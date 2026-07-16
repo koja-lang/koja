@@ -1,4 +1,4 @@
-//! Per-`Expr` coercion annotations. Two parallel families — they
+//! Per-`Expr` coercion annotations. Two parallel families that
 //! live on separate `Expr` slots because their downstream contracts
 //! differ.
 //!
@@ -6,15 +6,15 @@
 //! `Expr::literal_coercion`). A numeric literal flowing into a
 //! sized-numeric slot whose value fits the slot's range. The IR
 //! lowerer reads the field and mints `Const u8 = 5` instead of the
-//! default `Const i64 = 5`. **No paired IR instruction** — the
-//! annotation only changes which `Const` opcode is minted at the
+//! default `Const i64 = 5`. **No paired IR instruction** here, since
+//! the annotation only changes which `Const` opcode is minted at the
 //! literal leaf.
 //!
 //! **Value-conversion** ([`Coercion`], stamped on `Expr::coercion`).
 //! A value of type `T` flowing into a slot of type `U ≠ T` where
-//! the conversion needs runtime work — `UnionWiden` boxes a member
+//! the conversion needs runtime work: `UnionWiden` boxes a member
 //! into a tagged union, `NumericWiden` extends a sized numeric
-//! into its hub type (`Int` / `Float`); future variants will cover
+//! into its hub type (`Int` / `Float`), and future variants will cover
 //! fn-as-closure, `Display` in interpolation, list/map `from_list`,
 //! generic phi widening. Per `COMPILER-NORTHSTAR.md`'s coercion
 //! contract, every `Coercion::*` variant pairs 1:1 with an
@@ -80,7 +80,7 @@ impl NumericLiteralWidth {
 }
 
 /// Per-expression coercion annotation. One variant today (numeric
-/// literal width); see the module docs for why value-conversion
+/// literal width). See the module docs for why value-conversion
 /// coercions don't share this enum.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub enum LiteralCoercion {
@@ -109,7 +109,7 @@ pub enum Coercion {
     /// A sized numeric value flowing into its hub-type slot: any of
     /// `Int8` / `Int16` / `Int32` / `UInt8` / `UInt16` / `UInt32`
     /// into `Int`, or `Float32` into `Float`. Hub-only and lossless
-    /// by construction — sideways widening (`Int8 -> Int16`) and
+    /// by construction, since sideways widening (`Int8 -> Int16`) and
     /// `UInt64 -> Int` are rejected at typecheck. The carried
     /// `ResolvedType` is the target as declared at the slot. The
     /// source width and signedness come from the annotated

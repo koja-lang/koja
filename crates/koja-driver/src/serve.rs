@@ -1,7 +1,7 @@
 //! Minimal blocking HTTP/1.1 static file server for `koja doc
 //! serve`. Hand-rolled so the driver doesn't grow a new crate
 //! dependency just to preview the generated doc tree. Single-
-//! threaded — one user, mostly-cached — with `Connection: close`
+//! threaded (one user, mostly-cached) with `Connection: close`
 //! so we don't need keep-alive bookkeeping.
 //!
 //! Path resolution canonicalizes the doc root once at startup
@@ -31,10 +31,10 @@ const MAX_PORT_PROBE: u16 = 8019;
 const READ_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// Start serving `doc_root` on `127.0.0.1`. With `port = Some(p)`
-/// we error out if the port is taken; with `port = None` we
+/// we error out if the port is taken. With `port = None` we
 /// probe upward from [`DEFAULT_PORT`] until [`MAX_PORT_PROBE`].
 /// Returns only when the listener fails or the process is
-/// signaled — accepts are handled inline.
+/// signaled, since accepts are handled inline.
 pub fn run(doc_root: &Path, port: Option<u16>) -> Result<(), ServeError> {
     let canonical_root = doc_root
         .canonicalize()
@@ -135,8 +135,8 @@ fn handle_client(mut stream: TcpStream, doc_root: &Path) -> io::Result<()> {
 /// Read the full HTTP request head (up to `\r\n\r\n`) and
 /// return just the request line. Draining the header block
 /// before responding matters on macOS, which sends RST instead
-/// of FIN when a socket is closed with unread bytes buffered —
-/// the client would then see "connection reset by peer" before
+/// of FIN when a socket is closed with unread bytes buffered.
+/// The client would then see "connection reset by peer" before
 /// it finishes reading the body. Returns `Ok(None)` on a clean
 /// EOF (empty connection, e.g. a port probe).
 fn read_request_head(stream: &mut TcpStream) -> io::Result<Option<String>> {
@@ -243,7 +243,7 @@ fn write_status(stream: &mut TcpStream, code: u16, reason: &str, body: &[u8]) ->
 
 /// Map a file extension to a sensible Content-Type. Covers every
 /// asset the doc generator emits today (html / css / js / json)
-/// plus a couple of common image fallbacks; falls back to
+/// plus a couple of common image fallbacks. Falls back to
 /// `application/octet-stream` for anything else so the browser
 /// at least won't sniff into the wrong handler.
 pub(crate) fn mime_type(path: &Path) -> &'static str {
@@ -265,7 +265,7 @@ pub(crate) fn mime_type(path: &Path) -> &'static str {
 /// Minimal percent-decoder for URL paths. Only handles the
 /// `%HH` form the doc tree could realistically produce (spaces,
 /// unicode chars in file names). Bad escapes pass through
-/// untouched rather than erroring — the worst case is a 404
+/// untouched rather than erroring. The worst case is a 404
 /// when [`resolve`] then fails to find the literal path.
 fn percent_decode(s: &str) -> String {
     let bytes = s.as_bytes();

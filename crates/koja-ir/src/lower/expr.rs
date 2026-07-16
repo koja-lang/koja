@@ -4,7 +4,7 @@
 //! diagnostic for any unsupported variant.
 //!
 //! Call-site lowering (`f(args)` / `recv.m(args)`) lives in
-//! [`super::calls`] — only the dispatcher entries here, which fan
+//! [`super::calls`]. Only the dispatcher entries live here, which fan
 //! out to it.
 
 use koja_ast::ast::{BinOp, Diagnostic, Expr, ExprKind, Literal, StringPart, UnaryOp};
@@ -94,7 +94,7 @@ fn apply_value_coercion(
             let IRType::Union { members, .. } = &target_ir else {
                 panic!(
                     "IR lower: Coercion::UnionWiden target lowered to non-Union \
-                     `{target_ir:?}` — typecheck invariant violation",
+                     `{target_ir:?}` (typecheck invariant violation)",
                 );
             };
             let member_type = ctx.type_of(value).clone();
@@ -104,7 +104,7 @@ fn apply_value_coercion(
                 .unwrap_or_else(|| {
                     panic!(
                         "IR lower: Coercion::UnionWiden source type `{member_type:?}` \
-                         is not a member of target union `{target_ir:?}` — typecheck \
+                         is not a member of target union `{target_ir:?}`, typecheck \
                          invariant violation",
                     )
                 }) as u8;
@@ -160,7 +160,7 @@ fn lower_expr_inner(
                 );
                 ctx.mark_owned(dest);
                 // `Concat` copies both operands into the fresh result, so
-                // any owned operand temp is dead now — mirror the
+                // any owned operand temp is dead now. Mirror the
                 // interpolation fold in `lower_string`.
                 drop_discarded_temp(ctx, block, lhs);
                 drop_discarded_temp(ctx, block, rhs);
@@ -235,7 +235,7 @@ fn lower_expr_inner(
             )),
             other => panic!(
                 "IR lower: bare `Ident` `{name}` reaches lower with non-Local/Global \
-                 resolution {other:?} — typecheck seal must have rejected this",
+                 resolution {other:?}, typecheck seal must have rejected this",
             ),
         },
         ExprKind::ShortClosure { params, body } => {
@@ -244,8 +244,8 @@ fn lower_expr_inner(
         ExprKind::Self_ { local_id } => {
             let local_id = local_id.unwrap_or_else(|| {
                 panic!(
-                    "IR lower: `self` reaches lower without a stamped LocalId — \
-                     typecheck resolve invariant violation",
+                    "IR lower: `self` reaches lower without a stamped LocalId \
+                     (typecheck resolve invariant violation)",
                 );
             });
             Ok(lower_local_read(
@@ -360,7 +360,7 @@ fn lower_expr_inner(
         }
         ExprKind::Unary { op, operand } => {
             // `-N` against a narrow target folds to a single typed
-            // `Const` at the recorded width — the typecheck pass
+            // `Const` at the recorded width. The typecheck pass
             // stamps a coercion on the *outer* `Unary`'s span when
             // the negated literal flows into a sized slot. Without
             // a coercion record (or against a non-literal operand)
@@ -461,7 +461,7 @@ fn lower_expr_inner(
 }
 
 /// Materialize a local-slot read. Used for both bare-`Ident` and
-/// `self` references — both flow through the same per-function slot
+/// `self` references, since both flow through the same per-function slot
 /// table. Closure-body ctxs intercept captured-outer-local ids and
 /// emit a [`IRInstruction::LoadCapture`] indexed into the enclosing
 /// closure's env layout.
@@ -501,7 +501,7 @@ fn lower_local_read(
 
 /// Dispatch a bare ident with [`Resolution::Global`] on the
 /// resolved entry's kind: constants flow through
-/// [`lower_constant_ident`]; non-generic functions used as values
+/// [`lower_constant_ident`], and non-generic functions used as values
 /// flow through [`lower_fn_as_value`] (synthesizing a captureless
 /// closure wrapper and emitting [`IRInstruction::MakeClosure`]).
 #[allow(clippy::too_many_arguments)]
@@ -516,7 +516,7 @@ fn lower_global_ident(
     output: &mut LowerOutput,
 ) -> (ValueId, IRBlockId) {
     let entry = registry.get(global_id).unwrap_or_else(|| {
-        panic!("IR lower: global id {global_id} missing from registry — seal violation",)
+        panic!("IR lower: global id {global_id} missing from registry (seal violation)",)
     });
     match &entry.kind {
         GlobalKind::Constant(_) => {
@@ -532,7 +532,7 @@ fn lower_global_ident(
             output,
         ),
         other => panic!(
-            "IR lower: bare `Ident` `{name}` (id {global_id}) registers as {} — \
+            "IR lower: bare `Ident` `{name}` (id {global_id}) registers as {}, \
              typecheck seal violation",
             other.label(),
         ),
@@ -540,7 +540,7 @@ fn lower_global_ident(
 }
 
 /// Lower a bare ident that resolves to a package-level constant.
-/// Primitives inline as [`IRInstruction::Const`]; compounds emit a
+/// Primitives inline as [`IRInstruction::Const`], and compounds emit a
 /// [`IRInstruction::LoadConst`] against the pool entry minted in
 /// [`super::package::lower_package`].
 fn lower_constant_ident(
@@ -555,16 +555,16 @@ fn lower_constant_ident(
     let value = constant_value_from_registry(constant_id, registry).unwrap_or_else(|| {
         panic!(
             "IR lower: constant `{name}` (id {constant_id}) reaches lower \
-                 without a stamped definition or with an unsupported RHS shape — \
+                 without a stamped definition or with an unsupported RHS shape, \
                  typecheck seal must have rejected this",
         );
     });
     let entry = registry.get(constant_id).unwrap_or_else(|| {
-        panic!("IR lower: constant id {constant_id} missing from registry — seal violation",)
+        panic!("IR lower: constant id {constant_id} missing from registry (seal violation)",)
     });
     let GlobalKind::Constant(Some(def)) = &entry.kind else {
         panic!(
-            "IR lower: constant id {constant_id} ({name}) registers as {} — seal violation",
+            "IR lower: constant id {constant_id} ({name}) registers as {} (seal violation)",
             entry.kind.label(),
         );
     };
@@ -578,7 +578,7 @@ fn lower_constant_ident(
         (dest, block)
     } else {
         let IRConstantValue::Primitive(value) = value else {
-            unreachable!("non-pooling IRConstantValue must be Primitive — pool admission rule");
+            unreachable!("non-pooling IRConstantValue must be Primitive (pool admission rule)");
         };
         let dest = ctx.fresh_value(const_value_type(&value));
         ctx.cfg.append(block, IRInstruction::Const { dest, value });
@@ -601,18 +601,18 @@ fn lower_fn_as_value(
     output: &mut LowerOutput,
 ) -> (ValueId, IRBlockId) {
     let entry = registry.get(function_id).unwrap_or_else(|| {
-        panic!("IR lower: fn-as-value id {function_id} missing from registry — seal violation",)
+        panic!("IR lower: fn-as-value id {function_id} missing from registry (seal violation)",)
     });
     let GlobalKind::Function(Some(sig)) = &entry.kind else {
         panic!(
-            "IR lower: fn-as-value `{name}` (id {function_id}) registers as {} — \
+            "IR lower: fn-as-value `{name}` (id {function_id}) registers as {}, \
              typecheck seal violation",
             entry.kind.label(),
         );
     };
     if !entry.type_params.is_empty() {
         panic!(
-            "IR lower: fn-as-value `{name}` (id {function_id}) is generic — typecheck \
+            "IR lower: fn-as-value `{name}` (id {function_id}) is generic, typecheck \
              must have diagnosed this before lowering",
         );
     }
@@ -635,7 +635,7 @@ fn lower_fn_as_value(
 /// Fold a literal-arg to `UnaryOp::Neg` directly into a typed
 /// `ConstValue` at the recorded coercion width. Returns `None` for
 /// shapes the typecheck pass would never have stamped a coercion
-/// on — non-literal operand, group-wrapped non-literal, etc. —
+/// on (non-literal operand, group-wrapped non-literal, etc.),
 /// letting the caller fall back to the regular runtime negate.
 /// Hex / binary literals reach this helper through `parse_int_literal`
 /// for the unsigned escape hatch (`-1: UInt8` is rejected at
@@ -643,7 +643,7 @@ fn lower_fn_as_value(
 /// Pull the typecheck-stamped numeric width off `expr`'s
 /// `literal_coercion` slot, when present. Reserved for the leaf
 /// sites that emit a typed `Const` opcode (literal, negated-literal
-/// fold, pattern-equality) — every other position ignores the
+/// fold, pattern-equality). Every other position ignores the
 /// annotation.
 fn literal_width(expr: &Expr) -> Option<NumericLiteralWidth> {
     expr.literal_coercion
@@ -672,11 +672,11 @@ fn fold_negated_literal_const(operand: &Expr, target: NumericLiteralWidth) -> Op
 
 /// Pick the [`ConcatKind`] that matches a `<>` operand's IR type.
 /// Typecheck guarantees both operands share a heap-payload type
-/// (`String`, `Binary`, `Bits`); the lowerer just transcribes that
+/// (`String`, `Binary`, `Bits`), so the lowerer just transcribes that
 /// into an [`IRInstruction::Concat`]'s `kind`. Any other type
 /// surfaces `None` so the call site can emit a clear lower-layer
-/// diagnostic (defense-in-depth — the only path that reaches here
-/// is a typecheck-passed `BinOp::Concat`).
+/// diagnostic (defense-in-depth, since the only path that reaches
+/// here is a typecheck-passed `BinOp::Concat`).
 fn concat_kind_from_operand(ty: IRType) -> Option<ConcatKind> {
     match ty {
         IRType::String => Some(ConcatKind::String),
@@ -691,11 +691,11 @@ fn concat_kind_from_operand(ty: IRType) -> Option<ConcatKind> {
 ///
 /// Strategy: each part lowers to its own `String` value
 /// ([`emit_string_const`] for literals, recursive [`lower_expr`] for
-/// interpolations — the typecheck synthesizer wraps every
+/// interpolations, where the typecheck synthesizer wraps every
 /// interpolated expression in `.format()` so it's already
 /// `String`-typed by the time we see it). N parts then fold into
-/// N-1 chained binary [`IRInstruction::Concat`] instructions; empty
-/// parts produces a single empty-string const.
+/// N-1 chained binary [`IRInstruction::Concat`] instructions, and
+/// empty parts produces a single empty-string const.
 ///
 /// Single-part fast paths preserve byte-for-byte the prior shape:
 /// a lone literal emits one `Const`, a lone interpolation emits no
@@ -729,7 +729,7 @@ fn lower_string(
         ctx.mark_owned(dest);
         // `Concat` copies both operands, so the running accumulator and
         // any owned operand (e.g. a `Debug.format` result for `{x}`)
-        // are dead after this step — free them so interpolation
+        // are dead after this step. Free them so interpolation
         // intermediates don't leak.
         drop_discarded_temp(ctx, block, acc);
         drop_discarded_temp(ctx, block, next_value);

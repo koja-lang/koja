@@ -1,5 +1,5 @@
 //! IR-side handle for a local variable's storage slot. Opaque to
-//! backends; only the lower pass mints. Display is `"local_N"`.
+//! backends. Only the lower pass mints. Display is `"local_N"`.
 
 use std::fmt;
 
@@ -10,7 +10,7 @@ pub struct IRLocalId(u32);
 
 impl IRLocalId {
     /// Mint an [`IRLocalId`] from typecheck's [`LocalId`]. The lower
-    /// pass is the only minter; downstream consumers read only.
+    /// pass is the only minter, and downstream consumers read only.
     pub(crate) fn from_local_id(local_id: LocalId) -> Self {
         Self(local_id.as_u32())
     }
@@ -25,9 +25,9 @@ impl IRLocalId {
     /// Placeholder slot id for synthesized glue
     /// ([`crate::FunctionKind::CloneGlue`] / `DropGlue`). Glue bodies
     /// read the operand straight off the parameter's SSA value
-    /// (`params[0].id`) — the aggregate bodies `elaborate` synthesizes
+    /// (`params[0].id`). The aggregate bodies `elaborate` synthesizes
     /// project fields off it, and the backend's collection bodies bind
-    /// it via `get_nth_param` — so the param's `local_id` slot is
+    /// it via `get_nth_param`, so the param's `local_id` slot is
     /// never declared or read, and any id is sound here.
     pub(crate) fn synthetic_placeholder() -> Self {
         Self(0)

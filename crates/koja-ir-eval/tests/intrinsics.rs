@@ -3,17 +3,17 @@
 //! handler, writes `"{s}\n"` to stdout, and returns [`Value::Unit`].
 //!
 //! Stdout-capturing in-process is fiddly (the runtime printer in
-//! the LLVM backend writes via `libc::write`; the eval handler
+//! the LLVM backend writes via `libc::write`, while the eval handler
 //! writes via `io::stdout().lock()`). Capturing the stdout stream
 //! reliably across threads needs more plumbing than this slice
-//! warrants — instead we drive the `Global.print` path through the
+//! warrants, so instead we drive the `Global.print` path through the
 //! full pipeline and assert it returns `Value::Unit` without
 //! erroring. The byte-for-byte stdout assertion lives in the
 //! `koja-driver` e2e suite (`alpha_two_plus_two::*`), where the
 //! whole binary's stdout is captured via `Command::output`.
 //!
 //! Unregistered intrinsic ids (e.g. `@intrinsic fn missing`) used to
-//! surface at runtime as [`RuntimeError::UnknownIntrinsic`]; they
+//! surface at runtime as [`RuntimeError::UnknownIntrinsic`]. They
 //! now fail at lift time because [`koja_ir::IRIntrinsicId`]'s
 //! source-axis mapper returns `None` for paths that aren't part of
 //! the registered universe. That contract is exercised by

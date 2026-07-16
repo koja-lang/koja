@@ -9,7 +9,7 @@
 //! - method on a generic struct -> `@"TestApp.Pair_$Int64.String$.first"`
 //! - distinct args at the same call site -> distinct `define`s
 //!
-//! The LLVM backend has zero generics-aware code; it lowers whatever
+//! The LLVM backend has zero generics-aware code. It lowers whatever
 //! decls land in the [`koja_ir::IRPackage::functions`] map. A
 //! green test here pins that the closure-pass result threads through
 //! emit unchanged.

@@ -188,7 +188,7 @@ impl ProjectConfig {
     }
 
     /// Returns the entry value as a Process type name when it starts with an
-    /// uppercase letter (PascalCase) — the only valid entry shape. The driver
+    /// uppercase letter (PascalCase), the only valid entry shape. The driver
     /// rejects lowercase entries with a pointer at `.kojs` scripts.
     pub fn entry_type_name(&self) -> Option<&str> {
         self.entry

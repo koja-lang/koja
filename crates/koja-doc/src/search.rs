@@ -2,7 +2,7 @@
 //! fuzzy search. One entry per item (struct / enum / protocol /
 //! top-level fn / constant) and one entry per method on a type
 //! (deep-linking to `#fn-<method>` on the type's page). The JSON
-//! is also the AI-friendly bundle: every doc-visible symbol in
+//! is also the AI-friendly bundle, where every doc-visible symbol in
 //! the project + bundled stdlib + bundled deps is present with
 //! its kind, owning package, URL, and brief.
 //!

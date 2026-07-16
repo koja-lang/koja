@@ -23,12 +23,12 @@ use super::package::resolved_type_to_ir_type;
 
 /// Lower a statement-body arm into `arm_block`, then unconditionally
 /// jump to `merge_block` when flow stays open. Closed flow (early
-/// `return`) leaves the existing terminator in place; the merge
+/// `return`) leaves the existing terminator in place, and the merge
 /// block tolerates one fewer incoming edge.
 ///
 /// Returns the arm's open tail block (where the merge branch landed)
-/// so callers can append end-of-arm cleanup — e.g. `match` releasing
-/// its consumed subject temp — after the tail value has been
+/// so callers can append end-of-arm cleanup (e.g. `match` releasing
+/// its consumed subject temp) after the tail value has been
 /// acquired. `None` when the arm closed flow with an early `return`.
 pub(super) fn lower_arm_into(
     body: &[Statement],
@@ -55,11 +55,11 @@ pub(super) fn lower_arm_into(
     }
 }
 
-/// Lower an expression-shaped arm (ternary today; could grow more
-/// callers later) into `arm_block`, then unconditionally jump to
-/// `merge_block`. Mirrors [`lower_arm_into`] minus the `lower_body` /
-/// `FlowResult` machinery — an `Expr` arm cannot syntactically
-/// `return`.
+/// Lower an expression-shaped arm (ternary today, though this could
+/// grow more callers later) into `arm_block`, then unconditionally
+/// jump to `merge_block`. Mirrors [`lower_arm_into`] minus the
+/// `lower_body` / `FlowResult` machinery, since an `Expr` arm cannot
+/// syntactically `return`.
 pub(super) fn lower_expr_arm_into(
     expr: &Expr,
     ctx: &mut FnLowerCtx,
@@ -87,9 +87,9 @@ pub(super) fn lower_expr_arm_into(
 ///   free it if it owns a heap temp and substitute a fresh
 ///   `Const::Unit` to keep the merge edge type-consistent.
 /// - Otherwise (the arm produced a value of `result_ty`): *acquire*
-///   it so the merge `BlockParam` — which the construct's lowering
-///   marks `owned` for heap-managed results — owns an independent
-///   reference. An owned tail moves; a borrowed one clones.
+///   it so the merge `BlockParam` (which the construct's lowering
+///   marks `owned` for heap-managed results) owns an independent
+///   reference. An owned tail moves, and a borrowed one clones.
 ///
 /// Other mismatches indicate a typecheck/lowering disagreement and
 /// surface at seal.

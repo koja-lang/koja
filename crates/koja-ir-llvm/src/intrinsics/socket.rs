@@ -273,10 +273,6 @@ fn emit_recv_from<'ctx>(
     ret(ctx, ok)
 }
 
-// ---------------------------------------------------------------------------
-// shared helpers
-// ---------------------------------------------------------------------------
-
 /// Build `Result.Err(koja_last_error())`. The runtime helper
 /// returns a freshly-allocated Koja string payload pointer, which
 /// is exactly the LLVM-level representation of an `IRType::String`,
@@ -384,10 +380,6 @@ fn build_load_int<'ctx>(
 fn ret<'ctx>(ctx: &EmitContext<'ctx>, value: BasicValueEnum<'ctx>) -> Result<(), LlvmError> {
     ctx.builder.build_return(Some(&value)).or_ice().map(|_| ())
 }
-
-// ---------------------------------------------------------------------------
-// IR-shape lookups
-// ---------------------------------------------------------------------------
 
 fn expect_enum_symbol<'ty>(
     ty: &'ty IRType,

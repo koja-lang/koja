@@ -23,7 +23,7 @@
 //! [`super::package::resolved_type_to_ir_type`] maps `Never -> Unit`,
 //! so the IR-level value is always concrete `Unit`.
 //!
-//! `break` is lowered in [`super::body::lower_break_stmt`] —
+//! `break` is lowered in [`super::body::lower_break_stmt`].
 //! `lower_loop` only manages the [`FnLowerCtx::push_loop_exit`] /
 //! [`FnLowerCtx::pop_loop_exit`] bookkeeping that gives `break` an
 //! exit block to target.
@@ -43,12 +43,12 @@ use super::expr::lower_expr;
 ///
 /// - `header`: lowers `cond` and terminates with
 ///   [`IRTerminator::CondBranch`] to body or exit.
-/// - `body`: lowers the body statements; the trailing flow's
+/// - `body`: lowers the body statements. The trailing flow's
 ///   terminator is the back-edge [`IRTerminator::Branch`] to the
 ///   header. A body that closes its own flow (an early `return`)
-///   leaves no back-edge — the merge block tolerates the missing
+///   leaves no back-edge, and the merge block tolerates the missing
 ///   incoming.
-/// - `exit`: receives the cond=false fall-through; the surface
+/// - `exit`: receives the cond=false fall-through. The surface
 ///   expression's [`ValueId`] is a fresh `Const::Unit` emitted here
 ///   so the caller can keep threading.
 pub(super) fn lower_while(
@@ -85,10 +85,10 @@ pub(super) fn lower_while(
             ctx.cfg
                 .set_terminator(tail, IRTerminator::Branch(BranchTarget::to(header)));
         }
-        // Body closed its own flow (early `return` / `break`); no
-        // back-edge to emit. The header's CondBranch to `body_block`
-        // still names a valid block — its terminator was set inside
-        // `lower_body`.
+        // Body closed its own flow (early `return` / `break`), so
+        // there is no back-edge to emit. The header's CondBranch to
+        // `body_block` still names a valid block. Its terminator was
+        // set inside `lower_body`.
         FlowResult::Closed => {}
     }
     ctx.restore_slot_states(body_snapshot);
@@ -100,8 +100,8 @@ pub(super) fn lower_while(
 
 /// Release every heap-managed binding declared inside a loop body at
 /// the back-edge `tail`. A binding introduced in the body leaves
-/// scope when the iteration ends, so its owned value is dropped here
-/// — each iteration overwrites a fresh value and drops it before the
+/// scope when the iteration ends, so its owned value is dropped here.
+/// Each iteration overwrites a fresh value and drops it before the
 /// next, with no stale-overwrite drop on the slot (the body's single
 /// lowered `LocalWrite` was a first declaration). Crucially, these
 /// slots are then restored out of the live set by the caller so they
@@ -117,17 +117,17 @@ fn drop_body_scoped_bindings(
     }
 }
 
-/// Lower an infinite `loop ... end`. Builds two blocks (no header —
-/// there's no condition):
+/// Lower an infinite `loop ... end`. Builds two blocks (no header,
+/// since there's no condition):
 ///
-/// - `body`: lowers the body statements; the trailing flow's
+/// - `body`: lowers the body statements. The trailing flow's
 ///   terminator is the back-edge [`IRTerminator::Branch`] to itself.
 ///   A body that closes its own flow (an early `return` or `break`)
 ///   leaves no back-edge.
-/// - `exit`: only reachable via [`super::body::lower_break_stmt`];
-///   produces a fresh `Const::Unit` so the caller can keep threading.
-///   When the body has no `break`, the exit block stays unreachable
-///   — that's intentional and harmless (every emitted block carries
+/// - `exit`: only reachable via [`super::body::lower_break_stmt`].
+///   Produces a fresh `Const::Unit` so the caller can keep threading.
+///   When the body has no `break`, the exit block stays unreachable.
+///   That's intentional and harmless (every emitted block carries
 ///   its own terminator regardless of reachability).
 pub(super) fn lower_loop(
     body: &[Statement],

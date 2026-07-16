@@ -1,9 +1,9 @@
 //! `if` / `unless` / `cond` lowering. Each builds a CFG fragment
 //! whose merge block carries the join value as a typed
-//! [`BlockParam`]; reaching arms branch into the merge with the
+//! [`BlockParam`]. Reaching arms branch into the merge with the
 //! arm's tail value as the per-edge [`BranchTarget::args`] payload.
 //! Diverging arms (early `return`) close their own flow and don't
-//! contribute an edge to the merge — the seal pass admits a merge
+//! contribute an edge to the merge. The seal pass admits a merge
 //! block with fewer incomings than predecessors.
 //!
 //! The "no-else `if` / `unless` are statement-shaped" path stays
@@ -40,9 +40,9 @@ pub(super) struct IfLowering<'a> {
 /// param's `ValueId`.
 ///
 /// `result_ty` is sourced from the typecheck-stamped resolution on
-/// the surrounding `if`-expression — when both arms diverge the
+/// the surrounding `if`-expression. When both arms diverge the
 /// resolution is `Never` (mapped to `IRType::Unit` at the IR
-/// boundary in [`super::package::resolved_type_to_ir_type`]); the
+/// boundary in [`super::package::resolved_type_to_ir_type`]), and the
 /// merge block in that case is unreachable but still synthesized so
 /// any surrounding control flow continues to have a continuation
 /// block to thread through.
@@ -126,7 +126,7 @@ pub(super) fn lower_if(
 /// Lower an `unless cond do body end`. Same wiring as `lower_if`'s
 /// no-else path with the cond arms swapped: cond=true bypasses to
 /// merge with `Unit`, cond=false runs the body. Statement-shaped
-/// only — `unless` has no `else` arm, so the result type is always
+/// only. `unless` has no `else` arm, so the result type is always
 /// `Unit`.
 pub(super) fn lower_unless(
     condition: &Expr,
@@ -182,7 +182,7 @@ pub(super) struct CondLowering<'a> {
 /// its tail value, the else-body covers the "no arm matched" exit.
 ///
 /// The arm test chain is built as a sequence of `cond_test_<i>`
-/// blocks that fall through to the next test on cond=false; the
+/// blocks that fall through to the next test on cond=false. The
 /// final test's cond=false edge runs the else-body. Each arm body
 /// lives in its own `cond_body_<i>` block.
 pub(super) fn lower_cond(
@@ -228,7 +228,7 @@ pub(super) fn lower_cond(
             (None, None) => {
                 // No else and we exhausted arm tests: cond=false on
                 // the last arm flows directly to merge with `Unit`.
-                // (The parser always produces an else; this path is
+                // (The parser always produces an else, so this path is
                 // defensive parity with `resolve_cond`.)
                 let unit = emit_unit(ctx, after_cond);
                 BranchTarget::with_args(merge_block, vec![unit])
@@ -300,7 +300,7 @@ pub(super) struct TernaryLowering<'a> {
 /// shape as `lower_if`'s with-else path: one [`BlockParam`] typed
 /// by `result_ty`, each arm branches into the merge with the arm's
 /// expression value as the per-edge branch arg. Strictly simpler
-/// than `lower_if` because the arms are single expressions — no
+/// than `lower_if` because the arms are single expressions: no
 /// statement-body walk, no [`FlowResult::Closed`] bookkeeping (a
 /// ternary arm cannot syntactically contain a `return`).
 pub(super) fn lower_ternary(

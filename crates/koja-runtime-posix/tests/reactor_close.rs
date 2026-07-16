@@ -79,8 +79,8 @@ fn recv_blocking() {
 }
 
 /// Builds a connected localhost TCP pair, hands back the (non-blocking)
-/// client fd, and leaks all three endpoints so std never closes them —
-/// the test owns the fd's lifetime via `koja_fd_close`. Nothing is ever
+/// client fd, and leaks all three endpoints so std never closes them.
+/// The test owns the fd's lifetime via `koja_fd_close`. Nothing is ever
 /// written to the peer, so reading the client end always yields `EAGAIN`.
 fn never_readable_fd() -> i32 {
     let listener = TcpListener::bind("127.0.0.1:0").expect("bind loopback");

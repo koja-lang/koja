@@ -20,7 +20,7 @@ use common::{
 fn if_else_merge_emits_phi_for_int_arms() {
     // Every reaching arm of an Int-valued if/else hands its tail
     // value to the merge block via a per-edge `BranchTarget::args`
-    // payload; LLVM emission lowers that to a `phi i64` with one
+    // payload. LLVM emission lowers that to a `phi i64` with one
     // incoming per arm.
     let source = "
         fn pick -> Int
@@ -44,8 +44,8 @@ fn if_else_merge_emits_phi_for_int_arms() {
 
 #[test]
 fn cond_merge_emits_phi_with_incoming_per_arm() {
-    // `cond` lowers to chained test-blocks plus per-arm body blocks;
-    // each reaching body and the else-body all branch into the merge
+    // `cond` lowers to chained test-blocks plus per-arm body blocks.
+    // Each reaching body and the else-body all branch into the merge
     // with their tail value as the per-edge arg. LLVM phi sees one
     // incoming per branch.
     let source = "
@@ -68,7 +68,7 @@ fn cond_merge_emits_phi_with_incoming_per_arm() {
 
 #[test]
 fn if_no_else_emits_unit_typed_merge() {
-    // The no-else `if` types as Unit; the merge BlockParam is Unit
+    // The no-else `if` types as Unit. The merge BlockParam is Unit
     // and the LLVM phi is `phi {}` (the empty struct LLVM lowers
     // `Unit` to). Pin the shape so a regression in Unit handling
     // surfaces clearly.
@@ -85,9 +85,9 @@ fn if_no_else_emits_unit_typed_merge() {
 
 #[test]
 fn if_else_with_both_arms_diverging_emits_unreachable_merge_phi() {
-    // Both arms `return` early; the merge block has a BlockParam
+    // Both arms `return` early. The merge block has a BlockParam
     // that no edge feeds. LLVM accepts a zero-incoming phi at the
-    // builder level (verification may flag it later); the IR-level
+    // builder level (verification may flag it later). The IR-level
     // shape stays well-formed because the merge block is reachable
     // only by name (no actual edge), and the function's natural
     // exit is via the arms' own Returns.
@@ -129,9 +129,9 @@ fn ternary_emits_phi_for_int_arms() {
 
 #[test]
 fn if_else_with_diverging_arm_still_emits_phi_with_one_incoming() {
-    // The then-arm diverges via `return`; only the else-arm reaches
+    // The then-arm diverges via `return`. Only the else-arm reaches
     // merge. LLVM accepts a phi with a single incoming (LLVM IR
-    // permits 1+ incomings per phi) — the merge-block param's
+    // permits 1+ incomings per phi). The merge-block param's
     // BlockParam-to-phi translation runs unchanged.
     let source = "
         fn pick -> Int
@@ -154,7 +154,7 @@ fn if_else_with_diverging_arm_still_emits_phi_with_one_incoming() {
 #[test]
 fn match_int_chain_emits_chained_test_blocks_and_merge_phi() {
     // Each non-catch-all arm lowers to a test block plus an arm
-    // body block; the test block fires `icmp eq` against the subject
+    // body block. The test block fires `icmp eq` against the subject
     // and `br i1` to either its body or the next test. The dominance
     // rule means the subject (defined in entry) is visible in every
     // test block without being threaded through a BlockParam. The
@@ -381,7 +381,7 @@ fn match_exhaustive_enum_emits_unreachable_trap_block() {
     // An enum match with no catch-all and no remaining arm to fall
     // into materializes a synthesized trap block whose terminator is
     // the LLVM `unreachable` instruction. Typecheck has proven the
-    // edge can't fire at runtime; the block exists to keep the CFG
+    // edge can't fire at runtime. The block exists to keep the CFG
     // well-formed.
     let source = "
         enum Color

@@ -3,8 +3,8 @@
 //! The reactor already sends readiness events (`TAG_IO_READY = 2`, a bare
 //! `IOReady{variant, fd}` payload), but the receive side only dispatched
 //! `Business` (0) and `Lifecycle` (1) arms, so a tag-2 envelope hit the
-//! `unreachable` trap. Source lowering can't close the gap: the default
-//! `Process.run` is generic over `M`, so we can't tell whether `M` is a
+//! `unreachable` trap. Source lowering can't close the gap, because the
+//! default `Process.run` is generic over `M`, so we can't tell whether `M` is a
 //! union containing `IOReady` until monomorphization. This pass runs in
 //! `elaborate` (post-monomorphize), where `M` is concrete.
 //!
@@ -30,12 +30,12 @@ use super::{find_enum, find_struct, next_block_id, next_local_id, next_value_id}
 /// Non-generic, so its symbol is the bare package-qualified name.
 const IO_READY_SYMBOL: &str = "Global.IO.Ready";
 
-/// `Option.None` variant name — resolves the None tag from the
+/// `Option.None` variant name. Resolves the None tag from the
 /// monomorphized decl instead of hard-coding the wire byte.
 const OPTION_NONE_VARIANT: &str = "None";
 
 /// Synthesize a tag-2 receive arm into every process loop whose business
-/// message union contains `IOReady`. Idempotent — a `Receive` that
+/// message union contains `IOReady`. Idempotent, so a `Receive` that
 /// already has an `IOReady` arm is left untouched.
 pub(crate) fn deliver_io_ready(packages: &mut [IRPackage]) {
     for plan in gather(packages) {
@@ -45,7 +45,7 @@ pub(crate) fn deliver_io_ready(packages: &mut [IRPackage]) {
 
 /// A located, fully-resolved synthesis request. Gathered under a shared
 /// borrow (decls live in the same package set we later mutate), then
-/// applied — so every field is owned, with no borrow into `packages`.
+/// applied, so every field is owned, with no borrow into `packages`.
 struct ArmPlan {
     /// `Receive` location: package, function, block, instruction.
     block_index: usize,
@@ -168,7 +168,7 @@ fn apply(packages: &mut [IRPackage], plan: ArmPlan) {
     let envelope = ValueId(first_value + 3);
 
     // The payload slot must be declared on every path (the backend
-    // zero-inits it; untaken arms never write it), so it lives in entry.
+    // zero-inits it and untaken arms never write it), so it lives in entry.
     function.blocks[0]
         .instructions
         .push(IRInstruction::LocalDecl {

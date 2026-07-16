@@ -4,9 +4,9 @@
 //!
 //! Script mode wraps a top-level expression as the body of
 //! `__koja_user_main` (rather than requiring a `fn main` item).
-//! These tests pin the spawn-driven main shape — `define void
+//! These tests pin the spawn-driven main shape (`define void
 //! @__koja_user_main(ptr)` carrying the body, `define i64 @main()`
-//! trampoline handing the body to the runtime — plus the
+//! trampoline handing the body to the runtime) plus the
 //! helper-call wiring path unique to script-mode lowering (helpers
 //! live in a synthesized package fragment).
 //!
@@ -26,8 +26,8 @@ use common::{
 #[test]
 fn bare_two_plus_two_emits_const_add_then_ret_void() {
     // `2 + 2` lowers to a single `IRInstruction::BinaryOp::Add` on
-    // two `Const(Int)` operands. inkwell may or may not const-fold;
-    // either way the user body block ends in `ret void` (the
+    // two `Const(Int)` operands. inkwell may or may not const-fold.
+    // Either way the user body block ends in `ret void` (the
     // trailing expression's value is computed and discarded).
     let script = lower_as_script("2 + 2\n");
     let ir_text =
@@ -43,10 +43,10 @@ fn bare_two_plus_two_emits_const_add_then_ret_void() {
 
 #[test]
 fn large_int_literal_compiles_with_user_main_ret_void() {
-    // 64-bit literals widen past `i32`; the IR `IRType::Int`
+    // 64-bit literals widen past `i32`. The IR `IRType::Int`
     // tracks it as a 64-bit integer. With auto-print gone the only
     // observable IR-text effect is that compilation succeeds and
-    // `__koja_user_main` caps with `ret void` — pinned here so a
+    // `__koja_user_main` caps with `ret void`, pinned here so a
     // future regression that drops i64 literal support shows up
     // as a compile-time miss.
     let script = lower_as_script("5000000000\n");
@@ -79,7 +79,7 @@ fn bare_not_true_emits_user_main_ret_void() {
 fn int_compare_emits_user_main_ret_void() {
     // The `IRBinOp::Lt` on two i64 constants is inkwell's call to
     // constant-fold or emit `icmp slt`. Either way the surrounding
-    // `__koja_user_main` block caps with `ret void` — that's the
+    // `__koja_user_main` block caps with `ret void`. That's the
     // post-auto-print invariant this test guards.
     let script = lower_as_script("1 < 2\n");
     let ir_text =
@@ -144,7 +144,7 @@ fn empty_string_literal_uses_zero_bit_length() {
     assert_main_shape(&ir_text);
     // Empty UTF-8 payload: bit_length = 0, payload array length = 1
     // (just the trailing NUL). The rc word is the immortal sentinel
-    // (`i64::MIN`); the payload array renders as `zeroinitializer`.
+    // (`i64::MIN`), and the payload array renders as `zeroinitializer`.
     assert_contains(
         &ir_text,
         "@alpha_str.0 = private constant { i64, i64, [1 x i8] } \
@@ -173,7 +173,7 @@ fn float_arithmetic_emits_fadd_or_const_folds() {
         emit_script_llvm_ir(&script, APP_NAME).expect("emit_script_llvm_ir should succeed");
 
     assert_main_shape(&ir_text);
-    // inkwell may or may not const-fold the add; if it doesn't,
+    // inkwell may or may not const-fold the add. If it doesn't,
     // we'll see `fadd double` in the user body. With auto-print
     // gone there's no value-side sink to observe folded value at,
     // so const-fold cases just leave a no-op body capped by
@@ -193,7 +193,7 @@ fn float_compare_emits_ordered_predicate_or_const_folds() {
         emit_script_llvm_ir(&script, APP_NAME).expect("emit_script_llvm_ir should succeed");
 
     assert_main_shape(&ir_text);
-    // `OLT` -> `fcmp olt`. inkwell may const-fold; either way the
+    // `OLT` -> `fcmp olt`. inkwell may const-fold. Either way the
     // surrounding body caps with `ret void`.
     let user_body = extract_function_body(&ir_text, "__koja_user_main");
     assert!(
@@ -208,7 +208,7 @@ fn call_to_helper_emits_call_in_user_main_body() {
     // through `emit_script_llvm_ir`: helper lives in a package
     // fragment, the implicit `__koja_user_main` body issues the
     // call and feeds the result through arithmetic. With auto-print
-    // gone the result lands in an unobserved SSA register; the
+    // gone the result lands in an unobserved SSA register, and the
     // body ends in `ret void`.
     let source = "
         fn answer -> Int

@@ -44,7 +44,7 @@ const BANK: &str = "
     end
     ";
 
-/// A worker that never replies — used to drive the call timeout path.
+/// A worker that never replies, used to drive the call timeout path.
 const MUTE: &str = "
     struct Mute
     end

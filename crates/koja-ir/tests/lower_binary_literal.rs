@@ -14,20 +14,16 @@ use koja_ir::{
 
 mod common;
 
-use common::lower_script_source as lower;
+use common::{all_instructions, lower_script_source as lower};
 
 fn first_construct(blocks: &[IRBasicBlock]) -> &IRInstruction {
-    blocks
-        .iter()
-        .flat_map(|b| b.instructions.iter())
+    all_instructions(blocks)
         .find(|i| matches!(i, IRInstruction::BinaryConstruct { .. }))
         .expect("body should contain at least one BinaryConstruct instruction")
 }
 
 fn count_matching(blocks: &[IRBasicBlock], predicate: impl Fn(&IRInstruction) -> bool) -> usize {
-    blocks
-        .iter()
-        .flat_map(|b| b.instructions.iter())
+    all_instructions(blocks)
         .filter(|inst| predicate(inst))
         .count()
 }

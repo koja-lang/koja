@@ -6,8 +6,8 @@
 //! by its stable [`crate::function::IRSymbol`], an `IRScript` carries
 //! its body inline: the top-level statements lowered into a single
 //! basic block sequence plus the package fragments needed to resolve
-//! any helper-function calls. There is no entry-point symbol — the
-//! script *is* the entry point.
+//! any helper-function calls. There is no entry-point symbol, because
+//! the script *is* the entry point.
 //!
 //! Backends consume an `IRScript` directly:
 //!
@@ -46,7 +46,7 @@ use crate::yield_checks::{insert_yield_checks, insert_yield_checks_in_body};
 
 /// Sealed output of [`lower_script`]'s success path.
 ///
-/// `blocks` is the implicit function's body — the top-level
+/// `blocks` is the implicit function's body: the top-level
 /// statements of the script source lowered to one or more basic
 /// blocks. Today's scope produces exactly one block ending in
 /// `IRTerminator::Return`, mirroring `IRFunction.blocks` for a body
@@ -57,7 +57,7 @@ use crate::yield_checks::{insert_yield_checks, insert_yield_checks_in_body};
 /// `IRInstruction::Call` callees without revisiting the typecheck
 /// registry.
 ///
-/// `link_libraries` mirrors [`crate::IRProgram::link_libraries`] —
+/// `link_libraries` mirrors [`crate::IRProgram::link_libraries`]:
 /// a deduped, sorted list of `-l<name>` linker library names
 /// collected from every `@extern "C"` function declared anywhere in
 /// the script's package fragments. Per-function `link_name`
@@ -67,8 +67,8 @@ use crate::yield_checks::{insert_yield_checks, insert_yield_checks_in_body};
 /// expression value (or `IRType::Unit` for an empty / non-expression
 /// trailing statement). Backends consume this directly to size the
 /// `main` return slot and the `Return` terminator's value width.
-/// `def_location` points at the script's own source file (line 1):
-/// the LLVM backend stamps it on the synthesized `__koja_user_main`
+/// `def_location` points at the script's own source file (line 1).
+/// The LLVM backend stamps it on the synthesized `__koja_user_main`
 /// so a panic in top-level script code resolves to the user's file.
 /// `None` for an items-only / synthetic body with no source path.
 #[derive(Debug, Clone)]
@@ -84,7 +84,7 @@ impl IRScript {
     /// Lookup a helper function across every package by its mangled
     /// symbol. Mirrors [`crate::IRProgram::function`] so the
     /// interpreter and LLVM backend can drive a single shared
-    /// instruction walker over either IR shape — only the
+    /// instruction walker over either IR shape. Only the
     /// call-resolver closure differs.
     pub fn function(&self, mangled: &str) -> Option<&IRFunction> {
         self.packages
@@ -107,7 +107,7 @@ impl IRScript {
     }
 
     /// Lookup a pooled constant value across every package by its
-    /// mangled symbol. Mirrors [`Self::struct_decl`]; backends pass
+    /// mangled symbol. Mirrors [`Self::struct_decl`]. Backends pass
     /// the `&IRSymbol` carried on [`crate::IRInstruction::LoadConst`]
     /// directly through the `IRSymbol: Borrow<str>` impl.
     pub fn constant_value(&self, mangled: &str) -> Option<&IRConstantValue> {
@@ -122,16 +122,16 @@ impl IRScript {
 ///
 /// Pure with respect to its input. Per-function feature gaps surface
 /// as [`Diagnostic`]s and the offending function (or the script body
-/// itself) is dropped from the result; seal violations panic per
+/// itself) is dropped from the result. Seal violations panic per
 /// northstar.
 ///
 /// Pipeline contract: at most one file across all `checked.packages`
-/// may carry a populated `body`. Zero (an items-only script — every
-/// REPL session before the user types a top-level expression looks
-/// like this) is treated as an implicit `Unit`-returning empty body.
-/// More than one is a driver invariant violation and panics with a
-/// seal-style message — the driver dispatches script-mode lowering
-/// on a single source file.
+/// may carry a populated `body`. Zero (an items-only script, which is
+/// what every REPL session looks like before the user types a
+/// top-level expression) is treated as an implicit `Unit`-returning
+/// empty body. More than one is a driver invariant violation and
+/// panics with a seal-style message, since the driver dispatches
+/// script-mode lowering on a single source file.
 ///
 /// Sub-pass order:
 ///
@@ -165,8 +165,8 @@ pub fn lower_script(checked: &CheckedProgram) -> Result<IRScript, LowerError> {
 
     let (blocks, return_type) = lowered.unwrap_or_else(|()| {
         panic!(
-            "IR lower_script: body lowering returned Err(()) without pushing diagnostics — \
-             lower_body_to_blocks contract violation",
+            "IR lower_script: body lowering returned Err(()) without pushing diagnostics \
+             (lower_body_to_blocks contract violation)",
         )
     });
 
@@ -175,7 +175,7 @@ pub fn lower_script(checked: &CheckedProgram) -> Result<IRScript, LowerError> {
         let target_package = body_package.unwrap_or_else(|| {
             panic!(
                 "IR lower_script: script body produced synthesized closure(s) but no \
-                 package owns the body — lower-pass invariant violation",
+                 package owns the body (lower-pass invariant violation)",
             )
         });
         let target = packages
@@ -227,8 +227,8 @@ pub fn lower_script(checked: &CheckedProgram) -> Result<IRScript, LowerError> {
 /// empty slice when no file carries one (a script source that's
 /// items-only, e.g. a REPL session before the user types a
 /// trailing expression). Panics if more than one file carries a
-/// body — the driver must dispatch script-mode lowering on a single
-/// source file.
+/// body, since the driver must dispatch script-mode lowering on a
+/// single source file.
 fn locate_script_body(checked: &CheckedProgram) -> &[Statement] {
     let mut body: Option<&[Statement]> = None;
     for pkg in &checked.packages {
@@ -236,8 +236,8 @@ fn locate_script_body(checked: &CheckedProgram) -> &[Statement] {
             if let Some(stmts) = file.body.as_deref() {
                 if body.is_some() {
                     panic!(
-                        "IR lower_script: more than one file carries `File.body` — \
-                         the driver must dispatch script-mode lowering on a single source",
+                        "IR lower_script: more than one file carries `File.body` \
+                         (the driver must dispatch script-mode lowering on a single source)",
                     );
                 }
                 body = Some(stmts);
@@ -282,7 +282,7 @@ fn locate_script_body_location(checked: &CheckedProgram) -> Option<IRSourceDef> 
 }
 
 /// Synthesize the enclosing-symbol root for closures defined inside
-/// the script body. Yields `<package>.__script_body`; child closures
+/// the script body. Yields `<package>.__script_body`, and child closures
 /// then derive `<package>.__script_body__closure<N>` off it.
 fn synthesize_script_body_symbol(package: &str) -> IRSymbol {
     IRSymbol::from_identifier(&Identifier::new(package, vec!["__script_body".to_string()]))

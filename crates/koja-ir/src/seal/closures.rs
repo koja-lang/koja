@@ -3,7 +3,7 @@
 //! Two complementary checks:
 //!
 //! - [`seal_closure_decls`] runs per package and validates every
-//!   [`IRFunction`] with [`FunctionKind::Closure`] in isolation —
+//!   [`IRFunction`] with [`FunctionKind::Closure`] in isolation:
 //!   each `env_layout` slot is a supported [`IRType`], every
 //!   `LoadCapture` inside the body has `capture_index < env_layout.len()`
 //!   and `ty == env_layout[capture_index]`. It also guards against
@@ -17,7 +17,7 @@
 //!   `IRType::Function` value type matches the body's
 //!   `params`/`return_type` signature.
 //!
-//! Both checks panic on violation through [`super::seal_panic`] —
+//! Both checks panic on violation through [`super::seal_panic`], since
 //! closure seal failures indicate a [`crate::lower::closures`] bug,
 //! not a user error.
 
@@ -58,7 +58,7 @@ pub(super) fn seal_closure_decls(pkg: &IRPackage) {
 /// supported set, and every `LoadCapture` keyed into that layout
 /// is in range with a matching `ty`. Also enforces unique capture
 /// reads at the layout level (a layout slot may be read many
-/// times, that's fine — what's not fine is an out-of-range index).
+/// times, that's fine. What's not fine is an out-of-range index).
 fn seal_closure_function(function: &IRFunction, env_layout: &[IRType]) {
     let owner = format!("closure `{}`", function.symbol);
     for (index, ty) in env_layout.iter().enumerate() {
@@ -102,7 +102,7 @@ fn forbid_loadcapture_in(function: &IRFunction) {
             if let IRInstruction::LoadCapture { capture_index, .. } = inst {
                 seal_panic(&format!(
                     "{owner} block {} emits LoadCapture #{capture_index} but the function is \
-                     not a closure body — only `FunctionKind::Closure` admits captures",
+                     not a closure body (only `FunctionKind::Closure` admits captures)",
                     block.id,
                 ));
             }
@@ -113,7 +113,7 @@ fn forbid_loadcapture_in(function: &IRFunction) {
 /// Cross-instruction closure check. Driven by the `(owner, inst)`
 /// stream the caller produces (see
 /// [`super::structs::package_instructions`] /
-/// [`super::structs::script_body_instructions`]); `lookup`
+/// [`super::structs::script_body_instructions`]). `lookup`
 /// resolves an [`IRSymbol::mangled`] view to the registered
 /// [`IRFunction`] (`IRProgram::function` / `IRScript::function`).
 pub(super) fn seal_closure_ops<'inst, 'fun>(
@@ -156,8 +156,8 @@ fn require_closure_kind<'fun>(function: &'fun IRFunction, owner: &str) -> &'fun 
     match &function.kind {
         FunctionKind::Closure { env_layout } => env_layout,
         other => seal_panic(&format!(
-            "{owner}: MakeClosure body `{}` is `{kind}` — only `FunctionKind::Closure` is \
-             admitted as a closure body",
+            "{owner}: MakeClosure body `{}` is `{kind}` (only `FunctionKind::Closure` is \
+             admitted as a closure body)",
             function.symbol,
             kind = kind_label(other),
         )),
@@ -182,8 +182,8 @@ fn require_value_type_matches_body(
     } = value_ty
     else {
         seal_panic(&format!(
-            "{owner}: MakeClosure for `{body}` carries ty `{value_ty:?}` — closure values must \
-             have type `IRType::Function`",
+            "{owner}: MakeClosure for `{body}` carries ty `{value_ty:?}` (closure values must \
+             have type `IRType::Function`)",
         ));
     };
     if ty_params.len() != function.params.len() {
@@ -417,7 +417,7 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "is `Regular` — only `FunctionKind::Closure`")]
+    #[should_panic(expected = "is `Regular` (only `FunctionKind::Closure`")]
     fn make_closure_pointing_at_regular_panics() {
         let target = regular_function_with(Vec::new());
         let make = IRInstruction::MakeClosure {

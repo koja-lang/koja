@@ -1,20 +1,20 @@
 //! Closure-expression lowering. Three responsibilities:
 //!
-//! 1. **Capture analysis** — walk the closure body, collect the
+//! 1. **Capture analysis**: walk the closure body, collect the
 //!    outer-scope [`LocalId`]s referenced (deduped, in encounter
 //!    order). Nested closures contribute their own captures up to
 //!    this closure's scope.
-//! 2. **Body synthesis** — mint a `<enclosing>__closure<N>` symbol
+//! 2. **Body synthesis**: mint a `<enclosing>__closure<N>` symbol
 //!    and a [`FunctionKind::Closure`] [`IRFunction`] whose body
 //!    lowers under a fresh ctx whose [`ClosureState::set_captures`]
 //!    redirects outer-local idents through env-loads.
-//! 3. **Fn-as-value adapter** — wrap a named function in a
+//! 3. **Fn-as-value adapter**: wrap a named function in a
 //!    captureless [`FunctionKind::Closure`] so it can flow through
 //!    closure-typed slots ([`synthesize_fn_as_closure_wrapper`]).
 //!
 //! [`MakeClosure`] is then emitted in the outer block, reading each
 //! capture through the outer ctx's normal local-or-capture path.
-//! Captures copy into the env (value semantics — the outer binding
+//! Captures copy into the env (value semantics, so the outer binding
 //! stays live).
 
 use std::collections::{BTreeMap, BTreeSet, HashSet};
@@ -137,7 +137,7 @@ fn synthesize_env_glue(symbol: &IRSymbol, captures: &[CaptureInfo], output: &mut
 
 /// Build the `<body>.$drop_env$` capture-release glue
 /// ([`FunctionKind::DropClosureGlue`]) for a closure that owns at
-/// least one heap-managed capture. Returns `None` otherwise — the env
+/// least one heap-managed capture. Returns `None` otherwise, and the env
 /// is then freed without per-capture teardown (the runtime sees a
 /// null glue pointer in the env header).
 ///
@@ -145,7 +145,7 @@ fn synthesize_env_glue(symbol: &IRSymbol, captures: &[CaptureInfo], output: &mut
 /// user-visible params: for each heap-managed capture it
 /// [`IRInstruction::LoadCapture`]s the value and [`IRInstruction::DropValue`]s
 /// it. Composite drops are rewritten into `drop_T` calls by
-/// [`crate::elaborate`]; leaf drops stay inline `rc--` in the backend.
+/// [`crate::elaborate`], while leaf drops stay inline `rc--` in the backend.
 fn synthesize_drop_env(body_symbol: &IRSymbol, captures: &[CaptureInfo]) -> Option<IRFunction> {
     if !captures
         .iter()
@@ -191,7 +191,7 @@ fn synthesize_drop_env(body_symbol: &IRSymbol, captures: &[CaptureInfo]) -> Opti
 
 /// Register the `<body>.$copy_env$` env deep-copy glue shell
 /// ([`FunctionKind::CopyClosureGlue`]) for a closure that captures.
-/// Every capturing closure gets one — any closure value may flow
+/// Every capturing closure gets one, since any closure value may flow
 /// into a process-boundary send, and even an all-`Copy` env must be
 /// re-allocated to avoid cross-process rc traffic on the block.
 /// Returns `None` for captureless closures (null env, nothing to
@@ -232,8 +232,8 @@ fn expect_function_params(resolution: &ResolvedType) -> &[ResolvedType] {
     match resolution {
         ResolvedType::Anonymous(AnonymousKind::Function { params, .. }) => params,
         other => panic!(
-            "IR lower: closure resolution must be Anonymous(Function), got {other:?} — \
-             typecheck seal violation",
+            "IR lower: closure resolution must be Anonymous(Function), got {other:?} \
+             (typecheck seal violation)",
         ),
     }
 }
@@ -242,8 +242,8 @@ fn expect_function_return(resolution: &ResolvedType) -> &ResolvedType {
     match resolution {
         ResolvedType::Anonymous(AnonymousKind::Function { ret, .. }) => ret,
         other => panic!(
-            "IR lower: closure resolution must be Anonymous(Function), got {other:?} — \
-             typecheck seal violation",
+            "IR lower: closure resolution must be Anonymous(Function), got {other:?} \
+             (typecheck seal violation)",
         ),
     }
 }
@@ -266,7 +266,7 @@ fn param_ids(params: &[ClosureParam]) -> HashSet<LocalId> {
 /// `Resolution::Local` (or `Self_::local_id`) that the closure
 /// doesn't bind itself (params, assignments, pattern bindings).
 /// Returns dedup'd ids in encounter order. Nested closures
-/// contribute via a per-scope frame; their own params /
+/// contribute via a per-scope frame, and their own params /
 /// body-locals shadow ours during their subwalk.
 fn collect_captures(body: BodyShape<'_>, params: HashSet<LocalId>) -> Vec<(LocalId, ResolvedType)> {
     let mut walker = CaptureWalker {
@@ -516,7 +516,7 @@ impl CaptureWalker {
 
     /// An arm's pattern bindings (`Shape.Circle(n)`, `event: Lifecycle`)
     /// are locals of the arm's scope, not references to the outer
-    /// function — push them as a frame so guard / body reads of the
+    /// function. Push them as a frame so guard / body reads of the
     /// bound names aren't misclassified as captures.
     fn visit_match_arm(&mut self, arm: &MatchArm) {
         self.scopes.push(pattern_binding_ids(&arm.pattern));
@@ -689,8 +689,8 @@ fn closure_param_local_id(param: &ClosureParam, index: usize) -> LocalId {
         } => *id,
         ClosureParam::Name { local_id: None, .. }
         | ClosureParam::Wildcard { local_id: None, .. } => panic!(
-            "IR lower: closure param #{index} carries no LocalId — \
-             typecheck resolve invariant violation",
+            "IR lower: closure param #{index} carries no LocalId \
+             (typecheck resolve invariant violation)",
         ),
     }
 }
@@ -730,7 +730,7 @@ fn emit_make_closure(
             ty,
         },
     );
-    // A capturing closure allocates a fresh heap env it owns; a
+    // A capturing closure allocates a fresh heap env it owns, while a
     // captureless one carries no env (null pointer) and stays borrowed.
     // Marking only the capturing case keeps the result move-or-release
     // without a spurious drop of a null env.

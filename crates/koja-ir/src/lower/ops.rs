@@ -21,9 +21,9 @@ use crate::types::{ConstValue, IRBinOp, IRType, IRUnaryOp};
 /// Lower a literal AST node to a [`ConstValue`]. `target` is the
 /// typecheck-recorded coercion width when the literal flows into a
 /// narrower-than-default sized slot (struct field, call arg, return
-/// type, etc.); `None` keeps the default `Int64` / `Float64` head.
+/// type, etc.), and `None` keeps the default `Int64` / `Float64` head.
 /// Numeric out-of-range / parse failures push a diagnostic and
-/// return `Err(())`; non-numeric literals ignore `target`.
+/// return `Err(())`. Non-numeric literals ignore `target`.
 pub(super) fn lower_literal(
     value: &Literal,
     span: Span,
@@ -67,7 +67,7 @@ pub(super) fn lower_literal(
                 Err(())
             }
         },
-        // Used by `match`-arm literal patterns; expression-position
+        // Used by `match`-arm literal patterns. Expression-position
         // strings still flow through `ExprKind::String`'s own lower.
         Literal::String(text) => Ok(ConstValue::String(text.clone())),
         Literal::Unit => Ok(ConstValue::Unit),
@@ -92,8 +92,8 @@ pub(super) fn int_const_at_width(value: i128, target: Option<NumericLiteralWidth
         Some(NumericLiteralWidth::UInt64) => ConstValue::UInt64(value as u64),
         // Numeric coercion routes int literals only into integer
         // widths. A `Float*` recorded coercion against an `Int`
-        // literal is a typecheck bug — surface as a default fallback
-        // rather than panicking; a follow-up surface diagnostic
+        // literal is a typecheck bug. Surface as a default fallback
+        // rather than panicking, since a follow-up surface diagnostic
         // already would have fired.
         Some(NumericLiteralWidth::Float32) | Some(NumericLiteralWidth::Float64) => {
             ConstValue::Int64(value as i64)
@@ -116,7 +116,7 @@ fn float_const_at_width(value: f64, target: Option<NumericLiteralWidth>) -> Cons
 /// Parse an `IntLit` token's raw text into `i128`. The lexer
 /// preserves prefixes (`0x` / `0b`) and underscore separators
 /// verbatim, but `from_str_radix` is decimal-only by default and
-/// rejects both — strip underscores first, then dispatch to the
+/// rejects both, so strip underscores first, then dispatch to the
 /// right radix based on the prefix. `0X` / `0B` are accepted to
 /// match the lexer, which treats them identically to the lowercase
 /// forms. `i128` so a `UInt64` literal above `i64::MAX` (typecheck
@@ -158,18 +158,18 @@ pub(super) fn lower_bin_op(
         BinOp::And | BinOp::Or => {
             panic!(
                 "IR lower: `{op:?}` must route through short-circuit control flow, \
-                 not `lower_bin_op`: caller dispatch bug"
+                 not `lower_bin_op` (caller dispatch bug)"
             )
         }
-        // `<>` concat doesn't reach this helper — the expression
+        // `<>` concat doesn't reach this helper. The expression
         // lowerer intercepts `BinOp::Concat` and emits
         // [`IRInstruction::Concat`] directly. If we land here, the
-        // dispatcher branched incorrectly; surface a hard error so
-        // the caller fails fast rather than silently miscompiling.
+        // dispatcher branched incorrectly, so surface a hard error
+        // and the caller fails fast rather than silently miscompiling.
         BinOp::Concat => {
             diagnostics.push(Diagnostic::error(
                 "IR lower: `<>` concat must route through `IRInstruction::Concat`, \
-                 not `lower_bin_op` — caller dispatch bug",
+                 not `lower_bin_op` (caller dispatch bug)",
                 span,
             ));
             Err(())
@@ -185,7 +185,7 @@ pub(super) fn lower_unary_op(op: UnaryOp) -> IRUnaryOp {
 }
 
 /// Map a [`ConstValue`] variant to its [`IRType`]. Pure
-/// transliteration — each integer / float width gets its mirroring
+/// transliteration: each integer / float width gets its mirroring
 /// type, and `Bool` / `String` / `Unit` round-trip directly.
 pub(super) fn const_value_type(value: &ConstValue) -> IRType {
     match value {
@@ -224,7 +224,7 @@ pub(super) fn bin_op_result_type(op: IRBinOp, operand_ty: IRType) -> IRType {
 }
 
 /// The result type of a [`IRUnaryOp`] given the operand type. `Neg`
-/// preserves the operand width; `Not` is always `Bool`.
+/// preserves the operand width, and `Not` is always `Bool`.
 pub(super) fn unary_op_result_type(op: IRUnaryOp, operand_ty: IRType) -> IRType {
     match op {
         IRUnaryOp::Neg => operand_ty,

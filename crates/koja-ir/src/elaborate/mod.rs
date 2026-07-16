@@ -3,7 +3,7 @@
 //! *drop*, and *deep-copy* glue for every heap-managed **composite**
 //! type the program acquires, releases, or copies across a process
 //! boundary, and registers it on the package set so the backend can
-//! emit — and `call` — the glue without lazy backfill (northstar:
+//! emit (and `call`) the glue without lazy backfill (northstar:
 //! codegen never invokes a planner).
 //!
 //! ## What counts as composite glue
@@ -17,22 +17,22 @@
 //! - **Heap leaves** (`String` / `Binary` / `Bits`) and **closures**
 //!   (`Function`): inline `rc++` / `rc--` (the closure env's
 //!   per-capture teardown hides behind its header's `drop_fn`). No
-//!   glue function — handled directly at the instruction.
+//!   glue function, these are handled directly at the instruction.
 //! - **Composites** (`List` / `Map` / `Set`, heap-owning structs /
 //!   enums / unions): a `call` to the synthesized `<T>.$clone$` /
 //!   `<T>.$drop$`. This pass registers those functions.
 //!
 //! The deep-copy family ([`IRInstruction::DeepCopy`] /
 //! `<T>.$deep_copy$`, emitted at process-boundary sends) mirrors the
-//! clone family bucket-for-bucket; its discovery additionally seeds
+//! clone family bucket-for-bucket. Its discovery additionally seeds
 //! from every [`FunctionKind::CopyClosureGlue`] env layout, whose
 //! backend-synthesized body calls `deep_copy_T` per composite
 //! capture.
 //!
-//! The boxed-recursive [`IRType::Indirect`] is *transparent* — purely
+//! The boxed-recursive [`IRType::Indirect`] is *transparent*: purely
 //! the storage shape the cycle pass stamps on a recursive field, never
 //! a value in its own right (projection unboxes, construction
-//! re-boxes). It carries no glue: the enclosing aggregate's glue
+//! re-boxes). It carries no glue, since the enclosing aggregate's glue
 //! clones / drops the unboxed inner value (recursing into the inner
 //! type's glue), and the rebuild re-boxes.
 //!
@@ -44,7 +44,7 @@
 //! ## Two ways a glue body is born
 //!
 //! - **Aggregates** (`Struct` / `Enum` / `Union`): [`synthesis`] builds a
-//!   full IR body — field / payload projection, per-constituent
+//!   full IR body: field / payload projection, per-constituent
 //!   acquire / release (recursing into constituent glue via `Call`),
 //!   and an aggregate rebuild for clone. These carry a non-empty CFG
 //!   the backend walks like a [`FunctionKind::Regular`] body.
@@ -63,7 +63,7 @@
 //! fields, enum payloads, collection elements, union members, and the
 //! inner type behind a transparent `Indirect` box), because a
 //! composite's glue body recurses into its constituents' glue. Leaves
-//! and `Indirect` boxes themselves are skipped — they carry no glue.
+//! and `Indirect` boxes themselves are skipped, as they carry no glue.
 
 mod exit_signal;
 mod io_ready;
@@ -137,14 +137,14 @@ fn rewrite_all(
     }
 }
 
-/// True when `ty` owns heap storage that a `Drop` must release —
+/// True when `ty` owns heap storage that a `Drop` must release,
 /// the precise predicate the conservative lowering-side
 /// `is_heap_managed` defers to once the fully-monomorphized struct /
 /// enum decls exist on the program.
 ///
 /// Leaves and the always-heap collections answer `true` by shape.
 /// Aggregates (`Struct` / `Enum` / `Union`) answer `true` iff some
-/// field / payload / member does — a `struct` of scalars needs
+/// field / payload / member does, and a `struct` of scalars needs
 /// nothing. Recursion is bounded: value-level cycles are always
 /// broken by an [`IRType::Indirect`] box (stamped by
 /// [`crate::cycle::break_type_cycles`]), which answers `true`
@@ -188,10 +188,10 @@ fn needs_drop_seen(ty: &IRType, packages: &[IRPackage], visited: &mut BTreeSet<I
             .any(|member| needs_drop_seen(member, packages, visited)),
         // A closure owns its heap env block. Acquisition / release is
         // always inline (`rc++` / `koja_closure_rc_dec` on the env
-        // base — the per-instance capture teardown lives behind the
-        // env header's `drop_fn`, not behind per-type glue), so it
+        // base, while the per-instance capture teardown lives behind
+        // the env header's `drop_fn`, not behind per-type glue), so it
         // counts as needing drop without ever getting glue of its
-        // own; see [`is_inline_managed`].
+        // own. See [`is_inline_managed`].
         IRType::Function { .. } => true,
         IRType::Bool
         | IRType::CPtr(_)
@@ -225,7 +225,7 @@ fn variant_needs_drop(
     }
 }
 
-/// A heap-managed composite — needs drop *and* is not handled inline
+/// A heap-managed composite needs drop *and* is not handled inline
 /// by the backend. Only these get per-type glue functions.
 fn needs_glue(ty: &IRType, packages: &[IRPackage]) -> bool {
     !is_inline_managed(ty) && needs_drop(ty, packages)
@@ -348,7 +348,7 @@ fn close_over_constituents(mut work: Vec<IRType>, packages: &[IRPackage]) -> BTr
         for constituent in constituent_types(&ty, packages) {
             // A boxed-recursive field is cloned / dropped as its
             // unboxed inner value (the aggregate's own glue recurses),
-            // so close over `inner` — no standalone `Indirect` glue.
+            // so close over `inner` with no standalone `Indirect` glue.
             let constituent = unbox(&constituent).clone();
             if needs_glue(&constituent, packages) {
                 work.push(constituent);
@@ -359,7 +359,7 @@ fn close_over_constituents(mut work: Vec<IRType>, packages: &[IRPackage]) -> BTr
 }
 
 /// The payload type (`M` or `R`) a message / reply send intrinsic
-/// copies across a process boundary — `params[1].ty` of `Ref.cast` /
+/// copies across a process boundary: `params[1].ty` of `Ref.cast` /
 /// `Ref.call` / `Ref.send_after` / `ReplyTo.send` (`params[0]` is the
 /// `self` `Ref` / `ReplyTo`). `None` for any other function.
 fn send_intrinsic_payload(function: &IRFunction) -> Option<&IRType> {
@@ -488,11 +488,11 @@ fn glue_registered(packages: &[IRPackage], symbol: &IRSymbol) -> bool {
         .any(|pkg| pkg.functions.contains_key(symbol.mangled()))
 }
 
-/// Register the clone + drop glue shells for `ty` (idempotent —
+/// Register the clone + drop glue shells for `ty` (idempotent, as
 /// re-registering a symbol already present is a no-op). Aggregate
-/// bodies are synthesized here; collection bodies stay empty for the
-/// backend to synthesize. `Indirect` never reaches here — it is
-/// transparent and discovery closes over its inner type instead.
+/// bodies are synthesized here, while collection bodies stay empty for
+/// the backend to synthesize. `Indirect` never reaches here, since it
+/// is transparent and discovery closes over its inner type instead.
 fn register_glue(packages: &mut [IRPackage], ty: &IRType) {
     let (clone_blocks, drop_blocks) = if is_aggregate(ty) {
         (
@@ -573,7 +573,7 @@ fn glue_shell(
 /// Insert `function` into the package its symbol prefix names, or the
 /// `packages[0]` fallback when the prefix matches no package (the
 /// structural-collection glue case, whose synthetic symbol has no
-/// real package root). Idempotent: a symbol already registered
+/// real package root). Idempotent, as a symbol already registered
 /// anywhere is left untouched.
 fn insert_glue(packages: &mut [IRPackage], function: IRFunction) {
     if glue_registered(packages, &function.symbol) {

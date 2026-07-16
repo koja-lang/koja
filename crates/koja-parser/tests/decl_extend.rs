@@ -7,26 +7,15 @@
 //! - `priv fn` members
 //! - inline `type Alias = TypeExpr` members
 
-use koja_ast::ast::{ExtendBlock, ImplMember, Item, TypeExpr, Visibility};
-use koja_ast::util::dedent;
+use koja_ast::ast::{ImplMember, TypeExpr, Visibility};
 
 mod common;
 
-use common::parse_clean;
-
-fn first_extend(source: &str) -> ExtendBlock {
-    let file = parse_clean(source);
-    for item in file.items {
-        if let Item::Extend(b) = item {
-            return b;
-        }
-    }
-    panic!("no extend block in parsed output");
-}
+use common::first_extend;
 
 #[test]
 fn extend_block_parses() {
-    let src = dedent(
+    let block = first_extend(
         "
         extend Point
           fn origin() -> Point
@@ -35,7 +24,6 @@ fn extend_block_parses() {
         end
         ",
     );
-    let block = first_extend(&src);
     assert!(matches!(block.target, TypeExpr::Named { ref path, .. } if path == &["Point"]));
     assert_eq!(block.members.len(), 1);
     assert!(matches!(block.members[0], ImplMember::Function(_)));
@@ -43,7 +31,7 @@ fn extend_block_parses() {
 
 #[test]
 fn extend_with_priv_fn_parses() {
-    let src = dedent(
+    let block = first_extend(
         "
         extend Counter
           priv fn helper(self) -> Int
@@ -52,7 +40,6 @@ fn extend_with_priv_fn_parses() {
         end
         ",
     );
-    let block = first_extend(&src);
     let ImplMember::Function(function) = &block.members[0] else {
         panic!("expected function member, got {:?}", block.members[0]);
     };
@@ -62,7 +49,7 @@ fn extend_with_priv_fn_parses() {
 
 #[test]
 fn extend_with_generic_target() {
-    let src = dedent(
+    let block = first_extend(
         "
         extend Box<Int>
           fn unwrap(self) -> Int
@@ -71,7 +58,6 @@ fn extend_with_generic_target() {
         end
         ",
     );
-    let block = first_extend(&src);
     assert!(matches!(
         &block.target,
         TypeExpr::Generic { path, .. } if path == &["Box"]
@@ -83,7 +69,7 @@ fn extend_with_dotted_target() {
     // Cross-package extends use the dotted form to name the target's
     // owning package: `extend Net.TCPSocket` adds methods to the
     // `TCPSocket` struct defined in the `Net` package.
-    let src = dedent(
+    let block = first_extend(
         "
         extend Net.TCPSocket
           fn read_line(self) -> String
@@ -92,7 +78,6 @@ fn extend_with_dotted_target() {
         end
         ",
     );
-    let block = first_extend(&src);
     match &block.target {
         TypeExpr::Named { path, .. } => {
             assert_eq!(path, &vec!["Net".to_string(), "TCPSocket".to_string()]);
@@ -103,7 +88,7 @@ fn extend_with_dotted_target() {
 
 #[test]
 fn extend_with_type_alias_member() {
-    let src = dedent(
+    let block = first_extend(
         "
         extend Counter
           type Snapshot = Int
@@ -114,7 +99,6 @@ fn extend_with_type_alias_member() {
         end
         ",
     );
-    let block = first_extend(&src);
     assert_eq!(block.members.len(), 2);
     assert!(matches!(block.members[0], ImplMember::TypeAlias(_)));
     assert!(matches!(block.members[1], ImplMember::Function(_)));

@@ -1,5 +1,5 @@
 //! Regression coverage for the opaque-receiver shortcut in
-//! [`koja_ir::lower::calls::lower_method_call`]: when a bounded
+//! [`koja_ir::lower::calls::lower_method_call`]. When a bounded
 //! `Debug.{format, print, inspect}` call's receiver, post
 //! monomorphic substitution, resolves to an anonymous type
 //! ([`ResolvedType::Union`] or
@@ -7,12 +7,12 @@
 //! emits a constant `"..."` placeholder instead of routing through
 //! `receiver_struct_id`.
 //!
-//! The bug this guards: the stdlib hands out a parametric
+//! This guards the bug where the stdlib hands out a parametric
 //! `impl Debug for Pair<A, B>` whose body calls `self.first.format()`
 //! on a type-parameter receiver. Substituting `A -> Union<...>` at
 //! monomorphization time produces a method call whose receiver
 //! resolution is `Union(...)`, which the old `receiver_struct_id`
-//! would reject as a non-`Named { Global }` value — hence the panic
+//! would reject as a non-`Named { Global }` value, hence the panic
 //! we hit when loading `Net.tcp.koja`'s
 //! `Process<TCPServerConfig, TCPServerMsg | IOReady, String>` impl
 //! (it synthesizes `TCPServer.run` whose receive arm binds
@@ -22,43 +22,37 @@
 //!
 //! The behavioral contract mirrors `derive_debug`'s opaque-field
 //! rule at the AST layer
-//! ([`koja_typecheck::pipeline::synthesize::derive_debug::is_opaque_type`]):
-//! anonymous types render as the literal `"..."`. Keep the two
-//! layers in sync.
+//! ([`koja_typecheck::pipeline::synthesize::derive_debug::is_opaque_type`]),
+//! where anonymous types render as the literal `"..."`. Keep the
+//! two layers in sync.
 
-use koja_ast::util::dedent;
-use koja_ir::IRFunction;
+use koja_ir::{ConstValue, IRFunction, IRInstruction};
 
 mod common;
 
-use common::lower_script_source;
+use common::{all_instructions, lower_script_source, script_function_names};
 
 /// Walk every `IRInstruction::Const` in `function`'s blocks and
 /// collect the string literals folded into them. Used to assert
 /// that the opaque-receiver shortcut materialized the `"..."`
 /// placeholder for the union side of a `Pair<Union, _>.format` mono.
 fn collect_string_consts(function: &IRFunction) -> Vec<String> {
-    use koja_ir::{ConstValue, IRInstruction};
-    let mut out: Vec<String> = Vec::new();
-    for block in &function.blocks {
-        for instr in &block.instructions {
-            if let IRInstruction::Const {
+    all_instructions(&function.blocks)
+        .filter_map(|instr| match instr {
+            IRInstruction::Const {
                 value: ConstValue::String(s),
                 ..
-            } = instr
-            {
-                out.push(s.clone());
-            }
-        }
-    }
-    out
+            } => Some(s.clone()),
+            _ => None,
+        })
+        .collect()
 }
 
 #[test]
 fn pair_of_union_format_substitutes_to_opaque_placeholder() {
     // `Pair<A, B>.format()`'s parametric body calls
     // `self.first.format()`. With `A = Foo | Bar`, the substituted
-    // body's receiver is `Union(...)` — without the opaque shortcut
+    // body's receiver is `Union(...)`. Without the opaque shortcut
     // this would panic in `receiver_struct_id`. We exercise the path
     // by passing a union-typed pair into `format`.
     let source = "
@@ -79,7 +73,7 @@ fn pair_of_union_format_substitutes_to_opaque_placeholder() {
         0
         ";
 
-    let script = lower_script_source(&dedent(source));
+    let script = lower_script_source(source);
     let mono = script
         .packages
         .iter()
@@ -100,10 +94,10 @@ fn pair_of_union_format_substitutes_to_opaque_placeholder() {
 #[test]
 fn pair_with_function_field_format_substitutes_to_opaque_placeholder() {
     // The same shortcut covers
-    // `ResolvedType::Anonymous(AnonymousKind::Function)` — `A` lands
-    // as a function type rather than a union, but the bounded
-    // `.format()` call shape is identical. Latent before this slice;
-    // pinned here so a future refactor doesn't re-introduce the
+    // `ResolvedType::Anonymous(AnonymousKind::Function)`. Here `A`
+    // lands as a function type rather than a union, but the bounded
+    // `.format()` call shape is identical. Latent before this slice.
+    // Pinned here so a future refactor doesn't re-introduce the
     // panic for closure-typed type-param values.
     let source = "
         inc = fn (x: Int) -> Int x + 1 end
@@ -112,16 +106,13 @@ fn pair_with_function_field_format_substitutes_to_opaque_placeholder() {
         0
         ";
 
-    let script = lower_script_source(&dedent(source));
-    let all_pair_format_mangles: Vec<String> = script
-        .packages
-        .iter()
-        .flat_map(|p| p.functions.keys())
-        .map(|sym| sym.mangled().to_string())
+    let script = lower_script_source(source);
+    let all_pair_format_mangles: Vec<String> = script_function_names(&script)
+        .into_iter()
         .filter(|m| m.starts_with("Global.Pair_$") && m.ends_with(".format"))
         .collect();
     // The exact mangle for a function-typed arg includes a `Fn`
-    // marker that ir can rename later; pin the search to the
+    // marker that ir can rename later. Pin the search to the
     // mono that wasn't there before (anything except the bare
     // `Pair_$.Int64$.format` autoimport shape).
     let mono = script

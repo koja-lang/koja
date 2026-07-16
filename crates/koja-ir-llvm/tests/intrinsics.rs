@@ -3,15 +3,15 @@
 //!
 //! - `Global.print` registers as an emitter that synthesizes a
 //!   `define void @"Global.print"(ptr ...) { ... call void
-//!   @__koja_print_string(ptr ...); ret void }` shape;
+//!   @__koja_print_string(ptr ...); ret void }` shape.
 //! - the script body's call site routes through `call void
-//!   @"Global.print"(ptr ...)`;
+//!   @"Global.print"(ptr ...)`.
 //! - the spawn-driven main trampoline lands `ret i64 0` after the
 //!   user body completes, regardless of the trailing expression's
 //!   value (scripts always exit 0 on normal completion).
 //!
-//! Byte-for-byte stdout coverage lives in the lang golden suite;
-//! here we pin the static IR shape.
+//! Byte-for-byte stdout coverage lives in the lang golden suite.
+//! Here we pin the static IR shape.
 
 use koja_ast::util::dedent;
 use koja_ir::IRScript;
@@ -66,10 +66,10 @@ fn print_intrinsic_call_site_emits_void_call() {
 fn user_main_runs_print_intrinsic_then_returns_void() {
     // The script body is a `Unit`-typed `print(...)` call. With
     // auto-print removed, `__koja_user_main` is the spawn thunk
-    // carrying the user body; it should invoke `Global.print` and
+    // carrying the user body. It should invoke `Global.print` and
     // cap with `ret void`. The trampoline `@main` separately holds
-    // `ret i64 0` and never invokes `__koja_print_*` directly
-    // — the runtime printer is called only from inside
+    // `ret i64 0` and never invokes `__koja_print_*` directly.
+    // The runtime printer is called only from inside
     // `Global.print`'s synthesized body.
     let source = "
         @intrinsic
@@ -95,7 +95,7 @@ fn user_main_runs_print_intrinsic_then_returns_void() {
         "expected `__koja_user_main` to end with `ret void`; got:\n{user_main_body}",
     );
     // The runtime printer must NOT appear directly in
-    // `__koja_user_main` — it's reached only via `Global.print`.
+    // `__koja_user_main`. It's reached only via `Global.print`.
     assert!(
         !user_main_body.contains("__koja_print_"),
         "expected `__koja_user_main` not to call the runtime printer directly; got:\n{user_main_body}",
@@ -109,8 +109,8 @@ fn user_main_runs_print_intrinsic_then_returns_void() {
 }
 
 /// Slice the LLVM IR text from `define ... @<symbol>(...) {` to its
-/// matching closing `}`. Brittle by design — pure structural
-/// extraction off the textual IR — but enough for the assertion in
+/// matching closing `}`. Brittle by design (pure structural
+/// extraction off the textual IR) but enough for the assertion in
 /// the unit-trailing test above.
 fn extract_function_body<'a>(ir_text: &'a str, symbol: &str) -> &'a str {
     let needle = format!(" @{symbol}(");

@@ -2,21 +2,22 @@
 //! `src/lower/control_flow.rs`.
 //!
 //! Pins the basic-block CFG shape for the block-parameter SSA join
-//! model: every value-producing conditional ends in a merge block
+//! model. Every value-producing conditional ends in a merge block
 //! whose [`BlockParam`] receives each reaching arm's tail value via
 //! the per-edge [`BranchTarget::args`] payload. Backends translate
 //! the block param to a phi node (LLVM) or bind on edge traversal
-//! (eval); this test crate just inspects the IR shape.
+//! (eval). This test crate just inspects the IR shape.
 //!
 //! [`BlockParam`]: koja_ir::BlockParam
 //! [`BranchTarget::args`]: koja_ir::BranchTarget::args
 
-use koja_ast::util::dedent;
-use koja_ir::{BranchTarget, ConstValue, IRInstruction, IRTerminator, IRType};
+use koja_ir::{ConstValue, IRInstruction, IRTerminator, IRType};
 
 mod common;
 
-use common::{lower_script_source as lower, script_function};
+use common::{
+    block_labeled, branch_targets_into, entry_block, lower_script_source as lower, script_function,
+};
 
 #[test]
 fn if_no_else_lowers_to_three_blocks_with_unit_merge_param() {
@@ -30,7 +31,7 @@ fn if_no_else_lowers_to_three_blocks_with_unit_merge_param() {
         end
         ";
 
-    let script = lower(&dedent(source));
+    let script = lower(source);
     assert_eq!(
         script.blocks.len(),
         3,
@@ -38,7 +39,7 @@ fn if_no_else_lowers_to_three_blocks_with_unit_merge_param() {
         script.blocks.len(),
     );
 
-    let entry = &script.blocks[0];
+    let entry = entry_block(&script.blocks);
     let IRTerminator::CondBranch {
         cond: _,
         else_target,
@@ -130,7 +131,7 @@ fn if_else_lowers_to_four_blocks_with_typed_merge_param() {
         pick()
         ";
 
-    let script = lower(&dedent(source));
+    let script = lower(source);
     let pick = script_function(&script, "pick");
     assert_eq!(
         pick.blocks.len(),
@@ -139,7 +140,7 @@ fn if_else_lowers_to_four_blocks_with_typed_merge_param() {
         pick.blocks.len(),
     );
 
-    let entry = &pick.blocks[0];
+    let entry = entry_block(&pick.blocks);
     let IRTerminator::CondBranch {
         else_target,
         then_target,
@@ -201,8 +202,8 @@ fn unless_swaps_then_and_else_relative_to_if() {
         end
         ";
 
-    let script = lower(&dedent(source));
-    let entry = &script.blocks[0];
+    let script = lower(source);
+    let entry = entry_block(&script.blocks);
     let IRTerminator::CondBranch {
         else_target,
         then_target,
@@ -249,7 +250,7 @@ fn if_function_returns_unit() {
         end
         ";
 
-    let script = lower(&dedent(source));
+    let script = lower(source);
     assert_eq!(
         script.return_type,
         IRType::Unit,
@@ -270,7 +271,7 @@ fn early_return_inside_if_closes_then_branch() {
         pick()
         ";
 
-    let script = lower(&dedent(source));
+    let script = lower(source);
     let pick = script_function(&script, "pick");
     let return_blocks: Vec<_> = pick
         .blocks
@@ -299,13 +300,9 @@ fn cond_lowers_to_chained_test_blocks_with_typed_merge_param() {
         pick()
         ";
 
-    let script = lower(&dedent(source));
+    let script = lower(source);
     let pick = script_function(&script, "pick");
-    let merge = pick
-        .blocks
-        .iter()
-        .find(|b| b.label == "cond_merge")
-        .expect("missing cond_merge block");
+    let merge = block_labeled(&pick.blocks, "cond_merge");
     assert_eq!(merge.params.len(), 1);
     assert_eq!(
         merge.params[0].ty,
@@ -314,14 +311,7 @@ fn cond_lowers_to_chained_test_blocks_with_typed_merge_param() {
     );
 
     // Three branches into the merge: two arm bodies + one else body.
-    let incoming: Vec<&BranchTarget> = pick
-        .blocks
-        .iter()
-        .filter_map(|b| match &b.terminator {
-            IRTerminator::Branch(t) if t.block == merge.id => Some(t),
-            _ => None,
-        })
-        .collect();
+    let incoming = branch_targets_into(&pick.blocks, merge.id);
     assert_eq!(
         incoming.len(),
         3,
@@ -338,7 +328,7 @@ fn cond_lowers_to_chained_test_blocks_with_typed_merge_param() {
 
 #[test]
 fn ternary_emits_cond_branch_to_two_arms_and_merge_block_param() {
-    // Same shape as `if`/`else`'s with-else path: entry CondBranches
+    // Same shape as the with-else `if` path. Entry CondBranches
     // to a then- and an else-block, both arms unconditionally branch
     // into a typed merge block, and the merge's BlockParam is the
     // ternary's value.
@@ -350,7 +340,7 @@ fn ternary_emits_cond_branch_to_two_arms_and_merge_block_param() {
         pick()
         ";
 
-    let script = lower(&dedent(source));
+    let script = lower(source);
     let pick = script_function(&script, "pick");
     assert_eq!(
         pick.blocks.len(),
@@ -359,7 +349,7 @@ fn ternary_emits_cond_branch_to_two_arms_and_merge_block_param() {
         pick.blocks.len(),
     );
 
-    let entry = &pick.blocks[0];
+    let entry = entry_block(&pick.blocks);
     let IRTerminator::CondBranch {
         else_target,
         then_target,
@@ -424,7 +414,7 @@ fn ternary_emits_cond_branch_to_two_arms_and_merge_block_param() {
 #[test]
 fn merge_block_param_value_drives_function_return() {
     // The trailing if/else expression's value is the merge block's
-    // BlockParam; the function-end Return reads that param.
+    // BlockParam. The function-end Return reads that param.
     let source = "
         fn pick -> Int
           if true
@@ -437,13 +427,9 @@ fn merge_block_param_value_drives_function_return() {
         pick()
         ";
 
-    let script = lower(&dedent(source));
+    let script = lower(source);
     let pick = script_function(&script, "pick");
-    let merge = pick
-        .blocks
-        .iter()
-        .find(|b| b.label == "if_merge")
-        .expect("missing if_merge block");
+    let merge = block_labeled(&pick.blocks, "if_merge");
     let merge_param = merge.params[0].dest;
     assert_eq!(
         merge.terminator,
@@ -452,8 +438,8 @@ fn merge_block_param_value_drives_function_return() {
         },
         "merge's `Return` should read the BlockParam carrying the joined arm value",
     );
-    // Sanity: no Const::Unit emitted in the merge — the arms hand
-    // it a real Int via the BlockParam.
+    // The arms hand the merge a real Int via the BlockParam, so no
+    // Unit constant should be synthesized there.
     let unit_const_in_merge = merge.instructions.iter().any(|i| {
         matches!(
             i,

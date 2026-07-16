@@ -5,42 +5,15 @@
 //! and asserts the resulting AST variant. Combined, the tests pin
 //! which syntactic shape maps to which pattern node.
 
-use koja_ast::ast::{Expr, ExprKind, Item, Literal, Pattern, Statement};
-use koja_ast::util::dedent;
+use koja_ast::ast::{Literal, Pattern};
 
 mod common;
 
-use common::{assert_message_contains, parse_clean, parse_failing};
-
-fn first_match(source: &str) -> Vec<koja_ast::ast::MatchArm> {
-    let file = parse_clean(source);
-    for item in file.items {
-        if let Item::Function(f) = item {
-            for stmt in f.body.unwrap_or_default() {
-                if let Statement::Expr(Expr {
-                    kind: ExprKind::Match { arms, .. },
-                    ..
-                })
-                | Statement::Assignment {
-                    value:
-                        Expr {
-                            kind: ExprKind::Match { arms, .. },
-                            ..
-                        },
-                    ..
-                } = stmt
-                {
-                    return arms;
-                }
-            }
-        }
-    }
-    panic!("no match expression in parsed output");
-}
+use common::{first_match_arms, parse_failing_with};
 
 #[test]
 fn wildcard_pattern() {
-    let src = dedent(
+    let arms = first_match_arms(
         "
         fn run
           match x
@@ -49,13 +22,12 @@ fn wildcard_pattern() {
         end
         ",
     );
-    let arms = first_match(&src);
     assert!(matches!(arms[0].pattern, Pattern::Wildcard { .. }));
 }
 
 #[test]
 fn binding_pattern() {
-    let src = dedent(
+    let arms = first_match_arms(
         "
         fn run
           match x
@@ -64,13 +36,12 @@ fn binding_pattern() {
         end
         ",
     );
-    let arms = first_match(&src);
     assert!(matches!(arms[0].pattern, Pattern::Binding { ref name, .. } if name == "n"));
 }
 
 #[test]
 fn literal_int_pattern() {
-    let src = dedent(
+    let arms = first_match_arms(
         "
         fn run
           match x
@@ -80,13 +51,12 @@ fn literal_int_pattern() {
         end
         ",
     );
-    let arms = first_match(&src);
     assert!(matches!(arms[0].pattern, Pattern::Literal { .. }));
 }
 
 #[test]
 fn literal_string_pattern() {
-    let src = dedent(
+    let arms = first_match_arms(
         "
         fn run
           match x
@@ -96,7 +66,6 @@ fn literal_string_pattern() {
         end
         ",
     );
-    let arms = first_match(&src);
     assert!(matches!(arms[0].pattern, Pattern::Literal { .. }));
 }
 
@@ -106,7 +75,7 @@ fn literal_string_pattern() {
 /// expression always agree on the matched text.
 #[test]
 fn literal_multiline_string_pattern() {
-    let src = dedent(
+    let arms = first_match_arms(
         r#"
         fn run
           match x
@@ -119,7 +88,6 @@ fn literal_multiline_string_pattern() {
         end
         "#,
     );
-    let arms = first_match(&src);
     let Pattern::Literal {
         value: Literal::String(text),
         ..
@@ -132,7 +100,7 @@ fn literal_multiline_string_pattern() {
 
 #[test]
 fn string_pattern_with_interpolation_is_diagnosed() {
-    let src = dedent(
+    parse_failing_with(
         "
         fn run
           match x
@@ -141,14 +109,13 @@ fn string_pattern_with_interpolation_is_diagnosed() {
           end
         end
         ",
+        &["string patterns cannot contain"],
     );
-    let result = parse_failing(&src);
-    assert_message_contains(&result, "string patterns cannot contain");
 }
 
 #[test]
 fn literal_bool_pattern() {
-    let src = dedent(
+    let arms = first_match_arms(
         "
         fn run
           match x
@@ -158,14 +125,13 @@ fn literal_bool_pattern() {
         end
         ",
     );
-    let arms = first_match(&src);
     assert!(matches!(arms[0].pattern, Pattern::Literal { .. }));
     assert!(matches!(arms[1].pattern, Pattern::Literal { .. }));
 }
 
 #[test]
 fn or_pattern() {
-    let src = dedent(
+    let arms = first_match_arms(
         "
         fn run
           match x
@@ -175,7 +141,6 @@ fn or_pattern() {
         end
         ",
     );
-    let arms = first_match(&src);
     match &arms[0].pattern {
         Pattern::Or { patterns, .. } => assert_eq!(patterns.len(), 3),
         other => panic!("expected Or, got {other:?}"),
@@ -184,7 +149,7 @@ fn or_pattern() {
 
 #[test]
 fn list_pattern() {
-    let src = dedent(
+    let arms = first_match_arms(
         "
         fn run
           match items
@@ -194,7 +159,6 @@ fn list_pattern() {
         end
         ",
     );
-    let arms = first_match(&src);
     match &arms[0].pattern {
         Pattern::List { elements, .. } => assert_eq!(elements.len(), 2),
         other => panic!("expected List, got {other:?}"),
@@ -203,7 +167,7 @@ fn list_pattern() {
 
 #[test]
 fn enum_unit_variant_pattern() {
-    let src = dedent(
+    let arms = first_match_arms(
         "
         fn run
           match c
@@ -213,7 +177,6 @@ fn enum_unit_variant_pattern() {
         end
         ",
     );
-    let arms = first_match(&src);
     match &arms[0].pattern {
         Pattern::EnumUnit {
             type_path, variant, ..
@@ -227,7 +190,7 @@ fn enum_unit_variant_pattern() {
 
 #[test]
 fn enum_tuple_variant_pattern() {
-    let src = dedent(
+    let arms = first_match_arms(
         "
         fn run
           match o
@@ -237,7 +200,6 @@ fn enum_tuple_variant_pattern() {
         end
         ",
     );
-    let arms = first_match(&src);
     match &arms[0].pattern {
         Pattern::EnumTuple {
             variant, elements, ..
@@ -251,7 +213,7 @@ fn enum_tuple_variant_pattern() {
 
 #[test]
 fn enum_struct_variant_pattern() {
-    let src = dedent(
+    let arms = first_match_arms(
         "
         fn run
           match s
@@ -261,7 +223,6 @@ fn enum_struct_variant_pattern() {
         end
         ",
     );
-    let arms = first_match(&src);
     match &arms[0].pattern {
         Pattern::EnumStruct {
             variant, fields, ..
@@ -275,7 +236,7 @@ fn enum_struct_variant_pattern() {
 
 #[test]
 fn constructor_shorthand_pattern() {
-    let src = dedent(
+    let arms = first_match_arms(
         "
         fn run
           match r
@@ -285,7 +246,6 @@ fn constructor_shorthand_pattern() {
         end
         ",
     );
-    let arms = first_match(&src);
     match &arms[0].pattern {
         Pattern::Constructor { name, elements, .. } => {
             assert_eq!(name, "Ok");
@@ -297,7 +257,7 @@ fn constructor_shorthand_pattern() {
 
 #[test]
 fn struct_destructure_pattern() {
-    let src = dedent(
+    let arms = first_match_arms(
         "
         fn run
           match p
@@ -307,7 +267,6 @@ fn struct_destructure_pattern() {
         end
         ",
     );
-    let arms = first_match(&src);
     match &arms[0].pattern {
         Pattern::Struct {
             type_path, fields, ..
@@ -321,7 +280,7 @@ fn struct_destructure_pattern() {
 
 #[test]
 fn binary_pattern() {
-    let src = dedent(
+    let arms = first_match_arms(
         "
         fn run
           match data
@@ -331,7 +290,6 @@ fn binary_pattern() {
         end
         ",
     );
-    let arms = first_match(&src);
     match &arms[0].pattern {
         Pattern::Binary { segments, .. } => assert_eq!(segments.len(), 2),
         other => panic!("expected Binary, got {other:?}"),
@@ -340,7 +298,7 @@ fn binary_pattern() {
 
 #[test]
 fn package_qualified_enum_unit_pattern() {
-    let src = dedent(
+    let arms = first_match_arms(
         "
         fn run
           match c
@@ -350,7 +308,6 @@ fn package_qualified_enum_unit_pattern() {
         end
         ",
     );
-    let arms = first_match(&src);
     match &arms[0].pattern {
         Pattern::EnumUnit {
             type_path, variant, ..

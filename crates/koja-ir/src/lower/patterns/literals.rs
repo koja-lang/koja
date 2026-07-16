@@ -15,7 +15,7 @@ use crate::types::{IRBinOp, IRType, ValueId};
 /// Emit `subject == const(value)` into `block` and return the
 /// resulting `Bool` value. The pattern's stamped
 /// `literal_coercion` (when present) drives the const's width so
-/// the equality compares at the subject's runtime type — e.g.
+/// the equality compares at the subject's runtime type, e.g.
 /// `match x: UInt8 -> 5 -> ...` mints `Const u8 = 5` rather than
 /// the default `Const i64`. Returns `Err` only when `lower_literal`
 /// rejects the literal, which on the dispatcher path lets the

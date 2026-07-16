@@ -5,33 +5,21 @@
 //! when nested generics close two levels at once
 //! (`Map<String, List<Int>>`).
 
-use koja_ast::ast::{Item, TypeExpr};
-use koja_ast::util::dedent;
+use koja_ast::ast::TypeExpr;
 
 mod common;
 
-use common::parse_clean;
-
-fn first_field_type(source: &str) -> TypeExpr {
-    let file = parse_clean(source);
-    for item in file.items {
-        if let Item::Struct(s) = item {
-            return s.fields.into_iter().next().unwrap().type_expr;
-        }
-    }
-    panic!("no struct in parsed output");
-}
+use common::{first_field_type, first_function, first_protocol};
 
 #[test]
 fn named_single_segment() {
-    let src = dedent(
+    let ty = first_field_type(
         "
         struct S
           x: Int
         end
         ",
     );
-    let ty = first_field_type(&src);
     assert!(matches!(ty, TypeExpr::Named { path, .. } if path == vec!["Int"]));
 }
 
@@ -39,14 +27,13 @@ fn named_single_segment() {
 fn named_dotted_path() {
     // Package names are PascalCase, so a qualified type is two
     // `TypeIdent` segments stitched together with a dot.
-    let src = dedent(
+    let ty = first_field_type(
         "
         struct S
           x: JSON.Decoder
         end
         ",
     );
-    let ty = first_field_type(&src);
     assert!(
         matches!(ty, TypeExpr::Named { path, .. } if path == vec!["JSON".to_string(), "Decoder".to_string()])
     );
@@ -54,14 +41,13 @@ fn named_dotted_path() {
 
 #[test]
 fn generic_single_arg() {
-    let src = dedent(
+    let ty = first_field_type(
         "
         struct S
           x: List<Int>
         end
         ",
     );
-    let ty = first_field_type(&src);
     match ty {
         TypeExpr::Generic { path, args, .. } => {
             assert_eq!(path, vec!["List"]);
@@ -73,14 +59,13 @@ fn generic_single_arg() {
 
 #[test]
 fn generic_multiple_args() {
-    let src = dedent(
+    let ty = first_field_type(
         "
         struct S
           x: Map<String, Int>
         end
         ",
     );
-    let ty = first_field_type(&src);
     match ty {
         TypeExpr::Generic { args, .. } => assert_eq!(args.len(), 2),
         other => panic!("expected Generic, got {other:?}"),
@@ -89,14 +74,13 @@ fn generic_multiple_args() {
 
 #[test]
 fn nested_generics_close_with_gtgt() {
-    let src = dedent(
+    let ty = first_field_type(
         "
         struct S
           x: Map<String, List<Int>>
         end
         ",
     );
-    let ty = first_field_type(&src);
     match ty {
         TypeExpr::Generic { args, .. } => {
             assert_eq!(args.len(), 2);
@@ -108,14 +92,13 @@ fn nested_generics_close_with_gtgt() {
 
 #[test]
 fn function_type_no_params() {
-    let src = dedent(
+    let ty = first_field_type(
         "
         struct S
           callback: fn() -> Int
         end
         ",
     );
-    let ty = first_field_type(&src);
     match ty {
         TypeExpr::Function { params, .. } => {
             assert!(params.is_empty());
@@ -126,14 +109,13 @@ fn function_type_no_params() {
 
 #[test]
 fn function_type_with_params() {
-    let src = dedent(
+    let ty = first_field_type(
         "
         struct S
           callback: fn(Int, String) -> Bool
         end
         ",
     );
-    let ty = first_field_type(&src);
     match ty {
         TypeExpr::Function { params, .. } => {
             assert_eq!(params.len(), 2);
@@ -144,14 +126,13 @@ fn function_type_with_params() {
 
 #[test]
 fn union_type() {
-    let src = dedent(
+    let ty = first_field_type(
         "
         struct S
           x: Int | String | Bool
         end
         ",
     );
-    let ty = first_field_type(&src);
     match ty {
         TypeExpr::Union { types, .. } => assert_eq!(types.len(), 3),
         other => panic!("expected Union, got {other:?}"),
@@ -160,18 +141,13 @@ fn union_type() {
 
 #[test]
 fn self_type_inside_protocol() {
-    let src = dedent(
+    let p = first_protocol(
         "
         protocol Show
           fn show(self) -> Self
         end
         ",
     );
-    let file = parse_clean(&src);
-    let p = match &file.items[0] {
-        Item::Protocol(p) => p,
-        other => panic!("expected protocol, got {other:?}"),
-    };
     assert!(matches!(
         p.methods[0].return_type,
         Some(TypeExpr::Self_ { .. })
@@ -180,31 +156,25 @@ fn self_type_inside_protocol() {
 
 #[test]
 fn unit_return_type() {
-    let src = dedent(
+    let f = first_function(
         "
         fn run() -> ()
           ()
         end
         ",
     );
-    let file = parse_clean(&src);
-    let f = match &file.items[0] {
-        Item::Function(f) => f,
-        other => panic!("expected function, got {other:?}"),
-    };
     assert!(matches!(f.return_type, Some(TypeExpr::Unit { .. })));
 }
 
 #[test]
 fn package_qualified_generic_type() {
-    let src = dedent(
+    let ty = first_field_type(
         "
         struct S
           x: Pkg.Container<Int>
         end
         ",
     );
-    let ty = first_field_type(&src);
     match ty {
         TypeExpr::Generic { path, .. } => {
             assert_eq!(path, vec!["Pkg".to_string(), "Container".to_string()]);

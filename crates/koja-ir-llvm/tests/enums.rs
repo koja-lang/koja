@@ -4,7 +4,7 @@
 //! Three contracts are pinned:
 //!
 //! - **Pre-emission types**: every [`koja_ir::IREnumDecl`]
-//!   becomes three families of LLVM struct types — the outer
+//!   becomes three families of LLVM struct types: the outer
 //!   `%Pkg.Enum = type { [N x iAlign] }` blob, the per-variant
 //!   complete `%Pkg.Enum.Variant = type { i8, [pad x i8],
 //!   %Pkg.Enum.Variant.payload }` (or `{ i8 }` for Unit), and the
@@ -27,7 +27,7 @@
 //! All assertions are substring-only because LLVM may shuffle
 //! attribute ordering between patch versions. Auto-print of an
 //! enum return is unsupported in this slice, so the trailing
-//! expression in every test is a primitive — the enum lives in a
+//! expression in every test is a primitive. The enum lives in a
 //! static-method body that gets emitted regardless of whether the
 //! script's trailing expression references it.
 
@@ -38,14 +38,10 @@ mod common;
 
 use common::{APP_NAME, assert_contains, assert_main_shape, lower_script_source as lower_script};
 
-// ---------------------------------------------------------------------------
-// Decl emission — Unit-only enum
-// ---------------------------------------------------------------------------
-
 #[test]
 fn unit_only_enum_emits_outer_blob_and_per_variant_complete_types() {
     // Both `Red` and `Blue` need to be referenced from emitted code
-    // for LLVM to print their type definitions — unreferenced named
+    // for LLVM to print their type definitions. Unreferenced named
     // structs get elided from the textual IR even when their body
     // is set on the context. Two helper functions, one per variant,
     // keep both complete-struct types live in the printed IR.
@@ -84,14 +80,10 @@ fn unit_only_enum_emits_outer_blob_and_per_variant_complete_types() {
     );
 }
 
-// ---------------------------------------------------------------------------
-// Decl emission — Tuple variant
-// ---------------------------------------------------------------------------
-
 #[test]
 fn tuple_variant_emits_payload_struct_and_complete_with_padding() {
     // Constructing both `Ok` and `Err` (instead of just `Ok`) keeps
-    // both per-variant complete types live in the printed IR — see
+    // both per-variant complete types live in the printed IR. See
     // the docstring on `unit_only_enum_emits_outer_blob_...` above
     // for why unreferenced named structs are elided.
     let source = "
@@ -126,10 +118,6 @@ fn tuple_variant_emits_payload_struct_and_complete_with_padding() {
     assert_contains(&ir_text, "%TestApp.Result.Err = type { i8 }");
 }
 
-// ---------------------------------------------------------------------------
-// Decl emission — Struct variant
-// ---------------------------------------------------------------------------
-
 #[test]
 fn struct_variant_emits_payload_struct_and_complete_with_padding() {
     let source = "
@@ -155,10 +143,6 @@ fn struct_variant_emits_payload_struct_and_complete_with_padding() {
         "%TestApp.Shape.Rect = type { i8, [7 x i8], %TestApp.Shape.Rect.payload }",
     );
 }
-
-// ---------------------------------------------------------------------------
-// EnumConstruct emission
-// ---------------------------------------------------------------------------
 
 #[test]
 fn unit_variant_construction_lowers_to_alloca_and_tag_store() {
@@ -269,10 +253,6 @@ fn struct_variant_construction_writes_tag_and_each_named_field() {
     assert_contains(&ir_text, "store i64 20");
 }
 
-// ---------------------------------------------------------------------------
-// Outer blob alignment chunks (64-bit only)
-// ---------------------------------------------------------------------------
-
 #[cfg(target_pointer_width = "64")]
 #[test]
 fn outer_blob_uses_i64_chunks_when_payload_contains_int() {
@@ -294,14 +274,10 @@ fn outer_blob_uses_i64_chunks_when_payload_contains_int() {
         emit_script_llvm_ir(&script, APP_NAME).expect("emit_script_llvm_ir should succeed");
 
     // `Ok(Int)`'s complete struct is 16 bytes (tag + 7 bytes padding +
-    // i64 payload). The outer blob is `{ [2 x i64] }` — 2 i64 chunks
+    // i64 payload). The outer blob is `{ [2 x i64] }`: 2 i64 chunks
     // = 16 bytes, alignment 8.
     assert_contains(&ir_text, "%TestApp.Result = type { [2 x i64] }");
 }
-
-// ---------------------------------------------------------------------------
-// Cross-decl payloads
-// ---------------------------------------------------------------------------
 
 #[test]
 fn struct_variant_carrying_user_struct_resolves_field_through_pre_emit() {
@@ -332,10 +308,6 @@ fn struct_variant_carrying_user_struct_resolves_field_through_pre_emit() {
     );
 }
 
-// ---------------------------------------------------------------------------
-// Static method dispatch
-// ---------------------------------------------------------------------------
-
 #[test]
 fn static_method_returning_enum_emits_outer_typed_signature() {
     let source = "
@@ -357,10 +329,6 @@ fn static_method_returning_enum_emits_outer_typed_signature() {
 
     assert_contains(&ir_text, "define %TestApp.Color @TestApp.Color.primary()");
 }
-
-// ---------------------------------------------------------------------------
-// Script mode: enum construction from a non-trailing position
-// ---------------------------------------------------------------------------
 
 #[test]
 fn script_can_emit_enum_construct_from_non_trailing_assignment() {

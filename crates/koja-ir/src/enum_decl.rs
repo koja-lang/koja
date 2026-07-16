@@ -5,13 +5,13 @@
 //! package-qualified name, mirroring [`crate::IRStructDecl`]) and
 //! carries variant metadata in declaration order. Each
 //! [`IREnumVariant`] carries an [`IRVariantTag`] equal to its
-//! 0-based position; the tag width caps the variant count at 256
+//! 0-based position, and the tag width caps the variant count at 256
 //! (the LLVM layout uses an `i8` discriminant). Variant order
 //! matches declaration order so eval / LLVM index by position.
 //!
 //! The [`IRVariantPayload::Struct`] arm and the
 //! [`EnumPayloadInit::Struct`] arm intentionally reuse
-//! [`crate::IRStructField`] and [`crate::StructFieldInit`] — a
+//! [`crate::IRStructField`] and [`crate::StructFieldInit`], since a
 //! struct variant's payload layout is structurally a struct, and
 //! the construction-site init is structurally a `StructInit::fields`.
 //! Reusing keeps the seal helpers (dense-index / unique-name /
@@ -24,8 +24,8 @@
 //! Each enum gets three families of LLVM types:
 //!
 //! - `%<enum>` (outer): an opaque blob sized + aligned to fit the
-//!   largest complete variant struct. `{ [N x i<max_align*8>] }` —
-//!   the `iN` chunks are the trick that gives LLVM "this storage is
+//!   largest complete variant struct. `{ [N x i<max_align*8>] }`,
+//!   where the `iN` chunks are the trick that gives LLVM "this storage is
 //!   aligned to max_align" (a plain `[M x i8]` is alignment-1
 //!   regardless of size).
 //! - `%<enum>.<variant>` (per-variant complete): non-packed
@@ -41,11 +41,11 @@
 //! then GEPs through the per-variant complete type for the tag and
 //! the per-variant payload struct for fields. With opaque pointers
 //! (`ptr`), the same alloca pointer flows through different GEPs
-//! typed as different structs — no `bitcast` instruction is emitted
+//! typed as different structs, so no `bitcast` instruction is emitted
 //! at the LLVM IR level.
 //!
 //! We diverge from v1's packed `{ i8, [N x i8] }` layout because
-//! that layout misaligns payload fields (technically UB; relies on
+//! that layout misaligns payload fields (technically UB, relying on
 //! x86_64 / ARM64 tolerating misaligned access). The Rust-style
 //! layout is correct on every target LLVM supports.
 
@@ -54,19 +54,19 @@ use crate::struct_decl::{IRStructField, StructFieldInit};
 use crate::types::{IRType, ValueId};
 
 /// Discriminant tag for an enum variant. Wraps a `u8` because the
-/// LLVM layout uses an `i8` field for the tag — keeps the tag width
+/// LLVM layout uses an `i8` field for the tag, which keeps the tag width
 /// contract on the type rather than scattered across call sites.
 ///
 /// Mirrors the opaque-newtype pattern other IR identifiers use
-/// ([`crate::IRBlockId`], [`crate::ValueId`], [`crate::IRLocalId`]):
-/// distinct from raw `u8` so the type system distinguishes "this is
+/// ([`crate::IRBlockId`], [`crate::ValueId`], [`crate::IRLocalId`]).
+/// It is distinct from raw `u8` so the type system distinguishes "this is
 /// a variant tag" from "this is some other byte." `Display` renders
 /// `#0`, `#1`, … to align with `bb<n>` / `%<n>` IR text-format
 /// conventions.
 ///
 /// **Transient invariant**: capped at 256 variants total per enum.
 /// Lowering bounds-checks `position <= u8::MAX` and surfaces a
-/// feature-gap diagnostic on overflow; the cap goes away when we
+/// feature-gap diagnostic on overflow. The cap goes away when we
 /// widen the tag (a follow-up beyond this slice).
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct IRVariantTag(pub u8);
@@ -78,11 +78,11 @@ impl std::fmt::Display for IRVariantTag {
 }
 
 /// A lowered enum declaration. `symbol` is the same package-qualified
-/// mangled name shape an [`crate::IRFunction`] uses; `variants` is
+/// mangled name shape an [`crate::IRFunction`] uses, and `variants` is
 /// the declaration-order variant list. Variant order *is* the tag
-/// — variant `i` has `tag == IRVariantTag(i as u8)` — so seal
+/// (variant `i` has `tag == IRVariantTag(i as u8)`), so seal
 /// asserts dense, declaration-ordered tags. Generic decls never
-/// appear here — [`crate::generics::instantiate`] produces one
+/// appear here, as [`crate::generics::instantiate`] produces one
 /// [`IREnumDecl`] per discovered instantiation, keyed at its
 /// mangled symbol.
 #[derive(Debug, Clone)]
@@ -92,8 +92,8 @@ pub struct IREnumDecl {
 }
 
 /// One variant of an [`IREnumDecl`]. `name` is the surface variant
-/// name (`Some` in `Option.Some`); `payload` carries the variant's
-/// data shape; `tag` is the discriminant byte (== position in
+/// name (`Some` in `Option.Some`), `payload` carries the variant's
+/// data shape, and `tag` is the discriminant byte (== position in
 /// `variants`, asserted by seal).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct IREnumVariant {
@@ -117,9 +117,9 @@ pub enum IRVariantPayload {
 /// Per-instruction payload init for [`crate::IRInstruction::EnumConstruct`].
 /// Mirrors [`IRVariantPayload`] one-to-one but carries
 /// already-lowered [`ValueId`]s instead of declared types. The
-/// `Struct` arm reuses [`StructFieldInit`] — same canonicalization
-/// invariant the struct slice already maintains: indices are
-/// declaration-ordered with one entry per declared field.
+/// `Struct` arm reuses [`StructFieldInit`], keeping the same
+/// canonicalization invariant the struct slice already maintains:
+/// indices are declaration-ordered with one entry per declared field.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum EnumPayloadInit {
     Struct(Vec<StructFieldInit>),

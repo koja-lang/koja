@@ -4,7 +4,7 @@
 //! Drop glue is enabled: a heap-leaf local (`String` / `Binary` /
 //! `Bits`) is reference-counted, so lowering emits a `DropLocal`
 //! (`rc--`, freeing at zero) at scope exit. Acquisition sites
-//! (`Clone` = `rc++`) keep the count balanced — a binding shared by
+//! (`Clone` = `rc++`) keep the count balanced. A binding shared by
 //! assignment, returned out of the function, captured in a struct
 //! field, or passed as an argument each acquires its own reference, so
 //! the per-slot drop is safe rather than a double-free. These tests
@@ -13,38 +13,31 @@
 //! glue (regressing to the old leak baseline) or emitting drops for
 //! non-heap slots.
 
-use koja_ast::util::dedent;
 use koja_ir::{IRBasicBlock, IRInstruction};
 
 mod common;
 
-use common::{lower_script_source as lower, script_function};
+use common::{all_instructions, lower_script_source as lower, script_function};
 
 /// Assert `blocks` emit at least one `DropLocal` (rc drop glue is
 /// active for the body's heap-leaf locals).
 fn assert_has_drop(blocks: &[IRBasicBlock], name: &str) {
-    let has_drop = blocks
-        .iter()
-        .flat_map(|block| &block.instructions)
-        .any(|inst| matches!(inst, IRInstruction::DropLocal { .. }));
+    let has_drop =
+        all_instructions(blocks).any(|inst| matches!(inst, IRInstruction::DropLocal { .. }));
     assert!(
         has_drop,
         "`{name}` should emit a DropLocal for its heap-leaf local under the rc baseline",
     );
 }
 
-/// Assert `blocks` carry no `DropLocal` — the shape a purely scalar
+/// Assert `blocks` carry no `DropLocal`, the shape a purely scalar
 /// body must keep (no heap slots to reclaim).
 fn assert_no_drops(blocks: &[IRBasicBlock], name: &str) {
-    for block in blocks {
-        for inst in &block.instructions {
-            assert!(
-                !matches!(inst, IRInstruction::DropLocal { .. }),
-                "`{name}` should emit no DropLocal (no heap locals); \
-                 got {inst:?} in block `{}`",
-                block.label,
-            );
-        }
+    for inst in all_instructions(blocks) {
+        assert!(
+            !matches!(inst, IRInstruction::DropLocal { .. }),
+            "`{name}` should emit no DropLocal (no heap locals); got {inst:?}",
+        );
     }
 }
 
@@ -60,7 +53,7 @@ fn reassigned_heap_local_emits_droplocal() {
         taker(\"hi\")
     ";
 
-    let script = lower(&dedent(source));
+    let script = lower(source);
     assert_has_drop(&script_function(&script, "taker").blocks, "taker");
 }
 
@@ -75,7 +68,7 @@ fn returned_heap_local_emits_droplocal() {
         shout(\"hi\")
     ";
 
-    let script = lower(&dedent(source));
+    let script = lower(source);
     assert_has_drop(&script_function(&script, "shout").blocks, "shout");
 }
 
@@ -95,7 +88,7 @@ fn match_arms_writing_heap_emit_droplocal() {
         render(\"a\")
     ";
 
-    let script = lower(&dedent(source));
+    let script = lower(source);
     assert_has_drop(&script_function(&script, "render").blocks, "render");
 }
 
@@ -115,7 +108,7 @@ fn cond_arms_writing_heap_emit_droplocal() {
         classify(0)
     ";
 
-    let script = lower(&dedent(source));
+    let script = lower(source);
     assert_has_drop(&script_function(&script, "classify").blocks, "classify");
 }
 
@@ -134,7 +127,7 @@ fn struct_field_init_from_heap_local_emits_droplocal() {
         build()
     ";
 
-    let script = lower(&dedent(source));
+    let script = lower(source);
     assert_has_drop(&script_function(&script, "build").blocks, "build");
 }
 
@@ -153,7 +146,7 @@ fn heap_local_passed_as_arg_emits_droplocal() {
         build()
     ";
 
-    let script = lower(&dedent(source));
+    let script = lower(source);
     assert_has_drop(&script_function(&script, "build").blocks, "build");
 }
 
@@ -167,7 +160,7 @@ fn scalar_program_emits_no_droplocal() {
         add(1, 2)
     ";
 
-    let script = lower(&dedent(source));
+    let script = lower(source);
     assert_no_drops(&script_function(&script, "add").blocks, "add");
     assert_no_drops(&script.blocks, "script body");
 }

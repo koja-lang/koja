@@ -6,21 +6,21 @@
 //!
 //! Each command carries its own copy of the pipeline driver since
 //! they run a single source file and have no REPL state to thread.
-//! The REPL itself lives in [`koja_shell`]; `cmd_shell` is just a
+//! The REPL itself lives in [`koja_shell`]. `cmd_shell` is just a
 //! thin entry point that hands control off to it.
 //!
 //! ## Mode dispatch
 //!
 //! Two orthogonal axes drive every command except `shell`:
 //!
-//! - **Source shape** — `.kojs` (script, parsed [`ParseMode::Script`],
+//! - **Source shape**: `.kojs` (script, parsed [`ParseMode::Script`],
 //!   lowered via [`lower_script`]) vs `.koja` (project file, parsed
 //!   [`ParseMode::File`], lowered via [`lower_program`]).
-//! - **Command verb** — `build` (compile, keep), `run` (execute),
+//! - **Command verb**: `build` (compile, keep), `run` (execute),
 //!   `check` (parse + typecheck only).
 //!
 //! [`resolve_source_shape`] categorizes the input into one of
-//! three [`SourceShape`] variants — `Script(.kojs)`,
+//! three [`SourceShape`] variants: `Script(.kojs)`,
 //! `Program(.koja standalone)`, or `Project { config, root }`.
 //! Each command then decides what to do:
 //!
@@ -28,25 +28,25 @@
 //! |-----------|------------------------------------|--------------------------------------------|
 //! | `Script`  | parse Script + check               | full script pipeline                       |
 //! | `Program` | parse File + check (LSP-friendly)  | error: `.koja` needs project               |
-//! | `Project` | parse + check whole project        | full project pipeline (either backend for `run`; `build` is always LLVM) |
+//! | `Project` | parse + check whole project        | full project pipeline (either backend for `run`, always LLVM for `build`) |
 //!
 //! `cmd_shell` has no file dimension and bypasses the resolver
-//! entirely; REPL fragments are always script-mode. Project mode
+//! entirely. REPL fragments are always script-mode. Project mode
 //! routes through [`koja_ir::lower_program`] +
 //! [`koja_ir_llvm::compile_program`]. The manifest's `entry`
-//! field names a PascalCase `Process<C, M, R>` state type; the
+//! field names a PascalCase `Process<C, M, R>` state type, and the
 //! lowering synthesizes its entry wrapper.
 //!
 //! ## Backend selection
 //!
-//! Only `run` has a backend dimension — it accepts
+//! Only `run` has a backend dimension. It accepts
 //! `--backend={interpreter,llvm}` (see [`Backend`]):
 //!
 //! - `run` defaults to [`Backend::Interpreter`]: lower -> run via
-//!   [`Interpreter::run_script`] (scripts, exit 0; the trailing
-//!   expression's value is discarded — user code calls
+//!   [`Interpreter::run_script`] (scripts, exit 0, and the trailing
+//!   expression's value is discarded, so user code calls
 //!   `IO.puts` / `value.print()` explicitly for output) or
-//!   [`Interpreter::run_program`] (projects; the Process entry's
+//!   [`Interpreter::run_program`] (projects, where the Process entry's
 //!   exit code becomes the driver's exit status). Fast feedback,
 //!   no link step.
 //! - `run --backend=llvm`: lower -> [`koja_ir_llvm::compile_script`]
@@ -88,7 +88,7 @@ use crate::project::{self, ProjectConfig};
 ///
 /// `koja run` defaults to [`Backend::Interpreter`] (fast feedback,
 /// no link step) and accepts `--backend=llvm` to compile + exec.
-/// `koja build` is LLVM-only and carries no backend flag — the
+/// `koja build` is LLVM-only and carries no backend flag. The
 /// interpreter can't emit object files, so there's no choice to
 /// expose.
 ///
@@ -100,8 +100,8 @@ use crate::project::{self, ProjectConfig};
 #[derive(Clone, Copy, Debug, PartialEq, Eq, clap::ValueEnum)]
 pub enum Backend {
     /// Run via [`koja_ir_eval`]. Default for `run`. Not
-    /// valid for `build` — the interpreter doesn't produce object
-    /// files.
+    /// valid for `build` because the interpreter doesn't produce
+    /// object files.
     Interpreter,
     /// Compile + link via [`koja_ir_llvm`]. Default for
     /// `build`. For `run`, compiles to a temp binary, execs it,
@@ -115,19 +115,19 @@ pub enum Backend {
 /// file is provided, looks for an `koja.toml` in the current
 /// directory) and produces one of these variants. Each command
 /// decides which subset it accepts: `cmd_check` accepts all three
-/// (the `Project` arm is stubbed for now); `cmd_build`, `cmd_run`,
+/// (the `Project` arm is stubbed for now). `cmd_build`, `cmd_run`,
 /// and `cmd_eval` reject `Program` outright since executing a
 /// `.koja` file outside a project requires guessing the entry
 /// point and dependency graph.
 enum SourceShape {
     /// Standalone script (`.kojs`). Top-level expressions are
-    /// first-class; lowered via [`lower_script`].
+    /// first-class, lowered via [`lower_script`].
     Script(PathBuf),
     /// Project file (`.koja`) provided directly. Only `cmd_check`
-    /// accepts this — the others bail because executing a `.koja`
+    /// accepts this. The others bail because executing a `.koja`
     /// outside a project has no entry-point story.
     Program(PathBuf),
-    /// No file argument; an `koja.toml` was found in the current
+    /// No file argument. An `koja.toml` was found in the current
     /// directory and parsed cleanly. Carries the parsed
     /// [`ProjectConfig`] and the project root (the directory the
     /// manifest sits in) so the per-command handlers can walk
@@ -150,7 +150,7 @@ enum SourceShape {
 /// directory. `Some` -> [`SourceShape::Project`], `None` ->
 /// "missing koja.toml" error.
 ///
-/// Errors are returned as `Err(message)`; callers print them with
+/// Errors are returned as `Err(message)`. Callers print them with
 /// the usual `error: …` prefix and exit non-zero.
 fn resolve_source_shape(file: Option<&str>) -> Result<SourceShape, String> {
     if let Some(arg) = file {
@@ -200,7 +200,7 @@ fn bail_resolve_error(message: String) -> ! {
     process::exit(1);
 }
 
-/// `koja check [file]` — parse and typecheck a single source
+/// `koja check [file]`: parse and typecheck a single source
 /// file (or, eventually, a whole project) through the
 /// pipeline. Mirrors `koja check`'s contract: prints
 /// `<path>: OK` on success, or the collected parse/type
@@ -209,7 +209,7 @@ fn bail_resolve_error(message: String) -> ! {
 /// format instead of the OK line.
 ///
 /// `cmd_check` is the only command that accepts a standalone
-/// `.koja` file (parsed in [`ParseMode::File`]) — typecheck has no
+/// `.koja` file (parsed in [`ParseMode::File`]). Typecheck has no
 /// runtime semantics, so the absence of project context isn't a
 /// problem and LSP/editor flows lean on this.
 pub fn cmd_check(file: Option<String>, emit_ast: bool) {
@@ -221,11 +221,11 @@ pub fn cmd_check(file: Option<String>, emit_ast: bool) {
     }
 }
 
-/// `koja shell` — interactive REPL on top of the
+/// `koja shell`: interactive REPL on top of the
 /// pipeline. REPL fragments have no file dimension and are always
 /// script-mode, so this command bypasses the resolver and the
 /// `--backend` flag entirely (the REPL is interpreter-only by
-/// design). Delegates to [`koja_shell::run`]; the REPL
+/// design). Delegates to [`koja_shell::run`]. The REPL
 /// crate owns session state, multiline detection, command
 /// parsing, and its own pipeline driver.
 pub fn cmd_shell() {
@@ -238,7 +238,7 @@ pub fn cmd_shell() {
 
 /// What the REPL evaluates against: the baseline sources plus the
 /// package the session source belongs to (the project's package in a
-/// project, so its modules resolve unqualified; otherwise `REPL`).
+/// project, so its modules resolve unqualified, otherwise `REPL`).
 struct ShellSession {
     baseline: Vec<SourceFile>,
     session_package: String,
@@ -246,7 +246,7 @@ struct ShellSession {
 
 /// Resolve the REPL session. In a project, [`ProjectLoader`] supplies
 /// stdlib + project + dependency sources and the session adopts the
-/// project's package; with no readable `koja.toml` (or on any load
+/// project's package. With no readable `koja.toml` (or on any load
 /// failure) fall back to a stdlib-only `REPL` session. A malformed
 /// manifest or broken dependency warns but never aborts the shell.
 fn shell_session() -> ShellSession {
@@ -297,7 +297,7 @@ fn into_source_file(loaded: LoadedSource) -> SourceFile {
     }
 }
 
-/// `koja build [file] [-o output]` — produce a native binary for a
+/// `koja build [file] [-o output]`: produce a native binary for a
 /// `.kojs` script (or a project) on disk. LLVM is the only backend
 /// that emits object files, so `build` has no backend dimension.
 ///
@@ -305,7 +305,7 @@ fn into_source_file(loaded: LoadedSource) -> SourceFile {
 /// [`koja_ir_llvm::compile_script`] -> link. The script body becomes
 /// `main`'s body, so executing the binary prints the script's
 /// trailing value and exits 0 (via the temporary auto-print wrapper
-/// in `koja-runtime-posix/src/intrinsics.rs`; goes away with
+/// in `koja-runtime-posix/src/intrinsics.rs`, which goes away with
 /// `IO.puts`). `-o`/`--output` overrides the default stem-based
 /// output name.
 pub fn cmd_build(file: Option<String>, output: Option<String>, release: bool, emit_llvm: bool) {
@@ -319,19 +319,19 @@ pub fn cmd_build(file: Option<String>, output: Option<String>, release: bool, em
     }
 }
 
-/// `koja run [file] [--backend=interpreter|llvm] [-- args...]`
-/// — execute a `.kojs` script or a project through the chosen
+/// `koja run [file] [--backend=interpreter|llvm] [-- args...]`:
+/// execute a `.kojs` script or a project through the chosen
 /// backend.
 ///
 /// `--backend` defaults to [`Backend::Interpreter`]. Scripts:
 /// parse Script -> check -> [`lower_script`] ->
-/// [`Interpreter::run_script`]; exit 0 on success, 1 on any
+/// [`Interpreter::run_script`], exiting 0 on success and 1 on any
 /// pipeline failure. Projects: collect -> parse -> check ->
 /// [`lower_program`] -> [`Interpreter::run_program`] (with `args`
-/// as the argv-shaped config); the Process entry's exit code
+/// as the argv-shaped config), where the Process entry's exit code
 /// becomes the driver's exit status. [`Backend::Llvm`] takes the
 /// compiled path: lower -> compile -> link -> exec the binary
-/// (forwarding `args`) -> forward its exit code; script binaries
+/// (forwarding `args`) -> forward its exit code. Script binaries
 /// are temp files removed after the run.
 pub fn cmd_run(file: Option<String>, backend: Backend, release: bool, args: Vec<String>) {
     let mode = resolve_source_shape(file.as_deref()).unwrap_or_else(|err| bail_resolve_error(err));
@@ -349,15 +349,15 @@ pub fn cmd_run(file: Option<String>, backend: Backend, release: bool, args: Vec<
     }
 }
 
-/// `koja test` — discover `@test`-annotated functions in the
+/// `koja test`: discover `@test`-annotated functions in the
 /// current project, synthesize a Process-shaped harness type,
 /// lower the whole thing through the pipeline, link via LLVM, and
 /// exec the resulting binary so its exit code surfaces test
 /// success/failure.
 ///
 /// Requires an `koja.toml` in the current directory. Walks
-/// `config.src` AND `config.test` for the project itself; deps
-/// contribute only `src`. Autoimport is suppressed when the
+/// `config.src` AND `config.test` for the project itself, while
+/// deps contribute only `src`. Autoimport is suppressed when the
 /// project IS `Global`, since lib/global/src already provides the
 /// stdlib roots and a second copy would collide at registration
 /// time.
@@ -374,7 +374,7 @@ pub fn cmd_test(trace: bool, color: bool) {
 /// resulting binary at `output` (or a stem-derived default). Used
 /// by `cmd_build` when the user picks the LLVM backend. When
 /// `emit_llvm` is set, print the textual LLVM IR to stdout and
-/// short-circuit before linking — no `.o`, no binary.
+/// short-circuit before linking. No `.o`, no binary.
 fn build_and_keep(path: &Path, output: Option<String>, release: bool, emit_llvm: bool) {
     let script = build_script(path);
     let app_name = derive_package(path);
@@ -389,7 +389,7 @@ fn build_and_keep(path: &Path, output: Option<String>, release: bool, emit_llvm:
 
 /// Build the `.kojs` script at `path` into a temp binary, exec
 /// it with `args`, forward the exit code, and remove the temp
-/// binary. Diverges either way — we either exit with the binary's
+/// binary. Diverges either way. We either exit with the binary's
 /// status or print a launch error and exit 1. Used by `cmd_run`
 /// when the user picks the LLVM backend.
 fn run_script_compiled(path: &Path, release: bool, args: &[String]) -> ! {
@@ -418,8 +418,8 @@ fn run_script_compiled(path: &Path, release: bool, args: &[String]) -> ! {
 
 /// Run the `.kojs` script at `path` through the interpreter and
 /// discard the trailing value. Scripts always exit 0 on normal
-/// completion; any pipeline failure prints `error: <details>` and
-/// exits 1. The LLVM backend matches this contract — its `main`
+/// completion. Any pipeline failure prints `error: <details>` and
+/// exits 1. The LLVM backend matches this contract, since its `main`
 /// trampoline (see `koja-ir-llvm/src/main_wrapper.rs`)
 /// returns 0 after the user body's trailing expression evaluates.
 /// Used by `cmd_run` when the user picks the interpreter backend.
@@ -433,8 +433,8 @@ fn run_script_interpreted(path: &Path) {
 }
 
 /// Typecheck a single source file in the requested parse mode.
-/// Shared by the `Script` and `Program` arms of `cmd_check` — the
-/// only difference between them is the parse mode; the rest of the
+/// Shared by the `Script` and `Program` arms of `cmd_check`. The
+/// only difference between them is the parse mode, and the rest of the
 /// frontend (typecheck, OK/AST emission, error rendering) is
 /// identical.
 fn check_single_file(path: &Path, mode: ParseMode, emit_ast: bool) {
@@ -461,20 +461,20 @@ fn check_single_file(path: &Path, mode: ParseMode, emit_ast: bool) {
 /// test helpers, and `cmd_check` all feed the parser the same
 /// compilation unit. Stdlib sources lead so the registry sees
 /// `Global.*` and qualified declarations before any user code that
-/// references them; the user file is appended last. Autoimports
-/// land first, qualified packages second, user file last — order
+/// references them. The user file is appended last. Autoimports
+/// land first, qualified packages second, user file last. The order
 /// is semantically irrelevant (every entry registers under its own
 /// `Identifier`) but keeps debug listings stable.
 ///
 /// Single-file callers (`.kojs` scripts, standalone `.koja`,
-/// `cmd_check` on one path) always pass `None` for `skip_package` —
-/// those flows never declare project membership.
+/// `cmd_check` on one path) always pass `None` for `skip_package`,
+/// since those flows never declare project membership.
 fn bundle_with_autoimport(user: SourceFile) -> Vec<SourceFile> {
     bundle_many_with_autoimport(vec![user], None)
 }
 
 /// Multi-file counterpart to [`bundle_with_autoimport`] for the
-/// project-mode pipeline. Same lead-with-stdlib ordering; the
+/// project-mode pipeline. Same lead-with-stdlib ordering. The
 /// caller is expected to have already merged project + dependency
 /// sources into `user_files`.
 ///
@@ -484,7 +484,7 @@ fn bundle_with_autoimport(user: SourceFile) -> Vec<SourceFile> {
 /// `lib/json`, …) the on-disk sources already provide every decl
 /// the autoimport would inject, and a second copy would collide at
 /// registry seal time. Project-mode callers thread
-/// `Some(&config.name)` through; single-file callers pass `None`.
+/// `Some(&config.name)` through, while single-file callers pass `None`.
 fn bundle_many_with_autoimport(
     user_files: Vec<SourceFile>,
     skip_package: Option<&str>,
@@ -493,7 +493,7 @@ fn bundle_many_with_autoimport(
     // Qualified stdlib packages (Crypto, HTTP, JSON, Net, …)
     // ship pre-baked against the published Global. Loading them
     // when the user IS compiling Global self-imports an
-    // inconsistent pair — the user's edited `lib/global/src` would
+    // inconsistent pair. The user's edited `lib/global/src` would
     // co-exist with qualified packages typechecked against the
     // older baked Global, and protocol-impl resolution gets
     // confused (e.g. HTTP's `format`/`eq` calls fail to see the
@@ -513,7 +513,7 @@ fn bundle_many_with_autoimport(
 
 /// Read a source file and drive it through the script-mode
 /// pipeline (`parse -> check -> lower_script`). Returns the sealed
-/// [`IRScript`] on success; bails the process on any pipeline
+/// [`IRScript`] on success. Bails the process on any pipeline
 /// failure. `cmd_run` and `cmd_build` use this for the `.kojs`
 /// path.
 fn build_script(path: &Path) -> IRScript {
@@ -553,7 +553,7 @@ fn read_and_check(path: &Path, mode: ParseMode) -> (CheckedProgram, String) {
 }
 
 /// Read a source file or bail with `error: cannot read …`. Used by
-/// every command that opens a file directly; the `build_*` family
+/// every command that opens a file directly. The `build_*` family
 /// goes through [`read_and_check`] which calls this helper
 /// internally.
 fn read_source_or_exit(path: &Path) -> String {
@@ -576,8 +576,8 @@ fn read_source_or_exit(path: &Path) -> String {
 /// time.
 /// Render the sealed [`IRScript`] as LLVM IR text and stream it to
 /// stdout. Backs `koja build --emit-llvm` for script sources. The
-/// IR matches what the compiled `.o` would carry — same module,
-/// same `i64 main()` wrapper, same runtime helpers — minus the
+/// IR matches what the compiled `.o` would carry (same module,
+/// same `i64 main()` wrapper, same runtime helpers) minus the
 /// object emission. Diverges with `process::exit(1)` on
 /// codegen failure to keep the call site a single statement.
 fn print_script_ir(script: &IRScript, app_name: &str) {
@@ -660,7 +660,7 @@ fn resolve_output_name(output: Option<String>, path: &Path) -> String {
 
 /// Run one source file end-to-end through the script-mode
 /// pipeline. The trailing value is computed for its side effects
-/// and discarded — scripts always exit 0 on normal completion. On
+/// and discarded. Scripts always exit 0 on normal completion. On
 /// failure returns a formatted error string covering parse /
 /// typecheck / lower / runtime failures.
 fn run_script_pipeline(source: String, package: &str, path: PathBuf) -> Result<(), String> {
@@ -886,7 +886,7 @@ fn run_test_binary_with_timeout(binary: &str, timeout: Option<Duration>) -> Test
 
 /// Parse the generated harness source and splice it into `parsed`
 /// under a synthetic `<Package.__test_harness__>` path. Bails the
-/// process on a parse-time diagnostic — the harness is generated by
+/// process on a parse-time diagnostic. The harness is generated by
 /// the driver and must always parse cleanly.
 fn splice_test_harness(
     parsed: &mut ParsedProgram,
@@ -917,14 +917,14 @@ fn splice_test_harness(
 
 /// Project-test source walk: every `src` file from the project AND
 /// every dep, plus every `test` file from the project itself. Deps'
-/// `test` directories are intentionally skipped — they only show up
+/// `test` directories are intentionally skipped. They only show up
 /// when you `koja test` from inside that dep.
 /// `koja run` for a project under the interpreter: lower the full
 /// project and execute the Process entry in-process via
-/// [`Interpreter::run_program`] — no codegen, no link, no binary.
+/// [`Interpreter::run_program`]. No codegen, no link, no binary.
 /// The entry body's returned exit code becomes the driver's exit
 /// status. The entry process gets blocking socket/TLS externs and
-/// `receive` over lifecycle signals + `after` timeouts; features the
+/// `receive` over lifecycle signals + `after` timeouts. Features the
 /// interpreter doesn't cover yet (spawn, cross-process messaging)
 /// surface a runtime error plus a `--backend=llvm` hint. Diverges
 /// either way.
@@ -998,20 +998,20 @@ fn build_project_program(config: &ProjectConfig, root: &Path) -> IRProgram {
 }
 
 /// Resolve the project's entry identifier. The manifest's `entry`
-/// field names a PascalCase type implementing `Process<C, M, R>`;
-/// `lower_program` synthesizes the entry wrapper for it. Lowercase
-/// (function-shaped) entries are rejected here — `fn main` is no
+/// field names a PascalCase type implementing `Process<C, M, R>`,
+/// and `lower_program` synthesizes the entry wrapper for it. Lowercase
+/// (function-shaped) entries are rejected here, since `fn main` is no
 /// longer an entry point.
 fn resolve_project_entry(config: &ProjectConfig) -> Identifier {
     let entry = config.entry.as_deref().unwrap_or_else(|| {
-        eprintln!("error: koja.toml has no `entry` field; required for build/run");
+        eprintln!("error: koja.toml has no `entry` field (required for build/run)");
         process::exit(1);
     });
     if config.entry_type_name().is_none() {
         eprintln!(
             "error: koja.toml `entry = \"{entry}\"` must name a type implementing \
-             `Process` (PascalCase). `fn main` entries are no longer supported; \
-             use a `.kojs` script for entry-free programs."
+             `Process` (PascalCase). `fn main` entries are no longer supported. \
+             Use a `.kojs` script for entry-free programs."
         );
         process::exit(1);
     }
@@ -1071,8 +1071,8 @@ fn project_build_dir(root: &Path, release: bool) -> PathBuf {
 }
 
 /// Compile the [`IRProgram`] to an object file and link it into a
-/// native binary at `output`. Sibling to [`emit_and_link_script`];
-/// the only difference is the IR variant fed into the LLVM
+/// native binary at `output`. Sibling to [`emit_and_link_script`].
+/// The only difference is the IR variant fed into the LLVM
 /// backend. `app_name` flows into `__koja_app_name` and
 /// `program.link_libraries` becomes the `cc -l<name>` set.
 /// `extra_lib_search_paths` lets project-mode callers add the
@@ -1120,7 +1120,7 @@ fn emit_and_link_program(
 /// sidecar from [`koja_typecheck::format_registry`] so the ids
 /// that appear on AST reference sites are decodable without a
 /// separate lookup. Mirrors what `koja check --emit-ast` does for the
-/// v1 pipeline on the AST side; the registry sidecar is pipeline-only.
+/// v1 pipeline on the AST side. The registry sidecar is pipeline-only.
 ///
 /// A blank line separates the AST section(s) from the registry
 /// section, and successive files from each other.
@@ -1140,7 +1140,7 @@ fn emit_checked_ast(checked: &CheckedProgram) {
 }
 
 /// Derive the package name from the source file's stem. Falls back to
-/// `App` when the path has no usable stem; user-facing files always
+/// `App` when the path has no usable stem. User-facing files always
 /// have a stem in practice.
 fn derive_package(path: &Path) -> String {
     path.file_stem()

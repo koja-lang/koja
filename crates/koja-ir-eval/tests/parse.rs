@@ -3,9 +3,9 @@
 //! and `Float.parse(input: String) -> Result<Float, NumericConversionError>`
 //! (the pure-Rust shims surfaced through `koja-ir-eval`'s
 //! `intrinsics/parse.rs`). The Result enum is materialized directly
-//! off `function.return_type`; `Ok(value)` lands as a tuple-payload
+//! off `function.return_type`. `Ok(value)` lands as a tuple-payload
 //! enum variant, `Err(_)` carries a `NumericConversionError` value
-//! over the same enum — `InvalidFormat` for malformed text,
+//! over the same enum: `InvalidFormat` for malformed text,
 //! `OutOfRange` for well-formed numbers that don't fit.
 
 use koja_ast::util::dedent;
@@ -77,7 +77,7 @@ fn int_parse_trims_leading_and_trailing_whitespace() {
 
 #[test]
 fn float_parse_returns_ok_for_valid_float() {
-    // `1.5` exactly representable in f64; avoids clippy's
+    // `1.5` is exactly representable in f64, avoiding clippy's
     // `approx_constant` lint on near-Pi literals.
     let outcome = evaluate_script(&dedent(
         r#"
@@ -108,7 +108,7 @@ fn float_parse_rejects_non_numeric_input_as_invalid_format() {
 
 #[test]
 fn float_parse_rejects_overflow_as_out_of_range() {
-    // `1e999` is well-formed but rounds to infinity — only finite
+    // `1e999` is well-formed but rounds to infinity. Only finite
     // values parse.
     let outcome = evaluate_script(&dedent(
         r#"
@@ -126,7 +126,7 @@ fn float_parse_rejects_overflow_as_out_of_range() {
 #[test]
 fn float_parse_rejects_infinity_tokens_as_invalid_format() {
     // Rust's f64 parser accepts `inf` / `infinity` / `nan`, but Koja
-    // has no literal syntax for them — they're malformed input here.
+    // has no literal syntax for them, so they're malformed input here.
     let outcome = evaluate_script(&dedent(
         r#"
         match Float.parse("inf")

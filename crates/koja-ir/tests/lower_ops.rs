@@ -9,31 +9,26 @@ use koja_ir::{
 
 mod common;
 
-use common::lower_script_source as lower;
+use common::{
+    all_instructions, block_labeled, entry_block, lower_script_source as lower, script_function,
+};
 
-fn entry_block(script: &IRScript) -> &IRBasicBlock {
+/// Entry block of a script body that must lower to a single block.
+fn sole_block(script: &IRScript) -> &IRBasicBlock {
     assert_eq!(
         script.blocks.len(),
         1,
         "script bodies lower to a single basic block",
     );
-    &script.blocks[0]
-}
-
-fn block_by_label<'a>(script: &'a IRScript, label: &str) -> &'a IRBasicBlock {
-    script
-        .blocks
-        .iter()
-        .find(|block| block.label == label)
-        .unwrap_or_else(|| panic!("missing block `{label}` in {:?}", script.blocks))
+    entry_block(&script.blocks)
 }
 
 #[test]
 fn and_lowers_to_short_circuit_cfg() {
     let script = lower("true and false\n");
     let entry = &script.blocks[0];
-    let right = block_by_label(&script, "and_right");
-    let merge = block_by_label(&script, "and_merge");
+    let right = block_labeled(&script.blocks, "and_right");
+    let merge = block_labeled(&script.blocks, "and_merge");
     let IRTerminator::CondBranch {
         cond,
         else_target,
@@ -75,20 +70,18 @@ fn and_lowers_to_short_circuit_cfg() {
             value: Some(merge.params[0].dest),
         },
     );
-    assert!(script.blocks.iter().all(|block| {
-        !block
-            .instructions
-            .iter()
+    assert!(
+        !all_instructions(&script.blocks)
             .any(|instruction| matches!(instruction, IRInstruction::BinaryOp { .. }))
-    }));
+    );
 }
 
 #[test]
 fn or_lowers_to_short_circuit_cfg() {
     let script = lower("false or true\n");
     let entry = &script.blocks[0];
-    let right = block_by_label(&script, "or_right");
-    let merge = block_by_label(&script, "or_merge");
+    let right = block_labeled(&script.blocks, "or_right");
+    let merge = block_labeled(&script.blocks, "or_merge");
     let IRTerminator::CondBranch {
         cond,
         else_target,
@@ -127,7 +120,7 @@ fn or_lowers_to_short_circuit_cfg() {
 #[test]
 fn not_lowers_to_unary_op_not() {
     let script = lower("not true\n");
-    let block = entry_block(&script);
+    let block = sole_block(&script);
     assert_eq!(
         block.instructions,
         vec![
@@ -154,7 +147,7 @@ fn not_lowers_to_unary_op_not() {
 #[test]
 fn neg_lowers_to_unary_op_neg() {
     let script = lower("-7\n");
-    let block = entry_block(&script);
+    let block = sole_block(&script);
     assert_eq!(
         block.instructions,
         vec![
@@ -183,7 +176,7 @@ fn comparisons_lower_to_matching_ir_bin_ops() {
         ("1 >= 2\n", IRBinOp::GtEq),
     ] {
         let script = lower(source);
-        let block = entry_block(&script);
+        let block = sole_block(&script);
         let Some(IRInstruction::BinaryOp { op, .. }) = block.instructions.last() else {
             panic!("expected trailing BinaryOp for source {source:?}");
         };
@@ -193,11 +186,11 @@ fn comparisons_lower_to_matching_ir_bin_ops() {
 
 #[test]
 fn hex_int_literal_lowers_with_correct_radix() {
-    // The lexer hands lower the raw text `0xFF` (prefix preserved);
+    // The lexer hands lower the raw text `0xFF` (prefix preserved).
     // `lower/ops.rs::parse_int_literal` strips `0x` and dispatches
     // to `i64::from_str_radix(_, 16)`.
     let script = lower("0xFF\n");
-    let block = entry_block(&script);
+    let block = sole_block(&script);
     assert_eq!(
         block.instructions,
         vec![IRInstruction::Const {
@@ -210,7 +203,7 @@ fn hex_int_literal_lowers_with_correct_radix() {
 #[test]
 fn binary_int_literal_lowers_with_correct_radix() {
     let script = lower("0b1010\n");
-    let block = entry_block(&script);
+    let block = sole_block(&script);
     assert_eq!(
         block.instructions,
         vec![IRInstruction::Const {
@@ -222,10 +215,10 @@ fn binary_int_literal_lowers_with_correct_radix() {
 
 #[test]
 fn underscore_separated_int_literal_strips_separators() {
-    // `1_000_000` is decimal-with-underscores; the parser keeps the
+    // `1_000_000` is decimal-with-underscores. The parser keeps the
     // underscores in the token text, so lower must strip them.
     let script = lower("1_000_000\n");
-    let block = entry_block(&script);
+    let block = sole_block(&script);
     assert_eq!(
         block.instructions,
         vec![IRInstruction::Const {
@@ -238,7 +231,7 @@ fn underscore_separated_int_literal_strips_separators() {
 #[test]
 fn float_literal_lowers_to_const_float64() {
     let script = lower("1.5\n");
-    let block = entry_block(&script);
+    let block = sole_block(&script);
     assert_eq!(
         block.instructions,
         vec![IRInstruction::Const {
@@ -257,7 +250,7 @@ fn float_literal_lowers_to_const_float64() {
 #[test]
 fn float_arithmetic_lowers_with_float64_operand_type() {
     let script = lower("2.0 + 2.0\n");
-    let block = entry_block(&script);
+    let block = sole_block(&script);
     assert_eq!(
         block.instructions,
         vec![
@@ -286,18 +279,16 @@ fn float_arithmetic_lowers_with_float64_operand_type() {
     );
 }
 
-// ---------------------------------------------------------------------------
-// Narrow-int / narrow-float literal coercion: literal values flowing
+// Narrow-int / narrow-float literal coercion. Literal values flowing
 // into a sized target slot mint `Const` instructions at the recorded
 // width rather than the default `Int64` / `Float64` head. The tests
 // span every literal-fit site (call arg, struct field, return) so a
 // regression at any one site fails a dedicated case.
-// ---------------------------------------------------------------------------
 
 #[test]
 fn call_arg_uint8_coerces_literal_to_const_uint8() {
     let script = lower("fn take(x: UInt8) -> Unit\n  ()\nend\n\ntake(255)\n");
-    let block = entry_block(&script);
+    let block = sole_block(&script);
     assert!(
         block.instructions.iter().any(|i| matches!(
             i,
@@ -314,7 +305,7 @@ fn call_arg_uint8_coerces_literal_to_const_uint8() {
 #[test]
 fn struct_field_int8_coerces_literal_to_const_int8() {
     let script = lower("struct Sample\n  amplitude: Int8\nend\n\nSample{amplitude: -8}\n");
-    let block = entry_block(&script);
+    let block = sole_block(&script);
     assert!(
         block.instructions.iter().any(|i| matches!(
             i,
@@ -326,8 +317,8 @@ fn struct_field_int8_coerces_literal_to_const_int8() {
         "expected `Const Int8(-8)` field init (negated-literal fold), got {:?}",
         block.instructions,
     );
-    // The fold is the whole point: no separate `UnaryOp::Neg`
-    // instruction should remain — a single typed `Const` at the
+    // The fold is the whole point. No separate `UnaryOp::Neg`
+    // instruction should remain, a single typed `Const` at the
     // recorded width replaces the `Const(8)` + `Neg` pair.
     assert!(
         !block.instructions.iter().any(|i| matches!(
@@ -345,13 +336,8 @@ fn struct_field_int8_coerces_literal_to_const_int8() {
 #[test]
 fn return_type_uint16_coerces_literal_to_const_uint16() {
     let script = lower("fn answer -> UInt16\n  65_535\nend\n\nanswer()\n");
-    let answer = script
-        .function(&format!("{}.answer", common::PACKAGE))
-        .expect("missing `answer` function in lowered program");
-    let block = answer
-        .blocks
-        .first()
-        .expect("`answer` should have an entry block");
+    let answer = script_function(&script, "answer");
+    let block = entry_block(&answer.blocks);
     assert!(
         block.instructions.iter().any(|i| matches!(
             i,
@@ -368,13 +354,8 @@ fn return_type_uint16_coerces_literal_to_const_uint16() {
 #[test]
 fn return_type_float32_coerces_literal_to_const_float32() {
     let script = lower("fn half -> Float32\n  0.5\nend\n\nhalf()\n");
-    let half = script
-        .function(&format!("{}.half", common::PACKAGE))
-        .expect("missing `half` function in lowered program");
-    let block = half
-        .blocks
-        .first()
-        .expect("`half` should have an entry block");
+    let half = script_function(&script, "half");
+    let block = entry_block(&half.blocks);
     assert!(
         block.instructions.iter().any(|i| matches!(
             i,
@@ -394,7 +375,7 @@ fn negated_literal_in_uncoerced_position_keeps_runtime_neg() {
     // pre-coercion shape: `Const Int64(7)` + `UnaryOp::Neg`. Pins
     // that the fold only fires when a coercion record is present.
     let script = lower("-7\n");
-    let block = entry_block(&script);
+    let block = sole_block(&script);
     assert!(
         block.instructions.iter().any(|i| matches!(
             i,
@@ -411,7 +392,7 @@ fn negated_literal_in_uncoerced_position_keeps_runtime_neg() {
 #[test]
 fn float_comparison_lowers_with_bool_result() {
     let script = lower("1.0 < 2.0\n");
-    let block = entry_block(&script);
+    let block = sole_block(&script);
     let Some(IRInstruction::BinaryOp { op, lhs, rhs, .. }) = block.instructions.last() else {
         panic!(
             "expected trailing BinaryOp for `1.0 < 2.0`, got {:?}",

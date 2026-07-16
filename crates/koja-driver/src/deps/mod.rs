@@ -54,7 +54,7 @@ impl UpdateSpec {
 enum Mode {
     /// Resolve refs and fetch over the network (`koja deps get`).
     Fetch(UpdateSpec),
-    /// Lock and cache only; any miss is an error naming the fix.
+    /// Lock and cache only, where any miss is an error naming the fix.
     Offline,
 }
 

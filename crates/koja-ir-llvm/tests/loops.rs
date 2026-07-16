@@ -2,7 +2,7 @@
 //! typecheck for-desugar also funnels through `while`) lowering
 //! through the LLVM emitter. Pins the loop CFG-shape invariants
 //! in LLVM IR text: the named blocks (`while_header` / `while_body`
-//! / `while_exit` for `while`; `loop_body` / `loop_exit` for
+//! / `while_exit` for `while`, and `loop_body` / `loop_exit` for
 //! `loop`) and the `br` instructions that form back-edges and
 //! `break` exits.
 
@@ -38,7 +38,7 @@ fn while_emits_header_body_exit_blocks_and_back_edge() {
 fn for_emits_while_shape_and_calls_iterable_methods() {
     // The for-desugar produces a while-shaped CFG with `Counter.length`
     // / `Counter.get` calls and a match on `Option<Int>` inside the
-    // body — same LLVM shape as a hand-written while + match.
+    // body, the same LLVM shape as a hand-written while + match.
     let source = "
         struct Counter
           start: Int
@@ -72,7 +72,7 @@ fn for_emits_while_shape_and_calls_iterable_methods() {
 #[test]
 fn while_with_string_concat_emits_alloca_for_loop_carried_slot() {
     // The mutable `s` slot is heap-typed (String). Loop body
-    // reassigns it each iteration; the LocalWrite emits a `store`
+    // reassigns it each iteration. The LocalWrite emits a `store`
     // against the slot's `alloca`, and the header's cond-side
     // LocalRead emits a `load`. Pin the alloca presence.
     let source = "
@@ -98,7 +98,7 @@ fn while_with_string_concat_emits_alloca_for_loop_carried_slot() {
 fn loop_emits_loop_body_and_loop_exit_blocks_with_break_branch() {
     // `loop ... break ... end` lowers to `loop_body` / `loop_exit`
     // labeled blocks. The `break` becomes a `br label %loop_exit`
-    // (no condition — break is always-taken).
+    // (no condition, break is always-taken).
     let source = "
         i = 0
         loop
@@ -114,6 +114,6 @@ fn loop_emits_loop_body_and_loop_exit_blocks_with_break_branch() {
     assert_main_shape(&ir_text);
     assert_contains(&ir_text, "loop_body");
     assert_contains(&ir_text, "loop_exit");
-    // Unconditional branch to the exit — the break-branch.
+    // Unconditional branch to the exit, the break-branch.
     assert_contains(&ir_text, "br label %loop_exit");
 }

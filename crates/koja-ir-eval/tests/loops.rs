@@ -103,7 +103,7 @@ fn nested_while_loops_iterate_correctly() {
 }
 
 /// `Enumeration<Int>` fixture for the `for` tests below. `get`
-/// always returns `Some(...)` — the desugar's `__idx < __len`
+/// always returns `Some(...)`. The desugar's `__idx < __len`
 /// guard ensures it's only called for valid indices, and a
 /// literal `None` branch needs return-type back-propagation into
 /// unit-variant inference (orthogonal feature gap).
@@ -209,7 +209,7 @@ fn for_with_string_concat_in_body_accumulates_heap_state() {
     // Heap-typed loop-carried slot inside the desugared `for`. Each
     // iteration's `s = s <> "x"` reassignment drops the prior value
     // through the same ownership-aware `LocalWrite` path the `while`
-    // tests pin — `for` is a pure desugar so nothing new at runtime.
+    // tests pin. `for` is a pure desugar so nothing new at runtime.
     let source = with_fixture(
         "
         c = Counter{start: 0, finish: 3}
@@ -225,7 +225,7 @@ fn for_with_string_concat_in_body_accumulates_heap_state() {
 
 #[test]
 fn for_with_if_inside_body_branches_each_iteration() {
-    // `if`/`else` inside a `for` body — block-param SSA join still
+    // With `if`/`else` inside a `for` body, block-param SSA join still
     // works through the desugared while + match shape and the
     // back-edge into the surrounding header.
     let source = with_fixture(
@@ -247,7 +247,7 @@ fn for_with_if_inside_body_branches_each_iteration() {
 
 #[test]
 fn while_with_if_inside_body_branches_each_iteration() {
-    // `if`/`else` inside a loop body — block-param SSA join still
+    // With `if`/`else` inside a loop body, block-param SSA join still
     // works even with the back-edge into the surrounding header.
     let source = "
         i = 0
@@ -267,7 +267,7 @@ fn while_with_if_inside_body_branches_each_iteration() {
 
 #[test]
 fn loop_with_break_exits_after_counter_hits_five() {
-    // Counter loop terminates via `break` — the `loop` runs forever
+    // Counter loop terminates via `break`. The `loop` runs forever
     // unless `break` fires. Exiting yields control to the trailing
     // `i` expression, which reads the post-break value.
     let source = "
@@ -286,8 +286,8 @@ fn loop_with_break_exits_after_counter_hits_five() {
 #[test]
 fn loop_with_return_inside_body_exits_function() {
     // `return` from inside a `loop` short-circuits the whole
-    // function; no `break` needed. Driven through a helper `fn` so
-    // the trailing call types as `Int` — a bare trailing `loop`
+    // function, no `break` needed. Driven through a helper `fn` so
+    // the trailing call types as `Int`. A bare trailing `loop`
     // would infer the script's return type as `Unit` and coerce the
     // returned value away.
     let source = "
@@ -308,8 +308,8 @@ fn loop_with_return_inside_body_exits_function() {
 
 #[test]
 fn nested_loop_break_only_exits_inner() {
-    // The inner loop's `break` exits *only* the inner loop —
-    // control returns to the outer loop's body, which increments
+    // The inner loop's `break` exits *only* the inner loop.
+    // Control returns to the outer loop's body, which increments
     // and continues. Stops when the outer counter hits 3.
     let source = "
         outer = 0

@@ -6,27 +6,25 @@
 //! If a message moves materially, update the substring here so the
 //! test still pins the *spirit* of the diagnostic.
 
-use koja_ast::util::dedent;
+use koja_ast::ast::Item;
 
 mod common;
 
-use common::{assert_hint_contains, assert_message_contains, parse_failing};
+use common::{assert_hint_contains, error_messages, parse_failing, parse_failing_with};
 
 #[test]
 fn unterminated_struct_emits_error() {
-    let src = dedent(
+    parse_failing(
         "
         struct Open
           x: Int
         ",
     );
-    let result = parse_failing(&src);
-    assert!(!result.errors.is_empty());
 }
 
 #[test]
 fn priv_before_impl_is_rejected() {
-    let src = dedent(
+    let result = parse_failing_with(
         "
         struct Point
           x: Int
@@ -38,34 +36,32 @@ fn priv_before_impl_is_rejected() {
           end
         end
         ",
+        &["`priv` must be followed by"],
     );
-    let result = parse_failing(&src);
-    assert_message_contains(&result, "`priv` must be followed by");
     // Recovery still works. The impl block itself parses on the next pass.
     assert!(
         result
             .ast
             .items
             .iter()
-            .any(|item| matches!(item, koja_ast::ast::Item::Impl(_))),
+            .any(|item| matches!(item, Item::Impl(_))),
         "expected the impl block to survive recovery",
     );
 }
 
 #[test]
 fn priv_before_non_declaration_is_rejected() {
-    let src = dedent(
+    parse_failing_with(
         "
         priv 42
         ",
+        &["`priv` must be followed by"],
     );
-    let result = parse_failing(&src);
-    assert_message_contains(&result, "`priv` must be followed by");
 }
 
 #[test]
 fn else_if_pins_user_facing_message() {
-    let src = dedent(
+    let result = parse_failing_with(
         "
         fn run
           if x
@@ -75,29 +71,26 @@ fn else_if_pins_user_facing_message() {
           end
         end
         ",
+        &["else if is not supported"],
     );
-    let result = parse_failing(&src);
-    assert_message_contains(&result, "else if is not supported");
     assert_hint_contains(&result, "cond");
 }
 
 #[test]
 fn tuple_expression_diagnostic_is_actionable() {
-    let src = dedent(
+    parse_failing_with(
         "
         fn run
           (1, 2)
         end
         ",
+        &["tuples are not supported", "struct"],
     );
-    let result = parse_failing(&src);
-    assert_message_contains(&result, "tuples are not supported");
-    assert_message_contains(&result, "struct");
 }
 
 #[test]
 fn cond_without_else_message() {
-    let src = dedent(
+    parse_failing_with(
         "
         fn run
           cond
@@ -105,37 +98,34 @@ fn cond_without_else_message() {
           end
         end
         ",
+        &["cond requires an `else ->` arm"],
     );
-    let result = parse_failing(&src);
-    assert_message_contains(&result, "cond requires an `else ->` arm");
 }
 
 #[test]
 fn alias_path_must_end_with_type_ident() {
-    let src = dedent(
+    parse_failing_with(
         "
         alias Net.tcp
         ",
+        &["alias path must end with a type name (PascalCase)"],
     );
-    let result = parse_failing(&src);
-    assert_message_contains(&result, "alias path must end with a type name (PascalCase)");
 }
 
 #[test]
 fn annotation_without_declaration_diagnostic() {
-    let src = dedent(
+    parse_failing_with(
         "
         @doc \"oops\"
         \"not a decl\"
         ",
+        &["annotation must be followed by a declaration"],
     );
-    let result = parse_failing(&src);
-    assert_message_contains(&result, "annotation must be followed by a declaration");
 }
 
 #[test]
 fn annotation_in_protocol_must_precede_fn() {
-    let src = dedent(
+    parse_failing_with(
         "
         protocol P
           @doc \"oops\"
@@ -143,46 +133,39 @@ fn annotation_in_protocol_must_precede_fn() {
           end
         end
         ",
-    );
-    let result = parse_failing(&src);
-    assert_message_contains(
-        &result,
-        "annotation in protocol must be followed by a function signature",
+        &["annotation in protocol must be followed by a function signature"],
     );
 }
 
 #[test]
 fn impl_body_rejects_random_decl() {
-    let src = dedent(
+    parse_failing_with(
         "
         extend Foo
           struct Nested
           end
         end
         ",
+        &["expected function or type alias in block body"],
     );
-    let result = parse_failing(&src);
-    assert_message_contains(&result, "expected function or type alias in block body");
 }
 
 #[test]
 fn invalid_assignment_target_emits_hint() {
-    let src = dedent(
+    let result = parse_failing_with(
         "
         fn run
           1 + 2 = 5
         end
         ",
+        &["invalid assignment target"],
     );
-    let result = parse_failing(&src);
-    assert_message_contains(&result, "invalid assignment target");
     assert_hint_contains(&result, "variables and fields");
 }
 
 #[test]
 fn diagnostics_have_well_formed_spans() {
-    let src = "fn x\n  (1, 2)\nend\n";
-    let result = parse_failing(src);
+    let result = parse_failing("fn x\n  (1, 2)\nend\n");
     for diag in &result.errors {
         assert!(
             diag.span.end.offset >= diag.span.start.offset,
@@ -194,20 +177,17 @@ fn diagnostics_have_well_formed_spans() {
 
 #[test]
 fn top_level_bare_expression_in_file_mode_is_an_error() {
-    let src = dedent(
+    parse_failing(
         "
         42 + 17
         ",
     );
-    let result = parse_failing(&src);
-    assert!(!result.errors.is_empty());
 }
 
 #[test]
 fn diagnostic_messages_are_non_empty() {
     // Sanity: no diagnostic ever ships with an empty message.
-    let src = "fn x\n  (1, 2)\nend\n@@@";
-    let result = parse_failing(src);
+    let result = parse_failing("fn x\n  (1, 2)\nend\n@@@");
     for diag in &result.errors {
         assert!(!diag.message.is_empty());
     }
@@ -215,66 +195,57 @@ fn diagnostic_messages_are_non_empty() {
 
 #[test]
 fn unclosed_paren_renders_both_tokens_readably() {
-    let result = parse_failing("fn foo(");
-    assert_message_contains(&result, "expected `)`, found end of file");
+    parse_failing_with("fn foo(", &["expected `)`, found end of file"]);
 }
 
 #[test]
 fn missing_end_renders_keyword_and_keeps_hint() {
-    let src = dedent(
+    let result = parse_failing_with(
         "
         fn foo
           1
         ",
+        &["keyword `end`"],
     );
-    let result = parse_failing(&src);
-    assert_message_contains(&result, "keyword `end`");
     assert_hint_contains(&result, "must be closed with 'end'");
 }
 
 #[test]
 fn lowercase_struct_name_includes_found_identifier() {
-    let src = dedent(
+    parse_failing_with(
         "
         struct point
         end
         ",
-    );
-    let result = parse_failing(&src);
-    assert_message_contains(
-        &result,
-        "expected type identifier, found identifier `point`",
+        &["expected type identifier, found identifier `point`"],
     );
 }
 
 #[test]
 fn keyword_as_function_name_renders_keyword() {
-    let src = dedent(
+    parse_failing_with(
         "
         fn match(x: Int)
         end
         ",
+        &["expected identifier, found keyword `match`"],
     );
-    let result = parse_failing(&src);
-    assert_message_contains(&result, "expected identifier, found keyword `match`");
 }
 
 #[test]
 fn unclosed_generic_renders_expected_gt() {
-    let src = dedent(
+    parse_failing_with(
         "
         fn f(x: List<Int)
         end
         ",
+        &["expected `>`, found `)`"],
     );
-    let result = parse_failing(&src);
-    assert_message_contains(&result, "expected `>`, found `)`");
 }
 
 #[test]
 fn stray_token_at_top_level_renders_lexeme() {
-    let result = parse_failing("}\n");
-    assert_message_contains(&result, "unexpected token at top level: `}`");
+    parse_failing_with("}\n", &["unexpected token at top level: `}`"]);
 }
 
 #[test]
@@ -304,7 +275,7 @@ fn diagnostics_never_leak_debug_token_names() {
     ];
     for src in sources {
         let result = parse_failing(src);
-        for message in common::error_messages(&result) {
+        for message in error_messages(&result) {
             for name in debug_names {
                 assert!(
                     !message.contains(name),

@@ -1,11 +1,11 @@
 //! End-to-end runtime coverage for the generics slice's function
 //! arm. Every fixture here drives `parse -> check -> lower -> run` and
-//! observes the trailing [`Value`] — green tests pin that the
+//! observes the trailing [`Value`]. Green tests pin that the
 //! monomorphization closure pass produces functions the interpreter
 //! can dispatch by mangled symbol without any generics-aware code
 //! inside `koja-ir-eval`.
 //!
-//! The interpreter never sees a [`Resolution::TypeParam`] — it only
+//! The interpreter never sees a [`Resolution::TypeParam`]. It only
 //! consults [`IRSymbol`]s on `Call` instructions and [`IRFunction`]s
 //! in [`IRPackage::functions`]. So a green test for `id(1)` returning
 //! `1` is also a contract that the IR pipeline reached eval with a

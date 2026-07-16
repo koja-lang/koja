@@ -3,16 +3,16 @@
 //! Pins the LLVM-side contract:
 //!
 //! - bare `@extern "C" fn cosf(x: Float32) -> Float32` declares
-//!   `declare float @cosf(float)` (no body — the C runtime
-//!   provides the implementation at link time);
+//!   `declare float @cosf(float)` (no body, the C runtime
+//!   provides the implementation at link time).
 //! - aliased `@extern "C" @link "m:cos"` declares the function
-//!   under the `link_name`, not the mangled symbol — the user
-//!   `IRSymbol::TestApp.cosf` resolves to LLVM `@cos`;
+//!   under the `link_name`, not the mangled symbol. The user
+//!   `IRSymbol::TestApp.cosf` resolves to LLVM `@cos`.
 //! - call sites resolve through the `IRSymbol -> FunctionValue`
 //!   index on [`koja_ir_llvm::ctx::EmitContext`], so
 //!   `relay(x: Float32) -> Float32 = cosf(x)` emits
 //!   `call float @cos(...)` against the aliased name even though
-//!   the IR call carries the internal symbol;
+//!   the IR call carries the internal symbol.
 //! - `CPtr<T>` lowers to an opaque LLVM `ptr` in both parameter
 //!   and return position with no marshaling shim, so an
 //!   `@extern "C" fn write(buf: CPtr<UInt8>, len: UInt64) ->
@@ -66,7 +66,7 @@ fn link_only_lib_emits_declare_under_bare_last_segment() {
     let ir_text =
         emit_script_llvm_ir(&script, APP_NAME).expect("emit_script_llvm_ir should succeed");
 
-    // `@link "m"` only sets `link_lib`; the C symbol is still the
+    // `@link "m"` only sets `link_lib`. The C symbol is still the
     // function's bare last segment.
     assert_contains(&ir_text, "declare float @cosf(float)");
 }
@@ -133,7 +133,7 @@ fn cptr_param_lowers_to_opaque_pointer() {
 #[test]
 fn extern_with_cptr_arg_declares_pointer_param() {
     // `CPtr<T>` in argument position lowers to an opaque LLVM
-    // `ptr` — same shape as the return-position case above and
+    // `ptr`, the same shape as the return-position case above and
     // ABI-compatible with C `void*` for any T.
     let source = "
         @extern \"C\"
@@ -151,7 +151,7 @@ fn extern_with_cptr_arg_declares_pointer_param() {
 #[test]
 fn call_to_extern_passes_cptr_as_ptr_with_no_marshaling() {
     // The call site for an extern fn taking a `CPtr<T>` argument
-    // must hand the SSA `ptr` straight through — no per-call
+    // must hand the SSA `ptr` straight through. No per-call
     // marshaling shim, no allocas around the ptr value.
     let source = "
         @extern \"C\"

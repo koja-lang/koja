@@ -3,7 +3,7 @@
 //! Two complementary checks:
 //!
 //! - [`seal_struct_decls`] runs per package and validates every
-//!   [`IRStructDecl`] in isolation — keys match, field indices are
+//!   [`IRStructDecl`] in isolation: keys match, field indices are
 //!   dense in declaration order, field names are unique, every
 //!   field's `ir_type` is in the transient set.
 //! - [`seal_struct_ops`] runs across the assembled
@@ -15,7 +15,7 @@
 //!   one, `FieldGet::field_index` is in range, and
 //!   `FieldGet::field_type` matches `IRStructField::ir_type`.
 //!
-//! Both checks panic on violation through [`super::seal_panic`] —
+//! Both checks panic on violation through [`super::seal_panic`], since
 //! struct seal failures indicate a lower / lift_signatures bug.
 
 use std::collections::HashSet;
@@ -46,12 +46,12 @@ fn seal_struct_decl(decl: &IRStructDecl) {
 
 /// Validate a named-field layout (struct decl or enum struct-variant
 /// payload) against the shared invariants: dense, declaration-order
-/// `index`es; unique field names; every `ir_type` in the
+/// `index`es, unique field names, and every `ir_type` in the
 /// supported set.
 ///
 /// Shared helper because both [`IRStructDecl`] and
 /// [`crate::IRVariantPayload::Struct`] reuse the same
-/// [`IRStructField`] vocabulary — the enum slice's struct
+/// [`IRStructField`] vocabulary. The enum slice's struct
 /// variants are structurally a struct's field roster, and the seal
 /// surface should be identical.
 pub(super) fn seal_named_field_layout(owner: &str, fields: &[IRStructField]) {
@@ -79,7 +79,7 @@ pub(super) fn seal_named_field_layout(owner: &str, fields: &[IRStructField]) {
 
 /// Cross-instruction struct check. Driven by the `(owner, inst)`
 /// stream the caller produces (see [`package_instructions`] /
-/// [`function_instructions`]); `lookup` resolves an
+/// [`function_instructions`]). `lookup` resolves an
 /// [`IRSymbol::mangled`] view to the registered [`IRStructDecl`]
 /// (`IRProgram::struct_decl` / `IRScript::struct_decl`).
 pub(super) fn seal_struct_ops<'inst, 'decl>(
@@ -277,7 +277,7 @@ pub(super) fn script_body_instructions(
 
 // Inline unit coverage for the struct seal invariants. They live next to
 // the helpers because [`seal_struct_decls`] / [`seal_struct_ops`] are
-// `pub(super)` — integration tests under `tests/` can't reach them, and
+// `pub(super)`, so integration tests under `tests/` can't reach them, and
 // every other seal-violation path in the crate is exercised the same way
 // (the lowering pass produces correct IR by construction, so the only way
 // to drive a violation is to hand-build a malformed [`IRPackage`] /

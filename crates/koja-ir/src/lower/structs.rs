@@ -1,6 +1,6 @@
 //! Struct-shaped lowering: declarations, struct-literal construction,
 //! and field reads. Mirrors the layout of [`super::control_flow`] and
-//! [`super::ops`] — one helper per AST shape.
+//! [`super::ops`]: one helper per AST shape.
 //!
 //! Decl lowering pulls the canonical field layout off the typecheck
 //! registry's [`GlobalKind::Struct(Some(definition))`] so we never
@@ -9,7 +9,7 @@
 //! IR's job is purely "stamp positional indices and the resolved
 //! per-field [`IRType`] onto the instruction".
 //!
-//! Move tracking is deferred — field reads produce a value of the
+//! Move tracking is deferred. Field reads produce a value of the
 //! field's IRType without invalidating the receiver, matching v1
 //! and the resolve sub-pass. Tightening lands with the
 //! ownership slice.
@@ -37,7 +37,7 @@ use super::package::resolved_type_to_ir_type;
 /// for decls where any feature-gap diagnostic surfaced (the offending
 /// decl is dropped from the package). The pre-lifted
 /// [`GlobalKind::Struct`] entry on the registry already carries the
-/// canonical field layout — this helper just stamps the positional
+/// canonical field layout, so this helper just stamps the positional
 /// indices and translates each field's
 /// [`koja_typecheck::ResolvedStructField::ty`] into an
 /// [`IRType`].
@@ -54,8 +54,8 @@ pub(super) fn lower_struct_decl(
     let entry = registry.lookup(&identifier).map(|(_, entry)| entry)?;
     let GlobalKind::Struct(Some(definition)) = &entry.kind else {
         panic!(
-            "IR lower: struct `{identifier}` has no lifted definition — \
-             lift_signatures invariant violation",
+            "IR lower: struct `{identifier}` has no lifted definition \
+             (lift_signatures invariant violation)",
         );
     };
     if !entry.type_params.is_empty() {
@@ -78,7 +78,7 @@ pub(super) fn lower_struct_decl(
 /// resolved struct id off the call site's `expr.resolution` and
 /// canonicalizes the field-init list to declaration order so seal /
 /// backends iterate linearly. Each value is lowered through
-/// [`lower_expr`]; AST field-init order doesn't bleed into the IR.
+/// [`lower_expr`], so AST field-init order doesn't bleed into the IR.
 pub(super) fn lower_struct_construction(
     fields: &[FieldInit],
     expr_resolution: &ResolvedType,
@@ -123,21 +123,21 @@ pub(super) fn resolved_struct_symbol(
         IRType::Struct(symbol) => symbol,
         other => panic!(
             "IR lower: struct construction target lowered to `{other:?}`, expected \
-             IRType::Struct — typecheck seal must have caught this",
+             IRType::Struct (typecheck seal must have caught this)",
         ),
     }
 }
 
 /// Lower each field-init expression and re-order the results into
 /// declaration order. Shared by struct-literal construction and
-/// enum struct-variant construction — both want the same
+/// enum struct-variant construction, since both want the same
 /// "lower in source order, threading control flow, then canonicalize
 /// to declaration order" pipeline. The struct slice owns the helper
-/// because structs own the "named field layout" concept; the enum
+/// because structs own the "named field layout" concept, and the enum
 /// lowering module imports.
 ///
 /// Panics if a declared field has no corresponding init (typecheck
-/// seal forbids this; reaching it here is an invariant violation,
+/// seal forbids this, so reaching it here is an invariant violation,
 /// not a feature gap).
 pub(super) fn canonicalize_struct_inits(
     declared: &[ResolvedStructField],
@@ -166,7 +166,7 @@ pub(super) fn canonicalize_struct_inits(
         let value = values_by_name.remove(&decl_field.name).unwrap_or_else(|| {
             panic!(
                 "IR lower: named-field construction missing field `{}` after typecheck \
-                 seal — resolve invariant violation",
+                 seal (resolve invariant violation)",
                 decl_field.name,
             )
         });
@@ -179,7 +179,7 @@ pub(super) fn canonicalize_struct_inits(
 }
 
 /// Lower an `expr.field` access. The receiver's `ResolvedType` keys
-/// the registry lookup; the field's `ResolvedType` (already on
+/// the registry lookup, and the field's `ResolvedType` (already on
 /// `expr.resolution`) sizes the result.
 pub(super) fn lower_field_access(
     receiver: &Expr,
@@ -195,8 +195,8 @@ pub(super) fn lower_field_access(
         struct_definition_from_resolution(&receiver.resolution, registry, "field access");
     let (field_index, _) = definition.lookup_field(field).unwrap_or_else(|| {
         panic!(
-            "IR lower: field access missing field `{field}` after typecheck seal — \
-             resolve invariant violation",
+            "IR lower: field access missing field `{field}` after typecheck seal \
+             (resolve invariant violation)",
         )
     });
     let field_type =
@@ -216,9 +216,9 @@ pub(super) fn lower_field_access(
     );
     // Value semantics: reading a heap-leaf field hands the caller an
     // independent value (rc-bumped), balancing the drop the caller's
-    // binding/temp will emit — without disturbing the receiver's field.
+    // binding/temp will emit, without disturbing the receiver's field.
     let owned = materialize_owned(ctx, current, dest, &field_type);
-    // The base is only borrowed for the read; if it was a fresh temp
+    // The base is only borrowed for the read. If it was a fresh temp
     // (e.g. `make_struct().field`) it is dead now that the field has
     // been acquired, so free it.
     drop_discarded_temp(ctx, current, base);
@@ -238,7 +238,7 @@ fn struct_entry_from_resolution<'a>(
         panic!("IR lower: struct {role} has Unresolved resolution after typecheck seal",);
     };
     registry.get(*id).unwrap_or_else(|| {
-        panic!("IR lower: struct id {id} missing from registry — seal invariant violation",)
+        panic!("IR lower: struct id {id} missing from registry (seal invariant violation)",)
     })
 }
 
@@ -250,8 +250,8 @@ pub(super) fn struct_definition_from_resolution<'a>(
     let entry = struct_entry_from_resolution(resolution, registry, role);
     let GlobalKind::Struct(Some(definition)) = &entry.kind else {
         panic!(
-            "IR lower: struct {role} target `{}` has no lifted definition — \
-             lift_signatures invariant violation",
+            "IR lower: struct {role} target `{}` has no lifted definition \
+             (lift_signatures invariant violation)",
             entry.identifier,
         );
     };
@@ -259,7 +259,7 @@ pub(super) fn struct_definition_from_resolution<'a>(
 }
 
 /// Diagnose every feature gap on a struct decl. Returns `true` when
-/// any diagnostic was pushed; the caller drops the decl from the
+/// any diagnostic was pushed. The caller drops the decl from the
 /// package fragment in that case.
 fn has_feature_gap(decl: &StructDecl, diagnostics: &mut Vec<Diagnostic>) -> bool {
     let mut gapped = false;

@@ -1,6 +1,6 @@
 //! Spawn / receive lowering. Both expressions are concurrency
-//! primitives that the LLVM backend turns into `koja_rt_*` calls;
-//! the IR layer captures enough typed structure that the LLVM emit
+//! primitives that the LLVM backend turns into `koja_rt_*` calls.
+//! The IR layer captures enough typed structure that the LLVM emit
 //! pass and the eval interpreter can match on
 //! [`crate::IRInstruction::Spawn`] / [`crate::IRInstruction::Receive`]
 //! without re-walking the AST.
@@ -25,7 +25,7 @@
 //!   that the LLVM backend lowers into the actual mailbox dispatch.
 //!
 //! The receive's result rides through a synthesized merge block
-//! whose [`crate::function::BlockParam`] holds the join value;
+//! whose [`crate::function::BlockParam`] holds the join value, and
 //! every arm body branches to the merge block carrying its tail.
 //! The host block's terminator is [`crate::IRTerminator::Unreachable`]
 //! because dispatch always leaves the receive instruction.
@@ -55,7 +55,7 @@ use super::ownership::{
 use super::package::resolved_type_to_ir_type;
 
 /// Lower `spawn Type.start(config)`. Typecheck has already validated
-/// the inner shape; lowering turns it into a config value, an
+/// the inner shape. Lowering turns it into a config value, an
 /// enqueued instantiation for the receiver's `start` / `run`
 /// methods, a synthesized [`FunctionKind::SpawnWrapper`], and a
 /// single [`IRInstruction::Spawn`] producing a typed `Ref<M, R>`.
@@ -84,12 +84,12 @@ pub(super) fn lower_spawn(
     })?;
     let (config_value, current) = lower_expr(&config_arg.value, ctx, block, registry, output)?;
     let config_type = ctx.type_of(config_value);
-    // `spawn` hands the config to the child process, so deep-copy it —
-    // the child must share no heap storage with the spawner (rc
+    // `spawn` hands the config to the child process, so deep-copy it.
+    // The child must share no heap storage with the spawner (rc
     // bookkeeping is unsynchronized), mirroring the message-send
     // payload copy. The copy is *transferred*: it is never released
-    // here (the runtime owns it through the spawn payload's drop glue);
-    // an owned temp source is dead once the copy is taken.
+    // here (the runtime owns it through the spawn payload's drop glue).
+    // An owned temp source is dead once the copy is taken.
     let copied_config = materialize_boundary_copy(ctx, current, config_value, &config_type);
     if copied_config != config_value {
         drop_discarded_temp(ctx, current, config_value);
@@ -161,7 +161,7 @@ pub(super) struct ReceiveLowering<'a> {
 /// function's entry block and whose tail branches to a synthesized
 /// merge block carrying the join value as a [`crate::function::BlockParam`].
 /// The host block ends with the [`IRInstruction::Receive`] dispatch
-/// followed by [`IRTerminator::Unreachable`] — every reachable exit
+/// followed by [`IRTerminator::Unreachable`], since every reachable exit
 /// goes through the arm bodies into the merge block.
 pub(super) fn lower_receive(
     inputs: ReceiveLowering<'_>,
@@ -179,7 +179,7 @@ pub(super) fn lower_receive(
     } = inputs;
     if arms.is_empty() {
         output.diagnostics.push(Diagnostic::error(
-            "IR lower: `receive` reaches lower with zero arms — typecheck seal violation",
+            "IR lower: `receive` reaches lower with zero arms (typecheck seal violation)",
             span,
         ));
         return Err(());
@@ -262,14 +262,14 @@ fn lower_receive_arm(
     };
     let local_id = local_id.unwrap_or_else(|| {
         panic!(
-            "IR lower: receive arm pattern carries no LocalId — typecheck resolve \
-             invariant violation",
+            "IR lower: receive arm pattern carries no LocalId (typecheck resolve \
+             invariant violation)",
         );
     });
     let payload_resolution = resolved_type.as_ref().unwrap_or_else(|| {
         panic!(
-            "IR lower: receive arm pattern carries no resolved_type — typecheck resolve \
-             invariant violation",
+            "IR lower: receive arm pattern carries no resolved_type (typecheck resolve \
+             invariant violation)",
         );
     });
 
@@ -360,13 +360,13 @@ fn resolve_spawn_target(inner: &Expr) -> Option<SpawnTarget<'_>> {
 }
 
 /// Discover the `start`, `run`, and `priority` method instantiations
-/// for the receiver. `start` is what the wrapper invokes; `run` is the
-/// receive loop the wrapper chains into when `start` succeeds;
+/// for the receiver. `start` is what the wrapper invokes. `run` is the
+/// receive loop the wrapper chains into when `start` succeeds, and
 /// `priority` is read once right after `start` to set the process's
 /// scheduling priority. All go through [`LowerOutput::instantiations`] so the
 /// monomorphization driver synthesizes concrete bodies before seal.
-/// Non-generic receivers skip enqueueing — the methods already lift
-/// as concrete decls.
+/// Non-generic receivers skip enqueueing, since the methods already
+/// lift as concrete decls.
 fn enqueue_process_method_instantiations(
     target: &SpawnTarget<'_>,
     registry: &GlobalRegistry,
@@ -507,13 +507,13 @@ fn lookup_global(registry: &GlobalRegistry, path: &[&str]) -> GlobalRegistryId {
 /// Mint (or reuse) the [`FunctionKind::SpawnWrapper`] thunk keyed by
 /// `state_symbol`, plus its `<state>.__spawn_body` companion. The
 /// pair is content-addressed off the state type so distinct
-/// `spawn S.start(...)` sites for the same `S` share one wrapper;
+/// `spawn S.start(...)` sites for the same `S` share one wrapper, and
 /// distinct monomorphized state cells get distinct pairs exactly
 /// like generic structs do.
 ///
 /// The wrapper is a pure ABI shim: the LLVM emit pass declares it
 /// `void(i8*)` (the scheduler's `ProcessFn` shape), loads the typed
-/// config out of the runtime-provided pointer, and calls the body —
+/// config out of the runtime-provided pointer, and calls the body,
 /// which is the function its IR `Call` already names. All real
 /// semantics (`start`, the `Result` match, `run`) live in the body,
 /// a [`FunctionKind::Regular`] function built by
@@ -553,7 +553,7 @@ fn synthesize_spawn_wrapper(
 /// LLVM shim stores into the module-level `__koja_exit_code` global
 /// that the synthesized `main` trampoline returns from.
 ///
-/// Returns `[body, wrapper]`; the caller routes both into the
+/// Returns `[body, wrapper]`, and the caller routes both into the
 /// state's owning package.
 pub(crate) fn synthesize_process_entry_wrapper(
     state_symbol: &IRSymbol,
@@ -577,8 +577,8 @@ pub(crate) fn synthesize_process_entry_wrapper(
 /// holding (`run`'s return on the `Ok` path, `start`'s `Err` payload
 /// otherwise).
 enum ProcessBodyTail {
-    /// Drop it and return `Unit` — the scheduler manages the spawned
-    /// process's lifecycle; nobody reads the wrapper's result.
+    /// Drop it and return `Unit`. The scheduler manages the spawned
+    /// process's lifecycle, and nobody reads the wrapper's result.
     Discard,
     /// Hand it to `Global.StopReason.code` and return the `Int64`
     /// exit code for the LLVM shim to store into `__koja_exit_code`.
@@ -612,7 +612,7 @@ impl ProcessBodyTail {
 ///
 /// Every owned value is paired with a `Clone` / `Drop` marker, so
 /// the [`crate::elaborate`] pass rewrites composite ownership into
-/// glue exactly as for AST-lowered functions — no manual lifetime
+/// glue exactly as for AST-lowered functions, and no manual lifetime
 /// obligations survive into the backends.
 fn build_process_body(
     body_symbol: IRSymbol,
@@ -693,7 +693,7 @@ fn build_process_body(
     drop_discarded_temp(&mut ctx, ok_block, state_field);
     finish_process_arm(&mut ctx, ok_block, stop_reason, types, &tail);
 
-    // Err arm: `start` declined; its `StopReason` payload is the
+    // Err arm: `start` declined, so its `StopReason` payload is the
     // process's stop reason directly.
     let err_reason = extract_result_payload(
         &mut ctx,
@@ -793,14 +793,14 @@ fn extract_result_payload(
 /// scheduling weight via [`IRInstruction::SetPriority`], before `run`.
 ///
 /// The variant is a runtime value, so the weight is chosen by a
-/// name-keyed branch diamond — `High -> 2`, `Low -> 0`, else (`Normal`)
-/// -> 1, matching `koja_runtime_core::Priority::from_index`. The arms
+/// name-keyed branch diamond (`High -> 2`, `Low -> 0`, else (`Normal`)
+/// -> 1, matching `koja_runtime_core::Priority::from_index`). The arms
 /// converge on a join block carrying the `Int64` weight as a
-/// [`crate::function::BlockParam`]; that block is returned so the
+/// [`crate::function::BlockParam`], and that block is returned so the
 /// caller appends `run` to it.
 ///
 /// `priority` borrows `state` (clone-on-entry), so the owned `state`
-/// flows on to `run`; the `priority()` result is acquired and released
+/// flows on to `run`. The `priority()` result is acquired and released
 /// in the join block (a no-op for `Priority`'s unit variants).
 fn emit_apply_priority(
     ctx: &mut FnLowerCtx,
@@ -870,7 +870,7 @@ fn emit_apply_priority(
 }
 
 /// Emit `cond_br (tag == variant_tag) then, else` as `block`'s
-/// terminator — one rung of [`emit_apply_priority`]'s weight diamond,
+/// terminator, one rung of [`emit_apply_priority`]'s weight diamond,
 /// modeled on [`emit_result_tag_branch`].
 fn emit_priority_tag_branch(
     ctx: &mut FnLowerCtx,
@@ -942,7 +942,7 @@ fn finish_process_arm(
         );
     };
     // The process's own `StopReason.code()` is a name-keyed mapping to the
-    // exit wire code (Normal=0, Shutdown=1); record it as the exit reason for
+    // exit wire code (Normal=0, Shutdown=1). Record it as the exit reason for
     // every process, and reuse it as the OS exit code on the entry path.
     let code = ctx.fresh_value(IRType::Int64);
     ctx.cfg.append(
@@ -980,8 +980,8 @@ fn finish_process_arm(
 }
 
 /// Hand-build the wrapper shim's IR body: a single `Call` into the
-/// process body, discarding its result. Backends never emit this CFG
-/// — the LLVM declaration is the scheduler's `void(i8*)` `ProcessFn`
+/// process body, discarding its result. Backends never emit this CFG.
+/// The LLVM declaration is the scheduler's `void(i8*)` `ProcessFn`
 /// shape, whose signature can't be expressed in IR, so its emitter
 /// reads the callee out of this `Call` and synthesizes only the
 /// load-config ABI adaptation around it.
@@ -1051,7 +1051,7 @@ fn struct_symbol(ty: &IRType) -> Option<IRSymbol> {
 
 /// Pick the [`ReceiveTag`] that matches a typed-binding's payload
 /// type. Mirrors the typecheck-side admission rule
-/// (`is_business_envelope` / `is_lifecycle`) — anything else means
+/// (`is_business_envelope` / `is_lifecycle`), so anything else means
 /// the typecheck seal has been violated.
 fn receive_tag_for(payload: &ResolvedType, registry: &GlobalRegistry) -> Option<ReceiveTag> {
     if is_lifecycle(payload, registry) {

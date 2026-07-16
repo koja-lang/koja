@@ -10,18 +10,14 @@
 //! and the eval coverage in `koja-ir-eval/tests/concat.rs`
 //! (which pins the runtime byte-for-byte result).
 
-use koja_ast::util::dedent;
 use koja_ir::{ConcatKind, IRFunction, IRInstruction, IRType};
 
 mod common;
 
-use common::{lower_script_source as lower, script_function};
+use common::{all_instructions, lower_script_source as lower, script_function};
 
 fn first_concat(function: &IRFunction) -> &IRInstruction {
-    function
-        .blocks
-        .iter()
-        .flat_map(|b| b.instructions.iter())
+    all_instructions(&function.blocks)
         .find(|i| matches!(i, IRInstruction::Concat { .. }))
         .expect("function should contain at least one Concat instruction")
 }
@@ -34,7 +30,7 @@ fn string_concat_lowers_to_concat_string() {
         end
     ";
 
-    let script = lower(&dedent(source));
+    let script = lower(source);
     let greet = script_function(&script, "greet");
     let IRInstruction::Concat { kind, .. } = first_concat(greet) else {
         unreachable!()
@@ -51,7 +47,7 @@ fn binary_concat_lowers_to_concat_binary() {
         end
     ";
 
-    let script = lower(&dedent(source));
+    let script = lower(source);
     let join = script_function(&script, "join");
     let IRInstruction::Concat { kind, .. } = first_concat(join) else {
         unreachable!()
@@ -68,7 +64,7 @@ fn bits_concat_lowers_to_concat_bits() {
         end
     ";
 
-    let script = lower(&dedent(source));
+    let script = lower(source);
     let join = script_function(&script, "join");
     let IRInstruction::Concat { kind, .. } = first_concat(join) else {
         unreachable!()

@@ -204,9 +204,9 @@ pub(super) fn emit_drop_closure_env<'ctx>(
 ///
 /// 1. malloc a block the size of the env struct and `memcpy` the
 ///    whole source env over it: header (`drop_fn` / `copy_fn`) and
-///    `Copy` captures land correct as-is;
+///    `Copy` captures land correct as-is.
 /// 2. reset the fresh block's rc to 1 (the source's count came along
-///    in the copy);
+///    in the copy).
 /// 3. deep-copy every heap-managed capture in place
 ///    ([`deep_copy_in_slot`] skips scalars), severing every share
 ///    with the source env.

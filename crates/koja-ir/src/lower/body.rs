@@ -3,7 +3,7 @@
 //! trailing [`FlowResult`] so callers (`lower_function` /
 //! `lower_arm_into`) can decide how to wire the block's terminator.
 //!
-//! [`lower_body_to_blocks`] is the script-mode seam: it owns its own
+//! [`lower_body_to_blocks`] is the script-mode seam. It owns its own
 //! [`FnLowerCtx`], so [`crate::lower_script`] doesn't need to know
 //! about the lowering context at all.
 //!
@@ -38,7 +38,7 @@ use super::structs::resolved_struct_symbol;
 /// [`crate::lower`] module tree.
 ///
 /// `enclosing_symbol` seeds the synthesized-closure naming root for
-/// any closures that surface inside the body — `lower_script`
+/// any closures that surface inside the body. `lower_script`
 /// passes a `<package>.__script_body` shape so script-body closures
 /// get unique mangled names (`<package>.__script_body__closure0`).
 /// `None` callers have no closures in scope (legacy / test-only).
@@ -46,7 +46,7 @@ use super::structs::resolved_struct_symbol;
 /// `Err(())` means "a feature-gap diagnostic was already pushed and
 /// the caller should drop this body / function from the surrounding
 /// fragment". This matches the per-function fail-fast policy
-/// `lower_program` already implements; `lower_script` mirrors it for
+/// `lower_program` already implements, and `lower_script` mirrors it for
 /// the implicit script body.
 pub(crate) fn lower_body_to_blocks(
     body: &[Statement],
@@ -66,8 +66,8 @@ pub(crate) fn lower_body_to_blocks(
         } => ctx.type_of(*id),
         FlowResult::Open { value: None, .. } => IRType::Unit,
         // Closed-flow on a script body means an explicit `return`
-        // exited the script. `Unit` is a defensible default here —
-        // the auto-print wrapper inspects this type to pick a
+        // exited the script. `Unit` is a defensible default here.
+        // The auto-print wrapper inspects this type to pick a
         // printer, and a script that returns explicitly today only
         // does so via `return_value: Option<expr>` whose type the
         // body lowering already plumbed through `Return.value`.
@@ -80,7 +80,7 @@ pub(crate) fn lower_body_to_blocks(
 }
 
 /// Walk a sequence of statements, threading the open block through
-/// each one. Returns the trailing statement's flow result; an
+/// each one. Returns the trailing statement's flow result. An
 /// empty body returns `Open { value: None, block: entry }`.
 pub(super) fn lower_body(
     body: &[Statement],
@@ -91,8 +91,8 @@ pub(super) fn lower_body(
 ) -> Result<FlowResult, ()> {
     let mut last_value: Option<ValueId> = None;
     for stmt in body {
-        // The previous statement's trailing value is now superseded —
-        // if it owned a fresh heap-leaf allocation it's discarded, so
+        // The previous statement's trailing value is now superseded.
+        // If it owned a fresh heap-leaf allocation it's discarded, so
         // free it here (it is still live in the current `block`, which
         // its producer dominates). The final statement's value is not
         // dropped: it flows out as the body result.
@@ -129,7 +129,7 @@ fn lower_statement(
             // reach the next statement. Cap the open block with
             // `Unreachable` and report `Closed` so surrounding
             // arm-merge / fallthrough paths skip the would-be branch
-            // edge — without this, a match arm tail of `panic(...)`
+            // edge. Without this, a match arm tail of `panic(...)`
             // emits a `Branch` with the `Unit`-typed call result as a
             // branch arg into a merge block whose param is the `T` the
             // other arms produce, which the LLVM emitter rejects with
@@ -181,7 +181,7 @@ fn lower_statement(
 /// Lower `break`: terminate the open block with a `Branch` to the
 /// innermost enclosing loop's exit block. Typecheck-resolve has
 /// already gated `break` on `loop_depth > 0`, so a missing exit on
-/// the lower side is a resolver bug — panic rather than ship a
+/// the lower side is a resolver bug. Panic rather than ship a
 /// half-baked IR fragment.
 fn lower_break_statement(
     span: Span,
@@ -190,7 +190,7 @@ fn lower_break_statement(
 ) -> Result<FlowResult, ()> {
     let exit = ctx.current_loop_exit().unwrap_or_else(|| {
         panic!(
-            "IR lower: `break` reached lowering with no enclosing loop ({span:?}) — \
+            "IR lower: `break` reached lowering with no enclosing loop ({span:?}), \
              typecheck resolve invariant violation",
         )
     });
@@ -217,7 +217,7 @@ fn lower_break_statement(
 /// the rebuild in the currently-open block.
 ///
 /// Returns `Open { value: None, ... }` because assignment is
-/// statement-level vocabulary — its trailing value is the rhs's
+/// statement-level vocabulary. Its trailing value is the rhs's
 /// [`ValueId`], but no surface syntax in this slice consumes it
 /// directly. (Trailing-expression-of-body checking runs on the
 /// trailing `Statement::Expr`, not on assignments.)
@@ -308,7 +308,7 @@ fn lower_assignment(
 ///
 /// The walker derives each segment's struct decl + field index by
 /// substituting the previous level's `type_args` into the declared
-/// field type — same algorithm the resolver runs in
+/// field type, the same algorithm the resolver runs in
 /// `walk_field_segments`, just one layer down (we look at IRTypes
 /// for the actual `FieldGet` / `FieldSet` payloads).
 fn lower_field_assignment(
@@ -324,7 +324,7 @@ fn lower_field_assignment(
     let head_ty = lvalue.head_resolved_type.clone().unwrap_or_else(|| {
         panic!(
             "IR lower: multi-segment assignment target `{}` carries no head \
-             ResolvedType — typecheck resolve invariant violation",
+             ResolvedType (typecheck resolve invariant violation)",
             lvalue.segments.join("."),
         )
     });
@@ -444,7 +444,7 @@ struct FieldStep {
 }
 
 /// Walk `lvalue.segments[1..]` against the registry, mirroring the
-/// resolver's `walk_field_segments` — at each step, look up the
+/// resolver's `walk_field_segments`: at each step, look up the
 /// receiver's struct definition, substitute the receiver's type-args
 /// into the declared field type, and translate to an [`IRType`].
 /// Returns one [`FieldStep`] per non-head segment.
@@ -464,7 +464,7 @@ fn build_field_chain(
         else {
             panic!(
                 "IR lower: field-assignment segment `{segment}` projects through a \
-                 non-struct receiver `{current_ty:?}` — typecheck resolve invariant \
+                 non-struct receiver `{current_ty:?}`, typecheck resolve invariant \
                  violation",
             );
         };
@@ -473,7 +473,7 @@ fn build_field_chain(
         let (field_index, declared) = definition.lookup_field(segment).unwrap_or_else(|| {
             panic!(
                 "IR lower: field-assignment segment `{segment}` is not a declared \
-                 field on the receiver struct — typecheck resolve invariant violation",
+                 field on the receiver struct (typecheck resolve invariant violation)",
             )
         });
         let subst = Substitution::from_args(struct_id, type_args);
@@ -499,12 +499,12 @@ fn registry_struct(
     struct_id: koja_ast::identifier::GlobalRegistryId,
 ) -> &StructDefinition {
     let entry = registry.get(struct_id).unwrap_or_else(|| {
-        panic!("IR lower: struct id {struct_id} missing from registry — seal violation",)
+        panic!("IR lower: struct id {struct_id} missing from registry (seal violation)",)
     });
     let GlobalKind::Struct(Some(definition)) = &entry.kind else {
         panic!(
             "IR lower: registry id {struct_id} (`{}`) is not a struct with a lifted \
-             definition — typecheck resolve invariant violation",
+             definition (typecheck resolve invariant violation)",
             entry.identifier,
         );
     };
@@ -514,10 +514,10 @@ fn registry_struct(
 /// Lower `target op= value` to `LocalRead + (FieldGet*) + BinaryOp +
 /// (FieldSet*) + LocalWrite`. Typecheck-resolve guarantees the head
 /// local was already declared, the leaf field's type is arithmetic,
-/// and the rhs's type matches; this helper assumes a well-typed
+/// and the rhs's type matches, so this helper assumes a well-typed
 /// shape and panics on deviation. Unlike [`lower_assignment`], we
-/// never emit a `LocalDecl` — compound assignment is reassignment-
-/// only.
+/// never emit a `LocalDecl`, because compound assignment is
+/// reassignment-only.
 fn lower_compound_assignment(
     target: &LValue,
     op: CompoundOp,
@@ -571,7 +571,7 @@ fn lower_compound_assignment(
     let head_ty = target.head_resolved_type.clone().unwrap_or_else(|| {
         panic!(
             "IR lower: multi-segment compound-assign target `{}` carries no head \
-             ResolvedType — typecheck resolve invariant violation",
+             ResolvedType (typecheck resolve invariant violation)",
             target.segments.join("."),
         )
     });
@@ -675,7 +675,7 @@ fn lower_compound_assignment(
 
 /// True when `ty` is the registry-tracked `Global.Never` primitive.
 /// Cheaper than threading a "divergent expression" flag down from
-/// resolve: typecheck already stamps `expr.resolution` with the
+/// resolve, since typecheck already stamps `expr.resolution` with the
 /// callee's return type, which for [`Kernel.panic`] is rewritten to
 /// `Never` by the lift_signatures pass. Callees with no Never return
 /// (the common case) early-out on the first guard.
@@ -714,16 +714,16 @@ fn compound_to_ir(op: CompoundOp) -> IRBinOp {
 fn expect_local_id(lvalue: &LValue) -> LocalId {
     lvalue.local_id.unwrap_or_else(|| {
         panic!(
-            "IR lower: assignment target `{}` carries no LocalId — typecheck \
-             resolve invariant violation",
+            "IR lower: assignment target `{}` carries no LocalId (typecheck \
+             resolve invariant violation)",
             lvalue.segments.join("."),
         )
     })
 }
 
 /// Wire a still-open trailing flow up to its function's `Return`.
-/// Closed flows already set their own terminator (an inner `return`);
-/// nothing to do. Emits the function-exit drops, then stamps the
+/// Closed flows already set their own terminator (an inner `return`),
+/// so there is nothing to do. Emits the function-exit drops, then stamps the
 /// `Return` carrying the trailing value (if any).
 pub(super) fn finalize_open_flow(ctx: &mut FnLowerCtx, flow: FlowResult) {
     if let FlowResult::Open { value, block } = flow {

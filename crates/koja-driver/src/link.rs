@@ -1,7 +1,7 @@
 //! Native linker glue for the LLVM backend.
 //!
 //! [`koja-ir-llvm`](../koja_ir_llvm/index.html) emits a
-//! `.o` file; this module hands that object to `cc` along with the
+//! `.o` file. This module hands that object to `cc` along with the
 //! embedded runtime archive (and bundled BoringSSL `libcrypto.a` /
 //! `libssl.a` so `@link "ssl"` resolves without the user wiring up
 //! `LIBRARY_PATH`) and produces the final binary at `output`.
@@ -13,7 +13,7 @@
 use std::path::Path;
 use std::{env, fs, process};
 
-/// Knobs for [`link`]: release strips macOS dSYMs; `quiet`
+/// Knobs for [`link`]: release strips macOS dSYMs, and `quiet`
 /// suppresses the trailing `compiled: <output>` line that
 /// `koja build` prints (used by `koja run` so its output stays
 /// the user binary's stdout).
@@ -24,7 +24,7 @@ pub(crate) struct LinkOptions {
 }
 
 /// Embedded static libraries written to the temp link directory.
-/// The runtime is always linked; BoringSSL ships alongside so
+/// The runtime is always linked, and BoringSSL ships alongside so
 /// `@link "ssl"` / `@link "crypto"` annotations resolve out of
 /// the box.
 const EMBEDDED_RUNTIME: &[u8] = include_bytes!(env!("KOJA_RUNTIME_LIB_PATH"));
@@ -56,7 +56,7 @@ fn macos_deployment_target() -> String {
 
 /// Links an object file with the embedded runtime library to
 /// produce an executable. `link_libraries` carries `@link "name"`
-/// annotations collected during lowering (passed as `-l<name>`);
+/// annotations collected during lowering (passed as `-l<name>`), and
 /// `extra_lib_search_paths` lets callers add directories the
 /// linker should scan for `-l<name>` resolution (passed as
 /// `-L<dir>`). Project-mode callers thread the directory holding
@@ -109,7 +109,7 @@ pub(crate) fn link(
     // pass, so inter-archive references break when the archives
     // appear in the wrong order (`libssl.a` pulls EVP_HPKE_* /
     // KYBER_* / spake2plus symbols from `libcrypto.a`). Group the
-    // archives so ld re-scans them until no new references resolve;
+    // archives so ld re-scans them until no new references resolve.
     // macOS ld64 is order-independent and needs no grouping.
     #[cfg(target_os = "linux")]
     args.push("-Wl,--start-group".to_string());

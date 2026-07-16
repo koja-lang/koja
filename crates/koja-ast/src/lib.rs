@@ -4,16 +4,16 @@
 //! syntax designed for readability and conciseness. Key syntax traits:
 //!
 //! - Blocks delimited by keywords and `end` (no braces)
-//! - No semicolons — newlines are statement separators
+//! - No semicolons (newlines are statement separators)
 //! - `fn` / `priv fn` visibility model
 //! - Pattern matching with exhaustive `match` / `when` guards
 //! - String interpolation via `#{expr}`
 //! - Value-semantics memory (deep-copy on acquisition) without GC
 //!
 //! See the project-root design documents for full details:
-//! - `ROADMAP.md` — phases, feature status, and guiding principles
-//! - `MEMORY.md` — ownership, borrowing, and allocation model
-//! - `CONCURRENCY.md` — tasks, actors, and runtime design
+//! - `ROADMAP.md`: phases, feature status, and guiding principles
+//! - `MEMORY.md`: ownership, borrowing, and allocation model
+//! - `CONCURRENCY.md`: tasks, actors, and runtime design
 
 pub mod ast;
 pub mod coercion;

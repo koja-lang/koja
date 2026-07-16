@@ -7,7 +7,7 @@
 //! - `RuntimeBlock.adopt_binary` reads the payload, frees the source
 //!   runtime block, and returns a `Value::Binary`.
 //!
-//! `Random.int` is a direct extern shim; we pin both ends with
+//! `Random.int` is a direct extern shim. We pin both ends with
 //! `min == max` (deterministic) so the test doesn't depend on the
 //! live entropy source.
 

@@ -1,6 +1,6 @@
 //! Seal sub-pass: walks the merged [`crate::IRProgram`] /
 //! [`crate::IRScript`] and asserts the sealed-IR invariants per the
-//! [`COMPILER-NORTHSTAR.md`] contract. Panics on violation — seal
+//! [`COMPILER-NORTHSTAR.md`] contract. Panics on violation, since seal
 //! failures indicate compiler bugs in upstream sub-passes, not user
 //! errors.
 //!
@@ -8,23 +8,24 @@
 //!
 //! Layout map:
 //!
-//! - [`program`] — entry point [`seal_program`] plus
+//! - [`program`]: entry point [`seal_program`] plus
 //!   `seal_program_calls` (cross-function call-target lookup against
 //!   the assembled `IRProgram`).
-//! - [`script`] — entry point [`seal_script`] plus
+//! - [`script`]: entry point [`seal_script`] plus
 //!   `seal_script_calls` (mirror for the script-shaped output, with
 //!   `IRScript::function` as the lookup table).
-//! - [`function`] — `seal_package` / `seal_function` / `seal_block` /
+//! - [`function`]: `seal_package` / `seal_function` / `seal_block` /
 //!   `collect_block_ids`. Shared between the program and script
 //!   paths because both shapes contain `IRPackage` fragments and
 //!   both apply the same per-block invariants (operand
 //!   defined-before-use, terminator-target validity, supported
 //!   `ConstValue` / `IRType` widths).
-//! - [`structs`] — `seal_struct_decls` (per-package decl shape)
+//! - [`structs`]: the `seal_struct_decls` check (per-package decl
+//!   shape)
 //!   plus `seal_struct_ops` (cross-instruction `StructInit` /
 //!   `FieldGet` validation, fed by an `IRSymbol -> IRStructDecl`
 //!   closure the program / script paths supply).
-//! - This module ([`mod.rs`]) — shared helpers used by all
+//! - This module ([`mod.rs`]): shared helpers used by all
 //!   submodules: [`seal_panic`], [`require_supported_type`],
 //!   [`require_supported_const`], [`instruction_operands`],
 //!   [`terminator_operands`], [`terminator_targets`].
@@ -36,12 +37,12 @@
 //! 2. Every function in every package keys at its own symbol
 //!    (`pkg.functions[sym].symbol == sym`).
 //! 3. Per-function body shape matches its [`crate::FunctionKind`]:
-//!    `Regular` carries at least one basic block; `Intrinsic`
+//!    `Regular` carries at least one basic block, and `Intrinsic`
 //!    carries zero (the body is synthesized at emit time by the
 //!    backend's `intrinsics/` dispatch).
 //! 4. Every basic-block id is unique within its function.
 //! 5. Every operand referenced by an instruction or terminator points
-//!    at a `ValueId` whose definition dominates the using block — i.e.
+//!    at a `ValueId` whose definition dominates the using block, i.e.
 //!    the def lives in the using block itself or in some block that
 //!    sits on every path from the entry block to it. Function
 //!    parameter `ValueId`s seed the entry block's scope, so body
@@ -61,7 +62,7 @@
 //!    through the IR is one of `Bool`, `Float64`, `Int64`, `String`,
 //!    or `Unit`. The narrower / unsigned / `Float32` width variants
 //!    exist in the [`ConstValue`] vocabulary but are forbidden until
-//!    literal width inference lands — there's no surface syntax that
+//!    literal width inference lands, as there's no surface syntax that
 //!    materializes them yet. The [`IRType`] vocabulary is broader:
 //!    every variant is admitted, since FFI signatures (and any
 //!    regular function that propagates an FFI value) legitimately
@@ -98,14 +99,14 @@ pub(crate) use script::seal_script;
 /// Every [`IRType`] variant is admitted. The narrower / explicit-
 /// width numeric variants and `CPtr<T>` are reachable through
 /// extern-fn signatures (`FunctionKind::Extern` declarations) and
-/// through regular function bodies that propagate FFI values; the
+/// through regular function bodies that propagate FFI values. The
 /// rest are reachable through ordinary user code. Inner `CPtr`
 /// pointees recurse so `CPtr<CPtr<UInt8>>` rejects nothing
 /// structurally.
 ///
 /// Kept as a function (not deleted) so the per-edge call sites in
 /// [`function::seal_function`] retain their location-aware error
-/// surface — useful when seal panics ever loosen back into recoverable
+/// surface, useful when seal panics ever loosen back into recoverable
 /// diagnostics. See module docstring invariant 8.
 pub(super) fn require_supported_type(ty: &IRType, location: &dyn Fn() -> String) {
     match ty {
@@ -159,7 +160,7 @@ pub(super) fn require_supported_type(ty: &IRType, location: &dyn Fn() -> String)
 }
 
 pub(super) fn require_supported_const(value: &ConstValue, location: &dyn Fn() -> String) {
-    // Every [`ConstValue`] variant is currently admitted — narrow-int
+    // Every [`ConstValue`] variant is currently admitted. Narrow-int
     // and narrow-float widths landed alongside literal-fit coercion.
     // Helper exists so future additions to `ConstValue` (e.g. a
     // bigint variant) can opt in explicitly rather than implicitly
@@ -197,20 +198,20 @@ pub(super) fn instruction_operands(inst: &IRInstruction) -> Vec<ValueId> {
         IRInstruction::FieldGet { base, .. } => vec![*base],
         IRInstruction::FieldSet { base, value, .. } => vec![*base, *value],
         // `LoadCapture` reads from the enclosing closure's env, not
-        // a `ValueId`; nothing to validate in the per-block walk.
+        // a `ValueId`, so there is nothing to validate in the per-block walk.
         IRInstruction::LoadCapture { .. } => vec![],
         // `LoadConst` reads from the package constant pool, not a
-        // `ValueId`, so it has no operand to validate here — the
+        // `ValueId`, so it has no operand to validate here. The
         // pool entry is checked against the program-level constants
         // index by `seal_loadconst_pool`.
         IRInstruction::LoadConst { .. } => vec![],
-        // `DropLocal` consumes a slot, not a `ValueId`; the slot's
+        // `DropLocal` consumes a slot, not a `ValueId`. The slot's
         // existence is checked by `seal_locals_in_function` and it
         // produces nothing.
-        // `LocalDecl` declares the slot; nothing in scope yet to read.
+        // `LocalDecl` declares the slot, with nothing in scope yet to read.
         // `LocalRead` reads the slot named by `local`, not a `ValueId`,
         // so the per-block defined-set walk has nothing to validate
-        // here — `local` is checked against the per-function decl set
+        // here. `local` is checked against the per-function decl set
         // by `seal_locals_in_function`.
         IRInstruction::DropLocal { .. }
         | IRInstruction::LocalDecl { .. }
@@ -220,20 +221,20 @@ pub(super) fn instruction_operands(inst: &IRInstruction) -> Vec<ValueId> {
         IRInstruction::MakeClosure { captures, .. } => captures.clone(),
         IRInstruction::NumericWiden { value, .. } => vec![*value],
         // `Receive` consumes only the optional `after` timeout
-        // value; arm payloads bind into pre-declared local slots
+        // value. Arm payloads bind into pre-declared local slots
         // that the surrounding function-level walk validates.
         IRInstruction::Receive { after, .. } => {
             after.as_ref().map(|a| vec![a.timeout]).unwrap_or_default()
         }
-        // `Spawn` consumes the config value; the wrapper symbol
+        // `Spawn` consumes the config value. The wrapper symbol
         // resolves through the program's function index, validated
         // by `seal_program_calls`.
         IRInstruction::Spawn { config, .. } => vec![*config],
-        // `ProcessExit` / `SetPriority` consume their single tag value; the
-        // defined-before-use walk validates it like any other operand.
+        // `ProcessExit` / `SetPriority` consume their single tag value.
+        // The defined-before-use walk validates it like any other operand.
         IRInstruction::ProcessExit { reason } => vec![*reason],
         IRInstruction::SetPriority { tag } => vec![*tag],
-        // `YieldCheck` is a bare preemption point — no operands, no dest.
+        // `YieldCheck` is a bare preemption point: no operands, no dest.
         IRInstruction::YieldCheck => vec![],
         IRInstruction::StructInit { fields, .. } => fields.iter().map(|f| f.value).collect(),
         IRInstruction::UnaryOp { operand, .. } => vec![*operand],

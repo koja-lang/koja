@@ -10,7 +10,7 @@
 //! Eval flattens every integer width to [`Value::Int(i64)`], so the
 //! `Equality` / `Hash` int impls collapse to one spec per family.
 //! The narrow-width cells stay observable via call-site coercion at
-//! sized param slots — exactly the same shape `tests/bitwise.rs`
+//! sized param slots, exactly the same shape `tests/bitwise.rs`
 //! uses for the 48-cell `Bitwise` family.
 
 use koja_ast::util::dedent;
@@ -27,10 +27,6 @@ fn run_script(source: &str) -> Result<Value, RuntimeError> {
 fn run_program(source: &str) -> Result<Value, RuntimeError> {
     evaluate_program(&dedent(source))
 }
-
-// ---------------------------------------------------------------------------
-// Equality.eq — Bool + Int (i64 catch-all)
-// ---------------------------------------------------------------------------
 
 #[test]
 fn bool_eq_true_when_operands_match() {
@@ -68,10 +64,6 @@ fn uint8_eq_dispatches_through_narrow_impl() {
     .unwrap();
     assert_eq!(v, Value::Bool(true));
 }
-
-// ---------------------------------------------------------------------------
-// Hash.hash — SplitMix64 against the i64 reinterpretation
-// ---------------------------------------------------------------------------
 
 /// SplitMix64, mirrored from the eval handler so the test pins the
 /// exact byte-for-byte spec.
@@ -112,17 +104,13 @@ fn int_hash_distinct_inputs_produce_distinct_outputs() {
     );
 }
 
-// ---------------------------------------------------------------------------
-// Kernel.panic — surfaces the message verbatim
-// ---------------------------------------------------------------------------
-
 #[test]
 fn kernel_panic_surfaces_runtime_error_with_message() {
     // `Kernel.panic` returns `Never`, which lowers to an
     // `IRTerminator::Unreachable` after the call so the body's
     // SSA flow stays well-formed. The dispatch table converts the
     // call into `RuntimeError::Panicked` carrying the message
-    // unchanged — pin the verbatim payload here.
+    // unchanged. Pin the verbatim payload here.
     let err = run_program(
         "
         fn main

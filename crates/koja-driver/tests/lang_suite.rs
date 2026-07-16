@@ -120,10 +120,6 @@ fn run_with_timeout(configure: impl FnOnce(&mut Command)) -> (String, String, i3
     (stdout, stderr, code)
 }
 
-// ---------------------------------------------------------------------------
-// Shared runners
-// ---------------------------------------------------------------------------
-
 fn run_pass_dir(dir: &Path, label: &str) {
     let files = collect_test_files(dir);
     assert!(
@@ -145,7 +141,7 @@ fn run_pass_dir(dir: &Path, label: &str) {
         let expected = fs::read_to_string(&expected_path).unwrap();
 
         // Run under every eligible backend and assert each against the
-        // golden; both matching the same golden is interpreter <-> LLVM
+        // golden. Both matching the same golden is interpreter <-> LLVM
         // parity by transitivity.
         for &backend in backends_for(file) {
             let (stdout, stderr, code) = run_koja_backend(file, backend);
@@ -331,10 +327,6 @@ fn run_project_dir_backend(dir: &Path, label: &str, backend: &str, extra_args: &
     }
 }
 
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
 fn diff_lines(actual: &str, expected: &str) -> String {
     let actual_lines: Vec<&str> = actual.lines().collect();
     let expected_lines: Vec<&str> = expected.lines().collect();
@@ -354,10 +346,6 @@ fn diff_lines(actual: &str, expected: &str) -> String {
     }
     diff
 }
-
-// ---------------------------------------------------------------------------
-// Macro + test declarations
-// ---------------------------------------------------------------------------
 
 macro_rules! lang_test_dir {
     ($name:ident, $dir:expr) => {
@@ -412,7 +400,7 @@ lang_test_dir!(lang_compile_fail, "compile_fail", compile_fail);
 lang_test_dir!(lang_runtime_fail, "runtime_fail", runtime_fail);
 
 /// Backtrace smoke test: a debug `koja run` of the `panic_backtrace`
-/// fixture must surface the user's Koja call chain — the `crash()`
+/// fixture must surface the user's Koja call chain, meaning the `crash()`
 /// frame attributed to the fixture's source file. Guards against silent
 /// regressions in DWARF emission, frame-pointer maintenance, or the
 /// runtime symbolizer that would collapse the trace to "<no frames>".
@@ -450,7 +438,7 @@ lang_test_dir!(lang_pkg_fn, "pkg_fn", project);
 /// entries in `TypeContext::name_index` are last-write-wins, so the pipeline's own
 /// references to `Config` resolve to beta.Config (or vice versa) and the
 /// program fails at typecheck. This test must pass once the migration is
-/// complete; until then it is the oracle that we are actually fixing the bug.
+/// complete. Until then it is the oracle that we are actually fixing the bug.
 #[test]
 fn lang_package_collision() {
     run_project_dir(&lang_dir().join("package_collision"), "package_collision");
@@ -538,7 +526,7 @@ fn lang_ffi() {
 }
 
 /// A NaN handed back by an `@extern "C"` call must trap at the call
-/// site — the FFI boundary is the one remaining producer of
+/// site. The FFI boundary is the one remaining producer of
 /// non-finite floats, and the finite-only `Float` invariant closes
 /// it there. LLVM-only for the same `@link` reason as `lang_ffi`.
 #[test]
@@ -562,7 +550,7 @@ fn lang_ffi_nan_return_traps() {
 }
 
 /// Lifecycle signal delivery under both backends: the compiled binary
-/// receives SIGTERM directly; under `koja run --backend=interpreter` the
+/// receives SIGTERM directly, while under `koja run --backend=interpreter` the
 /// entry process runs in-process, so the signal lands on the
 /// interpreter's latched handlers. Both must produce the same stdout and
 /// exit code.
@@ -775,10 +763,6 @@ fn lang_socket_shutdown_exits_cleanly() {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Signal test runner
-// ---------------------------------------------------------------------------
-
 fn run_signal_test(dir: &Path, label: &str, signal: libc::c_int) {
     assert!(dir.exists(), "test fixture {label}/ not found");
 
@@ -896,7 +880,7 @@ fn signal_child_and_assert(
 /// matching `ready_line` arrives or `timeout` elapses. Returns the
 /// bytes read so far so the caller can prepend them to whatever
 /// `wait_with_output()` collects after the signal lands. Panics on
-/// timeout — a runtime that never prints its ready line is broken.
+/// timeout, since a runtime that never prints its ready line is broken.
 fn wait_for_ready_line(
     child: &mut std::process::Child,
     ready_line: &str,
@@ -964,10 +948,6 @@ fn wait_for_ready_line(
         }
     }
 }
-
-// ---------------------------------------------------------------------------
-// Standalone project-specific tests (build, check, release)
-// ---------------------------------------------------------------------------
 
 #[test]
 fn lang_project_build_test() {
@@ -1101,8 +1081,8 @@ fn lang_release_build_test() {
 
 /// Arithmetic faults must trap in release mode exactly as in debug:
 /// the guards are explicit branches in the emitted IR, not
-/// debug-only checks. The bit-shift fault is the historical repro —
-/// it only misbehaved under release-mode LLVM optimization.
+/// debug-only checks. The bit-shift fault is the historical repro
+/// that only misbehaved under release-mode LLVM optimization.
 #[test]
 fn lang_release_fault_parity_test() {
     let fixtures = [
@@ -1145,7 +1125,7 @@ fn run_koja_test_trace(extra_args: &[&str]) -> (String, String, i32) {
     if let Some(lib_path) = library_path() {
         cmd.env("LIBRARY_PATH", lib_path);
     }
-    // The colored path is gated on NO_COLOR being unset; clear it so the
+    // The colored path is gated on NO_COLOR being unset. Clear it so the
     // assertions are stable regardless of the surrounding environment.
     cmd.env_remove("NO_COLOR");
 
@@ -1161,7 +1141,7 @@ fn run_koja_test_trace(extra_args: &[&str]) -> (String, String, i32) {
 /// its `path:line` plus same-line result + timing, honors `--no-color`,
 /// and (with color) rewrites each completed line whole in the result
 /// color. Both invocations live in one test because they share the
-/// fixture's build dir/binary path; running them as separate `#[test]`s
+/// fixture's build dir/binary path, and running them as separate `#[test]`s
 /// would race under the parallel harness.
 #[test]
 fn lang_test_trace() {

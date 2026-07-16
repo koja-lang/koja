@@ -10,8 +10,8 @@
 //! - Exit emits a fresh `Const::Unit` and continues the surrounding
 //!   flow.
 //!
-//! And the two-block CFG shape for `loop` (no header — there's no
-//! condition):
+//! And the two-block CFG shape for `loop` (no header, since there is
+//! no condition):
 //!
 //! - Open block branches unconditionally to `loop_body`.
 //! - Body emits a back-edge [`IRTerminator::Branch`] to itself.
@@ -21,8 +21,8 @@
 //!   one `break` fires).
 //!
 //! Loop-carried state lives in alloca slots
-//! ([`IRInstruction::LocalRead`] / [`IRInstruction::LocalWrite`]) —
-//! no block params on the header. Block-param SSA stays for the
+//! ([`IRInstruction::LocalRead`] / [`IRInstruction::LocalWrite`]),
+//! with no block params on the header. Block-param SSA stays for the
 //! `if`/`else` joins that may live inside the body, but the loop
 //! itself doesn't introduce one.
 //!
@@ -30,12 +30,11 @@
 //! into the same while + match shape; [`for_lowers_via_desugar_to_while_plus_match`]
 //! pins the resulting IR end-to-end.
 
-use koja_ast::util::dedent;
 use koja_ir::{BranchTarget, IRInstruction, IRTerminator, IRType};
 
 mod common;
 
-use common::lower_script_source as lower;
+use common::{all_instructions, block_labeled, entry_block, lower_script_source as lower};
 
 #[test]
 fn while_lowers_to_header_body_exit_with_back_edge() {
@@ -46,9 +45,9 @@ fn while_lowers_to_header_body_exit_with_back_edge() {
         end
         ";
 
-    let script = lower(&dedent(source));
+    let script = lower(source);
 
-    // entry, while_header, while_body, while_exit — 4 blocks.
+    // entry, while_header, while_body, while_exit: 4 blocks.
     assert_eq!(
         script.blocks.len(),
         4,
@@ -56,7 +55,7 @@ fn while_lowers_to_header_body_exit_with_back_edge() {
         script.blocks.len(),
     );
 
-    let entry = &script.blocks[0];
+    let entry = entry_block(&script.blocks);
     let IRTerminator::Branch(BranchTarget {
         block: header_id,
         args,
@@ -136,7 +135,7 @@ fn while_lowers_to_header_body_exit_with_back_edge() {
 #[test]
 fn while_exit_block_emits_unit_and_continues_flow() {
     // Surface expression types as Unit, so the body's trailing flow
-    // through the exit block returns Unit; verify the exit block
+    // through the exit block returns Unit. Verify the exit block
     // contains a `Const::Unit` and that the function returns Unit.
     let source = "
         i = 0
@@ -145,14 +144,10 @@ fn while_exit_block_emits_unit_and_continues_flow() {
         end
         ";
 
-    let script = lower(&dedent(source));
+    let script = lower(source);
     assert_eq!(script.return_type, IRType::Unit);
 
-    let exit = script
-        .blocks
-        .iter()
-        .find(|b| b.label == "while_exit")
-        .expect("exit block missing");
+    let exit = block_labeled(&script.blocks, "while_exit");
     assert!(
         exit.instructions.iter().any(|i| matches!(
             i,
@@ -170,8 +165,8 @@ fn while_exit_block_emits_unit_and_continues_flow() {
 fn while_body_writes_propagate_through_alloca_slots() {
     // The mutable `i` slot is read in the header (cond evaluation)
     // and re-read + written in the body, all through LocalRead /
-    // LocalWrite against the same `IRLocalId` — no block params on
-    // the header.
+    // LocalWrite against the same `IRLocalId`, with no block params
+    // on the header.
     let source = "
         i = 0
         while i < 3
@@ -179,13 +174,9 @@ fn while_body_writes_propagate_through_alloca_slots() {
         end
         ";
 
-    let script = lower(&dedent(source));
+    let script = lower(source);
 
-    let header = script
-        .blocks
-        .iter()
-        .find(|b| b.label == "while_header")
-        .expect("header missing");
+    let header = block_labeled(&script.blocks, "while_header");
     let header_local_reads: Vec<_> = header
         .instructions
         .iter()
@@ -197,11 +188,7 @@ fn while_body_writes_propagate_through_alloca_slots() {
         header.instructions,
     );
 
-    let body = script
-        .blocks
-        .iter()
-        .find(|b| b.label == "while_body")
-        .expect("body missing");
+    let body = block_labeled(&script.blocks, "while_body");
     let body_writes: Vec<_> = body
         .instructions
         .iter()
@@ -227,13 +214,9 @@ fn while_with_return_inside_body_terminates_function() {
         i
         ";
 
-    let script = lower(&dedent(source));
+    let script = lower(source);
 
-    let body = script
-        .blocks
-        .iter()
-        .find(|b| b.label == "while_body")
-        .expect("body missing");
+    let body = block_labeled(&script.blocks, "while_body");
     assert!(
         matches!(body.terminator, IRTerminator::Return { .. }),
         "early-return body should terminate with Return; got {:?}",
@@ -244,7 +227,7 @@ fn while_with_return_inside_body_terminates_function() {
 #[test]
 fn for_lowers_via_desugar_to_while_plus_match() {
     // `for x in c` desugars to a while loop wrapping a match on
-    // `c.get(idx)`; we should see calls to `Counter.length` /
+    // `c.get(idx)`. We should see calls to `Counter.length` /
     // `Counter.get` and a back-edge to the header from the body's
     // descendant blocks.
     let source = "
@@ -270,35 +253,19 @@ fn for_lowers_via_desugar_to_while_plus_match() {
         end
         ";
 
-    let script = lower(&dedent(source));
+    let script = lower(source);
 
-    let header = script
-        .blocks
-        .iter()
-        .find(|b| b.label == "while_header")
-        .expect("for-desugar should produce a while_header block");
+    let header = block_labeled(&script.blocks, "while_header");
     assert!(
         matches!(header.terminator, IRTerminator::CondBranch { .. }),
         "while_header should terminate with CondBranch; got {:?}",
         header.terminator,
     );
 
-    let body = script
-        .blocks
-        .iter()
-        .find(|b| b.label == "while_body")
-        .expect("for-desugar should produce a while_body block");
-    let exit = script
-        .blocks
-        .iter()
-        .find(|b| b.label == "while_exit")
-        .expect("for-desugar should produce a while_exit block");
-    let _ = exit;
+    let body = block_labeled(&script.blocks, "while_body");
+    block_labeled(&script.blocks, "while_exit");
 
-    let calls: Vec<&str> = script
-        .blocks
-        .iter()
-        .flat_map(|b| b.instructions.iter())
+    let calls: Vec<&str> = all_instructions(&script.blocks)
         .filter_map(|inst| match inst {
             IRInstruction::Call { callee, .. } => Some(callee.mangled()),
             _ => None,
@@ -313,7 +280,7 @@ fn for_lowers_via_desugar_to_while_plus_match() {
         "for-desugar should call `Counter.get`; got calls {calls:?}",
     );
 
-    // Don't pin the exact match-arm block layout — only that some
+    // Don't pin the exact match-arm block layout, only that some
     // descendant block branches back to the header.
     let header_id = header.id;
     let has_back_edge = script.blocks.iter().any(|b| {
@@ -336,16 +303,16 @@ fn for_lowers_via_desugar_to_while_plus_match() {
 fn loop_lowers_to_body_with_self_back_edge() {
     // `loop end` (no break) emits an entry -> loop_body branch and a
     // back-edge from loop_body to itself. The exit block is
-    // synthesized but never reached at runtime — the IR still
+    // synthesized but never reached at runtime. The IR still
     // contains it (every `loop` produces both blocks unconditionally).
     let source = "
         loop
         end
         ";
 
-    let script = lower(&dedent(source));
+    let script = lower(source);
 
-    let entry = &script.blocks[0];
+    let entry = entry_block(&script.blocks);
     let IRTerminator::Branch(BranchTarget { block: body_id, .. }) = &entry.terminator else {
         panic!(
             "entry should branch unconditionally to loop_body; got {:?}",
@@ -371,18 +338,15 @@ fn loop_lowers_to_body_with_self_back_edge() {
     };
     assert_eq!(*back_edge_target, *body_id, "back-edge must target body");
 
-    script
-        .blocks
-        .iter()
-        .find(|b| b.label == "loop_exit")
-        .expect("loop_exit block missing (always synthesized, even if unreachable)");
+    // Always synthesized, even if unreachable.
+    block_labeled(&script.blocks, "loop_exit");
 }
 
 #[test]
 fn loop_with_break_lowers_break_as_branch_to_loop_exit() {
     // The body's `break` closes the body's flow with a
-    // `Branch(loop_exit)`. The body block has no back-edge — its
-    // terminator IS the break branch — and the exit block contains
+    // `Branch(loop_exit)`. The body block has no back-edge (its
+    // terminator IS the break branch) and the exit block contains
     // a `Const::Unit`.
     let source = "
         loop
@@ -390,18 +354,10 @@ fn loop_with_break_lowers_break_as_branch_to_loop_exit() {
         end
         ";
 
-    let script = lower(&dedent(source));
+    let script = lower(source);
 
-    let body = script
-        .blocks
-        .iter()
-        .find(|b| b.label == "loop_body")
-        .expect("loop_body missing");
-    let exit = script
-        .blocks
-        .iter()
-        .find(|b| b.label == "loop_exit")
-        .expect("loop_exit missing");
+    let body = block_labeled(&script.blocks, "loop_body");
+    let exit = block_labeled(&script.blocks, "loop_exit");
 
     let IRTerminator::Branch(BranchTarget { block: target, .. }) = &body.terminator else {
         panic!(
@@ -428,9 +384,9 @@ fn loop_with_break_lowers_break_as_branch_to_loop_exit() {
 
 #[test]
 fn nested_break_targets_innermost_loop_exit() {
-    // `loop loop break end end`: the inner `break` must branch to
+    // In `loop loop break end end` the inner `break` must branch to
     // the *inner* loop_exit, not the outer one. The IR shows two
-    // pairs of (body, exit) blocks; the inner break-branch's target
+    // pairs of (body, exit) blocks. The inner break-branch's target
     // is the inner exit (the second loop_exit by creation order).
     let source = "
         loop
@@ -440,7 +396,7 @@ fn nested_break_targets_innermost_loop_exit() {
         end
         ";
 
-    let script = lower(&dedent(source));
+    let script = lower(source);
 
     let exit_blocks: Vec<_> = script
         .blocks
@@ -454,11 +410,11 @@ fn nested_break_targets_innermost_loop_exit() {
         exit_blocks.len(),
         script.blocks.iter().map(|b| &b.label).collect::<Vec<_>>(),
     );
-    // `lower_loop` for the inner loop runs nested inside the outer
-    // — so by `fresh_block` order the outer's exit comes first
+    // `lower_loop` for the inner loop runs nested inside the outer,
+    // so by `fresh_block` order the outer's exit comes first
     // (created during the outer's `lower_loop` setup), then the
     // inner's exit. Bookkeeping mirrors v1's loop_exit stack push
-    // order; pin the outer-then-inner shape.
+    // order. Pin the outer-then-inner shape.
     let outer_exit_id = exit_blocks[0].id;
     let inner_exit_id = exit_blocks[1].id;
 

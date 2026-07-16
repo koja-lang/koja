@@ -24,7 +24,7 @@ pub enum PackageKind {
 }
 
 impl PackageKind {
-    /// Tier ordinal for the package sort: lower comes first.
+    /// Tier ordinal for the package sort, where lower comes first.
     fn tier(self) -> u8 {
         match self {
             PackageKind::Project => 0,
@@ -110,7 +110,7 @@ pub struct DocStruct {
     pub type_params: Vec<String>,
 }
 
-/// All extracted documentation for a single package: every kind of
+/// All extracted documentation for a single package. Every kind of
 /// item lives here, plus a flat [`Self::items`] roster used by the
 /// sidebar item list. `kind` is the origin tier (project / dep /
 /// stdlib) and drives cross-package sort + renderer labelling.

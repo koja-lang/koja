@@ -31,10 +31,6 @@ mod common;
 
 use common::{APP_NAME, assert_contains, assert_main_shape, lower_script_source as lower};
 
-// ---------------------------------------------------------------------------
-// Generic structs
-// ---------------------------------------------------------------------------
-
 #[test]
 fn generic_struct_emits_named_llvm_struct_with_mangled_symbol() {
     let source = "
@@ -125,10 +121,6 @@ fn nested_generic_struct_emits_inner_type_inside_outer_field_layout() {
     );
 }
 
-// ---------------------------------------------------------------------------
-// Generic enums
-// ---------------------------------------------------------------------------
-
 #[test]
 fn generic_enum_emits_outer_complete_and_payload_named_types_with_mangled_symbol() {
     let source = "
@@ -145,7 +137,7 @@ fn generic_enum_emits_outer_complete_and_payload_named_types_with_mangled_symbol
         emit_script_llvm_ir(&script, APP_NAME).expect("emit_script_llvm_ir should succeed");
 
     assert_main_shape(&ir_text);
-    // Outer blob — sized to the largest variant's complete struct.
+    // Outer blob, sized to the largest variant's complete struct.
     assert_contains(&ir_text, "%\"TestApp.Box_$Int64$\" = type {");
     // Per-variant complete struct with i8 tag + payload.
     assert_contains(&ir_text, "%\"TestApp.Box_$Int64$.Of\" = type {");

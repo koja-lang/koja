@@ -1,5 +1,5 @@
 //! Render documentation structs into static HTML pages using
-//! Askama templates. The renderer is package-aware: every page
+//! Askama templates. The renderer is package-aware. Every page
 //! receives the sidebar context (package roster + current
 //! package's item list + active item) so a single sidebar
 //! template can serve the root, per-package, and per-item pages.
@@ -164,7 +164,7 @@ struct ConstantTemplate<'a> {
     sidebar_items: &'a [DocItem],
 }
 
-/// Build the package-roster sidebar context: same input every
+/// Build the package-roster sidebar context, the same input every
 /// page receives at the root level. `sidebar_items` is empty
 /// because the root page lists packages, not items.
 fn package_refs(project: &DocProject) -> Vec<PackageRef<'_>> {

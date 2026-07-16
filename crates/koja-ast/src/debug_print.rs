@@ -113,10 +113,6 @@ impl<'a> Printer<'a> {
         });
     }
 
-    // ---------------------------------------------------------------
-    // Items
-    // ---------------------------------------------------------------
-
     fn item(&mut self, item: &Item) {
         match item {
             Item::Alias(alias) => self.alias(alias),
@@ -352,10 +348,6 @@ impl<'a> Printer<'a> {
         });
     }
 
-    // ---------------------------------------------------------------
-    // Statements
-    // ---------------------------------------------------------------
-
     fn statement(&mut self, stmt: &Statement) {
         match stmt {
             Statement::Expr(expr) => self.expr(expr),
@@ -391,10 +383,6 @@ impl<'a> Printer<'a> {
             Statement::Break { span } => self.header("Break", *span),
         }
     }
-
-    // ---------------------------------------------------------------
-    // Expressions
-    // ---------------------------------------------------------------
 
     fn expr(&mut self, expr: &Expr) {
         let head = expr_header(expr);
@@ -684,10 +672,6 @@ impl<'a> Printer<'a> {
         });
     }
 
-    // ---------------------------------------------------------------
-    // Parameters (function + closure)
-    // ---------------------------------------------------------------
-
     fn param(&mut self, param: &Param) {
         match param {
             Param::Self_ { span, .. } => {
@@ -731,10 +715,6 @@ impl<'a> Printer<'a> {
             ClosureParam::Wildcard { span, .. } => self.header("Wildcard", *span),
         }
     }
-
-    // ---------------------------------------------------------------
-    // Patterns
-    // ---------------------------------------------------------------
 
     fn pattern(&mut self, pat: &Pattern) {
         match pat {
@@ -844,10 +824,6 @@ impl<'a> Printer<'a> {
         });
     }
 
-    // ---------------------------------------------------------------
-    // Annotations
-    // ---------------------------------------------------------------
-
     fn annotations(&mut self, annotations: &[crate::ast::Annotation]) {
         if annotations.is_empty() {
             return;
@@ -865,11 +841,9 @@ impl<'a> Printer<'a> {
     }
 }
 
-// -------------------------------------------------------------------
 // Header helpers: pure functions producing the single-line label for
 // each node. Keeping these separate from Printer keeps the walker
 // small and makes header shape easy to eyeball.
-// -------------------------------------------------------------------
 
 fn expr_header(expr: &Expr) -> String {
     let mut out = match &expr.kind {
@@ -932,7 +906,7 @@ fn expr_header(expr: &Expr) -> String {
 }
 
 /// Compact rendering of a [`ResolvedType`] for `--emit-ast` output.
-/// `Named` leaves show the head `<id>`; generics show `<id><arg, ...>`
+/// `Named` leaves show the head `<id>`, and generics show `<id><arg, ...>`
 /// recursively. Anonymous function types render as
 /// `fn (T, U) -> R`. Unresolved heads render as `?` so partial
 /// resolution states are visible during development.
@@ -1013,10 +987,6 @@ fn enum_ctor_data_label(data: &EnumConstructionData) -> &'static str {
 fn enum_pattern_header(kind: &str, type_path: &[String], variant: &str) -> String {
     format!("{kind} {}.{variant}", type_path.join("."))
 }
-
-// -------------------------------------------------------------------
-// Scalar formatters
-// -------------------------------------------------------------------
 
 fn format_span(span: Span) -> String {
     format!("@{span}")

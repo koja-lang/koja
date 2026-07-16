@@ -747,7 +747,7 @@ impl<X, M: Message> ProcessTable<X, M> {
             });
         } else {
             // The target's slot may already be reclaimed, losing its
-            // recorded reason; a freed PID reports `Normal`.
+            // recorded reason. A freed PID reports `Normal`.
             let reason = self
                 .get(target)
                 .map_or(ExitReason::Normal, |process| process.exit_reason);
@@ -1511,7 +1511,7 @@ mod tests {
         let b = spawn_parked(&mut table, Priority::High);
         let c = spawn_parked(&mut table, Priority::Normal);
 
-        // Wake all three; High queue gets a then b (FIFO), Normal gets c.
+        // Wake all three. The High queue gets a then b (FIFO), Normal gets c.
         table.transition(a, ProcessState::Runnable);
         table.transition(b, ProcessState::Runnable);
         table.transition(c, ProcessState::Runnable);

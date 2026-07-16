@@ -12,17 +12,14 @@ use koja_ir::{ConstValue, IRInstruction, IRTerminator, IRType};
 
 mod common;
 
-use common::lower_script_source as lower;
+use common::{entry_block, lower_script_source as lower};
 
 #[test]
 fn string_literal_lowers_to_const_string() {
     let script = lower("\"hello\"\n");
     assert_eq!(script.return_type, IRType::String);
 
-    let block = script
-        .blocks
-        .first()
-        .expect("script has at least one block");
+    let block = entry_block(&script.blocks);
 
     let IRInstruction::Const { dest, value } = &block.instructions[0] else {
         panic!(
@@ -60,10 +57,7 @@ fn string_literal_lowers_to_const_string() {
 #[test]
 fn empty_string_literal_lowers_to_empty_const_string() {
     let script = lower("\"\"\n");
-    let block = script
-        .blocks
-        .first()
-        .expect("script has at least one block");
+    let block = entry_block(&script.blocks);
 
     let IRInstruction::Const { value, .. } = &block.instructions[0] else {
         panic!("expected a Const instruction");

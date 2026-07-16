@@ -4,7 +4,7 @@
 //!
 //! Signal flags are process-global, so the lifecycle test installs
 //! handlers by running a trivial entry first, latches SIGTERM with
-//! `raise`, then runs the receive fixture — fully deterministic, no
+//! `raise`, then runs the receive fixture, fully deterministic with no
 //! threads. The other fixtures never drain the signal queue
 //! (business-only arms don't poll it), so parallel test threads
 //! can't steal each other's signals.

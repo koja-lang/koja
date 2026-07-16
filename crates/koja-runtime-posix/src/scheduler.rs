@@ -99,9 +99,6 @@ const STACK_SIZE: usize = 512 * 1024;
 /// propagate across the call.
 pub(crate) type ProcessFn = extern "C-unwind" fn(*const u8);
 
-// ---------------------------------------------------------------------------
-// Platform-specific initial-frame layout constants
-// ---------------------------------------------------------------------------
 //
 // The offsets mirror the save/restore layout in `src/arch/*.s`.
 // `RET_ADDR_OFFSET` is where the first switch's `ret` reads its target
@@ -123,10 +120,6 @@ const INIT_FRAME_SIZE: usize = 64;
 const RET_ADDR_OFFSET: usize = 48;
 #[cfg(target_arch = "x86_64")]
 const ENTRY_REG_OFFSET: usize = 40;
-
-// ---------------------------------------------------------------------------
-// Process & scheduler state
-// ---------------------------------------------------------------------------
 
 /// An `mmap`-backed process stack: a `PROT_NONE` guard page at the
 /// lowest address (the growth end, since stacks grow down) followed by
@@ -320,7 +313,6 @@ static INJECTORS: LazyLock<[Injector<Pid>; READY_LEVELS]> =
 /// steal path needs no lock.
 static STEALERS: OnceLock<Vec<WorkerStealers>> = OnceLock::new();
 
-// ---------------------------------------------------------------------------
 // Per-worker thread-local state
 //
 // CURRENT_PID: which process this worker thread is currently executing.
@@ -342,7 +334,6 @@ static STEALERS: OnceLock<Vec<WorkerStealers>> = OnceLock::new();
 // stack. Therefore every function that can run on a process stack and
 // touches this state must be `#[inline(never)]` (a fresh call recomputes the
 // base) and must not read TLS after an internal context switch.
-// ---------------------------------------------------------------------------
 
 thread_local! {
     pub(crate) static CURRENT_PID: Cell<i64> = const { Cell::new(-1) };
@@ -359,10 +350,6 @@ thread_local! {
     /// stealing from itself. Unused (`0`) off a worker thread.
     static WORKER_ID: Cell<usize> = const { Cell::new(0) };
 }
-
-// ---------------------------------------------------------------------------
-// Private helpers
-// ---------------------------------------------------------------------------
 
 /// Yields the current process back to its worker's scheduling loop,
 /// returning when the worker resumes this process (possibly on a
@@ -924,10 +911,6 @@ fn fire_due_timers(table: &mut NativeTable, now: Instant) {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Runtime intrinsics (C ABI)
-// ---------------------------------------------------------------------------
-
 static RUNTIME_INIT: Once = Once::new();
 
 /// One-time process-global runtime initialization. Installs the panic hook
@@ -1020,7 +1003,7 @@ impl Driver for NativeDriver {
 
         let mut handles = Vec::with_capacity(n);
         handles.push(thread::spawn(reactor::reactor_loop));
-        // Worker 0 runs on this thread; 1..n run on spawned threads. The
+        // Worker 0 runs on this thread, and 1..n run on spawned threads. The
         // worker id indexes into `STEALERS`, so it must match `queues`.
         let mut main_queue = None;
         for (me, local) in queues.into_iter().enumerate() {

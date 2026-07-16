@@ -3,11 +3,11 @@
 //! level recursive type. Mirrors v1's `mark_recursive_fields` over
 //! the post-monomorphization IR graph.
 //!
-//! Edges count inline `Struct(_)` / `Enum(_)` references only —
+//! Edges count inline `Struct(_)` / `Enum(_)` references only, since
 //! pointer-shaped types (`CPtr`, `List`, `Map`, `Set`, `Function`,
 //! existing `Indirect`) already break the size dependency. Back-
-//! edges discovered by a three-color DFS pick out the source slot;
-//! the second walk rewrites that slot's `IRType` in place.
+//! edges discovered by a three-color DFS pick out the source slot,
+//! and the second walk rewrites that slot's `IRType` in place.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -110,7 +110,7 @@ fn collect_enum_edges(decl: &IREnumDecl) -> Vec<Edge> {
 
 /// Symbols of every struct / enum that contribute inline (non-pointer)
 /// size to `ty`'s value layout. Pointer-shaped wrappers stop the
-/// recursion — they already break the size cycle for the LLVM layer.
+/// recursion, as they already break the size cycle for the LLVM layer.
 fn inline_refs(ty: &IRType) -> Vec<IRSymbol> {
     match ty {
         IRType::Struct(symbol) | IRType::Enum(symbol) => vec![symbol.clone()],
@@ -346,7 +346,7 @@ mod tests {
     #[test]
     fn breaks_mutual_recursion_at_back_edge() {
         // Either Node.next OR Option.Some.tuple[0] gets the
-        // indirection — both cut the cycle, the exact slot
+        // indirection. Both cut the cycle, and the exact slot
         // depends on which decl the DFS hits first.
         let node = sym("Node");
         let option_node = IRSymbol::from_identifier(&Identifier::new(

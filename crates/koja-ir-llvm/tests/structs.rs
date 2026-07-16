@@ -106,7 +106,7 @@ fn struct_with_mixed_field_types_emits_each_llvm_type() {
         emit_script_llvm_ir(&script, APP_NAME).expect("emit_script_llvm_ir should succeed");
 
     assert_main_shape(&ir_text);
-    // Bool lowers to i1 in the transient set; the
+    // Bool lowers to i1 in the transient set. The
     // transient-set rule lives in `seal::require_supported_type`.
     assert_contains(&ir_text, "%TestApp.Profile = type { i64, i1 }");
     assert_contains(&ir_text, "store i64 30");
@@ -142,10 +142,6 @@ fn nested_struct_emits_inner_type_inside_outer_field_layout() {
     // list.
     assert_contains(&ir_text, "store %TestApp.Inner");
 }
-
-// ---------------------------------------------------------------------------
-// Static methods (inline + impl-block forms)
-// ---------------------------------------------------------------------------
 
 #[test]
 fn inline_static_method_emits_named_function_definition() {
@@ -225,10 +221,6 @@ fn static_method_with_args_emits_typed_signature_and_call() {
     assert_contains(&ir_text, "define i64 @TestApp.Point.at(i64");
     assert_contains(&ir_text, "call i64 @TestApp.Point.at(i64 7, i64 3)");
 }
-
-// ---------------------------------------------------------------------------
-// Instance methods (inline + impl-block forms)
-// ---------------------------------------------------------------------------
 
 #[test]
 fn inline_instance_method_emits_named_function_with_self_param() {

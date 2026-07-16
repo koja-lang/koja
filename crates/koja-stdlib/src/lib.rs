@@ -12,7 +12,7 @@ include!(concat!(env!("OUT_DIR"), "/stdlib_gen.rs"));
 
 /// Materialize [`AUTOIMPORT`] as parser-ready [`SourceFile`]s in
 /// declaration order. Each entry's package is the prefix of the
-/// `Package.module` key (so `Global.time` lands in `"Global"`); the
+/// `Package.module` key (so `Global.time` lands in `"Global"`), and the
 /// `path` is a synthetic `<Package.module>` marker, matching the
 /// convention noted on [`SourceFile::path`] for embedded sources.
 ///
@@ -27,14 +27,14 @@ pub fn autoimport_sources() -> Vec<SourceFile> {
 
 /// Materialize [`QUALIFIED`] as parser-ready [`SourceFile`]s in
 /// declaration order. Mirrors [`autoimport_sources`] but for
-/// qualified packages — those whose decls land in their own
+/// qualified packages, those whose decls land in their own
 /// package namespace (`Crypto.SHA256`, etc) and need an `alias` in
 /// the user's source to be referenced unqualified.
 ///
-/// Loaded alongside the autoimport set; pipeline runs prepend both
+/// Loaded alongside the autoimport set. Pipeline runs prepend both
 /// before the user file so `validate_aliases` sees the target
 /// packages already registered. Pragmatic stand-in for on-demand
-/// `IRPackage` loading; the curated package list lives in
+/// `IRPackage` loading. The curated package list lives in
 /// `build.rs::qualified_packages`.
 pub fn qualified_sources() -> Vec<SourceFile> {
     sources_from_table(QUALIFIED)

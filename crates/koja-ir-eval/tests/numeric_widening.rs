@@ -3,7 +3,7 @@
 //!
 //! The headline case is the FFI motivation: a *negative* `Int32`
 //! widened into an `Int` slot must stay negative (sign extension,
-//! not zero extension — the BoringSSL error-code bug). Unsigned
+//! not zero extension, the BoringSSL error-code bug). Unsigned
 //! sources zero-extend, `Float32` converts to `Float64`, and the
 //! `Int.to_*` / `UInt64.to_int` conversions round-trip values and
 //! reject out-of-range ones with `NumericConversionError.OutOfRange`.
@@ -92,7 +92,7 @@ fn int_narrowing_out_of_range_yields_conversion_error() {
 #[test]
 fn narrowed_value_round_trips_through_widening() {
     // Narrow `Int -> Int32`, then let the result widen back into
-    // an `Int` slot — the value is preserved end to end.
+    // an `Int` slot. The value is preserved end to end.
     let source = "
         fn want_int(n: Int) -> Int
           n

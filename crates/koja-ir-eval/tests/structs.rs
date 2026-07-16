@@ -158,10 +158,6 @@ fn nested_struct_field_chain_projects_inner_int() {
     assert_eq!(value, Value::Int(42));
 }
 
-// ---------------------------------------------------------------------------
-// Static methods (inline + impl-block forms)
-// ---------------------------------------------------------------------------
-
 #[test]
 fn inline_static_method_call_then_field_get_evaluates() {
     // Inline-form static method: `Point.origin()` returns the
@@ -227,10 +223,6 @@ fn static_method_returning_int_evaluates_to_constant() {
     let value = evaluate_script(&dedent(source));
     assert_eq!(value, Value::Int(42));
 }
-
-// ---------------------------------------------------------------------------
-// Instance methods (inline + impl-block forms)
-// ---------------------------------------------------------------------------
 
 #[test]
 fn inline_instance_method_reads_self_field() {

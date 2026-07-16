@@ -461,8 +461,8 @@ impl<'ctx> EmitContext<'ctx> {
 
     /// Resolve the opaque outer `StructType` for an enum by its
     /// mangled name. Outer types are minted (and so registered in the
-    /// LLVM context's name table) by [`crate::layout::enums::declare_enum_type`];
-    /// this accessor is a thin alias over [`Context::get_struct_type`]
+    /// LLVM context's name table) by [`crate::layout::enums::declare_enum_type`].
+    /// This accessor is a thin alias over [`Context::get_struct_type`]
     /// so emission sites read with intent: "the enum outer for
     /// `<symbol>`" rather than "named LLVM struct by string." Bodies
     /// only land later in [`crate::layout::enums::define_enum_bodies`],

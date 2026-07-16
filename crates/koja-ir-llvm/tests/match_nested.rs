@@ -1,4 +1,4 @@
-//! IR-text snapshot tests for nested-pattern match arms — literal
+//! IR-text snapshot tests for nested-pattern match arms: literal
 //! payloads inside struct fields and enum tuple positions. Pins
 //! the AND-chain CFG shape (one `match_and_field` follow-on block
 //! per non-first sibling test, tag-test-before-payload-projection
@@ -44,7 +44,7 @@ fn struct_literal_field_pattern_lowers_to_and_chained_test_blocks() {
 
 #[test]
 fn struct_partial_field_pattern_emits_only_one_field_test_no_follow_on() {
-    // `Point{x: 5}` lists only `x`; lowering must not mint a
+    // `Point{x: 5}` lists only `x`, so lowering must not mint a
     // `match_and_field` follow-on block (single test -> no AND
     // chain).
     let source = "
@@ -76,7 +76,7 @@ fn struct_partial_field_pattern_emits_only_one_field_test_no_follow_on() {
 fn nested_enum_payload_literal_orders_tag_check_before_payload_projection() {
     // `Option.Some(5)` must perform the Option tag check before
     // touching the payload's bytes. Inkwell labels carry the
-    // IR block label suffixes — pin both the entry `i8`
+    // IR block label suffixes. Pin both the entry `i8`
     // tag compare (`icmp eq i8`) and the AND-field follow-on
     // block name to confirm the ordering.
     let source = "

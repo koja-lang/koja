@@ -239,7 +239,7 @@ fn emit_guarded_div_rem<'ctx>(
 
 /// Float arithmetic traps when the IEEE result is non-finite,
 /// upholding the finite-only `Float` invariant. Comparisons use
-/// **ordered** predicates — with NaN unrepresentable they are total.
+/// **ordered** predicates. With NaN unrepresentable they are total.
 fn emit_float_binary_op<'ctx>(
     ctx: &EmitContext<'ctx>,
     op: IRBinOp,

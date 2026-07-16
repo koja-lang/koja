@@ -3,7 +3,7 @@
 //!
 //! Two-phase across all packages so a struct can carry another
 //! struct as a field regardless of declaration order:
-//! [`declare_struct_type`] mints opaque placeholders;
+//! [`declare_struct_type`] mints opaque placeholders, and
 //! [`define_struct_body`] sets each body once every package's
 //! placeholders exist.
 

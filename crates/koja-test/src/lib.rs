@@ -20,7 +20,7 @@ use koja_ast::ast::{AnnotationValue, Item};
 use koja_parser::ParsedProgram;
 
 /// Name of the synthesized test-harness entry type. Reserved for
-/// the test runner; the driver passes this as the project's
+/// the test runner. The driver passes this as the project's
 /// Process entry when lowering test builds, so it must match the
 /// struct name emitted by [`generate_harness`].
 pub const HARNESS_ENTRY: &str = "KojaTestHarness";
@@ -29,7 +29,7 @@ pub const HARNESS_ENTRY: &str = "KojaTestHarness";
 ///
 /// `trace` swaps the compact dots-and-summary output for one group
 /// header per struct and one timed line per test (modeled on
-/// `mix test --trace`); `color` gates the ANSI escapes so
+/// `mix test --trace`), and `color` gates the ANSI escapes so
 /// `--no-color` / `NO_COLOR` reach the generated source.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct TestOptions {
@@ -145,7 +145,7 @@ fn trace_result_line(
 /// dangling as the last output, then ` ... ok/FAIL (Nms)` is appended
 /// once the test returns.
 ///
-/// No imports are needed — the gather-then-check pipeline makes
+/// No imports are needed, since the gather-then-check pipeline makes
 /// every project type visible to every file automatically.
 pub fn generate_harness(tests: &[TestCase], opts: TestOptions) -> String {
     let (green, red, reset) = if opts.color {

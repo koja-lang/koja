@@ -5,7 +5,7 @@ use crate::function::IRSymbol;
 use crate::local::IRLocalId;
 
 /// Identifier of an SSA value within a single function. Values are
-/// numbered in definition order starting from 0; the same `ValueId`
+/// numbered in definition order starting from 0, and the same `ValueId`
 /// has no meaning across functions.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct ValueId(pub u32);
@@ -20,10 +20,10 @@ impl std::fmt::Display for ValueId {
 /// loads into a fresh `ValueId`.
 ///
 /// Integer + float variants mirror Koja's stdlib primitive structs
-/// 1:1 — width and signedness (or precision) are part of the variant
+/// 1:1. Width and signedness (or precision) are part of the variant
 /// identity, not separate fields. `Float32` / `Float64` are IEEE 754
 /// payloads (copy types per `LANGUAGE.md`). `String` carries raw
-/// UTF-8; backends materialize per [`IRType::String`].
+/// UTF-8, which backends materialize per [`IRType::String`].
 ///
 /// **Transient invariant**: the seal pass currently asserts only
 /// `Int64` / `Float64` flow through. The other width variants exist
@@ -31,15 +31,15 @@ impl std::fmt::Display for ValueId {
 /// inference can stamp them without reshuffling the IR shape.
 #[derive(Debug, Clone, PartialEq)]
 pub enum ConstValue {
-    /// Empty / literal-only `Binary` payload — exactly `bytes.len()`
+    /// Empty / literal-only `Binary` payload: exactly `bytes.len()`
     /// payload bytes, header `bit_length = bytes.len() * 8`. No
     /// trailing NUL. Segment-built `Binary` values flow through
     /// [`crate::IRInstruction::BinaryConstruct`] instead, since
     /// runtime segment values can't be folded into a `ConstValue`.
     Binary(Vec<u8>),
-    /// Empty / literal-only `Bits` payload — `bit_length` may be a
+    /// Empty / literal-only `Bits` payload, where `bit_length` may be a
     /// non-multiple of 8. Backends materialize `ceil(bit_length / 8)`
-    /// payload bytes; trailing bits in the last byte must be
+    /// payload bytes, and trailing bits in the last byte must be
     /// zero-padded by the producer (the lowerer / typecheck layer)
     /// so the on-wire bytes match the on-disk constant pool.
     Bits {
@@ -138,7 +138,7 @@ pub enum IRUnaryOp {
 }
 
 /// The kind of `<>` concatenation. Mirrors the heap-payload family
-/// 1:1 — the lowerer picks a variant from the operands' resolved
+/// 1:1. The lowerer picks a variant from the operands' resolved
 /// type and the LLVM backend keys on it to choose between inline
 /// `memcpy` (byte-aligned `String` / `Binary`) and the runtime
 /// `__koja_concat_bits` helper (`Bits`'s sub-byte alignment).
@@ -153,7 +153,7 @@ pub enum ConcatKind {
 /// Endianness modifier on integer / float binary segments. Mirrors
 /// the AST [`koja_ast::ast::BinaryEndianness`] one-for-one but lives
 /// in the IR vocabulary so the LLVM backend doesn't import AST
-/// types. `Big` matches network byte order — the language default
+/// types. `Big` matches network byte order, the language default
 /// when no `big`/`little` modifier is written.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BinaryEndian {
@@ -164,7 +164,7 @@ pub enum BinaryEndian {
 /// Signedness modifier on an integer binary segment. Mirrors the
 /// AST [`koja_ast::ast::BinarySignedness`] one-for-one. Does not
 /// affect packing (we always pack the low `width` bits of the
-/// already-evaluated value); kept on the IR for round-trip with
+/// already-evaluated value). Kept on the IR for round-trip with
 /// future binary patterns where signed vs unsigned changes the
 /// extraction shape.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -175,8 +175,8 @@ pub enum BinarySign {
 
 /// Layout pre-computed by the IR lowering layer for a single
 /// `<<segments>>` literal. `total_bits` is the sum of every
-/// segment's resolved bit width (typecheck rejects unresolvable —
-/// e.g. dynamic — widths). `byte_aligned` is the convenience
+/// segment's resolved bit width (typecheck rejects unresolvable,
+/// e.g. dynamic, widths). `byte_aligned` is the convenience
 /// `total_bits % 8 == 0` result, also used by the typecheck layer
 /// to pick between [`IRType::Binary`] (aligned) and [`IRType::Bits`]
 /// (not). Backends consume both fields directly so they don't need
@@ -193,16 +193,16 @@ pub struct ResolvedBinaryLayout {
 ///
 /// `bit_offset` is this segment's starting position **in bits**
 /// within the result payload (segments are laid out in source
-/// order; the lowering layer accumulates a running bit position).
+/// order, and the lowering layer accumulates a running bit position).
 /// `width` is the segment's bit width. For byte-aligned literals
-/// the offset will always be a multiple of 8 — backends can fast-
+/// the offset will always be a multiple of 8, so backends can fast-
 /// path on `bit_offset % 8 == 0 && width % 8 == 0` to use inline
 /// `memcpy` / byte-shift loops. For sub-byte segments either field
 /// may be a non-multiple of 8 and the backend must call
 /// `__koja_pack_bits`.
 ///
 /// `value` is the SSA `ValueId` produced by lowering the
-/// segment's AST `seg.value` expression — its `IRType` is whatever
+/// segment's AST `seg.value` expression. Its `IRType` is whatever
 /// the typecheck layer resolved (`Int64` for plain `::N`-sized
 /// integer literals, `Float32`/`Float64` for floats, `String` for
 /// string segments).
@@ -213,7 +213,7 @@ pub enum LoweredBinarySegment {
     /// defaults to [`BinaryEndian::Big`] when no modifier is given.
     /// Sub-byte widths are valid only when the segment also lives at
     /// a sub-byte `bit_offset` (i.e. inside a non-byte-aligned
-    /// literal); the byte-aligned shape rejects them.
+    /// literal). The byte-aligned shape rejects them.
     Integer {
         value: ValueId,
         width: u64,
@@ -222,7 +222,7 @@ pub enum LoweredBinarySegment {
         bit_offset: u64,
     },
     /// Float-typed segment. `width` is one of `32` (Float32) or
-    /// `64` (Float64) — typecheck enforces. Always byte-aligned by
+    /// `64` (Float64), which typecheck enforces. Always byte-aligned by
     /// language semantics so backends can skip the bit-pack path.
     Float {
         value: ValueId,
@@ -231,10 +231,10 @@ pub enum LoweredBinarySegment {
         bit_offset: u64,
     },
     /// String-typed segment. The SSA value is a `String`-typed
-    /// payload pointer (the same pointer family `<>` operates on);
-    /// backends `memcpy` the payload bytes into the result at
+    /// payload pointer (the same pointer family `<>` operates on),
+    /// and backends `memcpy` the payload bytes into the result at
     /// `bit_offset / 8`. `byte_length` is the source-byte count of
-    /// the string literal at typecheck time — we trust the typecheck
+    /// the string literal at typecheck time. We trust the typecheck
     /// layer to have stamped a constant width because dynamic-width
     /// segments are gated.
     String {
@@ -279,7 +279,7 @@ impl LoweredBinarySegment {
 /// lowering. Each variant carries the bit width and bit-offset
 /// the LLVM emit phase needs to extract / compare / bind the
 /// segment at the right position in the subject payload. Bindings
-/// reference a pre-declared [`crate::local::IRLocalId`] slot —
+/// reference a pre-declared [`crate::local::IRLocalId`] slot, and
 /// the emit phase stamps the extracted value into the slot at the
 /// matching `LocalWrite`-equivalent position so the arm body's
 /// `LocalRead`s find it.
@@ -301,7 +301,7 @@ pub enum LoweredBinaryPattern {
         width: u64,
     },
     /// Compare the byte run at `bit_offset / 8` against the
-    /// literal `bytes`. `bit_offset` is always byte-aligned —
+    /// literal `bytes`. `bit_offset` is always byte-aligned, as
     /// the typecheck layer rejects byte-misaligned string
     /// segments.
     LiteralBytes { bit_offset: u64, bytes: Vec<u8> },
@@ -323,7 +323,7 @@ pub enum LoweredBinaryPattern {
     /// Bind the remaining bits / bytes from `bit_offset` to the
     /// end of the subject into `local` (when `Some`). `ty` is
     /// [`IRType::Binary`] or [`IRType::Bits`] per the source
-    /// annotation — typecheck has already ensured the segment is
+    /// annotation. Typecheck has already ensured the segment is
     /// last and that the `Binary` variant has a byte-aligned
     /// prefix. `local: None` is the `_: Binary` / `_: Bits` shape
     /// (consume-the-rest discard, no SSA slot to write).
@@ -351,7 +351,7 @@ impl LoweredBinaryPattern {
 
 /// Pre-computed bookkeeping for a binary pattern match. `fixed_bits`
 /// is the total bit width of every segment except the greedy tail
-/// (when present); the LLVM emit phase compares the subject's
+/// (when present). The LLVM emit phase compares the subject's
 /// runtime bit length against this to decide whether the arm can
 /// fire at all. `has_greedy_tail` switches the length check between
 /// equality (`fixed_bits == subject_bits`) and unsigned-greater-or-
@@ -364,7 +364,7 @@ pub struct LoweredBinaryMatchLayout {
 
 impl ConcatKind {
     /// The [`IRType`] this concatenation produces. Reflects the
-    /// "result type matches operands" rule — both `lhs` and `rhs`
+    /// "result type matches operands" rule, where both `lhs` and `rhs`
     /// share this type by typecheck-time invariant.
     pub fn ir_type(&self) -> IRType {
         match self {
@@ -376,15 +376,15 @@ impl ConcatKind {
 }
 
 /// The IR type lattice. Mirrors [`ConstValue`] one-for-one on the
-/// integer + float side: each Koja stdlib `Int{N}` / `UInt{N}` /
+/// integer + float side, where each Koja stdlib `Int{N}` / `UInt{N}` /
 /// `Float{N}` primitive struct gets its own variant. Width and
 /// signedness/precision are part of the variant identity, not
 /// separate fields, so illegal states (e.g. `bits: 7`) are
 /// unrepresentable.
 ///
-/// `Float32` / `Float64` are IEEE 754 by-value primitives — **copy
+/// `Float32` / `Float64` are IEEE 754 by-value primitives, **copy
 /// types** per `LANGUAGE.md`, distinct from `String`'s move-type
-/// status. `Float64` is the v1 alias for `Global.Float`; `Float32`
+/// status. `Float64` is the v1 alias for `Global.Float`, while `Float32`
 /// only enters via explicit annotations / casts (a future slice).
 ///
 /// `String` / `Binary` / `Bits` are the bit-length-header family.
@@ -397,52 +397,52 @@ impl ConcatKind {
 /// - `Binary`: arbitrary bytes, no terminator, `bit_length =
 ///   byte_length * 8` (always a multiple of 8).
 /// - `Bits`: arbitrary bits, no terminator, `bit_length` may be a
-///   non-multiple of 8; payload occupies `ceil(bit_length / 8)`
+///   non-multiple of 8. The payload occupies `ceil(bit_length / 8)`
 ///   bytes and trailing bits in the last byte are zero-padded.
 ///
-/// All three are heap-allocated; the future drop-glue pass frees
+/// All three are heap-allocated, and the future drop-glue pass frees
 /// them at scope exit via [`crate::IRInstruction::DropLocal`].
 /// `CString` is a struct, not a member of this family.
 ///
 /// `Struct(symbol)` names a user-declared (non-generic) struct by
 /// the same mangled [`IRSymbol`] used as the key on
 /// [`crate::IRPackage::structs`]. Field layout is recovered through
-/// the matching [`crate::IRStructDecl`]; backends that need the
+/// the matching [`crate::IRStructDecl`], and backends that need the
 /// per-field width / offset thread that lookup directly. Generic
 /// instantiations get a richer key in the follow-up generics slice.
 ///
 /// `Enum(symbol)` names a user-declared enum by the same mangled
 /// [`IRSymbol`] used as the key on [`crate::IRPackage::enums`].
 /// Variant layout is recovered through the matching
-/// [`crate::IREnumDecl`]; the LLVM backend lays it out as an outer
+/// [`crate::IREnumDecl`], and the LLVM backend lays it out as an outer
 /// opaque blob with per-variant complete + payload structs (see
 /// [`crate::IREnumDecl`]'s module-level docs).
 ///
-/// `CPtr(pointee)` is the FFI pointer wrapper — at the LLVM layer
+/// `CPtr(pointee)` is the FFI pointer wrapper. At the LLVM layer
 /// every `CPtr<T>` lowers to an opaque `ptr` (default address
 /// space), regardless of `T`. The pointee is preserved here so
 /// the IR carries enough type information for future safety checks
 /// and for surfaces (mangling, debug printing) that distinguish
 /// `CPtr<UInt8>` from `CPtr<Float32>`. Pointee variants are
-/// themselves unrestricted — `CPtr<CPtr<T>>` is a valid shape.
+/// themselves unrestricted, so `CPtr<CPtr<T>>` is a valid shape.
 ///
 /// `List(element)` is the heap-backed dynamic array. Layout is
 /// `{ buf_ptr: i8*, length: i64, capacity: i64 }` regardless of
-/// `T`; the element type is preserved so backends can compute
+/// `T`. The element type is preserved so backends can compute
 /// element size for indexed addressing. Like `CPtr`, `List` is
 /// modeled as a primitive (no `IRStructDecl` ever materializes)
 /// because all storage lives off-heap behind `buf_ptr`.
 ///
 /// `Map(key, value)` and `Set(element)` are the heap-backed
-/// hash-tables. Both share a common 4-field layout —
-/// `{ entries_ptr: i8*, states_ptr: i8*, length: i64, capacity: i64 }` —
-/// regardless of the inner types; backends specialize entry-stride
+/// hash-tables. Both share a common 4-field layout,
+/// `{ entries_ptr: i8*, states_ptr: i8*, length: i64, capacity: i64 }`,
+/// regardless of the inner types, and backends specialize entry-stride
 /// per `(K, V)` / `T` instantiation. Same primitive treatment as
-/// `List`: no `IRStructDecl` materializes; storage lives off-heap.
+/// `List`, so no `IRStructDecl` materializes, and storage lives off-heap.
 ///
 /// **Concrete-only**: every variant of `IRType` names a fully
-/// monomorphized type. There is no "generic parameter" variant —
-/// generic-decl bodies are never lowered to `IRType`; instead
+/// monomorphized type. There is no "generic parameter" variant,
+/// because generic-decl bodies are never lowered to `IRType`. Instead
 /// [`crate::generics::instantiate`] substitutes [`koja_ast::identifier::ResolvedType`]
 /// templates against concrete args from the typecheck registry,
 /// then lowers the substituted shape into concrete `IRType`s. This
@@ -515,20 +515,20 @@ impl IRType {
     /// (collections, boxed-recursive `Indirect`, and any struct / enum
     /// / union, conservatively).
     ///
-    /// The predicate is intentionally structural — generic struct /
+    /// The predicate is intentionally structural, because generic struct /
     /// enum instantiations don't exist yet during per-package lowering,
     /// so the precise "does this aggregate actually own heap" question
     /// is deferred to the post-merge [`crate::elaborate`] pass (see
     /// [`crate::elaborate::needs_drop`]). The conservatism is safe and
-    /// cheap: a composite that turns out to be all-`Copy` gets no glue
+    /// cheap, since a composite that turns out to be all-`Copy` gets no glue
     /// registered, so the backend renders its `Clone` as a register
     /// copy and its `Drop` as a no-op.
     ///
-    /// Closures (`Function`) are counted here too: a closure value
+    /// Closures (`Function`) are counted here too, since a closure value
     /// owns a heap env, cloned by an `rc++` on the env block and
     /// released by an `rc--` that, at zero, runs the body's
     /// capture-release glue (`FunctionKind::DropClosureGlue`) before
-    /// freeing. The acquire / release ops are picked structurally —
+    /// freeing. The acquire / release ops are picked structurally, so
     /// the backend renders a `Clone` / `Drop` of `Function` inline
     /// against the env header, dispatching capture teardown through
     /// the env-carried glue pointer rather than the value's type.
@@ -581,7 +581,7 @@ impl IRType {
 
     /// True when this type is one of the integer-family variants
     /// (`Int8`..`Int64`, `UInt8`..`UInt64`). Useful in places that
-    /// want to handle "any integer" uniformly — e.g. typecheck
+    /// want to handle "any integer" uniformly, e.g. typecheck
     /// "is this an integer expression" predicates.
     pub fn is_int(&self) -> bool {
         matches!(

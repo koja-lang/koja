@@ -21,14 +21,14 @@ use crate::mangling::{mangled_function_name, mangled_method_name};
 use crate::types::{ConstValue, IRType, ValueId};
 
 /// Lower a `ExprKind::Call`. Seal guarantees the callee is one of:
-/// - Bare `Ident { Global(id) }` — direct [`IRInstruction::Call`]
+/// - Bare `Ident { Global(id) }`: direct [`IRInstruction::Call`]
 ///   (mangling applied for generic callees).
-/// - Bare `Ident { Local(local_id) }` — indirect
+/// - Bare `Ident { Local(local_id) }`: indirect
 ///   [`IRInstruction::CallClosure`] through the local's
 ///   `IRType::Function` slot.
 /// - `FieldAccess` with an `AnonymousKind::Function` resolution
-///   (produced by the field-as-callable rewrite in typecheck)
-///   — lower the callee expression to a fn-typed value, then emit
+///   (produced by the field-as-callable rewrite in typecheck):
+///   lower the callee expression to a fn-typed value, then emit
 ///   [`IRInstruction::CallClosure`].
 pub(super) fn lower_call(
     callee: &Expr,
@@ -65,8 +65,8 @@ pub(super) fn lower_call(
     };
     let entry = registry.get(*id).unwrap_or_else(|| {
         panic!(
-            "IR lower: callee id {id} not present in the registry — \
-             seal invariant violation",
+            "IR lower: callee id {id} not present in the registry \
+             (seal invariant violation)",
         )
     });
     let signature = function_signature_from_entry(entry);
@@ -79,7 +79,7 @@ pub(super) fn lower_call(
         } else {
             // Bare static call into a sibling inside a concrete-pinned
             // impl block (`impl CPtr<UInt8>` -> `Global.CPtr.strlen`
-            // mangles as `Global.CPtr_$UInt8$.strlen`) — match the
+            // mangles as `Global.CPtr_$UInt8$.strlen`). Match the
             // mono-side `enqueue_member_methods` output so the call
             // resolves through the IRPackage.
             let mangled =
@@ -143,10 +143,10 @@ fn impl_pinned_call_symbol(
     mangled_method_name(&owner_symbol, &arg_types, identifier.last(), &[])
 }
 
-/// Lower a `Resolution::Local` callee — `f(args)` where `f` is a
+/// Lower a `Resolution::Local` callee, `f(args)` where `f` is a
 /// closure-typed local slot. Reads the slot through the normal
 /// local-or-capture path ([`super::expr::lower_local_read`] is the
-/// equivalent path; here we inline because we already hold the
+/// equivalent path, but here we inline because we already hold the
 /// slot's resolved type), lowers each arg in sequence, then emits
 /// [`IRInstruction::CallClosure`] dispatching through the loaded
 /// fat pointer.
@@ -162,7 +162,7 @@ fn lower_local_closure_call(
     let ResolvedType::Anonymous(AnonymousKind::Function { ret, .. }) = callee_ty else {
         panic!(
             "IR lower: local closure call callee resolved to non-function type \
-             ({callee_ty:?}) — typecheck seal violation",
+             ({callee_ty:?}), typecheck seal violation",
         );
     };
     let callee_ir_type = resolved_type_to_ir_type(callee_ty, registry, &mut output.instantiations);
@@ -233,7 +233,7 @@ fn lower_closure_expr_call(
 ) -> Result<(ValueId, IRBlockId), ()> {
     let ResolvedType::Anonymous(AnonymousKind::Function { ret, .. }) = &callee.resolution else {
         panic!(
-            "IR lower: closure-expr call callee resolved to non-function type ({:?}) — \
+            "IR lower: closure-expr call callee resolved to non-function type ({:?}), \
              typecheck seal violation",
             callee.resolution,
         );
@@ -260,8 +260,8 @@ fn lower_closure_expr_call(
     );
     ctx.mark_owned(dest);
     // Release owned-temp args plus the callee fat pointer itself when it
-    // was produced fresh (e.g. a field access that returns a closure) —
-    // the call only borrows the env to dispatch.
+    // was produced fresh (e.g. a field access that returns a closure),
+    // since the call only borrows the env to dispatch.
     release_call_temps(ctx, current, &lowered_args, None);
     drop_discarded_temp(ctx, current, callee_value);
     Ok((dest, current))
@@ -280,15 +280,15 @@ pub(super) struct MethodCallShape<'a> {
 }
 
 /// Lower `ExprKind::MethodCall`. Static dispatch (`Type.method(...)`)
-/// reads the struct id off the receiver's `Resolution::Global`;
-/// instance dispatch (`recv.method(...)`) lowers the receiver to a
+/// reads the struct id off the receiver's `Resolution::Global`.
+/// Instance dispatch (`recv.method(...)`) lowers the receiver to a
 /// `ValueId`, derives the struct id from its resolved value type,
 /// and prepends the receiver to fill `params[0]` (`self`).
 ///
 /// Methods on generic structs/enums mangle the call symbol with the
 /// receiver's type-args plus any method-level type-args via
 /// [`mangled_method_name`]. The receiver's struct instantiation is
-/// auto-recorded by [`resolved_type_to_ir_type`]; method-level args
+/// auto-recorded by [`resolved_type_to_ir_type`], and method-level args
 /// (`ExprKind::MethodCall.type_args`) drive a fresh `Instantiation`
 /// pinned to the method template so [`crate::generics::instantiate`]
 /// produces a specialized body.
@@ -320,8 +320,8 @@ pub(super) fn lower_method_call(
 
     let struct_entry = registry.get(struct_id).unwrap_or_else(|| {
         panic!(
-            "IR lower: method call receiver id {struct_id} not present in the registry — \
-             seal invariant violation",
+            "IR lower: method call receiver id {struct_id} not present in the registry \
+             (seal invariant violation)",
         )
     });
     let receiver_type_args = receiver_type_args(receiver, dispatch);
@@ -330,8 +330,8 @@ pub(super) fn lower_method_call(
     let method_identifier = Identifier::new(struct_entry.identifier.package(), method_path);
     let (method_id, method_entry) = registry.lookup(&method_identifier).unwrap_or_else(|| {
         panic!(
-            "IR lower: method `{method_identifier}` missing from registry — \
-             seal invariant violation",
+            "IR lower: method `{method_identifier}` missing from registry \
+             (seal invariant violation)",
         )
     });
     let signature = function_signature_from_entry(method_entry);
@@ -391,7 +391,7 @@ pub(super) fn lower_method_call(
 /// boundary: `Ref.cast` / `Ref.call` / `Ref.send_after` and
 /// `ReplyTo.send`. Their first surface argument (the message `M` or
 /// reply `R`) must be deep-copied so the receiving process holds a
-/// physically independent value — see
+/// physically independent value, see
 /// [`CallSite::deep_copy_first_arg`].
 fn is_message_send(receiver: &Identifier, method: &str) -> bool {
     if receiver.package() != "Global" {
@@ -405,8 +405,8 @@ fn is_message_send(receiver: &Identifier, method: &str) -> bool {
 }
 
 /// Pull the receiver's type-args off a method-call site. For
-/// instance dispatch they live on `receiver.resolution.type_args`;
-/// for static dispatch the receiver is a bare type name with no
+/// instance dispatch they live on `receiver.resolution.type_args`.
+/// For static dispatch the receiver is a bare type name with no
 /// type-args attached at the AST layer (the pipeline does not yet support
 /// turbofish-style invocation), so this is currently always empty.
 fn receiver_type_args(receiver: &Expr, _dispatch: Dispatch) -> Vec<ResolvedType> {
@@ -424,7 +424,7 @@ fn function_signature_from_entry(entry: &RegistryEntry) -> &FunctionSignature {
     match &entry.kind {
         GlobalKind::Function(Some(sig)) => sig,
         other => panic!(
-            "IR lower: callee `{}` resolved to non-function entry ({}) — \
+            "IR lower: callee `{}` resolved to non-function entry ({}), \
              typecheck seal violation",
             entry.identifier,
             other.label(),
@@ -454,12 +454,12 @@ fn method_dispatch_kind(receiver: &Expr, registry: &GlobalRegistry) -> Dispatch 
 /// Collapse `Global.Int64` / `Global.Float64` onto `Global.Int` /
 /// `Global.Float` for method lookup. The typecheck pass treats these
 /// pairs as alias-equivalent (see
-/// [`koja_typecheck::pipeline::resolve::types::types_equivalent`])
-/// — until `Int` and `Float` become proper unions over their sized
+/// [`koja_typecheck::pipeline::resolve::types::types_equivalent`]).
+/// Until `Int` and `Float` become proper unions over their sized
 /// variants, methods registered on the unsized canonical (e.g.
 /// `Debug.format`, `Equality.eq`, `Hash.hash`) need to be reachable
 /// through an `Int64`-resolved receiver too. Other primitive widths
-/// (`Int8`, `UInt32`, etc.) keep their own ids — they're distinct
+/// (`Int8`, `UInt32`, etc.) keep their own ids, since they're distinct
 /// types in the alias rule, not collapsed.
 fn canonical_receiver_id(id: GlobalRegistryId, registry: &GlobalRegistry) -> GlobalRegistryId {
     let Some(entry) = registry.get(id) else {
@@ -485,7 +485,7 @@ fn canonical_receiver_id(id: GlobalRegistryId, registry: &GlobalRegistry) -> Glo
 }
 
 /// Pull the struct's `GlobalRegistryId` off a method-call receiver.
-/// Static reads from `receiver.kind`'s `Resolution::Global`; instance
+/// Static reads from `receiver.kind`'s `Resolution::Global`, instance
 /// reads from `receiver.resolution`'s resolved value type.
 fn receiver_struct_id(receiver: &Expr, dispatch: Dispatch) -> GlobalRegistryId {
     match dispatch {
@@ -517,7 +517,7 @@ fn receiver_struct_id(receiver: &Expr, dispatch: Dispatch) -> GlobalRegistryId {
             else {
                 panic!(
                     "IR lower: instance method receiver resolved to non-Global type \
-                     ({resolution:?}) — typecheck seal must have rejected this",
+                     ({resolution:?}), typecheck seal must have rejected this",
                 );
             };
             *struct_id
@@ -525,12 +525,12 @@ fn receiver_struct_id(receiver: &Expr, dispatch: Dispatch) -> GlobalRegistryId {
     }
 }
 
-/// Per-call inputs to [`emit_call`] — bundled so the emitter
+/// Per-call inputs to [`emit_call`], bundled so the emitter
 /// signature stays narrow regardless of how many derived fields the
 /// caller computed. `prepend` is the receiver [`ValueId`] for
 /// instance dispatch (filling `params[0]` / `self`), `None` for
 /// bare calls and static method dispatch. `callee_symbol` is
-/// already mangled if the callee is a generic instantiation;
+/// already mangled if the callee is a generic instantiation, and
 /// `return_ty` is already substituted.
 struct CallSite<'a> {
     callee_symbol: IRSymbol,
@@ -538,13 +538,13 @@ struct CallSite<'a> {
     args: &'a [Arg],
     prepend: Option<ValueId>,
     /// When set, the first surface argument is *deep-copied*
-    /// ([`IRInstruction::DeepCopy`]) before the call — the message /
+    /// ([`IRInstruction::DeepCopy`]) before the call. The message /
     /// reply send intrinsics (`Ref.cast` / `Ref.call` /
     /// `Ref.send_after` / `ReplyTo.send`) hand the payload to another
     /// process, and Koja's rc bookkeeping is unsynchronized, so the
     /// transported value must share no heap storage with the sender.
     /// The caller's own value keeps its normal slot lifecycle (an owned
-    /// temp source is released right after the copy); the copy is moved
+    /// temp source is released right after the copy). The copy is moved
     /// into the send and reclaimed by the runtime (delivered to the
     /// receiver or released via the envelope drop glue on discard).
     deep_copy_first_arg: bool,
@@ -553,7 +553,7 @@ struct CallSite<'a> {
 /// Shared tail of [`lower_call`] / [`lower_method_call`]: lower
 /// each arg in sequence, then emit the [`IRInstruction::Call`] in
 /// the final block. Under value semantics every argument is passed
-/// by value; the caller retains its slots and frees them at scope
+/// by value, and the caller retains its slots and frees them at scope
 /// exit.
 fn emit_call(
     site: CallSite<'_>,
@@ -607,13 +607,13 @@ fn emit_call(
 }
 
 /// Release every owned heap temporary handed to a call once the callee
-/// has taken its own copy. Callees follow the borrow convention — named
+/// has taken its own copy. Callees follow the borrow convention (named
 /// fns / closures clone each param into its slot ([`super::ownership::promote_param`]),
-/// collection intrinsics copy-on-write `self` and acquire stored args —
+/// collection intrinsics copy-on-write `self` and acquire stored args),
 /// so an owned-temp argument (or fluent-chain receiver) we passed is
 /// dead after the call and would otherwise leak. `transferred` names a
 /// value moved into a transport (the message / reply send payload) that
-/// the runtime now owns; it is skipped. Borrowed values (slot/field
+/// the runtime now owns, so it is skipped. Borrowed values (slot/field
 /// reads) and non-heap values are no-ops in [`drop_discarded_temp`].
 fn release_call_temps(
     ctx: &mut FnLowerCtx,
@@ -645,7 +645,7 @@ enum OpaqueDebugMethod {
 /// receiver, after monomorphic substitution, resolved to a type that
 /// the pipeline treats as opaque to `format` (a union or a function/closure
 /// type). Returning `Some` short-circuits the regular instance-method
-/// path in [`lower_method_call`] — `receiver_struct_id` would
+/// path in [`lower_method_call`], where `receiver_struct_id` would
 /// otherwise panic because anonymous types have no `Named { Global }`
 /// receiver to look a method up against.
 ///
@@ -656,7 +656,7 @@ enum OpaqueDebugMethod {
 /// type, `()` is `Global.Unit`), so they don't need a sibling arm.
 ///
 /// Aliases peel earlier in typecheck, so a direct `ResolvedType::Union`
-/// or `ResolvedType::Anonymous(Function)` is what reaches here — no
+/// or `ResolvedType::Anonymous(Function)` is what reaches here, with no
 /// alias-walking needed.
 fn opaque_debug_method(method: &str, ty: &ResolvedType) -> Option<OpaqueDebugMethod> {
     let kind = match method {
@@ -684,7 +684,7 @@ fn opaque_debug_method(method: &str, ty: &ResolvedType) -> Option<OpaqueDebugMet
 ///   the receiver value unchanged, so call chains preserve the value.
 ///
 /// The receiver is lowered exactly once: the `Inspect` arm passes it
-/// through as the result; the `Format` and `Print` arms still lower
+/// through as the result. The `Format` and `Print` arms still lower
 /// it for side effects (closure captures, owner reads) even though
 /// they discard the value.
 fn lower_opaque_debug_call(
@@ -718,7 +718,7 @@ fn lower_opaque_debug_call(
             Ok((unit, current))
         }
         OpaqueDebugMethod::Inspect => {
-            // `inspect` returns the receiver unchanged — it is moved out,
+            // `inspect` returns the receiver unchanged. It is moved out,
             // not discarded.
             current = emit_io_puts(placeholder, ctx, current);
             Ok((receiver_value, current))

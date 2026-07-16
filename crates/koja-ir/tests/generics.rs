@@ -4,7 +4,7 @@
 //!
 //! - Generic templates never appear in [`IRPackage::structs`] /
 //!   [`IRPackage::enums`]. The typecheck registry stays the single
-//!   source of truth for generic-decl shape; only fully-substituted
+//!   source of truth for generic-decl shape. Only fully-substituted
 //!   concrete decls land in [`IRPackage`].
 //! - Construction-site type-arg inference at typecheck propagates
 //!   into IR as a discovered instantiation, deduplicated by the
@@ -13,24 +13,47 @@
 //!   payload [`IRType`]s and distinct mangled symbols.
 //! - Nested generics (a generic instantiation whose args themselves
 //!   contain a generic instantiation) yield concrete decls for both
-//!   inner and outer — the worklist chases discoveries surfaced by
+//!   inner and outer. The worklist chases discoveries surfaced by
 //!   monomorphizing the outer template's substituted field types.
 //!
 //! Mangled-name shape is `<root>_$<arg>.<arg>$`, where each arg is
 //! either a primitive name (`Int64`, `String`) or a nested mangled
-//! symbol; nesting brings its own `_$..$` so depth-counting parses
+//! symbol. Nesting brings its own `_$..$` so depth-counting parses
 //! unambiguously.
 
-use koja_ast::util::dedent;
-use koja_ir::{IRInstruction, IRType, IRVariantPayload};
+use koja_ir::{IRInstruction, IRScript, IRType, IRVariantPayload};
 
 mod common;
 
-use common::lower_script_source;
+use common::{all_instructions, lower_script_source, mangled_function};
 
-// ---------------------------------------------------------------------------
+/// Mangled struct-decl names in the script starting with `prefix`, sorted.
+fn struct_decl_names(script: &IRScript, prefix: &str) -> Vec<String> {
+    let mut names: Vec<String> = script
+        .packages
+        .iter()
+        .flat_map(|p| p.structs.keys())
+        .map(|sym| sym.mangled().to_string())
+        .filter(|name| name.starts_with(prefix))
+        .collect();
+    names.sort();
+    names
+}
+
+/// Mangled enum-decl names in the script starting with `prefix`, sorted.
+fn enum_decl_names(script: &IRScript, prefix: &str) -> Vec<String> {
+    let mut names: Vec<String> = script
+        .packages
+        .iter()
+        .flat_map(|p| p.enums.keys())
+        .map(|sym| sym.mangled().to_string())
+        .filter(|name| name.starts_with(prefix))
+        .collect();
+    names.sort();
+    names
+}
+
 // Generic structs
-// ---------------------------------------------------------------------------
 
 #[test]
 fn generic_struct_construction_emits_concrete_decl_with_substituted_field_types() {
@@ -43,7 +66,7 @@ fn generic_struct_construction_emits_concrete_decl_with_substituted_field_types(
         Pair{a: 1, b: \"x\"}
         ";
 
-    let script = lower_script_source(&dedent(source));
+    let script = lower_script_source(source);
     let pkg = script.packages.first().expect("script has one package");
     assert!(
         !pkg.structs.contains_key("TestApp.Pair"),
@@ -73,11 +96,8 @@ fn generic_struct_construct_uses_mangled_symbol_on_struct_init() {
         Pair{a: 1, b: \"x\"}
         ";
 
-    let script = lower_script_source(&dedent(source));
-    let block = script.blocks.first().expect("script has one block");
-    let init_ty = block
-        .instructions
-        .iter()
+    let script = lower_script_source(source);
+    let init_ty = all_instructions(&script.blocks)
         .find_map(|inst| match inst {
             IRInstruction::StructInit { ty, .. } => Some(ty.clone()),
             _ => None,
@@ -100,16 +120,9 @@ fn generic_struct_idempotent_instantiations_dedupe_to_one_decl() {
         Pair{a: 3, b: \"z\"}
         ";
 
-    let script = lower_script_source(&dedent(source));
-    let pair_decls: Vec<&str> = script
-        .packages
-        .iter()
-        .flat_map(|p| p.structs.keys())
-        .map(|sym| sym.mangled())
-        .filter(|name| name.starts_with("TestApp.Pair"))
-        .collect();
+    let script = lower_script_source(source);
     assert_eq!(
-        pair_decls,
+        struct_decl_names(&script, "TestApp.Pair"),
         vec!["TestApp.Pair_$Int64.String$"],
         "three constructions of `Pair<Int, String>` must dedupe to one IRStructDecl",
     );
@@ -127,18 +140,10 @@ fn generic_struct_distinct_args_produce_distinct_decls() {
         Pair{a: \"y\", b: 2}
         ";
 
-    let script = lower_script_source(&dedent(source));
-    let mut pair_decls: Vec<&str> = script
-        .packages
-        .iter()
-        .flat_map(|p| p.structs.keys())
-        .map(|sym| sym.mangled())
-        .filter(|name| name.starts_with("TestApp.Pair"))
-        .collect();
-    pair_decls.sort();
+    let script = lower_script_source(source);
     assert_eq!(
-        pair_decls,
-        vec!["TestApp.Pair_$Int64.String$", "TestApp.Pair_$String.Int64$",],
+        struct_decl_names(&script, "TestApp.Pair"),
+        vec!["TestApp.Pair_$Int64.String$", "TestApp.Pair_$String.Int64$"],
     );
 }
 
@@ -156,7 +161,7 @@ fn generic_struct_with_user_struct_arg_includes_user_struct_in_mangled_name() {
         Box{value: Inner{n: 1}}
         ";
 
-    let script = lower_script_source(&dedent(source));
+    let script = lower_script_source(source);
     let mangled = "TestApp.Box_$TestApp.Inner$";
     let decl = script
         .struct_decl(mangled)
@@ -185,7 +190,7 @@ fn nested_generic_struct_yields_concrete_decls_for_outer_and_inner() {
         Pair{a: Box{value: 1}, b: \"x\"}
         ";
 
-    let script = lower_script_source(&dedent(source));
+    let script = lower_script_source(source);
 
     let inner_mangled = "TestApp.Box_$Int64$";
     let inner = script
@@ -204,11 +209,9 @@ fn nested_generic_struct_yields_concrete_decls_for_outer_and_inner() {
     assert_eq!(outer.fields[1].ir_type, IRType::String);
 }
 
-// ---------------------------------------------------------------------------
 // Substitution coverage for control-flow expressions
-// ---------------------------------------------------------------------------
 
-/// Regression: prior to the ternary work, [`ExprKind::Cond`]
+/// Pins a regression. Prior to the ternary work, [`ExprKind::Cond`]
 /// was in `substitute_in_expr`'s no-op list, so type substitution
 /// silently skipped any `cond` arm bodies. A generic struct
 /// constructed inside a `cond` arm of a generic function would keep
@@ -232,18 +235,16 @@ fn generic_fn_with_cond_in_body_substitutes_arm_body_resolutions() {
         wrap(1)
         ";
 
-    let script = lower_script_source(&dedent(source));
+    let script = lower_script_source(source);
     let mangled = "TestApp.Box_$Int64$";
     let decl = script.struct_decl(mangled).unwrap_or_else(|| {
-        panic!("expected `{mangled}` in script — Cond substitution did not walk arm bodies")
+        panic!("expected `{mangled}` in script, Cond substitution did not walk arm bodies")
     });
     assert_eq!(decl.fields.len(), 1);
     assert_eq!(decl.fields[0].ir_type, IRType::Int64);
 }
 
-// ---------------------------------------------------------------------------
 // Generic enums
-// ---------------------------------------------------------------------------
 
 #[test]
 fn generic_enum_construction_emits_concrete_decl_with_substituted_payload() {
@@ -255,7 +256,7 @@ fn generic_enum_construction_emits_concrete_decl_with_substituted_payload() {
         Box.Of(42)
         ";
 
-    let script = lower_script_source(&dedent(source));
+    let script = lower_script_source(source);
     let pkg = script.packages.first().expect("script has one package");
     assert!(
         !pkg.enums.contains_key("TestApp.Box"),
@@ -286,11 +287,8 @@ fn generic_enum_construct_uses_mangled_symbol_on_enum_construct() {
         Box.Of(42)
         ";
 
-    let script = lower_script_source(&dedent(source));
-    let block = script.blocks.first().expect("script has one block");
-    let construct_ty = block
-        .instructions
-        .iter()
+    let script = lower_script_source(source);
+    let construct_ty = all_instructions(&script.blocks)
         .find_map(|inst| match inst {
             IRInstruction::EnumConstruct { ty, .. } => Some(ty.clone()),
             _ => None,
@@ -312,15 +310,11 @@ fn generic_enum_idempotent_instantiations_dedupe_to_one_decl() {
         Box.Of(3)
         ";
 
-    let script = lower_script_source(&dedent(source));
-    let box_decls: Vec<&str> = script
-        .packages
-        .iter()
-        .flat_map(|p| p.enums.keys())
-        .map(|sym| sym.mangled())
-        .filter(|name| name.starts_with("TestApp.Box"))
-        .collect();
-    assert_eq!(box_decls, vec!["TestApp.Box_$Int64$"]);
+    let script = lower_script_source(source);
+    assert_eq!(
+        enum_decl_names(&script, "TestApp.Box"),
+        vec!["TestApp.Box_$Int64$"]
+    );
 }
 
 #[test]
@@ -334,17 +328,9 @@ fn generic_enum_distinct_args_produce_distinct_decls() {
         Box.Of(\"x\")
         ";
 
-    let script = lower_script_source(&dedent(source));
-    let mut box_decls: Vec<&str> = script
-        .packages
-        .iter()
-        .flat_map(|p| p.enums.keys())
-        .map(|sym| sym.mangled())
-        .filter(|name| name.starts_with("TestApp.Box"))
-        .collect();
-    box_decls.sort();
+    let script = lower_script_source(source);
     assert_eq!(
-        box_decls,
+        enum_decl_names(&script, "TestApp.Box"),
         vec!["TestApp.Box_$Int64$", "TestApp.Box_$String$"],
     );
 }
@@ -359,7 +345,7 @@ fn generic_enum_struct_variant_substitutes_each_payload_field() {
         Pair.Of{a: 1, b: \"x\"}
         ";
 
-    let script = lower_script_source(&dedent(source));
+    let script = lower_script_source(source);
     let mangled = "TestApp.Pair_$Int64.String$";
     let decl = script
         .enum_decl(mangled)
@@ -390,7 +376,7 @@ fn nested_generic_enum_in_generic_struct_yields_concrete_decls_for_both() {
         Pair{a: Box.Of(1), b: \"x\"}
         ";
 
-    let script = lower_script_source(&dedent(source));
+    let script = lower_script_source(source);
 
     let inner_mangled = "TestApp.Box_$Int64$";
     let inner = script
@@ -412,15 +398,13 @@ fn nested_generic_enum_in_generic_struct_yields_concrete_decls_for_both() {
     assert_eq!(outer.fields[1].ir_type, IRType::String);
 }
 
-// ---------------------------------------------------------------------------
 // Static method dispatch on generic types
-// ---------------------------------------------------------------------------
 
 /// Static-dispatch method calls on a generic type (`Box.make(...)`)
 /// previously skipped the per-method instantiation enqueue when no
 /// method-level type-args were present, so the call site mangled
 /// `Box_$Int64$.make` but no `IRFunction` with that symbol ever
-/// reached the `IRProgram` — `seal_program_calls` then panicked
+/// reached the `IRProgram`. `seal_program_calls` then panicked
 /// with "function `...` calls `Box_$Int64$.make`, but that function
 /// is not registered in the IRProgram". Pin the regression by
 /// asserting both the call instruction and the mono'd target land
@@ -441,17 +425,12 @@ fn static_call_on_generic_struct_registers_mono_method() {
         Box.make(42)
         ";
 
-    let script = lower_script_source(&dedent(source));
+    let script = lower_script_source(source);
     let target = "TestApp.Box_$Int64$.make";
-    let function = script
-        .function(target)
-        .unwrap_or_else(|| panic!("expected mono'd `{target}` in script"));
+    let function = mangled_function(&script, target);
     assert_eq!(function.symbol.mangled(), target);
 
-    let block = script.blocks.first().expect("script has one block");
-    let call_symbol = block
-        .instructions
-        .iter()
+    let call_symbol = all_instructions(&script.blocks)
         .find_map(|inst| match inst {
             IRInstruction::Call { callee, .. } => Some(callee.mangled().to_string()),
             _ => None,
@@ -472,9 +451,9 @@ fn static_call_on_generic_struct_registers_mono_method() {
 fn receive_arm_typed_binding_substitutes_payload_type_during_mono() {
     // No receive-arm-aware standalone smoke is wired up at the
     // script-test layer (receive lives behind a process struct), so
-    // settle for "this mono'd path used to panic; if the script
-    // lowers without panicking, the pattern substitution is doing
-    // its job".
+    // settle for a weaker check. This mono'd path used to panic, so
+    // if the script lowers without panicking, the pattern
+    // substitution is doing its job.
     let source = "
         struct Pair<A, B>
           first: A
@@ -494,11 +473,9 @@ fn receive_arm_typed_binding_substitutes_payload_type_during_mono() {
         Wrap.make(42)
         ";
 
-    let script = lower_script_source(&dedent(source));
+    let script = lower_script_source(source);
     let target = "TestApp.Wrap_$Int64$.make";
-    script
-        .function(target)
-        .unwrap_or_else(|| panic!("expected mono'd `{target}` in script"));
+    mangled_function(&script, target);
     let outer_pair = "TestApp.Pair_$TestApp.Wrap_$Int64$.Int64$";
     script
         .struct_decl(outer_pair)

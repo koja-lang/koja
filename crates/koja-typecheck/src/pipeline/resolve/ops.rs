@@ -253,7 +253,7 @@ pub(super) fn unary_type(
             } else {
                 diagnostics.push(Diagnostic::error(
                     format!(
-                        "`not` requires a Bool operand; got `{}`",
+                        "`not` requires a Bool operand, got `{}`",
                         display_resolution(ty, registry),
                     ),
                     span,
@@ -437,7 +437,7 @@ fn push_op_mismatch(
 ) {
     diagnostics.push(Diagnostic::error(
         format!(
-            "`{}` requires {expected}; got `{}` and `{}`",
+            "`{}` requires {expected}, got `{}` and `{}`",
             bin_op_label(op),
             display_resolution(lhs, registry),
             display_resolution(rhs, registry),

@@ -55,7 +55,7 @@ pub(crate) fn load_project_or_exit(missing_message: &[&str]) -> (ProjectConfig, 
 
 /// One source file's worth of input for `koja doc`. The
 /// `package` is the doc package the file's items will land
-/// under; `label` is the human-readable display path
+/// under, and `label` is the human-readable display path
 /// (filesystem path for project + dep inputs, synthetic
 /// `<Pkg.module>` marker for stdlib).
 struct DocInput {
@@ -85,7 +85,7 @@ pub fn cmd_doc(files: Vec<String>, output: String, project_only: bool, color: bo
 /// generate (unless `no_rebuild`) and then host the doc tree on
 /// `127.0.0.1`. Exists because the in-page fuzzy search reads
 /// `search-index.json` via `fetch()`, which browsers refuse for
-/// `file://` URLs; a local HTTP server is the standard workaround.
+/// `file://` URLs. A local HTTP server is the standard workaround.
 pub fn cmd_doc_serve(
     files: Vec<String>,
     output: String,
@@ -107,7 +107,7 @@ pub fn cmd_doc_serve(
 /// Drive the full discover -> parse -> extract -> render -> write
 /// pipeline. Returns `false` when there's nothing to document so
 /// the caller can decide whether to short-circuit (the bare
-/// generator prints "docs generated"; `serve` would skip starting
+/// generator prints "docs generated", while `serve` would skip starting
 /// the server). Fatal errors (output dir creation, file write)
 /// `process::exit` from inside.
 fn generate_docs(files: &[String], output: &str, project_only: bool, color: bool) -> bool {
@@ -137,7 +137,7 @@ fn generate_docs(files: &[String], output: &str, project_only: bool, color: bool
 /// returning the inputs plus the project package name (used as
 /// the sidebar header and the default-active package). Empty
 /// `files` means project mode (walk `src` from `koja.toml` and
-/// every dep's `src`); otherwise treat each entry as a path or a
+/// every dep's `src`). Otherwise treat each entry as a path or a
 /// directory of `.koja` files. Stdlib + deps are bundled unless
 /// `project_only` is true.
 fn discover_doc_inputs(files: &[String], project_only: bool) -> (Vec<DocInput>, String) {
@@ -395,7 +395,7 @@ pub fn cmd_format(files: Vec<String>, check: bool, write: bool, color: bool) {
 }
 
 /// Resolve which files `koja format` operates on: with no arguments,
-/// the project's `src` + `test` trees; otherwise the explicit file and
+/// the project's `src` + `test` trees, otherwise the explicit file and
 /// directory arguments. Paths are sorted for deterministic output.
 fn resolve_format_paths(files: &[String]) -> Vec<String> {
     if files.is_empty() {

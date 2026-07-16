@@ -1,4 +1,4 @@
-//! IR-lowering coverage for the enum slice: `lower/enums.rs`.
+//! IR-lowering coverage for the enum slice (`lower/enums.rs`).
 //!
 //! Walks every variant shape (Unit, Tuple, Struct) end-to-end and
 //! pins:
@@ -18,15 +18,14 @@
 //! - Inline + impl-block static methods on enum receivers lower to
 //!   regular package functions keyed at `<package>.<enum>.<method>`.
 
-use koja_ast::util::dedent;
 use koja_ir::{
-    EnumPayloadInit, FunctionKind, IREnumDecl, IRInstruction, IRScript, IRType, IRVariantPayload,
-    IRVariantTag,
+    EnumPayloadInit, FunctionKind, IRBasicBlock, IREnumDecl, IRInstruction, IRScript, IRSymbol,
+    IRType, IRVariantPayload, IRVariantTag, ValueId,
 };
 
 mod common;
 
-use common::{PACKAGE, lower_script_source};
+use common::{PACKAGE, all_instructions, lower_script_source};
 
 fn enum_decl<'a>(script: &'a IRScript, name: &str) -> &'a IREnumDecl {
     let mangled = format!("{PACKAGE}.{name}");
@@ -36,16 +35,9 @@ fn enum_decl<'a>(script: &'a IRScript, name: &str) -> &'a IREnumDecl {
 }
 
 fn first_enum_construct(
-    block: &koja_ir::IRBasicBlock,
-) -> (
-    koja_ir::ValueId,
-    &EnumPayloadInit,
-    IRVariantTag,
-    &koja_ir::IRSymbol,
-) {
-    block
-        .instructions
-        .iter()
+    blocks: &[IRBasicBlock],
+) -> (ValueId, &EnumPayloadInit, IRVariantTag, &IRSymbol) {
+    all_instructions(blocks)
         .find_map(|inst| match inst {
             IRInstruction::EnumConstruct {
                 dest,
@@ -55,12 +47,10 @@ fn first_enum_construct(
             } => Some((*dest, payload, *tag, ty)),
             _ => None,
         })
-        .expect("expected one EnumConstruct in block")
+        .expect("expected one EnumConstruct in script body")
 }
 
-// ---------------------------------------------------------------------------
 // Decl lowering
-// ---------------------------------------------------------------------------
 
 #[test]
 fn unit_only_enum_lowers_with_dense_declaration_order_tags() {
@@ -73,7 +63,7 @@ fn unit_only_enum_lowers_with_dense_declaration_order_tags() {
 
         ";
 
-    let script = lower_script_source(&dedent(source));
+    let script = lower_script_source(source);
     let decl = enum_decl(&script, "Color");
     assert_eq!(decl.symbol.mangled(), "TestApp.Color");
     let names: Vec<&str> = decl.variants.iter().map(|v| v.name.as_str()).collect();
@@ -100,7 +90,7 @@ fn tuple_variant_lowers_with_translated_element_types() {
 
         ";
 
-    let script = lower_script_source(&dedent(source));
+    let script = lower_script_source(source);
     let decl = enum_decl(&script, "Result");
     assert_eq!(decl.variants.len(), 2);
 
@@ -132,7 +122,7 @@ fn struct_variant_lowers_with_dense_declaration_order_field_indices() {
 
         ";
 
-    let script = lower_script_source(&dedent(source));
+    let script = lower_script_source(source);
     let decl = enum_decl(&script, "Shape");
     assert_eq!(decl.variants.len(), 1);
     let rect = &decl.variants[0];
@@ -161,7 +151,7 @@ fn mixed_shape_enum_preserves_per_variant_payload_kind() {
 
         ";
 
-    let script = lower_script_source(&dedent(source));
+    let script = lower_script_source(source);
     let decl = enum_decl(&script, "Shape");
     let kinds: Vec<&str> = decl
         .variants
@@ -175,9 +165,7 @@ fn mixed_shape_enum_preserves_per_variant_payload_kind() {
     assert_eq!(kinds, vec!["Unit", "Tuple", "Struct"]);
 }
 
-// ---------------------------------------------------------------------------
 // Construction
-// ---------------------------------------------------------------------------
 
 #[test]
 fn unit_variant_construction_lowers_to_unit_payload_init() {
@@ -190,9 +178,8 @@ fn unit_variant_construction_lowers_to_unit_payload_init() {
         Color.Red
         ";
 
-    let script = lower_script_source(&dedent(source));
-    let block = script.blocks.first().expect("script has one block");
-    let (_dest, payload, tag, ty) = first_enum_construct(block);
+    let script = lower_script_source(source);
+    let (_dest, payload, tag, ty) = first_enum_construct(&script.blocks);
     assert_eq!(ty.mangled(), "TestApp.Color");
     assert_eq!(tag, IRVariantTag(0));
     assert!(matches!(payload, EnumPayloadInit::Unit));
@@ -210,9 +197,8 @@ fn tuple_variant_construction_lowers_to_tuple_payload_init() {
         Result.Ok(42)
         ";
 
-    let script = lower_script_source(&dedent(source));
-    let block = script.blocks.first().expect("script has one block");
-    let (_dest, payload, tag, ty) = first_enum_construct(block);
+    let script = lower_script_source(source);
+    let (_dest, payload, tag, ty) = first_enum_construct(&script.blocks);
     assert_eq!(ty.mangled(), "TestApp.Result");
     assert_eq!(tag, IRVariantTag(0));
     let EnumPayloadInit::Tuple(values) = payload else {
@@ -231,9 +217,8 @@ fn struct_variant_construction_canonicalizes_field_init_order() {
         Shape.Rect{h: 2, w: 1}
         ";
 
-    let script = lower_script_source(&dedent(source));
-    let block = script.blocks.first().expect("script has one block");
-    let (_dest, payload, tag, ty) = first_enum_construct(block);
+    let script = lower_script_source(source);
+    let (_dest, payload, tag, ty) = first_enum_construct(&script.blocks);
     assert_eq!(ty.mangled(), "TestApp.Shape");
     assert_eq!(tag, IRVariantTag(0));
     let EnumPayloadInit::Struct(inits) = payload else {
@@ -256,15 +241,12 @@ fn variant_at_higher_position_carries_correct_tag() {
         Color.Blue
         ";
 
-    let script = lower_script_source(&dedent(source));
-    let block = script.blocks.first().expect("script has one block");
-    let (_dest, _payload, tag, _ty) = first_enum_construct(block);
+    let script = lower_script_source(source);
+    let (_dest, _payload, tag, _ty) = first_enum_construct(&script.blocks);
     assert_eq!(tag, IRVariantTag(2));
 }
 
-// ---------------------------------------------------------------------------
 // Static methods
-// ---------------------------------------------------------------------------
 
 #[test]
 fn inline_static_method_on_enum_lowers_into_package_function_map() {
@@ -280,7 +262,7 @@ fn inline_static_method_on_enum_lowers_into_package_function_map() {
 
         ";
 
-    let script = lower_script_source(&dedent(source));
+    let script = lower_script_source(source);
     let function = script
         .function("TestApp.Color.primary")
         .expect("inline static method on enum missing from program");
@@ -304,7 +286,7 @@ fn impl_block_on_enum_lowers_static_method_into_package_function_map() {
 
         ";
 
-    let script = lower_script_source(&dedent(source));
+    let script = lower_script_source(source);
     let function = script
         .function("TestApp.Color.primary")
         .expect("impl-block static method on enum missing from program");
@@ -327,11 +309,8 @@ fn static_method_call_on_enum_emits_call_against_qualified_symbol() {
         Color.primary()
         ";
 
-    let script = lower_script_source(&dedent(source));
-    let block = script.blocks.first().expect("script has one entry block");
-    let callee = block
-        .instructions
-        .iter()
+    let script = lower_script_source(source);
+    let callee = all_instructions(&script.blocks)
         .find_map(|inst| match inst {
             IRInstruction::Call { callee, .. } => Some(callee.clone()),
             _ => None,
@@ -340,9 +319,7 @@ fn static_method_call_on_enum_emits_call_against_qualified_symbol() {
     assert_eq!(callee.mangled(), "TestApp.Color.primary");
 }
 
-// ---------------------------------------------------------------------------
 // Cross-decl payloads
-// ---------------------------------------------------------------------------
 
 #[test]
 fn tuple_variant_carrying_user_struct_lowers_to_struct_ir_type() {
@@ -358,7 +335,7 @@ fn tuple_variant_carrying_user_struct_lowers_to_struct_ir_type() {
 
         ";
 
-    let script = lower_script_source(&dedent(source));
+    let script = lower_script_source(source);
     let wrap = enum_decl(&script, "Wrap");
     let some = &wrap.variants[0];
     let inner_symbol = script
@@ -388,7 +365,7 @@ fn struct_variant_carrying_user_enum_lowers_to_enum_ir_type() {
 
         ";
 
-    let script = lower_script_source(&dedent(source));
+    let script = lower_script_source(source);
     let wrap = enum_decl(&script, "Wrap");
     let color_symbol = enum_decl(&script, "Color").symbol.clone();
     let tagged = &wrap.variants[0];

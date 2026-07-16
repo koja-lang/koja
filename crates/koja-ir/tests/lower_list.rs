@@ -7,23 +7,22 @@
 //! confirm:
 //!
 //! - the `IRType::List(element)` lattice variant surfaces on call
-//!   sites and is monomorphized per element type;
+//!   sites and is monomorphized per element type
 //! - method dispatch lands on the matching `IRIntrinsicId::List`
-//!   variant on the resolved `IRFunction`;
+//!   variant on the resolved `IRFunction`
 //! - `Global.List` skips struct-decl emission (it's a primitive
-//!   template — backends synthesize the storage layout).
+//!   template, backends synthesize the storage layout)
 //!
 //! The autoimported stdlib already registers `List<T>`, so the
 //! script source just calls the intrinsics directly.
 
-use koja_ast::util::dedent;
 use koja_ir::{
     FunctionKind, IRFunction, IRInstruction, IRIntrinsicId, IRScript, IRType, ListMethod,
 };
 
 mod common;
 
-use common::lower_script_source;
+use common::{all_instructions, lower_script_source};
 
 /// Find the `List.<method>` call in the script body and return the
 /// resolved `IRFunction`. Mangled names look like
@@ -32,10 +31,7 @@ use common::lower_script_source;
 /// prefix and `.<method>` suffix is more robust than a single substring.
 fn intrinsic_call<'a>(script: &'a IRScript, method_name: &str) -> &'a IRFunction {
     let suffix = format!(".{method_name}");
-    let mangled = script
-        .blocks
-        .iter()
-        .flat_map(|b| b.instructions.iter())
+    let mangled = all_instructions(&script.blocks)
         .find_map(|inst| match inst {
             IRInstruction::Call { callee, .. }
                 if callee.mangled().contains(".List_") && callee.mangled().ends_with(&suffix) =>
@@ -45,17 +41,14 @@ fn intrinsic_call<'a>(script: &'a IRScript, method_name: &str) -> &'a IRFunction
             _ => None,
         })
         .unwrap_or_else(|| {
-            let calls: Vec<String> = script
-                .blocks
-                .iter()
-                .flat_map(|b| b.instructions.iter())
+            let calls: Vec<String> = all_instructions(&script.blocks)
                 .filter_map(|inst| match inst {
                     IRInstruction::Call { callee, .. } => Some(callee.mangled().to_string()),
                     _ => None,
                 })
                 .collect();
             panic!(
-                "no `List.{method_name}` Call instruction in script body — \
+                "no `List.{method_name}` Call instruction in script body, \
                  calls present: {calls:?}",
             )
         });
@@ -84,7 +77,7 @@ fn assert_list_intrinsic(function: &IRFunction, method: ListMethod) {
 
 #[test]
 fn empty_script_lowers_with_autoimport() {
-    let script = lower_script_source(&dedent("1"));
+    let script = lower_script_source("1");
     assert_eq!(script.return_type, IRType::Int64);
 }
 
@@ -94,7 +87,7 @@ fn list_new_lowers_to_intrinsic_new_with_typed_return() {
         my_list: List<Int> = List.new()
         my_list.length()
         ";
-    let script = lower_script_source(&dedent(source));
+    let script = lower_script_source(source);
     let new = intrinsic_call(&script, "new");
     assert_list_intrinsic(new, ListMethod::New);
     assert_eq!(new.return_type, IRType::List(Box::new(IRType::Int64)));
@@ -106,7 +99,7 @@ fn list_length_lowers_to_intrinsic_length_returning_int() {
         my_list: List<String> = List.new()
         my_list.length()
         ";
-    let script = lower_script_source(&dedent(source));
+    let script = lower_script_source(source);
     let length = intrinsic_call(&script, "length");
     assert_list_intrinsic(length, ListMethod::Length);
     assert_eq!(length.return_type, IRType::Int64);
@@ -123,7 +116,7 @@ fn list_append_lowers_to_intrinsic_append_with_element_param() {
         my_list: List<Int> = List.new()
         my_list.append(42)
         ";
-    let script = lower_script_source(&dedent(source));
+    let script = lower_script_source(source);
     let append = intrinsic_call(&script, "append");
     assert_list_intrinsic(append, ListMethod::Append);
     assert_eq!(append.return_type, IRType::List(Box::new(IRType::Int64)));
@@ -136,7 +129,7 @@ fn list_get_lowers_to_intrinsic_get_returning_option() {
         my_list: List<Int> = List.new()
         my_list.get(0)
         ";
-    let script = lower_script_source(&dedent(source));
+    let script = lower_script_source(source);
     let get = intrinsic_call(&script, "get");
     assert_list_intrinsic(get, ListMethod::Get);
     let IRType::Enum(symbol) = &get.return_type else {
@@ -158,7 +151,7 @@ fn list_concat_lowers_to_intrinsic_concat() {
         b: List<Int> = List.new()
         a.concat(b)
         ";
-    let script = lower_script_source(&dedent(source));
+    let script = lower_script_source(source);
     let concat = intrinsic_call(&script, "concat");
     assert_list_intrinsic(concat, ListMethod::Concat);
     assert_eq!(concat.return_type, IRType::List(Box::new(IRType::Int64)));
@@ -170,7 +163,7 @@ fn list_pop_lowers_to_intrinsic_pop_returning_pair() {
         my_list: List<Int> = List.new()
         my_list.pop()
         ";
-    let script = lower_script_source(&dedent(source));
+    let script = lower_script_source(source);
     let pop = intrinsic_call(&script, "pop");
     assert_list_intrinsic(pop, ListMethod::Pop);
     let IRType::Struct(symbol) = &pop.return_type else {
@@ -191,17 +184,14 @@ fn list_literal_lowers_to_new_plus_append_chain() {
         my_list: List<Int> = [10, 20, 30]
         my_list.length()
         ";
-    let script = lower_script_source(&dedent(source));
+    let script = lower_script_source(source);
     let new = intrinsic_call(&script, "new");
     assert_list_intrinsic(new, ListMethod::New);
     let append = intrinsic_call(&script, "append");
     assert_list_intrinsic(append, ListMethod::Append);
     assert_eq!(new.return_type, IRType::List(Box::new(IRType::Int64)));
     assert_eq!(append.return_type, IRType::List(Box::new(IRType::Int64)));
-    let append_calls = script
-        .blocks
-        .iter()
-        .flat_map(|b| b.instructions.iter())
+    let append_calls = all_instructions(&script.blocks)
         .filter(|inst| {
             matches!(
                 inst,
@@ -222,12 +212,12 @@ fn list_struct_is_primitive_template_and_skips_struct_decl() {
         my_list: List<Int> = List.new()
         my_list.length()
         ";
-    let script = lower_script_source(&dedent(source));
+    let script = lower_script_source(source);
     for package in &script.packages {
         for symbol in package.structs.keys() {
             assert!(
                 !symbol.mangled().starts_with("Global.List"),
-                "Global.List is a primitive struct template — backends synthesize \
+                "Global.List is a primitive struct template, backends synthesize \
                  storage, no IRStructDecl should be emitted (got `{symbol}`)",
             );
         }

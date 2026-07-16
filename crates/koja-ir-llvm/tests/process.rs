@@ -6,7 +6,7 @@
 //! - **Spawn**: serializes config to a stack alloca, calls
 //!   `koja_rt_spawn(wrapper, blob, size)`, wraps the returned pid
 //!   in the `Ref<M, R>` struct.
-//! - **SpawnWrapper body**: declared as `void(i8*)`; loads the
+//! - **SpawnWrapper body**: declared as `void(i8*)`. Loads the
 //!   typed config, calls `<state>.start`, branches on the
 //!   `Result.tag`, chains into `<state>.run` on Ok.
 //! - **Receive**: calls `koja_rt_receive` (or
@@ -15,7 +15,7 @@
 //!   "deserialize then branch" blocks ending in `unreachable` for
 //!   unmatched tags.
 //! - **Ref intrinsics**: `self_ref`, `cast`, `signal`, `kill`,
-//!   `alive?`, `send_after`, plus `ReplyTo.send` — each routes
+//!   `alive?`, `send_after`, plus `ReplyTo.send`. Each routes
 //!   through the matching `koja_rt_*` extern declared in
 //!   [`koja_ir_llvm::runtime`].
 //!
@@ -288,7 +288,7 @@ fn spawn_wrapper_loads_config_calls_start_then_run_on_ok() {
 
     // The start -> run dispatch lives in the IR-synthesized body,
     // emitted by the normal instruction pipeline. start returns
-    // Result<Counter, StopReason>; the name mangler qualifies
+    // Result<Counter, StopReason>. The name mangler qualifies
     // StopReason with the package it was lifted from (today:
     // `Global`, since the protocol stub lifts every type
     // declaration into the `Global` package).
@@ -327,7 +327,7 @@ fn receive_lifecycle_calls_koja_rt_receive_and_dispatches_on_tag() {
     assert_contains(&ir_text, "is_arm_0");
     // Each arm body block lives in the function's CFG and the
     // dispatch jumps in via the per-arm prelude block. The host
-    // block of the receive ends with a conditional branch — its
+    // block of the receive ends with a conditional branch. Its
     // IR-level Unreachable terminator becomes the fallthrough
     // unreachable after the arm tests.
     assert_contains(&ir_text, "lifecycle_payload");
@@ -362,7 +362,7 @@ fn receive_with_after_calls_receive_timeout_and_branches_on_none() {
 
 #[test]
 fn ref_self_ref_emits_koja_rt_self_wrapped_in_ref_struct() {
-    // self_ref is only callable from inside a process body; reach
+    // self_ref is only callable from inside a process body, so reach
     // it via a helper method on the Counter state so the
     // monomorphized Ref<Int, Int>.self_ref intrinsic gets emitted.
     let mut source = String::from(COUNTER_PROCESS);
@@ -530,8 +530,8 @@ fn ref_cast_with_unit_message_uses_i8_placeholder_in_envelope() {
     );
     let ir_text = emit(&source);
 
-    // Signature carries the i8 placeholder where M = Unit lands;
-    // the Pair envelope still packs an Option::None reply slot in
+    // Signature carries the i8 placeholder where M = Unit lands.
+    // The Pair envelope still packs an Option::None reply slot in
     // the trailing `[3 x i64]` array.
     assert_contains(
         &ir_text,
@@ -561,7 +561,7 @@ fn ref_call_emits_pair_envelope_with_some_reply_to_and_receive_loop() {
     // Writer side: the call envelope is the same `Pair<M,
     // Option<ReplyTo<R>>>` shape as cast / send_after, but the
     // reply slot is `Option::Some(ReplyTo { id: caller_pid,
-    // token })` — caller pid sourced from `koja_rt_self`, token
+    // token })`, with the caller pid sourced from `koja_rt_self`, token
     // from `koja_rt_call_token`, packed as the second and third
     // words of the option payload. inkwell folds the initial tag
     // insert into the array literal, leaving the runtime pid /
@@ -584,8 +584,8 @@ fn ref_call_emits_pair_envelope_with_some_reply_to_and_receive_loop() {
         &ir_text,
         "declare i64 @koja_rt_call_receive(i64, ptr, i64, i64)",
     );
-    // The literal `100` is consumed at the `.call` call site;
-    // inside the intrinsic body the timeout flows through `%2`
+    // The literal `100` is consumed at the `.call` call site.
+    // Inside the intrinsic body the timeout flows through `%2`
     // (the third intrinsic parameter) into the receive's last arg.
     assert_contains(&ir_text, "call i64 @koja_rt_call_receive(i64");
     assert_contains(&ir_text, "i64 %2)");
@@ -602,8 +602,8 @@ fn ref_call_emits_pair_envelope_with_some_reply_to_and_receive_loop() {
 /// Minimal Process-entry fixture mirroring the language
 /// `process_entry` test: an `App` struct, a `Process<App, (), ()>`
 /// impl whose `start` returns the config unchanged and whose `run`
-/// terminates with `StopReason.Normal`. No PascalCase entry helper
-/// — `lower_process_entry` synthesizes the `App.__entry_wrapper`
+/// terminates with `StopReason.Normal`. There is no PascalCase entry
+/// helper. `lower_process_entry` synthesizes the `App.__entry_wrapper`
 /// from the impl signature.
 const APP_PROCESS_ENTRY: &str = "
     struct App

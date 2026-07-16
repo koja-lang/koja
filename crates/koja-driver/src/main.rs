@@ -8,13 +8,13 @@
 //!
 //! Source dispatch follows [`pipeline::cmd_build`]'s extension
 //! rules: `.kojs` files are scripts (top-level expressions, no
-//! project context); `.koja` files are project files. Omitting the
+//! project context), while `.koja` files are project files. Omitting the
 //! file argument falls back to discovering an `koja.toml` in the
-//! current directory; project mode runs the full pipeline through
+//! current directory. Project mode runs the full pipeline through
 //! [`koja_ir_llvm::compile_program`] (`build`, `run
 //! --backend=llvm`) or [`koja_ir_eval::Interpreter`] (`run`).
 //!
-//! Backend selection: only `run` has a backend dimension — it
+//! Backend selection: only `run` has a backend dimension. It
 //! accepts `--backend={interpreter,llvm}` (see [`pipeline::Backend`])
 //! and defaults to `interpreter` (fast feedback, no link step).
 //! `build` is always LLVM (the only backend that produces a
@@ -49,7 +49,7 @@ struct Cli {
 enum Command {
     /// Compile a source file or project to a native binary
     Build {
-        /// Source file (`.koja` / `.kojs`; omit to use `koja.toml`)
+        /// Source file (`.koja` / `.kojs`, omit to use `koja.toml`)
         file: Option<String>,
 
         /// Output binary name
@@ -66,7 +66,7 @@ enum Command {
     },
     /// Type-check a source file or project without compiling
     Check {
-        /// Source file (`.koja` / `.kojs`; omit to use `koja.toml`)
+        /// Source file (`.koja` / `.kojs`, omit to use `koja.toml`)
         file: Option<String>,
 
         /// Print the type-checked AST to stdout instead of just OK/diagnostics
@@ -122,10 +122,10 @@ enum Command {
     },
     /// Compile and run a source file or project
     Run {
-        /// Source file (`.koja` / `.kojs`; omit to use `koja.toml`)
+        /// Source file (`.koja` / `.kojs`, omit to use `koja.toml`)
         file: Option<String>,
 
-        /// Execution backend: `interpreter` runs in-process for fast startup; `llvm` compiles to a native binary, runs it, and forwards its exit code
+        /// Execution backend: `interpreter` runs in-process for fast startup, while `llvm` compiles to a native binary, runs it, and forwards its exit code
         #[arg(long, value_enum, default_value = "interpreter")]
         backend: pipeline::Backend,
 
@@ -160,7 +160,7 @@ struct DocArgs {
     #[arg(short, long, default_value = "doc")]
     output: String,
 
-    /// Skip bundled stdlib + path dependencies; document the project sources only
+    /// Skip bundled stdlib + path dependencies and document the project sources only
     #[arg(long)]
     project_only: bool,
 
@@ -200,7 +200,7 @@ enum DocAction {
         #[arg(long)]
         port: Option<u16>,
 
-        /// Skip regenerating; serve whatever's already in the output dir
+        /// Skip regenerating and serve whatever's already in the output dir
         #[arg(long)]
         no_rebuild: bool,
     },
@@ -252,7 +252,7 @@ fn main() {
 
 /// Route `koja doc [...]` and `koja doc serve [...]` to the
 /// right handler. Bare `koja doc` falls through to the static
-/// generator; `koja doc serve` rebuilds (unless `--no-rebuild`)
+/// generator, while `koja doc serve` rebuilds (unless `--no-rebuild`)
 /// then hands the output dir to the preview server.
 fn dispatch_doc(args: DocArgs, color: bool) {
     let DocArgs {

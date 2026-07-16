@@ -7,7 +7,7 @@
 //! - used from at least two crates (otherwise it belongs next to its
 //!   single caller).
 //!
-//! The bar is deliberately high — `koja_ast` is a leaf crate in the
+//! The bar is deliberately high, since `koja_ast` is a leaf crate in the
 //! dependency graph, so every export here gets pulled into every
 //! downstream crate.
 
@@ -26,13 +26,13 @@
 ///   that prefix are trimmed instead of sliced, so blank/whitespace-
 ///   only lines collapse to the empty string rather than panicking.
 /// - Lines are rejoined with `\n`. Per [`str::lines`] semantics one
-///   trailing newline is dropped, so `"a\n"` dedents to `"a"`; a
+///   trailing newline is dropped, so `"a\n"` dedents to `"a"`, while a
 ///   closing-quote indent line (literal ending in `\n    `) surfaces
 ///   as a trailing `"\n"` in the output, which is typically what the
 ///   caller wants for source fixtures.
 ///
 /// Not intended for dedenting the *contents* of string literals in
-/// Koja source (that's [`parser::dedent_multiline_parts`]); this is
+/// Koja source (that's [`parser::dedent_multiline_parts`]). This is
 /// a tool-side utility for spelling fixtures.
 ///
 /// # Examples
@@ -115,7 +115,7 @@ mod tests {
         // `str::lines` drops a single trailing terminator, so a
         // literal ending in `\n` yields a string without one. That
         // matches the behavior of every legacy `dedent` copy we
-        // replaced — callers have been relying on it.
+        // replaced, and callers have been relying on it.
         let got = dedent("fn main\n  1\nend\n");
         assert_eq!(got, "fn main\n  1\nend");
     }
@@ -127,7 +127,7 @@ mod tests {
 
     #[test]
     fn whitespace_only_input_has_zero_min_indent() {
-        // No non-blank lines -> min_indent defaults to 0; whitespace
+        // No non-blank lines -> min_indent defaults to 0, so whitespace
         // is preserved on each line and one trailing `\n` is dropped.
         assert_eq!(dedent("\n    \n   \n"), "    \n   ");
     }

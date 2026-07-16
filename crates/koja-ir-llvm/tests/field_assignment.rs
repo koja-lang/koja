@@ -1,5 +1,5 @@
 //! IR-text snapshot tests for the multi-segment field-assignment
-//! lowering — `IRInstruction::FieldSet` and the optional
+//! lowering: `IRInstruction::FieldSet` and the optional
 //! `IRInstruction::DropValue` that precedes it on a heap-typed leaf
 //! overwrite.
 //!
@@ -7,7 +7,7 @@
 //! shape as `StructInit` (one alloca per `FieldSet`, one store of the
 //! new value into the GEP'd slot, one load to materialize the rebuilt
 //! struct as the instruction's SSA result). Assertions are substring-
-//! only; byte-for-byte stdout coverage of the same fixtures lives in
+//! only. Byte-for-byte stdout coverage of the same fixtures lives in
 //! the `koja-driver` e2e suite.
 
 use koja_ast::util::dedent;

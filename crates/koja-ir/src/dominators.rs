@@ -3,16 +3,16 @@
 //! Implements Cooper, Harvey, and Kennedy's "A Simple, Fast Dominance
 //! Algorithm" (2001). Two outputs:
 //!
-//! - [`compute_immediate_dominators`] — `Map<BlockId, BlockId>` where
+//! - [`compute_immediate_dominators`]: `Map<BlockId, BlockId>` where
 //!   `map[b]` is `b`'s immediate dominator. Entry is excluded (it
 //!   has no immediate dominator). Unreachable blocks are excluded
-//!   too — callers that need to seal them walk the unreachable set
+//!   too. Callers that need to seal them walk the unreachable set
 //!   separately.
-//! - [`dominator_tree_children`] — invert the immediate-dominator
+//! - [`dominator_tree_children`]: invert the immediate-dominator
 //!   map into `Map<parent, Vec<child>>` for top-down traversal of
 //!   the dominator tree.
 //!
-//! These are pure CFG primitives; they consume nothing about
+//! These are pure CFG primitives. They consume nothing about
 //! instruction operands or value types and only walk terminator
 //! targets to derive successor edges. Reusable for any future
 //! dataflow pass (DCE, GVN, etc.).
@@ -23,13 +23,13 @@ use crate::function::{IRBasicBlock, IRBlockId, IRTerminator};
 
 /// Walk every reachable block from `entry` and return the immediate
 /// dominator of each non-entry reachable block. The map's domain is
-/// "every reachable block except `entry`"; the entry itself has no
+/// "every reachable block except `entry`". The entry itself has no
 /// immediate dominator and is intentionally absent from the map.
 ///
 /// Unreachable blocks are silently skipped (they receive no
 /// immediate-dominator entry). The caller is responsible for
-/// surfacing dead-code diagnostics if it cares about reachability —
-/// dominance analysis alone has nothing to say about unreachable
+/// surfacing dead-code diagnostics if it cares about reachability.
+/// Dominance analysis alone has nothing to say about unreachable
 /// code.
 pub(crate) fn compute_immediate_dominators(
     blocks: &[IRBasicBlock],
@@ -87,8 +87,8 @@ pub(crate) fn compute_immediate_dominators(
 }
 
 /// Whether `dominator` dominates `block`, given the immediate-dominator
-/// map and its `entry`. The entry dominates every reachable block;
-/// otherwise walk `block`'s idom chain looking for `dominator`. `entry`
+/// map and its `entry`. The entry dominates every reachable block.
+/// Otherwise walk `block`'s idom chain looking for `dominator`. `entry`
 /// is absent from `immediate_dominators` (its sentinel is stripped), so
 /// the walk terminates with `false` rather than looping.
 pub(crate) fn dominates(
@@ -117,7 +117,7 @@ pub(crate) fn dominates(
 /// for any given parent are emitted in `blocks` declaration order
 /// so traversals are deterministic. The entry block is not a key in
 /// `immediate_dominators` itself but is the parent of every block
-/// whose immediate dominator is `entry` — so it appears as a key in
+/// whose immediate dominator is `entry`, so it appears as a key in
 /// the returned map iff at least one block has it as its immediate
 /// dominator (which is always true for any non-trivial function).
 pub(crate) fn dominator_tree_children(
@@ -134,7 +134,7 @@ pub(crate) fn dominator_tree_children(
 }
 
 /// Walk `b1` and `b2` up the partially-built dominator tree until
-/// they meet. Implements Cooper-Harvey-Kennedy's "intersect": at
+/// they meet. Implements Cooper-Harvey-Kennedy's "intersect". At
 /// each step, the deeper finger (lower postorder index) walks up.
 /// Terminates because the entry's sentinel `idom[entry] = entry`
 /// breaks the walk before underflowing the tree.
@@ -158,8 +158,8 @@ fn intersect(
 }
 
 /// Postorder traversal of the CFG starting at `entry`. Blocks
-/// appear in the order their DFS subtree completes — children
-/// before their parent — so the entry is the last element. Only
+/// appear in the order their DFS subtree completes (children
+/// before their parent), so the entry is the last element. Only
 /// reachable blocks appear in the result.
 fn postorder_traversal(blocks: &[IRBasicBlock], entry: IRBlockId) -> Vec<IRBlockId> {
     let by_id: HashMap<IRBlockId, &IRBasicBlock> =
@@ -205,9 +205,9 @@ pub(crate) fn successors(terminator: &IRTerminator) -> Vec<IRBlockId> {
 }
 
 /// `block -> blocks that branch into it`. Built once per function
-/// at dominance-analysis entry; reused inside the iterative
+/// at dominance-analysis entry and reused inside the iterative
 /// fixed-point loop. Unreachable blocks may have no entry in the
-/// returned map (no predecessors), and that's fine — the caller
+/// returned map (no predecessors), and that's fine. The caller
 /// filters them out.
 fn predecessor_map(blocks: &[IRBasicBlock]) -> HashMap<IRBlockId, Vec<IRBlockId>> {
     let mut predecessors: HashMap<IRBlockId, Vec<IRBlockId>> = HashMap::new();
@@ -321,7 +321,7 @@ mod tests {
 
     #[test]
     fn unreachable_blocks_are_skipped() {
-        // 0 -> 1 (return); 2 has no predecessors and is unreachable.
+        // 0 -> 1 (return). Block 2 has no predecessors and is unreachable.
         let blocks = vec![
             block(0, branch(1)),
             block(1, return_void()),

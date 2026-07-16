@@ -41,7 +41,7 @@ pub(crate) fn seal_program(program: &IRProgram) {
 /// Every [`FunctionKind::ProcessEntryWrapper`] must point at a struct
 /// state whose `start`, `run`, and `priority` methods are registered
 /// in the IRProgram. LLVM emit dereferences these symbols when
-/// synthesizing the wrapper body; a miss here would surface as a
+/// synthesizing the wrapper body, so a miss here would surface as a
 /// codegen-time panic instead of a clear seal violation.
 fn seal_program_entry_wrappers(program: &IRProgram) {
     for pkg in &program.packages {
@@ -131,11 +131,11 @@ fn seal_program_loadconst_pool(program: &IRProgram) {
 /// callee that exists as a registered function in the IRProgram. Lower
 /// dereferences the callee id through the typecheck registry, so a
 /// missing target here would indicate either a registry / IRProgram
-/// drift or a genuine lowering bug — both compiler issues.
+/// drift or a genuine lowering bug, both compiler issues.
 ///
-/// The same check applies to [`IRInstruction::Spawn::wrapper`] —
-/// spawn wrappers are minted by the spawn-wrapper monomorphization
-/// planner; a missing one indicates the closure pass failed to
+/// The same check applies to [`IRInstruction::Spawn::wrapper`].
+/// Spawn wrappers are minted by the spawn-wrapper monomorphization
+/// planner, and a missing one indicates the closure pass failed to
 /// discover the spawn site. Wrappers must register as
 /// `FunctionKind::SpawnWrapper`.
 fn seal_program_calls(program: &IRProgram) {

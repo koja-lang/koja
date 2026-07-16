@@ -51,18 +51,18 @@ pub enum Visibility {
 pub enum AnnotationValue {
     /// A string value: `@doc "text"` or `@doc """text"""`.
     String(String),
-    /// An explicit false: `@doc false` — suppresses documentation.
+    /// An explicit false: `@doc false`, which suppresses documentation.
     False,
 }
 
 /// A metadata annotation such as `@doc` or `@extern`.
 ///
 /// The struct is the verbatim source-shape (raw `name` + optional
-/// `value`); semantic classification flows through [`Annotation::kind`],
+/// `value`). Semantic classification flows through [`Annotation::kind`],
 /// which folds the recognized vocabulary into the structured
 /// [`AnnotationKind`] enum. Tools that only care about source shape
-/// (formatter, doc extractor) keep reading `name`/`value` directly;
-/// anything that wants exhaustive case analysis reaches for
+/// (formatter, doc extractor) keep reading `name`/`value` directly.
+/// Anything that wants exhaustive case analysis reaches for
 /// [`Annotation::kind`].
 #[derive(Debug, Clone)]
 pub struct Annotation {
@@ -72,16 +72,16 @@ pub struct Annotation {
 }
 
 /// Payload variants for a well-formed `@doc` annotation. Mirrors the
-/// two source shapes that have semantic meaning today; bare `@doc`
-/// (no value) is **not** a `DocAttr` — it falls through to
+/// two source shapes that have semantic meaning today. Bare `@doc`
+/// (no value) is **not** a `DocAttr`. It falls through to
 /// [`AnnotationKind::Unknown`] because no consumer treats it as
 /// documentation.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DocAttr {
-    /// `@doc "text"` — the docstring payload tools render in
+    /// `@doc "text"`: the docstring payload tools render in
     /// `koja-doc` / LSP hovers.
     Text(String),
-    /// `@doc false` — explicit "do not document this declaration"
+    /// `@doc false`: explicit "do not document this declaration"
     /// marker. Used by `koja-doc` to elide the decl from generated
     /// output.
     Suppressed,
@@ -103,28 +103,28 @@ pub enum DocAttr {
 /// shape and the malformed fall-through cases.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AnnotationKind<'a> {
-    /// `@doc "text"` or `@doc false`. Bare `@doc` is excluded — it
+    /// `@doc "text"` or `@doc false`. Bare `@doc` is excluded. It
     /// has no consumer in the codebase and lands in
     /// [`Self::Unknown`].
     Doc(DocAttr),
     /// `@extern "C"` (today's only valid ABI). Future ABIs would
-    /// surface here under different `abi` strings; the typecheck
+    /// surface here under different `abi` strings, and the typecheck
     /// layer is responsible for restricting which ABIs are
     /// admissible.
     Extern { abi: &'a str },
-    /// `@intrinsic` — compiler-emitted body, no source body, no FFI
+    /// `@intrinsic`: compiler-emitted body, no source body, no FFI
     /// symbol. Carries no payload.
     Intrinsic,
     /// `@link "lib"` or `@link "lib:sym"`. `lib` is the bare library
-    /// name (`-l<lib>` at link time); `name` is an optional C symbol
+    /// name (`-l<lib>` at link time), and `name` is an optional C symbol
     /// override taken from the `lib:sym` shape.
     Link {
         lib: Option<&'a str>,
         name: Option<&'a str>,
     },
-    /// `@test` — driver test-runner marker.
+    /// `@test`: driver test-runner marker.
     Test,
-    /// Anything else — unrecognized name, malformed value shape, or
+    /// Anything else: unrecognized name, malformed value shape, or
     /// any annotation the compiler hasn't been taught about. Carries
     /// the raw `name` + `value` borrow so unrecognized-annotation
     /// diagnostics (a future slice) can render the original source.
@@ -136,8 +136,8 @@ pub enum AnnotationKind<'a> {
 
 impl Annotation {
     /// Classify this annotation against the compiler's known
-    /// vocabulary. Pure function of `self.name` and `self.value`;
-    /// runs in O(1) over a small fixed match. See
+    /// vocabulary. Pure function of `self.name` and `self.value`
+    /// that runs in O(1) over a small fixed match. See
     /// [`AnnotationKind`] for the variant set and the "malformed
     /// shapes fall through to `Unknown`" contract.
     pub fn kind(&self) -> AnnotationKind<'_> {
@@ -187,7 +187,7 @@ impl Annotation {
 
 /// Returns `true` when `annotations` contains an `@extern "C"` marker
 /// (FFI-linked function with no source body). Thin wrapper over
-/// [`Annotation::kind`]; kept as a free function so callers can bind
+/// [`Annotation::kind`], kept as a free function so callers can bind
 /// against this signature without going through `Annotation::kind`.
 pub fn is_extern_c(annotations: &[Annotation]) -> bool {
     annotations
@@ -197,7 +197,7 @@ pub fn is_extern_c(annotations: &[Annotation]) -> bool {
 
 /// Returns `true` when `annotations` contains an `@intrinsic` marker
 /// (compiler-emitted body, no source body, no FFI symbol). Thin
-/// wrapper over [`Annotation::kind`]; kept as a free function so
+/// wrapper over [`Annotation::kind`], kept as a free function so
 /// callers can bind against this signature without going through
 /// `Annotation::kind`.
 pub fn is_intrinsic(annotations: &[Annotation]) -> bool {
@@ -280,7 +280,7 @@ pub enum Item {
 /// The root AST node representing a single Koja source file.
 ///
 /// `package` is the post-parse identity that flows downstream through
-/// typecheck and codegen; it's set by [`koja_parser::parse_file`] from
+/// typecheck and codegen. It's set by [`koja_parser::parse_file`] from
 /// the originating `SourceFile.package`. Callers that go through the
 /// bare-string [`koja_parser::parse`] entry point (REPL, formatter,
 /// proptests) leave it `String::new()` -- those paths never reach the
@@ -289,7 +289,7 @@ pub enum Item {
 /// `body` is `Some(_)` only when the source was parsed in
 /// `ParseMode::Script` -- it carries top-level statements (e.g. the
 /// REPL's accumulated input). The pipeline keeps `body`
-/// populated through typecheck and seal; downstream lowering
+/// populated through typecheck and seal, and downstream lowering
 /// (`koja-ir::lower_script`) consumes it directly. Project-mode
 /// (`ParseMode::File`) sources leave `body` as `None` and put their
 /// work in `items`.
@@ -342,7 +342,7 @@ pub struct Constant {
 ///
 /// `path` is the full lexical name: `["Color"]` for a top-level enum,
 /// `["Process", "ExitReason"]` for a nested one. The leaf is the
-/// enum's own name ([`Self::name`]); the preceding segments are the
+/// enum's own name ([`Self::name`]), and the preceding segments are the
 /// owning type path ([`Self::owner_path`]).
 #[derive(Debug, Clone)]
 pub struct EnumDecl {
@@ -356,13 +356,13 @@ pub struct EnumDecl {
 }
 
 impl EnumDecl {
-    /// The enum's own (leaf) name — the last path segment.
+    /// The enum's own (leaf) name, the last path segment.
     pub fn name(&self) -> &str {
         self.path.last().expect("enum path is non-empty")
     }
 
     /// The owning type path for a nested enum (everything before the
-    /// leaf); empty for a top-level enum.
+    /// leaf), empty for a top-level enum.
     pub fn owner_path(&self) -> &[String] {
         &self.path[..self.path.len() - 1]
     }
@@ -402,7 +402,7 @@ pub struct Function {
 }
 
 /// An `impl Protocol for Type` block. Inherent methods live in
-/// [`ExtendBlock`]; bare `impl Type` is a parse error.
+/// [`ExtendBlock`], and bare `impl Type` is a parse error.
 #[derive(Debug, Clone)]
 pub struct ImplBlock {
     pub target: TypeExpr,
@@ -412,7 +412,7 @@ pub struct ImplBlock {
 }
 
 /// An `extend Type` block: attaches inherent methods (and type
-/// aliases) to `target`. Methods are ambient; duplicate method
+/// aliases) to `target`. Methods are ambient, and duplicate method
 /// names across `extend` blocks targeting the same type are a hard
 /// compile error.
 #[derive(Debug, Clone)]
@@ -457,7 +457,7 @@ pub struct ProtocolMethod {
 /// A function parameter: either a `self` receiver or a named parameter.
 ///
 /// Both variants carry a `local_id: Option<LocalId>` slot the parser
-/// leaves as `None`; typecheck's `resolve_function` stamps it in
+/// leaves as `None`. Typecheck's `resolve_function` stamps it in
 /// when the param enters the per-function `LocalScope`. IR lower reads
 /// the stamped id (translating to `IRLocalId`) so body references and
 /// param-promotion `LocalDecl`/`LocalWrite`s share the same handle
@@ -484,8 +484,8 @@ pub enum Param {
 ///
 /// `path` is the full lexical name: `["Point"]` for a top-level
 /// struct, `["Process", "ExitSignal"]` for a nested one. The leaf is
-/// the struct's own name ([`Self::name`]); the preceding segments are
-/// the owning type path ([`Self::owner_path`]).
+/// the struct's own name ([`Self::name`]), and the preceding segments
+/// are the owning type path ([`Self::owner_path`]).
 #[derive(Debug, Clone)]
 pub struct StructDecl {
     pub annotations: Vec<Annotation>,
@@ -498,13 +498,13 @@ pub struct StructDecl {
 }
 
 impl StructDecl {
-    /// The struct's own (leaf) name — the last path segment.
+    /// The struct's own (leaf) name, the last path segment.
     pub fn name(&self) -> &str {
         self.path.last().expect("struct path is non-empty")
     }
 
     /// The owning type path for a nested struct (everything before the
-    /// leaf); empty for a top-level struct.
+    /// leaf), empty for a top-level struct.
     pub fn owner_path(&self) -> &[String] {
         &self.path[..self.path.len() - 1]
     }
@@ -581,7 +581,7 @@ pub enum CompoundOp {
 ///
 /// `local_id` is `None` after parse and stamped by typecheck-resolve
 /// for both single-segment locals (`x`) and multi-segment field
-/// writes (`point.x`) — the head segment is always a local, and IR
+/// writes (`point.x`). The head segment is always a local, and IR
 /// lower keys its `LocalRead` / `LocalWrite` instructions on that
 /// [`LocalId`].
 ///
@@ -591,7 +591,7 @@ pub enum CompoundOp {
 /// [`Self::segments`]`[1..]` against the registry starting from this
 /// type to derive each intermediate field's struct-id, field-index,
 /// and substituted field type. Single-segment writes leave it
-/// `None` — they don't need a chain walk.
+/// `None`, since they don't need a chain walk.
 #[derive(Debug, Clone)]
 pub struct LValue {
     pub head_resolved_type: Option<ResolvedType>,
@@ -659,7 +659,7 @@ pub enum BinOp {
 #[derive(Debug, Clone)]
 pub enum ClosureParam {
     /// A named parameter with optional type: `x`, `x: Int`.
-    /// `local_id` is `None` after parse; resolve stamps it so IR lower
+    /// `local_id` is `None` after parse. Resolve stamps it so IR lower
     /// can reach the same id without re-walking.
     Name {
         local_id: Option<LocalId>,
@@ -667,9 +667,9 @@ pub enum ClosureParam {
         span: Span,
         type_expr: Option<TypeExpr>,
     },
-    /// A wildcard parameter: `_`. `local_id` is `None` after parse;
-    /// typecheck stamps a nameless slot id so IR lower can
-    /// emit the param the same way it emits a `Name` param — the
+    /// A wildcard parameter: `_`. `local_id` is `None` after parse.
+    /// Typecheck stamps a nameless slot id so IR lower can
+    /// emit the param the same way it emits a `Name` param, and the
     /// body just never reads it.
     Wildcard {
         local_id: Option<LocalId>,
@@ -696,29 +696,29 @@ pub enum EnumConstructionData {
 /// `resolution.is_resolved()` on every non-excluded node.
 ///
 /// The two coercion slots (`literal_coercion`, `coercion`) carry
-/// per-expression coercion annotations stamped by typecheck; see
+/// per-expression coercion annotations stamped by typecheck. See
 /// [`crate::coercion`] for the design rationale.
 #[derive(Debug, Clone)]
 pub struct Expr {
     pub kind: ExprKind,
     /// Per-expression coercion annotation. Stamped by typecheck at
-    /// literal-fit sites (e.g. `5: UInt8`); read by IR lowering to
+    /// literal-fit sites (e.g. `5: UInt8`) and read by IR lowering to
     /// mint the matching narrow `Const` opcode. `None` for every
     /// other position. See [`crate::coercion`] for the full design
     /// rationale (annotation vs value-conversion families).
     pub literal_coercion: Option<LiteralCoercion>,
     /// Per-expression value-conversion coercion. Stamped by
     /// typecheck when the expression's value needs runtime work to
-    /// flow into its consumer (member->union widening today; future
+    /// flow into its consumer (member->union widening today, future
     /// fn-as-closure, generic phi widening, etc.). Each
     /// [`Coercion`] variant pairs 1:1 with an `IRInstruction::*`
     /// variant the lowerer emits at this exact site. Lives
-    /// alongside `literal_coercion` as a parallel coercion family
-    /// — see [`crate::coercion`]'s module doc for the full
+    /// alongside `literal_coercion` as a parallel coercion family.
+    /// See [`crate::coercion`]'s module doc for the full
     /// rationale.
     pub coercion: Option<Coercion>,
-    /// Type annotation. Default is [`ResolvedType::unresolved`];
-    /// typecheck resolve populates it with a registry-pointing
+    /// Type annotation. Default is [`ResolvedType::unresolved`].
+    /// Typecheck resolve populates it with a registry-pointing
     /// shape, and seal asserts `resolution.is_resolved()` on every
     /// non-excluded node.
     pub resolution: ResolvedType,
@@ -968,7 +968,7 @@ pub struct MatchArm {
 
 /// A named field within a struct pattern (either `Pattern::Struct` or
 /// `Pattern::EnumStruct`). Form is always `name: pattern` -- there is no
-/// shorthand. To bind under the field name, write `name: name`; to ignore,
+/// shorthand. To bind under the field name, write `name: name`. To ignore,
 /// write `name: _` or omit the field entirely (partial coverage).
 #[derive(Debug, Clone)]
 pub struct FieldPattern {
@@ -1043,7 +1043,7 @@ pub enum Pattern {
     /// A typed binding: `p: Post` -- matches a union member by type
     /// and binds the unwrapped value. `local_id` is `None` after
     /// parse and stamped by typecheck-resolve when the binding
-    /// enters scope (today only inside `receive` arms; `match` arms
+    /// enters scope (today only inside `receive` arms, while `match` arms
     /// still reject typed bindings as a feature gap). The IR-side
     /// translator reads it to thread the bound name through the same
     /// `LocalRead` vocabulary as body-declared locals.

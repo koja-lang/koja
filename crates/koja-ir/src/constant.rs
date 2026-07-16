@@ -4,7 +4,7 @@
 //! (they inline as [`crate::IRInstruction::Const`] at every use).
 //!
 //! Each [`IRPackage`] owns its constants pool keyed by the
-//! constant's mangled [`IRSymbol`]; [`crate::IRInstruction::LoadConst`]
+//! constant's mangled [`IRSymbol`], and [`crate::IRInstruction::LoadConst`]
 //! carries the same symbol so backends can lazily materialize one
 //! global per pool entry.
 //!
@@ -19,11 +19,11 @@ use crate::types::ConstValue;
 /// can materialize a deeply-nested constant in a single walk without
 /// re-running typecheck. `Primitive` reuses the same scalar
 /// [`ConstValue`] vocabulary the inline `IRInstruction::Const` path
-/// uses — keeps the two paths convergent for backends and avoids
+/// uses, which keeps the two paths convergent for backends and avoids
 /// re-encoding primitive literal shapes.
 #[derive(Clone, Debug, PartialEq)]
 pub enum IRConstantValue {
-    /// `<ty>.<variant>` — a unit-shaped enum variant. `tag` is the
+    /// `<ty>.<variant>`: a unit-shaped enum variant. `tag` is the
     /// variant's 0-based position in the [`crate::IREnumDecl`]
     /// variant roster (mirrors [`crate::IRInstruction::EnumConstruct`]'s
     /// `tag`).
@@ -33,7 +33,7 @@ pub enum IRConstantValue {
     /// scalar primitive constants do not pool (they inline at use
     /// sites).
     Primitive(ConstValue),
-    /// `<ty>{<fields>}` — a struct literal whose fields are themselves
+    /// `<ty>{<fields>}`: a struct literal whose fields are themselves
     /// constant values. Field order matches declaration order
     /// (mirrors [`crate::IRInstruction::StructInit`]).
     Struct {

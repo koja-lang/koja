@@ -13,7 +13,7 @@ use common::evaluate_program as evaluate;
 #[test]
 fn self_recursive_tail_call_runs_in_constant_stack() {
     // 100 000 frames would blow the host stack without the
-    // trampoline; reaching `Value::Int(0)` is the constant-stack
+    // trampoline. Reaching `Value::Int(0)` is the constant-stack
     // smoke test the LLVM backend's `tco_loop` mirrors.
     let source = "
         struct Counter

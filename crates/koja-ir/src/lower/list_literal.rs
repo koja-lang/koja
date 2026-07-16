@@ -29,8 +29,8 @@ pub(super) fn lower_list_literal(
         .map(|(id, _)| id)
         .unwrap_or_else(|| {
             panic!(
-                "IR lower: list literal reaches lower without `Global.List` in registry — \
-                 seal violation",
+                "IR lower: list literal reaches lower without `Global.List` in registry \
+                 (seal violation)",
             )
         });
     let new_receiver = stamped_expr(

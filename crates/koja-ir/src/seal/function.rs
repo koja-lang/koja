@@ -1,6 +1,6 @@
 //! Per-function and per-block invariants. [`seal_package`] /
 //! [`seal_block`] / [`seal_ssa`] are reused for both function- and
-//! script-shaped IR; the only difference is the seeded `ValueId` set
+//! script-shaped IR. The only difference is the seeded `ValueId` set
 //! (function params for fns, empty for scripts).
 
 use std::collections::{BTreeMap, HashMap, HashSet};
@@ -40,10 +40,10 @@ fn seal_function(function: &IRFunction) {
     let owner = format!("function `{}`", function.symbol);
     match &function.kind {
         FunctionKind::CloneGlue | FunctionKind::DeepCopyGlue | FunctionKind::DropGlue => {
-            // Glue bodies come in two shapes, both valid: aggregate
+            // Glue bodies come in two shapes, both valid. Aggregate
             // glue (struct / enum / union / `Indirect`) carries a full
             // elaborate-synthesized CFG, validated by the standard
-            // SSA / block walk below; collection glue (`List` / `Map`
+            // SSA / block walk below. Collection glue (`List` / `Map`
             // / `Set`) lowers empty and is synthesized at emit time
             // from the operand type, caught by the empty-blocks
             // early-return after the parameter checks.
@@ -150,7 +150,7 @@ fn seal_function(function: &IRFunction) {
 /// function's symbol, and arg arity must match `function.params`.
 /// Per-arg type matching against the param's type requires a global
 /// value-type index this seal walk doesn't build (mirrors the
-/// branch-arg arity-only check in [`require_branch_target_arity`]);
+/// branch-arg arity-only check in [`require_branch_target_arity`]).
 /// LLVM emission catches arg-type drift via inkwell's `build_store`
 /// type check.
 fn seal_tail_calls(function: &IRFunction, owner: &str) {
@@ -162,7 +162,7 @@ fn seal_tail_calls(function: &IRFunction, owner: &str) {
         if callee != &function.symbol {
             seal_panic(&format!(
                 "{owner} block {} has TailCall to `{callee}` but the enclosing function is \
-                 `{}` — cross-function tail calls are not admitted yet",
+                 `{}` (cross-function tail calls are not admitted yet)",
                 block.id, function.symbol,
             ));
         }
@@ -184,7 +184,7 @@ fn seal_tail_calls(function: &IRFunction, owner: &str) {
 /// validate that each [`BranchTarget`]'s `args` list matches the
 /// target block's declared param signature in count (and, where the
 /// per-block walk has captured both the param's and the arg's type,
-/// in type as well — see [`require_branch_target_well_formed`]).
+/// in type as well, see [`require_branch_target_well_formed`]).
 ///
 /// Built once per function so the per-block walk doesn't repeat the
 /// scan.
@@ -304,7 +304,7 @@ pub(super) fn seal_block(
 /// it on entry to their declaring block, instruction `dest`s join
 /// it as the walk advances, and every value pops back out when the
 /// dominator-subtree walk returns. An operand is in scope iff its
-/// def lives in some dominator of the using block — exactly what
+/// def lives in some dominator of the using block, exactly what
 /// dominance-based SSA admits.
 pub(super) fn seal_ssa(
     blocks: &[IRBasicBlock],
@@ -322,7 +322,7 @@ pub(super) fn seal_ssa(
 }
 
 /// Recursive descent over the dominator tree. The mutable `defined`
-/// set is the live "in scope at this point in the walk" set; values
+/// set is the live "in scope at this point in the walk" set. Values
 /// added on entry are removed on exit so siblings see their parent's
 /// scope but not each other's.
 fn walk_dominator_subtree(
@@ -386,7 +386,7 @@ fn require_in_scope(value: ValueId, owner: &str, block_id: IRBlockId, defined: &
 /// Validate that every [`BranchTarget`] in `term` passes exactly as
 /// many `args` as the target block declares [`crate::function::BlockParam`]s.
 /// Type-matching of args against params requires a global value-type
-/// index that this seal walk doesn't yet build; the count check is
+/// index that this seal walk doesn't yet build, so the count check is
 /// the strict invariant (an arity mismatch always indicates a
 /// lowering bug). Type validation happens at the LLVM-emission
 /// boundary via inkwell's `add_incoming` type check.
@@ -421,7 +421,7 @@ fn require_branch_target_arity(
 ) {
     let Some(params) = block_params.get(&target.block) else {
         // Unknown target id was already reported by `terminator_targets`
-        // / `block_ids` walk; skip the arity check rather than panic
+        // / `block_ids` walk, so skip the arity check rather than panic
         // twice for the same root cause.
         return;
     };
@@ -441,7 +441,7 @@ fn require_branch_target_arity(
 mod block_param_tests {
     //! Hand-built CFG fragments exercising the block-parameter and
     //! [`BranchTarget`] arg/param invariants on `seal_block`. The
-    //! happy path runs `seal_block` and expects no panic; mismatch
+    //! happy path runs `seal_block` and expects no panic, while mismatch
     //! cases pin the specific seal-violation message so future edits
     //! don't accidentally weaken the contract.
 
@@ -450,7 +450,7 @@ mod block_param_tests {
     use crate::types::ConstValue;
 
     /// Build a 2-block CFG: entry emits a `Const::Int64(42)` and
-    /// branches to merge with `args: [const_id]`; merge declares
+    /// branches to merge with `args: [const_id]`, and merge declares
     /// one `Int64` BlockParam and returns it. Returns the function
     /// shape and a label for use in seal panics.
     fn entry_branches_to_merge(merge_args: Vec<ValueId>) -> (Vec<IRBasicBlock>, String) {
@@ -517,7 +517,7 @@ mod block_param_tests {
     fn block_param_is_visible_to_block_body_operand_check() {
         // Merge declares a BlockParam, then the merge body reads it
         // via a UnaryOp. The seed-the-defined-set-with-block-params
-        // step is what makes this well-formed; without it the
+        // step is what makes this well-formed. Without it the
         // unary's operand check would panic.
         let entry_id = IRBlockId(0);
         let merge_id = IRBlockId(1);
@@ -577,7 +577,7 @@ mod block_param_tests {
             }],
             terminator: IRTerminator::Branch(BranchTarget::to(sibling_id)),
         };
-        // Sibling references `merge_param` directly — illegal
+        // Sibling references `merge_param` directly. This is illegal
         // because merge does not dominate sibling, so its
         // BlockParam is out of scope here.
         let sibling = IRBasicBlock {

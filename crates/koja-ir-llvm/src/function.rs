@@ -81,7 +81,7 @@ pub(crate) fn declare_function<'ctx>(
     };
     ctx.register_declared_function(function.symbol.clone(), llvm_function);
     if matches!(function.kind, FunctionKind::Extern(_)) {
-        // Foreign code can hand back NaN / inf; the call site traps
+        // Foreign code can hand back NaN / inf. The call site traps
         // on those to uphold the finite-only `Float` invariant.
         if matches!(function.return_type, IRType::Float32 | IRType::Float64) {
             ctx.register_extern_float_return(function.symbol.clone(), llvm_name.clone());

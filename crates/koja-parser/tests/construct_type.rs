@@ -3,38 +3,21 @@
 //! package-qualified forms (`Pkg.Type`, `Pkg.Type.Variant`).
 //! Package names are PascalCase.
 
-use koja_ast::ast::{EnumConstructionData, Expr, ExprKind, Item, Statement};
-use koja_ast::util::dedent;
+use koja_ast::ast::{EnumConstructionData, ExprKind};
 
 mod common;
 
-use common::parse_clean;
-
-fn first_expr(source: &str) -> Expr {
-    let file = parse_clean(source);
-    for item in file.items {
-        if let Item::Function(f) = item {
-            for stmt in f.body.unwrap_or_default() {
-                match stmt {
-                    Statement::Expr(e) | Statement::Assignment { value: e, .. } => return e,
-                    _ => continue,
-                }
-            }
-        }
-    }
-    panic!("no expression in parsed output");
-}
+use common::first_function_expr;
 
 #[test]
 fn struct_construction_with_fields() {
-    let src = dedent(
+    let expr = first_function_expr(
         "
         fn run
           p = Point { x: 1, y: 2 }
         end
         ",
     );
-    let expr = first_expr(&src);
     match expr.kind {
         ExprKind::StructConstruction { type_path, fields } => {
             assert_eq!(type_path, vec!["Point"]);
@@ -48,14 +31,13 @@ fn struct_construction_with_fields() {
 
 #[test]
 fn struct_construction_with_no_fields() {
-    let src = dedent(
+    let expr = first_function_expr(
         "
         fn run
           o = Origin {}
         end
         ",
     );
-    let expr = first_expr(&src);
     match expr.kind {
         ExprKind::StructConstruction { fields, .. } => assert!(fields.is_empty()),
         other => panic!("expected StructConstruction, got {other:?}"),
@@ -64,14 +46,13 @@ fn struct_construction_with_no_fields() {
 
 #[test]
 fn enum_construction_unit_variant() {
-    let src = dedent(
+    let expr = first_function_expr(
         "
         fn run
           c = Color.Red
         end
         ",
     );
-    let expr = first_expr(&src);
     match expr.kind {
         ExprKind::EnumConstruction {
             type_path,
@@ -88,14 +69,13 @@ fn enum_construction_unit_variant() {
 
 #[test]
 fn enum_construction_tuple_variant() {
-    let src = dedent(
+    let expr = first_function_expr(
         "
         fn run
           s = Shape.Rect(10, 20)
         end
         ",
     );
-    let expr = first_expr(&src);
     match expr.kind {
         ExprKind::EnumConstruction { variant, data, .. } => {
             assert_eq!(variant, "Rect");
@@ -110,14 +90,13 @@ fn enum_construction_tuple_variant() {
 
 #[test]
 fn enum_construction_struct_variant() {
-    let src = dedent(
+    let expr = first_function_expr(
         "
         fn run
           s = Event.Resize { width: 1, height: 2 }
         end
         ",
     );
-    let expr = first_expr(&src);
     match expr.kind {
         ExprKind::EnumConstruction { variant, data, .. } => {
             assert_eq!(variant, "Resize");
@@ -138,14 +117,13 @@ fn package_dot_type_with_braces_parses_as_enum_construction() {
     // enum shape unconditionally and lets later resolution decide.
     // This test pins that behavior so a refactor doesn't silently
     // flip it.
-    let src = dedent(
+    let expr = first_function_expr(
         "
         fn run
           x = Pkg.Point { x: 1, y: 2 }
         end
         ",
     );
-    let expr = first_expr(&src);
     match expr.kind {
         ExprKind::EnumConstruction {
             type_path,
@@ -162,14 +140,13 @@ fn package_dot_type_with_braces_parses_as_enum_construction() {
 
 #[test]
 fn nested_package_qualified_enum_path() {
-    let src = dedent(
+    let expr = first_function_expr(
         "
         fn run
           x = Pkg.Color.Red
         end
         ",
     );
-    let expr = first_expr(&src);
     match expr.kind {
         ExprKind::EnumConstruction {
             type_path, variant, ..
