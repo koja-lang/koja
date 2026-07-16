@@ -12,7 +12,8 @@
 //! [`crate::lower::package::lower_function_inner`] needs.
 
 use koja_ast::ast::{
-    EnumConstructionData, Expr, ExprKind, FieldPattern, Function, Pattern, Statement, StringPart,
+    EnumConstructionData, Expr, ExprKind, FieldPattern, Function, LValue, Pattern, Statement,
+    StringPart,
 };
 use koja_ast::identifier::{GlobalRegistryId, ResolvedType};
 use koja_typecheck::{FunctionSignature, ResolvedParam};
@@ -73,17 +74,29 @@ pub(super) fn substitute_signature(
 
 fn substitute_in_statement(stmt: &mut Statement, args: &[ResolvedType], owner: GlobalRegistryId) {
     match stmt {
-        Statement::Assignment { value, .. } => {
-            // The LValue target carries no ResolvedType slots today.
+        Statement::Assignment { target, value, .. } => {
+            substitute_in_lvalue(target, args, owner);
             substitute_in_expr(value, args, owner);
         }
         Statement::Break { .. } => {}
-        Statement::CompoundAssign { value, .. } => substitute_in_expr(value, args, owner),
+        Statement::CompoundAssign { target, value, .. } => {
+            substitute_in_lvalue(target, args, owner);
+            substitute_in_expr(value, args, owner);
+        }
         Statement::Expr(expr) => substitute_in_expr(expr, args, owner),
         Statement::Return { value: None, .. } => {}
         Statement::Return {
             value: Some(value), ..
         } => substitute_in_expr(value, args, owner),
+    }
+}
+
+/// A multi-segment assignment target (`self.field = ...`) carries the
+/// head's [`ResolvedType`], which can be generic (e.g. a field of type
+/// `T` on the enclosing struct). Single-segment targets carry `None`.
+fn substitute_in_lvalue(lvalue: &mut LValue, args: &[ResolvedType], owner: GlobalRegistryId) {
+    if let Some(head) = lvalue.head_resolved_type.as_mut() {
+        *head = substitute_resolved_type(head, args, owner);
     }
 }
 
@@ -139,7 +152,12 @@ fn substitute_in_expr(expr: &mut Expr, args: &[ResolvedType], owner: GlobalRegis
             EnumConstructionData::Unit => {}
         },
         ExprKind::FieldAccess { receiver, .. } => substitute_in_expr(receiver, args, owner),
-        ExprKind::For { iterable, body, .. } => {
+        ExprKind::For {
+            pattern,
+            iterable,
+            body,
+        } => {
+            substitute_in_pattern(pattern, args, owner);
             substitute_in_expr(iterable, args, owner);
             substitute_in_statements(body, args, owner);
         }
@@ -169,14 +187,12 @@ fn substitute_in_expr(expr: &mut Expr, args: &[ResolvedType], owner: GlobalRegis
             }
         }
         ExprKind::Match { subject, arms } => {
-            // Supported patterns carry no `ResolvedType` slots
-            // (wildcards / literals / bindings / enum constructors
-            // / struct destructures are leaves or carry only paths
-            // and named-field patterns), so the pattern walk is a
-            // no-op; the subject, arm guards, and arm bodies need
-            // substitution.
             substitute_in_expr(subject, args, owner);
             for arm in arms {
+                // Union-subject matches bind through typed-binding
+                // patterns whose annotation can carry a `TypeParam`
+                // (e.g. `xs: List<T>`), same as `receive` arms.
+                substitute_in_pattern(&mut arm.pattern, args, owner);
                 if let Some(guard) = &mut arm.guard {
                     substitute_in_expr(guard, args, owner);
                 }
@@ -263,10 +279,17 @@ fn substitute_in_expr(expr: &mut Expr, args: &[ResolvedType], owner: GlobalRegis
 fn substitute_in_pattern(pattern: &mut Pattern, args: &[ResolvedType], owner: GlobalRegistryId) {
     match pattern {
         Pattern::Binding { .. }
-        | Pattern::Binary { .. }
         | Pattern::EnumUnit { .. }
         | Pattern::Literal { .. }
         | Pattern::Wildcard { .. } => {}
+        Pattern::Binary { segments, .. } => {
+            for segment in segments {
+                substitute_in_expr(&mut segment.value, args, owner);
+                if let Some(size) = segment.size.as_mut() {
+                    substitute_in_expr(size, args, owner);
+                }
+            }
+        }
         Pattern::Constructor { elements, .. } | Pattern::EnumTuple { elements, .. } => {
             for sub in elements {
                 substitute_in_pattern(sub, args, owner);

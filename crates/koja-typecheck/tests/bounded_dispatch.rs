@@ -6,39 +6,16 @@
 //! `non_self_params`. Mono later substitutes through to a concrete
 //! receiver. That side lives in `koja-ir` tests.
 
-use koja_ast::ast::{Expr, ExprKind, File, Function, Item, Statement};
+use koja_ast::ast::{Expr, ExprKind, Function, Statement};
 use koja_ast::identifier::Identifier;
 use koja_ast::util::dedent;
-use koja_typecheck::{CheckedProgram, GlobalKind};
+use koja_typecheck::GlobalKind;
 
 mod common;
 
 use common::{
-    PACKAGE, diagnostic_messages, typecheck_script as typecheck,
-    typecheck_script_fail as typecheck_fail,
+    PACKAGE, assert_script_fails_with, find_function, global_id, typecheck_script as typecheck,
 };
-
-fn function<'a>(checked: &'a CheckedProgram, name: &str) -> &'a Function {
-    for pkg in &checked.packages {
-        for file in &pkg.files {
-            if let Some(found) = find_function(file, name) {
-                return found;
-            }
-        }
-    }
-    panic!("function `{name}` not found in checked program");
-}
-
-fn find_function<'a>(file: &'a File, name: &str) -> Option<&'a Function> {
-    for item in &file.items {
-        if let Item::Function(f) = item
-            && f.name == name
-        {
-            return Some(f);
-        }
-    }
-    None
-}
 
 fn body_trailing(function: &Function) -> &Expr {
     let body = function.body.as_ref().expect("function has a parsed body");
@@ -69,18 +46,14 @@ fn bounded_method_call_resolves_protocol_return_type() {
         ";
 
     let checked = typecheck(&dedent(source));
-    let show = function(&checked, "show");
+    let show = find_function(&checked, "show");
     let trailing = body_trailing(show);
     let ExprKind::MethodCall { method, .. } = &trailing.kind else {
         panic!("expected MethodCall, got {:?}", trailing.kind);
     };
     assert_eq!(method, "greet");
 
-    let string_id = checked
-        .registry
-        .lookup(&Identifier::new("Global", vec!["String".to_string()]))
-        .map(|(id, _)| id)
-        .expect("String exists in registry");
+    let string_id = global_id(&checked, "String");
     let koja_ast::identifier::ResolvedType::Named {
         resolution: koja_ast::identifier::Resolution::Global(id),
         ..
@@ -109,14 +82,7 @@ fn bounded_method_call_with_no_bound_diagnoses() {
         end
         ";
 
-    let failure = typecheck_fail(&dedent(source));
-    let messages = diagnostic_messages(&failure);
-    assert!(
-        messages
-            .iter()
-            .any(|m| m.contains("greet") && m.contains("no bound provides it")),
-        "expected `no bound provides it` diagnostic, got {messages:?}",
-    );
+    assert_script_fails_with(source, &["greet", "no bound provides it"]);
 }
 
 #[test]
@@ -134,14 +100,7 @@ fn bounded_method_call_with_unrelated_bound_diagnoses() {
         end
         ";
 
-    let failure = typecheck_fail(&dedent(source));
-    let messages = diagnostic_messages(&failure);
-    assert!(
-        messages
-            .iter()
-            .any(|m| m.contains("unrelated_method") && m.contains("no bound provides it")),
-        "expected `no bound provides it` diagnostic, got {messages:?}",
-    );
+    assert_script_fails_with(source, &["unrelated_method", "no bound provides it"]);
 }
 
 #[test]
@@ -160,14 +119,7 @@ fn bounded_method_call_with_static_bound_method_diagnoses() {
         end
         ";
 
-    let failure = typecheck_fail(&dedent(source));
-    let messages = diagnostic_messages(&failure);
-    assert!(
-        messages
-            .iter()
-            .any(|m| m.contains("static method") && m.contains("make")),
-        "expected static-method diagnostic, got {messages:?}",
-    );
+    assert_script_fails_with(source, &["static method", "make"]);
 }
 
 #[test]

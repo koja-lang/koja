@@ -9,30 +9,14 @@
 //! the rewritten alias target and never fall through to the
 //! "unknown type" diagnostic when the alias is well-formed.
 
-use std::path::PathBuf;
-
-use koja_parser::{ParseMode, SourceFile, parse_program};
-use koja_typecheck::{CheckFailure, CheckedProgram, check_program};
+use koja_parser::ParseMode;
 
 mod common;
 
-use common::{PACKAGE, diagnostic_messages, typecheck_file, typecheck_file_fail};
-
-/// Drive `parse_program -> check_program` on multiple user files
-/// stacked in the same package. Used by [`alias_is_file_private`]
-/// to prove sister files don't see each other's alias slices.
-fn check_multi_file(files: &[(&str, &str)]) -> Result<CheckedProgram, CheckFailure> {
-    let mut sources = koja_stdlib::autoimport_sources();
-    sources.extend(koja_stdlib::qualified_sources());
-    for (name, body) in files {
-        sources.push(SourceFile {
-            package: PACKAGE.to_string(),
-            path: PathBuf::from(name),
-            source: body.to_string(),
-        });
-    }
-    check_program(parse_program(sources, ParseMode::File))
-}
+use common::{
+    assert_file_fails_with, check_multi_file, diagnostic_messages, typecheck_file,
+    typecheck_file_fail,
+};
 
 #[test]
 fn alias_to_global_struct_resolves_locally() {
@@ -75,46 +59,28 @@ fn alias_default_local_name() {
 
 #[test]
 fn alias_unknown_package_diagnoses() {
-    let failure = typecheck_file_fail(
+    assert_file_fails_with(
         "alias Nope.Thing as Thing\n\
          fn main\n  1\nend\n",
-    );
-    let messages = diagnostic_messages(&failure);
-    assert!(
-        messages
-            .iter()
-            .any(|m| m.contains("alias target `Nope.Thing` is not a registered type")),
-        "expected unknown-package diagnostic, got: {messages:?}",
+        &["alias target `Nope.Thing` is not a registered type"],
     );
 }
 
 #[test]
 fn alias_unknown_type_diagnoses() {
-    let failure = typecheck_file_fail(
+    assert_file_fails_with(
         "alias Crypto.NoSuchType\n\
          fn main\n  1\nend\n",
-    );
-    let messages = diagnostic_messages(&failure);
-    assert!(
-        messages
-            .iter()
-            .any(|m| m.contains("alias target `Crypto.NoSuchType` is not a registered type")),
-        "expected unknown-type diagnostic, got: {messages:?}",
+        &["alias target `Crypto.NoSuchType` is not a registered type"],
     );
 }
 
 #[test]
 fn alias_path_too_short_diagnoses() {
-    let failure = typecheck_file_fail(
+    assert_file_fails_with(
         "alias Foo\n\
          fn main\n  1\nend\n",
-    );
-    let messages = diagnostic_messages(&failure);
-    assert!(
-        messages
-            .iter()
-            .any(|m| m.contains("alias path must be `Package.Type`")),
-        "expected path-too-short diagnostic, got: {messages:?}",
+        &["alias path must be `Package.Type`"],
     );
 }
 
@@ -127,63 +93,39 @@ fn alias_multi_segment_target_falls_through_when_unregistered() {
     // helper stays load-bearing for the eventual nested-type slice:
     // the helper resolves both `O` (1 segment) and `O.Inner` (2)
     // without code movement once the registry carries those entries.
-    let failure = typecheck_file_fail(
+    assert_file_fails_with(
         "alias Crypto.SHA256.Inner as Inner\n\
          fn main\n  1\nend\n",
-    );
-    let messages = diagnostic_messages(&failure);
-    assert!(
-        messages
-            .iter()
-            .any(|m| m.contains("alias target `Crypto.SHA256.Inner` is not a registered type")),
-        "expected unregistered-multi-segment-target diagnostic, got: {messages:?}",
+        &["alias target `Crypto.SHA256.Inner` is not a registered type"],
     );
 }
 
 #[test]
 fn alias_duplicate_local_name_diagnoses() {
-    let failure = typecheck_file_fail(
+    assert_file_fails_with(
         "alias Crypto.SHA256 as Hasher\n\
          alias Crypto.SHA1 as Hasher\n\
          fn main\n  1\nend\n",
-    );
-    let messages = diagnostic_messages(&failure);
-    assert!(
-        messages
-            .iter()
-            .any(|m| m.contains("duplicate alias `Hasher`")),
-        "expected duplicate-local-name diagnostic, got: {messages:?}",
+        &["duplicate alias `Hasher`"],
     );
 }
 
 #[test]
 fn alias_shadowing_global_is_error() {
-    let failure = typecheck_file_fail(
+    assert_file_fails_with(
         "alias Crypto.SHA256 as Int\n\
          fn main\n  1\nend\n",
-    );
-    let messages = diagnostic_messages(&failure);
-    assert!(
-        messages
-            .iter()
-            .any(|m| m.contains("alias `Int` would shadow") && m.contains("Global.Int")),
-        "expected shadow-Global diagnostic, got: {messages:?}",
+        &["alias `Int` would shadow", "Global.Int"],
     );
 }
 
 #[test]
 fn alias_shadowing_current_package_is_error() {
-    let failure = typecheck_file_fail(
+    assert_file_fails_with(
         "struct Foo\nend\n\
          alias Crypto.SHA256 as Foo\n\
          fn main\n  1\nend\n",
-    );
-    let messages = diagnostic_messages(&failure);
-    assert!(
-        messages
-            .iter()
-            .any(|m| m.contains("alias `Foo` would shadow") && m.contains("TestApp.Foo")),
-        "expected shadow-current-package diagnostic, got: {messages:?}",
+        &["alias `Foo` would shadow", "TestApp.Foo"],
     );
 }
 
@@ -210,17 +152,20 @@ fn alias_is_file_private() {
     // `a.koja` defines an alias. `b.koja` (sister file in the same
     // package) tries to use the alias's local name. Aliases are
     // file-private, so `b.koja` should fail to resolve `Hasher`.
-    let result = check_multi_file(&[
-        (
-            "a.koja",
-            "alias Crypto.SHA256 as Hasher\n\
-             fn use_a(data: Binary) -> Binary\n  Hasher.digest(data)\nend\n",
-        ),
-        (
-            "b.koja",
-            "fn use_b(data: Binary) -> Binary\n  Hasher.digest(data)\nend\n",
-        ),
-    ]);
+    let result = check_multi_file(
+        &[
+            (
+                "a.koja",
+                "alias Crypto.SHA256 as Hasher\n\
+                 fn use_a(data: Binary) -> Binary\n  Hasher.digest(data)\nend\n",
+            ),
+            (
+                "b.koja",
+                "fn use_b(data: Binary) -> Binary\n  Hasher.digest(data)\nend\n",
+            ),
+        ],
+        ParseMode::File,
+    );
     let failure = result.expect_err("sister file should not see a.koja's alias");
     let messages = diagnostic_messages(&failure);
     assert!(

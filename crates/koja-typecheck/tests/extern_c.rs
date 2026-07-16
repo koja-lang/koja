@@ -12,10 +12,7 @@ use koja_typecheck::GlobalKind;
 
 mod common;
 
-use common::{
-    PACKAGE, diagnostic_messages, typecheck_script as typecheck,
-    typecheck_script_fail as typecheck_fail,
-};
+use common::{PACKAGE, assert_script_fails_with, typecheck_script as typecheck};
 
 #[test]
 fn happy_path_explicit_width_primitives_typechecks() {
@@ -104,13 +101,9 @@ fn extern_with_intrinsic_is_mutex_rejected() {
         fn cosf(x: Float32) -> Float32
         ";
 
-    let failure = typecheck_fail(&dedent(source));
-    let messages = diagnostic_messages(&failure);
-    assert!(
-        messages
-            .iter()
-            .any(|m| m.contains("`@extern \"C\"` and `@intrinsic` are mutually exclusive")),
-        "expected mutex diagnostic, got: {messages:?}",
+    assert_script_fails_with(
+        source,
+        &["`@extern \"C\"` and `@intrinsic` are mutually exclusive"],
     );
 }
 
@@ -134,13 +127,9 @@ fn extern_with_self_receiver_is_rejected() {
         end
         ";
 
-    let failure = typecheck_fail(&dedent(source));
-    let messages = diagnostic_messages(&failure);
-    assert!(
-        messages
-            .iter()
-            .any(|m| m.contains("`@extern \"C\"` functions cannot take a `self` receiver")),
-        "expected self-receiver rejection, got: {messages:?}",
+    assert_script_fails_with(
+        source,
+        &["`@extern \"C\"` functions cannot take a `self` receiver"],
     );
 }
 
@@ -151,14 +140,12 @@ fn extern_with_inferred_int_param_is_rejected() {
         fn read(fd: Int) -> Int32
         ";
 
-    let failure = typecheck_fail(&dedent(source));
-    let messages = diagnostic_messages(&failure);
-    assert!(
-        messages.iter().any(|m| {
-            m.contains("`@extern \"C\"` parameter `fd`")
-                && m.contains("not an FFI-admissible C type")
-        }),
-        "expected inferred-Int rejection, got: {messages:?}",
+    assert_script_fails_with(
+        source,
+        &[
+            "`@extern \"C\"` parameter `fd`",
+            "not an FFI-admissible C type",
+        ],
     );
 }
 
@@ -169,14 +156,12 @@ fn extern_with_string_param_is_rejected() {
         fn label(name: String) -> Int32
         ";
 
-    let failure = typecheck_fail(&dedent(source));
-    let messages = diagnostic_messages(&failure);
-    assert!(
-        messages.iter().any(|m| {
-            m.contains("`@extern \"C\"` parameter `name`")
-                && m.contains("not an FFI-admissible C type")
-        }),
-        "expected String rejection, got: {messages:?}",
+    assert_script_fails_with(
+        source,
+        &[
+            "`@extern \"C\"` parameter `name`",
+            "not an FFI-admissible C type",
+        ],
     );
 }
 
@@ -187,13 +172,9 @@ fn extern_with_inferred_float_return_is_rejected() {
         fn pi -> Float
         ";
 
-    let failure = typecheck_fail(&dedent(source));
-    let messages = diagnostic_messages(&failure);
-    assert!(
-        messages
-            .iter()
-            .any(|m| m.contains("`@extern \"C\"` return type is not an FFI-admissible C type")),
-        "expected inferred-Float return rejection, got: {messages:?}",
+    assert_script_fails_with(
+        source,
+        &["`@extern \"C\"` return type is not an FFI-admissible C type"],
     );
 }
 
@@ -209,13 +190,11 @@ fn extern_with_user_struct_param_is_rejected() {
         fn length(v: Vec2) -> Float32
         ";
 
-    let failure = typecheck_fail(&dedent(source));
-    let messages = diagnostic_messages(&failure);
-    assert!(
-        messages.iter().any(|m| {
-            m.contains("`@extern \"C\"` parameter `v`")
-                && m.contains("not an FFI-admissible C type")
-        }),
-        "expected user-struct rejection, got: {messages:?}",
+    assert_script_fails_with(
+        source,
+        &[
+            "`@extern \"C\"` parameter `v`",
+            "not an FFI-admissible C type",
+        ],
     );
 }

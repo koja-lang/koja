@@ -24,8 +24,12 @@
 
 use koja_typecheck::CheckedProgram;
 
+use koja_ast::ast::Statement;
 use koja_ast::identifier::Identifier;
 
+use crate::constant::IRConstantValue;
+use crate::cycle::break_type_cycles;
+use crate::elaborate::elaborate_script;
 use crate::enum_decl::IREnumDecl;
 use crate::error::LowerError;
 use crate::function::{IRBasicBlock, IRFunction, IRSourceDef, IRSymbol};
@@ -35,7 +39,10 @@ use crate::package::IRPackage;
 use crate::program::{collect_link_libraries, empty_global_stdlib_package};
 use crate::seal;
 use crate::struct_decl::IRStructDecl;
+use crate::tail_calls::rewrite_tail_calls;
 use crate::types::IRType;
+use crate::union_decl::discover_unions;
+use crate::yield_checks::{insert_yield_checks, insert_yield_checks_in_body};
 
 /// Sealed output of [`lower_script`]'s success path.
 ///
@@ -103,7 +110,7 @@ impl IRScript {
     /// mangled symbol. Mirrors [`Self::struct_decl`]; backends pass
     /// the `&IRSymbol` carried on [`crate::IRInstruction::LoadConst`]
     /// directly through the `IRSymbol: Borrow<str>` impl.
-    pub fn constant_value(&self, mangled: &str) -> Option<&crate::IRConstantValue> {
+    pub fn constant_value(&self, mangled: &str) -> Option<&IRConstantValue> {
         self.packages
             .iter()
             .find_map(|pkg| pkg.constants.get(mangled))
@@ -206,12 +213,12 @@ pub fn lower_script(checked: &CheckedProgram) -> Result<IRScript, LowerError> {
         packages,
         return_type,
     };
-    crate::union_decl::discover_unions(&mut script.packages);
-    crate::cycle::break_type_cycles(&mut script.packages);
-    crate::tail_calls::rewrite_tail_calls(&mut script.packages);
-    crate::yield_checks::insert_yield_checks(&mut script.packages);
-    crate::yield_checks::insert_yield_checks_in_body(&mut script.blocks);
-    crate::elaborate::elaborate_script(&mut script.packages, &mut script.blocks);
+    discover_unions(&mut script.packages, &script.blocks);
+    break_type_cycles(&mut script.packages);
+    rewrite_tail_calls(&mut script.packages);
+    insert_yield_checks(&mut script.packages);
+    insert_yield_checks_in_body(&mut script.blocks);
+    elaborate_script(&mut script.packages, &mut script.blocks);
     seal::seal_script(&script);
     Ok(script)
 }
@@ -222,8 +229,8 @@ pub fn lower_script(checked: &CheckedProgram) -> Result<IRScript, LowerError> {
 /// trailing expression). Panics if more than one file carries a
 /// body — the driver must dispatch script-mode lowering on a single
 /// source file.
-fn locate_script_body(checked: &CheckedProgram) -> &[koja_ast::ast::Statement] {
-    let mut body: Option<&[koja_ast::ast::Statement]> = None;
+fn locate_script_body(checked: &CheckedProgram) -> &[Statement] {
+    let mut body: Option<&[Statement]> = None;
     for pkg in &checked.packages {
         for file in &pkg.files {
             if let Some(stmts) = file.body.as_deref() {

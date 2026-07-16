@@ -10,9 +10,7 @@ use koja_ast::util::dedent;
 
 mod common;
 
-use common::{
-    diagnostic_messages, typecheck_script as typecheck, typecheck_script_fail as typecheck_fail,
-};
+use common::{assert_script_fails_with, typecheck_script as typecheck};
 
 #[test]
 fn constructs_and_matches_nested_struct() {
@@ -166,7 +164,7 @@ fn alias_to_nested_type_resolves() {
 
 #[test]
 fn nested_struct_unknown_field_diagnoses_against_nested_name() {
-    let failure = typecheck_fail(&dedent(
+    assert_script_fails_with(
         "
         struct Outer
           tag: Int
@@ -178,10 +176,6 @@ fn nested_struct_unknown_field_diagnoses_against_nested_name() {
 
           Outer.Inner{y: 1}
         ",
-    ));
-    let messages = diagnostic_messages(&failure);
-    assert!(
-        messages.iter().any(|m| m.contains("has no field `y`")),
-        "expected an unknown-field diagnostic, got: {messages:?}",
+        &["has no field `y`"],
     );
 }

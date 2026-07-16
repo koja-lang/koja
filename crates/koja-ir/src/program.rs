@@ -197,7 +197,7 @@ pub fn lower_program(
 
     let mut program = merge::merge(packages, entry_symbol);
     program.link_libraries = collect_link_libraries(program.packages.iter());
-    discover_unions(&mut program.packages);
+    discover_unions(&mut program.packages, &[]);
     break_type_cycles(&mut program.packages);
     rewrite_tail_calls(&mut program.packages);
     yield_checks::insert_yield_checks(&mut program.packages);

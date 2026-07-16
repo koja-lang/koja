@@ -26,13 +26,15 @@
 
 use std::path::PathBuf;
 
-use koja_ast::ast::{ExprKind, Function, Item, Pattern, Statement};
-use koja_ast::identifier::{Identifier, Resolution, ResolvedType};
+use koja_ast::ast::{ExprKind, Function, Pattern, Statement};
+use koja_ast::identifier::{GlobalRegistryId, Resolution, ResolvedType};
 use koja_ast::util::dedent;
 use koja_parser::{ParseMode, SourceFile, parse_program};
 use koja_typecheck::{CheckFailure, CheckedProgram, check_program};
 
-const PACKAGE: &str = "TestApp";
+mod common;
+
+use common::{PACKAGE, diagnostic_messages, find_function, global_id, registry_id};
 
 /// Minimal stub of `process.koja`. Provides every
 /// type referenced in this slice's spawn/receive surface. The full
@@ -125,28 +127,8 @@ fn parse_and_check(source: &str) -> Result<CheckedProgram, CheckFailure> {
     check_program(parsed)
 }
 
-fn diagnostic_messages(failure: &CheckFailure) -> Vec<String> {
-    failure
-        .diagnostics
-        .iter()
-        .map(|d| d.message.clone())
-        .collect()
-}
-
 fn main_fn(checked: &CheckedProgram) -> &Function {
-    let pkg = checked
-        .packages
-        .iter()
-        .find(|p| p.package == PACKAGE)
-        .expect("test package missing");
-    let file = pkg.files.first().expect("package has no files");
-    file.items
-        .iter()
-        .find_map(|item| match item {
-            Item::Function(function) if function.name == "main" => Some(function),
-            _ => None,
-        })
-        .expect("`fn main` missing")
+    find_function(checked, "main")
 }
 
 fn trailing_resolution(checked: &CheckedProgram) -> ResolvedType {
@@ -158,25 +140,10 @@ fn trailing_resolution(checked: &CheckedProgram) -> ResolvedType {
     }
 }
 
-fn global_id(checked: &CheckedProgram, name: &str) -> koja_ast::identifier::GlobalRegistryId {
-    checked
-        .registry
-        .lookup(&Identifier::new("Global", vec![name.to_string()]))
-        .map(|(id, _)| id)
-        .unwrap_or_else(|| panic!("`Global.{name}` missing from registry"))
-}
-
 /// Registry id for a nested `Global.Process.<name>` type (the cluster
 /// now lives under the `Process` owner rather than at `Global` root).
-fn process_id(checked: &CheckedProgram, name: &str) -> koja_ast::identifier::GlobalRegistryId {
-    checked
-        .registry
-        .lookup(&Identifier::new(
-            "Global",
-            vec!["Process".to_string(), name.to_string()],
-        ))
-        .map(|(id, _)| id)
-        .unwrap_or_else(|| panic!("`Global.Process.{name}` missing from registry"))
+fn process_id(checked: &CheckedProgram, name: &str) -> GlobalRegistryId {
+    registry_id(checked, "Global", &["Process", name])
 }
 
 #[test]

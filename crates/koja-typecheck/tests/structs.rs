@@ -12,114 +12,18 @@
 //! surface forms produce identical registry entries and resolution
 //! shape.
 
-use koja_ast::ast::{Expr, ExprKind, Item, Statement, StructDecl};
-use koja_ast::identifier::GlobalRegistryId;
+use koja_ast::ast::ExprKind;
 use koja_ast::identifier::{Identifier, Resolution, ResolvedType};
 use koja_ast::util::dedent;
-use koja_typecheck::{
-    CheckedProgram, Dispatch, FunctionSignature, GlobalKind, ResolvedStructField, StructDefinition,
-};
+use koja_typecheck::{Dispatch, GlobalKind, ResolvedStructField};
 
 mod common;
 
 use common::{
-    PACKAGE, diagnostic_messages, typecheck_script as typecheck,
-    typecheck_script_fail as typecheck_fail,
+    PACKAGE, assert_script_fails_with, diagnostic_messages, find_struct_decl, function_signature,
+    global_leaf, method_signature, package_leaf, registry_id, struct_definition, trailing_expr,
+    typecheck_script as typecheck, typecheck_script_fail as typecheck_fail,
 };
-
-fn struct_definition<'a>(checked: &'a CheckedProgram, name: &str) -> &'a StructDefinition {
-    let ident = Identifier::new(PACKAGE, vec![name.to_string()]);
-    let (_, entry) = checked
-        .registry
-        .lookup(&ident)
-        .unwrap_or_else(|| panic!("`{ident}` not found in registry"));
-    match &entry.kind {
-        GlobalKind::Struct(Some(definition)) => definition,
-        other => panic!("expected lifted Struct(Some(_)) for `{ident}`, got {other:?}"),
-    }
-}
-
-fn find_struct_decl<'a>(checked: &'a CheckedProgram, name: &str) -> &'a StructDecl {
-    let pkg = checked
-        .packages
-        .iter()
-        .find(|p| p.package == PACKAGE)
-        .expect("checked program is missing the test package");
-    for file in &pkg.files {
-        for item in &file.items {
-            if let Item::Struct(decl) = item
-                && decl.name() == name
-            {
-                return decl;
-            }
-        }
-    }
-    panic!("struct `{name}` not found in checked program");
-}
-
-fn script_trailing_expr(checked: &CheckedProgram) -> &Expr {
-    let pkg = checked
-        .packages
-        .iter()
-        .find(|p| p.package == PACKAGE)
-        .expect("checked program is missing the test package");
-    let file = pkg.files.first().expect("package has no files");
-    let body = file
-        .body
-        .as_deref()
-        .expect("script-mode file must keep statements on File.body");
-    match body.last().expect("script body is empty") {
-        Statement::Expr(expr) => expr,
-        other => panic!("expected trailing Statement::Expr, got {other:?}"),
-    }
-}
-
-fn global_leaf(checked: &CheckedProgram, name: &str) -> ResolvedType {
-    let ident = Identifier::new("Global", vec![name.to_string()]);
-    let (id, _) = checked
-        .registry
-        .lookup(&ident)
-        .unwrap_or_else(|| panic!("stdlib stub `Global.{name}` missing from registry"));
-    ResolvedType::leaf(Resolution::Global(id))
-}
-
-fn package_leaf(checked: &CheckedProgram, name: &str) -> ResolvedType {
-    let ident = Identifier::new(PACKAGE, vec![name.to_string()]);
-    let (id, _) = checked
-        .registry
-        .lookup(&ident)
-        .unwrap_or_else(|| panic!("`{ident}` missing from registry"));
-    ResolvedType::leaf(Resolution::Global(id))
-}
-
-fn lookup_function_signature<'a>(
-    checked: &'a CheckedProgram,
-    package: &str,
-    path: &[&str],
-) -> &'a FunctionSignature {
-    let ident = Identifier::new(package, path.iter().map(|s| (*s).to_string()).collect());
-    let (_, entry) = checked
-        .registry
-        .lookup(&ident)
-        .unwrap_or_else(|| panic!("`{ident}` not found in registry"));
-    match &entry.kind {
-        GlobalKind::Function(Some(sig)) => sig,
-        other => panic!("expected lifted Function(Some(_)) for `{ident}`, got {other:?}"),
-    }
-}
-
-fn lookup_struct_id(checked: &CheckedProgram, package: &str, name: &str) -> GlobalRegistryId {
-    let ident = Identifier::new(package, vec![name.to_string()]);
-    let (id, _) = checked
-        .registry
-        .lookup(&ident)
-        .unwrap_or_else(|| panic!("`{ident}` not found in registry"));
-    id
-}
-
-// ---------------------------------------------------------------------------
-// Decl registration / lift
-// ---------------------------------------------------------------------------
 
 #[test]
 fn struct_decl_registers_with_lifted_definition() {
@@ -207,10 +111,6 @@ fn nested_struct_field_resolves_to_inner_struct_id() {
     assert_eq!(outer.fields[1].ty, bool_ty);
 }
 
-// ---------------------------------------------------------------------------
-// Construction
-// ---------------------------------------------------------------------------
-
 #[test]
 fn struct_construction_resolves_to_struct_leaf() {
     let source = "
@@ -223,7 +123,7 @@ fn struct_construction_resolves_to_struct_leaf() {
         ";
 
     let checked = typecheck(&dedent(source));
-    let trailing = script_trailing_expr(&checked);
+    let trailing = trailing_expr(&checked);
     let expected = package_leaf(&checked, "Point");
     assert_eq!(trailing.resolution, expected);
 
@@ -250,14 +150,10 @@ fn struct_construction_accepts_out_of_order_fields() {
         ";
 
     let checked = typecheck(&dedent(source));
-    let trailing = script_trailing_expr(&checked);
+    let trailing = trailing_expr(&checked);
     let expected = package_leaf(&checked, "Point");
     assert_eq!(trailing.resolution, expected);
 }
-
-// ---------------------------------------------------------------------------
-// Field access
-// ---------------------------------------------------------------------------
 
 #[test]
 fn field_access_resolves_to_declared_field_type() {
@@ -271,7 +167,7 @@ fn field_access_resolves_to_declared_field_type() {
         ";
 
     let checked = typecheck(&dedent(source));
-    let trailing = script_trailing_expr(&checked);
+    let trailing = trailing_expr(&checked);
     let int = global_leaf(&checked, "Int");
     assert_eq!(trailing.resolution, int);
 
@@ -298,14 +194,10 @@ fn nested_field_access_resolves_through_inner_struct() {
         ";
 
     let checked = typecheck(&dedent(source));
-    let trailing = script_trailing_expr(&checked);
+    let trailing = trailing_expr(&checked);
     let int = global_leaf(&checked, "Int");
     assert_eq!(trailing.resolution, int);
 }
-
-// ---------------------------------------------------------------------------
-// Negative: feature gaps
-// ---------------------------------------------------------------------------
 
 #[test]
 fn annotated_struct_diagnoses_feature_gap() {
@@ -316,14 +208,7 @@ fn annotated_struct_diagnoses_feature_gap() {
         end
         ";
 
-    let failure = typecheck_fail(&dedent(source));
-    let messages = diagnostic_messages(&failure);
-    assert!(
-        messages
-            .iter()
-            .any(|m| m.contains("annotations on struct items")),
-        "expected struct-annotation gap diagnostic, got {messages:?}",
-    );
+    assert_script_fails_with(source, &["annotations on struct items"]);
 }
 
 #[test]
@@ -335,17 +220,8 @@ fn default_field_value_diagnoses_feature_gap() {
         end
         ";
 
-    let failure = typecheck_fail(&dedent(source));
-    let messages = diagnostic_messages(&failure);
-    assert!(
-        messages.iter().any(|m| m.contains("default field values")),
-        "expected default-field-value gap diagnostic, got {messages:?}",
-    );
+    assert_script_fails_with(source, &["default field values"]);
 }
-
-// ---------------------------------------------------------------------------
-// Negative: construction validation
-// ---------------------------------------------------------------------------
 
 #[test]
 fn unknown_struct_type_diagnoses() {
@@ -353,14 +229,7 @@ fn unknown_struct_type_diagnoses() {
           Missing{x: 1}
         ";
 
-    let failure = typecheck_fail(&dedent(source));
-    let messages = diagnostic_messages(&failure);
-    assert!(
-        messages
-            .iter()
-            .any(|m| m.contains("does not recognize the struct type `Missing`")),
-        "expected unknown-struct diagnostic, got {messages:?}",
-    );
+    assert_script_fails_with(source, &["does not recognize the struct type `Missing`"]);
 }
 
 #[test]
@@ -369,14 +238,7 @@ fn primitive_struct_construction_diagnoses() {
           Int{x: 1}
         ";
 
-    let failure = typecheck_fail(&dedent(source));
-    let messages = diagnostic_messages(&failure);
-    assert!(
-        messages
-            .iter()
-            .any(|m| m.contains("cannot construct primitive type `Global.Int`")),
-        "expected primitive-construction diagnostic, got {messages:?}",
-    );
+    assert_script_fails_with(source, &["cannot construct primitive type `Global.Int`"]);
 }
 
 #[test]
@@ -390,14 +252,7 @@ fn unknown_field_in_construction_diagnoses() {
           Point{x: 1, y: 2, z: 3}
         ";
 
-    let failure = typecheck_fail(&dedent(source));
-    let messages = diagnostic_messages(&failure);
-    assert!(
-        messages
-            .iter()
-            .any(|m| m.contains("`TestApp.Point` has no field `z`")),
-        "expected unknown-field diagnostic, got {messages:?}",
-    );
+    assert_script_fails_with(source, &["`TestApp.Point` has no field `z`"]);
 }
 
 #[test]
@@ -411,14 +266,7 @@ fn missing_field_in_construction_diagnoses() {
           Point{x: 1}
         ";
 
-    let failure = typecheck_fail(&dedent(source));
-    let messages = diagnostic_messages(&failure);
-    assert!(
-        messages
-            .iter()
-            .any(|m| m.contains("missing field `y`") && m.contains("`TestApp.Point`")),
-        "expected missing-field diagnostic, got {messages:?}",
-    );
+    assert_script_fails_with(source, &["missing field `y`", "`TestApp.Point`"]);
 }
 
 #[test]
@@ -432,14 +280,7 @@ fn duplicate_field_in_construction_diagnoses() {
           Point{x: 1, x: 2, y: 3}
         ";
 
-    let failure = typecheck_fail(&dedent(source));
-    let messages = diagnostic_messages(&failure);
-    assert!(
-        messages
-            .iter()
-            .any(|m| m.contains("field `x`") && m.contains("initialized twice")),
-        "expected duplicate-field diagnostic, got {messages:?}",
-    );
+    assert_script_fails_with(source, &["field `x`", "initialized twice"]);
 }
 
 #[test]
@@ -453,19 +294,8 @@ fn wrong_field_type_in_construction_diagnoses() {
           Point{x: true, y: 2}
         ";
 
-    let failure = typecheck_fail(&dedent(source));
-    let messages = diagnostic_messages(&failure);
-    assert!(
-        messages.iter().any(|m| m.contains("field `x`")
-            && m.contains("expects `Int`")
-            && m.contains("got `Bool`")),
-        "expected wrong-field-type diagnostic, got {messages:?}",
-    );
+    assert_script_fails_with(source, &["field `x`", "expects `Int`", "got `Bool`"]);
 }
-
-// ---------------------------------------------------------------------------
-// Negative: field access validation
-// ---------------------------------------------------------------------------
 
 #[test]
 fn unknown_field_on_struct_access_diagnoses() {
@@ -478,14 +308,7 @@ fn unknown_field_on_struct_access_diagnoses() {
           Point{x: 1, y: 2}.z
         ";
 
-    let failure = typecheck_fail(&dedent(source));
-    let messages = diagnostic_messages(&failure);
-    assert!(
-        messages
-            .iter()
-            .any(|m| m.contains("`TestApp.Point` has no field `z`")),
-        "expected unknown-field-access diagnostic, got {messages:?}",
-    );
+    assert_script_fails_with(source, &["`TestApp.Point` has no field `z`"]);
 }
 
 #[test]
@@ -494,41 +317,11 @@ fn field_access_on_non_struct_diagnoses() {
           1.x
         ";
 
-    let failure = typecheck_fail(&dedent(source));
-    let messages = diagnostic_messages(&failure);
-    assert!(
-        messages
-            .iter()
-            .any(|m| m.contains("`Global.Int` has no field `x`")),
-        "expected no-field diagnostic on `Int`, got {messages:?}",
-    );
+    assert_script_fails_with(source, &["`Global.Int` has no field `x`"]);
 }
 
 fn field_name(field: &ResolvedStructField) -> &str {
     field.name.as_str()
-}
-
-// ---------------------------------------------------------------------------
-// Static methods (inline + impl-block forms)
-// ---------------------------------------------------------------------------
-
-fn method_signature<'a>(
-    checked: &'a CheckedProgram,
-    type_name: &str,
-    method_name: &str,
-) -> &'a FunctionSignature {
-    let identifier = Identifier::new(
-        PACKAGE,
-        vec![type_name.to_string(), method_name.to_string()],
-    );
-    let (_, entry) = checked
-        .registry
-        .lookup(&identifier)
-        .unwrap_or_else(|| panic!("`{identifier}` not registered"));
-    match &entry.kind {
-        GlobalKind::Function(Some(signature)) => signature,
-        other => panic!("expected lifted Function for `{identifier}`, got {other:?}"),
-    }
 }
 
 #[test]
@@ -613,14 +406,7 @@ fn inline_and_impl_static_method_with_same_name_collide() {
         end
         ";
 
-    let failure = typecheck_fail(&dedent(source));
-    let messages = diagnostic_messages(&failure);
-    assert!(
-        messages
-            .iter()
-            .any(|m| m.contains("`TestApp.Point.origin`") && m.contains("already defined")),
-        "expected duplicate-method diagnostic, got {messages:?}",
-    );
+    assert_script_fails_with(source, &["`TestApp.Point.origin`", "already defined"]);
 }
 
 #[test]
@@ -639,7 +425,7 @@ fn static_method_call_resolves_to_method_return_type() {
         ";
 
     let checked = typecheck(&dedent(source));
-    let trailing = script_trailing_expr(&checked);
+    let trailing = trailing_expr(&checked);
     assert_eq!(trailing.resolution, package_leaf(&checked, "Point"));
 
     let ExprKind::MethodCall {
@@ -670,7 +456,7 @@ fn static_method_with_args_validates_arity_and_types() {
         ";
 
     let checked = typecheck(&dedent(source));
-    let trailing = script_trailing_expr(&checked);
+    let trailing = trailing_expr(&checked);
     assert_eq!(trailing.resolution, global_leaf(&checked, "Int"));
 }
 
@@ -688,14 +474,7 @@ fn static_method_call_arity_mismatch_diagnoses() {
           Point.make(1)
         ";
 
-    let failure = typecheck_fail(&dedent(source));
-    let messages = diagnostic_messages(&failure);
-    assert!(
-        messages
-            .iter()
-            .any(|m| m.contains("`TestApp.Point.make`") && m.contains("expects 2 arguments")),
-        "expected arity-mismatch diagnostic, got {messages:?}",
-    );
+    assert_script_fails_with(source, &["`TestApp.Point.make`", "expects 2 arguments"]);
 }
 
 #[test]
@@ -712,14 +491,14 @@ fn static_method_call_arg_type_mismatch_diagnoses() {
           Point.make(true)
         ";
 
-    let failure = typecheck_fail(&dedent(source));
-    let messages = diagnostic_messages(&failure);
-    assert!(
-        messages.iter().any(|m| m.contains("argument `value`")
-            && m.contains("`TestApp.Point.make`")
-            && m.contains("expects `Int`")
-            && m.contains("got `Bool`")),
-        "expected arg-type-mismatch diagnostic, got {messages:?}",
+    assert_script_fails_with(
+        source,
+        &[
+            "argument `value`",
+            "`TestApp.Point.make`",
+            "expects `Int`",
+            "got `Bool`",
+        ],
     );
 }
 
@@ -734,13 +513,9 @@ fn nonexistent_static_method_diagnoses() {
           Point.frobnicate()
         ";
 
-    let failure = typecheck_fail(&dedent(source));
-    let messages = diagnostic_messages(&failure);
-    assert!(
-        messages
-            .iter()
-            .any(|m| m.contains("`TestApp.Point` has no static method `frobnicate`")),
-        "expected nonexistent-method diagnostic, got {messages:?}",
+    assert_script_fails_with(
+        source,
+        &["`TestApp.Point` has no static method `frobnicate`"],
     );
 }
 
@@ -757,11 +532,11 @@ fn instance_method_in_struct_body_lifts_with_dispatch_instance() {
         ";
 
     let checked = typecheck(&dedent(source));
-    let signature = lookup_function_signature(&checked, "TestApp", &["Point", "distance"]);
+    let signature = function_signature(&checked, "TestApp", &["Point", "distance"]);
     assert_eq!(signature.dispatch, Dispatch::Instance);
     assert_eq!(signature.params.len(), 1, "self lifts as a real param");
     assert_eq!(signature.params[0].name, "self");
-    let receiver_id = lookup_struct_id(&checked, "TestApp", "Point");
+    let receiver_id = registry_id(&checked, "TestApp", &["Point"]);
     assert_eq!(
         signature.params[0].ty,
         ResolvedType::leaf(Resolution::Global(receiver_id)),
@@ -784,10 +559,10 @@ fn instance_method_in_impl_block_lifts_with_dispatch_instance() {
         ";
 
     let checked = typecheck(&dedent(source));
-    let signature = lookup_function_signature(&checked, "TestApp", &["Point", "distance"]);
+    let signature = function_signature(&checked, "TestApp", &["Point", "distance"]);
     assert_eq!(signature.dispatch, Dispatch::Instance);
     assert_eq!(signature.params.len(), 1);
-    let receiver_id = lookup_struct_id(&checked, "TestApp", "Point");
+    let receiver_id = registry_id(&checked, "TestApp", &["Point"]);
     assert_eq!(
         signature.params[0].ty,
         ResolvedType::leaf(Resolution::Global(receiver_id)),
@@ -856,7 +631,7 @@ fn instance_method_call_resolves_to_method_return_type() {
         ";
 
     let checked = typecheck(&dedent(source));
-    let trailing = script_trailing_expr(&checked);
+    let trailing = trailing_expr(&checked);
     assert_eq!(
         trailing.resolution,
         global_leaf(&checked, "Int"),
@@ -882,14 +657,7 @@ fn instance_method_called_as_static_diagnoses() {
           Point.distance()
         ";
 
-    let failure = typecheck_fail(&dedent(source));
-    let messages = diagnostic_messages(&failure);
-    assert!(
-        messages
-            .iter()
-            .any(|m| m.contains("instance method") && m.contains("static")),
-        "expected instance-as-static diagnostic, got {messages:?}",
-    );
+    assert_script_fails_with(source, &["instance method", "static"]);
 }
 
 #[test]
@@ -907,14 +675,7 @@ fn static_method_called_on_instance_diagnoses() {
           Point{x: 1, y: 2}.origin()
         ";
 
-    let failure = typecheck_fail(&dedent(source));
-    let messages = diagnostic_messages(&failure);
-    assert!(
-        messages
-            .iter()
-            .any(|m| m.contains("static method") && m.contains("on a value")),
-        "expected static-on-instance diagnostic, got {messages:?}",
-    );
+    assert_script_fails_with(source, &["static method", "on a value"]);
 }
 
 #[test]
@@ -959,14 +720,7 @@ fn impl_with_extra_trait_args_diagnoses_arity() {
         end
         ";
 
-    let failure = typecheck_fail(&dedent(source));
-    let messages = diagnostic_messages(&failure);
-    assert!(
-        messages
-            .iter()
-            .any(|m| m.contains("expects 0 type arguments, got 1")),
-        "expected protocol arity diagnostic, got {messages:?}",
-    );
+    assert_script_fails_with(source, &["expects 0 type arguments, got 1"]);
 }
 
 #[test]
@@ -1032,15 +786,9 @@ fn generic_protocol_impl_with_wrong_concrete_arg_diagnoses() {
         end
         ";
 
-    let failure = typecheck_fail(&dedent(source));
-    let messages = diagnostic_messages(&failure);
-    assert!(
-        messages
-            .iter()
-            .any(|m| m.contains("does not match protocol")
-                && m.contains("Global.String")
-                && m.contains("Global.Int")),
-        "expected substituted-type mismatch diagnostic, got {messages:?}",
+    assert_script_fails_with(
+        source,
+        &["does not match protocol", "Global.String", "Global.Int"],
     );
 }
 
@@ -1227,14 +975,7 @@ fn trait_impl_on_concrete_target_args_diagnoses_mismatched_receiver() {
         end
         ";
 
-    let failure = typecheck_fail(&dedent(source));
-    let messages = diagnostic_messages(&failure);
-    assert!(
-        messages
-            .iter()
-            .any(|m| m.contains("no method `render`") && m.contains("Bag")),
-        "expected 'no method on receiver' diagnostic, got {messages:?}",
-    );
+    assert_script_fails_with(source, &["no method `render`", "Bag"]);
 }
 
 #[test]
@@ -1266,14 +1007,7 @@ fn general_and_specialized_trait_impls_collide_on_shared_method_name() {
         end
         ";
 
-    let failure = typecheck_fail(&dedent(source));
-    let messages = diagnostic_messages(&failure);
-    assert!(
-        messages
-            .iter()
-            .any(|m| m.contains("already defined") && m.contains("Bag.render")),
-        "expected duplicate-method/impl diagnostic, got {messages:?}",
-    );
+    assert_script_fails_with(source, &["already defined", "Bag.render"]);
 }
 
 #[test]
@@ -1288,14 +1022,7 @@ fn impl_with_type_alias_member_diagnoses_feature_gap() {
         end
         ";
 
-    let failure = typecheck_fail(&dedent(source));
-    let messages = diagnostic_messages(&failure);
-    assert!(
-        messages
-            .iter()
-            .any(|m| m.contains("`type` aliases inside `extend` blocks")),
-        "expected extend-typealias gap diagnostic, got {messages:?}",
-    );
+    assert_script_fails_with(source, &["`type` aliases inside `extend` blocks"]);
 }
 
 #[test]
@@ -1308,19 +1035,8 @@ fn impl_on_unknown_type_diagnoses() {
         end
         ";
 
-    let failure = typecheck_fail(&dedent(source));
-    let messages = diagnostic_messages(&failure);
-    assert!(
-        messages
-            .iter()
-            .any(|m| m.contains("cannot extend unknown type `Vector`")),
-        "expected extend-unknown-type diagnostic, got {messages:?}",
-    );
+    assert_script_fails_with(source, &["cannot extend unknown type `Vector`"]);
 }
-
-// ---------------------------------------------------------------------------
-// Generics: definition, lift, construction inference
-// ---------------------------------------------------------------------------
 
 #[test]
 fn generic_struct_lifts_with_type_params_and_typeparam_field_resolutions() {
@@ -1332,7 +1048,7 @@ fn generic_struct_lifts_with_type_params_and_typeparam_field_resolutions() {
         ";
 
     let checked = typecheck(&dedent(source));
-    let pair_id = lookup_struct_id(&checked, PACKAGE, "Pair");
+    let pair_id = registry_id(&checked, PACKAGE, &["Pair"]);
     let entry = checked
         .registry
         .get(pair_id)
@@ -1366,10 +1082,10 @@ fn generic_struct_construction_infers_type_args_from_field_values() {
         ";
 
     let checked = typecheck(&dedent(source));
-    let pair_id = lookup_struct_id(&checked, PACKAGE, "Pair");
+    let pair_id = registry_id(&checked, PACKAGE, &["Pair"]);
     let int = global_leaf(&checked, "Int");
     let string = global_leaf(&checked, "String");
-    let expr = script_trailing_expr(&checked);
+    let expr = trailing_expr(&checked);
     assert_eq!(
         expr.resolution,
         ResolvedType::Named {
@@ -1390,13 +1106,9 @@ fn generic_struct_construction_with_conflicting_inferences_diagnoses() {
           Pair{a: 1, b: \"x\"}
         ";
 
-    let failure = typecheck_fail(&dedent(source));
-    let messages = diagnostic_messages(&failure);
-    assert!(
-        messages
-            .iter()
-            .any(|m| m.contains("type parameter `T` of `TestApp.Pair` cannot be both")),
-        "expected type-param conflict diagnostic, got {messages:?}",
+    assert_script_fails_with(
+        source,
+        &["type parameter `T` of `TestApp.Pair` cannot be both"],
     );
 }
 
@@ -1410,14 +1122,7 @@ fn generic_struct_phantom_type_param_diagnoses() {
           Phantom{marker: 1}
         ";
 
-    let failure = typecheck_fail(&dedent(source));
-    let messages = diagnostic_messages(&failure);
-    assert!(
-        messages
-            .iter()
-            .any(|m| m.contains("cannot infer type parameter `T`")),
-        "expected Phantom-guard diagnostic, got {messages:?}",
-    );
+    assert_script_fails_with(source, &["cannot infer type parameter `T`"]);
 }
 
 #[test]
@@ -1435,8 +1140,8 @@ fn generic_struct_nested_in_generic_struct_resolves_through_typeparam_args() {
 
     let checked = typecheck(&dedent(source));
     let box_definition = struct_definition(&checked, "Box");
-    let box_id = lookup_struct_id(&checked, PACKAGE, "Box");
-    let pair_id = lookup_struct_id(&checked, PACKAGE, "Pair");
+    let box_id = registry_id(&checked, PACKAGE, &["Box"]);
+    let pair_id = registry_id(&checked, PACKAGE, &["Pair"]);
     let int = global_leaf(&checked, "Int");
 
     let inner = &box_definition.fields[0].ty;
@@ -1459,11 +1164,6 @@ fn generic_struct_nested_in_generic_struct_resolves_through_typeparam_args() {
     assert_eq!(type_args[1], int);
 }
 
-// ---------------------------------------------------------------------------
-// Field-as-callable: `recv.field(args)` desugars to `(recv.field)(args)`
-// when there's no method by that name and the field is fn-typed.
-// ---------------------------------------------------------------------------
-
 #[test]
 fn instance_method_call_on_fn_field_rewrites_to_field_access_call() {
     let source = "
@@ -1479,7 +1179,7 @@ fn instance_method_call_on_fn_field_rewrites_to_field_access_call() {
 
     let checked = typecheck(&dedent(source));
     let int = global_leaf(&checked, "Int");
-    let call = script_trailing_expr(&checked);
+    let call = trailing_expr(&checked);
     assert_eq!(call.resolution, int, "field call should resolve to Int");
 
     let ExprKind::Call { callee, args, .. } = &call.kind else {
@@ -1509,7 +1209,7 @@ fn instance_method_call_on_fn_field_with_args_validates_signature() {
 
     let checked = typecheck(&dedent(source));
     let int = global_leaf(&checked, "Int");
-    let call = script_trailing_expr(&checked);
+    let call = trailing_expr(&checked);
     assert_eq!(call.resolution, int);
 
     let ExprKind::Call { args, .. } = &call.kind else {
@@ -1531,14 +1231,7 @@ fn instance_method_call_on_fn_field_arg_type_mismatch_diagnoses() {
           t.work(true)
         ";
 
-    let failure = typecheck_fail(&dedent(source));
-    let messages = diagnostic_messages(&failure);
-    assert!(
-        messages
-            .iter()
-            .any(|m| m.contains("expects `Int`") && m.contains("got `Bool`")),
-        "expected arg-type diagnostic, got {messages:?}",
-    );
+    assert_script_fails_with(source, &["expects `Int`", "got `Bool`"]);
 }
 
 #[test]
@@ -1552,10 +1245,5 @@ fn instance_method_call_on_non_fn_field_falls_through_to_method_diagnostic() {
           t.work()
         ";
 
-    let failure = typecheck_fail(&dedent(source));
-    let messages = diagnostic_messages(&failure);
-    assert!(
-        messages.iter().any(|m| m.contains("no method `work`")),
-        "expected no-method diagnostic for non-fn field, got {messages:?}",
-    );
+    assert_script_fails_with(source, &["no method `work`"]);
 }

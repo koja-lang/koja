@@ -6,50 +6,18 @@
 //! and the bidirectional `List<T>` hint flow.
 
 use koja_ast::ast::{Expr, ExprKind, Literal, Statement};
-use koja_ast::identifier::{Identifier, Resolution, ResolvedType};
+use koja_ast::identifier::ResolvedType;
 use koja_ast::util::dedent;
 use koja_typecheck::CheckedProgram;
 
 mod common;
 
-use common::{PACKAGE, typecheck_script as typecheck};
-
-fn body_statements(checked: &CheckedProgram) -> &[Statement] {
-    let pkg = checked
-        .packages
-        .iter()
-        .find(|p| p.package == PACKAGE)
-        .expect("checked program is missing the test package");
-    let file = pkg.files.first().expect("package has no files");
-    file.body
-        .as_deref()
-        .expect("script-mode file must keep statements on File.body")
-}
-
-fn trailing_expr(checked: &CheckedProgram) -> &Expr {
-    let body = body_statements(checked);
-    let trailing = body.last().expect("expected at least one statement");
-    match trailing {
-        Statement::Expr(expr) => expr,
-        other => panic!("expected Statement::Expr as trailing statement, got {other:?}"),
-    }
-}
+use common::{
+    global_leaf, global_named, script_body, trailing_expr, typecheck_script as typecheck,
+};
 
 fn list_named_type(checked: &CheckedProgram, element: &str) -> ResolvedType {
-    let list_ident = Identifier::new("Global", vec!["List".to_string()]);
-    let (list_id, _) = checked
-        .registry
-        .lookup(&list_ident)
-        .unwrap_or_else(|| panic!("autoimported `Global.List` missing from registry"));
-    let element_ident = Identifier::new("Global", vec![element.to_string()]);
-    let (element_id, _) = checked
-        .registry
-        .lookup(&element_ident)
-        .unwrap_or_else(|| panic!("stdlib stub `Global.{element}` missing from registry"));
-    ResolvedType::Named {
-        resolution: Resolution::Global(list_id),
-        type_args: vec![ResolvedType::leaf(Resolution::Global(element_id))],
-    }
+    global_named(checked, "List", vec![global_leaf(checked, element)])
 }
 
 fn assert_list_literal(expr: &Expr) -> &[Expr] {
@@ -66,7 +34,7 @@ fn empty_list_literal_pins_element_from_binding_annotation() {
         my_list
         ";
     let checked = typecheck(&dedent(source));
-    let body = body_statements(&checked);
+    let body = script_body(&checked);
     let assignment = body.first().expect("missing assignment");
     let Statement::Assignment { value, .. } = assignment else {
         panic!("expected Statement::Assignment, got {assignment:?}");

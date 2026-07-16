@@ -9,17 +9,17 @@ Koja is a statically typed, compiled language targeting native binaries via LLVM
 - [Lexical Structure](#lexical-structure): Comments, Identifiers, Keywords, Operators, Numeric Literals, Line Continuation
 - [Variables and Constants](#variables-and-constants): Assignment, Type Annotations, Compound Assignment, Constants
 - [Functions](#functions): Declaration, Private Declarations, `return`, Parameters
-- [Control Flow](#control-flow): `if`/`else`, `while`, `loop`/`break`, `for`...`in`, Ternary
+- [Control Flow](#control-flow): `if`/`else`, `unless`, `while`, `loop`/`break`, `for`...`in`, Ternary
 - [Types](#types): Primitives, Numeric Widening, Arithmetic Faults, Unit, Strings, Structs, Enums, Union Types, Generics
 - [Pattern Matching](#pattern-matching): `match`, OR Patterns, `cond`
 - [Closures and Function Types](#closures-and-function-types): Block Closures, Short Closures, Capture Semantics, Function Types
 - [Value Semantics](#value-semantics): Rules, Copy Cost, Field Access
 - [Protocols](#protocols): Behavioral Contracts, Static Dispatch
-- [Packages](#packages): Transparent Files, Visibility, Aliases
+- [Packages](#packages): Transparent Files, Visibility, Aliases, Dependencies
 - [Concurrency](#concurrency): Processes, `spawn`/`receive`, `Ref`, `ReplyTo`, `Task`
 - [Standard Library](#standard-library): Built-in Functions, Core Types, Collections, String Methods, Binary/Bits, File I/O, Parsing, URI, Base, Path, Protocols
 - [C FFI](#c-ffi): `@extern "C"`, `CPtr<T>`, `CString`
-- [Annotations](#annotations): `@doc`
+- [Annotations](#annotations): `@doc`, `@test`
 - [Tooling](#tooling): CLI Commands, LSP, Formatter
 
 ---
@@ -182,7 +182,7 @@ end
 
 Functions without a return type return `()`. Parameters require explicit types. Return type annotation is required if the function returns a value.
 
-A compiled program's entry point is a type implementing the `Process` protocol, named by `entry` in `koja.toml`. There is no `fn main`. Scripts (`.kojs`) execute top-level statements directly. Most functions are declared inside `impl` blocks on a struct or enum. See [Impl Functions](#impl-functions) and [Static Functions](#static-functions).
+A compiled program's entry point is a type implementing the `Process` protocol, named by `entry` in `koja.toml`. There is no `fn main`. Scripts (`.kojs`) execute top-level statements directly. Functions may be declared at the top level or inside struct, enum, and `impl` bodies. See [Structs](#structs), [Protocols](#protocols), and [Static Functions](#static-functions).
 
 ### Private Declarations
 
@@ -268,6 +268,17 @@ end
 `if`/`else` can be used as value-producing expressions when both branches produce values.
 
 There is no `else if`. For multi-way branching, use [`cond`](#cond).
+
+### `unless`
+
+`unless` executes its body when the condition is `false`. It is a
+single-branch conditional and does not accept `else`.
+
+```koja
+unless ready?
+  "not ready".print()
+end
+```
 
 ### `while`
 
@@ -1112,7 +1123,7 @@ Vendored = { git = "https://git.example.com/vendored.git", branch = "main" }
 Greeter = { path = "libs/greeter" }
 ```
 
-Each dependency declares exactly one of `path`, `git`, or `github` (an `owner/repo` shorthand for `https://github.com/owner/repo`). Git dependencies accept at most one of `tag`, `branch`, or `rev`; with none, the remote's default branch is used. There is no version solver: a ref resolves to a commit, and one version of a package name exists per build.
+Each dependency declares exactly one of `path`, `git`, or `github` (an `owner/repo` shorthand for `https://github.com/owner/repo`). Git dependencies accept at most one of `tag`, `branch`, or `rev`. With none, the remote's default branch is used. There is no version solver: a ref resolves to a commit, and one version of a package name exists per build.
 
 `koja deps get` is the only command that touches the network. It resolves each ref to a commit SHA, records the pin in `koja.lock` (committed, so builds are reproducible), caches a mirror clone under `~/.koja/cache`, and copies the pinned tree into the project's `deps/` directory (gitignored and read-only, always regenerable). Dependencies of dependencies resolve transitively, and the root project's lockfile is the only one consulted.
 
@@ -1122,7 +1133,7 @@ Every other command is offline. `build`, `check`, `run`, `test`, and `doc` verif
 error: dependency `postgres` is not pinned in koja.lock (koja.toml changed?), run `koja deps get`
 ```
 
-`koja deps` prints each dependency with its pin and local state. `koja deps update [name]` re-resolves refs against their remotes (moving a `branch` pin forward). `koja deps clean` removes `deps/`; with `--cache` it also purges the global mirror cache.
+`koja deps` prints each dependency with its pin and local state. `koja deps update [name]` re-resolves refs against their remotes (moving a `branch` pin forward). `koja deps clean` removes `deps/`. With `--cache` it also purges the global mirror cache.
 
 Private repositories work through the ambient git configuration: SSH agents for `git@` URLs, credential helpers for https, and `insteadOf` rewrites in CI. Credentials never appear in `koja.toml` or `koja.lock`.
 
@@ -1548,7 +1559,7 @@ Functions:
 `Set<T>` implements `ListLiteral<T>`, so list literal syntax constructs a set when the target type is `Set<T>`:
 
 ```koja
-names: Set<String> = ["alice", "bob", "alice"]  # Set with 3 elements
+names: Set<String> = ["alice", "bob", "alice"]  # Set with 2 elements
 ```
 
 ### String Methods
@@ -1622,7 +1633,7 @@ msg = <<0x01, port::16>>
 
 Segment modifiers: `::N` (bit width), `::N byte` (byte width), `signed`/`unsigned`, `big`/`little`, type annotations (`: Float32`, `: Int16`). Byte-aligned totals produce `Binary`, non-byte-aligned produce `Bits`. String literals can appear as segments for protocol framing.
 
-`Binary`-typed values splice their bytes into the literal, so a framed message builds in one expression. A bare segment is a splice whenever its value is `Binary`-typed; `payload: Binary` spells it out explicitly. Splices take no width or endianness modifiers, and the fixed-width segments around a splice must total whole bytes:
+`Binary`-typed values splice their bytes into the literal, so a framed message builds in one expression. A bare segment is a splice whenever its value is `Binary`-typed. `payload: Binary` spells it out explicitly. Splices take no width or endianness modifiers, and the fixed-width segments around a splice must total whole bytes:
 
 ```koja
 frame = <<0x51, (payload.byte_size() + 4)::32, payload>>
@@ -2141,23 +2152,28 @@ Doc strings support Markdown and are rendered by `koja doc`.
 
 ### `@test`
 
-Marks a function as a test case. `koja test` discovers and runs all `@test`-annotated functions in `src/` and `test/` directories.
+Marks a function as a test case. `koja test` discovers and runs all
+`@test`-annotated functions in `src/` and `test/` directories. Test
+functions return `Result<Bool, String>`. Any `Result.Ok` passes, while
+`Result.Err(message)` fails with the given message.
 
 ```koja
-@test
-fn test_addition
-  result = add(2, 3)
-  assert(result == 5, "expected 5")
-end
+struct AdditionTest
+  @test "adds two integers"
+  fn test_addition -> Result<Bool, String>
+    result = add(2, 3)
 
-@test "handles negative numbers"
-fn test_negative
-  result = add(-1, 1)
-  assert(result == 0, "expected 0")
+    unless result == 5
+      return Result.Err("expected 5, got #{result}")
+    end
+
+    Result.Ok(true)
+  end
 end
 ```
 
-An optional string after `@test` provides a description printed during the test run. Tests abort on first failure.
+An optional string after `@test` provides a description printed during the
+test run. The runner reports every discovered test even when some fail.
 
 ---
 

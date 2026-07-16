@@ -6,58 +6,22 @@
 //! resolutions, and the bidirectional `Map<K, V>` hint flow.
 
 use koja_ast::ast::{Expr, ExprKind, Literal, Statement};
-use koja_ast::identifier::{Identifier, Resolution, ResolvedType};
+use koja_ast::identifier::ResolvedType;
 use koja_ast::util::dedent;
 use koja_typecheck::CheckedProgram;
 
 mod common;
 
-use common::{PACKAGE, typecheck_script as typecheck};
-
-fn body_statements(checked: &CheckedProgram) -> &[Statement] {
-    let pkg = checked
-        .packages
-        .iter()
-        .find(|p| p.package == PACKAGE)
-        .expect("checked program is missing the test package");
-    let file = pkg.files.first().expect("package has no files");
-    file.body
-        .as_deref()
-        .expect("script-mode file must keep statements on File.body")
-}
-
-fn trailing_expr(checked: &CheckedProgram) -> &Expr {
-    let body = body_statements(checked);
-    let trailing = body.last().expect("expected at least one statement");
-    match trailing {
-        Statement::Expr(expr) => expr,
-        other => panic!("expected Statement::Expr as trailing statement, got {other:?}"),
-    }
-}
+use common::{
+    global_leaf, global_named, script_body, trailing_expr, typecheck_script as typecheck,
+};
 
 fn map_named_type(checked: &CheckedProgram, key: &str, value: &str) -> ResolvedType {
-    let map_ident = Identifier::new("Global", vec!["Map".to_string()]);
-    let (map_id, _) = checked
-        .registry
-        .lookup(&map_ident)
-        .unwrap_or_else(|| panic!("autoimported `Global.Map` missing from registry"));
-    let key_ident = Identifier::new("Global", vec![key.to_string()]);
-    let (key_id, _) = checked
-        .registry
-        .lookup(&key_ident)
-        .unwrap_or_else(|| panic!("stdlib stub `Global.{key}` missing from registry"));
-    let value_ident = Identifier::new("Global", vec![value.to_string()]);
-    let (value_id, _) = checked
-        .registry
-        .lookup(&value_ident)
-        .unwrap_or_else(|| panic!("stdlib stub `Global.{value}` missing from registry"));
-    ResolvedType::Named {
-        resolution: Resolution::Global(map_id),
-        type_args: vec![
-            ResolvedType::leaf(Resolution::Global(key_id)),
-            ResolvedType::leaf(Resolution::Global(value_id)),
-        ],
-    }
+    global_named(
+        checked,
+        "Map",
+        vec![global_leaf(checked, key), global_leaf(checked, value)],
+    )
 }
 
 fn assert_map_literal(expr: &Expr) -> &[(Expr, Expr)] {
@@ -74,7 +38,7 @@ fn empty_map_literal_pins_entry_types_from_binding_annotation() {
         my_map
         ";
     let checked = typecheck(&dedent(source));
-    let body = body_statements(&checked);
+    let body = script_body(&checked);
     let assignment = body.first().expect("missing assignment");
     let Statement::Assignment { value, .. } = assignment else {
         panic!("expected Statement::Assignment, got {assignment:?}");
@@ -123,7 +87,7 @@ fn map_literal_typed_binding_pins_entry_types() {
         counts
         ";
     let checked = typecheck(&dedent(source));
-    let body = body_statements(&checked);
+    let body = script_body(&checked);
     let assignment = body.first().expect("missing assignment");
     let Statement::Assignment { value, .. } = assignment else {
         panic!("expected Statement::Assignment, got {assignment:?}");

@@ -15,18 +15,7 @@ use koja_typecheck::GlobalKind;
 
 mod common;
 
-use common::{PACKAGE, typecheck_script as typecheck};
-
-fn lookup_id(
-    checked: &koja_typecheck::CheckedProgram,
-    name: &str,
-) -> koja_ast::identifier::GlobalRegistryId {
-    checked
-        .registry
-        .lookup(&Identifier::new(PACKAGE, vec![name.to_string()]))
-        .map(|(id, _)| id)
-        .unwrap_or_else(|| panic!("`{name}` not registered"))
-}
+use common::{PACKAGE, registry_id, typecheck_script as typecheck};
 
 #[test]
 fn self_in_protocol_return_resolves_to_protocol_slot_zero_typeparam() {
@@ -40,7 +29,7 @@ fn self_in_protocol_return_resolves_to_protocol_slot_zero_typeparam() {
         ";
 
     let checked = typecheck(&dedent(source));
-    let builder_id = lookup_id(&checked, "Builder");
+    let builder_id = registry_id(&checked, PACKAGE, &["Builder"]);
     let entry = checked.registry.get(builder_id).expect("Builder entry");
     let GlobalKind::Protocol(Some(definition)) = &entry.kind else {
         panic!("expected lifted protocol, got {:?}", entry.kind);
@@ -77,7 +66,7 @@ fn self_in_protocol_param_resolves_to_protocol_slot_zero_typeparam() {
         ";
 
     let checked = typecheck(&dedent(source));
-    let equal_id = lookup_id(&checked, "Equal");
+    let equal_id = registry_id(&checked, PACKAGE, &["Equal"]);
     let entry = checked.registry.get(equal_id).expect("Equal entry");
     let GlobalKind::Protocol(Some(definition)) = &entry.kind else {
         panic!("expected lifted protocol, got {:?}", entry.kind);

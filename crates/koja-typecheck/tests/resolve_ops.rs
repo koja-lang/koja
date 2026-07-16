@@ -5,53 +5,12 @@
 //! expression's `resolution`. Error paths assert a diagnostic on
 //! ill-typed programs.
 
-use koja_ast::ast::Statement;
-use koja_ast::identifier::{Identifier, Resolution, ResolvedType};
-use koja_typecheck::CheckedProgram;
-
 mod common;
 
-use common::{PACKAGE, typecheck_script as typecheck, typecheck_script_fail as typecheck_fail};
-
-fn trailing_resolution(checked: &CheckedProgram) -> ResolvedType {
-    let pkg = checked
-        .packages
-        .iter()
-        .find(|p| p.package == PACKAGE)
-        .expect("checked program is missing the test package");
-    let file = pkg.files.first().expect("package has no files");
-    let body = file
-        .body
-        .as_deref()
-        .expect("script-mode file must keep statements on File.body");
-    let trailing = body.last().expect("expected at least one statement");
-    match trailing {
-        Statement::Expr(expr) => expr.resolution.clone(),
-        other => panic!("expected Statement::Expr as trailing statement, got {other:?}"),
-    }
-}
-
-/// Resolved leaf for the preloaded `Global.<name>` stdlib stub.
-fn global_leaf(checked: &CheckedProgram, name: &str) -> ResolvedType {
-    let ident = Identifier::new("Global", vec![name.to_string()]);
-    let (id, _) = checked
-        .registry
-        .lookup(&ident)
-        .unwrap_or_else(|| panic!("stdlib stub `Global.{name}` missing from registry"));
-    ResolvedType::leaf(Resolution::Global(id))
-}
-
-fn bool_type(checked: &CheckedProgram) -> ResolvedType {
-    global_leaf(checked, "Bool")
-}
-
-fn float_type(checked: &CheckedProgram) -> ResolvedType {
-    global_leaf(checked, "Float")
-}
-
-fn int_type(checked: &CheckedProgram) -> ResolvedType {
-    global_leaf(checked, "Int")
-}
+use common::{
+    assert_script_fails_with, bool_type, float_type, global_leaf, int_type, trailing_resolution,
+    typecheck_script as typecheck, typecheck_script_fail as typecheck_fail,
+};
 
 fn assert_trailing_is(source: &str, expected_name: &str) {
     let checked = typecheck(source);
@@ -176,28 +135,15 @@ fn binary_concat_requires_binary_operands() {
     // must convert through an explicit stdlib helper. Pin the
     // diagnostic shape so accidental cross-type acceptance gets
     // caught.
-    let failure = typecheck_fail("fn copy(b: Binary) -> Binary\n  \"hi\" <> b\nend\n\n1\n");
-    assert!(
-        failure
-            .diagnostics
-            .iter()
-            .any(|d| d.message.contains("String, Binary, or Bits")),
-        "expected concat-mismatch diagnostic; got {:?}",
-        failure.diagnostics,
+    assert_script_fails_with(
+        "fn copy(b: Binary) -> Binary\n  \"hi\" <> b\nend\n\n1\n",
+        &["String, Binary, or Bits"],
     );
 }
 
 #[test]
 fn int_concat_diagnoses() {
-    let failure = typecheck_fail("1 <> 2\n");
-    assert!(
-        failure
-            .diagnostics
-            .iter()
-            .any(|d| d.message.contains("String, Binary, or Bits")),
-        "expected non-concat-typed diagnostic; got {:?}",
-        failure.diagnostics,
-    );
+    assert_script_fails_with("1 <> 2\n", &["String, Binary, or Bits"]);
 }
 
 #[test]
@@ -255,16 +201,6 @@ fn mixed_int_float_arith_diagnoses() {
     );
 }
 
-// ------------------------------------------------------------------
-// `Int ≡ Int64` / `Float ≡ Float64` aliases at binary-op sites.
-// Today the registry keeps these as distinct primitives papered over
-// by `types_equivalent` (LANGUAGE.md primitives table). Future Koja
-// will promote `Int` to a real union over its sized variants. Both
-// arithmetic and comparison must accept the alias mix today so FFI
-// signatures returning `Int64` (or anything user-spelled as `Int64`)
-// flow through naturally without forcing the caller to qualify.
-// ------------------------------------------------------------------
-
 fn use_alias_int(extra: &str) -> String {
     let extern_decl = "@extern \"C\"\nfn produce_int64() -> Int64\n\n";
     format!("{extern_decl}result = produce_int64()\n{extra}\n")
@@ -310,13 +246,6 @@ fn float_alias_comparison_resolves_to_bool() {
     assert_eq!(trailing_resolution(&checked), bool_type(&checked));
 }
 
-// ------------------------------------------------------------------
-// Same-sized-numeric comparison. Stdlib byte-walking (`String.bytes`,
-// `Binary.byte_at`, hash digest comparisons) needs `UInt8 == UInt8`
-// without a detour through `Int`. The rule extends naturally to every
-// other sized numeric: same predicate, no per-type arms.
-// ------------------------------------------------------------------
-
 fn use_sized_pair(sized: &str, op_expr: &str) -> String {
     let extern_decl = format!("@extern \"C\"\nfn produce() -> {sized}\n\n");
     format!("{extern_decl}a = produce()\nb = produce()\n{op_expr}\n")
@@ -344,22 +273,8 @@ fn cross_sized_numeric_eq_is_rejected() {
     let source = "@extern \"C\"\nfn produce_u8() -> UInt8\n\
         @extern \"C\"\nfn produce_i32() -> Int32\n\
         a = produce_u8()\n  b = produce_i32()\n  a == b\n";
-    let failure = typecheck_fail(source);
-    assert!(
-        failure.diagnostics.iter().any(|d| d
-            .message
-            .contains("matching Bool, Float, Int, or String operands")),
-        "expected operand-mismatch diagnostic on cross-sized comparison; got {:?}",
-        failure.diagnostics,
-    );
+    assert_script_fails_with(source, &["matching Bool, Float, Int, or String operands"]);
 }
-
-// ------------------------------------------------------------------
-// Same-sized-numeric arithmetic. Same predicate as comparison:
-// every sized numeric admits `+ - * / %` with its peer. Cross-width
-// arithmetic (`Int32 + Int64`) is rejected so the user must convert
-// explicitly. `Int32 + IntLiteral` widens the literal to `Int32`.
-// ------------------------------------------------------------------
 
 #[test]
 fn same_sized_numeric_arith_resolves_to_operand_type() {
@@ -406,15 +321,7 @@ fn cross_sized_numeric_arith_is_rejected() {
     let source = "@extern \"C\"\nfn produce_i32() -> Int32\n\
         @extern \"C\"\nfn produce_i64() -> Int64\n\
         a = produce_i32()\n  b = produce_i64()\n  a + b\n";
-    let failure = typecheck_fail(source);
-    assert!(
-        failure
-            .diagnostics
-            .iter()
-            .any(|d| d.message.contains("Int, Float, or matching sized numeric")),
-        "expected operand-mismatch diagnostic on cross-sized arithmetic; got {:?}",
-        failure.diagnostics,
-    );
+    assert_script_fails_with(source, &["Int, Float, or matching sized numeric"]);
 }
 
 #[test]
@@ -430,13 +337,5 @@ fn unary_neg_on_sized_int_resolves_to_sized() {
 fn unary_neg_on_unsigned_int_is_rejected() {
     let source = "@extern \"C\"\nfn produce_u8() -> UInt8\n\
         a = produce_u8()\n  -a\n";
-    let failure = typecheck_fail(source);
-    assert!(
-        failure
-            .diagnostics
-            .iter()
-            .any(|d| d.message.contains("signed Int or Float")),
-        "expected signed-numeric diagnostic on unsigned negation; got {:?}",
-        failure.diagnostics,
-    );
+    assert_script_fails_with(source, &["signed Int or Float"]);
 }

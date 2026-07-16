@@ -9,7 +9,7 @@ use koja_ast::util::dedent;
 
 mod common;
 
-use common::{diagnostic_messages, typecheck_script, typecheck_script_fail};
+use common::{assert_script_fails_with, typecheck_script};
 
 fn assert_clean(source: &str) {
     let checked = typecheck_script(source);
@@ -17,15 +17,6 @@ fn assert_clean(source: &str) {
         checked.diagnostics.is_empty(),
         "expected no diagnostics, got: {:?}",
         checked.diagnostics
-    );
-}
-
-fn assert_diagnostic(source: &str, needle: &str) {
-    let failure = typecheck_script_fail(source);
-    let messages = diagnostic_messages(&failure);
-    assert!(
-        messages.iter().any(|m| m.contains(needle)),
-        "expected a diagnostic containing `{needle}`; got: {messages:?}"
     );
 }
 
@@ -82,25 +73,21 @@ fn read_after_passing_and_reassigning_is_clean() {
 
 #[test]
 fn binary_overflow_bare_segment_diagnoses() {
-    assert_diagnostic(
-        &dedent(
-            r#"
-            bad = <<256>>
-            "#,
-        ),
-        "does not fit in 8 unsigned bits",
+    assert_script_fails_with(
+        r#"
+        bad = <<256>>
+        "#,
+        &["does not fit in 8 unsigned bits"],
     );
 }
 
 #[test]
 fn binary_overflow_int8_signed_segment_diagnoses() {
-    assert_diagnostic(
-        &dedent(
-            r#"
-            bad = <<200 : Int8>>
-            "#,
-        ),
-        "does not fit in 8 signed bits",
+    assert_script_fails_with(
+        r#"
+        bad = <<200 : Int8>>
+        "#,
+        &["does not fit in 8 signed bits"],
     );
 }
 

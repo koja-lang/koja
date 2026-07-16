@@ -13,7 +13,7 @@ use koja_ast::util::dedent;
 
 mod common;
 
-use common::{typecheck_script as typecheck, typecheck_script_fail as typecheck_fail};
+use common::{assert_script_fails_with, typecheck_script as typecheck};
 
 #[test]
 fn literal_only_pattern_typechecks() {
@@ -95,7 +95,7 @@ fn string_literal_segment_typechecks() {
 
 #[test]
 fn non_binary_subject_diagnoses() {
-    let failure = typecheck_fail(&dedent(
+    assert_script_fails_with(
         "
         x = 1
         match x
@@ -103,20 +103,13 @@ fn non_binary_subject_diagnoses() {
             _ -> 0
           end
         ",
-    ));
-    assert!(
-        failure
-            .diagnostics
-            .iter()
-            .any(|d| d.message.contains("requires `Binary` or `Bits` subject")),
-        "expected non-binary-subject diagnostic, got {:?}",
-        failure.diagnostics,
+        &["requires `Binary` or `Bits` subject"],
     );
 }
 
 #[test]
 fn dynamic_width_pattern_diagnoses() {
-    let failure = typecheck_fail(&dedent(
+    assert_script_fails_with(
         "
         data = <<0xFF>>
           n = 8
@@ -125,20 +118,13 @@ fn dynamic_width_pattern_diagnoses() {
             _ -> 0
           end
         ",
-    ));
-    assert!(
-        failure
-            .diagnostics
-            .iter()
-            .any(|d| d.message.contains("dynamic-width binary pattern")),
-        "expected dynamic-width diagnostic, got {:?}",
-        failure.diagnostics,
+        &["dynamic-width binary pattern"],
     );
 }
 
 #[test]
 fn byte_unit_pattern_diagnoses() {
-    let failure = typecheck_fail(&dedent(
+    assert_script_fails_with(
         "
         data = <<0xFF, 0x01, 0x02, 0x03>>
           match data
@@ -146,20 +132,13 @@ fn byte_unit_pattern_diagnoses() {
             _ -> 0
           end
         ",
-    ));
-    assert!(
-        failure
-            .diagnostics
-            .iter()
-            .any(|d| d.message.contains("`::N byte`")),
-        "expected byte-unit diagnostic, got {:?}",
-        failure.diagnostics,
+        &["`::N byte`"],
     );
 }
 
 #[test]
 fn float_extract_diagnoses() {
-    let failure = typecheck_fail(&dedent(
+    assert_script_fails_with(
         "
         data = <<1.0: Float32>>
           match data
@@ -167,14 +146,7 @@ fn float_extract_diagnoses() {
             _ -> 0
           end
         ",
-    ));
-    assert!(
-        failure
-            .diagnostics
-            .iter()
-            .any(|d| d.message.contains("float-extract binary pattern")),
-        "expected float-extract diagnostic, got {:?}",
-        failure.diagnostics,
+        &["float-extract binary pattern"],
     );
 }
 
@@ -182,7 +154,7 @@ fn float_extract_diagnoses() {
 fn unaligned_binary_tail_diagnoses() {
     // `tag::3` + `rest: Binary` has a 3-bit fixed prefix -> not
     // byte-aligned -> reject.
-    let failure = typecheck_fail(&dedent(
+    assert_script_fails_with(
         "
         data = <<0::3, 0::5>>
           match data
@@ -190,20 +162,13 @@ fn unaligned_binary_tail_diagnoses() {
             _ -> 0
           end
         ",
-    ));
-    assert!(
-        failure
-            .diagnostics
-            .iter()
-            .any(|d| d.message.contains("byte-aligned prefix")),
-        "expected byte-aligned-prefix diagnostic, got {:?}",
-        failure.diagnostics,
+        &["byte-aligned prefix"],
     );
 }
 
 #[test]
 fn literal_overflow_diagnoses() {
-    let failure = typecheck_fail(&dedent(
+    assert_script_fails_with(
         "
         data = <<0xFF>>
           match data
@@ -211,33 +176,19 @@ fn literal_overflow_diagnoses() {
             _ -> 0
           end
         ",
-    ));
-    assert!(
-        failure
-            .diagnostics
-            .iter()
-            .any(|d| d.message.contains("does not fit in 8 unsigned bits")),
-        "expected literal-overflow diagnostic, got {:?}",
-        failure.diagnostics,
+        &["does not fit in 8 unsigned bits"],
     );
 }
 
 #[test]
 fn missing_catch_all_diagnoses() {
-    let failure = typecheck_fail(&dedent(
+    assert_script_fails_with(
         "
         data = <<0xFF>>
           match data
             <<tag::8>> -> tag
           end
         ",
-    ));
-    assert!(
-        failure
-            .diagnostics
-            .iter()
-            .any(|d| d.message.contains("wildcard `_` or binding catch-all")),
-        "expected missing-catch-all diagnostic, got {:?}",
-        failure.diagnostics,
+        &["wildcard `_` or binding catch-all"],
     );
 }

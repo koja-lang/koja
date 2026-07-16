@@ -1,0 +1,17 @@
+struct Holder<T>
+  subject: Int | List<T>
+
+  fn measure(self) -> Int
+    match self.subject
+      n: Int -> n
+      xs: List<T> -> xs.length()
+    end
+  end
+end
+
+direct: Holder<String> = Holder{subject: 7}
+direct.measure().print()
+
+words: Int | List<String> = ["a", "b", "c"]
+wrapped: Holder<String> = Holder{subject: words}
+wrapped.measure().print()

@@ -11,7 +11,8 @@ use koja_ast::util::dedent;
 mod common;
 
 use common::{
-    diagnostic_messages, typecheck_script as typecheck, typecheck_script_fail as typecheck_fail,
+    assert_script_fails_with, diagnostic_messages, typecheck_script as typecheck,
+    typecheck_script_fail as typecheck_fail,
 };
 
 #[test]
@@ -44,14 +45,7 @@ fn mismatched_trailing_expr_type_diagnoses() {
         end
         ";
 
-    let failure = typecheck_fail(&dedent(source));
-    let messages = diagnostic_messages(&failure);
-    assert!(
-        messages
-            .iter()
-            .any(|m| m.contains("return type mismatch") && m.contains("answer")),
-        "expected return-type-mismatch diagnostic, got {messages:?}",
-    );
+    assert_script_fails_with(source, &["return type mismatch", "answer"]);
 }
 
 #[test]
@@ -61,14 +55,7 @@ fn empty_body_with_non_unit_return_diagnoses() {
         end
         ";
 
-    let failure = typecheck_fail(&dedent(source));
-    let messages = diagnostic_messages(&failure);
-    assert!(
-        messages
-            .iter()
-            .any(|m| m.contains("return type mismatch") && m.contains("empty body")),
-        "expected empty-body return-type diagnostic, got {messages:?}",
-    );
+    assert_script_fails_with(source, &["return type mismatch", "empty body"]);
 }
 
 #[test]
@@ -79,14 +66,7 @@ fn trailing_assignment_with_non_unit_return_diagnoses() {
         end
         ";
 
-    let failure = typecheck_fail(&dedent(source));
-    let messages = diagnostic_messages(&failure);
-    assert!(
-        messages
-            .iter()
-            .any(|m| m.contains("return type mismatch") && m.contains("non-expression")),
-        "expected non-expression trailing-statement diagnostic, got {messages:?}",
-    );
+    assert_script_fails_with(source, &["return type mismatch", "non-expression"]);
 }
 
 #[test]
@@ -135,12 +115,5 @@ fn declared_return_mismatches_called_function_return_type_diagnoses() {
         end
         ";
 
-    let failure = typecheck_fail(&dedent(source));
-    let messages = diagnostic_messages(&failure);
-    assert!(
-        messages
-            .iter()
-            .any(|m| m.contains("return type mismatch") && m.contains("caller")),
-        "expected return-type-mismatch on `caller`, got {messages:?}",
-    );
+    assert_script_fails_with(source, &["return type mismatch", "caller"]);
 }

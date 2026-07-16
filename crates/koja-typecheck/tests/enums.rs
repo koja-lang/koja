@@ -13,67 +13,17 @@
 //! construction / static methods) so the diagnostic surface stays
 //! parallel between the two type-decl families.
 
-use koja_ast::ast::{EnumConstructionData, Expr, ExprKind, Statement};
-use koja_ast::identifier::{GlobalRegistryId, Identifier, Resolution, ResolvedType};
+use koja_ast::ast::{EnumConstructionData, ExprKind};
+use koja_ast::identifier::{Resolution, ResolvedType};
 use koja_ast::util::dedent;
-use koja_typecheck::{
-    CheckedProgram, EnumDefinition, FunctionSignature, GlobalKind, ResolvedEnumVariant,
-    ResolvedVariantData,
-};
+use koja_typecheck::{EnumDefinition, ResolvedEnumVariant, ResolvedVariantData};
 
 mod common;
 
 use common::{
-    PACKAGE, diagnostic_messages, typecheck_script as typecheck,
-    typecheck_script_fail as typecheck_fail,
+    PACKAGE, assert_script_fails_with, enum_definition, global_leaf, method_signature,
+    package_leaf, registry_id, trailing_expr, typecheck_script as typecheck,
 };
-
-fn enum_definition<'a>(checked: &'a CheckedProgram, name: &str) -> &'a EnumDefinition {
-    let ident = Identifier::new(PACKAGE, vec![name.to_string()]);
-    let (_, entry) = checked
-        .registry
-        .lookup(&ident)
-        .unwrap_or_else(|| panic!("`{ident}` not found in registry"));
-    match &entry.kind {
-        GlobalKind::Enum(Some(definition)) => definition,
-        other => panic!("expected lifted Enum(Some(_)) for `{ident}`, got {other:?}"),
-    }
-}
-
-fn script_trailing_expr(checked: &CheckedProgram) -> &Expr {
-    let pkg = checked
-        .packages
-        .iter()
-        .find(|p| p.package == PACKAGE)
-        .expect("checked program is missing the test package");
-    let file = pkg.files.first().expect("package has no files");
-    let body = file
-        .body
-        .as_deref()
-        .expect("script-mode file must keep statements on File.body");
-    match body.last().expect("script body is empty") {
-        Statement::Expr(expr) => expr,
-        other => panic!("expected trailing Statement::Expr, got {other:?}"),
-    }
-}
-
-fn global_leaf(checked: &CheckedProgram, name: &str) -> ResolvedType {
-    let ident = Identifier::new("Global", vec![name.to_string()]);
-    let (id, _) = checked
-        .registry
-        .lookup(&ident)
-        .unwrap_or_else(|| panic!("stdlib stub `Global.{name}` missing from registry"));
-    ResolvedType::leaf(Resolution::Global(id))
-}
-
-fn package_leaf(checked: &CheckedProgram, name: &str) -> ResolvedType {
-    let ident = Identifier::new(PACKAGE, vec![name.to_string()]);
-    let (id, _) = checked
-        .registry
-        .lookup(&ident)
-        .unwrap_or_else(|| panic!("`{ident}` missing from registry"));
-    ResolvedType::leaf(Resolution::Global(id))
-}
 
 fn variant<'a>(definition: &'a EnumDefinition, name: &str) -> &'a ResolvedEnumVariant {
     definition
@@ -82,19 +32,6 @@ fn variant<'a>(definition: &'a EnumDefinition, name: &str) -> &'a ResolvedEnumVa
         .find(|v| v.name == name)
         .unwrap_or_else(|| panic!("variant `{name}` missing from definition"))
 }
-
-fn lookup_enum_id(checked: &CheckedProgram, name: &str) -> GlobalRegistryId {
-    let ident = Identifier::new(PACKAGE, vec![name.to_string()]);
-    let (id, _) = checked
-        .registry
-        .lookup(&ident)
-        .unwrap_or_else(|| panic!("`{ident}` not found in registry"));
-    id
-}
-
-// ---------------------------------------------------------------------------
-// Decl registration / lift
-// ---------------------------------------------------------------------------
 
 #[test]
 fn unit_only_enum_lifts_with_unit_variants_in_declaration_order() {
@@ -187,10 +124,6 @@ fn tuple_variant_with_user_struct_payload_resolves_through_registry() {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Construction: Unit
-// ---------------------------------------------------------------------------
-
 #[test]
 fn unit_variant_construction_resolves_to_enum_leaf() {
     let source = "
@@ -203,7 +136,7 @@ fn unit_variant_construction_resolves_to_enum_leaf() {
         ";
 
     let checked = typecheck(&dedent(source));
-    let trailing = script_trailing_expr(&checked);
+    let trailing = trailing_expr(&checked);
     assert_eq!(trailing.resolution, package_leaf(&checked, "Color"));
 
     let ExprKind::EnumConstruction {
@@ -229,19 +162,8 @@ fn unit_variant_with_payload_supplied_diagnoses_shape_mismatch() {
           Color.Red(42)
         ";
 
-    let failure = typecheck_fail(&dedent(source));
-    let messages = diagnostic_messages(&failure);
-    assert!(
-        messages
-            .iter()
-            .any(|m| m.contains("`TestApp.Color.Red`") && m.contains("unit variant")),
-        "expected unit-shape mismatch diagnostic, got {messages:?}",
-    );
+    assert_script_fails_with(source, &["`TestApp.Color.Red`", "unit variant"]);
 }
-
-// ---------------------------------------------------------------------------
-// Construction: Tuple
-// ---------------------------------------------------------------------------
 
 #[test]
 fn tuple_variant_construction_resolves_argument_types() {
@@ -255,7 +177,7 @@ fn tuple_variant_construction_resolves_argument_types() {
         ";
 
     let checked = typecheck(&dedent(source));
-    let trailing = script_trailing_expr(&checked);
+    let trailing = trailing_expr(&checked);
     assert_eq!(trailing.resolution, package_leaf(&checked, "Result"));
 
     let ExprKind::EnumConstruction { variant, data, .. } = &trailing.kind else {
@@ -279,13 +201,13 @@ fn tuple_variant_arity_mismatch_diagnoses() {
           Result.Ok(1, 2)
         ";
 
-    let failure = typecheck_fail(&dedent(source));
-    let messages = diagnostic_messages(&failure);
-    assert!(
-        messages.iter().any(|m| m.contains("`TestApp.Result.Ok`")
-            && m.contains("expects 1 positional argument")
-            && m.contains("got 2")),
-        "expected tuple-arity diagnostic, got {messages:?}",
+    assert_script_fails_with(
+        source,
+        &[
+            "`TestApp.Result.Ok`",
+            "expects 1 positional argument",
+            "got 2",
+        ],
     );
 }
 
@@ -299,21 +221,15 @@ fn tuple_variant_argument_type_mismatch_diagnoses() {
           Result.Ok(true)
         ";
 
-    let failure = typecheck_fail(&dedent(source));
-    let messages = diagnostic_messages(&failure);
-    assert!(
-        messages
-            .iter()
-            .any(|m| m.contains("argument 1 of `TestApp.Result.Ok`")
-                && m.contains("expects `Int`")
-                && m.contains("got `Bool`")),
-        "expected tuple-arg-type diagnostic, got {messages:?}",
+    assert_script_fails_with(
+        source,
+        &[
+            "argument 1 of `TestApp.Result.Ok`",
+            "expects `Int`",
+            "got `Bool`",
+        ],
     );
 }
-
-// ---------------------------------------------------------------------------
-// Construction: Struct
-// ---------------------------------------------------------------------------
 
 #[test]
 fn struct_variant_construction_resolves_field_types() {
@@ -326,7 +242,7 @@ fn struct_variant_construction_resolves_field_types() {
         ";
 
     let checked = typecheck(&dedent(source));
-    let trailing = script_trailing_expr(&checked);
+    let trailing = trailing_expr(&checked);
     assert_eq!(trailing.resolution, package_leaf(&checked, "Shape"));
 
     let ExprKind::EnumConstruction { data, .. } = &trailing.kind else {
@@ -351,14 +267,7 @@ fn struct_variant_unknown_field_diagnoses() {
           Shape.Rect{w: 10, h: 20, z: 30}
         ";
 
-    let failure = typecheck_fail(&dedent(source));
-    let messages = diagnostic_messages(&failure);
-    assert!(
-        messages
-            .iter()
-            .any(|m| m.contains("`TestApp.Shape.Rect`") && m.contains("no field `z`")),
-        "expected unknown-field diagnostic, got {messages:?}",
-    );
+    assert_script_fails_with(source, &["`TestApp.Shape.Rect`", "no field `z`"]);
 }
 
 #[test]
@@ -371,14 +280,7 @@ fn struct_variant_missing_field_diagnoses() {
           Shape.Rect{w: 10}
         ";
 
-    let failure = typecheck_fail(&dedent(source));
-    let messages = diagnostic_messages(&failure);
-    assert!(
-        messages
-            .iter()
-            .any(|m| m.contains("missing field `h`") && m.contains("`TestApp.Shape.Rect`")),
-        "expected missing-field diagnostic, got {messages:?}",
-    );
+    assert_script_fails_with(source, &["missing field `h`", "`TestApp.Shape.Rect`"]);
 }
 
 #[test]
@@ -391,14 +293,14 @@ fn struct_variant_wrong_field_type_diagnoses() {
           Shape.Rect{w: true, h: 20}
         ";
 
-    let failure = typecheck_fail(&dedent(source));
-    let messages = diagnostic_messages(&failure);
-    assert!(
-        messages.iter().any(|m| m.contains("field `w`")
-            && m.contains("`TestApp.Shape.Rect`")
-            && m.contains("expects `Int`")
-            && m.contains("got `Bool`")),
-        "expected wrong-type diagnostic, got {messages:?}",
+    assert_script_fails_with(
+        source,
+        &[
+            "field `w`",
+            "`TestApp.Shape.Rect`",
+            "expects `Int`",
+            "got `Bool`",
+        ],
     );
 }
 
@@ -412,19 +314,15 @@ fn shape_mismatch_struct_supplied_to_tuple_variant_diagnoses() {
           Result.Ok{value: 1}
         ";
 
-    let failure = typecheck_fail(&dedent(source));
-    let messages = diagnostic_messages(&failure);
-    assert!(
-        messages.iter().any(|m| m.contains("`TestApp.Result.Ok`")
-            && m.contains("tuple variant")
-            && m.contains("constructed with named fields")),
-        "expected shape-mismatch diagnostic, got {messages:?}",
+    assert_script_fails_with(
+        source,
+        &[
+            "`TestApp.Result.Ok`",
+            "tuple variant",
+            "constructed with named fields",
+        ],
     );
 }
-
-// ---------------------------------------------------------------------------
-// Negative: unknown enum / variant
-// ---------------------------------------------------------------------------
 
 #[test]
 fn unknown_enum_in_construction_diagnoses() {
@@ -432,14 +330,7 @@ fn unknown_enum_in_construction_diagnoses() {
           Missing.Variant
         ";
 
-    let failure = typecheck_fail(&dedent(source));
-    let messages = diagnostic_messages(&failure);
-    assert!(
-        messages
-            .iter()
-            .any(|m| m.contains("does not recognize the enum type `Missing`")),
-        "expected unknown-enum diagnostic, got {messages:?}",
-    );
+    assert_script_fails_with(source, &["does not recognize the enum type `Missing`"]);
 }
 
 #[test]
@@ -452,19 +343,8 @@ fn unknown_variant_in_construction_diagnoses() {
           Color.Purple
         ";
 
-    let failure = typecheck_fail(&dedent(source));
-    let messages = diagnostic_messages(&failure);
-    assert!(
-        messages
-            .iter()
-            .any(|m| m.contains("`TestApp.Color`") && m.contains("no variant `Purple`")),
-        "expected unknown-variant diagnostic, got {messages:?}",
-    );
+    assert_script_fails_with(source, &["`TestApp.Color`", "no variant `Purple`"]);
 }
-
-// ---------------------------------------------------------------------------
-// Negative: feature gaps
-// ---------------------------------------------------------------------------
 
 #[test]
 fn annotated_enum_diagnoses_feature_gap() {
@@ -475,14 +355,7 @@ fn annotated_enum_diagnoses_feature_gap() {
         end
         ";
 
-    let failure = typecheck_fail(&dedent(source));
-    let messages = diagnostic_messages(&failure);
-    assert!(
-        messages
-            .iter()
-            .any(|m| m.contains("annotations on enum items")),
-        "expected enum-annotation gap diagnostic, got {messages:?}",
-    );
+    assert_script_fails_with(source, &["annotations on enum items"]);
 }
 
 #[test]
@@ -493,12 +366,7 @@ fn default_field_on_struct_variant_diagnoses_feature_gap() {
         end
         ";
 
-    let failure = typecheck_fail(&dedent(source));
-    let messages = diagnostic_messages(&failure);
-    assert!(
-        messages.iter().any(|m| m.contains("default field values")),
-        "expected default-field-value gap diagnostic, got {messages:?}",
-    );
+    assert_script_fails_with(source, &["default field values"]);
 }
 
 // `Tag()` and `Tag {}` (empty tuple/struct variants) are rejected
@@ -509,29 +377,6 @@ fn default_field_on_struct_variant_diagnoses_feature_gap() {
 // [`crate::pipeline::lift_signatures::enums`] never fires from a
 // surface program. Coverage for that fallback would need an AST
 // constructed in-test (out of scope for this slice).
-
-// ---------------------------------------------------------------------------
-// Static methods on enum receivers
-// ---------------------------------------------------------------------------
-
-fn method_signature<'a>(
-    checked: &'a CheckedProgram,
-    type_name: &str,
-    method_name: &str,
-) -> &'a FunctionSignature {
-    let identifier = Identifier::new(
-        PACKAGE,
-        vec![type_name.to_string(), method_name.to_string()],
-    );
-    let (_, entry) = checked
-        .registry
-        .lookup(&identifier)
-        .unwrap_or_else(|| panic!("`{identifier}` not registered"));
-    match &entry.kind {
-        GlobalKind::Function(Some(signature)) => signature,
-        other => panic!("expected lifted Function for `{identifier}`, got {other:?}"),
-    }
-}
 
 #[test]
 fn inline_static_method_on_enum_registers_under_qualified_identifier() {
@@ -573,13 +418,9 @@ fn impl_block_on_enum_admits_static_methods() {
     let signature = method_signature(&checked, "Color", "primary");
     assert_eq!(signature.return_type, package_leaf(&checked, "Color"));
 
-    let trailing = script_trailing_expr(&checked);
+    let trailing = trailing_expr(&checked);
     assert_eq!(trailing.resolution, package_leaf(&checked, "Color"));
 }
-
-// ---------------------------------------------------------------------------
-// Generics: definition, lift, construction inference
-// ---------------------------------------------------------------------------
 
 #[test]
 fn generic_enum_lifts_with_type_params_and_typeparam_payload_resolutions() {
@@ -591,7 +432,7 @@ fn generic_enum_lifts_with_type_params_and_typeparam_payload_resolutions() {
         ";
 
     let checked = typecheck(&dedent(source));
-    let result_id = lookup_enum_id(&checked, "Result");
+    let result_id = registry_id(&checked, PACKAGE, &["Result"]);
     let entry = checked
         .registry
         .get(result_id)
@@ -623,9 +464,9 @@ fn generic_enum_tuple_variant_construction_infers_type_args() {
         ";
 
     let checked = typecheck(&dedent(source));
-    let box_id = lookup_enum_id(&checked, "Box");
+    let box_id = registry_id(&checked, PACKAGE, &["Box"]);
     let int = global_leaf(&checked, "Int");
-    let trailing = script_trailing_expr(&checked);
+    let trailing = trailing_expr(&checked);
     assert_eq!(
         trailing.resolution,
         ResolvedType::Named {
@@ -646,14 +487,7 @@ fn generic_enum_partial_construction_diagnoses_phantom_for_unbound_param() {
           Result.Ok(42)
         ";
 
-    let failure = typecheck_fail(&dedent(source));
-    let messages = diagnostic_messages(&failure);
-    assert!(
-        messages
-            .iter()
-            .any(|m| m.contains("cannot infer type parameter `E`")),
-        "expected Phantom diagnostic for `E`, got {messages:?}",
-    );
+    assert_script_fails_with(source, &["cannot infer type parameter `E`"]);
 }
 
 #[test]
@@ -671,14 +505,12 @@ fn generic_enum_unit_variant_construction_diagnoses_phantom() {
           Maybe.None
         ";
 
-    let failure = typecheck_fail(&dedent(source));
-    let messages = diagnostic_messages(&failure);
-    assert!(
-        messages.iter().any(|m| {
-            m.contains("cannot infer type parameter `T` of `TestApp.Maybe`")
-                && m.contains("unit variant `None`")
-        }),
-        "expected unit-variant Phantom diagnostic, got {messages:?}",
+    assert_script_fails_with(
+        source,
+        &[
+            "cannot infer type parameter `T` of `TestApp.Maybe`",
+            "unit variant `None`",
+        ],
     );
 }
 
@@ -692,14 +524,7 @@ fn generic_enum_tuple_variant_arity_mismatch_diagnoses() {
           Box.Of(1)
         ";
 
-    let failure = typecheck_fail(&dedent(source));
-    let messages = diagnostic_messages(&failure);
-    assert!(
-        messages
-            .iter()
-            .any(|m| m.contains("expects 2 positional argument") && m.contains("got 1")),
-        "expected arity diagnostic, got {messages:?}",
-    );
+    assert_script_fails_with(source, &["expects 2 positional argument", "got 1"]);
 }
 
 #[test]
@@ -713,10 +538,10 @@ fn generic_enum_struct_variant_construction_infers_type_args() {
         ";
 
     let checked = typecheck(&dedent(source));
-    let pair_id = lookup_enum_id(&checked, "Pair");
+    let pair_id = registry_id(&checked, PACKAGE, &["Pair"]);
     let int = global_leaf(&checked, "Int");
     let string = global_leaf(&checked, "String");
-    let trailing = script_trailing_expr(&checked);
+    let trailing = trailing_expr(&checked);
     assert_eq!(
         trailing.resolution,
         ResolvedType::Named {

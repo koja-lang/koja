@@ -1,0 +1,44 @@
+alias Process.Step
+alias Process.StopReason
+
+struct Box<T>
+  value: T
+end
+
+enum BoxMsg<T>
+  Get
+  Put(T)
+end
+
+impl Process<Box<T>, BoxMsg<T>, T> for Box<T>
+  fn start(config: Box<T>) -> Result<Self, StopReason>
+    Result.Ok(config)
+  end
+
+  fn handle(self, msg: BoxMsg<T>, from: Option<ReplyTo<T>>) -> Step<Self>
+    match msg
+      BoxMsg.Get ->
+        _ = ReplyTo.reply(from, self.value)
+        Step.Continue(self)
+
+      BoxMsg.Put(value) ->
+        self.value = value
+        Step.Continue(self)
+    end
+  end
+end
+
+numbers = spawn Box.start(Box{value: 41})
+words = spawn Box.start(Box{value: "hello"})
+
+numbers.cast(BoxMsg.Put(42))
+
+match numbers.call(BoxMsg.Get, 5000)
+  Result.Ok(n) -> IO.puts("int box: #{n}")
+  Result.Err(_) -> IO.puts("int box: call failed")
+end
+
+match words.call(BoxMsg.Get, 5000)
+  Result.Ok(w) -> IO.puts("string box: #{w}")
+  Result.Err(_) -> IO.puts("string box: call failed")
+end

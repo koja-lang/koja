@@ -23,7 +23,7 @@ use koja_ast::util::dedent;
 
 mod common;
 
-use common::typecheck_script as typecheck;
+use common::{assert_script_fails_with, typecheck_script as typecheck};
 
 #[test]
 fn unit_variant_inferred_from_function_return_type() {
@@ -253,8 +253,6 @@ fn return_inside_closure_uses_closure_return_type_not_outer_fn() {
 
 #[test]
 fn unit_variant_without_expected_still_diagnoses() {
-    use common::typecheck_script_fail as typecheck_fail;
-
     // Bare assignment inside a Unit-returning function: the rhs
     // sits outside any expected-type position, so the unit-variant
     // diagnostic still fires (vs. the function-tail / arm-tail
@@ -269,17 +267,11 @@ fn unit_variant_without_expected_still_diagnoses() {
           x = Maybe.None
         end
         ";
-    let failure = typecheck_fail(&dedent(source));
-    assert!(
-        failure.to_string().contains("cannot infer type parameter"),
-        "expected `cannot infer type parameter` diagnostic; got {failure}",
-    );
+    assert_script_fails_with(source, &["cannot infer type parameter"]);
 }
 
 #[test]
 fn unit_variant_under_mismatched_expected_falls_back_to_diagnostic() {
-    use common::typecheck_script_fail as typecheck_fail;
-
     let source = "
         enum Maybe<T>
           Some(T)
@@ -294,23 +286,10 @@ fn unit_variant_under_mismatched_expected_falls_back_to_diagnostic() {
           Maybe.None
         end
         ";
-    let failure = typecheck_fail(&dedent(source));
-    assert!(
-        failure.to_string().contains("cannot infer type parameter"),
-        "expected `cannot infer type parameter` diagnostic when expected type's \
-         head differs from the unit variant's enum; got {failure}",
-    );
+    // Expected type's head differs from the unit variant's enum, so
+    // the "cannot infer" diagnostic still fires.
+    assert_script_fails_with(source, &["cannot infer type parameter"]);
 }
-
-// ------------------------------------------------------------------
-// Sized-int widening through generic returns. When the surrounding
-// expected type is a sized numeric primitive and the generic return
-// would otherwise lock in as the default `Int` literal, the
-// speculative pre-seed in `infer_call_type_args` keeps the sized
-// slot intact via `Substitution::set`'s `literal_widens_into` rule.
-// The literal arg picks up the matching `NumericLiteralWidth`
-// coercion downstream.
-// ------------------------------------------------------------------
 
 #[test]
 fn generic_return_hint_widens_int_literal_arg_to_int32() {
@@ -354,14 +333,6 @@ fn generic_return_hint_unrelated_to_arg_type_still_errors() {
         ";
     typecheck_fail(&dedent(source));
 }
-
-// ------------------------------------------------------------------
-// Struct-field initializer positions get the declared field type as
-// their expected hint, mirroring the function-tail / arm-tail
-// propagation above. Pre-fix, `Option.None` and `[]` at field
-// positions diagnosed because the per-field walk used bare
-// `resolve_expr`.
-// ------------------------------------------------------------------
 
 #[test]
 fn option_none_in_struct_field_infers_from_declared_type() {

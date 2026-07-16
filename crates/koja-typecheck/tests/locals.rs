@@ -20,44 +20,17 @@
 //! [`LValue::local_id`]: koja_ast::ast::LValue::local_id
 //! [`Resolution::Local`]: koja_ast::identifier::Resolution::Local
 
-use koja_ast::ast::{CompoundOp, ExprKind, Item, Statement};
-use koja_ast::identifier::{Identifier, Resolution, ResolvedType};
+use koja_ast::ast::{CompoundOp, ExprKind, Statement};
+use koja_ast::identifier::Resolution;
 use koja_ast::util::dedent;
 use koja_typecheck::CheckedProgram;
 
 mod common;
 
 use common::{
-    PACKAGE, diagnostic_messages, typecheck_file as typecheck,
-    typecheck_file_fail as typecheck_fail,
+    assert_file_fails_with, diagnostic_messages, function_body, global_leaf,
+    typecheck_file as typecheck, typecheck_file_fail as typecheck_fail,
 };
-
-fn global_leaf(checked: &CheckedProgram, name: &str) -> ResolvedType {
-    let ident = Identifier::new("Global", vec![name.to_string()]);
-    let (id, _) = checked
-        .registry
-        .lookup(&ident)
-        .unwrap_or_else(|| panic!("stdlib stub `Global.{name}` missing from registry"));
-    ResolvedType::leaf(Resolution::Global(id))
-}
-
-fn function_body<'a>(checked: &'a CheckedProgram, fn_name: &str) -> &'a [Statement] {
-    let pkg = checked
-        .packages
-        .iter()
-        .find(|p| p.package == PACKAGE)
-        .expect("checked program is missing the test package");
-    for file in &pkg.files {
-        for item in &file.items {
-            if let Item::Function(function) = item
-                && function.name == fn_name
-            {
-                return function.body.as_deref().expect("function has no body");
-            }
-        }
-    }
-    panic!("fn `{fn_name}` not found in checked program");
-}
 
 #[test]
 fn local_decl_stamps_lvalue_and_uses_inferred_type() {
@@ -206,14 +179,7 @@ fn reassignment_with_different_type_diagnoses() {
         end
         ";
 
-    let failure = typecheck_fail(&dedent(source));
-    let messages = diagnostic_messages(&failure);
-    assert!(
-        messages
-            .iter()
-            .any(|m| m.contains("reassign") && m.contains('x')),
-        "expected reassignment type-mismatch diagnostic, got {messages:?}",
-    );
+    assert_file_fails_with(source, &["reassign", "x"]);
 }
 
 #[test]
@@ -226,14 +192,7 @@ fn reassignment_with_annotation_diagnoses() {
         end
         ";
 
-    let failure = typecheck_fail(&dedent(source));
-    let messages = diagnostic_messages(&failure);
-    assert!(
-        messages
-            .iter()
-            .any(|m| m.contains("type annotation") && m.contains("first declaration")),
-        "expected annotation-on-reassignment diagnostic, got {messages:?}",
-    );
+    assert_file_fails_with(source, &["type annotation", "first declaration"]);
 }
 
 #[test]
@@ -245,14 +204,7 @@ fn decl_with_mismatched_annotation_diagnoses() {
         end
         ";
 
-    let failure = typecheck_fail(&dedent(source));
-    let messages = diagnostic_messages(&failure);
-    assert!(
-        messages
-            .iter()
-            .any(|m| m.contains("type annotation") && m.contains('x')),
-        "expected annotation-mismatch diagnostic, got {messages:?}",
-    );
+    assert_file_fails_with(source, &["type annotation", "x"]);
 }
 
 /// Helper: ensure a function body's i-th statement is a
@@ -381,14 +333,7 @@ fn compound_assign_undeclared_diagnoses() {
         end
         ";
 
-    let failure = typecheck_fail(&dedent(source));
-    let messages = diagnostic_messages(&failure);
-    assert!(
-        messages
-            .iter()
-            .any(|m| m.contains("undeclared variable") && m.contains("`x`")),
-        "expected undeclared-target diagnostic, got {messages:?}",
-    );
+    assert_file_fails_with(source, &["undeclared variable", "`x`"]);
 }
 
 #[test]
@@ -401,14 +346,7 @@ fn compound_assign_type_mismatch_diagnoses() {
         end
         ";
 
-    let failure = typecheck_fail(&dedent(source));
-    let messages = diagnostic_messages(&failure);
-    assert!(
-        messages
-            .iter()
-            .any(|m| m.contains("type mismatch") && m.contains("`x`")),
-        "expected type-mismatch diagnostic, got {messages:?}",
-    );
+    assert_file_fails_with(source, &["type mismatch", "`x`"]);
 }
 
 #[test]
@@ -421,14 +359,7 @@ fn compound_assign_non_arith_lhs_diagnoses() {
         end
         ";
 
-    let failure = typecheck_fail(&dedent(source));
-    let messages = diagnostic_messages(&failure);
-    assert!(
-        messages
-            .iter()
-            .any(|m| m.contains("Int") && m.contains("Float") && m.contains("`b`")),
-        "expected non-arithmetic-lhs diagnostic, got {messages:?}",
-    );
+    assert_file_fails_with(source, &["Int", "Float", "`b`"]);
 }
 
 #[test]

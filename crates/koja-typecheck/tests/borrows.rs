@@ -8,7 +8,7 @@ use koja_ast::util::dedent;
 mod common;
 
 use common::{
-    diagnostic_messages, typecheck_file, typecheck_file_fail, typecheck_script,
+    assert_file_fails_with, diagnostic_messages, typecheck_file, typecheck_script,
     typecheck_script_fail,
 };
 
@@ -73,7 +73,7 @@ fn borrow_bound_to_a_local_is_rejected() {
 
 #[test]
 fn borrow_returned_from_a_function_is_rejected() {
-    let failure = typecheck_file_fail(&dedent(
+    assert_file_fails_with(
         "
         struct Leaker
           fn leak(bytes: Binary) -> CPtr<UInt8>
@@ -85,19 +85,13 @@ fn borrow_returned_from_a_function_is_rejected() {
           1.print()
         end
         ",
-    ));
-    let messages = diagnostic_messages(&failure);
-    assert!(
-        messages
-            .iter()
-            .any(|m| m.contains("a borrowed pointer cannot be returned")),
-        "expected return-escape diagnostic, got {messages:?}",
+        &["a borrowed pointer cannot be returned"],
     );
 }
 
 #[test]
 fn borrow_as_implicit_tail_return_is_rejected() {
-    let failure = typecheck_file_fail(&dedent(
+    assert_file_fails_with(
         "
         struct Leaker
           fn leak(bytes: Binary) -> CPtr<UInt8>
@@ -109,13 +103,7 @@ fn borrow_as_implicit_tail_return_is_rejected() {
           1.print()
         end
         ",
-    ));
-    let messages = diagnostic_messages(&failure);
-    assert!(
-        messages
-            .iter()
-            .any(|m| m.contains("a borrowed pointer cannot be returned")),
-        "expected implicit-return escape diagnostic, got {messages:?}",
+        &["a borrowed pointer cannot be returned"],
     );
 }
 

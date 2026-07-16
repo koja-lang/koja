@@ -5,34 +5,16 @@
 //! and the body's `2 + 2` resolves into the preloaded `Global.Int`
 //! stdlib stub.
 
-use koja_ast::ast::{Expr, ExprKind, Item, Statement};
+use koja_ast::ast::{Expr, ExprKind, Statement};
 use koja_ast::identifier::{Identifier, Resolution, ResolvedType};
 use koja_ast::util::dedent;
-use koja_typecheck::{CheckedProgram, GlobalKind};
+use koja_typecheck::GlobalKind;
 
 mod common;
 
-use common::{PACKAGE, typecheck_file as typecheck, typecheck_file_fail as typecheck_fail};
-
-fn main_body(checked: &CheckedProgram) -> &[Statement] {
-    let pkg = checked
-        .packages
-        .iter()
-        .find(|p| p.package == PACKAGE)
-        .expect("checked program is missing the test package");
-    let file = pkg.files.first().expect("package has no files");
-    let main = file
-        .items
-        .iter()
-        .find_map(|item| match item {
-            Item::Function(function) if function.name == "main" => Some(function),
-            _ => None,
-        })
-        .expect("file is missing `fn main`");
-    main.body
-        .as_deref()
-        .expect("`fn main` has no body: extern fn cannot be the entry point")
-}
+use common::{
+    PACKAGE, function_body, typecheck_file as typecheck, typecheck_file_fail as typecheck_fail,
+};
 
 #[test]
 fn fn_main_two_plus_two_typechecks_to_int() {
@@ -61,7 +43,7 @@ fn fn_main_two_plus_two_typechecks_to_int() {
         "Global.Int registry entry identifier drifted",
     );
 
-    let body = main_body(&checked);
+    let body = function_body(&checked, "main");
     assert_eq!(body.len(), 1, "expected exactly one statement in main");
     let Statement::Expr(expr) = &body[0] else {
         panic!("expected Statement::Expr at body[0], got {:?}", body[0]);

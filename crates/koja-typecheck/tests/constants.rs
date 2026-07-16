@@ -6,9 +6,7 @@ use koja_ast::util::dedent;
 
 mod common;
 
-use common::{
-    diagnostic_messages, typecheck_script as typecheck, typecheck_script_fail as typecheck_fail,
-};
+use common::{assert_script_fails_with, typecheck_script as typecheck};
 
 #[test]
 fn primitive_string_and_struct_literal_constants_typecheck() {
@@ -45,13 +43,9 @@ fn constant_annotation_mismatch_diagnoses() {
         0
         ";
 
-    let failure = typecheck_fail(&dedent(source));
-    let messages = diagnostic_messages(&failure);
-    assert!(
-        messages.iter().any(|m| {
-            m.contains("constant value type") && m.contains("does not match annotation")
-        }),
-        "expected annotation mismatch diagnostic, got {messages:?}",
+    assert_script_fails_with(
+        source,
+        &["constant value type", "does not match annotation"],
     );
 }
 
@@ -63,14 +57,7 @@ fn non_literal_rhs_diagnoses() {
         X
         ";
 
-    let failure = typecheck_fail(&dedent(source));
-    let messages = diagnostic_messages(&failure);
-    assert!(
-        messages
-            .iter()
-            .any(|m| { m.contains("constant values are limited to literals") }),
-        "expected non-literal RHS diagnostic, got {messages:?}",
-    );
+    assert_script_fails_with(source, &["constant values are limited to literals"]);
 }
 
 #[test]
@@ -81,14 +68,7 @@ fn interpolated_string_constant_diagnoses() {
         S
         ";
 
-    let failure = typecheck_fail(&dedent(source));
-    let messages = diagnostic_messages(&failure);
-    assert!(
-        messages
-            .iter()
-            .any(|m| m.contains("interpolated strings are not constant-evaluable")),
-        "expected interpolation diagnostic, got {messages:?}",
-    );
+    assert_script_fails_with(source, &["interpolated strings are not constant-evaluable"]);
 }
 
 #[test]
@@ -112,13 +92,9 @@ fn binary_constant_with_non_literal_segment_diagnoses() {
         FRAME
         ";
 
-    let failure = typecheck_fail(&dedent(source));
-    let messages = diagnostic_messages(&failure);
-    assert!(
-        messages
-            .iter()
-            .any(|m| m.contains("binary segment values in a constant must be literals")),
-        "expected non-literal segment diagnostic, got {messages:?}",
+    assert_script_fails_with(
+        source,
+        &["binary segment values in a constant must be literals"],
     );
 }
 
@@ -130,14 +106,7 @@ fn binary_constant_segment_out_of_range_diagnoses() {
         FRAME
         ";
 
-    let failure = typecheck_fail(&dedent(source));
-    let messages = diagnostic_messages(&failure);
-    assert!(
-        messages
-            .iter()
-            .any(|m| m.contains("does not fit in 8 unsigned bits")),
-        "expected out-of-range segment diagnostic, got {messages:?}",
-    );
+    assert_script_fails_with(source, &["does not fit in 8 unsigned bits"]);
 }
 
 #[test]
@@ -151,14 +120,7 @@ fn binary_constant_segment_kind_mismatch_diagnoses() {
         FRAME
         ";
 
-    let failure = typecheck_fail(&dedent(source));
-    let messages = diagnostic_messages(&failure);
-    assert!(
-        messages
-            .iter()
-            .any(|m| m.contains("does not match the segment's declared shape")),
-        "expected segment shape diagnostic, got {messages:?}",
-    );
+    assert_script_fails_with(source, &["does not match the segment's declared shape"]);
 }
 
 #[test]
@@ -169,13 +131,9 @@ fn bits_valued_binary_constant_with_binary_annotation_diagnoses() {
         FLAGS
         ";
 
-    let failure = typecheck_fail(&dedent(source));
-    let messages = diagnostic_messages(&failure);
-    assert!(
-        messages.iter().any(|m| {
-            m.contains("constant value type") && m.contains("does not match annotation")
-        }),
-        "expected annotation mismatch diagnostic, got {messages:?}",
+    assert_script_fails_with(
+        source,
+        &["constant value type", "does not match annotation"],
     );
 }
 
@@ -188,12 +146,7 @@ fn duplicate_constant_collides_like_other_globals() {
         SAME
         ";
 
-    let failure = typecheck_fail(&dedent(source));
-    let messages = diagnostic_messages(&failure);
-    assert!(
-        messages.iter().any(|m| m.contains("already defined")),
-        "expected duplicate definition diagnostic, got {messages:?}",
-    );
+    assert_script_fails_with(source, &["already defined"]);
 }
 
 #[test]
@@ -205,14 +158,7 @@ fn assignment_cannot_use_package_constant_as_lhs() {
         0
         ";
 
-    let failure = typecheck_fail(&dedent(source));
-    let messages = diagnostic_messages(&failure);
-    assert!(
-        messages
-            .iter()
-            .any(|m| { m.contains("package-level constants") && m.contains("immutable") }),
-        "expected immutable-constant LHS diagnostic, got {messages:?}",
-    );
+    assert_script_fails_with(source, &["package-level constants", "immutable"]);
 }
 
 #[test]
@@ -224,12 +170,5 @@ fn compound_assign_on_package_constant_diagnoses() {
         0
         ";
 
-    let failure = typecheck_fail(&dedent(source));
-    let messages = diagnostic_messages(&failure);
-    assert!(
-        messages
-            .iter()
-            .any(|m| m.contains("immutable") && m.contains("STEP")),
-        "expected compound-assign on constant diagnostic, got {messages:?}",
-    );
+    assert_script_fails_with(source, &["immutable", "STEP"]);
 }

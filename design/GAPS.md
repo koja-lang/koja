@@ -211,6 +211,45 @@ package function. Known limitations:
 
 ---
 
+## Inference and ergonomics warts from the pooler build
+
+Found 2026-07-15 while building the `pooler` package (a generic
+`Process` implementation, the first real one outside the stdlib). The
+blocking bug is fixed. `spawn` on a generic process target was not
+substituting the call site's type args into the conformance's `M`/`R`,
+and the monomorphizer skipped `LValue.head_resolved_type` on field
+assignments (regression coverage in
+`tests/lang/generics/generic_process_spawn.kojs`). Four non-blocking
+warts remain, each with a workaround.
+
+- **Generic enum unit variants don't infer from parameter types.**
+  `consume(Signal.Done)` fails with "cannot infer type parameter `T`
+  from unit variant `Done`" even though `consume`'s parameter is
+  `Signal<T>` and `T` is bound in the enclosing scope. Payload
+  variants at the same call site infer fine. Workaround is binding
+  with an annotation first (`done: Signal<T> = Signal.Done`).
+- **`x = match … end` doesn't cross-infer generic payloads.** Arms
+  building `Result.Ok(true)` / `Result.Err("nope")` each fail to
+  infer the sibling's type parameter when the match is assigned to a
+  local, while the same match as a trailing expression (with the
+  function return type as the expected hint) compiles. The arms could
+  unify against each other. Workaround is restructuring so the match
+  is in return position, or annotating the binding.
+- **Nested enum patterns defeat exhaustiveness.** Splitting
+  `Result.Err` by payload (`Result.Err(CallError.Timeout)` +
+  `Result.Err(CallError.ProcessDown)`) reports "missing variant
+  `Err`" because the checker doesn't combine nested coverage into
+  coverage of the outer variant. Workaround is a `Result.Err(_)`
+  catch-all arm with an inner match on the payload.
+- **`priv fn` helpers are rejected inside protocol impl blocks.**
+  `impl Protocol for Type` requires every fn to be declared in the
+  protocol, so private helpers must live in a separate
+  `extend Type` block. Fine as a rule, but the diagnostic ("method
+  `x` is not declared in protocol") doesn't suggest `extend`, and
+  splitting one conceptual unit across two blocks reads worse.
+
+---
+
 ## Runtime: adjacent issues from the worker-migration TLS audit
 
 Found while root-causing the 2026-07 Linux shutdown crash (a process

@@ -23,37 +23,15 @@
 //!   binding arm hits each member of the underlying union, missing
 //!   members surface a clean diagnostic.
 
-use std::path::PathBuf;
-
 use koja_ast::util::dedent;
-use koja_parser::{ParseMode, SourceFile, parse_program};
-use koja_typecheck::{CheckFailure, CheckedProgram, check_program};
+use koja_parser::ParseMode;
 
 mod common;
 
 use common::{
-    PACKAGE, diagnostic_messages, typecheck_file as typecheck,
+    PACKAGE, check_packages, diagnostic_messages, typecheck_file as typecheck,
     typecheck_file_fail as typecheck_fail,
 };
-
-/// Multi-package driver: stack the named packages on top of the
-/// the autoimports + qualified slice and run the full typecheck
-/// pipeline. Used by [`alias_is_visible_cross_package`] to prove
-/// `type` aliases promote to package-global entries (unlike file-
-/// private `alias Pkg.Type` lines, which the existing
-/// `alias_is_file_private` test in `tests/aliases.rs` pins).
-fn check_multi_package(packages: &[(&str, &str, &str)]) -> Result<CheckedProgram, CheckFailure> {
-    let mut sources = koja_stdlib::autoimport_sources();
-    sources.extend(koja_stdlib::qualified_sources());
-    for (package, file, body) in packages {
-        sources.push(SourceFile {
-            package: package.to_string(),
-            path: PathBuf::from(file),
-            source: body.to_string(),
-        });
-    }
-    check_program(parse_program(sources, ParseMode::File))
-}
 
 #[test]
 fn type_alias_to_struct_resolves_at_use_site() {
@@ -277,18 +255,19 @@ fn type_alias_is_visible_cross_package() {
     // alias machinery finds them just like it finds structs and
     // enums. Without that promotion the `alias Pets.Pet` line
     // would diagnose with "alias target is not a registered type."
-    let result = check_multi_package(&[
-        (
-            "Pets",
-            "pets.koja",
-            "struct Cat\n  name: String\nend\n\
+    let result = check_packages(
+        &[
+            (
+                "Pets",
+                "pets.koja",
+                "struct Cat\n  name: String\nend\n\
              struct Dog\n  name: String\nend\n\
              type Pet = Cat | Dog\n",
-        ),
-        (
-            PACKAGE,
-            "app.koja",
-            "alias Pets.Cat\n\
+            ),
+            (
+                PACKAGE,
+                "app.koja",
+                "alias Pets.Cat\n\
              alias Pets.Pet\n\
              fn label(p: Pet) -> String\n  \
                 match p\n    \
@@ -298,8 +277,10 @@ fn type_alias_is_visible_cross_package() {
               fn main -> String\n  \
                 label(Cat{name: \"whiskers\"})\n\
               end\n",
-        ),
-    ]);
+            ),
+        ],
+        ParseMode::File,
+    );
     assert!(
         result.is_ok(),
         "expected cross-package alias to resolve, got {:?}",

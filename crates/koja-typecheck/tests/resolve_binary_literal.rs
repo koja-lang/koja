@@ -10,40 +10,11 @@
 //! `koja-ir-eval/tests/binary_literal.rs` (which pins the
 //! byte-for-byte runtime layout).
 
-use koja_ast::ast::Statement;
-use koja_ast::identifier::{Identifier, Resolution, ResolvedType};
-use koja_typecheck::CheckedProgram;
-
 mod common;
 
-use common::{PACKAGE, typecheck_script as typecheck, typecheck_script_fail as typecheck_fail};
-
-fn trailing_resolution(checked: &CheckedProgram) -> ResolvedType {
-    let pkg = checked
-        .packages
-        .iter()
-        .find(|p| p.package == PACKAGE)
-        .expect("checked program is missing the test package");
-    let file = pkg.files.first().expect("package has no files");
-    let body = file
-        .body
-        .as_deref()
-        .expect("script-mode file must keep statements on File.body");
-    let trailing = body.last().expect("expected at least one statement");
-    match trailing {
-        Statement::Expr(expr) => expr.resolution.clone(),
-        other => panic!("expected Statement::Expr as trailing statement, got {other:?}"),
-    }
-}
-
-fn global_leaf(checked: &CheckedProgram, name: &str) -> ResolvedType {
-    let ident = Identifier::new("Global", vec![name.to_string()]);
-    let (id, _) = checked
-        .registry
-        .lookup(&ident)
-        .unwrap_or_else(|| panic!("stdlib stub `Global.{name}` missing from registry"));
-    ResolvedType::leaf(Resolution::Global(id))
-}
+use common::{
+    assert_script_fails_with, global_leaf, trailing_resolution, typecheck_script as typecheck,
+};
 
 #[test]
 fn byte_aligned_literal_resolves_to_binary() {
@@ -126,60 +97,28 @@ fn empty_literal_resolves_to_binary() {
 #[test]
 fn dynamic_width_segment_diagnoses() {
     // `n` is a runtime int, so `<<x::n>>` is feature-gapped.
-    let failure = typecheck_fail("n = 8\n  x = 1\n  <<x::n>>\n");
-    assert!(
-        failure
-            .diagnostics
-            .iter()
-            .any(|d| d.message.contains("dynamic-width")),
-        "expected dynamic-width diagnostic, got {:?}",
-        failure.diagnostics,
-    );
+    assert_script_fails_with("n = 8\n  x = 1\n  <<x::n>>\n", &["dynamic-width"]);
 }
 
 #[test]
 fn float_with_size_modifier_diagnoses() {
     // `::N` only applies to integer values. Typing `1.0::32` is a
     // misuse that should be rejected loudly.
-    let failure = typecheck_fail("<<1.0::32>>\n");
-    assert!(
-        failure
-            .diagnostics
-            .iter()
-            .any(|d| d.message.contains("`Int`-typed value")),
-        "expected `::N` requires Int diagnostic, got {:?}",
-        failure.diagnostics,
-    );
+    assert_script_fails_with("<<1.0::32>>\n", &["`Int`-typed value"]);
 }
 
 #[test]
 fn unknown_type_annotation_diagnoses() {
     // `Bool` is a recognized stdlib stub but not a valid binary
     // segment type annotation.
-    let failure = typecheck_fail("<<true: Bool>>\n");
-    assert!(
-        failure
-            .diagnostics
-            .iter()
-            .any(|d| d.message.contains("not a recognized primitive")),
-        "expected unrecognized-type diagnostic, got {:?}",
-        failure.diagnostics,
-    );
+    assert_script_fails_with("<<true: Bool>>\n", &["not a recognized primitive"]);
 }
 
 #[test]
 fn string_segment_with_size_diagnoses() {
     // String segments don't carry `::N`. Combining the two is a
     // misuse the language layer should reject before lower.
-    let failure = typecheck_fail("<<\"hi\"::8>>\n");
-    assert!(
-        failure
-            .diagnostics
-            .iter()
-            .any(|d| d.message.contains("`String`-valued binary segment")),
-        "expected string-with-size diagnostic, got {:?}",
-        failure.diagnostics,
-    );
+    assert_script_fails_with("<<\"hi\"::8>>\n", &["`String`-valued binary segment"]);
 }
 
 #[test]
@@ -214,14 +153,9 @@ fn tagged_splice_resolves_to_binary() {
 
 #[test]
 fn binary_tag_on_non_binary_value_diagnoses() {
-    let failure = typecheck_fail("n = 5\n  <<n: Binary>>\n");
-    assert!(
-        failure
-            .diagnostics
-            .iter()
-            .any(|d| d.message.contains("requires a `Binary`-typed value")),
-        "expected splice value-type diagnostic, got {:?}",
-        failure.diagnostics,
+    assert_script_fails_with(
+        "n = 5\n  <<n: Binary>>\n",
+        &["requires a `Binary`-typed value"],
     );
 }
 
@@ -229,56 +163,24 @@ fn binary_tag_on_non_binary_value_diagnoses() {
 fn bare_segment_of_inadmissible_type_diagnoses() {
     // A bare segment admits `Int` (8-bit) and `Binary` (splice).
     // Anything else needs an explicit modifier.
-    let failure = typecheck_fail("<<1.5>>\n");
-    assert!(
-        failure
-            .diagnostics
-            .iter()
-            .any(|d| d.message.contains("or a `Binary`-typed value")),
-        "expected bare-segment type diagnostic, got {:?}",
-        failure.diagnostics,
-    );
+    assert_script_fails_with("<<1.5>>\n", &["or a `Binary`-typed value"]);
 }
 
 #[test]
 fn unaligned_run_before_splice_diagnoses() {
     // Each fixed-width run around a splice becomes its own Binary,
     // so a sub-byte run cannot precede a splice.
-    let failure = typecheck_fail("b = <<1>>\n  <<5::3, b>>\n");
-    assert!(
-        failure
-            .diagnostics
-            .iter()
-            .any(|d| d.message.contains("must total whole bytes")),
-        "expected unaligned-run diagnostic, got {:?}",
-        failure.diagnostics,
-    );
+    assert_script_fails_with("b = <<1>>\n  <<5::3, b>>\n", &["must total whole bytes"]);
 }
 
 #[test]
 fn unaligned_run_after_splice_diagnoses() {
-    let failure = typecheck_fail("b = <<1>>\n  <<b, 5::3>>\n");
-    assert!(
-        failure
-            .diagnostics
-            .iter()
-            .any(|d| d.message.contains("must total whole bytes")),
-        "expected unaligned-run diagnostic, got {:?}",
-        failure.diagnostics,
-    );
+    assert_script_fails_with("b = <<1>>\n  <<b, 5::3>>\n", &["must total whole bytes"]);
 }
 
 #[test]
 fn string_splice_tag_diagnoses() {
     // Only `Binary` values splice. `: String` gets a pointed
     // diagnostic instead of the unrecognized-primitive list.
-    let failure = typecheck_fail("s = \"hi\"\n  <<s: String>>\n");
-    assert!(
-        failure
-            .diagnostics
-            .iter()
-            .any(|d| d.message.contains("cannot be spliced")),
-        "expected string-splice diagnostic, got {:?}",
-        failure.diagnostics,
-    );
+    assert_script_fails_with("s = \"hi\"\n  <<s: String>>\n", &["cannot be spliced"]);
 }

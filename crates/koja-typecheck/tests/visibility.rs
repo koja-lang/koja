@@ -18,42 +18,16 @@
 //!
 //! [`VisibilityScope`]: koja_typecheck::registry::VisibilityScope
 
-use std::path::PathBuf;
-
 use koja_ast::util::dedent;
-use koja_parser::{ParseMode, SourceFile, parse_program};
-use koja_typecheck::{CheckFailure, CheckedProgram, check_program};
+use koja_parser::ParseMode;
+use koja_typecheck::{CheckFailure, CheckedProgram};
 
 mod common;
 
-use common::{PACKAGE, diagnostic_messages, typecheck_script, typecheck_script_fail};
-
-/// Drive `parse_program -> check_program` on multiple user files
-/// stacked in `TestApp`. Used by the same-package positives to prove
-/// `priv` decls reach sibling files inside one package.
-fn check_multi_file(files: &[(&str, &str)]) -> Result<CheckedProgram, CheckFailure> {
-    let stacked: Vec<(&str, &str, &str)> = files
-        .iter()
-        .map(|(name, body)| (PACKAGE, *name, *body))
-        .collect();
-    check_packages(&stacked)
-}
-
-/// Drive `parse_program -> check_program` on `(package, filename,
-/// body)` triples so cross-package rejection cases can stack a `Lib`
-/// package next to `TestApp`.
-fn check_packages(files: &[(&str, &str, &str)]) -> Result<CheckedProgram, CheckFailure> {
-    let mut sources = koja_stdlib::autoimport_sources();
-    sources.extend(koja_stdlib::qualified_sources());
-    for (package, name, body) in files {
-        sources.push(SourceFile {
-            package: package.to_string(),
-            path: PathBuf::from(name),
-            source: dedent(body),
-        });
-    }
-    check_program(parse_program(sources, ParseMode::Script))
-}
+use common::{
+    PACKAGE, assert_script_fails_with, check_multi_file, check_packages, diagnostic_messages,
+    typecheck_script, typecheck_script_fail,
+};
 
 /// Assert the failure contains the standard cross-package rejection
 /// message for `kind_label` (e.g. "struct") on `identifier`.
@@ -83,17 +57,20 @@ fn top_level_priv_callable_from_same_file() {
 
 #[test]
 fn top_level_priv_callable_across_files_in_same_package() {
-    let result = check_multi_file(&[
-        (
-            "helper.koja",
-            "
+    let result = check_multi_file(
+        &[
+            (
+                "helper.koja",
+                "
             priv fn double(x: Int) -> Int
               x * 2
             end
             ",
-        ),
-        ("main.kojs", "double(21).print()"),
-    ])
+            ),
+            ("main.kojs", "double(21).print()"),
+        ],
+        ParseMode::Script,
+    )
     .expect("same-package cross-file priv call should succeed");
     assert!(
         result.diagnostics.is_empty(),
@@ -173,7 +150,7 @@ fn priv_method_callable_across_impl_blocks_on_same_type() {
 
 #[test]
 fn priv_method_rejected_from_another_type() {
-    let failure = typecheck_script_fail(&dedent(
+    assert_script_fails_with(
         "
         struct Counter
           value: Int
@@ -191,20 +168,16 @@ fn priv_method_rejected_from_another_type() {
 
         Probe {}.poke().print()
         ",
-    ));
-    let messages = diagnostic_messages(&failure);
-    assert!(
-        messages
-            .iter()
-            .any(|m| m.contains("private method `TestApp.Counter.helper`")
-                && m.contains("cannot be called from here")),
-        "expected type-private rejection diagnostic, got {messages:?}",
+        &[
+            "private method `TestApp.Counter.helper`",
+            "cannot be called from here",
+        ],
     );
 }
 
 #[test]
 fn priv_method_rejected_from_top_level_code() {
-    let failure = typecheck_script_fail(&dedent(
+    assert_script_fails_with(
         "
         struct Counter
           value: Int
@@ -216,27 +189,20 @@ fn priv_method_rejected_from_top_level_code() {
 
         Counter { value: 1 }.helper().print()
         ",
-    ));
-    let messages = diagnostic_messages(&failure);
-    assert!(
-        messages
-            .iter()
-            .any(|m| m.contains("private method `TestApp.Counter.helper`")
-                && m.contains("cannot be called from here")),
-        "expected type-private rejection diagnostic, got {messages:?}",
+        &[
+            "private method `TestApp.Counter.helper`",
+            "cannot be called from here",
+        ],
     );
 }
 
-// ---------------------------------------------------------------------------
-// Same-package positives: `priv` decls reach sibling files
-// ---------------------------------------------------------------------------
-
 #[test]
 fn priv_struct_usable_across_files_in_same_package() {
-    check_multi_file(&[
-        (
-            "lib.koja",
-            "
+    check_multi_file(
+        &[
+            (
+                "lib.koja",
+                "
             priv struct Counter
               value: Int
             end
@@ -245,59 +211,68 @@ fn priv_struct_usable_across_files_in_same_package() {
               Counter{value: c.value + 1}
             end
             ",
-        ),
-        (
-            "main.kojs",
-            "
+            ),
+            (
+                "main.kojs",
+                "
             c = bump(Counter{value: 1})
             c.value.print()
             ",
-        ),
-    ])
+            ),
+        ],
+        ParseMode::Script,
+    )
     .expect("same-package priv struct use should succeed");
 }
 
 #[test]
 fn priv_enum_usable_across_files_in_same_package() {
-    check_multi_file(&[
-        (
-            "lib.koja",
-            "
+    check_multi_file(
+        &[
+            (
+                "lib.koja",
+                "
             priv enum Mode
               Off
               On
             end
             ",
-        ),
-        (
-            "main.kojs",
-            "
+            ),
+            (
+                "main.kojs",
+                "
             m = Mode.On
             match m
               Mode.On -> \"on\".print()
               Mode.Off -> \"off\".print()
             end
             ",
-        ),
-    ])
+            ),
+        ],
+        ParseMode::Script,
+    )
     .expect("same-package priv enum use should succeed");
 }
 
 #[test]
 fn priv_constant_usable_across_files_in_same_package() {
-    check_multi_file(&[
-        ("lib.koja", "priv const LIMIT: Int = 10"),
-        ("main.kojs", "LIMIT.print()"),
-    ])
+    check_multi_file(
+        &[
+            ("lib.koja", "priv const LIMIT: Int = 10"),
+            ("main.kojs", "LIMIT.print()"),
+        ],
+        ParseMode::Script,
+    )
     .expect("same-package priv constant use should succeed");
 }
 
 #[test]
 fn priv_type_alias_usable_across_files_in_same_package() {
-    check_multi_file(&[
-        (
-            "lib.koja",
-            "
+    check_multi_file(
+        &[
+            (
+                "lib.koja",
+                "
             priv struct Cat
               name: String
             end
@@ -308,10 +283,10 @@ fn priv_type_alias_usable_across_files_in_same_package() {
 
             priv type Pet = Cat | Dog
             ",
-        ),
-        (
-            "main.kojs",
-            "
+            ),
+            (
+                "main.kojs",
+                "
             priv fn name_of(p: Pet) -> String
               match p
                 c: Cat -> c.name
@@ -321,25 +296,28 @@ fn priv_type_alias_usable_across_files_in_same_package() {
 
             name_of(Cat{name: \"whiskers\"}).print()
             ",
-        ),
-    ])
+            ),
+        ],
+        ParseMode::Script,
+    )
     .expect("same-package priv type alias use should succeed");
 }
 
 #[test]
 fn priv_protocol_implementable_in_same_package() {
-    check_multi_file(&[
-        (
-            "lib.koja",
-            "
+    check_multi_file(
+        &[
+            (
+                "lib.koja",
+                "
             priv protocol Marked
               fn mark(self) -> Int
             end
             ",
-        ),
-        (
-            "main.kojs",
-            "
+            ),
+            (
+                "main.kojs",
+                "
             struct Point
               x: Int
             end
@@ -352,14 +330,12 @@ fn priv_protocol_implementable_in_same_package() {
 
             Point{x: 3}.mark().print()
             ",
-        ),
-    ])
+            ),
+        ],
+        ParseMode::Script,
+    )
     .expect("same-package priv protocol impl should succeed");
 }
-
-// ---------------------------------------------------------------------------
-// Cross-package negatives: `priv` decls reject other packages
-// ---------------------------------------------------------------------------
 
 /// A `Lib` package exporting one private decl per kind, plus a
 /// public control struct.
@@ -389,7 +365,10 @@ const LIB_DECLS: &str = "
     ";
 
 fn check_lib_and_app(app: &str) -> Result<CheckedProgram, CheckFailure> {
-    check_packages(&[("Lib", "lib.koja", LIB_DECLS), (PACKAGE, "main.kojs", app)])
+    check_packages(
+        &[("Lib", "lib.koja", LIB_DECLS), (PACKAGE, "main.kojs", app)],
+        ParseMode::Script,
+    )
 }
 
 #[test]
@@ -509,10 +488,6 @@ fn priv_struct_pattern_rejected_cross_package() {
     .expect_err("cross-package priv struct pattern should fail");
     assert_private_reference_rejected(&failure, "struct", "Lib.Hidden");
 }
-
-// ---------------------------------------------------------------------------
-// Signature leak check: public surface may not expose same-package privates
-// ---------------------------------------------------------------------------
 
 /// Assert the failure contains the leak message for a public
 /// `subject` exposing private `leaked` (both "kind `identifier`").

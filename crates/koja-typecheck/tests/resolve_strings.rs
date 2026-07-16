@@ -5,54 +5,14 @@
 //! per part. `String`-typed expressions are left bare to avoid the
 //! quote-adding behavior of `String.format`.
 
-use koja_ast::ast::{Expr, ExprKind, Function, Item, Statement, StringPart};
-use koja_ast::identifier::{Identifier, Resolution, ResolvedType};
+use koja_ast::ast::{Expr, ExprKind, StringPart};
 use koja_ast::util::dedent;
-use koja_typecheck::CheckedProgram;
 
 mod common;
 
-use common::{PACKAGE, diagnostic_messages, parse_and_check, typecheck_script as typecheck};
-use koja_parser::ParseMode;
-
-fn find_function<'a>(checked: &'a CheckedProgram, name: &str) -> &'a Function {
-    let pkg = checked
-        .packages
-        .iter()
-        .find(|p| p.package == PACKAGE)
-        .expect("checked program is missing the test package");
-    for file in &pkg.files {
-        for item in &file.items {
-            if let Item::Function(function) = item
-                && function.name == name
-            {
-                return function;
-            }
-        }
-    }
-    panic!("fn {name} not found in checked program");
-}
-
-fn trailing_expr(function: &Function) -> &Expr {
-    let body = function
-        .body
-        .as_deref()
-        .expect("function has no body (extern?)");
-    let trailing = body.last().expect("expected at least one statement");
-    match trailing {
-        Statement::Expr(expr) => expr,
-        other => panic!("expected Statement::Expr as trailing statement, got {other:?}"),
-    }
-}
-
-fn global_leaf(checked: &CheckedProgram, name: &str) -> ResolvedType {
-    let ident = Identifier::new("Global", vec![name.to_string()]);
-    let (id, _) = checked
-        .registry
-        .lookup(&ident)
-        .unwrap_or_else(|| panic!("stdlib stub `Global.{name}` missing from registry"));
-    ResolvedType::leaf(Resolution::Global(id))
-}
+use common::{
+    assert_script_fails_with, function_body, global_leaf, last_expr, typecheck_script as typecheck,
+};
 
 fn interpolation_exprs(string_expr: &Expr) -> Vec<&Expr> {
     let ExprKind::String { parts, .. } = &string_expr.kind else {
@@ -77,8 +37,7 @@ fn string_literal_resolves_to_global_string() {
 
     let checked = typecheck(&dedent(source));
     let string = global_leaf(&checked, "String");
-    let greeting = find_function(&checked, "greeting");
-    let trailing = trailing_expr(greeting);
+    let trailing = last_expr(function_body(&checked, "greeting"));
     assert_eq!(trailing.resolution, string);
     assert!(matches!(trailing.kind, ExprKind::String { .. }));
 }
@@ -93,8 +52,7 @@ fn string_interpolation_with_explicit_format_left_unchanged() {
 
     let checked = typecheck(&dedent(source));
     let string = global_leaf(&checked, "String");
-    let greeting = find_function(&checked, "greeting");
-    let trailing = trailing_expr(greeting);
+    let trailing = last_expr(function_body(&checked, "greeting"));
     assert_eq!(trailing.resolution, string);
     let interps = interpolation_exprs(trailing);
     assert_eq!(interps.len(), 1);
@@ -126,8 +84,7 @@ fn string_interpolation_int_wraps_in_format() {
 
     let checked = typecheck(&dedent(source));
     let string = global_leaf(&checked, "String");
-    let greeting = find_function(&checked, "greeting");
-    let trailing = trailing_expr(greeting);
+    let trailing = last_expr(function_body(&checked, "greeting"));
     assert_eq!(trailing.resolution, string);
     let interps = interpolation_exprs(trailing);
     assert_eq!(interps.len(), 1);
@@ -163,8 +120,7 @@ fn string_interpolation_string_left_unwrapped() {
 
     let checked = typecheck(&dedent(source));
     let string = global_leaf(&checked, "String");
-    let greeting = find_function(&checked, "greeting");
-    let trailing = trailing_expr(greeting);
+    let trailing = last_expr(function_body(&checked, "greeting"));
     assert_eq!(trailing.resolution, string);
     let interps = interpolation_exprs(trailing);
     assert_eq!(interps.len(), 1);
@@ -194,8 +150,7 @@ fn string_interpolation_struct_wraps_in_format() {
 
     let checked = typecheck(&dedent(source));
     let string = global_leaf(&checked, "String");
-    let render = find_function(&checked, "render");
-    let trailing = trailing_expr(render);
+    let trailing = last_expr(function_body(&checked, "render"));
     assert_eq!(trailing.resolution, string);
     let interps = interpolation_exprs(trailing);
     assert_eq!(interps.len(), 1);
@@ -231,13 +186,5 @@ fn string_interpolation_without_format_method_diagnoses() {
         end
         ";
 
-    let failure = parse_and_check(&dedent(source), ParseMode::Script)
-        .expect_err("expected typecheck to fail when the interp receiver has no `format` method");
-    let messages = diagnostic_messages(&failure);
-    assert!(
-        messages
-            .iter()
-            .any(|m| m.contains("receiver must have a struct or enum type")),
-        "expected a receiver-shape diagnostic from the `.format()` wrap, got {messages:?}",
-    );
+    assert_script_fails_with(source, &["receiver must have a struct or enum type"]);
 }
