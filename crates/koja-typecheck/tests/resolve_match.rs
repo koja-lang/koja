@@ -29,56 +29,17 @@
 //!   following an unguarded catch-all, duplicate enum-variant or literal
 //!   arms, and overlapping alternatives within an or-pattern
 
-use koja_ast::ast::{ExprKind, Item, Pattern, Statement};
-use koja_ast::identifier::{Identifier, Resolution, ResolvedType};
+use koja_ast::ast::{ExprKind, Pattern};
+use koja_ast::identifier::Resolution;
 use koja_ast::util::dedent;
-use koja_typecheck::CheckedProgram;
 
 mod common;
 
 use common::{
-    PACKAGE, typecheck_script as typecheck, typecheck_script_fail as typecheck_fail,
+    assert_script_fails_with, function_body, int_type, last_expr, string_type, trailing_expr,
+    trailing_resolution, typecheck_script as typecheck, typecheck_script_fail as typecheck_fail,
     warning_messages,
 };
-
-fn script_body(checked: &CheckedProgram) -> &[Statement] {
-    let pkg = checked
-        .packages
-        .iter()
-        .find(|p| p.package == PACKAGE)
-        .expect("checked program is missing the test package");
-    let file = pkg.files.first().expect("package has no files");
-    file.body
-        .as_deref()
-        .expect("script-mode file must keep statements on File.body")
-}
-
-fn trailing_resolution(checked: &CheckedProgram) -> ResolvedType {
-    let trailing = script_body(checked)
-        .last()
-        .expect("expected at least one statement");
-    match trailing {
-        Statement::Expr(expr) => expr.resolution.clone(),
-        other => panic!("expected Statement::Expr as trailing statement, got {other:?}"),
-    }
-}
-
-fn primitive_type(checked: &CheckedProgram, name: &str) -> ResolvedType {
-    let ident = Identifier::new("Global", vec![name.to_string()]);
-    let (id, _) = checked
-        .registry
-        .lookup(&ident)
-        .unwrap_or_else(|| panic!("stdlib stub `Global.{name}` missing from registry"));
-    ResolvedType::leaf(Resolution::Global(id))
-}
-
-fn int_type(checked: &CheckedProgram) -> ResolvedType {
-    primitive_type(checked, "Int")
-}
-
-fn string_type(checked: &CheckedProgram) -> ResolvedType {
-    primitive_type(checked, "String")
-}
 
 fn assert_missing_variant(source: &str, variant: &str) {
     let failure = typecheck_fail(&dedent(source));
@@ -135,12 +96,7 @@ fn match_binding_stamps_local_id() {
           end
         ";
     let checked = typecheck(&dedent(source));
-    let Statement::Expr(match_expr) = script_body(&checked)
-        .last()
-        .expect("missing trailing match-expr")
-    else {
-        panic!("expected trailing Statement::Expr");
-    };
+    let match_expr = trailing_expr(&checked);
     let ExprKind::Match { arms, .. } = &match_expr.kind else {
         panic!("expected ExprKind::Match");
     };
@@ -178,15 +134,7 @@ fn match_without_catch_all_diagnoses() {
             2 -> 20
           end
         ";
-    let failure = typecheck_fail(&dedent(source));
-    assert!(
-        failure
-            .diagnostics
-            .iter()
-            .any(|d| d.message.contains("must include a wildcard")),
-        "expected catch-all diagnostic, got: {:?}",
-        failure.diagnostics,
-    );
+    assert_script_fails_with(source, &["must include a wildcard"]);
 }
 
 #[test]
@@ -197,15 +145,7 @@ fn match_with_mismatched_arms_diagnoses() {
             _ -> false
           end
         ";
-    let failure = typecheck_fail(&dedent(source));
-    assert!(
-        failure
-            .diagnostics
-            .iter()
-            .any(|d| d.message.contains("match arms have inconsistent types")),
-        "expected mismatch diagnostic, got: {:?}",
-        failure.diagnostics,
-    );
+    assert_script_fails_with(source, &["match arms have inconsistent types"]);
 }
 
 #[test]
@@ -216,15 +156,7 @@ fn match_with_literal_type_mismatch_diagnoses() {
             _ -> 20
           end
         ";
-    let failure = typecheck_fail(&dedent(source));
-    assert!(
-        failure
-            .diagnostics
-            .iter()
-            .any(|d| d.message.contains("does not match subject type")),
-        "expected literal-vs-subject diagnostic, got: {:?}",
-        failure.diagnostics,
-    );
+    assert_script_fails_with(source, &["does not match subject type"]);
 }
 
 #[test]
@@ -237,9 +169,7 @@ fn match_guard_resolves_against_pattern_locals() {
         ";
     let checked = typecheck(&dedent(source));
     assert_eq!(trailing_resolution(&checked), int_type(&checked));
-    let Statement::Expr(match_expr) = script_body(&checked).last().unwrap() else {
-        panic!("expected trailing Statement::Expr");
-    };
+    let match_expr = trailing_expr(&checked);
     let ExprKind::Match { arms, .. } = &match_expr.kind else {
         panic!("expected ExprKind::Match");
     };
@@ -269,14 +199,7 @@ fn match_guard_non_bool_diagnoses() {
             _ -> 20
           end
         ";
-    let failure = typecheck_fail(&dedent(source));
-    assert!(
-        failure.diagnostics.iter().any(|d| d
-            .message
-            .contains("`match arm guard` condition must be `Bool`")),
-        "expected non-Bool guard diagnostic, got: {:?}",
-        failure.diagnostics,
-    );
+    assert_script_fails_with(source, &["`match arm guard` condition must be `Bool`"]);
 }
 
 #[test]
@@ -286,13 +209,9 @@ fn match_guarded_catch_all_does_not_close_chain() {
             _ when 1 > 0 -> 10
           end
         ";
-    let failure = typecheck_fail(&dedent(source));
-    assert!(
-        failure.diagnostics.iter().any(|d| d
-            .message
-            .contains("must include a wildcard `_` or binding catch-all arm")),
-        "expected missing-catch-all diagnostic, got: {:?}",
-        failure.diagnostics,
+    assert_script_fails_with(
+        source,
+        &["must include a wildcard `_` or binding catch-all arm"],
     );
 }
 
@@ -311,15 +230,7 @@ fn match_guarded_enum_arm_does_not_count_as_coverage() {
           end
         end
         ";
-    let failure = typecheck_fail(&dedent(source));
-    assert!(
-        failure
-            .diagnostics
-            .iter()
-            .any(|d| d.message.contains("not exhaustive") && d.message.contains("Red")),
-        "expected missing-Red diagnostic, got: {:?}",
-        failure.diagnostics,
-    );
+    assert_missing_variant(source, "Red");
 }
 
 #[test]
@@ -371,15 +282,7 @@ fn match_enum_missing_variant_diagnoses() {
           end
         end
         ";
-    let failure = typecheck_fail(&dedent(source));
-    assert!(
-        failure
-            .diagnostics
-            .iter()
-            .any(|d| d.message.contains("not exhaustive") && d.message.contains("Blue")),
-        "expected missing-variant diagnostic, got: {:?}",
-        failure.diagnostics,
-    );
+    assert_missing_variant(source, "Blue");
 }
 
 #[test]
@@ -400,24 +303,7 @@ fn match_enum_tuple_binding_stamps_local_id() {
           unwrap(Box.Some(7))
         ";
     let checked = typecheck(&dedent(source));
-    let pkg = checked
-        .packages
-        .iter()
-        .find(|p| p.package == PACKAGE)
-        .expect("missing test package");
-    let file = pkg.files.first().expect("package has no files");
-    let unwrap_fn = file
-        .items
-        .iter()
-        .find_map(|item| match item {
-            Item::Function(f) if f.name == "unwrap" => Some(f),
-            _ => None,
-        })
-        .expect("missing fn unwrap");
-    let body = unwrap_fn.body.as_deref().expect("missing fn unwrap body");
-    let Statement::Expr(match_expr) = body.last().expect("missing trailing match") else {
-        panic!("expected trailing Statement::Expr");
-    };
+    let match_expr = last_expr(function_body(&checked, "unwrap"));
     let ExprKind::Match { arms, .. } = &match_expr.kind else {
         panic!("expected ExprKind::Match");
     };
@@ -449,15 +335,7 @@ fn match_enum_tuple_arity_mismatch_diagnoses() {
           end
         end
         ";
-    let failure = typecheck_fail(&dedent(source));
-    assert!(
-        failure
-            .diagnostics
-            .iter()
-            .any(|d| d.message.contains("expects 2 positional element")),
-        "expected tuple arity diagnostic, got: {:?}",
-        failure.diagnostics,
-    );
+    assert_script_fails_with(source, &["expects 2 positional element"]);
 }
 
 #[test]
@@ -502,14 +380,7 @@ fn match_or_with_binding_diagnoses() {
             _ -> 0
           end
         ";
-    let failure = typecheck_fail(&dedent(source));
-    assert!(
-        failure.diagnostics.iter().any(|d| d
-            .message
-            .contains("only admits literal / enum-unit alternatives")),
-        "expected or-with-binding diagnostic, got: {:?}",
-        failure.diagnostics,
-    );
+    assert_script_fails_with(source, &["only admits literal / enum-unit alternatives"]);
 }
 
 #[test]
@@ -521,12 +392,7 @@ fn match_arm_binding_does_not_leak_to_following_arm() {
           end
         ";
     let checked = typecheck(&dedent(source));
-    let Statement::Expr(match_expr) = script_body(&checked)
-        .last()
-        .expect("missing trailing match")
-    else {
-        panic!("expected trailing Statement::Expr");
-    };
+    let match_expr = trailing_expr(&checked);
     let ExprKind::Match { arms, .. } = &match_expr.kind else {
         panic!("expected ExprKind::Match");
     };
@@ -558,9 +424,7 @@ fn match_struct_destructure_binds_resolve_against_field_types() {
         ";
     let checked = typecheck(&dedent(source));
     assert_eq!(trailing_resolution(&checked), int_type(&checked));
-    let Statement::Expr(match_expr) = script_body(&checked).last().unwrap() else {
-        panic!("expected trailing Statement::Expr");
-    };
+    let match_expr = trailing_expr(&checked);
     let ExprKind::Match { arms, .. } = &match_expr.kind else {
         panic!("expected ExprKind::Match");
     };
@@ -592,15 +456,7 @@ fn match_struct_destructure_unknown_field_diagnoses() {
             Point{z: a} -> a
           end
         ";
-    let failure = typecheck_fail(&dedent(source));
-    assert!(
-        failure
-            .diagnostics
-            .iter()
-            .any(|d| d.message.contains("has no field `z`")),
-        "expected unknown-field diagnostic, got: {:?}",
-        failure.diagnostics,
-    );
+    assert_script_fails_with(source, &["has no field `z`"]);
 }
 
 #[test]
@@ -622,9 +478,7 @@ fn match_struct_destructure_literal_field_resolves() {
         ";
     let checked = typecheck(&dedent(source));
     assert_eq!(trailing_resolution(&checked), int_type(&checked));
-    let Statement::Expr(match_expr) = script_body(&checked).last().unwrap() else {
-        panic!("expected trailing Statement::Expr");
-    };
+    let match_expr = trailing_expr(&checked);
     let ExprKind::Match { arms, .. } = &match_expr.kind else {
         panic!("expected ExprKind::Match");
     };
@@ -967,15 +821,7 @@ fn match_enum_struct_destructure_against_tuple_variant_diagnoses() {
             Box.None -> 0
           end
         ";
-    let failure = typecheck_fail(&dedent(source));
-    assert!(
-        failure
-            .diagnostics
-            .iter()
-            .any(|d| d.message.contains("not a struct variant")),
-        "expected struct-vs-tuple variant diagnostic, got: {:?}",
-        failure.diagnostics,
-    );
+    assert_script_fails_with(source, &["not a struct variant"]);
 }
 
 #[test]
@@ -1182,15 +1028,7 @@ fn match_bool_only_true_arm_still_requires_catch_all() {
             true -> 1
           end
         ";
-    let failure = typecheck_fail(&dedent(source));
-    assert!(
-        failure
-            .diagnostics
-            .iter()
-            .any(|d| d.message.contains("must include a wildcard")),
-        "expected missing-catch-all diagnostic for partial Bool match, got: {:?}",
-        failure.diagnostics,
-    );
+    assert_script_fails_with(source, &["must include a wildcard"]);
 }
 
 // --- Constructor shorthand + deferred-shape feature gaps ---
@@ -1213,24 +1051,7 @@ fn match_constructor_unit_resolves() {
           pick(Box.None)
         ";
     let checked = typecheck(&dedent(source));
-    let pkg = checked
-        .packages
-        .iter()
-        .find(|p| p.package == PACKAGE)
-        .expect("missing test package");
-    let file = pkg.files.first().expect("package has no files");
-    let pick_fn = file
-        .items
-        .iter()
-        .find_map(|item| match item {
-            Item::Function(f) if f.name == "pick" => Some(f),
-            _ => None,
-        })
-        .expect("missing fn pick");
-    let body = pick_fn.body.as_deref().expect("missing fn pick body");
-    let Statement::Expr(match_expr) = body.last().expect("missing trailing match") else {
-        panic!("expected trailing Statement::Expr");
-    };
+    let match_expr = last_expr(function_body(&checked, "pick"));
     let ExprKind::Match { arms, .. } = &match_expr.kind else {
         panic!("expected ExprKind::Match");
     };
@@ -1259,24 +1080,7 @@ fn match_constructor_tuple_resolves_and_binds() {
           unwrap(Box.Some(7))
         ";
     let checked = typecheck(&dedent(source));
-    let pkg = checked
-        .packages
-        .iter()
-        .find(|p| p.package == PACKAGE)
-        .expect("missing test package");
-    let file = pkg.files.first().expect("package has no files");
-    let unwrap_fn = file
-        .items
-        .iter()
-        .find_map(|item| match item {
-            Item::Function(f) if f.name == "unwrap" => Some(f),
-            _ => None,
-        })
-        .expect("missing fn unwrap");
-    let body = unwrap_fn.body.as_deref().expect("missing fn unwrap body");
-    let Statement::Expr(match_expr) = body.last().expect("missing trailing match") else {
-        panic!("expected trailing Statement::Expr");
-    };
+    let match_expr = last_expr(function_body(&checked, "unwrap"));
     let ExprKind::Match { arms, .. } = &match_expr.kind else {
         panic!("expected ExprKind::Match");
     };
@@ -1313,15 +1117,7 @@ fn match_constructor_unknown_variant_diagnoses() {
 
           unwrap(Box.None)
         ";
-    let failure = typecheck_fail(&dedent(source));
-    assert!(
-        failure
-            .diagnostics
-            .iter()
-            .any(|d| d.message.contains("has no variant `Foo`")),
-        "expected unknown-variant diagnostic, got: {:?}",
-        failure.diagnostics,
-    );
+    assert_script_fails_with(source, &["has no variant `Foo`"]);
 }
 
 #[test]
@@ -1341,15 +1137,7 @@ fn match_constructor_arity_mismatch_diagnoses() {
 
           unwrap(Box.None)
         ";
-    let failure = typecheck_fail(&dedent(source));
-    assert!(
-        failure
-            .diagnostics
-            .iter()
-            .any(|d| d.message.contains("expects 1 positional element")),
-        "expected arity-mismatch diagnostic, got: {:?}",
-        failure.diagnostics,
-    );
+    assert_script_fails_with(source, &["expects 1 positional element"]);
 }
 
 #[test]
@@ -1398,15 +1186,7 @@ fn match_constructor_unit_variant_with_payload_diagnoses() {
 
           unwrap(Box.None)
         ";
-    let failure = typecheck_fail(&dedent(source));
-    assert!(
-        failure
-            .diagnostics
-            .iter()
-            .any(|d| d.message.contains("is a unit variant and takes no payload")),
-        "expected unit-variant-with-payload diagnostic, got: {:?}",
-        failure.diagnostics,
-    );
+    assert_script_fails_with(source, &["is a unit variant and takes no payload"]);
 }
 
 #[test]
@@ -1417,15 +1197,7 @@ fn match_constructor_non_enum_subject_diagnoses() {
             _ -> 0
           end
         ";
-    let failure = typecheck_fail(&dedent(source));
-    assert!(
-        failure
-            .diagnostics
-            .iter()
-            .any(|d| d.message.contains("requires an enum subject")),
-        "expected non-enum-subject diagnostic, got: {:?}",
-        failure.diagnostics,
-    );
+    assert_script_fails_with(source, &["requires an enum subject"]);
 }
 
 #[test]
@@ -1436,15 +1208,7 @@ fn match_list_pattern_still_diagnoses_feature_gap() {
             _ -> 0
           end
         ";
-    let failure = typecheck_fail(&dedent(source));
-    assert!(
-        failure
-            .diagnostics
-            .iter()
-            .any(|d| d.message.contains("does not yet support list patterns")),
-        "expected list-pattern feature-gap diagnostic, got: {:?}",
-        failure.diagnostics,
-    );
+    assert_script_fails_with(source, &["does not yet support list patterns"]);
 }
 
 #[test]

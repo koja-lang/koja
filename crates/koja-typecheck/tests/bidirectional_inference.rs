@@ -23,7 +23,7 @@ use koja_ast::util::dedent;
 
 mod common;
 
-use common::typecheck_script as typecheck;
+use common::{assert_script_fails_with, typecheck_script as typecheck};
 
 #[test]
 fn unit_variant_inferred_from_function_return_type() {
@@ -253,8 +253,6 @@ fn return_inside_closure_uses_closure_return_type_not_outer_fn() {
 
 #[test]
 fn unit_variant_without_expected_still_diagnoses() {
-    use common::typecheck_script_fail as typecheck_fail;
-
     // Bare assignment inside a Unit-returning function: the rhs
     // sits outside any expected-type position, so the unit-variant
     // diagnostic still fires (vs. the function-tail / arm-tail
@@ -269,17 +267,11 @@ fn unit_variant_without_expected_still_diagnoses() {
           x = Maybe.None
         end
         ";
-    let failure = typecheck_fail(&dedent(source));
-    assert!(
-        failure.to_string().contains("cannot infer type parameter"),
-        "expected `cannot infer type parameter` diagnostic; got {failure}",
-    );
+    assert_script_fails_with(source, &["cannot infer type parameter"]);
 }
 
 #[test]
 fn unit_variant_under_mismatched_expected_falls_back_to_diagnostic() {
-    use common::typecheck_script_fail as typecheck_fail;
-
     let source = "
         enum Maybe<T>
           Some(T)
@@ -294,12 +286,9 @@ fn unit_variant_under_mismatched_expected_falls_back_to_diagnostic() {
           Maybe.None
         end
         ";
-    let failure = typecheck_fail(&dedent(source));
-    assert!(
-        failure.to_string().contains("cannot infer type parameter"),
-        "expected `cannot infer type parameter` diagnostic when expected type's \
-         head differs from the unit variant's enum; got {failure}",
-    );
+    // Expected type's head differs from the unit variant's enum, so
+    // the "cannot infer" diagnostic still fires.
+    assert_script_fails_with(source, &["cannot infer type parameter"]);
 }
 
 // ------------------------------------------------------------------

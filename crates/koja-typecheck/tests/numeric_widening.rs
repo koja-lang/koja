@@ -17,7 +17,7 @@ use koja_ast::util::dedent;
 
 mod common;
 
-use common::{diagnostic_messages, typecheck_script as typecheck, typecheck_script_fail};
+use common::{assert_script_fails_with, typecheck_script as typecheck, typecheck_script_fail};
 
 // -----------------------------------------------------------------------------
 // Accepts: every widenable source at every flow site
@@ -132,14 +132,7 @@ fn int_does_not_narrow_to_int32() {
         wide: Int = 5
         want32(wide)
         ";
-    let failure = typecheck_script_fail(&dedent(source));
-    let messages = diagnostic_messages(&failure);
-    assert!(
-        messages
-            .iter()
-            .any(|m| m.contains("expects `Int32`, got `Int`")),
-        "expected an Int -> Int32 mismatch diagnostic, got: {messages:?}",
-    );
+    assert_script_fails_with(source, &["expects `Int32`, got `Int`"]);
 }
 
 #[test]
@@ -152,14 +145,7 @@ fn uint64_does_not_widen_to_int() {
         u: UInt64 = 5
         want_int(u)
         ";
-    let failure = typecheck_script_fail(&dedent(source));
-    let messages = diagnostic_messages(&failure);
-    assert!(
-        messages
-            .iter()
-            .any(|m| m.contains("expects `Int`, got `UInt64`")),
-        "expected a UInt64 -> Int mismatch diagnostic, got: {messages:?}",
-    );
+    assert_script_fails_with(source, &["expects `Int`, got `UInt64`"]);
 }
 
 #[test]
@@ -172,14 +158,7 @@ fn int8_does_not_widen_sideways_to_int16() {
         small: Int8 = 1
         want16(small)
         ";
-    let failure = typecheck_script_fail(&dedent(source));
-    let messages = diagnostic_messages(&failure);
-    assert!(
-        messages
-            .iter()
-            .any(|m| m.contains("expects `Int16`, got `Int8`")),
-        "expected an Int8 -> Int16 mismatch diagnostic, got: {messages:?}",
-    );
+    assert_script_fails_with(source, &["expects `Int16`, got `Int8`"]);
 }
 
 #[test]
@@ -192,14 +171,7 @@ fn uint8_does_not_widen_sideways_to_uint16() {
         small: UInt8 = 1
         want16(small)
         ";
-    let failure = typecheck_script_fail(&dedent(source));
-    let messages = diagnostic_messages(&failure);
-    assert!(
-        messages
-            .iter()
-            .any(|m| m.contains("expects `UInt16`, got `UInt8`")),
-        "expected a UInt8 -> UInt16 mismatch diagnostic, got: {messages:?}",
-    );
+    assert_script_fails_with(source, &["expects `UInt16`, got `UInt8`"]);
 }
 
 #[test]
@@ -212,14 +184,7 @@ fn uint32_does_not_cross_to_int32() {
         u: UInt32 = 1
         want32(u)
         ";
-    let failure = typecheck_script_fail(&dedent(source));
-    let messages = diagnostic_messages(&failure);
-    assert!(
-        messages
-            .iter()
-            .any(|m| m.contains("expects `Int32`, got `UInt32`")),
-        "expected a UInt32 -> Int32 mismatch diagnostic, got: {messages:?}",
-    );
+    assert_script_fails_with(source, &["expects `Int32`, got `UInt32`"]);
 }
 
 #[test]
@@ -232,14 +197,7 @@ fn float_does_not_narrow_to_float32() {
         wide: Float = 1.5
         want32(wide)
         ";
-    let failure = typecheck_script_fail(&dedent(source));
-    let messages = diagnostic_messages(&failure);
-    assert!(
-        messages
-            .iter()
-            .any(|m| m.contains("expects `Float32`, got `Float`")),
-        "expected a Float -> Float32 mismatch diagnostic, got: {messages:?}",
-    );
+    assert_script_fails_with(source, &["expects `Float32`, got `Float`"]);
 }
 
 #[test]
@@ -252,14 +210,7 @@ fn float_literal_rounding_to_infinity_is_rejected() {
         x
         "
     );
-    let failure = typecheck_script_fail(&dedent(&source));
-    let messages = diagnostic_messages(&failure);
-    assert!(
-        messages
-            .iter()
-            .any(|m| m.contains("float literal is out of range")),
-        "expected an out-of-range float literal diagnostic, got: {messages:?}",
-    );
+    assert_script_fails_with(&source, &["float literal is out of range"]);
 }
 
 #[test]

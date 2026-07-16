@@ -10,22 +10,14 @@
 
 use koja_ast::identifier::{Identifier, Resolution, ResolvedType};
 use koja_ast::util::dedent;
-use koja_typecheck::{CheckedProgram, GlobalKind};
+use koja_typecheck::GlobalKind;
 
 mod common;
 
 use common::{
-    PACKAGE, diagnostic_messages, typecheck_script as typecheck,
-    typecheck_script_fail as typecheck_fail,
+    PACKAGE, assert_script_fails_with, diagnostic_messages, registry_id,
+    typecheck_script as typecheck, typecheck_script_fail as typecheck_fail,
 };
-
-fn protocol_id(checked: &CheckedProgram, name: &str) -> koja_ast::identifier::GlobalRegistryId {
-    checked
-        .registry
-        .lookup(&Identifier::new(PACKAGE, vec![name.to_string()]))
-        .map(|(id, _)| id)
-        .unwrap_or_else(|| panic!("`{name}` not registered"))
-}
 
 #[test]
 fn single_param_generic_protocol_lifts_with_self_then_user_params() {
@@ -42,7 +34,7 @@ fn single_param_generic_protocol_lifts_with_self_then_user_params() {
         ";
 
     let checked = typecheck(&dedent(source));
-    let id = protocol_id(&checked, "Match");
+    let id = registry_id(&checked, PACKAGE, &["Match"]);
     let entry = checked.registry.get(id).expect("Match entry");
     assert_eq!(entry.type_params, vec!["Self".to_string(), "T".to_string()]);
 
@@ -81,7 +73,7 @@ fn multi_param_generic_protocol_assigns_distinct_indices_in_order() {
         ";
 
     let checked = typecheck(&dedent(source));
-    let id = protocol_id(&checked, "Process");
+    let id = registry_id(&checked, PACKAGE, &["Process"]);
     let entry = checked.registry.get(id).expect("Process entry");
     assert_eq!(
         entry.type_params,
@@ -104,12 +96,7 @@ fn protocol_self_param_name_is_reserved() {
         end
         ";
 
-    let failure = typecheck_fail(&dedent(source));
-    let messages = diagnostic_messages(&failure);
-    assert!(
-        messages.iter().any(|m| m.contains("`Self` is reserved")),
-        "expected reserved-Self diagnostic, got {messages:?}",
-    );
+    assert_script_fails_with(source, &["`Self` is reserved"]);
 }
 
 #[test]
@@ -135,8 +122,8 @@ fn impl_records_protocol_args_on_target_conformances() {
         ";
 
     let checked = typecheck(&dedent(source));
-    let user_id = protocol_id(&checked, "User");
-    let match_id = protocol_id(&checked, "Match");
+    let user_id = registry_id(&checked, PACKAGE, &["User"]);
+    let match_id = registry_id(&checked, PACKAGE, &["Match"]);
     let args = checked
         .registry
         .lookup_conformance(user_id, match_id)
@@ -174,14 +161,7 @@ fn impl_with_wrong_protocol_arity_diagnoses() {
         end
         ";
 
-    let failure = typecheck_fail(&dedent(source));
-    let messages = diagnostic_messages(&failure);
-    assert!(
-        messages
-            .iter()
-            .any(|m| m.contains("Match") && m.contains("type argument")),
-        "expected protocol-arity diagnostic, got {messages:?}",
-    );
+    assert_script_fails_with(source, &["Match", "type argument"]);
 }
 
 #[test]

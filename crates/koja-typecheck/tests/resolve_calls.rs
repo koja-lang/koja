@@ -5,44 +5,17 @@
 //! non-identifier, and wrong-kind callees, plus return-type
 //! propagation through arithmetic.
 
-use koja_ast::ast::{Expr, ExprKind, Literal, Statement};
+use koja_ast::ast::{ExprKind, Literal};
 use koja_ast::identifier::{Identifier, Resolution, ResolvedType};
 use koja_ast::util::dedent;
-use koja_typecheck::{CheckedProgram, GlobalKind};
+use koja_typecheck::GlobalKind;
 
 mod common;
 
 use common::{
-    PACKAGE, diagnostic_messages, typecheck_script as typecheck,
-    typecheck_script_fail as typecheck_fail,
+    PACKAGE, assert_script_fails_with, diagnostic_messages, global_leaf, registry_id,
+    trailing_expr, typecheck_script as typecheck, typecheck_script_fail as typecheck_fail,
 };
-
-fn trailing_expr(checked: &CheckedProgram) -> &Expr {
-    let pkg = checked
-        .packages
-        .iter()
-        .find(|p| p.package == PACKAGE)
-        .expect("checked program is missing the test package");
-    let file = pkg.files.first().expect("package has no files");
-    let body = file
-        .body
-        .as_deref()
-        .expect("script-mode file must keep statements on File.body");
-    let trailing = body.last().expect("expected at least one statement");
-    match trailing {
-        Statement::Expr(expr) => expr,
-        other => panic!("expected Statement::Expr as trailing statement, got {other:?}"),
-    }
-}
-
-fn global_leaf(checked: &CheckedProgram, name: &str) -> ResolvedType {
-    let ident = Identifier::new("Global", vec![name.to_string()]);
-    let (id, _) = checked
-        .registry
-        .lookup(&ident)
-        .unwrap_or_else(|| panic!("stdlib stub `Global.{name}` missing from registry"));
-    ResolvedType::leaf(Resolution::Global(id))
-}
 
 // ---------------------------------------------------------------------------
 // Happy paths
@@ -79,11 +52,7 @@ fn zero_arg_call_resolves_to_callee_return_type() {
         panic!("expected bare-Ident callee, got {:?}", callee.kind,);
     };
     assert_eq!(name, "answer");
-    let answer_ident = Identifier::new(PACKAGE, vec!["answer".to_string()]);
-    let (answer_id, _) = checked
-        .registry
-        .lookup(&answer_ident)
-        .expect("TestApp.answer should be in the registry");
+    let answer_id = registry_id(&checked, PACKAGE, &["answer"]);
     assert_eq!(*resolution, Resolution::Global(answer_id));
 
     // Outer callee Expr.resolution stays Unresolved (carve-out).
@@ -173,12 +142,7 @@ fn arity_mismatch_diagnoses() {
         add(1)
         ";
 
-    let failure = typecheck_fail(&dedent(source));
-    let messages = diagnostic_messages(&failure);
-    assert!(
-        messages.iter().any(|m| m.contains("expects 2 argument")),
-        "expected arity diagnostic, got {messages:?}",
-    );
+    assert_script_fails_with(source, &["expects 2 argument"]);
 }
 
 #[test]
@@ -191,26 +155,12 @@ fn arg_type_mismatch_diagnoses() {
         only_int(true)
         ";
 
-    let failure = typecheck_fail(&dedent(source));
-    let messages = diagnostic_messages(&failure);
-    assert!(
-        messages
-            .iter()
-            .any(|m| m.contains("expects `Int`") && m.contains("got `Bool`")),
-        "expected arg-type diagnostic, got {messages:?}",
-    );
+    assert_script_fails_with(source, &["expects `Int`", "got `Bool`"]);
 }
 
 #[test]
 fn unknown_callee_diagnoses() {
-    let failure = typecheck_fail("missing()\n");
-    let messages = diagnostic_messages(&failure);
-    assert!(
-        messages
-            .iter()
-            .any(|m| m.contains("unknown function `missing`")),
-        "expected unknown-callee diagnostic, got {messages:?}",
-    );
+    assert_script_fails_with("missing()\n", &["unknown function `missing`"]);
 }
 
 #[test]
@@ -242,14 +192,7 @@ fn non_ident_callee_diagnoses() {
     // `(42)()` parses as Call { callee: Group { Literal } }. The
     // resolve_call arm pattern-matches on `ExprKind::Ident`. The
     // Group falls through to the non-Ident diagnose path.
-    let failure = typecheck_fail("(42)()\n");
-    let messages = diagnostic_messages(&failure);
-    assert!(
-        messages
-            .iter()
-            .any(|m| m.contains("only supports bare-identifier callees")),
-        "expected non-ident callee diagnostic, got {messages:?}",
-    );
+    assert_script_fails_with("(42)()\n", &["only supports bare-identifier callees"]);
 }
 
 #[test]

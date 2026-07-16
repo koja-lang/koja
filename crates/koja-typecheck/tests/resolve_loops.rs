@@ -17,28 +17,16 @@
 //! validator).
 
 use koja_ast::ast::{Expr, ExprKind, Statement};
-use koja_ast::identifier::{Identifier, Resolution, ResolvedType};
 use koja_ast::util::dedent;
 use koja_typecheck::CheckedProgram;
 
 mod common;
 
 use common::{
-    PACKAGE, diagnostic_messages, typecheck_script as typecheck,
-    typecheck_script_fail as typecheck_fail,
+    assert_script_fails_with, diagnostic_messages, int_type, never_type, trailing_expr,
+    trailing_resolution, typecheck_script as typecheck, typecheck_script_fail as typecheck_fail,
+    unit_type,
 };
-
-fn script_body(checked: &CheckedProgram) -> &[Statement] {
-    let pkg = checked
-        .packages
-        .iter()
-        .find(|p| p.package == PACKAGE)
-        .expect("checked program is missing the test package");
-    let file = pkg.files.first().expect("package has no files");
-    file.body
-        .as_deref()
-        .expect("script-mode file must keep statements on File.body")
-}
 
 /// `Enumeration<Int>` fixture using stdlib `Option<Int>`. `get`
 /// returns `Some(...)` unconditionally. The desugar's `__idx <
@@ -62,55 +50,18 @@ const ENUMERABLE_FIXTURE: &str = "
     end
     ";
 
-fn trailing_resolution(checked: &CheckedProgram) -> ResolvedType {
-    let trailing = script_body(checked)
-        .last()
-        .expect("expected at least one statement");
-    match trailing {
-        Statement::Expr(expr) => expr.resolution.clone(),
-        other => panic!("expected Statement::Expr as trailing statement, got {other:?}"),
-    }
-}
-
-fn primitive_type(checked: &CheckedProgram, name: &str) -> ResolvedType {
-    let ident = Identifier::new("Global", vec![name.to_string()]);
-    let (id, _) = checked
-        .registry
-        .lookup(&ident)
-        .unwrap_or_else(|| panic!("stdlib stub `Global.{name}` missing from registry"));
-    ResolvedType::leaf(Resolution::Global(id))
-}
-
-fn unit_type(checked: &CheckedProgram) -> ResolvedType {
-    primitive_type(checked, "Unit")
-}
-
-fn never_type(checked: &CheckedProgram) -> ResolvedType {
-    primitive_type(checked, "Never")
-}
-
 /// Trailing `loop`'s body's first/only `Statement::Expr` payload.
 /// The nested-break test runs against this to inspect an inner
 /// loop's resolution.
-fn trailing_loop_inner_expr(checked: &CheckedProgram) -> Expr {
-    let trailing = trailing_resolution_expr(checked);
+fn trailing_loop_inner_expr(checked: &CheckedProgram) -> &Expr {
+    let trailing = trailing_expr(checked);
     let ExprKind::Loop { body } = &trailing.kind else {
         panic!("expected trailing ExprKind::Loop, got {:?}", trailing.kind);
     };
     let Some(Statement::Expr(inner)) = body.first() else {
         panic!("expected loop body to start with Statement::Expr, got {body:?}");
     };
-    inner.clone()
-}
-
-fn trailing_resolution_expr(checked: &CheckedProgram) -> Expr {
-    let trailing = script_body(checked)
-        .last()
-        .expect("expected at least one statement");
-    match trailing {
-        Statement::Expr(expr) => expr.clone(),
-        other => panic!("expected Statement::Expr as trailing statement, got {other:?}"),
-    }
+    inner
 }
 
 #[test]
@@ -132,15 +83,7 @@ fn while_with_int_condition_diagnoses() {
           2
         end
         ";
-    let failure = typecheck_fail(&dedent(source));
-    assert!(
-        failure
-            .diagnostics
-            .iter()
-            .any(|d| d.message.contains("`while` condition must be `Bool`")),
-        "expected `while` condition diagnostic, got: {:?}",
-        failure.diagnostics,
-    );
+    assert_script_fails_with(source, &["`while` condition must be `Bool`"]);
 }
 
 #[test]
@@ -158,15 +101,9 @@ fn while_body_assignment_propagates_local_type() {
         sum
         ";
     let checked = typecheck(&dedent(source));
-    let body = script_body(&checked);
-    let int_ty = primitive_type(&checked, "Int");
     // Trailing `sum` reads the body-mutated local. Its resolution
     // is `Int`, proving the body's writes propagated.
-    let trailing = body.last().expect("missing trailing");
-    let Statement::Expr(expr) = trailing else {
-        panic!("expected trailing Statement::Expr");
-    };
-    assert_eq!(expr.resolution, int_ty);
+    assert_eq!(trailing_resolution(&checked), int_type(&checked));
 }
 
 #[test]
@@ -176,15 +113,7 @@ fn while_with_string_condition_diagnoses() {
           1
         end
         ";
-    let failure = typecheck_fail(&dedent(source));
-    assert!(
-        failure
-            .diagnostics
-            .iter()
-            .any(|d| d.message.contains("`while` condition must be `Bool`")),
-        "expected `while` condition diagnostic, got: {:?}",
-        failure.diagnostics,
-    );
+    assert_script_fails_with(source, &["`while` condition must be `Bool`"]);
 }
 
 fn with_fixture(body: &str) -> String {
@@ -206,10 +135,7 @@ fn for_over_enumerable_resolves_to_unit_and_binds_int() {
         ",
     );
     let checked = typecheck(&dedent(&source));
-    assert_eq!(
-        trailing_resolution(&checked),
-        primitive_type(&checked, "Int")
-    );
+    assert_eq!(trailing_resolution(&checked), int_type(&checked));
 }
 
 #[test]
@@ -227,10 +153,7 @@ fn for_with_wildcard_pattern_typechecks() {
         ",
     );
     let checked = typecheck(&dedent(&source));
-    assert_eq!(
-        trailing_resolution(&checked),
-        primitive_type(&checked, "Int")
-    );
+    assert_eq!(trailing_resolution(&checked), int_type(&checked));
 }
 
 #[test]
@@ -242,12 +165,7 @@ fn for_over_int_diagnoses_missing_length() {
           x
         end
         ";
-    let failure = typecheck_fail(&dedent(source));
-    let messages = diagnostic_messages(&failure);
-    assert!(
-        messages.iter().any(|m| m.contains("has no method `length")),
-        "expected missing-`length` diagnostic, got: {messages:?}",
-    );
+    assert_script_fails_with(source, &["has no method `length"]);
 }
 
 #[test]
@@ -262,12 +180,7 @@ fn for_over_struct_without_length_diagnoses() {
           v
         end
         ";
-    let failure = typecheck_fail(&dedent(source));
-    let messages = diagnostic_messages(&failure);
-    assert!(
-        messages.iter().any(|m| m.contains("has no method `length")),
-        "expected missing-`length` diagnostic, got: {messages:?}",
-    );
+    assert_script_fails_with(source, &["has no method `length"]);
 }
 
 #[test]
@@ -294,14 +207,7 @@ fn for_with_get_returning_non_enum_diagnoses() {
           v
         end
         ";
-    let failure = typecheck_fail(&dedent(source));
-    let messages = diagnostic_messages(&failure);
-    assert!(
-        messages
-            .iter()
-            .any(|m| m.contains("requires an enum subject")),
-        "expected non-enum subject diagnostic, got: {messages:?}",
-    );
+    assert_script_fails_with(source, &["requires an enum subject"]);
 }
 
 #[test]
@@ -334,16 +240,7 @@ fn for_with_get_returning_wrong_enum_diagnoses_missing_some_none() {
           v
         end
         ";
-    let failure = typecheck_fail(&dedent(source));
-    let messages = diagnostic_messages(&failure);
-    assert!(
-        messages.iter().any(|m| m.contains("no variant `Some`")),
-        "expected missing-`Some` diagnostic, got: {messages:?}",
-    );
-    assert!(
-        messages.iter().any(|m| m.contains("no variant `None`")),
-        "expected missing-`None` diagnostic, got: {messages:?}",
-    );
+    assert_script_fails_with(source, &["no variant `Some`", "no variant `None`"]);
 }
 
 #[test]
@@ -401,12 +298,7 @@ fn fn_int_loop_with_break_diagnoses_unit_int_mismatch() {
         end
         run()
         ";
-    let failure = typecheck_fail(&dedent(source));
-    let messages = diagnostic_messages(&failure);
-    assert!(
-        messages.iter().any(|m| m.contains("return type")),
-        "expected return-type mismatch diagnostic, got: {messages:?}",
-    );
+    assert_script_fails_with(source, &["return type"]);
 }
 
 #[test]

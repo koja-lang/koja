@@ -30,8 +30,8 @@ use koja_ast::util::dedent;
 mod common;
 
 use common::{
-    diagnostic_messages, typecheck_script as typecheck, typecheck_script_fail as typecheck_fail,
-    warning_messages,
+    assert_script_fails_with, diagnostic_messages, typecheck_script as typecheck,
+    typecheck_script_fail as typecheck_fail, warning_messages,
 };
 
 // -----------------------------------------------------------------------------
@@ -225,14 +225,7 @@ fn non_member_into_union_diagnoses() {
 
           take(C{z: 0})
         ";
-    let failure = typecheck_fail(&dedent(source));
-    let messages = diagnostic_messages(&failure);
-    assert!(
-        messages
-            .iter()
-            .any(|m| m.contains("expects `A | B`") && m.contains("C")),
-        "expected non-member-of-union arg diagnostic, got {messages:?}",
-    );
+    assert_script_fails_with(source, &["expects `A | B`", "C"]);
 }
 
 // -----------------------------------------------------------------------------
@@ -412,14 +405,7 @@ fn typed_binding_not_in_union_diagnoses() {
             _ -> 0
           end
         ";
-    let failure = typecheck_fail(&dedent(source));
-    let messages = diagnostic_messages(&failure);
-    assert!(
-        messages
-            .iter()
-            .any(|m| m.contains("typed-binding") && m.contains("union")),
-        "expected typed-binding-against-non-union diagnostic, got {messages:?}",
-    );
+    assert_script_fails_with(source, &["typed-binding", "union"]);
 }
 
 #[test]
@@ -450,12 +436,5 @@ fn typed_binding_member_not_in_union_diagnoses() {
 
           describe(A{x: 1})
         ";
-    let failure = typecheck_fail(&dedent(source));
-    let messages = diagnostic_messages(&failure);
-    assert!(
-        messages
-            .iter()
-            .any(|m| m.contains("C") && m.contains("A | B")),
-        "expected typed-binding-not-a-member diagnostic, got {messages:?}",
-    );
+    assert_script_fails_with(source, &["C", "A | B"]);
 }

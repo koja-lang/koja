@@ -10,10 +10,7 @@ use koja_typecheck::GlobalKind;
 
 mod common;
 
-use common::{
-    PACKAGE, diagnostic_messages, typecheck_script as typecheck,
-    typecheck_script_fail as typecheck_fail,
-};
+use common::{PACKAGE, assert_script_fails_with, typecheck_script as typecheck};
 
 #[test]
 fn happy_path_impl_satisfies_protocol() {
@@ -155,14 +152,7 @@ fn missing_required_method_diagnoses() {
         end
         ";
 
-    let failure = typecheck_fail(&dedent(source));
-    let messages = diagnostic_messages(&failure);
-    assert!(
-        messages
-            .iter()
-            .any(|m| m.contains("missing method `greet`") && m.contains("Greeter")),
-        "expected missing-method diagnostic, got {messages:?}",
-    );
+    assert_script_fails_with(source, &["missing method `greet`", "Greeter"]);
 }
 
 #[test]
@@ -186,14 +176,7 @@ fn extra_impl_method_diagnoses() {
         end
         ";
 
-    let failure = typecheck_fail(&dedent(source));
-    let messages = diagnostic_messages(&failure);
-    assert!(
-        messages.iter().any(|m| m.contains("`extra`")
-            && m.contains("not declared in protocol")
-            && m.contains("Greeter")),
-        "expected extra-method diagnostic, got {messages:?}",
-    );
+    assert_script_fails_with(source, &["`extra`", "not declared in protocol", "Greeter"]);
 }
 
 #[test]
@@ -213,14 +196,7 @@ fn return_type_mismatch_diagnoses() {
         end
         ";
 
-    let failure = typecheck_fail(&dedent(source));
-    let messages = diagnostic_messages(&failure);
-    assert!(
-        messages
-            .iter()
-            .any(|m| m.contains("return type") && m.contains("`greet`")),
-        "expected return-type mismatch diagnostic, got {messages:?}",
-    );
+    assert_script_fails_with(source, &["return type", "`greet`"]);
 }
 
 #[test]
@@ -240,14 +216,7 @@ fn param_type_mismatch_diagnoses() {
         end
         ";
 
-    let failure = typecheck_fail(&dedent(source));
-    let messages = diagnostic_messages(&failure);
-    assert!(
-        messages
-            .iter()
-            .any(|m| m.contains("param") && m.contains("`n`") && m.contains("`join`")),
-        "expected param-type mismatch diagnostic, got {messages:?}",
-    );
+    assert_script_fails_with(source, &["param", "`n`", "`join`"]);
 }
 
 #[test]
@@ -267,14 +236,7 @@ fn dispatch_mismatch_diagnoses() {
         end
         ";
 
-    let failure = typecheck_fail(&dedent(source));
-    let messages = diagnostic_messages(&failure);
-    assert!(
-        messages
-            .iter()
-            .any(|m| m.contains("receiver shape") && m.contains("`make`")),
-        "expected receiver-shape mismatch diagnostic, got {messages:?}",
-    );
+    assert_script_fails_with(source, &["receiver shape", "`make`"]);
 }
 
 #[test]
@@ -300,12 +262,5 @@ fn inherent_and_trait_impl_collide_on_same_method_name() {
         end
         ";
 
-    let failure = typecheck_fail(&dedent(source));
-    let messages = diagnostic_messages(&failure);
-    assert!(
-        messages
-            .iter()
-            .any(|m| m.contains("already defined") && m.contains("greet")),
-        "expected already-defined diagnostic for colliding methods, got {messages:?}",
-    );
+    assert_script_fails_with(source, &["already defined", "greet"]);
 }

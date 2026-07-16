@@ -16,7 +16,8 @@ use koja_ast::util::dedent;
 mod common;
 
 use common::{
-    diagnostic_messages, typecheck_script as typecheck, typecheck_script_fail as typecheck_fail,
+    assert_script_fails_with, diagnostic_messages, typecheck_script as typecheck,
+    typecheck_script_fail as typecheck_fail,
 };
 
 // ---------------------------------------------------------------------------
@@ -167,13 +168,9 @@ fn doc_string_on_top_level_priv_fn_is_rejected() {
         helper()
         ";
 
-    let failure = typecheck_fail(&dedent(source));
-    let messages = diagnostic_messages(&failure);
-    assert!(
-        messages
-            .iter()
-            .any(|m| m.contains("`@doc` is not allowed on private function `helper`")),
-        "expected @doc-on-private error, got {messages:?}",
+    assert_script_fails_with(
+        source,
+        &["`@doc` is not allowed on private function `helper`"],
     );
 }
 
@@ -188,13 +185,9 @@ fn doc_false_on_top_level_priv_fn_is_rejected() {
         helper()
         ";
 
-    let failure = typecheck_fail(&dedent(source));
-    let messages = diagnostic_messages(&failure);
-    assert!(
-        messages
-            .iter()
-            .any(|m| m.contains("`@doc` is not allowed on private function `helper`")),
-        "expected @doc-on-private error, got {messages:?}",
+    assert_script_fails_with(
+        source,
+        &["`@doc` is not allowed on private function `helper`"],
     );
 }
 
@@ -211,13 +204,9 @@ fn doc_string_on_type_body_priv_fn_is_rejected() {
         end
         ";
 
-    let failure = typecheck_fail(&dedent(source));
-    let messages = diagnostic_messages(&failure);
-    assert!(
-        messages
-            .iter()
-            .any(|m| m.contains("`@doc` is not allowed on private function `shift`")),
-        "expected @doc-on-private error, got {messages:?}",
+    assert_script_fails_with(
+        source,
+        &["`@doc` is not allowed on private function `shift`"],
     );
 }
 
@@ -242,12 +231,7 @@ fn doc_string_on_public_top_level_fn_is_accepted() {
 /// `kind_label` (e.g. "struct") on `name`.
 fn assert_doc_on_private_rejected(source: &str, kind_label: &str, name: &str) {
     let needle = format!("`@doc` is not allowed on private {kind_label} `{name}`");
-    let failure = typecheck_fail(&dedent(source));
-    let messages = diagnostic_messages(&failure);
-    assert!(
-        messages.iter().any(|m| m.contains(&needle)),
-        "expected `{needle}`, got {messages:?}",
-    );
+    assert_script_fails_with(source, &[&needle]);
 }
 
 #[test]
@@ -336,14 +320,7 @@ fn non_doc_annotation_on_struct_still_diagnoses() {
         end
         ";
 
-    let failure = typecheck_fail(&dedent(source));
-    let messages = diagnostic_messages(&failure);
-    assert!(
-        messages
-            .iter()
-            .any(|m| m.contains("annotations on struct items") && m.contains("@derive")),
-        "expected struct annotation gap to still fire on `@derive`, got {messages:?}",
-    );
+    assert_script_fails_with(source, &["annotations on struct items", "@derive"]);
 }
 
 #[test]
@@ -356,14 +333,7 @@ fn non_doc_annotation_on_enum_still_diagnoses() {
         end
         ";
 
-    let failure = typecheck_fail(&dedent(source));
-    let messages = diagnostic_messages(&failure);
-    assert!(
-        messages
-            .iter()
-            .any(|m| m.contains("annotations on enum items") && m.contains("@derive")),
-        "expected enum annotation gap to still fire on `@derive`, got {messages:?}",
-    );
+    assert_script_fails_with(source, &["annotations on enum items", "@derive"]);
 }
 
 #[test]
@@ -375,14 +345,7 @@ fn non_doc_annotation_on_protocol_still_diagnoses() {
         end
         ";
 
-    let failure = typecheck_fail(&dedent(source));
-    let messages = diagnostic_messages(&failure);
-    assert!(
-        messages
-            .iter()
-            .any(|m| m.contains("annotations on protocols") && m.contains("@derive")),
-        "expected protocol annotation gap to still fire on `@derive`, got {messages:?}",
-    );
+    assert_script_fails_with(source, &["annotations on protocols", "@derive"]);
 }
 
 #[test]
@@ -394,14 +357,7 @@ fn non_doc_annotation_on_protocol_method_still_diagnoses() {
         end
         ";
 
-    let failure = typecheck_fail(&dedent(source));
-    let messages = diagnostic_messages(&failure);
-    assert!(
-        messages
-            .iter()
-            .any(|m| m.contains("annotations on protocol methods") && m.contains("@derive")),
-        "expected protocol-method annotation gap to still fire on `@derive`, got {messages:?}",
-    );
+    assert_script_fails_with(source, &["annotations on protocol methods", "@derive"]);
 }
 
 #[test]
@@ -418,14 +374,7 @@ fn non_doc_annotation_on_constant_still_diagnoses() {
         ORIGIN.x
         ";
 
-    let failure = typecheck_fail(&dedent(source));
-    let messages = diagnostic_messages(&failure);
-    assert!(
-        messages
-            .iter()
-            .any(|m| { m.contains("annotations on constant items") && m.contains("@derive") }),
-        "expected constant annotation gap to still fire on `@derive`, got {messages:?}",
-    );
+    assert_script_fails_with(source, &["annotations on constant items", "@derive"]);
 }
 
 // ---------------------------------------------------------------------------

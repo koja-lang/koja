@@ -11,53 +11,14 @@
 //! Mismatched arm types surface a diagnostic and the surface
 //! expression resolves to `Unresolved`.
 
-use koja_ast::ast::{Item, Statement};
-use koja_ast::identifier::{Identifier, Resolution, ResolvedType};
 use koja_ast::util::dedent;
-use koja_typecheck::CheckedProgram;
 
 mod common;
 
-use common::{PACKAGE, typecheck_script as typecheck, typecheck_script_fail as typecheck_fail};
-
-fn trailing_resolution(checked: &CheckedProgram) -> ResolvedType {
-    let pkg = checked
-        .packages
-        .iter()
-        .find(|p| p.package == PACKAGE)
-        .expect("checked program is missing the test package");
-    let file = pkg.files.first().expect("package has no files");
-    let body = file
-        .body
-        .as_deref()
-        .expect("script-mode file must keep statements on File.body");
-    let trailing = body.last().expect("expected at least one statement");
-    match trailing {
-        Statement::Expr(expr) => expr.resolution.clone(),
-        other => panic!("expected Statement::Expr as trailing statement, got {other:?}"),
-    }
-}
-
-fn primitive_type(checked: &CheckedProgram, name: &str) -> ResolvedType {
-    let ident = Identifier::new("Global", vec![name.to_string()]);
-    let (id, _) = checked
-        .registry
-        .lookup(&ident)
-        .unwrap_or_else(|| panic!("stdlib stub `Global.{name}` missing from registry"));
-    ResolvedType::leaf(Resolution::Global(id))
-}
-
-fn unit_type(checked: &CheckedProgram) -> ResolvedType {
-    primitive_type(checked, "Unit")
-}
-
-fn int_type(checked: &CheckedProgram) -> ResolvedType {
-    primitive_type(checked, "Int")
-}
-
-fn never_type(checked: &CheckedProgram) -> ResolvedType {
-    primitive_type(checked, "Never")
-}
+use common::{
+    assert_script_fails_with, function_body, int_type, last_expr, never_type, trailing_resolution,
+    typecheck_script as typecheck, unit_type,
+};
 
 #[test]
 fn if_with_bool_condition_resolves_to_unit() {
@@ -88,15 +49,7 @@ fn if_with_int_condition_diagnoses() {
           2
         end
         ";
-    let failure = typecheck_fail(&dedent(source));
-    assert!(
-        failure
-            .diagnostics
-            .iter()
-            .any(|d| d.message.contains("`if` condition must be `Bool`")),
-        "expected `if` condition diagnostic, got: {:?}",
-        failure.diagnostics,
-    );
+    assert_script_fails_with(source, &["`if` condition must be `Bool`"]);
 }
 
 #[test]
@@ -106,15 +59,7 @@ fn unless_with_int_condition_diagnoses() {
           2
         end
         ";
-    let failure = typecheck_fail(&dedent(source));
-    assert!(
-        failure
-            .diagnostics
-            .iter()
-            .any(|d| d.message.contains("`unless` condition must be `Bool`")),
-        "expected `unless` condition diagnostic, got: {:?}",
-        failure.diagnostics,
-    );
+    assert_script_fails_with(source, &["`unless` condition must be `Bool`"]);
 }
 
 #[test]
@@ -139,15 +84,7 @@ fn if_else_with_mismatched_arms_diagnoses() {
           true
         end
         ";
-    let failure = typecheck_fail(&dedent(source));
-    assert!(
-        failure
-            .diagnostics
-            .iter()
-            .any(|d| d.message.contains("if/else arms have inconsistent types")),
-        "expected if/else mismatch diagnostic, got: {:?}",
-        failure.diagnostics,
-    );
+    assert_script_fails_with(source, &["if/else arms have inconsistent types"]);
 }
 
 #[test]
@@ -179,24 +116,7 @@ fn if_else_with_both_arms_diverging_resolves_to_never() {
         end
         ";
     let checked = typecheck(&dedent(source));
-    let pkg = checked
-        .packages
-        .iter()
-        .find(|p| p.package == PACKAGE)
-        .expect("missing test package");
-    let file = pkg.files.first().expect("package has no files");
-    let diverge = file
-        .items
-        .iter()
-        .find_map(|item| match item {
-            Item::Function(f) if f.name == "diverge" => Some(f),
-            _ => None,
-        })
-        .expect("missing `fn diverge`");
-    let body = diverge.body.as_deref().expect("`fn diverge` has no body");
-    let Statement::Expr(if_expr) = body.last().expect("missing trailing if-expr") else {
-        panic!("expected trailing Statement::Expr");
-    };
+    let if_expr = last_expr(function_body(&checked, "diverge"));
     assert_eq!(if_expr.resolution, never_type(&checked));
 }
 
@@ -222,15 +142,7 @@ fn cond_with_mismatched_arms_diagnoses() {
           else -> 3
         end
         ";
-    let failure = typecheck_fail(&dedent(source));
-    assert!(
-        failure
-            .diagnostics
-            .iter()
-            .any(|d| d.message.contains("cond arms have inconsistent types")),
-        "expected cond mismatch diagnostic, got: {:?}",
-        failure.diagnostics,
-    );
+    assert_script_fails_with(source, &["cond arms have inconsistent types"]);
 }
 
 #[test]
@@ -241,15 +153,7 @@ fn cond_with_int_condition_diagnoses() {
           else -> 2
         end
         ";
-    let failure = typecheck_fail(&dedent(source));
-    assert!(
-        failure
-            .diagnostics
-            .iter()
-            .any(|d| d.message.contains("`cond` condition must be `Bool`")),
-        "expected cond condition diagnostic, got: {:?}",
-        failure.diagnostics,
-    );
+    assert_script_fails_with(source, &["`cond` condition must be `Bool`"]);
 }
 
 #[test]
@@ -283,15 +187,7 @@ fn ternary_with_mismatched_arms_diagnoses() {
     let source = "
         true ? 1 : false
         ";
-    let failure = typecheck_fail(&dedent(source));
-    assert!(
-        failure
-            .diagnostics
-            .iter()
-            .any(|d| d.message.contains("ternary arms have inconsistent types")),
-        "expected ternary mismatch diagnostic, got: {:?}",
-        failure.diagnostics,
-    );
+    assert_script_fails_with(source, &["ternary arms have inconsistent types"]);
 }
 
 #[test]
@@ -299,15 +195,7 @@ fn ternary_with_int_condition_diagnoses() {
     let source = "
         1 ? 2 : 3
         ";
-    let failure = typecheck_fail(&dedent(source));
-    assert!(
-        failure
-            .diagnostics
-            .iter()
-            .any(|d| d.message.contains("`ternary` condition must be `Bool`")),
-        "expected ternary condition diagnostic, got: {:?}",
-        failure.diagnostics,
-    );
+    assert_script_fails_with(source, &["`ternary` condition must be `Bool`"]);
 }
 
 #[test]

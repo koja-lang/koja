@@ -7,37 +7,14 @@
 //! (`fn (T) -> U` parameters and returns) and cover the stdlib shape
 //! that powers `list.map` / `list.filter`.
 
-use koja_ast::identifier::{AnonymousKind, Identifier, Resolution, ResolvedType, TypeParamIndex};
+use koja_ast::identifier::{AnonymousKind, Resolution, ResolvedType, TypeParamIndex};
 use koja_ast::util::dedent;
-use koja_typecheck::GlobalKind;
 
 mod common;
 
-use common::{PACKAGE, typecheck_script as typecheck};
-
-fn lookup_function_signature<'a>(
-    checked: &'a koja_typecheck::CheckedProgram,
-    package: &str,
-    path: &[&str],
-) -> &'a koja_typecheck::FunctionSignature {
-    let identifier = Identifier::new(package, path.iter().map(|s| s.to_string()).collect());
-    let (_, entry) = checked
-        .registry
-        .lookup(&identifier)
-        .unwrap_or_else(|| panic!("`{}` not registered", identifier));
-    let GlobalKind::Function(Some(signature)) = &entry.kind else {
-        panic!("`{}` should have a lifted signature", identifier);
-    };
-    signature
-}
-
-fn global_leaf(checked: &koja_typecheck::CheckedProgram, name: &str) -> ResolvedType {
-    let (id, _) = checked
-        .registry
-        .lookup(&Identifier::new("Global", vec![name.to_string()]))
-        .unwrap_or_else(|| panic!("`Global.{name}` not registered"));
-    ResolvedType::leaf(Resolution::Global(id))
-}
+use common::{
+    PACKAGE, function_signature, global_leaf, registry_id, typecheck_script as typecheck,
+};
 
 #[test]
 fn function_type_param_lifts_to_anonymous_function() {
@@ -49,7 +26,7 @@ fn function_type_param_lifts_to_anonymous_function() {
 
     let checked = typecheck(&dedent(source));
     let int = global_leaf(&checked, "Int");
-    let signature = lookup_function_signature(&checked, PACKAGE, &["apply"]);
+    let signature = function_signature(&checked, PACKAGE, &["apply"]);
 
     let expected_callback = ResolvedType::Anonymous(AnonymousKind::Function {
         params: vec![int.clone()],
@@ -72,7 +49,7 @@ fn function_type_returning_function_type_nests() {
 
     let checked = typecheck(&dedent(source));
     let int = global_leaf(&checked, "Int");
-    let signature = lookup_function_signature(&checked, PACKAGE, &["make_pipeline"]);
+    let signature = function_signature(&checked, PACKAGE, &["make_pipeline"]);
 
     let inner = ResolvedType::Anonymous(AnonymousKind::Function {
         params: vec![int.clone()],
@@ -101,11 +78,8 @@ fn dotted_type_in_signature_lifts_to_qualified_global() {
         ";
 
     let checked = typecheck(&dedent(source));
-    let signature = lookup_function_signature(&checked, PACKAGE, &["touch"]);
-    let (sha_id, _) = checked
-        .registry
-        .lookup(&Identifier::new("Crypto", vec!["SHA256".to_string()]))
-        .expect("`Crypto.SHA256` should be registered via QUALIFIED");
+    let signature = function_signature(&checked, PACKAGE, &["touch"]);
+    let sha_id = registry_id(&checked, "Crypto", &["SHA256"]);
     let expected = ResolvedType::leaf(Resolution::Global(sha_id));
     assert_eq!(signature.params[0].ty, expected);
     assert_eq!(signature.return_type, expected);
@@ -123,12 +97,8 @@ fn function_type_in_generic_context_carries_type_params() {
         ";
 
     let checked = typecheck(&dedent(source));
-    let signature = lookup_function_signature(&checked, PACKAGE, &["map"]);
-    let map_id = checked
-        .registry
-        .lookup(&Identifier::new(PACKAGE, vec!["map".to_string()]))
-        .map(|(id, _)| id)
-        .expect("map registered");
+    let signature = function_signature(&checked, PACKAGE, &["map"]);
+    let map_id = registry_id(&checked, PACKAGE, &["map"]);
     let t = ResolvedType::leaf(Resolution::TypeParam {
         owner: map_id,
         index: TypeParamIndex::new(0),

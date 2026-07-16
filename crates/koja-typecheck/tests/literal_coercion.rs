@@ -9,7 +9,8 @@ use koja_ast::util::dedent;
 mod common;
 
 use common::{
-    diagnostic_messages, typecheck_script as typecheck, typecheck_script_fail as typecheck_fail,
+    assert_script_fails_with, diagnostic_messages, typecheck_script as typecheck,
+    typecheck_script_fail as typecheck_fail,
 };
 
 // ------------------------------------------------------------------
@@ -49,14 +50,7 @@ fn negative_int_literal_into_uint8_diagnoses_out_of_range() {
 
         take(-1)
         ";
-    let failure = typecheck_fail(&dedent(source));
-    let messages = diagnostic_messages(&failure);
-    assert!(
-        messages
-            .iter()
-            .any(|m| m.contains("-1") && m.contains("UInt8") && m.contains("0..=255")),
-        "expected `-1` / `UInt8` / range diagnostic, got {messages:?}",
-    );
+    assert_script_fails_with(source, &["-1", "UInt8", "0..=255"]);
 }
 
 #[test]
@@ -80,14 +74,7 @@ fn decimal_overflow_into_int8_diagnoses_out_of_range() {
 
         take(128)
         ";
-    let failure = typecheck_fail(&dedent(source));
-    let messages = diagnostic_messages(&failure);
-    assert!(
-        messages
-            .iter()
-            .any(|m| m.contains("128") && m.contains("Int8") && m.contains("-128..=127")),
-        "expected `128` / `Int8` / range diagnostic, got {messages:?}",
-    );
+    assert_script_fails_with(source, &["128", "Int8", "-128..=127"]);
 }
 
 // ------------------------------------------------------------------
@@ -115,14 +102,7 @@ fn struct_field_uint8_rejects_overflow_literal() {
 
         Fd{descriptor: 256}
         ";
-    let failure = typecheck_fail(&dedent(source));
-    let messages = diagnostic_messages(&failure);
-    assert!(
-        messages
-            .iter()
-            .any(|m| m.contains("descriptor") && m.contains("256") && m.contains("UInt8")),
-        "expected struct-field range diagnostic, got {messages:?}",
-    );
+    assert_script_fails_with(source, &["descriptor", "256", "UInt8"]);
 }
 
 // ------------------------------------------------------------------
@@ -150,14 +130,7 @@ fn enum_tuple_payload_int16_rejects_overflow_literal() {
 
         Signal.Tone(40_000)
         ";
-    let failure = typecheck_fail(&dedent(source));
-    let messages = diagnostic_messages(&failure);
-    assert!(
-        messages
-            .iter()
-            .any(|m| m.contains("Tone") && m.contains("40000") && m.contains("Int16")),
-        "expected enum-payload range diagnostic, got {messages:?}",
-    );
+    assert_script_fails_with(source, &["Tone", "40000", "Int16"]);
 }
 
 // ------------------------------------------------------------------
@@ -181,14 +154,7 @@ fn return_type_int8_rejects_overflow_literal() {
           200
         end
         ";
-    let failure = typecheck_fail(&dedent(source));
-    let messages = diagnostic_messages(&failure);
-    assert!(
-        messages
-            .iter()
-            .any(|m| m.contains("answer") && m.contains("200") && m.contains("Int8")),
-        "expected return-type range diagnostic, got {messages:?}",
-    );
+    assert_script_fails_with(source, &["answer", "200", "Int8"]);
 }
 
 // ------------------------------------------------------------------
@@ -212,14 +178,7 @@ fn const_initializer_uint8_rejects_negative_literal() {
 
         ()
         ";
-    let failure = typecheck_fail(&dedent(source));
-    let messages = diagnostic_messages(&failure);
-    assert!(
-        messages
-            .iter()
-            .any(|m| m.contains("-1") && m.contains("UInt8")),
-        "expected const-initializer range diagnostic, got {messages:?}",
-    );
+    assert_script_fails_with(source, &["-1", "UInt8"]);
 }
 
 // ------------------------------------------------------------------
@@ -279,14 +238,7 @@ fn float32_rejects_non_representable_literal() {
 
         take(0.1)
         ";
-    let failure = typecheck_fail(&dedent(source));
-    let messages = diagnostic_messages(&failure);
-    assert!(
-        messages
-            .iter()
-            .any(|m| m.contains("Float32") && m.contains("0.1")),
-        "expected float-round-trip range diagnostic, got {messages:?}",
-    );
+    assert_script_fails_with(source, &["Float32", "0.1"]);
 }
 
 // ------------------------------------------------------------------
@@ -304,14 +256,7 @@ fn non_numeric_source_keeps_strict_type_mismatch() {
 
         take(\"hello\")
         ";
-    let failure = typecheck_fail(&dedent(source));
-    let messages = diagnostic_messages(&failure);
-    assert!(
-        messages
-            .iter()
-            .any(|m| m.contains("expects") && m.contains("Int8") && m.contains("String")),
-        "expected strict type-mismatch diagnostic, got {messages:?}",
-    );
+    assert_script_fails_with(source, &["expects", "Int8", "String"]);
 }
 
 // ------------------------------------------------------------------
@@ -351,14 +296,7 @@ fn pattern_literal_uint8_out_of_range_diagnoses() {
         classify(5)
         ()
         ";
-    let failure = typecheck_fail(&dedent(source));
-    let messages = diagnostic_messages(&failure);
-    assert!(
-        messages
-            .iter()
-            .any(|m| m.contains("300") && m.contains("UInt8") && m.contains("0..=255")),
-        "expected pattern-literal range diagnostic, got {messages:?}",
-    );
+    assert_script_fails_with(source, &["300", "UInt8", "0..=255"]);
 }
 
 #[test]

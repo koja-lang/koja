@@ -26,9 +26,7 @@ use koja_ast::util::dedent;
 
 mod common;
 
-use common::{
-    diagnostic_messages, typecheck_script as typecheck, typecheck_script_fail as typecheck_fail,
-};
+use common::{assert_script_fails_with, typecheck_script as typecheck};
 
 #[test]
 fn inherent_impl_on_concrete_generic_target_succeeds() {
@@ -74,14 +72,7 @@ fn inherent_impl_on_concrete_generic_diagnoses_mismatched_receiver() {
         end
         ";
 
-    let failure = typecheck_fail(&dedent(source));
-    let messages = diagnostic_messages(&failure);
-    assert!(
-        messages
-            .iter()
-            .any(|m| m.contains("no method `render`") && m.contains("Bag")),
-        "expected `no method on receiver` diagnostic, got {messages:?}",
-    );
+    assert_script_fails_with(source, &["no method `render`", "Bag"]);
 }
 
 #[test]
@@ -139,14 +130,7 @@ fn duplicate_inherent_method_across_impls_diagnoses() {
         end
         ";
 
-    let failure = typecheck_fail(&dedent(source));
-    let messages = diagnostic_messages(&failure);
-    assert!(
-        messages
-            .iter()
-            .any(|m| m.contains("already defined") && m.contains("Bag.render")),
-        "expected duplicate-method diagnostic, got {messages:?}",
-    );
+    assert_script_fails_with(source, &["already defined", "Bag.render"]);
 }
 
 #[test]
@@ -180,15 +164,7 @@ fn distinct_concrete_specializations_share_method_name_diagnose_collision() {
         end
         ";
 
-    let failure = typecheck_fail(&dedent(source));
-    let messages = diagnostic_messages(&failure);
-    assert!(
-        messages
-            .iter()
-            .any(|m| m.contains("already defined") && m.contains("Bag.render")),
-        "expected duplicate-method diagnostic for two specialized impls of `Bag.render`, \
-         got {messages:?}",
-    );
+    assert_script_fails_with(source, &["already defined", "Bag.render"]);
 }
 
 #[test]

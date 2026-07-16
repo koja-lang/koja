@@ -20,7 +20,8 @@ use koja_ast::util::dedent;
 mod common;
 
 use common::{
-    diagnostic_messages, typecheck_script as typecheck, typecheck_script_fail as typecheck_fail,
+    assert_script_fails_with, diagnostic_messages, typecheck_script as typecheck,
+    typecheck_script_fail as typecheck_fail,
 };
 
 #[test]
@@ -60,7 +61,7 @@ fn depth_two_field_write_typechecks_through_nested_struct() {
 
 #[test]
 fn field_write_type_mismatch_diagnoses_against_leaf_type() {
-    let failure = typecheck_fail(&dedent(
+    assert_script_fails_with(
         "
         struct Point
           x: Int
@@ -71,19 +72,13 @@ fn field_write_type_mismatch_diagnoses_against_leaf_type() {
         p.x = true
         p
         ",
-    ));
-    let messages = diagnostic_messages(&failure);
-    assert!(
-        messages
-            .iter()
-            .any(|m| m.contains("p.x") && m.contains("Int") && m.contains("Bool")),
-        "expected leaf-type mismatch diagnostic naming the field path, got {messages:?}",
+        &["p.x", "Int", "Bool"],
     );
 }
 
 #[test]
 fn field_write_on_unknown_field_diagnoses_against_struct_name() {
-    let failure = typecheck_fail(&dedent(
+    assert_script_fails_with(
         "
         struct Point
           x: Int
@@ -93,13 +88,7 @@ fn field_write_on_unknown_field_diagnoses_against_struct_name() {
         p.z = 5
         p
         ",
-    ));
-    let messages = diagnostic_messages(&failure);
-    assert!(
-        messages
-            .iter()
-            .any(|m| m.contains("Point") && m.contains("z")),
-        "expected unknown-field diagnostic naming `Point` and `z`, got {messages:?}",
+        &["Point", "z"],
     );
 }
 

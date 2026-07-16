@@ -15,7 +15,7 @@ use koja_ast::util::dedent;
 mod common;
 
 use common::{
-    PACKAGE, diagnostic_messages, typecheck_script as typecheck,
+    PACKAGE, assert_script_fails_with, diagnostic_messages, typecheck_script as typecheck,
     typecheck_script_fail as typecheck_fail,
 };
 
@@ -94,12 +94,7 @@ fn unknown_bound_name_diagnoses_at_lift() {
         end
         ";
 
-    let failure = typecheck_fail(&dedent(source));
-    let messages = diagnostic_messages(&failure);
-    assert!(
-        messages.iter().any(|m| m.contains("NotARealProtocol")),
-        "expected unknown-bound diagnostic, got {messages:?}",
-    );
+    assert_script_fails_with(source, &["NotARealProtocol"]);
 }
 
 #[test]
@@ -114,12 +109,7 @@ fn non_protocol_bound_diagnoses_at_lift() {
         end
         ";
 
-    let failure = typecheck_fail(&dedent(source));
-    let messages = diagnostic_messages(&failure);
-    assert!(
-        messages.iter().any(|m| m.contains("Point")),
-        "expected non-protocol-bound diagnostic, got {messages:?}",
-    );
+    assert_script_fails_with(source, &["Point"]);
 }
 
 #[test]
@@ -142,14 +132,12 @@ fn call_site_with_unimplemented_bound_diagnoses() {
         show(Point{x: 1})
         ";
 
-    let failure = typecheck_fail(&dedent(source));
-    let messages = diagnostic_messages(&failure);
-    assert!(
-        messages
-            .iter()
-            .any(|m| m.contains("does not implement protocol `Greeter`")
-                && m.contains("required by type parameter `T`")),
-        "expected bound-enforcement diagnostic, got {messages:?}",
+    assert_script_fails_with(
+        source,
+        &[
+            "does not implement protocol `Greeter`",
+            "required by type parameter `T`",
+        ],
     );
 }
 

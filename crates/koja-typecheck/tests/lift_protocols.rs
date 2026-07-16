@@ -11,10 +11,7 @@ use koja_typecheck::{
 
 mod common;
 
-use common::{
-    PACKAGE, diagnostic_messages, typecheck_script as typecheck,
-    typecheck_script_fail as typecheck_fail,
-};
+use common::{PACKAGE, assert_script_fails_with, typecheck_script as typecheck};
 
 fn protocol_definition<'a>(checked: &'a CheckedProgram, name: &str) -> &'a ProtocolDefinition {
     let ident = Identifier::new(PACKAGE, vec![name.to_string()]);
@@ -82,14 +79,7 @@ fn duplicate_protocol_decl_diagnoses() {
         end
         ";
 
-    let failure = typecheck_fail(&dedent(source));
-    let messages = diagnostic_messages(&failure);
-    assert!(
-        messages
-            .iter()
-            .any(|m| m.contains("already defined") && m.contains("Greeter")),
-        "expected already-defined diagnostic on duplicate protocol, got {messages:?}",
-    );
+    assert_script_fails_with(source, &["already defined", "Greeter"]);
 }
 
 #[test]
@@ -100,14 +90,7 @@ fn generic_protocol_method_diagnoses_feature_gap() {
         end
         ";
 
-    let failure = typecheck_fail(&dedent(source));
-    let messages = diagnostic_messages(&failure);
-    assert!(
-        messages
-            .iter()
-            .any(|m| m.contains("generic protocol methods")),
-        "expected generic-protocol-method gap diagnostic, got {messages:?}",
-    );
+    assert_script_fails_with(source, &["generic protocol methods"]);
 }
 
 #[test]
@@ -119,12 +102,5 @@ fn protocol_annotation_diagnoses_feature_gap() {
         end
         ";
 
-    let failure = typecheck_fail(&dedent(source));
-    let messages = diagnostic_messages(&failure);
-    assert!(
-        messages
-            .iter()
-            .any(|m| m.contains("annotations on protocols")),
-        "expected protocol-annotation gap diagnostic, got {messages:?}",
-    );
+    assert_script_fails_with(source, &["annotations on protocols"]);
 }

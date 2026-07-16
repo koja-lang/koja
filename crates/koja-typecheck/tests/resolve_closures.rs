@@ -7,55 +7,15 @@
 //! capture of outer locals, nested closures, and "value-of-fn-type"
 //! storage in a local binding.
 
-use koja_ast::ast::{ClosureParam, Expr, ExprKind, Function, Item, Statement};
-use koja_ast::identifier::{AnonymousKind, Identifier, Resolution, ResolvedType};
+use koja_ast::ast::{ClosureParam, ExprKind, Statement};
+use koja_ast::identifier::{AnonymousKind, Resolution, ResolvedType};
 use koja_ast::util::dedent;
-use koja_typecheck::CheckedProgram;
 
 mod common;
 
 use common::{
-    PACKAGE, diagnostic_messages, typecheck_script as typecheck,
-    typecheck_script_fail as typecheck_fail,
+    assert_script_fails_with, function_body, global_leaf, last_expr, typecheck_script as typecheck,
 };
-
-fn function<'a>(checked: &'a CheckedProgram, name: &str) -> &'a Function {
-    let pkg = checked
-        .packages
-        .iter()
-        .find(|p| p.package == PACKAGE)
-        .expect("test package missing");
-    let file = pkg.files.first().expect("package has no files");
-    file.items
-        .iter()
-        .find_map(|item| match item {
-            Item::Function(f) if f.name == name => Some(f),
-            _ => None,
-        })
-        .unwrap_or_else(|| panic!("missing fn `{name}`"))
-}
-
-fn function_body<'a>(checked: &'a CheckedProgram, name: &str) -> &'a [Statement] {
-    function(checked, name)
-        .body
-        .as_deref()
-        .unwrap_or_else(|| panic!("`{name}` has no body"))
-}
-
-fn trailing_expr(body: &[Statement]) -> &Expr {
-    let Statement::Expr(expr) = body.last().expect("empty body") else {
-        panic!("trailing statement is not an expression");
-    };
-    expr
-}
-
-fn global_leaf(checked: &CheckedProgram, name: &str) -> ResolvedType {
-    let (id, _) = checked
-        .registry
-        .lookup(&Identifier::new("Global", vec![name.to_string()]))
-        .unwrap_or_else(|| panic!("`Global.{name}` not registered"));
-    ResolvedType::leaf(Resolution::Global(id))
-}
 
 fn fn_type(params: Vec<ResolvedType>, ret: ResolvedType) -> ResolvedType {
     ResolvedType::Anonymous(AnonymousKind::Function {
@@ -109,7 +69,7 @@ fn short_closure_with_unannotated_param_uses_context() {
     let checked = typecheck(&dedent(source));
     let int = global_leaf(&checked, "Int");
     let body = function_body(&checked, "make");
-    let trailing = trailing_expr(body);
+    let trailing = last_expr(body);
     let ExprKind::Call { args, .. } = &trailing.kind else {
         panic!("expected Call, got {:?}", trailing.kind);
     };
@@ -141,7 +101,7 @@ fn closure_captures_outer_local_with_local_resolution() {
     let ExprKind::Closure { body, .. } = &closure.kind else {
         panic!("expected Closure, got {:?}", closure.kind);
     };
-    let trailing = trailing_expr(body);
+    let trailing = last_expr(body);
     let ExprKind::Binary { right, .. } = &trailing.kind else {
         panic!("expected Binary in closure body, got {:?}", trailing.kind);
     };
@@ -186,14 +146,7 @@ fn closure_param_without_annotation_or_context_diagnoses() {
         end
         ";
 
-    let failure = typecheck_fail(&dedent(source));
-    let messages = diagnostic_messages(&failure);
-    assert!(
-        messages
-            .iter()
-            .any(|m| m.contains("closure parameter") && m.contains("type annotation")),
-        "expected param-annotation diagnostic, got {messages:?}",
-    );
+    assert_script_fails_with(source, &["closure parameter", "type annotation"]);
 }
 
 #[test]
@@ -229,10 +182,7 @@ fn closure_param_local_ids_stamped_for_seal() {
         ";
 
     let checked = typecheck(&dedent(source));
-    let body = function(&checked, "caller")
-        .body
-        .as_deref()
-        .expect("body present");
+    let body = function_body(&checked, "caller");
     let Statement::Assignment { value, .. } = &body[0] else {
         panic!("expected assignment");
     };
@@ -285,7 +235,7 @@ fn closure_capture_of_heap_local_resolves_through_string() {
     let string = global_leaf(&checked, "String");
     let int = global_leaf(&checked, "Int");
     let body = function_body(&checked, "make");
-    let trailing = trailing_expr(body);
+    let trailing = last_expr(body);
     let ExprKind::Call { args, .. } = &trailing.kind else {
         panic!("expected Call, got {:?}", trailing.kind);
     };
