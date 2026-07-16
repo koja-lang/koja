@@ -1,14 +1,14 @@
 //! AST-side substitution helpers for monomorphization.
 //!
 //! [`substitute_in_function`] walks every [`ResolvedType`] slot
-//! reachable from a function's body — `Expr.resolution`, the
-//! `type_args` carried on call/method-call expressions — and rewrites
+//! reachable from a function's body (`Expr.resolution` and the
+//! `type_args` carried on call/method-call expressions) and rewrites
 //! it via [`super::substitute_resolved_type`]. Mono drives this on a
 //! cloned [`Function`] before re-lowering, so the body sees concrete
 //! resolutions everywhere a `TypeParam` previously stood.
 //!
 //! [`substitute_signature`] does the same for a [`FunctionSignature`]
-//! — params and return type — yielding the substituted signature
+//! (params and return type), yielding the substituted signature
 //! [`crate::lower::package::lower_function_inner`] needs.
 
 use koja_ast::ast::{
@@ -273,7 +273,7 @@ fn substitute_in_expr(expr: &mut Expr, args: &[ResolvedType], owner: GlobalRegis
 
 /// Rewrite every `ResolvedType` slot reachable from a [`Pattern`].
 /// Only [`Pattern::TypedBinding`] carries a generic-bearing
-/// resolution today; other kinds either have no resolution or only
+/// resolution today. Other kinds either have no resolution or only
 /// a generic-free `TypeIdentifier` head, so the walk just recurses
 /// into nested sub-patterns.
 fn substitute_in_pattern(pattern: &mut Pattern, args: &[ResolvedType], owner: GlobalRegistryId) {

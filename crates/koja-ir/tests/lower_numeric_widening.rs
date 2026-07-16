@@ -5,20 +5,16 @@
 //! [`IRType`]s, from which the backends derive sign- vs
 //! zero-extension.
 
-use koja_ast::util::dedent;
 use koja_ir::{IRFunction, IRInstruction, IRType};
 
 mod common;
 
-use common::{lower_script_source as lower, script_function};
+use common::{all_instructions, lower_script_source as lower, script_function};
 
 /// Collect every `NumericWiden`'s `(from, to)` pair across the
 /// function's blocks.
 fn widen_pairs(function: &IRFunction) -> Vec<(&IRType, &IRType)> {
-    function
-        .blocks
-        .iter()
-        .flat_map(|b| b.instructions.iter())
+    all_instructions(&function.blocks)
         .filter_map(|i| match i {
             IRInstruction::NumericWiden { from, to, .. } => Some((from, to)),
             _ => None,
@@ -39,7 +35,7 @@ fn int32_arg_into_int_param_lowers_to_numeric_widen() {
 
         caller(7)
         ";
-    let script = lower(&dedent(source));
+    let script = lower(source);
     let widens = widen_pairs(script_function(&script, "caller"));
     assert_eq!(
         widens,
@@ -57,7 +53,7 @@ fn float32_return_into_float_lowers_to_numeric_widen() {
 
         promote(1.5)
         ";
-    let script = lower(&dedent(source));
+    let script = lower(source);
     let widens = widen_pairs(script_function(&script, "promote"));
     assert_eq!(
         widens,

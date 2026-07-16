@@ -3,7 +3,7 @@
 //! and mutating one side is never observable through the other.
 //! Mutators are copy-on-write (they clone the receiver's backing
 //! store before mutating), so `b = a; b = b.append(x)` leaves `a`
-//! untouched — including across a function-call boundary, where the
+//! untouched, including across a function-call boundary, where the
 //! callee's local mutation can't reach back to the caller's binding.
 
 use koja_ast::util::dedent;

@@ -11,7 +11,7 @@
 //! - **Captures** populate `env_layout`, surface as
 //!   [`IRInstruction::LoadCapture`] inside the body, and copy into
 //!   the env via a [`IRInstruction::LocalRead`] of the outer slot
-//!   (value semantics — the outer binding stays live).
+//!   (value semantics, the outer binding stays live).
 //! - **Closure-typed local calls** lower to
 //!   [`IRInstruction::CallClosure`] dispatching through a
 //!   [`IRInstruction::LocalRead`] of the slot.
@@ -20,50 +20,23 @@
 //!   (cached across repeated references) and emit
 //!   [`IRInstruction::MakeClosure`] with no captures.
 
-use koja_ast::util::dedent;
-use koja_ir::{FunctionKind, IRBasicBlock, IRFunction, IRInstruction, IRScript, IRType};
+use koja_ir::{FunctionKind, IRBasicBlock, IRFunction, IRInstruction, IRType};
 
 mod common;
 
-use common::lower_script_source as lower;
-
-fn function_opt<'a>(script: &'a IRScript, mangled: &str) -> Option<&'a IRFunction> {
-    script.function(mangled)
-}
-
-fn require_synthesized<'a>(script: &'a IRScript, mangled: &str) -> &'a IRFunction {
-    function_opt(script, mangled).unwrap_or_else(|| {
-        let names: Vec<_> = script
-            .packages
-            .iter()
-            .flat_map(|p| p.functions.values().map(|f| f.symbol.mangled().to_string()))
-            .collect();
-        panic!("missing synthesized function `{mangled}` in IRScript; have: {names:?}",);
-    })
-}
+use common::{
+    all_instructions, lower_script_source as lower, mangled_function, script_function_names,
+};
 
 fn make_closure_in(blocks: &[IRBasicBlock]) -> Vec<&IRInstruction> {
-    blocks
-        .iter()
-        .flat_map(|b| &b.instructions)
+    all_instructions(blocks)
         .filter(|i| matches!(i, IRInstruction::MakeClosure { .. }))
         .collect()
 }
 
 fn load_captures_in(function: &IRFunction) -> Vec<&IRInstruction> {
-    function
-        .blocks
-        .iter()
-        .flat_map(|b| &b.instructions)
+    all_instructions(&function.blocks)
         .filter(|i| matches!(i, IRInstruction::LoadCapture { .. }))
-        .collect()
-}
-
-fn call_closures_in(blocks: &[IRBasicBlock]) -> Vec<&IRInstruction> {
-    blocks
-        .iter()
-        .flat_map(|b| &b.instructions)
-        .filter(|i| matches!(i, IRInstruction::CallClosure { .. }))
         .collect()
 }
 
@@ -83,9 +56,9 @@ fn block_closure_without_captures_synthesizes_empty_env_body() {
         0
         ";
 
-    let script = lower(&dedent(source));
+    let script = lower(source);
 
-    let body = require_synthesized(&script, "TestApp.__script_body__closure0");
+    let body = mangled_function(&script, "TestApp.__script_body__closure0");
     let FunctionKind::Closure { env_layout } = &body.kind else {
         panic!(
             "synthesized closure body should be FunctionKind::Closure, got {:?}",
@@ -126,8 +99,8 @@ fn block_closure_with_capture_loads_through_env_layout() {
         0
         ";
 
-    let script = lower(&dedent(source));
-    let body = require_synthesized(&script, "TestApp.__script_body__closure0");
+    let script = lower(source);
+    let body = mangled_function(&script, "TestApp.__script_body__closure0");
 
     let FunctionKind::Closure { env_layout } = &body.kind else {
         unreachable!("body kind already checked in the no-capture test")
@@ -166,8 +139,8 @@ fn unused_outer_local_is_not_captured() {
     // in env_layout or carry a capture value. Pins the
     // capture-analysis dedup/visibility rules so a future walker bug
     // doesn't accidentally lift unused outer locals.
-    let script = lower(&dedent(source));
-    let body = require_synthesized(&script, "TestApp.__script_body__closure0");
+    let script = lower(source);
+    let body = mangled_function(&script, "TestApp.__script_body__closure0");
     let FunctionKind::Closure { env_layout } = &body.kind else {
         unreachable!("body kind already checked in the no-capture test")
     };
@@ -184,9 +157,10 @@ fn unused_outer_local_is_not_captured() {
 
 #[test]
 fn match_arm_binding_inside_closure_is_not_captured() {
-    // `n` is bound by the arm pattern *inside* the closure — it must
-    // lower as a body local, not a capture of the enclosing function
-    // (which never declared the slot; misclassifying ICEs at seal).
+    // `n` is bound by the arm pattern *inside* the closure, so it
+    // must lower as a body local, not a capture of the enclosing
+    // function. The enclosing function never declared the slot, and
+    // misclassifying ICEs at seal.
     let source = "
         f = fn () -> Int
           o = Option.Some(3)
@@ -198,8 +172,8 @@ fn match_arm_binding_inside_closure_is_not_captured() {
         0
         ";
 
-    let script = lower(&dedent(source));
-    let body = require_synthesized(&script, "TestApp.__script_body__closure0");
+    let script = lower(source);
+    let body = mangled_function(&script, "TestApp.__script_body__closure0");
     let FunctionKind::Closure { env_layout } = &body.kind else {
         unreachable!("body kind already checked in the no-capture test")
     };
@@ -227,8 +201,8 @@ fn nested_block_assignment_inside_closure_is_not_captured() {
         0
         ";
 
-    let script = lower(&dedent(source));
-    let body = require_synthesized(&script, "TestApp.__script_body__closure0");
+    let script = lower(source);
+    let body = mangled_function(&script, "TestApp.__script_body__closure0");
     let FunctionKind::Closure { env_layout } = &body.kind else {
         unreachable!("body kind already checked in the no-capture test")
     };
@@ -243,7 +217,7 @@ fn nested_block_assignment_inside_closure_is_not_captured() {
 fn heap_capture_copies_into_env_via_local_read() {
     // The closure captures heap-typed `s`. Under value semantics the
     // capture copies into the env via a `LocalRead` of the outer slot
-    // (the binding stays live) — there is no move-out.
+    // (the binding stays live). There is no move-out.
     let source = "
         s = \"hi\" <> \"there\"
         g = fn (x: Int) -> Int
@@ -256,8 +230,8 @@ fn heap_capture_copies_into_env_via_local_read() {
         end
         ";
 
-    let script = lower(&dedent(source));
-    let g_body = require_synthesized(&script, "TestApp.__script_body__closure0");
+    let script = lower(source);
+    let g_body = mangled_function(&script, "TestApp.__script_body__closure0");
     let FunctionKind::Closure { env_layout } = &g_body.kind else {
         unreachable!("g_body should be a closure")
     };
@@ -274,10 +248,7 @@ fn heap_capture_copies_into_env_via_local_read() {
         unreachable!()
     };
     assert_eq!(captures.len(), 1, "g forwards one captured value");
-    let reads_string = script
-        .blocks
-        .iter()
-        .flat_map(|b| &b.instructions)
+    let reads_string = all_instructions(&script.blocks)
         .any(|i| matches!(i, IRInstruction::LocalRead { ty, .. } if *ty == IRType::String));
     assert!(
         reads_string,
@@ -294,9 +265,11 @@ fn closure_typed_local_call_lowers_to_call_closure() {
         f(5)
         ";
 
-    let script = lower(&dedent(source));
+    let script = lower(source);
 
-    let calls = call_closures_in(&script.blocks);
+    let calls: Vec<_> = all_instructions(&script.blocks)
+        .filter(|i| matches!(i, IRInstruction::CallClosure { .. }))
+        .collect();
     assert_eq!(calls.len(), 1, "exactly one CallClosure for `f(5)`");
     let IRInstruction::CallClosure {
         args, result_ty, ..
@@ -307,9 +280,9 @@ fn closure_typed_local_call_lowers_to_call_closure() {
     assert_eq!(args.len(), 1, "one user-visible arg");
     assert_eq!(*result_ty, IRType::Int64);
 
-    // Also: no direct `Call` to a `__closure*` symbol — the indirect
-    // path is the only dispatch for closure-typed locals.
-    for inst in script.blocks.iter().flat_map(|b| &b.instructions) {
+    // Also assert there is no direct `Call` to a `__closure*` symbol.
+    // The indirect path is the only dispatch for closure-typed locals.
+    for inst in all_instructions(&script.blocks) {
         if let IRInstruction::Call { callee, .. } = inst {
             assert!(
                 !callee.mangled().contains("__closure"),
@@ -334,8 +307,8 @@ fn fn_as_value_synthesizes_captureless_wrapper_and_emits_make_closure() {
         apply(add, 1, 2)
         ";
 
-    let script = lower(&dedent(source));
-    let wrapper = require_synthesized(&script, "TestApp.add__as_closure");
+    let script = lower(source);
+    let wrapper = mangled_function(&script, "TestApp.add__as_closure");
 
     let FunctionKind::Closure { env_layout } = &wrapper.kind else {
         panic!(
@@ -347,10 +320,7 @@ fn fn_as_value_synthesizes_captureless_wrapper_and_emits_make_closure() {
     assert_eq!(wrapper.params.len(), 2);
     assert_eq!(wrapper.return_type, IRType::Int64);
 
-    let inner_calls: Vec<_> = wrapper
-        .blocks
-        .iter()
-        .flat_map(|b| &b.instructions)
+    let inner_calls: Vec<_> = all_instructions(&wrapper.blocks)
         .filter_map(|i| match i {
             IRInstruction::Call { callee, .. } => Some(callee.mangled()),
             _ => None,
@@ -396,19 +366,12 @@ fn fn_as_value_wrapper_is_cached_across_repeated_references() {
         apply(add, 1, 2) + apply(add, 3, 4)
         ";
 
-    let script = lower(&dedent(source));
-    require_synthesized(&script, "TestApp.add__as_closure");
+    let script = lower(source);
 
-    let wrapper_count: usize = script
-        .packages
+    let wrapper_count = script_function_names(&script)
         .iter()
-        .map(|p| {
-            p.functions
-                .values()
-                .filter(|f| f.symbol.mangled() == "TestApp.add__as_closure")
-                .count()
-        })
-        .sum();
+        .filter(|name| *name == "TestApp.add__as_closure")
+        .count();
     assert_eq!(
         wrapper_count, 1,
         "two `add` references must reuse a single wrapper, got {wrapper_count}",

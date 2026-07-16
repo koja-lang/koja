@@ -4,8 +4,8 @@
 //!
 //! `IRExternAttrs` is the IR-layer composition of two pieces of AST
 //! metadata ([`koja_ast::ast::is_extern_c`] for the ABI marker plus
-//! [`koja_ast::ast::AnnotationKind::Link`] for the linker payload);
-//! the AST keeps both pieces deliberately separate because `@link`
+//! [`koja_ast::ast::AnnotationKind::Link`] for the linker payload).
+//! The AST keeps both pieces deliberately separate because `@link`
 //! is pure linker metadata (no ABI implication) and `@extern "C"`
 //! is pure ABI metadata (no library name). They only fuse here,
 //! where the IR's [`crate::FunctionKind::Extern`] needs both to
@@ -23,7 +23,7 @@ use koja_ast::ast::{Annotation, AnnotationKind};
 ///
 /// `link_lib` is the bare library name (`@link "m"` -> `m`) the
 /// driver feeds to `cc -l<name>`. Multiple `@extern "C"` functions
-/// can name the same library — the IR layer (in [`crate::IRProgram`]
+/// can name the same library. The IR layer (in [`crate::IRProgram`]
 /// / [`crate::IRScript`]) dedupes across the program before
 /// surfacing a sorted list to the driver.
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
@@ -35,13 +35,13 @@ pub struct IRExternAttrs {
 impl IRExternAttrs {
     /// Build an [`IRExternAttrs`] from a function's `annotations`.
     /// Caller is responsible for already having checked
-    /// [`koja_ast::ast::is_extern_c`] — this helper just collects
+    /// [`koja_ast::ast::is_extern_c`]. This helper just collects
     /// the optional `@link` payload(s).
     ///
     /// Multiple `@link` annotations on one function fold with
     /// last-write-wins for whichever fields each one carries.
     /// Annotations whose `kind()` isn't [`AnnotationKind::Link`] are
-    /// skipped silently — the typecheck layer is responsible for
+    /// skipped silently, as the typecheck layer is responsible for
     /// rejecting unrecognized annotations.
     pub fn from_annotations(annotations: &[Annotation]) -> Self {
         let mut attrs = Self::default();

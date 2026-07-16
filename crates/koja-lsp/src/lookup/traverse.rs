@@ -579,10 +579,6 @@ fn find_in_expr(expr: &Expr, line: u32, col: u32, ctx: &LookupCtx<'_>) -> Option
     None
 }
 
-// ---------------------------------------------------------------------------
-// find_expr_at: returns the innermost Expr at a cursor position
-// ---------------------------------------------------------------------------
-
 /// A call site found by `find_enclosing_call`.
 pub(crate) struct CallSite<'a> {
     pub expr: &'a Expr,
@@ -802,10 +798,6 @@ fn find_expr_at_inner(expr: &Expr, line: u32, col: u32) -> Option<&Expr> {
 
     Some(child.unwrap_or(expr))
 }
-
-// ---------------------------------------------------------------------------
-// find_enclosing_call: returns the innermost Call/MethodCall at a position
-// ---------------------------------------------------------------------------
 
 /// Returns the innermost `Call` or `MethodCall` expression enclosing the
 /// cursor, along with the index of the argument the cursor falls within.

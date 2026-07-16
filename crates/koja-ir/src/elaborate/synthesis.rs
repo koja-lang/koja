@@ -3,7 +3,7 @@
 //! program's decls, [`copy_body`] / [`drop_body`] build a
 //! self-contained CFG that projects each constituent, acquires /
 //! releases it (recursing into the constituent's own glue by
-//! `Call`), and — for the copy family — rebuilds the aggregate.
+//! `Call`), and, for the copy family, rebuilds the aggregate.
 //!
 //! Every body's single parameter is [`SELF_VALUE`] (`ValueId(0)`),
 //! typed as the operand. Fresh SSA values number from 1 and blocks
@@ -27,13 +27,13 @@ use crate::types::{ConstValue, IRBinOp, IRType, ValueId};
 
 use super::{find_enum, find_struct, is_inline_managed, needs_drop, needs_glue, unbox};
 
-/// The glue's sole parameter — `self`, typed as the operand. Both the
+/// The glue's sole parameter, `self`, typed as the operand. Both the
 /// shell ([`super::glue_shell`]) and every synthesized body agree on
 /// this id so projections read straight off it.
 pub(super) const SELF_VALUE: ValueId = ValueId(0);
 
 /// Which copy family an aggregate body belongs to. The projection /
-/// rebuild walk is identical; the mode only selects the inline
+/// rebuild walk is identical, and the mode only selects the inline
 /// instruction for leaf / closure constituents and the glue symbol
 /// composite ones `Call` into.
 #[derive(Clone, Copy)]
@@ -64,7 +64,7 @@ impl CopyMode {
 }
 
 /// Build the `clone_T` / `deep_copy_T` body for an aggregate `ty`.
-/// Panics if `ty` is not a synthesizable aggregate — callers gate on
+/// Panics if `ty` is not a synthesizable aggregate. Callers gate on
 /// [`super::is_aggregate`].
 pub(super) fn copy_body(ty: &IRType, packages: &[IRPackage], mode: CopyMode) -> Vec<IRBasicBlock> {
     let mut synthesizer = Synthesizer::new(mode);
@@ -78,7 +78,7 @@ pub(super) fn copy_body(ty: &IRType, packages: &[IRPackage], mode: CopyMode) -> 
 }
 
 /// Build the `drop_T` body for an aggregate `ty`. Panics if `ty` is
-/// not a synthesizable aggregate — callers gate on [`super::is_aggregate`].
+/// not a synthesizable aggregate. Callers gate on [`super::is_aggregate`].
 pub(super) fn drop_body(ty: &IRType, packages: &[IRPackage]) -> Vec<IRBasicBlock> {
     let mut synthesizer = Synthesizer::new(CopyMode::Clone);
     match ty {
@@ -117,7 +117,7 @@ fn disposition(ty: &IRType, packages: &[IRPackage]) -> Disposition {
 /// Self-contained CFG accumulator for one glue body: a [`CFGBuilder`]
 /// plus the fresh-value / fresh-block counters lowering would
 /// otherwise own on [`crate::FnLowerCtx`]. `mode` selects the copy
-/// family [`Self::acquire`] emits; drop bodies never consult it.
+/// family [`Self::acquire`] emits. Drop bodies never consult it.
 struct Synthesizer {
     cfg: CFGBuilder,
     mode: CopyMode,
@@ -131,7 +131,7 @@ impl Synthesizer {
             cfg: CFGBuilder::new(),
             mode,
             next_block: 0,
-            // 0 is the `self` parameter; bodies number from 1.
+            // 0 is the `self` parameter, so bodies number from 1.
             next_value: 1,
         }
     }
@@ -161,7 +161,7 @@ impl Synthesizer {
     /// SSA value to store into the rebuilt aggregate.
     ///
     /// `ty` may be the declared field type, including a transparent
-    /// [`IRType::Indirect`] box — but the projected `value` is already
+    /// [`IRType::Indirect`] box, but the projected `value` is already
     /// the unboxed inner (the `FieldGet` / `EnumPayloadFieldGet`
     /// unboxes), and the rebuild re-boxes, so disposition runs on the
     /// inner type.
@@ -552,10 +552,10 @@ impl Synthesizer {
     /// Build the tag-dispatch skeleton for an `arm_count`-way enum /
     /// union switch keyed on the already-projected `tag` (`Int8`) in
     /// `entry`. Returns one (open) body block per arm plus the shared
-    /// `join` block; the caller fills each body and terminates it with
+    /// `join` block. The caller fills each body and terminates it with
     /// a branch to `join`, and sets `join`'s terminator.
     ///
-    /// Arms `0..arm_count-1` are reached by an equality gate; the last
+    /// Arms `0..arm_count-1` are reached by an equality gate. The last
     /// arm is the final `else`, since the tag is statically one of the
     /// arms (typecheck-exhaustive). A single-arm switch branches to its
     /// body unconditionally.

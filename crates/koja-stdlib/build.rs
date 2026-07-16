@@ -138,7 +138,7 @@ fn main() {
     let qualified_packages: &[&str] = &["Crypto", "HTTP", "JSON", "Net"];
     code.push_str("\n/// Stdlib sources for qualified packages user\n");
     code.push_str("/// programs can `alias` into scope. Loaded eagerly\n");
-    code.push_str("/// alongside `AUTOIMPORT`; pragmatic stand-in for\n");
+    code.push_str("/// alongside `AUTOIMPORT` as a pragmatic stand-in for\n");
     code.push_str("/// on-demand `IRPackage` loading.\n");
     code.push_str("pub const QUALIFIED: &[(&str, &str)] = &[\n");
     for package in qualified_packages {

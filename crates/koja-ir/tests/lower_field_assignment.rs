@@ -9,7 +9,7 @@
 //! - `p.x = v` lowers to `LocalRead -> FieldSet -> LocalWrite` with the
 //!   field index, type, and struct symbol pinned.
 //! - Depth-N (`a.b.c = v`) chains `LocalRead -> FieldGet -> FieldSet ->
-//!   FieldSet -> LocalWrite` — one `FieldGet` per non-leaf segment,
+//!   FieldSet -> LocalWrite`, one `FieldGet` per non-leaf segment and
 //!   one `FieldSet` per segment, walked back up.
 //! - Compound assignment on a field path (`p.x += 1`) reads the leaf
 //!   via `FieldGet`, combines through `BinaryOp`, then walks back up
@@ -19,19 +19,11 @@
 //! - Composite leaf overwrite (`h.items = other`) acquires the rhs
 //!   through clone glue and releases the overwritten value.
 
-use koja_ast::util::dedent;
-use koja_ir::{IRBasicBlock, IRInstruction, IRType};
+use koja_ir::{IRInstruction, IRType};
 
 mod common;
 
-use common::lower_script_source;
-
-fn instructions(blocks: &[IRBasicBlock]) -> Vec<&IRInstruction> {
-    blocks
-        .iter()
-        .flat_map(|block| block.instructions.iter())
-        .collect()
-}
+use common::{all_instructions, lower_script_source};
 
 #[test]
 fn single_segment_assignment_emits_local_write_only() {
@@ -45,8 +37,8 @@ fn single_segment_assignment_emits_local_write_only() {
         p.x
         ";
 
-    let script = lower_script_source(&dedent(source));
-    let instructions = instructions(&script.blocks);
+    let script = lower_script_source(source);
+    let instructions: Vec<_> = all_instructions(&script.blocks).collect();
     assert!(
         !instructions
             .iter()
@@ -68,10 +60,8 @@ fn depth_one_field_write_emits_field_set_around_local() {
         p.x
         ";
 
-    let script = lower_script_source(&dedent(source));
-    let instructions = instructions(&script.blocks);
-    let field_sets: Vec<_> = instructions
-        .iter()
+    let script = lower_script_source(source);
+    let field_sets: Vec<_> = all_instructions(&script.blocks)
         .filter_map(|inst| match inst {
             IRInstruction::FieldSet {
                 field_index,
@@ -106,10 +96,8 @@ fn depth_two_field_write_chains_field_get_then_field_set_walk_up() {
         o.inner.n
         ";
 
-    let script = lower_script_source(&dedent(source));
-    let instructions = instructions(&script.blocks);
-    let field_sets: Vec<_> = instructions
-        .iter()
+    let script = lower_script_source(source);
+    let field_sets: Vec<_> = all_instructions(&script.blocks)
         .filter_map(|inst| match inst {
             IRInstruction::FieldSet {
                 field_index,
@@ -150,19 +138,15 @@ fn compound_assign_on_field_emits_field_get_binary_op_field_set() {
         p.x
         ";
 
-    let script = lower_script_source(&dedent(source));
-    let instructions = instructions(&script.blocks);
+    let script = lower_script_source(source);
 
-    let field_get_count = instructions
-        .iter()
+    let field_get_count = all_instructions(&script.blocks)
         .filter(|inst| matches!(inst, IRInstruction::FieldGet { .. }))
         .count();
-    let field_set_count = instructions
-        .iter()
+    let field_set_count = all_instructions(&script.blocks)
         .filter(|inst| matches!(inst, IRInstruction::FieldSet { .. }))
         .count();
-    let binary_op_count = instructions
-        .iter()
+    let binary_op_count = all_instructions(&script.blocks)
         .filter(|inst| matches!(inst, IRInstruction::BinaryOp { .. }))
         .count();
     assert!(
@@ -195,8 +179,8 @@ fn composite_leaf_overwrite_acquires_rhs_and_drops_stale_value() {
         1
         ";
 
-    let script = lower_script_source(&dedent(source));
-    let instructions = instructions(&script.blocks);
+    let script = lower_script_source(source);
+    let instructions: Vec<_> = all_instructions(&script.blocks).collect();
 
     // Elaborate has already rewritten the composite Clone / DropValue
     // markers into glue calls, so match those.
@@ -212,8 +196,10 @@ fn composite_leaf_overwrite_acquires_rhs_and_drops_stale_value() {
     // Pin the drop whose argument is the stale leaf's FieldGet dest.
     let stale_leaf = instructions.iter().find_map(|inst| match inst {
         IRInstruction::FieldGet {
-            dest, field_type, ..
-        } if matches!(field_type, IRType::List(_)) => Some(*dest),
+            dest,
+            field_type: IRType::List(_),
+            ..
+        } => Some(*dest),
         _ => None,
     });
     let stale_leaf = stale_leaf.expect("expected a FieldGet reading the overwritten list field");
@@ -242,10 +228,8 @@ fn heap_leaf_overwrite_emits_drop_value_before_field_set() {
         1
         ";
 
-    let script = lower_script_source(&dedent(source));
-    let instructions = instructions(&script.blocks);
-    let drop_value_count = instructions
-        .iter()
+    let script = lower_script_source(source);
+    let drop_value_count = all_instructions(&script.blocks)
         .filter(|inst| matches!(inst, IRInstruction::DropValue { .. }))
         .count();
     assert!(

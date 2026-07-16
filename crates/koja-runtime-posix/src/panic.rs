@@ -24,10 +24,6 @@ pub(crate) struct UserCrash {
     pub crash_info: CrashInfo,
 }
 
-// ---------------------------------------------------------------------------
-// ANSI color helpers
-// ---------------------------------------------------------------------------
-
 fn app_name() -> &'static str {
     unsafe {
         let ptr = __koja_app_name.as_ptr();
@@ -53,10 +49,6 @@ const COLORS_ON: Colors = Colors {
 };
 
 const COLORS_OFF: Colors = Colors { red: "", reset: "" };
-
-// ---------------------------------------------------------------------------
-// Panic entry points
-// ---------------------------------------------------------------------------
 
 /// Distinguishes a user-level Koja panic (`panic()`, `unwrap` on `None`)
 /// from an internal runtime panic surfaced via the global hook. The origin
@@ -253,10 +245,6 @@ pub(crate) fn render_diagnostic(origin: PanicOrigin, message: &str) -> CrashInfo
     }
 }
 
-// ---------------------------------------------------------------------------
-// Frame filtering
-// ---------------------------------------------------------------------------
-
 /// True for any Rust frame originating in a runtime crate: `koja_runtime`
 /// (this staticlib's lib name), `koja_runtime_core`, or a future
 /// `koja_runtime_*`. Bare `koja_runtime` prefix is safe: lowered Koja
@@ -325,10 +313,6 @@ fn is_stdlib_frame(file_path: &str) -> bool {
         || path.contains("/crates/koja-")
 }
 
-// ---------------------------------------------------------------------------
-// Path formatting
-// ---------------------------------------------------------------------------
-
 fn format_file_path(file_path: &str, cwd: Option<&Path>, is_stdlib: bool) -> String {
     if file_path.is_empty() {
         return "<unknown>".to_string();
@@ -350,10 +334,6 @@ fn format_file_path(file_path: &str, cwd: Option<&Path>, is_stdlib: bool) -> Str
 
     file_path.to_string()
 }
-
-// ---------------------------------------------------------------------------
-// Name demangling
-// ---------------------------------------------------------------------------
 
 /// Converts mangled Koja names into a readable form:
 /// - `__koja_user_main` -> `main`
@@ -407,10 +387,6 @@ fn strip_generic_params(name: &str) -> String {
 
     result
 }
-
-// ---------------------------------------------------------------------------
-// Contextual hints
-// ---------------------------------------------------------------------------
 
 fn hint_for_panic(msg: &str) -> Option<&'static str> {
     if msg.contains("unwrap on None") {

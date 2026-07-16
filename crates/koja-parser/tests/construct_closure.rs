@@ -3,31 +3,15 @@
 //! The short-closure `expr -> expr` form is covered alongside the
 //! Pratt loop in `tests/expr.rs`.
 
-use koja_ast::ast::{ClosureParam, Expr, ExprKind, Item, Statement, TypeExpr};
-use koja_ast::util::dedent;
+use koja_ast::ast::{ClosureParam, ExprKind, TypeExpr};
 
 mod common;
 
-use common::{assert_hint_contains, assert_message_contains, parse_clean, parse_failing};
-
-fn first_closure_expr(source: &str) -> Expr {
-    let file = parse_clean(source);
-    for item in file.items {
-        if let Item::Function(f) = item {
-            for stmt in f.body.unwrap_or_default() {
-                match stmt {
-                    Statement::Expr(e) | Statement::Assignment { value: e, .. } => return e,
-                    _ => continue,
-                }
-            }
-        }
-    }
-    panic!("no expression in parsed output");
-}
+use common::{assert_hint_contains, first_function_expr, parse_failing_with};
 
 #[test]
 fn empty_closure_no_params() {
-    let src = dedent(
+    let expr = first_function_expr(
         "
         fn run
           c = fn() -> Int
@@ -36,7 +20,6 @@ fn empty_closure_no_params() {
         end
         ",
     );
-    let expr = first_closure_expr(&src);
     match expr.kind {
         ExprKind::Closure {
             params,
@@ -53,7 +36,7 @@ fn empty_closure_no_params() {
 
 #[test]
 fn closure_with_typed_params() {
-    let src = dedent(
+    let expr = first_function_expr(
         "
         fn run
           add = fn(a: Int, b: Int) -> Int
@@ -62,7 +45,6 @@ fn closure_with_typed_params() {
         end
         ",
     );
-    let expr = first_closure_expr(&src);
     match expr.kind {
         ExprKind::Closure { params, .. } => {
             assert_eq!(params.len(), 2);
@@ -82,7 +64,7 @@ fn closure_with_typed_params() {
 
 #[test]
 fn closure_with_inferred_params() {
-    let src = dedent(
+    let expr = first_function_expr(
         "
         fn run
           c = fn(x, y)
@@ -91,7 +73,6 @@ fn closure_with_inferred_params() {
         end
         ",
     );
-    let expr = first_closure_expr(&src);
     match expr.kind {
         ExprKind::Closure { params, .. } => {
             assert_eq!(params.len(), 2);
@@ -114,7 +95,7 @@ fn closure_with_inferred_params() {
 /// position diagnoses with a pointer at named params.
 #[test]
 fn closure_with_destructured_param_is_diagnosed() {
-    let src = dedent(
+    let result = parse_failing_with(
         "
         fn run
           c = fn((a, b))
@@ -122,15 +103,14 @@ fn closure_with_destructured_param_is_diagnosed() {
           end
         end
         ",
+        &["expected closure parameter"],
     );
-    let result = parse_failing(&src);
-    assert_message_contains(&result, "expected closure parameter");
     assert_hint_contains(&result, "Destructuring is not supported");
 }
 
 #[test]
 fn closure_without_return_type() {
-    let src = dedent(
+    let expr = first_function_expr(
         "
         fn run
           c = fn(x)
@@ -139,7 +119,6 @@ fn closure_without_return_type() {
         end
         ",
     );
-    let expr = first_closure_expr(&src);
     match expr.kind {
         ExprKind::Closure { return_type, .. } => assert!(return_type.is_none()),
         other => panic!("expected Closure, got {other:?}"),

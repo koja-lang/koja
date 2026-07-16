@@ -5,7 +5,7 @@
 //!   declaration order, with the param's `id` flowing into the
 //!   `LocalWrite` that mirrors it into its slot.
 //! - `Statement::Assignment`: the first write emits `LocalDecl`
-//!   followed by `LocalWrite`; subsequent writes only emit
+//!   followed by `LocalWrite`. Subsequent writes only emit
 //!   `LocalWrite` (the slot is already declared).
 //! - `ExprKind::Ident` reads of locals lower to `LocalRead` against
 //!   the same `IRLocalId` the writes target.
@@ -15,24 +15,13 @@
 //!   reuses the slot instead of re-declaring it, and skips the
 //!   stale-value drop (the slot may be uninitialized on that path).
 
-use koja_ast::util::dedent;
 use koja_ir::{IRBasicBlock, IRInstruction, IRType};
 
 mod common;
 
-use common::{lower_script_source as lower, script_function};
-
-fn entry_block(blocks: &[IRBasicBlock]) -> &IRBasicBlock {
-    blocks.first().expect("body should have at least one block")
-}
-
-fn local_decls(blocks: &[IRBasicBlock]) -> Vec<&IRInstruction> {
-    blocks
-        .iter()
-        .flat_map(|b| b.instructions.iter())
-        .filter(|i| matches!(i, IRInstruction::LocalDecl { .. }))
-        .collect()
-}
+use common::{
+    all_instructions, entry_block, local_decls, lower_script_source as lower, script_function,
+};
 
 #[test]
 fn body_decl_emits_local_decl_then_local_write() {
@@ -41,7 +30,7 @@ fn body_decl_emits_local_decl_then_local_write() {
         x
         ";
 
-    let script = lower(&dedent(source));
+    let script = lower(source);
     let entry = entry_block(&script.blocks);
     let body = &entry.instructions;
 
@@ -106,18 +95,15 @@ fn reassignment_emits_only_local_write() {
         x
         ";
 
-    let script = lower(&dedent(source));
+    let script = lower(source);
     let decls = local_decls(&script.blocks);
     assert_eq!(
         decls.len(),
         1,
-        "exactly one LocalDecl per slot — reassignment reuses it; got {decls:?}",
+        "exactly one LocalDecl per slot (reassignment reuses it), got {decls:?}",
     );
 
-    let writes: Vec<_> = script
-        .blocks
-        .iter()
-        .flat_map(|b| b.instructions.iter())
+    let writes: Vec<_> = all_instructions(&script.blocks)
         .filter_map(|i| match i {
             IRInstruction::LocalWrite { local, .. } => Some(*local),
             _ => None,
@@ -140,7 +126,7 @@ fn param_promotion_emits_local_decl_and_local_write_in_entry() {
         id(7)
         ";
 
-    let script = lower(&dedent(source));
+    let script = lower(source);
     let id_fn = script_function(&script, "id");
     let entry = entry_block(&id_fn.blocks);
 
@@ -212,7 +198,7 @@ fn reassign_after_while_reuses_slot_and_skips_stale_drop() {
         s
         ";
 
-    let script = lower(&dedent(source));
+    let script = lower(source);
     assert_decl_slots_unique(&script.blocks);
 
     let string_slot = local_decls(&script.blocks)
@@ -237,7 +223,7 @@ fn reassign_after_while_reuses_slot_and_skips_stale_drop() {
             IRInstruction::LocalWrite { local, .. } if *local == string_slot => Some((block, pos)),
             _ => None,
         })
-        .last()
+        .next_back()
         .expect("expected a LocalWrite for the post-loop reassignment");
 
     let stale_read = write_block.instructions[..write_pos]
@@ -268,7 +254,7 @@ fn reassign_after_if_branch_declaration_reuses_slot() {
         n
         ";
 
-    let script = lower(&dedent(source));
+    let script = lower(source);
     assert_decl_slots_unique(&script.blocks);
 }
 
@@ -296,7 +282,7 @@ fn reassign_in_match_arms_after_loop_declaration_reuses_slot() {
         r
         ";
 
-    let script = lower(&dedent(source));
+    let script = lower(source);
     assert_decl_slots_unique(&script.blocks);
 }
 
@@ -304,8 +290,8 @@ fn reassign_in_match_arms_after_loop_declaration_reuses_slot() {
 fn local_decl_lives_in_entry_block_for_if_branch_assignment() {
     // Assignments today are function-scoped (no block-scoping yet),
     // so even when the surface-level decl appears inside an `if`
-    // arm the `LocalDecl` must still be hoisted to the entry block
-    // — that's the contract LLVM relies on for single-`alloca`
+    // arm the `LocalDecl` must still be hoisted to the entry block.
+    // That's the contract LLVM relies on for single-`alloca`
     // hoisting. The corresponding `LocalWrite` stays where the
     // surface assignment was lowered (in the arm).
     let source = "
@@ -314,7 +300,7 @@ fn local_decl_lives_in_entry_block_for_if_branch_assignment() {
         end
         ";
 
-    let script = lower(&dedent(source));
+    let script = lower(source);
 
     let entry = entry_block(&script.blocks);
     let entry_decl = entry
@@ -327,7 +313,7 @@ fn local_decl_lives_in_entry_block_for_if_branch_assignment() {
         entry.instructions,
     );
 
-    // No other block should carry a LocalDecl — only the entry.
+    // No other block should carry a LocalDecl, only the entry.
     for block in script.blocks.iter().skip(1) {
         for inst in &block.instructions {
             assert!(

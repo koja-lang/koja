@@ -4,9 +4,9 @@
 //! the discriminant tag, the variant name (cached for `Display`),
 //! and the per-shape [`EnumPayload`]:
 //!
-//! - **Unit** — `Color.Red` -> `EnumPayload::Unit`
-//! - **Tuple** — `Result.Ok(42)` -> `EnumPayload::Tuple([Int(42)])`
-//! - **Struct** — `Shape.Rect{w: 1, h: 2}` ->
+//! - **Unit**: `Color.Red` -> `EnumPayload::Unit`
+//! - **Tuple**: `Result.Ok(42)` -> `EnumPayload::Tuple([Int(42)])`
+//! - **Struct**: `Shape.Rect{w: 1, h: 2}` ->
 //!   `EnumPayload::Struct([("w", Int(1)), ("h", Int(2))])`
 //!
 //! Plus the `Display` rendering for each shape so the runtime
@@ -20,10 +20,6 @@ mod common;
 fn evaluate_script(source: &str) -> Value {
     common::evaluate_script(source).expect("interpreter should not error on this fixture")
 }
-
-// ---------------------------------------------------------------------------
-// Unit variants
-// ---------------------------------------------------------------------------
 
 #[test]
 fn unit_variant_construction_yields_value_enum_with_unit_payload() {
@@ -71,10 +67,6 @@ fn higher_position_unit_variant_carries_position_as_tag() {
     assert_eq!(name, "Blue");
     assert_eq!(tag.0, 2);
 }
-
-// ---------------------------------------------------------------------------
-// Tuple variants
-// ---------------------------------------------------------------------------
 
 #[test]
 fn tuple_variant_carries_evaluated_positional_payload() {
@@ -138,10 +130,6 @@ fn tuple_variant_with_multiple_elements_carries_all_in_order() {
     );
 }
 
-// ---------------------------------------------------------------------------
-// Struct variants
-// ---------------------------------------------------------------------------
-
 #[test]
 fn struct_variant_carries_named_fields_in_declaration_order() {
     let source = "
@@ -188,10 +176,6 @@ fn struct_variant_canonicalizes_out_of_order_field_inits() {
     assert_eq!(fields[1].1, Value::Int(20));
 }
 
-// ---------------------------------------------------------------------------
-// Display rendering
-// ---------------------------------------------------------------------------
-
 #[test]
 fn unit_variant_display_renders_qualified_name_only() {
     let source = "
@@ -233,10 +217,6 @@ fn struct_variant_display_renders_named_payload_in_braces() {
     let value = evaluate_script(&dedent(source));
     assert_eq!(format!("{value}"), "TestApp.Shape.Rect{w: 10, h: 20}");
 }
-
-// ---------------------------------------------------------------------------
-// Static method dispatch via enum receiver
-// ---------------------------------------------------------------------------
 
 #[test]
 fn static_method_on_enum_returns_constructed_variant_value() {

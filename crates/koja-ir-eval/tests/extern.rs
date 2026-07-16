@@ -1,6 +1,6 @@
 //! `@extern "C"` interpreter coverage. The eval backend has no
 //! C-runtime linkage, so any FFI call surfaces a clean
-//! [`RuntimeError::ExternNotSupported`] — the message points the
+//! [`RuntimeError::ExternNotSupported`]. The message points the
 //! user at `--backend=llvm`, which does honor extern declarations.
 //!
 //! Declaring an extern fn but never calling it is fine: lowering
@@ -18,7 +18,7 @@ use common::{PACKAGE, evaluate_script};
 fn calling_extern_c_fn_surfaces_extern_not_supported() {
     // `Float32` literals don't exist yet, so we exercise the call
     // path through an extern fn that takes zero params and returns
-    // an admissible width — `rand32 -> Int32`. The trailing return
+    // an admissible width: `rand32 -> Int32`. The trailing return
     // path drives `rand32()` from inside `main`.
     let source = "
         @extern \"C\"
@@ -45,7 +45,7 @@ fn calling_extern_c_fn_surfaces_extern_not_supported() {
 #[test]
 fn declaring_but_not_calling_extern_c_evaluates_normally() {
     // Declaring `@extern "C" fn cosf(...)` should not cause the
-    // interpreter to error — only *invoking* it does. The script
+    // interpreter to error. Only *invoking* it does. The script
     // returns `7` (Int) without ever touching the extern.
     let source = "
         @extern \"C\"

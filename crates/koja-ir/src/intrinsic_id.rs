@@ -15,7 +15,7 @@
 //! [`Display`] mirrors the historical `id` strings (`"Kernel.panic"`,
 //! `"CPtr.null?"`, `"Int8.band"`) so existing diagnostics and test
 //! fixtures keep their wording. Backends never go through `Display`
-//! for dispatch — they pattern-match the enum directly.
+//! for dispatch, since they pattern-match the enum directly.
 
 use std::fmt;
 
@@ -54,7 +54,7 @@ macro_rules! intrinsic_methods {
 }
 
 /// One `@intrinsic`-annotated function's dispatch slot. Constructed
-/// at lift via [`IRIntrinsicId::from_identifier`]; consumed by both
+/// at lift via [`IRIntrinsicId::from_identifier`] and consumed by both
 /// backend dispatch tables via exhaustive `match`.
 ///
 /// Single-method namespaces (`Kernel`, `CString`) still wrap their
@@ -77,7 +77,7 @@ pub enum IRIntrinsicId {
     Kernel(KernelMethod),
     List(ListMethod),
     Map(MapMethod),
-    /// Explicit conversions out of the hub types — the inverse of
+    /// Explicit conversions out of the hub types, the inverse of
     /// implicit hub widening. All return
     /// `Result<T, NumericConversionError>` and fail with `OutOfRange`
     /// when the receiver does not fit the target.
@@ -93,12 +93,12 @@ pub enum IRIntrinsicId {
     Process(ProcessMethod),
     /// `@intrinsic` methods on `Ref<M, R>` from
     /// [`koja/lib/global/src/process.koja`]. The `M` / `R` type
-    /// parameters don't appear here — they ride the
+    /// parameters don't appear here. They ride the
     /// [`crate::IRFunction`] signature, the same way `List<T>`'s
     /// element type does.
     Ref(RefMethod),
     /// `@intrinsic` method on `ReplyTo<R>`. Single-method namespace
-    /// today (`send`); the wrapper enum keeps adding a sibling
+    /// today (`send`). The wrapper enum keeps adding a sibling
     /// method later a variant-add rather than a shape change, like
     /// [`KernelMethod`] / [`CStringMethod`].
     ReplyTo(ReplyToMethod),
@@ -157,7 +157,7 @@ intrinsic_methods! {
     }
 
     /// Float receivers for the float slice of `Equality`. Sibling of
-    /// [`IntType`]; each width is its own emitter cell (LLVM picks
+    /// [`IntType`]. Each width is its own emitter cell (LLVM picks
     /// f32 / f64 compare from the param's actual type).
     FloatType {
         Float => "Float",
@@ -166,7 +166,7 @@ intrinsic_methods! {
 
     /// Integer receivers for the 48-cell `Bitwise` family and the
     /// 8-cell integer slice of `Equality` / `Hash`. `Bool` and `String`
-    /// are not included — they're siblings of [`EqualityImpl::Int`] /
+    /// are not included, as they're siblings of [`EqualityImpl::Int`] /
     /// [`HashImpl::Int`] at the enum level.
     IntType {
         Int => "Int",
@@ -184,7 +184,7 @@ intrinsic_methods! {
     }
 
     /// Methods on `List<T>`. The element type doesn't appear here because
-    /// the IR carries it on the [`crate::IRFunction`] signature; backends
+    /// the IR carries it on the [`crate::IRFunction`] signature, and backends
     /// monomorphize per element type from there.
     ListMethod {
         Append => "append",
@@ -200,7 +200,7 @@ intrinsic_methods! {
     }
 
     /// Methods on `Map<K, V>`. Like [`ListMethod`], the key + value
-    /// types don't appear here — both ride the [`crate::IRFunction`]
+    /// types don't appear here. Both ride the [`crate::IRFunction`]
     /// signature, and backends specialize layouts per `(K, V)` pair
     /// from there.
     MapMethod {
@@ -230,7 +230,7 @@ intrinsic_methods! {
 
     /// `@intrinsic`-flagged methods on `Ref<M, R>` from
     /// [`koja/lib/global/src/process.koja`]. `Cast` / `Call` / `Signal` /
-    /// `Kill` / `AliveQ` / `SendAfter` cover the public mailbox surface;
+    /// `Kill` / `AliveQ` / `SendAfter` cover the public mailbox surface.
     /// `SelfRef` is the only zero-argument constructor (the others are
     /// receiver-bound).
     RefMethod {
@@ -244,7 +244,7 @@ intrinsic_methods! {
     }
 
     /// `@intrinsic`-flagged method on `ReplyTo<R>`. Single-variant today
-    /// (`send`); kept as a wrapper enum so adding a sibling later is a
+    /// (`send`), kept as a wrapper enum so adding a sibling later is a
     /// variant-add, not a shape change. Mirrors [`CStringMethod`] /
     /// [`KernelMethod`].
     ReplyToMethod {
@@ -256,7 +256,7 @@ intrinsic_methods! {
     }
 
     /// Methods on `Set<T>`. Same monomorphization story as
-    /// [`ListMethod`] / [`MapMethod`] — the element type rides the
+    /// [`ListMethod`] / [`MapMethod`]: the element type rides the
     /// [`crate::IRFunction`] signature.
     SetMethod {
         EmptyQ => "empty?",
@@ -271,7 +271,7 @@ intrinsic_methods! {
     /// `@intrinsic`-flagged methods on `Socket` from
     /// [`koja/lib/net/src/net.koja`]. `RecvFrom` receives one
     /// datagram + sender address (suspending the process until the fd
-    /// is readable); `Resolve` is a synchronous `getaddrinfo` shim.
+    /// is readable), and `Resolve` is a synchronous `getaddrinfo` shim.
     SocketMethod {
         LastError => "last_error",
         RecvFrom => "recv_from",
@@ -279,7 +279,7 @@ intrinsic_methods! {
     }
 
     /// Methods on `String` flagged `@intrinsic` in
-    /// [`crate::stdlib::string`]. Excludes `eq` / `hash`; those route
+    /// [`crate::stdlib::string`]. Excludes `eq` / `hash`, which route
     /// through [`EqualityImpl::String`] / [`HashImpl::String`] alongside
     /// the other primitive impls.
     StringMethod {
@@ -299,7 +299,7 @@ intrinsic_methods! {
 /// has its own emitter cell (boolean rendering, integer
 /// `format("{}")`, IEEE-754 `format("{}")` with f32/f64 width).
 ///
-/// `String` isn't here — `String.format` ships a pure-Koja body
+/// `String` isn't here, because `String.format` ships a pure-Koja body
 /// (`"\"" <> self.escape_debug() <> "\""` in
 /// `lib/global/src/debug.koja`) instead of an intrinsic.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -364,13 +364,13 @@ pub enum IntNarrowTarget {
 impl IRIntrinsicId {
     /// Map a function's canonical identifier to its dispatch slot.
     /// Returns `None` if no registered backend handles the
-    /// `(receiver, method)` pair — lift surfaces a diagnostic so
+    /// `(receiver, method)` pair. Lift surfaces a diagnostic so
     /// typo'd `@intrinsic` decls fail at parse -> check time, not
     /// at codegen.
     ///
     /// Strips the package prefix and walks the remaining path. All
     /// intrinsics today are either one-segment (`print`) or
-    /// two-segment (`Type.method`); nested-type intrinsics would
+    /// two-segment (`Type.method`). Nested-type intrinsics would
     /// extend the match arms without changing the shape.
     pub fn from_identifier(identifier: &Identifier) -> Option<Self> {
         match identifier.path() {
@@ -437,8 +437,8 @@ impl IntType {
     }
 
     /// Whether the receiver's right-shift should preserve the sign
-    /// bit. Signed integers (`Int`/`IntN`) use arithmetic shift;
-    /// unsigned (`UIntN`) use logical shift.
+    /// bit. Signed integers (`Int`/`IntN`) use arithmetic shift,
+    /// and unsigned (`UIntN`) use logical shift.
     pub fn is_signed(self) -> bool {
         matches!(self, Self::Int | Self::Int8 | Self::Int16 | Self::Int32,)
     }
@@ -448,7 +448,7 @@ impl DebugImpl {
     /// Map a receiver-type name (`"Bool"`, `"Int"`, `"Float"`,
     /// `"Float32"`, `"Int8"`, …) to the matching impl cell.
     /// Returns `None` for receivers outside the four families
-    /// (e.g. `String`, struct types) — `String.format` is pure
+    /// (e.g. `String`, struct types), since `String.format` is pure
     /// Koja and user types route through the synthesized
     /// `impl Debug` blocks.
     pub fn from_receiver(receiver: &str) -> Option<Self> {
@@ -499,7 +499,7 @@ impl EqualityImpl {
 }
 
 impl HashImpl {
-    /// Mirror of [`EqualityImpl::from_receiver`] — the two families
+    /// Mirror of [`EqualityImpl::from_receiver`], as the two families
     /// share the same receiver surface today.
     pub fn from_receiver(receiver: &str) -> Option<Self> {
         Some(match receiver {

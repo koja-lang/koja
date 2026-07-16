@@ -1,7 +1,7 @@
 //! Plain-struct destructure pattern lowering.
 //!
 //! Walks each [`FieldPattern`] against the corresponding declared
-//! field type. Wildcard fields contribute nothing; binding fields
+//! field type. Wildcard fields contribute nothing, binding fields
 //! emit a chained [`PayloadBind`] starting at
 //! [`BindOp::StructField`]. Literal / nested-struct / nested-enum
 //! field patterns recurse via [`super::lower_pattern_check`]
@@ -55,8 +55,8 @@ pub(super) fn lower_struct_check(
     for field in fields {
         let (field_index, declared) = definition.lookup_field(&field.name).unwrap_or_else(|| {
             panic!(
-                "IR lower: struct pattern references unknown field `{}` — \
-                 typecheck invariant violation",
+                "IR lower: struct pattern references unknown field `{}` \
+                 (typecheck invariant violation)",
                 field.name,
             )
         });
@@ -101,7 +101,7 @@ pub(super) fn lower_struct_check(
 /// position) into the outer chain. `prefix` is the extraction op
 /// (e.g. `BindOp::StructField` or `BindOp::EnumPayloadField`) that
 /// reads this sub-pattern's value from the outer extraction
-/// source; bindings reached through it prepend `prefix` to their
+/// source. Bindings reached through it prepend `prefix` to their
 /// chain. Non-binding sub-patterns mint a fresh test block (when
 /// any prior sibling test has already been emitted), emit the
 /// projection that exposes the sub-pattern's value to its own
@@ -111,7 +111,7 @@ pub(super) fn lower_struct_check(
 /// Lives here (not in `enums`) because both struct field walks
 /// and enum tuple / struct payload walks share the same merge
 /// discipline. `extraction_source` is the value `prefix` reads
-/// from — the outer subject for plain structs, the enum payload
+/// from: the outer subject for plain structs, the enum payload
 /// value for enum-tuple/-struct variants.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn lower_subpattern_into(
@@ -141,7 +141,7 @@ pub(super) fn lower_subpattern_into(
             // The inner pattern is structurally a catch-all
             // (bindings / wildcards / catch-all-only nested
             // structs). Bypass the projection-and-mint dance and
-            // emit one chained `PayloadBind` per binding leaf;
+            // emit one chained `PayloadBind` per binding leaf, and
             // the projection then happens at the success block
             // through the bind chain.
             let mut chain = vec![prefix];
@@ -198,7 +198,7 @@ fn is_static_catch_all(pattern: &Pattern) -> bool {
 
 /// Walk a static-catch-all `pattern` and append one chained
 /// [`PayloadBind`] per binding leaf. The caller threads `chain`
-/// with the outer prefix already pushed; this helper appends each
+/// with the outer prefix already pushed, and this helper appends each
 /// nested struct field's [`BindOp::StructField`] before recursing
 /// and pops on the way out, so siblings see clean state.
 /// Wildcards and binding-less destructures contribute nothing.
@@ -254,7 +254,7 @@ fn collect_catch_all_binds(
                     definition.lookup_field(&field.name).unwrap_or_else(|| {
                         panic!(
                             "IR lower: nested struct pattern references unknown \
-                             field `{}` — typecheck invariant violation",
+                             field `{}` (typecheck invariant violation)",
                             field.name,
                         )
                     });
@@ -281,8 +281,8 @@ fn collect_catch_all_binds(
             }
         }
         _ => panic!(
-            "IR lower: collect_catch_all_binds reached a non-catch-all pattern \
-             — caller must gate via is_static_catch_all",
+            "IR lower: collect_catch_all_binds reached a non-catch-all pattern, \
+             caller must gate via is_static_catch_all",
         ),
     }
 }
@@ -359,7 +359,7 @@ fn emit_subpattern_projection(
 /// nested [`TestStep`]s under the outer [`ChainMode::And`]
 /// discipline. Typecheck restricts nested or-patterns to literal /
 /// EnumUnit alternatives that produce no binds and a single
-/// Or-mode step; lifting them into an And-chain would require
+/// Or-mode step. Lifting them into an And-chain would require
 /// re-coding the wiring, so the lowerer panics if it reaches
 /// here. (The fixtures gate currently rejects any nested
 /// or-pattern inside struct/enum fields.)
@@ -383,8 +383,8 @@ pub(super) fn consume_inner_check(
             assert!(
                 matches!(chain_mode, ChainMode::And),
                 "IR lower: nested pattern inside a struct/enum field produced an \
-                 Or-chained check — typecheck-resolve admits only And-shaped nested \
-                 patterns here",
+                 Or-chained check, but typecheck-resolve admits only And-shaped \
+                 nested patterns here",
             );
             for bind in payload_binds {
                 binds.push(prepend_step(prefix, bind));

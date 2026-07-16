@@ -7,7 +7,7 @@
 //! - [`ProjectLoader`] sits on top of it and resolves a manifest into
 //!   package-tagged [`LoadedSource`]s, folding in dependency and stdlib
 //!   sources according to [`LoadOptions`]. The compiler and docs
-//!   generator use it; the formatter only needs the walk.
+//!   generator use it. The formatter only needs the walk.
 
 use std::collections::BTreeSet;
 use std::fs;
@@ -17,7 +17,7 @@ use crate::deps;
 use crate::project::ProjectConfig;
 
 /// Recursively collect files under `dir` whose extension is in
-/// `extensions`. Results are sorted for deterministic output; an
+/// `extensions`. Results are sorted for deterministic output, and an
 /// unreadable directory yields an empty vec rather than an error so
 /// callers degrade gracefully.
 pub(crate) fn walk_source_files(dir: &Path, extensions: &[&str]) -> Vec<PathBuf> {
@@ -63,7 +63,7 @@ pub(crate) struct LoadedSource {
 }
 
 /// How the loader reacts to a malformed dependency or unreadable file.
-/// `Strict` (compiler) surfaces a hard error; `Lenient` (docs) warns
+/// `Strict` (compiler) surfaces a hard error, while `Lenient` (docs) warns
 /// and skips so a single bad dependency can't sink the whole run.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum ErrorPolicy {
@@ -197,7 +197,7 @@ impl<'a> ProjectLoader<'a> {
     /// Resolve the transitive dependency graph via [`deps`] (offline:
     /// lock verification plus cache materialization for git deps,
     /// in-place resolution for path deps) and push each package's
-    /// `src`. Under `Strict` a resolution failure is an error; under
+    /// `src`. Under `Strict` a resolution failure is an error. Under
     /// `Lenient` it's a warning that skips all dependencies.
     fn push_dependencies(
         &self,
@@ -243,7 +243,7 @@ struct Collection {
 /// All embedded stdlib sources (`autoimport` + `qualified`) as
 /// [`LoadedSource`]s tagged [`SourceOrigin::Stdlib`]. Callers that
 /// already carry a package set (e.g. a project + its deps) filter out
-/// duplicates themselves; [`ProjectLoader::sources`] does so to avoid
+/// duplicates themselves. [`ProjectLoader::sources`] does so to avoid
 /// documenting a package twice when run from inside a stdlib package.
 pub(crate) fn stdlib_sources() -> Vec<LoadedSource> {
     koja_stdlib::autoimport_sources()

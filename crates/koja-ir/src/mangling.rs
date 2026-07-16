@@ -2,16 +2,16 @@
 //!
 //! Three helpers, one shape. `Pair<Int, String>` mangles to
 //! `TestApp.Pair_$Int.TestApp.String$`. A method on that struct
-//! mangles to `TestApp.Pair_$Int.TestApp.String$.first`; if the
+//! mangles to `TestApp.Pair_$Int.TestApp.String$.first`. If the
 //! method itself takes type params (`fn map<U>`) the args attach
 //! to the method segment as `…$.map_$<U-args>$`. Mirrors v1's
 //! mangling so cross-tool linker output stays comparable. The
-//! `_$..$` brackets delimit each type-args block; nested generic
+//! `_$..$` brackets delimit each type-args block, and nested generic
 //! args bring their own `_$..$` so depth-counting parses
 //! unambiguously.
 //!
-//! Call sites pass typed data ([`IRSymbol`], `[IRType]`, `&str`) —
-//! the helpers below own all string concatenation so `IRSymbol`
+//! Call sites pass typed data ([`IRSymbol`], `[IRType]`, `&str`).
+//! The helpers below own all string concatenation so `IRSymbol`
 //! stays opaque outside this module.
 
 use koja_ast::identifier::Identifier;
@@ -31,7 +31,7 @@ pub(crate) fn mangled_type_name(symbol: &IRSymbol, args: &[IRType]) -> IRSymbol 
 }
 
 /// Mangle a generic function's identifier with its inferred
-/// type-args. Same shape as [`mangled_type_name`] — the `_$..$`
+/// type-args. Same shape as [`mangled_type_name`]. The `_$..$`
 /// suffix attaches directly to the function symbol so call sites
 /// and monomorphization agree on the symbol form.
 pub(crate) fn mangled_function_name(symbol: &IRSymbol, args: &[IRType]) -> IRSymbol {
@@ -40,9 +40,9 @@ pub(crate) fn mangled_function_name(symbol: &IRSymbol, args: &[IRType]) -> IRSym
 
 /// Mangle a method on a generic struct or enum, optionally with the
 /// method's own type-args. `struct_template` is the receiver type's
-/// symbol root; `receiver_args` are the receiver's instantiation
-/// (empty for non-generic receivers); `method_name` is the bare
-/// method identifier; `method_args` are the method's own type-args
+/// symbol root, `receiver_args` are the receiver's instantiation
+/// (empty for non-generic receivers), `method_name` is the bare
+/// method identifier, and `method_args` are the method's own type-args
 /// (empty for struct-level-only methods).
 ///
 /// Both call-site lowering and monomorphization route through this
@@ -65,7 +65,7 @@ pub fn mangled_method_name(
 }
 
 /// Mint the `IRSymbol` rooted at `Global.<path>` for a stdlib type a
-/// cross-crate caller knows by name — a primitive receiver like
+/// cross-crate caller knows by name: a primitive receiver like
 /// `["Bool"]` / `["String"]`, or a `Global` nested type like
 /// `["Process", "CallError"]`. Stamped to the same shape the lift
 /// pass produces for the corresponding decl in the `Global` package,
@@ -83,7 +83,7 @@ pub fn global_primitive_symbol(path: &[&str]) -> IRSymbol {
 /// symbol. Auto-print code paths drive off the live runtime value
 /// (whose `IRSymbol` is already mangled to its concrete
 /// monomorphization, e.g. `Global.Result_$Int64.String$`) so they
-/// bypass receiver-template reconstruction; the resulting symbol
+/// bypass receiver-template reconstruction. The resulting symbol
 /// matches the same one [`super::lower::calls::lower_method_call`]
 /// would emit for a user-side `value.format()` call.
 pub fn debug_format_for_symbol(receiver: &IRSymbol) -> IRSymbol {
@@ -130,8 +130,8 @@ fn mangle_type(ty: &IRType) -> String {
 
 /// Build the canonical mangled [`IRSymbol`] for a union with the
 /// given (already mangled) member set. The `members` slice is
-/// expected in canonical (sorted) order — typecheck's
-/// `canonical_union` guarantees that — so any two surface unions
+/// expected in canonical (sorted) order (typecheck's
+/// `canonical_union` guarantees that), so any two surface unions
 /// with the same canonical member set yield the exact same
 /// `IRSymbol`. Backends look up `IRUnionDecl` entries by this
 /// symbol via [`crate::IRProgram::union_decl`].
@@ -146,11 +146,11 @@ pub(crate) fn union_mangle(members: &[IRType]) -> IRSymbol {
 
 /// Symbol of the synthesized clone glue for `ty` (`<type>.$clone$`).
 /// Hung off the type's own symbol exactly like [`mangled_method_name`]
-/// hangs a method off its receiver — glue is a synthesized method on
+/// hangs a method off its receiver. Glue is a synthesized method on
 /// the type, so a struct in `TestApp` gets `TestApp.Point.$clone$` and
 /// stays rooted in its own package. The `$`-fenced suffix can never
 /// collide with a user-defined `fn clone` (which mangles to the bare
-/// `<type>.clone`); acquisition dispatches to this symbol by type,
+/// `<type>.clone`). Acquisition dispatches to this symbol by type,
 /// never by method-name lookup. Both the [`crate::elaborate`] pass
 /// (which registers the glue) and the LLVM backend (which emits the
 /// `call`s) mint through this single helper so they agree by
@@ -161,13 +161,14 @@ pub fn clone_glue_symbol(ty: &IRType) -> IRSymbol {
 
 /// Symbol of the synthesized deep-copy glue for `ty`
 /// (`<type>.$deep_copy$`). Process-boundary analog of
-/// [`clone_glue_symbol`]; same rooting and collision-free guarantee.
+/// [`clone_glue_symbol`], with the same rooting and collision-free
+/// guarantee.
 pub fn deep_copy_glue_symbol(ty: &IRType) -> IRSymbol {
     glue_base(ty).derived(".$deep_copy$")
 }
 
 /// Symbol of the synthesized drop glue for `ty` (`<type>.$drop$`).
-/// Drop analog of [`clone_glue_symbol`]; same rooting and
+/// Drop analog of [`clone_glue_symbol`], with the same rooting and
 /// collision-free guarantee.
 pub fn drop_glue_symbol(ty: &IRType) -> IRSymbol {
     glue_base(ty).derived(".$drop$")
@@ -176,9 +177,9 @@ pub fn drop_glue_symbol(ty: &IRType) -> IRSymbol {
 /// Symbol of the synthesized *by-pointer* envelope-payload drop shim
 /// for `ty` (`<type>.$envdrop$`). The runtime's type-erased discard
 /// path (`koja-runtime-posix/src/wire.rs`) frees an undelivered message by
-/// calling a `void(ptr)` function over the payload bytes — an ABI the
+/// calling a `void(ptr)` function over the payload bytes, an ABI the
 /// by-value [`drop_glue_symbol`] can't satisfy. The LLVM backend
-/// synthesizes this thin shim per sent message / reply type: it loads
+/// synthesizes this thin shim per sent message / reply type. It loads
 /// the payload through the pointer and routes into the by-value
 /// `drop_T`. Same `$`-fenced collision-free rooting as the other glue.
 pub fn envelope_drop_glue_symbol(ty: &IRType) -> IRSymbol {
@@ -198,8 +199,8 @@ pub fn closure_drop_env_symbol(body: &IRSymbol) -> IRSymbol {
 }
 
 /// Symbol of the synthesized env deep-copy glue for a closure body
-/// (`<body>.$copy_env$`). Copy analog of [`closure_drop_env_symbol`];
-/// same rooting and collision-free guarantee. Minted by
+/// (`<body>.$copy_env$`). Copy analog of [`closure_drop_env_symbol`],
+/// with the same rooting and collision-free guarantee. Minted by
 /// `crate::lower::closures` (which registers the
 /// `FunctionKind::CopyClosureGlue` shell) and resolved by the LLVM
 /// backend at `MakeClosure` (which stamps its address into the env
@@ -212,7 +213,7 @@ pub fn closure_copy_env_symbol(body: &IRSymbol) -> IRSymbol {
 /// enum / union) carry their own package-qualified [`IRSymbol`], so
 /// the glue stays in their package. The structural primitive
 /// collections (`List` / `Map` / `Set` / `Indirect`) have no owning
-/// decl, so they get a synthetic root mangled from their shape —
+/// decl, so they get a synthetic root mangled from their shape,
 /// package-less, the same treatment [`union_mangle`] gives unions.
 fn glue_base(ty: &IRType) -> IRSymbol {
     match ty {

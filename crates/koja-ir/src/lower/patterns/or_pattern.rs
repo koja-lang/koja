@@ -6,7 +6,7 @@
 //! caller-supplied fall-through.
 //!
 //! Alternatives are restricted by typecheck to `Literal` /
-//! `EnumUnit` (no bindings, no nested or-patterns); anything else
+//! `EnumUnit` (no bindings, no nested or-patterns). Anything else
 //! reaching here is a typecheck-resolve invariant violation.
 
 use koja_ast::ast::Pattern;
@@ -71,7 +71,7 @@ fn emit_or_alternative(
             output,
         ),
         other => panic!(
-            "IR lower: or-alternative `{}` reached lowering — \
+            "IR lower: or-alternative `{}` reached lowering, but \
              typecheck-resolve admits only Literal / EnumUnit alternatives",
             pattern_kind_label(other),
         ),

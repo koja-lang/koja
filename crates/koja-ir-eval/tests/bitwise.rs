@@ -35,7 +35,7 @@ fn run_int(source: &str) -> i64 {
 
 #[test]
 fn int_band_returns_bitwise_and() {
-    // `0b1100 & 0b1010 = 0b1000`; binary literals exercise the
+    // `0b1100 & 0b1010 = 0b1000`. Binary literals exercise the
     // IR `lower/ops.rs` radix-aware parser end-to-end.
     let v = run_int("0b1100.band(0b1010)");
     assert_eq!(v, 0b1000);
@@ -55,7 +55,7 @@ fn int_bxor_returns_bitwise_xor() {
 
 #[test]
 fn int_bnot_flips_every_bit_signed() {
-    // i64 NOT of 0 = -1; eval doesn't mask to a narrower width.
+    // i64 NOT of 0 = -1. Eval doesn't mask to a narrower width.
     let v = run_int("0.bnot()");
     assert_eq!(v, -1);
 }
@@ -68,7 +68,7 @@ fn int_bsl_shifts_left() {
 
 #[test]
 fn int_bsr_signed_receiver_arithmetic_shift() {
-    // Negative i64 right-shifts arithmetically — sign bit
+    // Negative i64 right-shifts arithmetically. The sign bit
     // propagates, so the result stays negative. Pins the
     // signed-receiver branch of the eval dispatch.
     let v = run_int("(-8).bsr(1)");
@@ -83,7 +83,6 @@ fn int_bsr_positive_value_matches_arithmetic_shift() {
     assert_eq!(v, 4);
 }
 
-// ---------------------------------------------------------------------------
 // Narrow-width receivers: the narrow `Bitwise` impls (`UInt8` /
 // `Int32` / etc.) only become reachable from a script body via the
 // literal-fit coercion at sized param / return slots. Dispatching
@@ -91,7 +90,6 @@ fn int_bsr_positive_value_matches_arithmetic_shift() {
 // IR lower time AND the narrow-typed bitwise dispatch at eval time.
 // Eval flattens every integer width to `Value::Int(i64)`, so the
 // asserted result mirrors the operator's mathematical semantics.
-// ---------------------------------------------------------------------------
 //
 // Driven through the wrapper rather than `0xFF.band(0x0F)` so the
 // receiver actually flows through a `UInt8` slot instead of `Int`.
@@ -113,7 +111,7 @@ fn uint8_band_dispatches_through_narrow_impl() {
 #[test]
 fn int8_negative_literal_folds_through_narrow_band() {
     // `-1: Int8` flows in via the `-1` literal-fit coercion (typecheck
-    // records the negation fold at the call-site span); pinned here
+    // records the negation fold at the call-site span). Pinned here
     // through a narrow-typed wrapper.
     let v = run_int(
         "

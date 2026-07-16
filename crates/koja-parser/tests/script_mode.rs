@@ -8,15 +8,14 @@
 //! `koja-typecheck/tests/script_mode.rs`.
 
 use koja_ast::ast::{ExprKind, Item, Literal, Statement};
-use koja_parser::{ParseMode, parse};
+
+mod common;
+
+use common::{parse_clean, parse_clean_script, parse_failing};
 
 #[test]
 fn file_mode_rejects_top_level_expression() {
-    let result = parse("2 + 2\n", ParseMode::File);
-    assert!(
-        !result.errors.is_empty(),
-        "file mode must reject bare top-level expressions"
-    );
+    let result = parse_failing("2 + 2\n");
     assert!(
         result.ast.body.is_none(),
         "file mode never populates File.body"
@@ -25,19 +24,13 @@ fn file_mode_rejects_top_level_expression() {
 
 #[test]
 fn script_mode_accepts_bare_expression() {
-    let result = parse("2 + 2\n", ParseMode::Script);
+    let file = parse_clean_script("2 + 2\n");
     assert!(
-        result.errors.is_empty(),
-        "script mode should accept `2 + 2`, got errors: {:?}",
-        result.errors,
-    );
-    assert!(
-        result.ast.items.is_empty(),
+        file.items.is_empty(),
         "no items expected, got {:?}",
-        result.ast.items,
+        file.items,
     );
-    let body = result
-        .ast
+    let body = file
         .body
         .as_ref()
         .expect("script mode populates File.body when statements are present");
@@ -50,22 +43,15 @@ fn script_mode_accepts_bare_expression() {
 
 #[test]
 fn script_mode_accepts_mixed_items_and_statements() {
-    let source = "fn helper\n  1\nend\n\n2 + helper()\n";
-    let result = parse(source, ParseMode::Script);
-    assert!(
-        result.errors.is_empty(),
-        "mixed input should parse cleanly, got errors: {:?}",
-        result.errors,
-    );
+    let file = parse_clean_script("fn helper\n  1\nend\n\n2 + helper()\n");
 
-    assert_eq!(result.ast.items.len(), 1, "expected exactly one item");
-    let Item::Function(function) = &result.ast.items[0] else {
-        panic!("expected Item::Function, got {:?}", result.ast.items[0]);
+    assert_eq!(file.items.len(), 1, "expected exactly one item");
+    let Item::Function(function) = &file.items[0] else {
+        panic!("expected Item::Function, got {:?}", file.items[0]);
     };
     assert_eq!(function.name, "helper");
 
-    let body = result
-        .ast
+    let body = file
         .body
         .as_ref()
         .expect("body must be Some when there are top-level statements");
@@ -82,22 +68,15 @@ fn script_mode_disambiguates_fn_item_from_closure_expr() {
     // disambiguator must treat `Fn` followed by `LParen` as an
     // expression starter, not as `fn name(...)` (which requires
     // `Fn` followed by an identifier).
-    let source = "fn() -> Int\n  42\nend\nfn helper\n  2\nend\n";
-    let result = parse(source, ParseMode::Script);
-    assert!(
-        result.errors.is_empty(),
-        "fn closure expr + fn item should both parse, got errors: {:?}",
-        result.errors,
-    );
+    let file = parse_clean_script("fn() -> Int\n  42\nend\nfn helper\n  2\nend\n");
 
-    assert_eq!(result.ast.items.len(), 1, "expected exactly one fn item");
-    let Item::Function(function) = &result.ast.items[0] else {
-        panic!("expected Item::Function, got {:?}", result.ast.items[0]);
+    assert_eq!(file.items.len(), 1, "expected exactly one fn item");
+    let Item::Function(function) = &file.items[0] else {
+        panic!("expected Item::Function, got {:?}", file.items[0]);
     };
     assert_eq!(function.name, "helper");
 
-    let body = result
-        .ast
+    let body = file
         .body
         .as_ref()
         .expect("closure expression should be lifted into File.body");
@@ -114,26 +93,18 @@ fn script_mode_disambiguates_fn_item_from_closure_expr() {
 
 #[test]
 fn script_mode_with_only_items_leaves_body_none() {
-    let source = "fn main\n  2 + 2\nend\n";
-    let result = parse(source, ParseMode::Script);
-    assert!(result.errors.is_empty());
-    assert_eq!(result.ast.items.len(), 1);
+    let file = parse_clean_script("fn main\n  2 + 2\nend\n");
+    assert_eq!(file.items.len(), 1);
     assert!(
-        result.ast.body.is_none(),
+        file.body.is_none(),
         "items-only script must collapse File.body to None so downstream passes can distinguish it from statement-bearing scripts",
     );
 }
 
 #[test]
 fn script_mode_handles_assignment_at_top_level() {
-    let source = "x = 5\nx + 1\n";
-    let result = parse(source, ParseMode::Script);
-    assert!(
-        result.errors.is_empty(),
-        "top-level assignment + expression should parse, got errors: {:?}",
-        result.errors,
-    );
-    let body = result.ast.body.as_ref().expect("expected populated body");
+    let file = parse_clean_script("x = 5\nx + 1\n");
+    let body = file.body.as_ref().expect("expected populated body");
     assert_eq!(body.len(), 2);
     assert!(matches!(body[0], Statement::Assignment { .. }));
     assert!(matches!(body[1], Statement::Expr(_)));
@@ -141,12 +112,10 @@ fn script_mode_handles_assignment_at_top_level() {
 
 #[test]
 fn file_mode_after_script_mode_changes_unaffected() {
-    let source = "fn main\n  42\nend\n";
-    let result = parse(source, ParseMode::File);
-    assert!(result.errors.is_empty());
-    assert!(result.ast.body.is_none());
-    assert_eq!(result.ast.items.len(), 1);
-    let Item::Function(function) = &result.ast.items[0] else {
+    let file = parse_clean("fn main\n  42\nend\n");
+    assert!(file.body.is_none());
+    assert_eq!(file.items.len(), 1);
+    let Item::Function(function) = &file.items[0] else {
         panic!("expected Item::Function");
     };
     assert_eq!(function.name, "main");

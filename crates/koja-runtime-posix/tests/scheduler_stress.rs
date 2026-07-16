@@ -1,12 +1,12 @@
 //! Multi-worker scheduler stress harness.
 //!
 //! Drives the cooperative scheduler the same way a compiled Koja program
-//! does — `koja_rt_spawn` registers an entry function as PID 1, then
+//! does: `koja_rt_spawn` registers an entry function as PID 1, then
 //! `koja_rt_main_done` boots the reactor + worker pool and runs until that
 //! process dies. Here the process bodies are plain Rust `extern "C"`
 //! functions (matching the `ProcessFn = extern "C" fn(*const u8)` typedef)
-//! rather than LLVM-emitted ones, so the whole scheduler — context switch,
-//! mailbox handoff, and `Blocked <-> Runnable <-> Running` transitions —
+//! rather than LLVM-emitted ones, so the whole scheduler (context switch,
+//! mailbox handoff, and `Blocked <-> Runnable <-> Running` transitions)
 //! runs across real worker threads under `cargo test`.
 //!
 //! A controller (PID 1) spawns `CHILDREN` children and ping-pongs a one-byte
@@ -32,8 +32,8 @@
 //! never block, each calling `koja_rt_yield_check` enough times to exhaust its
 //! reduction budget repeatedly. Every exhaustion re-queues the spinner
 //! (`Running -> Runnable`) and context-switches back to its worker, so this
-//! soaks the cooperative-preemption path — budget decrement, `yield_running`
-//! under the scheduler lock, and live-fiber migration across workers — that
+//! soaks the cooperative-preemption path (budget decrement, `yield_running`
+//! under the scheduler lock, and live-fiber migration across workers) that
 //! the blocking ping-pong never hits. Like a parked process being woken on
 //! another worker (not a freed slot reused), it stays TSan-clean, so `just
 //! tsan` leaves it on.

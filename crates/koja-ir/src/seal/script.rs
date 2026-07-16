@@ -30,7 +30,7 @@ pub(crate) fn seal_script(script: &IRScript) {
     for block in &script.blocks {
         seal_block(block, owner, &block_ids, &block_params);
     }
-    // Script bodies have no function parameters; the dominator-tree
+    // Script bodies have no function parameters, so the dominator-tree
     // walk starts with an empty defined set.
     let parameter_value_ids: HashSet<ValueId> = HashSet::new();
     seal_ssa(&script.blocks, owner, &parameter_value_ids);
@@ -161,7 +161,7 @@ fn seal_script_loadconst_pool(script: &IRScript) {
 }
 
 /// Script counterpart of [`super::program`]'s `seal_program_calls`:
-/// `IRScript` carries its own `packages` table; both the inline
+/// `IRScript` carries its own `packages` table, and both the inline
 /// script body and any helper functions inside `packages` may emit
 /// calls, and every one of those must resolve to something
 /// `script.function()` can find.

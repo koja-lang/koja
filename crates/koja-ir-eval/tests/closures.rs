@@ -1,8 +1,8 @@
 //! Coverage for closure runtime in the eval interpreter.
 //!
 //! Pins runtime behavior across the two dispatch shapes the lower
-//! pass emits — direct user closures and named-fn-as-value adapters
-//! — including capture lifetimes, env indexing through
+//! pass emits (direct user closures and named-fn-as-value adapters),
+//! including capture lifetimes, env indexing through
 //! [`koja_ir::IRInstruction::LoadCapture`], higher-order
 //! parameter passing, and heap-typed captures whose outer slot is
 //! moved into the env.
@@ -153,10 +153,10 @@ fn short_closure_form_runs_with_capture() {
 
 #[test]
 fn closure_value_renders_through_display() {
-    // A closure can be returned from a function; its Display impl
+    // A closure can be returned from a function. Its Display impl
     // must surface a recognizable shape so `--auto-print` produces
     // human-readable stdout for closure-typed mains. Captures render
-    // inline; the body symbol stays mangled (matches the LLVM
+    // inline. The body symbol stays mangled (matches the LLVM
     // backend's expected stdout).
     let source = "
         y = 7

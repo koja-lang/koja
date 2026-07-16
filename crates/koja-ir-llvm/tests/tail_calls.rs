@@ -34,11 +34,11 @@ fn self_recursive_tail_call_emits_tco_loop_header_and_back_edge() {
         ";
     let program = lower(&dedent(source));
     let ir_text = emit_llvm_ir(&program, APP_NAME).expect("emit_llvm_ir");
-    // Loop header is a per-function block named `tco_loop` —
+    // Loop header is a per-function block named `tco_loop`,
     // appended after the param-init block of `count_down`.
     assert_contains(&ir_text, "tco_loop");
     // Param-init block ends with an unconditional branch to the
-    // loop header; the back-edge in the recursive arm is also a
+    // loop header. The back-edge in the recursive arm is also a
     // branch to the same label.
     assert_contains(&ir_text, "br label %tco_loop");
 }
@@ -48,7 +48,7 @@ fn self_recursive_tail_call_as_if_value_is_optimized() {
     // The recursive call is the *value* of the `if` (no early
     // `return`), so it reaches the function's `Return` through a merge
     // block param. The return-forwarder collapse must still expose it
-    // as a tail call — otherwise long-running `receive` loops grow the
+    // as a tail call, otherwise long-running `receive` loops grow the
     // stack one frame per iteration.
     let source = "
         struct Counter
@@ -162,7 +162,7 @@ fn non_recursive_function_emits_no_tco_loop() {
         ";
     let program = lower(&dedent(source));
     let ir_text = emit_llvm_ir(&program, APP_NAME).expect("emit_llvm_ir");
-    // Scope to `add_one` itself — auto-imported stdlib may carry its
+    // Scope to `add_one` itself, since auto-imported stdlib may carry its
     // own (now-optimized) recursive loops elsewhere in the module.
     let body = extract_function_body(&ir_text, "TestApp.add_one");
     assert!(

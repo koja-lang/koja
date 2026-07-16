@@ -10,7 +10,7 @@
 //!
 //! The driver supplies the baseline source set (stdlib, plus a
 //! project's sources when launched inside one) and the package the
-//! session evaluates in — see [`run`]. REPL fragments have no file
+//! session evaluates in. See [`run`]. REPL fragments have no file
 //! dimension, so the shell is unconditionally script-mode, bypassing
 //! the `.koja` / `.kojs` dispatch the other `koja` subcommands use. It
 //! depends only on the pipeline crates, never back on `koja-driver`.
@@ -35,7 +35,7 @@ mod complete;
 
 /// Default session package for a bare `koja shell` (no project). The
 /// session re-runs the entire concatenated input history through the
-/// pipeline on every step; the package label flows through into any
+/// pipeline on every step. The package label flows through into any
 /// helper functions the user defines via top-level `fn` items. In a
 /// project the driver passes the project's package name instead, so
 /// the project's declarations resolve unqualified (`Cli.usage()`)
@@ -85,16 +85,16 @@ enum InputOutcome {
 /// Drives a [`rustyline::Editor`] one line at a time via
 /// [`read_input`], which rewrites the prompt onto its own row
 /// the first time an input proves to be multi-line so the typed
-/// block reads as bare code; subsequent continuation lines come
+/// block reads as bare code. Subsequent continuation lines come
 /// in without any prompt prefix. Successful inputs accumulate
-/// into a [`Session`] that re-runs the whole history every step;
-/// the trailing expression's `Debug.format` rendering (if any) gets
+/// into a [`Session`] that re-runs the whole history every step.
+/// The trailing expression's `Debug.format` rendering (if any) gets
 /// printed and a [`Value::Unit`] trailing value suppresses the line.
 /// Pipeline errors print `error: …` and roll the session back to
 /// its pre-input state. Ctrl-C cancels the in-flight input and
-/// loops back to a fresh prompt; Ctrl-D / EOF exits cleanly.
+/// loops back to a fresh prompt, while Ctrl-D / EOF exits cleanly.
 ///
-/// History is kept in memory only — each accepted input (the full
+/// History is kept in memory only. Each accepted input (the full
 /// multi-line block, where applicable) is added as one entry so
 /// up-arrow recalls prior commands within the session, but
 /// nothing is persisted to disk.
@@ -170,7 +170,7 @@ pub fn run(baseline: Vec<SourceFile>, session_package: String) {
 /// complete fragment (open block, unclosed bracket, dangling
 /// string), the prompt + typed line are rewritten via ANSI so
 /// the prompt sits on its own row and the typed first line drops
-/// onto its own row below; the block then reads as bare code.
+/// onto its own row below. The block then reads as bare code.
 /// Subsequent reads happen with an empty prompt until
 /// [`is_input_complete`] flips true.
 ///
@@ -178,7 +178,7 @@ pub fn run(baseline: Vec<SourceFile>, session_package: String) {
 /// (on any line) or types `:reset` mid-multiline, discarding the
 /// partial buffer in either case. Ctrl-D / EOF mid-multiline
 /// surfaces as a Cancelled outcome with an "unterminated input
-/// discarded at EOF" message; Ctrl-D on the first read returns
+/// discarded at EOF" message, while Ctrl-D on the first read returns
 /// [`InputOutcome::Eof`].
 fn read_input(editor: &mut Editor<ShellHelper, DefaultHistory>, counter: u32) -> InputOutcome {
     let prompt = format!("koja({counter})> ");
@@ -248,13 +248,13 @@ fn erase_current_line() {
 struct Session {
     /// Baseline sources injected by the driver (stdlib plus, in a
     /// project, the project + dependency sources). Prepended to every
-    /// pipeline run and preserved across `:reset` — it's the fixed
+    /// pipeline run and preserved across `:reset`, since it's the fixed
     /// scope the REPL evaluates against, not session input.
     baseline: Vec<SourceFile>,
     counter: u32,
     /// Package the synthesized session source belongs to. In a project
     /// this is the project's package name, so its modules resolve
-    /// unqualified; otherwise [`SESSION_PACKAGE`].
+    /// unqualified, otherwise [`SESSION_PACKAGE`].
     package: String,
     statements: Vec<String>,
 }
@@ -344,7 +344,7 @@ impl Session {
 
     /// Concatenate all statement blocks into the script source the
     /// pipeline will parse. Blocks are joined with newlines so each
-    /// input remains its own logical line group; `ParseMode::Script`
+    /// input remains its own logical line group, and `ParseMode::Script`
     /// handles the rest.
     fn synthesize(&self) -> String {
         self.statements.join("\n")
@@ -445,7 +445,7 @@ fn run_script(script: &IRScript) -> Result<Value, String> {
 }
 
 /// The text the REPL prints for a trailing value. The wrapped lower
-/// hands back the `Debug.format` string verbatim; the unwrapped
+/// hands back the `Debug.format` string verbatim, and the unwrapped
 /// fallback renders the raw value through its runtime [`Display`].
 fn render(value: Value) -> String {
     match value {
@@ -458,7 +458,7 @@ fn render(value: Value) -> String {
 /// `Statement::Expr(e.format())`, mirroring the `.format()` wrap the
 /// `Debug` synthesizer splices into interpolations. No-op when the
 /// fragment has no body or its trailing statement isn't a bare
-/// expression (assignment, `fn` item, empty) — those lower to a `Unit`
+/// expression (assignment, `fn` item, empty), since those lower to a `Unit`
 /// trailing value the caller handles without rewriting.
 fn wrap_trailing_in_format(parsed: &mut ParsedProgram, fragment_path: &Path) {
     let Some(file) = parsed.get_mut(fragment_path) else {
@@ -495,7 +495,7 @@ fn wrap_trailing_in_format(parsed: &mut ParsedProgram, fragment_path: &Path) {
 ///
 /// Conservative on ambiguity: an input that looks complete by token
 /// counting but actually fails to parse will still be handed to
-/// [`Session::try_eval`] and produce a parse error — the user can
+/// [`Session::try_eval`] and produce a parse error, and the user can
 /// retry.
 fn is_input_complete(source: &str) -> bool {
     let mut block_depth: i32 = 0;

@@ -24,7 +24,7 @@ use crate::types::IRType;
 
 /// A lowered union declaration. `members` is the canonical
 /// (sorted) member type vector inherited from the surface
-/// `ResolvedType::Union`; `max_payload_size` is the byte width of
+/// `ResolvedType::Union`, and `max_payload_size` is the byte width of
 /// the largest member as computed by [`size_in_bytes`]. Backends
 /// consult `max_payload_size` to size the trailing `[N x i8]`
 /// payload buffer.
@@ -40,12 +40,12 @@ pub struct IRUnionDecl {
 /// struct layout.
 ///
 /// Mirrors the LLVM backend's per-shape ABI sizing on a 64-bit
-/// host: primitives match their bit width; pointer-shaped values
-/// use the host pointer size; structs sum their fields *with
-/// padding* to natural alignment; enums use the same `{ i8 tag +
+/// host. Primitives match their bit width, pointer-shaped values
+/// use the host pointer size, and structs sum their fields *with
+/// padding* to natural alignment. Enums use the same `{ i8 tag +
 /// align padding + max-payload }` blob the LLVM enum layout
 /// produces, with the outer rounded up to its max-align stride.
-/// Nested unions resolve through `unions`; if the inner decl
+/// Nested unions resolve through `unions`. If the inner decl
 /// isn't yet registered, fall back to `1 + max(member_size)` as
 /// a conservative upper bound so the caller's first sizing pass
 /// still produces a usable number that a later
@@ -140,7 +140,7 @@ where
 }
 
 /// Enum payload sizing mirrors `koja-ir-llvm`'s layout: each
-/// variant is a `{ i8 tag, [pad x i8], payload }` blob; the outer
+/// variant is a `{ i8 tag, [pad x i8], payload }` blob, and the outer
 /// is `{ [count x iN] }` where `N = max_align * 8` and the byte
 /// count is `count * max_align >= max_complete_size`. Returns the
 /// outer's `(size, align)`.
@@ -161,7 +161,7 @@ fn enum_size(
             }
         };
         let variant_align = payload_align.max(1);
-        // Complete = `{ i8 tag, [pad x i8], payload }`; tag occupies
+        // Complete = `{ i8 tag, [pad x i8], payload }`. The tag occupies
         // 1 byte, payload starts at its natural alignment, total
         // rounds up to the variant's max align so the outer's
         // stride absorbs it.
@@ -391,7 +391,7 @@ fn walk_instruction(instruction: &IRInstruction, out: &mut BTreeMap<IRSymbol, IR
 
 /// Per-segment IRType walker for the binary-pattern instruction.
 /// Only [`LoweredBinaryPattern::BindInt`] / [`LoweredBinaryPattern::GreedyTail`]
-/// carry types; the rest are pure shape + bit-offset metadata.
+/// carry types. The rest are pure shape + bit-offset metadata.
 fn walk_binary_pattern(
     segment: &crate::types::LoweredBinaryPattern,
     out: &mut BTreeMap<IRSymbol, IRType>,

@@ -7,10 +7,8 @@
 //! the same shapes earlier), so this test mainly pins behavioral
 //! parity between the two rejection sites. Negative coverage for
 //! non-`@doc` annotations lives in
-//! `koja-typecheck/tests/doc_annotations.rs` — those programs
+//! `koja-typecheck/tests/doc_annotations.rs`. Those programs
 //! never reach the IR pass.
-
-use koja_ast::util::dedent;
 
 mod common;
 
@@ -28,7 +26,7 @@ fn doc_annotated_struct_lowers_through_ir() {
         Point{x: 1, y: 2}.x
         ";
 
-    let script = lower_script_source(&dedent(source));
+    let script = lower_script_source(source);
     let mangled = format!("{PACKAGE}.Point");
     assert!(
         script.struct_decl(&mangled).is_some(),
@@ -50,7 +48,7 @@ fn doc_annotated_enum_lowers_through_ir() {
         1
         ";
 
-    let script = lower_script_source(&dedent(source));
+    let script = lower_script_source(source);
     let mangled = format!("{PACKAGE}.Color");
     assert!(
         script.enum_decl(&mangled).is_some(),

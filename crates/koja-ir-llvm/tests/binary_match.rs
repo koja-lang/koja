@@ -5,12 +5,12 @@
 //! Three shapes are pinned, one per branch of the per-segment
 //! dispatch:
 //!
-//! - Literal-bytes arm — touches the `memcmp` extern declaration
+//! - Literal-bytes arm: touches the `memcmp` extern declaration
 //!   and a `lit_ptr` private constant for the byte payload.
-//! - Sign-extended binding — proves the `signed` modifier emits an
+//! - Sign-extended binding: proves the `signed` modifier emits an
 //!   `ashr` after the `shl`, fixing the v1 latent bug where
 //!   `signed` was a no-op.
-//! - Greedy `: Binary` tail — proves the malloc/memcpy block that
+//! - Greedy `: Binary` tail: proves the malloc/memcpy block that
 //!   stamps the bit-length header for the new payload.
 
 use koja_ast::util::dedent;
@@ -71,7 +71,7 @@ fn binary_match_string_literal_segment_emits_memcmp_extern() {
 fn binary_match_signed_binding_emits_sign_extend_shl_ashr() {
     // The `signed` modifier must lower to `shl` + arithmetic `ashr`
     // (v1 always emitted an unsigned extraction and discarded the
-    // modifier — the pipeline fixes that by routing `BinarySign::Signed`
+    // modifier. The pipeline fixes that by routing `BinarySign::Signed`
     // through `extend_for_sign`).
     let source = "
         neg = <<0xFF>>
@@ -142,7 +142,7 @@ fn binary_match_greedy_tail_emits_malloc_and_memcpy() {
 #[test]
 fn binary_match_uge_length_check_for_greedy_tail() {
     // Greedy tails must use unsigned-greater-or-equal for the length
-    // check; without a greedy tail it's equality.
+    // check. Without a greedy tail it's equality.
     let source = "
         stream = <<0xAA, 0xBB, 0xCC, 0xDD>>
         match stream

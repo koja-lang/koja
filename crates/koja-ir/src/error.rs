@@ -3,7 +3,7 @@
 //! Both lowering entry points ([`crate::lower_program`] and
 //! [`crate::lower_script`]) return `Result<_, LowerError>`. The
 //! variants are disjoint and signal where in the pipeline the
-//! failure surfaced — feature-gap diagnostics get accumulated while
+//! failure surfaced. Feature-gap diagnostics get accumulated while
 //! walking the sealed AST, and the entry-point lookup miss is a
 //! project-mode-only concern.
 //!
@@ -17,10 +17,10 @@ use koja_ast::identifier::Identifier;
 /// [`crate::lower_script`]. Anything that could only originate from a
 /// compiler bug panics through `seal` instead of surfacing here.
 ///
-/// `Diagnostics` and `EntryPointNotFound` are disjoint: the lowering
+/// `Diagnostics` and `EntryPointNotFound` are disjoint. The lowering
 /// pass short-circuits before the entry-point check when diagnostics
 /// are present, so callers can match on one variant at a time.
-/// `EntryPointNotFound` is project-mode-only; script-mode lowering
+/// `EntryPointNotFound` is project-mode-only, as script-mode lowering
 /// has no caller-named entry to miss.
 #[derive(Debug, Clone)]
 pub enum LowerError {
@@ -28,7 +28,7 @@ pub enum LowerError {
     /// the sealed AST (unsupported expression / literal / statement
     /// kinds, extern-body functions, unsupported binary operators,
     /// etc.). Each [`Diagnostic`] carries a source span + message.
-    /// Lowering is per-function fail-fast: a failed function
+    /// Lowering is per-function fail-fast, so a failed function
     /// contributes one diagnostic and is omitted from the resulting
     /// partial IR.
     Diagnostics(Vec<Diagnostic>),

@@ -8,7 +8,7 @@
 //! on a spawned thread while the client runs on the test thread.
 //! Sequencing: the server writes a sentinel file once its listener
 //! is bound (loopback `connect` succeeds from that point, before
-//! `accept` is even called); the client waits for the sentinel.
+//! `accept` is even called). The client waits for the sentinel.
 //!
 //! Certificate fixtures are the stdlib's own
 //! `lib/net/test/fixtures/localhost_*.pem` (self-signed,

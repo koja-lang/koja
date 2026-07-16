@@ -22,21 +22,23 @@ use std::path::PathBuf;
 use koja_ast::identifier::Identifier;
 use koja_ast::util::dedent;
 use koja_ir::{
-    FunctionKind, IRBasicBlock, IRBlockId, IRFunction, IRInstruction, IRProgram, IRTerminator,
-    IRType, ReceiveTag, ValueId, lower_program,
+    FunctionKind, IRBasicBlock, IRFunction, IRInstruction, IRProgram, IRTerminator, IRType,
+    ReceiveTag, ValueId, lower_program,
 };
 use koja_parser::{ParseMode, SourceFile, parse_program};
 use koja_typecheck::check_program;
 
-const PACKAGE: &str = "TestApp";
+mod common;
 
-/// Minimal stub of `process.koja`. Mirrors the stub
-/// in `koja-typecheck/tests/process.rs` — provides every type
+use common::{PACKAGE, all_instructions, block_labeled, function};
+
+/// Minimal stub of `process.koja`. Mirrors the stub in
+/// `koja-typecheck/tests/process.rs` and provides every type
 /// referenced by spawn/receive lowering. Replaced by the full
-/// `Global.process` autoimport in step 5 of the
-/// concurrency plan. Indented inline with the
-/// surrounding Rust; `lower` dedents it (along with the test
-/// source) before parsing.
+/// `Global.process` autoimport in step 5 of the concurrency plan.
+/// Indented inline with the surrounding Rust, so
+/// [`lower_process_entry`] dedents it (along with the test source)
+/// before parsing.
 const PROCESS_STUB: &str = "
     enum Process.Lifecycle
       Shutdown
@@ -104,7 +106,7 @@ const PROCESS_ALIASES: &str = "\
 /// Synthetic Process state appended by [`lower`] so fixtures that
 /// only exercise spawn/receive lowering still give `lower_program`
 /// a valid entry. Spells out `run` because [`PROCESS_STUB`]'s
-/// protocol declares it without a default body; `priority` is
+/// protocol declares it without a default body. `priority` is
 /// defaulted there, so it is synthesized per-impl automatically.
 const TEST_ENTRY_SNIPPET: &str = "
     struct TestEntry
@@ -159,13 +161,6 @@ fn lower_process_entry(source: &str, state_name: &str) -> IRProgram {
     lower_program(&checked, &state).expect("lowering should succeed")
 }
 
-fn function<'a>(program: &'a IRProgram, name: &str) -> &'a IRFunction {
-    let mangled = format!("{PACKAGE}.{name}");
-    program
-        .function(&mangled)
-        .unwrap_or_else(|| panic!("missing function `{mangled}` in IRProgram"))
-}
-
 /// Under value semantics, returning a heap-managed value from `block`
 /// acquires it via [`IRInstruction::Clone`] before the `Return` (block
 /// params and call results are borrowed until acquired). Assert the
@@ -209,10 +204,7 @@ fn assert_return_acquires(block: &IRBasicBlock, source: ValueId) {
 /// states are all-`Copy`, so elaborate leaves the markers in place
 /// rather than rewriting them into glue calls).
 fn assert_process_body_shape(program: &IRProgram, wrapper: &IRFunction, state_mangled: &str) {
-    let body_callee = wrapper
-        .blocks
-        .iter()
-        .flat_map(|block| &block.instructions)
+    let body_callee = all_instructions(&wrapper.blocks)
         .find_map(|instruction| match instruction {
             IRInstruction::Call { callee, .. } => Some(callee.clone()),
             _ => None,
@@ -228,10 +220,7 @@ fn assert_process_body_shape(program: &IRProgram, wrapper: &IRFunction, state_ma
         body.kind,
     );
 
-    let callees: Vec<&str> = body
-        .blocks
-        .iter()
-        .flat_map(|block| &block.instructions)
+    let callees: Vec<&str> = all_instructions(&body.blocks)
         .filter_map(|instruction| match instruction {
             IRInstruction::Call { callee, .. } => Some(callee.mangled()),
             _ => None,
@@ -246,11 +235,7 @@ fn assert_process_body_shape(program: &IRProgram, wrapper: &IRFunction, state_ma
         "process body should call `{state_mangled}.run`, calls: {callees:?}",
     );
 
-    let instructions: Vec<&IRInstruction> = body
-        .blocks
-        .iter()
-        .flat_map(|block| &block.instructions)
-        .collect();
+    let instructions: Vec<&IRInstruction> = all_instructions(&body.blocks).collect();
     assert!(
         instructions
             .iter()
@@ -316,11 +301,7 @@ fn spawn_lowers_to_spawn_instruction_plus_wrapper_fn() {
     );
     let run = function(&program, "run");
 
-    let entry = run
-        .blocks
-        .iter()
-        .find(|b| b.label == "entry")
-        .expect("missing entry block in `run`");
+    let entry = block_labeled(&run.blocks, "entry");
     let spawn = entry
         .instructions
         .iter()
@@ -485,7 +466,7 @@ fn receive_lowers_to_receive_instruction_with_one_arm_per_body_block() {
     assert_eq!(
         host.terminator,
         IRTerminator::Unreachable,
-        "Receive's host block must end Unreachable — dispatch always exits via arm bodies",
+        "Receive's host block must end Unreachable, dispatch always exits via arm bodies",
     );
 
     let arm_block_id = arms[0].body;
@@ -494,22 +475,18 @@ fn receive_lowers_to_receive_instruction_with_one_arm_per_body_block() {
         "Receive arm body block id {arm_block_id} should exist in `loop`'s CFG",
     );
 
-    let merge = loop_fn
-        .blocks
-        .iter()
-        .find(|b| b.label == "receive_merge")
-        .expect("missing receive_merge block");
+    let merge = block_labeled(&loop_fn.blocks, "receive_merge");
     assert_eq!(
         merge.params.len(),
         1,
         "receive_merge should declare exactly one BlockParam for the join value",
     );
     let merge_param = merge.params[0].dest;
-    // Owned-merge-param model: each arm acquires its tail value before
-    // branching to the join, so the merge param already owns the join
+    // Under the owned-merge-param model, each arm acquires its tail
+    // value before branching to the join, so the merge param already owns the join
     // value and the Return moves it directly. The arm here yields
     // `StopReason.Shutdown`, owned from construction, so no Clone is
-    // emitted — the merge block simply returns its param.
+    // emitted and the merge block simply returns its param.
     assert_eq!(
         merge.terminator,
         IRTerminator::Return {
@@ -539,14 +516,10 @@ fn receive_with_after_lowers_timeout_value_and_after_block() {
     );
     let loop_fn = function(&program, "drain");
 
-    let after = loop_fn
-        .blocks
-        .iter()
-        .find_map(|b| {
-            b.instructions.iter().find_map(|inst| match inst {
-                IRInstruction::Receive { after, .. } => after.clone(),
-                _ => None,
-            })
+    let after = all_instructions(&loop_fn.blocks)
+        .find_map(|inst| match inst {
+            IRInstruction::Receive { after, .. } => after.clone(),
+            _ => None,
         })
         .expect("Receive should carry an after clause");
 
@@ -556,28 +529,22 @@ fn receive_with_after_lowers_timeout_value_and_after_block() {
         "after.body block id {} should resolve to a CFG block",
         after.body,
     );
-    assert!(
-        loop_fn.blocks.iter().any(|b| b.label == "receive_after"),
-        "lowered receive should mint a `receive_after` block",
-    );
+    // `block_labeled` panics if lowering didn't mint a `receive_after` block.
+    block_labeled(&loop_fn.blocks, "receive_after");
 
     // Timeout value rides through a regular IRInstruction::Const-typed
-    // operand into Receive; we only need to confirm Receive sees it
+    // operand into Receive. We only need to confirm Receive sees it
     // and the merge block's param ties everything back together.
     let _ = after.timeout;
-    let merge = loop_fn
-        .blocks
-        .iter()
-        .find(|b| b.label == "receive_merge")
-        .expect("missing receive_merge block");
+    let merge = block_labeled(&loop_fn.blocks, "receive_merge");
     assert_eq!(
         merge.params.len(),
         1,
         "after-style receive merges arm + after tails into one BlockParam",
     );
 
-    // Sanity: the receive's host block is still terminated unreachable.
-    let host_id: IRBlockId = loop_fn
+    // Sanity check that the receive's host block still terminates unreachable.
+    let host = loop_fn
         .blocks
         .iter()
         .find(|b| {
@@ -585,9 +552,7 @@ fn receive_with_after_lowers_timeout_value_and_after_block() {
                 .iter()
                 .any(|i| matches!(i, IRInstruction::Receive { .. }))
         })
-        .map(|b| b.id)
         .expect("missing host block for receive");
-    let host = loop_fn.blocks.iter().find(|b| b.id == host_id).unwrap();
     assert_eq!(host.terminator, IRTerminator::Unreachable);
 }
 
@@ -609,23 +574,15 @@ fn receive_arm_payload_local_is_declared_with_resolved_type() {
     );
     let loop_fn = function(&program, "drain");
 
-    let receive_arm = loop_fn
-        .blocks
-        .iter()
-        .find_map(|b| {
-            b.instructions.iter().find_map(|inst| match inst {
-                IRInstruction::Receive { arms, .. } => arms.first().cloned(),
-                _ => None,
-            })
+    let receive_arm = all_instructions(&loop_fn.blocks)
+        .find_map(|inst| match inst {
+            IRInstruction::Receive { arms, .. } => arms.first().cloned(),
+            _ => None,
         })
         .expect("missing Receive arm");
     let payload_local = receive_arm.payload_local;
 
-    let entry = loop_fn
-        .blocks
-        .iter()
-        .find(|b| b.label == "entry")
-        .expect("missing entry block");
+    let entry = block_labeled(&loop_fn.blocks, "entry");
     let payload_decl = entry.instructions.iter().any(|inst| match inst {
         IRInstruction::LocalDecl { local, .. } => *local == payload_local,
         _ => false,
@@ -717,16 +674,12 @@ fn process_entry_lowers_to_process_entry_wrapper() {
         IRType::Int64,
         "entry body returns the exit code for the shim to store",
     );
-    let routes_through_code = body
-        .blocks
-        .iter()
-        .flat_map(|block| &block.instructions)
-        .any(|instruction| {
-            matches!(
-                instruction,
-                IRInstruction::Call { callee, .. } if callee.mangled() == "Global.Process.StopReason.code"
-            )
-        });
+    let routes_through_code = all_instructions(&body.blocks).any(|instruction| {
+        matches!(
+            instruction,
+            IRInstruction::Call { callee, .. } if callee.mangled() == "Global.Process.StopReason.code"
+        )
+    });
     assert!(
         routes_through_code,
         "entry body should route both arms' StopReason through `Global.Process.StopReason.code`",

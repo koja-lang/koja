@@ -214,7 +214,7 @@ fn check_greedy_tail(
     let name = path.last().map(String::as_str).unwrap_or("");
     if name == "Binary" && !fixed_bits.is_multiple_of(8) {
         diagnostics.push(Diagnostic::error(
-            format!("`: Binary` rest requires a byte-aligned prefix; got {fixed_bits} fixed bits",),
+            format!("`: Binary` rest requires a byte-aligned prefix, got {fixed_bits} fixed bits",),
             segment.span,
         ));
         return true;

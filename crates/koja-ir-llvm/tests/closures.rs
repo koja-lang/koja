@@ -75,7 +75,7 @@ fn call_closure_dispatches_indirectly_with_env_first() {
     let ir_text = emit_script_llvm_ir(&script, APP_NAME).expect("emit_script_llvm_ir");
     // CallClosure spills the fat-pointer to alloca, GEPs the two
     // halves, then dispatches via an indirect call. Inkwell prints
-    // indirect calls without a `@symbol`; matching the GEP labels
+    // indirect calls without a `@symbol`. Matching the GEP labels
     // is enough to anchor the shape without coupling to inkwell's
     // exact rendering of the call site.
     assert_contains(&ir_text, "closure_call.fn_ptr");
@@ -94,7 +94,7 @@ fn load_capture_indexes_through_env_struct() {
     let script = lower(&dedent(source));
     let ir_text = emit_script_llvm_ir(&script, APP_NAME).expect("emit_script_llvm_ir");
     // `LoadCapture` GEPs inside the body's env struct. The label
-    // is `env.<index>`; the load names its dest `capture.<index>`.
+    // is `env.<index>`, and the load names its dest `capture.<index>`.
     assert_contains(&ir_text, "env.0");
     assert_contains(&ir_text, "capture.0");
 }
@@ -158,7 +158,7 @@ fn closure_body_loads_user_param_from_alloca_after_env() {
         ";
     let script = lower(&dedent(source));
     let ir_text = emit_script_llvm_ir(&script, APP_NAME).expect("emit_script_llvm_ir");
-    // The captureless body still exposes the env-first ABI; user
+    // The captureless body still exposes the env-first ABI. User
     // params follow it normally.
     assert_contains(&ir_text, "define i64 @TestApp.__script_body__closure0(ptr ");
 }

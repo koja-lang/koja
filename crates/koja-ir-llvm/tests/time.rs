@@ -11,7 +11,7 @@
 //!   turn invokes the C-named extern.
 //! - The pure-Koja getters (`Duration.from_millis(.)`,
 //!   `Duration.millis(self)`, `DateTime.timestamp_millis(self)`)
-//!   lower as ordinary functions; their bodies use `i64` everywhere
+//!   lower as ordinary functions. Their bodies use `i64` everywhere
 //!   because the pipeline treats `Int` and `Int64` interchangeably.
 
 use koja_ast::util::dedent;
@@ -31,8 +31,8 @@ fn datetime_now_call_emits_extern_declare_for_runtime_symbol() {
     // Triggering `DateTime.now()` (transitively, via
     // `.timestamp_millis()` so the script trailing value is a
     // primitive the auto-print scaffolding accepts) forces the
-    // emitter to declare `koja_time_now_millis` — the C-named
-    // extern backing the call — so it's resolvable at link time
+    // emitter to declare `koja_time_now_millis` (the C-named
+    // extern backing the call) so it's resolvable at link time
     // against `koja-runtime`.
     let ir_text = emit("DateTime.now().timestamp_millis()");
 
@@ -56,7 +56,7 @@ fn datetime_now_does_not_re_emit_runtime_symbol_under_alpha_mangling() {
 
 #[test]
 fn duration_from_millis_pure_koja_body_lowers_with_i64() {
-    // `Duration.from_millis(ms)` is pure-Koja — body just builds a
+    // `Duration.from_millis(ms)` is pure-Koja. The body just builds a
     // `Duration` struct from the param. Pin the function shape so
     // any drift in struct lowering or param threading shows up.
     // Project to `.millis()` so the script trailing is a primitive.

@@ -1,10 +1,10 @@
 //! Eval coverage for the auto-imported `Global.time` stdlib file.
 //! The pure-Koja bodies (`Duration.from_secs` / `from_millis` /
 //! `millis`, `DateTime.timestamp_millis`) evaluate end-to-end on
-//! the interpreter; the `@extern "C" priv fn koja_time_now_millis`
+//! the interpreter. The `@extern "C" priv fn koja_time_now_millis`
 //! routes through `koja-ir-eval`'s curated extern dispatch
 //! table, which calls into `koja-runtime`'s `koja_time_now_millis`
-//! over the C ABI — the same symbol the LLVM backend would link
+//! over the C ABI, the same symbol the LLVM backend would link
 //! against, so the two backends observe identical wall-clock
 //! values.
 
@@ -25,7 +25,7 @@ fn run_int(source: &str) -> i64 {
 #[test]
 fn duration_from_secs_multiplies_by_thousand() {
     // `Duration.from_secs(3)` should construct a `Duration` whose
-    // `millis = 3000`; project to a primitive via `.millis()` so
+    // `millis = 3000`. Project to a primitive via `.millis()` so
     // the script trailing is an `Int` the harness can read.
     let v = run_int("Duration.from_secs(3).millis()");
     assert_eq!(v, 3_000);

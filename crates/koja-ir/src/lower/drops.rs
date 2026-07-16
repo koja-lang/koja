@@ -1,5 +1,5 @@
 //! Function-exit drop emission. Called at every site that ends the
-//! function's control flow — explicit `return` and the synthesized
+//! function's control flow: explicit `return` and the synthesized
 //! fall-through tail [`super::body::finalize_open_flow`].
 //!
 //! Under the deep-copy-on-acquisition value-semantics baseline every

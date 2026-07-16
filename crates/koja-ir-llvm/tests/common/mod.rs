@@ -7,24 +7,24 @@
 //! Every llvm test shape drives `parse -> check -> lower -> emit_*` and
 //! asserts substrings of the produced IR text, so we expose:
 //!
-//! - [`PACKAGE`] / [`APP_NAME`] — defaults every test source registers
+//! - [`PACKAGE`] / [`APP_NAME`]: defaults every test source registers
 //!   under (`"TestApp"` / `"emit_test"`).
-//! - [`typecheck`] / [`typecheck_in`] — `parse_program -> check_program`
+//! - [`typecheck`] / [`typecheck_in`]: `parse_program -> check_program`
 //!   shorthands, parameterized by `ParseMode` (and optionally package
 //!   name for tests that target `Global` directly, e.g.
 //!   `intrinsics.rs`).
 //! - [`lower_program_source`] / [`lower_script_source`] /
-//!   [`lower_script_source_in`] — happy-path lowering shorthands.
+//!   [`lower_script_source_in`]: happy-path lowering shorthands.
 //!   Program-shaped fixtures get the synthetic [`TEST_ENTRY_NAME`]
 //!   Process state appended so `lower_program` always has a valid
-//!   Process entry; fixture functions (`fn main` and friends) emit
+//!   Process entry. Fixture functions (`fn main` and friends) emit
 //!   as plain package helpers alongside it.
-//! - [`assert_contains`] — substring assertion with a panic message
+//! - [`assert_contains`]: substring assertion with a panic message
 //!   that includes the full IR text on miss.
-//! - [`assert_main_shape`] — pin the script-mode wrapper invariants:
+//! - [`assert_main_shape`]: pin the script-mode wrapper invariants,
 //!   `define i64 @main()`, `ret i64 0`, and the `@__koja_app_name`
 //!   global.
-//! - [`assert_program_shape`] — pin the program-mode (Process entry)
+//! - [`assert_program_shape`]: pin the program-mode (Process entry)
 //!   trampoline invariants: `define i32 @main()`, the exit-code
 //!   global, and the scheduler boot calls.
 
@@ -49,7 +49,7 @@ pub const TEST_ENTRY_NAME: &str = "TestEntry";
 
 /// Minimal `Process` impl appended to every program-shaped fixture
 /// so `lower_program` has a valid entry. The state is never spawned
-/// or executed by these tests — it only satisfies the entry staging.
+/// or executed by these tests. It only satisfies the entry staging.
 const TEST_ENTRY_SNIPPET: &str = "
 struct TestEntry
 end
@@ -107,11 +107,11 @@ pub fn assert_contains(ir_text: &str, needle: &str) {
 /// satisfy:
 ///
 /// - `define void @__koja_user_main(ptr)` carrying the script body
-///   (always returns `ret void`; the trailing expression's value is
-///   computed for side effects and discarded);
+///   (always returns `ret void` since the trailing expression's value is
+///   computed for side effects and discarded).
 /// - `define i64 @main()` trampoline that hands the script body to
 ///   the runtime as PID 1 via `koja_rt_spawn`, blocks on
-///   `koja_rt_main_done`, and returns `ret i64 0`;
+///   `koja_rt_main_done`, and returns `ret i64 0`.
 /// - `@__koja_app_name` global that `koja-runtime`'s panic handler
 ///   links against.
 pub fn assert_main_shape(ir_text: &str) {
@@ -128,8 +128,8 @@ pub fn assert_main_shape(ir_text: &str) {
 ///
 /// - `define i32 @main()` trampoline that spawns the synthetic
 ///   entry wrapper, blocks on `koja_rt_main_done`, and returns the
-///   `@__koja_exit_code` global's value;
-/// - the entry wrapper define for [`TEST_ENTRY_NAME`];
+///   `@__koja_exit_code` global's value.
+/// - the entry wrapper define for [`TEST_ENTRY_NAME`].
 /// - `@__koja_app_name` global that `koja-runtime`'s panic handler
 ///   links against.
 pub fn assert_program_shape(ir_text: &str) {
@@ -146,7 +146,7 @@ pub fn assert_program_shape(ir_text: &str) {
 
 /// Slice the LLVM textual IR for one function so substring asserts
 /// don't accidentally pick up matches from other defs in the same
-/// module — relevant for any test where the auto-import pulls
+/// module, relevant for any test where the auto-import pulls
 /// stdlib functions (`Global.Int.band`, `DateTime.now`, …) into the
 /// emitted IR alongside the user's `main`. Returns the body between
 /// the `define ... @<name>(...) {` opening brace and the matching
@@ -154,7 +154,7 @@ pub fn assert_program_shape(ir_text: &str) {
 /// holds for everything we emit today).
 ///
 /// Anchored on the `define ` prefix so substring searches don't
-/// snap to call sites — a symbol like `@Global.Int.format(` appears
+/// snap to call sites. A symbol like `@Global.Int.format(` appears
 /// as both a `define` line and a `call` line once auto-derived
 /// `Debug` impls invoke it from synthesized bodies.
 pub fn extract_function_body<'a>(ir_text: &'a str, name: &str) -> &'a str {

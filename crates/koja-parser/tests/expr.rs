@@ -9,22 +9,11 @@
 //! - the `expr -> expr` short-closure shape and its single-param /
 //!   wildcard / parenthesized variants
 
-use koja_ast::ast::{BinOp, ClosureParam, Expr, ExprKind, Literal, Statement, UnaryOp};
-use koja_parser::{ParseMode, parse};
+use koja_ast::ast::{BinOp, ClosureParam, Expr, ExprKind, Literal, UnaryOp};
 
-fn parse_first_expr(src: &str) -> Expr {
-    let source = format!("{src}\n");
-    let result = parse(&source, ParseMode::Script);
-    for stmt in result.ast.body.unwrap_or_default() {
-        if let Statement::Expr(e) = stmt {
-            return e;
-        }
-        if let Statement::Assignment { value, .. } = stmt {
-            return value;
-        }
-    }
-    panic!("no expression found in parsed output");
-}
+mod common;
+
+use common::first_script_expr;
 
 fn is_binop(expr: &Expr, expected_op: BinOp) -> bool {
     matches!(expr.kind, ExprKind::Binary { op, .. } if op == expected_op)
@@ -34,7 +23,7 @@ fn is_binop(expr: &Expr, expected_op: BinOp) -> bool {
 
 #[test]
 fn mul_binds_tighter_than_add() {
-    let expr = parse_first_expr("1 + 2 * 3");
+    let expr = first_script_expr("1 + 2 * 3");
     let ExprKind::Binary {
         op, left, right, ..
     } = &expr.kind
@@ -48,7 +37,7 @@ fn mul_binds_tighter_than_add() {
 
 #[test]
 fn sub_and_div_precedence() {
-    let expr = parse_first_expr("a - b / c");
+    let expr = first_script_expr("a - b / c");
     let ExprKind::Binary { op, right, .. } = &expr.kind else {
         panic!("expected Binary, got {expr:?}");
     };
@@ -58,7 +47,7 @@ fn sub_and_div_precedence() {
 
 #[test]
 fn left_associativity_add() {
-    let expr = parse_first_expr("1 + 2 + 3");
+    let expr = first_script_expr("1 + 2 + 3");
     let ExprKind::Binary { op, left, .. } = &expr.kind else {
         panic!("expected Binary, got {expr:?}");
     };
@@ -70,19 +59,19 @@ fn left_associativity_add() {
 
 #[test]
 fn comparison_parses() {
-    let expr = parse_first_expr("a == b");
+    let expr = first_script_expr("a == b");
     assert!(is_binop(&expr, BinOp::Eq));
 
-    let expr2 = parse_first_expr("x != y");
+    let expr2 = first_script_expr("x != y");
     assert!(is_binop(&expr2, BinOp::NotEq));
 
-    let expr3 = parse_first_expr("a < b");
+    let expr3 = first_script_expr("a < b");
     assert!(is_binop(&expr3, BinOp::Lt));
 }
 
 #[test]
 fn comparison_lower_than_arithmetic() {
-    let expr = parse_first_expr("a + 1 == b * 2");
+    let expr = first_script_expr("a + 1 == b * 2");
     let ExprKind::Binary {
         op, left, right, ..
     } = &expr.kind
@@ -98,7 +87,7 @@ fn comparison_lower_than_arithmetic() {
 
 #[test]
 fn and_binds_tighter_than_or() {
-    let expr = parse_first_expr("a or b and c");
+    let expr = first_script_expr("a or b and c");
     let ExprKind::Binary { op, right, .. } = &expr.kind else {
         panic!("expected Binary, got {expr:?}");
     };
@@ -108,7 +97,7 @@ fn and_binds_tighter_than_or() {
 
 #[test]
 fn logical_lower_than_comparison() {
-    let expr = parse_first_expr("x > 0 and y < 10");
+    let expr = first_script_expr("x > 0 and y < 10");
     let ExprKind::Binary {
         op, left, right, ..
     } = &expr.kind
@@ -124,7 +113,7 @@ fn logical_lower_than_comparison() {
 
 #[test]
 fn unary_neg() {
-    let expr = parse_first_expr("-x");
+    let expr = first_script_expr("-x");
     let ExprKind::Unary { op, .. } = &expr.kind else {
         panic!("expected Unary, got {expr:?}");
     };
@@ -133,7 +122,7 @@ fn unary_neg() {
 
 #[test]
 fn unary_binds_tighter_than_binary() {
-    let expr = parse_first_expr("-a + b");
+    let expr = first_script_expr("-a + b");
     let ExprKind::Binary { op, left, .. } = &expr.kind else {
         panic!("expected Binary, got {expr:?}");
     };
@@ -151,13 +140,13 @@ fn unary_binds_tighter_than_binary() {
 
 #[test]
 fn ternary_parses() {
-    let expr = parse_first_expr("x ? 1 : 0");
+    let expr = first_script_expr("x ? 1 : 0");
     assert!(matches!(expr.kind, ExprKind::Ternary { .. }));
 }
 
 #[test]
 fn ternary_lower_than_comparison() {
-    let expr = parse_first_expr("a > b ? 1 : 0");
+    let expr = first_script_expr("a > b ? 1 : 0");
     let ExprKind::Ternary { condition, .. } = &expr.kind else {
         panic!("expected Ternary, got {expr:?}");
     };
@@ -168,7 +157,7 @@ fn ternary_lower_than_comparison() {
 
 #[test]
 fn field_access() {
-    let expr = parse_first_expr("point.x");
+    let expr = first_script_expr("point.x");
     let ExprKind::FieldAccess { field, .. } = &expr.kind else {
         panic!("expected FieldAccess, got {expr:?}");
     };
@@ -177,7 +166,7 @@ fn field_access() {
 
 #[test]
 fn chained_field_access() {
-    let expr = parse_first_expr("a.b.c");
+    let expr = first_script_expr("a.b.c");
     let ExprKind::FieldAccess {
         field, receiver, ..
     } = &expr.kind
@@ -190,7 +179,7 @@ fn chained_field_access() {
 
 #[test]
 fn method_call() {
-    let expr = parse_first_expr("list.push(42)");
+    let expr = first_script_expr("list.push(42)");
     let ExprKind::MethodCall { method, args, .. } = &expr.kind else {
         panic!("expected MethodCall, got {expr:?}");
     };
@@ -202,7 +191,7 @@ fn method_call() {
 
 #[test]
 fn modulus_same_precedence_as_mul() {
-    let expr = parse_first_expr("a * b % c");
+    let expr = first_script_expr("a * b % c");
     let ExprKind::Binary { op, left, .. } = &expr.kind else {
         panic!("expected Binary, got {expr:?}");
     };
@@ -214,7 +203,7 @@ fn modulus_same_precedence_as_mul() {
 
 #[test]
 fn short_closure_single_param() {
-    let expr = parse_first_expr("x -> x * 2");
+    let expr = first_script_expr("x -> x * 2");
     let ExprKind::ShortClosure { params, body, .. } = &expr.kind else {
         panic!("expected ShortClosure, got {expr:?}");
     };
@@ -225,7 +214,7 @@ fn short_closure_single_param() {
 
 #[test]
 fn short_closure_wildcard_param() {
-    let expr = parse_first_expr("_ -> 42");
+    let expr = first_script_expr("_ -> 42");
     let ExprKind::ShortClosure { params, body, .. } = &expr.kind else {
         panic!("expected ShortClosure, got {expr:?}");
     };
@@ -241,7 +230,7 @@ fn short_closure_wildcard_param() {
 
 #[test]
 fn short_closure_body_is_full_expr() {
-    let expr = parse_first_expr("x -> x + 1 * 2");
+    let expr = first_script_expr("x -> x + 1 * 2");
     let ExprKind::ShortClosure { body, .. } = &expr.kind else {
         panic!("expected ShortClosure, got {expr:?}");
     };
@@ -250,7 +239,7 @@ fn short_closure_body_is_full_expr() {
 
 #[test]
 fn short_closure_lower_precedence_than_arithmetic() {
-    let expr = parse_first_expr("a -> a + b");
+    let expr = first_script_expr("a -> a + b");
     let ExprKind::ShortClosure { params, body, .. } = &expr.kind else {
         panic!("expected ShortClosure, got {expr:?}");
     };
@@ -261,24 +250,10 @@ fn short_closure_lower_precedence_than_arithmetic() {
 
 #[test]
 fn short_closure_in_parenthesized_context() {
-    let result = parse("apply(5, x -> x + 1)\n", ParseMode::Script);
-    let call = result
-        .ast
-        .body
-        .unwrap_or_default()
-        .into_iter()
-        .find_map(|s| {
-            if let Statement::Expr(Expr {
-                kind: ExprKind::Call { args, .. },
-                ..
-            }) = s
-            {
-                Some(args)
-            } else {
-                None
-            }
-        });
-    let args = call.expect("expected a call expression");
+    let expr = first_script_expr("apply(5, x -> x + 1)");
+    let ExprKind::Call { args, .. } = expr.kind else {
+        panic!("expected a call expression, got {expr:?}");
+    };
     assert_eq!(args.len(), 2);
     assert!(matches!(args[1].value.kind, ExprKind::ShortClosure { .. }));
 }
@@ -287,7 +262,7 @@ fn short_closure_in_parenthesized_context() {
 
 #[test]
 fn not_unary() {
-    let expr = parse_first_expr("not x");
+    let expr = first_script_expr("not x");
     let ExprKind::Unary { op, .. } = &expr.kind else {
         panic!("expected Unary, got {expr:?}");
     };
@@ -296,7 +271,7 @@ fn not_unary() {
 
 #[test]
 fn not_binds_tighter_than_and() {
-    let expr = parse_first_expr("not a and b");
+    let expr = first_script_expr("not a and b");
     let ExprKind::Binary { op, left, .. } = &expr.kind else {
         panic!("expected Binary, got {expr:?}");
     };
@@ -314,7 +289,7 @@ fn not_binds_tighter_than_and() {
 
 #[test]
 fn concat_parses() {
-    let expr = parse_first_expr("\"a\" <> \"b\"");
+    let expr = first_script_expr("\"a\" <> \"b\"");
     assert!(is_binop(&expr, BinOp::Concat));
 }
 
@@ -322,7 +297,7 @@ fn concat_parses() {
 
 #[test]
 fn function_call_with_args() {
-    let expr = parse_first_expr("f(1, 2, 3)");
+    let expr = first_script_expr("f(1, 2, 3)");
     let ExprKind::Call { args, .. } = &expr.kind else {
         panic!("expected Call, got {expr:?}");
     };
@@ -331,7 +306,7 @@ fn function_call_with_args() {
 
 #[test]
 fn method_call_chains_through_field() {
-    let expr = parse_first_expr("a.b.push(1)");
+    let expr = first_script_expr("a.b.push(1)");
     let ExprKind::MethodCall {
         receiver, method, ..
     } = &expr.kind
@@ -344,7 +319,7 @@ fn method_call_chains_through_field() {
 
 #[test]
 fn call_result_chains_into_field_access() {
-    let expr = parse_first_expr("f().x");
+    let expr = first_script_expr("f().x");
     let ExprKind::FieldAccess {
         receiver, field, ..
     } = &expr.kind
@@ -359,7 +334,7 @@ fn call_result_chains_into_field_access() {
 
 #[test]
 fn int_literal() {
-    let expr = parse_first_expr("42");
+    let expr = first_script_expr("42");
     assert!(matches!(
         expr.kind,
         ExprKind::Literal {
@@ -370,7 +345,7 @@ fn int_literal() {
 
 #[test]
 fn bool_literal_true() {
-    let expr = parse_first_expr("true");
+    let expr = first_script_expr("true");
     assert!(matches!(
         expr.kind,
         ExprKind::Literal {
@@ -381,7 +356,7 @@ fn bool_literal_true() {
 
 #[test]
 fn bool_literal_false() {
-    let expr = parse_first_expr("false");
+    let expr = first_script_expr("false");
     assert!(matches!(
         expr.kind,
         ExprKind::Literal {

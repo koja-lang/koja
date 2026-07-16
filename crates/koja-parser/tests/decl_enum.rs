@@ -5,26 +5,15 @@
 //! - mixed variant kinds within one enum
 //! - generic enums and inline methods (same shape as struct bodies)
 
-use koja_ast::ast::{EnumVariantData, Item, TypeExpr, Visibility};
-use koja_ast::util::dedent;
+use koja_ast::ast::{EnumVariantData, TypeExpr, Visibility};
 
 mod common;
 
-use common::parse_clean;
-
-fn first_enum(source: &str) -> koja_ast::ast::EnumDecl {
-    let file = parse_clean(source);
-    for item in file.items {
-        if let Item::Enum(e) = item {
-            return e;
-        }
-    }
-    panic!("no enum in parsed output");
-}
+use common::first_enum;
 
 #[test]
 fn priv_enum_records_private_visibility() {
-    let src = dedent(
+    let e = first_enum(
         "
         priv enum Mode
           On
@@ -32,14 +21,13 @@ fn priv_enum_records_private_visibility() {
         end
         ",
     );
-    let e = first_enum(&src);
     assert_eq!(e.visibility, Visibility::Private);
     assert_eq!(e.name(), "Mode");
 }
 
 #[test]
 fn enum_defaults_to_public_visibility() {
-    let src = dedent(
+    let e = first_enum(
         "
         enum Mode
           On
@@ -47,13 +35,12 @@ fn enum_defaults_to_public_visibility() {
         end
         ",
     );
-    let e = first_enum(&src);
     assert_eq!(e.visibility, Visibility::Public);
 }
 
 #[test]
 fn unit_variants_only() {
-    let src = dedent(
+    let e = first_enum(
         "
         enum Color
           Red
@@ -62,7 +49,6 @@ fn unit_variants_only() {
         end
         ",
     );
-    let e = first_enum(&src);
     assert_eq!(e.variants.len(), 3);
     for variant in &e.variants {
         assert!(matches!(variant.data, EnumVariantData::Unit));
@@ -71,7 +57,7 @@ fn unit_variants_only() {
 
 #[test]
 fn tuple_variants() {
-    let src = dedent(
+    let e = first_enum(
         "
         enum Shape
           Circle(Int)
@@ -79,7 +65,6 @@ fn tuple_variants() {
         end
         ",
     );
-    let e = first_enum(&src);
     assert_eq!(e.variants.len(), 2);
     match &e.variants[0].data {
         EnumVariantData::Tuple(types) => assert_eq!(types.len(), 1),
@@ -93,14 +78,13 @@ fn tuple_variants() {
 
 #[test]
 fn struct_variants() {
-    let src = dedent(
+    let e = first_enum(
         "
         enum Shape
           Rect { width: Int, height: Int }
         end
         ",
     );
-    let e = first_enum(&src);
     match &e.variants[0].data {
         EnumVariantData::Struct(fields) => {
             assert_eq!(fields.len(), 2);
@@ -113,7 +97,7 @@ fn struct_variants() {
 
 #[test]
 fn mixed_variant_kinds() {
-    let src = dedent(
+    let e = first_enum(
         "
         enum Event
           Quit
@@ -122,7 +106,6 @@ fn mixed_variant_kinds() {
         end
         ",
     );
-    let e = first_enum(&src);
     assert_eq!(e.variants.len(), 3);
     assert!(matches!(e.variants[0].data, EnumVariantData::Unit));
     assert!(matches!(e.variants[1].data, EnumVariantData::Tuple(_)));
@@ -131,7 +114,7 @@ fn mixed_variant_kinds() {
 
 #[test]
 fn generic_enum() {
-    let src = dedent(
+    let e = first_enum(
         "
         enum Option<T>
           None
@@ -139,14 +122,13 @@ fn generic_enum() {
         end
         ",
     );
-    let e = first_enum(&src);
     assert_eq!(e.type_params.len(), 1);
     assert_eq!(e.type_params[0].name, "T");
 }
 
 #[test]
 fn enum_with_inline_methods() {
-    let src = dedent(
+    let e = first_enum(
         "
         enum Light
           Red
@@ -159,7 +141,6 @@ fn enum_with_inline_methods() {
         end
         ",
     );
-    let e = first_enum(&src);
     assert_eq!(e.variants.len(), 3);
     assert_eq!(e.functions.len(), 1);
     assert_eq!(e.functions[0].name, "next");
@@ -167,7 +148,7 @@ fn enum_with_inline_methods() {
 
 #[test]
 fn enum_with_annotation() {
-    let src = dedent(
+    let e = first_enum(
         "
         @doc \"a value or absence\"
         enum Option<T>
@@ -176,21 +157,19 @@ fn enum_with_annotation() {
         end
         ",
     );
-    let e = first_enum(&src);
     assert_eq!(e.annotations.len(), 1);
     assert_eq!(e.annotations[0].name, "doc");
 }
 
 #[test]
 fn tuple_variant_with_generic_inner_type() {
-    let src = dedent(
+    let e = first_enum(
         "
         enum Wrapper
           Box(List<Int>)
         end
         ",
     );
-    let e = first_enum(&src);
     match &e.variants[0].data {
         EnumVariantData::Tuple(types) => {
             assert_eq!(types.len(), 1);

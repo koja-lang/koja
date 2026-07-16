@@ -14,7 +14,7 @@
 //!   named a state type that no package registered (or that lacks a
 //!   `Process` conformance).
 //!
-//! `seal_program` runs as the last sub-pass of `lower_program`; seal
+//! `seal_program` runs as the last sub-pass of `lower_program`. Seal
 //! violations panic per northstar (compiler bugs, not user errors).
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -40,7 +40,7 @@ use crate::union_decl::{IRUnionDecl, discover_unions};
 use crate::{lower, merge, seal, yield_checks};
 
 /// Sealed output of [`lower_program`]'s success path. Backends consume
-/// this directly; they build their own indices over the sealed
+/// this directly. They build their own indices over the sealed
 /// vocabulary and never need to revisit the `CheckedProgram` it came
 /// from.
 ///
@@ -53,7 +53,7 @@ use crate::{lower, merge, seal, yield_checks};
 /// (`m`, `crypto`) collected from every `@extern "C"` function's
 /// [`crate::IRExternAttrs::link_lib`]. The driver feeds these to the
 /// linker as `-l<name>`. Per-function `link_name` overrides stay on
-/// the [`IRFunction`] — only the library set surfaces here.
+/// the [`IRFunction`]. Only the library set surfaces here.
 #[derive(Debug, Clone)]
 pub struct IRProgram {
     pub entry_point: IRSymbol,
@@ -63,8 +63,8 @@ pub struct IRProgram {
 
 impl IRProgram {
     /// Lookup a function across every package by its mangled symbol.
-    /// `O(packages * log functions_per_package)`; for the 1–3 packages
-    /// an program ships today this is overwhelmingly cheap. A
+    /// `O(packages * log functions_per_package)`. For the 1–3 packages
+    /// a program ships today this is overwhelmingly cheap. A
     /// flat index lands when codegen needs hot-path lookups.
     ///
     /// Accepts any `&str`-borrowable input, so backends can pass a
@@ -77,7 +77,7 @@ impl IRProgram {
     }
 
     /// Lookup a struct declaration across every package by its
-    /// mangled symbol. Mirrors [`Self::function`]; backends pass a
+    /// mangled symbol. Mirrors [`Self::function`]. Backends pass a
     /// `&IRSymbol` from `IRType::Struct` / `IRInstruction::StructInit`
     /// / `IRInstruction::FieldGet` directly through the
     /// `IRSymbol: Borrow<str>` impl.
@@ -88,7 +88,7 @@ impl IRProgram {
     }
 
     /// Lookup an enum declaration across every package by its
-    /// mangled symbol. Mirrors [`Self::struct_decl`]; backends pass
+    /// mangled symbol. Mirrors [`Self::struct_decl`]. Backends pass
     /// a `&IRSymbol` from `IRType::Enum` /
     /// `IRInstruction::EnumConstruct` directly through the
     /// `IRSymbol: Borrow<str>` impl.
@@ -97,7 +97,7 @@ impl IRProgram {
     }
 
     /// Lookup a union declaration across every package by its
-    /// mangled symbol. Mirrors [`Self::struct_decl`]; backends pass
+    /// mangled symbol. Mirrors [`Self::struct_decl`]. Backends pass
     /// the `&IRSymbol` carried on `IRType::Union { mangled }`
     /// directly through the `IRSymbol: Borrow<str>` impl.
     pub fn union_decl(&self, mangled: &str) -> Option<&IRUnionDecl> {
@@ -105,7 +105,7 @@ impl IRProgram {
     }
 
     /// Lookup a pooled constant value across every package by its
-    /// mangled symbol. Mirrors [`Self::struct_decl`]; backends pass
+    /// mangled symbol. Mirrors [`Self::struct_decl`]. Backends pass
     /// the `&IRSymbol` carried on [`crate::IRInstruction::LoadConst`]
     /// directly through the `IRSymbol: Borrow<str>` impl.
     pub fn constant_value(&self, mangled: &str) -> Option<&IRConstantValue> {
@@ -114,8 +114,8 @@ impl IRProgram {
             .find_map(|pkg| pkg.constants.get(mangled))
     }
 
-    /// The function the entry point resolves to. Panics if missing —
-    /// the entry-point existence check is a precondition that
+    /// The function the entry point resolves to. Panics if missing,
+    /// because the entry-point existence check is a precondition that
     /// `lower_program` enforces, and `seal_program` re-asserts on the
     /// final IRProgram.
     pub fn entry_function(&self) -> &IRFunction {
@@ -126,7 +126,7 @@ impl IRProgram {
     /// Whether `function` is this program's entry point. Lets backends
     /// distinguish the entry function (which gets exported under the
     /// host-runtime symbol, e.g. `main` on Unix) from every other
-    /// function in the program — symbol-keyed, with no AST types in
+    /// function in the program, symbol-keyed, with no AST types in
     /// scope.
     pub fn is_entry(&self, function: &IRFunction) -> bool {
         function.symbol == self.entry_point
@@ -137,16 +137,16 @@ impl IRProgram {
 ///
 /// Sub-pass order (forced by data dependencies):
 ///
-/// 1. `lower_package` — translate each `CheckedPackage` into an
+/// 1. `lower_package`: translate each `CheckedPackage` into an
 ///    `IRPackage` fragment. Generic decls are skipped (they live in
-///    the typecheck registry); concrete instantiations encountered
+///    the typecheck registry), and concrete instantiations encountered
 ///    along the way accumulate into a flat list keyed at the
 ///    template's [`koja_ast::identifier::GlobalRegistryId`]. Feature-
 ///    gap diagnostics push into the shared buffer and the offending
 ///    decl is dropped.
 /// 2. If any diagnostics were recorded, return
 ///    `Err(LowerError::Diagnostics)` immediately. Seal never runs on
-///    a partial IR — its invariants assume a complete program, and
+///    a partial IR, since its invariants assume a complete program, and
 ///    violating them panics (northstar: seal failures are compiler
 ///    bugs, not user errors).
 /// 3. Resolve the entry state's `Process<C, M, R>` impl, enqueue
@@ -154,16 +154,16 @@ impl IRProgram {
 ///    [`FunctionKind::ProcessEntryWrapper`] thunk under
 ///    `<state>.__entry_wrapper`. The wrapper is routed into the
 ///    state's owning package via the post-instantiate drain.
-/// 4. `generics::instantiate` — dedupe the instantiation list and
+/// 4. `generics::instantiate`: dedupe the instantiation list and
 ///    monomorphize each one off the typecheck registry into the
 ///    [`IRPackage`] that owns the template. The instantiation set is
 ///    dropped here and never reaches merge / seal / backends. The
 ///    drain also routes any leftover synthesized functions (the
 ///    entry wrapper above) to their owning packages.
-/// 5. `merge` — stitch the per-package fragments into a single
+/// 5. `merge`: stitch the per-package fragments into a single
 ///    working `IRProgram`.
-/// 6. Entry-point existence check — surfaces `EntryPointNotFound`.
-/// 7. `seal` — assert sealed-IRProgram invariants. Panics on violation.
+/// 6. Entry-point existence check: surfaces `EntryPointNotFound`.
+/// 7. `seal`: assert sealed-IRProgram invariants. Panics on violation.
 pub fn lower_program(
     checked: &CheckedProgram,
     entry_state: &Identifier,
@@ -216,7 +216,7 @@ pub fn lower_program(
 /// Synthesize the [`FunctionKind::ProcessEntryWrapper`] for the
 /// entry state and enqueue `start` / `run` instantiations. Returns
 /// the entry's user-facing identifier (the state) plus the wrapper's
-/// mangled [`IRSymbol`] — `lower_program` stamps the latter onto
+/// mangled [`IRSymbol`]. `lower_program` stamps the latter onto
 /// [`IRProgram::entry_point`].
 ///
 /// The wrapper drops directly into the state's owning [`IRPackage`]
@@ -344,7 +344,7 @@ pub(crate) fn empty_global_stdlib_package() -> IRPackage {
 /// deduped, sorted list of `link_lib` names. Used at lower time so
 /// backends and cache layers don't re-walk the IR. Functions without
 /// a `link_lib` (bare `@extern "C"` with no `@link`) contribute
-/// nothing; the C symbol is still resolved via the normal libc /
+/// nothing. The C symbol is still resolved via the normal libc /
 /// runtime search path at link time.
 pub(crate) fn collect_link_libraries<'a, I>(packages: I) -> Vec<String>
 where

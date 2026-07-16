@@ -277,8 +277,8 @@ pub(super) fn classify_segment(
                 other => {
                     diagnostics.push(Diagnostic::error(
                         format!(
-                            "IR lower: unrecognized binary segment type annotation `{other}` \
-                             — typecheck must have allowed an unsupported width",
+                            "IR lower: unrecognized binary segment type annotation `{other}`, \
+                             typecheck must have allowed an unsupported width",
                         ),
                         literal_span,
                     ));

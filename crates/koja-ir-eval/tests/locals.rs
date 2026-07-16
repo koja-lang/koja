@@ -2,7 +2,7 @@
 //! [`koja_ir_eval::Interpreter`]. The IR's local-slot
 //! instructions ([`IRInstruction::LocalDecl`] /
 //! [`IRInstruction::LocalRead`] / [`IRInstruction::LocalWrite`])
-//! lower to per-frame storage in the interpreter; these tests pin
+//! lower to per-frame storage in the interpreter. These tests pin
 //! the observable behavior end-to-end:
 //!
 //! - Variable declaration + read returns the bound value.
@@ -76,7 +76,7 @@ fn param_reassignment_replaces_slot_in_callee() {
 #[test]
 fn nested_call_does_not_leak_callee_local_into_caller_frame() {
     // Each function gets its own `Frame`. `caller`'s `x` and
-    // `helper`'s `n` are different slots; if frames bled together
+    // `helper`'s `n` are different slots. If frames bled together
     // we'd see `helper`'s value (5) instead of `caller`'s (1).
     let source = "
         fn helper(n: Int) -> Int

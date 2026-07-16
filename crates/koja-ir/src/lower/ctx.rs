@@ -1,7 +1,7 @@
 //! Per-function lowering context: counters, [`CFGBuilder`], and the
 //! `value -> IRType` index every recursive helper threads through.
 //!
-//! No language-aware logic lives here — this is the bookkeeping
+//! No language-aware logic lives here. This is the bookkeeping
 //! layer the rest of the [`crate::lower`] modules sit on top of.
 //!
 //! Three types live here together because they're co-evolving and
@@ -43,7 +43,7 @@ use crate::types::{IRType, ValueId};
 /// helper. Bundling these sinks keeps helper signatures under the
 /// clippy `too_many_arguments` threshold and makes the "what flows
 /// back upward" group explicit. Read-only inputs (the typecheck
-/// registry) stay separate args — they have a different direction
+/// registry) stay separate args, since they have a different direction
 /// of flow and don't share lifetime scope.
 ///
 /// `lower_program` / `lower_script` construct one [`LowerOutput`]
@@ -55,7 +55,7 @@ use crate::types::{IRType, ValueId};
 pub(crate) struct LowerOutput {
     pub(crate) diagnostics: Vec<Diagnostic>,
     /// Cache of fn-as-value adapter wrappers, keyed by the wrapped
-    /// function's symbol. One wrapper per named fn used as a value;
+    /// function's symbol. One wrapper per named fn used as a value.
     /// `synthesize_fn_as_closure_wrappers` reads the cache before
     /// minting to keep the package's function table dedup'd.
     pub(crate) fn_as_closure_wrappers: BTreeMap<IRSymbol, IRSymbol>,
@@ -63,7 +63,7 @@ pub(crate) struct LowerOutput {
     /// Dedupe set for [`crate::FunctionKind::SpawnWrapper`] symbols
     /// minted during `spawn` lowering. Each state cell gets one
     /// wrapper per [`super::process`] turn-around regardless of how
-    /// many `spawn S.start(...)` sites hit it; the IRPackage's
+    /// many `spawn S.start(...)` sites hit it, so the IRPackage's
     /// function table only sees one entry.
     pub(crate) spawn_wrappers: BTreeSet<IRSymbol>,
     /// Closure bodies, fn-as-value adapters, and spawn-wrapper
@@ -74,10 +74,10 @@ pub(crate) struct LowerOutput {
 
 /// The shape every `lower_*` helper returns. `Open` carries the
 /// trailing value (when the construct produces one) and the block
-/// where flow continues; `Closed` signals that an inner statement
+/// where flow continues. `Closed` signals that an inner statement
 /// already terminated the function (the only path today is
 /// `Statement::Return`). Closed branches don't fall through to a
-/// surrounding merge block — the caller's wiring sees
+/// surrounding merge block. The caller's wiring sees
 /// `FlowResult::Closed` directly and skips the fall-through wiring
 /// it would otherwise emit.
 #[derive(Debug, Clone)]
@@ -108,7 +108,7 @@ pub(crate) enum FlowResult {
 /// snapshots, restores, and merges it per arm.
 ///
 /// One context per `IRFunction` (or per script body). Discarded after
-/// the function's blocks are extracted via [`Self::into_blocks`];
+/// the function's blocks are extracted via [`Self::into_blocks`], and
 /// downstream consumers (seal, backends) build their own indices.
 pub(crate) struct FnLowerCtx {
     pub(crate) cfg: CFGBuilder,
@@ -119,9 +119,9 @@ pub(crate) struct FnLowerCtx {
     declared: BTreeSet<IRLocalId>,
     locals: BTreeMap<IRLocalId, IRType>,
     closures: ClosureState,
-    /// Stack of pending loop-exit blocks — one entry per enclosing
+    /// Stack of pending loop-exit blocks, one entry per enclosing
     /// `loop` / `while`. [`super::loops`] pushes the exit on entry
-    /// and pops on exit; [`super::body::lower_break_stmt`] peeks
+    /// and pops on exit, and [`super::body::lower_break_stmt`] peeks
     /// the top to find the [`IRBlockId`] its `Branch` should
     /// target. Mirrors v1's `FnLowerState::loop_exit` stack.
     loop_exit: Vec<IRBlockId>,
@@ -147,8 +147,8 @@ pub(crate) struct FnLowerCtx {
 }
 
 /// Per-function closure bookkeeping. Two roles: outer fns mint
-/// child names off `enclosing_symbol` + `next_index`; closure-body
-/// fns redirect outer-local idents through `captures`.
+/// child names off `enclosing_symbol` + `next_index`, and
+/// closure-body fns redirect outer-local idents through `captures`.
 #[derive(Default)]
 pub(crate) struct ClosureState {
     enclosing_symbol: Option<IRSymbol>,
@@ -205,7 +205,7 @@ impl FnLowerCtx {
         }
     }
 
-    /// Mark `value` as owning a fresh heap allocation — eligible to be
+    /// Mark `value` as owning a fresh heap allocation, eligible to be
     /// moved into an owner or freed as a discarded temp. Called by the
     /// drop-glue lowering at every certain-fresh producer.
     pub(crate) fn mark_owned(&mut self, value: ValueId) {
@@ -213,7 +213,7 @@ impl FnLowerCtx {
     }
 
     /// Does `value` own a fresh heap allocation? Absent values are
-    /// borrowed (literal / `const` / read / param) — cloned on
+    /// borrowed (literal / `const` / read / param), cloned on
     /// acquisition, never freed as a temp.
     pub(crate) fn is_owned(&self, value: ValueId) -> bool {
         self.owned_values.contains(&value)
@@ -238,7 +238,7 @@ impl FnLowerCtx {
     /// lowering ([`super::loops`]) uses this to release body-scoped
     /// bindings at the end of each iteration: such bindings leave
     /// scope at the back-edge, so they must be dropped there and kept
-    /// out of the function-exit drop set — where an unexecuted loop
+    /// out of the function-exit drop set, where an unexecuted loop
     /// body would otherwise leave them uninitialized.
     pub(crate) fn heap_slots_declared_since(
         &self,
@@ -261,18 +261,18 @@ impl FnLowerCtx {
         self.loop_exit.push(exit);
     }
 
-    /// Pop the topmost loop-exit block. Panics on an empty stack —
-    /// every push has a matching pop in the same lowering scope.
+    /// Pop the topmost loop-exit block. Panics on an empty stack,
+    /// since every push has a matching pop in the same lowering scope.
     pub(crate) fn pop_loop_exit(&mut self) {
         self.loop_exit
             .pop()
-            .expect("IR lower: pop_loop_exit on empty stack — push/pop imbalance");
+            .expect("IR lower: pop_loop_exit on empty stack (push/pop imbalance)");
     }
 
     /// The innermost enclosing loop's exit block, if any. `break`
     /// lowering consults this to pick its `Branch` target. `None`
-    /// means `break` was reached outside any loop — typecheck
-    /// should have already diagnosed; lowering panics.
+    /// means `break` was reached outside any loop, which typecheck
+    /// should have already diagnosed, so lowering panics.
     pub(crate) fn current_loop_exit(&self) -> Option<IRBlockId> {
         self.loop_exit.last().copied()
     }
@@ -325,9 +325,9 @@ impl FnLowerCtx {
     /// when the joined type is heap-managed. Every reaching arm hands
     /// the param an *acquired* value (see
     /// [`super::arms::finalize_arm_value`]), so the merged result is a
-    /// single-owner temp the consumer moves into an owner or releases —
-    /// without it, a constructed/called arm value would leak through the
-    /// join.
+    /// single-owner temp the consumer moves into an owner or releases.
+    /// Without it, a constructed/called arm value would leak through
+    /// the join.
     pub(crate) fn declare_merge_param(&mut self, block: IRBlockId, ty: IRType) -> ValueId {
         let owned = ty.is_heap_managed();
         let dest = self.declare_block_param(block, ty);
@@ -338,13 +338,13 @@ impl FnLowerCtx {
     }
 
     /// The entry block of the function being lowered. Panics if
-    /// called before [`Self::fresh_block`] — every consumer (param
+    /// called before [`Self::fresh_block`], since every consumer (param
     /// promotion, body-assignment lowering) sequences after entry
     /// creation.
     pub(crate) fn entry_block(&self) -> IRBlockId {
         self.entry_block.expect(
-            "IR lower: entry_block consulted before any block was opened — \
-             lower_function ordering bug",
+            "IR lower: entry_block consulted before any block was opened \
+             (lower_function ordering bug)",
         )
     }
 
@@ -359,7 +359,7 @@ impl FnLowerCtx {
 
     /// Record that `local` has been declared with type `ty`. The
     /// caller should emit the `LocalDecl` when this is the first
-    /// declaration; subsequent calls are no-ops.
+    /// declaration. Subsequent calls are no-ops.
     pub(crate) fn mark_local_declared(&mut self, local: IRLocalId, ty: IRType) -> bool {
         if !self.declared.insert(local) {
             return false;
@@ -400,8 +400,8 @@ impl FnLowerCtx {
     }
 
     /// Merge per-arm post-state snapshots into the live slot map.
-    /// A slot survives the join only when every branch declared it;
-    /// declarations confined to one arm don't leak past the merge.
+    /// A slot survives the join only when every branch declared it,
+    /// so declarations confined to one arm don't leak past the merge.
     pub(crate) fn merge_slot_states(&mut self, branches: Vec<SlotStateSnapshot>) {
         if branches.is_empty() {
             return;
@@ -424,27 +424,27 @@ impl FnLowerCtx {
         self.locals = merged;
     }
 
-    /// Lookup the recorded `IRType` for `id`. Panics on a miss —
+    /// Lookup the recorded `IRType` for `id`. Panics on a miss, since
     /// every emitted `ValueId` registers its type at allocation time,
     /// so a miss is a lowering bug.
     pub(crate) fn type_of(&self, id: ValueId) -> IRType {
         self.value_types
             .get(&id)
             .cloned()
-            .unwrap_or_else(|| panic!("IR lower: missing type for {id} — lowering bug"))
+            .unwrap_or_else(|| panic!("IR lower: missing type for {id} (lowering bug)"))
     }
 
     /// Consume the context and return the accumulated block list.
     /// Asserts via `CFGBuilder`'s closed-set that every block has had
-    /// a real terminator stamped — an unclosed block reaching the
+    /// a real terminator stamped, since an unclosed block reaching the
     /// caller is a lowering bug.
     pub(crate) fn into_blocks(self) -> Vec<IRBasicBlock> {
         let (blocks, closed) = self.cfg.into_blocks_with_closed();
         for block in &blocks {
             if !closed.contains_key(&block.id) {
                 panic!(
-                    "IR lower: block {} ({}) was opened but never had its terminator set — \
-                     lowering bug",
+                    "IR lower: block {} ({}) was opened but never had its terminator set \
+                     (lowering bug)",
                     block.id, block.label,
                 );
             }

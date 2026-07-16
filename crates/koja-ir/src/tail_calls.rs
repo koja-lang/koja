@@ -2,12 +2,12 @@
 //! across an [`crate::IRProgram`] / [`crate::IRScript`] and rewrites
 //! self-recursive call-then-return shapes into [`IRTerminator::TailCall`].
 //!
-//! The lowering layer never emits `TailCall` directly — the pattern
+//! The lowering layer never emits `TailCall` directly, because the pattern
 //! is best detected on the merged IR after monomorphization, when
 //! every callee resolves to its final symbol. Backends consume the
 //! rewritten IR and turn `TailCall` into in-frame state rebinding
-//! plus a jump (LLVM: store args + branch to a per-function loop
-//! header; eval: trampoline back through `execute_function` with
+//! plus a jump (LLVM stores args and branches to a per-function loop
+//! header, and eval trampolines back through `execute_function` with
 //! the new args).
 //!
 //! Detection shape (per block):
@@ -21,7 +21,7 @@
 //! ```
 //!
 //! Trailing drops are preserved (they release this iteration's owned
-//! locals before the back-edge). The `Call` is removed; the `Return`
+//! locals before the back-edge). The `Call` is removed, and the `Return`
 //! is replaced by `TailCall { callee, args }`.
 //!
 //! Cross-function tail calls (callee != enclosing symbol) and
@@ -34,7 +34,7 @@ use crate::package::IRPackage;
 use crate::types::{IRType, ValueId};
 
 /// Rewrite every self-recursive tail-position call across `packages`
-/// into [`IRTerminator::TailCall`]. Idempotent — re-running on an
+/// into [`IRTerminator::TailCall`]. Idempotent, because re-running on an
 /// already-rewritten IR is a no-op since `TailCall` blocks no longer
 /// match the `Return`-terminated detection pattern.
 pub(crate) fn rewrite_tail_calls(packages: &mut [IRPackage]) {
@@ -61,7 +61,7 @@ pub fn function_has_tail_call(function: &IRFunction) -> bool {
 fn rewrite_function(function: &mut IRFunction) {
     // The forwarder collapse exists solely to expose a self-recursive
     // call buried behind a control-flow merge, so only run it on
-    // self-recursive functions. This keeps unrelated merges intact —
+    // self-recursive functions. This keeps unrelated merges intact,
     // notably the single-`Return` shape the `main` wrapper depends on
     // (a non-recursive function with a value-producing `if`/`match`
     // tail would otherwise gain multiple return blocks).
@@ -78,7 +78,7 @@ fn rewrite_function(function: &mut IRFunction) {
     }
 }
 
-/// Whether `function` calls itself directly — the prerequisite for
+/// Whether `function` calls itself directly, the prerequisite for
 /// any self-tail-call, and the gate on the return-forwarder collapse.
 fn contains_self_call(function: &IRFunction) -> bool {
     let symbol = &function.symbol;
@@ -94,12 +94,12 @@ fn contains_self_call(function: &IRFunction) -> bool {
 /// collapsing **return-forwarding** blocks until none remain.
 ///
 /// A self-recursive call that is the *value* of an `if` / `match` /
-/// `receive` reaches the function's `Return` indirectly: the arm
+/// `receive` reaches the function's `Return` indirectly. The arm
 /// branches into a merge block carrying the call result as a
 /// [`crate::function::BlockParam`], and that merge block returns the
 /// param. The block holding the `Call` therefore ends in a `Branch`,
 /// not a `Return`, so [`match_tail_call`] can't see it and the call
-/// stays a real frame-growing recursion — fatal for the long-running
+/// stays a real frame-growing recursion, fatal for the long-running
 /// `receive ... after -> self.loop()` actor idiom (unbounded stack).
 ///
 /// A return-forwarder is a block of the shape
@@ -112,7 +112,7 @@ fn contains_self_call(function: &IRFunction) -> bool {
 /// ```
 ///
 /// Each predecessor reaching `M` by an unconditional `Branch(M, [x])`
-/// is rewritten to run `M`'s exit drops in place and `Return x`; `M`
+/// is rewritten to run `M`'s exit drops in place and `Return x`. `M`
 /// then has no predecessors and is removed. Running to a fixpoint
 /// peels nested merges outermost-first (a `receive` merge collapses
 /// into the `match` merge feeding it, which collapses into that
@@ -129,7 +129,7 @@ fn collapse_return_forwarders(function: &mut IRFunction) {
 /// Collapse the first collapsible return-forwarder found, returning
 /// `true` if one was rewritten. `false` signals the fixpoint.
 fn collapse_one_forwarder(function: &mut IRFunction) -> bool {
-    // The entry block (index 0) is never a merge; start the scan past
+    // The entry block (index 0) is never a merge, so start the scan past
     // it so a degenerate single-block forwarder can't be considered.
     let plan = (1..function.blocks.len()).find_map(|index| {
         let block = &function.blocks[index];
@@ -176,11 +176,11 @@ fn return_forwarder_param(block: &IRBasicBlock) -> Option<ValueId> {
 }
 
 /// Every predecessor edge into `target` as `(block index, branch arg)`
-/// pairs — but only when *all* references to `target` are single-arg
+/// pairs, but only when *all* references to `target` are single-arg
 /// unconditional branches. Returns `None` if any edge is a
 /// `CondBranch` into `target` (or a `Branch` with the wrong arg
-/// count), leaving the merge intact; `None` too when nothing branches
-/// to `target`.
+/// count), leaving the merge intact, and `None` too when nothing
+/// branches to `target`.
 fn collapsible_edges(function: &IRFunction, target: IRBlockId) -> Option<Vec<(usize, ValueId)>> {
     let mut edges = Vec::new();
     for (index, block) in function.blocks.iter().enumerate() {
@@ -202,7 +202,7 @@ fn collapsible_edges(function: &IRFunction, target: IRBlockId) -> Option<Vec<(us
     (!edges.is_empty()).then_some(edges)
 }
 
-/// The first unused [`ValueId`] for `function` — one past the maximum
+/// The first unused [`ValueId`] for `function`, one past the maximum
 /// id defined by any parameter, block parameter, or instruction. The
 /// rewrite mints back-edge arg-clone destinations from here.
 fn next_value_id(function: &IRFunction) -> u32 {
@@ -270,12 +270,12 @@ fn apply_plan(
     block.instructions.remove(plan.call_index);
 
     // Acquire each heap-managed arg into a fresh owned value *where the
-    // `Call` sat* — i.e. before the trailing exit drops. The back-edge
+    // `Call` sat*, i.e. before the trailing exit drops. The back-edge
     // then stores the clone, so rebinding a param slot never reads
     // through storage the drop just released. Without this, a
     // self-tail-call passing a heap slot (`f(list, ...)`) would drop
     // the slot's allocation and then store the freed pointer back. The
-    // emitted `Clone` is an inline `rc++` for a heap leaf; for a
+    // emitted `Clone` is an inline `rc++` for a heap leaf. For a
     // composite the later [`crate::elaborate`] pass rewrites it into a
     // `clone_T` call (or a register copy for an all-`Copy` aggregate).
     let mut args = plan.args;
@@ -319,7 +319,7 @@ mod tests {
     /// matches the canonical tail-call shape: param promotion in the
     /// entry, then `Call self(arg)`, then `Return Some(call_dest)`.
     /// The single param is typed `param_ty`. The returned function is
-    /// the rewrite-pass input; assertions inspect the post-rewrite
+    /// the rewrite-pass input, and assertions inspect the post-rewrite
     /// shape.
     fn build_self_call_with_param(param_ty: IRType) -> IRFunction {
         let symbol = IRSymbol::synthetic("Test.loop_forever".to_string());
@@ -368,7 +368,7 @@ mod tests {
         }
     }
 
-    /// The canonical Int64-param shape most tests build from — a scalar
+    /// The canonical Int64-param shape most tests build from. A scalar
     /// param needs no back-edge acquire.
     fn build_self_call_function() -> IRFunction {
         build_self_call_with_param(IRType::Int64)
@@ -411,7 +411,7 @@ mod tests {
     }
 
     /// The destination of the `Clone` inserted for the single arg, if
-    /// any — the rewrite acquires a heap-managed arg before the
+    /// any. The rewrite acquires a heap-managed arg before the
     /// back-edge so the trailing slot drop can't release storage the
     /// new args still reference.
     fn rewritten_arg_clone_dest(function: &IRFunction) -> Option<ValueId> {
@@ -462,7 +462,7 @@ mod tests {
         rewrite_tail_calls(&mut packages);
         let function = packages[0].functions.get(symbol.mangled()).unwrap();
         // The composite `Clone` is elaborated into a `clone_T` call
-        // downstream; here it must be present so the back-edge rebinds
+        // downstream. Here it must be present so the back-edge rebinds
         // an independent value rather than a freed buffer.
         assert!(
             rewritten_arg_clone_dest(function).is_some(),
@@ -535,8 +535,8 @@ mod tests {
         );
     }
 
-    /// Build the canonical `if`-wrapped self-call: the recursive call
-    /// is the value of the `else` arm and reaches `Return` through a
+    /// Build the canonical `if`-wrapped self-call, where the recursive
+    /// call is the value of the `else` arm and reaches `Return` through a
     /// merge-block param, not a direct `Return`. Shape:
     ///
     /// ```text
@@ -680,7 +680,7 @@ mod tests {
     }
 
     /// A merge whose exit drops sit in the forwarder must have them
-    /// replayed into each predecessor before the back-edge — the
+    /// replayed into each predecessor before the back-edge. The
     /// acquire of the heap arg still happens at the call site so the
     /// drop can't free storage the back-edge rebinds.
     #[test]

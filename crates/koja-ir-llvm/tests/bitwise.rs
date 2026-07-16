@@ -10,7 +10,7 @@
 //!   demonstrating the LLVM instruction the emitter chose (`and`,
 //!   `or`, `xor`, `xor ... -1` for `bnot`, `shl`, `ashr`).
 //! - narrow-receiver cells for `UInt8.band` (`and i8`), `UInt8.bsr`
-//!   (`lshr i8` — the unsigned-vs-signed shift divergence visible
+//!   (`lshr i8`, the unsigned-vs-signed shift divergence visible
 //!   only at the LLVM layer), and `Int32.bsl` (operand-typed
 //!   `shl i32` plus the shift-count `trunc` from the `Int = i64`
 //!   second arg). Reachable since literal-fit coercion lets the
@@ -74,7 +74,7 @@ fn int_bnot_emits_xor_with_minus_one() {
 #[test]
 fn int_bsl_emits_shl_with_native_width_count() {
     // Receiver is `Int = i64`, shift count is `Int = i64`, so the
-    // count flows in as-is — no `trunc` needed.
+    // count flows in as-is, no `trunc` needed.
     let body = emit_intrinsic_body("1.bsl(4)", "Global.Int.bsl");
     assert_contains(&body, "shl i64 %0, %1");
     assert!(
@@ -86,7 +86,7 @@ fn int_bsl_emits_shl_with_native_width_count() {
 
 #[test]
 fn int_bsr_signed_receiver_emits_arithmetic_shift() {
-    // Signed receiver = arithmetic shift; LLVM idiom is `ashr` (the
+    // Signed receiver = arithmetic shift. LLVM idiom is `ashr` (the
     // emitter passes `sign_extend = true` to inkwell's
     // `build_right_shift`, which materializes as `ashr`).
     let body = emit_intrinsic_body("(-8).bsr(1)", "Global.Int.bsr");
@@ -94,16 +94,14 @@ fn int_bsr_signed_receiver_emits_arithmetic_shift() {
     assert_contains(&body, "ret i64 %bsr");
 }
 
-// ---------------------------------------------------------------------------
 // Narrow-receiver cells. Reachable from a script body via the
 // literal-fit coercion at sized param slots. Wrapper-typed call
 // args force the literal through the narrow `Bitwise` impl so the
 // emitter actually picks the operand-typed instruction.
-// ---------------------------------------------------------------------------
 
 #[test]
 fn uint8_band_emits_and_i8() {
-    // Narrow-receiver `band` lowers to `and i8 %0, %1`; the literal
+    // Narrow-receiver `band` lowers to `and i8 %0, %1`. The literal
     // `0xFF` flows in as `Const i8 -1`, exercising the typecheck
     // coercion record at lower time.
     let source = "
@@ -139,7 +137,7 @@ fn uint8_bsr_emits_logical_shift() {
 #[test]
 fn int32_bsl_emits_shl_with_truncated_shift_count() {
     // `Int32.bsl` takes its receiver as `i32` and its shift count
-    // as `Int = i64`; the emitter must `trunc i64 %n to i32`
+    // as `Int = i64`. The emitter must `trunc i64 %n to i32`
     // before feeding the count into `shl`. Pinned here so a
     // regression in the count-narrowing path fails this case.
     let source = "

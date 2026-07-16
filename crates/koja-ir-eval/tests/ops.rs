@@ -63,7 +63,7 @@ fn neg_flips_int_sign() {
 
 #[test]
 fn string_concat_appends_payloads() {
-    // End-to-end String <> String through the interpreter — pins
+    // End-to-end String <> String through the interpreter, pinning
     // `concat_values`'s String arm. Phase C will add Binary/Bits
     // coverage once `<<…>>` literals can mint those values from
     // source.
@@ -124,7 +124,7 @@ fn float_arithmetic_evaluates_natively() {
 
 #[test]
 fn float_division_by_zero_panics() {
-    // `1.0 / 0.0` would be `+inf` under raw IEEE; the finite-only
+    // `1.0 / 0.0` would be `+inf` under raw IEEE. The finite-only
     // `Float` invariant traps it instead.
     let error = evaluate_script("1.0 / 0.0\n").expect_err("non-finite result must trap");
     assert_eq!(
@@ -137,7 +137,7 @@ fn float_division_by_zero_panics() {
 
 #[test]
 fn float_nan_producing_division_panics() {
-    // `0.0 / 0.0` would be `NaN`; with the finite-only invariant it
+    // `0.0 / 0.0` would be `NaN`. With the finite-only invariant it
     // traps, so NaN is unrepresentable in Koja.
     let error = evaluate_script("0.0 / 0.0\n").expect_err("NaN result must trap");
     assert_eq!(
@@ -175,7 +175,7 @@ fn float32_arithmetic_stays_at_f32_width() {
 #[test]
 fn float32_arithmetic_rounds_at_f32_precision() {
     // 2^24 + 1 is not representable in f32 and rounds (half-to-even)
-    // back to 2^24 — proof the math runs at f32 width, not widened to
+    // back to 2^24, proof the math runs at f32 width, not widened to
     // f64 and cast.
     assert_eq!(
         evaluate_script("a: Float32 = 16777216.0\nb: Float32 = 1.0\na + b\n").unwrap(),

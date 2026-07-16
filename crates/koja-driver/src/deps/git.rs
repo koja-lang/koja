@@ -67,7 +67,7 @@ pub(crate) fn ensure_mirror(url: &str) -> Result<PathBuf, String> {
 /// usually means the URL is misspelled.
 fn auth_hint(url: &str) -> &'static str {
     if url.contains("github.com") {
-        " (GitHub asks for credentials when a repository does not exist; check the owner/repo spelling and your access)"
+        " (GitHub asks for credentials when a repository does not exist, so check the owner/repo spelling and your access)"
     } else {
         ""
     }
@@ -198,7 +198,7 @@ fn find_ref(refs: &[(String, String)], name: &str) -> Option<String> {
 }
 
 /// Run git with stdout captured as UTF-8. stdin and stderr stay
-/// inherited so auth prompts work; `quiet` nulls stderr for probes
+/// inherited so auth prompts work, and `quiet` nulls stderr for probes
 /// whose failure is an expected outcome (e.g. `cat-file -e`).
 fn run(args: &[&str], quiet: bool) -> Result<String, String> {
     let bytes = run_raw(args, quiet)?;
@@ -223,7 +223,7 @@ fn run_raw(args: &[&str], quiet: bool) -> Result<Vec<u8>, String> {
         .output()
         .map_err(|err| match err.kind() {
             io::ErrorKind::NotFound => {
-                "`git` binary not found; git dependencies require git on PATH".to_string()
+                "`git` binary not found (git dependencies require git on PATH)".to_string()
             }
             _ => format!("cannot run git: {err}"),
         })?;

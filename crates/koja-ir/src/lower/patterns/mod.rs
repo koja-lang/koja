@@ -18,19 +18,19 @@
 //!
 //! # Module layout
 //!
-//! - [`enums`] — `EnumUnit` / `EnumTuple` / `EnumStruct` shapes,
+//! - [`enums`]: `EnumUnit` / `EnumTuple` / `EnumStruct` shapes,
 //!   `emit_enum_tag_eq`, and the shared enum-payload metadata
 //!   resolver. Tuple / struct variants recursively lower their
 //!   payload patterns and emit AND-chained `TestStep`s for any
 //!   non-binding inner shape.
-//! - [`structs`] — plain-struct destructure. Field patterns
-//!   recursively lower against the field type; bindings produce
+//! - [`structs`]: plain-struct destructure. Field patterns
+//!   recursively lower against the field type. Bindings produce
 //!   chained [`BindOp::StructField`] binds, non-binding fields add
 //!   AND-chained `TestStep`s.
-//! - [`or_pattern`] — `A | B | C` chained through fresh
+//! - [`or_pattern`]: `A | B | C` chained through fresh
 //!   `match_or_alt_<n>` blocks, one [`TestStep`] per alternative
 //!   under [`ChainMode::Or`].
-//! - [`literals`] — the `subject == const(value)` emission shared
+//! - [`literals`]: the `subject == const(value)` emission shared
 //!   between the dispatcher's `Pattern::Literal` arm and the
 //!   or-pattern literal-alternative arm.
 
@@ -73,13 +73,13 @@ pub(super) enum PatternCheck {
     /// destructure whose every listed field is itself a catch-all).
     /// `binds` carries any field-extraction binds the driver must
     /// emit at the head of the success block before running the
-    /// guard / body. Wildcard and binding always have empty binds;
-    /// struct destructure carries one entry per named binding field
+    /// guard / body. Wildcard and binding always have empty binds,
+    /// while struct destructure carries one entry per named binding field
     /// (potentially through nested fields).
     CatchAll { binds: Vec<PayloadBind> },
     /// One or more chained predicates. `chain_mode` decides the
     /// wiring: [`ChainMode::And`] for struct/enum field-test chains
-    /// (every step must succeed for the arm to fire);
+    /// (every step must succeed for the arm to fire), and
     /// [`ChainMode::Or`] for or-pattern alternatives (any step
     /// succeeding fires the arm). Single-step patterns
     /// (`Literal` / `EnumUnit` / a struct or enum whose interior
@@ -97,17 +97,17 @@ pub(super) enum PatternCheck {
 #[derive(Clone, Copy, Eq, PartialEq)]
 pub(super) enum ChainMode {
     /// Every step must succeed for the arm to fire. Interior
-    /// successes chain to the next step's `test_block`; any
+    /// successes chain to the next step's `test_block`, and any
     /// failure short-circuits to the caller-supplied fall-through.
     And,
     /// Any step succeeding fires the arm. Interior failures chain
-    /// to the next step's `test_block`; only the last step's
+    /// to the next step's `test_block`, and only the last step's
     /// failure reaches the caller-supplied fall-through.
     Or,
 }
 
 /// One predicate gating arm execution. The test instructions are
-/// already emitted into `test_block`; the driver sets that block's
+/// already emitted into `test_block`. The driver sets that block's
 /// terminator to a `CondBranch` keyed on `cond`.
 pub(super) struct TestStep {
     pub(super) cond: ValueId,
@@ -115,8 +115,8 @@ pub(super) struct TestStep {
 }
 
 /// One field binding emitted on the success edge. The driver
-/// applies `chain` to the outer subject — one extraction op per
-/// nesting level — and writes the final value into `local`.
+/// applies `chain` to the outer subject (one extraction op per
+/// nesting level) and writes the final value into `local`.
 pub(super) struct PayloadBind {
     pub(super) local: IRLocalId,
     pub(super) chain: Vec<BindStep>,
@@ -132,8 +132,8 @@ pub(super) struct BindStep {
 
 /// Which IR instruction a [`BindStep`] emits. `EnumPayloadField`
 /// emits `EnumPayloadFieldGet` (tag-gated, safe only when the
-/// enclosing tag test has already fired); `StructField` emits
-/// `FieldGet` (no tag — the input is already a struct);
+/// enclosing tag test has already fired). `StructField` emits
+/// `FieldGet` (no tag, since the input is already a struct).
 /// `UnionPayload` emits `UnionPayloadGet` (tag-gated extraction
 /// against a tagged union member).
 pub(super) enum BindOp {
@@ -264,7 +264,7 @@ pub(super) fn lower_pattern_check(
             let resolved = resolved_type.as_ref().unwrap_or_else(|| {
                 panic!(
                     "IR lower: typed-binding pattern `{name}` reaches lower without a \
-                     resolved_type — typecheck-resolve invariant violation",
+                     resolved_type (typecheck-resolve invariant violation)",
                 );
             });
             let member_ir =
@@ -273,7 +273,7 @@ pub(super) fn lower_pattern_check(
             let IRType::Union { members, .. } = &subject_ir else {
                 panic!(
                     "IR lower: typed-binding pattern `{name}` reaches lower with \
-                     non-Union subject `{subject_ir:?}` — typecheck-resolve invariant \
+                     non-Union subject `{subject_ir:?}`, typecheck-resolve invariant \
                      violation",
                 );
             };
@@ -283,8 +283,8 @@ pub(super) fn lower_pattern_check(
                 .unwrap_or_else(|| {
                     panic!(
                         "IR lower: typed-binding pattern `{name}` member \
-                         `{member_ir:?}` is not in subject union `{subject_ir:?}` — \
-                         typecheck-resolve invariant violation",
+                         `{member_ir:?}` is not in subject union `{subject_ir:?}` \
+                         (typecheck-resolve invariant violation)",
                     )
                 }) as u8;
             let cond = emit_union_tag_eq(inputs.subject, &subject_ir, member_index, ctx, block);
@@ -338,7 +338,7 @@ fn lower_binding_check(
     let id = local_id.unwrap_or_else(|| {
         panic!(
             "IR lower: match binding `{name}` reaches lower without a stamped \
-             LocalId — typecheck resolve invariant violation",
+             LocalId (typecheck resolve invariant violation)",
         );
     });
     let ir_local = IRLocalId::from_local_id(id);
@@ -369,7 +369,7 @@ pub(super) fn require_local(local_id: Option<LocalId>, name: &str) -> IRLocalId 
     let id = local_id.unwrap_or_else(|| {
         panic!(
             "IR lower: pattern binding `{name}` reaches lower without a \
-             stamped LocalId — typecheck-resolve invariant violation",
+             stamped LocalId (typecheck-resolve invariant violation)",
         );
     });
     IRLocalId::from_local_id(id)

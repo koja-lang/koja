@@ -4,11 +4,11 @@
 //! ever see leaf `Clone` / `DeepCopy` / `Drop` inline and a uniform
 //! `Call` for composites (northstar: no dynamic-dispatch IR).
 //!
-//! A composite is rewritten iff its type carries glue — i.e. it is in
+//! A composite is rewritten iff its type carries glue, i.e. it is in
 //! the `needed` set [`super::discover_glue_types`] produced (or, for
 //! `DeepCopy`, the `deep_needed` set from
 //! [`super::discover_deep_copy_types`]). Those sets are exactly the
-//! heap-managed composites; a no-glue composite (a struct of scalars,
+//! heap-managed composites, and a no-glue composite (a struct of scalars,
 //! say) is left as a plain `Clone` / `Drop` the backend renders as a
 //! register copy / no-op. Leaves stay inline `rc++` / `rc--`.
 //!
@@ -187,8 +187,9 @@ mod tests {
 
         rewrite_blocks_standalone(&mut blocks, &needed, &BTreeSet::new());
         let instructions = &blocks[0].instructions;
-        // Clone -> Call clone glue; DropValue -> Call drop glue;
-        // DropLocal -> LocalRead + Call drop glue; leaf Clone intact.
+        // Clone -> Call clone glue, DropValue -> Call drop glue,
+        // DropLocal -> LocalRead + Call drop glue, and the leaf
+        // Clone stays intact.
         assert_eq!(instructions.len(), 5);
         assert!(matches!(
             &instructions[0],
@@ -228,8 +229,8 @@ mod tests {
                     source: ValueId(0),
                     ty: composite.clone(),
                 },
-                // A `Clone` of the same type stays inline — only the
-                // deep-copy family is in `deep_needed`.
+                // A `Clone` of the same type stays inline, because only
+                // the deep-copy family is in `deep_needed`.
                 IRInstruction::Clone {
                     dest: ValueId(2),
                     source: ValueId(0),

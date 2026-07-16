@@ -3,20 +3,35 @@
 //! - a bodyless `@extern "C"` decl lowers to an [`IRFunction`] with
 //!   [`FunctionKind::Extern(attrs)`] carrying the AST's `link_name` /
 //!   `link_lib` payloads, and zero basic blocks (the LLVM backend
-//!   declares the C symbol; eval refuses to call into them);
-//! - per-function attrs survive lowering — `@link "lib:sym"` produces
-//!   both `link_lib` and `link_name`; bare `@extern "C"` produces no
-//!   link metadata;
+//!   declares the C symbol, and eval refuses to call into them)
+//! - per-function attrs survive lowering, so `@link "lib:sym"`
+//!   produces both `link_lib` and `link_name` while bare
+//!   `@extern "C"` produces no link metadata
 //! - the program-level `link_libraries` is deduped + sorted across
 //!   every `@extern "C"` function, regardless of which package or
-//!   `@link "lib:sym"` shape contributed.
+//!   `@link "lib:sym"` shape contributed
+//!
+//! [`IRFunction`]: koja_ir::IRFunction
+//! [`FunctionKind::Extern(attrs)`]: koja_ir::FunctionKind::Extern
 
-use koja_ast::util::dedent;
-use koja_ir::{FunctionKind, IRType};
+use koja_ir::{FunctionKind, IRExternAttrs, IRScript, IRType};
 
 mod common;
 
-const PACKAGE: &str = "TestApp";
+use common::{lower_script_source as lower, script_function};
+
+/// Fetch the [`IRExternAttrs`] of `name`, panicking if it didn't
+/// lower to [`FunctionKind::Extern`].
+fn extern_attrs<'a>(script: &'a IRScript, name: &str) -> &'a IRExternAttrs {
+    let function = script_function(script, name);
+    let FunctionKind::Extern(attrs) = &function.kind else {
+        panic!(
+            "expected FunctionKind::Extern for `{name}`; got {:?}",
+            function.kind,
+        );
+    };
+    attrs
+}
 
 #[test]
 fn bare_extern_c_lowers_to_function_kind_extern_with_empty_blocks() {
@@ -25,18 +40,10 @@ fn bare_extern_c_lowers_to_function_kind_extern_with_empty_blocks() {
         fn cosf(x: Float32) -> Float32
         ";
 
-    let script = common::lower_script_source_in(PACKAGE, &dedent(source));
-    let mangled = format!("{PACKAGE}.cosf");
-    let function = script
-        .function(&mangled)
-        .unwrap_or_else(|| panic!("missing extern fn `{mangled}` in IRScript"));
+    let script = lower(source);
+    let function = script_function(&script, "cosf");
 
-    let FunctionKind::Extern(attrs) = &function.kind else {
-        panic!(
-            "expected FunctionKind::Extern for `{mangled}`; got {:?}",
-            function.kind,
-        );
-    };
+    let attrs = extern_attrs(&script, "cosf");
     assert_eq!(
         attrs.link_lib, None,
         "bare @extern \"C\" carries no library"
@@ -63,14 +70,8 @@ fn link_lib_only_populates_link_lib_field() {
         fn cosf(x: Float32) -> Float32
         ";
 
-    let script = common::lower_script_source_in(PACKAGE, &dedent(source));
-    let function = script
-        .function(&format!("{PACKAGE}.cosf"))
-        .expect("missing extern fn `cosf` in IRScript");
-
-    let FunctionKind::Extern(attrs) = &function.kind else {
-        panic!("expected FunctionKind::Extern; got {:?}", function.kind);
-    };
+    let script = lower(source);
+    let attrs = extern_attrs(&script, "cosf");
     assert_eq!(attrs.link_lib.as_deref(), Some("m"));
     assert_eq!(attrs.link_name, None);
 }
@@ -83,14 +84,8 @@ fn link_lib_with_symbol_alias_populates_both_fields() {
         fn cosf(x: Float32) -> Float32
         ";
 
-    let script = common::lower_script_source_in(PACKAGE, &dedent(source));
-    let function = script
-        .function(&format!("{PACKAGE}.cosf"))
-        .expect("missing extern fn `cosf` in IRScript");
-
-    let FunctionKind::Extern(attrs) = &function.kind else {
-        panic!("expected FunctionKind::Extern; got {:?}", function.kind);
-    };
+    let script = lower(source);
+    let attrs = extern_attrs(&script, "cosf");
     assert_eq!(attrs.link_lib.as_deref(), Some("m"));
     assert_eq!(attrs.link_name.as_deref(), Some("cos"));
 }
@@ -117,7 +112,7 @@ fn link_libraries_are_deduped_and_sorted() {
         fn unlibbed(x: Int32) -> Int32
         ";
 
-    let script = common::lower_script_source_in(PACKAGE, &dedent(source));
+    let script = lower(source);
     assert_eq!(
         script.link_libraries,
         vec!["crypto".to_string(), "m".to_string()],
@@ -135,7 +130,7 @@ fn link_libraries_empty_without_any_extern_c() {
         helper()
         ";
 
-    let script = common::lower_script_source_in(PACKAGE, &dedent(source));
+    let script = lower(source);
     assert!(
         script.link_libraries.is_empty(),
         "no @extern \"C\" decls should leave link_libraries empty; got {:?}",
@@ -151,10 +146,8 @@ fn extern_c_with_cptr_param_lowers_pointee_into_irtype_cptr() {
         fn malloc(size: UInt64) -> CPtr<UInt8>
         ";
 
-    let script = common::lower_script_source_in(PACKAGE, &dedent(source));
-    let function = script
-        .function(&format!("{PACKAGE}.malloc"))
-        .expect("missing extern fn `malloc`");
+    let script = lower(source);
+    let function = script_function(&script, "malloc");
     assert_eq!(function.params.len(), 1);
     assert_eq!(function.params[0].ty, IRType::UInt64);
     assert_eq!(
@@ -166,7 +159,7 @@ fn extern_c_with_cptr_param_lowers_pointee_into_irtype_cptr() {
 
 #[test]
 fn last_link_wins_across_multiple_link_annotations() {
-    // `@link "a:foo"` then `@link "b:bar"` — the second should win
+    // `@link "a:foo"` then `@link "b:bar"`: the second should win
     // for both fields (mirrors v1 + the AST `AnnotationKind::Link`
     // walk in `IRExternAttrs::from_annotations`).
     let source = "
@@ -176,13 +169,8 @@ fn last_link_wins_across_multiple_link_annotations() {
         fn handle -> Int32
         ";
 
-    let script = common::lower_script_source_in(PACKAGE, &dedent(source));
-    let function = script
-        .function(&format!("{PACKAGE}.handle"))
-        .expect("missing extern fn `handle`");
-    let FunctionKind::Extern(attrs) = &function.kind else {
-        panic!("expected FunctionKind::Extern; got {:?}", function.kind);
-    };
+    let script = lower(source);
+    let attrs = extern_attrs(&script, "handle");
     assert_eq!(attrs.link_lib.as_deref(), Some("b"));
     assert_eq!(attrs.link_name.as_deref(), Some("bar"));
     assert_eq!(script.link_libraries, vec!["b".to_string()]);

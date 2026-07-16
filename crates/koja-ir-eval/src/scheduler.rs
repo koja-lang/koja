@@ -511,8 +511,8 @@ impl<R: CallResolver> Executor for EvalExecutor<'_, R> {
         // table on every `YieldCheck`.
         let budget = self.core.borrow().reductions_left(pid);
         REDUCTIONS_LEFT.with(|remaining| remaining.set(budget));
-        // Take the future out so the map is not borrowed across the poll;
-        // a process whose future has already completed (or was killed) is
+        // Take the future out so the map is not borrowed across the poll.
+        // A process whose future has already completed (or was killed) is
         // a no-op resume.
         let taken = self.futures.borrow_mut().remove(&pid);
         if let Some(mut future) = taken {

@@ -2,13 +2,11 @@
 //! per reference site while the package pool holds a single entry per
 //! `const` declaration.
 
-use koja_ast::util::dedent;
-
 use koja_ir::{ConstValue, IRConstantValue, IRInstruction, IRScript};
 
 mod common;
 
-use common::{PACKAGE, lower_script_source};
+use common::{PACKAGE, all_instructions, lower_script_source};
 
 /// The test package's pooled constant values, in pool order.
 fn pooled_values(script: &IRScript) -> Vec<&IRConstantValue> {
@@ -20,18 +18,15 @@ fn pooled_values(script: &IRScript) -> Vec<&IRConstantValue> {
         .collect()
 }
 
-/// Counts `LoadConst` instructions reachable from the test package —
-/// both the script body and any user-package helper fns. Stdlib
-/// autoimport packages (e.g. `Global.io`'s `STDIN`/`STDOUT`/`STDERR`
-/// struct constants) emit their own `LoadConst`s on field access —
-/// those would inflate the count and obscure what these tests are
-/// actually asserting about user-package lowering.
+/// Counts `LoadConst` instructions reachable from the test package,
+/// covering both the script body and any user-package helper fns.
+/// Stdlib autoimport packages (e.g. `Global.io`'s `STDIN`/`STDOUT`/
+/// `STDERR` struct constants) emit their own `LoadConst`s on field
+/// access. Those would inflate the count and obscure what these
+/// tests are actually asserting about user-package lowering.
 fn count_load_const(script: &IRScript) -> usize {
     let is_load_const = |inst: &&IRInstruction| matches!(inst, IRInstruction::LoadConst { .. });
-    let in_body = script
-        .blocks
-        .iter()
-        .flat_map(|block| block.instructions.iter())
+    let in_body = all_instructions(&script.blocks)
         .filter(is_load_const)
         .count();
     let in_fns = script
@@ -39,15 +34,14 @@ fn count_load_const(script: &IRScript) -> usize {
         .iter()
         .filter(|p| p.package == PACKAGE)
         .flat_map(|p| p.functions.values())
-        .flat_map(|function| function.blocks.iter())
-        .flat_map(|block| block.instructions.iter())
+        .flat_map(|function| all_instructions(&function.blocks))
         .filter(is_load_const)
         .count();
     in_body + in_fns
 }
 
-/// Pooled-constant count for the test package only — same scoping
-/// rationale as [`count_load_const`].
+/// Pooled-constant count for the test package only, with the same
+/// scoping rationale as [`count_load_const`].
 fn pooled_constants_len(script: &IRScript) -> usize {
     script
         .packages
@@ -70,7 +64,7 @@ fn struct_constant_pools_once_and_emits_load_const_per_field_read() {
         ORIGIN.x + ORIGIN.y
         ";
 
-    let script = lower_script_source(&dedent(source));
+    let script = lower_script_source(source);
     assert_eq!(
         pooled_constants_len(&script),
         1,
@@ -96,7 +90,7 @@ fn primitive_constant_does_not_pool_or_emit_load_const() {
         K + K
         ";
 
-    let script = lower_script_source(&dedent(source));
+    let script = lower_script_source(source);
     assert_eq!(pooled_constants_len(&script), 0);
     assert_eq!(count_load_const(&script), 0);
 }
@@ -111,7 +105,7 @@ fn binary_literal_constant_folds_to_exact_bytes() {
         FRAME.byte_size()
         ";
 
-    let script = lower_script_source(&dedent(source));
+    let script = lower_script_source(source);
     let values = pooled_values(&script);
     assert_eq!(values.len(), 1, "expected one pooled binary constant");
     let IRConstantValue::Primitive(ConstValue::Binary(bytes)) = values[0] else {
@@ -131,7 +125,7 @@ fn bits_constant_folds_with_bit_length() {
         FLAGS
         ";
 
-    let script = lower_script_source(&dedent(source));
+    let script = lower_script_source(source);
     let values = pooled_values(&script);
     assert_eq!(values.len(), 1, "expected one pooled bits constant");
     let IRConstantValue::Primitive(ConstValue::Bits { bytes, bit_length }) = values[0] else {
@@ -154,7 +148,7 @@ fn struct_constant_with_binary_field_folds_the_field() {
         DEFAULT.version
         ";
 
-    let script = lower_script_source(&dedent(source));
+    let script = lower_script_source(source);
     let values = pooled_values(&script);
     assert_eq!(values.len(), 1, "expected one pooled struct constant");
     let IRConstantValue::Struct { fields, .. } = values[0] else {

@@ -7,16 +7,16 @@
 //! Every eval test shape is a `parse -> check -> lower -> run` chain
 //! against a single in-memory source file, so we expose:
 //!
-//! - [`PACKAGE`] — the default package every test source registers
+//! - [`PACKAGE`]: the default package every test source registers
 //!   under (`"TestApp"`).
-//! - [`typecheck`] / [`typecheck_in`] — `parse_program -> check_program`
+//! - [`typecheck`] / [`typecheck_in`]: `parse_program -> check_program`
 //!   shorthands, parameterized by `ParseMode` (and optionally
 //!   package name for tests that want to target `Global` directly).
-//! - [`evaluate_program`] — `ParseMode::File` + `lower_program`
+//! - [`evaluate_program`]: `ParseMode::File` + `lower_program`
 //!   (with a synthetic Process entry appended so the entry staging
 //!   succeeds) + `Interpreter::run_function` against the fixture's
 //!   `fn main`, returning its runtime [`Value`].
-//! - [`evaluate_script`] / [`evaluate_script_in`] — `ParseMode::Script`
+//! - [`evaluate_script`] / [`evaluate_script_in`]: `ParseMode::Script`
 //!   + `lower_script` + `Interpreter::run_script`. The trailing
 //!     expression's runtime [`Value`] becomes the script's return,
 //!     which is what every script-shaped assertion inspects.
@@ -45,7 +45,7 @@ pub const TEST_ENTRY_NAME: &str = "TestEntry";
 
 /// Minimal `Process` impl appended to every program-shaped fixture
 /// so `lower_program` has a valid entry. The state is never spawned
-/// or executed by these tests — it only satisfies the entry staging;
+/// or executed by these tests. It only satisfies the entry staging.
 /// [`evaluate_program`] runs the fixture's `fn main` directly.
 const TEST_ENTRY_SNIPPET: &str = "
     struct TestEntry

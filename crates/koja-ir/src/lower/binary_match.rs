@@ -2,7 +2,7 @@
 //! [`IRInstruction::BinaryMatch`].
 //!
 //! Mirrors the segment-classification logic of
-//! [`super::binary_literal`] — typecheck has already validated
+//! [`super::binary_literal`]. Typecheck has already validated
 //! the segment shape (sized integer / typed integer / string
 //! literal / binding / discard / greedy tail), so the lower pass
 //! just transcribes each segment to its
@@ -35,7 +35,7 @@ use super::patterns::ensure_local_declared;
 /// `IRInstruction::BinaryMatch` to `block`. Returns the `i1`
 /// `ValueId` the match driver wires into the arm's `CondBranch`.
 /// Bindings inside the pattern are registered via `LocalDecl` in
-/// the function's entry block; the actual value writes happen as
+/// the function's entry block. The actual value writes happen as
 /// a side effect of the `BinaryMatch` instruction at emit time.
 pub(super) fn lower_binary_pattern(
     segments: &[BinarySegment],
@@ -86,7 +86,7 @@ pub(super) fn lower_binary_pattern(
 /// Per-segment classification: figure out the bit width from
 /// `::N` / `: Type` / bare default, then dispatch on
 /// `seg.value.kind`. Mirrors the typecheck-side classifier so the
-/// two layers see the same shape — lower never diagnoses (errors
+/// two layers see the same shape. Lower never diagnoses (errors
 /// are typecheck-only) and falls back to a discard when an
 /// unsupported shape leaks through.
 fn lower_segment(
@@ -117,7 +117,7 @@ fn lower_segment(
             let Resolution::Local(local_id) = resolution else {
                 panic!(
                     "IR lower: binary pattern binding `{name}` carries no \
-                     Resolution::Local — resolver invariant violation",
+                     Resolution::Local (resolver invariant violation)",
                 );
             };
             let local = IRLocalId::from_local_id(*local_id);
@@ -214,7 +214,7 @@ fn lower_greedy_tail(
 
 /// Per-segment fixed bit width. `None` only on a typecheck-bypassed
 /// shape (we already diagnosed dynamic widths / byte-unit /
-/// unsupported types) — the catch-all returns `None` rather than
+/// unsupported types). The catch-all returns `None` rather than
 /// panicking so a stale typecheck diagnostic doesn't trip a lower
 /// crash.
 fn segment_fixed_width(segment: &BinarySegment) -> Option<u64> {
@@ -242,7 +242,7 @@ fn segment_fixed_width(segment: &BinarySegment) -> Option<u64> {
 
 /// Read out the literal bytes of a string-segment value. Returns
 /// `None` for non-string and for interpolated strings (typecheck
-/// already rejects the latter — this is belt-and-suspenders).
+/// already rejects the latter, so this is belt-and-suspenders).
 fn string_segment_bytes(segment: &BinarySegment) -> Option<(Vec<u8>, u64)> {
     let ExprKind::String { parts, .. } = &segment.value.kind else {
         return None;

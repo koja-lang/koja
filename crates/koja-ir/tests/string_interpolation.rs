@@ -2,7 +2,7 @@
 //! `"prefix #{x.format()} suffix"` desugars at IR-lower time into a
 //! chain of N-1 `IRInstruction::Concat { kind: String }` instructions
 //! over the N parts. Each literal part lowers to a
-//! `ConstValue::String`; each interpolation part recurses through
+//! `ConstValue::String`. Each interpolation part recurses through
 //! [`lower_expr`] (the synthesizer wraps every interpolation in
 //! `.format()` so the inner expr is already `String`-typed by the
 //! time we see it).
@@ -11,17 +11,14 @@
 //! -> N-1 concats) and the concat-kind invariant (always
 //! `ConcatKind::String` regardless of how the part was sourced).
 
-use koja_ast::util::dedent;
-use koja_ir::{ConcatKind, IRInstruction, IRType};
+use koja_ir::{ConcatKind, ConstValue, IRBasicBlock, IRInstruction, IRType};
 
 mod common;
 
-use common::lower_script_source as lower;
+use common::{all_instructions, lower_script_source as lower};
 
-fn count_string_concats(blocks: &[koja_ir::IRBasicBlock]) -> usize {
-    blocks
-        .iter()
-        .flat_map(|b| b.instructions.iter())
+fn count_string_concats(blocks: &[IRBasicBlock]) -> usize {
+    all_instructions(blocks)
         .filter(|inst| {
             matches!(
                 inst,
@@ -34,15 +31,13 @@ fn count_string_concats(blocks: &[koja_ir::IRBasicBlock]) -> usize {
         .count()
 }
 
-fn count_string_consts(blocks: &[koja_ir::IRBasicBlock]) -> usize {
-    blocks
-        .iter()
-        .flat_map(|b| b.instructions.iter())
+fn count_string_consts(blocks: &[IRBasicBlock]) -> usize {
+    all_instructions(blocks)
         .filter(|inst| {
             matches!(
                 inst,
                 IRInstruction::Const {
-                    value: koja_ir::ConstValue::String(_),
+                    value: ConstValue::String(_),
                     ..
                 },
             )
@@ -60,7 +55,7 @@ fn three_part_interpolation_emits_two_string_concats() {
         \"a=#{x.format()}b\"
         ";
 
-    let script = lower(&dedent(source));
+    let script = lower(source);
     assert_eq!(script.return_type, IRType::String);
     assert_eq!(
         count_string_concats(&script.blocks),
@@ -79,13 +74,13 @@ fn five_part_interpolation_emits_four_string_concats() {
         \"x=#{x.format()} y=#{y.format()}.\"
         ";
 
-    let script = lower(&dedent(source));
+    let script = lower(source);
     assert_eq!(count_string_concats(&script.blocks), 4);
 }
 
 #[test]
 fn lone_interpolation_emits_no_concat_just_the_inner_value() {
-    // A single-part interpolation has nothing to fold; the
+    // A single-part interpolation has nothing to fold. The
     // `format()` call's `String` value flows straight through to the
     // function return.
     let source = "
@@ -93,7 +88,7 @@ fn lone_interpolation_emits_no_concat_just_the_inner_value() {
         \"#{x.format()}\"
         ";
 
-    let script = lower(&dedent(source));
+    let script = lower(source);
     assert_eq!(
         count_string_concats(&script.blocks),
         0,
@@ -104,13 +99,13 @@ fn lone_interpolation_emits_no_concat_just_the_inner_value() {
 #[test]
 fn lone_literal_emits_one_const_no_concat() {
     // Sanity check that the concat-chain shape doesn't kick in for
-    // plain (non-interpolated) string literals — the existing
+    // plain (non-interpolated) string literals. The existing
     // `lower_string` fast path stays intact.
     let source = "
         \"hello\"
         ";
 
-    let script = lower(&dedent(source));
+    let script = lower(source);
     assert_eq!(count_string_concats(&script.blocks), 0);
     assert_eq!(count_string_consts(&script.blocks), 1);
 }
@@ -126,11 +121,8 @@ fn literal_then_interpolation_then_literal_concats_are_string_kinded() {
         \"prefix-#{x.format()}-suffix\"
         ";
 
-    let script = lower(&dedent(source));
-    let kinds: Vec<ConcatKind> = script
-        .blocks
-        .iter()
-        .flat_map(|b| b.instructions.iter())
+    let script = lower(source);
+    let kinds: Vec<ConcatKind> = all_instructions(&script.blocks)
         .filter_map(|inst| match inst {
             IRInstruction::Concat { kind, .. } => Some(*kind),
             _ => None,

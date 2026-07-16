@@ -214,8 +214,8 @@ fn call_return_participates_in_outer_expression() {
 #[test]
 fn script_body_calls_helper_fn_in_packages() {
     // Mirror of `zero_arg_call_returns_callee_value` for script
-    // mode: the helper fn lives in the script's package fragment;
-    // the implicit body calls it. Drives `lower_script` +
+    // mode: the helper fn lives in the script's package fragment,
+    // and the implicit body calls it. Drives `lower_script` +
     // `Interpreter::run_script` end to end.
     let source = "
         fn answer -> Int
@@ -233,7 +233,7 @@ fn script_body_calls_helper_fn_in_packages() {
 
 #[test]
 fn if_with_true_condition_executes_then_branch() {
-    // The early `return 1` inside the `if true` body fires; the
+    // The early `return 1` inside the `if true` body fires. The
     // merge block's trailing `2` is unreachable.
     let source = "
         fn pick -> Int
@@ -251,7 +251,7 @@ fn if_with_true_condition_executes_then_branch() {
 #[test]
 fn if_with_false_condition_falls_through_to_merge() {
     // The cond evaluates to `false`, so the then-block is skipped
-    // entirely; the trailing `2` in the merge block is the
+    // entirely. The trailing `2` in the merge block is the
     // function's return value.
     let source = "
         fn pick -> Int
@@ -331,7 +331,7 @@ fn if_drives_program_mode_through_helper_calls() {
 #[test]
 fn if_else_value_producing_then_arm_with_true_condition() {
     // The if/else lowers to a 4-block CFG with a typed BlockParam
-    // on the merge; cond=true reaches merge with the then-arm's
+    // on the merge, and cond=true reaches merge with the then-arm's
     // value, which becomes the function's return.
     let source = "
         fn pick -> Int
@@ -365,7 +365,7 @@ fn if_else_value_producing_else_arm_with_false_condition() {
 
 #[test]
 fn if_else_with_diverging_then_arm_produces_else_value() {
-    // The then-arm diverges via `return`; only the else-arm reaches
+    // The then-arm diverges via `return`. Only the else-arm reaches
     // merge, passing its tail value via the BlockParam.
     let source = "
         fn pick -> Int

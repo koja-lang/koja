@@ -9,31 +9,15 @@
 //! - `for pattern in iterable` binds correctly
 //! - `receive` accepts optional `after timeout` block
 
-use koja_ast::ast::{Expr, ExprKind, Item, Statement};
-use koja_ast::util::dedent;
+use koja_ast::ast::{ExprKind, Pattern};
 
 mod common;
 
-use common::{assert_message_contains, parse_clean, parse_failing};
-
-fn first_function_expr(source: &str) -> Expr {
-    let file = parse_clean(source);
-    for item in file.items {
-        if let Item::Function(f) = item {
-            for stmt in f.body.unwrap_or_default() {
-                match stmt {
-                    Statement::Expr(e) | Statement::Assignment { value: e, .. } => return e,
-                    _ => continue,
-                }
-            }
-        }
-    }
-    panic!("no expression in parsed output");
-}
+use common::{first_function_expr, parse_failing_with};
 
 #[test]
 fn if_with_then_only() {
-    let src = dedent(
+    let expr = first_function_expr(
         "
         fn run
           if x
@@ -42,7 +26,6 @@ fn if_with_then_only() {
         end
         ",
     );
-    let expr = first_function_expr(&src);
     match expr.kind {
         ExprKind::If {
             then_body,
@@ -58,7 +41,7 @@ fn if_with_then_only() {
 
 #[test]
 fn if_with_else() {
-    let src = dedent(
+    let expr = first_function_expr(
         "
         fn run
           if x
@@ -69,7 +52,6 @@ fn if_with_else() {
         end
         ",
     );
-    let expr = first_function_expr(&src);
     match expr.kind {
         ExprKind::If { else_body, .. } => {
             assert!(else_body.is_some());
@@ -80,7 +62,7 @@ fn if_with_else() {
 
 #[test]
 fn else_if_is_rejected() {
-    let src = dedent(
+    parse_failing_with(
         "
         fn run
           if x
@@ -90,14 +72,13 @@ fn else_if_is_rejected() {
           end
         end
         ",
+        &["else if is not supported"],
     );
-    let result = parse_failing(&src);
-    assert_message_contains(&result, "else if is not supported");
 }
 
 #[test]
 fn unless_form() {
-    let src = dedent(
+    let expr = first_function_expr(
         "
         fn run
           unless x
@@ -106,13 +87,12 @@ fn unless_form() {
         end
         ",
     );
-    let expr = first_function_expr(&src);
     assert!(matches!(expr.kind, ExprKind::Unless { .. }));
 }
 
 #[test]
 fn match_with_arms() {
-    let src = dedent(
+    let expr = first_function_expr(
         "
         fn run
           match x
@@ -123,7 +103,6 @@ fn match_with_arms() {
         end
         ",
     );
-    let expr = first_function_expr(&src);
     match expr.kind {
         ExprKind::Match { arms, .. } => assert_eq!(arms.len(), 3),
         other => panic!("expected Match, got {other:?}"),
@@ -132,7 +111,7 @@ fn match_with_arms() {
 
 #[test]
 fn match_arm_with_when_guard() {
-    let src = dedent(
+    let expr = first_function_expr(
         "
         fn run
           match x
@@ -142,7 +121,6 @@ fn match_arm_with_when_guard() {
         end
         ",
     );
-    let expr = first_function_expr(&src);
     match expr.kind {
         ExprKind::Match { arms, .. } => {
             assert!(arms[0].guard.is_some());
@@ -154,7 +132,7 @@ fn match_arm_with_when_guard() {
 
 #[test]
 fn match_with_or_pattern() {
-    let src = dedent(
+    let expr = first_function_expr(
         "
         fn run
           match x
@@ -164,10 +142,9 @@ fn match_with_or_pattern() {
         end
         ",
     );
-    let expr = first_function_expr(&src);
     match expr.kind {
         ExprKind::Match { arms, .. } => {
-            assert!(matches!(arms[0].pattern, koja_ast::ast::Pattern::Or { .. }));
+            assert!(matches!(arms[0].pattern, Pattern::Or { .. }));
         }
         other => panic!("expected Match, got {other:?}"),
     }
@@ -175,7 +152,7 @@ fn match_with_or_pattern() {
 
 #[test]
 fn cond_with_else() {
-    let src = dedent(
+    let expr = first_function_expr(
         "
         fn run
           cond
@@ -186,7 +163,6 @@ fn cond_with_else() {
         end
         ",
     );
-    let expr = first_function_expr(&src);
     match expr.kind {
         ExprKind::Cond { arms, else_body } => {
             assert_eq!(arms.len(), 2);
@@ -198,7 +174,7 @@ fn cond_with_else() {
 
 #[test]
 fn cond_without_else_fails() {
-    let src = dedent(
+    parse_failing_with(
         "
         fn run
           cond
@@ -206,14 +182,13 @@ fn cond_without_else_fails() {
           end
         end
         ",
+        &["cond requires an `else ->` arm"],
     );
-    let result = parse_failing(&src);
-    assert_message_contains(&result, "cond requires an `else ->` arm");
 }
 
 #[test]
 fn for_loop_with_binding() {
-    let src = dedent(
+    let expr = first_function_expr(
         "
         fn run
           for x in items
@@ -222,10 +197,9 @@ fn for_loop_with_binding() {
         end
         ",
     );
-    let expr = first_function_expr(&src);
     match expr.kind {
         ExprKind::For { pattern, body, .. } => {
-            assert!(matches!(pattern, koja_ast::ast::Pattern::Binding { .. }));
+            assert!(matches!(pattern, Pattern::Binding { .. }));
             assert!(!body.is_empty());
         }
         other => panic!("expected For, got {other:?}"),
@@ -234,7 +208,7 @@ fn for_loop_with_binding() {
 
 #[test]
 fn loop_unbounded() {
-    let src = dedent(
+    let expr = first_function_expr(
         "
         fn run
           loop
@@ -243,13 +217,12 @@ fn loop_unbounded() {
         end
         ",
     );
-    let expr = first_function_expr(&src);
     assert!(matches!(expr.kind, ExprKind::Loop { .. }));
 }
 
 #[test]
 fn while_loop() {
-    let src = dedent(
+    let expr = first_function_expr(
         "
         fn run
           while x > 0
@@ -258,13 +231,12 @@ fn while_loop() {
         end
         ",
     );
-    let expr = first_function_expr(&src);
     assert!(matches!(expr.kind, ExprKind::While { .. }));
 }
 
 #[test]
 fn receive_with_arms() {
-    let src = dedent(
+    let expr = first_function_expr(
         "
         fn run
           receive
@@ -274,7 +246,6 @@ fn receive_with_arms() {
         end
         ",
     );
-    let expr = first_function_expr(&src);
     match expr.kind {
         ExprKind::Receive {
             arms,
@@ -290,7 +261,7 @@ fn receive_with_arms() {
 
 #[test]
 fn receive_with_after_clause() {
-    let src = dedent(
+    let expr = first_function_expr(
         "
         fn run
           receive
@@ -301,7 +272,6 @@ fn receive_with_after_clause() {
         end
         ",
     );
-    let expr = first_function_expr(&src);
     match expr.kind {
         ExprKind::Receive {
             after_timeout,

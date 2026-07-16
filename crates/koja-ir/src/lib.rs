@@ -7,21 +7,21 @@
 //! - [`lower_program`] consumes a sealed
 //!   [`koja_typecheck::CheckedProgram`] whose source declared an
 //!   entry function (`fn main`) and returns a sealed [`IRProgram`].
-//!   This is the project-mode path; the entry point is named by an
+//!   This is the project-mode path. The entry point is named by an
 //!   [`koja_ast::identifier::Identifier`].
 //! - [`lower_script`] consumes a sealed
 //!   [`koja_typecheck::CheckedProgram`] whose source was parsed
 //!   in `ParseMode::Script` (top-level statements live on
 //!   [`koja_ast::ast::File::body`]) and returns a sealed [`IRScript`].
-//!   This is the script-mode path; the script body *is* the entry
-//!   point — there's no identifier for it.
+//!   This is the script-mode path. The script body *is* the entry
+//!   point, so there's no identifier for it.
 //!
 //! Both paths share the same [`IRPackage`] / [`IRFunction`] vocabulary
 //! for helper-function decls and the same per-function lowering
-//! helpers; the difference is only in the entry-point shape they
-//! produce. Diagnostics: lowering is a pure translation from a sealed
-//! input. User-actionable errors funnel through [`LowerError`];
-//! everything else is a compiler bug and panics through `seal`.
+//! helpers. The difference is only in the entry-point shape they
+//! produce. Lowering is a pure translation from a sealed input.
+//! User-actionable errors funnel through [`LowerError`], and
+//! everything else is a compiler bug that panics through `seal`.
 //!
 //! Hard contract: this crate has **zero dependency on `koja-ir`**. The
 //! IR vocabulary defined here ([`IRProgram`], [`IRScript`],

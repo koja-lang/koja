@@ -328,10 +328,6 @@ pub extern "C" fn koja_socket_setsockopt_reuse(fd: i32) -> i64 {
     0
 }
 
-// ---------------------------------------------------------------------------
-// Private helpers
-// ---------------------------------------------------------------------------
-
 /// Constructs a `SockaddrIn` from an IPv4 address and port number.
 fn build_sockaddr_from_ip(
     ip_ptr: *const u8,

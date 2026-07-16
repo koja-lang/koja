@@ -11,7 +11,7 @@ use crate::struct_decl::IRStructDecl;
 use crate::union_decl::IRUnionDecl;
 
 /// Per-package IR fragment exposed to backends. Holds only
-/// fully-monomorphized concrete decls — generic templates and the
+/// fully-monomorphized concrete decls. Generic templates and the
 /// instantiation set are pipeline-internal scratch state owned by
 /// [`crate::generics`] and dropped before the sealed [`IRProgram`]
 /// is returned, so backends never observe a generic template.
@@ -27,7 +27,7 @@ pub struct IRPackage {
     /// at most one global per pool entry.
     pub constants: BTreeMap<IRSymbol, IRConstantValue>,
     /// Enum declarations owned by this package, keyed by their
-    /// stable [`IRSymbol`]. Same key shape as [`Self::structs`];
+    /// stable [`IRSymbol`]. Same key shape as [`Self::structs`], and
     /// backends use the symbol to consult the declared variant
     /// roster for `IRType::Enum(symbol)` /
     /// `IRInstruction::EnumConstruct`.
@@ -43,12 +43,12 @@ pub struct IRPackage {
     pub package: String,
     /// Struct declarations owned by this package, keyed by their
     /// stable [`IRSymbol`]. Same key shape as
-    /// [`Self::functions`]; backends use the symbol to consult the
+    /// [`Self::functions`], and backends use the symbol to consult the
     /// declared field layout for `IRType::Struct(symbol)` /
     /// `IRInstruction::StructInit` / `IRInstruction::FieldGet`.
     pub structs: BTreeMap<IRSymbol, IRStructDecl>,
-    /// Union declarations discovered during this package's lower —
-    /// one entry per distinct mangled `IRType::Union { mangled }`
+    /// Union declarations discovered during this package's lower,
+    /// with one entry per distinct mangled `IRType::Union { mangled }`
     /// referenced anywhere in the package. Backends consult
     /// `max_payload_size` to size the trailing `[N x i8]` payload
     /// in the `{ i8, [N x i8] }` LLVM struct layout.

@@ -59,7 +59,7 @@ fn local_decl_zero_initializes_the_slot() {
 fn heap_local_drop_null_checks_the_payload_before_rc_dec() {
     // The exit drop's payload->block-base mapping must propagate a
     // null payload to a null base (`select`) rather than wrapping to
-    // `0 - HEADER_BYTES` — a zero-initialized, never-written slot is
+    // `0 - HEADER_BYTES`. A zero-initialized, never-written slot is
     // a legal drop target.
     let source = r#"
         s = "a" <> "b"
@@ -93,7 +93,7 @@ fn reassignment_emits_a_second_store_into_the_same_slot() {
     let alloca_count = user_main.matches("alloca i64").count();
     assert_eq!(
         alloca_count, 1,
-        "expected exactly one alloca for the slot — reassignment reuses it.\n\
+        "expected exactly one alloca for the slot. Reassignment reuses it.\n\
          user_main body:\n{user_main}\n\nfull IR:\n{ir_text}",
     );
     assert_contains(user_main, "store i64 1");
@@ -118,8 +118,8 @@ fn param_promotion_emits_alloca_and_initial_store_in_callee() {
         emit_script_llvm_ir(&script, APP_NAME).expect("emit_script_llvm_ir should succeed");
 
     assert_main_shape(&ir_text);
-    // Each function gets its own alloca in its own entry block;
-    // we expect at least one i64 alloca for `id`'s param slot. Pin
+    // Each function gets its own alloca in its own entry block.
+    // We expect at least one i64 alloca for `id`'s param slot. Pin
     // one alloca minimum and a store of the param.
     assert!(
         ir_text.contains("alloca i64"),

@@ -1,4 +1,4 @@
-//! End-to-end interpreter coverage for `Debug for String` —
+//! End-to-end interpreter coverage for `Debug for String`,
 //! specifically that `escape_debug` round-trips correctly through
 //! the pipeline. Regression coverage for the cross-arm
 //! slot-state leak that surfaced as a SIGABRT inside the

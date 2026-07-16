@@ -10,33 +10,24 @@
 //!   struct / enum / fn / const / type alias / protocol
 
 use koja_ast::ast::{AnnotationValue, Item};
-use koja_ast::util::dedent;
 
 mod common;
 
-use common::{assert_message_contains, parse_clean, parse_failing};
-
-fn first_function_annotations(source: &str) -> Vec<koja_ast::ast::Annotation> {
-    let file = parse_clean(source);
-    for item in file.items {
-        if let Item::Function(f) = item {
-            return f.annotations;
-        }
-    }
-    panic!("no function in parsed output");
-}
+use common::{
+    first_constant, first_enum, first_function, first_struct, parse_clean, parse_failing_with,
+};
 
 #[test]
 fn bare_annotation_has_no_value() {
-    let src = dedent(
+    let anns = first_function(
         "
         @experimental
         fn run
           1
         end
         ",
-    );
-    let anns = first_function_annotations(&src);
+    )
+    .annotations;
     assert_eq!(anns.len(), 1);
     assert_eq!(anns[0].name, "experimental");
     assert!(anns[0].value.is_none());
@@ -44,15 +35,15 @@ fn bare_annotation_has_no_value() {
 
 #[test]
 fn string_annotation_carries_payload() {
-    let src = dedent(
+    let anns = first_function(
         "
         @doc \"increments by one\"
         fn bump
           1
         end
         ",
-    );
-    let anns = first_function_annotations(&src);
+    )
+    .annotations;
     assert_eq!(anns.len(), 1);
     assert!(matches!(
         anns[0].value,
@@ -62,7 +53,7 @@ fn string_annotation_carries_payload() {
 
 #[test]
 fn multiline_string_annotation() {
-    let src = dedent(
+    let anns = first_function(
         "
         @doc \"\"\"
           multi
@@ -72,36 +63,36 @@ fn multiline_string_annotation() {
           1
         end
         ",
-    );
-    let anns = first_function_annotations(&src);
+    )
+    .annotations;
     assert!(matches!(anns[0].value, Some(AnnotationValue::String(_))));
 }
 
 #[test]
 fn false_annotation() {
-    let src = dedent(
+    let anns = first_function(
         "
         @doc false
         fn skip
           1
         end
         ",
-    );
-    let anns = first_function_annotations(&src);
+    )
+    .annotations;
     assert_eq!(anns[0].name, "doc");
     assert!(matches!(anns[0].value, Some(AnnotationValue::False)));
 }
 
 #[test]
 fn stacked_annotations() {
-    let src = dedent(
+    let anns = first_function(
         "
         @extern \"C\"
         @link \"argon2\"
         fn argon2id_hash(t: UInt32) -> Int32
         ",
-    );
-    let anns = first_function_annotations(&src);
+    )
+    .annotations;
     assert_eq!(anns.len(), 2);
     assert_eq!(anns[0].name, "extern");
     assert_eq!(anns[1].name, "link");
@@ -109,7 +100,7 @@ fn stacked_annotations() {
 
 #[test]
 fn annotation_on_struct() {
-    let src = dedent(
+    let s = first_struct(
         "
         @doc \"a point\"
         struct Point
@@ -117,17 +108,12 @@ fn annotation_on_struct() {
         end
         ",
     );
-    let file = parse_clean(&src);
-    let s = match &file.items[0] {
-        Item::Struct(s) => s,
-        other => panic!("expected struct, got {other:?}"),
-    };
     assert_eq!(s.annotations.len(), 1);
 }
 
 #[test]
 fn annotation_on_enum() {
-    let src = dedent(
+    let e = first_enum(
         "
         @doc \"sum type\"
         enum Either<L, R>
@@ -136,39 +122,28 @@ fn annotation_on_enum() {
         end
         ",
     );
-    let file = parse_clean(&src);
-    let e = match &file.items[0] {
-        Item::Enum(e) => e,
-        other => panic!("expected enum, got {other:?}"),
-    };
     assert_eq!(e.annotations.len(), 1);
 }
 
 #[test]
 fn annotation_on_constant() {
-    let src = dedent(
+    let c = first_constant(
         "
         @doc \"upper bound\"
         const LIMIT: Int = 100
         ",
     );
-    let file = parse_clean(&src);
-    let c = match &file.items[0] {
-        Item::Constant(c) => c,
-        other => panic!("expected constant, got {other:?}"),
-    };
     assert_eq!(c.annotations.len(), 1);
 }
 
 #[test]
 fn annotation_on_type_alias() {
-    let src = dedent(
+    let file = parse_clean(
         "
         @doc \"unique id\"
         type UserId = Int
         ",
     );
-    let file = parse_clean(&src);
     let a = match &file.items[0] {
         Item::TypeAlias(a) => a,
         other => panic!("expected type alias, got {other:?}"),
@@ -178,12 +153,11 @@ fn annotation_on_type_alias() {
 
 #[test]
 fn annotation_followed_by_non_declaration_fails() {
-    let src = dedent(
+    parse_failing_with(
         "
         @doc \"oops\"
         \"not a declaration\"
         ",
+        &["annotation must be followed by a declaration"],
     );
-    let result = parse_failing(&src);
-    assert_message_contains(&result, "annotation must be followed by a declaration");
 }

@@ -1,5 +1,5 @@
 //! Enum-shaped lowering: declarations and enum-variant construction.
-//! Mirrors [`super::structs`] — one helper per AST shape.
+//! Mirrors [`super::structs`]: one helper per AST shape.
 //!
 //! Decl lowering pulls the canonical variant roster off the
 //! typecheck registry's [`GlobalKind::Enum(Some(definition))`] so we
@@ -12,7 +12,7 @@
 //! Per-shape construction is split into three small helpers
 //! (`lower_unit_variant` / `lower_tuple_variant` / `lower_struct_variant`)
 //! so each arm stays under the function-size guideline. The dispatch
-//! is the surface entry — it picks the variant by name off the
+//! is the surface entry. It picks the variant by name off the
 //! registry, then hands off to the per-shape helper based on the
 //! variant's declared payload.
 
@@ -41,11 +41,11 @@ use super::structs::canonicalize_struct_inits;
 /// The variant being constructed, bundled so the per-shape helpers
 /// take one identity arg instead of two. Mirrors the `&RegistryEntry`
 /// pattern in [`super::expr::emit_call`] (which threads a single
-/// identity object through the bare- vs instance-call dispatch);
-/// keeps `lower_struct_variant` under the clippy arg-count
+/// identity object through the bare- vs instance-call dispatch).
+/// Keeps `lower_struct_variant` under the clippy arg-count
 /// threshold without bundling the ambient
 /// `(ctx, block, registry, output)` tuple every other lower
-/// helper threads explicitly. Private to this module — the IR
+/// helper threads explicitly. Private to this module, since the IR
 /// vocabulary keeps `tag` and `ty` as separate fields on
 /// [`IRInstruction::EnumConstruct`], and `VariantTarget` is purely
 /// a lowering-pipeline grouping.
@@ -59,7 +59,7 @@ struct VariantTarget {
 /// [`crate::generics::instantiate`] off the typecheck registry) and
 /// for decls where any feature-gap diagnostic surfaced. Tag
 /// bounds-check (variant count > 256) surfaces as a feature-gap
-/// diagnostic — the LLVM `i8` tag width caps the variant count, and
+/// diagnostic. The LLVM `i8` tag width caps the variant count, and
 /// widening is a follow-up beyond this slice.
 pub(super) fn lower_enum_decl(
     decl: &EnumDecl,
@@ -74,8 +74,8 @@ pub(super) fn lower_enum_decl(
     let entry = registry.lookup(&identifier).map(|(_, entry)| entry)?;
     let GlobalKind::Enum(Some(definition)) = &entry.kind else {
         panic!(
-            "IR lower: enum `{identifier}` has no lifted definition — \
-             lift_signatures invariant violation",
+            "IR lower: enum `{identifier}` has no lifted definition \
+             (lift_signatures invariant violation)",
         );
     };
     if definition.variants.len() > usize::from(u8::MAX) + 1 {
@@ -140,7 +140,7 @@ fn lower_variants(
 /// `Type.Variant`. Picks the enum off the call-site
 /// `expr.resolution`, finds the variant by name, and dispatches to
 /// the per-shape helper. The shape match is guaranteed by typecheck
-/// resolve; reaching a mismatch here is an invariant violation.
+/// resolve, so reaching a mismatch here is an invariant violation.
 pub(super) fn lower_enum_construction(
     variant_name: &str,
     data: &EnumConstructionData,
@@ -155,8 +155,8 @@ pub(super) fn lower_enum_construction(
     let symbol = resolved_enum_symbol(expr_resolution, registry, &mut output.instantiations);
     let (variant_index, variant) = definition.lookup_variant(variant_name).unwrap_or_else(|| {
         panic!(
-            "IR lower: enum `{}` has no variant `{variant_name}` — \
-             typecheck seal must have rejected this",
+            "IR lower: enum `{}` has no variant `{variant_name}` \
+             (typecheck seal must have rejected this)",
             entry.identifier,
         )
     });
@@ -176,14 +176,14 @@ pub(super) fn lower_enum_construction(
         }
         (declared, supplied) => panic!(
             "IR lower: enum `{}.{variant_name}` payload shape mismatch \
-             (declared {declared:?}, supplied {supplied:?}) — typecheck seal violation",
+             (declared {declared:?}, supplied {supplied:?}), typecheck seal violation",
             entry.identifier,
         ),
     }
 }
 
 /// The mangled [`IRSymbol`] for the enum named by `resolution`.
-/// Mirrors [`super::structs`]'s `resolved_struct_symbol` — routes
+/// Mirrors [`super::structs`]'s `resolved_struct_symbol`. Routes
 /// through [`resolved_type_to_ir_type`] so any non-empty `type_args`
 /// land in `instantiations`.
 pub(super) fn resolved_enum_symbol(
@@ -195,7 +195,7 @@ pub(super) fn resolved_enum_symbol(
         IRType::Enum(symbol) => symbol,
         other => panic!(
             "IR lower: enum construction target lowered to `{other:?}`, expected \
-             IRType::Enum — typecheck seal must have caught this",
+             IRType::Enum (typecheck seal must have caught this)",
         ),
     }
 }
@@ -294,15 +294,15 @@ pub(super) fn enum_entry_from_resolution<'a>(
         panic!("IR lower: enum construction has Unresolved resolution after typecheck seal",);
     };
     registry.get(*id).unwrap_or_else(|| {
-        panic!("IR lower: enum id {id} missing from registry — seal invariant violation",)
+        panic!("IR lower: enum id {id} missing from registry (seal invariant violation)",)
     })
 }
 
 pub(super) fn enum_definition_from_entry(entry: &RegistryEntry) -> &EnumDefinition {
     let GlobalKind::Enum(Some(definition)) = &entry.kind else {
         panic!(
-            "IR lower: enum construction target `{}` has no lifted definition — \
-             lift_signatures invariant violation",
+            "IR lower: enum construction target `{}` has no lifted definition \
+             (lift_signatures invariant violation)",
             entry.identifier,
         );
     };

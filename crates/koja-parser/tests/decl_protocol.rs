@@ -7,60 +7,46 @@
 //! - the error path for an annotation in a protocol body that is
 //!   not followed by a function signature
 
-use koja_ast::ast::{Item, TypeExpr, Visibility};
-use koja_ast::util::dedent;
+use koja_ast::ast::{TypeExpr, Visibility};
 
 mod common;
 
-use common::{assert_message_contains, parse_clean, parse_failing};
-
-fn first_protocol(source: &str) -> koja_ast::ast::ProtocolDecl {
-    let file = parse_clean(source);
-    for item in file.items {
-        if let Item::Protocol(p) = item {
-            return p;
-        }
-    }
-    panic!("no protocol in parsed output");
-}
+use common::{first_protocol, parse_failing_with};
 
 #[test]
 fn priv_protocol_records_private_visibility() {
-    let src = dedent(
+    let p = first_protocol(
         "
         priv protocol Show
           fn show(self) -> String
         end
         ",
     );
-    let p = first_protocol(&src);
     assert_eq!(p.visibility, Visibility::Private);
     assert_eq!(p.name, "Show");
 }
 
 #[test]
 fn protocol_defaults_to_public_visibility() {
-    let src = dedent(
+    let p = first_protocol(
         "
         protocol Show
           fn show(self) -> String
         end
         ",
     );
-    let p = first_protocol(&src);
     assert_eq!(p.visibility, Visibility::Public);
 }
 
 #[test]
 fn protocol_required_method() {
-    let src = dedent(
+    let p = first_protocol(
         "
         protocol Show
           fn show(self) -> String
         end
         ",
     );
-    let p = first_protocol(&src);
     assert_eq!(p.methods.len(), 1);
     assert_eq!(p.methods[0].name, "show");
     assert!(p.methods[0].body.is_none());
@@ -68,7 +54,7 @@ fn protocol_required_method() {
 
 #[test]
 fn protocol_default_method_body() {
-    let src = dedent(
+    let p = first_protocol(
         "
         protocol Greet
           fn hello(self) -> String
@@ -77,14 +63,13 @@ fn protocol_default_method_body() {
         end
         ",
     );
-    let p = first_protocol(&src);
     assert_eq!(p.methods.len(), 1);
     assert!(p.methods[0].body.is_some());
 }
 
 #[test]
 fn protocol_mixed_required_and_default_methods() {
-    let src = dedent(
+    let p = first_protocol(
         "
         protocol Show
           fn show(self) -> String
@@ -94,7 +79,6 @@ fn protocol_mixed_required_and_default_methods() {
         end
         ",
     );
-    let p = first_protocol(&src);
     assert_eq!(p.methods.len(), 2);
     assert!(p.methods[0].body.is_none());
     assert!(p.methods[1].body.is_some());
@@ -102,14 +86,13 @@ fn protocol_mixed_required_and_default_methods() {
 
 #[test]
 fn protocol_with_type_params() {
-    let src = dedent(
+    let p = first_protocol(
         "
         protocol From<T>
           fn from(value: T) -> Self
         end
         ",
     );
-    let p = first_protocol(&src);
     assert_eq!(p.type_params.len(), 1);
     assert_eq!(p.type_params[0].name, "T");
     let method = &p.methods[0];
@@ -118,7 +101,7 @@ fn protocol_with_type_params() {
 
 #[test]
 fn protocol_method_with_annotation() {
-    let src = dedent(
+    let p = first_protocol(
         "
         protocol Greet
           @doc \"a polite greeting\"
@@ -126,7 +109,6 @@ fn protocol_method_with_annotation() {
         end
         ",
     );
-    let p = first_protocol(&src);
     assert_eq!(p.methods.len(), 1);
     assert_eq!(p.methods[0].annotations.len(), 1);
     assert_eq!(p.methods[0].annotations[0].name, "doc");
@@ -134,7 +116,7 @@ fn protocol_method_with_annotation() {
 
 #[test]
 fn annotation_not_followed_by_fn_in_protocol_fails() {
-    let src = dedent(
+    parse_failing_with(
         "
         protocol Bad
           @doc \"oops\"
@@ -142,10 +124,6 @@ fn annotation_not_followed_by_fn_in_protocol_fails() {
           end
         end
         ",
-    );
-    let result = parse_failing(&src);
-    assert_message_contains(
-        &result,
-        "annotation in protocol must be followed by a function signature",
+        &["annotation in protocol must be followed by a function signature"],
     );
 }

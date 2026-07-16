@@ -10,12 +10,12 @@
 //!
 //! - widening a single member into a 2-/3-member union and matching
 //!   the catch-all
-//! - alias-fronted unions (`type X = A | B`) — the runtime sees the
+//! - alias-fronted unions (`type X = A | B`): the runtime sees the
 //!   underlying tagged-union shape with no alias-specific encoding
 //! - enum-in-union: each member is itself a tagged enum, and the
 //!   typed-binding arm extracts an `Enum` value the body can match
 //!   on again
-//! - struct-field union: a struct field holds a union value;
+//! - struct-field union: a struct field holds a union value, and
 //!   reading the field yields the same `Value::Union` shape
 //!   construction would.
 
@@ -56,7 +56,7 @@ fn member_widens_into_union_and_match_catch_all_returns() {
 
 #[test]
 fn typed_binding_arm_extracts_member_payload() {
-    // Each typed-binding arm narrows to its member type; the body
+    // Each typed-binding arm narrows to its member type. The body
     // sees the field projection of the bound payload.
     let source = "
         struct Post
@@ -90,7 +90,7 @@ fn typed_binding_arm_extracts_member_payload() {
 
 #[test]
 fn alias_fronted_union_is_runtime_equivalent_to_bare_union() {
-    // The alias is a typecheck convenience — at runtime, both
+    // The alias is a typecheck convenience. At runtime, both
     // `Pet` and `Cat | Dog | Fish` materialize the same tagged-
     // union shape and match the same way.
     let source = "
@@ -128,7 +128,7 @@ fn alias_fronted_union_is_runtime_equivalent_to_bare_union() {
 #[test]
 fn enum_in_union_runs_nested_match() {
     // A typed-binding arm narrows the union to one of its enum
-    // members; the body's inner `match` then dispatches on that
+    // members. The body's inner `match` then dispatches on that
     // enum's variants. Mirrors the `process_union_msg` golden's
     // outer/inner shape.
     let source = "
@@ -164,7 +164,7 @@ fn enum_in_union_runs_nested_match() {
 
 #[test]
 fn struct_field_union_round_trips_through_field_read() {
-    // The struct stores a union-typed field; reading the field
+    // The struct stores a union-typed field. Reading the field
     // surfaces the same `Value::Union` shape construction would,
     // so the typed-binding match dispatches identically.
     let source = "

@@ -1,7 +1,7 @@
 //! Shared "literal-protocol" carrier machinery.
 //!
-//! Each protocol-aware literal family (today: `[a, b, c]` ->
-//! `ListLiteral<T>`, `["k": v, ...]` -> `MapLiteral<K, V>`; soon:
+//! Each protocol-aware literal family (today `[a, b, c]` ->
+//! `ListLiteral<T>` and `["k": v, ...]` -> `MapLiteral<K, V>`, soon
 //! `123` -> `IntLiteral<T>`, `1.0` -> `FloatLiteral<T>`, `<<...>>` ->
 //! `BinaryLiteral<T>`) shares the same carrier-rewrite shape:
 //!

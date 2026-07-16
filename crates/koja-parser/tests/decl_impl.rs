@@ -10,26 +10,15 @@
 //! - the diagnostic that fires when the body holds something other
 //!   than a function or type alias
 
-use koja_ast::ast::{ImplMember, Item, TypeExpr};
-use koja_ast::util::dedent;
+use koja_ast::ast::{ImplMember, TypeExpr};
 
 mod common;
 
-use common::{assert_message_contains, parse_clean, parse_failing};
-
-fn first_impl(source: &str) -> koja_ast::ast::ImplBlock {
-    let file = parse_clean(source);
-    for item in file.items {
-        if let Item::Impl(b) = item {
-            return b;
-        }
-    }
-    panic!("no impl block in parsed output");
-}
+use common::{first_impl, parse_failing_with};
 
 #[test]
 fn trait_impl_for_type() {
-    let src = dedent(
+    let block = first_impl(
         "
         impl Show for Point
           fn show(self) -> String
@@ -38,7 +27,6 @@ fn trait_impl_for_type() {
         end
         ",
     );
-    let block = first_impl(&src);
     let trait_path = match &block.trait_expr {
         TypeExpr::Named { path, .. } => path.clone(),
         other => panic!("expected Named trait, got {other:?}"),
@@ -51,7 +39,7 @@ fn trait_impl_for_type() {
 
 #[test]
 fn trait_impl_with_type_alias_member() {
-    let src = dedent(
+    let block = first_impl(
         "
         impl Counted for Counter
           type Snapshot = Int
@@ -62,7 +50,6 @@ fn trait_impl_with_type_alias_member() {
         end
         ",
     );
-    let block = first_impl(&src);
     assert_eq!(block.members.len(), 2);
     assert!(matches!(block.members[0], ImplMember::TypeAlias(_)));
     assert!(matches!(block.members[1], ImplMember::Function(_)));
@@ -70,7 +57,7 @@ fn trait_impl_with_type_alias_member() {
 
 #[test]
 fn trait_impl_with_generic_target() {
-    let src = dedent(
+    let block = first_impl(
         "
         impl Show for Box<Int>
           fn show(self) -> String
@@ -79,7 +66,6 @@ fn trait_impl_with_generic_target() {
         end
         ",
     );
-    let block = first_impl(&src);
     assert!(matches!(
         &block.target,
         TypeExpr::Generic { path, .. } if path == &["Box"]
@@ -92,16 +78,15 @@ fn trait_impl_with_generic_target() {
 
 #[test]
 fn impl_body_rejects_non_function_non_alias() {
-    let src = dedent(
+    parse_failing_with(
         "
         impl Show for Point
           struct Nested
           end
         end
         ",
+        &["expected function or type alias in block body"],
     );
-    let result = parse_failing(&src);
-    assert_message_contains(&result, "expected function or type alias in block body");
 }
 
 #[test]
@@ -110,7 +95,7 @@ fn bare_impl_emits_migration_diagnostic() {
     // parser should emit a diagnostic that points the user to
     // `extend Type` instead, with a hint mentioning both the
     // replacement and the protocol-impl form.
-    let src = dedent(
+    let result = parse_failing_with(
         "
         impl Point
           fn origin() -> Point
@@ -118,11 +103,7 @@ fn bare_impl_emits_migration_diagnostic() {
           end
         end
         ",
-    );
-    let result = parse_failing(&src);
-    assert_message_contains(
-        &result,
-        "bare `impl Type` is not supported. Use `extend Type` for inherent methods",
+        &["bare `impl Type` is not supported. Use `extend Type` for inherent methods"],
     );
     // The hint should mention both the replacement keyword and the
     // protocol-impl form so a confused user can self-correct

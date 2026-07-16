@@ -1,30 +1,32 @@
 //! Coverage for `match` lowering in `src/lower/match_expr.rs`.
 //!
-//! Pins the linear-arm-chain CFG: each non-catch-all arm runs a
+//! Pins the linear-arm-chain CFG. Each non-catch-all arm runs a
 //! pattern test in its own block, cond=false falls through to the
 //! next arm's test, and every arm body branches into one merge
 //! block carrying the join value as a typed [`BlockParam`]. The
 //! catch-all arm closes the chain with an unconditional `Branch`
 //! to its body block. A guarded arm interposes a `match_guard_<n>`
-//! block between pattern success and the body — payload binds
-//! land at the head of the guard block, the guard expr runs there,
-//! and the block ends in a `CondBranch` to the body or the same
+//! block between pattern success and the body. Payload binds land
+//! at the head of the guard block, the guard expr runs there, and
+//! the block ends in a `CondBranch` to the body or the same
 //! fall-through the pattern's failure edge uses.
 //!
-//! Struct destructure patterns extend the bind protocol: enum
+//! Struct destructure patterns extend the bind protocol. Enum
 //! struct variants emit `EnumPayloadFieldGet` indexed by declared
-//! field position; plain-struct destructures emit `FieldGet` and
-//! act as catch-alls (no tag check, no test block — only binds in
-//! the success block).
+//! field position, while plain-struct destructures emit `FieldGet`
+//! and act as catch-alls (no tag check, no test block, only binds
+//! in the success block).
 //!
 //! [`BlockParam`]: koja_ir::BlockParam
 
-use koja_ast::util::dedent;
 use koja_ir::{ConstValue, IRBinOp, IRInstruction, IRTerminator, IRType, IRVariantTag};
 
 mod common;
 
-use common::{lower_script_source as lower, script_function};
+use common::{
+    all_instructions, block_labeled, branch_targets_into, count_blocks_with_prefix, entry_block,
+    lower_script_source as lower, script_function,
+};
 
 #[test]
 fn match_int_literal_chain_lowers_to_test_blocks_and_typed_merge() {
@@ -40,14 +42,10 @@ fn match_int_literal_chain_lowers_to_test_blocks_and_typed_merge() {
         pick()
         ";
 
-    let script = lower(&dedent(source));
+    let script = lower(source);
     let pick = script_function(&script, "pick");
 
-    let merge = pick
-        .blocks
-        .iter()
-        .find(|b| b.label == "match_merge")
-        .expect("missing match_merge block");
+    let merge = block_labeled(&pick.blocks, "match_merge");
     assert_eq!(
         merge.params.len(),
         1,
@@ -68,34 +66,19 @@ fn match_int_literal_chain_lowers_to_test_blocks_and_typed_merge() {
         "merge's `Return` should read the joined arm value via the BlockParam",
     );
 
-    let body_count = pick
-        .blocks
-        .iter()
-        .filter(|b| b.label.starts_with("match_body_"))
-        .count();
+    let body_count = count_blocks_with_prefix(&pick.blocks, "match_body_");
     assert_eq!(
         body_count, 3,
         "expected one body block per arm; got {body_count}",
     );
 
-    let test_count = pick
-        .blocks
-        .iter()
-        .filter(|b| b.label.starts_with("match_test_"))
-        .count();
+    let test_count = count_blocks_with_prefix(&pick.blocks, "match_test_");
     assert_eq!(
         test_count, 2,
         "expected one chained test block per non-first arm; got {test_count}",
     );
 
-    let incoming_to_merge: Vec<_> = pick
-        .blocks
-        .iter()
-        .filter_map(|b| match &b.terminator {
-            IRTerminator::Branch(target) if target.block == merge.id => Some(target),
-            _ => None,
-        })
-        .collect();
+    let incoming_to_merge = branch_targets_into(&pick.blocks, merge.id);
     assert_eq!(
         incoming_to_merge.len(),
         3,
@@ -123,10 +106,10 @@ fn match_literal_arm_emits_subject_eq_const_predicate() {
         pick()
         ";
 
-    let script = lower(&dedent(source));
+    let script = lower(source);
     let pick = script_function(&script, "pick");
 
-    let entry = &pick.blocks[0];
+    let entry = entry_block(&pick.blocks);
     let has_eq = entry.instructions.iter().any(|i| {
         matches!(
             i,
@@ -162,10 +145,10 @@ fn match_catch_all_branches_unconditionally_to_body() {
         pick()
         ";
 
-    let script = lower(&dedent(source));
+    let script = lower(source);
     let pick = script_function(&script, "pick");
 
-    let entry = &pick.blocks[0];
+    let entry = entry_block(&pick.blocks);
     let IRTerminator::Branch(target) = &entry.terminator else {
         panic!(
             "single-catch-all match should terminate the test block in an unconditional Branch; \
@@ -194,24 +177,18 @@ fn match_binding_emits_local_decl_and_write() {
         pick()
         ";
 
-    let script = lower(&dedent(source));
+    let script = lower(source);
     let pick = script_function(&script, "pick");
 
-    let has_decl = pick.blocks.iter().any(|b| {
-        b.instructions
-            .iter()
-            .any(|i| matches!(i, IRInstruction::LocalDecl { .. }))
-    });
+    let has_decl =
+        all_instructions(&pick.blocks).any(|i| matches!(i, IRInstruction::LocalDecl { .. }));
     assert!(
         has_decl,
         "match binding `x` should emit a `LocalDecl` (in the function entry block)",
     );
 
-    let has_write = pick.blocks.iter().any(|b| {
-        b.instructions
-            .iter()
-            .any(|i| matches!(i, IRInstruction::LocalWrite { .. }))
-    });
+    let has_write =
+        all_instructions(&pick.blocks).any(|i| matches!(i, IRInstruction::LocalWrite { .. }));
     assert!(
         has_write,
         "match binding `x` should emit a `LocalWrite` capturing the subject value",
@@ -231,10 +208,10 @@ fn match_string_literal_arm_lowers_const_string_and_eq() {
         pick()
         ";
 
-    let script = lower(&dedent(source));
+    let script = lower(source);
     let pick = script_function(&script, "pick");
 
-    let entry = &pick.blocks[0];
+    let entry = entry_block(&pick.blocks);
     let has_string_const = entry.instructions.iter().any(|i| {
         matches!(
             i,
@@ -283,10 +260,10 @@ fn match_enum_unit_arm_emits_tag_get_and_eq_chain() {
         pick(Color.Red)
         ";
 
-    let script = lower(&dedent(source));
+    let script = lower(source);
     let pick = script_function(&script, "pick");
 
-    let entry = &pick.blocks[0];
+    let entry = entry_block(&pick.blocks);
     let has_tag_get = entry
         .instructions
         .iter()
@@ -343,38 +320,32 @@ fn match_enum_tuple_binding_emits_payload_field_get_and_local_write() {
         unwrap(Box.Some(7))
         ";
 
-    let script = lower(&dedent(source));
+    let script = lower(source);
     let unwrap_fn = script_function(&script, "unwrap");
 
-    let payload_get = unwrap_fn.blocks.iter().find_map(|b| {
-        b.instructions.iter().find_map(|i| match i {
-            IRInstruction::EnumPayloadFieldGet {
-                payload_index, tag, ..
-            } => Some((*tag, *payload_index)),
-            _ => None,
-        })
+    let payload_get = all_instructions(&unwrap_fn.blocks).find_map(|i| match i {
+        IRInstruction::EnumPayloadFieldGet {
+            payload_index, tag, ..
+        } => Some((*tag, *payload_index)),
+        _ => None,
     });
     let (tag, payload_index) =
         payload_get.expect("payload binding should emit `EnumPayloadFieldGet`");
     assert_eq!(
         tag,
         IRVariantTag(0),
-        "Some is the first declared variant — tag 0",
+        "Some is the first declared variant (tag 0)",
     );
     assert_eq!(payload_index, 0, "x is the first payload field");
 
-    let body_block = unwrap_fn
-        .blocks
-        .iter()
-        .find(|b| b.label == "match_body_0")
-        .expect("missing match_body_0 block");
+    let body_block = block_labeled(&unwrap_fn.blocks, "match_body_0");
     let body_has_payload_get = body_block
         .instructions
         .iter()
         .any(|i| matches!(i, IRInstruction::EnumPayloadFieldGet { .. }));
     assert!(
         body_has_payload_get,
-        "payload field-get must run on the success edge — appears in the arm body block",
+        "payload field-get must run on the success edge, in the arm body block",
     );
     let body_has_local_write = body_block
         .instructions
@@ -385,7 +356,7 @@ fn match_enum_tuple_binding_emits_payload_field_get_and_local_write() {
         "binding should emit a `LocalWrite` in the body block",
     );
 
-    let entry = &unwrap_fn.blocks[0];
+    let entry = entry_block(&unwrap_fn.blocks);
     let entry_has_local_decl = entry
         .instructions
         .iter()
@@ -414,7 +385,7 @@ fn match_exhaustive_enum_synthesizes_unreachable_trap_block() {
         pick(Color.Red)
         ";
 
-    let script = lower(&dedent(source));
+    let script = lower(source);
     let pick = script_function(&script, "pick");
 
     let unreachable_block = pick
@@ -444,14 +415,10 @@ fn match_or_alternatives_chain_through_dedicated_test_blocks() {
         pick()
         ";
 
-    let script = lower(&dedent(source));
+    let script = lower(source);
     let pick = script_function(&script, "pick");
 
-    let alt_count = pick
-        .blocks
-        .iter()
-        .filter(|b| b.label.starts_with("match_or_alt_"))
-        .count();
+    let alt_count = count_blocks_with_prefix(&pick.blocks, "match_or_alt_");
     assert_eq!(
         alt_count, 2,
         "an or-pattern of 3 alternatives should mint 2 fresh chain blocks (the first \
@@ -484,14 +451,10 @@ fn match_guarded_arm_interposes_guard_block_between_test_and_body() {
         pick(7)
         ";
 
-    let script = lower(&dedent(source));
+    let script = lower(source);
     let pick = script_function(&script, "pick");
 
-    let guard_block = pick
-        .blocks
-        .iter()
-        .find(|b| b.label == "match_guard_0")
-        .expect("guarded arm should mint a `match_guard_0` block");
+    let guard_block = block_labeled(&pick.blocks, "match_guard_0");
 
     let IRTerminator::CondBranch {
         then_target,
@@ -504,20 +467,12 @@ fn match_guarded_arm_interposes_guard_block_between_test_and_body() {
             guard_block.terminator,
         );
     };
-    let body_block = pick
-        .blocks
-        .iter()
-        .find(|b| b.label == "match_body_0")
-        .expect("missing match_body_0");
+    let body_block = block_labeled(&pick.blocks, "match_body_0");
     assert_eq!(
         then_target.block, body_block.id,
         "guard true should branch into the arm body block",
     );
-    let fall_through = pick
-        .blocks
-        .iter()
-        .find(|b| b.label == "match_body_1")
-        .expect("missing match_body_1 (the catch-all body)");
+    let fall_through = block_labeled(&pick.blocks, "match_body_1");
     let next_test = pick.blocks.iter().find(|b| b.label == "match_test_1");
     let expected_else = next_test.map(|b| b.id).unwrap_or(fall_through.id);
     assert_eq!(
@@ -532,8 +487,8 @@ fn match_guarded_arm_interposes_guard_block_between_test_and_body() {
         .any(|i| matches!(i, IRInstruction::LocalWrite { .. }));
     assert!(
         !body_has_local_write,
-        "the body block should not host a `LocalWrite` for a guarded binding — the \
-         binding writes upstream so the guard sees it",
+        "the body block should not host a `LocalWrite` for a guarded binding (the \
+         binding writes upstream so the guard sees it)",
     );
 }
 
@@ -555,14 +510,10 @@ fn match_guarded_enum_payload_binds_land_in_guard_block() {
         unwrap(Box.Some(7))
         ";
 
-    let script = lower(&dedent(source));
+    let script = lower(source);
     let unwrap_fn = script_function(&script, "unwrap");
 
-    let guard_block = unwrap_fn
-        .blocks
-        .iter()
-        .find(|b| b.label == "match_guard_0")
-        .expect("guarded enum-tuple arm should mint a `match_guard_0` block");
+    let guard_block = block_labeled(&unwrap_fn.blocks, "match_guard_0");
     let guard_has_payload_get = guard_block
         .instructions
         .iter()
@@ -590,14 +541,10 @@ fn match_struct_destructure_emits_field_get_in_body_block() {
         add()
         ";
 
-    let script = lower(&dedent(source));
+    let script = lower(source);
     let add_fn = script_function(&script, "add");
 
-    let body_block = add_fn
-        .blocks
-        .iter()
-        .find(|b| b.label == "match_body_0")
-        .expect("missing match_body_0 block");
+    let body_block = block_labeled(&add_fn.blocks, "match_body_0");
 
     let field_indices: Vec<u32> = body_block
         .instructions
@@ -652,14 +599,10 @@ fn match_enum_struct_destructure_emits_payload_field_get_by_declared_index() {
         area(Shape.Rect{w: 3, h: 4})
         ";
 
-    let script = lower(&dedent(source));
+    let script = lower(source);
     let area_fn = script_function(&script, "area");
 
-    let rect_body = area_fn
-        .blocks
-        .iter()
-        .find(|b| b.label == "match_body_0")
-        .expect("missing match_body_0 (Rect arm)");
+    let rect_body = block_labeled(&area_fn.blocks, "match_body_0");
     let payload_indices: Vec<u32> = rect_body
         .instructions
         .iter()
@@ -677,11 +620,7 @@ fn match_enum_struct_destructure_emits_payload_field_get_by_declared_index() {
          payload indices; got {payload_indices:?}",
     );
 
-    let circle_body = area_fn
-        .blocks
-        .iter()
-        .find(|b| b.label == "match_body_1")
-        .expect("missing match_body_1 (Circle arm)");
+    let circle_body = block_labeled(&area_fn.blocks, "match_body_1");
     let circle_tags: Vec<IRVariantTag> = circle_body
         .instructions
         .iter()
@@ -714,10 +653,10 @@ fn match_struct_destructure_acts_as_catch_all_in_chain() {
         first()
         ";
 
-    let script = lower(&dedent(source));
+    let script = lower(source);
     let first_fn = script_function(&script, "first");
 
-    let entry = &first_fn.blocks[0];
+    let entry = entry_block(&first_fn.blocks);
     assert!(
         matches!(&entry.terminator, IRTerminator::Branch(_)),
         "plain-struct destructure should close the chain with an unconditional Branch \
@@ -725,11 +664,7 @@ fn match_struct_destructure_acts_as_catch_all_in_chain() {
         entry.terminator,
     );
 
-    let test_block_count = first_fn
-        .blocks
-        .iter()
-        .filter(|b| b.label.starts_with("match_test_"))
-        .count();
+    let test_block_count = count_blocks_with_prefix(&first_fn.blocks, "match_test_");
     assert_eq!(
         test_block_count, 0,
         "struct destructure as the first / only arm should not mint any extra test blocks",
@@ -738,10 +673,9 @@ fn match_struct_destructure_acts_as_catch_all_in_chain() {
 
 #[test]
 fn match_literal_against_narrow_subject_mints_narrow_const() {
-    // Pattern-literal coercion: a match against a `UInt8` subject
-    // should mint `Const UInt8(5)` for the literal arm, not the
-    // default `Const Int64(5)`. Pins that
-    // `patterns/literals.rs::emit_literal_eq` reads
+    // A match against a `UInt8` subject should mint `Const UInt8(5)`
+    // for the literal arm, not the default `Const Int64(5)`. Pins
+    // that `patterns/literals.rs::emit_literal_eq` reads
     // `Pattern::Literal.literal_coercion`.
     let source = "
         fn classify(x: UInt8) -> Int
@@ -754,31 +688,23 @@ fn match_literal_against_narrow_subject_mints_narrow_const() {
         classify(5)
         ";
 
-    let script = lower(&dedent(source));
+    let script = lower(source);
     let classify = script_function(&script, "classify");
 
-    let has_uint8_const = classify
-        .blocks
-        .iter()
-        .flat_map(|b| b.instructions.iter())
-        .any(|i| {
-            matches!(
-                i,
-                IRInstruction::Const {
-                    value: ConstValue::UInt8(5),
-                    ..
-                }
-            )
-        });
+    let has_uint8_const = all_instructions(&classify.blocks).any(|i| {
+        matches!(
+            i,
+            IRInstruction::Const {
+                value: ConstValue::UInt8(5),
+                ..
+            }
+        )
+    });
     assert!(
         has_uint8_const,
         "pattern literal `5` matched against `UInt8` should mint `Const UInt8(5)`; \
          got {:?}",
-        classify
-            .blocks
-            .iter()
-            .flat_map(|b| b.instructions.iter())
-            .collect::<Vec<_>>(),
+        all_instructions(&classify.blocks).collect::<Vec<_>>(),
     );
 }
 
@@ -800,33 +726,28 @@ fn lower_match_constructor_tuple_emits_enum_tuple_shape() {
         unwrap(Box.Some(7))
         ";
 
-    let script = lower(&dedent(source));
+    let script = lower(source);
     let unwrap_fn = script_function(&script, "unwrap");
 
-    let has_tag_check = unwrap_fn
-        .blocks
-        .iter()
-        .flat_map(|b| b.instructions.iter())
-        .any(|i| matches!(i, IRInstruction::EnumTagGet { .. }));
+    let has_tag_check =
+        all_instructions(&unwrap_fn.blocks).any(|i| matches!(i, IRInstruction::EnumTagGet { .. }));
     assert!(
         has_tag_check,
         "constructor shorthand `Some(x)` should rewrite to EnumTuple and emit `EnumTagGet`",
     );
 
-    let payload_get = unwrap_fn.blocks.iter().find_map(|b| {
-        b.instructions.iter().find_map(|i| match i {
-            IRInstruction::EnumPayloadFieldGet {
-                payload_index, tag, ..
-            } => Some((*tag, *payload_index)),
-            _ => None,
-        })
+    let payload_get = all_instructions(&unwrap_fn.blocks).find_map(|i| match i {
+        IRInstruction::EnumPayloadFieldGet {
+            payload_index, tag, ..
+        } => Some((*tag, *payload_index)),
+        _ => None,
     });
     let (tag, payload_index) = payload_get
         .expect("constructor shorthand should emit `EnumPayloadFieldGet` for the binding");
     assert_eq!(
         tag,
         IRVariantTag(0),
-        "Some is the first declared variant — tag 0",
+        "Some is the first declared variant (tag 0)",
     );
     assert_eq!(payload_index, 0, "x is the first payload field");
 }
@@ -854,10 +775,10 @@ fn match_struct_literal_field_emits_field_get_and_eq_test_in_entry_block() {
         classify(Point{x: 5, y: 6})
         ";
 
-    let script = lower(&dedent(source));
+    let script = lower(source);
     let classify = script_function(&script, "classify");
 
-    let entry = &classify.blocks[0];
+    let entry = entry_block(&classify.blocks);
     let field_indices: Vec<u32> = entry
         .instructions
         .iter()
@@ -921,7 +842,7 @@ fn match_struct_literal_field_emits_field_get_and_eq_test_in_entry_block() {
          got {and_consts:?}",
     );
 
-    // Entry's true edge goes to the AND block; its false edge
+    // Entry's true edge goes to the AND block. Its false edge
     // falls through to arm 1's test.
     let IRTerminator::CondBranch {
         then_target,
@@ -938,17 +859,13 @@ fn match_struct_literal_field_emits_field_get_and_eq_test_in_entry_block() {
         then_target.block, and_block.id,
         "entry's true edge should go to the fresh AND-field block",
     );
-    let next_test = classify
-        .blocks
-        .iter()
-        .find(|b| b.label == "match_test_1")
-        .expect("missing match_test_1 for catch-all arm");
+    let next_test = block_labeled(&classify.blocks, "match_test_1");
     assert_eq!(
         else_target.block, next_test.id,
         "entry's false edge should fall through to the next arm's test block",
     );
 
-    // The AND block's true edge goes to arm 0's body; its false
+    // The AND block's true edge goes to arm 0's body. Its false
     // edge also falls through to arm 1's test.
     let IRTerminator::CondBranch {
         then_target: and_then,
@@ -961,11 +878,7 @@ fn match_struct_literal_field_emits_field_get_and_eq_test_in_entry_block() {
             and_block.terminator,
         );
     };
-    let body_0 = classify
-        .blocks
-        .iter()
-        .find(|b| b.label == "match_body_0")
-        .expect("missing match_body_0");
+    let body_0 = block_labeled(&classify.blocks, "match_body_0");
     assert_eq!(
         and_then.block, body_0.id,
         "AND-field block's true edge should branch to the arm's body block",
@@ -978,7 +891,7 @@ fn match_struct_literal_field_emits_field_get_and_eq_test_in_entry_block() {
 
 #[test]
 fn match_struct_partial_field_pattern_omits_other_fields_from_tests() {
-    // `Point{x: 5}` lists only `x`; the lowering must not emit a
+    // `Point{x: 5}` lists only `x`. The lowering must not emit a
     // FieldGet for `y` (implicit wildcard).
     let source = "
         struct Point
@@ -996,13 +909,10 @@ fn match_struct_partial_field_pattern_omits_other_fields_from_tests() {
         classify(Point{x: 5, y: 9})
         ";
 
-    let script = lower(&dedent(source));
+    let script = lower(source);
     let classify = script_function(&script, "classify");
 
-    let field_indices: Vec<u32> = classify
-        .blocks
-        .iter()
-        .flat_map(|b| b.instructions.iter())
+    let field_indices: Vec<u32> = all_instructions(&classify.blocks)
         .filter_map(|i| match i {
             IRInstruction::FieldGet { field_index, .. } => Some(*field_index),
             _ => None,
@@ -1014,11 +924,7 @@ fn match_struct_partial_field_pattern_omits_other_fields_from_tests() {
         "partial struct pattern `Point{{x: 5}}` should only FieldGet x; got {field_indices:?}",
     );
 
-    let and_blocks = classify
-        .blocks
-        .iter()
-        .filter(|b| b.label.starts_with("match_and_field"))
-        .count();
+    let and_blocks = count_blocks_with_prefix(&classify.blocks, "match_and_field");
     assert_eq!(
         and_blocks, 0,
         "single-field pattern should not mint any AND-chain follow-on blocks",
@@ -1043,10 +949,10 @@ fn match_nested_enum_with_inner_literal_orders_tag_before_payload_extraction() {
         classify(Option.Some(5))
         ";
 
-    let script = lower(&dedent(source));
+    let script = lower(source);
     let classify = script_function(&script, "classify");
 
-    let entry = &classify.blocks[0];
+    let entry = entry_block(&classify.blocks);
     let entry_has_tag_get = entry
         .instructions
         .iter()
@@ -1096,7 +1002,7 @@ fn match_nested_struct_inside_enum_tuple_chains_field_test_after_tag() {
     // `Option.Some(Point{x: 5})` produces three blocks of interest:
     // entry (tag check), AND #1 (payload extraction + x FieldGet
     // + Eq), and the body block. The bind chain isn't exercised
-    // here — every field is a literal — but the test ordering
+    // here (every field is a literal), but the test ordering
     // pins the same CFG shape the lang fixture relies on.
     let source = "
         struct Point
@@ -1114,10 +1020,10 @@ fn match_nested_struct_inside_enum_tuple_chains_field_test_after_tag() {
         classify(Option.Some(Point{x: 5, y: 9}))
         ";
 
-    let script = lower(&dedent(source));
+    let script = lower(source);
     let classify = script_function(&script, "classify");
 
-    let entry = &classify.blocks[0];
+    let entry = entry_block(&classify.blocks);
     let entry_tag_gets = entry
         .instructions
         .iter()
@@ -1175,7 +1081,7 @@ fn match_nested_struct_inside_enum_tuple_chains_field_test_after_tag() {
 #[test]
 fn match_nested_struct_binding_emits_chained_field_gets_in_body_block() {
     // `Option.Some(Point{x: 5, y: y_bind})` exercises a chained
-    // bind: at the success edge, the lowering must first project
+    // bind. At the success edge, the lowering must first project
     // the Option payload (EnumPayloadFieldGet) and then GEP into
     // Point's y field (FieldGet). The bind chain shows up as two
     // sequential projections in the body block, ending in a
@@ -1196,14 +1102,10 @@ fn match_nested_struct_binding_emits_chained_field_gets_in_body_block() {
         classify(Option.Some(Point{x: 5, y: 9}))
         ";
 
-    let script = lower(&dedent(source));
+    let script = lower(source);
     let classify = script_function(&script, "classify");
 
-    let body = classify
-        .blocks
-        .iter()
-        .find(|b| b.label == "match_body_0")
-        .expect("missing match_body_0 block");
+    let body = block_labeled(&classify.blocks, "match_body_0");
 
     let payload_gets = body
         .instructions
@@ -1244,11 +1146,11 @@ fn match_nested_struct_binding_emits_chained_field_gets_in_body_block() {
 #[test]
 fn match_struct_or_pattern_inside_field_still_wires_or_chain_for_inner() {
     // `Point{x: 1 | 2 | 3, y: y_bind}` exercises the
-    // or-pattern-inside-struct-field case: the inner or-pattern
+    // or-pattern-inside-struct-field case. The inner or-pattern
     // should preserve its ChainMode::Or wiring (any alt true ->
     // success) while the outer struct chain stays AND. Today this
     // would require lifting the or-chain into an AND-chain in
-    // consume_inner_check; pin behavior so we see how it's wired.
+    // consume_inner_check. Pin behavior so we see how it's wired.
     let source = "
         struct Point
           x: Int
@@ -1268,22 +1170,19 @@ fn match_struct_or_pattern_inside_field_still_wires_or_chain_for_inner() {
     // The typecheck-side and IR-lowering-side restriction on
     // mixed-mode chains panics for or-inside-and. This test
     // documents that the fixture compiles by virtue of an `_`
-    // catch-all — should this panic in lowering, the test will
+    // catch-all. Should this panic in lowering, the test will
     // surface the regression for follow-up.
-    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| lower(&dedent(source))));
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| lower(source)));
     if result.is_err() {
-        // Acceptable: or-inside-struct-field is currently in the
-        // out-of-scope list. The test pins that we panic with a
-        // clear message rather than miscompile.
+        // Or-inside-struct-field is currently in the out-of-scope
+        // list, so a panic is acceptable. The test pins that we
+        // panic with a clear message rather than miscompile.
         return;
     }
     let script = result.unwrap();
     let classify = script_function(&script, "classify");
     assert!(
-        classify
-            .blocks
-            .iter()
-            .any(|b| b.label.starts_with("match_or_alt_")),
+        count_blocks_with_prefix(&classify.blocks, "match_or_alt_") > 0,
         "or-pattern inside a struct field should still mint `match_or_alt_*` blocks if \
          the inner lowering succeeds; got blocks {:?}",
         classify

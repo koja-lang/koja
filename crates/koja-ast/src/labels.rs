@@ -1,5 +1,5 @@
 //! Short, stable labels for AST shapes used in diagnostics and panics.
-//! `expr_kind_label` returns a compact kind name (e.g. `"binary"`);
+//! `expr_kind_label` returns a compact kind name (e.g. `"binary"`), and
 //! `bin_op_label` renders the literal source token (`"+"`, `"and"`).
 
 use crate::ast::{BinOp, CompoundOp, ExprKind, Pattern};

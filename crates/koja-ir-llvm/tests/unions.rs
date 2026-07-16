@@ -60,8 +60,8 @@ fn union_outer_struct_emits_with_payload_buffer() {
         &ir_text,
         "%Union_TestApp.Comment_or_TestApp.Post = type { i8,",
     );
-    // 8-byte payload buffer — pinned only on 64-bit hosts where
-    // single-ptr fields measure 8 bytes; the IR layout pass uses
+    // 8-byte payload buffer, pinned only on 64-bit hosts where
+    // single-ptr fields measure 8 bytes. The IR layout pass uses
     // host pointer width.
     #[cfg(target_pointer_width = "64")]
     assert_contains(
@@ -138,7 +138,7 @@ fn typed_binding_arm_emits_tag_load_compare_branch_and_payload_load() {
     let script = lower_script(&dedent(source));
     let ir_text =
         emit_script_llvm_ir(&script, APP_NAME).expect("emit_script_llvm_ir should succeed");
-    // Tag load is an `i8` read; the per-arm compare follows.
+    // Tag load is an `i8` read. The per-arm compare follows.
     assert_contains(
         &ir_text,
         "load i8, ptr %Union_TestApp.A_or_TestApp.B_tag_ptr",
@@ -189,7 +189,7 @@ fn struct_field_union_typechecks_and_emits() {
     // The union outer is referenced as the type of the `Holder.pet` field.
     assert_contains(&ir_text, "%Union_TestApp.Cat_or_TestApp.Dog = type { i8,");
     // The struct body for `Holder` references the union outer for
-    // the `pet` field — the type system requires the union to be
+    // the `pet` field. The type system requires the union to be
     // declared (and its layout registered) before this struct
     // body is emitted.
     assert_contains(

@@ -15,33 +15,15 @@
 //!   another generic function) cascade through the worklist.
 //!
 //! Mangled-name shape for top-level generic functions mirrors generic
-//! types — `<root>_$<arg>.<arg>$`. Methods on a generic type read as
+//! types: `<root>_$<arg>.<arg>$`. Methods on a generic type read as
 //! `<type-mangled>.<method>` (no separate args list, since methods
 //! inherit the type's params).
 
-use koja_ast::util::dedent;
-use koja_ir::{IRFunction, IRType};
+use koja_ir::IRType;
 
 mod common;
 
-use common::lower_script_source;
-
-fn collect_script_function_names(script: &koja_ir::IRScript) -> Vec<String> {
-    let mut names: Vec<String> = script
-        .packages
-        .iter()
-        .flat_map(|p| p.functions.keys())
-        .map(|sym| sym.mangled().to_string())
-        .collect();
-    names.sort();
-    names
-}
-
-fn function<'a>(script: &'a koja_ir::IRScript, mangled: &str) -> &'a IRFunction {
-    script
-        .function(mangled)
-        .unwrap_or_else(|| panic!("expected function `{mangled}` in script"))
-}
+use common::{lower_script_source, mangled_function, script_function_names};
 
 #[test]
 fn identity_function_monomorphizes_at_each_concrete_arg() {
@@ -54,9 +36,9 @@ fn identity_function_monomorphizes_at_each_concrete_arg() {
         id(\"hello\")
         ";
 
-    let script = lower_script_source(&dedent(source));
+    let script = lower_script_source(source);
 
-    let names = collect_script_function_names(&script);
+    let names = script_function_names(&script);
     assert!(
         !names.iter().any(|n| n == "TestApp.id"),
         "generic template `TestApp.id` must not appear in IRPackage.functions",
@@ -64,12 +46,12 @@ fn identity_function_monomorphizes_at_each_concrete_arg() {
     assert!(names.contains(&"TestApp.id_$Int64$".to_string()));
     assert!(names.contains(&"TestApp.id_$String$".to_string()));
 
-    let int_id = function(&script, "TestApp.id_$Int64$");
+    let int_id = mangled_function(&script, "TestApp.id_$Int64$");
     assert_eq!(int_id.return_type, IRType::Int64);
     assert_eq!(int_id.params.len(), 1);
     assert_eq!(int_id.params[0].ty, IRType::Int64);
 
-    let string_id = function(&script, "TestApp.id_$String$");
+    let string_id = mangled_function(&script, "TestApp.id_$String$");
     assert_eq!(string_id.return_type, IRType::String);
     assert_eq!(string_id.params.len(), 1);
     assert_eq!(string_id.params[0].ty, IRType::String);
@@ -87,8 +69,8 @@ fn idempotent_calls_dedupe_to_one_function_per_arg_set() {
         id(3)
         ";
 
-    let script = lower_script_source(&dedent(source));
-    let id_decls: Vec<_> = collect_script_function_names(&script)
+    let script = lower_script_source(source);
+    let id_decls: Vec<_> = script_function_names(&script)
         .into_iter()
         .filter(|n| n.starts_with("TestApp.id"))
         .collect();
@@ -106,8 +88,8 @@ fn multi_param_function_mangles_args_in_declaration_order() {
         pick(\"y\", 2)
         ";
 
-    let script = lower_script_source(&dedent(source));
-    let mut pick_decls: Vec<_> = collect_script_function_names(&script)
+    let script = lower_script_source(source);
+    let mut pick_decls: Vec<_> = script_function_names(&script)
         .into_iter()
         .filter(|n| n.starts_with("TestApp.pick"))
         .collect();
@@ -120,7 +102,7 @@ fn multi_param_function_mangles_args_in_declaration_order() {
         ],
     );
 
-    let first = function(&script, "TestApp.pick_$Int64.String$");
+    let first = mangled_function(&script, "TestApp.pick_$Int64.String$");
     assert_eq!(first.params[0].ty, IRType::Int64);
     assert_eq!(first.params[1].ty, IRType::String);
     assert_eq!(first.return_type, IRType::Int64);
@@ -140,8 +122,8 @@ fn generic_function_calling_another_generic_cascades_through_worklist() {
         passthrough(7)
         ";
 
-    let script = lower_script_source(&dedent(source));
-    let names = collect_script_function_names(&script);
+    let script = lower_script_source(source);
+    let names = script_function_names(&script);
     assert!(names.contains(&"TestApp.passthrough_$Int64$".to_string()));
     assert!(
         names.contains(&"TestApp.id_$Int64$".to_string()),
@@ -163,8 +145,8 @@ fn generic_function_called_with_user_struct_includes_struct_in_mangle() {
         id(Inner{n: 1})
         ";
 
-    let script = lower_script_source(&dedent(source));
-    let id_decls: Vec<_> = collect_script_function_names(&script)
+    let script = lower_script_source(source);
+    let id_decls: Vec<_> = script_function_names(&script)
         .into_iter()
         .filter(|n| n.starts_with("TestApp.id"))
         .collect();
@@ -185,8 +167,8 @@ fn generic_function_called_with_generic_arg_yields_nested_mangle() {
         id(Box{value: 1})
         ";
 
-    let script = lower_script_source(&dedent(source));
-    let names = collect_script_function_names(&script);
+    let script = lower_script_source(source);
+    let names = script_function_names(&script);
     let id_decls: Vec<_> = names
         .iter()
         .filter(|n| n.starts_with("TestApp.id"))
@@ -214,8 +196,8 @@ fn method_on_generic_struct_monomorphizes_with_struct_mangled_prefix() {
         0
         ";
 
-    let script = lower_script_source(&dedent(source));
-    let names = collect_script_function_names(&script);
+    let script = lower_script_source(source);
+    let names = script_function_names(&script);
     assert!(
         names.contains(&"TestApp.Pair_$Int64.String$.first".to_string()),
         "method `Pair<Int, String>.first` should monomorphize when `Pair<Int, String>` is \
@@ -226,8 +208,7 @@ fn method_on_generic_struct_monomorphizes_with_struct_mangled_prefix() {
         "generic template `TestApp.Pair.first` must not appear in IRPackage.functions",
     );
 
-    let mangled = "TestApp.Pair_$Int64.String$.first";
-    let method = function(&script, mangled);
+    let method = mangled_function(&script, "TestApp.Pair_$Int64.String$.first");
     assert_eq!(method.return_type, IRType::Int64);
 }
 
@@ -248,8 +229,8 @@ fn method_on_generic_struct_for_distinct_args_mints_distinct_methods() {
         0
         ";
 
-    let script = lower_script_source(&dedent(source));
-    let mut firsts: Vec<_> = collect_script_function_names(&script)
+    let script = lower_script_source(source);
+    let mut firsts: Vec<_> = script_function_names(&script)
         .into_iter()
         .filter(|n| n.starts_with("TestApp.Pair_") && n.ends_with(".first"))
         .collect();

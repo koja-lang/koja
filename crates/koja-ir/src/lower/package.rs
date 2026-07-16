@@ -5,7 +5,7 @@
 //! [`resolved_type_to_ir_type`]) so siblings import a stable seam.
 //!
 //! Top-level / inline-struct / `impl`-block functions all flow
-//! through [`lower_function_with_identifier`] — only the
+//! through [`lower_function_with_identifier`]. Only the
 //! [`Identifier`] differs.
 
 use koja_ast::ast::{
@@ -40,12 +40,12 @@ use std::collections::BTreeMap;
 use std::path::Path;
 
 /// Lower one [`CheckedPackage`] into an [`IRPackage`] fragment.
-/// Generic struct / enum decls are skipped here — they live in the
+/// Generic struct / enum decls are skipped here. They live in the
 /// typecheck registry and only become concrete decls when
 /// [`crate::generics::instantiate`] specializes them. Concrete
 /// instantiations encountered while lowering construction sites,
 /// field types, or function signatures append to
-/// `output.instantiations` for the driver to monomorphize;
+/// `output.instantiations` for the driver to monomorphize, while
 /// feature-gap diagnostics push to `output.diagnostics` and the
 /// offending decl is dropped.
 pub(crate) fn lower_package(
@@ -146,9 +146,9 @@ pub(crate) fn lower_package(
 }
 
 /// Lower methods declared in an `impl Trait for Type ... end` block.
-/// Unsupported targets already errored upstream; IR silently skips
+/// Unsupported targets already errored upstream, so IR silently skips
 /// them. Synthesized default-method bodies lower like any other
-/// method — they all register at `Package.Type.method` and the IR
+/// method. They all register at `Package.Type.method` and the IR
 /// doesn't model the trait link.
 fn lower_impl(
     impl_block: &ImplBlock,
@@ -224,7 +224,7 @@ fn extend_target_is_protocol(
 }
 
 /// Resolve a nominal `impl`/`extend` target into its owning
-/// `(package, path)`. Twin of typecheck's `lookup_owner_path`: a
+/// `(package, path)`. Twin of typecheck's `lookup_owner_path`, where a
 /// same-package nested type wins over the `<package>.<rest>` reading.
 pub(crate) fn lookup_owner_path(
     path: &[String],
@@ -248,8 +248,8 @@ pub(crate) fn lookup_owner_path(
 }
 
 /// Shared member-lowering loop for [`lower_impl`] and [`lower_extend`].
-/// `fn` members key at `<target_package>.<target_name>.<method>`;
-/// type aliases are dropped.
+/// `fn` members key at `<target_package>.<target_name>.<method>`,
+/// and type aliases are dropped.
 fn lower_block_members(
     target_package: &str,
     target_path: &[String],
@@ -275,7 +275,7 @@ fn lower_block_members(
 /// True when `target_path` resolves to a generic struct/enum.
 /// Methods on a generic target are specialized through
 /// [`crate::generics::instantiate`] when the receiver type is
-/// concrete; lowering them eagerly at the template would feed
+/// concrete. Lowering them eagerly at the template would feed
 /// `TypeParam` into [`resolved_type_to_ir_type`] and panic.
 fn impl_target_is_generic(
     target_path: &[String],
@@ -300,14 +300,14 @@ pub(crate) fn nominal_target_path(target: &TypeExpr) -> Option<&[String]> {
 
 /// Lower one [`Function`] under `identifier`. `@intrinsic`-annotated
 /// functions become [`FunctionKind::Intrinsic`] with empty blocks
-/// (backends synthesize bodies from a mangled-symbol table);
+/// (backends synthesize bodies from a mangled-symbol table).
 /// `@extern "C"`-annotated functions become [`FunctionKind::Extern`]
-/// with empty blocks and the parsed `link_name` / `link_lib` attrs;
-/// regular functions become [`FunctionKind::Regular`] with at least
+/// with empty blocks and the parsed `link_name` / `link_lib` attrs,
+/// and regular functions become [`FunctionKind::Regular`] with at least
 /// one basic block. Returns `None` (with a diagnostic) on feature
 /// gaps.
 ///
-/// Generic functions are skipped here — same shape as the
+/// Generic functions are skipped here, the same shape as the
 /// generic-struct skip in [`super::structs::lower_struct_decl`].
 /// Specialization happens later when [`crate::generics::instantiate`]
 /// drives the worklist of [`Instantiation`]s recorded at call sites.
@@ -346,7 +346,7 @@ pub(crate) fn def_location_of(function: &Function, def_file: Option<&Path>) -> O
 }
 
 /// Body of [`lower_function_with_identifier`] minus the registry
-/// signature lookup and the generic skip — both of which the
+/// signature lookup and the generic skip, both of which the
 /// monomorphization driver supplies on its own (substituted
 /// signature, mangled symbol). Shared by the concrete top-level
 /// path and `crate::generics::monomorphize::monomorphize_function`.
@@ -415,7 +415,7 @@ pub(crate) fn lower_function_inner(
         output.diagnostics.push(Diagnostic::error(
             format!(
                 "IR does not yet lower bodyless fn `{identifier}` (no `@intrinsic` / \
-                 `@extern \"C\"` marker — provide one or add a body)",
+                 `@extern \"C\"` marker, provide one or add a body)",
             ),
             function.span,
         ));
@@ -442,7 +442,7 @@ pub(crate) fn lower_function_inner(
 /// Mint a [`ValueId`](crate::types::ValueId) per parameter (in
 /// declaration order, `self` included) and promote each into a local
 /// slot via `LocalDecl` + `LocalWrite` appended to the entry block.
-/// `self` is treated as a regular param here: typecheck stamps
+/// `self` is treated as a regular param here, since typecheck stamps
 /// `local_id` on every param shape, and `ExprKind::Self_` references
 /// read through the same `LocalRead` path body locals use.
 fn lower_params(
@@ -457,7 +457,7 @@ fn lower_params(
     for (index, param) in function.params.iter().enumerate() {
         let local_id = param_local_id(param).unwrap_or_else(|| {
             panic!(
-                "IR lower: `{identifier}` parameter #{index} carries no `LocalId` — \
+                "IR lower: `{identifier}` parameter #{index} carries no `LocalId`, \
                  typecheck resolve must stamp one for every param before lower runs",
             )
         });
@@ -471,7 +471,7 @@ fn lower_params(
 }
 
 /// Mint params for an `@intrinsic` function. No entry block, no
-/// promotion: backends synthesize the body and never walk the
+/// promotion. Backends synthesize the body and never walk the
 /// (empty) blocks.
 fn lower_intrinsic_params(
     function: &Function,
@@ -484,8 +484,8 @@ fn lower_intrinsic_params(
     for (index, param) in function.params.iter().enumerate() {
         let local_id = param_local_id(param).unwrap_or_else(|| {
             panic!(
-                "IR lower: intrinsic parameter #{index} carries no `LocalId` — \
-                 typecheck resolve invariant violation",
+                "IR lower: intrinsic parameter #{index} carries no `LocalId` \
+                 (typecheck resolve invariant violation)",
             )
         });
         let resolved = &signature.params[index].ty;
@@ -510,7 +510,7 @@ fn param_local_id(param: &Param) -> Option<LocalId> {
 
 /// Lookup the lifted [`FunctionSignature`] for `identifier`.
 /// Returns `None` when collect / lift rejected the function (IR
-/// silently skips); a registered entry without a signature panics
+/// silently skips), while a registered entry without a signature panics
 /// as an invariant violation.
 pub(super) fn function_signature<'a>(
     registry: &'a GlobalRegistry,
@@ -521,7 +521,7 @@ pub(super) fn function_signature<'a>(
         GlobalKind::Function(Some(sig)) => Some(sig),
         other => panic!(
             "IR lower: function `{identifier}` has no lifted signature \
-             ({}) — lift_signatures invariant violation",
+             ({}), lift_signatures invariant violation",
             other.label(),
         ),
     }
@@ -529,16 +529,16 @@ pub(super) fn function_signature<'a>(
 
 /// Translate a typecheck [`ResolvedType`] to a concrete [`IRType`].
 /// Stdlib `Global.{Bool,Float,Int,String,Unit}` map to scalar
-/// [`IRType`]s; user structs / enums map to [`IRType::Struct`] /
-/// [`IRType::Enum`] — with concrete `type_args` folded into the
+/// [`IRType`]s. User structs / enums map to [`IRType::Struct`] /
+/// [`IRType::Enum`], with concrete `type_args` folded into the
 /// symbol via [`mangled_type_name`]. Every non-empty-args
 /// translation also pushes an [`Instantiation`] (keyed at the
 /// template's [`GlobalRegistryId`]) for the
 /// [`crate::generics::instantiate`] driver to specialize.
 ///
-/// Panics on `Resolution::TypeParam` — by the time IR lowers a
+/// Panics on `Resolution::TypeParam`, because by the time IR lowers a
 /// type, every `Param` should have been substituted by the caller
-/// (typecheck for resolved expressions; the monomorphization driver
+/// (typecheck for resolved expressions, the monomorphization driver
 /// for generic-decl fields). A `Param` reaching this helper is a
 /// compiler bug.
 pub(crate) fn resolved_type_to_ir_type(
@@ -563,7 +563,7 @@ pub(crate) fn resolved_type_to_ir_type(
             type_args,
         } => panic!(
             "IR lower: resolved_type_to_ir_type received a non-Global resolution \
-             ({resolution:?}) — every Param must be substituted before lowering \
+             ({resolution:?}), every Param must be substituted before lowering \
              (type_args: {type_args:?})",
         ),
         ResolvedType::Union(members) => {
@@ -577,7 +577,7 @@ pub(crate) fn resolved_type_to_ir_type(
             }
         }
         ResolvedType::Unresolved => {
-            panic!("IR lower: resolved_type_to_ir_type received Unresolved — seal violation",)
+            panic!("IR lower: resolved_type_to_ir_type received Unresolved (seal violation)",)
         }
     }
 }
@@ -589,7 +589,7 @@ fn global_to_ir_type(
     instantiations: &mut Vec<Instantiation>,
 ) -> IRType {
     let entry = registry.get(id).unwrap_or_else(|| {
-        panic!("IR lower: ResolvedType id {id} missing from registry — seal violation",)
+        panic!("IR lower: ResolvedType id {id} missing from registry (seal violation)",)
     });
     // Peel through `type X = ...` aliases first. Aliases stay as
     // `Named { Global(alias_id) }` in the typecheck output to keep
@@ -606,11 +606,11 @@ fn global_to_ir_type(
         return resolved_type_to_ir_type(expansion, registry, instantiations);
     }
     // Stdlib *primitive* `Struct(_)` stubs (scalars, `CPtr<T>`) need
-    // fixed-shape lowering; user-style stdlib structs (`DateTime`,
+    // fixed-shape lowering, while user-style stdlib structs (`DateTime`,
     // `Duration`, etc. from auto-imported `Global.*` files) and
     // stdlib `Enum(_)` stubs (today `Option<T>`) fall through to
     // the generic monomorphization path. The match below is the
-    // sole authority on which `Global.*` names are primitive — if
+    // sole authority on which `Global.*` names are primitive: if
     // you add a new primitive to `with_stdlib_stubs`, add it here.
     if entry.identifier.is_in_package("Global") && matches!(entry.kind, GlobalKind::Struct(_)) {
         let last = entry.identifier.last();
@@ -624,8 +624,8 @@ fn global_to_ir_type(
             );
             let pointee = resolved_type_to_ir_type(&type_args[0], registry, instantiations);
             // Method monomorphization needs an Instantiation entry even
-            // though the pointer itself doesn't carry a struct decl —
-            // call sites mangle method symbols as `CPtr_$T$.method`,
+            // though the pointer itself doesn't carry a struct decl.
+            // Call sites mangle method symbols as `CPtr_$T$.method`,
             // which mono materializes via `enqueue_member_methods`.
             instantiations.push(Instantiation {
                 template: id,

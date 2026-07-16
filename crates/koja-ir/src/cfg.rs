@@ -16,7 +16,7 @@
 //!
 //! Adapted from the v1 `CFGBuilder` (`koja-ir/src/cfg.rs`). Trimmed
 //! for the feature slice: no loop scoping (`mark_loop`, `LoopExitOp`)
-//! since loops aren't lowered yet; no legacy `into_blocks` escape
+//! since loops aren't lowered yet, and no legacy `into_blocks` escape
 //! hatch since the pipeline has no walker that drops the closed-set.
 
 use std::collections::HashMap;
@@ -47,15 +47,15 @@ pub(crate) struct CFGBuilder {
 
 impl CFGBuilder {
     /// Empty builder. Block / value counters live on
-    /// [`crate::FnLowerCtx`] — the builder only owns the block list.
+    /// [`crate::FnLowerCtx`]. The builder only owns the block list.
     pub(crate) fn new() -> Self {
         Self::default()
     }
 
     /// Add a fresh empty block with the given id and human-readable
     /// label. Caller must have minted `id` via
-    /// [`crate::FnLowerCtx::fresh_block`]. The new block starts open:
-    /// its terminator slot holds a placeholder `Branch(id)` that
+    /// [`crate::FnLowerCtx::fresh_block`]. The new block starts open,
+    /// meaning its terminator slot holds a placeholder `Branch(id)` that
     /// callers must overwrite via [`Self::set_terminator`] before
     /// the block is sealed.
     pub(crate) fn add_block(&mut self, id: IRBlockId, label: impl Into<String>) {
@@ -76,14 +76,14 @@ impl CFGBuilder {
     /// Push a typed [`BlockParam`] onto block `id`'s entry signature.
     /// The caller has already minted `dest` via the surrounding
     /// `FnLowerCtx::fresh_value` (so the value-types index is in
-    /// sync); this helper just records the param on the block. Panics
+    /// sync). This helper just records the param on the block. Panics
     /// if the block is not present.
     pub(crate) fn declare_block_param(&mut self, id: IRBlockId, dest: ValueId, ty: IRType) {
         self.block_mut(id).params.push(BlockParam { dest, ty });
     }
 
     /// Append `instr` to the block identified by `id`. Panics if the
-    /// block is not present in the builder — callers should add the
+    /// block is not present in the builder. Callers should add the
     /// block via [`Self::add_block`] first.
     pub(crate) fn append(&mut self, id: IRBlockId, instr: IRInstruction) {
         self.block_mut(id).instructions.push(instr);

@@ -2,7 +2,7 @@
 //! [`koja_ir_llvm::emit_script_llvm_ir`]: signed sources sign-extend
 //! (`sext`), unsigned sources zero-extend (`zext`), and `Float32`
 //! extends to `double` (`fpext`). Sign extension is the headline
-//! contract — a negative `Int32` (e.g. a C error code) widened into
+//! contract: a negative `Int32` (e.g. a C error code) widened into
 //! an `Int` slot must stay negative.
 //!
 //! All assertions are substring-only because LLVM may shuffle

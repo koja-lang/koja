@@ -1,7 +1,7 @@
 //! Coverage for the statement-list driver in `src/lower/body.rs`:
-//! `Statement::Return` shape — both `return <expr>` and bare
-//! `return` (Unit) — pinning the terminator that gets stamped and
-//! the closed-flow contract; the empty-body Unit-return shape.
+//! the `Statement::Return` shape (both `return <expr>` and bare
+//! Unit `return`) pinning the terminator that gets stamped and the
+//! closed-flow contract, plus the empty-body Unit-return shape.
 //!
 //! Per-function fail-fast within the body is exercised end-to-end
 //! by `lower_package.rs:partial_failure_reports_only_the_failing_function_diagnostic`.
@@ -10,7 +10,7 @@ use koja_ir::{IRInstruction, IRTerminator, IRType};
 
 mod common;
 
-use common::lower_script_source as lower;
+use common::{entry_block, lower_script_source as lower};
 
 #[test]
 fn explicit_return_with_value_terminates_block() {
@@ -35,10 +35,7 @@ fn explicit_return_with_value_terminates_block() {
 fn empty_main_body_returns_unit_with_no_value() {
     let script = lower("\n");
     assert_eq!(script.return_type, IRType::Unit);
-    let block = script
-        .blocks
-        .first()
-        .expect("script has at least one block");
+    let block = entry_block(&script.blocks);
     assert!(
         block.instructions.is_empty(),
         "an empty body should not emit any instructions; got {:?}",

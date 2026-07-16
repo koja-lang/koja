@@ -7,17 +7,18 @@
 //!
 //! Runs after [`crate::tail_calls::rewrite_tail_calls`] (so `TailCall`
 //! terminators already exist) and before `elaborate`. A back-edge is
-//! the edge `pred -> succ` where `succ` dominates `pred`; the check is
+//! the edge `pred -> succ` where `succ` dominates `pred`. The check is
 //! appended to `pred`, running once per iteration just before the
 //! branch. `TailCall` blocks have no CFG successor, so the two
 //! insertion sites never overlap.
 //!
 //! Non-tail recursion crosses neither site (each frame is a plain
 //! [`IRInstruction::Call`], with no back-edge), so the entry check is
-//! what bounds it: a recursion cycle always passes through a function
-//! that contains a call, and a check at that function's entry fires once
-//! per frame. Leaf and loop-only functions carry no call and are skipped
-//! — their loops are already covered, and straight-line work is bounded.
+//! what bounds it, since a recursion cycle always passes through a
+//! function that contains a call, and a check at that function's entry
+//! fires once per frame. Leaf and loop-only functions carry no call and
+//! are skipped. Their loops are already covered, and straight-line work
+//! is bounded.
 
 use crate::dominators::{compute_immediate_dominators, dominates, successors};
 use crate::function::{
@@ -105,8 +106,8 @@ fn insert_in_body(blocks: &mut [IRBasicBlock]) {
     let Some(entry) = blocks.first().map(|block| block.id) else {
         return;
     };
-    // Back-edges need dominators, which need a branch to exist at all;
-    // a function that only returns or tail-calls has none.
+    // Back-edges need dominators, which need a branch to exist at all.
+    // A function that only returns or tail-calls has none.
     let has_branch = blocks.iter().any(|block| {
         matches!(
             block.terminator,

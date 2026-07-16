@@ -1,4 +1,4 @@
-//! IR-lowering coverage for the struct slice: `lower/structs.rs`.
+//! IR-lowering coverage for the struct slice (`lower/structs.rs`).
 //!
 //! Walks an end-to-end happy path (`struct Point` plus a body that
 //! constructs and projects it) and pins:
@@ -16,12 +16,11 @@
 //!   surface a [`LowerError::Diagnostics`] with the matching message
 //!   and the offending struct is dropped from the package fragment.
 
-use koja_ast::util::dedent;
-use koja_ir::{IRInstruction, IRScript, IRStructDecl, IRType};
+use koja_ir::{FunctionKind, IRInstruction, IRScript, IRStructDecl, IRType};
 
 mod common;
 
-use common::{PACKAGE, lower_script_source};
+use common::{PACKAGE, all_instructions, entry_block, lower_script_source};
 
 fn struct_decl<'a>(script: &'a IRScript, name: &str) -> &'a IRStructDecl {
     let mangled = format!("{PACKAGE}.{name}");
@@ -30,9 +29,7 @@ fn struct_decl<'a>(script: &'a IRScript, name: &str) -> &'a IRStructDecl {
         .unwrap_or_else(|| panic!("struct `{mangled}` missing from IRScript"))
 }
 
-// ---------------------------------------------------------------------------
 // Decl lowering
-// ---------------------------------------------------------------------------
 
 #[test]
 fn struct_decl_lowers_to_ir_struct_decl_with_dense_indices() {
@@ -44,7 +41,7 @@ fn struct_decl_lowers_to_ir_struct_decl_with_dense_indices() {
 
         ";
 
-    let script = lower_script_source(&dedent(source));
+    let script = lower_script_source(source);
     let decl = struct_decl(&script, "Point");
 
     assert_eq!(decl.symbol.mangled(), "TestApp.Point");
@@ -70,7 +67,7 @@ fn mixed_field_struct_translates_each_field_independently() {
 
         ";
 
-    let script = lower_script_source(&dedent(source));
+    let script = lower_script_source(source);
     let decl = struct_decl(&script, "Mixed");
     let kinds: Vec<_> = decl.fields.iter().map(|f| f.ir_type.clone()).collect();
     assert_eq!(kinds, vec![IRType::Bool, IRType::String, IRType::Int64]);
@@ -90,7 +87,7 @@ fn nested_struct_field_lowers_to_inner_struct_ir_type() {
 
         ";
 
-    let script = lower_script_source(&dedent(source));
+    let script = lower_script_source(source);
     let outer = struct_decl(&script, "Outer");
     let inner = struct_decl(&script, "Inner");
     assert_eq!(
@@ -108,14 +105,12 @@ fn empty_struct_lowers_to_empty_field_list() {
 
         ";
 
-    let script = lower_script_source(&dedent(source));
+    let script = lower_script_source(source);
     let decl = struct_decl(&script, "Marker");
     assert!(decl.fields.is_empty());
 }
 
-// ---------------------------------------------------------------------------
 // StructInit + FieldGet
-// ---------------------------------------------------------------------------
 
 #[test]
 fn struct_construction_lowers_to_struct_init_with_canonical_field_order() {
@@ -128,13 +123,10 @@ fn struct_construction_lowers_to_struct_init_with_canonical_field_order() {
         Point{y: 20, x: 10}
         ";
 
-    let script = lower_script_source(&dedent(source));
-    let block = script.blocks.first().expect("script has one block");
-    // Two consts (10, 20) plus the StructInit; AST order doesn't
+    let script = lower_script_source(source);
+    // Two consts (10, 20) plus the StructInit. AST order doesn't
     // dictate the per-field-init index ordering on the StructInit.
-    let init = block
-        .instructions
-        .iter()
+    let init = all_instructions(&script.blocks)
         .find_map(|inst| match inst {
             IRInstruction::StructInit { ty, fields, .. } => Some((ty, fields)),
             _ => None,
@@ -158,11 +150,8 @@ fn field_access_lowers_to_field_get_with_resolved_index_and_type() {
         Point{x: 1, y: 2}.y
         ";
 
-    let script = lower_script_source(&dedent(source));
-    let block = script.blocks.first().expect("script has one block");
-    let field_get = block
-        .instructions
-        .iter()
+    let script = lower_script_source(source);
+    let field_get = all_instructions(&script.blocks)
         .find_map(|inst| match inst {
             IRInstruction::FieldGet {
                 field_index,
@@ -194,11 +183,8 @@ fn nested_field_access_chains_two_field_gets() {
         Outer{inner: Inner{n: 7}}.inner.n
         ";
 
-    let script = lower_script_source(&dedent(source));
-    let block = script.blocks.first().expect("script has one block");
-    let field_gets: Vec<_> = block
-        .instructions
-        .iter()
+    let script = lower_script_source(source);
+    let field_gets: Vec<_> = all_instructions(&script.blocks)
         .filter_map(|inst| match inst {
             IRInstruction::FieldGet {
                 field_index,
@@ -224,14 +210,10 @@ fn nested_field_access_chains_two_field_gets() {
 // runs, so they're unreachable through the normal `parse -> check -> lower`
 // pipeline these tests drive. The IR-side checks stay as defense-in-depth
 // for any future caller that bypasses typecheck (e.g. tooling that constructs
-// a CheckedProgram by hand); the typecheck-side gaps are covered by
+// a CheckedProgram by hand). The typecheck-side gaps are covered by
 // `koja-typecheck/tests/structs.rs`.
 
-// ---------------------------------------------------------------------------
 // Static methods (inline + impl-block forms)
-// ---------------------------------------------------------------------------
-
-use koja_ir::FunctionKind;
 
 #[test]
 fn inline_static_method_lowers_into_package_function_map() {
@@ -248,7 +230,7 @@ fn inline_static_method_lowers_into_package_function_map() {
         Point.origin().x
         ";
 
-    let script = lower_script_source(&dedent(source));
+    let script = lower_script_source(source);
     let function = script
         .function("TestApp.Point.origin")
         .expect("inline static method missing from program");
@@ -273,7 +255,7 @@ fn impl_block_static_method_lowers_into_package_function_map() {
         Point.origin().x
         ";
 
-    let script = lower_script_source(&dedent(source));
+    let script = lower_script_source(source);
     let function = script
         .function("TestApp.Point.origin")
         .expect("impl-block static method missing from program");
@@ -296,12 +278,9 @@ fn static_method_call_emits_call_against_qualified_symbol() {
         Point.origin().x
         ";
 
-    let script = lower_script_source(&dedent(source));
-    let block = script.blocks.first().expect("script has one entry block");
+    let script = lower_script_source(source);
 
-    let call_callee = block
-        .instructions
-        .iter()
+    let call_callee = all_instructions(&script.blocks)
         .find_map(|inst| match inst {
             IRInstruction::Call { callee, .. } => Some(callee.clone()),
             _ => None,
@@ -309,9 +288,7 @@ fn static_method_call_emits_call_against_qualified_symbol() {
         .expect("expected one Call instruction");
     assert_eq!(call_callee.mangled(), "TestApp.Point.origin");
 
-    let field_get = block
-        .instructions
-        .iter()
+    let field_get = all_instructions(&script.blocks)
         .find_map(|inst| match inst {
             IRInstruction::FieldGet {
                 field_index,
@@ -338,11 +315,8 @@ fn static_method_with_args_lowers_call_with_lowered_args() {
         Point.at(7, 3)
         ";
 
-    let script = lower_script_source(&dedent(source));
-    let block = script.blocks.first().expect("script has one entry block");
-    let (callee, arg_count) = block
-        .instructions
-        .iter()
+    let script = lower_script_source(source);
+    let (callee, arg_count) = all_instructions(&script.blocks)
         .find_map(|inst| match inst {
             IRInstruction::Call { callee, args, .. } => Some((callee.clone(), args.len())),
             _ => None,
@@ -352,9 +326,7 @@ fn static_method_with_args_lowers_call_with_lowered_args() {
     assert_eq!(arg_count, 2);
 }
 
-// ---------------------------------------------------------------------------
 // Instance methods (inline + impl-block forms)
-// ---------------------------------------------------------------------------
 
 #[test]
 fn inline_instance_method_lowers_with_self_param_promoted() {
@@ -371,7 +343,7 @@ fn inline_instance_method_lowers_with_self_param_promoted() {
         Point{x: 1, y: 2}.first()
         ";
 
-    let script = lower_script_source(&dedent(source));
+    let script = lower_script_source(source);
     let method = script
         .function("TestApp.Point.first")
         .expect("inline instance method missing from program");
@@ -388,10 +360,7 @@ fn inline_instance_method_lowers_with_self_param_promoted() {
         "self's IRType should be the receiver struct",
     );
 
-    let entry = method
-        .blocks
-        .first()
-        .expect("instance method has at least one block");
+    let entry = entry_block(&method.blocks);
     assert!(
         entry.instructions.iter().any(
             |i| matches!(i, IRInstruction::LocalDecl { local, .. } if *local == self_param.local_id),
@@ -399,8 +368,8 @@ fn inline_instance_method_lowers_with_self_param_promoted() {
         "entry block should declare a slot for self: {:?}",
         entry.instructions,
     );
-    // `self` is heap-managed (a struct), so promotion *acquires* it:
-    // a `Clone` of the incoming param feeds the slot write, giving the
+    // `self` is heap-managed (a struct), so promotion *acquires* it.
+    // A `Clone` of the incoming param feeds the slot write, giving the
     // frame storage it can drop at exit without disturbing the caller.
     let acquired = entry
         .instructions
@@ -443,7 +412,7 @@ fn impl_block_instance_method_lowers_with_self_param_promoted() {
         Point{x: 1, y: 2}.first()
         ";
 
-    let script = lower_script_source(&dedent(source));
+    let script = lower_script_source(source);
     let method = script
         .function("TestApp.Point.first")
         .expect("impl-block instance method missing from program");
@@ -470,12 +439,9 @@ fn instance_method_call_prepends_receiver_to_call_args() {
         Point{x: 1, y: 2}.shift(7)
         ";
 
-    let script = lower_script_source(&dedent(source));
-    let block = script.blocks.first().expect("main has one block");
+    let script = lower_script_source(source);
 
-    let (callee, args) = block
-        .instructions
-        .iter()
+    let (callee, args) = all_instructions(&script.blocks)
         .find_map(|i| match i {
             IRInstruction::Call { callee, args, .. } => Some((callee.clone(), args.clone())),
             _ => None,
@@ -485,14 +451,12 @@ fn instance_method_call_prepends_receiver_to_call_args() {
     assert_eq!(
         args.len(),
         2,
-        "instance call passes (self, dx) — 2 args, receiver-first"
+        "instance call passes (self, dx): 2 args, receiver-first"
     );
 
-    // The first arg should be the receiver value — the StructInit's
-    // dest — the second the lowered explicit `7` Const.
-    let init_dest = block
-        .instructions
-        .iter()
+    // The first arg should be the receiver value (the StructInit's
+    // dest), the second the lowered explicit `7` Const.
+    let init_dest = all_instructions(&script.blocks)
         .find_map(|i| match i {
             IRInstruction::StructInit { dest, .. } => Some(*dest),
             _ => None,

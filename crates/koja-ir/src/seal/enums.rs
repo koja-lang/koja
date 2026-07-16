@@ -1,6 +1,6 @@
 //! Enum-shaped seal invariants.
 //!
-//! Mirrors [`super::structs`] — two complementary checks:
+//! Mirrors [`super::structs`] with two complementary checks:
 //!
 //! - [`seal_enum_decls`] runs per package and validates every
 //!   [`IREnumDecl`] in isolation (key matches symbol, dense
@@ -17,7 +17,7 @@
 //!   matches the variant's declared [`IRVariantPayload`] (Unit↔Unit,
 //!   Tuple arity match, Struct len + canonicalization match).
 //!
-//! Both checks panic on violation through [`super::seal_panic`] —
+//! Both checks panic on violation through [`super::seal_panic`], since
 //! enum seal failures indicate a lower / lift_signatures bug, not a
 //! user error.
 
@@ -50,7 +50,7 @@ fn seal_enum_decl(decl: &IREnumDecl) {
     if decl.variants.len() > usize::from(u8::MAX) + 1 {
         seal_panic(&format!(
             "{owner} declares {n} variants; the IR caps the count at {max} \
-             (transient — the LLVM `i8` tag width)",
+             (transient, from the LLVM `i8` tag width)",
             n = decl.variants.len(),
             max = u8::MAX as usize + 1,
         ));
@@ -95,7 +95,7 @@ fn seal_variant_payload(owner: &str, variant: &crate::enum_decl::IREnumVariant) 
 /// Cross-instruction enum check. Driven by the `(owner, inst)`
 /// stream the caller produces (see
 /// [`super::structs::package_instructions`] /
-/// [`super::structs::function_instructions`]); `lookup` resolves an
+/// [`super::structs::function_instructions`]). `lookup` resolves an
 /// [`IRSymbol::mangled`] view to the registered [`IREnumDecl`]
 /// (`IRProgram::enum_decl` / `IRScript::enum_decl`).
 pub(super) fn seal_enum_ops<'inst, 'decl>(

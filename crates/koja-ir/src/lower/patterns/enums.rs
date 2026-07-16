@@ -1,7 +1,7 @@
 //! Enum-flavored pattern lowering: `EnumUnit`, `EnumTuple`, and
 //! `EnumStruct`. The unit case lives inline in the dispatcher
 //! ([`super::lower_pattern_check`]) since it's just an
-//! [`emit_enum_tag_eq`] + [`super::single_test`] pair; the tuple
+//! [`emit_enum_tag_eq`] + [`super::single_test`] pair. The tuple
 //! and struct cases own their own payload walkers that share the
 //! [`enum_pattern_metadata`] resolver and the cross-shape
 //! [`super::structs::lower_subpattern_into`] merge discipline.
@@ -38,7 +38,7 @@ pub(super) fn lower_enum_struct_check(
     let ResolvedVariantData::Struct(declared_fields) = metadata.variant_data else {
         panic!(
             "IR lower: enum struct pattern `{}.{variant_name}` targets a \
-             non-struct variant — typecheck invariant violation",
+             non-struct variant (typecheck invariant violation)",
             metadata.label,
         );
     };
@@ -86,7 +86,7 @@ pub(super) fn lower_enum_tuple_check(
     let ResolvedVariantData::Tuple(declared_payload) = metadata.variant_data else {
         panic!(
             "IR lower: enum tuple pattern `{}.{variant_name}` targets a \
-             non-tuple variant — typecheck invariant violation",
+             non-tuple variant (typecheck invariant violation)",
             metadata.label,
         );
     };
@@ -237,7 +237,7 @@ fn walk_enum_struct_fields(
             .unwrap_or_else(|| {
                 panic!(
                     "IR lower: enum struct pattern `{}.{variant}.{name}` references \
-                     unknown field — typecheck invariant violation",
+                     unknown field (typecheck invariant violation)",
                     metadata.label,
                     variant = metadata.variant_name(),
                     name = field.name,
@@ -301,8 +301,8 @@ fn enum_pattern_metadata<'a>(
     );
     let (variant_index, variant) = definition.lookup_variant(variant_name).unwrap_or_else(|| {
         panic!(
-            "IR lower: enum `{}` has no variant `{variant_name}` — \
-             typecheck invariant violation",
+            "IR lower: enum `{}` has no variant `{variant_name}` \
+             (typecheck invariant violation)",
             entry.identifier,
         )
     });

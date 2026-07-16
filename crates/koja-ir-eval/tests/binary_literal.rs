@@ -25,7 +25,7 @@ fn empty_literal_evaluates_to_empty_binary() {
 
 #[test]
 fn sixteen_bit_big_endian_segment_packs_msb_first() {
-    // Default endianness is big — `0x00FF` packs as `[0x00, 0xFF]`.
+    // Default endianness is big: `0x00FF` packs as `[0x00, 0xFF]`.
     assert_eq!(
         evaluate("<<255::16>>\n").unwrap(),
         Value::binary(vec![0x00, 0xFF]),

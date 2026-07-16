@@ -2,19 +2,19 @@
 //! that fall through on miss, with each arm body branching into a
 //! single merge block carrying the join value as a typed
 //! [`crate::function::BlockParam`]. Same merge-block shape as
-//! [`super::control_flow::lower_cond`]'s with-else path; the
+//! [`super::control_flow::lower_cond`]'s with-else path. The
 //! distinguishing piece is the per-arm [`PatternCheck`] that gates
 //! whether the arm body executes.
 //!
 //! Each arm's [`PatternCheck::Tests`] may carry multiple gating
 //! predicates (single-test for `Literal` / `EnumUnit` /
-//! `EnumTuple`, n-test for `Or`); the driver wires every step's
+//! `EnumTuple`, n-test for `Or`). The driver wires every step's
 //! success edge to the arm's success block, every interior step's
 //! failure edge to the next step, and the final step's failure
-//! edge to either the next arm's first test block or — when the
-//! arm chain has no successor — a synthesized `Unreachable` trap
+//! edge to either the next arm's first test block or, when the
+//! arm chain has no successor, a synthesized `Unreachable` trap
 //! block. Typecheck has already proven exhaustiveness for enum
-//! subjects, so the trap is statically unreachable; it exists to
+//! subjects, so the trap is statically unreachable. It exists to
 //! keep the CFG well-formed for backends that demand a terminator
 //! on every block.
 //!
@@ -100,8 +100,8 @@ pub(super) fn lower_match(
         };
         let (check, _) = lower_pattern_check(&arm.pattern, inputs, ctx, current_test, output)?;
         // An unguarded catch-all has no failure edge, so it never
-        // needs a fall-through. Any other arm — including a
-        // guarded catch-all whose guard might be false — falls
+        // needs a fall-through. Any other arm, including a
+        // guarded catch-all whose guard might be false, falls
         // through to the next arm's test block (or a shared trap
         // when this is the last arm).
         let needs_fall_through = match &check {
@@ -161,10 +161,10 @@ pub(super) fn lower_match(
         )?;
         // The match consumes its subject: when the subject is an owned
         // heap temp (`match self.handle(...)`), exactly one arm body
-        // executes, so each arm's tail releases it — after the tail
+        // executes, so each arm's tail releases it after the tail
         // value has been acquired, since payload binds borrow the
         // subject's storage. An early-`return` arm leaves the temp to
-        // leak (no tail block to host the drop); slot-tracked subjects
+        // leak (no tail block to host the drop). Slot-tracked subjects
         // are borrowed reads and no-op here.
         if let Some(tail) = arm_tail {
             drop_discarded_temp(ctx, tail, subject_value);
@@ -179,8 +179,8 @@ pub(super) fn lower_match(
     }
 
     // Join per-arm post-states into the merged post-match state.
-    // Slots that every reachable arm agrees on keep their stamp;
-    // disagreements fall back to `Unowned` (conservative — no
+    // Slots that every reachable arm agrees on keep their stamp, and
+    // disagreements fall back to `Unowned` (conservative: no
     // function-exit drop for a slot whose runtime ownership is
     // ambiguous). Empty `arm_post_states` falls back to the entry
     // snapshot, preserving the pre-match slot states untouched.
@@ -291,8 +291,8 @@ fn emit_payload_binds(
 
 /// Lazily mint a single `Unreachable`-terminated trap block shared
 /// by every arm whose final-step failure edge has nowhere else to
-/// go. Typecheck has proven these edges are statically unreachable;
-/// the block keeps the CFG well-formed.
+/// go. Typecheck has proven these edges are statically unreachable,
+/// and the block keeps the CFG well-formed.
 fn trap_block_for(slot: &mut Option<IRBlockId>, ctx: &mut FnLowerCtx) -> IRBlockId {
     if let Some(existing) = *slot {
         return existing;

@@ -11,7 +11,7 @@
 //! resolved by the time the IR reaches eval.
 //!
 //! Distinct args round-tripping through eval with distinct symbols
-//! makes the dedup-by-instantiation-set contract observable — every
+//! makes the dedup-by-instantiation-set contract observable. Every
 //! value reaching the interpreter carries the mangled name, so the
 //! test fixture observes the closure-pass result end-to-end without
 //! reaching back into [`koja_ir`] internals.
@@ -20,7 +20,7 @@
 //! exercised here: typecheck doesn't yet substitute `TypeParam`
 //! into a `FieldAccess`'s result resolution, so those programs hit
 //! a seal violation upstream of IR. They land with a future
-//! typecheck slice; the IR contract is concretely pinned by the
+//! typecheck slice. The IR contract is concretely pinned by the
 //! construction-shaped tests in this file.
 
 use koja_ast::util::dedent;
@@ -31,10 +31,6 @@ mod common;
 fn evaluate_script(source: &str) -> Value {
     common::evaluate_script(source).expect("interpreter should not error on this fixture")
 }
-
-// ---------------------------------------------------------------------------
-// Generic structs
-// ---------------------------------------------------------------------------
 
 #[test]
 fn generic_struct_construction_yields_value_struct_with_mangled_symbol() {
@@ -87,10 +83,6 @@ fn generic_struct_distinct_args_round_trip_with_distinct_symbols() {
     assert_eq!(a.mangled(), "TestApp.Pair_$Int64.String$");
     assert_eq!(b.mangled(), "TestApp.Pair_$String.Int64$");
 }
-
-// ---------------------------------------------------------------------------
-// Generic enums
-// ---------------------------------------------------------------------------
 
 #[test]
 fn generic_enum_tuple_variant_construction_yields_value_enum_with_mangled_symbol() {

@@ -14,35 +14,22 @@
 //! - The concrete impl method (e.g. `Point.greet`) is lowered into
 //!   the IR package alongside the mono'd `show`.
 //!
-//! No `protocol_impls` table walk lives at the call site — the
+//! No `protocol_impls` table walk lives at the call site. The
 //! receiver-substitute path through [`super::lower::expr::lower_method_call`]
 //! reuses the same lookup an inherent method goes through, so this
 //! test mirrors the inherent-method-on-concrete-type shape rather
 //! than asserting on any IR-side rewrite hook.
 
-use koja_ast::util::dedent;
-
 mod common;
 
-use common::lower_script_source;
-
-fn collect_function_names(script: &koja_ir::IRScript) -> Vec<String> {
-    let mut names: Vec<String> = script
-        .packages
-        .iter()
-        .flat_map(|p| p.functions.keys())
-        .map(|sym| sym.mangled().to_string())
-        .collect();
-    names.sort();
-    names
-}
+use common::{lower_script_source, script_function_names};
 
 #[test]
 fn bounded_dispatch_monomorphizes_show_at_concrete_arg() {
     // `show<T: Greeter>(value: T) -> String { value.greet() }` is
     // monomorphized at `T = Point` when called with a `Point`. The
     // resulting concrete `show_$Point$` body lowers a call to
-    // `Point.greet` — the trait-impl method registered by the
+    // `Point.greet`, the trait-impl method registered by the
     // `impl Greeter for Point` block.
     let source = "
         protocol Greeter
@@ -67,8 +54,8 @@ fn bounded_dispatch_monomorphizes_show_at_concrete_arg() {
         0
         ";
 
-    let script = lower_script_source(&dedent(source));
-    let names = collect_function_names(&script);
+    let script = lower_script_source(source);
+    let names = script_function_names(&script);
     assert!(
         names.contains(&"TestApp.show_$TestApp.Point$".to_string()),
         "expected mono'd `show_$TestApp.Point$`, got {names:?}",
@@ -85,7 +72,7 @@ fn bounded_dispatch_monomorphizes_show_at_concrete_arg() {
 
 #[test]
 fn bounded_dispatch_distinct_concrete_args_mint_distinct_show_decls() {
-    // Two structs implementing the same protocol -> two distinct
+    // Two structs implementing the same protocol yield two distinct
     // mono'd `show` functions, one per receiver type. Confirms that
     // each call's receiver substitution flows independently through
     // the worklist.
@@ -123,8 +110,8 @@ fn bounded_dispatch_distinct_concrete_args_mint_distinct_show_decls() {
         0
         ";
 
-    let script = lower_script_source(&dedent(source));
-    let mut shows: Vec<_> = collect_function_names(&script)
+    let script = lower_script_source(source);
+    let mut shows: Vec<_> = script_function_names(&script)
         .into_iter()
         .filter(|n| n.starts_with("TestApp.show"))
         .collect();
@@ -169,8 +156,8 @@ fn bounded_dispatch_generic_struct_receiver_resolves_through_substitution() {
         0
         ";
 
-    let script = lower_script_source(&dedent(source));
-    let names = collect_function_names(&script);
+    let script = lower_script_source(source);
+    let names = script_function_names(&script);
     assert!(
         names.contains(&"TestApp.show_$TestApp.Bag_$Int64$$".to_string()),
         "expected mono'd `show_$Bag<Int>$`, got {names:?}",

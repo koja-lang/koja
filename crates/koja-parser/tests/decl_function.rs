@@ -8,50 +8,33 @@
 //!   `@extern` / `@intrinsic`, bodyless before a sibling `fn`)
 //! - visibility (`fn` is Public, `priv fn` is Private)
 
-use koja_ast::ast::{Item, Param, TypeExpr, Visibility};
-use koja_ast::util::dedent;
+use koja_ast::ast::{Function, ImplMember, Item, Param, TypeExpr, Visibility};
 
 mod common;
 
-use common::parse_clean;
+use common::{first_extend, first_function, parse_clean};
 
-fn first_function(source: &str) -> koja_ast::ast::Function {
-    let file = parse_clean(source);
-    for item in file.items {
-        if let Item::Function(f) = item {
-            return f;
-        }
-    }
-    panic!("no function in parsed output");
-}
-
-fn nth_function(source: &str, idx: usize) -> koja_ast::ast::Function {
-    let file = parse_clean(source);
-    let mut funcs: Vec<_> = file
+fn nth_function(source: &str, idx: usize) -> Function {
+    parse_clean(source)
         .items
         .into_iter()
-        .filter_map(|item| {
-            if let Item::Function(f) = item {
-                Some(f)
-            } else {
-                None
-            }
+        .filter_map(|item| match item {
+            Item::Function(f) => Some(f),
+            _ => None,
         })
-        .collect();
-    assert!(idx < funcs.len(), "only {} functions parsed", funcs.len());
-    funcs.swap_remove(idx)
+        .nth(idx)
+        .unwrap_or_else(|| panic!("fewer than {} functions parsed", idx + 1))
 }
 
 #[test]
 fn bare_fn_no_params() {
-    let src = dedent(
+    let f = first_function(
         "
         fn run
           42
         end
         ",
     );
-    let f = first_function(&src);
     assert_eq!(f.name, "run");
     assert!(f.params.is_empty());
     assert!(f.return_type.is_none());
@@ -61,14 +44,13 @@ fn bare_fn_no_params() {
 
 #[test]
 fn fn_with_typed_params() {
-    let src = dedent(
+    let f = first_function(
         "
         fn add(a: Int, b: Int) -> Int
           a + b
         end
         ",
     );
-    let f = first_function(&src);
     assert_eq!(f.params.len(), 2);
     match &f.params[0] {
         Param::Regular { name, .. } => {
@@ -81,14 +63,13 @@ fn fn_with_typed_params() {
 
 #[test]
 fn fn_with_default_param() {
-    let src = dedent(
+    let f = first_function(
         "
         fn greet(name: String = \"world\") -> String
           name
         end
         ",
     );
-    let f = first_function(&src);
     match &f.params[0] {
         Param::Regular { default, .. } => assert!(default.is_some()),
         other => panic!("expected Regular param, got {other:?}"),
@@ -97,7 +78,7 @@ fn fn_with_default_param() {
 
 #[test]
 fn fn_with_self_borrow() {
-    let src = dedent(
+    let block = first_extend(
         "
         extend Counter
           fn value(self) -> Int
@@ -106,13 +87,8 @@ fn fn_with_self_borrow() {
         end
         ",
     );
-    let file = parse_clean(&src);
-    let block = match &file.items[0] {
-        Item::Extend(b) => b,
-        other => panic!("expected extend block, got {other:?}"),
-    };
     let func = match &block.members[0] {
-        koja_ast::ast::ImplMember::Function(f) => f,
+        ImplMember::Function(f) => f,
         other => panic!("expected function member, got {other:?}"),
     };
     match &func.params[0] {
@@ -123,58 +99,53 @@ fn fn_with_self_borrow() {
 
 #[test]
 fn fn_empty_body_is_some_with_no_statements() {
-    let src = dedent(
+    let f = first_function(
         "
         fn noop
         end
         ",
     );
-    let f = first_function(&src);
     assert!(f.body.as_ref().is_some_and(|b| b.is_empty()));
 }
 
 #[test]
 fn fn_extern_has_no_body() {
-    let src = dedent(
+    let f = first_function(
         "
         @extern \"C\"
         fn libc_abs(n: Int32) -> Int32
         ",
     );
-    let f = first_function(&src);
     assert!(f.body.is_none());
     assert_eq!(f.annotations.len(), 1);
 }
 
 #[test]
 fn fn_intrinsic_has_no_body() {
-    let src = dedent(
+    let f = first_function(
         "
         @intrinsic \"List.len\"
         fn list_len(items: List<Int>) -> Int
         ",
     );
-    let f = first_function(&src);
     assert!(f.body.is_none());
 }
 
 #[test]
 fn priv_fn_is_private() {
-    let src = dedent(
+    let f = first_function(
         "
         priv fn helper
           1
         end
         ",
     );
-    let f = first_function(&src);
     assert_eq!(f.visibility, Visibility::Private);
 }
 
 #[test]
 fn fn_followed_by_fn_each_has_body() {
-    let src = dedent(
-        "
+    let src = "
         fn first
           1
         end
@@ -182,10 +153,9 @@ fn fn_followed_by_fn_each_has_body() {
         fn second
           2
         end
-        ",
-    );
-    let a = nth_function(&src, 0);
-    let b = nth_function(&src, 1);
+        ";
+    let a = nth_function(src, 0);
+    let b = nth_function(src, 1);
     assert_eq!(a.name, "first");
     assert_eq!(b.name, "second");
     assert!(a.body.is_some());
@@ -194,14 +164,13 @@ fn fn_followed_by_fn_each_has_body() {
 
 #[test]
 fn fn_with_type_parameters() {
-    let src = dedent(
+    let f = first_function(
         "
         fn identity<T>(x: T) -> T
           x
         end
         ",
     );
-    let f = first_function(&src);
     assert_eq!(f.type_params.len(), 1);
     assert_eq!(f.type_params[0].name, "T");
 }

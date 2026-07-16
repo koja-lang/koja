@@ -1,33 +1,25 @@
 //! Coverage for statement parsing: assignment / typed assignment /
 //! compound assignment / `return` / `break`.
 
-use koja_ast::ast::{CompoundOp, Item, Statement, TypeExpr};
-use koja_ast::util::dedent;
+use koja_ast::ast::{CompoundOp, ExprKind, Statement, TypeExpr};
 
 mod common;
 
-use common::parse_clean;
+use common::first_function;
 
 fn function_body(source: &str) -> Vec<Statement> {
-    let file = parse_clean(source);
-    for item in file.items {
-        if let Item::Function(f) = item {
-            return f.body.unwrap_or_default();
-        }
-    }
-    panic!("no function in parsed output");
+    first_function(source).body.unwrap_or_default()
 }
 
 #[test]
 fn plain_assignment() {
-    let src = dedent(
+    let body = function_body(
         "
         fn run
           x = 5
         end
         ",
     );
-    let body = function_body(&src);
     match &body[0] {
         Statement::Assignment {
             target,
@@ -43,14 +35,13 @@ fn plain_assignment() {
 
 #[test]
 fn typed_assignment() {
-    let src = dedent(
+    let body = function_body(
         "
         fn run
           x: Int = 5
         end
         ",
     );
-    let body = function_body(&src);
     match &body[0] {
         Statement::Assignment {
             type_annotation, ..
@@ -66,14 +57,13 @@ fn typed_assignment() {
 
 #[test]
 fn dotted_lvalue_assignment() {
-    let src = dedent(
+    let body = function_body(
         "
         fn run
           point.x = 5
         end
         ",
     );
-    let body = function_body(&src);
     match &body[0] {
         Statement::Assignment { target, .. } => {
             assert_eq!(target.segments, vec!["point", "x"]);
@@ -84,7 +74,7 @@ fn dotted_lvalue_assignment() {
 
 #[test]
 fn compound_add() {
-    let src = dedent(
+    let body = function_body(
         "
         fn run
           x = 0
@@ -92,7 +82,6 @@ fn compound_add() {
         end
         ",
     );
-    let body = function_body(&src);
     match &body[1] {
         Statement::CompoundAssign { op, .. } => assert_eq!(*op, CompoundOp::Add),
         other => panic!("expected CompoundAssign, got {other:?}"),
@@ -101,7 +90,7 @@ fn compound_add() {
 
 #[test]
 fn compound_sub() {
-    let src = dedent(
+    let body = function_body(
         "
         fn run
           x = 0
@@ -109,7 +98,6 @@ fn compound_sub() {
         end
         ",
     );
-    let body = function_body(&src);
     match &body[1] {
         Statement::CompoundAssign { op, .. } => assert_eq!(*op, CompoundOp::Sub),
         other => panic!("expected CompoundAssign, got {other:?}"),
@@ -118,7 +106,7 @@ fn compound_sub() {
 
 #[test]
 fn compound_mul() {
-    let src = dedent(
+    let body = function_body(
         "
         fn run
           x = 1
@@ -126,7 +114,6 @@ fn compound_mul() {
         end
         ",
     );
-    let body = function_body(&src);
     match &body[1] {
         Statement::CompoundAssign { op, .. } => assert_eq!(*op, CompoundOp::Mul),
         other => panic!("expected CompoundAssign, got {other:?}"),
@@ -135,7 +122,7 @@ fn compound_mul() {
 
 #[test]
 fn compound_div() {
-    let src = dedent(
+    let body = function_body(
         "
         fn run
           x = 4
@@ -143,7 +130,6 @@ fn compound_div() {
         end
         ",
     );
-    let body = function_body(&src);
     match &body[1] {
         Statement::CompoundAssign { op, .. } => assert_eq!(*op, CompoundOp::Div),
         other => panic!("expected CompoundAssign, got {other:?}"),
@@ -152,14 +138,13 @@ fn compound_div() {
 
 #[test]
 fn return_with_value() {
-    let src = dedent(
+    let body = function_body(
         "
         fn run
           return 42
         end
         ",
     );
-    let body = function_body(&src);
     match &body[0] {
         Statement::Return { value, .. } => assert!(value.is_some()),
         other => panic!("expected Return, got {other:?}"),
@@ -168,14 +153,13 @@ fn return_with_value() {
 
 #[test]
 fn return_without_value() {
-    let src = dedent(
+    let body = function_body(
         "
         fn run
           return
         end
         ",
     );
-    let body = function_body(&src);
     match &body[0] {
         Statement::Return { value, .. } => assert!(value.is_none()),
         other => panic!("expected Return, got {other:?}"),
@@ -184,7 +168,7 @@ fn return_without_value() {
 
 #[test]
 fn break_statement() {
-    let src = dedent(
+    let body = function_body(
         "
         fn run
           loop
@@ -193,10 +177,9 @@ fn break_statement() {
         end
         ",
     );
-    let body = function_body(&src);
     let loop_body = match &body[0] {
         Statement::Expr(expr) => match &expr.kind {
-            koja_ast::ast::ExprKind::Loop { body } => body,
+            ExprKind::Loop { body } => body,
             other => panic!("expected Loop, got {other:?}"),
         },
         other => panic!("expected Expr(Loop), got {other:?}"),

@@ -1,24 +1,23 @@
 //! Coverage for expression-level lowering in `src/lower/expr.rs`.
 //!
-//! Headline coverage today is `ExprKind::Call`: zero-arg callee
-//! lowers to a single `Call` instruction; an arg-taking callee's
+//! Headline coverage today is `ExprKind::Call`. A zero-arg callee
+//! lowers to a single `Call` instruction. An arg-taking callee's
 //! function gets `ValueId`s allocated up front in
-//! `IRFunction.params`; nested calls chain two `Call` instructions
+//! `IRFunction.params`. Nested calls chain two `Call` instructions
 //! through a shared intermediate `ValueId`. Other [`ExprKind`]
 //! variants get their dedicated test files (literals + ops in
 //! `lower_ops.rs`, `if`/`unless` in `lower_control_flow.rs`).
 
-use koja_ast::util::dedent;
 use koja_ir::{IRBasicBlock, IRInstruction, IRTerminator, IRType};
 
 mod common;
 
-use common::{PACKAGE, lower_script_source as lower, script_function};
+use common::{
+    PACKAGE, all_instructions, entry_block, lower_script_source as lower, script_function,
+};
 
 fn count_calls(blocks: &[IRBasicBlock]) -> usize {
-    blocks
-        .iter()
-        .flat_map(|b| b.instructions.iter())
+    all_instructions(blocks)
         .filter(|i| matches!(i, IRInstruction::Call { .. }))
         .count()
 }
@@ -33,11 +32,8 @@ fn zero_arg_call_lowers_to_single_call_instruction() {
         answer()
         ";
 
-    let script = lower(&dedent(source));
-    let block = script
-        .blocks
-        .first()
-        .expect("script has at least one block");
+    let script = lower(source);
+    let block = entry_block(&script.blocks);
     assert_eq!(
         block.instructions.len(),
         1,
@@ -74,7 +70,7 @@ fn arg_taking_callee_allocates_param_value_ids_before_body() {
         take(99)
         ";
 
-    let script = lower(&dedent(source));
+    let script = lower(source);
     let take = script_function(&script, "take");
     assert_eq!(take.params.len(), 1, "take has one declared param");
     // Params are the first ids allocated, so the body's const
@@ -86,12 +82,9 @@ fn arg_taking_callee_allocates_param_value_ids_before_body() {
         "lowering should stamp the param's IRType from the lifted signature",
     );
     // The entry block emits `LocalDecl` + `LocalWrite` for param
-    // promotion ahead of the body's const; both produce no `dest`,
+    // promotion ahead of the body's const. Both produce no `dest`,
     // so we walk past them to find the first body-produced value.
-    let body_dest = take
-        .blocks
-        .first()
-        .expect("take has one block")
+    let body_dest = entry_block(&take.blocks)
         .instructions
         .iter()
         .find_map(|inst| inst.dest())
@@ -103,10 +96,7 @@ fn arg_taking_callee_allocates_param_value_ids_before_body() {
     );
 
     // The call site wires `99` into the Call's args.
-    let calls: Vec<_> = script
-        .blocks
-        .iter()
-        .flat_map(|b| b.instructions.iter())
+    let calls: Vec<_> = all_instructions(&script.blocks)
         .filter_map(|i| match i {
             IRInstruction::Call { args, .. } => Some(args.clone()),
             _ => None,
@@ -130,7 +120,7 @@ fn nested_calls_chain_through_value_ids() {
         a() + b()
         ";
 
-    let script = lower(&dedent(source));
+    let script = lower(source);
     assert_eq!(
         count_calls(&script.blocks),
         2,
@@ -183,7 +173,7 @@ fn returned_value_flows_through_call_terminator() {
         answer()
         ";
 
-    let script = lower(&dedent(source));
+    let script = lower(source);
     let block = &script.blocks[0];
     let Some(IRInstruction::Call { dest, .. }) = block.instructions.last() else {
         panic!(

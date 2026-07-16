@@ -73,7 +73,7 @@ fn struct_pattern_basic_second_literal_arm_is_reachable() {
 #[test]
 fn struct_pattern_basic_partial_match_on_first_field_falls_through() {
     // `Point{x: 5, y: 9}` matches `x` in the first arm but fails
-    // on `y`; must fall through to the catch-all.
+    // on `y`, so it must fall through to the catch-all.
     let source = "
         struct Point
           x: Int

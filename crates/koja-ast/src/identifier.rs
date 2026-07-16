@@ -83,7 +83,7 @@ impl fmt::Display for Identifier {
 /// crate can mint ids, but outside of the registry itself there should
 /// be no reason to call it.
 ///
-/// The id's derivation is an implementation detail; a future parallel
+/// The id's derivation is an implementation detail. A future parallel
 /// cache will swap sequential assignment for content-addressable
 /// hashing without changing this type's surface.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -109,7 +109,7 @@ impl fmt::Display for GlobalRegistryId {
 
 /// Opaque per-function handle for a local binding (parameter or
 /// `let`-introduced variable). Minted by typecheck's `LocalScope`
-/// when a fresh name enters scope; carried by [`Resolution::Local`] on
+/// when a fresh name enters scope and carried by [`Resolution::Local`] on
 /// every reference site to that binding within the same function.
 ///
 /// Mirrors [`GlobalRegistryId`]: a public [`Self::new`] ctor (so the
@@ -198,14 +198,14 @@ impl Resolution {
 ///
 /// Split along the named/anonymous axis:
 ///
-/// - [`Self::Named`] — types with a source-given name. Identity is the
-///   head [`Resolution`] (which registry entry this refers to);
+/// - [`Self::Named`]: types with a source-given name. Identity is the
+///   head [`Resolution`] (which registry entry this refers to), and
 ///   `type_args` are the generic arguments at this use site
 ///   (themselves `ResolvedType`s, so generics nest).
-/// - [`Self::Anonymous`] — structural types with no source name.
-///   Identity is by shape. Today: function types only; future: records,
+/// - [`Self::Anonymous`]: structural types with no source name.
+///   Identity is by shape. Today: function types only. Future: records,
 ///   tuples.
-/// - [`Self::Unresolved`] — in-flight placeholder before resolve runs.
+/// - [`Self::Unresolved`]: in-flight placeholder before resolve runs.
 ///   `Default` returns this.
 ///
 /// Shape examples:
@@ -228,9 +228,9 @@ pub enum ResolvedType {
     /// Anonymous union of two or more types: `A | B`. Members are
     /// kept in canonical order (sorted by display, deduped, with
     /// nested unions and aliases peeled and flattened) by the
-    /// `canonical_union` constructor in typecheck — the
+    /// `canonical_union` constructor in typecheck. The
     /// invariant lets equality compare member vectors elementwise.
-    /// A named alias `type Pet = ...` is *not* this variant; it
+    /// A named alias `type Pet = ...` is *not* this variant. It
     /// stays as `Named { Global(alias_id), [] }` and only peels to
     /// the underlying union at equivalence / widening / IR-lower
     /// time, so diagnostics keep the user's chosen name.
@@ -243,7 +243,7 @@ pub enum ResolvedType {
 
 impl ResolvedType {
     /// Fully-unresolved placeholder. Equivalent to
-    /// [`ResolvedType::default`]; exposed as a named constructor for
+    /// [`ResolvedType::default`], exposed as a named constructor for
     /// intent at call sites.
     pub fn unresolved() -> Self {
         Self::Unresolved
@@ -259,7 +259,7 @@ impl ResolvedType {
     }
 
     /// True iff every leaf is resolved. Seal uses this as its
-    /// whole-tree invariant — a single [`Self::Unresolved`] hole or a
+    /// whole-tree invariant, where a single [`Self::Unresolved`] hole or a
     /// [`Resolution::Unresolved`] head anywhere in the tree fails the
     /// check.
     pub fn is_resolved(&self) -> bool {
@@ -284,7 +284,7 @@ impl ResolvedType {
 /// `Tuple { elements }`.
 #[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub enum AnonymousKind {
-    /// `fn (T, U) -> R` — structural function type. Equates positionally
+    /// `fn (T, U) -> R`: structural function type. Equates positionally
     /// on param types and covariantly on return.
     Function {
         params: Vec<ResolvedType>,

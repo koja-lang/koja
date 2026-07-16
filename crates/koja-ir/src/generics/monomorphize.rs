@@ -39,8 +39,8 @@ pub(super) fn monomorphize(
 ) {
     let entry = registry.get(inst.template).unwrap_or_else(|| {
         panic!(
-            "IR generics: instantiation template id `{}` missing from registry — \
-             lower invariant violation",
+            "IR generics: instantiation template id `{}` missing from registry \
+             (lower invariant violation)",
             inst.template,
         )
     });
@@ -57,7 +57,7 @@ pub(super) fn monomorphize(
             assert_arity(&entry.identifier, entry.type_params.len(), &inst.args);
             let symbol = mangled_type_name(&template_symbol, &arg_types);
             // `Global.CPtr<T>` is a primitive at the IR layer
-            // ([`IRType::CPtr`]), not a struct decl — its fields don't
+            // ([`IRType::CPtr`]), not a struct decl, so its fields don't
             // exist as IR storage. Still enqueue its methods so call
             // sites against `CPtr_$T$.alloc`, `.free`, etc. resolve.
             if !is_primitive_struct_template(&entry.identifier) {
@@ -126,7 +126,7 @@ pub(super) fn monomorphize(
             let ast_entry = function_index.get(&inst.template).unwrap_or_else(|| {
                 panic!(
                     "IR generics: function template `{}` registered but no AST \
-                     entry in CheckedProgram — generics index invariant violation",
+                     entry in CheckedProgram (generics index invariant violation)",
                     entry.identifier,
                 )
             });
@@ -146,7 +146,7 @@ pub(super) fn monomorphize(
                 .insert(decl.symbol.clone(), decl);
         }
         other => panic!(
-            "IR generics: instantiation template `{}` is a {} — \
+            "IR generics: instantiation template `{}` is a {}, but \
              only struct / enum / function templates can be monomorphized",
             entry.identifier,
             other.label(),
@@ -263,12 +263,12 @@ fn monomorphize_function(
 /// their type-param scope from the enclosing type, so the resulting
 /// `Instantiation` keeps `args` (the receiver's concrete type list)
 /// but switches `template` to the method's id and points `owner` at
-/// the type — substitute calls in [`monomorphize_function`] then
+/// the type. Substitute calls in [`monomorphize_function`] then
 /// resolve `Resolution::TypeParam { owner: type_id, .. }` references
 /// inside the method body to the right concrete type.
 ///
 /// Methods that declare their own type params (`fn map<U>` on
-/// `Option<T>`) are skipped here — they need a call site to pick
+/// `Option<T>`) are skipped here, since they need a call site to pick
 /// the method-level args and enqueue the full
 /// `(template, args, method_args, owner)` quadruple. A struct
 /// instantiation alone doesn't pin `<U>`.
@@ -340,13 +340,13 @@ fn protocol_method_names(kind: &GlobalKind, registry: &GlobalRegistry) -> BTreeS
     names
 }
 
-/// True for stdlib structs that lower to a primitive [`IRType`] —
+/// True for stdlib structs that lower to a primitive [`IRType`]:
 /// `Global.CPtr<T>` (becomes `IRType::CPtr(...)`), `Global.List<T>`
 /// (becomes `IRType::List(...)`), `Global.Map<K, V>` (becomes
 /// `IRType::Map { ... }`), and `Global.Set<T>` (becomes
 /// `IRType::Set(...)`). Mono enqueues the struct's methods (so
 /// call sites can dispatch) but skips creating an `IRStructDecl`
-/// (the IR has no struct storage to describe; the pointer or hash-
+/// (the IR has no struct storage to describe, as the pointer or hash-
 /// table shape lives entirely inside the LLVM type lowering).
 fn is_primitive_struct_template(identifier: &koja_ast::identifier::Identifier) -> bool {
     if identifier.package() != "Global" {

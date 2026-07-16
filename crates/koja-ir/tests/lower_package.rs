@@ -4,19 +4,18 @@
 //! - happy-path lowering of a package function (project mode) and a
 //!   bare trailing-expression script body, asserting the produced
 //!   instruction sequence on the resulting [`IRProgram`] /
-//!   [`IRScript`];
+//!   [`IRScript`]
 //! - cross-package call wiring through script mode's
-//!   [`IRScript::function`] index;
+//!   [`IRScript::function`] index
 //! - the [`LowerError::EntryPointNotFound`] failure mode for an
 //!   entry state that no package registers (or that lacks a
-//!   `Process` conformance);
-//! - the per-function fail-fast contract: extern-fn-without-body
-//!   surfaces a feature-gap diagnostic, and a single bad function
-//!   in a multi-fn package produces exactly one diagnostic for the
-//!   failing function while the rest are still walked.
+//!   `Process` conformance)
+//! - the lower-time positive path for `@extern "C"` fns
+//! - the per-function fail-fast contract, where a single bad
+//!   function in a multi-fn package produces exactly one diagnostic
+//!   for the failing function while the rest are still walked
 
 use koja_ast::identifier::Identifier;
-use koja_ast::util::dedent;
 use koja_ir::{
     ConstValue, FunctionKind, IRBasicBlock, IRBinOp, IRFunction, IRInstruction, IRTerminator,
     IRType, LowerError, ValueId, lower_program,
@@ -26,8 +25,9 @@ use koja_parser::ParseMode;
 mod common;
 
 use common::{
-    PACKAGE, TEST_ENTRY_NAME, expect_diagnostics, lower_program_err as lower_err,
-    lower_program_source as lower, lower_script_source as lower_as_script, typecheck,
+    PACKAGE, TEST_ENTRY_NAME, all_instructions, expect_diagnostics, function,
+    lower_program_err as lower_err, lower_program_source as lower,
+    lower_script_source as lower_as_script, script_function, typecheck,
 };
 
 #[test]
@@ -38,9 +38,9 @@ fn fn_main_two_plus_two_lowers_to_const_const_add_return() {
         end
         ";
 
-    let program = lower(&dedent(source));
+    let program = lower(source);
 
-    // The entry point is the synthetic test-entry state's wrapper;
+    // The entry point is the synthetic test-entry state's wrapper.
     // `fn main` lowers as a plain package helper alongside it.
     assert_eq!(
         program.entry_point.mangled(),
@@ -51,7 +51,7 @@ fn fn_main_two_plus_two_lowers_to_const_const_add_return() {
         FunctionKind::ProcessEntryWrapper { .. },
     ));
 
-    let main: &IRFunction = common::function(&program, "main");
+    let main: &IRFunction = function(&program, "main");
     assert_eq!(main.blocks.len(), 1, "fns lower to one basic block");
 
     let block: &IRBasicBlock = &main.blocks[0];
@@ -142,9 +142,7 @@ fn script_with_helper_fn_lowers_call_through_packages() {
     let script = lower_as_script("fn helper -> Int\n  1\nend\n\nhelper() + 1\n");
 
     let helper_mangled = format!("{PACKAGE}.helper");
-    let helper = script
-        .function(&helper_mangled)
-        .expect("helper fn should be lowered into IRScript.packages");
+    let helper = script_function(&script, "helper");
     assert_eq!(helper.symbol.mangled(), helper_mangled);
     assert_eq!(helper.return_type, IRType::Int64);
 
@@ -164,9 +162,7 @@ fn script_with_helper_fn_lowers_call_through_packages() {
         ),
         "expected trailing BinaryOp(Add), got {trailing:?}",
     );
-    let call = block
-        .instructions
-        .iter()
+    let call = all_instructions(&script.blocks)
         .find(|inst| matches!(inst, IRInstruction::Call { .. }))
         .expect("expected a Call instruction in the script body");
     let IRInstruction::Call { callee, .. } = call else {
@@ -183,7 +179,7 @@ fn lower_program_reports_missing_entry_state() {
         end
         ";
 
-    let checked = typecheck(&dedent(source), ParseMode::File);
+    let checked = typecheck(source, ParseMode::File);
     let missing = Identifier::new(PACKAGE, vec!["App".to_string()]);
     let err =
         lower_program(&checked, &missing).expect_err("missing entry state should be reported");
@@ -201,7 +197,7 @@ fn lower_program_reports_entry_state_without_process_impl() {
         end
         ";
 
-    let checked = typecheck(&dedent(source), ParseMode::File);
+    let checked = typecheck(source, ParseMode::File);
     let state = Identifier::new(PACKAGE, vec!["App".to_string()]);
     let err = lower_program(&checked, &state)
         .expect_err("entry state without a Process impl should be reported");
@@ -211,13 +207,14 @@ fn lower_program_reports_entry_state_without_process_impl() {
     }
 }
 
-/// Extern fns no longer surface a lower-time feature gap — they
+/// Extern fns no longer surface a lower-time feature gap. They
 /// lower to [`koja_ir::FunctionKind::Extern`] with empty
 /// blocks. Type-shape rejections are intercepted earlier by the
 /// typecheck FFI gate (see `koja-typecheck`'s
-/// `extern_c.rs`). This test pins the lower-time positive path:
-/// FFI-admissible signatures lower cleanly with the empty-body
-/// shape the seal pass requires for `FunctionKind::Extern`.
+/// `extern_c.rs`). This test pins the lower-time positive path,
+/// where FFI-admissible signatures lower cleanly with the
+/// empty-body shape the seal pass requires for
+/// `FunctionKind::Extern`.
 #[test]
 fn extern_fn_lowers_with_empty_blocks_and_extern_kind() {
     let source = "
@@ -229,29 +226,29 @@ fn extern_fn_lowers_with_empty_blocks_and_extern_kind() {
         end
         ";
 
-    let program = lower(&dedent(source));
-    let cosf = common::function(&program, "cosf");
+    let program = lower(source);
+    let cosf = function(&program, "cosf");
     assert!(
         cosf.blocks.is_empty(),
         "extern fn should lower to zero blocks; got {}",
         cosf.blocks.len(),
     );
     assert!(
-        matches!(cosf.kind, koja_ir::FunctionKind::Extern(_)),
+        matches!(cosf.kind, FunctionKind::Extern(_)),
         "expected FunctionKind::Extern for cosf; got {:?}",
         cosf.kind,
     );
 }
 
 /// When one function fails to lower, other functions in the same
-/// package still get walked — the failing one is simply omitted, and
+/// package still get walked. The failing one is simply omitted, and
 /// the final [`LowerError::Diagnostics`] carries *only* the diagnostic
 /// from the function that actually failed. Pins the per-function
 /// fail-fast contract so a single bad function doesn't mask issues in
 /// other ones and doesn't spew spurious errors either. Uses a
-/// bodyless `fn broken` (an IR-only feature gap that passes typecheck via
-/// typecheck and parse — see `decl.rs:485` — but which IR lower
-/// rejects with the bodyless-fn diagnostic in `package.rs:284`).
+/// bodyless `fn broken`, an IR-only feature gap that passes parse and
+/// typecheck (see `decl.rs:485`) but which IR lower rejects with the
+/// bodyless-fn diagnostic in `package.rs:284`.
 #[test]
 fn partial_failure_reports_only_the_failing_function_diagnostic() {
     let source = "
@@ -261,8 +258,7 @@ fn partial_failure_reports_only_the_failing_function_diagnostic() {
         end
         ";
 
-    let program = dedent(source);
-    let messages = expect_diagnostics(lower_err(&program));
+    let messages = expect_diagnostics(lower_err(source));
     assert_eq!(
         messages.len(),
         1,
