@@ -81,7 +81,7 @@ pub enum Interest {
 
 /// Which direction a registered fd became ready in. Set by the reactor
 /// from the fired event, then carried to the watcher as the `IOReady`
-/// variant. `Error` covers hangup / poll error / a forced `release_fd`.
+/// variant. `Error` covers hangup / poll error / a forced fd release.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Readiness {
     Error,

@@ -2,14 +2,13 @@
 
 use std::ffi::{CStr, c_char};
 use std::fs::{self, OpenOptions};
-use std::io;
 use std::os::fd::IntoRawFd;
 use std::path::Path;
 use std::ptr;
 use std::slice;
 
-use crate::ffi::{libc_close, libc_read, libc_write};
-use crate::reactor::{Interest, block_until_ready, io_block, release_fd};
+use crate::ffi::{libc_read, libc_write};
+use crate::reactor::{Interest, block_until_ready, io_block, release_fd_and_close};
 use crate::util::{alloc_binary, set_last_error};
 
 /// Decodes a NUL-terminated C path pointer into `&str`, recording the
@@ -28,14 +27,12 @@ unsafe fn cstr_path<'a>(ptr: *const u8) -> Result<&'a str, ()> {
 }
 
 /// Closes a raw file descriptor. Returns 0 on success, -1 on error.
-/// Drops any reactor registration first so fd-number reuse can't
-/// hit stale poller entries.
+/// The reactor owns the close so its registration teardown and the
+/// `close(2)` syscall stay atomic with respect to concurrent parkers.
 #[unsafe(no_mangle)]
 pub extern "C" fn koja_fd_close(fd: i32) -> i32 {
-    release_fd(fd);
-    let ret = unsafe { libc_close(fd) };
-    if ret < 0 {
-        set_last_error(io::Error::last_os_error());
+    if let Err(error) = release_fd_and_close(fd) {
+        set_last_error(error);
         return -1;
     }
     0

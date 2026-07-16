@@ -1,26 +1,31 @@
 //! Close-while-blocked liveness harness.
 //!
-//! Reproduces the scenario the reactor's `release_fd` reverse-map fix
-//! exists for: a process parked in `koja_fd_read` (`io_block`-ed on a
-//! socket fd) while *another* process closes that same fd. The poller
-//! keys waiters by pid, so without the fd->pid `blocking` map the closer
-//! can't find the parked reader and it strands forever.
+//! Reproduces the scenario the reactor's close teardown exists for: a
+//! process parked in `koja_fd_read` (`io_block`-ed on a socket fd) while
+//! *another* process closes that same fd. Two historical regressions live
+//! here. Without waking the parked reader at close, it strands forever.
+//! And with the wake and the `close(2)` syscall unserialized, the woken
+//! reader can retry, hit `EAGAIN` on the still-open fd, and re-park in
+//! the reactor right before the kernel silently drops the poller entry
+//! at close, again stranding it forever. The second race hits roughly a
+//! quarter of cycles, so the close/park cycle loops enough times to make
+//! a regression near-certain to trip.
 //!
 //! Like `scheduler_stress`, this drives the real scheduler + reactor via
 //! the runtime's `#[no_mangle]` C surface, with process bodies written as
-//! plain `extern "C"` functions. The reader announces itself, blocks on a
-//! never-readable socket, and is expected to wake with an error (the
-//! retried read hits `EBADF` on the closed fd). The controller closes the
-//! fd and waits for the reader's completion message; a regression makes
-//! the reader hang, which the watchdog turns into a hard abort so the
-//! suite fails loudly instead of stalling.
+//! plain `extern "C"` functions. Each cycle the reader announces itself,
+//! blocks on a never-readable socket, and is expected to wake with an
+//! error (the retried read hits `EBADF` on the closed fd). The controller
+//! closes the fd and waits for the reader's completion message; a
+//! regression makes the reader hang, which the watchdog turns into a hard
+//! abort so the suite fails loudly instead of stalling.
 //!
 //! As with `scheduler_stress`, the runtime is a process-global singleton,
 //! so this file contains exactly one `#[test]`.
 
 use std::net::{TcpListener, TcpStream};
 use std::os::fd::AsRawFd;
-use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI64, AtomicUsize, Ordering};
 use std::time::Duration;
 
 extern crate koja_runtime;
@@ -49,12 +54,17 @@ unsafe extern "C" {
 #[unsafe(no_mangle)]
 static __koja_app_name: [u8; 1] = [0];
 
+/// Close/park cycles per run. At the observed ~20-40% per-cycle rate of
+/// the re-park race, twenty cycles push a regression's escape odds below
+/// one in a thousand.
+const CYCLES: usize = 20;
+
 /// PID the reader reports back to, published before the reader is spawned.
 static CONTROLLER_PID: AtomicI64 = AtomicI64::new(0);
 /// Raw fd the reader blocks on; closed out from under it by the controller.
 static READER_FD: AtomicI64 = AtomicI64::new(-1);
-/// Set by the reader when its blocked read returns an error (woke correctly).
-static READER_ERRORED: AtomicBool = AtomicBool::new(false);
+/// Cycles whose blocked read returned an error (the reader woke correctly).
+static READER_ERRORS: AtomicUsize = AtomicUsize::new(0);
 /// Set once the test's assertions are reached, disarming the watchdog.
 static FINISHED: AtomicBool = AtomicBool::new(false);
 
@@ -95,37 +105,42 @@ extern "C" fn reader_entry(_state: *const u8) {
 
     unsafe { koja_rt_send(controller, &ABOUT_TO_BLOCK, 1, None) };
     let result = unsafe { koja_fd_read(fd, 16) };
-    READER_ERRORED.store(result.is_null(), Ordering::SeqCst);
+    if result.is_null() {
+        READER_ERRORS.fetch_add(1, Ordering::SeqCst);
+    }
     unsafe { koja_rt_send(controller, &DONE, 1, None) };
 }
 
-/// Controller (PID 1): spawn the reader, wait until it's about to block,
-/// close the fd out from under it, and wait for its completion message.
+/// Controller (PID 1): each cycle, spawn a reader on a fresh socket pair,
+/// wait until it's about to block, close the fd out from under it, and
+/// wait for its completion message.
 extern "C" fn controller_entry(_state: *const u8) {
     CONTROLLER_PID.store(unsafe { koja_rt_self() }, Ordering::SeqCst);
-    READER_FD.store(never_readable_fd() as i64, Ordering::SeqCst);
 
-    unsafe { koja_rt_spawn(reader_entry, std::ptr::null(), 0, None) };
+    for _ in 0..CYCLES {
+        READER_FD.store(never_readable_fd() as i64, Ordering::SeqCst);
+        unsafe { koja_rt_spawn(reader_entry, std::ptr::null(), 0, None) };
 
-    // First message: the reader is about to enter its blocking read. The
-    // short pause lets it actually park in `io_block` (register in the
-    // reactor's `blocking` map) before we close, so we exercise the
-    // close-*while-blocked* path rather than a pre-close fast `EBADF`.
-    recv_blocking();
-    std::thread::sleep(Duration::from_millis(50));
+        // First message: the reader is about to enter its blocking read.
+        // The short pause lets it actually park in `io_block` (register in
+        // the reactor's waker map) before we close, so we exercise the
+        // close-*while-blocked* path rather than a pre-close fast `EBADF`.
+        recv_blocking();
+        std::thread::sleep(Duration::from_millis(50));
 
-    let fd = READER_FD.load(Ordering::SeqCst) as i32;
-    unsafe { koja_fd_close(fd) };
+        let fd = READER_FD.load(Ordering::SeqCst) as i32;
+        unsafe { koja_fd_close(fd) };
 
-    // Second message: the reader's read returned. A regression strands it
-    // here forever, which the watchdog converts into an abort.
-    recv_blocking();
+        // Second message: the reader's read returned. A regression strands
+        // it here forever, which the watchdog converts into an abort.
+        recv_blocking();
+    }
 }
 
 #[test]
 fn close_wakes_blocked_reader() {
     std::thread::spawn(|| {
-        for _ in 0..100 {
+        for _ in 0..300 {
             if FINISHED.load(Ordering::SeqCst) {
                 return;
             }
@@ -141,8 +156,9 @@ fn close_wakes_blocked_reader() {
     }
 
     FINISHED.store(true, Ordering::SeqCst);
-    assert!(
-        READER_ERRORED.load(Ordering::SeqCst),
-        "reader blocked in koja_fd_read should wake with an error when its fd is closed",
+    assert_eq!(
+        READER_ERRORS.load(Ordering::SeqCst),
+        CYCLES,
+        "every reader blocked in koja_fd_read should wake with an error when its fd is closed",
     );
 }
