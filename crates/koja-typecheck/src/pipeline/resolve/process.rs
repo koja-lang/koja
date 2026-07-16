@@ -20,6 +20,7 @@ use koja_ast::labels::pattern_span;
 use koja_ast::span::Span;
 
 use crate::pipeline::lift_signatures::{TypeParamScope, resolve_type_expr};
+use crate::pipeline::unify::{Substitution, substitute};
 use crate::registry::GlobalRegistry;
 
 use super::control_flow::{body_tail_type, join_arm_tails, require_bool_condition};
@@ -45,14 +46,14 @@ pub(super) fn resolve_spawn(
         } if method == "start" => match &receiver.resolution {
             ResolvedType::Named {
                 resolution: Resolution::Global(id),
-                ..
-            } => Some(*id),
+                type_args,
+            } => Some((*id, type_args.clone())),
             _ => None,
         },
         _ => None,
     };
 
-    let Some(target_id) = receiver_id else {
+    let Some((target_id, target_args)) = receiver_id else {
         diagnostics.push(Diagnostic::error(
             "`spawn` requires `Type.start(config)` where `Type` implements `Process`",
             span,
@@ -111,9 +112,14 @@ pub(super) fn resolve_spawn(
         return ResolvedType::unresolved();
     };
 
+    // A generic target records its `Process` args against its own type
+    // params (e.g. `Msg<T>` with `T` owned by the target). Substitute
+    // the instantiation the `start(config)` call inferred, which the
+    // static-dispatch path stitched onto the receiver's resolution.
+    let subst = Substitution::from_args(target_id, &target_args);
     ResolvedType::Named {
         resolution: Resolution::Global(ref_id),
-        type_args: vec![msg_ty.clone(), reply_ty.clone()],
+        type_args: vec![substitute(msg_ty, &subst), substitute(reply_ty, &subst)],
     }
 }
 

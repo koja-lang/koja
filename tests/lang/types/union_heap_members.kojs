@@ -1,0 +1,27 @@
+struct Wrap
+  inner: Int | List<String>
+end
+
+# A list value is { buf, len, cap }, wider than a pointer. The union
+# payload buffer must fit the full value or clones read garbage.
+words: Int | List<String> = ["a", "b", "c"]
+copy = words
+
+match copy
+  n: Int -> n.print()
+  xs: List<String> -> xs.length().print()
+end
+
+wrapped = Wrap{inner: words}
+
+match wrapped.inner
+  n: Int -> n.print()
+  xs: List<String> -> xs.length().print()
+end
+
+counts: Map<String, Int> | Bool = ["a": 1, "b": 2]
+
+match counts
+  m: Map<String, Int> -> m.length().print()
+  b: Bool -> b.print()
+end

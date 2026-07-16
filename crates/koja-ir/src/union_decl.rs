@@ -76,15 +76,17 @@ fn size_and_align(
         IRType::Float32 | IRType::Int32 | IRType::UInt32 => (4, 4),
         IRType::Float64 | IRType::Int64 | IRType::UInt64 => (8, 8),
         IRType::Unit => (0, 1),
-        IRType::Binary
-        | IRType::Bits
-        | IRType::CPtr(_)
-        | IRType::Function { .. }
-        | IRType::Indirect(_)
-        | IRType::List(_)
-        | IRType::Map { .. }
-        | IRType::Set(_)
-        | IRType::String => (PTR_BYTES, PTR_BYTES),
+        IRType::Binary | IRType::Bits | IRType::CPtr(_) | IRType::Indirect(_) | IRType::String => {
+            (PTR_BYTES, PTR_BYTES)
+        }
+        // Fat values whose LLVM shapes are wider than one pointer:
+        // closure `{ fn_ptr, env_ptr }`, list `{ buf_ptr, len, cap }`,
+        // hashtable `{ entries_ptr, states_ptr, len, cap }`. Must
+        // mirror `koja-ir-llvm`'s value types or a union payload
+        // buffer truncates the value it stores.
+        IRType::Function { .. } => (2 * PTR_BYTES, PTR_BYTES),
+        IRType::List(_) => (3 * PTR_BYTES, PTR_BYTES),
+        IRType::Map { .. } | IRType::Set(_) => (4 * PTR_BYTES, PTR_BYTES),
         IRType::Struct(symbol) => match structs.get(symbol) {
             Some(decl) => sum_fields(
                 decl.fields.iter().map(|f| &f.ir_type),
@@ -177,13 +179,15 @@ fn round_up(value: u32, alignment: u32) -> u32 {
     value.div_ceil(alignment) * alignment
 }
 
-/// Walk every IR type referenced in `packages` and register one
+/// Walk every IR type referenced in `packages` (and, for script
+/// mode, the top-level `script_blocks`) and register one
 /// [`IRUnionDecl`] per distinct mangled `IRType::Union` head into
-/// the package that first observed it. Cross-package lookup goes
-/// through [`crate::IRProgram::union_decl`], so where the decl
-/// physically lives doesn't matter for backends — only that
-/// every observed mangled symbol has exactly one entry.
-pub(crate) fn discover_unions(packages: &mut [IRPackage]) {
+/// the package that first observed it. Script-only unions land in
+/// the first package. Cross-package lookup goes through
+/// [`crate::IRProgram::union_decl`], so where the decl physically
+/// lives doesn't matter for backends. What matters is that every
+/// observed mangled symbol has exactly one entry.
+pub(crate) fn discover_unions(packages: &mut [IRPackage], script_blocks: &[IRBasicBlock]) {
     let struct_index: BTreeMap<IRSymbol, IRStructDecl> = packages
         .iter()
         .flat_map(|pkg| {
@@ -224,6 +228,18 @@ pub(crate) fn discover_unions(packages: &mut [IRPackage]) {
             }
             seen.insert(mangled.clone(), idx);
             staged[idx].insert(mangled, ir_type);
+        }
+    }
+    if !script_blocks.is_empty() && !packages.is_empty() {
+        let mut local: BTreeMap<IRSymbol, IRType> = BTreeMap::new();
+        for block in script_blocks {
+            walk_block(block, &mut local);
+        }
+        for (mangled, ir_type) in local {
+            if !seen.contains_key(&mangled) {
+                seen.insert(mangled.clone(), 0);
+                staged[0].insert(mangled, ir_type);
+            }
         }
     }
     let empty_unions: BTreeMap<IRSymbol, IRUnionDecl> = BTreeMap::new();

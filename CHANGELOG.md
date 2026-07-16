@@ -10,6 +10,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - Closing a file descriptor while another process is blocked reading or writing it can no longer leave that process hung forever.
+- Generic process implementations (`impl Process<Config<T>, Msg<T>, R> for Server<T>`) can now be spawned, with `spawn` inferring the instantiated `Ref` type instead of failing with a type mismatch.
+- Assigning to a generically typed field and matching a union subject with a typed binding that mentions a type parameter (`xs: List<T>`) no longer crash the compiler inside generic types.
+- Union values with a `List`, `Map`, `Set`, or closure member no longer get silently truncated and abort at runtime when copied or passed to a function.
+- Matching a union-typed variable at the top level of a script no longer fails to compile.
 
 ## [0.15.1] - 2026-07-15
 
