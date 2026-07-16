@@ -22,7 +22,7 @@ use polling::{Event, Events, PollMode, Poller};
 
 use koja_runtime_core::{ProcessState, Reactor, Readiness, Waker};
 
-use crate::ffi::{EAGAIN, EINTR, get_errno};
+use crate::ffi::{EAGAIN, EINTR, get_errno, libc_close};
 use crate::scheduler::{
     CURRENT_PID, NativeTable, SCHED, SHUTDOWN, WORK_AVAILABLE, publish_ready, send_io_event,
     yield_to_scheduler,
@@ -46,21 +46,32 @@ struct NativeReactor {
 
 impl NativeReactor {
     /// Adds or modifies `fd` in the poller with oneshot mode, using the
-    /// `registered` set to pick `add` vs `modify`.
-    fn arm(&self, fd: i32, event: Event) {
+    /// `registered` set to pick `add` vs `modify`. A failure means the
+    /// poller will never report readiness for `fd` (typically because the
+    /// fd was closed), so callers must not leave a waker parked on it.
+    fn arm(&self, fd: i32, event: Event) -> io::Result<()> {
         let borrowed = unsafe { BorrowedFd::borrow_raw(fd) };
         let mut set = self.registered.lock().unwrap();
-        if set.contains(&fd) {
-            let _ = self
-                .poller
-                .modify_with_mode(borrowed, event, PollMode::Oneshot);
+        let result = if set.contains(&fd) {
+            self.poller
+                .modify_with_mode(borrowed, event, PollMode::Oneshot)
         } else {
             unsafe {
-                let _ = self
-                    .poller
-                    .add_with_mode(&borrowed, event, PollMode::Oneshot);
+                self.poller
+                    .add_with_mode(&borrowed, event, PollMode::Oneshot)
             }
-            set.insert(fd);
+        };
+        match result {
+            Ok(()) => {
+                set.insert(fd);
+                Ok(())
+            }
+            // A failed modify means the kernel already dropped the entry
+            // (closed fd), so the set must not keep claiming it is armed.
+            Err(error) => {
+                set.remove(&fd);
+                Err(error)
+            }
         }
     }
 
@@ -78,13 +89,28 @@ impl Reactor for NativeReactor {
     /// Records the action to take when `fd` next becomes ready and arms
     /// the poller for `interest`. The waker is stored before arming: an
     /// already-ready fd can fire immediately.
+    ///
+    /// A failed arm fails open. The fd is already closed (a registration
+    /// can race [`release_fd_and_close`]), no readiness event will ever
+    /// fire, so the waker is taken back out and woken immediately. The
+    /// waiter resumes, retries its syscall, and observes `EBADF` itself.
     fn register(&self, fd: i32, interest: Interest, waker: Waker) {
         let event = match interest {
             Interest::Readable => Event::readable(fd as usize),
             Interest::Writable => Event::writable(fd as usize),
         };
         self.wakers.lock().unwrap().insert(fd, waker);
-        self.arm(fd, event);
+        if self.arm(fd, event).is_err() {
+            let mut wakers = self.wakers.lock().unwrap();
+            // Only take back the exact waker this call inserted. A concurrent
+            // close may have already claimed (and woken) it, and the fd
+            // number may even have been reused for a fresh registration.
+            if wakers.get(&fd) == Some(&waker) {
+                wakers.remove(&fd);
+                drop(wakers);
+                wake(waker);
+            }
+        }
     }
 
     fn deregister(&self, fd: i32) {
@@ -95,8 +121,8 @@ impl Reactor for NativeReactor {
     /// Waits for readiness up to `timeout` and returns a waker for each
     /// fired fd. Oneshot disarms the poller entry on fire, but the waker
     /// stays registered until an explicit [`deregister`](Reactor::deregister)
-    /// (an `io_block` waiter, on resume) or `release_fd` (a watcher). A
-    /// `Fd.watch` owner re-arms by watching again.
+    /// (an `io_block` waiter, on resume) or [`release_fd_and_close`] (a
+    /// watcher). A `Fd.watch` owner re-arms by watching again.
     fn poll(&self, timeout: Option<Duration>) -> Vec<Waker> {
         let mut events = Events::new();
         match self.poller.wait(&mut events, timeout) {
@@ -165,7 +191,7 @@ pub fn init() {
 /// state is `Running` (mid-`io_block`, before its context switch) or
 /// already `Runnable` must not be transitioned, or `ProcessTable::
 /// transition` trips its legal-edge assertion. Shared by the reactor
-/// readiness path and `release_fd` so the two can't drift.
+/// readiness path and [`wake`] so the two can't drift.
 fn promote_io_waiter(sched: &mut NativeTable, pid: i64) {
     if sched
         .get(pid)
@@ -251,35 +277,63 @@ pub extern "C" fn koja_rt_unwatch_fd(fd: i32) {
     }
 }
 
-/// Drops `fd` from the reactor's bookkeeping and wakes whoever was parked
-/// on it, so closing an fd from one worker can't strand a process blocked
-/// on it from another. Idempotent.
-///
-/// A process `io_block`-ed on `fd` is promoted `WaitingIO -> Runnable` (it
+/// Executes a waker for an fd that will never report readiness again.
+/// A process `io_block`-ed on it is promoted `WaitingIO -> Runnable` (it
 /// resumes, retries the syscall, and gets `EBADF`). A `Fd.watch` owner is
 /// sent a synthetic `IOReady.Error` so its handler observes the hangup.
-/// Without this, the poller entry is torn down and no further readiness
-/// event ever fires for that fd.
-pub(crate) fn release_fd(fd: i32) {
-    let Some(reactor) = REACTOR.get() else {
-        return;
-    };
-    let waker = reactor.wakers.lock().unwrap().remove(&fd);
-    reactor.disarm(fd);
-
+///
+/// Must run with the `wakers` lock dropped. `SCHED` is never taken under it.
+fn wake(waker: Waker) {
     match waker {
-        Some(Waker::Resume(pid)) => {
+        Waker::Resume(pid) => {
             let mut sched = SCHED.lock().unwrap();
             promote_io_waiter(&mut sched, pid);
             publish_ready(&mut sched);
         }
-        Some(Waker::Deliver { fd, pid, .. }) => {
+        Waker::Deliver { fd, pid, .. } => {
             send_io_event(pid, IO_READY_ERROR, fd as i64);
         }
-        None => {}
     }
-
     WORK_AVAILABLE.notify_all();
+}
+
+/// Closes `fd`, dropping it from the reactor's bookkeeping and waking
+/// whoever was parked on it, so closing an fd from one worker can't
+/// strand a process blocked on it from another.
+///
+/// The `wakers` lock is held across the `close(2)` syscall so a concurrent
+/// `register` for this fd lands entirely before it (waker claimed here,
+/// the woken waiter's retry sees `EBADF`) or entirely after (the arm hits
+/// the closed fd and `register` fails open). With the lock dropped in
+/// between, a promoted waiter can re-register while the fd is still open,
+/// the kernel then silently drops the poller entry at close, and the
+/// waiter strands forever. Holding the lock also keeps fd-number reuse
+/// from attaching a stale waker to an unrelated fresh fd.
+pub(crate) fn release_fd_and_close(fd: i32) -> io::Result<()> {
+    let Some(reactor) = REACTOR.get() else {
+        return close_raw(fd);
+    };
+
+    let (waker, result) = {
+        let mut wakers = reactor.wakers.lock().unwrap();
+        let waker = wakers.remove(&fd);
+        reactor.disarm(fd);
+        (waker, close_raw(fd))
+    };
+
+    if let Some(waker) = waker {
+        wake(waker);
+    }
+    result
+}
+
+/// `close(2)`, with the OS error captured immediately so later lock
+/// traffic cannot clobber `errno`.
+fn close_raw(fd: i32) -> io::Result<()> {
+    if unsafe { libc_close(fd) } < 0 {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(())
 }
 
 /// Suspends the current process until `fd` is ready for the given
