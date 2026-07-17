@@ -1,0 +1,24 @@
+# Type-private helpers may live inside a protocol impl block
+# alongside the methods they support (LANGUAGE.md: "priv fn helpers
+# are allowed in impl blocks"). Public extras are still rejected.
+
+protocol Greeter
+  fn greet(self) -> String
+end
+
+struct Robot
+  name: String
+end
+
+impl Greeter for Robot
+  fn greet(self) -> String
+    self.prefix() <> self.name
+  end
+
+  priv fn prefix(self) -> String
+    "beep boop "
+  end
+end
+
+r = Robot{name: "R2"}
+IO.puts(r.greet())

@@ -859,13 +859,22 @@ fn verify_protocol_conformance(
         let ImplMember::Function(function) = member else {
             continue;
         };
+        // Type-private helpers may live alongside the protocol
+        // methods they support. Only public extras are rejected,
+        // since they would silently widen the type's public surface
+        // from inside a conformance block.
+        if function.visibility == Visibility::Private {
+            continue;
+        }
         if !protocol_method_names.contains_key(function.name.as_str()) {
-            diagnostics.push(Diagnostic::error(
+            diagnostics.push(Diagnostic::error_with_hint(
                 format!(
                     "method `{}` is not declared in protocol `{protocol_identifier}` \
                      (on `impl {protocol_identifier} for {target_label}`)",
                     function.name,
                 ),
+                "mark it `priv fn` if it is an implementation helper, or declare it \
+                 in the type's own body",
                 function.span,
             ));
         }

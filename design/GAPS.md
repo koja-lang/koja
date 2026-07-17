@@ -219,8 +219,12 @@ blocking bug is fixed. `spawn` on a generic process target was not
 substituting the call site's type args into the conformance's `M`/`R`,
 and the monomorphizer skipped `LValue.head_resolved_type` on field
 assignments (regression coverage in
-`tests/lang/generics/generic_process_spawn.kojs`). Four non-blocking
-warts remain, each with a workaround.
+`tests/lang/generics/generic_process_spawn.kojs`). Also fixed
+2026-07-16: `priv fn` helpers inside `impl Protocol for Type` blocks
+were rejected despite LANGUAGE.md allowing them; the conformance check
+now skips private members and only rejects public extras (regression
+coverage in `tests/lang/protocols/priv_impl_helper.kojs`). Three
+non-blocking warts remain, each with a workaround.
 
 - **Generic enum unit variants don't infer from parameter types.**
   `consume(Signal.Done)` fails with "cannot infer type parameter `T`
@@ -241,12 +245,6 @@ warts remain, each with a workaround.
   `Err`" because the checker doesn't combine nested coverage into
   coverage of the outer variant. Workaround is a `Result.Err(_)`
   catch-all arm with an inner match on the payload.
-- **`priv fn` helpers are rejected inside protocol impl blocks.**
-  `impl Protocol for Type` requires every fn to be declared in the
-  protocol, so private helpers must live in a separate
-  `extend Type` block. Fine as a rule, but the diagnostic ("method
-  `x` is not declared in protocol") doesn't suggest `extend`, and
-  splitting one conceptual unit across two blocks reads worse.
 
 ---
 

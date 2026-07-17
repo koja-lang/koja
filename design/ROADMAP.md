@@ -120,6 +120,7 @@ See [GAPS.md](GAPS.md) for known compiler limitations and workarounds.
 - **Concurrency model** -- documented in `archive/20260313-CONCURRENCY.md` and `archive/20260323-CONCURRENCY.md` (processes, native runtime, supervision)
 - **Project config format** -- `koja.toml` (TOML-based, replacing `project.koja`)
 - **Module system redesign** -- documented in `archive/20260403-IMPORT.md` (files as transparent, types as namespaces, no intra-project imports, qualified package access, `import` keyword removed)
+- **Conformance headers** -- agreed design in [CONFORMANCE-HEADERS.md](CONFORMANCE-HEADERS.md) (`struct Server<T>: Process<...>, Debug` declares conformance on the type, protocol methods live in the body, comma-separated list with `&` reserved for composition in type positions)
 - **Compiler architecture** -- destination spec in [COMPILER-NORTHSTAR.md](COMPILER-NORTHSTAR.md) (four-phase linear pipeline, sealed `IRProgram`, package-granular incremental, single `TypeIdentifier` for all bound names). Predecessor docs: [archive/20260502-EXPOIR-ROADMAP.md](archive/20260502-EXPOIR-ROADMAP.md) (live KojaIR roadmap), [archive/20260502-COMPILER.md](archive/20260502-COMPILER.md) (earlier self-hosted compiler sketch), and [archive/20260427-EXPOIR.md](archive/20260427-EXPOIR.md) (original SIL-style design and Wave 1-17 history).
 
 ### Tooling (pulled forward)
