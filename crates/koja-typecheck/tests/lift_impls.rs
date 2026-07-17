@@ -180,6 +180,40 @@ fn extra_impl_method_diagnoses() {
 }
 
 #[test]
+fn priv_helper_in_protocol_impl_is_allowed() {
+    let source = "
+        protocol Greeter
+          fn greet(self) -> String
+        end
+
+        struct Robot
+          name: String
+        end
+
+        impl Greeter for Robot
+          fn greet(self) -> String
+            self.prefix() <> self.name
+          end
+
+          priv fn prefix(self) -> String
+            \"beep boop \"
+          end
+        end
+
+        r = Robot{name: \"R2\"}
+        r.greet()
+        ";
+
+    let checked = typecheck(&dedent(source));
+    let helper_ident = Identifier::new(PACKAGE, vec!["Robot".to_string(), "prefix".to_string()]);
+    let (_, entry) = checked
+        .registry
+        .lookup(&helper_ident)
+        .expect("Robot.prefix should be registered as a type-private helper");
+    assert!(matches!(entry.kind, GlobalKind::Function(Some(_))));
+}
+
+#[test]
 fn return_type_mismatch_diagnoses() {
     let source = "
         protocol Greeter

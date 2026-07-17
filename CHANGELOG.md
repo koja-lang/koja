@@ -14,6 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Assigning to a generically typed field and matching a union subject with a typed binding that mentions a type parameter (`xs: List<T>`) no longer crash the compiler inside generic types.
 - Union values with a `List`, `Map`, `Set`, or closure member no longer get silently truncated and abort at runtime when copied or passed to a function.
 - Matching a union-typed variable at the top level of a script no longer fails to compile.
+- `priv fn` helpers inside `impl Protocol for Type` blocks are no longer rejected as undeclared protocol methods, matching the documented visibility rules since 0.15.0.
 
 ## [0.15.1] - 2026-07-15
 
