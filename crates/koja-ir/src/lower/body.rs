@@ -65,7 +65,12 @@ pub(crate) fn lower_body_to_blocks(
             value: Some(id), ..
         } => ctx.type_of(*id),
         FlowResult::Open { value: None, .. } => IRType::Unit,
-        FlowResult::Closed => ctx.explicit_return_type().cloned().unwrap_or(IRType::Unit),
+        // Closed flow means an explicit `return` exited the script.
+        // Typecheck does not yet validate explicit return values (it
+        // only checks the trailing expression), so their IR types
+        // carry no guarantee. `Unit` is the defensible default until
+        // explicit-return checking lands upstream.
+        FlowResult::Closed => IRType::Unit,
     };
     finalize_open_flow(&mut ctx, flow, &return_type);
     Ok((ctx.into_blocks(), return_type))
@@ -144,7 +149,6 @@ fn lower_statement(
                     // exit drops free its source slots, so the return
                     // clone is taken while the source is live.
                     let return_ty = ctx.type_of(id);
-                    ctx.record_explicit_return_type(return_ty.clone());
                     let owned = materialize_owned(ctx, next, id, &return_ty);
                     emit_function_exit_drops(ctx, next);
                     ctx.cfg
@@ -152,7 +156,6 @@ fn lower_statement(
                     Some(owned)
                 }
                 None => {
-                    ctx.record_explicit_return_type(IRType::Unit);
                     emit_function_exit_drops(ctx, block);
                     ctx.cfg
                         .set_terminator(block, IRTerminator::Return { value: None });

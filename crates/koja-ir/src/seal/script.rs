@@ -37,7 +37,7 @@ pub(crate) fn seal_script(script: &IRScript) {
     // walk starts with an empty defined set.
     let parameter_value_ids: HashSet<ValueId> = HashSet::new();
     seal_ssa(&script.blocks, owner, &parameter_value_ids);
-    seal_script_body_types(&script.blocks, &script.return_type, &type_environment);
+    seal_script_body_types(&script.blocks, &type_environment);
     seal_script_calls(script);
     seal_script_struct_ops(script);
     seal_script_enum_ops(script);

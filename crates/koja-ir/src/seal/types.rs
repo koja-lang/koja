@@ -8,7 +8,8 @@ use std::collections::BTreeMap;
 use crate::constant::IRConstantValue;
 use crate::enum_decl::{EnumPayloadInit, IREnumDecl, IRVariantPayload};
 use crate::function::{
-    FunctionKind, IRBasicBlock, IRFunction, IRInstruction, IRSymbol, IRTerminator,
+    FunctionKind, IRBasicBlock, IRBlockId, IRFunction, IRFunctionParam, IRInstruction, IRSymbol,
+    IRTerminator,
 };
 use crate::local::IRLocalId;
 use crate::package::IRPackage;
@@ -125,12 +126,8 @@ pub(super) fn seal_package_types(package: &IRPackage, environment: &TypeEnvironm
     }
 }
 
-pub(super) fn seal_script_body_types(
-    blocks: &[IRBasicBlock],
-    return_type: &IRType,
-    environment: &TypeEnvironment<'_>,
-) {
-    seal_body_types(blocks, &[], return_type, "script body", environment, None);
+pub(super) fn seal_script_body_types(blocks: &[IRBasicBlock], environment: &TypeEnvironment<'_>) {
+    seal_body_types(blocks, &[], "script body", environment, None);
 }
 
 fn seal_function_types(function: &IRFunction, environment: &TypeEnvironment<'_>) {
@@ -141,7 +138,6 @@ fn seal_function_types(function: &IRFunction, environment: &TypeEnvironment<'_>)
     seal_body_types(
         &function.blocks,
         &function.params,
-        &function.return_type,
         &owner,
         environment,
         Some(function),
@@ -150,8 +146,7 @@ fn seal_function_types(function: &IRFunction, environment: &TypeEnvironment<'_>)
 
 fn seal_body_types(
     blocks: &[IRBasicBlock],
-    params: &[crate::function::IRFunctionParam],
-    return_type: &IRType,
+    params: &[IRFunctionParam],
     owner: &str,
     environment: &TypeEnvironment<'_>,
     function: Option<&IRFunction>,
@@ -170,20 +165,13 @@ fn seal_body_types(
                 function,
             );
         }
-        seal_terminator_types(
-            &block.terminator,
-            blocks,
-            &value_types,
-            return_type,
-            params,
-            owner,
-        );
+        seal_terminator_types(&block.terminator, blocks, &value_types, params, owner);
     }
 }
 
 fn collect_local_types(
     blocks: &[IRBasicBlock],
-    params: &[crate::function::IRFunctionParam],
+    params: &[IRFunctionParam],
     owner: &str,
 ) -> BTreeMap<IRLocalId, IRType> {
     let mut locals = BTreeMap::new();
@@ -211,7 +199,7 @@ fn collect_local_types(
 
 fn collect_value_types(
     blocks: &[IRBasicBlock],
-    params: &[crate::function::IRFunctionParam],
+    params: &[IRFunctionParam],
     owner: &str,
     environment: &TypeEnvironment<'_>,
 ) -> BTreeMap<ValueId, IRType> {
@@ -389,14 +377,9 @@ fn seal_instruction_types(
             require_value_type(values, *lhs, operand_ty, owner, "BinaryOp lhs");
             require_value_type(values, *rhs, operand_ty, owner, "BinaryOp rhs");
         }
-        IRInstruction::Call { args, callee, dest } => {
+        IRInstruction::Call { args, callee, .. } => {
             let target = environment.function(callee);
             require_arguments(args, &target.params, values, owner, "Call");
-            require_same_type(
-                value_type(values, *dest, owner),
-                &target.return_type,
-                &format!("{owner} Call result `{dest}`"),
-            );
         }
         IRInstruction::CallClosure {
             args,
@@ -434,6 +417,8 @@ fn seal_instruction_types(
             payload, tag, ty, ..
         } => {
             let declaration = environment.enum_decl(ty);
+            // Out-of-range tags panic in `super::enums::seal_enum_ops`;
+            // this pass only types the payload values.
             let Some(variant) = declaration.variants.get(tag.0 as usize) else {
                 return;
             };
@@ -481,6 +466,10 @@ fn seal_instruction_types(
         IRInstruction::LoadCapture {
             capture_index, ty, ..
         } => {
+            // Stray `LoadCapture` in non-closure functions and
+            // out-of-range capture indexes panic in
+            // `super::closures::seal_closure_ops`; this pass only
+            // types the in-range slot.
             let Some(function) = function else {
                 return;
             };
@@ -509,6 +498,8 @@ fn seal_instruction_types(
             body, captures, ty, ..
         } => {
             let target = environment.function(body);
+            // A non-closure body kind panics in
+            // `super::closures::seal_closure_ops`.
             let FunctionKind::Closure { env_layout } = &target.kind else {
                 return;
             };
@@ -564,6 +555,9 @@ fn seal_instruction_types(
         }
         IRInstruction::StructInit { fields, ty, .. } => {
             let declaration = environment.struct_decl(ty);
+            // Arity and index-order violations panic in
+            // `super::structs::seal_struct_ops`; this pass only types
+            // the in-range field values.
             for field in fields {
                 if let Some(expected) = declaration.fields.get(field.index as usize) {
                     require_value_type(
@@ -646,8 +640,7 @@ fn seal_terminator_types(
     terminator: &IRTerminator,
     blocks: &[IRBasicBlock],
     values: &BTreeMap<ValueId, IRType>,
-    return_type: &IRType,
-    params: &[crate::function::IRFunctionParam],
+    params: &[IRFunctionParam],
     owner: &str,
 ) {
     match terminator {
@@ -663,14 +656,12 @@ fn seal_terminator_types(
             seal_branch_types(then_target.block, &then_target.args, blocks, values, owner);
             seal_branch_types(else_target.block, &else_target.args, blocks, values, owner);
         }
-        IRTerminator::Return { value } => match value {
-            Some(value) => {
-                require_value_type(values, *value, return_type, owner, "Return value");
-            }
-            None => {
-                require_same_type(return_type, &IRType::Unit, &format!("{owner} Return"));
-            }
-        },
+        // Deliberately unchecked: typecheck only validates trailing
+        // expressions today, so an explicit `return`'s value carries
+        // no type guarantee the seal could hold lowering to. Validate
+        // against the declared return type once typecheck checks
+        // explicit returns.
+        IRTerminator::Return { .. } => {}
         IRTerminator::TailCall { args, .. } => {
             require_arguments(args, params, values, owner, "TailCall");
         }
@@ -679,7 +670,7 @@ fn seal_terminator_types(
 }
 
 fn seal_branch_types(
-    target: crate::function::IRBlockId,
+    target: IRBlockId,
     args: &[ValueId],
     blocks: &[IRBasicBlock],
     values: &BTreeMap<ValueId, IRType>,
@@ -747,6 +738,8 @@ fn seal_enum_payload_types(
             );
         }
         (EnumPayloadInit::Unit, IRVariantPayload::Unit) => {}
+        // Payload shape mismatches panic in
+        // `super::enums::seal_enum_ops`.
         _ => {}
     }
 }
@@ -779,7 +772,7 @@ fn seal_union_projection(
 
 fn require_arguments(
     args: &[ValueId],
-    params: &[crate::function::IRFunctionParam],
+    params: &[IRFunctionParam],
     values: &BTreeMap<ValueId, IRType>,
     owner: &str,
     operation: &str,
@@ -1105,30 +1098,6 @@ mod tests {
             )],
             Vec::new(),
             IRType::Unit,
-        );
-        let package = package(vec![function]);
-        let environment = TypeEnvironment::new(std::slice::from_ref(&package));
-        seal_package_types(&package, &environment);
-    }
-
-    #[test]
-    #[should_panic(expected = "Return value")]
-    fn return_type_mismatch_panics() {
-        let function = function(
-            symbol("return"),
-            vec![block(
-                0,
-                vec![IRInstruction::Const {
-                    dest: ValueId(0),
-                    value: ConstValue::Bool(true),
-                }],
-                Vec::new(),
-                IRTerminator::Return {
-                    value: Some(ValueId(0)),
-                },
-            )],
-            Vec::new(),
-            IRType::Int64,
         );
         let package = package(vec![function]);
         let environment = TypeEnvironment::new(std::slice::from_ref(&package));

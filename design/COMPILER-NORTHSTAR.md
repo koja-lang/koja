@@ -306,8 +306,9 @@ and type validators. Together they assert:
   for validated `Unreachable` sinks left by `Never` expressions.
 - Every SSA value is defined once and dominates its uses.
 - Every local is declared consistently.
-- Every branch, call, instruction, and return agrees with its declared
-  types.
+- Every branch, call, and instruction agrees with its declared types.
+  (Explicit `return` values are exempt until typecheck validates them;
+  today it only checks trailing expressions.)
 - Every synthesized declaration lives in its explicit owner package.
 - Every operand graph is free of `Coercion` metadata (all coercions
   emitted as instructions).

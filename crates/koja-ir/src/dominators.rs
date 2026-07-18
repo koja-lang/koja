@@ -13,9 +13,10 @@
 //!   the dominator tree.
 //!
 //! These are pure CFG primitives. They consume nothing about
-//! instruction operands or value types and only walk terminator
-//! targets to derive successor edges. Reusable for any future
-//! dataflow pass (DCE, GVN, etc.).
+//! instruction operands or value types and derive successor edges
+//! from terminator targets plus `Receive` arm bodies (dispatch
+//! enters those blocks at runtime without a terminator edge).
+//! Reusable for any future dataflow pass (DCE, GVN, etc.).
 
 use std::collections::{HashMap, HashSet};
 

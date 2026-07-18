@@ -27,6 +27,38 @@ Full design in [TYPES.md](TYPES.md) "Iterator protocol redesign" section.
 
 ---
 
+## Explicit `return` values are not type-checked
+
+Typecheck only validates a function's trailing expression against the
+declared return type (`resolve/return_type.rs`). An explicit
+`return <value>` resolves its expression with the declared return type as
+an inference hint, but never runs `check_compatible_stamping` on the
+result. Two consequences:
+
+- `return "x"` inside `fn f() -> Int` passes typecheck and produces
+  ill-typed IR (the LLVM backend rejects it late; the interpreter
+  errors at runtime).
+- `return Cat{}` inside `fn f() -> Cat | Dog` never gets its
+  `Coercion::UnionWiden` stamped, so no `UnionWrap` is emitted and
+  union-typed early returns miscompile.
+
+Script bodies have no declared return type at all, so their explicit
+returns are entirely unconstrained; script return typing (`Unit` when
+flow closes via `return`) and REPL echo semantics are open design
+questions tied to this gap. Relatedly, the compiled script path only
+supports a single reachable `Return`-terminated block
+(`main_wrapper.rs::find_return_block`), so a script with an early
+`return` runs on the interpreter but fails `koja run --backend llvm`
+with a codegen error.
+
+The fix belongs in typecheck: check and coercion-stamp every
+`Statement::Return` value the same way trailing expressions are handled
+today. Until then, `seal/types.rs` deliberately exempts
+`IRTerminator::Return` from the typed-IR seal, since lowering cannot
+guarantee an invariant typecheck doesn't establish.
+
+---
+
 ## Nested types: lexical (in-body) declaration deferred
 
 The qualified-name form is **implemented** — `struct Owner.Nested … end`
