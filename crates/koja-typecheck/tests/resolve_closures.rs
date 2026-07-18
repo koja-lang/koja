@@ -13,9 +13,7 @@ use koja_ast::util::dedent;
 
 mod common;
 
-use common::{
-    assert_script_fails_with, function_body, global_leaf, last_expr, typecheck_script as typecheck,
-};
+use common::{function_body, global_leaf, last_expr, typecheck_script as typecheck};
 
 fn fn_type(params: Vec<ResolvedType>, ret: ResolvedType) -> ResolvedType {
     ResolvedType::Anonymous(AnonymousKind::Function {
@@ -132,21 +130,6 @@ fn nested_closures_resolve_through_layers() {
         ";
 
     typecheck(&dedent(source));
-}
-
-#[test]
-fn closure_param_without_annotation_or_context_diagnoses() {
-    // Short closure assigned to a local: no expected fn type from
-    // context, no per-param annotation, so resolve emits a
-    // "needs a type annotation" diagnostic.
-    let source = "
-        fn make -> Int
-          f = x -> x + 1
-          5
-        end
-        ";
-
-    assert_script_fails_with(source, &["closure parameter", "type annotation"]);
 }
 
 #[test]

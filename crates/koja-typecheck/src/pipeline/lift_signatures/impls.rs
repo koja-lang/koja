@@ -16,6 +16,7 @@ use koja_ast::ast::{
 use koja_ast::identifier::{GlobalRegistryId, Identifier, Resolution, ResolvedType};
 
 use crate::pipeline::collect::{lookup_owner_path, nominal_target_path};
+use crate::pipeline::resolve::types::types_equivalent;
 use crate::pipeline::unify::{Substitution, substitute};
 use crate::registry::{
     Dispatch, GlobalKind, GlobalRegistry, InsertOutcome, ProtocolDefinition,
@@ -942,7 +943,7 @@ fn check_impl_method_signature(
         .enumerate()
     {
         let expected_ty = substitute(&want.ty, protocol_subst);
-        if expected_ty != got.ty {
+        if !types_equivalent(&expected_ty, &got.ty, registry) {
             diagnostics.push(Diagnostic::error(
                 format!(
                     "param #{} (`{}`) on method `{}` does not match protocol \
@@ -958,7 +959,7 @@ fn check_impl_method_signature(
         }
     }
     let expected_return = substitute(&expected.return_type, protocol_subst);
-    if expected_return != actual.return_type {
+    if !types_equivalent(&expected_return, &actual.return_type, registry) {
         diagnostics.push(Diagnostic::error(
             format!(
                 "return type of method `{}` does not match protocol `{protocol_identifier}` \

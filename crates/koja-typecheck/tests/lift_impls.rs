@@ -254,6 +254,68 @@ fn param_type_mismatch_diagnoses() {
 }
 
 #[test]
+fn protocol_impl_accepts_equivalent_alias_parameter() {
+    let source = "
+        type Count = Int
+
+        protocol Combiner
+          fn join(self, n: Count) -> Int
+        end
+
+        struct Adder
+        end
+
+        impl Combiner for Adder
+          fn join(self, n: Int) -> Int
+            n
+          end
+        end
+        ";
+
+    typecheck(&dedent(source));
+}
+
+#[test]
+fn protocol_impl_accepts_int64_for_int_parameter() {
+    let source = "
+        protocol Combiner
+          fn join(self, n: Int) -> Int
+        end
+
+        struct Adder
+        end
+
+        impl Combiner for Adder
+          fn join(self, n: Int64) -> Int
+            0
+          end
+        end
+        ";
+
+    typecheck(&dedent(source));
+}
+
+#[test]
+fn protocol_impl_accepts_int_for_int64_return() {
+    let source = "
+        protocol Counter
+          fn count(self) -> Int64
+        end
+
+        struct Tally
+        end
+
+        impl Counter for Tally
+          fn count(self) -> Int
+            0
+          end
+        end
+        ";
+
+    typecheck(&dedent(source));
+}
+
+#[test]
 fn dispatch_mismatch_diagnoses() {
     let source = "
         protocol Maker

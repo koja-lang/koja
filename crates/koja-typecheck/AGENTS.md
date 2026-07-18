@@ -11,12 +11,10 @@ One entry point:
 pub fn check_program(parsed: ParsedProgram) -> Result<CheckedProgram, CheckFailure>;
 ```
 
-Success arm is **always sealed**: every relevant `Expr.resolution` fully
-populated into the registry, every `Resolution` either
-`Global(GlobalRegistryId)` or `Unresolved` (only for nodes the seal contract
-excludes). The `seal_ast` invariant check runs as the last sub-pass of
-`check_program` and panics on violation. Seal failures are compiler bugs, not
-recoverable conditions.
+Success is always sealed. Concrete runtime types contain no unresolved or
+type-parameter leaves. Generic templates may retain resolved `TypeParam`
+leaves, but never `Unresolved`. Every registry declaration is fully stamped.
+`seal_ast` runs last and panics on violation.
 
 Type identity flows through `Expr.resolution`, a registry-pointing
 `ResolvedType` (see `koja_ast::identifier`).
@@ -27,17 +25,17 @@ best-effort consumption.
 ## Sub-passes
 
 ```
-preload         -> GlobalRegistry::with_stdlib_stubs seeds Global.Int/Bool/Unit/
-                   Float/String as struct entries (temporary; real stdlib
-                   compilation will supplant this)
-collect         -> register top-level decls; assign Identifier
-lift_signatures -> resolve TypeExpr params/return into ResolvedType and
-                   stamp Function entries with their signature
-resolve         -> walk all bodies AND any File.body (script mode);
-                   populate Resolution + Expr.resolution (a
-                   registry-pointing ResolvedType)
-seal            -> assert seal_ast invariants over both items and
-                   File.body; panic on violation
+preload          -> seed temporary Global primitive stubs
+derive           -> append Debug and Equality impls before binding
+collect          -> register declarations, then impl blocks
+validate         -> check nested declarations and file aliases
+lift_signatures  -> stamp resolved registry definitions
+visibility       -> reject private types in public signatures
+synthesize       -> rewrite typed surface shapes such as `for`
+resolve          -> resolve and type-check every body
+borrows          -> reject escaping CPtr.borrow results
+diagnostic gate  -> return CheckFailure when errors exist
+seal             -> assert AST and registry invariants
 ```
 
 The order is forced by data dependencies, not preference. Each pass is a
@@ -49,13 +47,10 @@ statements on `File.body`. There is no synthetic `fn main` wrapper:
 `lower_script` consumes that shape. Project-mode files leave `File.body` as
 `None`. Their work lives in `File.items[Function]`.
 
-Future sub-passes land in this orchestration when the work they do becomes
-load-bearing: `strip_cfg` for `@cfg`-driven pruning, `synthesize` between
-`collect` and `lift_signatures` for protocol defaults, `check` between
-`resolve` and `seal` for compatibility validation beyond what `resolve`
-enforces inline, and `annotate` between `check` and `seal` for coercion
-emission. They aren't in the pipeline yet because there's nothing for them
-to do. No-op pass-throughs would be dead architecture.
+New sub-passes land only when their work is load-bearing. `strip_cfg` will run
+before collect so excluded nodes never enter the registry. Compatibility
+checks and coercion annotation stay folded into resolve unless a concrete
+need justifies splitting them.
 
 ## Coverage today
 

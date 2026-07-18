@@ -375,3 +375,119 @@ pub fn substitute(template: &ResolvedType, subst: &Substitution) -> ResolvedType
         ResolvedType::Unresolved => ResolvedType::Unresolved,
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::slice::from_ref;
+
+    use koja_ast::identifier::{
+        AnonymousKind, GlobalRegistryId, Resolution, ResolvedType, TypeParamIndex,
+    };
+
+    use crate::registry::GlobalRegistry;
+
+    use super::{Substitution, substitute, unify_into};
+
+    fn parameter(owner: GlobalRegistryId, index: u32) -> ResolvedType {
+        ResolvedType::leaf(Resolution::TypeParam {
+            owner,
+            index: TypeParamIndex::new(index),
+        })
+    }
+
+    #[test]
+    fn conflicting_rebinding_reports_both_types() {
+        let registry = GlobalRegistry::with_stdlib_stubs();
+        let int = registry.primitive("Int");
+        let owner = GlobalRegistryId::new(100);
+        let string = registry.primitive("String");
+        let template = parameter(owner, 0);
+        let mut substitution = Substitution::single(owner, 1);
+
+        unify_into(&template, &int, &mut substitution, &registry).expect("first binding succeeds");
+        let conflict = unify_into(&template, &string, &mut substitution, &registry)
+            .expect_err("incompatible rebinding should conflict");
+
+        assert_eq!(conflict.actual, string);
+        assert_eq!(conflict.prev, int);
+    }
+
+    #[test]
+    fn dual_scope_substitution_routes_by_owner() {
+        let registry = GlobalRegistry::with_stdlib_stubs();
+        let int = registry.primitive("Int");
+        let method = GlobalRegistryId::new(200);
+        let receiver = GlobalRegistryId::new(100);
+        let string = registry.primitive("String");
+        let template = ResolvedType::Anonymous(AnonymousKind::Function {
+            params: vec![parameter(receiver, 0)],
+            ret: Box::new(parameter(method, 0)),
+        });
+        let actual = ResolvedType::Anonymous(AnonymousKind::Function {
+            params: vec![int],
+            ret: Box::new(string),
+        });
+        let mut substitution = Substitution::dual(receiver, 1, method, 1);
+
+        unify_into(&template, &actual, &mut substitution, &registry)
+            .expect("dual-scope unification should succeed");
+
+        assert_eq!(substitute(&template, &substitution), actual);
+    }
+
+    #[test]
+    fn equivalent_rebinding_preserves_first_binding() {
+        let registry = GlobalRegistry::with_stdlib_stubs();
+        let int = registry.primitive("Int");
+        let int64 = registry.primitive("Int64");
+        let owner = GlobalRegistryId::new(100);
+        let template = parameter(owner, 0);
+        let mut substitution = Substitution::single(owner, 1);
+
+        unify_into(&template, &int, &mut substitution, &registry).expect("first binding succeeds");
+        unify_into(&template, &int64, &mut substitution, &registry)
+            .expect("equivalent rebinding succeeds");
+
+        assert_eq!(substitute(&template, &substitution), int);
+    }
+
+    #[test]
+    fn from_args_substitutes_nested_type_parameter() {
+        let owner = GlobalRegistryId::new(100);
+        let replacement = ResolvedType::leaf(Resolution::Global(GlobalRegistryId::new(200)));
+        let substitution = Substitution::from_args(owner, from_ref(&replacement));
+        let template = ResolvedType::Union(vec![
+            parameter(owner, 0),
+            ResolvedType::leaf(Resolution::Global(GlobalRegistryId::new(300))),
+        ]);
+
+        let ResolvedType::Union(members) = substitute(&template, &substitution) else {
+            panic!("union shape should be preserved");
+        };
+        assert_eq!(members[0], replacement);
+    }
+
+    #[test]
+    fn structural_mismatch_leaves_slot_unbound() {
+        let registry = GlobalRegistry::with_stdlib_stubs();
+        let owner = GlobalRegistryId::new(100);
+        let string = registry.primitive("String");
+        let ResolvedType::Named {
+            resolution: int_head,
+            ..
+        } = registry.primitive("Int")
+        else {
+            panic!("Int should be a named primitive");
+        };
+        let template = ResolvedType::Named {
+            resolution: int_head,
+            type_args: vec![parameter(owner, 0)],
+        };
+        let mut substitution = Substitution::single(owner, 1);
+
+        unify_into(&template, &string, &mut substitution, &registry)
+            .expect("structural mismatch is deferred");
+
+        assert_eq!(substitution.args(owner), vec![ResolvedType::unresolved()]);
+    }
+}

@@ -9,11 +9,24 @@
 //! - `for pattern in iterable` binds correctly
 //! - `receive` accepts optional `after timeout` block
 
-use koja_ast::ast::{ExprKind, Pattern};
+use koja_ast::ast::{Expr, ExprKind, Pattern, Statement};
 
 mod common;
 
 use common::{first_function_expr, parse_failing_with};
+
+fn is_closure_assignment(statement: &Statement) -> bool {
+    matches!(
+        statement,
+        Statement::Assignment {
+            value: Expr {
+                kind: ExprKind::Closure { .. },
+                ..
+            },
+            ..
+        }
+    )
+}
 
 #[test]
 fn if_with_then_only() {
@@ -283,4 +296,122 @@ fn receive_with_after_clause() {
         }
         other => panic!("expected Receive, got {other:?}"),
     }
+}
+
+#[test]
+fn cond_arm_body_accepts_assigned_block_closure() {
+    let expr = first_function_expr(
+        "
+        fn run
+          cond
+            ready ->
+              transform = fn (x: Int) -> Int
+                x * 2
+              end
+              transform(1)
+            else -> 0
+          end
+        end
+        ",
+    );
+    let ExprKind::Cond { arms, .. } = expr.kind else {
+        panic!("expected Cond, got {expr:?}");
+    };
+    assert_eq!(arms.len(), 1);
+    assert!(is_closure_assignment(&arms[0].body[0]));
+}
+
+#[test]
+fn match_arm_body_accepts_assigned_block_closure() {
+    let expr = first_function_expr(
+        "
+        fn run
+          match value
+            _ ->
+              transform = fn (x: Int) -> Int
+                x * 2
+              end
+              transform(1)
+            1 -> 1
+          end
+        end
+        ",
+    );
+    let ExprKind::Match { arms, .. } = expr.kind else {
+        panic!("expected Match, got {expr:?}");
+    };
+    assert_eq!(arms.len(), 2);
+    assert!(is_closure_assignment(&arms[0].body[0]));
+}
+
+#[test]
+fn match_arm_body_accepts_direct_block_closure() {
+    let expr = first_function_expr(
+        "
+        fn run
+          match value
+            _ ->
+              fn (x: Int) -> Int
+                x * 2
+              end
+            1 -> 1
+          end
+        end
+        ",
+    );
+    let ExprKind::Match { arms, .. } = expr.kind else {
+        panic!("expected Match, got {expr:?}");
+    };
+    assert_eq!(arms.len(), 2);
+    assert!(matches!(
+        arms[0].body[0],
+        Statement::Expr(Expr {
+            kind: ExprKind::Closure { .. },
+            ..
+        })
+    ));
+}
+
+#[test]
+fn match_arm_body_accepts_short_closure_call_argument() {
+    let expr = first_function_expr(
+        "
+        fn run
+          match value
+            _ ->
+              prepare()
+              items.map(x -> x * 2)
+            1 -> 1
+          end
+        end
+        ",
+    );
+    let ExprKind::Match { arms, .. } = expr.kind else {
+        panic!("expected Match, got {expr:?}");
+    };
+    assert_eq!(arms.len(), 2);
+    assert_eq!(arms[0].body.len(), 2);
+}
+
+#[test]
+fn receive_arm_body_accepts_assigned_block_closure() {
+    let expr = first_function_expr(
+        "
+        fn run
+          receive
+            _ ->
+              transform = fn (x: Int) -> Int
+                x * 2
+              end
+              transform(1)
+            message -> message
+          end
+        end
+        ",
+    );
+    let ExprKind::Receive { arms, .. } = expr.kind else {
+        panic!("expected Receive, got {expr:?}");
+    };
+    assert_eq!(arms.len(), 2);
+    assert!(is_closure_assignment(&arms[0].body[0]));
 }

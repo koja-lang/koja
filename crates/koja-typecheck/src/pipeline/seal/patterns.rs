@@ -10,9 +10,9 @@ use koja_ast::identifier::Resolution;
 use koja_ast::labels::{pattern_kind_label, pattern_span};
 use koja_ast::span::Span;
 
-use super::seal_panic;
+use super::{SealMode, seal_panic, seal_resolved_type};
 
-pub(super) fn seal_pattern(pattern: &Pattern) {
+pub(super) fn seal_pattern(pattern: &Pattern, mode: SealMode) {
     match pattern {
         Pattern::Binding {
             local_id,
@@ -38,7 +38,7 @@ pub(super) fn seal_pattern(pattern: &Pattern) {
         } => {
             seal_enum_path(type_path, variant, *span);
             for field in fields {
-                seal_pattern(&field.pattern);
+                seal_pattern(&field.pattern, mode);
             }
         }
         Pattern::EnumTuple {
@@ -50,7 +50,7 @@ pub(super) fn seal_pattern(pattern: &Pattern) {
         } => {
             seal_enum_path(type_path, variant, *span);
             for element in elements {
-                seal_pattern(element);
+                seal_pattern(element, mode);
             }
         }
         Pattern::EnumUnit {
@@ -65,7 +65,7 @@ pub(super) fn seal_pattern(pattern: &Pattern) {
                 seal_panic("or-pattern carries no alternatives", *span);
             }
             for alternative in patterns {
-                seal_pattern(alternative);
+                seal_pattern(alternative, mode);
             }
         }
         Pattern::Struct {
@@ -78,7 +78,7 @@ pub(super) fn seal_pattern(pattern: &Pattern) {
                 seal_panic("struct pattern carries an empty type path", *span);
             }
             for field in fields {
-                seal_pattern(&field.pattern);
+                seal_pattern(&field.pattern, mode);
             }
         }
         Pattern::Binary { segments, .. } => {
@@ -102,7 +102,7 @@ pub(super) fn seal_pattern(pattern: &Pattern) {
                     *span,
                 );
             }
-            if resolved_type.is_none() {
+            let Some(resolved_type) = resolved_type else {
                 seal_panic(
                     &format!(
                         "typed-binding pattern `{name}` carries no resolved_type; resolver \
@@ -110,7 +110,8 @@ pub(super) fn seal_pattern(pattern: &Pattern) {
                     ),
                     *span,
                 );
-            }
+            };
+            seal_resolved_type(resolved_type, mode, *span);
         }
         other => seal_panic(
             &format!(

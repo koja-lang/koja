@@ -96,17 +96,15 @@ impl Parser {
         stmts
     }
 
-    /// Heuristic: does the current position look like the start of a
-    /// new match / cond / receive arm rather than a continuation
-    /// statement? We scan forward to see if there's a `->` before a
-    /// newline / `end`. Bracketed expressions (`(...)`, `{...}`,
-    /// `[...]`) are skipped over by depth tracking.
+    /// Returns whether the current line contains an arm arrow before
+    /// a token that can only belong to a statement.
     fn looks_like_new_arm(&self) -> bool {
         let mut i = self.pos;
         let mut depth = 0u32;
         while i < self.tokens.len() {
             match &self.tokens[i].kind {
                 TokenKind::Arrow if depth == 0 => return true,
+                TokenKind::Eq | TokenKind::Fn if depth == 0 => return false,
                 TokenKind::Newline | TokenKind::End | TokenKind::EndOfFile if depth == 0 => {
                     return false;
                 }

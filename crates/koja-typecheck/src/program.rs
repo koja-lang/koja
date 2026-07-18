@@ -51,26 +51,16 @@ pub struct CheckedProgram {
 ///    `.Unit`/`.Float`/`.String` are registered as structs before any
 ///    user decl. Temporary. Once the real stdlib compiles as a
 ///    package these entries land through `collect`.
-/// 1. `synthesize::derive_debug`: append `impl Debug for T` blocks
-///    for every user struct / enum that doesn't already have one.
-///    Runs pre-collect so the new items land before name binding.
-/// 2. `collect`: register every top-level decl. Function signatures
-///    land in the `Function(None)` state.
-/// 2. `aliases::validate_aliases`: validate each file's `alias` decls
-///    against the now-populated registry (path length, target exists,
-///    no duplicates, no shadowing). Pure validation. The AST is not
-///    mutated. Lift / resolve consult the file's alias slice on demand
-///    via [`crate::pipeline::aliases::collect_file_aliases`].
-/// 3. `lift_signatures`: resolve each function's `TypeExpr` params +
-///    return into `ResolvedType`s and upgrade the registry entry to
-///    `Function(Some(signature))`.
-/// 4. `synthesize`: surface-shape AST rewrites (today: `for` desugar).
-/// 5. `resolve`: walk every body and populate `Resolution` +
-///    `Expr.resolution`.
-/// 6. `seal`: assert sealed-AST invariants. Panics on violation.
-///
-/// Future sub-passes (`strip_cfg`, `check`, `annotate`) land between
-/// these when the work they do becomes load-bearing.
+/// 1. Derive Debug and Equality impls before binding.
+/// 2. Collect declarations, then impl blocks, across every file.
+/// 3. Validate nested declarations and file aliases.
+/// 4. Lift signatures and declaration definitions into the registry.
+/// 5. Reject private types leaked through public signatures.
+/// 6. Rewrite typed surface shapes such as `for`.
+/// 7. Resolve and type-check every body.
+/// 8. Reject escaping `CPtr.borrow` results.
+/// 9. Return [`CheckFailure`] if any errors were collected.
+/// 10. Seal successful AST and registry invariants.
 pub fn check_program(parsed: ParsedProgram) -> Result<CheckedProgram, CheckFailure> {
     if parsed.has_errors() {
         return Err(CheckFailure {

@@ -48,13 +48,7 @@ fn tests_lang_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../tests/lang")
 }
 
-/// Checks the span invariants that the lexer currently upholds:
-/// `start <= end` and `end` does not exceed the source length.
-///
-/// Note: `Position::offset` is documented as a byte offset but the lexer
-/// currently stores it as a character index (see `Cursor` in `cursor.rs`).
-/// The stricter "offset is on a UTF-8 char boundary" property is exercised
-/// separately by `lexer_offset_should_be_byte_indexed` (currently `#[ignore]`).
+/// Checks that span offsets are ordered UTF-8 boundaries within the source.
 fn span_well_formed(span: &Span, source: &str) -> Result<(), String> {
     let start = span.start.offset as usize;
     let end = span.end.offset as usize;
@@ -66,6 +60,12 @@ fn span_well_formed(span: &Span, source: &str) -> Result<(), String> {
             "span end ({end}) exceeds source length ({})",
             source.len()
         ));
+    }
+    if !source.is_char_boundary(start) {
+        return Err(format!("span start ({start}) is not a UTF-8 boundary"));
+    }
+    if !source.is_char_boundary(end) {
+        return Err(format!("span end ({end}) is not a UTF-8 boundary"));
     }
     Ok(())
 }
@@ -155,21 +155,12 @@ proptest! {
     }
 }
 
-/// Documents a known bug discovered by `spans_are_well_formed`:
-/// `Position::offset` is documented as a byte offset (see
-/// `koja-ast/src/span.rs`) but the lexer's `Cursor` stores it as a character
-/// index. For multi-byte source characters the resulting offsets land
-/// mid-character, which would silently corrupt any future feature that uses
-/// span offsets to slice into the source string (LSP hover, go-to-definition,
-/// quick-fix snippets, etc.). Today no consumer indexes by offset, so this
-/// is latent rather than active. Remove `#[ignore]` once the cursor tracks
-/// byte offset alongside its char index.
 #[test]
-#[ignore = "lexer offset is char-indexed, see comment"]
 fn lexer_offset_should_be_byte_indexed() {
-    let source = "\u{00A1}";
-    let result = lex(source);
-    let eof = result.tokens.last().expect("at least one token");
-    assert_eq!(eof.span.start.offset, source.len() as u32);
-    assert_eq!(eof.span.end.offset, source.len() as u32);
+    for source in ["¡", "a¡b", "😀"] {
+        let result = lex(source);
+        let eof = result.tokens.last().expect("at least one token");
+        assert_eq!(eof.span.start.offset, source.len() as u32);
+        assert_eq!(eof.span.end.offset, source.len() as u32);
+    }
 }

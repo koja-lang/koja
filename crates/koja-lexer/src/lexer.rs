@@ -27,12 +27,13 @@ enum StringMode {
 struct InterpolState {
     brace_depth: u32,
     mode: StringMode,
+    start: Position,
 }
 
 /// Mutable state for the lexer: cursor into source, and output vectors.
-struct Lexer {
+struct Lexer<'source> {
     comments: Vec<Comment>,
-    cursor: Cursor,
+    cursor: Cursor<'source>,
     errors: Vec<Diagnostic>,
     string_stack: Vec<InterpolState>,
     tokens: Vec<Token>,
@@ -57,8 +58,8 @@ fn is_number_char(c: char) -> bool {
     c.is_ascii_digit() || c == '_'
 }
 
-impl Lexer {
-    fn new(source: &str) -> Self {
+impl<'source> Lexer<'source> {
+    fn new(source: &'source str) -> Self {
         Self {
             comments: Vec::new(),
             cursor: Cursor::new(source),
@@ -409,6 +410,7 @@ impl Lexer {
                 self.string_stack.push(InterpolState {
                     brace_depth: 0,
                     mode,
+                    start: interp_start,
                 });
                 return;
             }
@@ -453,7 +455,7 @@ impl Lexer {
     /// Peek past whitespace (and comment lines) to check if the next
     /// meaningful token starts with a continuation (`.`).
     fn next_nonws_continues(&self) -> bool {
-        let mut i = self.cursor.offset();
+        let mut i = self.cursor.char_index();
         loop {
             while i < self.cursor.len() && matches!(self.cursor.char_at(i), Some(' ' | '\t' | '\r'))
             {
@@ -549,15 +551,11 @@ impl Lexer {
                 },
                 '!' => match self.cursor.peek_at(1) {
                     Some('=') => self.double(TokenKind::NotEq),
-                    _ => {
-                        self.errors.push(Diagnostic {
-                            severity: Severity::Error,
-                            message: "unexpected character '!'".into(),
-                            hint: Some("use '!=' for not-equal comparison".into()),
-                            span: Span::new(start, start),
-                        });
-                        self.cursor.advance();
-                    }
+                    _ => self.unexpected_character(
+                        '!',
+                        Some("use '!=' for not-equal comparison".into()),
+                        start,
+                    ),
                 },
                 '<' => match self.cursor.peek_at(1) {
                     Some('<') => self.double(TokenKind::LtLt),
@@ -588,17 +586,17 @@ impl Lexer {
                 }
                 '\n' => self.lex_newline(),
 
-                c => {
-                    let end = self.cursor.position();
-                    self.errors.push(Diagnostic {
-                        severity: Severity::Error,
-                        message: format!("unexpected character: '{c}'"),
-                        hint: None,
-                        span: Span::new(start, end),
-                    });
-                    self.cursor.advance();
-                }
+                c => self.unexpected_character(c, None, start),
             }
+        }
+
+        if let Some(state) = self.string_stack.last() {
+            self.errors.push(Diagnostic {
+                severity: Severity::Error,
+                message: "unterminated string interpolation".into(),
+                hint: Some("add a closing '}'".into()),
+                span: Span::new(state.start, self.cursor.position()),
+            });
         }
 
         self.tokens.push(Token {
@@ -616,6 +614,16 @@ impl Lexer {
             span: Span::new(start, self.cursor.position()),
         });
     }
+
+    fn unexpected_character(&mut self, character: char, hint: Option<String>, start: Position) {
+        self.cursor.advance();
+        self.errors.push(Diagnostic {
+            severity: Severity::Error,
+            message: format!("unexpected character '{character}'"),
+            hint,
+            span: Span::new(start, self.cursor.position()),
+        });
+    }
 }
 
 #[cfg(test)]
@@ -625,6 +633,12 @@ mod tests {
     fn lex_kinds(source: &str) -> Vec<TokenKind> {
         let result = lex(source);
         result.tokens.into_iter().map(|t| t.kind).collect()
+    }
+
+    fn lex_without_eof(source: &str) -> Vec<TokenKind> {
+        let mut kinds = lex_kinds(source);
+        assert_eq!(kinds.pop(), Some(TokenKind::EndOfFile));
+        kinds
     }
 
     #[test]
@@ -751,6 +765,45 @@ mod tests {
     }
 
     #[test]
+    fn test_keyword_classification() {
+        let cases = [
+            ("after", TokenKind::After),
+            ("alias", TokenKind::Alias),
+            ("break", TokenKind::Break),
+            ("cond", TokenKind::Cond),
+            ("const", TokenKind::Const),
+            ("else", TokenKind::Else),
+            ("end", TokenKind::End),
+            ("enum", TokenKind::Enum),
+            ("extend", TokenKind::Extend),
+            ("false", TokenKind::False),
+            ("fn", TokenKind::Fn),
+            ("for", TokenKind::For),
+            ("if", TokenKind::If),
+            ("impl", TokenKind::Impl),
+            ("in", TokenKind::In),
+            ("loop", TokenKind::Loop),
+            ("match", TokenKind::Match),
+            ("not", TokenKind::Not),
+            ("priv", TokenKind::Priv),
+            ("protocol", TokenKind::Protocol),
+            ("receive", TokenKind::Receive),
+            ("return", TokenKind::Return),
+            ("self", TokenKind::Self_),
+            ("spawn", TokenKind::Spawn),
+            ("struct", TokenKind::Struct),
+            ("true", TokenKind::True),
+            ("type", TokenKind::Type),
+            ("unless", TokenKind::Unless),
+            ("when", TokenKind::When),
+            ("while", TokenKind::While),
+        ];
+        for (source, expected) in cases {
+            assert_eq!(lex_without_eof(source), vec![expected], "{source}");
+        }
+    }
+
+    #[test]
     fn test_interpolation_at_start() {
         assert_eq!(
             lex_kinds(r##""#{x} done""##),
@@ -853,6 +906,109 @@ mod tests {
     }
 
     #[test]
+    fn test_number_forms() {
+        assert_eq!(
+            lex_kinds("42 3.14 0xFF 0b1010"),
+            vec![
+                TokenKind::IntLit("42".into()),
+                TokenKind::FloatLit("3.14".into()),
+                TokenKind::IntLit("0xFF".into()),
+                TokenKind::IntLit("0b1010".into()),
+                TokenKind::EndOfFile,
+            ]
+        );
+    }
+
+    #[test]
+    fn test_number_prefixes_require_digits() {
+        for (source, message) in [
+            ("0B", "expected binary digits"),
+            ("0X", "expected hex digits"),
+            ("0b", "expected binary digits"),
+            ("0x", "expected hex digits"),
+        ] {
+            let result = lex(source);
+            assert_eq!(result.errors.len(), 1, "{source}");
+            assert!(result.errors[0].message.contains(message), "{source}");
+            assert_eq!(result.errors[0].span.end.offset, source.len() as u32);
+        }
+    }
+
+    #[test]
+    fn test_number_underscores_and_uppercase_prefixes() {
+        assert_eq!(
+            lex_kinds("1_000 3.1_4 0XFF_FF 0B10_10"),
+            vec![
+                TokenKind::IntLit("1_000".into()),
+                TokenKind::FloatLit("3.1_4".into()),
+                TokenKind::IntLit("0XFF_FF".into()),
+                TokenKind::IntLit("0B10_10".into()),
+                TokenKind::EndOfFile,
+            ]
+        );
+    }
+
+    #[test]
+    fn test_operator_and_delimiter_tokens() {
+        assert_eq!(
+            lex_without_eof(
+                "& @ -> : :: , . = == > >= >> < <= << <> - -= % | + += ? / /= * *= \
+                 { } [ ] ( )",
+            ),
+            vec![
+                TokenKind::Ampersand,
+                TokenKind::At,
+                TokenKind::Arrow,
+                TokenKind::Colon,
+                TokenKind::ColonColon,
+                TokenKind::Comma,
+                TokenKind::Dot,
+                TokenKind::Eq,
+                TokenKind::EqEq,
+                TokenKind::Gt,
+                TokenKind::GtEq,
+                TokenKind::GtGt,
+                TokenKind::Lt,
+                TokenKind::LtEq,
+                TokenKind::LtLt,
+                TokenKind::LtGt,
+                TokenKind::Minus,
+                TokenKind::MinusEq,
+                TokenKind::Percent,
+                TokenKind::Pipe,
+                TokenKind::Plus,
+                TokenKind::PlusEq,
+                TokenKind::Question,
+                TokenKind::Slash,
+                TokenKind::SlashEq,
+                TokenKind::Star,
+                TokenKind::StarEq,
+                TokenKind::LBrace,
+                TokenKind::RBrace,
+                TokenKind::LBracket,
+                TokenKind::RBracket,
+                TokenKind::LParen,
+                TokenKind::RParen,
+            ]
+        );
+    }
+
+    #[test]
+    fn test_operator_line_continuation() {
+        let continuations = [
+            "!=", "%", "(", "*", "*=", "+", "+=", ",", "-", "-=", ".", "/", "/=", ":", "::", "<",
+            "<<", "<=", "<>", "=", "==", ">", ">=", "@", "[", "{", "|", "->", "and", "not", "or",
+        ];
+        for continuation in continuations {
+            let kinds = lex_kinds(&format!("left {continuation}\nright"));
+            assert!(
+                !kinds.contains(&TokenKind::Newline),
+                "{continuation} did not suppress newline"
+            );
+        }
+    }
+
+    #[test]
     fn test_simple_string() {
         assert_eq!(
             lex_kinds(r#""hello""#),
@@ -870,6 +1026,110 @@ mod tests {
         let result = lex(r#""bad\x""#);
         assert_eq!(result.errors.len(), 1);
         assert!(result.errors[0].message.contains("unknown escape"));
+    }
+
+    #[test]
+    fn test_unexpected_character_span_covers_utf8_source() {
+        for source in ["!", "¡"] {
+            let result = lex(source);
+            assert_eq!(result.errors.len(), 1);
+            let span = result.errors[0].span;
+            assert_eq!(
+                &source[span.start.offset as usize..span.end.offset as usize],
+                source
+            );
+        }
+    }
+
+    #[test]
+    fn test_unterminated_interpolation_at_eof() {
+        let source = "\"hello #{name";
+        let result = lex(source);
+        assert_eq!(result.errors.len(), 1);
+        assert_eq!(
+            result.errors[0].message,
+            "unterminated string interpolation"
+        );
+        let span = result.errors[0].span;
+        assert_eq!(
+            &source[span.start.offset as usize..span.end.offset as usize],
+            "#{name"
+        );
+        assert!(
+            !result
+                .tokens
+                .iter()
+                .any(|token| matches!(token.kind, TokenKind::InterpolEnd))
+        );
+    }
+
+    #[test]
+    fn test_unterminated_multiline_interpolation_at_eof() {
+        let source = "\"\"\"hello #{name";
+        let result = lex(source);
+        assert_eq!(result.errors.len(), 1);
+        assert_eq!(
+            result.errors[0].message,
+            "unterminated string interpolation"
+        );
+    }
+
+    #[test]
+    fn test_unicode_comment_extraction() {
+        let source = "# ¡hola\n";
+        let result = lex(source);
+        assert_eq!(result.comments.len(), 1);
+        assert_eq!(result.comments[0].text, "¡hola");
+        assert_eq!(
+            result.tokens.last().expect("end of file").span.end.offset,
+            source.len() as u32
+        );
+    }
+
+    #[test]
+    fn test_comment_edge_cases() {
+        let empty = lex("#");
+        assert_eq!(empty.comments[0].text, "");
+
+        let two_spaces = lex("#  indented");
+        assert_eq!(two_spaces.comments[0].text, " indented");
+
+        let no_space = lex("#attached");
+        assert_eq!(no_space.comments[0].text, "attached");
+    }
+
+    #[test]
+    fn test_unicode_offsets_are_bytes() {
+        let source = r#""¡😀""#;
+        let result = lex(source);
+        let fragment = result
+            .tokens
+            .iter()
+            .find(|token| matches!(token.kind, TokenKind::StringFragment(_)))
+            .expect("string fragment");
+        assert_eq!(
+            &source[fragment.span.start.offset as usize..fragment.span.end.offset as usize],
+            "¡😀"
+        );
+        assert_eq!(
+            result.tokens.last().expect("end of file").span.end.offset,
+            source.len() as u32
+        );
+    }
+
+    #[test]
+    fn test_unicode_comment_preserves_dot_continuation() {
+        assert_eq!(
+            lex_kinds("value\n# ¡hola\n.next()"),
+            vec![
+                TokenKind::Ident("value".into()),
+                TokenKind::Dot,
+                TokenKind::Ident("next".into()),
+                TokenKind::LParen,
+                TokenKind::RParen,
+                TokenKind::EndOfFile,
+            ]
+        );
     }
 
     #[test]

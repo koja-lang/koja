@@ -60,6 +60,17 @@ pub fn parse_failing(source: &str) -> ParseResult {
     result
 }
 
+/// Parse dedented `source` in `ParseMode::Script`, expecting at least
+/// one diagnostic.
+pub fn parse_failing_script(source: &str) -> ParseResult {
+    let result = parse(&dedent(source), ParseMode::Script);
+    assert!(
+        !result.errors.is_empty(),
+        "expected parse errors, got a clean parse",
+    );
+    result
+}
+
 /// [`parse_failing`] plus a message assertion per needle. Returns the
 /// result so hint / recovery assertions can follow.
 pub fn parse_failing_with(source: &str, needles: &[&str]) -> ParseResult {

@@ -1,12 +1,19 @@
 //! Sub-passes of the typecheck phase, run in order by
 //! [`crate::check_program`]:
 //!
+//! - `synthesize::derive_debug` and `synthesize::derive_equality`:
+//!   append derived impls before binding.
 //! - [`collect::collect_file_decls`] +
 //!   [`collect::collect_file_impls`]: register every top-level decl,
 //!   then every `impl` block (cross-file two-pass).
+//! - [`collect::validate_nested_types`] and
+//!   [`aliases::validate_aliases`]: validate declarations against the
+//!   complete registry.
 //! - [`lift_signatures::lift_signatures`][]: stamp
 //!   [`crate::registry::FunctionSignature`]s and lifted struct /
 //!   enum / protocol payloads.
+//! - [`visibility::check_signature_leaks`]: reject private types in
+//!   public signatures.
 //! - [`synthesize::synthesize_program`]: surface-shape AST rewrites
 //!   (today: `for` desugar).
 //! - [`resolve::resolve_file`]: populate `Resolution` /
@@ -15,8 +22,7 @@
 //!   their borrowing statement.
 //! - [`seal::seal_ast`]: assert sealed-AST invariants.
 //!
-//! Pipeline contract: diagnostics short-circuit `check_program`
-//! before `seal` runs, so `seal` only ever sees fully-resolved trees.
+//! Errors return before seal, so seal only sees successful trees.
 
 pub(crate) mod aliases;
 pub(crate) mod borrows;

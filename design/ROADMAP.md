@@ -454,7 +454,7 @@ Active design discussions about the type system, code organization, and function
 ### Short closures
 
 - Short closure syntax (`x -> expr`) is parsed, type-checked with full capture analysis, compiled, and supports context-driven parameter type inference at inline call sites. `option.map(x -> x + 1)` infers `x: Int` from `Option<Int>`. Works for direct calls, method calls, and generic methods.
-- Remaining gap: variable-assigned short closures (`add_ten = x -> x + 10`) don't receive an expected type at the assignment site, so params remain `Unknown`. Workaround: use inline at the call site, or add explicit type annotations.
+- Short closures are limited to direct call arguments. Store a closure in a variable with the block form so its parameter and return types are explicit.
 
 ### `Self` type expression (implemented)
 

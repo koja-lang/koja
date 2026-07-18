@@ -186,3 +186,34 @@ fn break_statement() {
     };
     assert!(matches!(loop_body[0], Statement::Break { .. }));
 }
+
+#[test]
+fn return_and_break_remain_statements_in_match_arm() {
+    let body = function_body(
+        "
+        fn run
+          match value
+            0 -> return 1
+            _ ->
+              loop
+                break
+              end
+          end
+        end
+        ",
+    );
+    let Statement::Expr(expr) = &body[0] else {
+        panic!("expected match expression");
+    };
+    let ExprKind::Match { arms, .. } = &expr.kind else {
+        panic!("expected match expression, got {expr:?}");
+    };
+    assert!(matches!(arms[0].body[0], Statement::Return { .. }));
+    let Statement::Expr(loop_expr) = &arms[1].body[0] else {
+        panic!("expected loop expression");
+    };
+    let ExprKind::Loop { body } = &loop_expr.kind else {
+        panic!("expected loop expression, got {loop_expr:?}");
+    };
+    assert!(matches!(body[0], Statement::Break { .. }));
+}
