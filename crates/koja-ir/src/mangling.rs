@@ -101,14 +101,14 @@ fn mangle_type(ty: &IRType) -> String {
         IRType::Bits => "Bits".to_string(),
         IRType::Bool => "Bool".to_string(),
         IRType::CPtr(inner) => format!("CPtr_${}$", mangle_type(inner)),
-        IRType::Indirect(inner) => format!("Indirect_${}$", mangle_type(inner)),
-        IRType::Enum(symbol) | IRType::Struct(symbol) => symbol.mangled().to_string(),
+        IRType::Enum(symbol) => symbol.mangled().to_string(),
         IRType::Float32 => "Float32".to_string(),
         IRType::Float64 => "Float64".to_string(),
         IRType::Function { params, ret, .. } => {
             let rendered_params: Vec<String> = params.iter().map(mangle_type).collect();
             format!("Fn_${};{}$", rendered_params.join(","), mangle_type(ret))
         }
+        IRType::Indirect(inner) => format!("Indirect_${}$", mangle_type(inner)),
         IRType::Int8 => "Int8".to_string(),
         IRType::Int16 => "Int16".to_string(),
         IRType::Int32 => "Int32".to_string(),
@@ -119,6 +119,7 @@ fn mangle_type(ty: &IRType) -> String {
         }
         IRType::Set(inner) => format!("Set_${}$", mangle_type(inner)),
         IRType::String => "String".to_string(),
+        IRType::Struct(symbol) => symbol.mangled().to_string(),
         IRType::UInt8 => "UInt8".to_string(),
         IRType::UInt16 => "UInt16".to_string(),
         IRType::UInt32 => "UInt32".to_string(),
@@ -220,5 +221,53 @@ fn glue_base(ty: &IRType) -> IRSymbol {
         IRType::Enum(symbol) | IRType::Struct(symbol) => symbol.clone(),
         IRType::Union { mangled, .. } => mangled.clone(),
         other => IRSymbol::synthetic(mangle_type(other)),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn symbol(name: &str) -> IRSymbol {
+        IRSymbol::from_identifier(&Identifier::new("Test", vec![name.to_string()]))
+    }
+
+    #[test]
+    fn glue_symbol_cannot_collide_with_surface_method() {
+        let ty = IRType::Struct(symbol("Thing"));
+        assert_eq!(clone_glue_symbol(&ty).mangled(), "Test.Thing.$clone$");
+        assert_ne!(
+            clone_glue_symbol(&ty),
+            mangled_method_name(&symbol("Thing"), &[], "clone", &[]),
+        );
+    }
+
+    #[test]
+    fn method_mangling_keeps_receiver_and_method_arguments_distinct() {
+        let mangled = mangled_method_name(
+            &symbol("Box"),
+            &[IRType::String],
+            "map",
+            &[IRType::List(Box::new(IRType::Int64))],
+        );
+        assert_eq!(mangled.mangled(), "Test.Box_$String$.map_$List_$Int64$$");
+    }
+
+    #[test]
+    fn nested_type_arguments_preserve_boundaries() {
+        let mangled = mangled_type_name(
+            &symbol("Pair"),
+            &[
+                IRType::List(Box::new(IRType::Struct(symbol("Item")))),
+                IRType::Map {
+                    key: Box::new(IRType::String),
+                    value: Box::new(IRType::Int64),
+                },
+            ],
+        );
+        assert_eq!(
+            mangled.mangled(),
+            "Test.Pair_$List_$Test.Item$.Map_$String.Int64$$"
+        );
     }
 }

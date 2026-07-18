@@ -75,12 +75,7 @@ fn fn_main_two_plus_two_lowers_to_const_const_add_return() {
             },
         ],
     );
-    assert_eq!(
-        block.terminator,
-        IRTerminator::Return {
-            value: Some(ValueId(2)),
-        },
-    );
+    assert_eq!(block.terminator, IRTerminator::Return { value: None },);
 }
 
 #[test]

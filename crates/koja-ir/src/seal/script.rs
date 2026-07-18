@@ -14,11 +14,14 @@ use super::closures::seal_closure_ops;
 use super::enums::seal_enum_ops;
 use super::function::{collect_block_ids, seal_block, seal_package, seal_ssa};
 use super::structs::{package_instructions, script_body_instructions, seal_struct_ops};
+use super::types::{TypeEnvironment, seal_package_types, seal_script_body_types};
 use super::{require_supported_type, seal_panic};
 
 pub(crate) fn seal_script(script: &IRScript) {
+    let type_environment = TypeEnvironment::new(&script.packages);
     for pkg in &script.packages {
         seal_package(pkg);
+        seal_package_types(pkg, &type_environment);
     }
     let owner = "script body";
     if script.blocks.is_empty() {
@@ -34,6 +37,7 @@ pub(crate) fn seal_script(script: &IRScript) {
     // walk starts with an empty defined set.
     let parameter_value_ids: HashSet<ValueId> = HashSet::new();
     seal_ssa(&script.blocks, owner, &parameter_value_ids);
+    seal_script_body_types(&script.blocks, &script.return_type, &type_environment);
     seal_script_calls(script);
     seal_script_struct_ops(script);
     seal_script_enum_ops(script);

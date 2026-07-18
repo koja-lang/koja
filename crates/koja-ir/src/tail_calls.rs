@@ -70,7 +70,7 @@ fn rewrite_function(function: &mut IRFunction) {
     }
     let symbol = function.symbol.clone();
     let param_types: Vec<IRType> = function.params.iter().map(|p| p.ty.clone()).collect();
-    let mut next_value = next_value_id(function);
+    let mut next_value = function.next_value_id();
     for block in &mut function.blocks {
         if let Some(plan) = match_tail_call(block, &symbol) {
             apply_plan(block, plan, &symbol, &param_types, &mut next_value);
@@ -200,27 +200,6 @@ fn collapsible_edges(function: &IRFunction, target: IRBlockId) -> Option<Vec<(us
         }
     }
     (!edges.is_empty()).then_some(edges)
-}
-
-/// The first unused [`ValueId`] for `function`, one past the maximum
-/// id defined by any parameter, block parameter, or instruction. The
-/// rewrite mints back-edge arg-clone destinations from here.
-fn next_value_id(function: &IRFunction) -> u32 {
-    let mut max = 0;
-    for param in &function.params {
-        max = max.max(param.id.0);
-    }
-    for block in &function.blocks {
-        for block_param in &block.params {
-            max = max.max(block_param.dest.0);
-        }
-        for instruction in &block.instructions {
-            if let Some(dest) = instruction.dest() {
-                max = max.max(dest.0);
-            }
-        }
-    }
-    max + 1
 }
 
 /// Detection-time payload: which instruction index holds the

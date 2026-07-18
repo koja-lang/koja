@@ -46,7 +46,7 @@ use koja_typecheck::{CheckedPackage, GlobalRegistry};
 
 use crate::lower::LowerOutput;
 use crate::lower::package::{lookup_owner_path, nominal_target_path};
-use crate::package::IRPackage;
+use crate::package::{IRPackage, insert_package_function};
 
 /// One discovered generic instantiation. Recorded by
 /// [`crate::lower::package::resolved_type_to_ir_type`] every time it
@@ -111,34 +111,36 @@ pub(crate) fn instantiate(
         if !done.insert(inst.clone()) {
             continue;
         }
+        let owner = registry
+            .get(inst.template)
+            .unwrap_or_else(|| {
+                panic!(
+                    "IR generics: instantiation template id `{}` missing from registry",
+                    inst.template
+                )
+            })
+            .identifier
+            .package()
+            .to_string();
         monomorphize::monomorphize(&inst, registry, &function_index, packages, output);
         worklist.append(&mut std::mem::take(&mut output.instantiations));
         // Mono'd bodies can mint closures / spawn wrappers via
         // `lower_function_inner`. `lower_package_inner` drains those
         // once at the end of each initial-pass lowering, before mono
         // runs, so anything pushed here would otherwise be stranded.
-        drain_synthesized_into_packages(packages, output);
+        drain_synthesized_into_packages(packages, output, &owner);
     }
 }
 
-/// Route each synthesized function to the `IRPackage` whose label
-/// matches its symbol's package prefix, falling back to the first
-/// package on a misalignment so a missing target surfaces as a seal
-/// panic instead of a silent drop.
-fn drain_synthesized_into_packages(packages: &mut [IRPackage], output: &mut LowerOutput) {
+/// Route functions synthesized while specializing one template to
+/// that template's package.
+fn drain_synthesized_into_packages(
+    packages: &mut [IRPackage],
+    output: &mut LowerOutput,
+    owner: &str,
+) {
     for synthesized in output.synthesized_functions.drain(..) {
-        let symbol_str = synthesized.symbol.mangled();
-        let pkg_prefix = symbol_str.split('.').next().unwrap_or(symbol_str);
-        let index = packages
-            .iter()
-            .position(|pkg| pkg.package == pkg_prefix)
-            .unwrap_or(0);
-        let owner = packages
-            .get_mut(index)
-            .expect("IR generics: no IRPackage available to host synthesized function");
-        owner
-            .functions
-            .insert(synthesized.symbol.clone(), synthesized);
+        insert_package_function(packages, owner, synthesized);
     }
 }
 
@@ -304,5 +306,58 @@ pub(crate) fn substitute_resolved_type(
                 .collect(),
         ),
         ResolvedType::Unresolved => ResolvedType::Unresolved,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use koja_ast::identifier::TypeParamIndex;
+
+    use super::*;
+
+    fn parameter(owner: GlobalRegistryId, index: u32) -> ResolvedType {
+        ResolvedType::Named {
+            resolution: Resolution::TypeParam {
+                index: TypeParamIndex::new(index),
+                owner,
+            },
+            type_args: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn substitutes_matching_owner_through_nested_shapes() {
+        let owner = GlobalRegistryId::new(1);
+        let concrete = ResolvedType::Named {
+            resolution: Resolution::Global(GlobalRegistryId::new(2)),
+            type_args: Vec::new(),
+        };
+        let template = ResolvedType::Anonymous(AnonymousKind::Function {
+            params: vec![ResolvedType::Union(vec![
+                parameter(owner, 0),
+                ResolvedType::Unresolved,
+            ])],
+            ret: Box::new(parameter(owner, 0)),
+        });
+
+        let substituted =
+            substitute_resolved_type(&template, std::slice::from_ref(&concrete), owner);
+        let ResolvedType::Anonymous(AnonymousKind::Function { params, ret }) = substituted else {
+            panic!("expected function type");
+        };
+        assert_eq!(*ret, concrete);
+        assert!(matches!(&params[0], ResolvedType::Union(members) if members[0] == concrete),);
+    }
+
+    #[test]
+    fn unrelated_owner_parameter_stays_generic() {
+        let owner = GlobalRegistryId::new(1);
+        let other = GlobalRegistryId::new(2);
+        let template = parameter(other, 0);
+
+        assert_eq!(
+            substitute_resolved_type(&template, &[ResolvedType::Unresolved], owner),
+            template,
+        );
     }
 }

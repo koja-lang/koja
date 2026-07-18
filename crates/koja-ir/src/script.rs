@@ -35,7 +35,8 @@ use crate::error::LowerError;
 use crate::function::{IRBasicBlock, IRFunction, IRSourceDef, IRSymbol};
 use crate::generics;
 use crate::lower::{LowerOutput, lower_body_to_blocks, lower_package};
-use crate::package::IRPackage;
+use crate::merge;
+use crate::package::{IRPackage, insert_package_function};
 use crate::program::{collect_link_libraries, empty_global_stdlib_package};
 use crate::seal;
 use crate::struct_decl::IRStructDecl;
@@ -117,34 +118,12 @@ impl IRScript {
     }
 }
 
-/// Run every sub-pass in the lowering phase against a
-/// script-mode [`CheckedProgram`].
+/// Lower a script body and its package declarations.
 ///
-/// Pure with respect to its input. Per-function feature gaps surface
-/// as [`Diagnostic`]s and the offending function (or the script body
-/// itself) is dropped from the result. Seal violations panic per
-/// northstar.
-///
-/// Pipeline contract: at most one file across all `checked.packages`
-/// may carry a populated `body`. Zero (an items-only script, which is
-/// what every REPL session looks like before the user types a
-/// top-level expression) is treated as an implicit `Unit`-returning
-/// empty body. More than one is a driver invariant violation and
-/// panics with a seal-style message, since the driver dispatches
-/// script-mode lowering on a single source file.
-///
-/// Sub-pass order:
-///
-/// 1. `lower_package` per package (same path [`crate::lower_program`]
-///    uses) so any `fn helper -> Int / 1 / end` decls in the script
-///    source are available to call.
-/// 2. Locate the unique file with `body.is_some()` across the input
-///    and lower its statements through the shared
-///    [`lower_body_to_blocks`] helper.
-/// 3. Bail with `Err(LowerError::Diagnostics)` if any
-///    feature-gap diagnostic surfaced (per-function fail-fast).
-/// 4. Run `seal::seal_script` on the assembled script. Panics on
-///    violation per the seal contract.
+/// At most one input file may carry top-level statements. The result
+/// runs through package coalescing, generic specialization, cycle
+/// breaking, tail-call rewriting, yield insertion, elaboration, and
+/// sealing.
 pub fn lower_script(checked: &CheckedProgram) -> Result<IRScript, LowerError> {
     let mut output = LowerOutput::default();
     let mut packages: Vec<IRPackage> = Vec::with_capacity(checked.packages.len() + 1);
@@ -152,6 +131,7 @@ pub fn lower_script(checked: &CheckedProgram) -> Result<IRScript, LowerError> {
     for pkg in &checked.packages {
         packages.push(lower_package(pkg, &checked.registry, &mut output));
     }
+    packages = merge::coalesce(packages);
 
     let body = locate_script_body(checked);
     let body_package = locate_script_body_package(checked);
@@ -178,17 +158,8 @@ pub fn lower_script(checked: &CheckedProgram) -> Result<IRScript, LowerError> {
                  package owns the body (lower-pass invariant violation)",
             )
         });
-        let target = packages
-            .iter_mut()
-            .find(|pkg| pkg.package == target_package)
-            .unwrap_or_else(|| {
-                panic!(
-                    "IR lower_script: package `{target_package}` owns the script body \
-                     but is missing from the lowered package list",
-                )
-            });
         for function in synthesized {
-            target.functions.insert(function.symbol.clone(), function);
+            insert_package_function(&mut packages, target_package, function);
         }
     }
 

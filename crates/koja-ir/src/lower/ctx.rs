@@ -116,6 +116,7 @@ pub(crate) struct FnLowerCtx {
     next_block: u32,
     value_types: BTreeMap<ValueId, IRType>,
     entry_block: Option<IRBlockId>,
+    explicit_return_type: Option<IRType>,
     declared: BTreeSet<IRLocalId>,
     locals: BTreeMap<IRLocalId, IRType>,
     closures: ClosureState,
@@ -197,6 +198,7 @@ impl FnLowerCtx {
             next_block: 0,
             value_types: BTreeMap::new(),
             entry_block: None,
+            explicit_return_type: None,
             declared: BTreeSet::new(),
             locals: BTreeMap::new(),
             closures: ClosureState::default(),
@@ -283,6 +285,21 @@ impl FnLowerCtx {
 
     pub(crate) fn closures(&self) -> &ClosureState {
         &self.closures
+    }
+
+    pub(crate) fn explicit_return_type(&self) -> Option<&IRType> {
+        self.explicit_return_type.as_ref()
+    }
+
+    pub(crate) fn record_explicit_return_type(&mut self, ty: IRType) {
+        if let Some(expected) = &self.explicit_return_type {
+            assert_eq!(
+                expected, &ty,
+                "IR lower: explicit returns disagree after typecheck"
+            );
+            return;
+        }
+        self.explicit_return_type = Some(ty);
     }
 
     /// Mint a fresh `ValueId` and record its `IRType`.

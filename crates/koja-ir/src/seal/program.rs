@@ -13,6 +13,7 @@ use super::enums::seal_enum_ops;
 use super::function::seal_package;
 use super::seal_panic;
 use super::structs::{package_instructions, seal_struct_ops};
+use super::types::{TypeEnvironment, seal_package_types};
 
 pub(crate) fn seal_program(program: &IRProgram) {
     let Some(entry) = program.function(program.entry_point.mangled()) else {
@@ -27,8 +28,10 @@ pub(crate) fn seal_program(program: &IRProgram) {
             program.entry_point, entry.kind,
         ));
     }
+    let type_environment = TypeEnvironment::new(&program.packages);
     for pkg in &program.packages {
         seal_package(pkg);
+        seal_package_types(pkg, &type_environment);
     }
     seal_program_calls(program);
     seal_program_struct_ops(program);

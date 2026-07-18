@@ -32,7 +32,7 @@ use crate::generics::{self, Instantiation};
 use crate::lower::{
     LowerOutput, ProcessBodyTypes, resolved_type_to_ir_type, synthesize_process_entry_wrapper,
 };
-use crate::package::IRPackage;
+use crate::package::{IRPackage, insert_package_function};
 use crate::struct_decl::IRStructDecl;
 use crate::tail_calls::rewrite_tail_calls;
 use crate::types::IRType;
@@ -133,37 +133,12 @@ impl IRProgram {
     }
 }
 
-/// Run every sub-pass in the lowering phase.
+/// Lower a project through package coalescing, entry synthesis,
+/// generic specialization, cycle breaking, tail-call rewriting,
+/// yield insertion, ownership elaboration, and sealing.
 ///
-/// Sub-pass order (forced by data dependencies):
-///
-/// 1. `lower_package`: translate each `CheckedPackage` into an
-///    `IRPackage` fragment. Generic decls are skipped (they live in
-///    the typecheck registry), and concrete instantiations encountered
-///    along the way accumulate into a flat list keyed at the
-///    template's [`koja_ast::identifier::GlobalRegistryId`]. Feature-
-///    gap diagnostics push into the shared buffer and the offending
-///    decl is dropped.
-/// 2. If any diagnostics were recorded, return
-///    `Err(LowerError::Diagnostics)` immediately. Seal never runs on
-///    a partial IR, since its invariants assume a complete program, and
-///    violating them panics (northstar: seal failures are compiler
-///    bugs, not user errors).
-/// 3. Resolve the entry state's `Process<C, M, R>` impl, enqueue
-///    `start`/`run` instantiations, and synthesize the
-///    [`FunctionKind::ProcessEntryWrapper`] thunk under
-///    `<state>.__entry_wrapper`. The wrapper is routed into the
-///    state's owning package via the post-instantiate drain.
-/// 4. `generics::instantiate`: dedupe the instantiation list and
-///    monomorphize each one off the typecheck registry into the
-///    [`IRPackage`] that owns the template. The instantiation set is
-///    dropped here and never reaches merge / seal / backends. The
-///    drain also routes any leftover synthesized functions (the
-///    entry wrapper above) to their owning packages.
-/// 5. `merge`: stitch the per-package fragments into a single
-///    working `IRProgram`.
-/// 6. Entry-point existence check: surfaces `EntryPointNotFound`.
-/// 7. `seal`: assert sealed-IRProgram invariants. Panics on violation.
+/// Diagnostics return before sealing. Every synthesized declaration
+/// is inserted into its explicit owner package.
 pub fn lower_program(
     checked: &CheckedProgram,
     entry_state: &Identifier,
@@ -179,6 +154,7 @@ pub fn lower_program(
         return Err(LowerError::Diagnostics(output.diagnostics));
     }
 
+    packages = merge::coalesce(packages);
     let (entry_identifier, entry_symbol) =
         stage_process_entry(entry_state, checked, &mut packages, &mut output)?;
 
@@ -273,6 +249,7 @@ fn stage_process_entry(
             state_entry.identifier,
         ),
     };
+    let owner_package = state_entry.identifier.package().to_string();
 
     enqueue_process_methods(state_id, &checked.registry, output);
 
@@ -285,8 +262,8 @@ fn stage_process_entry(
     );
     let [body, wrapper] = synthesize_process_entry_wrapper(&state_symbol, body_types);
     let wrapper_symbol = wrapper.symbol.clone();
-    insert_into_owning_package(packages, body);
-    insert_into_owning_package(packages, wrapper);
+    insert_package_function(packages, &owner_package, body);
+    insert_package_function(packages, &owner_package, wrapper);
 
     Ok((state.clone(), wrapper_symbol))
 }
@@ -312,19 +289,6 @@ fn enqueue_process_methods(
             });
         }
     }
-}
-
-fn insert_into_owning_package(packages: &mut [IRPackage], function: IRFunction) {
-    let symbol_str = function.symbol.mangled();
-    let prefix = symbol_str.split('.').next().unwrap_or(symbol_str);
-    let index = packages
-        .iter()
-        .position(|pkg| pkg.package == prefix)
-        .unwrap_or(0);
-    let owner = packages
-        .get_mut(index)
-        .expect("IR lower: no IRPackage available to host the synthesized process entry wrapper");
-    owner.functions.insert(function.symbol.clone(), function);
 }
 
 /// Empty `Global` IRPackage seeded so `generics::monomorphize` has a

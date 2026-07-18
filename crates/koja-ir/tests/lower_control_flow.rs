@@ -92,8 +92,6 @@ fn if_no_else_lowers_to_three_blocks_with_unit_merge_param() {
         IRType::Unit,
         "merge BlockParam should be Unit-typed for if-no-else",
     );
-    let merge_param = merge_block.params[0].dest;
-
     // Then-block branches into merge with its tail (coerced to Unit
     // for the no-else / Unit-typed case).
     let then_term = match &then_block.terminator {
@@ -107,13 +105,11 @@ fn if_no_else_lowers_to_three_blocks_with_unit_merge_param() {
         "then-block should branch into merge with one arg",
     );
 
-    // The function's trailing Return reads the merge's BlockParam.
+    // The function discards the Unit merge value at its return boundary.
     assert_eq!(
         merge_block.terminator,
-        IRTerminator::Return {
-            value: Some(merge_param)
-        },
-        "merge block should `Return` its BlockParam value",
+        IRTerminator::Return { value: None },
+        "merge block should return without a value",
     );
 }
 

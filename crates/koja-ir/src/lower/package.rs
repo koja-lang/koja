@@ -426,7 +426,7 @@ pub(crate) fn lower_function_inner(
     let params = lower_params(function, identifier, signature, registry, output, &mut ctx)?;
 
     let flow = lower_body(body, &mut ctx, entry, registry, output).ok()?;
-    finalize_open_flow(&mut ctx, flow);
+    finalize_open_flow(&mut ctx, flow, &return_type);
 
     let blocks = ctx.into_blocks();
     Some(IRFunction {

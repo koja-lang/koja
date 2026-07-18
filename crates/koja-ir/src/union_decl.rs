@@ -50,7 +50,7 @@ pub struct IRUnionDecl {
 /// a conservative upper bound so the caller's first sizing pass
 /// still produces a usable number that a later
 /// [`refine_nested_union_sizes`] pass can settle.
-pub fn size_in_bytes(
+pub(crate) fn size_in_bytes(
     ty: &IRType,
     structs: &BTreeMap<IRSymbol, IRStructDecl>,
     enums: &BTreeMap<IRSymbol, IREnumDecl>,

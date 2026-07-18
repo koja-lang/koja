@@ -61,17 +61,18 @@ Definitions used throughout this doc.
   sequential `u32` today). Built during the `collect` and
   `lift_signatures` sub-passes, frozen at seal, then consumed by
   ir (and the LSP) as part of the sealed substrate.
-- **Sealed `IRProgram`.** The output of the koja-ir phase. No
-  `Stub` instructions; every callee is resolved to a registered
-  symbol; every coercion has been emitted as an explicit
-  `IRInstruction`. Asserted by `seal_program`.
-- **Closure pass.** The whole-program walk in `koja-ir/src/closure/`
-  that discovers which generic instantiations the source actually
-  references and registers them via the planners.
-- **Planners.** The `monomorphize_*` functions in
-  `koja-ir/src/lower/monomorphize.rs`. Take a generic decl + a
-  type-arg vector and append a specialized `IRStruct` / `IREnum` /
-  `IRFunction` to `IRProgram`. LLVM-free; idempotent.
+- **Sealed `IRProgram`.** The output of the koja-ir phase. It has no
+  `Stub` instructions. Every callee resolves to a registered symbol,
+  every coercion has become an explicit `IRInstruction`, and CFG,
+  SSA, local, and type invariants hold.
+  Asserted by `seal_program`.
+- **Generic instantiation pass.** The worklist in
+  `koja-ir/src/generics/` that discovers concrete generic
+  instantiations and specializes them to a fixpoint.
+- **Monomorphizer.** The helpers in
+  `koja-ir/src/generics/monomorphize.rs`. They take a generic
+  declaration and concrete type arguments, then register the
+  specialized IR declaration in its explicit owner package.
 - **`IRPackage`.** A per-package fragment produced by source
   lowering. The unit of incremental cache.
 - **`Identifier`.** Globally-unique handle for any bound thing in
@@ -210,7 +211,7 @@ calls `seal_ast`.
 
 ## Phase 3: koja-ir (the lowering phase)
 
-Input: `CheckedProgram` — the sealed (AST + `GlobalRegistry`) pair
+Input: `CheckedProgram`, the sealed AST and `GlobalRegistry` pair
 from typecheck.
 Output: sealed `IRProgram`.
 
@@ -218,15 +219,17 @@ Output: sealed `IRProgram`.
 
 ```text
 koja-ir:
-  collect-package -> per-package source-lowering produces an IRPackage
-                     fragment (cacheable per package per the
-                     incremental-compilation section)
-  merge           -> merge IRPackages into a single working IRProgram
-  closure         -> whole-program walk discovers required generic
-                     instantiations; planners register them in IRProgram
-  elaborate       -> later refinements (currently empty; reserved for
-                     future passes)
-  seal            -> assert sealed-IRProgram invariants per seal_program
+  lower packages       -> translate each CheckedPackage into an IRPackage
+  coalesce             -> combine fragments that share a package label
+  entry preparation    -> validate the Process state, enqueue its methods,
+                          and synthesize its body and wrapper
+  instantiate generics -> specialize discovered instantiations to a fixpoint
+  assemble program     -> attach the final package set and entry symbol
+  break cycles         -> insert Indirect at recursive layout back edges
+  rewrite tail calls   -> replace self call and return shapes with TailCall
+  insert yield checks  -> mark cooperative scheduling points
+  elaborate            -> synthesize ownership glue and delivery arms
+  seal                 -> assert the complete IRProgram contract
 ```
 
 ### Pipeline entry points
@@ -237,6 +240,10 @@ pub fn lower_program(
     entry_state: &Identifier,
 ) -> Result<IRProgram, LowerError>;
 
+pub fn lower_script(
+    checked: &CheckedProgram,
+) -> Result<IRScript, LowerError>;
+
 pub(crate) fn lower_package(
     pkg: &CheckedPackage,
     registry: &GlobalRegistry,
@@ -244,20 +251,19 @@ pub(crate) fn lower_package(
 ) -> IRPackage;
 ```
 
-`lower_program` is the single public entry point — it owns the
-package-by-package walk, the closure pass, the merge, and the
-seal. `lower_package` is `pub(crate)`; it is called once per
-package from inside `lower_program` and produces a per-package
-fragment. Per-package source-lowering cacheability is the design
-intent (the function is pure with respect to its inputs); the
-on-disk cache layer is not yet implemented and lives behind the
-`lower_program` shell today.
+`lower_program` owns the project pipeline and process entry
+synthesis. `lower_script` runs the corresponding whole-program
+passes around an inline script body. `lower_package` remains
+`pub(crate)` and produces the package-granular fragment used by
+both entry points. Per-package source-lowering cacheability is the
+design intent. The on-disk cache layer is not yet implemented.
 
 ### What koja-ir owns
 
 - Translation of sealed AST to IR instructions.
-- Generic specialization (the closure pass discovers; planners
-  produce specialized decls).
+- Generic specialization and final symbol minting.
+- Ownership glue, recursive layout indirection, delivery-arm
+  synthesis, tail-call rewriting, and yield-check insertion.
 - All coercion emission. Each `Coercion` annotation in the AST
   becomes an explicit `IRInstruction` (today: `Coercion::UnionWiden`
   → `IRInstruction::UnionWrap`).
@@ -277,7 +283,7 @@ on-disk cache layer is not yet implemented and lives behind the
 The free functions in `koja-ir/src/lower/` are **pure translators**
 under this architecture:
 
-- They do not discover generics or bail on unregistered symbols.
+- They record discovered generic instantiations for the worklist.
 - They panic on lookup misses. Misses are `seal` violations
   upstream, not recoverable conditions in the helpers.
 - They have no `Ok(None) → Stub` paths. `IRInstruction::Stub` does
@@ -290,14 +296,19 @@ pub(crate) fn seal_program(program: &IRProgram)
 ```
 
 Implemented in `koja-ir/src/seal/program.rs` as a top-level walk
-that delegates to focused helpers (`seal_program_entry_wrappers`,
-`seal_program_calls`, `seal_program_closure_ops`,
-`seal_program_enum_ops`, `seal_program_struct_ops`,
-`seal_program_loadconst_pool`). Together they assert:
+that delegates to focused declaration, function, SSA, ownership,
+and type validators. Together they assert:
 
 - No `IRInstruction::Stub` anywhere.
 - Every callee in `IRInstruction::Call` and friends resolves to a
-  registered symbol in `prog.functions`.
+  registered function.
+- Every CFG target resolves. Disconnected blocks are rejected except
+  for validated `Unreachable` sinks left by `Never` expressions.
+- Every SSA value is defined once and dominates its uses.
+- Every local is declared consistently.
+- Every branch, call, instruction, and return agrees with its declared
+  types.
+- Every synthesized declaration lives in its explicit owner package.
 - Every operand graph is free of `Coercion` metadata (all coercions
   emitted as instructions).
 - The entry point referenced in `prog.entry_point` resolves to a
@@ -506,11 +517,13 @@ What this rules out:
 
 The compiler uses three seal pass-throughs:
 
-| Seal                    | Phase     | Asserts                                                                    |
-| ----------------------- | --------- | -------------------------------------------------------------------------- |
-| `seal_ast`              | typecheck | every `Expr.resolution` resolved; every `RegistryEntry` complete           |
-| `seal_program`          | koja-ir   | no `Stub`; every callee registered; no `Coercion` metadata; entry resolved |
-| (codegen/eval implicit) | backend   | one match arm per `IRInstruction`; no fallback paths                       |
+- Typecheck runs `seal_ast` to require resolved expressions and
+  complete registry entries.
+- IR runs `seal_program` to require valid declarations, CFG, SSA,
+  locals, types, ownership operations, package routing, and entry
+  registration.
+- Each backend matches every `IRInstruction` without semantic
+  fallback paths.
 
 The seal contract is `panic on violation`. Seal failures indicate
 upstream bugs, not recoverable conditions.

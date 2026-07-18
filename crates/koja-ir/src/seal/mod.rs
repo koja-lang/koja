@@ -92,6 +92,7 @@ mod function;
 mod program;
 mod script;
 mod structs;
+mod types;
 
 pub(crate) use program::seal_program;
 pub(crate) use script::seal_script;
