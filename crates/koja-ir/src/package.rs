@@ -54,3 +54,49 @@ pub struct IRPackage {
     /// in the `{ i8, [N x i8] }` LLVM struct layout.
     pub unions: BTreeMap<IRSymbol, IRUnionDecl>,
 }
+
+pub(crate) fn insert_package_function(
+    packages: &mut [IRPackage],
+    owner: &str,
+    function: IRFunction,
+) {
+    let symbol = function.symbol.clone();
+    let package = packages
+        .iter_mut()
+        .find(|package| package.package == owner)
+        .unwrap_or_else(|| {
+            panic!("IR package routing: function `{symbol}` names missing owner package `{owner}`")
+        });
+    if package.functions.insert(symbol.clone(), function).is_some() {
+        panic!("IR package routing: function `{symbol}` is already registered in `{owner}`");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::function::FunctionKind;
+    use crate::types::IRType;
+    use koja_ast::identifier::Identifier;
+
+    #[test]
+    #[should_panic(expected = "missing owner package `Missing`")]
+    fn insert_function_rejects_missing_owner() {
+        let mut packages = Vec::new();
+        insert_package_function(
+            &mut packages,
+            "Missing",
+            IRFunction {
+                blocks: Vec::new(),
+                def_location: None,
+                kind: FunctionKind::Regular,
+                params: Vec::new(),
+                return_type: IRType::Unit,
+                symbol: IRSymbol::from_identifier(&Identifier::new(
+                    "Missing",
+                    vec!["run".to_string()],
+                )),
+            },
+        );
+    }
+}

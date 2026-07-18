@@ -13,13 +13,14 @@
 //!   the dominator tree.
 //!
 //! These are pure CFG primitives. They consume nothing about
-//! instruction operands or value types and only walk terminator
-//! targets to derive successor edges. Reusable for any future
-//! dataflow pass (DCE, GVN, etc.).
+//! instruction operands or value types and derive successor edges
+//! from terminator targets plus `Receive` arm bodies (dispatch
+//! enters those blocks at runtime without a terminator edge).
+//! Reusable for any future dataflow pass (DCE, GVN, etc.).
 
 use std::collections::{HashMap, HashSet};
 
-use crate::function::{IRBasicBlock, IRBlockId, IRTerminator};
+use crate::function::{IRBasicBlock, IRBlockId, IRInstruction, IRTerminator};
 
 /// Walk every reachable block from `entry` and return the immediate
 /// dominator of each non-entry reachable block. The map's domain is
@@ -182,7 +183,7 @@ fn visit(
     let Some(block) = by_id.get(&block_id) else {
         return;
     };
-    for successor in successors(&block.terminator) {
+    for successor in successors(block) {
         visit(successor, by_id, visited, order);
     }
     order.push(block_id);
@@ -190,7 +191,7 @@ fn visit(
 
 /// Successor block ids reachable from `terminator`. `seal/mod.rs` keeps
 /// its own `terminator_targets` copy to avoid depending on this module.
-pub(crate) fn successors(terminator: &IRTerminator) -> Vec<IRBlockId> {
+fn terminator_successors(terminator: &IRTerminator) -> Vec<IRBlockId> {
     match terminator {
         IRTerminator::Branch(target) => vec![target.block],
         IRTerminator::CondBranch {
@@ -204,6 +205,18 @@ pub(crate) fn successors(terminator: &IRTerminator) -> Vec<IRBlockId> {
     }
 }
 
+pub(crate) fn successors(block: &IRBasicBlock) -> Vec<IRBlockId> {
+    let mut targets = Vec::new();
+    for instruction in &block.instructions {
+        if let IRInstruction::Receive { after, arms, .. } = instruction {
+            targets.extend(arms.iter().map(|arm| arm.body));
+            targets.extend(after.iter().map(|after| after.body));
+        }
+    }
+    targets.extend(terminator_successors(&block.terminator));
+    targets
+}
+
 /// `block -> blocks that branch into it`. Built once per function
 /// at dominance-analysis entry and reused inside the iterative
 /// fixed-point loop. Unreachable blocks may have no entry in the
@@ -212,7 +225,7 @@ pub(crate) fn successors(terminator: &IRTerminator) -> Vec<IRBlockId> {
 fn predecessor_map(blocks: &[IRBasicBlock]) -> HashMap<IRBlockId, Vec<IRBlockId>> {
     let mut predecessors: HashMap<IRBlockId, Vec<IRBlockId>> = HashMap::new();
     for block in blocks {
-        for successor in successors(&block.terminator) {
+        for successor in successors(block) {
             predecessors.entry(successor).or_default().push(block.id);
         }
     }

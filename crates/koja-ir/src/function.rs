@@ -6,7 +6,7 @@ use std::borrow::Borrow;
 use std::fmt;
 use std::path::PathBuf;
 
-use koja_ast::identifier::Identifier;
+use koja_ast::identifier::{Identifier, LocalId};
 
 use crate::enum_decl::{EnumPayloadInit, IRVariantTag};
 use crate::extern_attrs::IRExternAttrs;
@@ -292,6 +292,57 @@ pub struct IRFunction {
     pub params: Vec<IRFunctionParam>,
     pub return_type: IRType,
     pub symbol: IRSymbol,
+}
+
+impl IRFunction {
+    pub(crate) fn next_block_id(&self) -> IRBlockId {
+        let max = self.blocks.iter().map(|block| block.id.0).max();
+        IRBlockId(max.map_or(0, |id| id + 1))
+    }
+
+    pub(crate) fn next_local_id(&self) -> IRLocalId {
+        let mut max = 0;
+        for param in &self.params {
+            max = max.max(param.local_id.as_u32());
+        }
+        for block in &self.blocks {
+            for instruction in &block.instructions {
+                match instruction {
+                    IRInstruction::DropLocal { local, .. }
+                    | IRInstruction::LocalDecl { local, .. }
+                    | IRInstruction::LocalRead { local, .. }
+                    | IRInstruction::LocalWrite { local, .. } => max = max.max(local.as_u32()),
+                    IRInstruction::Receive { arms, .. } => {
+                        for arm in arms {
+                            max = max.max(arm.payload_local.as_u32());
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+        IRLocalId::from_local_id(LocalId::new(max + 1))
+    }
+
+    pub(crate) fn next_value_id(&self) -> u32 {
+        let mut max = self
+            .params
+            .iter()
+            .map(|param| param.id.0)
+            .max()
+            .unwrap_or(0);
+        for block in &self.blocks {
+            for param in &block.params {
+                max = max.max(param.dest.0);
+            }
+            for instruction in &block.instructions {
+                if let Some(dest) = instruction.dest() {
+                    max = max.max(dest.0);
+                }
+            }
+        }
+        max + 1
+    }
 }
 
 /// A straight-line sequence of [`IRInstruction`]s ending in exactly

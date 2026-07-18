@@ -350,6 +350,12 @@ fn spawn_lowers_to_spawn_instruction_plus_wrapper_fn() {
     let wrapper_fn = program
         .function(wrapper.mangled())
         .expect("wrapper symbol should resolve to a synthesized function");
+    let wrapper_package = program
+        .packages
+        .iter()
+        .find(|package| package.functions.contains_key(wrapper.mangled()))
+        .expect("wrapper should belong to one package");
+    assert_eq!(wrapper_package.package, PACKAGE);
     assert!(
         matches!(wrapper_fn.kind, FunctionKind::SpawnWrapper { .. }),
         "wrapper kind should be SpawnWrapper, got {:?}",
@@ -630,6 +636,12 @@ fn process_entry_lowers_to_process_entry_wrapper() {
     let wrapper = program
         .function(&wrapper_mangled)
         .expect("entry wrapper must be registered as a function");
+    let wrapper_package = program
+        .packages
+        .iter()
+        .find(|package| package.functions.contains_key(wrapper_mangled.as_str()))
+        .expect("entry wrapper should belong to one package");
+    assert_eq!(wrapper_package.package, PACKAGE);
     match &wrapper.kind {
         FunctionKind::ProcessEntryWrapper { state } => {
             assert!(

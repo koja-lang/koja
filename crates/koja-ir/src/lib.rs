@@ -1,32 +1,16 @@
-//! Sealed IR lowering for the [`COMPILER-NORTHSTAR.md`] pipeline.
+//! Sealed intermediate representation for Koja.
 //!
 //! [`COMPILER-NORTHSTAR.md`]: ../../design/COMPILER-NORTHSTAR.md
 //!
-//! Two public entry points, one IR shape per usecase:
+//! Two lowering entry points serve project and script execution:
 //!
-//! - [`lower_program`] consumes a sealed
-//!   [`koja_typecheck::CheckedProgram`] whose source declared an
-//!   entry function (`fn main`) and returns a sealed [`IRProgram`].
-//!   This is the project-mode path. The entry point is named by an
-//!   [`koja_ast::identifier::Identifier`].
-//! - [`lower_script`] consumes a sealed
-//!   [`koja_typecheck::CheckedProgram`] whose source was parsed
-//!   in `ParseMode::Script` (top-level statements live on
-//!   [`koja_ast::ast::File::body`]) and returns a sealed [`IRScript`].
-//!   This is the script-mode path. The script body *is* the entry
-//!   point, so there's no identifier for it.
+//! - [`lower_program`] lowers a project and synthesizes the entry
+//!   wrapper for the requested concrete `Process` state.
+//! - [`lower_script`] lowers top-level script statements directly.
 //!
-//! Both paths share the same [`IRPackage`] / [`IRFunction`] vocabulary
-//! for helper-function decls and the same per-function lowering
-//! helpers. The difference is only in the entry-point shape they
-//! produce. Lowering is a pure translation from a sealed input.
-//! User-actionable errors funnel through [`LowerError`], and
-//! everything else is a compiler bug that panics through `seal`.
-//!
-//! Hard contract: this crate has **zero dependency on `koja-ir`**. The
-//! IR vocabulary defined here ([`IRProgram`], [`IRScript`],
-//! [`IRPackage`], [`IRFunction`], [`IRInstruction`], [`IRTerminator`],
-//! …) is fresh and self-contained.
+//! Both consume a sealed [`koja_typecheck::CheckedProgram`] and return
+//! a fully transformed, seal-validated output. [`LowerError`] carries
+//! user-facing lowering failures. Seal failures are compiler bugs.
 
 mod binary_packing;
 mod cfg;
@@ -54,9 +38,8 @@ mod types;
 mod union_decl;
 mod yield_checks;
 
-pub use binary_packing::{pack_bits_into, pack_integer_segment};
+pub use binary_packing::pack_integer_segment;
 pub use constant::IRConstantValue;
-pub use elaborate::needs_drop;
 pub use enum_decl::{EnumPayloadInit, IREnumDecl, IREnumVariant, IRVariantPayload, IRVariantTag};
 pub use error::LowerError;
 pub use extern_attrs::IRExternAttrs;
@@ -81,4 +64,4 @@ pub use types::{
     LoweredBinaryMatchLayout, LoweredBinaryPattern, LoweredBinarySegment, NEG_OVERFLOW_MESSAGE,
     ResolvedBinaryLayout, ValueId,
 };
-pub use union_decl::{IRUnionDecl, size_in_bytes};
+pub use union_decl::IRUnionDecl;

@@ -641,9 +641,8 @@ fn synthesize_body(
         BodyShape::Short(expr) => vec![Statement::Expr(expr.clone())],
     };
     let flow = lower_body(&body_statements, &mut ctx, entry, registry, output)?;
-    finalize_open_flow(&mut ctx, flow);
-
     let return_type = resolved_type_to_ir_type(sig.fn_ret, registry, &mut output.instantiations);
+    finalize_open_flow(&mut ctx, flow, &return_type);
     let env_layout: Vec<IRType> = captures.iter().map(|c| c.ir_type.clone()).collect();
     Ok(IRFunction {
         blocks: ctx.into_blocks(),

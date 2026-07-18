@@ -65,6 +65,7 @@
 //! composite's glue body recurses into its constituents' glue. Leaves
 //! and `Indirect` boxes themselves are skipped, as they carry no glue.
 
+mod delivery;
 mod exit_signal;
 mod io_ready;
 mod rewrite;
@@ -72,16 +73,14 @@ mod synthesis;
 
 use std::collections::BTreeSet;
 
-use koja_ast::identifier::LocalId;
-
 use crate::enum_decl::{IREnumDecl, IREnumVariant, IRVariantPayload};
 use crate::function::{
-    FunctionKind, IRBasicBlock, IRBlockId, IRFunction, IRFunctionParam, IRInstruction, IRSymbol,
+    FunctionKind, IRBasicBlock, IRFunction, IRFunctionParam, IRInstruction, IRSymbol,
 };
 use crate::intrinsic_id::{IRIntrinsicId, RefMethod, ReplyToMethod};
 use crate::local::IRLocalId;
 use crate::mangling::{clone_glue_symbol, deep_copy_glue_symbol, drop_glue_symbol};
-use crate::package::IRPackage;
+use crate::package::{IRPackage, insert_package_function};
 use crate::struct_decl::IRStructDecl;
 use crate::types::IRType;
 
@@ -150,7 +149,7 @@ fn rewrite_all(
 /// [`crate::cycle::break_type_cycles`]), which answers `true`
 /// without recursing through the named type again, and a `visited`
 /// set guards against any residual revisit.
-pub fn needs_drop(ty: &IRType, packages: &[IRPackage]) -> bool {
+pub(crate) fn needs_drop(ty: &IRType, packages: &[IRPackage]) -> bool {
     needs_drop_seen(ty, packages, &mut BTreeSet::new())
 }
 
@@ -414,62 +413,6 @@ fn constituent_types(ty: &IRType, packages: &[IRPackage]) -> Vec<IRType> {
     }
 }
 
-/// First unused [`IRBlockId`], one past the function's max block id.
-/// Shared by the delivery sub-passes that splice synthesized blocks
-/// into existing functions.
-fn next_block_id(function: &IRFunction) -> IRBlockId {
-    let max = function.blocks.iter().map(|block| block.id.0).max();
-    IRBlockId(max.map_or(0, |id| id + 1))
-}
-
-/// First unused [`crate::types::ValueId`], one past every parameter,
-/// block parameter, and instruction definition. Mirrors `tail_calls`.
-fn next_value_id(function: &IRFunction) -> u32 {
-    let mut max = 0;
-    for param in &function.params {
-        max = max.max(param.id.0);
-    }
-    for block in &function.blocks {
-        for block_param in &block.params {
-            max = max.max(block_param.dest.0);
-        }
-        for instruction in &block.instructions {
-            if let Some(dest) = instruction.dest() {
-                max = max.max(dest.0);
-            }
-        }
-    }
-    max + 1
-}
-
-/// First unused [`IRLocalId`], one past every slot the function names.
-/// Every local (params, body slots, receive-arm payloads, binary-match
-/// binds) carries a `LocalDecl` in entry, so the scan below is exhaustive
-/// even though it doesn't descend into `BinaryMatch` segments.
-fn next_local_id(function: &IRFunction) -> IRLocalId {
-    let mut max = 0;
-    for param in &function.params {
-        max = max.max(param.local_id.as_u32());
-    }
-    for block in &function.blocks {
-        for instruction in &block.instructions {
-            match instruction {
-                IRInstruction::DropLocal { local, .. }
-                | IRInstruction::LocalDecl { local, .. }
-                | IRInstruction::LocalRead { local, .. }
-                | IRInstruction::LocalWrite { local, .. } => max = max.max(local.as_u32()),
-                IRInstruction::Receive { arms, .. } => {
-                    for arm in arms {
-                        max = max.max(arm.payload_local.as_u32());
-                    }
-                }
-                _ => {}
-            }
-        }
-    }
-    IRLocalId::from_local_id(LocalId::new(max + 1))
-}
-
 fn find_struct<'a>(packages: &'a [IRPackage], symbol: &IRSymbol) -> Option<&'a IRStructDecl> {
     packages
         .iter()
@@ -504,6 +447,7 @@ fn register_glue(packages: &mut [IRPackage], ty: &IRType) {
     };
     insert_glue(
         packages,
+        ty,
         glue_shell(
             clone_glue_symbol(ty),
             FunctionKind::CloneGlue,
@@ -514,6 +458,7 @@ fn register_glue(packages: &mut [IRPackage], ty: &IRType) {
     );
     insert_glue(
         packages,
+        ty,
         glue_shell(
             drop_glue_symbol(ty),
             FunctionKind::DropGlue,
@@ -536,6 +481,7 @@ fn register_deep_copy_glue(packages: &mut [IRPackage], ty: &IRType) {
     };
     insert_glue(
         packages,
+        ty,
         glue_shell(
             deep_copy_glue_symbol(ty),
             FunctionKind::DeepCopyGlue,
@@ -570,25 +516,31 @@ fn glue_shell(
     }
 }
 
-/// Insert `function` into the package its symbol prefix names, or the
-/// `packages[0]` fallback when the prefix matches no package (the
-/// structural-collection glue case, whose synthetic symbol has no
-/// real package root). Idempotent, as a symbol already registered
-/// anywhere is left untouched.
-fn insert_glue(packages: &mut [IRPackage], function: IRFunction) {
+/// Insert glue into the package that owns its concrete type.
+fn insert_glue(packages: &mut [IRPackage], ty: &IRType, function: IRFunction) {
     if glue_registered(packages, &function.symbol) {
         return;
     }
-    let symbol = function.symbol.mangled();
-    let prefix = symbol.split('.').next().unwrap_or(symbol);
-    let index = packages
-        .iter()
-        .position(|pkg| pkg.package == prefix)
-        .unwrap_or(0);
-    let owner = packages
-        .get_mut(index)
-        .expect("IR elaborate: no IRPackage available to host synthesized glue");
-    owner.functions.insert(function.symbol.clone(), function);
+    let owner = glue_owner(packages, ty);
+    insert_package_function(packages, &owner, function);
+}
+
+fn glue_owner(packages: &[IRPackage], ty: &IRType) -> String {
+    let owner = match ty {
+        IRType::Enum(symbol) => packages
+            .iter()
+            .find(|package| package.enums.contains_key(symbol.mangled())),
+        IRType::Struct(symbol) => packages
+            .iter()
+            .find(|package| package.structs.contains_key(symbol.mangled())),
+        IRType::Union { mangled, .. } => packages
+            .iter()
+            .find(|package| package.unions.contains_key(mangled.mangled())),
+        _ => return "Global".to_string(),
+    };
+    owner
+        .map(|package| package.package.clone())
+        .unwrap_or_else(|| panic!("IR elaborate: no package owns glue type `{ty:?}`"))
 }
 
 #[cfg(test)]

@@ -119,7 +119,7 @@ fn insert_in_body(blocks: &mut [IRBasicBlock]) {
     for block in blocks.iter_mut() {
         let is_tail_call = matches!(block.terminator, IRTerminator::TailCall { .. });
         let on_back_edge = immediate_dominators.as_ref().is_some_and(|idoms| {
-            successors(&block.terminator)
+            successors(block)
                 .iter()
                 .any(|succ| dominates(idoms, entry, *succ, block.id))
         });

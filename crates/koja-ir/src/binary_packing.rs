@@ -45,7 +45,7 @@ pub fn pack_integer_segment(
 /// at bit offset `start_bit`. `buffer` is assumed pre-zeroed, and we
 /// `or` rather than overwrite so adjacent segments that share a
 /// byte don't clobber each other.
-pub fn pack_bits_into(buffer: &mut [u8], value: u64, width: u64, start_bit: u64) {
+fn pack_bits_into(buffer: &mut [u8], value: u64, width: u64, start_bit: u64) {
     for i in 0..width {
         let bit = ((value >> (width - 1 - i)) & 1) as u8;
         if bit == 0 {
@@ -55,5 +55,38 @@ pub fn pack_bits_into(buffer: &mut [u8], value: u64, width: u64, start_bit: u64)
         let byte = (bit_pos / 8) as usize;
         let bit_in_byte = 7 - (bit_pos % 8) as u32;
         buffer[byte] |= 1 << bit_in_byte;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn aligned_big_endian_segment_writes_high_byte_first() {
+        let mut buffer = [0; 2];
+        pack_integer_segment(&mut buffer, 0x1234, 16, BinaryEndian::Big, 0);
+        assert_eq!(buffer, [0x12, 0x34]);
+    }
+
+    #[test]
+    fn aligned_little_endian_segment_writes_low_byte_first() {
+        let mut buffer = [0; 2];
+        pack_integer_segment(&mut buffer, 0x1234, 16, BinaryEndian::Little, 0);
+        assert_eq!(buffer, [0x34, 0x12]);
+    }
+
+    #[test]
+    fn sub_byte_segment_crosses_byte_boundary() {
+        let mut buffer = [0; 2];
+        pack_bits_into(&mut buffer, 0b11_1111, 6, 5);
+        assert_eq!(buffer, [0b0000_0111, 0b1110_0000]);
+    }
+
+    #[test]
+    fn zero_width_segment_leaves_buffer_unchanged() {
+        let mut buffer = [0xaa];
+        pack_integer_segment(&mut buffer, u64::MAX, 0, BinaryEndian::Big, 0);
+        assert_eq!(buffer, [0xaa]);
     }
 }

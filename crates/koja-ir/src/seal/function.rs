@@ -148,11 +148,7 @@ fn seal_function(function: &IRFunction) {
 /// Validate every [`IRTerminator::TailCall`] in `function` against
 /// the self-recursion contract: callee must equal the enclosing
 /// function's symbol, and arg arity must match `function.params`.
-/// Per-arg type matching against the param's type requires a global
-/// value-type index this seal walk doesn't build (mirrors the
-/// branch-arg arity-only check in [`require_branch_target_arity`]).
-/// LLVM emission catches arg-type drift via inkwell's `build_store`
-/// type check.
+/// [`super::types`] validates each argument's type.
 fn seal_tail_calls(function: &IRFunction, owner: &str) {
     let expected_arity = function.params.len();
     for block in &function.blocks {
@@ -181,10 +177,8 @@ fn seal_tail_calls(function: &IRFunction, owner: &str) {
 
 /// Per-function index of every block's [`crate::function::BlockParam`]
 /// signature, keyed by [`IRBlockId`]. Used by [`seal_block`] to
-/// validate that each [`BranchTarget`]'s `args` list matches the
-/// target block's declared param signature in count (and, where the
-/// per-block walk has captured both the param's and the arg's type,
-/// in type as well, see [`require_branch_target_well_formed`]).
+/// validate that each [`BranchTarget`]'s `args` list matches the target
+/// block's declared arity. [`super::types`] validates argument types.
 ///
 /// Built once per function so the per-block walk doesn't repeat the
 /// scan.
@@ -281,8 +275,25 @@ pub(super) fn seal_block(
     block_params: &BTreeMap<IRBlockId, Vec<IRType>>,
 ) {
     for instruction in &block.instructions {
-        if let IRInstruction::Const { value, dest } = instruction {
-            require_supported_const(value, &|| format!("{owner} const instruction at {dest}"));
+        match instruction {
+            IRInstruction::Const { value, dest } => {
+                require_supported_const(value, &|| format!("{owner} const instruction at {dest}"));
+            }
+            IRInstruction::Receive { after, arms, .. } => {
+                for target in arms
+                    .iter()
+                    .map(|arm| arm.body)
+                    .chain(after.iter().map(|after| after.body))
+                {
+                    if !block_ids.contains(&target) {
+                        seal_panic(&format!(
+                            "{owner} block {} Receive targets unknown block `{target}`",
+                            block.id,
+                        ));
+                    }
+                }
+            }
+            _ => {}
         }
     }
     for target in terminator_targets(&block.terminator) {
@@ -313,12 +324,55 @@ pub(super) fn seal_ssa(
 ) {
     let entry = blocks[0].id;
     let immediate_dominators = compute_immediate_dominators(blocks, entry);
+    for block in blocks
+        .iter()
+        .filter(|block| block.id != entry && !immediate_dominators.contains_key(&block.id))
+    {
+        seal_unreachable_block(block, owner, parameter_value_ids);
+    }
     let children = dominator_tree_children(&immediate_dominators, blocks);
     let blocks_by_id: HashMap<IRBlockId, &IRBasicBlock> =
         blocks.iter().map(|block| (block.id, block)).collect();
 
     let mut defined = parameter_value_ids.clone();
     walk_dominator_subtree(entry, owner, &children, &blocks_by_id, &mut defined);
+}
+
+/// Validate the canonical sink left after a `Never` expression.
+///
+/// Lowering may retain one disconnected continuation block terminated
+/// by `Unreachable`. Any other disconnected shape remains invalid.
+fn seal_unreachable_block(
+    block: &IRBasicBlock,
+    owner: &str,
+    parameter_value_ids: &HashSet<ValueId>,
+) {
+    if !matches!(block.terminator, IRTerminator::Unreachable) {
+        seal_panic(&format!(
+            "{owner} contains unreachable block {} without an `Unreachable` terminator",
+            block.id
+        ));
+    }
+
+    let mut defined = parameter_value_ids.clone();
+    for param in &block.params {
+        if !defined.insert(param.dest) {
+            seal_panic(&format!(
+                "{owner} unreachable block {} redefines value `{}`",
+                block.id, param.dest
+            ));
+        }
+    }
+    for instruction in &block.instructions {
+        for operand in instruction_operands(instruction) {
+            require_in_scope(operand, owner, block.id, &defined);
+        }
+        if let Some(dest) = instruction.dest()
+            && !defined.insert(dest)
+        {
+            seal_panic(&format!("{owner} redefines value `{dest}`"));
+        }
+    }
 }
 
 /// Recursive descent over the dominator tree. The mutable `defined`
@@ -383,13 +437,8 @@ fn require_in_scope(value: ValueId, owner: &str, block_id: IRBlockId, defined: &
     }
 }
 
-/// Validate that every [`BranchTarget`] in `term` passes exactly as
-/// many `args` as the target block declares [`crate::function::BlockParam`]s.
-/// Type-matching of args against params requires a global value-type
-/// index that this seal walk doesn't yet build, so the count check is
-/// the strict invariant (an arity mismatch always indicates a
-/// lowering bug). Type validation happens at the LLVM-emission
-/// boundary via inkwell's `add_incoming` type check.
+/// Validate that every [`BranchTarget`] passes the target block's
+/// declared number of arguments. Typed validation runs separately.
 fn seal_branch_target_arities(
     term: &IRTerminator,
     pred: IRBlockId,
@@ -565,17 +614,28 @@ mod block_param_tests {
         let entry_id = IRBlockId(0);
         let sibling_id = IRBlockId(1);
         let merge_id = IRBlockId(2);
-        let const_id = ValueId(0);
-        let merge_param = ValueId(1);
+        let cond_id = ValueId(0);
+        let const_id = ValueId(1);
+        let merge_param = ValueId(2);
         let entry = IRBasicBlock {
             id: entry_id,
             label: "entry".to_string(),
             params: Vec::new(),
-            instructions: vec![IRInstruction::Const {
-                dest: const_id,
-                value: ConstValue::Int64(0),
-            }],
-            terminator: IRTerminator::Branch(BranchTarget::to(sibling_id)),
+            instructions: vec![
+                IRInstruction::Const {
+                    dest: cond_id,
+                    value: ConstValue::Bool(true),
+                },
+                IRInstruction::Const {
+                    dest: const_id,
+                    value: ConstValue::Int64(0),
+                },
+            ],
+            terminator: IRTerminator::CondBranch {
+                cond: cond_id,
+                else_target: BranchTarget::with_args(merge_id, vec![const_id]),
+                then_target: BranchTarget::to(sibling_id),
+            },
         };
         // Sibling references `merge_param` directly. This is illegal
         // because merge does not dominate sibling, so its
@@ -602,6 +662,28 @@ mod block_param_tests {
             },
         };
         let blocks = vec![entry, sibling, merge];
+        run_seal(&blocks, "test fn");
+    }
+
+    #[test]
+    #[should_panic(expected = "without an `Unreachable` terminator")]
+    fn unreachable_non_sink_block_panics() {
+        let blocks = vec![
+            IRBasicBlock {
+                id: IRBlockId(0),
+                instructions: Vec::new(),
+                label: "entry".to_string(),
+                params: Vec::new(),
+                terminator: IRTerminator::Return { value: None },
+            },
+            IRBasicBlock {
+                id: IRBlockId(1),
+                instructions: Vec::new(),
+                label: "orphan".to_string(),
+                params: Vec::new(),
+                terminator: IRTerminator::Return { value: None },
+            },
+        ];
         run_seal(&blocks, "test fn");
     }
 }

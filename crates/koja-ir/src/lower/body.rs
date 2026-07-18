@@ -65,17 +65,14 @@ pub(crate) fn lower_body_to_blocks(
             value: Some(id), ..
         } => ctx.type_of(*id),
         FlowResult::Open { value: None, .. } => IRType::Unit,
-        // Closed-flow on a script body means an explicit `return`
-        // exited the script. `Unit` is a defensible default here.
-        // The auto-print wrapper inspects this type to pick a
-        // printer, and a script that returns explicitly today only
-        // does so via `return_value: Option<expr>` whose type the
-        // body lowering already plumbed through `Return.value`.
-        // Tightening this to "type of the returned value" is a
-        // follow-up if/when scripts care.
+        // Closed flow means an explicit `return` exited the script.
+        // Typecheck does not yet validate explicit return values (it
+        // only checks the trailing expression), so their IR types
+        // carry no guarantee. `Unit` is the defensible default until
+        // explicit-return checking lands upstream.
         FlowResult::Closed => IRType::Unit,
     };
-    finalize_open_flow(&mut ctx, flow);
+    finalize_open_flow(&mut ctx, flow, &return_type);
     Ok((ctx.into_blocks(), return_type))
 }
 
@@ -725,8 +722,17 @@ fn expect_local_id(lvalue: &LValue) -> LocalId {
 /// Closed flows already set their own terminator (an inner `return`),
 /// so there is nothing to do. Emits the function-exit drops, then stamps the
 /// `Return` carrying the trailing value (if any).
-pub(super) fn finalize_open_flow(ctx: &mut FnLowerCtx, flow: FlowResult) {
+pub(super) fn finalize_open_flow(ctx: &mut FnLowerCtx, flow: FlowResult, return_type: &IRType) {
     if let FlowResult::Open { value, block } = flow {
+        if return_type == &IRType::Unit {
+            if let Some(value) = value {
+                drop_discarded_temp(ctx, block, value);
+            }
+            emit_function_exit_drops(ctx, block);
+            ctx.cfg
+                .set_terminator(block, IRTerminator::Return { value: None });
+            return;
+        }
         // Acquire the trailing value as owned *before* the exit drops,
         // so the return clone is taken while its source slots are live.
         let owned = value.map(|id| {

@@ -82,7 +82,7 @@ fn intrinsic_call_lowers_to_normal_call_instruction() {
         .instructions
         .iter()
         .find_map(|inst| match inst {
-            IRInstruction::Call { callee, args, dest } => Some((callee, args, dest)),
+            IRInstruction::Call { callee, args, .. } => Some((callee, args)),
             _ => None,
         })
         .expect("expected a Call instruction in the script body");
@@ -90,10 +90,8 @@ fn intrinsic_call_lowers_to_normal_call_instruction() {
     assert_eq!(call.1.len(), 1, "print takes exactly one String arg");
     assert_eq!(
         block.terminator,
-        IRTerminator::Return {
-            value: Some(*call.2),
-        },
-        "trailing intrinsic call's dest threads through to Return",
+        IRTerminator::Return { value: None },
+        "Unit script discards the intrinsic call result",
     );
 }
 
