@@ -16,10 +16,49 @@ use crate::function::{BranchTarget, IRBlockId, IRInstruction, IRTerminator};
 use crate::types::{ConstValue, IRType, ValueId};
 
 use super::body::lower_body;
-use super::ctx::{FlowResult, FnLowerCtx, LowerOutput};
+use super::ctx::{FlowResult, FnLowerCtx, LowerOutput, SlotStateSnapshot};
 use super::expr::lower_expr;
 use super::ownership::{drop_discarded_temp, materialize_owned};
 use super::package::resolved_type_to_ir_type;
+
+/// One lowered arm's join inputs, the open tail block and the
+/// post-body slot state. The tail is `None` when an early `return`
+/// closed the arm, whose exit drops already released its slots.
+pub(super) type ArmJoinState = (Option<IRBlockId>, SlotStateSnapshot);
+
+/// Merge per-arm post-states into the construct's post-join slot
+/// state, releasing arm-scoped heap bindings on the way out.
+///
+/// A slot declared in only some arms does not survive
+/// [`FnLowerCtx::merge_slot_states`], so function-exit drops never
+/// free it. Exactly one arm executes, so its bindings leave scope at
+/// the join and are released in that arm's tail block. The tail's
+/// branch arg is already an owned value ([`finalize_arm_value`]) and
+/// appended instructions land before the terminator, so the drop is
+/// safe on the merge edge.
+pub(super) fn join_arm_states(ctx: &mut FnLowerCtx, arms: Vec<ArmJoinState>) {
+    let states: Vec<SlotStateSnapshot> = arms.iter().map(|(_, state)| state.clone()).collect();
+    ctx.merge_slot_states(states);
+    let merged = ctx.snapshot_slot_states();
+    for (tail, state) in arms {
+        let Some(tail) = tail else { continue };
+        let mut orphaned: Vec<_> = state
+            .into_iter()
+            .filter(|(local, ty)| {
+                !merged.contains_key(local)
+                    && ty.is_heap_managed()
+                    // Pattern-bind slots borrow the subject's payload
+                    // storage, which the subject's release covers.
+                    && !ctx.slot_is_borrowed(*local)
+            })
+            .collect();
+        // LIFO drop order, matching function-exit drops.
+        orphaned.reverse();
+        for (local, ty) in orphaned {
+            ctx.cfg.append(tail, IRInstruction::DropLocal { local, ty });
+        }
+    }
+}
 
 /// Lower a statement-body arm into `arm_block`, then unconditionally
 /// jump to `merge_block` when flow stays open. Closed flow (early

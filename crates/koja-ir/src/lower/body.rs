@@ -191,8 +191,15 @@ fn lower_break_statement(
              typecheck resolve invariant violation",
         )
     });
+    // Escaping a match arm skips the arm tail's subject release, so
+    // free any owned subject temps entered since the loop began.
+    for value in ctx.subject_temps_since(exit.subject_temp_watermark) {
+        let ty = ctx.type_of(value);
+        ctx.cfg
+            .append(block, IRInstruction::DropValue { value, ty });
+    }
     ctx.cfg
-        .set_terminator(block, IRTerminator::Branch(BranchTarget::to(exit)));
+        .set_terminator(block, IRTerminator::Branch(BranchTarget::to(exit.block)));
     Ok(FlowResult::Closed)
 }
 

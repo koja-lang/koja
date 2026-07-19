@@ -33,6 +33,15 @@ use koja_ast::identifier::LocalId;
 /// which the drop-glue emission consults.
 pub(crate) type SlotStateSnapshot = BTreeMap<IRLocalId, IRType>;
 
+/// One enclosing loop's `break` context, the exit block to branch to
+/// and the subject-temp watermark at loop entry (see
+/// [`FnLowerCtx::subject_temps_since`]).
+#[derive(Clone, Copy)]
+pub(crate) struct LoopExit {
+    pub(crate) block: IRBlockId,
+    pub(crate) subject_temp_watermark: usize,
+}
+
 use crate::cfg::CFGBuilder;
 use crate::function::{IRBasicBlock, IRBlockId, IRFunction, IRSymbol};
 use crate::generics::Instantiation;
@@ -119,12 +128,12 @@ pub(crate) struct FnLowerCtx {
     declared: BTreeSet<IRLocalId>,
     locals: BTreeMap<IRLocalId, IRType>,
     closures: ClosureState,
-    /// Stack of pending loop-exit blocks, one entry per enclosing
-    /// `loop` / `while`. [`super::loops`] pushes the exit on entry
-    /// and pops on exit, and [`super::body::lower_break_stmt`] peeks
-    /// the top to find the [`IRBlockId`] its `Branch` should
-    /// target. Mirrors v1's `FnLowerState::loop_exit` stack.
-    loop_exit: Vec<IRBlockId>,
+    /// Stack of pending loop exits, one entry per enclosing `loop` /
+    /// `while`. Carries the exit block `break` branches to and the
+    /// subject-temp watermark at loop entry, so `break` can release
+    /// match subjects it escapes. [`super::loops`] pushes on entry
+    /// and pops on exit.
+    loop_exit: Vec<LoopExit>,
     /// SSA values that own a fresh heap allocation (and so may be
     /// moved into an owner or dropped as a temp). Marked at every
     /// producer that is *certain* to allocate fresh:
@@ -144,6 +153,17 @@ pub(crate) struct FnLowerCtx {
     /// consumer: it is *moved* into an owner ([`super::ownership::materialize_owned`])
     /// or *released* at a use-and-release site ([`super::ownership::drop_discarded_temp`]).
     owned_values: BTreeSet<ValueId>,
+    /// Slots that hold a borrowed reference rather than an owned
+    /// value. Pattern binds write the subject's payload storage
+    /// without a `Clone`, so no drop site may ever free these.
+    /// Monotonic, like `declared`.
+    borrowed_slots: BTreeSet<IRLocalId>,
+    /// Owned match-subject temps whose arms are currently being
+    /// lowered. A `return` or `break` inside an arm exits before the
+    /// arm tail's subject release runs, so early-exit lowering drops
+    /// this stack (innermost first) on the way out.
+    /// [`super::match_expr`] pushes before lowering arms, pops after.
+    pending_subject_temps: Vec<ValueId>,
 }
 
 /// Per-function closure bookkeeping. Two roles: outer fns mint
@@ -202,7 +222,52 @@ impl FnLowerCtx {
             closures: ClosureState::default(),
             loop_exit: Vec::new(),
             owned_values: BTreeSet::new(),
+            borrowed_slots: BTreeSet::new(),
+            pending_subject_temps: Vec::new(),
         }
+    }
+
+    /// Push an owned match-subject temp for the duration of its arms'
+    /// lowering. Paired with [`Self::pop_subject_temp`].
+    pub(crate) fn push_subject_temp(&mut self, value: ValueId) {
+        self.pending_subject_temps.push(value);
+    }
+
+    /// Pop the innermost pending subject temp.
+    pub(crate) fn pop_subject_temp(&mut self) {
+        self.pending_subject_temps
+            .pop()
+            .expect("IR lower: pop_subject_temp on empty stack (push/pop imbalance)");
+    }
+
+    /// Pending subject temps beyond the `from` stack watermark,
+    /// innermost first. `return` drains from 0 and `break` from the
+    /// enclosing loop's entry watermark.
+    pub(crate) fn subject_temps_since(&self, from: usize) -> Vec<ValueId> {
+        self.pending_subject_temps[from..]
+            .iter()
+            .rev()
+            .copied()
+            .collect()
+    }
+
+    /// Current subject-temp stack depth, captured by loop lowering as
+    /// the `break` drain watermark.
+    pub(crate) fn subject_temp_watermark(&self) -> usize {
+        self.pending_subject_temps.len()
+    }
+
+    /// Mark `local` as holding a borrowed reference (a pattern bind
+    /// writing the match subject's payload storage). No drop site may
+    /// free it. The subject's own release covers the storage.
+    pub(crate) fn mark_slot_borrowed(&mut self, local: IRLocalId) {
+        self.borrowed_slots.insert(local);
+    }
+
+    /// Does `local` hold a borrowed reference (see
+    /// [`Self::mark_slot_borrowed`])?
+    pub(crate) fn slot_is_borrowed(&self, local: IRLocalId) -> bool {
+        self.borrowed_slots.contains(&local)
     }
 
     /// Mark `value` as owning a fresh heap allocation, eligible to be
@@ -219,14 +284,16 @@ impl FnLowerCtx {
         self.owned_values.contains(&value)
     }
 
-    /// The heap-managed local slots live on this path, in reverse
-    /// declaration order (LIFO drop). Used by the drop-glue
+    /// The owning heap-managed local slots live on this path, in
+    /// reverse declaration order (LIFO drop). Used by the drop-glue
     /// lowering to free every owning slot at a control-flow exit.
+    /// Borrowed slots (pattern binds) are excluded because their
+    /// storage belongs to the match subject.
     pub(crate) fn heap_managed_slots(&self) -> Vec<(IRLocalId, IRType)> {
         let mut slots: Vec<(IRLocalId, IRType)> = self
             .locals
             .iter()
-            .filter(|(_, ty)| ty.is_heap_managed())
+            .filter(|(local, ty)| ty.is_heap_managed() && !self.slot_is_borrowed(**local))
             .map(|(local, ty)| (*local, ty.clone()))
             .collect();
         slots.reverse();
@@ -248,17 +315,21 @@ impl FnLowerCtx {
             .locals
             .iter()
             .filter(|(local, _)| !snapshot.contains_key(local))
-            .filter(|(_, ty)| ty.is_heap_managed())
+            .filter(|(local, ty)| ty.is_heap_managed() && !self.slot_is_borrowed(**local))
             .map(|(local, ty)| (*local, ty.clone()))
             .collect();
         slots.reverse();
         slots
     }
 
-    /// Push an enclosing loop's exit block. Paired with
-    /// [`Self::pop_loop_exit`] by [`super::loops`].
+    /// Push an enclosing loop's exit block, capturing the current
+    /// subject-temp watermark. Paired with [`Self::pop_loop_exit`]
+    /// by [`super::loops`].
     pub(crate) fn push_loop_exit(&mut self, exit: IRBlockId) {
-        self.loop_exit.push(exit);
+        self.loop_exit.push(LoopExit {
+            block: exit,
+            subject_temp_watermark: self.subject_temp_watermark(),
+        });
     }
 
     /// Pop the topmost loop-exit block. Panics on an empty stack,
@@ -269,11 +340,12 @@ impl FnLowerCtx {
             .expect("IR lower: pop_loop_exit on empty stack (push/pop imbalance)");
     }
 
-    /// The innermost enclosing loop's exit block, if any. `break`
-    /// lowering consults this to pick its `Branch` target. `None`
-    /// means `break` was reached outside any loop, which typecheck
-    /// should have already diagnosed, so lowering panics.
-    pub(crate) fn current_loop_exit(&self) -> Option<IRBlockId> {
+    /// The innermost enclosing loop's exit, if any. `break` lowering
+    /// consults this to pick its `Branch` target and the subject-temp
+    /// drain watermark. `None` means `break` was reached outside any
+    /// loop, which typecheck should have already diagnosed, so
+    /// lowering panics.
+    pub(crate) fn current_loop_exit(&self) -> Option<LoopExit> {
         self.loop_exit.last().copied()
     }
 
