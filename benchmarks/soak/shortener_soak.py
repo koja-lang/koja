@@ -15,9 +15,9 @@ Usage:
   koja build --release && ./build/release/shortener
 
   # Terminal 2: run the soak
-  ./benchmarks/shortener_soak.py                      # 40k requests
-  ./benchmarks/shortener_soak.py --requests 100000
-  ./benchmarks/shortener_soak.py --max-growth-mb 10   # exit 1 on leak
+  ./benchmarks/soak/shortener_soak.py                      # 40k requests
+  ./benchmarks/soak/shortener_soak.py --requests 100000
+  ./benchmarks/soak/shortener_soak.py --max-growth-mb 10   # exit 1 on leak
 
 Exit status is non-zero when --max-growth-mb is set and RSS grew more
 than that between the first and last sample (the first batch is

@@ -9,6 +9,7 @@ fn countdown(n: Int, acc: Int) -> Int
   if n == 0
     return acc
   end
+
   countdown(n - 1, acc + 1)
 end
 

@@ -10,7 +10,7 @@ fn scan(s: String, i: Int, n: Int, acc: Int) -> Int
     return acc
   end
 
-  match i - i / 13 * 13 == 0
+  match i % 13 == 0
     true -> scan(s, i + 1, n, acc + 2)
     false -> scan(s, i + 1, n, acc + 1)
   end
