@@ -349,6 +349,14 @@ thread_local! {
     /// This worker's id (its index into [`STEALERS`]), so `find_work` skips
     /// stealing from itself. Unused (`0`) off a worker thread.
     static WORKER_ID: Cell<usize> = const { Cell::new(0) };
+    /// Set by [`koja_rt_yield_check`] just before switching back, consumed
+    /// by the worker at switch-out. The yield slow path skips [`SCHED`]
+    /// entirely: the worker replays the `Running -> Runnable` edge under
+    /// the lock hold it already takes for `after_switch`. Safe because the
+    /// flag is written and read on the same worker thread within one
+    /// resume, and the process cannot migrate until `after_switch`
+    /// re-queues it.
+    static YIELDED: Cell<bool> = const { Cell::new(false) };
 }
 
 /// Yields the current process back to its worker's scheduling loop,
@@ -804,6 +812,10 @@ fn worker_loop(local: WorkerQueues, me: usize) {
         match claim_work() {
             Some((pid, proc_sp)) => {
                 let saved_sp = NativeExecutor.resume(pid, proc_sp);
+                // A voluntary yield (reduction budget spent) flagged itself
+                // in this worker's TLS instead of taking the lock. Reading
+                // it here is safe: worker_loop never migrates threads.
+                let yielded = YIELDED.with(|flag| flag.replace(false));
 
                 let mut guard = SCHED.lock().unwrap();
                 // Persist the saved `sp` into the executor's execution state,
@@ -813,9 +825,14 @@ fn worker_loop(local: WorkerQueues, me: usize) {
                 if let Some(pcb) = guard.get_mut(pid) {
                     pcb.execution.sp = saved_sp;
                 }
+                if yielded {
+                    // Replay the yield's `Running -> Runnable` edge so
+                    // `after_switch` re-queues the process.
+                    guard.yield_running(pid);
+                }
                 let reclaim = guard.after_switch(pid);
                 // Co-location: a process that yielded back (reduction budget
-                // spent) was staged in `pending_ready`, and `publish_ready`
+                // spent) re-queues via `after_switch`, and `publish_ready`
                 // keeps it on this worker's local deque so it resumes warm
                 // here.
                 publish_ready(&mut guard);
@@ -1306,17 +1323,23 @@ pub extern "C" fn koja_rt_set_priority(level: i64) {
 
 /// Slow path of the cooperative preemption point. Compiled process code
 /// decrements the per-worker `koja_reductions_left` budget inline at each
-/// `YieldCheck` and calls this only once it hits zero, so the body just
-/// re-queues the process (`Running -> Runnable`) and context-switches back to
-/// the worker, which re-enqueues it via the usual `after_switch` path. The
-/// next resume re-seeds the budget through `koja_seed_reductions`.
+/// `YieldCheck` and calls this only once it hits zero. It takes no lock:
+/// it flags the voluntary yield in [`YIELDED`] and switches back, and the
+/// worker replays the `Running -> Runnable` edge under the [`SCHED`] hold
+/// it already takes at switch-out. Taking the lock here instead serialized
+/// every compute-bound worker's quantum expiry through one mutex (the
+/// dominant contended stack in the process_storm profile). The next
+/// resume re-seeds the budget through `koja_seed_reductions`.
+///
+/// The [`YIELDED`] write happens before the switch on the running worker's
+/// own TLS, so the TLS-caching hazard above does not apply.
 #[unsafe(no_mangle)]
 pub extern "C" fn koja_rt_yield_check() {
     let pid = CURRENT_PID.with(|c| c.get());
     if pid < 0 {
         return;
     }
-    SCHED.lock().unwrap().yield_running(pid);
+    YIELDED.with(|flag| flag.set(true));
     yield_to_scheduler();
 }
 

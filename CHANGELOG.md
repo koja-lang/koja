@@ -11,6 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Recursive loops that carry a string or collection along are now roughly twice as fast.
 - Completed `call`s and timed-out `receive`s now clean up their timeout bookkeeping immediately, making message-heavy programs significantly faster and lighter on memory.
+- Compute-heavy processes no longer contend on a runtime lock at every preemption point, freeing up scheduler capacity on multi-core workloads.
 
 ### Fixed
 
