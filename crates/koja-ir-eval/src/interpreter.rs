@@ -19,7 +19,8 @@ use koja_ir::{
     ReceiveAfter, ReceiveArm, ReceiveTag, ResolvedBinaryLayout, ValueId, pack_integer_segment,
 };
 use koja_runtime_core::{
-    CrashInfo, Driver, ExitNotice, ExitReason, Readiness, Tag, duration_from_user_millis,
+    CrashInfo, Driver, ExitNotice, ExitReason, Readiness, Tag, TimerService,
+    duration_from_user_millis,
 };
 
 use crate::error::RuntimeError;
@@ -29,7 +30,7 @@ use crate::ops::{apply_binary_op, apply_unary_op};
 use crate::reactor::EvalReactor;
 use crate::scheduler::{
     self, CoreHandle, EvalClock, EvalDriver, EvalExecutor, EvalMessage, EvalSignals, EvalTable,
-    ProcessFuture, YieldOnce, block_on,
+    ProcessFuture, TimersHandle, YieldOnce, block_on,
 };
 use crate::value::{EnumPayload, Value};
 
@@ -69,7 +70,8 @@ impl Interpreter {
         // process future has `Output = ()`, so it stashes its `Value` result
         // here for `run_program` to return once the driver tears down.
         let core: CoreHandle = Rc::new(RefCell::new(EvalTable::new()));
-        let _guard = scheduler::install_runtime(Rc::clone(&core));
+        let timers: TimersHandle = Rc::new(RefCell::new(TimerService::new()));
+        let _guard = scheduler::install_runtime(Rc::clone(&core), Rc::clone(&timers));
         let main = core.borrow_mut().spawn((), None);
 
         let exit_cell: Rc<RefCell<Option<Result<Value, RuntimeError>>>> =
@@ -95,6 +97,7 @@ impl Interpreter {
         let signals = EvalSignals::new(program_uses_lifecycle(program));
         EvalDriver::new(
             core,
+            timers,
             executor,
             EvalReactor,
             EvalClock,
@@ -135,7 +138,8 @@ impl Interpreter {
         // the "runtime not installed" guard. The body's trailing value
         // surfaces through `exit_cell` once the driver tears down.
         let core: CoreHandle = Rc::new(RefCell::new(EvalTable::new()));
-        let _guard = scheduler::install_runtime(Rc::clone(&core));
+        let timers: TimersHandle = Rc::new(RefCell::new(TimerService::new()));
+        let _guard = scheduler::install_runtime(Rc::clone(&core), Rc::clone(&timers));
         let main = core.borrow_mut().spawn((), None);
 
         let exit_cell: Rc<RefCell<Option<Result<Value, RuntimeError>>>> =
@@ -153,6 +157,7 @@ impl Interpreter {
         let signals = EvalSignals::new(script_uses_lifecycle(script));
         EvalDriver::new(
             core,
+            timers,
             executor,
             EvalReactor,
             EvalClock,

@@ -18,6 +18,7 @@ pub mod memory;
 pub mod process_table;
 pub mod protocol;
 pub mod scheduler_trace;
+pub mod timer_service;
 pub mod timer_wheel;
 pub mod timing;
 pub mod wire;
@@ -33,6 +34,7 @@ pub use protocol::{
     SignalSource, Tag, Waker,
 };
 pub use scheduler_trace::{TraceEntry, TraceEvent};
-pub use timer_wheel::TimerEntry;
+pub use timer_service::TimerService;
+pub use timer_wheel::Due;
 pub use timing::duration_from_user_millis;
 pub use wire::{Envelope, OwnedPayload};

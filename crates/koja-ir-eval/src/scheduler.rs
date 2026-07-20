@@ -32,7 +32,7 @@ use std::time::{Duration, Instant};
 use koja_ir::IRSymbol;
 use koja_runtime_core::{
     Clock, CooperativeDriver, CrashInfo, Executor, ExitReason, Lifecycle, Message, MessageSource,
-    Pid, Priority, ProcessTable, Readiness, SignalSource, Tag, WaitTarget,
+    Pid, Priority, ProcessTable, Readiness, SignalSource, Tag, TimerService, WaitTarget,
 };
 
 use crate::interpreter::{CallResolver, build_exit_signal_value};
@@ -48,6 +48,11 @@ pub(crate) type EvalTable = ProcessTable<(), EvalMessage>;
 /// through this handle. The borrow is held only across single core
 /// operations, never across a `resume`.
 pub(crate) type CoreHandle = Rc<RefCell<EvalTable>>;
+
+/// Shared owner of the timer service, split from the table like the
+/// native `TIMERS` (single-threaded here, so the split is for API
+/// parity rather than contention).
+pub(crate) type TimersHandle = Rc<RefCell<TimerService<EvalMessage>>>;
 
 /// A suspended process body: the interpreter's `async` call tree, boxed
 /// so the executor can store and re-poll it across suspensions. Borrows
@@ -66,6 +71,9 @@ thread_local! {
     /// duration of the run. The cooperative analog of native's global
     /// `SCHED`, per-thread so parallel test runs stay isolated.
     static CORE: RefCell<Option<CoreHandle>> = const { RefCell::new(None) };
+    /// The timer service for the in-flight run, the cooperative analog
+    /// of native's global `TIMERS`. Installed and cleared with [`CORE`].
+    static TIMERS: RefCell<Option<TimersHandle>> = const { RefCell::new(None) };
     /// The PID the executor is currently resuming, set around each
     /// `resume`. Mirrors native's per-worker `CURRENT_PID`.
     static CURRENT_PID: Cell<Pid> = const { Cell::new(0) };
@@ -100,6 +108,7 @@ pub(crate) struct RuntimeGuard;
 impl Drop for RuntimeGuard {
     fn drop(&mut self) {
         CORE.with(|core| *core.borrow_mut() = None);
+        TIMERS.with(|timers| *timers.borrow_mut() = None);
         CURRENT_PID.with(|pid| pid.set(0));
         REDUCTIONS_LEFT.with(|remaining| remaining.set(0));
         PENDING_SPAWNS.with(|queue| queue.borrow_mut().clear());
@@ -107,10 +116,12 @@ impl Drop for RuntimeGuard {
     }
 }
 
-/// Installs `core` as the running table for the current `run_program`.
-/// The returned guard restores the thread-locals when dropped.
-pub(crate) fn install_runtime(core: CoreHandle) -> RuntimeGuard {
+/// Installs `core` and `timers` as the running runtime for the current
+/// `run_program`. The returned guard restores the thread-locals when
+/// dropped.
+pub(crate) fn install_runtime(core: CoreHandle, timers: TimersHandle) -> RuntimeGuard {
     CORE.with(|slot| *slot.borrow_mut() = Some(core));
+    TIMERS.with(|slot| *slot.borrow_mut() = Some(timers));
     CURRENT_PID.with(|pid| pid.set(0));
     REDUCTIONS_LEFT.with(|remaining| remaining.set(0));
     PENDING_SPAWNS.with(|queue| queue.borrow_mut().clear());
@@ -147,6 +158,19 @@ fn with_table<T>(f: impl FnOnce(&mut EvalTable) -> T) -> T {
     })
 }
 
+/// Runs `f` against the installed timer service. Same install lifetime
+/// as [`with_table`], and the two borrows are never held together.
+fn with_timers<T>(f: impl FnOnce(&mut TimerService<EvalMessage>) -> T) -> T {
+    TIMERS.with(|slot| {
+        let guard = slot.borrow();
+        let handle = guard
+            .as_ref()
+            .expect("eval runtime not installed: timers touched outside a process");
+        let mut timers = handle.borrow_mut();
+        f(&mut timers)
+    })
+}
+
 /// Pops the next received message (system traffic before business) for
 /// `pid`, or `None` when its receive queues are empty.
 pub(crate) fn pop_received(pid: Pid) -> Option<EvalMessage> {
@@ -157,25 +181,35 @@ pub(crate) fn pop_received(pid: Pid) -> Option<EvalMessage> {
     })
 }
 
-/// Parks `pid` as `Blocked` on its receive queues, with an optional wake
-/// deadline. The caller then yields ([`YieldOnce`]) so the driver regains
-/// control until a delivery or the deadline promotes the process.
+/// Parks `pid` as `Blocked` on `target`, recording (and arming) an
+/// optional wake deadline. The caller then yields ([`YieldOnce`]) so the
+/// driver regains control until a delivery or the deadline promotes the
+/// process. A refused park (killed mid-run) arms nothing.
+fn park(pid: Pid, target: WaitTarget, deadline: Option<Instant>) {
+    let parked = with_table(|table| table.try_park(pid, target, deadline));
+    if parked && let Some(deadline) = deadline {
+        with_timers(|timers| timers.arm_deadline(pid, deadline));
+    }
+}
+
+/// Parks `pid` on its receive queues (`receive` / `receive after`).
 pub(crate) fn park_receive(pid: Pid, deadline: Option<Instant>) {
-    with_table(|table| table.try_park(pid, WaitTarget::Receive, deadline));
+    park(pid, WaitTarget::Receive, deadline);
 }
 
-/// Parks `pid` as `Blocked` on its one-shot reply slot, with an optional
-/// timeout deadline. Used by `Ref.call` so only a reply delivery (not
-/// queued business/lifecycle traffic) wakes the caller. Calls are atomic.
+/// Parks `pid` on its one-shot reply slot, so only a reply delivery (not
+/// queued business/lifecycle traffic) wakes the caller (`Ref.call`).
+/// Calls are atomic.
 pub(crate) fn park_reply(pid: Pid, deadline: Option<Instant>) {
-    with_table(|table| table.try_park(pid, WaitTarget::Reply, deadline));
+    park(pid, WaitTarget::Reply, deadline);
 }
 
-/// Disarms `pid`'s wake deadline, cancelling its timer-wheel entry.
-/// Called on the wake paths (message arrival or timeout expiry) so
-/// completed waits leave nothing behind in the wheel.
+/// Disarms `pid`'s wake deadline, clearing the recorded instant and
+/// cancelling the timer entry. Called on the wake paths (message
+/// arrival or timeout expiry) so completed waits leave nothing behind.
 pub(crate) fn clear_deadline(pid: Pid) {
     with_table(|table| table.clear_deadline(pid));
+    with_timers(|timers| timers.cancel_deadline(pid));
 }
 
 /// Parks `pid` as `WaitingIO` for the reactor (`io_block`). Returns
@@ -212,7 +246,7 @@ pub(crate) fn deliver(pid: Pid, message: EvalMessage) {
 
 /// Schedules `message` for delivery to `pid` at `fire_at` (`Ref.send_after`).
 pub(crate) fn schedule_timer(pid: Pid, fire_at: Instant, message: EvalMessage) {
-    with_table(|table| table.push_timer(fire_at, pid, message));
+    with_timers(|timers| timers.schedule_deliver(fire_at, pid, message));
 }
 
 /// Takes the pending reply from `pid`'s one-shot reply slot, if one has
@@ -257,8 +291,13 @@ pub(crate) fn reply(coords: ReplyInfo, value: Value) -> bool {
 }
 
 /// Terminates `pid` (`Ref.kill`), dropping any reclaimed resources here.
+/// A reclaimed target may have died parked with a deadline armed, so
+/// cancel it too.
 pub(crate) fn kill(pid: Pid) {
     let reclaim = with_table(|table| table.kill(pid));
+    if reclaim.is_some() {
+        with_timers(|timers| timers.cancel_deadline(pid));
+    }
     drop(reclaim);
 }
 
@@ -481,8 +520,9 @@ impl<'a, R: CallResolver> EvalExecutor<'a, R> {
                 break;
             }
             for pid in staged {
-                let reclaim = self.core.borrow_mut().kill(pid);
-                drop(reclaim);
+                // The module-level kill also cancels a parked target's
+                // armed deadline via the installed timer service.
+                kill(pid);
                 self.futures.borrow_mut().remove(&pid);
             }
         }

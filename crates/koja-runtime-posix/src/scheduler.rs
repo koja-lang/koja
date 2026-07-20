@@ -8,15 +8,15 @@
 use std::alloc;
 use std::cell::{Cell, RefCell, UnsafeCell};
 use std::ptr;
-use std::sync::atomic::{AtomicBool, AtomicI32, AtomicI64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI32, AtomicI64, AtomicU64, Ordering};
 use std::sync::{Condvar, LazyLock, Mutex, Once, OnceLock};
 use std::thread;
 use std::time::{Duration, Instant};
 
 use crossbeam_deque::{Injector, Steal, Stealer, Worker};
 use koja_runtime_core::{
-    Clock, CrashInfo, Driver, Executor, ExitNotice, ExitReason, Lifecycle, Pid, Priority,
-    ProcessTable, Reclaim, SignalSource, duration_from_user_millis, slot_index,
+    Clock, CrashInfo, Driver, Due, Executor, ExitNotice, ExitReason, Lifecycle, Pid, Priority,
+    ProcessTable, Reclaim, SignalSource, TimerService, duration_from_user_millis, slot_index,
 };
 
 use crate::ffi::{fflush, koja_context_switch, koja_process_start, koja_seed_reductions, setvbuf};
@@ -48,16 +48,20 @@ fn poll_signals() {
         return;
     }
 
-    let main_pid = {
+    let (main_pid, newly_draining) = {
         let mut guard = SCHED.lock().unwrap();
-        // SIGTERM (`Shutdown`) starts the drain: refuse new spawns and arm the
-        // grace deadline. The signal is still delivered to main below so a
-        // lifecycle-aware program can shut itself down before the deadline.
-        if fired.contains(&Lifecycle::Shutdown) {
-            guard.enter_draining(NativeClock.now(), grace_period());
-        }
-        guard.main_pid()
+        // SIGTERM (`Shutdown`) starts the drain: refuse new spawns. The
+        // signal is still delivered to main below so a lifecycle-aware
+        // program can shut itself down before the grace deadline.
+        let newly_draining = fired.contains(&Lifecycle::Shutdown) && guard.enter_draining();
+        (guard.main_pid(), newly_draining)
     };
+    // Arm the grace backstop outside the SCHED hold (the two locks are
+    // never held together). `enter_draining` switched exactly once, so
+    // the window is measured from the first SIGTERM.
+    if newly_draining {
+        TIMERS.with(|timers| timers.arm_grace(NativeClock.now() + grace_period()));
+    }
     for lifecycle in fired {
         send_lifecycle_to(main_pid, lifecycle as i64);
     }
@@ -267,6 +271,69 @@ fn lifecycle_from_index(index: i64) -> Lifecycle {
 /// update processes. The lock is always released before context-switching.
 pub(crate) static SCHED: Mutex<NativeTable> = Mutex::new(ProcessTable::new());
 
+/// The timer service behind its own lock, gated by an atomic next-fire
+/// instant so the worker loop's per-iteration timer check is a single
+/// relaxed load instead of a [`SCHED`] acquisition.
+///
+/// Lock-order rule: this lock and [`SCHED`] are never held together.
+/// Firing drains under this lock, releases it, then applies under
+/// `SCHED`, where [`ProcessTable::promote_expired`] re-validates each
+/// wake against the live process state.
+struct Timers {
+    /// Reference instant for the gate encoding, fixed at first use.
+    epoch: Instant,
+    /// Nanoseconds from `epoch` to the next fire, `u64::MAX` when
+    /// nothing is pending. Refreshed under the service lock on every
+    /// mutation ([`Self::with`]), read without it.
+    gate: AtomicU64,
+    service: Mutex<TimerService<Envelope>>,
+}
+
+impl Timers {
+    fn new() -> Self {
+        Self {
+            epoch: Instant::now(),
+            gate: AtomicU64::new(u64::MAX),
+            service: Mutex::new(TimerService::new()),
+        }
+    }
+
+    /// Runs `f` under the service lock, refreshing the gate before
+    /// release so a due entry is never hidden behind a stale gate.
+    fn with<T>(&self, f: impl FnOnce(&mut TimerService<Envelope>) -> T) -> T {
+        let mut service = self.service.lock().unwrap();
+        let out = f(&mut service);
+        let gate = service
+            .next_fire()
+            .map_or(u64::MAX, |at| self.nanos_since_epoch(at));
+        self.gate.store(gate, Ordering::Relaxed);
+        out
+    }
+
+    /// Whether anything is due at `now`, the lock-free worker-loop check.
+    fn due(&self, now: Instant) -> bool {
+        let gate = self.gate.load(Ordering::Relaxed);
+        gate != u64::MAX && self.nanos_since_epoch(now) >= gate
+    }
+
+    /// The next fire instant, for sizing an idle park. Reads the gate,
+    /// no lock.
+    fn next_fire(&self) -> Option<Instant> {
+        match self.gate.load(Ordering::Relaxed) {
+            u64::MAX => None,
+            nanos => Some(self.epoch + Duration::from_nanos(nanos)),
+        }
+    }
+
+    fn nanos_since_epoch(&self, at: Instant) -> u64 {
+        at.saturating_duration_since(self.epoch).as_nanos() as u64
+    }
+}
+
+/// Timers, deadlines, and the drain-grace backstop, off the [`SCHED`]
+/// hot path.
+static TIMERS: LazyLock<Timers> = LazyLock::new(Timers::new);
+
 /// Condvar paired with [`SCHED`]. Workers park here when idle.
 /// Woken by `koja_rt_send`, `koja_rt_spawn`, the reactor, and on shutdown.
 pub(crate) static WORK_AVAILABLE: Condvar = Condvar::new();
@@ -450,10 +517,13 @@ fn deliver_exit_signals(table: &mut NativeTable) -> Vec<Envelope> {
 }
 
 /// Resources detached while settling a death edge, dropped by the
-/// caller after releasing the lock. The fields are never read by name
-/// (they exist so their `Drop` runs at that controlled point).
+/// caller after releasing the lock. `leftovers` and `reclaims` are never
+/// read by name (they exist so their `Drop` runs at that controlled
+/// point). `freed` names the reclaimed PIDs so the caller can cancel
+/// their armed deadlines via [`cancel_freed_deadlines`].
 #[allow(dead_code)]
 struct SettledExits {
+    freed: Vec<Pid>,
     leftovers: Vec<Envelope>,
     reclaims: Vec<Reclaim<NativeExecution, Envelope>>,
 }
@@ -464,18 +534,41 @@ struct SettledExits {
 /// `ExitSignal`s. Call at every site that can stage notices or kills
 /// (death edges and `koja_rt_monitor`).
 fn settle_exits(table: &mut NativeTable) -> SettledExits {
+    let mut freed = Vec::new();
     let mut reclaims = Vec::new();
     loop {
         let staged = table.take_pending_kills();
         if staged.is_empty() {
             break;
         }
-        reclaims.extend(staged.into_iter().filter_map(|pid| table.kill(pid)));
+        for pid in staged {
+            if let Some(reclaim) = table.kill(pid) {
+                freed.push(pid);
+                reclaims.push(reclaim);
+            }
+        }
     }
     SettledExits {
+        freed,
         leftovers: deliver_exit_signals(table),
         reclaims,
     }
+}
+
+/// Cancels freed processes' armed deadlines so they don't linger in the
+/// wheel until they age out. Call after releasing [`SCHED`] (the two
+/// locks are never held together). Slot reuse is harmless. A PID embeds
+/// its generation, so a stale cancel can never hit a recycled slot's
+/// fresh entry.
+fn cancel_freed_deadlines(freed: &[Pid]) {
+    if freed.is_empty() {
+        return;
+    }
+    TIMERS.with(|timers| {
+        for &pid in freed {
+            timers.cancel_deadline(pid);
+        }
+    });
 }
 
 /// `koja_rt_reply` status: the reply was slotted for a still-waiting caller.
@@ -573,6 +666,7 @@ unsafe extern "C" fn process_trampoline() {
         publish_ready(&mut guard);
         settled
     };
+    cancel_freed_deadlines(&settled.freed);
     drop(settled);
 
     WORK_AVAILABLE.notify_all();
@@ -781,19 +875,22 @@ fn worker_loop(local: WorkerQueues, me: usize) {
 
         poll_signals();
 
-        // Timers, deadlines, and the drain-grace backstop need the lock.
-        // Publish any wakes they (or `poll_signals`) staged to the injectors,
-        // then wake peers for them.
-        let published = {
+        // The timer gate: a single relaxed load. Only when something is
+        // actually due does this iteration take the timer lock (drain)
+        // and then SCHED (apply). Previously every iteration took SCHED
+        // here, which convoyed all workers.
+        let now = NativeClock.now();
+        if TIMERS.due(now) {
+            let (due, grace_fired) =
+                TIMERS.with(|timers| (timers.advance(now), timers.grace_expired(now)));
+
             let mut guard = SCHED.lock().unwrap();
-            let now = NativeClock.now();
-            guard.promote_due_deadlines(now);
-            fire_due_timers(&mut guard, now);
+            let leftovers = apply_due(&mut guard, due);
 
             // Drain grace elapsed: force-kill stragglers. They become `Dead`
             // (alive == 0, main included), so the runtime tears down. The
             // detached resources drop after the lock is released.
-            if guard.is_draining() && guard.grace_expired(now) {
+            if grace_fired && guard.is_draining() {
                 let reclaim = guard.kill_all();
                 // Everything is dead, so the staged cascade kills are
                 // no-ops. Settling still drains the staging queues.
@@ -801,13 +898,17 @@ fn worker_loop(local: WorkerQueues, me: usize) {
                 SHUTDOWN.store(true, Ordering::Relaxed);
                 drop(guard);
                 WORK_AVAILABLE.notify_all();
+                drop(leftovers);
                 drop(reclaim);
                 drop(settled);
                 break;
             }
-            publish_ready(&mut guard)
-        };
-        notify_workers(published);
+            // Publish the wakes the promotions staged, then wake peers.
+            let published = publish_ready(&mut guard);
+            drop(guard);
+            notify_workers(published);
+            drop(leftovers);
+        }
 
         match claim_work() {
             Some((pid, proc_sp)) => {
@@ -845,6 +946,11 @@ fn worker_loop(local: WorkerQueues, me: usize) {
 
                 if shutdown {
                     WORK_AVAILABLE.notify_all();
+                }
+                // A reclaimed process may have died parked with a deadline
+                // armed (a deferred kill). Cancel it now, off the lock.
+                if reclaim.is_some() {
+                    TIMERS.with(|timers| timers.cancel_deadline(pid));
                 }
                 drop(reclaim);
                 if shutdown {
@@ -907,7 +1013,7 @@ fn park_for_work(now: Instant) -> bool {
         return false;
     }
     let any_active = guard.any_active();
-    let nearest = guard.nearest_wakeup();
+    let nearest = TIMERS.next_fire();
     let idle_park = Duration::from_millis(if any_active { 10 } else { 100 });
     let timeout = nearest
         .map(|deadline| deadline.saturating_duration_since(now))
@@ -916,16 +1022,24 @@ fn park_for_work(now: Instant) -> bool {
     false
 }
 
-/// Delivers every timer due at `now`. The envelope was staged in wire
-/// format at schedule time, so firing is a plain delivery. An
-/// undeliverable timer (target gone or dead) drops its envelope,
-/// running its payload drop glue.
-fn fire_due_timers(table: &mut NativeTable, now: Instant) {
-    for entry in table.take_due_timers(now) {
-        if let Some(undelivered) = table.deliver(entry.target_pid, entry.envelope) {
-            drop(undelivered);
+/// Applies one drained timer batch under [`SCHED`], waking expired
+/// deadline waiters (re-validated by the table) and delivering due
+/// envelopes, staged in wire format at schedule time so firing is a
+/// plain delivery. Returns the undeliverable envelopes (target gone or
+/// dead) for the caller to drop after releasing the lock, since payload
+/// drop glue is arbitrary emitted code.
+fn apply_due(table: &mut NativeTable, due: Vec<Due<Envelope>>) -> Vec<Envelope> {
+    let mut leftovers = Vec::new();
+    for entry in due {
+        match entry {
+            Due::Deliver {
+                envelope,
+                target_pid,
+            } => leftovers.extend(table.deliver(target_pid, envelope)),
+            Due::Promote { pid, fire_at } => table.promote_expired(pid, fire_at),
         }
     }
+    leftovers
 }
 
 static RUNTIME_INIT: Once = Once::new();
@@ -1139,20 +1253,27 @@ pub extern "C" fn koja_rt_receive(out: *mut u8, out_cap: i64) -> i64 {
 #[unsafe(no_mangle)]
 pub extern "C" fn koja_rt_receive_timeout(out: *mut u8, out_cap: i64, timeout_ms: i64) -> i64 {
     let pid = CURRENT_PID.with(|c| c.get());
+    let now = Instant::now();
+    let deadline = now + duration_from_user_millis(timeout_ms);
 
-    {
+    let parked = {
         let mut guard = SCHED.lock().unwrap();
         let popped = guard.get_mut(pid).and_then(|p| p.mailbox.pop_received());
         if let Some(envelope) = popped {
             drop(guard);
             return deliver_envelope(envelope, out, out_cap);
         }
-        let now = Instant::now();
-        let deadline = now + duration_from_user_millis(timeout_ms);
         if deadline <= now {
             return -1;
         }
-        guard.try_park(pid, WaitTarget::Receive, Some(deadline));
+        guard.try_park(pid, WaitTarget::Receive, Some(deadline))
+    };
+    // Arm outside the SCHED hold. The order is safe: this process cannot
+    // be resumed (and so cannot re-arm or cancel) until it yields below,
+    // and a fire before the arm just misses an entry that lands on the
+    // next drain. A refused park (killed mid-run) arms nothing.
+    if parked {
+        TIMERS.with(|timers| timers.arm_deadline(pid, deadline));
     }
 
     yield_to_scheduler();
@@ -1162,6 +1283,7 @@ pub extern "C" fn koja_rt_receive_timeout(out: *mut u8, out_cap: i64, timeout_ms
         guard.clear_deadline(pid);
         guard.get_mut(pid).and_then(|p| p.mailbox.pop_received())
     };
+    TIMERS.with(|timers| timers.cancel_deadline(pid));
     envelope.map_or(-1, |envelope| deliver_envelope(envelope, out, out_cap))
 }
 
@@ -1200,6 +1322,7 @@ pub extern "C" fn koja_rt_call_receive(
     let deadline = Instant::now() + duration_from_user_millis(timeout_ms);
 
     loop {
+        let mut parked = false;
         let stale = {
             let mut guard = SCHED.lock().unwrap();
             match guard.get_mut(pid).and_then(|p| p.mailbox.take_reply()) {
@@ -1207,6 +1330,7 @@ pub extern "C" fn koja_rt_call_receive(
                     guard.clear_deadline(pid);
                     guard.clear_awaiting_reply(pid);
                     drop(guard);
+                    TIMERS.with(|timers| timers.cancel_deadline(pid));
                     deliver_envelope(envelope, out, out_cap);
                     return 0;
                 }
@@ -1215,9 +1339,11 @@ pub extern "C" fn koja_rt_call_receive(
                     if Instant::now() >= deadline {
                         guard.clear_deadline(pid);
                         guard.clear_awaiting_reply(pid);
+                        drop(guard);
+                        TIMERS.with(|timers| timers.cancel_deadline(pid));
                         return -1;
                     }
-                    guard.try_park(pid, WaitTarget::Reply, Some(deadline));
+                    parked = guard.try_park(pid, WaitTarget::Reply, Some(deadline));
                     None
                 }
             }
@@ -1225,7 +1351,14 @@ pub extern "C" fn koja_rt_call_receive(
 
         match stale {
             Some(stale) => drop(stale),
-            None => yield_to_scheduler(),
+            None => {
+                // Arm outside the SCHED hold (see `koja_rt_receive_timeout`
+                // for the ordering argument). A refused park arms nothing.
+                if parked {
+                    TIMERS.with(|timers| timers.arm_deadline(pid, deadline));
+                }
+                yield_to_scheduler();
+            }
         }
     }
 }
@@ -1384,11 +1517,8 @@ pub unsafe extern "C" fn koja_rt_send_after(
         unsafe { Envelope::from_payload(TAG_BUSINESS, msg_ptr, msg_len as usize, drop_glue) };
     let fire_at = Instant::now() + duration_from_user_millis(delay_ms);
 
-    {
-        let mut guard = SCHED.lock().unwrap();
-        guard.push_timer(fire_at, pid, envelope);
-    }
-
+    TIMERS.with(|timers| timers.schedule_deliver(fire_at, pid, envelope));
+    // Wake a parked worker so it re-sizes its idle park to the new timer.
     WORK_AVAILABLE.notify_one();
 }
 
@@ -1417,6 +1547,13 @@ pub extern "C" fn koja_rt_kill(pid: i64) {
     let woken = publish_ready(&mut guard);
     drop(guard);
     notify_workers(woken);
+    // A parked target may have died with a deadline armed. A deferred
+    // (on_cpu) kill reclaims at the owner's switch-out, which cancels
+    // there instead.
+    if reclaim.is_some() {
+        TIMERS.with(|timers| timers.cancel_deadline(pid));
+    }
+    cancel_freed_deadlines(&settled.freed);
     drop(reclaim);
     drop(settled);
 }
@@ -1433,6 +1570,7 @@ pub extern "C" fn koja_rt_monitor(target: i64) -> i64 {
     let woken = publish_ready(&mut guard);
     drop(guard);
     notify_workers(woken);
+    cancel_freed_deadlines(&settled.freed);
     drop(settled);
     token
 }

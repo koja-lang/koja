@@ -1,5 +1,8 @@
-//! Generational slotmap of live processes plus the scheduler's ready queue
-//! and timing wheel: the agnostic scheduling *policy*.
+//! Generational slotmap of live processes plus the scheduler's ready
+//! queue: the agnostic scheduling *policy*. Timers and deadlines live in
+//! the separately-locked [`TimerService`](crate::timer_service::TimerService).
+//! The table only records the armed deadline instant for the
+//! [`ProcessTable::promote_expired`] re-validation.
 //!
 //! A PID packs a slot index and a generation: `pid = (generation << 32) |
 //! index`. Slots are reused after a process dies (so memory is bounded), and
@@ -8,10 +11,7 @@
 //! of aliasing the new occupant.
 //!
 //! All state changes funnel through [`ProcessTable::transition`], which keeps
-//! the ready queue and the live / active counts in sync. The ready queue makes
-//! process pickup O(1), and the [`TimerWheel`] makes deadline promotion and
-//! timer firing amortized O(1). Both delayed deliveries and receive/call
-//! deadlines share one wheel keyed by fire instant.
+//! the ready queue and the live / active counts in sync.
 //!
 //! The table is generic over two platform types and contains **no locking,
 //! no threads, and no I/O**: the per-process execution state `X` (opaque,
@@ -23,12 +23,11 @@
 //! cooperative one.
 
 use std::collections::VecDeque;
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 use crate::mailbox::{Mailbox, WaitTarget};
 use crate::protocol::{Message, Pid, Tag};
 use crate::scheduler_trace::{SchedulerTrace, TraceEntry, TraceEvent};
-use crate::timer_wheel::{Due, TimerEntry, TimerToken, TimerWheel};
 
 /// Splits a packed PID into `(slot_index, generation)`.
 fn decode(pid: Pid) -> (u32, u32) {
@@ -58,12 +57,11 @@ pub struct ProcessControlBlock<X, M> {
     /// saved `sp`, stack mapping). Opaque to the table.
     pub execution: X,
     /// Optional wake deadline. Set when parking with a timeout, cleared on
-    /// resume. The driver promotes `Blocked -> Runnable` when it passes.
+    /// resume. [`ProcessTable::promote_expired`] re-validates a fired
+    /// timer entry against it before waking. The entry itself lives in
+    /// the driver's `TimerService`, armed and cancelled by the adapter
+    /// outside the table lock.
     pub deadline: Option<Instant>,
-    /// Wheel handle for the armed `deadline`, so waking cancels the
-    /// entry instead of letting it age out. Cleared together with
-    /// `deadline`.
-    deadline_token: Option<TimerToken>,
     /// Routed message queues plus the one-shot reply slot.
     pub mailbox: Mailbox<M>,
     /// Correlation token of the `Ref.call` this process is currently waiting
@@ -105,7 +103,6 @@ impl<X, M> ProcessControlBlock<X, M> {
         Self {
             execution,
             deadline: None,
-            deadline_token: None,
             mailbox: Mailbox::default(),
             awaiting_reply: None,
             crash_info: None,
@@ -302,7 +299,7 @@ pub struct ScheduleCounters {
     /// Ready-queue entries skipped by `claim_next` (killed, already resumed,
     /// or still `on_cpu`).
     pub stale_claims_skipped: u64,
-    /// Deadline-heap entries rejected by `promote_due_deadlines`.
+    /// Fired deadline entries rejected by `promote_expired`.
     pub stale_deadlines_skipped: u64,
     /// Envelopes bounced off a dead or stale target.
     pub undeliverable_envelopes: u64,
@@ -326,18 +323,17 @@ impl ScheduleCounters {
 }
 
 /// The runtime's lifecycle mode. `Draining` is entered on `SIGTERM`: new
-/// spawns are refused and a grace deadline is armed, after which any
-/// straggler is force-killed. Resets to `Running` by construction (a fresh
-/// table per program / per run).
+/// spawns are refused and the adapter arms a grace deadline in its
+/// `TimerService`, after which any straggler is force-killed. Resets to
+/// `Running` by construction (a fresh table per program / per run).
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Mode {
     Running,
     Draining,
 }
 
-/// The scheduler's process store: a generational slotmap with a ready queue
-/// and a timing wheel. Contains no synchronization. The adapter's driver
-/// supplies it.
+/// The scheduler's process store: a generational slotmap with a ready
+/// queue. Contains no synchronization. The adapter's driver supplies it.
 pub struct ProcessTable<X, M> {
     /// Count of `Running` + `WaitingIO` processes (park-timeout heuristic).
     active: usize,
@@ -345,10 +341,6 @@ pub struct ProcessTable<X, M> {
     alive: usize,
     /// Invariant counters, exposed to fixtures via the adapter.
     counters: ScheduleCounters,
-    /// Due deliveries staged by the most recent [`Self::advance_timers`],
-    /// drained by [`Self::take_due_timers`]. Promotions are applied inline
-    /// during the advance. Only the deliveries the driver routes wait here.
-    due_delivers: Vec<TimerEntry<M>>,
     /// When set, [`Self::enqueue_ready`] stages PIDs in [`Self::pending_ready`]
     /// for an adapter that owns the ready queue (native work-stealing) instead
     /// of pushing into [`Self::ready`]. Off by default, so the cooperative and
@@ -356,13 +348,6 @@ pub struct ProcessTable<X, M> {
     external_ready: bool,
     /// Indices of free slots available for reuse.
     free: Vec<u32>,
-    /// When draining, the instant after which stragglers are force-killed
-    /// (armed once by [`Self::enter_draining`]). `None` while `Running`.
-    grace_deadline: Option<Instant>,
-    /// The instant the wheel was last advanced to, so the paired
-    /// `promote_due_deadlines` / `take_due_timers` calls for one `now` drain
-    /// the wheel exactly once.
-    last_advance: Option<Instant>,
     /// First spawned process (the program entry). Drives signal delivery and
     /// the shutdown decision. `0` until the first spawn.
     main_pid: Pid,
@@ -392,8 +377,6 @@ pub struct ProcessTable<X, M> {
     slots: Vec<Slot<X, M>>,
     /// Lifecycle event ring, dumped at shutdown under `KOJA_SCHED_TRACE`.
     trace: SchedulerTrace,
-    /// Delayed deliveries and receive/call deadlines, soonest first.
-    wheel: TimerWheel<M>,
 }
 
 impl<X, M: Message> ProcessTable<X, M> {
@@ -402,11 +385,8 @@ impl<X, M: Message> ProcessTable<X, M> {
             active: 0,
             alive: 0,
             counters: ScheduleCounters::new(),
-            due_delivers: Vec::new(),
             external_ready: false,
             free: Vec::new(),
-            grace_deadline: None,
-            last_advance: None,
             main_pid: 0,
             mode: Mode::Running,
             monitors: Vec::new(),
@@ -418,7 +398,6 @@ impl<X, M: Message> ProcessTable<X, M> {
             ready_ages: [0; LEVELS],
             slots: Vec::new(),
             trace: SchedulerTrace::new(),
-            wheel: TimerWheel::new(),
         }
     }
 
@@ -516,11 +495,6 @@ impl<X, M: Message> ProcessTable<X, M> {
             return None;
         }
         let process = slot.process.take()?;
-        // A process dying while parked with a timeout must not strand
-        // its deadline entry in the wheel.
-        if let Some(token) = process.deadline_token {
-            self.wheel.cancel(token);
-        }
         slot.generation = slot.generation.wrapping_add(1);
         self.free.push(index);
         self.trace.record(pid, TraceEvent::Freed);
@@ -615,34 +589,30 @@ impl<X, M: Message> ProcessTable<X, M> {
     /// resurrect it.
     /// A refused caller should still yield. The worker sees `Dead` on
     /// switch-out and reclaims the slot, so the frame never resumes.
+    ///
+    /// The table only records `deadline`. After a successful park the
+    /// caller arms the actual timer entry in its `TimerService`, outside
+    /// this lock.
     pub fn try_park(&mut self, pid: Pid, target: WaitTarget, deadline: Option<Instant>) -> bool {
         if !self.is_alive(pid) {
             self.note_refused_park(pid);
             return false;
         }
-        // Re-parking (the call_receive stale-reply loop) must replace the
-        // previous wheel entry, not accumulate a duplicate.
-        self.clear_deadline(pid);
         self.transition(pid, ProcessState::Blocked);
-        let token = deadline.map(|deadline| self.wheel.insert_deadline(deadline, pid));
         if let Some(process) = self.get_mut(pid) {
             process.deadline = deadline;
-            process.deadline_token = token;
             process.waiting = target;
         }
         true
     }
 
-    /// Disarms `pid`'s wake deadline: cancels the wheel entry and clears
-    /// the control-block fields. Wake paths call this unconditionally,
-    /// so a process without an armed deadline is a no-op.
+    /// Clears `pid`'s recorded wake deadline, so a later fired timer
+    /// entry fails the [`promote_expired`](Self::promote_expired)
+    /// re-validation. Wake paths pair this with the `TimerService`
+    /// cancel, made outside this lock.
     pub fn clear_deadline(&mut self, pid: Pid) {
-        let Some(process) = self.get_mut(pid) else {
-            return;
-        };
-        process.deadline = None;
-        if let Some(token) = process.deadline_token.take() {
-            self.wheel.cancel(token);
+        if let Some(process) = self.get_mut(pid) {
+            process.deadline = None;
         }
     }
 
@@ -987,77 +957,25 @@ impl<X, M: Message> ProcessTable<X, M> {
         displaced
     }
 
-    /// Schedules a delayed message. Cancellation is lazy: a timer aimed at a
-    /// process that later dies is simply dropped (undeliverable) when it fires,
-    /// reclaiming its envelope then.
-    pub fn push_timer(&mut self, fire_at: Instant, target_pid: Pid, envelope: M) {
-        self.wheel.insert_deliver(fire_at, target_pid, envelope);
-    }
-
-    /// Drains the wheel up to `now` exactly once: applies expired deadlines
-    /// inline (promoting validated waiters, counting stale entries) and stages
-    /// due deliveries in [`Self::due_delivers`] for the driver to route. The
-    /// paired `promote_due_deadlines` / `take_due_timers` calls a driver makes
-    /// for one `now` both route here, and the second is a no-op.
-    fn advance_timers(&mut self, now: Instant) {
-        if self.last_advance.is_some_and(|last| now <= last) {
-            return;
+    /// Wakes `pid` for a fired deadline entry, re-validating it against
+    /// the live state first. The entry is stale (counted, skipped) when
+    /// the process was woken by a message, resumed, re-blocked with a
+    /// different deadline, or died between the fire and this apply. The
+    /// re-validation is what lets the `TimerService` fire under its own
+    /// lock without ever holding this one.
+    pub fn promote_expired(&mut self, pid: Pid, fire_at: Instant) {
+        let expired = matches!(
+            self.get(pid),
+            Some(process)
+                if process.state == ProcessState::Blocked
+                    && process.deadline == Some(fire_at)
+        );
+        if expired {
+            self.clear_deadline(pid);
+            self.transition(pid, ProcessState::Runnable);
+        } else {
+            self.counters.stale_deadlines_skipped += 1;
         }
-        self.last_advance = Some(now);
-        for due in self.wheel.drain_due(now) {
-            match due {
-                Due::Deliver {
-                    envelope,
-                    target_pid,
-                } => self.due_delivers.push(TimerEntry {
-                    envelope,
-                    target_pid,
-                }),
-                Due::Promote { pid, fire_at } => {
-                    let expired = matches!(
-                        self.get(pid),
-                        Some(process)
-                            if process.state == ProcessState::Blocked
-                                && process.deadline == Some(fire_at)
-                    );
-                    if expired {
-                        // The fired entry already left the wheel, so just
-                        // clear the control-block fields.
-                        if let Some(process) = self.get_mut(pid) {
-                            process.deadline = None;
-                            process.deadline_token = None;
-                        }
-                        self.transition(pid, ProcessState::Runnable);
-                    } else {
-                        self.counters.stale_deadlines_skipped += 1;
-                    }
-                }
-            }
-        }
-    }
-
-    /// Removes and returns every timer whose `fire_at` is at or before
-    /// `now`, soonest first. The caller delivers each staged envelope.
-    /// Pairs with [`Self::promote_due_deadlines`] for the same `now`: the
-    /// wheel is advanced at most once per `now`, so whichever of the two
-    /// runs first does the draining and the second only reads what that
-    /// advance staged.
-    pub fn take_due_timers(&mut self, now: Instant) -> Vec<TimerEntry<M>> {
-        self.advance_timers(now);
-        std::mem::take(&mut self.due_delivers)
-    }
-
-    /// Promotes every process whose receive deadline has passed. Stale entries
-    /// (the process was woken by a message, resumed, or died, or re-blocked
-    /// with a different deadline) are validated against the live state and
-    /// skipped.
-    ///
-    /// Drives the shared wheel via [`Self::advance_timers`]. A driver calls
-    /// this *before* [`Self::take_due_timers`] for the same `now`: this call
-    /// advances the wheel and applies expired deadlines inline, and the
-    /// paired `take` then collects the deliveries staged by the same advance.
-    pub fn promote_due_deadlines(&mut self, now: Instant) {
-        self.advance_timers(now);
     }
 
     /// Whether any process is `Running` or `WaitingIO`.
@@ -1071,37 +989,22 @@ impl<X, M: Message> ProcessTable<X, M> {
         self.alive == 0 || (self.main_pid != 0 && !self.is_alive(self.main_pid))
     }
 
-    /// The soonest pending timer or deadline (folding in the drain grace
-    /// deadline so the idle park wakes to enforce it), for sizing the idle
-    /// park.
-    pub fn nearest_wakeup(&self) -> Option<Instant> {
-        match (self.wheel.nearest(), self.grace_deadline) {
-            (Some(timer), Some(grace)) => Some(timer.min(grace)),
-            (timer, grace) => timer.or(grace),
-        }
-    }
-
-    /// Enters `Draining` and arms the grace deadline at `now + grace`.
-    /// Idempotent: a second `SIGTERM` neither re-arms the deadline nor
-    /// extends it, so the grace window is measured from the first signal.
-    pub fn enter_draining(&mut self, now: Instant, grace: Duration) {
+    /// Enters `Draining`, returning whether this call performed the
+    /// switch so the adapter arms the grace deadline in its
+    /// `TimerService` exactly once (a second `SIGTERM` neither re-arms
+    /// nor extends the window).
+    pub fn enter_draining(&mut self) -> bool {
         if self.mode == Mode::Draining {
-            return;
+            return false;
         }
         self.mode = Mode::Draining;
-        self.grace_deadline = Some(now + grace);
+        true
     }
 
     /// Whether the runtime is draining (a `SIGTERM` has been seen). New
     /// spawns are refused while this holds.
     pub fn is_draining(&self) -> bool {
         self.mode == Mode::Draining
-    }
-
-    /// Whether the drain grace deadline has passed at `now`. Always `false`
-    /// while `Running` (no deadline armed).
-    pub fn grace_expired(&self, now: Instant) -> bool {
-        self.grace_deadline.is_some_and(|deadline| now >= deadline)
     }
 
     /// Force-kills every live process (recording [`ExitReason::Killed`]),
@@ -1222,29 +1125,15 @@ mod tests {
     }
 
     #[test]
-    fn enter_draining_arms_grace_once() {
+    fn enter_draining_switches_once() {
         let mut table = TestTable::new();
         assert!(!table.is_draining());
-        assert!(!table.grace_expired(Instant::now()));
-
-        let start = Instant::now();
-        table.enter_draining(start, Duration::from_secs(5));
+        assert!(table.enter_draining(), "first SIGTERM performs the switch");
         assert!(table.is_draining());
-        assert!(!table.grace_expired(start));
-        assert!(table.grace_expired(start + Duration::from_secs(5)));
-
-        // A second SIGTERM neither re-arms nor extends the window.
-        table.enter_draining(start + Duration::from_secs(1), Duration::from_secs(100));
-        assert!(table.grace_expired(start + Duration::from_secs(5)));
-    }
-
-    #[test]
-    fn nearest_wakeup_folds_in_grace_deadline() {
-        let mut table = TestTable::new();
-        assert_eq!(table.nearest_wakeup(), None);
-        let start = Instant::now();
-        table.enter_draining(start, Duration::from_secs(5));
-        assert_eq!(table.nearest_wakeup(), Some(start + Duration::from_secs(5)));
+        // A second SIGTERM reports false so the adapter arms the grace
+        // deadline exactly once.
+        assert!(!table.enter_draining());
+        assert!(table.is_draining());
     }
 
     #[test]
@@ -1358,24 +1247,6 @@ mod tests {
     }
 
     #[test]
-    fn timer_wheel_pops_in_fire_order() {
-        let mut table = TestTable::new();
-        let base = Instant::now();
-        table.push_timer(base + Duration::from_millis(30), 1, fake_envelope());
-        table.push_timer(base + Duration::from_millis(10), 2, fake_envelope());
-        table.push_timer(base + Duration::from_millis(20), 3, fake_envelope());
-
-        let due = table.take_due_timers(base + Duration::from_millis(25));
-        let pids: Vec<Pid> = due.iter().map(|entry| entry.target_pid).collect();
-        assert_eq!(pids, vec![2, 3], "soonest-first, only due timers");
-        assert_eq!(
-            table.nearest_wakeup(),
-            Some(base + Duration::from_millis(30)),
-            "remaining timer still pending"
-        );
-    }
-
-    #[test]
     fn park_refuses_killed_process() {
         // A cross-worker kill can land while the victim is mid-run. Its next
         // park must not resurrect it over the `Dead` tombstone.
@@ -1444,7 +1315,22 @@ mod tests {
     }
 
     #[test]
-    fn stale_deadline_skip_is_counted() {
+    fn promote_expired_wakes_a_deadline_waiter() {
+        let mut table = TestTable::new();
+        let pid = fake_spawn(&mut table);
+        table.transition(pid, ProcessState::Running);
+        let deadline = Instant::now() + Duration::from_millis(5);
+        assert!(table.try_park(pid, WaitTarget::Receive, Some(deadline)));
+
+        table.promote_expired(pid, deadline);
+        let process = table.get(pid).unwrap();
+        assert_eq!(process.state, ProcessState::Runnable);
+        assert_eq!(process.deadline, None, "wake clears the recorded deadline");
+        assert_eq!(table.counters().stale_deadlines_skipped, 0);
+    }
+
+    #[test]
+    fn promote_expired_skips_a_message_woken_waiter() {
         let mut table = TestTable::new();
         let pid = fake_spawn(&mut table);
         table.transition(pid, ProcessState::Running);
@@ -1452,42 +1338,24 @@ mod tests {
         assert!(table.try_park(pid, WaitTarget::Receive, Some(deadline)));
 
         // A message wins the race: the waiter is promoted, leaving the
-        // deadline entry stale.
+        // fired entry stale.
         assert!(table.deliver(pid, fake_envelope()).is_none());
         assert_eq!(table.get(pid).unwrap().state, ProcessState::Runnable);
 
-        table.promote_due_deadlines(deadline + Duration::from_millis(1));
+        table.promote_expired(pid, deadline);
         assert_eq!(table.counters().stale_deadlines_skipped, 1);
         assert_eq!(table.get(pid).unwrap().state, ProcessState::Runnable);
     }
 
     #[test]
-    fn clearing_a_deadline_cancels_the_wheel_entry() {
+    fn promote_expired_skips_a_reparked_waiter() {
         let mut table = TestTable::new();
         let pid = fake_spawn(&mut table);
         table.transition(pid, ProcessState::Running);
 
-        let deadline = Instant::now() + Duration::from_millis(10);
-        assert!(table.try_park(pid, WaitTarget::Receive, Some(deadline)));
-        assert!(table.deliver(pid, fake_envelope()).is_none());
-
-        // The resume path disarms the deadline, so nothing is pending
-        // and the drain sees no entry at all, stale or otherwise.
-        table.clear_deadline(pid);
-        assert_eq!(table.nearest_wakeup(), None);
-        table.promote_due_deadlines(deadline + Duration::from_millis(1));
-        assert_eq!(table.counters().stale_deadlines_skipped, 0);
-        assert_eq!(table.get(pid).unwrap().state, ProcessState::Runnable);
-    }
-
-    #[test]
-    fn repark_replaces_the_deadline_entry() {
-        let mut table = TestTable::new();
-        let pid = fake_spawn(&mut table);
-        table.transition(pid, ProcessState::Running);
-
-        // First park, then a message wake and a re-park with a later
-        // deadline, as the call_receive stale-reply loop does.
+        // Park, stale-reply wake, re-park with a later deadline, as the
+        // call_receive loop does. The first deadline's fire must not wake
+        // the re-parked waiter early.
         let first = Instant::now() + Duration::from_millis(10);
         let second = first + Duration::from_millis(10);
         assert!(table.try_park(pid, WaitTarget::Reply, Some(first)));
@@ -1495,29 +1363,44 @@ mod tests {
         assert_eq!(table.claim_next(), Some(pid));
         assert!(table.try_park(pid, WaitTarget::Reply, Some(second)));
 
-        // Accumulated entries would keep the first instant nearest and
-        // count a stale skip when it fired.
-        assert_eq!(table.nearest_wakeup(), Some(second));
-        table.promote_due_deadlines(second + Duration::from_millis(1));
-        assert_eq!(table.counters().stale_deadlines_skipped, 0);
+        table.promote_expired(pid, first);
+        assert_eq!(table.counters().stale_deadlines_skipped, 1);
+        assert_eq!(table.get(pid).unwrap().state, ProcessState::Blocked);
+
+        table.promote_expired(pid, second);
         assert_eq!(table.get(pid).unwrap().state, ProcessState::Runnable);
     }
 
     #[test]
-    fn killing_a_parked_process_cancels_its_deadline() {
+    fn promote_expired_skips_a_cleared_deadline() {
+        let mut table = TestTable::new();
+        let pid = fake_spawn(&mut table);
+        table.transition(pid, ProcessState::Running);
+        let deadline = Instant::now() + Duration::from_millis(10);
+        assert!(table.try_park(pid, WaitTarget::Receive, Some(deadline)));
+        assert!(table.deliver(pid, fake_envelope()).is_none());
+
+        // The resume path cleared the recorded deadline, so a late fire
+        // for it is stale.
+        table.clear_deadline(pid);
+        table.promote_expired(pid, deadline);
+        assert_eq!(table.counters().stale_deadlines_skipped, 1);
+        assert_eq!(table.get(pid).unwrap().state, ProcessState::Runnable);
+    }
+
+    #[test]
+    fn promote_expired_skips_a_dead_waiter() {
         let mut table = TestTable::new();
         let pid = fake_spawn(&mut table);
         table.claim_next().unwrap();
         let deadline = Instant::now() + Duration::from_millis(10);
         assert!(table.try_park(pid, WaitTarget::Receive, Some(deadline)));
         assert!(table.after_switch(pid).is_none(), "parked, not dead");
-
         assert!(table.kill(pid).is_some(), "off-cpu target frees inline");
-        assert_eq!(
-            table.nearest_wakeup(),
-            None,
-            "the freed slot's entry must not linger in the wheel",
-        );
+
+        table.promote_expired(pid, deadline);
+        assert_eq!(table.counters().stale_deadlines_skipped, 1);
+        assert_eq!(table.counters().violations, 0);
     }
 
     #[test]
@@ -1574,7 +1457,6 @@ mod tests {
         assert_eq!(process.state, ProcessState::Blocked);
         assert_eq!(process.waiting, WaitTarget::Reply);
         assert_eq!(process.deadline, Some(deadline));
-        assert_eq!(table.nearest_wakeup(), Some(deadline));
     }
 
     #[test]

@@ -28,6 +28,8 @@ use crate::process_table::{ProcessState, ProcessTable};
 use crate::protocol::{
     Clock, Driver, Executor, Lifecycle, MessageSource, Reactor, SignalSource, Waker,
 };
+use crate::timer_service::TimerService;
+use crate::timer_wheel::Due;
 
 /// Idle park cap when a process is `Running`/`WaitingIO`. Work is
 /// imminent, so wake often. Mirrors the native worker loop.
@@ -56,6 +58,10 @@ where
     grace: Duration,
     reactor: R,
     signals: S,
+    /// Timers, deadlines, and the drain-grace backstop. Shared with the
+    /// adapter's park sites (which arm deadlines from process context),
+    /// hence the `Rc` like [`Self::core`].
+    timers: Rc<RefCell<TimerService<E::Message>>>,
 }
 
 impl<E, R, C, S> CooperativeDriver<E, R, C, S>
@@ -70,6 +76,7 @@ where
     /// table and the executor before calling [`Driver::run`].
     pub fn new(
         core: Rc<RefCell<ProcessTable<E::Execution, E::Message>>>,
+        timers: Rc<RefCell<TimerService<E::Message>>>,
         executor: E,
         reactor: R,
         clock: C,
@@ -83,6 +90,7 @@ where
             grace,
             reactor,
             signals,
+            timers,
         }
     }
 
@@ -97,9 +105,9 @@ where
         // A `SIGTERM` (`Shutdown`) starts the drain: refuse new spawns and
         // arm the grace deadline. The signal is still delivered to main so a
         // `Lifecycle`-aware program can shut itself down before the deadline.
-        if fired.contains(&Lifecycle::Shutdown) {
+        if fired.contains(&Lifecycle::Shutdown) && self.core.borrow_mut().enter_draining() {
             let now = self.clock.now();
-            self.core.borrow_mut().enter_draining(now, self.grace);
+            self.timers.borrow_mut().arm_grace(now + self.grace);
         }
         let main = self.core.borrow().main_pid();
         for event in fired {
@@ -113,9 +121,12 @@ where
     /// the shutdown condition (`alive == 0`) fires. Drops the detached
     /// resources off the table borrow.
     fn enforce_grace(&self, now: Instant) {
+        if !self.timers.borrow().grace_expired(now) {
+            return;
+        }
         let reclaimed = {
             let mut table = self.core.borrow_mut();
-            if table.is_draining() && table.grace_expired(now) {
+            if table.is_draining() {
                 table.kill_all()
             } else {
                 Vec::new()
@@ -124,16 +135,25 @@ where
         drop(reclaimed);
     }
 
-    /// Delivers every timer due at `now`, dropping any undeliverable
-    /// payload (target gone) off the table borrow.
+    /// Fires everything due at `now`, promoting expired deadline waiters
+    /// (re-validated by the table) and delivering due timers. Any
+    /// undeliverable payload (target gone) is dropped off the table
+    /// borrow.
     fn fire_due_timers(&self, now: Instant) {
-        let due = self.core.borrow_mut().take_due_timers(now);
+        let due = self.timers.borrow_mut().advance(now);
         for entry in due {
-            let leftover = self
-                .core
-                .borrow_mut()
-                .deliver(entry.target_pid, entry.envelope);
-            drop(leftover);
+            match entry {
+                Due::Deliver {
+                    envelope,
+                    target_pid,
+                } => {
+                    let leftover = self.core.borrow_mut().deliver(target_pid, envelope);
+                    drop(leftover);
+                }
+                Due::Promote { pid, fire_at } => {
+                    self.core.borrow_mut().promote_expired(pid, fire_at);
+                }
+            }
         }
     }
 
@@ -141,10 +161,8 @@ where
     /// that bounds signal latency, polling the reactor for fd readiness
     /// meanwhile. Promotes any process the reactor resumes.
     fn idle(&self, now: Instant) {
-        let (nearest, any_active) = {
-            let table = self.core.borrow();
-            (table.nearest_wakeup(), table.any_active())
-        };
+        let nearest = self.timers.borrow().next_fire();
+        let any_active = self.core.borrow().any_active();
         let cap = if any_active {
             IDLE_CAP_ACTIVE
         } else {
@@ -203,7 +221,6 @@ where
         loop {
             self.deliver_signals();
             let now = self.clock.now();
-            self.core.borrow_mut().promote_due_deadlines(now);
             self.fire_due_timers(now);
             self.enforce_grace(now);
 
@@ -332,6 +349,7 @@ mod tests {
         let grace = Duration::from_secs(3600);
         CooperativeDriver::new(
             Rc::clone(&core),
+            Rc::new(RefCell::new(TimerService::new())),
             MockExecutor {
                 core: Rc::clone(&core),
                 exit_on_resume: true,
@@ -368,6 +386,7 @@ mod tests {
         let grace = Duration::from_millis(250);
         CooperativeDriver::new(
             Rc::clone(&core),
+            Rc::new(RefCell::new(TimerService::new())),
             // Never exits on its own: the only way `run` returns is the
             // grace-deadline hard-kill.
             MockExecutor {
