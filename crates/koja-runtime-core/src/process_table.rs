@@ -28,7 +28,7 @@ use std::time::{Duration, Instant};
 use crate::mailbox::{Mailbox, WaitTarget};
 use crate::protocol::{Message, Pid, Tag};
 use crate::scheduler_trace::{SchedulerTrace, TraceEntry, TraceEvent};
-use crate::timer_wheel::{Due, TimerEntry, TimerWheel};
+use crate::timer_wheel::{Due, TimerEntry, TimerToken, TimerWheel};
 
 /// Splits a packed PID into `(slot_index, generation)`.
 fn decode(pid: Pid) -> (u32, u32) {
@@ -60,6 +60,10 @@ pub struct ProcessControlBlock<X, M> {
     /// Optional wake deadline. Set when parking with a timeout, cleared on
     /// resume. The driver promotes `Blocked -> Runnable` when it passes.
     pub deadline: Option<Instant>,
+    /// Wheel handle for the armed `deadline`, so waking cancels the
+    /// entry instead of letting it age out. Cleared together with
+    /// `deadline`.
+    deadline_token: Option<TimerToken>,
     /// Routed message queues plus the one-shot reply slot.
     pub mailbox: Mailbox<M>,
     /// Correlation token of the `Ref.call` this process is currently waiting
@@ -101,6 +105,7 @@ impl<X, M> ProcessControlBlock<X, M> {
         Self {
             execution,
             deadline: None,
+            deadline_token: None,
             mailbox: Mailbox::default(),
             awaiting_reply: None,
             crash_info: None,
@@ -511,6 +516,11 @@ impl<X, M: Message> ProcessTable<X, M> {
             return None;
         }
         let process = slot.process.take()?;
+        // A process dying while parked with a timeout must not strand
+        // its deadline entry in the wheel.
+        if let Some(token) = process.deadline_token {
+            self.wheel.cancel(token);
+        }
         slot.generation = slot.generation.wrapping_add(1);
         self.free.push(index);
         self.trace.record(pid, TraceEvent::Freed);
@@ -610,15 +620,30 @@ impl<X, M: Message> ProcessTable<X, M> {
             self.note_refused_park(pid);
             return false;
         }
+        // Re-parking (the call_receive stale-reply loop) must replace the
+        // previous wheel entry, not accumulate a duplicate.
+        self.clear_deadline(pid);
         self.transition(pid, ProcessState::Blocked);
+        let token = deadline.map(|deadline| self.wheel.insert_deadline(deadline, pid));
         if let Some(process) = self.get_mut(pid) {
             process.deadline = deadline;
+            process.deadline_token = token;
             process.waiting = target;
         }
-        if let Some(deadline) = deadline {
-            self.push_deadline(pid, deadline);
-        }
         true
+    }
+
+    /// Disarms `pid`'s wake deadline: cancels the wheel entry and clears
+    /// the control-block fields. Wake paths call this unconditionally,
+    /// so a process without an armed deadline is a no-op.
+    pub fn clear_deadline(&mut self, pid: Pid) {
+        let Some(process) = self.get_mut(pid) else {
+            return;
+        };
+        process.deadline = None;
+        if let Some(token) = process.deadline_token.take() {
+            self.wheel.cancel(token);
+        }
     }
 
     /// Parks `pid` as `WaitingIO`, with the same kill-tombstone refusal as
@@ -996,6 +1021,12 @@ impl<X, M: Message> ProcessTable<X, M> {
                                 && process.deadline == Some(fire_at)
                     );
                     if expired {
+                        // The fired entry already left the wheel, so just
+                        // clear the control-block fields.
+                        if let Some(process) = self.get_mut(pid) {
+                            process.deadline = None;
+                            process.deadline_token = None;
+                        }
                         self.transition(pid, ProcessState::Runnable);
                     } else {
                         self.counters.stale_deadlines_skipped += 1;
@@ -1014,12 +1045,6 @@ impl<X, M: Message> ProcessTable<X, M> {
     pub fn take_due_timers(&mut self, now: Instant) -> Vec<TimerEntry<M>> {
         self.advance_timers(now);
         std::mem::take(&mut self.due_delivers)
-    }
-
-    /// Records a receive deadline so the driver can promote the waiter back to
-    /// `Runnable` when it expires.
-    fn push_deadline(&mut self, pid: Pid, deadline: Instant) {
-        self.wheel.insert_deadline(deadline, pid);
     }
 
     /// Promotes every process whose receive deadline has passed. Stale entries
@@ -1114,7 +1139,7 @@ impl<X, M: Message> Default for ProcessTable<X, M> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::wire::{Envelope, TAG_BUSINESS, TAG_LIFECYCLE};
+    use crate::wire::{Envelope, TAG_BUSINESS, TAG_LIFECYCLE, TAG_REPLY};
     use std::ptr;
     use std::time::Duration;
 
@@ -1158,6 +1183,12 @@ mod tests {
     /// A minimal lifecycle/system envelope (empty payload, no glue).
     fn fake_lifecycle() -> Envelope {
         unsafe { Envelope::from_payload(TAG_LIFECYCLE, ptr::null(), 0, None) }
+    }
+
+    /// A minimal reply envelope (empty payload, no glue), waking a
+    /// `WaitTarget::Reply` waiter.
+    fn fake_reply() -> Envelope {
+        unsafe { Envelope::from_payload(TAG_REPLY, ptr::null(), 0, None) }
     }
 
     #[test]
@@ -1428,6 +1459,65 @@ mod tests {
         table.promote_due_deadlines(deadline + Duration::from_millis(1));
         assert_eq!(table.counters().stale_deadlines_skipped, 1);
         assert_eq!(table.get(pid).unwrap().state, ProcessState::Runnable);
+    }
+
+    #[test]
+    fn clearing_a_deadline_cancels_the_wheel_entry() {
+        let mut table = TestTable::new();
+        let pid = fake_spawn(&mut table);
+        table.transition(pid, ProcessState::Running);
+
+        let deadline = Instant::now() + Duration::from_millis(10);
+        assert!(table.try_park(pid, WaitTarget::Receive, Some(deadline)));
+        assert!(table.deliver(pid, fake_envelope()).is_none());
+
+        // The resume path disarms the deadline, so nothing is pending
+        // and the drain sees no entry at all, stale or otherwise.
+        table.clear_deadline(pid);
+        assert_eq!(table.nearest_wakeup(), None);
+        table.promote_due_deadlines(deadline + Duration::from_millis(1));
+        assert_eq!(table.counters().stale_deadlines_skipped, 0);
+        assert_eq!(table.get(pid).unwrap().state, ProcessState::Runnable);
+    }
+
+    #[test]
+    fn repark_replaces_the_deadline_entry() {
+        let mut table = TestTable::new();
+        let pid = fake_spawn(&mut table);
+        table.transition(pid, ProcessState::Running);
+
+        // First park, then a message wake and a re-park with a later
+        // deadline, as the call_receive stale-reply loop does.
+        let first = Instant::now() + Duration::from_millis(10);
+        let second = first + Duration::from_millis(10);
+        assert!(table.try_park(pid, WaitTarget::Reply, Some(first)));
+        assert!(table.deliver(pid, fake_reply()).is_none());
+        assert_eq!(table.claim_next(), Some(pid));
+        assert!(table.try_park(pid, WaitTarget::Reply, Some(second)));
+
+        // Accumulated entries would keep the first instant nearest and
+        // count a stale skip when it fired.
+        assert_eq!(table.nearest_wakeup(), Some(second));
+        table.promote_due_deadlines(second + Duration::from_millis(1));
+        assert_eq!(table.counters().stale_deadlines_skipped, 0);
+        assert_eq!(table.get(pid).unwrap().state, ProcessState::Runnable);
+    }
+
+    #[test]
+    fn killing_a_parked_process_cancels_its_deadline() {
+        let mut table = TestTable::new();
+        let pid = fake_spawn(&mut table);
+        table.claim_next().unwrap();
+        let deadline = Instant::now() + Duration::from_millis(10);
+        assert!(table.try_park(pid, WaitTarget::Receive, Some(deadline)));
+        assert!(table.after_switch(pid).is_none(), "parked, not dead");
+
+        assert!(table.kill(pid).is_some(), "off-cpu target frees inline");
+        assert_eq!(
+            table.nearest_wakeup(),
+            None,
+            "the freed slot's entry must not linger in the wheel",
+        );
     }
 
     #[test]

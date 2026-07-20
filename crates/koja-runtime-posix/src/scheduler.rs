@@ -1142,10 +1142,8 @@ pub extern "C" fn koja_rt_receive_timeout(out: *mut u8, out_cap: i64, timeout_ms
 
     let envelope = {
         let mut guard = SCHED.lock().unwrap();
-        guard.get_mut(pid).and_then(|p| {
-            p.deadline = None;
-            p.mailbox.pop_received()
-        })
+        guard.clear_deadline(pid);
+        guard.get_mut(pid).and_then(|p| p.mailbox.pop_received())
     };
     envelope.map_or(-1, |envelope| deliver_envelope(envelope, out, out_cap))
 }
@@ -1189,9 +1187,7 @@ pub extern "C" fn koja_rt_call_receive(
             let mut guard = SCHED.lock().unwrap();
             match guard.get_mut(pid).and_then(|p| p.mailbox.take_reply()) {
                 Some(envelope) if envelope.reply_token == token => {
-                    if let Some(p) = guard.get_mut(pid) {
-                        p.deadline = None;
-                    }
+                    guard.clear_deadline(pid);
                     guard.clear_awaiting_reply(pid);
                     drop(guard);
                     deliver_envelope(envelope, out, out_cap);
@@ -1200,9 +1196,7 @@ pub extern "C" fn koja_rt_call_receive(
                 Some(stale) => Some(stale),
                 None => {
                     if Instant::now() >= deadline {
-                        if let Some(p) = guard.get_mut(pid) {
-                            p.deadline = None;
-                        }
+                        guard.clear_deadline(pid);
                         guard.clear_awaiting_reply(pid);
                         return -1;
                     }

@@ -171,6 +171,13 @@ pub(crate) fn park_reply(pid: Pid, deadline: Option<Instant>) {
     with_table(|table| table.try_park(pid, WaitTarget::Reply, deadline));
 }
 
+/// Disarms `pid`'s wake deadline, cancelling its timer-wheel entry.
+/// Called on the wake paths (message arrival or timeout expiry) so
+/// completed waits leave nothing behind in the wheel.
+pub(crate) fn clear_deadline(pid: Pid) {
+    with_table(|table| table.clear_deadline(pid));
+}
+
 /// Parks `pid` as `WaitingIO` for the reactor (`io_block`). Returns
 /// whether the park took. A refused park means a kill landed mid-run, and
 /// the caller must not arm the fd because there is no waiter to wake.

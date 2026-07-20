@@ -1,5 +1,5 @@
 //! The scheduler's timing structure: a single hashed timing wheel plus
-//! an overflow heap, unifying the two previously-separate concerns
+//! an overflow map, unifying the two previously-separate concerns
 //! (delayed `send_after` message delivery and receive/call deadline
 //! promotion) into one keyspace keyed by fire instant.
 //!
@@ -16,23 +16,34 @@
 //! A circular array of [`WHEEL_SLOTS`] buckets at [`WHEEL_TICK`]
 //! resolution covers a horizon of `WHEEL_SLOTS * WHEEL_TICK`. An entry
 //! due at instant `t` lands in bucket `tick(t) % WHEEL_SLOTS`. Anything
-//! beyond the horizon waits in the `overflow` min-heap and is drained
-//! when it comes due. An `occupied` bitmap makes [`TimerWheel::nearest`]
-//! skip empty buckets.
+//! beyond the horizon waits in the `overflow` map (ordered by fire
+//! instant, so removal by key is `O(log n)`) and is drained when it
+//! comes due. An `occupied` bitmap makes [`TimerWheel::nearest`] skip
+//! empty buckets.
+//!
+//! ## Cancellation
+//!
+//! Deadline inserts hand back a [`TimerToken`] so the waiter's wake
+//! path can remove the entry via [`TimerWheel::cancel`] instead of
+//! letting it age out. Without eager cancellation every completed
+//! `Ref.call` leaves a stale entry behind, and a call-heavy workload
+//! carries millions of them.
 //!
 //! ## Correctness
 //!
 //! Bucketing is by *tick* (millisecond granularity), but every drain
-//! re-checks the exact `fire_at <= now`, so firing precision matches the
-//! old heap exactly. The ticks only decide distribution and cursor
-//! stepping, never whether an entry is due. The load-bearing invariant:
-//! each [`TimerWheel::drain_due`] scans buckets from the old cursor tick
+//! re-checks the exact `fire_at <= now`, so firing precision matches an
+//! exact heap. The ticks only decide distribution and cursor stepping,
+//! never whether an entry is due. The load-bearing invariant: each
+//! [`TimerWheel::drain_due`] scans buckets from the old cursor tick
 //! through `tick(now)` inclusive (capped at one full rotation), so any
 //! entry whose `fire_at <= now` is visited before the cursor passes its
-//! bucket. Nothing is stranded behind the cursor for a rotation.
+//! bucket. Nothing is stranded behind the cursor for a rotation. The
+//! nothing-due fast path may leave the cursor behind `tick(now)`, which
+//! is safe for the same reason: the next real drain's span is capped at
+//! one full rotation, so it still visits every bucket.
 
-use std::cmp::Reverse;
-use std::collections::BinaryHeap;
+use std::collections::BTreeMap;
 use std::time::{Duration, Instant};
 
 use crate::protocol::Pid;
@@ -76,9 +87,8 @@ enum WheelKind<M> {
 }
 
 /// One scheduled entry. Bucketed at insert time by its fire tick and
-/// fired when the exact `fire_at <= now`. Ordered by `(fire_at, seq)`
-/// for the overflow heap. `seq` is unique, so the order is total and
-/// `Eq` holds only between an entry and itself.
+/// fired when the exact `fire_at <= now`. `seq` is unique, breaking
+/// ties in the fire order.
 struct WheelEntry<M> {
     fire_at: Instant,
     kind: WheelKind<M>,
@@ -86,24 +96,16 @@ struct WheelEntry<M> {
     seq: u64,
 }
 
-impl<M> PartialEq for WheelEntry<M> {
-    fn eq(&self, other: &Self) -> bool {
-        self.fire_at == other.fire_at && self.seq == other.seq
-    }
-}
-
-impl<M> Eq for WheelEntry<M> {}
-
-impl<M> PartialOrd for WheelEntry<M> {
-    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-        Some(self.cmp(other))
-    }
-}
-
-impl<M> Ord for WheelEntry<M> {
-    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        (self.fire_at, self.seq).cmp(&(other.fire_at, other.seq))
-    }
+/// Handle to a pending deadline entry, returned by
+/// [`TimerWheel::insert_deadline`] and consumed by
+/// [`TimerWheel::cancel`]. Records where the entry landed so the cancel
+/// never searches: `slot` names the bucket for in-horizon entries, and
+/// `None` means the overflow map, keyed by `(fire_at, seq)`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct TimerToken {
+    fire_at: Instant,
+    seq: u64,
+    slot: Option<usize>,
 }
 
 /// A due entry handed back to the table, partitioned by kind.
@@ -115,23 +117,37 @@ pub enum Due<M> {
     Promote { pid: Pid, fire_at: Instant },
 }
 
-/// A single hashed timing wheel with an overflow heap. Holds both
+/// Payload of an overflow entry. The fire instant and `seq` live in
+/// the map key, so cancellation is a keyed remove.
+struct OverflowEntry<M> {
+    kind: WheelKind<M>,
+    pid: Pid,
+}
+
+/// A single hashed timing wheel with an overflow map. Holds both
 /// `send_after` deliveries and receive/call deadlines.
 pub struct TimerWheel<M> {
     /// Reference instant for tick math, fixed at the first insertion.
     base: Option<Instant>,
-    /// Tick the cursor last advanced to (`tick(last drained now)`).
+    /// Tick the cursor last advanced to (`tick(now)` of the last drain
+    /// that took the slow path).
     cursor_tick: u64,
     /// Occupied-bucket bitmap, so `nearest` skips empty buckets.
     occupied: [u64; BITMAP_WORDS],
     /// Entries parked beyond the wheel horizon, soonest first.
-    overflow: BinaryHeap<Reverse<WheelEntry<M>>>,
+    overflow: BTreeMap<(Instant, u64), OverflowEntry<M>>,
     /// Count of pending entries across wheel + overflow.
     pending: usize,
     /// Monotonic tie-breaker for stable ordering.
     seq: u64,
     /// The wheel buckets, grown to [`WHEEL_SLOTS`] on first insert.
     slots: Vec<Vec<WheelEntry<M>>>,
+    /// Lower bound on every pending entry's `fire_at`, gating the
+    /// nothing-due fast path in [`Self::drain_due`]. Tightened on
+    /// insert and recomputed exactly after a slow-path drain. A cancel
+    /// may leave it stale-low, which only costs one wasted slow drain,
+    /// never a missed firing.
+    soonest: Option<Instant>,
 }
 
 impl<M> TimerWheel<M> {
@@ -140,10 +156,11 @@ impl<M> TimerWheel<M> {
             base: None,
             cursor_tick: 0,
             occupied: [0; BITMAP_WORDS],
-            overflow: BinaryHeap::new(),
+            overflow: BTreeMap::new(),
             pending: 0,
             seq: 0,
             slots: Vec::new(),
+            soonest: None,
         }
     }
 
@@ -153,16 +170,19 @@ impl<M> TimerWheel<M> {
     }
 
     /// Schedules `envelope` for delivery to `target_pid` at `fire_at`.
+    /// Fire-and-forget: delayed sends are never cancelled, so the token
+    /// is dropped.
     pub fn insert_deliver(&mut self, fire_at: Instant, target_pid: Pid, envelope: M) {
         self.insert(fire_at, target_pid, WheelKind::Deliver(Box::new(envelope)));
     }
 
-    /// Records a receive/call deadline for `pid` at `fire_at`.
-    pub fn insert_deadline(&mut self, fire_at: Instant, pid: Pid) {
-        self.insert(fire_at, pid, WheelKind::Promote);
+    /// Records a receive/call deadline for `pid` at `fire_at`. The
+    /// returned token lets the wake path cancel the entry.
+    pub fn insert_deadline(&mut self, fire_at: Instant, pid: Pid) -> TimerToken {
+        self.insert(fire_at, pid, WheelKind::Promote)
     }
 
-    fn insert(&mut self, fire_at: Instant, pid: Pid, kind: WheelKind<M>) {
+    fn insert(&mut self, fire_at: Instant, pid: Pid, kind: WheelKind<M>) -> TimerToken {
         let base = self.ensure_base(fire_at);
         self.seq += 1;
         let target_tick = tick_of(base, fire_at).max(self.cursor_tick);
@@ -173,19 +193,61 @@ impl<M> TimerWheel<M> {
             seq: self.seq,
         };
         self.pending += 1;
-        if target_tick < self.cursor_tick + WHEEL_SLOTS {
+        self.soonest = Some(self.soonest.map_or(fire_at, |soonest| soonest.min(fire_at)));
+        let slot = if target_tick < self.cursor_tick + WHEEL_SLOTS {
             let idx = (target_tick % WHEEL_SLOTS) as usize;
             self.set_occupied(idx);
             self.slots[idx].push(entry);
+            Some(idx)
         } else {
-            self.overflow.push(Reverse(entry));
+            self.overflow.insert(
+                (fire_at, entry.seq),
+                OverflowEntry {
+                    kind: entry.kind,
+                    pid,
+                },
+            );
+            None
+        };
+        TimerToken {
+            fire_at,
+            seq: self.seq,
+            slot,
+        }
+    }
+
+    /// Removes the pending entry `token` refers to. A no-op when the
+    /// entry already fired, so wake paths can cancel unconditionally.
+    pub fn cancel(&mut self, token: TimerToken) {
+        let removed = match token.slot {
+            Some(idx) => {
+                let bucket = &mut self.slots[idx];
+                match bucket.iter().position(|entry| entry.seq == token.seq) {
+                    Some(i) => {
+                        bucket.swap_remove(i);
+                        self.release_bucket_if_empty(idx);
+                        true
+                    }
+                    None => false,
+                }
+            }
+            None => self.overflow.remove(&(token.fire_at, token.seq)).is_some(),
+        };
+        if removed {
+            self.pending -= 1;
         }
     }
 
     /// Removes and returns every entry due at `now`, soonest first.
     /// Promote entries surface for the table to re-validate, and
-    /// deliver entries surface for the driver to route.
+    /// deliver entries surface for the driver to route. Callers hit
+    /// this on every scheduler iteration, so the nothing-due fast path
+    /// (nothing pending, or the soonest entry is still in the future)
+    /// returns without scanning or allocating.
     pub fn drain_due(&mut self, now: Instant) -> Vec<Due<M>> {
+        if self.pending == 0 || self.soonest.is_some_and(|soonest| now < soonest) {
+            return Vec::new();
+        }
         let Some(base) = self.base else {
             return Vec::new();
         };
@@ -193,12 +255,17 @@ impl<M> TimerWheel<M> {
         let mut due: Vec<WheelEntry<M>> = Vec::new();
 
         // Overflow first: the soonest parked entries that have come due.
-        while let Some(Reverse(top)) = self.overflow.peek() {
-            if top.fire_at <= now {
-                due.push(self.overflow.pop().unwrap().0);
-            } else {
+        while let Some((&(fire_at, _), _)) = self.overflow.first_key_value() {
+            if fire_at > now {
                 break;
             }
+            let ((fire_at, seq), entry) = self.overflow.pop_first().unwrap();
+            due.push(WheelEntry {
+                fire_at,
+                kind: entry.kind,
+                pid: entry.pid,
+                seq,
+            });
         }
 
         // Wheel: scan ticks (cursor ..= target), capped at one rotation,
@@ -217,17 +284,13 @@ impl<M> TimerWheel<M> {
                         i += 1;
                     }
                 }
-                if self.slots[idx].is_empty() {
-                    self.clear_occupied(idx);
-                    if self.slots[idx].capacity() > BUCKET_RETAIN {
-                        self.slots[idx].shrink_to(BUCKET_RETAIN);
-                    }
-                }
+                self.release_bucket_if_empty(idx);
             }
         }
 
         self.cursor_tick = target;
         self.pending -= due.len();
+        self.soonest = self.nearest();
         due.sort_by_key(|entry| (entry.fire_at, entry.seq));
         due.into_iter()
             .map(|entry| match entry.kind {
@@ -245,7 +308,10 @@ impl<M> TimerWheel<M> {
 
     /// The soonest pending fire instant, for sizing the idle park.
     pub fn nearest(&self) -> Option<Instant> {
-        let mut best = self.overflow.peek().map(|Reverse(top)| top.fire_at);
+        let mut best = self
+            .overflow
+            .first_key_value()
+            .map(|(&(fire_at, _), _)| fire_at);
         for word in 0..BITMAP_WORDS {
             let mut bits = self.occupied[word];
             while bits != 0 {
@@ -270,6 +336,18 @@ impl<M> TimerWheel<M> {
                 self.slots = (0..WHEEL_SLOTS).map(|_| Vec::new()).collect();
                 t
             }
+        }
+    }
+
+    /// Clears the occupancy bit and returns burst capacity once a
+    /// bucket empties (`Vec` never shrinks on its own).
+    fn release_bucket_if_empty(&mut self, idx: usize) {
+        if !self.slots[idx].is_empty() {
+            return;
+        }
+        self.clear_occupied(idx);
+        if self.slots[idx].capacity() > BUCKET_RETAIN {
+            self.slots[idx].shrink_to(BUCKET_RETAIN);
         }
     }
 
@@ -394,6 +472,81 @@ mod tests {
             retained <= WHEEL_SLOTS as usize * BUCKET_RETAIN,
             "bucket capacity after drain should be bounded, got {retained}",
         );
+    }
+
+    #[test]
+    fn cancel_removes_slot_entry() {
+        let mut wheel: TimerWheel<()> = TimerWheel::new();
+        let base = Instant::now();
+        // Within the wheel horizon, so the entry lives in a bucket.
+        let token = wheel.insert_deadline(base + Duration::from_millis(50), 1);
+        wheel.cancel(token);
+
+        assert!(wheel.is_empty());
+        assert_eq!(wheel.nearest(), None);
+        assert!(wheel.drain_due(base + Duration::from_millis(60)).is_empty());
+    }
+
+    #[test]
+    fn cancel_removes_overflow_entry() {
+        let mut wheel: TimerWheel<()> = TimerWheel::new();
+        let base = Instant::now();
+        // Beyond the ~4s horizon, so the entry lives in the overflow map.
+        let far = base + Duration::from_secs(30);
+        let token = wheel.insert_deadline(far, 2);
+        wheel.cancel(token);
+
+        assert!(wheel.is_empty());
+        assert_eq!(wheel.nearest(), None);
+        assert!(wheel.drain_due(far + Duration::from_millis(1)).is_empty());
+    }
+
+    #[test]
+    fn cancel_after_fire_is_a_noop() {
+        let mut wheel: TimerWheel<()> = TimerWheel::new();
+        let base = Instant::now();
+        let token = wheel.insert_deadline(base + Duration::from_millis(5), 3);
+
+        let due = wheel.drain_due(base + Duration::from_millis(10));
+        assert!(matches!(due.as_slice(), [Due::Promote { pid: 3, .. }]));
+        assert!(wheel.is_empty());
+
+        wheel.cancel(token);
+        assert!(wheel.is_empty(), "pending must not underflow");
+    }
+
+    #[test]
+    fn cancelling_one_entry_leaves_the_rest() {
+        let mut wheel: TimerWheel<()> = TimerWheel::new();
+        let base = Instant::now();
+        let fire = base + Duration::from_millis(20);
+        let cancelled = wheel.insert_deadline(fire, 1);
+        wheel.insert_deadline(fire, 2);
+        wheel.cancel(cancelled);
+
+        assert_eq!(wheel.nearest(), Some(fire), "survivor still pending");
+        let due = wheel.drain_due(fire + Duration::from_millis(1));
+        assert_eq!(pids(&due), vec![2], "only the survivor fires");
+        assert!(wheel.is_empty());
+    }
+
+    #[test]
+    fn fast_path_drains_do_not_strand_entries() {
+        // Nothing-due drains skip the cursor advance. The eventual real
+        // drain must still visit the entry's bucket and fire it.
+        let mut wheel: TimerWheel<()> = TimerWheel::new();
+        let base = Instant::now();
+        let fire = base + Duration::from_millis(500);
+        wheel.insert_deadline(fire, 9);
+
+        for ms in 1..100 {
+            assert!(
+                wheel.drain_due(base + Duration::from_millis(ms)).is_empty(),
+                "nothing is due yet",
+            );
+        }
+        let due = wheel.drain_due(fire + Duration::from_millis(1));
+        assert!(matches!(due.as_slice(), [Due::Promote { pid: 9, .. }]));
     }
 
     #[test]

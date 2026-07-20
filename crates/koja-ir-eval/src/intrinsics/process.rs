@@ -187,6 +187,7 @@ async fn call<R: CallResolver>(
             // Correlate by token. A mismatch is a stale reply from an
             // earlier call that already timed out, so discard and keep waiting.
             if reply.reply.map(|info| info.token) == Some(token) {
+                scheduler::clear_deadline(caller);
                 scheduler::clear_awaiting_reply(caller);
                 return Ok(helpers::result_value(
                     result_symbol.clone(),
@@ -196,6 +197,7 @@ async fn call<R: CallResolver>(
             continue;
         }
         if Instant::now() >= deadline {
+            scheduler::clear_deadline(caller);
             scheduler::clear_awaiting_reply(caller);
             let variant = if scheduler::is_alive(target) {
                 "Timeout"
