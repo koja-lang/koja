@@ -4,22 +4,35 @@ A URL shortener written in Koja — a complete end-to-end CRUD service:
 HTTP serving on `Net.TCPListener` + `HTTP.Parser`, JSON in and out via
 `JSON`, and PostgreSQL through the [Postgres](https://github.com/hpopp/postgres-koja)
 package, a pure-Koja driver speaking the v3 wire protocol (no C
-driver, no FFI).
+driver, no FFI), with connections managed by the
+[Pooler](../pooler) resource pool.
 
 It doubles as a tour of the things that make Koja great:
 
 - **Process entry** — the program starts from `App`
-  (`impl Process<List<String>, (), String>` in `src/app.koja`), named
-  by `entry = "App"` in `koja.toml`.
-- **Signal-driven lifecycle** — the tick loop `receive`s `Lifecycle`
-  events, so Ctrl-C (`Interrupt`) and SIGTERM (`Shutdown`) drain and
-  exit with the right code.
-- **Value semantics** — the Postgres connection lives in process
-  state; every query returns an updated connection that the router and
-  app thread through and rebind. No locks, no mutation at a distance.
-- **Git dependencies** — the driver is declared in `koja.toml`
-  (`Postgres = { github = "hpopp/postgres-koja", tag = "v0.1.0" }`)
-  and pinned to an exact commit by the committed `koja.lock`.
+  (`impl Process<List<String>, TCPEvent, String>` in `src/app.koja`),
+  named by `entry = "App"` in `koja.toml`.
+- **Event-driven accept** — a spawned `Net.TCPServer` watches the
+  listener with the runtime's IO reactor and delivers each accepted
+  socket as a `TCPEvent.Connected` message; nothing polls.
+- **Process per connection** — `App` hands every socket to a one-shot
+  `Worker` process, so slow clients and concurrent requests never
+  block each other. Workers speak HTTP keep-alive, framing requests
+  off the socket with a buffered reader.
+- **Signal-driven lifecycle** — `handle_signal` receives `Lifecycle`
+  events, so Ctrl-C (`Interrupt`) and SIGTERM (`Shutdown`) exit with
+  the right code.
+- **Value semantics** — each request checks a Postgres connection out
+  of the pool; every query returns an updated connection that the
+  router threads through, and the updated value is checked back in.
+  No locks, no mutation at a distance.
+- **Process-based pooling** — `Pooler.Pool` holds 10 eagerly built
+  connections behind a single process that lends them out one at a
+  time, queueing checkout callers in FIFO order when all are lent.
+- **Git and path dependencies** — the driver is declared in
+  `koja.toml` (`Postgres = { github = "hpopp/postgres-koja", tag = "v0.1.0" }`)
+  and pinned to an exact commit by the committed `koja.lock`, while
+  the pool comes from a local path (`Pooler = { path = "../pooler" }`).
 
 ## Layout
 
@@ -27,7 +40,7 @@ It doubles as a tour of the things that make Koja great:
 api-docs/         -- Bruno collection covering every route
 db/init.sql       -- schema, applied automatically by the compose stack
 src/
-  app.koja        -- entry process: listener, tick loop, lifecycle
+  app.koja        -- entry process, per-connection workers, keep-alive
   config.koja     -- env-driven runtime configuration
   json_util.koja  -- request-body parsing / response encoding helpers
   links.koja      -- LinkStore: CRUD queries over the Postgres driver

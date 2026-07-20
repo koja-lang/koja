@@ -1,0 +1,136 @@
+struct PoolTest
+  priv fn int_pool(size: Int) -> Pool<Int>
+    config = Config{
+      create: fn () -> Result<Int, String> Result.Ok(7) end,
+      size: size,
+    }
+
+    Pool.start(config)
+  end
+
+  @test "checkout lends a resource and checkin returns the updated value"
+  fn test_round_trip -> Result<Bool, String>
+    pool = int_pool(1)
+
+    first =
+      match pool.checkout(1000)
+        Result.Ok(resource) -> resource
+        Result.Err(_) -> return Result.Err("first checkout failed")
+      end
+
+    if first != 7
+      return Result.Err("expected fresh resource 7, got #{first}")
+    end
+
+    pool.checkin(first + 1)
+
+    match pool.checkout(1000)
+      Result.Ok(resource) ->
+        pool.stop()
+        resource == 8
+          ? Result.Ok(true)
+          : Result.Err("expected checked-in 8, got #{resource}")
+
+      Result.Err(_) ->
+        Result.Err("second checkout failed")
+    end
+  end
+
+  @test "an exhausted pool queues callers until a checkin"
+  fn test_waitlist -> Result<Bool, String>
+    pool = int_pool(1)
+
+    lent =
+      match pool.checkout(1000)
+        Result.Ok(resource) -> resource
+        Result.Err(_) -> return Result.Err("initial checkout failed")
+      end
+
+    waiter =
+      Task.async(fn () -> Result<Int, Error> pool.checkout(3000) end)
+
+    pool.checkin(lent)
+
+    match Task.await(waiter)
+      Result.Err(_) ->
+        Result.Err("waiter task failed")
+
+      Result.Ok(outcome) ->
+        pool.stop()
+
+        match outcome
+          Result.Ok(_) ->
+            Result.Ok(true)
+
+          Result.Err(_) ->
+            Result.Err("queued checkout should be answered by checkin")
+        end
+    end
+  end
+
+  @test "checkout times out when every resource stays lent"
+  fn test_timeout -> Result<Bool, String>
+    pool = int_pool(1)
+
+    match pool.checkout(1000)
+      Result.Ok(_) -> ()
+      Result.Err(_) -> return Result.Err("initial checkout failed")
+    end
+
+    second = pool.checkout(100)
+    pool.stop()
+
+    match second
+      Result.Err(Error.Timeout) ->
+        Result.Ok(true)
+
+      Result.Err(_) ->
+        Result.Err("expected Timeout error")
+
+      Result.Ok(_) ->
+        Result.Err("checkout should not succeed on an exhausted pool")
+    end
+  end
+
+  @test "discard builds a replacement resource"
+  fn test_discard -> Result<Bool, String>
+    pool = int_pool(1)
+
+    match pool.checkout(1000)
+      Result.Ok(_) -> ()
+      Result.Err(_) -> return Result.Err("initial checkout failed")
+    end
+
+    match pool.discard(1000)
+      Result.Ok(_) -> ()
+      Result.Err(_) -> return Result.Err("discard failed")
+    end
+
+    match pool.checkout(1000)
+      Result.Ok(resource) ->
+        pool.stop()
+        resource == 7
+          ? Result.Ok(true)
+          : Result.Err("expected replacement 7, got #{resource}")
+
+      Result.Err(_) ->
+        Result.Err("checkout after discard failed")
+    end
+  end
+
+  @test "a failing factory brings the pool down"
+  fn test_start_failure -> Result<Bool, String>
+    config = Config{
+      create: fn () -> Result<Int, String> Result.Err("boom") end,
+      size: 1,
+    }
+
+    pool = Pool.start(config)
+
+    match pool.checkout(1000)
+      Result.Err(Error.PoolDown) -> Result.Ok(true)
+      Result.Err(_) -> Result.Err("expected PoolDown error")
+      Result.Ok(_) -> Result.Err("checkout should fail on a dead pool")
+    end
+  end
+end

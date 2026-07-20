@@ -8,4 +8,5 @@ name = "Shortener"
 version = "0.1.0"
 
 [dependencies]
+Pooler = { path = "../pooler" }
 Postgres = { github = "hpopp/postgres-koja", tag = "v0.1.0" }
