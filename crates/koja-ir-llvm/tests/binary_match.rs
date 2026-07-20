@@ -162,12 +162,13 @@ fn binary_match_uge_length_check_for_greedy_tail() {
 
 #[test]
 fn binary_match_guards_extraction_behind_length_check() {
-    // Extraction must be gated behind the length check: a too-short
-    // subject otherwise reads past the payload and the greedy tail's
-    // `byte_length - prefix` underflows to a giant malloc -> null ->
-    // SIGBUS. The fix branches on `bin_pat_len_ok` into `bin_pat_extract`
-    // and joins through a `bin_pat_result` phi yielding `false` on the
-    // short path.
+    // Binding side effects must be gated behind both the length check
+    // (a too-short subject otherwise reads past the payload and the
+    // greedy tail's `byte_length - prefix` underflows to a giant
+    // malloc -> null -> SIGBUS) and the literal tests (a failed arm
+    // otherwise still allocates the tail block, leaking one block per
+    // scan miss). The shape is `bin_pat_len_ok -> bin_pat_test ->
+    // bin_pat_bind`, joining through a `bin_pat_result` phi.
     let source = "
         stream = <<0xAA, 0xBB>>
         match stream
@@ -181,10 +182,11 @@ fn binary_match_guards_extraction_behind_length_check() {
         emit_script_llvm_ir(&script, APP_NAME).expect("emit_script_llvm_ir should succeed");
 
     assert_main_shape(&ir_text);
-    assert_contains(&ir_text, "bin_pat_extract");
+    assert_contains(&ir_text, "bin_pat_test");
+    assert_contains(&ir_text, "bin_pat_bind");
     assert_contains(&ir_text, "bin_pat_merge");
     assert_contains(&ir_text, "bin_pat_result");
-    // The extraction-gating branch keys off the length-check bit, so
-    // the malloc/memcpy only run once the subject is long enough.
+    // The gating branch keys off the length-check bit, so the
+    // malloc/memcpy only run once the subject is long enough.
     assert_contains(&ir_text, "br i1 %bin_pat_len_ok");
 }

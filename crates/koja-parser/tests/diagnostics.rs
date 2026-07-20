@@ -6,11 +6,14 @@
 //! If a message moves materially, update the substring here so the
 //! test still pins the *spirit* of the diagnostic.
 
-use koja_ast::ast::Item;
+use koja_ast::ast::{ExprKind, Item, Literal, Statement};
 
 mod common;
 
-use common::{assert_hint_contains, error_messages, parse_failing, parse_failing_with};
+use common::{
+    assert_hint_contains, assert_message_contains, error_messages, parse_failing,
+    parse_failing_script, parse_failing_with,
+};
 
 #[test]
 fn unterminated_struct_emits_error() {
@@ -284,4 +287,83 @@ fn diagnostics_never_leak_debug_token_names() {
             }
         }
     }
+}
+
+#[test]
+fn break_in_assignment_is_rejected() {
+    parse_failing_with(
+        "
+        fn run
+          value = break
+        end
+        ",
+        &["`break` is only valid as a statement"],
+    );
+}
+
+#[test]
+fn return_in_call_argument_is_rejected() {
+    parse_failing_with(
+        "
+        fn run
+          consume(return 1)
+        end
+        ",
+        &["`return` is only valid as a statement"],
+    );
+}
+
+#[test]
+fn return_in_grouped_expression_is_rejected() {
+    parse_failing_with(
+        "
+        fn run
+          (return 1)
+        end
+        ",
+        &["`return` is only valid as a statement"],
+    );
+}
+
+#[test]
+fn return_in_ternary_branch_is_rejected() {
+    parse_failing_with(
+        "
+        fn run
+          ready ? return 1 : 0
+        end
+        ",
+        &["`return` is only valid as a statement"],
+    );
+}
+
+#[test]
+fn return_prefix_preserves_assignment_recovery() {
+    let result = parse_failing_with(
+        "
+        fn run
+          value = return 1
+        end
+        ",
+        &["`return` is only valid as a statement"],
+    );
+    let Item::Function(function) = &result.ast.items[0] else {
+        panic!("expected function");
+    };
+    let Statement::Assignment { value, .. } = &function.body.as_ref().expect("body")[0] else {
+        panic!("expected assignment");
+    };
+    assert!(matches!(
+        value.kind,
+        ExprKind::Literal {
+            value: Literal::Int(_)
+        }
+    ));
+}
+
+#[test]
+fn short_closure_outside_call_argument_is_rejected() {
+    let result = parse_failing_script("transform = x -> x * 2");
+    assert_message_contains(&result, "short closures are only allowed as call arguments");
+    assert_hint_contains(&result, "fn (...) -> ... end");
 }

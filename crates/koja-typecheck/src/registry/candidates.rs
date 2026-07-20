@@ -1,9 +1,8 @@
 //! Completion-candidate queries shared by the LSP and the REPL.
 //!
-//! Pure read-only walks over the registry: what members a type
-//! exposes behind a dot, and what top-level symbols a package
-//! declares. Consumers apply their own prefix filtering and
-//! presentation (LSP `CompletionItem`s, shell replacement strings).
+//! Pure read-only walks over the registry. Results use stable
+//! kind-then-label order before consumers apply prefix filtering and
+//! presentation.
 
 use koja_ast::identifier::{GlobalRegistryId, Resolution, ResolvedType};
 
@@ -18,7 +17,7 @@ pub const KEYWORDS: &[&str] = &[
 ];
 
 /// What kind of declaration or member a [`Candidate`] names.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum CandidateKind {
     Constant,
     Enum,
@@ -108,6 +107,7 @@ impl GlobalRegistry {
             }
             _ => {}
         }
+        candidates.sort_unstable_by_key(|candidate| (candidate.kind, candidate.label));
         candidates
     }
 
@@ -183,6 +183,7 @@ impl GlobalRegistry {
             };
             candidates.push(candidate);
         }
+        candidates.sort_unstable_by_key(|candidate| (candidate.kind, candidate.label));
         candidates
     }
 

@@ -5,6 +5,24 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- String and collection temporaries used as `==` or `!=` operands are now reclaimed instead of leaking on every comparison.
+- Heap values bound inside a `match`, `if`, or `cond` arm are now reclaimed when the arm finishes instead of leaking.
+- Returning early from inside a `match` arm no longer leaks the matched value.
+- A binary pattern with a `Binary` or `Bits` tail no longer leaks memory each time the pattern fails to match.
+- Passing an owned `String` or `Binary` where a union type like `Binary | String` is expected no longer leaks the value on every call.
+- Long-running servers no longer hold on to the peak memory reached during message bursts; timer bookkeeping now returns burst capacity to the allocator.
+- Protocol implementations whose method signatures differ from the protocol only through a type alias or the `Int`/`Int64` and `Float`/`Float64` pairs are now accepted instead of rejected as mismatches.
+- Code completions from the LSP and shell now return in a stable order instead of varying between runs.
+- Block closures in multi-statement `match`, `cond`, and `receive` arms no longer get mistaken for the next arm.
+- Short closures outside call arguments now report an actionable parse error instead of producing an ambiguous syntax tree.
+- Using `return` or `break` inside an expression now reports a parse error instead of silently becoming an ordinary value.
+- Source spans now use UTF-8 byte offsets, so locations after non-ASCII text remain valid source ranges.
+- Unterminated string interpolation and unexpected characters now report diagnostics that cover the offending source.
+
 ## [0.15.2] - 2026-07-17
 
 ### Fixed

@@ -6,30 +6,31 @@
 //! 1. Load the subject's runtime bit length from `subject - 8`,
 //!    shift right by 3 for the byte length.
 //! 2. Compare the byte length against `layout.fixed_bits >> 3`
-//!    (`EQ` when there's no greedy tail, `UGE` when there is).
-//!    The result is the seed `i1`.
-//! 3. Walk segments in source order, ANDing each segment's
-//!    per-segment success bit into the running result:
-//!    - [`LoweredBinaryPattern::LiteralInt`] / `LiteralBytes`
-//!      compare against the constant.
+//!    (`EQ` when there's no greedy tail, `UGE` when there is). A
+//!    failed check short-circuits to `false` without touching the
+//!    payload.
+//! 3. Test phase. AND together every literal segment's comparison
+//!    ([`LoweredBinaryPattern::LiteralInt`] / `LiteralBytes`
+//!    against the constant). A failed test short-circuits to
+//!    `false` before any binding side effect runs.
+//! 4. Bind phase, on the fully matched path only.
 //!    - [`LoweredBinaryPattern::BindInt`] extracts the bit slice,
 //!      sign-extends when the modifier asks for it (**fixes a v1
-//!      bug**: v1 always treated the extracted value as
-//!      unsigned), narrows to the slot's declared LLVM type, and
-//!      stores it via the local slot table.
-//!    - [`LoweredBinaryPattern::Discard`] is a no-op: only the
-//!      `bit_offset` accumulator advances (the IR layer already
-//!      tracked that).
+//!      bug** where the extracted value was always unsigned),
+//!      narrows to the slot's declared LLVM type, and stores it
+//!      via the local slot table.
 //!    - [`LoweredBinaryPattern::GreedyTail`] allocates a fresh
 //!      heap block of `8 + ceil(remaining_bits / 8)` bytes,
 //!      copies the remaining bytes from the subject, stores the
 //!      bit-length header, and writes the payload pointer into
 //!      the binding slot (when there is one).
+//!    - [`LoweredBinaryPattern::Discard`] is a no-op in both
+//!      phases.
 //!
 //! All sub-byte arithmetic is gated to the byte-aligned path.
 //! Typecheck rejects bit-misaligned greedy tails, but a `Bits`
 //! greedy tail with a byte-aligned fixed prefix and a sub-byte
-//! suffix still flows through here: we memcpy
+//! suffix still flows through here. We memcpy
 //! `ceil(remaining_bits / 8)` bytes and let the heap layout carry
 //! the exact bit count.
 
@@ -51,7 +52,8 @@ use super::{ValueMap, lookup};
 
 /// Lower an `IRInstruction::BinaryMatch`. Returns the `i1` success
 /// bit. Binding segments stamp their extracted values into the
-/// pre-declared local slots as a side effect.
+/// pre-declared local slots as a side effect, gated on the whole
+/// pattern matching.
 pub(super) fn emit_binary_match<'ctx>(
     ctx: &EmitContext<'ctx>,
     layout: LoweredBinaryMatchLayout,
@@ -67,32 +69,44 @@ pub(super) fn emit_binary_match<'ctx>(
     // Segment extraction indexes off the subject length, so on a
     // too-short subject the reads run past the payload and the
     // greedy-tail size underflows to a huge `malloc` -> null -> SIGBUS.
-    // Gate it behind the length check: a failed check short-circuits to
-    // `false` without touching the payload.
+    // Gate it behind the length check. A failed check short-circuits
+    // to `false` without touching the payload.
     let entry_block = ctx.builder.get_insert_block().ok_or_else(|| {
         LlvmError::Codegen("binary match emitted with no active block".to_string())
     })?;
     let function = entry_block.get_parent().ok_or_else(|| {
         LlvmError::Codegen("binary match active block has no parent function".to_string())
     })?;
-    let extract_block = ctx.context.append_basic_block(function, "bin_pat_extract");
+    let test_block = ctx.context.append_basic_block(function, "bin_pat_test");
+    let bind_block = ctx.context.append_basic_block(function, "bin_pat_bind");
     let merge_block = ctx.context.append_basic_block(function, "bin_pat_merge");
     ctx.builder
-        .build_conditional_branch(length_ok, extract_block, merge_block)
+        .build_conditional_branch(length_ok, test_block, merge_block)
         .or_ice()?;
 
-    ctx.builder.position_at_end(extract_block);
-    let mut extracted = true_i1(ctx);
+    // Test phase: literal comparisons only, no side effects.
+    ctx.builder.position_at_end(test_block);
+    let mut tests_ok = true_i1(ctx);
     for segment in segments {
-        let segment_ok = emit_segment(ctx, payload, bit_length, byte_length, segment)?;
-        extracted = ctx
+        let segment_ok = emit_segment_test(ctx, payload, segment)?;
+        tests_ok = ctx
             .builder
-            .build_and(extracted, segment_ok, "bin_pat_and")
+            .build_and(tests_ok, segment_ok, "bin_pat_and")
             .or_ice()?;
     }
-    // `emit_segment` is straight-line, but capture the builder's block
-    // for the phi edge in case that ever stops being true.
-    let extract_end = ctx.builder.get_insert_block().unwrap_or(extract_block);
+    let test_end = ctx.builder.get_insert_block().unwrap_or(test_block);
+    ctx.builder
+        .build_conditional_branch(tests_ok, bind_block, merge_block)
+        .or_ice()?;
+
+    // Bind phase: runs only when the whole pattern matched. The
+    // greedy tail's fresh allocation must not happen on a failed
+    // arm, or every miss leaks one block.
+    ctx.builder.position_at_end(bind_block);
+    for segment in segments {
+        emit_segment_bind(ctx, payload, bit_length, byte_length, segment)?;
+    }
+    let bind_end = ctx.builder.get_insert_block().unwrap_or(bind_block);
     ctx.builder
         .build_unconditional_branch(merge_block)
         .or_ice()?;
@@ -102,8 +116,13 @@ pub(super) fn emit_binary_match<'ctx>(
         .builder
         .build_phi(ctx.context.bool_type(), "bin_pat_result")
         .or_ice()?;
-    let length_failed = ctx.context.bool_type().const_int(0, false);
-    result.add_incoming(&[(&length_failed, entry_block), (&extracted, extract_end)]);
+    let failed = ctx.context.bool_type().const_int(0, false);
+    let matched = true_i1(ctx);
+    result.add_incoming(&[
+        (&failed, entry_block),
+        (&failed, test_end),
+        (&matched, bind_end),
+    ]);
     Ok(result.as_basic_value().into_int_value())
 }
 
@@ -178,13 +197,13 @@ fn length_check<'ctx>(
         .or_ice()
 }
 
-/// Dispatch on the per-segment variant. Returns an `i1` that the
-/// caller ANDs into the running success bit.
-fn emit_segment<'ctx>(
+/// Emit a segment's side-effect-free match predicate. Returns an
+/// `i1` that the caller ANDs into the running success bit. Binding
+/// segments never gate the arm and answer `true` here. Their stores
+/// happen in [`emit_segment_bind`], after the whole pattern matched.
+fn emit_segment_test<'ctx>(
     ctx: &EmitContext<'ctx>,
     payload: PointerValue<'ctx>,
-    bit_length: IntValue<'ctx>,
-    byte_length: IntValue<'ctx>,
     segment: &LoweredBinaryPattern,
 ) -> Result<IntValue<'ctx>, LlvmError> {
     match segment {
@@ -198,6 +217,26 @@ fn emit_segment<'ctx>(
         LoweredBinaryPattern::LiteralBytes { bit_offset, bytes } => {
             emit_literal_bytes(ctx, payload, *bit_offset, bytes)
         }
+        LoweredBinaryPattern::BindInt { .. }
+        | LoweredBinaryPattern::Discard { .. }
+        | LoweredBinaryPattern::GreedyTail { .. } => Ok(true_i1(ctx)),
+    }
+}
+
+/// Emit a segment's binding side effects (slot stores, the greedy
+/// tail's fresh allocation). Runs only on the matched path. A failed
+/// arm must not allocate, or every scan miss leaks the tail block.
+fn emit_segment_bind<'ctx>(
+    ctx: &EmitContext<'ctx>,
+    payload: PointerValue<'ctx>,
+    bit_length: IntValue<'ctx>,
+    byte_length: IntValue<'ctx>,
+    segment: &LoweredBinaryPattern,
+) -> Result<(), LlvmError> {
+    match segment {
+        LoweredBinaryPattern::LiteralInt { .. }
+        | LoweredBinaryPattern::LiteralBytes { .. }
+        | LoweredBinaryPattern::Discard { .. } => Ok(()),
         LoweredBinaryPattern::BindInt {
             bit_offset,
             endian,
@@ -205,36 +244,29 @@ fn emit_segment<'ctx>(
             sign,
             ty,
             width,
-        } => {
-            emit_bind_int(
-                ctx,
-                payload,
-                *bit_offset,
-                *endian,
-                *local,
-                *sign,
-                ty,
-                *width,
-            )?;
-            Ok(true_i1(ctx))
-        }
-        LoweredBinaryPattern::Discard { .. } => Ok(true_i1(ctx)),
+        } => emit_bind_int(
+            ctx,
+            payload,
+            *bit_offset,
+            *endian,
+            *local,
+            *sign,
+            ty,
+            *width,
+        ),
         LoweredBinaryPattern::GreedyTail {
             bit_offset,
             local,
             ty,
-        } => {
-            emit_greedy_tail(
-                ctx,
-                payload,
-                bit_length,
-                byte_length,
-                *bit_offset,
-                *local,
-                ty,
-            )?;
-            Ok(true_i1(ctx))
-        }
+        } => emit_greedy_tail(
+            ctx,
+            payload,
+            bit_length,
+            byte_length,
+            *bit_offset,
+            *local,
+            ty,
+        ),
     }
 }
 

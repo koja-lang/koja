@@ -132,6 +132,7 @@ pub(super) fn lower_subpattern_into(
         Pattern::Binding { local_id, name, .. } => {
             let ir_local = require_local(*local_id, name);
             ensure_local_declared(ir_local, sub_ir_type, ctx);
+            ctx.mark_slot_borrowed(ir_local);
             binds.push(PayloadBind {
                 local: ir_local,
                 chain: vec![prefix],
@@ -218,6 +219,7 @@ fn collect_catch_all_binds(
         Pattern::Binding { local_id, name, .. } => {
             let ir_local = require_local(*local_id, name);
             ensure_local_declared(ir_local, sub_ir_type, ctx);
+            ctx.mark_slot_borrowed(ir_local);
             binds.push(PayloadBind {
                 local: ir_local,
                 chain: chain.iter().map(clone_bind_step).collect(),

@@ -38,8 +38,8 @@ use koja_typecheck::GlobalRegistry;
 use crate::function::{BranchTarget, IRBlockId, IRInstruction, IRTerminator};
 use crate::types::{IRType, ValueId};
 
-use super::arms::lower_arm_into;
-use super::ctx::{FnLowerCtx, LowerOutput, SlotStateSnapshot};
+use super::arms::{ArmJoinState, join_arm_states, lower_arm_into};
+use super::ctx::{FnLowerCtx, LowerOutput};
 use super::expr::lower_expr;
 use super::ownership::drop_discarded_temp;
 use super::patterns::{
@@ -68,12 +68,20 @@ pub(super) fn lower_match(
         result_ty,
     } = inputs;
     let (subject_value, block) = lower_expr(subject, ctx, block, registry, output)?;
+    // Track the owned subject while its arms lower so early exits
+    // (`return` / `break` inside an arm) can release it. They leave
+    // before the arm tail's release below runs.
+    let subject_is_temp =
+        ctx.is_owned(subject_value) && ctx.type_of(subject_value).is_heap_managed();
+    if subject_is_temp {
+        ctx.push_subject_temp(subject_value);
+    }
 
     let merge_block = ctx.fresh_block("match_merge");
     let result_id = ctx.declare_merge_param(merge_block, result_ty.clone());
 
     let entry_snapshot = ctx.snapshot_slot_states();
-    let mut arm_post_states: Vec<SlotStateSnapshot> = Vec::with_capacity(arms.len());
+    let mut arm_states: Vec<ArmJoinState> = Vec::with_capacity(arms.len());
 
     let mut current_test = block;
     let mut closed_chain = false;
@@ -159,17 +167,18 @@ pub(super) fn lower_match(
             registry,
             output,
         )?;
-        // The match consumes its subject: when the subject is an owned
-        // heap temp (`match self.handle(...)`), exactly one arm body
-        // executes, so each arm's tail releases it after the tail
-        // value has been acquired, since payload binds borrow the
-        // subject's storage. An early-`return` arm leaves the temp to
-        // leak (no tail block to host the drop). Slot-tracked subjects
-        // are borrowed reads and no-op here.
+        // The match consumes its subject. When the subject is an
+        // owned heap temp (`match self.handle(...)`), exactly one arm
+        // body executes, so each arm's tail releases it after the
+        // tail value has been acquired (payload binds borrow the
+        // subject's storage). Early-exit arms have no tail, so their
+        // `return` / `break` lowering drains the subject-temp stack
+        // instead. Slot-tracked subjects are borrowed reads and no-op
+        // here.
         if let Some(tail) = arm_tail {
             drop_discarded_temp(ctx, tail, subject_value);
         }
-        arm_post_states.push(ctx.snapshot_slot_states());
+        arm_states.push((arm_tail, ctx.snapshot_slot_states()));
         if let Some(next) = next_arm {
             current_test = next;
         }
@@ -177,17 +186,18 @@ pub(super) fn lower_match(
             break;
         }
     }
+    if subject_is_temp {
+        ctx.pop_subject_temp();
+    }
 
-    // Join per-arm post-states into the merged post-match state.
-    // Slots that every reachable arm agrees on keep their stamp, and
-    // disagreements fall back to `Unowned` (conservative: no
-    // function-exit drop for a slot whose runtime ownership is
-    // ambiguous). Empty `arm_post_states` falls back to the entry
-    // snapshot, preserving the pre-match slot states untouched.
-    if arm_post_states.is_empty() {
+    // Join per-arm post-states into the merged post-match state and
+    // release arm-scoped heap bindings at each arm's tail. Empty
+    // `arm_states` falls back to the entry snapshot, preserving the
+    // pre-match slot states untouched.
+    if arm_states.is_empty() {
         ctx.restore_slot_states(entry_snapshot);
     } else {
-        ctx.merge_slot_states(arm_post_states);
+        join_arm_states(ctx, arm_states);
     }
 
     Ok((result_id, merge_block))

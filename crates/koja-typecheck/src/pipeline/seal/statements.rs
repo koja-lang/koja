@@ -8,9 +8,9 @@ use koja_ast::ast::{LValue, Statement};
 use koja_ast::span::Span;
 
 use super::expressions::seal_expr;
-use super::seal_panic;
+use super::{SealMode, seal_panic};
 
-pub(super) fn seal_statement(stmt: &Statement) {
+pub(super) fn seal_statement(stmt: &Statement, mode: SealMode) {
     match stmt {
         Statement::Assignment {
             span,
@@ -19,7 +19,7 @@ pub(super) fn seal_statement(stmt: &Statement) {
             ..
         } => {
             seal_lvalue_shape(target, "assignment", *span);
-            seal_expr(value);
+            seal_expr(value, mode);
         }
         Statement::Break { .. } | Statement::Return { value: None, .. } => {}
         Statement::CompoundAssign {
@@ -29,12 +29,12 @@ pub(super) fn seal_statement(stmt: &Statement) {
             ..
         } => {
             seal_lvalue_shape(target, "compound-assign", *span);
-            seal_expr(value);
+            seal_expr(value, mode);
         }
-        Statement::Expr(expr) => seal_expr(expr),
+        Statement::Expr(expr) => seal_expr(expr, mode),
         Statement::Return {
             value: Some(value), ..
-        } => seal_expr(value),
+        } => seal_expr(value, mode),
     }
 }
 

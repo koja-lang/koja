@@ -298,6 +298,22 @@ neighbor remains open:
 
 ---
 
+## Runtime: RSS grows linearly under server load
+
+Found benchmarking the concurrent shortener rewrite (2026-07,
+process-per-connection workers + keep-alive, release build). RSS grows
+~127 MB per 10,000 requests, linear across repeated identical loads,
+with and without keep-alive, on both DB-backed and 404 paths. No
+crashes, drops, or latency degradation — but a long-running server
+would exhaust memory. Something on the per-request path is not
+reclaimed: candidate suspects are dead one-shot worker processes not
+being fully reaped, per-request heap values surviving the worker's
+recursive `serve` loop (tail-call frames keeping buffers alive), or
+mailbox/envelope allocations. Needs a runtime heap audit with a
+minimal spawn-per-message reproducer.
+
+---
+
 ## Bug triage log
 
 Audited 2026-05-03 · re-triaged 2026-05-27 (seven fixed entries

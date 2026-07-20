@@ -19,6 +19,14 @@ fn is_binop(expr: &Expr, expected_op: BinOp) -> bool {
     matches!(expr.kind, ExprKind::Binary { op, .. } if op == expected_op)
 }
 
+fn first_call_argument(source: &str) -> Expr {
+    let expr = first_script_expr(source);
+    let ExprKind::Call { args, .. } = expr.kind else {
+        panic!("expected call, got {expr:?}");
+    };
+    args.into_iter().next().expect("call argument").value
+}
+
 // ---- Arithmetic precedence ----
 
 #[test]
@@ -203,7 +211,7 @@ fn modulus_same_precedence_as_mul() {
 
 #[test]
 fn short_closure_single_param() {
-    let expr = first_script_expr("x -> x * 2");
+    let expr = first_call_argument("apply(x -> x * 2)");
     let ExprKind::ShortClosure { params, body, .. } = &expr.kind else {
         panic!("expected ShortClosure, got {expr:?}");
     };
@@ -214,7 +222,7 @@ fn short_closure_single_param() {
 
 #[test]
 fn short_closure_wildcard_param() {
-    let expr = first_script_expr("_ -> 42");
+    let expr = first_call_argument("apply(_ -> 42)");
     let ExprKind::ShortClosure { params, body, .. } = &expr.kind else {
         panic!("expected ShortClosure, got {expr:?}");
     };
@@ -230,7 +238,7 @@ fn short_closure_wildcard_param() {
 
 #[test]
 fn short_closure_body_is_full_expr() {
-    let expr = first_script_expr("x -> x + 1 * 2");
+    let expr = first_call_argument("apply(x -> x + 1 * 2)");
     let ExprKind::ShortClosure { body, .. } = &expr.kind else {
         panic!("expected ShortClosure, got {expr:?}");
     };
@@ -239,7 +247,7 @@ fn short_closure_body_is_full_expr() {
 
 #[test]
 fn short_closure_lower_precedence_than_arithmetic() {
-    let expr = first_script_expr("a -> a + b");
+    let expr = first_call_argument("apply(a -> a + b)");
     let ExprKind::ShortClosure { params, body, .. } = &expr.kind else {
         panic!("expected ShortClosure, got {expr:?}");
     };

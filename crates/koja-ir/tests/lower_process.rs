@@ -161,6 +161,44 @@ fn lower_process_entry(source: &str, state_name: &str) -> IRProgram {
     lower_program(&checked, &state).expect("lowering should succeed")
 }
 
+/// `stage_process_entry` re-enqueues the concrete entry methods the
+/// package pass already lowered. Re-lowering `start` would mint its
+/// closure a second time and panic on duplicate registration, so
+/// mono must skip already-registered concrete symbols.
+#[test]
+fn entry_start_with_closure_lowers_without_duplicate_registration() {
+    let source = "
+        struct ClosureEntry
+          value: Int
+        end
+
+        impl Process<(), (), ()> for ClosureEntry
+          fn start(config: ()) -> Result<Self, StopReason>
+            make = fn () -> Int
+              41 + 1
+            end
+
+            Result.Ok(ClosureEntry{value: make()})
+          end
+
+          fn handle(self, msg: (), from: Option<ReplyTo<()>>) -> Step<Self>
+            Step.Continue(self)
+          end
+
+          fn run(self) -> StopReason
+            StopReason.Normal
+          end
+        end
+        ";
+    let program = lower_process_entry(source, "ClosureEntry");
+    assert!(
+        program
+            .function(&format!("{PACKAGE}.ClosureEntry.start__closure0"))
+            .is_some(),
+        "start's closure should be registered exactly once",
+    );
+}
+
 /// Under value semantics, returning a heap-managed value from `block`
 /// acquires it via [`IRInstruction::Clone`] before the `Return` (block
 /// params and call results are borrowed until acquired). Assert the

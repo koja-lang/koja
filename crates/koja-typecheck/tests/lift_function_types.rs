@@ -118,3 +118,16 @@ fn function_type_in_generic_context_carries_type_params() {
     assert_eq!(**ret, u);
     assert_eq!(signature.return_type, u);
 }
+
+#[test]
+fn generic_function_body_passes_template_seal() {
+    let source = "
+        fn identity<T>(value: T) -> T
+          value
+        end
+
+        identity(1)
+        ";
+
+    typecheck(&dedent(source));
+}

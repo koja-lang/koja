@@ -1,32 +1,46 @@
 alias HTTP.Parser
+alias HTTP.Request
+alias HTTP.Response
 alias HTTP.Status
-alias Net.TCPListener
+alias Net.TCPServer
+alias Net.TCPServer.Config as TCPServerConfig
+alias Net.TCPServer.Event as TCPEvent
 alias Net.TCPSocket
+alias Pooler.Config as PoolConfig
+alias Pooler.Pool
 alias Postgres.Config as DbConfig
 alias Postgres.Connection
 alias Process.Lifecycle
 alias Process.Step
 alias Process.StopReason
 
-const TICK_MS: Int = 10
+const POOL_SIZE: Int = 10
+const CHECKOUT_MS: Int = 5000
+
+# SCRAM-SHA-256 auth runs its 4096 PBKDF2 rounds in pure Koja, so each
+# connect costs ~1s under `koja run`'s interpreter (vs ~10ms compiled).
+# The startup probe waits for the pool to build all POOL_SIZE
+# connections, so give it an interpreter-sized budget.
+const STARTUP_PROBE_MS: Int = 30000
+
+# Keep-alive limits: how many bytes to pull per socket read, and how
+# many requests one connection may issue before the worker closes it.
+const READ_CHUNK: Int = 8192
+const MAX_REQUESTS_PER_CONNECTION: Int = 1000
 
 @doc """
 The URL-shortener entry process. `start` loads config from the
-environment, opens a Postgres connection, and binds the listener. The
-`run` tick loop drains pending connections non-blockingly, then waits
-briefly for OS lifecycle signals so Ctrl-C / SIGTERM shut down cleanly.
-
-The Postgres connection lives in process state and is threaded through
-every request (Koja values are independent, so each query returns an
-updated connection); `handle_connection` rebinds the process to the
-connection the router hands back.
+environment, spawns a pool of `POOL_SIZE` Postgres connections, and
+spawns a `Net.TCPServer` acceptor that delivers connected sockets as
+`TCPEvent.Connected` messages. Each connection is handed to a one-shot
+`Worker` process, so requests are handled concurrently and the entry
+process never blocks on IO.
 """
 struct App
-  db: Connection
-  listener: TCPListener
+  pool: Pool<Connection>
 end
 
-impl Process<List<String>, (), String> for App
+impl Process<List<String>, TCPEvent, String> for App
   fn start(config: List<String>) -> Result<Self, StopReason>
     settings = Config.load()
     db_config = DbConfig.new(
@@ -36,32 +50,53 @@ impl Process<List<String>, (), String> for App
       settings.db_name,
     ).with_password(settings.db_password)
 
-    conn =
-      match Connection.connect(db_config)
-        Result.Ok(c) ->
-          c
+    create =
+      fn () -> Result<Connection, String> match Connection.connect(db_config)
+          Result.Ok(conn) -> Result.Ok(conn)
+          Result.Err(e) -> Result.Err(e.message())
+        end end
 
-        Result.Err(e) ->
-          IO.puts("database connection failed: #{e.message()}")
-          return Result.Err(StopReason.Shutdown)
-      end
+    pool = Pool.start(PoolConfig{create: create, size: POOL_SIZE})
 
-    match TCPListener.bind(settings.port)
-      Result.Err(e) ->
-        IO.puts("bind failed: " <> e.message())
-        Result.Err(StopReason.Shutdown)
+    # The pool builds its connections eagerly but reports factory
+    # failure as PoolDown on first use. Probe once so a bad database
+    # config fails at startup instead of on the first request.
+    match pool.checkout(STARTUP_PROBE_MS)
+      Result.Ok(conn) ->
+        pool.checkin(conn)
 
-      Result.Ok(listener) ->
-        IO.puts("koja-shortener listening on http://127.0.0.1:#{settings.port}")
-        IO.puts("  POST /links {\"url\": \"...\"}  -> create")
-        IO.puts("  GET  /:code                  -> redirect")
-        IO.puts("  (press Ctrl-C to stop)")
-        Result.Ok(App{db: conn, listener: listener})
+      Result.Err(Pooler.Error.Timeout) ->
+        IO.puts("database connections are still warming up; try again shortly")
+        return Result.Err(StopReason.Shutdown)
+
+      Result.Err(_) ->
+        IO.puts("database connection failed (is the compose stack up?)")
+        return Result.Err(StopReason.Shutdown)
     end
+
+    me: Ref<TCPEvent, String> = Ref.self_ref()
+    _ = spawn TCPServer.start(TCPServerConfig{port: settings.port, owner: me})
+
+    IO.puts("koja-shortener listening on http://127.0.0.1:#{settings.port}")
+    IO.puts("  POST /links {\"url\": \"...\"}  -> create")
+    IO.puts("  GET  /:code                  -> redirect")
+    IO.puts("  (#{POOL_SIZE} pooled db connections, press Ctrl-C to stop)")
+    Result.Ok(App{pool: pool})
   end
 
-  fn handle(self, msg: (), from: Option<ReplyTo<String>>) -> Step<Self>
-    Step.Continue(self)
+  fn handle(self, msg: TCPEvent, from: Option<ReplyTo<String>>) -> Step<Self>
+    match msg
+      TCPEvent.Connected(client) ->
+        _ = spawn Worker.start(Worker.Config{client: client, pool: self.pool})
+        Step.Continue(self)
+
+      TCPEvent.Closed(_) ->
+        Step.Continue(self)
+
+      TCPEvent.Error(e) ->
+        IO.puts("listener error: " <> e.message())
+        Step.Done(StopReason.Shutdown)
+    end
   end
 
   fn handle_signal(self, signal: Lifecycle) -> Step<Self>
@@ -79,69 +114,193 @@ impl Process<List<String>, (), String> for App
         Step.Done(StopReason.Shutdown)
     end
   end
+end
+
+@doc """
+A one-shot process that owns a single client connection. Its `run`
+loop reads requests off the socket (HTTP keep-alive), checks a database
+connection out of the pool for each one, routes it, and writes the
+response. The worker exits when the client closes, a read or write
+fails, the request asks for `Connection: close`, or the per-connection
+request budget is spent.
+"""
+struct Worker
+  client: TCPSocket
+  pool: Pool<Connection>
+end
+
+struct Worker.Config
+  client: TCPSocket
+  pool: Pool<Connection>
+end
+
+impl Process<Worker.Config, (), ()> for Worker
+  fn start(config: Worker.Config) -> Result<Self, StopReason>
+    Result.Ok(Worker{client: config.client, pool: config.pool})
+  end
+
+  fn handle(self, msg: (), from: Option<ReplyTo<()>>) -> Step<Self>
+    Step.Continue(self)
+  end
 
   fn run(self) -> StopReason
-    self.tick()
+    self.serve("", MAX_REQUESTS_PER_CONNECTION)
   end
 end
 
-extend App
-  priv fn tick(self) -> StopReason
-    app = self.drain()
+extend Worker
+  priv fn serve(self, buffered: String, budget: Int) -> StopReason
+    match read_request(self.client, buffered)
+      Option.None ->
+        self.close()
+        StopReason.Normal
 
-    receive
-      event: Lifecycle ->
-        match app.handle_signal(event)
-          Step.Done(reason) -> reason
-          Step.Continue(next) -> next.tick()
+      Option.Some(framed) ->
+        outcome = self.respond(framed.first)
+        keep = outcome.second and budget > 1
+        response = with_connection(outcome.first, keep ? "keep-alive" : "close")
+
+        match self.client.write(response.serialize())
+          Result.Ok(_) when keep ->
+            self.serve(framed.second, budget - 1)
+
+          _ ->
+            self.close()
+            StopReason.Normal
         end
-    after TICK_MS
-      app.tick()
     end
   end
 
-  priv fn drain(self) -> App
-    match self.listener.try_accept()
-      Option.Some(client) -> self.handle_connection(client).drain()
-      Option.None -> self
+  # Parses and routes one raw request. Returns the response paired
+  # with whether the client wants the connection kept open.
+  priv fn respond(self, raw: String) -> Pair<Response, Bool>
+    match Parser.parse_request(raw)
+      Result.Err(_) ->
+        Pair{
+          first: Router.error(Status.bad_request(), "malformed request"),
+          second: false,
+        }
+
+      Result.Ok(req) ->
+        keep = wants_keep_alive?(req)
+
+        match self.pool.checkout(CHECKOUT_MS)
+          Result.Err(_) ->
+            Pair{
+              first: Router.error(
+                Status.new(503, "Service Unavailable"),
+                "no database connection available",
+              ),
+              second: keep,
+            }
+
+          Result.Ok(conn) ->
+            routed = Router.route(req, conn)
+            self.pool.checkin(routed.second)
+            Pair{first: routed.first, second: keep}
+        end
     end
   end
 
-  priv fn handle_connection(self, client: TCPSocket) -> App
-    raw =
-      match client.read(8192)
-        Result.Ok(s) -> s
-        Result.Err(_) -> ""
-      end
-
-    if raw.empty?()
-      close(client)
-      return self
-    end
-
-    outcome =
-      match Parser.parse_request(raw)
-        Result.Ok(req) ->
-          Router.route(req, self.db)
-
-        Result.Err(_) ->
-          Pair{
-            first: Router.error(Status.bad_request(), "malformed request"),
-            second: self.db,
-          }
-      end
-
-    match client.write(outcome.first.serialize())
-      _ -> ()
-    end
-
-    close(client)
-    App{db: outcome.second, listener: self.listener}
-  end
-
-  priv fn close(client: TCPSocket)
-    match client.close()
+  priv fn close(self)
+    match self.client.close()
       _ -> ()
     end
   end
+end
+
+# Reads from `client` until `buffered` holds one complete HTTP request
+# (headers plus `Content-Length` bytes of body). Returns the framed
+# request paired with any bytes that arrived after it (pipelining), or
+# `Option.None` when the client closes or the read fails.
+priv fn read_request(client: TCPSocket, buffered: String)
+  -> Option<Pair<String, String>>
+
+  match split_request(buffered)
+    Option.Some(framed) ->
+      Option.Some(framed)
+
+    Option.None ->
+      match client.read(READ_CHUNK)
+        Result.Ok(chunk) when not chunk.empty?() ->
+          read_request(client, buffered <> chunk)
+        _ -> Option.None
+      end
+  end
+end
+
+# Splits `buffer` into one complete request and the leftover bytes, or
+# returns None when the request is still incomplete.
+priv fn split_request(buffer: String) -> Option<Pair<String, String>>
+  parts = buffer.split("\r\n\r\n")
+
+  if parts.length() < 2
+    return Option.None
+  end
+
+  header_text =
+    match parts.get(0)
+      Option.Some(text) -> text
+      Option.None -> ""
+    end
+
+  total = header_text.length() + 4 + content_length(header_text)
+
+  if buffer.length() < total
+    return Option.None
+  end
+
+  request = buffer.slice(Range{start: 0, stop: total - 1})
+  leftover = buffer.length() == total
+    ? ""
+    : buffer.slice(Range{start: total, stop: buffer.length() - 1})
+
+  Option.Some(Pair{first: request, second: leftover})
+end
+
+priv fn content_length(header_text: String) -> Int
+  lines = header_text.split("\r\n")
+  found = lines.filter(line -> line.downcase().starts_with?("content-length:"))
+
+  match found.get(0)
+    Option.None ->
+      0
+
+    Option.Some(line) ->
+      match line.split(":").get(1)
+        Option.None ->
+          0
+
+        Option.Some(value) ->
+          match value.trim().to_int()
+            Result.Ok(n) -> n
+            Result.Err(_) -> 0
+          end
+      end
+  end
+end
+
+# HTTP/1.1 defaults to keep-alive, HTTP/1.0 to close; an explicit
+# Connection header overrides either.
+priv fn wants_keep_alive?(req: Request) -> Bool
+  fallback = req.version == "HTTP/1.1"
+
+  match req.headers.get("Connection")
+    Option.None ->
+      fallback
+
+    Option.Some(value) ->
+      lowered = value.downcase()
+
+      cond
+        lowered.contains?("close") -> false
+        lowered.contains?("keep-alive") -> true
+        else -> fallback
+      end
+  end
+end
+
+priv fn with_connection(response: Response, value: String) -> Response
+  response.headers = response.headers.set("Connection", value)
+  response
 end

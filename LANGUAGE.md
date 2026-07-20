@@ -44,9 +44,9 @@ x = 42  # inline comment
 ### Keywords
 
 ```
-alias, break, cond, const, else, end, enum, false, fn, for,
-if, impl, in, loop, match, not, priv, protocol,
-receive, return, self, spawn, struct, true, type, unless, when
+after, alias, break, cond, const, else, end, enum, extend, false,
+fn, for, if, impl, in, loop, match, not, priv, protocol, receive,
+return, self, spawn, struct, true, type, unless, when, while
 ```
 
 `and` and `or` are operator-identifiers, not reserved keywords. They act as infix boolean operators in expressions (`a and b`, `x or y`) but can also be used freely as method names, function names, or field names (e.g., `option.or(default)`).
@@ -239,6 +239,8 @@ fn find(items: List<Int32>, target: Int32) -> Bool
 end
 ```
 
+`return` is a statement. It cannot appear inside another expression.
+
 ### Parameters
 
 Parameters are passed by value. The callee receives its own independent copy and the caller's binding stays usable afterward:
@@ -301,6 +303,8 @@ loop
   i += 1
 end
 ```
+
+`break` is a statement. It cannot appear inside another expression.
 
 ### `for` ... `in`
 
@@ -888,7 +892,7 @@ measure = fn (data: String) -> Int data.length() end
 
 ### Short Closures
 
-Short closures use `param -> expr` syntax with parameter types inferred from the calling context:
+Short closures use `param -> expr` syntax as direct call arguments, with parameter types inferred from the call:
 
 ```koja
 option.map(x -> x + 1)
@@ -896,7 +900,7 @@ list.filter(n -> n > 3)
 names.map(name -> name.upcase())
 ```
 
-Works at inline call sites including generic methods. For multi-parameter or multi-statement closures, use the block form above.
+Both positional and named arguments accept the short form, including arguments to generic functions. Use the block form outside a call argument or when the closure needs multiple parameters or statements.
 
 ### Capture Semantics
 

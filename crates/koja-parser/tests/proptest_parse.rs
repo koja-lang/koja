@@ -48,21 +48,22 @@ fn tests_lang_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../tests/lang")
 }
 
-/// Checks the span invariants the parser currently upholds: `start <= end`
-/// and `end` does not exceed the source length.
-///
-/// The stricter "offset lands on a UTF-8 char boundary" property is not
-/// asserted here because the underlying lexer cursor is char-indexed, not
-/// byte-indexed (see `lexer_offset_should_be_byte_indexed` in the
-/// `koja-lexer` proptest suite).
-fn span_within_source(start: u32, end: u32, source_len: usize) -> Result<(), String> {
+/// Checks that span offsets are ordered UTF-8 boundaries within the source.
+fn span_within_source(start: u32, end: u32, source: &str) -> Result<(), String> {
     if start > end {
         return Err(format!("span start ({start}) > end ({end})"));
     }
-    if end as usize > source_len {
+    if end as usize > source.len() {
         return Err(format!(
-            "span end ({end}) exceeds source length ({source_len})"
+            "span end ({end}) exceeds source length ({})",
+            source.len()
         ));
+    }
+    if !source.is_char_boundary(start as usize) {
+        return Err(format!("span start ({start}) is not a UTF-8 boundary"));
+    }
+    if !source.is_char_boundary(end as usize) {
+        return Err(format!("span end ({end}) is not a UTF-8 boundary"));
     }
     Ok(())
 }
@@ -126,7 +127,7 @@ proptest! {
             if let Err(err) = span_within_source(
                 diag.span.start.offset,
                 diag.span.end.offset,
-                s.len(),
+                &s,
             ) {
                 return Err(TestCaseError::fail(format!(
                     "ill-formed diagnostic span: {err}\nsource: {s:?}\ndiag: {diag:?}"

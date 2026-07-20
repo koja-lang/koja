@@ -48,6 +48,12 @@ const WHEEL_SLOTS: u64 = 4096;
 const WHEEL_TICK_NANOS: u64 = WHEEL_TICK.as_nanos() as u64;
 /// `u64` words backing the occupied-bucket bitmap.
 const BITMAP_WORDS: usize = (WHEEL_SLOTS / 64) as usize;
+/// Capacity an emptied bucket keeps. Buckets grow to absorb bursts
+/// (every `Ref.call` arms a deadline entry), and `Vec` never returns
+/// capacity on its own, so without this cap a burst's peak footprint
+/// becomes permanent RSS. 4096 buckets a few thousand entries deep is
+/// hundreds of MB.
+const BUCKET_RETAIN: usize = 16;
 
 /// A pending delayed message (`send_after`), surfaced by
 /// [`TimerWheel::drain_due`] for the driver to deliver. The message is
@@ -58,10 +64,12 @@ pub struct TimerEntry<M> {
     pub target_pid: Pid,
 }
 
-/// What a fired wheel entry asks the table to do.
+/// What a fired wheel entry asks the table to do. The deliver payload
+/// is boxed so the far more numerous deadline entries (one per
+/// `Ref.call` / `receive after`) don't pay the envelope's inline size.
 enum WheelKind<M> {
     /// Deliver a staged envelope to `pid`.
-    Deliver(M),
+    Deliver(Box<M>),
     /// Promote `pid` (a receive/call deadline expired). `fire_at` is the
     /// recorded deadline the table re-validates against.
     Promote,
@@ -146,7 +154,7 @@ impl<M> TimerWheel<M> {
 
     /// Schedules `envelope` for delivery to `target_pid` at `fire_at`.
     pub fn insert_deliver(&mut self, fire_at: Instant, target_pid: Pid, envelope: M) {
-        self.insert(fire_at, target_pid, WheelKind::Deliver(envelope));
+        self.insert(fire_at, target_pid, WheelKind::Deliver(Box::new(envelope)));
     }
 
     /// Records a receive/call deadline for `pid` at `fire_at`.
@@ -211,6 +219,9 @@ impl<M> TimerWheel<M> {
                 }
                 if self.slots[idx].is_empty() {
                     self.clear_occupied(idx);
+                    if self.slots[idx].capacity() > BUCKET_RETAIN {
+                        self.slots[idx].shrink_to(BUCKET_RETAIN);
+                    }
                 }
             }
         }
@@ -221,7 +232,7 @@ impl<M> TimerWheel<M> {
         due.into_iter()
             .map(|entry| match entry.kind {
                 WheelKind::Deliver(envelope) => Due::Deliver {
-                    envelope,
+                    envelope: *envelope,
                     target_pid: entry.pid,
                 },
                 WheelKind::Promote => Due::Promote {
@@ -362,6 +373,27 @@ mod tests {
 
         let due = wheel.drain_due(now + Duration::from_millis(3));
         assert_eq!(pids(&due), vec![2]);
+    }
+
+    #[test]
+    fn drained_buckets_release_burst_capacity() {
+        // A call-heavy burst grows bucket Vecs. Once drained they must
+        // give the capacity back or the peak becomes permanent RSS.
+        let mut wheel: TimerWheel<()> = TimerWheel::new();
+        let base = Instant::now();
+        let fire = base + Duration::from_millis(10);
+        for pid in 0..10_000 {
+            wheel.insert_deadline(fire, pid);
+        }
+
+        let due = wheel.drain_due(fire + Duration::from_millis(1));
+        assert_eq!(due.len(), 10_000);
+        assert!(wheel.is_empty());
+        let retained: usize = wheel.slots.iter().map(Vec::capacity).sum();
+        assert!(
+            retained <= WHEEL_SLOTS as usize * BUCKET_RETAIN,
+            "bucket capacity after drain should be bounded, got {retained}",
+        );
     }
 
     #[test]

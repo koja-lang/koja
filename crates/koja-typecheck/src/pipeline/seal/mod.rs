@@ -44,16 +44,29 @@ use crate::pipeline::collect::{lookup_owner_path, nominal_target_path};
 use crate::program::CheckedProgram;
 use crate::registry::{GlobalKind, GlobalRegistry};
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum SealMode {
+    Concrete,
+    GenericTemplate,
+}
+
+impl SealMode {
+    fn for_template(generic: bool) -> Self {
+        if generic {
+            Self::GenericTemplate
+        } else {
+            Self::Concrete
+        }
+    }
+}
+
 /// Asserts the sealed-AST invariants on `program`. Panics on violation.
 ///
-/// Generic decl bodies (functions with their own type params, plus
-/// inline `fn` items on generic struct/enum decls and impl-block
-/// methods on generic targets) are skipped: their bodies still
-/// carry [`Resolution::TypeParam`] leaves until IR's monomorphization
-/// substitutes through and re-lowers a concrete copy. The IR pipeline
-/// drops generic templates before seal-equivalent invariants apply
-/// downstream.
+/// Generic templates permit resolved [`Resolution::TypeParam`] leaves.
+/// Concrete bodies reject them. Neither mode permits unresolved
+/// annotations.
 pub(crate) fn seal_ast(program: &CheckedProgram) {
+    seal_registry(&program.registry);
     for pkg in &program.packages {
         for file in &pkg.files {
             seal_file(file, &pkg.package, &program.registry);
@@ -65,37 +78,29 @@ fn seal_file(file: &File, package: &str, registry: &GlobalRegistry) {
     for item in &file.items {
         match item {
             Item::Function(function) => {
-                if !function.type_params.is_empty() {
-                    continue;
-                }
-                seal_function(function);
+                let mode = SealMode::for_template(!function.type_params.is_empty());
+                seal_function(function, mode);
             }
             Item::Struct(decl) => {
                 let owner_generic = !decl.type_params.is_empty();
                 for function in &decl.functions {
-                    if owner_generic || !function.type_params.is_empty() {
-                        continue;
-                    }
-                    seal_function(function);
+                    let generic = owner_generic || !function.type_params.is_empty();
+                    seal_function(function, SealMode::for_template(generic));
                 }
             }
             Item::Enum(decl) => {
                 let owner_generic = !decl.type_params.is_empty();
                 for function in &decl.functions {
-                    if owner_generic || !function.type_params.is_empty() {
-                        continue;
-                    }
-                    seal_function(function);
+                    let generic = owner_generic || !function.type_params.is_empty();
+                    seal_function(function, SealMode::for_template(generic));
                 }
             }
             Item::Impl(impl_block) => {
                 let target_generic = impl_target_is_generic(&impl_block.target, package, registry);
                 for member in &impl_block.members {
-                    if let ImplMember::Function(function) = member
-                        && function.type_params.is_empty()
-                        && !target_generic
-                    {
-                        seal_function(function);
+                    if let ImplMember::Function(function) = member {
+                        let generic = target_generic || !function.type_params.is_empty();
+                        seal_function(function, SealMode::for_template(generic));
                     }
                 }
             }
@@ -103,11 +108,9 @@ fn seal_file(file: &File, package: &str, registry: &GlobalRegistry) {
                 let target_generic =
                     impl_target_is_generic(&extend_block.target, package, registry);
                 for member in &extend_block.members {
-                    if let ImplMember::Function(function) = member
-                        && function.type_params.is_empty()
-                        && !target_generic
-                    {
-                        seal_function(function);
+                    if let ImplMember::Function(function) = member {
+                        let generic = target_generic || !function.type_params.is_empty();
+                        seal_function(function, SealMode::for_template(generic));
                     }
                 }
             }
@@ -122,7 +125,33 @@ fn seal_file(file: &File, package: &str, registry: &GlobalRegistry) {
         // `file.body`. Downstream passes consume them directly. Seal
         // the same statement-tree invariants function bodies satisfy.
         for stmt in body {
-            seal_statement(stmt);
+            seal_statement(stmt, SealMode::Concrete);
+        }
+    }
+}
+
+fn seal_registry(registry: &GlobalRegistry) {
+    for (_, entry) in registry.iter() {
+        match &entry.kind {
+            GlobalKind::Constant(Some(_))
+            | GlobalKind::Enum(Some(_))
+            | GlobalKind::Function(Some(_))
+            | GlobalKind::Protocol(Some(_))
+            | GlobalKind::Struct(Some(_))
+            | GlobalKind::TypeAlias(Some(_)) => {}
+            GlobalKind::Constant(None)
+            | GlobalKind::Enum(None)
+            | GlobalKind::Function(None)
+            | GlobalKind::Protocol(None)
+            | GlobalKind::Struct(None)
+            | GlobalKind::TypeAlias(None) => seal_panic(
+                &format!(
+                    "registry entry `{}` reached seal as an unstamped {}",
+                    entry.identifier,
+                    entry.kind.label(),
+                ),
+                entry.span,
+            ),
         }
     }
 }
@@ -177,15 +206,15 @@ fn seal_constant(constant: &Constant, package: &str, registry: &GlobalRegistry) 
             constant.span,
         ),
     }
-    seal_expr(&constant.value);
+    seal_expr(&constant.value, SealMode::Concrete);
 }
 
-fn seal_function(function: &Function) {
+fn seal_function(function: &Function, mode: SealMode) {
     let Some(body) = function.body.as_ref() else {
         return;
     };
     for stmt in body {
-        seal_statement(stmt);
+        seal_statement(stmt, mode);
     }
 }
 
@@ -225,9 +254,57 @@ pub(super) fn seal_no_type_param(ty: &ResolvedType, span: Span) {
     }
 }
 
+pub(super) fn seal_resolved_type(ty: &ResolvedType, mode: SealMode, span: Span) {
+    if !ty.is_resolved() {
+        seal_panic("type annotation missing resolution", span);
+    }
+    if mode == SealMode::Concrete {
+        seal_no_type_param(ty, span);
+    }
+}
+
 pub(super) fn seal_panic(message: &str, span: Span) -> ! {
     panic!(
         "typecheck seal violation: {message} at line {}, column {}",
         span.start.line, span.start.column
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use koja_ast::ast::{Expr, ExprKind, Literal};
+    use koja_ast::identifier::Identifier;
+    use koja_ast::span::Span;
+
+    use crate::registry::{GlobalRegistry, VisibilityScope};
+
+    use super::expressions::seal_expr;
+    use super::{SealMode, seal_registry};
+
+    #[test]
+    #[should_panic(expected = "reached seal as an unstamped function")]
+    fn registry_rejects_unstamped_entry() {
+        let mut registry = GlobalRegistry::new();
+        registry.insert_function(
+            Identifier::new("Test", vec!["pending".to_string()]),
+            Span::default(),
+            Vec::new(),
+            VisibilityScope::Public,
+        );
+
+        seal_registry(&registry);
+    }
+
+    #[test]
+    #[should_panic(expected = "type annotation missing resolution")]
+    fn template_rejects_unresolved_expression() {
+        let expression = Expr::new(
+            ExprKind::Literal {
+                value: Literal::Unit,
+            },
+            Span::default(),
+        );
+
+        seal_expr(&expression, SealMode::GenericTemplate);
+    }
 }

@@ -128,23 +128,30 @@ annotation, and sealing. There is no separate "preprocess" phase.
 
 ```text
 koja-typecheck:
+  preload          -> seed temporary Global primitive stubs.
+  derive           -> append Debug and Equality impls before collect
+                      so synthesized declarations enter normal binding.
   collect          -> two passes across all files. collect_file_decls
                       registers named decls (types, functions, etc.)
                       into the GlobalRegistry. collect_file_impls runs
                       after every decl is registered and binds impl
                       blocks. The two-pass shape lets impls reference
                       types declared in later files.
+  validate         -> validate nested declarations and file aliases
+                      against the complete registry.
   lift_signatures  -> stamp FunctionSignatures and lifted struct /
                       enum / protocol payloads on the registry.
-  synthesize       -> surface-shape AST rewrites (today: `for` desugar).
-                      Default protocol impl bodies (Debug, etc.) are
-                      derived at monomorphization time by the codegen
-                      backends, not pre-baked as a typecheck sub-pass.
+  visibility       -> reject private types leaked through public
+                      signatures.
+  synthesize       -> rewrite typed surface shapes such as `for`.
   resolve          -> walk all bodies; populate Resolution and
                       resolution: ResolvedType on every relevant node;
                       validate type compatibility; annotate coercion
                       sites. Check, annotate, and resolve are folded
                       into one walk rather than separate sub-passes.
+  borrows          -> reject CPtr.borrow results that escape their
+                      borrowing statement.
+  diagnostics      -> return CheckFailure if any error was collected.
   seal             -> assert sealed-substrate invariants per seal_ast.
 ```
 
@@ -167,7 +174,7 @@ When a new transformation is proposed, find its slot mechanically:
 5. Does it produce nodes that themselves need resolution?
    → before resolve.
 6. Does it touch invariants the seal asserts?
-   → it doesn't belong in typecheck; it belongs in koja-ir or later.
+   → update the owning typecheck pass and its seal together.
 
 ### What typecheck owns
 
@@ -176,7 +183,8 @@ When a new transformation is proposed, find its slot mechanically:
 - Type resolution for every type expression.
 - Overload / dispatch resolution for every call.
 - Coercion annotation on every site that requires one.
-- Surface-shape synthesis (today: `for` desugar).
+- Debug and Equality impl synthesis before binding.
+- Surface-shape synthesis such as `for` desugar.
 - Registration of every top-level decl in its own
   `GlobalRegistry`.
 
@@ -185,10 +193,6 @@ When a new transformation is proposed, find its slot mechanically:
 - Generic specialization (monomorphization). Generic decls remain
   in the sealed AST with type-parameter references; koja-ir
   specializes them.
-- Default protocol impl bodies (Debug, etc.). The registry knows
-  which protocols a type conforms to, but the synthesized impl
-  bodies are produced at monomorphization time by the codegen
-  backends — not pre-baked into the sealed AST.
 - Any IR construction.
 - Any awareness of LLVM types or backend concerns.
 

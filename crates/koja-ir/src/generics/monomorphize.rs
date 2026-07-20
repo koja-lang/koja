@@ -123,6 +123,17 @@ pub(super) fn monomorphize(
                     &method_arg_types,
                 )
             };
+            // Concrete process-entry methods arrive here via
+            // `stage_process_entry` even though the initial package
+            // pass already lowered them. Re-lowering would synthesize
+            // their closures a second time and panic on duplicate
+            // registration, so skip symbols that already exist.
+            if owning_package(packages, &owner_label, &template_symbol)
+                .functions
+                .contains_key(symbol.mangled())
+            {
+                return;
+            }
             let ast_entry = function_index.get(&inst.template).unwrap_or_else(|| {
                 panic!(
                     "IR generics: function template `{}` registered but no AST \

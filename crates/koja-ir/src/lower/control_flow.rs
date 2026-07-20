@@ -18,8 +18,8 @@ use koja_typecheck::GlobalRegistry;
 use crate::function::{BranchTarget, IRBlockId, IRInstruction, IRTerminator};
 use crate::types::{ConstValue, IRType, ValueId};
 
-use super::arms::{emit_unit, lower_arm_into, lower_expr_arm_into};
-use super::ctx::{FnLowerCtx, LowerOutput, SlotStateSnapshot};
+use super::arms::{ArmJoinState, emit_unit, join_arm_states, lower_arm_into, lower_expr_arm_into};
+use super::ctx::{FnLowerCtx, LowerOutput};
 use super::expr::lower_expr;
 
 /// AST-side inputs to [`lower_if`]. Bundled so the helper signature
@@ -88,9 +88,9 @@ pub(super) fn lower_if(
     );
 
     let entry_snapshot = ctx.snapshot_slot_states();
-    let mut post_states: Vec<SlotStateSnapshot> = Vec::with_capacity(2);
+    let mut arm_states: Vec<ArmJoinState> = Vec::with_capacity(2);
 
-    lower_arm_into(
+    let then_tail = lower_arm_into(
         then_body,
         ctx,
         then_block,
@@ -99,11 +99,11 @@ pub(super) fn lower_if(
         registry,
         output,
     )?;
-    post_states.push(ctx.snapshot_slot_states());
+    arm_states.push((then_tail, ctx.snapshot_slot_states()));
 
     if let (Some(else_body), Some(else_block)) = (else_body, else_block) {
         ctx.restore_slot_states(entry_snapshot.clone());
-        lower_arm_into(
+        let else_tail = lower_arm_into(
             else_body,
             ctx,
             else_block,
@@ -112,14 +112,14 @@ pub(super) fn lower_if(
             registry,
             output,
         )?;
-        post_states.push(ctx.snapshot_slot_states());
+        arm_states.push((else_tail, ctx.snapshot_slot_states()));
     } else {
         // No `else` arm: the cond=false edge bypasses the body
         // straight to the merge, so the "else" post-state is the
         // entry snapshot (no slot writes occur on that path).
-        post_states.push(entry_snapshot);
+        arm_states.push((None, entry_snapshot));
     }
-    ctx.merge_slot_states(post_states);
+    join_arm_states(ctx, arm_states);
     Ok((result_id, merge_block))
 }
 
@@ -151,7 +151,7 @@ pub(super) fn lower_unless(
         },
     );
     let entry_snapshot = ctx.snapshot_slot_states();
-    lower_arm_into(
+    let body_tail = lower_arm_into(
         body,
         ctx,
         body_block,
@@ -164,7 +164,7 @@ pub(super) fn lower_unless(
     // Merge the body-arm post-state with the bypass-arm post-state
     // (= entry snapshot, since the cond=true path skips the body
     // and writes no slots).
-    ctx.merge_slot_states(vec![body_post, entry_snapshot]);
+    join_arm_states(ctx, vec![(body_tail, body_post), (None, entry_snapshot)]);
     Ok((result_id, merge_block))
 }
 
@@ -214,7 +214,7 @@ pub(super) fn lower_cond(
 
     let entry_snapshot = ctx.snapshot_slot_states();
     let arm_count = arms.len() + usize::from(else_body.is_some());
-    let mut post_states: Vec<SlotStateSnapshot> = Vec::with_capacity(arm_count);
+    let mut arm_states: Vec<ArmJoinState> = Vec::with_capacity(arm_count);
 
     let mut current_test = block;
     for (index, arm) in arms.iter().enumerate() {
@@ -243,7 +243,7 @@ pub(super) fn lower_cond(
             },
         );
         ctx.restore_slot_states(entry_snapshot.clone());
-        lower_arm_into(
+        let arm_tail = lower_arm_into(
             &arm.body,
             ctx,
             body_block,
@@ -252,7 +252,7 @@ pub(super) fn lower_cond(
             registry,
             output,
         )?;
-        post_states.push(ctx.snapshot_slot_states());
+        arm_states.push((arm_tail, ctx.snapshot_slot_states()));
         if let Some(next) = next_test {
             current_test = next;
         }
@@ -260,7 +260,7 @@ pub(super) fn lower_cond(
 
     if let (Some(else_body), Some(else_block)) = (else_body, else_block) {
         ctx.restore_slot_states(entry_snapshot.clone());
-        lower_arm_into(
+        let else_tail = lower_arm_into(
             else_body,
             ctx,
             else_block,
@@ -269,17 +269,17 @@ pub(super) fn lower_cond(
             registry,
             output,
         )?;
-        post_states.push(ctx.snapshot_slot_states());
+        arm_states.push((else_tail, ctx.snapshot_slot_states()));
     } else if !arms.is_empty() {
         // No else and parser-produced cond: contribute the
         // entry-snapshot to the merge so a slot that some arm
         // writes (and others don't) doesn't get over-promoted.
-        post_states.push(entry_snapshot.clone());
+        arm_states.push((None, entry_snapshot.clone()));
     }
-    if post_states.is_empty() {
+    if arm_states.is_empty() {
         ctx.restore_slot_states(entry_snapshot);
     } else {
-        ctx.merge_slot_states(post_states);
+        join_arm_states(ctx, arm_states);
     }
     Ok((result_id, merge_block))
 }

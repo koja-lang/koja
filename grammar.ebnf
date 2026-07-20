@@ -211,7 +211,7 @@ postfix_op = "." , IDENT , "(" , [ arg_list ] , ")"        (* method call *)
 
 arg_list = arg , { "," , arg } ;
 
-arg = [ IDENT , ":" ] , expr ;    (* positional or keyword *)
+arg = [ IDENT , ":" ] , ( short_closure | expr ) ;    (* positional or keyword *)
 
 primary = literal
         | IDENT
@@ -220,7 +220,6 @@ primary = literal
         | enum_construction
         | binary_literal
         | closure
-        | short_closure
         
         | if_expr
         | unless_expr
@@ -260,7 +259,7 @@ closure_params = closure_param , { "," , closure_param } ;
 closure_param = IDENT , [ ":" , type_expr ]
               | "_" ;
 
-(* Short arrow closure: (args -> expr) -- delimited by enclosing parens *)
+(* Short arrow closure: direct call arguments only *)
 short_closure = closure_param_short , "->" , expr ;
 
 closure_param_short = IDENT , [ ":" , type_expr ]
@@ -404,7 +403,7 @@ float_lit = DECIMAL_INT , "." , DECIMAL_INT ;
 
 string_lit = '"' , { string_char | interpolation } , '"' ;
 string_char = escape_seq | any_char_except_quote_backslash_newline ;
-escape_seq = "\\" , ( '"' | "\\" | "n" | "t" | "#" ) ;
+escape_seq = "\\" , ( '"' | "\\" | "n" | "r" | "t" | "#" ) ;
 
 multiline_string_lit = '"""' , { multiline_char | interpolation } , '"""' ;
 multiline_char = escape_seq | any_char_except_triple_quote_backslash ;

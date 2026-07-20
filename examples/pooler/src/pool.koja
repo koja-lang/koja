@@ -1,0 +1,226 @@
+alias Process.CallError
+alias Process.Step
+alias Process.StopReason
+alias ReplyTo.Delivery
+
+@doc """
+Configuration for a pool. `create` is the resource factory: the pool
+calls it `size` times at startup and once per discarded resource. The
+closure carries the concrete resource type, so the pool itself never
+needs to know how a resource is built.
+"""
+struct Config<T>
+  create: fn () -> Result<T, String>
+  size: Int
+end
+
+@doc """
+The pool's message contract. Borrowers check a resource out, use it,
+and either check the (possibly updated) value back in or discard a
+broken one so the pool can build a replacement.
+"""
+enum Msg<T>
+  Checkin(T)
+  Checkout
+  Discard
+end
+
+@doc """
+The pool's reply contract. `Resource` answers a checkout. `Done` and
+`Failed` answer a discard.
+"""
+enum Reply<T>
+  Done
+  Failed(String)
+  Resource(T)
+end
+
+@doc """
+Why a pool operation failed. `Timeout` means no resource freed up
+within the checkout timeout, `PoolDown` means the pool process is not
+running (including a pool whose factory failed at startup).
+"""
+enum Error
+  Failed(String)
+  PoolDown
+  Timeout
+end
+
+@doc """
+A handle to a running pool. Lends resource values to callers one at a
+time: `checkout` borrows a resource, `checkin` returns the (possibly
+updated) value, and `discard` reports a broken resource so the pool
+builds a replacement. When every resource is lent out, checkout callers
+queue in FIFO order and are answered as resources come back.
+"""
+struct Pool<T>
+  ref: Ref<Msg<T>, Reply<T>>
+
+  @doc """
+  Spawns a pool process for `config`. The pool eagerly builds
+  `config.size` resources. If any `create` call fails, the process
+  exits and every later operation returns `Error.PoolDown`.
+  """
+  fn start(config: Config<T>) -> Pool<T>
+    Pool{ref: spawn Server.start(config)}
+  end
+
+  @doc """
+  Borrows a resource, waiting up to `timeout_ms` for one to free up.
+  """
+  fn checkout(self, timeout_ms: Int) -> Result<T, Error>
+    match self.ref.call(Msg.Checkout, timeout_ms)
+      Result.Ok(Reply.Resource(resource)) -> Result.Ok(resource)
+      Result.Ok(_) -> Result.Err(Error.Failed("unexpected checkout reply"))
+      Result.Err(CallError.Timeout) -> Result.Err(Error.Timeout)
+      Result.Err(_) -> Result.Err(Error.PoolDown)
+    end
+  end
+
+  @doc """
+  Returns a borrowed resource to the pool. The checked-in value is the
+  one lent to the next borrower, so updates made while borrowed (a
+  rebound connection, a refreshed session) are preserved.
+  """
+  fn checkin(self, resource: T)
+    self.ref.cast(Msg.Checkin(resource))
+  end
+
+  @doc """
+  Reports a borrowed resource as broken instead of returning it. The
+  pool builds a replacement with its factory. If the factory fails, the
+  pool shrinks by one and the error is returned.
+  """
+  fn discard(self, timeout_ms: Int) -> Result<(), Error>
+    match self.ref.call(Msg.Discard, timeout_ms)
+      Result.Ok(Reply.Done) -> Result.Ok(())
+      Result.Ok(Reply.Failed(reason)) -> Result.Err(Error.Failed(reason))
+      Result.Ok(_) -> Result.Err(Error.Failed("unexpected discard reply"))
+      Result.Err(CallError.Timeout) -> Result.Err(Error.Timeout)
+      Result.Err(_) -> Result.Err(Error.PoolDown)
+    end
+  end
+
+  @doc """
+  Terminates the pool process. Lent resources are unaffected, and
+  queued checkout callers see `Error.PoolDown`.
+  """
+  fn stop(self)
+    self.ref.kill()
+  end
+end
+
+# The pool process behind a `Pool` handle. Never part of the public
+# surface. `Pool.start` spawns it and the `Ref` is the only line in.
+priv struct Server<T>
+  available: List<T>
+  create: fn () -> Result<T, String>
+  waiting: List<ReplyTo<Reply<T>>>
+end
+
+impl Process<Config<T>, Msg<T>, Reply<T>> for Server<T>
+  fn start(config: Config<T>) -> Result<Self, StopReason>
+    available: List<T> = List.new()
+    waiting: List<ReplyTo<Reply<T>>> = List.new()
+    i = 0
+
+    while i < config.size
+      match config.create()
+        Result.Ok(resource) -> available = available.append(resource)
+        Result.Err(_) -> return Result.Err(StopReason.Shutdown)
+      end
+
+      i += 1
+    end
+
+    Result.Ok(Server{
+      available: available,
+      create: config.create,
+      waiting: waiting,
+    })
+  end
+
+  fn handle(self, msg: Msg<T>, from: Option<ReplyTo<Reply<T>>>) -> Step<Self>
+    match msg
+      Msg.Checkin(resource) -> Step.Continue(self.lend_or_stash(resource))
+      Msg.Checkout -> Step.Continue(self.checkout(from))
+      Msg.Discard -> Step.Continue(self.replace_discarded(from))
+    end
+  end
+
+  # Answers a checkout from the shelf, or queues the caller. A cast
+  # checkout carries no reply channel and is dropped.
+  priv fn checkout(self, from: Option<ReplyTo<Reply<T>>>) -> Self
+    match from
+      Option.None ->
+        self
+
+      Option.Some(caller) ->
+        popped = self.available.pop()
+
+        match popped.first
+          Option.None ->
+            self.waiting = self.waiting.append(caller)
+            self
+
+          Option.Some(resource) ->
+            self.available = popped.second
+
+            match caller.send(Reply.Resource(resource))
+              Delivery.Delivered ->
+                self
+
+                # The caller gave up before we answered. Keep the resource.
+
+              Delivery.Expired ->
+                self.available = self.available.append(resource)
+                self
+            end
+        end
+    end
+  end
+
+  # Hands `resource` to the oldest waiter still listening, or shelves it.
+  priv fn lend_or_stash(self, resource: T) -> Self
+    remaining = self.waiting
+
+    loop
+      match remaining.first()
+        Option.None ->
+          self.available = self.available.append(resource)
+          self.waiting = remaining
+          return self
+
+        Option.Some(waiter) ->
+          remaining = remaining.slice(1, remaining.length() - 1)
+
+          match waiter.send(Reply.Resource(resource))
+            Delivery.Delivered ->
+              self.waiting = remaining
+              return self
+
+              # Stale waiter whose call already timed out. Keep scanning.
+
+            Delivery.Expired ->
+              ()
+          end
+      end
+    end
+  end
+
+  # Builds a replacement for a discarded resource and routes it like a
+  # checkin. A failed factory shrinks the pool and reports `Failed`.
+  priv fn replace_discarded(self, from: Option<ReplyTo<Reply<T>>>) -> Self
+    match self.create()
+      Result.Ok(resource) ->
+        done: Reply<T> = Reply.Done
+        _ = ReplyTo.reply(from, done)
+        self.lend_or_stash(resource)
+
+      Result.Err(reason) ->
+        failed: Reply<T> = Reply.Failed(reason)
+        _ = ReplyTo.reply(from, failed)
+        self
+    end
+  end
+end

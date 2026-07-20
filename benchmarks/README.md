@@ -42,6 +42,22 @@ numbers would dominate the signal, so we use the in-workload timing instead.
 BEAM equivalents live in `beam/` (`compute.erl`, `concurrency.erl`,
 `storm.erl`) and mirror the same workloads.
 
+## Shortener soak test
+
+`shortener_soak.py` drives the `examples/shortener` server with sustained
+keep-alive load while sampling its RSS — the leak-and-throughput regression
+check that micro-benchmarks can't provide (it caught six compiler/runtime
+memory leaks in Jul 2026). Start the example's compose stack and server, then:
+
+```sh
+./shortener_soak.py                                  # 40k requests, RSS per batch
+./shortener_soak.py --requests 100000 --batches 20   # longer soak
+./shortener_soak.py --max-growth-mb 10               # non-zero exit on growth
+```
+
+A healthy run holds RSS flat after the first (warmup) batch. Pair it with
+macOS `leaks <pid>` for allocation-site stacks when growth appears.
+
 ## Adding a benchmark
 
 1. Add a `koja/<name>.kojs` that prints `"<metric>_ms #{elapsed}"`.

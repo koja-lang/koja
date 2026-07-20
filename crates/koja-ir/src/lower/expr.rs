@@ -119,6 +119,14 @@ fn apply_value_coercion(
                     value,
                 },
             );
+            // The wrap aliases the member's storage without an
+            // acquire, so an owned source moves into the union.
+            // Transfer the ownership stamp or the temp's release site
+            // never sees it (regression: every `write(...)` against a
+            // `Binary | String` param leaked the widened string).
+            if ctx.is_owned(value) {
+                ctx.mark_owned(dest);
+            }
             (dest, block)
         }
     }
@@ -180,6 +188,13 @@ fn lower_expr_inner(
                     rhs,
                 },
             );
+            // The op reads its operands and produces an independent
+            // result (heap operands only occur for `==` / `!=`, which
+            // yield a Bool), so owned operand temps like
+            // `s.slice(r) == sep` are dead here. Without this release
+            // every comparison against a fresh String leaks its temp.
+            drop_discarded_temp(ctx, block, lhs);
+            drop_discarded_temp(ctx, block, rhs);
             Ok((dest, block))
         }
         ExprKind::BinaryLiteral { segments } => {

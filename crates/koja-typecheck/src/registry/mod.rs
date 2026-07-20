@@ -151,7 +151,7 @@ pub enum VisibilityScope {
 /// Outcome of an insert attempt. `Collision` carries the existing
 /// entry so the caller can emit an "already defined" diagnostic.
 #[derive(Debug)]
-pub enum InsertOutcome<'a> {
+pub(crate) enum InsertOutcome<'a> {
     Collision { existing: &'a RegistryEntry },
     Fresh(GlobalRegistryId),
 }
@@ -181,7 +181,7 @@ impl GlobalRegistry {
     /// `impl P for Int` blocks register conformances without the
     /// stub-vs-real-struct branching the bare-marker design
     /// originally forced.
-    pub fn with_stdlib_stubs() -> Self {
+    pub(crate) fn with_stdlib_stubs() -> Self {
         let mut reg = Self::default();
         for name in [
             "Int", "Bool", "Unit", "Float", "Never", "String", "Binary", "Bits", "Int8", "Int16",
@@ -196,7 +196,7 @@ impl GlobalRegistry {
     /// resolved type + value [`ConstantDefinition`] is stamped in
     /// later by [`Self::set_constant_definition`]. Constants don't
     /// take type parameters, so callers always pass an empty vec.
-    pub fn insert_constant(
+    pub(crate) fn insert_constant(
         &mut self,
         identifier: Identifier,
         span: Span,
@@ -217,7 +217,7 @@ impl GlobalRegistry {
     /// declared generic-param names from the AST so resolve and
     /// lift can answer "what params are in scope inside this decl?"
     /// before the variant payload types have been resolved.
-    pub fn insert_enum(
+    pub(crate) fn insert_enum(
         &mut self,
         identifier: Identifier,
         span: Span,
@@ -244,7 +244,7 @@ impl GlobalRegistry {
     /// `PackagePrivate` / `TypePrivate(type_id)` variant that
     /// matches where the `priv fn` was declared. See
     /// [`VisibilityScope`] for the mapping rule.
-    pub fn insert_function(
+    pub(crate) fn insert_function(
         &mut self,
         identifier: Identifier,
         span: Span,
@@ -262,7 +262,7 @@ impl GlobalRegistry {
 
     /// Register a protocol in the `Protocol(None)` state. Method
     /// roster is stamped later by [`Self::set_protocol_definition`].
-    pub fn insert_protocol(
+    pub(crate) fn insert_protocol(
         &mut self,
         identifier: Identifier,
         span: Span,
@@ -281,7 +281,7 @@ impl GlobalRegistry {
     /// Register a struct in the `Struct(None)` state. The
     /// resolved field layout is stamped in later by
     /// [`Self::set_struct_definition`].
-    pub fn insert_struct(
+    pub(crate) fn insert_struct(
         &mut self,
         identifier: Identifier,
         span: Span,
@@ -303,7 +303,7 @@ impl GlobalRegistry {
     /// generic params today, so callers always pass an empty vec.
     /// Generic aliases are tracked as a future language extension
     /// in the v1-parity plan.
-    pub fn insert_type_alias(
+    pub(crate) fn insert_type_alias(
         &mut self,
         identifier: Identifier,
         span: Span,
@@ -320,7 +320,7 @@ impl GlobalRegistry {
 
     /// Stamp a resolved variant roster onto an enum entry. Panics
     /// unless the entry's kind is exactly `Enum(None)`.
-    pub fn set_enum_definition(&mut self, id: GlobalRegistryId, definition: EnumDefinition) {
+    pub(crate) fn set_enum_definition(&mut self, id: GlobalRegistryId, definition: EnumDefinition) {
         let entry = self.entries.get_mut(&id).unwrap_or_else(|| {
             panic!("set_enum_definition on missing registry id {id}: collect invariant violation")
         });
@@ -354,7 +354,7 @@ impl GlobalRegistry {
     /// Panics unless `target_id` names a struct or enum with a
     /// stamped definition (lift orders enum/struct definition
     /// stamping before impl conformance recording).
-    pub fn record_conformance(
+    pub(crate) fn record_conformance(
         &mut self,
         target_id: GlobalRegistryId,
         protocol_id: GlobalRegistryId,
@@ -406,7 +406,7 @@ impl GlobalRegistry {
 
     /// Stamp a resolved method roster. Panics unless the entry's
     /// kind is exactly `Protocol(None)`.
-    pub fn set_protocol_definition(
+    pub(crate) fn set_protocol_definition(
         &mut self,
         id: GlobalRegistryId,
         definition: ProtocolDefinition,
@@ -440,7 +440,11 @@ impl GlobalRegistry {
 
     /// Stamp a resolved field layout onto a struct entry. Panics
     /// unless the entry's kind is exactly `Struct(None)`.
-    pub fn set_struct_definition(&mut self, id: GlobalRegistryId, definition: StructDefinition) {
+    pub(crate) fn set_struct_definition(
+        &mut self,
+        id: GlobalRegistryId,
+        definition: StructDefinition,
+    ) {
         let entry = self.entries.get_mut(&id).unwrap_or_else(|| {
             panic!("set_struct_definition on missing registry id {id}: collect invariant violation")
         });
@@ -501,7 +505,7 @@ impl GlobalRegistry {
 
     /// Stamp a resolved type + RHS onto a constant entry. Panics
     /// unless the entry's kind is exactly `Constant(None)`.
-    pub fn set_constant_definition(
+    pub(crate) fn set_constant_definition(
         &mut self,
         id: GlobalRegistryId,
         definition: ConstantDefinition,
@@ -535,7 +539,11 @@ impl GlobalRegistry {
 
     /// Stamp a resolved expansion onto a type-alias entry. Panics
     /// unless the entry's kind is exactly `TypeAlias(None)`.
-    pub fn set_type_alias_definition(&mut self, id: GlobalRegistryId, expansion: ResolvedType) {
+    pub(crate) fn set_type_alias_definition(
+        &mut self,
+        id: GlobalRegistryId,
+        expansion: ResolvedType,
+    ) {
         let entry = self.entries.get_mut(&id).unwrap_or_else(|| {
             panic!(
                 "set_type_alias_definition on missing registry id {id}: \
@@ -582,7 +590,7 @@ impl GlobalRegistry {
     /// downstream peels short-circuit cleanly. Panics if `id` is
     /// not a `TypeAlias` entry. Only the cycle pass should call
     /// this.
-    pub fn set_type_alias_definition_force(
+    pub(crate) fn set_type_alias_definition_force(
         &mut self,
         id: GlobalRegistryId,
         expansion: ResolvedType,
@@ -608,7 +616,7 @@ impl GlobalRegistry {
 
     /// Stamp a resolved signature onto a function entry. Panics unless
     /// the entry's kind is exactly `Function(None)`.
-    pub fn set_signature(&mut self, id: GlobalRegistryId, signature: FunctionSignature) {
+    pub(crate) fn set_signature(&mut self, id: GlobalRegistryId, signature: FunctionSignature) {
         let entry = self.entries.get_mut(&id).unwrap_or_else(|| {
             panic!("set_signature on missing registry id {id}: collect invariant violation")
         });
@@ -720,7 +728,7 @@ impl GlobalRegistry {
     /// Replace `owner`'s `type_param_bounds`. `bounds.len()` must equal
     /// the entry's `type_params.len()`. Called by lift's bounds-resolve
     /// sub-pass after every protocol id is registered.
-    pub fn set_type_param_bounds(
+    pub(crate) fn set_type_param_bounds(
         &mut self,
         owner: GlobalRegistryId,
         bounds: Vec<Vec<GlobalRegistryId>>,

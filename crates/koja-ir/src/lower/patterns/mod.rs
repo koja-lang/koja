@@ -290,6 +290,7 @@ pub(super) fn lower_pattern_check(
             let cond = emit_union_tag_eq(inputs.subject, &subject_ir, member_index, ctx, block);
             let local = require_local(*local_id, name);
             ensure_local_declared(local, &member_ir, ctx);
+            ctx.mark_slot_borrowed(local);
             let bind = PayloadBind {
                 local,
                 chain: vec![BindStep {
@@ -342,6 +343,9 @@ fn lower_binding_check(
         );
     });
     let ir_local = IRLocalId::from_local_id(id);
+    // The bind writes the subject value without a `Clone`, so the
+    // slot borrows and no drop site may free it.
+    ctx.mark_slot_borrowed(ir_local);
     if !ctx.local_is_declared(ir_local) {
         let ty = lower_result_ty(inputs.subject_ty, inputs.registry, output);
         let entry = ctx.entry_block();
@@ -403,6 +407,11 @@ pub(super) fn field_type_for(
 /// success edge of the arm test, but seal expects every
 /// `LocalWrite` to be dominated by exactly one `LocalDecl`, which
 /// is always in entry.
+///
+/// Callers whose bind borrows the subject's payload storage (every
+/// enum/struct/union pattern bind) must also
+/// [`FnLowerCtx::mark_slot_borrowed`] the slot. A binary-match greedy
+/// tail writes a freshly allocated block and must not.
 pub(super) fn ensure_local_declared(local: IRLocalId, ty: &IRType, ctx: &mut FnLowerCtx) {
     if ctx.local_is_declared(local) {
         return;
