@@ -31,28 +31,37 @@ numbers would dominate the signal, so we use the in-workload timing instead.
 
 ## Benchmarks
 
-| Program                   | Measures                                                       |
-| ------------------------- | -------------------------------------------------------------- |
-| `koja/loop.kojs`          | Tight 200M-iteration counting loop — raw integer/branch speed. |
-| `koja/recursion.kojs`     | `fib(35)` — recursive call overhead.                           |
-| `koja/msg_roundtrip.kojs` | 1M synchronous `call`/reply round-trips to one process.        |
-| `koja/spawn_reply.kojs`   | 100k spawn-then-call-then-exit cycles — process churn.         |
-| `koja/process_storm.kojs` | 10k processes spawned concurrently, each doing CPU work.       |
+| Program                   | Measures                                                                                                               |
+| ------------------------- | ---------------------------------------------------------------------------------------------------------------------- |
+| `koja/loop.kojs`          | Tight 200M-iteration counting loop — raw integer/branch speed.                                                         |
+| `koja/recursion.kojs`     | `fib(35)` — recursive call overhead.                                                                                   |
+| `koja/tail_scan.kojs`     | 200M tail-recursive iterations threading a `String` param — self-tail-call loopification and back-edge ownership cost. |
+| `koja/msg_roundtrip.kojs` | 1M synchronous `call`/reply round-trips to one process.                                                                |
+| `koja/spawn_reply.kojs`   | 100k spawn-then-call-then-exit cycles — process churn.                                                                 |
+| `koja/process_storm.kojs` | 10k processes spawned concurrently, each doing CPU work.                                                               |
 
 BEAM equivalents live in `beam/` (`compute.erl`, `concurrency.erl`,
-`storm.erl`) and mirror the same workloads.
+`storm.erl`) and mirror the same workloads, including a `tail_scan`
+counterpart in `compute.erl` (BEAM has native tail-call optimization, so
+it is the natural baseline for loopified recursion).
 
-## Shortener soak test
+## Soak tests (`soak/`)
 
-`shortener_soak.py` drives the `examples/shortener` server with sustained
-keep-alive load while sampling its RSS — the leak-and-throughput regression
-check that micro-benchmarks can't provide (it caught six compiler/runtime
-memory leaks in Jul 2026). Start the example's compose stack and server, then:
+Long-running load harnesses, separate from the timed micro-benchmarks
+above: they measure stability (memory growth, sustained throughput)
+rather than a single bracketed workload, and they are not part of
+`run.sh`.
+
+`soak/shortener_soak.py` drives the `examples/shortener` server with
+sustained keep-alive load while sampling its RSS — the leak-and-throughput
+regression check that micro-benchmarks can't provide (it caught six
+compiler/runtime memory leaks in Jul 2026). Start the example's compose
+stack and server, then:
 
 ```sh
-./shortener_soak.py                                  # 40k requests, RSS per batch
-./shortener_soak.py --requests 100000 --batches 20   # longer soak
-./shortener_soak.py --max-growth-mb 10               # non-zero exit on growth
+soak/shortener_soak.py                                  # 40k requests, RSS per batch
+soak/shortener_soak.py --requests 100000 --batches 20   # longer soak
+soak/shortener_soak.py --max-growth-mb 10               # non-zero exit on growth
 ```
 
 A healthy run holds RSS flat after the first (warmup) batch. Pair it with

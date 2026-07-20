@@ -7,8 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Recursive loops that carry a string or collection along are now roughly twice as fast.
+
 ### Fixed
 
+- Deep recursion no longer overflows the stack when the recursive call sits inside an `if` without an `else`.
 - String and collection temporaries used as `==` or `!=` operands are now reclaimed instead of leaking on every comparison.
 - Heap values bound inside a `match`, `if`, or `cond` arm are now reclaimed when the arm finishes instead of leaking.
 - Returning early from inside a `match` arm no longer leaks the matched value.

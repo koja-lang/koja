@@ -28,7 +28,8 @@
 //! intermediate non-drop instructions disqualify a candidate.
 
 use crate::function::{
-    FunctionKind, IRBasicBlock, IRBlockId, IRFunction, IRInstruction, IRSymbol, IRTerminator,
+    BranchTarget, FunctionKind, IRBasicBlock, IRBlockId, IRFunction, IRInstruction, IRSymbol,
+    IRTerminator,
 };
 use crate::package::IRPackage;
 use crate::types::{IRType, ValueId};
@@ -108,20 +109,19 @@ fn contains_self_call(function: &IRFunction) -> bool {
 /// M(%p):
 ///   DropLocal a      // zero or more function-exit drops, nothing else
 ///   DropLocal b
-///   Return %p        // returns its sole block param verbatim
-/// ```
+///   Return %p        // its sole block param, or a bare `Return` when
+/// ```                // the function returns Unit
 ///
 /// Each predecessor reaching `M` by an unconditional `Branch(M, [x])`
-/// is rewritten to run `M`'s exit drops in place and `Return x`. `M`
-/// then has no predecessors and is removed. Running to a fixpoint
+/// is rewritten to run `M`'s exit drops in place and `Return x`. A
+/// `CondBranch` leg targeting `M` (a no-`else` `if` whose false edge
+/// jumps straight to the merge) can't be rewritten in place, because the
+/// other leg must keep branching, so that edge is retargeted at a
+/// synthesized trampoline block holding the drops and the `Return`.
+/// `M` then has no predecessors and is removed. Running to a fixpoint
 /// peels nested merges outermost-first (a `receive` merge collapses
 /// into the `match` merge feeding it, which collapses into that
 /// match's arms), surfacing a self-call buried arbitrarily deep.
-///
-/// Collapse is skipped for a merge whose incoming edges aren't all
-/// single-arg unconditional branches (e.g. a no-`else` `if` whose
-/// `CondBranch` targets the merge directly) so a partially-rewritten
-/// merge never strands a block param with missing predecessors.
 fn collapse_return_forwarders(function: &mut IRFunction) {
     while collapse_one_forwarder(function) {}
 }
@@ -133,73 +133,136 @@ fn collapse_one_forwarder(function: &mut IRFunction) -> bool {
     // it so a degenerate single-block forwarder can't be considered.
     let plan = (1..function.blocks.len()).find_map(|index| {
         let block = &function.blocks[index];
-        return_forwarder_param(block)?;
-        let edges = collapsible_edges(function, block.id)?;
-        Some((block.id, block.instructions.clone(), edges))
+        let shape = forwarder_shape(block)?;
+        edges_are_collapsible(function, block.id)
+            .then(|| (block.id, block.instructions.clone(), shape))
     });
-    let Some((target, exit_drops, edges)) = plan else {
+    let Some((target, exit_drops, shape)) = plan else {
         return false;
     };
-    for (predecessor, arg) in edges {
-        let block = &mut function.blocks[predecessor];
-        block.instructions.extend(exit_drops.iter().cloned());
-        block.terminator = IRTerminator::Return { value: Some(arg) };
-    }
-    function.blocks.retain(|block| block.id != target);
-    true
-}
 
-/// The sole block param of `block` when it is a return-forwarder:
-/// exactly one param, every instruction a function-exit drop, and a
-/// terminator that returns that param verbatim. A `DropValue` of the
-/// returned param itself disqualifies the block (it would double-free
-/// the value the predecessor is about to return).
-fn return_forwarder_param(block: &IRBasicBlock) -> Option<ValueId> {
-    let [param] = block.params.as_slice() else {
-        return None;
-    };
-    let IRTerminator::Return {
-        value: Some(returned),
-    } = &block.terminator
-    else {
-        return None;
-    };
-    if *returned != param.dest {
-        return None;
-    }
-    let all_exit_drops = block.instructions.iter().all(|inst| match inst {
-        IRInstruction::DropLocal { .. } => true,
-        IRInstruction::DropValue { value, .. } => *value != param.dest,
-        _ => false,
-    });
-    all_exit_drops.then_some(param.dest)
-}
-
-/// Every predecessor edge into `target` as `(block index, branch arg)`
-/// pairs, but only when *all* references to `target` are single-arg
-/// unconditional branches. Returns `None` if any edge is a
-/// `CondBranch` into `target` (or a `Branch` with the wrong arg
-/// count), leaving the merge intact, and `None` too when nothing
-/// branches to `target`.
-fn collapsible_edges(function: &IRFunction, target: IRBlockId) -> Option<Vec<(usize, ValueId)>> {
-    let mut edges = Vec::new();
-    for (index, block) in function.blocks.iter().enumerate() {
-        match &block.terminator {
+    // An unconditional `Branch` predecessor absorbs the forwarder in
+    // place. A `CondBranch` leg can't (its other leg must keep
+    // branching), so the leg is retargeted at a trampoline block that
+    // carries the drops and the `Return`. Trampolines have no params
+    // and so can never become forwarder candidates themselves, which
+    // keeps the fixpoint terminating.
+    let mut next_block = function.next_block_id().0;
+    let mut trampolines: Vec<IRBasicBlock> = Vec::new();
+    for block in &mut function.blocks {
+        match &mut block.terminator {
             IRTerminator::Branch(branch) if branch.block == target => {
-                let [arg] = branch.args.as_slice() else {
-                    return None;
-                };
-                edges.push((index, *arg));
+                let value = shape.returned_value(&branch.args);
+                block.instructions.extend(exit_drops.iter().cloned());
+                block.terminator = IRTerminator::Return { value };
             }
             IRTerminator::CondBranch {
                 then_target,
                 else_target,
                 ..
-            } if then_target.block == target || else_target.block == target => return None,
+            } => {
+                for leg in [&mut *then_target, else_target] {
+                    if leg.block != target {
+                        continue;
+                    }
+                    let id = IRBlockId(next_block);
+                    next_block += 1;
+                    trampolines.push(IRBasicBlock {
+                        id,
+                        label: format!("tail_return_{}", id.0),
+                        params: Vec::new(),
+                        instructions: exit_drops.clone(),
+                        terminator: IRTerminator::Return {
+                            value: shape.returned_value(&leg.args),
+                        },
+                    });
+                    *leg = BranchTarget::to(id);
+                }
+            }
             _ => {}
         }
     }
-    (!edges.is_empty()).then_some(edges)
+    function.blocks.extend(trampolines);
+    function.blocks.retain(|block| block.id != target);
+    true
+}
+
+/// What a collapsed return-forwarder hands back to its predecessors.
+#[derive(Clone, Copy)]
+enum ForwarderShape {
+    /// `Return %p` of the sole block param, so each predecessor
+    /// returns the value it was branching in.
+    ReturnsParam,
+    /// Bare `Return` in a Unit function, discarding the branched
+    /// value (the merge param is Unit-typed).
+    ReturnsUnit,
+}
+
+impl ForwarderShape {
+    fn returned_value(self, edge_args: &[ValueId]) -> Option<ValueId> {
+        match self {
+            ForwarderShape::ReturnsParam => Some(edge_args[0]),
+            ForwarderShape::ReturnsUnit => None,
+        }
+    }
+}
+
+/// Classify `block` as a return-forwarder: exactly one block param,
+/// every instruction a function-exit drop, and a terminator that
+/// returns the param verbatim ([`ForwarderShape::ReturnsParam`]) or
+/// nothing in a Unit function ([`ForwarderShape::ReturnsUnit`]). A
+/// `DropValue` of the param disqualifies the block: in the param case
+/// it would double-free the value the predecessor is about to return,
+/// and in the Unit case the predecessors have no value to replay the
+/// drop against. The Unit shape also requires a non-heap param so
+/// discarding the branched value can't leak.
+fn forwarder_shape(block: &IRBasicBlock) -> Option<ForwarderShape> {
+    let [param] = block.params.as_slice() else {
+        return None;
+    };
+    let shape = match &block.terminator {
+        IRTerminator::Return {
+            value: Some(returned),
+        } if *returned == param.dest => ForwarderShape::ReturnsParam,
+        IRTerminator::Return { value: None } if !param.ty.is_heap_managed() => {
+            ForwarderShape::ReturnsUnit
+        }
+        _ => return None,
+    };
+    let all_exit_drops = block.instructions.iter().all(|inst| match inst {
+        IRInstruction::DropLocal { .. } => true,
+        IRInstruction::DropValue { value, .. } => *value != param.dest,
+        _ => false,
+    });
+    all_exit_drops.then_some(shape)
+}
+
+/// Whether every edge into `target` carries exactly the one arg its
+/// block param expects, from a `Branch` or a `CondBranch` leg. `false`
+/// when an edge is malformed or nothing branches to `target` at all.
+fn edges_are_collapsible(function: &IRFunction, target: IRBlockId) -> bool {
+    let mut edge_count = 0;
+    for block in &function.blocks {
+        let legs: Vec<&BranchTarget> = match &block.terminator {
+            IRTerminator::Branch(branch) => vec![branch],
+            IRTerminator::CondBranch {
+                then_target,
+                else_target,
+                ..
+            } => vec![then_target, else_target],
+            _ => continue,
+        };
+        for leg in legs {
+            if leg.block != target {
+                continue;
+            }
+            if leg.args.len() != 1 {
+                return false;
+            }
+            edge_count += 1;
+        }
+    }
+    edge_count > 0
 }
 
 /// Detection-time payload: which instruction index holds the
@@ -257,19 +320,35 @@ fn apply_plan(
     // emitted `Clone` is an inline `rc++` for a heap leaf. For a
     // composite the later [`crate::elaborate`] pass rewrites it into a
     // `clone_T` call (or a register copy for an all-`Copy` aggregate).
+    //
+    // A passthrough arg skips the acquire entirely: when the arg reads
+    // a slot whose trailing `DropLocal` sits in this block, ownership
+    // moves through the back-edge instead. The drop is elided and no
+    // clone is emitted, so `scan(s, i + 1)`-style loops carry zero rc
+    // traffic per iteration.
     let mut args = plan.args;
     let mut clones = Vec::new();
+    let mut elided_drops: Vec<usize> = Vec::new();
     for (arg, ty) in args.iter_mut().zip(param_types) {
-        if ty.is_heap_managed() {
-            let dest = ValueId(*next_value);
-            *next_value += 1;
-            clones.push(IRInstruction::Clone {
-                dest,
-                source: *arg,
-                ty: ty.clone(),
-            });
-            *arg = dest;
+        if !ty.is_heap_managed() {
+            continue;
         }
+        if let Some(drop_index) = passthrough_drop(block, plan.call_index, *arg, &elided_drops) {
+            elided_drops.push(drop_index);
+            continue;
+        }
+        let dest = ValueId(*next_value);
+        *next_value += 1;
+        clones.push(IRInstruction::Clone {
+            dest,
+            source: *arg,
+            ty: ty.clone(),
+        });
+        *arg = dest;
+    }
+    elided_drops.sort_unstable();
+    for index in elided_drops.into_iter().rev() {
+        block.instructions.remove(index);
     }
     for (offset, clone) in clones.into_iter().enumerate() {
         block.instructions.insert(plan.call_index + offset, clone);
@@ -279,6 +358,44 @@ fn apply_plan(
         callee: enclosing.clone(),
         args,
     };
+}
+
+/// The trailing-drop index that `arg` may consume as a move. The move
+/// requires `arg` to be a `LocalRead` of some slot in this block, the
+/// slot never written after that read, and a `DropLocal` of the slot
+/// in the trailing drop region (at or past `call_index`, the `Call`
+/// already removed). `taken` holds drop indices consumed by earlier
+/// args, so two args reading the same slot elide at most one drop
+/// between them (the second still needs its own acquire).
+fn passthrough_drop(
+    block: &IRBasicBlock,
+    call_index: usize,
+    arg: ValueId,
+    taken: &[usize],
+) -> Option<usize> {
+    let read_index = block.instructions[..call_index]
+        .iter()
+        .position(|inst| matches!(inst, IRInstruction::LocalRead { dest, .. } if *dest == arg))?;
+    let IRInstruction::LocalRead { local: slot, .. } = &block.instructions[read_index] else {
+        unreachable!("position matched a LocalRead");
+    };
+    let slot = *slot;
+    let rewritten_after_read = block.instructions[read_index + 1..]
+        .iter()
+        .any(|inst| matches!(inst, IRInstruction::LocalWrite { local, .. } if *local == slot));
+    if rewritten_after_read {
+        return None;
+    }
+    block.instructions[call_index..]
+        .iter()
+        .enumerate()
+        .map(|(offset, inst)| (call_index + offset, inst))
+        .find_map(|(index, inst)| match inst {
+            IRInstruction::DropLocal { local, .. } if *local == slot && !taken.contains(&index) => {
+                Some(index)
+            }
+            _ => None,
+        })
 }
 
 #[cfg(test)]
@@ -430,6 +547,193 @@ mod tests {
             rewritten_arg_clone_dest(function).is_some(),
             "a heap-leaf arg must be acquired: {:?}",
             function.blocks[0].instructions,
+        );
+    }
+
+    /// Append a trailing exit drop of the param slot to the canonical
+    /// self-call shape, forming the passthrough pattern `f(s)` where
+    /// `s` reads the very slot the exit drop releases.
+    fn build_passthrough_function(param_ty: IRType) -> IRFunction {
+        let mut function = build_self_call_with_param(param_ty.clone());
+        function.blocks[0]
+            .instructions
+            .push(IRInstruction::DropLocal {
+                local: local(0),
+                ty: param_ty,
+            });
+        function
+    }
+
+    #[test]
+    fn passthrough_heap_arg_moves_without_clone_or_drop() {
+        let function = build_passthrough_function(IRType::String);
+        let symbol = function.symbol.clone();
+        let mut packages = vec![package_with(function)];
+        rewrite_tail_calls(&mut packages);
+        let function = packages[0].functions.get(symbol.mangled()).unwrap();
+        let block = &function.blocks[0];
+        let IRTerminator::TailCall { args, .. } = &block.terminator else {
+            panic!("expected TailCall, got {:?}", block.terminator);
+        };
+        assert_eq!(
+            args,
+            &vec![ValueId(1)],
+            "the slot read is forwarded as-is; ownership moves through the back-edge",
+        );
+        assert!(
+            !block.instructions.iter().any(|inst| matches!(
+                inst,
+                IRInstruction::Clone { .. } | IRInstruction::DropLocal { .. }
+            )),
+            "a passthrough arg needs neither the acquire nor the slot drop: {:?}",
+            block.instructions,
+        );
+    }
+
+    #[test]
+    fn second_arg_reading_the_same_slot_still_acquires() {
+        // `f(s, s)` forwards one slot into two params. Only one arg may
+        // take the slot's ownership. The other must acquire or the
+        // back-edge would be one reference short.
+        let symbol = IRSymbol::synthetic("Test.loop_pair".to_string());
+        let param_ty = IRType::String;
+        let reads = [ValueId(2), ValueId(3)];
+        let call_dest = ValueId(4);
+        let function = IRFunction {
+            def_location: None,
+            blocks: vec![IRBasicBlock {
+                id: IRBlockId(0),
+                label: "entry".to_string(),
+                params: Vec::new(),
+                instructions: vec![
+                    IRInstruction::LocalDecl {
+                        local: local(0),
+                        ty: param_ty.clone(),
+                    },
+                    IRInstruction::LocalWrite {
+                        local: local(0),
+                        value: ValueId(0),
+                    },
+                    IRInstruction::LocalDecl {
+                        local: local(1),
+                        ty: param_ty.clone(),
+                    },
+                    IRInstruction::LocalWrite {
+                        local: local(1),
+                        value: ValueId(1),
+                    },
+                    IRInstruction::LocalRead {
+                        dest: reads[0],
+                        local: local(0),
+                        ty: param_ty.clone(),
+                    },
+                    IRInstruction::LocalRead {
+                        dest: reads[1],
+                        local: local(0),
+                        ty: param_ty.clone(),
+                    },
+                    IRInstruction::Call {
+                        dest: call_dest,
+                        callee: symbol.clone(),
+                        args: reads.to_vec(),
+                    },
+                    IRInstruction::DropLocal {
+                        local: local(1),
+                        ty: param_ty.clone(),
+                    },
+                    IRInstruction::DropLocal {
+                        local: local(0),
+                        ty: param_ty.clone(),
+                    },
+                ],
+                terminator: IRTerminator::Return {
+                    value: Some(call_dest),
+                },
+            }],
+            kind: FunctionKind::Regular,
+            params: vec![
+                IRFunctionParam {
+                    id: ValueId(0),
+                    local_id: local(0),
+                    ty: param_ty.clone(),
+                },
+                IRFunctionParam {
+                    id: ValueId(1),
+                    local_id: local(1),
+                    ty: param_ty.clone(),
+                },
+            ],
+            return_type: param_ty,
+            symbol: symbol.clone(),
+        };
+        let mut packages = vec![package_with(function)];
+        rewrite_tail_calls(&mut packages);
+        let function = packages[0].functions.get(symbol.mangled()).unwrap();
+        let block = &function.blocks[0];
+        assert!(matches!(block.terminator, IRTerminator::TailCall { .. }));
+        let clone_count = block
+            .instructions
+            .iter()
+            .filter(|inst| matches!(inst, IRInstruction::Clone { .. }))
+            .count();
+        assert_eq!(
+            clone_count, 1,
+            "exactly one of the two same-slot args must acquire: {:?}",
+            block.instructions,
+        );
+        let dropped: Vec<_> = block
+            .instructions
+            .iter()
+            .filter_map(|inst| match inst {
+                IRInstruction::DropLocal { local, .. } => Some(*local),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            dropped,
+            vec![local(1)],
+            "slot 0's drop moves through the back-edge; slot 1 (never forwarded) keeps its drop",
+        );
+    }
+
+    #[test]
+    fn slot_rewritten_after_read_is_not_elided() {
+        // The trailing drop releases the slot's *new* value, not the
+        // one the arg still holds, so the move elision must not fire.
+        let mut function = build_passthrough_function(IRType::String);
+        let overwrite_index = function.blocks[0]
+            .instructions
+            .iter()
+            .position(|inst| matches!(inst, IRInstruction::Call { .. }))
+            .unwrap();
+        function.blocks[0].instructions.insert(
+            overwrite_index,
+            IRInstruction::LocalWrite {
+                local: local(0),
+                value: ValueId(1),
+            },
+        );
+        let symbol = function.symbol.clone();
+        let mut packages = vec![package_with(function)];
+        rewrite_tail_calls(&mut packages);
+        let function = packages[0].functions.get(symbol.mangled()).unwrap();
+        let block = &function.blocks[0];
+        assert!(matches!(block.terminator, IRTerminator::TailCall { .. }));
+        assert!(
+            block
+                .instructions
+                .iter()
+                .any(|inst| matches!(inst, IRInstruction::Clone { .. })),
+            "a rewritten slot disqualifies the move; the acquire must stay: {:?}",
+            block.instructions,
+        );
+        assert!(
+            block
+                .instructions
+                .iter()
+                .any(|inst| matches!(inst, IRInstruction::DropLocal { .. })),
+            "the slot drop must stay too: {:?}",
+            block.instructions,
         );
     }
 
@@ -828,12 +1132,12 @@ mod tests {
     }
 
     /// A merge reached by a `CondBranch` edge (a no-`else` `if` whose
-    /// false edge targets the merge directly) is left intact: rewriting
-    /// only one edge of a two-way branch into a `Return` is impossible,
-    /// so the conservative path keeps the merge and forgoes TCO rather
-    /// than stranding a block param.
+    /// false edge targets the merge directly) still collapses: the
+    /// conditional leg can't be rewritten into a `Return` in place, so
+    /// it is retargeted at a synthesized trampoline block carrying the
+    /// merge's drops and the `Return`, and the self-call arm loopifies.
     #[test]
-    fn condbranch_into_merge_is_left_intact() {
+    fn condbranch_into_merge_collapses_via_trampoline() {
         let symbol = IRSymbol::synthetic("Test.loop_no_else".to_string());
         let param_id = ValueId(0);
         let param_local = local(0);
@@ -919,13 +1223,161 @@ mod tests {
         let mut packages = vec![package_with(function)];
         rewrite_tail_calls(&mut packages);
         let function = packages[0].functions.get(symbol.mangled()).unwrap();
-        assert_eq!(function.blocks.len(), 3, "merge must be kept intact");
+        // entry + if_then + trampoline, with the merge itself gone.
+        assert_eq!(
+            function.blocks.len(),
+            3,
+            "merge must collapse; blocks: {:?}",
+            function.blocks.iter().map(|b| &b.label).collect::<Vec<_>>(),
+        );
+        let if_then = function
+            .blocks
+            .iter()
+            .find(|b| b.label == "if_then")
+            .unwrap();
         assert!(
-            !function
-                .blocks
-                .iter()
-                .any(|b| matches!(b.terminator, IRTerminator::TailCall { .. })),
-            "no TCO when the merge has a CondBranch predecessor",
+            matches!(if_then.terminator, IRTerminator::TailCall { .. }),
+            "the self-call arm must loopify; got {:?}",
+            if_then.terminator,
+        );
+        let trampoline = function
+            .blocks
+            .iter()
+            .find(|b| b.label.starts_with("tail_return"))
+            .expect("a trampoline block must be synthesized");
+        assert!(matches!(
+            trampoline.terminator,
+            IRTerminator::Return {
+                value: Some(ValueId(4))
+            }
+        ));
+        let entry = &function.blocks[0];
+        let IRTerminator::CondBranch { else_target, .. } = &entry.terminator else {
+            panic!("entry must keep its CondBranch");
+        };
+        assert_eq!(else_target.block, trampoline.id);
+        assert!(
+            else_target.args.is_empty(),
+            "the retargeted leg passes no args; the trampoline has no params",
+        );
+    }
+
+    /// The audit's real-world miss shape, a Unit function whose `match`
+    /// merge ends in a bare `Return` (no value). The forwarder still
+    /// collapses and the recursive arm loopifies.
+    #[test]
+    fn unit_returning_merge_collapses() {
+        let symbol = IRSymbol::synthetic("Test.loop_unit".to_string());
+        let param_id = ValueId(0);
+        let param_local = local(0);
+        let cond = ValueId(1);
+        let unit_a = ValueId(2);
+        let read_dest = ValueId(3);
+        let call_dest = ValueId(4);
+        let merge_param = ValueId(5);
+        let function = IRFunction {
+            def_location: None,
+            blocks: vec![
+                IRBasicBlock {
+                    id: IRBlockId(0),
+                    label: "entry".to_string(),
+                    params: Vec::new(),
+                    instructions: vec![
+                        IRInstruction::LocalDecl {
+                            local: param_local,
+                            ty: IRType::Int64,
+                        },
+                        IRInstruction::LocalWrite {
+                            local: param_local,
+                            value: param_id,
+                        },
+                        IRInstruction::Const {
+                            dest: cond,
+                            value: ConstValue::Bool(true),
+                        },
+                    ],
+                    terminator: IRTerminator::CondBranch {
+                        cond,
+                        else_target: BranchTarget::to(IRBlockId(2)),
+                        then_target: BranchTarget::to(IRBlockId(1)),
+                    },
+                },
+                IRBasicBlock {
+                    id: IRBlockId(1),
+                    label: "match_body_0".to_string(),
+                    params: Vec::new(),
+                    instructions: vec![
+                        IRInstruction::LocalRead {
+                            dest: read_dest,
+                            local: param_local,
+                            ty: IRType::Int64,
+                        },
+                        IRInstruction::Call {
+                            dest: call_dest,
+                            callee: symbol.clone(),
+                            args: vec![read_dest],
+                        },
+                    ],
+                    terminator: IRTerminator::Branch(BranchTarget::with_args(
+                        IRBlockId(3),
+                        vec![call_dest],
+                    )),
+                },
+                IRBasicBlock {
+                    id: IRBlockId(2),
+                    label: "match_body_1".to_string(),
+                    params: Vec::new(),
+                    instructions: vec![IRInstruction::Const {
+                        dest: unit_a,
+                        value: ConstValue::Unit,
+                    }],
+                    terminator: IRTerminator::Branch(BranchTarget::with_args(
+                        IRBlockId(3),
+                        vec![unit_a],
+                    )),
+                },
+                IRBasicBlock {
+                    id: IRBlockId(3),
+                    label: "match_merge".to_string(),
+                    params: vec![BlockParam {
+                        dest: merge_param,
+                        ty: IRType::Unit,
+                    }],
+                    instructions: Vec::new(),
+                    terminator: IRTerminator::Return { value: None },
+                },
+            ],
+            kind: FunctionKind::Regular,
+            params: vec![IRFunctionParam {
+                id: param_id,
+                local_id: param_local,
+                ty: IRType::Int64,
+            }],
+            return_type: IRType::Unit,
+            symbol: symbol.clone(),
+        };
+        let mut packages = vec![package_with(function)];
+        rewrite_tail_calls(&mut packages);
+        let function = packages[0].functions.get(symbol.mangled()).unwrap();
+        let recursive_arm = function
+            .blocks
+            .iter()
+            .find(|b| b.label == "match_body_0")
+            .unwrap();
+        assert!(
+            matches!(recursive_arm.terminator, IRTerminator::TailCall { .. }),
+            "the recursive arm of a Unit match must loopify; got {:?}",
+            recursive_arm.terminator,
+        );
+        let base_arm = function
+            .blocks
+            .iter()
+            .find(|b| b.label == "match_body_1")
+            .unwrap();
+        assert!(
+            matches!(base_arm.terminator, IRTerminator::Return { value: None }),
+            "the base arm returns Unit directly; got {:?}",
+            base_arm.terminator,
         );
     }
 

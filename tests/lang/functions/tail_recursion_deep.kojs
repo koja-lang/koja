@@ -1,0 +1,37 @@
+# Deep self-recursion in the shapes the tail-call pass must loopify.
+# Each function recurses far past any native or interpreter stack
+# budget, so a regression in the rewrite (or the return-forwarder
+# collapse feeding it) shows up as a stack overflow, not a wrong value.
+
+# Guard `if` with an early return, leaving the recursive call to end
+# its own block.
+fn countdown(n: Int, acc: Int) -> Int
+  if n == 0
+    return acc
+  end
+
+  countdown(n - 1, acc + 1)
+end
+
+# No-`else` `if` in a Unit function, where the false edge of the
+# CondBranch jumps straight to the return merge (the trampoline-collapse
+# shape).
+fn tick(n: Int) -> Unit
+  if n > 0
+    tick(n - 1)
+  end
+end
+
+# Recursive call as a `match` arm value, threading a heap param
+# through every frame (the back-edge passthrough move).
+fn thread(s: String, n: Int, acc: Int) -> Int
+  match n == 0
+    true -> acc + s.length()
+    false -> thread(s, n - 1, acc + 1)
+  end
+end
+
+countdown(200000, 0).print()
+tick(200000)
+"ticked".print()
+thread("koja", 200000, 0).print()
