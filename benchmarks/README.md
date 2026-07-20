@@ -31,13 +31,14 @@ numbers would dominate the signal, so we use the in-workload timing instead.
 
 ## Benchmarks
 
-| Program                   | Measures                                                       |
-| ------------------------- | -------------------------------------------------------------- |
-| `koja/loop.kojs`          | Tight 200M-iteration counting loop — raw integer/branch speed. |
-| `koja/recursion.kojs`     | `fib(35)` — recursive call overhead.                           |
-| `koja/msg_roundtrip.kojs` | 1M synchronous `call`/reply round-trips to one process.        |
-| `koja/spawn_reply.kojs`   | 100k spawn-then-call-then-exit cycles — process churn.         |
-| `koja/process_storm.kojs` | 10k processes spawned concurrently, each doing CPU work.       |
+| Program                   | Measures                                                                                                               |
+| ------------------------- | ---------------------------------------------------------------------------------------------------------------------- |
+| `koja/loop.kojs`          | Tight 200M-iteration counting loop — raw integer/branch speed.                                                         |
+| `koja/recursion.kojs`     | `fib(35)` — recursive call overhead.                                                                                   |
+| `koja/tail_scan.kojs`     | 200M tail-recursive iterations threading a `String` param — self-tail-call loopification and back-edge ownership cost. |
+| `koja/msg_roundtrip.kojs` | 1M synchronous `call`/reply round-trips to one process.                                                                |
+| `koja/spawn_reply.kojs`   | 100k spawn-then-call-then-exit cycles — process churn.                                                                 |
+| `koja/process_storm.kojs` | 10k processes spawned concurrently, each doing CPU work.                                                               |
 
 BEAM equivalents live in `beam/` (`compute.erl`, `concurrency.erl`,
 `storm.erl`) and mirror the same workloads.

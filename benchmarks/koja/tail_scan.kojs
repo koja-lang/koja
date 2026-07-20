@@ -1,0 +1,29 @@
+# Tail-recursive counting loop threading a String param through every
+# iteration, the stdlib hot-loop shape (String.split / trim / HTTP
+# read_line). Exercises self-tail-call loopification and the back-edge
+# passthrough move of the heap param. The body is integer work only,
+# with per-character reads deliberately avoided, so the number isolates
+# the recursion machinery rather than codepoint indexing.
+
+fn scan(s: String, i: Int, n: Int, acc: Int) -> Int
+  if i >= n
+    return acc
+  end
+
+  match i - i / 13 * 13 == 0
+    true -> scan(s, i + 1, n, acc + 2)
+    false -> scan(s, i + 1, n, acc + 1)
+  end
+end
+
+subject = "koja threads this string through two hundred million frames"
+
+t0 = DateTime.now().timestamp_millis()
+total = scan(subject, 0, 200000000, 0)
+t1 = DateTime.now().timestamp_millis()
+
+if total == 0
+  "scan computed nothing, wrong subject".print()
+end
+
+"tail_scan_ms #{t1 - t0}".print()
