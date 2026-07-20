@@ -6,6 +6,7 @@
 **/target/release
 **/build/debug
 **/build/release
+*.beam
 *.o
 *.out
 *.exe

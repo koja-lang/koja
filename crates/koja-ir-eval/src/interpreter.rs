@@ -792,11 +792,15 @@ fn execute_receive<'a, R: CallResolver>(
             if let Some(message) = scheduler::pop_received(pid)
                 && let Some(block) = dispatch_received(message, arms, frame, resolver)
             {
+                if deadline.is_some() {
+                    scheduler::clear_deadline(pid);
+                }
                 return Ok(block);
             }
             if let Some(deadline) = deadline
                 && Instant::now() >= deadline
             {
+                scheduler::clear_deadline(pid);
                 let clause = after.expect("deadline implies an after clause");
                 return Ok(clause.body);
             }
