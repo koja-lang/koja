@@ -19,7 +19,7 @@ use koja_ir::{
     ReceiveAfter, ReceiveArm, ReceiveTag, ResolvedBinaryLayout, ValueId, pack_integer_segment,
 };
 use koja_runtime_core::{
-    CrashInfo, Driver, ExitNotice, ExitReason, Readiness, Tag, TimerService,
+    CrashInfo, Driver, ExitNotice, ExitReason, Priority, Readiness, Tag, Wake,
     duration_from_user_millis,
 };
 
@@ -29,8 +29,8 @@ use crate::intrinsics;
 use crate::ops::{apply_binary_op, apply_unary_op};
 use crate::reactor::EvalReactor;
 use crate::scheduler::{
-    self, CoreHandle, EvalClock, EvalDriver, EvalExecutor, EvalMessage, EvalSignals, EvalTable,
-    ProcessFuture, TimersHandle, YieldOnce, block_on,
+    self, EvalClock, EvalDriver, EvalExecutor, EvalMessage, EvalRuntime, EvalSignals,
+    ProcessFuture, YieldOnce, block_on,
 };
 use crate::value::{EnumPayload, Value};
 
@@ -69,10 +69,9 @@ impl Interpreter {
         // `StopReason`-derived exit code surfaces through `exit_cell`. The
         // process future has `Output = ()`, so it stashes its `Value` result
         // here for `run_program` to return once the driver tears down.
-        let core: CoreHandle = Rc::new(RefCell::new(EvalTable::new()));
-        let timers: TimersHandle = Rc::new(RefCell::new(TimerService::new()));
-        let _guard = scheduler::install_runtime(Rc::clone(&core), Rc::clone(&timers));
-        let main = core.borrow_mut().spawn((), None);
+        let runtime = EvalRuntime::new();
+        let _guard = scheduler::install_runtime(runtime.clone());
+        let main = boot_main(&runtime);
 
         let exit_cell: Rc<RefCell<Option<Result<Value, RuntimeError>>>> =
             Rc::new(RefCell::new(None));
@@ -84,7 +83,7 @@ impl Interpreter {
             })
         };
 
-        let executor = EvalExecutor::new(Rc::clone(&core), program);
+        let executor = EvalExecutor::new(Rc::clone(&runtime.core), program);
         executor.install_future(main, entry_future);
 
         // The driver installs the signal handlers (SIGTERM/SIGINT/SIGHUP)
@@ -96,8 +95,7 @@ impl Interpreter {
         // ones).
         let signals = EvalSignals::new(program_uses_lifecycle(program));
         EvalDriver::new(
-            core,
-            timers,
+            runtime,
             executor,
             EvalReactor,
             EvalClock,
@@ -137,10 +135,9 @@ impl Interpreter {
         // `receive` / timers / I/O engage the runtime instead of tripping
         // the "runtime not installed" guard. The body's trailing value
         // surfaces through `exit_cell` once the driver tears down.
-        let core: CoreHandle = Rc::new(RefCell::new(EvalTable::new()));
-        let timers: TimersHandle = Rc::new(RefCell::new(TimerService::new()));
-        let _guard = scheduler::install_runtime(Rc::clone(&core), Rc::clone(&timers));
-        let main = core.borrow_mut().spawn((), None);
+        let runtime = EvalRuntime::new();
+        let _guard = scheduler::install_runtime(runtime.clone());
+        let main = boot_main(&runtime);
 
         let exit_cell: Rc<RefCell<Option<Result<Value, RuntimeError>>>> =
             Rc::new(RefCell::new(None));
@@ -151,13 +148,12 @@ impl Interpreter {
             })
         };
 
-        let executor = EvalExecutor::new(Rc::clone(&core), script);
+        let executor = EvalExecutor::new(Rc::clone(&runtime.core), script);
         executor.install_future(main, body_future);
 
         let signals = EvalSignals::new(script_uses_lifecycle(script));
         EvalDriver::new(
-            core,
-            timers,
+            runtime,
             executor,
             EvalReactor,
             EvalClock,
@@ -171,6 +167,21 @@ impl Interpreter {
             .take()
             .expect("script body produced no result before shutdown")
     }
+}
+
+/// Spawns PID 1 (the entry process) into a fresh cooperative core and
+/// enqueues its first wake, the boot both `run_program` and `run_script`
+/// perform before handing the loop to the driver.
+fn boot_main(runtime: &EvalRuntime) -> koja_runtime_core::Pid {
+    let main = runtime
+        .core
+        .spawn((), None)
+        .expect("the entry spawn has no parent to refuse over");
+    runtime.ready.borrow_mut().push(Wake {
+        pid: main,
+        priority: Priority::default(),
+    });
+    main
 }
 
 /// Per-call execution frame. SSA values and local-slot storage live

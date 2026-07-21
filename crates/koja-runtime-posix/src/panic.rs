@@ -99,7 +99,7 @@ pub(crate) fn crash_unwind(message: &str) -> ! {
 
 /// Installs a process-global panic hook that routes every Rust panic, on
 /// any thread and from any site (`unwrap`, `expect`, `assert!`, allocation
-/// failure, a poisoned `SCHED` lock), through the same diagnostic-and-abort
+/// failure, a poisoned slot lock), through the same diagnostic-and-abort
 /// path as user panics. The hook runs before unwinding with the stack
 /// intact, so the backtrace is faithful and no unwind ever crosses the
 /// C-ABI or poisons a lock (the first panic aborts immediately, so the

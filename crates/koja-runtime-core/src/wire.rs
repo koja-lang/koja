@@ -188,6 +188,10 @@ impl Message for Envelope {
             _ => Tag::Business,
         }
     }
+
+    fn reply_token(&self) -> i64 {
+        self.reply_token
+    }
 }
 
 /// Discard-path free: runs payload drop glue (when present) over the

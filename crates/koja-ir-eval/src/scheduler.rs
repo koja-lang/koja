@@ -25,14 +25,15 @@ use std::future::Future;
 use std::pin::Pin;
 use std::rc::Rc;
 use std::sync::Arc;
-use std::task::{Context, Poll, Wake};
+use std::task::{Context, Poll};
 use std::thread::{self, Thread};
 use std::time::{Duration, Instant};
 
 use koja_ir::IRSymbol;
 use koja_runtime_core::{
-    Clock, CooperativeDriver, CrashInfo, Executor, ExitReason, Lifecycle, Message, MessageSource,
-    Pid, Priority, ProcessTable, Readiness, SignalSource, Tag, TimerService, WaitTarget,
+    Clock, CooperativeDriver, CooperativeRuntime, CrashInfo, Executor, ExitReason, IoPark,
+    Lifecycle, Message, MessageSource, Pid, Priority, ProcessTable, Readiness, SignalSource, Tag,
+    TimerService, WaitTarget, Wake,
 };
 
 use crate::interpreter::{CallResolver, build_exit_signal_value};
@@ -43,16 +44,11 @@ use crate::value::Value;
 /// execution state, hence `()`) keyed against eval's typed message repr.
 pub(crate) type EvalTable = ProcessTable<(), EvalMessage>;
 
-/// Shared owner of the core table. The driver loop and the per-process
-/// await points (which park / peek the mailbox) all reach the table
-/// through this handle. The borrow is held only across single core
-/// operations, never across a `resume`.
-pub(crate) type CoreHandle = Rc<RefCell<EvalTable>>;
-
-/// Shared owner of the timer service, split from the table like the
-/// native `TIMERS` (single-threaded here, so the split is for API
-/// parity rather than contention).
-pub(crate) type TimersHandle = Rc<RefCell<TimerService<EvalMessage>>>;
+/// The shared runtime state for one eval run: the table plus the
+/// driver's ready queue and timer service. The driver loop and the
+/// per-process await points (which park / peek the mailbox and raise
+/// wakes) all reach the state through clones of this bundle.
+pub(crate) type EvalRuntime = CooperativeRuntime<(), EvalMessage>;
 
 /// A suspended process body: the interpreter's `async` call tree, boxed
 /// so the executor can store and re-poll it across suspensions. Borrows
@@ -67,13 +63,11 @@ pub(crate) type EvalDriver<'a, R> =
     CooperativeDriver<EvalExecutor<'a, R>, EvalReactor, EvalClock, EvalSignals>;
 
 thread_local! {
-    /// The core table for the in-flight `run_program`, installed for the
-    /// duration of the run. The cooperative analog of native's global
-    /// `SCHED`, per-thread so parallel test runs stay isolated.
-    static CORE: RefCell<Option<CoreHandle>> = const { RefCell::new(None) };
-    /// The timer service for the in-flight run, the cooperative analog
-    /// of native's global `TIMERS`. Installed and cleared with [`CORE`].
-    static TIMERS: RefCell<Option<TimersHandle>> = const { RefCell::new(None) };
+    /// The shared state (table, ready queue, timers) for the in-flight
+    /// `run_program`, installed for the duration of the run. The
+    /// cooperative analog of native's global `TABLE` / deques / `TIMERS`,
+    /// per-thread so parallel test runs stay isolated.
+    static RUNTIME: RefCell<Option<EvalRuntime>> = const { RefCell::new(None) };
     /// The PID the executor is currently resuming, set around each
     /// `resume`. Mirrors native's per-worker `CURRENT_PID`.
     static CURRENT_PID: Cell<Pid> = const { Cell::new(0) };
@@ -107,8 +101,7 @@ pub(crate) struct RuntimeGuard;
 
 impl Drop for RuntimeGuard {
     fn drop(&mut self) {
-        CORE.with(|core| *core.borrow_mut() = None);
-        TIMERS.with(|timers| *timers.borrow_mut() = None);
+        RUNTIME.with(|runtime| *runtime.borrow_mut() = None);
         CURRENT_PID.with(|pid| pid.set(0));
         REDUCTIONS_LEFT.with(|remaining| remaining.set(0));
         PENDING_SPAWNS.with(|queue| queue.borrow_mut().clear());
@@ -116,12 +109,11 @@ impl Drop for RuntimeGuard {
     }
 }
 
-/// Installs `core` and `timers` as the running runtime for the current
+/// Installs `runtime` as the running runtime for the current
 /// `run_program`. The returned guard restores the thread-locals when
 /// dropped.
-pub(crate) fn install_runtime(core: CoreHandle, timers: TimersHandle) -> RuntimeGuard {
-    CORE.with(|slot| *slot.borrow_mut() = Some(core));
-    TIMERS.with(|slot| *slot.borrow_mut() = Some(timers));
+pub(crate) fn install_runtime(runtime: EvalRuntime) -> RuntimeGuard {
+    RUNTIME.with(|slot| *slot.borrow_mut() = Some(runtime));
     CURRENT_PID.with(|pid| pid.set(0));
     REDUCTIONS_LEFT.with(|remaining| remaining.set(0));
     PENDING_SPAWNS.with(|queue| queue.borrow_mut().clear());
@@ -145,40 +137,39 @@ pub(crate) fn record_crash(crash_info: CrashInfo) {
     });
 }
 
-/// Runs `f` against the installed core table. Panics if no runtime is
+/// Runs `f` against the installed runtime state. Panics if no runtime is
 /// installed, since `receive` / `spawn` only run inside a driven process.
-fn with_table<T>(f: impl FnOnce(&mut EvalTable) -> T) -> T {
-    CORE.with(|slot| {
+fn with_runtime<T>(f: impl FnOnce(&EvalRuntime) -> T) -> T {
+    RUNTIME.with(|slot| {
         let guard = slot.borrow();
-        let handle = guard
+        let runtime = guard
             .as_ref()
             .expect("eval runtime not installed: receive/spawn ran outside a process");
-        let mut table = handle.borrow_mut();
-        f(&mut table)
+        f(runtime)
     })
+}
+
+/// Runs `f` against the installed core table.
+fn with_table<T>(f: impl FnOnce(&EvalTable) -> T) -> T {
+    with_runtime(|runtime| f(&runtime.core))
+}
+
+/// Pushes a wake fact onto the installed driver's ready queue. The
+/// cooperative analog of native's `route_wake`.
+fn push_wake(wake: Wake) {
+    with_runtime(|runtime| runtime.ready.borrow_mut().push(wake));
 }
 
 /// Runs `f` against the installed timer service. Same install lifetime
 /// as [`with_table`], and the two borrows are never held together.
 fn with_timers<T>(f: impl FnOnce(&mut TimerService<EvalMessage>) -> T) -> T {
-    TIMERS.with(|slot| {
-        let guard = slot.borrow();
-        let handle = guard
-            .as_ref()
-            .expect("eval runtime not installed: timers touched outside a process");
-        let mut timers = handle.borrow_mut();
-        f(&mut timers)
-    })
+    with_runtime(|runtime| f(&mut runtime.timers.borrow_mut()))
 }
 
 /// Pops the next received message (system traffic before business) for
 /// `pid`, or `None` when its receive queues are empty.
 pub(crate) fn pop_received(pid: Pid) -> Option<EvalMessage> {
-    with_table(|table| {
-        table
-            .get_mut(pid)
-            .and_then(|pcb| pcb.mailbox.pop_received())
-    })
+    with_table(|table| table.pop_received(pid))
 }
 
 /// Parks `pid` as `Blocked` on `target`, recording (and arming) an
@@ -212,10 +203,10 @@ pub(crate) fn clear_deadline(pid: Pid) {
     with_timers(|timers| timers.cancel_deadline(pid));
 }
 
-/// Parks `pid` as `WaitingIO` for the reactor (`io_block`). Returns
-/// whether the park took. A refused park means a kill landed mid-run, and
-/// the caller must not arm the fd because there is no waiter to wake.
-pub(crate) fn park_io(pid: Pid) -> bool {
+/// Parks `pid` as `WaitingIO` for the reactor (`io_block`). The
+/// system-mail check and the park happen in one table hold, so a signal
+/// can never be stranded behind the wait.
+pub(crate) fn park_io(pid: Pid) -> IoPark {
     with_table(|table| table.try_park_io(pid))
 }
 
@@ -224,24 +215,28 @@ pub(crate) fn park_io(pid: Pid) -> bool {
 /// its `io_block` strategy: cooperative park (process mode) vs. blocking
 /// the single thread on the fd (function mode, no driver).
 pub(crate) fn runtime_installed() -> bool {
-    CORE.with(|slot| slot.borrow().is_some())
+    RUNTIME.with(|slot| slot.borrow().is_some())
 }
 
 /// Illegal state-transition count for the installed cooperative core,
 /// eval's analog of the native `koja_rt_sched_violations` oracle. Reads
-/// eval's own `ProcessTable` (not the native `SCHED`, which never runs
+/// eval's own `ProcessTable` (not the native table, which never runs
 /// under eval) so the kill/park race fixtures actually exercise the
 /// cooperative scheduler's transition guard.
 pub(crate) fn sched_violations() -> i64 {
     with_table(|table| table.counters().violations as i64)
 }
 
-/// Routes `message` into `pid`'s mailbox, waking it if it is parked on the
-/// matching target. A bounced (target gone) or displaced (stale reply)
-/// message is dropped here, off the table borrow.
+/// Routes `message` into `pid`'s mailbox, forwarding the wake it may
+/// produce to the driver's ready queue. A bounced (target gone) or
+/// displaced (stale reply) message is dropped here, off the table's
+/// locks.
 pub(crate) fn deliver(pid: Pid, message: EvalMessage) {
-    let leftover = with_table(|table| table.deliver(pid, message));
-    drop(leftover);
+    let delivery = with_table(|table| table.deliver(pid, message));
+    if let Some(wake) = delivery.wake {
+        push_wake(wake);
+    }
+    drop(delivery.leftover);
 }
 
 /// Schedules `message` for delivery to `pid` at `fire_at` (`Ref.send_after`).
@@ -252,7 +247,7 @@ pub(crate) fn schedule_timer(pid: Pid, fire_at: Instant, message: EvalMessage) {
 /// Takes the pending reply from `pid`'s one-shot reply slot, if one has
 /// landed (`Ref.call`'s resume check).
 pub(crate) fn take_reply(pid: Pid) -> Option<EvalMessage> {
-    with_table(|table| table.get_mut(pid).and_then(|pcb| pcb.mailbox.take_reply()))
+    with_table(|table| table.take_reply(pid))
 }
 
 /// Registers `pid` as awaiting the reply for `token` (`Ref.call`), so
@@ -273,21 +268,17 @@ pub(crate) fn clear_awaiting_reply(pid: Pid) {
 pub(crate) fn reply(coords: ReplyInfo, value: Value) -> bool {
     let caller = coords.caller_pid;
     let token = coords.token;
-    with_table(|table| {
-        if !table.is_awaiting_reply(caller, token) {
-            return false;
-        }
-        let leftover = table.deliver(
-            caller,
-            EvalMessage {
-                reply: Some(coords),
-                tag: Tag::Reply,
-                value,
-            },
-        );
-        drop(leftover);
-        true
-    })
+    let message = EvalMessage {
+        reply: Some(coords),
+        tag: Tag::Reply,
+        value,
+    };
+    let delivery = with_table(|table| table.deliver_reply(caller, token, message));
+    if let Some(wake) = delivery.wake {
+        push_wake(wake);
+    }
+    drop(delivery.leftover);
+    delivery.delivered
 }
 
 /// Terminates `pid` (`Ref.kill`), dropping any reclaimed resources here.
@@ -398,7 +389,15 @@ pub(crate) fn spawn_child(wrapper: IRSymbol, config: Value) -> Pid {
     if with_table(|table| table.is_draining()) {
         return 0;
     }
-    let pid = with_table(|table| table.spawn((), Some(current_pid())));
+    // A refused spawn means a kill landed on the (still running) spawner.
+    // Pid 0 keeps the child from outliving the already-settled cascade.
+    let Ok(pid) = with_table(|table| table.spawn((), Some(current_pid()))) else {
+        return 0;
+    };
+    push_wake(Wake {
+        pid,
+        priority: Priority::default(),
+    });
     PENDING_SPAWNS.with(|queue| {
         queue.borrow_mut().push(PendingSpawn {
             config,
@@ -474,13 +473,13 @@ impl Future for YieldOnce {
 /// `IOReady` values). Process execution state and the resume token both
 /// stay `()`.
 pub(crate) struct EvalExecutor<'a, R: CallResolver> {
-    core: CoreHandle,
+    core: Rc<EvalTable>,
     futures: RefCell<HashMap<Pid, ProcessFuture<'a>>>,
     resolver: &'a R,
 }
 
 impl<'a, R: CallResolver> EvalExecutor<'a, R> {
-    pub(crate) fn new(core: CoreHandle, resolver: &'a R) -> Self {
+    pub(crate) fn new(core: Rc<EvalTable>, resolver: &'a R) -> Self {
         Self {
             core,
             futures: RefCell::new(HashMap::new()),
@@ -515,7 +514,7 @@ impl<'a, R: CallResolver> EvalExecutor<'a, R> {
     /// The single-threaded analog of native's per-death-site settles.
     fn settle_exits(&self) {
         loop {
-            let staged = self.core.borrow_mut().take_pending_kills();
+            let staged = self.core.take_pending_kills();
             if staged.is_empty() {
                 break;
             }
@@ -532,7 +531,7 @@ impl<'a, R: CallResolver> EvalExecutor<'a, R> {
     /// Synthesizes and delivers every staged `ExitSignal`, waking
     /// parked watchers.
     fn deliver_exit_signals(&self) {
-        let notices = self.core.borrow_mut().take_exit_notices();
+        let notices = self.core.take_exit_notices();
         for notice in notices {
             deliver(
                 notice.watcher,
@@ -556,7 +555,7 @@ impl<R: CallResolver> Executor for EvalExecutor<'_, R> {
         // Seed this quantum's reduction budget (reset by `claim_next` on the
         // `-> Running` edge) so `reduce` decrements a `Cell` rather than the
         // table on every `YieldCheck`.
-        let budget = self.core.borrow().reductions_left(pid);
+        let budget = self.core.reductions_left(pid);
         REDUCTIONS_LEFT.with(|remaining| remaining.set(budget));
         // Take the future out so the map is not borrowed across the poll.
         // A process whose future has already completed (or was killed) is
@@ -571,16 +570,14 @@ impl<R: CallResolver> Executor for EvalExecutor<'_, R> {
             }));
             match poll {
                 Ok(Poll::Ready(())) => {
-                    self.core.borrow_mut().mark_dead_if_alive(pid);
+                    self.core.mark_dead_if_alive(pid);
                 }
                 Ok(Poll::Pending) => {
                     self.futures.borrow_mut().insert(pid, future);
                 }
                 Err(_payload) => {
-                    self.core
-                        .borrow_mut()
-                        .set_exit_reason(pid, ExitReason::Crashed);
-                    self.core.borrow_mut().mark_dead_if_alive(pid);
+                    self.core.set_exit_reason(pid, ExitReason::Crashed);
+                    self.core.mark_dead_if_alive(pid);
                 }
             }
         }
@@ -683,7 +680,7 @@ pub(crate) fn block_on<F: Future>(future: F) -> F::Output {
 /// A waker that unparks the thread blocked in [`block_on`].
 struct ThreadWaker(Thread);
 
-impl Wake for ThreadWaker {
+impl std::task::Wake for ThreadWaker {
     fn wake(self: Arc<Self>) {
         self.0.unpark();
     }

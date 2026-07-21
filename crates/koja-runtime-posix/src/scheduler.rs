@@ -1,9 +1,13 @@
 //! Multi-threaded cooperative scheduler for Koja lightweight processes.
 //!
-//! N worker OS threads share a Mutex-protected process list. Each worker
-//! runs a scheduling loop: grab a runnable process, context-switch into it,
-//! and when it yields (via `receive`), switch back and look for more work.
-//! Idle workers park on a Condvar and are woken by `send` or `spawn`.
+//! N worker OS threads share the internally synchronized [`TABLE`]
+//! (per-slot locks and CAS lifecycle edges; no global scheduler lock, see
+//! `design/SCHEDULER-PROTOCOL.md`). Each worker runs a scheduling loop:
+//! claim a runnable process, context-switch into it, and when it yields
+//! (via `receive`), switch back and look for more work. Newly-runnable
+//! processes route directly to the work-stealing deques ([`route_wake`]).
+//! Idle workers park on a sleeper-counted condvar and are woken by `send`
+//! or `spawn`.
 
 use std::alloc;
 use std::cell::{Cell, RefCell, UnsafeCell};
@@ -15,12 +19,12 @@ use std::time::{Duration, Instant};
 
 use crossbeam_deque::{Injector, Steal, Stealer, Worker};
 use koja_runtime_core::{
-    Clock, CrashInfo, Driver, Due, Executor, ExitNotice, ExitReason, Lifecycle, Pid, Priority,
-    ProcessTable, Reclaim, SignalSource, TimerService, duration_from_user_millis, slot_index,
+    Clock, CrashInfo, Driver, Due, Executor, ExitNotice, ExitReason, Lifecycle, MailPark, Pid,
+    Priority, ProcessTable, Reclaim, SignalSource, SwitchOutcome, TimerService, Wake,
+    duration_from_user_millis, slot_index,
 };
 
 use crate::ffi::{fflush, koja_context_switch, koja_process_start, koja_seed_reductions, setvbuf};
-use crate::mailbox::WaitTarget;
 use crate::memory;
 use crate::panic;
 use crate::reactor;
@@ -48,20 +52,15 @@ fn poll_signals() {
         return;
     }
 
-    let (main_pid, newly_draining) = {
-        let mut guard = SCHED.lock().unwrap();
-        // SIGTERM (`Shutdown`) starts the drain: refuse new spawns. The
-        // signal is still delivered to main below so a lifecycle-aware
-        // program can shut itself down before the grace deadline.
-        let newly_draining = fired.contains(&Lifecycle::Shutdown) && guard.enter_draining();
-        (guard.main_pid(), newly_draining)
-    };
-    // Arm the grace backstop outside the SCHED hold (the two locks are
-    // never held together). `enter_draining` switched exactly once, so
-    // the window is measured from the first SIGTERM.
-    if newly_draining {
+    // SIGTERM (`Shutdown`) starts the drain: refuse new spawns. The
+    // signal is still delivered to main below so a lifecycle-aware
+    // program can shut itself down before the grace deadline.
+    // `enter_draining` switched exactly once, so the grace window is
+    // measured from the first SIGTERM.
+    if fired.contains(&Lifecycle::Shutdown) && TABLE.enter_draining() {
         TIMERS.with(|timers| timers.arm_grace(NativeClock.now() + grace_period()));
     }
+    let main_pid = TABLE.main_pid();
     for lifecycle in fired {
         send_lifecycle_to(main_pid, lifecycle as i64);
     }
@@ -149,9 +148,9 @@ impl Drop for ProcessStack {
 
 /// A native process's execution state: everything the native
 /// [`Executor`](koja_runtime_core::Executor) needs to enter and resume one
-/// process. Stored opaquely in the agnostic
-/// [`ProcessControlBlock`](koja_runtime_core::ProcessControlBlock). The
-/// scheduling policy in `koja-runtime-core` never inspects it.
+/// process. Stored opaquely in the process's table slot, owned by the
+/// slot's `on_cpu` claim holder. The scheduling policy in
+/// `koja-runtime-core` never inspects it.
 ///
 /// Dropping an execution state unmaps its `stack` and releases its `init_state`
 /// (running the config's drop glue), which is how a reclaimed process frees
@@ -174,7 +173,9 @@ pub(crate) struct NativeExecution {
 
 /// `NativeExecution` holds raw pointers that are heap-allocated and not
 /// thread-affine, so cross-thread transfer is safe. This is what makes the
-/// concrete `ProcessTable<NativeExecution, Envelope>` `Send` for the `Mutex`.
+/// concrete `ProcessTable<NativeExecution, Envelope>` `Sync` for the
+/// [`TABLE`] static (the table publishes execution state to its single
+/// claim holder via the lifecycle word's release/acquire pair).
 unsafe impl Send for NativeExecution {}
 
 impl NativeExecution {
@@ -213,9 +214,8 @@ impl Executor for NativeExecutor {
 
     /// Switches onto `pid`'s stack at `continuation` (its saved `sp`) and
     /// runs until the process yields back via [`yield_to_scheduler`], then
-    /// returns the `sp` it yielded at. The caller (driver) has already
-    /// released `SCHED`. This touches only thread-locals and the assembly,
-    /// never the table, so the lock stays dropped across the switch.
+    /// returns the `sp` it yielded at. This touches only thread-locals and
+    /// the assembly, never the table, so no lock is held across the switch.
     fn resume(&self, pid: Pid, continuation: Self::Continuation) -> Self::Continuation {
         CURRENT_PID.with(|c| c.set(pid));
         tsan::switch_to_process(tsan::slot_fiber(slot_index(pid)));
@@ -267,18 +267,19 @@ fn lifecycle_from_index(index: i64) -> Lifecycle {
     }
 }
 
-/// Global scheduler state. Workers hold this lock briefly to find or
-/// update processes. The lock is always released before context-switching.
-pub(crate) static SCHED: Mutex<NativeTable> = Mutex::new(ProcessTable::new());
+/// Global scheduler state: the internally synchronized process table.
+/// Every access is `&TABLE`; the table's own per-slot and registry locks
+/// are always released before context-switching.
+pub(crate) static TABLE: NativeTable = ProcessTable::new();
 
 /// The timer service behind its own lock, gated by an atomic next-fire
 /// instant so the worker loop's per-iteration timer check is a single
-/// relaxed load instead of a [`SCHED`] acquisition.
+/// relaxed load instead of a lock acquisition.
 ///
-/// Lock-order rule: this lock and [`SCHED`] are never held together.
-/// Firing drains under this lock, releases it, then applies under
-/// `SCHED`, where [`ProcessTable::promote_expired`] re-validates each
-/// wake against the live process state.
+/// Lock-order rule: this lock and the table's core locks are never held
+/// together. Firing drains under this lock, releases it, then applies
+/// against [`TABLE`], where [`ProcessTable::promote_expired`]
+/// re-validates each wake against the live process state.
 struct Timers {
     /// Reference instant for the gate encoding, fixed at first use.
     epoch: Instant,
@@ -330,13 +331,29 @@ impl Timers {
     }
 }
 
-/// Timers, deadlines, and the drain-grace backstop, off the [`SCHED`]
+/// Timers, deadlines, and the drain-grace backstop, off the scheduling
 /// hot path.
 static TIMERS: LazyLock<Timers> = LazyLock::new(Timers::new);
 
-/// Condvar paired with [`SCHED`]. Workers park here when idle.
-/// Woken by `koja_rt_send`, `koja_rt_spawn`, the reactor, and on shutdown.
-pub(crate) static WORK_AVAILABLE: Condvar = Condvar::new();
+/// Where idle workers park: a sleeper count under a small mutex plus its
+/// condvar. Woken by `koja_rt_send`, `koja_rt_spawn`, the reactor, and on
+/// shutdown.
+///
+/// The count is what keeps the wake path cheap: a producer that woke
+/// nobody-parked skips the syscall entirely, and [`notify_workers`] only
+/// notifies when a sleeper is actually registered. The lost-wakeup guard
+/// is the mutex: a parker re-checks the injectors under the hold before
+/// waiting, and a producer pushes its work *before* taking the hold to
+/// notify, so the check and the notify cannot interleave the wrong way.
+struct IdlePark {
+    sleepers: Mutex<usize>,
+    wakeup: Condvar,
+}
+
+static IDLE_PARK: IdlePark = IdlePark {
+    sleepers: Mutex::new(0),
+    wakeup: Condvar::new(),
+};
 
 /// Set to `true` when the runtime should tear down. Once true, all
 /// workers and the reactor thread exit their loops and join.
@@ -369,9 +386,9 @@ type WorkerQueues = [Worker<Pid>; READY_LEVELS];
 type WorkerStealers = [Stealer<Pid>; READY_LEVELS];
 
 /// Per-priority global run queues: the overflow/cross-thread landing zone
-/// for newly-runnable PIDs ([`publish_ready`]). Workers drain these
+/// for newly-runnable PIDs ([`route_wake`]). Workers drain these
 /// (highest priority first) only after their local deques and stealing
-/// come up empty. Lock-free, so producers push while holding [`SCHED`].
+/// come up empty. Lock-free, so any thread can push.
 static INJECTORS: LazyLock<[Injector<Pid>; READY_LEVELS]> =
     LazyLock::new(|| [Injector::new(), Injector::new(), Injector::new()]);
 
@@ -417,9 +434,8 @@ thread_local! {
     /// stealing from itself. Unused (`0`) off a worker thread.
     static WORKER_ID: Cell<usize> = const { Cell::new(0) };
     /// Set by [`koja_rt_yield_check`] just before switching back, consumed
-    /// by the worker at switch-out. The yield slow path skips [`SCHED`]
-    /// entirely: the worker replays the `Running -> Runnable` edge under
-    /// the lock hold it already takes for `after_switch`. Safe because the
+    /// by the worker at switch-out: the worker replays the yield as the
+    /// `Running -> Runnable` edge inside `after_switch`. Safe because the
     /// flag is written and read on the same worker thread within one
     /// resume, and the process cannot migrate until `after_switch`
     /// re-queues it.
@@ -445,19 +461,16 @@ pub(crate) fn yield_to_scheduler() {
     }
 }
 
-/// Routes `envelope` to `pid` under the scheduler lock, then drops any
-/// leftover (an undeliverable envelope, or a stale reply displaced from
-/// the reply slot) after the lock is released, since payload drop glue is
-/// arbitrary emitted code and shouldn't run while holding `SCHED`.
+/// Routes `envelope` to `pid`, enqueues the wake it may produce, then
+/// drops any leftover (an undeliverable envelope, or a stale reply
+/// displaced from the reply slot) after the table's slot lock is
+/// released, since payload drop glue is arbitrary emitted code and
+/// shouldn't run while holding a core lock.
 fn deliver_or_discard(pid: i64, envelope: Envelope) {
-    let mut guard = SCHED.lock().unwrap();
-    let leftover = guard.deliver(pid, envelope);
-    // A delivery that woke a parked receiver staged it in `pending_ready`.
-    // Publish it to the injectors and wake a worker. No wake -> no notify.
-    let woken = publish_ready(&mut guard);
-    drop(guard);
+    let delivery = TABLE.deliver(pid, envelope);
+    let woken = delivery.wake.map_or(0, route_wake);
     notify_workers(woken);
-    drop(leftover);
+    drop(delivery.leftover);
 }
 
 /// Payload drop glue for an undelivered `ExitSignal` envelope:
@@ -505,61 +518,70 @@ fn exit_signal_envelope(notice: &ExitNotice) -> Envelope {
     }
 }
 
-/// Synthesizes and delivers every staged `ExitSignal`, waking parked
-/// watchers. Returns the undeliverable envelopes for the caller to
-/// drop after releasing the lock.
-fn deliver_exit_signals(table: &mut NativeTable) -> Vec<Envelope> {
-    table
-        .take_exit_notices()
-        .into_iter()
-        .filter_map(|notice| table.deliver(notice.watcher, exit_signal_envelope(&notice)))
-        .collect()
+/// Synthesizes and delivers every staged `ExitSignal`, routing the wakes
+/// of parked watchers. Returns the undeliverable envelopes for the
+/// caller to drop, plus how many wakes landed in a global injector.
+fn deliver_exit_signals() -> (Vec<Envelope>, usize) {
+    let mut leftovers = Vec::new();
+    let mut woken = 0;
+    for notice in TABLE.take_exit_notices() {
+        let delivery = TABLE.deliver(notice.watcher, exit_signal_envelope(&notice));
+        woken += delivery.wake.map_or(0, route_wake);
+        leftovers.extend(delivery.leftover);
+    }
+    (leftovers, woken)
 }
 
-/// Resources detached while settling a death edge, dropped by the
-/// caller after releasing the lock. `leftovers` and `reclaims` are never
-/// read by name (they exist so their `Drop` runs at that controlled
-/// point). `freed` names the reclaimed PIDs so the caller can cancel
-/// their armed deadlines via [`cancel_freed_deadlines`].
+/// Resources detached while settling a death edge, dropped by the caller
+/// after any lock is released. `leftovers` and `reclaims` are never read
+/// by name (they exist so their `Drop` runs at that controlled point).
+/// `freed` names the reclaimed PIDs so the caller can cancel their armed
+/// deadlines via [`cancel_freed_deadlines`].
 #[allow(dead_code)]
 struct SettledExits {
     freed: Vec<Pid>,
     leftovers: Vec<Envelope>,
     reclaims: Vec<Reclaim<NativeExecution, Envelope>>,
+    /// Wakes routed to a global injector, for the caller's
+    /// [`notify_workers`].
+    woken: usize,
 }
 
-/// Settles every consequence of a death edge under one lock hold:
-/// force-kills the staged kill-cascade targets until none remain (each
-/// kill can stage grandchildren), then delivers the staged
+/// Settles every consequence of a death edge: the staged-drain cascade.
+/// Drains the staged kill targets, kills each with no cross-slot lock
+/// held (each kill can stage grandchildren under the registry), and
+/// repeats until nothing is staged, then delivers the staged
 /// `ExitSignal`s. Call at every site that can stage notices or kills
 /// (death edges and `koja_rt_monitor`).
-fn settle_exits(table: &mut NativeTable) -> SettledExits {
+fn settle_exits() -> SettledExits {
     let mut freed = Vec::new();
     let mut reclaims = Vec::new();
     loop {
-        let staged = table.take_pending_kills();
+        let staged = TABLE.take_pending_kills();
         if staged.is_empty() {
             break;
         }
         for pid in staged {
-            if let Some(reclaim) = table.kill(pid) {
+            if let Some(reclaim) = TABLE.kill(pid) {
                 freed.push(pid);
                 reclaims.push(reclaim);
             }
         }
     }
+    let (leftovers, woken) = deliver_exit_signals();
     SettledExits {
         freed,
-        leftovers: deliver_exit_signals(table),
+        leftovers,
         reclaims,
+        woken,
     }
 }
 
 /// Cancels freed processes' armed deadlines so they don't linger in the
-/// wheel until they age out. Call after releasing [`SCHED`] (the two
-/// locks are never held together). Slot reuse is harmless. A PID embeds
-/// its generation, so a stale cancel can never hit a recycled slot's
-/// fresh entry.
+/// wheel until they age out. Call with no core lock held (the timer lock
+/// and the table's locks are never held together). Slot reuse is
+/// harmless. A PID embeds its generation, so a stale cancel can never
+/// hit a recycled slot's fresh entry.
 fn cancel_freed_deadlines(freed: &[Pid]) {
     if freed.is_empty() {
         return;
@@ -578,22 +600,20 @@ const REPLY_DELIVERED: i64 = 0;
 /// discarded. Mirrored as `Delivery.Expired`.
 const REPLY_EXPIRED: i64 = 1;
 
-/// Slots `envelope` for `pid` only if it is still awaiting `token`, checking
-/// and delivering under one lock hold so the answer is linearizable against
-/// the caller's timeout. Off-lock cleanup mirrors [`deliver_or_discard`].
+/// Slots `envelope` for `pid` only if it is still awaiting `token`. The
+/// table checks and delivers in one slot hold, so the answer is
+/// linearizable against the caller's timeout. Off-lock cleanup mirrors
+/// [`deliver_or_discard`].
 fn reply_or_expire(pid: i64, token: i64, envelope: Envelope) -> i64 {
-    let mut guard = SCHED.lock().unwrap();
-    if !guard.is_awaiting_reply(pid, token) {
-        drop(guard);
-        drop(envelope);
-        return REPLY_EXPIRED;
-    }
-    let leftover = guard.deliver(pid, envelope);
-    let woken = publish_ready(&mut guard);
-    drop(guard);
+    let delivery = TABLE.deliver_reply(pid, token, envelope);
+    let woken = delivery.wake.map_or(0, route_wake);
     notify_workers(woken);
-    drop(leftover);
-    REPLY_DELIVERED
+    drop(delivery.leftover);
+    if delivery.delivered {
+        REPLY_DELIVERED
+    } else {
+        REPLY_EXPIRED
+    }
 }
 
 /// Prepares a fresh process stack so the first `koja_context_switch`
@@ -620,20 +640,20 @@ unsafe fn init_process_stack(stack_top: *mut u8, entry: unsafe extern "C" fn()) 
 unsafe extern "C" fn process_trampoline() {
     let pid = CURRENT_PID.with(|c| c.get());
 
-    let Some((func, init_state)) = SCHED
-        .lock()
-        .unwrap()
-        .get(pid)
-        .map(|pcb| pcb.execution.entry())
+    // Safety: this trampoline runs as the freshly claimed process, so it
+    // is the slot's `on_cpu` claim holder.
+    let Some((func, init_state)) =
+        (unsafe { TABLE.with_execution(pid, |execution| execution.entry()) })
     else {
         return;
     };
 
     // Contain a user crash to this one process: a panicking body unwinds
     // back to here (release-before-suspend guarantees no user code holds
-    // `SCHED` while unwinding), carrying its `UserCrash` payload. We record
-    // `Crashed` + the capture, then fall into the normal death path, where
-    // the `Dead` edge runs drop glue and reclaims the stack as usual.
+    // a core lock while unwinding), carrying its `UserCrash` payload. We
+    // record `Crashed` + the capture, then fall into the normal death
+    // path, where the `Dead` edge runs drop glue and reclaims the stack
+    // as usual.
     let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         func(init_state);
     }));
@@ -645,12 +665,11 @@ unsafe extern "C" fn process_trampoline() {
         let crash_info = payload
             .downcast::<crate::panic::UserCrash>()
             .map_or_else(|_| CrashInfo::default(), |boxed| boxed.crash_info);
-        let mut guard = SCHED.lock().unwrap();
-        guard.set_exit_reason(pid, ExitReason::Crashed);
-        guard.set_crash_info(pid, crash_info);
+        TABLE.set_exit_reason(pid, ExitReason::Crashed);
+        TABLE.set_crash_info(pid, crash_info);
         // A crashing entry process (PID 1) never returns a `StopReason`, so
         // force a non-zero OS exit. `koja_rt_main_done` applies it on join.
-        if pid == guard.main_pid() {
+        if pid == TABLE.main_pid() {
             ENTRY_EXIT_OVERRIDE.store(CRASH_EXIT_CODE, Ordering::SeqCst);
         }
     }
@@ -659,17 +678,13 @@ unsafe extern "C" fn process_trampoline() {
     // process plus the kill-cascade for its children. Settle both
     // (waking parked watchers) before yielding, dropping bounced
     // envelopes and reclaimed resources off-lock.
-    let settled = {
-        let mut guard = SCHED.lock().unwrap();
-        guard.mark_dead_if_alive(pid);
-        let settled = settle_exits(&mut guard);
-        publish_ready(&mut guard);
-        settled
-    };
+    TABLE.mark_dead_if_alive(pid);
+    let settled = settle_exits();
     cancel_freed_deadlines(&settled.freed);
+    notify_workers(settled.woken);
     drop(settled);
 
-    WORK_AVAILABLE.notify_all();
+    notify_all_workers();
     yield_to_scheduler();
 }
 
@@ -745,56 +760,62 @@ fn cgroup_cpu_quota() -> Option<usize> {
     Some((quota / period).clamp(1, 256) as usize)
 }
 
-/// Routes every newly-runnable PID the table staged in `pending_ready` to a
-/// run queue, returning how many landed in a global injector (i.e. need a
-/// peer woken). On a worker thread the wake is co-located onto that worker's
-/// local deque, keeping a process and whoever woke it (a `send`/`reply`
-/// partner, a parent that just spawned it) on one core, so it returns 0 and
-/// the running worker drains it itself. Off a worker (the reactor thread) it
-/// falls back to the per-priority injectors. Lock-free either way, so it is
-/// safe (and intended) to call while holding [`SCHED`].
+/// Routes one newly-runnable process to a run queue, returning how many
+/// wakes landed in a global injector (i.e. need a peer woken via
+/// [`notify_workers`]). On a worker thread the wake is co-located onto
+/// that worker's local deque, keeping a process and whoever woke it (a
+/// `send`/`reply` partner, a parent that just spawned it) on one core, so
+/// it returns 0 and the running worker drains it itself. Off a worker
+/// (the reactor thread) it falls back to the per-priority injectors.
+/// Lock-free either way.
 ///
 /// `#[inline(never)]` is load-bearing. This runs on process stacks (send,
 /// spawn, the trampoline's death path) where a cached TLS base from before
 /// a context switch would resolve `LOCAL_QUEUES` to a *different* worker's
 /// single-owner deque, racing its owner. See the TLS caching note above.
 #[inline(never)]
-pub(crate) fn publish_ready(table: &mut NativeTable) -> usize {
-    let drained = table.drain_pending_ready();
+pub(crate) fn route_wake(wake: Wake) -> usize {
     LOCAL_QUEUES.with(|cell| {
         let local = cell.borrow();
         match local.as_ref() {
             Some(local) => {
-                for (pid, priority) in drained {
-                    local[priority as usize].push(pid);
-                }
+                local[wake.priority as usize].push(wake.pid);
                 0
             }
             None => {
-                let mut published = 0;
-                for (pid, priority) in drained {
-                    INJECTORS[priority as usize].push(pid);
-                    published += 1;
-                }
-                published
+                INJECTORS[wake.priority as usize].push(wake.pid);
+                1
             }
         }
     })
 }
 
 /// Wakes up to `count` parked workers: one per newly-runnable process, so
-/// a burst of wakes spreads across idle workers without a thundering herd.
-/// A no-op when `count` is 0 or no worker is parked. Call after releasing
-/// [`SCHED`], so a woken worker doesn't immediately contend on the lock.
-fn notify_workers(count: usize) {
-    for _ in 0..count {
-        WORK_AVAILABLE.notify_one();
+/// a burst of wakes spreads across idle workers without a thundering
+/// herd. A no-op when `count` is 0 or no worker is parked (checked under
+/// the sleeper mutex, so the common nobody-parked case is one short
+/// uncontended lock). Call with the work already pushed, so a woken
+/// worker finds it.
+pub(crate) fn notify_workers(count: usize) {
+    if count == 0 {
+        return;
+    }
+    let sleepers = IDLE_PARK.sleepers.lock().unwrap();
+    for _ in 0..count.min(*sleepers) {
+        IDLE_PARK.wakeup.notify_one();
     }
 }
 
-/// Finds the next candidate PID for the running worker, without touching
-/// [`SCHED`]: its own local deques first (highest priority first), then the
-/// global injectors (the reactor's wake channel), then stealing from peers.
+/// Wakes every parked worker: the shutdown broadcast (and the death
+/// path's "main may be dead" nudge).
+pub(crate) fn notify_all_workers() {
+    let _sleepers = IDLE_PARK.sleepers.lock().unwrap();
+    IDLE_PARK.wakeup.notify_all();
+}
+
+/// Finds the next candidate PID for the running worker: its own local
+/// deques first (highest priority first), then the global injectors
+/// (the reactor's wake channel), then stealing from peers.
 /// Injectors come before stealing so a cross-thread wake is a cheap drain
 /// rather than a full sibling scan. Stealing only kicks in to spread a busy
 /// worker's co-located backlog. `None` means no work is visible right now (or
@@ -845,22 +866,22 @@ fn retry_steal(mut attempt: impl FnMut() -> Steal<Pid>) -> Option<Pid> {
 }
 
 /// Whether any global injector holds work: the lost-wakeup guard a worker
-/// re-checks under [`SCHED`] before parking, since producers push to an
-/// injector and then notify without the lock.
+/// re-checks under the sleeper mutex before parking, since producers push
+/// to an injector before notifying.
 fn injectors_nonempty() -> bool {
     INJECTORS.iter().any(|injector| !injector.is_empty())
 }
 
 /// Core scheduling loop run by every worker thread.
 ///
-/// Each iteration: service timers/deadlines under [`SCHED`], find a runnable
-/// process via [`find_work`] (local deque, then the global injectors, then
-/// stealing) without the lock, claim it under the lock, context-switch into
-/// it, and on return persist its saved stack pointer and re-queue or reclaim
-/// it. A process that yields back (or one woken by a `send`/`reply`/`spawn`
-/// running on this worker) stays on this worker's local deque (co-location).
-/// When no work is visible the worker parks on [`WORK_AVAILABLE`], and it
-/// exits when [`SHUTDOWN`] is set.
+/// Each iteration: service timers/deadlines, find a runnable process via
+/// [`find_work`] (local deque, then the global injectors, then stealing),
+/// claim it with a lock-free CAS, context-switch into it, and on return
+/// persist its saved stack pointer and re-queue or reclaim it. A process
+/// that yields back (or one woken by a `send`/`reply`/`spawn` running on
+/// this worker) stays on this worker's local deque (co-location). When no
+/// work is visible the worker parks on [`IDLE_PARK`], and it exits when
+/// [`SHUTDOWN`] is set.
 fn worker_loop(local: WorkerQueues, me: usize) {
     tsan::capture_scheduler_fiber();
     // Publish this worker's deques so intrinsics running in process context
@@ -877,35 +898,29 @@ fn worker_loop(local: WorkerQueues, me: usize) {
 
         // The timer gate: a single relaxed load. Only when something is
         // actually due does this iteration take the timer lock (drain)
-        // and then SCHED (apply). Previously every iteration took SCHED
-        // here, which convoyed all workers.
+        // and touch the table (apply).
         let now = NativeClock.now();
         if TIMERS.due(now) {
             let (due, grace_fired) =
                 TIMERS.with(|timers| (timers.advance(now), timers.grace_expired(now)));
 
-            let mut guard = SCHED.lock().unwrap();
-            let leftovers = apply_due(&mut guard, due);
+            let (leftovers, published) = apply_due(due);
 
             // Drain grace elapsed: force-kill stragglers. They become `Dead`
             // (alive == 0, main included), so the runtime tears down. The
-            // detached resources drop after the lock is released.
-            if grace_fired && guard.is_draining() {
-                let reclaim = guard.kill_all();
+            // detached resources drop before the loop exits.
+            if grace_fired && TABLE.is_draining() {
+                let reclaim = TABLE.kill_all();
                 // Everything is dead, so the staged cascade kills are
                 // no-ops. Settling still drains the staging queues.
-                let settled = settle_exits(&mut guard);
+                let settled = settle_exits();
                 SHUTDOWN.store(true, Ordering::Relaxed);
-                drop(guard);
-                WORK_AVAILABLE.notify_all();
+                notify_all_workers();
                 drop(leftovers);
                 drop(reclaim);
                 drop(settled);
                 break;
             }
-            // Publish the wakes the promotions staged, then wake peers.
-            let published = publish_ready(&mut guard);
-            drop(guard);
             notify_workers(published);
             drop(leftovers);
         }
@@ -914,41 +929,38 @@ fn worker_loop(local: WorkerQueues, me: usize) {
             Some((pid, proc_sp)) => {
                 let saved_sp = NativeExecutor.resume(pid, proc_sp);
                 // A voluntary yield (reduction budget spent) flagged itself
-                // in this worker's TLS instead of taking the lock. Reading
+                // in this worker's TLS instead of touching the table. Reading
                 // it here is safe: worker_loop never migrates threads.
                 let yielded = YIELDED.with(|flag| flag.replace(false));
 
-                let mut guard = SCHED.lock().unwrap();
-                // Persist the saved `sp` into the executor's execution state,
-                // then release the `on_cpu` claim and reclaim the slot if the
-                // process died. Detaching resources here (under the lock) lets
-                // the unmap/dealloc run after the lock is dropped.
-                if let Some(pcb) = guard.get_mut(pid) {
-                    pcb.execution.sp = saved_sp;
-                }
+                // Persist the saved `sp` into the executor's execution state
+                // *before* the `after_switch` release publishes it to the
+                // next claimer. Safety: this worker still holds the claim.
+                unsafe { TABLE.with_execution(pid, |execution| execution.sp = saved_sp) };
                 if yielded {
                     // Replay the yield's `Running -> Runnable` edge so
                     // `after_switch` re-queues the process.
-                    guard.yield_running(pid);
+                    TABLE.yield_running(pid);
                 }
-                let reclaim = guard.after_switch(pid);
-                // Co-location: a process that yielded back (reduction budget
-                // spent) re-queues via `after_switch`, and `publish_ready`
-                // keeps it on this worker's local deque so it resumes warm
-                // here.
-                publish_ready(&mut guard);
+                // Release the claim and route the process by its observed
+                // state. Co-location: a re-queued process stays on this
+                // worker's local deque so it resumes warm here.
+                let reclaim = match TABLE.after_switch(pid) {
+                    SwitchOutcome::Requeue(wake) => {
+                        route_wake(wake);
+                        None
+                    }
+                    SwitchOutcome::Reclaimed(reclaim) => Some(reclaim),
+                    SwitchOutcome::Parked => None,
+                };
 
-                let shutdown = guard.should_shutdown();
+                let shutdown = TABLE.should_shutdown();
                 if shutdown {
                     SHUTDOWN.store(true, Ordering::Relaxed);
-                }
-                drop(guard);
-
-                if shutdown {
-                    WORK_AVAILABLE.notify_all();
+                    notify_all_workers();
                 }
                 // A reclaimed process may have died parked with a deadline
-                // armed (a deferred kill). Cancel it now, off the lock.
+                // armed (a deferred kill). Cancel it now.
                 if reclaim.is_some() {
                     TIMERS.with(|timers| timers.cancel_deadline(pid));
                 }
@@ -968,78 +980,80 @@ fn worker_loop(local: WorkerQueues, me: usize) {
 
 /// Claims the next runnable process for the running worker, returning it with
 /// its saved stack pointer and this quantum's reduction budget seeded. Pops
-/// candidates via [`find_work`] and validates each under [`SCHED`] with
+/// candidates via [`find_work`] and validates each with the lock-free
 /// [`ProcessTable::try_claim`], skipping stale entries (killed or already
 /// resumed). `None` when no claimable work is visible.
 fn claim_work() -> Option<(Pid, *mut u8)> {
     while let Some(pid) = find_work() {
-        let mut guard = SCHED.lock().unwrap();
-        if !guard.try_claim(pid) {
+        if !TABLE.try_claim(pid) {
             continue;
         }
-        let proc_sp = guard
-            .get(pid)
-            .expect("just-claimed process exists")
-            .execution
-            .sp;
+        // Safety: the claim just succeeded, so this worker owns the slot's
+        // execution state until `after_switch`.
+        let proc_sp = unsafe { TABLE.with_execution(pid, |execution| execution.sp) }
+            .expect("just-claimed process exists");
         // Seed this quantum's reduction budget (reset by `try_claim`) into the
         // C thread-local that compiled process code decrements inline at each
         // `YieldCheck`, calling `koja_rt_yield_check` only on exhaustion.
-        unsafe { koja_seed_reductions(guard.reductions_left(pid)) };
+        unsafe { koja_seed_reductions(TABLE.reductions_left(pid)) };
         return Some((pid, proc_sp));
     }
     None
 }
 
 /// Parks the worker until woken or a deadline elapses. Returns `true` when
-/// the worker should exit (shutdown). Re-checks the shutdown condition and
-/// injector emptiness under the lock first, so a wake that landed between
-/// [`find_work`] and acquiring [`SCHED`] is never missed.
+/// the worker should exit (shutdown). Registers as a sleeper and re-checks
+/// injector emptiness under the sleeper mutex, so a wake that landed
+/// between [`find_work`] and this registration is never missed (producers
+/// push before they take the mutex to notify).
 fn park_for_work(now: Instant) -> bool {
-    let mut guard = SCHED.lock().unwrap();
-    if guard.should_shutdown() {
+    if TABLE.should_shutdown() {
         SHUTDOWN.store(true, Ordering::Relaxed);
-        drop(guard);
-        WORK_AVAILABLE.notify_all();
+        notify_all_workers();
         return true;
     }
-    // Lost-wakeup guard: a producer may have published work after our
-    // `find_work` scan but before this lock. Surface any staged wakes and
-    // bail out of parking if there is now injector work to pick up.
-    let published = publish_ready(&mut guard);
-    if injectors_nonempty() {
-        drop(guard);
-        notify_workers(published);
+    let mut sleepers = IDLE_PARK.sleepers.lock().unwrap();
+    if injectors_nonempty() || SHUTDOWN.load(Ordering::Relaxed) {
         return false;
     }
-    let any_active = guard.any_active();
-    let nearest = TIMERS.next_fire();
-    let idle_park = Duration::from_millis(if any_active { 10 } else { 100 });
-    let timeout = nearest
+    let idle_park = Duration::from_millis(if TABLE.any_active() { 10 } else { 100 });
+    let timeout = TIMERS
+        .next_fire()
         .map(|deadline| deadline.saturating_duration_since(now))
         .unwrap_or(idle_park);
-    let _ = WORK_AVAILABLE.wait_timeout(guard, timeout);
+    *sleepers += 1;
+    let (mut sleepers, _) = IDLE_PARK.wakeup.wait_timeout(sleepers, timeout).unwrap();
+    *sleepers -= 1;
     false
 }
 
-/// Applies one drained timer batch under [`SCHED`], waking expired
-/// deadline waiters (re-validated by the table) and delivering due
-/// envelopes, staged in wire format at schedule time so firing is a
-/// plain delivery. Returns the undeliverable envelopes (target gone or
-/// dead) for the caller to drop after releasing the lock, since payload
-/// drop glue is arbitrary emitted code.
-fn apply_due(table: &mut NativeTable, due: Vec<Due<Envelope>>) -> Vec<Envelope> {
+/// Applies one drained timer batch, waking expired deadline waiters
+/// (re-validated by the table) and delivering due envelopes, staged in
+/// wire format at schedule time so firing is a plain delivery. Returns
+/// the undeliverable envelopes (target gone or dead) for the caller to
+/// drop off any core lock, plus the injector-routed wake count for
+/// [`notify_workers`].
+fn apply_due(due: Vec<Due<Envelope>>) -> (Vec<Envelope>, usize) {
     let mut leftovers = Vec::new();
+    let mut published = 0;
     for entry in due {
         match entry {
             Due::Deliver {
                 envelope,
                 target_pid,
-            } => leftovers.extend(table.deliver(target_pid, envelope)),
-            Due::Promote { pid, fire_at } => table.promote_expired(pid, fire_at),
+            } => {
+                let delivery = TABLE.deliver(target_pid, envelope);
+                published += delivery.wake.map_or(0, route_wake);
+                leftovers.extend(delivery.leftover);
+            }
+            Due::Promote { pid, fire_at } => {
+                if let Some(wake) = TABLE.promote_expired(pid, fire_at) {
+                    published += route_wake(wake);
+                }
+            }
         }
     }
-    leftovers
+    (leftovers, published)
 }
 
 static RUNTIME_INIT: Once = Once::new();
@@ -1047,18 +1061,11 @@ static RUNTIME_INIT: Once = Once::new();
 /// One-time process-global runtime initialization. Installs the panic hook
 /// that converts any Rust panic (on any thread, before unwinding) into a
 /// clean diagnostic abort, so a panic can never unwind across the C-ABI or
-/// poison the scheduler lock, and hands ready-queue ownership to the
-/// work-stealing deques. Called at the head of every runtime entry
+/// poison a scheduler lock. Called at the head of every runtime entry
 /// point (`koja_rt_spawn` is the first one a program reaches), so the hook
-/// is live before any worker thread is spawned or any `SCHED` lock is taken.
+/// is live before any worker thread is spawned.
 fn ensure_runtime_init() {
-    RUNTIME_INIT.call_once(|| {
-        panic::install_panic_hook();
-        // Switch the table to external-ready before the first spawn enqueues,
-        // so every runnable PID flows through the work-stealing injectors
-        // (the in-core ready queues go unused on native).
-        SCHED.lock().unwrap().use_external_ready();
-    });
+    RUNTIME_INIT.call_once(panic::install_panic_hook);
 }
 
 /// Called by the compiled Koja program after `main` returns. The C-ABI
@@ -1101,9 +1108,9 @@ fn line_buffer_stdout() {
 
 /// The native [`Driver`]: a pool of `worker_count()` worker OS threads
 /// plus a dedicated reactor thread. Each worker owns per-priority local
-/// run queues and steals from its peers. The `Mutex`-guarded [`SCHED`]
-/// table still owns the process control blocks, and idle workers park on
-/// [`WORK_AVAILABLE`].
+/// run queues and steals from its peers. The internally synchronized
+/// [`TABLE`] owns the process slots, and idle workers park on
+/// [`IDLE_PARK`].
 pub(crate) struct NativeDriver;
 
 impl Driver for NativeDriver {
@@ -1179,14 +1186,13 @@ fn maybe_dump_scheduler_trace() {
     if std::env::var_os("KOJA_SCHED_TRACE").is_none() {
         return;
     }
-    let guard = SCHED.lock().unwrap();
-    for entry in guard.trace_entries() {
+    for entry in TABLE.trace_entries() {
         eprintln!(
             "koja sched: {:>8} pid {:#012x} {}",
             entry.seq, entry.pid, entry.event,
         );
     }
-    let counters = guard.counters();
+    let counters = TABLE.counters();
     eprintln!(
         "koja sched: violations={} parks_refused={} kills_deferred={} \
          stale_claims_skipped={} stale_deadlines_skipped={} undeliverable_envelopes={}",
@@ -1220,30 +1226,27 @@ fn deliver_envelope(envelope: Envelope, out: *mut u8, out_cap: i64) -> i64 {
 /// most `out_cap` bytes), frees the transport buffer, and returns its
 /// wire tag. Context-switches back to the scheduler (marking the
 /// process `Blocked`) until a message arrives. System traffic is
-/// drained before business traffic (see [`Mailbox::pop_received`]).
+/// drained before business traffic (see
+/// [`Mailbox::pop_received`](koja_runtime_core::mailbox::Mailbox::pop_received)).
 /// Returns `-1` only if woken with empty queues, which no live wake
 /// path produces.
 #[unsafe(no_mangle)]
 pub extern "C" fn koja_rt_receive(out: *mut u8, out_cap: i64) -> i64 {
     let pid = CURRENT_PID.with(|c| c.get());
 
-    {
-        let mut guard = SCHED.lock().unwrap();
-        let popped = guard.get_mut(pid).and_then(|p| p.mailbox.pop_received());
-        if let Some(envelope) = popped {
-            drop(guard);
-            return deliver_envelope(envelope, out, out_cap);
-        }
-        guard.try_park(pid, WaitTarget::Receive, None);
+    // Check and park in one slot hold, so a delivery can't slip between
+    // the empty check and the park. A refused park (killed mid-run) still
+    // yields: the owner reclaims at switch-out and the frame never resumes.
+    match TABLE.receive_or_park(pid, None) {
+        MailPark::Ready(envelope) => return deliver_envelope(envelope, out, out_cap),
+        MailPark::Parked | MailPark::Refused | MailPark::Stale(_) => {}
     }
 
     yield_to_scheduler();
 
-    let envelope = {
-        let mut guard = SCHED.lock().unwrap();
-        guard.get_mut(pid).and_then(|p| p.mailbox.pop_received())
-    };
-    envelope.map_or(-1, |envelope| deliver_envelope(envelope, out, out_cap))
+    TABLE
+        .pop_received(pid)
+        .map_or(-1, |envelope| deliver_envelope(envelope, out, out_cap))
 }
 
 /// Receive with a timeout. Like [`koja_rt_receive`] but sets a
@@ -1255,34 +1258,27 @@ pub extern "C" fn koja_rt_receive_timeout(out: *mut u8, out_cap: i64, timeout_ms
     let pid = CURRENT_PID.with(|c| c.get());
     let now = Instant::now();
     let deadline = now + duration_from_user_millis(timeout_ms);
+    if deadline <= now {
+        return TABLE
+            .pop_received(pid)
+            .map_or(-1, |envelope| deliver_envelope(envelope, out, out_cap));
+    }
 
-    let parked = {
-        let mut guard = SCHED.lock().unwrap();
-        let popped = guard.get_mut(pid).and_then(|p| p.mailbox.pop_received());
-        if let Some(envelope) = popped {
-            drop(guard);
-            return deliver_envelope(envelope, out, out_cap);
-        }
-        if deadline <= now {
-            return -1;
-        }
-        guard.try_park(pid, WaitTarget::Receive, Some(deadline))
-    };
-    // Arm outside the SCHED hold. The order is safe: this process cannot
-    // be resumed (and so cannot re-arm or cancel) until it yields below,
-    // and a fire before the arm just misses an entry that lands on the
-    // next drain. A refused park (killed mid-run) arms nothing.
-    if parked {
-        TIMERS.with(|timers| timers.arm_deadline(pid, deadline));
+    match TABLE.receive_or_park(pid, Some(deadline)) {
+        MailPark::Ready(envelope) => return deliver_envelope(envelope, out, out_cap),
+        // Arm outside the slot hold. The order is safe: this process
+        // cannot be resumed (and so cannot re-arm or cancel) until it
+        // yields below, and a fire before the arm just misses an entry
+        // that lands on the next drain.
+        MailPark::Parked => TIMERS.with(|timers| timers.arm_deadline(pid, deadline)),
+        // A refused park (killed mid-run) arms nothing but still yields.
+        MailPark::Refused | MailPark::Stale(_) => {}
     }
 
     yield_to_scheduler();
 
-    let envelope = {
-        let mut guard = SCHED.lock().unwrap();
-        guard.clear_deadline(pid);
-        guard.get_mut(pid).and_then(|p| p.mailbox.pop_received())
-    };
+    TABLE.clear_deadline(pid);
+    let envelope = TABLE.pop_received(pid);
     TIMERS.with(|timers| timers.cancel_deadline(pid));
     envelope.map_or(-1, |envelope| deliver_envelope(envelope, out, out_cap))
 }
@@ -1299,7 +1295,7 @@ static CALL_TOKEN: AtomicI64 = AtomicI64::new(0);
 pub extern "C" fn koja_rt_call_token() -> i64 {
     let token = CALL_TOKEN.fetch_add(1, Ordering::Relaxed) + 1;
     let pid = CURRENT_PID.with(|c| c.get());
-    SCHED.lock().unwrap().set_awaiting_reply(pid, token);
+    TABLE.set_awaiting_reply(pid, token);
     token
 }
 
@@ -1322,43 +1318,37 @@ pub extern "C" fn koja_rt_call_receive(
     let deadline = Instant::now() + duration_from_user_millis(timeout_ms);
 
     loop {
-        let mut parked = false;
-        let stale = {
-            let mut guard = SCHED.lock().unwrap();
-            match guard.get_mut(pid).and_then(|p| p.mailbox.take_reply()) {
-                Some(envelope) if envelope.reply_token == token => {
-                    guard.clear_deadline(pid);
-                    guard.clear_awaiting_reply(pid);
-                    drop(guard);
-                    TIMERS.with(|timers| timers.cancel_deadline(pid));
-                    deliver_envelope(envelope, out, out_cap);
-                    return 0;
-                }
-                Some(stale) => Some(stale),
-                None => {
-                    if Instant::now() >= deadline {
-                        guard.clear_deadline(pid);
-                        guard.clear_awaiting_reply(pid);
-                        drop(guard);
-                        TIMERS.with(|timers| timers.cancel_deadline(pid));
-                        return -1;
-                    }
-                    parked = guard.try_park(pid, WaitTarget::Reply, Some(deadline));
-                    None
-                }
+        // The timeout check comes before the reply check, so a woken
+        // waiter that finds its deadline passed gives up even if a reply
+        // squeaked in meanwhile; `clear_awaiting_reply` makes the sender's
+        // `Expired` answer authoritative from here on.
+        if Instant::now() >= deadline {
+            TABLE.clear_deadline(pid);
+            TABLE.clear_awaiting_reply(pid);
+            TIMERS.with(|timers| timers.cancel_deadline(pid));
+            return -1;
+        }
+        // Check the reply slot and park in one hold, so a reply can't
+        // slip between the empty check and the park. A matching take
+        // also clears the awaited token and recorded deadline.
+        match TABLE.take_reply_or_park(pid, token, Some(deadline)) {
+            MailPark::Ready(envelope) => {
+                TIMERS.with(|timers| timers.cancel_deadline(pid));
+                deliver_envelope(envelope, out, out_cap);
+                return 0;
             }
-        };
-
-        match stale {
-            Some(stale) => drop(stale),
-            None => {
-                // Arm outside the SCHED hold (see `koja_rt_receive_timeout`
-                // for the ordering argument). A refused park arms nothing.
-                if parked {
-                    TIMERS.with(|timers| timers.arm_deadline(pid, deadline));
-                }
+            // A stale leftover from an earlier timed-out call: drop it
+            // (running its payload glue) and re-check immediately.
+            MailPark::Stale(stale) => drop(stale),
+            MailPark::Parked => {
+                // Arm outside the slot hold (see `koja_rt_receive_timeout`
+                // for the ordering argument).
+                TIMERS.with(|timers| timers.arm_deadline(pid, deadline));
                 yield_to_scheduler();
             }
+            // A refused park (killed mid-run) arms nothing but still
+            // yields; the owner reclaims at switch-out.
+            MailPark::Refused => yield_to_scheduler(),
         }
     }
 }
@@ -1435,10 +1425,7 @@ pub extern "C" fn koja_rt_send_lifecycle(pid: i64, variant: i64) {
 #[unsafe(no_mangle)]
 pub extern "C" fn koja_rt_process_exit(reason: i64) {
     let pid = CURRENT_PID.with(|c| c.get());
-    SCHED
-        .lock()
-        .unwrap()
-        .set_exit_reason(pid, ExitReason::from_index(reason));
+    TABLE.set_exit_reason(pid, ExitReason::from_index(reason));
 }
 
 /// Sets the calling process's scheduling priority from a `Priority`
@@ -1448,19 +1435,16 @@ pub extern "C" fn koja_rt_process_exit(reason: i64) {
 #[unsafe(no_mangle)]
 pub extern "C" fn koja_rt_set_priority(level: i64) {
     let pid = CURRENT_PID.with(|c| c.get());
-    SCHED
-        .lock()
-        .unwrap()
-        .set_priority(pid, Priority::from_index(level));
+    TABLE.set_priority(pid, Priority::from_index(level));
 }
 
 /// Slow path of the cooperative preemption point. Compiled process code
 /// decrements the per-worker `koja_reductions_left` budget inline at each
 /// `YieldCheck` and calls this only once it hits zero. It takes no lock:
 /// it flags the voluntary yield in [`YIELDED`] and switches back, and the
-/// worker replays the `Running -> Runnable` edge under the [`SCHED`] hold
-/// it already takes at switch-out. Taking the lock here instead serialized
-/// every compute-bound worker's quantum expiry through one mutex (the
+/// worker replays the `Running -> Runnable` edge inside `after_switch`
+/// at switch-out. Taking a lock here instead serialized every
+/// compute-bound worker's quantum expiry through one mutex (the
 /// dominant contended stack in the process_storm profile). The next
 /// resume re-seeds the budget through `koja_seed_reductions`.
 ///
@@ -1519,14 +1503,14 @@ pub unsafe extern "C" fn koja_rt_send_after(
 
     TIMERS.with(|timers| timers.schedule_deliver(fire_at, pid, envelope));
     // Wake a parked worker so it re-sizes its idle park to the new timer.
-    WORK_AVAILABLE.notify_one();
+    notify_workers(1);
 }
 
 /// Returns 1 if the process with the given PID is still alive (not `Dead`),
 /// 0 otherwise. An out-of-range PID returns 0.
 #[unsafe(no_mangle)]
 pub extern "C" fn koja_rt_is_process_alive(pid: i64) -> i64 {
-    SCHED.lock().unwrap().is_alive(pid) as i64
+    TABLE.is_alive(pid) as i64
 }
 
 /// Immediately marks a process as `Dead`, reclaiming its stack and
@@ -1541,12 +1525,9 @@ pub extern "C" fn koja_rt_is_process_alive(pid: i64) -> i64 {
 /// config glue, so nested heap is released too.
 #[unsafe(no_mangle)]
 pub extern "C" fn koja_rt_kill(pid: i64) {
-    let mut guard = SCHED.lock().unwrap();
-    let reclaim = guard.kill(pid);
-    let settled = settle_exits(&mut guard);
-    let woken = publish_ready(&mut guard);
-    drop(guard);
-    notify_workers(woken);
+    let reclaim = TABLE.kill(pid);
+    let settled = settle_exits();
+    notify_workers(settled.woken);
     // A parked target may have died with a deadline armed. A deferred
     // (on_cpu) kill reclaims at the owner's switch-out, which cancels
     // there instead.
@@ -1564,12 +1545,9 @@ pub extern "C" fn koja_rt_kill(pid: i64) {
 #[unsafe(no_mangle)]
 pub extern "C" fn koja_rt_monitor(target: i64) -> i64 {
     let watcher = CURRENT_PID.with(|c| c.get());
-    let mut guard = SCHED.lock().unwrap();
-    let token = guard.monitor(watcher, target);
-    let settled = settle_exits(&mut guard);
-    let woken = publish_ready(&mut guard);
-    drop(guard);
-    notify_workers(woken);
+    let token = TABLE.monitor(watcher, target);
+    let settled = settle_exits();
+    notify_workers(settled.woken);
     cancel_freed_deadlines(&settled.freed);
     drop(settled);
     token
@@ -1579,7 +1557,7 @@ pub extern "C" fn koja_rt_monitor(target: i64) -> i64 {
 /// `ExitSignal`. A no-op for an unknown or already-fired token.
 #[unsafe(no_mangle)]
 pub extern "C" fn koja_rt_demonitor(token: i64) {
-    SCHED.lock().unwrap().demonitor(token);
+    TABLE.demonitor(token);
 }
 
 /// The calling process's parent PID, or 0 for the entry process
@@ -1587,7 +1565,7 @@ pub extern "C" fn koja_rt_demonitor(token: i64) {
 #[unsafe(no_mangle)]
 pub extern "C" fn koja_rt_parent() -> i64 {
     let pid = CURRENT_PID.with(|c| c.get());
-    SCHED.lock().unwrap().parent(pid).unwrap_or(0)
+    TABLE.parent(pid).unwrap_or(0)
 }
 
 /// Count of illegal lifecycle edges the scheduler has applied: zero in
@@ -1595,21 +1573,21 @@ pub extern "C" fn koja_rt_parent() -> i64 {
 /// race-regression lang fixtures (see `tests/lang/memory/`).
 #[unsafe(no_mangle)]
 pub extern "C" fn koja_rt_sched_violations() -> i64 {
-    SCHED.lock().unwrap().counters().violations as i64
+    TABLE.counters().violations as i64
 }
 
 /// Count of parks refused over a kill tombstone. Positive evidence that
 /// the kill-vs-park window was actually hit during a storm fixture.
 #[unsafe(no_mangle)]
 pub extern "C" fn koja_rt_parks_refused() -> i64 {
-    SCHED.lock().unwrap().counters().parks_refused as i64
+    TABLE.counters().parks_refused as i64
 }
 
 /// Spawns a new lightweight process that will call `fn_ptr(state)`.
 ///
 /// Allocates a stack, copies the initial state onto the heap, and
 /// registers the process as `Created`. Wakes an idle worker via
-/// [`WORK_AVAILABLE`]. Returns the new process's PID.
+/// [`notify_workers`]. Returns the new process's PID.
 ///
 /// The process owns its config copy: `drop_glue` (null when the config
 /// owns no nested heap) runs over it when the process's resources are
@@ -1638,7 +1616,7 @@ pub unsafe extern "C" fn koja_rt_spawn(
     // Refuse new processes once draining (SIGTERM seen): the program is
     // shutting down. Return the invalid pid 0 (a `Ref` over it behaves like
     // a ref to an already-dead process). Dropping `init_state` runs its glue.
-    if SCHED.lock().unwrap().is_draining() {
+    if TABLE.is_draining() {
         drop(init_state);
         return 0;
     }
@@ -1653,13 +1631,21 @@ pub unsafe extern "C" fn koja_rt_spawn(
         _ => None,
     };
 
-    let (id, woken) = {
-        let mut guard = SCHED.lock().unwrap();
-        let id = guard.spawn(execution, parent);
-        // The spawn staged the new process in `pending_ready`. Publish it to
-        // the injectors so any worker can pick it up.
-        (id, publish_ready(&mut guard))
+    let id = match TABLE.spawn(execution, parent) {
+        Ok(id) => id,
+        // A kill landed on the (still running) spawner: refuse, so the
+        // child cannot outlive the already-settled kill cascade. The
+        // execution drops here, running the config glue and releasing
+        // the stack.
+        Err(refused) => {
+            drop(refused);
+            return 0;
+        }
     };
+    let woken = route_wake(Wake {
+        pid: id,
+        priority: Priority::default(),
+    });
 
     // Materialize the slot's TSan fiber here, at spawn, rather than lazily on
     // first claim. Creation is a no-op off `koja_tsan`. Under it, deferring to

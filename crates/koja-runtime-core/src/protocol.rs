@@ -40,6 +40,13 @@ pub enum Tag {
 /// natively, a typed value cooperatively) is the executor's choice.
 pub trait Message {
     fn tag(&self) -> Tag;
+
+    /// The call token carried by a `Reply`-tagged message, matched
+    /// against the receiver's awaited token at delivery. Non-reply
+    /// backends leave the default.
+    fn reply_token(&self) -> i64 {
+        0
+    }
 }
 
 /// Mints the protocol messages the
@@ -138,21 +145,20 @@ pub trait Reactor {
 /// [`resume`](Executor::resume) enters or continues a process until it
 /// next yields control back. It deliberately trades only a small `Copy`
 /// [`Continuation`](Executor::Continuation) token (native: the saved
-/// stack pointer) rather than `&mut Execution`: the native switch
-/// releases the core lock across the context switch, and the running
-/// process reads its own execution state mid-switch, so a borrow can't
-/// span the suspension point. The [`Driver`] reads the prior token out
-/// of the table under the lock, drops the lock, calls `resume`, then
-/// stores the returned token back. It consults the process's
-/// control-block state (the authoritative record) to decide what to do
-/// next, since a concurrent kill or wake may have landed meanwhile.
+/// stack pointer) rather than `&mut Execution`: the running process
+/// reads its own execution state mid-switch, so a borrow can't span the
+/// suspension point. The [`Driver`] reads the prior token out of the
+/// table, calls `resume`, then stores the returned token back. It
+/// consults the process's lifecycle state (the authoritative record) at
+/// switch-out to decide what to do next, since a concurrent kill or wake
+/// may have landed meanwhile.
 ///
 /// The **release-before-suspend invariant** holds for both backends: a
 /// suspension point releases its access to the core before yielding and
 /// re-acquires it on resume.
 pub trait Executor {
-    /// Per-process execution state, stored opaquely in each process's
-    /// [`ProcessControlBlock`](crate::process_table::ProcessControlBlock).
+    /// Per-process execution state, stored opaquely in the process's
+    /// table slot and owned by the `on_cpu` claim holder.
     type Execution;
     /// The `Copy` resume token the driver marshals in and out of the
     /// table around a [`resume`](Executor::resume) (native: the saved
