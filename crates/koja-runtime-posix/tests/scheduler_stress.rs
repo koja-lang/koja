@@ -53,36 +53,13 @@
 
 use std::sync::atomic::{AtomicI64, AtomicUsize, Ordering};
 
-// The runtime exposes its scheduler purely through `#[no_mangle]` C symbols;
-// this test reaches them via the `extern "C"` block below. Pull the rlib onto
-// the link line so those symbols resolve (without a Rust-level reference,
-// rustc would drop the otherwise-unused dependency).
+// Pull the runtime rlib onto the link line so its `#[no_mangle]` symbols
+// resolve (without a Rust-level reference, rustc would drop the
+// otherwise-unused dependency).
 extern crate koja_runtime;
 
-unsafe extern "C" {
-    fn koja_rt_spawn(
-        fn_ptr: extern "C" fn(*const u8),
-        state_ptr: *const u8,
-        state_len: i64,
-        drop_glue: Option<unsafe extern "C" fn(*mut u8)>,
-    ) -> i64;
-    fn koja_rt_send(
-        pid: i64,
-        msg_ptr: *const u8,
-        msg_len: i64,
-        drop_glue: Option<unsafe extern "C" fn(*mut u8)>,
-    );
-    fn koja_rt_receive(out: *mut u8, out_cap: i64) -> i64;
-    fn koja_rt_self() -> i64;
-    fn koja_rt_yield_check();
-    fn koja_rt_main_done();
-}
-
-/// Generated Koja programs emit this null-terminated app-name string; the
-/// runtime's panic handler links against it. Provide an empty one so the
-/// runtime rlib resolves at link time.
-#[unsafe(no_mangle)]
-static __koja_app_name: [u8; 1] = [0];
+mod common;
+use common::*;
 
 /// Number of children the controller spawns.
 static CHILDREN: AtomicUsize = AtomicUsize::new(0);
@@ -115,13 +92,6 @@ static STEAL_DONE: AtomicUsize = AtomicUsize::new(0);
 const PING: u8 = 0xAB;
 const PONG: u8 = 0xCD;
 const CHURN_BYTE: u8 = 0xEF;
-
-/// Blocks until a real message arrives, ignoring spurious empty wakes
-/// (`koja_rt_receive` returns -1 when woken with an empty mailbox).
-fn recv_blocking() {
-    let mut byte = 0u8;
-    while unsafe { koja_rt_receive(&mut byte, 1) } < 0 {}
-}
 
 /// Child process body: receive a ping and reply to the controller, once per
 /// round, then exit.
@@ -227,13 +197,6 @@ extern "C" fn controller_entry(_state: *const u8) {
     for _ in 0..burst {
         recv_blocking();
     }
-}
-
-fn env_usize(key: &str, default: usize) -> usize {
-    std::env::var(key)
-        .ok()
-        .and_then(|v| v.parse().ok())
-        .unwrap_or(default)
 }
 
 #[test]

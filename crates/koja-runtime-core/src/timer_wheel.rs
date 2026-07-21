@@ -66,15 +66,6 @@ const BITMAP_WORDS: usize = (WHEEL_SLOTS / 64) as usize;
 /// hundreds of MB.
 const BUCKET_RETAIN: usize = 16;
 
-/// A pending delayed message (`send_after`), surfaced by
-/// [`TimerWheel::drain_due`] for the driver to deliver. The message is
-/// staged at schedule time, so firing is just a delivery. An
-/// undeliverable entry reclaims its payload by dropping it.
-pub struct TimerEntry<M> {
-    pub envelope: M,
-    pub target_pid: Pid,
-}
-
 /// What a fired wheel entry asks the table to do. The deliver payload
 /// is boxed so the far more numerous deadline entries (one per
 /// `Ref.call` / `receive after`) don't pay the envelope's inline size.
@@ -304,6 +295,17 @@ impl<M> TimerWheel<M> {
                 },
             })
             .collect()
+    }
+
+    /// Lower bound on the soonest pending fire instant, without a scan.
+    /// May be stale-low after a cancel (costing one wasted drain), never
+    /// stale-high, so a gate built on it can never miss a due entry.
+    pub fn soonest_bound(&self) -> Option<Instant> {
+        if self.pending == 0 {
+            None
+        } else {
+            self.soonest
+        }
     }
 
     /// The soonest pending fire instant, for sizing the idle park.

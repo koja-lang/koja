@@ -32,7 +32,7 @@
 //!
 //! The native `koja_fd_read` / `koja_socket_accept` / ... symbols couple the
 //! syscall and its koja-heap marshaling with the *native* `io_block`
-//! (native `SCHED` + asm context switch), which eval cannot drive. Eval's
+//! (native table + asm context switch), which eval cannot drive. Eval's
 //! cooperative wrappers ([`crate::externs::fd`], [`crate::externs::net`])
 //! therefore [`io_block`] for readiness *first*, then call the native
 //! symbol on an fd that is now ready, so its internal `block_until_ready`
@@ -47,7 +47,7 @@ use std::io;
 use std::thread;
 use std::time::Duration;
 
-use koja_runtime_core::{Interest, Pid, Reactor, Readiness, Waker};
+use koja_runtime_core::{Interest, IoPark, Pid, Reactor, Readiness, Waker};
 
 use crate::scheduler::{self, YieldOnce};
 
@@ -182,17 +182,23 @@ pub(crate) async fn io_block(fd: i32, interest: Interest) -> bool {
         return false;
     }
     let pid = scheduler::current_pid();
-    // A refused park means a kill landed mid-run: skip the registration
-    // (no waiter to wake) and let the yield below be permanent.
-    if scheduler::park_io(pid) {
-        arm(fd, interest, Waker::Resume(pid));
-        YieldOnce::new().await;
-        unwatch(fd);
-        // Resumed without readiness means a message woke us, so report
-        // the interrupt.
-        return !ready_now(fd, interest);
+    match scheduler::park_io(pid) {
+        // A queued system message must not be stranded behind the wait:
+        // report the interrupt so the caller handles the signal.
+        IoPark::SystemMail => true,
+        IoPark::Parked => {
+            arm(fd, interest, Waker::Resume(pid));
+            YieldOnce::new().await;
+            unwatch(fd);
+            // Resumed without readiness means a message woke us, so report
+            // the interrupt.
+            !ready_now(fd, interest)
+        }
+        // A refused park means a kill landed mid-run: skip the registration
+        // (no waiter to wake). The process never resumes past the next
+        // yield, so the answer is moot.
+        IoPark::Refused => false,
     }
-    false
 }
 
 /// Insert (or replace) `fd`'s registration. The last `register` for an fd

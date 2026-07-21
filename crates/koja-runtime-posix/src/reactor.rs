@@ -20,11 +20,11 @@ use std::time::Duration;
 
 use polling::{Event, Events, PollMode, Poller};
 
-use koja_runtime_core::{ProcessState, Reactor, Readiness, Waker};
+use koja_runtime_core::{IoPark, Reactor, Readiness, Waker};
 
 use crate::ffi::{EAGAIN, EINTR, get_errno, libc_close};
 use crate::scheduler::{
-    CURRENT_PID, NativeTable, SCHED, SHUTDOWN, WORK_AVAILABLE, publish_ready, send_io_event,
+    CURRENT_PID, SHUTDOWN, TABLE, notify_all_workers, notify_workers, route_wake, send_io_event,
     yield_to_scheduler,
 };
 use crate::wire::{IO_READY_ERROR, IO_READY_READ, IO_READY_WRITE};
@@ -186,42 +186,29 @@ pub fn init() {
     });
 }
 
-/// Promotes a process from `WaitingIO` to `Runnable` if (and only if)
-/// it is still parked. The state guard is essential: a process whose
-/// state is `Running` (mid-`io_block`, before its context switch) or
-/// already `Runnable` must not be transitioned, or `ProcessTable::
-/// transition` trips its legal-edge assertion. Shared by the reactor
-/// readiness path and [`wake`] so the two can't drift.
-fn promote_io_waiter(sched: &mut NativeTable, pid: i64) {
-    if sched
-        .get(pid)
-        .is_some_and(|process| process.state == ProcessState::WaitingIO)
-    {
-        sched.transition(pid, ProcessState::Runnable);
-    }
-}
-
 /// Applies the wakers from one [`poll`](Reactor::poll) pass. `Resume`
-/// wakers are promoted in a single `SCHED` critical section. `Deliver`
-/// wakers send their `IOReady` afterward (`send_io_event` takes `SCHED`
-/// itself), so payload glue never runs under the promote lock.
-fn apply_wakers(wakers: Vec<Waker>) {
-    {
-        let mut sched = SCHED.lock().unwrap();
-        for waker in &wakers {
-            if let Waker::Resume(pid) = waker {
-                promote_io_waiter(&mut sched, *pid);
-            }
+/// wakers are promoted via [`ProcessTable::promote_io_waiter`], which
+/// re-validates the `WaitingIO` state (a concurrent wake or kill may
+/// have moved the process). `Deliver` wakers send their `IOReady`
+/// afterward, so payload glue never runs under a slot lock. Returns the
+/// injector-routed wake count for [`notify_workers`].
+///
+/// [`ProcessTable::promote_io_waiter`]: koja_runtime_core::ProcessTable::promote_io_waiter
+fn apply_wakers(wakers: Vec<Waker>) -> usize {
+    let mut published = 0;
+    for waker in &wakers {
+        if let Waker::Resume(pid) = waker
+            && let Some(wake) = TABLE.promote_io_waiter(*pid)
+        {
+            published += route_wake(wake);
         }
-        // Route the promoted waiters (staged in `pending_ready`) to the
-        // work-stealing injectors. The `notify_all` below wakes the workers.
-        publish_ready(&mut sched);
     }
     for waker in wakers {
         if let Waker::Deliver { fd, pid, readiness } = waker {
             send_io_event(pid, io_variant(readiness), fd as i64);
         }
     }
+    published
 }
 
 /// Wakes the reactor thread from its `poll` wait. Used during shutdown so
@@ -245,8 +232,8 @@ pub fn reactor_loop() {
         if wakers.is_empty() {
             continue;
         }
-        apply_wakers(wakers);
-        WORK_AVAILABLE.notify_all();
+        let published = apply_wakers(wakers);
+        notify_workers(published);
     }
 }
 
@@ -282,19 +269,19 @@ pub extern "C" fn koja_rt_unwatch_fd(fd: i32) {
 /// resumes, retries the syscall, and gets `EBADF`). A `Fd.watch` owner is
 /// sent a synthetic `IOReady.Error` so its handler observes the hangup.
 ///
-/// Must run with the `wakers` lock dropped. `SCHED` is never taken under it.
+/// Must run with the `wakers` lock dropped. No table lock is taken under it.
 fn wake(waker: Waker) {
     match waker {
         Waker::Resume(pid) => {
-            let mut sched = SCHED.lock().unwrap();
-            promote_io_waiter(&mut sched, pid);
-            publish_ready(&mut sched);
+            if let Some(wake) = TABLE.promote_io_waiter(pid) {
+                route_wake(wake);
+            }
         }
         Waker::Deliver { fd, pid, .. } => {
             send_io_event(pid, IO_READY_ERROR, fd as i64);
         }
     }
-    WORK_AVAILABLE.notify_all();
+    notify_all_workers();
 }
 
 /// Closes `fd`, dropping it from the reactor's bookkeeping and waking
@@ -356,19 +343,20 @@ fn close_raw(fd: i32) -> io::Result<()> {
 pub fn io_block(fd: i32, interest: Interest) -> bool {
     let pid = CURRENT_PID.with(|c| c.get());
 
-    // A queued system message must not be stranded behind the wait.
-    // Bail so the caller can interrupt.
-    let parked = {
-        let mut sched = SCHED.lock().unwrap();
-        if sched.has_system_mail(pid) {
-            return true;
+    // The system-mail check and the park happen in one slot hold, so a
+    // signal can't slip between them and strand behind the wait.
+    match TABLE.try_park_io(pid) {
+        // A queued system message must not be stranded behind the wait.
+        // Bail so the caller can interrupt.
+        IoPark::SystemMail => return true,
+        IoPark::Parked => {
+            if let Some(reactor) = REACTOR.get() {
+                reactor.register(fd, interest, Waker::Resume(pid));
+            }
         }
         // A refused park means a kill landed mid-run: skip the registration
         // (no waiter to wake) and let the switch-out below be permanent.
-        sched.try_park_io(pid)
-    };
-    if parked && let Some(reactor) = REACTOR.get() {
-        reactor.register(fd, interest, Waker::Resume(pid));
+        IoPark::Refused => {}
     }
 
     yield_to_scheduler();
@@ -378,7 +366,7 @@ pub fn io_block(fd: i32, interest: Interest) -> bool {
     }
 
     // A queued system message means a signal interrupted the wait, not readiness.
-    SCHED.lock().unwrap().has_system_mail(pid)
+    TABLE.has_system_mail(pid)
 }
 
 /// Runs a non-blocking syscall, suspending the process on `EAGAIN`

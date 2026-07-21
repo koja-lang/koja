@@ -1,0 +1,9 @@
+# ThreadSanitizer suppressions for `just tsan`.
+#
+# crossbeam-deque's Chase-Lev deque synchronizes its buffer accesses
+# with standalone SeqCst fences, which TSan does not model, so it
+# reports Worker::push racing Stealer::steal_batch_and_pop. A known
+# false positive (crossbeam-rs/crossbeam#589), previously masked
+# because the global scheduler mutex serialized the surrounding code.
+# Scoped to the crate so races in our own code still surface.
+race:crossbeam_deque

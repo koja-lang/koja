@@ -1,0 +1,48 @@
+# Endless spawn -> call -> kill churn for RSS endurance runs. Every slot
+# is recycled, so any unbounded growth (arena, registry bookkeeping,
+# envelope leaks) shows up as a rising RSS trend. Driven by
+# soak/overnight.sh, which samples RSS externally and stops the process
+# when its segment ends.
+
+alias Process.Step
+alias Process.StopReason
+
+struct W
+end
+
+enum M
+  Ping
+end
+
+impl Process<W, M, Int> for W
+  fn start(config: W) -> Result<Self, StopReason>
+    Result.Ok(W{})
+  end
+
+  fn handle(self, msg: M, from: Option<ReplyTo<Int>>) -> Step<Self>
+    _ = ReplyTo.reply(from, 1)
+
+    Step.Continue(self)
+  end
+end
+
+# Effectively unbounded: the runner stops the process when its segment
+# ends. The cap only exists because codegen requires a reachable return.
+i = 0
+
+loop
+  w = spawn W.start(W{})
+  w.call(M.Ping, 5000)
+  w.kill()
+  i += 1
+
+  if i % 100000 == 0
+    "churn_iter #{i}".print()
+  end
+
+  if i >= 1000000000
+    break
+  end
+end
+
+"churn_done #{i}".print()

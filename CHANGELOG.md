@@ -9,8 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Message-heavy concurrent programs now scale across cores: sends, receives, and spawns no longer serialize on a global scheduler lock.
 - Recursive loops that carry a string or collection along are now roughly twice as fast.
 - Completed `call`s and timed-out `receive`s now clean up their timeout bookkeeping immediately, making message-heavy programs significantly faster and lighter on memory.
+- Compute-heavy processes no longer contend on a runtime lock at every preemption point, freeing up scheduler capacity on multi-core workloads.
+- Timers and call timeouts now live outside the scheduler lock, so workers skip timer bookkeeping entirely unless something is actually due.
 
 ### Fixed
 
