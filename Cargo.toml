@@ -22,7 +22,7 @@ members = [
 [workspace.package]
 edition = "2024"
 license = "MIT"
-version = "0.15.2"
+version = "0.15.3"
 
 # Optimize the runtime even in dev builds so `cargo test` exercises the
 # same codegen the shipped release runtime gets. The worker-migration

@@ -711,11 +711,11 @@ checksum = "8f42a60cbdf9a97f5d2305f08a87dc4e09308d1276d28c869c684d7777685682"
 
 [[package]]
 name = "koja-ast"
-version = "0.15.2"
+version = "0.15.3"
 
 [[package]]
 name = "koja-doc"
-version = "0.15.2"
+version = "0.15.3"
 dependencies = [
  "askama",
  "koja-ast",
@@ -725,7 +725,7 @@ dependencies = [
 
 [[package]]
 name = "koja-driver"
-version = "0.15.2"
+version = "0.15.3"
 dependencies = [
  "boring-sys",
  "clap",
@@ -750,7 +750,7 @@ dependencies = [
 
 [[package]]
 name = "koja-fmt"
-version = "0.15.2"
+version = "0.15.3"
 dependencies = [
  "koja-ast",
  "koja-parser",
@@ -759,7 +759,7 @@ dependencies = [
 
 [[package]]
 name = "koja-ir"
-version = "0.15.2"
+version = "0.15.3"
 dependencies = [
  "koja-ast",
  "koja-parser",
@@ -769,7 +769,7 @@ dependencies = [
 
 [[package]]
 name = "koja-ir-eval"
-version = "0.15.2"
+version = "0.15.3"
 dependencies = [
  "boring-sys",
  "koja-ast",
@@ -783,7 +783,7 @@ dependencies = [
 
 [[package]]
 name = "koja-ir-llvm"
-version = "0.15.2"
+version = "0.15.3"
 dependencies = [
  "inkwell",
  "koja-ast",
@@ -795,7 +795,7 @@ dependencies = [
 
 [[package]]
 name = "koja-lexer"
-version = "0.15.2"
+version = "0.15.3"
 dependencies = [
  "koja-ast",
  "proptest",
@@ -803,7 +803,7 @@ dependencies = [
 
 [[package]]
 name = "koja-lsp"
-version = "0.15.2"
+version = "0.15.3"
 dependencies = [
  "koja-ast",
  "koja-fmt",
@@ -818,7 +818,7 @@ dependencies = [
 
 [[package]]
 name = "koja-parser"
-version = "0.15.2"
+version = "0.15.3"
 dependencies = [
  "koja-ast",
  "koja-lexer",
@@ -827,14 +827,14 @@ dependencies = [
 
 [[package]]
 name = "koja-runtime-core"
-version = "0.15.2"
+version = "0.15.3"
 dependencies = [
  "libc",
 ]
 
 [[package]]
 name = "koja-runtime-posix"
-version = "0.15.2"
+version = "0.15.3"
 dependencies = [
  "backtrace",
  "cc",
@@ -846,7 +846,7 @@ dependencies = [
 
 [[package]]
 name = "koja-shell"
-version = "0.15.2"
+version = "0.15.3"
 dependencies = [
  "koja-ast",
  "koja-ir",
@@ -860,14 +860,14 @@ dependencies = [
 
 [[package]]
 name = "koja-stdlib"
-version = "0.15.2"
+version = "0.15.3"
 dependencies = [
  "koja-parser",
 ]
 
 [[package]]
 name = "koja-test"
-version = "0.15.2"
+version = "0.15.3"
 dependencies = [
  "koja-ast",
  "koja-parser",
@@ -875,7 +875,7 @@ dependencies = [
 
 [[package]]
 name = "koja-typecheck"
-version = "0.15.2"
+version = "0.15.3"
 dependencies = [
  "koja-ast",
  "koja-parser",
