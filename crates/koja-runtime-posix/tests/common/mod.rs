@@ -14,7 +14,7 @@
 pub type ProcessFn = extern "C" fn(*const u8);
 
 // The runtime exposes its scheduler purely through `#[no_mangle]` C
-// symbols; tests reach them via this block.
+// symbols, which tests reach via this block.
 unsafe extern "C" {
     pub fn koja_rt_is_process_alive(pid: i64) -> i64;
     pub fn koja_rt_kill(pid: i64);
@@ -39,14 +39,14 @@ unsafe extern "C" {
     pub fn koja_rt_yield_check();
 }
 
-/// Generated Koja programs emit this null-terminated app-name string; the
-/// runtime's panic handler links against it. Provide an empty one so the
-/// runtime rlib resolves at link time.
+/// Generated Koja programs emit this null-terminated app-name string and
+/// the runtime's panic handler links against it. Provide an empty one so
+/// the runtime rlib resolves at link time.
 #[unsafe(no_mangle)]
 static __koja_app_name: [u8; 1] = [0];
 
 /// The `ExitSignal` wire tag, mirroring `wire::TAG_EXIT_SIGNAL` (a frozen
-/// ABI constant; the core crate is not visible to integration tests).
+/// ABI constant, since the core crate is not visible to integration tests).
 pub const TAG_EXIT_SIGNAL: i64 = 4;
 
 /// Blocks until a real message arrives and returns its wire tag,

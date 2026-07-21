@@ -11,8 +11,8 @@
 //! Recording is unconditional, so it must not sit behind any shared
 //! lock: every hot lifecycle edge records. Each recording thread writes
 //! its own ring, reached through a thread-local handle after a one-time
-//! registration; the ring's own mutex is uncontended until a dump reads
-//! it. The shared `seq` stamp is what lets the dump interleave the rings
+//! registration, and the ring's own mutex is uncontended until a dump
+//! reads it. The shared `seq` stamp is what lets the dump interleave the rings
 //! back into one global order.
 
 use std::cell::RefCell;

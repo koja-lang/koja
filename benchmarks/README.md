@@ -67,6 +67,20 @@ soak/shortener_soak.py --max-growth-mb 10               # non-zero exit on growt
 A healthy run holds RSS flat after the first (warmup) batch. Pair it with
 macOS `leaks <pid>` for allocation-site stacks when growth appears.
 
+`soak/overnight.sh` is the unattended endurance harness: it cycles the
+debug invariant stress tests (cranked parameters), repeated ThreadSanitizer
+runs, the benchmark suite (medians to CSV for drift review), and a
+spawn/call/kill churn loop (`soak/churn.kojs`) with RSS sampling, until a
+deadline. Failures are collected with their logs rather than stopping the
+run, and the known-benign TSan fiber SEGV is counted separately from real
+races. Results land in `soak/results/<timestamp>/`.
+
+```sh
+soak/overnight.sh                     # 8 hours
+DURATION_HOURS=12 soak/overnight.sh   # longer
+DURATION_SECS=60 soak/overnight.sh    # smoke-test the harness itself
+```
+
 ## Adding a benchmark
 
 1. Add a `koja/<name>.kojs` that prints `"<metric>_ms #{elapsed}"`.

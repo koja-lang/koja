@@ -2,7 +2,7 @@
 //!
 //! A breeder process spawns blocked-forever children in a tight loop
 //! while the controller kills it. The kill's cascade covers the children
-//! that exist when the death edge lands; the dangerous window is the
+//! that exist when the death edge lands. The dangerous window is the
 //! breeder continuing to run afterwards (a deferred, `on_cpu` kill) and
 //! spawning more. Those spawns must be refused over the breeder's
 //! tombstone (PID 0), because the cascade will never see them.
@@ -74,9 +74,9 @@ extern "C" fn controller_entry(_state: *const u8) {
 
         // Wait until the breeder can spawn no more: it settled itself, or
         // it is dead and off-CPU. A deferred kill leaves it running
-        // briefly; a breeder reclaimed at switch-out never settles, but
-        // by then it can no longer spawn either. Spin-yield rather than
-        // block: the breeder posts no message.
+        // briefly, and a breeder reclaimed at switch-out never settles,
+        // but by then it can no longer spawn either. Spin-yield rather
+        // than block: the breeder posts no message.
         while !BREEDER_SETTLED.load(Ordering::SeqCst)
             && unsafe { koja_rt_is_process_alive(breeder) } != 0
         {

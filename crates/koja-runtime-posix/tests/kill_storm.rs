@@ -75,7 +75,7 @@ extern "C" fn controller_entry(_state: *const u8) {
         // claim later), mid-run on another worker (`on_cpu`, deferred
         // reclaim), or racing its next park (park refused over the
         // tombstone). Echoes from victims that beat their kill linger in
-        // the controller's mailbox; the next wave's round-trip count
+        // the controller's mailbox, and the next wave's round-trip count
         // absorbs them.
         for &pid in &victims {
             send_byte(pid, PING);

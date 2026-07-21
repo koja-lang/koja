@@ -9,7 +9,7 @@
 //! two things that make native multi-threaded: there are **no worker
 //! threads** (one loop on the calling thread) and **no work stealing**
 //! (the driver owns one [`ReadyQueue`], fed by the wake facts the shared
-//! [`ProcessTable`] returns; the table's own locks are uncontended).
+//! [`ProcessTable`] returns, and the table's locks are uncontended).
 //!
 //! Because a cooperative executor keeps its suspended state inside the
 //! executor (eval: a parked `Future`) rather than as a saved stack

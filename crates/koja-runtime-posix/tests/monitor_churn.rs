@@ -1,7 +1,7 @@
 //! Monitor-vs-kill churn: every watcher gets exactly one `ExitSignal`.
 //!
 //! Each round spawns a target and a watcher. The target blocks until
-//! poked and then exits; the watcher monitors the target and blocks until
+//! poked and then exits. The watcher monitors the target and blocks until
 //! the `ExitSignal` arrives. The controller pokes the target immediately
 //! after spawning the watcher, so the `monitor` registration races the
 //! target's death across workers: some monitors land before the death

@@ -15,17 +15,17 @@
 //! `design/SCHEDULER-PROTOCOL.md`:
 //!
 //! - Each slot's lifecycle (generation, state, `on_cpu`) is one packed
-//!   atomic word ([`LifecycleWord`]); every state change is a CAS edge.
+//!   atomic word ([`LifecycleWord`]), and every state change is a CAS edge.
 //! - Each slot's messaging and death-path state sits behind its own
 //!   mutex. Coupled edges (park, wake, kill) CAS the word while holding
-//!   it; the claim family (`try_claim`, the `after_switch` release) is
+//!   it. The claim family (`try_claim`, the `after_switch` release) is
 //!   lock-free.
 //! - The registry mutex owns the cold global state: freelist and arena
 //!   growth, monitors, staged exit notices and cascade kills, and the
 //!   drain mode. Monitor aliveness and the spawn tombstone check are
 //!   decided under its hold.
-//! - Counters are relaxed atomics; `execution` lives in a cell owned by
-//!   the `on_cpu` claim holder; slots live in an append-only chunked
+//! - Counters are relaxed atomics. `execution` lives in a cell owned by
+//!   the `on_cpu` claim holder, and slots live in an append-only chunked
 //!   arena so they never move under lock-free readers.
 //!
 //! The hierarchy is flat: a thread holds at most one core lock (slot or
@@ -183,7 +183,7 @@ impl<X, M> Slot<X, M> {
     }
 }
 
-/// Slots per arena chunk 0; chunk `k` holds `BASE_CHUNK << k` slots, so
+/// Slots per arena chunk 0. Chunk `k` holds `BASE_CHUNK << k` slots, so
 /// the chunk pointer array stays tiny while capacity grows geometrically.
 const BASE_CHUNK: usize = 64;
 /// Enough chunks to cover every 32-bit slot index.
@@ -191,7 +191,7 @@ const MAX_CHUNKS: usize = 32;
 
 /// Append-only chunked slot storage. Slots never move once published, so
 /// lock-free readers can hold `&Slot` across arena growth. Growth happens
-/// under the registry mutex; `published` is the release-published slot
+/// under the registry mutex, and `published` is the release-published slot
 /// count readers bound their indexing by.
 struct SlotArena<X, M> {
     chunks: [AtomicPtr<Slot<X, M>>; MAX_CHUNKS],
@@ -240,7 +240,7 @@ impl<X, M> SlotArena<X, M> {
 
     /// Publishes one more slot, allocating its chunk if this index is the
     /// first to land there. Caller holds the registry mutex (growth is
-    /// single-writer); readers are lock-free.
+    /// single-writer) while readers stay lock-free.
     fn grow(&self) -> u32 {
         let index = self.published.load(Ordering::Relaxed);
         let (chunk, _) = chunk_position(index);
@@ -546,12 +546,12 @@ pub struct ReplyDelivery<M> {
 /// [`ProcessTable::take_reply_or_park`]), decided in one slot hold so a
 /// delivery can never slip between the check and the park.
 pub enum MailPark<M> {
-    /// A message was already waiting; nothing was parked.
+    /// A message was already waiting, so nothing was parked.
     Ready(M),
-    /// The mailbox part was empty; the process is parked.
+    /// The mailbox part was empty and the process is parked.
     Parked,
     /// The park was refused over a kill tombstone. The caller should
-    /// still yield; the owner reclaims at switch-out.
+    /// still yield, and the owner reclaims at switch-out.
     Refused,
     /// A reply was waiting but its token doesn't match the in-flight
     /// call: a leftover from an earlier timed-out call. The caller drops
@@ -562,7 +562,7 @@ pub enum MailPark<M> {
 /// The outcome of [`ProcessTable::try_park_io`], decided in one slot hold
 /// so a system message can never slip in between the check and the park.
 pub enum IoPark {
-    /// Parked as `WaitingIO`; the caller registers the fd.
+    /// Parked as `WaitingIO`. The caller registers the fd.
     Parked,
     /// Refused over a kill tombstone: no waiter to wake, don't register.
     Refused,
@@ -574,7 +574,7 @@ pub enum IoPark {
 /// What became of a process at its owner's switch-out
 /// ([`ProcessTable::after_switch`]).
 pub enum SwitchOutcome<X, M> {
-    /// Parked (`Blocked`/`WaitingIO`); a wake will re-enqueue it.
+    /// Parked (`Blocked`/`WaitingIO`). A wake will re-enqueue it.
     Parked,
     /// Dead: the slot was reclaimed. Drop the resources off-lock.
     Reclaimed(Reclaim<X, M>),
@@ -584,7 +584,7 @@ pub enum SwitchOutcome<X, M> {
 }
 
 /// The scheduler's process store. Internally synchronized (see the module
-/// doc); every method takes `&self`, so adapters share it directly: the
+/// doc), so every method takes `&self` and adapters share it directly: the
 /// native driver as a plain `static`, cooperative drivers via `Rc`.
 pub struct ProcessTable<X, M> {
     /// Count of `Running` + `WaitingIO` processes (park-timeout heuristic).
@@ -729,7 +729,7 @@ impl<X, M: Message> ProcessTable<X, M> {
             }
             let index = registry.free.pop().unwrap_or_else(|| self.arena.grow());
             let slot = self.arena.get(index).expect("just-published slot");
-            // A fresh slot's word is vacant at generation 0; live
+            // A fresh slot's word is vacant at generation 0, and live
             // generations start at 1.
             let generation = slot.lifecycle.load().generation.max(1);
             let pid = encode(index, generation);
@@ -742,7 +742,7 @@ impl<X, M: Message> ProcessTable<X, M> {
                 .store(Priority::default() as u8, Ordering::Relaxed);
             // The spawner owns the vacant slot under the registry hold
             // (the index is off the freelist and unpublished), so the
-            // execution write is exclusive; `occupy`'s release-store
+            // execution write is exclusive. `occupy`'s release-store
             // publishes it to the eventual claimer.
             unsafe { *slot.execution.0.get() = Some(execution) };
             slot.lifecycle.occupy(generation);
@@ -913,7 +913,7 @@ impl<X, M: Message> ProcessTable<X, M> {
 
     /// Takes the reply for the in-flight call `token`, or parks `pid` on
     /// its reply slot, in one hold. A matching reply also clears the
-    /// awaited token and deadline (the call completed); a mismatched one
+    /// awaited token and deadline (the call completed). A mismatched one
     /// is handed back as [`MailPark::Stale`] for the caller to drop and
     /// retry.
     pub fn take_reply_or_park(
@@ -977,7 +977,7 @@ impl<X, M: Message> ProcessTable<X, M> {
 
     /// Records why `pid` is terminating, to be read when the death edge
     /// stages exit notices. Set before marking the process dead. A no-op
-    /// for a stale PID; a process that sets no reason dies `Normal`.
+    /// for a stale PID. A process that sets no reason dies `Normal`.
     pub fn set_exit_reason(&self, pid: Pid, reason: ExitReason) {
         self.with_hot(pid, |_, hot| hot.exit_reason = reason);
     }
@@ -1200,8 +1200,8 @@ impl<X, M: Message> ProcessTable<X, M> {
                 priority: slot.priority(),
             }),
             // The release left `Dead` off-cpu: this owner is the unique
-            // reclaimer (a racing kill saw `on_cpu` and deferred; a second
-            // kill sees `Dead` and no-ops).
+            // reclaimer (a racing kill saw `on_cpu` and deferred, and a
+            // second kill sees `Dead` and no-ops).
             Some(ProcessState::Dead) => SwitchOutcome::Reclaimed(self.reclaim(pid, slot)),
             _ => SwitchOutcome::Parked,
         }
@@ -1236,7 +1236,7 @@ impl<X, M: Message> ProcessTable<X, M> {
     /// freed index to the freelist.
     ///
     /// The outer `None` means the edge did not apply (already dead or
-    /// stale); the inner option is the off-cpu reclaim.
+    /// stale), and the inner option is the off-cpu reclaim.
     fn death_edge(&self, pid: Pid, forced: Option<ExitReason>) -> Option<Option<Reclaim<X, M>>> {
         let (_, generation) = decode(pid);
         let staged = self.with_hot(pid, |slot, hot| {
@@ -1344,7 +1344,7 @@ impl<X, M: Message> ProcessTable<X, M> {
         // Stage the children for the cascade and drop out of the parent's
         // entry. Spawn also runs under this hold, so no child can register
         // concurrently and escape the staging. A staged child may still
-        // lose a racing death of its own; the cascade's `kill` skips it.
+        // lose a racing death of its own, which the cascade's `kill` skips.
         if let Some(children) = registry.children.remove(&pid) {
             registry.pending_kills.extend(children);
         }

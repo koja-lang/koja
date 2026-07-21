@@ -1,7 +1,7 @@
 //! Multi-threaded cooperative scheduler for Koja lightweight processes.
 //!
-//! N worker OS threads share the internally synchronized [`TABLE`]
-//! (per-slot locks and CAS lifecycle edges; no global scheduler lock, see
+//! N worker OS threads share the internally synchronized [`TABLE`]:
+//! per-slot locks and CAS lifecycle edges, no global scheduler lock (see
 //! `design/SCHEDULER-PROTOCOL.md`). Each worker runs a scheduling loop:
 //! claim a runnable process, context-switch into it, and when it yields
 //! (via `receive`), switch back and look for more work. Newly-runnable
@@ -268,7 +268,7 @@ fn lifecycle_from_index(index: i64) -> Lifecycle {
 }
 
 /// Global scheduler state: the internally synchronized process table.
-/// Every access is `&TABLE`; the table's own per-slot and registry locks
+/// Every access is `&TABLE`, and the table's per-slot and registry locks
 /// are always released before context-switching.
 pub(crate) static TABLE: NativeTable = ProcessTable::new();
 
@@ -1320,7 +1320,7 @@ pub extern "C" fn koja_rt_call_receive(
     loop {
         // The timeout check comes before the reply check, so a woken
         // waiter that finds its deadline passed gives up even if a reply
-        // squeaked in meanwhile; `clear_awaiting_reply` makes the sender's
+        // squeaked in meanwhile. `clear_awaiting_reply` makes the sender's
         // `Expired` answer authoritative from here on.
         if Instant::now() >= deadline {
             TABLE.clear_deadline(pid);
@@ -1347,7 +1347,7 @@ pub extern "C" fn koja_rt_call_receive(
                 yield_to_scheduler();
             }
             // A refused park (killed mid-run) arms nothing but still
-            // yields; the owner reclaims at switch-out.
+            // yields, and the owner reclaims at switch-out.
             MailPark::Refused => yield_to_scheduler(),
         }
     }

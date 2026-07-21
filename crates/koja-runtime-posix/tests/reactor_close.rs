@@ -16,7 +16,7 @@
 //! plain `extern "C"` functions. Each cycle the reader announces itself,
 //! blocks on a never-readable socket, and is expected to wake with an
 //! error (the retried read hits `EBADF` on the closed fd). The controller
-//! closes the fd and waits for the reader's completion message; a
+//! closes the fd and waits for the reader's completion message. A
 //! regression makes the reader hang, which the watchdog turns into a hard
 //! abort so the suite fails loudly instead of stalling.
 //!
@@ -61,7 +61,7 @@ const CYCLES: usize = 20;
 
 /// PID the reader reports back to, published before the reader is spawned.
 static CONTROLLER_PID: AtomicI64 = AtomicI64::new(0);
-/// Raw fd the reader blocks on; closed out from under it by the controller.
+/// Raw fd the reader blocks on, closed out from under it by the controller.
 static READER_FD: AtomicI64 = AtomicI64::new(-1);
 /// Cycles whose blocked read returned an error (the reader woke correctly).
 static READER_ERRORS: AtomicUsize = AtomicUsize::new(0);

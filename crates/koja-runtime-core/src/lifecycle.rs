@@ -12,8 +12,8 @@
 //! Ordering: a successful claim is an acquire and [`LifecycleWord::release`]
 //! (the `on_cpu` clear) is a release, forming the happens-before pair
 //! that licenses a claimer's read of execution state the previous owner
-//! wrote. Every other edge uses acquire/release too; none is hot enough
-//! for relaxed to matter.
+//! wrote. Every other edge uses acquire/release too, since none is hot
+//! enough for relaxed to matter.
 
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -216,7 +216,7 @@ impl LifecycleWord {
 
     /// Occupies a vacant slot at `generation` as `Created`. Called under
     /// the registry mutex (which owns the freelist), so the slot cannot
-    /// be double-occupied; the store still asserts vacancy in debug.
+    /// be double-occupied. The store still asserts vacancy in debug.
     pub fn occupy(&self, generation: u32) {
         let prior = self.0.swap(
             pack(generation, state_code(ProcessState::Created), false),
