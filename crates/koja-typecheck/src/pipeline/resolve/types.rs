@@ -355,19 +355,11 @@ pub(super) fn verify_bounds(
         if param_bounds.is_empty() {
             continue;
         }
-        let ResolvedType::Named {
-            resolution: Resolution::Global(target_id),
-            ..
-        } = inferred
-        else {
-            continue;
-        };
-        let target_id = *target_id;
         for &protocol_id in param_bounds {
-            if registry
-                .lookup_conformance(target_id, protocol_id)
-                .is_some()
-            {
+            let Some(satisfied) = protocol_bound_satisfied(inferred, protocol_id, registry) else {
+                continue;
+            };
+            if satisfied {
                 continue;
             }
             let bound_label = registry
@@ -390,4 +382,35 @@ pub(super) fn verify_bounds(
             ));
         }
     }
+}
+
+/// Return a concrete bound decision for supported type heads. Tuples have
+/// structural `Debug` and `Equality`. Other anonymous shapes remain deferred.
+fn protocol_bound_satisfied(
+    inferred: &ResolvedType,
+    protocol_id: GlobalRegistryId,
+    registry: &GlobalRegistry,
+) -> Option<bool> {
+    match inferred {
+        ResolvedType::Named {
+            resolution: Resolution::Global(target_id),
+            ..
+        } => Some(
+            registry
+                .lookup_conformance(*target_id, protocol_id)
+                .is_some(),
+        ),
+        ResolvedType::Anonymous(AnonymousKind::Tuple { .. }) => {
+            Some(tuple_implements_protocol(protocol_id, registry))
+        }
+        _ => None,
+    }
+}
+
+fn tuple_implements_protocol(protocol_id: GlobalRegistryId, registry: &GlobalRegistry) -> bool {
+    registry.get(protocol_id).is_some_and(|entry| {
+        entry.identifier.package() == "Global"
+            && entry.identifier.path().len() == 1
+            && matches!(entry.identifier.last(), "Debug" | "Equality")
+    })
 }

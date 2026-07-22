@@ -50,3 +50,15 @@ end
 
 zip2("k", 7).print()
 zip2(true, (1, 2)).print()
+
+# Explicit universal bounds still admit structural tuple conformances.
+fn render<T: Debug>(value: T) -> String
+  value.format()
+end
+
+fn equal<T: Equality>(left: T, right: T) -> Bool
+  left.eq(right)
+end
+
+IO.puts(render((8, "eight")))
+equal((1, 2), (1, 2)).print()

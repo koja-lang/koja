@@ -1,0 +1,9 @@
+protocol Marked
+  fn mark(self) -> Int
+end
+
+fn use_mark<T: Marked>(value: T) -> Int
+  value.mark()
+end
+
+use_mark((1, 2))

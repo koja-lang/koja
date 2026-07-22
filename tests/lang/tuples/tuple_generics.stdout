@@ -9,3 +9,5 @@ Span{range: (3, 9), label: "body"}
 9
 ("k", 7)
 (true, (1, 2))
+(8, "eight")
+true
