@@ -390,6 +390,8 @@ fn walk_instruction(instruction: &IRInstruction, out: &mut BTreeMap<IRSymbol, IR
         | IRInstruction::Const { .. }
         | IRInstruction::EnumConstruct { .. }
         | IRInstruction::EnumTagGet { .. }
+        | IRInstruction::FreeIndirect { .. }
+        | IRInstruction::IndirectPresent { .. }
         | IRInstruction::LocalWrite { .. }
         | IRInstruction::ProcessExit { .. }
         | IRInstruction::SetPriority { .. }

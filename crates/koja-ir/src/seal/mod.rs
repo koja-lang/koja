@@ -205,6 +205,9 @@ pub(super) fn instruction_operands(inst: &IRInstruction) -> Vec<ValueId> {
         }
         IRInstruction::FieldGet { base, .. } => vec![*base],
         IRInstruction::FieldSet { base, value, .. } => vec![*base, *value],
+        IRInstruction::FreeIndirect { base, .. } | IRInstruction::IndirectPresent { base, .. } => {
+            vec![*base]
+        }
         // `LoadCapture` reads from the enclosing closure's env, not
         // a `ValueId`, so there is nothing to validate in the per-block walk.
         IRInstruction::LoadCapture { .. } => vec![],

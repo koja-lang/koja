@@ -18,7 +18,7 @@
 use crate::cfg::CFGBuilder;
 use crate::enum_decl::{EnumPayloadInit, IRVariantPayload};
 use crate::function::{
-    BranchTarget, IRBasicBlock, IRBlockId, IRInstruction, IRSymbol, IRTerminator,
+    BranchTarget, IRBasicBlock, IRBlockId, IRIndirectSlot, IRInstruction, IRSymbol, IRTerminator,
 };
 use crate::mangling::{clone_glue_symbol, deep_copy_glue_symbol, drop_glue_symbol};
 use crate::package::IRPackage;
@@ -241,7 +241,7 @@ impl Synthesizer {
                     base: SELF_VALUE,
                     dest: projected,
                     field_index: field.index,
-                    field_type: field.ir_type.clone(),
+                    field_type: unbox(&field.ir_type).clone(),
                     struct_symbol: symbol.clone(),
                 },
             );
@@ -273,25 +273,71 @@ impl Synthesizer {
             .unwrap_or_else(|| panic!("elaborate synth: drop of unregistered struct `{symbol}`"));
         let fields = decl.fields.clone();
         let entry = self.block("entry");
+        let mut current = entry;
         for field in &fields {
             if !needs_drop(&field.ir_type, packages) {
                 continue;
             }
+            let release_block = if matches!(&field.ir_type, IRType::Indirect(_)) {
+                let slot = IRIndirectSlot::StructField {
+                    field_index: field.index,
+                    struct_symbol: symbol.clone(),
+                };
+                let present = self.value();
+                self.append(
+                    current,
+                    IRInstruction::IndirectPresent {
+                        base: SELF_VALUE,
+                        dest: present,
+                        slot: slot.clone(),
+                    },
+                );
+                let release = self.block(format!("field{}_drop", field.index));
+                let next = self.block(format!("field{}_done", field.index));
+                self.cfg.set_terminator(
+                    current,
+                    IRTerminator::CondBranch {
+                        cond: present,
+                        else_target: BranchTarget::to(next),
+                        then_target: BranchTarget::to(release),
+                    },
+                );
+                current = next;
+                release
+            } else {
+                current
+            };
             let projected = self.value();
             self.append(
-                entry,
+                release_block,
                 IRInstruction::FieldGet {
                     base: SELF_VALUE,
                     dest: projected,
                     field_index: field.index,
-                    field_type: field.ir_type.clone(),
+                    field_type: unbox(&field.ir_type).clone(),
                     struct_symbol: symbol.clone(),
                 },
             );
-            self.release(entry, projected, &field.ir_type, packages);
+            self.release(release_block, projected, &field.ir_type, packages);
+            if matches!(&field.ir_type, IRType::Indirect(_)) {
+                self.append(
+                    release_block,
+                    IRInstruction::FreeIndirect {
+                        base: SELF_VALUE,
+                        slot: IRIndirectSlot::StructField {
+                            field_index: field.index,
+                            struct_symbol: symbol.clone(),
+                        },
+                    },
+                );
+                self.cfg.set_terminator(
+                    release_block,
+                    IRTerminator::Branch(BranchTarget::to(current)),
+                );
+            }
         }
         self.cfg
-            .set_terminator(entry, IRTerminator::Return { value: None });
+            .set_terminator(current, IRTerminator::Return { value: None });
     }
 
     // --- tuple -----------------------------------------------------
@@ -453,6 +499,7 @@ impl Synthesizer {
             .set_terminator(join, IRTerminator::Return { value: None });
 
         for (variant, &body) in variants.iter().zip(&bodies) {
+            let mut current = body;
             match &variant.payload {
                 IRVariantPayload::Unit => {}
                 IRVariantPayload::Tuple(types) => {
@@ -460,14 +507,14 @@ impl Synthesizer {
                         if !needs_drop(field_ty, packages) {
                             continue;
                         }
-                        let projected = self.enum_payload_get(
-                            body,
+                        current = self.release_enum_field(
+                            current,
                             symbol,
                             variant.tag,
                             payload_index as u32,
                             field_ty,
+                            packages,
                         );
-                        self.release(body, projected, field_ty, packages);
                     }
                 }
                 IRVariantPayload::Struct(fields) => {
@@ -475,19 +522,19 @@ impl Synthesizer {
                         if !needs_drop(&field.ir_type, packages) {
                             continue;
                         }
-                        let projected = self.enum_payload_get(
-                            body,
+                        current = self.release_enum_field(
+                            current,
                             symbol,
                             variant.tag,
                             field.index,
                             &field.ir_type,
+                            packages,
                         );
-                        self.release(body, projected, &field.ir_type, packages);
                     }
                 }
             }
             self.cfg
-                .set_terminator(body, IRTerminator::Branch(BranchTarget::to(join)));
+                .set_terminator(current, IRTerminator::Branch(BranchTarget::to(join)));
         }
     }
 
@@ -507,11 +554,65 @@ impl Synthesizer {
                 value: SELF_VALUE,
                 tag,
                 payload_index,
-                field_type: field_type.clone(),
+                field_type: unbox(field_type).clone(),
                 ty: symbol.clone(),
             },
         );
         dest
+    }
+
+    fn release_enum_field(
+        &mut self,
+        block: IRBlockId,
+        symbol: &IRSymbol,
+        tag: crate::enum_decl::IRVariantTag,
+        payload_index: u32,
+        field_type: &IRType,
+        packages: &[IRPackage],
+    ) -> IRBlockId {
+        if !matches!(field_type, IRType::Indirect(_)) {
+            let projected = self.enum_payload_get(block, symbol, tag, payload_index, field_type);
+            self.release(block, projected, field_type, packages);
+            return block;
+        }
+
+        let slot = IRIndirectSlot::EnumPayload {
+            payload_index,
+            tag,
+            ty: symbol.clone(),
+        };
+        let present = self.value();
+        self.append(
+            block,
+            IRInstruction::IndirectPresent {
+                base: SELF_VALUE,
+                dest: present,
+                slot: slot.clone(),
+            },
+        );
+        let release = self.block(format!("payload{payload_index}_drop"));
+        let next = self.block(format!("payload{payload_index}_done"));
+        self.cfg.set_terminator(
+            block,
+            IRTerminator::CondBranch {
+                cond: present,
+                else_target: BranchTarget::to(next),
+                then_target: BranchTarget::to(release),
+            },
+        );
+
+        let projected = self.enum_payload_get(release, symbol, tag, payload_index, field_type);
+        self.release(release, projected, field_type, packages);
+        self.append(
+            release,
+            IRInstruction::FreeIndirect {
+                base: SELF_VALUE,
+                slot,
+            },
+        );
+        self.cfg
+            .set_terminator(release, IRTerminator::Branch(BranchTarget::to(next)));
+        next
     }
 
     // --- union -----------------------------------------------------

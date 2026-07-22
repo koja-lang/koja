@@ -8,8 +8,8 @@ use std::collections::BTreeMap;
 use crate::constant::IRConstantValue;
 use crate::enum_decl::{EnumPayloadInit, IREnumDecl, IRVariantPayload};
 use crate::function::{
-    FunctionKind, IRBasicBlock, IRBlockId, IRFunction, IRFunctionParam, IRInstruction, IRSymbol,
-    IRTerminator,
+    FunctionKind, IRBasicBlock, IRBlockId, IRFunction, IRFunctionParam, IRIndirectSlot,
+    IRInstruction, IRSymbol, IRTerminator,
 };
 use crate::local::IRLocalId;
 use crate::package::IRPackage;
@@ -276,7 +276,9 @@ fn instruction_result_type(
         IRInstruction::Concat { dest, kind, .. } => (*dest, kind.ir_type()),
         IRInstruction::Const { dest, value } => (*dest, const_type(value)),
         IRInstruction::DeepCopy { dest, ty, .. } => (*dest, ty.clone()),
-        IRInstruction::DropLocal { .. } | IRInstruction::DropValue { .. } => return None,
+        IRInstruction::DropLocal { .. }
+        | IRInstruction::DropValue { .. }
+        | IRInstruction::FreeIndirect { .. } => return None,
         IRInstruction::EnumConstruct { dest, ty, .. } => (*dest, IRType::Enum(ty.clone())),
         IRInstruction::EnumPayloadFieldGet {
             dest, field_type, ..
@@ -290,6 +292,7 @@ fn instruction_result_type(
             struct_symbol,
             ..
         } => (*dest, IRType::Struct(struct_symbol.clone())),
+        IRInstruction::IndirectPresent { dest, .. } => (*dest, IRType::Bool),
         IRInstruction::LoadCapture { dest, ty, .. } | IRInstruction::LoadConst { dest, ty, .. } => {
             (*dest, ty.clone())
         }
@@ -466,6 +469,16 @@ fn seal_instruction_types(
                 "FieldSet base",
             );
             require_value_type(values, *value, field_type, owner, "FieldSet value");
+        }
+        IRInstruction::FreeIndirect { base, slot }
+        | IRInstruction::IndirectPresent { base, slot, .. } => {
+            let expected = match slot {
+                IRIndirectSlot::EnumPayload { ty, .. } => IRType::Enum(ty.clone()),
+                IRIndirectSlot::StructField { struct_symbol, .. } => {
+                    IRType::Struct(struct_symbol.clone())
+                }
+            };
+            require_value_type(values, *base, &expected, owner, "FreeIndirect base");
         }
         IRInstruction::LoadCapture {
             capture_index, ty, ..

@@ -20,7 +20,7 @@
 
 use std::collections::HashSet;
 
-use crate::function::{IRFunction, IRInstruction, IRSymbol};
+use crate::function::{IRFunction, IRIndirectSlot, IRInstruction, IRSymbol};
 use crate::package::IRPackage;
 use crate::struct_decl::{IRStructDecl, IRStructField};
 use crate::types::IRType;
@@ -145,6 +145,24 @@ pub(super) fn seal_struct_ops<'inst, 'decl>(
                     &owner,
                 );
             }
+            IRInstruction::FreeIndirect {
+                slot:
+                    IRIndirectSlot::StructField {
+                        field_index,
+                        struct_symbol,
+                    },
+                ..
+            }
+            | IRInstruction::IndirectPresent {
+                slot:
+                    IRIndirectSlot::StructField {
+                        field_index,
+                        struct_symbol,
+                    },
+                ..
+            } => {
+                seal_indirect_field(lookup, struct_symbol, *field_index, &owner);
+            }
             IRInstruction::BinaryConstruct { .. }
             | IRInstruction::BinaryMatch { .. }
             | IRInstruction::BinaryOp { .. }
@@ -159,6 +177,8 @@ pub(super) fn seal_struct_ops<'inst, 'decl>(
             | IRInstruction::EnumConstruct { .. }
             | IRInstruction::EnumPayloadFieldGet { .. }
             | IRInstruction::EnumTagGet { .. }
+            | IRInstruction::FreeIndirect { .. }
+            | IRInstruction::IndirectPresent { .. }
             | IRInstruction::LoadCapture { .. }
             | IRInstruction::LoadConst { .. }
             | IRInstruction::LocalDecl { .. }
@@ -210,6 +230,30 @@ fn seal_field_projection<'decl>(
             name = declared.name,
             got = field_type,
             expected = declared.ir_type,
+        ));
+    }
+}
+
+fn seal_indirect_field<'decl>(
+    lookup: &impl Fn(&str) -> Option<&'decl IRStructDecl>,
+    struct_symbol: &IRSymbol,
+    field_index: u32,
+    owner: &str,
+) {
+    let decl = require_struct(lookup, struct_symbol, owner);
+    let Some(field) = decl.fields.get(field_index as usize) else {
+        seal_panic(&format!(
+            "{owner}: FreeIndirect on `{struct_symbol}` references field index {field_index}, \
+             but the decl only has {count} field(s)",
+            count = decl.fields.len(),
+        ));
+    };
+    if !matches!(&field.ir_type, IRType::Indirect(_)) {
+        seal_panic(&format!(
+            "{owner}: FreeIndirect on `{struct_symbol}.{name}` requires an Indirect field, \
+             but the decl carries `{:?}`",
+            field.ir_type,
+            name = field.name,
         ));
     }
 }
@@ -290,7 +334,7 @@ mod tests {
 
     use koja_ast::identifier::Identifier;
 
-    use crate::function::{IRInstruction, IRSymbol};
+    use crate::function::{IRIndirectSlot, IRInstruction, IRSymbol};
     use crate::package::IRPackage;
     use crate::struct_decl::{IRStructDecl, IRStructField, StructFieldInit};
     use crate::types::{IRType, ValueId};
@@ -478,6 +522,22 @@ mod tests {
             field_index: 0,
             field_type: IRType::Bool,
             struct_symbol: decl.symbol.clone(),
+        };
+        let decls = vec![decl];
+        let lookup = lookup_against(&decls);
+        seal_struct_ops(std::iter::once(("test".to_string(), &inst)), &lookup);
+    }
+
+    #[test]
+    #[should_panic(expected = "requires an Indirect field")]
+    fn free_indirect_rejects_inline_struct_field() {
+        let decl = point_decl();
+        let inst = IRInstruction::FreeIndirect {
+            base: ValueId(0),
+            slot: IRIndirectSlot::StructField {
+                field_index: 0,
+                struct_symbol: decl.symbol.clone(),
+            },
         };
         let decls = vec![decl];
         let lookup = lookup_against(&decls);

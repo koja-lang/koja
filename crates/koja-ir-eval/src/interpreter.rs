@@ -1261,6 +1261,17 @@ fn execute_instruction<'a, R: CallResolver>(
             // value-keyed drop is a no-op for the interpreter (mirrors
             // [`IRInstruction::DropLocal`] above).
             IRInstruction::DropValue { .. } => Ok(()),
+            // Recursive boxes exist only in the native layout. Eval
+            // stores the inner value directly and reclaims through
+            // the host GC.
+            IRInstruction::FreeIndirect { .. } => Ok(()),
+            IRInstruction::IndirectPresent { base, dest, .. } => {
+                let base = lookup(&frame.values, *base)?;
+                frame
+                    .values
+                    .insert(*dest, Value::Bool(!matches!(base, Value::Unit)));
+                Ok(())
+            }
             // The LLVM backend zero-initializes the slot at the decl
             // site so scope-exit drop glue can run on never-written
             // slots (e.g. the payload local of a receive arm that did
