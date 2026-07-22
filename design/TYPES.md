@@ -39,6 +39,11 @@ first-class types on equal footing. `Type::Function` is a type alongside
 `Type::Struct` and `Type::Enum`. Function values can be stored in variables,
 passed as arguments, and returned.
 
+Products have one nominal form and two structural forms. Named structs
+provide named fields and functions. Anonymous tuples provide positional
+elements with destructuring-only access. Anonymous records would add
+structural named fields.
+
 A struct with zero fields is the unit type (algebraically, the empty product
 is 1). This handles the "namespace for functions" case without a separate
 keyword:
@@ -167,12 +172,12 @@ library code rather than language primitives.
 
 Each algebraic type has a named (declared) form and an anonymous (inline) form:
 
-| Algebra     | Named (declared)       | Anonymous (inline)                  | Term    |
-| ----------- | ---------------------- | ----------------------------------- | ------- |
-| Product     | `struct User`          | `{name: String, age: Int}`          | record  |
-| Sum         | `enum Option<T>`       | `union Pet = Cat \| Dog`            | union   |
-| Kojanential | `fn name(...) ... end` | `x -> expr` / `fn (...) -> ... end` | closure |
-| Unit        | `struct IO` (0 fields) | `()` (unit literal)                 |         |
+| Algebra     | Named (declared)       | Anonymous (inline)                                    | Term            |
+| ----------- | ---------------------- | ----------------------------------------------------- | --------------- |
+| Product     | `struct User`          | `(Int, String)` or planned `{name: String, age: Int}` | tuple or record |
+| Sum         | `enum Option<T>`       | `union Pet = Cat \| Dog`                              | union           |
+| Kojanential | `fn name(...) ... end` | `x -> expr` / `fn (...) -> ... end`                   | closure         |
+| Unit        | `struct IO` (0 fields) | `()` (unit literal)                                   |                 |
 
 Every type-constructor now has both forms. The algebra is complete.
 
@@ -305,15 +310,45 @@ types.
 
 ## Literal protocols (partially implemented)
 
-- **Concept**: all literal syntax (`42`, `"hello"`, `[...]`, `[k:v]`, `(a,b)`) backed by protocols, not special-cased types. Any type can opt into literal construction by implementing the protocol.
-- **Protocol family**: `IntLiteral`, `FloatLiteral`, `StringLiteral`, `ListLiteral<T>`, `MapLiteral<K,V>`, `PairLiteral<A,B>`.
-- **Default types**: `Int`, `Float`, `String`, `List<T>`, `Map<K,V>`, `Pair<A,B>` when no type annotation is present.
+- **Concept**: literal syntax has a canonical type and may convert
+  contextually through a protocol. Any type can opt into a literal family by
+  implementing its protocol.
+- **Protocol family**: implemented `ListLiteral<T>` and `MapLiteral<K, V>`,
+  plus planned `IntLiteral`, `FloatLiteral`, `StringLiteral`, and
+  `TupleLiteral<T>`.
+- **Default types**: `Int`, `Float`, `String`, `List<T>`, `Map<K, V>`, and
+  the structural tuple `(A, B, ...)` when no conforming expected type is
+  present.
 - **Infallible**: literal protocols return `Self`, not `Result`. Fallible parsing (e.g. from untrusted input) uses regular functions that return `Result`.
-- **Pair syntax**: `(a, b)` may return via `PairLiteral<A, B>` -- only pairs (arity 2). 3+ values use named structs.
 - **Implemented**: `ListLiteral<T>` with `from_list(move list: List<T>) -> Self` -- `List<T>` and `Set<T>` implement it. Defined in `lib/global/src/kernel.koja`.
 - **Implemented**: `MapLiteral<K, V>` with `from_map(move map: Map<K, V>) -> Self` -- `Map<K, V>` implements it as identity. `[key: value]` syntax and `[:]` for empty maps.
-- **Planned**: `IntLiteral`, `FloatLiteral` (enables custom `Decimal` type from float literals), `StringLiteral`, `PairLiteral<A,B>`.
+- **Planned**: `IntLiteral`, `FloatLiteral` (enables custom `Decimal` type
+  from float literals), `StringLiteral`, and `TupleLiteral<T>`.
 - **Fractal design**: user-defined types and built-in types have identical access to literal syntax. No two-tier system.
+
+`TupleLiteral<T>` takes the complete anonymous tuple type as `T`, preserving
+heterogeneous elements and compile-time arity:
+
+```koja
+protocol TupleLiteral<T>
+  fn from_tuple(value: T) -> Self
+end
+
+impl TupleLiteral<(Int, Int)> for Point
+  fn from_tuple(value: (Int, Int)) -> Self
+    (x, y) = value
+    Point{x: x, y: y}
+  end
+end
+
+point: Point = (3, 9)
+```
+
+The unhinted expression `(3, 9)` keeps type `(Int, Int)`. With the expected
+type `Point`, typecheck finds the matching
+`TupleLiteral<(Int, Int)>` conformance and rewrites the expression through
+`Point.from_tuple((3, 9))`. A three-element conformer instead implements a
+shape such as `TupleLiteral<(UInt8, UInt8, UInt8)>`.
 
 ---
 
@@ -330,7 +365,7 @@ index-based while loops. This precludes lazy iteration, streaming, and any
 non-random-access collection (maps, linked lists, generators).
 
 Pre-v1.0, replace with an `Iterator<T>` protocol using
-`next(move self) -> Option<Pair<T, Self>>`. `get` now returns `Option<T>`.
+`next(self) -> Option<(T, Self)>`. `get` now returns `Option<T>`.
 Codegen change is contained to `compile_for` in `loops.rs`; List/String
 impls wrap existing index-based access in iterator state.
 

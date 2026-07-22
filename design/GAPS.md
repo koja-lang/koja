@@ -14,7 +14,7 @@ index-based while loops. This precludes lazy iteration, streaming, and any
 non-random-access collection (maps, linked lists, generators).
 
 Pre-v1.0, replace with an `Iterator<T>` protocol using
-`next(self) -> Option<Pair<T, Self>>`. `get` now returns `Option<T>`.
+`next(self) -> Option<(T, Self)>`. `get` now returns `Option<T>`.
 Codegen change is contained to `compile_for` in `loops.rs`; List/String
 impls wrap existing index-based access in iterator state.
 
@@ -24,6 +24,21 @@ automatically since iteration is bounds-checked). With lazy iteration,
 `loop { match iter.next() ... }` and `None` breaks the loop.
 
 Full design in [TYPES.md](TYPES.md) "Iterator protocol redesign" section.
+
+---
+
+## Tuple equality skips closure and union elements
+
+Tuple equality lowers element-wise calls only for types with a usable
+`Equality` implementation. Closure and union elements are currently treated
+as opaque and skipped, so tuples that differ only in those positions compare
+equal. The same hole applies when an opaque element appears inside a nested
+tuple.
+
+This does not satisfy the language contract that tuples support equality only
+when every element does. Until closures and unions gain defined equality
+semantics, typecheck should reject equality on tuple shapes containing either
+type instead of allowing lowering to omit them.
 
 ---
 
@@ -357,7 +372,8 @@ summary:
   grammar alternatives in both `closure_param` and
   `closure_param_short`, and all downstream match arms (typecheck
   feature-gap diagnostic, IR lower panic, fmt, debug-print).
-  Re-introduce if anonymous tuples ever enter the grammar properly.
+  Anonymous tuples now exist, but closure parameters remain name-only.
+  Destructure a tuple in the closure body when needed.
 - **Category C (grammar.ebnf vs parser):** C1 (`cond` mandatory `else`)
   and C4 (multiline-string patterns, now parsed with expression-equal
   dedent semantics plus an interpolation diagnostic) are fixed. C3 was

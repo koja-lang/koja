@@ -85,6 +85,7 @@ Interpreter script mode (`.kojs` and `koja run --backend=interpreter`) now boots
 - Primitives: `Int`, `Int8`, `Int16`, `Int32`, `UInt8`, `UInt16`, `UInt32`, `UInt64`, `Float`, `Float32`, `Bool`, `String`
 - List literal syntax (`[1, 2, 3]`) backed by `ListLiteral<T>` protocol
 - Map literal syntax (`["key": value]`, `[:]` empty) backed by `MapLiteral<K, V>` protocol
+- Anonymous tuples (`(a, b, ...)`) with structural types, destructuring assignment, match patterns, unions, generics, equality, and `Debug`
 - `Self` type expression in `protocol` and `impl` blocks
 - `Hash` and `Equality` protocols with intrinsic implementations for all primitives plus `Binary` and `Bits` (literal-form `Debug` output included)
 - Stdlib types: `Option<T>`, `Result<T, E>`, `Pair<A, B>`, `Map<K, V>`, `Set<T>` (auto-imported from the `Global` package's `kernel.koja`); `Process<C, M, R>`, `Ref<M, R>`, `ReplyTo<R>`, `Task<R>`, `Step<S>`, `Lifecycle`, `StopReason`, `ExitStatus`, `ExitReason` (auto-imported from `process.koja`); `Base` (base16/base64/url-safe encode + decode, auto-imported from `base.koja`); `Path` (POSIX path manipulation, auto-imported from `path.koja`); `CPtr<T>`, `CString` (auto-imported from `cptr.koja`, `cstring.koja`)
@@ -368,7 +369,7 @@ The polish, validation, and language-surface review that gates a published 1.0. 
 - **Documentation polish** -- doctests (code blocks in `@doc` strings compile + run as tests), client-side fuzzy search in `koja doc` output, prose pages from `docs/*.md`, clickable type cross-references in signatures.
 - **CLI query/guide system** -- `koja query type <Type>` / `koja query module <pkg>` / `koja query protocol <Protocol>`; `koja guide <topic>` (prose guides on value semantics, concurrency, FFI, protocols, testing, etc.).
 - **LSP finishing pass** -- inlay hints for inferred types, multi-module cross-file diagnostics.
-- **Ergonomic cleanup** -- ~~`koja new` scaffolding generates a `Process` entry (not `fn main`); retire `fn main` as an entry mode~~ (**done**); `HTTP.Server` wrapper landing in stdlib.
+- **Ergonomic cleanup** -- ~~`koja new` scaffolding generates a `Process` entry (not `fn main`) and retires `fn main` as an entry mode~~ (**done**). Add contextual `TupleLiteral<T>` conversion, migrate process envelopes, intrinsics, iterators, and stdlib call sites from `Pair<A, B>` to tuples, then remove `Pair`. Land the `HTTP.Server` wrapper in stdlib.
 - **Stdlib completion** -- `Net` TLS (`upgrade_tls`, `TLSConfig`), ~~git deps + lockfile in the package manager~~ (**done** -- git dependencies pin through a committed `koja.lock` via `koja deps get`/`update`/`clean`, offline builds re-materialize from a global cache), C FFI Phase 3 (`@compat "C"` structs + callbacks), `Mmap`.
 - **First-party reference packages** -- at minimum `argon2` (validates C FFI Phase 3 + crypto pattern) and structured `logging` (validates the package manager workflow end-to-end on external code).
 - **Compiler diagnostic quality pass** -- dedicated milestone for "error messages are a feature." Review every diagnostic site, improve span precision, add hints, polish phrasing.
@@ -535,7 +536,13 @@ See [COMPILER-NORTHSTAR.md](COMPILER-NORTHSTAR.md) for the destination architect
 
 ### Literal protocols
 
-`ListLiteral<T>` and `MapLiteral<K,V>` are implemented. Remaining: `IntLiteral`, `FloatLiteral`, `StringLiteral`, `PairLiteral<A,B>`. See [TYPES.md](TYPES.md) for full details.
+`ListLiteral<T>` and `MapLiteral<K,V>` are implemented. Planned
+`TupleLiteral<T>` conversion uses the complete anonymous tuple type as
+`T`, so a conformer can distinguish `(Int, Int)` from
+`(UInt8, UInt8, UInt8)` at compile time. Without an expected conformer,
+tuple syntax keeps its structural tuple type. Remaining scalar literal
+protocols are `IntLiteral`, `FloatLiteral`, and `StringLiteral`. See
+[TYPES.md](TYPES.md) for full details.
 
 ---
 

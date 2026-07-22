@@ -26,25 +26,16 @@ Routes:
 struct Router
   fn route(req: Request, conn: Connection) -> (Response, Connection)
     match req.method
-      Method.Delete ->
-        handle_delete(req.path, conn)
-
-      Method.Get ->
-        handle_get(req.path, conn)
-
-      Method.Post ->
-        handle_post(req, conn)
-
-      Method.Put ->
-        handle_put(req, conn)
-
+      Method.Delete -> handle_delete(req.path, conn)
+      Method.Get -> handle_get(req.path, conn)
+      Method.Post -> handle_post(req, conn)
+      Method.Put -> handle_put(req, conn)
       _ ->
-        respond(
-          conn,
+        (
           error(
             Status.method_not_allowed(),
             "#{req.method.to_string()} is not supported",
-          ),
+          ), conn
         )
     end
   end
@@ -67,7 +58,7 @@ struct Router
 
   priv fn handle_get(path: String, conn: Connection) -> (Response, Connection)
     if path == "/"
-      return respond(conn, info())
+      return (info(), conn)
     end
 
     if path == "/links"
@@ -80,39 +71,32 @@ struct Router
 
       Option.None ->
         match code_after(path, "/")
-          Option.Some(code) ->
-            redirect(conn, code)
-
+          Option.Some(code) -> redirect(conn, code)
           Option.None ->
-            respond(conn, error(Status.not_found(), "no route for #{path}"))
+            (error(Status.not_found(), "no route for #{path}"), conn)
         end
     end
   end
 
   priv fn handle_post(req: Request, conn: Connection) -> (Response, Connection)
     unless req.path == "/links"
-      return respond(
-        conn,
-        error(Status.not_found(), "no route for POST #{req.path}"),
-      )
+      return (error(Status.not_found(), "no route for POST #{req.path}"), conn)
     end
 
     match JsonUtil.parse_url(req.body)
       Result.Err(message) ->
-        respond(conn, error(Status.bad_request(), message))
+        (error(Status.bad_request(), message), conn)
 
       Result.Ok(url) ->
         (conn, created) = LinkStore.create(conn, url)
 
         match created
           Result.Ok(link) ->
-            respond(
-              conn,
+            (
               json_response(Status.created(), JsonUtil.link_to_value(link)),
+              conn
             )
-
-          Result.Err(e) ->
-            respond(conn, db_error(e))
+          Result.Err(e) -> (db_error(e), conn)
         end
     end
   end
@@ -122,15 +106,14 @@ struct Router
       match code_after(req.path, LINKS_PREFIX)
         Option.Some(c) -> c
         Option.None ->
-          return respond(
-            conn,
-            error(Status.not_found(), "no route for PUT #{req.path}"),
+          return (
+            error(Status.not_found(), "no route for PUT #{req.path}"), conn
           )
       end
 
     match JsonUtil.parse_url(req.body)
       Result.Err(message) ->
-        respond(conn, error(Status.bad_request(), message))
+        (error(Status.bad_request(), message), conn)
 
       Result.Ok(url) ->
         outcome = LinkStore.update(conn, code, url)
@@ -145,20 +128,17 @@ struct Router
       match code_after(path, LINKS_PREFIX)
         Option.Some(c) -> c
         Option.None ->
-          return respond(
-            conn,
-            error(Status.not_found(), "no route for DELETE #{path}"),
+          return (
+            error(Status.not_found(), "no route for DELETE #{path}"), conn
           )
       end
 
     (conn, removed) = LinkStore.remove(conn, code)
 
     match removed
-      Result.Err(e) ->
-        respond(conn, db_error(e))
-
+      Result.Err(e) -> (db_error(e), conn)
       Result.Ok(deleted) ->
-        deleted ? respond(conn, no_content()) : respond(conn, not_found(code))
+        deleted ? (no_content(), conn) : (not_found(code), conn)
     end
   end
 
@@ -167,13 +147,8 @@ struct Router
 
     match listed
       Result.Ok(links) ->
-        respond(
-          conn,
-          json_response(Status.ok(), JsonUtil.links_to_value(links)),
-        )
-
-      Result.Err(e) ->
-        respond(conn, db_error(e))
+        (json_response(Status.ok(), JsonUtil.links_to_value(links)), conn)
+      Result.Err(e) -> (db_error(e), conn)
     end
   end
 
@@ -186,12 +161,12 @@ struct Router
 
     match visited
       Result.Err(e) ->
-        respond(conn, db_error(e))
+        (db_error(e), conn)
 
       Result.Ok(target) ->
         match target
-          Option.Some(url) -> respond(conn, redirect_response(url))
-          Option.None -> respond(conn, not_found(code))
+          Option.Some(url) -> (redirect_response(url), conn)
+          Option.None -> (not_found(code), conn)
         end
     end
   end
@@ -205,26 +180,15 @@ struct Router
 
     match found
       Result.Err(e) ->
-        respond(conn, db_error(e))
+        (db_error(e), conn)
 
       Result.Ok(maybe) ->
         match maybe
           Option.Some(link) ->
-            respond(
-              conn,
-              json_response(Status.ok(), JsonUtil.link_to_value(link)),
-            )
-
-          Option.None ->
-            respond(conn, not_found(code))
+            (json_response(Status.ok(), JsonUtil.link_to_value(link)), conn)
+          Option.None -> (not_found(code), conn)
         end
     end
-  end
-
-  priv fn respond(conn: Connection, response: Response)
-    -> (Response, Connection)
-
-    (response, conn)
   end
 
   priv fn info -> Response
