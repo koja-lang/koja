@@ -235,6 +235,20 @@ pub(crate) fn types_equivalent(
                     .all(|(x, y)| types_equivalent(x, y, registry))
                 && types_equivalent(a_ret, b_ret, registry)
         }
+        (
+            ResolvedType::Anonymous(AnonymousKind::Tuple {
+                elements: a_elements,
+            }),
+            ResolvedType::Anonymous(AnonymousKind::Tuple {
+                elements: b_elements,
+            }),
+        ) => {
+            a_elements.len() == b_elements.len()
+                && a_elements
+                    .iter()
+                    .zip(b_elements)
+                    .all(|(x, y)| types_equivalent(x, y, registry))
+        }
         (ResolvedType::Union(a_members), ResolvedType::Union(b_members)) => {
             a_members.len() == b_members.len()
                 && a_members

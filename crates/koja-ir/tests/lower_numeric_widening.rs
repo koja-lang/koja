@@ -61,3 +61,42 @@ fn float32_return_into_float_lowers_to_numeric_widen() {
         "expected exactly one Float32 -> Float64 NumericWiden at the return site",
     );
 }
+
+#[test]
+fn tuple_element_widening_precedes_tuple_init() {
+    let source = "
+        fn build(small: Int32) -> (Int, String)
+          (small, \"wide\")
+        end
+
+        build(7)
+        ";
+    let script = lower(source);
+    let build = script_function(&script, "build");
+    let instructions: Vec<_> = all_instructions(&build.blocks).collect();
+    let widen_index = instructions
+        .iter()
+        .position(|instruction| {
+            matches!(
+                instruction,
+                IRInstruction::NumericWiden {
+                    from: IRType::Int32,
+                    to: IRType::Int64,
+                    ..
+                }
+            )
+        })
+        .expect("tuple element should widen from Int32 to Int");
+    let tuple_index = instructions
+        .iter()
+        .position(|instruction| {
+            matches!(
+                instruction,
+                IRInstruction::TupleInit { ty, .. }
+                    if ty.as_slice() == [IRType::Int64, IRType::String]
+            )
+        })
+        .expect("tuple should initialize with the widened element type");
+
+    assert!(widen_index < tuple_index);
+}

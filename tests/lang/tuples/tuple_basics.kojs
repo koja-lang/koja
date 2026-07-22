@@ -8,6 +8,13 @@ pair.print()
 annotated: (Int, Bool) = (7, true)
 annotated.print()
 
+# Contextual element conversion uses ordinary numeric rules.
+small: Int32 = -7
+wide: (Int, String) = (small, "wide")
+fitted: (UInt8, String) = (255, "fitted")
+wide.print()
+fitted.print()
+
 # Destructuring assignment.
 (a, b) = pair
 a.print()

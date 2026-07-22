@@ -363,3 +363,28 @@ fn result_ok_payload_int64_unifies_with_expected_int() {
         ";
     typecheck(&dedent(source));
 }
+
+#[test]
+fn tuple_literal_elements_fit_contextual_numeric_widths() {
+    let source = "
+        type Sample = (UInt8, (Int8, Float32))
+
+        sample: Sample = (255, (-128, 0.5))
+        sample
+        ";
+
+    typecheck(&dedent(source));
+}
+
+#[test]
+fn tuple_literal_element_out_of_range_diagnoses() {
+    let source = "
+        fn take(sample: (UInt8, String)) -> Unit
+          ()
+        end
+
+        take((256, \"too wide\"))
+        ";
+
+    assert_script_fails_with(source, &["256", "UInt8", "0..=255"]);
+}

@@ -21,7 +21,7 @@ fn tuple_aliases_lower_across_methods_patterns_elements_and_generics() {
         end
 
         left: NamedPair = make(\"one\")
-        right: Pair = make(\"one\")
+        right: Pair = (1, \"one\")
         left.print()
         (left == right).print()
         IO.puts(make(\"name\").format())
