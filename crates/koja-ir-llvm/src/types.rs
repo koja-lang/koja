@@ -68,6 +68,9 @@ pub(crate) fn ir_int_type<'ctx>(
         IRType::Struct(_) => Err(LlvmError::Codegen(format!(
             "expected an integer or Bool IRType, got `{ty:?}`",
         ))),
+        IRType::Tuple(_) => Err(LlvmError::Codegen(format!(
+            "expected an integer or Bool IRType, got `{ty:?}`",
+        ))),
         IRType::Union { .. } => Err(LlvmError::Codegen(format!(
             "expected an integer or Bool IRType, got `{ty:?}`",
         ))),
@@ -118,9 +121,25 @@ pub(crate) fn ir_basic_type<'ctx>(
         IRType::List(_) => Ok(list_value_type(ctx).into()),
         IRType::Map { .. } | IRType::Set(_) => Ok(hashtable_value_type(ctx).into()),
         IRType::Struct(symbol) => Ok(ctx.layouts.struct_type(symbol.mangled()).into()),
+        IRType::Tuple(elements) => Ok(tuple_struct_type(ctx, elements)?.into()),
         IRType::Union { mangled, .. } => Ok(ctx.layouts.union_outer(mangled.mangled()).0.into()),
         IRType::Unit => Ok(ctx.context.i8_type().into()),
     }
+}
+
+/// Anonymous (unnamed) LLVM struct type for a tuple's element
+/// shape. Tuples are structural, so two tuples with the same
+/// element types produce identical LLVM types and no named
+/// registration is needed.
+pub(crate) fn tuple_struct_type<'ctx>(
+    ctx: &EmitContext<'ctx>,
+    elements: &[IRType],
+) -> Result<StructType<'ctx>, LlvmError> {
+    let element_types = elements
+        .iter()
+        .map(|element| ir_basic_type(ctx, element))
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(ctx.context.struct_type(&element_types, false))
 }
 
 /// ABI byte size of `ty` on the host triple. Routes through

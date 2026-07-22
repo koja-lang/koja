@@ -142,6 +142,47 @@ fn call_site_with_unimplemented_bound_diagnoses() {
 }
 
 #[test]
+fn tuple_call_site_with_custom_bound_diagnoses() {
+    let source = "
+        protocol Marked
+          fn mark(self) -> Int
+        end
+
+        fn use_mark<T: Marked>(value: T) -> Int
+          value.mark()
+        end
+
+        use_mark((1, 2))
+        ";
+
+    assert_script_fails_with(
+        source,
+        &[
+            "does not implement protocol `Marked`",
+            "required by type parameter `T`",
+        ],
+    );
+}
+
+#[test]
+fn tuple_call_site_satisfies_structural_protocol_bounds() {
+    let source = "
+        fn render<T: Debug>(value: T) -> String
+          value.format()
+        end
+
+        fn equal<T: Equality>(left: T, right: T) -> Bool
+          left.eq(right)
+        end
+
+        render((1, \"one\"))
+        equal((1, 2), (1, 2))
+        ";
+
+    typecheck(&dedent(source));
+}
+
+#[test]
 fn call_site_with_implemented_bound_succeeds() {
     let source = "
         protocol Greeter

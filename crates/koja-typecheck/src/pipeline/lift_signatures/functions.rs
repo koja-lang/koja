@@ -4,13 +4,12 @@
 
 use koja_ast::ast::{Diagnostic, Function, Param, TypeExpr, is_extern_c, is_intrinsic};
 use koja_ast::identifier::{AnonymousKind, GlobalRegistryId, Identifier, Resolution, ResolvedType};
-use koja_ast::span::Span;
 
 use crate::registry::{Dispatch, FunctionSignature, GlobalKind, GlobalRegistry, ResolvedParam};
 
 use super::LiftScope;
 use super::SelfContext;
-use super::types::{TypeParamScope, concrete_self_type, resolve_type_expr};
+use super::types::{TypeParamScope, concrete_self_type, resolve_type_expr, type_expr_span};
 
 /// Resolve a function's param + return types and stamp the lifted
 /// [`FunctionSignature`] onto its registry entry. The caller picks
@@ -289,20 +288,8 @@ fn type_expr_label(ty: &TypeExpr) -> String {
         TypeExpr::Self_ { .. } => "Self".to_string(),
         TypeExpr::Unit { .. } => "Unit".to_string(),
         TypeExpr::Function { .. } => "<function type>".to_string(),
+        TypeExpr::Tuple { .. } => "<tuple>".to_string(),
         TypeExpr::Union { .. } => "<union>".to_string(),
-    }
-}
-
-/// Span associated with a [`TypeExpr`] for diagnostics on the
-/// return-type slot.
-fn type_expr_span(ty: &TypeExpr) -> Span {
-    match ty {
-        TypeExpr::Named { span, .. }
-        | TypeExpr::Generic { span, .. }
-        | TypeExpr::Unit { span }
-        | TypeExpr::Self_ { span }
-        | TypeExpr::Function { span, .. }
-        | TypeExpr::Union { span, .. } => *span,
     }
 }
 

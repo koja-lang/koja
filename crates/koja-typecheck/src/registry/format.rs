@@ -204,6 +204,14 @@ fn format_resolved(ty: &ResolvedType, registry: &GlobalRegistry) -> String {
                 format_resolved(ret, registry),
             )
         }
+        ResolvedType::Anonymous(AnonymousKind::Tuple { elements }) => {
+            let rendered = elements
+                .iter()
+                .map(|e| format_resolved(e, registry))
+                .collect::<Vec<_>>()
+                .join(", ");
+            format!("({rendered})")
+        }
         ResolvedType::Named {
             resolution,
             type_args,

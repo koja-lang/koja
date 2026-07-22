@@ -15,8 +15,8 @@ use super::process::{
     emit_process_exit, emit_receive, emit_set_priority, emit_spawn, emit_yield_check,
 };
 use super::{
-    ValueMap, calls, clone, closures, concat, constants, deep_copy, enums, locals, lookup, ops,
-    structs, unions,
+    ValueMap, calls, clone, closures, concat, constants, deep_copy, enums, indirect, locals,
+    lookup, ops, structs, tuples, unions,
 };
 
 pub(crate) fn emit_instruction<'ctx>(
@@ -167,6 +167,16 @@ pub(crate) fn emit_instruction<'ctx>(
             Ok(())
         }
         IRInstruction::DropValue { value, ty } => locals::emit_drop_value(ctx, *value, ty, values),
+        IRInstruction::FreeIndirect { base, slot } => {
+            let base = lookup(values, *base)?;
+            indirect::emit_free_indirect(ctx, base, slot)
+        }
+        IRInstruction::IndirectPresent { base, dest, slot } => {
+            let base = lookup(values, *base)?;
+            let present = indirect::emit_indirect_present(ctx, base, slot)?;
+            values.insert(*dest, present);
+            Ok(())
+        }
         IRInstruction::LoadCapture {
             capture_index,
             dest,
@@ -207,6 +217,22 @@ pub(crate) fn emit_instruction<'ctx>(
         }
         IRInstruction::StructInit { dest, fields, ty } => {
             let result = structs::emit_struct_init(ctx, fields, ty, values)?;
+            values.insert(*dest, result);
+            Ok(())
+        }
+        IRInstruction::TupleGet {
+            base,
+            dest,
+            element_type,
+            index,
+        } => {
+            let base_value = lookup(values, *base)?;
+            let result = tuples::emit_tuple_get(ctx, base_value, *index, element_type)?;
+            values.insert(*dest, result);
+            Ok(())
+        }
+        IRInstruction::TupleInit { dest, elements, ty } => {
+            let result = tuples::emit_tuple_init(ctx, elements, ty, values)?;
             values.insert(*dest, result);
             Ok(())
         }

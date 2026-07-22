@@ -117,6 +117,7 @@ fn statement_span(statement: &Statement) -> koja_ast::span::Span {
         Statement::Assignment { span, .. }
         | Statement::Break { span }
         | Statement::CompoundAssign { span, .. }
+        | Statement::Destructure { span, .. }
         | Statement::Return { span, .. } => *span,
         Statement::Expr(expr) => expr.span,
     }

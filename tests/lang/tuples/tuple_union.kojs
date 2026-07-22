@@ -1,0 +1,55 @@
+# Tuples as union members: widening, typed-binding match arms, and
+# tuple aliases inside unions.
+
+struct NotFound
+  key: String
+end
+
+fn found(n: Int, name: String) -> (Int, String) | NotFound
+  (n, name)
+end
+
+fn missing(key: String) -> (Int, String) | NotFound
+  NotFound{key: key}
+end
+
+fn lookup(key: String) -> (Int, String) | NotFound
+  match key
+    "a" -> found(1, "alpha")
+    "b" -> found(2, "beta")
+    _ -> missing(key)
+  end
+end
+
+fn render(result: (Int, String) | NotFound) -> String
+  match result
+    t: (Int, String) ->
+      (n, name) = t
+      "#{n}:#{name}"
+
+    missing: NotFound ->
+      "missing #{missing.key}"
+  end
+end
+
+IO.puts(render(lookup("a")))
+IO.puts(render(lookup("b")))
+IO.puts(render(lookup("zzz")))
+
+# A type alias naming a tuple works as a union member too.
+type Hit = (Int, String)
+type Outcome = Hit | NotFound
+
+fn score(o: Outcome) -> Int
+  match o
+    hit: Hit ->
+      (n, _) = hit
+      n
+
+    nf: NotFound ->
+      -1
+  end
+end
+
+score(lookup("a")).print()
+score(lookup("nope")).print()

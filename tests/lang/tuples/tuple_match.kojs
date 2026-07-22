@@ -1,0 +1,53 @@
+# Tuple patterns in match: literal elements, bindings, wildcards,
+# nesting, guards, and struct elements.
+
+fn describe(pair: (Int, Int)) -> String
+  match pair
+    (0, 0) -> "origin"
+    (0, y) -> "on y axis at #{y}"
+    (x, 0) -> "on x axis at #{x}"
+    (x, y) when x == y -> "diagonal"
+    (_, _) -> "general"
+  end
+end
+
+IO.puts(describe((0, 0)))
+IO.puts(describe((0, 4)))
+IO.puts(describe((3, 0)))
+IO.puts(describe((5, 5)))
+IO.puts(describe((1, 2)))
+
+# Nested tuple patterns with mixed element kinds.
+fn classify(item: (String, (Int, Bool))) -> String
+  match item
+    ("a", (n, true)) -> "a-live-#{n}"
+    ("a", (_, false)) -> "a-dead"
+    (name, (n, _)) when n > 10 -> "#{name}-big"
+    (name, _) -> "#{name}-small"
+  end
+end
+
+IO.puts(classify(("a", (1, true))))
+IO.puts(classify(("a", (2, false))))
+IO.puts(classify(("b", (50, true))))
+IO.puts(classify(("c", (3, false))))
+
+# Struct elements bind through tuple patterns.
+struct Point
+  x: Int
+  y: Int
+end
+
+pt_pair = (Point{x: 1, y: 2}, "label")
+
+match pt_pair
+  (Point{x: x}, label) -> IO.puts("#{label}: x=#{x}")
+end
+
+# Tuples inside enum payloads.
+opt: Option<(Int, String)> = Option.Some((42, "answer"))
+
+match opt
+  Option.Some((n, s)) -> IO.puts("#{n} is the #{s}")
+  Option.None -> IO.puts("nothing")
+end

@@ -93,7 +93,7 @@ fn eligible_for_primitive_equality(left: &Expr, right: &Expr, registry: &GlobalR
         && is_primitive_equality_eligible(&right.resolution, registry)
 }
 
-fn is_primitive_equality_eligible(ty: &ResolvedType, registry: &GlobalRegistry) -> bool {
+pub(super) fn is_primitive_equality_eligible(ty: &ResolvedType, registry: &GlobalRegistry) -> bool {
     const PRIMITIVES: &[&str] = &[
         "Bool", "Float", "Float32", "Int", "Int16", "Int32", "Int64", "Int8", "String", "UInt16",
         "UInt32", "UInt64", "UInt8",

@@ -1,0 +1,50 @@
+struct Rt
+  @extern "C"
+  fn koja_rt_live_blocks -> Int64
+end
+
+enum Tree
+  Leaf(Int)
+  Branch(Tree, Tree)
+end
+
+fn build_tree(depth: Int) -> Tree
+  if depth == 0
+    Tree.Leaf(1)
+  else
+    Tree.Branch(build_tree(depth - 1), build_tree(depth - 1))
+  end
+end
+
+fn sum_tree(tree: Tree) -> Int
+  match tree
+    Tree.Leaf(value) -> value
+    Tree.Branch(left, right) -> sum_tree(left) + sum_tree(right)
+  end
+end
+
+fn exercise -> Int
+  tree = build_tree(5)
+  copy = tree
+  sum_tree(tree) + sum_tree(copy)
+end
+
+_ = exercise()
+start = Rt.koja_rt_live_blocks()
+i = 0
+total = 0
+
+loop
+  total += exercise()
+  i += 1
+
+  if i == 100
+    break
+  end
+end
+
+finish = Rt.koja_rt_live_blocks()
+(finish == start
+  ? "recursive indirect reclaim: ok"
+  : "recursive indirect reclaim: LEAK").print()
+(total == 6400).print()

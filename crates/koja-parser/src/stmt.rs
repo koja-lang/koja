@@ -84,6 +84,15 @@ impl Parser {
                 let value = self.parse_expr();
                 let span = self.span_from(start_span);
 
+                if matches!(&expr.kind, ExprKind::Tuple { .. }) {
+                    let pattern = self.expr_to_destructure_pattern(&expr);
+                    return Statement::Destructure {
+                        pattern,
+                        value,
+                        span,
+                    };
+                }
+
                 let target = try_expr_to_lvalue(&expr).unwrap_or_else(|| {
                     self.error_with_hint(
                         "invalid assignment target".to_string(),
@@ -135,6 +144,37 @@ impl Parser {
                 }
             }
             _ => Statement::Expr(expr),
+        }
+    }
+
+    /// Reinterpret a parsed tuple expression as the irrefutable
+    /// pattern allowed on a destructuring assignment left-hand side.
+    /// Invalid elements are diagnosed and recovered as wildcards.
+    fn expr_to_destructure_pattern(&mut self, expr: &Expr) -> Pattern {
+        match &expr.kind {
+            ExprKind::Tuple { elements } => Pattern::Tuple {
+                elements: elements
+                    .iter()
+                    .map(|element| self.expr_to_destructure_pattern(element))
+                    .collect(),
+                span: expr.span,
+            },
+            ExprKind::Ident { name, .. } if name == "_" => Pattern::Wildcard { span: expr.span },
+            ExprKind::Ident { name, .. } => Pattern::Binding {
+                local_id: None,
+                name: name.clone(),
+                span: expr.span,
+            },
+            _ => {
+                self.error_with_hint(
+                    "invalid destructuring target".to_string(),
+                    "only names, `_`, and nested tuples can appear on the left of a \
+                     destructuring assignment"
+                        .into(),
+                    expr.span,
+                );
+                Pattern::Wildcard { span: expr.span }
+            }
         }
     }
 }

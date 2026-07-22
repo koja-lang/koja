@@ -114,6 +114,7 @@ fn collect_enum_edges(decl: &IREnumDecl) -> Vec<Edge> {
 fn inline_refs(ty: &IRType) -> Vec<IRSymbol> {
     match ty {
         IRType::Struct(symbol) | IRType::Enum(symbol) => vec![symbol.clone()],
+        IRType::Tuple(elements) => elements.iter().flat_map(inline_refs).collect(),
         IRType::Union { members, .. } => members.iter().flat_map(inline_refs).collect(),
         IRType::Binary
         | IRType::Bits

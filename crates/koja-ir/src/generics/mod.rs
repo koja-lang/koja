@@ -299,6 +299,14 @@ pub(crate) fn substitute_resolved_type(
                 ret: Box::new(substitute_resolved_type(ret, args, owner)),
             })
         }
+        ResolvedType::Anonymous(AnonymousKind::Tuple { elements }) => {
+            ResolvedType::Anonymous(AnonymousKind::Tuple {
+                elements: elements
+                    .iter()
+                    .map(|e| substitute_resolved_type(e, args, owner))
+                    .collect(),
+            })
+        }
         ResolvedType::Union(members) => ResolvedType::Union(
             members
                 .iter()

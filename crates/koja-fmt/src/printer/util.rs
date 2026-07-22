@@ -219,6 +219,10 @@ pub(super) fn type_expr_to_doc(ty: &TypeExpr) -> Doc {
                 type_expr_to_doc(return_type),
             ])
         }
+        TypeExpr::Tuple { elements, .. } => {
+            let parts: Vec<Doc> = elements.iter().map(type_expr_to_doc).collect();
+            concat(vec![text("("), intersperse(parts, text(", ")), text(")")])
+        }
         TypeExpr::Union { types, .. } => {
             let parts: Vec<Doc> = types.iter().map(type_expr_to_doc).collect();
             intersperse(parts, text(" | "))
@@ -303,6 +307,10 @@ pub(super) fn pattern_to_doc(pat: &Pattern) -> Doc {
         Pattern::List { elements, .. } => {
             let elems: Vec<Doc> = elements.iter().map(pattern_to_doc).collect();
             concat(vec![text("["), intersperse(elems, text(", ")), text("]")])
+        }
+        Pattern::Tuple { elements, .. } => {
+            let elems: Vec<Doc> = elements.iter().map(pattern_to_doc).collect();
+            concat(vec![text("("), intersperse(elems, text(", ")), text(")")])
         }
         Pattern::Binary { segments, .. } => {
             if segments.is_empty() {
@@ -779,6 +787,7 @@ pub(super) fn stmt_start_line(stmt: &Statement) -> u32 {
         Statement::Expr(expr) => expr_span(expr).start.line,
         Statement::Assignment { span, .. }
         | Statement::CompoundAssign { span, .. }
+        | Statement::Destructure { span, .. }
         | Statement::Return { span, .. }
         | Statement::Break { span, .. } => span.start.line,
     }
@@ -790,6 +799,7 @@ pub(super) fn stmt_end_line(stmt: &Statement) -> u32 {
         Statement::Expr(expr) => expr_span(expr).end.line,
         Statement::Assignment { span, .. }
         | Statement::CompoundAssign { span, .. }
+        | Statement::Destructure { span, .. }
         | Statement::Return { span, .. }
         | Statement::Break { span, .. } => span.end.line,
     }

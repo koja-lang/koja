@@ -192,9 +192,9 @@ pub(crate) fn define_function<'ctx>(
         }
         FunctionKind::CloneGlue | FunctionKind::DeepCopyGlue | FunctionKind::DropGlue => {
             if function.blocks.is_empty() {
-                // Collection / `Indirect` glue: a runtime-shaped
-                // deep-copy / element-walk synthesized from the operand
-                // type at emit time, not from an IR CFG.
+                // Collection glue uses a runtime-shaped deep-copy or
+                // element walk synthesized from the operand type at
+                // emit time, not from an IR CFG.
                 return emit::collection_glue::emit_collection_glue_body(
                     ctx,
                     function,

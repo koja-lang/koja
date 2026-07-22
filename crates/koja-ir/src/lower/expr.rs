@@ -43,6 +43,7 @@ use super::ownership::drop_discarded_temp;
 use super::package::resolved_type_to_ir_type;
 use super::process::{ReceiveLowering, lower_receive, lower_spawn};
 use super::structs::{lower_field_access, lower_struct_construction};
+use super::tuples::lower_tuple_literal;
 
 pub(super) fn lower_expr(
     expr: &Expr,
@@ -351,6 +352,7 @@ fn lower_expr_inner(
             output,
         ),
         ExprKind::String { parts, .. } => lower_string(parts, ctx, block, registry, output),
+        ExprKind::Tuple { elements } => lower_tuple_literal(elements, ctx, block, registry, output),
         ExprKind::StructConstruction { fields, .. } => {
             lower_struct_construction(fields, &expr.resolution, ctx, block, registry, output)
         }
@@ -768,7 +770,7 @@ fn lower_string_part(
     }
 }
 
-fn emit_string_const(value: String, ctx: &mut FnLowerCtx, block: IRBlockId) -> ValueId {
+pub(super) fn emit_string_const(value: String, ctx: &mut FnLowerCtx, block: IRBlockId) -> ValueId {
     let dest = ctx.fresh_value(IRType::String);
     ctx.cfg.append(
         block,

@@ -102,7 +102,7 @@ pub(super) fn emit_drop_local<'ctx>(
         // release. `elaborate` rewrites the heap-owning composites
         // into a `LocalRead` + `Call @drop_T`, so a scalar aggregate
         // is all that survives as a bare `DropLocal` here.
-        IRType::Enum(_) | IRType::Struct(_) | IRType::Union { .. } => Ok(()),
+        IRType::Enum(_) | IRType::Struct(_) | IRType::Tuple(_) | IRType::Union { .. } => Ok(()),
         _ => panic!(
             "LLVM emit: unsupported `IRInstruction::DropLocal` type {ty:?} for slot `{local}`. \
              Collections / boxes always carry glue and must be rewritten to a `Call @drop_T`",
@@ -136,7 +136,7 @@ pub(super) fn emit_drop_value<'ctx>(
         // No-glue aggregate value (every field `Copy`): nothing to
         // release. The heap-owning composites are rewritten to a
         // `Call @drop_T` by `elaborate`.
-        IRType::Enum(_) | IRType::Struct(_) | IRType::Union { .. } => Ok(()),
+        IRType::Enum(_) | IRType::Struct(_) | IRType::Tuple(_) | IRType::Union { .. } => Ok(()),
         _ => panic!(
             "LLVM emit: unsupported `IRInstruction::DropValue` type {ty:?} for value \
              `{value}`. Collections / boxes always carry glue and must be rewritten to a \

@@ -164,20 +164,20 @@ impl fmt::Display for IRBlockId {
 pub enum FunctionKind {
     /// Synthesized per-type clone glue (`<T>.$clone$`). Registered by
     /// the `elaborate` sub-pass for every heap-managed composite type
-    /// (`List` / `Map` / `Set` / heap-owning structs, enums, unions,
-    /// `Indirect` boxes). The operand type is `params[0].ty`, and the
+    /// (`List` / `Map` / `Set` / heap-owning structs, enums, tuples,
+    /// and unions). The operand type is `params[0].ty`, and the
     /// return type matches it. Lowering's composite `IRInstruction::Clone`
     /// is rewritten into a `call` to this glue, so backends only ever
     /// see leaf `Clone`s inline and a uniform `call` for composites.
     ///
     /// Its body is born one of two ways:
-    /// - **Aggregates** (`Struct` / `Enum` / `Union`): `elaborate::synth`
+    /// - **Aggregates** (`Struct` / `Enum` / `Tuple` / `Union`): `elaborate::synth`
     ///   builds a full CFG (project each field / payload, acquire it,
     ///   rebuild). `blocks` is non-empty and the LLVM backend walks it
     ///   like a [`Self::Regular`] body.
-    /// - **Collections / `Indirect`**: a runtime-shaped deep-copy the
-    ///   LLVM backend synthesizes from the operand type at emit time,
-    ///   so `blocks` lowers empty like [`Self::Intrinsic`].
+    /// - **Collections**: a runtime-shaped deep-copy the LLVM backend
+    ///   synthesizes from the operand type at emit time, so `blocks`
+    ///   lowers empty like [`Self::Intrinsic`].
     ///
     /// Eval reclaims via its host GC and never invokes the glue.
     CloneGlue,
@@ -407,6 +407,22 @@ impl BranchTarget {
     pub fn with_args(block: IRBlockId, args: Vec<ValueId>) -> Self {
         Self { args, block }
     }
+}
+
+/// Declaration slot that owns a cycle-breaking `Indirect` box.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum IRIndirectSlot {
+    /// A payload slot in one enum variant.
+    EnumPayload {
+        payload_index: u32,
+        tag: IRVariantTag,
+        ty: IRSymbol,
+    },
+    /// A field slot in a struct.
+    StructField {
+        field_index: u32,
+        struct_symbol: IRSymbol,
+    },
 }
 
 /// A single SSA-style instruction. Most variants define a fresh
@@ -646,6 +662,19 @@ pub enum IRInstruction {
         struct_symbol: IRSymbol,
         value: ValueId,
     },
+    /// Free the raw allocation owned by an `Indirect` declaration
+    /// slot after its unboxed inner value has been released. The base
+    /// aggregate remains the operand because `Indirect` pointers are
+    /// never exposed as value-level IR.
+    FreeIndirect { base: ValueId, slot: IRIndirectSlot },
+    /// `dest = base.<indirect_slot> != null`. Synthesized drop glue
+    /// uses this guard because a declared but never-written local
+    /// carries an all-zero aggregate value.
+    IndirectPresent {
+        base: ValueId,
+        dest: ValueId,
+        slot: IRIndirectSlot,
+    },
     /// Free the heap storage currently held by `local`'s slot. Emitted
     /// by the lowering layer at function exits (return, fall-through)
     /// for slots whose [`IRType`] is heap-allocated. Reads the slot's
@@ -721,6 +750,26 @@ pub enum IRInstruction {
         dest: ValueId,
         fields: Vec<StructFieldInit>,
         ty: IRSymbol,
+    },
+    /// `dest = base.<index>`. Tuple analog of [`Self::FieldGet`],
+    /// index-addressed because tuples are structural and have no
+    /// decl to name fields against. `element_type` is the projected
+    /// element's [`IRType`] (cached from the tuple shape at lower
+    /// time).
+    TupleGet {
+        base: ValueId,
+        dest: ValueId,
+        element_type: IRType,
+        index: u32,
+    },
+    /// `dest = (e0, e1, ...)`. Tuple analog of [`Self::StructInit`]:
+    /// `elements` are in positional order and `ty` is the tuple's
+    /// element type vector. Backends materialize as alloca +
+    /// per-element store + load.
+    TupleInit {
+        dest: ValueId,
+        elements: Vec<ValueId>,
+        ty: Vec<IRType>,
     },
     /// `dest = <op> operand`. `operand_ty` mirrors
     /// [`IRInstruction::BinaryOp`]'s field. Backends key negation
@@ -877,9 +926,8 @@ pub struct ReceiveAfter {
 
 impl IRInstruction {
     /// The `ValueId` this instruction defines, if any. Storage-slot
-    /// side-effect variants ([`IRInstruction::DropLocal`] /
-    /// [`IRInstruction::LocalDecl`] / [`IRInstruction::LocalWrite`])
-    /// return `None`, and everything else defines a destination.
+    /// and ownership side-effect variants return `None`, and
+    /// everything else defines a destination.
     pub fn dest(&self) -> Option<ValueId> {
         match self {
             IRInstruction::BinaryConstruct { dest, .. }
@@ -896,6 +944,7 @@ impl IRInstruction {
             | IRInstruction::EnumTagGet { dest, .. }
             | IRInstruction::FieldGet { dest, .. }
             | IRInstruction::FieldSet { dest, .. }
+            | IRInstruction::IndirectPresent { dest, .. }
             | IRInstruction::LoadCapture { dest, .. }
             | IRInstruction::LoadConst { dest, .. }
             | IRInstruction::LocalRead { dest, .. }
@@ -904,12 +953,15 @@ impl IRInstruction {
             | IRInstruction::Receive { dest, .. }
             | IRInstruction::Spawn { dest, .. }
             | IRInstruction::StructInit { dest, .. }
+            | IRInstruction::TupleGet { dest, .. }
+            | IRInstruction::TupleInit { dest, .. }
             | IRInstruction::UnaryOp { dest, .. }
             | IRInstruction::UnionPayloadGet { dest, .. }
             | IRInstruction::UnionTagGet { dest, .. }
             | IRInstruction::UnionWrap { dest, .. } => Some(*dest),
             IRInstruction::DropLocal { .. }
             | IRInstruction::DropValue { .. }
+            | IRInstruction::FreeIndirect { .. }
             | IRInstruction::LocalDecl { .. }
             | IRInstruction::LocalWrite { .. }
             | IRInstruction::ProcessExit { .. }

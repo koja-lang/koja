@@ -1,9 +1,10 @@
-//! Type-expression parser. Handles the eight surface shapes:
+//! Type-expression parser. It handles the following surface shapes:
 //!
 //! - `Int`, `String` (`Named` with a single segment)
 //! - `Pkg.Type` (`Named` with a dotted path, packages are PascalCase)
 //! - `List<Int>`, `Pkg.Container<T>` (`Generic`)
 //! - `()` (`Unit`)
+//! - `(A, B)` (`Tuple`, always arity 2+, `(A)` is grouping)
 //! - `fn (A, B) -> C` (`Function`)
 //! - `Self` (`Self_`)
 //! - `A | B | C` (`Union`)
@@ -14,6 +15,7 @@
 //! stdlib and project sources alike.
 
 use koja_ast::ast::TypeExpr;
+use koja_ast::labels::type_expr_span;
 use koja_ast::span::Span;
 use koja_ast::token::TokenKind;
 
@@ -91,6 +93,28 @@ impl Parser {
         }
 
         let first = self.parse_type_expr();
+        if self.eat(&TokenKind::Comma).is_some() {
+            self.skip_newlines();
+            let mut elements = vec![first];
+            loop {
+                if self.at(&TokenKind::RParen) || self.at_eof() {
+                    let span = self.current_span();
+                    self.error("tuple types do not allow trailing commas".to_string(), span);
+                    break;
+                }
+                elements.push(self.parse_type_expr());
+                if self.eat(&TokenKind::Comma).is_none() {
+                    break;
+                }
+                self.skip_newlines();
+            }
+            self.skip_newlines();
+            self.expect(&TokenKind::RParen);
+            return TypeExpr::Tuple {
+                elements,
+                span: self.span_from(start),
+            };
+        }
         self.skip_newlines();
         self.expect(&TokenKind::RParen);
         first
@@ -153,16 +177,5 @@ impl Parser {
             args,
             span: self.span_from(start),
         }
-    }
-}
-
-fn type_expr_span(t: &TypeExpr) -> Span {
-    match t {
-        TypeExpr::Named { span, .. }
-        | TypeExpr::Generic { span, .. }
-        | TypeExpr::Unit { span, .. }
-        | TypeExpr::Function { span, .. }
-        | TypeExpr::Self_ { span, .. }
-        | TypeExpr::Union { span, .. } => *span,
     }
 }

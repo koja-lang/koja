@@ -323,6 +323,10 @@ impl CaptureWalker {
             }
             Statement::Break { .. } => {}
             Statement::CompoundAssign { value, .. } => self.visit_expr(value),
+            Statement::Destructure { pattern, value, .. } => {
+                self.visit_expr(value);
+                self.note_pattern_locals(pattern);
+            }
             Statement::Expr(expr) => self.visit_expr(expr),
             Statement::Return { value, .. } => {
                 if let Some(expr) = value {
@@ -346,6 +350,14 @@ impl CaptureWalker {
             let frame = self.scopes.last_mut().expect("walker always has a frame");
             frame.insert(id);
         }
+    }
+
+    /// A destructure's pattern bindings belong to the current frame,
+    /// like [`Self::note_assignment_local`] but for every binding the
+    /// tuple pattern introduces.
+    fn note_pattern_locals(&mut self, pattern: &Pattern) {
+        let frame = self.scopes.last_mut().expect("walker always has a frame");
+        frame.extend(pattern_binding_ids(pattern));
     }
 
     fn visit_expr(&mut self, expr: &Expr) {
@@ -490,6 +502,11 @@ impl CaptureWalker {
                 self.visit_expr(then_expr);
                 self.visit_expr(else_expr);
             }
+            ExprKind::Tuple { elements } => {
+                for element in elements {
+                    self.visit_expr(element);
+                }
+            }
             ExprKind::Unary { operand, .. } => self.visit_expr(operand),
             ExprKind::Unless { condition, body } => {
                 self.visit_expr(condition);
@@ -563,7 +580,8 @@ fn collect_pattern_binding_ids(pattern: &Pattern, ids: &mut HashSet<LocalId>) {
         }
         Pattern::Constructor { elements, .. }
         | Pattern::EnumTuple { elements, .. }
-        | Pattern::List { elements, .. } => {
+        | Pattern::List { elements, .. }
+        | Pattern::Tuple { elements, .. } => {
             for element in elements {
                 collect_pattern_binding_ids(element, ids);
             }

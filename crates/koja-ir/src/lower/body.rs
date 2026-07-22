@@ -31,6 +31,7 @@ use super::ops::bin_op_result_type;
 use super::ownership::{drop_discarded_temp, materialize_owned};
 use super::package::resolved_type_to_ir_type;
 use super::structs::resolved_struct_symbol;
+use super::tuples::lower_destructure;
 
 /// Lower a sequence of statements into a CFG fragment, starting in a
 /// fresh `entry` block. Used by [`crate::lower_script`] to lower a
@@ -171,6 +172,9 @@ fn lower_statement(
         Statement::CompoundAssign {
             target, op, value, ..
         } => lower_compound_assignment(target, *op, value, ctx, block, registry, output),
+        Statement::Destructure { pattern, value, .. } => {
+            lower_destructure(pattern, value, ctx, block, registry, output)
+        }
         Statement::Break { span } => lower_break_statement(*span, ctx, block),
     }
 }
@@ -251,7 +255,26 @@ fn lower_assignment(
     // taken before the overwrite-drop, so a self-assign (`x = x`)
     // copies the old payload before freeing it.
     let owned_value = materialize_owned(ctx, current, value_id, &value_ty);
+    store_owned_into_local(ctx, current, ir_local, owned_value, &value_ty);
+    Ok(FlowResult::Open {
+        value: None,
+        block: current,
+    })
+}
 
+/// Write an already-owned value into a local slot, handling the
+/// slot's lifecycle: first write declares it in entry, a
+/// loop/branch-revived slot re-marks live, and reassignment of a
+/// live heap-managed slot drops the stale value before the
+/// overwrite. Shared by plain assignment and destructure element
+/// stores.
+pub(super) fn store_owned_into_local(
+    ctx: &mut FnLowerCtx,
+    current: IRBlockId,
+    ir_local: IRLocalId,
+    owned_value: ValueId,
+    value_ty: &IRType,
+) {
     if !ctx.local_is_declared(ir_local) {
         let entry = ctx.entry_block();
         ctx.cfg.append(
@@ -298,10 +321,6 @@ fn lower_assignment(
             value: owned_value,
         },
     );
-    Ok(FlowResult::Open {
-        value: None,
-        block: current,
-    })
 }
 
 /// Lower `head.f1.f2 = value` (any depth `>= 2`) into the SSA-pure

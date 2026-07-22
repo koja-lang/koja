@@ -7,7 +7,9 @@
 //! [`method_lookup_message`], [`dispatch_mismatch_message`]).
 
 use koja_ast::ast::{Arg, Diagnostic, EnumConstructionData, Expr, ExprKind};
-use koja_ast::identifier::{GlobalRegistryId, Resolution, ResolvedType, TypeParamIndex};
+use koja_ast::identifier::{
+    AnonymousKind, GlobalRegistryId, Resolution, ResolvedType, TypeParamIndex,
+};
 use koja_ast::span::Span;
 
 use super::super::ctx::{Callee, Resolver};
@@ -50,7 +52,10 @@ pub(super) struct MethodInferenceTarget<'a> {
 /// Receiver classification for method-call dispatch. `Static` and
 /// `Instance` capture the receiver's struct id. `Bounded` captures
 /// the type-param's `(owner, index)` for bounded dispatch, since the
-/// concrete struct id only emerges post-monomorphization.
+/// concrete struct id only emerges post-monomorphization. `Tuple`
+/// has no registry id at all: anonymous tuples are structural and
+/// admit only the universal-protocol functions, resolved by
+/// [`super::tuples::resolve_tuple_method_call`].
 #[derive(Clone, Copy)]
 pub(super) enum MethodReceiver {
     Static {
@@ -63,13 +68,14 @@ pub(super) enum MethodReceiver {
         owner: GlobalRegistryId,
         index: TypeParamIndex,
     },
+    Tuple,
 }
 
 impl MethodReceiver {
     pub(super) fn expected_dispatch(self) -> Dispatch {
         match self {
             Self::Static { .. } => Dispatch::Static,
-            Self::Instance { .. } | Self::Bounded { .. } => Dispatch::Instance,
+            Self::Instance { .. } | Self::Bounded { .. } | Self::Tuple => Dispatch::Instance,
         }
     }
 
@@ -78,7 +84,9 @@ impl MethodReceiver {
     pub(super) fn explicit_params(self, params: &[ResolvedParam]) -> &[ResolvedParam] {
         match self {
             Self::Static { .. } => params,
-            Self::Instance { .. } | Self::Bounded { .. } => params.get(1..).unwrap_or(&[]),
+            Self::Instance { .. } | Self::Bounded { .. } | Self::Tuple => {
+                params.get(1..).unwrap_or(&[])
+            }
         }
     }
 }
@@ -134,23 +142,23 @@ pub(super) fn classify_receiver(
         // Receiver already triggered its own diagnostic.
         return None;
     }
-    if let ResolvedType::Union(_) = peel_alias(&receiver.resolution, resolver.registry) {
+    let structural_receiver = peel_alias(&receiver.resolution, resolver.registry);
+    if matches!(&structural_receiver, ResolvedType::Union(_)) {
         diagnostics.push(Diagnostic::error(
             format!(
-                "cannot call method on union type `{}`; \
-                 match the union first to bind a specific variant",
+                "cannot call method on union type `{}`. \
+                 Match the union first to bind a specific variant",
                 display_resolution(&receiver.resolution, resolver.registry),
             ),
             receiver.span,
         ));
         return None;
     }
-    match &receiver.resolution {
+    match structural_receiver {
         ResolvedType::Named {
             resolution: Resolution::Global(struct_id),
             ..
         } => {
-            let struct_id = *struct_id;
             let entry = resolver.registry.get(struct_id)?;
             if !matches!(entry.kind, GlobalKind::Enum(_) | GlobalKind::Struct(_)) {
                 diagnostics.push(Diagnostic::error(
@@ -165,13 +173,11 @@ pub(super) fn classify_receiver(
             }
             Some(MethodReceiver::Instance { struct_id })
         }
+        ResolvedType::Anonymous(AnonymousKind::Tuple { .. }) => Some(MethodReceiver::Tuple),
         ResolvedType::Named {
             resolution: Resolution::TypeParam { owner, index },
             ..
-        } => Some(MethodReceiver::Bounded {
-            owner: *owner,
-            index: *index,
-        }),
+        } => Some(MethodReceiver::Bounded { owner, index }),
         _ => {
             diagnostics.push(Diagnostic::error(
                 "instance method receiver must have a struct or enum type".to_string(),
@@ -449,7 +455,9 @@ pub(super) fn method_lookup_message(
         MethodReceiver::Instance { .. } => {
             format!("`{}` has no method `{method}`", struct_entry.identifier,)
         }
-        MethodReceiver::Bounded { .. } => unreachable!("bounded receivers don't reach this path"),
+        MethodReceiver::Bounded { .. } | MethodReceiver::Tuple => {
+            unreachable!("bounded / tuple receivers don't reach this path")
+        }
     }
 }
 
@@ -470,6 +478,8 @@ pub(super) fn dispatch_mismatch_message(
              instead",
             method_entry.identifier, struct_entry.identifier,
         ),
-        MethodReceiver::Bounded { .. } => unreachable!("bounded receivers don't reach this path"),
+        MethodReceiver::Bounded { .. } | MethodReceiver::Tuple => {
+            unreachable!("bounded / tuple receivers don't reach this path")
+        }
     }
 }

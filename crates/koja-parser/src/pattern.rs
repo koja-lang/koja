@@ -33,8 +33,14 @@ impl Parser {
                     let variant = type_path.pop().unwrap();
                     return self.finish_enum_pattern(type_path, variant, start);
                 }
-                // Typed binding: `name: Type` -- matches a union member by type
-                if self.at(&TokenKind::Colon) && matches!(self.peek_nth(1), TokenKind::TypeIdent(_))
+                // A typed binding such as `name: Type` matches a union
+                // member by type. A `(` after the colon starts a tuple
+                // type such as `t: (Int, String)`.
+                if self.at(&TokenKind::Colon)
+                    && matches!(
+                        self.peek_nth(1),
+                        TokenKind::TypeIdent(_) | TokenKind::LParen
+                    )
                 {
                     self.advance(); // :
                     let type_expr = self.parse_type_expr();
@@ -263,8 +269,14 @@ impl Parser {
         let first = self.parse_pattern();
         if self.eat(&TokenKind::Comma).is_some() {
             self.skip_newlines();
-            while !self.at(&TokenKind::RParen) && !self.at_eof() {
-                self.parse_pattern();
+            let mut elements = vec![first];
+            loop {
+                if self.at(&TokenKind::RParen) || self.at_eof() {
+                    let span = self.current_span();
+                    self.error("tuples do not allow trailing commas".to_string(), span);
+                    break;
+                }
+                elements.push(self.parse_pattern());
                 if self.eat(&TokenKind::Comma).is_none() {
                     break;
                 }
@@ -272,12 +284,10 @@ impl Parser {
             }
             self.skip_newlines();
             self.expect(&TokenKind::RParen);
-            let span = self.span_from(start);
-            self.error(
-                "tuples are not supported, use a struct instead".to_string(),
-                span,
-            );
-            Pattern::Wildcard { span }
+            Pattern::Tuple {
+                elements,
+                span: self.span_from(start),
+            }
         } else {
             self.skip_newlines();
             self.expect(&TokenKind::RParen);

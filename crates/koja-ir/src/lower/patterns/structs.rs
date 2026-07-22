@@ -193,6 +193,7 @@ fn is_static_catch_all(pattern: &Pattern) -> bool {
     match pattern {
         Pattern::Wildcard { .. } | Pattern::Binding { .. } => true,
         Pattern::Struct { fields, .. } => fields.iter().all(|f| is_static_catch_all(&f.pattern)),
+        Pattern::Tuple { elements, .. } => elements.iter().all(is_static_catch_all),
         _ => false,
     }
 }
@@ -282,6 +283,39 @@ fn collect_catch_all_binds(
                 chain.pop();
             }
         }
+        Pattern::Tuple { elements, .. } => {
+            let element_types = super::tuples::tuple_element_types(
+                sub_resolved_ty,
+                elements.len(),
+                inputs.registry,
+            );
+            for (index, (element, element_resolved)) in
+                elements.iter().zip(&element_types).enumerate()
+            {
+                let element_ir = super::super::package::resolved_type_to_ir_type(
+                    element_resolved,
+                    inputs.registry,
+                    &mut output.instantiations,
+                );
+                chain.push(BindStep {
+                    op: BindOp::TupleElement {
+                        index: index as u32,
+                    },
+                    output_type: element_ir.clone(),
+                });
+                collect_catch_all_binds(
+                    element,
+                    element_resolved,
+                    &element_ir,
+                    chain,
+                    inputs,
+                    ctx,
+                    binds,
+                    output,
+                );
+                chain.pop();
+            }
+        }
         _ => panic!(
             "IR lower: collect_catch_all_binds reached a non-catch-all pattern, \
              caller must gate via is_static_catch_all",
@@ -332,6 +366,17 @@ fn emit_subpattern_projection(
                     tag: *tag,
                     ty: enum_symbol.clone(),
                     value: source,
+                },
+            );
+        }
+        BindOp::TupleElement { index } => {
+            ctx.cfg.append(
+                block,
+                IRInstruction::TupleGet {
+                    base: source,
+                    dest,
+                    element_type: sub_ir_type.clone(),
+                    index: *index,
                 },
             );
         }
@@ -426,6 +471,7 @@ fn clone_bind_op(op: &BindOp) -> BindOp {
             field_index: *field_index,
             struct_symbol: struct_symbol.clone(),
         },
+        BindOp::TupleElement { index } => BindOp::TupleElement { index: *index },
         BindOp::UnionPayload {
             member_index,
             member_type,

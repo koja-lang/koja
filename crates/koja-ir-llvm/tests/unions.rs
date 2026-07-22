@@ -71,6 +71,35 @@ fn union_outer_struct_emits_with_payload_buffer() {
 }
 
 #[test]
+fn unit_tuple_union_payload_matches_llvm_tuple_size() {
+    let source = "
+        fn take(value: ((), Int) | Bool) -> Int
+          match value
+            pair: ((), Int) ->
+              (_, number) = pair
+              number
+            flag: Bool ->
+              if flag
+                1
+              else
+                0
+              end
+          end
+        end
+
+        take(((), 7))
+        ";
+    let script = lower_script(&dedent(source));
+    let ir_text =
+        emit_script_llvm_ir(&script, APP_NAME).expect("emit_script_llvm_ir should succeed");
+    #[cfg(target_pointer_width = "64")]
+    assert_contains(
+        &ir_text,
+        "%\"Union_Tuple_$Unit,Int64$_or_Bool\" = type { i8, [16 x i8] }",
+    );
+}
+
+#[test]
 fn union_wrap_emits_tag_store_then_payload_store() {
     // Member-typed arg flowing into a union slot stamps a
     // `Coercion::UnionWiden` at typecheck and lowers to a

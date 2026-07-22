@@ -137,7 +137,7 @@ pub(crate) fn canonical_union(
 /// types pass through unchanged. Cycles are bounded by a small
 /// recursion cap. `lift_type_aliases` rejects cycles up front, so
 /// hitting the cap here is a registry invariant violation.
-pub(crate) fn peel_alias(ty: &ResolvedType, registry: &GlobalRegistry) -> ResolvedType {
+pub fn peel_alias(ty: &ResolvedType, registry: &GlobalRegistry) -> ResolvedType {
     peel_alias_capped(ty, registry, 32)
 }
 
@@ -235,6 +235,20 @@ pub(crate) fn types_equivalent(
                     .all(|(x, y)| types_equivalent(x, y, registry))
                 && types_equivalent(a_ret, b_ret, registry)
         }
+        (
+            ResolvedType::Anonymous(AnonymousKind::Tuple {
+                elements: a_elements,
+            }),
+            ResolvedType::Anonymous(AnonymousKind::Tuple {
+                elements: b_elements,
+            }),
+        ) => {
+            a_elements.len() == b_elements.len()
+                && a_elements
+                    .iter()
+                    .zip(b_elements)
+                    .all(|(x, y)| types_equivalent(x, y, registry))
+        }
         (ResolvedType::Union(a_members), ResolvedType::Union(b_members)) => {
             a_members.len() == b_members.len()
                 && a_members
@@ -281,6 +295,14 @@ pub(super) fn display_resolution(ty: &ResolvedType, registry: &GlobalRegistry) -
                 "fn ({rendered_params}) -> {}",
                 display_resolution(ret, registry),
             )
+        }
+        ResolvedType::Anonymous(AnonymousKind::Tuple { elements }) => {
+            let rendered = elements
+                .iter()
+                .map(|e| display_resolution(e, registry))
+                .collect::<Vec<_>>()
+                .join(", ");
+            format!("({rendered})")
         }
         ResolvedType::Named {
             resolution: Resolution::Global(id),
@@ -347,19 +369,11 @@ pub(super) fn verify_bounds(
         if param_bounds.is_empty() {
             continue;
         }
-        let ResolvedType::Named {
-            resolution: Resolution::Global(target_id),
-            ..
-        } = inferred
-        else {
-            continue;
-        };
-        let target_id = *target_id;
         for &protocol_id in param_bounds {
-            if registry
-                .lookup_conformance(target_id, protocol_id)
-                .is_some()
-            {
+            let Some(satisfied) = protocol_bound_satisfied(inferred, protocol_id, registry) else {
+                continue;
+            };
+            if satisfied {
                 continue;
             }
             let bound_label = registry
@@ -382,4 +396,35 @@ pub(super) fn verify_bounds(
             ));
         }
     }
+}
+
+/// Return a concrete bound decision for supported type heads. Tuples have
+/// structural `Debug` and `Equality`. Other anonymous shapes remain deferred.
+fn protocol_bound_satisfied(
+    inferred: &ResolvedType,
+    protocol_id: GlobalRegistryId,
+    registry: &GlobalRegistry,
+) -> Option<bool> {
+    match peel_alias(inferred, registry) {
+        ResolvedType::Named {
+            resolution: Resolution::Global(target_id),
+            ..
+        } => Some(
+            registry
+                .lookup_conformance(target_id, protocol_id)
+                .is_some(),
+        ),
+        ResolvedType::Anonymous(AnonymousKind::Tuple { .. }) => {
+            Some(tuple_implements_protocol(protocol_id, registry))
+        }
+        _ => None,
+    }
+}
+
+fn tuple_implements_protocol(protocol_id: GlobalRegistryId, registry: &GlobalRegistry) -> bool {
+    registry.get(protocol_id).is_some_and(|entry| {
+        entry.identifier.package() == "Global"
+            && entry.identifier.path().len() == 1
+            && matches!(entry.identifier.last(), "Debug" | "Equality")
+    })
 }

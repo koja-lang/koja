@@ -1,12 +1,12 @@
 //! Coverage for bracket and paren grouping expressions: list and
-//! map literals, paren expressions, the unit literal `()`, and the
-//! "tuples are not supported" rejection path.
+//! map literals, paren expressions, and the unit literal `()`.
+//! Tuple literals live in `construct_tuple.rs`.
 
 use koja_ast::ast::{ExprKind, Literal};
 
 mod common;
 
-use common::{first_function_expr, parse_failing_with};
+use common::first_function_expr;
 
 #[test]
 fn empty_list_literal() {
@@ -130,16 +130,4 @@ fn unit_literal_from_empty_parens() {
             value: Literal::Unit
         }
     ));
-}
-
-#[test]
-fn tuple_syntax_is_rejected() {
-    parse_failing_with(
-        "
-        fn run
-          (1, 2)
-        end
-        ",
-        &["tuples are not supported"],
-    );
 }

@@ -31,7 +31,7 @@
 
 use koja_ast::ast::{Diagnostic, Expr, ExprKind, Literal, UnaryOp};
 use koja_ast::coercion::{Coercion, LiteralCoercion, NumericLiteralWidth};
-use koja_ast::identifier::ResolvedType;
+use koja_ast::identifier::{AnonymousKind, ResolvedType};
 use koja_ast::span::Span;
 
 use super::types::{is_primitive, peel_alias, types_equivalent};
@@ -116,6 +116,12 @@ pub(crate) enum Mismatch {
     Incompatible,
 }
 
+enum TupleCompatibility {
+    Compatible,
+    Mismatch(Mismatch),
+    NotTupleLiteral,
+}
+
 /// Run [`check_compatible`] for `expr` (whose resolved type is
 /// `actual_ty`) flowing into `expected_ty`, stamping the matching
 /// coercion slot on the expression for every accepting arm.
@@ -148,7 +154,55 @@ pub(crate) fn check_compatible_stamping(
             rendered_value,
             width,
         }),
-        Compatible::Incompatible => Some(Mismatch::Incompatible),
+        Compatible::Incompatible => {
+            match check_tuple_literal_compatible(expr, actual_ty, expected_ty, registry) {
+                TupleCompatibility::Compatible => None,
+                TupleCompatibility::Mismatch(mismatch) => Some(mismatch),
+                TupleCompatibility::NotTupleLiteral => Some(Mismatch::Incompatible),
+            }
+        }
+    }
+}
+
+fn check_tuple_literal_compatible(
+    expr: &mut Expr,
+    actual_ty: &ResolvedType,
+    expected_ty: &ResolvedType,
+    registry: &GlobalRegistry,
+) -> TupleCompatibility {
+    let actual = peel_alias(actual_ty, registry);
+    let expected = peel_alias(expected_ty, registry);
+    let (
+        ResolvedType::Anonymous(AnonymousKind::Tuple {
+            elements: actual_types,
+        }),
+        ResolvedType::Anonymous(AnonymousKind::Tuple {
+            elements: expected_types,
+        }),
+    ) = (actual, expected)
+    else {
+        return TupleCompatibility::NotTupleLiteral;
+    };
+    let Some(elements) = tuple_literal_elements_mut(expr) else {
+        return TupleCompatibility::NotTupleLiteral;
+    };
+    if elements.len() != actual_types.len() || elements.len() != expected_types.len() {
+        return TupleCompatibility::Mismatch(Mismatch::Incompatible);
+    }
+    for ((element, actual), expected) in elements.iter_mut().zip(&actual_types).zip(&expected_types)
+    {
+        if let Some(mismatch) = check_compatible_stamping(element, actual, expected, registry) {
+            return TupleCompatibility::Mismatch(mismatch);
+        }
+    }
+    TupleCompatibility::Compatible
+}
+
+fn tuple_literal_elements_mut(expr: &mut Expr) -> Option<&mut [Expr]> {
+    match &mut expr.kind {
+        ExprKind::Group { expr: inner } => tuple_literal_elements_mut(inner),
+        ExprKind::Tuple { elements } => Some(elements),
+        _ => None,
     }
 }
 

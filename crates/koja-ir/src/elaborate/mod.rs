@@ -19,8 +19,8 @@
 //!   per-capture teardown hides behind its header's `drop_fn`). No
 //!   glue function, these are handled directly at the instruction.
 //! - **Composites** (`List` / `Map` / `Set`, heap-owning structs /
-//!   enums / unions): a `call` to the synthesized `<T>.$clone$` /
-//!   `<T>.$drop$`. This pass registers those functions.
+//!   enums / tuples / unions): a `call` to the synthesized
+//!   `<T>.$clone$` / `<T>.$drop$`. This pass registers those functions.
 //!
 //! The deep-copy family ([`IRInstruction::DeepCopy`] /
 //! `<T>.$deep_copy$`, emitted at process-boundary sends) mirrors the
@@ -29,12 +29,10 @@
 //! backend-synthesized body calls `deep_copy_T` per composite
 //! capture.
 //!
-//! The boxed-recursive [`IRType::Indirect`] is *transparent*: purely
-//! the storage shape the cycle pass stamps on a recursive field, never
-//! a value in its own right (projection unboxes, construction
-//! re-boxes). It carries no glue, since the enclosing aggregate's glue
-//! clones / drops the unboxed inner value (recursing into the inner
-//! type's glue), and the rebuild re-boxes.
+//! The boxed-recursive [`IRType::Indirect`] remains value-transparent.
+//! The enclosing aggregate's glue acquires or releases the unboxed
+//! inner value, while construction allocates the box and aggregate
+//! drop or field overwrite explicitly frees it.
 //!
 //! A composite that turns out to own no heap (e.g. `struct Point { x:
 //! Int, y: Int }`) has [`needs_drop`] `== false`, so no glue is
@@ -43,11 +41,12 @@
 //!
 //! ## Two ways a glue body is born
 //!
-//! - **Aggregates** (`Struct` / `Enum` / `Union`): [`synthesis`] builds a
-//!   full IR body: field / payload projection, per-constituent
-//!   acquire / release (recursing into constituent glue via `Call`),
-//!   and an aggregate rebuild for clone. These carry a non-empty CFG
-//!   the backend walks like a [`FunctionKind::Regular`] body.
+//! - **Aggregates** (`Struct` / `Enum` / `Tuple` / `Union`):
+//!   [`synthesis`] builds a full IR body: field / payload projection,
+//!   per-constituent acquire / release (recursing into constituent
+//!   glue via `Call`), and an aggregate rebuild for clone. These carry
+//!   a non-empty CFG the backend walks like a
+//!   [`FunctionKind::Regular`] body.
 //! - **Collections** (`List` / `Map` / `Set`): the body is a
 //!   runtime-shaped deep-copy / element-walk the LLVM backend
 //!   synthesizes from the operand type at emit time, so the shell
@@ -60,10 +59,10 @@
 //! `DropLocal` / `DropValue` across every function body (and, for
 //! scripts, the inline script body). The worklist then transitively
 //! pulls in each composite's heap-managed constituents (struct
-//! fields, enum payloads, collection elements, union members, and the
-//! inner type behind a transparent `Indirect` box), because a
-//! composite's glue body recurses into its constituents' glue. Leaves
-//! and `Indirect` boxes themselves are skipped, as they carry no glue.
+//! fields, enum payloads, tuple elements, collection elements, union
+//! members, and the inner type behind a transparent `Indirect` box),
+//! because a composite's glue body recurses into its constituents'
+//! glue. Leaves and `Indirect` boxes themselves carry no glue family.
 
 mod delivery;
 mod exit_signal;
@@ -75,7 +74,8 @@ use std::collections::BTreeSet;
 
 use crate::enum_decl::{IREnumDecl, IREnumVariant, IRVariantPayload};
 use crate::function::{
-    FunctionKind, IRBasicBlock, IRFunction, IRFunctionParam, IRInstruction, IRSymbol,
+    FunctionKind, IRBasicBlock, IRFunction, IRFunctionParam, IRIndirectSlot, IRInstruction,
+    IRSymbol,
 };
 use crate::intrinsic_id::{IRIntrinsicId, RefMethod, ReplyToMethod};
 use crate::local::IRLocalId;
@@ -89,6 +89,7 @@ use crate::types::IRType;
 /// it, then rewrite every composite acquisition / release into a glue
 /// `Call`.
 pub(crate) fn elaborate(packages: &mut [IRPackage]) {
+    insert_indirect_overwrite_frees(packages, &mut []);
     let needed = discover_glue_types(packages, &[]);
     let deep_needed = discover_deep_copy_types(packages, &[]);
     register_all(packages, &needed, &deep_needed);
@@ -102,6 +103,7 @@ pub(crate) fn elaborate(packages: &mut [IRPackage]) {
 /// (which carries its own `Clone` / `Drop` sites outside any package
 /// function) and the rewrite covers it too.
 pub(crate) fn elaborate_script(packages: &mut [IRPackage], body: &mut [IRBasicBlock]) {
+    insert_indirect_overwrite_frees(packages, body);
     let needed = discover_glue_types(packages, body);
     let deep_needed = discover_deep_copy_types(packages, body);
     register_all(packages, &needed, &deep_needed);
@@ -109,6 +111,60 @@ pub(crate) fn elaborate_script(packages: &mut [IRPackage], body: &mut [IRBasicBl
     rewrite::rewrite_blocks_standalone(body, &needed, &deep_needed);
     io_ready::deliver_io_ready(packages);
     exit_signal::deliver_exit_signal(packages);
+}
+
+fn insert_indirect_overwrite_frees(packages: &mut [IRPackage], body: &mut [IRBasicBlock]) {
+    let indirect_fields: BTreeSet<(IRSymbol, u32)> = packages
+        .iter()
+        .flat_map(|package| package.structs.values())
+        .flat_map(|decl| {
+            decl.fields
+                .iter()
+                .filter(|field| matches!(&field.ir_type, IRType::Indirect(_)))
+                .map(|field| (decl.symbol.clone(), field.index))
+        })
+        .collect();
+    if indirect_fields.is_empty() {
+        return;
+    }
+
+    for blocks in packages
+        .iter_mut()
+        .flat_map(|package| package.functions.values_mut())
+        .map(|function| function.blocks.as_mut_slice())
+        .chain(std::iter::once(body))
+    {
+        insert_block_indirect_overwrite_frees(blocks, &indirect_fields);
+    }
+}
+
+fn insert_block_indirect_overwrite_frees(
+    blocks: &mut [IRBasicBlock],
+    indirect_fields: &BTreeSet<(IRSymbol, u32)>,
+) {
+    for block in blocks {
+        let mut rewritten = Vec::with_capacity(block.instructions.len());
+        for instruction in block.instructions.drain(..) {
+            if let IRInstruction::FieldSet {
+                base,
+                field_index,
+                struct_symbol,
+                ..
+            } = &instruction
+                && indirect_fields.contains(&(struct_symbol.clone(), *field_index))
+            {
+                rewritten.push(IRInstruction::FreeIndirect {
+                    base: *base,
+                    slot: IRIndirectSlot::StructField {
+                        field_index: *field_index,
+                        struct_symbol: struct_symbol.clone(),
+                    },
+                });
+            }
+            rewritten.push(instruction);
+        }
+        block.instructions = rewritten;
+    }
 }
 
 fn register_all(
@@ -157,11 +213,9 @@ fn needs_drop_seen(ty: &IRType, packages: &[IRPackage], visited: &mut BTreeSet<I
     match ty {
         IRType::Binary | IRType::Bits | IRType::String => true,
         IRType::List(_) | IRType::Map { .. } | IRType::Set(_) => true,
-        // `Indirect` is transparent: it is purely the storage shape the
-        // cycle pass stamps on a recursive field, never a value in its
-        // own right (field access unboxes to `inner`, construction
-        // re-boxes). Its drop-ness is the inner type's.
-        IRType::Indirect(inner) => needs_drop_seen(inner, packages, visited),
+        // The wrapper is value-transparent, but its declaration slot
+        // owns a raw box allocation independently of the inner value.
+        IRType::Indirect(_) => true,
         IRType::Struct(symbol) => {
             if !visited.insert(symbol.clone()) {
                 return false;
@@ -182,6 +236,9 @@ fn needs_drop_seen(ty: &IRType, packages: &[IRPackage], visited: &mut BTreeSet<I
                     .any(|variant| variant_needs_drop(variant, packages, visited))
             })
         }
+        IRType::Tuple(elements) => elements
+            .iter()
+            .any(|element| needs_drop_seen(element, packages, visited)),
         IRType::Union { members, .. } => members
             .iter()
             .any(|member| needs_drop_seen(member, packages, visited)),
@@ -255,12 +312,12 @@ pub(super) fn unbox(ty: &IRType) -> &IRType {
 }
 
 /// An aggregate whose glue body [`synthesis`] builds in IR (as opposed to
-/// the collection / `Indirect` family, whose body the backend
-/// synthesizes from the operand type at emit time).
+/// the collection family, whose body the backend synthesizes from the
+/// operand type at emit time).
 fn is_aggregate(ty: &IRType) -> bool {
     matches!(
         ty,
-        IRType::Enum(_) | IRType::Struct(_) | IRType::Union { .. }
+        IRType::Enum(_) | IRType::Struct(_) | IRType::Tuple(_) | IRType::Union { .. }
     )
 }
 
@@ -382,15 +439,16 @@ fn clone_or_drop_type(instruction: &IRInstruction) -> Option<&IRType> {
     }
 }
 
-/// The heap-managed sub-types `ty`'s glue body recurses into: struct
-/// fields, enum payloads, union members, collection elements, and the
-/// `Indirect` inner type.
+/// The heap-managed sub-types that `ty`'s glue body recurses into.
+/// Includes aggregate members, collection elements, and transparent
+/// boxes.
 fn constituent_types(ty: &IRType, packages: &[IRPackage]) -> Vec<IRType> {
     match ty {
         IRType::Indirect(inner) | IRType::List(inner) | IRType::Set(inner) => {
             vec![inner.as_ref().clone()]
         }
         IRType::Map { key, value } => vec![key.as_ref().clone(), value.as_ref().clone()],
+        IRType::Tuple(elements) => elements.clone(),
         IRType::Union { members, .. } => members.clone(),
         IRType::Struct(symbol) => find_struct(packages, symbol)
             .map(|decl| decl.fields.iter().map(|f| f.ir_type.clone()).collect())
@@ -776,6 +834,366 @@ mod tests {
             .function(drop_glue_symbol(&option_ty).mangled())
             .expect("drop glue registered");
         assert!(matches!(drop_glue.kind, FunctionKind::DropGlue));
+    }
+
+    #[test]
+    fn nested_tuple_glue_synthesizes_transitive_families_and_seals() {
+        let inner_ty = IRType::Tuple(vec![IRType::String, IRType::String]);
+        let outer_ty = IRType::Tuple(vec![inner_ty.clone(), IRType::Int64]);
+        let left = ValueId(0);
+        let right = ValueId(1);
+        let inner = ValueId(2);
+        let number = ValueId(3);
+        let outer = ValueId(4);
+        let cloned = ValueId(5);
+        let deep_copied = ValueId(6);
+        let seed = seed_function(
+            sym("Test.seed"),
+            vec![
+                IRInstruction::Const {
+                    dest: left,
+                    value: ConstValue::String("left".to_string()),
+                },
+                IRInstruction::Const {
+                    dest: right,
+                    value: ConstValue::String("right".to_string()),
+                },
+                IRInstruction::TupleInit {
+                    dest: inner,
+                    elements: vec![left, right],
+                    ty: vec![IRType::String, IRType::String],
+                },
+                IRInstruction::Const {
+                    dest: number,
+                    value: ConstValue::Int64(7),
+                },
+                IRInstruction::TupleInit {
+                    dest: outer,
+                    elements: vec![inner, number],
+                    ty: vec![inner_ty.clone(), IRType::Int64],
+                },
+                IRInstruction::Clone {
+                    dest: cloned,
+                    source: outer,
+                    ty: outer_ty.clone(),
+                },
+                IRInstruction::DeepCopy {
+                    dest: deep_copied,
+                    source: outer,
+                    ty: outer_ty.clone(),
+                },
+                IRInstruction::DropValue {
+                    value: outer,
+                    ty: outer_ty.clone(),
+                },
+                IRInstruction::DropValue {
+                    value: cloned,
+                    ty: outer_ty.clone(),
+                },
+                IRInstruction::DropValue {
+                    value: deep_copied,
+                    ty: outer_ty.clone(),
+                },
+            ],
+        );
+        let mut pkg = empty_package("Test");
+        pkg.functions.insert(seed.symbol.clone(), seed);
+        let entry_point = install_entry_scaffold(&mut pkg);
+        let mut program = IRProgram {
+            entry_point,
+            link_libraries: Vec::new(),
+            packages: vec![pkg, empty_package("Global")],
+        };
+
+        elaborate_and_seal(&mut program);
+
+        for ty in [&inner_ty, &outer_ty] {
+            let clone_glue = program
+                .function(clone_glue_symbol(ty).mangled())
+                .expect("clone glue registered");
+            assert!(matches!(clone_glue.kind, FunctionKind::CloneGlue));
+            assert!(!clone_glue.blocks.is_empty());
+
+            let drop_glue = program
+                .function(drop_glue_symbol(ty).mangled())
+                .expect("drop glue registered");
+            assert!(matches!(drop_glue.kind, FunctionKind::DropGlue));
+            assert!(!drop_glue.blocks.is_empty());
+
+            let deep_copy_glue = program
+                .function(deep_copy_glue_symbol(ty).mangled())
+                .expect("deep-copy glue registered");
+            assert!(matches!(deep_copy_glue.kind, FunctionKind::DeepCopyGlue));
+            assert!(!deep_copy_glue.blocks.is_empty());
+        }
+    }
+
+    #[test]
+    fn recursive_enum_drop_releases_inner_values_before_boxes() {
+        let tree = sym("Test.Tree");
+        let tree_ty = IRType::Enum(tree.clone());
+        let decl = IREnumDecl {
+            symbol: tree.clone(),
+            variants: vec![
+                IREnumVariant {
+                    name: "Leaf".to_string(),
+                    payload: IRVariantPayload::Tuple(vec![IRType::Int64]),
+                    tag: IRVariantTag(0),
+                },
+                IREnumVariant {
+                    name: "Branch".to_string(),
+                    payload: IRVariantPayload::Tuple(vec![
+                        IRType::Indirect(Box::new(tree_ty.clone())),
+                        IRType::Indirect(Box::new(tree_ty.clone())),
+                    ]),
+                    tag: IRVariantTag(1),
+                },
+            ],
+        };
+        let number = ValueId(0);
+        let left = ValueId(1);
+        let right = ValueId(2);
+        let branch = ValueId(3);
+        let cloned = ValueId(4);
+        let deep_copied = ValueId(5);
+        let seed = seed_function(
+            sym("Test.seed"),
+            vec![
+                IRInstruction::Const {
+                    dest: number,
+                    value: ConstValue::Int64(1),
+                },
+                IRInstruction::EnumConstruct {
+                    dest: left,
+                    payload: EnumPayloadInit::Tuple(vec![number]),
+                    tag: IRVariantTag(0),
+                    ty: tree.clone(),
+                },
+                IRInstruction::EnumConstruct {
+                    dest: right,
+                    payload: EnumPayloadInit::Tuple(vec![number]),
+                    tag: IRVariantTag(0),
+                    ty: tree.clone(),
+                },
+                IRInstruction::EnumConstruct {
+                    dest: branch,
+                    payload: EnumPayloadInit::Tuple(vec![left, right]),
+                    tag: IRVariantTag(1),
+                    ty: tree.clone(),
+                },
+                IRInstruction::Clone {
+                    dest: cloned,
+                    source: branch,
+                    ty: tree_ty.clone(),
+                },
+                IRInstruction::DeepCopy {
+                    dest: deep_copied,
+                    source: branch,
+                    ty: tree_ty.clone(),
+                },
+                IRInstruction::DropValue {
+                    value: branch,
+                    ty: tree_ty.clone(),
+                },
+                IRInstruction::DropValue {
+                    value: cloned,
+                    ty: tree_ty.clone(),
+                },
+                IRInstruction::DropValue {
+                    value: deep_copied,
+                    ty: tree_ty.clone(),
+                },
+            ],
+        );
+        let mut pkg = empty_package("Test");
+        pkg.enums.insert(tree.clone(), decl);
+        pkg.functions.insert(seed.symbol.clone(), seed);
+        let entry_point = install_entry_scaffold(&mut pkg);
+        let mut program = IRProgram {
+            entry_point,
+            link_libraries: Vec::new(),
+            packages: vec![pkg],
+        };
+
+        elaborate_and_seal(&mut program);
+
+        for symbol in [clone_glue_symbol(&tree_ty), deep_copy_glue_symbol(&tree_ty)] {
+            assert!(
+                !program
+                    .function(symbol.mangled())
+                    .expect("copy glue registered")
+                    .blocks
+                    .is_empty()
+            );
+        }
+        let drop_glue = program
+            .function(drop_glue_symbol(&tree_ty).mangled())
+            .expect("drop glue registered");
+        let release_blocks: Vec<&IRBasicBlock> = drop_glue
+            .blocks
+            .iter()
+            .filter(|block| {
+                block
+                    .instructions
+                    .iter()
+                    .any(|instruction| matches!(instruction, IRInstruction::FreeIndirect { .. }))
+            })
+            .collect();
+        assert_eq!(release_blocks.len(), 2);
+        for block in release_blocks {
+            let release = block
+                .instructions
+                .iter()
+                .position(|instruction| {
+                    matches!(instruction, IRInstruction::Call { callee, .. }
+                        if callee == &drop_glue_symbol(&tree_ty))
+                })
+                .expect("inner release");
+            let free = block
+                .instructions
+                .iter()
+                .position(|instruction| {
+                    matches!(
+                        instruction,
+                        IRInstruction::FreeIndirect {
+                            slot: IRIndirectSlot::EnumPayload { .. },
+                            ..
+                        }
+                    )
+                })
+                .expect("box free");
+            assert!(release < free);
+        }
+        assert_eq!(
+            drop_glue
+                .blocks
+                .iter()
+                .flat_map(|block| &block.instructions)
+                .filter(|instruction| {
+                    matches!(
+                        instruction,
+                        IRInstruction::IndirectPresent {
+                            slot: IRIndirectSlot::EnumPayload { .. },
+                            ..
+                        }
+                    )
+                })
+                .count(),
+            2
+        );
+    }
+
+    #[test]
+    fn indirect_struct_overwrite_frees_replaced_box() {
+        let boxed = sym("Test.Boxed");
+        let boxed_ty = IRType::Struct(boxed.clone());
+        let decl = IRStructDecl {
+            fields: vec![IRStructField {
+                index: 0,
+                ir_type: IRType::Indirect(Box::new(IRType::Int64)),
+                name: "value".to_string(),
+            }],
+            symbol: boxed.clone(),
+        };
+        let old_value = ValueId(0);
+        let base = ValueId(1);
+        let new_value = ValueId(2);
+        let updated = ValueId(3);
+        let seed = seed_function(
+            sym("Test.seed"),
+            vec![
+                IRInstruction::Const {
+                    dest: old_value,
+                    value: ConstValue::Int64(1),
+                },
+                IRInstruction::StructInit {
+                    dest: base,
+                    fields: vec![StructFieldInit {
+                        index: 0,
+                        value: old_value,
+                    }],
+                    ty: boxed.clone(),
+                },
+                IRInstruction::Const {
+                    dest: new_value,
+                    value: ConstValue::Int64(2),
+                },
+                IRInstruction::FieldSet {
+                    base,
+                    dest: updated,
+                    field_index: 0,
+                    field_type: IRType::Int64,
+                    struct_symbol: boxed.clone(),
+                    value: new_value,
+                },
+                IRInstruction::DropValue {
+                    value: updated,
+                    ty: boxed_ty.clone(),
+                },
+            ],
+        );
+        let mut pkg = empty_package("Test");
+        pkg.structs.insert(boxed.clone(), decl);
+        pkg.functions.insert(seed.symbol.clone(), seed);
+        let entry_point = install_entry_scaffold(&mut pkg);
+        let mut program = IRProgram {
+            entry_point,
+            link_libraries: Vec::new(),
+            packages: vec![pkg],
+        };
+
+        elaborate_and_seal(&mut program);
+
+        let seed = program.function("Test.seed").expect("seed function");
+        let overwrite = seed.blocks[0]
+            .instructions
+            .windows(2)
+            .find(|pair| matches!(pair[1], IRInstruction::FieldSet { .. }))
+            .expect("field overwrite");
+        assert!(matches!(
+            &overwrite[0],
+            IRInstruction::FreeIndirect {
+                base: free_base,
+                slot: IRIndirectSlot::StructField {
+                    field_index: 0,
+                    struct_symbol,
+                },
+            } if *free_base == base && struct_symbol == &boxed
+        ));
+
+        let drop_glue = program
+            .function(drop_glue_symbol(&boxed_ty).mangled())
+            .expect("drop glue registered");
+        assert!(
+            drop_glue
+                .blocks
+                .iter()
+                .flat_map(|block| &block.instructions)
+                .any(|instruction| {
+                    matches!(
+                        instruction,
+                        IRInstruction::FreeIndirect {
+                            slot: IRIndirectSlot::StructField { .. },
+                            ..
+                        }
+                    )
+                })
+        );
+        assert!(
+            drop_glue
+                .blocks
+                .iter()
+                .flat_map(|block| &block.instructions)
+                .any(|instruction| {
+                    matches!(
+                        instruction,
+                        IRInstruction::IndirectPresent {
+                            slot: IRIndirectSlot::StructField { .. },
+                            ..
+                        }
+                    )
+                })
+        );
     }
 
     #[test]

@@ -85,6 +85,7 @@ Interpreter script mode (`.kojs` and `koja run --backend=interpreter`) now boots
 - Primitives: `Int`, `Int8`, `Int16`, `Int32`, `UInt8`, `UInt16`, `UInt32`, `UInt64`, `Float`, `Float32`, `Bool`, `String`
 - List literal syntax (`[1, 2, 3]`) backed by `ListLiteral<T>` protocol
 - Map literal syntax (`["key": value]`, `[:]` empty) backed by `MapLiteral<K, V>` protocol
+- Anonymous tuples (`(a, b, ...)`) with structural types, destructuring assignment, match patterns, unions, generics, equality, and `Debug`
 - `Self` type expression in `protocol` and `impl` blocks
 - `Hash` and `Equality` protocols with intrinsic implementations for all primitives plus `Binary` and `Bits` (literal-form `Debug` output included)
 - Stdlib types: `Option<T>`, `Result<T, E>`, `Pair<A, B>`, `Map<K, V>`, `Set<T>` (auto-imported from the `Global` package's `kernel.koja`); `Process<C, M, R>`, `Ref<M, R>`, `ReplyTo<R>`, `Task<R>`, `Step<S>`, `Lifecycle`, `StopReason`, `ExitStatus`, `ExitReason` (auto-imported from `process.koja`); `Base` (base16/base64/url-safe encode + decode, auto-imported from `base.koja`); `Path` (POSIX path manipulation, auto-imported from `path.koja`); `CPtr<T>`, `CString` (auto-imported from `cptr.koja`, `cstring.koja`)
@@ -98,7 +99,7 @@ Interpreter script mode (`.kojs` and `koja run --backend=interpreter`) now boots
 
 ### Design notes
 
-- **No tuples**: Koja does not have anonymous tuple syntax. `(a, b)` is grouping only. For multiple return values, use a struct. `Pair<A, B>` (with `.first` / `.second`) is available in the stdlib for lightweight two-value cases. 3+ values should always be a struct. Note: `(a, b)` pair syntax may return once protocols land via a `PairLiteral<A, B>` literal protocol -- this would be protocol-backed syntax, not a built-in tuple type, and is limited to arity 2.
+- **Anonymous tuples** (done): `(a, b)` is a structural n-ary tuple (arity 2+, identity by element types). Access is destructuring-only -- `(x, y) = pair` statements and `match` patterns -- with no positional `.0`/`.1` access, so anything reaching for field names should be a struct. Tuples participate in unions, compare element-wise with `==`, and format structurally. `Pair<A, B>` is slated for removal once the process envelope, intrinsics, and stdlib call sites migrate.
 - `**()` as the unit literal\*\*: `()` is the literal whose type is the 0-tuple -- Koja's "no useful value" type. Use `else -> ()` in `cond` for side-effect-only fallthrough. Function bodies whose declared return is the 0-tuple implicitly coerce the trailing value to unit (kept for stdlib ergonomics; the interpreter applies the coercion via `coerce_return` in `koja-ir-eval`). Pre-1.0 cleanup: tighten the typechecker to require explicit return-type annotations rather than relying on implicit coercion, and consider renaming the type itself to `Unit` (or `Void`) so it sits visually alongside `Int`/`String`. 1-tuples are not and never will be a thing.
 - **Closures**: Block closures with explicit types and parens: `fn (a: Int32, b: Int32) -> Int32 ... end`. Mirrors function signature syntax. Short closures (`x -> expr`) with full capture support and context-driven parameter type inference at inline call sites. Used by `map`/`then` on `Option` and `Result`.
 - **No private modules**: Files are modules, and all modules are importable. Access control lives at the function level (`priv fn`), not the module level. Use `@doc false` on types to signal "internal, don't depend on this" -- a documentation-level convention, not a compiler wall. This matches Elixir's approach and avoids the complexity of Rust's `pub(crate)` or Go's `internal/` directory enforcement.
@@ -368,7 +369,7 @@ The polish, validation, and language-surface review that gates a published 1.0. 
 - **Documentation polish** -- doctests (code blocks in `@doc` strings compile + run as tests), client-side fuzzy search in `koja doc` output, prose pages from `docs/*.md`, clickable type cross-references in signatures.
 - **CLI query/guide system** -- `koja query type <Type>` / `koja query module <pkg>` / `koja query protocol <Protocol>`; `koja guide <topic>` (prose guides on value semantics, concurrency, FFI, protocols, testing, etc.).
 - **LSP finishing pass** -- inlay hints for inferred types, multi-module cross-file diagnostics.
-- **Ergonomic cleanup** -- ~~`koja new` scaffolding generates a `Process` entry (not `fn main`); retire `fn main` as an entry mode~~ (**done**); `HTTP.Server` wrapper landing in stdlib.
+- **Ergonomic cleanup** -- ~~`koja new` scaffolding generates a `Process` entry (not `fn main`) and retires `fn main` as an entry mode~~ (**done**). Add contextual `TupleLiteral<T>` conversion, migrate process envelopes, intrinsics, iterators, and stdlib call sites from `Pair<A, B>` to tuples, then remove `Pair`. Land the `HTTP.Server` wrapper in stdlib.
 - **Stdlib completion** -- `Net` TLS (`upgrade_tls`, `TLSConfig`), ~~git deps + lockfile in the package manager~~ (**done** -- git dependencies pin through a committed `koja.lock` via `koja deps get`/`update`/`clean`, offline builds re-materialize from a global cache), C FFI Phase 3 (`@compat "C"` structs + callbacks), `Mmap`.
 - **First-party reference packages** -- at minimum `argon2` (validates C FFI Phase 3 + crypto pattern) and structured `logging` (validates the package manager workflow end-to-end on external code).
 - **Compiler diagnostic quality pass** -- dedicated milestone for "error messages are a feature." Review every diagnostic site, improve span precision, add hints, polish phrasing.
@@ -535,7 +536,13 @@ See [COMPILER-NORTHSTAR.md](COMPILER-NORTHSTAR.md) for the destination architect
 
 ### Literal protocols
 
-`ListLiteral<T>` and `MapLiteral<K,V>` are implemented. Remaining: `IntLiteral`, `FloatLiteral`, `StringLiteral`, `PairLiteral<A,B>`. See [TYPES.md](TYPES.md) for full details.
+`ListLiteral<T>` and `MapLiteral<K,V>` are implemented. Planned
+`TupleLiteral<T>` conversion uses the complete anonymous tuple type as
+`T`, so a conformer can distinguish `(Int, Int)` from
+`(UInt8, UInt8, UInt8)` at compile time. Without an expected conformer,
+tuple syntax keeps its structural tuple type. Remaining scalar literal
+protocols are `IntLiteral`, `FloatLiteral`, and `StringLiteral`. See
+[TYPES.md](TYPES.md) for full details.
 
 ---
 

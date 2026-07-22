@@ -387,6 +387,7 @@ lang_test_dir!(lang_types, "types");
 lang_test_dir!(lang_generics, "generics");
 lang_test_dir!(lang_protocols, "protocols");
 lang_test_dir!(lang_collections, "collections");
+lang_test_dir!(lang_tuples, "tuples");
 lang_test_dir!(lang_ownership, "ownership");
 lang_test_dir!(lang_io, "io");
 // Memory-reclaim regressions: process payload lifecycles (spawn

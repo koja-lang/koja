@@ -381,6 +381,14 @@ impl<'a> Printer<'a> {
                 None => self.header("Return", *span),
             },
             Statement::Break { span } => self.header("Break", *span),
+            Statement::Destructure {
+                pattern,
+                value,
+                span,
+            } => self.nested("Destructure", *span, |p| {
+                p.section("pattern", |p| p.pattern(pattern));
+                p.section("value", |p| p.expr(value));
+            }),
         }
     }
 
@@ -580,6 +588,11 @@ impl<'a> Printer<'a> {
                 self.section("condition", |p| p.expr(condition));
                 self.section("then", |p| p.expr(then_expr));
                 self.section("else", |p| p.expr(else_expr));
+            }
+            ExprKind::Tuple { elements } => {
+                for e in elements {
+                    self.expr(e);
+                }
             }
             ExprKind::Unary { operand, .. } => self.expr(operand),
             ExprKind::Unless { condition, body } => {
@@ -808,6 +821,13 @@ impl<'a> Printer<'a> {
                     }
                 });
             }
+            Pattern::Tuple { elements, span } => {
+                self.nested("Tuple", *span, |p| {
+                    for e in elements {
+                        p.pattern(e);
+                    }
+                });
+            }
             Pattern::Or { patterns, span } => {
                 self.nested("Or", *span, |p| {
                     for pat in patterns {
@@ -895,6 +915,7 @@ fn expr_header(expr: &Expr) -> String {
             format!("StructConstruction {}", type_path.join("."))
         }
         ExprKind::Ternary { .. } => String::from("Ternary"),
+        ExprKind::Tuple { elements } => format!("Tuple ({} elems)", elements.len()),
         ExprKind::Unary { op, .. } => format!("Unary {}", format_unary_op(*op)),
         ExprKind::Unless { .. } => String::from("Unless"),
         ExprKind::While { .. } => String::from("While"),
@@ -919,6 +940,10 @@ fn format_resolved_type(ty: &ResolvedType) -> String {
                 rendered_params.join(", "),
                 format_resolved_type(ret),
             )
+        }
+        ResolvedType::Anonymous(AnonymousKind::Tuple { elements }) => {
+            let rendered: Vec<String> = elements.iter().map(format_resolved_type).collect();
+            format!("({})", rendered.join(", "))
         }
         ResolvedType::Named {
             resolution,
@@ -964,6 +989,7 @@ fn expr_has_children(kind: &ExprKind) -> bool {
         | ExprKind::ShortClosure { .. }
         | ExprKind::Spawn { .. }
         | ExprKind::Ternary { .. }
+        | ExprKind::Tuple { .. }
         | ExprKind::Unary { .. }
         | ExprKind::Unless { .. }
         | ExprKind::While { .. } => true,
@@ -1091,6 +1117,14 @@ fn type_expr_inline(t: &TypeExpr) -> String {
             format_fn_params(params),
             type_expr_brief(return_type),
         ),
+        TypeExpr::Tuple { elements, .. } => format!(
+            "Tuple ({})",
+            elements
+                .iter()
+                .map(type_expr_brief)
+                .collect::<Vec<_>>()
+                .join(", "),
+        ),
         TypeExpr::Union { types, .. } => format!(
             "Union {}",
             types
@@ -1126,6 +1160,14 @@ fn type_expr_brief(t: &TypeExpr) -> String {
             "fn({}) -> {}",
             format_fn_params(params),
             type_expr_brief(return_type),
+        ),
+        TypeExpr::Tuple { elements, .. } => format!(
+            "({})",
+            elements
+                .iter()
+                .map(type_expr_brief)
+                .collect::<Vec<_>>()
+                .join(", "),
         ),
         TypeExpr::Union { types, .. } => types
             .iter()

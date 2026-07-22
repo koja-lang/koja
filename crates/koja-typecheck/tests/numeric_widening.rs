@@ -264,3 +264,32 @@ fn widening_does_not_chain_into_union_membership() {
         ";
     typecheck_script_fail(&dedent(source));
 }
+
+#[test]
+fn tuple_literal_elements_widen_at_typed_slots() {
+    let source = "
+        struct Holder
+          pair: (Int, String)
+        end
+
+        fn take(pair: (Int, String)) -> Unit
+          ()
+        end
+
+        fn promote(number: Int32) -> (Int, String)
+          (number, \"return\")
+        end
+
+        small: Int32 = -7
+        ratio: Float32 = 1.5
+        annotated: (Int, String) = (small, \"binding\")
+        nested: ((Float, String), Bool) = ((ratio, \"nested\"), true)
+        Holder{pair: (small, \"field\")}
+        take((small, \"argument\"))
+        promote(small)
+        annotated
+        nested
+        ";
+
+    typecheck(&dedent(source));
+}

@@ -270,6 +270,17 @@ fn emit_payload_binds(
                         },
                     );
                 }
+                BindOp::TupleElement { index } => {
+                    ctx.cfg.append(
+                        body_block,
+                        IRInstruction::TupleGet {
+                            base: current,
+                            dest,
+                            element_type: step.output_type.clone(),
+                            index: *index,
+                        },
+                    );
+                }
                 BindOp::UnionPayload {
                     member_index,
                     member_type,

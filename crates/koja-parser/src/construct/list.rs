@@ -1,10 +1,10 @@
 //! Bracket and paren grouping expressions: list literals `[1, 2, 3]`,
 //! map literals `[key: val, ...]` (with `[:]` as the empty map),
-//! parenthesized expressions `(e)`, and the unit literal `()`.
+//! parenthesized expressions `(e)`, the unit literal `()`, and
+//! anonymous tuple literals `(a, b)`.
 //!
-//! Tuples are rejected with a "use a struct instead" diagnostic so
-//! the surface stays small without leaving the syntactic hole
-//! confused for grouping.
+//! Tuples are always arity 2+. `()` is unit, `(e)` is grouping, and
+//! there are no 1-tuples or trailing commas.
 
 use koja_ast::ast::{Expr, ExprKind, Literal};
 use koja_ast::token::TokenKind;
@@ -30,8 +30,14 @@ impl Parser {
 
         if self.eat(&TokenKind::Comma).is_some() {
             self.skip_newlines();
-            while !self.at(&TokenKind::RParen) && !self.at_eof() {
-                self.parse_expr();
+            let mut elements = vec![first];
+            loop {
+                if self.at(&TokenKind::RParen) || self.at_eof() {
+                    let span = self.current_span();
+                    self.error("tuples do not allow trailing commas".to_string(), span);
+                    break;
+                }
+                elements.push(self.parse_expr());
                 if self.eat(&TokenKind::Comma).is_none() {
                     break;
                 }
@@ -39,17 +45,7 @@ impl Parser {
             }
             self.skip_newlines();
             self.expect(&TokenKind::RParen);
-            let span = self.span_from(start);
-            self.error(
-                "tuples are not supported, use a struct instead".to_string(),
-                span,
-            );
-            Expr::new(
-                ExprKind::Literal {
-                    value: Literal::Unit,
-                },
-                span,
-            )
+            Expr::new(ExprKind::Tuple { elements }, self.span_from(start))
         } else {
             self.skip_newlines();
             self.expect(&TokenKind::RParen);

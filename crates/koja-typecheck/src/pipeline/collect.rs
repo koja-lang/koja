@@ -29,6 +29,7 @@ use koja_ast::ast::{
     StructDecl, StructField, TypeAlias, TypeExpr, TypeParam, Visibility,
 };
 use koja_ast::identifier::{GlobalRegistryId, Identifier};
+use koja_ast::labels::type_expr_span;
 use koja_ast::span::Span;
 
 use crate::pipeline::visibility::check_reference_visibility;
@@ -805,17 +806,6 @@ pub(crate) fn lookup_owner_path(
 /// [`crate::registry::GlobalRegistry::set_type_param_bounds`].
 fn type_param_names(type_params: &[TypeParam]) -> Vec<String> {
     type_params.iter().map(|p| p.name.clone()).collect()
-}
-
-fn type_expr_span(type_expr: &TypeExpr) -> Span {
-    match type_expr {
-        TypeExpr::Function { span, .. }
-        | TypeExpr::Generic { span, .. }
-        | TypeExpr::Named { span, .. }
-        | TypeExpr::Self_ { span }
-        | TypeExpr::Union { span, .. }
-        | TypeExpr::Unit { span } => *span,
-    }
 }
 
 /// Diagnose every feature gap on a struct decl up front so collect

@@ -152,6 +152,10 @@ impl LocalIndex {
                 self.walk_expr(value);
             }
             Statement::CompoundAssign { value, .. } => self.walk_expr(value),
+            Statement::Destructure { pattern, value, .. } => {
+                self.walk_pattern(pattern);
+                self.walk_expr(value);
+            }
             Statement::Return {
                 value: Some(expr), ..
             } => self.walk_expr(expr),
@@ -187,7 +191,9 @@ impl LocalIndex {
                     ty: resolved_type.clone(),
                 },
             ),
-            Pattern::EnumTuple { elements, .. } | Pattern::Constructor { elements, .. } => {
+            Pattern::EnumTuple { elements, .. }
+            | Pattern::Constructor { elements, .. }
+            | Pattern::Tuple { elements, .. } => {
                 for sub in elements {
                     self.walk_pattern(sub);
                 }
@@ -333,6 +339,11 @@ impl LocalIndex {
                 self.walk_expr(condition);
                 self.walk_expr(then_expr);
                 self.walk_expr(else_expr);
+            }
+            ExprKind::Tuple { elements } => {
+                for e in elements {
+                    self.walk_expr(e);
+                }
             }
             ExprKind::Unary { operand, .. } => self.walk_expr(operand),
             ExprKind::BinaryLiteral { segments } => {

@@ -23,6 +23,14 @@ pub(crate) fn format_resolved_type(ty: &ResolvedType, registry: &GlobalRegistry)
                 format_resolved_type(ret, registry)
             )
         }
+        ResolvedType::Anonymous(AnonymousKind::Tuple { elements }) => {
+            let rendered = elements
+                .iter()
+                .map(|e| format_resolved_type(e, registry))
+                .collect::<Vec<_>>()
+                .join(", ");
+            format!("({rendered})")
+        }
         ResolvedType::Named {
             resolution: Resolution::Global(id),
             type_args,

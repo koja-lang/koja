@@ -152,6 +152,13 @@ pub(super) fn require_supported_type(ty: &IRType, location: &dyn Fn() -> String)
             }
             require_supported_type(ret, &|| format!("{} (Function return)", location()));
         }
+        IRType::Tuple(elements) => {
+            for (idx, element) in elements.iter().enumerate() {
+                require_supported_type(element, &|| {
+                    format!("{} (Tuple element[{idx}])", location())
+                });
+            }
+        }
         IRType::Union { members, .. } => {
             for (idx, member) in members.iter().enumerate() {
                 require_supported_type(member, &|| format!("{} (Union member[{idx}])", location()));
@@ -198,6 +205,9 @@ pub(super) fn instruction_operands(inst: &IRInstruction) -> Vec<ValueId> {
         }
         IRInstruction::FieldGet { base, .. } => vec![*base],
         IRInstruction::FieldSet { base, value, .. } => vec![*base, *value],
+        IRInstruction::FreeIndirect { base, .. } | IRInstruction::IndirectPresent { base, .. } => {
+            vec![*base]
+        }
         // `LoadCapture` reads from the enclosing closure's env, not
         // a `ValueId`, so there is nothing to validate in the per-block walk.
         IRInstruction::LoadCapture { .. } => vec![],
@@ -238,6 +248,8 @@ pub(super) fn instruction_operands(inst: &IRInstruction) -> Vec<ValueId> {
         // `YieldCheck` is a bare preemption point: no operands, no dest.
         IRInstruction::YieldCheck => vec![],
         IRInstruction::StructInit { fields, .. } => fields.iter().map(|f| f.value).collect(),
+        IRInstruction::TupleGet { base, .. } => vec![*base],
+        IRInstruction::TupleInit { elements, .. } => elements.clone(),
         IRInstruction::UnaryOp { operand, .. } => vec![*operand],
         IRInstruction::UnionPayloadGet { value, .. } | IRInstruction::UnionTagGet { value, .. } => {
             vec![*value]

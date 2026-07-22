@@ -210,6 +210,11 @@ pub(super) fn seal_expr(expr: &Expr, mode: SealMode) {
             seal_expr(then_expr, mode);
             seal_expr(else_expr, mode);
         }
+        ExprKind::Tuple { elements } => {
+            for element in elements {
+                seal_expr(element, mode);
+            }
+        }
         ExprKind::Unary { operand, .. } => seal_expr(operand, mode),
         ExprKind::Unless { condition, body } => {
             seal_expr(condition, mode);

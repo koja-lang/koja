@@ -26,7 +26,7 @@ use std::collections::HashSet;
 use crate::enum_decl::{
     EnumPayloadInit, IREnumDecl, IREnumVariant, IRVariantPayload, IRVariantTag,
 };
-use crate::function::{IRInstruction, IRSymbol};
+use crate::function::{IRIndirectSlot, IRInstruction, IRSymbol};
 use crate::package::IRPackage;
 use crate::types::IRType;
 
@@ -123,6 +123,27 @@ pub(super) fn seal_enum_ops<'inst, 'decl>(
                 let variant = require_variant(lookup, ty, *tag, &owner, "EnumPayloadFieldGet");
                 seal_payload_field_index(&owner, ty, variant, *payload_index, field_type);
             }
+            IRInstruction::FreeIndirect {
+                slot:
+                    IRIndirectSlot::EnumPayload {
+                        payload_index,
+                        tag,
+                        ty,
+                    },
+                ..
+            }
+            | IRInstruction::IndirectPresent {
+                slot:
+                    IRIndirectSlot::EnumPayload {
+                        payload_index,
+                        tag,
+                        ty,
+                    },
+                ..
+            } => {
+                let variant = require_variant(lookup, ty, *tag, &owner, "indirect slot operation");
+                seal_indirect_payload(&owner, ty, variant, *payload_index);
+            }
             _ => {}
         }
     }
@@ -212,6 +233,29 @@ fn seal_payload_field_index(
     }
 }
 
+fn seal_indirect_payload(owner: &str, ty: &IRSymbol, variant: &IREnumVariant, payload_index: u32) {
+    let declared = match &variant.payload {
+        IRVariantPayload::Tuple(types) => types.get(payload_index as usize),
+        IRVariantPayload::Struct(fields) => fields.get(payload_index as usize).map(|f| &f.ir_type),
+        IRVariantPayload::Unit => None,
+    };
+    let Some(declared_type) = declared else {
+        seal_panic(&format!(
+            "{owner}: FreeIndirect on `{ty}.{name}` references payload index {payload_index}, \
+             but the variant payload exposes {arity} field(s)",
+            name = variant.name,
+            arity = payload_arity(&variant.payload),
+        ));
+    };
+    if !matches!(declared_type, IRType::Indirect(_)) {
+        seal_panic(&format!(
+            "{owner}: FreeIndirect on `{ty}.{name}` payload index {payload_index} requires an \
+             Indirect slot, but the decl carries `{declared_type:?}`",
+            name = variant.name,
+        ));
+    }
+}
+
 /// See [`super::structs::field_type_matches`]. Decl-side
 /// `Indirect(T)` matches an instruction-side `T`.
 fn field_type_matches(declared: &IRType, requested: &IRType) -> bool {
@@ -283,7 +327,7 @@ mod tests {
     use crate::enum_decl::{
         EnumPayloadInit, IREnumDecl, IREnumVariant, IRVariantPayload, IRVariantTag,
     };
-    use crate::function::{IRInstruction, IRSymbol};
+    use crate::function::{IRIndirectSlot, IRInstruction, IRSymbol};
     use crate::package::IRPackage;
     use crate::struct_decl::{IRStructField, StructFieldInit};
     use crate::types::{IRType, ValueId};
@@ -538,6 +582,25 @@ mod tests {
             tag: IRVariantTag(1),
             ty: decl.symbol.clone(),
             value: ValueId(1),
+        };
+        let decls = vec![decl];
+        seal_enum_ops(
+            std::iter::once(("test".to_string(), &inst)),
+            &lookup_against(&decls),
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "requires an Indirect slot")]
+    fn free_indirect_rejects_inline_enum_payload() {
+        let decl = option_decl();
+        let inst = IRInstruction::FreeIndirect {
+            base: ValueId(0),
+            slot: IRIndirectSlot::EnumPayload {
+                payload_index: 0,
+                tag: IRVariantTag(1),
+                ty: decl.symbol.clone(),
+            },
         };
         let decls = vec![decl];
         seal_enum_ops(

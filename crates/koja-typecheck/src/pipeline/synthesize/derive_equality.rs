@@ -95,6 +95,7 @@ fn type_expr_head(te: &TypeExpr) -> Option<&str> {
         }
         TypeExpr::Function { .. }
         | TypeExpr::Self_ { .. }
+        | TypeExpr::Tuple { .. }
         | TypeExpr::Union { .. }
         | TypeExpr::Unit { .. } => None,
     }

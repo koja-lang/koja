@@ -24,27 +24,18 @@ Routes:
 - `GET    /:code`       302-redirect to the target, counting the hit
 """
 struct Router
-  fn route(req: Request, conn: Connection) -> Pair<Response, Connection>
+  fn route(req: Request, conn: Connection) -> (Response, Connection)
     match req.method
-      Method.Delete ->
-        handle_delete(req.path, conn)
-
-      Method.Get ->
-        handle_get(req.path, conn)
-
-      Method.Post ->
-        handle_post(req, conn)
-
-      Method.Put ->
-        handle_put(req, conn)
-
+      Method.Delete -> handle_delete(req.path, conn)
+      Method.Get -> handle_get(req.path, conn)
+      Method.Post -> handle_post(req, conn)
+      Method.Put -> handle_put(req, conn)
       _ ->
-        respond(
-          conn,
+        (
           error(
             Status.method_not_allowed(),
             "#{req.method.to_string()} is not supported",
-          ),
+          ), conn
         )
     end
   end
@@ -65,11 +56,9 @@ struct Router
     )
   end
 
-  priv fn handle_get(path: String, conn: Connection)
-    -> Pair<Response, Connection>
-
+  priv fn handle_get(path: String, conn: Connection) -> (Response, Connection)
     if path == "/"
-      return respond(conn, info())
+      return (info(), conn)
     end
 
     if path == "/links"
@@ -82,61 +71,49 @@ struct Router
 
       Option.None ->
         match code_after(path, "/")
-          Option.Some(code) ->
-            redirect(conn, code)
-
+          Option.Some(code) -> redirect(conn, code)
           Option.None ->
-            respond(conn, error(Status.not_found(), "no route for #{path}"))
+            (error(Status.not_found(), "no route for #{path}"), conn)
         end
     end
   end
 
-  priv fn handle_post(req: Request, conn: Connection)
-    -> Pair<Response, Connection>
-
+  priv fn handle_post(req: Request, conn: Connection) -> (Response, Connection)
     unless req.path == "/links"
-      return respond(
-        conn,
-        error(Status.not_found(), "no route for POST #{req.path}"),
-      )
+      return (error(Status.not_found(), "no route for POST #{req.path}"), conn)
     end
 
     match JsonUtil.parse_url(req.body)
       Result.Err(message) ->
-        respond(conn, error(Status.bad_request(), message))
+        (error(Status.bad_request(), message), conn)
 
       Result.Ok(url) ->
-        outcome = LinkStore.create(conn, url)
+        (conn, created) = LinkStore.create(conn, url)
 
-        match outcome.second
+        match created
           Result.Ok(link) ->
-            respond(
-              outcome.first,
+            (
               json_response(Status.created(), JsonUtil.link_to_value(link)),
+              conn
             )
-
-          Result.Err(e) ->
-            respond(outcome.first, db_error(e))
+          Result.Err(e) -> (db_error(e), conn)
         end
     end
   end
 
-  priv fn handle_put(req: Request, conn: Connection)
-    -> Pair<Response, Connection>
-
+  priv fn handle_put(req: Request, conn: Connection) -> (Response, Connection)
     code =
       match code_after(req.path, LINKS_PREFIX)
         Option.Some(c) -> c
         Option.None ->
-          return respond(
-            conn,
-            error(Status.not_found(), "no route for PUT #{req.path}"),
+          return (
+            error(Status.not_found(), "no route for PUT #{req.path}"), conn
           )
       end
 
     match JsonUtil.parse_url(req.body)
       Result.Err(message) ->
-        respond(conn, error(Status.bad_request(), message))
+        (error(Status.bad_request(), message), conn)
 
       Result.Ok(url) ->
         outcome = LinkStore.update(conn, code, url)
@@ -145,92 +122,73 @@ struct Router
   end
 
   priv fn handle_delete(path: String, conn: Connection)
-    -> Pair<Response, Connection>
+    -> (Response, Connection)
 
     code =
       match code_after(path, LINKS_PREFIX)
         Option.Some(c) -> c
         Option.None ->
-          return respond(
-            conn,
-            error(Status.not_found(), "no route for DELETE #{path}"),
+          return (
+            error(Status.not_found(), "no route for DELETE #{path}"), conn
           )
       end
 
-    outcome = LinkStore.remove(conn, code)
+    (conn, removed) = LinkStore.remove(conn, code)
 
-    match outcome.second
-      Result.Err(e) ->
-        respond(outcome.first, db_error(e))
-
+    match removed
+      Result.Err(e) -> (db_error(e), conn)
       Result.Ok(deleted) ->
-        deleted
-          ? respond(outcome.first, no_content())
-          : respond(outcome.first, not_found(code))
+        deleted ? (no_content(), conn) : (not_found(code), conn)
     end
   end
 
-  priv fn list_all(conn: Connection) -> Pair<Response, Connection>
-    outcome = LinkStore.all(conn)
+  priv fn list_all(conn: Connection) -> (Response, Connection)
+    (conn, listed) = LinkStore.all(conn)
 
-    match outcome.second
+    match listed
       Result.Ok(links) ->
-        respond(
-          outcome.first,
-          json_response(Status.ok(), JsonUtil.links_to_value(links)),
-        )
-
-      Result.Err(e) ->
-        respond(outcome.first, db_error(e))
+        (json_response(Status.ok(), JsonUtil.links_to_value(links)), conn)
+      Result.Err(e) -> (db_error(e), conn)
     end
   end
 
-  priv fn metadata(conn: Connection, code: String) -> Pair<Response, Connection>
+  priv fn metadata(conn: Connection, code: String) -> (Response, Connection)
     link_or_404(LinkStore.find(conn, code), code)
   end
 
-  priv fn redirect(conn: Connection, code: String) -> Pair<Response, Connection>
-    outcome = LinkStore.visit(conn, code)
+  priv fn redirect(conn: Connection, code: String) -> (Response, Connection)
+    (conn, visited) = LinkStore.visit(conn, code)
 
-    match outcome.second
+    match visited
       Result.Err(e) ->
-        respond(outcome.first, db_error(e))
+        (db_error(e), conn)
 
       Result.Ok(target) ->
         match target
-          Option.Some(url) -> respond(outcome.first, redirect_response(url))
-          Option.None -> respond(outcome.first, not_found(code))
+          Option.Some(url) -> (redirect_response(url), conn)
+          Option.None -> (not_found(code), conn)
         end
     end
   end
 
   priv fn link_or_404(
-    outcome: Pair<Connection, Result<Option<Link>, String>>,
+    outcome: (Connection, Result<Option<Link>, String>),
     code: String,
-  ) -> Pair<Response, Connection>
+  ) -> (Response, Connection)
 
-    match outcome.second
+    (conn, found) = outcome
+
+    match found
       Result.Err(e) ->
-        respond(outcome.first, db_error(e))
+        (db_error(e), conn)
 
       Result.Ok(maybe) ->
         match maybe
           Option.Some(link) ->
-            respond(
-              outcome.first,
-              json_response(Status.ok(), JsonUtil.link_to_value(link)),
-            )
-
-          Option.None ->
-            respond(outcome.first, not_found(code))
+            (json_response(Status.ok(), JsonUtil.link_to_value(link)), conn)
+          Option.None -> (not_found(code), conn)
         end
     end
-  end
-
-  priv fn respond(conn: Connection, response: Response)
-    -> Pair<Response, Connection>
-
-    Pair{first: response, second: conn}
   end
 
   priv fn info -> Response

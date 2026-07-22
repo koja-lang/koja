@@ -28,7 +28,7 @@ mod registry;
 
 pub use error::CheckFailure;
 pub use koja_ast::coercion::{LiteralCoercion, NumericLiteralWidth};
-pub use pipeline::{Substitution, substitute};
+pub use pipeline::{Substitution, peel_alias, substitute};
 pub use program::{CheckedPackage, CheckedProgram, check_program};
 pub use registry::{
     Candidate, CandidateDetail, CandidateKind, ConstantDefinition, Dispatch, EnumDefinition,

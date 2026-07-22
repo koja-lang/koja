@@ -1,0 +1,64 @@
+# Tuples flowing through generics: type-param pinning, collection
+# elements, struct fields, and generic functions returning tuples.
+
+struct Util
+  fn identity<T>(x: T) -> T
+    x
+  end
+end
+
+# Generic identity pinned to a tuple shape.
+Util.identity((1, "one")).print()
+
+# Nested through a generic container.
+boxed: Option<(Int, Bool)> = Option.Some((5, true))
+boxed.print()
+
+# Tuples as list elements: append, length, and per-element format.
+pairs: List<(Int, String)> = List.new()
+pairs = pairs.append((1, "one"))
+pairs = pairs.append((2, "two"))
+pairs.length().print()
+pairs.print()
+
+# Destructure a tuple pulled back out of the list.
+match pairs.get(1)
+  Option.Some((n, s)) -> IO.puts("#{n}=#{s}")
+  Option.None -> IO.puts("missing")
+end
+
+# Tuple with a generic-collection element formats recursively.
+with_list = ("xs", [1, 2, 3])
+with_list.print()
+
+# Struct fields typed as tuples, including derived Debug.
+struct Span
+  range: (Int, Int)
+  label: String
+end
+
+s = Span{range: (3, 9), label: "body"}
+s.print()
+(lo, hi) = s.range
+lo.print()
+hi.print()
+
+# Generic function producing a tuple of its params.
+fn zip2<A, B>(a: A, b: B) -> (A, B)
+  (a, b)
+end
+
+zip2("k", 7).print()
+zip2(true, (1, 2)).print()
+
+# Explicit universal bounds still admit structural tuple conformances.
+fn render<T: Debug>(value: T) -> String
+  value.format()
+end
+
+fn equal<T: Equality>(left: T, right: T) -> Bool
+  left.eq(right)
+end
+
+IO.puts(render((8, "eight")))
+equal((1, 2), (1, 2)).print()

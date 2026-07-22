@@ -481,6 +481,11 @@ pub enum IRType {
     Set(Box<IRType>),
     String,
     Struct(IRSymbol),
+    /// Anonymous tuple. Identity is the element shape, so the type
+    /// carries its elements inline like [`IRType::Function`] and no
+    /// decl ever materializes. Backends lay out `{T0, T1, ...}`
+    /// directly from the elements.
+    Tuple(Vec<IRType>),
     UInt8,
     UInt16,
     UInt32,
@@ -542,6 +547,7 @@ impl IRType {
             | Self::Map { .. }
             | Self::Set(_)
             | Self::Struct(_)
+            | Self::Tuple(_)
             | Self::Union { .. } => true,
             Self::Bool
             | Self::CPtr(_)

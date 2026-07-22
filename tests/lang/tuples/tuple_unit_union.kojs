@@ -1,0 +1,25 @@
+# A Unit element still occupies LLVM's inert i8 placeholder in a
+# value position, so a union buffer must include it and the tuple's
+# natural padding.
+
+fn read_number(value: ((), Int) | Bool) -> Int
+  match value
+    pair: ((), Int) ->
+      (_, number) = pair
+      number
+
+    flag: Bool ->
+      if flag
+        1
+      else
+        0
+      end
+  end
+end
+
+read_number(((), 42)).print()
+read_number(true).print()
+read_number(((), 7)).print()
+
+stored: ((), Int) | Bool = ((), 99)
+read_number(stored).print()

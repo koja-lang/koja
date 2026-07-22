@@ -370,6 +370,33 @@ fn return_type_float32_coerces_literal_to_const_float32() {
 }
 
 #[test]
+fn tuple_literal_element_coerces_before_tuple_init() {
+    let script = lower("fn sample -> (UInt8, String)\n  (255, \"narrow\")\nend\n\nsample()\n");
+    let sample = script_function(&script, "sample");
+    let block = entry_block(&sample.blocks);
+    assert!(
+        block.instructions.iter().any(|instruction| matches!(
+            instruction,
+            IRInstruction::Const {
+                value: ConstValue::UInt8(255),
+                ..
+            }
+        )),
+        "expected tuple element to lower as `Const UInt8(255)`, got {:?}",
+        block.instructions,
+    );
+    assert!(
+        block.instructions.iter().any(|instruction| matches!(
+            instruction,
+            IRInstruction::TupleInit { ty, .. }
+                if ty.as_slice() == [IRType::UInt8, IRType::String]
+        )),
+        "expected tuple to initialize with the coerced element type, got {:?}",
+        block.instructions,
+    );
+}
+
+#[test]
 fn negated_literal_in_uncoerced_position_keeps_runtime_neg() {
     // Without a narrow-target site, `-7` still lowers to the
     // pre-coercion shape: `Const Int64(7)` + `UnaryOp::Neg`. Pins

@@ -75,6 +75,9 @@ pub(crate) fn find_in_statement(
             find_in_expr(value, line, col, ctx)
         }
         Statement::CompoundAssign { value, .. } => find_in_expr(value, line, col, ctx),
+        Statement::Destructure { pattern, value, .. } => {
+            find_in_pattern(pattern, line, col, ctx).or_else(|| find_in_expr(value, line, col, ctx))
+        }
         Statement::Return {
             value: Some(expr), ..
         } => find_in_expr(expr, line, col, ctx),
@@ -141,6 +144,15 @@ pub(crate) fn find_in_type_expr(
                 }
                 if let Some(info) = find_in_type_expr(return_type, line, col, ctx) {
                     return Some(info);
+                }
+            }
+        }
+        TypeExpr::Tuple { elements, span } => {
+            if span_contains(span, line, col) {
+                for element in elements {
+                    if let Some(info) = find_in_type_expr(element, line, col, ctx) {
+                        return Some(info);
+                    }
                 }
             }
         }
@@ -247,6 +259,15 @@ fn find_in_pattern(pat: &Pattern, line: u32, col: u32, ctx: &LookupCtx<'_>) -> O
         Pattern::Or { patterns, span } => {
             if span_contains(span, line, col) {
                 for sub in patterns {
+                    if let Some(info) = find_in_pattern(sub, line, col, ctx) {
+                        return Some(info);
+                    }
+                }
+            }
+        }
+        Pattern::Tuple { elements, span } => {
+            if span_contains(span, line, col) {
+                for sub in elements {
                     if let Some(info) = find_in_pattern(sub, line, col, ctx) {
                         return Some(info);
                     }
@@ -555,6 +576,15 @@ fn find_in_expr(expr: &Expr, line: u32, col: u32, ctx: &LookupCtx<'_>) -> Option
                 }
             }
         }
+        ExprKind::Tuple { elements } => {
+            if span_contains(&expr.span, line, col) {
+                for e in elements {
+                    if let Some(info) = find_in_expr(e, line, col, ctx) {
+                        return Some(info);
+                    }
+                }
+            }
+        }
         ExprKind::Unary { operand, .. } => {
             if span_contains(&expr.span, line, col) {
                 return find_in_expr(operand, line, col, ctx);
@@ -662,6 +692,7 @@ fn find_expr_at_in_stmt(stmt: &Statement, line: u32, col: u32) -> Option<&Expr> 
         Statement::Expr(expr) => find_expr_at_inner(expr, line, col),
         Statement::Assignment { value, .. } => find_expr_at_inner(value, line, col),
         Statement::CompoundAssign { value, .. } => find_expr_at_inner(value, line, col),
+        Statement::Destructure { value, .. } => find_expr_at_inner(value, line, col),
         Statement::Return {
             value: Some(expr), ..
         } => find_expr_at_inner(expr, line, col),
@@ -773,6 +804,9 @@ fn find_expr_at_inner(expr: &Expr, line: u32, col: u32) -> Option<&Expr> {
         } => find_expr_at_inner(condition, line, col)
             .or_else(|| find_expr_at_inner(then_expr, line, col))
             .or_else(|| find_expr_at_inner(else_expr, line, col)),
+        ExprKind::Tuple { elements } => elements
+            .iter()
+            .find_map(|e| find_expr_at_inner(e, line, col)),
         ExprKind::Unary { operand, .. } => find_expr_at_inner(operand, line, col),
         ExprKind::BinaryLiteral { segments } => segments.iter().find_map(|seg| {
             find_expr_at_inner(&seg.value, line, col).or_else(|| {
@@ -871,6 +905,7 @@ fn find_call_in_body<'a>(body: &'a [Statement], line: u32, col: u32) -> Option<C
         Statement::Expr(expr) => find_call_inner(expr, line, col),
         Statement::Assignment { value, .. } => find_call_inner(value, line, col),
         Statement::CompoundAssign { value, .. } => find_call_inner(value, line, col),
+        Statement::Destructure { value, .. } => find_call_inner(value, line, col),
         Statement::Return {
             value: Some(expr), ..
         } => find_call_inner(expr, line, col),

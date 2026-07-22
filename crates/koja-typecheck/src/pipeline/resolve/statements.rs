@@ -41,9 +41,11 @@
 //! [`LValue`]: koja_ast::ast::LValue
 //! [`Resolution::Local`]: koja_ast::identifier::Resolution::Local
 
-use koja_ast::ast::{CompoundOp, Diagnostic, Expr, LValue, TypeExpr};
+use koja_ast::ast::{CompoundOp, Diagnostic, Expr, LValue, Pattern, TypeExpr};
 use koja_ast::identifier::{Identifier, LocalId, Resolution, ResolvedType};
-use koja_ast::labels::compound_op_label;
+use koja_ast::labels::{
+    compound_op_label, pattern_kind_label, pattern_span, type_expr_span as annotation_span,
+};
 use koja_ast::span::Span;
 
 use crate::pipeline::lift_signatures::{TypeParamScope, resolve_type_expr};
@@ -53,6 +55,7 @@ use crate::registry::GlobalKind;
 use super::coercion::check_compatible_stamping;
 use super::ctx::Resolver;
 use super::expr::{resolve_expr, resolve_expr_with_expected};
+use super::patterns::resolve_pattern;
 use super::types::{display_resolution, is_arithmetic_type};
 
 /// Resolve a `target = value` statement. Validates target shape,
@@ -188,12 +191,63 @@ pub(super) fn resolve_assignment(
     lvalue.local_id = Some(local_id);
 }
 
-/// Resolve a `target op= value` statement. Reassignment-only: the
-/// target (or its leaf field, on a multi-segment path) must already
-/// resolve to an arithmetic type (`Int` or `Float`), and the rhs
-/// must match. On success, stamps `target.local_id` (the head local)
-/// so IR lower can desugar to `LocalRead + (FieldGet*) + BinaryOp +
-/// (FieldSet*) + LocalWrite`.
+/// Resolve a `(a, b) = value` statement. The value resolves first,
+/// then the pattern binds element-wise against its tuple type. Only
+/// bindings, wildcards, and nested tuples are allowed, so the
+/// pattern can never fail at runtime.
+pub(super) fn resolve_destructure(
+    pattern: &mut Pattern,
+    value: &mut Expr,
+    resolver: &mut Resolver<'_>,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    resolve_expr(value, resolver, diagnostics);
+    if !destructure_pattern_is_irrefutable(pattern, diagnostics) {
+        return;
+    }
+    if !value.resolution.is_resolved() {
+        return;
+    }
+    let subject_ty = value.resolution.clone();
+    resolve_pattern(pattern, &subject_ty, resolver, diagnostics);
+}
+
+/// True when every leaf is a binding, wildcard, or nested tuple.
+/// Any other shape is refutable and diagnosed. Walks the whole
+/// pattern so one statement reports every offending leaf at once.
+fn destructure_pattern_is_irrefutable(
+    pattern: &Pattern,
+    diagnostics: &mut Vec<Diagnostic>,
+) -> bool {
+    match pattern {
+        Pattern::Binding { .. } | Pattern::Wildcard { .. } => true,
+        Pattern::Tuple { elements, .. } => {
+            let mut irrefutable = true;
+            for element in elements {
+                irrefutable &= destructure_pattern_is_irrefutable(element, diagnostics);
+            }
+            irrefutable
+        }
+        other => {
+            diagnostics.push(Diagnostic::error(
+                format!(
+                    "destructuring assignment only allows names, `_`, and nested \
+                     tuples, found a {} pattern",
+                    pattern_kind_label(other),
+                ),
+                pattern_span(other),
+            ));
+            false
+        }
+    }
+}
+
+/// Resolve a `target op= value` statement. Reassignment only, so
+/// the target (or its leaf field, on a multi-segment path) must
+/// already resolve to an arithmetic type (`Int` or `Float`), and
+/// the rhs must match. On success, stamps `target.local_id` (the
+/// head local) so IR lower can desugar to `LocalRead + (FieldGet*)
+/// + BinaryOp + (FieldSet*) + LocalWrite`.
 pub(super) fn resolve_compound_assignment(
     target: &mut LValue,
     op: CompoundOp,
@@ -420,17 +474,6 @@ fn walk_field_segments(
 
 fn format_lvalue(lvalue: &LValue) -> String {
     lvalue.segments.join(".")
-}
-
-fn annotation_span(annotation: &TypeExpr) -> Span {
-    match annotation {
-        TypeExpr::Function { span, .. }
-        | TypeExpr::Generic { span, .. }
-        | TypeExpr::Named { span, .. }
-        | TypeExpr::Self_ { span }
-        | TypeExpr::Union { span, .. }
-        | TypeExpr::Unit { span } => *span,
-    }
 }
 
 /// True when `name` is a package-level constant in the resolver's

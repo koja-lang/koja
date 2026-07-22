@@ -8,8 +8,8 @@ use std::collections::BTreeMap;
 use crate::constant::IRConstantValue;
 use crate::enum_decl::{EnumPayloadInit, IREnumDecl, IRVariantPayload};
 use crate::function::{
-    FunctionKind, IRBasicBlock, IRBlockId, IRFunction, IRFunctionParam, IRInstruction, IRSymbol,
-    IRTerminator,
+    FunctionKind, IRBasicBlock, IRBlockId, IRFunction, IRFunctionParam, IRIndirectSlot,
+    IRInstruction, IRSymbol, IRTerminator,
 };
 use crate::local::IRLocalId;
 use crate::package::IRPackage;
@@ -276,7 +276,9 @@ fn instruction_result_type(
         IRInstruction::Concat { dest, kind, .. } => (*dest, kind.ir_type()),
         IRInstruction::Const { dest, value } => (*dest, const_type(value)),
         IRInstruction::DeepCopy { dest, ty, .. } => (*dest, ty.clone()),
-        IRInstruction::DropLocal { .. } | IRInstruction::DropValue { .. } => return None,
+        IRInstruction::DropLocal { .. }
+        | IRInstruction::DropValue { .. }
+        | IRInstruction::FreeIndirect { .. } => return None,
         IRInstruction::EnumConstruct { dest, ty, .. } => (*dest, IRType::Enum(ty.clone())),
         IRInstruction::EnumPayloadFieldGet {
             dest, field_type, ..
@@ -290,6 +292,7 @@ fn instruction_result_type(
             struct_symbol,
             ..
         } => (*dest, IRType::Struct(struct_symbol.clone())),
+        IRInstruction::IndirectPresent { dest, .. } => (*dest, IRType::Bool),
         IRInstruction::LoadCapture { dest, ty, .. } | IRInstruction::LoadConst { dest, ty, .. } => {
             (*dest, ty.clone())
         }
@@ -305,6 +308,10 @@ fn instruction_result_type(
         IRInstruction::SetPriority { .. } => return None,
         IRInstruction::Spawn { dest, ref_type, .. } => (*dest, IRType::Struct(ref_type.clone())),
         IRInstruction::StructInit { dest, ty, .. } => (*dest, IRType::Struct(ty.clone())),
+        IRInstruction::TupleGet {
+            dest, element_type, ..
+        } => (*dest, element_type.clone()),
+        IRInstruction::TupleInit { dest, ty, .. } => (*dest, IRType::Tuple(ty.clone())),
         IRInstruction::UnaryOp {
             dest,
             op,
@@ -463,6 +470,16 @@ fn seal_instruction_types(
             );
             require_value_type(values, *value, field_type, owner, "FieldSet value");
         }
+        IRInstruction::FreeIndirect { base, slot }
+        | IRInstruction::IndirectPresent { base, slot, .. } => {
+            let expected = match slot {
+                IRIndirectSlot::EnumPayload { ty, .. } => IRType::Enum(ty.clone()),
+                IRIndirectSlot::StructField { struct_symbol, .. } => {
+                    IRType::Struct(struct_symbol.clone())
+                }
+            };
+            require_value_type(values, *base, &expected, owner, "FreeIndirect base");
+        }
         IRInstruction::LoadCapture {
             capture_index, ty, ..
         } => {
@@ -568,6 +585,40 @@ fn seal_instruction_types(
                         "StructInit field",
                     );
                 }
+            }
+        }
+        IRInstruction::TupleGet {
+            base,
+            element_type,
+            index,
+            ..
+        } => {
+            let IRType::Tuple(elements) = value_type(values, *base, owner) else {
+                seal_panic(&format!("{owner}: TupleGet base `{base}` is not a tuple",));
+            };
+            let Some(declared) = elements.get(*index as usize) else {
+                seal_panic(&format!(
+                    "{owner}: TupleGet references element index {index}, but the tuple \
+                     only has {count} element(s)",
+                    count = elements.len(),
+                ));
+            };
+            require_same_type(
+                element_type,
+                declared,
+                &format!("{owner} TupleGet element `{index}`"),
+            );
+        }
+        IRInstruction::TupleInit { elements, ty, .. } => {
+            if elements.len() != ty.len() {
+                seal_panic(&format!(
+                    "{owner}: TupleInit carries {got} element(s) but its type has {expected}",
+                    got = elements.len(),
+                    expected = ty.len(),
+                ));
+            }
+            for (element, expected) in elements.iter().zip(ty) {
+                require_value_type(values, *element, expected, owner, "TupleInit element");
             }
         }
         IRInstruction::UnaryOp {

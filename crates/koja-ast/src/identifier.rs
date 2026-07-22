@@ -203,8 +203,8 @@ impl Resolution {
 ///   `type_args` are the generic arguments at this use site
 ///   (themselves `ResolvedType`s, so generics nest).
 /// - [`Self::Anonymous`]: structural types with no source name.
-///   Identity is by shape. Today: function types only. Future: records,
-///   tuples.
+///   Identity is by shape. Covers function and tuple types today,
+///   with records as a possible future addition.
 /// - [`Self::Unresolved`]: in-flight placeholder before resolve runs.
 ///   `Default` returns this.
 ///
@@ -267,6 +267,9 @@ impl ResolvedType {
             Self::Anonymous(AnonymousKind::Function { params, ret }) => {
                 params.iter().all(|p| p.is_resolved()) && ret.is_resolved()
             }
+            Self::Anonymous(AnonymousKind::Tuple { elements }) => {
+                elements.iter().all(Self::is_resolved)
+            }
             Self::Named {
                 resolution,
                 type_args,
@@ -280,8 +283,8 @@ impl ResolvedType {
 /// Kind tag for [`ResolvedType::Anonymous`]. Each variant is an
 /// anonymous type family with its own structural-equivalence rule.
 ///
-/// Today: only [`Self::Function`]. Future: `Record { fields }` and
-/// `Tuple { elements }`.
+/// Covers [`Self::Function`] and [`Self::Tuple`] today. Records are a
+/// possible future addition.
 #[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub enum AnonymousKind {
     /// `fn (T, U) -> R`: structural function type. Equates positionally
@@ -290,4 +293,7 @@ pub enum AnonymousKind {
         params: Vec<ResolvedType>,
         ret: Box<ResolvedType>,
     },
+    /// A structural tuple type such as `(T, U)`, always two or more
+    /// elements. Equates positionally on element types.
+    Tuple { elements: Vec<ResolvedType> },
 }

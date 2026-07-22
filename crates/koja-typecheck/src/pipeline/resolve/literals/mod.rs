@@ -1,8 +1,9 @@
 //! Typecheck for the AST's literal-shaped expressions.
 //!
 //! Today's surface: list literals (`[a, b, c]`), map literals
-//! (`["k": v, ...]`), and binary literals (`<<...>>`). Each
-//! per-shape resolver lives in its own file. The carrier-protocol
+//! (`["k": v, ...]`), binary literals (`<<...>>`), and tuple
+//! literals (`(a, b)`). Each per-shape resolver lives in its own
+//! file. The carrier-protocol
 //! mechanics that list and map share (the
 //! `<carrier>.<from_method>(<canonical-literal>)` synthesis when
 //! the surrounding hint demands a non-default conformer) live in
@@ -23,8 +24,10 @@ mod binary;
 mod carrier;
 mod list;
 mod map;
+mod tuple;
 
 pub(super) use binary::resolve_binary_literal;
 pub(crate) use binary::{SegmentKind, resolve_segment};
 pub(super) use list::resolve_list_literal;
 pub(super) use map::resolve_map_literal;
+pub(super) use tuple::resolve_tuple_literal;

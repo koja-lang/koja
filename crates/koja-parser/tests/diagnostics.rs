@@ -80,14 +80,14 @@ fn else_if_pins_user_facing_message() {
 }
 
 #[test]
-fn tuple_expression_diagnostic_is_actionable() {
+fn tuple_trailing_comma_diagnostic_is_actionable() {
     parse_failing_with(
         "
         fn run
-          (1, 2)
+          (1, 2,)
         end
         ",
-        &["tuples are not supported", "struct"],
+        &["tuples do not allow trailing commas"],
     );
 }
 
@@ -168,7 +168,7 @@ fn invalid_assignment_target_emits_hint() {
 
 #[test]
 fn diagnostics_have_well_formed_spans() {
-    let result = parse_failing("fn x\n  (1, 2)\nend\n");
+    let result = parse_failing("fn x\n  (1, 2,)\nend\n");
     for diag in &result.errors {
         assert!(
             diag.span.end.offset >= diag.span.start.offset,

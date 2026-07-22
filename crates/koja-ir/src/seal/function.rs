@@ -41,7 +41,7 @@ fn seal_function(function: &IRFunction) {
     match &function.kind {
         FunctionKind::CloneGlue | FunctionKind::DeepCopyGlue | FunctionKind::DropGlue => {
             // Glue bodies come in two shapes, both valid. Aggregate
-            // glue (struct / enum / union / `Indirect`) carries a full
+            // glue (struct, enum, tuple, or union) carries a full
             // elaborate-synthesized CFG, validated by the standard
             // SSA / block walk below. Collection glue (`List` / `Map`
             // / `Set`) lowers empty and is synthesized at emit time

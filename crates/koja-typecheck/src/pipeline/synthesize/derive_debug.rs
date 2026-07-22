@@ -136,6 +136,7 @@ fn type_expr_head(te: &TypeExpr) -> Option<&str> {
         }
         TypeExpr::Function { .. }
         | TypeExpr::Self_ { .. }
+        | TypeExpr::Tuple { .. }
         | TypeExpr::Union { .. }
         | TypeExpr::Unit { .. } => None,
     }
@@ -354,11 +355,12 @@ fn field_format_part(field_name: &str, field_type: &TypeExpr, span: Span) -> Str
 ///
 /// - Compiler-internal recursion-break wrappers (`Indirect`,
 ///   `Pointer`, `CPtr`).
-/// - Anything that isn't a plain named or generic type
+/// - Anything that isn't a plain named, generic, or tuple type
 ///   ([`TypeExpr::Function`], [`TypeExpr::Self_`], [`TypeExpr::Union`],
 ///   [`TypeExpr::Unit`]): functions / unions / etc. don't carry
 ///   `format` and there's no syntactic `Self.format()` recursion
-///   contract.
+///   contract. Tuples conform to `Debug` structurally, so they
+///   format like any named field type.
 ///
 /// Generic instantiations (`List<Int>`, `Pair<A, B>`, …) are *not*
 /// opaque: they pick up either a hand-written stdlib impl or a
@@ -377,6 +379,7 @@ pub(super) fn is_opaque_type(te: &TypeExpr) -> bool {
             path.last().map(String::as_str),
             Some("CPtr") | Some("Indirect") | Some("Pointer")
         ),
+        TypeExpr::Tuple { .. } => false,
         TypeExpr::Function { .. }
         | TypeExpr::Self_ { .. }
         | TypeExpr::Union { .. }
