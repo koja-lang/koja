@@ -1,0 +1,12 @@
+fn dynamic(label: String, number: Int) -> String
+  "#{label}-#{number}"
+end
+
+original = ((dynamic("left", 1), dynamic("right", 2)), 7)
+copy = original
+
+original.print()
+copy.print()
+
+((left, right), number) = copy
+IO.puts("#{left}|#{right}|#{number}")

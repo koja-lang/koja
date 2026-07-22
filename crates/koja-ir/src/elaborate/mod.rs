@@ -19,8 +19,8 @@
 //!   per-capture teardown hides behind its header's `drop_fn`). No
 //!   glue function, these are handled directly at the instruction.
 //! - **Composites** (`List` / `Map` / `Set`, heap-owning structs /
-//!   enums / unions): a `call` to the synthesized `<T>.$clone$` /
-//!   `<T>.$drop$`. This pass registers those functions.
+//!   enums / tuples / unions): a `call` to the synthesized
+//!   `<T>.$clone$` / `<T>.$drop$`. This pass registers those functions.
 //!
 //! The deep-copy family ([`IRInstruction::DeepCopy`] /
 //! `<T>.$deep_copy$`, emitted at process-boundary sends) mirrors the
@@ -43,11 +43,12 @@
 //!
 //! ## Two ways a glue body is born
 //!
-//! - **Aggregates** (`Struct` / `Enum` / `Union`): [`synthesis`] builds a
-//!   full IR body: field / payload projection, per-constituent
-//!   acquire / release (recursing into constituent glue via `Call`),
-//!   and an aggregate rebuild for clone. These carry a non-empty CFG
-//!   the backend walks like a [`FunctionKind::Regular`] body.
+//! - **Aggregates** (`Struct` / `Enum` / `Tuple` / `Union`):
+//!   [`synthesis`] builds a full IR body: field / payload projection,
+//!   per-constituent acquire / release (recursing into constituent
+//!   glue via `Call`), and an aggregate rebuild for clone. These carry
+//!   a non-empty CFG the backend walks like a
+//!   [`FunctionKind::Regular`] body.
 //! - **Collections** (`List` / `Map` / `Set`): the body is a
 //!   runtime-shaped deep-copy / element-walk the LLVM backend
 //!   synthesizes from the operand type at emit time, so the shell
@@ -60,10 +61,11 @@
 //! `DropLocal` / `DropValue` across every function body (and, for
 //! scripts, the inline script body). The worklist then transitively
 //! pulls in each composite's heap-managed constituents (struct
-//! fields, enum payloads, collection elements, union members, and the
-//! inner type behind a transparent `Indirect` box), because a
-//! composite's glue body recurses into its constituents' glue. Leaves
-//! and `Indirect` boxes themselves are skipped, as they carry no glue.
+//! fields, enum payloads, tuple elements, collection elements, union
+//! members, and the inner type behind a transparent `Indirect` box),
+//! because a composite's glue body recurses into its constituents'
+//! glue. Leaves and `Indirect` boxes themselves are skipped, as they
+//! carry no glue.
 
 mod delivery;
 mod exit_signal;
@@ -385,15 +387,16 @@ fn clone_or_drop_type(instruction: &IRInstruction) -> Option<&IRType> {
     }
 }
 
-/// The heap-managed sub-types `ty`'s glue body recurses into: struct
-/// fields, enum payloads, union members, collection elements, and the
-/// `Indirect` inner type.
+/// The heap-managed sub-types that `ty`'s glue body recurses into.
+/// Includes aggregate members, collection elements, and transparent
+/// boxes.
 fn constituent_types(ty: &IRType, packages: &[IRPackage]) -> Vec<IRType> {
     match ty {
         IRType::Indirect(inner) | IRType::List(inner) | IRType::Set(inner) => {
             vec![inner.as_ref().clone()]
         }
         IRType::Map { key, value } => vec![key.as_ref().clone(), value.as_ref().clone()],
+        IRType::Tuple(elements) => elements.clone(),
         IRType::Union { members, .. } => members.clone(),
         IRType::Struct(symbol) => find_struct(packages, symbol)
             .map(|decl| decl.fields.iter().map(|f| f.ir_type.clone()).collect())
@@ -779,6 +782,98 @@ mod tests {
             .function(drop_glue_symbol(&option_ty).mangled())
             .expect("drop glue registered");
         assert!(matches!(drop_glue.kind, FunctionKind::DropGlue));
+    }
+
+    #[test]
+    fn nested_tuple_glue_synthesizes_transitive_families_and_seals() {
+        let inner_ty = IRType::Tuple(vec![IRType::String, IRType::String]);
+        let outer_ty = IRType::Tuple(vec![inner_ty.clone(), IRType::Int64]);
+        let left = ValueId(0);
+        let right = ValueId(1);
+        let inner = ValueId(2);
+        let number = ValueId(3);
+        let outer = ValueId(4);
+        let cloned = ValueId(5);
+        let deep_copied = ValueId(6);
+        let seed = seed_function(
+            sym("Test.seed"),
+            vec![
+                IRInstruction::Const {
+                    dest: left,
+                    value: ConstValue::String("left".to_string()),
+                },
+                IRInstruction::Const {
+                    dest: right,
+                    value: ConstValue::String("right".to_string()),
+                },
+                IRInstruction::TupleInit {
+                    dest: inner,
+                    elements: vec![left, right],
+                    ty: vec![IRType::String, IRType::String],
+                },
+                IRInstruction::Const {
+                    dest: number,
+                    value: ConstValue::Int64(7),
+                },
+                IRInstruction::TupleInit {
+                    dest: outer,
+                    elements: vec![inner, number],
+                    ty: vec![inner_ty.clone(), IRType::Int64],
+                },
+                IRInstruction::Clone {
+                    dest: cloned,
+                    source: outer,
+                    ty: outer_ty.clone(),
+                },
+                IRInstruction::DeepCopy {
+                    dest: deep_copied,
+                    source: outer,
+                    ty: outer_ty.clone(),
+                },
+                IRInstruction::DropValue {
+                    value: outer,
+                    ty: outer_ty.clone(),
+                },
+                IRInstruction::DropValue {
+                    value: cloned,
+                    ty: outer_ty.clone(),
+                },
+                IRInstruction::DropValue {
+                    value: deep_copied,
+                    ty: outer_ty.clone(),
+                },
+            ],
+        );
+        let mut pkg = empty_package("Test");
+        pkg.functions.insert(seed.symbol.clone(), seed);
+        let entry_point = install_entry_scaffold(&mut pkg);
+        let mut program = IRProgram {
+            entry_point,
+            link_libraries: Vec::new(),
+            packages: vec![pkg, empty_package("Global")],
+        };
+
+        elaborate_and_seal(&mut program);
+
+        for ty in [&inner_ty, &outer_ty] {
+            let clone_glue = program
+                .function(clone_glue_symbol(ty).mangled())
+                .expect("clone glue registered");
+            assert!(matches!(clone_glue.kind, FunctionKind::CloneGlue));
+            assert!(!clone_glue.blocks.is_empty());
+
+            let drop_glue = program
+                .function(drop_glue_symbol(ty).mangled())
+                .expect("drop glue registered");
+            assert!(matches!(drop_glue.kind, FunctionKind::DropGlue));
+            assert!(!drop_glue.blocks.is_empty());
+
+            let deep_copy_glue = program
+                .function(deep_copy_glue_symbol(ty).mangled())
+                .expect("deep-copy glue registered");
+            assert!(matches!(deep_copy_glue.kind, FunctionKind::DeepCopyGlue));
+            assert!(!deep_copy_glue.blocks.is_empty());
+        }
     }
 
     #[test]
