@@ -19,7 +19,7 @@
 
 use koja_ast::ast::{Arg, Expr, Pattern};
 use koja_ast::identifier::{AnonymousKind, ResolvedType};
-use koja_typecheck::GlobalRegistry;
+use koja_typecheck::{GlobalRegistry, peel_alias};
 
 use super::body::store_owned_into_local;
 use super::calls::{conformance_method_symbol, emit_io_puts};
@@ -169,7 +169,7 @@ pub(super) fn lower_tuple_conformance_call(
     registry: &GlobalRegistry,
     output: &mut LowerOutput,
 ) -> Result<(ValueId, IRBlockId), ()> {
-    let elements = tuple_element_resolutions(&receiver.resolution);
+    let elements = tuple_element_resolutions(&receiver.resolution, registry);
     let (receiver_value, mut current) = lower_expr(receiver, ctx, block, registry, output)?;
     match method {
         "eq" => {
@@ -183,7 +183,7 @@ pub(super) fn lower_tuple_conformance_call(
             let (result, after) = emit_tuple_eq(
                 receiver_value,
                 other_value,
-                elements,
+                &elements,
                 ctx,
                 after,
                 registry,
@@ -195,13 +195,13 @@ pub(super) fn lower_tuple_conformance_call(
         }
         "format" => {
             let formatted =
-                emit_tuple_format(receiver_value, elements, ctx, current, registry, output);
+                emit_tuple_format(receiver_value, &elements, ctx, current, registry, output);
             drop_discarded_temp(ctx, current, receiver_value);
             Ok((formatted, current))
         }
         "inspect" => {
             let formatted =
-                emit_tuple_format(receiver_value, elements, ctx, current, registry, output);
+                emit_tuple_format(receiver_value, &elements, ctx, current, registry, output);
             current = emit_io_puts(formatted, ctx, current);
             drop_discarded_temp(ctx, current, formatted);
             // `inspect` returns the receiver unchanged so call
@@ -210,7 +210,7 @@ pub(super) fn lower_tuple_conformance_call(
         }
         "print" => {
             let formatted =
-                emit_tuple_format(receiver_value, elements, ctx, current, registry, output);
+                emit_tuple_format(receiver_value, &elements, ctx, current, registry, output);
             current = emit_io_puts(formatted, ctx, current);
             drop_discarded_temp(ctx, current, formatted);
             drop_discarded_temp(ctx, current, receiver_value);
@@ -231,8 +231,12 @@ pub(super) fn lower_tuple_conformance_call(
     }
 }
 
-fn tuple_element_resolutions(tuple_ty: &ResolvedType) -> &[ResolvedType] {
-    let ResolvedType::Anonymous(AnonymousKind::Tuple { elements }) = tuple_ty else {
+fn tuple_element_resolutions(
+    tuple_ty: &ResolvedType,
+    registry: &GlobalRegistry,
+) -> Vec<ResolvedType> {
+    let ResolvedType::Anonymous(AnonymousKind::Tuple { elements }) = peel_alias(tuple_ty, registry)
+    else {
         panic!(
             "IR lower: tuple conformance receiver resolved to `{tuple_ty:?}` \
              (typecheck resolve invariant violation)",
@@ -283,14 +287,24 @@ fn emit_element_format(
     registry: &GlobalRegistry,
     output: &mut LowerOutput,
 ) -> ValueId {
-    if is_opaque_element(element_ty) {
+    let structural_element = peel_alias(element_ty, registry);
+    if is_opaque_element(&structural_element) {
         return emit_string_const("...".to_string(), ctx, block);
     }
-    let extracted = emit_tuple_get(base, index, element_ty, ctx, block, registry, output);
-    if let ResolvedType::Anonymous(AnonymousKind::Tuple { elements }) = element_ty {
+    let extracted = emit_tuple_get(
+        base,
+        index,
+        &structural_element,
+        ctx,
+        block,
+        registry,
+        output,
+    );
+    if let ResolvedType::Anonymous(AnonymousKind::Tuple { elements }) = &structural_element {
         return emit_tuple_format(extracted, elements, ctx, block, registry, output);
     }
-    let (callee, return_ty) = conformance_method_symbol(element_ty, "format", registry, output);
+    let (callee, return_ty) =
+        conformance_method_symbol(&structural_element, "format", registry, output);
     let dest = ctx.fresh_value(return_ty);
     ctx.cfg.append(
         block,
@@ -336,10 +350,13 @@ fn emit_tuple_eq(
     registry: &GlobalRegistry,
     output: &mut LowerOutput,
 ) -> (ValueId, IRBlockId) {
-    let comparable: Vec<(usize, &ResolvedType)> = elements
+    let comparable: Vec<(usize, ResolvedType)> = elements
         .iter()
         .enumerate()
-        .filter(|(_, ty)| !is_opaque_element(ty))
+        .filter_map(|(index, ty)| {
+            let structural = peel_alias(ty, registry);
+            (!is_opaque_element(&structural)).then_some((index, structural))
+        })
         .collect();
     if comparable.is_empty() {
         let dest = ctx.fresh_value(IRType::Bool);
@@ -360,7 +377,7 @@ fn emit_tuple_eq(
         let (cond, after) = emit_element_eq(
             (lhs, rhs),
             index,
-            element_ty,
+            &element_ty,
             ctx,
             current,
             registry,

@@ -8,7 +8,9 @@ use koja_ast::ast::{Arg, Expr, ExprKind};
 use koja_ast::identifier::{
     AnonymousKind, GlobalRegistryId, Identifier, LocalId, Resolution, ResolvedType,
 };
-use koja_typecheck::{Dispatch, FunctionSignature, GlobalKind, GlobalRegistry, RegistryEntry};
+use koja_typecheck::{
+    Dispatch, FunctionSignature, GlobalKind, GlobalRegistry, RegistryEntry, peel_alias,
+};
 
 use super::ctx::{FnLowerCtx, LowerOutput};
 use super::expr::lower_expr;
@@ -306,13 +308,14 @@ pub(super) fn lower_method_call(
         args,
         method_type_args,
     } = shape;
+    let structural_receiver = peel_alias(&receiver.resolution, registry);
     if matches!(
-        receiver.resolution,
+        &structural_receiver,
         ResolvedType::Anonymous(AnonymousKind::Tuple { .. })
     ) {
         return lower_tuple_conformance_call(receiver, method, args, ctx, block, registry, output);
     }
-    if let Some(opaque) = opaque_debug_method(method, &receiver.resolution) {
+    if let Some(opaque) = opaque_debug_method(method, &structural_receiver) {
         return lower_opaque_debug_call(opaque, receiver, ctx, block, registry, output);
     }
     let dispatch = method_dispatch_kind(receiver, registry);
@@ -323,7 +326,8 @@ pub(super) fn lower_method_call(
             (Some(recv_id), next_block)
         }
     };
-    let struct_id = canonical_receiver_id(receiver_struct_id(receiver, dispatch), registry);
+    let struct_id =
+        canonical_receiver_id(receiver_struct_id(receiver, dispatch, registry), registry);
 
     let struct_entry = registry.get(struct_id).unwrap_or_else(|| {
         panic!(
@@ -438,11 +442,12 @@ pub(super) fn conformance_method_symbol(
     registry: &GlobalRegistry,
     output: &mut LowerOutput,
 ) -> (IRSymbol, IRType) {
+    let structural_receiver = peel_alias(receiver_ty, registry);
     let ResolvedType::Named {
         resolution: Resolution::Global(struct_id),
         type_args,
         ..
-    } = receiver_ty
+    } = &structural_receiver
     else {
         panic!(
             "IR lower: conformance call receiver `{receiver_ty:?}` is not a nominal type \
@@ -558,7 +563,11 @@ fn canonical_receiver_id(id: GlobalRegistryId, registry: &GlobalRegistry) -> Glo
 /// Pull the struct's `GlobalRegistryId` off a method-call receiver.
 /// Static reads from `receiver.kind`'s `Resolution::Global`, instance
 /// reads from `receiver.resolution`'s resolved value type.
-fn receiver_struct_id(receiver: &Expr, dispatch: Dispatch) -> GlobalRegistryId {
+fn receiver_struct_id(
+    receiver: &Expr,
+    dispatch: Dispatch,
+    registry: &GlobalRegistry,
+) -> GlobalRegistryId {
     match dispatch {
         Dispatch::Static => {
             let ExprKind::Ident {
@@ -581,17 +590,18 @@ fn receiver_struct_id(receiver: &Expr, dispatch: Dispatch) -> GlobalRegistryId {
         }
         Dispatch::Instance => {
             let resolution = &receiver.resolution;
+            let structural_receiver = peel_alias(resolution, registry);
             let ResolvedType::Named {
                 resolution: Resolution::Global(struct_id),
                 ..
-            } = resolution
+            } = structural_receiver
             else {
                 panic!(
                     "IR lower: instance method receiver resolved to non-Global type \
                      ({resolution:?}), typecheck seal must have rejected this",
                 );
             };
-            *struct_id
+            struct_id
         }
     }
 }

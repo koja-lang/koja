@@ -13,7 +13,7 @@ use koja_ast::span::Span;
 use super::super::ctx::Resolver;
 use super::super::expr::resolve_expr_with_expected;
 use super::super::ops::is_primitive_equality_eligible;
-use super::super::types::{display_resolution, types_equivalent};
+use super::super::types::{display_resolution, peel_alias, types_equivalent};
 use super::resolve_args;
 
 pub(super) fn resolve_tuple_method_call(
@@ -121,18 +121,26 @@ fn check_elements_support_equality(
     resolver: &Resolver<'_>,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
-    let ResolvedType::Anonymous(AnonymousKind::Tuple { elements }) = tuple_ty else {
+    let ResolvedType::Anonymous(AnonymousKind::Tuple { elements }) =
+        peel_alias(tuple_ty, resolver.registry)
+    else {
         return;
     };
-    for element in elements {
-        match element {
+    for element in &elements {
+        let structural_element = peel_alias(element, resolver.registry);
+        match &structural_element {
             ResolvedType::Anonymous(AnonymousKind::Tuple { .. }) => {
-                check_elements_support_equality(element, call_span, resolver, diagnostics);
+                check_elements_support_equality(
+                    &structural_element,
+                    call_span,
+                    resolver,
+                    diagnostics,
+                );
             }
             ResolvedType::Named {
                 resolution: Resolution::Global(id),
                 ..
-            } if !element_has_eq(element, *id, resolver) => {
+            } if !element_has_eq(&structural_element, *id, resolver) => {
                 diagnostics.push(Diagnostic::error(
                     format!(
                         "cannot compare tuples containing `{}`. The element type does \

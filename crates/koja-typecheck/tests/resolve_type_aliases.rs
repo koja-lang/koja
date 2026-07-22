@@ -29,8 +29,8 @@ use koja_parser::ParseMode;
 mod common;
 
 use common::{
-    PACKAGE, check_packages, diagnostic_messages, typecheck_file as typecheck,
-    typecheck_file_fail as typecheck_fail,
+    PACKAGE, assert_file_fails_with, check_packages, diagnostic_messages,
+    typecheck_file as typecheck, typecheck_file_fail as typecheck_fail,
 };
 
 #[test]
@@ -285,5 +285,74 @@ fn type_alias_is_visible_cross_package() {
         result.is_ok(),
         "expected cross-package alias to resolve, got {:?}",
         result.err().map(|f| diagnostic_messages(&f)),
+    );
+}
+
+#[test]
+fn tuple_alias_chain_supports_methods_patterns_and_destructuring() {
+    let source = "
+        type Pair = (Int, String)
+        type NamedPair = Pair
+
+        fn use_pair(pair: NamedPair) -> Bool
+          pair.print()
+          pair.format()
+          (left, _) = pair
+          left.print()
+          match pair
+            (number, label) -> pair.eq((number, label))
+          end
+        end
+        ";
+
+    typecheck(&dedent(source));
+}
+
+#[test]
+fn tuple_alias_satisfies_structural_protocol_bounds() {
+    let source = "
+        type Pair = (Int, String)
+
+        fn render<T: Debug>(value: T) -> String
+          value.format()
+        end
+
+        fn equal<T: Equality>(left: T, right: T) -> Bool
+          left.eq(right)
+        end
+
+        fn use_pair(pair: Pair) -> Bool
+          render(pair)
+          equal(pair, (1, \"one\"))
+        end
+        ";
+
+    typecheck(&dedent(source));
+}
+
+#[test]
+fn tuple_alias_does_not_satisfy_custom_protocol_bound() {
+    let source = "
+        protocol Marked
+          fn mark(self) -> Int
+        end
+
+        type Pair = (Int, Int)
+
+        fn use_mark<T: Marked>(value: T) -> Int
+          value.mark()
+        end
+
+        fn reject(pair: Pair) -> Int
+          use_mark(pair)
+        end
+        ";
+
+    assert_file_fails_with(
+        source,
+        &[
+            "does not implement protocol `Marked`",
+            "required by type parameter `T`",
+        ],
     );
 }

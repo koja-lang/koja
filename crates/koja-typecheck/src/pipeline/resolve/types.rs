@@ -137,7 +137,7 @@ pub(crate) fn canonical_union(
 /// types pass through unchanged. Cycles are bounded by a small
 /// recursion cap. `lift_type_aliases` rejects cycles up front, so
 /// hitting the cap here is a registry invariant violation.
-pub(crate) fn peel_alias(ty: &ResolvedType, registry: &GlobalRegistry) -> ResolvedType {
+pub fn peel_alias(ty: &ResolvedType, registry: &GlobalRegistry) -> ResolvedType {
     peel_alias_capped(ty, registry, 32)
 }
 
@@ -391,13 +391,13 @@ fn protocol_bound_satisfied(
     protocol_id: GlobalRegistryId,
     registry: &GlobalRegistry,
 ) -> Option<bool> {
-    match inferred {
+    match peel_alias(inferred, registry) {
         ResolvedType::Named {
             resolution: Resolution::Global(target_id),
             ..
         } => Some(
             registry
-                .lookup_conformance(*target_id, protocol_id)
+                .lookup_conformance(target_id, protocol_id)
                 .is_some(),
         ),
         ResolvedType::Anonymous(AnonymousKind::Tuple { .. }) => {

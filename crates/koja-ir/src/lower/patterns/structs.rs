@@ -284,9 +284,13 @@ fn collect_catch_all_binds(
             }
         }
         Pattern::Tuple { elements, .. } => {
-            let element_types = super::tuples::tuple_element_types(sub_resolved_ty, elements.len());
+            let element_types = super::tuples::tuple_element_types(
+                sub_resolved_ty,
+                elements.len(),
+                inputs.registry,
+            );
             for (index, (element, element_resolved)) in
-                elements.iter().zip(element_types).enumerate()
+                elements.iter().zip(&element_types).enumerate()
             {
                 let element_ir = super::super::package::resolved_type_to_ir_type(
                     element_resolved,

@@ -7,6 +7,7 @@
 
 use koja_ast::ast::Pattern;
 use koja_ast::identifier::{AnonymousKind, ResolvedType};
+use koja_typecheck::{GlobalRegistry, peel_alias};
 
 use super::super::ctx::{FnLowerCtx, LowerOutput};
 use super::super::package::resolved_type_to_ir_type;
@@ -21,11 +22,11 @@ pub(super) fn lower_tuple_check(
     block: IRBlockId,
     output: &mut LowerOutput,
 ) -> (PatternCheck, IRBlockId) {
-    let element_types = tuple_element_types(inputs.subject_ty, elements.len());
+    let element_types = tuple_element_types(inputs.subject_ty, elements.len(), inputs.registry);
     let mut binds = Vec::new();
     let mut steps = Vec::new();
     let mut current_block = block;
-    for (index, (pattern, element_resolved)) in elements.iter().zip(element_types).enumerate() {
+    for (index, (pattern, element_resolved)) in elements.iter().zip(&element_types).enumerate() {
         let element_ir = resolved_type_to_ir_type(
             element_resolved,
             inputs.registry,
@@ -67,8 +68,14 @@ pub(super) fn lower_tuple_check(
 
 /// The subject's element resolved types, arity-checked against the
 /// pattern.
-pub(super) fn tuple_element_types(subject_ty: &ResolvedType, arity: usize) -> &[ResolvedType] {
-    let ResolvedType::Anonymous(AnonymousKind::Tuple { elements }) = subject_ty else {
+pub(super) fn tuple_element_types(
+    subject_ty: &ResolvedType,
+    arity: usize,
+    registry: &GlobalRegistry,
+) -> Vec<ResolvedType> {
+    let ResolvedType::Anonymous(AnonymousKind::Tuple { elements }) =
+        peel_alias(subject_ty, registry)
+    else {
         panic!(
             "IR lower: tuple pattern subject resolved to `{subject_ty:?}` after \
              typecheck seal (resolve invariant violation)",

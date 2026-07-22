@@ -35,4 +35,5 @@ pub(crate) mod synthesize;
 pub(crate) mod unify;
 pub(crate) mod visibility;
 
+pub use resolve::types::peel_alias;
 pub use unify::{Substitution, substitute};

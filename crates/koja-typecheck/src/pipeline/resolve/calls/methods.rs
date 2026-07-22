@@ -142,7 +142,8 @@ pub(super) fn classify_receiver(
         // Receiver already triggered its own diagnostic.
         return None;
     }
-    if let ResolvedType::Union(_) = peel_alias(&receiver.resolution, resolver.registry) {
+    let structural_receiver = peel_alias(&receiver.resolution, resolver.registry);
+    if matches!(&structural_receiver, ResolvedType::Union(_)) {
         diagnostics.push(Diagnostic::error(
             format!(
                 "cannot call method on union type `{}`. \
@@ -153,12 +154,11 @@ pub(super) fn classify_receiver(
         ));
         return None;
     }
-    match &receiver.resolution {
+    match structural_receiver {
         ResolvedType::Named {
             resolution: Resolution::Global(struct_id),
             ..
         } => {
-            let struct_id = *struct_id;
             let entry = resolver.registry.get(struct_id)?;
             if !matches!(entry.kind, GlobalKind::Enum(_) | GlobalKind::Struct(_)) {
                 diagnostics.push(Diagnostic::error(
@@ -177,10 +177,7 @@ pub(super) fn classify_receiver(
         ResolvedType::Named {
             resolution: Resolution::TypeParam { owner, index },
             ..
-        } => Some(MethodReceiver::Bounded {
-            owner: *owner,
-            index: *index,
-        }),
+        } => Some(MethodReceiver::Bounded { owner, index }),
         _ => {
             diagnostics.push(Diagnostic::error(
                 "instance method receiver must have a struct or enum type".to_string(),
