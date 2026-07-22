@@ -40,8 +40,9 @@ pub struct IRUnionDecl {
 /// struct layout.
 ///
 /// Mirrors the LLVM backend's per-shape ABI sizing on a 64-bit
-/// host. Primitives match their bit width, pointer-shaped values
-/// use the host pointer size, and structs sum their fields *with
+/// host. Primitives match their bit width, value-position `Unit`
+/// uses LLVM's inert `i8` placeholder, pointer-shaped values use
+/// the host pointer size, and structs sum their fields *with
 /// padding* to natural alignment. Enums use the same `{ i8 tag +
 /// align padding + max-payload }` blob the LLVM enum layout
 /// produces, with the outer rounded up to its max-align stride.
@@ -75,7 +76,7 @@ fn size_and_align(
         IRType::Int16 | IRType::UInt16 => (2, 2),
         IRType::Float32 | IRType::Int32 | IRType::UInt32 => (4, 4),
         IRType::Float64 | IRType::Int64 | IRType::UInt64 => (8, 8),
-        IRType::Unit => (0, 1),
+        IRType::Unit => (1, 1),
         IRType::Binary | IRType::Bits | IRType::CPtr(_) | IRType::Indirect(_) | IRType::String => {
             (PTR_BYTES, PTR_BYTES)
         }
@@ -155,6 +156,8 @@ fn enum_size(
     let mut max_complete_align = 1u32;
     for variant in &decl.variants {
         let (payload_size, payload_align) = match &variant.payload {
+            // A unit variant has no value-position payload. Its
+            // complete representation is only the tag byte.
             IRVariantPayload::Unit => (0, 1),
             IRVariantPayload::Tuple(types) => sum_fields(types.iter(), structs, enums, unions),
             IRVariantPayload::Struct(fields) => {
@@ -484,5 +487,26 @@ fn walk_type(ty: &IRType, out: &mut BTreeMap<IRSymbol, IRType>) {
             }
             out.entry(mangled.clone()).or_insert_with(|| ty.clone());
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn size(ty: &IRType) -> u32 {
+        size_in_bytes(ty, &BTreeMap::new(), &BTreeMap::new(), &BTreeMap::new())
+    }
+
+    #[test]
+    fn value_position_unit_matches_llvm_i8_placeholder() {
+        assert_eq!(size(&IRType::Unit), 1);
+    }
+
+    #[test]
+    fn tuples_with_unit_include_natural_padding() {
+        assert_eq!(size(&IRType::Tuple(vec![IRType::Unit, IRType::Int64])), 16);
+        assert_eq!(size(&IRType::Tuple(vec![IRType::Int64, IRType::Unit])), 16);
+        assert_eq!(size(&IRType::Tuple(vec![IRType::Unit, IRType::Unit])), 2);
     }
 }

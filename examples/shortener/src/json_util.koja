@@ -69,6 +69,9 @@ struct JsonUtil
     end
   end
 
+  # `Value.Object` still carries `Pair` entries (the stdlib JSON
+  # package has not migrated to tuples yet), so this scan stays on
+  # the `Pair` API.
   priv fn scan(entries: List<Pair<String, Value>>, key: String, index: Int)
     -> Option<Value>
 

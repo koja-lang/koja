@@ -156,13 +156,14 @@ extend Worker
         StopReason.Normal
 
       Option.Some(framed) ->
-        outcome = self.respond(framed.first)
-        keep = outcome.second and budget > 1
-        response = with_connection(outcome.first, keep ? "keep-alive" : "close")
+        (request, leftover) = framed
+        (response, keep) = self.respond(request)
+        keep = keep and budget > 1
+        response = with_connection(response, keep ? "keep-alive" : "close")
 
         match self.client.write(response.serialize())
           Result.Ok(_) when keep ->
-            self.serve(framed.second, budget - 1)
+            self.serve(leftover, budget - 1)
 
           _ ->
             self.close()
@@ -173,31 +174,26 @@ extend Worker
 
   # Parses and routes one raw request. Returns the response paired
   # with whether the client wants the connection kept open.
-  priv fn respond(self, raw: String) -> Pair<Response, Bool>
+  priv fn respond(self, raw: String) -> (Response, Bool)
     match Parser.parse_request(raw)
       Result.Err(_) ->
-        Pair{
-          first: Router.error(Status.bad_request(), "malformed request"),
-          second: false,
-        }
+        (Router.error(Status.bad_request(), "malformed request"), false)
 
       Result.Ok(req) ->
         keep = wants_keep_alive?(req)
 
         match self.pool.checkout(CHECKOUT_MS)
           Result.Err(_) ->
-            Pair{
-              first: Router.error(
-                Status.new(503, "Service Unavailable"),
-                "no database connection available",
-              ),
-              second: keep,
-            }
+            error = Router.error(
+              Status.new(503, "Service Unavailable"),
+              "no database connection available",
+            )
+            (error, keep)
 
           Result.Ok(conn) ->
-            routed = Router.route(req, conn)
-            self.pool.checkin(routed.second)
-            Pair{first: routed.first, second: keep}
+            (response, conn) = Router.route(req, conn)
+            self.pool.checkin(conn)
+            (response, keep)
         end
     end
   end
@@ -214,7 +210,7 @@ end
 # request paired with any bytes that arrived after it (pipelining), or
 # `Option.None` when the client closes or the read fails.
 priv fn read_request(client: TCPSocket, buffered: String)
-  -> Option<Pair<String, String>>
+  -> Option<(String, String)>
 
   match split_request(buffered)
     Option.Some(framed) ->
@@ -231,7 +227,7 @@ end
 
 # Splits `buffer` into one complete request and the leftover bytes, or
 # returns None when the request is still incomplete.
-priv fn split_request(buffer: String) -> Option<Pair<String, String>>
+priv fn split_request(buffer: String) -> Option<(String, String)>
   parts = buffer.split("\r\n\r\n")
 
   if parts.length() < 2
@@ -255,7 +251,7 @@ priv fn split_request(buffer: String) -> Option<Pair<String, String>>
     ? ""
     : buffer.slice(Range{start: total, stop: buffer.length() - 1})
 
-  Option.Some(Pair{first: request, second: leftover})
+  Option.Some((request, leftover))
 end
 
 priv fn content_length(header_text: String) -> Int

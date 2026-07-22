@@ -34,27 +34,22 @@ struct LinkStore
   Inserts a new link for `url` under a freshly generated unique code,
   retrying on the (unlikely) event of a code collision.
   """
-  fn create(conn: Connection, url: String)
-    -> Pair<Connection, Result<Link, String>>
-
+  fn create(conn: Connection, url: String) -> (Connection, Result<Link, String>)
     create_attempt(conn, url, 0)
   end
 
   @doc """
   Returns every link, newest first.
   """
-  fn all(conn: Connection) -> Pair<Connection, Result<List<Link>, String>>
+  fn all(conn: Connection) -> (Connection, Result<List<Link>, String>)
     outcome = conn.query(
       select_columns() <> " FROM links ORDER BY created_at DESC",
     )
     rows: List<Link> = List.new()
 
     match outcome.second
-      Result.Err(e) ->
-        Pair.new(outcome.first, Result.Err(e.message()))
-
-      Result.Ok(qr) ->
-        Pair.new(outcome.first, Result.Ok(map_rows(qr.rows, 0, rows)))
+      Result.Err(e) -> (outcome.first, Result.Err(e.message()))
+      Result.Ok(qr) -> (outcome.first, Result.Ok(map_rows(qr.rows, 0, rows)))
     end
   end
 
@@ -62,7 +57,7 @@ struct LinkStore
   Looks up a single link by code.
   """
   fn find(conn: Connection, code: String)
-    -> Pair<Connection, Result<Option<Link>, String>>
+    -> (Connection, Result<Option<Link>, String>)
 
     query_one(
       conn,
@@ -75,7 +70,7 @@ struct LinkStore
   or `None` when no link has that code.
   """
   fn update(conn: Connection, code: String, url: String)
-    -> Pair<Connection, Result<Option<Link>, String>>
+    -> (Connection, Result<Option<Link>, String>)
 
     query_one(
       conn,
@@ -88,16 +83,13 @@ struct LinkStore
   Deletes a link, returning `true` when a row was removed.
   """
   fn remove(conn: Connection, code: String)
-    -> Pair<Connection, Result<Bool, String>>
+    -> (Connection, Result<Bool, String>)
 
     outcome = conn.query("DELETE FROM links WHERE code = " <> lit(code))
 
     match outcome.second
-      Result.Err(e) ->
-        Pair.new(outcome.first, Result.Err(e.message()))
-
-      Result.Ok(qr) ->
-        Pair.new(outcome.first, Result.Ok(qr.tag != "DELETE 0"))
+      Result.Err(e) -> (outcome.first, Result.Err(e.message()))
+      Result.Ok(qr) -> (outcome.first, Result.Ok(qr.tag != "DELETE 0"))
     end
   end
 
@@ -106,7 +98,7 @@ struct LinkStore
   `None` when the code is unknown. Used by the redirect path.
   """
   fn visit(conn: Connection, code: String)
-    -> Pair<Connection, Result<Option<String>, String>>
+    -> (Connection, Result<Option<String>, String>)
 
     outcome = conn.query(
       "UPDATE links SET hits = hits + 1 WHERE code = " <> lit(code) <>
@@ -115,7 +107,7 @@ struct LinkStore
 
     match outcome.second
       Result.Err(e) ->
-        Pair.new(outcome.first, Result.Err(e.message()))
+        (outcome.first, Result.Err(e.message()))
 
       Result.Ok(qr) ->
         target: Option<String> =
@@ -124,15 +116,15 @@ struct LinkStore
             Option.None -> Option.None
           end
 
-        Pair.new(outcome.first, Result.Ok(target))
+        (outcome.first, Result.Ok(target))
     end
   end
 
   priv fn create_attempt(conn: Connection, url: String, attempt: Int)
-    -> Pair<Connection, Result<Link, String>>
+    -> (Connection, Result<Link, String>)
 
     if attempt >= MAX_ATTEMPTS
-      return Pair.new(conn, Result.Err("could not generate a unique code"))
+      return (conn, Result.Err("could not generate a unique code"))
     end
 
     code = generate_code(CODE_LENGTH, "")
@@ -144,24 +136,24 @@ struct LinkStore
 
     match outcome.second
       Result.Err(e) ->
-        Pair.new(outcome.first, Result.Err(e.message()))
+        (outcome.first, Result.Err(e.message()))
 
       Result.Ok(qr) ->
         match first_link(qr)
-          Option.Some(link) -> Pair.new(outcome.first, Result.Ok(link))
+          Option.Some(link) -> (outcome.first, Result.Ok(link))
           Option.None -> create_attempt(outcome.first, url, attempt + 1)
         end
     end
   end
 
   priv fn query_one(conn: Connection, sql: String)
-    -> Pair<Connection, Result<Option<Link>, String>>
+    -> (Connection, Result<Option<Link>, String>)
 
     outcome = conn.query(sql)
 
     match outcome.second
-      Result.Err(e) -> Pair.new(outcome.first, Result.Err(e.message()))
-      Result.Ok(qr) -> Pair.new(outcome.first, Result.Ok(first_link(qr)))
+      Result.Err(e) -> (outcome.first, Result.Err(e.message()))
+      Result.Ok(qr) -> (outcome.first, Result.Ok(first_link(qr)))
     end
   end
 
