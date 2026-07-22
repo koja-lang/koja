@@ -7,7 +7,7 @@
 //!   `Process` impl all diagnose.
 //! - `receive` arms must use a `Pattern::TypedBinding` whose
 //!   annotation is either a business envelope
-//!   (`Pair<M, Option<ReplyTo<R>>>`) or `Lifecycle`. Arm bodies +
+//!   (`(M, Option<ReplyTo<R>>)`) or `Lifecycle`. Arm bodies +
 //!   the `after` body join under the same lattice as `match`.
 //! - `receive after timeout body end` requires `Int` for the
 //!   timeout (no arrow on the `after` clause, body follows directly).
@@ -255,12 +255,12 @@ fn spawn_receiver_without_process_impl_diagnoses() {
 #[test]
 fn receive_business_arm_resolves_with_typed_binding() {
     // The arm pattern's typed-binding annotation is the arm subject
-    // type. `pair: Pair<Int, Option<ReplyTo<String>>>` is a business
-    // envelope. The body sees `pair` as that type.
+    // type. `(Int, Option<ReplyTo<String>>)` is a business
+    // envelope. The body sees `envelope` as that type.
     let source = "
         fn main -> StopReason
           receive
-            pair: Pair<Int, Option<ReplyTo<String>>> ->
+            envelope: (Int, Option<ReplyTo<String>>) ->
               StopReason.Normal
           end
         end
@@ -276,7 +276,7 @@ fn receive_business_arm_resolves_with_typed_binding() {
     };
     assert_eq!(*id, process_id(&checked, "StopReason"));
 
-    // The bound `pair` should have a `local_id` stamped on the
+    // The bound envelope should have a `local_id` stamped on the
     // typed-binding pattern.
     let main = main_fn(&checked);
     let body = main.body.as_deref().expect("main body");
@@ -342,7 +342,7 @@ fn receive_arm_without_typed_binding_diagnoses() {
 #[test]
 fn receive_arm_with_unsupported_envelope_diagnoses() {
     // A typed-binding against `Int` is not a business envelope
-    // (`Pair<M, Option<ReplyTo<R>>>`) and not `Lifecycle`.
+    // (`(M, Option<ReplyTo<R>>)`), and not `Lifecycle`.
     let source = "
         fn main -> StopReason
           receive
@@ -358,6 +358,26 @@ fn receive_arm_with_unsupported_envelope_diagnoses() {
             .iter()
             .any(|m| m.contains("only supports business")),
         "expected envelope shape diagnostic, got {messages:?}",
+    );
+}
+
+#[test]
+fn receive_arm_with_legacy_pair_envelope_diagnoses() {
+    let source = "
+        fn main -> StopReason
+          receive
+            envelope: Pair<Int, Option<ReplyTo<String>>> ->
+              StopReason.Normal
+          end
+        end
+        ";
+    let failure = typecheck_fail(&dedent(source));
+    let messages = diagnostic_messages(&failure);
+    assert!(
+        messages
+            .iter()
+            .any(|message| message.contains("only supports business")),
+        "expected tuple-envelope diagnostic, got {messages:?}",
     );
 }
 
@@ -387,7 +407,7 @@ fn receive_arms_join_under_same_lattice_as_match() {
     let source = "
         fn main -> StopReason
           receive
-            pair: Pair<Int, Option<ReplyTo<Int>>> -> StopReason.Normal
+            envelope: (Int, Option<ReplyTo<Int>>) -> StopReason.Normal
             event: Lifecycle -> StopReason.Shutdown
           end
         end
@@ -411,7 +431,7 @@ fn receive_with_inconsistent_arm_tails_diagnoses() {
     let source = "
         fn main -> StopReason
           receive
-            pair: Pair<Int, Option<ReplyTo<Int>>> -> StopReason.Normal
+            envelope: (Int, Option<ReplyTo<Int>>) -> StopReason.Normal
             event: Lifecycle -> 0
           end
         end

@@ -5,11 +5,9 @@
 //! `Rc` before mutating, so a shared binding (`b = a`) is never
 //! observably mutated through another alias.
 //!
-//! `get` and `pop` materialize `Option<T>` / `Pair<Option<T>, List<T>>`
-//! values directly. The receiver symbol for the option / pair shape
-//! flows from `function.return_type`. The inner Option symbol for
-//! `pop` is resolved off Pair's struct decl through the resolver,
-//! so neither path fabricates an [`IRSymbol`] from a string.
+//! `get` and `pop` materialize `Option<T>` / `(Option<T>, List<T>)`
+//! values directly. Their concrete return types flow from the
+//! specialized function signature.
 
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -25,7 +23,7 @@ pub(super) fn dispatch<R: CallResolver>(
     method: ListMethod,
     function: &IRFunction,
     args: &[Value],
-    resolver: &R,
+    _resolver: &R,
 ) -> Result<Value, RuntimeError> {
     match method {
         ListMethod::Append => append(args),
@@ -35,7 +33,7 @@ pub(super) fn dispatch<R: CallResolver>(
         ListMethod::Get => get(function, args),
         ListMethod::Length => length(args),
         ListMethod::New => new(),
-        ListMethod::Pop => pop(function, resolver, args),
+        ListMethod::Pop => pop(function, args),
         ListMethod::ReplaceAt => replace_at(args),
         ListMethod::Slice => slice(args),
     }
@@ -89,22 +87,14 @@ fn get(function: &IRFunction, args: &[Value]) -> Result<Value, RuntimeError> {
     Ok(helpers::option_value(option_symbol, value))
 }
 
-fn pop<R: CallResolver>(
-    function: &IRFunction,
-    resolver: &R,
-    args: &[Value],
-) -> Result<Value, RuntimeError> {
+fn pop(function: &IRFunction, args: &[Value]) -> Result<Value, RuntimeError> {
     let list = expect_list(args, 0, "List.pop")?;
-    let pair_symbol = struct_return_symbol(function, "List.pop")?;
-    let option_symbol = pair_first_option_symbol(&pair_symbol, resolver)?;
+    let option_symbol = tuple_option_symbol(function)?;
     let mut items = list.borrow().clone();
     let popped = items.pop();
     let option = helpers::option_value(option_symbol, popped);
     let remainder = Value::List(Rc::new(RefCell::new(items)));
-    Ok(Value::Struct {
-        symbol: pair_symbol,
-        fields: vec![option, remainder],
-    })
+    Ok(Value::Tuple(vec![option, remainder]))
 }
 
 fn replace_at(args: &[Value]) -> Result<Value, RuntimeError> {
@@ -161,41 +151,18 @@ fn expect_int(args: &[Value], index: usize, label: &str) -> Result<i64, RuntimeE
     }
 }
 
-fn struct_return_symbol(function: &IRFunction, label: &str) -> Result<IRSymbol, RuntimeError> {
+fn tuple_option_symbol(function: &IRFunction) -> Result<IRSymbol, RuntimeError> {
     match &function.return_type {
-        IRType::Struct(symbol) => Ok(symbol.clone()),
-        other => Err(RuntimeError::TypeMismatch {
-            detail: format!("{label} expected Struct return type, got `{other:?}`"),
-        }),
-    }
-}
-
-/// Resolve `Pair<Option<T>, List<T>>`'s `first` field type to the
-/// `Option<T>` symbol via the resolver. Keeps `IRSymbol` opaque
-/// (no string-mangled fabrication).
-fn pair_first_option_symbol<R: CallResolver>(
-    pair_symbol: &IRSymbol,
-    resolver: &R,
-) -> Result<IRSymbol, RuntimeError> {
-    let decl =
-        resolver
-            .struct_decl(pair_symbol.mangled())
-            .ok_or_else(|| RuntimeError::Unsupported {
+        IRType::Tuple(elements) => match elements.as_slice() {
+            [IRType::Enum(symbol), IRType::List(_)] => Ok(symbol.clone()),
+            other => Err(RuntimeError::TypeMismatch {
                 detail: format!(
-                    "List.pop: Pair struct `{pair_symbol}` missing from IR \
-                 (seal invariant violation)",
+                    "List.pop expected `(Option<T>, List<T>)`, got tuple elements `{other:?}`"
                 ),
-            })?;
-    let first = decl
-        .fields
-        .first()
-        .ok_or_else(|| RuntimeError::Unsupported {
-            detail: format!("List.pop: Pair struct `{pair_symbol}` has no fields"),
-        })?;
-    match &first.ir_type {
-        IRType::Enum(symbol) => Ok(symbol.clone()),
+            }),
+        },
         other => Err(RuntimeError::TypeMismatch {
-            detail: format!("List.pop: Pair `first` expected Enum (Option), got `{other:?}`",),
+            detail: format!("List.pop expected Tuple return type, got `{other:?}`"),
         }),
     }
 }

@@ -404,7 +404,7 @@ fn ref_signal_loads_lifecycle_variant_byte_and_calls_send_lifecycle() {
 }
 
 #[test]
-fn ref_cast_emits_pair_envelope_with_none_reply_to_and_calls_koja_rt_send() {
+fn ref_cast_emits_tuple_envelope_with_none_reply_to_and_calls_koja_rt_send() {
     let mut source = String::from(COUNTER_PROCESS);
     source.push_str(
         "
@@ -419,9 +419,9 @@ fn ref_cast_emits_pair_envelope_with_none_reply_to_and_calls_koja_rt_send() {
     assert_contains(&ir_text, "declare void @koja_rt_send(i64, ptr, i64, ptr)");
     assert_contains(&ir_text, "call void @koja_rt_send(i64");
     assert_contains(&ir_text, "cast_envelope");
-    assert_contains(&ir_text, "pair_msg");
-    assert_contains(&ir_text, "pair_option");
-    // The Pair envelope packs `Option::None` as `[i64 1, i64 0,
+    assert_contains(&ir_text, "tuple_msg");
+    assert_contains(&ir_text, "tuple_option");
+    // The tuple envelope packs `Option::None` as `[i64 1, i64 0,
     // i64 0]` (tag byte = 1 in little-endian first lane, pid and
     // token words zero), independent of `R`. Pinning the literal
     // here catches accidental tag-flip regressions.
@@ -463,7 +463,7 @@ fn ref_alive_compares_koja_rt_is_process_alive_against_zero() {
 }
 
 #[test]
-fn ref_send_after_emits_pair_envelope_and_passes_delay_to_runtime() {
+fn ref_send_after_emits_tuple_envelope_and_passes_delay_to_runtime() {
     let mut source = String::from(COUNTER_PROCESS);
     source.push_str(
         "
@@ -481,7 +481,7 @@ fn ref_send_after_emits_pair_envelope_and_passes_delay_to_runtime() {
     );
     assert_contains(&ir_text, "call void @koja_rt_send_after(i64");
     assert_contains(&ir_text, "i64 250");
-    // Same `Pair<M, Option<ReplyTo<R>>>` envelope as `Ref.cast`,
+    // Same `(M, Option<ReplyTo<R>>)` envelope as `Ref.cast`,
     // with `Option::None` in the reply slot (the runtime delivers
     // the message into the same mailbox the receive arm reads).
     assert_contains(&ir_text, "send_after_envelope");
@@ -491,7 +491,7 @@ fn ref_send_after_emits_pair_envelope_and_passes_delay_to_runtime() {
 /// Pins the Unit-as-msg-payload codegen surface used by
 /// `Task<R>` (where the public-API `Ref<(), R>` pins `M = Unit`).
 /// The LLVM boundary maps Unit to an `i8` placeholder in every
-/// value position (param, struct field, local) so the Pair
+/// value position (param, tuple element, local) so the tuple
 /// envelope still lays out cleanly. Catches regressions in
 /// `function::function_signature` and the `types::ir_basic_type`
 /// Unit mapping.
@@ -531,7 +531,7 @@ fn ref_cast_with_unit_message_uses_i8_placeholder_in_envelope() {
     let ir_text = emit(&source);
 
     // Signature carries the i8 placeholder where M = Unit lands.
-    // The Pair envelope still packs an Option::None reply slot in
+    // The tuple envelope still packs an Option::None reply slot in
     // the trailing `[3 x i64]` array.
     assert_contains(
         &ir_text,
@@ -540,13 +540,13 @@ fn ref_cast_with_unit_message_uses_i8_placeholder_in_envelope() {
     assert_contains(&ir_text, "%cast_envelope = alloca { i8, [3 x i64] }");
     assert_contains(
         &ir_text,
-        "%pair_msg = insertvalue { i8, [3 x i64] } undef, i8 %1, 0",
+        "%tuple_msg = insertvalue { i8, [3 x i64] } undef, i8 %1, 0",
     );
     assert_contains(&ir_text, "[3 x i64] [i64 1, i64 0, i64 0]");
 }
 
 #[test]
-fn ref_call_emits_pair_envelope_with_some_reply_to_and_receive_loop() {
+fn ref_call_emits_tuple_envelope_with_some_reply_to_and_receive_loop() {
     let mut source = String::from(COUNTER_PROCESS);
     source.push_str(
         "
@@ -558,8 +558,8 @@ fn ref_call_emits_pair_envelope_with_some_reply_to_and_receive_loop() {
     );
     let ir_text = emit(&source);
 
-    // Writer side: the call envelope is the same `Pair<M,
-    // Option<ReplyTo<R>>>` shape as cast / send_after, but the
+    // Writer side: the call envelope is the same
+    // `(M, Option<ReplyTo<R>>)` shape as cast / send_after, but the
     // reply slot is `Option::Some(ReplyTo { id: caller_pid,
     // token })`, with the caller pid sourced from `koja_rt_self`, token
     // from `koja_rt_call_token`, packed as the second and third

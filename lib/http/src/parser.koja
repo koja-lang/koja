@@ -16,14 +16,14 @@ struct Parser
   fn parse_request(raw: String) -> Result<Request, Error>
     p = Parser{input: raw, pos: 0}
 
-    line_pair =
+    line_tuple =
       match p.read_line()
-        Option.Some(lp) -> lp
+        Option.Some(tuple) -> tuple
         Option.None -> return Result.Err(Error.ParseError("empty request"))
       end
 
-    request_line = line_pair.first
-    p = Parser{input: raw, pos: line_pair.second}
+    (request_line, request_pos) = line_tuple
+    p = Parser{input: raw, pos: request_pos}
 
     parts = request_line.split(" ")
 
@@ -42,15 +42,17 @@ struct Parser
         Result.Err(msg) -> return Result.Err(Error.ParseError(msg))
       end
 
-    rest =
+    headers_and_body =
       match p.parse_headers_and_body()
-        Result.Ok(hb) -> hb
+        Result.Ok(tuple) -> tuple
         Result.Err(e) -> return Result.Err(e)
       end
 
+    (headers, body) = headers_and_body
+
     Result.Ok(Request{
-      body: rest.second,
-      headers: rest.first,
+      body: body,
+      headers: headers,
       method: method,
       path: path,
       version: version,
@@ -64,52 +66,53 @@ struct Parser
   fn parse_response(raw: String) -> Result<Response, Error>
     p = Parser{input: raw, pos: 0}
 
-    line_pair =
+    line_tuple =
       match p.read_line()
-        Option.Some(lp) -> lp
+        Option.Some(tuple) -> tuple
         Option.None -> return Result.Err(Error.ParseError("empty response"))
       end
 
-    status_line = line_pair.first
-    p = Parser{input: raw, pos: line_pair.second}
+    (status_line, response_pos) = line_tuple
+    p = Parser{input: raw, pos: response_pos}
 
-    status_pair =
+    status_tuple =
       match Parser.parse_status_line(status_line)
-        Result.Ok(sp) -> sp
+        Result.Ok(tuple) -> tuple
         Result.Err(e) -> return Result.Err(e)
       end
 
-    version = status_pair.first
-    status = status_pair.second
+    (version, status) = status_tuple
 
-    rest =
+    headers_and_body =
       match p.parse_headers_and_body()
-        Result.Ok(hb) -> hb
+        Result.Ok(tuple) -> tuple
         Result.Err(e) -> return Result.Err(e)
       end
+
+    (headers, body) = headers_and_body
 
     Result.Ok(Response{
-      body: rest.second,
-      headers: rest.first,
+      body: body,
+      headers: headers,
       status: status,
       version: version,
     })
   end
 
-  priv fn parse_headers_and_body(self) -> Result<Pair<Headers, String>, Error>
+  priv fn parse_headers_and_body(self) -> Result<(Headers, String), Error>
     # Parses the header block and message body from a parser positioned at
     # the start of the headers (just past the request/status line). Returns
     # the parsed headers paired with the body string. Shared by
     # `parse_request` and `parse_response`.
 
-    header_pair =
+    header_tuple =
       match self.parse_headers()
-        Result.Ok(hp) -> hp
+        Result.Ok(tuple) -> tuple
         Result.Err(e) -> return Result.Err(e)
       end
 
-    headers = header_pair.first
-    after_headers = Parser{input: self.input, pos: header_pair.second}
+    (headers, header_pos) = header_tuple
+    after_headers = Parser{input: self.input, pos: header_pos}
 
     body =
       match after_headers.parse_body(headers)
@@ -117,10 +120,10 @@ struct Parser
         Result.Err(e) -> return Result.Err(e)
       end
 
-    Result.Ok(Pair{first: headers, second: body})
+    Result.Ok((headers, body))
   end
 
-  priv fn parse_status_line(line: String) -> Result<Pair<String, Status>, Error>
+  priv fn parse_status_line(line: String) -> Result<(String, Status), Error>
     sp1 =
       match Parser.find_char(line, " ", 0)
         Option.Some(i) -> i
@@ -149,30 +152,29 @@ struct Parser
       end
 
     status = Status{code: code, reason: reason}
-    Result.Ok(Pair{first: version, second: status})
+    Result.Ok((version, status))
   end
 
-  priv fn parse_headers(self) -> Result<Pair<Headers, Int>, Error>
+  priv fn parse_headers(self) -> Result<(Headers, Int), Error>
     headers = Headers.new()
     Parser.parse_headers_loop(self.input, self.pos, headers)
   end
 
   priv fn parse_headers_loop(input: String, pos: Int, headers: Headers)
-    -> Result<Pair<Headers, Int>, Error>
+    -> Result<(Headers, Int), Error>
 
     p = Parser{input: input, pos: pos}
 
-    line_pair =
+    line_tuple =
       match p.read_line()
-        Option.Some(lp) -> lp
-        Option.None -> return Result.Ok(Pair{first: headers, second: pos})
+        Option.Some(tuple) -> tuple
+        Option.None -> return Result.Ok((headers, pos))
       end
 
-    line = line_pair.first
-    new_pos = line_pair.second
+    (line, new_pos) = line_tuple
 
     if line.empty?()
-      return Result.Ok(Pair{first: headers, second: new_pos})
+      return Result.Ok((headers, new_pos))
     end
 
     colon =
@@ -227,14 +229,14 @@ struct Parser
 
     p = Parser{input: input, pos: pos}
 
-    size_pair =
+    size_tuple =
       match p.read_line()
-        Option.Some(sp) -> sp
+        Option.Some(tuple) -> tuple
         Option.None -> return Result.Ok(sb.build())
       end
 
-    size_str = size_pair.first.trim()
-    new_pos = size_pair.second
+    (size_line, new_pos) = size_tuple
+    size_str = size_line.trim()
 
     chunk_size =
       match Parser.parse_hex(size_str)
@@ -259,7 +261,7 @@ struct Parser
     Parser.parse_chunks(input, next_pos, sb)
   end
 
-  priv fn read_line(self) -> Option<Pair<String, Int>>
+  priv fn read_line(self) -> Option<(String, Int)>
     if self.pos >= self.input.length()
       return Option.None
     end
@@ -267,13 +269,13 @@ struct Parser
     match Parser.find_crlf(self.input, self.pos)
       Option.Some(crlf_pos) ->
         line = self.input.slice(Range{start: self.pos, stop: crlf_pos - 1})
-        Option.Some(Pair.new(line, crlf_pos + 2))
+        Option.Some((line, crlf_pos + 2))
 
       Option.None ->
         line = self.input.slice(
           Range{start: self.pos, stop: self.input.length() - 1},
         )
-        Option.Some(Pair.new(line, self.input.length()))
+        Option.Some((line, self.input.length()))
     end
   end
 

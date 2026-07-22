@@ -1,7 +1,7 @@
 //! `@intrinsic` methods on `Socket` from
 //! [`koja/lib/net/src/net.koja`]:
 //!
-//! * `Socket.recv_from(self, count: Int) -> Result<Pair<Binary, SocketAddress>, String>`:
+//! * `Socket.recv_from(self, count: Int) -> Result<(Binary, SocketAddress), String>`:
 //!   datagram receive. Suspends until the fd is readable.
 //! * `Socket.resolve(hostname: String) -> Result<List<IPAddress>, String>`:
 //!   synchronous `getaddrinfo` shim.
@@ -37,7 +37,7 @@ use crate::runtime::{
     declare_free_extern, declare_last_error_extern, declare_malloc_extern,
     declare_socket_recv_from_extern, declare_socket_resolve_extern,
 };
-use crate::types::list_value_type;
+use crate::types::{ir_basic_type, list_value_type};
 
 /// `enum Result<T, E>` variant tag for `Ok(T)`. Lifted from
 /// `koja/lib/global/src/kernel.koja`'s declaration order.
@@ -157,8 +157,7 @@ fn emit_recv_from<'ctx>(
     llvm_function: FunctionValue<'ctx>,
 ) -> Result<(), LlvmError> {
     let result_symbol = expect_enum_symbol(&function.return_type, function)?;
-    let pair_symbol = resolve_pair_symbol(ctx, result_symbol, function)?;
-    let sa_symbol = resolve_struct_field_symbol(ctx, &pair_symbol, 1, function)?;
+    let (received_type, sa_symbol) = resolve_recv_from_payload(ctx, result_symbol, function)?;
     let ip_symbol = resolve_struct_field_symbol(ctx, &sa_symbol, 0, function)?;
 
     let i64_ty = ctx.context.i64_type();
@@ -257,19 +256,19 @@ fn emit_recv_from<'ctx>(
     let sa_val =
         build_insert(ctx, sa_val.into(), recv_port, 1, "sa_with_port")?.into_struct_value();
 
-    let pair_struct = ctx.layouts.struct_type(pair_symbol.mangled());
-    let pair_val = build_insert(
+    let tuple_struct = ir_basic_type(ctx, &received_type)?.into_struct_type();
+    let received = build_insert(
         ctx,
-        pair_struct.get_undef().into(),
+        tuple_struct.get_undef().into(),
         data_ptr,
         0,
-        "pair_with_data",
+        "tuple_with_data",
     )?
     .into_struct_value();
-    let pair_val =
-        build_insert(ctx, pair_val.into(), sa_val.into(), 1, "pair_with_addr")?.into_struct_value();
+    let received = build_insert(ctx, received.into(), sa_val.into(), 1, "tuple_with_addr")?
+        .into_struct_value();
 
-    let ok = build_enum_value(ctx, result_symbol, RESULT_OK_TAG, &[pair_val.into()])?;
+    let ok = build_enum_value(ctx, result_symbol, RESULT_OK_TAG, &[received.into()])?;
     ret(ctx, ok)
 }
 
@@ -419,20 +418,27 @@ fn resolve_list_element_symbol(
     }
 }
 
-/// Walk `Result<Pair<Binary, SocketAddress>, _>` and pull out the
-/// `IRSymbol` of the `Pair` struct. The intrinsic emitter then
-/// recursively walks the pair's fields to reach `SocketAddress`
-/// and `IPAddress`.
-fn resolve_pair_symbol(
+/// Walk `Result<(Binary, SocketAddress), _>` and return the tuple
+/// type plus the `SocketAddress` symbol.
+fn resolve_recv_from_payload(
     ctx: &EmitContext<'_>,
     result_symbol: &IRSymbol,
     function: &IRFunction,
-) -> Result<IRSymbol, LlvmError> {
+) -> Result<(IRType, IRSymbol), LlvmError> {
     let ok_field = single_ok_payload(ctx, result_symbol, function, "Socket.recv_from")?;
     match ok_field {
-        IRType::Struct(symbol) => Ok(symbol),
+        IRType::Tuple(elements) => {
+            let [IRType::Binary, IRType::Struct(address_symbol)] = elements.as_slice() else {
+                return Err(LlvmError::Codegen(format!(
+                    "Socket.recv_from Ok payload expected `(Binary, SocketAddress)`, \
+                     got `{elements:?}`",
+                )));
+            };
+            let address_symbol = address_symbol.clone();
+            Ok((IRType::Tuple(elements), address_symbol))
+        }
         other => Err(LlvmError::Codegen(format!(
-            "Socket.recv_from Ok payload expected to be a Struct (Pair), got `{other:?}`",
+            "Socket.recv_from Ok payload expected a Tuple, got `{other:?}`",
         ))),
     }
 }
@@ -463,10 +469,9 @@ fn single_ok_payload(
     }
 }
 
-/// `IRSymbol` of the struct at `index` inside `struct_symbol`. The
-/// `Pair` / `SocketAddress` walk needs this to reach the inner
-/// `SocketAddress` and `IPAddress` types without hardcoding their
-/// identifier strings.
+/// `IRSymbol` of the struct at `index` inside `struct_symbol`.
+/// The socket address walk uses it to reach `IPAddress` without
+/// hardcoding identifier strings.
 fn resolve_struct_field_symbol(
     ctx: &EmitContext<'_>,
     struct_symbol: &IRSymbol,

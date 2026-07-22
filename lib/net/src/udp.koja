@@ -50,12 +50,10 @@ struct UDPSocket
   end
 
   @doc """
-  Receives up to `count` bytes. Returns a pair of the received data
+  Receives up to `count` bytes. Returns a tuple of the received data
   and the sender's address, or an error if the receive fails.
   """
-  fn recv_from(self, count: Int)
-    -> Result<Pair<Binary, SocketAddress>, SocketError>
-
+  fn recv_from(self, count: Int) -> Result<(Binary, SocketAddress), SocketError>
     match self.socket.recv_from(count)
       Result.Ok(received) -> Result.Ok(received)
       Result.Err(_) -> Result.Err(SocketError.last())

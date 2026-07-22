@@ -265,8 +265,10 @@ protocol Process<C, M, R>
   """
   fn run(self) -> Process.StopReason
     receive
-      pair: Pair<M, Option<ReplyTo<R>>> ->
-        match self.handle(pair.first, pair.second)
+      envelope: (M, Option<ReplyTo<R>>) ->
+        (msg, from) = envelope
+
+        match self.handle(msg, from)
           Process.Step.Continue(next) -> next.run()
           Process.Step.Done(reason) -> reason
         end
@@ -338,8 +340,9 @@ impl Process<Task<R>, (), R> for Task<R>
     result = self.work()
 
     receive
-      pair: Pair<(), Option<ReplyTo<R>>> ->
-        ReplyTo.reply(pair.second, result)
+      envelope: ((), Option<ReplyTo<R>>) ->
+        (_, from) = envelope
+        ReplyTo.reply(from, result)
 
         Process.StopReason.Normal
 

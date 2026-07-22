@@ -4,7 +4,7 @@
 //! watcher's monomorphized `M` (and its union tag layout) is
 //! unknowable runtime-side, so this post-monomorphize pass synthesizes
 //! a tag-4 arm that reshapes the bare struct into the business arm's
-//! `Pair<M, Option.None>`. Unlike `IOReady`, `M` may also be *exactly*
+//! `(M, Option.None)`. Unlike `IOReady`, `M` may also be *exactly*
 //! `ExitSignal`, in which case the reshape skips the `UnionWrap`.
 
 use crate::function::{
@@ -136,7 +136,7 @@ fn apply(packages: &mut [IRPackage], plan: ArmPlan) {
     let reply_none = ValueId(first_value + 2);
     let envelope = ValueId(first_value + 3);
 
-    // Reshape the bare `ExitSignal` into the `Pair<M, Option.None>` the
+    // Reshape the bare `ExitSignal` into the `(M, Option.None)` the
     // business body consumes, then branch into that body.
     let mut instructions = vec![IRInstruction::LocalRead {
         dest: signal,

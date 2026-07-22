@@ -225,8 +225,8 @@ fn substitute_in_expr(expr: &mut Expr, args: &[ResolvedType], owner: GlobalRegis
             for arm in arms {
                 // `receive` arms admit typed-binding patterns whose
                 // payload type can carry a `TypeParam` from the
-                // enclosing generic decl (e.g. `pair: Pair<(),
-                // Option<ReplyTo<R>>>`). Without this walk the raw
+                // enclosing generic decl, such as
+                // `((), Option<ReplyTo<R>>)`. Without this walk the raw
                 // `R` leaks into `resolved_type_to_ir_type` on
                 // re-lower.
                 substitute_in_pattern(&mut arm.pattern, args, owner);

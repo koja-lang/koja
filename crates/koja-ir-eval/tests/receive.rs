@@ -65,7 +65,7 @@ fn after_timeout_runs_the_after_body() {
     let source = entry_with_run(
         "
         receive
-          pair: Pair<String, Option<ReplyTo<()>>> -> StopReason.Shutdown
+          envelope: (String, Option<ReplyTo<()>>) -> StopReason.Shutdown
         after 5
           StopReason.Normal
         end

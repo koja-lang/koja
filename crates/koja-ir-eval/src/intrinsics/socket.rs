@@ -1,7 +1,7 @@
 //! `@intrinsic` methods on `Socket` from
 //! [`koja/lib/net/src/net.koja`]:
 //!
-//! * `Socket.recv_from(self, count: Int) -> Result<Pair<Binary, SocketAddress>, String>`
+//! * `Socket.recv_from(self, count: Int) -> Result<(Binary, SocketAddress), String>`
 //! * `Socket.resolve(hostname: String) -> Result<List<IPAddress>, String>`
 //!
 //! Both call the same runtime helpers the LLVM backend declares
@@ -112,8 +112,7 @@ async fn recv_from<R: CallResolver>(
     };
     let fd = socket_fd(receiver)?;
     let result_symbol = helpers::enum_return_symbol(function, "Socket.recv_from")?;
-    let pair_symbol = recv_from_pair_symbol(&result_symbol, resolver)?;
-    let address_symbol = struct_field_symbol(&pair_symbol, 1, resolver)?;
+    let address_symbol = recv_from_address_symbol(&result_symbol, resolver)?;
     let ip_symbol = struct_field_symbol(&address_symbol, 0, resolver)?;
 
     // Interrupted by a signal: surface an error instead of reading.
@@ -145,11 +144,8 @@ async fn recv_from<R: CallResolver>(
         symbol: address_symbol,
         fields: vec![ip, Value::Int(port)],
     };
-    let pair = Value::Struct {
-        symbol: pair_symbol,
-        fields: vec![data, address],
-    };
-    Ok(helpers::result_value(result_symbol, Ok(pair)))
+    let received = Value::Tuple(vec![data, address]);
+    Ok(helpers::result_value(result_symbol, Ok(received)))
 }
 
 /// `Err` payload for a failed socket call: the runtime's last-error
@@ -192,21 +188,28 @@ fn resolve_element_symbol<R: CallResolver>(
     }
 }
 
-/// Walk `Result<Pair<Binary, SocketAddress>, _>` down to the `Pair`
+/// Walk `Result<(Binary, SocketAddress), _>` down to the address
 /// struct symbol.
-fn recv_from_pair_symbol<R: CallResolver>(
+fn recv_from_address_symbol<R: CallResolver>(
     result_symbol: &IRSymbol,
     resolver: &R,
 ) -> Result<IRSymbol, RuntimeError> {
     match helpers::single_ok_payload(result_symbol, resolver, "Socket.recv_from")? {
-        IRType::Struct(symbol) => Ok(symbol),
+        IRType::Tuple(elements) => match elements.as_slice() {
+            [IRType::Binary, IRType::Struct(symbol)] => Ok(symbol.clone()),
+            other => Err(RuntimeError::TypeMismatch {
+                detail: format!(
+                    "Socket.recv_from expected `(Binary, SocketAddress)`, \
+                     got tuple elements `{other:?}`"
+                ),
+            }),
+        },
         other => Err(payload_shape_error("Socket.recv_from", &other)),
     }
 }
 
 /// The struct symbol at field `index` of `struct_symbol`'s decl.
-/// Used to walk `Pair -> SocketAddress -> IPAddress` without
-/// hardcoding identifier strings.
+/// Used to reach `IPAddress` without hardcoding identifier strings.
 fn struct_field_symbol<R: CallResolver>(
     struct_symbol: &IRSymbol,
     index: usize,

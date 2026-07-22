@@ -37,7 +37,7 @@ use crate::memory;
 use crate::protocol::{Message, Tag};
 
 /// Forward business traffic: casts, call requests, timer fires. Payload
-/// is the message, a `Pair<M, Option<ReplyTo<R>>>`.
+/// is the message, an `(M, Option<ReplyTo<R>>)` tuple.
 pub const TAG_BUSINESS: u8 = 0;
 /// Lifecycle signal. Payload is the lifecycle variant byte.
 pub const TAG_LIFECYCLE: u8 = 1;

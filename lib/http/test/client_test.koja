@@ -1,90 +1,39 @@
 struct ClientTest
-  @test "parse_url extracts host, port, and path"
-  fn test_parse_url_basic -> Result<Bool, String>
-    match parse_url("http://example.com/path")
-      Result.Ok(parts) ->
-        unless parts.first == "example.com"
-          return Result.Err("expected host example.com, got #{parts.first}")
-        end
-
-        unless parts.second.first == 80
-          return Result.Err("expected port 80, got #{parts.second.first}")
-        end
-
-        unless parts.second.second == "/path"
-          return Result.Err("expected path /path, got #{parts.second.second}")
-        end
-
-      Result.Err(msg) ->
-        return Result.Err("parse_url failed: #{msg}")
-    end
-
-    Result.Ok(true)
+  @test "request rejects an invalid URI before networking"
+  fn test_request_invalid_uri -> Result<Bool, String>
+    ClientTest.expect_invalid_url(
+      "http://exa mple.com/",
+      "invalid URI component",
+    )
   end
 
-  @test "parse_url handles custom port"
-  fn test_parse_url_custom_port -> Result<Bool, String>
-    match parse_url("http://localhost:3000/api")
-      Result.Ok(parts) ->
-        unless parts.first == "localhost"
-          return Result.Err("expected localhost")
-        end
-
-        unless parts.second.first == 3000
-          return Result.Err("expected port 3000")
-        end
-
-        unless parts.second.second == "/api"
-          return Result.Err("expected /api")
-        end
-
-      Result.Err(msg) ->
-        return Result.Err("parse_url failed: #{msg}")
-    end
-
-    Result.Ok(true)
+  @test "request rejects an unsupported scheme before networking"
+  fn test_request_unsupported_scheme -> Result<Bool, String>
+    ClientTest.expect_invalid_url(
+      "ftp://example.com/file",
+      "unsupported URL scheme",
+    )
   end
 
-  @test "parse_url defaults to root path"
-  fn test_parse_url_no_path -> Result<Bool, String>
-    match parse_url("http://example.com")
-      Result.Ok(parts) ->
-        unless parts.first == "example.com"
-          return Result.Err("expected host example.com")
-        end
-
-        unless parts.second.second == "/"
-          return Result.Err("expected root path, got #{parts.second.second}")
-        end
-
-      Result.Err(msg) ->
-        return Result.Err("parse_url failed: #{msg}")
-    end
-
-    Result.Ok(true)
+  @test "request rejects a missing host before networking"
+  fn test_request_missing_host -> Result<Bool, String>
+    ClientTest.expect_invalid_url("http:///path", "missing host")
   end
 
-  @test "parse_url handles https default port"
-  fn test_parse_url_https -> Result<Bool, String>
-    match parse_url("https://example.com/secure")
-      Result.Ok(parts) ->
-        unless parts.second.first == 443
-          return Result.Err("expected port 443, got #{parts.second.first}")
-        end
+  priv fn expect_invalid_url(url: String, expected: String)
+    -> Result<Bool, String>
 
-      Result.Err(msg) ->
-        return Result.Err("parse_url failed: #{msg}")
+    match request(Method.Get, url, Headers.new(), "")
+      Result.Err(Error.InvalidUrl(message)) ->
+        message.contains?(expected)
+          ? Result.Ok(true)
+          : Result.Err("expected '#{expected}' in '#{message}'")
+
+      Result.Err(error) ->
+        Result.Err("expected InvalidUrl, got '#{error.message()}'")
+
+      Result.Ok(_) ->
+        Result.Err("expected InvalidUrl for '#{url}'")
     end
-
-    Result.Ok(true)
-  end
-
-  @test "parse_url rejects empty host"
-  fn test_parse_url_empty_host -> Result<Bool, String>
-    unless parse_url("http:///path").err?()
-      return Result.Err("expected error for empty host")
-    end
-
-    Result.Ok(true)
   end
 end

@@ -1237,8 +1237,10 @@ end
 ```koja
 fn run(self) -> StopReason
   receive
-    pair: Pair<M, Option<ReplyTo<R>>> ->
-      match self.handle(pair.first, pair.second)
+    envelope: (M, Option<ReplyTo<R>>) ->
+      (msg, from) = envelope
+
+      match self.handle(msg, from)
         Step.Continue(next) -> next.run()
         Step.Done(reason) -> reason
       end
@@ -1389,7 +1391,8 @@ The underlying keywords that power the process model. `spawn` creates a new ligh
 
 ```koja
 receive
-  pair: Pair<M, Option<ReplyTo<R>>> ->
+  envelope: (M, Option<ReplyTo<R>>) ->
+    (msg, from) = envelope
     # handle the message
 end
 ```
@@ -1398,7 +1401,8 @@ An optional `after` clause bounds the wait: if no message arrives within the tim
 
 ```koja
 receive
-  pair: Pair<M, Option<ReplyTo<R>>> ->
+  envelope: (M, Option<ReplyTo<R>>) ->
+    (msg, from) = envelope
     # handle the message
 after 5000
   # no message within 5 seconds
@@ -1486,6 +1490,9 @@ err.or(99).print()        # 99
 
 ### `Pair<A, B>`
 
+`Pair` remains available for compatibility. Prefer an anonymous tuple
+for new positional two-value groupings.
+
 ```koja
 struct Pair<A, B>
   first: A
@@ -1550,6 +1557,7 @@ Functions:
 - `filter(self, f: fn (T) -> Bool) -> List<T>`: returns elements for which `f` returns `true`.
 - `any?(self, f: fn (T) -> Bool) -> Bool`: returns `true` if `f` returns `true` for at least one element.
 - `all?(self, f: fn (T) -> Bool) -> Bool`: returns `true` if `f` returns `true` for every element. Returns `true` for an empty list.
+- `pop(self) -> (Option<T>, List<T>)`: returns the last element and remaining list.
 
 ```koja
 nums = [1, 2, 3, 4, 5]
@@ -1585,7 +1593,7 @@ Functions:
 - `length(self) -> Int`: returns the number of entries.
 - `empty?(self) -> Bool`: returns `true` if the map has no entries.
 
-`Map` does not currently support iteration. To iterate over entries, use `List<Pair<K, V>>` as an ordered key-value collection instead.
+`Map` does not currently support iteration. To iterate over entries, use `List<(K, V)>` as an ordered key-value collection instead.
 
 Map literals (`[key: value, ...]`) are backed by the `MapLiteral<K, V>` protocol. See [Literal Protocols](#literal-protocols).
 

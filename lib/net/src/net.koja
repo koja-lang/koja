@@ -135,10 +135,10 @@ struct Socket
 
   @doc """
   Receives data and the sender's address (for unconnected datagram sockets).
-  Returns a pair of (data, sender address).
+  Returns a tuple of the data and sender address.
   """
   @intrinsic
-  fn recv_from(self, count: Int) -> Result<Pair<Binary, SocketAddress>, String>
+  fn recv_from(self, count: Int) -> Result<(Binary, SocketAddress), String>
 
   @doc """
   Resolves a hostname to a list of IP addresses via DNS.

@@ -821,7 +821,7 @@ mod tests {
             "
             struct Wire
               # Pulls a big-endian unsigned 16-bit integer off the front.
-              fn take_u16(data: Binary) -> Option<Pair<Int, Binary>>
+              fn take_u16(data: Binary) -> Option<(Int, Binary)>
                 Option.None
               end
             end

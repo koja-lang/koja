@@ -200,8 +200,10 @@ fn send_after_delivers_a_delayed_business_message() {
             me: Ref<Int, ()> = Ref.self_ref()
             me.send_after(42, 1)
             receive
-              pair: Pair<Int, Option<ReplyTo<()>>> ->
-                if pair.first == 42
+              envelope: (Int, Option<ReplyTo<()>>) ->
+                (message, _) = envelope
+
+                if message == 42
                   Process.StopReason.Normal
                 else
                   Process.StopReason.Shutdown

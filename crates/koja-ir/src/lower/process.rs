@@ -31,7 +31,9 @@
 //! because dispatch always leaves the receive instruction.
 
 use koja_ast::ast::{Arg, Diagnostic, Expr, ExprKind, MatchArm, Pattern, Statement};
-use koja_ast::identifier::{GlobalRegistryId, Identifier, LocalId, Resolution, ResolvedType};
+use koja_ast::identifier::{
+    AnonymousKind, GlobalRegistryId, Identifier, LocalId, Resolution, ResolvedType,
+};
 use koja_ast::span::Span;
 use koja_typecheck::{GlobalKind, GlobalRegistry, RegistryEntry};
 
@@ -1057,7 +1059,7 @@ fn receive_tag_for(payload: &ResolvedType, registry: &GlobalRegistry) -> Option<
     if is_lifecycle(payload, registry) {
         return Some(ReceiveTag::Lifecycle);
     }
-    if is_business_envelope(payload, registry) {
+    if is_business_envelope(payload) {
         return Some(ReceiveTag::Business);
     }
     None
@@ -1067,20 +1069,11 @@ fn is_lifecycle(ty: &ResolvedType, registry: &GlobalRegistry) -> bool {
     matches_global(ty, registry, &["Process", "Lifecycle"], 0)
 }
 
-fn is_business_envelope(ty: &ResolvedType, registry: &GlobalRegistry) -> bool {
-    let ResolvedType::Named {
-        resolution: Resolution::Global(head),
-        type_args,
-    } = ty
-    else {
-        return false;
-    };
-    if type_args.len() != 2 {
-        return false;
-    }
-    registry
-        .get(*head)
-        .is_some_and(|entry| is_global_named(entry, &["Pair"]))
+fn is_business_envelope(ty: &ResolvedType) -> bool {
+    matches!(
+        ty,
+        ResolvedType::Anonymous(AnonymousKind::Tuple { elements }) if elements.len() == 2
+    )
 }
 
 fn matches_global(

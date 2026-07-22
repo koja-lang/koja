@@ -38,7 +38,7 @@ impl Process<App, AppMsg, String> for App
                 IO.puts("woke from accept")
                 StopReason.Shutdown
 
-              pair: Pair<AppMsg, Option<ReplyTo<String>>> ->
+              envelope: (AppMsg, Option<ReplyTo<String>>) ->
                 StopReason.Shutdown
             end
         end

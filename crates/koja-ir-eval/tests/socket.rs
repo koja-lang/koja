@@ -128,7 +128,10 @@ fn udp_loopback_send_and_recv_from() {
           end
 
           match receiver.recv_from(64)
-            Result.Ok(received) -> received.first
+            Result.Ok(received) ->
+              (data, _) = received
+              data
+
             Result.Err(_) -> <<>>
           end
         end

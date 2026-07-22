@@ -158,7 +158,7 @@ fn list_concat_lowers_to_intrinsic_concat() {
 }
 
 #[test]
-fn list_pop_lowers_to_intrinsic_pop_returning_pair() {
+fn list_pop_lowers_to_intrinsic_pop_returning_tuple() {
     let source = "
         my_list: List<Int> = List.new()
         my_list.pop()
@@ -166,16 +166,20 @@ fn list_pop_lowers_to_intrinsic_pop_returning_pair() {
     let script = lower_script_source(source);
     let pop = intrinsic_call(&script, "pop");
     assert_list_intrinsic(pop, ListMethod::Pop);
-    let IRType::Struct(symbol) = &pop.return_type else {
+    let IRType::Tuple(elements) = &pop.return_type else {
         panic!(
-            "List.pop should return `IRType::Struct(Pair<...>)`, got {:?}",
+            "List.pop should return an `IRType::Tuple`, got {:?}",
             pop.return_type,
         );
     };
+    let [IRType::Enum(option_symbol), IRType::List(remaining)] = elements.as_slice() else {
+        panic!("List.pop should return `(Option<Int>, List<Int>)`, got {elements:?}");
+    };
     assert!(
-        symbol.mangled().contains("Pair"),
-        "List.pop return struct should monomorphize to a Pair, got `{symbol}`",
+        option_symbol.mangled().contains("Option"),
+        "List.pop first element should be an Option, got `{option_symbol}`",
     );
+    assert_eq!(remaining.as_ref(), &IRType::Int64);
 }
 
 #[test]

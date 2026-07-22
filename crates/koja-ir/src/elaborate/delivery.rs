@@ -2,19 +2,18 @@ use crate::enum_decl::{EnumPayloadInit, IRVariantTag};
 use crate::function::{IRBlockId, IRFunction, IRInstruction, IRSymbol, ReceiveArm, ReceiveTag};
 use crate::local::IRLocalId;
 use crate::package::IRPackage;
-use crate::struct_decl::StructFieldInit;
 use crate::types::{IRType, ValueId};
 
-use super::{find_enum, find_struct};
+use super::find_enum;
 
 const OPTION_NONE_VARIANT: &str = "None";
 
 pub(super) struct BusinessEnvelope {
     pub body: IRBlockId,
+    pub envelope_elements: Vec<IRType>,
     pub message_type: IRType,
     pub none_tag: IRVariantTag,
     pub option_symbol: IRSymbol,
-    pub pair_symbol: IRSymbol,
     pub payload_local: IRLocalId,
 }
 
@@ -51,19 +50,10 @@ pub(super) fn envelope_instructions(
             tag: business.none_tag,
             ty: business.option_symbol.clone(),
         },
-        IRInstruction::StructInit {
+        IRInstruction::TupleInit {
             dest: envelope,
-            fields: vec![
-                StructFieldInit {
-                    index: 0,
-                    value: message,
-                },
-                StructFieldInit {
-                    index: 1,
-                    value: reply_none,
-                },
-            ],
-            ty: business.pair_symbol.clone(),
+            elements: vec![message, reply_none],
+            ty: business.envelope_elements.clone(),
         },
         IRInstruction::LocalWrite {
             local: business.payload_local,
@@ -81,13 +71,13 @@ pub(super) fn resolve_business_envelope(
         return None;
     }
     let business = arms.iter().find(|arm| arm.tag == ReceiveTag::Business)?;
-    let IRType::Struct(pair_symbol) = &business.payload_type else {
+    let IRType::Tuple(envelope_elements) = &business.payload_type else {
         return None;
     };
-    let [message_field, reply_field] = find_struct(packages, pair_symbol)?.fields.as_slice() else {
+    let [message_type, reply_type] = envelope_elements.as_slice() else {
         return None;
     };
-    let IRType::Enum(option_symbol) = &reply_field.ir_type else {
+    let IRType::Enum(option_symbol) = reply_type else {
         return None;
     };
     let none_tag = find_enum(packages, option_symbol)?
@@ -97,10 +87,10 @@ pub(super) fn resolve_business_envelope(
         .tag;
     Some(BusinessEnvelope {
         body: business.body,
-        message_type: message_field.ir_type.clone(),
+        envelope_elements: envelope_elements.clone(),
+        message_type: message_type.clone(),
         none_tag,
         option_symbol: option_symbol.clone(),
-        pair_symbol: pair_symbol.clone(),
         payload_local: business.payload_local,
     })
 }

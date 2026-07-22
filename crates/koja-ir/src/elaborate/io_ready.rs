@@ -8,9 +8,9 @@
 //! union containing `IOReady` until monomorphization. This pass runs in
 //! `elaborate` (post-monomorphize), where `M` is concrete.
 //!
-//! For each `Receive` whose business arm takes a `Pair<union, Option<…>>`
+//! For each `Receive` whose business arm takes a `(union, Option<…>)`
 //! whose union has an `IOReady` member, it synthesizes a tag-2 arm that
-//! reshapes the delivered `IOReady` into the `Pair<M, Option.None>` the
+//! reshapes the delivered `IOReady` into the `(M, Option.None)` the
 //! business body already consumes, then branches there. Every step reuses
 //! an existing `IRInstruction`, so no backend gains a new emission shape.
 
@@ -127,7 +127,7 @@ fn apply(packages: &mut [IRPackage], plan: ArmPlan) {
     let reply_none = ValueId(first_value + 2);
     let envelope = ValueId(first_value + 3);
 
-    // Reshape the bare `IOReady` into the `Pair<M, Option.None>` the
+    // Reshape the bare `IOReady` into the `(M, Option.None)` the
     // business body consumes, then branch into that body.
     let mut instructions = vec![
         IRInstruction::LocalRead {
