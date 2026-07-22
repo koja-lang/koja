@@ -9,7 +9,7 @@
 
 use koja_ast::ast::{Diagnostic, EnumConstructionData, Expr, ExprKind, FieldInit};
 use koja_ast::identifier::{
-    GlobalRegistryId, Identifier, Resolution, ResolvedType, TypeParamIndex,
+    AnonymousKind, GlobalRegistryId, Identifier, Resolution, ResolvedType, TypeParamIndex,
 };
 use koja_ast::span::Span;
 
@@ -425,16 +425,31 @@ pub(super) fn resolve_field_access(
     diagnostics: &mut Vec<Diagnostic>,
 ) -> ResolvedType {
     resolve_expr(receiver, resolver, diagnostics);
-    if let ResolvedType::Union(_) = peel_alias(&receiver.resolution, resolver.registry) {
-        diagnostics.push(Diagnostic::error(
-            format!(
-                "cannot access field `{field}` on union type `{}`; \
-                 match the union first to bind a specific variant",
-                display_resolution(&receiver.resolution, resolver.registry),
-            ),
-            span,
-        ));
-        return ResolvedType::unresolved();
+    match peel_alias(&receiver.resolution, resolver.registry) {
+        ResolvedType::Union(_) => {
+            diagnostics.push(Diagnostic::error(
+                format!(
+                    "cannot access field `{field}` on union type `{}`. \
+                     Match the union first to bind a specific variant",
+                    display_resolution(&receiver.resolution, resolver.registry),
+                ),
+                span,
+            ));
+            return ResolvedType::unresolved();
+        }
+        ResolvedType::Anonymous(AnonymousKind::Tuple { .. }) => {
+            diagnostics.push(Diagnostic::error_with_hint(
+                format!(
+                    "cannot access field `{field}` on tuple `{}`",
+                    display_resolution(&receiver.resolution, resolver.registry),
+                ),
+                "tuples have no named or positional fields. Destructure \
+                 instead with `(a, b) = value`",
+                span,
+            ));
+            return ResolvedType::unresolved();
+        }
+        _ => {}
     }
     let ResolvedType::Named {
         resolution: Resolution::Global(struct_id),

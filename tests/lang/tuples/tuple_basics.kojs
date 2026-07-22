@@ -1,0 +1,55 @@
+# Anonymous tuple fundamentals: literals, type annotations,
+# destructuring assignment (flat, nested, wildcard), Debug
+# formatting, and string interpolation.
+
+pair = (1, "two")
+pair.print()
+
+annotated: (Int, Bool) = (7, true)
+annotated.print()
+
+# Destructuring assignment.
+(a, b) = pair
+a.print()
+b.print()
+
+# Wildcard and nested destructuring.
+(x, _, (y, z)) = (10, "skip", (20, 30))
+x.print()
+y.print()
+z.print()
+
+# Reassignment through destructuring.
+(a, b) = (99, "ninety-nine")
+a.print()
+b.print()
+
+# Nested literal formatting and interpolation.
+nested = (1, (2.5, false))
+nested.print()
+IO.puts("value: #{nested}")
+
+# format() returns the same rendering print() writes.
+IO.puts(nested.format())
+
+# Tuples returned from functions, consumed by destructuring.
+fn min_max(values: List<Int>) -> (Int, Int)
+  lo = 999
+  hi = -999
+
+  for v in values
+    if v < lo
+      lo = v
+    end
+
+    if v > hi
+      hi = v
+    end
+  end
+
+  (lo, hi)
+end
+
+(lo, hi) = min_max([3, 1, 4, 1, 5])
+lo.print()
+hi.print()

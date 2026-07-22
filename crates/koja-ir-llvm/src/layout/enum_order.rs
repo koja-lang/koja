@@ -151,6 +151,11 @@ fn collect_type_enum_refs(
                 }
             }
         }
+        IRType::Tuple(elements) => {
+            for element in elements {
+                collect_type_enum_refs(element, struct_field_index, deps);
+            }
+        }
         IRType::Union { members, .. } => {
             for member in members {
                 collect_type_enum_refs(member, struct_field_index, deps);

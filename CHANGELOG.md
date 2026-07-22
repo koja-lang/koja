@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- Anonymous tuples. Build with `(a, b)`, annotate as `(Int, String)`, take apart with destructuring assignment `(x, y) = pair` or `match` patterns.
+- Tuples compare with `==`/`!=`, print and interpolate like any other value, and can be members of type unions.
+
 ## [0.15.3] - 2026-07-21
 
 ### Changed

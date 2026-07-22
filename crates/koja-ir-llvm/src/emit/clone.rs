@@ -75,7 +75,9 @@ pub(super) fn emit_clone<'ctx>(
         // `elaborate` rewrites only the heap-owning composites into
         // `Call @clone_T`, so any aggregate surviving to here owns no
         // heap and aliasing its immutable SSA value is sound.
-        IRType::Enum(_) | IRType::Struct(_) | IRType::Union { .. } => lookup(values, source)?,
+        IRType::Enum(_) | IRType::Struct(_) | IRType::Tuple(_) | IRType::Union { .. } => {
+            lookup(values, source)?
+        }
         // Closure: share the env block. `rc++` on the env (null /
         // immortal envs are no-ops in the runtime), then alias the same
         // `{fn_ptr, env_ptr}` fat pointer. The matching `Drop` runs

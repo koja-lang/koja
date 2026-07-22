@@ -1198,6 +1198,37 @@ mod tests {
     }
 
     #[test]
+    fn tuple_syntax_round_trips() {
+        assert_unchanged(
+            r#"
+            fn split(pair: (Int, String)) -> String
+              (n, name) = pair
+
+              match (n, name)
+                (0, _) -> "zero"
+                (_, label) -> label
+              end
+            end
+        "#,
+        );
+    }
+
+    #[test]
+    fn long_tuple_literal_packs_like_fill() {
+        assert_fmt_script(
+            r#"
+            t = (first_element_value, second_element_value, third_element_value, fourth_element_value)
+        "#,
+            r#"
+            t = (
+              first_element_value, second_element_value, third_element_value,
+              fourth_element_value
+            )
+        "#,
+        );
+    }
+
+    #[test]
     fn match_ternary_body_breaks_arms_consistently() {
         // The `scan_error` shape: a ternary body overflows, so the short
         // sibling arm breaks consistently rather than staying inline.

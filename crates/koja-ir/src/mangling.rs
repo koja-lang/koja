@@ -120,6 +120,10 @@ fn mangle_type(ty: &IRType) -> String {
         IRType::Set(inner) => format!("Set_${}$", mangle_type(inner)),
         IRType::String => "String".to_string(),
         IRType::Struct(symbol) => symbol.mangled().to_string(),
+        IRType::Tuple(elements) => {
+            let rendered: Vec<String> = elements.iter().map(mangle_type).collect();
+            format!("Tuple_${}$", rendered.join(","))
+        }
         IRType::UInt8 => "UInt8".to_string(),
         IRType::UInt16 => "UInt16".to_string(),
         IRType::UInt32 => "UInt32".to_string(),

@@ -14,6 +14,7 @@ use super::ctx::{FnLowerCtx, LowerOutput};
 use super::expr::lower_expr;
 use super::ownership::{drop_discarded_temp, materialize_boundary_copy};
 use super::package::resolved_type_to_ir_type;
+use super::tuples::lower_tuple_conformance_call;
 use crate::function::{IRBlockId, IRInstruction, IRSymbol};
 use crate::generics::{Instantiation, substitute_resolved_type};
 use crate::local::IRLocalId;
@@ -305,6 +306,12 @@ pub(super) fn lower_method_call(
         args,
         method_type_args,
     } = shape;
+    if matches!(
+        receiver.resolution,
+        ResolvedType::Anonymous(AnonymousKind::Tuple { .. })
+    ) {
+        return lower_tuple_conformance_call(receiver, method, args, ctx, block, registry, output);
+    }
     if let Some(opaque) = opaque_debug_method(method, &receiver.resolution) {
         return lower_opaque_debug_call(opaque, receiver, ctx, block, registry, output);
     }
@@ -418,6 +425,70 @@ fn receiver_type_args(receiver: &Expr, _dispatch: Dispatch) -> Vec<ResolvedType>
         ResolvedType::Named { type_args, .. } => type_args.clone(),
         _ => Vec::new(),
     }
+}
+
+/// Callee symbol + IR return type for `receiver_ty.method()` where
+/// `receiver_ty` is a resolved nominal type. Mirrors the symbol and
+/// instantiation logic of [`lower_method_call`] for call sites the
+/// lowering itself synthesizes (tuple conformance expansion), where
+/// there is no receiver `Expr` to consult.
+pub(super) fn conformance_method_symbol(
+    receiver_ty: &ResolvedType,
+    method: &str,
+    registry: &GlobalRegistry,
+    output: &mut LowerOutput,
+) -> (IRSymbol, IRType) {
+    let ResolvedType::Named {
+        resolution: Resolution::Global(struct_id),
+        type_args,
+        ..
+    } = receiver_ty
+    else {
+        panic!(
+            "IR lower: conformance call receiver `{receiver_ty:?}` is not a nominal type \
+             (typecheck resolve invariant violation)",
+        );
+    };
+    let struct_id = canonical_receiver_id(*struct_id, registry);
+    let struct_entry = registry.get(struct_id).unwrap_or_else(|| {
+        panic!(
+            "IR lower: conformance call receiver id {struct_id} not present in the \
+             registry (seal invariant violation)",
+        )
+    });
+    let mut method_path = struct_entry.identifier.path().to_vec();
+    method_path.push(method.to_string());
+    let method_identifier = Identifier::new(struct_entry.identifier.package(), method_path);
+    let (method_id, method_entry) = registry.lookup(&method_identifier).unwrap_or_else(|| {
+        panic!(
+            "IR lower: conformance method `{method_identifier}` missing from registry \
+             (typecheck must have validated the call)",
+        )
+    });
+    let signature = function_signature_from_entry(method_entry);
+    if type_args.is_empty() {
+        let return_ty =
+            resolved_type_to_ir_type(&signature.return_type, registry, &mut output.instantiations);
+        return (
+            IRSymbol::from_identifier(&method_entry.identifier),
+            return_ty,
+        );
+    }
+    let receiver_arg_ir: Vec<IRType> = type_args
+        .iter()
+        .map(|ty| resolved_type_to_ir_type(ty, registry, &mut output.instantiations))
+        .collect();
+    let receiver_template = IRSymbol::from_identifier(&struct_entry.identifier);
+    let callee = mangled_method_name(&receiver_template, &receiver_arg_ir, method, &[]);
+    output.instantiations.push(Instantiation {
+        template: method_id,
+        args: type_args.clone(),
+        method_args: Vec::new(),
+        owner: struct_id,
+    });
+    let substituted = substitute_resolved_type(&signature.return_type, type_args, struct_id);
+    let return_ty = resolved_type_to_ir_type(&substituted, registry, &mut output.instantiations);
+    (callee, return_ty)
 }
 
 fn function_signature_from_entry(entry: &RegistryEntry) -> &FunctionSignature {
@@ -744,7 +815,7 @@ fn emit_opaque_placeholder(ctx: &mut FnLowerCtx, block: IRBlockId) -> ValueId {
 /// the `IO.puts` function in [`koja/lib/global/src/io.koja`], so the
 /// regular function registration in `lower_function_inner` resolves
 /// it at link time.
-fn emit_io_puts(message: ValueId, ctx: &mut FnLowerCtx, block: IRBlockId) -> IRBlockId {
+pub(super) fn emit_io_puts(message: ValueId, ctx: &mut FnLowerCtx, block: IRBlockId) -> IRBlockId {
     let callee = IRSymbol::from_identifier(&Identifier::new(
         "Global",
         vec!["IO".to_string(), "puts".to_string()],

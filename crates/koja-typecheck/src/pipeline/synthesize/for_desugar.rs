@@ -74,7 +74,8 @@ fn recurse_into_statement(stmt: &mut Statement, counter: &mut SynthCounter) {
     match stmt {
         Statement::Expr(expr)
         | Statement::Assignment { value: expr, .. }
-        | Statement::CompoundAssign { value: expr, .. } => recurse_into_expr(expr, counter),
+        | Statement::CompoundAssign { value: expr, .. }
+        | Statement::Destructure { value: expr, .. } => recurse_into_expr(expr, counter),
         Statement::Return {
             value: Some(expr), ..
         } => recurse_into_expr(expr, counter),
@@ -211,6 +212,11 @@ fn recurse_into_expr(expr: &mut Expr, counter: &mut SynthCounter) {
             recurse_into_expr(condition, counter);
             recurse_into_expr(then_expr, counter);
             recurse_into_expr(else_expr, counter);
+        }
+        ExprKind::Tuple { elements } => {
+            for element in elements.iter_mut() {
+                recurse_into_expr(element, counter);
+            }
         }
         ExprKind::Unary { operand, .. } => recurse_into_expr(operand, counter),
         ExprKind::Unless { condition, body } => {

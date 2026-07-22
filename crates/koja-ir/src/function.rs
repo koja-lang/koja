@@ -722,6 +722,26 @@ pub enum IRInstruction {
         fields: Vec<StructFieldInit>,
         ty: IRSymbol,
     },
+    /// `dest = base.<index>`. Tuple analog of [`Self::FieldGet`],
+    /// index-addressed because tuples are structural and have no
+    /// decl to name fields against. `element_type` is the projected
+    /// element's [`IRType`] (cached from the tuple shape at lower
+    /// time).
+    TupleGet {
+        base: ValueId,
+        dest: ValueId,
+        element_type: IRType,
+        index: u32,
+    },
+    /// `dest = (e0, e1, ...)`. Tuple analog of [`Self::StructInit`]:
+    /// `elements` are in positional order and `ty` is the tuple's
+    /// element type vector. Backends materialize as alloca +
+    /// per-element store + load.
+    TupleInit {
+        dest: ValueId,
+        elements: Vec<ValueId>,
+        ty: Vec<IRType>,
+    },
     /// `dest = <op> operand`. `operand_ty` mirrors
     /// [`IRInstruction::BinaryOp`]'s field. Backends key negation
     /// width, signedness, and the `-MIN` overflow guard on it.
@@ -904,6 +924,8 @@ impl IRInstruction {
             | IRInstruction::Receive { dest, .. }
             | IRInstruction::Spawn { dest, .. }
             | IRInstruction::StructInit { dest, .. }
+            | IRInstruction::TupleGet { dest, .. }
+            | IRInstruction::TupleInit { dest, .. }
             | IRInstruction::UnaryOp { dest, .. }
             | IRInstruction::UnionPayloadGet { dest, .. }
             | IRInstruction::UnionTagGet { dest, .. }

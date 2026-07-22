@@ -1,0 +1,14 @@
+(1, "two")
+(7, true)
+1
+"two"
+10
+20
+30
+99
+"ninety-nine"
+(1, (2.5, false))
+value: (1, (2.5, false))
+(1, (2.5, false))
+1
+5

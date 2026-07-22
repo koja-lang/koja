@@ -86,6 +86,11 @@ pub(super) fn seal_pattern(pattern: &Pattern, mode: SealMode) {
                 seal_binary_segment(segment);
             }
         }
+        Pattern::Tuple { elements, .. } => {
+            for element in elements {
+                seal_pattern(element, mode);
+            }
+        }
         Pattern::TypedBinding {
             local_id,
             name,

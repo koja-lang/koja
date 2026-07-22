@@ -32,7 +32,7 @@ fn parse_file_has_errors_for_invalid_source() {
     let src = SourceFile {
         package: "broken".to_string(),
         path: PathBuf::from("a.koja"),
-        source: "fn foo\n  (1, 2)\nend\n".to_string(),
+        source: "fn foo\n  (1, 2,)\nend\n".to_string(),
     };
     let parsed = parse_file(src, ParseMode::File);
     assert!(parsed.has_errors());
@@ -113,7 +113,7 @@ fn parse_program_has_errors_when_any_file_fails() {
         SourceFile {
             package: "p".to_string(),
             path: PathBuf::from("bad.koja"),
-            source: "fn broken\n  (1, 2)\nend\n".to_string(),
+            source: "fn broken\n  (1, 2,)\nend\n".to_string(),
         },
     ];
     let program = parse_program(sources, ParseMode::File);

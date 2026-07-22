@@ -36,8 +36,9 @@ mod or_pattern;
 mod structs;
 
 use koja_ast::ast::{Diagnostic, Pattern};
-use koja_ast::identifier::{Resolution, ResolvedType};
+use koja_ast::identifier::{AnonymousKind, Resolution, ResolvedType};
 use koja_ast::labels::pattern_span;
+use koja_ast::span::Span;
 
 use super::ctx::Resolver;
 use super::types::{display_resolution, is_primitive, names_struct, peel_alias, types_equivalent};
@@ -179,6 +180,9 @@ pub(super) fn resolve_pattern(
             ));
             PatternCoverage::Other
         }
+        Pattern::Tuple { elements, span } => {
+            resolve_tuple_pattern(elements, subject_ty, *span, resolver, diagnostics)
+        }
         Pattern::TypedBinding {
             local_id,
             name,
@@ -218,7 +222,7 @@ pub(super) fn resolve_pattern(
                 {
                     diagnostics.push(Diagnostic::error(
                         format!(
-                            "typed-binding pattern requires a union subject; \
+                            "typed-binding pattern requires a union subject, \
                              got `{}`",
                             display_resolution(subject_ty, resolver.registry),
                         ),
@@ -231,8 +235,63 @@ pub(super) fn resolve_pattern(
             let id = resolver.scope.declare(name, resolved.clone());
             *local_id = Some(id);
             *resolved_type = Some(resolved.clone());
-            PatternCoverage::UnionMember(resolved)
+            // Key coverage on the peeled type so an alias arm (e.g.
+            // `hit: Hit` where `type Hit = (Int, String)`) matches the
+            // union's canonical member key.
+            PatternCoverage::UnionMember(peel_alias(&resolved, resolver.registry))
         }
+    }
+}
+
+/// Resolve a `(a, b)` pattern against a tuple subject. Coverage is
+/// the conservative product rule. The pattern is a catch-all only
+/// when every element is, and anything narrower counts as `Other`
+/// so the match still needs a catch-all arm.
+fn resolve_tuple_pattern(
+    elements: &mut [Pattern],
+    subject_ty: &ResolvedType,
+    span: Span,
+    resolver: &mut Resolver<'_>,
+    diagnostics: &mut Vec<Diagnostic>,
+) -> PatternCoverage {
+    let peeled = peel_alias(subject_ty, resolver.registry);
+    let ResolvedType::Anonymous(AnonymousKind::Tuple {
+        elements: element_types,
+    }) = &peeled
+    else {
+        if subject_ty.is_resolved() {
+            diagnostics.push(Diagnostic::error(
+                format!(
+                    "tuple pattern requires a tuple subject, got `{}`",
+                    display_resolution(subject_ty, resolver.registry),
+                ),
+                span,
+            ));
+        }
+        return PatternCoverage::Other;
+    };
+    if elements.len() != element_types.len() {
+        diagnostics.push(Diagnostic::error(
+            format!(
+                "tuple pattern has {} elements but subject `{}` has {}",
+                elements.len(),
+                display_resolution(subject_ty, resolver.registry),
+                element_types.len(),
+            ),
+            span,
+        ));
+        return PatternCoverage::Other;
+    }
+    let element_types = element_types.clone();
+    let mut all_catch_all = true;
+    for (pattern, element_ty) in elements.iter_mut().zip(&element_types) {
+        let coverage = resolve_pattern(pattern, element_ty, resolver, diagnostics);
+        all_catch_all &= matches!(coverage, PatternCoverage::CatchAll);
+    }
+    if all_catch_all {
+        PatternCoverage::CatchAll
+    } else {
+        PatternCoverage::Other
     }
 }
 

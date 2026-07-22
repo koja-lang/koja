@@ -196,9 +196,11 @@ anonymous form of functions:
 
     record : struct :: closure : named function
 
-Records fill the product slot that tuples occupy in other languages,
-without the readability cost of positional access. Fields are named, so
-`{x: Int, y: Int}` is self-documenting in a way `(Int, Int)` never is.
+Records are the named-field complement to anonymous tuples: tuples
+cover positional grouping with destructuring-only access, records
+would cover the cases where names carry the meaning. Fields are named,
+so `{x: Int, y: Int}` is self-documenting in a way `(Int, Int)` never
+is.
 
 ```koja
 fn parse_header(raw: String) -> {name: String, value: String}

@@ -182,6 +182,9 @@ fn needs_drop_seen(ty: &IRType, packages: &[IRPackage], visited: &mut BTreeSet<I
                     .any(|variant| variant_needs_drop(variant, packages, visited))
             })
         }
+        IRType::Tuple(elements) => elements
+            .iter()
+            .any(|element| needs_drop_seen(element, packages, visited)),
         IRType::Union { members, .. } => members
             .iter()
             .any(|member| needs_drop_seen(member, packages, visited)),
@@ -260,7 +263,7 @@ pub(super) fn unbox(ty: &IRType) -> &IRType {
 fn is_aggregate(ty: &IRType) -> bool {
     matches!(
         ty,
-        IRType::Enum(_) | IRType::Struct(_) | IRType::Union { .. }
+        IRType::Enum(_) | IRType::Struct(_) | IRType::Tuple(_) | IRType::Union { .. }
     )
 }
 

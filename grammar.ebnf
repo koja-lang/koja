@@ -148,6 +148,8 @@ primary_type_expr = "fn" , "(" , [ fn_type_param , { "," , fn_type_param } ] , "
                   | named_type , "<" , type_expr , { "," , type_expr } , ">"  (* generic *)
                   | named_type                                              (* simple *)
                   | "Self"                                                  (* self type *)
+                  | "(" , type_expr , "," , type_expr ,
+                    { "," , type_expr } , ")"                               (* tuple *)
                   | "(" , ")" ;                                             (* unit *)
 
 fn_type_param = type_expr ;
@@ -166,6 +168,7 @@ named_type = TYPE_IDENT , { "." , TYPE_IDENT } ;
 statement = expr
           | assignment
           | compound_assign
+          | destructure
           | return_stmt
           | break_stmt ;
 
@@ -173,6 +176,14 @@ lvalue = IDENT , { "." , IDENT } ;
 
 assignment = IDENT , ":" , type_expr , "=" , expr
            | lvalue , "=" , expr ;
+
+(* Elements are irrefutable: bindings, wildcards, or nested tuples of those. *)
+destructure = tuple_binding , "=" , expr ;
+
+tuple_binding = "(" , tuple_element , "," , tuple_element ,
+                { "," , tuple_element } , ")" ;
+
+tuple_element = IDENT | "_" | tuple_binding ;
 
 return_stmt = "return" , [ expr ] ;
 
@@ -230,6 +241,7 @@ primary = literal
         | while_expr
         | receive_expr
         | spawn_expr
+        | "(" , expr , "," , expr , { "," , expr } , ")"     (* tuple *)
         | "(" , expr , ")" ;                                 (* grouping *)
 
 struct_construction = named_type , "{" ,
@@ -370,6 +382,7 @@ pattern = "_"                                                       (* wildcard 
         | TYPE_IDENT ,
           "{" , [ field_pattern , { "," , field_pattern } ] , "}"   (* plain struct *)
         | "[" , [ pattern , { "," , pattern } ] , "]"               (* list *)
+        | "(" , pattern , "," , pattern , { "," , pattern } , ")"   (* tuple *)
         | binary_pattern                                             (* binary *)
         | TYPE_IDENT ,
           "(" , pattern , { "," , pattern } , ")" ;                 (* Some/Ok/Err *)

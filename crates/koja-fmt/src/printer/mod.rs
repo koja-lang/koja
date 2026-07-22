@@ -704,6 +704,19 @@ impl<'a> Printer<'a> {
                     ])
                 }
             }
+            Statement::Destructure { pattern, value, .. } => {
+                let lhs = pattern_to_doc(pattern);
+                let value_doc = self.expr_to_doc(value);
+                if expr_contains_block(value) {
+                    concat(vec![
+                        lhs,
+                        text(" ="),
+                        indent(2, concat(vec![hardline(), value_doc])),
+                    ])
+                } else {
+                    group(concat(vec![lhs, text(" = "), value_doc]))
+                }
+            }
             Statement::Return { value, .. } => match value {
                 Some(v) => concat(vec![text("return "), self.expr_to_doc(v)]),
                 None => text("return"),

@@ -562,6 +562,9 @@ pub enum TypeExpr {
     /// The `Self` type: resolves to the implementing type inside `impl` and
     /// `protocol` blocks.
     Self_ { span: Span },
+    /// An anonymous tuple type such as `(Int, String)`, always two or
+    /// more elements. `()` is [`Self::Unit`] and `(T)` is grouping.
+    Tuple { elements: Vec<TypeExpr>, span: Span },
     /// A union type: `A | B | C`.
     Union { types: Vec<TypeExpr>, span: Span },
 }
@@ -624,6 +627,15 @@ pub enum Statement {
     Return { value: Option<Expr>, span: Span },
     /// A loop break: `break`.
     Break { span: Span },
+    /// An irrefutable tuple destructuring assignment such as
+    /// `(a, b) = expr`. The pattern is restricted to bindings,
+    /// wildcards, and nested tuples. Refutable shapes are rejected
+    /// during parse and resolve.
+    Destructure {
+        pattern: Pattern,
+        value: Expr,
+        span: Span,
+    },
 }
 
 // Expressions
@@ -858,6 +870,10 @@ pub enum ExprKind {
         then_expr: Box<Expr>,
         else_expr: Box<Expr>,
     },
+    /// An anonymous tuple literal such as `(1, "a")`, always two or
+    /// more elements. `()` is the unit literal and `(e)` is
+    /// [`Self::Group`].
+    Tuple { elements: Vec<Expr> },
     /// A unary operation: `-x`, `not flag`.
     Unary { op: UnaryOp, operand: Box<Expr> },
     /// An unless guard: `unless cond ... end`.
@@ -1064,6 +1080,9 @@ pub enum Pattern {
     },
     /// A list pattern: `[head, tail]`.
     List { elements: Vec<Pattern>, span: Span },
+    /// An anonymous tuple pattern such as `(a, b)`, always two or
+    /// more elements to match the literal and type arity rule.
+    Tuple { elements: Vec<Pattern>, span: Span },
     /// An OR pattern: `1 | 2 | 3`.
     Or { patterns: Vec<Pattern>, span: Span },
 }

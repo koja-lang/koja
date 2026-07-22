@@ -204,6 +204,11 @@ fn collect_type_ids(ty: &ResolvedType, ids: &mut Vec<GlobalRegistryId>) {
             }
             collect_type_ids(ret, ids);
         }
+        ResolvedType::Anonymous(AnonymousKind::Tuple { elements }) => {
+            for element in elements {
+                collect_type_ids(element, ids);
+            }
+        }
         ResolvedType::Named {
             resolution,
             type_args,

@@ -245,6 +245,11 @@ pub(super) fn seal_no_type_param(ty: &ResolvedType, span: Span) {
             }
             seal_no_type_param(ret, span);
         }
+        ResolvedType::Anonymous(AnonymousKind::Tuple { elements }) => {
+            for element in elements {
+                seal_no_type_param(element, span);
+            }
+        }
         ResolvedType::Union(members) => {
             for member in members {
                 seal_no_type_param(member, span);

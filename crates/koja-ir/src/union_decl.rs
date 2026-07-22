@@ -96,6 +96,7 @@ fn size_and_align(
             ),
             None => (PTR_BYTES, PTR_BYTES),
         },
+        IRType::Tuple(elements) => sum_fields(elements.iter(), structs, enums, unions),
         IRType::Enum(symbol) => match enums.get(symbol) {
             Some(decl) => enum_size(decl, structs, enums, unions),
             None => (PTR_BYTES, PTR_BYTES),
@@ -358,6 +359,12 @@ fn walk_instruction(instruction: &IRInstruction, out: &mut BTreeMap<IRSymbol, IR
             walk_type(to, out);
         }
         IRInstruction::Spawn { config_type, .. } => walk_type(config_type, out),
+        IRInstruction::TupleGet { element_type, .. } => walk_type(element_type, out),
+        IRInstruction::TupleInit { ty, .. } => {
+            for element in ty {
+                walk_type(element, out);
+            }
+        }
         IRInstruction::UnionWrap {
             member_type, ty, ..
         }
@@ -465,6 +472,11 @@ fn walk_type(ty: &IRType, out: &mut BTreeMap<IRSymbol, IRType>) {
                 walk_type(param, out);
             }
             walk_type(ret, out);
+        }
+        IRType::Tuple(elements) => {
+            for element in elements {
+                walk_type(element, out);
+            }
         }
         IRType::Union { mangled, members } => {
             for member in members {

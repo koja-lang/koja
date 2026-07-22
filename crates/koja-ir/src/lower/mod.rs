@@ -64,6 +64,7 @@ pub(crate) mod package;
 mod patterns;
 mod process;
 mod structs;
+mod tuples;
 
 pub(crate) use body::lower_body_to_blocks;
 pub(crate) use ctx::LowerOutput;

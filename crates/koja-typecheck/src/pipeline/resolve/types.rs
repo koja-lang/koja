@@ -282,6 +282,14 @@ pub(super) fn display_resolution(ty: &ResolvedType, registry: &GlobalRegistry) -
                 display_resolution(ret, registry),
             )
         }
+        ResolvedType::Anonymous(AnonymousKind::Tuple { elements }) => {
+            let rendered = elements
+                .iter()
+                .map(|e| display_resolution(e, registry))
+                .collect::<Vec<_>>()
+                .join(", ");
+            format!("({rendered})")
+        }
         ResolvedType::Named {
             resolution: Resolution::Global(id),
             ..

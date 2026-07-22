@@ -44,6 +44,10 @@ fn type_expr_label(te: &TypeExpr) -> String {
             format!("fn ({}) -> {}", ps.join(", "), type_expr_label(return_type))
         }
         TypeExpr::Self_ { .. } => "Self".to_string(),
+        TypeExpr::Tuple { elements, .. } => {
+            let es: Vec<String> = elements.iter().map(type_expr_label).collect();
+            format!("({})", es.join(", "))
+        }
         TypeExpr::Union { types, .. } => {
             let ts: Vec<String> = types.iter().map(type_expr_label).collect();
             ts.join(" | ")

@@ -2,7 +2,7 @@
 //! `expr_kind_label` returns a compact kind name (e.g. `"binary"`), and
 //! `bin_op_label` renders the literal source token (`"+"`, `"and"`).
 
-use crate::ast::{BinOp, CompoundOp, ExprKind, Pattern};
+use crate::ast::{BinOp, CompoundOp, ExprKind, Pattern, TypeExpr};
 use crate::span::Span;
 
 pub fn expr_kind_label(kind: &ExprKind) -> &'static str {
@@ -31,6 +31,7 @@ pub fn expr_kind_label(kind: &ExprKind) -> &'static str {
         ExprKind::String { .. } => "string",
         ExprKind::StructConstruction { .. } => "struct-construction",
         ExprKind::Ternary { .. } => "ternary",
+        ExprKind::Tuple { .. } => "tuple",
         ExprKind::Unary { .. } => "unary",
         ExprKind::Unless { .. } => "unless",
         ExprKind::While { .. } => "while",
@@ -49,6 +50,7 @@ pub fn pattern_kind_label(pattern: &Pattern) -> &'static str {
         Pattern::Literal { .. } => "literal",
         Pattern::Or { .. } => "or",
         Pattern::Struct { .. } => "struct",
+        Pattern::Tuple { .. } => "tuple",
         Pattern::TypedBinding { .. } => "typed-binding",
         Pattern::Wildcard { .. } => "wildcard",
     }
@@ -66,8 +68,21 @@ pub fn pattern_span(pattern: &Pattern) -> Span {
         | Pattern::Literal { span, .. }
         | Pattern::Or { span, .. }
         | Pattern::Struct { span, .. }
+        | Pattern::Tuple { span, .. }
         | Pattern::TypedBinding { span, .. }
         | Pattern::Wildcard { span, .. } => *span,
+    }
+}
+
+pub fn type_expr_span(type_expr: &TypeExpr) -> Span {
+    match type_expr {
+        TypeExpr::Function { span, .. }
+        | TypeExpr::Generic { span, .. }
+        | TypeExpr::Named { span, .. }
+        | TypeExpr::Self_ { span }
+        | TypeExpr::Tuple { span, .. }
+        | TypeExpr::Union { span, .. }
+        | TypeExpr::Unit { span } => *span,
     }
 }
 

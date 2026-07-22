@@ -16,7 +16,7 @@ use super::process::{
 };
 use super::{
     ValueMap, calls, clone, closures, concat, constants, deep_copy, enums, locals, lookup, ops,
-    structs, unions,
+    structs, tuples, unions,
 };
 
 pub(crate) fn emit_instruction<'ctx>(
@@ -207,6 +207,22 @@ pub(crate) fn emit_instruction<'ctx>(
         }
         IRInstruction::StructInit { dest, fields, ty } => {
             let result = structs::emit_struct_init(ctx, fields, ty, values)?;
+            values.insert(*dest, result);
+            Ok(())
+        }
+        IRInstruction::TupleGet {
+            base,
+            dest,
+            element_type,
+            index,
+        } => {
+            let base_value = lookup(values, *base)?;
+            let result = tuples::emit_tuple_get(ctx, base_value, *index, element_type)?;
+            values.insert(*dest, result);
+            Ok(())
+        }
+        IRInstruction::TupleInit { dest, elements, ty } => {
+            let result = tuples::emit_tuple_init(ctx, elements, ty, values)?;
             values.insert(*dest, result);
             Ok(())
         }

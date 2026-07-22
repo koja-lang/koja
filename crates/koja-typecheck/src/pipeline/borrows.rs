@@ -111,6 +111,9 @@ fn check_statement(stmt: &Statement, registry: &GlobalRegistry, diagnostics: &mu
         Statement::CompoundAssign { value, .. } => {
             check_expr(value, Position::Escaping, registry, diagnostics);
         }
+        Statement::Destructure { value, .. } => {
+            check_expr(value, Position::Escaping, registry, diagnostics);
+        }
         Statement::Expr(expr) => check_expr(expr, Position::Escaping, registry, diagnostics),
         Statement::Return {
             value: Some(value), ..
@@ -261,6 +264,11 @@ fn check_expr(
             check_expr(condition, Position::Escaping, registry, diagnostics);
             check_expr(then_expr, Position::Escaping, registry, diagnostics);
             check_expr(else_expr, Position::Escaping, registry, diagnostics);
+        }
+        ExprKind::Tuple { elements } => {
+            for element in elements {
+                check_expr(element, Position::Escaping, registry, diagnostics);
+            }
         }
         ExprKind::Unary { operand, .. } => {
             check_expr(operand, Position::Escaping, registry, diagnostics);

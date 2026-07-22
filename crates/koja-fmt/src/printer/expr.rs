@@ -116,6 +116,11 @@ impl<'a> Printer<'a> {
                 }
             }
 
+            ExprKind::Tuple { elements } => {
+                let items: Vec<Doc> = elements.iter().map(|e| self.expr_to_doc(e)).collect();
+                fill_bracket_list("(", ")", items)
+            }
+
             ExprKind::Map { entries } => {
                 if entries.is_empty() {
                     text("[:]")

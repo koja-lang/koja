@@ -1302,6 +1302,42 @@ fn execute_instruction<'a, R: CallResolver>(
                 );
                 Ok(())
             }
+            IRInstruction::TupleGet {
+                base,
+                dest,
+                element_type: _,
+                index,
+            } => {
+                let base_value = lookup(&frame.values, *base)?;
+                let Value::Tuple(elements) = base_value else {
+                    return Err(RuntimeError::TypeMismatch {
+                        detail: format!("tuple_get expects a Tuple receiver, got {base_value}"),
+                    });
+                };
+                let element = elements
+                    .into_iter()
+                    .nth(*index as usize)
+                    .unwrap_or_else(|| {
+                        panic!(
+                            "interpreter: TupleGet index {index} out of range \
+                         (seal invariant violation)",
+                        )
+                    });
+                frame.values.insert(*dest, element);
+                Ok(())
+            }
+            IRInstruction::TupleInit {
+                dest,
+                elements,
+                ty: _,
+            } => {
+                let mut materialized = Vec::with_capacity(elements.len());
+                for element in elements {
+                    materialized.push(lookup(&frame.values, *element)?);
+                }
+                frame.values.insert(*dest, Value::Tuple(materialized));
+                Ok(())
+            }
             IRInstruction::UnaryOp {
                 dest,
                 op,

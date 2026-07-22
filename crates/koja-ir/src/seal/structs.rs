@@ -170,6 +170,8 @@ pub(super) fn seal_struct_ops<'inst, 'decl>(
             | IRInstruction::Receive { .. }
             | IRInstruction::SetPriority { .. }
             | IRInstruction::Spawn { .. }
+            | IRInstruction::TupleGet { .. }
+            | IRInstruction::TupleInit { .. }
             | IRInstruction::UnaryOp { .. }
             | IRInstruction::UnionPayloadGet { .. }
             | IRInstruction::UnionTagGet { .. }

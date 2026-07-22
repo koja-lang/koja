@@ -10,7 +10,7 @@ Koja is a statically typed, compiled language targeting native binaries via LLVM
 - [Variables and Constants](#variables-and-constants): Assignment, Type Annotations, Compound Assignment, Constants
 - [Functions](#functions): Declaration, Private Declarations, `return`, Parameters
 - [Control Flow](#control-flow): `if`/`else`, `unless`, `while`, `loop`/`break`, `for`...`in`, Ternary
-- [Types](#types): Primitives, Numeric Widening, Arithmetic Faults, Unit, Strings, Structs, Enums, Union Types, Generics
+- [Types](#types): Primitives, Numeric Widening, Arithmetic Faults, Unit, Strings, Structs, Enums, Union Types, Tuples, Generics
 - [Pattern Matching](#pattern-matching): `match`, OR Patterns, `cond`
 - [Closures and Function Types](#closures-and-function-types): Block Closures, Short Closures, Capture Semantics, Function Types
 - [Value Semantics](#value-semantics): Rules, Copy Cost, Field Access
@@ -698,6 +698,58 @@ pet: Pet = c
 ```
 
 Order doesn't matter. `Post | Comment` and `Comment | Post` are the same type.
+
+### Tuples
+
+An anonymous, fixed-size grouping of values. Tuples are structural: two tuple types are the same type exactly when their element types match, position by position.
+
+```koja
+point = (3, 9)
+entry: (String, Int) = ("alice", 42)
+nested = (1, (2.5, false))
+```
+
+Tuples need at least two elements. `()` is the unit value, and `(x)` is a parenthesized expression, not a tuple. Trailing commas are not allowed.
+
+There is no positional access (`t.0`). Take a tuple apart with a destructuring assignment:
+
+```koja
+(name, score) = entry
+(_, score) = entry  # wildcard skips an element
+(a, (b, c)) = nested  # nesting works
+```
+
+Every element pattern must be irrefutable: a binding, a wildcard, or a nested tuple of those. Use `match` for refutable patterns:
+
+```koja
+match point
+  (0, 0) -> "origin"
+  (x, 0) when x > 0 -> "positive x axis"
+  (_, y) -> "somewhere at y = #{y}"
+end
+```
+
+Tuples support `==`/`!=` (element-wise, when every element does), `format()`, `print()`, and string interpolation:
+
+```koja
+(1, "one").print()  # (1, "one")
+```
+
+Tuples work as function returns, generic type arguments, struct fields, and union members:
+
+```koja
+fn lookup(key: String) -> (Int, String) | NotFound
+  ...
+end
+
+match lookup("a")
+  hit: (Int, String) ->
+    (n, name) = hit
+    name
+
+  missing: NotFound -> missing.key
+end
+```
 
 ### Generics
 

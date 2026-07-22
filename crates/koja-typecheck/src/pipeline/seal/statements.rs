@@ -8,6 +8,7 @@ use koja_ast::ast::{LValue, Statement};
 use koja_ast::span::Span;
 
 use super::expressions::seal_expr;
+use super::patterns::seal_pattern;
 use super::{SealMode, seal_panic};
 
 pub(super) fn seal_statement(stmt: &Statement, mode: SealMode) {
@@ -29,6 +30,10 @@ pub(super) fn seal_statement(stmt: &Statement, mode: SealMode) {
             ..
         } => {
             seal_lvalue_shape(target, "compound-assign", *span);
+            seal_expr(value, mode);
+        }
+        Statement::Destructure { pattern, value, .. } => {
+            seal_pattern(pattern, mode);
             seal_expr(value, mode);
         }
         Statement::Expr(expr) => seal_expr(expr, mode),

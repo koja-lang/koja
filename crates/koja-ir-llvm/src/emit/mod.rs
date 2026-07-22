@@ -64,6 +64,7 @@ mod locals;
 pub(crate) mod ops;
 pub(crate) mod process;
 mod structs;
+mod tuples;
 mod unions;
 
 pub(crate) use instruction::emit_instruction as emit_instruction_external;

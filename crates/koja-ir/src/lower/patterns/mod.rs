@@ -38,6 +38,7 @@ mod enums;
 mod literals;
 mod or_pattern;
 mod structs;
+mod tuples;
 
 use koja_ast::ast::{Diagnostic, Pattern};
 use koja_ast::identifier::{GlobalRegistryId, LocalId, ResolvedType};
@@ -134,6 +135,7 @@ pub(super) struct BindStep {
 /// emits `EnumPayloadFieldGet` (tag-gated, safe only when the
 /// enclosing tag test has already fired). `StructField` emits
 /// `FieldGet` (no tag, since the input is already a struct).
+/// `TupleElement` emits `TupleGet` (index-addressed, no decl).
 /// `UnionPayload` emits `UnionPayloadGet` (tag-gated extraction
 /// against a tagged union member).
 pub(super) enum BindOp {
@@ -145,6 +147,9 @@ pub(super) enum BindOp {
     StructField {
         field_index: u32,
         struct_symbol: IRSymbol,
+    },
+    TupleElement {
+        index: u32,
     },
     UnionPayload {
         member_index: u8,
@@ -254,6 +259,9 @@ pub(super) fn lower_pattern_check(
         )),
         Pattern::Struct { fields, .. } => Ok(structs::lower_struct_check(
             fields, &inputs, ctx, block, output,
+        )),
+        Pattern::Tuple { elements, .. } => Ok(tuples::lower_tuple_check(
+            elements, &inputs, ctx, block, output,
         )),
         Pattern::TypedBinding {
             local_id,

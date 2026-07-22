@@ -554,6 +554,12 @@ pub(crate) fn resolved_type_to_ir_type(
                 .collect(),
             ret: Box::new(resolved_type_to_ir_type(ret, registry, instantiations)),
         },
+        ResolvedType::Anonymous(AnonymousKind::Tuple { elements }) => IRType::Tuple(
+            elements
+                .iter()
+                .map(|e| resolved_type_to_ir_type(e, registry, instantiations))
+                .collect(),
+        ),
         ResolvedType::Named {
             resolution: Resolution::Global(id),
             type_args,

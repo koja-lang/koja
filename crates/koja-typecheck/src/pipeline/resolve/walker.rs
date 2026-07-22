@@ -32,7 +32,7 @@ use crate::registry::{FunctionSignature, GlobalKind, GlobalRegistry};
 use super::ctx::{Resolver, ResolverEnv};
 use super::expr::resolve_expr_with_expected;
 use super::return_type::check_return_type;
-use super::statements::{resolve_assignment, resolve_compound_assignment};
+use super::statements::{resolve_assignment, resolve_compound_assignment, resolve_destructure};
 
 pub(crate) fn resolve_file(
     file: &mut File,
@@ -330,6 +330,9 @@ pub(super) fn resolve_statement_with_expected(
             span,
         } => {
             resolve_compound_assignment(target, *op, value, *span, resolver, diagnostics);
+        }
+        Statement::Destructure { pattern, value, .. } => {
+            resolve_destructure(pattern, value, resolver, diagnostics);
         }
         Statement::Expr(expr) => {
             resolve_expr_with_expected(expr, expected, resolver, diagnostics);

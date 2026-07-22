@@ -15,7 +15,7 @@
 use std::collections::HashSet;
 
 use koja_ast::ast::{Diagnostic, Item};
-use koja_ast::identifier::{GlobalRegistryId, Identifier, Resolution, ResolvedType};
+use koja_ast::identifier::{AnonymousKind, GlobalRegistryId, Identifier, Resolution, ResolvedType};
 
 use crate::pipeline::aliases::collect_file_aliases;
 use crate::program::CheckedPackage;
@@ -146,12 +146,15 @@ fn type_references_alias(
         ResolvedType::Named { type_args, .. } => type_args
             .iter()
             .any(|arg| type_references_alias(arg, registry, seen)),
-        ResolvedType::Anonymous(koja_ast::identifier::AnonymousKind::Function { params, ret }) => {
+        ResolvedType::Anonymous(AnonymousKind::Function { params, ret }) => {
             params
                 .iter()
                 .any(|p| type_references_alias(p, registry, seen))
                 || type_references_alias(ret, registry, seen)
         }
+        ResolvedType::Anonymous(AnonymousKind::Tuple { elements }) => elements
+            .iter()
+            .any(|e| type_references_alias(e, registry, seen)),
         ResolvedType::Union(members) => members
             .iter()
             .any(|m| type_references_alias(m, registry, seen)),

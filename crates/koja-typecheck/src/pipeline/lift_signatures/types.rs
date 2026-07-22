@@ -7,6 +7,8 @@ use koja_ast::identifier::{
 };
 use koja_ast::span::Span;
 
+pub(super) use koja_ast::labels::type_expr_span;
+
 use crate::pipeline::aliases::rewrite_through_aliases;
 use crate::pipeline::resolve::types::canonical_union;
 use crate::pipeline::visibility::check_reference_visibility;
@@ -117,6 +119,13 @@ pub(crate) fn resolve_type_expr(
             resolve_named(path, *span, type_params, scope, diagnostics)
         }
         TypeExpr::Self_ { span } => resolve_self(*span, type_params, scope.registry, diagnostics),
+        TypeExpr::Tuple { elements, .. } => {
+            let resolved = elements
+                .iter()
+                .map(|element| resolve_type_expr(element, type_params, scope, diagnostics))
+                .collect();
+            ResolvedType::Anonymous(AnonymousKind::Tuple { elements: resolved })
+        }
         TypeExpr::Union { types, .. } => {
             let members = types
                 .iter()
@@ -352,17 +361,6 @@ fn lookup_path_entry<'r>(
     None
 }
 
-pub(super) fn type_expr_span(type_expr: &TypeExpr) -> Span {
-    match type_expr {
-        TypeExpr::Function { span, .. }
-        | TypeExpr::Generic { span, .. }
-        | TypeExpr::Named { span, .. }
-        | TypeExpr::Self_ { span }
-        | TypeExpr::Union { span, .. }
-        | TypeExpr::Unit { span } => *span,
-    }
-}
-
 /// Resolve a `<T: Bound>` bound name to the protocol's registry id.
 /// Lookup order matches type-name resolution: file aliases first
 /// (so `<T: AliasedProtocol>` works), then `package`, then `Global`.
@@ -423,6 +421,14 @@ pub(super) fn render_resolved(ty: &ResolvedType, registry: &GlobalRegistry) -> S
                 "fn ({rendered_params}) -> {}",
                 render_resolved(ret, registry),
             )
+        }
+        ResolvedType::Anonymous(AnonymousKind::Tuple { elements }) => {
+            let rendered = elements
+                .iter()
+                .map(|e| render_resolved(e, registry))
+                .collect::<Vec<_>>()
+                .join(", ");
+            format!("({rendered})")
         }
         ResolvedType::Named {
             resolution: Resolution::Global(id),

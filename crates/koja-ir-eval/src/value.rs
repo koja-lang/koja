@@ -92,6 +92,9 @@ pub enum Value {
         symbol: IRSymbol,
         fields: Vec<Value>,
     },
+    /// Anonymous tuple. Structural (no symbol), mirroring
+    /// [`koja_ir::IRType::Tuple`].
+    Tuple(Vec<Value>),
     /// Tagged union value. `tag` is the 0-based member index (the
     /// position of the wrapped member in the union's canonical
     /// member list). `payload` is the boxed value the user wrote.
@@ -249,6 +252,16 @@ impl fmt::Display for Value {
             Value::Map(entries) => write_map_entries(f, &entries.borrow()),
             Value::Set(items) => write_set_items(f, &items.borrow()),
             Value::String(bytes) => f.write_str(&String::from_utf8_lossy(bytes)),
+            Value::Tuple(elements) => {
+                write!(f, "(")?;
+                for (index, element) in elements.iter().enumerate() {
+                    if index > 0 {
+                        write!(f, ", ")?;
+                    }
+                    write!(f, "{element}")?;
+                }
+                write!(f, ")")
+            }
             Value::Struct { symbol, fields } => {
                 write!(f, "{symbol}(")?;
                 for (index, field) in fields.iter().enumerate() {

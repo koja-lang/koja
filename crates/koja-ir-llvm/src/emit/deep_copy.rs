@@ -60,7 +60,9 @@ pub(super) fn emit_deep_copy<'ctx>(
         | IRType::Unit => lookup(values, source)?,
         // No-glue aggregates own no heap, so the register copy is
         // already physically independent (same reasoning as `Clone`'s).
-        IRType::Enum(_) | IRType::Struct(_) | IRType::Union { .. } => lookup(values, source)?,
+        IRType::Enum(_) | IRType::Struct(_) | IRType::Tuple(_) | IRType::Union { .. } => {
+            lookup(values, source)?
+        }
         IRType::Function { .. } => {
             let closure_value = lookup(values, source)?;
             let env =

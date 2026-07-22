@@ -620,6 +620,11 @@ fn substitute_named_in_type_expr(type_expr: &mut TypeExpr, from: &str, to: &Type
             }
             substitute_named_in_type_expr(return_type, from, to);
         }
+        TypeExpr::Tuple { elements, .. } => {
+            for element in elements {
+                substitute_named_in_type_expr(element, from, to);
+            }
+        }
         TypeExpr::Union { types, .. } => {
             for ty in types {
                 substitute_named_in_type_expr(ty, from, to);
@@ -642,6 +647,10 @@ fn substitute_named_in_statement(statement: &mut Statement, from: &str, to: &Typ
             substitute_named_in_expr(value, from, to);
         }
         Statement::CompoundAssign { value, .. } => substitute_named_in_expr(value, from, to),
+        Statement::Destructure { pattern, value, .. } => {
+            substitute_named_in_pattern(pattern, from, to);
+            substitute_named_in_expr(value, from, to);
+        }
         Statement::Return { value, .. } => {
             if let Some(value) = value {
                 substitute_named_in_expr(value, from, to);
@@ -676,7 +685,9 @@ fn substitute_named_in_pattern(pattern: &mut Pattern, from: &str, to: &TypeExpr)
                 substitute_named_in_pattern(pat, from, to);
             }
         }
-        Pattern::EnumTuple { elements, .. } | Pattern::Constructor { elements, .. } => {
+        Pattern::EnumTuple { elements, .. }
+        | Pattern::Constructor { elements, .. }
+        | Pattern::Tuple { elements, .. } => {
             for pat in elements {
                 substitute_named_in_pattern(pat, from, to);
             }

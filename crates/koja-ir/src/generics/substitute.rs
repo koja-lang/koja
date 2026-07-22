@@ -83,6 +83,10 @@ fn substitute_in_statement(stmt: &mut Statement, args: &[ResolvedType], owner: G
             substitute_in_lvalue(target, args, owner);
             substitute_in_expr(value, args, owner);
         }
+        Statement::Destructure { pattern, value, .. } => {
+            substitute_in_pattern(pattern, args, owner);
+            substitute_in_expr(value, args, owner);
+        }
         Statement::Expr(expr) => substitute_in_expr(expr, args, owner),
         Statement::Return { value: None, .. } => {}
         Statement::Return {
@@ -259,6 +263,11 @@ fn substitute_in_expr(expr: &mut Expr, args: &[ResolvedType], owner: GlobalRegis
             substitute_in_expr(then_expr, args, owner);
             substitute_in_expr(else_expr, args, owner);
         }
+        ExprKind::Tuple { elements } => {
+            for element in elements {
+                substitute_in_expr(element, args, owner);
+            }
+        }
         ExprKind::Unary { operand, .. } => substitute_in_expr(operand, args, owner),
         ExprKind::Unless { condition, body } => {
             substitute_in_expr(condition, args, owner);
@@ -303,7 +312,8 @@ fn substitute_in_pattern(pattern: &mut Pattern, args: &[ResolvedType], owner: Gl
         Pattern::List { elements, .. }
         | Pattern::Or {
             patterns: elements, ..
-        } => {
+        }
+        | Pattern::Tuple { elements, .. } => {
             for sub in elements {
                 substitute_in_pattern(sub, args, owner);
             }

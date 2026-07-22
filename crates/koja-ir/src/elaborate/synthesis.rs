@@ -1,5 +1,5 @@
 //! IR body synthesis for *aggregate* clone / deep-copy / drop glue
-//! (`Struct` / `Enum` / `Union`). Given the operand type and the
+//! (`Struct` / `Enum` / `Tuple` / `Union`). Given the operand type and the
 //! program's decls, [`copy_body`] / [`drop_body`] build a
 //! self-contained CFG that projects each constituent, acquires /
 //! releases it (recursing into the constituent's own glue by
@@ -71,6 +71,7 @@ pub(super) fn copy_body(ty: &IRType, packages: &[IRPackage], mode: CopyMode) -> 
     match ty {
         IRType::Struct(symbol) => synthesizer.struct_copy(symbol, packages),
         IRType::Enum(symbol) => synthesizer.enum_copy(ty, symbol, packages),
+        IRType::Tuple(elements) => synthesizer.tuple_copy(elements, packages),
         IRType::Union { members, .. } => synthesizer.union_copy(ty, members, packages),
         other => panic!("elaborate synthesis: copy_body on non-aggregate {other:?}"),
     }
@@ -84,6 +85,7 @@ pub(super) fn drop_body(ty: &IRType, packages: &[IRPackage]) -> Vec<IRBasicBlock
     match ty {
         IRType::Struct(symbol) => synthesizer.struct_drop(symbol, packages),
         IRType::Enum(symbol) => synthesizer.enum_drop(symbol, packages),
+        IRType::Tuple(elements) => synthesizer.tuple_drop(elements, packages),
         IRType::Union { members, .. } => synthesizer.union_drop(ty, members, packages),
         other => panic!("elaborate synthesis: drop_body on non-aggregate {other:?}"),
     }
@@ -287,6 +289,66 @@ impl Synthesizer {
                 },
             );
             self.release(entry, projected, &field.ir_type, packages);
+        }
+        self.cfg
+            .set_terminator(entry, IRTerminator::Return { value: None });
+    }
+
+    // --- tuple -----------------------------------------------------
+
+    /// Tuple analog of [`Self::struct_copy`]. Elements come straight
+    /// off the structural type, so there is no decl to consult.
+    fn tuple_copy(&mut self, elements: &[IRType], packages: &[IRPackage]) {
+        let entry = self.block("entry");
+        let mut owned = Vec::with_capacity(elements.len());
+        for (index, element_ty) in elements.iter().enumerate() {
+            let projected = self.value();
+            self.append(
+                entry,
+                IRInstruction::TupleGet {
+                    base: SELF_VALUE,
+                    dest: projected,
+                    element_type: element_ty.clone(),
+                    index: index as u32,
+                },
+            );
+            owned.push(self.acquire(entry, projected, element_ty, packages));
+        }
+        let result = self.value();
+        self.append(
+            entry,
+            IRInstruction::TupleInit {
+                dest: result,
+                elements: owned,
+                ty: elements.to_vec(),
+            },
+        );
+        self.cfg.set_terminator(
+            entry,
+            IRTerminator::Return {
+                value: Some(result),
+            },
+        );
+    }
+
+    /// Tuple analog of [`Self::struct_drop`].
+    fn tuple_drop(&mut self, elements: &[IRType], packages: &[IRPackage]) {
+        let entry = self.block("entry");
+        for (index, element_ty) in elements.iter().enumerate() {
+            if !needs_drop(element_ty, packages) {
+                continue;
+            }
+            let projected = self.value();
+            self.append(
+                entry,
+                IRInstruction::TupleGet {
+                    base: SELF_VALUE,
+                    dest: projected,
+                    element_type: element_ty.clone(),
+                    index: index as u32,
+                },
+            );
+            self.release(entry, projected, element_ty, packages);
         }
         self.cfg
             .set_terminator(entry, IRTerminator::Return { value: None });

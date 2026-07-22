@@ -22,6 +22,7 @@
 
 mod bounded;
 mod methods;
+mod tuples;
 
 use koja_ast::ast::{Arg, Diagnostic, Expr, ExprKind, Literal};
 use koja_ast::identifier::{
@@ -414,10 +415,20 @@ pub(super) fn resolve_method_call(
         };
         return MethodCallOutcome::Method(resolve_bounded_method_call(site, resolver, diagnostics));
     }
+    if matches!(method_receiver, MethodReceiver::Tuple) {
+        return MethodCallOutcome::Method(tuples::resolve_tuple_method_call(
+            receiver,
+            method,
+            args,
+            call_span,
+            resolver,
+            diagnostics,
+        ));
+    }
 
     let struct_id = match method_receiver {
         MethodReceiver::Static { struct_id } | MethodReceiver::Instance { struct_id } => struct_id,
-        MethodReceiver::Bounded { .. } => unreachable!("handled above"),
+        MethodReceiver::Bounded { .. } | MethodReceiver::Tuple => unreachable!("handled above"),
     };
     let Some(struct_entry) = resolver.registry.get(struct_id) else {
         return MethodCallOutcome::Method(ResolvedType::unresolved());

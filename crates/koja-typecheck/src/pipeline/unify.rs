@@ -338,6 +338,23 @@ pub(crate) fn unify_into(
             }
             unify_into(template_ret, actual_ret, subst, registry)
         }
+        (
+            ResolvedType::Anonymous(AnonymousKind::Tuple {
+                elements: template_elements,
+            }),
+            ResolvedType::Anonymous(AnonymousKind::Tuple {
+                elements: actual_elements,
+            }),
+        ) => {
+            if template_elements.len() != actual_elements.len() {
+                return Ok(());
+            }
+            for (template_element, actual_element) in template_elements.iter().zip(actual_elements)
+            {
+                unify_into(template_element, actual_element, subst, registry)?;
+            }
+            Ok(())
+        }
         _ => Ok(()),
     }
 }
@@ -353,6 +370,11 @@ pub fn substitute(template: &ResolvedType, subst: &Substitution) -> ResolvedType
             ResolvedType::Anonymous(AnonymousKind::Function {
                 params: params.iter().map(|p| substitute(p, subst)).collect(),
                 ret: Box::new(substitute(ret, subst)),
+            })
+        }
+        ResolvedType::Anonymous(AnonymousKind::Tuple { elements }) => {
+            ResolvedType::Anonymous(AnonymousKind::Tuple {
+                elements: elements.iter().map(|e| substitute(e, subst)).collect(),
             })
         }
         ResolvedType::Named {

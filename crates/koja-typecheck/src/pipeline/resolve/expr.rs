@@ -19,7 +19,9 @@ use super::control_flow::{
 use super::ctx::Resolver;
 use super::enums::resolve_enum_construction;
 use super::idents::{resolve_ident, resolve_self};
-use super::literals::{resolve_binary_literal, resolve_list_literal, resolve_map_literal};
+use super::literals::{
+    resolve_binary_literal, resolve_list_literal, resolve_map_literal, resolve_tuple_literal,
+};
 use super::match_expr::resolve_match;
 use super::ops::{binary_type, resolve_equality_op_expr, unary_type};
 use super::process::{resolve_receive, resolve_spawn};
@@ -222,6 +224,9 @@ pub(super) fn resolve_expr_with_expected(
             resolver,
             diagnostics,
         ),
+        ExprKind::Tuple { elements } => {
+            resolve_tuple_literal(elements, expected, resolver, diagnostics)
+        }
         ExprKind::Unary { op, operand } => {
             resolve_expr(operand, resolver, diagnostics);
             unary_type(*op, operand, expr.span, resolver.registry, diagnostics)
