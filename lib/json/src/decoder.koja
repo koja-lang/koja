@@ -36,22 +36,22 @@ struct Decoder
     bytes = input.to_binary()
     d = Decoder{input: bytes, size: bytes.byte_size()}
 
-    pair =
+    (value, next_pos) =
       match d.parse_value_at(d.skip_ws(0))
         Result.Ok(p) -> p
         Result.Err(msg) -> return Result.Err(msg)
       end
 
-    rest = d.skip_ws(pair.second)
+    rest = d.skip_ws(next_pos)
 
     if rest < d.size
       return Result.Err("unexpected trailing content at position #{rest}")
     end
 
-    Result.Ok(pair.first)
+    Result.Ok(value)
   end
 
-  fn parse_value_at(self, pos: Int) -> Result<Pair<Value, Int>, String>
+  fn parse_value_at(self, pos: Int) -> Result<(Value, Int), String>
     if pos >= self.size
       return Result.Err("unexpected end of input at position #{pos}")
     end
@@ -85,27 +85,27 @@ struct Decoder
     Result.Err("unexpected character '#{self.text(pos, pos)}' at position #{pos}")
   end
 
-  fn parse_null(self, pos: Int) -> Result<Pair<Value, Int>, String>
+  fn parse_null(self, pos: Int) -> Result<(Value, Int), String>
     if pos + 4 > self.size or self.text(pos, pos + 3) != "null"
       return Result.Err("expected 'null' at position #{pos}")
     end
 
-    Result.Ok(Pair.new(Value.Null, pos + 4))
+    Result.Ok((Value.Null, pos + 4))
   end
 
-  fn parse_bool(self, pos: Int) -> Result<Pair<Value, Int>, String>
+  fn parse_bool(self, pos: Int) -> Result<(Value, Int), String>
     if pos + 4 <= self.size and self.text(pos, pos + 3) == "true"
-      return Result.Ok(Pair.new(Value.Bool(true), pos + 4))
+      return Result.Ok((Value.Bool(true), pos + 4))
     end
 
     if pos + 5 <= self.size and self.text(pos, pos + 4) == "false"
-      return Result.Ok(Pair.new(Value.Bool(false), pos + 5))
+      return Result.Ok((Value.Bool(false), pos + 5))
     end
 
     Result.Err("expected 'true' or 'false' at position #{pos}")
   end
 
-  fn parse_number(self, pos: Int) -> Result<Pair<Value, Int>, String>
+  fn parse_number(self, pos: Int) -> Result<(Value, Int), String>
     i = pos
 
     if self.peek?(i, BYTE_MINUS)
@@ -155,7 +155,7 @@ struct Decoder
             return Result.Err("invalid float '#{num_str}' at position #{pos}: #{msg}")
         end
 
-      return Result.Ok(Pair.new(Value.Float(f), i))
+      return Result.Ok((Value.Float(f), i))
     end
 
     n =
@@ -165,7 +165,7 @@ struct Decoder
           return Result.Err("invalid integer '#{num_str}' at position #{pos}: #{msg}")
       end
 
-    Result.Ok(Pair.new(Value.Int(n), i))
+    Result.Ok((Value.Int(n), i))
   end
 
   fn consume_digits(self, start: Int) -> Int
@@ -182,17 +182,17 @@ struct Decoder
     i
   end
 
-  fn parse_string(self, pos: Int) -> Result<Pair<Value, Int>, String>
-    pair =
+  fn parse_string(self, pos: Int) -> Result<(Value, Int), String>
+    (string, next_pos) =
       match self.parse_raw_string(pos)
         Result.Ok(p) -> p
         Result.Err(msg) -> return Result.Err(msg)
       end
 
-    Result.Ok(Pair.new(Value.String(pair.first), pair.second))
+    Result.Ok((Value.String(string), next_pos))
   end
 
-  fn parse_raw_string(self, pos: Int) -> Result<Pair<String, Int>, String>
+  fn parse_raw_string(self, pos: Int) -> Result<(String, Int), String>
     if not self.peek?(pos, BYTE_QUOTE)
       return Result.Err("expected '\"' at position #{pos}")
     end
@@ -201,7 +201,7 @@ struct Decoder
   end
 
   priv fn scan_string(self, start: Int, open: Int)
-    -> Result<Pair<String, Int>, String>
+    -> Result<(String, Int), String>
 
     # Fast path for string contents. Scan for the closing quote and cut
     # the value out as one slice. Falls over to `scan_escaped` at the
@@ -213,7 +213,7 @@ struct Decoder
       b = self.byte(i)
 
       if b == BYTE_QUOTE
-        return Result.Ok(Pair.new(self.text(start, i - 1), i + 1))
+        return Result.Ok((self.text(start, i - 1), i + 1))
       end
 
       if b == BYTE_BACKSLASH
@@ -232,7 +232,7 @@ struct Decoder
     pos: Int,
     open: Int,
     sb: StringBuilder,
-  ) -> Result<Pair<String, Int>, String>
+  ) -> Result<(String, Int), String>
 
     # Slow path for strings containing escapes. Accumulate the slices
     # between escapes plus each unescaped character. `start` tracks the
@@ -249,7 +249,7 @@ struct Decoder
           sb = sb.add(self.text(start, i - 1))
         end
 
-        return Result.Ok(Pair.new(sb.build(), i + 1))
+        return Result.Ok((sb.build(), i + 1))
       end
 
       if b == BYTE_BACKSLASH
@@ -282,30 +282,30 @@ struct Decoder
     Result.Err("unterminated string starting at position #{open}")
   end
 
-  fn parse_array(self, pos: Int) -> Result<Pair<Value, Int>, String>
+  fn parse_array(self, pos: Int) -> Result<(Value, Int), String>
     i = self.skip_ws(pos + 1)
     items: List<Value> = List.new()
 
     if self.peek?(i, BYTE_RBRACKET)
-      return Result.Ok(Pair.new(Value.Array(items), i + 1))
+      return Result.Ok((Value.Array(items), i + 1))
     end
 
     self.parse_array_elements(items, i, pos)
   end
 
   fn parse_array_elements(self, items: List<Value>, pos: Int, arr_start: Int)
-    -> Result<Pair<Value, Int>, String>
+    -> Result<(Value, Int), String>
 
     i = self.skip_ws(pos)
 
-    pair =
+    (value, next_pos) =
       match self.parse_value_at(i)
         Result.Ok(p) -> p
         Result.Err(msg) -> return Result.Err(msg)
       end
 
-    items = items.append(pair.first)
-    i = self.skip_ws(pair.second)
+    items = items.append(value)
+    i = self.skip_ws(next_pos)
 
     if i >= self.size
       return Result.Err("unterminated array starting at position #{arr_start}")
@@ -314,7 +314,7 @@ struct Decoder
     b = self.byte(i)
 
     if b == BYTE_RBRACKET
-      return Result.Ok(Pair.new(Value.Array(items), i + 1))
+      return Result.Ok((Value.Array(items), i + 1))
     end
 
     if b != BYTE_COMMA
@@ -324,12 +324,12 @@ struct Decoder
     self.parse_array_elements(items, i + 1, arr_start)
   end
 
-  fn parse_object(self, pos: Int) -> Result<Pair<Value, Int>, String>
+  fn parse_object(self, pos: Int) -> Result<(Value, Int), String>
     i = self.skip_ws(pos + 1)
-    entries: List<Pair<String, Value>> = List.new()
+    entries: List<(String, Value)> = List.new()
 
     if self.peek?(i, BYTE_RBRACE)
-      return Result.Ok(Pair.new(Value.Object(entries), i + 1))
+      return Result.Ok((Value.Object(entries), i + 1))
     end
 
     self.parse_object_entries(entries, i, pos)
@@ -337,21 +337,21 @@ struct Decoder
 
   fn parse_object_entries(
     self,
-    entries: List<Pair<String, Value>>,
+    entries: List<(String, Value)>,
     pos: Int,
     obj_start: Int,
-  ) -> Result<Pair<Value, Int>, String>
+  ) -> Result<(Value, Int), String>
 
     i = self.skip_ws(pos)
 
-    key_pair =
+    (key, next_pos) =
       match self.parse_raw_string(i)
         Result.Ok(kp) -> kp
         Result.Err(msg) ->
           return Result.Err("expected string key in object: " <> msg)
       end
 
-    i = self.skip_ws(key_pair.second)
+    i = self.skip_ws(next_pos)
 
     if not self.peek?(i, BYTE_COLON)
       return Result.Err("expected ':' after object key at position #{i}")
@@ -359,14 +359,14 @@ struct Decoder
 
     i = self.skip_ws(i + 1)
 
-    val_pair =
+    (value, next_pos) =
       match self.parse_value_at(i)
         Result.Ok(vp) -> vp
         Result.Err(msg) -> return Result.Err(msg)
       end
 
-    entries = entries.append(Pair.new(key_pair.first, val_pair.first))
-    i = self.skip_ws(val_pair.second)
+    entries = entries.append((key, value))
+    i = self.skip_ws(next_pos)
 
     if i >= self.size
       return Result.Err("unterminated object starting at position #{obj_start}")
@@ -375,7 +375,7 @@ struct Decoder
     b = self.byte(i)
 
     if b == BYTE_RBRACE
-      return Result.Ok(Pair.new(Value.Object(entries), i + 1))
+      return Result.Ok((Value.Object(entries), i + 1))
     end
 
     if b != BYTE_COMMA

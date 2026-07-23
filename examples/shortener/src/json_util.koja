@@ -12,11 +12,10 @@ struct JsonUtil
   fn link_to_value(link: Link) -> Value
     Value.object(
       [
-        Value.entry("code", Value.string(link.code)),
-        Value.entry("url", Value.string(link.url)),
-        Value.entry("created_at", Value.string(link.created_at)),
-        Value.entry("hits", Value.int(link.hits)),
-        Value.entry("short_path", Value.string("/" <> link.code))
+        ("code", Value.string(link.code)), ("url", Value.string(link.url)),
+        ("created_at", Value.string(link.created_at)),
+        ("hits", Value.int(link.hits)),
+        ("short_path", Value.string("/" <> link.code))
       ],
     )
   end
@@ -69,19 +68,14 @@ struct JsonUtil
     end
   end
 
-  # `Value.Object` still carries `Pair` entries (the stdlib JSON
-  # package has not migrated to tuples yet), so this scan stays on
-  # the `Pair` API.
-  priv fn scan(entries: List<Pair<String, Value>>, key: String, index: Int)
+  priv fn scan(entries: List<(String, Value)>, key: String, index: Int)
     -> Option<Value>
 
     if index >= entries.length()
       return Option.None
     end
 
-    entry = entries.get(index).unwrap()
-    entry.first == key
-      ? Option.Some(entry.second)
-      : scan(entries, key, index + 1)
+    (entry_key, entry_value) = entries.get(index).unwrap()
+    entry_key == key ? Option.Some(entry_value) : scan(entries, key, index + 1)
   end
 end

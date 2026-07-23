@@ -534,11 +534,11 @@ fn synthesize_default_method(
 /// concrete `TypeExpr` the impl pinned. The substitution covers
 /// param signatures, the return type, and every `TypeExpr` inside
 /// the body: match arms' typed-binding patterns,
-/// `pair: Pair<M, Option<ReplyTo<R>>>` receive-arm payloads, let-
+/// `(M, Option<ReplyTo<R>>)` receive-arm payloads, let-
 /// binding annotations, closures, and so on.
 ///
 /// Without this, a default body like `Process.run`'s
-/// `pair: Pair<M, Option<ReplyTo<R>>> -> ...` would carry bare `M`
+/// tuple envelope would carry bare `M`
 /// / `R` references into the impl's `Worker.run` synthesis, where
 /// the resolver has no protocol-type-param scope to look them up
 /// in. Pre-substituting at synthesis time means the rest of the
@@ -593,7 +593,7 @@ fn substitute_protocol_type_params(
 /// with the concrete `to` expression. Recurses into generic
 /// argument lists, function-type params and returns, and union
 /// alternatives so nested references like
-/// `Pair<M, Option<ReplyTo<R>>>` rewrite all the way down.
+/// `(M, Option<ReplyTo<R>>)` rewrite all the way down.
 fn substitute_named_in_type_expr(type_expr: &mut TypeExpr, from: &str, to: &TypeExpr) {
     match type_expr {
         TypeExpr::Named { path, .. } if path.len() == 1 && path[0] == from => {

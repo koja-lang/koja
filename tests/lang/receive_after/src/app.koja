@@ -21,7 +21,7 @@ impl Process<App, AppMsg, String> for App
 
   fn run(self) -> StopReason
     receive
-      pair: Pair<AppMsg, Option<ReplyTo<String>>> ->
+      envelope: (AppMsg, Option<ReplyTo<String>>) ->
         StopReason.Shutdown
 
       event: Lifecycle ->

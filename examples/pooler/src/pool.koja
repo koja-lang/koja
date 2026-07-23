@@ -156,23 +156,22 @@ impl Process<Config<T>, Msg<T>, Reply<T>> for Server<T>
         self
 
       Option.Some(caller) ->
-        popped = self.available.pop()
+        (popped, available) = self.available.pop()
 
-        match popped.first
+        match popped
           Option.None ->
             self.waiting = self.waiting.append(caller)
             self
 
           Option.Some(resource) ->
-            self.available = popped.second
+            self.available = available
 
             match caller.send(Reply.Resource(resource))
               Delivery.Delivered ->
                 self
 
-                # The caller gave up before we answered. Keep the resource.
-
               Delivery.Expired ->
+                # The caller gave up before we answered. Keep the resource.
                 self.available = self.available.append(resource)
                 self
             end

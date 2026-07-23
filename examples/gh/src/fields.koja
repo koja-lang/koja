@@ -48,16 +48,14 @@ struct Fields
     end
   end
 
-  priv fn scan(entries: List<Pair<String, Value>>, key: String, index: Int)
+  priv fn scan(entries: List<(String, Value)>, key: String, index: Int)
     -> Option<Value>
 
     if index >= entries.length()
       return Option.None
     end
 
-    entry = entries.get(index).unwrap()
-    entry.first == key
-      ? Option.Some(entry.second)
-      : scan(entries, key, index + 1)
+    (entry_key, entry_value) = entries.get(index).unwrap()
+    entry_key == key ? Option.Some(entry_value) : scan(entries, key, index + 1)
   end
 end

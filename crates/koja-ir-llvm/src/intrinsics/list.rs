@@ -275,8 +275,8 @@ fn emit_pop<'ctx>(
 ) -> Result<(), LlvmError> {
     let i8_ty = ctx.context.i8_type();
     let i64_ty = ctx.context.i64_type();
-    let pair_struct = ir_basic_type(ctx, &function.return_type)?.into_struct_type();
-    let option_symbol = struct_field_enum_symbol(ctx, &function.return_type, 0, function)?;
+    let tuple_struct = ir_basic_type(ctx, &function.return_type)?.into_struct_type();
+    let option_symbol = tuple_element_enum_symbol(&function.return_type, 0, function)?;
 
     let empty_bb = ctx.context.append_basic_block(llvm_function, "empty");
     let nonempty_bb = ctx.context.append_basic_block(llvm_function, "nonempty");
@@ -314,9 +314,9 @@ fn emit_pop<'ctx>(
         "pop_empty",
     )?;
     let empty_list = build_list_struct(ctx, empty_buf, len, len)?;
-    let pair_empty = build_pair(ctx, pair_struct, none, empty_list.into())?;
+    let tuple_empty = build_tuple(ctx, tuple_struct, none, empty_list.into())?;
     ctx.builder
-        .build_return(Some(&pair_empty))
+        .build_return(Some(&tuple_empty))
         .or_ice()
         .map(|_| ())?;
 
@@ -353,9 +353,9 @@ fn emit_pop<'ctx>(
         "pop",
     )?;
     let shortened = build_list_struct(ctx, new_buf, new_len, new_len)?;
-    let pair_nonempty = build_pair(ctx, pair_struct, some, shortened.into())?;
+    let tuple_nonempty = build_tuple(ctx, tuple_struct, some, shortened.into())?;
     ctx.builder
-        .build_return(Some(&pair_nonempty))
+        .build_return(Some(&tuple_nonempty))
         .or_ice()
         .map(|_| ())?;
 
@@ -771,57 +771,53 @@ fn expect_enum_symbol<'ty>(
     }
 }
 
-/// Resolve the enum symbol stored at `field_index` of the struct
-/// referenced by `struct_ty`. Used by `List.pop` to recover the
-/// inner `Option<T>` symbol from its `Pair<Option<T>, List<T>>`
-/// return type. Without this step, the intrinsic would have to
-/// re-derive the symbol from mangled names, duplicating the
-/// lowering pass's mangling rules.
-fn struct_field_enum_symbol<'ctx>(
-    ctx: &EmitContext<'ctx>,
-    struct_ty: &IRType,
-    field_index: usize,
+/// Resolve the enum symbol stored at `element_index` of a tuple.
+/// `List.pop` uses this to recover its concrete `Option<T>`.
+fn tuple_element_enum_symbol(
+    tuple_ty: &IRType,
+    element_index: usize,
     function: &IRFunction,
 ) -> Result<IRSymbol, LlvmError> {
-    let IRType::Struct(struct_symbol) = struct_ty else {
+    let IRType::Tuple(elements) = tuple_ty else {
         return Err(LlvmError::Codegen(format!(
-            "List.pop expected a struct return type, got `{struct_ty:?}` (symbol `{}`)",
+            "List.pop expected a tuple return type, got `{tuple_ty:?}` (symbol `{}`)",
             function.symbol,
         )));
     };
-    let field_ty = ctx.layouts.struct_field_ir_type(struct_symbol, field_index);
-    match field_ty {
-        IRType::Enum(symbol) => Ok(symbol),
+    match elements.get(element_index) {
+        Some(IRType::Enum(symbol)) => Ok(symbol.clone()),
         other => Err(LlvmError::Codegen(format!(
-            "List.pop expected an enum-typed field at index {field_index} of `{struct_symbol}`, \
+            "List.pop expected an enum-typed element at index {element_index}, \
              got `{other:?}` (symbol `{}`)",
             function.symbol,
         ))),
     }
 }
 
-fn build_pair<'ctx>(
+fn build_tuple<'ctx>(
     ctx: &EmitContext<'ctx>,
-    pair_struct: StructType<'ctx>,
-    first: BasicValueEnum<'ctx>,
-    second: BasicValueEnum<'ctx>,
+    tuple_struct: StructType<'ctx>,
+    first_element: BasicValueEnum<'ctx>,
+    second_element: BasicValueEnum<'ctx>,
 ) -> Result<BasicValueEnum<'ctx>, LlvmError> {
     let alloca = ctx
         .builder
-        .build_alloca(pair_struct, "pair_alloca")
+        .build_alloca(tuple_struct, "tuple_alloca")
         .or_ice()?;
     let first_ptr = ctx
         .builder
-        .build_struct_gep(pair_struct, alloca, 0, "first_ptr")
+        .build_struct_gep(tuple_struct, alloca, 0, "first_ptr")
         .or_ice()?;
-    ctx.builder.build_store(first_ptr, first).or_ice()?;
+    ctx.builder.build_store(first_ptr, first_element).or_ice()?;
     let second_ptr = ctx
         .builder
-        .build_struct_gep(pair_struct, alloca, 1, "second_ptr")
+        .build_struct_gep(tuple_struct, alloca, 1, "second_ptr")
         .or_ice()?;
-    ctx.builder.build_store(second_ptr, second).or_ice()?;
     ctx.builder
-        .build_load(pair_struct, alloca, "pair_val")
+        .build_store(second_ptr, second_element)
+        .or_ice()?;
+    ctx.builder
+        .build_load(tuple_struct, alloca, "tuple_val")
         .or_ice()
 }
 

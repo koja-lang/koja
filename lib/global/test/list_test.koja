@@ -107,13 +107,13 @@ struct ListTest
   @test "pop removes last element"
   fn test_pop -> Result<Bool, String>
     list = [10, 20, 30, 40, 50]
-    pair = list.pop()
+    (popped, remaining) = list.pop()
 
-    unless pair.first.unwrap() == 50
+    unless popped.unwrap() == 50
       return Result.Err("expected popped value 50")
     end
 
-    unless pair.second.length() == 4
+    unless remaining.length() == 4
       return Result.Err("expected remaining length 4")
     end
 
@@ -123,12 +123,12 @@ struct ListTest
   @test "pop until empty"
   fn test_pop_empty -> Result<Bool, String>
     rest = [1, 2, 3]
-    rest = rest.pop().second
-    rest = rest.pop().second
-    rest = rest.pop().second
-    empty_pair = rest.pop()
+    (_, rest) = rest.pop()
+    (_, rest) = rest.pop()
+    (_, rest) = rest.pop()
+    (popped, _) = rest.pop()
 
-    if empty_pair.first.some?()
+    if popped.some?()
       return Result.Err("expected None from empty pop")
     end
 

@@ -41,14 +41,13 @@ pub(crate) use process::build_business_payload;
 
 /// Run the registered intrinsic `id` against `args`. `function` is
 /// the calling [`IRFunction`]: handlers that mint typed return
-/// values (`Option<T>`, `Result<T, E>`, `Pair<...>`) read the
+/// values (`Option<T>`, `Result<T, E>`, tuples) read the
 /// receiver symbol from `function.return_type`, and pointer-typed
 /// intrinsics (`CPtr.alloc`, `CPtr.offset`, …) read the element
 /// type from `function.params[0].ty` / `function.return_type` to
-/// compute `size_of::<T>()`. `resolver` is consulted when a
-/// handler needs sibling decl info (e.g. Pair's `first` field type
-/// for `List.pop`) so neither path fabricates an `IRSymbol` from a
-/// string.
+/// compute `size_of::<T>()`. `resolver` is consulted when a handler
+/// needs sibling declaration information, so no path fabricates an
+/// `IRSymbol` from a string.
 ///
 /// `async` because the process intrinsics suspend: `Ref.call` parks on
 /// the caller's reply slot and yields to the driver until the reply lands

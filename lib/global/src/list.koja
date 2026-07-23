@@ -133,11 +133,11 @@ extend List<T>
   fn new -> List<T>
 
   @doc """
-  Removes the last element. Returns a pair of the removed element (or `None`
+  Removes the last element. Returns a tuple of the removed element (or `None`
   if empty) and the remaining list.
   """
   @intrinsic
-  fn pop(self) -> Pair<Option<T>, List<T>>
+  fn pop(self) -> (Option<T>, List<T>)
 
   @doc """
   Reduces the list to a single value by applying `f` to the accumulator

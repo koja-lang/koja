@@ -60,7 +60,7 @@ struct Encoder
     sb.add("]").build()
   end
 
-  priv fn encode_object(entries: List<Pair<String, Value>>) -> String
+  priv fn encode_object(entries: List<(String, Value)>) -> String
     if entries.empty?()
       return "{}"
     end
@@ -73,9 +73,9 @@ struct Encoder
         sb = sb.add(",")
       end
 
-      pair = entries.get(i).unwrap()
-      sb = sb.add(Encoder.encode_string(pair.first))
-      sb = sb.add(":").add(Encoder.encode_value(pair.second))
+      (key, value) = entries.get(i).unwrap()
+      sb = sb.add(Encoder.encode_string(key))
+      sb = sb.add(":").add(Encoder.encode_value(value))
       i += 1
     end
 
@@ -145,7 +145,7 @@ struct Encoder
     sb.add("\n").add(Encoder.make_indent(indent)).add("]").build()
   end
 
-  priv fn encode_object_pretty(entries: List<Pair<String, Value>>, indent: Int)
+  priv fn encode_object_pretty(entries: List<(String, Value)>, indent: Int)
     -> String
 
     if entries.empty?()
@@ -161,10 +161,10 @@ struct Encoder
         sb = sb.add(",\n")
       end
 
-      pair = entries.get(i).unwrap()
+      (key, value) = entries.get(i).unwrap()
       sb = sb.add(Encoder.make_indent(inner))
-      sb = sb.add(Encoder.encode_string(pair.first))
-      sb = sb.add(": ").add(Encoder.encode_value_pretty(pair.second, inner))
+      sb = sb.add(Encoder.encode_string(key))
+      sb = sb.add(": ").add(Encoder.encode_value_pretty(value, inner))
       i += 1
     end
 

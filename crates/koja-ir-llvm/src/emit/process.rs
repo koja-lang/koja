@@ -513,9 +513,9 @@ fn dispatch_arms<'ctx>(
 
 /// Load the typed payload the runtime copied into `payload_slot` (the
 /// tag header is already stripped) and store it into the arm's payload
-/// local. `Business` arms load the message `Pair<M, Option<ReplyTo<R>>>`,
+/// local. `Business` arms load the `(M, Option<ReplyTo<R>>)` message,
 /// `Lifecycle` arms the signal enum, and `IOReady` / `ExitSignal` arms
-/// the bare event value that the `elaborate` body rewraps into the `Pair`.
+/// the bare event value that `elaborate` rewraps into the tuple.
 fn deserialize_payload_into_local<'ctx>(
     ctx: &EmitContext<'ctx>,
     payload_slot: PointerValue<'ctx>,

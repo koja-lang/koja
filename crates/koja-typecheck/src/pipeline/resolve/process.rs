@@ -7,7 +7,7 @@
 //!
 //! `receive arms after timeout body end`: each arm's pattern
 //! must be a [`Pattern::TypedBinding`] whose annotation resolves to
-//! either a business envelope (`Pair<M, Option<ReplyTo<R>>>`) or
+//! either a business envelope (`(M, Option<ReplyTo<R>>)`) or
 //! a lifecycle event (`Lifecycle`). Arms self-discriminate by their
 //! envelope type, so no surface union plumbing is needed. V1's
 //! `process_msg_type` envelope hint is unnecessary because
@@ -15,7 +15,7 @@
 //! `after` body join under the same lattice as `match` / `cond`.
 
 use koja_ast::ast::{Diagnostic, Expr, ExprKind, MatchArm, Pattern, Statement};
-use koja_ast::identifier::{GlobalRegistryId, Identifier, Resolution, ResolvedType};
+use koja_ast::identifier::{AnonymousKind, GlobalRegistryId, Identifier, Resolution, ResolvedType};
 use koja_ast::labels::pattern_span;
 use koja_ast::span::Span;
 
@@ -191,7 +191,7 @@ fn message_includes_exit_signal(message_type: &ResolvedType, registry: &GlobalRe
 
 /// Resolve `receive arms after timeout after_body end`. Each arm's
 /// pattern must be a typed-binding whose annotation is either a
-/// business envelope `Pair<M, Option<ReplyTo<R>>>` or a lifecycle
+/// business envelope `(M, Option<ReplyTo<R>>)` or a lifecycle
 /// `Lifecycle`. Joins arm tails (and the after-body tail when an
 /// `after` clause is present) under the same lattice `match` uses.
 pub(super) fn resolve_receive(
@@ -279,7 +279,7 @@ fn bind_receive_pattern(
     else {
         diagnostics.push(Diagnostic::error(
             "receive arms must use a typed-binding pattern \
-             (`name: Pair<M, Option<ReplyTo<R>>>` or `name: Lifecycle`)",
+             (`name: (M, Option<ReplyTo<R>>)` or `name: Lifecycle`)",
             pattern_span(pattern),
         ));
         return None;
@@ -298,7 +298,7 @@ fn bind_receive_pattern(
     {
         diagnostics.push(Diagnostic::error(
             format!(
-                "receive only supports business (`Pair<M, Option<ReplyTo<R>>>`) and \
+                "receive only supports business (`(M, Option<ReplyTo<R>>)`) and \
                  lifecycle (`Lifecycle`) arms (got `{}`)",
                 display_resolution(&resolved, resolver.registry),
             ),
@@ -312,27 +312,19 @@ fn bind_receive_pattern(
     Some(resolved)
 }
 
-/// `Pair<_, Option<ReplyTo<_>>>`. Walks the head id and inner shape
-/// without caring what `M` / `R` resolve to. Every concrete `M` /
-/// `R` is admissible at the receive site.
+/// `(_, Option<ReplyTo<_>>)`. Walks the structural tuple and inner
+/// named shape without caring what `M` or `R` resolve to.
 fn is_business_envelope(ty: &ResolvedType, registry: &GlobalRegistry) -> bool {
-    let ResolvedType::Named {
-        resolution: Resolution::Global(head_id),
-        type_args,
-    } = ty
-    else {
+    let ResolvedType::Anonymous(AnonymousKind::Tuple { elements }) = ty else {
         return false;
     };
-    if !is_global_type(*head_id, registry, &["Pair"]) {
-        return false;
-    }
-    let [_msg, second] = type_args.as_slice() else {
+    let [_message, reply] = elements.as_slice() else {
         return false;
     };
     let ResolvedType::Named {
         resolution: Resolution::Global(option_id),
         type_args: option_args,
-    } = second
+    } = reply
     else {
         return false;
     };

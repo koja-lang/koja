@@ -2,7 +2,7 @@
 //! the cooperative scheduler core (`koja-runtime-core`) that
 //! `koja-ir-eval` drives. Each method mirrors the LLVM backend's
 //! `koja_rt_*` emitter in `koja-ir-llvm/src/intrinsics/process.rs` (same
-//! `Pair<M, Option<ReplyTo<R>>>` envelope shape, same reply-token
+//! `(M, Option<ReplyTo<R>>)` envelope shape, same reply-token
 //! correlation, same `CallError` mapping), but traffics typed
 //! [`Value`]s through the core mailbox instead of serialized bytes.
 //!
@@ -276,30 +276,27 @@ fn reply_send<R: CallResolver>(
 
 // ----- message materialization --------------------------------------------
 
-/// Build the `Pair<M, Option<ReplyTo<R>>>` value a delivered business
+/// Build the `(M, Option<ReplyTo<R>>)` value a delivered business
 /// message binds into a receive arm's payload local. The receiver's arm
-/// `payload_type` names the `Pair`, its second field names the
+/// `payload_type` names the tuple, its second element names the
 /// `Option<ReplyTo<R>>`, and (for a call) the `Some` variant names the
 /// `ReplyTo` struct, so the whole shape is recovered from the decls,
 /// mirroring the LLVM receive-side typed load. A `None` reply slot is a
 /// cast / timer fire. `Some` carries the caller's `ReplyTo` coordinates.
 pub(crate) fn build_business_payload<R: CallResolver>(
-    pair_type: &IRType,
+    envelope_type: &IRType,
     message: EvalMessage,
     resolver: &R,
 ) -> Value {
-    let IRType::Struct(pair_symbol) = pair_type else {
+    let IRType::Tuple(elements) = envelope_type else {
         panic!(
-            "interpreter: business receive arm payload `{pair_type:?}` is not a `Pair` struct \
+            "interpreter: business receive arm payload `{envelope_type:?}` is not a tuple \
              (seal invariant violation)"
         );
     };
-    let pair_decl = resolver.struct_decl(pair_symbol.mangled()).unwrap_or_else(|| {
-        panic!("interpreter: `Pair` struct `{pair_symbol}` missing from IR (seal invariant violation)")
-    });
-    let IRType::Enum(option_symbol) = reply_field_type(pair_decl, pair_symbol) else {
+    let [_message_type, IRType::Enum(option_symbol)] = elements.as_slice() else {
         panic!(
-            "interpreter: `Pair` `{pair_symbol}` second field is not an `Option` enum \
+            "interpreter: business envelope `{envelope_type:?}` does not end in an `Option` enum \
              (seal invariant violation)"
         );
     };
@@ -307,30 +304,10 @@ pub(crate) fn build_business_payload<R: CallResolver>(
         symbol: option_some_struct_symbol(option_symbol, resolver),
         fields: vec![Value::Int(info.caller_pid), Value::Int(info.token)],
     });
-    Value::Struct {
-        symbol: pair_symbol.clone(),
-        fields: vec![
-            message.value,
-            helpers::option_value(option_symbol.clone(), reply_to),
-        ],
-    }
-}
-
-/// The `Pair`'s second (reply) field type, the `Option<ReplyTo<R>>`.
-fn reply_field_type<'a>(
-    pair_decl: &'a koja_ir::IRStructDecl,
-    pair_symbol: &IRSymbol,
-) -> &'a IRType {
-    pair_decl
-        .fields
-        .get(1)
-        .map(|field| &field.ir_type)
-        .unwrap_or_else(|| {
-            panic!(
-                "interpreter: `Pair` struct `{pair_symbol}` has no second (reply) field \
-                 (seal invariant violation)"
-            )
-        })
+    Value::Tuple(vec![
+        message.value,
+        helpers::option_value(option_symbol.clone(), reply_to),
+    ])
 }
 
 /// Recover the payload struct symbol from an `Option<T>` enum decl's

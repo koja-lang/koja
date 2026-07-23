@@ -35,14 +35,14 @@ impl Process<(), ProbeMsg, Int> for Probe
         me.cast(ProbeMsg.Tick)
 
         receive
-          pair: Pair<ProbeMsg, Option<ReplyTo<Int>>> ->
+          envelope: (ProbeMsg, Option<ReplyTo<Int>>) ->
             IO.puts("deadline clamp: message wins")
         after -1
           IO.puts("deadline clamp: wrong timeout")
         end
 
         receive
-          pair: Pair<ProbeMsg, Option<ReplyTo<Int>>> ->
+          envelope: (ProbeMsg, Option<ReplyTo<Int>>) ->
             IO.puts("deadline clamp: wrong message")
         after -1
           IO.puts("deadline clamp: receive timeout")
@@ -51,7 +51,7 @@ impl Process<(), ProbeMsg, Int> for Probe
         me.send_after(ProbeMsg.Tick, -1)
 
         receive
-          pair: Pair<ProbeMsg, Option<ReplyTo<Int>>> ->
+          envelope: (ProbeMsg, Option<ReplyTo<Int>>) ->
             IO.puts("deadline clamp: send after")
         after 5000
           IO.puts("deadline clamp: send after failed")

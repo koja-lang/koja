@@ -6,8 +6,8 @@ provides the bindings. No new compiler intrinsics are required.
 
 > **Status: implemented** (`lib/net/src/tls.koja`). The landed API
 > differs from sections 4–5 below in four ways: the raw `SSL`/`SSL_CTX`
-> pointer pair is wrapped in a `TLSSession` struct (no `Pair<CPtr,
-CPtr>` returns), `TCPSocket` carries `tls: Option<TLSSession>`
+> pointer tuple is wrapped in a `TLSSession` struct (no raw pointer
+> tuple returns), `TCPSocket` carries `tls: Option<TLSSession>`
 > instead of two null-sentinel pointer fields, credentials are
 > memory-only — `TLSConfig` holds an `Option<TLSIdentity>` (a
 > `Crypto.Certificate` / `Crypto.PrivateKey` pair, parsed from PEM
@@ -228,7 +228,7 @@ end
 fd.block(err == SSL_ERROR_WANT_READ)
 ```
 
-#### `TLS.connect(fd, hostname) -> Result<Pair<CPtr<UInt8>, CPtr<UInt8>>, String>`
+#### `TLS.connect(fd, hostname) -> Result<(CPtr<UInt8>, CPtr<UInt8>), String>`
 
 Client-side handshake:
 
@@ -236,11 +236,11 @@ Client-side handshake:
 2. `ssl_ctx_set_default_verify_paths(ctx)` -- system CA certs
 3. `ssl_new(ctx)`, `ssl_set_fd(ssl, fd.descriptor)`
 4. `ssl_set_tlsext_host_name(ssl, hostname)` -- SNI
-5. Loop: call `ssl_connect(ssl)`. On success return `Pair{first: ssl, second: ctx}`.
+5. Loop: call `ssl_connect(ssl)`. On success return `(ssl, ctx)`.
    On `WANT_READ`/`WANT_WRITE`, call `fd.block(...)` and retry.
    On other error, free ssl/ctx and return error.
 
-#### `TLS.accept(fd, config) -> Result<Pair<CPtr<UInt8>, CPtr<UInt8>>, String>`
+#### `TLS.accept(fd, config) -> Result<(CPtr<UInt8>, CPtr<UInt8>), String>`
 
 Server-side handshake:
 
@@ -306,7 +306,7 @@ fn upgrade_tls(move self, hostname: String) -> Result<TCPSocket, String>
 ```
 
 Calls `TLS.connect(self.socket.fd, hostname)`. On success, sets
-`self.ssl` and `self.ssl_ctx` from the returned pair.
+`self.ssl` and `self.ssl_ctx` from the returned tuple.
 
 ```koja
 fn accept_tls(move self, config: TLSConfig) -> Result<TCPSocket, String>

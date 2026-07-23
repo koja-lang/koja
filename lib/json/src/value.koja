@@ -6,7 +6,7 @@ enum Value
   Float(Float)
   String(String)
   Array(List<Value>)
-  Object(List<Pair<String, Value>>)
+  Object(List<(String, Value)>)
 
   fn null -> Value
     Value.Null
@@ -32,11 +32,11 @@ enum Value
     Value.Array(items)
   end
 
-  fn object(entries: List<Pair<String, Value>>) -> Value
+  fn object(entries: List<(String, Value)>) -> Value
     Value.Object(entries)
   end
 
-  fn entry(key: String, value: Value) -> Pair<String, Value>
-    Pair{first: key, second: value}
+  fn entry(key: String, value: Value) -> (String, Value)
+    (key, value)
   end
 end

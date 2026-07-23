@@ -12,6 +12,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Anonymous tuples. Build with `(a, b)`, annotate as `(Int, String)`, take apart with destructuring assignment `(x, y) = pair` or `match` patterns.
 - Tuples compare with `==`/`!=`, print and interpolate like any other value, and can be members of type unions.
 
+### Changed
+
+- **Breaking change.** Standard library APIs now use anonymous tuples for list pops, datagram receives, JSON object entries, parser results, and process envelopes instead of `Pair`.
+
 ## [0.15.3] - 2026-07-21
 
 ### Changed

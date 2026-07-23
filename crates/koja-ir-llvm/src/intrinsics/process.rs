@@ -1,10 +1,10 @@
 //! `Ref<M, R>` and `ReplyTo<R>` `@intrinsic` emitters, each backed
 //! by a per-method `koja_rt_*` extern declared in [`crate::runtime`]
 //! and implemented in `koja-runtime-posix`. Message-bearing methods
-//! share the `Pair<M, Option<ReplyTo<R>>>` envelope shape the
+//! share the `(M, Option<ReplyTo<R>>)` envelope shape the
 //! receive side reads, with the reply slot `None` for `cast` /
 //! `send_after` and `Some(ReplyTo { id, token })` for `call`. Reply
-//! payloads travel bare (no `Pair` envelope), correlated to the
+//! payloads travel bare, correlated to the
 //! in-flight call by the `ReplyTo`'s token.
 
 use inkwell::AddressSpace;
@@ -111,11 +111,9 @@ fn emit_self_ref<'ctx>(
         .map(|_| ())
 }
 
-/// `Ref.cast(self, msg: M)`: wrap `msg` in a `Pair<M, Option<
-/// ReplyTo<R>>>` envelope with the second field set to `Option::
-/// None`, then route through `koja_rt_send`. The receive-side
-/// `pair: Pair<M, Option<ReplyTo<R>>> ->` arm in the `Process.run`
-/// default body reads the same shape.
+/// `Ref.cast(self, msg: M)`: wrap `msg` in a
+/// `(M, Option<ReplyTo<R>>)` envelope with the second element set to
+/// `Option::None`, then route through `koja_rt_send`.
 fn emit_cast<'ctx>(
     ctx: &EmitContext<'ctx>,
     function: &IRFunction,
@@ -129,7 +127,7 @@ fn emit_cast<'ctx>(
     let msg_llvm = ir_basic_type(ctx, msg_ir_type)?;
     let none_payload = option_none_payload(ctx);
     let (envelope_ptr, envelope_size) =
-        build_pair_envelope_alloca(ctx, "cast_envelope", msg_llvm, msg_value, none_payload)?;
+        build_tuple_envelope_alloca(ctx, "cast_envelope", msg_llvm, msg_value, none_payload)?;
     let drop_glue = payload_drop_glue(ctx, msg_ir_type)?;
 
     let send_fn = declare_rt_send_extern(ctx);
@@ -148,8 +146,8 @@ fn emit_cast<'ctx>(
     ctx.builder.build_return(None).or_ice().map(|_| ())
 }
 
-/// `Ref.send_after(self, msg: M, delay_ms: Int)`: same `Pair<M,
-/// Option<ReplyTo<R>>>` envelope as [`emit_cast`] (`Option::None`
+/// `Ref.send_after(self, msg: M, delay_ms: Int)`: same
+/// `(M, Option<ReplyTo<R>>)` envelope as [`emit_cast`] (`Option::None`
 /// reply slot), routed through `koja_rt_send_after` with the
 /// trailing delay parameter.
 fn emit_send_after<'ctx>(
@@ -165,7 +163,7 @@ fn emit_send_after<'ctx>(
     let (delay_value, _) = nth_param(function, llvm_function, 2)?;
     let msg_llvm = ir_basic_type(ctx, msg_ir_type)?;
     let none_payload = option_none_payload(ctx);
-    let (envelope_ptr, envelope_size) = build_pair_envelope_alloca(
+    let (envelope_ptr, envelope_size) = build_tuple_envelope_alloca(
         ctx,
         "send_after_envelope",
         msg_llvm,
@@ -196,7 +194,7 @@ fn emit_send_after<'ctx>(
 /// the synchronous request/reply primitive.
 ///
 /// Mint a correlation token via `koja_rt_call_token()`, build a
-/// `Pair<M, Option<ReplyTo<R>>>` envelope with the second field set
+/// `(M, Option<ReplyTo<R>>)` envelope with the second element set
 /// to `Option::Some(ReplyTo { id: caller_pid, token })`, `koja_rt_
 /// send` it to the target, then block on `koja_rt_call_receive(
 /// token, timeout)`, which waits on the caller's one-shot reply
@@ -242,7 +240,7 @@ fn emit_call<'ctx>(
         .into_int_value();
     let some_payload = option_some_payload(ctx, caller_pid, token)?;
     let (envelope_ptr, envelope_size) =
-        build_pair_envelope_alloca(ctx, "call_envelope", msg_llvm, msg_value, some_payload)?;
+        build_tuple_envelope_alloca(ctx, "call_envelope", msg_llvm, msg_value, some_payload)?;
     let drop_glue = payload_drop_glue(ctx, msg_ir_type)?;
     let send_fn = declare_rt_send_extern(ctx);
     ctx.builder
@@ -627,8 +625,8 @@ fn emit_parent<'ctx>(
 
 // ----- ReplyTo method emitters --------------------------------------------
 
-/// `ReplyTo.send(self, reply: R)`: serialize `reply` (bare `R`,
-/// no `Pair` envelope) and route through `koja_rt_reply` to the
+/// `ReplyTo.send(self, reply: R)`: serialize bare `R` and route
+/// through `koja_rt_reply` to the
 /// originating caller, stamping the call's correlation token from
 /// `self`. The runtime parks the envelope in the caller's one-shot
 /// reply slot, where `koja_rt_call_receive` matches it by token in
@@ -748,13 +746,13 @@ const RESULT_ERR_TAG: u8 = 1;
 const CALL_ERROR_TIMEOUT_TAG: u8 = 0;
 const CALL_ERROR_PROCESS_DOWN_TAG: u8 = 1;
 
-/// Synthesized LLVM type for the second field of a `Pair<M, Option
-/// <ReplyTo<R>>>` envelope. `R` has no LLVM-side influence:
+/// Synthesized LLVM type for the second element of an
+/// `(M, Option<ReplyTo<R>>)` envelope. `R` has no LLVM-side influence:
 /// `ReplyTo<R>` always lays out as `{ i64 id, i64 token }`, so
 /// `Option<ReplyTo<R>>` is `{ i8 tag, [7 x i8] padding, i64
 /// reply_id, i64 token }` = 24 bytes regardless of `R`. We pack it
 /// into `[3 x i64]` so the writer side doesn't need the
-/// receive-side's pre-emit Pair / Option registry lookup. Binary
+/// receive-side's pre-emit Option registry lookup. Binary
 /// layout matches the receiver's typed load by construction.
 fn option_reply_to_payload_ty<'ctx>(ctx: &EmitContext<'ctx>) -> BasicTypeEnum<'ctx> {
     ctx.context.i64_type().array_type(3).into()
@@ -805,11 +803,11 @@ fn option_some_payload<'ctx>(
         .into_array_value())
 }
 
-/// Stack-allocate a `Pair<M, Option<ReplyTo<R>>>` envelope with
-/// `msg_value` in the first field and `option_payload` in the
+/// Stack-allocate an `(M, Option<ReplyTo<R>>)` envelope with
+/// `msg_value` in the first element and `option_payload` in the
 /// second, then return `(envelope_ptr, abi_size)` ready for an
 /// `koja_rt_send` / `koja_rt_send_after` call.
-fn build_pair_envelope_alloca<'ctx>(
+fn build_tuple_envelope_alloca<'ctx>(
     ctx: &EmitContext<'ctx>,
     label: &str,
     msg_ty: BasicTypeEnum<'ctx>,
@@ -823,12 +821,12 @@ fn build_pair_envelope_alloca<'ctx>(
     let undef = envelope_ty.get_undef();
     let with_msg = ctx
         .builder
-        .build_insert_value(undef, msg_value, 0, "pair_msg")
+        .build_insert_value(undef, msg_value, 0, "tuple_msg")
         .or_ice()?
         .into_struct_value();
     let envelope = ctx
         .builder
-        .build_insert_value(with_msg, option_payload, 1, "pair_option")
+        .build_insert_value(with_msg, option_payload, 1, "tuple_option")
         .or_ice()?
         .into_struct_value();
     ctx.builder.build_store(alloca, envelope).or_ice()?;

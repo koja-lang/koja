@@ -2,8 +2,8 @@ fn identity<T>(x: T) -> T
   x
 end
 
-fn make_pair<A, B>(a: A, b: B) -> Pair<A, B>
-  Pair{first: a, second: b}
+fn make_pair<A, B>(a: A, b: B) -> (A, B)
+  (a, b)
 end
 
 identity(42).print()
@@ -11,9 +11,11 @@ identity("hello").print()
 identity(true).print()
 
 p = make_pair(10, 20)
-p.first.print()
-p.second.print()
+(first, second) = p
+first.print()
+second.print()
 
 p2 = make_pair("foo", 100)
-p2.first.print()
-p2.second.print()
+(first, second) = p2
+first.print()
+second.print()

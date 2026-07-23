@@ -829,7 +829,7 @@ fn execute_receive<'a, R: CallResolver>(
 /// Dispatch a mailbox message popped during `receive` to the arm whose
 /// tag matches, binding the arm's payload local and returning its body
 /// block. `None` when no arm matches (the message is dropped). Business
-/// traffic binds a `Pair<M, Option<ReplyTo<R>>>` built from the arm's
+/// traffic binds an `(M, Option<ReplyTo<R>>)` built from the arm's
 /// payload type. Lifecycle traffic binds the `Lifecycle` enum value.
 fn dispatch_received<R: CallResolver>(
     message: EvalMessage,
@@ -848,7 +848,7 @@ fn dispatch_received<R: CallResolver>(
         // `IOReady` enum via [`build_io_ready_value`], the monitor
         // machinery's `ExitSignal` struct via [`build_exit_signal_value`]).
         // Bind them into the synthesized arm, whose body reshapes them
-        // into the business `Pair`.
+        // into the business tuple.
         Tag::ExitSignal => {
             let arm = arms.iter().find(|arm| arm.tag == ReceiveTag::ExitSignal)?;
             frame.locals.insert(arm.payload_local, message.value);
