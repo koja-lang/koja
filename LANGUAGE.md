@@ -769,12 +769,12 @@ Type arguments are inferred at call sites from arguments and type annotations.
 #### Generic Structs
 
 ```koja
-struct Pair<A, B>
-  first: A
-  second: B
+struct Entry<K, V>
+  key: K
+  value: V
 end
 
-p = Pair{first: 10, second: "hello"}
+entry = Entry{key: "answer", value: 42}
 ```
 
 #### Generic Enums
@@ -793,8 +793,8 @@ arms, struct fields, and generic call returns:
 ```koja
 z: Option<Int32> = Option.None
 
-fn empty_pair() -> Pair<Int, Option<String>>
-  Pair.new(1, Option.None)
+fn empty_label() -> (Int, Option<String>)
+  (1, Option.None)
 end
 ```
 
