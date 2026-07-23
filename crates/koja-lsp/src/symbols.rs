@@ -207,8 +207,7 @@ fn collect_workspace_symbols(file: &File, query: &str, results: &mut Vec<SymbolI
     }
 }
 
-/// Collects a struct/enum declaration, its functions, and its nested
-/// types into workspace symbol results.
+/// Collects a struct/enum, its functions, and its nested types.
 fn collect_type_workspace_symbols(
     item: &Item,
     container: Option<&str>,
@@ -253,8 +252,7 @@ fn collect_type_workspace_symbols(
     }
 }
 
-/// Collects the function members of an `impl`/`extend` block into
-/// workspace symbol results.
+/// Collects the function members of an `impl`/`extend` block.
 fn collect_member_workspace_symbols(
     members: &[ImplMember],
     container: &str,
@@ -421,8 +419,7 @@ fn build_document_symbols(file: &File) -> Vec<DocumentSymbol> {
     symbols
 }
 
-/// Builds a [`DocumentSymbol`] for a struct declaration, with nested
-/// types and functions as children.
+/// Builds a [`DocumentSymbol`] for a struct declaration.
 fn struct_symbol(s: &StructDecl) -> DocumentSymbol {
     let range = span_to_range(&s.span);
     let mut children = nested_symbols(&s.nested);
@@ -440,8 +437,7 @@ fn struct_symbol(s: &StructDecl) -> DocumentSymbol {
     }
 }
 
-/// Builds a [`DocumentSymbol`] for an enum declaration, with variants,
-/// nested types, and functions as children.
+/// Builds a [`DocumentSymbol`] for an enum declaration.
 fn enum_symbol(e: &EnumDecl) -> DocumentSymbol {
     let range = span_to_range(&e.span);
     let mut children: Vec<DocumentSymbol> = e
@@ -477,7 +473,6 @@ fn enum_symbol(e: &EnumDecl) -> DocumentSymbol {
     }
 }
 
-/// Builds symbols for the nested type declarations of a struct/enum.
 fn nested_symbols(nested: &[Item]) -> Vec<DocumentSymbol> {
     nested
         .iter()

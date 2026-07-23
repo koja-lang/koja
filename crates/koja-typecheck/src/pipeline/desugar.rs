@@ -18,8 +18,6 @@ pub(crate) fn desugar_packages(packages: &mut [CheckedPackage]) {
     }
 }
 
-/// Append `item`, then its nested declarations (recursively) with the
-/// owner's path segments prefixed.
 fn hoist_item(mut item: Item, out: &mut Vec<Item>) {
     let (owner_path, nested) = match &mut item {
         Item::Enum(decl) => (decl.path.clone(), std::mem::take(&mut decl.nested)),

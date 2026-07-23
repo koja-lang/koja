@@ -283,8 +283,7 @@ impl<'a> Printer<'a> {
         concat(parts)
     }
 
-    /// Appends nested type declarations to a type body, blank-line
-    /// separated, with leading and trailing comments.
+    /// Appends nested type declarations to a type body.
     fn push_nested_to_body(&mut self, body: &mut Vec<Doc>, nested: &[Item], have_members: bool) {
         for (i, item) in nested.iter().enumerate() {
             if i > 0 || have_members {

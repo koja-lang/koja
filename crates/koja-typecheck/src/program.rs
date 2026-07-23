@@ -76,9 +76,8 @@ pub fn check_program(parsed: ParsedProgram) -> Result<CheckedProgram, CheckFailu
 
     let mut packages = into_packages(parsed);
 
-    // Hoist lexically nested type declarations to qualified top-level
-    // items before anything else looks at `file.items`, so derive
-    // synthesis and collect see the flat shape.
+    // Must run first so derive synthesis and collect see the flat
+    // qualified shape.
     desugar::desugar_packages(&mut packages);
 
     // Pre-collect synthesis: append `impl Debug / Equality for T`

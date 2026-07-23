@@ -222,7 +222,6 @@ fn struct_with_top_level_annotation() {
     assert_eq!(s.annotations[0].name, "doc");
 }
 
-/// Extracts the nested item at `index`, asserting it is a struct.
 fn nested_struct(owner: &StructDecl, index: usize) -> &StructDecl {
     match &owner.nested[index] {
         Item::Struct(s) => s,

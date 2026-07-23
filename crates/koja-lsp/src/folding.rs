@@ -128,7 +128,6 @@ fn collect_item_folds(file: &File, ranges: &mut Vec<FoldingRange>) {
     }
 }
 
-/// Folds the nested type declarations of a struct/enum, recursively.
 fn collect_nested_folds(nested: &[Item], ranges: &mut Vec<FoldingRange>) {
     for item in nested {
         let (span, inner) = match item {

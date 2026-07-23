@@ -2,8 +2,7 @@
 //!
 //! Struct bodies interleave field declarations with inline functions
 //! and nested type declarations. The [`Parser::parse_type_body_member`]
-//! helper is shared with `enum` and `impl` bodies which have the same
-//! prefix handling (`priv`, `@annotation`).
+//! helper is shared with `enum` and `impl` bodies.
 
 use koja_ast::ast::{Annotation, Function, Item, StructDecl, StructField, Visibility};
 use koja_ast::token::TokenKind;
@@ -80,9 +79,8 @@ impl Parser {
         }
     }
 
-    /// Parse a single function or nested type declaration sitting
-    /// inside a `struct`, `enum`, or `impl` body. Handles the `priv`
-    /// and `@annotation` prefixes uniformly.
+    /// Parse one member of a `struct`, `enum`, or `impl` body,
+    /// handling the `priv` and `@annotation` prefixes uniformly.
     pub(crate) fn parse_type_body_member(&mut self, context: &str) -> TypeBodyMember {
         let annotations = if self.at(&TokenKind::At) {
             let annotations = self.parse_annotations();
@@ -123,8 +121,6 @@ impl Parser {
     }
 
     /// Parse a `struct`/`enum` declared inside another type's body.
-    /// The name must be a single segment because the owner prefix is
-    /// implied.
     fn parse_nested_type_item(
         &mut self,
         annotations: Vec<Annotation>,
