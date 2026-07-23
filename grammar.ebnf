@@ -48,17 +48,23 @@ top_level_decl = struct_decl
 (* 2. Type declarations                                                       *)
 (* ========================================================================== *)
 
-struct_member = struct_field | function_decl ;
+(* Nested types: `struct Owner.Nested` at top level, or a struct/enum
+   declared inside the owner's body (single-segment name, owner prefix
+   implied). References always use the qualified name. *)
 
-struct_decl = { annotation } , [ "priv" ] , "struct" , TYPE_IDENT , [ type_params ] ,
+decl_path = TYPE_IDENT , { "." , TYPE_IDENT } ;
+
+struct_member = struct_field | function_decl | struct_decl | enum_decl ;
+
+struct_decl = { annotation } , [ "priv" ] , "struct" , decl_path , [ type_params ] ,
               { struct_member } ,
               "end" ;
 
 struct_field = IDENT , ":" , type_expr , [ "=" , expr ] ;
 
-enum_member = enum_variant | function_decl ;
+enum_member = enum_variant | function_decl | struct_decl | enum_decl ;
 
-enum_decl = { annotation } , [ "priv" ] , "enum" , TYPE_IDENT , [ type_params ] ,
+enum_decl = { annotation } , [ "priv" ] , "enum" , decl_path , [ type_params ] ,
             { enum_member } ,
             "end" ;
 

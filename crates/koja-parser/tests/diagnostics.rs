@@ -149,7 +149,7 @@ fn impl_body_rejects_random_decl() {
           end
         end
         ",
-        &["expected function or type alias in block body"],
+        &["nested type declarations are not allowed in impl or extend blocks"],
     );
 }
 

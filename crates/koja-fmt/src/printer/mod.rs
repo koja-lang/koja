@@ -268,8 +268,9 @@ impl<'a> Printer<'a> {
             }
             body.push(self.struct_field_to_doc(field));
         }
+        self.push_nested_to_body(&mut body, &s.nested, !s.fields.is_empty());
         for (i, func) in s.functions.iter().enumerate() {
-            if i > 0 || !s.fields.is_empty() {
+            if i > 0 || !s.fields.is_empty() || !s.nested.is_empty() {
                 body.push(hardline());
             }
             body.push(hardline());
@@ -280,6 +281,25 @@ impl<'a> Printer<'a> {
         parts.push(hardline());
         parts.push(text("end"));
         concat(parts)
+    }
+
+    /// Appends nested type declarations to a type body, blank-line
+    /// separated, with leading and trailing comments.
+    fn push_nested_to_body(&mut self, body: &mut Vec<Doc>, nested: &[Item], have_members: bool) {
+        for (i, item) in nested.iter().enumerate() {
+            if i > 0 || have_members {
+                body.push(hardline());
+            }
+            body.push(hardline());
+            let (cdocs, _) = self.comments.drain_before(item_start_line(item));
+            for c in cdocs {
+                body.push(c);
+            }
+            body.push(self.item_to_doc(item));
+            if let Some(tc) = self.comments.drain_trailing(item_span(item).end.line) {
+                body.push(tc);
+            }
+        }
     }
 
     /// Formats a single struct field with optional default value.
@@ -326,8 +346,9 @@ impl<'a> Printer<'a> {
             }
             body.push(self.enum_variant_to_doc(variant));
         }
+        self.push_nested_to_body(&mut body, &e.nested, !e.variants.is_empty());
         for (i, func) in e.functions.iter().enumerate() {
-            if i > 0 || !e.variants.is_empty() {
+            if i > 0 || !e.variants.is_empty() || !e.nested.is_empty() {
                 body.push(hardline());
             }
             body.push(hardline());

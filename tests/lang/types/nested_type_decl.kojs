@@ -1,0 +1,37 @@
+struct Owner
+  x: Int
+
+  struct Nested
+    y: Int
+  end
+
+  enum Kind
+    Alpha
+    Beta(Int)
+  end
+
+  fn double(self) -> Int
+    self.x * 2
+  end
+end
+
+# The qualified form declares a sibling nested type on the same owner.
+struct Owner.Extra
+  z: Int
+end
+
+n = Owner.Nested{y: 5}
+n.print()
+
+k = Owner.Kind.Beta(7)
+
+match k
+  Owner.Kind.Alpha -> "alpha".print()
+  Owner.Kind.Beta(v) -> v.print()
+end
+
+e = Owner.Extra{z: 9}
+e.print()
+
+o = Owner{x: 2}
+o.double().print()

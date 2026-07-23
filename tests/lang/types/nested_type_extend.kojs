@@ -1,0 +1,14 @@
+struct Wallet
+  struct Coin
+    value: Int
+  end
+end
+
+extend Wallet.Coin
+  fn double(self) -> Int
+    self.value * 2
+  end
+end
+
+c = Wallet.Coin{value: 21}
+c.double().print()

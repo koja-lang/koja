@@ -4,8 +4,9 @@
 //! - the three variant shapes (Unit, Tuple, Struct)
 //! - mixed variant kinds within one enum
 //! - generic enums and inline methods (same shape as struct bodies)
+//! - lexically nested type declarations (`struct`/`enum` in the body)
 
-use koja_ast::ast::{EnumVariantData, TypeExpr, Visibility};
+use koja_ast::ast::{EnumVariantData, Item, TypeExpr, Visibility};
 
 mod common;
 
@@ -180,4 +181,46 @@ fn tuple_variant_with_generic_inner_type() {
         }
         other => panic!("expected Tuple, got {other:?}"),
     }
+}
+
+#[test]
+fn enum_with_nested_struct() {
+    let e = first_enum(
+        "
+        enum Tree
+          Leaf
+          Node(Int)
+
+          struct Meta
+            depth: Int
+          end
+        end
+        ",
+    );
+    assert_eq!(e.variants.len(), 2);
+    assert_eq!(e.nested.len(), 1);
+    let Item::Struct(meta) = &e.nested[0] else {
+        panic!("expected a nested struct");
+    };
+    assert_eq!(meta.path, vec!["Meta"]);
+}
+
+#[test]
+fn enum_with_nested_enum() {
+    let e = first_enum(
+        "
+        enum Outer
+          A
+
+          priv enum Inner
+            B
+          end
+        end
+        ",
+    );
+    let Item::Enum(inner) = &e.nested[0] else {
+        panic!("expected a nested enum");
+    };
+    assert_eq!(inner.name(), "Inner");
+    assert_eq!(inner.visibility, Visibility::Private);
 }

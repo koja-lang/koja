@@ -7,12 +7,13 @@
 //! - generic structs (`struct Box<T>`) and bounded generics
 //!   (`struct Set<T: Eq & Hash>`)
 //! - per-field type expressions resolve to the right shape
+//! - lexically nested type declarations (`struct`/`enum` in the body)
 
-use koja_ast::ast::{EnumVariantData, TypeExpr, Visibility};
+use koja_ast::ast::{EnumVariantData, Item, StructDecl, TypeExpr, Visibility};
 
 mod common;
 
-use common::first_struct;
+use common::{first_struct, parse_failing_with};
 
 #[test]
 fn priv_struct_records_private_visibility() {
@@ -219,6 +220,145 @@ fn struct_with_top_level_annotation() {
     );
     assert_eq!(s.annotations.len(), 1);
     assert_eq!(s.annotations[0].name, "doc");
+}
+
+/// Extracts the nested item at `index`, asserting it is a struct.
+fn nested_struct(owner: &StructDecl, index: usize) -> &StructDecl {
+    match &owner.nested[index] {
+        Item::Struct(s) => s,
+        other => panic!("expected a nested struct, got {other:?}"),
+    }
+}
+
+#[test]
+fn struct_with_nested_struct() {
+    let s = first_struct(
+        "
+        struct Owner
+          x: Int
+
+          struct Nested
+            y: Int
+          end
+        end
+        ",
+    );
+    assert_eq!(s.fields.len(), 1);
+    assert_eq!(s.nested.len(), 1);
+    let nested = nested_struct(&s, 0);
+    assert_eq!(nested.path, vec!["Nested"]);
+    assert_eq!(nested.fields.len(), 1);
+    assert_eq!(nested.visibility, Visibility::Public);
+}
+
+#[test]
+fn struct_with_nested_enum() {
+    let s = first_struct(
+        "
+        struct Owner
+          struct First
+            a: Int
+          end
+
+          enum Kind
+            Alpha
+            Beta(Int)
+          end
+        end
+        ",
+    );
+    assert_eq!(s.nested.len(), 2);
+    assert!(matches!(&s.nested[0], Item::Struct(_)));
+    let Item::Enum(kind) = &s.nested[1] else {
+        panic!("expected a nested enum");
+    };
+    assert_eq!(kind.name(), "Kind");
+    assert_eq!(kind.variants.len(), 2);
+}
+
+#[test]
+fn priv_nested_struct_records_private_visibility() {
+    let s = first_struct(
+        "
+        struct Owner
+          priv struct Secret
+            a: Int
+          end
+        end
+        ",
+    );
+    assert_eq!(nested_struct(&s, 0).visibility, Visibility::Private);
+}
+
+#[test]
+fn annotated_nested_struct() {
+    let s = first_struct(
+        "
+        struct Owner
+          @doc \"a helper\"
+          struct Nested
+            a: Int
+          end
+        end
+        ",
+    );
+    let nested = nested_struct(&s, 0);
+    assert_eq!(nested.annotations.len(), 1);
+    assert_eq!(nested.annotations[0].name, "doc");
+}
+
+#[test]
+fn nested_struct_depth_three() {
+    let s = first_struct(
+        "
+        struct A
+          struct B
+            struct C
+              x: Int
+            end
+          end
+        end
+        ",
+    );
+    let b = nested_struct(&s, 0);
+    let c = nested_struct(b, 0);
+    assert_eq!(c.path, vec!["C"]);
+}
+
+#[test]
+fn nested_struct_interleaves_with_fields_and_methods() {
+    let s = first_struct(
+        "
+        struct Owner
+          x: Int
+
+          struct Nested
+            y: Int
+          end
+
+          fn double() -> Int
+            self.x * 2
+          end
+        end
+        ",
+    );
+    assert_eq!(s.fields.len(), 1);
+    assert_eq!(s.nested.len(), 1);
+    assert_eq!(s.functions.len(), 1);
+}
+
+#[test]
+fn nested_struct_rejects_multi_segment_name() {
+    parse_failing_with(
+        "
+        struct Owner
+          struct Foo.Bar
+            y: Int
+          end
+        end
+        ",
+        &["take a single name, found `Foo.Bar`"],
+    );
 }
 
 #[test]

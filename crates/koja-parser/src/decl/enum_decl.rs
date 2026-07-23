@@ -9,6 +9,7 @@
 use koja_ast::ast::{Annotation, EnumDecl, EnumVariant, EnumVariantData, Item, Visibility};
 use koja_ast::token::TokenKind;
 
+use crate::decl::struct_decl::TypeBodyMember;
 use crate::parser::Parser;
 
 impl Parser {
@@ -26,11 +27,17 @@ impl Parser {
         self.skip_newlines();
         let mut variants = Vec::new();
         let mut functions = Vec::new();
+        let mut nested = Vec::new();
         while !self.at(&TokenKind::End) && !self.at_eof() {
             match self.peek().clone() {
-                TokenKind::Fn | TokenKind::Priv | TokenKind::At => {
-                    functions.push(self.parse_type_body_function("enum"));
-                }
+                TokenKind::Fn
+                | TokenKind::Priv
+                | TokenKind::At
+                | TokenKind::Struct
+                | TokenKind::Enum => match self.parse_type_body_member("enum") {
+                    TypeBodyMember::Function(function) => functions.push(*function),
+                    TypeBodyMember::Nested(item) => nested.push(*item),
+                },
                 _ => {
                     variants.push(self.parse_enum_variant());
                 }
@@ -46,6 +53,7 @@ impl Parser {
             type_params,
             variants,
             functions,
+            nested,
             span: self.span_from(start),
         })
     }

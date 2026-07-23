@@ -12,7 +12,7 @@ use koja_parser::{ParsedFile, ParsedProgram};
 
 use crate::error::CheckFailure;
 use crate::pipeline::{
-    aliases, borrows, collect, lift_signatures, resolve, seal, synthesize, visibility,
+    aliases, borrows, collect, desugar, lift_signatures, resolve, seal, synthesize, visibility,
 };
 use crate::registry::GlobalRegistry;
 
@@ -51,16 +51,18 @@ pub struct CheckedProgram {
 ///    `.Unit`/`.Float`/`.String` are registered as structs before any
 ///    user decl. Temporary. Once the real stdlib compiles as a
 ///    package these entries land through `collect`.
-/// 1. Derive Debug and Equality impls before binding.
-/// 2. Collect declarations, then impl blocks, across every file.
-/// 3. Validate nested declarations and file aliases.
-/// 4. Lift signatures and declaration definitions into the registry.
-/// 5. Reject private types leaked through public signatures.
-/// 6. Rewrite typed surface shapes such as `for`.
-/// 7. Resolve and type-check every body.
-/// 8. Reject escaping `CPtr.borrow` results.
-/// 9. Return [`CheckFailure`] if any errors were collected.
-/// 10. Seal successful AST and registry invariants.
+/// 1. Hoist lexically nested type declarations to qualified
+///    top-level items.
+/// 2. Derive Debug and Equality impls before binding.
+/// 3. Collect declarations, then impl blocks, across every file.
+/// 4. Validate nested declarations and file aliases.
+/// 5. Lift signatures and declaration definitions into the registry.
+/// 6. Reject private types leaked through public signatures.
+/// 7. Rewrite typed surface shapes such as `for`.
+/// 8. Resolve and type-check every body.
+/// 9. Reject escaping `CPtr.borrow` results.
+/// 10. Return [`CheckFailure`] if any errors were collected.
+/// 11. Seal successful AST and registry invariants.
 pub fn check_program(parsed: ParsedProgram) -> Result<CheckedProgram, CheckFailure> {
     if parsed.has_errors() {
         return Err(CheckFailure {
@@ -73,6 +75,11 @@ pub fn check_program(parsed: ParsedProgram) -> Result<CheckedProgram, CheckFailu
     let mut registry = GlobalRegistry::with_stdlib_stubs();
 
     let mut packages = into_packages(parsed);
+
+    // Hoist lexically nested type declarations to qualified top-level
+    // items before anything else looks at `file.items`, so derive
+    // synthesis and collect see the flat shape.
+    desugar::desugar_packages(&mut packages);
 
     // Pre-collect synthesis: append `impl Debug / Equality for T`
     // blocks so they're present when collect / lift register items.

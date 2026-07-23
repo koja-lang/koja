@@ -1,0 +1,7 @@
+struct Owner
+  struct Foo.Bar
+    y: Int
+  end
+end
+
+1.print()

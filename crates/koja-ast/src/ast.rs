@@ -352,6 +352,9 @@ pub struct EnumDecl {
     pub type_params: Vec<TypeParam>,
     pub variants: Vec<EnumVariant>,
     pub functions: Vec<Function>,
+    /// Lexically nested type declarations, hoisted to qualified
+    /// top-level items by typecheck's desugar pass.
+    pub nested: Vec<Item>,
     pub span: Span,
 }
 
@@ -494,6 +497,9 @@ pub struct StructDecl {
     pub type_params: Vec<TypeParam>,
     pub fields: Vec<StructField>,
     pub functions: Vec<Function>,
+    /// Lexically nested type declarations, hoisted to qualified
+    /// top-level items by typecheck's desugar pass.
+    pub nested: Vec<Item>,
     pub span: Span,
 }
 

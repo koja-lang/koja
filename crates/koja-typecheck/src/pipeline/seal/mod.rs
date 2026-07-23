@@ -82,6 +82,11 @@ fn seal_file(file: &File, package: &str, registry: &GlobalRegistry) {
                 seal_function(function, mode);
             }
             Item::Struct(decl) => {
+                assert!(
+                    decl.nested.is_empty(),
+                    "sealed struct `{}` still carries nested declarations",
+                    decl.path.join(".")
+                );
                 let owner_generic = !decl.type_params.is_empty();
                 for function in &decl.functions {
                     let generic = owner_generic || !function.type_params.is_empty();
@@ -89,6 +94,11 @@ fn seal_file(file: &File, package: &str, registry: &GlobalRegistry) {
                 }
             }
             Item::Enum(decl) => {
+                assert!(
+                    decl.nested.is_empty(),
+                    "sealed enum `{}` still carries nested declarations",
+                    decl.path.join(".")
+                );
                 let owner_generic = !decl.type_params.is_empty();
                 for function in &decl.functions {
                     let generic = owner_generic || !function.type_params.is_empty();

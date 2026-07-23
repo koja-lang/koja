@@ -10,7 +10,10 @@
 use tower_lsp_server::jsonrpc::Result;
 use tower_lsp_server::ls_types::*;
 
-use koja_ast::ast::{File, Function, ImplMember, Item, Param, TypeExpr, TypeParam, Visibility};
+use koja_ast::ast::{
+    EnumDecl, File, Function, ImplMember, Item, Param, StructDecl, TypeExpr, TypeParam, Visibility,
+};
+use koja_ast::span::Span;
 
 use crate::backend::Backend;
 use crate::convert::{path_to_uri, span_to_range};
@@ -100,8 +103,29 @@ impl Backend {
     }
 }
 
-/// Collects workspace symbols from a file, filtering by query substring.
+/// Builds a flat workspace symbol entry.
 #[allow(deprecated)]
+fn symbol_info(
+    name: &str,
+    kind: SymbolKind,
+    uri: &Uri,
+    span: &Span,
+    container: Option<String>,
+) -> SymbolInformation {
+    SymbolInformation {
+        name: name.to_string(),
+        kind,
+        tags: None,
+        deprecated: None,
+        location: Location {
+            uri: uri.clone(),
+            range: span_to_range(span),
+        },
+        container_name: container,
+    }
+}
+
+/// Collects workspace symbols from a file, filtering by query substring.
 fn collect_workspace_symbols(file: &File, query: &str, results: &mut Vec<SymbolInformation>) {
     let uri = file.path.as_deref().and_then(path_to_uri);
     let uri = match uri {
@@ -116,164 +140,140 @@ fn collect_workspace_symbols(file: &File, query: &str, results: &mut Vec<SymbolI
             Item::Alias(_) => {}
             Item::Function(f) => {
                 if matches(&f.name) {
-                    results.push(SymbolInformation {
-                        name: f.name.clone(),
-                        kind: SymbolKind::FUNCTION,
-                        tags: None,
-                        deprecated: None,
-                        location: Location {
-                            uri: uri.clone(),
-                            range: span_to_range(&f.span),
-                        },
-                        container_name: None,
-                    });
+                    results.push(symbol_info(
+                        &f.name,
+                        SymbolKind::FUNCTION,
+                        &uri,
+                        &f.span,
+                        None,
+                    ));
                 }
             }
-            Item::Struct(s) => {
-                if matches(s.name()) {
-                    results.push(SymbolInformation {
-                        name: s.name().to_string(),
-                        kind: SymbolKind::STRUCT,
-                        tags: None,
-                        deprecated: None,
-                        location: Location {
-                            uri: uri.clone(),
-                            range: span_to_range(&s.span),
-                        },
-                        container_name: None,
-                    });
-                }
-                for f in &s.functions {
-                    if matches(&f.name) {
-                        results.push(SymbolInformation {
-                            name: f.name.clone(),
-                            kind: SymbolKind::METHOD,
-                            tags: None,
-                            deprecated: None,
-                            location: Location {
-                                uri: uri.clone(),
-                                range: span_to_range(&f.span),
-                            },
-                            container_name: Some(s.name().to_string()),
-                        });
-                    }
-                }
-            }
-            Item::Enum(e) => {
-                if matches(e.name()) {
-                    results.push(SymbolInformation {
-                        name: e.name().to_string(),
-                        kind: SymbolKind::ENUM,
-                        tags: None,
-                        deprecated: None,
-                        location: Location {
-                            uri: uri.clone(),
-                            range: span_to_range(&e.span),
-                        },
-                        container_name: None,
-                    });
-                }
-                for f in &e.functions {
-                    if matches(&f.name) {
-                        results.push(SymbolInformation {
-                            name: f.name.clone(),
-                            kind: SymbolKind::METHOD,
-                            tags: None,
-                            deprecated: None,
-                            location: Location {
-                                uri: uri.clone(),
-                                range: span_to_range(&f.span),
-                            },
-                            container_name: Some(e.name().to_string()),
-                        });
-                    }
-                }
+            Item::Struct(_) | Item::Enum(_) => {
+                collect_type_workspace_symbols(item, None, &uri, query, results);
             }
             Item::Constant(c) => {
                 if matches(&c.name) {
-                    results.push(SymbolInformation {
-                        name: c.name.clone(),
-                        kind: SymbolKind::CONSTANT,
-                        tags: None,
-                        deprecated: None,
-                        location: Location {
-                            uri: uri.clone(),
-                            range: span_to_range(&c.span),
-                        },
-                        container_name: None,
-                    });
+                    results.push(symbol_info(
+                        &c.name,
+                        SymbolKind::CONSTANT,
+                        &uri,
+                        &c.span,
+                        None,
+                    ));
                 }
             }
             Item::Protocol(p) => {
                 if matches(&p.name) {
-                    results.push(SymbolInformation {
-                        name: p.name.clone(),
-                        kind: SymbolKind::INTERFACE,
-                        tags: None,
-                        deprecated: None,
-                        location: Location {
-                            uri: uri.clone(),
-                            range: span_to_range(&p.span),
-                        },
-                        container_name: None,
-                    });
+                    results.push(symbol_info(
+                        &p.name,
+                        SymbolKind::INTERFACE,
+                        &uri,
+                        &p.span,
+                        None,
+                    ));
                 }
             }
             Item::TypeAlias(t) => {
                 if matches(&t.name) {
-                    results.push(SymbolInformation {
-                        name: t.name.clone(),
-                        kind: SymbolKind::TYPE_PARAMETER,
-                        tags: None,
-                        deprecated: None,
-                        location: Location {
-                            uri: uri.clone(),
-                            range: span_to_range(&t.span),
-                        },
-                        container_name: None,
-                    });
+                    results.push(symbol_info(
+                        &t.name,
+                        SymbolKind::TYPE_PARAMETER,
+                        &uri,
+                        &t.span,
+                        None,
+                    ));
                 }
             }
             Item::Impl(imp) => {
-                let container = type_expr_label(&imp.target);
-                for member in &imp.members {
-                    if let ImplMember::Function(f) = member
-                        && matches(&f.name)
-                    {
-                        results.push(SymbolInformation {
-                            name: f.name.clone(),
-                            kind: SymbolKind::METHOD,
-                            tags: None,
-                            deprecated: None,
-                            location: Location {
-                                uri: uri.clone(),
-                                range: span_to_range(&f.span),
-                            },
-                            container_name: Some(container.clone()),
-                        });
-                    }
-                }
+                collect_member_workspace_symbols(
+                    &imp.members,
+                    &type_expr_label(&imp.target),
+                    &uri,
+                    query,
+                    results,
+                );
             }
             Item::Extend(ext) => {
-                let container = type_expr_label(&ext.target);
-                for member in &ext.members {
-                    if let ImplMember::Function(f) = member
-                        && matches(&f.name)
-                    {
-                        results.push(SymbolInformation {
-                            name: f.name.clone(),
-                            kind: SymbolKind::METHOD,
-                            tags: None,
-                            deprecated: None,
-                            location: Location {
-                                uri: uri.clone(),
-                                range: span_to_range(&f.span),
-                            },
-                            container_name: Some(container.clone()),
-                        });
-                    }
-                }
+                collect_member_workspace_symbols(
+                    &ext.members,
+                    &type_expr_label(&ext.target),
+                    &uri,
+                    query,
+                    results,
+                );
             }
+        }
+    }
+}
+
+/// Collects a struct/enum declaration, its functions, and its nested
+/// types into workspace symbol results.
+fn collect_type_workspace_symbols(
+    item: &Item,
+    container: Option<&str>,
+    uri: &Uri,
+    query: &str,
+    results: &mut Vec<SymbolInformation>,
+) {
+    let matches = |name: &str| query.is_empty() || name.to_ascii_lowercase().contains(query);
+    let (name, kind, span, functions, nested) = match item {
+        Item::Enum(e) => (e.name(), SymbolKind::ENUM, &e.span, &e.functions, &e.nested),
+        Item::Struct(s) => (
+            s.name(),
+            SymbolKind::STRUCT,
+            &s.span,
+            &s.functions,
+            &s.nested,
+        ),
+        _ => return,
+    };
+    if matches(name) {
+        results.push(symbol_info(
+            name,
+            kind,
+            uri,
+            span,
+            container.map(str::to_string),
+        ));
+    }
+    for f in functions {
+        if matches(&f.name) {
+            results.push(symbol_info(
+                &f.name,
+                SymbolKind::METHOD,
+                uri,
+                &f.span,
+                Some(name.to_string()),
+            ));
+        }
+    }
+    for nested_item in nested {
+        collect_type_workspace_symbols(nested_item, Some(name), uri, query, results);
+    }
+}
+
+/// Collects the function members of an `impl`/`extend` block into
+/// workspace symbol results.
+fn collect_member_workspace_symbols(
+    members: &[ImplMember],
+    container: &str,
+    uri: &Uri,
+    query: &str,
+    results: &mut Vec<SymbolInformation>,
+) {
+    let matches = |name: &str| query.is_empty() || name.to_ascii_lowercase().contains(query);
+    for member in members {
+        if let ImplMember::Function(f) = member
+            && matches(&f.name)
+        {
+            results.push(symbol_info(
+                &f.name,
+                SymbolKind::METHOD,
+                uri,
+                &f.span,
+                Some(container.to_string()),
+            ));
         }
     }
 }
@@ -286,70 +286,8 @@ fn build_document_symbols(file: &File) -> Vec<DocumentSymbol> {
         match item {
             Item::Alias(_) => {}
             Item::Function(f) => symbols.push(function_symbol(f)),
-            Item::Struct(s) => {
-                let range = span_to_range(&s.span);
-                let children: Vec<DocumentSymbol> =
-                    s.functions.iter().map(function_symbol).collect();
-                #[allow(deprecated)]
-                symbols.push(DocumentSymbol {
-                    name: s.name().to_string(),
-                    detail: detail_with_visibility(
-                        s.visibility,
-                        type_params_detail(&s.type_params),
-                    ),
-                    kind: SymbolKind::STRUCT,
-                    tags: None,
-                    deprecated: None,
-                    range,
-                    selection_range: range,
-                    children: if children.is_empty() {
-                        None
-                    } else {
-                        Some(children)
-                    },
-                });
-            }
-            Item::Enum(e) => {
-                let range = span_to_range(&e.span);
-                let mut children: Vec<DocumentSymbol> = e
-                    .variants
-                    .iter()
-                    .map(|v| {
-                        let vrange = span_to_range(&v.span);
-                        #[allow(deprecated)]
-                        DocumentSymbol {
-                            name: v.name.clone(),
-                            detail: None,
-                            kind: SymbolKind::ENUM_MEMBER,
-                            tags: None,
-                            deprecated: None,
-                            range: vrange,
-                            selection_range: vrange,
-                            children: None,
-                        }
-                    })
-                    .collect();
-                children.extend(e.functions.iter().map(function_symbol));
-
-                #[allow(deprecated)]
-                symbols.push(DocumentSymbol {
-                    name: e.name().to_string(),
-                    detail: detail_with_visibility(
-                        e.visibility,
-                        type_params_detail(&e.type_params),
-                    ),
-                    kind: SymbolKind::ENUM,
-                    tags: None,
-                    deprecated: None,
-                    range,
-                    selection_range: range,
-                    children: if children.is_empty() {
-                        None
-                    } else {
-                        Some(children)
-                    },
-                });
-            }
+            Item::Struct(s) => symbols.push(struct_symbol(s)),
+            Item::Enum(e) => symbols.push(enum_symbol(e)),
             Item::Constant(c) => {
                 let range = span_to_range(&c.span);
                 #[allow(deprecated)]
@@ -481,6 +419,82 @@ fn build_document_symbols(file: &File) -> Vec<DocumentSymbol> {
     }
 
     symbols
+}
+
+/// Builds a [`DocumentSymbol`] for a struct declaration, with nested
+/// types and functions as children.
+fn struct_symbol(s: &StructDecl) -> DocumentSymbol {
+    let range = span_to_range(&s.span);
+    let mut children = nested_symbols(&s.nested);
+    children.extend(s.functions.iter().map(function_symbol));
+    #[allow(deprecated)]
+    DocumentSymbol {
+        name: s.name().to_string(),
+        detail: detail_with_visibility(s.visibility, type_params_detail(&s.type_params)),
+        kind: SymbolKind::STRUCT,
+        tags: None,
+        deprecated: None,
+        range,
+        selection_range: range,
+        children: children_option(children),
+    }
+}
+
+/// Builds a [`DocumentSymbol`] for an enum declaration, with variants,
+/// nested types, and functions as children.
+fn enum_symbol(e: &EnumDecl) -> DocumentSymbol {
+    let range = span_to_range(&e.span);
+    let mut children: Vec<DocumentSymbol> = e
+        .variants
+        .iter()
+        .map(|v| {
+            let vrange = span_to_range(&v.span);
+            #[allow(deprecated)]
+            DocumentSymbol {
+                name: v.name.clone(),
+                detail: None,
+                kind: SymbolKind::ENUM_MEMBER,
+                tags: None,
+                deprecated: None,
+                range: vrange,
+                selection_range: vrange,
+                children: None,
+            }
+        })
+        .collect();
+    children.extend(nested_symbols(&e.nested));
+    children.extend(e.functions.iter().map(function_symbol));
+    #[allow(deprecated)]
+    DocumentSymbol {
+        name: e.name().to_string(),
+        detail: detail_with_visibility(e.visibility, type_params_detail(&e.type_params)),
+        kind: SymbolKind::ENUM,
+        tags: None,
+        deprecated: None,
+        range,
+        selection_range: range,
+        children: children_option(children),
+    }
+}
+
+/// Builds symbols for the nested type declarations of a struct/enum.
+fn nested_symbols(nested: &[Item]) -> Vec<DocumentSymbol> {
+    nested
+        .iter()
+        .filter_map(|item| match item {
+            Item::Enum(e) => Some(enum_symbol(e)),
+            Item::Struct(s) => Some(struct_symbol(s)),
+            _ => None,
+        })
+        .collect()
+}
+
+fn children_option(children: Vec<DocumentSymbol>) -> Option<Vec<DocumentSymbol>> {
+    if children.is_empty() {
+        None
+    } else {
+        Some(children)
+    }
 }
 
 /// Builds a [`DocumentSymbol`] for a function declaration.
