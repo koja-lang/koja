@@ -16,6 +16,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **Breaking change.** Standard library APIs now use anonymous tuples for list pops, datagram receives, JSON object entries, parser results, and process envelopes instead of `Pair`.
 
+### Fixed
+
+- `koja format` now exits with an error code when a file fails to parse, instead of printing the error and reporting success.
+
 ## [0.15.3] - 2026-07-21
 
 ### Changed

@@ -347,6 +347,7 @@ pub fn cmd_format(files: Vec<String>, check: bool, write: bool, color: bool) {
     let resolved = resolve_format_paths(&files);
 
     let mut has_diff = false;
+    let mut has_parse_errors = false;
     for path in &resolved {
         let source = match fs::read_to_string(path) {
             Ok(s) => s,
@@ -362,7 +363,7 @@ pub fn cmd_format(files: Vec<String>, check: bool, write: bool, color: bool) {
             koja_fmt::FormatResult::Ok(s) => s,
             koja_fmt::FormatResult::ParseErrors(errors) => {
                 render_diagnostics(path, &source, &errors, color);
-                has_diff = true;
+                has_parse_errors = true;
                 continue;
             }
         };
@@ -389,7 +390,7 @@ pub fn cmd_format(files: Vec<String>, check: bool, write: bool, color: bool) {
         }
     }
 
-    if check && has_diff {
+    if has_parse_errors || (check && has_diff) {
         process::exit(1);
     }
 }

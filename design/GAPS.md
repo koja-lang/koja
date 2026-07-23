@@ -39,6 +39,20 @@ type instead of allowing lowering to omit them.
 
 ---
 
+## Formatter relocates trailing comments
+
+`koja format` reattaches a trailing comment on an enum variant, match or
+receive arm, or declaration header to the following item instead of keeping it
+on its line. `Shutdown # SIGTERM` becomes `Shutdown` with `# SIGTERM` on its
+own line above the next variant, inverting the comment's meaning. A
+single-statement arm whose body ends in a comment is collapsed onto the arm
+line and the comment is pushed below the enclosing block. Trailing comments on
+plain statements are unaffected. Until the printer anchors comments to the
+node they follow, formatting any source that uses these positions is lossy.
+This also blocks running documentation snippets through the formatter.
+
+---
+
 ## Explicit `return` values are not type-checked
 
 Typecheck only validates a function's trailing expression against the
