@@ -732,7 +732,7 @@ fn build_delivery<'ctx>(
 // ----- envelope construction ----------------------------------------------
 
 /// `enum Option<T>` variant tags (declaration order in
-/// `koja/lib/global/src/kernel.koja`).
+/// `koja/lib/global/src/option.koja`).
 const OPTION_SOME_TAG: u64 = 0;
 const OPTION_NONE_TAG: u64 = 1;
 

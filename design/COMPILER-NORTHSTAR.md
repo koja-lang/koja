@@ -791,8 +791,8 @@ Predecessor docs (archived; preserved for historical context, not
 authoritative):
 
 - `archive/20260502-COMPILER.md` — earlier self-hosted compiler
-  architecture sketch (Phase 6A material; will be revisited under
-  the northstar when self-hosting begins).
+  architecture sketch. Self-hosting is now optional research and will
+  be revisited under the northstar only if it offers a concrete benefit.
 - `archive/20260502-EXPOIR-ROADMAP.md` — superseded KojaIR
   roadmap.
 - `archive/20260427-EXPOIR.md` — original SIL-style design notes.

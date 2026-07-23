@@ -1,10 +1,10 @@
-# Runtime gaps & architecture smells
+# Runtime Gaps and Architecture Smells
 
-A triage of structural problems in `koja-runtime`. This is a standing
-audit document, not a plan: each entry records a smell, where it lives,
-the bug class it produces, and the shape of the fix. Completed gaps are
-deleted, so everything below is still open. Pull individual entries into
-their own plans as they get tackled.
+A standing audit of structural problems across `koja-runtime-core` and its
+adapters. Each entry records a smell, where it lives, the bug class it
+produces, and the shape of the fix. Completed gaps are deleted, so everything
+below is still open. Pull individual entries into their own plans as they are
+tackled.
 
 ## The throughline
 
@@ -84,57 +84,39 @@ soaks are replayable by seed (the counters above become the oracle).
 Alternatively `loom` models of the `ProcessTable` protocols for true
 exhaustiveness over a small state space.
 
-### 2. Two keyspaces multiplexed into one integer
+### 2. Mailbox depth is not observable
 
-**Severity: low (was medium; de-risked by generational PIDs). Bug class: misrouted I/O events.**
-
-The reactor distinguishes I/O-block events (key = `pid`) from watch
-events (key = `fd + WATCH_KEY_OFFSET`, offset `1_000_000`) by arithmetic
-(`reactor.rs`). Multiplexing two keyspaces into one integer by offset is
-fragile by construction.
-
-**De-risked.** Now that PIDs are generational (`(generation << 32) |
-index`), live packed PIDs are `>= 2^32` — far above `WATCH_KEY_OFFSET` —
-so the collision is practically unreachable. This is a robustness
-cleanup, not an active bug.
-
-**Fix.** Fold both into a typed `enum EventKey { Process(Pid),
-Watch(Fd) }` resolved through a table, rather than an integer offset.
-
-### 3. Unbounded mailboxes have no backpressure
-
-**Severity: medium-high. Bug class: load-driven memory growth / latency collapse.**
+**Severity: medium. Bug class: invisible overload and latency collapse.**
 
 Each process mailbox stores system and business traffic in unbounded
 `VecDeque`s. `cast`, timers, and I/O delivery keep accepting work while a
-receiver is slow or blocked, with no capacity limit, delivery failure, or
-mailbox-depth API. Because process boundaries deep-copy eagerly, every
-queued message has already paid its allocation and copy cost.
+receiver is slow or blocked. This is intentional. Like the BEAM, Koja does not
+apply automatic sender-side backpressure or impose a process mailbox capacity.
+Application protocols, calls, pools, and demand-driven libraries own admission
+control.
 
 This is not an ownership leak: draining or killing the process reclaims
 the envelopes correctly. It is demand-driven retention, so the existing
 steady-state live-block tests do not catch it. A producer that outruns a
 consumer can still grow RSS until the OS kills the program.
 
-**Fix.** Decide the backpressure contract before calling the runtime
-production-ready. At minimum expose mailbox message/byte depth and
-high-water counters so overload is observable. A bounded design must
-also define what non-blocking `cast`, timer, lifecycle, monitor, and I/O
-delivery do at capacity; likely system traffic needs a reserved lane,
-while business delivery returns an explicit accepted/rejected result or
-uses a process-configured overflow policy. Add a slow-consumer stress
-fixture that proves the selected bound and reclaim behavior on both
-adapters.
+**Fix.** Implement the `Runtime` observability API tracked in
+[ROADMAP.md](ROADMAP.md). Global and per-process snapshots must expose
+mailbox depth without changing delivery semantics. At minimum, distinguish
+system and business queue depth so operators can identify a slow consumer
+without inspecting payloads.
+
+Add a slow-consumer fixture that verifies depth snapshots and eventual
+reclamation on both adapters.
 
 ---
 
 ## Launch priority
 
 No open entry blocks an experimental soft launch. The ownership-leak
-class is closed; **#1** (`loom`) and **#2** (typed `EventKey`) are
-robustness/coverage cleanups. **#3** (mailbox backpressure) should gate a
-production-ready claim unless the unbounded behavior is explicitly
-documented and instrumented first. The one-time fairness gap (preemption
+class is closed. **#1** (`loom`) is a robustness and coverage improvement.
+**#2** requires the 0.16 observability surface, while unbounded delivery
+remains the documented contract. The one-time fairness gap (preemption
 points covering only loops and tail calls, letting deep non-tail
 recursion monopolize a worker) is now closed: a `YieldCheck` sits at the
 entry of every call-containing function, lowered to an inline reduction

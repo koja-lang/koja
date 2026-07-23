@@ -1,9 +1,8 @@
 # Known Compiler Gaps
 
 Known limitations, bugs, and workarounds in the Koja compiler. New gaps
-should be added here as they're discovered (agent testing, self-hosting,
-etc.). For the full design of the iterator protocol replacement, see
-[TYPES.md](TYPES.md).
+should be added here as they are discovered through tests, real programs, and
+compiler audits.
 
 ---
 
@@ -22,8 +21,6 @@ The current `for` loop hides the `Option` from the user (unwraps
 automatically since iteration is bounds-checked). With lazy iteration,
 `Option` becomes the termination mechanism -- `for` desugars to
 `loop { match iter.next() ... }` and `None` breaks the loop.
-
-Full design in [TYPES.md](TYPES.md) "Iterator protocol redesign" section.
 
 ---
 
@@ -238,7 +235,8 @@ package function. Known limitations:
 
 - **No explicit project selector.** The shell detects the project from
   the current directory only; there is no `-S <path>` flag yet to point
-  it elsewhere (tracked in ROADMAP Phase 5 Track B).
+  it elsewhere. The [roadmap](ROADMAP.md#ecosystem-validation) treats
+  this as an optional improvement driven by use.
 - **Whole-program re-check per input.** Each prompt re-runs the entire
   baseline (stdlib + project + history) through the pipeline — the
   existing whole-program model, fine for small projects but linear in
@@ -310,22 +308,6 @@ neighbor remains open:
   until the next runtime call. Consequence is mistimed yield checks
   (never memory unsafety). A fix needs codegen to recompute the TLS
   address after every call that can suspend, or a non-TLS budget.
-
----
-
-## Runtime: RSS grows linearly under server load
-
-Found benchmarking the concurrent shortener rewrite (2026-07,
-process-per-connection workers + keep-alive, release build). RSS grows
-~127 MB per 10,000 requests, linear across repeated identical loads,
-with and without keep-alive, on both DB-backed and 404 paths. No
-crashes, drops, or latency degradation — but a long-running server
-would exhaust memory. Something on the per-request path is not
-reclaimed: candidate suspects are dead one-shot worker processes not
-being fully reaped, per-request heap values surviving the worker's
-recursive `serve` loop (tail-call frames keeping buffers alive), or
-mailbox/envelope allocations. Needs a runtime heap audit with a
-minimal spawn-per-message reproducer.
 
 ---
 

@@ -997,7 +997,7 @@ Koja uses value semantics. Every binding, parameter, return, and field is an ind
 
 ### Copy Cost
 
-All types copy on assignment. Numeric primitives, `Bool`, `()`, and function pointers copy bit-for-bit. `String`, `Binary`, `Bits`, `List`, `Map`, `Set`, structs, and enums are heap-backed, but the copy is cheap. The block is reference-counted and shared, with a copy made lazily only if a shared value is mutated (copy-on-write). The result is always an independent value:
+All types copy on assignment. Numeric primitives, `Bool`, `()`, and function pointers copy bit-for-bit. `String`, `Binary`, `Bits`, `List`, `Map`, `Set`, structs, and enums are heap-backed, but the copy is cheap: the underlying memory is shared, so assigning or passing a value copies nothing. Mutation works on a fresh copy, so no binding ever observes another's changes. (Today mutation always makes that copy. A future compiler may skip it when nothing else shares the value, with no change in behavior.) The result is always an independent value:
 
 ```koja
 a = 42
@@ -1422,7 +1422,7 @@ The following types and functions are available in every file with no alias need
 > **Note:** Koja uses value semantics. Every binding, parameter,
 > return, and field is an independent value. Assigning or passing a
 > value already yields an independent copy (cheaply, via reference-
-> counted copy-on-write under the hood), so there is no `clone()`:
+> counted sharing under the hood), so there is no `clone()`:
 > just assign or pass the value.
 
 ### `Kernel`

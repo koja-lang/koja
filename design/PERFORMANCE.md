@@ -1,265 +1,237 @@
-# Performance strategy
+# Performance Strategy
 
-A standing strategy document for Koja's runtime and codegen performance —
-not a plan and not a backlog. It records _where Koja structurally stands
-relative to the BEAM_, the throughline that should guide tuning, and a
-tiered menu of levers with their prior art. Pull individual levers into
-their own plans as they get tackled; prune entries here once they land or
-stop being true.
+This is a standing strategy for Koja runtime and codegen performance. It is not
+a backlog or release plan. It records the current cost model, measured gaps,
+and optimization directions that preserve the language contract.
 
-See also: [ROADMAP.md](ROADMAP.md) (milestones), [RUNTIME-GAPS.md](RUNTIME-GAPS.md)
-(correctness/structural smells), [MEMORY-MODEL.md](MEMORY-MODEL.md) (RC + COW),
-[SCHEDULER-PROTOCOL.md](SCHEDULER-PROTOCOL.md) (executor/reactor/driver).
+Concrete commitments belong in [ROADMAP.md](ROADMAP.md). Correctness problems
+belong in [RUNTIME-GAPS.md](RUNTIME-GAPS.md). Representation and scheduling
+constraints live in [MEMORY-MODEL.md](MEMORY-MODEL.md) and
+[SCHEDULER-PROTOCOL.md](SCHEDULER-PROTOCOL.md).
 
-## The throughline
+## Discipline
 
-> The BEAM spent thirty years working _around_ being a bytecode
-> interpreter with immutable data and per-process tracing GC. Koja starts
-> where that climb was headed: **ahead-of-time native code through LLVM.**
+Performance work starts with a representative measurement and ends with the
+same measurement. A technique remains an idea until it improves throughput,
+latency, memory, or tail behavior without weakening semantics.
 
-So the strategy is not "copy the BEAM." It is two-pronged:
+Microbenchmarks identify costs. They do not establish application performance.
+Long-running services, process churn, and real package workloads decide whether
+an optimization matters.
 
-1. **Pay the taxes the BEAM also pays, but more cheaply** — reduction
-   counting, message copying, allocation, RC bookkeeping. These are the
-   places Koja is currently _behind_, because the BEAM has tuned them for
-   decades and Koja's first cut is naive.
-2. **Exploit what a bytecode VM structurally cannot do** — whole-program
-   optimization, profile-guided optimization, post-link layout,
-   devirtualization. These are Koja's moat; the BEAM cannot follow.
+Correctness comes first. The native panic and forced-kill paths can currently
+leave managed allocations referenced only by discarded frames. Performance
+work must not hide that reclamation gap or interpret crash-loop RSS growth as
+ordinary allocation overhead.
 
-Every lever below is tagged with which prong it serves. When a microbenchmark
-regresses (e.g. `fib` after function-entry preemption landed), the question to
-ask first is "is this a tax we're paying naively?" — prong 1 — before reaching
-for anything exotic.
+## Current cost model
+
+The LLVM backend is the production performance target.
+
+- Primitive values copy as bits.
+- `String`, `Binary`, `Bits`, and closure environments use non-atomic
+  reference-counted blocks within a process.
+- Native collection copies allocate and copy their backing buffers.
+- User composites recursively copy or acquire their fields.
+- Native process boundaries physically deep-copy managed payloads.
+- The cooperative interpreter uses host values and `Rc` storage. Its
+  allocation profile is not evidence for native performance.
+- Scheduling is cooperatively preemptive through compiler-inserted yield
+  checks.
+
+There is no general in-place-when-unique optimization, reference-count
+elision pass, process-boundary move inference, or cross-process shared
+immutable block today. The one targeted exception is the tail-call rewrite,
+which transfers argument ownership across the loop back edge instead of
+paying a clone and drop on every iteration.
 
 ## Measured baseline
 
-Microbenchmarks, one machine (Apple Silicon / darwin), Koja `build --release`
-(LLVM -O3) vs Erlang/OTP BeamAsm. Internal timing excludes VM startup and
-compile. Captured via `just bench`; lower is better.
+The baseline snapshot below was measured on July 22, 2026, on one Apple Silicon
+Darwin machine with `just bench`. Koja uses `build --release` and LLVM `-O3`.
+The comparison uses Erlang/OTP BeamAsm. Internal timing excludes startup and
+compilation. Lower values are better.
 
-| Workload                         |    Koja |   BEAM | Koja ÷ BEAM throughput |
-| -------------------------------- | ------: | -----: | ---------------------: |
-| Tight loop (200M iters)          |  223 ms | 330 ms |      **1.48× (ahead)** |
-| `fib(35)` (29.9M non-tail calls) |   80 ms |  54 ms |                  0.68× |
-| Msg round-trip (1M)              | 2069 ms | 494 ms |                  0.24× |
-| Spawn + reply (100k)             |  393 ms | 106 ms |                  0.27× |
-| 10k process storm                | 1428 ms | 168 ms |                  0.12× |
+| Workload                        | Koja median | BEAM median | Koja / BEAM time |
+| ------------------------------- | ----------: | ----------: | ---------------: |
+| Tight loop, 200M iterations     |      210 ms |      324 ms |            0.65x |
+| `fib(35)`, 29.9M non-tail calls |       65 ms |       52 ms |            1.25x |
+| Tail scan, 200M iterations      |      432 ms |      457 ms |            0.95x |
+| Message round trip, 1M          |      616 ms |      479 ms |            1.29x |
+| Spawn and reply, 100k           |      326 ms |      102 ms |            3.20x |
+| Process storm, 10k processes    |      221 ms |      138 ms |            1.60x |
 
-Read these honestly: they are degenerate microbenchmarks (an empty 200M-iter
-loop and naive `fib` are not real workloads), they cover only the compiled
-backend, and the messaging comparison is conservative for Koja (its `.call`
-does timeout + reply-correlation work the raw Erlang `!`/`receive` baseline
-skips). The shape of the gap is what matters: **compute is a real fight,
-fine-grained concurrency is where the BEAM still leads.**
+These are diagnostic microbenchmarks, not release gates. They cover only the
+compiled backend. Koja `Ref.call` also performs timeout and reply-correlation
+work that the raw Erlang send and receive comparison omits.
 
-The `fib` line is the canonical prong-1 story: it was ~1.9× _ahead_ before
-function-entry preemption landed, because it had zero yield-checks. It now
-runs a reduction decrement on every one of ~30M calls — a tax the BEAM has
-always paid (and folds into dispatch cheaply) that Koja only just adopted.
-Tier 1 below is largely about making that tax cheap.
+The useful signal is structural. Native compute is competitive. Message round
+trips and process storms are within roughly 1.3x to 1.6x of the BEAM in this
+snapshot. Spawn and reply remains the largest measured gap at 3.2x.
 
----
+## Near-term levers
 
-## Tier 1 — make the runtime taxes cheap (prong 1, highest near-term leverage)
+### Reduction checks
 
-### Reduction-counting overhead
+Every `YieldCheck` decrements `koja_reductions_left`. On Darwin, thread-local
+access may retain a TLV thunk even on the inline path. Call-heavy recursion
+therefore pays a meaningful scheduling tax.
 
-**Leverage: high. Effort: medium. Prior art: BEAM register pinning, BEAM per-op reduction cost.**
+Candidate optimizations include:
 
-The per-`YieldCheck` decrement is an inline `load / sub / store / icmp / branch`
-on the `koja_reductions_left` thread-local (`reductions.c`, lowered in
-`emit_yield_check`). On darwin the TLS access does not relax to local-exec —
-it goes through a TLV thunk per check — so the "inline" path still pays a
-thunk on every check. Two proven moves:
+- pinning the active reduction counter in a reserved register through a
+  supported calling convention
+- assigning static reduction costs to straight-line regions and decrementing
+  once per region
+- reducing redundant checks only where the same fairness bound is preserved
 
-- **Register-pin the counter.** The BEAM keeps core VM state in reserved
-  machine registers. Pinning the current process's reduction count (and likely
-  the current-process pointer) in a reserved register via an LLVM global
-  register variable / a reserved-register calling convention turns each check
-  into register arithmetic and deletes the TLV thunk. This alone likely
-  recovers most of the `fib` regression.
-- **Amortize the decrement.** The BEAM assigns each operation a static
-  reduction cost and decrements in bulk, not 1-per-call. Have the compiler
-  compute a per-region weight and decrement once per straight-line region
-  instead of once per call/back-edge. Fewer hot-path ops at equal fairness.
+The current checks cover loop back-edges, tail calls, and entries of
+call-containing functions. Removing one requires evidence that the remaining
+sites still bound cooperative execution.
 
-### Message-passing copy cost
+### Native collection copies
 
-**Leverage: high (closes most of msg/spawn gap). Effort: medium-high. Prior art: BEAM refc binaries. Gated on: the `Shared` ARC-style type.**
+Copying `List`, `Map`, or `Set` is proportional to the collection size because
+native clone glue allocates a fresh buffer and acquires every managed element.
+This is a larger cost than the phrase "cheap value copy" suggests.
 
-Koja deep-copies every payload at the process boundary (`DeepCopy` +
-`deep_copy_T` glue) so intra-process RC stays non-atomic. The BEAM copies
-small terms but **reference-counts binaries above ~64 bytes off-heap and
-shares them**. Koja's COW + RC model is most of the way to the same thing:
-for large immutable payloads, transfer a shared-immutable RC'd block instead
-of copying — O(1) instead of O(size). The cost is that cross-process sharing
-forces those blocks' RC to be atomic; scope it to large payloads so the common
-small-message path keeps the non-atomic fast path.
+Potential improvements include:
 
-The clean vehicle for that atomic boundary is the **`Shared` ARC-style type**
-— the deeply-immutable, atomically-reference-counted value from the original
-EXPOIR design ([ROADMAP.md](ROADMAP.md): the Phase 5 "atomic-refcount sharing
-for deeply-immutable values" optimization question, currently deferrable; also
-[archive/20260427-EXPOIR.md](archive/20260427-EXPOIR.md)). A `Shared<T>` makes
-"this value may be referenced across processes, account for it atomically" a
-_typed, opt-in_ property rather than a runtime guess, which keeps the
-non-`Shared` fast path provably non-atomic. **This lever is effectively gated
-on that type landing** — and the roadmap flags it as defer-if-complex, so treat
-zero-copy messaging as downstream of that decision, not independent of it. If
-`Shared` is deferred, the fallback stays the existing copy machinery (and
-`shared_map`'s copy-in/copy-out), which is correct but O(size). Couples to
-[MEMORY-MODEL.md](MEMORY-MODEL.md).
+- eliding a collection copy when a compiler-proven owned temporary transfers
+  directly into its destination
+- adding reference-counted collection buffers with copy-before-write
+  semantics
+- specializing copies for trivial element types
+- coalescing nested element acquisitions when the full buffer is immediately
+  consumed
 
-### Allocation + reference-counting bookkeeping
+Reference-counted collection buffers would change the current representation.
+They require a clear uniqueness test, matching drop behavior, and process
+deep-copy handling before they become the default.
 
-**Leverage: medium-high (dominant in real workloads). Effort: medium. Prior art: RC research the BEAM never needed.**
+### Native message copies
 
-Koja chose RC, so mine the RC literature the BEAM's tracing GC let it ignore:
+Native sends, replies, timers, and spawn configs deep-copy managed payloads so
+process-local reference counts remain non-atomic. The cost is proportional to
+the reachable payload.
 
-- **Coalesced / deferred RC** (Levanoni–Petrank): batch and cancel
-  retain/release pairs rather than touching counts eagerly.
-- **Biased RC** (Swift; _Biased Reference Counting_, PACT'18): a non-atomic
-  fast path for the owning thread, atomic slow path only on cross-thread access.
-  This is the _general_ form of what a `Shared` type does _selectively_; if the
-  `Shared` ARC-style type lands, prefer leaning on that typed boundary over a
-  blanket biased-RC scheme, and keep biased RC in reserve for the case where
-  untyped cross-thread sharing turns out to be common.
-- **An ARC-optimizer-style LLVM pass** to eliminate redundant `Clone`/`DropValue`
-  pairs at codegen (Koja already emits acquire/drop glue; a peephole over it is
-  low-risk).
-- **Arena / bump allocation for process-local short-lived data**, bulk-reclaimed
-  at process death — the BEAM's cheapest trick (per-process heaps freed
-  wholesale).
+Two optimizations cover different cases.
 
----
+**Last-use transfer** can hand a native allocation to the receiver when the
+compiler proves the sender retains no reachable reference and every transferred
+block has a unique owner. This is not a general analysis Koja already has.
+Existing owned-temporary lowering is a useful precedent, but process-boundary
+transfer needs its own escape and uniqueness proof.
 
-## Tier 2 — exploit the AOT edge (prong 2, medium-term moat)
+**Shared immutable leaves** can give sufficiently large immutable payloads an
+atomic reference-counted representation selected at allocation time. This is
+similar to BEAM reference-counted binaries. It should remain an internal
+representation unless a user-visible sharing type proves necessary.
 
-### Profile-guided + whole-program optimization
+Small messages should retain the current non-atomic deep-copy path unless
+measurement shows that an atomic representation is cheaper.
 
-**Leverage: high, broad. Effort: medium (mostly build-pipeline work). Prior art: nothing in the BEAM — structurally impossible there.**
+### Reference-count and glue optimization
 
-LTO across packages, **PGO** (collect branch/reduction profiles, feed them
-back), and post-link layout (**BOLT**). A JIT approximates PGO at runtime; an
-AOT compiler bakes it in for free. This is the single biggest thing the BEAM
-cannot answer.
+Koja emits explicit clone and drop operations before LLVM optimization.
+Opportunities include:
 
-### Protocol-dispatch devirtualization
+- cancelling provably balanced acquire and release pairs
+- coalescing repeated operations across straight-line regions
+- specializing composite glue for trivial fields
+- measuring whether biased reference counting helps any internal
+  cross-thread immutable representation
 
-**Leverage: medium. Effort: medium. Prior art: standard for AOT trait/interface langs.**
+This work must preserve normal-path cleanup and cannot compensate for missing
+unwind cleanup. The panic and kill reclamation gap needs a correctness design,
+not an optimizer workaround.
 
-Turn dynamic protocol dispatch into static / inlined calls where the call
-graph permits (monomorphization is already done for generics in `koja-ir`;
-extend the analysis to protocol receivers). Removes an indirect call and
-unlocks inlining on hot dispatch sites.
+### Long foreign calls
 
-### Move inference at the process boundary
+A CPU-bound `@extern "C"` call occupies its native worker until the call
+returns. Cooperative reduction checks cannot run inside foreign code.
 
-**Leverage: high (eats most real sends; partially decouples the concurrency win from `Shared`). Effort: medium-high. Prior art: Pony `iso`/`consume`, Rust move + `Send`.**
+A dirty-scheduler equivalent could route explicitly marked long calls to a
+dedicated pool. The design must define argument ownership, result delivery,
+process death while a call is active, and whether the foreign function may
+call back into Koja.
 
-Value semantics already make copy-vs-move-vs-share an _implementation detail_:
-the spec says every binding is an independent value, so the backend is free to
-pick the cheapest sound lowering for a boundary `DeepCopy`, with the copy as the
-always-correct fallback. That licenses a pure optimization — no behavior change.
+## AOT optimization
 
-The high-value, locally-provable case is **move-on-last-use**: if the sender
-provably never touches a sent value again _and_ its heap subgraph isn't
-reachable from anything the sender keeps live, the boundary copy becomes a
-**move** — hand the block to the receiver, zero copy, and crucially _no atomic
-RC_, because ownership transfers wholesale and there's still exactly one owner.
-This is the strongest outcome on every axis and covers the dominant idioms
-(`spawn Foo.start(config)` with a locally-built `config`; a `send` of a
-freshly-constructed message). It is the same analysis Koja already runs
-_intra-process_ — the owned-temporary discipline where construction results are
-moved, not cloned (see the throughline in [RUNTIME-GAPS.md](RUNTIME-GAPS.md)) —
-generalized from the call boundary to the send boundary.
+### LTO, PGO, and post-link layout
 
-Why this is move inference and **not** auto-sharing: promoting a _kept_ or
-aliased value to a shared block runs into representation coherence — RC
-atomicity is a property of the heap block, fixed at allocation, and one count
-field can't be non-atomic for the sender's references and atomic for the
-receiver's. That global rewrite is exactly what the typed `Shared` boundary
-exists to avoid. So the division of labor is: **the compiler infers moves
-automatically; `Shared` stays the explicit type for the "kept and shared" case
-a local proof can't reach.** Move inference is the partial-decoupling that takes
-schedule pressure off `Shared` — it captures the common send-and-forget traffic
-without waiting on that type to land. (COW also means the share case never has a
-mutation hazard — any write forks — so the only true blocker for sharing is the
-representation, not aliased mutation.) Conservative is fine: fire only where
-non-escape is cheaply provable and copy otherwise. Couples to
-[MEMORY-MODEL.md](MEMORY-MODEL.md).
+Project and dependency package code already enters one whole-program LLVM
+module. The remaining opportunities are profile-guided optimization, post-link
+layout, and possible LTO across the generated module and supporting native
+libraries. These techniques are broad but not free. Profile collection,
+reproducibility, build time, and stale profile behavior are part of the
+feature.
 
-### Dirty-scheduler equivalent for long native calls
+### Static-call optimization
 
-**Leverage: medium (fairness + throughput under FFI). Effort: medium. Prior art: BEAM dirty schedulers (OTP ~17/20).**
+Protocol dispatch is already static through monomorphization. There is no
+dynamic protocol dispatch to devirtualize.
 
-A CPU-bound `@extern` / FFI call currently occupies a worker with no yield
-point. A dedicated pool for long native calls (or yield-around-FFI hooks)
-keeps the main workers responsive. Couples to [FFI.md](FFI.md) and the
-reactor model in [SCHEDULER-PROTOCOL.md](SCHEDULER-PROTOCOL.md).
+The remaining opportunity is whole-program inlining, constant propagation, and
+specialization across static call boundaries. Measure LLVM's current result
+before adding a Koja-specific pass.
 
----
+### Value representation
 
-## Tier 3 — the frontier (prong 2, long-term architecture bets)
+Pointer tagging or another compact representation could reduce allocation and
+copy cost for selected values. Any change couples directly to [ABI.md](ABI.md),
+debug information, FFI boundaries, and both backends. It requires a workload
+showing that representation size or boxing is a dominant cost.
 
-### Signal-based asynchronous preemption — the marquee bet
+### Binary and bit operations
 
-**Leverage: high (removes yield-checks from the hot path entirely). Effort: high. Prior art: Go 1.14 (2020).**
+LLVM auto-vectorization and focused SIMD intrinsics may improve `Binary` and
+`Bits` operations. Prefer patterns LLVM can already optimize before adding
+target-specific intrinsics.
 
-This is the natural successor to the function-entry preemption that landed in
-Gap #3, and the most important long-term idea in this document.
+## Asynchronous preemption research
 
-Go used to preempt cooperatively at **function prologues** — the _exact_
-approach Koja ships today — and hit the _exact_ two problems Koja now has:
-tight loops with no calls can't be preempted, and the prologue checks cost. In
-1.14 Go moved to **signal-based async preemption**: the scheduler signals a
-worker, the handler parks the process at a compiler-registered safepoint, and
-the hot path carries _no checks at all._
+Signal-based asynchronous preemption is an open question, neither committed
+nor ruled out. The cooperative yield-check contract stands unless the
+measurements below justify revisiting it.
 
-Koja built the "Go 1.13" version. The "Go 1.14" upgrade would:
+Koja already checks loop back-edges, tail calls, and call-containing function
+entries. Asynchronous preemption would primarily remove check overhead and
+cover compiled native regions that cannot reach a check promptly. It would not
+make an arbitrary foreign call safely suspendible, and it would not replace the
+cooperative mechanism in eval or a future single-threaded target.
 
-- keep compiler-inserted `YieldCheck`s as the portable fallback (and the only
-  mechanism on the cooperative interpreter and WASM),
-- add signal-based preemption on platforms that support it, and
-- **delete the checks from the native hot path** — reclaiming both `fib` and
-  the per-iteration tight-loop overhead, while _strengthening_ fairness (even
-  check-free loops become preemptible).
+A viable design needs:
 
-It makes the entire reduction-counting-tax question in Tier 1 mostly disappear
-on the native backend. The Tier 1 reduction-counter fixes are the cheap interim
-win; this is the structural endgame.
+- compiler-registered safe suspension points
+- signal-safe handoff to the scheduler
+- correct register and stack-map recovery
+- interaction with runtime locks and foreign calls
+- architecture support for every native tier
+- a portable cooperative fallback
 
-### Smaller frontier levers
+Native checks should not be removed until the asynchronous path demonstrates
+equivalent fairness, correct resumption, and a meaningful measured win.
 
-- **NUMA-aware run queues** and smarter steal heuristics (victim selection,
-  steal batching) as core counts grow.
-- **Value representation**: pointer tagging / NaN-boxing to avoid boxing small
-  scalars; couples to [ABI.md](ABI.md) and [TYPES.md](TYPES.md).
-- **SIMD bit/binary ops**: the BEAM interprets its bit syntax; LLVM
-  auto-vectorization (or hand-written intrinsics) can make `Binary`/`Bits`
-  operations a Koja strength rather than parity.
+## Additional research
 
----
+- NUMA-aware queue placement and steal heuristics at high core counts
+- better batching for scheduler wakes and message delivery
+- allocation-site profiles tied to source locations
+- package-level code-size and compile-time budgets
 
-## Sequencing & discipline
+## Suggested order
 
-Suggested order, cheapest-validating-first:
+1. Establish repeatable application benchmarks and regression tracking.
+2. Reduce Darwin reduction-counter overhead.
+3. Measure and optimize native collection copies and redundant glue.
+4. Add PGO, post-link layout, or native-library LTO only with reproducible
+   measurements.
+5. Prototype last-use transfer for fresh process payloads.
+6. Evaluate shared immutable leaves for large retained payloads.
+7. Investigate asynchronous preemption only if yield checks remain a material
+   cost.
 
-1. **Tier 1 reduction-counter fixes** — recovers today's `fib` regression,
-   small, and exercises the measurement loop.
-2. **PGO / LTO** — broad win, the structural moat.
-3. **Move inference at the process boundary** — `Shared`-independent, captures
-   the common send-and-forget traffic, and takes schedule pressure off the
-   `Shared` type.
-4. **Message zero-copy for kept/aliased payloads** — closes the rest of the
-   concurrency gap; gated on the `Shared` ARC-style type.
-5. **Signal-based async preemption** — the architecture bet that retires the
-   yield-check tax for good.
-
-Discipline: you cannot tune what you do not measure. `just bench` and the
-runtime's self-reporting counters (`ScheduleCounters`, the lifecycle ring,
-`koja_rt_sched_violations`) are the seed; the standing goal is per-release
-regression tracking against _representative_ workloads, not just the degenerate
-microbenchmarks above. Every lever in this document should be justified by a
-before/after number, not a hunch.
+Every optimization must publish its benchmark, workload, compiler revision,
+and correctness checks. Remove ideas from this document when evidence makes
+them irrelevant.
