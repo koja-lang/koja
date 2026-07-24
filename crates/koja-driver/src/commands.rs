@@ -13,7 +13,7 @@ use std::{env, fs, process};
 use koja_ast::util::dedent;
 use koja_parser::ParseMode;
 
-use crate::diagnostics::render_diagnostics;
+use crate::diagnostics::print_file_diagnostics;
 use crate::loader::{
     self, ErrorPolicy, LoadOptions, LoadedSource, ProjectLoader, SourceOrigin, walk_source_files,
 };
@@ -73,8 +73,8 @@ struct DocInput {
 /// generated tree is a one-stop browsable reference. Pass
 /// `--project-only` to skip stdlib + deps. With no positional
 /// arguments, looks for `koja.toml` in the current directory.
-pub fn cmd_doc(files: Vec<String>, output: String, project_only: bool, color: bool) {
-    if !generate_docs(&files, &output, project_only, color) {
+pub fn cmd_doc(files: Vec<String>, output: String, project_only: bool) {
+    if !generate_docs(&files, &output, project_only) {
         return;
     }
     let out_path = Path::new(&output);
@@ -92,9 +92,8 @@ pub fn cmd_doc_serve(
     project_only: bool,
     port: Option<u16>,
     no_rebuild: bool,
-    color: bool,
 ) {
-    if !no_rebuild && !generate_docs(&files, &output, project_only, color) {
+    if !no_rebuild && !generate_docs(&files, &output, project_only) {
         return;
     }
     let out_path = Path::new(&output);
@@ -110,14 +109,14 @@ pub fn cmd_doc_serve(
 /// generator prints "docs generated", while `serve` would skip starting
 /// the server). Fatal errors (output dir creation, file write)
 /// `process::exit` from inside.
-fn generate_docs(files: &[String], output: &str, project_only: bool, color: bool) -> bool {
+fn generate_docs(files: &[String], output: &str, project_only: bool) -> bool {
     let (inputs, project_package) = discover_doc_inputs(files, project_only);
     if inputs.is_empty() {
         println!("no source files to document");
         return false;
     }
 
-    let project = extract_doc_project(inputs, &project_package, color);
+    let project = extract_doc_project(inputs, &project_package);
     if project.packages.is_empty() {
         println!("no items to document");
         return false;
@@ -222,17 +221,13 @@ impl From<LoadedSource> for DocInput {
 /// Parses every input file and extracts doc-renderable items
 /// into a [`koja_doc::DocProject`] under the input's tagged
 /// package. Files with parse errors are reported and skipped.
-fn extract_doc_project(
-    inputs: Vec<DocInput>,
-    project_package: &str,
-    color: bool,
-) -> koja_doc::DocProject {
+fn extract_doc_project(inputs: Vec<DocInput>, project_package: &str) -> koja_doc::DocProject {
     let mut project = koja_doc::DocProject::new(project_package);
 
     for input in inputs {
         let parse_result = koja_parser::parse(&input.source, ParseMode::File);
         if !parse_result.errors.is_empty() {
-            render_diagnostics(&input.label, &input.source, &parse_result.errors, color);
+            print_file_diagnostics(&input.label, &input.source, &parse_result.errors);
             continue;
         }
 
@@ -343,7 +338,7 @@ fn read_doc_input(path: &Path) -> Option<String> {
 /// formats all `.koja` files in the project's `src` and `test`
 /// directories. Directory arguments are walked recursively for
 /// `.koja` files.
-pub fn cmd_format(files: Vec<String>, check: bool, write: bool, color: bool) {
+pub fn cmd_format(files: Vec<String>, check: bool, write: bool) {
     let resolved = resolve_format_paths(&files);
 
     let mut has_diff = false;
@@ -362,7 +357,7 @@ pub fn cmd_format(files: Vec<String>, check: bool, write: bool, color: bool) {
         let formatted = match result {
             koja_fmt::FormatResult::Ok(s) => s,
             koja_fmt::FormatResult::ParseErrors(errors) => {
-                render_diagnostics(path, &source, &errors, color);
+                print_file_diagnostics(path, &source, &errors);
                 has_parse_errors = true;
                 continue;
             }
@@ -580,7 +575,7 @@ pub fn cmd_new(name: String) {
 /// the item-count line. Annotation slots like `Expr.resolved_type`
 /// are `None` here -- no typecheck has run. Diagnostics still go
 /// to stderr regardless.
-pub fn cmd_parse(files: Vec<String>, color: bool, emit_ast: bool) {
+pub fn cmd_parse(files: Vec<String>, emit_ast: bool) {
     if files.is_empty() {
         eprintln!("Usage: koja parse <file.koja>");
         process::exit(1);
@@ -603,7 +598,7 @@ pub fn cmd_parse(files: Vec<String>, color: bool, emit_ast: bool) {
         result.ast.path = Some(PathBuf::from(path));
 
         if !result.errors.is_empty() {
-            render_diagnostics(path, &source, &result.errors, color);
+            print_file_diagnostics(path, &source, &result.errors);
             continue;
         }
 
@@ -619,7 +614,7 @@ pub fn cmd_parse(files: Vec<String>, color: bool, emit_ast: bool) {
 }
 
 /// `koja lex <file.koja>` -- lexes and prints every token with its position.
-pub fn cmd_lex(files: Vec<String>, color: bool) {
+pub fn cmd_lex(files: Vec<String>) {
     if files.is_empty() {
         eprintln!("Usage: koja lex <file.koja>");
         process::exit(1);
@@ -637,7 +632,7 @@ pub fn cmd_lex(files: Vec<String>, color: bool) {
         let result = koja_lexer::lex(&source);
 
         if !result.errors.is_empty() {
-            render_diagnostics(path, &source, &result.errors, color);
+            print_file_diagnostics(path, &source, &result.errors);
         }
 
         println!(

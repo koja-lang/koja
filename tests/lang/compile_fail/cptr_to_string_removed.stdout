@@ -1,2 +1,1 @@
-error: type error:
-  `Global.CPtr` has no method `to_string`
+`Global.CPtr` has no method `to_string`

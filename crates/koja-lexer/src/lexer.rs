@@ -322,6 +322,7 @@ impl<'source> Lexer<'source> {
                 severity: Severity::Error,
                 message: label.into(),
                 hint: Some(hint.into()),
+                path: None,
                 span: Span::new(start, self.cursor.position()),
             });
             return;
@@ -356,6 +357,7 @@ impl<'source> Lexer<'source> {
                     severity: Severity::Error,
                     message: label.into(),
                     hint: Some(hint.into()),
+                    path: None,
                     span: Span::new(frag_start, self.cursor.position()),
                 });
                 return;
@@ -391,6 +393,7 @@ impl<'source> Lexer<'source> {
                     severity: Severity::Error,
                     message: "unterminated string".into(),
                     hint: Some("add a closing '\"'".into()),
+                    path: None,
                     span: Span::new(frag_start, self.cursor.position()),
                 });
                 return;
@@ -439,6 +442,7 @@ impl<'source> Lexer<'source> {
                         severity: Severity::Error,
                         message: format!("unknown escape sequence '\\{next}'"),
                         hint: Some("supported escapes: \\\\, \\\", \\n, \\r, \\t, \\#".into()),
+                        path: None,
                         span: Span::new(esc_start, self.cursor.position()),
                     });
                     text.push('\\');
@@ -595,6 +599,7 @@ impl<'source> Lexer<'source> {
                 severity: Severity::Error,
                 message: "unterminated string interpolation".into(),
                 hint: Some("add a closing '}'".into()),
+                path: None,
                 span: Span::new(state.start, self.cursor.position()),
             });
         }
@@ -621,6 +626,7 @@ impl<'source> Lexer<'source> {
             severity: Severity::Error,
             message: format!("unexpected character '{character}'"),
             hint,
+            path: None,
             span: Span::new(start, self.cursor.position()),
         });
     }

@@ -19,7 +19,7 @@ Koja is a statically typed, compiled language targeting native binaries via LLVM
 - [Concurrency](#concurrency): Processes, `spawn`/`receive`, `Ref`, `ReplyTo`, `Task`
 - [Standard Library](#standard-library): Built-in Functions, Core Types, Collections, String Methods, Binary/Bits, File I/O, Parsing, URI, Base, Path, Protocols
 - [C FFI](#c-ffi): `@extern "C"`, `CPtr<T>`, `CString`
-- [Annotations](#annotations): `@doc`, `@test`
+- [Annotations](#annotations): `@deprecated`, `@doc`, `@test`
 - [Tooling](#tooling): CLI Commands, LSP, Formatter
 
 ---
@@ -1091,7 +1091,7 @@ impl Greeter for Cat
 end
 ```
 
-The compiler validates completeness (all protocol functions must be implemented) and signature compatibility. `priv fn` helpers are allowed in impl blocks. `@doc` annotations are supported on protocol declarations.
+The compiler validates completeness (all protocol functions must be implemented) and signature compatibility. `priv fn` helpers are allowed in impl blocks. `@doc` and `@deprecated` annotations are supported on protocol declarations.
 
 `Self` inside a protocol declaration is syntactic sugar for an implicit first type parameter on the protocol. It is the slot every conforming type fills in via `impl Protocol for ConcreteType`. Methods that mention `Self` in their signature (return type, non-receiver param) treat it as that synthetic param. In an `impl Protocol for ConcreteType` block, the synthetic param resolves to `ConcreteType` and the method's `Self` ends up typed as the concrete implementer. User-declared protocol type parameters (e.g. `protocol Eq<T>`) are appended after the synthetic `Self` slot. The name `Self` is reserved on protocols and cannot also be declared explicitly.
 
@@ -2233,12 +2233,49 @@ Pointers passed to C are valid for the duration of the call. A C function that k
 
 ## Annotations
 
+An annotation is `@name` with an optional payload, placed before a
+declaration. Payloads are strings (single-line `"..."` or multiline
+`"""..."""`, interchangeable) or the literal `false`. By convention,
+annotations that carry prose (`@deprecated`, `@doc`) use the multiline form,
+and short labels like `@test` descriptions stay on one line.
+
+The FFI annotations `@extern` and `@link` are covered in [C FFI](#c-ffi).
+
+### `@deprecated`
+
+Marks a declaration as deprecated. Every use produces a compile warning:
+
+```koja
+@deprecated """
+Use `checksum32` instead. It handles inputs longer than 64 KiB.
+"""
+fn checksum(data: Binary) -> Int32
+  # ...
+end
+```
+
+```
+warning: `checksum` is deprecated: Use `checksum32` instead. It handles inputs longer than 64 KiB.
+```
+
+The message is required and should tell the caller what to use instead. Bare
+`@deprecated` is a compile error.
+
+`@deprecated` is accepted on functions (top-level, inline, and `impl`/`extend`
+members), structs, enums, constants, type aliases, and protocols, including
+`priv` declarations. Warnings fire at every resolved use site (calls, type
+positions, construction, patterns, constant reads), except inside the
+deprecated declaration itself and inside `impl`/`extend` blocks whose target
+is deprecated, so deprecating a type does not flag its own methods.
+
 ### `@doc`
 
 Documents a function, struct, or enum:
 
 ```koja
-@doc "Adds two integers."
+@doc """
+Adds two integers.
+"""
 fn add(a: Int32, b: Int32) -> Int32
   a + b
 end

@@ -68,12 +68,14 @@ pub fn parse_file(source: SourceFile, mode: ParseMode) -> ParsedFile {
     let mut ast = result.ast;
     ast.path = Some(source.path.clone());
     ast.package = source.package.clone();
+    let mut diagnostics = result.errors;
+    Diagnostic::stamp_paths(&mut diagnostics, &source.path);
     ParsedFile {
         package: source.package,
         path: source.path,
         source: source.source,
         ast,
-        diagnostics: result.errors,
+        diagnostics,
     }
 }
 

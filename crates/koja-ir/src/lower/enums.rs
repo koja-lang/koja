@@ -312,7 +312,10 @@ pub(super) fn enum_definition_from_entry(entry: &RegistryEntry) -> &EnumDefiniti
 fn has_feature_gap(decl: &EnumDecl, diagnostics: &mut Vec<Diagnostic>) -> bool {
     let mut gapped = false;
     for annotation in &decl.annotations {
-        if matches!(annotation.kind(), AnnotationKind::Doc(_)) {
+        if matches!(
+            annotation.kind(),
+            AnnotationKind::Deprecated { .. } | AnnotationKind::Doc(_)
+        ) {
             continue;
         }
         diagnostics.push(Diagnostic::error(

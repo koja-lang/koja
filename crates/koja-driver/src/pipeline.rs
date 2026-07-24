@@ -71,7 +71,7 @@ use std::process;
 use std::thread;
 use std::time::{Duration, Instant};
 
-use koja_ast::ast::Diagnostic;
+use koja_ast::ast::{Diagnostic, Severity};
 use koja_ast::identifier::Identifier;
 use koja_ir::{IRProgram, IRScript, lower_program, lower_script};
 use koja_ir_eval::{Interpreter, RuntimeError, Value};
@@ -80,6 +80,7 @@ use koja_test::{HARNESS_ENTRY, TestCase, TestOptions, discover_tests, generate_h
 use koja_typecheck::{CheckFailure, CheckedProgram, check_program, format_registry};
 
 use crate::commands::load_project_or_exit;
+use crate::diagnostics::{SourceMap, render_program_diagnostics};
 use crate::link::{self, LinkOptions};
 use crate::loader::{self, ErrorPolicy, LoadOptions, LoadedSource, ProjectLoader};
 use crate::project::{self, ProjectConfig};
@@ -440,18 +441,11 @@ fn run_script_interpreted(path: &Path) {
 fn check_single_file(path: &Path, mode: ParseMode, emit_ast: bool) {
     let source = read_source_or_exit(path);
     let package = derive_package(path);
-    match run_check(source, &package, path.to_path_buf(), mode) {
-        Ok(checked) => {
-            if emit_ast {
-                emit_checked_ast(&checked);
-            } else {
-                println!("{}: OK", path.display());
-            }
-        }
-        Err(error) => {
-            eprintln!("error: {error}");
-            process::exit(1);
-        }
+    let checked = run_check(source, &package, path.to_path_buf(), mode);
+    if emit_ast {
+        emit_checked_ast(&checked);
+    } else {
+        println!("{}: OK", path.display());
     }
 }
 
@@ -542,13 +536,10 @@ fn read_and_check(path: &Path, mode: ParseMode) -> (CheckedProgram, String) {
         }),
         mode,
     );
-    let checked = match check_program(parsed) {
-        Ok(checked) => checked,
-        Err(failure) => {
-            eprintln!("error: {}", format_check_failure(failure));
-            process::exit(1);
-        }
-    };
+    let sources = capture_sources(&parsed);
+    let checked =
+        check_program(parsed).unwrap_or_else(|failure| bail_check_failure(failure, &sources));
+    print_check_warnings(&checked, &sources);
     (checked, package)
 }
 
@@ -660,9 +651,10 @@ fn resolve_output_name(output: Option<String>, path: &Path) -> String {
 
 /// Run one source file end-to-end through the script-mode
 /// pipeline. The trailing value is computed for its side effects
-/// and discarded. Scripts always exit 0 on normal completion. On
-/// failure returns a formatted error string covering parse /
-/// typecheck / lower / runtime failures.
+/// and discarded. Scripts always exit 0 on normal completion.
+/// Parse / typecheck failures render their diagnostics and bail the
+/// process. Lower / runtime failures return a formatted error
+/// string.
 fn run_script_pipeline(source: String, package: &str, path: PathBuf) -> Result<(), String> {
     let parsed = parse_program(
         bundle_with_autoimport(SourceFile {
@@ -672,7 +664,10 @@ fn run_script_pipeline(source: String, package: &str, path: PathBuf) -> Result<(
         }),
         ParseMode::Script,
     );
-    let checked = check_program(parsed).map_err(format_check_failure)?;
+    let sources = capture_sources(&parsed);
+    let checked =
+        check_program(parsed).unwrap_or_else(|failure| bail_check_failure(failure, &sources));
+    print_check_warnings(&checked, &sources);
     let script = lower_script(&checked).map_err(|err| err.to_string())?;
     Interpreter::run_script(&script)
         .map(|_| ())
@@ -680,15 +675,10 @@ fn run_script_pipeline(source: String, package: &str, path: PathBuf) -> Result<(
 }
 
 /// Parse + typecheck one source file in the requested parse mode.
-/// Returns the sealed [`CheckedProgram`] on success, or a formatted
-/// error string on parse/typecheck failure. Used by
-/// [`check_single_file`].
-fn run_check(
-    source: String,
-    package: &str,
-    path: PathBuf,
-    mode: ParseMode,
-) -> Result<CheckedProgram, String> {
+/// Returns the sealed [`CheckedProgram`] on success, bails the
+/// process with rendered diagnostics on parse / typecheck failure.
+/// Used by [`check_single_file`].
+fn run_check(source: String, package: &str, path: PathBuf, mode: ParseMode) -> CheckedProgram {
     let parsed = parse_program(
         bundle_with_autoimport(SourceFile {
             package: package.to_string(),
@@ -697,7 +687,11 @@ fn run_check(
         }),
         mode,
     );
-    check_program(parsed).map_err(format_check_failure)
+    let sources = capture_sources(&parsed);
+    let checked =
+        check_program(parsed).unwrap_or_else(|failure| bail_check_failure(failure, &sources));
+    print_check_warnings(&checked, &sources);
+    checked
 }
 
 /// `koja check` for a project: walk every `src` directory,
@@ -711,18 +705,14 @@ fn check_project(config: &ProjectConfig, root: &Path, emit_ast: bool) {
         bundle_many_with_autoimport(user_files, Some(&config.name)),
         ParseMode::File,
     );
-    match check_program(parsed) {
-        Ok(checked) => {
-            if emit_ast {
-                emit_checked_ast(&checked);
-            } else {
-                println!("{}: OK", config.name);
-            }
-        }
-        Err(failure) => {
-            eprintln!("error: {}", format_check_failure(failure));
-            process::exit(1);
-        }
+    let sources = capture_sources(&parsed);
+    let checked =
+        check_program(parsed).unwrap_or_else(|failure| bail_check_failure(failure, &sources));
+    print_check_warnings(&checked, &sources);
+    if emit_ast {
+        emit_checked_ast(&checked);
+    } else {
+        println!("{}: OK", config.name);
     }
 }
 
@@ -773,13 +763,10 @@ fn run_project_tests(config: &ProjectConfig, root: &Path, opts: TestOptions) {
 
     splice_test_harness(&mut parsed, config, &tests, opts);
 
-    let checked = match check_program(parsed) {
-        Ok(checked) => checked,
-        Err(failure) => {
-            eprintln!("error: {}", format_check_failure(failure));
-            process::exit(1);
-        }
-    };
+    let sources = capture_sources(&parsed);
+    let checked =
+        check_program(parsed).unwrap_or_else(|failure| bail_check_failure(failure, &sources));
+    print_check_warnings(&checked, &sources);
     let entry = Identifier::new(config.name.clone(), vec![HARNESS_ENTRY.to_string()]);
     let program = match lower_program(&checked, &entry) {
         Ok(program) => program,
@@ -980,13 +967,10 @@ fn build_project_program(config: &ProjectConfig, root: &Path) -> IRProgram {
         bundle_many_with_autoimport(user_files, Some(&config.name)),
         ParseMode::File,
     );
-    let checked = match check_program(parsed) {
-        Ok(checked) => checked,
-        Err(failure) => {
-            eprintln!("error: {}", format_check_failure(failure));
-            process::exit(1);
-        }
-    };
+    let sources = capture_sources(&parsed);
+    let checked =
+        check_program(parsed).unwrap_or_else(|failure| bail_check_failure(failure, &sources));
+    print_check_warnings(&checked, &sources);
     let entry = resolve_project_entry(config);
     match lower_program(&checked, &entry) {
         Ok(program) => program,
@@ -1149,44 +1133,53 @@ fn derive_package(path: &Path) -> String {
         .to_string()
 }
 
-/// Render a [`CheckFailure`] as the multi-line error string the
-/// driver prints. Sources diagnostics from both the typecheck pass
-/// itself and the partial parse output (parse errors live there, not
-/// on `failure.diagnostics`).
-fn format_check_failure(failure: CheckFailure) -> String {
+/// Print the warning-severity diagnostics riding a successful check
+/// (deprecation notices, match reachability) to stderr. Every
+/// command that continues past `check_program` calls this so
+/// warnings surface regardless of how the compile is invoked.
+fn print_check_warnings(checked: &CheckedProgram, sources: &SourceMap) {
+    let warnings: Vec<Diagnostic> = checked
+        .diagnostics
+        .iter()
+        .filter(|diag| diag.severity == Severity::Warning)
+        .cloned()
+        .collect();
+    if !warnings.is_empty() {
+        eprintln!("{}", render_program_diagnostics(&warnings, sources));
+    }
+}
+
+/// Snapshot every parsed file's source before `check_program`
+/// consumes the parse, for snippet rendering. `CheckFailure::partial`
+/// is rebuilt without sources on the typecheck-failure path, so the
+/// driver keeps its own copy.
+fn capture_sources(parsed: &ParsedProgram) -> SourceMap {
+    parsed
+        .files
+        .iter()
+        .map(|(path, file)| (path.clone(), file.source.clone()))
+        .collect()
+}
+
+/// Render a [`CheckFailure`]'s diagnostics to stderr and exit 1.
+/// Parse diagnostics live on the partial parse, not on
+/// `failure.diagnostics`, so both sets print.
+fn bail_check_failure(failure: CheckFailure, sources: &SourceMap) -> ! {
     let CheckFailure {
         diagnostics,
         partial,
     } = failure;
-    let parse_diags = parse_diagnostics(&partial);
-    let parse_block = (!parse_diags.is_empty()).then(|| format_block("parse error", &parse_diags));
-    let type_block = (!diagnostics.is_empty()).then(|| {
-        format_block(
-            "type error",
-            diagnostics.iter().collect::<Vec<_>>().as_slice(),
-        )
-    });
-    match (parse_block, type_block) {
-        (Some(parse), Some(types)) => format!("{parse}\n{types}"),
-        (Some(parse), None) => parse,
-        (None, Some(types)) => types,
-        (None, None) => "check failed with no diagnostics".to_string(),
-    }
-}
-
-fn parse_diagnostics(parsed: &ParsedProgram) -> Vec<&Diagnostic> {
-    parsed
+    let mut all: Vec<Diagnostic> = partial
         .files
         .values()
         .flat_map(|file| file.diagnostics.iter())
-        .collect()
-}
-
-fn format_block(prefix: &str, diagnostics: &[&Diagnostic]) -> String {
-    let mut out = format!("{prefix}:");
-    for diag in diagnostics {
-        out.push_str("\n  ");
-        out.push_str(&diag.message);
+        .cloned()
+        .collect();
+    all.extend(diagnostics);
+    if all.is_empty() {
+        eprintln!("error: check failed with no diagnostics");
+    } else {
+        eprintln!("{}", render_program_diagnostics(&all, sources));
     }
-    out
+    process::exit(1);
 }

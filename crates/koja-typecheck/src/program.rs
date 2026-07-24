@@ -12,7 +12,8 @@ use koja_parser::{ParsedFile, ParsedProgram};
 
 use crate::error::CheckFailure;
 use crate::pipeline::{
-    aliases, borrows, collect, desugar, lift_signatures, resolve, seal, synthesize, visibility,
+    aliases, borrows, collect, deprecation, desugar, lift_signatures, resolve, seal,
+    stamp_file_paths, synthesize, visibility,
 };
 use crate::registry::GlobalRegistry;
 
@@ -61,8 +62,9 @@ pub struct CheckedProgram {
 /// 7. Rewrite typed surface shapes such as `for`.
 /// 8. Resolve and type-check every body.
 /// 9. Reject escaping `CPtr.borrow` results.
-/// 10. Return [`CheckFailure`] if any errors were collected.
-/// 11. Seal successful AST and registry invariants.
+/// 10. Warn on uses of `@deprecated` declarations.
+/// 11. Return [`CheckFailure`] if any errors were collected.
+/// 12. Seal successful AST and registry invariants.
 pub fn check_program(parsed: ParsedProgram) -> Result<CheckedProgram, CheckFailure> {
     if parsed.has_errors() {
         return Err(CheckFailure {
@@ -103,16 +105,12 @@ pub fn check_program(parsed: ParsedProgram) -> Result<CheckedProgram, CheckFailu
     // `list.koja` regardless of file order. The alternative is
     // dependency-ordered file walks at the driver layer, which the
     // typechecker shouldn't care about.
-    for pkg in &packages {
-        for file in &pkg.files {
-            collect::collect_file_decls(file, &pkg.package, &mut registry, &mut diagnostics);
-        }
-    }
-    for pkg in &packages {
-        for file in &pkg.files {
-            collect::collect_file_impls(file, &pkg.package, &mut registry, &mut diagnostics);
-        }
-    }
+    for_each_file(&packages, &mut diagnostics, |file, package, diags| {
+        collect::collect_file_decls(file, package, &mut registry, diags);
+    });
+    for_each_file(&packages, &mut diagnostics, |file, package, diags| {
+        collect::collect_file_impls(file, package, &mut registry, diags);
+    });
 
     collect::validate_nested_types(&packages, &registry, &mut diagnostics);
 
@@ -120,23 +118,43 @@ pub fn check_program(parsed: ParsedProgram) -> Result<CheckedProgram, CheckFailu
 
     lift_signatures::lift_signatures(&mut packages, &mut registry, &mut diagnostics);
 
-    visibility::check_signature_leaks(&registry, &mut diagnostics);
+    // The leak check walks the registry, not files, so its
+    // diagnostics have no owning path. Track its range so the
+    // stamping assertion below can exempt it.
+    let leak_range = {
+        let start = diagnostics.len();
+        visibility::check_signature_leaks(&registry, &mut diagnostics);
+        start..diagnostics.len()
+    };
 
     synthesize::synthesize_program(&mut packages);
 
     for pkg in &mut packages {
         for file in &mut pkg.files {
+            let start = diagnostics.len();
             resolve::resolve_file(file, &pkg.package, &registry, &mut diagnostics);
+            stamp_file_paths(&mut diagnostics, start, file);
         }
     }
 
     // Position check on `CPtr.borrow` results. Runs after resolve so
     // static receivers carry their `Resolution::Global` stamp.
-    for pkg in &packages {
-        for file in &pkg.files {
-            borrows::check_file(file, &registry, &mut diagnostics);
-        }
-    }
+    for_each_file(&packages, &mut diagnostics, |file, _package, diags| {
+        borrows::check_file(file, &registry, diags);
+    });
+
+    // Deprecation warnings also read post-resolve stamps.
+    for_each_file(&packages, &mut diagnostics, |file, package, diags| {
+        deprecation::check_file(file, package, &registry, diags);
+    });
+
+    debug_assert!(
+        diagnostics
+            .iter()
+            .enumerate()
+            .all(|(idx, d)| d.path.is_some() || leak_range.contains(&idx)),
+        "diagnostic missing an owning path: a per-file pass forgot to stamp"
+    );
 
     if diagnostics.iter().any(|d| d.severity == Severity::Error) {
         return Err(CheckFailure {
@@ -152,6 +170,22 @@ pub fn check_program(parsed: ParsedProgram) -> Result<CheckedProgram, CheckFailu
     };
     seal::seal_ast(&checked);
     Ok(checked)
+}
+
+/// Run `pass` on every file across every package, stamping the
+/// diagnostics each call emits with the owning file's path.
+fn for_each_file(
+    packages: &[CheckedPackage],
+    diagnostics: &mut Vec<Diagnostic>,
+    mut pass: impl FnMut(&File, &str, &mut Vec<Diagnostic>),
+) {
+    for pkg in packages {
+        for file in &pkg.files {
+            let start = diagnostics.len();
+            pass(file, &pkg.package, diagnostics);
+            stamp_file_paths(diagnostics, start, file);
+        }
+    }
 }
 
 /// Group the parsed files by package, preserving each package's

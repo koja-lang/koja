@@ -41,6 +41,12 @@ struct Cli {
     #[arg(long, global = true)]
     no_color: bool,
 
+    /// Diagnostic output format (defaults to `pretty` on terminals
+    /// and `short` when stderr is piped, `KOJA_DIAGNOSTICS` overrides
+    /// the detection)
+    #[arg(long, global = true, value_enum)]
+    diagnostics: Option<diagnostics::DiagnosticFormat>,
+
     #[command(subcommand)]
     command: Command,
 }
@@ -209,6 +215,7 @@ enum DocAction {
 fn main() {
     let cli = Cli::parse();
     let color = !cli.no_color && std::env::var("NO_COLOR").is_err();
+    diagnostics::init_style(cli.diagnostics, cli.no_color);
 
     match cli.command {
         Command::Build {
@@ -224,7 +231,7 @@ fn main() {
             Some(DepsAction::Get) => deps::cmd_get(None),
             Some(DepsAction::Update { name }) => deps::cmd_get(Some(name)),
         },
-        Command::Doc(args) => dispatch_doc(args, color),
+        Command::Doc(args) => dispatch_doc(args),
         Command::Eval { file } => pipeline::cmd_run(
             Some(file),
             pipeline::Backend::Interpreter,
@@ -235,10 +242,10 @@ fn main() {
             files,
             check,
             write_back,
-        } => commands::cmd_format(files, check, write_back, color),
-        Command::Lex { files } => commands::cmd_lex(files, color),
+        } => commands::cmd_format(files, check, write_back),
+        Command::Lex { files } => commands::cmd_lex(files),
         Command::New { name } => commands::cmd_new(name),
-        Command::Parse { files, emit_ast } => commands::cmd_parse(files, color, emit_ast),
+        Command::Parse { files, emit_ast } => commands::cmd_parse(files, emit_ast),
         Command::Run {
             file,
             backend,
@@ -254,7 +261,7 @@ fn main() {
 /// right handler. Bare `koja doc` falls through to the static
 /// generator, while `koja doc serve` rebuilds (unless `--no-rebuild`)
 /// then hands the output dir to the preview server.
-fn dispatch_doc(args: DocArgs, color: bool) {
+fn dispatch_doc(args: DocArgs) {
     let DocArgs {
         action,
         files,
@@ -263,9 +270,9 @@ fn dispatch_doc(args: DocArgs, color: bool) {
     } = args;
 
     match action {
-        None => commands::cmd_doc(files, output, project_only, color),
+        None => commands::cmd_doc(files, output, project_only),
         Some(DocAction::Serve { port, no_rebuild }) => {
-            commands::cmd_doc_serve(files, output, project_only, port, no_rebuild, color);
+            commands::cmd_doc_serve(files, output, project_only, port, no_rebuild);
         }
     }
 }

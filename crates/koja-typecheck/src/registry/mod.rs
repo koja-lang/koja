@@ -116,6 +116,9 @@ impl GlobalKind {
 /// `Public` or `PackagePrivate`.
 #[derive(Clone, Debug)]
 pub struct RegistryEntry {
+    /// `@deprecated` message, always non-empty. `None` means not
+    /// deprecated.
+    pub deprecation: Option<String>,
     pub identifier: Identifier,
     pub kind: GlobalKind,
     pub span: Span,
@@ -318,6 +321,15 @@ impl GlobalRegistry {
         )
     }
 
+    /// Stamp a `@deprecated` message onto an entry. Collect calls
+    /// this at most once per decl, right after a fresh insert.
+    pub(crate) fn set_deprecation(&mut self, id: GlobalRegistryId, message: String) {
+        let entry = self.entries.get_mut(&id).unwrap_or_else(|| {
+            panic!("set_deprecation on missing registry id {id}: collect invariant violation")
+        });
+        entry.deprecation = Some(message);
+    }
+
     /// Stamp a resolved variant roster onto an enum entry. Panics
     /// unless the entry's kind is exactly `Enum(None)`.
     pub(crate) fn set_enum_definition(&mut self, id: GlobalRegistryId, definition: EnumDefinition) {
@@ -492,6 +504,7 @@ impl GlobalRegistry {
         self.entries.insert(
             id,
             RegistryEntry {
+                deprecation: None,
                 identifier,
                 kind,
                 span,

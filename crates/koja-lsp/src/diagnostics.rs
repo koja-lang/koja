@@ -402,14 +402,16 @@ fn collect_parse_diagnostics(parsed: &ParsedProgram, active_path: &Path) -> Vec<
     out
 }
 
-/// Forward all check-phase diagnostics to the active URI. Today's
-/// `KojaDiagnostic` carries only a [`Span`] (no file path), so the
-/// LSP can't yet split a multi-file bundle's diagnostics across
-/// per-URI streams. Users see every check-phase error attributed to
-/// whichever file last triggered `diagnose`. Revisit when diagnostics
-/// learn to carry their owning path.
-fn filter_diags(diags: &[KojaDiagnostic], _active_path: &Path) -> Vec<KojaDiagnostic> {
-    diags.to_vec()
+/// Keep the check-phase diagnostics that belong to the active file,
+/// plus any without an owning path (registry-driven passes) so
+/// nothing disappears. Diagnostics from sibling files are dropped
+/// rather than misattributed to the active buffer.
+fn filter_diags(diags: &[KojaDiagnostic], active_path: &Path) -> Vec<KojaDiagnostic> {
+    diags
+        .iter()
+        .filter(|d| d.path.as_deref().is_none_or(|path| path == active_path))
+        .cloned()
+        .collect()
 }
 
 /// Converts a Koja compiler diagnostic to an LSP diagnostic.
@@ -425,11 +427,22 @@ fn to_lsp_diagnostic(d: &KojaDiagnostic) -> Diagnostic {
         None => d.message.clone(),
     };
 
+    let tags = is_deprecation_warning(d).then(|| vec![DiagnosticTag::DEPRECATED]);
+
     Diagnostic {
         range: span_to_range(&d.span),
         severity: Some(severity),
         source: Some("koja".to_string()),
         message,
+        tags,
         ..Default::default()
     }
+}
+
+/// Whether `d` is a use-of-deprecated warning, so editors render the
+/// span with strikethrough. Keys off the message shape produced by
+/// typecheck's deprecation pass (`pipeline/deprecation.rs`). Keep the
+/// two in sync when changing the wording.
+fn is_deprecation_warning(d: &KojaDiagnostic) -> bool {
+    d.severity == KojaSeverity::Warning && d.message.contains("` is deprecated: ")
 }

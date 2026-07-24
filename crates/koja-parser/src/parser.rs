@@ -207,6 +207,7 @@ impl Parser {
                 severity: Severity::Error,
                 message,
                 hint,
+                path: None,
                 span,
             });
             self.advance()
@@ -318,6 +319,7 @@ impl Parser {
             severity: Severity::Error,
             message,
             hint: None,
+            path: None,
             span,
         });
     }
@@ -327,6 +329,7 @@ impl Parser {
             severity: Severity::Error,
             message,
             hint: Some(hint),
+            path: None,
             span,
         });
     }
