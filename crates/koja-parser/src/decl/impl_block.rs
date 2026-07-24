@@ -5,6 +5,7 @@
 use koja_ast::ast::{ExtendBlock, ImplBlock, ImplMember, Item, Visibility};
 use koja_ast::token::TokenKind;
 
+use crate::decl::struct_decl::TypeBodyMember;
 use crate::parser::Parser;
 
 impl Parser {
@@ -56,9 +57,26 @@ impl Parser {
                 break;
             }
             match self.peek().clone() {
-                TokenKind::Fn | TokenKind::Priv | TokenKind::At => {
-                    let func = self.parse_type_body_function("impl");
-                    members.push(ImplMember::Function(func));
+                TokenKind::Fn
+                | TokenKind::Priv
+                | TokenKind::At
+                | TokenKind::Struct
+                | TokenKind::Enum => {
+                    let member_span = self.current_span();
+                    match self.parse_type_body_member("impl") {
+                        TypeBodyMember::Function(func) => {
+                            members.push(ImplMember::Function(*func));
+                        }
+                        TypeBodyMember::Nested(_) => {
+                            self.error(
+                                "nested type declarations are not allowed in impl or extend \
+                                 blocks. Declare the type inside the owner's body or at the \
+                                 top level with a qualified name"
+                                    .to_string(),
+                                member_span,
+                            );
+                        }
+                    }
                 }
                 TokenKind::Type => {
                     let alias = self.parse_type_alias(Vec::new(), Visibility::Public);

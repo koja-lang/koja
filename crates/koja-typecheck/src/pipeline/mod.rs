@@ -1,6 +1,8 @@
 //! Sub-passes of the typecheck phase, run in order by
 //! [`crate::check_program`]:
 //!
+//! - [`desugar::desugar_packages`]: hoist lexically nested type
+//!   declarations to qualified top-level items.
 //! - `synthesize::derive_debug` and `synthesize::derive_equality`:
 //!   append derived impls before binding.
 //! - [`collect::collect_file_decls`] +
@@ -27,6 +29,7 @@
 pub(crate) mod aliases;
 pub(crate) mod borrows;
 pub(crate) mod collect;
+pub(crate) mod desugar;
 pub(crate) mod lift_signatures;
 pub(crate) mod local_scope;
 pub(crate) mod resolve;

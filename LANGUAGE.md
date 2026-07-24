@@ -10,7 +10,7 @@ Koja is a statically typed, compiled language targeting native binaries via LLVM
 - [Variables and Constants](#variables-and-constants): Assignment, Type Annotations, Compound Assignment, Constants
 - [Functions](#functions): Declaration, Private Declarations, `return`, Parameters
 - [Control Flow](#control-flow): `if`/`else`, `unless`, `while`, `loop`/`break`, `for`...`in`, Ternary
-- [Types](#types): Primitives, Numeric Widening, Arithmetic Faults, Unit, Strings, Structs, Enums, Union Types, Tuples, Generics
+- [Types](#types): Primitives, Numeric Widening, Arithmetic Faults, Unit, Strings, Structs, Enums, Nested Types, Union Types, Tuples, Generics
 - [Pattern Matching](#pattern-matching): `match`, OR Patterns, `cond`
 - [Closures and Function Types](#closures-and-function-types): Block Closures, Short Closures, Capture Semantics, Function Types
 - [Value Semantics](#value-semantics): Rules, Copy Cost, Field Access
@@ -671,6 +671,42 @@ enum Expr
   Mul(List<Expr>)
 end
 ```
+
+### Nested Types
+
+A struct or enum can own other types. Declare the nested type inside the owner's body, or at the top level with a qualified name. The two forms are equivalent:
+
+```koja
+struct Supervisor
+  strategy: Supervisor.Strategy
+
+  enum Strategy
+    OneForAll
+    OneForOne
+    RestForOne
+  end
+end
+
+# Equivalent qualified top-level form.
+enum Supervisor.Strategy
+  OneForAll
+  OneForOne
+  RestForOne
+end
+```
+
+The nested type is always referenced by its qualified name, `Supervisor.Strategy`, even inside the owner's own body. Construction, pattern matching, generics, `extend` blocks, and protocol impls all work on nested types:
+
+```koja
+s = Supervisor{strategy: Supervisor.Strategy.OneForOne}
+
+match s.strategy
+  Supervisor.Strategy.OneForOne -> "one for one".print()
+  _ -> "other".print()
+end
+```
+
+Nesting is a namespacing device only. The nested type does not inherit the owner's type parameters, and `priv` on a nested type means package-private as usual.
 
 ### Union Types
 

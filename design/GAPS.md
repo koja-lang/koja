@@ -85,40 +85,6 @@ guarantee an invariant typecheck doesn't establish.
 
 ---
 
-## Nested types: lexical (in-body) declaration deferred
-
-The qualified-name form is **implemented** — `struct Owner.Nested … end`
-declared at top level, with construction, patterns, type-position
-resolution, generics (`Owner.Nested<T>`), `extend`/`impl` on nested
-targets, aliases, mangling, and `Debug` surface-name rendering all working
-across both backends (design archived in
-[archive/20260630-NESTED-TYPES.md](archive/20260630-NESTED-TYPES.md)).
-
-What remains deferred is the **lexical** sugar: declaring a type inside the
-owner's body rather than via a qualified top-level decl.
-
-```koja
-struct Supervisor
-  enum Strategy
-    OneForOne
-    OneForAll
-    RestForOne
-  end
-end
-```
-
-It resolves to the same member as `enum Supervisor.Strategy … end`; it is
-purely a same-file convenience. The struct/enum body parser in
-`koja-parser/src/decl.rs` only accepts fields and inline `fn` methods, so
-nested type items would need to be allowed in that loop and hoisted to the
-owner's namespace during collection.
-
-**Why deferred:** the qualified-name form already covers every use site
-(supervision coins its nested types that way); the lexical form is sugar,
-not a 1.0 blocker.
-
----
-
 ## Constants are not referenceable across packages
 
 Every `const` is same-package only in practice. Bare identifiers resolve

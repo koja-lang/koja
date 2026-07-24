@@ -352,6 +352,8 @@ pub struct EnumDecl {
     pub type_params: Vec<TypeParam>,
     pub variants: Vec<EnumVariant>,
     pub functions: Vec<Function>,
+    /// Nested type declarations, only `Item::Struct` / `Item::Enum`.
+    pub nested: Vec<Item>,
     pub span: Span,
 }
 
@@ -494,6 +496,8 @@ pub struct StructDecl {
     pub type_params: Vec<TypeParam>,
     pub fields: Vec<StructField>,
     pub functions: Vec<Function>,
+    /// Nested type declarations, only `Item::Struct` / `Item::Enum`.
+    pub nested: Vec<Item>,
     pub span: Span,
 }
 

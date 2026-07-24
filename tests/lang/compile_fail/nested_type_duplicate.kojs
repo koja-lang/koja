@@ -1,0 +1,11 @@
+struct Owner
+  struct Nested
+    y: Int
+  end
+end
+
+struct Owner.Nested
+  z: Int
+end
+
+1.print()

@@ -67,11 +67,13 @@ fn collect_item_folds(file: &File, ranges: &mut Vec<FoldingRange>) {
                 if let Some(r) = span_fold(&s.span, Some(FoldingRangeKind::Region)) {
                     ranges.push(r);
                 }
+                collect_nested_folds(&s.nested, ranges);
             }
             Item::Enum(e) => {
                 if let Some(r) = span_fold(&e.span, Some(FoldingRangeKind::Region)) {
                     ranges.push(r);
                 }
+                collect_nested_folds(&e.nested, ranges);
             }
             Item::Impl(imp) => {
                 if let Some(r) = span_fold(&imp.span, Some(FoldingRangeKind::Region)) {
@@ -123,6 +125,20 @@ fn collect_item_folds(file: &File, ranges: &mut Vec<FoldingRange>) {
             }
             Item::TypeAlias(_) => {}
         }
+    }
+}
+
+fn collect_nested_folds(nested: &[Item], ranges: &mut Vec<FoldingRange>) {
+    for item in nested {
+        let (span, inner) = match item {
+            Item::Enum(e) => (&e.span, &e.nested),
+            Item::Struct(s) => (&s.span, &s.nested),
+            _ => continue,
+        };
+        if let Some(r) = span_fold(span, Some(FoldingRangeKind::Region)) {
+            ranges.push(r);
+        }
+        collect_nested_folds(inner, ranges);
     }
 }
 

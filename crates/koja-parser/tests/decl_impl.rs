@@ -9,6 +9,7 @@
 //! - generic protocol heads + targets
 //! - the diagnostic that fires when the body holds something other
 //!   than a function or type alias
+//! - nested type declarations are rejected with a diagnostic
 
 use koja_ast::ast::{ImplMember, TypeExpr};
 
@@ -81,8 +82,7 @@ fn impl_body_rejects_non_function_non_alias() {
     parse_failing_with(
         "
         impl Show for Point
-          struct Nested
-          end
+          count: Int
         end
         ",
         &["expected function or type alias in block body"],
@@ -124,5 +124,19 @@ fn bare_impl_emits_migration_diagnostic() {
     assert!(
         hint.contains("impl Protocol for Type"),
         "hint should mention the protocol-impl form: {hint}"
+    );
+}
+
+#[test]
+fn nested_type_declaration_rejected_in_impl() {
+    parse_failing_with(
+        "
+        impl Show for Point
+          struct Helper
+            x: Int
+          end
+        end
+        ",
+        &["nested type declarations are not allowed in impl or extend blocks"],
     );
 }

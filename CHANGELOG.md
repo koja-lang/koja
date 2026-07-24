@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - Anonymous tuples. Build with `(a, b)`, annotate as `(Int, String)`, take apart with destructuring assignment `(x, y) = pair` or `match` patterns.
+- Nested types can now be declared inside the owner's body, equivalent to the qualified top-level form `struct Owner.Nested`.
 - Tuples compare with `==`/`!=`, print and interpolate like any other value, and can be members of type unions.
 
 ### Changed
