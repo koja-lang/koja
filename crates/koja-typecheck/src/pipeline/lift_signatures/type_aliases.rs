@@ -66,11 +66,6 @@ pub(super) fn lift_type_aliases(
     diagnose_alias_cycles(packages, registry, diagnostics);
 }
 
-/// For each alias entry, walk its expansion looking for itself.
-/// On a cycle: emit one diagnostic and rewrite the expansion to
-/// `ResolvedType::unresolved` so downstream peels return the
-/// alias's `Named` head unchanged (no infinite recursion at peel
-/// time).
 /// One registered alias's identity plus the declaration site needed
 /// to attribute a cycle diagnostic to its owning file.
 struct AliasSite {
@@ -80,6 +75,10 @@ struct AliasSite {
     span: koja_ast::span::Span,
 }
 
+/// For each alias entry, walk its expansion looking for itself. On a
+/// cycle, emit one diagnostic and rewrite the expansion to
+/// `ResolvedType::unresolved` so downstream peels return the alias's
+/// `Named` head unchanged (no infinite recursion at peel time).
 fn diagnose_alias_cycles(
     packages: &[CheckedPackage],
     registry: &mut GlobalRegistry,
