@@ -36,10 +36,12 @@ last major product types planned before ecosystem validation.
 ### Language and tooling
 
 - **[DONE]** Core anonymous tuple support and standard API migrations
+- **[DONE]** Lexical nested type declarations with formatter, LSP, and editor
+  grammar support
 - Anonymous tuple support in the VSCode, Vim, and tree-sitter integrations
 - A CLI task protocol modeled on `Mix.Tasks`
 - Anonymous records
-- An `@deprecated` compile annotation
+- **[DONE]** An `@deprecated` compile annotation
 - Deprecation of `Pair<A, B>` with guidance to use anonymous tuples
 
 ### Correctness and production gates

@@ -264,7 +264,10 @@ pub(super) fn struct_definition_from_resolution<'a>(
 fn has_feature_gap(decl: &StructDecl, diagnostics: &mut Vec<Diagnostic>) -> bool {
     let mut gapped = false;
     for annotation in &decl.annotations {
-        if matches!(annotation.kind(), AnnotationKind::Doc(_)) {
+        if matches!(
+            annotation.kind(),
+            AnnotationKind::Deprecated { .. } | AnnotationKind::Doc(_)
+        ) {
             continue;
         }
         diagnostics.push(Diagnostic::error(

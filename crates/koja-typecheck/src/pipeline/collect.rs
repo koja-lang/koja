@@ -32,6 +32,7 @@ use koja_ast::identifier::{GlobalRegistryId, Identifier};
 use koja_ast::labels::type_expr_span;
 use koja_ast::span::Span;
 
+use crate::pipeline::stamp_file_paths;
 use crate::pipeline::visibility::check_reference_visibility;
 use crate::program::CheckedPackage;
 use crate::registry::{GlobalKind, GlobalRegistry, InsertOutcome, VisibilityScope};
@@ -108,6 +109,7 @@ pub(crate) fn validate_nested_types(
 ) {
     for pkg in packages {
         for file in &pkg.files {
+            let start = diagnostics.len();
             for item in &file.items {
                 match item {
                     Item::Struct(decl) if !decl.owner_path().is_empty() => {
@@ -135,6 +137,7 @@ pub(crate) fn validate_nested_types(
                     _ => {}
                 }
             }
+            stamp_file_paths(diagnostics, start, file);
         }
     }
 }
@@ -260,10 +263,11 @@ fn register_function_with_identifier(
     if reject_self_param(function, &identifier, self_context, diagnostics) {
         return;
     }
+    let deprecation = deprecation_message(&function.annotations, diagnostics);
     let type_params = type_param_names(&function.type_params);
     let visibility = function_visibility_scope(function.visibility, owner_type);
     match registry.insert_function(identifier, function.span, type_params, visibility) {
-        InsertOutcome::Fresh(_) => {}
+        InsertOutcome::Fresh(id) => stamp_deprecation(registry, id, deprecation),
         InsertOutcome::Collision { existing } => {
             diagnostics.push(Diagnostic::error_with_hint(
                 format!("`{}` is already defined", existing.identifier),
@@ -329,6 +333,56 @@ fn diagnose_doc_on_private(
     }
 }
 
+/// Annotations skipped by the per-decl "unsupported annotation" gap
+/// helpers because a dedicated check owns them. `@doc` is checked by
+/// [`diagnose_doc_on_private`] and `@deprecated` by
+/// [`deprecation_message`], matched by name so malformed shapes
+/// aren't double-diagnosed.
+fn has_dedicated_validation(annotation: &Annotation) -> bool {
+    annotation.name == "deprecated" || matches!(annotation.kind(), AnnotationKind::Doc(_))
+}
+
+/// The validated `@deprecated` message on a decl. Bare `@deprecated`
+/// and non-string or empty payloads are rejected. Every deprecation
+/// warning must tell callers what to use instead.
+fn deprecation_message(
+    annotations: &[Annotation],
+    diagnostics: &mut Vec<Diagnostic>,
+) -> Option<String> {
+    let mut message = None;
+    for annotation in annotations {
+        if annotation.name != "deprecated" {
+            continue;
+        }
+        match annotation.kind() {
+            // Trimmed so `"""` payloads don't drag their surrounding
+            // newlines into every warning.
+            AnnotationKind::Deprecated { message: text } if !text.trim().is_empty() => {
+                message = Some(text.trim().to_string());
+            }
+            _ => diagnostics.push(Diagnostic::error_with_hint(
+                "`@deprecated` requires a message".to_string(),
+                "describe the replacement, e.g. `@deprecated \"\"\"Use ... instead.\"\"\"`"
+                    .to_string(),
+                annotation.span,
+            )),
+        }
+    }
+    message
+}
+
+/// Stamp a validated `@deprecated` message onto a freshly inserted
+/// entry.
+fn stamp_deprecation(
+    registry: &mut GlobalRegistry,
+    id: GlobalRegistryId,
+    deprecation: Option<String>,
+) {
+    if let Some(message) = deprecation {
+        registry.set_deprecation(id, message);
+    }
+}
+
 /// Reject a `self` receiver only when registration is happening
 /// outside a struct/impl context (top-level functions). Inside a
 /// struct or `impl Type` block, `self` is the receiver for an
@@ -372,12 +426,16 @@ fn register_struct(
         &decl.annotations,
         diagnostics,
     );
+    let deprecation = deprecation_message(&decl.annotations, diagnostics);
     let identifier = Identifier::new(package, decl.path.clone());
     let type_params = type_param_names(&decl.type_params);
     let visibility = package_visibility_scope(decl.visibility);
     let struct_id =
         match registry.insert_struct(identifier.clone(), decl.span, type_params, visibility) {
-            InsertOutcome::Fresh(id) => Some(id),
+            InsertOutcome::Fresh(id) => {
+                stamp_deprecation(registry, id, deprecation);
+                Some(id)
+            }
             InsertOutcome::Collision { existing } => {
                 diagnostics.push(Diagnostic::error_with_hint(
                     format!("`{}` is already defined", existing.identifier),
@@ -429,12 +487,16 @@ fn register_enum(
         &decl.annotations,
         diagnostics,
     );
+    let deprecation = deprecation_message(&decl.annotations, diagnostics);
     let identifier = Identifier::new(package, decl.path.clone());
     let type_params = type_param_names(&decl.type_params);
     let visibility = package_visibility_scope(decl.visibility);
     let enum_id = match registry.insert_enum(identifier.clone(), decl.span, type_params, visibility)
     {
-        InsertOutcome::Fresh(id) => Some(id),
+        InsertOutcome::Fresh(id) => {
+            stamp_deprecation(registry, id, deprecation);
+            Some(id)
+        }
         InsertOutcome::Collision { existing } => {
             diagnostics.push(Diagnostic::error_with_hint(
                 format!("`{}` is already defined", existing.identifier),
@@ -642,18 +704,20 @@ fn register_protocol(
         type_params.push(param.name.clone());
     }
     let visibility = package_visibility_scope(decl.visibility);
-    if let InsertOutcome::Collision { existing } =
-        registry.insert_protocol(identifier, decl.span, type_params, visibility)
-    {
-        diagnostics.push(Diagnostic::error_with_hint(
-            format!("`{}` is already defined", existing.identifier),
-            format!(
-                "previous {} definition is at line {}",
-                existing.kind.label(),
-                existing.span.start.line
-            ),
-            decl.span,
-        ));
+    let deprecation = deprecation_message(&decl.annotations, diagnostics);
+    match registry.insert_protocol(identifier, decl.span, type_params, visibility) {
+        InsertOutcome::Fresh(id) => stamp_deprecation(registry, id, deprecation),
+        InsertOutcome::Collision { existing } => {
+            diagnostics.push(Diagnostic::error_with_hint(
+                format!("`{}` is already defined", existing.identifier),
+                format!(
+                    "previous {} definition is at line {}",
+                    existing.kind.label(),
+                    existing.span.start.line
+                ),
+                decl.span,
+            ));
+        }
     }
 }
 
@@ -680,18 +744,20 @@ fn register_constant(
     );
     let identifier = Identifier::new(package, vec![constant.name.clone()]);
     let visibility = package_visibility_scope(constant.visibility);
-    if let InsertOutcome::Collision { existing } =
-        registry.insert_constant(identifier, constant.span, visibility)
-    {
-        diagnostics.push(Diagnostic::error_with_hint(
-            format!("`{}` is already defined", existing.identifier),
-            format!(
-                "previous {} definition is at line {}",
-                existing.kind.label(),
-                existing.span.start.line
-            ),
-            constant.span,
-        ));
+    let deprecation = deprecation_message(&constant.annotations, diagnostics);
+    match registry.insert_constant(identifier, constant.span, visibility) {
+        InsertOutcome::Fresh(id) => stamp_deprecation(registry, id, deprecation),
+        InsertOutcome::Collision { existing } => {
+            diagnostics.push(Diagnostic::error_with_hint(
+                format!("`{}` is already defined", existing.identifier),
+                format!(
+                    "previous {} definition is at line {}",
+                    existing.kind.label(),
+                    existing.span.start.line
+                ),
+                constant.span,
+            ));
+        }
     }
 }
 
@@ -716,18 +782,20 @@ fn register_type_alias(
     );
     let identifier = Identifier::new(package, vec![alias.name.clone()]);
     let visibility = package_visibility_scope(alias.visibility);
-    if let InsertOutcome::Collision { existing } =
-        registry.insert_type_alias(identifier, alias.span, visibility)
-    {
-        diagnostics.push(Diagnostic::error_with_hint(
-            format!("`{}` is already defined", existing.identifier),
-            format!(
-                "previous {} definition is at line {}",
-                existing.kind.label(),
-                existing.span.start.line
-            ),
-            alias.span,
-        ));
+    let deprecation = deprecation_message(&alias.annotations, diagnostics);
+    match registry.insert_type_alias(identifier, alias.span, visibility) {
+        InsertOutcome::Fresh(id) => stamp_deprecation(registry, id, deprecation),
+        InsertOutcome::Collision { existing } => {
+            diagnostics.push(Diagnostic::error_with_hint(
+                format!("`{}` is already defined", existing.identifier),
+                format!(
+                    "previous {} definition is at line {}",
+                    existing.kind.label(),
+                    existing.span.start.line
+                ),
+                alias.span,
+            ));
+        }
     }
 }
 
@@ -737,7 +805,7 @@ fn diagnose_alias_annotations(
     diagnostics: &mut Vec<Diagnostic>,
 ) {
     for annotation in annotations {
-        if matches!(annotation.kind(), AnnotationKind::Doc(_)) {
+        if has_dedicated_validation(annotation) {
             continue;
         }
         diagnostics.push(Diagnostic::error(
@@ -756,7 +824,7 @@ fn diagnose_constant_annotations(
     diagnostics: &mut Vec<Diagnostic>,
 ) {
     for annotation in annotations {
-        if matches!(annotation.kind(), AnnotationKind::Doc(_)) {
+        if has_dedicated_validation(annotation) {
             continue;
         }
         diagnostics.push(Diagnostic::error(
@@ -827,7 +895,7 @@ fn diagnose_struct_annotations(
     diagnostics: &mut Vec<Diagnostic>,
 ) {
     for annotation in annotations {
-        if matches!(annotation.kind(), AnnotationKind::Doc(_)) {
+        if has_dedicated_validation(annotation) {
             continue;
         }
         diagnostics.push(Diagnostic::error(
@@ -864,7 +932,7 @@ fn diagnose_struct_field_gaps(
 /// sees a populated registry.
 fn diagnose_enum_feature_gaps(decl: &EnumDecl, diagnostics: &mut Vec<Diagnostic>) {
     for annotation in &decl.annotations {
-        if matches!(annotation.kind(), AnnotationKind::Doc(_)) {
+        if has_dedicated_validation(annotation) {
             continue;
         }
         diagnostics.push(Diagnostic::error(
@@ -939,7 +1007,7 @@ fn diagnose_extend_member_feature_gaps(
 /// `["Self", ...user_declared]` type-param stamping.
 fn diagnose_protocol_feature_gaps(decl: &ProtocolDecl, diagnostics: &mut Vec<Diagnostic>) {
     for annotation in &decl.annotations {
-        if matches!(annotation.kind(), AnnotationKind::Doc(_)) {
+        if has_dedicated_validation(annotation) {
             continue;
         }
         diagnostics.push(Diagnostic::error(

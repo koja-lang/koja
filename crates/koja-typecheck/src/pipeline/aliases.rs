@@ -18,6 +18,7 @@ use std::collections::BTreeMap;
 use koja_ast::ast::{AliasDecl, Diagnostic, Item};
 use koja_ast::identifier::{GlobalRegistryId, Identifier};
 
+use crate::pipeline::stamp_file_paths;
 use crate::pipeline::visibility::check_reference_visibility;
 use crate::program::CheckedPackage;
 use crate::registry::{GlobalKind, GlobalRegistry, RegistryEntry};
@@ -102,7 +103,9 @@ pub(crate) fn validate_aliases(
 ) {
     for pkg in packages {
         for file in &pkg.files {
+            let start = diagnostics.len();
             validate_file_aliases(file_alias_iter(file), &pkg.package, registry, diagnostics);
+            stamp_file_paths(diagnostics, start, file);
         }
     }
 }

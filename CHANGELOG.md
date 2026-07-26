@@ -11,11 +11,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Anonymous tuples. Build with `(a, b)`, annotate as `(Int, String)`, take apart with destructuring assignment `(x, y) = pair` or `match` patterns.
 - Nested types can now be declared inside the owner's body, equivalent to the qualified top-level form `struct Owner.Nested`.
+- The `@deprecated "message"` annotation marks a declaration as deprecated, warning at every use site with the given migration guidance.
 - Tuples compare with `==`/`!=`, print and interpolate like any other value, and can be members of type unions.
 
 ### Changed
 
 - **Breaking change.** Standard library APIs now use anonymous tuples for list pops, datagram receives, JSON object entries, parser results, and process envelopes instead of `Pair`.
+- Compiler errors and warnings now print their `file:line:column` location with a source snippet and caret underline.
+- Diagnostics render in a pretty terminal format or a machine-friendly one-line format, selectable via `--diagnostics=pretty|short` or the `KOJA_DIAGNOSTICS` environment variable (defaulting by whether stderr is a terminal).
 
 ### Fixed
 

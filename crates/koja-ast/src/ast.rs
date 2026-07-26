@@ -6,7 +6,7 @@
 //! nodes. [`Pattern`]s appear in `match` arms, `for` loops, and destructuring
 //! assignments.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use crate::coercion::{Coercion, LiteralCoercion};
 use crate::identifier::{LocalId, Resolution, ResolvedType};
@@ -103,6 +103,10 @@ pub enum DocAttr {
 /// shape and the malformed fall-through cases.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AnnotationKind<'a> {
+    /// `@deprecated "message"`. The message is required. Bare
+    /// `@deprecated` lands in [`Self::Unknown`] and typecheck
+    /// rejects it.
+    Deprecated { message: &'a str },
     /// `@doc "text"` or `@doc false`. Bare `@doc` is excluded. It
     /// has no consumer in the codebase and lands in
     /// [`Self::Unknown`].
@@ -142,6 +146,13 @@ impl Annotation {
     /// shapes fall through to `Unknown`" contract.
     pub fn kind(&self) -> AnnotationKind<'_> {
         match self.name.as_str() {
+            "deprecated" => match &self.value {
+                Some(AnnotationValue::String(message)) => AnnotationKind::Deprecated { message },
+                _ => AnnotationKind::Unknown {
+                    name: &self.name,
+                    value: self.value.as_ref(),
+                },
+            },
             "doc" => match &self.value {
                 Some(AnnotationValue::String(text)) => {
                     AnnotationKind::Doc(DocAttr::Text(text.clone()))
@@ -219,6 +230,10 @@ pub struct Diagnostic {
     pub severity: Severity,
     pub message: String,
     pub hint: Option<String>,
+    /// Owning source file, stamped at the per-file pass seams after
+    /// construction. `None` means no file context (registry-driven
+    /// passes) and renderers omit the location for those.
+    pub path: Option<PathBuf>,
     pub span: Span,
 }
 
@@ -229,6 +244,7 @@ impl Diagnostic {
             severity: Severity::Error,
             message: message.into(),
             hint: None,
+            path: None,
             span,
         }
     }
@@ -243,6 +259,7 @@ impl Diagnostic {
             severity: Severity::Error,
             message: message.into(),
             hint: Some(hint.into()),
+            path: None,
             span,
         }
     }
@@ -253,7 +270,19 @@ impl Diagnostic {
             severity: Severity::Warning,
             message: message.into(),
             hint: None,
+            path: None,
             span,
+        }
+    }
+
+    /// Stamp `path` onto every diagnostic in `diagnostics` that has no
+    /// owning file yet. Idempotent, so outer seams never overwrite a
+    /// stamp applied closer to the emitting pass.
+    pub fn stamp_paths(diagnostics: &mut [Diagnostic], path: &Path) {
+        for diagnostic in diagnostics {
+            if diagnostic.path.is_none() {
+                diagnostic.path = Some(path.to_path_buf());
+            }
         }
     }
 }
@@ -304,7 +333,7 @@ pub struct File {
 }
 
 /// The severity level of a compiler diagnostic.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Severity {
     Error,
     Warning,

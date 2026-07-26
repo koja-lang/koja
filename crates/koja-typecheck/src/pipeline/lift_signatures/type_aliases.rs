@@ -13,11 +13,13 @@
 //! cleanly.
 
 use std::collections::HashSet;
+use std::path::PathBuf;
 
 use koja_ast::ast::{Diagnostic, Item};
 use koja_ast::identifier::{AnonymousKind, GlobalRegistryId, Identifier, Resolution, ResolvedType};
 
 use crate::pipeline::aliases::collect_file_aliases;
+use crate::pipeline::stamp_file_paths;
 use crate::program::CheckedPackage;
 use crate::registry::{GlobalKind, GlobalRegistry};
 
@@ -35,6 +37,7 @@ pub(super) fn lift_type_aliases(
 ) {
     for pkg in packages {
         for file in &pkg.files {
+            let start = diagnostics.len();
             let aliases = collect_file_aliases(file);
             let scope = LiftScope {
                 aliases: &aliases,
@@ -57,22 +60,31 @@ pub(super) fn lift_type_aliases(
                 );
                 scope.registry.set_type_alias_definition(id, resolved);
             }
+            stamp_file_paths(diagnostics, start, file);
         }
     }
     diagnose_alias_cycles(packages, registry, diagnostics);
 }
 
-/// For each alias entry, walk its expansion looking for itself.
-/// On a cycle: emit one diagnostic and rewrite the expansion to
-/// `ResolvedType::unresolved` so downstream peels return the
-/// alias's `Named` head unchanged (no infinite recursion at peel
-/// time).
+/// One registered alias's identity plus the declaration site needed
+/// to attribute a cycle diagnostic to its owning file.
+struct AliasSite {
+    id: GlobalRegistryId,
+    identifier: Identifier,
+    path: Option<PathBuf>,
+    span: koja_ast::span::Span,
+}
+
+/// For each alias entry, walk its expansion looking for itself. On a
+/// cycle, emit one diagnostic and rewrite the expansion to
+/// `ResolvedType::unresolved` so downstream peels return the alias's
+/// `Named` head unchanged (no infinite recursion at peel time).
 fn diagnose_alias_cycles(
     packages: &[CheckedPackage],
     registry: &mut GlobalRegistry,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
-    let mut alias_ids: Vec<(GlobalRegistryId, Identifier, koja_ast::span::Span)> = Vec::new();
+    let mut alias_sites: Vec<AliasSite> = Vec::new();
     for pkg in packages {
         for file in &pkg.files {
             for item in &file.items {
@@ -81,24 +93,33 @@ fn diagnose_alias_cycles(
                 };
                 let identifier = Identifier::new(&pkg.package, vec![alias.name.clone()]);
                 if let Some((id, entry)) = registry.lookup(&identifier) {
-                    alias_ids.push((id, entry.identifier.clone(), alias.span));
+                    alias_sites.push(AliasSite {
+                        id,
+                        identifier: entry.identifier.clone(),
+                        path: file.path.clone(),
+                        span: alias.span,
+                    });
                 }
             }
         }
     }
-    let mut cycling: Vec<(GlobalRegistryId, Identifier, koja_ast::span::Span)> = Vec::new();
-    for (id, identifier, span) in &alias_ids {
-        let mut seen: HashSet<GlobalRegistryId> = HashSet::new();
-        if expansion_cycles(*id, registry, &mut seen) {
-            cycling.push((*id, identifier.clone(), *span));
-        }
-    }
-    for (id, identifier, span) in cycling {
-        diagnostics.push(Diagnostic::error(
-            format!("type alias `{identifier}` references itself (cycle)"),
-            span,
-        ));
-        registry.set_type_alias_definition_force(id, ResolvedType::unresolved());
+    // Detect every cycle before rewriting any expansion, so all
+    // members of one cycle diagnose rather than just the first.
+    let cycling: Vec<AliasSite> = alias_sites
+        .into_iter()
+        .filter(|site| {
+            let mut seen: HashSet<GlobalRegistryId> = HashSet::new();
+            expansion_cycles(site.id, registry, &mut seen)
+        })
+        .collect();
+    for site in cycling {
+        let mut diagnostic = Diagnostic::error(
+            format!("type alias `{}` references itself (cycle)", site.identifier),
+            site.span,
+        );
+        diagnostic.path = site.path;
+        diagnostics.push(diagnostic);
+        registry.set_type_alias_definition_force(site.id, ResolvedType::unresolved());
     }
 }
 
