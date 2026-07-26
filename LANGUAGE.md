@@ -136,15 +136,15 @@ x /= 4
 
 ### Assignment and Value Semantics
 
-Every binding holds an independent value. Assignment copies, and the original stays usable:
+Every binding holds an independent value. Assignment copies:
 
 ```koja
 p1 = Point{x: 1, y: 2}
 p2 = p1
-p1.x    # still valid, p2 is an independent copy
+p2.x = 10    # p1.x is still 1
 ```
 
-Copies are observably independent for every type. Mutating one binding never affects another, and a value remains usable for as long as it is in scope.
+Copies are observably independent for every type. Mutating one binding never affects another. See [Value Semantics](#value-semantics).
 
 ### Constants
 
@@ -243,15 +243,15 @@ end
 
 ### Parameters
 
-Parameters are passed by value. The callee receives its own independent copy and the caller's binding stays usable afterward:
+Parameters are passed by value. The callee receives its own independent copy of each argument:
 
 ```koja
 fn describe(c: Config) -> String
-  c.name                 # operates on a private copy
+  c.name                 # operates on the callee's own copy
 end
 ```
 
-There is no parameter-passing modifier. Every parameter is a value. (Earlier releases had a `move` keyword. It has been removed, since value semantics make it meaningless.)
+There is no parameter-passing modifier. Every parameter is a value.
 
 ---
 
@@ -686,8 +686,15 @@ struct Supervisor
     RestForOne
   end
 end
+```
 
-# Equivalent qualified top-level form.
+The equivalent qualified top-level form (declare one or the other, not both):
+
+```koja
+struct Supervisor
+  strategy: Supervisor.Strategy
+end
+
 enum Supervisor.Strategy
   OneForAll
   OneForOne
@@ -737,7 +744,7 @@ Order doesn't matter. `Post | Comment` and `Comment | Post` are the same type.
 
 ### Tuples
 
-An anonymous, fixed-size grouping of values. Tuples are structural: two tuple types are the same type exactly when their element types match, position by position.
+An anonymous, fixed-size grouping of values. Tuples are structural. Two tuple types are the same type exactly when their element types match, position by position.
 
 ```koja
 point = (3, 9)
@@ -775,7 +782,7 @@ Tuples work as function returns, generic type arguments, struct fields, and unio
 
 ```koja
 fn lookup(key: String) -> (Int, String) | NotFound
-  ...
+  # ...
 end
 
 match lookup("a")
@@ -927,7 +934,7 @@ Variable bindings inside OR patterns are disallowed.
 
 `match` is value-producing when all arms produce values.
 
-`match` reads the matched value without consuming it. The original variable remains live inside all arms and after the `match` expression.
+Matching only reads the subject. The matched variable can be used inside arms and after the `match` expression like any other binding.
 
 ### `cond`
 
@@ -992,14 +999,15 @@ Both positional and named arguments accept the short form, including arguments t
 
 ### Capture Semantics
 
-Closures capture variables from their enclosing scope by value. Each captured variable is copied into the closure's environment, and the original stays usable:
+Closures capture variables from their enclosing scope by value. Each captured variable is copied into the closure's environment when the closure is created, so later rebinding does not affect the closure's copy:
 
 ```koja
 multiplier = 3
-triple = fn (x: Int32) -> Int32
-  x * multiplier    # multiplier is copied into the closure
+triple = fn (x: Int) -> Int
+  x * multiplier    # captures a copy of multiplier
 end
-multiplier.print()  # still live
+multiplier = 10     # does not affect triple
+triple(5).print()   # 15
 ```
 
 Captured closures use heap-allocated environment structs.
@@ -1020,12 +1028,12 @@ apply(5, fn (n: Int32) -> Int32 n * 2 end).print()
 
 ## Value Semantics
 
-Koja uses value semantics. Every binding, parameter, return, and field is an independent value, with memory managed automatically by the runtime.
+Koja uses value semantics. Every binding, parameter, return, and field is an independent value, with memory managed automatically by the runtime. There are no moves, borrows, or lifetimes. Using a value never invalidates it.
 
 ### Rules
 
-1. Assignment copies. The source remains usable.
-2. Function and closure parameters are passed by value. The caller's binding survives the call.
+1. Assignment copies.
+2. Function and closure parameters are passed by value.
 3. There is no aliasing. Mutating one binding never affects another.
 4. A value is usable for as long as it is in scope.
 
@@ -1033,16 +1041,16 @@ Koja uses value semantics. Every binding, parameter, return, and field is an ind
 
 ### Copy Cost
 
-All types copy on assignment. Numeric primitives, `Bool`, `()`, and function pointers copy bit-for-bit. `String`, `Binary`, `Bits`, `List`, `Map`, `Set`, structs, and enums are heap-backed, but the copy is cheap: the underlying memory is shared, so assigning or passing a value copies nothing. Mutation works on a fresh copy, so no binding ever observes another's changes. (Today mutation always makes that copy. A future compiler may skip it when nothing else shares the value, with no change in behavior.) The result is always an independent value:
+All types copy on assignment. Numeric primitives, `Bool`, `()`, and function pointers copy bit-for-bit. `String`, `Binary`, `Bits`, `List`, `Map`, `Set`, structs, and enums are heap-backed, but the copy is cheap. The underlying memory is shared, so assigning or passing a value copies nothing. Mutation works on a fresh copy, so no binding ever observes another's changes. (Today mutation always makes that copy. A future compiler may skip it when nothing else shares the value, with no change in behavior.) The result is always an independent value:
 
 ```koja
 a = 42
-b = a     # a is still live
+b = a     # b is an independent copy
 ```
 
 ### Field Access
 
-Field access reads a value out of the struct without disturbing the owner. You can read fields freely:
+Field access reads the field's value, which is itself an independent value:
 
 ```koja
 struct Wrapper
@@ -1051,15 +1059,14 @@ struct Wrapper
 end
 
 w = Wrapper{name: "hello", count: 1}
-w.name.print()    # w is still live
-w.count.print()
 w.name.print()
+w.count.print()
 ```
 
 This extends to chained access and method calls:
 
 ```koja
-w.name.length()   # reads name, calls length. w is still live
+w.name.length()   # reads name, then calls length on it
 ```
 
 To mutate a field, use reassignment. The right-hand side transforms the current field value and the result is written back:
@@ -1116,7 +1123,7 @@ end
 Bounds are verified at call sites. If a concrete type doesn't implement a required protocol, the compiler emits an error:
 
 ```
-type `Cat` does not implement protocol `Description` (required by type parameter `T` in `describe_and_greet`)
+type `Cat` does not implement protocol `Description` (required by type parameter `T` in `myapp.describe_and_greet`)
 ```
 
 Inside the function body, protocol methods can be called directly on bounded type parameters. The compiler resolves the method through the protocol's signature.
@@ -1131,7 +1138,7 @@ Protocol dispatch is static via monomorphization. No vtables, no dynamic dispatc
 
 ## Packages
 
-A package is the unit of code organization, defined by a `koja.toml` manifest. Files within a package are transparent: they share one namespace, and every top-level declaration (type, function, constant) is visible from every other file in the package. Files carry no namespace of their own, and there are no imports:
+A package is the unit of code organization, defined by a `koja.toml` manifest. Files within a package are transparent. They share one namespace, and every top-level declaration (type, function, constant) is visible from every other file in the package. Files carry no namespace of their own, and there are no imports:
 
 ```koja
 # src/helper.koja
@@ -1140,6 +1147,9 @@ fn add(a: Int, b: Int) -> Int
 end
 
 # src/app.koja
+alias Process.Step
+alias Process.StopReason
+
 struct App
 end
 
@@ -1215,7 +1225,7 @@ Vendored = { git = "https://git.example.com/vendored.git", branch = "main" }
 Greeter = { path = "libs/greeter" }
 ```
 
-Each dependency declares exactly one of `path`, `git`, or `github` (an `owner/repo` shorthand for `https://github.com/owner/repo`). Git dependencies accept at most one of `tag`, `branch`, or `rev`. With none, the remote's default branch is used. There is no version solver: a ref resolves to a commit, and one version of a package name exists per build.
+Each dependency declares exactly one of `path`, `git`, or `github` (an `owner/repo` shorthand for `https://github.com/owner/repo`). Git dependencies accept at most one of `tag`, `branch`, or `rev`. With none, the remote's default branch is used. There is no version solver. A ref resolves to a commit, and one version of a package name exists per build.
 
 `koja deps get` is the only command that touches the network. It resolves each ref to a commit SHA, records the pin in `koja.lock` (committed, so builds are reproducible), caches a mirror clone under `~/.koja/cache`, and copies the pinned tree into the project's `deps/` directory (gitignored and read-only, always regenerable). Dependencies of dependencies resolve transitively, and the root project's lockfile is the only one consulted.
 
@@ -1243,8 +1253,8 @@ values behave as zero.
 The simplest way to run concurrent work. Wraps a closure, runs it in a spawned process, and returns the result:
 
 ```koja
-ref = Task.async(fn -> expensive_computation() end)
-result = Task.await(ref)  # Result<R, CallError>, times out after 5000ms
+ref = Task.async(fn () -> Int expensive_computation() end)
+result = Task.await(ref)  # Result<Int, Process.CallError>, times out after 5000ms
 ```
 
 `Task.async(fn)` spawns the closure and returns a `Ref<(), R>`. `Task.await(ref)` sends a unit message and waits for the reply.
@@ -1255,12 +1265,14 @@ For stateful, long-lived processes, implement the `Process` protocol. `C` is the
 
 ```koja
 protocol Process<C, M, R>
-  fn start(config: C) -> Result<Self, StopReason>
-  fn handle(self, msg: M, from: Option<ReplyTo<R>>) -> Step<Self>
-  fn handle_signal(self, event: Lifecycle) -> Step<Self>
-  fn run(self) -> StopReason
+  fn start(config: C) -> Result<Self, Process.StopReason>
+  fn handle(self, msg: M, from: Option<ReplyTo<R>>) -> Process.Step<Self>
+  fn handle_signal(self, event: Process.Lifecycle) -> Process.Step<Self>
+  fn run(self) -> Process.StopReason
 end
 ```
+
+The helper types are nested under `Process` (`Process.Step`, `Process.StopReason`, `Process.Lifecycle`, `Process.CallError`). Idiomatic code shortens them with file-local aliases (`alias Process.Step`), which the examples below assume.
 
 `start` builds the initial state from config in the child process context, before the receive loop begins. Return `Result.Ok(self)` to begin running, or `Result.Err(reason)` to abort startup.
 
@@ -1293,6 +1305,9 @@ end
 A complete process example:
 
 ```koja
+alias Process.Step
+alias Process.StopReason
+
 enum CounterMsg
   Increment
   Decrement
@@ -1325,40 +1340,35 @@ count = ref.call(CounterMsg.Increment, 5000)
 
 ### Lifecycle and StopReason
 
-`Lifecycle` abstracts OS signals into a platform-agnostic enum:
+`Process.Lifecycle` abstracts OS signals into a platform-agnostic enum:
 
 ```koja
-enum Lifecycle
+enum Process.Lifecycle
   Shutdown    # SIGTERM
   Interrupt   # SIGINT
   Reload      # SIGHUP
 end
 ```
 
-`StopReason` represents intentional process termination:
+`Process.StopReason` represents intentional process termination:
 
 ```koja
-enum StopReason
+enum Process.StopReason
   Normal      # process finished its work
   Shutdown    # process was told to stop
 end
 ```
 
-The `ExitStatus` protocol maps a `StopReason` to an OS exit code (only relevant for the entry process):
+The runtime maps the entry process's final `StopReason` to the OS exit code: `Normal` exits 0, `Shutdown` exits 1.
+
+`Process.ExitReason` is what a monitoring process sees when a watched process stops:
 
 ```koja
-protocol ExitStatus
-  fn code(self) -> Int
-end
-```
-
-`ExitReason` is what a supervisor sees when a child stops:
-
-```koja
-enum ExitReason
+enum Process.ExitReason
   Normal
   Shutdown
-  Crashed(String)
+  Killed
+  Crashed(Process.CrashInfo)   # CrashInfo carries the panic message and backtrace
 end
 ```
 
@@ -1375,8 +1385,8 @@ end
 Operations on a process handle:
 
 - `cast(msg: M)`: fire-and-forget. The handler receives `from = Option.None`.
-- `call(msg: M, timeout: Int) -> Result<R, CallError>`: sends a message and blocks up to `timeout` milliseconds for a reply. Returns `Result.Ok(reply)` on success, `Result.Err(CallError.Timeout)` if the process didn't reply in time, or `Result.Err(CallError.ProcessDown)` if the process is dead.
-- `signal(event: Lifecycle)`: sends a lifecycle signal to the process (e.g. `Lifecycle.Shutdown`). Delivered to `handle_signal`.
+- `call(msg: M, timeout: Int) -> Result<R, Process.CallError>`: sends a message and blocks up to `timeout` milliseconds for a reply. Returns `Result.Ok(reply)` on success, `Result.Err(CallError.Timeout)` if the process didn't reply in time, or `Result.Err(CallError.ProcessDown)` if the process is dead.
+- `signal(event: Process.Lifecycle)`: sends a lifecycle signal to the process (e.g. `Lifecycle.Shutdown`). Delivered to `handle_signal`.
 - `kill()`: immediately terminates the process. No signal is sent.
 - `alive?() -> Bool`: returns `true` if the process is still running.
 - `send_after(msg: M, delay_ms: Int)`: schedules `msg` for delivery after `delay_ms` milliseconds. The message is copied immediately. Delivery happens asynchronously when the timer fires. Useful for periodic ticks and timeouts inside a process loop.
@@ -1391,7 +1401,7 @@ me.send_after(TickMsg.Tick, 1000)
 ```koja
 ref.cast(CounterMsg.Increment)
 result = ref.call(CounterMsg.Increment, 5000)
-ref.signal(Lifecycle.Shutdown)
+ref.signal(Process.Lifecycle.Shutdown)
 ```
 
 ### `ReplyTo<R>` and `reply`
@@ -1405,13 +1415,13 @@ struct ReplyTo<R>
 end
 ```
 
-- `send(reply: R)`: sends the reply back to the caller.
+- `send(reply: R) -> ReplyTo.Delivery`: sends the reply back to the caller. Returns `Delivered`, or `Expired` if the caller already gave up on its `call`. The result is advisory and most handlers ignore it.
 
 `ReplyTo.reply(from, value)` is a convenience on `ReplyTo<R>` that handles the common pattern of replying only when a caller is present (skips silently for `cast` messages):
 
 ```koja
 extend ReplyTo<R>
-  fn reply(from: Option<ReplyTo<R>>, value: R)
+  fn reply(from: Option<ReplyTo<R>>, value: R) -> Option<ReplyTo.Delivery>
 end
 ```
 
@@ -1433,7 +1443,7 @@ receive
 end
 ```
 
-An optional `after` clause bounds the wait: if no message arrives within the timeout (in milliseconds), the `after` body runs instead. The timeout is any `Int` expression:
+An optional `after` clause bounds the wait. If no message arrives within the timeout (in milliseconds), the `after` body runs instead. The timeout is any `Int` expression:
 
 ```koja
 receive
@@ -2020,9 +2030,9 @@ protocol Debug
 end
 ```
 
-`format` returns a round-trippable string representation of the value. `print` writes that string to stdout (via `IO.puts`). The receiver stays live and the call returns `()`. `inspect` is the chainable variant. It prints and returns `self`, useful for tap-style debugging in the middle of an expression. The compiler auto-derives `Debug` for all types: primitives via intrinsics, enums as `VariantName` or `VariantName(payload)`, structs as `TypeName{field: value, ...}`. Generic types derive the same full field-by-field body as concrete ones. Fields whose type has no meaningful rendering (`CPtr<T>`, function values) render as a literal `"..."` placeholder. Implementing `format` is enough to get `print` and `inspect` for free. Custom implementations can override the derived one via `impl Debug for MyType`.
+`format` returns a round-trippable string representation of the value. `print` writes that string to stdout (via `IO.puts`) and returns `()`. `inspect` is the chainable variant. It prints and returns `self`, useful for tap-style debugging in the middle of an expression. The compiler auto-derives `Debug` for all types: primitives via intrinsics, enums as `VariantName` or `VariantName(payload)`, structs as `TypeName{field: value, ...}`. Generic types derive the same full field-by-field body as concrete ones. Fields whose type has no meaningful rendering (`CPtr<T>`, function values) render as a literal `"..."` placeholder. Implementing `format` is enough to get `print` and `inspect` for free. Custom implementations can override the derived one via `impl Debug for MyType`.
 
-`Debug.format` for `String` is round-trippable: it wraps the contents in double quotes and escapes `\`, `"`, `\n`, `\r`, `\t`. That means `.print()` shows top-level strings quoted, and aggregates render their `String` fields quoted too:
+`Debug.format` for `String` is round-trippable. It wraps the contents in double quotes and escapes `\`, `"`, `\n`, `\r`, `\t`. That means `.print()` shows top-level strings quoted, and aggregates render their `String` fields quoted too:
 
 ```koja
 p = Point{x: 1, y: 2}
@@ -2089,7 +2099,7 @@ result.print()
 
 Extern functions have no body. Parameter and return types must be FFI-compatible: explicit-width primitives (`Int32`, `UInt8`, `Float32`, etc.), `Bool`, `CPtr<T>`, or `()`. Extern functions can coexist with normal Koja functions in the same struct. Use `priv fn` on the extern declarations and expose safe public wrappers.
 
-A `Float32` / `Float64` value returned by an extern call is checked at the call site: a NaN or infinity handed back by C panics with an `ArithmeticError` (`non-finite float returned by <name>`), keeping the finite-only float invariant intact across the FFI boundary (see [Arithmetic Faults](#arithmetic-faults)).
+A `Float32` / `Float64` value returned by an extern call is checked at the call site. A NaN or infinity handed back by C panics with an `ArithmeticError` (`non-finite float returned by <name>`), keeping the finite-only float invariant intact across the FFI boundary (see [Arithmetic Faults](#arithmetic-faults)).
 
 Declare C return types at their true width and let [numeric widening](#numeric-widening) do the rest. A C `int` bound as `Int32` flows directly into `Int` contexts with correct sign extension, so negative error codes survive the trip. Reading a C `int` as `Int` would zero-extend the upper 32 bits and corrupt negative values.
 
@@ -2145,7 +2155,7 @@ Type annotations on the variable drive generic inference for static methods like
 - `CPtr.copy(bytes: Binary) -> CPtr<UInt8>`: malloc'd owned copy of the bytes. Nameable like any value. The caller frees it. Use this when a C API retains the pointer past the call.
 
 ```koja
-digest = CPtr.alloc(32)
+digest: CPtr<UInt8> = CPtr.alloc(32)
 FFI.blake3_hash(CPtr.borrow(data), data.byte_size(), digest)  # fine
 
 p = CPtr.borrow(data)  # compile error: a borrowed pointer cannot be bound
