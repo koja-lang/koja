@@ -39,10 +39,10 @@ last major product types planned before ecosystem validation.
 - **[DONE]** Lexical nested type declarations with formatter, LSP, and editor
   grammar support
 - Anonymous tuple support in the VSCode, Vim, and tree-sitter integrations
-- A CLI task protocol modeled on `Mix.Tasks`
+- **[DONE]** A CLI task protocol modeled on `Mix.Tasks` (`Koja.Task` + `[tasks]` manifest exports)
 - Anonymous records
 - **[DONE]** An `@deprecated` compile annotation
-- Deprecation of `Pair<A, B>` with guidance to use anonymous tuples
+- **[DONE]** Deprecation of `Pair<A, B>` with guidance to use anonymous tuples
 
 ### Correctness and production gates
 
@@ -50,6 +50,9 @@ last major product types planned before ecosystem validation.
   remain consistent across both backends.
 - Reject reads of locals that are not definitely assigned on every path.
 - Reject tuple equality when any element lacks valid equality semantics.
+- Make the formatter round-trip multiline string literals byte-exactly.
+  Heredoc-style content must survive formatting without dedent or lexing
+  corruption.
 - Make public constants referenceable across package boundaries, or explicitly
   narrow the language contract before release.
 - Attribute LSP diagnostics to their originating file in multi-file projects.

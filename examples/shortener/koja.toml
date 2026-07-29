@@ -4,9 +4,9 @@ bin = "shortener"
 description = "A URL shortener service backed by PostgreSQL"
 entry = "App"
 license = "MIT"
-name = "Shortener"
+name = "shortener"
 version = "0.1.0"
 
 [dependencies]
-Pooler = { path = "../pooler" }
-Postgres = { github = "hpopp/postgres-koja", tag = "v0.1.0" }
+pooler = { path = "../pooler" }
+postgres = { github = "hpopp/postgres-koja", tag = "v0.1.0" }

@@ -23,4 +23,5 @@ pass_through_externs! {
     get_env => fn koja_get_env(key: CPtr) -> CPtr;
     hostname => fn koja_hostname() -> CPtr;
     set_env => fn koja_set_env(key: CPtr, val: CPtr) -> ();
+    toolchain_version => fn koja_toolchain_version() -> CPtr;
 }

@@ -1,4 +1,4 @@
 [project]
-name = "CrossRef"
+name = "cross_ref"
 version = "0.1.0"
 entry = "App"

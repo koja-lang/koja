@@ -8,7 +8,8 @@ use std::path::Path;
 
 use serde::Deserialize;
 
-/// Top-level TOML structure: `[project]` + optional `[dependencies]`.
+/// Top-level TOML structure: `[project]` + optional `[dependencies]`
+/// and `[tasks]`.
 #[derive(Deserialize)]
 struct KojaToml {
     /// The project dependencies.
@@ -16,6 +17,9 @@ struct KojaToml {
     dependencies: HashMap<String, DepConfig>,
     /// The project configuration.
     project: ProjectConfig,
+    /// Exported tasks, task name -> implementing type.
+    #[serde(default)]
+    tasks: HashMap<String, String>,
 }
 
 /// A single dependency declaration from `[dependencies]`.
@@ -145,9 +149,14 @@ fn warn_embedded_credentials(alias: &str, url: &str) {
 pub struct ProjectConfig {
     #[serde(default)]
     pub authors: Vec<String>,
-    /// Output binary name. Falls back to the lowercased package name.
+    /// Output binary name. Falls back to the package name.
     #[serde(default)]
     pub bin: Option<String>,
+    /// Explicit PascalCase code namespace, for packages whose namespace
+    /// can't be derived from `name` (acronyms: `name = "json"` +
+    /// `namespace = "JSON"`). See [`ProjectConfig::namespace`].
+    #[serde(default, rename = "namespace")]
+    pub declared_namespace: Option<String>,
     #[serde(default)]
     pub dependencies: HashMap<String, DepConfig>,
     #[serde(default)]
@@ -161,10 +170,16 @@ pub struct ProjectConfig {
     /// SPDX expression, e.g. "MIT OR Apache-2.0"
     #[serde(default)]
     pub license: Option<String>,
-    /// The project name that identifies the package. Should be PascalCase.
+    /// The lowercase snake_case package identity, used for dependency
+    /// keys, `deps/` directories, and task name prefixes.
     pub name: String,
     #[serde(default = "default_src")]
     pub src: Vec<String>,
+    /// Exported tasks from the top-level `[tasks]` table. Each maps a
+    /// task name (prefixed with this package's `name`, e.g.
+    /// `"postgres.migrate"`) to the type implementing `Koja.Task`.
+    #[serde(default, skip_deserializing)]
+    pub tasks: HashMap<String, String>,
     #[serde(default = "default_test")]
     pub test: Vec<String>,
     /// The project version. Should be a semantic version string.
@@ -181,10 +196,20 @@ fn default_test() -> Vec<String> {
 
 impl ProjectConfig {
     /// Output binary name: the explicit `bin` field when set, otherwise
-    /// the package name lowercased (the PascalCase namespace `Gh` yields
-    /// a `gh` binary).
+    /// the (already lowercase) package name.
     pub fn binary_name(&self) -> String {
-        self.bin.clone().unwrap_or_else(|| self.name.to_lowercase())
+        self.bin.clone().unwrap_or_else(|| self.name.clone())
+    }
+
+    /// The PascalCase code namespace, taken from the declared `namespace`
+    /// field when set and otherwise derived from `name` (`my_app` -> `MyApp`).
+    /// This is the string stamped on every source file and used for
+    /// qualified access (`Postgres.Connection`), while `name` stays
+    /// the lowercase identity.
+    pub fn namespace(&self) -> String {
+        self.declared_namespace
+            .clone()
+            .unwrap_or_else(|| koja_parser::derive_namespace(&self.name))
     }
 
     /// Returns the entry value as a Process type name when it starts with an
@@ -215,13 +240,107 @@ pub fn load_project(dir: &Path) -> Result<Option<ProjectConfig>, String> {
 
     let mut config = parsed.project;
     config.dependencies = parsed.dependencies;
+    config.tasks = parsed.tasks;
     for (alias, dep) in &config.dependencies {
         dep.source(alias)?;
     }
 
+    check_package_identity(&config)?;
+    check_tasks(&config)?;
     let current = parse_version(env!("CARGO_PKG_VERSION")).expect("crate version is X.Y.Z");
     check_koja_version(&config, current)?;
     Ok(Some(config))
+}
+
+/// Validate the `[tasks]` table. Every task name is namespaced under
+/// this package's `name` (`postgres.migrate` from package `postgres`),
+/// which makes task collisions across the dependency graph structurally
+/// impossible. Values name the PascalCase type implementing `Koja.Task`.
+fn check_tasks(config: &ProjectConfig) -> Result<(), String> {
+    let name = &config.name;
+    for (task, task_type) in &config.tasks {
+        let rest = task.strip_prefix(name).and_then(|r| r.strip_prefix('.'));
+        let valid_rest = rest.is_some_and(|r| {
+            !r.is_empty()
+                && r.split('.').all(|segment| {
+                    segment.starts_with(|c: char| c.is_ascii_lowercase())
+                        && segment
+                            .chars()
+                            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_')
+                })
+        });
+        if !valid_rest {
+            return Err(format!(
+                "task `{task}` must be named `{name}.<task>` (lowercase snake_case segments), \
+                 e.g. `{name}.migrate`"
+            ));
+        }
+        if !task_type.starts_with(|c: char| c.is_ascii_uppercase()) {
+            return Err(format!(
+                "task `{task}` must name a PascalCase type implementing `Koja.Task`, got `{task_type}`"
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// Validate the `name` / `namespace` split. `name` is the lowercase
+/// snake_case identity, `namespace` (when declared) the PascalCase
+/// code-facing name. Rejections hint at the snake_case rewrite and, when
+/// derivation wouldn't round-trip, the `namespace` override to keep.
+fn check_package_identity(config: &ProjectConfig) -> Result<(), String> {
+    let name = &config.name;
+    let valid_name = name.starts_with(|c: char| c.is_ascii_lowercase())
+        && name
+            .chars()
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_');
+    if !valid_name {
+        let suggested = suggest_snake_case(name);
+        let mut message =
+            format!("package name `{name}` must be lowercase snake_case (like `{suggested}`)");
+        if koja_parser::derive_namespace(&suggested) != *name {
+            message.push_str(&format!(
+                ". Keep `{name}` as the code namespace with `namespace = \"{name}\"`"
+            ));
+        }
+        return Err(message);
+    }
+
+    if let Some(namespace) = &config.declared_namespace {
+        let valid_namespace = namespace.starts_with(|c: char| c.is_ascii_uppercase())
+            && namespace.chars().all(|c| c.is_ascii_alphanumeric());
+        if !valid_namespace {
+            return Err(format!(
+                "package `{name}`: namespace `{namespace}` must be PascalCase (like `{}`)",
+                koja_parser::derive_namespace(name)
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// Best-effort snake_case rewrite of an invalid package name, for the
+/// error hint. Case boundaries become underscores and consecutive
+/// capitals collapse (`CrossRef` -> `cross_ref`, `JSON` -> `json`).
+fn suggest_snake_case(name: &str) -> String {
+    let mut out = String::new();
+    let mut prev_lower = false;
+    for c in name.chars() {
+        if c.is_ascii_uppercase() {
+            if prev_lower {
+                out.push('_');
+            }
+            out.push(c.to_ascii_lowercase());
+            prev_lower = false;
+        } else if c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_' {
+            out.push(c);
+            prev_lower = c.is_ascii_lowercase() || c.is_ascii_digit();
+        }
+    }
+    if out.is_empty() || !out.starts_with(|c: char| c.is_ascii_lowercase()) {
+        return format!("my_{out}");
+    }
+    out
 }
 
 /// Parse a bare `X.Y` or `X.Y.Z` version into a comparable triple.
@@ -272,7 +391,9 @@ mod tests {
 
     fn parse(source: &str) -> ProjectConfig {
         let parsed: KojaToml = toml::from_str(source).expect("valid koja.toml");
-        parsed.project
+        let mut config = parsed.project;
+        config.tasks = parsed.tasks;
+        config
     }
 
     #[test]
@@ -280,7 +401,7 @@ mod tests {
         let config = parse(
             r#"
             [project]
-            name = "Gh"
+            name = "gh"
             version = "0.1.0"
             bin = "gh-cli"
             "#,
@@ -289,15 +410,125 @@ mod tests {
     }
 
     #[test]
-    fn binary_name_defaults_to_lowercased_package_name() {
+    fn binary_name_defaults_to_package_name() {
         let config = parse(
             r#"
             [project]
-            name = "Gh"
+            name = "gh"
             version = "0.1.0"
             "#,
         );
         assert_eq!(config.binary_name(), "gh");
+    }
+
+    #[test]
+    fn namespace_derives_from_snake_case_name() {
+        let config = parse(
+            r#"
+            [project]
+            name = "my_app"
+            version = "0.1.0"
+            "#,
+        );
+        assert_eq!(config.namespace(), "MyApp");
+    }
+
+    #[test]
+    fn namespace_honors_explicit_declaration() {
+        let config = parse(
+            r#"
+            [project]
+            name = "json"
+            namespace = "JSON"
+            version = "0.1.0"
+            "#,
+        );
+        assert_eq!(config.namespace(), "JSON");
+    }
+
+    #[test]
+    fn identity_rejects_pascal_case_name_with_snake_hint() {
+        let config = parse(
+            r#"
+            [project]
+            name = "CrossRef"
+            version = "0.1.0"
+            "#,
+        );
+        let err = check_package_identity(&config).unwrap_err();
+        assert!(err.contains("`cross_ref`"), "got: {err}");
+    }
+
+    #[test]
+    fn identity_hints_namespace_override_when_derivation_lossy() {
+        let config = parse(
+            r#"
+            [project]
+            name = "JSON"
+            version = "0.1.0"
+            "#,
+        );
+        let err = check_package_identity(&config).unwrap_err();
+        assert!(err.contains("namespace = \"JSON\""), "got: {err}");
+    }
+
+    #[test]
+    fn identity_rejects_invalid_namespace() {
+        let config = parse(
+            r#"
+            [project]
+            name = "my_app"
+            namespace = "my_app"
+            version = "0.1.0"
+            "#,
+        );
+        let err = check_package_identity(&config).unwrap_err();
+        assert!(err.contains("PascalCase"), "got: {err}");
+    }
+
+    #[test]
+    fn identity_accepts_snake_case_names() {
+        for name in ["gh", "my_app", "http2", "a_b_c"] {
+            let config = parse(&format!(
+                "[project]\nname = \"{name}\"\nversion = \"0.1.0\"\n"
+            ));
+            assert_eq!(check_package_identity(&config), Ok(()), "name: {name}");
+        }
+    }
+
+    fn parse_with_task(task: &str, task_type: &str) -> ProjectConfig {
+        parse(&format!(
+            "[project]\nname = \"postgres\"\nversion = \"0.1.0\"\n\n[tasks]\n\"{task}\" = \"{task_type}\"\n"
+        ))
+    }
+
+    #[test]
+    fn tasks_accept_package_prefixed_names() {
+        for task in ["postgres.migrate", "postgres.db.migrate", "postgres.gen_2"] {
+            let config = parse_with_task(task, "Migrate");
+            assert_eq!(check_tasks(&config), Ok(()), "task: {task}");
+        }
+    }
+
+    #[test]
+    fn tasks_reject_unprefixed_or_malformed_names() {
+        for task in [
+            "migrate",
+            "db.migrate",
+            "postgres",
+            "postgres.",
+            "postgres.Migrate",
+            "postgresql.migrate",
+        ] {
+            let err = check_tasks(&parse_with_task(task, "Migrate")).unwrap_err();
+            assert!(err.contains("`postgres.<task>`"), "task {task}: {err}");
+        }
+    }
+
+    #[test]
+    fn tasks_reject_lowercase_type_values() {
+        let err = check_tasks(&parse_with_task("postgres.migrate", "migrate")).unwrap_err();
+        assert!(err.contains("PascalCase type"), "got: {err}");
     }
 
     fn dep(source: &str) -> Result<DepSource, String> {
@@ -365,7 +596,7 @@ mod tests {
 
     fn check(required: &str, current: (u64, u64, u64)) -> Result<(), String> {
         let config = parse(&format!(
-            "[project]\nname = \"Pkg\"\nversion = \"0.1.0\"\nkoja = \"{required}\"\n"
+            "[project]\nname = \"pkg\"\nversion = \"0.1.0\"\nkoja = \"{required}\"\n"
         ));
         check_koja_version(&config, current)
     }
@@ -383,7 +614,7 @@ mod tests {
         let err = check("0.15.0", (0, 14, 1)).unwrap_err();
         assert_eq!(
             err,
-            "package `Pkg` requires koja >= 0.15.0, but this is koja 0.14.1"
+            "package `pkg` requires koja >= 0.15.0, but this is koja 0.14.1"
         );
     }
 

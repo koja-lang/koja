@@ -51,6 +51,14 @@ pub unsafe extern "C" fn koja_get_env(key_ptr: *const u8) -> *const u8 {
     }
 }
 
+/// Returns the toolchain version (the workspace crate version), so
+/// Koja-implemented toolchain tasks like `koja.new` can stamp scaffolds
+/// with the compiler version that generated them.
+#[unsafe(no_mangle)]
+pub extern "C" fn koja_toolchain_version() -> *const u8 {
+    into_raw_cstring(env!("CARGO_PKG_VERSION"))
+}
+
 /// Returns the system hostname.
 #[unsafe(no_mangle)]
 pub extern "C" fn koja_hostname() -> *const u8 {

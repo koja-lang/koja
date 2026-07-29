@@ -10,10 +10,11 @@ fn main() {
     println!("cargo:rerun-if-changed={}", lib_dir.display());
 
     // Discover all projects under lib/. Each subdirectory with an
-    // koja.toml is a stdlib project. Its package name comes from
-    // the `name = "..."` field in koja.toml (Elixir-style: directory
-    // is snake_case, package is PascalCase, the auto-imported
-    // package is `Global`).
+    // koja.toml is a stdlib project. Its code namespace comes from
+    // the manifest's `namespace = "..."` override when present,
+    // otherwise it is derived from the lowercase `name = "..."`
+    // (`global` -> `Global`, while `http` declares `HTTP`). The
+    // auto-imported package is `Global`.
     let mut global_entries: Vec<(String, String)> = Vec::new();
     let mut qualified: BTreeMap<String, Vec<(String, String)>> = BTreeMap::new();
 
@@ -40,7 +41,7 @@ fn main() {
         }
 
         println!("cargo:rerun-if-changed={}", toml_path.display());
-        let package_name = read_package_name(&toml_path).unwrap_or_else(|| {
+        let package_name = read_package_namespace(&toml_path).unwrap_or_else(|| {
             panic!(
                 "missing or unparsable `name = \"...\"` in {}",
                 toml_path.display()
@@ -135,7 +136,7 @@ fn main() {
     // `lift_signatures` / `resolve` see its types when validating a
     // user's `alias` decl. Retires once `IRPackage` caching +
     // on-demand package loads land.
-    let qualified_packages: &[&str] = &["Crypto", "HTTP", "JSON", "Net"];
+    let qualified_packages: &[&str] = &["Crypto", "HTTP", "JSON", "Koja", "Net"];
     code.push_str("\n/// Stdlib sources for qualified packages user\n");
     code.push_str("/// programs can `alias` into scope. Loaded eagerly\n");
     code.push_str("/// alongside `AUTOIMPORT` as a pragmatic stand-in for\n");
@@ -148,6 +149,18 @@ fn main() {
         for (module_name, const_name) in entries {
             code.push_str(&format!("    (\"{module_name}\", {const_name}),\n"));
         }
+    }
+    code.push_str("];\n");
+
+    // Toolchain tasks exported by the `koja` package's manifest, so
+    // `lib/koja/koja.toml` stays the single source of truth for what
+    // the driver offers as built-in tasks (`koja new` == `koja.new`).
+    let koja_toml = fs::read_to_string(lib_dir.join("koja/koja.toml")).unwrap();
+    code.push_str("\n/// Tasks exported by the toolchain's `Koja` package,\n");
+    code.push_str("/// parsed from the `[tasks]` table in lib/koja/koja.toml.\n");
+    code.push_str("pub const TOOLCHAIN_TASKS: &[(&str, &str)] = &[\n");
+    for (task_name, type_name) in read_tasks(&koja_toml) {
+        code.push_str(&format!("    (\"{task_name}\", \"{type_name}\"),\n"));
     }
     code.push_str("];\n");
 
@@ -180,14 +193,22 @@ fn collect_koja_files(dir: &Path, out: &mut Vec<PathBuf>) {
     }
 }
 
-/// Extracts the `name = "..."` value from a project-style koja.toml. Tolerant
-/// of arbitrary whitespace and key ordering, but expects the value to be a
-/// double-quoted string on a single line, which matches every shipped
-/// koja.toml in this workspace.
-fn read_package_name(toml_path: &Path) -> Option<String> {
+/// Extracts a package's code namespace from a project-style koja.toml,
+/// preferring an explicit `namespace = "..."` over the form derived
+/// from `name = "..."`. Tolerant of arbitrary whitespace and key
+/// ordering, but expects double-quoted single-line values, which
+/// matches every shipped koja.toml in this workspace.
+fn read_package_namespace(toml_path: &Path) -> Option<String> {
     let content = fs::read_to_string(toml_path).ok()?;
+    if let Some(namespace) = read_string_key(&content, "namespace") {
+        return Some(namespace);
+    }
+    read_string_key(&content, "name").map(|name| derive_namespace(&name))
+}
+
+fn read_string_key(content: &str, key: &str) -> Option<String> {
     for line in content.lines() {
-        let Some(rest) = line.trim().strip_prefix("name") else {
+        let Some(rest) = line.trim().strip_prefix(key) else {
             continue;
         };
         let rest = rest.trim_start();
@@ -202,4 +223,45 @@ fn read_package_name(toml_path: &Path) -> Option<String> {
         return Some(rest[..end].to_string());
     }
     None
+}
+
+/// Parses the `[tasks]` table: `"task.name" = "TypeName"` entries
+/// between the `[tasks]` header and the next section header.
+fn read_tasks(content: &str) -> Vec<(String, String)> {
+    let mut tasks = Vec::new();
+    let mut in_tasks = false;
+    for line in content.lines() {
+        let line = line.trim();
+        if line.starts_with('[') {
+            in_tasks = line == "[tasks]";
+            continue;
+        }
+        if !in_tasks {
+            continue;
+        }
+        let Some((key, value)) = line.split_once('=') else {
+            continue;
+        };
+        let key = key.trim().trim_matches('"');
+        let value = value.trim().trim_matches('"');
+        if !key.is_empty() && !value.is_empty() {
+            tasks.push((key.to_string(), value.to_string()));
+        }
+    }
+    tasks
+}
+
+/// Snake-to-Pascal namespace derivation. Build scripts can't use
+/// workspace crates, so this mirrors `koja_parser::derive_namespace`.
+fn derive_namespace(name: &str) -> String {
+    name.split('_')
+        .filter(|segment| !segment.is_empty())
+        .map(|segment| {
+            let mut chars = segment.chars();
+            match chars.next() {
+                Some(first) => first.to_ascii_uppercase().to_string() + chars.as_str(),
+                None => String::new(),
+            }
+        })
+        .collect()
 }

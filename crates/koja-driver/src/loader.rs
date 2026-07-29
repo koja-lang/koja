@@ -107,17 +107,18 @@ impl<'a> ProjectLoader<'a> {
     /// `Lenient` always returns `Ok`, warning past anything broken.
     pub fn sources(&self, opts: LoadOptions) -> Result<Vec<LoadedSource>, String> {
         let strict = opts.on_error == ErrorPolicy::Strict;
+        let namespace = self.config.namespace();
 
         let mut collection = Collection::default();
-        collection.seen_packages.insert(self.config.name.clone());
+        collection.seen_packages.insert(namespace.clone());
         // The compiler injects `Global` via autoimport, so reserve the
-        // name to flag a dependency that collides with it.
-        if strict && self.config.name != "Global" {
+        // namespace to flag a dependency that collides with it.
+        if strict && namespace != "Global" {
             collection.seen_packages.insert("Global".to_string());
         }
 
         self.push_package(
-            &self.config.name,
+            &namespace,
             &self.config.src,
             self.root,
             &opts,
@@ -126,7 +127,7 @@ impl<'a> ProjectLoader<'a> {
         )?;
         if opts.include_tests {
             self.push_package(
-                &self.config.name,
+                &namespace,
                 &self.config.test,
                 self.root,
                 &opts,
@@ -215,9 +216,9 @@ impl<'a> ProjectLoader<'a> {
             }
         };
         for dep in resolved {
-            collection.seen_packages.insert(dep.name.clone());
+            collection.seen_packages.insert(dep.namespace.clone());
             self.push_package(
-                &dep.name,
+                &dep.namespace,
                 &dep.src,
                 &dep.root,
                 opts,
@@ -288,12 +289,12 @@ mod tests {
             .collect()
     }
 
-    /// Scaffold a project named `Main` with one `src` file, one `test`
-    /// file, and a path dependency `Greeter` declaring `dep_name`.
+    /// Scaffold a project named `main` with one `src` file, one `test`
+    /// file, and a path dependency `greeter` declaring `dep_name`.
     fn scaffold(root: &Path, dep_name: &str) {
         write(
             &root.join("koja.toml"),
-            "[project]\nname = \"Main\"\nversion = \"0.1.0\"\n\n[dependencies]\ngreeter = { path = \"libs/greeter\" }\n",
+            "[project]\nname = \"main\"\nversion = \"0.1.0\"\n\n[dependencies]\ngreeter = { path = \"libs/greeter\" }\n",
         );
         write(&root.join("src/main.koja"), "// main\n");
         write(&root.join("test/main_test.koja"), "// test\n");
@@ -338,7 +339,7 @@ mod tests {
     #[test]
     fn sources_tags_project_and_dependency() {
         let root = unique_temp("sources");
-        scaffold(&root, "Greeter");
+        scaffold(&root, "greeter");
         let config = project::load_project(&root).unwrap().unwrap();
 
         let loaded = ProjectLoader::new(&config, &root)
@@ -378,7 +379,7 @@ mod tests {
     #[test]
     fn include_tests_adds_test_dir() {
         let root = unique_temp("tests");
-        scaffold(&root, "Greeter");
+        scaffold(&root, "greeter");
         let config = project::load_project(&root).unwrap().unwrap();
 
         let without = ProjectLoader::new(&config, &root)
@@ -400,7 +401,7 @@ mod tests {
     #[test]
     fn strict_rejects_duplicate_package_name() {
         let root = unique_temp("dup");
-        scaffold(&root, "Main");
+        scaffold(&root, "main");
         let config = project::load_project(&root).unwrap().unwrap();
 
         let result = ProjectLoader::new(&config, &root).sources(strict(false));
@@ -414,7 +415,7 @@ mod tests {
         let root = unique_temp("lenient");
         write(
             &root.join("koja.toml"),
-            "[project]\nname = \"Main\"\nversion = \"0.1.0\"\n\n[dependencies]\nghost = { path = \"libs/ghost\" }\n",
+            "[project]\nname = \"main\"\nversion = \"0.1.0\"\n\n[dependencies]\nghost = { path = \"libs/ghost\" }\n",
         );
         write(&root.join("src/main.koja"), "// main\n");
         let config = project::load_project(&root).unwrap().unwrap();

@@ -24,11 +24,29 @@ use koja_ast::ast::{Diagnostic, File, Severity};
 use crate::ParseMode;
 use crate::parse;
 
+/// Derive a package's PascalCase code namespace from its lowercase
+/// snake_case manifest name (`my_app` -> `MyApp`). Total in this
+/// direction only. Names whose namespace can't be derived (acronyms
+/// like `JSON`) declare it explicitly in their manifest.
+pub fn derive_namespace(name: &str) -> String {
+    name.split('_')
+        .filter(|segment| !segment.is_empty())
+        .map(|segment| {
+            let mut chars = segment.chars();
+            match chars.next() {
+                Some(first) => first.to_ascii_uppercase().to_string() + chars.as_str(),
+                None => String::new(),
+            }
+        })
+        .collect()
+}
+
 /// A single source file ready to be parsed.
 #[derive(Clone, Debug)]
 pub struct SourceFile {
-    /// The package this file belongs to. For project files this is the
-    /// declared project name. For stdlib files it is `"Global"`, and
+    /// The package namespace this file belongs to. For project files
+    /// this is the manifest's declared or derived namespace (see
+    /// [`derive_namespace`]). For stdlib files it is `"Global"`, and
     /// for single-file eval / run paths it is the file stem.
     pub package: String,
     /// Filesystem path (or a synthetic identifier like `<Global.io>` for

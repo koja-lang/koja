@@ -44,7 +44,7 @@ impl Fixture {
 
     /// Scaffold the root project with the given `[dependencies]`.
     fn write_project(&self, deps: &[(&str, String)]) {
-        write_package(&self.project(), "Root", deps);
+        write_package(&self.project(), "root", deps);
     }
 
     /// Scaffold a dependency repo and commit it on `main`.
@@ -124,7 +124,8 @@ impl Drop for Fixture {
     }
 }
 
-/// Write a minimal koja package: `koja.toml` plus one `src` struct.
+/// Write a minimal koja package: `koja.toml` plus one `src` struct
+/// named after the package's derived namespace (`greeter` -> `greeter`).
 fn write_package(dir: &Path, name: &str, deps: &[(&str, String)]) {
     let src = dir.join("src");
     fs::create_dir_all(&src).unwrap();
@@ -137,9 +138,15 @@ fn write_package(dir: &Path, name: &str, deps: &[(&str, String)]) {
         }
     }
     fs::write(dir.join("koja.toml"), manifest).unwrap();
+
+    let mut chars = name.chars();
+    let struct_name = match chars.next() {
+        Some(first) => first.to_ascii_uppercase().to_string() + chars.as_str(),
+        None => String::new(),
+    };
     fs::write(
-        src.join(format!("{}.koja", name.to_lowercase())),
-        format!("struct {name}\nend\n"),
+        src.join(format!("{name}.koja")),
+        format!("struct {struct_name}\nend\n"),
     )
     .unwrap();
 }
@@ -185,7 +192,7 @@ fn head_rev(repo: &Path) -> String {
 #[test]
 fn get_pins_annotated_tag_to_peeled_commit_and_check_runs_offline() {
     let fx = Fixture::new("offline");
-    let repo = fx.make_repo("greeter", "Greeter", &[]);
+    let repo = fx.make_repo("greeter", "greeter", &[]);
     git(&repo, &["tag", "-a", "v1.0", "-m", "release"]);
     let tag_object = git(&repo, &["rev-parse", "v1.0"]).trim().to_string();
     let commit = git(&repo, &["rev-parse", "v1.0^{commit}"])
@@ -195,13 +202,13 @@ fn get_pins_annotated_tag_to_peeled_commit_and_check_runs_offline() {
 
     fx.koja_ok(&["deps", "get"]);
 
-    assert_eq!(fx.locked_rev("Greeter"), commit);
+    assert_eq!(fx.locked_rev("greeter"), commit);
     assert_ne!(
         commit, tag_object,
         "annotated tag object must not be the pin"
     );
 
-    let dep_root = fx.project().join("deps").join("Greeter");
+    let dep_root = fx.project().join("deps").join("greeter");
     let marker = fs::read_to_string(dep_root.join(".koja-rev")).unwrap();
     assert_eq!(marker.trim(), commit);
     let source = dep_root.join("src").join("greeter.koja");
@@ -212,7 +219,7 @@ fn get_pins_annotated_tag_to_peeled_commit_and_check_runs_offline() {
     );
 
     let status = fx.koja_ok(&["deps"]);
-    assert!(status.contains("Greeter"), "status missing dep: {status}");
+    assert!(status.contains("greeter"), "status missing dep: {status}");
     assert!(status.contains("ok"), "status should report ok: {status}");
 
     // Take the "remote" away entirely: check must stay offline.
@@ -223,7 +230,7 @@ fn get_pins_annotated_tag_to_peeled_commit_and_check_runs_offline() {
 #[test]
 fn check_without_lock_or_with_stale_lock_names_the_fix() {
     let fx = Fixture::new("stale");
-    let repo = fx.make_repo("greeter", "Greeter", &[]);
+    let repo = fx.make_repo("greeter", "greeter", &[]);
     git(&repo, &["tag", "v1.0"]);
     fx.write_project(&[("greeter", dep_git_tag(&repo, "v1.0"))]);
 
@@ -248,7 +255,7 @@ fn check_without_lock_or_with_stale_lock_names_the_fix() {
 #[test]
 fn branch_pin_survives_get_and_moves_on_update() {
     let fx = Fixture::new("update");
-    let repo = fx.make_repo("greeter", "Greeter", &[]);
+    let repo = fx.make_repo("greeter", "greeter", &[]);
     let first = head_rev(&repo);
     fx.write_project(&[(
         "greeter",
@@ -256,7 +263,7 @@ fn branch_pin_survives_get_and_moves_on_update() {
     )]);
 
     fx.koja_ok(&["deps", "get"]);
-    assert_eq!(fx.locked_rev("Greeter"), first);
+    assert_eq!(fx.locked_rev("greeter"), first);
 
     // The branch moves. `get` keeps the pin, `update` re-resolves.
     fs::write(repo.join("note.txt"), "moved\n").unwrap();
@@ -265,24 +272,24 @@ fn branch_pin_survives_get_and_moves_on_update() {
     assert_ne!(first, second);
 
     fx.koja_ok(&["deps", "get"]);
-    assert_eq!(fx.locked_rev("Greeter"), first);
+    assert_eq!(fx.locked_rev("greeter"), first);
 
     fx.koja_ok(&["deps", "update"]);
-    assert_eq!(fx.locked_rev("Greeter"), second);
-    let marker = fs::read_to_string(fx.project().join("deps/Greeter/.koja-rev")).unwrap();
+    assert_eq!(fx.locked_rev("greeter"), second);
+    let marker = fs::read_to_string(fx.project().join("deps/greeter/.koja-rev")).unwrap();
     assert_eq!(marker.trim(), second);
 }
 
 #[test]
 fn transitive_deps_resolve_and_diamonds_dedupe() {
     let fx = Fixture::new("diamond");
-    let shared = fx.make_repo("shared", "Shared", &[]);
-    let left = fx.make_repo("left", "Left", &[("shared", dep_git(&shared))]);
-    let right = fx.make_repo("right", "Right", &[("shared", dep_git(&shared))]);
+    let shared = fx.make_repo("shared", "shared", &[]);
+    let left = fx.make_repo("left", "left", &[("shared", dep_git(&shared))]);
+    let right = fx.make_repo("right", "right", &[("shared", dep_git(&shared))]);
     fx.write_project(&[("left", dep_git(&left)), ("right", dep_git(&right))]);
 
     fx.koja_ok(&["deps", "get"]);
-    for name in ["Left", "Right", "Shared"] {
+    for name in ["left", "right", "shared"] {
         assert!(
             fx.project()
                 .join("deps")
@@ -296,9 +303,9 @@ fn transitive_deps_resolve_and_diamonds_dedupe() {
     let lock = fx.lock_contents();
     assert_eq!(lock.matches("[[package]]").count(), 3);
     let (left_at, right_at, shared_at) = (
-        lock.find("\"Left\"").unwrap(),
-        lock.find("\"Right\"").unwrap(),
-        lock.find("\"Shared\"").unwrap(),
+        lock.find("\"left\"").unwrap(),
+        lock.find("\"right\"").unwrap(),
+        lock.find("\"shared\"").unwrap(),
     );
     assert!(
         left_at < right_at && right_at < shared_at,
@@ -315,16 +322,16 @@ fn transitive_deps_resolve_and_diamonds_dedupe() {
 #[test]
 fn conflicting_requirements_for_one_source_error() {
     let fx = Fixture::new("conflict");
-    let shared = fx.make_repo("shared", "Shared", &[]);
+    let shared = fx.make_repo("shared", "shared", &[]);
     git(&shared, &["tag", "v1.0"]);
     fs::write(shared.join("note.txt"), "more\n").unwrap();
     commit_all(&shared);
     git(&shared, &["tag", "v2.0"]);
 
-    let left = fx.make_repo("left", "Left", &[("shared", dep_git_tag(&shared, "v1.0"))]);
+    let left = fx.make_repo("left", "left", &[("shared", dep_git_tag(&shared, "v1.0"))]);
     let right = fx.make_repo(
         "right",
-        "Right",
+        "right",
         &[("shared", dep_git_tag(&shared, "v2.0"))],
     );
     fx.write_project(&[("left", dep_git(&left)), ("right", dep_git(&right))]);
@@ -339,13 +346,13 @@ fn conflicting_requirements_for_one_source_error() {
 #[test]
 fn duplicate_package_name_from_two_sources_errors() {
     let fx = Fixture::new("dupname");
-    let first = fx.make_repo("first", "Dup", &[]);
-    let second = fx.make_repo("second", "Dup", &[]);
+    let first = fx.make_repo("first", "dup", &[]);
+    let second = fx.make_repo("second", "dup", &[]);
     fx.write_project(&[("first", dep_git(&first)), ("second", dep_git(&second))]);
 
     let stderr = fx.koja_err(&["deps", "get"]);
     assert!(
-        stderr.contains("duplicate package name `Dup`"),
+        stderr.contains("duplicate package name `dup`"),
         "expected duplicate-name error: {stderr}"
     );
 }
@@ -353,9 +360,9 @@ fn duplicate_package_name_from_two_sources_errors() {
 #[test]
 fn dependency_cycle_errors() {
     let fx = Fixture::new("cycle");
-    let b = fx.make_repo("b", "B", &[]);
-    let a = fx.make_repo("a", "A", &[("b", dep_git(&b))]);
-    write_package(&b, "B", &[("a", dep_git(&a))]);
+    let b = fx.make_repo("b", "b", &[]);
+    let a = fx.make_repo("a", "a", &[("b", dep_git(&b))]);
+    write_package(&b, "b", &[("a", dep_git(&a))]);
     commit_all(&b);
     fx.write_project(&[("a", dep_git(&a))]);
 
@@ -369,7 +376,7 @@ fn dependency_cycle_errors() {
 #[test]
 fn clean_rebuilds_from_cache_and_cache_miss_is_an_error() {
     let fx = Fixture::new("clean");
-    let repo = fx.make_repo("greeter", "Greeter", &[]);
+    let repo = fx.make_repo("greeter", "greeter", &[]);
     fx.write_project(&[("greeter", dep_git(&repo))]);
     fx.koja_ok(&["deps", "get"]);
 
@@ -392,7 +399,7 @@ fn clean_rebuilds_from_cache_and_cache_miss_is_an_error() {
 
     // The warm cache re-materializes without the remote.
     fx.koja_ok(&["check"]);
-    assert!(fx.project().join("deps/Greeter/koja.toml").is_file());
+    assert!(fx.project().join("deps/greeter/koja.toml").is_file());
 
     fx.koja_ok(&["deps", "clean", "--cache"]);
     assert!(!fx.home().join("cache").join("git").exists());
@@ -401,18 +408,18 @@ fn clean_rebuilds_from_cache_and_cache_miss_is_an_error() {
 #[test]
 fn removed_deps_are_pruned_from_the_lock() {
     let fx = Fixture::new("prune");
-    let keep = fx.make_repo("keep", "Keep", &[]);
-    let drop = fx.make_repo("drop", "Drop", &[]);
+    let keep = fx.make_repo("keep", "keep", &[]);
+    let drop = fx.make_repo("drop", "drop", &[]);
     fx.write_project(&[("drop", dep_git(&drop)), ("keep", dep_git(&keep))]);
 
     fx.koja_ok(&["deps", "get"]);
-    assert!(fx.lock_contents().contains("\"Drop\""));
+    assert!(fx.lock_contents().contains("\"drop\""));
 
     fx.write_project(&[("keep", dep_git(&keep))]);
     fx.koja_ok(&["deps", "get"]);
     let lock = fx.lock_contents();
-    assert!(!lock.contains("\"Drop\""), "pruned entry survived:\n{lock}");
-    assert!(lock.contains("\"Keep\""));
+    assert!(!lock.contains("\"drop\""), "pruned entry survived:\n{lock}");
+    assert!(lock.contains("\"keep\""));
 }
 
 /// Add a `koja = "<minimum>"` line to a package's `[project]` section.
@@ -426,13 +433,13 @@ fn require_koja(dir: &Path, minimum: &str) {
 #[test]
 fn koja_minimum_too_new_fails_for_root_and_deps() {
     let fx = Fixture::new("minver");
-    let repo = fx.make_repo("greeter", "Greeter", &[]);
+    let repo = fx.make_repo("greeter", "greeter", &[]);
     fx.write_project(&[("greeter", dep_git(&repo))]);
 
     require_koja(&fx.project(), "99.0.0");
     let stderr = fx.koja_err(&["check"]);
     assert!(
-        stderr.contains("`Root` requires koja >= 99.0.0"),
+        stderr.contains("`root` requires koja >= 99.0.0"),
         "expected root minimum-version error: {stderr}"
     );
 
@@ -442,7 +449,7 @@ fn koja_minimum_too_new_fails_for_root_and_deps() {
     commit_all(&repo);
     let stderr = fx.koja_err(&["deps", "get"]);
     assert!(
-        stderr.contains("`Greeter` requires koja >= 99.0.0"),
+        stderr.contains("`greeter` requires koja >= 99.0.0"),
         "expected dep minimum-version error: {stderr}"
     );
 }
@@ -451,11 +458,11 @@ fn koja_minimum_too_new_fails_for_root_and_deps() {
 fn path_dep_of_a_git_dep_cannot_escape_its_checkout() {
     let fx = Fixture::new("escape");
     let outside = fx.root.join("outside");
-    write_package(&outside, "Outside", &[]);
+    write_package(&outside, "outside", &[]);
 
     let sneaky = fx.make_repo(
         "sneaky",
-        "Sneaky",
+        "sneaky",
         &[("outside", "{ path = \"../../../outside\" }".to_string())],
     );
     fx.write_project(&[("sneaky", dep_git(&sneaky))]);

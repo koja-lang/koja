@@ -35,8 +35,20 @@ struct KojaToml {
 #[derive(Deserialize)]
 struct ProjectStub {
     name: String,
+    #[serde(default)]
+    namespace: Option<String>,
     #[serde(default = "default_src")]
     src: Vec<String>,
+}
+
+impl ProjectStub {
+    /// The PascalCase namespace stamped on the package's files,
+    /// mirroring `koja_driver`'s `ProjectConfig::namespace`.
+    fn namespace(&self) -> String {
+        self.namespace
+            .clone()
+            .unwrap_or_else(|| koja_parser::derive_namespace(&self.name))
+    }
 }
 
 #[derive(Deserialize)]
@@ -103,16 +115,17 @@ fn collect_sibling_sources(project_root: &Path, current_path: Option<&Path>) -> 
     };
 
     let mut files: Vec<SourceFile> = Vec::new();
+    let namespace = parsed.project.namespace();
     let mut seen_pkgs: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
-    seen_pkgs.insert(parsed.project.name.clone());
-    if parsed.project.name != "Global" {
+    seen_pkgs.insert(namespace.clone());
+    if namespace != "Global" {
         seen_pkgs.insert("Global".to_string());
     }
 
     push_package_files(
         &parsed.project.src,
         project_root,
-        &parsed.project.name,
+        &namespace,
         current_path,
         &mut files,
     );
@@ -154,13 +167,14 @@ fn push_dep_files(
     let Ok(dep_toml) = toml::from_str::<KojaToml>(&dep_src) else {
         return;
     };
-    if !seen_pkgs.insert(dep_toml.project.name.clone()) {
+    let namespace = dep_toml.project.namespace();
+    if !seen_pkgs.insert(namespace.clone()) {
         return;
     }
     push_package_files(
         &dep_toml.project.src,
         dep_root,
-        &dep_toml.project.name,
+        &namespace,
         current_path,
         out,
     );
@@ -216,10 +230,10 @@ fn same_file(a: &Path, b: &Path) -> bool {
     }
 }
 
-fn read_project_name(project_root: &Path) -> Option<String> {
+fn read_project_namespace(project_root: &Path) -> Option<String> {
     let source = fs::read_to_string(project_root.join("koja.toml")).ok()?;
     let parsed: KojaToml = toml::from_str(&source).ok()?;
-    Some(parsed.project.name)
+    Some(parsed.project.namespace())
 }
 
 impl Backend {
@@ -236,7 +250,7 @@ impl Backend {
         let project_root = active_path.parent().and_then(find_project_root);
         let active_package = match (&project_root, active_path.as_path()) {
             (Some(root), _) => {
-                read_project_name(root).unwrap_or_else(|| package_for_path(Some(&active_path)))
+                read_project_namespace(root).unwrap_or_else(|| package_for_path(Some(&active_path)))
             }
             (None, p) => package_for_path(Some(p)),
         };

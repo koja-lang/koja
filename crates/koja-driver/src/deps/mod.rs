@@ -15,7 +15,7 @@
 mod git;
 mod lock;
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::{fs, process};
@@ -29,9 +29,15 @@ const REV_MARKER: &str = ".koja-rev";
 /// One package in the resolved dependency graph, ready for the
 /// loader to walk.
 pub(crate) struct ResolvedDep {
+    /// Lowercase package identity (the `deps/<name>` directory).
     pub name: String,
+    /// PascalCase code namespace stamped on the package's files.
+    pub namespace: String,
     pub root: PathBuf,
     pub src: Vec<String>,
+    /// The dep's own manifest task exports (`[tasks]`), kept for task
+    /// resolution across the dependency graph.
+    pub tasks: HashMap<String, String>,
 }
 
 /// Which pins `koja deps get`/`update` re-resolve against the remote.
@@ -190,11 +196,12 @@ pub(crate) fn cmd_clean(cache: bool) {
 }
 
 fn resolve(config: &ProjectConfig, root: &Path, mode: Mode) -> Result<Resolver, String> {
-    let mut seen_names: BTreeMap<String, String> = stdlib_package_names()
+    let mut seen_names: BTreeMap<String, String> = stdlib_reserved_names()
         .into_iter()
         .map(|name| (name, "the standard library".to_string()))
         .collect();
     seen_names.insert(config.name.clone(), "the project".to_string());
+    seen_names.insert(config.namespace(), "the project".to_string());
 
     let mut resolver = Resolver {
         deps_dir: root.join("deps"),
@@ -291,11 +298,13 @@ impl Resolver {
         }
 
         let dep_config = load_dep_manifest(&canonical, alias)?;
-        self.claim_name(&dep_config.name, declared_by)?;
+        self.claim_package(&dep_config, declared_by)?;
         self.resolved.push(ResolvedDep {
             name: dep_config.name.clone(),
+            namespace: dep_config.namespace(),
             root: canonical.clone(),
             src: dep_config.src.clone(),
+            tasks: dep_config.tasks.clone(),
         });
 
         self.stack.push(key);
@@ -351,7 +360,8 @@ impl Resolver {
             .canonicalize()
             .map_err(|err| format!("cannot resolve {}: {err}", dep_root.display()))?;
 
-        self.claim_name(&name, declared_by)?;
+        let dep_config = load_dep_manifest(&dep_root, alias)?;
+        self.claim_package(&dep_config, declared_by)?;
         if matches!(self.mode, Mode::Fetch(_)) {
             self.locked.push(LockedPackage {
                 name: name.clone(),
@@ -361,11 +371,12 @@ impl Resolver {
             });
         }
 
-        let dep_config = load_dep_manifest(&dep_root, alias)?;
         self.resolved.push(ResolvedDep {
             name,
+            namespace: dep_config.namespace(),
             root: dep_root.clone(),
             src: dep_config.src.clone(),
+            tasks: dep_config.tasks.clone(),
         });
 
         self.stack.push(url.to_string());
@@ -465,13 +476,21 @@ impl Resolver {
         Ok((name, dep_root))
     }
 
-    fn claim_name(&mut self, name: &str, declared_by: &str) -> Result<(), String> {
+    /// Claim a dep's identity strings. `name` and `namespace` live in
+    /// case-disjoint worlds (lowercase vs PascalCase), so one map holds
+    /// both without cross-talk, and two deps collide when either matches.
+    fn claim_package(&mut self, config: &ProjectConfig, declared_by: &str) -> Result<(), String> {
+        self.claim(&config.name, "name", declared_by)?;
+        self.claim(&config.namespace(), "namespace", declared_by)
+    }
+
+    fn claim(&mut self, claimed: &str, kind: &str, declared_by: &str) -> Result<(), String> {
         if let Some(existing) = self
             .seen_names
-            .insert(name.to_string(), declared_by.to_string())
+            .insert(claimed.to_string(), declared_by.to_string())
         {
             return Err(format!(
-                "duplicate package name `{name}` in dependency graph (declared by {existing} and {declared_by})"
+                "duplicate package {kind} `{claimed}` in dependency graph (declared by {existing} and {declared_by})"
             ));
         }
         Ok(())
@@ -577,13 +596,18 @@ fn set_mode(path: &Path, mode: u32) -> Result<(), String> {
         .map_err(|err| format!("cannot chmod {}: {err}", path.display()))
 }
 
-/// Package names reserved by the embedded stdlib. A dependency
-/// claiming one of these would collide with the bundled sources.
-fn stdlib_package_names() -> BTreeSet<String> {
+/// Identity strings reserved by the embedded stdlib, in both worlds. A
+/// dependency claiming a stdlib namespace (`JSON`) or the matching
+/// lowercase name (`json`) would collide with the bundled sources.
+fn stdlib_reserved_names() -> BTreeSet<String> {
     koja_stdlib::qualified_sources()
         .into_iter()
         .map(|source| source.package)
         .chain(std::iter::once("Global".to_string()))
+        .flat_map(|namespace| {
+            let name = namespace.to_lowercase();
+            [namespace, name]
+        })
         .collect()
 }
 

@@ -76,14 +76,15 @@ use koja_ast::identifier::Identifier;
 use koja_ir::{IRProgram, IRScript, lower_program, lower_script};
 use koja_ir_eval::{Interpreter, RuntimeError, Value};
 use koja_parser::{ParseMode, ParsedProgram, SourceFile, parse_file, parse_program};
-use koja_test::{HARNESS_ENTRY, TestCase, TestOptions, discover_tests, generate_harness};
+use koja_test::{HARNESS_ENTRY, TestOptions, discover_tests, generate_harness};
 use koja_typecheck::{CheckFailure, CheckedProgram, check_program, format_registry};
 
-use crate::commands::load_project_or_exit;
+use crate::commands::{load_project_or_exit, try_load_project};
 use crate::diagnostics::{SourceMap, render_program_diagnostics};
 use crate::link::{self, LinkOptions};
 use crate::loader::{self, ErrorPolicy, LoadOptions, LoadedSource, ProjectLoader};
 use crate::project::{self, ProjectConfig};
+use crate::tasks::{TASK_HARNESS_ENTRY, TaskProvider, generate_task_harness, resolve_tasks};
 
 /// Which downstream backend a `run` invocation drives.
 ///
@@ -272,7 +273,7 @@ fn shell_session() -> ShellSession {
     }) {
         Ok(sources) => ShellSession {
             baseline: sources.into_iter().map(into_source_file).collect(),
-            session_package: config.name,
+            session_package: config.namespace(),
         },
         Err(_) => stdlib_session(),
     }
@@ -335,6 +336,9 @@ pub fn cmd_build(file: Option<String>, output: Option<String>, release: bool, em
 /// (forwarding `args`) -> forward its exit code. Script binaries
 /// are temp files removed after the run.
 pub fn cmd_run(file: Option<String>, backend: Backend, release: bool, args: Vec<String>) {
+    if let Some(task_name) = file.as_deref().filter(|arg| looks_like_task_name(arg)) {
+        run_task(task_name, backend, release, &args);
+    }
     let mode = resolve_source_shape(file.as_deref()).unwrap_or_else(|err| bail_resolve_error(err));
     match (mode, backend) {
         (SourceShape::Script(path), Backend::Interpreter) => run_script_interpreted(&path),
@@ -371,6 +375,204 @@ pub fn cmd_test(trace: bool, color: bool) {
     run_project_tests(&config, &root, TestOptions { color, trace });
 }
 
+/// `koja tasks`: list every task name in scope. Inside a project
+/// that's the project's + dependencies' + the toolchain's. Outside
+/// one, the toolchain's only.
+pub fn cmd_tasks() {
+    let project = try_load_project();
+    let tasks = resolve_tasks(
+        project
+            .as_ref()
+            .map(|(config, root)| (config, root.as_path())),
+    )
+    .unwrap_or_else(|err| {
+        eprintln!("error: {err}");
+        process::exit(1);
+    });
+    if tasks.is_empty() {
+        println!("no tasks defined");
+        return;
+    }
+    for name in tasks.keys() {
+        println!("{name}");
+    }
+}
+
+/// Whether a `koja run` argument names a task rather than a file. It
+/// must be dotted (task names are package-prefixed), not carry a
+/// source extension, and not exist on disk (an on-disk path always
+/// wins).
+fn looks_like_task_name(arg: &str) -> bool {
+    arg.contains('.')
+        && !arg.contains('/')
+        && !arg.ends_with(".koja")
+        && !arg.ends_with(".kojs")
+        && !Path::new(arg).exists()
+}
+
+/// `koja run <task.name>`: resolve the task, synthesize its harness,
+/// and execute through the chosen backend. Diverges either way.
+///
+/// Works without a `koja.toml`. Projectless invocations see the
+/// toolchain's tasks only (so `koja new` runs anywhere). Toolchain
+/// tasks compile against a stdlib-only bundle even inside a project,
+/// since scaffolding must not require the surrounding project to
+/// build.
+fn run_task(name: &str, backend: Backend, release: bool, args: &[String]) -> ! {
+    let project = try_load_project();
+    let tasks = resolve_tasks(
+        project
+            .as_ref()
+            .map(|(config, root)| (config, root.as_path())),
+    )
+    .unwrap_or_else(|err| {
+        eprintln!("error: {err}");
+        process::exit(1);
+    });
+    let Some(provider) = tasks.get(name) else {
+        eprintln!("error: no task named `{name}` (see `koja tasks`)");
+        process::exit(1);
+    };
+
+    let program = if provider.toolchain {
+        lower_task_harness(bundle_many_with_autoimport(Vec::new(), None), provider)
+    } else {
+        let (config, root) = project
+            .as_ref()
+            .expect("non-toolchain tasks only resolve inside a project");
+        build_task_program(config, root, name, provider)
+    };
+    match backend {
+        Backend::Interpreter => interpret_program(&program, args),
+        Backend::Llvm => {
+            run_task_compiled(&program, name, provider, project.as_ref(), release, args)
+        }
+    }
+}
+
+/// LLVM leg of [`run_task`]. Project/dep tasks link into the project
+/// build dir and stay cached, while toolchain tasks link into a temp
+/// binary removed after the run (there may be no project to cache
+/// under).
+fn run_task_compiled(
+    program: &IRProgram,
+    name: &str,
+    provider: &TaskProvider,
+    project: Option<&(ProjectConfig, PathBuf)>,
+    release: bool,
+    args: &[String],
+) -> ! {
+    let binary_stem = format!("task_{}", name.replace('.', "_"));
+    let (binary, app_name, link_roots, remove_after) = match project.filter(|_| !provider.toolchain)
+    {
+        Some((config, root)) => (
+            project_build_dir(root, release).join(binary_stem),
+            config.name.as_str(),
+            vec![root.as_path()],
+            false,
+        ),
+        None => (
+            env::temp_dir().join(format!("koja-run-{}-{binary_stem}", process::id())),
+            provider.package.as_str(),
+            Vec::new(),
+            true,
+        ),
+    };
+    let binary = binary.to_string_lossy().to_string();
+    emit_and_link_program(program, app_name, &binary, &link_roots, release);
+    exec_binary(&binary, args, remove_after)
+}
+
+/// Drive the project pipeline with the task harness spliced into the
+/// provider's package and [`TASK_HARNESS_ENTRY`] as the entry. Bails
+/// the process on any failure.
+///
+/// Checks twice: first the project as written, so a bad `[tasks]`
+/// entry (missing type, no `Koja.Task` impl) surfaces as a task error
+/// against a clean program instead of a typecheck failure inside the
+/// synthesized harness, then the program with the harness spliced in.
+/// Toolchain tasks skip the pre-pass (the stdlib is trusted) and go
+/// straight through [`lower_task_harness`].
+fn build_task_program(
+    config: &ProjectConfig,
+    root: &Path,
+    task_name: &str,
+    provider: &TaskProvider,
+) -> IRProgram {
+    let user_files = collect_project_sources_or_exit(config, root, false);
+    let bundled = bundle_many_with_autoimport(user_files, Some(&config.namespace()));
+
+    let parsed = parse_program(bundled.clone(), ParseMode::File);
+    let sources = capture_sources(&parsed);
+    let checked =
+        check_program(parsed).unwrap_or_else(|failure| bail_check_failure(failure, &sources));
+    print_check_warnings(&checked, &sources);
+    check_task_conformance(&checked, task_name, provider);
+
+    lower_task_harness(bundled, provider)
+}
+
+/// Splice the task harness into the provider's package, check, and
+/// lower with [`TASK_HARNESS_ENTRY`] as the entry. Bails the process
+/// on any failure.
+fn lower_task_harness(bundled: Vec<SourceFile>, provider: &TaskProvider) -> IRProgram {
+    let mut parsed = parse_program(bundled, ParseMode::File);
+    splice_generated_source(
+        &mut parsed,
+        provider.namespace.clone(),
+        "__task_harness__",
+        generate_task_harness(&provider.type_name),
+    );
+    let sources = capture_sources(&parsed);
+    let checked =
+        check_program(parsed).unwrap_or_else(|failure| bail_check_failure(failure, &sources));
+
+    let entry = Identifier::new(
+        provider.namespace.clone(),
+        vec![TASK_HARNESS_ENTRY.to_string()],
+    );
+    match lower_program(&checked, &entry) {
+        Ok(program) => program,
+        Err(err) => {
+            eprintln!("error: {err}");
+            process::exit(1);
+        }
+    }
+}
+
+/// Verify the manifest-declared task type exists and implements
+/// `Koja.Task`, so a bad `[tasks]` entry reads as a task error rather
+/// than a typecheck failure inside the synthesized harness.
+fn check_task_conformance(checked: &CheckedProgram, task_name: &str, provider: &TaskProvider) {
+    let type_id = Identifier::new(
+        provider.namespace.clone(),
+        provider.type_name.split('.').map(String::from).collect(),
+    );
+    let Some((target_id, _)) = checked.registry.lookup(&type_id) else {
+        eprintln!(
+            "error: task `{task_name}` names type `{}`, which does not exist in package `{}`",
+            provider.type_name, provider.package
+        );
+        process::exit(1);
+    };
+    let protocol_id = Identifier::new("Koja".to_string(), vec!["Task".to_string()]);
+    let Some((protocol_id, _)) = checked.registry.lookup(&protocol_id) else {
+        eprintln!("internal error: stdlib protocol `Koja.Task` is not registered");
+        process::exit(1);
+    };
+    if checked
+        .registry
+        .lookup_conformance(target_id, protocol_id)
+        .is_none()
+    {
+        eprintln!(
+            "error: task `{task_name}` names type `{}.{}`, which does not implement `Koja.Task`",
+            provider.namespace, provider.type_name
+        );
+        process::exit(1);
+    }
+}
+
 /// Build the `.kojs` script at `path` through LLVM and keep the
 /// resulting binary at `output` (or a stem-derived default). Used
 /// by `cmd_build` when the user picks the LLVM backend. When
@@ -404,17 +606,7 @@ fn run_script_compiled(path: &Path, release: bool, args: &[String]) -> ! {
         .to_string_lossy()
         .to_string();
     emit_and_link_script(&script, &derive_package(path), &output, release);
-
-    let status = process::Command::new(&output).args(args).status();
-    let _ = fs::remove_file(&output);
-
-    match status {
-        Ok(status) => process::exit(status.code().unwrap_or(1)),
-        Err(err) => {
-            eprintln!("error: failed to exec `{output}`: {err}");
-            process::exit(1);
-        }
-    }
+    exec_binary(&output, args, true)
 }
 
 /// Run the `.kojs` script at `path` through the interpreter and
@@ -478,7 +670,8 @@ fn bundle_with_autoimport(user: SourceFile) -> Vec<SourceFile> {
 /// `lib/json`, …) the on-disk sources already provide every decl
 /// the autoimport would inject, and a second copy would collide at
 /// registry seal time. Project-mode callers thread
-/// `Some(&config.name)` through, while single-file callers pass `None`.
+/// `Some(&config.namespace())` through, while single-file callers pass
+/// `None`.
 fn bundle_many_with_autoimport(
     user_files: Vec<SourceFile>,
     skip_package: Option<&str>,
@@ -702,7 +895,7 @@ fn run_check(source: String, package: &str, path: PathBuf, mode: ParseMode) -> C
 fn check_project(config: &ProjectConfig, root: &Path, emit_ast: bool) {
     let user_files = collect_project_sources_or_exit(config, root, false);
     let parsed = parse_program(
-        bundle_many_with_autoimport(user_files, Some(&config.name)),
+        bundle_many_with_autoimport(user_files, Some(&config.namespace())),
         ParseMode::File,
     );
     let sources = capture_sources(&parsed);
@@ -751,23 +944,29 @@ fn build_project_and_keep(
 /// pipeline failure or launch error prints `error: …` and exits 1.
 /// The early `no tests found` path is the lone non-diverging branch.
 fn run_project_tests(config: &ProjectConfig, root: &Path, opts: TestOptions) {
+    let namespace = config.namespace();
     let user_files = collect_project_sources_or_exit(config, root, true);
-    let bundled = bundle_many_with_autoimport(user_files, Some(&config.name));
+    let bundled = bundle_many_with_autoimport(user_files, Some(&namespace));
     let mut parsed = parse_program(bundled, ParseMode::File);
 
-    let tests = discover_tests(&parsed, &config.name, root);
+    let tests = discover_tests(&parsed, &namespace, root);
     if tests.is_empty() {
         println!("no tests found");
         return;
     }
 
-    splice_test_harness(&mut parsed, config, &tests, opts);
+    splice_generated_source(
+        &mut parsed,
+        namespace.clone(),
+        "__test_harness__",
+        generate_harness(&tests, opts),
+    );
 
     let sources = capture_sources(&parsed);
     let checked =
         check_program(parsed).unwrap_or_else(|failure| bail_check_failure(failure, &sources));
     print_check_warnings(&checked, &sources);
-    let entry = Identifier::new(config.name.clone(), vec![HARNESS_ENTRY.to_string()]);
+    let entry = Identifier::new(namespace, vec![HARNESS_ENTRY.to_string()]);
     let program = match lower_program(&checked, &entry) {
         Ok(program) => program,
         Err(err) => {
@@ -871,35 +1070,29 @@ fn run_test_binary_with_timeout(binary: &str, timeout: Option<Duration>) -> Test
     }
 }
 
-/// Parse the generated harness source and splice it into `parsed`
-/// under a synthetic `<Package.__test_harness__>` path. Bails the
-/// process on a parse-time diagnostic. The harness is generated by
-/// the driver and must always parse cleanly.
-fn splice_test_harness(
-    parsed: &mut ParsedProgram,
-    config: &ProjectConfig,
-    tests: &[TestCase],
-    opts: TestOptions,
-) {
-    let harness_source = generate_harness(tests, opts);
-    let harness_path = PathBuf::from(format!("<{}.__test_harness__>", config.name));
-    let harness_parsed = parse_file(
+/// Parse a driver-generated source and splice it into `parsed` under
+/// a synthetic `<package.tag>` path. Bails the process on a
+/// parse-time diagnostic. Generated sources must always parse
+/// cleanly. Shared by the test and task harness paths.
+fn splice_generated_source(parsed: &mut ParsedProgram, package: String, tag: &str, source: String) {
+    let path = PathBuf::from(format!("<{package}.{tag}>"));
+    let generated = parse_file(
         SourceFile {
-            package: config.name.clone(),
-            path: harness_path.clone(),
-            source: harness_source,
+            package,
+            path: path.clone(),
+            source,
         },
         ParseMode::File,
     );
-    if !harness_parsed.diagnostics.is_empty() {
-        eprintln!("internal error: generated test harness failed to parse");
-        for diag in &harness_parsed.diagnostics {
+    if !generated.diagnostics.is_empty() {
+        eprintln!("internal error: generated {tag} source failed to parse");
+        for diag in &generated.diagnostics {
             eprintln!("  {}", diag.message);
         }
         process::exit(1);
     }
-    parsed.order.push(harness_path.clone());
-    parsed.files.insert(harness_path, harness_parsed);
+    parsed.order.push(path.clone());
+    parsed.files.insert(path, generated);
 }
 
 /// Project-test source walk: every `src` file from the project AND
@@ -917,7 +1110,14 @@ fn splice_test_harness(
 /// either way.
 fn run_project_interpreted(config: &ProjectConfig, root: &Path, args: &[String]) -> ! {
     let program = build_project_program(config, root);
-    match Interpreter::run_program(&program, args) {
+    interpret_program(&program, args)
+}
+
+/// Execute a lowered [`IRProgram`]'s Process entry in-process via
+/// [`Interpreter::run_program`] and exit with its code. Shared by the
+/// project and task interpreter paths.
+fn interpret_program(program: &IRProgram, args: &[String]) -> ! {
+    match Interpreter::run_program(program, args) {
         Ok(Value::Int(code)) => process::exit(code as i32),
         Ok(other) => {
             eprintln!("error: process entry returned non-integer exit value `{other}`");
@@ -927,7 +1127,7 @@ fn run_project_interpreted(config: &ProjectConfig, root: &Path, args: &[String])
             eprintln!("error: {error}");
             if matches!(error, RuntimeError::Unsupported { .. }) {
                 eprintln!(
-                    "hint: this project uses process features the interpreter does not \
+                    "hint: this program uses process features the interpreter does not \
                      support yet; run with --backend=llvm"
                 );
             }
@@ -947,8 +1147,16 @@ fn run_project_compiled(config: &ProjectConfig, root: &Path, release: bool, args
         .to_string_lossy()
         .to_string();
     emit_and_link_program(&program, &config.name, &binary, &[root], release);
+    exec_binary(&binary, args, false)
+}
 
-    let status = process::Command::new(&binary).args(args).status();
+/// Exec a freshly linked binary with `args`, forward its exit code,
+/// and optionally remove it afterwards. Diverges either way.
+fn exec_binary(binary: &str, args: &[String], remove_after: bool) -> ! {
+    let status = process::Command::new(binary).args(args).status();
+    if remove_after {
+        let _ = fs::remove_file(binary);
+    }
     match status {
         Ok(status) => process::exit(status.code().unwrap_or(1)),
         Err(err) => {
@@ -964,7 +1172,7 @@ fn run_project_compiled(config: &ProjectConfig, root: &Path, release: bool, args
 fn build_project_program(config: &ProjectConfig, root: &Path) -> IRProgram {
     let user_files = collect_project_sources_or_exit(config, root, false);
     let parsed = parse_program(
-        bundle_many_with_autoimport(user_files, Some(&config.name)),
+        bundle_many_with_autoimport(user_files, Some(&config.namespace())),
         ParseMode::File,
     );
     let sources = capture_sources(&parsed);
@@ -999,7 +1207,7 @@ fn resolve_project_entry(config: &ProjectConfig) -> Identifier {
         );
         process::exit(1);
     }
-    Identifier::new(config.name.clone(), vec![entry.to_string()])
+    Identifier::new(config.namespace(), vec![entry.to_string()])
 }
 
 /// Collect the project's compiler inputs: the project's own `src`

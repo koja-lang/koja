@@ -1,3 +1,4 @@
 [project]
-name = "JSON"
+name = "json"
+namespace = "JSON"
 version = "0.1.0"

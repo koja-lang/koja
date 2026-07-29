@@ -1,7 +1,7 @@
 [project]
-name = "LocalDep"
+name = "local_dep"
 version = "0.1.0"
 entry = "App"
 
 [dependencies]
-Greeter = { path = "libs/greeter" }
+greeter = { path = "libs/greeter" }

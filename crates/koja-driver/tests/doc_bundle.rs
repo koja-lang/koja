@@ -24,7 +24,7 @@ fn write_fixture_project(root: &Path) {
     fs::create_dir_all(&src_dir).unwrap();
     fs::write(
         root.join("koja.toml"),
-        "[project]\nentry = \"main\"\nname = \"MyApp\"\nversion = \"0.1.0\"\n",
+        "[project]\nentry = \"main\"\nname = \"my_app\"\nversion = \"0.1.0\"\n",
     )
     .unwrap();
     fs::write(
@@ -89,7 +89,7 @@ fn doc_skips_stdlib_overlap_with_project_name() {
     fs::create_dir_all(&src_dir).unwrap();
     fs::write(
         tmp.join("koja.toml"),
-        "[project]\nentry = \"main\"\nname = \"Net\"\nversion = \"0.1.0\"\n",
+        "[project]\nentry = \"main\"\nname = \"net\"\nversion = \"0.1.0\"\n",
     )
     .unwrap();
     fs::write(

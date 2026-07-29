@@ -17,7 +17,7 @@ enum PEMError
         "no CERTIFICATE block found (the input looks like a private key)"
 
       PEMError.EncryptedKeyUnsupported ->
-        "passphrase-protected keys are not supported; provide an unencrypted PKCS#8 key"
+        "passphrase-protected keys are not supported. Provide an unencrypted PKCS#8 key"
 
       PEMError.NoCertificateBlock ->
         "no CERTIFICATE block found in PEM text"

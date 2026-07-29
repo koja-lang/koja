@@ -10,6 +10,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - Anonymous tuples. Build with `(a, b)`, annotate as `(Int, String)`, take apart with destructuring assignment `(x, y) = pair` or `match` patterns.
+- Custom CLI tasks. A package's `[tasks]` table maps package-prefixed names to types implementing the new `Koja.Task` protocol, runnable with `koja run <task.name> [-- args]` from the project or any project depending on it.
+- `koja tasks` lists every task exported by the project, its dependencies, and the toolchain.
+- Directory functions on `File`: `mkdir` (single level), `mkdir_p` (creates missing parents), `rmdir` (removes an empty directory), and `dir?` (true only for directories).
 - Nested types can now be declared inside the owner's body, equivalent to the qualified top-level form `struct Owner.Nested`.
 - The `@deprecated "message"` annotation marks a declaration as deprecated, warning at every use site with the given migration guidance.
 - Tuples compare with `==`/`!=`, print and interpolate like any other value, and can be members of type unions.
@@ -17,6 +20,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - **Breaking change.** Standard library APIs now use anonymous tuples for list pops, datagram receives, JSON object entries, parser results, and process envelopes instead of `Pair`.
+- **Breaking change.** The manifest `name` is now the package's lowercase snake_case identity, and code-facing PascalCase namespaces are derived from it (`my_app` -> `MyApp`) or declared with the new `namespace` field.
+- `koja new` is now a task written in Koja itself, exported by the stdlib as `koja.new` and runnable anywhere, including outside a project.
 - Compiler errors and warnings now print their `file:line:column` location with a source snippet and caret underline.
 - Diagnostics render in a pretty terminal format or a machine-friendly one-line format, selectable via `--diagnostics=pretty|short` or the `KOJA_DIAGNOSTICS` environment variable (defaulting by whether stderr is a terminal).
 

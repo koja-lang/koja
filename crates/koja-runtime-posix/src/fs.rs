@@ -108,6 +108,74 @@ pub unsafe extern "C" fn koja_file_exists(path_ptr: *const u8) -> i64 {
     if Path::new(path).exists() { 1 } else { 0 }
 }
 
+/// Returns 1 if `path` is a directory, 0 otherwise.
+///
+/// # Safety
+/// `path_ptr` must point to a valid NUL-terminated UTF-8 string.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn koja_file_is_dir(path_ptr: *const u8) -> i64 {
+    let Ok(path) = (unsafe { cstr_path(path_ptr) }) else {
+        return 0;
+    };
+    if Path::new(path).is_dir() { 1 } else { 0 }
+}
+
+/// Creates a single directory. Errors if the parent is missing or the
+/// path already exists. Returns 0 on success, -1 on error.
+///
+/// # Safety
+/// `path_ptr` must point to a valid NUL-terminated UTF-8 string.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn koja_file_mkdir(path_ptr: *const u8) -> i64 {
+    let Ok(path) = (unsafe { cstr_path(path_ptr) }) else {
+        return -1;
+    };
+    match fs::create_dir(path) {
+        Ok(()) => 0,
+        Err(e) => {
+            set_last_error(e);
+            -1
+        }
+    }
+}
+
+/// Creates a directory and any missing parents (`mkdir -p`). An already
+/// existing directory succeeds. Returns 0 on success, -1 on error.
+///
+/// # Safety
+/// `path_ptr` must point to a valid NUL-terminated UTF-8 string.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn koja_file_mkdir_p(path_ptr: *const u8) -> i64 {
+    let Ok(path) = (unsafe { cstr_path(path_ptr) }) else {
+        return -1;
+    };
+    match fs::create_dir_all(path) {
+        Ok(()) => 0,
+        Err(e) => {
+            set_last_error(e);
+            -1
+        }
+    }
+}
+
+/// Removes an empty directory. Returns 0 on success, -1 on error.
+///
+/// # Safety
+/// `path_ptr` must point to a valid NUL-terminated UTF-8 string.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn koja_file_rmdir(path_ptr: *const u8) -> i64 {
+    let Ok(path) = (unsafe { cstr_path(path_ptr) }) else {
+        return -1;
+    };
+    match fs::remove_dir(path) {
+        Ok(()) => 0,
+        Err(e) => {
+            set_last_error(e);
+            -1
+        }
+    }
+}
+
 /// Opens a file. `mode`: 0 = read, 1 = write (create/truncate), 2 = append.
 /// Returns fd on success, -1 on error.
 ///

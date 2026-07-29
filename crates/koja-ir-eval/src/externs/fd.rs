@@ -41,9 +41,13 @@ pass_through_externs! {
     fd_close => fn koja_fd_close(fd: Int32) -> Int32;
     file_delete => fn koja_file_delete(path: CPtr) -> Int64;
     file_exists => fn koja_file_exists(path: CPtr) -> Int64;
+    file_is_dir => fn koja_file_is_dir(path: CPtr) -> Int64;
+    file_mkdir => fn koja_file_mkdir(path: CPtr) -> Int64;
+    file_mkdir_p => fn koja_file_mkdir_p(path: CPtr) -> Int64;
     file_open => fn koja_file_open(path: CPtr, mode: Int64) -> Int32;
     file_read_all => fn koja_file_read_all(path: CPtr) -> CPtr;
     file_rename => fn koja_file_rename(src: CPtr, dst: CPtr) -> Int64;
+    file_rmdir => fn koja_file_rmdir(path: CPtr) -> Int64;
     file_write_all => fn koja_file_write_all(path: CPtr, content: CPtr, len: Int64) -> Int64;
 }
 

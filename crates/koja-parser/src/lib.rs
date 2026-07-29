@@ -10,4 +10,6 @@ mod types;
 
 pub use koja_ast::ast;
 pub use parser::{ParseMode, ParseResult, parse};
-pub use program::{ParsedFile, ParsedProgram, SourceFile, parse_file, parse_program};
+pub use program::{
+    ParsedFile, ParsedProgram, SourceFile, derive_namespace, parse_file, parse_program,
+};
