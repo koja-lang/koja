@@ -1,3 +1,4 @@
 [project]
-name = "HTTP"
+name = "http"
+namespace = "HTTP"
 version = "0.1.0"

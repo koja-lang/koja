@@ -152,7 +152,23 @@ struct File
   end
 
   @doc """
-  Returns true if a file exists at the given path.
+  Returns true if the given path exists and is a directory. `exists?`
+  is true for files and directories alike, while `dir?` distinguishes them.
+  """
+  fn dir?(path: String) -> Bool
+    cs =
+      match path_cstring(path)
+        Result.Err(_) -> return false
+        Result.Ok(value) -> value
+      end
+
+    result = koja_file_is_dir(cs.ptr)
+    cs.free()
+    result == 1
+  end
+
+  @doc """
+  Returns true if a file or directory exists at the given path.
   """
   fn exists?(path: String) -> Bool
     cs =
@@ -164,6 +180,40 @@ struct File
     result = koja_file_exists(cs.ptr)
     cs.free()
     result == 1
+  end
+
+  @doc """
+  Creates a single directory. Errors if the parent directory is missing
+  or the path already exists. See `mkdir_p` for the recursive variant.
+  Returns Ok("ok") on success or an error message.
+  """
+  fn mkdir(path: String) -> Result<String, String>
+    cs =
+      match path_cstring(path)
+        Result.Err(error) -> return Result.Err(error)
+        Result.Ok(value) -> value
+      end
+
+    result = koja_file_mkdir(cs.ptr)
+    cs.free()
+    result >= 0 ? Result.Ok("ok") : Result.Err("mkdir failed")
+  end
+
+  @doc """
+  Creates a directory along with any missing parents (like `mkdir -p`).
+  Succeeds if the directory already exists.
+  Returns Ok("ok") on success or an error message.
+  """
+  fn mkdir_p(path: String) -> Result<String, String>
+    cs =
+      match path_cstring(path)
+        Result.Err(error) -> return Result.Err(error)
+        Result.Ok(value) -> value
+      end
+
+    result = koja_file_mkdir_p(cs.ptr)
+    cs.free()
+    result >= 0 ? Result.Ok("ok") : Result.Err("mkdir_p failed")
   end
 
   @doc """
@@ -261,6 +311,23 @@ struct File
   end
 
   @doc """
+  Removes an empty directory. Errors if the directory is not empty.
+  See `delete` for removing files.
+  Returns Ok("ok") on success or an error message.
+  """
+  fn rmdir(path: String) -> Result<String, String>
+    cs =
+      match path_cstring(path)
+        Result.Err(error) -> return Result.Err(error)
+        Result.Ok(value) -> value
+      end
+
+    result = koja_file_rmdir(cs.ptr)
+    cs.free()
+    result >= 0 ? Result.Ok("ok") : Result.Err("rmdir failed")
+  end
+
+  @doc """
   Writes text or raw bytes to the given path, creating or truncating it.
   Returns Ok("ok") on success or an error message.
   """
@@ -300,6 +367,15 @@ struct File
   priv fn koja_file_exists(path: CPtr<UInt8>) -> Int64
 
   @extern "C"
+  priv fn koja_file_is_dir(path: CPtr<UInt8>) -> Int64
+
+  @extern "C"
+  priv fn koja_file_mkdir(path: CPtr<UInt8>) -> Int64
+
+  @extern "C"
+  priv fn koja_file_mkdir_p(path: CPtr<UInt8>) -> Int64
+
+  @extern "C"
   priv fn koja_file_open(path: CPtr<UInt8>, mode: Int64) -> Int32
 
   @extern "C"
@@ -307,6 +383,9 @@ struct File
 
   @extern "C"
   priv fn koja_file_rename(src: CPtr<UInt8>, dst: CPtr<UInt8>) -> Int64
+
+  @extern "C"
+  priv fn koja_file_rmdir(path: CPtr<UInt8>) -> Int64
 
   @extern "C"
   priv fn koja_file_write_all(

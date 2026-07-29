@@ -10,7 +10,6 @@
 use std::path::{Path, PathBuf};
 use std::{env, fs, process};
 
-use koja_ast::util::dedent;
 use koja_parser::ParseMode;
 
 use crate::diagnostics::print_file_diagnostics;
@@ -36,21 +35,32 @@ fn current_dir_or_exit() -> PathBuf {
 /// to stderr and exits non-zero. On any other error, prints
 /// `error: {e}` and exits.
 pub(crate) fn load_project_or_exit(missing_message: &[&str]) -> (ProjectConfig, PathBuf) {
-    let cwd = current_dir_or_exit();
-    let config = match project::load_project(&cwd) {
-        Ok(Some(c)) => c,
-        Ok(None) => {
+    match try_load_project() {
+        Some(loaded) => loaded,
+        None => {
             for line in missing_message {
                 eprintln!("{line}");
             }
             process::exit(1);
         }
+    }
+}
+
+/// Loads `koja.toml` from the current directory if one exists,
+/// returning `(config, cwd)`. A missing manifest is `None`, while a
+/// broken one prints `error: {e}` and exits. Commands that also work
+/// projectless (the task runner) use this instead of
+/// [`load_project_or_exit`].
+pub(crate) fn try_load_project() -> Option<(ProjectConfig, PathBuf)> {
+    let cwd = current_dir_or_exit();
+    match project::load_project(&cwd) {
+        Ok(Some(config)) => Some((config, cwd)),
+        Ok(None) => None,
         Err(e) => {
             eprintln!("error: {e}");
             process::exit(1);
         }
-    };
-    (config, cwd)
+    }
 }
 
 /// One source file's worth of input for `koja doc`. The
@@ -168,7 +178,7 @@ fn discover_project_doc_inputs(project_only: bool) -> (Vec<DocInput>, String) {
         .unwrap_or_default();
     let inputs = loaded.into_iter().map(DocInput::from).collect();
 
-    (inputs, config.name.clone())
+    (inputs, config.namespace())
 }
 
 /// Explicit-file doc inputs: each entry in `files` is a `.koja` file
@@ -444,126 +454,6 @@ fn explicit_format_paths(files: &[String]) -> Vec<String> {
     }
     paths.sort();
     paths
-}
-
-/// `koja new <name>` -- scaffolds a new Koja project.
-///
-/// Creates a directory with `koja.toml` (`entry = "App"`),
-/// `.gitignore`, `src/app.koja` (a minimal `Process` entry type plus
-/// a `greet` helper), and `test/app_test.koja` (a placeholder
-/// `@test` exercising `greet`). `koja build` and `koja test` both
-/// succeed against the scaffold from the first command.
-pub fn cmd_new(name: String) {
-    if name.is_empty() || !name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
-        eprintln!("error: project name must contain only ASCII letters, digits, and underscores");
-        process::exit(1);
-    }
-
-    let project_dir = Path::new(&name);
-    if project_dir.exists() {
-        eprintln!("error: directory '{name}' already exists");
-        process::exit(1);
-    }
-
-    let src_dir = project_dir.join("src");
-    fs::create_dir_all(&src_dir).unwrap_or_else(|e| {
-        eprintln!("error: cannot create directory: {e}");
-        process::exit(1);
-    });
-
-    let test_dir = project_dir.join("test");
-    fs::create_dir_all(&test_dir).unwrap_or_else(|e| {
-        eprintln!("error: cannot create directory: {e}");
-        process::exit(1);
-    });
-
-    // Stamp the scaffolding compiler's minor as the minimum. Pre-1.0
-    // minors are breaking, so a fresh project needs at least the
-    // compiler that generated it.
-    let minimum = env!("CARGO_PKG_VERSION")
-        .rsplit_once('.')
-        .map_or(env!("CARGO_PKG_VERSION"), |(minor, _)| minor);
-    let toml_content = dedent(&format!(
-        "
-        [project]
-        entry = \"App\"
-        koja = \"{minimum}\"
-        name = \"{name}\"
-        version = \"0.1.0\"
-        "
-    ));
-    fs::write(project_dir.join("koja.toml"), toml_content).unwrap_or_else(|e| {
-        eprintln!("error: cannot write koja.toml: {e}");
-        process::exit(1);
-    });
-
-    let gitignore_content = dedent(
-        "
-        /build
-        /deps
-        ",
-    );
-    fs::write(project_dir.join(".gitignore"), gitignore_content).unwrap_or_else(|e| {
-        eprintln!("error: cannot write .gitignore: {e}");
-        process::exit(1);
-    });
-
-    let app_content = dedent(
-        "
-        alias Process.Step
-        alias Process.StopReason
-
-        fn greet(name: String) -> String
-          \"Hello, #{name}!\"
-        end
-
-        struct App
-        end
-
-        impl Process<(), (), ()> for App
-          fn start(config: ()) -> Result<Self, StopReason>
-            Result.Ok(App{})
-          end
-
-          fn handle(self, msg: (), from: Option<ReplyTo<()>>) -> Step<Self>
-            Step.Continue(self)
-          end
-
-          fn run(self) -> StopReason
-            IO.puts(greet(\"Koja\"))
-            StopReason.Normal
-          end
-        end
-        ",
-    );
-    fs::write(src_dir.join("app.koja"), app_content).unwrap_or_else(|e| {
-        eprintln!("error: cannot write src/app.koja: {e}");
-        process::exit(1);
-    });
-
-    let app_test_content = dedent(
-        "
-        struct AppTest
-          @test \"greet builds a greeting message\"
-          fn test_greet -> Result<Bool, String>
-            actual = greet(\"Koja\")
-            expected = \"Hello, Koja!\"
-
-            unless actual == expected
-              return Result.Err(\"expected `#{expected}`, got `#{actual}`\")
-            end
-
-            Result.Ok(true)
-          end
-        end
-        ",
-    );
-    fs::write(test_dir.join("app_test.koja"), app_test_content).unwrap_or_else(|e| {
-        eprintln!("error: cannot write test/app_test.koja: {e}");
-        process::exit(1);
-    });
-
-    println!("created project '{name}'");
 }
 
 /// `koja parse <file.koja> [--emit-ast]` -- parses and reports

@@ -1,0 +1,170 @@
+@doc """
+The `koja.new` toolchain task backing `koja new <name>`. Scaffolds a
+new project directory with `koja.toml`, `.gitignore`, a starter
+`Process` entry in `src/`, and a starter test in `test/`.
+"""
+struct New
+end
+
+impl Koja.Task for New
+  fn run(args: List<String>) -> Result<(), String>
+    name =
+      match args.get(0)
+        Option.None -> return Result.Err("usage: koja new <name>")
+        Option.Some(value) -> value
+      end
+
+    unless valid_project_name?(name)
+      return Result.Err("project name must be lowercase snake_case (like `my_app`). The code namespace is derived from it (`my_app` -> `MyApp`)")
+    end
+
+    if File.exists?(name)
+      return Result.Err("directory '#{name}' already exists")
+    end
+
+    match File.mkdir_p("#{name}/src")
+      Result.Err(message) ->
+        return Result.Err("cannot create directory: #{message}")
+      Result.Ok(_) -> ()
+    end
+
+    match File.mkdir_p("#{name}/test")
+      Result.Err(message) ->
+        return Result.Err("cannot create directory: #{message}")
+      Result.Ok(_) -> ()
+    end
+
+    match write_scaffold(name)
+      Result.Err(message) -> return Result.Err(message)
+      Result.Ok(_) -> ()
+    end
+
+    IO.puts("created project '#{name}'")
+    Result.Ok(())
+  end
+end
+
+priv fn write_scaffold(name: String) -> Result<(), String>
+  match write_file("#{name}/koja.toml", toml_content(name))
+    Result.Err(message) -> return Result.Err(message)
+    Result.Ok(_) -> ()
+  end
+
+  match write_file("#{name}/.gitignore", gitignore_content())
+    Result.Err(message) -> return Result.Err(message)
+    Result.Ok(_) -> ()
+  end
+
+  match write_file("#{name}/src/app.koja", app_content())
+    Result.Err(message) -> return Result.Err(message)
+    Result.Ok(_) -> ()
+  end
+
+  write_file("#{name}/test/app_test.koja", app_test_content())
+end
+
+priv fn write_file(path: String, content: String) -> Result<(), String>
+  match File.write(path, content)
+    Result.Err(message) -> Result.Err("cannot write #{path}: #{message}")
+    Result.Ok(_) -> Result.Ok(())
+  end
+end
+
+priv fn valid_project_name?(name: String) -> Bool
+  chars = name.codepoints()
+
+  starts_lower =
+    match chars.get(0)
+      Option.None -> false
+      Option.Some(first) -> ascii_lowercase?(first)
+    end
+
+  starts_lower
+    and chars.all?(c -> ascii_lowercase?(c) or ascii_digit?(c) or c == "_")
+end
+
+priv fn ascii_lowercase?(char: String) -> Bool
+  "abcdefghijklmnopqrstuvwxyz".contains?(char)
+end
+
+priv fn ascii_digit?(char: String) -> Bool
+  "0123456789".contains?(char)
+end
+
+# Stamp the scaffolding compiler's minor as the minimum. Pre-1.0
+# minors are breaking, so a fresh project needs at least the
+# compiler that generated it.
+priv fn minimum_koja_version -> String
+  version = toolchain_version()
+  parts = version.split(".")
+
+  match parts.get(0)
+    Option.None ->
+      version
+
+    Option.Some(major) ->
+      match parts.get(1)
+        Option.None -> version
+        Option.Some(minor) -> "#{major}.#{minor}"
+      end
+  end
+end
+
+priv fn toolchain_version -> String
+  cs = koja_toolchain_version().to_cstring()
+  result = cs.to_string()
+  cs.free()
+  result.unwrap()
+end
+
+# Scaffold contents build from joined lines rather than multiline
+# literals. The trailing newline (the closing "") and the nested
+# indentation must survive the formatter and the heredoc dedent
+# rules byte-exactly.
+priv fn lines(parts: List<String>) -> String
+  String.join(parts, "\n")
+end
+
+priv fn toml_content(name: String) -> String
+  lines(
+    [
+      "[project]", "entry = \"App\"", "koja = \"#{minimum_koja_version()}\"",
+      "name = \"#{name}\"", "version = \"0.1.0\"", ""
+    ],
+  )
+end
+
+priv fn gitignore_content -> String
+  lines(["/build", "/deps", ""])
+end
+
+priv fn app_content -> String
+  lines(
+    [
+      "alias Process.Step", "alias Process.StopReason", "",
+      "fn greet(name: String) -> String", "  \"Hello, \#{name}!\"", "end", "",
+      "struct App", "end", "", "impl Process<(), (), ()> for App",
+      "  fn start(config: ()) -> Result<Self, StopReason>",
+      "    Result.Ok(App{})", "  end", "",
+      "  fn handle(self, msg: (), from: Option<ReplyTo<()>>) -> Step<Self>",
+      "    Step.Continue(self)", "  end", "", "  fn run(self) -> StopReason",
+      "    IO.puts(greet(\"Koja\"))", "    StopReason.Normal", "  end", "end",
+      ""
+    ],
+  )
+end
+
+priv fn app_test_content -> String
+  lines(
+    [
+      "struct AppTest", "  @test \"greet builds a greeting message\"",
+      "  fn test_greet -> Result<Bool, String>", "    actual = greet(\"Koja\")",
+      "    expected = \"Hello, Koja!\"", "", "    unless actual == expected",
+      "      return Result.Err(\"expected `\#{expected}`, got `\#{actual}`\")",
+      "    end", "", "    Result.Ok(true)", "  end", "end", ""
+    ],
+  )
+end
+
+@extern "C"
+priv fn koja_toolchain_version -> CPtr<UInt8>

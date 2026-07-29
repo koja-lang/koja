@@ -257,4 +257,111 @@ struct FileTest
       Result.Ok(_) -> Result.Err("invalid UTF-8 decoded as text")
     end
   end
+
+  @test "mkdir creates a directory that dir? sees and rmdir removes"
+  fn test_mkdir_rmdir -> Result<Bool, String>
+    path = "/tmp/koja_file_test_mkdir"
+    File.rmdir(path)
+
+    match File.mkdir(path)
+      Result.Err(msg) -> return Result.Err("mkdir failed: #{msg}")
+      Result.Ok(_) -> ()
+    end
+
+    unless File.dir?(path)
+      File.rmdir(path)
+      return Result.Err("dir? false for created directory")
+    end
+
+    match File.rmdir(path)
+      Result.Err(msg) -> return Result.Err("rmdir failed: #{msg}")
+      Result.Ok(_) -> ()
+    end
+
+    File.exists?(path)
+      ? Result.Err("directory still exists after rmdir")
+      : Result.Ok(true)
+  end
+
+  @test "mkdir errors when the directory already exists"
+  fn test_mkdir_existing -> Result<Bool, String>
+    path = "/tmp/koja_file_test_mkdir_existing"
+    File.mkdir_p(path)
+
+    result = File.mkdir(path)
+    File.rmdir(path)
+
+    match result
+      Result.Err(_) -> Result.Ok(true)
+      Result.Ok(_) -> Result.Err("mkdir on existing directory should error")
+    end
+  end
+
+  @test "mkdir errors when the parent is missing"
+  fn test_mkdir_missing_parent -> Result<Bool, String>
+    match File.mkdir("/tmp/koja_file_test_no_parent/child")
+      Result.Err(_) -> Result.Ok(true)
+      Result.Ok(_) -> Result.Err("mkdir without parent should error")
+    end
+  end
+
+  @test "mkdir_p creates missing parents and is idempotent"
+  fn test_mkdir_p -> Result<Bool, String>
+    parent = "/tmp/koja_file_test_mkdir_p"
+    nested = "#{parent}/a/b"
+
+    match File.mkdir_p(nested)
+      Result.Err(msg) -> return Result.Err("mkdir_p failed: #{msg}")
+      Result.Ok(_) -> ()
+    end
+
+    repeat = File.mkdir_p(nested)
+    ok = File.dir?(nested)
+    File.rmdir(nested)
+    File.rmdir("#{parent}/a")
+    File.rmdir(parent)
+
+    unless ok
+      return Result.Err("dir? false for nested directory")
+    end
+
+    match repeat
+      Result.Err(msg) ->
+        Result.Err("mkdir_p on existing directory errored: #{msg}")
+
+      Result.Ok(_) ->
+        Result.Ok(true)
+    end
+  end
+
+  @test "rmdir errors on a non-empty directory"
+  fn test_rmdir_non_empty -> Result<Bool, String>
+    path = "/tmp/koja_file_test_rmdir_full"
+    File.mkdir_p(path)
+
+    match File.write("#{path}/occupant.txt", "here")
+      Result.Err(msg) -> return Result.Err("write failed: #{msg}")
+      Result.Ok(_) -> ()
+    end
+
+    result = File.rmdir(path)
+    File.delete("#{path}/occupant.txt")
+    File.rmdir(path)
+
+    match result
+      Result.Err(_) -> Result.Ok(true)
+      Result.Ok(_) -> Result.Err("rmdir on non-empty directory should error")
+    end
+  end
+
+  @test "dir? is false for regular files and missing paths"
+  fn test_dir_false_cases -> Result<Bool, String>
+    if File.dir?("/dev/null")
+      return Result.Err("dir? true for /dev/null")
+    end
+
+    File.dir?("/tmp/koja_file_test_missing_dir_99999")
+      ? Result.Err("dir? true for missing path")
+      : Result.Ok(true)
+  end
 end

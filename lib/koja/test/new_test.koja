@@ -1,0 +1,118 @@
+struct NewTest
+  @test "run without arguments returns usage"
+  fn test_usage -> Result<Bool, String>
+    args: List<String> = []
+
+    match New.run(args)
+      Result.Ok(_) ->
+        Result.Err("expected usage error")
+
+      Result.Err(message) ->
+        message == "usage: koja new <name>"
+          ? Result.Ok(true)
+          : Result.Err("unexpected message: #{message}")
+    end
+  end
+
+  @test "run rejects a non-snake_case name"
+  fn test_bad_name -> Result<Bool, String>
+    match New.run(["MyApp"])
+      Result.Ok(_) ->
+        Result.Err("expected validation error")
+
+      Result.Err(message) ->
+        expected = "project name must be lowercase snake_case (like `my_app`). The code namespace is derived from it (`my_app` -> `MyApp`)"
+        message == expected
+          ? Result.Ok(true)
+          : Result.Err("unexpected message: #{message}")
+    end
+  end
+
+  @test "run refuses an existing directory"
+  fn test_existing_directory -> Result<Bool, String>
+    name = "koja_new_test_existing"
+
+    match File.mkdir_p(name)
+      Result.Err(message) -> return Result.Err("setup mkdir failed: #{message}")
+      Result.Ok(_) -> ()
+    end
+
+    result = New.run([name])
+    File.rmdir(name)
+
+    match result
+      Result.Ok(_) ->
+        Result.Err("expected existing-directory error")
+
+      Result.Err(message) ->
+        message == "directory '#{name}' already exists"
+          ? Result.Ok(true)
+          : Result.Err("unexpected message: #{message}")
+    end
+  end
+
+  @test "run scaffolds a complete project"
+  fn test_scaffold -> Result<Bool, String>
+    name = "koja_new_test_scaffold"
+    cleanup_scaffold(name)
+
+    match New.run([name])
+      Result.Err(message) -> return Result.Err("run failed: #{message}")
+      Result.Ok(_) -> ()
+    end
+
+    toml = File.read("#{name}/koja.toml")
+    gitignore = File.read("#{name}/.gitignore")
+    app = File.read("#{name}/src/app.koja")
+    app_test = File.read("#{name}/test/app_test.koja")
+    cleanup_scaffold(name)
+
+    match check_marker(toml, "name = \"#{name}\"", "koja.toml")
+      Result.Err(message) -> return Result.Err(message)
+      Result.Ok(_) -> ()
+    end
+
+    match check_marker(gitignore, "/build", ".gitignore")
+      Result.Err(message) -> return Result.Err(message)
+      Result.Ok(_) -> ()
+    end
+
+    match check_marker(app, "impl Process<(), (), ()> for App", "src/app.koja")
+      Result.Err(message) -> return Result.Err(message)
+      Result.Ok(_) -> ()
+    end
+
+    check_marker(
+      app_test,
+      "fn test_greet -> Result<Bool, String>",
+      "test/app_test.koja",
+    )
+  end
+
+  priv fn check_marker(
+    contents: Result<String, String>,
+    marker: String,
+    label: String,
+  ) -> Result<Bool, String>
+
+    match contents
+      Result.Err(message) ->
+        Result.Err("cannot read #{label}: #{message}")
+
+      Result.Ok(text) ->
+        text.contains?(marker)
+          ? Result.Ok(true)
+          : Result.Err("#{label} is missing `#{marker}`")
+    end
+  end
+
+  priv fn cleanup_scaffold(name: String)
+    File.delete("#{name}/koja.toml")
+    File.delete("#{name}/.gitignore")
+    File.delete("#{name}/src/app.koja")
+    File.delete("#{name}/test/app_test.koja")
+    File.rmdir("#{name}/src")
+    File.rmdir("#{name}/test")
+    File.rmdir(name)
+  end
+end

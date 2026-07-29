@@ -29,6 +29,7 @@ mod loader;
 mod pipeline;
 pub mod project;
 mod serve;
+mod tasks;
 
 use koja_runtime as _;
 
@@ -126,9 +127,10 @@ enum Command {
         #[arg(long)]
         emit_ast: bool,
     },
-    /// Compile and run a source file or project
+    /// Compile and run a source file, project, or task
     Run {
-        /// Source file (`.koja` / `.kojs`, omit to use `koja.toml`)
+        /// Source file (`.koja` / `.kojs`), task name (`postgres.migrate`),
+        /// or omit to run the project's entry via `koja.toml`
         file: Option<String>,
 
         /// Execution backend: `interpreter` runs in-process for fast startup, while `llvm` compiles to a native binary, runs it, and forwards its exit code
@@ -145,6 +147,8 @@ enum Command {
     },
     /// Start an interactive REPL backed by the interpreter
     Shell,
+    /// List tasks exported by the project, its dependencies, and the toolchain
+    Tasks,
     /// Run tests (requires koja.toml)
     Test {
         /// Print each test name and per-test timing as it runs instead of progress dots
@@ -244,7 +248,13 @@ fn main() {
             write_back,
         } => commands::cmd_format(files, check, write_back),
         Command::Lex { files } => commands::cmd_lex(files),
-        Command::New { name } => commands::cmd_new(name),
+        // Alias for the self-hosted `koja.new` toolchain task.
+        Command::New { name } => pipeline::cmd_run(
+            Some("koja.new".to_string()),
+            pipeline::Backend::Interpreter,
+            false,
+            vec![name],
+        ),
         Command::Parse { files, emit_ast } => commands::cmd_parse(files, emit_ast),
         Command::Run {
             file,
@@ -253,6 +263,7 @@ fn main() {
             args,
         } => pipeline::cmd_run(file, backend, release, args),
         Command::Shell => pipeline::cmd_shell(),
+        Command::Tasks => pipeline::cmd_tasks(),
         Command::Test { trace } => pipeline::cmd_test(trace, color),
     }
 }

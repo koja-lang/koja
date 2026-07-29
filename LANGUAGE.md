@@ -20,7 +20,7 @@ Koja is a statically typed, compiled language targeting native binaries via LLVM
 - [Standard Library](#standard-library): Built-in Functions, Core Types, Collections, String Methods, Binary/Bits, File I/O, Parsing, URI, Base, Path, Protocols
 - [C FFI](#c-ffi): `@extern "C"`, `CPtr<T>`, `CString`
 - [Annotations](#annotations): `@deprecated`, `@doc`, `@test`
-- [Tooling](#tooling): CLI Commands, LSP, Formatter
+- [Tooling](#tooling): CLI Commands, Custom Tasks, LSP, Formatter
 
 ---
 
@@ -1169,7 +1169,16 @@ impl Process<(), (), ()> for App
 end
 ```
 
-Other packages (the qualified standard library and dependencies) are reached through their package name: `JSON.Decoder`, `Net.TCPSocket`, `HTTP.get(...)`.
+Other packages (the qualified standard library and dependencies) are reached through their package namespace: `JSON.Decoder`, `Net.TCPSocket`, `HTTP.get(...)`.
+
+A package has two names. The manifest `name` is its lowercase snake_case identity, used for the `deps/` directory, dependency keys, lockfile entries, and the default binary name. Its **namespace** is the PascalCase name code uses for qualified access, derived from `name` (`my_app` -> `MyApp`). When the derivation isn't right (acronyms, unusual casing), declare it explicitly:
+
+```toml
+[project]
+name = "http"
+namespace = "HTTP"
+version = "0.1.0"
+```
 
 ### Visibility
 
@@ -1220,9 +1229,9 @@ Packages declare dependencies in `koja.toml`, by local path or by git repository
 
 ```toml
 [dependencies]
-Postgres = { github = "koja-lang/postgres", tag = "v0.1.0" }
-Vendored = { git = "https://git.example.com/vendored.git", branch = "main" }
-Greeter = { path = "libs/greeter" }
+postgres = { github = "koja-lang/postgres", tag = "v0.1.0" }
+vendored = { git = "https://git.example.com/vendored.git", branch = "main" }
+greeter = { path = "libs/greeter" }
 ```
 
 Each dependency declares exactly one of `path`, `git`, or `github` (an `owner/repo` shorthand for `https://github.com/owner/repo`). Git dependencies accept at most one of `tag`, `branch`, or `rev`. With none, the remote's default branch is used. There is no version solver. A ref resolves to a commit, and one version of a package name exists per build.
@@ -1829,9 +1838,13 @@ Functions:
 - `File.read(path: String) -> Result<String, String>`: reads an entire file as UTF-8 text (opens, reads, closes).
 - `File.read_binary(path: String) -> Result<Binary, String>`: reads an entire file as arbitrary bytes.
 - `File.write(path: String, content: Binary | String) -> Result<String, String>`: writes text or arbitrary bytes (creates or truncates).
-- `File.exists?(path: String) -> Bool`: returns true if the file exists.
+- `File.exists?(path: String) -> Bool`: returns true if a file or directory exists at the path.
+- `File.dir?(path: String) -> Bool`: returns true only for directories (`exists?` covers both).
 - `File.delete(path: String) -> Result<String, String>`: deletes a file.
 - `File.rename(source: String, destination: String) -> Result<String, String>`: renames (moves) a file.
+- `File.mkdir(path: String) -> Result<String, String>`: creates a single directory, erroring if the parent is missing or the path already exists.
+- `File.mkdir_p(path: String) -> Result<String, String>`: creates a directory and any missing parents (like `mkdir -p`), succeeding if it already exists.
+- `File.rmdir(path: String) -> Result<String, String>`: removes an empty directory.
 - `close(self) -> Result<String, String>`: closes the file handle.
 
 ```koja
@@ -2333,6 +2346,7 @@ test run. The runner reports every discovered test even when some fail.
 | `koja run`    | Build and execute in one step                     |
 | `koja check`  | Type check without compiling                      |
 | `koja test`   | Run `@test`-annotated functions                   |
+| `koja tasks`  | List tasks from the project, deps, and toolchain  |
 | `koja deps`   | Fetch and inspect dependencies (`get`, `update`)  |
 | `koja format` | Opinionated code formatter (`--write`, `--check`) |
 | `koja doc`    | Generate static HTML documentation                |
@@ -2362,14 +2376,51 @@ version = "0.1.0"
 
 Fields:
 
-- `name`: project name (used as the binary output name).
+- `name`: package identity, lowercase snake_case (used as the binary output name and the dependency key).
+- `namespace`: PascalCase name code uses for qualified access. Optional, derived from `name` when omitted (`my_app` -> `MyApp`).
 - `version`: semantic version string.
 - `entry`: the type implementing `Process` that the program starts (required for `build`/`run`).
 - `src`: source directories (default `["src"]`).
 - `test`: test directories (default `["test"]`).
 - `koja`: minimum compiler version, e.g. `koja = "0.15.0"`. A bare version, no operators. An older compiler refuses the package (and any package depending on it) with an error naming both versions.
 
-A `[dependencies]` table declares path and git dependencies; see [Dependencies](#dependencies).
+A `[dependencies]` table declares path and git dependencies (see [Dependencies](#dependencies)), and a `[tasks]` table exports custom CLI tasks (see [Custom Tasks](#custom-tasks)).
+
+### Custom Tasks
+
+A package exports CLI tasks in its `koja.toml`, mapping a task name to a type implementing the `Koja.Task` protocol. Task names are prefixed with the package's `name`, so who provides a task is always visible and names never collide across the dependency graph:
+
+```toml
+[tasks]
+"postgres.migrate" = "Migrate"
+```
+
+The type's `run` receives everything after `--` on the command line. Returning `Result.Err` prints the message to stderr and exits non-zero:
+
+```koja
+struct Migrate
+end
+
+impl Koja.Task for Migrate
+  fn run(args: List<String>) -> Result<(), String>
+    IO.puts("running migrations")
+    Result.Ok(())
+  end
+end
+```
+
+Tasks run with `koja run <task.name> [-- args]` and are invocable from any project that depends on the exporting package. `koja tasks` lists every task in scope:
+
+```
+$ koja tasks
+myapp.seed        Seed
+postgres.migrate  Migrate
+$ koja run postgres.migrate -- --dry-run
+```
+
+`Koja.Task` lives in the qualified `Koja` stdlib package, the toolchain's API surface. Like `koja test`, task runs execute through the standard `Process` pipeline: the driver synthesizes a process entry that calls the task type's `run` with the arguments.
+
+The toolchain exports its own tasks through the `Koja` package, so they are in scope everywhere -- even outside a project. `koja new` is an alias for `koja run koja.new`.
 
 ### Language Server (LSP)
 

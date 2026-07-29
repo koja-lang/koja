@@ -1,4 +1,4 @@
 [project]
-name = "Diamond"
+name = "diamond"
 version = "0.1.0"
 entry = "App"

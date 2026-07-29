@@ -1,4 +1,4 @@
 [project]
 entry = "App"
-name = "ProcessIoSignal"
+name = "process_io_signal"
 version = "0.1.0"

@@ -1,4 +1,4 @@
 [project]
 entry = "App"
-name = "FfiNanTrap"
+name = "ffi_nan_trap"
 version = "0.1.0"

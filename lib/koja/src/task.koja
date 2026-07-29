@@ -1,0 +1,37 @@
+@doc """
+A custom CLI task, invocable as `koja run <name>`.
+
+Packages export tasks in their `koja.toml` by mapping a task name to
+the implementing type. Task names are prefixed with the package name,
+so a package named `postgres` exports tasks like `postgres.migrate`:
+
+```toml
+[tasks]
+"postgres.migrate" = "Migrate"
+```
+
+The named type implements this protocol. `args` carries everything
+after `--` on the command line. Returning `Result.Err` prints the
+message to stderr and exits nonzero:
+
+```koja
+struct Migrate
+end
+
+impl Koja.Task for Migrate
+  fn run(args: List<String>) -> Result<(), String>
+    IO.puts("running migrations")
+    Result.Ok(())
+  end
+end
+```
+
+Tasks exported by a project's dependencies are invocable from that
+project too, and `koja tasks` lists every task in scope.
+"""
+protocol Task
+  @doc """
+  Executes the task with the command-line arguments after `--`.
+  """
+  fn run(args: List<String>) -> Result<(), String>
+end
