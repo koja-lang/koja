@@ -391,9 +391,10 @@ impl<'a> Printer<'a> {
             text("()")
         } else if let [arg] = args
             && arg.name.is_none()
-            && is_closure_arg(&arg.value)
+            && (is_closure_arg(&arg.value) || is_heredoc(&arg.value))
         {
-            // Hug a sole trailing closure instead of exploding the arg list.
+            // Hug a sole trailing closure or heredoc instead of exploding
+            // the arg list.
             concat(vec![text("("), self.arg_to_doc(arg), text(")")])
         } else {
             let arg_docs: Vec<Doc> = args.iter().map(|a| self.arg_to_doc(a)).collect();
@@ -526,53 +527,66 @@ impl<'a> Printer<'a> {
         out.push(self.expr_to_doc(expr));
     }
 
-    /// Formats a string literal (single-line or multi-line heredoc).
+    /// Formats a string literal. Multiline strings render as a heredoc
+    /// block unless the content cannot survive that form (see
+    /// [`heredoc_representable`]), in which case they fall back to the
+    /// single-line spelling with `\n` escapes.
     fn string_to_doc(&mut self, parts: &[StringPart], multiline: bool) -> Doc {
-        if multiline {
-            let mut doc_parts = vec![text("\"\"\"")];
-            for part in parts {
-                match part {
-                    StringPart::Literal { value, .. } => {
-                        let escaped = escape_multiline_literal(value);
-                        for (i, l) in escaped.split('\n').enumerate() {
-                            if i > 0 {
-                                doc_parts.push(hardline());
-                            }
-                            doc_parts.push(text(l.to_string()));
-                        }
-                    }
-                    StringPart::Interpolation { expr, format, .. } => {
-                        doc_parts.push(text("#{"));
-                        doc_parts.push(self.expr_to_doc(expr));
-                        if let Some(fmt) = format {
-                            doc_parts.push(text(format!(":{}", fmt)));
-                        }
-                        doc_parts.push(text("}"));
-                    }
-                }
-            }
-            doc_parts.push(text("\"\"\""));
-            concat(doc_parts)
-        } else {
-            let mut doc_parts = vec![text("\"")];
-            for part in parts {
-                match part {
-                    StringPart::Literal { value, .. } => {
-                        doc_parts.push(text(escape_string_literal(value)));
-                    }
-                    StringPart::Interpolation { expr, format, .. } => {
-                        doc_parts.push(text("#{"));
-                        doc_parts.push(self.expr_to_doc(expr));
-                        if let Some(fmt) = format {
-                            doc_parts.push(text(format!(":{}", fmt)));
-                        }
-                        doc_parts.push(text("}"));
-                    }
-                }
-            }
-            doc_parts.push(text("\""));
-            concat(doc_parts)
+        if multiline && heredoc_representable(parts) {
+            return self.heredoc_to_doc(parts);
         }
+        let mut doc_parts = vec![text("\"")];
+        for part in parts {
+            match part {
+                StringPart::Literal { value, .. } => {
+                    doc_parts.push(text(escape_string_literal(value)));
+                }
+                StringPart::Interpolation { expr, format, .. } => {
+                    doc_parts.push(self.interpolation_to_doc(expr, format.as_deref()));
+                }
+            }
+        }
+        doc_parts.push(text("\""));
+        concat(doc_parts)
+    }
+
+    /// Formats a multiline string as a heredoc block: the delimiters and
+    /// every content line sit at the ambient indent, each behind a
+    /// hardline. The closing delimiter's column therefore equals the pad
+    /// the hardlines injected, so the parser's closing-column dedent
+    /// strips exactly what the printer added and the cooked value
+    /// round-trips (including nested relative indentation).
+    fn heredoc_to_doc(&mut self, parts: &[StringPart]) -> Doc {
+        let mut doc_parts = vec![text("\"\"\""), hardline()];
+        for part in parts {
+            match part {
+                StringPart::Literal { value, .. } => {
+                    let escaped = escape_multiline_literal(value);
+                    for (i, line) in escaped.split('\n').enumerate() {
+                        if i > 0 {
+                            doc_parts.push(hardline());
+                        }
+                        doc_parts.push(text(line.to_string()));
+                    }
+                }
+                StringPart::Interpolation { expr, format, .. } => {
+                    doc_parts.push(self.interpolation_to_doc(expr, format.as_deref()));
+                }
+            }
+        }
+        doc_parts.push(hardline());
+        doc_parts.push(text("\"\"\""));
+        concat(doc_parts)
+    }
+
+    /// Formats a `#{expr}` or `#{expr:spec}` interpolation segment.
+    fn interpolation_to_doc(&mut self, expr: &Expr, format: Option<&str>) -> Doc {
+        let mut doc_parts = vec![text("#{"), self.expr_to_doc(expr)];
+        if let Some(spec) = format {
+            doc_parts.push(text(format!(":{spec}")));
+        }
+        doc_parts.push(text("}"));
+        concat(doc_parts)
     }
 
     /// Formats a `match` arm: `pattern [when guard] -> body`.

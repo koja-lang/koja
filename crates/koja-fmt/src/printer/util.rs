@@ -479,6 +479,24 @@ pub(super) fn is_inline_closure(expr: &Expr) -> bool {
     matches!(&expr.kind, ExprKind::Closure { body, .. } if body.len() == 1)
 }
 
+/// Returns `true` if the value survives heredoc form. The renderer trims
+/// trailing whitespace from every output line, so content with a space
+/// before a line end round-trips through single-line form instead.
+pub(super) fn heredoc_representable(parts: &[StringPart]) -> bool {
+    parts.iter().enumerate().all(|(i, part)| match part {
+        StringPart::Literal { value, .. } => {
+            !value.contains(" \n") && (i + 1 != parts.len() || !value.ends_with(' '))
+        }
+        StringPart::Interpolation { .. } => true,
+    })
+}
+
+/// Returns `true` if the expression is a multiline string that will
+/// render in heredoc form (block-shaped, forcing hard line breaks).
+pub(super) fn is_heredoc(expr: &Expr) -> bool {
+    matches!(&expr.kind, ExprKind::String { multiline: true, parts } if heredoc_representable(parts))
+}
+
 /// Returns `true` if the statement is or contains a block expression
 /// at its top level (if, match, cond, while, for, loop, etc.).
 pub(super) fn stmt_is_block(stmt: &Statement) -> bool {
@@ -824,17 +842,29 @@ pub(super) fn escape_string_literal(s: &str) -> String {
     out
 }
 
-/// Escapes special characters in a multiline (`"""..."""`) string literal.
+/// Escapes special characters in a multiline (`"""` heredoc) string body.
 ///
-/// Unlike [`escape_string_literal`], we leave `\n` as a raw newline (the
-/// whole point of multiline literals) and we don't escape `"` (a single
-/// quote inside `"""..."""` is harmless, only the closing `"""` matters).
-/// We do escape `\\`, `\r`, `\t`, and `#{` so the formatted output
-/// re-parses to the same `String` value.
+/// Unlike [`escape_string_literal`], `\n` stays a raw newline (the whole
+/// point of multiline literals) and lone quotes stay raw. Only every
+/// third quote of a consecutive run is escaped, since three raw quotes
+/// would lex as the closing delimiter. `\\`, `\r`, `\t`, and `#{` are
+/// escaped so the formatted output re-parses to the same value.
 pub(super) fn escape_multiline_literal(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
+    let mut quote_run = 0;
     let mut chars = s.chars().peekable();
     while let Some(c) = chars.next() {
+        if c == '"' {
+            quote_run += 1;
+            if quote_run == 3 {
+                out.push_str("\\\"");
+                quote_run = 0;
+            } else {
+                out.push('"');
+            }
+            continue;
+        }
+        quote_run = 0;
         match c {
             '\\' => out.push_str("\\\\"),
             '\r' => out.push_str("\\r"),

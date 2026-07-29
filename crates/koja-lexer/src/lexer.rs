@@ -139,6 +139,17 @@ impl<'source> Lexer<'source> {
         }
     }
 
+    /// Push an error diagnostic with a hint.
+    fn error(&mut self, message: impl Into<String>, hint: &str, span: Span) {
+        self.errors.push(Diagnostic {
+            severity: Severity::Error,
+            message: message.into(),
+            hint: Some(hint.into()),
+            path: None,
+            span,
+        });
+    }
+
     /// Maps a scanned name to a keyword token or an identifier/type token.
     fn keyword_or_ident(&self, name: String) -> TokenKind {
         if name.starts_with(|c: char| c.is_ascii_uppercase()) {
@@ -220,13 +231,28 @@ impl<'source> Lexer<'source> {
         self.emit(kind, start);
     }
 
-    /// Opens a triple-quoted multiline string (`"""`) and enters the string body scanner.
+    /// Opens a triple-quoted multiline string (`"""`) and enters the string
+    /// body scanner. Content must start on the line after the opener so the
+    /// closing delimiter's column is an unambiguous dedent oracle.
     fn lex_multiline_string(&mut self) {
         let start = self.cursor.position();
         self.cursor.advance();
         self.cursor.advance();
         self.cursor.advance();
         self.emit(TokenKind::MultilineStringStart, start);
+        let next = if self.cursor.at_end() {
+            None
+        } else {
+            Some(self.cursor.peek())
+        };
+        let crlf = next == Some('\r') && self.cursor.peek_at(1) == Some('\n');
+        if !matches!(next, None | Some('\n')) && !crlf {
+            self.error(
+                "multiline string content must start on a new line",
+                "put the content on the line after the opening '\"\"\"'",
+                Span::new(start, self.cursor.position()),
+            );
+        }
         self.lex_string_body(true);
     }
 
@@ -318,13 +344,7 @@ impl<'source> Lexer<'source> {
             self.cursor.advance();
         }
         if self.cursor.offset() == digit_start {
-            self.errors.push(Diagnostic {
-                severity: Severity::Error,
-                message: label.into(),
-                hint: Some(hint.into()),
-                path: None,
-                span: Span::new(start, self.cursor.position()),
-            });
+            self.error(label, hint, Span::new(start, self.cursor.position()));
             return;
         }
         let name = self.cursor.text_from(start_offset);
@@ -353,13 +373,7 @@ impl<'source> Lexer<'source> {
                 } else {
                     ("unterminated string", "add a closing '\"'")
                 };
-                self.errors.push(Diagnostic {
-                    severity: Severity::Error,
-                    message: label.into(),
-                    hint: Some(hint.into()),
-                    path: None,
-                    span: Span::new(frag_start, self.cursor.position()),
-                });
+                self.error(label, hint, Span::new(frag_start, self.cursor.position()));
                 return;
             }
 
@@ -380,22 +394,28 @@ impl<'source> Lexer<'source> {
             {
                 self.emit_fragment(&mut text, frag_start);
                 let end_start = self.cursor.position();
+                let closer_starts_line = self.only_whitespace_before_on_line();
                 self.cursor.advance();
                 self.cursor.advance();
                 self.cursor.advance();
+                if !closer_starts_line {
+                    self.error(
+                        "the closing '\"\"\"' of a multiline string must be on its own line",
+                        "move the closing '\"\"\"' to its own line",
+                        Span::new(end_start, self.cursor.position()),
+                    );
+                }
                 self.emit(TokenKind::MultilineStringEnd, end_start);
                 return;
             }
 
             if !multiline && c == '\n' {
                 self.emit_fragment(&mut text, frag_start);
-                self.errors.push(Diagnostic {
-                    severity: Severity::Error,
-                    message: "unterminated string".into(),
-                    hint: Some("add a closing '\"'".into()),
-                    path: None,
-                    span: Span::new(frag_start, self.cursor.position()),
-                });
+                self.error(
+                    "unterminated string",
+                    "add a closing '\"'",
+                    Span::new(frag_start, self.cursor.position()),
+                );
                 return;
             }
 
@@ -438,13 +458,11 @@ impl<'source> Lexer<'source> {
                     let esc_start = self.cursor.position();
                     self.cursor.advance();
                     self.cursor.advance();
-                    self.errors.push(Diagnostic {
-                        severity: Severity::Error,
-                        message: format!("unknown escape sequence '\\{next}'"),
-                        hint: Some("supported escapes: \\\\, \\\", \\n, \\r, \\t, \\#".into()),
-                        path: None,
-                        span: Span::new(esc_start, self.cursor.position()),
-                    });
+                    self.error(
+                        format!("unknown escape sequence '\\{next}'"),
+                        "supported escapes: \\\\, \\\", \\n, \\r, \\t, \\#",
+                        Span::new(esc_start, self.cursor.position()),
+                    );
                     text.push('\\');
                     text.push(next);
                 }
@@ -487,6 +505,20 @@ impl<'source> Lexer<'source> {
             return false;
         }
         self.cursor.char_at(i) == Some('.')
+    }
+
+    /// True if only whitespace precedes the current position on its line.
+    fn only_whitespace_before_on_line(&self) -> bool {
+        let mut i = self.cursor.char_index();
+        while i > 0 {
+            i -= 1;
+            match self.cursor.char_at(i) {
+                Some('\n') => return true,
+                Some(' ' | '\t' | '\r') => continue,
+                _ => return false,
+            }
+        }
+        true
     }
 
     /// Main dispatch loop: consumes characters and emits tokens until EOF.
@@ -595,13 +627,12 @@ impl<'source> Lexer<'source> {
         }
 
         if let Some(state) = self.string_stack.last() {
-            self.errors.push(Diagnostic {
-                severity: Severity::Error,
-                message: "unterminated string interpolation".into(),
-                hint: Some("add a closing '}'".into()),
-                path: None,
-                span: Span::new(state.start, self.cursor.position()),
-            });
+            let span = Span::new(state.start, self.cursor.position());
+            self.error(
+                "unterminated string interpolation",
+                "add a closing '}'",
+                span,
+            );
         }
 
         self.tokens.push(Token {
@@ -881,13 +912,29 @@ mod tests {
     }
 
     #[test]
-    fn test_multiline_escapes() {
-        let src = r##""""hello\nworld""""##;
+    fn test_multiline_closer_must_start_its_line() {
+        let result = lex("\"\"\"\ntext \"\"\"");
+        assert_eq!(result.errors.len(), 1, "errors: {:?}", result.errors);
         assert_eq!(
-            lex_kinds(src),
+            result.errors[0].message,
+            "the closing '\"\"\"' of a multiline string must be on its own line"
+        );
+    }
+
+    #[test]
+    fn test_multiline_escapes() {
+        let src = "\"\"\"\nhello\\nworld\n\"\"\"";
+        let result = lex(src);
+        assert!(result.errors.is_empty(), "errors: {:?}", result.errors);
+        assert_eq!(
+            result
+                .tokens
+                .into_iter()
+                .map(|t| t.kind)
+                .collect::<Vec<_>>(),
             vec![
                 TokenKind::MultilineStringStart,
-                TokenKind::StringFragment("hello\nworld".into()),
+                TokenKind::StringFragment("\nhello\nworld\n".into()),
                 TokenKind::MultilineStringEnd,
                 TokenKind::EndOfFile,
             ]
@@ -896,18 +943,29 @@ mod tests {
 
     #[test]
     fn test_multiline_interpolation() {
-        let src = r##""""hello #{name}""""##;
+        let src = "\"\"\"\nhello #{name}\n\"\"\"";
         assert_eq!(
             lex_kinds(src),
             vec![
                 TokenKind::MultilineStringStart,
-                TokenKind::StringFragment("hello ".into()),
+                TokenKind::StringFragment("\nhello ".into()),
                 TokenKind::InterpolStart,
                 TokenKind::Ident("name".into()),
                 TokenKind::InterpolEnd,
+                TokenKind::StringFragment("\n".into()),
                 TokenKind::MultilineStringEnd,
                 TokenKind::EndOfFile,
             ]
+        );
+    }
+
+    #[test]
+    fn test_multiline_opener_must_end_its_line() {
+        let result = lex("\"\"\"text\n\"\"\"");
+        assert_eq!(result.errors.len(), 1, "errors: {:?}", result.errors);
+        assert_eq!(
+            result.errors[0].message,
+            "multiline string content must start on a new line"
         );
     }
 
@@ -1071,7 +1129,7 @@ mod tests {
 
     #[test]
     fn test_unterminated_multiline_interpolation_at_eof() {
-        let source = "\"\"\"hello #{name";
+        let source = "\"\"\"\nhello #{name";
         let result = lex(source);
         assert_eq!(result.errors.len(), 1);
         assert_eq!(
