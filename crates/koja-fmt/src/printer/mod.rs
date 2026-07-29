@@ -673,7 +673,7 @@ impl<'a> Printer<'a> {
                 target,
                 type_annotation,
                 value,
-                ..
+                span,
             } => {
                 let target_doc = text(target.segments.join("."));
                 let lhs = if let Some(te) = type_annotation {
@@ -690,6 +690,20 @@ impl<'a> Printer<'a> {
                         text(" ="),
                         indent(2, concat(vec![line(), value_doc])),
                     ]))
+                } else if is_heredoc(value) {
+                    // Both opener placements are idiomatic. Preserve the
+                    // author's choice: glued (`x = """`) when the literal
+                    // starts on the assignment's line, otherwise broken
+                    // (newline after `=`, block indented like match/cond).
+                    if value.span.start.line == span.start.line {
+                        concat(vec![lhs, text(" = "), value_doc])
+                    } else {
+                        concat(vec![
+                            lhs,
+                            text(" ="),
+                            indent(2, concat(vec![hardline(), value_doc])),
+                        ])
+                    }
                 } else if expr_contains_block(value) {
                     concat(vec![
                         lhs,

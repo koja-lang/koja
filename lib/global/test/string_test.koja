@@ -35,8 +35,10 @@ struct StringTest
 
   @test "heredoc dedents trailing lines"
   fn test_heredoc -> Result<Bool, String>
-    msg = """first line
-    second line"""
+    msg = """
+    first line
+    second line
+    """
 
     unless msg == "first line\nsecond line"
       return Result.Err("heredoc content")

@@ -49,7 +49,7 @@ pub enum Visibility {
 /// The value attached to an annotation.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AnnotationValue {
-    /// A string value: `@doc "text"` or `@doc """text"""`.
+    /// A string value: `@doc "text"` or a triple-quoted multiline payload.
     String(String),
     /// An explicit false: `@doc false`, which suppresses documentation.
     False,

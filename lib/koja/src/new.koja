@@ -63,8 +63,9 @@ priv fn write_scaffold(name: String) -> Result<(), String>
   write_file("#{name}/test/app_test.koja", app_test_content())
 end
 
+# Appends the trailing newline the heredoc closing delimiter strips.
 priv fn write_file(path: String, content: String) -> Result<(), String>
-  match File.write(path, content)
+  match File.write(path, "#{content}\n")
     Result.Err(message) -> Result.Err("cannot write #{path}: #{message}")
     Result.Ok(_) -> Result.Ok(())
   end
@@ -117,53 +118,68 @@ priv fn toolchain_version -> String
   result.unwrap()
 end
 
-# Scaffold contents build from joined lines rather than multiline
-# literals. The trailing newline (the closing "") and the nested
-# indentation must survive the formatter and the heredoc dedent
-# rules byte-exactly.
-priv fn lines(parts: List<String>) -> String
-  String.join(parts, "\n")
-end
-
 priv fn toml_content(name: String) -> String
-  lines(
-    [
-      "[project]", "entry = \"App\"", "koja = \"#{minimum_koja_version()}\"",
-      "name = \"#{name}\"", "version = \"0.1.0\"", ""
-    ],
-  )
+  """
+  [project]
+  entry = "App"
+  koja = "#{minimum_koja_version()}"
+  name = "#{name}"
+  version = "0.1.0"
+  """
 end
 
 priv fn gitignore_content -> String
-  lines(["/build", "/deps", ""])
+  """
+  /build
+  /deps
+  """
 end
 
 priv fn app_content -> String
-  lines(
-    [
-      "alias Process.Step", "alias Process.StopReason", "",
-      "fn greet(name: String) -> String", "  \"Hello, \#{name}!\"", "end", "",
-      "struct App", "end", "", "impl Process<(), (), ()> for App",
-      "  fn start(config: ()) -> Result<Self, StopReason>",
-      "    Result.Ok(App{})", "  end", "",
-      "  fn handle(self, msg: (), from: Option<ReplyTo<()>>) -> Step<Self>",
-      "    Step.Continue(self)", "  end", "", "  fn run(self) -> StopReason",
-      "    IO.puts(greet(\"Koja\"))", "    StopReason.Normal", "  end", "end",
-      ""
-    ],
-  )
+  """
+  alias Process.Step
+  alias Process.StopReason
+
+  fn greet(name: String) -> String
+    "Hello, \#{name}!"
+  end
+
+  struct App
+  end
+
+  impl Process<(), (), ()> for App
+    fn start(config: ()) -> Result<Self, StopReason>
+      Result.Ok(App{})
+    end
+
+    fn handle(self, msg: (), from: Option<ReplyTo<()>>) -> Step<Self>
+      Step.Continue(self)
+    end
+
+    fn run(self) -> StopReason
+      IO.puts(greet("Koja"))
+      StopReason.Normal
+    end
+  end
+  """
 end
 
 priv fn app_test_content -> String
-  lines(
-    [
-      "struct AppTest", "  @test \"greet builds a greeting message\"",
-      "  fn test_greet -> Result<Bool, String>", "    actual = greet(\"Koja\")",
-      "    expected = \"Hello, Koja!\"", "", "    unless actual == expected",
-      "      return Result.Err(\"expected `\#{expected}`, got `\#{actual}`\")",
-      "    end", "", "    Result.Ok(true)", "  end", "end", ""
-    ],
-  )
+  """
+  struct AppTest
+    @test "greet builds a greeting message"
+    fn test_greet -> Result<Bool, String>
+      actual = greet("Koja")
+      expected = "Hello, Koja!"
+
+      unless actual == expected
+        return Result.Err("expected `\#{expected}`, got `\#{actual}`")
+      end
+
+      Result.Ok(true)
+    end
+  end
+  """
 end
 
 @extern "C"

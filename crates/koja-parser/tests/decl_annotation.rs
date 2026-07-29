@@ -3,7 +3,7 @@
 //! Pins:
 //! - `@name` bare (no value)
 //! - `@name "string"`
-//! - `@name """multiline"""`
+//! - `@name` with a triple-quoted multiline payload
 //! - `@name false`
 //! - multiple stacked annotations
 //! - annotations propagate to every supported declaration kind:

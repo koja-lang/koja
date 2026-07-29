@@ -461,6 +461,23 @@ msg = """
   """
 ```
 
+Content must start on the line after the opening `"""`, and the closing `"""`
+must sit on its own line (only whitespace may precede it, though code such as a
+closing `)` may follow it). This makes the closing delimiter's column an
+unambiguous dedent oracle. Both placements of the opener are idiomatic and the
+formatter preserves whichever one you write:
+
+```koja
+x =
+  """
+  example text
+  """
+
+y = """
+example text
+"""
+```
+
 Multiline strings support the same escape sequences and interpolation as single-line strings.
 
 ### Structs
