@@ -4,8 +4,7 @@
 //! `TestApp.Pair_$Int.TestApp.String$`. A method on that struct
 //! mangles to `TestApp.Pair_$Int.TestApp.String$.first`. If the
 //! method itself takes type params (`fn map<U>`) the args attach
-//! to the method segment as `…$.map_$<U-args>$`. Mirrors v1's
-//! mangling so cross-tool linker output stays comparable. The
+//! to the method segment as `…$.map_$<U-args>$`. The
 //! `_$..$` brackets delimit each type-args block, and nested generic
 //! args bring their own `_$..$` so depth-counting parses
 //! unambiguously.

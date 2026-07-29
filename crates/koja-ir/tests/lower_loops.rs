@@ -34,7 +34,9 @@ use koja_ir::{BranchTarget, IRInstruction, IRTerminator, IRType};
 
 mod common;
 
-use common::{all_instructions, block_labeled, entry_block, lower_script_source as lower};
+use common::{
+    all_instructions, block_labeled, entry_block, lower_script_source as lower, script_function,
+};
 
 #[test]
 fn while_lowers_to_header_body_exit_with_back_edge() {
@@ -207,16 +209,21 @@ fn while_with_return_inside_body_terminates_function() {
     // The body block's terminator should be a Return, not a
     // back-edge Branch.
     let source = "
-        i = 0
-        while i < 10
-          return i
+        fn first_below(limit: Int) -> Int
+          i = 0
+          while i < limit
+            return i
+          end
+          i
         end
-        i
+
+        first_below(10).print()
         ";
 
     let script = lower(source);
 
-    let body = block_labeled(&script.blocks, "while_body");
+    let function = script_function(&script, "first_below");
+    let body = block_labeled(&function.blocks, "while_body");
     assert!(
         matches!(body.terminator, IRTerminator::Return { .. }),
         "early-return body should terminate with Return; got {:?}",
@@ -413,8 +420,8 @@ fn nested_break_targets_innermost_loop_exit() {
     // `lower_loop` for the inner loop runs nested inside the outer,
     // so by `fresh_block` order the outer's exit comes first
     // (created during the outer's `lower_loop` setup), then the
-    // inner's exit. Bookkeeping mirrors v1's loop_exit stack push
-    // order. Pin the outer-then-inner shape.
+    // inner's exit, matching the loop_exit stack push order. Pin
+    // the outer-then-inner shape.
     let outer_exit_id = exit_blocks[0].id;
     let inner_exit_id = exit_blocks[1].id;
 

@@ -22,6 +22,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Breaking change.** Standard library APIs now use anonymous tuples for list pops, datagram receives, JSON object entries, parser results, and process envelopes instead of `Pair`.
 - **Breaking change.** The manifest `name` is now the package's lowercase snake_case identity, and code-facing PascalCase namespaces are derived from it (`my_app` -> `MyApp`) or declared with the new `namespace` field.
 - **Breaking change.** Multiline string content must start on the line after the opening `"""`, and the closing `"""` must sit on its own line.
+- **Breaking change.** Explicit `return` values are now typechecked against the declared return type, a bare `return` in a valued function is an error, and `return <value>` is rejected in `Unit` functions and scripts.
+- `Kernel.exit` is now typed as divergent, so a match arm or function body can end in `Kernel.exit(...)` without a dummy tail value.
 - `koja new` is now a task written in Koja itself, exported by the stdlib as `koja.new` and runnable anywhere, including outside a project.
 - Compiler errors and warnings now print their `file:line:column` location with a source snippet and caret underline.
 - Diagnostics render in a pretty terminal format or a machine-friendly one-line format, selectable via `--diagnostics=pretty|short` or the `KOJA_DIAGNOSTICS` environment variable (defaulting by whether stderr is a terminal).
@@ -30,6 +32,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - `koja format` now exits with an error code when a file fails to parse, instead of printing the error and reporting success.
 - `koja format` now preserves multiline string literals exactly, including nested indentation and embedded quotes, instead of corrupting their content.
+- A conditional top-level `return` in a script no longer crashes `koja run --backend=llvm`.
 
 ## [0.15.3] - 2026-07-21
 

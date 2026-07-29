@@ -44,7 +44,7 @@ use super::PatternCoverage;
 /// Resolve a `<<segments>>` pattern against `subject_ty`. Returns
 /// [`PatternCoverage::Other`]. Binary patterns never satisfy the
 /// catch-all rule, so the match driver requires a separate
-/// wildcard arm for exhaustiveness (matching v1's behavior).
+/// wildcard arm for exhaustiveness.
 pub(super) fn resolve_binary_pattern(
     segments: &mut [BinarySegment],
     subject_ty: &ResolvedType,
@@ -348,8 +348,8 @@ fn resolve_binding_type(
 }
 
 /// Range-check an integer literal segment against its declared
-/// bit width, honoring the `signed` / `unsigned` modifier. Ported
-/// from v1's `check_literal_overflow`. Silently no-ops for widths
+/// bit width, honoring the `signed` / `unsigned` modifier.
+/// Silently no-ops for widths
 /// outside the 1..=64 supported range. `segment_fixed_width`
 /// already rejects 0, and bit widths >64 are gated by other rules.
 fn check_literal_overflow(

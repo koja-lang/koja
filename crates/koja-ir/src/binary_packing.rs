@@ -36,8 +36,8 @@ pub fn pack_integer_segment(
     }
     // A sub-byte segment writes the low `width` bits MSB first,
     // mirroring the runtime `__koja_pack_bits` helper. Endianness is
-    // meaningless for non-byte-multiple widths in v1, so we only
-    // honour the high-order-first convention.
+    // meaningless for non-byte-multiple widths, so we only honour
+    // the high-order-first convention.
     pack_bits_into(buffer, value, width, start_bit);
 }
 

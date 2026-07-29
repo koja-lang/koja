@@ -54,8 +54,7 @@ pub(crate) struct EmitContext<'ctx> {
     /// Counter for `alpha_<prefix>.<n>` global names: strings,
     /// binary, bits constants all share a single sequence so each
     /// emitted global symbol is unique. `Cell<u32>` because emission
-    /// walks `&EmitContext` immutably. Mirrors v1's
-    /// `string_const.<n>` pattern in `koja-codegen`.
+    /// walks `&EmitContext` immutably.
     payload_counter: Cell<u32>,
     /// Per-function local-variable slot map: `IRLocalId ->
     /// PointerValue` (the LLVM `alloca` materializing the slot).
@@ -481,8 +480,7 @@ impl<'ctx> EmitContext<'ctx> {
 
     /// Build an alloca at the head of the current function's entry
     /// block, regardless of where the builder is currently
-    /// positioned. Mirrors v1 codegen's `Compiler::build_entry_alloca`:
-    /// pulling the alloca to the entry block keeps a per-iteration
+    /// positioned. Pulling the alloca to the entry block keeps a per-iteration
     /// alloca inside a TCO loop from leaking stack across iterations.
     /// Restores the builder's position before returning.
     pub(crate) fn build_entry_alloca<T: BasicType<'ctx>>(

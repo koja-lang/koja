@@ -126,11 +126,11 @@ pub(crate) fn emit_set_from_list<'ctx>(
     ret_struct(ctx, final_set)
 }
 
-/// Inline the `Set.insert` body at a call site. v1 emitted a
-/// sibling function and called it. This avoids that round-trip by
-/// inlining, since the per-method declared-function index isn't
-/// populated for the freshly-monomorphized `Set.insert` at the
-/// point where `from_list`'s body is being emitted.
+/// Inline the `Set.insert` body at a call site instead of emitting
+/// a sibling function and calling it, since the per-method
+/// declared-function index isn't populated for the
+/// freshly-monomorphized `Set.insert` at the point where
+/// `from_list`'s body is being emitted.
 fn call_set_insert_inline<'ctx>(
     ctx: &EmitContext<'ctx>,
     function: &IRFunction,

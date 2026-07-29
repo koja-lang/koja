@@ -105,8 +105,8 @@ pub(super) fn resolve_unless(
 
 /// Resolve a `cond ... end` chain: every arm's condition is a `Bool`,
 /// every arm's body resolves, and the result type is the strict-
-/// equality join of every arm tail type plus the else-body tail.
-/// Mirrors v1's `cond` join (treating `Never` as bottom). Missing
+/// equality join of every arm tail type plus the else-body tail
+/// (treating `Never` as bottom). Missing
 /// `else_body` defaults to a Unit sink so a `cond` without an else
 /// joins to `Unit` regardless of the arm tails, but the parser
 /// requires `else`, so this branch is defensive.

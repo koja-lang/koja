@@ -43,9 +43,9 @@ pub(super) fn lower_constant_pool_entry(
 /// constant pool (vs. inlining at the use site as
 /// [`IRInstruction::Const`](crate::function::IRInstruction::Const)). Heap payloads (strings, binaries,
 /// bits), unit enum variants, and structs of literals pool. Scalar
-/// numeric / bool / unit primitives inline. Mirrors v1's
-/// `ConstantTables` admission rule, where the binary size win is on
-/// compound constants rather than primitives that fit in a register.
+/// numeric / bool / unit primitives inline, since the binary size
+/// win is on compound constants rather than primitives that fit in
+/// a register.
 pub(super) fn pools_in_constant_pool(value: &IRConstantValue) -> bool {
     match value {
         IRConstantValue::EnumVariant { .. } | IRConstantValue::Struct { .. } => true,

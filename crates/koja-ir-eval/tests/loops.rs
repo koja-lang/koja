@@ -59,22 +59,25 @@ fn while_with_string_concat_in_body_accumulates_heap_state() {
 #[test]
 fn early_return_inside_while_exits_function() {
     let source = "
-        i = 0
-        while i < 100
-          i = i + 1
-          if i == 5
-            return i
+        fn first_match() -> Int
+          i = 0
+          while i < 100
+            i = i + 1
+            if i == 5
+              return i
+            end
           end
+          0
         end
-        0
+
+        first_match()
         ";
     assert_eq!(evaluate(&dedent(source)).unwrap(), Value::Int(5));
 }
 
 #[test]
 fn while_value_is_unit() {
-    // A trailing `while` produces Unit (loops type as Unit,
-    // mirroring v1).
+    // A trailing `while` produces Unit (loops type as Unit).
     let source = "
         i = 0
         while i < 1
@@ -162,13 +165,16 @@ fn for_with_zero_length_iterable_skips_body() {
 fn early_return_inside_for_exits_function() {
     let source = with_fixture(
         "
-        c = Counter{start: 0, finish: 100}
-        for x in c
-          if x == 7
-            return x
+        fn find_seven(c: Counter) -> Int
+          for x in c
+            if x == 7
+              return x
+            end
           end
+          0
         end
-        0
+
+        find_seven(Counter{start: 0, finish: 100})
         ",
     );
     assert_eq!(evaluate(&dedent(&source)).unwrap(), Value::Int(7));

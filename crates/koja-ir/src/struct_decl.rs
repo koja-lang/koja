@@ -7,7 +7,7 @@
 //! [`IRStructField`] carries its 0-based positional `index` even
 //! though the slot is also implicit in the `Vec` ordering. Backends
 //! lift the index out of the struct and consult it directly when
-//! materializing GEPs, mirroring v1 `koja-codegen`'s pattern. Field
+//! materializing GEPs. Field
 //! names are kept for diagnostic / debug rendering and for naming
 //! LLVM allocas + GEPs, while lowering and seal index by position.
 //!

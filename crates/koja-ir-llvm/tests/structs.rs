@@ -15,8 +15,7 @@
 //!   order in the IR layer flows straight into linear `store`
 //!   sequences in the bitcode.
 //! - **`FieldGet` lowering**: a `recv.field` projection lowers to
-//!   alloca -> store-receiver -> `getelementptr inbounds -> load`,
-//!   mirroring v1 codegen's `emit_field_load` shape.
+//!   alloca -> store-receiver -> `getelementptr inbounds -> load`.
 //!
 //! All assertions are substring-only (LLVM may shuffle attribute
 //! ordering between patch versions). Byte-for-byte stdout coverage of
@@ -85,7 +84,7 @@ fn field_get_lowers_to_gep_then_load() {
         emit_script_llvm_ir(&script, APP_NAME).expect("emit_script_llvm_ir should succeed");
 
     // FieldGet always projects through alloca -> store-receiver ->
-    // GEP -> load (mirroring v1 codegen's `emit_field_load`).
+    // GEP -> load.
     assert_contains(&ir_text, "getelementptr inbounds %TestApp.Point");
     assert_contains(&ir_text, "load i64");
 }

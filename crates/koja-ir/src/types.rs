@@ -306,8 +306,7 @@ pub enum LoweredBinaryPattern {
     /// segments.
     LiteralBytes { bit_offset: u64, bytes: Vec<u8> },
     /// Extract an integer segment and bind it into the local
-    /// slot `local`. Sign-extend when `sign == Signed` (fixes a
-    /// v1 codegen bug where the modifier was ignored).
+    /// slot `local`. Sign-extend when `sign == Signed`.
     BindInt {
         bit_offset: u64,
         endian: BinaryEndian,
@@ -384,7 +383,7 @@ impl ConcatKind {
 ///
 /// `Float32` / `Float64` are IEEE 754 by-value primitives, **copy
 /// types** per `LANGUAGE.md`, distinct from `String`'s move-type
-/// status. `Float64` is the v1 alias for `Global.Float`, while `Float32`
+/// status. `Float64` backs `Global.Float`, while `Float32`
 /// only enters via explicit annotations / casts (a future slice).
 ///
 /// `String` / `Binary` / `Bits` are the bit-length-header family.

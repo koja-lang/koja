@@ -31,7 +31,7 @@ use crate::registry::{FunctionSignature, GlobalKind, GlobalRegistry};
 
 use super::ctx::{Resolver, ResolverEnv};
 use super::expr::resolve_expr_with_expected;
-use super::return_type::check_return_type;
+use super::return_type::{check_explicit_return, check_return_type};
 use super::statements::{resolve_assignment, resolve_compound_assignment, resolve_destructure};
 
 pub(crate) fn resolve_file(
@@ -150,6 +150,12 @@ pub(crate) fn resolve_file(
     if let Some(body) = file.body.as_mut() {
         let mut scope = LocalScope::new();
         let mut resolver = env.make_resolver(None, None, &[], &mut scope);
+        // Scripts have no return channel: a bare `return` is a normal
+        // early exit and a valued `return` is rejected (exit codes go
+        // through `Kernel.exit`). Treating the body as Unit-returning
+        // lets `check_explicit_return` enforce that.
+        resolver.current_return_type = Some(resolver.registry.primitive("Unit"));
+        resolver.in_script_body = true;
         for stmt in body.iter_mut() {
             resolve_statement(stmt, &mut resolver, diagnostics);
         }
@@ -337,11 +343,12 @@ pub(super) fn resolve_statement_with_expected(
         Statement::Expr(expr) => {
             resolve_expr_with_expected(expr, expected, resolver, diagnostics);
         }
-        Statement::Return { value, .. } => {
+        Statement::Return { value, span } => {
             if let Some(value) = value {
                 let expected = resolver.current_return_type.clone();
                 resolve_expr_with_expected(value, expected.as_ref(), resolver, diagnostics);
             }
+            check_explicit_return(value.as_mut(), *span, resolver, diagnostics);
         }
     }
 }

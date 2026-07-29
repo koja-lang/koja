@@ -1,5 +1,5 @@
 //! IR-text + behavioral coverage for `Debug for String`,
-//! specifically `escape_debug`, which v1-PARITY pinned as the
+//! specifically `escape_debug`, the historical
 //! "match-on-String + concat-assign" SIGABRT source. The bug was a
 //! spurious `DropLocal` inside the second match arm at lowering
 //! time. Under the value-semantics leak baseline the arm bodies

@@ -25,7 +25,7 @@ use crate::interpreter::CallResolver;
 use crate::scheduler::{self, EvalMessage, ReplyInfo, YieldOnce};
 use crate::value::Value;
 
-/// `Option<T>::Some` tag (declaration order, v1 convention shared with
+/// `Option<T>::Some` tag (declaration order, convention shared with
 /// [`helpers`]). Used to recover the `ReplyTo` payload type from an
 /// `Option<ReplyTo<R>>` decl when materializing a delivered call.
 const SOME_TAG: IRVariantTag = IRVariantTag(0);

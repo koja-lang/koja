@@ -1,5 +1,5 @@
 //! Typecheck coverage for trailing-expression-vs-declared-return
-//! checking. Mirrors v1's `check_implicit_return` shape: when the
+//! checking. When the
 //! declared return type is non-Unit, the body's trailing statement
 //! must be a `Statement::Expr` whose resolution equals the declared
 //! return type. Unit-returning functions skip the check, and

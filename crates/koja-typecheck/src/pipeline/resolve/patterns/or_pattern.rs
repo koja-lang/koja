@@ -98,8 +98,8 @@ pub(super) fn resolve_or_pattern(
                 // CatchAll only reachable via an unhandled future shape.
                 // The single-test guard above already rejects bindings /
                 // wildcards inside or-patterns. UnionMember inside an
-                // or-pattern isn't a v1 surface. Collapse to Other so
-                // the outer match runs its "non-exhaustive" rule.
+                // or-pattern isn't a supported surface. Collapse to Other
+                // so the outer match runs its "non-exhaustive" rule.
                 all_literal = false;
                 all_enum_units = false;
             }

@@ -1,7 +1,7 @@
 //! Cycle-breaking pass: wraps recursive struct fields / enum payload
 //! slots with [`IRType::Indirect`] so backends never face a value-
-//! level recursive type. Mirrors v1's `mark_recursive_fields` over
-//! the post-monomorphization IR graph.
+//! level recursive type. Runs over the post-monomorphization IR
+//! graph.
 //!
 //! Edges count inline `Struct(_)` / `Enum(_)` references only, since
 //! pointer-shaped types (`CPtr`, `List`, `Map`, `Set`, `Function`,

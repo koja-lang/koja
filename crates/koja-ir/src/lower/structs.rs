@@ -10,9 +10,8 @@
 //! per-field [`IRType`] onto the instruction".
 //!
 //! Move tracking is deferred. Field reads produce a value of the
-//! field's IRType without invalidating the receiver, matching v1
-//! and the resolve sub-pass. Tightening lands with the
-//! ownership slice.
+//! field's IRType without invalidating the receiver, matching the
+//! resolve sub-pass. Tightening lands with the ownership slice.
 
 use std::collections::BTreeMap;
 

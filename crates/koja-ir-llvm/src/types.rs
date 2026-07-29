@@ -3,7 +3,7 @@
 //! unsigned widths share their LLVM width (signedness is
 //! per-instruction, not per-type). `Float32` / `Float64` map to
 //! `f32` / `f64` IEEE 754. `String` maps to a default-AS pointer
-//! (the v1 header layout lives in
+//! (the header layout lives in
 //! [`crate::emit::instruction::emit_const_string`]). `Struct(_)`
 //! resolves through the pre-emitted [`crate::ctx::EmitContext`] struct
 //! type map. `Enum(_)` resolves through the pre-emitted enum-layout

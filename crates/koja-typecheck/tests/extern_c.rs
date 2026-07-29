@@ -1,5 +1,4 @@
-//! `@extern "C"` FFI signature gate. Mirrors v1's
-//! `validate_ffi_signature` rules: bodyless declaration, no
+//! `@extern "C"` FFI signature gate: bodyless declaration, no
 //! `@intrinsic` mutex, no `self` receiver, and parameter / return
 //! types restricted to the explicit-width numeric primitives,
 //! `Bool`, `Unit`, or `CPtr<T>`. `@link` annotations are pure

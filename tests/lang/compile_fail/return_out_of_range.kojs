@@ -1,0 +1,8 @@
+fn tiny(flag: Bool) -> Int8
+  if flag
+    return 300
+  end
+  1
+end
+
+tiny(true).print()

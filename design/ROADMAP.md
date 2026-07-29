@@ -46,7 +46,7 @@ last major product types planned before ecosystem validation.
 
 ### Correctness and production gates
 
-- Type-check and coercion-stamp every explicit `return`. Script behavior must
+- **[DONE]** Type-check and coercion-stamp every explicit `return`. Script behavior must
   remain consistent across both backends.
 - Reject reads of locals that are not definitely assigned on every path.
 - Reject tuple equality when any element lacks valid equality semantics.
@@ -148,6 +148,11 @@ maintenance or product benefit.
 Additional native targets, cross-compilation, WebAssembly, browser integration,
 and alternative backends remain possible future work. Their designs must
 preserve the compiler and runtime invariants above.
+
+Embeddable script evaluation is another candidate: a host API around the
+interpreter's script entry point that returns the script's result to the
+embedding program. Explicit `return <value>` at the top level is rejected
+today and stays reserved as the hosted-script result channel.
 
 ## Guiding principles
 

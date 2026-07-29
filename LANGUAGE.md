@@ -241,6 +241,17 @@ end
 
 `return` is a statement. It cannot appear inside another expression.
 
+Every explicit `return` is typechecked against the declared return type with the same rules as the trailing expression, including numeric literal coercion (`return 5` in a `-> Int8` function produces an `Int8`). A bare `return` in a function that declares a return type is an error, and `return <value>` in a function that returns `Unit` is an error. A `return` whose value diverges (such as `return Kernel.panic("boom")`) is accepted in any function.
+
+Scripts (`.kojs`) have no return channel. A bare `return` at the top level ends the script early as a normal exit (exit code 0), while `return <value>` is a compile error. Use `Kernel.exit(code)` to set an exit code, or print the value.
+
+```koja
+if args.empty?()
+  IO.puts("nothing to do")
+  return
+end
+```
+
 ### Parameters
 
 Parameters are passed by value. The callee receives its own independent copy of each argument:
@@ -1503,7 +1514,7 @@ Core runtime operations.
 
 #### `Kernel.exit(code: Int)`
 
-Terminates the process immediately with the given exit code. `0` indicates success, and any non-zero value indicates failure.
+Terminates the process immediately with the given exit code. `0` indicates success, and any non-zero value indicates failure. Never returns, so a match arm or function body may end in `Kernel.exit(...)` regardless of the type the surrounding code expects.
 
 ```koja
 Kernel.exit(0)

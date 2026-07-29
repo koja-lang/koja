@@ -1,6 +1,7 @@
 //! `String` method intrinsics. Eval-side codepoint walking goes
-//! through Rust's `str` primitives so semantics match v1 byte-for-
-//! byte. `to_cstring` allocates a null-terminated `malloc` copy of
+//! through Rust's `str` primitives so semantics match the native
+//! backend byte-for-byte.
+//! `to_cstring` allocates a null-terminated `malloc` copy of
 //! the receiver and bundles the pointer + byte length into a
 //! [`Value::Struct`] matching the `CString` decl. Callers free it
 //! through `CString.free` (which routes to `CPtr.free`).
