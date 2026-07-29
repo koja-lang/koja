@@ -375,9 +375,9 @@ pub fn cmd_test(trace: bool, color: bool) {
     run_project_tests(&config, &root, TestOptions { color, trace });
 }
 
-/// `koja tasks`: list every task in scope with the providing type.
-/// Inside a project that's the project's + dependencies' + the
-/// toolchain's. Outside one, the toolchain's only.
+/// `koja tasks`: list every task name in scope. Inside a project
+/// that's the project's + dependencies' + the toolchain's. Outside
+/// one, the toolchain's only.
 pub fn cmd_tasks() {
     let project = try_load_project();
     let tasks = resolve_tasks(
@@ -393,9 +393,8 @@ pub fn cmd_tasks() {
         println!("no tasks defined");
         return;
     }
-    let width = tasks.keys().map(String::len).max().unwrap_or(0);
-    for (name, provider) in &tasks {
-        println!("{name:width$}  {}", provider.type_name);
+    for name in tasks.keys() {
+        println!("{name}");
     }
 }
 

@@ -2413,8 +2413,9 @@ Tasks run with `koja run <task.name> [-- args]` and are invocable from any proje
 
 ```
 $ koja tasks
-myapp.seed        Seed
-postgres.migrate  Migrate
+koja.new
+myapp.seed
+postgres.migrate
 $ koja run postgres.migrate -- --dry-run
 ```
 

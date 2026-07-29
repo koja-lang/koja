@@ -230,7 +230,7 @@ fn listing_always_offers_the_toolchain_tasks() {
     scaffold_project(&fx, "");
 
     let stdout = fx.koja_ok(&["tasks"]);
-    assert_eq!(stdout.trim(), "koja.new  New");
+    assert_eq!(stdout.trim(), "koja.new");
 }
 
 #[test]
