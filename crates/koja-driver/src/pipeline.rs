@@ -463,24 +463,24 @@ fn run_task_compiled(
     args: &[String],
 ) -> ! {
     let binary_stem = format!("task_{}", name.replace('.', "_"));
-    match project.filter(|_| !provider.toolchain) {
-        Some((config, root)) => {
-            let binary = project_build_dir(root, release)
-                .join(binary_stem)
-                .to_string_lossy()
-                .to_string();
-            emit_and_link_program(program, &config.name, &binary, &[root], release);
-            exec_binary(&binary, args, false)
-        }
-        None => {
-            let binary = env::temp_dir()
-                .join(format!("koja-run-{}-{binary_stem}", process::id()))
-                .to_string_lossy()
-                .to_string();
-            emit_and_link_program(program, &provider.package, &binary, &[], release);
-            exec_binary(&binary, args, true)
-        }
-    }
+    let (binary, app_name, link_roots, remove_after) = match project.filter(|_| !provider.toolchain)
+    {
+        Some((config, root)) => (
+            project_build_dir(root, release).join(binary_stem),
+            config.name.as_str(),
+            vec![root.as_path()],
+            false,
+        ),
+        None => (
+            env::temp_dir().join(format!("koja-run-{}-{binary_stem}", process::id())),
+            provider.package.as_str(),
+            Vec::new(),
+            true,
+        ),
+    };
+    let binary = binary.to_string_lossy().to_string();
+    emit_and_link_program(program, app_name, &binary, &link_roots, release);
+    exec_binary(&binary, args, remove_after)
 }
 
 /// Drive the project pipeline with the task harness spliced into the

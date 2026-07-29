@@ -177,6 +177,7 @@ fn dependency_task_is_listed_and_runs() {
     let listing = fx.koja_ok(&["tasks"]);
     assert!(listing.contains("myapp.greet"), "listing: {listing}");
     assert!(listing.contains("tooling.lint"), "listing: {listing}");
+    assert!(listing.contains("koja.new"), "listing: {listing}");
 
     let stdout = fx.koja_ok(&["run", "tooling.lint", "--", "fast"]);
     assert_eq!(stdout.trim(), "linting fast");
@@ -225,20 +226,11 @@ fn task_type_must_exist_and_implement_the_protocol() {
 }
 
 #[test]
-fn listing_always_offers_the_toolchain_tasks() {
-    let fx = Fixture::new("empty");
-    scaffold_project(&fx, "");
-
-    let stdout = fx.koja_ok(&["tasks"]);
-    assert_eq!(stdout.trim(), "koja.new");
-}
-
-#[test]
 fn tasks_and_task_runs_work_without_a_project() {
     let fx = Fixture::new("projectless");
 
     let listing = fx.koja_ok(&["tasks"]);
-    assert!(listing.contains("koja.new"), "listing: {listing}");
+    assert_eq!(listing.trim(), "koja.new");
 
     fx.koja_ok(&["run", "koja.new", "--", "my_app"]);
     assert!(fx.root.join("my_app/koja.toml").exists());
@@ -259,8 +251,25 @@ fn read_scaffold_file(fx: &Fixture, relative: &str) -> String {
 }
 
 #[test]
-fn new_scaffolds_a_complete_working_project() {
+fn new_scaffolds_a_working_project_and_rejects_bad_input() {
     let fx = Fixture::new("new");
+
+    let stderr = fx.koja_err(&["new", "MyApp"]);
+    assert!(
+        stderr.contains(
+            "error: project name must be lowercase snake_case (like `my_app`). \
+             The code namespace is derived from it (`my_app` -> `MyApp`)"
+        ),
+        "unexpected stderr: {stderr}"
+    );
+
+    fs::create_dir(fx.root.join("taken")).unwrap();
+    let stderr = fx.koja_err(&["new", "taken"]);
+    assert!(
+        stderr.contains("error: directory 'taken' already exists"),
+        "unexpected stderr: {stderr}"
+    );
+
     let stdout = fx.koja_ok(&["new", "my_app"]);
     assert_eq!(stdout.trim(), "created project 'my_app'");
 
@@ -291,26 +300,5 @@ fn new_scaffolds_a_complete_working_project() {
         output.status.success(),
         "koja check failed in scaffold:\nstderr: {}",
         String::from_utf8_lossy(&output.stderr)
-    );
-}
-
-#[test]
-fn new_rejects_bad_names_and_existing_directories() {
-    let fx = Fixture::new("new-errors");
-
-    let stderr = fx.koja_err(&["new", "MyApp"]);
-    assert!(
-        stderr.contains(
-            "error: project name must be lowercase snake_case (like `my_app`). \
-             The code namespace is derived from it (`my_app` -> `MyApp`)"
-        ),
-        "unexpected stderr: {stderr}"
-    );
-
-    fs::create_dir(fx.root.join("taken")).unwrap();
-    let stderr = fx.koja_err(&["new", "taken"]);
-    assert!(
-        stderr.contains("error: directory 'taken' already exists"),
-        "unexpected stderr: {stderr}"
     );
 }
