@@ -2,6 +2,7 @@ fn tiny(flag: Bool) -> Int8
   if flag
     return 5
   end
+
   0
 end
 
