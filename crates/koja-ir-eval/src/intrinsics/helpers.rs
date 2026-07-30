@@ -9,15 +9,15 @@ use crate::error::RuntimeError;
 use crate::interpreter::CallResolver;
 use crate::value::{EnumPayload, Value};
 
-/// `Option<T>::Some` carries the only tuple-payload variant, and v1
-/// monotonically assigns tag `0`. The `option_value` helper bakes
-/// that in so callers don't have to fish through the enum decl for
-/// each invocation.
+/// `Option<T>::Some` carries the only tuple-payload variant, and
+/// declaration-order tagging assigns it tag `0`. The `option_value`
+/// helper bakes that in so callers don't have to fish through the
+/// enum decl for each invocation.
 const SOME_TAG: IRVariantTag = IRVariantTag(0);
 const NONE_TAG: IRVariantTag = IRVariantTag(1);
 
 /// `Result<T, E>::Ok` carries the value and `::Err` carries the error.
-/// Same v1 convention as `Option`'s `Some` / `None`.
+/// Same declaration-order convention as `Option`'s `Some` / `None`.
 const OK_TAG: IRVariantTag = IRVariantTag(0);
 const ERR_TAG: IRVariantTag = IRVariantTag(1);
 

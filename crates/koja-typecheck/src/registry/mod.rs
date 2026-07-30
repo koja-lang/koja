@@ -304,8 +304,7 @@ impl GlobalRegistry {
     /// state. The expansion is stamped in later by
     /// [`Self::set_type_alias_definition`]. Aliases don't take
     /// generic params today, so callers always pass an empty vec.
-    /// Generic aliases are tracked as a future language extension
-    /// in the v1-parity plan.
+    /// Generic aliases are a possible future language extension.
     pub(crate) fn insert_type_alias(
         &mut self,
         identifier: Identifier,

@@ -68,7 +68,6 @@ pub(super) fn lift_function_with_identifier(
         ),
         None => scope.registry.primitive("Unit"),
     };
-    let return_type = override_divergent_return(&identifier, declared_return_type, scope.registry);
 
     let dispatch = match function.params.first() {
         Some(Param::Self_ { .. }) => Dispatch::Instance,
@@ -76,13 +75,16 @@ pub(super) fn lift_function_with_identifier(
     };
     let impl_args = concrete_impl_args(self_context);
 
-    let signature = FunctionSignature {
+    let mut signature = FunctionSignature {
         dispatch,
         params,
-        return_type,
+        return_type: declared_return_type,
         impl_args,
     };
 
+    // Validate against the author-declared return type. The divergent
+    // override below retypes compiler-known non-returning functions to
+    // `Never`, which is a typecheck-internal notion, not an FFI shape.
     if is_extern_c(&function.annotations) {
         validate_extern_c_signature(
             function,
@@ -92,6 +94,8 @@ pub(super) fn lift_function_with_identifier(
             diagnostics,
         );
     }
+    signature.return_type =
+        override_divergent_return(&identifier, signature.return_type, scope.registry);
 
     scope.registry.set_signature(id, signature);
 }
@@ -137,24 +141,33 @@ fn is_concrete_type(ty: &ResolvedType) -> bool {
 }
 
 /// Override the declared return type for compiler-known divergent
-/// functions. `Global.Kernel.panic` is declared `-> Unit` in the
-/// shared stdlib source for v1 back-compat (v1 has no `Never`). The new pipeline
-/// rewrites it to `Never` here so match arms that end in
-/// `Kernel.panic(...)` skip the arm-tail join lattice and let
-/// `Option.unwrap` / `Result.unwrap` typecheck cleanly.
+/// functions. `Global.Kernel.panic` and `Global.Kernel.exit` are
+/// declared `-> Unit` in the stdlib source (`Never` has no surface
+/// syntax), yet neither ever returns at runtime. Rewriting them to
+/// `Never` here lets match arms that end in a `panic(...)` or
+/// `exit(...)` call skip the arm-tail join lattice, so
+/// `Option.unwrap` / `Result.unwrap` typecheck cleanly. The
+/// private `koja_kernel_exit` extern (declared `-> !` in the runtime)
+/// is covered so `exit`'s own trampoline body typechecks as divergent.
 fn override_divergent_return(
     identifier: &Identifier,
     declared: ResolvedType,
     registry: &GlobalRegistry,
 ) -> ResolvedType {
-    if is_kernel_panic(identifier) {
+    if is_divergent_kernel_function(identifier) {
         return registry.primitive("Never");
     }
     declared
 }
 
-fn is_kernel_panic(identifier: &Identifier) -> bool {
-    identifier.package() == "Global" && identifier.path() == ["Kernel", "panic"]
+fn is_divergent_kernel_function(identifier: &Identifier) -> bool {
+    if identifier.package() != "Global" {
+        return false;
+    }
+    let path = identifier.path();
+    path == ["Kernel", "exit"]
+        || path == ["Kernel", "koja_kernel_exit"]
+        || path == ["Kernel", "panic"]
 }
 
 /// Validate a function's resolved signature against the FFI rules.
@@ -255,7 +268,7 @@ fn validate_extern_c_signature(
 }
 
 /// True when `ty` is one of the explicit-width numeric primitives,
-/// `Bool`, `Unit`, or `CPtr<T>` (any pointee). Mirrors v1's FFI gate.
+/// `Bool`, `Unit`, or `CPtr<T>` (any pointee).
 fn is_ffi_admissible_type(ty: &ResolvedType, registry: &GlobalRegistry) -> bool {
     let ResolvedType::Named {
         resolution: Resolution::Global(id),

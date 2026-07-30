@@ -1968,7 +1968,7 @@ fn execute_binary_match(
 /// Inverse of [`pack_integer_segment`]: read `width` bits at
 /// `start_bit` as an unsigned integer, byte-shuffled per `endian`
 /// on the byte-aligned fast path, MSB-first on the sub-byte path
-/// (where endianness is meaningless in v1).
+/// (where endianness is meaningless).
 fn extract_integer_segment(bytes: &[u8], width: u64, endian: BinaryEndian, start_bit: u64) -> u64 {
     if width == 0 {
         return 0;

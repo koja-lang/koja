@@ -1,5 +1,5 @@
 //! `loop` and `while` lowering. Both build a body-and-exit CFG
-//! fragment whose shape mirrors v1's [`koja-ir::lower::loops`]:
+//! fragment:
 //!
 //! ```text
 //! while:

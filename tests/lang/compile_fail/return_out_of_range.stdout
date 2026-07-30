@@ -1,0 +1,1 @@
+return value `300` does not fit the declared return type `Int8` (range -128..=127)

@@ -1,0 +1,1 @@
+scripts do not return a value (hint: use `Kernel.exit(code)` to set an exit code, or print the value)

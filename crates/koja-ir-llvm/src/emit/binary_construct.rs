@@ -4,9 +4,9 @@
 //! Two emission shapes, picked per-segment:
 //!
 //! - **Byte-aligned** (`bit_offset % 8 == 0 && width % 8 == 0`):
-//!   pack inline. Integer / float segments run the byte-shift-loop
-//!   from v1's `emit_byte_packing` (high-byte-first for `Big`,
-//!   low-byte-first for `Little`), with float segments first
+//!   pack inline. Integer / float segments run a byte-shift loop
+//!   (high-byte-first for `Big`, low-byte-first for `Little`),
+//!   with float segments first
 //!   bit-cast through their integer type. String segments
 //!   `memcpy` straight into the payload.
 //! - **Sub-byte**: call the `__koja_pack_bits` runtime
@@ -111,8 +111,8 @@ fn emit_segment<'ctx>(
             bit_offset,
         } => {
             let int_value = float_value_as_i64(ctx, values, *value, *width)?;
-            // Floats are always byte-aligned in v1 (32 / 64 bit
-            // widths), so we can lean on the byte-shift loop.
+            // Floats are always byte-aligned (32 / 64 bit widths),
+            // so we can lean on the byte-shift loop.
             emit_byte_packed_int(ctx, payload, int_value, *width, *endian, *bit_offset / 8)
         }
         LoweredBinarySegment::String {
@@ -145,10 +145,10 @@ fn emit_segment<'ctx>(
     }
 }
 
-/// Byte-by-byte pack of an integer-coerced segment value. Mirrors
-/// v1's `emit_byte_packing`: for `num_bytes = width / 8`, write
-/// each output byte from MSB-first (Big) or LSB-first (Little) by
-/// shifting the i64 right and truncating to `i8`.
+/// Byte-by-byte pack of an integer-coerced segment value. For
+/// `num_bytes = width / 8`, write each output byte from MSB-first
+/// (Big) or LSB-first (Little) by shifting the i64 right and
+/// truncating to `i8`.
 fn emit_byte_packed_int<'ctx>(
     ctx: &EmitContext<'ctx>,
     payload: PointerValue<'ctx>,
@@ -198,7 +198,7 @@ fn emit_byte_packed_int<'ctx>(
 
 /// Sub-byte segment: hand the i64-widened value, the bit `width`,
 /// and the absolute `bit_offset` to the runtime helper. Endianness
-/// is meaningless for non-byte-multiple widths in v1, so we only
+/// is meaningless for non-byte-multiple widths, so we only
 /// emit MSB-first. The helper writes the low `width` bits of
 /// `value` left-to-right starting at `bit_offset`.
 fn pack_bits_segment<'ctx>(
@@ -259,8 +259,8 @@ fn lookup_int_widened<'ctx>(
 }
 
 /// Bit-cast a float segment's value to its `i{width}` representation
-/// and zero-extend to i64. v1 semantics: `Float32` segments
-/// truncate from the IR's i64 / Float64 first.
+/// and zero-extend to i64. `Float32` segments truncate from the
+/// IR's i64 / Float64 first.
 fn float_value_as_i64<'ctx>(
     ctx: &EmitContext<'ctx>,
     values: &ValueMap<'ctx>,

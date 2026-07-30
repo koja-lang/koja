@@ -43,6 +43,7 @@ impl<'a> ResolverEnv<'a> {
             enclosing_type,
             enclosing_type_id,
             file_aliases: self.file_aliases,
+            in_script_body: false,
             loop_break_seen: Vec::new(),
             loop_depth: 0,
             package: self.package,
@@ -110,6 +111,13 @@ pub(super) struct Resolver<'a> {
     /// every type-name lookup before falling back to the current
     /// package and `Global` (the lookup precedence).
     pub file_aliases: &'a [AliasDecl],
+    /// True while resolving a script's top-level statements, where a
+    /// valued `return` gets the script-specific rejection (scripts
+    /// communicate through stdout and `Kernel.exit`, not a return
+    /// value). Closure boundaries reset this to `false` and restore
+    /// on exit, since a `return` inside a closure targets the
+    /// closure.
+    pub in_script_body: bool,
     /// One slot per enclosing `loop` / `while`, set to `true` by
     /// the `break` gate when a break targets the innermost loop.
     /// `resolve_loop` consults the popped slot to decide whether

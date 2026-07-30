@@ -4,7 +4,8 @@ Core runtime operations.
 struct Kernel
   @doc """
   Terminates the process immediately with the given exit code.
-  Code 0 indicates success; any non-zero value indicates failure.
+  Code 0 indicates success, and any non-zero value indicates failure.
+  Never returns.
   """
   fn exit(code: Int)
     koja_kernel_exit(code)

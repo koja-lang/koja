@@ -1,0 +1,8 @@
+fn answer(flag: Bool) -> Int
+  if flag
+    return
+  end
+  1
+end
+
+answer(false).print()

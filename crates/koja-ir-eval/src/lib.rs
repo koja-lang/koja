@@ -21,9 +21,8 @@
 //! write, and accept paths park on readiness instead of blocking the
 //! shared driver thread.
 //!
-//! Hard contract: zero dependency on the v1 `koja-ir` / `koja-ir-eval`
-//! path. Sealed `IRProgram` / `IRScript` from `koja-ir` are the
-//! only inputs.
+//! Hard contract: sealed `IRProgram` / `IRScript` from `koja-ir`
+//! are the only inputs.
 
 // Keep `koja-runtime-posix`'s rlib in the link graph even if the direct
 // Rust-path uses (e.g. [`crate::scheduler::EvalSignals`], which calls

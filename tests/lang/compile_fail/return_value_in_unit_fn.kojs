@@ -1,0 +1,8 @@
+fn log_flag(flag: Bool)
+  if flag
+    return 5
+  end
+  IO.puts("done")
+end
+
+log_flag(false)

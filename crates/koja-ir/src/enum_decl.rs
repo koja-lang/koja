@@ -44,8 +44,8 @@
 //! typed as different structs, so no `bitcast` instruction is emitted
 //! at the LLVM IR level.
 //!
-//! We diverge from v1's packed `{ i8, [N x i8] }` layout because
-//! that layout misaligns payload fields (technically UB, relying on
+//! We avoid a packed `{ i8, [N x i8] }` layout because
+//! it misaligns payload fields (technically UB, relying on
 //! x86_64 / ARM64 tolerating misaligned access). The Rust-style
 //! layout is correct on every target LLVM supports.
 

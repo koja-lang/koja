@@ -44,9 +44,9 @@ pub(super) use read::{emit_has_q, emit_map_get, emit_remove};
 pub(super) use util::ir_byte_size;
 pub(crate) use util::occupied_loop;
 
-/// Initial bucket count for a freshly-allocated hashtable. Matches
-/// v1's `INITIAL_CAPACITY` so eval / native / future JIT all
-/// agree on the first-resize threshold.
+/// Initial bucket count for a freshly-allocated hashtable. Shared
+/// across backends so eval / native / future JIT all agree on the
+/// first-resize threshold.
 pub(super) const INITIAL_CAPACITY: u64 = 8;
 
 /// Per-byte state of a single bucket. `STATE_EMPTY` is `memset`-

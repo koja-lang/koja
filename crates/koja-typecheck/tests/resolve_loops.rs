@@ -271,13 +271,12 @@ fn loop_with_break_resolves_to_unit() {
 
 #[test]
 fn loop_with_only_inner_return_resolves_to_never() {
-    // Body's only "exit" is a nested `return` (no `break`), so the
-    // loop stays `Never` and the script typechecks via
-    // `check_return_type`'s `Never` short-circuit. Mirrors v1's
-    // `match_loop_return.koja` shape.
+    // Body's only "exit" is a nested bare `return` (no `break`), so
+    // the loop stays `Never`. Bare, since a valued `return` in a
+    // script body is rejected.
     let source = "
         loop
-          return 7
+          return
         end
         ";
     let checked = typecheck(&dedent(source));

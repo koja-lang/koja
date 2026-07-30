@@ -96,12 +96,11 @@ pub(crate) fn emit_exit_code_global(ctx: &EmitContext<'_>) {
 ///    body as PID 1, then `koja_rt_main_done()` to boot the
 ///    scheduler (which runs until PID 1 dies), then `ret i64 0`.
 ///
-/// The trailing block of `__koja_user_main` is always capped with
-/// `ret void`. The script body's trailing value is computed (for
-/// its side effects) and discarded. Empty bodies are illegal
-/// (sealed IR guarantees at least one block), and the final IR
-/// block must end in `Return`. The seal pass admits other
-/// terminators for non-trailing blocks.
+/// Every reachable `Return`-terminated block of `__koja_user_main`
+/// (the fallthrough exit plus any explicit early `return` in the
+/// script) is capped with `ret void`. The script body's trailing
+/// value is computed (for its side effects) and discarded. Empty
+/// bodies are illegal (sealed IR guarantees at least one block).
 pub(crate) fn emit_script_main<'ctx>(
     ctx: &EmitContext<'ctx>,
     blocks: &[IRBasicBlock],
@@ -135,7 +134,7 @@ fn define_user_main<'ctx>(
     ctx.reset_locals();
     let block_map = declare_blocks(ctx, function, blocks);
     let reachable = emit::reachable_blocks(blocks);
-    let return_block_id = find_return_block(blocks, &reachable)?;
+    let return_block_ids = find_return_blocks(blocks, &reachable)?;
 
     let mut values: ValueMap<'ctx> = ValueMap::new();
     let phi_map = emit::declare_block_param_phis(ctx, blocks, &block_map, &mut values)?;
@@ -151,7 +150,7 @@ fn define_user_main<'ctx>(
             }
             let llvm_block = block_map[&block.id];
             ctx.builder.position_at_end(llvm_block);
-            if block.id == return_block_id {
+            if return_block_ids.contains(&block.id) {
                 let (next_values, _terminator) =
                     emit::emit_instructions(ctx, block, std::mem::take(&mut values))?;
                 values = next_values;
@@ -334,10 +333,11 @@ fn define_main_trampoline<'ctx>(ctx: &EmitContext<'ctx>) -> Result<(), LlvmError
         .map(|_| ())
 }
 
-/// Cap the trailing block of `__koja_user_main` with `ret void`.
-/// The script body's `Return` terminator's value (if any) has
-/// already been emitted by [`emit::emit_instructions`]. We discard
-/// it because scripts always exit 0 on normal completion.
+/// Cap a `Return`-terminated block of `__koja_user_main` with
+/// `ret void`. The block's instructions (including the trailing
+/// value, if any) have already been emitted by
+/// [`emit::emit_instructions`]. The value is discarded because
+/// scripts always exit 0 on normal completion.
 ///
 /// Skips the cap when the host block is already terminated.
 /// `IRInstruction::Receive` ends the block with its dispatcher
@@ -352,37 +352,28 @@ fn emit_user_main_return<'ctx>(ctx: &EmitContext<'ctx>) -> Result<(), LlvmError>
     ctx.builder.build_return(None).or_ice().map(|_| ())
 }
 
-/// The [`IRBlockId`] of the unique *reachable* block ending in
-/// `Return`. Today's slice produces exactly one reachable
-/// `Return`-terminated block per function (the merge block of an
-/// `if` / `unless` falls through to it via `Branch`). Divergent
+/// The [`IRBlockId`]s of every *reachable* block ending in `Return`.
+/// The body's fallthrough exit is one, and each explicit early
+/// `return` in the script contributes another. All of them get
+/// capped with `ret void` by [`emit_user_main_return`]. Divergent
 /// if/else's may synthesize an unreachable merge whose `Return`
-/// reads an unmaterialized `BlockParam`. Those don't count and
-/// are filtered out via `reachable`. A missing or duplicate
-/// reachable `Return` is a lowering bug we surface as a codegen
-/// error.
-fn find_return_block(
+/// reads an unmaterialized `BlockParam`. Those don't count and are
+/// filtered out via `reachable`. No reachable `Return` at all is a
+/// lowering bug we surface as a codegen error.
+fn find_return_blocks(
     blocks: &[IRBasicBlock],
     reachable: &HashSet<IRBlockId>,
-) -> Result<IRBlockId, LlvmError> {
-    let mut found: Option<IRBlockId> = None;
-    for block in blocks {
-        if !reachable.contains(&block.id) {
-            continue;
-        }
-        if matches!(block.terminator, IRTerminator::Return { .. }) {
-            if found.is_some() {
-                return Err(LlvmError::Codegen(
-                    "LLVM expects exactly one reachable Return-terminated block in `main`"
-                        .to_string(),
-                ));
-            }
-            found = Some(block.id);
-        }
-    }
-    found.ok_or_else(|| {
-        LlvmError::Codegen(
+) -> Result<HashSet<IRBlockId>, LlvmError> {
+    let return_blocks: HashSet<IRBlockId> = blocks
+        .iter()
+        .filter(|block| reachable.contains(&block.id))
+        .filter(|block| matches!(block.terminator, IRTerminator::Return { .. }))
+        .map(|block| block.id)
+        .collect();
+    if return_blocks.is_empty() {
+        return Err(LlvmError::Codegen(
             "LLVM expects at least one reachable Return-terminated block in `main`".to_string(),
-        )
-    })
+        ));
+    }
+    Ok(return_blocks)
 }

@@ -247,8 +247,7 @@ pub(crate) fn declare_malloc_extern<'ctx>(ctx: &EmitContext<'ctx>) -> FunctionVa
 /// Declare (or look up) the `koja_utf8_validate` runtime helper.
 /// Signature: `i64 koja_utf8_validate(i8* ptr, i64 len)`. Returns
 /// `1` if `[ptr..ptr+len)` is valid UTF-8, `0` otherwise. Called
-/// from `Binary.to_string` to gate the heap-clone path. The same
-/// helper backs v1's `Binary_to_string` intrinsic.
+/// from `Binary.to_string` to gate the heap-clone path.
 pub(crate) fn declare_utf8_validate_extern<'ctx>(ctx: &EmitContext<'ctx>) -> FunctionValue<'ctx> {
     let i64_ty = ctx.context.i64_type();
     let ptr_ty = ctx.context.ptr_type(AddressSpace::default());
@@ -394,7 +393,7 @@ pub(crate) fn declare_binary_slice_extern<'ctx>(ctx: &EmitContext<'ctx>) -> Func
 /// Declare (or look up) the `__koja_panic` runtime helper.
 /// Signature: `void __koja_panic(i8* message_payload)`. The
 /// `Kernel.panic` intrinsic body calls this with the `String`
-/// payload pointer (i.e. 8 bytes past the v1 length header) and
+/// payload pointer (i.e. 8 bytes past the length header) and
 /// trails the call with `unreachable`. The runtime side prints
 /// `panic: <message>` to stderr and aborts.
 pub(crate) fn declare_panic_extern<'ctx>(ctx: &EmitContext<'ctx>) -> FunctionValue<'ctx> {

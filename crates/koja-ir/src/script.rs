@@ -49,9 +49,9 @@ use crate::yield_checks::{insert_yield_checks, insert_yield_checks_in_body};
 ///
 /// `blocks` is the implicit function's body: the top-level
 /// statements of the script source lowered to one or more basic
-/// blocks. Today's scope produces exactly one block ending in
-/// `IRTerminator::Return`, mirroring `IRFunction.blocks` for a body
-/// without control flow.
+/// blocks, mirroring `IRFunction.blocks`. The fallthrough exit ends
+/// in `IRTerminator::Return`, and each explicit early `return` in
+/// the script contributes another `Return`-terminated block.
 ///
 /// `packages` carries the same per-package function fragments that
 /// [`crate::IRProgram::packages`] does, so backends can resolve

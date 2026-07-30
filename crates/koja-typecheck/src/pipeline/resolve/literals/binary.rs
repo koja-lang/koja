@@ -153,7 +153,7 @@ fn unaligned_run_diagnostic(span: Span) -> Diagnostic {
 
 /// Validate one segment and produce its [`SegmentInfo`] (`None` plus
 /// a diagnostic on failure). Surfaces feature-gap diagnostics for
-/// the v1 dynamic-width form (`::n` where `n` is a runtime int).
+/// the dynamic-width form (`::n` where `n` is a runtime int).
 /// Also called by the constant lift, which stamps segment value
 /// resolutions itself before delegating the width and fit rules here.
 pub(crate) fn resolve_segment(

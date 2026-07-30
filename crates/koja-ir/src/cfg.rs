@@ -14,10 +14,9 @@
 //! so terminator references resolve regardless of which builder
 //! produced the block. The builder owns no counters.
 //!
-//! Adapted from the v1 `CFGBuilder` (`koja-ir/src/cfg.rs`). Trimmed
-//! for the feature slice: no loop scoping (`mark_loop`, `LoopExitOp`)
-//! since loops aren't lowered yet, and no legacy `into_blocks` escape
-//! hatch since the pipeline has no walker that drops the closed-set.
+//! Deliberately minimal: no loop-scoping bookkeeping (loop lowering
+//! tracks its own exit blocks) and no `into_blocks` escape hatch,
+//! since no walker drops the closed-set.
 
 use std::collections::HashMap;
 
@@ -36,7 +35,7 @@ use crate::types::{IRType, ValueId};
 pub(crate) struct CFGBuilder {
     blocks: Vec<IRBasicBlock>,
     /// `id -> index into self.blocks`. Maintained alongside `blocks`
-    /// to avoid the linear scan v1 paid in `block_mut`.
+    /// so `block_mut` avoids a linear scan.
     by_id: HashMap<IRBlockId, usize>,
     /// Block ids whose terminator has been explicitly set via
     /// [`Self::set_terminator`]. Walks consult this to distinguish

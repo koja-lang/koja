@@ -28,7 +28,7 @@ use crate::types::{ir_basic_type, list_value_type};
 const OPTION_SOME_TAG: IRVariantTag = IRVariantTag(0);
 const OPTION_NONE_TAG: IRVariantTag = IRVariantTag(1);
 
-/// Initial buffer capacity for `List.new`. Matches v1.
+/// Initial buffer capacity for `List.new`.
 const INITIAL_CAPACITY: u64 = 8;
 
 pub(super) fn emit_list<'ctx>(

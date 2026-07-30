@@ -1,6 +1,4 @@
 //! Native object-file emission via inkwell's `TargetMachine`.
-//! Mirrors the v1 codegen pattern in `koja-codegen`'s
-//! `emit_object_file`.
 
 use std::path::Path;
 
@@ -49,9 +47,8 @@ pub(crate) fn emit_object_file(
     // LLVM 18's X86 backend requires a real CPU name (not "generic")
     // because it constructs a fresh `X86Subtarget` per function during
     // emission and indexes into scheduling tables that are only
-    // populated for known CPU models. v1 codegen learned this the
-    // hard way. Mirroring its host-CPU selection avoids the same
-    // SIGSEGV on Linux x86_64.
+    // populated for known CPU models. Selecting the host CPU avoids
+    // that SIGSEGV on Linux x86_64.
     let cpu = TargetMachine::get_host_cpu_name().to_string();
     let features = TargetMachine::get_host_cpu_features().to_string();
     let machine = target

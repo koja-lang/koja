@@ -11,8 +11,8 @@
 //! [`HARNESS_ENTRY`] as the project's Process entry.
 //!
 //! Kept backend-agnostic on purpose: this crate only depends on
-//! the AST + parser surface so both the pipeline and (any
-//! future) v1 fallback can share the same harness shape.
+//! the AST + parser surface, so any backend can share the same
+//! harness shape.
 
 use std::path::Path;
 

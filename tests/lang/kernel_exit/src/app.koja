@@ -8,10 +8,20 @@ enum AppMsg
   Noop
 end
 
+# `Kernel.exit` is typed `Never`, so an arm ending in it joins with
+# the `String` arm without a dummy tail value.
+fn describe(n: Int) -> String
+  match n
+    0 -> "zero"
+    _ -> Kernel.exit(42)
+  end
+end
+
 impl Process<App, AppMsg, String> for App
   fn start(config: App) -> Result<Self, StopReason>
+    IO.puts(describe(0))
     IO.puts("before exit")
-    Kernel.exit(42)
+    IO.puts(describe(1))
     IO.puts("after exit")
     Result.Ok(config)
   end

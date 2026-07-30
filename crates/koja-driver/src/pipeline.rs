@@ -664,8 +664,7 @@ fn bundle_with_autoimport(user: SourceFile) -> Vec<SourceFile> {
 /// caller is expected to have already merged project + dependency
 /// sources into `user_files`.
 ///
-/// `skip_package` mirrors v1's
-/// [`crate::resolve::insert_stdlib`] convention: when a project IS
+/// `skip_package` handles the stdlib self-compile: when a project IS
 /// one of the curated packages (e.g. building/testing `lib/global`,
 /// `lib/json`, …) the on-disk sources already provide every decl
 /// the autoimport would inject, and a second copy would collide at
@@ -686,8 +685,7 @@ fn bundle_many_with_autoimport(
     // confused (e.g. HTTP's `format`/`eq` calls fail to see the
     // user's edited `Global` protocol impls because the qualified
     // packages were lifted before user files joined the bundle).
-    // Mirrors v1's behavior: qualified deps don't tag along on a
-    // Global self-compile.
+    // Qualified deps don't tag along on a Global self-compile.
     if skip_package != Some("Global") {
         sources.extend(koja_stdlib::qualified_sources());
     }
@@ -821,8 +819,8 @@ fn link_object(
     );
 }
 
-/// Canonicalize a user-supplied source path, exiting on miss with
-/// a matching error message to v1's `koja build`.
+/// Canonicalize a user-supplied source path, exiting with a clear
+/// error message when the file does not exist.
 fn canonical_source_path(file: &str) -> PathBuf {
     Path::new(file).canonicalize().unwrap_or_else(|_| {
         eprintln!("error: file not found: {file}");
@@ -831,8 +829,8 @@ fn canonical_source_path(file: &str) -> PathBuf {
 }
 
 /// Pick the output binary name. Honors a user-supplied `--output`,
-/// otherwise mirrors v1: drop the source extension to derive the
-/// binary name, falling back to `output` if there's no usable stem.
+/// otherwise drops the source extension to derive the binary name,
+/// falling back to `output` if there's no usable stem.
 fn resolve_output_name(output: Option<String>, path: &Path) -> String {
     output.unwrap_or_else(|| {
         path.file_stem()
@@ -890,8 +888,7 @@ fn run_check(source: String, package: &str, path: PathBuf, mode: ParseMode) -> C
 /// `koja check` for a project: walk every `src` directory,
 /// resolve declared dependencies, parse + typecheck the whole set,
 /// and print `<project>: OK` (or per-file ASTs when `emit_ast`
-/// is set). Mirrors v1's `cmd_check`'s project arm but routes
-/// through typecheck.
+/// is set).
 fn check_project(config: &ProjectConfig, root: &Path, emit_ast: bool) {
     let user_files = collect_project_sources_or_exit(config, root, false);
     let parsed = parse_program(
@@ -1311,8 +1308,7 @@ fn emit_and_link_program(
 /// [`koja_ast::format_file`], followed by the compact registry
 /// sidecar from [`koja_typecheck::format_registry`] so the ids
 /// that appear on AST reference sites are decodable without a
-/// separate lookup. Mirrors what `koja check --emit-ast` does for the
-/// v1 pipeline on the AST side. The registry sidecar is pipeline-only.
+/// separate lookup.
 ///
 /// A blank line separates the AST section(s) from the registry
 /// section, and successive files from each other.

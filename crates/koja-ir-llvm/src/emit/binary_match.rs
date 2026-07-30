@@ -15,10 +15,9 @@
 //!    `false` before any binding side effect runs.
 //! 4. Bind phase, on the fully matched path only.
 //!    - [`LoweredBinaryPattern::BindInt`] extracts the bit slice,
-//!      sign-extends when the modifier asks for it (**fixes a v1
-//!      bug** where the extracted value was always unsigned),
-//!      narrows to the slot's declared LLVM type, and stores it
-//!      via the local slot table.
+//!      sign-extends when the modifier asks for it, narrows to the
+//!      slot's declared LLVM type, and stores it via the local slot
+//!      table.
 //!    - [`LoweredBinaryPattern::GreedyTail`] allocates a fresh
 //!      heap block of `8 + ceil(remaining_bits / 8)` bytes,
 //!      copies the remaining bytes from the subject, stores the
@@ -462,8 +461,8 @@ fn emit_greedy_tail<'ctx>(
 }
 
 /// Read `num_bytes` from `payload + byte_offset` and assemble them
-/// into an `i64`. Mirrors v1's `extract_segment_value` byte-shift
-/// loop. `Big` packs high-byte-first, `Little` low-byte-first.
+/// into an `i64` via a byte-shift loop. `Big` packs high-byte-first,
+/// `Little` low-byte-first.
 fn extract_int<'ctx>(
     ctx: &EmitContext<'ctx>,
     payload: PointerValue<'ctx>,
@@ -512,10 +511,10 @@ fn extract_int<'ctx>(
     Ok(result)
 }
 
-/// Sign-extend the low `width` bits when `sign == Signed`. Fixes
-/// v1's behavior of returning the raw extracted `i64` regardless
-/// of `signed` / `unsigned` modifier. For example, the byte `0xFF`
-/// in a `signed`-modified segment should bind as `-1`, not `255`.
+/// Sign-extend the low `width` bits when `sign == Signed`. Without
+/// this, the raw extracted `i64` would ignore the `signed` /
+/// `unsigned` modifier. For example, the byte `0xFF` in a
+/// `signed`-modified segment should bind as `-1`, not `255`.
 fn extend_for_sign<'ctx>(
     ctx: &EmitContext<'ctx>,
     extracted: IntValue<'ctx>,

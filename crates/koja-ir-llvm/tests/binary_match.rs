@@ -8,8 +8,7 @@
 //! - Literal-bytes arm: touches the `memcmp` extern declaration
 //!   and a `lit_ptr` private constant for the byte payload.
 //! - Sign-extended binding: proves the `signed` modifier emits an
-//!   `ashr` after the `shl`, fixing the v1 latent bug where
-//!   `signed` was a no-op.
+//!   `ashr` after the `shl` instead of being a no-op.
 //! - Greedy `: Binary` tail: proves the malloc/memcpy block that
 //!   stamps the bit-length header for the new payload.
 
@@ -70,9 +69,8 @@ fn binary_match_string_literal_segment_emits_memcmp_extern() {
 #[test]
 fn binary_match_signed_binding_emits_sign_extend_shl_ashr() {
     // The `signed` modifier must lower to `shl` + arithmetic `ashr`
-    // (v1 always emitted an unsigned extraction and discarded the
-    // modifier. The pipeline fixes that by routing `BinarySign::Signed`
-    // through `extend_for_sign`).
+    // (an unsigned extraction alone would discard the modifier, so
+    // `BinarySign::Signed` routes through `extend_for_sign`).
     let source = "
         neg = <<0xFF>>
         match neg
@@ -93,8 +91,8 @@ fn binary_match_signed_binding_emits_sign_extend_shl_ashr() {
 #[test]
 fn binary_match_unsigned_binding_skips_sign_extend() {
     // The flip side: an unsigned byte binding must not emit the
-    // `sign_*` IR (otherwise the v1 fix would have over-rotated and
-    // changed unsigned semantics).
+    // `sign_*` IR (otherwise sign extension would over-rotate and
+    // change unsigned semantics).
     let source = "
         data = <<0xAB>>
         match data

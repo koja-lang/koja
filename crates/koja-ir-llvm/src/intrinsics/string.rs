@@ -1,8 +1,6 @@
-//! `String` method intrinsics. Mirrors v1's
-//! `koja-codegen::intrinsics::string` + `cptr::emit_cstring_intrinsic`
-//! port shape: trivial cells inline against the `[i64 bit_length]
-//! [payload bytes]` layout (with the SSA pointer pointing at the
-//! payload), and the codepoint-aware cells (`length`, `get`,
+//! `String` method intrinsics. Trivial cells inline against the
+//! `[i64 bit_length] [payload bytes]` layout (with the SSA pointer
+//! pointing at the payload), and the codepoint-aware cells (`length`, `get`,
 //! `slice`) delegate to `koja-runtime` helpers so unicode walking
 //! stays in Rust.
 
