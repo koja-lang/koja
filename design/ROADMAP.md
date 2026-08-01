@@ -48,8 +48,8 @@ last major product types planned before ecosystem validation.
 
 - **[DONE]** Type-check and coercion-stamp every explicit `return`. Script behavior must
   remain consistent across both backends.
-- Reject reads of locals that are not definitely assigned on every path.
-- Reject tuple equality when any element lacks valid equality semantics.
+- **[DONE]** Reject reads of locals that are not definitely assigned on every path.
+- **[DONE]** Reject tuple equality when any element lacks valid equality semantics.
 - **[DONE]** Make the formatter round-trip multiline string literals byte-exactly.
   Heredoc-style content must survive formatting without dedent or lexing
   corruption.

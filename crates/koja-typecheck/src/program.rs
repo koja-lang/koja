@@ -12,8 +12,8 @@ use koja_parser::{ParsedFile, ParsedProgram};
 
 use crate::error::CheckFailure;
 use crate::pipeline::{
-    aliases, borrows, collect, deprecation, desugar, lift_signatures, resolve, seal,
-    stamp_file_paths, synthesize, visibility,
+    aliases, borrows, collect, definite_assignment, deprecation, desugar, lift_signatures, resolve,
+    seal, stamp_file_paths, synthesize, visibility,
 };
 use crate::registry::GlobalRegistry;
 
@@ -62,9 +62,10 @@ pub struct CheckedProgram {
 /// 7. Rewrite typed surface shapes such as `for`.
 /// 8. Resolve and type-check every body.
 /// 9. Reject escaping `CPtr.borrow` results.
-/// 10. Warn on uses of `@deprecated` declarations.
-/// 11. Return [`CheckFailure`] if any errors were collected.
-/// 12. Seal successful AST and registry invariants.
+/// 10. Reject reads of locals not definitely assigned on every path.
+/// 11. Warn on uses of `@deprecated` declarations.
+/// 12. Return [`CheckFailure`] if any errors were collected.
+/// 13. Seal successful AST and registry invariants.
 pub fn check_program(parsed: ParsedProgram) -> Result<CheckedProgram, CheckFailure> {
     if parsed.has_errors() {
         return Err(CheckFailure {
@@ -141,6 +142,12 @@ pub fn check_program(parsed: ParsedProgram) -> Result<CheckedProgram, CheckFailu
     // static receivers carry their `Resolution::Global` stamp.
     for_each_file(&packages, &mut diagnostics, |file, _package, diags| {
         borrows::check_file(file, &registry, diags);
+    });
+
+    // Definite-assignment analysis reads the `LocalId` stamps resolve
+    // left on reads and assignment targets.
+    for_each_file(&packages, &mut diagnostics, |file, _package, diags| {
+        definite_assignment::check_file(file, &registry, diags);
     });
 
     // Deprecation warnings also read post-resolve stamps.

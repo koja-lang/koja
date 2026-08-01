@@ -3,17 +3,18 @@
 //! universal protocol functions resolve: `format` / `print` /
 //! `inspect` from `Debug` and `eq` from `Equality`. IR lowering
 //! expands each of these inline per tuple shape, mirroring what
-//! `derive_debug` / `derive_equality` synthesize for nominal types
-//! (including the opaque-element fallbacks).
+//! `derive_debug` / `derive_equality` synthesize for nominal types.
+//! `eq` additionally requires every element (recursively) to carry
+//! valid equality semantics, while `Debug` renders opaque elements
+//! as `"..."` instead.
 
 use koja_ast::ast::{Arg, Diagnostic, Expr};
-use koja_ast::identifier::{AnonymousKind, GlobalRegistryId, Identifier, Resolution, ResolvedType};
+use koja_ast::identifier::{AnonymousKind, Resolution, ResolvedType};
 use koja_ast::span::Span;
 
 use super::super::ctx::Resolver;
 use super::super::expr::resolve_expr_with_expected;
-use super::super::ops::is_primitive_equality_eligible;
-use super::super::types::{display_resolution, peel_alias, types_equivalent};
+use super::super::types::{display_resolution, named_type_has_eq, peel_alias, types_equivalent};
 use super::resolve_args;
 
 pub(super) fn resolve_tuple_method_call(
@@ -67,8 +68,8 @@ pub(super) fn resolve_tuple_method_call(
 
 /// `lhs.eq(rhs)`: one argument, structurally the same tuple shape as
 /// the receiver. Elements compare through their own `Equality`
-/// conformance, with opaque elements (closures, unions) skipped the
-/// same way derived struct `eq` skips opaque fields.
+/// conformance. Every element must have valid equality semantics, so
+/// closure and union elements are rejected rather than skipped.
 fn resolve_tuple_eq(
     receiver: &Expr,
     args: &mut [Arg],
@@ -111,10 +112,11 @@ fn resolve_tuple_eq(
     bool_ty
 }
 
-/// Every comparable element must conform to `Equality`, or IR
-/// lowering would have no `eq` function to call. Opaque elements
-/// (closures, unions) are exempt because lowering skips them, and
-/// type-param elements ride the universal-`Equality` bound.
+/// Every element must have valid equality semantics, or IR lowering
+/// would have no `eq` to call for it. Closures and unions have no
+/// defined equality, so tuples containing them (at any nesting
+/// depth) reject instead of silently skipping the element.
+/// Type-param elements ride the universal-`Equality` bound.
 fn check_elements_support_equality(
     tuple_ty: &ResolvedType,
     call_span: Span,
@@ -129,6 +131,15 @@ fn check_elements_support_equality(
     for element in &elements {
         let structural_element = peel_alias(element, resolver.registry);
         match &structural_element {
+            ResolvedType::Anonymous(AnonymousKind::Function { .. }) => emit_no_equality(
+                element,
+                "closures cannot be compared for equality. Compare the other elements \
+                 individually, or keep the closure out of the compared value"
+                    .to_string(),
+                call_span,
+                resolver,
+                diagnostics,
+            ),
             ResolvedType::Anonymous(AnonymousKind::Tuple { .. }) => {
                 check_elements_support_equality(
                     &structural_element,
@@ -140,32 +151,47 @@ fn check_elements_support_equality(
             ResolvedType::Named {
                 resolution: Resolution::Global(id),
                 ..
-            } if !element_has_eq(&structural_element, *id, resolver) => {
-                diagnostics.push(Diagnostic::error(
+            } if !named_type_has_eq(&structural_element, *id, resolver.registry) => {
+                emit_no_equality(
+                    element,
                     format!(
-                        "cannot compare tuples containing `{}`. The element type does \
-                         not conform to `Equality`",
+                        "`{}` does not implement `Equality`",
                         display_resolution(element, resolver.registry),
                     ),
                     call_span,
-                ));
+                    resolver,
+                    diagnostics,
+                );
             }
+            ResolvedType::Union(_) => emit_no_equality(
+                element,
+                "union values cannot be compared for equality. Match on the member type \
+                 first, then compare the members"
+                    .to_string(),
+                call_span,
+                resolver,
+                diagnostics,
+            ),
             _ => {}
         }
     }
 }
 
-fn element_has_eq(element: &ResolvedType, id: GlobalRegistryId, resolver: &Resolver<'_>) -> bool {
-    if is_primitive_equality_eligible(element, resolver.registry) {
-        return true;
-    }
-    let Some(entry) = resolver.registry.get(id) else {
-        return false;
-    };
-    let mut eq_path = entry.identifier.path().to_vec();
-    eq_path.push("eq".to_string());
-    let eq_identifier = Identifier::new(entry.identifier.package(), eq_path);
-    resolver.registry.lookup(&eq_identifier).is_some()
+fn emit_no_equality(
+    element: &ResolvedType,
+    hint: String,
+    call_span: Span,
+    resolver: &Resolver<'_>,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    diagnostics.push(Diagnostic::error_with_hint(
+        format!(
+            "cannot compare tuples containing `{}`",
+            display_resolution(element, resolver.registry),
+        ),
+        hint,
+        call_span,
+    ));
 }
 
 /// Shared zero-argument validation for the `Debug` family.

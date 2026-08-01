@@ -12,6 +12,7 @@ use koja_ast::identifier::{AnonymousKind, GlobalRegistryId, Identifier, Resoluti
 use koja_ast::span::Span;
 
 use super::ctx::Callee;
+use super::ops::is_primitive_equality_eligible;
 use crate::pipeline::aliases::rewrite_through_aliases;
 use crate::pipeline::lift_signatures::ResolutionScope;
 use crate::pipeline::unify::Substitution;
@@ -414,17 +415,71 @@ fn protocol_bound_satisfied(
                 .lookup_conformance(target_id, protocol_id)
                 .is_some(),
         ),
-        ResolvedType::Anonymous(AnonymousKind::Tuple { .. }) => {
-            Some(tuple_implements_protocol(protocol_id, registry))
+        ResolvedType::Anonymous(AnonymousKind::Tuple { elements }) => {
+            Some(tuple_implements_protocol(&elements, protocol_id, registry))
         }
         _ => None,
     }
 }
 
-fn tuple_implements_protocol(protocol_id: GlobalRegistryId, registry: &GlobalRegistry) -> bool {
-    registry.get(protocol_id).is_some_and(|entry| {
-        entry.identifier.package() == "Global"
-            && entry.identifier.path().len() == 1
-            && matches!(entry.identifier.last(), "Debug" | "Equality")
-    })
+/// Tuples have structural `Debug` unconditionally (opaque elements
+/// render as `"..."`), but structural `Equality` only when every
+/// element supports it.
+fn tuple_implements_protocol(
+    elements: &[ResolvedType],
+    protocol_id: GlobalRegistryId,
+    registry: &GlobalRegistry,
+) -> bool {
+    let Some(entry) = registry.get(protocol_id) else {
+        return false;
+    };
+    if entry.identifier.package() != "Global" || entry.identifier.path().len() != 1 {
+        return false;
+    }
+    match entry.identifier.last() {
+        "Debug" => true,
+        "Equality" => elements
+            .iter()
+            .all(|element| supports_tuple_equality(element, registry)),
+        _ => false,
+    }
+}
+
+/// True when `ty` has usable equality semantics as a tuple element:
+/// a primitive, a nominal type with an `eq` function, a type
+/// parameter (universal `Equality` bound), or a tuple of such
+/// elements. Closures and unions have no defined equality.
+pub(super) fn supports_tuple_equality(ty: &ResolvedType, registry: &GlobalRegistry) -> bool {
+    let structural = peel_alias(ty, registry);
+    match &structural {
+        ResolvedType::Anonymous(AnonymousKind::Function { .. }) | ResolvedType::Union(_) => false,
+        ResolvedType::Anonymous(AnonymousKind::Tuple { elements }) => elements
+            .iter()
+            .all(|element| supports_tuple_equality(element, registry)),
+        ResolvedType::Named {
+            resolution: Resolution::Global(id),
+            ..
+        } => named_type_has_eq(&structural, *id, registry),
+        // Type parameters ride the universal `Equality` bound, and
+        // unresolved holes were diagnosed upstream.
+        _ => true,
+    }
+}
+
+/// The nominal type declares (or derives) an `eq` function.
+pub(super) fn named_type_has_eq(
+    ty: &ResolvedType,
+    id: GlobalRegistryId,
+    registry: &GlobalRegistry,
+) -> bool {
+    if is_primitive_equality_eligible(ty, registry) {
+        return true;
+    }
+    let Some(entry) = registry.get(id) else {
+        return false;
+    };
+    let mut eq_path = entry.identifier.path().to_vec();
+    eq_path.push("eq".to_string());
+    let eq_identifier = Identifier::new(entry.identifier.package(), eq_path);
+    registry.lookup(&eq_identifier).is_some()
 }

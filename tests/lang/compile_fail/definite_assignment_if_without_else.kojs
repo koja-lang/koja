@@ -1,0 +1,9 @@
+# A local assigned in only one arm of an `if` without an `else` is
+# not definitely assigned on the fall-through path.
+flag = true
+
+if flag
+  m = 1
+end
+
+m.print()
