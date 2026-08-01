@@ -1,0 +1,9 @@
+# Reading a local first assigned inside a maybe-zero-trip loop body
+# must be rejected: the read would load an uninitialized slot.
+i = 5
+
+while i < 3
+  n = i * 2
+end
+
+n.print()

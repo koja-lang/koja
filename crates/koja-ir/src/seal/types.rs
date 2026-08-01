@@ -126,8 +126,32 @@ pub(super) fn seal_package_types(package: &IRPackage, environment: &TypeEnvironm
     }
 }
 
-pub(super) fn seal_script_body_types(blocks: &[IRBasicBlock], environment: &TypeEnvironment<'_>) {
-    seal_body_types(blocks, &[], "script body", environment, None);
+/// The body a `Return` terminator exits. Function bodies hold bare
+/// returns to `Unit`. Script bodies allow them anywhere, since a
+/// top-level `return` exits the script early and discards the
+/// trailing value.
+enum ReturnSite<'a> {
+    Function { return_type: &'a IRType },
+    ScriptBody { return_type: &'a IRType },
+}
+
+impl ReturnSite<'_> {
+    fn return_type(&self) -> &IRType {
+        match self {
+            ReturnSite::Function { return_type } | ReturnSite::ScriptBody { return_type } => {
+                return_type
+            }
+        }
+    }
+}
+
+pub(super) fn seal_script_body_types(
+    blocks: &[IRBasicBlock],
+    return_type: &IRType,
+    environment: &TypeEnvironment<'_>,
+) {
+    let site = ReturnSite::ScriptBody { return_type };
+    seal_body_types(blocks, &[], "script body", environment, None, &site);
 }
 
 fn seal_function_types(function: &IRFunction, environment: &TypeEnvironment<'_>) {
@@ -135,12 +159,16 @@ fn seal_function_types(function: &IRFunction, environment: &TypeEnvironment<'_>)
         return;
     }
     let owner = format!("function `{}`", function.symbol);
+    let site = ReturnSite::Function {
+        return_type: &function.return_type,
+    };
     seal_body_types(
         &function.blocks,
         &function.params,
         &owner,
         environment,
         Some(function),
+        &site,
     );
 }
 
@@ -150,6 +178,7 @@ fn seal_body_types(
     owner: &str,
     environment: &TypeEnvironment<'_>,
     function: Option<&IRFunction>,
+    site: &ReturnSite<'_>,
 ) {
     let local_types = collect_local_types(blocks, params, owner);
     let value_types = collect_value_types(blocks, params, owner, environment);
@@ -165,7 +194,7 @@ fn seal_body_types(
                 function,
             );
         }
-        seal_terminator_types(&block.terminator, blocks, &value_types, params, owner);
+        seal_terminator_types(&block.terminator, blocks, &value_types, params, owner, site);
     }
 }
 
@@ -693,6 +722,7 @@ fn seal_terminator_types(
     values: &BTreeMap<ValueId, IRType>,
     params: &[IRFunctionParam],
     owner: &str,
+    site: &ReturnSite<'_>,
 ) {
     match terminator {
         IRTerminator::Branch(target) => {
@@ -707,12 +737,15 @@ fn seal_terminator_types(
             seal_branch_types(then_target.block, &then_target.args, blocks, values, owner);
             seal_branch_types(else_target.block, &else_target.args, blocks, values, owner);
         }
-        // Deliberately unchecked: typecheck only validates trailing
-        // expressions today, so an explicit `return`'s value carries
-        // no type guarantee the seal could hold lowering to. Validate
-        // against the declared return type once typecheck checks
-        // explicit returns.
-        IRTerminator::Return { .. } => {}
+        IRTerminator::Return { value } => match (value, site) {
+            (Some(value), _) => {
+                require_value_type(values, *value, site.return_type(), owner, "Return");
+            }
+            (None, ReturnSite::ScriptBody { .. }) => {}
+            (None, ReturnSite::Function { return_type }) => {
+                require_same_type(&IRType::Unit, return_type, &format!("{owner} bare Return"))
+            }
+        },
         IRTerminator::TailCall { args, .. } => {
             require_arguments(args, params, values, owner, "TailCall");
         }
@@ -1149,6 +1182,49 @@ mod tests {
             )],
             Vec::new(),
             IRType::Unit,
+        );
+        let package = package(vec![function]);
+        let environment = TypeEnvironment::new(std::slice::from_ref(&package));
+        seal_package_types(&package, &environment);
+    }
+
+    #[test]
+    #[should_panic(expected = "Return value")]
+    fn return_value_type_mismatch_panics() {
+        let function = function(
+            symbol("return_mismatch"),
+            vec![block(
+                0,
+                vec![IRInstruction::Const {
+                    dest: ValueId(0),
+                    value: ConstValue::Bool(true),
+                }],
+                Vec::new(),
+                IRTerminator::Return {
+                    value: Some(ValueId(0)),
+                },
+            )],
+            Vec::new(),
+            IRType::Int64,
+        );
+        let package = package(vec![function]);
+        let environment = TypeEnvironment::new(std::slice::from_ref(&package));
+        seal_package_types(&package, &environment);
+    }
+
+    #[test]
+    #[should_panic(expected = "bare Return")]
+    fn bare_return_in_valued_function_panics() {
+        let function = function(
+            symbol("bare_return"),
+            vec![block(
+                0,
+                Vec::new(),
+                Vec::new(),
+                IRTerminator::Return { value: None },
+            )],
+            Vec::new(),
+            IRType::Int64,
         );
         let package = package(vec![function]);
         let environment = TypeEnvironment::new(std::slice::from_ref(&package));

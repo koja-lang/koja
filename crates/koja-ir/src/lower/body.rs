@@ -66,11 +66,9 @@ pub(crate) fn lower_body_to_blocks(
             value: Some(id), ..
         } => ctx.type_of(*id),
         FlowResult::Open { value: None, .. } => IRType::Unit,
-        // Closed flow means an explicit `return` exited the script.
-        // Typecheck does not yet validate explicit return values (it
-        // only checks the trailing expression), so their IR types
-        // carry no guarantee. `Unit` is the defensible default until
-        // explicit-return checking lands upstream.
+        // Closed flow means every path exits via a bare `return` (the
+        // only kind typecheck admits in a script) or diverges, so the
+        // body never produces a trailing value.
         FlowResult::Closed => IRType::Unit,
     };
     finalize_open_flow(&mut ctx, flow, &return_type);

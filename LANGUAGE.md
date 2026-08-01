@@ -112,6 +112,26 @@ x = 42
 name = "koja"
 ```
 
+### Definite Assignment
+
+A variable must be assigned before it is read, no matter which path the program takes to get there. If a variable is only assigned inside one branch of an `if`, `cond`, or `match`, or inside a loop body that might never run, reading it afterward is a compile error:
+
+```koja
+while i < 3
+  n = i * 2    # the loop may run zero times
+end
+n.print()      # error: `n` may not be assigned on every path
+
+if flag
+  m = 1
+else
+  m = 2
+end
+m.print()      # ok: both branches assign
+```
+
+A branch that always exits early (`return`, `break`, `Kernel.panic`) doesn't count against the others. Only reads are checked, so assigning to the variable again after the branch or loop is always fine. When the value depends on a branch, either assign a default first or use the expression form (`m = if flag 1 else 2 end`).
+
 ### Type Annotations
 
 Optional type annotations follow the variable name with a colon:
@@ -805,6 +825,8 @@ Tuples support `==`/`!=` (element-wise, when every element does), `format()`, `p
 ```koja
 (1, "one").print()  # (1, "one")
 ```
+
+A tuple containing a closure- or union-typed element (at any nesting depth) is not comparable, since closures and union values cannot be compared for equality. `==`/`!=` on such a tuple is a compile error, and the tuple does not satisfy a `T: Equality` bound. `format()` and `print()` still work, rendering opaque elements as `"..."`.
 
 Tuples work as function returns, generic type arguments, struct fields, and union members:
 

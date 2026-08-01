@@ -1,0 +1,12 @@
+# Tuple equality requires every element to have valid equality
+# semantics. Closures have none, so the comparison is rejected
+# instead of silently skipping the element.
+f = fn (x: Int) -> Int
+  x
+end
+
+g = fn (x: Int) -> Int
+  x + 1
+end
+
+((f, 1) == (g, 1)).print()

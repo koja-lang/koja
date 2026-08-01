@@ -22,6 +22,8 @@
 //!   `Expr.resolution` on every node.
 //! - [`borrows::check_file`]: reject `CPtr.borrow` results escaping
 //!   their borrowing statement.
+//! - [`definite_assignment::check_file`]: reject reads of locals not
+//!   assigned on every path.
 //! - [`deprecation::check_file`]: warn on uses of `@deprecated`
 //!   declarations.
 //! - [`seal::seal_ast`]: assert sealed-AST invariants.
@@ -33,6 +35,7 @@ use koja_ast::ast::{Diagnostic, File};
 pub(crate) mod aliases;
 pub(crate) mod borrows;
 pub(crate) mod collect;
+pub(crate) mod definite_assignment;
 pub(crate) mod deprecation;
 pub(crate) mod desugar;
 pub(crate) mod lift_signatures;

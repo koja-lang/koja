@@ -246,8 +246,9 @@ fn tuple_element_resolutions(
 }
 
 /// Closures and unions have no callable conformance functions, so
-/// `format` renders their placeholder and `eq` skips them, matching
-/// the derived-impl treatment of opaque struct fields.
+/// `format` renders their placeholder and `eq` treats reaching one
+/// as a typecheck invariant violation (tuple equality on shapes
+/// containing them is rejected during resolve).
 fn is_opaque_element(ty: &ResolvedType) -> bool {
     matches!(
         ty,
@@ -337,10 +338,11 @@ fn emit_concat(lhs: ValueId, rhs: ValueId, ctx: &mut FnLowerCtx, block: IRBlockI
     dest
 }
 
-/// Element-wise short-circuit equality. Comparable elements chain
-/// through `CondBranch`es into a shared merge block (false exits
-/// early), so element `eq` calls after a mismatch never run. A tuple
-/// with no comparable elements is constant `true`.
+/// Element-wise short-circuit equality. Elements chain through
+/// `CondBranch`es into a shared merge block (false exits early), so
+/// element `eq` calls after a mismatch never run. Typecheck rejects
+/// tuple equality on shapes with opaque elements, so every element
+/// is comparable here.
 fn emit_tuple_eq(
     lhs: ValueId,
     rhs: ValueId,
@@ -353,22 +355,16 @@ fn emit_tuple_eq(
     let comparable: Vec<(usize, ResolvedType)> = elements
         .iter()
         .enumerate()
-        .filter_map(|(index, ty)| {
+        .map(|(index, ty)| {
             let structural = peel_alias(ty, registry);
-            (!is_opaque_element(&structural)).then_some((index, structural))
+            assert!(
+                !is_opaque_element(&structural),
+                "IR lower: tuple `eq` reached an opaque element `{ty:?}` \
+                 (typecheck resolve invariant violation)",
+            );
+            (index, structural)
         })
         .collect();
-    if comparable.is_empty() {
-        let dest = ctx.fresh_value(IRType::Bool);
-        ctx.cfg.append(
-            block,
-            IRInstruction::Const {
-                dest,
-                value: ConstValue::Bool(true),
-            },
-        );
-        return (dest, block);
-    }
     let merge_block = ctx.fresh_block("tuple_eq_merge");
     let result = ctx.declare_merge_param(merge_block, IRType::Bool);
     let mut current = block;

@@ -24,21 +24,6 @@ automatically since iteration is bounds-checked). With lazy iteration,
 
 ---
 
-## Tuple equality skips closure and union elements
-
-Tuple equality lowers element-wise calls only for types with a usable
-`Equality` implementation. Closure and union elements are currently treated
-as opaque and skipped, so tuples that differ only in those positions compare
-equal. The same hole applies when an opaque element appears inside a nested
-tuple.
-
-This does not satisfy the language contract that tuples support equality only
-when every element does. Until closures and unions gain defined equality
-semantics, typecheck should reject equality on tuple shapes containing either
-type instead of allowing lowering to omit them.
-
----
-
 ## Formatter relocates trailing comments
 
 `koja format` reattaches a trailing comment on an enum variant, match or
@@ -50,38 +35,6 @@ line and the comment is pushed below the enclosing block. Trailing comments on
 plain statements are unaffected. Until the printer anchors comments to the
 node they follow, formatting any source that uses these positions is lossy.
 This also blocks running documentation snippets through the formatter.
-
----
-
-## Explicit `return` values are not type-checked
-
-Typecheck only validates a function's trailing expression against the
-declared return type (`resolve/return_type.rs`). An explicit
-`return <value>` resolves its expression with the declared return type as
-an inference hint, but never runs `check_compatible_stamping` on the
-result. Two consequences:
-
-- `return "x"` inside `fn f() -> Int` passes typecheck and produces
-  ill-typed IR (the LLVM backend rejects it late; the interpreter
-  errors at runtime).
-- `return Cat{}` inside `fn f() -> Cat | Dog` never gets its
-  `Coercion::UnionWiden` stamped, so no `UnionWrap` is emitted and
-  union-typed early returns miscompile.
-
-Script bodies have no declared return type at all, so their explicit
-returns are entirely unconstrained; script return typing (`Unit` when
-flow closes via `return`) and REPL echo semantics are open design
-questions tied to this gap. Relatedly, the compiled script path only
-supports a single reachable `Return`-terminated block
-(`main_wrapper.rs::find_return_block`), so a script with an early
-`return` runs on the interpreter but fails `koja run --backend llvm`
-with a codegen error.
-
-The fix belongs in typecheck: check and coercion-stamp every
-`Statement::Return` value the same way trailing expressions are handled
-today. Until then, `seal/types.rs` deliberately exempts
-`IRTerminator::Return` from the typed-IR seal, since lowering cannot
-guarantee an invariant typecheck doesn't establish.
 
 ---
 
@@ -159,35 +112,6 @@ notation at runtime, so the gap is literal syntax only.
 **Fix path:** lexer support for an optional exponent suffix on float
 literals, plus the same round-to-infinity `OutOfRange` check float
 literals already get.
-
----
-
-## No definite-assignment analysis for locals
-
-Found 2026-07-12 while fixing the duplicate-`LocalDecl` seal panic.
-Locals are function-scoped and nothing verifies that every path to a
-read actually assigned the local first. A read after a
-conditionally-executed first assignment compiles and reads an
-uninitialized slot (verified on 0.14.0):
-
-```koja
-i = 5
-while i < 3   # never executes
-  n = i * 2
-end
-n.print()     # uninitialized read. Garbage Int, or a crash for
-              # heap-managed types.
-```
-
-The IR side already defends itself. `merge_slot_states` keeps a slot
-in the live set only when every branch assigned it, so no exit-drop is
-emitted for a maybe-uninitialized slot. The surface language should
-match with a proper diagnostic. The likely fix is a
-definite-assignment dataflow pass in typecheck (a read is an error
-unless every path from function entry assigns first, with `if`/`else`
-where both arms assign counting as assigned and loop bodies counting
-as maybe-assigned). Needs LANGUAGE.md wording and will flag existing
-code that relies on a loop always executing at least once.
 
 ---
 

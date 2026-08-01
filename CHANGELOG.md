@@ -23,6 +23,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Breaking change.** The manifest `name` is now the package's lowercase snake_case identity, and code-facing PascalCase namespaces are derived from it (`my_app` -> `MyApp`) or declared with the new `namespace` field.
 - **Breaking change.** Multiline string content must start on the line after the opening `"""`, and the closing `"""` must sit on its own line.
 - **Breaking change.** Explicit `return` values are now typechecked against the declared return type, a bare `return` in a valued function is an error, and `return <value>` is rejected in `Unit` functions and scripts.
+- **Breaking change.** Reading a local that is not assigned on every path to the read is now a compile error, instead of silently loading an uninitialized value.
+- **Breaking change.** Comparing tuples that contain a closure- or union-typed element is now a compile error, instead of silently skipping those elements.
 - `Kernel.exit` is now typed as divergent, so a match arm or function body can end in `Kernel.exit(...)` without a dummy tail value.
 - `koja new` is now a task written in Koja itself, exported by the stdlib as `koja.new` and runnable anywhere, including outside a project.
 - Compiler errors and warnings now print their `file:line:column` location with a source snippet and caret underline.

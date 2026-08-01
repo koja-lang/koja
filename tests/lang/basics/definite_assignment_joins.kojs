@@ -1,0 +1,61 @@
+# Definite-assignment joins: reads are legal when every reaching
+# path assigns first, including branch intersections and diverging
+# arms. Runs on both backends.
+
+# Both if arms assign.
+flag = true
+
+if flag
+  a = 1
+else
+  a = 2
+end
+
+a.print()
+
+# Every cond arm (including else) assigns.
+x = 50
+
+cond
+  x > 100 -> size = "big"
+  x > 10 -> size = "medium"
+  else -> size = "small"
+end
+
+size.print()
+
+# Every match arm reassigns a branch-declared local.
+if flag
+  b = 0
+end
+
+match x
+  50 -> b = 1
+  _ -> b = 2
+end
+
+b.print()
+
+# A panicking arm diverges and does not veto the join.
+fn pick(ok: Bool) -> Int
+  if ok
+    n = 7
+  else
+    Kernel.panic("no value")
+  end
+
+  n
+end
+
+pick(true).print()
+
+# Writes stay legal after a zero-trip loop. Only reads are gated.
+j = 5
+
+while j < 3
+  s = "loop value"
+  j += 1
+end
+
+s = "post-loop value"
+s.print()
