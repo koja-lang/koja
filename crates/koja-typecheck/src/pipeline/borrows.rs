@@ -173,6 +173,9 @@ fn check_expr(
             }
             EnumConstructionData::Unit => {}
         },
+        ExprKind::Fail { value } => {
+            check_expr(value, Position::Returned, registry, diagnostics);
+        }
         ExprKind::FieldAccess { receiver, .. } => {
             check_expr(receiver, Position::Escaping, registry, diagnostics);
         }
@@ -238,6 +241,12 @@ fn check_expr(
             }
             check_body(after_body, Position::Escaping, registry, diagnostics);
         }
+        ExprKind::Rescue {
+            subject, handler, ..
+        } => {
+            check_expr(subject, Position::Escaping, registry, diagnostics);
+            check_expr(handler, Position::Escaping, registry, diagnostics);
+        }
         ExprKind::ShortClosure { body, .. } => {
             check_expr(body, Position::Returned, registry, diagnostics);
         }
@@ -264,6 +273,9 @@ fn check_expr(
             check_expr(condition, Position::Escaping, registry, diagnostics);
             check_expr(then_expr, Position::Escaping, registry, diagnostics);
             check_expr(else_expr, Position::Escaping, registry, diagnostics);
+        }
+        ExprKind::Try { expr: inner } => {
+            check_expr(inner, Position::Escaping, registry, diagnostics);
         }
         ExprKind::Tuple { elements } => {
             for element in elements {

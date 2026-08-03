@@ -10,6 +10,8 @@ use crate::parser::Parser;
 // =========================================================================
 
 pub(crate) const BP_ARROW: u8 = 1;
+pub(crate) const BP_RESCUE_L: u8 = 2;
+pub(crate) const BP_RESCUE_R: u8 = 3;
 pub(crate) const BP_TERNARY: u8 = 3;
 pub(crate) const BP_OR_L: u8 = 6;
 pub(crate) const BP_OR_R: u8 = 7;
@@ -88,6 +90,11 @@ impl Parser {
                 continue;
             }
 
+            if matches!(self.peek(), TokenKind::Rescue) && BP_RESCUE_L >= min_bp {
+                lhs = self.parse_rescue_tail(lhs);
+                continue;
+            }
+
             if self.consume_continuation_newlines(min_bp) {
                 continue;
             }
@@ -126,6 +133,7 @@ impl Parser {
         self.skip_newlines();
         let continues = match self.peek() {
             TokenKind::Question => BP_TERNARY >= min_bp,
+            TokenKind::Rescue => BP_RESCUE_L >= min_bp,
             kind @ TokenKind::Ident(name) if name == "and" || name == "or" => {
                 infix_bp(kind).is_some_and(|(left_bp, _)| left_bp >= min_bp)
             }
@@ -213,7 +221,7 @@ impl Parser {
     fn parse_short_closure_tail(&mut self, lhs: Expr, allowed: bool) -> Expr {
         if !allowed {
             self.error_with_hint(
-                "short closures are only allowed as call arguments".into(),
+                "short closures are only valid as call arguments".into(),
                 "use `fn (...) -> ... end` outside a call argument".into(),
                 self.current_span(),
             );
@@ -226,6 +234,39 @@ impl Parser {
             ExprKind::ShortClosure {
                 params,
                 body: Box::new(body),
+            },
+            span,
+        )
+    }
+
+    fn parse_rescue_tail(&mut self, subject: Expr) -> Expr {
+        self.advance(); // rescue
+        let binder_span = self.current_span();
+        let binder = match self.peek().clone() {
+            TokenKind::Ident(name) => {
+                self.advance();
+                (name != "_").then_some(name)
+            }
+            _ => {
+                self.error_with_hint(
+                    "expected error binding after `rescue`".into(),
+                    "write `rescue e -> handler`, or `rescue _ -> handler` to ignore the error"
+                        .into(),
+                    binder_span,
+                );
+                None
+            }
+        };
+        self.expect(&TokenKind::Arrow);
+        self.skip_newlines();
+        let handler = self.parse_expr_bp(BP_RESCUE_R);
+        let span = Span::new(subject.span.start, handler.span.end);
+        Expr::new(
+            ExprKind::Rescue {
+                subject: Box::new(subject),
+                binder,
+                binder_span,
+                handler: Box::new(handler),
             },
             span,
         )
@@ -260,8 +301,9 @@ impl Parser {
 
     fn reject_nested_ternary(&mut self, expr: &Expr, span: Span) {
         if matches!(expr.kind, ExprKind::Ternary { .. }) {
-            self.error(
-                "nested ternary not allowed, use `cond` instead".into(),
+            self.error_with_hint(
+                "nested ternary is not valid".into(),
+                "use `cond` for multi-way branching".into(),
                 span,
             );
         }
@@ -275,6 +317,7 @@ impl Parser {
         match self.peek().clone() {
             TokenKind::Break => self.parse_break_recovery(),
             TokenKind::Cond => self.parse_cond_expr(),
+            TokenKind::Fail => self.parse_fail_prefix(),
             TokenKind::False => self.parse_literal_prefix(Literal::Bool(false)),
             TokenKind::FloatLit(text) => self.parse_literal_prefix(Literal::Float(text)),
             TokenKind::Fn => self.parse_closure_expr(),
@@ -296,6 +339,7 @@ impl Parser {
             TokenKind::Spawn => self.parse_spawn_prefix(),
             TokenKind::StringStart => self.parse_string_expr(false),
             TokenKind::True => self.parse_literal_prefix(Literal::Bool(true)),
+            TokenKind::Try => self.parse_try_prefix(),
             TokenKind::TypeIdent(_) => self.parse_type_construction(),
             TokenKind::Unless => self.parse_unless_expr(),
             TokenKind::While => self.parse_while_expr(),
@@ -314,6 +358,18 @@ impl Parser {
         Expr::new(
             ExprKind::Literal {
                 value: Literal::Unit,
+            },
+            self.span_from(start),
+        )
+    }
+
+    fn parse_fail_prefix(&mut self) -> Expr {
+        let start = self.current_span();
+        self.advance(); // fail
+        let value = self.parse_expr();
+        Expr::new(
+            ExprKind::Fail {
+                value: Box::new(value),
             },
             self.span_from(start),
         )
@@ -371,6 +427,21 @@ impl Parser {
         let expr = self.parse_expr();
         Expr::new(
             ExprKind::Spawn {
+                expr: Box::new(expr),
+            },
+            self.span_from(start),
+        )
+    }
+
+    /// `try` binds like unary minus: it takes the postfix chain
+    /// (`try socket.read(n)` propagates the read), while binary
+    /// operators apply to the unwrapped value.
+    fn parse_try_prefix(&mut self) -> Expr {
+        let start = self.current_span();
+        self.advance(); // try
+        let expr = self.parse_expr_bp(BP_UNARY_R);
+        Expr::new(
+            ExprKind::Try {
                 expr: Box::new(expr),
             },
             self.span_from(start),

@@ -12,6 +12,7 @@ Koja is a statically typed, compiled language targeting native binaries via LLVM
 - [Control Flow](#control-flow): `if`/`else`, `unless`, `while`, `loop`/`break`, `for`...`in`, Ternary
 - [Types](#types): Primitives, Numeric Widening, Arithmetic Faults, Unit, Strings, Structs, Enums, Nested Types, Union Types, Tuples, Generics
 - [Pattern Matching](#pattern-matching): `match`, OR Patterns, `cond`
+- [Error Handling](#error-handling): `! E` Signatures, `fail`, `try`, Error Unions, `rescue`
 - [Closures and Function Types](#closures-and-function-types): Block Closures, Short Closures, Capture Semantics, Function Types
 - [Value Semantics](#value-semantics): Rules, Copy Cost, Field Access
 - [Protocols](#protocols): Behavioral Contracts, Static Dispatch
@@ -44,9 +45,10 @@ x = 42  # inline comment
 ### Keywords
 
 ```
-after, alias, break, cond, const, else, end, enum, extend, false,
-fn, for, if, impl, in, loop, match, not, priv, protocol, receive,
-return, self, spawn, struct, true, type, unless, when, while
+after, alias, break, cond, const, else, end, enum, extend, fail,
+false, fn, for, if, impl, in, loop, match, not, priv, protocol,
+receive, rescue, return, self, spawn, struct, true, try, type,
+unless, when, while
 ```
 
 `and` and `or` are operator-identifiers, not reserved keywords. They act as infix boolean operators in expressions (`a and b`, `x or y`) but can also be used freely as method names, function names, or field names (e.g., `option.or(default)`).
@@ -57,14 +59,15 @@ Precedence from lowest to highest:
 
 | Precedence | Operators                   |
 | ---------- | --------------------------- |
-| 1          | `or`                        |
-| 2          | `and`                       |
-| 3          | `not` (prefix)              |
-| 4          | `==` `!=` `<` `>` `<=` `>=` |
-| 5          | `+` `-` `<>`                |
-| 6          | `*` `/` `%`                 |
-| 7          | `-` (unary negation)        |
-| 8          | `.field` `.fn()` `()`       |
+| 1          | `rescue`                    |
+| 2          | `or`                        |
+| 3          | `and`                       |
+| 4          | `not` (prefix)              |
+| 5          | `==` `!=` `<` `>` `<=` `>=` |
+| 6          | `+` `-` `<>`                |
+| 7          | `*` `/` `%`                 |
+| 8          | `-` (unary negation)        |
+| 9          | `.field` `.fn()` `()`       |
 
 `and` and `or` evaluate left to right and short-circuit. `a and b`
 evaluates `b` only when `a` is `true`. `a or b` evaluates `b` only when
@@ -91,7 +94,7 @@ A literal must fit its type. An integer literal outside the target's range is a 
 
 ### Line Continuation
 
-Newlines terminate statements. Line continuation is implicit after binary operators, `.`, and `,`. A line starting with `and`, `or`, or the ternary `?` also continues the previous expression, so wrapped conditions lead each continuation line with the operator.
+Newlines terminate statements. Line continuation is implicit after binary operators, `.`, and `,`. A line starting with `and`, `or`, `rescue`, or the ternary `?` also continues the previous expression, so wrapped conditions lead each continuation line with the operator.
 
 ```koja
 if request.valid? and request.authorized?
@@ -120,7 +123,7 @@ A variable must be assigned before it is read, no matter which path the program 
 while i < 3
   n = i * 2    # the loop may run zero times
 end
-n.print()      # error: `n` may not be assigned on every path
+n.print()      # error: `n` does not have a value on every path
 
 if flag
   m = 1
@@ -201,6 +204,8 @@ end
 ```
 
 Functions without a return type return `()`. Parameters require explicit types. Return type annotation is required if the function returns a value.
+
+A fallible function declares an error type after `!`, as in `-> Int ! ParseError`. This is notation for returning `Result<Int, ParseError>`. See [Error Handling](#error-handling).
 
 A compiled program's entry point is a type implementing the `Process` protocol, named by `entry` in `koja.toml`. There is no `fn main`. Scripts (`.kojs`) execute top-level statements directly. Functions may be declared at the top level or inside struct, enum, and `impl` bodies. See [Structs](#structs), [Protocols](#protocols), and [Static Functions](#static-functions).
 
@@ -1015,6 +1020,87 @@ end
 
 ---
 
+## Error Handling
+
+Recoverable errors are values: a fallible function returns [`Result<T, E>`](#resultt-e). The error channel notation is sugar over that type, not a second mechanism. Bugs are a separate channel entirely: they crash the process (see [Concurrency](#concurrency)) and are never catchable in-process.
+
+### `! E` Signatures
+
+`-> T ! E` declares a function that produces a `T` or fails with an `E`. It is pure notation for `-> Result<T, E>`, and callers see an ordinary `Result`:
+
+```koja
+fn parse_port(raw: String) -> Int ! ParseError
+  # ...
+end
+
+outcome = parse_port("8080")   # outcome: Result<Int, ParseError>
+```
+
+Inside a `!`-spelled function, success values are unwrapped: `return value` and the trailing expression check against `T` and wrap in `Result.Ok` automatically. A `-> () ! E` function that falls off the end returns `Result.Ok(())`. Writing `Result.Ok(...)` by hand in return position is a compile error pointing at the auto-wrap rule.
+
+The `!` spelling is opt-in per declaration. A function declared `-> Result<T, E>` keeps its explicit `Result.Ok` / `Result.Err` returns and compiles exactly as before.
+
+### `fail`
+
+`fail expr` exits the function with an error. It is sugar for `return Result.Err(expr)` and goes anywhere `return` does: a statement of its own or a match arm tail, never embedded in a larger expression.
+
+```koja
+fn read_config(path: String) -> Config ! ConfigError
+  unless File.exists?(path)
+    fail ConfigError.Missing(path)
+  end
+  # ...
+end
+```
+
+### `try`
+
+`try expr` unwraps a `Result`: an `Ok` value flows through, an `Err` propagates out of the enclosing function.
+
+```koja
+fn load(path: String) -> Server ! ConfigError
+  config = try read_config(path)
+  port = try parse_port(config.port)   # error type must fit the declared `E`
+  Server{config: config, port: port}
+end
+```
+
+The subject must produce a `Result`, and the enclosing function (or closure) must declare an error type for the propagated error to fit into, under either spelling. For an `Option`, name the error first: `try option.or_err(error)`.
+
+### Error Unions
+
+Errors compose with ordinary [union types](#union-types). A function calling into two error domains declares the union, and each propagated or failed error widens into it without conversion ceremony:
+
+```koja
+fn fetch_user(id: Int) -> User ! HTTP.Error | ParseError
+  response = try HTTP.get(user_url(id))   # HTTP.Error widens
+  try parse_user(response.body)           # ParseError widens
+end
+```
+
+A `type` alias names a recurring union: `type AppError = HTTP.Error | ParseError`. Callers match on the union member to route errors (see [Union Types](#union-types)).
+
+### `rescue`
+
+`expr rescue e -> handler` handles one expression's error inline. The `Ok` value flows through, and the handler receives the error and must produce the same success type or diverge (`fail` or a panic):
+
+```koja
+port = parse_port(raw) rescue _ -> 8080
+
+socket = TCPSocket.connect(host, port)
+  rescue e -> fail Error.ConnectFailed(e.message())
+
+limits = fetch_limits(url) rescue e -> Kernel.panic("config unavailable: #{e}")
+```
+
+`rescue` works on any `Result` regardless of the enclosing function's spelling. It binds looser than any operator, so the whole chain to its left is the subject. Use `_` to ignore the error.
+
+### Combinators
+
+`try` / `fail` / `rescue` are the control-flow surface. `Result`'s functions remain for outcomes treated as data, results held in collections, returned by `Task.await`, or stored in fields, where propagation cannot reach. See [`Result<T, E>`](#resultt-e).
+
+---
+
 ## Closures and Function Types
 
 ### Block Closures
@@ -1559,7 +1645,9 @@ enum Option<T>
 end
 ```
 
-Functions: `unwrap()`, `or(default)`, `some?()`, `none?()`, `map(fn (T) -> U)`, `then(fn (T) -> Option<U>)`.
+Functions: `unwrap()`, `or(default)`, `or_err(error)`, `some?()`, `none?()`, `map(fn (T) -> U)`, `then(fn (T) -> Option<U>)`.
+
+`or_err(error)` bridges to `Result`: `Some(v)` becomes `Ok(v)` and `None` becomes `Err(error)`, ready for [`try`](#try).
 
 ```koja
 x = Option.Some(42)
@@ -1583,7 +1671,7 @@ enum Result<T, E>
 end
 ```
 
-Functions: `unwrap()`, `or(default)`, `ok?()`, `err?()`, `map(fn (T) -> U)`, `then(fn (T) -> Result<U, E>)`.
+Functions: `unwrap()`, `or(default)`, `ok?()`, `err?()`, `ok()`, `err()`, `map(fn (T) -> U)`, `map_err(fn (E) -> F)`.
 
 ```koja
 ok: Result<Int32, Int32> = Result.Ok(42)
@@ -1592,6 +1680,8 @@ ok.unwrap().print()       # 42
 err: Result<Int32, Int32> = Result.Err(1)
 err.or(99).print()        # 99
 ```
+
+For unwrap-or-propagate control flow, prefer `try` / `fail` / `rescue` over combinator chains. See [Error Handling](#error-handling).
 
 ### `Pair<A, B>`
 

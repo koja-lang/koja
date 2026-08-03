@@ -10,6 +10,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - Anonymous tuples. Build with `(a, b)`, annotate as `(Int, String)`, take apart with destructuring assignment `(x, y) = pair` or `match` patterns.
+- Error channel notation for fallible functions: `-> T ! E` declares a function returning `Result<T, E>`, with success values wrapping in `Result.Ok` automatically.
+- `try expr` unwraps an `Ok` value or propagates the `Err` out of the enclosing function, widening the error into a declared union such as `! ParseError | NetError`.
+- `fail expr` returns an error from a fallible function, as sugar for `return Result.Err(expr)`.
+- `expr rescue e -> handler` handles one expression's error inline, producing the `Ok` value or the handler's result.
 - Custom CLI tasks. A package's `[tasks]` table maps package-prefixed names to types implementing the new `Koja.Task` protocol, runnable with `koja run <task.name> [-- args]` from the project or any project depending on it.
 - `koja tasks` lists every task exported by the project, its dependencies, and the toolchain.
 - Directory functions on `File`: `mkdir` (single level), `mkdir_p` (creates missing parents), `rmdir` (removes an empty directory), and `dir?` (true only for directories).
@@ -19,6 +23,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Breaking change.** `try`, `fail`, and `rescue` are now reserved keywords and can no longer be used as identifiers.
+- **Breaking change.** `Result.then` has been removed. Use `try` for unwrap-or-propagate chains.
 - **Breaking change.** Standard library APIs now use anonymous tuples for list pops, datagram receives, JSON object entries, parser results, and process envelopes instead of `Pair`.
 - **Breaking change.** The manifest `name` is now the package's lowercase snake_case identity, and code-facing PascalCase namespaces are derived from it (`my_app` -> `MyApp`) or declared with the new `namespace` field.
 - **Breaking change.** Multiline string content must start on the line after the opening `"""`, and the closing `"""` must sit on its own line.

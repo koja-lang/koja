@@ -1,0 +1,5 @@
+fn caller() -> Int ! String
+  try 42
+end
+
+caller()

@@ -3,11 +3,13 @@
 //!
 //! - associativity for `+`/`-`, `*`/`/`/`%`, `==`/`!=`/`<`/`>`/`<=`/`>=`,
 //!   `and`/`or`, and the `?:` ternary
-//! - the precedence ladder: postfix > unary > mul > add > cmp > and >
-//!   or > ternary > short-closure arrow
+//! - the precedence ladder: postfix > unary/`try` > mul > add > cmp >
+//!   and > or > ternary > `rescue` > short-closure arrow
 //! - postfix forms (field access, method call, call, ternary)
 //! - the `expr -> expr` short-closure shape and its single-param /
 //!   wildcard / parenthesized variants
+//! - the error-channel forms `try expr`, `fail expr`, and
+//!   `expr rescue e -> handler`
 
 use koja_ast::ast::{BinOp, ClosureParam, Expr, ExprKind, Literal, UnaryOp};
 
@@ -336,6 +338,109 @@ fn call_result_chains_into_field_access() {
     };
     assert_eq!(field, "x");
     assert!(matches!(receiver.kind, ExprKind::Call { .. }));
+}
+
+// ---- Error channel: try / fail / rescue ----
+
+#[test]
+fn try_parses_prefix() {
+    let expr = first_script_expr("try f()");
+    let ExprKind::Try { expr: inner } = &expr.kind else {
+        panic!("expected Try, got {expr:?}");
+    };
+    assert!(matches!(inner.kind, ExprKind::Call { .. }));
+}
+
+#[test]
+fn try_binds_the_postfix_chain() {
+    let expr = first_script_expr("try socket.read(4)");
+    let ExprKind::Try { expr: inner } = &expr.kind else {
+        panic!("expected Try, got {expr:?}");
+    };
+    assert!(matches!(inner.kind, ExprKind::MethodCall { .. }));
+}
+
+#[test]
+fn try_lower_than_binary_operators() {
+    let expr = first_script_expr("try f() + 1");
+    let ExprKind::Binary { op, left, .. } = &expr.kind else {
+        panic!("expected Binary, got {expr:?}");
+    };
+    assert_eq!(*op, BinOp::Add);
+    assert!(matches!(left.kind, ExprKind::Try { .. }));
+}
+
+#[test]
+fn fail_takes_a_full_expression() {
+    let expr = first_script_expr("fail Error.NotFound(name)");
+    let ExprKind::Fail { value } = &expr.kind else {
+        panic!("expected Fail, got {expr:?}");
+    };
+    assert!(matches!(value.kind, ExprKind::EnumConstruction { .. }));
+}
+
+#[test]
+fn rescue_parses_with_binder() {
+    let expr = first_script_expr("f() rescue e -> 0");
+    let ExprKind::Rescue {
+        subject,
+        binder,
+        handler,
+        ..
+    } = &expr.kind
+    else {
+        panic!("expected Rescue, got {expr:?}");
+    };
+    assert!(matches!(subject.kind, ExprKind::Call { .. }));
+    assert_eq!(binder.as_deref(), Some("e"));
+    assert!(matches!(
+        handler.kind,
+        ExprKind::Literal {
+            value: Literal::Int(_)
+        }
+    ));
+}
+
+#[test]
+fn rescue_wildcard_binder_is_none() {
+    let expr = first_script_expr("f() rescue _ -> 0");
+    let ExprKind::Rescue { binder, .. } = &expr.kind else {
+        panic!("expected Rescue, got {expr:?}");
+    };
+    assert!(binder.is_none());
+}
+
+#[test]
+fn rescue_continues_across_a_newline() {
+    let expr = first_script_expr("f()\n  rescue e -> fallback");
+    assert!(matches!(expr.kind, ExprKind::Rescue { .. }));
+}
+
+#[test]
+fn rescue_lower_than_ternary() {
+    let expr = first_script_expr("c ? a : b rescue e -> h");
+    let ExprKind::Rescue { subject, .. } = &expr.kind else {
+        panic!("expected Rescue, got {expr:?}");
+    };
+    assert!(matches!(subject.kind, ExprKind::Ternary { .. }));
+}
+
+#[test]
+fn rescue_handler_takes_fail() {
+    let expr = first_script_expr("f() rescue e -> fail Error.Wrapped(e)");
+    let ExprKind::Rescue { handler, .. } = &expr.kind else {
+        panic!("expected Rescue, got {expr:?}");
+    };
+    assert!(matches!(handler.kind, ExprKind::Fail { .. }));
+}
+
+#[test]
+fn rescue_handler_takes_try() {
+    let expr = first_script_expr("fetch(primary) rescue _ -> try fetch(mirror)");
+    let ExprKind::Rescue { handler, .. } = &expr.kind else {
+        panic!("expected Rescue, got {expr:?}");
+    };
+    assert!(matches!(handler.kind, ExprKind::Try { .. }));
 }
 
 // ---- Literals ----

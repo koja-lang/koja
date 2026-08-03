@@ -1159,7 +1159,9 @@ fn match_constructor_struct_variant_diagnoses() {
             .diagnostics
             .iter()
             .any(|d| d.message.contains("is a struct variant")
-                && d.message.contains("Shape.Rect{...}")),
+                && d.hint
+                    .as_deref()
+                    .is_some_and(|h| h.contains("Shape.Rect{...}"))),
         "expected struct-variant shorthand redirect diagnostic, got: {:?}",
         failure.diagnostics,
     );

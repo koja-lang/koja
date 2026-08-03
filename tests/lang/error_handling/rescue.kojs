@@ -1,0 +1,44 @@
+# `rescue` forms: inline default, error binder, translation via
+# `fail`, and a diverging handler.
+
+enum ParseError
+  BadDigit(String)
+end
+
+enum AppError
+  BadInput
+end
+
+fn digit(s: String) -> Int ! ParseError
+  match s
+    "0" -> 0
+    "1" -> 1
+    _ -> fail ParseError.BadDigit(s)
+  end
+end
+
+fn describe(e: ParseError) -> Int
+  match e
+    ParseError.BadDigit(s) -> s.length()
+  end
+end
+
+fn translated(s: String) -> Int ! AppError
+  digit(s) rescue _ -> fail AppError.BadInput
+end
+
+# Inline default with the error ignored.
+a = digit("1") rescue _ -> -1
+b = digit("x") rescue _ -> -1
+IO.puts("a = #{a}")
+IO.puts("b = #{b}")
+
+# The binder carries the error value into the handler.
+c = digit("abc") rescue e -> describe(e)
+IO.puts("c = #{c}")
+
+# A handler may fail into the enclosing channel instead.
+d = translated("0")
+e = translated("nope")
+IO.puts("d ok? #{d.ok?()}")
+IO.puts("e ok? #{e.ok?()}")

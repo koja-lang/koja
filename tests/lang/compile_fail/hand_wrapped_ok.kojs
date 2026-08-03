@@ -1,0 +1,9 @@
+enum MyError
+  Nope
+end
+
+fn caller() -> Int ! MyError
+  return Result.Ok(5)
+end
+
+caller()

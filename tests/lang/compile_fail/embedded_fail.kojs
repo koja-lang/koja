@@ -1,0 +1,9 @@
+enum MyError
+  Nope
+end
+
+fn caller(flag: Bool) -> Int ! MyError
+  flag ? 1 : fail MyError.Nope
+end
+
+caller(true)

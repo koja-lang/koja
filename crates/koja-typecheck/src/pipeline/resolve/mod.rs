@@ -22,6 +22,8 @@
 //! - [`strings`]: string literal resolution.
 //! - [`control_flow`]: `if` / `unless` (Unit-typed, value-producing
 //!   forms land with locals).
+//! - [`error_channel`]: `try` / `fail` / `rescue` desugaring and
+//!   `Result.Ok` auto-wrapping for `! E` functions.
 //! - [`ops`]: literal, binary, and unary type rules.
 //! - [`return_type`]: trailing-expression-vs-declared-return checking.
 //! - [`types`]: registry-backed [`ResolvedType`] predicates and
@@ -38,6 +40,7 @@ pub(crate) mod coercion;
 mod control_flow;
 mod ctx;
 mod enums;
+mod error_channel;
 mod expr;
 mod idents;
 mod inference;

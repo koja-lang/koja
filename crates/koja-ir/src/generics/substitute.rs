@@ -54,6 +54,7 @@ pub(super) fn substitute_signature(
     owner: GlobalRegistryId,
 ) -> FunctionSignature {
     FunctionSignature {
+        declared_fallible: signature.declared_fallible,
         dispatch: signature.dispatch,
         params: signature
             .params
@@ -155,6 +156,7 @@ fn substitute_in_expr(expr: &mut Expr, args: &[ResolvedType], owner: GlobalRegis
             }
             EnumConstructionData::Unit => {}
         },
+        ExprKind::Fail { value } => substitute_in_expr(value, args, owner),
         ExprKind::FieldAccess { receiver, .. } => substitute_in_expr(receiver, args, owner),
         ExprKind::For {
             pattern,
@@ -240,6 +242,12 @@ fn substitute_in_expr(expr: &mut Expr, args: &[ResolvedType], owner: GlobalRegis
             }
             substitute_in_statements(after_body, args, owner);
         }
+        ExprKind::Rescue {
+            subject, handler, ..
+        } => {
+            substitute_in_expr(subject, args, owner);
+            substitute_in_expr(handler, args, owner);
+        }
         ExprKind::ShortClosure { body, .. } => substitute_in_expr(body, args, owner),
         ExprKind::Spawn { expr: inner } => substitute_in_expr(inner, args, owner),
         ExprKind::String { parts, .. } => {
@@ -263,6 +271,7 @@ fn substitute_in_expr(expr: &mut Expr, args: &[ResolvedType], owner: GlobalRegis
             substitute_in_expr(then_expr, args, owner);
             substitute_in_expr(else_expr, args, owner);
         }
+        ExprKind::Try { expr: inner } => substitute_in_expr(inner, args, owner),
         ExprKind::Tuple { elements } => {
             for element in elements {
                 substitute_in_expr(element, args, owner);

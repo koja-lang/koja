@@ -91,11 +91,7 @@ impl Parser {
         };
 
         self.skip_newlines();
-        let return_type = if self.eat(&TokenKind::Arrow).is_some() {
-            Some(self.parse_type_expr())
-        } else {
-            None
-        };
+        let (return_type, error_type) = self.parse_return_signature();
 
         self.skip_newlines();
         let body =
@@ -113,6 +109,7 @@ impl Parser {
             type_params,
             params,
             return_type,
+            error_type,
             body,
             span: self.span_from(start),
         }

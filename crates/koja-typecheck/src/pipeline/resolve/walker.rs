@@ -30,6 +30,10 @@ use crate::pipeline::local_scope::LocalScope;
 use crate::registry::{FunctionSignature, GlobalKind, GlobalRegistry};
 
 use super::ctx::{Resolver, ResolverEnv};
+use super::error_channel::{
+    channel_for_signature, hand_wrapped_result, is_fail_statement, ok_wrap_return,
+    resolve_fail_statement, return_site_expected,
+};
 use super::expr::resolve_expr_with_expected;
 use super::return_type::{check_explicit_return, check_return_type};
 use super::statements::{resolve_assignment, resolve_compound_assignment, resolve_destructure};
@@ -202,12 +206,33 @@ fn resolve_function(
             &type_param_owners,
             &mut scope,
         );
-        let expected = signature
+        resolver.error_channel = signature
             .as_ref()
-            .filter(|sig| sig.return_type.is_resolved())
-            .map(|sig| sig.return_type.clone());
+            .and_then(|sig| channel_for_signature(sig, resolver.registry));
+        // A `! E` function's body checks against the unwrapped
+        // success type `T`. The `Result.Ok` wrapping happens after
+        // each site passes (`ok_wrap_return` below,
+        // `check_return_type` for the trailing expression).
+        let expected = match &resolver.error_channel {
+            Some(channel) if channel.ok_wraps => Some(channel.ok.clone()),
+            _ => signature
+                .as_ref()
+                .filter(|sig| sig.return_type.is_resolved())
+                .map(|sig| sig.return_type.clone()),
+        };
         resolver.current_return_type = expected.clone();
-        resolve_body_with_expected(body, expected.as_ref(), &mut resolver, diagnostics);
+        // A hand-written `Result.Ok(...)` trailer retargets at the
+        // full `Result` type so `check_return_type` can teach the
+        // auto-wrap rule instead of failing `E` inference.
+        let trailing_expected = match (body.last(), &resolver.error_channel) {
+            (Some(Statement::Expr(trailing)), Some(channel))
+                if hand_wrapped_result(trailing, channel, resolver.registry) =>
+            {
+                Some(channel.result.clone())
+            }
+            _ => expected,
+        };
+        resolve_body_with_expected(body, trailing_expected.as_ref(), &mut resolver, diagnostics);
     }
 
     if let Some(signature) = signature {
@@ -302,6 +327,14 @@ pub(super) fn resolve_statement_with_expected(
     resolver: &mut Resolver<'_>,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
+    // Statement-position `fail` (including match arm tails, whose
+    // bodies route through here) rewrites the whole statement to
+    // `return Result.Err(...)`, so it dispatches before the
+    // per-shape arms below.
+    if is_fail_statement(stmt) {
+        resolve_fail_statement(stmt, resolver, diagnostics);
+        return;
+    }
     match stmt {
         Statement::Assignment {
             target,
@@ -322,7 +355,7 @@ pub(super) fn resolve_statement_with_expected(
             if resolver.loop_depth == 0 {
                 diagnostics.push(Diagnostic::error_with_hint(
                     "break outside of loop",
-                    "'break' can only be used inside 'loop' or 'while'",
+                    "`break` is only valid inside `loop` or `while`",
                     *span,
                 ));
             } else if let Some(seen) = resolver.loop_break_seen.last_mut() {
@@ -345,10 +378,12 @@ pub(super) fn resolve_statement_with_expected(
         }
         Statement::Return { value, span } => {
             if let Some(value) = value {
-                let expected = resolver.current_return_type.clone();
+                let expected =
+                    return_site_expected(value, resolver.current_return_type.as_ref(), resolver);
                 resolve_expr_with_expected(value, expected.as_ref(), resolver, diagnostics);
             }
             check_explicit_return(value.as_mut(), *span, resolver, diagnostics);
+            ok_wrap_return(value, *span, resolver);
         }
     }
 }

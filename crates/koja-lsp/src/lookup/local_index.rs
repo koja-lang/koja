@@ -297,7 +297,19 @@ impl LocalIndex {
                     self.walk_expr(v);
                 }
             }
-            ExprKind::Spawn { expr: inner } => self.walk_expr(inner),
+            ExprKind::Spawn { expr: inner } | ExprKind::Try { expr: inner } => {
+                self.walk_expr(inner)
+            }
+            ExprKind::Fail { value } => self.walk_expr(value),
+            // The rescue binder has no LocalId in the AST (resolve
+            // desugars it into a match pattern), so only the
+            // subexpressions are indexed.
+            ExprKind::Rescue {
+                subject, handler, ..
+            } => {
+                self.walk_expr(subject);
+                self.walk_expr(handler);
+            }
             ExprKind::Receive {
                 arms,
                 after_timeout,

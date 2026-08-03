@@ -7,7 +7,7 @@
 //! signatures and, inside struct/enum/impl bodies, when the *next*
 //! token starts another function declaration.
 
-use koja_ast::ast::{Annotation, Function, Item, Param, Visibility};
+use koja_ast::ast::{Annotation, Function, Item, Param, TypeExpr, Visibility};
 use koja_ast::token::TokenKind;
 
 use crate::parser::Parser;
@@ -41,11 +41,7 @@ impl Parser {
         };
 
         self.skip_newlines();
-        let return_type = if self.eat(&TokenKind::Arrow).is_some() {
-            Some(self.parse_type_expr())
-        } else {
-            None
-        };
+        let (return_type, error_type) = self.parse_return_signature();
 
         self.skip_newlines();
         let bodyless_marker = annotations
@@ -73,9 +69,25 @@ impl Parser {
             type_params,
             params,
             return_type,
+            error_type,
             body,
             span: self.span_from(start),
         }
+    }
+
+    /// Parses the optional `-> T` return type and its optional `! E`
+    /// error type. `! E` is only legal after a return type.
+    pub(crate) fn parse_return_signature(&mut self) -> (Option<TypeExpr>, Option<TypeExpr>) {
+        if self.eat(&TokenKind::Arrow).is_none() {
+            return (None, None);
+        }
+        let return_type = self.parse_type_expr();
+        let error_type = if self.eat(&TokenKind::Bang).is_some() {
+            Some(self.parse_type_expr())
+        } else {
+            None
+        };
+        (Some(return_type), error_type)
     }
 
     pub(crate) fn parse_param_list(&mut self) -> Vec<Param> {

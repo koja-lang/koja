@@ -420,6 +420,8 @@ pub enum EnumVariantData {
 
 /// A function declaration: `fn name(params) -> ReturnType ... end`.
 /// `body` is `None` for extern declarations (`@extern "C"`) that have no body.
+/// `error_type` is `Some` for the fallible spelling `-> T ! E`, which is
+/// notation for `-> Result<T, E>` plus Ok-wrapping of success returns.
 #[derive(Debug, Clone)]
 pub struct Function {
     pub annotations: Vec<Annotation>,
@@ -428,6 +430,7 @@ pub struct Function {
     pub type_params: Vec<TypeParam>,
     pub params: Vec<Param>,
     pub return_type: Option<TypeExpr>,
+    pub error_type: Option<TypeExpr>,
     pub body: Option<Vec<Statement>>,
     pub span: Span,
 }
@@ -481,6 +484,7 @@ pub struct ProtocolMethod {
     pub type_params: Vec<TypeParam>,
     pub params: Vec<Param>,
     pub return_type: Option<TypeExpr>,
+    pub error_type: Option<TypeExpr>,
     pub body: Option<Vec<Statement>>,
     pub span: Span,
 }
@@ -825,6 +829,11 @@ pub enum ExprKind {
         variant: String,
         data: EnumConstructionData,
     },
+    /// An error return: `fail expr`. Diverges like `return`, sending
+    /// the value down the enclosing function's error channel. Only
+    /// valid in statement and arm-tail positions. Typecheck desugars
+    /// it to `return Result.Err(value)`.
+    Fail { value: Box<Expr> },
     /// A field access: `point.x`.
     FieldAccess { receiver: Box<Expr>, field: String },
     /// A for loop: `for x in items ... end`.
@@ -874,6 +883,16 @@ pub enum ExprKind {
         after_timeout: Option<Box<Expr>>,
         after_body: Vec<Statement>,
     },
+    /// An inline error handler: `expr rescue e -> handler`.
+    /// `binder` is `None` for `_`. The handler must produce the
+    /// subject's `Ok` type or diverge. Typecheck desugars the whole
+    /// node to a `match` on the subject.
+    Rescue {
+        subject: Box<Expr>,
+        binder: Option<String>,
+        binder_span: Span,
+        handler: Box<Expr>,
+    },
     /// A self reference: `self`. `local_id` is `None` after parse and
     /// stamped by typecheck-resolve to the enclosing instance method's
     /// `self` slot. IR lower keys its `LocalRead` on the same id, so
@@ -903,6 +922,10 @@ pub enum ExprKind {
         then_expr: Box<Expr>,
         else_expr: Box<Expr>,
     },
+    /// An error propagation: `try expr`. Yields the subject's `Ok`
+    /// value or early-returns the `Err` widened into the enclosing
+    /// function's error type. Typecheck desugars it to a `match`.
+    Try { expr: Box<Expr> },
     /// An anonymous tuple literal such as `(1, "a")`, always two or
     /// more elements. `()` is the unit literal and `(e)` is
     /// [`Self::Group`].

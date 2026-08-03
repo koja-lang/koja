@@ -12,19 +12,19 @@ struct Cli
   Runs the command named by `args`. Returns the output to print, or
   an error message for a bad invocation or a failed API call.
   """
-  fn dispatch(args: List<String>) -> Result<String, String>
+  fn dispatch(args: List<String>) -> String ! String
     if args.empty?()
-      return Result.Ok(usage())
+      return usage()
     end
 
     command = args.get(0).unwrap()
 
     match command
-      "help" -> Result.Ok(usage())
-      "repo" -> run_repo(args)
-      "repos" -> run_repos(args)
-      "user" -> run_user(args)
-      _ -> Result.Err("unknown command: #{command}\n\n#{usage()}")
+      "help" -> usage()
+      "repo" -> try run_repo(args)
+      "repos" -> try run_repos(args)
+      "user" -> try run_user(args)
+      _ -> fail "unknown command: #{command}\n\n#{usage()}"
     end
   end
 
@@ -111,9 +111,8 @@ struct Cli
     )
   end
 
+  # Trims an ISO-8601 timestamp to its date part.
   priv fn date_of(timestamp: String) -> String
-    # Trims an ISO-8601 timestamp to its date part.
-
     timestamp.length() < 10
       ? timestamp
       : timestamp.slice(Range{start: 0, stop: 9})
@@ -143,35 +142,25 @@ struct Cli
     line
   end
 
-  priv fn require_arg(args: List<String>, name: String)
-    -> Result<String, String>
-
-    args.get(1).or_err("missing argument: #{name}")
+  priv fn require_arg(args: List<String>, name: String) -> String ! String
+    try args.get(1).or_err("missing argument: #{name}")
   end
 
-  priv fn run_repo(args: List<String>) -> Result<String, String>
-    full_name =
-      match require_arg(args, "<owner/name>")
-        Result.Ok(v) -> v
-        Result.Err(e) -> return Result.Err(e)
-      end
-
-    GitHub.repo(full_name).map(x -> render_repo(x))
+  priv fn run_repo(args: List<String>) -> String ! String
+    full_name = try require_arg(args, "<owner/name>")
+    repo = try GitHub.repo(full_name)
+    render_repo(repo)
   end
 
-  priv fn run_repos(args: List<String>) -> Result<String, String>
-    login =
-      match require_arg(args, "<login>")
-        Result.Ok(v) -> v
-        Result.Err(e) -> return Result.Err(e)
-      end
-
-    GitHub.repos(login).map(x -> render_repos(login, x))
+  priv fn run_repos(args: List<String>) -> String ! String
+    login = try require_arg(args, "<login>")
+    repos = try GitHub.repos(login)
+    render_repos(login, repos)
   end
 
-  priv fn run_user(args: List<String>) -> Result<String, String>
-    require_arg(args, "<login>")
-      .then(login -> GitHub.user(login))
-      .map(x -> render_user(x))
+  priv fn run_user(args: List<String>) -> String ! String
+    login = try require_arg(args, "<login>")
+    user = try GitHub.user(login)
+    render_user(user)
   end
 end

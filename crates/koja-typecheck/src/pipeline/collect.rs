@@ -157,7 +157,7 @@ fn validate_nested_owner(
         diagnostics.push(Diagnostic::error(
             format!(
                 "nested type `{leaf}` must be declared under a type in the same \
-                 package; `{owner_name}` is not a known type in `{package}`"
+                 package (`{owner_name}` is not a known type in `{package}`)"
             ),
             span,
         ));
@@ -323,7 +323,7 @@ fn diagnose_doc_on_private(
     for annotation in annotations {
         if matches!(annotation.kind(), AnnotationKind::Doc(_)) {
             diagnostics.push(Diagnostic::error_with_hint(
-                format!("`@doc` is not allowed on private {kind_label} `{name}`"),
+                format!("`@doc` is not valid on private {kind_label} `{name}`"),
                 "private declarations never appear in generated docs. Document it with a `#` \
                  comment instead."
                     .to_string(),

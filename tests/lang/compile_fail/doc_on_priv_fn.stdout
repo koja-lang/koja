@@ -1,1 +1,1 @@
-`@doc` is not allowed on private function `helper`
+`@doc` is not valid on private function `helper`

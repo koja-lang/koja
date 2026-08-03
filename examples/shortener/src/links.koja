@@ -19,8 +19,8 @@ const CODE_ALPHABET: String = "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLM
 @doc """
 Data-access layer over the `links` table. Every operation threads the
 Postgres `Connection` through (Koja values are independent, so a query
-returns an updated connection) and returns it alongside the outcome;
-callers rebind to the returned connection. Driver errors are collapsed
+returns an updated connection) and returns it alongside the outcome,
+so callers rebind to the returned connection. Driver errors are collapsed
 to their `message()` text at this boundary so the HTTP layer only
 deals in strings.
 
@@ -42,14 +42,14 @@ struct LinkStore
   Returns every link, newest first.
   """
   fn all(conn: Connection) -> (Connection, Result<List<Link>, String>)
-    outcome = conn.query(
+    (conn, outcome) = conn.query(
       select_columns() <> " FROM links ORDER BY created_at DESC",
     )
     rows: List<Link> = List.new()
 
-    match outcome.second
-      Result.Err(e) -> (outcome.first, Result.Err(e.message()))
-      Result.Ok(qr) -> (outcome.first, Result.Ok(map_rows(qr.rows, 0, rows)))
+    match outcome
+      Result.Err(e) -> (conn, Result.Err(e.message()))
+      Result.Ok(qr) -> (conn, Result.Ok(map_rows(qr.rows, 0, rows)))
     end
   end
 
@@ -85,11 +85,11 @@ struct LinkStore
   fn remove(conn: Connection, code: String)
     -> (Connection, Result<Bool, String>)
 
-    outcome = conn.query("DELETE FROM links WHERE code = " <> lit(code))
+    (conn, outcome) = conn.query("DELETE FROM links WHERE code = " <> lit(code))
 
-    match outcome.second
-      Result.Err(e) -> (outcome.first, Result.Err(e.message()))
-      Result.Ok(qr) -> (outcome.first, Result.Ok(qr.tag != "DELETE 0"))
+    match outcome
+      Result.Err(e) -> (conn, Result.Err(e.message()))
+      Result.Ok(qr) -> (conn, Result.Ok(qr.tag != "DELETE 0"))
     end
   end
 
@@ -100,23 +100,18 @@ struct LinkStore
   fn visit(conn: Connection, code: String)
     -> (Connection, Result<Option<String>, String>)
 
-    outcome = conn.query(
+    (conn, outcome) = conn.query(
       "UPDATE links SET hits = hits + 1 WHERE code = " <> lit(code) <>
         " RETURNING url",
     )
 
-    match outcome.second
+    match outcome
       Result.Err(e) ->
-        (outcome.first, Result.Err(e.message()))
+        (conn, Result.Err(e.message()))
 
       Result.Ok(qr) ->
-        target: Option<String> =
-          match qr.rows.get(0)
-            Option.Some(row) -> Option.Some(col(row, 0))
-            Option.None -> Option.None
-          end
-
-        (outcome.first, Result.Ok(target))
+        target: Option<String> = qr.rows.get(0).map(row -> col(row, 0))
+        (conn, Result.Ok(target))
     end
   end
 
@@ -128,20 +123,20 @@ struct LinkStore
     end
 
     code = generate_code(CODE_LENGTH, "")
-    outcome = conn.query(
+    (conn, outcome) = conn.query(
       "INSERT INTO links (code, url) VALUES (" <> lit(code) <> ", " <>
         lit(url) <>
         ") ON CONFLICT (code) DO NOTHING RETURNING code, url, created_at::text, hits",
     )
 
-    match outcome.second
+    match outcome
       Result.Err(e) ->
-        (outcome.first, Result.Err(e.message()))
+        (conn, Result.Err(e.message()))
 
       Result.Ok(qr) ->
         match first_link(qr)
-          Option.Some(link) -> (outcome.first, Result.Ok(link))
-          Option.None -> create_attempt(outcome.first, url, attempt + 1)
+          Option.Some(link) -> (conn, Result.Ok(link))
+          Option.None -> create_attempt(conn, url, attempt + 1)
         end
     end
   end
@@ -149,11 +144,11 @@ struct LinkStore
   priv fn query_one(conn: Connection, sql: String)
     -> (Connection, Result<Option<Link>, String>)
 
-    outcome = conn.query(sql)
+    (conn, outcome) = conn.query(sql)
 
-    match outcome.second
-      Result.Err(e) -> (outcome.first, Result.Err(e.message()))
-      Result.Ok(qr) -> (outcome.first, Result.Ok(first_link(qr)))
+    match outcome
+      Result.Err(e) -> (conn, Result.Err(e.message()))
+      Result.Ok(qr) -> (conn, Result.Ok(first_link(qr)))
     end
   end
 

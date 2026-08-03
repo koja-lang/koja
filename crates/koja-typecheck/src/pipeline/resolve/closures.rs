@@ -33,6 +33,7 @@ use koja_ast::identifier::{AnonymousKind, ResolvedType};
 use koja_ast::span::Span;
 
 use super::ctx::Resolver;
+use super::error_channel::channel_for_closure;
 use super::expr::resolve_expr_with_expected;
 use super::walker::resolve_body_with_expected;
 use crate::pipeline::lift_signatures::{TypeParamScope, resolve_type_expr};
@@ -61,6 +62,12 @@ pub(super) fn resolve_closure(
         .clone()
         .or_else(|| expected_return.cloned());
     let saved_return = std::mem::replace(&mut resolver.current_return_type, return_hint.clone());
+    // A `try` or `fail` inside the closure propagates to the
+    // closure's own return type, never the enclosing function's.
+    let saved_error_channel = std::mem::replace(
+        &mut resolver.error_channel,
+        channel_for_closure(return_hint.as_ref(), resolver.registry),
+    );
     let saved_in_script_body = std::mem::replace(&mut resolver.in_script_body, false);
     let saved_loop_depth = std::mem::replace(&mut resolver.loop_depth, 0);
     let saved_loop_break_seen = std::mem::take(&mut resolver.loop_break_seen);
@@ -76,6 +83,7 @@ pub(super) fn resolve_closure(
     resolver.loop_break_seen = saved_loop_break_seen;
     resolver.loop_depth = saved_loop_depth;
     resolver.in_script_body = saved_in_script_body;
+    resolver.error_channel = saved_error_channel;
     resolver.current_return_type = saved_return;
     resolver.scope.restore(snapshot);
 
@@ -104,6 +112,10 @@ pub(super) fn resolve_short_closure(
 
     let saved_return =
         std::mem::replace(&mut resolver.current_return_type, expected_return.cloned());
+    let saved_error_channel = std::mem::replace(
+        &mut resolver.error_channel,
+        channel_for_closure(expected_return, resolver.registry),
+    );
     let saved_in_script_body = std::mem::replace(&mut resolver.in_script_body, false);
     let saved_loop_depth = std::mem::replace(&mut resolver.loop_depth, 0);
     let saved_loop_break_seen = std::mem::take(&mut resolver.loop_break_seen);
@@ -112,6 +124,7 @@ pub(super) fn resolve_short_closure(
     resolver.loop_break_seen = saved_loop_break_seen;
     resolver.loop_depth = saved_loop_depth;
     resolver.in_script_body = saved_in_script_body;
+    resolver.error_channel = saved_error_channel;
     resolver.current_return_type = saved_return;
     resolver.scope.restore(snapshot);
 

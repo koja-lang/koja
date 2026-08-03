@@ -239,6 +239,10 @@ impl Checker<'_, '_> {
                 }
                 EnumConstructionData::Unit => {}
             },
+            ExprKind::Fail { value } => {
+                self.check_expr(value, state);
+                state.diverge();
+            }
             ExprKind::FieldAccess { receiver, .. } => self.check_expr(receiver, state),
             // Post-resolve success paths never contain `For` (it
             // desugars before resolve). Walk defensively on the
@@ -324,6 +328,15 @@ impl Checker<'_, '_> {
                 }
                 state.join_arms(arm_states);
             }
+            ExprKind::Rescue {
+                subject, handler, ..
+            } => {
+                self.check_expr(subject, state);
+                // The handler runs only on the error path, so its
+                // assignments do not survive the expression.
+                let mut handler_state = state.clone();
+                self.check_expr(handler, &mut handler_state);
+            }
             ExprKind::ShortClosure { params, body } => {
                 let mut inner = self.closure_entry_state(params, state);
                 self.check_expr(body, &mut inner);
@@ -355,6 +368,7 @@ impl Checker<'_, '_> {
                 self.diverge_on_never(&else_expr.resolution, &mut else_state);
                 state.join_arms(vec![then_state, else_state]);
             }
+            ExprKind::Try { expr: inner } => self.check_expr(inner, state),
             ExprKind::Unary { operand, .. } => self.check_expr(operand, state),
             ExprKind::Unless { condition, body } | ExprKind::While { condition, body } => {
                 // `unless` has no else arm and a `while` body may run
@@ -455,7 +469,7 @@ impl Checker<'_, '_> {
             return;
         }
         self.diagnostics.push(Diagnostic::error_with_hint(
-            format!("`{name}` may not be assigned on every path to this read"),
+            format!("`{name}` does not have a value on every path to this read"),
             format!(
                 "assign `{name}` a value before the branch or loop, or restructure so the \
                  branch produces the value (`{name} = if ... else ... end`)",

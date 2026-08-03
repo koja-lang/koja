@@ -7,6 +7,8 @@ use crate::pipeline::lift_signatures::ResolutionScope;
 use crate::pipeline::local_scope::LocalScope;
 use crate::registry::GlobalRegistry;
 
+use super::error_channel::ErrorChannel;
+
 /// File-level resolver inputs: the cross-function pieces every
 /// per-function [`Resolver`] reuses verbatim. Bundling them at the
 /// file level keeps the `walker::resolve_function` signature short
@@ -42,6 +44,7 @@ impl<'a> ResolverEnv<'a> {
             current_return_type: None,
             enclosing_type,
             enclosing_type_id,
+            error_channel: None,
             file_aliases: self.file_aliases,
             in_script_body: false,
             loop_break_seen: Vec::new(),
@@ -106,6 +109,14 @@ pub(super) struct Resolver<'a> {
     /// the `priv fn` type-private check: a `TypePrivate(owner)`
     /// callee is only callable when this equals `Some(owner)`.
     pub enclosing_type_id: Option<GlobalRegistryId>,
+    /// The innermost function-shape's error channel, present when
+    /// its declared return type is `Result<T, E>` (either the `! E`
+    /// or the explicit spelling). `try` and `fail` resolve against
+    /// it, and its `ok_wraps` flag drives `Result.Ok` auto-wrapping
+    /// at `return` sites. Closure boundaries swap in the closure's
+    /// own channel and restore on exit, mirroring
+    /// `current_return_type`.
+    pub error_channel: Option<ErrorChannel>,
     /// In-scope alias roster for the current file, validated by
     /// [`crate::pipeline::aliases::validate_aliases`]. Consulted by
     /// every type-name lookup before falling back to the current

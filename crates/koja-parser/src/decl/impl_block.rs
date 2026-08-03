@@ -68,10 +68,12 @@ impl Parser {
                             members.push(ImplMember::Function(*func));
                         }
                         TypeBodyMember::Nested(_) => {
-                            self.error(
-                                "nested type declarations are not allowed in impl or extend \
-                                 blocks. Declare the type inside the owner's body or at the \
-                                 top level with a qualified name"
+                            self.error_with_hint(
+                                "nested type declarations are not valid in `impl` or `extend` \
+                                 blocks"
+                                    .to_string(),
+                                "declare the type inside the owner's body or at the top level \
+                                 with a qualified name"
                                     .to_string(),
                                 member_span,
                             );

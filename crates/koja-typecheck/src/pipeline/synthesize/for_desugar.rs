@@ -129,6 +129,7 @@ fn recurse_into_expr(expr: &mut Expr, counter: &mut SynthCounter) {
                 }
             }
         }
+        ExprKind::Fail { value } => recurse_into_expr(value, counter),
         ExprKind::FieldAccess { receiver, .. } => recurse_into_expr(receiver, counter),
         ExprKind::For { iterable, body, .. } => {
             recurse_into_expr(iterable, counter);
@@ -189,6 +190,12 @@ fn recurse_into_expr(expr: &mut Expr, counter: &mut SynthCounter) {
             }
             desugar_body(after_body, counter);
         }
+        ExprKind::Rescue {
+            subject, handler, ..
+        } => {
+            recurse_into_expr(subject, counter);
+            recurse_into_expr(handler, counter);
+        }
         ExprKind::ShortClosure { body, .. } => recurse_into_expr(body, counter),
         ExprKind::Spawn { expr } => recurse_into_expr(expr, counter),
         ExprKind::String { parts, .. } => {
@@ -213,6 +220,7 @@ fn recurse_into_expr(expr: &mut Expr, counter: &mut SynthCounter) {
             recurse_into_expr(then_expr, counter);
             recurse_into_expr(else_expr, counter);
         }
+        ExprKind::Try { expr } => recurse_into_expr(expr, counter),
         ExprKind::Tuple { elements } => {
             for element in elements.iter_mut() {
                 recurse_into_expr(element, counter);

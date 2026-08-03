@@ -1,0 +1,13 @@
+enum MyError
+  Nope
+end
+
+enum OtherError
+  AlsoNope
+end
+
+fn caller() -> Int ! MyError
+  fail OtherError.AlsoNope
+end
+
+caller()

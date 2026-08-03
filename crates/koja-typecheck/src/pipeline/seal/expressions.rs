@@ -77,6 +77,12 @@ pub(super) fn seal_expr(expr: &Expr, mode: SealMode) {
             }
             EnumConstructionData::Unit => {}
         },
+        // Resolve desugars `try`, `fail`, and `rescue` into match
+        // and return forms. Seal should never see one.
+        ExprKind::Fail { .. } => seal_panic(
+            "typecheck seal saw an `ExprKind::Fail` after resolve",
+            expr.span,
+        ),
         ExprKind::FieldAccess { receiver, .. } => seal_expr(receiver, mode),
         // `synthesize` rewrites statement-position fors and
         // resolve diagnoses expression-position fors. Seal should
@@ -183,6 +189,10 @@ pub(super) fn seal_expr(expr: &Expr, mode: SealMode) {
                 seal_statement(stmt, mode);
             }
         }
+        ExprKind::Rescue { .. } => seal_panic(
+            "typecheck seal saw an `ExprKind::Rescue` after resolve",
+            expr.span,
+        ),
         ExprKind::Self_ { .. } => {}
         ExprKind::ShortClosure { params, body } => {
             seal_closure_params(params, expr);
@@ -210,6 +220,10 @@ pub(super) fn seal_expr(expr: &Expr, mode: SealMode) {
             seal_expr(then_expr, mode);
             seal_expr(else_expr, mode);
         }
+        ExprKind::Try { .. } => seal_panic(
+            "typecheck seal saw an `ExprKind::Try` after resolve",
+            expr.span,
+        ),
         ExprKind::Tuple { elements } => {
             for element in elements {
                 seal_expr(element, mode);

@@ -165,6 +165,7 @@ impl<'source> Lexer<'source> {
             "end" => TokenKind::End,
             "enum" => TokenKind::Enum,
             "extend" => TokenKind::Extend,
+            "fail" => TokenKind::Fail,
             "false" => TokenKind::False,
             "fn" => TokenKind::Fn,
             "for" => TokenKind::For,
@@ -177,11 +178,13 @@ impl<'source> Lexer<'source> {
             "priv" => TokenKind::Priv,
             "protocol" => TokenKind::Protocol,
             "receive" => TokenKind::Receive,
+            "rescue" => TokenKind::Rescue,
             "return" => TokenKind::Return,
             "self" => TokenKind::Self_,
             "spawn" => TokenKind::Spawn,
             "struct" => TokenKind::Struct,
             "true" => TokenKind::True,
+            "try" => TokenKind::Try,
             "type" => TokenKind::Type,
             "unless" => TokenKind::Unless,
             "when" => TokenKind::When,
@@ -587,11 +590,7 @@ impl<'source> Lexer<'source> {
                 },
                 '!' => match self.cursor.peek_at(1) {
                     Some('=') => self.double(TokenKind::NotEq),
-                    _ => self.unexpected_character(
-                        '!',
-                        Some("use '!=' for not-equal comparison".into()),
-                        start,
-                    ),
+                    _ => self.single(TokenKind::Bang),
                 },
                 '<' => match self.cursor.peek_at(1) {
                     Some('<') => self.double(TokenKind::LtLt),
@@ -813,6 +812,7 @@ mod tests {
             ("end", TokenKind::End),
             ("enum", TokenKind::Enum),
             ("extend", TokenKind::Extend),
+            ("fail", TokenKind::Fail),
             ("false", TokenKind::False),
             ("fn", TokenKind::Fn),
             ("for", TokenKind::For),
@@ -825,11 +825,13 @@ mod tests {
             ("priv", TokenKind::Priv),
             ("protocol", TokenKind::Protocol),
             ("receive", TokenKind::Receive),
+            ("rescue", TokenKind::Rescue),
             ("return", TokenKind::Return),
             ("self", TokenKind::Self_),
             ("spawn", TokenKind::Spawn),
             ("struct", TokenKind::Struct),
             ("true", TokenKind::True),
+            ("try", TokenKind::Try),
             ("type", TokenKind::Type),
             ("unless", TokenKind::Unless),
             ("when", TokenKind::When),
@@ -838,6 +840,27 @@ mod tests {
         for (source, expected) in cases {
             assert_eq!(lex_without_eof(source), vec![expected], "{source}");
         }
+    }
+
+    #[test]
+    fn test_keyword_with_question_suffix_stays_identifier() {
+        assert_eq!(
+            lex_without_eof("fail?"),
+            vec![TokenKind::Ident("fail?".into())]
+        );
+    }
+
+    #[test]
+    fn test_bare_bang_lexes_as_bang() {
+        assert_eq!(
+            lex_without_eof("-> Int ! String"),
+            vec![
+                TokenKind::Arrow,
+                TokenKind::TypeIdent("Int".into()),
+                TokenKind::Bang,
+                TokenKind::TypeIdent("String".into()),
+            ]
+        );
     }
 
     #[test]
@@ -1094,7 +1117,7 @@ mod tests {
 
     #[test]
     fn test_unexpected_character_span_covers_utf8_source() {
-        for source in ["!", "¡"] {
+        for source in ["~", "¡"] {
             let result = lex(source);
             assert_eq!(result.errors.len(), 1);
             let span = result.errors[0].span;

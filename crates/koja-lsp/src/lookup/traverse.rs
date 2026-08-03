@@ -501,9 +501,26 @@ fn find_in_expr(expr: &Expr, line: u32, col: u32, ctx: &LookupCtx<'_>) -> Option
                 }
             }
         }
-        ExprKind::Spawn { expr: inner, .. } => {
+        ExprKind::Spawn { expr: inner, .. } | ExprKind::Try { expr: inner } => {
             if span_contains(&expr.span, line, col) {
                 return find_in_expr(inner, line, col, ctx);
+            }
+        }
+        ExprKind::Fail { value } => {
+            if span_contains(&expr.span, line, col) {
+                return find_in_expr(value, line, col, ctx);
+            }
+        }
+        ExprKind::Rescue {
+            subject, handler, ..
+        } => {
+            if span_contains(&expr.span, line, col) {
+                if let Some(info) = find_in_expr(subject, line, col, ctx) {
+                    return Some(info);
+                }
+                if let Some(info) = find_in_expr(handler, line, col, ctx) {
+                    return Some(info);
+                }
             }
         }
         ExprKind::Receive {
@@ -768,7 +785,14 @@ fn find_expr_at_inner(expr: &Expr, line: u32, col: u32) -> Option<&Expr> {
         ExprKind::Map { entries } => entries.iter().find_map(|(k, v)| {
             find_expr_at_inner(k, line, col).or_else(|| find_expr_at_inner(v, line, col))
         }),
-        ExprKind::Spawn { expr: inner, .. } => find_expr_at_inner(inner, line, col),
+        ExprKind::Spawn { expr: inner, .. } | ExprKind::Try { expr: inner } => {
+            find_expr_at_inner(inner, line, col)
+        }
+        ExprKind::Fail { value } => find_expr_at_inner(value, line, col),
+        ExprKind::Rescue {
+            subject, handler, ..
+        } => find_expr_at_inner(subject, line, col)
+            .or_else(|| find_expr_at_inner(handler, line, col)),
         ExprKind::Receive {
             arms,
             after_timeout,

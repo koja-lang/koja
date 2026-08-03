@@ -9,7 +9,9 @@ use crate::registry::{Dispatch, FunctionSignature, GlobalKind, GlobalRegistry, R
 
 use super::LiftScope;
 use super::SelfContext;
-use super::types::{TypeParamScope, concrete_self_type, resolve_type_expr, type_expr_span};
+use super::types::{
+    TypeParamScope, concrete_self_type, resolve_return_signature, resolve_type_expr, type_expr_span,
+};
 
 /// Resolve a function's param + return types and stamp the lifted
 /// [`FunctionSignature`] onto its registry entry. The caller picks
@@ -59,15 +61,13 @@ pub(super) fn lift_function_with_identifier(
         ));
     }
 
-    let declared_return_type = match function.return_type.as_ref() {
-        Some(type_expr) => resolve_type_expr(
-            type_expr,
-            type_params,
-            scope.resolution_scope(),
-            diagnostics,
-        ),
-        None => scope.registry.primitive("Unit"),
-    };
+    let declared_return_type = resolve_return_signature(
+        function.return_type.as_ref(),
+        function.error_type.as_ref(),
+        type_params,
+        scope.resolution_scope(),
+        diagnostics,
+    );
 
     let dispatch = match function.params.first() {
         Some(Param::Self_ { .. }) => Dispatch::Instance,
@@ -76,6 +76,7 @@ pub(super) fn lift_function_with_identifier(
     let impl_args = concrete_impl_args(self_context);
 
     let mut signature = FunctionSignature {
+        declared_fallible: function.error_type.is_some(),
         dispatch,
         params,
         return_type: declared_return_type,

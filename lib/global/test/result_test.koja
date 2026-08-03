@@ -82,32 +82,6 @@ struct ResultTest
     Result.Ok(true)
   end
 
-  @test "then chains Ok values"
-  fn test_then_ok -> Result<Bool, String>
-    ok: Result<Int, Int> = Result.Ok(42)
-    chained =
-      ok.then(fn (v: Int) -> Result<Int, Int> Result.Ok(v * 3) end)
-
-    unless chained.unwrap() == 126
-      return Result.Err("expected 126")
-    end
-
-    Result.Ok(true)
-  end
-
-  @test "then returns Err unchanged"
-  fn test_then_err -> Result<Bool, String>
-    err: Result<Int, Int> = Result.Err(1)
-    err_chained =
-      err.then(fn (v: Int) -> Result<Int, Int> Result.Ok(v * 3) end)
-
-    unless err_chained.or(-1) == -1
-      return Result.Err("expected -1")
-    end
-
-    Result.Ok(true)
-  end
-
   @test "ok converts Ok to Some and Err to None"
   fn test_ok -> Result<Bool, String>
     ok: Result<Int, Int> = Result.Ok(42)

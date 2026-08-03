@@ -230,6 +230,30 @@ pub(super) fn type_expr_to_doc(ty: &TypeExpr) -> Doc {
     }
 }
 
+/// Formats a `-> T ! E` return signature tail, shared by function
+/// and protocol-method signatures. `None` when there is nothing to
+/// print (unit return, no error type). An error type forces the
+/// return out even when it is unit: `-> () ! E`.
+pub(super) fn return_signature_doc(
+    return_type: Option<&TypeExpr>,
+    error_type: Option<&TypeExpr>,
+) -> Option<Doc> {
+    let has_return = error_type.is_some() || return_type.is_some_and(|rt| !is_unit_type(rt));
+    if !has_return {
+        return None;
+    }
+    let mut parts = vec![text("-> ")];
+    match return_type {
+        Some(return_type) => parts.push(type_expr_to_doc(return_type)),
+        None => parts.push(text("()")),
+    }
+    if let Some(error_type) = error_type {
+        parts.push(text(" ! "));
+        parts.push(type_expr_to_doc(error_type));
+    }
+    Some(concat(parts))
+}
+
 /// Formats a pattern (used in match arms, for loops, destructuring).
 pub(super) fn pattern_to_doc(pat: &Pattern) -> Doc {
     match pat {

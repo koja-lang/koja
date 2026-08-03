@@ -14,7 +14,7 @@ use crate::registry::{
 };
 
 use super::LiftScope;
-use super::types::{TypeParamScope, resolve_type_expr};
+use super::types::{TypeParamScope, resolve_return_signature, resolve_type_expr};
 
 pub(super) fn lift_protocol(
     decl: &ProtocolDecl,
@@ -73,15 +73,13 @@ fn lift_protocol_method(
             Param::Self_ { .. } => None,
         })
         .collect();
-    let return_type = match method.return_type.as_ref() {
-        Some(type_expr) => resolve_type_expr(
-            type_expr,
-            type_params,
-            scope.resolution_scope(),
-            diagnostics,
-        ),
-        None => scope.registry.primitive("Unit"),
-    };
+    let return_type = resolve_return_signature(
+        method.return_type.as_ref(),
+        method.error_type.as_ref(),
+        type_params,
+        scope.resolution_scope(),
+        diagnostics,
+    );
     ResolvedProtocolMethod {
         dispatch,
         has_default: method.body.is_some(),

@@ -1,0 +1,46 @@
+# The `! E` error channel basics: Ok auto-wrapping, `fail`, and
+# `try` propagation across two hops.
+
+enum MyError
+  TooSmall(Int)
+  Empty
+end
+
+fn half(n: Int) -> Int ! MyError
+  if n < 2
+    fail MyError.TooSmall(n)
+  end
+
+  n / 2
+end
+
+fn quarter(n: Int) -> Int ! MyError
+  h = try half(n)
+  try half(h)
+end
+
+fn log(n: Int) -> () ! MyError
+  q = try quarter(n)
+  IO.puts("quarter of #{n} is #{q}")
+end
+
+fn early(n: Int) -> Int ! MyError
+  if n > 100
+    return n
+  end
+
+  n + 1
+end
+
+# A fallible function's result is an ordinary Result value.
+match quarter(1)
+  Result.Ok(v) -> IO.puts("ok #{v}")
+  Result.Err(MyError.TooSmall(n)) -> IO.puts("too small #{n}")
+  Result.Err(_) -> IO.puts("other")
+end
+
+_ = log(40)
+
+# Explicit return and unit success wrap in Ok automatically.
+IO.puts("early ok? #{early(200).ok?()}")
+IO.puts("log ok? #{log(8).ok?()}")

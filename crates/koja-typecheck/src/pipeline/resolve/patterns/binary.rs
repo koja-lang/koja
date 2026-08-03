@@ -110,7 +110,7 @@ fn resolve_segment(
     if check_greedy_tail(segment, is_last, *total_fixed_bits, resolver, diagnostics) {
         if *has_greedy {
             diagnostics.push(Diagnostic::error(
-                "at most one greedy rest segment is allowed per binary pattern",
+                "a binary pattern allows at most one greedy rest segment",
                 segment.span,
             ));
         }
@@ -248,7 +248,7 @@ fn segment_fixed_width(segment: &BinarySegment, diagnostics: &mut Vec<Diagnostic
     if let Some(size_expr) = &segment.size {
         if segment.unit == BinaryUnit::Byte {
             diagnostics.push(Diagnostic::error(
-                "typecheck: `::N byte` segment size is not supported in binary \
+                "typecheck does not support `::N byte` segment sizes in binary \
                  patterns (use `::M` bits instead)",
                 segment.span,
             ));
