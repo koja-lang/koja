@@ -100,6 +100,24 @@ fn protocol_with_type_params() {
 }
 
 #[test]
+fn protocol_method_with_error_type() {
+    let p = first_protocol(
+        "
+        protocol Store
+          fn load(self, key: String) -> String ! StoreError
+        end
+        ",
+    );
+    let method = &p.methods[0];
+    assert!(
+        matches!(method.return_type, Some(TypeExpr::Named { ref path, .. }) if path == &["String"])
+    );
+    assert!(
+        matches!(method.error_type, Some(TypeExpr::Named { ref path, .. }) if path == &["StoreError"])
+    );
+}
+
+#[test]
 fn protocol_method_with_annotation() {
     let p = first_protocol(
         "

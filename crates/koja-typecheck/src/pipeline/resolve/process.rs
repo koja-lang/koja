@@ -152,7 +152,7 @@ pub(super) fn check_monitor_call_site(
     let Some(protocol_args) = conformance else {
         diagnostics.push(Diagnostic::error_with_hint(
             "`Process.monitor` must be called from a method of a type that implements `Process`",
-            "the monitored process's `ExitSignal` is delivered to the calling process's mailbox",
+            "the runtime delivers the monitored process's `ExitSignal` to the calling process's mailbox",
             call_span,
         ));
         return;

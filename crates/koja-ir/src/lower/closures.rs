@@ -402,6 +402,7 @@ impl CaptureWalker {
                     }
                 }
             },
+            ExprKind::Fail { value } => self.visit_expr(value),
             ExprKind::FieldAccess { receiver, .. } => self.visit_expr(receiver),
             ExprKind::For {
                 pattern,
@@ -470,6 +471,12 @@ impl CaptureWalker {
                 }
                 self.visit_statements(after_body);
             }
+            ExprKind::Rescue {
+                subject, handler, ..
+            } => {
+                self.visit_expr(subject);
+                self.visit_expr(handler);
+            }
             ExprKind::Self_ { local_id } => {
                 if let Some(id) = local_id
                     && !self.visible(*id)
@@ -502,6 +509,7 @@ impl CaptureWalker {
                 self.visit_expr(then_expr);
                 self.visit_expr(else_expr);
             }
+            ExprKind::Try { expr: inner } => self.visit_expr(inner),
             ExprKind::Tuple { elements } => {
                 for element in elements {
                     self.visit_expr(element);

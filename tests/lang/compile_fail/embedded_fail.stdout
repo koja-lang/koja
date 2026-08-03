@@ -1,0 +1,1 @@
+`fail` exits the function and cannot be embedded in a larger expression

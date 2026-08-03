@@ -74,7 +74,7 @@ fn else_if_pins_user_facing_message() {
           end
         end
         ",
-        &["else if is not supported"],
+        &["`else if` is not valid"],
     );
     assert_hint_contains(&result, "cond");
 }
@@ -103,6 +103,19 @@ fn cond_without_else_message() {
         ",
         &["cond requires an `else ->` arm"],
     );
+}
+
+#[test]
+fn rescue_without_binder_diagnostic() {
+    let result = parse_failing_with(
+        "
+        fn run
+          f() rescue -> 0
+        end
+        ",
+        &["expected error binding after `rescue`"],
+    );
+    assert_hint_contains(&result, "rescue _ -> handler");
 }
 
 #[test]
@@ -149,7 +162,7 @@ fn impl_body_rejects_random_decl() {
           end
         end
         ",
-        &["nested type declarations are not allowed in impl or extend blocks"],
+        &["nested type declarations are not valid in `impl` or `extend` blocks"],
     );
 }
 
@@ -364,6 +377,6 @@ fn return_prefix_preserves_assignment_recovery() {
 #[test]
 fn short_closure_outside_call_argument_is_rejected() {
     let result = parse_failing_script("transform = x -> x * 2");
-    assert_message_contains(&result, "short closures are only allowed as call arguments");
+    assert_message_contains(&result, "short closures are only valid as call arguments");
     assert_hint_contains(&result, "fn (...) -> ... end");
 }

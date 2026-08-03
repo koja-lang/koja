@@ -210,6 +210,9 @@ impl<'a> Printer<'a> {
             if let Some(ret) = &f.return_type {
                 p.line(&format!("return: {}", type_expr_inline(ret)));
             }
+            if let Some(err) = &f.error_type {
+                p.line(&format!("error: {}", type_expr_inline(err)));
+            }
             match &f.body {
                 Some(body) => p.section("body", |p| {
                     for stmt in body {
@@ -290,6 +293,9 @@ impl<'a> Printer<'a> {
             }
             if let Some(ret) = &m.return_type {
                 p.line(&format!("return: {}", type_expr_inline(ret)));
+            }
+            if let Some(err) = &m.error_type {
+                p.line(&format!("error: {}", type_expr_inline(err)));
             }
             match &m.body {
                 Some(body) => p.section("body", |p| {
@@ -469,6 +475,7 @@ impl<'a> Printer<'a> {
                     }
                 }
             },
+            ExprKind::Fail { value } => self.expr(value),
             ExprKind::FieldAccess { receiver, .. } => {
                 self.expr(receiver);
             }
@@ -558,6 +565,12 @@ impl<'a> Printer<'a> {
                     });
                 }
             }
+            ExprKind::Rescue {
+                subject, handler, ..
+            } => {
+                self.section("subject", |p| p.expr(subject));
+                self.section("handler", |p| p.expr(handler));
+            }
             ExprKind::Self_ { .. } => {}
             ExprKind::ShortClosure { params, body } => {
                 if !params.is_empty() {
@@ -589,6 +602,7 @@ impl<'a> Printer<'a> {
                 self.section("then", |p| p.expr(then_expr));
                 self.section("else", |p| p.expr(else_expr));
             }
+            ExprKind::Try { expr } => self.expr(expr),
             ExprKind::Tuple { elements } => {
                 for e in elements {
                     self.expr(e);
@@ -882,6 +896,7 @@ fn expr_header(expr: &Expr) -> String {
             variant,
             enum_ctor_data_label(data),
         ),
+        ExprKind::Fail { .. } => String::from("Fail"),
         ExprKind::FieldAccess { field, .. } => format!("FieldAccess .{field}"),
         ExprKind::For { .. } => String::from("For"),
         ExprKind::Group { .. } => String::from("Group"),
@@ -901,6 +916,10 @@ fn expr_header(expr: &Expr) -> String {
         ExprKind::Match { .. } => String::from("Match"),
         ExprKind::MethodCall { method, .. } => format!("MethodCall .{method}"),
         ExprKind::Receive { .. } => String::from("Receive"),
+        ExprKind::Rescue { binder, .. } => match binder {
+            Some(name) => format!("Rescue {name}"),
+            None => String::from("Rescue _"),
+        },
         ExprKind::Self_ { .. } => String::from("Self"),
         ExprKind::ShortClosure { .. } => String::from("ShortClosure"),
         ExprKind::Spawn { .. } => String::from("Spawn"),
@@ -915,6 +934,7 @@ fn expr_header(expr: &Expr) -> String {
             format!("StructConstruction {}", type_path.join("."))
         }
         ExprKind::Ternary { .. } => String::from("Ternary"),
+        ExprKind::Try { .. } => String::from("Try"),
         ExprKind::Tuple { elements } => format!("Tuple ({} elems)", elements.len()),
         ExprKind::Unary { op, .. } => format!("Unary {}", format_unary_op(*op)),
         ExprKind::Unless { .. } => String::from("Unless"),
@@ -978,6 +998,7 @@ fn expr_has_children(kind: &ExprKind) -> bool {
         | ExprKind::Call { .. }
         | ExprKind::Closure { .. }
         | ExprKind::Cond { .. }
+        | ExprKind::Fail { .. }
         | ExprKind::FieldAccess { .. }
         | ExprKind::For { .. }
         | ExprKind::Group { .. }
@@ -986,9 +1007,11 @@ fn expr_has_children(kind: &ExprKind) -> bool {
         | ExprKind::Match { .. }
         | ExprKind::MethodCall { .. }
         | ExprKind::Receive { .. }
+        | ExprKind::Rescue { .. }
         | ExprKind::ShortClosure { .. }
         | ExprKind::Spawn { .. }
         | ExprKind::Ternary { .. }
+        | ExprKind::Try { .. }
         | ExprKind::Tuple { .. }
         | ExprKind::Unary { .. }
         | ExprKind::Unless { .. }

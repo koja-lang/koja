@@ -56,10 +56,38 @@ pub(super) fn resolve_match(
     diagnostics: &mut Vec<Diagnostic>,
 ) -> ResolvedType {
     resolve_expr(subject, resolver, diagnostics);
+    resolve_match_arms(
+        "match",
+        subject,
+        arms,
+        expected,
+        span,
+        resolver,
+        diagnostics,
+    )
+}
+
+/// The arm half of [`resolve_match`], split out so the `try` /
+/// `rescue` desugars in [`super::error_channel`] can resolve their
+/// synthesized arms against an already-resolved subject (which must
+/// not be walked twice). `keyword` labels the join diagnostics with
+/// the construct the user actually wrote.
+pub(super) fn resolve_match_arms(
+    keyword: &str,
+    subject: &Expr,
+    arms: &mut [MatchArm],
+    expected: Option<&ResolvedType>,
+    span: Span,
+    resolver: &mut Resolver<'_>,
+    diagnostics: &mut Vec<Diagnostic>,
+) -> ResolvedType {
     let subject_ty = subject.resolution.clone();
 
     if arms.is_empty() {
-        diagnostics.push(Diagnostic::error("`match` requires at least one arm", span));
+        diagnostics.push(Diagnostic::error(
+            format!("`{keyword}` requires at least one arm"),
+            span,
+        ));
         return ResolvedType::unresolved();
     }
 
@@ -111,7 +139,7 @@ pub(super) fn resolve_match(
             }
         }
         tails.push((
-            format!("arm #{}", index + 1),
+            arm_label(keyword, index),
             body_tail_type(&arm.body, resolver.registry),
         ));
     }
@@ -156,7 +184,18 @@ pub(super) fn resolve_match(
         }
     }
 
-    join_arm_tails("match", &tails, span, resolver.registry, diagnostics)
+    join_arm_tails(keyword, &tails, span, resolver.registry, diagnostics)
+}
+
+/// Join-diagnostic label for one arm. A desugared `rescue` names
+/// its two synthesized arms by role so the message reads in the
+/// user's terms rather than exposing the underlying `match`.
+fn arm_label(keyword: &str, index: usize) -> String {
+    match (keyword, index) {
+        ("rescue", 0) => "the subject's `Ok` value".to_string(),
+        ("rescue", _) => "the rescue handler".to_string(),
+        _ => format!("arm #{}", index + 1),
+    }
 }
 
 /// If `subject` peels to a union, return the canonical

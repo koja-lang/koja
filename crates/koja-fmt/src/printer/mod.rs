@@ -441,16 +441,7 @@ impl<'a> Printer<'a> {
         }
 
         let params_doc: Vec<Doc> = f.params.iter().map(|p| self.param_to_doc(p)).collect();
-        let has_return = f.return_type.as_ref().is_some_and(|rt| !is_unit_type(rt));
-
-        let return_doc = if has_return {
-            Some(concat(vec![
-                text("-> "),
-                type_expr_to_doc(f.return_type.as_ref().unwrap()),
-            ]))
-        } else {
-            None
-        };
+        let return_doc = return_signature_doc(f.return_type.as_ref(), f.error_type.as_ref());
 
         let params_inline = if params_doc.is_empty() {
             text("")
@@ -552,16 +543,7 @@ impl<'a> Printer<'a> {
         }
 
         let params_doc: Vec<Doc> = m.params.iter().map(|p| self.param_to_doc(p)).collect();
-        let has_return = m.return_type.as_ref().is_some_and(|rt| !is_unit_type(rt));
-
-        let return_doc = if has_return {
-            Some(concat(vec![
-                text("-> "),
-                type_expr_to_doc(m.return_type.as_ref().unwrap()),
-            ]))
-        } else {
-            None
-        };
+        let return_doc = return_signature_doc(m.return_type.as_ref(), m.error_type.as_ref());
 
         if params_doc.is_empty() {
             parts.push(text(prefix));

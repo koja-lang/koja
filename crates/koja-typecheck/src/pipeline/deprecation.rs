@@ -341,6 +341,7 @@ impl Walker<'_, '_> {
                     EnumConstructionData::Unit => {}
                 }
             }
+            ExprKind::Fail { value } => self.check_expr(value),
             ExprKind::FieldAccess { receiver, .. } => self.check_expr(receiver),
             ExprKind::For {
                 pattern,
@@ -421,6 +422,12 @@ impl Walker<'_, '_> {
                 }
                 self.check_body(after_body);
             }
+            ExprKind::Rescue {
+                subject, handler, ..
+            } => {
+                self.check_expr(subject);
+                self.check_expr(handler);
+            }
             ExprKind::ShortClosure { body, .. } => self.check_expr(body),
             ExprKind::String { parts, .. } => {
                 for part in parts {
@@ -444,6 +451,7 @@ impl Walker<'_, '_> {
                 self.check_expr(then_expr);
                 self.check_expr(else_expr);
             }
+            ExprKind::Try { expr: inner } => self.check_expr(inner),
             ExprKind::Unary { operand, .. } => self.check_expr(operand),
             ExprKind::Unless { condition, body } | ExprKind::While { condition, body } => {
                 self.check_expr(condition);

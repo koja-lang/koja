@@ -158,7 +158,7 @@ fn doc_string_on_top_level_priv_fn_is_rejected() {
 
     assert_script_fails_with(
         source,
-        &["`@doc` is not allowed on private function `helper`"],
+        &["`@doc` is not valid on private function `helper`"],
     );
 }
 
@@ -175,7 +175,7 @@ fn doc_false_on_top_level_priv_fn_is_rejected() {
 
     assert_script_fails_with(
         source,
-        &["`@doc` is not allowed on private function `helper`"],
+        &["`@doc` is not valid on private function `helper`"],
     );
 }
 
@@ -192,10 +192,7 @@ fn doc_string_on_type_body_priv_fn_is_rejected() {
         end
         ";
 
-    assert_script_fails_with(
-        source,
-        &["`@doc` is not allowed on private function `shift`"],
-    );
+    assert_script_fails_with(source, &["`@doc` is not valid on private function `shift`"]);
 }
 
 #[test]
@@ -214,7 +211,7 @@ fn doc_string_on_public_top_level_fn_is_accepted() {
 /// Assert `source` fails with the @doc-on-private message for
 /// `kind_label` (e.g. "struct") on `name`.
 fn assert_doc_on_private_rejected(source: &str, kind_label: &str, name: &str) {
-    let needle = format!("`@doc` is not allowed on private {kind_label} `{name}`");
+    let needle = format!("`@doc` is not valid on private {kind_label} `{name}`");
     assert_script_fails_with(source, &[&needle]);
 }
 

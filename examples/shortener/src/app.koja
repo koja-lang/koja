@@ -41,7 +41,7 @@ struct App
 end
 
 impl Process<List<String>, TCPEvent, String> for App
-  fn start(config: List<String>) -> Result<Self, StopReason>
+  fn start(config: List<String>) -> Self ! StopReason
     settings = Config.load()
     db_config = DbConfig.new(
       settings.db_host,
@@ -51,10 +51,9 @@ impl Process<List<String>, TCPEvent, String> for App
     ).with_password(settings.db_password)
 
     create =
-      fn () -> Result<Connection, String> match Connection.connect(db_config)
-          Result.Ok(conn) -> Result.Ok(conn)
-          Result.Err(e) -> Result.Err(e.message())
-        end end
+      fn () -> Result<Connection, String>
+        Connection.connect(db_config).map_err(e -> e.message())
+      end
 
     pool = Pool.start(PoolConfig{create: create, size: POOL_SIZE})
 
@@ -67,11 +66,11 @@ impl Process<List<String>, TCPEvent, String> for App
 
       Result.Err(Pooler.Error.Timeout) ->
         IO.puts("database connections are still warming up; try again shortly")
-        return Result.Err(StopReason.Shutdown)
+        fail StopReason.Shutdown
 
       Result.Err(_) ->
         IO.puts("database connection failed (is the compose stack up?)")
-        return Result.Err(StopReason.Shutdown)
+        fail StopReason.Shutdown
     end
 
     me: Ref<TCPEvent, String> = Ref.self_ref()
@@ -81,7 +80,7 @@ impl Process<List<String>, TCPEvent, String> for App
     IO.puts("  POST /links {\"url\": \"...\"}  -> create")
     IO.puts("  GET  /:code                  -> redirect")
     IO.puts("  (#{POOL_SIZE} pooled db connections, press Ctrl-C to stop)")
-    Result.Ok(App{pool: pool})
+    App{pool: pool}
   end
 
   fn handle(self, msg: TCPEvent, from: Option<ReplyTo<String>>) -> Step<Self>
@@ -135,8 +134,8 @@ struct Worker.Config
 end
 
 impl Process<Worker.Config, (), ()> for Worker
-  fn start(config: Worker.Config) -> Result<Self, StopReason>
-    Result.Ok(Worker{client: config.client, pool: config.pool})
+  fn start(config: Worker.Config) -> Self ! StopReason
+    Worker{client: config.client, pool: config.pool}
   end
 
   fn handle(self, msg: (), from: Option<ReplyTo<()>>) -> Step<Self>
@@ -276,8 +275,8 @@ priv fn content_length(header_text: String) -> Int
   end
 end
 
-# HTTP/1.1 defaults to keep-alive, HTTP/1.0 to close; an explicit
-# Connection header overrides either.
+# HTTP/1.1 defaults to keep-alive and HTTP/1.0 to close, but an
+# explicit Connection header overrides either.
 priv fn wants_keep_alive?(req: Request) -> Bool
   fallback = req.version == "HTTP/1.1"
 

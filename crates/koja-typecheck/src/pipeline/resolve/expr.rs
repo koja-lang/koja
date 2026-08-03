@@ -18,6 +18,7 @@ use super::control_flow::{
 };
 use super::ctx::Resolver;
 use super::enums::resolve_enum_construction;
+use super::error_channel::{resolve_rescue, resolve_try};
 use super::idents::{resolve_ident, resolve_self};
 use super::literals::{
     resolve_binary_literal, resolve_list_literal, resolve_map_literal, resolve_tuple_literal,
@@ -92,6 +93,19 @@ pub(super) fn resolve_expr_with_expected(
         expr.resolution = ty;
         return;
     }
+    // `try` / `rescue` desugar to `match` expressions over their
+    // resolved subject, replacing the outer kind in place. Same
+    // pre-dispatch shape as List / Map / MethodCall above.
+    if matches!(expr.kind, ExprKind::Try { .. }) {
+        let ty = resolve_try(expr, resolver, diagnostics);
+        expr.resolution = ty;
+        return;
+    }
+    if matches!(expr.kind, ExprKind::Rescue { .. }) {
+        let ty = resolve_rescue(expr, resolver, diagnostics);
+        expr.resolution = ty;
+        return;
+    }
     // Rewrite `A.B { … }` to a struct construction when the path names
     // a struct. A no-op for real enum variants.
     rewrite_dotted_struct_construction(expr, resolver);
@@ -145,6 +159,20 @@ pub(super) fn resolve_expr_with_expected(
             resolver,
             diagnostics,
         ),
+        // Statement and arm-tail `fail`s are rewritten by the
+        // statement walker before expression dispatch runs, so
+        // reaching here means an illegal embedded position (a call
+        // argument, a ternary branch, ...).
+        ExprKind::Fail { value } => {
+            resolve_expr(value, resolver, diagnostics);
+            diagnostics.push(Diagnostic::error_with_hint(
+                "`fail` exits the function and cannot be embedded in a larger expression",
+                "`fail` goes anywhere `return` does: a statement of its own or a \
+                 match arm tail",
+                expr.span,
+            ));
+            ResolvedType::unresolved()
+        }
         ExprKind::FieldAccess { receiver, field } => {
             resolve_field_access(receiver, field, expr.span, resolver, diagnostics)
         }

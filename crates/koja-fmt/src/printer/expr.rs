@@ -311,6 +311,32 @@ impl<'a> Printer<'a> {
                 concat(vec![text("spawn "), self.expr_to_doc(inner)])
             }
 
+            ExprKind::Try { expr: inner } => concat(vec![text("try "), self.expr_to_doc(inner)]),
+
+            ExprKind::Fail { value } => concat(vec![text("fail "), self.expr_to_doc(value)]),
+
+            // Breaks into the two-line idiom with `rescue` leading
+            // the continuation line, mirroring how it parses.
+            ExprKind::Rescue {
+                subject,
+                binder,
+                handler,
+                ..
+            } => {
+                let binder_text = binder.clone().unwrap_or_else(|| String::from("_"));
+                group(concat(vec![
+                    self.expr_to_doc(subject),
+                    indent(
+                        2,
+                        concat(vec![
+                            line(),
+                            text(format!("rescue {binder_text} -> ")),
+                            self.expr_to_doc(handler),
+                        ]),
+                    ),
+                ]))
+            }
+
             ExprKind::Ternary {
                 condition,
                 then_expr,

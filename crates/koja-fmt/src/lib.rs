@@ -1146,14 +1146,14 @@ mod tests {
         assert_fmt(
             r#"
             fn run_user(args: List<String>) -> Result<String, String>
-              require_arg(args, "<login>").then(login -> GitHub.user(login)).map(x -> render_user(x))
+              require_arg(args, "<login>").map(login -> GitHub.user(login)).map_err(e -> render_error(e))
             end
         "#,
             r#"
             fn run_user(args: List<String>) -> Result<String, String>
               require_arg(args, "<login>")
-                .then(login -> GitHub.user(login))
-                .map(x -> render_user(x))
+                .map(login -> GitHub.user(login))
+                .map_err(e -> render_error(e))
             end
         "#,
         );
@@ -1408,6 +1408,96 @@ mod tests {
             FormatResult::Ok(out) => assert_eq!(out, "x = \"keep \"\n"),
             FormatResult::ParseErrors(e) => panic!("parse error: {e:?}"),
         }
+    }
+
+    #[test]
+    fn error_channel_signature_stays_inline() {
+        assert_unchanged(
+            "
+            fn parse(s: String) -> Int ! ParseError
+              1
+            end
+        ",
+        );
+    }
+
+    #[test]
+    fn unit_success_error_signature_keeps_unit_return() {
+        assert_unchanged(
+            "
+            fn log(message: String) -> () ! WriteError
+              x = 1
+            end
+        ",
+        );
+    }
+
+    #[test]
+    fn union_error_signature_stays_inline() {
+        assert_unchanged(
+            "
+            fn fetch(url: String) -> Limits ! HTTP.Error | ParseError
+              parse(url)
+            end
+        ",
+        );
+    }
+
+    #[test]
+    fn protocol_method_error_signature_round_trips() {
+        assert_unchanged(
+            "
+            protocol Decode
+              fn decode(self, raw: Binary) -> Self ! DecodeError
+            end
+        ",
+        );
+    }
+
+    #[test]
+    fn try_and_fail_round_trip() {
+        assert_unchanged(
+            "
+            fn caller(flag: Bool) -> Int ! MyError
+              unless flag
+                fail MyError.Nope
+              end
+
+              n = try parse(\"1\")
+              try parse(\"2\")
+            end
+        ",
+        );
+    }
+
+    #[test]
+    fn short_rescue_stays_inline() {
+        assert_unchanged(
+            "
+            fn caller(s: String) -> Int
+              parse(s) rescue _ -> 0
+            end
+        ",
+        );
+    }
+
+    #[test]
+    fn long_rescue_breaks_onto_continuation_line() {
+        assert_fmt(
+            "
+            fn connect(config: Config) -> Connection ! Error
+              socket = TCPSocket.connect(config.host, config.port) rescue e -> fail Error.ConnectFailed(e.message())
+              handshake(socket)
+            end
+        ",
+            "
+            fn connect(config: Config) -> Connection ! Error
+              socket = TCPSocket.connect(config.host, config.port)
+                rescue e -> fail Error.ConnectFailed(e.message())
+              handshake(socket)
+            end
+        ",
+        );
     }
 
     #[test]

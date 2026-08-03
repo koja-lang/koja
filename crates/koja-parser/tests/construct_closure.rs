@@ -105,7 +105,7 @@ fn closure_with_destructured_param_is_diagnosed() {
         ",
         &["expected closure parameter"],
     );
-    assert_hint_contains(&result, "Destructuring is not supported");
+    assert_hint_contains(&result, "Destructuring patterns are not valid here");
 }
 
 #[test]

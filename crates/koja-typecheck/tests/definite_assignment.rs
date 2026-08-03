@@ -11,7 +11,7 @@ mod common;
 
 use common::{assert_file_fails_with, assert_script_fails_with, typecheck_file, typecheck_script};
 
-const NEEDLE: &str = "may not be assigned on every path";
+const NEEDLE: &str = "does not have a value on every path";
 
 // Rejections
 

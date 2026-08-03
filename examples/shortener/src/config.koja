@@ -38,14 +38,8 @@ struct Config
 
   priv fn env_int(key: String, fallback: Int) -> Int
     match System.get_env(key)
-      Option.None ->
-        fallback
-
-      Option.Some(value) ->
-        match value.to_int()
-          Result.Ok(n) -> n
-          Result.Err(_) -> fallback
-        end
+      Option.None -> fallback
+      Option.Some(value) -> value.to_int() rescue _ -> fallback
     end
   end
 end

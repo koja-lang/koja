@@ -1,0 +1,69 @@
+# Error composition across domains: `try` and `fail` widen member
+# errors into a declared union, and callers route on the union.
+
+enum ParseError
+  BadDigit(String)
+end
+
+enum NetError
+  Timeout
+end
+
+type AppError = ParseError | NetError
+
+fn fetch(ok: Bool) -> String ! NetError
+  unless ok
+    fail NetError.Timeout
+  end
+
+  "1"
+end
+
+fn digit(s: String) -> Int ! ParseError
+  if s == "1"
+    1
+  else
+    fail ParseError.BadDigit(s)
+  end
+end
+
+fn combined(ok: Bool) -> Int ! AppError
+  body = try fetch(ok)
+  try digit(body)
+end
+
+fn route(outcome: Result<Int, AppError>) -> String
+  match outcome
+    Result.Ok(v) ->
+      "ok #{v}"
+
+    Result.Err(e) ->
+      match e
+        err: NetError -> "net error"
+        err: ParseError -> "parse error"
+      end
+  end
+end
+
+IO.puts(route(combined(true)))
+IO.puts(route(combined(false)))
+
+# `try` and `fail` inside a closure target the closure's own
+# Result return type.
+fn via_closure(n: Int) -> Int ! NetError
+  doubled =
+    fn (m: Int) -> Result<Int, NetError>
+      if m > 10
+        fail NetError.Timeout
+      end
+
+      Result.Ok(m * 2)
+    end
+
+  try doubled(n)
+end
+
+small = via_closure(3) rescue _ -> 0
+big = via_closure(30) rescue _ -> -1
+IO.puts("small = #{small}")
+IO.puts("big = #{big}")

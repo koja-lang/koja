@@ -68,8 +68,8 @@ impl Parser {
                 let span = self.current_span();
                 self.error_with_hint(
                     format!("expected closure parameter, found {}", self.peek()),
-                    "closure parameters are named (`x` or `x: Int`) or `_`. \
-                     Destructuring is not supported"
+                    "a closure parameter is a name (`x` or `x: Int`) or `_`. \
+                     Destructuring patterns are not valid here"
                         .into(),
                     span,
                 );

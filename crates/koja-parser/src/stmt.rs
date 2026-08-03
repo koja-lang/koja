@@ -11,7 +11,7 @@ impl Parser {
             TokenKind::Const => {
                 let span = self.current_span();
                 self.error_with_hint(
-                    "constants must be declared at the module level".to_string(),
+                    "`const` is only valid at the module level".to_string(),
                     "move this `const` outside of the function body".into(),
                     span,
                 );
@@ -96,7 +96,7 @@ impl Parser {
                 let target = try_expr_to_lvalue(&expr).unwrap_or_else(|| {
                     self.error_with_hint(
                         "invalid assignment target".to_string(),
-                        "only variables and fields can be assigned to".into(),
+                        "assign only to variables and fields".into(),
                         start_span,
                     );
                     LValue {
@@ -125,7 +125,7 @@ impl Parser {
                 } else {
                     self.error_with_hint(
                         "invalid compound assignment target".to_string(),
-                        "only variables and fields can be assigned to".into(),
+                        "assign only to variables and fields".into(),
                         start_span,
                     );
                     LValue {

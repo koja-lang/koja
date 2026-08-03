@@ -137,6 +137,40 @@ pub(crate) fn resolve_type_expr(
     }
 }
 
+/// Resolve a declared return signature, folding a `-> T ! E` error
+/// channel into the underlying `Result<T, E>`. A missing return type
+/// resolves to `Unit`.
+pub(super) fn resolve_return_signature(
+    return_type: Option<&TypeExpr>,
+    error_type: Option<&TypeExpr>,
+    type_params: TypeParamScope<'_>,
+    scope: ResolutionScope<'_>,
+    diagnostics: &mut Vec<Diagnostic>,
+) -> ResolvedType {
+    let success = match return_type {
+        Some(type_expr) => resolve_type_expr(type_expr, type_params, scope, diagnostics),
+        None => scope.registry.primitive("Unit"),
+    };
+    let Some(error_expr) = error_type else {
+        return success;
+    };
+    let error = resolve_type_expr(error_expr, type_params, scope, diagnostics);
+    let result_identifier = Identifier::new("Global", vec!["Result".to_string()]);
+    let (result_id, _) = scope
+        .registry
+        .lookup(&result_identifier)
+        .unwrap_or_else(|| {
+            panic!(
+                "`Global.Result` missing from registry while lifting a `! E` \
+                 signature: stdlib must be lifted first",
+            )
+        });
+    ResolvedType::Named {
+        resolution: Resolution::Global(result_id),
+        type_args: vec![success, error],
+    }
+}
+
 /// Resolve a bare `Self` type-expression. Walks the scope from
 /// innermost outward and dispatches by owner kind: a protocol owner
 /// resolves to its implicit slot-0 type-param (protocols register

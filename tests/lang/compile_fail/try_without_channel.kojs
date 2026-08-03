@@ -1,0 +1,13 @@
+fn parse(s: String) -> Int ! String
+  if s == "1"
+    1
+  else
+    fail "bad digit"
+  end
+end
+
+fn caller() -> Int
+  try parse("1")
+end
+
+caller()

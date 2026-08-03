@@ -490,6 +490,7 @@ fn synthesize_default_method(
         type_params: method.type_params,
         params: method.params,
         return_type: method.return_type,
+        error_type: method.error_type,
         body: method.body,
         span: method.span,
     };

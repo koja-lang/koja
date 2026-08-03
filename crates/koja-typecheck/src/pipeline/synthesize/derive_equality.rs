@@ -205,6 +205,7 @@ fn eq_function(other_type: TypeExpr, body_expr: Expr, span: Span) -> Function {
             },
         ],
         return_type: Some(named_type(BOOL_TYPE, span)),
+        error_type: None,
         body: Some(vec![Statement::Expr(body_expr)]),
         span,
     }

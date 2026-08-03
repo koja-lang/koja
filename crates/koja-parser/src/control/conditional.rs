@@ -21,8 +21,8 @@ impl Parser {
         let else_body = if self.eat(&TokenKind::Else).is_some() {
             if *self.peek() == TokenKind::If {
                 self.error_with_hint(
-                    "else if is not supported".to_string(),
-                    "use cond for multi-way branching".to_string(),
+                    "`else if` is not valid".to_string(),
+                    "use `cond` for multi-way branching".to_string(),
                     self.current_span(),
                 );
             }

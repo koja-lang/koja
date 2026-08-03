@@ -30,19 +30,19 @@ The following facts constrain future planning.
 
 ## 0.16.0
 
-The 0.16 release closes the remaining known language contracts while adding the
-last major product types planned before ecosystem validation.
+The 0.16 release closes the remaining known language contracts, ships
+anonymous tuples, and adds the error channel.
 
 ### Language and tooling
 
 - **[DONE]** Core anonymous tuple support and standard API migrations
 - **[DONE]** Lexical nested type declarations with formatter, LSP, and editor
   grammar support
-- Anonymous tuple support in the VSCode, Vim, and tree-sitter integrations
 - **[DONE]** A CLI task protocol modeled on `Mix.Tasks` (`Koja.Task` + `[tasks]` manifest exports)
-- Anonymous records
 - **[DONE]** An `@deprecated` compile annotation
 - **[DONE]** Deprecation of `Pair<A, B>` with guidance to use anonymous tuples
+- **[DONE]** Error channel notation over `Result`: `-> T ! E` signatures with
+  `try`, `fail`, and `rescue` ([ERROR-HANDLING.md](ERROR-HANDLING.md))
 
 ### Correctness and production gates
 
@@ -53,20 +53,26 @@ last major product types planned before ecosystem validation.
 - **[DONE]** Make the formatter round-trip multiline string literals byte-exactly.
   Heredoc-style content must survive formatting without dedent or lexing
   corruption.
+
+The release is complete when these items are implemented, documented, and
+covered by tests on both backends where applicable. The VSCode, Vim, and
+tree-sitter integrations pick up anonymous tuple support after the release
+ships. That is ecosystem work, not a release gate.
+
+## 0.17.0
+
+Remove `Pair<A, B>` after its 0.16 deprecation period. Migration guidance will
+cover tuple construction, destructuring, patterns, and public API changes.
+
+The following items carry over from 0.16.
+
+- Anonymous records
 - Make public constants referenceable across package boundaries, or explicitly
   narrow the language contract before release.
 - Attribute LSP diagnostics to their originating file in multi-file projects.
 - Add a `Runtime` observability API with global and per-process metrics,
   including mailbox depth, and document the overload contract for long-running
   services.
-
-The release is complete when these items are implemented, documented, and
-covered by tests on both backends where applicable.
-
-## 0.17.0
-
-Remove `Pair<A, B>` after its 0.16 deprecation period. Migration guidance will
-cover tuple construction, destructuring, patterns, and public API changes.
 
 The rest of the 0.17 scope will be selected from evidence gathered while
 building real packages and applications. Later `0.x` releases will be added

@@ -3,7 +3,7 @@
 //! Pins:
 //! - bare fn with no params, no return type, no body
 //! - parameter parsing (typed param, default value, self receiver)
-//! - return-type parsing
+//! - return-type parsing, including the `-> T ! E` error channel
 //! - body presence detection (empty body, normal body, bodyless for
 //!   `@extern` / `@intrinsic`, bodyless before a sibling `fn`)
 //! - visibility (`fn` is Public, `priv fn` is Private)
@@ -160,6 +160,59 @@ fn fn_followed_by_fn_each_has_body() {
     assert_eq!(b.name, "second");
     assert!(a.body.is_some());
     assert!(b.body.is_some());
+}
+
+#[test]
+fn fn_without_bang_has_no_error_type() {
+    let f = first_function(
+        "
+        fn add(a: Int, b: Int) -> Int
+          a + b
+        end
+        ",
+    );
+    assert!(f.error_type.is_none());
+}
+
+#[test]
+fn fn_with_error_type() {
+    let f = first_function(
+        "
+        fn read_config(path: String) -> Config ! String
+          parse(path)
+        end
+        ",
+    );
+    assert!(matches!(f.return_type, Some(TypeExpr::Named { ref path, .. }) if path == &["Config"]));
+    assert!(matches!(f.error_type, Some(TypeExpr::Named { ref path, .. }) if path == &["String"]));
+}
+
+#[test]
+fn fn_with_union_error_type() {
+    let f = first_function(
+        "
+        fn fetch(url: String) -> Limits ! SocketError | ParseError
+          run(url)
+        end
+        ",
+    );
+    let Some(TypeExpr::Union { ref types, .. }) = f.error_type else {
+        panic!("expected union error type, got {:?}", f.error_type);
+    };
+    assert_eq!(types.len(), 2);
+}
+
+#[test]
+fn fn_with_unit_success_and_error_type() {
+    let f = first_function(
+        "
+        fn ping(host: String) -> () ! String
+          send(host)
+        end
+        ",
+    );
+    assert!(matches!(f.return_type, Some(TypeExpr::Unit { .. })));
+    assert!(f.error_type.is_some());
 }
 
 #[test]

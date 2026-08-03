@@ -29,24 +29,24 @@ struct JsonUtil
 
   @doc """
   Extracts a non-empty `url` string from a JSON request body, or
-  returns a human-readable error describing what was wrong.
+  fails with a human-readable error describing what was wrong.
   """
-  fn parse_url(body: String) -> Result<String, String>
-    decoded =
-      match Decoder.decode(body)
-        Result.Ok(value) -> value
-        Result.Err(_) -> return Result.Err("body is not valid JSON")
-      end
+  fn parse_url(body: String) -> String ! String
+    decoded = Decoder.decode(body) rescue _ -> fail "body is not valid JSON"
 
     match field(decoded, "url")
       Option.None ->
-        Result.Err("missing \"url\" field")
+        fail "missing \"url\" field"
 
       Option.Some(Value.String(url)) ->
-        url.empty?() ? Result.Err("\"url\" must not be empty") : Result.Ok(url)
+        if url.empty?()
+          fail "\"url\" must not be empty"
+        end
+
+        url
 
       Option.Some(_) ->
-        Result.Err("\"url\" must be a string")
+        fail "\"url\" must be a string"
     end
   end
 

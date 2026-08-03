@@ -85,7 +85,7 @@ fn else_if_is_rejected() {
           end
         end
         ",
-        &["else if is not supported"],
+        &["`else if` is not valid"],
     );
 }
 

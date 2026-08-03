@@ -71,6 +71,11 @@ pub struct ResolvedStructField {
 /// monomorphization produces from the receiver side.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct FunctionSignature {
+    /// True when the author spelled the return as `-> T ! E`. The
+    /// `return_type` already holds the lifted `Result<T, E>`, and this
+    /// flag gates Ok-wrapping, which never applies to functions
+    /// declared with an explicit `-> Result<T, E>`.
+    pub declared_fallible: bool,
     pub dispatch: Dispatch,
     pub params: Vec<ResolvedParam>,
     pub return_type: ResolvedType,

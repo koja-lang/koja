@@ -13,7 +13,7 @@
 (* Whitespace and newlines are significant as statement separators but are    *)
 (* omitted from the grammar for readability. Newlines terminate statements;   *)
 (* line continuation is implicit after binary operators, ".", and ",", and    *)
-(* before a line starting with "and", "or", or the ternary "?".               *)
+(* before a line starting with "and", "or", "rescue", or the ternary "?".     *)
 (* ========================================================================== *)
 
 
@@ -97,7 +97,7 @@ protocol_decl = { annotation } , [ "priv" ] , "protocol" , TYPE_IDENT , [ type_p
                 "end" ;
 
 protocol_method = { annotation } , "fn" , IDENT , [ type_params ] ,
-                  [ "(" , [ param_list ] , ")" ] , [ "->" , type_expr ] ,
+                  [ "(" , [ param_list ] , ")" ] , [ return_signature ] ,
                   [ { statement } , "end" ] ;
 
 
@@ -133,9 +133,13 @@ type_alias = "type" , TYPE_IDENT , "=" , type_expr ;
 (* ========================================================================== *)
 
 function_decl = { annotation } , [ "priv" ] , "fn" , IDENT , [ type_params ] ,
-                [ "(" , [ param_list ] , ")" ] , [ "->" , type_expr ] ,
+                [ "(" , [ param_list ] , ")" ] , [ return_signature ] ,
                 [ { statement } , "end" ] ;
                 (* Body is optional: `@extern "C"` declarations omit the body and `end`. *)
+
+(* `-> T ! E` is notation for `-> Result<T, E>`. The error type may be a
+   union. See section 7 for `try`, `fail`, and `rescue`. *)
+return_signature = "->" , type_expr , [ "!" , type_expr ] ;
 
 param_list = param , { "," , param } ;
 
@@ -195,7 +199,11 @@ return_stmt = "return" , [ expr ] ;
 
 break_stmt = "break" ;
 
-expr = ternary_expr ;
+expr = rescue_expr ;
+
+(* Inline error handling: the handler sees the subject's error and must
+   produce the subject's Ok type or diverge (return, fail, panic). *)
+rescue_expr = ternary_expr , { "rescue" , ( IDENT | "_" ) , "->" , ternary_expr } ;
 
 ternary_expr = or_expr , [ "?" , or_expr , ":" , or_expr ] ;
 (* Note: else branch is or_expr, not ternary_expr -- nesting prohibited *)
@@ -218,6 +226,7 @@ addition = multiplication , { ( "+" | "-" | "<>" ) , multiplication } ;
 multiplication = unary , { ( "*" | "/" | "%" ) , unary } ;
 
 unary = "-" , unary
+      | "try" , unary       (* error propagation: unwraps Ok, returns Err *)
       | postfix ;
 
 postfix = primary , { postfix_op } ;
@@ -247,8 +256,14 @@ primary = literal
         | while_expr
         | receive_expr
         | spawn_expr
+        | fail_expr
         | "(" , expr , "," , expr , { "," , expr } , ")"     (* tuple *)
         | "(" , expr , ")" ;                                 (* grouping *)
+
+(* Error return: `return Result.Err(expr)` with union widening. Parses as
+   an expression but is only valid in statement position, match/cond arm
+   tails, and rescue handlers. *)
+fail_expr = "fail" , expr ;
 
 struct_construction = named_type , "{" ,
                       field_init , { "," , field_init } , [ "," ] ,
@@ -449,14 +464,16 @@ map_lit  = "[" , ":" , "]"                                          (* empty map
 (* ========================================================================== *)
 
 (* Precedence (lowest to highest):                                            *)
-(*   1. or                                                                    *)
-(*   2. and                                                                   *)
-(*   3. not                                                                   *)
-(*   4. ==  !=  <  >  <=  >=                                                  *)
-(*   5. +  -  <>                                                              *)
-(*   6. *  /  %                                                               *)
-(*   7. unary -                                                               *)
-(*   8. postfix: .fn()  .field  ()                                            *)
+(*   1. rescue                                                                *)
+(*   2. ternary ? :                                                           *)
+(*   3. or                                                                    *)
+(*   4. and                                                                   *)
+(*   5. not                                                                   *)
+(*   6. ==  !=  <  >  <=  >=                                                  *)
+(*   7. +  -  <>                                                              *)
+(*   8. *  /  %                                                               *)
+(*   9. unary -, try                                                          *)
+(*   10. postfix: .fn()  .field  ()                                           *)
 (*                                                                            *)
 (* Assignment operators: =  +=  -=  *=  /=                                    *)
 
@@ -524,9 +541,10 @@ BIN_DIGIT = "0" | "1" ;
 (* Reserved keywords                                                          *)
 (* ========================================================================== *)
 
-(* after, alias, break, cond, const, else, end, enum, extend, false,     *)
-(* fn, for, if, impl, in, loop, match, not, priv, protocol,              *)
-(* receive, return, self, spawn, struct, true, type, unless, when, while *)
+(* after, alias, break, cond, const, else, end, enum, extend, fail,      *)
+(* false, fn, for, if, impl, in, loop, match, not, priv, protocol,       *)
+(* receive, rescue, return, self, spawn, struct, true, try, type,        *)
+(* unless, when, while                                                   *)
 (*                                                                       *)
 (* Note: `and`, `or`, and `as` are contextual identifiers, not reserved  *)
 (* keywords. `and`/`or` are recognized as infix operators by the parser  *)

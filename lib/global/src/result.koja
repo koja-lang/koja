@@ -77,17 +77,6 @@ enum Result<T, E>
   end
 
   @doc """
-  Applies `f` to the `Ok` value (where `f` returns a `Result`), returns
-  `Err` unchanged. Also known as flat_map.
-  """
-  fn then<U>(self, f: fn (T) -> Result<U, E>) -> Result<U, E>
-    match self
-      Result.Ok(val) -> f(val)
-      Result.Err(e) -> Result.Err(e)
-    end
-  end
-
-  @doc """
   Returns the `Ok` value. Panics if the result is `Err`.
   """
   fn unwrap(self) -> T

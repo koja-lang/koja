@@ -162,11 +162,9 @@ fn constructor_metadata(
         }
         ResolvedVariantData::Tuple(_) => ConstructorRewrite::Tuple,
         ResolvedVariantData::Struct(_) => {
-            diagnostics.push(Diagnostic::error(
-                format!(
-                    "variant `{label}.{name}` is a struct variant; use `{label}.{name}{{...}}` \
-                     syntax instead of `{name}(...)`"
-                ),
+            diagnostics.push(Diagnostic::error_with_hint(
+                format!("variant `{label}.{name}` is a struct variant, not a tuple variant"),
+                format!("use `{label}.{name}{{...}}` syntax instead of `{name}(...)`"),
                 span,
             ));
             return Err(());

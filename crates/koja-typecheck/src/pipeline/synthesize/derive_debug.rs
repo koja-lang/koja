@@ -232,6 +232,7 @@ fn format_function(body_expr: Expr, span: Span) -> Function {
             span,
         }],
         return_type: Some(named_type(STRING_TYPE, span)),
+        error_type: None,
         body: Some(vec![Statement::Expr(body_expr)]),
         span,
     }
@@ -265,6 +266,7 @@ fn print_function(span: Span) -> Function {
             span,
         }],
         return_type: None,
+        error_type: None,
         body: Some(vec![Statement::Expr(puts_call)]),
         span,
     }
@@ -285,6 +287,7 @@ fn inspect_function(span: Span) -> Function {
             span,
         }],
         return_type: Some(TypeExpr::Self_ { span }),
+        error_type: None,
         body: Some(vec![
             Statement::Expr(print_call),
             Statement::Expr(self_expr(span)),
