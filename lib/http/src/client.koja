@@ -7,50 +7,50 @@ alias URI.Error as URIError
 @doc """
 Sends a DELETE request to the given URL.
 """
-fn delete(url: String, headers: Headers) -> Result<Response, Error>
-  request(Method.Delete, url, headers, "")
+fn delete(url: String, headers: Headers) -> Response ! Error
+  try request(Method.Delete, url, headers, "")
 end
 
 @doc """
 Sends a GET request to the given URL.
 """
-fn get(url: String) -> Result<Response, Error>
-  request(Method.Get, url, Headers.new(), "")
+fn get(url: String) -> Response ! Error
+  try request(Method.Get, url, Headers.new(), "")
 end
 
 @doc """
 Sends a HEAD request to the given URL.
 """
-fn head(url: String) -> Result<Response, Error>
-  request(Method.Head, url, Headers.new(), "")
+fn head(url: String) -> Response ! Error
+  try request(Method.Head, url, Headers.new(), "")
 end
 
 @doc """
 Sends an OPTIONS request to the given URL.
 """
-fn options(url: String) -> Result<Response, Error>
-  request(Method.Options, url, Headers.new(), "")
+fn options(url: String) -> Response ! Error
+  try request(Method.Options, url, Headers.new(), "")
 end
 
 @doc """
 Sends a PATCH request to the given URL with a body.
 """
-fn patch(url: String, body: String, headers: Headers) -> Result<Response, Error>
-  request(Method.Patch, url, headers, body)
+fn patch(url: String, body: String, headers: Headers) -> Response ! Error
+  try request(Method.Patch, url, headers, body)
 end
 
 @doc """
 Sends a POST request to the given URL with a body.
 """
-fn post(url: String, body: String, headers: Headers) -> Result<Response, Error>
-  request(Method.Post, url, headers, body)
+fn post(url: String, body: String, headers: Headers) -> Response ! Error
+  try request(Method.Post, url, headers, body)
 end
 
 @doc """
 Sends a PUT request to the given URL with a body.
 """
-fn put(url: String, body: String, headers: Headers) -> Result<Response, Error>
-  request(Method.Put, url, headers, body)
+fn put(url: String, body: String, headers: Headers) -> Response ! Error
+  try request(Method.Put, url, headers, body)
 end
 
 @doc """
@@ -59,43 +59,28 @@ Sends an HTTP request with the given method, URL, headers,
   the full response, and closes the connection.
 """
 fn request(method: Method, url: String, headers: Headers, body: String)
-  -> Result<Response, Error>
+  -> Response ! Error
 
-  parsed =
-    match URI.parse(url)
-      Result.Ok(uri) -> uri
-      Result.Err(e) ->
-        return Result.Err(Error.InvalidUrl(uri_error_message(e, url)))
-    end
+  parsed = URI.parse(url)
+    rescue e -> fail Error.InvalidUrl(uri_error_message(e, url))
 
-  scheme =
-    match parsed.scheme
-      Option.Some(s) ->
-        s
-
-      Option.None ->
-        message = "URL must be absolute and use http or https: " <> url
-        return Result.Err(Error.InvalidUrl(message))
-    end
+  scheme = try parsed.scheme.or_err(
+    Error.InvalidUrl("URL must be absolute and use http or https: " <> url),
+  )
 
   unless scheme == "http" or scheme == "https"
-    message = "unsupported URL scheme '#{scheme}': " <> url
-    return Result.Err(Error.InvalidUrl(message))
+    fail Error.InvalidUrl("unsupported URL scheme '#{scheme}': " <> url)
   end
 
   host =
     match parsed.host
       Option.Some(h) when not h.empty?() -> h
-      _ -> return Result.Err(Error.InvalidUrl("missing host in URL: " <> url))
+      _ -> fail Error.InvalidUrl("missing host in URL: " <> url)
     end
 
-  port =
-    match parsed.port
-      Option.Some(p) -> p
-      Option.None ->
-        return Result.Err(Error.InvalidUrl("missing port in URL: " <> url))
-    end
-
+  port = try parsed.port.or_err(
+    Error.InvalidUrl("missing port in URL: " <> url),
+  )
   path = parsed.path.empty?() ? "/" : parsed.path
 
   target =
@@ -106,30 +91,20 @@ fn request(method: Method, url: String, headers: Headers, body: String)
 
   socket =
     if scheme == "https"
-      match TCPSocket.connect_tls(host, port)
-        Result.Ok(s) -> s
-        Result.Err(e) ->
-          return Result.Err(Error.ConnectionFailed(net_error_message(e)))
-      end
+      TCPSocket.connect_tls(host, port)
+        rescue e -> fail Error.ConnectionFailed(net_error_message(e))
     else
-      match TCPSocket.connect(host, port)
-        Result.Ok(s) -> s
-        Result.Err(e) -> return Result.Err(Error.ConnectionFailed(e.message()))
-      end
+      TCPSocket.connect(host, port)
+        rescue e -> fail Error.ConnectionFailed(e.message())
     end
 
   raw = build_request(method, host, target, headers, body)
 
-  match socket.write(raw)
-    Result.Err(e) ->
-      message = "write failed: " <> net_error_message(e)
-      return Result.Err(Error.ConnectionFailed(message))
+  socket.write(raw)
+    rescue e -> fail Error.ConnectionFailed("write failed: " <>
+      net_error_message(e))
 
-    Result.Ok(_) ->
-      ()
-  end
-
-  read_response(socket)
+  try read_response(socket)
 end
 
 priv fn uri_error_message(error: URIError, url: String) -> String
@@ -187,11 +162,9 @@ priv fn write_headers(sb: StringBuilder, headers: Headers, i: Int)
   write_headers(sb, headers, i + 1)
 end
 
-priv fn read_response(socket: TCPSocket) -> Result<Response, Error>
-  match read_all(socket, StringBuilder.new())
-    Result.Err(e) -> Result.Err(e)
-    Result.Ok(data) -> Parser.parse_response(data)
-  end
+priv fn read_response(socket: TCPSocket) -> Response ! Error
+  data = try read_all(socket, StringBuilder.new())
+  try Parser.parse_response(data)
 end
 
 priv fn net_error_message(e: SocketError | TLSError) -> String
@@ -201,21 +174,19 @@ priv fn net_error_message(e: SocketError | TLSError) -> String
   end
 end
 
-priv fn read_all(socket: TCPSocket, sb: StringBuilder) -> Result<String, Error>
-  match socket.read(8192)
-    Result.Err(e) ->
-      Result.Err(Error.ConnectionFailed("read failed: " <> net_error_message(e)))
+priv fn read_all(socket: TCPSocket, sb: StringBuilder) -> String ! Error
+  chunk = socket.read(8192)
+    rescue e -> fail Error.ConnectionFailed("read failed: " <>
+      net_error_message(e))
 
-    Result.Ok(chunk) ->
-      if chunk.empty?()
-        match socket.close()
-          _ -> ()
-        end
+  if chunk.empty?()
+    match socket.close()
+      _ -> ()
+    end
 
-        Result.Ok(sb.build())
-      else
-        sb = sb.add(chunk)
-        read_all(socket, sb)
-      end
+    return sb.build()
   end
+
+  sb = sb.add(chunk)
+  try read_all(socket, sb)
 end

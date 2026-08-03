@@ -13,187 +13,120 @@ struct Parser
   Parses a raw HTTP request string into a Request.
   Expects the full message including headers and body.
   """
-  fn parse_request(raw: String) -> Result<Request, Error>
+  fn parse_request(raw: String) -> Request ! Error
     p = Parser{input: raw, pos: 0}
 
-    line_tuple =
-      match p.read_line()
-        Option.Some(tuple) -> tuple
-        Option.None -> return Result.Err(Error.ParseError("empty request"))
-      end
+    (request_line, request_pos) = try p.read_line()
+      .or_err(Error.ParseError("empty request"))
 
-    (request_line, request_pos) = line_tuple
     p = Parser{input: raw, pos: request_pos}
-
     parts = request_line.split(" ")
 
     if parts.length() < 3
-      error = Error.ParseError("malformed request line: " <> request_line)
-      return Result.Err(error)
+      fail Error.ParseError("malformed request line: " <> request_line)
     end
 
     method_str = parts.get(0).unwrap()
     path = parts.get(1).unwrap()
     version = parts.get(2).unwrap()
 
-    method =
-      match Method.from_string(method_str)
-        Result.Ok(m) -> m
-        Result.Err(msg) -> return Result.Err(Error.ParseError(msg))
-      end
+    method = Method.from_string(method_str)
+      rescue msg -> fail Error.ParseError(msg)
 
-    headers_and_body =
-      match p.parse_headers_and_body()
-        Result.Ok(tuple) -> tuple
-        Result.Err(e) -> return Result.Err(e)
-      end
+    (headers, body) = try p.parse_headers_and_body()
 
-    (headers, body) = headers_and_body
-
-    Result.Ok(Request{
+    Request{
       body: body,
       headers: headers,
       method: method,
       path: path,
       version: version,
-    })
+    }
   end
 
   @doc """
   Parses a raw HTTP response string into a Response.
   Expects the full message including headers and body.
   """
-  fn parse_response(raw: String) -> Result<Response, Error>
+  fn parse_response(raw: String) -> Response ! Error
     p = Parser{input: raw, pos: 0}
 
-    line_tuple =
-      match p.read_line()
-        Option.Some(tuple) -> tuple
-        Option.None -> return Result.Err(Error.ParseError("empty response"))
-      end
+    (status_line, response_pos) = try p.read_line()
+      .or_err(Error.ParseError("empty response"))
 
-    (status_line, response_pos) = line_tuple
     p = Parser{input: raw, pos: response_pos}
+    (version, status) = try Parser.parse_status_line(status_line)
+    (headers, body) = try p.parse_headers_and_body()
 
-    status_tuple =
-      match Parser.parse_status_line(status_line)
-        Result.Ok(tuple) -> tuple
-        Result.Err(e) -> return Result.Err(e)
-      end
-
-    (version, status) = status_tuple
-
-    headers_and_body =
-      match p.parse_headers_and_body()
-        Result.Ok(tuple) -> tuple
-        Result.Err(e) -> return Result.Err(e)
-      end
-
-    (headers, body) = headers_and_body
-
-    Result.Ok(Response{
-      body: body,
-      headers: headers,
-      status: status,
-      version: version,
-    })
+    Response{body: body, headers: headers, status: status, version: version}
   end
 
-  priv fn parse_headers_and_body(self) -> Result<(Headers, String), Error>
+  priv fn parse_headers_and_body(self) -> (Headers, String) ! Error
     # Parses the header block and message body from a parser positioned at
     # the start of the headers (just past the request/status line). Returns
     # the parsed headers paired with the body string. Shared by
     # `parse_request` and `parse_response`.
 
-    header_tuple =
-      match self.parse_headers()
-        Result.Ok(tuple) -> tuple
-        Result.Err(e) -> return Result.Err(e)
-      end
-
-    (headers, header_pos) = header_tuple
+    (headers, header_pos) = try self.parse_headers()
     after_headers = Parser{input: self.input, pos: header_pos}
-
-    body =
-      match after_headers.parse_body(headers)
-        Result.Ok(b) -> b
-        Result.Err(e) -> return Result.Err(e)
-      end
-
-    Result.Ok((headers, body))
+    body = try after_headers.parse_body(headers)
+    (headers, body)
   end
 
-  priv fn parse_status_line(line: String) -> Result<(String, Status), Error>
-    sp1 =
-      match Parser.find_char(line, " ", 0)
-        Option.Some(i) -> i
-        Option.None ->
-          return Result.Err(Error.ParseError("malformed status line: " <> line))
-      end
+  priv fn parse_status_line(line: String) -> (String, Status) ! Error
+    sp1 = try Parser.find_char(line, " ", 0)
+      .or_err(Error.ParseError("malformed status line: " <> line))
 
     version = line.slice(Range{start: 0, stop: sp1 - 1})
     rest = line.slice(Range{start: sp1 + 1, stop: line.length() - 1})
 
-    sp2 =
-      match Parser.find_char(rest, " ", 0)
-        Option.Some(i) -> i
-        Option.None ->
-          return Result.Err(Error.ParseError("malformed status line: " <> line))
-      end
+    sp2 = try Parser.find_char(rest, " ", 0)
+      .or_err(Error.ParseError("malformed status line: " <> line))
 
     code_str = rest.slice(Range{start: 0, stop: sp2 - 1})
     reason = rest.slice(Range{start: sp2 + 1, stop: rest.length() - 1})
 
-    code =
-      match code_str.to_int()
-        Result.Ok(c) -> c
-        Result.Err(_) ->
-          return Result.Err(Error.ParseError("invalid status code: " <> code_str))
-      end
+    code = code_str.to_int()
+      rescue _ -> fail Error.ParseError("invalid status code: " <> code_str)
 
-    status = Status{code: code, reason: reason}
-    Result.Ok((version, status))
+    (version, Status{code: code, reason: reason})
   end
 
-  priv fn parse_headers(self) -> Result<(Headers, Int), Error>
+  priv fn parse_headers(self) -> (Headers, Int) ! Error
     headers = Headers.new()
-    Parser.parse_headers_loop(self.input, self.pos, headers)
+    try Parser.parse_headers_loop(self.input, self.pos, headers)
   end
 
   priv fn parse_headers_loop(input: String, pos: Int, headers: Headers)
-    -> Result<(Headers, Int), Error>
+    -> (Headers, Int) ! Error
 
     p = Parser{input: input, pos: pos}
 
     line_tuple =
       match p.read_line()
         Option.Some(tuple) -> tuple
-        Option.None -> return Result.Ok((headers, pos))
+        Option.None -> return (headers, pos)
       end
 
     (line, new_pos) = line_tuple
 
     if line.empty?()
-      return Result.Ok((headers, new_pos))
+      return (headers, new_pos)
     end
 
-    colon =
-      match Parser.find_char(line, ":", 0)
-        Option.Some(c) -> c
-        Option.None ->
-          return Result.Err(Error.ParseError("malformed header line: " <> line))
-      end
+    colon = try Parser.find_char(line, ":", 0)
+      .or_err(Error.ParseError("malformed header line: " <> line))
 
     name = line.slice(Range{start: 0, stop: colon - 1})
     value = line.slice(Range{start: colon + 1, stop: line.length() - 1})
       .trim_start()
     headers = headers.append(name, value)
-    Parser.parse_headers_loop(input, new_pos, headers)
+    try Parser.parse_headers_loop(input, new_pos, headers)
   end
 
-  priv fn parse_body(self, headers: Headers) -> Result<String, Error>
+  priv fn parse_body(self, headers: Headers) -> String ! Error
     if Parser.is_chunked(headers)
-      return self.parse_chunked_body()
+      return try self.parse_chunked_body()
     end
 
     match headers.content_length()
@@ -201,14 +134,14 @@ struct Parser
         end_pos = self.pos + len > self.input.length()
           ? self.input.length() - 1
           : self.pos + len - 1
-        Result.Ok(self.input.slice(Range{start: self.pos, stop: end_pos}))
+        self.input.slice(Range{start: self.pos, stop: end_pos})
 
       Option.None ->
         self.pos < self.input.length()
-          ? Result.Ok(self.input.slice(
+          ? self.input.slice(
             Range{start: self.pos, stop: self.input.length() - 1},
-          ))
-          : Result.Ok("")
+          )
+          : ""
     end
   end
 
@@ -219,38 +152,34 @@ struct Parser
     end
   end
 
-  priv fn parse_chunked_body(self) -> Result<String, Error>
+  priv fn parse_chunked_body(self) -> String ! Error
     sb = StringBuilder.new()
-    Parser.parse_chunks(self.input, self.pos, sb)
+    try Parser.parse_chunks(self.input, self.pos, sb)
   end
 
   priv fn parse_chunks(input: String, pos: Int, sb: StringBuilder)
-    -> Result<String, Error>
+    -> String ! Error
 
     p = Parser{input: input, pos: pos}
 
     size_tuple =
       match p.read_line()
         Option.Some(tuple) -> tuple
-        Option.None -> return Result.Ok(sb.build())
+        Option.None -> return sb.build()
       end
 
     (size_line, new_pos) = size_tuple
     size_str = size_line.trim()
 
-    chunk_size =
-      match Parser.parse_hex(size_str)
-        Result.Ok(cs) -> cs
-        Result.Err(_) ->
-          return Result.Err(Error.ParseError("invalid chunk size: " <> size_str))
-      end
+    chunk_size = Parser.parse_hex(size_str)
+      rescue _ -> fail Error.ParseError("invalid chunk size: " <> size_str)
 
     if chunk_size == 0
-      return Result.Ok(sb.build())
+      return sb.build()
     end
 
     if new_pos + chunk_size > input.length()
-      return Result.Err(Error.ParseError("chunk extends past end of input"))
+      fail Error.ParseError("chunk extends past end of input")
     end
 
     chunk = input.slice(Range{start: new_pos, stop: new_pos + chunk_size - 1})
@@ -258,7 +187,7 @@ struct Parser
 
     after_chunk = new_pos + chunk_size
     next_pos = after_chunk + 2 <= input.length() ? after_chunk + 2 : after_chunk
-    Parser.parse_chunks(input, next_pos, sb)
+    try Parser.parse_chunks(input, next_pos, sb)
   end
 
   priv fn read_line(self) -> Option<(String, Int)>
@@ -305,17 +234,17 @@ struct Parser
       : Parser.find_char(input, target, pos + 1)
   end
 
-  priv fn parse_hex(s: String) -> Result<Int, String>
+  priv fn parse_hex(s: String) -> Int ! String
     if s.empty?()
-      return Result.Err("empty hex string")
+      fail "empty hex string"
     end
 
-    Parser.parse_hex_digits(s, 0, 0)
+    try Parser.parse_hex_digits(s, 0, 0)
   end
 
-  priv fn parse_hex_digits(s: String, i: Int, acc: Int) -> Result<Int, String>
+  priv fn parse_hex_digits(s: String, i: Int, acc: Int) -> Int ! String
     if i >= s.length()
-      return Result.Ok(acc)
+      return acc
     end
 
     ch = s.get(i).unwrap()
@@ -344,9 +273,9 @@ struct Parser
         "E" -> 14
         "f" -> 15
         "F" -> 15
-        _ -> return Result.Err("invalid hex digit: " <> ch)
+        _ -> fail "invalid hex digit: #{ch}"
       end
 
-    Parser.parse_hex_digits(s, i + 1, acc * 16 + digit)
+    try Parser.parse_hex_digits(s, i + 1, acc * 16 + digit)
   end
 end

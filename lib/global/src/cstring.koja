@@ -30,5 +30,5 @@ struct CString
   pointers, lengths, and UTF-8.
   """
   @intrinsic
-  fn to_string(self) -> Result<String, CString.ConversionError>
+  fn to_string(self) -> String ! CString.ConversionError
 end

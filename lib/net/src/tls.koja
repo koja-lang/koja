@@ -214,25 +214,23 @@ struct TLSSession
   the certificate and key from `config`. Suspends the process while
   the socket is not ready. Returns the established session.
   """
-  fn accept(fd: Fd, config: TLSConfig)
-    -> Result<TLSSession, SocketError | TLSError>
-
+  fn accept(fd: Fd, config: TLSConfig) -> TLSSession ! SocketError | TLSError
     identity =
       match config.identity
         Option.Some(i) -> i
-        Option.None -> return handshake_tls_failure(TLSError.IdentityRequired)
+        Option.None -> fail TLSError.IdentityRequired
       end
 
     ctx = ssl_ctx_new(tls_method())
 
     if ctx.null?()
-      return handshake_tls_failure(TLSError.Internal)
+      fail TLSError.Internal
     end
 
     match load_identity(ctx, identity)
       Result.Err(e) ->
         ssl_ctx_free(ctx)
-        return handshake_tls_failure(e)
+        fail e
 
       Result.Ok(_) ->
         ()
@@ -242,11 +240,11 @@ struct TLSSession
 
     if ssl.null?()
       ssl_ctx_free(ctx)
-      return handshake_tls_failure(TLSError.Internal)
+      fail TLSError.Internal
     end
 
     ssl_set_fd(ssl, fd.descriptor)
-    handshake_loop(ssl, ctx, fd, false)
+    try handshake_loop(ssl, ctx, fd, false)
   end
 
   @doc """
@@ -256,18 +254,18 @@ struct TLSSession
   the socket is not ready. Returns the established session.
   """
   fn connect(fd: Fd, hostname: String, config: TLSConfig)
-    -> Result<TLSSession, SocketError | TLSError>
+    -> TLSSession ! SocketError | TLSError
 
     ctx = ssl_ctx_new(tls_method())
 
     if ctx.null?()
-      return handshake_tls_failure(TLSError.Internal)
+      fail TLSError.Internal
     end
 
     match configure_verification(ctx, config)
       Result.Err(e) ->
         ssl_ctx_free(ctx)
-        return handshake_tls_failure(e)
+        fail e
 
       Result.Ok(_) ->
         ()
@@ -277,7 +275,7 @@ struct TLSSession
 
     if ssl.null?()
       ssl_ctx_free(ctx)
-      return handshake_tls_failure(TLSError.Internal)
+      fail TLSError.Internal
     end
 
     ssl_set_fd(ssl, fd.descriptor)
@@ -287,7 +285,7 @@ struct TLSSession
         Result.Err(_) ->
           ssl_free(ssl)
           ssl_ctx_free(ctx)
-          return handshake_tls_failure(TLSError.ProtocolFailed)
+          fail TLSError.ProtocolFailed
 
         Result.Ok(value) ->
           value
@@ -300,7 +298,7 @@ struct TLSSession
     end
 
     host_cs.free()
-    handshake_loop(ssl, ctx, fd, true)
+    try handshake_loop(ssl, ctx, fd, true)
   end
 
   @doc """
@@ -308,13 +306,11 @@ struct TLSSession
   an empty `Binary` on a clean end of stream. Suspends the process
   while the socket is not ready.
   """
-  fn read_binary(self, fd: Fd, count: Int)
-    -> Result<Binary, SocketError | TLSError>
-
+  fn read_binary(self, fd: Fd, count: Int) -> Binary ! SocketError | TLSError
     buf: CPtr<UInt8> = CPtr.alloc(count)
     result = read_loop(self.ssl, fd, buf, count)
     buf.free()
-    result
+    try result
   end
 
   @doc """
@@ -332,76 +328,76 @@ struct TLSSession
   `String` (encoded as UTF-8) or a `Binary`. Returns the number of
   bytes written. Suspends the process while the socket is not ready.
   """
-  fn write(self, fd: Fd, data: Binary | String)
-    -> Result<Int, SocketError | TLSError>
-
+  fn write(self, fd: Fd, data: Binary | String) -> Int ! SocketError | TLSError
     bytes =
       match data
         b: Binary -> b
         s: String -> s.to_binary()
       end
 
-    write_loop(self.ssl, fd, bytes)
+    try write_loop(self.ssl, fd, bytes)
   end
 
-  priv fn add_chain_certs(ctx: CPtr<UInt8>, bio: CPtr<UInt8>)
-    -> Result<Bool, TLSError>
-
+  priv fn add_chain_certs(ctx: CPtr<UInt8>, bio: CPtr<UInt8>) -> Bool ! TLSError
     no_arg: CPtr<UInt8> = CPtr.null()
     cert = pem_read_bio_x509(bio, no_arg, no_arg, no_arg)
 
     if cert.null?()
-      # End of bundle; reading past the last block queues a PEM error.
+      # End of bundle. Reading past the last block queues a PEM error.
       err_clear_error()
-      return Result.Ok(true)
+      return true
     end
 
     added: Int = ssl_ctx_add1_chain_cert(ctx, cert)
     x509_free(cert)
 
-    added == 1
-      ? add_chain_certs(ctx, bio)
-      : Result.Err(TLSError.CertificateInvalid)
+    if added != 1
+      fail TLSError.CertificateInvalid
+    end
+
+    try add_chain_certs(ctx, bio)
   end
 
   priv fn add_store_certs(store: CPtr<UInt8>, bio: CPtr<UInt8>, loaded: Int)
-    -> Result<Bool, TLSError>
+    -> Bool ! TLSError
 
     no_arg: CPtr<UInt8> = CPtr.null()
     cert = pem_read_bio_x509(bio, no_arg, no_arg, no_arg)
 
     if cert.null?()
-      # End of bundle; reading past the last block queues a PEM error.
+      # End of bundle. Reading past the last block queues a PEM error.
       err_clear_error()
 
       if loaded > 0
-        return Result.Ok(true)
+        return true
       end
 
-      return Result.Err(TLSError.TrustStoreInvalid)
+      fail TLSError.TrustStoreInvalid
     end
 
     added: Int = x509_store_add_cert(store, cert)
     x509_free(cert)
 
-    added == 1
-      ? add_store_certs(store, bio, loaded + 1)
-      : Result.Err(TLSError.TrustStoreInvalid)
+    if added != 1
+      fail TLSError.TrustStoreInvalid
+    end
+
+    try add_store_certs(store, bio, loaded + 1)
   end
 
   priv fn configure_verification(ctx: CPtr<UInt8>, config: TLSConfig)
-    -> Result<Bool, TLSError>
+    -> Bool ! TLSError
 
     unless config.verify
-      return Result.Ok(true)
+      return true
     end
 
     no_callback: CPtr<UInt8> = CPtr.null()
     ssl_ctx_set_verify(ctx, SSL_VERIFY_PEER, no_callback)
 
     match config.trust
-      TrustStore.Custom(ca) -> load_ca_pem(ctx, ca.pem)
-      TrustStore.System -> load_system_trust(ctx)
+      TrustStore.Custom(ca) -> try load_ca_pem(ctx, ca.pem)
+      TrustStore.System -> try load_system_trust(ctx)
     end
   end
 
@@ -428,12 +424,12 @@ struct TLSSession
     ctx: CPtr<UInt8>,
     fd: Fd,
     client: Bool,
-  ) -> Result<TLSSession, SocketError | TLSError>
+  ) -> TLSSession ! SocketError | TLSError
 
     ret: Int = client ? ssl_connect(ssl) : ssl_accept(ssl)
 
     if ret == 1
-      return Result.Ok(TLSSession{ctx: ctx, ssl: ssl})
+      return TLSSession{ctx: ctx, ssl: ssl}
     end
 
     err: Int = ssl_get_error(ssl, ret)
@@ -442,21 +438,11 @@ struct TLSSession
       failure = handshake_failure(ssl, err)
       ssl_free(ssl)
       ssl_ctx_free(ctx)
-      return Result.Err(failure)
+      fail failure
     end
 
     fd.block(err == SSL_ERROR_WANT_READ)
-    handshake_loop(ssl, ctx, fd, client)
-  end
-
-  priv fn handshake_tls_failure(e: TLSError)
-    -> Result<TLSSession, SocketError | TLSError>
-
-    # Widens a `TLSError` for handshake entry points returning
-    # `Result<TLSSession, SocketError | TLSError>`.
-
-    failure: SocketError | TLSError = e
-    Result.Err(failure)
+    try handshake_loop(ssl, ctx, fd, client)
   end
 
   priv fn io_failure(err: Int) -> SocketError | TLSError
@@ -475,80 +461,75 @@ struct TLSSession
     failed
   end
 
-  priv fn load_ca_file(ctx: CPtr<UInt8>, path: String) -> Result<Bool, TLSError>
-    path_cs =
-      match path.to_cstring()
-        Result.Err(_) -> return Result.Err(TLSError.TrustStoreInvalid)
-        Result.Ok(value) -> value
-      end
+  priv fn load_ca_file(ctx: CPtr<UInt8>, path: String) -> Bool ! TLSError
+    path_cs = path.to_cstring() rescue _ -> fail TLSError.TrustStoreInvalid
 
     no_dir: CPtr<UInt8> = CPtr.null()
     loaded: Int = ssl_ctx_load_verify_locations(ctx, path_cs.ptr, no_dir)
     path_cs.free()
-    loaded == 1 ? Result.Ok(true) : Result.Err(TLSError.TrustStoreInvalid)
+
+    if loaded != 1
+      fail TLSError.TrustStoreInvalid
+    end
+
+    true
   end
 
-  priv fn load_ca_pem(ctx: CPtr<UInt8>, pem: String) -> Result<Bool, TLSError>
+  priv fn load_ca_pem(ctx: CPtr<UInt8>, pem: String) -> Bool ! TLSError
     bytes = pem.to_binary()
     bio = bio_new_mem_buf(CPtr.borrow(bytes), bytes.byte_size())
 
     if bio.null?()
-      return Result.Err(TLSError.Internal)
+      fail TLSError.Internal
     end
 
     store = ssl_ctx_get_cert_store(ctx)
     result = add_store_certs(store, bio, 0)
     bio_free(bio)
-    result
+    try result
   end
 
   priv fn load_identity(ctx: CPtr<UInt8>, identity: TLSIdentity)
-    -> Result<Bool, TLSError>
+    -> Bool ! TLSError
 
-    match use_certificate_pem(ctx, identity.cert.pem)
-      Result.Err(e) -> return Result.Err(e)
-      Result.Ok(_) -> ()
-    end
-
-    use_private_key_pem(ctx, identity.key.pem)
+    try use_certificate_pem(ctx, identity.cert.pem)
+    try use_private_key_pem(ctx, identity.key.pem)
   end
 
-  priv fn load_system_trust(ctx: CPtr<UInt8>) -> Result<Bool, TLSError>
+  priv fn load_system_trust(ctx: CPtr<UInt8>) -> Bool ! TLSError
     ssl_ctx_set_default_verify_paths(ctx)
 
-    if File.exists?("/etc/ssl/cert.pem")
-      return load_ca_file(ctx, "/etc/ssl/cert.pem")
+    cond
+      File.exists?("/etc/ssl/cert.pem") ->
+        try load_ca_file(ctx, "/etc/ssl/cert.pem")
+      File.exists?("/etc/ssl/certs/ca-certificates.crt") ->
+        try load_ca_file(ctx, "/etc/ssl/certs/ca-certificates.crt")
+      else -> true
     end
-
-    if File.exists?("/etc/ssl/certs/ca-certificates.crt")
-      return load_ca_file(ctx, "/etc/ssl/certs/ca-certificates.crt")
-    end
-
-    Result.Ok(true)
   end
 
   priv fn read_loop(ssl: CPtr<UInt8>, fd: Fd, buf: CPtr<UInt8>, count: Int)
-    -> Result<Binary, SocketError | TLSError>
+    -> Binary ! SocketError | TLSError
 
     ret: Int = ssl_read(ssl, buf, count)
 
     if ret > 0
-      return Result.Ok(buf.to_binary(ret))
+      return buf.to_binary(ret)
     end
 
     if ret == 0
       eof: Binary = <<>>
-      return Result.Ok(eof)
+      return eof
     end
 
     err: Int = ssl_get_error(ssl, ret)
 
     if err != SSL_ERROR_WANT_READ and err != SSL_ERROR_WANT_WRITE
-      return Result.Err(io_failure(err))
+      fail io_failure(err)
     end
 
     fd.block(err == SSL_ERROR_WANT_READ)
-    read_loop(ssl, fd, buf, count)
+    try read_loop(ssl, fd, buf, count)
   end
 
   priv fn syscall_failure -> SocketError | TLSError
@@ -569,14 +550,12 @@ struct TLSSession
     end
   end
 
-  priv fn use_certificate_pem(ctx: CPtr<UInt8>, pem: String)
-    -> Result<Bool, TLSError>
-
+  priv fn use_certificate_pem(ctx: CPtr<UInt8>, pem: String) -> Bool ! TLSError
     bytes = pem.to_binary()
     bio = bio_new_mem_buf(CPtr.borrow(bytes), bytes.byte_size())
 
     if bio.null?()
-      return Result.Err(TLSError.Internal)
+      fail TLSError.Internal
     end
 
     no_arg: CPtr<UInt8> = CPtr.null()
@@ -584,7 +563,7 @@ struct TLSSession
 
     if cert.null?()
       bio_free(bio)
-      return Result.Err(TLSError.CertificateInvalid)
+      fail TLSError.CertificateInvalid
     end
 
     used: Int = ssl_ctx_use_certificate(ctx, cert)
@@ -592,23 +571,21 @@ struct TLSSession
 
     if used != 1
       bio_free(bio)
-      return Result.Err(TLSError.CertificateInvalid)
+      fail TLSError.CertificateInvalid
     end
 
     # Any further certificates in the bundle form the chain.
     result = add_chain_certs(ctx, bio)
     bio_free(bio)
-    result
+    try result
   end
 
-  priv fn use_private_key_pem(ctx: CPtr<UInt8>, pem: String)
-    -> Result<Bool, TLSError>
-
+  priv fn use_private_key_pem(ctx: CPtr<UInt8>, pem: String) -> Bool ! TLSError
     bytes = pem.to_binary()
     bio = bio_new_mem_buf(CPtr.borrow(bytes), bytes.byte_size())
 
     if bio.null?()
-      return Result.Err(TLSError.Internal)
+      fail TLSError.Internal
     end
 
     no_arg: CPtr<UInt8> = CPtr.null()
@@ -616,32 +593,36 @@ struct TLSSession
     bio_free(bio)
 
     if key.null?()
-      return Result.Err(TLSError.PrivateKeyInvalid)
+      fail TLSError.PrivateKeyInvalid
     end
 
     used: Int = ssl_ctx_use_private_key(ctx, key)
     evp_pkey_free(key)
 
-    used == 1 ? Result.Ok(true) : Result.Err(TLSError.PrivateKeyInvalid)
+    if used != 1
+      fail TLSError.PrivateKeyInvalid
+    end
+
+    true
   end
 
   priv fn write_loop(ssl: CPtr<UInt8>, fd: Fd, bytes: Binary)
-    -> Result<Int, SocketError | TLSError>
+    -> Int ! SocketError | TLSError
 
     ret: Int = ssl_write(ssl, CPtr.borrow(bytes), bytes.byte_size())
 
     if ret > 0
-      return Result.Ok(ret)
+      return ret
     end
 
     err: Int = ssl_get_error(ssl, ret)
 
     if err != SSL_ERROR_WANT_READ and err != SSL_ERROR_WANT_WRITE
-      return Result.Err(io_failure(err))
+      fail io_failure(err)
     end
 
     fd.block(err == SSL_ERROR_WANT_READ)
-    write_loop(ssl, fd, bytes)
+    try write_loop(ssl, fd, bytes)
   end
 
   @extern "C" @link "ssl:BIO_free"

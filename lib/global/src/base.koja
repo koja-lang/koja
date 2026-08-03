@@ -56,12 +56,12 @@ struct Base
   `InvalidLength` for odd-length input and `InvalidCharacter` for
   anything outside `0-9a-fA-F`.
   """
-  fn decode16(text: String) -> Result<Binary, BaseError>
+  fn decode16(text: String) -> Binary ! BaseError
     data = text.to_binary()
     size = data.byte_size()
 
     if size % 2 == 1
-      return Result.Err(BaseError.InvalidLength)
+      fail BaseError.InvalidLength
     end
 
     out: Binary = <<>>
@@ -72,18 +72,18 @@ struct Base
       lo = hex_value(data.at(i + 1).or(0))
 
       if hi < 0
-        return Result.Err(invalid_character(data, i))
+        fail invalid_character(data, i)
       end
 
       if lo < 0
-        return Result.Err(invalid_character(data, i + 1))
+        fail invalid_character(data, i + 1)
       end
 
       out = <<out, hi.bsl(4).bor(lo)>>
       i += 2
     end
 
-    Result.Ok(out)
+    out
   end
 
   @doc """
@@ -98,8 +98,8 @@ struct Base
   Decodes base64 `text` using the standard `+/` alphabet. Padding is
   optional, but `=` may only appear at the end of the input.
   """
-  fn decode64(text: String) -> Result<Binary, BaseError>
-    decode64_with(text, false)
+  fn decode64(text: String) -> Binary ! BaseError
+    try decode64_with(text, false)
   end
 
   @doc """
@@ -114,8 +114,8 @@ struct Base
   Decodes base64 `text` using the url-safe `-_` alphabet. Padding is
   optional, but `=` may only appear at the end of the input.
   """
-  fn url_decode64(text: String) -> Result<Binary, BaseError>
-    decode64_with(text, true)
+  fn url_decode64(text: String) -> Binary ! BaseError
+    try decode64_with(text, true)
   end
 
   priv fn encode64_with(data: Binary, url: Bool) -> String
@@ -156,13 +156,13 @@ struct Base
     text(out)
   end
 
-  priv fn decode64_with(text: String, url: Bool) -> Result<Binary, BaseError>
+  priv fn decode64_with(text: String, url: Bool) -> Binary ! BaseError
     data = text.to_binary()
     size = data.byte_size()
 
     # A remainder of one character can never carry a whole byte.
     if size % 4 == 1
-      return Result.Err(BaseError.InvalidLength)
+      fail BaseError.InvalidLength
     end
 
     out: Binary = <<>>
@@ -170,18 +170,12 @@ struct Base
 
     while i < size
       group = size - i > 4 ? 4 : size - i
-
-      chunk =
-        match decode_quad(data, i, group, i + group == size, url)
-          Result.Ok(c) -> c
-          Result.Err(e) -> return Result.Err(e)
-        end
-
+      chunk = try decode_quad(data, i, group, i + group == size, url)
       out = <<out, chunk>>
       i += 4
     end
 
-    Result.Ok(out)
+    out
   end
 
   # Decodes one group of up to four characters. Padding, explicit `=`
@@ -194,7 +188,7 @@ struct Base
     count: Int,
     last: Bool,
     url: Bool,
-  ) -> Result<Binary, BaseError>
+  ) -> Binary ! BaseError
 
     s0 = sextet_at(data, offset, 0, count, url)
     s1 = sextet_at(data, offset, 1, count, url)
@@ -204,48 +198,48 @@ struct Base
     # The first two sextets carry the first byte's bits, so padding
     # can never appear there.
     if s0 == SEXTET_PAD or s1 == SEXTET_PAD
-      return Result.Err(BaseError.InvalidPadding)
+      fail BaseError.InvalidPadding
     end
 
     if s0 == SEXTET_INVALID
-      return Result.Err(invalid_character(data, offset))
+      fail invalid_character(data, offset)
     end
 
     if s1 == SEXTET_INVALID
-      return Result.Err(invalid_character(data, offset + 1))
+      fail invalid_character(data, offset + 1)
     end
 
     n = s0.bsl(18).bor(s1.bsl(12))
 
     if s2 == SEXTET_PAD
       unless s3 == SEXTET_PAD and last
-        return Result.Err(BaseError.InvalidPadding)
+        fail BaseError.InvalidPadding
       end
 
-      return Result.Ok(<<(n.bsr(16))>>)
+      return <<(n.bsr(16))>>
     end
 
     if s2 == SEXTET_INVALID
-      return Result.Err(invalid_character(data, offset + 2))
+      fail invalid_character(data, offset + 2)
     end
 
     n = n.bor(s2.bsl(6))
 
     if s3 == SEXTET_PAD
       unless last
-        return Result.Err(BaseError.InvalidPadding)
+        fail BaseError.InvalidPadding
       end
 
-      return Result.Ok(<<(n.bsr(16)), (n.bsr(8).band(255))>>)
+      return <<(n.bsr(16)), (n.bsr(8).band(255))>>
     end
 
     if s3 == SEXTET_INVALID
-      return Result.Err(invalid_character(data, offset + 3))
+      fail invalid_character(data, offset + 3)
     end
 
     n = n.bor(s3)
 
-    Result.Ok(<<(n.bsr(16)), (n.bsr(8).band(255)), (n.band(255))>>)
+    <<(n.bsr(16)), (n.bsr(8).band(255)), (n.band(255))>>
   end
 
   # Positions past `count` belong to an unpadded final group and

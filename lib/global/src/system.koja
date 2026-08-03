@@ -8,21 +8,17 @@ struct System
   @doc """
   Returns the current working directory as an absolute path.
   """
-  fn cwd -> Result<String, String>
+  fn cwd -> String ! String
     ptr = koja_cwd()
 
     if ptr.null?()
-      Result.Err("failed to get current directory")
-    else
-      cs = ptr.to_cstring()
-      result = cs.to_string()
-      cs.free()
-
-      match result
-        Result.Err(_) -> Result.Err("current directory is not valid UTF-8")
-        Result.Ok(value) -> Result.Ok(value)
-      end
+      fail "failed to get current directory"
     end
+
+    cs = ptr.to_cstring()
+    result = cs.to_string()
+    cs.free()
+    result rescue _ -> fail "current directory is not valid UTF-8"
   end
 
   @doc """

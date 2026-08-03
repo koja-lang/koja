@@ -44,16 +44,16 @@ struct Certificate
   block. Private keys and other non-certificate input are rejected
   with a matching `PEMError` variant.
   """
-  fn parse(text: String) -> Result<Certificate, PEMError>
+  fn parse(text: String) -> Certificate ! PEMError
     if text.contains?("-----BEGIN CERTIFICATE-----")
-      return Result.Ok(Certificate{pem: text})
+      return Certificate{pem: text}
     end
 
     if private_key_block?(text)
-      return Result.Err(PEMError.CertificateIsPrivateKey)
+      fail PEMError.CertificateIsPrivateKey
     end
 
-    Result.Err(PEMError.NoCertificateBlock)
+    fail PEMError.NoCertificateBlock
   end
 end
 
@@ -73,20 +73,20 @@ struct PrivateKey
   rejected, as are certificates and other non-key input, each with
   a matching `PEMError` variant.
   """
-  fn parse(text: String) -> Result<PrivateKey, PEMError>
+  fn parse(text: String) -> PrivateKey ! PEMError
     if text.contains?("-----BEGIN ENCRYPTED PRIVATE KEY-----")
-      return Result.Err(PEMError.EncryptedKeyUnsupported)
+      fail PEMError.EncryptedKeyUnsupported
     end
 
     if private_key_block?(text)
-      return Result.Ok(PrivateKey{pem: text})
+      return PrivateKey{pem: text}
     end
 
     if text.contains?("-----BEGIN CERTIFICATE-----")
-      return Result.Err(PEMError.PrivateKeyIsCertificate)
+      fail PEMError.PrivateKeyIsCertificate
     end
 
-    Result.Err(PEMError.NoPrivateKeyBlock)
+    fail PEMError.NoPrivateKeyBlock
   end
 end
 

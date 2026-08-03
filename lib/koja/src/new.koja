@@ -7,68 +7,42 @@ struct New
 end
 
 impl Koja.Task for New
-  fn run(args: List<String>) -> Result<(), String>
-    name =
-      match args.get(0)
-        Option.None -> return Result.Err("usage: koja new <name>")
-        Option.Some(value) -> value
-      end
+  fn run(args: List<String>) -> () ! String
+    name = try args.get(0).or_err("usage: koja new <name>")
 
     unless valid_project_name?(name)
-      return Result.Err("project name must be lowercase snake_case (like `my_app`). The code namespace is derived from it (`my_app` -> `MyApp`)")
+      fail "project name must be lowercase snake_case (like `my_app`). The code namespace is derived from it (`my_app` -> `MyApp`)"
     end
 
     if File.exists?(name)
-      return Result.Err("directory '#{name}' already exists")
+      fail "directory '#{name}' already exists"
     end
 
-    match File.mkdir_p("#{name}/src")
-      Result.Err(message) ->
-        return Result.Err("cannot create directory: #{message}")
-      Result.Ok(_) -> ()
-    end
+    File.mkdir_p("#{name}/src")
+      rescue message -> fail "cannot create directory: #{message}"
 
-    match File.mkdir_p("#{name}/test")
-      Result.Err(message) ->
-        return Result.Err("cannot create directory: #{message}")
-      Result.Ok(_) -> ()
-    end
+    File.mkdir_p("#{name}/test")
+      rescue message -> fail "cannot create directory: #{message}"
 
-    match write_scaffold(name)
-      Result.Err(message) -> return Result.Err(message)
-      Result.Ok(_) -> ()
-    end
+    try write_scaffold(name)
 
     IO.puts("created project '#{name}'")
-    Result.Ok(())
   end
 end
 
-priv fn write_scaffold(name: String) -> Result<(), String>
-  match write_file("#{name}/koja.toml", toml_content(name))
-    Result.Err(message) -> return Result.Err(message)
-    Result.Ok(_) -> ()
-  end
-
-  match write_file("#{name}/.gitignore", gitignore_content())
-    Result.Err(message) -> return Result.Err(message)
-    Result.Ok(_) -> ()
-  end
-
-  match write_file("#{name}/src/app.koja", app_content())
-    Result.Err(message) -> return Result.Err(message)
-    Result.Ok(_) -> ()
-  end
-
-  write_file("#{name}/test/app_test.koja", app_test_content())
+priv fn write_scaffold(name: String) -> () ! String
+  try write_file("#{name}/koja.toml", toml_content(name))
+  try write_file("#{name}/.gitignore", gitignore_content())
+  try write_file("#{name}/src/app.koja", app_content())
+  try write_file("#{name}/test/app_test.koja", app_test_content())
 end
 
 # Appends the trailing newline the heredoc closing delimiter strips.
-priv fn write_file(path: String, content: String) -> Result<(), String>
-  match File.write(path, "#{content}\n")
-    Result.Err(message) -> Result.Err("cannot write #{path}: #{message}")
-    Result.Ok(_) -> Result.Ok(())
-  end
+priv fn write_file(path: String, content: String) -> () ! String
+  File.write(path, "#{content}\n")
+    rescue message -> fail "cannot write #{path}: #{message}"
+
+  ()
 end
 
 priv fn valid_project_name?(name: String) -> Bool
@@ -148,8 +122,8 @@ priv fn app_content -> String
   end
 
   impl Process<(), (), ()> for App
-    fn start(config: ()) -> Result<Self, StopReason>
-      Result.Ok(App{})
+    fn start(config: ()) -> Self ! StopReason
+      App{}
     end
 
     fn handle(self, msg: (), from: Option<ReplyTo<()>>) -> Step<Self>

@@ -13,18 +13,18 @@ enum Method
 
   @doc """
   Parses an uppercase HTTP method string into a Method value.
-  Returns an error for unrecognized methods.
+  Fails for unrecognized methods.
   """
-  fn from_string(s: String) -> Result<Method, String>
+  fn from_string(s: String) -> Method ! String
     match s
-      "DELETE" -> Result.Ok(Method.Delete)
-      "GET" -> Result.Ok(Method.Get)
-      "HEAD" -> Result.Ok(Method.Head)
-      "OPTIONS" -> Result.Ok(Method.Options)
-      "PATCH" -> Result.Ok(Method.Patch)
-      "POST" -> Result.Ok(Method.Post)
-      "PUT" -> Result.Ok(Method.Put)
-      _ -> Result.Err("unknown HTTP method: " <> s)
+      "DELETE" -> Method.Delete
+      "GET" -> Method.Get
+      "HEAD" -> Method.Head
+      "OPTIONS" -> Method.Options
+      "PATCH" -> Method.Patch
+      "POST" -> Method.Post
+      "PUT" -> Method.Put
+      _ -> fail "unknown HTTP method: #{s}"
     end
   end
 
