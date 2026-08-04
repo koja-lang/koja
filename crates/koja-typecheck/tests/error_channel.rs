@@ -25,7 +25,7 @@ mod common;
 use common::{
     PACKAGE, assert_script_fails_with, function_body, function_signature, global_named, int_type,
     package_leaf, trailing_resolution, typecheck_script as typecheck,
-    typecheck_script_fail as typecheck_fail,
+    typecheck_script_fail as typecheck_fail, unit_type,
 };
 
 /// Typecheck `source` (dedented) expecting failure, and assert one
@@ -200,6 +200,38 @@ fn unit_success_appends_ok_unit_on_fall_off() {
             value: Literal::Unit
         }
     ));
+}
+
+#[test]
+fn bare_error_signature_lifts_to_result_of_unit() {
+    let source = "
+        enum MyError
+          Nope
+        end
+
+        fn note(flag: Bool) ! MyError
+          unless flag
+            fail MyError.Nope
+          end
+        end
+
+          note(true)
+        ";
+    let checked = typecheck(&dedent(source));
+    let signature = function_signature(&checked, PACKAGE, &["note"]);
+    assert!(signature.declared_fallible);
+    let expected = global_named(
+        &checked,
+        "Result",
+        vec![unit_type(&checked), package_leaf(&checked, "MyError")],
+    );
+    assert_eq!(signature.return_type, expected);
+    // The body can fall off the end, so a `Result.Ok(())` appends.
+    let body = function_body(&checked, "note");
+    let Some(Statement::Expr(appended)) = body.last() else {
+        panic!("expected a trailing expression");
+    };
+    assert_ok_construction(appended);
 }
 
 #[test]

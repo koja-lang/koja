@@ -667,7 +667,7 @@ struct URI
     start: Int,
     stop: Int,
     allowed: fn (Int) -> Bool,
-  ) -> () ! URIError
+  ) ! URIError
 
     i = start
 
@@ -702,7 +702,7 @@ struct URI
   # ':' in its first segment, which would make it indistinguishable
   # from a scheme (RFC 3986 section 4.2).
   priv fn validate_path(bytes: Binary, start: Int, stop: Int, relative: Bool)
-    -> () ! URIError
+    ! URIError
 
     if relative
       # The first segment ends at the first '/'.

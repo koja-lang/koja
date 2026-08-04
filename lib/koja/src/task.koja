@@ -19,7 +19,7 @@ struct Migrate
 end
 
 impl Koja.Task for Migrate
-  fn run(args: List<String>) -> () ! String
+  fn run(args: List<String>) ! String
     IO.puts("running migrations")
   end
 end
@@ -32,5 +32,5 @@ protocol Task
   @doc """
   Executes the task with the command-line arguments after `--`.
   """
-  fn run(args: List<String>) -> () ! String
+  fn run(args: List<String>) ! String
 end

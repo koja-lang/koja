@@ -7,7 +7,7 @@ struct New
 end
 
 impl Koja.Task for New
-  fn run(args: List<String>) -> () ! String
+  fn run(args: List<String>) ! String
     name = try args.get(0).or_err("usage: koja new <name>")
 
     unless valid_project_name?(name)
@@ -30,7 +30,7 @@ impl Koja.Task for New
   end
 end
 
-priv fn write_scaffold(name: String) -> () ! String
+priv fn write_scaffold(name: String) ! String
   try write_file("#{name}/koja.toml", toml_content(name))
   try write_file("#{name}/.gitignore", gitignore_content())
   try write_file("#{name}/src/app.koja", app_content())
@@ -38,7 +38,7 @@ priv fn write_scaffold(name: String) -> () ! String
 end
 
 # Appends the trailing newline the heredoc closing delimiter strips.
-priv fn write_file(path: String, content: String) -> () ! String
+priv fn write_file(path: String, content: String) ! String
   File.write(path, "#{content}\n")
     rescue message -> fail "cannot write #{path}: #{message}"
 

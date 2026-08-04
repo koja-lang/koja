@@ -138,8 +138,10 @@ function_decl = { annotation } , [ "priv" ] , "fn" , IDENT , [ type_params ] ,
                 (* Body is optional: `@extern "C"` declarations omit the body and `end`. *)
 
 (* `-> T ! E` is notation for `-> Result<T, E>`. The error type may be a
-   union. See section 7 for `try`, `fail`, and `rescue`. *)
-return_signature = "->" , type_expr , [ "!" , type_expr ] ;
+   union. A bare `! E` declares a unit success, so `fn run(args) ! String`
+   means `-> () ! String`. See section 7 for `try`, `fail`, and `rescue`. *)
+return_signature = ( "->" , type_expr , [ "!" , type_expr ] )
+                 | ( "!" , type_expr ) ;
 
 param_list = param , { "," , param } ;
 

@@ -118,6 +118,22 @@ fn protocol_method_with_error_type() {
 }
 
 #[test]
+fn protocol_method_with_bare_error_type() {
+    let p = first_protocol(
+        "
+        protocol Store
+          fn flush(self) ! StoreError
+        end
+        ",
+    );
+    let method = &p.methods[0];
+    assert!(method.return_type.is_none());
+    assert!(
+        matches!(method.error_type, Some(TypeExpr::Named { ref path, .. }) if path == &["StoreError"])
+    );
+}
+
+#[test]
 fn protocol_method_with_annotation() {
     let p = first_protocol(
         "

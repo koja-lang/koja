@@ -19,7 +19,8 @@ fn quarter(n: Int) -> Int ! MyError
   try half(h)
 end
 
-fn log(n: Int) -> () ! MyError
+# A bare `! E` declares a unit success.
+fn log(n: Int) ! MyError
   q = try quarter(n)
   IO.puts("quarter of #{n} is #{q}")
 end

@@ -1036,7 +1036,15 @@ end
 outcome = parse_port("8080")   # outcome: Result<Int, ParseError>
 ```
 
-Inside a `!`-spelled function, success values are unwrapped: `return value` and the trailing expression check against `T` and wrap in `Result.Ok` automatically. A `-> () ! E` function that falls off the end returns `Result.Ok(())`. Writing `Result.Ok(...)` by hand in return position is a compile error pointing at the auto-wrap rule.
+Inside a `!`-spelled function, success values are unwrapped: `return value` and the trailing expression check against `T` and wrap in `Result.Ok` automatically. Writing `Result.Ok(...)` by hand in return position is a compile error pointing at the auto-wrap rule.
+
+A fallible function with no meaningful return value omits the return type, just like its infallible counterpart. A bare `! E` declares a unit success (`Result<(), E>`), and the body returns `Result.Ok(())` when it falls off the end:
+
+```koja
+fn log_line(message: String) ! WriteError
+  try append(message)
+end
+```
 
 The `!` spelling is opt-in per declaration. A function declared `-> Result<T, E>` keeps its explicit `Result.Ok` / `Result.Err` returns and compiles exactly as before.
 
@@ -2542,7 +2550,7 @@ struct Migrate
 end
 
 impl Koja.Task for Migrate
-  fn run(args: List<String>) -> () ! String
+  fn run(args: List<String>) ! String
     IO.puts("running migrations")
   end
 end
