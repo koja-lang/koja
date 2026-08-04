@@ -61,12 +61,11 @@ struct Parser
     Response{body: body, headers: headers, status: status, version: version}
   end
 
+  # Parses the header block and message body from a parser positioned at
+  # the start of the headers (just past the request/status line). Returns
+  # the parsed headers paired with the body string. Shared by
+  # `parse_request` and `parse_response`.
   priv fn parse_headers_and_body(self) -> (Headers, String) ! Error
-    # Parses the header block and message body from a parser positioned at
-    # the start of the headers (just past the request/status line). Returns
-    # the parsed headers paired with the body string. Shared by
-    # `parse_request` and `parse_response`.
-
     (headers, header_pos) = try self.parse_headers()
     after_headers = Parser{input: self.input, pos: header_pos}
     body = try after_headers.parse_body(headers)
