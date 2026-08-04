@@ -6,14 +6,23 @@ of O(N*k) for k fragments totalling N characters.
 struct StringBuilder
   parts: List<String>
 
+  @doc """
+  Creates an empty builder.
+  """
   fn new -> StringBuilder
     StringBuilder{parts: List.new()}
   end
 
+  @doc """
+  Appends one fragment and returns the updated builder.
+  """
   fn add(self, s: String) -> StringBuilder
     StringBuilder{parts: self.parts.append(s)}
   end
 
+  @doc """
+  Joins all fragments into the final string.
+  """
   fn build(self) -> String
     StringBuilder.merge_join(self.parts, 0, self.parts.length())
   end

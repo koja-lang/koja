@@ -1,0 +1,10 @@
+{% if !ctx.toc.is_empty() %}
+<aside class="toc" aria-label="On this page">
+  <p class="toc-title">On this page</p>
+  <ol>
+    {% for entry in ctx.toc %}
+    <li><a{% if entry.mono %} class="mono"{% endif %} href="#{{ entry.href }}">{{ entry.label }}</a></li>
+    {% endfor %}
+  </ol>
+</aside>
+{% endif %}

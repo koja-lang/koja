@@ -250,12 +250,26 @@ fn extract_doc_project(inputs: Vec<DocInput>, project_package: &str) -> koja_doc
 
 /// Renders the project as the subdir-per-package HTML tree.
 /// Always emits `index.html` (package roster), `style.css`,
-/// `search.js`, and `search-index.json` at the root, then one
-/// subdirectory per documented package containing its
-/// `index.html` plus a page per item.
+/// `doc.js`, `search.js`, `search-index.json`, and the
+/// self-hosted `fonts/` at the root, then one subdirectory per
+/// documented package containing its `index.html` plus a page
+/// per item.
 fn write_doc_files(project: &koja_doc::DocProject, out_path: &Path) {
     write_doc_file(&out_path.join("style.css"), koja_doc::CSS);
+    write_doc_file(&out_path.join("doc.js"), koja_doc::DOC_JS);
     write_doc_file(&out_path.join("search.js"), koja_doc::SEARCH_JS);
+
+    let fonts_dir = out_path.join("fonts");
+    if let Err(e) = fs::create_dir_all(&fonts_dir) {
+        eprintln!(
+            "error creating fonts directory {}: {e}",
+            fonts_dir.display()
+        );
+        process::exit(1);
+    }
+    for (name, bytes) in koja_doc::FONTS {
+        write_doc_bytes(&fonts_dir.join(name), bytes);
+    }
     write_doc_file(
         &out_path.join("search-index.json"),
         &koja_doc::search_index_json(project),
@@ -305,6 +319,10 @@ fn write_doc_files(project: &koja_doc::DocProject, out_path: &Path) {
 }
 
 fn write_doc_file(path: &Path, content: &str) {
+    write_doc_bytes(path, content.as_bytes());
+}
+
+fn write_doc_bytes(path: &Path, content: &[u8]) {
     if let Err(e) = fs::write(path, content) {
         eprintln!("error writing {}: {e}", path.display());
         process::exit(1);

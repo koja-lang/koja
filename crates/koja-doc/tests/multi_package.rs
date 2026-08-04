@@ -147,9 +147,9 @@ fn root_index_renders_package_roster() {
     assert!(html.contains("Crypto/index.html"));
     assert!(html.contains("Global/index.html"));
     assert!(html.contains("Helper/index.html"));
-    assert!(html.contains("chip-project"));
-    assert!(html.contains("chip-stdlib"));
-    assert!(html.contains("chip-dependency"));
+    assert!(html.contains("<span class=\"item-kind\">project</span>"));
+    assert!(html.contains("<span class=\"item-kind\">stdlib</span>"));
+    assert!(html.contains("<span class=\"item-kind\">dependency</span>"));
     assert!(html.contains("id=\"doc-search\""));
     assert!(html.contains("data-root-prefix=\"\""));
 }
@@ -163,8 +163,9 @@ fn package_index_links_back_to_root_assets() {
     assert!(html.contains("data-root-prefix=\"../\""));
     assert!(html.contains("href=\"../style.css\""));
     assert!(html.contains("src=\"../search.js\""));
+    assert!(html.contains("src=\"../doc.js\""));
     assert!(html.contains("href=\"SHA256.html\""));
-    assert!(html.contains("class=\"sidebar-package\""));
+    assert!(html.contains("class=\"package-select\""));
     assert!(html.contains("value=\"../MyApp/index.html\""));
 }
 
@@ -328,4 +329,47 @@ fn struct_page_links_methods_and_other_packages() {
     assert!(html.contains("href=\"#fn-digest\""));
     assert!(html.contains("value=\"../MyApp/index.html\""));
     assert!(html.contains("data-root-prefix=\"../\""));
+    // Signatures render pre-highlighted.
+    assert!(html.contains("<span class=\"kw\">fn</span>"));
+    // Even a small page renders its "on this page" TOC.
+    assert!(html.contains("On this page"));
+}
+
+#[test]
+fn big_struct_page_gets_on_this_page_toc() {
+    let mut project = DocProject::new("Big");
+    ingest(
+        &mut project,
+        "Big",
+        PackageKind::Project,
+        "
+        @doc \"Connection pool.\"
+        struct Pool
+          size: Int
+
+          fn checkout(self, timeout: Int) -> Int ! String
+            self.size
+          end
+
+          fn release(self) -> Int
+            self.size
+          end
+
+          fn stats(self) -> Int
+            self.size
+          end
+        end
+        ",
+    );
+    finalize_project(&mut project);
+
+    let big = project.find_package("Big").expect("Big present");
+    let pool = big.structs.iter().find(|s| s.name == "Pool").expect("Pool");
+    let html = render_struct(pool, big, &project);
+
+    assert!(html.contains("On this page"));
+    assert!(html.contains("href=\"#fields\""));
+    assert!(html.contains("href=\"#fn-checkout\""));
+    // The fallible spelling survives into the rendered signature.
+    assert!(html.contains("! <span class=\"ty\">String</span>"));
 }

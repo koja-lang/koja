@@ -71,6 +71,8 @@
     if (currentHits.length === 0) {
       resultsEl.innerHTML = "";
       resultsEl.classList.remove("open");
+      input.setAttribute("aria-expanded", "false");
+      input.removeAttribute("aria-activedescendant");
       return;
     }
     var html = "";
@@ -80,24 +82,32 @@
       html +=
         '<a class="' +
         cls +
+        '" id="search-option-' +
+        i +
+        '" role="option" aria-selected="' +
+        (i === selected) +
         '" href="' +
         rootPrefix +
         escapeHtml(hit.url) +
         '">' +
-        '<span class="type-chip chip-' +
-        escapeHtml(hit.kind) +
-        '">' +
-        escapeHtml(hit.kind) +
-        "</span>" +
         '<span class="search-result-name">' +
         escapeHtml(hit.pkg) +
         "." +
         escapeHtml(hit.name) +
         "</span>" +
+        '<span class="search-result-kind">' +
+        escapeHtml(hit.kind) +
+        "</span>" +
         "</a>";
     }
     resultsEl.innerHTML = html;
     resultsEl.classList.add("open");
+    input.setAttribute("aria-expanded", "true");
+    if (selected >= 0) {
+      input.setAttribute("aria-activedescendant", "search-option-" + selected);
+    } else {
+      input.removeAttribute("aria-activedescendant");
+    }
   }
 
   function escapeHtml(s) {

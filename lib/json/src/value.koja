@@ -1,4 +1,6 @@
-@doc "Core JSON value type and convenience constructors."
+@doc """
+Core JSON value type and convenience constructors.
+"""
 enum Value
   Null
   Bool(Bool)
@@ -8,34 +10,59 @@ enum Value
   Array(List<Value>)
   Object(List<(String, Value)>)
 
+  @doc """
+  The JSON `null` value.
+  """
   fn null -> Value
     Value.Null
   end
 
+  @doc """
+  Wraps a `Bool` as a JSON value.
+  """
   fn bool(v: Bool) -> Value
     Value.Bool(v)
   end
 
+  @doc """
+  Wraps an `Int` as a JSON value.
+  """
   fn int(n: Int) -> Value
     Value.Int(n)
   end
 
+  @doc """
+  Wraps a `Float` as a JSON value.
+  """
   fn float(f: Float) -> Value
     Value.Float(f)
   end
 
+  @doc """
+  Wraps a `String` as a JSON value.
+  """
   fn string(s: String) -> Value
     Value.String(s)
   end
 
+  @doc """
+  Wraps a list of values as a JSON array.
+  """
   fn array(items: List<Value>) -> Value
     Value.Array(items)
   end
 
+  @doc """
+  Wraps a list of key-value entries as a JSON object. Entries keep
+  their list order when encoded.
+  """
   fn object(entries: List<(String, Value)>) -> Value
     Value.Object(entries)
   end
 
+  @doc """
+  Builds one object entry, for use with `object`.
+  """
   fn entry(key: String, value: Value) -> (String, Value)
     (key, value)
   end

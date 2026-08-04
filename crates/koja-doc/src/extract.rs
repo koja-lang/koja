@@ -74,10 +74,12 @@ pub struct DocField {
     pub type_name: String,
 }
 
-/// Documentation for a function.
+/// Documentation for a function. `error_type` is `Some` for the
+/// fallible spelling `-> T ! E`.
 #[derive(Debug)]
 pub struct DocFunction {
     pub doc: Option<String>,
+    pub error_type: Option<String>,
     pub name: String,
     pub params: Vec<DocParam>,
     pub return_type: Option<String>,
@@ -433,6 +435,7 @@ fn extract_function(f: &Function) -> Option<DocFunction> {
 
     Some(DocFunction {
         doc: annotation_string(&f.annotations),
+        error_type: f.error_type.as_ref().map(type_expr_to_string),
         name: f.name.clone(),
         params,
         return_type: f.return_type.as_ref().map(type_expr_to_string),
@@ -486,6 +489,7 @@ fn extract_protocol_method(m: &ProtocolMethod) -> Option<DocFunction> {
 
     Some(DocFunction {
         doc: annotation_string(&m.annotations),
+        error_type: m.error_type.as_ref().map(type_expr_to_string),
         name: m.name.clone(),
         params,
         return_type: m.return_type.as_ref().map(type_expr_to_string),

@@ -1,7 +1,20 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Source+Code+Pro:wght@400;600&family=Source+Sans+3:wght@400;600;700&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="{{ root_prefix }}style.css">
-<script defer src="{{ root_prefix }}search.js"></script>
+<meta name="color-scheme" content="light dark">
+<link rel="stylesheet" href="{{ ctx.root_prefix }}style.css">
+<script>
+  // Resolve theme before first paint to avoid a flash of the wrong mode.
+  (function () {
+    var systemDark = matchMedia("(prefers-color-scheme: dark)");
+    function apply() {
+      document.documentElement.dataset.theme =
+        localStorage.getItem("theme") || (systemDark.matches ? "dark" : "light");
+    }
+    apply();
+    systemDark.addEventListener("change", function () {
+      if (!localStorage.getItem("theme")) apply();
+    });
+  })();
+</script>
+<script defer src="{{ ctx.root_prefix }}doc.js"></script>
+<script defer src="{{ ctx.root_prefix }}search.js"></script>

@@ -6,13 +6,15 @@
 </head>
 <body>
 
-{% include "theme_toggle.html" %}
+{% include "header.html" %}
+
+<div class="frame">
 {% include "sidebar.html" %}
 
-<main class="content">
+<main class="content" id="content">
   <div class="page-header">
-    <span class="type-chip chip-enum">enum</span>
     <h1>{{ e.name }}</h1>
+    <span class="kind-chip">enum</span>
   </div>
 
   {% if let Some(doc) = e.doc %}
@@ -20,7 +22,7 @@
   {% endif %}
 
   {% if !e.variants.is_empty() %}
-  <h2 class="section-heading">Variants</h2>
+  <h2 class="section-heading" id="variants">Variants</h2>
   <ul class="fields-list">
     {% for v in e.variants %}
     <li><span class="field-name">{{ v }}</span></li>
@@ -29,7 +31,7 @@
   {% endif %}
 
   {% if !e.functions.is_empty() %}
-  <h2 class="section-heading">Functions</h2>
+  <h2 class="section-heading" id="functions">Functions</h2>
   <div class="summary">
     {% for f in e.functions %}
     <div class="summary-row">
@@ -43,6 +45,9 @@
   {% endfor %}
   {% endif %}
 </main>
+
+{% include "toc.html" %}
+</div>
 
 </body>
 </html>

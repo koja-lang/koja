@@ -12,21 +12,31 @@ emits a `doc/<Pkg>/<Item>.html` tree alongside a root package roster
   tier (`PackageKind::Project / Dependency / Stdlib`) so the driver can mix
   project, dep, and stdlib sources into one project.
 - `render.rs`: Askama templates for the root index, per-package index, and
-  per-item pages. Each render call receives the sidebar context
-  (`packages`, `sidebar_items`, `current_package`, `active_item`,
-  `root_prefix`).
+  per-item pages. Each render call builds a `PageContext` (package roster,
+  grouped rail items, conditional "on this page" TOC, `root_prefix`).
+- `highlight.rs`: hand-rolled Koja highlighter for signatures and
+  doc-comment code blocks. Token classes mirror the website's Rouge lexer
+  (`kojalang.org/_plugins/koja_lexer.rb`).
 - `search.rs`: emits `search-index.json`, one entry per item plus one per
   method (deep-linked to `#fn-<name>`). Doubles as the AI-friendly bundle.
-- `style.rs`: embeds `templates/style.css` (CSS) and `assets/search.js`
-  (the hand-rolled fuzzy search bundle).
+- `style.rs`: embeds `templates/style.css`, `assets/doc.js` (theme toggle,
+  mobile rail, scroll spy), `assets/search.js` (fuzzy search), and the
+  self-hosted woff2 fonts under `assets/fonts/`.
 - `templates/`: `index.html` (root roster), `package_index.html`,
-  `item_*.html`, `sidebar.html` (search + dropdown + items), `head.html`,
-  `function_detail.html`, `theme_toggle.html`.
+  `item_*.html`, `header.html` (brand + package dropdown + search + theme
+  toggle), `sidebar.html` (left rail), `toc.html` (right column),
+  `head.html`, `function_detail.html`.
 - `assets/search.js`: self-contained fuzzy search reading
   `search-index.json` from the doc root. `/` focuses, ↑↓ + Enter navigate,
   Esc dismisses.
 - `tests/multi_package.rs`: end-to-end coverage of the
   extract → finalize → render → search-index pipeline.
+
+The page design mirrors kojalang.org: same fonts (Outfit / Source Sans 3 /
+Source Code Pro), teal accents, and Ayu Mirage code panels that stay dark
+in both themes. Layout is a centered three-column frame (left rail, ~52rem
+article, right "on this page" TOC) that is identical on every page. Pages
+with no TOC entries leave the third column blank.
 
 ## Driver integration
 

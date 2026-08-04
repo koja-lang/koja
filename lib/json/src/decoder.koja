@@ -32,6 +32,14 @@ struct Decoder
   input: Binary
   size: Int
 
+  @doc """
+  Parse a JSON string into a `Value` tree.
+
+  Numbers with a decimal point or exponent decode as `Value.Float`,
+  all others as `Value.Int`. Object entries keep their source order.
+  Fails with a message that includes the byte offset of the error,
+  such as `expected ':' after object key at position 12`.
+  """
   fn decode(input: String) -> Value ! String
     bytes = input.to_binary()
     d = Decoder{input: bytes, size: bytes.byte_size()}
@@ -46,7 +54,7 @@ struct Decoder
     value
   end
 
-  fn parse_value_at(self, pos: Int) -> (Value, Int) ! String
+  priv fn parse_value_at(self, pos: Int) -> (Value, Int) ! String
     if pos >= self.size
       fail "unexpected end of input at position #{pos}"
     end
@@ -65,7 +73,7 @@ struct Decoder
     end
   end
 
-  fn parse_null(self, pos: Int) -> (Value, Int) ! String
+  priv fn parse_null(self, pos: Int) -> (Value, Int) ! String
     if pos + 4 > self.size or self.text(pos, pos + 3) != "null"
       fail "expected 'null' at position #{pos}"
     end
@@ -73,7 +81,7 @@ struct Decoder
     (Value.Null, pos + 4)
   end
 
-  fn parse_bool(self, pos: Int) -> (Value, Int) ! String
+  priv fn parse_bool(self, pos: Int) -> (Value, Int) ! String
     if pos + 4 <= self.size and self.text(pos, pos + 3) == "true"
       return (Value.Bool(true), pos + 4)
     end
@@ -85,7 +93,7 @@ struct Decoder
     fail "expected 'true' or 'false' at position #{pos}"
   end
 
-  fn parse_number(self, pos: Int) -> (Value, Int) ! String
+  priv fn parse_number(self, pos: Int) -> (Value, Int) ! String
     i = pos
 
     if self.peek?(i, BYTE_MINUS)
@@ -140,7 +148,7 @@ struct Decoder
     (Value.Int(n), i)
   end
 
-  fn consume_digits(self, start: Int) -> Int
+  priv fn consume_digits(self, start: Int) -> Int
     i = start
 
     while i < self.size
@@ -154,12 +162,12 @@ struct Decoder
     i
   end
 
-  fn parse_string(self, pos: Int) -> (Value, Int) ! String
+  priv fn parse_string(self, pos: Int) -> (Value, Int) ! String
     (string, next_pos) = try self.parse_raw_string(pos)
     (Value.String(string), next_pos)
   end
 
-  fn parse_raw_string(self, pos: Int) -> (String, Int) ! String
+  priv fn parse_raw_string(self, pos: Int) -> (String, Int) ! String
     if not self.peek?(pos, BYTE_QUOTE)
       fail "expected '\"' at position #{pos}"
     end
@@ -167,11 +175,10 @@ struct Decoder
     try self.scan_string(pos + 1, pos)
   end
 
+  # Fast path for string contents. Scan for the closing quote and cut
+  # the value out as one slice. Falls over to `scan_escaped` at the
+  # first backslash.
   priv fn scan_string(self, start: Int, open: Int) -> (String, Int) ! String
-    # Fast path for string contents. Scan for the closing quote and cut
-    # the value out as one slice. Falls over to `scan_escaped` at the
-    # first backslash.
-
     i = start
 
     while i < self.size
@@ -191,6 +198,9 @@ struct Decoder
     fail "unterminated string starting at position #{open}"
   end
 
+  # Slow path for strings containing escapes. Accumulate the slices
+  # between escapes plus each unescaped character. `start` tracks the
+  # beginning of the pending unflushed segment.
   priv fn scan_escaped(
     self,
     seg_start: Int,
@@ -198,10 +208,6 @@ struct Decoder
     open: Int,
     sb: StringBuilder,
   ) -> (String, Int) ! String
-
-    # Slow path for strings containing escapes. Accumulate the slices
-    # between escapes plus each unescaped character. `start` tracks the
-    # beginning of the pending unflushed segment.
 
     start = seg_start
     i = pos
@@ -247,7 +253,7 @@ struct Decoder
     fail "unterminated string starting at position #{open}"
   end
 
-  fn parse_array(self, pos: Int) -> (Value, Int) ! String
+  priv fn parse_array(self, pos: Int) -> (Value, Int) ! String
     i = self.skip_ws(pos + 1)
     items: List<Value> = List.new()
 
@@ -258,8 +264,14 @@ struct Decoder
     try self.parse_array_elements(items, i, pos)
   end
 
-  fn parse_array_elements(self, items: List<Value>, pos: Int, arr_start: Int)
-    -> (Value, Int) ! String
+  # One element per call. Recurses past each ',' with the elements
+  # parsed so far and returns at ']'.
+  priv fn parse_array_elements(
+    self,
+    items: List<Value>,
+    pos: Int,
+    arr_start: Int,
+  ) -> (Value, Int) ! String
 
     i = self.skip_ws(pos)
     (value, next_pos) = try self.parse_value_at(i)
@@ -283,7 +295,7 @@ struct Decoder
     try self.parse_array_elements(items, i + 1, arr_start)
   end
 
-  fn parse_object(self, pos: Int) -> (Value, Int) ! String
+  priv fn parse_object(self, pos: Int) -> (Value, Int) ! String
     i = self.skip_ws(pos + 1)
     entries: List<(String, Value)> = List.new()
 
@@ -294,7 +306,8 @@ struct Decoder
     try self.parse_object_entries(entries, i, pos)
   end
 
-  fn parse_object_entries(
+  # One entry per call, same recursion shape as parse_array_elements.
+  priv fn parse_object_entries(
     self,
     entries: List<(String, Value)>,
     pos: Int,
@@ -335,9 +348,8 @@ struct Decoder
     try self.parse_object_entries(entries, i + 1, obj_start)
   end
 
+  # The byte at `pos`. Callers guarantee `pos` is in bounds.
   priv fn byte(self, pos: Int) -> Int
-    # The byte at `pos`. Callers guarantee `pos` is in bounds.
-
     self.input.at(pos).unwrap()
   end
 
@@ -371,11 +383,10 @@ struct Decoder
     i
   end
 
+  # The inclusive byte range `[start, stop]` as a String. The input
+  # bytes come from a String and every cut point is an ASCII byte, so
+  # the slice is always valid UTF-8.
   priv fn text(self, start: Int, stop: Int) -> String
-    # The inclusive byte range `[start, stop]` as a String. The input
-    # bytes come from a String and every cut point is an ASCII byte, so
-    # the slice is always valid UTF-8.
-
     match self.input.slice(Range{start: start, stop: stop}).to_string()
       Result.Ok(s) -> s
       Result.Err(_) -> ""

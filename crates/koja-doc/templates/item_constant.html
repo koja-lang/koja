@@ -6,19 +6,22 @@
 </head>
 <body>
 
-{% include "theme_toggle.html" %}
+{% include "header.html" %}
+
+<div class="frame">
 {% include "sidebar.html" %}
 
-<main class="content">
+<main class="content" id="content">
   <div class="page-header">
-    <span class="type-chip chip-const">const</span>
     <h1>{{ c.name }}</h1>
+    <span class="kind-chip">const</span>
   </div>
 
   {% if let Some(doc) = c.doc %}
   <div class="detail-doc">{{ doc|md }}</div>
   {% endif %}
 </main>
+</div>
 
 </body>
 </html>
