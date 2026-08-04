@@ -19,6 +19,7 @@ mod highlight;
 mod render;
 mod search;
 mod style;
+pub mod terminal;
 
 pub use extract::{
     DocConstant, DocEnum, DocFunction, DocItem, DocPackage, DocProject, DocProtocol, DocStruct,

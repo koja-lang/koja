@@ -12,6 +12,7 @@ use koja_ast::ast::{
     AnnotationValue, EnumDecl, ExtendBlock, File, Function, ImplMember, Item, Param, ProtocolDecl,
     ProtocolMethod, StructDecl, TypeExpr, Visibility,
 };
+use koja_ast::util::dedent;
 
 /// Where a [`DocPackage`] came from. Drives the cross-package sort
 /// order (project -> dependency -> stdlib, alphabetical within tier)
@@ -355,12 +356,14 @@ fn finalize_package(pkg: &mut DocPackage) {
     pkg.items.sort_by(|a, b| a.name.cmp(&b.name));
 }
 
+/// Read the `@doc` string, dedented so the declaration's source
+/// indentation doesn't leak into markdown or terminal rendering.
 fn annotation_string(annotations: &[koja_ast::ast::Annotation]) -> Option<String> {
     annotations
         .iter()
         .find(|a| a.name == "doc")
         .and_then(|a| match &a.value {
-            Some(AnnotationValue::String(s)) => Some(s.clone()),
+            Some(AnnotationValue::String(s)) => Some(dedent(s).trim().to_string()),
             _ => None,
         })
 }

@@ -36,50 +36,91 @@ pub fn highlight_koja(code: &str) -> String {
     out
 }
 
+/// One styled run in a rendered signature. `Plain` runs carry no
+/// highlight class.
+enum SignatureToken {
+    Function,
+    Keyword,
+    Plain,
+    Type,
+}
+
+impl SignatureToken {
+    fn class(&self) -> Option<&'static str> {
+        match self {
+            SignatureToken::Function => Some("fn"),
+            SignatureToken::Keyword => Some("kw"),
+            SignatureToken::Plain => None,
+            SignatureToken::Type => Some("ty"),
+        }
+    }
+}
+
 impl DocFunction {
+    /// Break this signature into styled runs, the shared source for
+    /// both the HTML and plain-text renderings.
+    fn signature_segments(&self) -> Vec<(SignatureToken, String)> {
+        use SignatureToken::{Function, Keyword, Plain, Type};
+
+        let mut segments = vec![
+            (Keyword, "fn".to_string()),
+            (Plain, " ".to_string()),
+            (Function, self.name.clone()),
+        ];
+
+        if !self.type_params.is_empty() {
+            segments.push((Plain, "<".to_string()));
+            segments.push((Type, self.type_params.join(", ")));
+            segments.push((Plain, ">".to_string()));
+        }
+
+        segments.push((Plain, "(".to_string()));
+        for (idx, p) in self.params.iter().enumerate() {
+            if idx > 0 {
+                segments.push((Plain, ", ".to_string()));
+            }
+            if p.name == "self" {
+                segments.push((Keyword, "self".to_string()));
+                continue;
+            }
+            segments.push((Plain, p.name.clone()));
+            if !p.type_name.is_empty() {
+                segments.push((Plain, ": ".to_string()));
+                segments.push((Type, p.type_name.clone()));
+            }
+        }
+        segments.push((Plain, ")".to_string()));
+
+        if let Some(ret) = &self.return_type {
+            segments.push((Plain, " -> ".to_string()));
+            segments.push((Type, ret.clone()));
+        }
+        if let Some(err) = &self.error_type {
+            segments.push((Plain, " ! ".to_string()));
+            segments.push((Type, err.clone()));
+        }
+        segments
+    }
+
     /// Render this signature as highlighted HTML for the docs'
     /// code panels. Called from the `function_detail` template.
     pub fn signature_html(&self) -> String {
         let mut out = String::new();
-        out.push_str("<span class=\"kw\">fn</span> <span class=\"fn\">");
-        push_escaped(&mut out, &self.name);
-        out.push_str("</span>");
-
-        if !self.type_params.is_empty() {
-            out.push_str("&lt;<span class=\"ty\">");
-            push_escaped(&mut out, &self.type_params.join(", "));
-            out.push_str("</span>&gt;");
-        }
-
-        out.push('(');
-        for (idx, p) in self.params.iter().enumerate() {
-            if idx > 0 {
-                out.push_str(", ");
+        for (token, text) in self.signature_segments() {
+            match token.class() {
+                Some(class) => span(&mut out, class, &text),
+                None => push_escaped(&mut out, &text),
             }
-            if p.name == "self" {
-                out.push_str("<span class=\"kw\">self</span>");
-                continue;
-            }
-            push_escaped(&mut out, &p.name);
-            if !p.type_name.is_empty() {
-                out.push_str(": <span class=\"ty\">");
-                push_escaped(&mut out, &p.type_name);
-                out.push_str("</span>");
-            }
-        }
-        out.push(')');
-
-        if let Some(ret) = &self.return_type {
-            out.push_str(" -&gt; <span class=\"ty\">");
-            push_escaped(&mut out, ret);
-            out.push_str("</span>");
-        }
-        if let Some(err) = &self.error_type {
-            out.push_str(" ! <span class=\"ty\">");
-            push_escaped(&mut out, err);
-            out.push_str("</span>");
         }
         out
+    }
+
+    /// Render this signature as plain text for terminal output.
+    pub fn signature_text(&self) -> String {
+        self.signature_segments()
+            .into_iter()
+            .map(|(_, text)| text)
+            .collect()
     }
 }
 
@@ -244,9 +285,8 @@ mod tests {
         assert!(html.contains("&gt;"));
     }
 
-    #[test]
-    fn signature_renders_fallible_generic_function() {
-        let f = DocFunction {
+    fn checkout_function() -> DocFunction {
+        DocFunction {
             doc: None,
             error_type: Some("PoolError".to_string()),
             name: "checkout".to_string(),
@@ -262,13 +302,25 @@ mod tests {
             ],
             return_type: Some("Conn".to_string()),
             type_params: vec![],
-        };
-        let html = f.signature_html();
+        }
+    }
+
+    #[test]
+    fn signature_renders_fallible_generic_function() {
+        let html = checkout_function().signature_html();
         assert_eq!(
             html,
             "<span class=\"kw\">fn</span> <span class=\"fn\">checkout</span>\
              (<span class=\"kw\">self</span>, timeout: <span class=\"ty\">Int32</span>) \
              -&gt; <span class=\"ty\">Conn</span> ! <span class=\"ty\">PoolError</span>"
+        );
+    }
+
+    #[test]
+    fn signature_text_renders_plain_form() {
+        assert_eq!(
+            checkout_function().signature_text(),
+            "fn checkout(self, timeout: Int32) -> Conn ! PoolError"
         );
     }
 }

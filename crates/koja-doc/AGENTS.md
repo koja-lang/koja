@@ -19,6 +19,12 @@ emits a `doc/<Pkg>/<Item>.html` tree alongside a root package roster
   (`kojalang.org/_plugins/koja_lexer.rb`).
 - `search.rs`: emits `search-index.json`, one entry per item plus one per
   method (deep-linked to `#fn-<name>`). Doubles as the AI-friendly bundle.
+  Also owns the crate-internal `Symbol` enumeration that `terminal.rs`
+  shares.
+- `terminal.rs`: `koja doc search` backend. Matches a query against every
+  symbol and renders plain markdown: an exact name hit prints the full doc
+  (signatures via `DocFunction::signature_text()`), anything else prints a
+  match list.
 - `style.rs`: embeds `templates/style.css`, `assets/doc.js` (theme toggle,
   mobile rail, scroll spy), `assets/search.js` (fuzzy search), and the
   self-hosted woff2 fonts under `assets/fonts/`.
@@ -48,4 +54,10 @@ bundles the project + every path dep + the embedded stdlib
 `cmd_doc_serve` rebuilds (unless `--no-rebuild`) and then hosts the doc
 tree via [`koja-driver`'s `serve` module](../koja-driver/src/serve.rs).
 Serving is required for the in-page fuzzy search since browsers refuse to
-`fetch()` `search-index.json` over `file://`.
+`fetch()` `search-index.json` over `file://`. `cmd_doc_search` skips disk
+output entirely and prints `terminal::search` results to stdout.
+
+Outside a project (no `koja.toml`), all three commands fall back to
+stdlib-only inputs. Generation then defaults its output to
+`$TMPDIR/koja-stdlib-doc-<version>` unless `-o` is passed, and
+`--project-only` is an error.

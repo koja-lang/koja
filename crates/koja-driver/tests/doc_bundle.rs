@@ -1,4 +1,5 @@
-//! Smoke tests for `koja doc` and `koja doc --project-only`.
+//! Smoke tests for `koja doc`, `koja doc search`, and
+//! `koja doc --project-only`.
 //!
 //! Spins the compiled `koja` binary against a tiny fixture
 //! project and asserts the on-disk doc tree: a root
@@ -6,7 +7,9 @@
 //! packages) with their own `index.html`, plus the shared
 //! `style.css` / `search.js` / `search-index.json` assets at
 //! the root. The `--project-only` variant repeats the run and
-//! asserts the stdlib subdirs are absent.
+//! asserts the stdlib subdirs are absent. Search and the
+//! outside-project stdlib fallback are covered against both the
+//! fixture project and a bare temp dir.
 
 use std::fs;
 use std::io::{Read, Write};
@@ -32,6 +35,14 @@ fn write_fixture_project(root: &Path) {
         "@doc \"A widget.\"\nstruct Widget\n  count: Int\nend\n\nfn main\n  0\nend\n",
     )
     .unwrap();
+}
+
+fn run_koja(cwd: &Path, args: &[&str]) -> std::process::Output {
+    Command::new(koja_bin())
+        .args(args)
+        .current_dir(cwd)
+        .output()
+        .unwrap_or_else(|e| panic!("failed to run koja {args:?}: {e}"))
 }
 
 fn run_doc(cwd: &Path, args: &[&str]) {
@@ -229,6 +240,63 @@ fn http_get(port: u16, path: &str) -> Result<(u16, String, String), String> {
         .parse()
         .map_err(|_| "non-numeric status")?;
     Ok((status, head.to_string(), body.to_string()))
+}
+
+#[test]
+fn doc_search_renders_exact_partial_and_no_match() {
+    let tmp = tempdir();
+    write_fixture_project(&tmp);
+
+    let exact = run_koja(&tmp, &["doc", "search", "Widget"]);
+    assert!(
+        exact.status.success(),
+        "exact search failed: {}",
+        String::from_utf8_lossy(&exact.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&exact.stdout);
+    assert!(stdout.contains("# MyApp.Widget (struct)"), "{stdout}");
+    assert!(stdout.contains("A widget."), "{stdout}");
+
+    let partial = run_koja(&tmp, &["doc", "search", "widg"]);
+    assert!(partial.status.success());
+    let stdout = String::from_utf8_lossy(&partial.stdout);
+    assert!(
+        stdout.contains("- MyApp.Widget (struct): A widget."),
+        "{stdout}"
+    );
+
+    let none = run_koja(&tmp, &["doc", "search", "zzzz-no-such-symbol"]);
+    assert!(
+        !none.status.success(),
+        "no-match search should exit nonzero"
+    );
+    assert!(String::from_utf8_lossy(&none.stderr).contains("no matches"));
+}
+
+#[test]
+fn doc_falls_back_to_stdlib_outside_project() {
+    let tmp = tempdir();
+
+    let search = run_koja(&tmp, &["doc", "search", "List.append"]);
+    assert!(
+        search.status.success(),
+        "stdlib search failed: {}",
+        String::from_utf8_lossy(&search.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&search.stdout);
+    assert!(stdout.contains("# Global.List.append (fn)"), "{stdout}");
+
+    // Bare generation works too, defaulting to a temp output dir.
+    let generated = run_koja(&tmp, &["doc"]);
+    assert!(generated.status.success());
+    let stdout = String::from_utf8_lossy(&generated.stdout);
+    assert!(stdout.contains("docs generated: "), "{stdout}");
+    assert!(stdout.contains("koja-stdlib-doc-"), "{stdout}");
+
+    // --project-only still needs an actual project.
+    let project_only = run_koja(&tmp, &["doc", "--project-only"]);
+    assert!(!project_only.status.success());
+    assert!(String::from_utf8_lossy(&project_only.stderr).contains("requires a koja.toml project"));
 }
 
 #[test]

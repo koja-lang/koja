@@ -10,7 +10,7 @@
 use koja_ast::util::dedent;
 use koja_doc::{
     DocProject, PackageKind, extract_items, finalize_project, render_package_index,
-    render_root_index, render_struct, search_index_json,
+    render_root_index, render_struct, search_index_json, terminal, terminal::SearchOutcome,
 };
 use koja_parser::ParseMode;
 
@@ -333,6 +333,38 @@ fn struct_page_links_methods_and_other_packages() {
     assert!(html.contains("<span class=\"kw\">fn</span>"));
     // Even a small page renders its "on this page" TOC.
     assert!(html.contains("On this page"));
+}
+
+#[test]
+fn terminal_search_covers_exact_partial_and_none() {
+    let project = build_project();
+
+    let SearchOutcome::Hits(full) = terminal::search(&project, "counter") else {
+        panic!("expected exact hit");
+    };
+    assert!(full.starts_with("# MyApp.Counter (struct)\n"));
+    assert!(full.contains("A counter for the app."));
+    assert!(full.contains("### `fn bump()`"));
+    assert!(
+        full.contains("Also matched:\n\n- MyApp.Counter.bump (fn): Bump the counter by one.\n")
+    );
+
+    let SearchOutcome::Hits(function) = terminal::search(&project, "Counter.bump") else {
+        panic!("expected function hit");
+    };
+    assert!(function.starts_with("# MyApp.Counter.bump (fn)\n"));
+    assert!(function.contains("```koja\nfn bump()\n```"));
+
+    let SearchOutcome::Hits(list) = terminal::search(&project, "s") else {
+        panic!("expected partial hits");
+    };
+    assert!(list.contains("- Crypto.SHA256 (struct): SHA-256 hasher."));
+    assert!(list.contains("- Helper.assist (fn): Helper utility."));
+
+    assert!(matches!(
+        terminal::search(&project, "nope"),
+        SearchOutcome::NoMatches
+    ));
 }
 
 #[test]

@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `koja doc search <query>` looks up a symbol from the terminal, printing the full doc for an exact name and a candidate list for partial matches.
+- `koja doc` commands now work outside a project, documenting the standard library on its own.
+
 ### Changed
 
 - `koja doc` pages now match the kojalang.org design, with a centered layout, a navigation rail grouped by kind, and an "on this page" column on large items.
