@@ -5,9 +5,14 @@ meta {
 }
 
 get {
-  url: {{baseUrl}}/links
+  url: {{baseUrl}}/links?limit=100&offset=0
   body: none
   auth: none
+}
+
+params:query {
+  limit: 100
+  offset: 0
 }
 
 assert {
@@ -17,7 +22,12 @@ assert {
 docs {
   # List Links
 
-  Returns every link in the store as a JSON array. Empty store returns `[]`.
+  Returns one page of links as a JSON array, newest first. Empty page returns `[]`.
+
+  **Query params**
+
+  - `limit`: page size, 1 to 1000, default 100
+  - `offset`: rows to skip, default 0
 
   **Response 200**
 

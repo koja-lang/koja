@@ -74,8 +74,8 @@ Then exercise it:
 # create a link
 curl -s -X POST localhost:8080/links -d '{"url": "https://example.com"}'
 
-# list links / fetch metadata
-curl -s localhost:8080/links
+# list links (paginated, newest first) / fetch metadata
+curl -s 'localhost:8080/links?limit=20&offset=40'
 curl -s localhost:8080/links/<code>
 
 # repoint and delete
@@ -91,15 +91,15 @@ collection with a request per route.
 
 ## Routes
 
-| Method   | Path           | Behavior                                  |
-| -------- | -------------- | ----------------------------------------- |
-| `GET`    | `/`            | Service info                              |
-| `GET`    | `/links`       | List every link                           |
-| `POST`   | `/links`       | Create a link from `{"url": "..."}`       |
-| `GET`    | `/links/:code` | Link metadata (url, hits, created_at)     |
-| `PUT`    | `/links/:code` | Repoint a link at a new URL               |
-| `DELETE` | `/links/:code` | Delete a link                             |
-| `GET`    | `/:code`       | 302-redirect to the target, count the hit |
+| Method   | Path           | Behavior                                                                 |
+| -------- | -------------- | ------------------------------------------------------------------------ |
+| `GET`    | `/`            | Service info                                                             |
+| `GET`    | `/links`       | List links, newest first (`limit` up to 1000, default 100, and `offset`) |
+| `POST`   | `/links`       | Create a link from `{"url": "..."}`                                      |
+| `GET`    | `/links/:code` | Link metadata (url, hits, created_at)                                    |
+| `PUT`    | `/links/:code` | Repoint a link at a new URL                                              |
+| `DELETE` | `/links/:code` | Delete a link                                                            |
+| `GET`    | `/:code`       | 302-redirect to the target, count the hit                                |
 
 ## Configuration
 

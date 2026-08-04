@@ -39,11 +39,15 @@ struct LinkStore
   end
 
   @doc """
-  Returns every link, newest first.
+  Returns one page of links, newest first. `limit` and `offset` are
+  validated by the router, so they interpolate as plain integers.
   """
-  fn all(conn: Connection) -> (Connection, Result<List<Link>, String>)
+  fn page(conn: Connection, limit: Int, offset: Int)
+    -> (Connection, Result<List<Link>, String>)
+
     (conn, outcome) = conn.query(
-      select_columns() <> " FROM links ORDER BY created_at DESC",
+      select_columns() <>
+        " FROM links ORDER BY created_at DESC LIMIT #{limit} OFFSET #{offset}",
     )
     rows: List<Link> = List.new()
 

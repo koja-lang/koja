@@ -8,6 +8,8 @@ alias JSON.Value
 alias Postgres.Connection
 
 const LINKS_PREFIX: String = "/links/"
+const DEFAULT_LIMIT: Int = 100
+const MAX_LIMIT: Int = 1000
 
 @doc """
 Maps an HTTP request to a response, threading the Postgres
@@ -16,7 +18,7 @@ returning it alongside the response so the caller can rebind.
 
 Routes:
 - `GET    /`            service info
-- `GET    /links`       list every link
+- `GET    /links`       list links, newest first (`limit` and `offset` query params)
 - `POST   /links`       create a link from a JSON `{"url": ...}` body
 - `GET    /links/:code` link metadata
 - `PUT    /links/:code` repoint a link at a new URL
@@ -25,9 +27,11 @@ Routes:
 """
 struct Router
   fn route(req: Request, conn: Connection) -> (Response, Connection)
+    (path, query) = split_query(req.path)
+
     match req.method
-      Method.Delete -> handle_delete(req.path, conn)
-      Method.Get -> handle_get(req.path, conn)
+      Method.Delete -> handle_delete(path, conn)
+      Method.Get -> handle_get(path, query, conn)
       Method.Post -> handle_post(req, conn)
       Method.Put -> handle_put(req, conn)
       _ ->
@@ -55,13 +59,15 @@ struct Router
     )
   end
 
-  priv fn handle_get(path: String, conn: Connection) -> (Response, Connection)
+  priv fn handle_get(path: String, query: String, conn: Connection)
+    -> (Response, Connection)
+
     if path == "/"
       return (info(), conn)
     end
 
     if path == "/links"
-      return list_all(conn)
+      return list_links(query, conn)
     end
 
     match code_after(path, LINKS_PREFIX)
@@ -141,14 +147,69 @@ struct Router
     end
   end
 
-  priv fn list_all(conn: Connection) -> (Response, Connection)
-    (conn, listed) = LinkStore.all(conn)
+  priv fn list_links(query: String, conn: Connection) -> (Response, Connection)
+    (limit, offset) =
+      match page_params(query)
+        Result.Ok(params) -> params
+        Result.Err(message) ->
+          return (error(Status.bad_request(), message), conn)
+      end
+
+    (conn, listed) = LinkStore.page(conn, limit, offset)
 
     match listed
       Result.Ok(links) ->
         (json_response(Status.ok(), JsonUtil.links_to_value(links)), conn)
       Result.Err(e) -> (db_error(e), conn)
     end
+  end
+
+  # Parses and bounds the pagination params. `limit` defaults to
+  # DEFAULT_LIMIT, `offset` to 0.
+  priv fn page_params(query: String) -> (Int, Int) ! String
+    limit = try int_param(query, "limit", DEFAULT_LIMIT)
+    offset = try int_param(query, "offset", 0)
+
+    unless limit >= 1 and limit <= MAX_LIMIT
+      fail "limit must be between 1 and #{MAX_LIMIT}"
+    end
+
+    unless offset >= 0
+      fail "offset must not be negative"
+    end
+
+    (limit, offset)
+  end
+
+  priv fn int_param(query: String, name: String, default: Int) -> Int ! String
+    match query_param(query, name)
+      Option.None -> default
+      Option.Some(text) ->
+        text.to_int()
+          rescue _ -> fail "#{name} must be an integer, got '#{text}'"
+    end
+  end
+
+  priv fn query_param(query: String, name: String) -> Option<String>
+    prefix = name <> "="
+    found: Option<String> = Option.None
+
+    for pair in query.split("&")
+      if pair.starts_with?(prefix)
+        found = Option.Some(pair.slice(
+          Range{start: prefix.length(), stop: pair.length() - 1},
+        ))
+      end
+    end
+
+    found
+  end
+
+  # Splits a request target into its path and query string, e.g.
+  # "/links?limit=10" into ("/links", "limit=10").
+  priv fn split_query(target: String) -> (String, String)
+    parts = target.split("?")
+    (parts.get(0).or(target), parts.get(1).or(""))
   end
 
   priv fn metadata(conn: Connection, code: String) -> (Response, Connection)
@@ -200,8 +261,8 @@ struct Router
             "routes",
             Value.array(
               [
-                Value.string("GET /links"), Value.string("POST /links"),
-                Value.string("GET /links/:code"),
+                Value.string("GET /links?limit=&offset="),
+                Value.string("POST /links"), Value.string("GET /links/:code"),
                 Value.string("PUT /links/:code"),
                 Value.string("DELETE /links/:code"), Value.string("GET /:code")
               ],
