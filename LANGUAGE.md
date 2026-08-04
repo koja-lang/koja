@@ -425,7 +425,7 @@ Widening applies wherever a value flows into a typed slot: call arguments, struc
 - **Generic inference**: `T` binds to the actual type. `identity(small)` infers `T = Int32`, not `Int`.
 - **Narrowing or cross-category conversion**: `Int` never implicitly becomes `Int32`, and ints never become floats.
 
-The inverse direction is explicit and checked. `Int` provides `to_int8`, `to_int16`, `to_int32`, `to_uint8`, `to_uint16`, `to_uint32`, and `to_uint64`, each returning `Result<TargetType, NumericConversionError>`, with `Result.Err(NumericConversionError.OutOfRange)` when the value does not fit. `UInt64.to_int` is the checked bridge back to the hub, and `Float.to_float32` rounds to the nearest representable value, with `OutOfRange` for magnitudes too large for a 32-bit float:
+The inverse direction is explicit and checked. `Int` provides `to_int8`, `to_int16`, `to_int32`, `to_uint8`, `to_uint16`, `to_uint32`, and `to_uint64`, each declared `-> TargetType ! NumericConversionError` and failing with `NumericConversionError.OutOfRange` when the value does not fit. `UInt64.to_int` is the checked bridge back to the hub, and `Float.to_float32` rounds to the nearest representable value, with `OutOfRange` for magnitudes too large for a 32-bit float:
 
 ```koja
 match 300.to_int8()
@@ -1036,7 +1036,15 @@ end
 outcome = parse_port("8080")   # outcome: Result<Int, ParseError>
 ```
 
-Inside a `!`-spelled function, success values are unwrapped: `return value` and the trailing expression check against `T` and wrap in `Result.Ok` automatically. A `-> () ! E` function that falls off the end returns `Result.Ok(())`. Writing `Result.Ok(...)` by hand in return position is a compile error pointing at the auto-wrap rule.
+Inside a `!`-spelled function, success values are unwrapped: `return value` and the trailing expression check against `T` and wrap in `Result.Ok` automatically. Writing `Result.Ok(...)` by hand in return position is a compile error pointing at the auto-wrap rule.
+
+A fallible function with no meaningful return value omits the return type, just like its infallible counterpart. A bare `! E` declares a unit success (`Result<(), E>`), and the body returns `Result.Ok(())` when it falls off the end:
+
+```koja
+fn log_line(message: String) ! WriteError
+  try append(message)
+end
+```
 
 The `!` spelling is opt-in per declaration. A function declared `-> Result<T, E>` keeps its explicit `Result.Ok` / `Result.Err` returns and compiles exactly as before.
 
@@ -1290,8 +1298,8 @@ struct App
 end
 
 impl Process<(), (), ()> for App
-  fn start(config: ()) -> Result<Self, StopReason>
-    Result.Ok(App{})
+  fn start(config: ()) -> Self ! StopReason
+    App{}
   end
 
   fn handle(self, msg: (), from: Option<ReplyTo<()>>) -> Step<Self>
@@ -1410,7 +1418,7 @@ For stateful, long-lived processes, implement the `Process` protocol. `C` is the
 
 ```koja
 protocol Process<C, M, R>
-  fn start(config: C) -> Result<Self, Process.StopReason>
+  fn start(config: C) -> Self ! Process.StopReason
   fn handle(self, msg: M, from: Option<ReplyTo<R>>) -> Process.Step<Self>
   fn handle_signal(self, event: Process.Lifecycle) -> Process.Step<Self>
   fn run(self) -> Process.StopReason
@@ -1419,7 +1427,7 @@ end
 
 The helper types are nested under `Process` (`Process.Step`, `Process.StopReason`, `Process.Lifecycle`, `Process.CallError`). Idiomatic code shortens them with file-local aliases (`alias Process.Step`), which the examples below assume.
 
-`start` builds the initial state from config in the child process context, before the receive loop begins. Return `Result.Ok(self)` to begin running, or `Result.Err(reason)` to abort startup.
+`start` builds the initial state from config in the child process context, before the receive loop begins. Return the state to begin running, or `fail reason` to abort startup.
 
 `handle` returns `Step<Self>`. Return `Step.Continue(self)` to keep running with updated state, or `Step.Done(reason)` (with a `StopReason` of `Normal` or `Shutdown`) to stop.
 
@@ -1463,8 +1471,8 @@ struct Counter
 end
 
 impl Process<Counter, CounterMsg, Int> for Counter
-  fn start(config: Counter) -> Result<Self, StopReason>
-    Result.Ok(config)
+  fn start(config: Counter) -> Self ! StopReason
+    config
   end
 
   fn handle(self, msg: CounterMsg, from: Option<ReplyTo<Int>>) -> Step<Self>
@@ -1852,8 +1860,8 @@ Functions:
 - `split(self, separator: String) -> List<String>`: splits on each occurrence of `separator`. An empty separator splits into individual characters.
 - `starts_with?(self, prefix: String) -> Bool`: returns `true` if the string starts with `prefix`.
 - `to_binary(self) -> Binary`: zero-cost conversion to `Binary` (every valid UTF-8 string is a valid byte sequence).
-- `to_float(self) -> Result<Float, NumericConversionError>`: parses the string as a 64-bit float (see [Parsing](#parsing)).
-- `to_int(self) -> Result<Int, NumericConversionError>`: parses the string as a 64-bit signed integer (see [Parsing](#parsing)).
+- `to_float(self) -> Float ! NumericConversionError`: parses the string as a 64-bit float (see [Parsing](#parsing)).
+- `to_int(self) -> Int ! NumericConversionError`: parses the string as a 64-bit signed integer (see [Parsing](#parsing)).
 - `trim(self) -> String`: returns a copy with leading and trailing whitespace removed.
 - `trim_end(self) -> String`: returns a copy with trailing whitespace removed.
 - `trim_start(self) -> String`: returns a copy with leading whitespace removed.
@@ -1919,7 +1927,7 @@ Float-extract segments (`x: Float32` in a pattern) are not supported yet. When t
 - `byte_size(self) -> Int`: returns the number of bytes.
 - `slice(self, range: Range) -> Binary`: copies the inclusive byte range `[start, stop]`. Endpoints clamp to the binary's bounds.
 - `to_bits(self) -> Bits`: zero-cost widening from bytes to bits.
-- `to_string(self) -> Result<String, String.ConversionError>`: attempts to interpret bytes as UTF-8, returning `InvalidUTF8` when decoding fails.
+- `to_string(self) -> String ! String.ConversionError`: attempts to interpret bytes as UTF-8, failing with `InvalidUTF8` when decoding fails.
 
 `Binary` implements `Equality` (length plus byte comparison, so `a == b` works) and `Hash`, making it usable as a `Map` key or `Set` element. Its `Debug` rendering is the byte-list form `<<83, 0, 0, 0, 4>>`, truncated with a trailing `...` past 64 bytes.
 
@@ -1934,7 +1942,7 @@ Float-extract segments (`x: Float32` in a pattern) are not supported yet. When t
 
 - `String.to_binary(self) -> Binary`: zero-cost widening from UTF-8 string to bytes.
 - `CPtr<UInt8>.to_binary(self, len: Int) -> Binary`: creates a `Binary` by copying `len` bytes from the pointer. The pointer is not freed. A negative length panics.
-- `Bits.to_binary(self) -> Result<Binary, String>`: narrows bits to bytes. Returns `Result.Err` if the bit length is not divisible by 8.
+- `Bits.to_binary(self) -> Binary ! String`: narrows bits to bytes. Fails if the bit length is not divisible by 8.
 
 ```koja
 bin = "hello".to_binary()
@@ -1957,10 +1965,10 @@ end
 
 Functions:
 
-- `read(self, count: Int) -> Result<String, String>`: reads and validates up to `count` bytes as UTF-8.
-- `read_binary(self, count: Int) -> Result<Binary, String>`: reads up to `count` arbitrary bytes.
-- `write(self, data: Binary | String) -> Result<Int, String>`: writes data, returns bytes written.
-- `close(self) -> Result<String, String>`: closes the descriptor.
+- `read(self, count: Int) -> String ! String`: reads and validates up to `count` bytes as UTF-8.
+- `read_binary(self, count: Int) -> Binary ! String`: reads up to `count` arbitrary bytes.
+- `write(self, data: Binary | String) -> Int ! String`: writes data, returns bytes written.
+- `close(self) -> String ! String`: closes the descriptor.
 
 #### `File`
 
@@ -1974,18 +1982,18 @@ end
 
 Functions:
 
-- `File.open(path: String, mode: FileMode) -> Result<File, String>`: opens a file with the given mode (`FileMode.Read`, `FileMode.Write`, `FileMode.Append`).
-- `File.read(path: String) -> Result<String, String>`: reads an entire file as UTF-8 text (opens, reads, closes).
-- `File.read_binary(path: String) -> Result<Binary, String>`: reads an entire file as arbitrary bytes.
-- `File.write(path: String, content: Binary | String) -> Result<String, String>`: writes text or arbitrary bytes (creates or truncates).
+- `File.open(path: String, mode: FileMode) -> File ! String`: opens a file with the given mode (`FileMode.Read`, `FileMode.Write`, `FileMode.Append`).
+- `File.read(path: String) -> String ! String`: reads an entire file as UTF-8 text (opens, reads, closes).
+- `File.read_binary(path: String) -> Binary ! String`: reads an entire file as arbitrary bytes.
+- `File.write(path: String, content: Binary | String) -> String ! String`: writes text or arbitrary bytes (creates or truncates).
 - `File.exists?(path: String) -> Bool`: returns true if a file or directory exists at the path.
 - `File.dir?(path: String) -> Bool`: returns true only for directories (`exists?` covers both).
-- `File.delete(path: String) -> Result<String, String>`: deletes a file.
-- `File.rename(source: String, destination: String) -> Result<String, String>`: renames (moves) a file.
-- `File.mkdir(path: String) -> Result<String, String>`: creates a single directory, erroring if the parent is missing or the path already exists.
-- `File.mkdir_p(path: String) -> Result<String, String>`: creates a directory and any missing parents (like `mkdir -p`), succeeding if it already exists.
-- `File.rmdir(path: String) -> Result<String, String>`: removes an empty directory.
-- `close(self) -> Result<String, String>`: closes the file handle.
+- `File.delete(path: String) -> String ! String`: deletes a file.
+- `File.rename(source: String, destination: String) -> String ! String`: renames (moves) a file.
+- `File.mkdir(path: String) -> String ! String`: creates a single directory, erroring if the parent is missing or the path already exists.
+- `File.mkdir_p(path: String) -> String ! String`: creates a directory and any missing parents (like `mkdir -p`), succeeding if it already exists.
+- `File.rmdir(path: String) -> String ! String`: removes an empty directory.
+- `close(self) -> String ! String`: closes the file handle.
 
 ```koja
 content = File.read("config.txt").unwrap()
@@ -2021,8 +2029,8 @@ IO.puts("Hello, #{name}!")
 
 Static functions on `Int` and `Float` for parsing strings:
 
-- `Int.parse(input: String) -> Result<Int, NumericConversionError>`: parses a string as a 64-bit signed integer.
-- `Float.parse(input: String) -> Result<Float, NumericConversionError>`: parses a string as a 64-bit float.
+- `Int.parse(input: String) -> Int ! NumericConversionError`: parses a string as a 64-bit signed integer.
+- `Float.parse(input: String) -> Float ! NumericConversionError`: parses a string as a 64-bit float.
 
 Failures distinguish malformed text from values that don't fit: `NumericConversionError.InvalidFormat` for text that isn't a number, `NumericConversionError.OutOfRange` for a well-formed number outside the target's range (an integer overflowing 64 bits, or a float magnitude like `1e999` that would round to infinity). Only finite floats parse. There is no literal syntax for infinities or NaN. This is the same error enum the checked narrowing methods use (see [Numeric Widening](#numeric-widening)).
 
@@ -2057,10 +2065,10 @@ end
 
 Functions:
 
-- `URI.parse(input: String) -> Result<URI, URI.Error>`: parses and validates an absolute or relative URI. The scheme is lowercased, and a known scheme's default port fills `port` when the input has none. Errors carry the offending part of the input.
+- `URI.parse(input: String) -> URI ! URI.Error`: parses and validates an absolute or relative URI. The scheme is lowercased, and a known scheme's default port fills `port` when the input has none. Errors carry the offending part of the input.
 - `to_string(self) -> String`: reassembles the URI, omitting the port when it equals the scheme's default.
 - `URI.encode(input: String) -> String`: percent-encodes every character that is neither reserved nor unreserved.
-- `URI.decode(input: String) -> Result<String, URI.Error>`: percent-unescapes, rejecting malformed `%XX` sequences and invalid UTF-8.
+- `URI.decode(input: String) -> String ! URI.Error`: percent-unescapes, rejecting malformed `%XX` sequences and invalid UTF-8.
 - `URI.default_port(scheme: String) -> Option<Int>`: the well-known port for a scheme (`"https"` gives `443`), or `Option.None`.
 
 `URI` implements `Equality` (component-wise) and `Debug` (`format` renders the assembled URI string, so interpolation produces the URL).
@@ -2079,11 +2087,11 @@ URI.encode("put it+й").print() # "put%20it+%D0%B9"
 RFC 4648 encoding and decoding: base16 (hex), base64, and url-safe base64. Encoders accept either a `String` (encoded as its UTF-8 bytes) or a `Binary`, and return the encoded text. Decoders take a `String` and return the decoded bytes, or a `Base.Error` (`InvalidCharacter` with the offending character, `InvalidLength`, or `InvalidPadding`).
 
 - `Base.encode16(data: Binary | String) -> String`: lowercase hex, two characters per byte.
-- `Base.decode16(text: String) -> Result<Binary, Base.Error>`: accepts both cases.
+- `Base.decode16(text: String) -> Binary ! Base.Error`: accepts both cases.
 - `Base.encode64(data: Binary | String) -> String`: standard `+/` alphabet, padded with `=`.
-- `Base.decode64(text: String) -> Result<Binary, Base.Error>`
+- `Base.decode64(text: String) -> Binary ! Base.Error`
 - `Base.url_encode64(data: Binary | String) -> String`: url-safe `-_` alphabet, padded with `=`.
-- `Base.url_decode64(text: String) -> Result<Binary, Base.Error>`
+- `Base.url_decode64(text: String) -> Binary ! Base.Error`
 
 Base64 decoders accept both padded and unpadded input, but `=` may only appear as final padding:
 
@@ -2348,10 +2356,10 @@ back = cs.to_string().unwrap()
 cs.free()
 ```
 
-`String.to_cstring() -> Result<CString, CString.ConversionError>`
+`String.to_cstring() -> CString ! CString.ConversionError`
 allocates a null-terminated copy via `malloc` and rejects `String`
 values containing U+0000 with `InteriorNul`.
-`CString.to_string() -> Result<String, CString.ConversionError>` copies
+`CString.to_string() -> String ! CString.ConversionError` copies
 exactly `len` bytes and rejects invalid lengths, pointers, and UTF-8.
 It does not consume or free the C buffer. Call `free()` only when the
 descriptor owns malloc-compatible storage.
@@ -2535,16 +2543,15 @@ A package exports CLI tasks in its `koja.toml`, mapping a task name to a type im
 "postgres.migrate" = "Migrate"
 ```
 
-The type's `run` receives everything after `--` on the command line. Returning `Result.Err` prints the message to stderr and exits non-zero:
+The type's `run` receives everything after `--` on the command line. Failing (via `fail` or a propagated `try`) prints the error to stderr and exits non-zero:
 
 ```koja
 struct Migrate
 end
 
 impl Koja.Task for Migrate
-  fn run(args: List<String>) -> Result<(), String>
+  fn run(args: List<String>) ! String
     IO.puts("running migrations")
-    Result.Ok(())
   end
 end
 ```

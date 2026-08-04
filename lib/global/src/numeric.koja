@@ -154,92 +154,91 @@ end
 
 extend Int
   @doc """
-  Parses a string as a 64-bit signed integer. Returns `Result.Ok(value)` on
-  success, `Result.Err(NumericConversionError.InvalidFormat)` if the string
-  is not a valid integer, or `Result.Err(NumericConversionError.OutOfRange)`
-  for a well-formed integer that does not fit in 64 bits.
+  Parses a string as a 64-bit signed integer. Fails with
+  `NumericConversionError.InvalidFormat` if the string is not a valid
+  integer, or `NumericConversionError.OutOfRange` for a well-formed
+  integer that does not fit in 64 bits.
   """
   @intrinsic
-  fn parse(input: String) -> Result<Int, NumericConversionError>
+  fn parse(input: String) -> Int ! NumericConversionError
 
   @doc """
-  Narrows to an 8-bit signed integer. Returns
-  `Result.Err(NumericConversionError.OutOfRange)` if the value does not fit.
+  Narrows to an 8-bit signed integer. Fails with
+  `NumericConversionError.OutOfRange` if the value does not fit.
   """
   @intrinsic
-  fn to_int8(self) -> Result<Int8, NumericConversionError>
+  fn to_int8(self) -> Int8 ! NumericConversionError
 
   @doc """
-  Narrows to a 16-bit signed integer. Returns
-  `Result.Err(NumericConversionError.OutOfRange)` if the value does not fit.
+  Narrows to a 16-bit signed integer. Fails with
+  `NumericConversionError.OutOfRange` if the value does not fit.
   """
   @intrinsic
-  fn to_int16(self) -> Result<Int16, NumericConversionError>
+  fn to_int16(self) -> Int16 ! NumericConversionError
 
   @doc """
-  Narrows to a 32-bit signed integer. Returns
-  `Result.Err(NumericConversionError.OutOfRange)` if the value does not fit.
+  Narrows to a 32-bit signed integer. Fails with
+  `NumericConversionError.OutOfRange` if the value does not fit.
   """
   @intrinsic
-  fn to_int32(self) -> Result<Int32, NumericConversionError>
+  fn to_int32(self) -> Int32 ! NumericConversionError
 
   @doc """
-  Narrows to an 8-bit unsigned integer. Returns
-  `Result.Err(NumericConversionError.OutOfRange)` if the value does not fit.
+  Narrows to an 8-bit unsigned integer. Fails with
+  `NumericConversionError.OutOfRange` if the value does not fit.
   """
   @intrinsic
-  fn to_uint8(self) -> Result<UInt8, NumericConversionError>
+  fn to_uint8(self) -> UInt8 ! NumericConversionError
 
   @doc """
-  Narrows to a 16-bit unsigned integer. Returns
-  `Result.Err(NumericConversionError.OutOfRange)` if the value does not fit.
+  Narrows to a 16-bit unsigned integer. Fails with
+  `NumericConversionError.OutOfRange` if the value does not fit.
   """
   @intrinsic
-  fn to_uint16(self) -> Result<UInt16, NumericConversionError>
+  fn to_uint16(self) -> UInt16 ! NumericConversionError
 
   @doc """
-  Narrows to a 32-bit unsigned integer. Returns
-  `Result.Err(NumericConversionError.OutOfRange)` if the value does not fit.
+  Narrows to a 32-bit unsigned integer. Fails with
+  `NumericConversionError.OutOfRange` if the value does not fit.
   """
   @intrinsic
-  fn to_uint32(self) -> Result<UInt32, NumericConversionError>
+  fn to_uint32(self) -> UInt32 ! NumericConversionError
 
   @doc """
-  Converts to a 64-bit unsigned integer. Returns
-  `Result.Err(NumericConversionError.OutOfRange)` if the value is negative.
+  Converts to a 64-bit unsigned integer. Fails with
+  `NumericConversionError.OutOfRange` if the value is negative.
   """
   @intrinsic
-  fn to_uint64(self) -> Result<UInt64, NumericConversionError>
+  fn to_uint64(self) -> UInt64 ! NumericConversionError
 end
 
 extend Float
   @doc """
-  Parses a string as a 64-bit floating-point number. Returns
-  `Result.Ok(value)` on success,
-  `Result.Err(NumericConversionError.InvalidFormat)` if the string is not a
-  valid float, or `Result.Err(NumericConversionError.OutOfRange)` for a
-  well-formed magnitude too large for a 64-bit float (e.g. `"1e999"`). Only
-  finite values parse — there is no literal syntax for infinities or NaN.
+  Parses a string as a 64-bit floating-point number. Fails with
+  `NumericConversionError.InvalidFormat` if the string is not a valid
+  float, or `NumericConversionError.OutOfRange` for a well-formed
+  magnitude too large for a 64-bit float (e.g. `"1e999"`). Only finite
+  values parse. There is no literal syntax for infinities or NaN.
   """
   @intrinsic
-  fn parse(input: String) -> Result<Float, NumericConversionError>
+  fn parse(input: String) -> Float ! NumericConversionError
 
   @doc """
   Converts to a 32-bit float, rounding to the nearest representable
-  value. Returns `Result.Err(NumericConversionError.OutOfRange)` when
-  the magnitude is too large for a 32-bit float.
+  value. Fails with `NumericConversionError.OutOfRange` when the
+  magnitude is too large for a 32-bit float.
   """
   @intrinsic
-  fn to_float32(self) -> Result<Float32, NumericConversionError>
+  fn to_float32(self) -> Float32 ! NumericConversionError
 end
 
 extend UInt64
   @doc """
-  Converts to a 64-bit signed integer. Returns
-  `Result.Err(NumericConversionError.OutOfRange)` if the value exceeds
-  `Int`'s maximum. `UInt64` is the one sized integer that cannot
-  widen implicitly into `Int`; this is the explicit bridge.
+  Converts to a 64-bit signed integer. Fails with
+  `NumericConversionError.OutOfRange` if the value exceeds `Int`'s
+  maximum. `UInt64` is the one sized integer that cannot widen
+  implicitly into `Int`; this is the explicit bridge.
   """
   @intrinsic
-  fn to_int(self) -> Result<Int, NumericConversionError>
+  fn to_int(self) -> Int ! NumericConversionError
 end

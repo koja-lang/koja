@@ -69,50 +69,63 @@ struct Socket
   @doc """
   Accepts an incoming connection. Returns the client file descriptor.
   """
-  fn accept(self) -> Result<Fd, String>
+  fn accept(self) -> Fd ! String
     client_fd = koja_socket_accept(self.fd.descriptor)
-    client_fd == -1
-      ? Result.Err(last_error())
-      : Result.Ok(Fd{descriptor: client_fd})
+
+    if client_fd == -1
+      fail last_error()
+    end
+
+    Fd{descriptor: client_fd}
   end
 
   @doc """
   Binds the socket to the given address and port.
   """
-  fn bind(self, addr: SocketAddress) -> Result<Socket, String>
+  fn bind(self, addr: SocketAddress) -> Socket ! String
     result = koja_socket_bind(
       self.fd.descriptor,
       CPtr.borrow(addr.ip.bytes),
       addr.ip.bytes.byte_size(),
       addr.port,
     )
-    result == -1 ? Result.Err(last_error()) : Result.Ok(self)
+
+    if result == -1
+      fail last_error()
+    end
+
+    self
   end
 
   @doc """
   Closes the socket.
   """
-  fn close(self) -> Result<String, String>
-    self.fd.close()
+  fn close(self) -> String ! String
+    try self.fd.close()
   end
 
   @doc """
   Connects the socket to the given address and port.
   """
-  fn connect(self, addr: SocketAddress) -> Result<Socket, String>
+  fn connect(self, addr: SocketAddress) -> Socket ! String
     result = koja_socket_connect(
       self.fd.descriptor,
       CPtr.borrow(addr.ip.bytes),
       addr.ip.bytes.byte_size(),
       addr.port,
     )
-    result == -1 ? Result.Err(last_error()) : Result.Ok(self)
+
+    if result == -1
+      fail last_error()
+    end
+
+    self
   end
 
   @doc """
   Creates a socket of the given kind (Stream or Datagram).
   """
-  fn create(kind: SocketKind) -> Result<Socket, String>
+  fn create(kind: SocketKind) -> Socket ! String
     sock_type =
       match kind
         SocketKind.Stream -> 1
@@ -120,17 +133,25 @@ struct Socket
       end
 
     fd = koja_socket_create(sock_type)
-    fd == -1
-      ? Result.Err(last_error())
-      : Result.Ok(Socket{fd: Fd{descriptor: fd}})
+
+    if fd == -1
+      fail last_error()
+    end
+
+    Socket{fd: Fd{descriptor: fd}}
   end
 
   @doc """
   Starts listening for incoming connections with the given backlog.
   """
-  fn listen(self, backlog: Int) -> Result<Socket, String>
+  fn listen(self, backlog: Int) -> Socket ! String
     result = koja_socket_listen(self.fd.descriptor, backlog)
-    result == -1 ? Result.Err(last_error()) : Result.Ok(self)
+
+    if result == -1
+      fail last_error()
+    end
+
+    self
   end
 
   @doc """
@@ -138,21 +159,19 @@ struct Socket
   Returns a tuple of the data and sender address.
   """
   @intrinsic
-  fn recv_from(self, count: Int) -> Result<(Binary, SocketAddress), String>
+  fn recv_from(self, count: Int) -> (Binary, SocketAddress) ! String
 
   @doc """
   Resolves a hostname to a list of IP addresses via DNS.
   """
   @intrinsic
-  fn resolve(hostname: String) -> Result<List<IPAddress>, String>
+  fn resolve(hostname: String) -> List<IPAddress> ! String
 
   @doc """
   Sends data to the given address (for unconnected datagram sockets).
   Returns the number of bytes sent.
   """
-  fn send_to(self, data: Binary | String, addr: SocketAddress)
-    -> Result<Int, String>
-
+  fn send_to(self, data: Binary | String, addr: SocketAddress) -> Int ! String
     bytes =
       match data
         binary: Binary -> binary
@@ -167,15 +186,25 @@ struct Socket
       addr.ip.bytes.byte_size(),
       addr.port,
     )
-    result == -1 ? Result.Err(last_error()) : Result.Ok(result)
+
+    if result == -1
+      fail last_error()
+    end
+
+    result
   end
 
   @doc """
   Sets the SO_REUSEADDR option on the socket.
   """
-  fn set_reuse_addr(self) -> Result<Socket, String>
+  fn set_reuse_addr(self) -> Socket ! String
     result = koja_socket_setsockopt_reuse(self.fd.descriptor)
-    result == -1 ? Result.Err(last_error()) : Result.Ok(self)
+
+    if result == -1
+      fail last_error()
+    end
+
+    self
   end
 
   @doc """

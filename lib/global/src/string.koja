@@ -361,15 +361,15 @@ extend String
   @doc """
   Parses the string as a 64-bit floating-point number. See `Float.parse`.
   """
-  fn to_float(self) -> Result<Float, NumericConversionError>
-    Float.parse(self)
+  fn to_float(self) -> Float ! NumericConversionError
+    try Float.parse(self)
   end
 
   @doc """
   Parses the string as a 64-bit signed integer. See `Int.parse`.
   """
-  fn to_int(self) -> Result<Int, NumericConversionError>
-    Int.parse(self)
+  fn to_int(self) -> Int ! NumericConversionError
+    try Int.parse(self)
   end
 
   @doc """
@@ -474,9 +474,9 @@ extend String
 
   @doc """
   Allocates a null-terminated C string copy of this string using `malloc`.
-  Returns `InteriorNul` when the string contains U+0000. The caller must
-  call `free()` on a successful result.
+  Fails with `InteriorNul` when the string contains U+0000. The caller
+  must call `free()` on a successful result.
   """
   @intrinsic
-  fn to_cstring(self) -> Result<CString, CString.ConversionError>
+  fn to_cstring(self) -> CString ! CString.ConversionError
 end

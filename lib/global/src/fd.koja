@@ -18,27 +18,21 @@ struct Fd
   @doc """
   Closes the file descriptor.
   """
-  fn close(self) -> Result<String, String>
-    koja_fd_close(self.descriptor) == 0
-      ? Result.Ok("")
-      : Result.Err("close failed")
+  fn close(self) -> String ! String
+    if koja_fd_close(self.descriptor) != 0
+      fail "close failed"
+    end
+
+    ""
   end
 
   @doc """
   Reads up to `count` bytes from the file descriptor.
   Returns the data read as a string, or an error message.
   """
-  fn read(self, count: Int) -> Result<String, String>
-    match self.read_binary(count)
-      Result.Err(error) ->
-        Result.Err(error)
-
-      Result.Ok(bytes) ->
-        match bytes.to_string()
-          Result.Err(_) -> Result.Err("read data is not valid UTF-8")
-          Result.Ok(value) -> Result.Ok(value)
-        end
-    end
+  fn read(self, count: Int) -> String ! String
+    bytes = try self.read_binary(count)
+    bytes.to_string() rescue _ -> fail "read data is not valid UTF-8"
   end
 
   @doc """
@@ -47,11 +41,14 @@ struct Fd
   suitable for binary wire protocols. Returns the bytes read, or an
   error message.
   """
-  fn read_binary(self, count: Int) -> Result<Binary, String>
+  fn read_binary(self, count: Int) -> Binary ! String
     ptr = koja_fd_read(self.descriptor, count)
-    ptr.null?()
-      ? Result.Err("read failed")
-      : Result.Ok(RuntimeBlock.adopt_binary(ptr))
+
+    if ptr.null?()
+      fail "read failed"
+    end
+
+    RuntimeBlock.adopt_binary(ptr)
   end
 
   @doc """
@@ -79,7 +76,7 @@ struct Fd
   as UTF-8) or a `Binary` for raw wire protocols, so non-UTF-8 frames pass
   through unaltered. Returns the number of bytes written, or an error.
   """
-  fn write(self, data: Binary | String) -> Result<Int, String>
+  fn write(self, data: Binary | String) -> Int ! String
     bytes =
       match data
         b: Binary -> b
@@ -91,7 +88,12 @@ struct Fd
       CPtr.borrow(bytes),
       bytes.byte_size(),
     )
-    result >= 0 ? Result.Ok(result) : Result.Err("write failed")
+
+    if result < 0
+      fail "write failed"
+    end
+
+    result
   end
 
   @extern "C"
@@ -131,24 +133,24 @@ struct File
   @doc """
   Closes the file handle.
   """
-  fn close(self) -> Result<String, String>
-    self.fd.close()
+  fn close(self) -> String ! String
+    try self.fd.close()
   end
 
   @doc """
   Deletes the file at the given path.
-  Returns Ok("ok") on success or an error message.
+  Returns "ok" on success or an error message.
   """
-  fn delete(path: String) -> Result<String, String>
-    cs =
-      match path_cstring(path)
-        Result.Err(error) -> return Result.Err(error)
-        Result.Ok(value) -> value
-      end
-
+  fn delete(path: String) -> String ! String
+    cs = try path_cstring(path)
     result = koja_file_delete(cs.ptr)
     cs.free()
-    result >= 0 ? Result.Ok("ok") : Result.Err("delete failed")
+
+    if result < 0
+      fail "delete failed"
+    end
+
+    "ok"
   end
 
   @doc """
@@ -185,35 +187,35 @@ struct File
   @doc """
   Creates a single directory. Errors if the parent directory is missing
   or the path already exists. See `mkdir_p` for the recursive variant.
-  Returns Ok("ok") on success or an error message.
+  Returns "ok" on success or an error message.
   """
-  fn mkdir(path: String) -> Result<String, String>
-    cs =
-      match path_cstring(path)
-        Result.Err(error) -> return Result.Err(error)
-        Result.Ok(value) -> value
-      end
-
+  fn mkdir(path: String) -> String ! String
+    cs = try path_cstring(path)
     result = koja_file_mkdir(cs.ptr)
     cs.free()
-    result >= 0 ? Result.Ok("ok") : Result.Err("mkdir failed")
+
+    if result < 0
+      fail "mkdir failed"
+    end
+
+    "ok"
   end
 
   @doc """
   Creates a directory along with any missing parents (like `mkdir -p`).
   Succeeds if the directory already exists.
-  Returns Ok("ok") on success or an error message.
+  Returns "ok" on success or an error message.
   """
-  fn mkdir_p(path: String) -> Result<String, String>
-    cs =
-      match path_cstring(path)
-        Result.Err(error) -> return Result.Err(error)
-        Result.Ok(value) -> value
-      end
-
+  fn mkdir_p(path: String) -> String ! String
+    cs = try path_cstring(path)
     result = koja_file_mkdir_p(cs.ptr)
     cs.free()
-    result >= 0 ? Result.Ok("ok") : Result.Err("mkdir_p failed")
+
+    if result < 0
+      fail "mkdir_p failed"
+    end
+
+    "ok"
   end
 
   @doc """
@@ -224,7 +226,7 @@ struct File
   - FileMode.Write   — open for writing (create/truncate)
   - FileMode.Append  — open for appending (create if needed)
   """
-  fn open(path: String, mode: FileMode) -> Result<File, String>
+  fn open(path: String, mode: FileMode) -> File ! String
     mode_int =
       match mode
         FileMode.Read -> 0
@@ -232,17 +234,15 @@ struct File
         FileMode.Append -> 2
       end
 
-    cs =
-      match path_cstring(path)
-        Result.Err(error) -> return Result.Err(error)
-        Result.Ok(value) -> value
-      end
-
+    cs = try path_cstring(path)
     fd = koja_file_open(cs.ptr, mode_int)
     cs.free()
-    fd >= 0
-      ? Result.Ok(File{fd: Fd{descriptor: fd}})
-      : Result.Err("open failed")
+
+    if fd < 0
+      fail "open failed"
+    end
+
+    File{fd: Fd{descriptor: fd}}
   end
 
   @doc """
@@ -250,55 +250,38 @@ struct File
   This is a convenience method that opens, reads, and closes the file.
   Returns the file contents or an error message.
   """
-  fn read(path: String) -> Result<String, String>
-    match File.read_binary(path)
-      Result.Err(error) ->
-        Result.Err(error)
-
-      Result.Ok(bytes) ->
-        match bytes.to_string()
-          Result.Err(_) -> Result.Err("file is not valid UTF-8")
-          Result.Ok(value) -> Result.Ok(value)
-        end
-    end
+  fn read(path: String) -> String ! String
+    bytes = try File.read_binary(path)
+    bytes.to_string() rescue _ -> fail "file is not valid UTF-8"
   end
 
   @doc """
   Reads the entire contents of a file at the given path as raw bytes.
   """
-  fn read_binary(path: String) -> Result<Binary, String>
-    cs =
-      match path_cstring(path)
-        Result.Err(error) -> return Result.Err(error)
-        Result.Ok(value) -> value
-      end
-
+  fn read_binary(path: String) -> Binary ! String
+    cs = try path_cstring(path)
     ptr = koja_file_read_all(cs.ptr)
     cs.free()
 
     if ptr.null?()
-      Result.Err("read failed")
-    else
-      Result.Ok(RuntimeBlock.adopt_binary(ptr))
+      fail "read failed"
     end
+
+    RuntimeBlock.adopt_binary(ptr)
   end
 
   @doc """
   Renames (moves) a file from source to destination.
-  Returns Ok("ok") on success or an error message.
+  Returns "ok" on success or an error message.
   """
-  fn rename(source: String, destination: String) -> Result<String, String>
-    src_cs =
-      match path_cstring(source)
-        Result.Err(error) -> return Result.Err(error)
-        Result.Ok(value) -> value
-      end
+  fn rename(source: String, destination: String) -> String ! String
+    src_cs = try path_cstring(source)
 
     dst_cs =
       match path_cstring(destination)
         Result.Err(error) ->
           src_cs.free()
-          return Result.Err(error)
+          fail error
 
         Result.Ok(value) ->
           value
@@ -307,36 +290,37 @@ struct File
     result = koja_file_rename(src_cs.ptr, dst_cs.ptr)
     src_cs.free()
     dst_cs.free()
-    result >= 0 ? Result.Ok("ok") : Result.Err("rename failed")
+
+    if result < 0
+      fail "rename failed"
+    end
+
+    "ok"
   end
 
   @doc """
   Removes an empty directory. Errors if the directory is not empty.
   See `delete` for removing files.
-  Returns Ok("ok") on success or an error message.
+  Returns "ok" on success or an error message.
   """
-  fn rmdir(path: String) -> Result<String, String>
-    cs =
-      match path_cstring(path)
-        Result.Err(error) -> return Result.Err(error)
-        Result.Ok(value) -> value
-      end
-
+  fn rmdir(path: String) -> String ! String
+    cs = try path_cstring(path)
     result = koja_file_rmdir(cs.ptr)
     cs.free()
-    result >= 0 ? Result.Ok("ok") : Result.Err("rmdir failed")
+
+    if result < 0
+      fail "rmdir failed"
+    end
+
+    "ok"
   end
 
   @doc """
   Writes text or raw bytes to the given path, creating or truncating it.
-  Returns Ok("ok") on success or an error message.
+  Returns "ok" on success or an error message.
   """
-  fn write(path: String, content: Binary | String) -> Result<String, String>
-    path_cs =
-      match path_cstring(path)
-        Result.Err(error) -> return Result.Err(error)
-        Result.Ok(value) -> value
-      end
+  fn write(path: String, content: Binary | String) -> String ! String
+    path_cs = try path_cstring(path)
 
     bytes =
       match content
@@ -350,14 +334,16 @@ struct File
       bytes.byte_size(),
     )
     path_cs.free()
-    result >= 0 ? Result.Ok("ok") : Result.Err("write failed")
+
+    if result < 0
+      fail "write failed"
+    end
+
+    "ok"
   end
 
-  priv fn path_cstring(path: String) -> Result<CString, String>
-    match path.to_cstring()
-      Result.Err(_) -> Result.Err("path contains an interior NUL")
-      Result.Ok(value) -> Result.Ok(value)
-    end
+  priv fn path_cstring(path: String) -> CString ! String
+    path.to_cstring() rescue _ -> fail "path contains an interior NUL"
   end
 
   @extern "C"

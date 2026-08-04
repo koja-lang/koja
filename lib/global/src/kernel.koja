@@ -122,11 +122,11 @@ extend Binary
   fn to_bits(self) -> Bits
 
   @doc """
-  Attempts to interpret the binary as a UTF-8 string. Returns `Result.Ok`
-  with the string if the bytes are valid UTF-8, or `InvalidUTF8` otherwise.
+  Attempts to interpret the binary as a UTF-8 string. Returns the
+  string if the bytes are valid UTF-8, or fails with `InvalidUTF8`.
   """
   @intrinsic
-  fn to_string(self) -> Result<String, String.ConversionError>
+  fn to_string(self) -> String ! String.ConversionError
 end
 
 impl Equality for Binary
@@ -163,12 +163,12 @@ extend Bits
   fn byte_at(self, index: Int) -> Option<Int>
 
   @doc """
-  Attempts to narrow a `Bits` value to `Binary`. Returns `Result.Ok` if
-  the bit length is byte-aligned (divisible by 8), or `Result.Err` with
-  a diagnostic message otherwise.
+  Attempts to narrow a `Bits` value to `Binary`. Returns the binary if
+  the bit length is byte-aligned (divisible by 8), or fails with a
+  diagnostic message.
   """
   @intrinsic
-  fn to_binary(self) -> Result<Binary, String>
+  fn to_binary(self) -> Binary ! String
 end
 
 impl Equality for Bits

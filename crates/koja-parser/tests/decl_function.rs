@@ -216,6 +216,32 @@ fn fn_with_unit_success_and_error_type() {
 }
 
 #[test]
+fn fn_with_bare_error_type() {
+    let f = first_function(
+        "
+        fn ping(host: String) ! String
+          send(host)
+        end
+        ",
+    );
+    assert!(f.return_type.is_none());
+    assert!(matches!(f.error_type, Some(TypeExpr::Named { ref path, .. }) if path == &["String"]));
+}
+
+#[test]
+fn fn_without_params_with_bare_error_type() {
+    let f = first_function(
+        "
+        fn flush ! IOError
+          drain()
+        end
+        ",
+    );
+    assert!(f.return_type.is_none());
+    assert!(matches!(f.error_type, Some(TypeExpr::Named { ref path, .. }) if path == &["IOError"]));
+}
+
+#[test]
 fn fn_with_type_parameters() {
     let f = first_function(
         "

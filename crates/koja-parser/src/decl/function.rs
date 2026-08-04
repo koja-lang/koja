@@ -76,9 +76,13 @@ impl Parser {
     }
 
     /// Parses the optional `-> T` return type and its optional `! E`
-    /// error type. `! E` is only legal after a return type.
+    /// error type. A bare `! E` with no return type declares a unit
+    /// success, so `fn run(args) ! String` means `-> () ! String`.
     pub(crate) fn parse_return_signature(&mut self) -> (Option<TypeExpr>, Option<TypeExpr>) {
         if self.eat(&TokenKind::Arrow).is_none() {
+            if self.eat(&TokenKind::Bang).is_some() {
+                return (None, Some(self.parse_type_expr()));
+            }
             return (None, None);
         }
         let return_type = self.parse_type_expr();

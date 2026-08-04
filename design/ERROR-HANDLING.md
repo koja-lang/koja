@@ -13,6 +13,9 @@ Koja gets a fallibility notation over `Result`, not a second error
 channel:
 
 - `-> T ! E` in a signature is pure notation for `-> Result<T, E>`.
+- A bare `! E` with no return type declares a unit success
+  (`Result<(), E>`), mirroring how infallible unit functions omit the
+  return type entirely (added 2026-08-03).
 - `try expr` unwraps `Ok` or returns the `Err`, widened into the
   enclosing function's declared error union.
 - `fail expr` is `return Result.Err(expr)`, with the same widening.
@@ -302,7 +305,7 @@ The `@test` contract is already the error channel, hand-rolled. Test
 functions return `Result<Bool, String>`, `Err` is the failure message,
 and every test body pays the propagation ceremony for its setup calls
 plus a `Result.Ok(true)` trailer. Under this design the contract
-becomes `-> () ! String`:
+becomes a bare `! String`:
 
 - `fail "expected 2 fields, got #{n}"` is the assertion-failure verb.
   The Ruby test lineage (`fail` / `flunk`) makes the keyword read even
@@ -314,7 +317,8 @@ becomes `-> () ! String`:
 - Success type `()` kills the `Result.Ok(true)` trailer, and a passing
   body just ends.
 
-The runner contract is any `-> () ! E` with `E: Debug`. Plain
+The runner contract is any `! E` with a unit success and `E: Debug`.
+Plain
 `fail "message"` widens `String` into the union, domain errors ride
 along raw (`result = try outcome`), and a structured `Test.Failure`
 gets rich rendering. Rust's `Result`-returning tests with `?` are the
@@ -342,12 +346,12 @@ enum Failure
   Untrue(String)          # check: the described predicate was false
 end
 
-fn assert_eq<T: Equality & Debug>(actual: T, expected: T) -> () ! Failure
-fn assert_ne<T: Equality & Debug>(actual: T, expected: T) -> () ! Failure
+fn assert_eq<T: Equality & Debug>(actual: T, expected: T) ! Failure
+fn assert_ne<T: Equality & Debug>(actual: T, expected: T) ! Failure
 fn assert_ok<T, E: Debug>(outcome: Result<T, E>) -> T ! Failure
 fn assert_err<T: Debug, E>(outcome: Result<T, E>) -> E ! Failure
 fn assert_some<T>(option: Option<T>, what: String) -> T ! Failure
-fn check(condition: Bool, message: String) -> () ! Failure
+fn check(condition: Bool, message: String) ! Failure
 ```
 
 The helpers dogfood the feature (`assert_ok` is one `rescue` line and
@@ -356,7 +360,7 @@ integration test above becomes ~13 lines:
 
 ```koja
 @test "connects with trust auth and runs SELECT"
-fn test_trust_select -> () ! Failure | Postgres.Error
+fn test_trust_select ! Failure | Postgres.Error
   conn = try connect_trust()
 
   (conn, outcome) = conn.query("SELECT 1 AS one, 'two' AS two")

@@ -232,24 +232,25 @@ pub(super) fn type_expr_to_doc(ty: &TypeExpr) -> Doc {
 
 /// Formats a `-> T ! E` return signature tail, shared by function
 /// and protocol-method signatures. `None` when there is nothing to
-/// print (unit return, no error type). An error type forces the
-/// return out even when it is unit: `-> () ! E`.
+/// print (unit return, no error type). A unit return with an error
+/// type prints the bare canonical form `! E`, so `-> () ! E`
+/// normalizes on format.
 pub(super) fn return_signature_doc(
     return_type: Option<&TypeExpr>,
     error_type: Option<&TypeExpr>,
 ) -> Option<Doc> {
-    let has_return = error_type.is_some() || return_type.is_some_and(|rt| !is_unit_type(rt));
-    if !has_return {
-        return None;
-    }
-    let mut parts = vec![text("-> ")];
-    match return_type {
-        Some(return_type) => parts.push(type_expr_to_doc(return_type)),
-        None => parts.push(text("()")),
+    let unit_return = return_type.is_none_or(is_unit_type);
+    let mut parts = Vec::new();
+    if !unit_return {
+        parts.push(text("-> "));
+        parts.push(type_expr_to_doc(return_type.expect("unit_return is false")));
     }
     if let Some(error_type) = error_type {
-        parts.push(text(" ! "));
+        parts.push(text(if unit_return { "! " } else { " ! " }));
         parts.push(type_expr_to_doc(error_type));
+    }
+    if parts.is_empty() {
+        return None;
     }
     Some(concat(parts))
 }

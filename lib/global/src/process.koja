@@ -222,9 +222,9 @@ protocol Process<C, M, R>
   @doc """
   Starts the process by building initial state from config. Runs in the
   child process context after spawn, before the receive loop begins.
-  Return `Result.Err` to abort startup.
+  Fail with a `Process.StopReason` to abort startup.
   """
-  fn start(config: C) -> Result<Self, Process.StopReason>
+  fn start(config: C) -> Self ! Process.StopReason
 
   @doc """
   Handles a business message. Return `Process.Step.Continue(self)` to keep
@@ -332,8 +332,8 @@ extend Task<R>
 end
 
 impl Process<Task<R>, (), R> for Task<R>
-  fn start(config: Task<R>) -> Result<Self, Process.StopReason>
-    Result.Ok(config)
+  fn start(config: Task<R>) -> Self ! Process.StopReason
+    config
   end
 
   fn run(self) -> Process.StopReason

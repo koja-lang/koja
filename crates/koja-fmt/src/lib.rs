@@ -1422,17 +1422,6 @@ mod tests {
     }
 
     #[test]
-    fn unit_success_error_signature_keeps_unit_return() {
-        assert_unchanged(
-            "
-            fn log(message: String) -> () ! WriteError
-              x = 1
-            end
-        ",
-        );
-    }
-
-    #[test]
     fn union_error_signature_stays_inline() {
         assert_unchanged(
             "
@@ -1449,6 +1438,37 @@ mod tests {
             "
             protocol Decode
               fn decode(self, raw: Binary) -> Self ! DecodeError
+            end
+        ",
+        );
+    }
+
+    #[test]
+    fn bare_error_signature_round_trips() {
+        assert_unchanged(
+            "
+            fn ping(host: String) ! String
+              send(host)
+            end
+
+            protocol Store
+              fn flush(self) ! StoreError
+            end
+        ",
+        );
+    }
+
+    #[test]
+    fn unit_error_signature_normalizes_to_bare_form() {
+        assert_fmt(
+            "
+            fn ping(host: String) -> () ! String
+              send(host)
+            end
+        ",
+            "
+            fn ping(host: String) ! String
+              send(host)
             end
         ",
         );
