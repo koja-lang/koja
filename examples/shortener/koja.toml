@@ -9,4 +9,4 @@ version = "0.1.0"
 
 [dependencies]
 pooler = { path = "../pooler" }
-postgres = { path = "../../../postgres" }
+postgres = { github = "koja-lang/postgres", tag = "v0.2.0" }

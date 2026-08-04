@@ -30,9 +30,9 @@ It doubles as a tour of the things that make Koja great:
   connections behind a single process that lends them out one at a
   time, queueing checkout callers in FIFO order when all are lent.
 - **Git and path dependencies** — the driver is declared in
-  `koja.toml` (`Postgres = { github = "hpopp/postgres-koja", tag = "v0.1.0" }`)
+  `koja.toml` (`postgres = { github = "koja-lang/postgres", tag = "v0.2.0" }`)
   and pinned to an exact commit by the committed `koja.lock`, while
-  the pool comes from a local path (`Pooler = { path = "../pooler" }`).
+  the pool comes from a local path (`pooler = { path = "../pooler" }`).
 
 ## Layout
 
