@@ -15,9 +15,11 @@
 //! the static assets that ship alongside the HTML.
 
 mod extract;
+mod highlight;
 mod render;
 mod search;
 mod style;
+pub mod terminal;
 
 pub use extract::{
     DocConstant, DocEnum, DocFunction, DocItem, DocPackage, DocProject, DocProtocol, DocStruct,
@@ -28,4 +30,4 @@ pub use render::{
     render_root_index, render_struct,
 };
 pub use search::search_index_json;
-pub use style::{CSS, SEARCH_JS};
+pub use style::{CSS, DOC_JS, FONTS, SEARCH_JS};

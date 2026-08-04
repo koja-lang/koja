@@ -6,25 +6,28 @@
 </head>
 <body>
 
-{% include "theme_toggle.html" %}
+{% include "header.html" %}
+
+<div class="frame">
 {% include "sidebar.html" %}
 
-<main class="content">
+<main class="content" id="content">
   <div class="page-header">
-    <span class="type-chip chip-pkg">{{ package_kind_label }}</span>
     <h1>{{ package_name }}</h1>
+    <span class="kind-chip">{{ package_kind_label }}</span>
   </div>
 
   <div class="item-list">
-    {% for item in sidebar_items %}
+    {% for item in items %}
     <div class="item-row">
-      <span class="type-chip chip-{{ item.kind }}">{{ item.kind }}</span>
       <a class="item-name" href="{{ item.name }}.html">{{ item.name }}</a>
+      <span class="item-kind">{{ item.kind }}</span>
       {% if let Some(doc) = item.doc %}<span class="item-brief">{{ doc|brief }}</span>{% endif %}
     </div>
     {% endfor %}
   </div>
 </main>
+</div>
 
 </body>
 </html>

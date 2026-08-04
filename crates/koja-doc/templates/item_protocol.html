@@ -6,13 +6,15 @@
 </head>
 <body>
 
-{% include "theme_toggle.html" %}
+{% include "header.html" %}
+
+<div class="frame">
 {% include "sidebar.html" %}
 
-<main class="content">
+<main class="content" id="content">
   <div class="page-header">
-    <span class="type-chip chip-protocol">protocol</span>
     <h1>{{ p.name }}{% if !p.type_params.is_empty() %}&lt;{{ p.type_params.join(", ") }}&gt;{% endif %}</h1>
+    <span class="kind-chip">protocol</span>
   </div>
 
   {% if let Some(doc) = p.doc %}
@@ -20,7 +22,7 @@
   {% endif %}
 
   {% if !p.functions.is_empty() %}
-  <h2 class="section-heading">Methods</h2>
+  <h2 class="section-heading" id="functions">Methods</h2>
   <div class="summary">
     {% for f in p.functions %}
     <div class="summary-row">
@@ -34,6 +36,9 @@
   {% endfor %}
   {% endif %}
 </main>
+
+{% include "toc.html" %}
+</div>
 
 </body>
 </html>

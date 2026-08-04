@@ -5,6 +5,23 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- `koja doc search <query>` looks up a symbol from the terminal, printing the full doc for an exact name and a candidate list for partial matches.
+- `koja doc` commands now work outside a project, documenting the standard library on its own.
+
+### Changed
+
+- `koja doc` pages now match the kojalang.org design, with a centered layout, a navigation rail grouped by kind, and an "on this page" column on large items.
+- Generated docs now syntax highlight function signatures and doc-comment code blocks in the website's code style.
+- Generated docs now bundle their fonts and no longer load from a CDN, so they render fully offline.
+
+### Fixed
+
+- Generated docs now show the `! E` error channel on fallible function signatures.
+
 ## [0.16.0] - 2026-08-03
 
 ### Added

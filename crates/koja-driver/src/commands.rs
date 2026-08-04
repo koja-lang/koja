@@ -10,6 +10,7 @@
 use std::path::{Path, PathBuf};
 use std::{env, fs, process};
 
+use koja_doc::terminal::SearchOutcome;
 use koja_parser::ParseMode;
 
 use crate::diagnostics::print_file_diagnostics;
@@ -82,13 +83,34 @@ struct DocInput {
 /// sources, and the embedded stdlib package set together so the
 /// generated tree is a one-stop browsable reference. Pass
 /// `--project-only` to skip stdlib + deps. With no positional
-/// arguments, looks for `koja.toml` in the current directory.
-pub fn cmd_doc(files: Vec<String>, output: String, project_only: bool) {
-    if !generate_docs(&files, &output, project_only) {
-        return;
+/// arguments, looks for `koja.toml` in the current directory and
+/// falls back to stdlib-only docs (written to a temp dir) when
+/// there is none.
+pub fn cmd_doc(files: Vec<String>, output: Option<String>, project_only: bool) {
+    if let Some(out_path) = generate_docs(&files, output, project_only) {
+        println!("docs generated: {}", out_path.display());
     }
-    let out_path = Path::new(&output);
-    println!("docs generated: {}", out_path.display());
+}
+
+/// `koja doc search <query>` -- look up a symbol and print its doc
+/// as plain markdown, with no disk output. An exact name renders
+/// the full doc, partial matches list candidates, and no matches
+/// exits non-zero.
+pub fn cmd_doc_search(files: Vec<String>, project_only: bool, query: &str) {
+    let discovered = discover_doc_inputs(&files, project_only);
+    if discovered.inputs.is_empty() {
+        eprintln!("no source files to document");
+        process::exit(1);
+    }
+
+    let project = extract_doc_project(discovered.inputs, &discovered.project_package);
+    match koja_doc::terminal::search(&project, query) {
+        SearchOutcome::Hits(text) => print!("{text}"),
+        SearchOutcome::NoMatches => {
+            eprintln!("no matches for \"{query}\"");
+            process::exit(1);
+        }
+    }
 }
 
 /// `koja doc serve [-o output_dir] [--port N] [--no-rebuild]` --
@@ -98,58 +120,86 @@ pub fn cmd_doc(files: Vec<String>, output: String, project_only: bool) {
 /// `file://` URLs. A local HTTP server is the standard workaround.
 pub fn cmd_doc_serve(
     files: Vec<String>,
-    output: String,
+    output: Option<String>,
     project_only: bool,
     port: Option<u16>,
     no_rebuild: bool,
 ) {
-    if !no_rebuild && !generate_docs(&files, &output, project_only) {
-        return;
-    }
-    let out_path = Path::new(&output);
-    if let Err(e) = serve::run(out_path, port) {
+    let out_path = if no_rebuild {
+        let stdlib_fallback = files.is_empty() && try_load_project().is_none();
+        resolve_doc_output(output, stdlib_fallback)
+    } else {
+        match generate_docs(&files, output, project_only) {
+            Some(path) => path,
+            None => return,
+        }
+    };
+    if let Err(e) = serve::run(&out_path, port) {
         eprintln!("error: {e}");
         process::exit(1);
     }
 }
 
 /// Drive the full discover -> parse -> extract -> render -> write
-/// pipeline. Returns `false` when there's nothing to document so
-/// the caller can decide whether to short-circuit (the bare
-/// generator prints "docs generated", while `serve` would skip starting
-/// the server). Fatal errors (output dir creation, file write)
-/// `process::exit` from inside.
-fn generate_docs(files: &[String], output: &str, project_only: bool) -> bool {
-    let (inputs, project_package) = discover_doc_inputs(files, project_only);
-    if inputs.is_empty() {
+/// pipeline, returning the output dir docs were written to.
+/// Returns `None` when there's nothing to document so the caller
+/// can decide whether to short-circuit (the bare generator prints
+/// "docs generated", while `serve` would skip starting the server).
+/// Fatal errors (output dir creation, file write) `process::exit`
+/// from inside.
+fn generate_docs(files: &[String], output: Option<String>, project_only: bool) -> Option<PathBuf> {
+    let discovered = discover_doc_inputs(files, project_only);
+    if discovered.inputs.is_empty() {
         println!("no source files to document");
-        return false;
+        return None;
     }
 
-    let project = extract_doc_project(inputs, &project_package);
+    let project = extract_doc_project(discovered.inputs, &discovered.project_package);
     if project.packages.is_empty() {
         println!("no items to document");
-        return false;
+        return None;
     }
 
-    let out_path = Path::new(output);
-    if let Err(e) = fs::create_dir_all(out_path) {
+    let out_path = resolve_doc_output(output, discovered.stdlib_fallback);
+    if let Err(e) = fs::create_dir_all(&out_path) {
         eprintln!("error creating output directory: {e}");
         process::exit(1);
     }
 
-    write_doc_files(&project, out_path);
-    true
+    write_doc_files(&project, &out_path);
+    Some(out_path)
 }
 
-/// Resolves the list of source files `koja doc` will process,
-/// returning the inputs plus the project package name (used as
-/// the sidebar header and the default-active package). Empty
+/// Pick the doc output dir. An explicit `-o` always wins, project
+/// mode defaults to `doc`, and the stdlib fallback defaults to a
+/// per-compiler-version temp dir so `koja doc` works from any cwd.
+fn resolve_doc_output(output: Option<String>, stdlib_fallback: bool) -> PathBuf {
+    if let Some(output) = output {
+        return PathBuf::from(output);
+    }
+    if stdlib_fallback {
+        env::temp_dir().join(format!("koja-stdlib-doc-{}", env!("CARGO_PKG_VERSION")))
+    } else {
+        PathBuf::from("doc")
+    }
+}
+
+/// Resolved doc inputs plus the project package name (used as the
+/// sidebar header and the default-active package). `stdlib_fallback`
+/// is set when no project was found and only the bundled stdlib is
+/// documented, which switches the default output dir to a temp dir.
+struct DiscoveredDocInputs {
+    inputs: Vec<DocInput>,
+    project_package: String,
+    stdlib_fallback: bool,
+}
+
+/// Resolves the list of source files `koja doc` will process. Empty
 /// `files` means project mode (walk `src` from `koja.toml` and
 /// every dep's `src`). Otherwise treat each entry as a path or a
 /// directory of `.koja` files. Stdlib + deps are bundled unless
 /// `project_only` is true.
-fn discover_doc_inputs(files: &[String], project_only: bool) -> (Vec<DocInput>, String) {
+fn discover_doc_inputs(files: &[String], project_only: bool) -> DiscoveredDocInputs {
     if files.is_empty() {
         return discover_project_doc_inputs(project_only);
     }
@@ -157,15 +207,24 @@ fn discover_doc_inputs(files: &[String], project_only: bool) -> (Vec<DocInput>, 
 }
 
 /// Project-mode doc inputs: no files given, so load `src` from the
-/// current `koja.toml` (exiting with usage help if there is none),
-/// plus every dependency's `src` and the stdlib unless `project_only`.
-/// The project package name doubles as the sidebar header.
-fn discover_project_doc_inputs(project_only: bool) -> (Vec<DocInput>, String) {
-    let (config, cwd) = load_project_or_exit(&[
-        "error: no source file specified and no koja.toml found",
-        "Usage: koja doc <file.koja ...> [-o output_dir]",
-        "  or:  create a koja.toml in the current directory",
-    ]);
+/// current `koja.toml`, plus every dependency's `src` and the stdlib
+/// unless `project_only`. Without a `koja.toml` the bundled stdlib
+/// is documented on its own (empty project name, so the brand
+/// renders as plain "koja docs"); `--project-only` without a
+/// project is an error.
+fn discover_project_doc_inputs(project_only: bool) -> DiscoveredDocInputs {
+    let Some((config, cwd)) = try_load_project() else {
+        if project_only {
+            eprintln!("error: --project-only requires a koja.toml project");
+            process::exit(1);
+        }
+        let inputs = loader::stdlib_sources().into_iter().map(DocInput::from);
+        return DiscoveredDocInputs {
+            inputs: inputs.collect(),
+            project_package: String::new(),
+            stdlib_fallback: true,
+        };
+    };
 
     let loaded = ProjectLoader::new(&config, &cwd)
         .sources(LoadOptions {
@@ -176,15 +235,18 @@ fn discover_project_doc_inputs(project_only: bool) -> (Vec<DocInput>, String) {
             on_error: ErrorPolicy::Lenient,
         })
         .unwrap_or_default();
-    let inputs = loaded.into_iter().map(DocInput::from).collect();
 
-    (inputs, config.namespace())
+    DiscoveredDocInputs {
+        inputs: loaded.into_iter().map(DocInput::from).collect(),
+        project_package: config.namespace(),
+        stdlib_fallback: false,
+    }
 }
 
 /// Explicit-file doc inputs: each entry in `files` is a `.koja` file
 /// or a directory of them, all tagged under the synthetic `Docs`
 /// package. The stdlib is appended unless `project_only`.
-fn discover_explicit_doc_inputs(files: &[String], project_only: bool) -> (Vec<DocInput>, String) {
+fn discover_explicit_doc_inputs(files: &[String], project_only: bool) -> DiscoveredDocInputs {
     let project_package = "Docs".to_string();
     let mut inputs = Vec::new();
     for input in files {
@@ -209,7 +271,11 @@ fn discover_explicit_doc_inputs(files: &[String], project_only: bool) -> (Vec<Do
         inputs.extend(loader::stdlib_sources().into_iter().map(DocInput::from));
     }
 
-    (inputs, project_package)
+    DiscoveredDocInputs {
+        inputs,
+        project_package,
+        stdlib_fallback: false,
+    }
 }
 
 impl From<LoadedSource> for DocInput {
@@ -250,12 +316,26 @@ fn extract_doc_project(inputs: Vec<DocInput>, project_package: &str) -> koja_doc
 
 /// Renders the project as the subdir-per-package HTML tree.
 /// Always emits `index.html` (package roster), `style.css`,
-/// `search.js`, and `search-index.json` at the root, then one
-/// subdirectory per documented package containing its
-/// `index.html` plus a page per item.
+/// `doc.js`, `search.js`, `search-index.json`, and the
+/// self-hosted `fonts/` at the root, then one subdirectory per
+/// documented package containing its `index.html` plus a page
+/// per item.
 fn write_doc_files(project: &koja_doc::DocProject, out_path: &Path) {
     write_doc_file(&out_path.join("style.css"), koja_doc::CSS);
+    write_doc_file(&out_path.join("doc.js"), koja_doc::DOC_JS);
     write_doc_file(&out_path.join("search.js"), koja_doc::SEARCH_JS);
+
+    let fonts_dir = out_path.join("fonts");
+    if let Err(e) = fs::create_dir_all(&fonts_dir) {
+        eprintln!(
+            "error creating fonts directory {}: {e}",
+            fonts_dir.display()
+        );
+        process::exit(1);
+    }
+    for (name, bytes) in koja_doc::FONTS {
+        write_doc_bytes(&fonts_dir.join(name), bytes);
+    }
     write_doc_file(
         &out_path.join("search-index.json"),
         &koja_doc::search_index_json(project),
@@ -305,6 +385,10 @@ fn write_doc_files(project: &koja_doc::DocProject, out_path: &Path) {
 }
 
 fn write_doc_file(path: &Path, content: &str) {
+    write_doc_bytes(path, content.as_bytes());
+}
+
+fn write_doc_bytes(path: &Path, content: &[u8]) {
     if let Err(e) = fs::write(path, content) {
         eprintln!("error writing {}: {e}", path.display());
         process::exit(1);

@@ -12,6 +12,7 @@ use koja_ast::ast::{
     AnnotationValue, EnumDecl, ExtendBlock, File, Function, ImplMember, Item, Param, ProtocolDecl,
     ProtocolMethod, StructDecl, TypeExpr, Visibility,
 };
+use koja_ast::util::dedent;
 
 /// Where a [`DocPackage`] came from. Drives the cross-package sort
 /// order (project -> dependency -> stdlib, alphabetical within tier)
@@ -74,10 +75,12 @@ pub struct DocField {
     pub type_name: String,
 }
 
-/// Documentation for a function.
+/// Documentation for a function. `error_type` is `Some` for the
+/// fallible spelling `-> T ! E`.
 #[derive(Debug)]
 pub struct DocFunction {
     pub doc: Option<String>,
+    pub error_type: Option<String>,
     pub name: String,
     pub params: Vec<DocParam>,
     pub return_type: Option<String>,
@@ -353,12 +356,14 @@ fn finalize_package(pkg: &mut DocPackage) {
     pkg.items.sort_by(|a, b| a.name.cmp(&b.name));
 }
 
+/// Read the `@doc` string, dedented so the declaration's source
+/// indentation doesn't leak into markdown or terminal rendering.
 fn annotation_string(annotations: &[koja_ast::ast::Annotation]) -> Option<String> {
     annotations
         .iter()
         .find(|a| a.name == "doc")
         .and_then(|a| match &a.value {
-            Some(AnnotationValue::String(s)) => Some(s.clone()),
+            Some(AnnotationValue::String(s)) => Some(dedent(s).trim().to_string()),
             _ => None,
         })
 }
@@ -433,6 +438,7 @@ fn extract_function(f: &Function) -> Option<DocFunction> {
 
     Some(DocFunction {
         doc: annotation_string(&f.annotations),
+        error_type: f.error_type.as_ref().map(type_expr_to_string),
         name: f.name.clone(),
         params,
         return_type: f.return_type.as_ref().map(type_expr_to_string),
@@ -486,6 +492,7 @@ fn extract_protocol_method(m: &ProtocolMethod) -> Option<DocFunction> {
 
     Some(DocFunction {
         doc: annotation_string(&m.annotations),
+        error_type: m.error_type.as_ref().map(type_expr_to_string),
         name: m.name.clone(),
         params,
         return_type: m.return_type.as_ref().map(type_expr_to_string),

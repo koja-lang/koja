@@ -10,7 +10,9 @@
 //! dependency on `serde_json`. The payload shape is fixed and
 //! the only escaping concern is doc-string content.
 
-use crate::extract::{DocPackage, DocProject};
+use crate::extract::{
+    DocConstant, DocEnum, DocFunction, DocPackage, DocProject, DocProtocol, DocStruct,
+};
 
 /// Format `project` as the contents of `doc/search-index.json`,
 /// ready to be written verbatim by the driver. Same sort order
@@ -18,25 +20,22 @@ use crate::extract::{DocPackage, DocProject};
 /// alphabetical hit list matches the visible sidebar when the
 /// search box is empty.
 pub fn search_index_json(project: &DocProject) -> String {
-    let mut entries: Vec<SearchEntry> = Vec::new();
-    for pkg in &project.packages {
-        collect_package_entries(pkg, &mut entries);
-    }
+    let symbols = collect_symbols(project);
 
     let mut out = String::from("[");
-    for (idx, entry) in entries.iter().enumerate() {
+    for (idx, symbol) in symbols.iter().enumerate() {
         if idx > 0 {
             out.push(',');
         }
         out.push_str("\n  {");
-        out.push_str(&format!("\"pkg\":{},", json_str(&entry.pkg)));
-        out.push_str(&format!("\"name\":{},", json_str(&entry.name)));
-        out.push_str(&format!("\"kind\":{},", json_str(&entry.kind)));
-        out.push_str(&format!("\"url\":{},", json_str(&entry.url)));
-        out.push_str(&format!("\"brief\":{}", json_str(&entry.brief)));
+        out.push_str(&format!("\"pkg\":{},", json_str(symbol.package)));
+        out.push_str(&format!("\"name\":{},", json_str(&symbol.name)));
+        out.push_str(&format!("\"kind\":{},", json_str(symbol.kind)));
+        out.push_str(&format!("\"url\":{},", json_str(&symbol.url())));
+        out.push_str(&format!("\"brief\":{}", json_str(&symbol.brief())));
         out.push('}');
     }
-    if !entries.is_empty() {
+    if !symbols.is_empty() {
         out.push('\n');
     }
     out.push(']');
@@ -44,78 +43,98 @@ pub fn search_index_json(project: &DocProject) -> String {
     out
 }
 
-struct SearchEntry {
-    brief: String,
-    kind: String,
-    name: String,
-    pkg: String,
-    url: String,
+/// One doc-visible symbol, shared between the JSON search index
+/// and the terminal matcher. `name` is the display name, either a
+/// bare item name (`List`) or a member spelling (`List.append`).
+pub(crate) struct Symbol<'a> {
+    pub kind: &'static str,
+    pub name: String,
+    pub owner: Option<&'a str>,
+    pub package: &'a str,
+    pub target: SymbolTarget<'a>,
 }
 
-fn collect_package_entries(pkg: &DocPackage, out: &mut Vec<SearchEntry>) {
+/// The doc item a [`Symbol`] points at, for full-doc rendering.
+pub(crate) enum SymbolTarget<'a> {
+    Constant(&'a DocConstant),
+    Enum(&'a DocEnum),
+    Function(&'a DocFunction),
+    Protocol(&'a DocProtocol),
+    Struct(&'a DocStruct),
+}
+
+impl Symbol<'_> {
+    pub fn brief(&self) -> String {
+        brief(self.doc())
+    }
+
+    pub fn doc(&self) -> &Option<String> {
+        match &self.target {
+            SymbolTarget::Constant(c) => &c.doc,
+            SymbolTarget::Enum(e) => &e.doc,
+            SymbolTarget::Function(f) => &f.doc,
+            SymbolTarget::Protocol(p) => &p.doc,
+            SymbolTarget::Struct(s) => &s.doc,
+        }
+    }
+
+    pub fn qualified_name(&self) -> String {
+        format!("{}.{}", self.package, self.name)
+    }
+
+    fn url(&self) -> String {
+        match (&self.target, self.owner) {
+            (SymbolTarget::Function(f), Some(owner)) => {
+                format!("{}/{owner}.html#fn-{}", self.package, f.name)
+            }
+            _ => format!("{}/{}.html", self.package, self.name),
+        }
+    }
+}
+
+/// Enumerate every doc-visible symbol in roster order, walking each
+/// package's constants, enums, functions, protocols, then structs.
+pub(crate) fn collect_symbols(project: &DocProject) -> Vec<Symbol<'_>> {
+    let mut out = Vec::new();
+    for pkg in &project.packages {
+        collect_package_symbols(pkg, &mut out);
+    }
+    out
+}
+
+fn collect_package_symbols<'a>(pkg: &'a DocPackage, out: &mut Vec<Symbol<'a>>) {
+    let item = |kind, name: &str, target| Symbol {
+        kind,
+        name: name.to_string(),
+        owner: None,
+        package: &pkg.name,
+        target,
+    };
+    let member = |owner: &'a str, f: &'a DocFunction| Symbol {
+        kind: "fn",
+        name: format!("{owner}.{}", f.name),
+        owner: Some(owner),
+        package: &pkg.name,
+        target: SymbolTarget::Function(f),
+    };
+
     for c in &pkg.constants {
-        out.push(SearchEntry {
-            brief: brief(&c.doc),
-            kind: "const".to_string(),
-            name: c.name.clone(),
-            pkg: pkg.name.clone(),
-            url: format!("{}/{}.html", pkg.name, c.name),
-        });
+        out.push(item("const", &c.name, SymbolTarget::Constant(c)));
     }
     for e in &pkg.enums {
-        out.push(SearchEntry {
-            brief: brief(&e.doc),
-            kind: "enum".to_string(),
-            name: e.name.clone(),
-            pkg: pkg.name.clone(),
-            url: format!("{}/{}.html", pkg.name, e.name),
-        });
-        for f in &e.functions {
-            out.push(method_entry(pkg, &e.name, f));
-        }
+        out.push(item("enum", &e.name, SymbolTarget::Enum(e)));
+        out.extend(e.functions.iter().map(|f| member(&e.name, f)));
     }
     for f in &pkg.functions {
-        out.push(SearchEntry {
-            brief: brief(&f.doc),
-            kind: "fn".to_string(),
-            name: f.name.clone(),
-            pkg: pkg.name.clone(),
-            url: format!("{}/{}.html", pkg.name, f.name),
-        });
+        out.push(item("fn", &f.name, SymbolTarget::Function(f)));
     }
     for p in &pkg.protocols {
-        out.push(SearchEntry {
-            brief: brief(&p.doc),
-            kind: "protocol".to_string(),
-            name: p.name.clone(),
-            pkg: pkg.name.clone(),
-            url: format!("{}/{}.html", pkg.name, p.name),
-        });
-        for f in &p.functions {
-            out.push(method_entry(pkg, &p.name, f));
-        }
+        out.push(item("protocol", &p.name, SymbolTarget::Protocol(p)));
+        out.extend(p.functions.iter().map(|f| member(&p.name, f)));
     }
     for s in &pkg.structs {
-        out.push(SearchEntry {
-            brief: brief(&s.doc),
-            kind: "struct".to_string(),
-            name: s.name.clone(),
-            pkg: pkg.name.clone(),
-            url: format!("{}/{}.html", pkg.name, s.name),
-        });
-        for f in &s.functions {
-            out.push(method_entry(pkg, &s.name, f));
-        }
-    }
-}
-
-fn method_entry(pkg: &DocPackage, owner: &str, f: &crate::extract::DocFunction) -> SearchEntry {
-    SearchEntry {
-        brief: brief(&f.doc),
-        kind: "fn".to_string(),
-        name: format!("{owner}.{}", f.name),
-        pkg: pkg.name.clone(),
-        url: format!("{}/{owner}.html#fn-{}", pkg.name, f.name),
+        out.push(item("struct", &s.name, SymbolTarget::Struct(s)));
+        out.extend(s.functions.iter().map(|f| member(&s.name, f)));
     }
 }
 
@@ -127,9 +146,11 @@ fn brief(doc: &Option<String>) -> String {
         return String::new();
     };
     let trimmed = doc.trim();
-    if let Some(idx) = trimmed.find(". ") {
-        trimmed[..=idx].to_string()
-    } else if let Some(idx) = trimmed.find(".\n") {
+    let sentence_end = [". ", ".\n"]
+        .iter()
+        .filter_map(|sep| trimmed.find(sep))
+        .min();
+    if let Some(idx) = sentence_end {
         trimmed[..=idx].to_string()
     } else if trimmed.ends_with('.') {
         trimmed.to_string()
@@ -177,5 +198,11 @@ mod tests {
         assert_eq!(brief(&Some("First. Second.".to_string())), "First.");
         assert_eq!(brief(&Some("Trailing.".to_string())), "Trailing.");
         assert_eq!(brief(&Some("Line one\nLine two".to_string())), "Line one");
+        // A paragraph break ends the first sentence even when a
+        // `". "` boundary appears later.
+        assert_eq!(
+            brief(&Some("First.\n\nSecond one. Third.".to_string())),
+            "First."
+        );
     }
 }

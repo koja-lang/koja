@@ -166,9 +166,10 @@ struct DocArgs {
     /// Source files or directories (omit to use koja.toml)
     files: Vec<String>,
 
-    /// Output directory for generated HTML
-    #[arg(short, long, default_value = "doc")]
-    output: String,
+    /// Output directory for generated HTML (defaults to `doc`, or a
+    /// temp dir when documenting the stdlib outside a project)
+    #[arg(short, long)]
+    output: Option<String>,
 
     /// Skip bundled stdlib + path dependencies and document the project sources only
     #[arg(long)]
@@ -200,6 +201,15 @@ enum DepsAction {
 
 #[derive(Subcommand)]
 enum DocAction {
+    /// Look up a symbol and print its doc to the terminal
+    ///
+    /// An exact name (`List`, `List.append`, `JSON.Decoder`) renders
+    /// the full doc as plain markdown. Partial matches list the
+    /// candidates. Exits non-zero when nothing matches.
+    Search {
+        /// Symbol name or substring to look up
+        query: String,
+    },
     /// Rebuild docs and serve them on a local HTTP port
     ///
     /// Sidesteps the `file://` CORS restriction that prevents the
@@ -268,10 +278,11 @@ fn main() {
     }
 }
 
-/// Route `koja doc [...]` and `koja doc serve [...]` to the
-/// right handler. Bare `koja doc` falls through to the static
-/// generator, while `koja doc serve` rebuilds (unless `--no-rebuild`)
-/// then hands the output dir to the preview server.
+/// Route `koja doc [...]` and its subcommands to the right handler.
+/// Bare `koja doc` falls through to the static generator, `koja doc
+/// serve` rebuilds (unless `--no-rebuild`) then hands the output dir
+/// to the preview server, and `koja doc search` prints matches to
+/// stdout without touching disk (`-o` is ignored).
 fn dispatch_doc(args: DocArgs) {
     let DocArgs {
         action,
@@ -282,6 +293,9 @@ fn dispatch_doc(args: DocArgs) {
 
     match action {
         None => commands::cmd_doc(files, output, project_only),
+        Some(DocAction::Search { query }) => {
+            commands::cmd_doc_search(files, project_only, &query);
+        }
         Some(DocAction::Serve { port, no_rebuild }) => {
             commands::cmd_doc_serve(files, output, project_only, port, no_rebuild);
         }
