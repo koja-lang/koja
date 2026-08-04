@@ -75,68 +75,48 @@ struct GitHub
   @doc """
   Fetches a repository by its `owner/name` path.
   """
-  fn repo(full_name: String) -> Result<GitHub.Repo, String>
-    match fetch("/repos/#{full_name}")
-      Result.Ok(value) -> Result.Ok(GitHub.Repo.from_json(value))
-      Result.Err(e) -> Result.Err(e)
-    end
+  fn repo(full_name: String) -> GitHub.Repo ! String
+    value = try fetch("/repos/#{full_name}")
+    GitHub.Repo.from_json(value)
   end
 
   @doc """
   Fetches a user's repositories, most recently updated first.
   """
-  fn repos(login: String) -> Result<List<GitHub.Repo>, String>
-    value =
-      match fetch("/users/#{login}/repos?sort=updated&per_page=20")
-        Result.Ok(v) -> v
-        Result.Err(e) -> return Result.Err(e)
-      end
+  fn repos(login: String) -> List<GitHub.Repo> ! String
+    value = try fetch("/users/#{login}/repos?sort=updated&per_page=20")
 
     match value
       Value.Array(items) ->
-        Result.Ok(items.map(fn (item: Value) -> GitHub.Repo
+        items.map(fn (item: Value) -> GitHub.Repo
           GitHub.Repo.from_json(item)
-        end))
-      _ -> Result.Err("expected a JSON array of repositories")
+        end)
+      _ -> fail "expected a JSON array of repositories"
     end
   end
 
   @doc """
   Fetches a user profile by login.
   """
-  fn user(login: String) -> Result<GitHub.User, String>
-    match fetch("/users/#{login}")
-      Result.Ok(value) -> Result.Ok(GitHub.User.from_json(value))
-      Result.Err(e) -> Result.Err(e)
-    end
+  fn user(login: String) -> GitHub.User ! String
+    value = try fetch("/users/#{login}")
+    GitHub.User.from_json(value)
   end
 
-  priv fn decode(body: String) -> Result<Value, String>
-    match Decoder.decode(body)
-      Result.Ok(value) -> Result.Ok(value)
-      Result.Err(e) -> Result.Err("malformed JSON from GitHub: #{e}")
-    end
+  priv fn decode(body: String) -> Value ! String
+    Decoder.decode(body) rescue e -> fail "malformed JSON from GitHub: #{e}"
   end
 
-  priv fn fetch(path: String) -> Result<Value, String>
-    response =
-      match HTTP.request(Method.Get, "#{API_ROOT}#{path}", headers(), "")
-        Result.Ok(r) -> r
-        Result.Err(e) -> return Result.Err(e.message())
-      end
+  priv fn fetch(path: String) -> Value ! String
+    response = HTTP.request(Method.Get, "#{API_ROOT}#{path}", headers(), "")
+      rescue e -> fail e.message()
 
     match response.status.code
-      code when code >= 200 and code < 300 ->
-        decode(response.body)
-
+      code when code >= 200 and code < 300 -> try decode(response.body)
       403 ->
-        Result.Err("rate limited or forbidden -- set GITHUB_TOKEN to authenticate")
-
-      404 ->
-        Result.Err("not found: #{path}")
-
-      code ->
-        Result.Err("GitHub returned HTTP #{code}")
+        fail "rate limited or forbidden -- set GITHUB_TOKEN to authenticate"
+      404 -> fail "not found: #{path}"
+      code -> fail "GitHub returned HTTP #{code}"
     end
   end
 

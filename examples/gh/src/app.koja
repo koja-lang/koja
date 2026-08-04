@@ -12,8 +12,8 @@ struct App
 end
 
 impl Process<List<String>, (), String> for App
-  fn start(config: List<String>) -> Result<Self, StopReason>
-    Result.Ok(App{args: config})
+  fn start(config: List<String>) -> Self ! StopReason
+    App{args: config}
   end
 
   fn handle(self, msg: (), from: Option<ReplyTo<String>>) -> Step<Self>

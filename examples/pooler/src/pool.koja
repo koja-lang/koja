@@ -68,12 +68,12 @@ struct Pool<T>
   @doc """
   Borrows a resource, waiting up to `timeout_ms` for one to free up.
   """
-  fn checkout(self, timeout_ms: Int) -> Result<T, Error>
+  fn checkout(self, timeout_ms: Int) -> T ! Error
     match self.ref.call(Msg.Checkout, timeout_ms)
-      Result.Ok(Reply.Resource(resource)) -> Result.Ok(resource)
-      Result.Ok(_) -> Result.Err(Error.Failed("unexpected checkout reply"))
-      Result.Err(CallError.Timeout) -> Result.Err(Error.Timeout)
-      Result.Err(_) -> Result.Err(Error.PoolDown)
+      Result.Ok(Reply.Resource(resource)) -> resource
+      Result.Ok(_) -> fail Error.Failed("unexpected checkout reply")
+      Result.Err(CallError.Timeout) -> fail Error.Timeout
+      Result.Err(_) -> fail Error.PoolDown
     end
   end
 
@@ -91,13 +91,13 @@ struct Pool<T>
   pool builds a replacement with its factory. If the factory fails, the
   pool shrinks by one and the error is returned.
   """
-  fn discard(self, timeout_ms: Int) -> Result<(), Error>
+  fn discard(self, timeout_ms: Int) ! Error
     match self.ref.call(Msg.Discard, timeout_ms)
-      Result.Ok(Reply.Done) -> Result.Ok(())
-      Result.Ok(Reply.Failed(reason)) -> Result.Err(Error.Failed(reason))
-      Result.Ok(_) -> Result.Err(Error.Failed("unexpected discard reply"))
-      Result.Err(CallError.Timeout) -> Result.Err(Error.Timeout)
-      Result.Err(_) -> Result.Err(Error.PoolDown)
+      Result.Ok(Reply.Done) -> ()
+      Result.Ok(Reply.Failed(reason)) -> fail Error.Failed(reason)
+      Result.Ok(_) -> fail Error.Failed("unexpected discard reply")
+      Result.Err(CallError.Timeout) -> fail Error.Timeout
+      Result.Err(_) -> fail Error.PoolDown
     end
   end
 
@@ -119,25 +119,18 @@ priv struct Server<T>
 end
 
 impl Process<Config<T>, Msg<T>, Reply<T>> for Server<T>
-  fn start(config: Config<T>) -> Result<Self, StopReason>
+  fn start(config: Config<T>) -> Self ! StopReason
     available: List<T> = List.new()
     waiting: List<ReplyTo<Reply<T>>> = List.new()
     i = 0
 
     while i < config.size
-      match config.create()
-        Result.Ok(resource) -> available = available.append(resource)
-        Result.Err(_) -> return Result.Err(StopReason.Shutdown)
-      end
-
+      resource = config.create() rescue _ -> fail StopReason.Shutdown
+      available = available.append(resource)
       i += 1
     end
 
-    Result.Ok(Server{
-      available: available,
-      create: config.create,
-      waiting: waiting,
-    })
+    Server{available: available, create: config.create, waiting: waiting}
   end
 
   fn handle(self, msg: Msg<T>, from: Option<ReplyTo<Reply<T>>>) -> Step<Self>
