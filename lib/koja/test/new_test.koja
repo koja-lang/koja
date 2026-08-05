@@ -63,6 +63,7 @@ struct NewTest
 
     toml = File.read("#{name}/koja.toml")
     gitignore = File.read("#{name}/.gitignore")
+    agents = File.read("#{name}/AGENTS.md")
     app = File.read("#{name}/src/app.koja")
     app_test = File.read("#{name}/test/app_test.koja")
     cleanup_scaffold(name)
@@ -73,6 +74,11 @@ struct NewTest
     end
 
     match check_marker(gitignore, "/build", ".gitignore")
+      Result.Err(message) -> return Result.Err(message)
+      Result.Ok(_) -> ()
+    end
+
+    match check_marker(agents, "koja doc search", "AGENTS.md")
       Result.Err(message) -> return Result.Err(message)
       Result.Ok(_) -> ()
     end
@@ -109,6 +115,7 @@ struct NewTest
   priv fn cleanup_scaffold(name: String)
     File.delete("#{name}/koja.toml")
     File.delete("#{name}/.gitignore")
+    File.delete("#{name}/AGENTS.md")
     File.delete("#{name}/src/app.koja")
     File.delete("#{name}/test/app_test.koja")
     File.rmdir("#{name}/src")

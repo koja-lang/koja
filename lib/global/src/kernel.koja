@@ -1,4 +1,39 @@
 @doc """
+An arbitrary byte sequence.
+"""
+@intrinsic
+struct Binary
+end
+
+@doc """
+An arbitrary bit sequence, not necessarily byte-aligned.
+"""
+@intrinsic
+struct Bits
+end
+
+@doc """
+A boolean value, `true` or `false`.
+"""
+@intrinsic
+struct Bool
+end
+
+@doc """
+The type of expressions that never produce a value, such as `Kernel.panic`.
+"""
+@intrinsic
+struct Never
+end
+
+@doc """
+The empty value, returned by functions with no declared return type.
+"""
+@intrinsic
+struct Unit
+end
+
+@doc """
 Core runtime operations.
 """
 struct Kernel

@@ -1,3 +1,10 @@
+@doc """
+UTF-8 text, indexed by Unicode codepoint.
+"""
+@intrinsic
+struct String
+end
+
 impl Equality for String
   @doc """
   Returns `true` if both strings have the same content.

@@ -26,7 +26,7 @@
 //! [`format`] submodule. It's a separate concern from the data + insert
 //! API (different audience: diagnostic rendering vs pipeline work).
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 use koja_ast::ast::Literal;
 use koja_ast::identifier::{
@@ -165,6 +165,9 @@ pub struct GlobalRegistry {
     entries: HashMap<GlobalRegistryId, RegistryEntry>,
     by_identifier: HashMap<Identifier, GlobalRegistryId>,
     next_id: u32,
+    /// Seeded primitive stubs not yet claimed by an `@intrinsic`
+    /// type declaration. [`Self::claim_primitive_stub`] drains it.
+    unclaimed_primitive_stubs: HashSet<GlobalRegistryId>,
 }
 
 impl GlobalRegistry {
@@ -654,6 +657,28 @@ impl GlobalRegistry {
         }
     }
 
+    /// Claim a seeded primitive stub for an `@intrinsic` type
+    /// declaration. Stamps the declaration's span onto the entry so
+    /// later collisions point at real source, and consumes the stub
+    /// so a second claim collides like any duplicate. `None` when
+    /// `identifier` doesn't name an unclaimed builtin.
+    pub(crate) fn claim_primitive_stub(
+        &mut self,
+        identifier: &Identifier,
+        span: Span,
+    ) -> Option<GlobalRegistryId> {
+        let id = *self.by_identifier.get(identifier)?;
+        if !self.unclaimed_primitive_stubs.remove(&id) {
+            return None;
+        }
+        let entry = self
+            .entries
+            .get_mut(&id)
+            .expect("reverse index points at a missing forward entry");
+        entry.span = span;
+        Some(id)
+    }
+
     /// Dereference an id to its entry.
     pub fn get(&self, id: GlobalRegistryId) -> Option<&RegistryEntry> {
         self.entries.get(&id)
@@ -840,4 +865,59 @@ fn seed_primitive_stub(reg: &mut GlobalRegistry, name: &str, type_params: Vec<St
             fields: Vec::new(),
         },
     );
+    reg.unclaimed_primitive_stubs.insert(id);
+}
+
+#[cfg(test)]
+mod tests {
+    use koja_ast::span::Position;
+
+    use super::*;
+
+    fn decl_span() -> Span {
+        let position = |column| Position {
+            offset: column,
+            line: 3,
+            column,
+        };
+        Span::new(position(1), position(20))
+    }
+
+    #[test]
+    fn claim_primitive_stub_stamps_span_and_consumes_stub() {
+        let mut reg = GlobalRegistry::with_stdlib_stubs();
+        let identifier = Identifier::new("Global", vec!["String".to_string()]);
+
+        let id = reg
+            .claim_primitive_stub(&identifier, decl_span())
+            .expect("seeded `Global.String` stub should be claimable");
+        assert_eq!(reg.get(id).unwrap().span, decl_span());
+
+        assert!(
+            reg.claim_primitive_stub(&identifier, Span::default())
+                .is_none(),
+            "a stub claims at most once",
+        );
+    }
+
+    #[test]
+    fn claim_primitive_stub_rejects_non_builtin_identifiers() {
+        let mut reg = GlobalRegistry::with_stdlib_stubs();
+        let user_struct = Identifier::new("App", vec!["Config".to_string()]);
+        let InsertOutcome::Fresh(_) = reg.insert_struct(
+            user_struct.clone(),
+            Span::default(),
+            Vec::new(),
+            VisibilityScope::Public,
+        ) else {
+            panic!("fresh registry should accept `App.Config`");
+        };
+
+        assert!(
+            reg.claim_primitive_stub(&user_struct, decl_span())
+                .is_none()
+        );
+        let missing = Identifier::new("App", vec!["Missing".to_string()]);
+        assert!(reg.claim_primitive_stub(&missing, decl_span()).is_none());
+    }
 }

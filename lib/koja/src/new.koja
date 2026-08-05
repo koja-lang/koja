@@ -1,7 +1,7 @@
 @doc """
 The `koja.new` toolchain task backing `koja new <name>`. Scaffolds a
-new project directory with `koja.toml`, `.gitignore`, a starter
-`Process` entry in `src/`, and a starter test in `test/`.
+new project directory with `koja.toml`, `.gitignore`, `AGENTS.md`, a
+starter `Process` entry in `src/`, and a starter test in `test/`.
 """
 struct New
 end
@@ -33,6 +33,7 @@ end
 priv fn write_scaffold(name: String) ! String
   try write_file("#{name}/koja.toml", toml_content(name))
   try write_file("#{name}/.gitignore", gitignore_content())
+  try write_file("#{name}/AGENTS.md", agents_content())
   try write_file("#{name}/src/app.koja", app_content())
   try write_file("#{name}/test/app_test.koja", app_test_content())
 end
@@ -106,6 +107,46 @@ priv fn gitignore_content -> String
   """
   /build
   /deps
+  """
+end
+
+# Evergreen agent guidance: teach the lookup tools and the core
+# invariants, never version-shaped API surface that can go stale.
+priv fn agents_content -> String
+  """
+  # Agent Guide
+
+  This is a [Koja](https://kojalang.org) project. Koja is a statically
+  typed, compiled language with Ruby-inspired syntax, value semantics,
+  and Erlang-style concurrency.
+
+  ## Look up documentation
+
+  `koja doc search <query>` prints docs for any stdlib or project
+  symbol. An exact name renders the full doc. A partial name lists
+  candidates.
+
+  ## Commands
+
+  Set `KOJA_DIAGNOSTICS=short` to print each diagnostic on one line.
+
+  - `koja check` type checks without compiling
+  - `koja test` runs `@test` functions from `src/` and `test/`
+  - `koja run` builds and executes the project
+  - `koja format --write <files>` formats source files
+
+  ## Language essentials
+
+  - No `let`, `var`, `mut`, or semicolons. Assignment creates a
+    variable, and blocks close with `end`.
+  - No `else if`. Use `cond` for multi-branch conditionals.
+  - Values never alias. A mutating function takes `self` and returns a
+    new value, so rebind the result: `list = list.append(42)`.
+  - `-> T ! E` declares a fallible function. `try expr` unwraps or
+    propagates the error, `fail e` returns an error, and
+    `expr rescue e -> handler` handles it inline.
+  - Files in one package share a namespace. Same-package code needs no
+    imports. Use `alias Pkg.Type` to shorten external package paths.
   """
 end
 

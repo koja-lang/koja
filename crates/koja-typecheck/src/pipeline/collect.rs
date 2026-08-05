@@ -26,7 +26,7 @@
 use koja_ast::ast::{
     Annotation, AnnotationKind, Constant, Diagnostic, EnumDecl, EnumVariant, EnumVariantData,
     ExtendBlock, File, Function, ImplBlock, ImplMember, Item, Param, ProtocolDecl, ProtocolMethod,
-    StructDecl, StructField, TypeAlias, TypeExpr, TypeParam, Visibility,
+    StructDecl, StructField, TypeAlias, TypeExpr, TypeParam, Visibility, is_intrinsic,
 };
 use koja_ast::identifier::{GlobalRegistryId, Identifier};
 use koja_ast::labels::type_expr_span;
@@ -428,33 +428,11 @@ fn register_struct(
     );
     let deprecation = deprecation_message(&decl.annotations, diagnostics);
     let identifier = Identifier::new(package, decl.path.clone());
-    let type_params = type_param_names(&decl.type_params);
-    let visibility = package_visibility_scope(decl.visibility);
-    let struct_id =
-        match registry.insert_struct(identifier.clone(), decl.span, type_params, visibility) {
-            InsertOutcome::Fresh(id) => {
-                stamp_deprecation(registry, id, deprecation);
-                Some(id)
-            }
-            InsertOutcome::Collision { existing } => {
-                diagnostics.push(Diagnostic::error_with_hint(
-                    format!("`{}` is already defined", existing.identifier),
-                    format!(
-                        "previous {} definition is at line {}",
-                        existing.kind.label(),
-                        existing.span.start.line
-                    ),
-                    decl.span,
-                ));
-                // Still register inline methods even on collision. The
-                // duplicate decl is itself diagnosed, and methods declared
-                // under the duplicate would otherwise dangle. Re-look up
-                // the existing entry's id so methods scope their
-                // visibility against whatever struct already owns the
-                // name.
-                registry.lookup(&identifier).map(|(id, _)| id)
-            }
-        };
+    let struct_id = if is_intrinsic(&decl.annotations) {
+        register_intrinsic_struct(decl, &identifier, deprecation, registry, diagnostics)
+    } else {
+        register_ordinary_struct(decl, &identifier, deprecation, registry, diagnostics)
+    };
     for function in &decl.functions {
         let method_identifier = Identifier::member(package, &decl.path, &function.name);
         register_function_with_identifier(
@@ -465,6 +443,105 @@ fn register_struct(
             registry,
             diagnostics,
         );
+    }
+}
+
+fn register_ordinary_struct(
+    decl: &StructDecl,
+    identifier: &Identifier,
+    deprecation: Option<String>,
+    registry: &mut GlobalRegistry,
+    diagnostics: &mut Vec<Diagnostic>,
+) -> Option<GlobalRegistryId> {
+    let type_params = type_param_names(&decl.type_params);
+    let visibility = package_visibility_scope(decl.visibility);
+    match registry.insert_struct(identifier.clone(), decl.span, type_params, visibility) {
+        InsertOutcome::Fresh(id) => {
+            stamp_deprecation(registry, id, deprecation);
+            Some(id)
+        }
+        InsertOutcome::Collision { existing } => {
+            diagnostics.push(Diagnostic::error_with_hint(
+                format!("`{}` is already defined", existing.identifier),
+                format!(
+                    "previous {} definition is at line {}",
+                    existing.kind.label(),
+                    existing.span.start.line
+                ),
+                decl.span,
+            ));
+            // Still register inline methods even on collision. The
+            // duplicate decl is itself diagnosed, and methods declared
+            // under the duplicate would otherwise dangle. Re-look up
+            // the existing entry's id so methods scope their
+            // visibility against whatever struct already owns the
+            // name.
+            registry.lookup(identifier).map(|(id, _)| id)
+        }
+    }
+}
+
+/// Register an `@intrinsic struct` declaration by claiming the
+/// compiler's seeded primitive stub. The declaration is a doc
+/// anchor for a compiler-defined type, not a new type. Falls back
+/// to the ordinary insert path when the claim fails so duplicates
+/// get the standard "already defined" diagnostic and the decl's
+/// methods never dangle.
+fn register_intrinsic_struct(
+    decl: &StructDecl,
+    identifier: &Identifier,
+    deprecation: Option<String>,
+    registry: &mut GlobalRegistry,
+    diagnostics: &mut Vec<Diagnostic>,
+) -> Option<GlobalRegistryId> {
+    diagnose_intrinsic_struct_shape(decl, diagnostics);
+    if let Some(id) = registry.claim_primitive_stub(identifier, decl.span) {
+        stamp_deprecation(registry, id, deprecation);
+        return Some(id);
+    }
+    if registry.lookup(identifier).is_none() {
+        diagnostics.push(Diagnostic::error_with_hint(
+            format!("`{identifier}` is not a builtin type"),
+            "`@intrinsic` on a struct declares a compiler-provided type like `String` or \
+             `Int`. Remove the annotation to declare an ordinary struct."
+                .to_string(),
+            decl.span,
+        ));
+    }
+    register_ordinary_struct(decl, identifier, deprecation, registry, diagnostics)
+}
+
+/// Shape checks for `@intrinsic struct` declarations. The compiler
+/// owns the definition, so the source declaration carries docs and
+/// methods only.
+fn diagnose_intrinsic_struct_shape(decl: &StructDecl, diagnostics: &mut Vec<Diagnostic>) {
+    if decl.visibility != Visibility::Public {
+        diagnostics.push(Diagnostic::error_with_hint(
+            format!("`@intrinsic` struct `{}` cannot be private", decl.name()),
+            "builtin types are always public".to_string(),
+            decl.span,
+        ));
+    }
+    if !decl.type_params.is_empty() {
+        diagnostics.push(Diagnostic::error(
+            format!(
+                "`@intrinsic` struct `{}` cannot declare type parameters",
+                decl.name(),
+            ),
+            decl.span,
+        ));
+    }
+    if let Some(field) = decl.fields.first() {
+        diagnostics.push(Diagnostic::error_with_hint(
+            format!(
+                "`@intrinsic` struct `{}` cannot declare fields",
+                decl.name()
+            ),
+            "the compiler provides the definition of a builtin type. The declaration only \
+             carries docs and methods."
+                .to_string(),
+            field.span,
+        ));
     }
 }
 
@@ -895,7 +972,11 @@ fn diagnose_struct_annotations(
     diagnostics: &mut Vec<Diagnostic>,
 ) {
     for annotation in annotations {
-        if has_dedicated_validation(annotation) {
+        // `@intrinsic` marks a builtin type declaration.
+        // [`register_intrinsic_struct`] owns its validation.
+        if has_dedicated_validation(annotation)
+            || matches!(annotation.kind(), AnnotationKind::Intrinsic)
+        {
             continue;
         }
         diagnostics.push(Diagnostic::error(
