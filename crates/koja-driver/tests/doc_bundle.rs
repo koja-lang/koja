@@ -87,6 +87,10 @@ fn doc_bundle_emits_assets_and_stdlib_packages() {
         global_index.is_file(),
         "stdlib package Global should be bundled by default"
     );
+    assert!(
+        doc.join("Global").join("String.html").is_file(),
+        "builtin String should get a page via its `@intrinsic` declaration"
+    );
 
     let search_json = fs::read_to_string(doc.join("search-index.json")).unwrap();
     assert!(search_json.contains("\"pkg\":\"MyApp\""));
@@ -297,6 +301,36 @@ fn doc_falls_back_to_stdlib_outside_project() {
     let project_only = run_koja(&tmp, &["doc", "--project-only"]);
     assert!(!project_only.status.success());
     assert!(String::from_utf8_lossy(&project_only.stderr).contains("requires a koja.toml project"));
+}
+
+#[test]
+fn doc_search_renders_builtin_primitive_types() {
+    let tmp = tempdir();
+
+    // Builtins anchor through the stdlib's `@intrinsic` struct
+    // declarations, so an exact hit renders a full page with the
+    // type's `extend`-block methods attached.
+    let exact = run_koja(&tmp, &["doc", "search", "String"]);
+    assert!(
+        exact.status.success(),
+        "builtin search failed: {}",
+        String::from_utf8_lossy(&exact.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&exact.stdout);
+    assert!(stdout.contains("# Global.String (struct)"), "{stdout}");
+    assert!(
+        stdout.contains("UTF-8 text, indexed by Unicode codepoint."),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains("### `fn trim(self) -> String`"),
+        "extend-block methods should attach to the builtin: {stdout}"
+    );
+
+    let method = run_koja(&tmp, &["doc", "search", "Int.parse"]);
+    assert!(method.status.success());
+    let stdout = String::from_utf8_lossy(&method.stdout);
+    assert!(stdout.contains("# Global.Int.parse (fn)"), "{stdout}");
 }
 
 #[test]

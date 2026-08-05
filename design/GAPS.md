@@ -215,36 +215,37 @@ neighbor remains open:
 
 ---
 
-## Stdlib API surface is not discoverable from a fresh install
+## Builtin types masquerade as structs
 
-Found 2026-08-01 during a fresh-context agent experiment (building a
-DNS resolver from only the installed toolchain and the language
-reference). The agent could not learn the `Net.UDPSocket` API from any
-supported path and resorted to extracting the embedded stdlib sources
-from the compiler binary with `strings`.
+Noted 2026-08-04 while landing `@intrinsic` struct declarations. The
+18 scalar builtins (`String`, `Int`, `Bool`, ...) are declared in
+stdlib source as `@intrinsic struct` doc anchors that claim the
+registry's seeded stubs. `List<T>`, `Map<K, V>`, `Set<T>`, and
+`CPtr<T>` are plain `struct` declarations whose representation the
+compiler owns anyway. Both groups borrow the struct keyword for types
+that have no struct semantics, and the compiler polices the lie with
+special cases instead of ruling it out:
 
-The discovery chain is broken at every link:
+- Collect diagnoses `@intrinsic` struct shape (no fields, no type
+  params, public only) where a dedicated grammar form would make the
+  states unwritable.
+- Typecheck rejects `String{}`-style construction of primitives as an
+  explicit special case.
+- `resolved_type_to_ir_type` maps `Global.*` names to fixed IR shapes
+  through a name-keyed match that calls itself the "sole authority"
+  and must be extended by hand per primitive.
+- `koja doc` labels every builtin "(struct)".
 
-- `LANGUAGE.md` inventories stdlib types by name (`UDPSocket`,
-  `TLSConfig`, ...) but carries no signatures for most of them.
-- Stdlib sources are embedded in the binary by `koja-stdlib`'s build
-  script, so a fresh install has no `.koja` sources on disk to read.
-- `koja doc` generates full stdlib API docs (it is how the answer was
-  available all along), but it is HTML-only and the reference mentions
-  it once, in the tooling table, as "generate static HTML
-  documentation". Nothing steers a newcomer to it as the stdlib
-  lookup tool.
-- kojalang.org hosts the language reference but no generated API docs,
-  so web search finds nothing either.
-
-**Fix path, in leverage order:** a terminal output mode for the doc
-tool (`koja doc Net.UDPSocket` printing signatures and doc strings as
-text, the `go doc` model) is the fix that serves agents, and the
-extraction machinery already exists in `koja-doc`. Publishing
-generated stdlib docs on kojalang.org fixes web discovery. Cheap
-wiring meanwhile: a pointer to `koja doc` at the top of the
-LANGUAGE.md Standard Library section, and a mention in the `koja new`
-scaffold.
+**Fix path:** a `builtin` declaration kind at the same level as
+`struct` and `enum`. Declaring a name the compiler does not support is
+a compile error, which is exactly the stub-claim rule that landed with
+`@intrinsic`, so the semantics carry over unchanged. The kind must
+allow type parameters (`builtin List<T>`). A `GlobalKind::Builtin`
+registry entry can carry its IR shape, dissolving the name-keyed match
+and the construction special case, and docs get an honest kind label.
+Cost is a new keyword and `Item` variant through parser, formatter,
+LSP, doc extractor, typecheck, and IR, which is why the annotation
+shipped first as a contained stepping stone.
 
 ---
 
