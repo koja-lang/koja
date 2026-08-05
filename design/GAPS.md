@@ -254,6 +254,42 @@ shipped first as a contained stepping stone.
 
 ---
 
+## Aggregate arguments ride LLVM's unstable first-class ABI
+
+Found 2026-08-04 when the yield-check register intrinsics made union
+fixtures fail at `-O0` on aarch64. Compiled functions pass every
+struct, tuple, enum, and union as a first-class LLVM aggregate value.
+LLVM lowers such an argument by splitting it into one piece per leaf
+field, and that lowering is a codegen convention, not a stable ABI.
+Two consequences:
+
+- **Correctness (mitigated).** GlobalISel and SelectionDAG disagree on
+  the stack placement of byte-sized pieces on Darwin (1-byte slots vs
+  4-byte slots). At `-O0` LLVM picks GlobalISel per function and falls
+  back to SelectionDAG for functions it cannot select, so one module
+  could mix both and corrupt aggregates at call boundaries. The union
+  type `{ i8, [N x i8] }` splits entirely into byte pieces and was the
+  visible casualty. `object.rs` now pins `-global-isel=0` so every
+  function uses one selector. Any type with a `Bool`, `Unit`, or
+  `Int8` field still produces byte pieces, so the pin must stay until
+  the ABI changes.
+- **Cost (open).** Splitting is wasteful for byte-layout aggregates.
+  A non-inlined call passing an 18-byte union spends roughly 25
+  instructions scattering bytes into eight registers and ten stack
+  slots, and the callee reassembles them one `ldrb` at a time. Release
+  builds pay this on every union-taking call that does not inline.
+
+**Fix path:** lower aggregate arguments in our emit layer instead of
+leaning on LLVM's splitting, the way clang lowers C structs. Coerce
+small aggregates to `[N x i64]` chunks and pass large ones indirectly
+through a caller-owned temporary. An interim union-only step is to
+chunk union payloads to `i64` words like enum outers already do, which
+fixes the worst splitter (`[N x i8]`) and shrinks the piece count by
+8x, but the selector pin and the byte-piece hazard for other types
+remain until the general lowering lands.
+
+---
+
 ## Bug triage log
 
 Audited 2026-05-03 · re-triaged 2026-05-27 (seven fixed entries

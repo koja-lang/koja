@@ -72,10 +72,11 @@ n = 0
 loop
   reply = ponger.call(n, 5000)
 
-  ok = match reply
-    Result.Ok(v) -> v == n + 1
-    Result.Err(_) -> false
-  end
+  ok =
+    match reply
+      Result.Ok(v) -> v == n + 1
+      Result.Err(_) -> false
+    end
 
   if ok
     good += 1
