@@ -58,6 +58,7 @@ pub(crate) const RT_PROCESS_ALIVE_SYMBOL: &str = "koja_rt_is_process_alive";
 pub(crate) const RT_PROCESS_EXIT_SYMBOL: &str = "koja_rt_process_exit";
 pub(crate) const RT_RECEIVE_SYMBOL: &str = "koja_rt_receive";
 pub(crate) const RT_RECEIVE_TIMEOUT_SYMBOL: &str = "koja_rt_receive_timeout";
+pub(crate) const RT_REDUCTIONS_GRANT_SYMBOL: &str = "koja_rt_reductions_grant";
 pub(crate) const RT_REPLY_SYMBOL: &str = "koja_rt_reply";
 pub(crate) const RT_SELF_SYMBOL: &str = "koja_rt_self";
 pub(crate) const RT_SEND_AFTER_SYMBOL: &str = "koja_rt_send_after";
@@ -506,18 +507,33 @@ pub(crate) fn declare_rt_set_priority_extern<'ctx>(ctx: &EmitContext<'ctx>) -> F
 }
 
 /// Declare (or look up) `koja_rt_yield_check`. Signature:
-/// `void koja_rt_yield_check()`: the slow path of a cooperative preemption
+/// `u32 koja_rt_yield_check()`: the slow path of a cooperative preemption
 /// point, called inline only once the reduction budget is exhausted, which
-/// re-queues the process and switches back to its worker.
+/// re-queues the process and switches back to its worker. Returns the
+/// next quantum's grant so the register strategy can reseed after the
+/// process resumes (the thread-local strategy ignores it).
 pub(crate) fn declare_rt_yield_check_extern<'ctx>(ctx: &EmitContext<'ctx>) -> FunctionValue<'ctx> {
-    let signature = ctx.context.void_type().fn_type(&[], false);
+    let signature = ctx.context.i32_type().fn_type(&[], false);
     declare_extern(ctx, RT_YIELD_CHECK_SYMBOL, signature)
+}
+
+/// Declare (or look up) `u32 koja_rt_reductions_grant()`, the running
+/// process's reduction grant for the current quantum. Called once at
+/// every compiled process entry on the register strategy to seed the
+/// budget register.
+pub(crate) fn declare_rt_reductions_grant_extern<'ctx>(
+    ctx: &EmitContext<'ctx>,
+) -> FunctionValue<'ctx> {
+    let signature = ctx.context.i32_type().fn_type(&[], false);
+    declare_extern(ctx, RT_REDUCTIONS_GRANT_SYMBOL, signature)
 }
 
 /// Declare (or look up) `koja_reductions_left`, the per-worker reduction
 /// budget defined as a thread-local in `koja-runtime-posix/src/reductions.c`.
-/// Compiled `YieldCheck`s decrement it inline. The runtime seeds it on each
-/// resume. Initial-exec because it is resolved within the final executable.
+/// x86_64 `YieldCheck`s decrement it inline and the runtime seeds it on
+/// each resume (aarch64 keeps the budget in a reserved register, see
+/// [`crate::reductions`]). Initial-exec because it is resolved within
+/// the final executable.
 pub(crate) fn reductions_counter_global<'ctx>(ctx: &EmitContext<'ctx>) -> GlobalValue<'ctx> {
     if let Some(existing) = ctx.module.get_global(RT_REDUCTIONS_COUNTER_SYMBOL) {
         return existing;

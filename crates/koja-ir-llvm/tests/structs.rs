@@ -63,7 +63,7 @@ fn struct_init_lowers_to_alloca_store_per_field_then_load() {
         emit_script_llvm_ir(&script, APP_NAME).expect("emit_script_llvm_ir should succeed");
 
     assert_contains(&ir_text, "alloca %TestApp.Point");
-    assert_contains(&ir_text, "getelementptr inbounds %TestApp.Point");
+    assert_contains(&ir_text, "getelementptr inbounds nuw %TestApp.Point");
     assert_contains(&ir_text, "store i64 5");
     assert_contains(&ir_text, "store i64 10");
 }
@@ -85,7 +85,7 @@ fn field_get_lowers_to_gep_then_load() {
 
     // FieldGet always projects through alloca -> store-receiver ->
     // GEP -> load.
-    assert_contains(&ir_text, "getelementptr inbounds %TestApp.Point");
+    assert_contains(&ir_text, "getelementptr inbounds nuw %TestApp.Point");
     assert_contains(&ir_text, "load i64");
 }
 

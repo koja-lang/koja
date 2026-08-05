@@ -165,7 +165,7 @@ fn unit_variant_construction_lowers_to_alloca_and_tag_store() {
 
     assert_contains(&ir_text, "alloca %TestApp.Color");
     // Tag-only store at field index 0 of the per-variant complete type.
-    assert_contains(&ir_text, "getelementptr inbounds %TestApp.Color.Red");
+    assert_contains(&ir_text, "getelementptr inbounds nuw %TestApp.Color.Red");
     assert_contains(&ir_text, "store i8 0");
 }
 
@@ -216,11 +216,11 @@ fn tuple_variant_construction_writes_tag_and_payload_field() {
     assert_contains(&ir_text, "store i8 0");
     // Payload GEP through the per-variant complete struct (field 2,
     // after tag + padding).
-    assert_contains(&ir_text, "getelementptr inbounds %TestApp.Result.Ok");
+    assert_contains(&ir_text, "getelementptr inbounds nuw %TestApp.Result.Ok");
     // Payload field GEP through the payload struct.
     assert_contains(
         &ir_text,
-        "getelementptr inbounds %TestApp.Result.Ok.payload",
+        "getelementptr inbounds nuw %TestApp.Result.Ok.payload",
     );
     assert_contains(&ir_text, "store i64 42");
 }
@@ -247,7 +247,7 @@ fn struct_variant_construction_writes_tag_and_each_named_field() {
     assert_contains(&ir_text, "store i8 0");
     assert_contains(
         &ir_text,
-        "getelementptr inbounds %TestApp.Shape.Rect.payload",
+        "getelementptr inbounds nuw %TestApp.Shape.Rect.payload",
     );
     assert_contains(&ir_text, "store i64 10");
     assert_contains(&ir_text, "store i64 20");

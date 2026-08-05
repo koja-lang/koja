@@ -1,0 +1,95 @@
+alias Process.Step
+alias Process.StopReason
+
+# Starvation: compute-bound hogs must not starve a message-serving
+# sibling. Every hog grinds non-tail `fib`, whose only preemption point
+# is the compiler-inserted function-entry yield check, so each reply
+# below proves entry checks fire under load. The hog count is
+# oversubscribed past any realistic worker pool, and every process
+# shares one priority, so fairness comes from preemption alone. Without
+# entry checks the hogs monopolize the workers and the calls time out.
+# Main's exit tears the hogs down, which bounds the fixture's runtime
+# on both backends.
+
+fn fib(n: Int) -> Int
+  if n <= 1
+    n
+  else
+    fib(n - 1) + fib(n - 2)
+  end
+end
+
+struct Ponger
+end
+
+impl Process<Int, Int, Int> for Ponger
+  fn start(config: Int) -> Result<Self, StopReason>
+    Result.Ok(Ponger{})
+  end
+
+  fn handle(self, msg: Int, from: Option<ReplyTo<Int>>) -> Step<Self>
+    ReplyTo.reply(from, msg + 1)
+    Step.Continue(self)
+  end
+end
+
+struct Hog
+end
+
+impl Process<Int, Int, Int> for Hog
+  fn start(config: Int) -> Result<Self, StopReason>
+    Result.Ok(Hog{})
+  end
+
+  fn handle(self, msg: Int, from: Option<ReplyTo<Int>>) -> Step<Self>
+    Step.Continue(self)
+  end
+
+  fn run(self) -> StopReason
+    loop
+      fib(20)
+    end
+
+    StopReason.Normal
+  end
+end
+
+ponger = spawn Ponger.start(0)
+i = 0
+
+loop
+  _ = spawn Hog.start(0)
+  i += 1
+
+  if i >= 16
+    break
+  end
+end
+
+good = 0
+n = 0
+
+loop
+  reply = ponger.call(n, 5000)
+
+  ok = match reply
+    Result.Ok(v) -> v == n + 1
+    Result.Err(_) -> false
+  end
+
+  if ok
+    good += 1
+  end
+
+  n += 1
+
+  if n >= 10
+    break
+  end
+end
+
+if good == 10
+  "starvation: ok".print()
+else
+  "starvation: STARVED #{10 - good}".print()
+end

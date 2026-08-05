@@ -95,8 +95,10 @@ unsafe extern "C" {
     pub fn koja_process_start();
 
     /// Seed this worker thread's `koja_reductions_left` budget. The counter
-    /// is a C thread-local (`reductions.c`) so compiled process code can
-    /// decrement it inline. The runtime only ever writes it through here.
+    /// is a C thread-local (`reductions.c`) so compiled x86_64 process code
+    /// can decrement it inline. The runtime only ever writes it through
+    /// here. aarch64 keeps the budget in a reserved register instead.
+    #[cfg(target_arch = "x86_64")]
     pub fn koja_seed_reductions(budget: u32);
 
     pub fn fflush(stream: *mut u8) -> i32;

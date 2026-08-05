@@ -155,7 +155,7 @@ against the grammar and `koja-lsp`.
 ## Contributing
 
 Working on the compiler requires building from source. See
-[INSTALLING.md](INSTALLING.md) for toolchain setup (Rust 1.85+, LLVM 18).
+[INSTALLING.md](INSTALLING.md) for toolchain setup (Rust 1.85+, LLVM 21).
 
 ### Testing
 

@@ -24,7 +24,9 @@ use koja_runtime_core::{
     duration_from_user_millis, slot_index,
 };
 
-use crate::ffi::{fflush, koja_context_switch, koja_process_start, koja_seed_reductions, setvbuf};
+#[cfg(target_arch = "x86_64")]
+use crate::ffi::koja_seed_reductions;
+use crate::ffi::{fflush, koja_context_switch, koja_process_start, setvbuf};
 use crate::memory;
 use crate::panic;
 use crate::reactor;
@@ -993,9 +995,16 @@ fn claim_work() -> Option<(Pid, *mut u8)> {
         let proc_sp = unsafe { TABLE.with_execution(pid, |execution| execution.sp) }
             .expect("just-claimed process exists");
         // Seed this quantum's reduction budget (reset by `try_claim`) into the
-        // C thread-local that compiled process code decrements inline at each
-        // `YieldCheck`, calling `koja_rt_yield_check` only on exhaustion.
-        unsafe { koja_seed_reductions(TABLE.reductions_left(pid)) };
+        // C thread-local that compiled x86_64 process code decrements inline
+        // at each `YieldCheck`. aarch64 keeps the budget in the reserved
+        // register x26 instead. Entries seed it via `koja_rt_reductions_grant`,
+        // the yield slow path reseeds from that call's return value, and
+        // other suspensions keep their leftover budget, which the grant
+        // bounds, so a resumed process never outruns a fresh quantum.
+        #[cfg(target_arch = "x86_64")]
+        unsafe {
+            koja_seed_reductions(TABLE.reductions_left(pid))
+        };
         return Some((pid, proc_sp));
     }
     None
@@ -1439,25 +1448,49 @@ pub extern "C" fn koja_rt_set_priority(level: i64) {
 }
 
 /// Slow path of the cooperative preemption point. Compiled process code
-/// decrements the per-worker `koja_reductions_left` budget inline at each
-/// `YieldCheck` and calls this only once it hits zero. It takes no lock:
+/// spends its reduction budget inline at each `YieldCheck` and calls
+/// this only once it is exhausted. It takes no lock:
 /// it flags the voluntary yield in [`YIELDED`] and switches back, and the
 /// worker replays the `Running -> Runnable` edge inside `after_switch`
 /// at switch-out. Taking a lock here instead serialized every
 /// compute-bound worker's quantum expiry through one mutex (the
-/// dominant contended stack in the process_storm profile). The next
-/// resume re-seeds the budget through `koja_seed_reductions`.
+/// dominant contended stack in the process_storm profile).
+///
+/// Returns the next quantum's grant, read after the process resumes.
+/// The aarch64 budget register reseeds from this return value because
+/// it is the only channel that survives the Rust frames between
+/// compiled code and the context switch (their epilogues restore any
+/// callee-saved register they touched, and TLS pokes can land on the
+/// wrong worker after a migration). x86_64 reseeds through
+/// `koja_seed_reductions` at claim time instead and ignores the value.
+/// Clamped to at least 1 so a decrement can never skip past the
+/// exhaustion test.
 ///
 /// The [`YIELDED`] write happens before the switch on the running worker's
 /// own TLS, so the TLS-caching hazard above does not apply.
 #[unsafe(no_mangle)]
-pub extern "C" fn koja_rt_yield_check() {
+pub extern "C" fn koja_rt_yield_check() -> u32 {
     let pid = CURRENT_PID.with(|c| c.get());
     if pid < 0 {
-        return;
+        return Priority::Normal.budget();
     }
     YIELDED.with(|flag| flag.set(true));
     yield_to_scheduler();
+    TABLE.reductions_left(pid).max(1)
+}
+
+/// The running process's reduction grant for the current quantum.
+/// Compiled aarch64 process entries (spawn wrappers, the script
+/// user-main thunk) call this once to seed the budget register.
+/// Clamped to at least 1 for the same wrap guard as
+/// [`koja_rt_yield_check`].
+#[unsafe(no_mangle)]
+pub extern "C" fn koja_rt_reductions_grant() -> u32 {
+    let pid = CURRENT_PID.with(|c| c.get());
+    if pid < 0 {
+        return Priority::Normal.budget();
+    }
+    TABLE.reductions_left(pid).max(1)
 }
 
 /// Sends an IOReady event to the process identified by `pid`.

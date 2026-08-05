@@ -10,6 +10,7 @@ use inkwell::targets::{
 };
 
 use crate::error::LlvmError;
+use crate::reductions;
 
 /// Default macOS deployment target baked into the emitted object's
 /// triple when `MACOSX_DEPLOYMENT_TARGET` is unset. Matches
@@ -50,7 +51,7 @@ pub(crate) fn emit_object_file(
     // populated for known CPU models. Selecting the host CPU avoids
     // that SIGSEGV on Linux x86_64.
     let cpu = TargetMachine::get_host_cpu_name().to_string();
-    let features = TargetMachine::get_host_cpu_features().to_string();
+    let features = reductions::host_cpu_features();
     let machine = target
         .create_target_machine(
             &triple,

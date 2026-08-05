@@ -205,13 +205,18 @@ the old worker's cached TLS base; fixed with `#[inline(never)]`
 barriers, see the note in `koja-runtime-posix/src/scheduler.rs`). One
 neighbor remains open:
 
-- **Reduction counter writes can land on the wrong worker.** Compiled
-  process code decrements the C thread-local `koja_reductions_left`
-  inline, and LLVM may cache its address across a suspension point, so
-  a migrated process keeps decrementing the previous worker's counter
-  until the next runtime call. Consequence is mistimed yield checks
-  (never memory unsafety). A fix needs codegen to recompute the TLS
-  address after every call that can suspend, or a non-TLS budget.
+- **Reduction counter writes can land on the wrong worker (x86-64
+  only).** Compiled x86_64 process code decrements the C thread-local
+  `koja_reductions_left` inline, and LLVM may cache its address across
+  a suspension point, so a migrated process keeps decrementing the
+  previous worker's counter until the next runtime call. Consequence
+  is mistimed yield checks (never memory unsafety). aarch64 closed
+  this on 2026-08-04 by moving the budget into the reserved register
+  `x26` (`koja-ir-llvm/src/reductions.rs`), which rides the process
+  context through migration and also removed the macOS `tlv_get_addr`
+  cost that made yield checks half of `fib(35)`'s runtime. The x86-64
+  register fix waits on LLVM's `+reserve-r8..r15`, which landed after
+  the LLVM 22 branch.
 
 ---
 

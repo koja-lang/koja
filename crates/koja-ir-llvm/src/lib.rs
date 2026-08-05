@@ -58,6 +58,9 @@
 //!   file is the deletion target when `IO.puts` lands.
 //! - [`object`]: native `.o` emission via inkwell's `TargetMachine`.
 //! - [`program`] / [`script`]: orchestrators for the two IR shapes.
+//! - [`reductions`]: the per-arch reduction-budget strategy behind
+//!   `YieldCheck` (reserved register on aarch64, thread-local on
+//!   x86_64) and the host feature string both target machines use.
 //! - [`types`]: `IRType` -> inkwell `IntType` mapping.
 
 mod constant_pool;
@@ -71,6 +74,7 @@ mod layout;
 mod main_wrapper;
 mod object;
 mod program;
+mod reductions;
 mod runtime;
 mod script;
 mod types;

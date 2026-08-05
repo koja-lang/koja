@@ -25,6 +25,8 @@ use inkwell::targets::{
 use inkwell::types::StructType;
 use koja_ir::{IREnumVariant, IRSymbol, IRType, IRVariantPayload, IRVariantTag};
 
+use crate::reductions;
+
 pub(crate) mod enum_order;
 pub(crate) mod enums;
 pub(crate) mod structs;
@@ -291,7 +293,7 @@ fn host_target_data() -> TargetData {
     let target = Target::from_triple(&triple)
         .expect("LLVM emit: failed to resolve native target from triple");
     let cpu = TargetMachine::get_host_cpu_name().to_string();
-    let features = TargetMachine::get_host_cpu_features().to_string();
+    let features = reductions::host_cpu_features();
     let machine = target
         .create_target_machine(
             &triple,

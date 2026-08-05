@@ -55,7 +55,7 @@ fn generic_struct_emits_named_llvm_struct_with_mangled_symbol() {
     assert_contains(&ir_text, "alloca %\"TestApp.Pair_$Int64.String$\"");
     assert_contains(
         &ir_text,
-        "getelementptr inbounds %\"TestApp.Pair_$Int64.String$\"",
+        "getelementptr inbounds nuw %\"TestApp.Pair_$Int64.String$\"",
     );
     assert_contains(&ir_text, "store i64 1");
     assert!(

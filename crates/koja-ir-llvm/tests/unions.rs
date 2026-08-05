@@ -137,7 +137,7 @@ fn union_wrap_emits_tag_store_then_payload_store() {
     // GEP through the outer to field 1 (the payload buffer).
     assert_contains(
         &ir_text,
-        "%Union_TestApp.A_or_TestApp.B_payload_ptr = getelementptr inbounds %Union_TestApp.A_or_TestApp.B, ptr %Union_TestApp.A_or_TestApp.B_tmp, i32 0, i32 1",
+        "%Union_TestApp.A_or_TestApp.B_payload_ptr = getelementptr inbounds nuw %Union_TestApp.A_or_TestApp.B, ptr %Union_TestApp.A_or_TestApp.B_tmp, i32 0, i32 1",
     );
 }
 
@@ -178,7 +178,7 @@ fn typed_binding_arm_emits_tag_load_compare_branch_and_payload_load() {
     // Payload extraction reads through field 1 of the outer.
     assert_contains(
         &ir_text,
-        "%Union_TestApp.A_or_TestApp.B_payload_ptr = getelementptr inbounds \
+        "%Union_TestApp.A_or_TestApp.B_payload_ptr = getelementptr inbounds nuw \
          %Union_TestApp.A_or_TestApp.B, ptr %Union_TestApp.A_or_TestApp.B_payload_src, \
          i32 0, i32 1",
     );
