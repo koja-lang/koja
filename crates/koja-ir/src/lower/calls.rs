@@ -169,6 +169,7 @@ fn lower_local_closure_call(
         );
     };
     let callee_ir_type = resolved_type_to_ir_type(callee_ty, registry, &mut output.instantiations);
+    let param_types = closure_param_types(&callee_ir_type);
     let return_ty = resolved_type_to_ir_type(ret, registry, &mut output.instantiations);
 
     let ir_local = IRLocalId::from_local_id(local_id);
@@ -211,6 +212,7 @@ fn lower_local_closure_call(
             args: lowered_args.clone(),
             callee: callee_value,
             dest,
+            param_types,
             result_ty: return_ty,
         },
     );
@@ -220,6 +222,14 @@ fn lower_local_closure_call(
     // read, never owned) are dead after the call.
     release_call_temps(ctx, current, &lowered_args, None);
     Ok((dest, current))
+}
+
+/// Parameter types of a closure callee's [`IRType::Function`].
+fn closure_param_types(callee_ir_type: &IRType) -> Vec<IRType> {
+    let IRType::Function { params, .. } = callee_ir_type else {
+        panic!("IR lower: closure callee lowered to non-function IRType ({callee_ir_type:?})");
+    };
+    params.clone()
 }
 
 /// Lower a call whose callee is a non-Ident expression of fn type
@@ -241,6 +251,9 @@ fn lower_closure_expr_call(
             callee.resolution,
         );
     };
+    let callee_ir_type =
+        resolved_type_to_ir_type(&callee.resolution, registry, &mut output.instantiations);
+    let param_types = closure_param_types(&callee_ir_type);
     let return_ty = resolved_type_to_ir_type(ret, registry, &mut output.instantiations);
 
     let (callee_value, mut current) = lower_expr(callee, ctx, block, registry, output)?;
@@ -258,6 +271,7 @@ fn lower_closure_expr_call(
             args: lowered_args.clone(),
             callee: callee_value,
             dest,
+            param_types,
             result_ty: return_ty,
         },
     );

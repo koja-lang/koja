@@ -88,16 +88,14 @@ pub(super) fn emit_call_closure<'ctx>(
     ctx: &EmitContext<'ctx>,
     callee: ValueId,
     args: &[ValueId],
+    param_types: &[IRType],
     result_ty: &IRType,
     values: &ValueMap<'ctx>,
 ) -> Result<BasicValueEnum<'ctx>, LlvmError> {
     let callee_value = lookup(values, callee)?;
-    let mut user_param_types: Vec<IRType> = Vec::with_capacity(args.len());
     let mut user_args: Vec<BasicMetadataValueEnum<'ctx>> = Vec::with_capacity(args.len());
     for arg in args {
-        let value = lookup(values, *arg)?;
-        user_param_types.push(ir_type_for_basic_value(value));
-        user_args.push(value.into());
+        user_args.push(lookup(values, *arg)?.into());
     }
     let fat_ty = closure_fat_ptr_type(ctx);
     let alloca = ctx.build_entry_alloca(fat_ty, "closure_call");
@@ -121,7 +119,7 @@ pub(super) fn emit_call_closure<'ctx>(
         .build_load(ptr_ty, env_slot, "closure_call.env")
         .or_ice()?
         .into_pointer_value();
-    let signature = closure_body_signature(ctx, &user_param_types, result_ty)?;
+    let signature = closure_body_signature(ctx, param_types, result_ty)?;
     let mut all_args: Vec<BasicMetadataValueEnum<'ctx>> = Vec::with_capacity(user_args.len() + 1);
     all_args.push(env_ptr.into());
     all_args.extend(user_args);
@@ -383,29 +381,4 @@ fn build_closure_fat_pointer<'ctx>(
     ctx.builder
         .build_load(fat_ty, alloca, &format!("{body}.closure_value"))
         .or_ice()
-}
-
-/// Recover the [`IRType`] surface a closure-call argument was lowered
-/// from, given its LLVM `BasicValueEnum`. The [`closure_body_signature`]
-/// helper rebuilds the indirect-call signature from these and we
-/// only need enough fidelity that `ir_basic_type` round-trips.
-/// Integer width is preserved from the LLVM int width, and floats /
-/// pointers / aggregates pick a representative `IRType` whose LLVM
-/// translation matches the value's type.
-fn ir_type_for_basic_value(value: BasicValueEnum<'_>) -> IRType {
-    match value {
-        BasicValueEnum::IntValue(int) => match int.get_type().get_bit_width() {
-            1 => IRType::Bool,
-            8 => IRType::Int8,
-            16 => IRType::Int16,
-            32 => IRType::Int32,
-            _ => IRType::Int64,
-        },
-        BasicValueEnum::FloatValue(_) => IRType::Float64,
-        BasicValueEnum::PointerValue(_) => IRType::String,
-        BasicValueEnum::StructValue(_)
-        | BasicValueEnum::ArrayValue(_)
-        | BasicValueEnum::VectorValue(_)
-        | BasicValueEnum::ScalableVectorValue(_) => IRType::Int64,
-    }
 }

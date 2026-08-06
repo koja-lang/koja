@@ -296,9 +296,11 @@ pub(super) fn emit_set_priority<'ctx>(
 /// `koja_rt_receive_timeout` when `after` is present) to copy the next
 /// message's payload into it (the runtime strips the tag header and
 /// frees the transport buffer), then branches into the arm whose tag
-/// matches the returned wire tag. The host block ends with the
-/// dispatch, so its IR `Unreachable` terminator is a no-op once the
-/// `super::emit_block` already-terminated guard kicks in.
+/// matches the returned wire tag. Dispatch always exits through an
+/// arm, so anything staged after the `Receive` in the host IR block
+/// (payload-local drops, the terminator) is dead. It gets parked in
+/// a fresh `receive_dead` block to keep the dispatcher's own blocks
+/// verifier-clean.
 ///
 /// `dest` and `result_type` come from the IR for symmetry with
 /// other instruction emitters. The host block never reads `dest`
@@ -327,7 +329,12 @@ pub(super) fn emit_receive<'ctx>(
         let continue_bb = timeout_tag_branch(ctx, host_function, tag_value, after)?;
         ctx.builder.position_at_end(continue_bb);
     }
-    dispatch_arms(ctx, host_function, payload_slot, tag_value, arms)
+    dispatch_arms(ctx, host_function, payload_slot, tag_value, arms)?;
+    let dead_bb = ctx
+        .context
+        .append_basic_block(host_function, "receive_dead");
+    ctx.builder.position_at_end(dead_bb);
+    Ok(())
 }
 
 /// Allocate the scratch slot the runtime copies the delivered payload

@@ -267,26 +267,28 @@ Two consequences:
   the stack placement of byte-sized pieces on Darwin (1-byte slots vs
   4-byte slots). At `-O0` LLVM picks GlobalISel per function and falls
   back to SelectionDAG for functions it cannot select, so one module
-  could mix both and corrupt aggregates at call boundaries. The union
-  type `{ i8, [N x i8] }` splits entirely into byte pieces and was the
-  visible casualty. `object.rs` now pins `-global-isel=0` so every
-  function uses one selector. Any type with a `Bool`, `Unit`, or
+  could mix both and corrupt aggregates at call boundaries. The old
+  union type `{ i8, [N x i8] }` split entirely into byte pieces and
+  was the visible casualty. `object.rs` now pins `-global-isel=0` so
+  every function uses one selector. Any type with a `Bool`, `Unit`, or
   `Int8` field still produces byte pieces, so the pin must stay until
   the ABI changes.
-- **Cost (open).** Splitting is wasteful for byte-layout aggregates.
-  A non-inlined call passing an 18-byte union spends roughly 25
-  instructions scattering bytes into eight registers and ten stack
-  slots, and the callee reassembles them one `ldrb` at a time. Release
-  builds pay this on every union-taking call that does not inline.
+- **Cost (mostly mitigated).** Splitting is wasteful for byte-layout
+  aggregates. Under the old union shape, a non-inlined call passing
+  an 18-byte union spent roughly 25 instructions scattering bytes
+  into eight registers and ten stack slots, and the callee
+  reassembled them one `ldrb` at a time. The 2026-08-05 reshape to
+  `{ i64, [M x i64] }` cut that to a few word moves. Other aggregates
+  with byte-sized fields still split poorly.
 
 **Fix path:** lower aggregate arguments in our emit layer instead of
 leaning on LLVM's splitting, the way clang lowers C structs. Coerce
 small aggregates to `[N x i64]` chunks and pass large ones indirectly
-through a caller-owned temporary. An interim union-only step is to
-chunk union payloads to `i64` words like enum outers already do, which
-fixes the worst splitter (`[N x i8]`) and shrinks the piece count by
-8x, but the selector pin and the byte-piece hazard for other types
-remain until the general lowering lands.
+through a caller-owned temporary. The interim union-only step landed
+2026-08-05: union outers are now `{ i64, [M x i64] }` (tag widened to
+a word, payload chunked to words), which removed the worst splitter
+and aligned payload accesses. The selector pin and the byte-piece
+hazard for other types remain until the general lowering lands.
 
 ---
 

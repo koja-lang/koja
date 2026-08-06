@@ -1364,6 +1364,7 @@ fn execute_instruction<'a, R: CallResolver>(
                 args,
                 callee,
                 dest,
+                param_types: _,
                 result_ty: _,
             } => {
                 let callee_value = lookup(&frame.values, *callee)?;

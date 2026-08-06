@@ -32,6 +32,31 @@ cp koja-v0.16.0-darwin-arm64/{koja,koja-lsp} ~/.local/bin/
 
 Make sure `~/.local/bin` is on your `PATH`, then run `koja --version`.
 
+### GitHub Actions
+
+The [setup-koja](https://github.com/koja-lang/setup-koja) action installs the toolchain on Linux and macOS runners and adds it to `PATH`:
+
+```yaml
+steps:
+  - uses: actions/checkout@v6
+  - uses: koja-lang/setup-koja@v1
+    with:
+      koja-version: 0.16.0
+  - run: koja test
+```
+
+A version like `0.16` installs the newest matching release, and `koja-version-file` reads the version from `.tool-versions` or `koja.toml`. The action also registers a problem matcher, so compile diagnostics annotate pull requests. See the [action README](https://github.com/koja-lang/setup-koja#readme) for all inputs.
+
+### Docker
+
+Images for `linux/amd64` and `linux/arm64` are published to Docker Hub as [`kojalang/koja`](https://hub.docker.com/r/kojalang/koja) and to GitHub Container Registry as `ghcr.io/koja-lang/koja`. The image contains the compiler, the language server, and the tools that `koja` invokes:
+
+```sh
+docker run --rm -v "$PWD":/app kojalang/koja koja run script.kojs
+```
+
+See [docker-koja](https://github.com/koja-lang/docker-koja#readme) for the tag policy and a multi-stage build example that deploys a compiled program on a plain base image.
+
 ## Building from source
 
 On other platforms, or to work on the compiler itself, build from source as described in the sections below.

@@ -1,0 +1,57 @@
+# Closure parameters whose LLVM shapes are not plain words: structs,
+# tuples, and Float32. Pins the indirect-call signature the backend
+# builds from the stamped IR parameter types.
+
+struct Point
+  x: Int
+  y: Int
+end
+
+fn apply_point(p: Point, f: fn (Point) -> Int) -> Int
+  f(p)
+end
+
+fn apply_f32(x: Float32, f: fn (Float32) -> Float32) -> Float32
+  f(x)
+end
+
+fn apply_pair(pair: (Int, Bool), f: fn ((Int, Bool)) -> Int) -> Int
+  f(pair)
+end
+
+fn make_point(x: Int, f: fn (Int) -> Point) -> Point
+  f(x)
+end
+
+# Aggregate parameter passed through an indirect call.
+p = Point{x: 3, y: 4}
+apply_point(p, fn (q: Point) -> Int q.x * 10 + q.y end).print()
+
+# Float32 stays 32-bit across the closure boundary.
+quarter: Float32 = 0.25
+apply_f32(quarter, fn (v: Float32) -> Float32 v + v end).print()
+
+# Tuple parameter with a Bool element.
+double_if =
+  fn (t: (Int, Bool)) -> Int
+    (n, flag) = t
+
+    if flag
+      n * 2
+    else
+      n
+    end
+  end
+
+apply_pair((21, true), double_if).print()
+apply_pair((21, false), double_if).print()
+
+# Aggregate return from a closure.
+built =
+  make_point(7, fn (x: Int) -> Point Point{x: x, y: x + 1} end)
+built.x.print()
+built.y.print()
+
+# Capture plus aggregate parameter together.
+offset = 100
+apply_point(p, fn (q: Point) -> Int q.x + q.y + offset end).print()

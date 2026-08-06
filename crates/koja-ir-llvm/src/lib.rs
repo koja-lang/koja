@@ -85,6 +85,7 @@ use std::path::Path;
 
 use inkwell::OptimizationLevel;
 use inkwell::context::Context;
+use inkwell::module::Module;
 use koja_ir::{IRProgram, IRScript};
 
 use crate::ctx::EmitContext;
@@ -124,6 +125,7 @@ pub fn compile_program(
     let ctx = EmitContext::new(&context, app_name, true);
     program::compile_program(&ctx, program, app_name)?;
     ctx.finalize_debug_info();
+    verify_module(&ctx.module)?;
     object::emit_object_file(&ctx.module, output, options.opt_level())
 }
 
@@ -134,6 +136,7 @@ pub fn emit_llvm_ir(program: &IRProgram, app_name: &str) -> Result<String, LlvmE
     let context = Context::create();
     let ctx = EmitContext::new(&context, app_name, false);
     program::compile_program(&ctx, program, app_name)?;
+    verify_module(&ctx.module)?;
     Ok(ctx.module.print_to_string().to_string())
 }
 
@@ -148,6 +151,7 @@ pub fn compile_script(
     let ctx = EmitContext::new(&context, app_name, true);
     script::compile_script(&ctx, script, app_name)?;
     ctx.finalize_debug_info();
+    verify_module(&ctx.module)?;
     object::emit_object_file(&ctx.module, output, options.opt_level())
 }
 
@@ -156,5 +160,23 @@ pub fn emit_script_llvm_ir(script: &IRScript, app_name: &str) -> Result<String, 
     let context = Context::create();
     let ctx = EmitContext::new(&context, app_name, false);
     script::compile_script(&ctx, script, app_name)?;
+    verify_module(&ctx.module)?;
     Ok(ctx.module.print_to_string().to_string())
+}
+
+/// Run LLVM's module verifier on the freshly built module. Any
+/// failure is an internal compiler error in the emit layer, caught
+/// here before it turns into miscompiled machine code. The offending
+/// module is dumped beside the temp dir for postmortem debugging.
+fn verify_module(module: &Module<'_>) -> Result<(), LlvmError> {
+    module.verify().map_err(|message| {
+        let dump = std::env::temp_dir().join("koja-verify-failure.ll");
+        let dumped = module.print_to_file(&dump).is_ok();
+        let suffix = if dumped {
+            format!(" (module dumped to {})", dump.display())
+        } else {
+            String::new()
+        };
+        LlvmError::Codegen(format!("module verification failed{suffix}: {message}"))
+    })
 }

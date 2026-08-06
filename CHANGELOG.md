@@ -25,6 +25,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Generated docs now show the `! E` error channel on fallible function signatures.
 - Builtin types like `String` and `Int` now appear in generated docs and `koja doc search`, with their extension methods attached.
+- Closure calls now compile with the callee's declared parameter types, removing a latent miscompile risk for `Float32` and struct arguments.
+- The compiler now verifies every emitted module and reports an internal error instead of producing a corrupt binary.
 
 ## [0.16.0] - 2026-08-03
 

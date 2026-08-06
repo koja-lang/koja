@@ -5,8 +5,8 @@
 //! members }` head plus a per-program [`IRUnionDecl`] entry keyed by
 //! the same `mangled` symbol. Backends look the decl up to discover
 //! `max_payload_size`, the byte width of the largest member, which
-//! determines the trailing `[N x i8]` payload buffer in the
-//! `{ i8, [N x i8] }` LLVM struct layout.
+//! determines the trailing `[M x i64]` payload buffer in the
+//! `{ i64, [M x i64] }` LLVM struct layout.
 //!
 //! Every distinct canonical surface union (sorted, deduped, alias-
 //! peeled member set) yields the same `mangled` symbol and a single
@@ -26,7 +26,7 @@ use crate::types::IRType;
 /// (sorted) member type vector inherited from the surface
 /// `ResolvedType::Union`, and `max_payload_size` is the byte width of
 /// the largest member as computed by [`size_in_bytes`]. Backends
-/// consult `max_payload_size` to size the trailing `[N x i8]`
+/// consult `max_payload_size` to size the trailing `[M x i64]`
 /// payload buffer.
 #[derive(Debug, Clone)]
 pub struct IRUnionDecl {
@@ -36,7 +36,7 @@ pub struct IRUnionDecl {
 }
 
 /// Conservative byte-size walker used to size the trailing
-/// `[N x i8]` payload buffer in a union's `{ i8, [N x i8] }` LLVM
+/// `[M x i64]` payload buffer in a union's `{ i64, [M x i64] }` LLVM
 /// struct layout.
 ///
 /// Mirrors the LLVM backend's per-shape ABI sizing on a 64-bit
@@ -103,14 +103,14 @@ fn size_and_align(
             None => (PTR_BYTES, PTR_BYTES),
         },
         IRType::Union { mangled, members } => match unions.get(mangled) {
-            Some(decl) => (1 + decl.max_payload_size, 1),
+            Some(decl) => union_size(decl.max_payload_size),
             None => {
                 let payload = members
                     .iter()
                     .map(|m| size_in_bytes(m, structs, enums, unions))
                     .max()
                     .unwrap_or(0);
-                (1 + payload, 1)
+                union_size(payload)
             }
         },
     }
@@ -181,6 +181,13 @@ fn enum_size(
 fn round_up(value: u32, alignment: u32) -> u32 {
     let alignment = alignment.max(1);
     value.div_ceil(alignment) * alignment
+}
+
+/// `(size, align)` of a union outer holding `payload` bytes: one
+/// `i64` tag word plus the payload rounded up to whole words,
+/// mirroring the `{ i64, [M x i64] }` LLVM shape.
+fn union_size(payload: u32) -> (u32, u32) {
+    (8 + 8 * payload.div_ceil(8), 8)
 }
 
 /// Walk every IR type referenced in `packages` (and, for script
@@ -335,7 +342,16 @@ fn walk_block_param(param: &BlockParam, out: &mut BTreeMap<IRSymbol, IRType>) {
 
 fn walk_instruction(instruction: &IRInstruction, out: &mut BTreeMap<IRSymbol, IRType>) {
     match instruction {
-        IRInstruction::CallClosure { result_ty, .. } => walk_type(result_ty, out),
+        IRInstruction::CallClosure {
+            param_types,
+            result_ty,
+            ..
+        } => {
+            for param in param_types {
+                walk_type(param, out);
+            }
+            walk_type(result_ty, out);
+        }
         IRInstruction::Clone { ty, .. }
         | IRInstruction::DeepCopy { ty, .. }
         | IRInstruction::DropLocal { ty, .. }
@@ -510,5 +526,29 @@ mod tests {
         assert_eq!(size(&IRType::Tuple(vec![IRType::Unit, IRType::Int64])), 16);
         assert_eq!(size(&IRType::Tuple(vec![IRType::Int64, IRType::Unit])), 16);
         assert_eq!(size(&IRType::Tuple(vec![IRType::Unit, IRType::Unit])), 2);
+    }
+
+    fn union_of(name: &str, members: Vec<IRType>) -> IRType {
+        IRType::Union {
+            mangled: IRSymbol::synthetic(name.to_string()),
+            members,
+        }
+    }
+
+    #[test]
+    fn unions_are_a_tag_word_plus_word_chunked_payload() {
+        // A 1-byte payload rounds up to one word: { i64, [1 x i64] }.
+        assert_eq!(size(&union_of("U_bool", vec![IRType::Bool])), 16);
+        // A 16-byte tuple payload is two words: { i64, [2 x i64] }.
+        let tuple = IRType::Tuple(vec![IRType::Unit, IRType::Int64]);
+        assert_eq!(size(&union_of("U_tuple", vec![tuple])), 24);
+    }
+
+    #[test]
+    fn nested_unions_size_through_the_outer_shape() {
+        // Inner { i64, [1 x i64] } = 16 bytes becomes the outer's
+        // payload: { i64, [2 x i64] } = 24 bytes.
+        let inner = union_of("U_inner", vec![IRType::Int64]);
+        assert_eq!(size(&union_of("U_outer", vec![inner])), 24);
     }
 }

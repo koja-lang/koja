@@ -65,9 +65,11 @@ pub(crate) fn emit_instruction<'ctx>(
             args,
             callee,
             dest,
+            param_types,
             result_ty,
         } => {
-            let result = closures::emit_call_closure(ctx, *callee, args, result_ty, values)?;
+            let result =
+                closures::emit_call_closure(ctx, *callee, args, param_types, result_ty, values)?;
             values.insert(*dest, result);
             Ok(())
         }
