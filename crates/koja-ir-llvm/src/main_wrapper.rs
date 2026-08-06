@@ -45,6 +45,7 @@ use crate::emit::{self, ValueMap};
 use crate::error::{IceExt, LlvmError};
 use crate::function::declare_blocks;
 use crate::intrinsics::process::payload_drop_glue;
+use crate::reductions::emit_budget_seed;
 use crate::runtime::{
     declare_rt_build_argv_extern, declare_rt_main_done_extern, declare_rt_spawn_extern,
 };
@@ -140,6 +141,14 @@ fn define_user_main<'ctx>(
     let phi_map = emit::declare_block_param_phis(ctx, blocks, &block_map, &mut values)?;
     ctx.set_block_map(block_map.clone());
     let result = (|| -> Result<(), LlvmError> {
+        // PID 1's first compiled code, so the register-strategy budget
+        // gets its initial grant at the top of the entry block.
+        let entry_id = blocks
+            .first()
+            .expect("sealed IR guarantees an entry block")
+            .id;
+        ctx.builder.position_at_end(block_map[&entry_id]);
+        emit_budget_seed(ctx)?;
         for block in blocks {
             if !reachable.contains(&block.id) {
                 // Same boundary stand-in as `define_function`: blocks the

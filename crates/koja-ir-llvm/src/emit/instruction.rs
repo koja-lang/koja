@@ -8,12 +8,11 @@ use koja_ir::IRInstruction;
 
 use crate::ctx::EmitContext;
 use crate::error::LlvmError;
+use crate::reductions::emit_yield_check;
 
 use super::binary_construct::emit_binary_construct;
 use super::binary_match;
-use super::process::{
-    emit_process_exit, emit_receive, emit_set_priority, emit_spawn, emit_yield_check,
-};
+use super::process::{emit_process_exit, emit_receive, emit_set_priority, emit_spawn};
 use super::{
     ValueMap, calls, clone, closures, concat, constants, deep_copy, enums, indirect, locals,
     lookup, ops, structs, tuples, unions,
@@ -66,9 +65,11 @@ pub(crate) fn emit_instruction<'ctx>(
             args,
             callee,
             dest,
+            param_types,
             result_ty,
         } => {
-            let result = closures::emit_call_closure(ctx, *callee, args, result_ty, values)?;
+            let result =
+                closures::emit_call_closure(ctx, *callee, args, param_types, result_ty, values)?;
             values.insert(*dest, result);
             Ok(())
         }

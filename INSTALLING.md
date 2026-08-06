@@ -32,6 +32,31 @@ cp koja-v0.16.0-darwin-arm64/{koja,koja-lsp} ~/.local/bin/
 
 Make sure `~/.local/bin` is on your `PATH`, then run `koja --version`.
 
+### GitHub Actions
+
+The [setup-koja](https://github.com/koja-lang/setup-koja) action installs the toolchain on Linux and macOS runners and adds it to `PATH`:
+
+```yaml
+steps:
+  - uses: actions/checkout@v6
+  - uses: koja-lang/setup-koja@v1
+    with:
+      koja-version: 0.16.0
+  - run: koja test
+```
+
+A version like `0.16` installs the newest matching release, and `koja-version-file` reads the version from `.tool-versions` or `koja.toml`. The action also registers a problem matcher, so compile diagnostics annotate pull requests. See the [action README](https://github.com/koja-lang/setup-koja#readme) for all inputs.
+
+### Docker
+
+Images for `linux/amd64` and `linux/arm64` are published to Docker Hub as [`kojalang/koja`](https://hub.docker.com/r/kojalang/koja) and to GitHub Container Registry as `ghcr.io/koja-lang/koja`. The image contains the compiler, the language server, and the tools that `koja` invokes:
+
+```sh
+docker run --rm -v "$PWD":/app kojalang/koja koja run script.kojs
+```
+
+See [docker-koja](https://github.com/koja-lang/docker-koja#readme) for the tag policy and a multi-stage build example that deploys a compiled program on a plain base image.
+
 ## Building from source
 
 On other platforms, or to work on the compiler itself, build from source as described in the sections below.
@@ -39,10 +64,10 @@ On other platforms, or to work on the compiler itself, build from source as desc
 ### Requirements
 
 - Rust 1.85 or newer (1.94.1+ recommended — some transitive crates push the practical minimum upward; if you see MSRV errors, run `rustup update stable` or `rustup override set 1.94.1` inside the repo)
-- LLVM 18 (specifically 18.1.x — `llvm-sys` will not accept other versions)
+- LLVM 21 (specifically 21.1.x — `llvm-sys` will not accept other versions)
 - A C toolchain (`cc` / `clang`)
 
-The compiler links LLVM 18 statically through [`llvm-sys`](https://crates.io/crates/llvm-sys), so the LLVM development libraries must be installed and discoverable at build time.
+The compiler links LLVM 21 statically through [`llvm-sys`](https://crates.io/crates/llvm-sys), so the LLVM development libraries must be installed and discoverable at build time.
 
 #### Toolchain compatibility
 
@@ -50,8 +75,8 @@ Whatever installed your Rust toolchain also chose your `libstdc++`, and `llvm-sy
 
 | Rust source                   | LLVM source                       | Status                               |
 | ----------------------------- | --------------------------------- | ------------------------------------ |
-| Homebrew (macOS or Linuxbrew) | Homebrew (`brew install llvm@18`) | Supported                            |
-| rustup                        | apt (`llvm-18-dev`)               | Supported, simplest on Debian/Ubuntu |
+| Homebrew (macOS or Linuxbrew) | Homebrew (`brew install llvm@21`) | Supported                            |
+| rustup                        | apt (`llvm-21-dev`)               | Supported, simplest on Debian/Ubuntu |
 | rustup                        | Homebrew                          | Supported                            |
 | Homebrew                      | apt                               | **Not supported**                    |
 
@@ -62,10 +87,10 @@ If you previously installed Rust via Homebrew and want to switch to apt LLVM, `b
 This is the primary supported configuration.
 
 ```sh
-brew install llvm@18
+brew install llvm@21
 git clone https://github.com/koja-lang/koja && cd koja
 
-export LLVM_SYS_181_PREFIX="$(brew --prefix llvm@18)"
+export LLVM_SYS_211_PREFIX="$(brew --prefix llvm@21)"
 export LIBRARY_PATH="$(brew --prefix)/lib:$LIBRARY_PATH"
 
 cargo build -p koja-runtime-posix
@@ -88,12 +113,23 @@ curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 rustup default stable
 ```
 
-Install LLVM 18 and every dev dependency `llvm-sys` will need to link:
+Debian 12/13 and Ubuntu through 25.10 do not ship LLVM 21 in their own repos, so add [apt.llvm.org](https://apt.llvm.org) first (skip this on Ubuntu 26.04+, where `llvm-21-dev` is native):
+
+```sh
+wget -qO- https://apt.llvm.org/llvm-snapshot.gpg.key \
+    | sudo tee /etc/apt/trusted.gpg.d/llvm-snapshot.asc > /dev/null
+codename="$(. /etc/os-release && echo "$VERSION_CODENAME")"
+echo "deb http://apt.llvm.org/$codename/ llvm-toolchain-$codename-21 main" \
+    | sudo tee /etc/apt/sources.list.d/llvm-21.list
+sudo apt update
+```
+
+Install LLVM 21 and every dev dependency `llvm-sys` will need to link:
 
 ```sh
 sudo apt install -y \
     build-essential cmake pkg-config gdb \
-    llvm-18-dev libpolly-18-dev clang-18 libclang-18-dev \
+    llvm-21-dev libpolly-21-dev clang-21 libclang-21-dev \
     zlib1g-dev libzstd-dev libtinfo-dev libxml2-dev libffi-dev libz3-dev
 ```
 
@@ -102,7 +138,7 @@ Pin `llvm-sys` to the apt-installed LLVM and build:
 ```sh
 git clone https://github.com/koja-lang/koja && cd koja
 
-export LLVM_SYS_181_PREFIX="$(llvm-config-18 --prefix)"
+export LLVM_SYS_211_PREFIX="$(llvm-config-21 --prefix)"
 
 cargo build -p koja-runtime-posix
 cargo build -p koja-runtime-posix --release
@@ -116,10 +152,10 @@ cp target/release/koja ~/.local/bin/koja
 Use this path if your Rust toolchain also comes from Homebrew. The build flow mirrors macOS — `brew --prefix` resolves to `/home/linuxbrew/.linuxbrew` instead of `/opt/homebrew`.
 
 ```sh
-brew install llvm@18
+brew install llvm@21
 git clone https://github.com/koja-lang/koja && cd koja
 
-export LLVM_SYS_181_PREFIX="$(brew --prefix llvm@18)"
+export LLVM_SYS_211_PREFIX="$(brew --prefix llvm@21)"
 export LIBRARY_PATH="$(brew --prefix)/lib:$LIBRARY_PATH"
 
 cargo build -p koja-runtime-posix
@@ -144,13 +180,13 @@ You should see `hello, world!` printed to stdout.
 Debian splits Polly out of the main LLVM package:
 
 ```sh
-sudo apt install -y libpolly-18-dev
+sudo apt install -y libpolly-21-dev
 cargo clean -p llvm-sys
 ```
 
 #### `cannot find -lz` / `-lzstd` / `-ltinfo` / `-lxml2` / `-lffi` / `-lz3`
 
-LLVM 18 was built against these system libraries, and the linker re-resolves them when you link the compiler. Install whichever development package is missing:
+LLVM 21 was built against these system libraries, and the linker re-resolves them when you link the compiler. Install whichever development package is missing:
 
 | Linker arg | Debian package |
 | ---------- | -------------- |
@@ -168,10 +204,10 @@ The full apt install line above pre-installs all of these.
 `boring-sys` uses `bindgen`, which loads `libclang.so` to parse C headers. Install both:
 
 ```sh
-sudo apt install -y clang-18 libclang-18-dev
+sudo apt install -y clang-21 libclang-21-dev
 ```
 
-For tooling consistency, match the LLVM version (`-18`) rather than installing the unversioned `clang` metapackage.
+For tooling consistency, match the LLVM version (`-21`) rather than installing the unversioned `clang` metapackage.
 
 #### SIGSEGV inside `llvm::X86ReadAdvanceTable` when running `koja run`
 
@@ -196,16 +232,16 @@ cargo build --release
 Alternatively, if you want to stay on Linuxbrew, install Homebrew LLVM and remove the apt one:
 
 ```sh
-brew install llvm@18
-sudo apt remove --purge llvm-18-dev
-unset LLVM_SYS_181_PREFIX
+brew install llvm@21
+sudo apt remove --purge llvm-21-dev
+unset LLVM_SYS_211_PREFIX
 cargo clean
 cargo build --release
 ```
 
 #### Stale `llvm-sys` artifacts after switching LLVM versions
 
-`llvm-sys`'s build script does **not** rerun when you change `LLVM_SYS_181_PREFIX`, so a `cargo build` after `apt install llvm-18-dev` reuses the previously-compiled artifacts and ignores the new install. Force a rebuild:
+`llvm-sys`'s build script does **not** rerun when you change `LLVM_SYS_211_PREFIX`, so a `cargo build` after `apt install llvm-21-dev` reuses the previously-compiled artifacts and ignores the new install. Force a rebuild:
 
 ```sh
 cargo clean -p llvm-sys

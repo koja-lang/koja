@@ -39,6 +39,8 @@
 //!   complete struct for the tag and the payload for fields, then
 //!   loads the populated outer as the SSA result.
 
+use std::num::NonZeroU32;
+
 use inkwell::types::{BasicTypeEnum, StructType};
 use koja_ir::{IREnumDecl, IREnumVariant, IRStructField, IRType, IRVariantPayload};
 
@@ -197,8 +199,12 @@ fn define_outer_body<'ctx>(
     max_complete_align: u32,
 ) -> StructType<'ctx> {
     let outer = lookup_named_struct(ctx, decl.symbol.mangled());
-    let chunk_bits = max_complete_align * 8;
-    let chunk_type = ctx.context.custom_width_int_type(chunk_bits);
+    // Alignment is at least 1, so the chunk width is never zero.
+    let chunk_bits = NonZeroU32::new(max_complete_align * 8).expect("zero-width enum chunk");
+    let chunk_type = ctx
+        .context
+        .custom_width_int_type(chunk_bits)
+        .expect("enum chunk width exceeds LLVM's integer limit");
     let align_u64 = u64::from(max_complete_align);
     // Round size up to a multiple of alignment so the chunk_count
     // matches Rust's enum-size convention. LLVM rounds struct sizes

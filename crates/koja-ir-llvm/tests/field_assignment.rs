@@ -35,7 +35,7 @@ fn depth_one_field_write_emits_alloca_gep_store_load_shape() {
         emit_script_llvm_ir(&script, APP_NAME).expect("emit_script_llvm_ir should succeed");
 
     assert_contains(&ir_text, "alloca %TestApp.Point");
-    assert_contains(&ir_text, "getelementptr inbounds %TestApp.Point");
+    assert_contains(&ir_text, "getelementptr inbounds nuw %TestApp.Point");
     assert_contains(&ir_text, "store i64 10");
 }
 

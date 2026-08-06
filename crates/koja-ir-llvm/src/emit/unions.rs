@@ -1,7 +1,9 @@
 //! Union literal + projection emission: `UnionWrap`, `UnionTagGet`,
 //! `UnionPayloadGet`. Every shape spills the SSA value through an
 //! entry-block alloca and GEPs through the union's outer
-//! `{ i8 tag, [N x i8] payload }` struct.
+//! `{ i64 tag, [M x i64] payload }` struct. The tag word stores the
+//! member index zero-extended so every tag byte is defined, and
+//! reads truncate back to the `i8` the IR instructions carry.
 
 use inkwell::values::BasicValueEnum;
 use koja_ir::IRType;
@@ -27,7 +29,7 @@ pub(super) fn emit_union_wrap<'ctx>(
             "LLVM emit: UnionWrap target IRType is not Union (got `{ty:?}`)",
         )));
     };
-    let (outer, _payload_size) = ctx.layouts.union_outer(mangled.mangled());
+    let outer = ctx.layouts.union_outer(mangled.mangled());
     let alloca = ctx.build_entry_alloca(outer, &format!("{mangled}_tmp"));
     let tag_ptr = ctx
         .builder
@@ -35,7 +37,7 @@ pub(super) fn emit_union_wrap<'ctx>(
         .or_ice()?;
     let tag_value = ctx
         .context
-        .i8_type()
+        .i64_type()
         .const_int(u64::from(member_index), false);
     ctx.builder.build_store(tag_ptr, tag_value).or_ice()?;
     let payload_ptr = ctx
@@ -48,9 +50,10 @@ pub(super) fn emit_union_wrap<'ctx>(
         .or_ice()
 }
 
-/// Spill `value` to a fresh outer-typed alloca and load the tag
-/// byte at field 0 as `i8`. Counterpart of
-/// [`super::enums::emit_enum_tag_get`] for the union family.
+/// Spill `value` to a fresh outer-typed alloca, load the tag word
+/// at field 0, and truncate it to the `i8` the IR contract
+/// carries. Counterpart of [`super::enums::emit_enum_tag_get`] for
+/// the union family.
 pub(super) fn emit_union_tag_get<'ctx>(
     ctx: &EmitContext<'ctx>,
     ty: &IRType,
@@ -61,16 +64,26 @@ pub(super) fn emit_union_tag_get<'ctx>(
             "LLVM emit: UnionTagGet receiver IRType is not Union (got `{ty:?}`)",
         )));
     };
-    let (outer, _) = ctx.layouts.union_outer(mangled.mangled());
+    let outer = ctx.layouts.union_outer(mangled.mangled());
     let alloca = ctx.build_entry_alloca(outer, &format!("{mangled}_tag_src"));
     ctx.builder.build_store(alloca, value).or_ice()?;
     let tag_ptr = ctx
         .builder
         .build_struct_gep(outer, alloca, 0, &format!("{mangled}_tag_ptr"))
         .or_ice()?;
+    let tag_word = ctx
+        .builder
+        .build_load(
+            ctx.context.i64_type(),
+            tag_ptr,
+            &format!("{mangled}_tag_word"),
+        )
+        .or_ice()?
+        .into_int_value();
     ctx.builder
-        .build_load(ctx.context.i8_type(), tag_ptr, &format!("{mangled}_tag"))
+        .build_int_truncate(tag_word, ctx.context.i8_type(), &format!("{mangled}_tag"))
         .or_ice()
+        .map(Into::into)
 }
 
 /// Spill `value` to a fresh outer-typed alloca, GEP into the
@@ -89,7 +102,7 @@ pub(super) fn emit_union_payload_get<'ctx>(
             "LLVM emit: UnionPayloadGet receiver IRType is not Union (got `{ty:?}`)",
         )));
     };
-    let (outer, _) = ctx.layouts.union_outer(mangled.mangled());
+    let outer = ctx.layouts.union_outer(mangled.mangled());
     let alloca = ctx.build_entry_alloca(outer, &format!("{mangled}_payload_src"));
     ctx.builder.build_store(alloca, value).or_ice()?;
     let payload_ptr = ctx

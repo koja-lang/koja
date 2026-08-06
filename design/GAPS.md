@@ -205,13 +205,18 @@ the old worker's cached TLS base; fixed with `#[inline(never)]`
 barriers, see the note in `koja-runtime-posix/src/scheduler.rs`). One
 neighbor remains open:
 
-- **Reduction counter writes can land on the wrong worker.** Compiled
-  process code decrements the C thread-local `koja_reductions_left`
-  inline, and LLVM may cache its address across a suspension point, so
-  a migrated process keeps decrementing the previous worker's counter
-  until the next runtime call. Consequence is mistimed yield checks
-  (never memory unsafety). A fix needs codegen to recompute the TLS
-  address after every call that can suspend, or a non-TLS budget.
+- **Reduction counter writes can land on the wrong worker (x86-64
+  only).** Compiled x86_64 process code decrements the C thread-local
+  `koja_reductions_left` inline, and LLVM may cache its address across
+  a suspension point, so a migrated process keeps decrementing the
+  previous worker's counter until the next runtime call. Consequence
+  is mistimed yield checks (never memory unsafety). aarch64 closed
+  this on 2026-08-04 by moving the budget into the reserved register
+  `x26` (`koja-ir-llvm/src/reductions.rs`), which rides the process
+  context through migration and also removed the macOS `tlv_get_addr`
+  cost that made yield checks half of `fib(35)`'s runtime. The x86-64
+  register fix waits on LLVM's `+reserve-r8..r15`, which landed after
+  the LLVM 22 branch.
 
 ---
 
@@ -246,6 +251,44 @@ and the construction special case, and docs get an honest kind label.
 Cost is a new keyword and `Item` variant through parser, formatter,
 LSP, doc extractor, typecheck, and IR, which is why the annotation
 shipped first as a contained stepping stone.
+
+---
+
+## Aggregate arguments ride LLVM's unstable first-class ABI
+
+Found 2026-08-04 when the yield-check register intrinsics made union
+fixtures fail at `-O0` on aarch64. Compiled functions pass every
+struct, tuple, enum, and union as a first-class LLVM aggregate value.
+LLVM lowers such an argument by splitting it into one piece per leaf
+field, and that lowering is a codegen convention, not a stable ABI.
+Two consequences:
+
+- **Correctness (mitigated).** GlobalISel and SelectionDAG disagree on
+  the stack placement of byte-sized pieces on Darwin (1-byte slots vs
+  4-byte slots). At `-O0` LLVM picks GlobalISel per function and falls
+  back to SelectionDAG for functions it cannot select, so one module
+  could mix both and corrupt aggregates at call boundaries. The old
+  union type `{ i8, [N x i8] }` split entirely into byte pieces and
+  was the visible casualty. `object.rs` now pins `-global-isel=0` so
+  every function uses one selector. Any type with a `Bool`, `Unit`, or
+  `Int8` field still produces byte pieces, so the pin must stay until
+  the ABI changes.
+- **Cost (mostly mitigated).** Splitting is wasteful for byte-layout
+  aggregates. Under the old union shape, a non-inlined call passing
+  an 18-byte union spent roughly 25 instructions scattering bytes
+  into eight registers and ten stack slots, and the callee
+  reassembled them one `ldrb` at a time. The 2026-08-05 reshape to
+  `{ i64, [M x i64] }` cut that to a few word moves. Other aggregates
+  with byte-sized fields still split poorly.
+
+**Fix path:** lower aggregate arguments in our emit layer instead of
+leaning on LLVM's splitting, the way clang lowers C structs. Coerce
+small aggregates to `[N x i64]` chunks and pass large ones indirectly
+through a caller-owned temporary. The interim union-only step landed
+2026-08-05: union outers are now `{ i64, [M x i64] }` (tag widened to
+a word, payload chunked to words), which removed the worst splitter
+and aligned payload accesses. The selector pin and the byte-piece
+hazard for other types remain until the general lowering lands.
 
 ---
 

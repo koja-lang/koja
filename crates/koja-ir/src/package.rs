@@ -50,8 +50,8 @@ pub struct IRPackage {
     /// Union declarations discovered during this package's lower,
     /// with one entry per distinct mangled `IRType::Union { mangled }`
     /// referenced anywhere in the package. Backends consult
-    /// `max_payload_size` to size the trailing `[N x i8]` payload
-    /// in the `{ i8, [N x i8] }` LLVM struct layout.
+    /// `max_payload_size` to size the trailing `[M x i64]` payload
+    /// in the `{ i64, [M x i64] }` LLVM struct layout.
     pub unions: BTreeMap<IRSymbol, IRUnionDecl>,
 }
 

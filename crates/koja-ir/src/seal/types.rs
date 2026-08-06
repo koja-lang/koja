@@ -420,6 +420,7 @@ fn seal_instruction_types(
         IRInstruction::CallClosure {
             args,
             callee,
+            param_types,
             result_ty,
             ..
         } => {
@@ -430,6 +431,12 @@ fn seal_instruction_types(
             };
             require_argument_types(args, params, values, owner, "CallClosure");
             require_same_type(ret, result_ty, &format!("{owner} CallClosure result type"));
+            if param_types != params {
+                seal_panic(&format!(
+                    "{owner} CallClosure param_types {param_types:?} disagree with callee \
+                     function type {params:?}"
+                ));
+            }
         }
         IRInstruction::Clone { source, ty, .. } => {
             require_value_type(values, *source, ty, owner, "copy source");

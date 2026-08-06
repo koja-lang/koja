@@ -193,12 +193,9 @@ pub(crate) fn emit_block<'ctx>(
     for instr in &block.instructions {
         emit_instruction_external(ctx, instr, values)?;
     }
-    // `IRInstruction::Receive` is a self-terminating instruction:
-    // the dispatcher in [`process::emit_receive`] ends the host
-    // block with a `switch`/`br` into the arm body blocks before
-    // the IR terminator (today: `Unreachable`) gets a chance to
-    // run. Skip the natural terminator emit when the host block
-    // is already capped so LLVM doesn't reject the duplicate.
+    // Backstop against duplicate terminators when an instruction
+    // emitter (block-splitting shapes like `Receive` or the trap
+    // guards) leaves the builder on an already-capped block.
     if let Some(insert_block) = ctx.builder.get_insert_block()
         && insert_block.get_terminator().is_some()
     {
@@ -260,9 +257,8 @@ pub(crate) fn emit_instructions<'ctx, 'block>(
     for instr in &block.instructions {
         emit_instruction_external(ctx, instr, &mut values)?;
     }
-    // Same self-terminating-Receive guard as [`emit_block`]. The
-    // caller's terminator handling (today: `emit_main_return`)
-    // checks for an already-capped block before running.
+    // The caller's terminator handling (today: `emit_main_return`)
+    // carries the same already-capped backstop as [`emit_block`].
     Ok((values, &block.terminator))
 }
 

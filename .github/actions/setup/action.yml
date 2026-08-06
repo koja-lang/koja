@@ -1,6 +1,6 @@
 name: Setup toolchain
 description: >
-  Install the pinned Rust toolchain and LLVM 18, export the llvm-sys
+  Install the pinned Rust toolchain and LLVM 21, export the llvm-sys
   environment, and restore the shared cargo cache.
 
 inputs:
@@ -20,23 +20,29 @@ runs:
         toolchain: "1.94.1"
         components: ${{ inputs.components }}
 
-    - name: Install LLVM 18 (apt)
+    # LLVM 21 is not in the runner distro's own repos, so add apt.llvm.org.
+    - name: Install LLVM 21 (apt)
       if: runner.os == 'Linux'
       shell: bash
       run: |
+        wget -qO- https://apt.llvm.org/llvm-snapshot.gpg.key \
+          | sudo tee /etc/apt/trusted.gpg.d/llvm-snapshot.asc > /dev/null
+        codename="$(. /etc/os-release && echo "$VERSION_CODENAME")"
+        echo "deb http://apt.llvm.org/$codename/ llvm-toolchain-$codename-21 main" \
+          | sudo tee /etc/apt/sources.list.d/llvm-21.list
         sudo apt-get update
         sudo apt-get install -y \
           build-essential cmake pkg-config \
-          llvm-18-dev libpolly-18-dev clang-18 libclang-18-dev \
+          llvm-21-dev libpolly-21-dev clang-21 libclang-21-dev \
           zlib1g-dev libzstd-dev libtinfo-dev libxml2-dev libffi-dev libz3-dev
-        echo "LLVM_SYS_181_PREFIX=$(llvm-config-18 --prefix)" >> "$GITHUB_ENV"
+        echo "LLVM_SYS_211_PREFIX=$(llvm-config-21 --prefix)" >> "$GITHUB_ENV"
 
-    - name: Install LLVM 18 (brew)
+    - name: Install LLVM 21 (brew)
       if: runner.os == 'macOS'
       shell: bash
       run: |
-        brew install llvm@18
-        echo "LLVM_SYS_181_PREFIX=$(brew --prefix llvm@18)" >> "$GITHUB_ENV"
+        brew install llvm@21
+        echo "LLVM_SYS_211_PREFIX=$(brew --prefix llvm@21)" >> "$GITHUB_ENV"
         echo "LIBRARY_PATH=$(brew --prefix)/lib" >> "$GITHUB_ENV"
 
     - name: Restore cargo cache

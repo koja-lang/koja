@@ -75,7 +75,7 @@ jobs:
             "$(brew --prefix)/lib/libzstd.dylib" \
             "$(brew --prefix)/lib/libunwind.dylib" \
             "$(brew --prefix zstd)/lib/libzstd.dylib" \
-            "$(brew --prefix llvm@18)/lib/libunwind.dylib"
+            "$(brew --prefix llvm@21)/lib/libunwind.dylib"
 
       - name: Build release binaries
         run: |

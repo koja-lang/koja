@@ -496,7 +496,7 @@ pub enum IRType {
     /// `members` is the canonical (sorted) member type vector
     /// inherited from the surface `ResolvedType::Union`. Backends
     /// look up `mangled` in the program-level `UnionDecl` registry
-    /// to discover `max_payload_size` for the `{ i8, [N x i8] }`
+    /// to discover `max_payload_size` for the `{ i64, [M x i64] }`
     /// LLVM struct layout.
     Union {
         mangled: IRSymbol,

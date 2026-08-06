@@ -502,11 +502,13 @@ pub enum IRInstruction {
     },
     /// `dest = callee(args)`: indirect call through a closure
     /// fat pointer (`callee.ty == IRType::Function`). The backend
-    /// prepends `env_ptr` to `args` before dispatch.
+    /// prepends `env_ptr` to `args` before dispatch and builds the
+    /// call signature from `param_types`.
     CallClosure {
         args: Vec<ValueId>,
         callee: ValueId,
         dest: ValueId,
+        param_types: Vec<IRType>,
         result_ty: IRType,
     },
     /// `dest = clone(source)`: a value-semantics acquisition that

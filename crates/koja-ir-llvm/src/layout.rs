@@ -25,6 +25,8 @@ use inkwell::targets::{
 use inkwell::types::StructType;
 use koja_ir::{IREnumVariant, IRSymbol, IRType, IRVariantPayload, IRVariantTag};
 
+use crate::reductions;
+
 pub(crate) mod enum_order;
 pub(crate) mod enums;
 pub(crate) mod structs;
@@ -49,13 +51,10 @@ pub(crate) struct VariantLayout<'ctx> {
 }
 
 /// LLVM layout of a single union decl. `outer` is the
-/// `{ i8 tag, [N x i8] payload }` named struct. `payload_size`
-/// is `N` (the byte width of the largest member, cached on
-/// [`koja_ir::IRUnionDecl::max_payload_size`]). See
-/// [`unions`] for layout details.
+/// `{ i64 tag, [M x i64] payload }` named struct. See [`unions`]
+/// for layout details.
 pub(crate) struct UnionLayout<'ctx> {
     pub(crate) outer: StructType<'ctx>,
-    pub(crate) payload_size: u32,
 }
 
 /// Type-layout registry held as [`crate::ctx::EmitContext::layouts`].
@@ -266,10 +265,10 @@ impl<'ctx> TypeLayouts<'ctx> {
         }
     }
 
-    /// `(outer, payload_size)` for the union at `mangled`. Copies
-    /// out so the caller can build allocas / GEPs without holding
-    /// the `RefCell` open.
-    pub(crate) fn union_outer(&self, mangled: &str) -> (StructType<'ctx>, u32) {
+    /// The outer struct for the union at `mangled`. Copies out so
+    /// the caller can build allocas / GEPs without holding the
+    /// `RefCell` open.
+    pub(crate) fn union_outer(&self, mangled: &str) -> StructType<'ctx> {
         let map = self.union_layouts.borrow();
         let layout = map.get(mangled).unwrap_or_else(|| {
             panic!(
@@ -277,7 +276,7 @@ impl<'ctx> TypeLayouts<'ctx> {
                  (pre-emit ordering violation)",
             )
         });
-        (layout.outer, layout.payload_size)
+        layout.outer
     }
 }
 
@@ -291,7 +290,7 @@ fn host_target_data() -> TargetData {
     let target = Target::from_triple(&triple)
         .expect("LLVM emit: failed to resolve native target from triple");
     let cpu = TargetMachine::get_host_cpu_name().to_string();
-    let features = TargetMachine::get_host_cpu_features().to_string();
+    let features = reductions::host_cpu_features();
     let machine = target
         .create_target_machine(
             &triple,

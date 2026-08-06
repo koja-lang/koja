@@ -1,8 +1,10 @@
 //! Native object-file emission via inkwell's `TargetMachine`.
 
 use std::path::Path;
+use std::sync::Once;
 
 use inkwell::OptimizationLevel;
+use inkwell::llvm_sys::support::LLVMParseCommandLineOptions;
 use inkwell::module::Module;
 use inkwell::passes::PassBuilderOptions;
 use inkwell::targets::{
@@ -10,6 +12,7 @@ use inkwell::targets::{
 };
 
 use crate::error::LlvmError;
+use crate::reductions;
 
 /// Default macOS deployment target baked into the emitted object's
 /// triple when `MACOSX_DEPLOYMENT_TARGET` is unset. Matches
@@ -37,6 +40,7 @@ pub(crate) fn emit_object_file(
     path: &Path,
     opt_level: OptimizationLevel,
 ) -> Result<(), LlvmError> {
+    force_selection_dag();
     Target::initialize_native(&InitializationConfig::default())
         .map_err(|e| LlvmError::ObjectEmit(format!("failed to initialize native target: {e}")))?;
 
@@ -50,7 +54,7 @@ pub(crate) fn emit_object_file(
     // populated for known CPU models. Selecting the host CPU avoids
     // that SIGSEGV on Linux x86_64.
     let cpu = TargetMachine::get_host_cpu_name().to_string();
-    let features = TargetMachine::get_host_cpu_features().to_string();
+    let features = reductions::host_cpu_features();
     let machine = target
         .create_target_machine(
             &triple,
@@ -71,6 +75,25 @@ pub(crate) fn emit_object_file(
     machine
         .write_to_file(module, FileType::Object, path)
         .map_err(|e| LlvmError::ObjectEmit(format!("failed to write object file: {e}")))
+}
+
+/// Pin instruction selection to SelectionDAG (plus FastISel) for the
+/// whole process. At `-O0` on aarch64 LLVM defaults to GlobalISel and
+/// silently falls back to SelectionDAG for any function it cannot
+/// select, which includes every function carrying the
+/// reduction-budget register intrinsics from [`crate::reductions`].
+/// The two selectors disagree on the stack placement of split
+/// aggregate arguments (GlobalISel packs byte-sized pieces into
+/// 1-byte slots, SelectionDAG into 4-byte slots), so a mixed-selector
+/// module corrupts by-value aggregates like union payloads at call
+/// boundaries. One selector for every function keeps callers and
+/// callees in agreement.
+fn force_selection_dag() {
+    static ONCE: Once = Once::new();
+    ONCE.call_once(|| {
+        let args = [c"koja".as_ptr(), c"-global-isel=0".as_ptr()];
+        unsafe { LLVMParseCommandLineOptions(args.len() as i32, args.as_ptr(), std::ptr::null()) };
+    });
 }
 
 /// Map an [`OptimizationLevel`] to a new-PM pass-pipeline string for

@@ -48,10 +48,10 @@ use crate::ctx::EmitContext;
 use crate::error::{IceExt, LlvmError};
 use crate::intrinsics::process::payload_drop_glue;
 use crate::main_wrapper::EXIT_CODE_SYMBOL;
+use crate::reductions::emit_budget_seed;
 use crate::runtime::{
     declare_rt_process_exit_extern, declare_rt_receive_extern, declare_rt_receive_timeout_extern,
-    declare_rt_set_priority_extern, declare_rt_spawn_extern, declare_rt_yield_check_extern,
-    reductions_counter_global,
+    declare_rt_set_priority_extern, declare_rt_spawn_extern,
 };
 use crate::types::ir_basic_type;
 
@@ -129,6 +129,9 @@ fn emit_wrapper_shim<'ctx>(
 
     let entry_bb = ctx.context.append_basic_block(llvm_function, "entry");
     ctx.builder.position_at_end(entry_bb);
+    // First compiled code on the fresh process stack, so this is where
+    // the register-strategy budget gets its initial grant.
+    emit_budget_seed(ctx)?;
     let raw_ptr = llvm_function
         .get_nth_param(0)
         .ok_or_else(|| {
@@ -286,59 +289,6 @@ pub(super) fn emit_set_priority<'ctx>(
     Ok(())
 }
 
-// ----- IRInstruction::YieldCheck -------------------------------------------
-
-/// Emit `IRInstruction::YieldCheck` as an inline reduction spend: decrement
-/// the per-worker `koja_reductions_left` thread-local and branch into
-/// `koja_rt_yield_check` only when it reaches zero. The common case is a
-/// load / sub / store with no call, so the dense placement stays cheap.
-pub(super) fn emit_yield_check(ctx: &EmitContext<'_>) -> Result<(), LlvmError> {
-    let host_block = ctx.builder.get_insert_block().ok_or_else(|| {
-        LlvmError::Codegen("LLVM emit: YieldCheck emitted with no insertion block".to_string())
-    })?;
-    let function = host_block.get_parent().ok_or_else(|| {
-        LlvmError::Codegen("LLVM emit: YieldCheck's host block has no parent function".to_string())
-    })?;
-
-    let i32_ty = ctx.context.i32_type();
-    let counter = reductions_counter_global(ctx).as_pointer_value();
-    let current = ctx
-        .builder
-        .build_load(i32_ty, counter, "reductions")
-        .or_ice()?
-        .into_int_value();
-    let decremented = ctx
-        .builder
-        .build_int_sub(current, i32_ty.const_int(1, false), "reductions_next")
-        .or_ice()?;
-    ctx.builder.build_store(counter, decremented).or_ice()?;
-
-    let exhausted = ctx
-        .builder
-        .build_int_compare(
-            IntPredicate::EQ,
-            decremented,
-            i32_ty.const_zero(),
-            "reductions_out",
-        )
-        .or_ice()?;
-    let yield_bb = ctx.context.append_basic_block(function, "yield_slow");
-    let continue_bb = ctx.context.append_basic_block(function, "yield_cont");
-    ctx.builder
-        .build_conditional_branch(exhausted, yield_bb, continue_bb)
-        .or_ice()?;
-
-    ctx.builder.position_at_end(yield_bb);
-    let yield_check_fn = declare_rt_yield_check_extern(ctx);
-    ctx.builder.build_call(yield_check_fn, &[], "").or_ice()?;
-    ctx.builder
-        .build_unconditional_branch(continue_bb)
-        .or_ice()?;
-
-    ctx.builder.position_at_end(continue_bb);
-    Ok(())
-}
-
 // ----- IRInstruction::Receive ----------------------------------------------
 
 /// Emit a single `IRInstruction::Receive`. Allocates a payload scratch
@@ -346,9 +296,11 @@ pub(super) fn emit_yield_check(ctx: &EmitContext<'_>) -> Result<(), LlvmError> {
 /// `koja_rt_receive_timeout` when `after` is present) to copy the next
 /// message's payload into it (the runtime strips the tag header and
 /// frees the transport buffer), then branches into the arm whose tag
-/// matches the returned wire tag. The host block ends with the
-/// dispatch, so its IR `Unreachable` terminator is a no-op once the
-/// `super::emit_block` already-terminated guard kicks in.
+/// matches the returned wire tag. Dispatch always exits through an
+/// arm, so anything staged after the `Receive` in the host IR block
+/// (payload-local drops, the terminator) is dead. It gets parked in
+/// a fresh `receive_dead` block to keep the dispatcher's own blocks
+/// verifier-clean.
 ///
 /// `dest` and `result_type` come from the IR for symmetry with
 /// other instruction emitters. The host block never reads `dest`
@@ -377,7 +329,12 @@ pub(super) fn emit_receive<'ctx>(
         let continue_bb = timeout_tag_branch(ctx, host_function, tag_value, after)?;
         ctx.builder.position_at_end(continue_bb);
     }
-    dispatch_arms(ctx, host_function, payload_slot, tag_value, arms)
+    dispatch_arms(ctx, host_function, payload_slot, tag_value, arms)?;
+    let dead_bb = ctx
+        .context
+        .append_basic_block(host_function, "receive_dead");
+    ctx.builder.position_at_end(dead_bb);
+    Ok(())
 }
 
 /// Allocate the scratch slot the runtime copies the delivered payload
