@@ -24,6 +24,7 @@ use koja_runtime_core::{
     duration_from_user_millis, slot_index,
 };
 
+use crate::fault;
 #[cfg(target_arch = "x86_64")]
 use crate::ffi::koja_seed_reductions;
 use crate::ffi::{fflush, koja_context_switch, koja_process_start, setvbuf};
@@ -95,7 +96,13 @@ fn send_lifecycle_to(pid: i64, variant: i64) {
     deliver_or_discard(pid, Envelope::new(buf, LIFECYCLE_BUF_SIZE));
 }
 
-const STACK_SIZE: usize = 512 * 1024;
+pub(crate) const STACK_SIZE: usize = 512 * 1024;
+
+/// Bytes of `PROT_NONE` guard below every process stack. Wider than one
+/// page because FFI-called C code is compiled without stack probes, so
+/// one large frame could otherwise step past a single guard page. The
+/// cost per process is virtual-only.
+const GUARD_SIZE: usize = 64 * 1024;
 
 /// A compiled process body, entered on first switch. `extern "C-unwind"`
 /// because a user crash inside the body unwinds back through it to the
@@ -126,15 +133,24 @@ const RET_ADDR_OFFSET: usize = 48;
 #[cfg(target_arch = "x86_64")]
 const ENTRY_REG_OFFSET: usize = 40;
 
-/// An `mmap`-backed process stack: a `PROT_NONE` guard page at the
-/// lowest address (the growth end, since stacks grow down) followed by
-/// the usable region. Held on each [`NativeExecution`] so the mapping is
-/// `munmap`ped on drop when the process's resources are reclaimed.
+/// An `mmap`-backed process stack: a [`GUARD_SIZE`] `PROT_NONE` region
+/// at the lowest address (the growth end, since stacks grow down)
+/// followed by the usable region. Held on each [`NativeExecution`] so
+/// the mapping is `munmap`ped on drop when the process's resources are
+/// reclaimed.
 pub(crate) struct ProcessStack {
-    /// Base of the whole mapping (start of the guard page).
+    /// Base of the whole mapping (start of the guard region).
     base: *mut u8,
-    /// Total mapped bytes: guard page + usable stack.
+    /// Total mapped bytes: guard region + usable stack.
     size: usize,
+}
+
+impl ProcessStack {
+    /// The guard region `(base, len)`, published to worker TLS while
+    /// the process runs so the fault handler can recognize overflow.
+    fn guard_range(&self) -> (usize, usize) {
+        (self.base as usize, self.size - STACK_SIZE)
+    }
 }
 
 impl Drop for ProcessStack {
@@ -167,9 +183,9 @@ pub(crate) struct NativeExecution {
     /// Saved stack pointer. Written by `koja_context_switch` when the process
     /// yields, read when a worker resumes it.
     pub(crate) sp: *mut u8,
-    /// The process's `mmap`-backed stack. Never read by name, held purely so
-    /// its [`Drop`] `munmap`s the mapping when the execution state is reclaimed.
-    #[allow(dead_code)]
+    /// The process's `mmap`-backed stack. Read for its guard range at
+    /// claim time; its [`Drop`] `munmap`s the mapping when the execution
+    /// state is reclaimed.
     stack: ProcessStack,
 }
 
@@ -690,15 +706,16 @@ unsafe extern "C" fn process_trampoline() {
     yield_to_scheduler();
 }
 
-/// Maps a fresh [`STACK_SIZE`] process stack with a `PROT_NONE` guard
-/// page at the growth (low-address) end and initialises it so the first
-/// context switch lands in [`process_trampoline`]. Returns the mapping
-/// handle (a [`ProcessStack`] that `munmap`s itself on drop) plus the
-/// initial stack pointer. Aborts on mapping failure, matching the old
-/// allocator.
+/// Maps a fresh [`STACK_SIZE`] process stack with a [`GUARD_SIZE`]
+/// `PROT_NONE` region at the growth (low-address) end and initialises
+/// it so the first context switch lands in [`process_trampoline`].
+/// Returns the mapping handle (a [`ProcessStack`] that `munmap`s itself
+/// on drop) plus the initial stack pointer. Aborts on mapping failure,
+/// matching the old allocator.
 fn allocate_process_stack() -> (ProcessStack, *mut u8) {
     let page = unsafe { libc::sysconf(libc::_SC_PAGESIZE) } as usize;
-    let size = page + STACK_SIZE;
+    debug_assert_eq!(GUARD_SIZE % page, 0);
+    let size = GUARD_SIZE + STACK_SIZE;
     let oom = || alloc::handle_alloc_error(alloc::Layout::from_size_align(size, page).unwrap());
 
     let base = unsafe {
@@ -715,9 +732,11 @@ fn allocate_process_stack() -> (ProcessStack, *mut u8) {
         oom();
     }
 
-    // Guard the lowest page: a downward-growing stack that overruns its
-    // usable region faults here instead of corrupting adjacent memory.
-    if unsafe { libc::mprotect(base, page, libc::PROT_NONE) } != 0 {
+    // Guard the lowest region: a downward-growing stack that overruns
+    // its usable region faults here instead of corrupting adjacent
+    // memory, and the fault handler turns that into a stack overflow
+    // diagnostic.
+    if unsafe { libc::mprotect(base, GUARD_SIZE, libc::PROT_NONE) } != 0 {
         unsafe { libc::munmap(base, size) };
         oom();
     }
@@ -886,6 +905,9 @@ fn injectors_nonempty() -> bool {
 /// [`SHUTDOWN`] is set.
 fn worker_loop(local: WorkerQueues, me: usize) {
     tsan::capture_scheduler_fiber();
+    // The stack overflow handler needs somewhere to run when a process
+    // stack is spent.
+    fault::install_altstack();
     // Publish this worker's deques so intrinsics running in process context
     // (e.g. `koja_rt_send`) can co-locate the processes they wake here.
     WORKER_ID.with(|id| id.set(me));
@@ -928,8 +950,12 @@ fn worker_loop(local: WorkerQueues, me: usize) {
         }
 
         match claim_work() {
-            Some((pid, proc_sp)) => {
+            Some((pid, proc_sp, (guard_base, guard_len))) => {
+                // Cleared right after the switch so a stale range cannot
+                // misattribute a later fault to a freed stack.
+                fault::set_current_guard(guard_base, guard_len);
                 let saved_sp = NativeExecutor.resume(pid, proc_sp);
+                fault::clear_current_guard();
                 // A voluntary yield (reduction budget spent) flagged itself
                 // in this worker's TLS instead of touching the table. Reading
                 // it here is safe: worker_loop never migrates threads.
@@ -985,15 +1011,19 @@ fn worker_loop(local: WorkerQueues, me: usize) {
 /// candidates via [`find_work`] and validates each with the lock-free
 /// [`ProcessTable::try_claim`], skipping stale entries (killed or already
 /// resumed). `None` when no claimable work is visible.
-fn claim_work() -> Option<(Pid, *mut u8)> {
+fn claim_work() -> Option<(Pid, *mut u8, (usize, usize))> {
     while let Some(pid) = find_work() {
         if !TABLE.try_claim(pid) {
             continue;
         }
         // Safety: the claim just succeeded, so this worker owns the slot's
         // execution state until `after_switch`.
-        let proc_sp = unsafe { TABLE.with_execution(pid, |execution| execution.sp) }
-            .expect("just-claimed process exists");
+        let (proc_sp, guard) = unsafe {
+            TABLE.with_execution(pid, |execution| {
+                (execution.sp, execution.stack.guard_range())
+            })
+        }
+        .expect("just-claimed process exists");
         // Seed this quantum's reduction budget (reset by `try_claim`) into the
         // C thread-local that compiled x86_64 process code decrements inline
         // at each `YieldCheck`. aarch64 keeps the budget in the reserved
@@ -1005,7 +1035,7 @@ fn claim_work() -> Option<(Pid, *mut u8)> {
         unsafe {
             koja_seed_reductions(TABLE.reductions_left(pid))
         };
-        return Some((pid, proc_sp));
+        return Some((pid, proc_sp, guard));
     }
     None
 }
@@ -1070,11 +1100,19 @@ static RUNTIME_INIT: Once = Once::new();
 /// One-time process-global runtime initialization. Installs the panic hook
 /// that converts any Rust panic (on any thread, before unwinding) into a
 /// clean diagnostic abort, so a panic can never unwind across the C-ABI or
-/// poison a scheduler lock. Called at the head of every runtime entry
-/// point (`koja_rt_spawn` is the first one a program reaches), so the hook
-/// is live before any worker thread is spawned.
+/// poison a scheduler lock, and the SIGSEGV / SIGBUS handler that reports
+/// process stack overflows. Called at the head of every runtime entry
+/// point (`koja_rt_spawn` is the first one a program reaches), so both are
+/// live before any worker thread is spawned.
 fn ensure_runtime_init() {
-    RUNTIME_INIT.call_once(panic::install_panic_hook);
+    RUNTIME_INIT.call_once(|| {
+        panic::install_panic_hook();
+        // std installs its own SIGSEGV/SIGBUS handler the first time a
+        // thread spawns. Force that one-time install to happen now so
+        // the koja fault handler installed next stays the final one.
+        let _ = thread::spawn(|| {}).join();
+        fault::install();
+    });
 }
 
 /// Called by the compiled Koja program after `main` returns. The C-ABI
