@@ -1,0 +1,28 @@
+# Recursion with fat frames. The tuple locals stay live across the
+# recursive call, so each frame is kilobytes rather than tens of bytes
+# and stack growth takes big strides. Stack probes keep those strides
+# landing inside the guard region.
+
+fn sum16(
+  t: (Int, Int, Int, Int, Int, Int, Int, Int, Int, Int, Int, Int, Int, Int, Int, Int),
+) -> Int
+
+  (a, b, c, d, e, f, g, h, i, j, k, l, m, o, p, q) = t
+  a + b + c + d + e + f + g + h + i + j + k + l + m + o + p + q
+end
+
+fn grow(n: Int) -> Int
+  t1 = (n, n, n, n, n, n, n, n, n, n, n, n, n, n, n, n)
+  t2 = (n, n, n, n, n, n, n, n, n, n, n, n, n, n, n, n)
+  t3 = (n, n, n, n, n, n, n, n, n, n, n, n, n, n, n, n)
+  t4 = (n, n, n, n, n, n, n, n, n, n, n, n, n, n, n, n)
+  t5 = (n, n, n, n, n, n, n, n, n, n, n, n, n, n, n, n)
+  t6 = (n, n, n, n, n, n, n, n, n, n, n, n, n, n, n, n)
+  t7 = (n, n, n, n, n, n, n, n, n, n, n, n, n, n, n, n)
+  t8 = (n, n, n, n, n, n, n, n, n, n, n, n, n, n, n, n)
+  deeper = grow(n + 1)
+  deeper + sum16(t1) + sum16(t2) + sum16(t3) + sum16(t4) + sum16(t5) +
+    sum16(t6) + sum16(t7) + sum16(t8)
+end
+
+grow(1).print()

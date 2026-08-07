@@ -109,6 +109,53 @@ without inspecting payloads.
 Add a slow-consumer fixture that verifies depth snapshots and eventual
 reclamation on both adapters.
 
+### 3. Per-process mmap caps density and slows spawn
+
+**Severity: medium. Bug class: scaling ceiling, slow spawn.**
+
+Every spawn does an `mmap` plus an `mprotect`, and every death an
+`munmap` (`allocate_process_stack` in `scheduler.rs`). This is the
+correct-first design, but it carries two costs:
+
+- **Spawn latency.** Two syscalls per spawn put the spawn benchmark at
+  roughly 2.8x BEAM. The BEAM allocates process memory from large
+  shared carriers with no syscall on the spawn path.
+- **Density.** Each guarded stack is two VMAs (the `PROT_NONE` guard
+  and the usable region). Linux caps VMAs at `vm.max_map_count`,
+  65530 by default, so about 30k live processes before tuning. The
+  BEAM runs millions of processes per node because thousands of
+  process blocks share one carrier mapping. Matching that is part of
+  the pitch to the Elixir audience.
+
+The virtual reservation itself is not the constraint. 2M processes at
+576 KiB reserve about 1.1 TB, which a 64-bit address space absorbs.
+The VMA count is the binding limit.
+
+**Fix.** In two steps, both compatible with fixed non-relocatable
+stacks:
+
+1. **Stack pooling.** Death returns the mapping to a free list, spawn
+   pops one. Removes the syscalls from the hot path and most of the
+   spawn gap. No change to the guard or fault handler.
+2. **Carrier stacks with a prologue limit check.** Carve stacks from
+   large shared mappings with no guard pages, and have the compiler
+   emit a stack-limit compare at function entry, the Go model. The
+   check can ride the existing `YieldCheck` entry sequence, and an
+   overflow becomes a clean runtime kill with the same
+   `** (stack overflow)` diagnostic. A software check cannot protect
+   unprobed C frames, so FFI-heavy processes may keep guarded `mmap`
+   stacks while plain processes use carrier stacks.
+
+   The check also upgrades overflow from program-fatal to
+   process-contained. A hardware guard fault cannot unwind (no stack
+   to run cleanup on, and it may interrupt a lock-holding runtime
+   call), so today the whole program dies and monitors never fire.
+   A prologue check detects exhaustion synchronously with headroom
+   left, so it can reuse the panic unwind path: the process dies with
+   a stack overflow `StopReason` and monitors are notified like any
+   other crash. The guard stays as the program-fatal backstop for
+   unprobed C frames.
+
 ---
 
 ## Launch priority
@@ -116,7 +163,9 @@ reclamation on both adapters.
 No open entry blocks an experimental soft launch. The ownership-leak
 class is closed. **#1** (`loom`) is a robustness and coverage improvement.
 **#2** requires the 0.16 observability surface, while unbounded delivery
-remains the documented contract. The one-time fairness gap (preemption
+remains the documented contract. **#3** step 1 (stack pooling) is the
+next performance item, and step 2 gates the million-process story, not
+the launch. The one-time fairness gap (preemption
 points covering only loops and tail calls, letting deep non-tail
 recursion monopolize a worker) is now closed: a `YieldCheck` sits at the
 entry of every call-containing function, lowered to an inline reduction

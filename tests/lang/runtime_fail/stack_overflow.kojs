@@ -1,0 +1,8 @@
+# Unbounded non-tail recursion exhausts the process stack. The fault
+# handler reports it instead of a bare SIGSEGV/SIGBUS kill.
+
+fn grow(n: Int) -> Int
+  grow(n + 1) + n
+end
+
+grow(1).print()

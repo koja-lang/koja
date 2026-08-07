@@ -245,10 +245,9 @@ impl<'ctx> EmitContext<'ctx> {
         }
     }
 
-    /// Force a maintained frame pointer (`frame-pointer=all`) and
-    /// asynchronous unwind tables (`uwtable`) on `llvm_function`.
+    /// Attributes every emitted function carries.
     ///
-    /// The frame pointer keeps the `fp`-chain unwinder `libc::backtrace`
+    /// `frame-pointer=all` keeps the `fp`-chain unwinder `libc::backtrace`
     /// uses from walking straight past koja frames (without it LLVM never
     /// repoints the frame-pointer register), so panic backtraces show the
     /// whole koja call chain.
@@ -257,13 +256,21 @@ impl<'ctx> EmitContext<'ctx> {
     /// *through* a koja frame, so a `Kernel.panic` unwind can cross the
     /// compiled body to the `catch_unwind` at `process_trampoline` and contain
     /// the crash to one process.
-    pub(crate) fn set_frame_pointer(&self, llvm_function: FunctionValue<'ctx>) {
+    ///
+    /// `probe-stack` makes frames larger than a page touch each page in
+    /// order, so growth past a process stack's end always lands in the
+    /// guard region instead of skipping over it.
+    pub(crate) fn set_function_attributes(&self, llvm_function: FunctionValue<'ctx>) {
         let frame_pointer = self.context.create_string_attribute("frame-pointer", "all");
         llvm_function.add_attribute(AttributeLoc::Function, frame_pointer);
         // `uwtable` kind with value 2 = async unwind tables (UWTableKind).
         let uwtable_kind = Attribute::get_named_enum_kind_id("uwtable");
         let uwtable = self.context.create_enum_attribute(uwtable_kind, 2);
         llvm_function.add_attribute(AttributeLoc::Function, uwtable);
+        let probe_stack = self
+            .context
+            .create_string_attribute("probe-stack", "inline-asm");
+        llvm_function.add_attribute(AttributeLoc::Function, probe_stack);
     }
 
     /// Stage the per-function [`TcoFrame`] for the body currently

@@ -125,7 +125,7 @@ fn define_user_main<'ctx>(
     let function = ctx
         .module
         .add_function(USER_MAIN_SYMBOL, signature, Some(Linkage::External));
-    ctx.set_frame_pointer(function);
+    ctx.set_function_attributes(function);
     // Attribute the synthesized body to the script's source file so a
     // top-level panic resolves to `main` at the user's file:line.
     ctx.enter_named_function_debug(function, "main", def_location);
@@ -215,7 +215,7 @@ pub(crate) fn emit_process_entry_main<'ctx>(
     let main_fn = ctx
         .module
         .add_function(ENTRY_SYMBOL, signature, Some(Linkage::External));
-    ctx.set_frame_pointer(main_fn);
+    ctx.set_function_attributes(main_fn);
 
     let entry_bb = ctx.context.append_basic_block(main_fn, "entry");
     ctx.builder.position_at_end(entry_bb);
@@ -308,7 +308,7 @@ fn define_main_trampoline<'ctx>(ctx: &EmitContext<'ctx>) -> Result<(), LlvmError
     let function = ctx
         .module
         .add_function(ENTRY_SYMBOL, signature, Some(Linkage::External));
-    ctx.set_frame_pointer(function);
+    ctx.set_function_attributes(function);
     let entry = ctx.context.append_basic_block(function, "entry");
     ctx.builder.position_at_end(entry);
     ctx.enter_synthetic_debug();

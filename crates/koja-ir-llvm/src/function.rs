@@ -90,7 +90,7 @@ pub(crate) fn declare_function<'ctx>(
         // FFI declarations carry no body we define. Everything else
         // gets a maintained frame pointer so panic backtraces can
         // walk it.
-        ctx.set_frame_pointer(llvm_function);
+        ctx.set_function_attributes(llvm_function);
     }
     ctx.declare_function_debug(
         llvm_function,

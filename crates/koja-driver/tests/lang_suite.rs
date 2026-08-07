@@ -56,7 +56,9 @@ const BACKENDS: [&str; 2] = ["llvm", "interpreter"];
 /// starved the signalled child), but compiler-inserted yield-checks at
 /// loop back-edges now preempt the spinner under both backends. Add a
 /// stem here only for a genuinely backend-specific fixture.
-const LLVM_ONLY: &[&str] = &[];
+// The stack overflow fixtures need fixed process stacks and the fault
+// handler. The interpreter recurses on the host Rust stack instead.
+const LLVM_ONLY: &[&str] = &["stack_overflow", "stack_overflow_big_frame"];
 
 /// Whether `file` runs under the interpreter in addition to LLVM.
 fn eval_eligible(file: &Path) -> bool {
