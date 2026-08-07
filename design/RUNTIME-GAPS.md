@@ -146,6 +146,16 @@ stacks:
    unprobed C frames, so FFI-heavy processes may keep guarded `mmap`
    stacks while plain processes use carrier stacks.
 
+   The check also upgrades overflow from program-fatal to
+   process-contained. A hardware guard fault cannot unwind (no stack
+   to run cleanup on, and it may interrupt a lock-holding runtime
+   call), so today the whole program dies and monitors never fire.
+   A prologue check detects exhaustion synchronously with headroom
+   left, so it can reuse the panic unwind path: the process dies with
+   a stack overflow `StopReason` and monitors are notified like any
+   other crash. The guard stays as the program-fatal backstop for
+   unprobed C frames.
+
 ---
 
 ## Launch priority
