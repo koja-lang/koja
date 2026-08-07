@@ -12,9 +12,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `koja doc search <query>` looks up a symbol from the terminal, printing the full doc for an exact name and a candidate list for partial matches.
 - `koja doc` commands now work outside a project, documenting the standard library on its own.
 - `koja new` scaffolds an `AGENTS.md` that points coding agents at `koja doc search` and the language's core conventions.
+- Go to definition now works on standard library symbols, landing in real source files extracted under `~/.koja/stdlib/`.
 
 ### Changed
 
+- `koja format` now always writes files in place like `mix format`, dropping the `--write` flag and the single-file stdout mode.
 - Compute-heavy code runs up to 40% faster on Apple Silicon, where preemption checks now cost a couple of register instructions instead of a thread-local access.
 - Building the compiler from source now requires LLVM 21 (up from LLVM 18).
 - `koja doc` pages now match the kojalang.org design, with a centered layout, a navigation rail grouped by kind, and an "on this page" column on large items.
@@ -23,6 +25,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- LSP: Editor diagnostics in multi-file projects now appear on the file that owns them instead of being dropped, and clear when an edit elsewhere fixes them.
+- LSP: Hovering a keyword or blank spot inside a type no longer shows a bogus `String` hover from the auto-derived `Debug` impl, and derived members no longer appear in the editor outline.
 - Generated docs now show the `! E` error channel on fallible function signatures.
 - Builtin types like `String` and `Int` now appear in generated docs and `koja doc search`, with their extension methods attached.
 - Closure calls now compile with the callee's declared parameter types, removing a latent miscompile risk for `Float32` and struct arguments.

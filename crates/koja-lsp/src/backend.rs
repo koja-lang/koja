@@ -4,7 +4,7 @@
 //! [`LanguageServer`] trait implementation that dispatches to focused
 //! handler modules.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -73,6 +73,8 @@ pub struct Backend {
     pub(crate) documents: Arc<RwLock<HashMap<String, DocumentState>>>,
     pub(crate) autoimport_sources: Arc<Vec<SourceFile>>,
     pub(crate) qualified_sources: Arc<Vec<SourceFile>>,
+    /// URIs holding published diagnostics, for stale clearing.
+    pub(crate) published: Arc<RwLock<HashSet<Uri>>>,
 }
 
 impl std::fmt::Debug for Backend {
@@ -92,12 +94,27 @@ impl Backend {
     /// The sources are parsed fresh on every diagnostic run. Caching
     /// them as `SourceFile`s avoids re-reading the embedded strings on
     /// every keystroke while keeping each parse independent.
+    ///
+    /// Stdlib sources carry paths into the on-disk extraction so
+    /// go-to-definition lands in real files. If extraction fails, the
+    /// synthetic `<Package.module>` markers keep diagnostics working.
     pub fn new(client: Client) -> Self {
+        let (autoimport, qualified) = match koja_stdlib::extract() {
+            Ok(root) => (
+                koja_stdlib::autoimport_sources_at(&root),
+                koja_stdlib::qualified_sources_at(&root),
+            ),
+            Err(_) => (
+                koja_stdlib::autoimport_sources(),
+                koja_stdlib::qualified_sources(),
+            ),
+        };
         Self {
             client,
             documents: Arc::new(RwLock::new(HashMap::new())),
-            autoimport_sources: Arc::new(koja_stdlib::autoimport_sources()),
-            qualified_sources: Arc::new(koja_stdlib::qualified_sources()),
+            autoimport_sources: Arc::new(autoimport),
+            qualified_sources: Arc::new(qualified),
+            published: Arc::new(RwLock::new(HashSet::new())),
         }
     }
 }

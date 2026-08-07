@@ -126,6 +126,10 @@ priv fn agents_content -> String
   symbol. An exact name renders the full doc. A partial name lists
   candidates.
 
+  The standard library sources are extracted to `~/.koja/stdlib/`,
+  one directory per compiler build. Read or grep them there when the
+  docs are not enough.
+
   ## Commands
 
   Set `KOJA_DIAGNOSTICS=short` to print each diagnostic on one line.
@@ -133,7 +137,7 @@ priv fn agents_content -> String
   - `koja check` type checks without compiling
   - `koja test` runs `@test` functions from `src/` and `test/`
   - `koja run` builds and executes the project
-  - `koja format --write <files>` formats source files
+  - `koja format` formats the project in place (`--check` to verify)
 
   ## Language essentials
 

@@ -2487,19 +2487,19 @@ test run. The runner reports every discovered test even when some fail.
 
 ## Tooling
 
-| Command       | Description                                       |
-| ------------- | ------------------------------------------------- |
-| `koja new`    | Scaffold a new project directory                  |
-| `koja build`  | Compile to a native binary via LLVM               |
-| `koja run`    | Build and execute in one step                     |
-| `koja check`  | Type check without compiling                      |
-| `koja test`   | Run `@test`-annotated functions                   |
-| `koja tasks`  | List tasks from the project, deps, and toolchain  |
-| `koja deps`   | Fetch and inspect dependencies (`get`, `update`)  |
-| `koja format` | Opinionated code formatter (`--write`, `--check`) |
-| `koja doc`    | Generate static HTML documentation                |
-| `koja lex`    | Dump tokens                                       |
-| `koja parse`  | Dump AST                                          |
+| Command       | Description                                      |
+| ------------- | ------------------------------------------------ |
+| `koja new`    | Scaffold a new project directory                 |
+| `koja build`  | Compile to a native binary via LLVM              |
+| `koja run`    | Build and execute in one step                    |
+| `koja check`  | Type check without compiling                     |
+| `koja test`   | Run `@test`-annotated functions                  |
+| `koja tasks`  | List tasks from the project, deps, and toolchain |
+| `koja deps`   | Fetch and inspect dependencies (`get`, `update`) |
+| `koja format` | Opinionated code formatter (`--check` for CI)    |
+| `koja doc`    | Generate static HTML documentation               |
+| `koja lex`    | Dump tokens                                      |
+| `koja parse`  | Dump AST                                         |
 
 ### Project Scaffolding
 
@@ -2576,4 +2576,4 @@ Real-time diagnostics, document formatting, hover (type signatures + `@doc`), an
 
 ### Formatter
 
-Zero-config, opinionated. `koja format --write` reformats in place, `koja format --check` exits non-zero if formatting differs. The formatter handles escape re-encoding for round-trip correctness and preserves annotations.
+Zero-config, opinionated. `koja format` reformats in place (the whole project with no arguments, like `mix format`), and `koja format --check` exits non-zero if formatting differs. The formatter handles escape re-encoding for round-trip correctness and preserves annotations.

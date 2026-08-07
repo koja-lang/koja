@@ -42,6 +42,7 @@ impl Parser {
             trait_expr: first_type,
             members,
             span: self.span_from(start),
+            synthetic: false,
         })
     }
 

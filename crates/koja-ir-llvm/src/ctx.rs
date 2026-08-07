@@ -51,7 +51,7 @@ pub(crate) struct EmitContext<'ctx> {
     /// the host [`inkwell::targets::TargetData`] used by the enum
     /// layout computation. See [`crate::layout`].
     pub(crate) layouts: TypeLayouts<'ctx>,
-    /// Counter for `alpha_<prefix>.<n>` global names: strings,
+    /// Counter for `koja_<prefix>.<n>` global names: strings,
     /// binary, bits constants all share a single sequence so each
     /// emitted global symbol is unique. `Cell<u32>` because emission
     /// walks `&EmitContext` immutably.
@@ -420,7 +420,7 @@ impl<'ctx> EmitContext<'ctx> {
     pub(crate) fn next_payload_symbol(&self, prefix: &str) -> String {
         let n = self.payload_counter.get();
         self.payload_counter.set(n + 1);
-        format!("alpha_{prefix}.{n}")
+        format!("koja_{prefix}.{n}")
     }
 
     /// Register an `alloca` for `local`. Panics on duplicate keys,
