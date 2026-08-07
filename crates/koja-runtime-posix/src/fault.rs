@@ -71,7 +71,13 @@ pub(crate) fn install_altstack() {
 /// so the faulting instruction re-executes and the default action kills
 /// the program with the right status.
 extern "C" fn fault_handler(sig: libc::c_int, info: *mut libc::siginfo_t, _ctx: *mut libc::c_void) {
+    // Linux libc exposes `si_addr` as a union accessor method, macOS as
+    // a plain field.
+    #[cfg(target_os = "linux")]
+    let addr = unsafe { (*info).si_addr() } as usize;
+    #[cfg(not(target_os = "linux"))]
     let addr = unsafe { (*info).si_addr } as usize;
+    
     let (guard_base, guard_len) = GUARD_RANGE.with(|cell| cell.get());
     if guard_len != 0 && addr >= guard_base && addr < guard_base + guard_len {
         write_overflow_diagnostic();
