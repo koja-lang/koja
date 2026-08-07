@@ -437,12 +437,17 @@ pub struct Function {
 
 /// An `impl Protocol for Type` block. Inherent methods live in
 /// [`ExtendBlock`], and bare `impl Type` is a parse error.
+///
+/// `synthetic` marks compiler-derived impls (auto-derived `Debug` /
+/// `Equality`). Their nodes reuse the declaring type's span, so
+/// position-based tools like the LSP must skip them.
 #[derive(Debug, Clone)]
 pub struct ImplBlock {
     pub target: TypeExpr,
     pub trait_expr: TypeExpr,
     pub members: Vec<ImplMember>,
     pub span: Span,
+    pub synthetic: bool,
 }
 
 /// An `extend Type` block: attaches inherent methods (and type

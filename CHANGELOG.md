@@ -25,7 +25,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- Editor diagnostics in multi-file projects now appear on the file that owns them instead of being dropped, and clear when an edit elsewhere fixes them.
+- LSP: Editor diagnostics in multi-file projects now appear on the file that owns them instead of being dropped, and clear when an edit elsewhere fixes them.
+- LSP: Hovering a keyword or blank spot inside a type no longer shows a bogus `String` hover from the auto-derived `Debug` impl, and derived members no longer appear in the editor outline.
 - Generated docs now show the `! E` error channel on fallible function signatures.
 - Builtin types like `String` and `Int` now appear in generated docs and `koja doc search`, with their extension methods attached.
 - Closure calls now compile with the callee's declared parameter types, removing a latent miscompile risk for `Float32` and struct arguments.

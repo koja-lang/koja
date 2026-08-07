@@ -149,6 +149,7 @@ fn equality_impl_block(target: TypeExpr, body_expr: Expr, span: Span) -> Item {
             other_type, body_expr, span,
         ))],
         span,
+        synthetic: true,
     })
 }
 

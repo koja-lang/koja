@@ -99,6 +99,9 @@ pub(crate) fn find_symbol_at(
                 }
             }
             Item::Impl(imp) => {
+                if imp.synthetic {
+                    continue;
+                }
                 for member in &imp.members {
                     if let ImplMember::Function(f) = member {
                         if !span_contains(&f.span, line, col) {
@@ -409,6 +412,46 @@ mod tests {
             result.errors
         );
         result.ast
+    }
+
+    /// Derived `Debug` / `Equality` impls reuse the declaring type's
+    /// span on every node, so cursor positions that hit no real symbol
+    /// (keywords, whitespace) used to fall into them and hover as
+    /// `String`. Synthetic impls must be invisible to position lookup.
+    #[test]
+    fn keywords_inside_a_struct_hit_no_symbol() {
+        let checked = check(
+            r#"
+            priv struct Wire
+              priv fn scan(data: Binary) -> Option<(String, Binary)>
+                Option.None
+              end
+            end
+            "#,
+        );
+        let active_path = PathBuf::from("test.koja");
+        let file = checked
+            .packages
+            .iter()
+            .find(|p| p.package == PACKAGE)
+            .and_then(|pkg| {
+                pkg.files
+                    .iter()
+                    .find(|f| f.path.as_deref() == Some(active_path.as_path()))
+            })
+            .expect("active file");
+        let locals = LocalIndex::default();
+        let ctx = LookupCtx {
+            registry: &checked.registry,
+            package: PACKAGE,
+            locals: &locals,
+        };
+        // `priv` of the inline fn (2:3) and the indent before the body
+        // (3:3) hit no symbol. `Option` in the body (3:5) still resolves.
+        assert!(find_symbol_at(file, 2, 3, &ctx).is_none());
+        assert!(find_symbol_at(file, 3, 3, &ctx).is_none());
+        let info = find_symbol_at(file, 3, 5, &ctx).expect("symbol on Option");
+        assert!(matches!(info, SymbolInfo::Enum { ref name } if name == "Option"));
     }
 
     #[test]
