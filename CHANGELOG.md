@@ -12,7 +12,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `koja doc search <query>` looks up a symbol from the terminal, printing the full doc for an exact name and a candidate list for partial matches.
 - `koja doc` commands now work outside a project, documenting the standard library on its own.
 - `koja new` scaffolds an `AGENTS.md` that points coding agents at `koja doc search` and the language's core conventions.
-- A process that overflows its stack now dies with a `** (stack overflow)` diagnostic instead of a bare crash.
 
 ### Changed
 
@@ -28,6 +27,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Builtin types like `String` and `Int` now appear in generated docs and `koja doc search`, with their extension methods attached.
 - Closure calls now compile with the callee's declared parameter types, removing a latent miscompile risk for `Float32` and struct arguments.
 - The compiler now verifies every emitted module and reports an internal error instead of producing a corrupt binary.
+- A process that overflows its stack now dies with a `** (stack overflow)` diagnostic instead of a bare crash.
 
 ## [0.16.0] - 2026-08-03
 
