@@ -77,7 +77,7 @@ extern "C" fn fault_handler(sig: libc::c_int, info: *mut libc::siginfo_t, _ctx: 
     let addr = unsafe { (*info).si_addr() } as usize;
     #[cfg(not(target_os = "linux"))]
     let addr = unsafe { (*info).si_addr } as usize;
-    
+
     let (guard_base, guard_len) = GUARD_RANGE.with(|cell| cell.get());
     if guard_len != 0 && addr >= guard_base && addr < guard_base + guard_len {
         write_overflow_diagnostic();

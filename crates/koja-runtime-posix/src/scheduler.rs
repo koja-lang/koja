@@ -184,7 +184,7 @@ pub(crate) struct NativeExecution {
     /// yields, read when a worker resumes it.
     pub(crate) sp: *mut u8,
     /// The process's `mmap`-backed stack. Read for its guard range at
-    /// claim time; its [`Drop`] `munmap`s the mapping when the execution
+    /// claim time. Its [`Drop`] `munmap`s the mapping when the execution
     /// state is reclaimed.
     stack: ProcessStack,
 }
