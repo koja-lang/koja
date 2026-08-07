@@ -147,7 +147,7 @@ pub(crate) fn emit_string_literal_payload<'ctx>(
 /// `Bits` whose `bit_length` is a non-multiple of 8, the producer
 /// is responsible for zero-padding the trailing partial byte.
 ///
-/// `prefix` becomes `alpha_<prefix>.<n>` in the LLVM IR, purely
+/// `prefix` becomes `koja_<prefix>.<n>` in the LLVM IR, purely
 /// cosmetic but helps reading raw IR (`str` / `bin` / `bits`).
 fn emit_const_payload<'ctx>(
     ctx: &EmitContext<'ctx>,

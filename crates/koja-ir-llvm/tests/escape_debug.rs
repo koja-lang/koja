@@ -7,7 +7,7 @@
 //!
 //! These tests pin the LLVM IR shape. The actual end-to-end
 //! "compile + execute the binary, observe correct output" coverage
-//! lives in the driver crate (see `alpha_two_plus_two.rs`).
+//! lives in the driver crate's `lang_suite.rs`.
 
 use koja_ast::util::dedent;
 use koja_ir_llvm::emit_script_llvm_ir;

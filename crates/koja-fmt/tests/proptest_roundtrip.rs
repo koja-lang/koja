@@ -129,7 +129,7 @@ fn corpus_canonical() {
         };
         if src != formatted {
             failures.push(format!(
-                "{}: not in canonical form (run `koja format --write`)",
+                "{}: not in canonical form (run `koja format`)",
                 path.display()
             ));
         }

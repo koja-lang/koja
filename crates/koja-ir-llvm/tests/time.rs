@@ -40,7 +40,7 @@ fn datetime_now_call_emits_extern_declare_for_runtime_symbol() {
 }
 
 #[test]
-fn datetime_now_does_not_re_emit_runtime_symbol_under_alpha_mangling() {
+fn datetime_now_does_not_re_emit_runtime_symbol_under_name_mangling() {
     // The extern's link name is the function's bare last-segment
     // (`koja_time_now_millis`), not the name-mangled
     // `Global.DateTime.koja_time_now_millis`. Mirror the assertion
@@ -50,7 +50,7 @@ fn datetime_now_does_not_re_emit_runtime_symbol_under_alpha_mangling() {
 
     assert!(
         !ir_text.contains("@Global.DateTime.koja_time_now_millis"),
-        "extern declaration must use the bare C name, not the the name mangling; got:\n{ir_text}",
+        "extern declaration must use the bare C name, not the name mangling. Got:\n{ir_text}",
     );
 }
 

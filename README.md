@@ -172,7 +172,7 @@ cargo test --workspace -- --test-threads=4
 Koja source files can be formatted with the built-in formatter.
 
 ```sh
-koja format --write <file.koja>
+koja format <file.koja>
 ```
 
 Compiler formatting and lint checks use Cargo:

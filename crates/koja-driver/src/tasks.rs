@@ -115,8 +115,8 @@ pub(crate) fn generate_task_harness(type_name: &str) -> String {
         end
 
         impl Process<List<String>, (), ()> for {TASK_HARNESS_ENTRY}
-          fn start(config: List<String>) -> Result<Self, Process.StopReason>
-            Result.Ok({TASK_HARNESS_ENTRY}{{args: config}})
+          fn start(config: List<String>) -> Self ! Process.StopReason
+            {TASK_HARNESS_ENTRY}{{args: config}}
           end
 
           fn handle(self, msg: (), from: Option<ReplyTo<()>>) -> Process.Step<Self>

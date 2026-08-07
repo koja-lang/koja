@@ -292,6 +292,22 @@ hazard for other types remain until the general lowering lands.
 
 ---
 
+## Linux binaries are non-PIE (no ASLR)
+
+Codegen uses `RelocMode::Default`, which emits absolute
+(`R_X86_64_32`) relocations. Modern Debian and Ubuntu default `cc` to
+PIE and reject those relocations, so `link.rs` passes `-no-pie` on
+Linux. The result is that every Linux binary Koja produces runs
+without ASLR, a real hardening loss for server deployments. macOS is
+unaffected (ld64 produces PIE from the same objects).
+
+**Fix path:** switch object emission to `RelocMode::PIC` in
+`koja-ir-llvm/src/object.rs`, drop the `-no-pie` flag, and benchmark.
+PIC adds GOT indirection for globals, so the compute suite should be
+re-run on Linux before and after.
+
+---
+
 ## Bug triage log
 
 Audited 2026-05-03 · re-triaged 2026-05-27 (seven fixed entries

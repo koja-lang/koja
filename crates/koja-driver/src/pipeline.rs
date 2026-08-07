@@ -56,10 +56,6 @@
 //!   binary at the output path. The interpreter has no codegen
 //!   surface, so `build` carries no backend flag.
 //! - `check` and `shell` have no backend dimension.
-//!
-//! Scope today (mirrors `koja-typecheck` / `koja-ir`): the full
-//! feature set surface those crates expose. Anything beyond
-//! typecheck-errors with a precise diagnostic.
 
 use std::env;
 use std::ffi::OsStr;
@@ -90,70 +86,42 @@ use crate::tasks::{TASK_HARNESS_ENTRY, TaskProvider, generate_task_harness, reso
 ///
 /// `koja run` defaults to [`Backend::Interpreter`] (fast feedback,
 /// no link step) and accepts `--backend=llvm` to compile + exec.
-/// `koja build` is LLVM-only and carries no backend flag. The
-/// interpreter can't emit object files, so there's no choice to
-/// expose.
-///
-/// Future-proofing: when a WASM backend lands it slots in as a
-/// third variant here, and a `build --backend=wasm` flag can be
-/// re-added then (it'll have two genuinely valid targets). `check`
-/// and `shell` have no backend dimension and don't reference this
-/// enum.
+/// `koja build` carries no backend flag: only LLVM emits object
+/// files.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, clap::ValueEnum)]
 pub enum Backend {
-    /// Run via [`koja_ir_eval`]. Default for `run`. Not
-    /// valid for `build` because the interpreter doesn't produce
-    /// object files.
+    /// Run in-process via [`koja_ir_eval`].
     Interpreter,
-    /// Compile + link via [`koja_ir_llvm`]. Default for
-    /// `build`. For `run`, compiles to a temp binary, execs it,
-    /// and forwards the binary's exit code.
+    /// Compile + link via [`koja_ir_llvm`], exec the binary, and
+    /// forward its exit code.
     Llvm,
 }
 
-/// Categorized source input for an `koja` command.
+/// Categorized source input for a `koja` command.
 ///
-/// [`resolve_source_shape`] inspects the file extension (or, when no
-/// file is provided, looks for an `koja.toml` in the current
-/// directory) and produces one of these variants. Each command
-/// decides which subset it accepts: `cmd_check` accepts all three
-/// (the `Project` arm is stubbed for now). `cmd_build`, `cmd_run`,
-/// and `cmd_eval` reject `Program` outright since executing a
-/// `.koja` file outside a project requires guessing the entry
-/// point and dependency graph.
+/// [`resolve_source_shape`] inspects the file extension (or, with
+/// no file, the current directory's `koja.toml`) and produces one
+/// of these variants. `cmd_check` accepts all three. `cmd_build`
+/// and `cmd_run` reject `Program`, since a bare `.koja` file has
+/// no entry point or dependency graph.
 enum SourceShape {
     /// Standalone script (`.kojs`). Top-level expressions are
     /// first-class, lowered via [`lower_script`].
     Script(PathBuf),
-    /// Project file (`.koja`) provided directly. Only `cmd_check`
-    /// accepts this. The others bail because executing a `.koja`
-    /// outside a project has no entry-point story.
+    /// Project file (`.koja`) provided directly.
     Program(PathBuf),
-    /// No file argument. An `koja.toml` was found in the current
-    /// directory and parsed cleanly. Carries the parsed
-    /// [`ProjectConfig`] and the project root (the directory the
-    /// manifest sits in) so the per-command handlers can walk
-    /// `src` directories and resolve dependencies without re-loading
-    /// the manifest.
+    /// No file argument, `koja.toml` found in the current
+    /// directory. Carries the parsed [`ProjectConfig`] and the
+    /// project root so handlers need not re-load the manifest.
     Project {
         config: Box<ProjectConfig>,
         root: PathBuf,
     },
 }
 
-/// Categorize the user's input into an [`SourceShape`].
-///
-/// With a file argument: canonicalize, then dispatch on the
-/// extension (`.kojs` -> [`SourceShape::Script`], `.koja` ->
-/// [`SourceShape::Program`], anything else -> unrecognized-extension
-/// error).
-///
-/// With no file argument: read `koja.toml` from the current
-/// directory. `Some` -> [`SourceShape::Project`], `None` ->
-/// "missing koja.toml" error.
-///
-/// Errors are returned as `Err(message)`. Callers print them with
-/// the usual `error: …` prefix and exit non-zero.
+/// Categorize the user's input into a [`SourceShape`]. Errors are
+/// returned as `Err(message)` for the caller to print and exit
+/// non-zero.
 fn resolve_source_shape(file: Option<&str>) -> Result<SourceShape, String> {
     if let Some(arg) = file {
         let path = canonical_source_path(arg);
@@ -202,18 +170,14 @@ fn bail_resolve_error(message: String) -> ! {
     process::exit(1);
 }
 
-/// `koja check [file]`: parse and typecheck a single source
-/// file (or, eventually, a whole project) through the
-/// pipeline. Mirrors `koja check`'s contract: prints
-/// `<path>: OK` on success, or the collected parse/type
-/// diagnostics on failure (exit 1). When `emit_ast` is set, prints
-/// the sealed AST in [`koja_ast::format_file`]'s compact tree
-/// format instead of the OK line.
+/// `koja check [file]`: parse and typecheck a file or project.
+/// Prints `<path>: OK` on success, or the collected diagnostics on
+/// failure (exit 1). When `emit_ast` is set, prints the sealed AST
+/// in [`koja_ast::format_file`]'s compact tree format instead.
 ///
-/// `cmd_check` is the only command that accepts a standalone
-/// `.koja` file (parsed in [`ParseMode::File`]). Typecheck has no
-/// runtime semantics, so the absence of project context isn't a
-/// problem and LSP/editor flows lean on this.
+/// This is the only command that accepts a standalone `.koja` file
+/// (parsed in [`ParseMode::File`]): typecheck needs no project
+/// context, and LSP/editor flows lean on this.
 pub fn cmd_check(file: Option<String>, emit_ast: bool) {
     let mode = resolve_source_shape(file.as_deref()).unwrap_or_else(|err| bail_resolve_error(err));
     match mode {
@@ -300,16 +264,9 @@ fn into_source_file(loaded: LoadedSource) -> SourceFile {
 }
 
 /// `koja build [file] [-o output]`: produce a native binary for a
-/// `.kojs` script (or a project) on disk. LLVM is the only backend
-/// that emits object files, so `build` has no backend dimension.
-///
-/// For a `.kojs` argument: parse Script -> check -> [`lower_script`] ->
-/// [`koja_ir_llvm::compile_script`] -> link. The script body becomes
-/// `main`'s body, so executing the binary prints the script's
-/// trailing value and exits 0 (via the temporary auto-print wrapper
-/// in `koja-runtime-posix/src/intrinsics.rs`, which goes away with
-/// `IO.puts`). `-o`/`--output` overrides the default stem-based
-/// output name.
+/// `.kojs` script or a project. LLVM is the only backend that emits
+/// object files, so `build` has no backend dimension.
+/// `-o`/`--output` overrides the default stem-based output name.
 pub fn cmd_build(file: Option<String>, output: Option<String>, release: bool, emit_llvm: bool) {
     let mode = resolve_source_shape(file.as_deref()).unwrap_or_else(|err| bail_resolve_error(err));
     match mode {
@@ -502,11 +459,7 @@ fn build_task_program(
     let user_files = collect_project_sources_or_exit(config, root, false);
     let bundled = bundle_many_with_autoimport(user_files, Some(&config.namespace()));
 
-    let parsed = parse_program(bundled.clone(), ParseMode::File);
-    let sources = capture_sources(&parsed);
-    let checked =
-        check_program(parsed).unwrap_or_else(|failure| bail_check_failure(failure, &sources));
-    print_check_warnings(&checked, &sources);
+    let checked = check_bundle(bundled.clone(), ParseMode::File);
     check_task_conformance(&checked, task_name, provider);
 
     lower_task_harness(bundled, provider)
@@ -592,15 +545,10 @@ fn build_and_keep(path: &Path, output: Option<String>, release: bool, emit_llvm:
 
 /// Build the `.kojs` script at `path` into a temp binary, exec
 /// it with `args`, forward the exit code, and remove the temp
-/// binary. Diverges either way. We either exit with the binary's
-/// status or print a launch error and exit 1. Used by `cmd_run`
-/// when the user picks the LLVM backend.
+/// binary. Diverges either way (binary status or launch error).
 fn run_script_compiled(path: &Path, release: bool, args: &[String]) -> ! {
     let script = build_script(path);
-    let stem = path
-        .file_stem()
-        .and_then(OsStr::to_str)
-        .unwrap_or("alpha_program");
+    let stem = path.file_stem().and_then(OsStr::to_str).unwrap_or("app");
     let output = env::temp_dir()
         .join(format!("koja-run-{}-{stem}", process::id()))
         .to_string_lossy()
@@ -611,29 +559,21 @@ fn run_script_compiled(path: &Path, release: bool, args: &[String]) -> ! {
 
 /// Run the `.kojs` script at `path` through the interpreter and
 /// discard the trailing value. Scripts always exit 0 on normal
-/// completion. Any pipeline failure prints `error: <details>` and
-/// exits 1. The LLVM backend matches this contract, since its `main`
-/// trampoline (see `koja-ir-llvm/src/main_wrapper.rs`)
-/// returns 0 after the user body's trailing expression evaluates.
-/// Used by `cmd_run` when the user picks the interpreter backend.
+/// completion, matching the LLVM backend's `main` trampoline (see
+/// `koja-ir-llvm/src/main_wrapper.rs`). Runtime failures print
+/// `error: …` and exit 1.
 fn run_script_interpreted(path: &Path) {
-    let source = read_source_or_exit(path);
-    let package = derive_package(path);
-    if let Err(error) = run_script_pipeline(source, &package, path.to_path_buf()) {
+    let script = build_script(path);
+    if let Err(error) = Interpreter::run_script(&script) {
         eprintln!("error: {error}");
         process::exit(1);
     }
 }
 
 /// Typecheck a single source file in the requested parse mode.
-/// Shared by the `Script` and `Program` arms of `cmd_check`. The
-/// only difference between them is the parse mode, and the rest of the
-/// frontend (typecheck, OK/AST emission, error rendering) is
-/// identical.
+/// Shared by the `Script` and `Program` arms of `cmd_check`.
 fn check_single_file(path: &Path, mode: ParseMode, emit_ast: bool) {
-    let source = read_source_or_exit(path);
-    let package = derive_package(path);
-    let checked = run_check(source, &package, path.to_path_buf(), mode);
+    let (checked, _) = read_and_check(path, mode);
     if emit_ast {
         emit_checked_ast(&checked);
     } else {
@@ -641,36 +581,25 @@ fn check_single_file(path: &Path, mode: ParseMode, emit_ast: bool) {
     }
 }
 
-/// Wrap one user-supplied [`SourceFile`] with the curated
-/// stdlib auto-import (`Global.time`, `Global.bitwise`, …) plus the
-/// curated qualified packages (`Crypto.*`, …) so the driver,
-/// test helpers, and `cmd_check` all feed the parser the same
-/// compilation unit. Stdlib sources lead so the registry sees
-/// `Global.*` and qualified declarations before any user code that
-/// references them. The user file is appended last. Autoimports
-/// land first, qualified packages second, user file last. The order
-/// is semantically irrelevant (every entry registers under its own
-/// `Identifier`) but keeps debug listings stable.
-///
-/// Single-file callers (`.kojs` scripts, standalone `.koja`,
-/// `cmd_check` on one path) always pass `None` for `skip_package`,
-/// since those flows never declare project membership.
+/// Wrap one user-supplied [`SourceFile`] with the embedded stdlib
+/// (auto-import plus qualified packages) so every pipeline feeds
+/// the parser the same compilation unit. Stdlib sources lead so
+/// the registry sees their declarations before any user code that
+/// references them. Single-file callers never declare project
+/// membership, hence `skip_package: None`.
 fn bundle_with_autoimport(user: SourceFile) -> Vec<SourceFile> {
     bundle_many_with_autoimport(vec![user], None)
 }
 
-/// Multi-file counterpart to [`bundle_with_autoimport`] for the
-/// project-mode pipeline. Same lead-with-stdlib ordering. The
-/// caller is expected to have already merged project + dependency
-/// sources into `user_files`.
+/// Multi-file counterpart to [`bundle_with_autoimport`] for
+/// project mode, where `user_files` already merges project and
+/// dependency sources.
 ///
-/// `skip_package` handles the stdlib self-compile: when a project IS
-/// one of the curated packages (e.g. building/testing `lib/global`,
+/// `skip_package` handles the stdlib self-compile: when the project
+/// IS an embedded package (building or testing `lib/global`,
 /// `lib/json`, …) the on-disk sources already provide every decl
 /// the autoimport would inject, and a second copy would collide at
-/// registry seal time. Project-mode callers thread
-/// `Some(&config.namespace())` through, while single-file callers pass
-/// `None`.
+/// registry seal time.
 fn bundle_many_with_autoimport(
     user_files: Vec<SourceFile>,
     skip_package: Option<&str>,
@@ -712,14 +641,13 @@ fn build_script(path: &Path) -> IRScript {
     }
 }
 
-/// Shared parse + check helper for the build / run paths. Returns
-/// the sealed [`CheckedProgram`] and the derived package name.
-/// Bails the process with a formatted error on read / parse /
-/// typecheck failures.
+/// Read, bundle, parse, and typecheck one source file. Returns the
+/// sealed [`CheckedProgram`] and the derived package name. Bails
+/// the process on read / parse / typecheck failures.
 fn read_and_check(path: &Path, mode: ParseMode) -> (CheckedProgram, String) {
     let source = read_source_or_exit(path);
     let package = derive_package(path);
-    let parsed = parse_program(
+    let checked = check_bundle(
         bundle_with_autoimport(SourceFile {
             package: package.clone(),
             path: path.to_path_buf(),
@@ -727,11 +655,24 @@ fn read_and_check(path: &Path, mode: ParseMode) -> (CheckedProgram, String) {
         }),
         mode,
     );
+    (checked, package)
+}
+
+/// Parse and typecheck a bundled compilation unit, printing any
+/// warnings. Bails the process with rendered diagnostics on
+/// failure.
+fn check_bundle(bundled: Vec<SourceFile>, mode: ParseMode) -> CheckedProgram {
+    check_parsed(parse_program(bundled, mode))
+}
+
+/// [`check_bundle`] for an already-parsed program, for callers that
+/// splice generated sources between parse and check.
+fn check_parsed(parsed: ParsedProgram) -> CheckedProgram {
     let sources = capture_sources(&parsed);
     let checked =
         check_program(parsed).unwrap_or_else(|failure| bail_check_failure(failure, &sources));
     print_check_warnings(&checked, &sources);
-    (checked, package)
+    checked
 }
 
 /// Read a source file or bail with `error: cannot read …`. Used by
@@ -748,20 +689,9 @@ fn read_source_or_exit(path: &Path) -> String {
     }
 }
 
-/// Compile the [`IRScript`] to an object file and link it into a
-/// native binary at `output`, threading through [`link::link`] for
-/// `cc` invocation, runtime archive embedding, and BoringSSL
-/// linkage. `app_name` flows into the binary's `__koja_app_name`
-/// global (panic backtrace label). `script.link_libraries`
-/// (deduped at lower time from every `@extern "C" @link "lib"`)
-/// flows through to `cc -l<name>` so FFI calls resolve at link
-/// time.
-/// Render the sealed [`IRScript`] as LLVM IR text and stream it to
-/// stdout. Backs `koja build --emit-llvm` for script sources. The
-/// IR matches what the compiled `.o` would carry (same module,
-/// same `i64 main()` wrapper, same runtime helpers) minus the
-/// object emission. Diverges with `process::exit(1)` on
-/// codegen failure to keep the call site a single statement.
+/// Render the sealed [`IRScript`] as LLVM IR text on stdout. Backs
+/// `koja build --emit-llvm` for scripts: the same module the
+/// compiled `.o` would carry, minus object emission.
 fn print_script_ir(script: &IRScript, app_name: &str) {
     match koja_ir_llvm::emit_script_llvm_ir(script, app_name) {
         Ok(ir) => print!("{ir}"),
@@ -785,6 +715,10 @@ fn print_program_ir(program: &IRProgram, app_name: &str) {
     }
 }
 
+/// Compile the [`IRScript`] to an object file and link it into a
+/// native binary at `output`. `app_name` flows into the binary's
+/// `__koja_app_name` global (panic backtrace label) and
+/// `script.link_libraries` becomes the `cc -l<name>` set.
 fn emit_and_link_script(script: &IRScript, app_name: &str, output: &str, release: bool) {
     let object_path = format!("{output}.o");
     if let Err(err) = koja_ir_llvm::compile_script(
@@ -829,60 +763,14 @@ fn canonical_source_path(file: &str) -> PathBuf {
 }
 
 /// Pick the output binary name. Honors a user-supplied `--output`,
-/// otherwise drops the source extension to derive the binary name,
-/// falling back to `output` if there's no usable stem.
+/// otherwise drops the source extension to derive the binary name.
 fn resolve_output_name(output: Option<String>, path: &Path) -> String {
     output.unwrap_or_else(|| {
         path.file_stem()
             .and_then(OsStr::to_str)
-            .unwrap_or("output")
+            .unwrap_or("app")
             .to_string()
     })
-}
-
-/// Run one source file end-to-end through the script-mode
-/// pipeline. The trailing value is computed for its side effects
-/// and discarded. Scripts always exit 0 on normal completion.
-/// Parse / typecheck failures render their diagnostics and bail the
-/// process. Lower / runtime failures return a formatted error
-/// string.
-fn run_script_pipeline(source: String, package: &str, path: PathBuf) -> Result<(), String> {
-    let parsed = parse_program(
-        bundle_with_autoimport(SourceFile {
-            package: package.to_string(),
-            path,
-            source,
-        }),
-        ParseMode::Script,
-    );
-    let sources = capture_sources(&parsed);
-    let checked =
-        check_program(parsed).unwrap_or_else(|failure| bail_check_failure(failure, &sources));
-    print_check_warnings(&checked, &sources);
-    let script = lower_script(&checked).map_err(|err| err.to_string())?;
-    Interpreter::run_script(&script)
-        .map(|_| ())
-        .map_err(|err| err.to_string())
-}
-
-/// Parse + typecheck one source file in the requested parse mode.
-/// Returns the sealed [`CheckedProgram`] on success, bails the
-/// process with rendered diagnostics on parse / typecheck failure.
-/// Used by [`check_single_file`].
-fn run_check(source: String, package: &str, path: PathBuf, mode: ParseMode) -> CheckedProgram {
-    let parsed = parse_program(
-        bundle_with_autoimport(SourceFile {
-            package: package.to_string(),
-            path,
-            source,
-        }),
-        mode,
-    );
-    let sources = capture_sources(&parsed);
-    let checked =
-        check_program(parsed).unwrap_or_else(|failure| bail_check_failure(failure, &sources));
-    print_check_warnings(&checked, &sources);
-    checked
 }
 
 /// `koja check` for a project: walk every `src` directory,
@@ -891,14 +779,10 @@ fn run_check(source: String, package: &str, path: PathBuf, mode: ParseMode) -> C
 /// is set).
 fn check_project(config: &ProjectConfig, root: &Path, emit_ast: bool) {
     let user_files = collect_project_sources_or_exit(config, root, false);
-    let parsed = parse_program(
+    let checked = check_bundle(
         bundle_many_with_autoimport(user_files, Some(&config.namespace())),
         ParseMode::File,
     );
-    let sources = capture_sources(&parsed);
-    let checked =
-        check_program(parsed).unwrap_or_else(|failure| bail_check_failure(failure, &sources));
-    print_check_warnings(&checked, &sources);
     if emit_ast {
         emit_checked_ast(&checked);
     } else {
@@ -959,10 +843,7 @@ fn run_project_tests(config: &ProjectConfig, root: &Path, opts: TestOptions) {
         generate_harness(&tests, opts),
     );
 
-    let sources = capture_sources(&parsed);
-    let checked =
-        check_program(parsed).unwrap_or_else(|failure| bail_check_failure(failure, &sources));
-    print_check_warnings(&checked, &sources);
+    let checked = check_parsed(parsed);
     let entry = Identifier::new(namespace, vec![HARNESS_ENTRY.to_string()]);
     let program = match lower_program(&checked, &entry) {
         Ok(program) => program,
@@ -1092,19 +973,10 @@ fn splice_generated_source(parsed: &mut ParsedProgram, package: String, tag: &st
     parsed.files.insert(path, generated);
 }
 
-/// Project-test source walk: every `src` file from the project AND
-/// every dep, plus every `test` file from the project itself. Deps'
-/// `test` directories are intentionally skipped. They only show up
-/// when you `koja test` from inside that dep.
 /// `koja run` for a project under the interpreter: lower the full
-/// project and execute the Process entry in-process via
-/// [`Interpreter::run_program`]. No codegen, no link, no binary.
-/// The entry body's returned exit code becomes the driver's exit
-/// status. The entry process gets blocking socket/TLS externs and
-/// `receive` over lifecycle signals + `after` timeouts. Features the
-/// interpreter doesn't cover yet (spawn, cross-process messaging)
-/// surface a runtime error plus a `--backend=llvm` hint. Diverges
-/// either way.
+/// project and execute the Process entry in-process, no codegen or
+/// link. Features the interpreter does not cover yet surface a
+/// runtime error plus a `--backend=llvm` hint. Diverges either way.
 fn run_project_interpreted(config: &ProjectConfig, root: &Path, args: &[String]) -> ! {
     let program = build_project_program(config, root);
     interpret_program(&program, args)
@@ -1168,14 +1040,10 @@ fn exec_binary(binary: &str, args: &[String], remove_after: bool) -> ! {
 /// process with a formatted error on any failure.
 fn build_project_program(config: &ProjectConfig, root: &Path) -> IRProgram {
     let user_files = collect_project_sources_or_exit(config, root, false);
-    let parsed = parse_program(
+    let checked = check_bundle(
         bundle_many_with_autoimport(user_files, Some(&config.namespace())),
         ParseMode::File,
     );
-    let sources = capture_sources(&parsed);
-    let checked =
-        check_program(parsed).unwrap_or_else(|failure| bail_check_failure(failure, &sources));
-    print_check_warnings(&checked, &sources);
     let entry = resolve_project_entry(config);
     match lower_program(&checked, &entry) {
         Ok(program) => program,
@@ -1229,14 +1097,7 @@ fn collect_project_sources_or_exit(
             eprintln!("error: {err}");
             process::exit(1);
         });
-    loaded
-        .into_iter()
-        .map(|source| SourceFile {
-            package: source.package,
-            path: source.path,
-            source: source.source,
-        })
-        .collect()
+    loaded.into_iter().map(into_source_file).collect()
 }
 
 /// Default output path for project builds:

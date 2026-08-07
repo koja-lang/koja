@@ -34,7 +34,7 @@ use koja_parser::{ParseMode, SourceFile, parse_program};
 use koja_typecheck::check_program;
 
 const PACKAGE: &str = "TestApp";
-const APP_NAME: &str = "alpha_process_test";
+const APP_NAME: &str = "koja_process_test";
 
 /// Minimal stub of `process.koja`. Mirrors the
 /// stubs used by `koja-ir/tests/lower_process.rs` and
