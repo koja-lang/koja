@@ -127,3 +127,24 @@ pub fn evaluate_script_in(package: &str, source: &str) -> Result<Value, RuntimeE
     let script = lower_script(&checked).expect("script lowering should succeed");
     Interpreter::run_script(&script)
 }
+
+/// [`evaluate_script`] with one dependency package stacked next to
+/// the script, for cross-package fixtures.
+pub fn evaluate_script_with_dep(
+    dep_package: &str,
+    dep_source: &str,
+    script: &str,
+) -> Result<Value, RuntimeError> {
+    let mut sources = koja_stdlib::autoimport_sources();
+    sources.push(SourceFile {
+        package: dep_package.to_string(),
+        path: PathBuf::from("dep.koja"),
+        source: dep_source.to_string(),
+    });
+    sources.push(test_source(PACKAGE, script));
+    let parsed = parse_program(sources, ParseMode::Script);
+    let checked =
+        check_program(parsed).unwrap_or_else(|failure| panic!("typecheck failed:\n{failure}"));
+    let lowered = lower_script(&checked).expect("script lowering should succeed");
+    Interpreter::run_script(&lowered)
+}

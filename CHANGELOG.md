@@ -13,6 +13,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `koja doc` commands now work outside a project, documenting the standard library on its own.
 - `koja new` scaffolds an `AGENTS.md` that points coding agents at `koja doc search` and the language's core conventions.
 - Go to definition now works on standard library symbols, landing in real source files extracted under `~/.koja/stdlib/`.
+- Public constants are now readable across package boundaries with `Pkg.NAME`.
+- Public functions in other packages now work as first-class values with `Pkg.helper`, matching the bare-name form inside a package.
+- Standard library constants such as `STDOUT` now resolve by bare name, like `Global` types and functions.
 
 ### Changed
 

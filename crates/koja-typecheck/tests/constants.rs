@@ -1,12 +1,18 @@
 //! Package-level `const` lifting: literals, enums, structs, annotation
 //! matching, interpolation / non-literal RHS rejection, duplicate names,
-//! and immutability (no assigning to constants from function bodies).
+//! immutability (no assigning to constants from function bodies), and
+//! package-qualified reads across package boundaries.
 
 use koja_ast::util::dedent;
+use koja_parser::ParseMode;
+use koja_typecheck::{CheckFailure, CheckedProgram};
 
 mod common;
 
-use common::{assert_script_fails_with, typecheck_script as typecheck};
+use common::{
+    PACKAGE, assert_script_fails_with, check_packages, diagnostic_messages,
+    typecheck_script as typecheck, warning_messages,
+};
 
 #[test]
 fn primitive_string_and_struct_literal_constants_typecheck() {
@@ -171,4 +177,173 @@ fn compound_assign_on_package_constant_diagnoses() {
         ";
 
     assert_script_fails_with(source, &["immutable", "STEP"]);
+}
+
+// Package-qualified reads. `Lib.MAX` parses as a unit enum
+// construction and `Lib.default_size` as a field access, so both
+// surface shapes are covered.
+
+const LIB_CONSTANTS: &str = "
+    const MAX = 100
+    const default_size = 25
+    priv const HIDDEN = 7
+
+    @deprecated \"Use MAX instead.\"
+    const OLD_MAX = 50
+
+    fn helper() -> Int
+      1
+    end
+
+    priv fn hidden_helper() -> Int
+      2
+    end
+
+    fn identity<T>(x: T) -> T
+      x
+    end
+
+    struct Widget
+      size: Int
+    end
+    ";
+
+fn check_lib_and_app(app: &str) -> Result<CheckedProgram, CheckFailure> {
+    check_packages(
+        &[
+            ("Lib", "lib.koja", LIB_CONSTANTS),
+            (PACKAGE, "main.kojs", app),
+        ],
+        ParseMode::Script,
+    )
+}
+
+fn assert_app_fails_with(app: &str, needle: &str) {
+    let failure = check_lib_and_app(app).expect_err("expected a diagnostic");
+    let messages = diagnostic_messages(&failure);
+    assert!(
+        messages.iter().any(|m| m.contains(needle)),
+        "expected `{needle}`, got {messages:?}",
+    );
+}
+
+#[test]
+fn public_constants_readable_cross_package() {
+    check_lib_and_app(
+        "
+        total: Int = Lib.MAX + Lib.default_size
+        total.print()
+        ",
+    )
+    .expect("public cross-package constant reads should succeed");
+}
+
+#[test]
+fn qualified_read_within_own_package() {
+    typecheck(&dedent(
+        "
+        const MAX = 100
+
+        TestApp.MAX.print()
+        ",
+    ));
+}
+
+#[test]
+fn priv_constant_rejected_cross_package() {
+    assert_app_fails_with(
+        "Lib.HIDDEN.print()",
+        "private constant `Lib.HIDDEN` cannot be referenced from package `TestApp`",
+    );
+}
+
+#[test]
+fn deprecated_constant_warns_at_qualified_read() {
+    let checked =
+        check_lib_and_app("Lib.OLD_MAX.print()").expect("deprecated reads still typecheck");
+    let warnings = warning_messages(&checked);
+    assert!(
+        warnings
+            .iter()
+            .any(|m| m.contains("`OLD_MAX` is deprecated")),
+        "expected a deprecation warning, got {warnings:?}",
+    );
+}
+
+#[test]
+fn unknown_member_in_known_package_diagnoses() {
+    assert_app_fails_with(
+        "Lib.MAXX.print()",
+        "package `Lib` has no constant or function `MAXX`",
+    );
+}
+
+#[test]
+fn function_value_readable_cross_package() {
+    check_lib_and_app(
+        "
+        f = Lib.helper
+        result: Int = f()
+        result.print()
+        ",
+    )
+    .expect("cross-package function values should typecheck");
+}
+
+#[test]
+fn priv_function_value_rejected_cross_package() {
+    assert_app_fails_with(
+        "f = Lib.hidden_helper\nf().print()",
+        "private function `Lib.hidden_helper` cannot be referenced from package `TestApp`",
+    );
+}
+
+#[test]
+fn generic_function_value_diagnoses() {
+    assert_app_fails_with(
+        "f = Lib.identity\nf(1).print()",
+        "cannot reference generic function `Lib.identity` as a value",
+    );
+}
+
+#[test]
+fn type_member_read_diagnoses() {
+    assert_app_fails_with("x = Lib.Widget\n0", "`Lib.Widget` is a struct, not a value");
+}
+
+#[test]
+fn global_constants_resolve_bare() {
+    typecheck(&dedent(
+        "
+        out: Fd = STDOUT
+        out.print()
+        ",
+    ));
+}
+
+#[test]
+fn package_constant_shadows_global_constant() {
+    typecheck(&dedent(
+        "
+        const STDOUT = 1
+
+        shadowed: Int = STDOUT
+        shadowed.print()
+        ",
+    ));
+}
+
+#[test]
+fn enum_in_scope_wins_over_package_prefix() {
+    check_lib_and_app(
+        "
+        enum Lib
+          MAX
+        end
+
+        heading: Lib = Lib.MAX
+        heading.print()
+        ",
+    )
+    .expect("a type named like a package takes precedence over the package");
 }

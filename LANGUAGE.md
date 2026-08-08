@@ -191,6 +191,8 @@ const EMPTY: Option<Int> = Option.None
 
 Constants are inlined at every usage site.
 
+Within a package, constants are read by bare name (`MAX`). Constants from the auto-imported `Global` package also resolve bare (`STDOUT`). Public constants in other packages are read through the package namespace (`Mathlib.PI`).
+
 ---
 
 ## Functions
@@ -1168,6 +1170,22 @@ end
 apply(5, fn (n: Int32) -> Int32 n * 2 end).print()
 ```
 
+### Named Functions as Values
+
+A named function's bare name is a function value. Functions in other packages are reached through the package namespace:
+
+```koja
+fn double(x: Int) -> Int
+  x * 2
+end
+
+f = double          # same package
+g = Mathlib.square  # another package
+apply(5, f).print()
+```
+
+Generic functions cannot be referenced as values. There is no call site to infer their type arguments from.
+
 ---
 
 ## Value Semantics
@@ -1313,7 +1331,7 @@ impl Process<(), (), ()> for App
 end
 ```
 
-Other packages (the qualified standard library and dependencies) are reached through their package namespace: `JSON.Decoder`, `Net.TCPSocket`, `HTTP.get(...)`.
+Other packages (the qualified standard library and dependencies) are reached through their package namespace: `JSON.Decoder`, `Net.TCPSocket`, `HTTP.get(...)`, `Mathlib.PI`.
 
 A package has two names. The manifest `name` is its lowercase snake_case identity, used for the `deps/` directory, dependency keys, lockfile entries, and the default binary name. Its **namespace** is the PascalCase name code uses for qualified access, derived from `name` (`my_app` -> `MyApp`). When the derivation isn't right (acronyms, unusual casing), declare it explicitly:
 

@@ -152,6 +152,22 @@ fn short_closure_form_runs_with_capture() {
 }
 
 #[test]
+fn cross_package_function_value_invokes_through_local() {
+    let dep = "
+        fn double(x: Int) -> Int
+          x * 2
+        end
+        ";
+    let script = "
+        f = Dep.double
+        f(21)
+        ";
+    let value = common::evaluate_script_with_dep("Dep", &dedent(dep), &dedent(script))
+        .expect("cross-package function value should evaluate");
+    assert_eq!(value, Value::Int(42));
+}
+
+#[test]
 fn closure_value_renders_through_display() {
     // A closure can be returned from a function. Its Display impl
     // must surface a recognizable shape so `--auto-print` produces

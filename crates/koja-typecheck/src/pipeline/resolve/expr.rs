@@ -19,7 +19,7 @@ use super::control_flow::{
 use super::ctx::Resolver;
 use super::enums::resolve_enum_construction;
 use super::error_channel::{resolve_rescue, resolve_try};
-use super::idents::{resolve_ident, resolve_self};
+use super::idents::{resolve_ident, resolve_qualified_member, resolve_self};
 use super::literals::{
     resolve_binary_literal, resolve_list_literal, resolve_map_literal, resolve_tuple_literal,
 };
@@ -109,6 +109,10 @@ pub(super) fn resolve_expr_with_expected(
     // Rewrite `A.B { … }` to a struct construction when the path names
     // a struct. A no-op for real enum variants.
     rewrite_dotted_struct_construction(expr, resolver);
+    if let Some(ty) = resolve_qualified_member(expr, resolver, diagnostics) {
+        expr.resolution = ty;
+        return;
+    }
     let ty = match &mut expr.kind {
         ExprKind::Binary { op, left, right } => {
             resolve_expr(left, resolver, diagnostics);

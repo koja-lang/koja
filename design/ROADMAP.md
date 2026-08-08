@@ -67,8 +67,8 @@ cover tuple construction, destructuring, patterns, and public API changes.
 The following items carry over from 0.16.
 
 - Anonymous records
-- Make public constants referenceable across package boundaries, or explicitly
-  narrow the language contract before release.
+- **[DONE]** Make public constants referenceable across package boundaries, or
+  explicitly narrow the language contract before release.
 - **[DONE]** Attribute LSP diagnostics to their originating file in multi-file
   projects.
 - Add a `Runtime` observability API with global and per-process metrics,

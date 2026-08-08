@@ -6,7 +6,7 @@
 //! diagnostic-shape helpers ([`function_signature`],
 //! [`method_lookup_message`], [`dispatch_mismatch_message`]).
 
-use koja_ast::ast::{Arg, Diagnostic, EnumConstructionData, Expr, ExprKind};
+use koja_ast::ast::{Arg, Diagnostic, Expr, ExprKind};
 use koja_ast::identifier::{
     AnonymousKind, GlobalRegistryId, Resolution, ResolvedType, TypeParamIndex,
 };
@@ -17,6 +17,7 @@ use super::super::expr::resolve_expr;
 use super::super::inference::{
     PhantomContext, fill_from_expected, finalize_inference, unify_pairs,
 };
+use super::super::paths::static_dotted_path;
 use super::super::types::{display_resolution, lookup_type, peel_alias};
 use super::emit_conflict;
 use crate::pipeline::unify::{Substitution, substitute};
@@ -96,7 +97,7 @@ impl MethodReceiver {
 /// populated tree.
 ///
 /// Static dispatch admits three receiver shapes, all collapsed to a
-/// dotted path by [`static_receiver_path`]:
+/// dotted path by [`static_dotted_path`]:
 ///
 /// - Bare `Ident` naming a same-package or `Global` type
 ///   (`Color.foo()`).
@@ -124,7 +125,7 @@ pub(super) fn classify_receiver(
     // Protocols admit static dispatch only (statics registered via
     // `extend`, like `Process.monitor`). There is no instance path
     // for them, so no Instance-arm counterpart below.
-    if let Some(receiver_path) = static_receiver_path(&receiver.kind)
+    if let Some(receiver_path) = static_dotted_path(&receiver.kind)
         && let Some((struct_id, struct_entry)) =
             lookup_type(&receiver_path, resolver.resolution_scope())
         && matches!(
@@ -185,55 +186,6 @@ pub(super) fn classify_receiver(
             ));
             None
         }
-    }
-}
-
-/// Collapse a method-call receiver to its dotted type path when one
-/// of the static-dispatch shapes matches. Returns:
-///
-/// - `Some(["Color"])` for bare `Ident("Color")`.
-/// - `Some(["Crypto", "SHA256"])` for the parser's
-///   `EnumConstruction { type_path: ["Crypto"], variant: "SHA256",
-///   data: Unit }` shape, what `Crypto.SHA256.digest(...)` and
-///   `HTTP.Headers.new()` parse to before disambiguation.
-/// - `Some(["HTTP", "Headers"])` for an `Ident`-rooted
-///   `FieldAccess` chain `FieldAccess { receiver: Ident("HTTP"),
-///   field: "Headers" }`.
-/// - `None` for everything else (value receivers, parenthesized
-///   expressions, calls, etc.). Those flow through the
-///   instance-dispatch path.
-fn static_receiver_path(kind: &ExprKind) -> Option<Vec<String>> {
-    match kind {
-        ExprKind::EnumConstruction {
-            data: EnumConstructionData::Unit,
-            type_path,
-            variant,
-        } => {
-            let mut path = type_path.clone();
-            path.push(variant.clone());
-            Some(path)
-        }
-        ExprKind::Ident { .. } | ExprKind::FieldAccess { .. } => {
-            let mut path = Vec::new();
-            walk_dotted_path(kind, &mut path)?;
-            Some(path)
-        }
-        _ => None,
-    }
-}
-
-fn walk_dotted_path(kind: &ExprKind, out: &mut Vec<String>) -> Option<()> {
-    match kind {
-        ExprKind::Ident { name, .. } => {
-            out.push(name.clone());
-            Some(())
-        }
-        ExprKind::FieldAccess { receiver, field } => {
-            walk_dotted_path(&receiver.kind, out)?;
-            out.push(field.clone());
-            Some(())
-        }
-        _ => None,
     }
 }
 
