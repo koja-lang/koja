@@ -504,7 +504,7 @@ fn is_input_complete(source: &str) -> bool {
     let mut bracket_depth: i32 = 0;
     let mut string_depth: i32 = 0;
     let mut interpol_depth: i32 = 0;
-    for token in koja_lexer::lex(source).tokens {
+    for token in koja_lexer::lex(source, koja_lexer::FileId::UNKNOWN).tokens {
         match token.kind {
             TokenKind::Cond
             | TokenKind::Enum
@@ -549,6 +549,7 @@ fn format_check_failure(failure: CheckFailure) -> String {
     let CheckFailure {
         diagnostics,
         partial,
+        ..
     } = failure;
     let parse_diags = parse_diagnostics(&partial);
     let parse_block = (!parse_diags.is_empty()).then(|| format_block("parse error", &parse_diags));

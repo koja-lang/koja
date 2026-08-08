@@ -15,7 +15,10 @@
 //! Compiler-bug failure modes (seal invariant violations) panic
 //! through [`crate::pipeline::seal`] and never surface here.
 
+use std::path::{Path, PathBuf};
+
 use koja_ast::ast::Diagnostic;
+use koja_ast::span::FileId;
 use koja_parser::ParsedProgram;
 
 /// Failure result of [`crate::check_program`].
@@ -29,6 +32,16 @@ use koja_parser::ParsedProgram;
 pub struct CheckFailure {
     pub diagnostics: Vec<Diagnostic>,
     pub partial: ParsedProgram,
+    /// File table indexed by [`FileId`], in original parse order.
+    /// `partial` may regroup files, so resolve spans through this.
+    pub source_paths: Vec<PathBuf>,
+}
+
+impl CheckFailure {
+    /// Resolve a span's [`FileId`] to the owning file path.
+    pub fn path_of(&self, file: FileId) -> Option<&Path> {
+        self.source_paths.get(file.0 as usize).map(PathBuf::as_path)
+    }
 }
 
 impl std::fmt::Display for CheckFailure {

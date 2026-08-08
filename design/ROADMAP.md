@@ -69,7 +69,8 @@ The following items carry over from 0.16.
 - Anonymous records
 - Make public constants referenceable across package boundaries, or explicitly
   narrow the language contract before release.
-- Attribute LSP diagnostics to their originating file in multi-file projects.
+- **[DONE]** Attribute LSP diagnostics to their originating file in multi-file
+  projects.
 - Add a `Runtime` observability API with global and per-process metrics,
   including mailbox depth, and document the overload contract for long-running
   services.

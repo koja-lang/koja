@@ -7,6 +7,6 @@ mod cursor;
 mod lexer;
 
 pub use koja_ast::ast::Comment;
-pub use koja_ast::span::{Position, Span};
+pub use koja_ast::span::{FileId, Position, Span};
 pub use koja_ast::token::{Token, TokenKind};
 pub use lexer::{LexResult, lex};

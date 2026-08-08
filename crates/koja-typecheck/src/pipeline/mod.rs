@@ -30,8 +30,6 @@
 //!
 //! Errors return before seal, so seal only sees successful trees.
 
-use koja_ast::ast::{Diagnostic, File};
-
 pub(crate) mod aliases;
 pub(crate) mod borrows;
 pub(crate) mod collect;
@@ -48,11 +46,3 @@ pub(crate) mod visibility;
 
 pub use resolve::types::peel_alias;
 pub use unify::{Substitution, substitute};
-
-/// Stamp diagnostics emitted since `start` with `file`'s owning path.
-/// Per-file passes bracket their work with this so diagnostics carry
-/// file attribution without threading paths through every emit site.
-pub(crate) fn stamp_file_paths(diagnostics: &mut [Diagnostic], start: usize, file: &File) {
-    let Some(path) = &file.path else { return };
-    Diagnostic::stamp_paths(&mut diagnostics[start..], path);
-}

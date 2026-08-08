@@ -6,7 +6,7 @@
 
 use std::path::PathBuf;
 
-use koja_parser::{ParseMode, SourceFile, parse_file};
+use koja_parser::{FileId, ParseMode, SourceFile, parse_file};
 
 fn format_snippet(source: &str) -> String {
     let parsed = parse_file(
@@ -16,6 +16,7 @@ fn format_snippet(source: &str) -> String {
             source: source.to_string(),
         },
         ParseMode::File,
+        FileId(0),
     );
     assert!(
         parsed.diagnostics.is_empty(),
@@ -33,6 +34,7 @@ fn format_snippet_script(source: &str) -> String {
             source: source.to_string(),
         },
         ParseMode::Script,
+        FileId(0),
     );
     assert!(
         parsed.diagnostics.is_empty(),

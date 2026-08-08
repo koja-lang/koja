@@ -1,7 +1,7 @@
 use koja_ast::ast::{Diagnostic, Severity};
 
 use crate::cursor::Cursor;
-use crate::{Comment, Position, Span, Token, TokenKind};
+use crate::{Comment, FileId, Position, Span, Token, TokenKind};
 
 /// The output of lexing: tokens, extracted comments, and any lexical errors.
 #[derive(Debug)]
@@ -35,13 +35,15 @@ struct Lexer<'source> {
     comments: Vec<Comment>,
     cursor: Cursor<'source>,
     errors: Vec<Diagnostic>,
+    file: FileId,
     string_stack: Vec<InterpolState>,
     tokens: Vec<Token>,
 }
 
-/// Tokenizes Koja source code into a stream of tokens, comments, and errors.
-pub fn lex(source: &str) -> LexResult {
-    let mut lexer = Lexer::new(source);
+/// Tokenizes Koja source code into a stream of tokens, comments, and
+/// errors. Every emitted span carries `file`.
+pub fn lex(source: &str, file: FileId) -> LexResult {
+    let mut lexer = Lexer::new(source, file);
     lexer.run();
     LexResult {
         comments: lexer.comments,
@@ -59,14 +61,20 @@ fn is_number_char(c: char) -> bool {
 }
 
 impl<'source> Lexer<'source> {
-    fn new(source: &'source str) -> Self {
+    fn new(source: &'source str, file: FileId) -> Self {
         Self {
             comments: Vec::new(),
             cursor: Cursor::new(source),
             errors: Vec::new(),
+            file,
             string_stack: Vec::new(),
             tokens: Vec::new(),
         }
+    }
+
+    /// Span from `start` to the current cursor position.
+    fn span(&self, start: Position) -> Span {
+        Span::new(start, self.cursor.position(), self.file)
     }
 
     /// Returns true if the last token indicates the expression continues on
@@ -120,7 +128,7 @@ impl<'source> Lexer<'source> {
         self.cursor.advance();
         self.tokens.push(Token {
             kind,
-            span: Span::new(start, self.cursor.position()),
+            span: self.span(start),
         });
     }
 
@@ -128,7 +136,7 @@ impl<'source> Lexer<'source> {
     fn emit(&mut self, kind: TokenKind, start: Position) {
         self.tokens.push(Token {
             kind,
-            span: Span::new(start, self.cursor.position()),
+            span: self.span(start),
         });
     }
 
@@ -145,7 +153,6 @@ impl<'source> Lexer<'source> {
             severity: Severity::Error,
             message: message.into(),
             hint: Some(hint.into()),
-            path: None,
             span,
         });
     }
@@ -215,7 +222,7 @@ impl<'source> Lexer<'source> {
         let text = self.cursor.text_from(text_start);
         self.comments.push(Comment {
             text,
-            span: Span::new(start, self.cursor.position()),
+            span: self.span(start),
         });
     }
 
@@ -253,7 +260,7 @@ impl<'source> Lexer<'source> {
             self.error(
                 "multiline string content must start on a new line",
                 "put the content on the line after the opening '\"\"\"'",
-                Span::new(start, self.cursor.position()),
+                self.span(start),
             );
         }
         self.lex_string_body(true);
@@ -347,7 +354,7 @@ impl<'source> Lexer<'source> {
             self.cursor.advance();
         }
         if self.cursor.offset() == digit_start {
-            self.error(label, hint, Span::new(start, self.cursor.position()));
+            self.error(label, hint, self.span(start));
             return;
         }
         let name = self.cursor.text_from(start_offset);
@@ -376,7 +383,7 @@ impl<'source> Lexer<'source> {
                 } else {
                     ("unterminated string", "add a closing '\"'")
                 };
-                self.error(label, hint, Span::new(frag_start, self.cursor.position()));
+                self.error(label, hint, self.span(frag_start));
                 return;
             }
 
@@ -405,7 +412,7 @@ impl<'source> Lexer<'source> {
                     self.error(
                         "the closing '\"\"\"' of a multiline string must be on its own line",
                         "move the closing '\"\"\"' to its own line",
-                        Span::new(end_start, self.cursor.position()),
+                        self.span(end_start),
                     );
                 }
                 self.emit(TokenKind::MultilineStringEnd, end_start);
@@ -417,7 +424,7 @@ impl<'source> Lexer<'source> {
                 self.error(
                     "unterminated string",
                     "add a closing '\"'",
-                    Span::new(frag_start, self.cursor.position()),
+                    self.span(frag_start),
                 );
                 return;
             }
@@ -464,7 +471,7 @@ impl<'source> Lexer<'source> {
                     self.error(
                         format!("unknown escape sequence '\\{next}'"),
                         "supported escapes: \\\\, \\\", \\n, \\r, \\t, \\#",
-                        Span::new(esc_start, self.cursor.position()),
+                        self.span(esc_start),
                     );
                     text.push('\\');
                     text.push(next);
@@ -626,7 +633,7 @@ impl<'source> Lexer<'source> {
         }
 
         if let Some(state) = self.string_stack.last() {
-            let span = Span::new(state.start, self.cursor.position());
+            let span = self.span(state.start);
             self.error(
                 "unterminated string interpolation",
                 "add a closing '}'",
@@ -636,7 +643,7 @@ impl<'source> Lexer<'source> {
 
         self.tokens.push(Token {
             kind: TokenKind::EndOfFile,
-            span: Span::new(self.cursor.position(), self.cursor.position()),
+            span: self.span(self.cursor.position()),
         });
     }
 
@@ -646,7 +653,7 @@ impl<'source> Lexer<'source> {
         self.cursor.advance();
         self.tokens.push(Token {
             kind,
-            span: Span::new(start, self.cursor.position()),
+            span: self.span(start),
         });
     }
 
@@ -656,8 +663,7 @@ impl<'source> Lexer<'source> {
             severity: Severity::Error,
             message: format!("unexpected character '{character}'"),
             hint,
-            path: None,
-            span: Span::new(start, self.cursor.position()),
+            span: self.span(start),
         });
     }
 }
@@ -665,6 +671,10 @@ impl<'source> Lexer<'source> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn lex(source: &str) -> LexResult {
+        super::lex(source, FileId::UNKNOWN)
+    }
 
     fn lex_kinds(source: &str) -> Vec<TokenKind> {
         let result = lex(source);

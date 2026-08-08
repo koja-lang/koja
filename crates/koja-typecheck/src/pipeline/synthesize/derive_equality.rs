@@ -123,14 +123,14 @@ fn needs_enum_derive(decl: &EnumDecl, existing: &[String]) -> bool {
 }
 
 fn synthesize_struct_impl(decl: &StructDecl) -> Item {
-    let span = decl.span;
+    let span = decl.span.as_synthetic();
     let target = self_target_type(&decl.path, &decl.type_params, span);
     let body = struct_eq_body(&decl.fields, span);
     equality_impl_block(target.clone(), body, span)
 }
 
 fn synthesize_enum_impl(decl: &EnumDecl) -> Item {
-    let span = decl.span;
+    let span = decl.span.as_synthetic();
     let target = self_target_type(&decl.path, &decl.type_params, span);
     let body = enum_eq_body(&decl.path, &decl.variants, span);
     equality_impl_block(target.clone(), body, span)

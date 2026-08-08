@@ -76,6 +76,9 @@ fn collect_item_folds(file: &File, ranges: &mut Vec<FoldingRange>) {
                 collect_nested_folds(&e.nested, ranges);
             }
             Item::Impl(imp) => {
+                if imp.span.synthetic {
+                    continue;
+                }
                 if let Some(r) = span_fold(&imp.span, Some(FoldingRangeKind::Region)) {
                     ranges.push(r);
                 }

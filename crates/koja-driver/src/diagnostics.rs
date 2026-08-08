@@ -7,16 +7,46 @@
 //! flag, then the `KOJA_DIAGNOSTICS` env var, then whether stderr
 //! is a terminal.
 
-use std::collections::BTreeMap;
 use std::env;
 use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
 use koja_ast::ast::{Diagnostic, Severity};
+use koja_ast::span::FileId;
 
-/// Source text keyed by file path, for snippet rendering.
-pub type SourceMap = BTreeMap<PathBuf, String>;
+/// Source files for rendering, indexed by [`FileId`]. A diagnostic
+/// whose file id misses the table renders without a location.
+pub struct SourceTable {
+    files: Vec<(PathBuf, String)>,
+    /// When true, every span resolves to the one entry. Covers
+    /// bare parses whose spans carry [`FileId::UNKNOWN`].
+    single: bool,
+}
+
+impl SourceTable {
+    pub fn new(files: Vec<(PathBuf, String)>) -> Self {
+        Self {
+            files,
+            single: false,
+        }
+    }
+
+    /// One-file table that attributes every span to that file.
+    pub fn single(path: impl Into<PathBuf>, source: impl Into<String>) -> Self {
+        Self {
+            files: vec![(path.into(), source.into())],
+            single: true,
+        }
+    }
+
+    fn resolve(&self, file: FileId) -> Option<(&Path, &str)> {
+        let index = if self.single { 0 } else { file.0 as usize };
+        self.files
+            .get(index)
+            .map(|(path, source)| (path.as_path(), source.as_str()))
+    }
+}
 
 /// Hints longer than this render as a trailing `help:` block instead
 /// of a label attached to the underline.
@@ -77,32 +107,30 @@ fn style() -> RenderStyle {
 }
 
 /// Render diagnostics in the process style. The returned block has
-/// no trailing newline. Pretty rendering degrades gracefully: a
-/// missing source keeps the header and location lines, a missing
-/// path keeps just the header (and hint).
-pub fn render_program_diagnostics(diagnostics: &[Diagnostic], sources: &SourceMap) -> String {
+/// no trailing newline. Pretty rendering degrades gracefully: an
+/// empty source keeps the header and location lines, an unresolved
+/// file id keeps just the header (and hint).
+pub fn render_program_diagnostics(diagnostics: &[Diagnostic], sources: &SourceTable) -> String {
     render_with_style(diagnostics, sources, style())
 }
 
 /// Render diagnostics from one bare parse / lex result to stderr,
 /// attributing them all to `path`.
 pub fn print_file_diagnostics(path: &str, source: &str, diagnostics: &[Diagnostic]) {
-    let mut owned = diagnostics.to_vec();
-    Diagnostic::stamp_paths(&mut owned, Path::new(path));
-    let sources = SourceMap::from([(PathBuf::from(path), source.to_string())]);
-    eprintln!("{}", render_program_diagnostics(&owned, &sources));
+    let sources = SourceTable::single(path, source);
+    eprintln!("{}", render_program_diagnostics(diagnostics, &sources));
 }
 
 fn render_with_style(
     diagnostics: &[Diagnostic],
-    sources: &SourceMap,
+    sources: &SourceTable,
     style: RenderStyle,
 ) -> String {
     let rendered: Vec<String> = diagnostics
         .iter()
         .map(|diagnostic| match style.format {
             DiagnosticFormat::Pretty => render_pretty(diagnostic, sources, style.color),
-            DiagnosticFormat::Short => render_short(diagnostic),
+            DiagnosticFormat::Short => render_short(diagnostic, sources),
         })
         .collect();
     let separator = match style.format {
@@ -115,9 +143,9 @@ fn render_with_style(
 /// `path:line:col: severity: message (hint: ...)`. Newlines in the
 /// message and hint flatten to spaces so one diagnostic is always
 /// exactly one line.
-fn render_short(diagnostic: &Diagnostic) -> String {
-    let location = match &diagnostic.path {
-        Some(path) => format!(
+fn render_short(diagnostic: &Diagnostic, sources: &SourceTable) -> String {
+    let location = match sources.resolve(diagnostic.span.file) {
+        Some((path, _)) => format!(
             "{}:{}:{}",
             display_path(path),
             diagnostic.span.start.line,
@@ -151,7 +179,7 @@ fn render_short(diagnostic: &Diagnostic) -> String {
 ///
 /// Long or multiline hints fall back to a `= help:` block after the
 /// snippet instead of the inline label.
-fn render_pretty(diagnostic: &Diagnostic, sources: &SourceMap, color: bool) -> String {
+fn render_pretty(diagnostic: &Diagnostic, sources: &SourceTable, color: bool) -> String {
     let palette = Palette {
         color,
         severity: diagnostic.severity,
@@ -167,8 +195,8 @@ fn render_pretty(diagnostic: &Diagnostic, sources: &SourceMap, color: bool) -> S
         .as_deref()
         .filter(|hint| !hint.contains('\n') && hint.chars().count() <= INLINE_HINT_LIMIT);
 
-    if let Some(path) = &diagnostic.path {
-        let source = sources.get(path).map(String::as_str);
+    if let Some((path, source)) = sources.resolve(diagnostic.span.file) {
+        let source = (!source.is_empty()).then_some(source);
         out.push('\n');
         out.push_str(&render_snippet(
             diagnostic,
@@ -378,7 +406,7 @@ impl Palette {
 mod tests {
     use super::*;
 
-    use koja_ast::span::{Position, Span};
+    use koja_ast::span::{FileId, Position, Span};
 
     const SOURCE: &str = "fn setup() -> Point\n  p = Point.orign()\nend\n";
     const FILE: &str = "src/main.koja";
@@ -392,19 +420,26 @@ mod tests {
     }
 
     fn span(line: u32, start_column: u32, end_column: u32) -> Span {
-        Span::new(position(line, start_column), position(line, end_column))
+        Span::new(
+            position(line, start_column),
+            position(line, end_column),
+            FileId(0),
+        )
     }
 
-    fn located(mut diagnostic: Diagnostic) -> Diagnostic {
-        diagnostic.path = Some(PathBuf::from(FILE));
-        diagnostic
+    fn sources() -> SourceTable {
+        SourceTable::new(vec![(PathBuf::from(FILE), SOURCE.to_string())])
     }
 
-    fn sources() -> SourceMap {
-        SourceMap::from([(PathBuf::from(FILE), SOURCE.to_string())])
+    fn no_sources() -> SourceTable {
+        SourceTable::new(Vec::new())
     }
 
-    fn render(diagnostics: &[Diagnostic], sources: &SourceMap, format: DiagnosticFormat) -> String {
+    fn render(
+        diagnostics: &[Diagnostic],
+        sources: &SourceTable,
+        format: DiagnosticFormat,
+    ) -> String {
         render_with_style(
             diagnostics,
             sources,
@@ -417,11 +452,11 @@ mod tests {
 
     #[test]
     fn pretty_renders_snippet_with_inline_hint() {
-        let diagnostic = located(Diagnostic::error_with_hint(
+        let diagnostic = Diagnostic::error_with_hint(
             "unknown function `Point.orign`",
             "did you mean `origin`?",
             span(2, 7, 17),
-        ));
+        );
         let expected = "\
 error: unknown function `Point.orign`
   ╭─ src/main.koja:2:7
@@ -440,11 +475,8 @@ error: unknown function `Point.orign`
     #[test]
     fn pretty_long_hint_falls_back_to_help_block() {
         let hint = "describe the replacement, for example a fully qualified path like `Global.New`";
-        let diagnostic = located(Diagnostic::error_with_hint(
-            "unknown function `Point.orign`",
-            hint,
-            span(2, 7, 17),
-        ));
+        let diagnostic =
+            Diagnostic::error_with_hint("unknown function `Point.orign`", hint, span(2, 7, 17));
         let expected = format!(
             "\
 error: unknown function `Point.orign`
@@ -464,10 +496,10 @@ error: unknown function `Point.orign`
 
     #[test]
     fn pretty_multiline_span_underlines_to_end_of_first_line() {
-        let diagnostic = located(Diagnostic::error(
+        let diagnostic = Diagnostic::error(
             "mismatched end",
-            Span::new(position(2, 7), position(3, 2)),
-        ));
+            Span::new(position(2, 7), position(3, 2), FileId(0)),
+        );
         let rendered = render(&[diagnostic], &sources(), DiagnosticFormat::Pretty);
         assert!(
             rendered.contains("  │       ─────────────"),
@@ -477,18 +509,19 @@ error: unknown function `Point.orign`
 
     #[test]
     fn pretty_missing_source_keeps_header_and_location() {
-        let diagnostic = located(Diagnostic::error("something failed", span(2, 7, 17)));
+        let diagnostic = Diagnostic::error("something failed", span(2, 7, 17));
+        let table = SourceTable::new(vec![(PathBuf::from(FILE), String::new())]);
         let expected = "\
 error: something failed
   ╭─ src/main.koja:2:7";
         assert_eq!(
-            render(&[diagnostic], &SourceMap::new(), DiagnosticFormat::Pretty),
-            expected,
+            render(&[diagnostic], &table, DiagnosticFormat::Pretty),
+            expected
         );
     }
 
     #[test]
-    fn pretty_pathless_diagnostic_keeps_header_and_hint() {
+    fn pretty_unresolved_file_keeps_header_and_hint() {
         let diagnostic = Diagnostic::error_with_hint(
             "public signature leaks private type",
             "mark the type public",
@@ -498,18 +531,18 @@ error: something failed
 error: public signature leaks private type
  = help: mark the type public";
         assert_eq!(
-            render(&[diagnostic], &SourceMap::new(), DiagnosticFormat::Pretty),
+            render(&[diagnostic], &no_sources(), DiagnosticFormat::Pretty),
             expected,
         );
     }
 
     #[test]
     fn short_renders_one_line_with_flattened_message_and_hint() {
-        let diagnostic = located(Diagnostic::error_with_hint(
+        let diagnostic = Diagnostic::error_with_hint(
             "unknown function\n`Point.orign`",
             "did you mean `origin`?",
             span(2, 7, 17),
-        ));
+        );
         assert_eq!(
             render(&[diagnostic], &sources(), DiagnosticFormat::Short),
             "src/main.koja:2:7: error: unknown function `Point.orign` (hint: did you mean `origin`?)",
@@ -517,23 +550,36 @@ error: public signature leaks private type
     }
 
     #[test]
-    fn short_pathless_diagnostic_uses_unknown_location() {
+    fn short_unresolved_file_uses_unknown_location() {
         let diagnostic = Diagnostic::warning("private type leaked", span(1, 1, 2));
         assert_eq!(
-            render(&[diagnostic], &SourceMap::new(), DiagnosticFormat::Short),
+            render(&[diagnostic], &no_sources(), DiagnosticFormat::Short),
             "<unknown>: warning: private type leaked",
+        );
+    }
+
+    #[test]
+    fn single_table_attributes_unknown_spans() {
+        let diagnostic = Diagnostic::error(
+            "boom",
+            Span::new(position(2, 7), position(2, 9), FileId::UNKNOWN),
+        );
+        let table = SourceTable::single(FILE, SOURCE);
+        assert_eq!(
+            render(&[diagnostic], &table, DiagnosticFormat::Short),
+            "src/main.koja:2:7: error: boom",
         );
     }
 
     #[test]
     fn blocks_separate_by_format() {
         let diagnostics = vec![
-            located(Diagnostic::warning("first", span(1, 1, 3))),
-            located(Diagnostic::warning("second", span(2, 3, 4))),
+            Diagnostic::warning("first", span(1, 1, 3)),
+            Diagnostic::warning("second", span(2, 3, 4)),
         ];
-        let short = render(&diagnostics, &SourceMap::new(), DiagnosticFormat::Short);
+        let short = render(&diagnostics, &no_sources(), DiagnosticFormat::Short);
         assert_eq!(short.lines().count(), 2);
-        let pretty = render(&diagnostics, &SourceMap::new(), DiagnosticFormat::Pretty);
+        let pretty = render(&diagnostics, &no_sources(), DiagnosticFormat::Pretty);
         assert!(
             pretty.contains("\n\n"),
             "pretty blocks separate with a blank line"

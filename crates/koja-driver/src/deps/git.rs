@@ -7,25 +7,15 @@
 //! inherit stdin and stderr so credential and passphrase prompts
 //! reach the terminal.
 
-use std::env;
 use std::fs::{self, File};
 use std::io;
 use std::os::unix::io::AsRawFd;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
-use crate::project::GitRef;
+use koja_stdlib::koja_home;
 
-/// Root of the per-user Koja directory: `KOJA_HOME` or `~/.koja`.
-pub(crate) fn koja_home() -> Result<PathBuf, String> {
-    if let Ok(home) = env::var("KOJA_HOME") {
-        return Ok(PathBuf::from(home));
-    }
-    match env::var("HOME") {
-        Ok(home) => Ok(PathBuf::from(home).join(".koja")),
-        Err(_) => Err("cannot determine home directory (set KOJA_HOME or HOME)".to_string()),
-    }
-}
+use crate::project::GitRef;
 
 /// Directory holding the mirror clones.
 pub(crate) fn cache_dir() -> Result<PathBuf, String> {

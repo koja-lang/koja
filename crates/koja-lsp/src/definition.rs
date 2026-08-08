@@ -6,7 +6,6 @@
 use tower_lsp_server::jsonrpc::Result;
 use tower_lsp_server::ls_types::*;
 
-use koja_ast::ast::File;
 use koja_ast::identifier::Identifier;
 use koja_ast::span::Span;
 use koja_typecheck::GlobalRegistry;
@@ -54,16 +53,15 @@ impl Backend {
             type_name,
             method_name,
         } = &symbol
-            && let Some((span, target_pkg)) = lookup_method_span(type_name, method_name, registry)
+            && let Some(span) = lookup_method_span(type_name, method_name, registry)
         {
-            return Ok(Some(resolve_location(&uri, span, &target_pkg, state)));
+            return Ok(Some(resolve_location(&uri, span, state)));
         }
 
         if let Some(name) = symbol_name(&symbol)
-            && let Some((span, target_pkg)) =
-                lookup_global_span(name, &state.active_package, registry)
+            && let Some(span) = lookup_global_span(name, &state.active_package, registry)
         {
-            return Ok(Some(resolve_location(&uri, span, &target_pkg, state)));
+            return Ok(Some(resolve_location(&uri, span, state)));
         }
 
         // Variable: jump to its declaring local span via the per-doc
@@ -94,15 +92,11 @@ fn symbol_name(symbol: &SymbolInfo) -> Option<&str> {
     })
 }
 
-fn lookup_global_span(
-    name: &str,
-    package: &str,
-    registry: &GlobalRegistry,
-) -> Option<(Span, String)> {
+fn lookup_global_span(name: &str, package: &str, registry: &GlobalRegistry) -> Option<Span> {
     for pkg in [package, "Global"] {
         let ident = Identifier::new(pkg, vec![name.to_string()]);
         if let Some((_, entry)) = registry.lookup(&ident) {
-            return Some((entry.span, pkg.to_string()));
+            return Some(entry.span);
         }
     }
     None
@@ -112,69 +106,30 @@ fn lookup_method_span(
     type_name: &str,
     method_name: &str,
     registry: &GlobalRegistry,
-) -> Option<(Span, String)> {
+) -> Option<Span> {
     for (_, entry) in registry.iter() {
         let path = entry.identifier.path();
         if path.len() == 2 && path[0] == type_name && path[1] == method_name {
-            return Some((entry.span, entry.identifier.package().to_string()));
+            return Some(entry.span);
         }
     }
     None
 }
 
-/// Render a [`Location`] for the active or sibling file containing
-/// `target_pkg`. We don't have the registry's span attributed to a
-/// specific file path today, so we walk the document state's checked
-/// packages to find which file's items declared the entry.
-fn resolve_location(
-    uri: &Uri,
-    span: Span,
-    target_pkg: &str,
-    state: &DocumentState,
-) -> GotoDefinitionResponse {
-    let range = span_to_range(&span);
-    if target_pkg == state.active_package {
-        return GotoDefinitionResponse::Scalar(Location {
-            uri: uri.clone(),
-            range,
-        });
-    }
-    let target_uri = find_pkg_file_uri(target_pkg, span, state).unwrap_or_else(|| uri.clone());
+/// Render a [`Location`] for the file that owns `span`, resolved
+/// through the checked program's file table. Falls back to the
+/// active URI when the id does not resolve.
+fn resolve_location(uri: &Uri, span: Span, state: &DocumentState) -> GotoDefinitionResponse {
+    let target_uri = state
+        .checked
+        .as_ref()
+        .and_then(|checked| checked.path_of(span.file))
+        .and_then(path_to_uri)
+        .unwrap_or_else(|| uri.clone());
     GotoDefinitionResponse::Scalar(Location {
         uri: target_uri,
-        range,
+        range: span_to_range(&span),
     })
-}
-
-fn find_pkg_file_uri(target_pkg: &str, span: Span, state: &DocumentState) -> Option<Uri> {
-    let checked = state.checked.as_ref()?;
-    for pkg in &checked.packages {
-        if pkg.package != target_pkg {
-            continue;
-        }
-        for file in &pkg.files {
-            if file_contains_span(file, &span)
-                && let Some(path) = &file.path
-                && let Some(uri) = path_to_uri(path)
-            {
-                return Some(uri);
-            }
-        }
-        if let Some(first) = pkg.files.first()
-            && let Some(path) = &first.path
-            && let Some(uri) = path_to_uri(path)
-        {
-            return Some(uri);
-        }
-    }
-    None
-}
-
-/// Best-effort: a file "contains" a span when the span's start line
-/// falls within the file's span range. Used to attribute a registry
-/// span back to a concrete file path.
-fn file_contains_span(file: &File, span: &Span) -> bool {
-    span.start.line >= file.span.start.line && span.end.line <= file.span.end.line
 }
 
 /// Linear scan of the per-document local index for the first entry

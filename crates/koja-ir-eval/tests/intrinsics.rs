@@ -9,8 +9,8 @@
 //! warrants, so instead we drive the `Global.print` path through the
 //! full pipeline and assert it returns `Value::Unit` without
 //! erroring. The byte-for-byte stdout assertion lives in the
-//! `koja-driver` e2e suite (`alpha_two_plus_two::*`), where the
-//! whole binary's stdout is captured via `Command::output`.
+//! `koja-driver` e2e suite (`lang_suite.rs`), where the whole
+//! binary's stdout is captured via `Command::output`.
 //!
 //! Unregistered intrinsic ids (e.g. `@intrinsic fn missing`) used to
 //! surface at runtime as [`RuntimeError::UnknownIntrinsic`]. They

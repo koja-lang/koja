@@ -2,15 +2,16 @@
 //!
 //! Bundles stdlib + project sibling files + the active buffer into a
 //! single [`ParsedProgram`], runs the pipeline
-//! ([`parse_program`] then [`check_program`]), merges parse-phase and
-//! check-phase diagnostics, filters to the active path, and publishes
-//! them to the client.
+//! ([`parse_program`] then [`check_program`]), groups parse-phase and
+//! check-phase diagnostics by the file that owns them, and publishes
+//! each group to its own URI.
 //!
 //! When a file belongs to a project (detected by walking up to find
 //! `koja.toml`), all sibling project files are bundled so cross-file
-//! type references resolve correctly.
+//! type references resolve correctly, with open editor buffers
+//! overlaying their on-disk contents.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -22,7 +23,7 @@ use koja_parser::{ParseMode, ParsedProgram, SourceFile, parse_program};
 use koja_typecheck::{CheckedProgram, check_program};
 
 use crate::backend::{Backend, DocumentState};
-use crate::convert::{span_to_range, uri_to_path};
+use crate::convert::{path_to_uri, span_to_range, uri_to_path};
 use crate::lookup::LocalIndex;
 
 #[derive(Deserialize)]
@@ -101,9 +102,14 @@ fn collect_koja_files(dir: &Path) -> Vec<PathBuf> {
 
 /// Collects sibling project [`SourceFile`]s (excluding `current_path`)
 /// with their owning package names. Also scans local-path dependencies.
+/// Files open in the editor read from `overlays` instead of disk.
 /// Returns an empty vec on any I/O or parse-toml failure so the LSP
 /// degrades gracefully rather than dropping diagnostics entirely.
-fn collect_sibling_sources(project_root: &Path, current_path: Option<&Path>) -> Vec<SourceFile> {
+fn collect_sibling_sources(
+    project_root: &Path,
+    current_path: Option<&Path>,
+    overlays: &HashMap<PathBuf, String>,
+) -> Vec<SourceFile> {
     let toml_path = project_root.join("koja.toml");
     let source = match fs::read_to_string(&toml_path) {
         Ok(s) => s,
@@ -127,6 +133,7 @@ fn collect_sibling_sources(project_root: &Path, current_path: Option<&Path>) -> 
         project_root,
         &namespace,
         current_path,
+        overlays,
         &mut files,
     );
 
@@ -136,6 +143,7 @@ fn collect_sibling_sources(project_root: &Path, current_path: Option<&Path>) -> 
             &project_root.join(rel),
             &mut seen_pkgs,
             current_path,
+            overlays,
             &mut files,
         );
     }
@@ -145,7 +153,13 @@ fn collect_sibling_sources(project_root: &Path, current_path: Option<&Path>) -> 
     // its own koja.toml.
     if let Ok(entries) = fs::read_dir(project_root.join("deps")) {
         for entry in entries.flatten() {
-            push_dep_files(&entry.path(), &mut seen_pkgs, current_path, &mut files);
+            push_dep_files(
+                &entry.path(),
+                &mut seen_pkgs,
+                current_path,
+                overlays,
+                &mut files,
+            );
         }
     }
 
@@ -159,6 +173,7 @@ fn push_dep_files(
     dep_root: &Path,
     seen_pkgs: &mut std::collections::BTreeSet<String>,
     current_path: Option<&Path>,
+    overlays: &HashMap<PathBuf, String>,
     out: &mut Vec<SourceFile>,
 ) {
     let Ok(dep_src) = fs::read_to_string(dep_root.join("koja.toml")) else {
@@ -176,6 +191,7 @@ fn push_dep_files(
         dep_root,
         &namespace,
         current_path,
+        overlays,
         out,
     );
 }
@@ -185,6 +201,7 @@ fn push_package_files(
     package_root: &Path,
     package: &str,
     current_path: Option<&Path>,
+    overlays: &HashMap<PathBuf, String>,
     out: &mut Vec<SourceFile>,
 ) {
     for src in src_dirs {
@@ -196,17 +213,15 @@ fn push_package_files(
             if current_path.is_some_and(|cp| same_file(&file_path, cp)) {
                 continue;
             }
-            // Mirror [`koja_driver::pipeline::push_package_sources`]: files
-            // whose stem starts with `alpha_` are pipeline-only sources
-            // delivered exclusively through the curated autoimport set.
-            // Their declarations would land out-of-order if pulled from
-            // disk, e.g. `debug_containers` references
-            // `Pair`/`Option`/`Result` and must come after `kernel`.
-            if is_alpha_only_path(&file_path) {
-                continue;
-            }
-            let Ok(text) = fs::read_to_string(&file_path) else {
-                continue;
+            let overlay = fs::canonicalize(&file_path)
+                .ok()
+                .and_then(|canonical| overlays.get(&canonical).cloned());
+            let text = match overlay {
+                Some(buffer) => buffer,
+                None => match fs::read_to_string(&file_path) {
+                    Ok(text) => text,
+                    Err(_) => continue,
+                },
             };
             out.push(SourceFile {
                 package: package.to_string(),
@@ -215,12 +230,6 @@ fn push_package_files(
             });
         }
     }
-}
-
-fn is_alpha_only_path(path: &Path) -> bool {
-    path.file_stem()
-        .and_then(|s| s.to_str())
-        .is_some_and(|stem| stem.starts_with("alpha_"))
 }
 
 fn same_file(a: &Path, b: &Path) -> bool {
@@ -238,12 +247,15 @@ fn read_project_namespace(project_root: &Path) -> Option<String> {
 
 impl Backend {
     /// Runs the pipeline on the current source text and publishes
-    /// LSP diagnostics for the active document.
-    ///
-    /// The bundle (stdlib + siblings + active buffer) is parsed and
-    /// checked from scratch on every call. We accept that cost for
-    /// simplicity and revisit only if real-world latency complains.
+    /// diagnostics per owning file. The bundle (stdlib + siblings +
+    /// active buffer) is parsed and checked from scratch on every
+    /// call. We accept that cost for simplicity and revisit only if
+    /// real-world latency complains.
     pub(crate) async fn diagnose(&self, uri: Uri, text: &str, version: Option<i32>) {
+        // Re-materialize the stdlib extraction if pruned, so cached
+        // stdlib paths stay valid for navigation.
+        let _ = koja_stdlib::extract();
+
         let active_path = uri_to_path(uri.as_str())
             .unwrap_or_else(|| PathBuf::from(format!("<{}>", uri.as_str())));
 
@@ -255,55 +267,42 @@ impl Backend {
             (None, p) => package_for_path(Some(p)),
         };
 
-        let sources =
-            self.build_bundle(&active_package, &active_path, text, project_root.as_deref());
+        let overlays = self.open_document_overlays(uri.as_str()).await;
+        let (sources, project_paths) = self.build_bundle(
+            &active_package,
+            &active_path,
+            text,
+            project_root.as_deref(),
+            &overlays,
+        );
 
         let parsed = parse_program(sources, ParseMode::for_path(&active_path));
 
-        let parse_diags = collect_parse_diagnostics(&parsed, &active_path);
-        let check_result = check_program(parsed);
-        let (checked, mut check_diags) = match check_result {
+        let mut all_diags: Vec<KojaDiagnostic> = parsed
+            .files
+            .values()
+            .flat_map(|file| file.diagnostics.iter().cloned())
+            .collect();
+
+        // On typecheck failure keep the partial ParsedProgram so
+        // AST-only handlers (symbols, folding) still see something
+        // useful. `source_paths` keeps the original parse order that
+        // spans' file ids index into.
+        let (checked, parsed_for_state, source_paths) = match check_program(parsed) {
             Ok(checked) => {
-                let diags = filter_diags(&checked.diagnostics, &active_path);
-                (Some(checked), diags)
+                all_diags.extend(checked.diagnostics.iter().cloned());
+                let rebuilt = rebuild_parsed_from_checked(&checked);
+                let source_paths = checked.source_paths.clone();
+                (Some(checked), rebuilt, source_paths)
             }
             Err(failure) => {
-                let diags = filter_diags(&failure.diagnostics, &active_path);
-                // Recover the partial ParsedProgram so AST-only handlers
-                // (symbols, folding) still see something useful on
-                // typecheck failure.
-                let parsed = failure.partial;
-                let locals = LocalIndex::build(&parsed, &active_path);
-                let mut all_diags = parse_diags.clone();
-                all_diags.extend(diags);
-                let lsp_diags: Vec<Diagnostic> = all_diags.iter().map(to_lsp_diagnostic).collect();
-                {
-                    let mut docs = self.documents.write().await;
-                    docs.insert(
-                        uri.as_str().to_string(),
-                        DocumentState {
-                            source: text.to_string(),
-                            active_path: active_path.clone(),
-                            active_package: active_package.clone(),
-                            parsed,
-                            checked: None,
-                            locals,
-                        },
-                    );
-                }
-                self.client
-                    .publish_diagnostics(uri, lsp_diags, version)
-                    .await;
-                return;
+                all_diags.extend(failure.diagnostics);
+                (None, failure.partial, failure.source_paths)
             }
         };
 
-        let mut all_diags = parse_diags;
-        all_diags.append(&mut check_diags);
-        let lsp_diags: Vec<Diagnostic> = all_diags.iter().map(to_lsp_diagnostic).collect();
-
-        let parsed_again = rebuild_parsed_from_checked(checked.as_ref().unwrap());
-        let locals = LocalIndex::build(&parsed_again, &active_path);
+        let grouped = group_by_file(all_diags, &source_paths, &active_path, &project_paths);
+        let locals = LocalIndex::build(&parsed_for_state, &active_path);
 
         {
             let mut docs = self.documents.write().await;
@@ -313,21 +312,85 @@ impl Backend {
                     source: text.to_string(),
                     active_path: active_path.clone(),
                     active_package,
-                    parsed: parsed_again,
+                    parsed: parsed_for_state,
                     checked,
                     locals,
                 },
             );
         }
 
-        self.client
-            .publish_diagnostics(uri, lsp_diags, version)
+        self.publish_grouped(uri, version, &active_path, grouped)
             .await;
+    }
+
+    /// Publish each file's diagnostics to its own URI and clear the
+    /// URIs that lost theirs since the previous pass.
+    async fn publish_grouped(
+        &self,
+        uri: Uri,
+        version: Option<i32>,
+        active_path: &Path,
+        mut grouped: HashMap<PathBuf, Vec<KojaDiagnostic>>,
+    ) {
+        let active_diags: Vec<Diagnostic> = grouped
+            .remove(active_path)
+            .unwrap_or_default()
+            .iter()
+            .map(to_lsp_diagnostic)
+            .collect();
+
+        let mut publishes: Vec<(Uri, Vec<Diagnostic>)> = Vec::new();
+        let mut now_published: HashSet<Uri> = HashSet::new();
+        if !active_diags.is_empty() {
+            now_published.insert(uri.clone());
+        }
+        for (path, diags) in &grouped {
+            let Some(sibling_uri) = path_to_uri(path) else {
+                continue;
+            };
+            now_published.insert(sibling_uri.clone());
+            publishes.push((sibling_uri, diags.iter().map(to_lsp_diagnostic).collect()));
+        }
+
+        let stale: Vec<Uri> = {
+            let mut published = self.published.write().await;
+            let stale = stale_uris(&published, &now_published, &uri);
+            *published = now_published;
+            stale
+        };
+
+        self.client
+            .publish_diagnostics(uri, active_diags, version)
+            .await;
+        for (sibling_uri, diags) in publishes {
+            self.client
+                .publish_diagnostics(sibling_uri, diags, None)
+                .await;
+        }
+        for stale_uri in stale {
+            self.client
+                .publish_diagnostics(stale_uri, Vec::new(), None)
+                .await;
+        }
+    }
+
+    /// Canonical path to buffer text for every other open document,
+    /// so siblings compile from unsaved editor state, not disk.
+    async fn open_document_overlays(&self, active_uri: &str) -> HashMap<PathBuf, String> {
+        let docs = self.documents.read().await;
+        docs.iter()
+            .filter(|(doc_uri, _)| doc_uri.as_str() != active_uri)
+            .filter_map(|(_, state)| {
+                let canonical = fs::canonicalize(&state.active_path).ok()?;
+                Some((canonical, state.source.clone()))
+            })
+            .collect()
     }
 }
 
 impl Backend {
-    /// Bundle the source list that gets fed to `parse_program`.
+    /// Bundle the source list for `parse_program`, plus the project
+    /// paths eligible for published diagnostics.
     ///
     /// Mirrors [`koja_driver::pipeline::bundle_many_with_autoimport`]: the
     /// embedded autoimport set is dropped for any module already
@@ -343,22 +406,27 @@ impl Backend {
         active_path: &Path,
         text: &str,
         project_root: Option<&Path>,
-    ) -> Vec<SourceFile> {
+        overlays: &HashMap<PathBuf, String>,
+    ) -> (Vec<SourceFile>, HashSet<PathBuf>) {
         let mut sources: Vec<SourceFile> =
             Vec::with_capacity(self.autoimport_sources.len() + self.qualified_sources.len() + 4);
         sources.extend(filter_stdlib(&self.autoimport_sources, active_package));
         if active_package != "Global" {
             sources.extend(filter_stdlib(&self.qualified_sources, active_package));
         }
+        let mut project_paths = HashSet::new();
         if let Some(root) = project_root {
-            sources.extend(collect_sibling_sources(root, Some(active_path)));
+            for sibling in collect_sibling_sources(root, Some(active_path), overlays) {
+                project_paths.insert(sibling.path.clone());
+                sources.push(sibling);
+            }
         }
         sources.push(SourceFile {
             package: active_package.to_string(),
             path: active_path.to_path_buf(),
             source: text.to_string(),
         });
-        sources
+        (sources, project_paths)
     }
 }
 
@@ -408,24 +476,37 @@ fn rebuild_parsed_from_checked(checked: &CheckedProgram) -> ParsedProgram {
     ParsedProgram { files, order }
 }
 
-fn collect_parse_diagnostics(parsed: &ParsedProgram, active_path: &Path) -> Vec<KojaDiagnostic> {
-    let mut out = Vec::new();
-    if let Some(file) = parsed.get(active_path) {
-        out.extend(file.diagnostics.iter().cloned());
-    }
-    out
-}
-
-/// Keep the check-phase diagnostics that belong to the active file,
-/// plus any without an owning path (registry-driven passes) so
-/// nothing disappears. Diagnostics from sibling files are dropped
-/// rather than misattributed to the active buffer.
-fn filter_diags(diags: &[KojaDiagnostic], active_path: &Path) -> Vec<KojaDiagnostic> {
-    diags
+/// URIs whose diagnostics disappeared this pass and need an empty
+/// publish. The active URI always gets its own publish, so skip it.
+fn stale_uris(published: &HashSet<Uri>, now_published: &HashSet<Uri>, active: &Uri) -> Vec<Uri> {
+    published
         .iter()
-        .filter(|d| d.path.as_deref().is_none_or(|path| path == active_path))
+        .filter(|old| !now_published.contains(old) && *old != active)
         .cloned()
         .collect()
+}
+
+/// Bucket diagnostics by the file that owns them, resolving each
+/// span's file id through `source_paths`. Unresolved ids anchor to
+/// the active file. Paths outside the bundled project files (stdlib,
+/// synthetic markers) are dropped because the user cannot act on
+/// them.
+fn group_by_file(
+    diags: Vec<KojaDiagnostic>,
+    source_paths: &[PathBuf],
+    active_path: &Path,
+    project_paths: &HashSet<PathBuf>,
+) -> HashMap<PathBuf, Vec<KojaDiagnostic>> {
+    let mut grouped: HashMap<PathBuf, Vec<KojaDiagnostic>> = HashMap::new();
+    for diag in diags {
+        let owner = match source_paths.get(diag.span.file.0 as usize) {
+            None => active_path.to_path_buf(),
+            Some(path) if path == active_path || project_paths.contains(path) => path.clone(),
+            Some(_) => continue,
+        };
+        grouped.entry(owner).or_default().push(diag);
+    }
+    grouped
 }
 
 /// Converts a Koja compiler diagnostic to an LSP diagnostic.
@@ -459,4 +540,73 @@ fn to_lsp_diagnostic(d: &KojaDiagnostic) -> Diagnostic {
 /// two in sync when changing the wording.
 fn is_deprecation_warning(d: &KojaDiagnostic) -> bool {
     d.severity == KojaSeverity::Warning && d.message.contains("` is deprecated: ")
+}
+
+#[cfg(test)]
+mod tests {
+    use std::str::FromStr;
+
+    use koja_ast::span::{FileId, Span};
+
+    use super::*;
+
+    fn diag(file: FileId) -> KojaDiagnostic {
+        let mut span = Span::default();
+        span.file = file;
+        KojaDiagnostic::error("boom", span)
+    }
+
+    #[test]
+    fn grouping_buckets_by_owning_file() {
+        let active = PathBuf::from("/proj/src/main.koja");
+        let sibling = PathBuf::from("/proj/src/util.koja");
+        let source_paths = vec![active.clone(), sibling.clone()];
+        let project_paths = HashSet::from([sibling.clone()]);
+
+        let grouped = group_by_file(
+            vec![diag(FileId(0)), diag(FileId(1)), diag(FileId(1))],
+            &source_paths,
+            &active,
+            &project_paths,
+        );
+
+        assert_eq!(grouped[&active].len(), 1);
+        assert_eq!(grouped[&sibling].len(), 2);
+    }
+
+    #[test]
+    fn grouping_anchors_unresolved_files_to_active() {
+        let active = PathBuf::from("/proj/src/main.koja");
+        let grouped = group_by_file(vec![diag(FileId::UNKNOWN)], &[], &active, &HashSet::new());
+        assert_eq!(grouped[&active].len(), 1);
+    }
+
+    #[test]
+    fn grouping_drops_paths_outside_the_project() {
+        let active = PathBuf::from("/proj/src/main.koja");
+        let source_paths = vec![
+            PathBuf::from("<Global.io>"),
+            PathBuf::from("/home/u/.koja/stdlib/0.16.0-abcd1234/global/src/io.koja"),
+        ];
+        let grouped = group_by_file(
+            vec![diag(FileId(0)), diag(FileId(1))],
+            &source_paths,
+            &active,
+            &HashSet::new(),
+        );
+        assert!(grouped.is_empty());
+    }
+
+    #[test]
+    fn stale_set_diff_excludes_survivors_and_active() {
+        let active = Uri::from_str("file:///proj/src/main.koja").unwrap();
+        let survivor = Uri::from_str("file:///proj/src/util.koja").unwrap();
+        let lost = Uri::from_str("file:///proj/src/gone.koja").unwrap();
+
+        let published = HashSet::from([active.clone(), survivor.clone(), lost.clone()]);
+        let now_published = HashSet::from([survivor]);
+
+        let stale = stale_uris(&published, &now_published, &active);
+        assert_eq!(stale, vec![lost]);
+    }
 }

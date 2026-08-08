@@ -186,6 +186,9 @@ fn collect_workspace_symbols(file: &File, query: &str, results: &mut Vec<SymbolI
                 }
             }
             Item::Impl(imp) => {
+                if imp.span.synthetic {
+                    continue;
+                }
                 collect_member_workspace_symbols(
                     &imp.members,
                     &type_expr_label(&imp.target),
@@ -301,6 +304,9 @@ fn build_document_symbols(file: &File) -> Vec<DocumentSymbol> {
                 });
             }
             Item::Impl(imp) => {
+                if imp.span.synthetic {
+                    continue;
+                }
                 let range = span_to_range(&imp.span);
                 let target_name = type_expr_label(&imp.target);
                 let children: Vec<DocumentSymbol> = imp

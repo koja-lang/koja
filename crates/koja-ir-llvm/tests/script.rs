@@ -105,7 +105,7 @@ fn string_literal_emits_rc_header_layout() {
     // is the immortal sentinel (`i64::MIN = -9223372036854775808`) so the
     // runtime never frees the rodata literal. For "hello": bit_length =
     // 40, payload = 6 bytes (5 utf8 + trailing NUL).
-    assert_contains(&ir_text, "@alpha_str.0 = private constant");
+    assert_contains(&ir_text, "@koja_str.0 = private constant");
     assert_contains(
         &ir_text,
         "{ i64 -9223372036854775808, i64 40, [6 x i8] c\"hello\\00\" }",
@@ -147,7 +147,7 @@ fn empty_string_literal_uses_zero_bit_length() {
     // (`i64::MIN`), and the payload array renders as `zeroinitializer`.
     assert_contains(
         &ir_text,
-        "@alpha_str.0 = private constant { i64, i64, [1 x i8] } \
+        "@koja_str.0 = private constant { i64, i64, [1 x i8] } \
          { i64 -9223372036854775808, i64 0, [1 x i8] zeroinitializer }",
     );
 }

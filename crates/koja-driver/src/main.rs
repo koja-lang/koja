@@ -4,7 +4,8 @@
 //! either [`pipeline`] (the compiler pipeline: `koja-typecheck ->
 //! koja-ir -> koja-ir-llvm` / `koja-ir-eval`) or
 //! [`commands`] (frontend / filesystem tooling: `parse`, `lex`,
-//! `format`, `doc`, `new`).
+//! `format`, `doc`). `koja new` is an alias for the self-hosted
+//! `koja.new` toolchain task and rides the pipeline's task runner.
 //!
 //! Source dispatch follows [`pipeline::cmd_build`]'s extension
 //! rules: `.kojs` files are scripts (top-level expressions, no
@@ -18,8 +19,7 @@
 //! accepts `--backend={interpreter,llvm}` (see [`pipeline::Backend`])
 //! and defaults to `interpreter` (fast feedback, no link step).
 //! `build` is always LLVM (the only backend that produces a
-//! binary), so it carries no backend flag. A future WASM backend
-//! slots in as a third variant.
+//! binary), so it carries no backend flag.
 
 mod commands;
 mod deps;
@@ -87,26 +87,23 @@ enum Command {
     },
     /// Generate HTML documentation
     Doc(DocArgs),
-    /// Run a source file through the interpreter
+    /// Run a script through the interpreter
     ///
-    /// Thin alias for `koja run --backend=interpreter`. Prints the
-    /// trailing value and exits 0 on success.
+    /// Thin alias for `koja run --backend=interpreter`. Output comes
+    /// from `IO.puts` / `value.print()` calls. The script's trailing
+    /// value is discarded.
     Eval {
-        /// Source file (`.koja` / `.kojs`)
+        /// Source file (`.kojs` script)
         file: String,
     },
-    /// Format source files
+    /// Format source files in place
     Format {
         /// Files or directories to format (formats project if omitted)
         files: Vec<String>,
 
-        /// Check if files need formatting (exit 1 if so)
+        /// Check if files need formatting (exit 1 if so) instead of writing
         #[arg(long)]
         check: bool,
-
-        /// Write formatted output back to files
-        #[arg(long = "write")]
-        write_back: bool,
     },
     /// Dump the token stream
     Lex {
@@ -231,6 +228,10 @@ fn main() {
     let color = !cli.no_color && std::env::var("NO_COLOR").is_err();
     diagnostics::init_style(cli.diagnostics, cli.no_color);
 
+    // Keep the on-disk stdlib extraction alive for tooling.
+    // Best-effort, the pipeline compiles from embedded sources.
+    let _ = koja_stdlib::extract();
+
     match cli.command {
         Command::Build {
             file,
@@ -252,11 +253,7 @@ fn main() {
             false,
             Vec::new(),
         ),
-        Command::Format {
-            files,
-            check,
-            write_back,
-        } => commands::cmd_format(files, check, write_back),
+        Command::Format { files, check } => commands::cmd_format(files, check),
         Command::Lex { files } => commands::cmd_lex(files),
         // Alias for the self-hosted `koja.new` toolchain task.
         Command::New { name } => pipeline::cmd_run(

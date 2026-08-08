@@ -784,7 +784,7 @@ Discussion that produced this doc:
 Existing related docs:
 
 - `../LANGUAGE.md` — language specification.
-- `archive/20260610-PACKAGE.md` — cookbook distribution model (archived; the roadmap has since committed to a conventional package manager).
+- `archive/20260610-PACKAGE.md` — cookbook distribution model, superseded by `ECOSYSTEM.md`, which keeps the cookbook for patterns and adds a crawler-built index for packages.
 - `TYPES.md` — type system.
 
 Predecessor docs (archived; preserved for historical context, not

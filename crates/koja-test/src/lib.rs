@@ -251,8 +251,8 @@ pub fn generate_harness(tests: &[TestCase], opts: TestOptions) -> String {
     source.push_str(&format!("struct {HARNESS_ENTRY}\nend\n\n"));
     source.push_str(&format!("impl Process<(), (), ()> for {HARNESS_ENTRY}\n"));
     source.push_str(&format!(
-        "  fn start(config: ()) -> Result<Self, Process.StopReason>\n    \
-           Result.Ok({HARNESS_ENTRY}{{}})\n  \
+        "  fn start(config: ()) -> Self ! Process.StopReason\n    \
+           {HARNESS_ENTRY}{{}}\n  \
          end\n\n"
     ));
     source.push_str(

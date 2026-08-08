@@ -14,11 +14,27 @@ pub struct Position {
     pub column: u32,
 }
 
-/// A source range defined by a start and end position.
+/// Index into the source file table of one compilation, in parse input
+/// order. File ids are transient per compilation, like paths.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct FileId(pub u32);
+
+impl FileId {
+    /// Sentinel for bare-string parses (REPL, formatter, tests), which
+    /// never cross file boundaries.
+    pub const UNKNOWN: FileId = FileId(u32::MAX);
+}
+
+/// A source range defined by a start and end position, plus the file it
+/// came from.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Span {
     pub start: Position,
     pub end: Position,
+    pub file: FileId,
+    /// True on compiler-synthesized nodes (derived impls), which copy
+    /// their declaring type's positions. Position lookups skip them.
+    pub synthetic: bool,
 }
 
 /// Compact `L:C-L:C` rendering shared by the AST printer and the
@@ -42,8 +58,30 @@ impl Default for Span {
 
 impl Span {
     /// Creates a span from explicit start and end positions.
-    pub fn new(start: Position, end: Position) -> Self {
-        Self { start, end }
+    pub fn new(start: Position, end: Position, file: FileId) -> Self {
+        Self {
+            start,
+            end,
+            file,
+            synthetic: false,
+        }
+    }
+
+    /// A copy of this span marked as compiler-synthesized.
+    pub fn as_synthetic(self) -> Span {
+        Span {
+            synthetic: true,
+            ..self
+        }
+    }
+
+    /// Merges two spans into one covering both. Keeps `self.file` and
+    /// `self.synthetic`.
+    pub fn to(self, end: Span) -> Span {
+        Span {
+            end: end.end,
+            ..self
+        }
     }
 
     /// Returns a zero-length span at the origin, used as a placeholder.
@@ -53,6 +91,6 @@ impl Span {
             line: 0,
             column: 0,
         };
-        Self { start: p, end: p }
+        Self::new(p, p, FileId::UNKNOWN)
     }
 }

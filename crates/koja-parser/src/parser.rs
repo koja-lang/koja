@@ -1,7 +1,7 @@
 use std::path::Path;
 
 use koja_ast::ast::{Comment, Diagnostic, File, Item, Severity, Statement, Visibility};
-use koja_ast::span::{Position, Span};
+use koja_ast::span::{FileId, Position, Span};
 use koja_ast::token::{Token, TokenKind};
 use koja_lexer::{LexResult, lex};
 
@@ -207,7 +207,6 @@ impl Parser {
                 severity: Severity::Error,
                 message,
                 hint,
-                path: None,
                 span,
             });
             self.advance()
@@ -295,7 +294,7 @@ impl Parser {
     }
 
     pub(crate) fn span_from(&self, start: Span) -> Span {
-        Span::new(start.start, self.prev_end())
+        Span::new(start.start, self.prev_end(), start.file)
     }
 
     pub(crate) fn prev_end(&self) -> Position {
@@ -319,7 +318,6 @@ impl Parser {
             severity: Severity::Error,
             message,
             hint: None,
-            path: None,
             span,
         });
     }
@@ -329,7 +327,6 @@ impl Parser {
             severity: Severity::Error,
             message,
             hint: Some(hint),
-            path: None,
             span,
         });
     }
@@ -477,8 +474,15 @@ impl Parser {
     }
 }
 
+/// Bare-string entry point (REPL, formatter, tests). Spans carry
+/// [`FileId::UNKNOWN`]. Multi-file callers use [`crate::parse_file`].
 pub fn parse(source: &str, mode: ParseMode) -> ParseResult {
-    let lex_result = lex(source);
+    parse_in_file(source, mode, FileId::UNKNOWN)
+}
+
+/// Parses `source` with every span attributed to `file`.
+pub fn parse_in_file(source: &str, mode: ParseMode, file: FileId) -> ParseResult {
+    let lex_result = lex(source, file);
     let mut parser = Parser::new(lex_result);
     let ast = parser.parse_file(mode);
     ParseResult {

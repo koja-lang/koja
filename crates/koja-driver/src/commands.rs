@@ -427,12 +427,12 @@ fn read_doc_input(path: &Path) -> Option<String> {
     }
 }
 
-/// `koja format [files...] [--check] [--write]` -- formats Koja
-/// source files. With no arguments, looks for `koja.toml` and
-/// formats all `.koja` files in the project's `src` and `test`
+/// `koja format [files...] [--check]` -- formats Koja source files
+/// in place, matching `mix format`. With no arguments, looks for
+/// `koja.toml` and formats the project's `src` and `test`
 /// directories. Directory arguments are walked recursively for
 /// `.koja` files.
-pub fn cmd_format(files: Vec<String>, check: bool, write: bool) {
+pub fn cmd_format(files: Vec<String>, check: bool) {
     let resolved = resolve_format_paths(&files);
 
     let mut has_diff = false;
@@ -464,18 +464,14 @@ pub fn cmd_format(files: Vec<String>, check: bool, write: bool) {
             } else {
                 println!("{path}: ok");
             }
-        } else if write || resolved.len() > 1 {
-            if source != formatted {
-                if let Err(e) = fs::write(path, &formatted) {
-                    eprintln!("error writing {path}: {e}");
-                    process::exit(1);
-                }
-                println!("{path}: formatted");
-            } else {
-                println!("{path}: unchanged");
+        } else if source != formatted {
+            if let Err(e) = fs::write(path, &formatted) {
+                eprintln!("error writing {path}: {e}");
+                process::exit(1);
             }
+            println!("{path}: formatted");
         } else {
-            print!("{formatted}");
+            println!("{path}: unchanged");
         }
     }
 
@@ -500,7 +496,7 @@ fn resolve_format_paths(files: &[String]) -> Vec<String> {
 fn project_format_paths() -> Vec<String> {
     let (config, cwd) = load_project_or_exit(&[
         "error: no files specified and no koja.toml found",
-        "Usage: koja format [files...] [--check] [--write]",
+        "Usage: koja format [files...] [--check]",
         "  or:  create a koja.toml in the current directory",
     ]);
 
@@ -603,7 +599,7 @@ pub fn cmd_lex(files: Vec<String>) {
             }
         };
 
-        let result = koja_lexer::lex(&source);
+        let result = koja_lexer::lex(&source, koja_lexer::FileId::UNKNOWN);
 
         if !result.errors.is_empty() {
             print_file_diagnostics(path, &source, &result.errors);
