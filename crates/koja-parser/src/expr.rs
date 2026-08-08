@@ -106,7 +106,7 @@ impl Parser {
                 let op_token = self.advance();
                 let op = token_to_binop(&op_token.kind);
                 let rhs = self.parse_expr_bp(r_bp);
-                let span = Span::new(lhs.span.start, rhs.span.end);
+                let span = lhs.span.to(rhs.span);
                 lhs = Expr::new(
                     ExprKind::Binary {
                         op,
@@ -149,7 +149,7 @@ impl Parser {
         self.advance(); // (
         let args = self.parse_arg_list();
         self.expect(&TokenKind::RParen);
-        let span = Span::new(callee.span.start, self.prev_end());
+        let span = self.span_from(callee.span);
         Expr::new(
             ExprKind::Call {
                 callee: Box::new(callee),
@@ -169,7 +169,7 @@ impl Parser {
                     self.advance(); // (
                     let args = self.parse_arg_list();
                     self.expect(&TokenKind::RParen);
-                    let span = Span::new(receiver.span.start, self.prev_end());
+                    let span = self.span_from(receiver.span);
                     Expr::new(
                         ExprKind::MethodCall {
                             receiver: Box::new(receiver),
@@ -180,7 +180,7 @@ impl Parser {
                         span,
                     )
                 } else {
-                    let span = Span::new(receiver.span.start, self.prev_end());
+                    let span = self.span_from(receiver.span);
                     Expr::new(
                         ExprKind::FieldAccess {
                             receiver: Box::new(receiver),
@@ -196,7 +196,7 @@ impl Parser {
                 self.parse_enum_construction_tail(type_path, variant, receiver.span)
             }
             _ => {
-                let span = Span::new(receiver.span.start, self.prev_end());
+                let span = self.span_from(receiver.span);
                 self.error("expected field name or method after '.'".into(), span);
                 Expr::new(
                     ExprKind::FieldAccess {
@@ -229,7 +229,7 @@ impl Parser {
         self.advance(); // ->
         let params = self.expr_to_closure_params(&lhs, lhs.span);
         let body = self.parse_expr_bp(BP_ARROW);
-        let span = Span::new(lhs.span.start, body.span.end);
+        let span = lhs.span.to(body.span);
         Expr::new(
             ExprKind::ShortClosure {
                 params,
@@ -260,7 +260,7 @@ impl Parser {
         self.expect(&TokenKind::Arrow);
         self.skip_newlines();
         let handler = self.parse_expr_bp(BP_RESCUE_R);
-        let span = Span::new(subject.span.start, handler.span.end);
+        let span = subject.span.to(handler.span);
         Expr::new(
             ExprKind::Rescue {
                 subject: Box::new(subject),
@@ -283,7 +283,7 @@ impl Parser {
         self.expect(&TokenKind::Colon);
         let else_expr = self.parse_expr_bp(BP_TERNARY + 1);
         self.reject_nested_ternary(&else_expr, else_expr.span);
-        let span = Span::new(condition.span.start, else_expr.span.end);
+        let span = condition.span.to(else_expr.span);
         Expr::new(
             ExprKind::Ternary {
                 condition: Box::new(condition),

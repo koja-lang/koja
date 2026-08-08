@@ -154,14 +154,14 @@ fn needs_enum_derive(decl: &EnumDecl, existing: &[String]) -> bool {
 }
 
 fn synthesize_struct_impl(decl: &StructDecl) -> Item {
-    let span = decl.span;
+    let span = decl.span.as_synthetic();
     let target = self_target_type(&decl.path, &decl.type_params, span);
     let format_body = struct_format_body(&decl.path, &decl.fields, span);
     debug_impl_block(target, format_body, span)
 }
 
 fn synthesize_enum_impl(decl: &EnumDecl) -> Item {
-    let span = decl.span;
+    let span = decl.span.as_synthetic();
     let target = self_target_type(&decl.path, &decl.type_params, span);
     let format_body = enum_format_body(&decl.path, &decl.variants, span);
     debug_impl_block(target, format_body, span)
@@ -184,7 +184,6 @@ fn debug_impl_block(target: TypeExpr, format_body: Expr, span: Span) -> Item {
             ImplMember::Function(inspect_function(span)),
         ],
         span,
-        synthetic: true,
     })
 }
 

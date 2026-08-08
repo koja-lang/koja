@@ -20,9 +20,10 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use koja_ast::ast::{Diagnostic, File, Severity};
+use koja_ast::span::FileId;
 
 use crate::ParseMode;
-use crate::parse;
+use crate::parse_in_file;
 
 /// Derive a package's PascalCase code namespace from its lowercase
 /// snake_case manifest name (`my_app` -> `MyApp`). Total in this
@@ -79,21 +80,19 @@ impl ParsedFile {
 
 /// Parses a single [`SourceFile`] into a [`ParsedFile`]. Populates
 /// `ast.path` and `ast.package` from the source so downstream stages
-/// (typecheck, codegen) don't have to thread the per-file identity
-/// alongside the AST.
-pub fn parse_file(source: SourceFile, mode: ParseMode) -> ParsedFile {
-    let result = parse(&source.source, mode);
+/// (typecheck, codegen) do not have to thread the per-file identity
+/// alongside the AST. Every span carries `file`.
+pub fn parse_file(source: SourceFile, mode: ParseMode, file: FileId) -> ParsedFile {
+    let result = parse_in_file(&source.source, mode, file);
     let mut ast = result.ast;
     ast.path = Some(source.path.clone());
     ast.package = source.package.clone();
-    let mut diagnostics = result.errors;
-    Diagnostic::stamp_paths(&mut diagnostics, &source.path);
     ParsedFile {
         package: source.package,
         path: source.path,
         source: source.source,
         ast,
-        diagnostics,
+        diagnostics: result.errors,
     }
 }
 
@@ -121,6 +120,11 @@ impl ParsedProgram {
         self.order.iter().map(|p| &self.files[p])
     }
 
+    /// Resolve a span's [`FileId`] to the owning file path.
+    pub fn path_of(&self, file: FileId) -> Option<&Path> {
+        self.order.get(file.0 as usize).map(PathBuf::as_path)
+    }
+
     pub fn get(&self, path: &Path) -> Option<&ParsedFile> {
         self.files.get(path)
     }
@@ -139,12 +143,13 @@ impl ParsedProgram {
 }
 
 /// Parses a list of source files in input order, producing a
-/// [`ParsedProgram`]. All files are parsed in the same `mode`.
+/// [`ParsedProgram`]. All files are parsed in the same `mode`. Each
+/// file gets a [`FileId`] equal to its index in `order`.
 pub fn parse_program(sources: Vec<SourceFile>, mode: ParseMode) -> ParsedProgram {
     let mut files = BTreeMap::new();
     let mut order = Vec::with_capacity(sources.len());
-    for source in sources {
-        let parsed = parse_file(source, mode);
+    for (index, source) in sources.into_iter().enumerate() {
+        let parsed = parse_file(source, mode, FileId(index as u32));
         order.push(parsed.path.clone());
         files.insert(parsed.path.clone(), parsed);
     }

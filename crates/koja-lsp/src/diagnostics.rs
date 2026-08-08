@@ -286,20 +286,22 @@ impl Backend {
 
         // On typecheck failure keep the partial ParsedProgram so
         // AST-only handlers (symbols, folding) still see something
-        // useful.
-        let (checked, parsed_for_state) = match check_program(parsed) {
+        // useful. `source_paths` keeps the original parse order that
+        // spans' file ids index into.
+        let (checked, parsed_for_state, source_paths) = match check_program(parsed) {
             Ok(checked) => {
                 all_diags.extend(checked.diagnostics.iter().cloned());
                 let rebuilt = rebuild_parsed_from_checked(&checked);
-                (Some(checked), rebuilt)
+                let source_paths = checked.source_paths.clone();
+                (Some(checked), rebuilt, source_paths)
             }
             Err(failure) => {
                 all_diags.extend(failure.diagnostics);
-                (None, failure.partial)
+                (None, failure.partial, failure.source_paths)
             }
         };
 
-        let grouped = group_by_file(all_diags, &active_path, &project_paths);
+        let grouped = group_by_file(all_diags, &source_paths, &active_path, &project_paths);
         let locals = LocalIndex::build(&parsed_for_state, &active_path);
 
         {
@@ -484,18 +486,20 @@ fn stale_uris(published: &HashSet<Uri>, now_published: &HashSet<Uri>, active: &U
         .collect()
 }
 
-/// Bucket diagnostics by the file that owns them. Pathless
-/// diagnostics anchor to the active file. Paths outside the bundled
-/// project files (stdlib, synthetic markers) are dropped because the
-/// user cannot act on them.
+/// Bucket diagnostics by the file that owns them, resolving each
+/// span's file id through `source_paths`. Unresolved ids anchor to
+/// the active file. Paths outside the bundled project files (stdlib,
+/// synthetic markers) are dropped because the user cannot act on
+/// them.
 fn group_by_file(
     diags: Vec<KojaDiagnostic>,
+    source_paths: &[PathBuf],
     active_path: &Path,
     project_paths: &HashSet<PathBuf>,
 ) -> HashMap<PathBuf, Vec<KojaDiagnostic>> {
     let mut grouped: HashMap<PathBuf, Vec<KojaDiagnostic>> = HashMap::new();
     for diag in diags {
-        let owner = match &diag.path {
+        let owner = match source_paths.get(diag.span.file.0 as usize) {
             None => active_path.to_path_buf(),
             Some(path) if path == active_path || project_paths.contains(path) => path.clone(),
             Some(_) => continue,
@@ -542,28 +546,26 @@ fn is_deprecation_warning(d: &KojaDiagnostic) -> bool {
 mod tests {
     use std::str::FromStr;
 
-    use koja_ast::span::Span;
+    use koja_ast::span::{FileId, Span};
 
     use super::*;
 
-    fn diag(path: Option<&str>) -> KojaDiagnostic {
-        let mut d = KojaDiagnostic::error("boom", Span::default());
-        d.path = path.map(PathBuf::from);
-        d
+    fn diag(file: FileId) -> KojaDiagnostic {
+        let mut span = Span::default();
+        span.file = file;
+        KojaDiagnostic::error("boom", span)
     }
 
     #[test]
     fn grouping_buckets_by_owning_file() {
         let active = PathBuf::from("/proj/src/main.koja");
         let sibling = PathBuf::from("/proj/src/util.koja");
+        let source_paths = vec![active.clone(), sibling.clone()];
         let project_paths = HashSet::from([sibling.clone()]);
 
         let grouped = group_by_file(
-            vec![
-                diag(Some("/proj/src/main.koja")),
-                diag(Some("/proj/src/util.koja")),
-                diag(Some("/proj/src/util.koja")),
-            ],
+            vec![diag(FileId(0)), diag(FileId(1)), diag(FileId(1))],
+            &source_paths,
             &active,
             &project_paths,
         );
@@ -573,22 +575,22 @@ mod tests {
     }
 
     #[test]
-    fn grouping_anchors_pathless_to_active() {
+    fn grouping_anchors_unresolved_files_to_active() {
         let active = PathBuf::from("/proj/src/main.koja");
-        let grouped = group_by_file(vec![diag(None)], &active, &HashSet::new());
+        let grouped = group_by_file(vec![diag(FileId::UNKNOWN)], &[], &active, &HashSet::new());
         assert_eq!(grouped[&active].len(), 1);
     }
 
     #[test]
     fn grouping_drops_paths_outside_the_project() {
         let active = PathBuf::from("/proj/src/main.koja");
+        let source_paths = vec![
+            PathBuf::from("<Global.io>"),
+            PathBuf::from("/home/u/.koja/stdlib/0.16.0-abcd1234/global/src/io.koja"),
+        ];
         let grouped = group_by_file(
-            vec![
-                diag(Some("<Global.io>")),
-                diag(Some(
-                    "/home/u/.koja/stdlib/0.16.0-abcd1234/global/src/io.koja",
-                )),
-            ],
+            vec![diag(FileId(0)), diag(FileId(1))],
+            &source_paths,
             &active,
             &HashSet::new(),
         );

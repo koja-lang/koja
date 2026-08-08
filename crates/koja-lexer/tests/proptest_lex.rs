@@ -13,8 +13,12 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use koja_lexer::{Span, TokenKind, lex};
+use koja_lexer::{FileId, LexResult, Span, TokenKind};
 use proptest::prelude::*;
+
+fn lex(source: &str) -> LexResult {
+    koja_lexer::lex(source, FileId::UNKNOWN)
+}
 
 fn collect_koja_files(roots: &[&Path]) -> Vec<PathBuf> {
     let mut out = Vec::new();

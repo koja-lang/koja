@@ -470,7 +470,10 @@ fn warnings_carry_the_owning_file_path() {
         .iter()
         .find(|d| d.severity == Severity::Warning)
         .expect("expected a deprecation warning");
-    assert_eq!(warning.path.as_deref(), Some(Path::new("test.koja")));
+    assert_eq!(
+        checked.path_of(warning.span.file),
+        Some(Path::new("test.koja"))
+    );
 }
 
 #[test]
@@ -505,7 +508,10 @@ fn cross_package_warnings_carry_the_using_file_path() {
         .iter()
         .find(|d| d.severity == Severity::Warning)
         .expect("expected a deprecation warning");
-    assert_eq!(warning.path.as_deref(), Some(Path::new("app.koja")));
+    assert_eq!(
+        checked.path_of(warning.span.file),
+        Some(Path::new("app.koja"))
+    );
 }
 
 #[test]
@@ -521,5 +527,8 @@ fn error_diagnostics_carry_the_owning_file_path() {
         .diagnostics
         .first()
         .expect("expected a placement error");
-    assert_eq!(error.path.as_deref(), Some(Path::new("test.koja")));
+    assert_eq!(
+        failure.path_of(error.span.file),
+        Some(Path::new("test.koja"))
+    );
 }

@@ -99,9 +99,6 @@ pub(crate) fn find_symbol_at(
                 }
             }
             Item::Impl(imp) => {
-                if imp.synthetic {
-                    continue;
-                }
                 for member in &imp.members {
                     if let ImplMember::Function(f) = member {
                         if !span_contains(&f.span, line, col) {

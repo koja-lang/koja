@@ -599,7 +599,7 @@ pub fn cmd_lex(files: Vec<String>) {
             }
         };
 
-        let result = koja_lexer::lex(&source);
+        let result = koja_lexer::lex(&source, koja_lexer::FileId::UNKNOWN);
 
         if !result.errors.is_empty() {
             print_file_diagnostics(path, &source, &result.errors);

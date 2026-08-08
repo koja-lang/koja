@@ -71,12 +71,12 @@ use koja_ast::ast::{Diagnostic, Severity};
 use koja_ast::identifier::Identifier;
 use koja_ir::{IRProgram, IRScript, lower_program, lower_script};
 use koja_ir_eval::{Interpreter, RuntimeError, Value};
-use koja_parser::{ParseMode, ParsedProgram, SourceFile, parse_file, parse_program};
+use koja_parser::{FileId, ParseMode, ParsedProgram, SourceFile, parse_file, parse_program};
 use koja_test::{HARNESS_ENTRY, TestOptions, discover_tests, generate_harness};
 use koja_typecheck::{CheckFailure, CheckedProgram, check_program, format_registry};
 
 use crate::commands::{load_project_or_exit, try_load_project};
-use crate::diagnostics::{SourceMap, render_program_diagnostics};
+use crate::diagnostics::{SourceTable, render_program_diagnostics};
 use crate::link::{self, LinkOptions};
 use crate::loader::{self, ErrorPolicy, LoadOptions, LoadedSource, ProjectLoader};
 use crate::project::{self, ProjectConfig};
@@ -954,6 +954,7 @@ fn run_test_binary_with_timeout(binary: &str, timeout: Option<Duration>) -> Test
 /// cleanly. Shared by the test and task harness paths.
 fn splice_generated_source(parsed: &mut ParsedProgram, package: String, tag: &str, source: String) {
     let path = PathBuf::from(format!("<{package}.{tag}>"));
+    let file = FileId(parsed.order.len() as u32);
     let generated = parse_file(
         SourceFile {
             package,
@@ -961,6 +962,7 @@ fn splice_generated_source(parsed: &mut ParsedProgram, package: String, tag: &st
             source,
         },
         ParseMode::File,
+        file,
     );
     if !generated.diagnostics.is_empty() {
         eprintln!("internal error: generated {tag} source failed to parse");
@@ -1202,7 +1204,7 @@ fn derive_package(path: &Path) -> String {
 /// (deprecation notices, match reachability) to stderr. Every
 /// command that continues past `check_program` calls this so
 /// warnings surface regardless of how the compile is invoked.
-fn print_check_warnings(checked: &CheckedProgram, sources: &SourceMap) {
+fn print_check_warnings(checked: &CheckedProgram, sources: &SourceTable) {
     let warnings: Vec<Diagnostic> = checked
         .diagnostics
         .iter()
@@ -1217,22 +1219,25 @@ fn print_check_warnings(checked: &CheckedProgram, sources: &SourceMap) {
 /// Snapshot every parsed file's source before `check_program`
 /// consumes the parse, for snippet rendering. `CheckFailure::partial`
 /// is rebuilt without sources on the typecheck-failure path, so the
-/// driver keeps its own copy.
-fn capture_sources(parsed: &ParsedProgram) -> SourceMap {
-    parsed
-        .files
-        .iter()
-        .map(|(path, file)| (path.clone(), file.source.clone()))
-        .collect()
+/// driver keeps its own copy, indexed by [`koja_parser::FileId`].
+fn capture_sources(parsed: &ParsedProgram) -> SourceTable {
+    SourceTable::new(
+        parsed
+            .order
+            .iter()
+            .map(|path| (path.clone(), parsed.files[path].source.clone()))
+            .collect(),
+    )
 }
 
 /// Render a [`CheckFailure`]'s diagnostics to stderr and exit 1.
 /// Parse diagnostics live on the partial parse, not on
 /// `failure.diagnostics`, so both sets print.
-fn bail_check_failure(failure: CheckFailure, sources: &SourceMap) -> ! {
+fn bail_check_failure(failure: CheckFailure, sources: &SourceTable) -> ! {
     let CheckFailure {
         diagnostics,
         partial,
+        ..
     } = failure;
     let mut all: Vec<Diagnostic> = partial
         .files

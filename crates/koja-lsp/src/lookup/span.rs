@@ -4,8 +4,12 @@ use koja_ast::ast::{Annotation, AnnotationValue};
 use koja_ast::span::Span;
 
 /// Returns `true` if the 1-indexed `(line, col)` cursor position falls
-/// within the given span.
+/// within the given span. Synthetic spans never match. They copy the
+/// declaring type's positions and would shadow the real nodes there.
 pub(crate) fn span_contains(span: &Span, line: u32, col: u32) -> bool {
+    if span.synthetic {
+        return false;
+    }
     if line < span.start.line || line > span.end.line {
         return false;
     }
@@ -21,7 +25,7 @@ pub(crate) fn span_contains(span: &Span, line: u32, col: u32) -> bool {
 /// Returns `true` if the cursor is on the name portion of the span's
 /// start line.
 pub(crate) fn span_contains_name(_name: &str, span: &Span, line: u32, col: u32) -> bool {
-    span.start.line == line && col >= span.start.column && col <= span.end.column
+    !span.synthetic && span.start.line == line && col >= span.start.column && col <= span.end.column
 }
 
 /// Extracts the doc string from a `@doc` annotation, if present.

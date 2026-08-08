@@ -6,7 +6,7 @@
 //! nodes. [`Pattern`]s appear in `match` arms, `for` loops, and destructuring
 //! assignments.
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use crate::coercion::{Coercion, LiteralCoercion};
 use crate::identifier::{LocalId, Resolution, ResolvedType};
@@ -224,16 +224,14 @@ pub struct Comment {
     pub span: Span,
 }
 
-/// A compiler diagnostic emitted during parsing, type checking, or codegen.
+/// A compiler diagnostic emitted during parsing, type checking, or
+/// codegen. The owning file is `span.file`, resolved through the
+/// compilation's source file table.
 #[derive(Debug, Clone)]
 pub struct Diagnostic {
     pub severity: Severity,
     pub message: String,
     pub hint: Option<String>,
-    /// Owning source file, stamped at the per-file pass seams after
-    /// construction. `None` means no file context (registry-driven
-    /// passes) and renderers omit the location for those.
-    pub path: Option<PathBuf>,
     pub span: Span,
 }
 
@@ -244,7 +242,6 @@ impl Diagnostic {
             severity: Severity::Error,
             message: message.into(),
             hint: None,
-            path: None,
             span,
         }
     }
@@ -259,7 +256,6 @@ impl Diagnostic {
             severity: Severity::Error,
             message: message.into(),
             hint: Some(hint.into()),
-            path: None,
             span,
         }
     }
@@ -270,19 +266,7 @@ impl Diagnostic {
             severity: Severity::Warning,
             message: message.into(),
             hint: None,
-            path: None,
             span,
-        }
-    }
-
-    /// Stamp `path` onto every diagnostic in `diagnostics` that has no
-    /// owning file yet. Idempotent, so outer seams never overwrite a
-    /// stamp applied closer to the emitting pass.
-    pub fn stamp_paths(diagnostics: &mut [Diagnostic], path: &Path) {
-        for diagnostic in diagnostics {
-            if diagnostic.path.is_none() {
-                diagnostic.path = Some(path.to_path_buf());
-            }
         }
     }
 }
@@ -437,17 +421,14 @@ pub struct Function {
 
 /// An `impl Protocol for Type` block. Inherent methods live in
 /// [`ExtendBlock`], and bare `impl Type` is a parse error.
-///
-/// `synthetic` marks compiler-derived impls (auto-derived `Debug` /
-/// `Equality`). Their nodes reuse the declaring type's span, so
-/// position-based tools like the LSP must skip them.
+/// Compiler-derived impls (auto-derived `Debug` / `Equality`) carry
+/// [`Span::synthetic`] spans.
 #[derive(Debug, Clone)]
 pub struct ImplBlock {
     pub target: TypeExpr,
     pub trait_expr: TypeExpr,
     pub members: Vec<ImplMember>,
     pub span: Span,
-    pub synthetic: bool,
 }
 
 /// An `extend Type` block: attaches inherent methods (and type

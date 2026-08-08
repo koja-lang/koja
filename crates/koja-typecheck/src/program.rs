@@ -5,15 +5,16 @@
 //! and panics on violation.
 
 use std::collections::BTreeMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use koja_ast::ast::{Diagnostic, File, Severity};
+use koja_ast::span::FileId;
 use koja_parser::{ParsedFile, ParsedProgram};
 
 use crate::error::CheckFailure;
 use crate::pipeline::{
     aliases, borrows, collect, definite_assignment, deprecation, desugar, lift_signatures, resolve,
-    seal, stamp_file_paths, synthesize, visibility,
+    seal, synthesize, visibility,
 };
 use crate::registry::GlobalRegistry;
 
@@ -40,6 +41,16 @@ pub struct CheckedProgram {
     /// Canonical source of truth for what was registered. Lowering
     /// crates build their own indices over `Identifier`.
     pub registry: GlobalRegistry,
+    /// File table indexed by [`FileId`], copied from
+    /// `ParsedProgram::order`. Resolves any span to its owning file.
+    pub source_paths: Vec<PathBuf>,
+}
+
+impl CheckedProgram {
+    /// Resolve a span's [`FileId`] to the owning file path.
+    pub fn path_of(&self, file: FileId) -> Option<&Path> {
+        self.source_paths.get(file.0 as usize).map(PathBuf::as_path)
+    }
 }
 
 /// Run every sub-pass in the typecheck phase.
@@ -70,6 +81,7 @@ pub fn check_program(parsed: ParsedProgram) -> Result<CheckedProgram, CheckFailu
     if parsed.has_errors() {
         return Err(CheckFailure {
             diagnostics: Vec::new(),
+            source_paths: parsed.order.clone(),
             partial: parsed,
         });
     }
@@ -77,6 +89,7 @@ pub fn check_program(parsed: ParsedProgram) -> Result<CheckedProgram, CheckFailu
     let mut diagnostics: Vec<Diagnostic> = Vec::new();
     let mut registry = GlobalRegistry::with_stdlib_stubs();
 
+    let source_paths = parsed.order.clone();
     let mut packages = into_packages(parsed);
 
     // Must run first so derive synthesis and collect see the flat
@@ -119,22 +132,13 @@ pub fn check_program(parsed: ParsedProgram) -> Result<CheckedProgram, CheckFailu
 
     lift_signatures::lift_signatures(&mut packages, &mut registry, &mut diagnostics);
 
-    // The leak check walks the registry, not files, so its
-    // diagnostics have no owning path. Track its range so the
-    // stamping assertion below can exempt it.
-    let leak_range = {
-        let start = diagnostics.len();
-        visibility::check_signature_leaks(&registry, &mut diagnostics);
-        start..diagnostics.len()
-    };
+    visibility::check_signature_leaks(&registry, &mut diagnostics);
 
     synthesize::synthesize_program(&mut packages);
 
     for pkg in &mut packages {
         for file in &mut pkg.files {
-            let start = diagnostics.len();
             resolve::resolve_file(file, &pkg.package, &registry, &mut diagnostics);
-            stamp_file_paths(&mut diagnostics, start, file);
         }
     }
 
@@ -155,18 +159,11 @@ pub fn check_program(parsed: ParsedProgram) -> Result<CheckedProgram, CheckFailu
         deprecation::check_file(file, package, &registry, diags);
     });
 
-    debug_assert!(
-        diagnostics
-            .iter()
-            .enumerate()
-            .all(|(idx, d)| d.path.is_some() || leak_range.contains(&idx)),
-        "diagnostic missing an owning path: a per-file pass forgot to stamp"
-    );
-
     if diagnostics.iter().any(|d| d.severity == Severity::Error) {
         return Err(CheckFailure {
             diagnostics,
             partial: rebuild_parsed(&packages),
+            source_paths,
         });
     }
 
@@ -174,13 +171,13 @@ pub fn check_program(parsed: ParsedProgram) -> Result<CheckedProgram, CheckFailu
         diagnostics,
         packages,
         registry,
+        source_paths,
     };
     seal::seal_ast(&checked);
     Ok(checked)
 }
 
-/// Run `pass` on every file across every package, stamping the
-/// diagnostics each call emits with the owning file's path.
+/// Run `pass` on every file across every package.
 fn for_each_file(
     packages: &[CheckedPackage],
     diagnostics: &mut Vec<Diagnostic>,
@@ -188,9 +185,7 @@ fn for_each_file(
 ) {
     for pkg in packages {
         for file in &pkg.files {
-            let start = diagnostics.len();
             pass(file, &pkg.package, diagnostics);
-            stamp_file_paths(diagnostics, start, file);
         }
     }
 }

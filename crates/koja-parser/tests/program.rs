@@ -11,7 +11,7 @@
 
 use std::path::PathBuf;
 
-use koja_parser::{ParseMode, SourceFile, parse_file, parse_program};
+use koja_parser::{FileId, ParseMode, SourceFile, parse_file, parse_program};
 
 #[test]
 fn parse_file_threads_path_and_package_into_ast() {
@@ -20,7 +20,7 @@ fn parse_file_threads_path_and_package_into_ast() {
         path: PathBuf::from("src/main.koja"),
         source: "fn main\n  1\nend\n".to_string(),
     };
-    let parsed = parse_file(src, ParseMode::File);
+    let parsed = parse_file(src, ParseMode::File, FileId(0));
     assert_eq!(parsed.ast.path, Some(PathBuf::from("src/main.koja")));
     assert_eq!(parsed.ast.package, "myapp");
     assert_eq!(parsed.package, "myapp");
@@ -34,7 +34,7 @@ fn parse_file_has_errors_for_invalid_source() {
         path: PathBuf::from("a.koja"),
         source: "fn foo\n  (1, 2,)\nend\n".to_string(),
     };
-    let parsed = parse_file(src, ParseMode::File);
+    let parsed = parse_file(src, ParseMode::File, FileId(0));
     assert!(parsed.has_errors());
 }
 
@@ -45,7 +45,7 @@ fn parse_file_clean_source_has_no_errors() {
         path: PathBuf::from("a.koja"),
         source: "fn foo\n  1\nend\n".to_string(),
     };
-    let parsed = parse_file(src, ParseMode::File);
+    let parsed = parse_file(src, ParseMode::File, FileId(0));
     assert!(!parsed.has_errors());
 }
 

@@ -870,7 +870,7 @@ fn seed_primitive_stub(reg: &mut GlobalRegistry, name: &str, type_params: Vec<St
 
 #[cfg(test)]
 mod tests {
-    use koja_ast::span::Position;
+    use koja_ast::span::{FileId, Position};
 
     use super::*;
 
@@ -880,7 +880,7 @@ mod tests {
             line: 3,
             column,
         };
-        Span::new(position(1), position(20))
+        Span::new(position(1), position(20), FileId::UNKNOWN)
     }
 
     #[test]

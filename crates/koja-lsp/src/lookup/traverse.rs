@@ -645,7 +645,7 @@ pub(crate) fn find_expr_at(file: &File, line: u32, col: u32) -> Option<&Expr> {
                     .as_ref()
                     .and_then(|b| find_expr_at_in_body(b, line, col))
             }
-            Item::Impl(imp) if !imp.synthetic => imp.members.iter().find_map(|m| {
+            Item::Impl(imp) => imp.members.iter().find_map(|m| {
                 if let ImplMember::Function(f) = m
                     && span_contains(&f.span, line, col)
                 {
@@ -870,7 +870,7 @@ pub(crate) fn find_enclosing_call(file: &File, line: u32, col: u32) -> Option<Ca
                     .as_ref()
                     .and_then(|b| find_call_in_body(b, line, col))
             }
-            Item::Impl(imp) if !imp.synthetic => imp.members.iter().find_map(|m| {
+            Item::Impl(imp) => imp.members.iter().find_map(|m| {
                 if let ImplMember::Function(f) = m
                     && span_contains(&f.span, line, col)
                 {

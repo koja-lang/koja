@@ -25,6 +25,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Diagnostics from program-wide checks, such as a public signature that leaks a private type, now point at the offending file and line instead of printing `<unknown>`.
 - LSP: Editor diagnostics in multi-file projects now appear on the file that owns them instead of being dropped, and clear when an edit elsewhere fixes them.
 - LSP: Hovering a keyword or blank spot inside a type no longer shows a bogus `String` hover from the auto-derived `Debug` impl, and derived members no longer appear in the editor outline.
 - Generated docs now show the `! E` error channel on fallible function signatures.

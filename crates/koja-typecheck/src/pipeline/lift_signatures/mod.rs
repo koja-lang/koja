@@ -21,7 +21,6 @@ use koja_ast::ast::{
 use koja_ast::identifier::{GlobalRegistryId, Identifier, ResolvedType};
 
 use crate::pipeline::aliases::collect_file_aliases;
-use crate::pipeline::stamp_file_paths;
 use crate::program::CheckedPackage;
 use crate::registry::GlobalRegistry;
 
@@ -116,7 +115,6 @@ pub(crate) fn lift_signatures(
     // conformance in pass 2.
     for pkg in packages.iter() {
         for file in &pkg.files {
-            let start = diagnostics.len();
             let aliases = collect_file_aliases(file);
             let mut scope = LiftScope {
                 aliases: &aliases,
@@ -128,7 +126,6 @@ pub(crate) fn lift_signatures(
                     protocols::lift_protocol(decl, &mut scope, diagnostics);
                 }
             }
-            stamp_file_paths(diagnostics, start, file);
         }
     }
     // Pass 1b: resolve `<T: Bound>` bound names against the now-fully-
@@ -152,7 +149,6 @@ pub(crate) fn lift_signatures(
     // (already registered with type_params at collect).
     for pkg in packages.iter() {
         for file in &pkg.files {
-            let start = diagnostics.len();
             let aliases = collect_file_aliases(file);
             let mut scope = LiftScope {
                 aliases: &aliases,
@@ -177,7 +173,6 @@ pub(crate) fn lift_signatures(
                     _ => {}
                 }
             }
-            stamp_file_paths(diagnostics, start, file);
         }
     }
     // Pass 1d: constants. Runs after structs / enums lift so the
@@ -190,7 +185,6 @@ pub(crate) fn lift_signatures(
     for pkg in packages.iter_mut() {
         let package = pkg.package.clone();
         for file in &mut pkg.files {
-            let start = diagnostics.len();
             let aliases = collect_file_aliases(file);
             let mut scope = LiftScope {
                 aliases: &aliases,
@@ -202,7 +196,6 @@ pub(crate) fn lift_signatures(
                     constants::lift_constant(constant, &mut scope, diagnostics);
                 }
             }
-            stamp_file_paths(diagnostics, start, file);
         }
     }
     // Pass 2: impl + extend blocks. Mutable so impl synthesis can
@@ -210,7 +203,6 @@ pub(crate) fn lift_signatures(
     for pkg in packages.iter_mut() {
         let package = pkg.package.clone();
         for file in &mut pkg.files {
-            let start = diagnostics.len();
             let aliases = collect_file_aliases(file);
             let mut scope = LiftScope {
                 aliases: &aliases,
@@ -228,7 +220,6 @@ pub(crate) fn lift_signatures(
                     _ => {}
                 }
             }
-            stamp_file_paths(diagnostics, start, file);
         }
     }
 }
@@ -245,7 +236,6 @@ fn resolve_all_bounds(
 ) {
     for pkg in packages {
         for file in &pkg.files {
-            let start = diagnostics.len();
             let aliases = collect_file_aliases(file);
             let mut scope = LiftScope {
                 aliases: &aliases,
@@ -276,7 +266,6 @@ fn resolve_all_bounds(
                     _ => {}
                 }
             }
-            stamp_file_paths(diagnostics, start, file);
         }
     }
 }

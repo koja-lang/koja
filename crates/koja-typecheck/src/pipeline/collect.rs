@@ -32,7 +32,6 @@ use koja_ast::identifier::{GlobalRegistryId, Identifier};
 use koja_ast::labels::type_expr_span;
 use koja_ast::span::Span;
 
-use crate::pipeline::stamp_file_paths;
 use crate::pipeline::visibility::check_reference_visibility;
 use crate::program::CheckedPackage;
 use crate::registry::{GlobalKind, GlobalRegistry, InsertOutcome, VisibilityScope};
@@ -109,7 +108,6 @@ pub(crate) fn validate_nested_types(
 ) {
     for pkg in packages {
         for file in &pkg.files {
-            let start = diagnostics.len();
             for item in &file.items {
                 match item {
                     Item::Struct(decl) if !decl.owner_path().is_empty() => {
@@ -137,7 +135,6 @@ pub(crate) fn validate_nested_types(
                     _ => {}
                 }
             }
-            stamp_file_paths(diagnostics, start, file);
         }
     }
 }
