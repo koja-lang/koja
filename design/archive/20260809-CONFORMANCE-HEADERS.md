@@ -2,7 +2,8 @@
 
 Design for declaring protocol conformance on the type declaration itself,
 with protocol methods living in the type body. Proposed 2026-07-16 during
-the pooler build. Status: agreed design, not yet implemented.
+the pooler build. Status: implemented in 0.17, including the near-miss
+warning.
 
 ---
 

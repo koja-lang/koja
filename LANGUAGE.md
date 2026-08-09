@@ -15,7 +15,7 @@ Koja is a statically typed, compiled language targeting native binaries via LLVM
 - [Error Handling](#error-handling): `! E` Signatures, `fail`, `try`, Error Unions, `rescue`
 - [Closures and Function Types](#closures-and-function-types): Block Closures, Short Closures, Capture Semantics, Function Types
 - [Value Semantics](#value-semantics): Rules, Copy Cost, Field Access
-- [Protocols](#protocols): Behavioral Contracts, Static Dispatch
+- [Protocols](#protocols): Behavioral Contracts, Impl Blocks, Static Dispatch
 - [Packages](#packages): Transparent Files, Visibility, Aliases, Dependencies
 - [Concurrency](#concurrency): Processes, `spawn`/`receive`, `Ref`, `ReplyTo`, `Task`
 - [Standard Library](#standard-library): Built-in Functions, Core Types, Collections, String Methods, Binary/Bits, File I/O, Parsing, URI, Base, Path, Protocols
@@ -552,6 +552,8 @@ struct Point
   y: Int32
 end
 ```
+
+The header can also declare protocol conformances (`struct Point: Display, Hash`). See [Protocols](#protocols).
 
 #### Construction
 
@@ -1308,17 +1310,47 @@ w.name.print()              # "HELLO"
 
 ## Protocols
 
-Protocols define behavioral contracts. Types implement protocols via `impl Protocol for Type`.
+Protocols define behavioral contracts. A struct or enum lists its protocols after a colon in its header, and the functions in its body satisfy the contract:
 
 ```koja
 protocol Greeter
   fn greet(self) -> String
 end
 
-struct Cat
+struct Cat: Greeter, Description
   name: String
-end
 
+  fn greet(self) -> String
+    "meow, I'm #{self.name}"
+  end
+
+  fn describe(self) -> String
+    "a cat named #{self.name}"
+  end
+end
+```
+
+The compiler checks completeness and signature compatibility, and synthesizes any default-bodied methods the type omits. If the body has a function whose name is a near miss of an omitted default, the compiler warns about the likely typo. Entry processes are declared this way (`struct App: Process<(), (), ()>`, see [Packages](#packages)). Protocol declarations accept `@doc` and `@deprecated`.
+
+`Debug` and `Equality` are auto-derived for every type, so listing one is only an override. It suppresses the derived implementation, and the body must supply `format` / `eq`:
+
+```koja
+struct Token: Debug
+  secret: String
+
+  fn format(self) -> String
+    "Token(redacted)"
+  end
+end
+```
+
+`Self` inside a protocol is sugar for an implicit first type parameter, filled in by each conforming type. A method signature that mentions `Self` resolves it to the concrete implementer. User-declared protocol type parameters (e.g. `protocol Eq<T>`) follow the `Self` slot, and the name `Self` cannot be declared explicitly.
+
+### Impl Blocks
+
+A conformance can also live in a separate `impl Protocol for Type` block:
+
+```koja
 impl Greeter for Cat
   fn greet(self) -> String
     "meow, I'm #{self.name}"
@@ -1326,9 +1358,9 @@ impl Greeter for Cat
 end
 ```
 
-The compiler validates completeness (all protocol functions must be implemented) and signature compatibility. `priv fn` helpers are allowed in impl blocks. `@doc` and `@deprecated` annotations are supported on protocol declarations.
+The two forms are equivalent and check identically. Declaring the same conformance in both is a duplicate-conformance error.
 
-`Self` inside a protocol declaration is syntactic sugar for an implicit first type parameter on the protocol. It is the slot every conforming type fills in via `impl Protocol for ConcreteType`. Methods that mention `Self` in their signature (return type, non-receiver param) treat it as that synthetic param. In an `impl Protocol for ConcreteType` block, the synthetic param resolves to `ConcreteType` and the method's `Self` ends up typed as the concrete implementer. User-declared protocol type parameters (e.g. `protocol Eq<T>`) are appended after the synthetic `Self` slot. The name `Self` is reserved on protocols and cannot also be declared explicitly.
+The impl block is the isolated-contract form. It rejects public functions the protocol does not declare (`priv fn` helpers are allowed). Use it when a conformance's methods would crowd the type body.
 
 ### Trait Bounds
 
@@ -1340,7 +1372,7 @@ fn say_hello<T: Greeter>(animal: T) -> String
 end
 ```
 
-Multiple bounds use `&` (the protocol composition operator, complementing `|` for union types):
+Multiple bounds use `&`. It is valid only in bound lists, not in general type positions:
 
 ```koja
 fn describe_and_greet<T: Greeter & Description>(animal: T) -> String
@@ -1378,10 +1410,7 @@ end
 alias Process.Step
 alias Process.StopReason
 
-struct App
-end
-
-impl Process<(), (), ()> for App
+struct App: Process<(), (), ()>
   fn start(config: ()) -> Self ! StopReason
     App{}
   end
@@ -1550,11 +1579,9 @@ enum CounterMsg
   Decrement
 end
 
-struct Counter
+struct Counter: Process<Counter, CounterMsg, Int>
   count: Int
-end
 
-impl Process<Counter, CounterMsg, Int> for Counter
   fn start(config: Counter) -> Self ! StopReason
     config
   end

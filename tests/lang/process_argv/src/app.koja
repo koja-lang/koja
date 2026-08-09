@@ -1,15 +1,13 @@
 alias Process.Step
 alias Process.StopReason
 
-struct App
-  args: List<String>
-end
-
 enum AppMsg
   Noop
 end
 
-impl Process<List<String>, AppMsg, String> for App
+struct App: Process<List<String>, AppMsg, String>
+  args: List<String>
+
   fn start(config: List<String>) -> Result<Self, StopReason>
     Result.Ok(App{args: config})
   end

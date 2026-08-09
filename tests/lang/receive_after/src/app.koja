@@ -2,14 +2,11 @@ alias Process.Lifecycle
 alias Process.Step
 alias Process.StopReason
 
-struct App
-end
-
 enum AppMsg
   Ping
 end
 
-impl Process<App, AppMsg, String> for App
+struct App: Process<App, AppMsg, String>
   fn start(config: App) -> Result<Self, StopReason>
     IO.puts("waiting")
     Result.Ok(config)

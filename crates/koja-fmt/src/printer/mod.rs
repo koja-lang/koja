@@ -259,6 +259,9 @@ impl<'a> Printer<'a> {
             header.push('>');
         }
         parts.push(text(header));
+        if !s.conformances.is_empty() {
+            parts.push(util::conformance_header_doc(&s.conformances));
+        }
 
         let mut body = Vec::new();
         for field in &s.fields {
@@ -370,6 +373,9 @@ impl<'a> Printer<'a> {
             header.push('>');
         }
         parts.push(text(header));
+        if !e.conformances.is_empty() {
+            parts.push(util::conformance_header_doc(&e.conformances));
+        }
 
         let mut body = Vec::new();
         for variant in &e.variants {

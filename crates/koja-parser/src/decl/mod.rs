@@ -28,12 +28,39 @@ pub(crate) mod impl_block;
 pub(crate) mod protocol;
 pub(crate) mod struct_decl;
 
-use koja_ast::ast::{Statement, TypeParam};
+use koja_ast::ast::{Statement, TypeExpr, TypeParam};
 use koja_ast::token::TokenKind;
 
 use crate::parser::Parser;
 
 impl Parser {
+    /// Parse the optional conformance header after a type's name and
+    /// generics, as in `struct Foo: Display, Hash`. Commas separate
+    /// the entries and may be followed by a line break. `&` is
+    /// rejected with a hint since it composes protocols in type
+    /// positions.
+    pub(crate) fn parse_optional_conformances(&mut self) -> Vec<TypeExpr> {
+        if self.eat(&TokenKind::Colon).is_none() {
+            return Vec::new();
+        }
+        self.skip_newlines();
+        let mut conformances = vec![self.parse_type_expr()];
+        loop {
+            if let Some(ampersand) = self.eat(&TokenKind::Ampersand) {
+                self.error(
+                    "use a comma-separated conformance list (`&` only composes bounds, like `<T: Eq & Hash>`)"
+                        .to_string(),
+                    ampersand.span,
+                );
+            } else if self.eat(&TokenKind::Comma).is_none() {
+                break;
+            }
+            self.skip_newlines();
+            conformances.push(self.parse_type_expr());
+        }
+        conformances
+    }
+
     pub(crate) fn parse_optional_type_params(&mut self) -> Vec<TypeParam> {
         if self.eat(&TokenKind::Lt).is_none() {
             return Vec::new();

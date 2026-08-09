@@ -1,9 +1,6 @@
 alias Process.Step
 alias Process.StopReason
 
-struct App
-end
-
 enum AppMsg
   Noop
 end
@@ -17,7 +14,7 @@ fn describe(n: Int) -> String
   end
 end
 
-impl Process<App, AppMsg, String> for App
+struct App: Process<App, AppMsg, String>
   fn start(config: App) -> Result<Self, StopReason>
     IO.puts(describe(0))
     IO.puts("before exit")

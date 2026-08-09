@@ -83,7 +83,7 @@ struct NewTest
       Result.Ok(_) -> ()
     end
 
-    match check_marker(app, "impl Process<(), (), ()> for App", "src/app.koja")
+    match check_marker(app, "struct App: Process<(), (), ()>", "src/app.koja")
       Result.Err(message) -> return Result.Err(message)
       Result.Ok(_) -> ()
     end

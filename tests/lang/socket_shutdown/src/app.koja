@@ -1,15 +1,12 @@
 alias Net.TCPSocket
 
-struct App
-end
-
 # Regression for the worker-migration TLS bug: a process that suspends in
 # socket I/O (`connect` on Linux returns EINPROGRESS and parks in the
 # reactor) can resume on a different worker thread, and the runtime must
 # not yield through the old worker's scheduler stack afterwards. The
 # harness runs this binary repeatedly and asserts a clean exit.
 
-impl Process<(), (), ()> for App
+struct App: Process<(), (), ()>
   fn start(config: ()) -> Result<Self, Process.StopReason>
     Result.Ok(App{})
   end

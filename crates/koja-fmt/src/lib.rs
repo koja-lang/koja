@@ -477,6 +477,57 @@ mod tests {
     }
 
     #[test]
+    fn conformance_header_short_is_canonical() {
+        assert_unchanged(
+            "
+            struct Point: Display, Hash
+              x: Int
+
+              fn display(self) -> String
+                \"point\"
+              end
+            end
+        ",
+        );
+    }
+
+    #[test]
+    fn enum_conformance_header_is_canonical() {
+        assert_unchanged(
+            "
+            enum Color: Display
+              Red
+              Green
+
+              fn display(self) -> String
+                \"color\"
+              end
+            end
+        ",
+        );
+    }
+
+    #[test]
+    fn conformance_header_long_wraps_after_colon() {
+        let wrapped = "
+            struct Server<T>:
+              Process<Config<T>, Msg<T>, Reply<T>>, Serialization, Comparable, Debug
+
+              available: List<T>
+            end
+        ";
+        assert_fmt(
+            "
+            struct Server<T>: Process<Config<T>, Msg<T>, Reply<T>>, Serialization, Comparable, Debug
+              available: List<T>
+            end
+        ",
+            wrapped,
+        );
+        assert_unchanged(wrapped);
+    }
+
+    #[test]
     fn stacked_annotations_on_function() {
         assert_fmt(
             "

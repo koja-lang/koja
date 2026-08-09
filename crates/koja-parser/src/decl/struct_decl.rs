@@ -26,6 +26,7 @@ impl Parser {
 
         let path = self.parse_decl_path();
         let type_params = self.parse_optional_type_params();
+        let conformances = self.parse_optional_conformances();
 
         self.skip_newlines();
         let mut fields = Vec::new();
@@ -54,6 +55,7 @@ impl Parser {
             visibility,
             path,
             type_params,
+            conformances,
             fields,
             functions,
             nested,

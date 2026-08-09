@@ -7,11 +7,9 @@ overridden `run` skips the receive loop entirely -- it dispatches the
 command, prints the result, and returns a `StopReason` whose
 `ExitStatus` becomes the process exit code (0 on success, 1 on error).
 """
-struct App
+struct App: Process<List<String>, (), String>
   args: List<String>
-end
 
-impl Process<List<String>, (), String> for App
   fn start(config: List<String>) -> Self ! StopReason
     App{args: config}
   end

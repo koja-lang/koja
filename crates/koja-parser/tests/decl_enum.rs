@@ -40,6 +40,22 @@ fn enum_defaults_to_public_visibility() {
 }
 
 #[test]
+fn enum_conformance_header() {
+    let e = first_enum(
+        "
+        enum Direction: Display, Hash
+          North
+          South
+        end
+        ",
+    );
+    assert_eq!(e.conformances.len(), 2);
+    assert!(matches!(&e.conformances[0], TypeExpr::Named { path, .. } if path == &["Display"]));
+    assert!(matches!(&e.conformances[1], TypeExpr::Named { path, .. } if path == &["Hash"]));
+    assert_eq!(e.variants.len(), 2);
+}
+
+#[test]
 fn unit_variants_only() {
     let e = first_enum(
         "

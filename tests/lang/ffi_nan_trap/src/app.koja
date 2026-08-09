@@ -9,10 +9,7 @@ struct FFI
   fn nan_c -> Float64
 end
 
-struct App
-end
-
-impl Process<(), (), ()> for App
+struct App: Process<(), (), ()>
   fn start(config: ()) -> Result<Self, StopReason>
     Result.Ok(App{})
   end

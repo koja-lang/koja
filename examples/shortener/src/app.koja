@@ -36,11 +36,9 @@ spawns a `Net.TCPServer` acceptor that delivers connected sockets as
 `Worker` process, so requests are handled concurrently and the entry
 process never blocks on IO.
 """
-struct App
+struct App: Process<List<String>, TCPEvent, String>
   pool: Pool<Connection>
-end
 
-impl Process<List<String>, TCPEvent, String> for App
   fn start(config: List<String>) -> Self ! StopReason
     settings = Config.load()
     db_config = DbConfig.new(

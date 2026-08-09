@@ -202,7 +202,45 @@ pub(crate) fn lift_signatures(
             }
         }
     }
-    // Pass 2: impl + extend blocks. Mutable so impl synthesis can
+    // Pass 2a: conformance headers (`struct T: P`). Runs before impl
+    // blocks so the header records each conformance first and a
+    // duplicating `impl P for T` gets the blame. Mutable so default
+    // methods can synthesize into the type body.
+    for pkg in packages.iter_mut() {
+        let package = pkg.package.clone();
+        for file in &mut pkg.files {
+            let aliases = collect_file_aliases(file);
+            let mut scope = LiftScope {
+                aliases: &aliases,
+                package: &package,
+                registry,
+            };
+            for item in &mut file.items {
+                match item {
+                    Item::Enum(decl) => impls::lift_header_conformances(
+                        "enum",
+                        &decl.path,
+                        &decl.conformances,
+                        &mut decl.functions,
+                        &bodies,
+                        &mut scope,
+                        diagnostics,
+                    ),
+                    Item::Struct(decl) => impls::lift_header_conformances(
+                        "struct",
+                        &decl.path,
+                        &decl.conformances,
+                        &mut decl.functions,
+                        &bodies,
+                        &mut scope,
+                        diagnostics,
+                    ),
+                    _ => {}
+                }
+            }
+        }
+    }
+    // Pass 2b: impl + extend blocks. Mutable so impl synthesis can
     // push members.
     for pkg in packages.iter_mut() {
         let package = pkg.package.clone();

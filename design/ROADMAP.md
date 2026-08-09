@@ -81,7 +81,7 @@ declares its own builtin types, and adds runtime observability.
 - **[DONE]** Remove `Pair<A, B>` after its 0.16 deprecation period. The
   changelog covers migration to anonymous tuple construction, destructuring,
   and patterns.
-- Inline protocol conformance on type declarations:
+- **[DONE]** Inline protocol conformance on type declarations:
   `struct MyApp: Process<C, M, R>` takes a comma-separated protocol list and
   desugars to the equivalent `impl` blocks. Enums take the same syntax. The
   main motivation is making application entry types read less awkwardly.

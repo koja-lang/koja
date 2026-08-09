@@ -164,6 +164,11 @@ pub(crate) fn find_symbol_at(
                         name: s.name().to_string(),
                     });
                 }
+                for conformance in &s.conformances {
+                    if let Some(info) = find_in_type_expr(conformance, line, col, ctx) {
+                        return Some(info);
+                    }
+                }
                 for field in &s.fields {
                     if let Some(info) = find_in_type_expr(&field.type_expr, line, col, ctx) {
                         return Some(info);
@@ -181,6 +186,11 @@ pub(crate) fn find_symbol_at(
                     return Some(SymbolInfo::Enum {
                         name: e.name().to_string(),
                     });
+                }
+                for conformance in &e.conformances {
+                    if let Some(info) = find_in_type_expr(conformance, line, col, ctx) {
+                        return Some(info);
+                    }
                 }
                 for variant in &e.variants {
                     if let EnumVariantData::Struct(fields) = &variant.data {
@@ -439,6 +449,20 @@ mod tests {
         result.ast
     }
 
+    fn test_file(checked: &CheckedProgram) -> &File {
+        let active_path = PathBuf::from("test.koja");
+        checked
+            .packages
+            .iter()
+            .find(|p| p.package == PACKAGE)
+            .and_then(|pkg| {
+                pkg.files
+                    .iter()
+                    .find(|f| f.path.as_deref() == Some(active_path.as_path()))
+            })
+            .expect("active file")
+    }
+
     /// Derived `Debug` / `Equality` impls reuse the declaring type's
     /// span on every node, so cursor positions that hit no real symbol
     /// (keywords, whitespace) used to fall into them and hover as
@@ -454,17 +478,7 @@ mod tests {
             end
             "#,
         );
-        let active_path = PathBuf::from("test.koja");
-        let file = checked
-            .packages
-            .iter()
-            .find(|p| p.package == PACKAGE)
-            .and_then(|pkg| {
-                pkg.files
-                    .iter()
-                    .find(|f| f.path.as_deref() == Some(active_path.as_path()))
-            })
-            .expect("active file");
+        let file = test_file(&checked);
         let locals = LocalIndex::default();
         let ctx = LookupCtx {
             registry: &checked.registry,
@@ -477,6 +491,47 @@ mod tests {
         assert!(find_symbol_at(file, 3, 3, &ctx).is_none());
         let info = find_symbol_at(file, 3, 5, &ctx).expect("symbol on Option");
         assert!(matches!(info, SymbolInfo::Enum { ref name } if name == "Option"));
+    }
+
+    #[test]
+    fn header_conformance_resolves_to_protocol() {
+        let checked = check(
+            r#"
+            protocol Marker
+              fn tag(self) -> String
+            end
+
+            struct Point: Marker
+              x: Int
+
+              fn tag(self) -> String
+                "point"
+              end
+            end
+
+            enum Flag: Marker
+              On
+              Off
+
+              fn tag(self) -> String
+                "flag"
+              end
+            end
+            "#,
+        );
+        let file = test_file(&checked);
+        let locals = LocalIndex::default();
+        let ctx = LookupCtx {
+            registry: &checked.registry,
+            package: PACKAGE,
+            locals: &locals,
+        };
+        // `Marker` in `struct Point: Marker` (5:15) and
+        // `enum Flag: Marker` (13:12).
+        for (line, col) in [(5, 15), (13, 12)] {
+            let info = find_symbol_at(file, line, col, &ctx).expect("symbol on header entry");
+            assert!(matches!(info, SymbolInfo::Protocol { ref name } if name == "Marker"));
+        }
     }
 
     #[test]

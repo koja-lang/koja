@@ -63,14 +63,20 @@ decl_path = TYPE_IDENT , { "." , TYPE_IDENT } ;
 struct_member = struct_field | function_decl | struct_decl | enum_decl ;
 
 struct_decl = { annotation } , [ "priv" ] , "struct" , decl_path , [ type_params ] ,
+              [ ":" , conformance_list ] ,
               { struct_member } ,
               "end" ;
+
+(* Conformance header: the listed protocols are satisfied by the
+   type body's functions. *)
+conformance_list = type_expr , { "," , type_expr } ;
 
 struct_field = IDENT , ":" , type_expr , [ "=" , expr ] ;
 
 enum_member = enum_variant | function_decl | struct_decl | enum_decl ;
 
 enum_decl = { annotation } , [ "priv" ] , "enum" , decl_path , [ type_params ] ,
+            [ ":" , conformance_list ] ,
             { enum_member } ,
             "end" ;
 

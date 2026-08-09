@@ -222,6 +222,64 @@ fn struct_with_top_level_annotation() {
     assert_eq!(s.annotations[0].name, "doc");
 }
 
+#[test]
+fn struct_conformance_header_single() {
+    let s = first_struct(
+        "
+        struct Point: Display
+          x: Int
+        end
+        ",
+    );
+    assert_eq!(s.conformances.len(), 1);
+    assert!(matches!(&s.conformances[0], TypeExpr::Named { path, .. } if path == &["Display"]));
+    assert_eq!(s.fields.len(), 1);
+}
+
+#[test]
+fn struct_conformance_header_list_with_generic_args() {
+    let s = first_struct(
+        "
+        struct Server<T>: Process<Config, Msg<T>, Reply>, Debug
+          available: List<T>
+        end
+        ",
+    );
+    assert_eq!(s.conformances.len(), 2);
+    assert!(matches!(
+        &s.conformances[0],
+        TypeExpr::Generic { path, args, .. } if path == &["Process"] && args.len() == 3
+    ));
+    assert!(matches!(&s.conformances[1], TypeExpr::Named { path, .. } if path == &["Debug"]));
+}
+
+#[test]
+fn struct_conformance_header_wraps_after_colon() {
+    let s = first_struct(
+        "
+        struct Server:
+          Process<Config, Msg, Reply>, Debug
+
+          available: List<Int>
+        end
+        ",
+    );
+    assert_eq!(s.conformances.len(), 2);
+    assert_eq!(s.fields.len(), 1);
+}
+
+#[test]
+fn struct_conformance_header_rejects_ampersand() {
+    parse_failing_with(
+        "
+        struct Point: Display & Hash
+          x: Int
+        end
+        ",
+        &["use a comma-separated conformance list"],
+    );
+}
+
 fn nested_struct(owner: &StructDecl, index: usize) -> &StructDecl {
     match &owner.nested[index] {
         Item::Struct(s) => s,
