@@ -256,16 +256,25 @@ fn find_in_inline_functions(
 /// Searches a file's items for the `@doc` annotation on the item
 /// named `name`. Handles three families of names:
 ///
-/// * Top-level declarations (`fn`, `struct`, `enum`, `const`,
-///   `protocol`, `type`).
-/// * Inline methods on `struct` / `enum` declarations: matches both
-///   the bare name (`puts`) and the mangled `Type_method` form.
+/// * Top-level declarations (`fn`, `builtin`, `struct`, `enum`,
+///   `const`, `protocol`, `type`).
+/// * Inline methods on `builtin` / `struct` / `enum` declarations:
+///   matches both the bare name (`puts`) and the mangled
+///   `Type_method` form.
 /// * Methods inside `impl` blocks (same dual form) and default
 ///   methods on `protocol` declarations.
 pub(crate) fn find_doc_for(file: &File, name: &str) -> Option<String> {
     for item in &file.items {
         match item {
             Item::Alias(_) => {}
+            Item::Builtin(b) => {
+                if b.name() == name {
+                    return span::annotation_doc(&b.annotations);
+                }
+                if let Some(doc) = doc_in_methods(&b.functions, b.name(), name) {
+                    return Some(doc);
+                }
+            }
             Item::Function(f) if f.name == name => {
                 return span::annotation_doc(&f.annotations);
             }
@@ -506,6 +515,34 @@ mod tests {
             find_doc_for(&file, "Greeter_hello")
                 .unwrap()
                 .contains("Says hello.")
+        );
+    }
+
+    #[test]
+    fn finds_doc_on_builtin_and_inline_builtin_method() {
+        let file = parse_source(
+            r#"
+            @doc """
+            A UTF-8 string.
+            """
+            builtin String
+              @doc """
+              Number of codepoints.
+              """
+              fn length(self) -> Int
+              end
+            end
+            "#,
+        );
+        assert!(
+            find_doc_for(&file, "String")
+                .unwrap()
+                .contains("A UTF-8 string.")
+        );
+        assert!(
+            find_doc_for(&file, "String_length")
+                .unwrap()
+                .contains("Number of codepoints.")
         );
     }
 
