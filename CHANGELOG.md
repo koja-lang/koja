@@ -16,6 +16,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Public constants are now readable across package boundaries with `Pkg.NAME`.
 - Public functions in other packages now work as first-class values with `Pkg.helper`, matching the bare-name form inside a package.
 - Standard library constants such as `STDOUT` now resolve by bare name, like `Global` types and functions.
+- Struct fields and enum struct-variant fields can declare default values (`port: Int = 5432`), which fill in at constructions that omit the field, including `Option.None` and `[]` on generic fields.
 
 ### Changed
 
@@ -36,6 +37,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Closure calls now compile with the callee's declared parameter types, removing a latent miscompile risk for `Float32` and struct arguments.
 - The compiler now verifies every emitted module and reports an internal error instead of producing a corrupt binary.
 - A process that overflows its stack now dies with a `** (stack overflow)` diagnostic instead of a bare crash.
+- `koja run` temp binaries now live under one `koja-run` directory in the system temp dir, and stale leftovers from interrupted runs sweep automatically.
 
 ## [0.16.0] - 2026-08-03
 

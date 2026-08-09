@@ -42,6 +42,7 @@ mod ctx;
 mod enums;
 mod error_channel;
 mod expr;
+mod field_defaults;
 mod idents;
 mod inference;
 pub(crate) mod literals;

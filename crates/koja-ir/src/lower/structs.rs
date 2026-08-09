@@ -15,9 +15,7 @@
 
 use std::collections::BTreeMap;
 
-use koja_ast::ast::{
-    AnnotationKind, Diagnostic, Expr, FieldInit, StructDecl, StructField, is_intrinsic,
-};
+use koja_ast::ast::{AnnotationKind, Diagnostic, Expr, FieldInit, StructDecl, is_intrinsic};
 use koja_ast::identifier::{Identifier, Resolution, ResolvedType};
 use koja_typecheck::{
     GlobalKind, GlobalRegistry, RegistryEntry, ResolvedStructField, StructDefinition,
@@ -288,28 +286,5 @@ fn has_feature_gap(decl: &StructDecl, diagnostics: &mut Vec<Diagnostic>) -> bool
         ));
         gapped = true;
     }
-    for field in &decl.fields {
-        if field_has_feature_gap(decl.name(), field, diagnostics) {
-            gapped = true;
-        }
-    }
     gapped
-}
-
-fn field_has_feature_gap(
-    struct_name: &str,
-    field: &StructField,
-    diagnostics: &mut Vec<Diagnostic>,
-) -> bool {
-    if field.default.is_some() {
-        diagnostics.push(Diagnostic::error(
-            format!(
-                "IR does not yet lower default field values (on `{struct_name}.{}`)",
-                field.name,
-            ),
-            field.span,
-        ));
-        return true;
-    }
-    false
 }

@@ -34,7 +34,7 @@ use koja_ast::coercion::{Coercion, LiteralCoercion, NumericLiteralWidth};
 use koja_ast::identifier::{AnonymousKind, ResolvedType};
 use koja_ast::span::Span;
 
-use super::types::{is_primitive, peel_alias, types_equivalent};
+use super::types::{display_resolution, is_primitive, peel_alias, types_equivalent};
 use crate::registry::GlobalRegistry;
 
 /// Reject a float literal whose decimal text rounds to infinity
@@ -106,6 +106,7 @@ pub(crate) enum Compatible {
 /// [`check_compatible_stamping`] so each check site renders its own
 /// site-specific diagnostic while the accepting arms (and their
 /// AST stamping) stay shared.
+#[derive(Debug)]
 pub(crate) enum Mismatch {
     /// Numeric literal whose value does not fit the expected range.
     OutOfRange {
@@ -120,6 +121,34 @@ enum TupleCompatibility {
     Compatible,
     Mismatch(Mismatch),
     NotTupleLiteral,
+}
+
+/// Render the shared type-mismatch diagnostic for a value flowing
+/// into an expected slot. `subject` names the site, e.g.
+/// "field `x` of `Pkg.Type`" or "argument 1 of `Pkg.Enum.Variant`".
+pub(crate) fn mismatch_message(
+    subject: &str,
+    mismatch: &Mismatch,
+    expected: &ResolvedType,
+    actual: &ResolvedType,
+    registry: &GlobalRegistry,
+) -> String {
+    match mismatch {
+        Mismatch::OutOfRange {
+            rendered_value,
+            width,
+        } => format!(
+            "{subject} expects `{}`: value `{rendered_value}` does not fit in `{}` (range {})",
+            display_resolution(expected, registry),
+            width.label(),
+            width.range_label(),
+        ),
+        Mismatch::Incompatible => format!(
+            "{subject} expects `{}`, got `{}`",
+            display_resolution(expected, registry),
+            display_resolution(actual, registry),
+        ),
+    }
 }
 
 /// Run [`check_compatible`] for `expr` (whose resolved type is

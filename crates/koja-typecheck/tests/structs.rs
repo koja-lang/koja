@@ -2,8 +2,8 @@
 //! registration, signature lifting, struct-literal construction,
 //! field-access resolution, and static method dispatch. Includes
 //! per-feature gap diagnostics (generics, instance methods,
-//! annotations, default field values, trait impls, type aliases in
-//! impl blocks, impl on unknown / non-struct types) plus the
+//! annotations, trait impls, type aliases in impl blocks, impl on
+//! unknown / non-struct types) plus the
 //! per-construction-site validation diagnostics (unknown / extra /
 //! missing / duplicate / wrong-typed field, non-struct receiver).
 //!
@@ -209,18 +209,6 @@ fn annotated_struct_diagnoses_feature_gap() {
         ";
 
     assert_script_fails_with(source, &["annotations on struct items"]);
-}
-
-#[test]
-fn default_field_value_diagnoses_feature_gap() {
-    let source = "
-        struct Point
-          x: Int = 0
-          y: Int
-        end
-        ";
-
-    assert_script_fails_with(source, &["default field values"]);
 }
 
 #[test]

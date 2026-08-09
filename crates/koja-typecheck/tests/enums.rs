@@ -2,7 +2,7 @@
 //! registration + lift, the three variant shapes (Unit, Tuple,
 //! Struct) at construction time, static method dispatch through an
 //! enum receiver, plus the per-feature gap diagnostics (generics,
-//! annotations, default field values on struct variants, empty
+//! annotations, empty
 //! Tuple `Foo()` / Struct `Foo {}` payloads, impl block on an enum
 //! is admitted) and per-construction-site validation diagnostics
 //! (unknown enum, unknown variant, shape mismatch, arity mismatch
@@ -356,17 +356,6 @@ fn annotated_enum_diagnoses_feature_gap() {
         ";
 
     assert_script_fails_with(source, &["annotations on enum items"]);
-}
-
-#[test]
-fn default_field_on_struct_variant_diagnoses_feature_gap() {
-    let source = "
-        enum Shape
-          Rect{w: Int = 1, h: Int}
-        end
-        ";
-
-    assert_script_fails_with(source, &["default field values"]);
 }
 
 // `Tag()` and `Tag {}` (empty tuple/struct variants) are rejected

@@ -545,6 +545,44 @@ config = Config{
 }
 ```
 
+#### Default Field Values
+
+A field can declare a default value. A construction that omits the field uses the default:
+
+```koja
+struct Config
+  host: String = "localhost"
+  port: Int = 5432
+  name: String
+end
+
+c = Config{name: "app"}   # host and port fill from the defaults
+Config{}                  # error: `name` has no default
+```
+
+Default values are limited to side-effect-free expressions: literals (no interpolation), negated numerics, unit enum variants, binary literals, and struct, list, map, or set literals of those. The compiler checks each default against the field type at the declaration. A default cannot use an `alias` shorthand. Write the qualified name.
+
+The default expression evaluates at each construction that omits the field. This makes generic defaults work: a `List<T>` field can default to `[]` and an `Option<T>` field to `Option.None`:
+
+```koja
+struct Stack<T>
+  items: List<T> = []
+  top: Option<T> = Option.None
+end
+
+s: Stack<Int> = Stack{}
+```
+
+Struct variants of enums take defaults the same way:
+
+```koja
+enum Shape
+  Rect{width: Int, height: Int = 2}
+end
+
+Shape.Rect{width: 4}   # height fills with 2
+```
+
 #### Field Access
 
 ```koja
@@ -679,6 +717,8 @@ end
 d = Direction.North
 s = Shape.Circle(5)
 ```
+
+Struct-variant fields can declare default values. See [Default Field Values](#default-field-values).
 
 Within a `match` arm on the same enum, the type prefix can be omitted for unit variants:
 

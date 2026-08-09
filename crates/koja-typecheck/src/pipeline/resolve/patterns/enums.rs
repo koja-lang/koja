@@ -232,6 +232,7 @@ fn resolve_enum_struct_metadata(
     let declared = declared
         .iter()
         .map(|field| ResolvedStructField {
+            default: field.default.clone(),
             name: field.name.clone(),
             ty: substitute(&field.ty, &subst),
         })

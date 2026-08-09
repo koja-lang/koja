@@ -16,9 +16,7 @@
 //! registry, then hands off to the per-shape helper based on the
 //! variant's declared payload.
 
-use koja_ast::ast::{
-    AnnotationKind, Diagnostic, EnumConstructionData, EnumDecl, EnumVariant, Expr, FieldInit,
-};
+use koja_ast::ast::{AnnotationKind, Diagnostic, EnumConstructionData, EnumDecl, Expr, FieldInit};
 use koja_ast::identifier::{Identifier, Resolution, ResolvedType};
 use koja_typecheck::{
     EnumDefinition, GlobalKind, GlobalRegistry, RegistryEntry, ResolvedVariantData,
@@ -328,38 +326,5 @@ fn has_feature_gap(decl: &EnumDecl, diagnostics: &mut Vec<Diagnostic>) -> bool {
         ));
         gapped = true;
     }
-    for variant in &decl.variants {
-        if variant_has_feature_gap(decl.name(), variant, diagnostics) {
-            gapped = true;
-        }
-    }
     gapped
-}
-
-fn variant_has_feature_gap(
-    enum_name: &str,
-    variant: &EnumVariant,
-    diagnostics: &mut Vec<Diagnostic>,
-) -> bool {
-    use koja_ast::ast::EnumVariantData;
-    match &variant.data {
-        EnumVariantData::Struct(fields) => {
-            let mut gapped = false;
-            for field in fields {
-                if field.default.is_some() {
-                    diagnostics.push(Diagnostic::error(
-                        format!(
-                            "IR does not yet lower default field values on struct \
-                             variants (on `{enum_name}.{}.{}`)",
-                            variant.name, field.name,
-                        ),
-                        field.span,
-                    ));
-                    gapped = true;
-                }
-            }
-            gapped
-        }
-        EnumVariantData::Tuple(_) | EnumVariantData::Unit => false,
-    }
 }

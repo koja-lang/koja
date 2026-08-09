@@ -17,9 +17,10 @@ use crate::pipeline::unify::{Conflict, Substitution, substitute};
 use crate::pipeline::visibility::check_reference_visibility;
 use crate::registry::{GlobalKind, GlobalRegistry, ResolvedStructField};
 
-use super::coercion::{Mismatch, check_compatible_stamping};
+use super::coercion::{check_compatible_stamping, mismatch_message};
 use super::ctx::{Callee, Resolver};
 use super::expr::{resolve_expr, resolve_expr_with_expected};
+use super::field_defaults::synthesize_default_init;
 use super::inference::{PhantomContext, fill_from_expected, finalize_inference, unify_pairs};
 use super::types::{display_resolution, lookup_type, names_struct, peel_alias};
 
@@ -68,7 +69,7 @@ fn joined(type_path: &[String], variant: &str) -> Vec<String> {
 /// mismatches so the surrounding expression stays stable.
 pub(super) fn resolve_struct_construction(
     type_path: &[String],
-    fields: &mut [FieldInit],
+    fields: &mut Vec<FieldInit>,
     expected: Option<&ResolvedType>,
     span: Span,
     resolver: &mut Resolver<'_>,
@@ -126,6 +127,7 @@ pub(super) fn resolve_struct_construction(
         walk_field_inits(&definition.fields, fields, resolver, diagnostics);
         validate_named_fields(
             &owner,
+            struct_id,
             &definition.fields,
             fields,
             span,
@@ -155,6 +157,7 @@ pub(super) fn resolve_struct_construction(
     let substituted_fields = substitute_declared_fields(&definition.fields, &subst);
     validate_named_fields(
         &owner,
+        struct_id,
         &substituted_fields,
         fields,
         span,
@@ -214,6 +217,7 @@ fn substitute_declared_fields(
     declared
         .iter()
         .map(|field| ResolvedStructField {
+            default: field.default.clone(),
             name: field.name.clone(),
             ty: substitute(&field.ty, subst),
         })
@@ -320,14 +324,18 @@ fn emit_conflict(
 ///
 /// `owner_label` is the prefix used in diagnostics
 /// (`MyApp.MyStruct` for structs, `MyApp.MyEnum.MyVariant` for
-/// enum struct variants). Each `FieldInit.value` must already have
-/// `resolution` populated (either resolved or `Unresolved`). Inits
-/// with unresolved values skip the type-equality check (their own
-/// upstream diagnostic already fired).
+/// enum struct variants) and `owner_id` is the declaring type's
+/// registry id (anchor for default-value fill). Each
+/// `FieldInit.value` must already have `resolution` populated
+/// (either resolved or `Unresolved`). Inits with unresolved values
+/// skip the type-equality check (their own upstream diagnostic
+/// already fired). Omitted fields fill from their declared default
+/// when one exists, so only defaultless omissions diagnose.
 pub(super) fn validate_named_fields(
     owner_label: &str,
+    owner_id: GlobalRegistryId,
     declared: &[ResolvedStructField],
-    fields: &mut [FieldInit],
+    fields: &mut Vec<FieldInit>,
     span: Span,
     resolver: &mut Resolver<'_>,
     diagnostics: &mut Vec<Diagnostic>,
@@ -357,52 +365,42 @@ pub(super) fn validate_named_fields(
         if !actual.is_resolved() {
             continue;
         }
-        match check_compatible_stamping(
+        if let Some(mismatch) = check_compatible_stamping(
             &mut field.value,
             &actual,
             &declared_field.ty,
             resolver.registry,
         ) {
-            None => {}
-            Some(Mismatch::OutOfRange {
-                rendered_value,
-                width,
-            }) => {
-                diagnostics.push(Diagnostic::error(
-                    format!(
-                        "field `{}` of `{owner_label}` expects `{}`: value \
-                         `{rendered_value}` does not fit in `{}` (range {})",
-                        field.name,
-                        display_resolution(&declared_field.ty, resolver.registry),
-                        width.label(),
-                        width.range_label(),
-                    ),
-                    field.span,
-                ));
-            }
-            Some(Mismatch::Incompatible) => {
-                diagnostics.push(Diagnostic::error(
-                    format!(
-                        "field `{}` of `{owner_label}` expects `{}`, got `{}`",
-                        field.name,
-                        display_resolution(&declared_field.ty, resolver.registry),
-                        display_resolution(&actual, resolver.registry),
-                    ),
-                    field.span,
-                ));
-            }
+            let subject = format!("field `{}` of `{owner_label}`", field.name);
+            diagnostics.push(Diagnostic::error(
+                mismatch_message(
+                    &subject,
+                    &mismatch,
+                    &declared_field.ty,
+                    &actual,
+                    resolver.registry,
+                ),
+                field.span,
+            ));
         }
     }
     for (index, present) in seen.iter().enumerate() {
-        if !*present {
-            diagnostics.push(Diagnostic::error(
-                format!(
-                    "missing field `{}` in literal for `{owner_label}`",
-                    declared[index].name,
-                ),
-                span,
-            ));
+        if *present {
+            continue;
         }
+        if let Some(init) =
+            synthesize_default_init(&declared[index], owner_id, span, resolver.registry)
+        {
+            fields.push(init);
+            continue;
+        }
+        diagnostics.push(Diagnostic::error(
+            format!(
+                "missing field `{}` in literal for `{owner_label}`",
+                declared[index].name,
+            ),
+            span,
+        ));
     }
 }
 

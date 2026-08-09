@@ -26,6 +26,7 @@ use crate::registry::GlobalRegistry;
 
 mod constants;
 mod enums;
+mod field_defaults;
 mod functions;
 mod impls;
 mod protocols;

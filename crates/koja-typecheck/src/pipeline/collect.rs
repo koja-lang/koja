@@ -24,9 +24,9 @@
 //! enforce path-len / target-exists / no-shadow rules.
 
 use koja_ast::ast::{
-    Annotation, AnnotationKind, Constant, Diagnostic, EnumDecl, EnumVariant, EnumVariantData,
-    ExtendBlock, File, Function, ImplBlock, ImplMember, Item, Param, ProtocolDecl, ProtocolMethod,
-    StructDecl, StructField, TypeAlias, TypeExpr, TypeParam, Visibility, is_intrinsic,
+    Annotation, AnnotationKind, Constant, Diagnostic, EnumDecl, ExtendBlock, File, Function,
+    ImplBlock, ImplMember, Item, Param, ProtocolDecl, ProtocolMethod, StructDecl, TypeAlias,
+    TypeExpr, TypeParam, Visibility, is_intrinsic,
 };
 use koja_ast::identifier::{GlobalRegistryId, Identifier};
 use koja_ast::labels::type_expr_span;
@@ -957,18 +957,7 @@ fn type_param_names(type_params: &[TypeParam]) -> Vec<String> {
 /// definition in the presence of these gaps so the surrounding
 /// program shape stays accurate.
 fn diagnose_struct_feature_gaps(decl: &StructDecl, diagnostics: &mut Vec<Diagnostic>) {
-    diagnose_struct_annotations(decl.name(), &decl.annotations, diagnostics);
-    for field in &decl.fields {
-        diagnose_struct_field_gaps(decl.name(), field, diagnostics);
-    }
-}
-
-fn diagnose_struct_annotations(
-    struct_name: &str,
-    annotations: &[Annotation],
-    diagnostics: &mut Vec<Diagnostic>,
-) {
-    for annotation in annotations {
+    for annotation in &decl.annotations {
         // `@intrinsic` marks a builtin type declaration.
         // [`register_intrinsic_struct`] owns its validation.
         if has_dedicated_validation(annotation)
@@ -979,27 +968,11 @@ fn diagnose_struct_annotations(
         diagnostics.push(Diagnostic::error(
             format!(
                 "typecheck does not yet support annotations on struct items \
-                 (`@{}` on `{struct_name}`)",
+                 (`@{}` on `{}`)",
                 annotation.name,
+                decl.name(),
             ),
             annotation.span,
-        ));
-    }
-}
-
-fn diagnose_struct_field_gaps(
-    struct_name: &str,
-    field: &StructField,
-    diagnostics: &mut Vec<Diagnostic>,
-) {
-    if field.default.is_some() {
-        diagnostics.push(Diagnostic::error(
-            format!(
-                "typecheck does not yet support default field values \
-                 (on `{struct_name}.{}`)",
-                field.name,
-            ),
-            field.span,
         ));
     }
 }
@@ -1022,29 +995,6 @@ fn diagnose_enum_feature_gaps(decl: &EnumDecl, diagnostics: &mut Vec<Diagnostic>
             ),
             annotation.span,
         ));
-    }
-    for variant in &decl.variants {
-        diagnose_enum_variant_gaps(decl.name(), variant, diagnostics);
-    }
-}
-
-/// Diagnose feature gaps on a single enum variant. Reuses
-/// [`diagnose_struct_field_gaps`] for the per-field walk on struct
-/// variants so the diagnostic wording stays identical between
-/// `struct Foo { ... }` and `enum E { Foo { ... } }`.
-fn diagnose_enum_variant_gaps(
-    enum_name: &str,
-    variant: &EnumVariant,
-    diagnostics: &mut Vec<Diagnostic>,
-) {
-    match &variant.data {
-        EnumVariantData::Struct(fields) => {
-            let owner = format!("{enum_name}.{}", variant.name);
-            for field in fields {
-                diagnose_struct_field_gaps(&owner, field, diagnostics);
-            }
-        }
-        EnumVariantData::Tuple(_) | EnumVariantData::Unit => {}
     }
 }
 

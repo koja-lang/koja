@@ -579,6 +579,12 @@ button:focus-visible {
   content: "— ";
 }
 
+.field-default {
+  font-family: var(--font-mono);
+  font-size: 0.88rem;
+  color: var(--ink-soft);
+}
+
 /* ---------- function details ---------- */
 
 .detail {

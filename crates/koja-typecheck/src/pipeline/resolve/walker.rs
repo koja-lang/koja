@@ -35,6 +35,7 @@ use super::error_channel::{
     resolve_fail_statement, return_site_expected,
 };
 use super::expr::resolve_expr_with_expected;
+use super::field_defaults::{resolve_enum_defaults, resolve_struct_defaults};
 use super::return_type::{check_explicit_return, check_return_type};
 use super::statements::{resolve_assignment, resolve_compound_assignment, resolve_destructure};
 
@@ -57,6 +58,7 @@ pub(crate) fn resolve_file(
                 resolve_function(function, &identifier, None, None, &mut env, diagnostics);
             }
             Item::Struct(decl) => {
+                resolve_struct_defaults(decl, &env, diagnostics);
                 let enclosing_type_id = enclosing_type_id(env.package, &decl.path, env.registry);
                 for function in &mut decl.functions {
                     let identifier = Identifier::member(env.package, &decl.path, &function.name);
@@ -71,6 +73,7 @@ pub(crate) fn resolve_file(
                 }
             }
             Item::Enum(decl) => {
+                resolve_enum_defaults(decl, &env, diagnostics);
                 let enclosing_type_id = enclosing_type_id(env.package, &decl.path, env.registry);
                 for function in &mut decl.functions {
                     let identifier = Identifier::member(env.package, &decl.path, &function.name);

@@ -1,0 +1,42 @@
+struct Config
+  host: String = "localhost"
+  port: Int = 5432
+  name: String
+end
+
+c = Config{name: "app"}
+"#{c.host}:#{c.port}/#{c.name}".print()
+
+o = Config{host: "db", port: 1, name: "x"}
+"#{o.host}:#{o.port}".print()
+
+struct Stack<T>
+  items: List<T> = []
+  top: Option<T> = Option.None
+end
+
+s: Stack<Int> = Stack{}
+s.items.length().print()
+
+match s.top
+  Option.Some(v) -> "some #{v}".print()
+  Option.None -> "none".print()
+end
+
+enum Shape
+  Rect {
+    width: Int,
+    height: Int = 2,
+  }
+  Dot
+end
+
+fn area(shape: Shape) -> Int
+  match shape
+    Shape.Rect{width: w, height: h} -> w * h
+    Shape.Dot -> 0
+  end
+end
+
+area(Shape.Rect{width: 4}).print()
+area(Shape.Rect{width: 3, height: 5}).print()
