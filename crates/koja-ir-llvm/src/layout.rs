@@ -297,7 +297,7 @@ fn host_target_data() -> TargetData {
             &cpu,
             &features,
             OptimizationLevel::None,
-            RelocMode::Default,
+            RelocMode::PIC,
             CodeModel::Default,
         )
         .expect("LLVM emit: failed to create native target machine");

@@ -456,6 +456,40 @@ lang_test_dir!(lang_process_priority, "process_priority", project);
 lang_test_dir!(lang_process_argv, "process_argv", project, "hello", "world");
 lang_test_dir!(lang_receive_after, "receive_after", project);
 
+/// Linux binaries must be position-independent (ELF type `DYN`) so the
+/// loader can apply ASLR. Guards the `RelocMode::PIC` emission path.
+#[cfg(target_os = "linux")]
+#[test]
+fn lang_binary_is_position_independent() {
+    let dir = std::env::temp_dir().join(format!("koja-pie-test-{}", std::process::id()));
+    fs::create_dir_all(&dir).unwrap();
+    let script = dir.join("main.kojs");
+    fs::write(&script, "IO.puts(\"ok\")\n").unwrap();
+    let binary = dir.join("main");
+
+    let (_, stderr, code) = run_with_timeout(|cmd| {
+        cmd.arg("build").arg(&script).arg("-o").arg(&binary);
+    });
+    assert_eq!(code, 0, "koja build failed:\n{stderr}");
+
+    let readelf = Command::new("readelf")
+        .arg("-h")
+        .arg(&binary)
+        .output()
+        .expect("failed to run readelf");
+    let header = String::from_utf8_lossy(&readelf.stdout);
+    let elf_type = header
+        .lines()
+        .find(|line| line.trim_start().starts_with("Type:"))
+        .unwrap_or_else(|| panic!("readelf output missing Type line:\n{header}"));
+    assert!(
+        elf_type.contains("DYN"),
+        "binary is not position-independent: {elf_type}"
+    );
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
 /// Compile `ffi/ffi_helper.c` into `libffi_helper.a` inside `dir`
 /// and return the archive's path. Callers remove it when done.
 fn build_ffi_helper_lib(dir: &Path) -> PathBuf {

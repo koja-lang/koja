@@ -98,13 +98,6 @@ pub(crate) fn link(
         args.push("-L".to_string());
         args.push(path.to_string_lossy().to_string());
     }
-    // Modern Debian/Ubuntu default `cc` to PIE, which rejects the
-    // absolute (`R_X86_64_32`) relocations LLVM emits under
-    // `RelocMode::Default`. Until codegen is switched to
-    // `RelocMode::PIC`, ask the linker for a non-PIE binary on
-    // Linux.
-    #[cfg(target_os = "linux")]
-    args.push("-no-pie".to_string());
     // GNU ld resolves static archives in a single left-to-right
     // pass, so inter-archive references break when the archives
     // appear in the wrong order (`libssl.a` pulls EVP_HPKE_* /

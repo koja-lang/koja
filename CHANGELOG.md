@@ -24,6 +24,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `koja format` now always writes files in place like `mix format`, dropping the `--write` flag and the single-file stdout mode.
 - Compute-heavy code runs up to 40% faster on Apple Silicon, where preemption checks now cost a couple of register instructions instead of a thread-local access.
 - Building the compiler from source now requires LLVM 21 (up from LLVM 18).
+- Linux binaries are now position-independent, so deployments get ASLR.
 - `koja doc` pages now match the kojalang.org design, with a centered layout, a navigation rail grouped by kind, and an "on this page" column on large items.
 - Generated docs now syntax highlight function signatures and doc-comment code blocks in the website's code style.
 - Generated docs now bundle their fonts and no longer load from a CDN, so they render fully offline.
