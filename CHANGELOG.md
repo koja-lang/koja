@@ -5,28 +5,28 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.17.0] - 2026-08-09
 
 ### Added
 
-- `koja doc search <query>` looks up a symbol from the terminal, printing the full doc for an exact name and a candidate list for partial matches.
-- `koja doc` commands now work outside a project, documenting the standard library on its own.
-- `koja new` scaffolds an `AGENTS.md` that points coding agents at `koja doc search` and the language's core conventions.
-- Go to definition now works on standard library symbols, landing in real source files extracted under `~/.koja/stdlib/`.
+- Structs and enums can declare protocol conformances in their header (`struct App: Process<C, M, R>`), so an app entry no longer needs a separate `impl` block.
+- Struct fields and enum struct-variant fields can declare default values (`port: Int = 5432`), which fill in at constructions that omit the field, including `Option.None` and `[]` on generic fields.
 - Public constants are now readable across package boundaries with `Pkg.NAME`.
 - Public functions in other packages now work as first-class values with `Pkg.helper`, matching the bare-name form inside a package.
 - Standard library constants such as `STDOUT` now resolve by bare name, like `Global` types and functions.
-- Struct fields and enum struct-variant fields can declare default values (`port: Int = 5432`), which fill in at constructions that omit the field, including `Option.None` and `[]` on generic fields.
 - New `builtin` declaration kind and keyword for compiler-owned types, so `String`, `Int`, `List<T>`, and friends show up in docs, hovers, and search as `builtin` instead of masquerading as structs.
-- Structs and enums can declare protocol conformances in their header (`struct App: Process<C, M, R>`), so an app entry no longer needs a separate `impl` block.
+- `koja doc search <query>` looks up a symbol from the terminal, printing the full doc for an exact name and a candidate list for partial matches.
+- Go to definition now works on standard library symbols, landing in real source files extracted under `~/.koja/stdlib/`.
+- `koja doc` commands now work outside a project, documenting the standard library on its own.
+- `koja new` scaffolds an `AGENTS.md` that points coding agents at `koja doc search` and the language's core conventions.
 - The compiler warns when a type body has a function whose name is a near miss of an unimplemented default protocol method, catching typos like `pritn` for `print`.
 
 ### Changed
 
-- `koja format` now always writes files in place like `mix format`, dropping the `--write` flag and the single-file stdout mode.
 - Compute-heavy code runs up to 40% faster on Apple Silicon, where preemption checks now cost a couple of register instructions instead of a thread-local access.
-- Building the compiler from source now requires LLVM 21 (up from LLVM 18).
 - Linux binaries are now position-independent, so deployments get ASLR.
+- `koja format` now always writes files in place like `mix format`, dropping the `--write` flag and the single-file stdout mode.
+- Building the compiler from source now requires LLVM 21 (up from LLVM 18).
 - `koja doc` pages now match the kojalang.org design, with a centered layout, a navigation rail grouped by kind, and an "on this page" column on large items.
 - Generated docs now syntax highlight function signatures and doc-comment code blocks in the website's code style.
 - Generated docs now bundle their fonts and no longer load from a CDN, so they render fully offline.
@@ -37,14 +37,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Closure calls now compile with the callee's declared parameter types, removing a latent miscompile risk for `Float32` and struct arguments.
+- A process that overflows its stack now dies with a `** (stack overflow)` diagnostic instead of a bare crash.
+- The compiler now verifies every emitted module and reports an internal error instead of producing a corrupt binary.
 - Diagnostics from program-wide checks, such as a public signature that leaks a private type, now point at the offending file and line instead of printing `<unknown>`.
 - LSP: Editor diagnostics in multi-file projects now appear on the file that owns them instead of being dropped, and clear when an edit elsewhere fixes them.
 - LSP: Hovering a keyword or blank spot inside a type no longer shows a bogus `String` hover from the auto-derived `Debug` impl, and derived members no longer appear in the editor outline.
 - Generated docs now show the `! E` error channel on fallible function signatures.
 - Builtin types like `String` and `Int` now appear in generated docs and `koja doc search`, with their extension methods attached.
-- Closure calls now compile with the callee's declared parameter types, removing a latent miscompile risk for `Float32` and struct arguments.
-- The compiler now verifies every emitted module and reports an internal error instead of producing a corrupt binary.
-- A process that overflows its stack now dies with a `** (stack overflow)` diagnostic instead of a bare crash.
 - `koja run` temp binaries now live under one `koja-run` directory in the system temp dir, and stale leftovers from interrupted runs sweep automatically.
 
 ## [0.16.0] - 2026-08-03

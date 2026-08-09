@@ -61,8 +61,10 @@ ships. That is ecosystem work, not a release gate.
 
 ## 0.17.0
 
-The 0.17 release removes deprecated surface, cleans up how the compiler
-declares its own builtin types, and adds runtime observability.
+The 0.17 release removes deprecated surface, modernizes type declarations
+with conformance headers, struct field defaults, and the `builtin`
+declaration kind, and hardens Linux deployments with position-independent
+binaries.
 
 ### Language and tooling
 
@@ -72,12 +74,6 @@ declares its own builtin types, and adds runtime observability.
   projects (carried over from 0.16).
 - **[DONE]** Default values for struct and enum struct-variant fields,
   re-evaluated at each construction site.
-- Default values for function parameters, so optional arguments do not
-  require a separate options struct at every call site. A defaulted function
-  is callable at every arity its defaults allow. `&name/arity` references
-  pin one arity when a bare name is ambiguous. Separately declared functions
-  sharing a name across arities stay out of scope
-  ([MISC.md](MISC.md)).
 - **[DONE]** Remove `Pair<A, B>` after its 0.16 deprecation period. The
   changelog covers migration to anonymous tuple construction, destructuring,
   and patterns.
@@ -88,13 +84,28 @@ declares its own builtin types, and adds runtime observability.
 - **[DONE]** A `builtin` declaration kind for compiler-owned types. It
   replaces the `@intrinsic struct` workaround, the construction special
   cases, and the name-keyed IR shape match.
-- Add a `Runtime` observability API with global and per-process metrics,
-  including mailbox depth, and document the overload contract for long-running
-  services.
 - **[DONE]** Emit position-independent Linux binaries so deployments get
   ASLR.
 
-The rest of the 0.17 scope will be selected from evidence gathered while
+## 0.18.0
+
+The 0.18 release adds optional function arguments and runtime observability.
+
+### Language and tooling
+
+- Default values for function parameters, so optional arguments do not
+  require a separate options struct at every call site. A defaulted function
+  is callable at every arity its defaults allow. `&name/arity` references
+  pin one arity when a bare name is ambiguous. Separately declared functions
+  sharing a name across arities stay out of scope
+  ([MISC.md](MISC.md)). Struct field defaults (0.17) reduced the urgency by
+  making options structs cheap to declare and construct.
+- Add a `Runtime` observability API with global and per-process metrics,
+  including mailbox depth, and document the overload contract for long-running
+  services. Shape the API from the telemetry and structured logging package
+  work in the ecosystem-validation section, not speculatively.
+
+The rest of the 0.18 scope will be selected from evidence gathered while
 building real packages and applications. Later `0.x` releases will be added
 only when their scope is concrete.
 

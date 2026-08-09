@@ -2606,7 +2606,7 @@ The `koja.toml` file defines the project configuration:
 ```toml
 [project]
 entry = "App"
-koja = "0.16"
+koja = "0.17"
 name = "my_app"
 version = "0.1.0"
 ```
@@ -2619,7 +2619,7 @@ Fields:
 - `entry`: the type implementing `Process` that the program starts (required for `build`/`run`).
 - `src`: source directories (default `["src"]`).
 - `test`: test directories (default `["test"]`).
-- `koja`: minimum compiler version, e.g. `koja = "0.16.0"`. A bare version, no operators. An older compiler refuses the package (and any package depending on it) with an error naming both versions.
+- `koja`: minimum compiler version, e.g. `koja = "0.17.0"`. A bare version, no operators. An older compiler refuses the package (and any package depending on it) with an error naming both versions.
 
 A `[dependencies]` table declares path and git dependencies (see [Dependencies](#dependencies)), and a `[tasks]` table exports custom CLI tasks (see [Custom Tasks](#custom-tasks)).
 

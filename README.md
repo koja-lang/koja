@@ -112,11 +112,9 @@ enum CounterMsg
   Add(Int)
 end
 
-struct Counter
+struct Counter: Process<Int, CounterMsg, Int>
   value: Int
-end
 
-impl Process<Int, CounterMsg, Int> for Counter
   fn start(initial: Int) -> Result<Self, StopReason>
     Result.Ok(Counter{value: initial})
   end
