@@ -64,13 +64,15 @@ ships. That is ecosystem work, not a release gate.
 Remove `Pair<A, B>` after its 0.16 deprecation period. Migration guidance will
 cover tuple construction, destructuring, patterns, and public API changes.
 
-The following items carry over from 0.16.
+### Language and tooling
 
-- Anonymous records
-- **[DONE]** Make public constants referenceable across package boundaries, or
-  explicitly narrow the language contract before release.
+- **[DONE]** Make public constants and functions referenceable across package
+  boundaries (carried over from 0.16).
 - **[DONE]** Attribute LSP diagnostics to their originating file in multi-file
-  projects.
+  projects (carried over from 0.16).
+- **[DONE]** Default values for struct and enum struct-variant fields,
+  re-evaluated at each construction site.
+- Anonymous records
 - Add a `Runtime` observability API with global and per-process metrics,
   including mailbox depth, and document the overload contract for long-running
   services.
