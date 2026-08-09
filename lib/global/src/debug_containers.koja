@@ -1,13 +1,3 @@
-impl Debug for Pair<A, B>
-  @doc """
-  Renders the pair as `(first, second)`, with each side rendered
-  through its own `Debug.format`.
-  """
-  fn format(self) -> String
-    "(" <> self.first.format() <> ", " <> self.second.format() <> ")"
-  end
-end
-
 impl Debug for Option<T>
   @doc """
   Renders `Option.Some(v)` as `Some(<v.format()>)` and

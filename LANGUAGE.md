@@ -917,6 +917,8 @@ end
 entry = Entry{key: "answer", value: 42}
 ```
 
+Generic struct literals like `Entry{key: k, value: v}` infer their type parameters from the field values when each type parameter appears in at least one field. A type annotation on the binding is only required when no field uniquely binds a parameter, for example a struct that only mentions some of its parameters in its fields' types.
+
 #### Generic Enums
 
 ```koja
@@ -1748,28 +1750,6 @@ err.or(99).print()        # 99
 ```
 
 For unwrap-or-propagate control flow, prefer `try` / `fail` / `rescue` over combinator chains. See [Error Handling](#error-handling).
-
-### `Pair<A, B>`
-
-`Pair` remains available for compatibility. Prefer an anonymous tuple
-for new positional two-value groupings.
-
-```koja
-struct Pair<A, B>
-  first: A
-  second: B
-end
-```
-
-Fields: `first`, `second`.
-
-```koja
-p: Pair<Int, String> = Pair{first: 10, second: "hello"}
-p.first.print()    # 10
-p.second.print()   # hello
-```
-
-Generic struct literals like `Pair{first: x, second: y}` infer their type parameters from the field values when each field's expected type-param appears in at least one field. A type annotation on the binding (`p: Pair<Int, String> = ...`) is only required when no positional field uniquely binds a parameter, for example a struct that only mentions some of its parameters in its fields' types.
 
 ### `Range`
 

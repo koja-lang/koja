@@ -46,8 +46,17 @@ fn unit_variant_in_generic_static_call_arg_from_return_hint() {
         struct Thing
         end
 
-        fn build(thing: Thing) -> Pair<Thing, Option<String>>
-          Pair.new(thing, Option.None)
+        struct Duo<A, B>
+          first: A
+          second: B
+
+          fn new(first: A, second: B) -> Duo<A, B>
+            Duo{first: first, second: second}
+          end
+        end
+
+        fn build(thing: Thing) -> Duo<Thing, Option<String>>
+          Duo.new(thing, Option.None)
         end
         ";
     typecheck(&dedent(source));
@@ -56,11 +65,16 @@ fn unit_variant_in_generic_static_call_arg_from_return_hint() {
 #[test]
 fn unit_variant_in_generic_free_call_arg_from_return_hint() {
     let source = "
-        fn pair<A, B>(first: A, second: B) -> Pair<A, B>
-          Pair{first: first, second: second}
+        struct Duo<A, B>
+          first: A
+          second: B
         end
 
-        fn build() -> Pair<Int, Option<String>>
+        fn pair<A, B>(first: A, second: B) -> Duo<A, B>
+          Duo{first: first, second: second}
+        end
+
+        fn build() -> Duo<Int, Option<String>>
           pair(1, Option.None)
         end
         ";

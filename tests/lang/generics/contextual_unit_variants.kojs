@@ -2,20 +2,29 @@ struct Thing
   name: String
 end
 
+struct Duo<A, B>
+  first: A
+  second: B
+
+  fn new(first: A, second: B) -> Duo<A, B>
+    Duo{first: first, second: second}
+  end
+end
+
 fn identity<T>(value: T) -> T
   value
 end
 
-fn pair<A, B>(first: A, second: B) -> Pair<A, B>
-  Pair{first: first, second: second}
+fn duo<A, B>(first: A, second: B) -> Duo<A, B>
+  Duo{first: first, second: second}
 end
 
-fn static_pair(thing: Thing) -> Pair<Thing, Option<String>>
-  Pair.new(thing, Option.None)
+fn static_duo(thing: Thing) -> Duo<Thing, Option<String>>
+  Duo.new(thing, Option.None)
 end
 
-fn free_pair -> Pair<Int, Option<String>>
-  pair(1, Option.None)
+fn free_duo -> Duo<Int, Option<String>>
+  duo(1, Option.None)
 end
 
 fn optional -> Option<Int>
@@ -26,9 +35,9 @@ fn failure -> Result<Int, String>
   identity(Result.Err("failed"))
 end
 
-value = static_pair(Thing{name: "thing"})
+value = static_duo(Thing{name: "thing"})
 value.first.name.print()
 value.second.none?().print()
-free_pair().second.none?().print()
+free_duo().second.none?().print()
 optional().none?().print()
 failure().err?().print()

@@ -8,6 +8,43 @@ When an idea becomes concrete, move it into a focused design document. Add it
 to [ROADMAP.md](ROADMAP.md) only when its release scope is known. Delete ideas
 that no longer serve the language.
 
+## Arity overloading (separately declared same-name functions)
+
+Erlang-style `foo/2` and `foo/3` as distinct functions with distinct bodies.
+Deferred in favor of default parameter values, which cover trailing optional
+arguments from one declaration. The unique cases B-style arities add:
+
+- The parameter meaning shifts with arity, as in `range(stop)` against
+  `range(start, stop)`. Defaults cannot express this because they fill from
+  the right.
+- The return type shifts with arity, as in `get(key) -> Option<V>` against
+  `get(key, default) -> V`. Distinct names like `get` and `get_or` document
+  this better in a typed language.
+- Each arity has a genuinely different implementation.
+
+Revisit if stdlib or ecosystem work keeps producing awkward `foo`,
+`foo_from`, `foo_with` name clusters that are really one concept. The
+`&name/arity` reference syntax works the same whether the arities come from
+one declaration or several, so this extension stays syntax-compatible. If
+adopted, a defaulted function claims its whole arity range and any separate
+declaration inside that range is a compile error.
+
+## Anonymous records
+
+Named-field companions to anonymous tuples, for example
+`{name: "x", count: 3}` without a struct declaration. Deferred from 0.17 and
+gated on evidence: revisit only if ecosystem work shows that mid-pipeline
+projections (JSON responses, database rows, `map` outputs) are a recurring
+pain that anonymous tuples and cheap nominal structs do not cover.
+
+The main arguments against: declaring a struct in Koja is nearly free, a
+declared struct is where `@doc`, defaults, `impl` blocks, and derives hang,
+and structural typing (width subtyping, record flow rules) is a large
+type-system commitment in a nominal, monomorphized compiler. Decoding JSON
+and rows into declared structs is the intended practice. Struct field
+defaults and possible trailing keyword syntax cover the options-struct use
+case.
+
 ## C-compatible structs
 
 Support an explicitly C-compatible struct layout for passing records by value

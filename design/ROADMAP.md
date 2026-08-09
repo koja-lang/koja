@@ -61,8 +61,8 @@ ships. That is ecosystem work, not a release gate.
 
 ## 0.17.0
 
-Remove `Pair<A, B>` after its 0.16 deprecation period. Migration guidance will
-cover tuple construction, destructuring, patterns, and public API changes.
+The 0.17 release removes deprecated surface, cleans up how the compiler
+declares its own builtin types, and adds runtime observability.
 
 ### Language and tooling
 
@@ -72,10 +72,27 @@ cover tuple construction, destructuring, patterns, and public API changes.
   projects (carried over from 0.16).
 - **[DONE]** Default values for struct and enum struct-variant fields,
   re-evaluated at each construction site.
-- Anonymous records
+- Default values for function parameters, so optional arguments do not
+  require a separate options struct at every call site. A defaulted function
+  is callable at every arity its defaults allow. `&name/arity` references
+  pin one arity when a bare name is ambiguous. Separately declared functions
+  sharing a name across arities stay out of scope
+  ([MISC.md](MISC.md)).
+- **[DONE]** Remove `Pair<A, B>` after its 0.16 deprecation period. The
+  changelog covers migration to anonymous tuple construction, destructuring,
+  and patterns.
+- Inline protocol conformance on type declarations:
+  `struct MyApp: Process<C, M, R>` takes a comma-separated protocol list and
+  desugars to the equivalent `impl` blocks. Enums take the same syntax. The
+  main motivation is making application entry types read less awkwardly.
+- A `builtin` declaration kind for compiler-owned types. It replaces the
+  `@intrinsic struct` workaround, the construction special cases, and the
+  name-keyed IR shape match ([GAPS.md](GAPS.md)).
 - Add a `Runtime` observability API with global and per-process metrics,
   including mailbox depth, and document the overload contract for long-running
   services.
+- Emit position-independent Linux binaries so deployments get ASLR
+  ([GAPS.md](GAPS.md)).
 
 The rest of the 0.17 scope will be selected from evidence gathered while
 building real packages and applications. Later `0.x` releases will be added

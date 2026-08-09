@@ -27,6 +27,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Generated docs now syntax highlight function signatures and doc-comment code blocks in the website's code style.
 - Generated docs now bundle their fonts and no longer load from a CDN, so they render fully offline.
 
+### Removed
+
+- **Breaking change.** `Pair<A, B>` is removed after its 0.16 deprecation. Build with an anonymous tuple `(a, b)` and replace `.first`/`.second` reads and `Pair` patterns with tuple destructuring `(first, second) = value`.
+
 ### Fixed
 
 - Diagnostics from program-wide checks, such as a public signature that leaks a private type, now point at the offending file and line instead of printing `<unknown>`.
