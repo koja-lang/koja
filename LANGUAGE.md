@@ -1372,7 +1372,7 @@ fn say_hello<T: Greeter>(animal: T) -> String
 end
 ```
 
-Multiple bounds use `&` (the protocol composition operator, complementing `|` for union types):
+Multiple bounds use `&`. It is valid only in bound lists, not in general type positions:
 
 ```koja
 fn describe_and_greet<T: Greeter & Description>(animal: T) -> String

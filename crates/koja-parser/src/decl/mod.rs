@@ -48,7 +48,7 @@ impl Parser {
         loop {
             if let Some(ampersand) = self.eat(&TokenKind::Ampersand) {
                 self.error(
-                    "use a comma-separated conformance list (`&` composes protocols in type positions)"
+                    "use a comma-separated conformance list (`&` only composes bounds, like `<T: Eq & Hash>`)"
                         .to_string(),
                     ampersand.span,
                 );
