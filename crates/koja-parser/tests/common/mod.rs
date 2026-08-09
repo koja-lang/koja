@@ -19,8 +19,8 @@
 #![allow(dead_code)]
 
 use koja_ast::ast::{
-    AliasDecl, Constant, EnumDecl, Expr, ExprKind, ExtendBlock, File, Function, ImplBlock, Item,
-    MatchArm, ProtocolDecl, Statement, StructDecl, TypeExpr,
+    AliasDecl, BuiltinDecl, Constant, EnumDecl, Expr, ExprKind, ExtendBlock, File, Function,
+    ImplBlock, Item, MatchArm, ProtocolDecl, Statement, StructDecl, TypeExpr,
 };
 use koja_ast::util::dedent;
 use koja_parser::{ParseMode, ParseResult, parse};
@@ -145,6 +145,7 @@ macro_rules! first_item_fn {
 }
 
 first_item_fn!(first_alias, Alias, AliasDecl, "alias");
+first_item_fn!(first_builtin, Builtin, BuiltinDecl, "builtin");
 first_item_fn!(first_constant, Constant, Constant, "constant");
 first_item_fn!(first_enum, Enum, EnumDecl, "enum");
 first_item_fn!(first_extend, Extend, ExtendBlock, "extend block");

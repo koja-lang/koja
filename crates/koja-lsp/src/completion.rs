@@ -96,6 +96,7 @@ impl Backend {
 /// its detail through the LSP's signature / type formatters.
 fn to_completion_item(candidate: &Candidate<'_>, registry: &GlobalRegistry) -> CompletionItem {
     let kind = match candidate.kind {
+        CandidateKind::Builtin => CompletionItemKind::STRUCT,
         CandidateKind::Constant => CompletionItemKind::CONSTANT,
         CandidateKind::Enum => CompletionItemKind::ENUM,
         CandidateKind::EnumVariant => CompletionItemKind::ENUM_MEMBER,

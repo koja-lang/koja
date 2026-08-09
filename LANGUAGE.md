@@ -10,7 +10,7 @@ Koja is a statically typed, compiled language targeting native binaries via LLVM
 - [Variables and Constants](#variables-and-constants): Assignment, Type Annotations, Compound Assignment, Constants
 - [Functions](#functions): Declaration, Private Declarations, `return`, Parameters
 - [Control Flow](#control-flow): `if`/`else`, `unless`, `while`, `loop`/`break`, `for`...`in`, Ternary
-- [Types](#types): Primitives, Numeric Widening, Arithmetic Faults, Unit, Strings, Structs, Enums, Nested Types, Union Types, Tuples, Generics
+- [Types](#types): Primitives, Builtin Declarations, Numeric Widening, Arithmetic Faults, Unit, Strings, Structs, Enums, Nested Types, Union Types, Tuples, Generics
 - [Pattern Matching](#pattern-matching): `match`, OR Patterns, `cond`
 - [Error Handling](#error-handling): `! E` Signatures, `fail`, `try`, Error Unions, `rescue`
 - [Closures and Function Types](#closures-and-function-types): Block Closures, Short Closures, Capture Semantics, Function Types
@@ -45,10 +45,10 @@ x = 42  # inline comment
 ### Keywords
 
 ```
-after, alias, break, cond, const, else, end, enum, extend, fail,
-false, fn, for, if, impl, in, loop, match, not, priv, protocol,
-receive, rescue, return, self, spawn, struct, true, try, type,
-unless, when, while
+after, alias, break, builtin, cond, const, else, end, enum, extend,
+fail, false, fn, for, if, impl, in, loop, match, not, priv,
+protocol, receive, rescue, return, self, spawn, struct, true, try,
+type, unless, when, while
 ```
 
 `and` and `or` are operator-identifiers, not reserved keywords. They act as infix boolean operators in expressions (`a and b`, `x or y`) but can also be used freely as method names, function names, or field names (e.g., `option.or(default)`).
@@ -405,6 +405,30 @@ every `String` is valid UTF-8 by construction. Float equality is
 therefore a true equivalence relation, and comparisons are total.
 
 All types have value semantics. Assignment produces an independent copy. Numeric primitives and `Bool` copy bit-for-bit. `String`, `Binary`, `Bits`, `List`, `Map`, `Set`, structs, and enums copy their contents. The distinction is only one of cost, never of semantics.
+
+### Builtin Declarations
+
+The compiler owns the representation of the primitive types and the
+core collections (`List<T>`, `Map<K, V>`, `Set<T>`, `CPtr<T>`). The
+stdlib declares each one with the `builtin` keyword, which anchors its
+`@doc` comment and its methods:
+
+```koja
+@doc """
+A UTF-8 string.
+"""
+builtin String
+  @intrinsic
+  fn length(self) -> Int
+end
+```
+
+A `builtin` body admits only functions, never fields or nested type
+bodies. Builtin types are always public, and they cannot be
+constructed with struct-literal syntax. Declaring a builtin name the
+compiler does not provide is a compile error, so user code cannot
+mint new builtins. `impl` and `extend` blocks target builtins the
+same way they target structs and enums.
 
 ### Numeric Widening
 

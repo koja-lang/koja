@@ -82,7 +82,8 @@ impl Backend {
 
 fn symbol_name(symbol: &SymbolInfo) -> Option<&str> {
     Some(match symbol {
-        SymbolInfo::Function { name }
+        SymbolInfo::Builtin { name }
+        | SymbolInfo::Function { name }
         | SymbolInfo::Struct { name }
         | SymbolInfo::Enum { name }
         | SymbolInfo::Constant { name }

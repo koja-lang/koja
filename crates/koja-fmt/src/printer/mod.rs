@@ -229,6 +229,7 @@ impl<'a> Printer<'a> {
     fn item_to_doc(&mut self, item: &Item) -> Doc {
         match item {
             Item::Struct(s) => self.struct_to_doc(s),
+            Item::Builtin(b) => self.builtin_to_doc(b),
             Item::Enum(e) => self.enum_to_doc(e),
             Item::Extend(e) => self.extend_to_doc(e),
             Item::Function(f) => self.function_to_doc(f, 0),
@@ -277,6 +278,40 @@ impl<'a> Printer<'a> {
             body.push(self.function_to_doc(func, 2));
         }
         self.push_trailing_body_comments(&mut body, s.span.end.line);
+        parts.push(indent(2, concat(body)));
+        parts.push(hardline());
+        parts.push(text("end"));
+        concat(parts)
+    }
+
+    /// Formats a `builtin` declaration, the struct printer minus fields.
+    fn builtin_to_doc(&mut self, b: &BuiltinDecl) -> Doc {
+        let mut parts = Vec::new();
+        if let Some(doc) = annotations_to_doc(&b.annotations) {
+            parts.push(doc);
+            parts.push(hardline());
+        }
+        let mut header = format!(
+            "{}builtin {}",
+            visibility_prefix(b.visibility),
+            b.path.join(".")
+        );
+        if !b.type_params.is_empty() {
+            header.push('<');
+            header.push_str(&util::format_type_params(&b.type_params));
+            header.push('>');
+        }
+        parts.push(text(header));
+
+        let mut body = Vec::new();
+        for (i, func) in b.functions.iter().enumerate() {
+            if i > 0 {
+                body.push(hardline());
+            }
+            body.push(hardline());
+            body.push(self.function_to_doc(func, 2));
+        }
+        self.push_trailing_body_comments(&mut body, b.span.end.line);
         parts.push(indent(2, concat(body)));
         parts.push(hardline());
         parts.push(text("end"));

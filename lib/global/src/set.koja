@@ -3,7 +3,7 @@ A generic hash set of unique elements of type `T`.
 Elements must implement `Hash` and `Equality`. Uses open addressing
 with linear probing.
 """
-struct Set<T>
+builtin Set<T>
   @doc """
   Returns `true` if the set contains no elements.
   """

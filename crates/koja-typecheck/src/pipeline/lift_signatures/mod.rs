@@ -16,7 +16,8 @@
 use std::collections::HashMap;
 
 use koja_ast::ast::{
-    AliasDecl, Diagnostic, EnumDecl, Function, Item, ProtocolDecl, ProtocolMethod, StructDecl,
+    AliasDecl, BuiltinDecl, Diagnostic, EnumDecl, Function, Item, ProtocolDecl, ProtocolMethod,
+    StructDecl,
 };
 use koja_ast::identifier::{GlobalRegistryId, Identifier, ResolvedType};
 
@@ -24,6 +25,7 @@ use crate::pipeline::aliases::collect_file_aliases;
 use crate::program::CheckedPackage;
 use crate::registry::GlobalRegistry;
 
+mod builtins;
 mod constants;
 mod enums;
 mod field_defaults;
@@ -158,6 +160,7 @@ pub(crate) fn lift_signatures(
             };
             for item in &file.items {
                 match item {
+                    Item::Builtin(decl) => builtins::lift_builtin(decl, &mut scope, diagnostics),
                     Item::Enum(decl) => enums::lift_enum(decl, &mut scope, diagnostics),
                     Item::Function(function) => {
                         let identifier =
@@ -245,6 +248,7 @@ fn resolve_all_bounds(
             };
             for item in &file.items {
                 match item {
+                    Item::Builtin(decl) => resolve_builtin_bounds(decl, &mut scope, diagnostics),
                     Item::Enum(decl) => resolve_enum_bounds(decl, &mut scope, diagnostics),
                     Item::Function(function) => resolve_function_bounds(
                         function,
@@ -282,6 +286,33 @@ fn resolve_struct_bounds(
     };
     let resolved = resolve_param_bounds(&decl.type_params, scope.resolution_scope(), diagnostics);
     scope.registry.set_type_param_bounds(id, resolved);
+}
+
+fn resolve_builtin_bounds(
+    decl: &BuiltinDecl,
+    scope: &mut LiftScope<'_>,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    let identifier = Identifier::new(scope.package, decl.path.clone());
+    let Some((id, entry)) = scope.registry.lookup(&identifier) else {
+        return;
+    };
+    // An arity-mismatched claim keeps the stub's param names, so
+    // the declared bounds list would not line up. Collect already
+    // diagnosed the mismatch.
+    if entry.type_params.len() == decl.type_params.len() {
+        let resolved =
+            resolve_param_bounds(&decl.type_params, scope.resolution_scope(), diagnostics);
+        scope.registry.set_type_param_bounds(id, resolved);
+    }
+    for function in &decl.functions {
+        resolve_function_bounds(
+            function,
+            Identifier::member(scope.package, &decl.path, &function.name),
+            scope,
+            diagnostics,
+        );
+    }
 }
 
 fn resolve_enum_bounds(

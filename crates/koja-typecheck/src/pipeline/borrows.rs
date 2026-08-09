@@ -35,6 +35,7 @@ pub(crate) fn check_file(
 ) {
     for item in &file.items {
         match item {
+            Item::Builtin(decl) => check_functions(&decl.functions, registry, diagnostics),
             Item::Enum(decl) => check_functions(&decl.functions, registry, diagnostics),
             Item::Extend(block) => check_members(&block.members, registry, diagnostics),
             Item::Function(function) => check_function(function, registry, diagnostics),

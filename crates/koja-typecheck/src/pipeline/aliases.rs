@@ -177,7 +177,8 @@ fn check_target_kind(
     diagnostics: &mut Vec<Diagnostic>,
 ) -> bool {
     match entry.kind {
-        GlobalKind::Enum(_)
+        GlobalKind::Builtin(_)
+        | GlobalKind::Enum(_)
         | GlobalKind::Protocol(_)
         | GlobalKind::Struct(_)
         | GlobalKind::TypeAlias(_) => true,

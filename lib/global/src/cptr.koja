@@ -1,4 +1,4 @@
-struct CPtr<T>
+builtin CPtr<T>
   @doc """
   Allocates memory for `count` elements of type T using C's malloc.
   Panics when `count` is negative.

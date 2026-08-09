@@ -449,6 +449,34 @@ mod tests {
     }
 
     #[test]
+    fn builtin_empty_body_is_canonical() {
+        assert_unchanged(
+            "
+            @doc \"An immutable UTF-8 string.\"
+            builtin String
+            end
+        ",
+        );
+    }
+
+    #[test]
+    fn builtin_with_functions_is_canonical() {
+        assert_unchanged(
+            "
+            builtin List<T>
+              fn length(self) -> Int
+                0
+              end
+
+              priv fn helper -> Int
+                1
+              end
+            end
+        ",
+        );
+    }
+
+    #[test]
     fn stacked_annotations_on_function() {
         assert_fmt(
             "

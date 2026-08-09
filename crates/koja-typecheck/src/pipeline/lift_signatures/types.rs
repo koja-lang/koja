@@ -197,7 +197,7 @@ fn resolve_self(
                     index: TypeParamIndex::new(0),
                 });
             }
-            GlobalKind::Struct(_) | GlobalKind::Enum(_) => {
+            GlobalKind::Builtin(_) | GlobalKind::Struct(_) | GlobalKind::Enum(_) => {
                 return concrete_self_type(owner, registry);
             }
             GlobalKind::Constant(_) | GlobalKind::Function(_) | GlobalKind::TypeAlias(_) => {
@@ -367,7 +367,7 @@ fn lookup_path_entry<'r>(
     let candidate = Identifier::new("Global", path.to_vec());
     if let Some((id, entry)) = scope.registry.lookup(&candidate) {
         // Single-segment fallthrough into `Global.<name>` is reserved
-        // for the stdlib primitive stubs (`Int`, `String`, …): those
+        // for the stdlib builtins (`Int`, `String`, …). Those
         // are the only `Global.*` entries a user-facing type
         // expression can name without qualifying further. Multi-
         // segment paths bypass this guard because the qualification

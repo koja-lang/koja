@@ -15,7 +15,7 @@
 
 use std::collections::BTreeMap;
 
-use koja_ast::ast::{AnnotationKind, Diagnostic, Expr, FieldInit, StructDecl, is_intrinsic};
+use koja_ast::ast::{AnnotationKind, Diagnostic, Expr, FieldInit, StructDecl};
 use koja_ast::identifier::{Identifier, Resolution, ResolvedType};
 use koja_typecheck::{
     GlobalKind, GlobalRegistry, RegistryEntry, ResolvedStructField, StructDefinition,
@@ -46,13 +46,6 @@ pub(super) fn lower_struct_decl(
     registry: &GlobalRegistry,
     output: &mut LowerOutput,
 ) -> Option<IRStructDecl> {
-    // `@intrinsic` type declarations document compiler-provided
-    // builtins (`String`, `Int`, ...). Their fixed-shape lowering
-    // lives in `resolved_type_to_ir_type`, so the decl itself emits
-    // no IR struct.
-    if is_intrinsic(&decl.annotations) {
-        return None;
-    }
     if has_feature_gap(decl, &mut output.diagnostics) {
         return None;
     }

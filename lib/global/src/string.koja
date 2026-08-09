@@ -1,8 +1,7 @@
 @doc """
 UTF-8 text, indexed by Unicode codepoint.
 """
-@intrinsic
-struct String
+builtin String
 end
 
 impl Equality for String

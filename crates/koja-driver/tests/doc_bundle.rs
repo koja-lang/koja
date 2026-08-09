@@ -89,7 +89,7 @@ fn doc_bundle_emits_assets_and_stdlib_packages() {
     );
     assert!(
         doc.join("Global").join("String.html").is_file(),
-        "builtin String should get a page via its `@intrinsic` declaration"
+        "builtin String should get a page via its `builtin` declaration"
     );
 
     let search_json = fs::read_to_string(doc.join("search-index.json")).unwrap();
@@ -307,9 +307,9 @@ fn doc_falls_back_to_stdlib_outside_project() {
 fn doc_search_renders_builtin_primitive_types() {
     let tmp = tempdir();
 
-    // Builtins anchor through the stdlib's `@intrinsic` struct
-    // declarations, so an exact hit renders a full page with the
-    // type's `extend`-block methods attached.
+    // Builtins anchor through the stdlib's `builtin` declarations,
+    // so an exact hit renders a full page with the type's
+    // `extend`-block methods attached.
     let exact = run_koja(&tmp, &["doc", "search", "String"]);
     assert!(
         exact.status.success(),
@@ -317,7 +317,7 @@ fn doc_search_renders_builtin_primitive_types() {
         String::from_utf8_lossy(&exact.stderr)
     );
     let stdout = String::from_utf8_lossy(&exact.stdout);
-    assert!(stdout.contains("# Global.String (struct)"), "{stdout}");
+    assert!(stdout.contains("# Global.String (builtin)"), "{stdout}");
     assert!(
         stdout.contains("UTF-8 text, indexed by Unicode codepoint."),
         "{stdout}"

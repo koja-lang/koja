@@ -2,7 +2,7 @@
 A dynamically-sized, heap-backed list. Owns its elements and follows
 move semantics for mutations.
 """
-struct List<T>
+builtin List<T>
 end
 
 impl Enumeration<T> for List<T>

@@ -11,14 +11,15 @@ use super::{GlobalKind, GlobalRegistry, VisibilityScope};
 
 /// Koja language keywords offered as completions.
 pub const KEYWORDS: &[&str] = &[
-    "break", "cond", "const", "else", "end", "enum", "extend", "false", "fn", "for", "if", "impl",
-    "in", "loop", "match", "priv", "protocol", "receive", "return", "self", "spawn", "struct",
-    "true", "type", "unless", "when", "while",
+    "break", "builtin", "cond", "const", "else", "end", "enum", "extend", "false", "fn", "for",
+    "if", "impl", "in", "loop", "match", "priv", "protocol", "receive", "return", "self", "spawn",
+    "struct", "true", "type", "unless", "when", "while",
 ];
 
 /// What kind of declaration or member a [`Candidate`] names.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum CandidateKind {
+    Builtin,
     Constant,
     Enum,
     EnumVariant,
@@ -131,6 +132,11 @@ impl GlobalRegistry {
             }
             let label = path[0].as_str();
             let candidate = match &entry.kind {
+                GlobalKind::Builtin(_) => Candidate {
+                    detail: CandidateDetail::TypeParams(&entry.type_params),
+                    kind: CandidateKind::Builtin,
+                    label,
+                },
                 GlobalKind::Constant(Some(definition)) => Candidate {
                     detail: CandidateDetail::Type(&definition.ty),
                     kind: CandidateKind::Constant,

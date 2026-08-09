@@ -42,6 +42,10 @@ pub fn format_registry(registry: &GlobalRegistry) -> String {
 
 fn format_kind(kind: &GlobalKind, registry: &GlobalRegistry) -> String {
     match kind {
+        GlobalKind::Builtin(def) => format!(
+            "builtin{}",
+            format_conformances(&def.conformances, registry)
+        ),
         GlobalKind::Constant(None) => "const <unlifted>".to_string(),
         GlobalKind::Constant(Some(def)) => format_constant(def, registry),
         GlobalKind::Enum(None) => "enum".to_string(),

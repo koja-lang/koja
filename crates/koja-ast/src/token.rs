@@ -32,6 +32,7 @@ pub enum TokenKind {
     // Keywords
     After,
     Break,
+    Builtin,
     Cond,
     Const,
     Else,
@@ -134,6 +135,7 @@ impl TokenKind {
             Self::After => "after",
             Self::Alias => "alias",
             Self::Break => "break",
+            Self::Builtin => "builtin",
             Self::Cond => "cond",
             Self::Const => "const",
             Self::Else => "else",

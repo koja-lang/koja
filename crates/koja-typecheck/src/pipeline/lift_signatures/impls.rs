@@ -72,7 +72,7 @@ pub(super) fn lift_impl(
             .registry
             .lookup(&target_identifier)
             .map(|(_, e)| &e.kind),
-        Some(GlobalKind::Enum(_) | GlobalKind::Struct(_))
+        Some(GlobalKind::Builtin(_) | GlobalKind::Enum(_) | GlobalKind::Struct(_))
     ) {
         // Collect already diagnosed. Nothing was registered.
         return;
@@ -164,7 +164,7 @@ pub(super) fn lift_extend(
     if !is_protocol
         && !matches!(
             target_kind,
-            Some(GlobalKind::Enum(_) | GlobalKind::Struct(_))
+            Some(GlobalKind::Builtin(_) | GlobalKind::Enum(_) | GlobalKind::Struct(_))
         )
     {
         return;

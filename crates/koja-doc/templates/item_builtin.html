@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <title>{{ b.name }} — Koja Docs</title>
+  {% include "head.html" %}
+</head>
+<body>
+
+{% include "header.html" %}
+
+<div class="frame">
+{% include "sidebar.html" %}
+
+<main class="content" id="content">
+  <div class="page-header">
+    <h1>{{ b.name }}{% if !b.type_params.is_empty() %}&lt;{{ b.type_params.join(", ") }}&gt;{% endif %}</h1>
+    <span class="kind-chip">builtin</span>
+  </div>
+
+  {% if let Some(doc) = b.doc %}
+  <div class="detail-doc">{{ doc|md }}</div>
+  {% endif %}
+
+  {% if !b.functions.is_empty() %}
+  <h2 class="section-heading" id="functions">Functions</h2>
+  <div class="summary">
+    {% for f in b.functions %}
+    <div class="summary-row">
+      <div class="summary-name"><a href="#fn-{{ f.name }}">{{ f.name }}</a></div>
+      {% if let Some(doc) = f.doc %}<div class="summary-brief">{{ doc|brief }}</div>{% endif %}
+    </div>
+    {% endfor %}
+  </div>
+  {% for f in b.functions %}
+  {% include "function_detail.html" %}
+  {% endfor %}
+  {% endif %}
+</main>
+
+{% include "toc.html" %}
+</div>
+
+</body>
+</html>

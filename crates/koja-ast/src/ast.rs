@@ -280,6 +280,7 @@ impl Diagnostic {
 #[derive(Debug, Clone)]
 pub enum Item {
     Alias(AliasDecl),
+    Builtin(BuiltinDecl),
     Constant(Constant),
     Enum(EnumDecl),
     Extend(ExtendBlock),
@@ -530,6 +531,27 @@ impl StructDecl {
     /// leaf), empty for a top-level struct.
     pub fn owner_path(&self) -> &[String] {
         &self.path[..self.path.len() - 1]
+    }
+}
+
+/// A builtin type declaration, `builtin String ... end`.
+///
+/// Declares a compiler-owned type. The body admits only functions, so
+/// fields and nested types are syntactically unwritable.
+#[derive(Debug, Clone)]
+pub struct BuiltinDecl {
+    pub annotations: Vec<Annotation>,
+    pub visibility: Visibility,
+    pub path: Vec<String>,
+    pub type_params: Vec<TypeParam>,
+    pub functions: Vec<Function>,
+    pub span: Span,
+}
+
+impl BuiltinDecl {
+    /// The builtin's own (leaf) name, the last path segment.
+    pub fn name(&self) -> &str {
+        self.path.last().expect("builtin path is non-empty")
     }
 }
 

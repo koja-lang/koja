@@ -130,7 +130,10 @@ pub(super) fn classify_receiver(
             lookup_type(&receiver_path, resolver.resolution_scope())
         && matches!(
             struct_entry.kind,
-            GlobalKind::Enum(_) | GlobalKind::Protocol(_) | GlobalKind::Struct(_)
+            GlobalKind::Builtin(_)
+                | GlobalKind::Enum(_)
+                | GlobalKind::Protocol(_)
+                | GlobalKind::Struct(_)
         )
     {
         check_reference_visibility(struct_entry, resolver.package, receiver.span, diagnostics);
@@ -161,7 +164,10 @@ pub(super) fn classify_receiver(
             ..
         } => {
             let entry = resolver.registry.get(struct_id)?;
-            if !matches!(entry.kind, GlobalKind::Enum(_) | GlobalKind::Struct(_)) {
+            if !matches!(
+                entry.kind,
+                GlobalKind::Builtin(_) | GlobalKind::Enum(_) | GlobalKind::Struct(_)
+            ) {
                 diagnostics.push(Diagnostic::error(
                     format!(
                         "instance method receiver must be a struct or enum value (`{}` is a {})",

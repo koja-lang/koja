@@ -23,6 +23,9 @@ use traverse::{find_in_ident_at_name, find_in_params, find_in_statement, find_in
 /// Describes the kind and identity of a symbol found at a cursor position.
 #[derive(Debug)]
 pub(crate) enum SymbolInfo {
+    Builtin {
+        name: String,
+    },
     Constant {
         name: String,
     },
@@ -139,6 +142,19 @@ pub(crate) fn find_symbol_at(
                     }
                 }
             }
+            Item::Builtin(b) => {
+                if !span_contains(&b.span, line, col) {
+                    continue;
+                }
+                if span_contains_name(b.name(), &b.span, line, col) {
+                    return Some(SymbolInfo::Builtin {
+                        name: b.name().to_string(),
+                    });
+                }
+                if let Some(info) = find_in_inline_functions(&b.functions, line, col, ctx) {
+                    return Some(info);
+                }
+            }
             Item::Struct(s) => {
                 if !span_contains(&s.span, line, col) {
                     continue;
@@ -240,16 +256,25 @@ fn find_in_inline_functions(
 /// Searches a file's items for the `@doc` annotation on the item
 /// named `name`. Handles three families of names:
 ///
-/// * Top-level declarations (`fn`, `struct`, `enum`, `const`,
-///   `protocol`, `type`).
-/// * Inline methods on `struct` / `enum` declarations: matches both
-///   the bare name (`puts`) and the mangled `Type_method` form.
+/// * Top-level declarations (`fn`, `builtin`, `struct`, `enum`,
+///   `const`, `protocol`, `type`).
+/// * Inline methods on `builtin` / `struct` / `enum` declarations:
+///   matches both the bare name (`puts`) and the mangled
+///   `Type_method` form.
 /// * Methods inside `impl` blocks (same dual form) and default
 ///   methods on `protocol` declarations.
 pub(crate) fn find_doc_for(file: &File, name: &str) -> Option<String> {
     for item in &file.items {
         match item {
             Item::Alias(_) => {}
+            Item::Builtin(b) => {
+                if b.name() == name {
+                    return span::annotation_doc(&b.annotations);
+                }
+                if let Some(doc) = doc_in_methods(&b.functions, b.name(), name) {
+                    return Some(doc);
+                }
+            }
             Item::Function(f) if f.name == name => {
                 return span::annotation_doc(&f.annotations);
             }
@@ -357,6 +382,9 @@ fn classify_in_package(name: &str, package: &str, registry: &GlobalRegistry) -> 
     let identifier = Identifier::new(package, vec![name.to_string()]);
     let (_, entry) = registry.lookup(&identifier)?;
     Some(match &entry.kind {
+        GlobalKind::Builtin(_) => SymbolInfo::Builtin {
+            name: name.to_string(),
+        },
         GlobalKind::Function(_) => SymbolInfo::Function {
             name: name.to_string(),
         },
@@ -491,6 +519,34 @@ mod tests {
     }
 
     #[test]
+    fn finds_doc_on_builtin_and_inline_builtin_method() {
+        let file = parse_source(
+            r#"
+            @doc """
+            A UTF-8 string.
+            """
+            builtin String
+              @doc """
+              Number of codepoints.
+              """
+              fn length(self) -> Int
+              end
+            end
+            "#,
+        );
+        assert!(
+            find_doc_for(&file, "String")
+                .unwrap()
+                .contains("A UTF-8 string.")
+        );
+        assert!(
+            find_doc_for(&file, "String_length")
+                .unwrap()
+                .contains("Number of codepoints.")
+        );
+    }
+
+    #[test]
     fn finds_doc_on_protocol_default_method() {
         let file = parse_source(
             r#"
@@ -588,7 +644,7 @@ mod tests {
             locals: &locals,
         };
         let info = classify_name("Int", &ctx).expect("classify");
-        assert!(matches!(info, SymbolInfo::Struct { ref name } if name == "Int"));
+        assert!(matches!(info, SymbolInfo::Builtin { ref name } if name == "Int"));
     }
 
     /// Smoke test mirroring the hover/definition pipeline: build a

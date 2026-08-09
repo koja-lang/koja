@@ -93,6 +93,13 @@ fn seal_file(file: &File, package: &str, registry: &GlobalRegistry) {
                     seal_function(function, SealMode::for_template(generic));
                 }
             }
+            Item::Builtin(decl) => {
+                let owner_generic = !decl.type_params.is_empty();
+                for function in &decl.functions {
+                    let generic = owner_generic || !function.type_params.is_empty();
+                    seal_function(function, SealMode::for_template(generic));
+                }
+            }
             Item::Enum(decl) => {
                 assert!(
                     decl.nested.is_empty(),
@@ -143,7 +150,8 @@ fn seal_file(file: &File, package: &str, registry: &GlobalRegistry) {
 fn seal_registry(registry: &GlobalRegistry) {
     for (_, entry) in registry.iter() {
         match &entry.kind {
-            GlobalKind::Constant(Some(_))
+            GlobalKind::Builtin(_)
+            | GlobalKind::Constant(Some(_))
             | GlobalKind::Enum(Some(_))
             | GlobalKind::Function(Some(_))
             | GlobalKind::Protocol(Some(_))

@@ -183,7 +183,8 @@ fn collect_surface_ids(entry: &RegistryEntry, ids: &mut Vec<GlobalRegistryId>) {
             }
         }
         GlobalKind::TypeAlias(Some(expansion)) => collect_type_ids(expansion, ids),
-        GlobalKind::Constant(None)
+        GlobalKind::Builtin(_)
+        | GlobalKind::Constant(None)
         | GlobalKind::Enum(None)
         | GlobalKind::Function(None)
         | GlobalKind::Protocol(None)

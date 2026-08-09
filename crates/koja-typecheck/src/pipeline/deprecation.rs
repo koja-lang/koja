@@ -11,10 +11,10 @@
 //! [`lookup_type`] the resolver used.
 
 use koja_ast::ast::{
-    Annotation, AnnotationKind, ClosureParam, Constant, Diagnostic, EnumConstructionData, EnumDecl,
-    EnumVariantData, Expr, ExprKind, ExtendBlock, File, Function, ImplBlock, ImplMember, Item,
-    Param, Pattern, ProtocolDecl, Statement, StringPart, StructDecl, StructField, TypeAlias,
-    TypeExpr, TypeParam,
+    Annotation, AnnotationKind, BuiltinDecl, ClosureParam, Constant, Diagnostic,
+    EnumConstructionData, EnumDecl, EnumVariantData, Expr, ExprKind, ExtendBlock, File, Function,
+    ImplBlock, ImplMember, Item, Param, Pattern, ProtocolDecl, Statement, StringPart, StructDecl,
+    StructField, TypeAlias, TypeExpr, TypeParam,
 };
 use koja_ast::identifier::{GlobalRegistryId, Identifier, Resolution, ResolvedType};
 use koja_ast::span::Span;
@@ -71,6 +71,7 @@ impl Walker<'_, '_> {
     fn check_item(&mut self, item: &Item) {
         match item {
             Item::Alias(_) => {}
+            Item::Builtin(decl) => self.check_builtin(decl),
             Item::Constant(constant) => self.check_constant(constant),
             Item::Enum(decl) => self.check_enum(decl),
             Item::Extend(block) => self.check_extend(block),
@@ -90,6 +91,17 @@ impl Walker<'_, '_> {
             self.check_type_expr(annotation);
         }
         self.check_expr(&constant.value);
+    }
+
+    fn check_builtin(&mut self, decl: &BuiltinDecl) {
+        if is_deprecated(&decl.annotations) {
+            return;
+        }
+        self.with_type_params(&decl.type_params, |walker| {
+            for function in &decl.functions {
+                walker.check_function(function);
+            }
+        });
     }
 
     fn check_struct(&mut self, decl: &StructDecl) {

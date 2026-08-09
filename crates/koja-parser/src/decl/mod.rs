@@ -4,6 +4,7 @@
 //! Modules:
 //! - `alias`: `alias Pkg.Type [as LocalName]` (packages are PascalCase)
 //! - `annotation`: `@name`, `@name "value"` decorators on declarations
+//! - `builtin_decl`: `builtin Name<...> ... end` for compiler-owned types
 //! - `constant`: `const NAME [: T] = expr`
 //! - `enum_decl`: `enum Name<...> ... end` with Unit / Tuple / Struct variants
 //! - `extend_block`: `extend Type ... end` for inherent methods (ambient visibility)
@@ -18,6 +19,7 @@
 
 pub(crate) mod alias;
 pub(crate) mod annotation;
+pub(crate) mod builtin_decl;
 pub(crate) mod constant;
 pub(crate) mod enum_decl;
 pub(crate) mod extend_block;

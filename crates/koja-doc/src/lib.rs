@@ -22,12 +22,12 @@ mod style;
 pub mod terminal;
 
 pub use extract::{
-    DocConstant, DocEnum, DocFunction, DocItem, DocPackage, DocProject, DocProtocol, DocStruct,
-    PackageKind, extract_items, finalize_project,
+    DocBuiltin, DocConstant, DocEnum, DocFunction, DocItem, DocPackage, DocProject, DocProtocol,
+    DocStruct, PackageKind, extract_items, finalize_project,
 };
 pub use render::{
-    render_constant, render_enum, render_function, render_package_index, render_protocol,
-    render_root_index, render_struct,
+    render_builtin, render_constant, render_enum, render_function, render_package_index,
+    render_protocol, render_root_index, render_struct,
 };
 pub use search::search_index_json;
 pub use style::{CSS, DOC_JS, FONTS, SEARCH_JS};

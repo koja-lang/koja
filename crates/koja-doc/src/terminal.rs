@@ -91,6 +91,10 @@ fn render_full(hit: &Symbol, partials: &[&Symbol]) -> String {
     let mut out = format!("# {} ({})\n", header_name(hit), hit.kind);
 
     match &hit.target {
+        SymbolTarget::Builtin(b) => {
+            push_doc(&mut out, &b.doc);
+            push_functions(&mut out, &b.functions);
+        }
         SymbolTarget::Constant(_) => push_doc(&mut out, hit.doc()),
         SymbolTarget::Function(f) => {
             out.push_str("\n```koja\n");
@@ -136,6 +140,7 @@ fn render_full(hit: &Symbol, partials: &[&Symbol]) -> String {
 /// that carry them.
 fn header_name(symbol: &Symbol) -> String {
     let type_params = match &symbol.target {
+        SymbolTarget::Builtin(b) => &b.type_params,
         SymbolTarget::Protocol(p) => &p.type_params,
         SymbolTarget::Struct(s) => &s.type_params,
         _ => return symbol.qualified_name(),
@@ -179,7 +184,9 @@ fn push_functions(out: &mut String, functions: &[DocFunction]) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::extract::{DocConstant, DocEnum, DocField, DocParam, DocStruct, PackageKind};
+    use crate::extract::{
+        DocBuiltin, DocConstant, DocEnum, DocField, DocParam, DocStruct, PackageKind,
+    };
 
     fn hits(outcome: SearchOutcome) -> String {
         match outcome {
@@ -191,13 +198,8 @@ mod tests {
     fn sample_project() -> DocProject {
         let mut project = DocProject::new("MyApp");
         let global = project.ensure_package("Global", PackageKind::Stdlib);
-        global.structs.push(DocStruct {
+        global.builtins.push(DocBuiltin {
             doc: Some("A growable list. Backed by a heap block.".to_string()),
-            fields: vec![DocField {
-                default: None,
-                name: "length".to_string(),
-                type_name: "Int".to_string(),
-            }],
             functions: vec![DocFunction {
                 doc: Some(
                     "Append an item.\n\n## Examples\n\n```koja\nlist.append(1)\n```".to_string(),
@@ -227,6 +229,19 @@ mod tests {
             variants: vec!["Some(T)".to_string(), "None".to_string()],
         });
 
+        let app = project.ensure_package("MyApp", PackageKind::Project);
+        app.structs.push(DocStruct {
+            doc: Some("Connection settings.".to_string()),
+            fields: vec![DocField {
+                default: Some("5432".to_string()),
+                name: "port".to_string(),
+                type_name: "Int".to_string(),
+            }],
+            functions: vec![],
+            name: "Config".to_string(),
+            type_params: vec![],
+        });
+
         let json = project.ensure_package("JSON", PackageKind::Stdlib);
         json.constants.push(DocConstant {
             doc: Some("Maximum nesting depth.".to_string()),
@@ -242,15 +257,23 @@ mod tests {
     }
 
     #[test]
-    fn exact_type_hit_renders_full_doc() {
+    fn exact_builtin_hit_renders_full_doc() {
         let project = sample_project();
         let text = hits(search(&project, "list"));
-        assert!(text.starts_with("# Global.List<T> (struct)\n"));
+        assert!(text.starts_with("# Global.List<T> (builtin)\n"));
         assert!(text.contains("A growable list."));
-        assert!(text.contains("## Fields\n\n- length: Int\n"));
         assert!(text.contains("### `fn append(self, item: T) -> List<T>`"));
         assert!(text.contains("list.append(1)"));
         assert!(text.contains("Also matched:\n\n- Global.List.append (fn): Append an item.\n"));
+    }
+
+    #[test]
+    fn exact_struct_hit_renders_fields() {
+        let project = sample_project();
+        let text = hits(search(&project, "config"));
+        assert!(text.starts_with("# MyApp.Config (struct)\n"));
+        assert!(text.contains("Connection settings."));
+        assert!(text.contains("## Fields\n\n- port: Int = 5432\n"));
     }
 
     #[test]
@@ -281,8 +304,8 @@ mod tests {
     #[test]
     fn partial_query_lists_matches() {
         let project = sample_project();
-        let text = hits(search(&project, "app"));
-        assert!(text.starts_with("1 match for \"app\":"));
+        let text = hits(search(&project, "appe"));
+        assert!(text.starts_with("1 match for \"appe\":"));
         assert!(text.contains("- Global.List.append (fn): Append an item.\n"));
     }
 

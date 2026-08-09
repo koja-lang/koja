@@ -24,9 +24,9 @@
 //! enforce path-len / target-exists / no-shadow rules.
 
 use koja_ast::ast::{
-    Annotation, AnnotationKind, Constant, Diagnostic, EnumDecl, ExtendBlock, File, Function,
-    ImplBlock, ImplMember, Item, Param, ProtocolDecl, ProtocolMethod, StructDecl, TypeAlias,
-    TypeExpr, TypeParam, Visibility, is_intrinsic,
+    Annotation, AnnotationKind, BuiltinDecl, Constant, Diagnostic, EnumDecl, ExtendBlock, File,
+    Function, ImplBlock, ImplMember, Item, Param, ProtocolDecl, ProtocolMethod, StructDecl,
+    TypeAlias, TypeExpr, TypeParam, Visibility, is_intrinsic,
 };
 use koja_ast::identifier::{GlobalRegistryId, Identifier};
 use koja_ast::labels::type_expr_span;
@@ -34,7 +34,7 @@ use koja_ast::span::Span;
 
 use crate::pipeline::visibility::check_reference_visibility;
 use crate::program::CheckedPackage;
-use crate::registry::{GlobalKind, GlobalRegistry, InsertOutcome, VisibilityScope};
+use crate::registry::{ClaimOutcome, GlobalKind, GlobalRegistry, InsertOutcome, VisibilityScope};
 
 /// Pass 1 of collect: register every named decl (functions,
 /// structs, enums, protocols, constants, type aliases) so that
@@ -49,6 +49,9 @@ pub(crate) fn collect_file_decls(
 ) {
     for item in &file.items {
         match item {
+            Item::Builtin(decl) => {
+                register_builtin(decl, package, registry, diagnostics);
+            }
             Item::Enum(decl) => {
                 register_enum(decl, package, registry, diagnostics);
             }
@@ -161,7 +164,7 @@ fn validate_nested_owner(
         return;
     };
     match entry.kind {
-        GlobalKind::Struct(_) | GlobalKind::Protocol(_) => {}
+        GlobalKind::Builtin(_) | GlobalKind::Protocol(_) | GlobalKind::Struct(_) => {}
         GlobalKind::Enum(_) => {
             if enum_has_variant(packages, package, owner_path, leaf) {
                 diagnostics.push(Diagnostic::error(
@@ -423,13 +426,10 @@ fn register_struct(
         &decl.annotations,
         diagnostics,
     );
+    diagnose_intrinsic_on_struct(decl, diagnostics);
     let deprecation = deprecation_message(&decl.annotations, diagnostics);
     let identifier = Identifier::new(package, decl.path.clone());
-    let struct_id = if is_intrinsic(&decl.annotations) {
-        register_intrinsic_struct(decl, &identifier, deprecation, registry, diagnostics)
-    } else {
-        register_ordinary_struct(decl, &identifier, deprecation, registry, diagnostics)
-    };
+    let struct_id = register_ordinary_struct(decl, &identifier, deprecation, registry, diagnostics);
     for function in &decl.functions {
         let method_identifier = Identifier::member(package, &decl.path, &function.name);
         register_function_with_identifier(
@@ -450,9 +450,32 @@ fn register_ordinary_struct(
     registry: &mut GlobalRegistry,
     diagnostics: &mut Vec<Diagnostic>,
 ) -> Option<GlobalRegistryId> {
-    let type_params = type_param_names(&decl.type_params);
-    let visibility = package_visibility_scope(decl.visibility);
-    match registry.insert_struct(identifier.clone(), decl.span, type_params, visibility) {
+    insert_struct_entry(
+        identifier,
+        decl.span,
+        type_param_names(&decl.type_params),
+        package_visibility_scope(decl.visibility),
+        deprecation,
+        registry,
+        diagnostics,
+    )
+}
+
+/// Shared struct-entry insert with the standard collision
+/// diagnostic. On collision the existing entry's id is returned so
+/// the caller can still register inline methods against whatever
+/// type already owns the name: the duplicate decl is itself
+/// diagnosed, and methods declared under it would otherwise dangle.
+fn insert_struct_entry(
+    identifier: &Identifier,
+    span: Span,
+    type_params: Vec<String>,
+    visibility: VisibilityScope,
+    deprecation: Option<String>,
+    registry: &mut GlobalRegistry,
+    diagnostics: &mut Vec<Diagnostic>,
+) -> Option<GlobalRegistryId> {
+    match registry.insert_struct(identifier.clone(), span, type_params, visibility) {
         InsertOutcome::Fresh(id) => {
             stamp_deprecation(registry, id, deprecation);
             Some(id)
@@ -465,79 +488,130 @@ fn register_ordinary_struct(
                     existing.kind.label(),
                     existing.span.start.line
                 ),
-                decl.span,
+                span,
             ));
-            // Still register inline methods even on collision. The
-            // duplicate decl is itself diagnosed, and methods declared
-            // under the duplicate would otherwise dangle. Re-look up
-            // the existing entry's id so methods scope their
-            // visibility against whatever struct already owns the
-            // name.
             registry.lookup(identifier).map(|(id, _)| id)
         }
     }
 }
 
-/// Register an `@intrinsic struct` declaration by claiming the
-/// compiler's seeded primitive stub. The declaration is a doc
-/// anchor for a compiler-defined type, not a new type. Falls back
-/// to the ordinary insert path when the claim fails so duplicates
-/// get the standard "already defined" diagnostic and the decl's
-/// methods never dangle.
-fn register_intrinsic_struct(
-    decl: &StructDecl,
-    identifier: &Identifier,
-    deprecation: Option<String>,
-    registry: &mut GlobalRegistry,
-    diagnostics: &mut Vec<Diagnostic>,
-) -> Option<GlobalRegistryId> {
-    diagnose_intrinsic_struct_shape(decl, diagnostics);
-    if let Some(id) = registry.claim_primitive_stub(identifier, decl.span) {
-        stamp_deprecation(registry, id, deprecation);
-        return Some(id);
+/// `@intrinsic` on a struct was the pre-`builtin` way to declare a
+/// compiler-owned type. `@intrinsic fn` is untouched.
+fn diagnose_intrinsic_on_struct(decl: &StructDecl, diagnostics: &mut Vec<Diagnostic>) {
+    if !is_intrinsic(&decl.annotations) {
+        return;
     }
-    if registry.lookup(identifier).is_none() {
-        diagnostics.push(Diagnostic::error_with_hint(
-            format!("`{identifier}` is not a builtin type"),
-            "`@intrinsic` on a struct declares a compiler-provided type like `String` or \
-             `Int`. Remove the annotation to declare an ordinary struct."
-                .to_string(),
-            decl.span,
-        ));
-    }
-    register_ordinary_struct(decl, identifier, deprecation, registry, diagnostics)
+    let span = decl
+        .annotations
+        .iter()
+        .find(|annotation| annotation.name == "intrinsic")
+        .map(|annotation| annotation.span)
+        .unwrap_or(decl.span);
+    diagnostics.push(Diagnostic::error_with_hint(
+        format!(
+            "`@intrinsic` on struct `{}` is replaced by the `builtin` declaration",
+            decl.name(),
+        ),
+        format!("declare it as `builtin {} ... end`", decl.name()),
+        span,
+    ));
 }
 
-/// Shape checks for `@intrinsic struct` declarations. The compiler
-/// owns the definition, so the source declaration carries docs and
-/// methods only.
-fn diagnose_intrinsic_struct_shape(decl: &StructDecl, diagnostics: &mut Vec<Diagnostic>) {
+/// Register a `builtin` declaration by claiming the compiler's
+/// seeded stub. An unknown name is a compile error. Failed claims
+/// fall back to an ordinary struct insert so duplicates get the
+/// standard "already defined" diagnostic and the decl's methods
+/// never dangle.
+fn register_builtin(
+    decl: &BuiltinDecl,
+    package: &str,
+    registry: &mut GlobalRegistry,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    diagnose_builtin_feature_gaps(decl, diagnostics);
+    diagnose_doc_on_private(
+        decl.name(),
+        "builtin",
+        decl.visibility,
+        &decl.annotations,
+        diagnostics,
+    );
+    let deprecation = deprecation_message(&decl.annotations, diagnostics);
+    let identifier = Identifier::new(package, decl.path.clone());
+    let type_params = type_param_names(&decl.type_params);
+    let builtin_id = match registry.claim_builtin_stub(&identifier, decl.span, type_params) {
+        Some(ClaimOutcome::Claimed(id)) => {
+            stamp_deprecation(registry, id, deprecation);
+            Some(id)
+        }
+        Some(ClaimOutcome::ArityMismatch { id, expected_arity }) => {
+            diagnostics.push(Diagnostic::error(
+                format!(
+                    "builtin `{}` takes exactly {expected_arity} type parameter{}, found {}",
+                    decl.name(),
+                    if expected_arity == 1 { "" } else { "s" },
+                    decl.type_params.len(),
+                ),
+                decl.span,
+            ));
+            stamp_deprecation(registry, id, deprecation);
+            Some(id)
+        }
+        None => {
+            if registry.lookup(&identifier).is_none() {
+                diagnostics.push(Diagnostic::error_with_hint(
+                    format!("`{identifier}` is not a builtin type"),
+                    "`builtin` declares a compiler-provided type like `String` or `List`. \
+                     Declare an ordinary type with `struct` or `enum`."
+                        .to_string(),
+                    decl.span,
+                ));
+            }
+            insert_struct_entry(
+                &identifier,
+                decl.span,
+                type_param_names(&decl.type_params),
+                package_visibility_scope(decl.visibility),
+                deprecation,
+                registry,
+                diagnostics,
+            )
+        }
+    };
+    for function in &decl.functions {
+        let method_identifier = Identifier::member(package, &decl.path, &function.name);
+        register_function_with_identifier(
+            function,
+            method_identifier,
+            SelfContext::AllowSelf,
+            builtin_id,
+            registry,
+            diagnostics,
+        );
+    }
+}
+
+/// Shape and annotation checks for `builtin` declarations.
+fn diagnose_builtin_feature_gaps(decl: &BuiltinDecl, diagnostics: &mut Vec<Diagnostic>) {
     if decl.visibility != Visibility::Public {
         diagnostics.push(Diagnostic::error_with_hint(
-            format!("`@intrinsic` struct `{}` cannot be private", decl.name()),
+            format!("builtin type `{}` cannot be private", decl.name()),
             "builtin types are always public".to_string(),
             decl.span,
         ));
     }
-    if !decl.type_params.is_empty() {
+    for annotation in &decl.annotations {
+        if has_dedicated_validation(annotation) {
+            continue;
+        }
         diagnostics.push(Diagnostic::error(
             format!(
-                "`@intrinsic` struct `{}` cannot declare type parameters",
+                "typecheck does not yet support annotations on builtin items \
+                 (`@{}` on `{}`)",
+                annotation.name,
                 decl.name(),
             ),
-            decl.span,
-        ));
-    }
-    if let Some(field) = decl.fields.first() {
-        diagnostics.push(Diagnostic::error_with_hint(
-            format!(
-                "`@intrinsic` struct `{}` cannot declare fields",
-                decl.name()
-            ),
-            "the compiler provides the definition of a builtin type. The declaration only \
-             carries docs and methods."
-                .to_string(),
-            field.span,
+            annotation.span,
         ));
     }
 }
@@ -631,10 +705,13 @@ fn register_impl(
         ));
         return;
     };
-    if !matches!(entry.kind, GlobalKind::Enum(_) | GlobalKind::Struct(_)) {
+    if !matches!(
+        entry.kind,
+        GlobalKind::Builtin(_) | GlobalKind::Enum(_) | GlobalKind::Struct(_)
+    ) {
         diagnostics.push(Diagnostic::error(
             format!(
-                "typecheck only supports `impl` on structs and enums \
+                "typecheck only supports `impl` on structs, enums, and builtins \
                  (`{}` is a {})",
                 target_path.join("."),
                 entry.kind.label(),
@@ -693,11 +770,15 @@ fn register_extend(
     // diagnoses `self` receivers on them.
     if !matches!(
         entry_kind,
-        GlobalKind::Enum(_) | GlobalKind::Protocol(_) | GlobalKind::Struct(_)
+        GlobalKind::Builtin(_)
+            | GlobalKind::Enum(_)
+            | GlobalKind::Protocol(_)
+            | GlobalKind::Struct(_)
     ) {
         diagnostics.push(Diagnostic::error(
             format!(
-                "`extend` only supports structs, enums, and protocols (`{}` is a {})",
+                "`extend` only supports structs, enums, builtins, and protocols \
+                 (`{}` is a {})",
                 target_path.join("."),
                 entry_kind.label(),
             ),
@@ -958,8 +1039,8 @@ fn type_param_names(type_params: &[TypeParam]) -> Vec<String> {
 /// program shape stays accurate.
 fn diagnose_struct_feature_gaps(decl: &StructDecl, diagnostics: &mut Vec<Diagnostic>) {
     for annotation in &decl.annotations {
-        // `@intrinsic` marks a builtin type declaration.
-        // [`register_intrinsic_struct`] owns its validation.
+        // `@intrinsic` on a struct gets the targeted replacement
+        // diagnostic from [`diagnose_intrinsic_on_struct`].
         if has_dedicated_validation(annotation)
             || matches!(annotation.kind(), AnnotationKind::Intrinsic)
         {
