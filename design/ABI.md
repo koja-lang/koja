@@ -331,8 +331,3 @@ declare-on-first-use
 helpers in `koja-ir-llvm/src/runtime.rs`. Signatures are matched by
 specification. There is no generated header. When adding or changing one,
 update both sides and note parameter meaning at the definition site.
-
-[CONFORMANCE-HEADERS.md](CONFORMANCE-HEADERS.md) proposes a generated
-language-neutral surface that would make this larger symbol set mechanically
-checkable. Until that lands, source definitions and LLVM declarations must
-change together.
