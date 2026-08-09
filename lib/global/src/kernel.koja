@@ -58,21 +58,6 @@ struct Kernel
 end
 
 @doc """
-A lightweight pair of two values. Access elements via `.first` and `.second`.
-"""
-@deprecated """
-Replaced by anonymous tuple (a, b). Pair will be removed in Koja 0.17.
-"""
-struct Pair<A, B>
-  first: A
-  second: B
-
-  fn new(first: A, second: B) -> Pair<A, B>
-    Pair{first: first, second: second}
-  end
-end
-
-@doc """
 An inclusive range from `start` to `stop`. Both endpoints are included.
 """
 struct Range

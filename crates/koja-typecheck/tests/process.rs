@@ -362,11 +362,18 @@ fn receive_arm_with_unsupported_envelope_diagnoses() {
 }
 
 #[test]
-fn receive_arm_with_legacy_pair_envelope_diagnoses() {
+fn receive_arm_with_struct_envelope_diagnoses() {
+    // A struct-typed envelope (the legacy pre-tuple `Pair` shape) is
+    // not a business envelope either.
     let source = "
+        struct Duo<A, B>
+          first: A
+          second: B
+        end
+
         fn main -> StopReason
           receive
-            envelope: Pair<Int, Option<ReplyTo<String>>> ->
+            envelope: Duo<Int, Option<ReplyTo<String>>> ->
               StopReason.Normal
           end
         end

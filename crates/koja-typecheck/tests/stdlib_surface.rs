@@ -102,7 +102,6 @@ const SURFACE: &[(&str, &[&str])] = &[
     ("List", &["format"]),
     ("Map", &["format"]),
     ("Option", &["format"]),
-    ("Pair", &["format"]),
     ("Range", &[]),
     (
         "Random",

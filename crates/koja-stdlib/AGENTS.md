@@ -11,7 +11,7 @@ Embeds `.koja` stdlib sources into the compiler binary.
 
 Sources live in `koja/lib/`, organized by package:
 
-- `std/src/` -- Auto-imported core: kernel.koja (Option, Result, List, Map, Set, Pair, Range), string.koja, list.koja, map.koja, set.koja, process.koja, debug.koja, io.koja, fd.koja, cptr.koja, cstring.koja, bitwise.koja, system.koja, time.koja
+- `std/src/` -- Auto-imported core: kernel.koja (Option, Result, List, Map, Set, Range), string.koja, list.koja, map.koja, set.koja, process.koja, debug.koja, io.koja, fd.koja, cptr.koja, cstring.koja, bitwise.koja, system.koja, time.koja
 - `net/src/` -- TCP/UDP/Socket types (qualified: `net.TCPSocket`)
 - `crypto/src/` -- SHA family, HMAC (qualified: `crypto.SHA256`)
 - `json/src/` -- JSON encoder/decoder (qualified: `json.Value`)
