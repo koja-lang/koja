@@ -30,6 +30,7 @@ pub(crate) fn check_file(
     };
     for item in &file.items {
         match item {
+            Item::Builtin(decl) => checker.check_functions(&decl.functions),
             Item::Enum(decl) => checker.check_functions(&decl.functions),
             Item::Extend(block) => checker.check_members(&block.members),
             Item::Function(function) => checker.check_function(function),

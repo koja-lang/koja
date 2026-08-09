@@ -40,6 +40,11 @@ pub(crate) fn synthesize_program(packages: &mut [CheckedPackage]) {
 fn synthesize_item(item: &mut Item) {
     match item {
         Item::Function(function) => synthesize_function(function),
+        Item::Builtin(decl) => {
+            for function in &mut decl.functions {
+                synthesize_function(function);
+            }
+        }
         Item::Struct(decl) => {
             for function in &mut decl.functions {
                 synthesize_function(function);

@@ -1,36 +1,31 @@
 @doc """
 An arbitrary byte sequence.
 """
-@intrinsic
-struct Binary
+builtin Binary
 end
 
 @doc """
 An arbitrary bit sequence, not necessarily byte-aligned.
 """
-@intrinsic
-struct Bits
+builtin Bits
 end
 
 @doc """
 A boolean value, `true` or `false`.
 """
-@intrinsic
-struct Bool
+builtin Bool
 end
 
 @doc """
 The type of expressions that never produce a value, such as `Kernel.panic`.
 """
-@intrinsic
-struct Never
+builtin Never
 end
 
 @doc """
 The empty value, returned by functions with no declared return type.
 """
-@intrinsic
-struct Unit
+builtin Unit
 end
 
 @doc """

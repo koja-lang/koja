@@ -15,10 +15,10 @@
 use std::fmt::Write as _;
 
 use crate::ast::{
-    AliasDecl, AnnotationValue, Arg, BinOp, BinarySegment, ClosureParam, CompoundOp, CondArm,
-    Constant, EnumConstructionData, EnumDecl, EnumVariant, EnumVariantData, Expr, ExprKind,
-    ExtendBlock, FieldInit, FieldPattern, File, Function, ImplBlock, ImplMember, Item, LValue,
-    Literal, MatchArm, Param, Pattern, ProtocolDecl, ProtocolMethod, Statement, StringPart,
+    AliasDecl, AnnotationValue, Arg, BinOp, BinarySegment, BuiltinDecl, ClosureParam, CompoundOp,
+    CondArm, Constant, EnumConstructionData, EnumDecl, EnumVariant, EnumVariantData, Expr,
+    ExprKind, ExtendBlock, FieldInit, FieldPattern, File, Function, ImplBlock, ImplMember, Item,
+    LValue, Literal, MatchArm, Param, Pattern, ProtocolDecl, ProtocolMethod, Statement, StringPart,
     StructDecl, StructField, TypeAlias, TypeExpr, TypeParam, UnaryOp, Visibility,
 };
 use crate::identifier::{AnonymousKind, Resolution, ResolvedType};
@@ -116,6 +116,7 @@ impl<'a> Printer<'a> {
     fn item(&mut self, item: &Item) {
         match item {
             Item::Alias(alias) => self.alias(alias),
+            Item::Builtin(b) => self.builtin_decl(b),
             Item::Constant(c) => self.constant(c),
             Item::Enum(e) => self.enum_decl(e),
             Item::Extend(e) => self.extend_block(e),
@@ -304,6 +305,24 @@ impl<'a> Printer<'a> {
                     }
                 }),
                 None => p.line("body: <required>"),
+            }
+        });
+    }
+
+    fn builtin_decl(&mut self, b: &BuiltinDecl) {
+        let header = format!(
+            "BuiltinDecl {}{}",
+            b.path.join("."),
+            format_type_params(&b.type_params)
+        );
+        self.nested(&header, b.span, |p| {
+            p.annotations(&b.annotations);
+            if !b.functions.is_empty() {
+                p.section("functions", |p| {
+                    for f in &b.functions {
+                        p.function("Function", f);
+                    }
+                });
             }
         });
     }

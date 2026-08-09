@@ -15,6 +15,87 @@ use std::collections::BTreeMap;
 use koja_ast::ast::Expr;
 use koja_ast::identifier::{GlobalRegistryId, ResolvedType};
 
+/// The compiler-provided representation behind a `builtin` type
+/// declaration. IR maps each shape structurally to its `IRType`, so
+/// lowering never re-derives the shape from the type's name. Two
+/// entries may share a shape: `Int` and `Int64` are distinct
+/// registry entries with the same representation.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BuiltinShape {
+    Binary,
+    Bits,
+    Bool,
+    CPtr,
+    Float32,
+    Float64,
+    Int8,
+    Int16,
+    Int32,
+    Int64,
+    List,
+    Map,
+    Never,
+    Set,
+    String,
+    UInt8,
+    UInt16,
+    UInt32,
+    UInt64,
+    Unit,
+}
+
+impl BuiltinShape {
+    /// The exact number of type parameters a declaration of this
+    /// shape must carry.
+    pub fn arity(self) -> usize {
+        match self {
+            Self::Map => 2,
+            Self::CPtr | Self::List | Self::Set => 1,
+            _ => 0,
+        }
+    }
+
+    /// Whether `==` on two values of this shape stays on the
+    /// backend's primitive fast path instead of rewriting to
+    /// `.eq(...)` method dispatch.
+    pub fn has_primitive_equality(self) -> bool {
+        match self {
+            Self::Bool
+            | Self::Float32
+            | Self::Float64
+            | Self::Int8
+            | Self::Int16
+            | Self::Int32
+            | Self::Int64
+            | Self::String
+            | Self::UInt8
+            | Self::UInt16
+            | Self::UInt32
+            | Self::UInt64 => true,
+            Self::Binary
+            | Self::Bits
+            | Self::CPtr
+            | Self::List
+            | Self::Map
+            | Self::Never
+            | Self::Set
+            | Self::Unit => false,
+        }
+    }
+}
+
+/// Payload of a [`super::GlobalKind::Builtin`] entry. Unlike the
+/// other definition carriers there is no `None` lifecycle state:
+/// the compiler owns the definition, so the shape is stamped at
+/// seed time. `conformances` mirrors
+/// [`StructDefinition::conformances`] so `impl P for Int` works the
+/// same as on user structs.
+#[derive(Clone, Debug)]
+pub struct BuiltinDefinition {
+    pub conformances: BTreeMap<GlobalRegistryId, Vec<ResolvedType>>,
+    pub shape: BuiltinShape,
+}
+
 /// How a function call dispatches on its callee.
 ///
 /// `Static` is the default: direct lookup by qualified name. The

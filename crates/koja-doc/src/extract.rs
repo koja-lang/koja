@@ -9,9 +9,9 @@
 //! sidebar dropdown can pivot between packages without ambiguity.
 
 use koja_ast::ast::{
-    AnnotationValue, EnumDecl, Expr, ExprKind, ExtendBlock, File, Function, ImplMember, Item,
-    Literal, Param, ProtocolDecl, ProtocolMethod, StringPart, StructDecl, TypeExpr, UnaryOp,
-    Visibility,
+    AnnotationValue, BuiltinDecl, EnumDecl, Expr, ExprKind, ExtendBlock, File, Function,
+    ImplMember, Item, Literal, Param, ProtocolDecl, ProtocolMethod, StringPart, StructDecl,
+    TypeExpr, UnaryOp, Visibility,
 };
 use koja_ast::util::dedent;
 
@@ -106,6 +106,16 @@ pub struct DocProtocol {
     pub type_params: Vec<String>,
 }
 
+/// Documentation for a builtin type. Builtins carry functions but no
+/// fields, the compiler owns their representation.
+#[derive(Debug)]
+pub struct DocBuiltin {
+    pub doc: Option<String>,
+    pub functions: Vec<DocFunction>,
+    pub name: String,
+    pub type_params: Vec<String>,
+}
+
 /// Documentation for a struct, including its impl functions.
 #[derive(Debug)]
 pub struct DocStruct {
@@ -128,6 +138,7 @@ pub struct DocStruct {
 /// route identically.
 #[derive(Debug)]
 pub struct DocPackage {
+    pub builtins: Vec<DocBuiltin>,
     pub constants: Vec<DocConstant>,
     pub enums: Vec<DocEnum>,
     pub functions: Vec<DocFunction>,
@@ -151,6 +162,7 @@ struct PendingExtend {
 impl DocPackage {
     fn new(name: String, kind: PackageKind) -> Self {
         Self {
+            builtins: Vec::new(),
             constants: Vec::new(),
             enums: Vec::new(),
             functions: Vec::new(),
@@ -218,6 +230,11 @@ pub fn extract_items(file: &File, project: &mut DocProject, package: &str, kind:
     for item in &file.items {
         match item {
             Item::Alias(_) => {}
+            Item::Builtin(b) => {
+                if let Some(db) = extract_builtin(b) {
+                    pkg.builtins.push(db);
+                }
+            }
             Item::Constant(c) => {
                 if let Some(dc) = extract_constant(c) {
                     pkg.constants.push(dc);
@@ -287,7 +304,13 @@ fn resolve_pending_extends(project: &mut DocProject) {
         else {
             continue;
         };
-        if let Some(ds) = target
+        if let Some(db) = target
+            .builtins
+            .iter_mut()
+            .find(|b| b.name == pending.target_name)
+        {
+            db.functions.extend(pending.functions);
+        } else if let Some(ds) = target
             .structs
             .iter_mut()
             .find(|s| s.name == pending.target_name)
@@ -304,12 +327,16 @@ fn resolve_pending_extends(project: &mut DocProject) {
 }
 
 fn finalize_package(pkg: &mut DocPackage) {
+    pkg.builtins.sort_by(|a, b| a.name.cmp(&b.name));
     pkg.constants.sort_by(|a, b| a.name.cmp(&b.name));
     pkg.enums.sort_by(|a, b| a.name.cmp(&b.name));
     pkg.functions.sort_by(|a, b| a.name.cmp(&b.name));
     pkg.protocols.sort_by(|a, b| a.name.cmp(&b.name));
     pkg.structs.sort_by(|a, b| a.name.cmp(&b.name));
 
+    for b in &mut pkg.builtins {
+        b.functions.sort_by(|a, b| a.name.cmp(&b.name));
+    }
     for e in &mut pkg.enums {
         e.functions.sort_by(|a, b| a.name.cmp(&b.name));
     }
@@ -321,6 +348,13 @@ fn finalize_package(pkg: &mut DocPackage) {
     }
 
     pkg.items.clear();
+    for b in &pkg.builtins {
+        pkg.items.push(DocItem {
+            doc: b.doc.clone(),
+            kind: "builtin".to_string(),
+            name: b.name.clone(),
+        });
+    }
     for c in &pkg.constants {
         pkg.items.push(DocItem {
             doc: c.doc.clone(),
@@ -525,6 +559,18 @@ fn extract_struct(s: &StructDecl) -> Option<DocStruct> {
         functions,
         name: s.name().to_string(),
         type_params: s.type_params.iter().map(|tp| tp.name.clone()).collect(),
+    })
+}
+
+fn extract_builtin(b: &BuiltinDecl) -> Option<DocBuiltin> {
+    if has_doc_false(&b.annotations) {
+        return None;
+    }
+    Some(DocBuiltin {
+        doc: annotation_string(&b.annotations),
+        functions: b.functions.iter().filter_map(extract_function).collect(),
+        name: b.name().to_string(),
+        type_params: b.type_params.iter().map(|tp| tp.name.clone()).collect(),
     })
 }
 

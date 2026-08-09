@@ -1,6 +1,6 @@
 //! Build the `search-index.json` payload powering the sidebar
-//! fuzzy search. One entry per item (struct / enum / protocol /
-//! top-level fn / constant) and one entry per method on a type
+//! fuzzy search. One entry per item (builtin / struct / enum /
+//! protocol / top-level fn / constant) and one entry per method on a type
 //! (deep-linking to `#fn-<method>` on the type's page). The JSON
 //! is also the AI-friendly bundle, where every doc-visible symbol in
 //! the project + bundled stdlib + bundled deps is present with
@@ -11,7 +11,7 @@
 //! the only escaping concern is doc-string content.
 
 use crate::extract::{
-    DocConstant, DocEnum, DocFunction, DocPackage, DocProject, DocProtocol, DocStruct,
+    DocBuiltin, DocConstant, DocEnum, DocFunction, DocPackage, DocProject, DocProtocol, DocStruct,
 };
 
 /// Format `project` as the contents of `doc/search-index.json`,
@@ -56,6 +56,7 @@ pub(crate) struct Symbol<'a> {
 
 /// The doc item a [`Symbol`] points at, for full-doc rendering.
 pub(crate) enum SymbolTarget<'a> {
+    Builtin(&'a DocBuiltin),
     Constant(&'a DocConstant),
     Enum(&'a DocEnum),
     Function(&'a DocFunction),
@@ -70,6 +71,7 @@ impl Symbol<'_> {
 
     pub fn doc(&self) -> &Option<String> {
         match &self.target {
+            SymbolTarget::Builtin(b) => &b.doc,
             SymbolTarget::Constant(c) => &c.doc,
             SymbolTarget::Enum(e) => &e.doc,
             SymbolTarget::Function(f) => &f.doc,
@@ -93,7 +95,8 @@ impl Symbol<'_> {
 }
 
 /// Enumerate every doc-visible symbol in roster order, walking each
-/// package's constants, enums, functions, protocols, then structs.
+/// package's builtins, constants, enums, functions, protocols, then
+/// structs.
 pub(crate) fn collect_symbols(project: &DocProject) -> Vec<Symbol<'_>> {
     let mut out = Vec::new();
     for pkg in &project.packages {
@@ -118,6 +121,10 @@ fn collect_package_symbols<'a>(pkg: &'a DocPackage, out: &mut Vec<Symbol<'a>>) {
         target: SymbolTarget::Function(f),
     };
 
+    for b in &pkg.builtins {
+        out.push(item("builtin", &b.name, SymbolTarget::Builtin(b)));
+        out.extend(b.functions.iter().map(|f| member(&b.name, f)));
+    }
     for c in &pkg.constants {
         out.push(item("const", &c.name, SymbolTarget::Constant(c)));
     }

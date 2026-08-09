@@ -59,6 +59,9 @@ impl Backend {
                 type_name,
                 method_name,
             } => build_method_hover(type_name, method_name, state, registry, &stdlib_files),
+            SymbolInfo::Builtin { name } => {
+                build_builtin_hover(name, &state.active_package, state, registry, &stdlib_files)
+            }
             SymbolInfo::Struct { name } => {
                 build_struct_hover(name, &state.active_package, state, registry, &stdlib_files)
             }
@@ -191,6 +194,27 @@ fn find_method_signature<'a>(
         }
     }
     None
+}
+
+fn build_builtin_hover(
+    name: &str,
+    package: &str,
+    state: &DocumentState,
+    registry: &GlobalRegistry,
+    stdlib_files: &[&File],
+) -> Option<String> {
+    let (_, kind, type_params) = lookup_global(name, package, registry)?;
+    let GlobalKind::Builtin(_) = kind else {
+        return None;
+    };
+    let type_params_display = if type_params.is_empty() {
+        String::new()
+    } else {
+        format!("<{}>", type_params.join(", "))
+    };
+    let signature = format!("builtin {name}{type_params_display}");
+    let doc = resolve_doc(name, state, stdlib_files);
+    Some(format_hover(&signature, doc.as_deref()))
 }
 
 fn build_struct_hover(

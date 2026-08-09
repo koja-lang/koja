@@ -17,6 +17,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Public functions in other packages now work as first-class values with `Pkg.helper`, matching the bare-name form inside a package.
 - Standard library constants such as `STDOUT` now resolve by bare name, like `Global` types and functions.
 - Struct fields and enum struct-variant fields can declare default values (`port: Int = 5432`), which fill in at constructions that omit the field, including `Option.None` and `[]` on generic fields.
+- New `builtin` declaration kind and keyword for compiler-owned types, so `String`, `Int`, `List<T>`, and friends show up in docs, hovers, and search as `builtin` instead of masquerading as structs.
 
 ### Changed
 

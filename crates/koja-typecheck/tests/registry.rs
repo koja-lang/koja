@@ -1,22 +1,10 @@
-//! Coverage that `check_program` preloads the stdlib struct stubs
+//! Coverage that `check_program` preloads the builtin stubs
 //! (`Int`/`Bool`/`Unit`/`Float`/`String`) into the [`GlobalRegistry`]
-//! before user decls are collected.
-//!
-//! Stubs are temporary scaffolding: once the real stdlib compiles as
-//! a package they land through `collect`. These assertions stay valid
-//! post-cutover because stubs and real entries share the same shape
-//! (`Global.<name>` struct with an empty `StructDefinition` in the
-//! registry, user-declared structs may add fields and conformances).
-//!
-//! `typecheck_file` prepends [`koja_stdlib::AUTOIMPORT`], so
-//! protocols defined there (e.g. `Bitwise`) legitimately land
-//! conformances on the primitives via `impl Bitwise for Int` and
-//! friends. The assertions below pin "no leaked fields" (which holds
-//! regardless of autoimport content) and skip the conformance check
-//! to avoid coupling registry tests to the autoimport list.
+//! before user decls are collected, and that the stdlib's `builtin`
+//! declarations claim them without changing their kind or identity.
 
 use koja_ast::identifier::Identifier;
-use koja_typecheck::{CheckedProgram, GlobalKind, StructDefinition};
+use koja_typecheck::{CheckedProgram, GlobalKind};
 
 mod common;
 
@@ -29,7 +17,7 @@ fn check_empty_main() -> CheckedProgram {
 }
 
 #[test]
-fn stdlib_stubs_land_in_registry_as_structs() {
+fn stdlib_stubs_land_in_registry_as_builtins() {
     let checked = check_empty_main();
 
     for name in STDLIB_STUBS {
@@ -38,16 +26,10 @@ fn stdlib_stubs_land_in_registry_as_structs() {
             panic!("stdlib stub `Global.{name}` missing from registry after check_program")
         });
 
-        let GlobalKind::Struct(Some(StructDefinition { fields, .. })) = &entry.kind else {
-            panic!(
-                "Global.{name} registered with wrong kind: expected `Struct(Some(_))`, \
-                 got {:?}",
-                entry.kind,
-            );
-        };
         assert!(
-            fields.is_empty(),
-            "Global.{name} primitive stub leaked fields: {fields:?}",
+            matches!(entry.kind, GlobalKind::Builtin(_)),
+            "Global.{name} registered with wrong kind: expected `Builtin(_)`, got {:?}",
+            entry.kind,
         );
         assert_eq!(
             entry.identifier, ident,

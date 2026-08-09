@@ -1,8 +1,8 @@
-//! Typecheck coverage for `@intrinsic` type declarations: the
-//! stdlib's doc anchors for compiler-defined builtins. Happy paths
-//! run implicitly in every test through the autoimported stdlib, so
-//! this file pins the claim's observable effect (builtin registry
-//! entries carry stdlib source spans) plus the misuse diagnostics.
+//! Typecheck coverage for `builtin` type declarations: the stdlib's
+//! doc anchors for compiler-owned types. Happy paths run implicitly
+//! in every test through the autoimported stdlib, so this file pins
+//! the claim's observable effect (builtin registry entries carry
+//! stdlib source spans) plus the misuse diagnostics.
 
 use koja_ast::identifier::Identifier;
 use koja_ast::span::Span;
@@ -12,11 +12,12 @@ mod common;
 
 use common::{assert_script_fails_with, check_packages, diagnostic_messages, typecheck_script};
 
-/// Every seeded primitive stub, mirrored from
+/// Every seeded builtin stub, mirrored from
 /// `GlobalRegistry::with_stdlib_stubs`.
 const BUILTINS: &[&str] = &[
     "Int", "Bool", "Unit", "Float", "Never", "String", "Binary", "Bits", "Int8", "Int16", "Int32",
-    "Int64", "UInt8", "UInt16", "UInt32", "UInt64", "Float32", "Float64",
+    "Int64", "UInt8", "UInt16", "UInt32", "UInt64", "Float32", "Float64", "CPtr", "List", "Map",
+    "Set",
 ];
 
 #[test]
@@ -32,17 +33,16 @@ fn stdlib_declarations_claim_every_builtin_stub() {
             entry.span,
             Span::default(),
             "`{identifier}` still carries the seeded stub span; expected the stdlib's \
-             `@intrinsic` declaration to claim it",
+             `builtin` declaration to claim it",
         );
     }
 }
 
 #[test]
-fn intrinsic_struct_outside_stdlib_diagnoses_not_builtin() {
+fn builtin_outside_stdlib_diagnoses_not_builtin() {
     assert_script_fails_with(
         "
-        @intrinsic
-        struct Config
+        builtin Config
         end
         ",
         &["`TestApp.Config` is not a builtin type"],
@@ -50,14 +50,13 @@ fn intrinsic_struct_outside_stdlib_diagnoses_not_builtin() {
 }
 
 #[test]
-fn intrinsic_redeclaration_of_builtin_diagnoses_already_defined() {
+fn builtin_redeclaration_diagnoses_already_defined() {
     let failure = check_packages(
         &[(
             "Global",
             "dup.koja",
             "
-            @intrinsic
-            struct String
+            builtin String
             end
             ",
         )],
@@ -74,39 +73,33 @@ fn intrinsic_redeclaration_of_builtin_diagnoses_already_defined() {
 }
 
 #[test]
-fn private_intrinsic_struct_diagnoses() {
+fn private_builtin_diagnoses() {
     assert_script_fails_with(
         "
-        @intrinsic
-        priv struct Shadow
+        priv builtin Shadow
         end
         ",
-        &["`@intrinsic` struct `Shadow` cannot be private"],
+        &["builtin type `Shadow` cannot be private"],
     );
 }
 
 #[test]
-fn generic_intrinsic_struct_diagnoses() {
+fn builtin_construction_diagnoses() {
     assert_script_fails_with(
-        "
-        @intrinsic
-        struct Wrapper<T>
-        end
-        ",
-        &["`@intrinsic` struct `Wrapper` cannot declare type parameters"],
+        "s = String{}",
+        &["cannot construct builtin type `Global.String` with struct literal syntax"],
     );
 }
 
 #[test]
-fn intrinsic_struct_with_fields_diagnoses() {
+fn intrinsic_on_struct_diagnoses_replacement() {
     assert_script_fails_with(
         "
         @intrinsic
-        struct Sized
-          width: Int
+        struct Config
         end
         ",
-        &["`@intrinsic` struct `Sized` cannot declare fields"],
+        &["`@intrinsic` on struct `Config` is replaced by the `builtin` declaration"],
     );
 }
 

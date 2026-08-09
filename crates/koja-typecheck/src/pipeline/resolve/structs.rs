@@ -9,7 +9,7 @@
 
 use koja_ast::ast::{Diagnostic, EnumConstructionData, Expr, ExprKind, FieldInit};
 use koja_ast::identifier::{
-    AnonymousKind, GlobalRegistryId, Identifier, Resolution, ResolvedType, TypeParamIndex,
+    AnonymousKind, GlobalRegistryId, Resolution, ResolvedType, TypeParamIndex,
 };
 use koja_ast::span::Span;
 
@@ -89,6 +89,17 @@ pub(super) fn resolve_struct_construction(
     };
     check_reference_visibility(struct_entry, resolver.package, span, diagnostics);
 
+    if matches!(struct_entry.kind, GlobalKind::Builtin(_)) {
+        bare_walk_fields(fields, resolver, diagnostics);
+        diagnostics.push(Diagnostic::error(
+            format!(
+                "cannot construct builtin type `{}` with struct literal syntax",
+                struct_entry.identifier,
+            ),
+            span,
+        ));
+        return ResolvedType::leaf(Resolution::Global(struct_id));
+    }
     let GlobalKind::Struct(definition) = &struct_entry.kind else {
         bare_walk_fields(fields, resolver, diagnostics);
         diagnostics.push(Diagnostic::error(
@@ -104,22 +115,11 @@ pub(super) fn resolve_struct_construction(
     let Some(definition) = definition else {
         panic!(
             "typecheck: struct entry `{}` reached struct-literal validation \
-             without a stamped definition: every struct (including stdlib stubs) \
-             carries `Struct(Some(_))` after preload",
+             without a stamped definition: every user struct carries \
+             `Struct(Some(_))` after lift",
             struct_entry.identifier,
         );
     };
-    if is_unconstructable_primitive(&struct_entry.identifier) {
-        bare_walk_fields(fields, resolver, diagnostics);
-        diagnostics.push(Diagnostic::error(
-            format!(
-                "cannot construct primitive type `{}` with struct literal syntax",
-                struct_entry.identifier,
-            ),
-            span,
-        ));
-        return ResolvedType::leaf(Resolution::Global(struct_id));
-    }
 
     let owner = struct_entry.identifier.to_string();
     let type_params = struct_entry.type_params.clone();
@@ -487,36 +487,4 @@ pub(super) fn resolve_field_access(
     // round-trips back to itself.
     let subst = Substitution::from_args(struct_id, receiver_args);
     substitute(&declared.ty, &subst)
-}
-
-/// `Global.<name>` types whose values are produced exclusively by
-/// literals, intrinsics, or arithmetic, never by struct-literal
-/// syntax. The list mirrors the preloaded primitive stubs in
-/// [`crate::registry::GlobalRegistry::with_stdlib_stubs`].
-fn is_unconstructable_primitive(identifier: &Identifier) -> bool {
-    if !identifier.is_in_global() {
-        return false;
-    }
-    matches!(
-        identifier.last(),
-        "Binary"
-            | "Bits"
-            | "Bool"
-            | "CPtr"
-            | "Float"
-            | "Float32"
-            | "Float64"
-            | "Int"
-            | "Int16"
-            | "Int32"
-            | "Int64"
-            | "Int8"
-            | "Never"
-            | "String"
-            | "UInt16"
-            | "UInt32"
-            | "UInt64"
-            | "UInt8"
-            | "Unit"
-    )
 }

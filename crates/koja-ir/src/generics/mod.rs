@@ -145,9 +145,9 @@ fn drain_synthesized_into_packages(
 }
 
 /// Map every function template's `GlobalRegistryId` to its AST
-/// node. Covers top-level `fn`s, inline methods on struct/enum
-/// decls, and methods in `impl` / `extend` blocks (the latter may
-/// target another package).
+/// node. Covers top-level `fn`s, inline methods on builtin, struct,
+/// and enum decls, and methods in `impl` / `extend` blocks (the
+/// latter may target another package).
 /// An indexed function template: the AST node plus the path of the
 /// file it was parsed from. The path threads through to
 /// [`crate::lower::package::lower_function_inner`] when a
@@ -187,6 +187,12 @@ fn index_item<'a>(
         Item::Function(function) => {
             let identifier = Identifier::new(package, vec![function.name.clone()]);
             insert_function(map, registry, &identifier, function, def_file);
+        }
+        Item::Builtin(decl) => {
+            for function in &decl.functions {
+                let identifier = Identifier::member(package, &decl.path, &function.name);
+                insert_function(map, registry, &identifier, function, def_file);
+            }
         }
         Item::Struct(decl) => {
             for function in &decl.functions {

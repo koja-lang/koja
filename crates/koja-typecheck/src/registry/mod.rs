@@ -40,9 +40,9 @@ mod format;
 
 pub use candidates::{Candidate, CandidateDetail, CandidateKind, KEYWORDS};
 pub use definitions::{
-    ConstantDefinition, Dispatch, EnumDefinition, FunctionSignature, ProtocolDefinition,
-    ResolvedEnumVariant, ResolvedParam, ResolvedProtocolMethod, ResolvedStructField,
-    ResolvedVariantData, StructDefinition,
+    BuiltinDefinition, BuiltinShape, ConstantDefinition, Dispatch, EnumDefinition,
+    FunctionSignature, ProtocolDefinition, ResolvedEnumVariant, ResolvedParam,
+    ResolvedProtocolMethod, ResolvedStructField, ResolvedVariantData, StructDefinition,
 };
 pub use format::format_registry;
 
@@ -66,6 +66,9 @@ pub use format::format_registry;
 /// [`StructDefinition::conformances`] for the full rationale.
 #[derive(Clone, Debug)]
 pub enum GlobalKind {
+    /// A compiler-owned type declared with the `builtin` keyword.
+    /// No `Option` lifecycle: the shape is stamped at seed time.
+    Builtin(BuiltinDefinition),
     Constant(Option<Box<ConstantDefinition>>),
     Enum(Option<EnumDefinition>),
     Function(Option<FunctionSignature>),
@@ -85,6 +88,7 @@ pub enum GlobalKind {
 impl GlobalKind {
     pub fn label(&self) -> &'static str {
         match self {
+            GlobalKind::Builtin(_) => "builtin",
             GlobalKind::Constant(_) => "constant",
             GlobalKind::Enum(_) => "enum",
             GlobalKind::Function(_) => "function",
@@ -159,15 +163,28 @@ pub(crate) enum InsertOutcome<'a> {
     Fresh(GlobalRegistryId),
 }
 
+/// Outcome of a successful [`GlobalRegistry::claim_builtin_stub`].
+/// On `ArityMismatch` the stub is still consumed (span stamped, no
+/// second claim) but keeps its seeded param names, so collect can
+/// diagnose without leaving a half-adopted entry behind.
+#[derive(Debug)]
+pub(crate) enum ClaimOutcome {
+    ArityMismatch {
+        id: GlobalRegistryId,
+        expected_arity: usize,
+    },
+    Claimed(GlobalRegistryId),
+}
+
 /// Id-keyed registry of every globally-named decl across the program.
 #[derive(Clone, Debug, Default)]
 pub struct GlobalRegistry {
     entries: HashMap<GlobalRegistryId, RegistryEntry>,
     by_identifier: HashMap<Identifier, GlobalRegistryId>,
     next_id: u32,
-    /// Seeded primitive stubs not yet claimed by an `@intrinsic`
-    /// type declaration. [`Self::claim_primitive_stub`] drains it.
-    unclaimed_primitive_stubs: HashSet<GlobalRegistryId>,
+    /// Seeded builtin stubs not yet claimed by a `builtin`
+    /// declaration. [`Self::claim_builtin_stub`] drains it.
+    unclaimed_builtin_stubs: HashSet<GlobalRegistryId>,
 }
 
 impl GlobalRegistry {
@@ -175,26 +192,53 @@ impl GlobalRegistry {
         Self::default()
     }
 
-    /// Seed a fresh registry with stdlib primitive stubs: scalar /
-    /// FFI-width primitives plus `String` / `Binary` / `Bits`. All
-    /// under the `Global` package so resolve never special-cases
-    /// them. `CPtr<T>` and `Option<T>` are *not* stubbed here.
-    /// They're defined in autoimported `Global.cptr` / `Global.kernel`
-    /// sources and land through `collect` like any other user decl.
+    /// Seed a fresh registry with one [`GlobalKind::Builtin`] stub
+    /// per compiler-owned type, all under the `Global` package so
+    /// resolve never special-cases them. `Option<T>` is *not*
+    /// stubbed: it's an ordinary enum in autoimported
+    /// `Global.kernel`.
     ///
-    /// Each primitive lands as `Struct(Some(empty_def))`: zero
-    /// fields, empty conformance map. The empty definition lets
-    /// `impl P for Int` blocks register conformances without the
-    /// stub-vs-real-struct branching the bare-marker design
-    /// originally forced.
+    /// Each stub carries its [`BuiltinShape`] and an empty
+    /// conformance map, so `impl P for Int` blocks register
+    /// conformances the same way they do against user structs. A
+    /// `builtin` declaration later claims the stub via
+    /// [`Self::claim_builtin_stub`].
     pub(crate) fn with_stdlib_stubs() -> Self {
+        use BuiltinShape as Shape;
         let mut reg = Self::default();
-        for name in [
-            "Int", "Bool", "Unit", "Float", "Never", "String", "Binary", "Bits", "Int8", "Int16",
-            "Int32", "Int64", "UInt8", "UInt16", "UInt32", "UInt64", "Float32", "Float64",
-        ] {
-            seed_primitive_stub(&mut reg, name, Vec::new());
+        let scalars = [
+            ("Binary", Shape::Binary),
+            ("Bits", Shape::Bits),
+            ("Bool", Shape::Bool),
+            ("Float", Shape::Float64),
+            ("Float32", Shape::Float32),
+            ("Float64", Shape::Float64),
+            ("Int", Shape::Int64),
+            ("Int8", Shape::Int8),
+            ("Int16", Shape::Int16),
+            ("Int32", Shape::Int32),
+            ("Int64", Shape::Int64),
+            ("Never", Shape::Never),
+            ("String", Shape::String),
+            ("UInt8", Shape::UInt8),
+            ("UInt16", Shape::UInt16),
+            ("UInt32", Shape::UInt32),
+            ("UInt64", Shape::UInt64),
+            ("Unit", Shape::Unit),
+        ];
+        for (name, shape) in scalars {
+            seed_builtin_stub(&mut reg, name, shape, Vec::new());
         }
+        let type_param = |name: &str| vec![name.to_string()];
+        seed_builtin_stub(&mut reg, "CPtr", Shape::CPtr, type_param("T"));
+        seed_builtin_stub(&mut reg, "List", Shape::List, type_param("T"));
+        seed_builtin_stub(
+            &mut reg,
+            "Map",
+            Shape::Map,
+            vec!["K".to_string(), "V".to_string()],
+        );
+        seed_builtin_stub(&mut reg, "Set", Shape::Set, type_param("T"));
         reg
     }
 
@@ -381,11 +425,12 @@ impl GlobalRegistry {
             )
         });
         let conformances = match &mut entry.kind {
+            GlobalKind::Builtin(def) => &mut def.conformances,
             GlobalKind::Struct(Some(def)) => &mut def.conformances,
             GlobalKind::Enum(Some(def)) => &mut def.conformances,
             other => panic!(
-                "record_conformance on `{}` ({}): only stamped struct/enum entries \
-                 accept conformances",
+                "record_conformance on `{}` ({}): only builtin and stamped \
+                 struct/enum entries accept conformances",
                 entry.identifier,
                 other.label(),
             ),
@@ -411,6 +456,7 @@ impl GlobalRegistry {
     ) -> Option<&[ResolvedType]> {
         let entry = self.entries.get(&target_id)?;
         let conformances = match &entry.kind {
+            GlobalKind::Builtin(def) => &def.conformances,
             GlobalKind::Struct(Some(def)) => &def.conformances,
             GlobalKind::Enum(Some(def)) => &def.conformances,
             _ => return None,
@@ -657,18 +703,21 @@ impl GlobalRegistry {
         }
     }
 
-    /// Claim a seeded primitive stub for an `@intrinsic` type
-    /// declaration. Stamps the declaration's span onto the entry so
-    /// later collisions point at real source, and consumes the stub
-    /// so a second claim collides like any duplicate. `None` when
-    /// `identifier` doesn't name an unclaimed builtin.
-    pub(crate) fn claim_primitive_stub(
+    /// Claim a seeded builtin stub for a `builtin` declaration.
+    /// Stamps the declaration's span onto the entry so later
+    /// collisions point at real source, and consumes the stub so a
+    /// second claim collides like any duplicate. When the declared
+    /// type-param arity matches the stub's shape, the entry adopts
+    /// the declared names so member lifting resolves against them.
+    /// `None` when `identifier` doesn't name an unclaimed builtin.
+    pub(crate) fn claim_builtin_stub(
         &mut self,
         identifier: &Identifier,
         span: Span,
-    ) -> Option<GlobalRegistryId> {
+        type_params: Vec<String>,
+    ) -> Option<ClaimOutcome> {
         let id = *self.by_identifier.get(identifier)?;
-        if !self.unclaimed_primitive_stubs.remove(&id) {
+        if !self.unclaimed_builtin_stubs.remove(&id) {
             return None;
         }
         let entry = self
@@ -676,7 +725,28 @@ impl GlobalRegistry {
             .get_mut(&id)
             .expect("reverse index points at a missing forward entry");
         entry.span = span;
-        Some(id)
+        let GlobalKind::Builtin(definition) = &entry.kind else {
+            panic!(
+                "unclaimed stub `{}` is not a Builtin entry: seed invariant violation",
+                entry.identifier,
+            );
+        };
+        let expected_arity = definition.shape.arity();
+        if type_params.len() != expected_arity {
+            return Some(ClaimOutcome::ArityMismatch { id, expected_arity });
+        }
+        entry.type_param_bounds = vec![Vec::new(); type_params.len()];
+        entry.type_params = type_params;
+        Some(ClaimOutcome::Claimed(id))
+    }
+
+    /// The shape carried by a [`GlobalKind::Builtin`] entry. `None`
+    /// for unknown ids and non-builtin entries.
+    pub fn builtin_shape(&self, id: GlobalRegistryId) -> Option<BuiltinShape> {
+        match &self.get(id)?.kind {
+            GlobalKind::Builtin(definition) => Some(definition.shape),
+            _ => None,
+        }
     }
 
     /// Dereference an id to its entry.
@@ -838,14 +908,21 @@ impl GlobalRegistry {
 /// duplication unnecessary: every value is already independent.)
 pub const UNIVERSAL_PROTOCOLS: &[&str] = &["Debug", "Equality"];
 
-/// Seed a primitive struct stub under `Global.<name>` with an empty
-/// `StructDefinition` (no fields, no conformances). The empty
-/// definition lets `impl P for <name>` blocks call
-/// [`GlobalRegistry::record_conformance`] without distinguishing
-/// stubs from user structs.
-fn seed_primitive_stub(reg: &mut GlobalRegistry, name: &str, type_params: Vec<String>) {
-    let outcome = reg.insert_struct(
+/// Seed a builtin stub under `Global.<name>` carrying `shape` and an
+/// empty conformance map.
+fn seed_builtin_stub(
+    reg: &mut GlobalRegistry,
+    name: &str,
+    shape: BuiltinShape,
+    type_params: Vec<String>,
+) {
+    let kind = GlobalKind::Builtin(BuiltinDefinition {
+        conformances: BTreeMap::new(),
+        shape,
+    });
+    let outcome = reg.insert(
         Identifier::new("Global", vec![name.to_string()]),
+        kind,
         Span::default(),
         type_params,
         VisibilityScope::Public,
@@ -858,14 +935,7 @@ fn seed_primitive_stub(reg: &mut GlobalRegistry, name: &str, type_params: Vec<St
             existing.identifier,
         ),
     };
-    reg.set_struct_definition(
-        id,
-        StructDefinition {
-            conformances: BTreeMap::new(),
-            fields: Vec::new(),
-        },
-    );
-    reg.unclaimed_primitive_stubs.insert(id);
+    reg.unclaimed_builtin_stubs.insert(id);
 }
 
 #[cfg(test)]
@@ -884,24 +954,57 @@ mod tests {
     }
 
     #[test]
-    fn claim_primitive_stub_stamps_span_and_consumes_stub() {
+    fn claim_builtin_stub_stamps_span_and_consumes_stub() {
         let mut reg = GlobalRegistry::with_stdlib_stubs();
         let identifier = Identifier::new("Global", vec!["String".to_string()]);
 
-        let id = reg
-            .claim_primitive_stub(&identifier, decl_span())
-            .expect("seeded `Global.String` stub should be claimable");
+        let Some(ClaimOutcome::Claimed(id)) =
+            reg.claim_builtin_stub(&identifier, decl_span(), Vec::new())
+        else {
+            panic!("seeded `Global.String` stub should be claimable");
+        };
         assert_eq!(reg.get(id).unwrap().span, decl_span());
 
         assert!(
-            reg.claim_primitive_stub(&identifier, Span::default())
+            reg.claim_builtin_stub(&identifier, Span::default(), Vec::new())
                 .is_none(),
             "a stub claims at most once",
         );
     }
 
     #[test]
-    fn claim_primitive_stub_rejects_non_builtin_identifiers() {
+    fn claim_builtin_stub_adopts_declared_param_names() {
+        let mut reg = GlobalRegistry::with_stdlib_stubs();
+        let identifier = Identifier::new("Global", vec!["List".to_string()]);
+
+        let Some(ClaimOutcome::Claimed(id)) =
+            reg.claim_builtin_stub(&identifier, decl_span(), vec!["Elem".to_string()])
+        else {
+            panic!("seeded `Global.List` stub should be claimable");
+        };
+        assert_eq!(reg.type_params(id), Some(&["Elem".to_string()][..]));
+    }
+
+    #[test]
+    fn claim_builtin_stub_reports_arity_mismatch() {
+        let mut reg = GlobalRegistry::with_stdlib_stubs();
+        let identifier = Identifier::new("Global", vec!["Map".to_string()]);
+
+        let Some(ClaimOutcome::ArityMismatch { id, expected_arity }) =
+            reg.claim_builtin_stub(&identifier, decl_span(), vec!["K".to_string()])
+        else {
+            panic!("wrong arity should report a mismatch");
+        };
+        assert_eq!(expected_arity, 2);
+        assert_eq!(
+            reg.type_params(id),
+            Some(&["K".to_string(), "V".to_string()][..]),
+            "mismatched claim keeps the seeded param names",
+        );
+    }
+
+    #[test]
+    fn claim_builtin_stub_rejects_non_builtin_identifiers() {
         let mut reg = GlobalRegistry::with_stdlib_stubs();
         let user_struct = Identifier::new("App", vec!["Config".to_string()]);
         let InsertOutcome::Fresh(_) = reg.insert_struct(
@@ -914,10 +1017,13 @@ mod tests {
         };
 
         assert!(
-            reg.claim_primitive_stub(&user_struct, decl_span())
+            reg.claim_builtin_stub(&user_struct, decl_span(), Vec::new())
                 .is_none()
         );
         let missing = Identifier::new("App", vec!["Missing".to_string()]);
-        assert!(reg.claim_primitive_stub(&missing, decl_span()).is_none());
+        assert!(
+            reg.claim_builtin_stub(&missing, decl_span(), Vec::new())
+                .is_none()
+        );
     }
 }

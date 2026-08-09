@@ -18,13 +18,15 @@ use crate::pipeline::lift_signatures::ResolutionScope;
 use crate::pipeline::unify::Substitution;
 use crate::registry::{GlobalKind, GlobalRegistry, RegistryEntry};
 
-/// Whether `path` resolves to a registered struct. Lets the resolver
-/// tell a nested struct from a struct-shaped enum variant, since they parse
-/// to the same node.
+/// Whether `path` resolves to a registered struct or builtin. Lets
+/// the resolver tell a nested struct from a struct-shaped enum
+/// variant, since they parse to the same node. Builtins route to
+/// struct-construction resolution so the "cannot construct builtin"
+/// diagnostic fires there.
 pub(super) fn names_struct(path: &[String], scope: ResolutionScope<'_>) -> bool {
     matches!(
         lookup_type(path, scope),
-        Some((_, entry)) if matches!(entry.kind, GlobalKind::Struct(_))
+        Some((_, entry)) if matches!(entry.kind, GlobalKind::Builtin(_) | GlobalKind::Struct(_))
     )
 }
 

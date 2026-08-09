@@ -394,6 +394,7 @@ impl Parser {
         match self.peek() {
             TokenKind::Alias
             | TokenKind::At
+            | TokenKind::Builtin
             | TokenKind::Const
             | TokenKind::Enum
             | TokenKind::Extend
@@ -425,6 +426,7 @@ impl Parser {
 
         match self.peek().clone() {
             TokenKind::Struct => Some(self.parse_struct_item(annotations, visibility)),
+            TokenKind::Builtin => Some(self.parse_builtin_item(annotations, visibility)),
             TokenKind::Enum => Some(self.parse_enum_item(annotations, visibility)),
             TokenKind::Protocol => Some(self.parse_protocol_item(annotations, visibility)),
             TokenKind::Fn => Some(self.parse_function_item(annotations, visibility)),

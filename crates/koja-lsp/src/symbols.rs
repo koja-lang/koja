@@ -11,7 +11,8 @@ use tower_lsp_server::jsonrpc::Result;
 use tower_lsp_server::ls_types::*;
 
 use koja_ast::ast::{
-    EnumDecl, File, Function, ImplMember, Item, Param, StructDecl, TypeExpr, TypeParam, Visibility,
+    BuiltinDecl, EnumDecl, File, Function, ImplMember, Item, Param, StructDecl, TypeExpr,
+    TypeParam, Visibility,
 };
 use koja_ast::span::Span;
 
@@ -138,6 +139,28 @@ fn collect_workspace_symbols(file: &File, query: &str, results: &mut Vec<SymbolI
     for item in &file.items {
         match item {
             Item::Alias(_) => {}
+            Item::Builtin(b) => {
+                if matches(b.name()) {
+                    results.push(symbol_info(
+                        b.name(),
+                        SymbolKind::STRUCT,
+                        &uri,
+                        &b.span,
+                        None,
+                    ));
+                }
+                for f in &b.functions {
+                    if matches(&f.name) {
+                        results.push(symbol_info(
+                            &f.name,
+                            SymbolKind::METHOD,
+                            &uri,
+                            &f.span,
+                            Some(b.name().to_string()),
+                        ));
+                    }
+                }
+            }
             Item::Function(f) => {
                 if matches(&f.name) {
                     results.push(symbol_info(
@@ -286,6 +309,7 @@ fn build_document_symbols(file: &File) -> Vec<DocumentSymbol> {
     for item in &file.items {
         match item {
             Item::Alias(_) => {}
+            Item::Builtin(b) => symbols.push(builtin_symbol(b)),
             Item::Function(f) => symbols.push(function_symbol(f)),
             Item::Struct(s) => symbols.push(struct_symbol(s)),
             Item::Enum(e) => symbols.push(enum_symbol(e)),
@@ -423,6 +447,23 @@ fn build_document_symbols(file: &File) -> Vec<DocumentSymbol> {
     }
 
     symbols
+}
+
+/// Builds a [`DocumentSymbol`] for a builtin declaration.
+fn builtin_symbol(b: &BuiltinDecl) -> DocumentSymbol {
+    let range = span_to_range(&b.span);
+    let children: Vec<DocumentSymbol> = b.functions.iter().map(function_symbol).collect();
+    #[allow(deprecated)]
+    DocumentSymbol {
+        name: b.name().to_string(),
+        detail: type_params_detail(&b.type_params),
+        kind: SymbolKind::STRUCT,
+        tags: None,
+        deprecated: None,
+        range,
+        selection_range: range,
+        children: children_option(children),
+    }
 }
 
 /// Builds a [`DocumentSymbol`] for a struct declaration.

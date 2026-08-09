@@ -23,7 +23,7 @@
 
 use koja_ast::ast::{Arg, BinOp, Diagnostic, Expr, ExprKind, UnaryOp};
 use koja_ast::coercion::LiteralCoercion;
-use koja_ast::identifier::ResolvedType;
+use koja_ast::identifier::{Resolution, ResolvedType};
 use koja_ast::labels::bin_op_label;
 use koja_ast::span::Span;
 
@@ -31,7 +31,7 @@ use super::coercion::{Compatible, check_compatible, coercion_target_mut};
 use super::ctx::Resolver;
 use super::expr::resolve_expr;
 use super::types::{display_resolution, is_primitive, types_equivalent};
-use crate::registry::GlobalRegistry;
+use crate::registry::{GlobalKind, GlobalRegistry};
 
 const EQ_METHOD: &str = "eq";
 
@@ -94,11 +94,20 @@ fn eligible_for_primitive_equality(left: &Expr, right: &Expr, registry: &GlobalR
 }
 
 pub(super) fn is_primitive_equality_eligible(ty: &ResolvedType, registry: &GlobalRegistry) -> bool {
-    const PRIMITIVES: &[&str] = &[
-        "Bool", "Float", "Float32", "Int", "Int16", "Int32", "Int64", "Int8", "String", "UInt16",
-        "UInt32", "UInt64", "UInt8",
-    ];
-    PRIMITIVES.iter().any(|p| is_primitive(ty, registry, p))
+    let ResolvedType::Named {
+        resolution: Resolution::Global(id),
+        type_args,
+    } = ty
+    else {
+        return false;
+    };
+    if !type_args.is_empty() {
+        return false;
+    }
+    match registry.get(*id).map(|entry| &entry.kind) {
+        Some(GlobalKind::Builtin(def)) => def.shape.has_primitive_equality(),
+        _ => false,
+    }
 }
 
 /// Stand-in `Expr` used during the [`std::mem::replace`] swap when

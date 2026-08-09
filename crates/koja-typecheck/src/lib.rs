@@ -31,8 +31,8 @@ pub use koja_ast::coercion::{LiteralCoercion, NumericLiteralWidth};
 pub use pipeline::{Substitution, peel_alias, substitute};
 pub use program::{CheckedPackage, CheckedProgram, check_program};
 pub use registry::{
-    Candidate, CandidateDetail, CandidateKind, ConstantDefinition, Dispatch, EnumDefinition,
-    FunctionSignature, GlobalKind, GlobalRegistry, KEYWORDS, ProtocolDefinition, RegistryEntry,
-    ResolvedEnumVariant, ResolvedParam, ResolvedProtocolMethod, ResolvedStructField,
-    ResolvedVariantData, StructDefinition, format_registry,
+    BuiltinDefinition, BuiltinShape, Candidate, CandidateDetail, CandidateKind, ConstantDefinition,
+    Dispatch, EnumDefinition, FunctionSignature, GlobalKind, GlobalRegistry, KEYWORDS,
+    ProtocolDefinition, RegistryEntry, ResolvedEnumVariant, ResolvedParam, ResolvedProtocolMethod,
+    ResolvedStructField, ResolvedVariantData, StructDefinition, format_registry,
 };

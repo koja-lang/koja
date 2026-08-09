@@ -221,12 +221,15 @@ fn unknown_struct_type_diagnoses() {
 }
 
 #[test]
-fn primitive_struct_construction_diagnoses() {
+fn builtin_struct_literal_construction_diagnoses() {
     let source = "
           Int{x: 1}
         ";
 
-    assert_script_fails_with(source, &["cannot construct primitive type `Global.Int`"]);
+    assert_script_fails_with(
+        source,
+        &["cannot construct builtin type `Global.Int` with struct literal syntax"],
+    );
 }
 
 #[test]
@@ -305,7 +308,10 @@ fn field_access_on_non_struct_diagnoses() {
           1.x
         ";
 
-    assert_script_fails_with(source, &["`Global.Int` has no field `x`"]);
+    assert_script_fails_with(
+        source,
+        &["field access requires a struct receiver, got `Global.Int` (builtin)"],
+    );
 }
 
 fn field_name(field: &ResolvedStructField) -> &str {

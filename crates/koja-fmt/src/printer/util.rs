@@ -76,6 +76,7 @@ pub(super) fn struct_body(prefix: Doc, field_docs: Vec<Doc>) -> Doc {
 pub(super) fn item_span(item: &Item) -> &Span {
     match item {
         Item::Alias(a) => &a.span,
+        Item::Builtin(b) => &b.span,
         Item::Constant(c) => &c.span,
         Item::Enum(e) => &e.span,
         Item::Extend(e) => &e.span,
@@ -92,6 +93,7 @@ pub(super) fn item_span(item: &Item) -> &Span {
 pub(super) fn item_annotations(item: &Item) -> &[Annotation] {
     match item {
         Item::Alias(_) | Item::Extend(_) | Item::Impl(_) => &[],
+        Item::Builtin(b) => &b.annotations,
         Item::Constant(c) => &c.annotations,
         Item::Enum(e) => &e.annotations,
         Item::Function(f) => &f.annotations,

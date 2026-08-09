@@ -23,6 +23,9 @@ use traverse::{find_in_ident_at_name, find_in_params, find_in_statement, find_in
 /// Describes the kind and identity of a symbol found at a cursor position.
 #[derive(Debug)]
 pub(crate) enum SymbolInfo {
+    Builtin {
+        name: String,
+    },
     Constant {
         name: String,
     },
@@ -137,6 +140,19 @@ pub(crate) fn find_symbol_at(
                             }
                         }
                     }
+                }
+            }
+            Item::Builtin(b) => {
+                if !span_contains(&b.span, line, col) {
+                    continue;
+                }
+                if span_contains_name(b.name(), &b.span, line, col) {
+                    return Some(SymbolInfo::Builtin {
+                        name: b.name().to_string(),
+                    });
+                }
+                if let Some(info) = find_in_inline_functions(&b.functions, line, col, ctx) {
+                    return Some(info);
                 }
             }
             Item::Struct(s) => {
@@ -357,6 +373,9 @@ fn classify_in_package(name: &str, package: &str, registry: &GlobalRegistry) -> 
     let identifier = Identifier::new(package, vec![name.to_string()]);
     let (_, entry) = registry.lookup(&identifier)?;
     Some(match &entry.kind {
+        GlobalKind::Builtin(_) => SymbolInfo::Builtin {
+            name: name.to_string(),
+        },
         GlobalKind::Function(_) => SymbolInfo::Function {
             name: name.to_string(),
         },
@@ -588,7 +607,7 @@ mod tests {
             locals: &locals,
         };
         let info = classify_name("Int", &ctx).expect("classify");
-        assert!(matches!(info, SymbolInfo::Struct { ref name } if name == "Int"));
+        assert!(matches!(info, SymbolInfo::Builtin { ref name } if name == "Int"));
     }
 
     /// Smoke test mirroring the hover/definition pipeline: build a

@@ -1,85 +1,73 @@
 @doc """
 A 64-bit signed integer, the default integer type.
 """
-@intrinsic
-struct Int
+builtin Int
 end
 
 @doc """
 An 8-bit signed integer.
 """
-@intrinsic
-struct Int8
+builtin Int8
 end
 
 @doc """
 A 16-bit signed integer.
 """
-@intrinsic
-struct Int16
+builtin Int16
 end
 
 @doc """
 A 32-bit signed integer.
 """
-@intrinsic
-struct Int32
+builtin Int32
 end
 
 @doc """
 A 64-bit signed integer, the explicit-width spelling of `Int`.
 """
-@intrinsic
-struct Int64
+builtin Int64
 end
 
 @doc """
 An 8-bit unsigned integer.
 """
-@intrinsic
-struct UInt8
+builtin UInt8
 end
 
 @doc """
 A 16-bit unsigned integer.
 """
-@intrinsic
-struct UInt16
+builtin UInt16
 end
 
 @doc """
 A 32-bit unsigned integer.
 """
-@intrinsic
-struct UInt32
+builtin UInt32
 end
 
 @doc """
 A 64-bit unsigned integer.
 """
-@intrinsic
-struct UInt64
+builtin UInt64
 end
 
 @doc """
 A finite 64-bit IEEE 754 float, the default float type.
 """
-@intrinsic
-struct Float
+builtin Float
 end
 
 @doc """
 A finite 32-bit IEEE 754 float.
 """
-@intrinsic
-struct Float32
+builtin Float32
 end
 
 @doc """
 A finite 64-bit IEEE 754 float, the explicit-width spelling of `Float`.
 """
-@intrinsic
-struct Float64
+builtin Float64
 end
 
 @doc """

@@ -8,8 +8,8 @@
 use askama::Template;
 
 use crate::extract::{
-    DocConstant, DocEnum, DocFunction, DocItem, DocPackage, DocProject, DocProtocol, DocStruct,
-    PackageKind,
+    DocBuiltin, DocConstant, DocEnum, DocFunction, DocItem, DocPackage, DocProject, DocProtocol,
+    DocStruct, PackageKind,
 };
 
 mod filters {
@@ -153,7 +153,8 @@ fn sidebar_groups(items: &[DocItem]) -> Vec<SidebarGroup<'_>> {
         }];
     }
 
-    let kinds: [(&str, &'static str); 5] = [
+    let kinds: [(&str, &'static str); 6] = [
+        ("builtin", "Builtins"),
         ("const", "Constants"),
         ("enum", "Enums"),
         ("fn", "Functions"),
@@ -201,6 +202,10 @@ impl TocEntry {
 
 fn function_entries(functions: &[DocFunction]) -> impl Iterator<Item = TocEntry> + '_ {
     functions.iter().map(|f| TocEntry::function(&f.name))
+}
+
+fn builtin_toc(b: &DocBuiltin) -> Vec<TocEntry> {
+    function_entries(&b.functions).collect()
 }
 
 fn struct_toc(s: &DocStruct) -> Vec<TocEntry> {
@@ -296,6 +301,13 @@ struct PackageIndexTemplate<'a> {
 }
 
 #[derive(Template)]
+#[template(path = "item_builtin.html")]
+struct BuiltinTemplate<'a> {
+    b: &'a DocBuiltin,
+    ctx: PageContext<'a>,
+}
+
+#[derive(Template)]
 #[template(path = "item_struct.html")]
 struct StructTemplate<'a> {
     ctx: PageContext<'a>,
@@ -379,6 +391,14 @@ pub fn render_package_index(pkg: &DocPackage, project: &DocProject) -> String {
     };
     tmpl.render()
         .expect("failed to render package index template")
+}
+
+pub fn render_builtin(b: &DocBuiltin, pkg: &DocPackage, project: &DocProject) -> String {
+    let tmpl = BuiltinTemplate {
+        b,
+        ctx: PageContext::item(&b.name, builtin_toc(b), pkg, project),
+    };
+    tmpl.render().expect("failed to render builtin template")
 }
 
 pub fn render_struct(s: &DocStruct, pkg: &DocPackage, project: &DocProject) -> String {

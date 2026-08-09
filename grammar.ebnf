@@ -40,6 +40,7 @@ script  = { top_level_decl | statement } ;                  (* .kojs *)
 
 top_level_decl = struct_decl
                | enum_decl
+               | builtin_decl
                | protocol_decl
                | impl_block
                | extend_block
@@ -76,6 +77,13 @@ enum_decl = { annotation } , [ "priv" ] , "enum" , decl_path , [ type_params ] ,
 enum_variant = TYPE_IDENT                                           (* unit *)
              | TYPE_IDENT , "(" , type_expr , { "," , type_expr } , ")"   (* tuple *)
              | TYPE_IDENT , "{" , struct_field , { "," , struct_field } , "}" ; (* struct *)
+
+(* Builtin types: compiler-owned representations (`String`, `List<T>`).
+   Always public. The body admits only functions. *)
+
+builtin_decl = { annotation } , "builtin" , decl_path , [ type_params ] ,
+               { function_decl } ,
+               "end" ;
 
 type_params = "<" , type_param , { "," , type_param } , ">" ;
 

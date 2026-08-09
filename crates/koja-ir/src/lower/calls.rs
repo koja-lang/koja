@@ -533,7 +533,10 @@ fn method_dispatch_kind(receiver: &Expr, registry: &GlobalRegistry) -> Dispatch 
         && let Some(entry) = registry.get(*id)
         && matches!(
             entry.kind,
-            GlobalKind::Enum(_) | GlobalKind::Protocol(_) | GlobalKind::Struct(_)
+            GlobalKind::Builtin(_)
+                | GlobalKind::Enum(_)
+                | GlobalKind::Protocol(_)
+                | GlobalKind::Struct(_)
         )
     {
         return Dispatch::Static;

@@ -193,37 +193,31 @@ neighbor remains open:
 
 ---
 
-## Builtin types masquerade as structs
+## Builtins inherit zero-field struct derives
 
-Noted 2026-08-04 while landing `@intrinsic` struct declarations. The
-18 scalar builtins (`String`, `Int`, `Bool`, ...) are declared in
-stdlib source as `@intrinsic struct` doc anchors that claim the
-registry's seeded stubs. `List<T>`, `Map<K, V>`, `Set<T>`, and
-`CPtr<T>` are plain `struct` declarations whose representation the
-compiler owns anyway. Both groups borrow the struct keyword for types
-that have no struct semantics, and the compiler polices the lie with
-special cases instead of ruling it out:
+Found 2026-08-08 while auditing the `builtin` migration.
+`derive_debug` and `derive_equality` synthesize the same impls for a
+`builtin` declaration that a zero-field struct gets. Builtins with
+explicit stdlib impls (the scalars, `String`, container `Debug`)
+never hit the synthesis, but the holes are live:
 
-- Collect diagnoses `@intrinsic` struct shape (no fields, no type
-  params, public only) where a dedicated grammar form would make the
-  states unwritable.
-- Typecheck rejects `String{}`-style construction of primitives as an
-  explicit special case.
-- `resolved_type_to_ir_type` maps `Global.*` names to fixed IR shapes
-  through a name-keyed match that calls itself the "sole authority"
-  and must be extended by hand per primitive.
-- `koja doc` labels every builtin "(struct)".
+- `List`, `Map`, `Set`, and `CPtr` have no explicit `Equality` impl,
+  so the derived `eq` compares zero fields and returns `true` for
+  every pair: `[1, 2] == [3]` evaluates to `true` today. This
+  pre-dates the `builtin` keyword, since the types were zero-field
+  structs before.
+- `CPtr` has no explicit `Debug` impl, so `ptr.print()` renders the
+  struct-shaped `CPtr{}`.
+- `Int64`, `Float64`, `Never`, and `Unit` lean on synthesized derives
+  only for conformance. At runtime the IR's `Int64`-onto-`Int` method
+  collapse routes to the real intrinsic impls.
 
-**Fix path:** a `builtin` declaration kind at the same level as
-`struct` and `enum`. Declaring a name the compiler does not support is
-a compile error, which is exactly the stub-claim rule that landed with
-`@intrinsic`, so the semantics carry over unchanged. The kind must
-allow type parameters (`builtin List<T>`). A `GlobalKind::Builtin`
-registry entry can carry its IR shape, dissolving the name-keyed match
-and the construction special case, and docs get an honest kind label.
-Cost is a new keyword and `Item` variant through parser, formatter,
-LSP, doc extractor, typecheck, and IR, which is why the annotation
-shipped first as a contained stepping stone.
+**Fix path:** delete the builtin arms from both derive passes and add
+explicit stdlib impls. Collection `eq` needs an element-wise walk and
+a `T: Equality` requirement on the impl target, which the language
+cannot spell yet. `CPtr` needs a real `Debug` body. The
+conformance-only holes need explicit impls or a rule that a builtin
+satisfies bounds by shape.
 
 ---
 

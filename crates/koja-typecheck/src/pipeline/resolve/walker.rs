@@ -72,6 +72,20 @@ pub(crate) fn resolve_file(
                     );
                 }
             }
+            Item::Builtin(decl) => {
+                let enclosing_type_id = enclosing_type_id(env.package, &decl.path, env.registry);
+                for function in &mut decl.functions {
+                    let identifier = Identifier::member(env.package, &decl.path, &function.name);
+                    resolve_function(
+                        function,
+                        &identifier,
+                        Some(&decl.path),
+                        enclosing_type_id,
+                        &mut env,
+                        diagnostics,
+                    );
+                }
+            }
             Item::Enum(decl) => {
                 resolve_enum_defaults(decl, &env, diagnostics);
                 let enclosing_type_id = enclosing_type_id(env.package, &decl.path, env.registry);

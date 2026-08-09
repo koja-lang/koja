@@ -53,19 +53,22 @@ pub(super) fn monomorphize(
         .collect();
 
     match &entry.kind {
+        // A builtin lowers to a primitive IRType, not a struct decl,
+        // so there is no IR storage to describe (the pointer or
+        // hash-table shape lives entirely inside the LLVM type
+        // lowering). Still enqueue its methods so call sites against
+        // `List_$T$.append`, `CPtr_$T$.alloc`, etc. resolve.
+        GlobalKind::Builtin(_) => {
+            assert_arity(&entry.identifier, entry.type_params.len(), &inst.args);
+            enqueue_member_methods(inst, registry, function_index, output);
+        }
         GlobalKind::Struct(Some(definition)) => {
             assert_arity(&entry.identifier, entry.type_params.len(), &inst.args);
             let symbol = mangled_type_name(&template_symbol, &arg_types);
-            // `Global.CPtr<T>` is a primitive at the IR layer
-            // ([`IRType::CPtr`]), not a struct decl, so its fields don't
-            // exist as IR storage. Still enqueue its methods so call
-            // sites against `CPtr_$T$.alloc`, `.free`, etc. resolve.
-            if !is_primitive_struct_template(&entry.identifier) {
-                let decl = monomorphize_struct(definition, inst, symbol, registry, output);
-                owning_package(packages, &owner_label, &template_symbol)
-                    .structs
-                    .insert(decl.symbol.clone(), decl);
-            }
+            let decl = monomorphize_struct(definition, inst, symbol, registry, output);
+            owning_package(packages, &owner_label, &template_symbol)
+                .structs
+                .insert(decl.symbol.clone(), decl);
             enqueue_member_methods(inst, registry, function_index, output);
         }
         GlobalKind::Enum(Some(definition)) => {
@@ -333,6 +336,7 @@ fn enqueue_member_methods(
 fn protocol_method_names(kind: &GlobalKind, registry: &GlobalRegistry) -> BTreeSet<String> {
     let mut names: BTreeSet<String> = BTreeSet::new();
     let conformances = match kind {
+        GlobalKind::Builtin(def) => &def.conformances,
         GlobalKind::Struct(Some(def)) => &def.conformances,
         GlobalKind::Enum(Some(def)) => &def.conformances,
         _ => return names,
@@ -349,22 +353,6 @@ fn protocol_method_names(kind: &GlobalKind, registry: &GlobalRegistry) -> BTreeS
         }
     }
     names
-}
-
-/// True for stdlib structs that lower to a primitive [`IRType`]:
-/// `Global.CPtr<T>` (becomes `IRType::CPtr(...)`), `Global.List<T>`
-/// (becomes `IRType::List(...)`), `Global.Map<K, V>` (becomes
-/// `IRType::Map { ... }`), and `Global.Set<T>` (becomes
-/// `IRType::Set(...)`). Mono enqueues the struct's methods (so
-/// call sites can dispatch) but skips creating an `IRStructDecl`
-/// (the IR has no struct storage to describe, as the pointer or hash-
-/// table shape lives entirely inside the LLVM type lowering).
-fn is_primitive_struct_template(identifier: &koja_ast::identifier::Identifier) -> bool {
-    if identifier.package() != "Global" {
-        return false;
-    }
-    let path = identifier.path();
-    path.len() == 1 && matches!(path[0].as_str(), "CPtr" | "List" | "Map" | "Set")
 }
 
 fn assert_arity(

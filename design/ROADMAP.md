@@ -85,9 +85,9 @@ declares its own builtin types, and adds runtime observability.
   `struct MyApp: Process<C, M, R>` takes a comma-separated protocol list and
   desugars to the equivalent `impl` blocks. Enums take the same syntax. The
   main motivation is making application entry types read less awkwardly.
-- A `builtin` declaration kind for compiler-owned types. It replaces the
-  `@intrinsic struct` workaround, the construction special cases, and the
-  name-keyed IR shape match ([GAPS.md](GAPS.md)).
+- **[DONE]** A `builtin` declaration kind for compiler-owned types. It
+  replaces the `@intrinsic struct` workaround, the construction special
+  cases, and the name-keyed IR shape match.
 - Add a `Runtime` observability API with global and per-process metrics,
   including mailbox depth, and document the overload contract for long-running
   services.

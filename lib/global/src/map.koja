@@ -3,7 +3,7 @@ A generic hash map from keys of type `K` to values of type `V`.
 Keys must implement `Hash` and `Equality`. Uses open addressing
 with linear probing.
 """
-struct Map<K, V>
+builtin Map<K, V>
 end
 
 extend Map<K, V>

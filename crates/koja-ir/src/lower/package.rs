@@ -15,7 +15,7 @@ use koja_ast::ast::{
 use koja_ast::identifier::{
     AnonymousKind, GlobalRegistryId, Identifier, LocalId, Resolution, ResolvedType,
 };
-use koja_typecheck::{CheckedPackage, FunctionSignature, GlobalKind, GlobalRegistry};
+use koja_typecheck::{BuiltinShape, CheckedPackage, FunctionSignature, GlobalKind, GlobalRegistry};
 
 use crate::constant::IRConstantValue;
 use crate::enum_decl::IREnumDecl;
@@ -96,6 +96,23 @@ pub(crate) fn lower_package(
                     if let Some(lowered) = lower_struct_decl(decl, &pkg.package, registry, output) {
                         structs.insert(lowered.symbol.clone(), lowered);
                     }
+                    if decl.type_params.is_empty() {
+                        for function in &decl.functions {
+                            let identifier =
+                                Identifier::member(&pkg.package, &decl.path, &function.name);
+                            if let Some(lowered) = lower_function_with_identifier(
+                                function, identifier, def_file, registry, output,
+                            ) {
+                                functions.insert(lowered.symbol.clone(), lowered);
+                            }
+                        }
+                    }
+                }
+                // A builtin's representation is compiler-provided
+                // (`builtin_to_ir_type`), so the decl emits no IR
+                // struct. Methods on generic builtins specialize
+                // through monomorphization like any generic type.
+                Item::Builtin(decl) => {
                     if decl.type_params.is_empty() {
                         for function in &decl.functions {
                             let identifier =
@@ -611,127 +628,12 @@ fn global_to_ir_type(
         );
         return resolved_type_to_ir_type(expansion, registry, instantiations);
     }
-    // Stdlib *primitive* `Struct(_)` stubs (scalars, `CPtr<T>`) need
-    // fixed-shape lowering, while user-style stdlib structs (`DateTime`,
-    // `Duration`, etc. from auto-imported `Global.*` files) and
-    // stdlib `Enum(_)` stubs (today `Option<T>`) fall through to
-    // the generic monomorphization path. The match below is the
-    // sole authority on which `Global.*` names are primitive: if
-    // you add a new primitive to `with_stdlib_stubs`, add it here.
-    if entry.identifier.is_in_package("Global") && matches!(entry.kind, GlobalKind::Struct(_)) {
-        let last = entry.identifier.last();
-        if last == "CPtr" {
-            assert_eq!(
-                type_args.len(),
-                1,
-                "IR lower: stdlib primitive `Global.CPtr` requires exactly one type \
-                 argument; got {} ({type_args:?})",
-                type_args.len(),
-            );
-            let pointee = resolved_type_to_ir_type(&type_args[0], registry, instantiations);
-            // Method monomorphization needs an Instantiation entry even
-            // though the pointer itself doesn't carry a struct decl.
-            // Call sites mangle method symbols as `CPtr_$T$.method`,
-            // which mono materializes via `enqueue_member_methods`.
-            instantiations.push(Instantiation {
-                template: id,
-                args: type_args.to_vec(),
-                method_args: Vec::new(),
-                owner: id,
-            });
-            return IRType::CPtr(Box::new(pointee));
-        }
-        if last == "List" {
-            assert_eq!(
-                type_args.len(),
-                1,
-                "IR lower: stdlib primitive `Global.List` requires exactly one type \
-                 argument; got {} ({type_args:?})",
-                type_args.len(),
-            );
-            let element = resolved_type_to_ir_type(&type_args[0], registry, instantiations);
-            instantiations.push(Instantiation {
-                template: id,
-                args: type_args.to_vec(),
-                method_args: Vec::new(),
-                owner: id,
-            });
-            return IRType::List(Box::new(element));
-        }
-        if last == "Map" {
-            assert_eq!(
-                type_args.len(),
-                2,
-                "IR lower: stdlib primitive `Global.Map` requires exactly two type \
-                 arguments; got {} ({type_args:?})",
-                type_args.len(),
-            );
-            let key = resolved_type_to_ir_type(&type_args[0], registry, instantiations);
-            let value = resolved_type_to_ir_type(&type_args[1], registry, instantiations);
-            instantiations.push(Instantiation {
-                template: id,
-                args: type_args.to_vec(),
-                method_args: Vec::new(),
-                owner: id,
-            });
-            return IRType::Map {
-                key: Box::new(key),
-                value: Box::new(value),
-            };
-        }
-        if last == "Set" {
-            assert_eq!(
-                type_args.len(),
-                1,
-                "IR lower: stdlib primitive `Global.Set` requires exactly one type \
-                 argument; got {} ({type_args:?})",
-                type_args.len(),
-            );
-            let element = resolved_type_to_ir_type(&type_args[0], registry, instantiations);
-            instantiations.push(Instantiation {
-                template: id,
-                args: type_args.to_vec(),
-                method_args: Vec::new(),
-                owner: id,
-            });
-            return IRType::Set(Box::new(element));
-        }
-        let primitive = match last {
-            "Binary" => Some(IRType::Binary),
-            "Bits" => Some(IRType::Bits),
-            "Bool" => Some(IRType::Bool),
-            "Float" | "Float64" => Some(IRType::Float64),
-            "Float32" => Some(IRType::Float32),
-            "Int" | "Int64" => Some(IRType::Int64),
-            "Int8" => Some(IRType::Int8),
-            "Int16" => Some(IRType::Int16),
-            "Int32" => Some(IRType::Int32),
-            // `Never` has no runtime representation. The only place
-            // an expression's resolution surfaces `Never` is a
-            // fully-divergent `if`/`else`/`cond` whose merge block we
-            // still synthesize for surrounding-flow continuity but
-            // is never reached at runtime. Mapping to `Unit` is a
-            // structurally-safe placeholder until `IRType::Never`
-            // lands alongside `Kernel.panic` and friends.
-            "Never" => Some(IRType::Unit),
-            "UInt8" => Some(IRType::UInt8),
-            "UInt16" => Some(IRType::UInt16),
-            "UInt32" => Some(IRType::UInt32),
-            "UInt64" => Some(IRType::UInt64),
-            "String" => Some(IRType::String),
-            "Unit" => Some(IRType::Unit),
-            _ => None,
-        };
-        if let Some(ir) = primitive {
-            assert!(
-                type_args.is_empty(),
-                "IR lower: stdlib primitive `{}` cannot carry type_args",
-                entry.identifier,
-            );
-            return ir;
-        }
-        // Falls through to the generic struct path below for
-        // user-style `Global.*` structs from the auto-import.
+    // Builtins lower structurally from their registry-stamped shape.
+    // User-style stdlib structs (`DateTime`, `Duration`, etc. from
+    // auto-imported `Global.*` files) and enums (`Option<T>`) fall
+    // through to the generic monomorphization path.
+    if let GlobalKind::Builtin(definition) = &entry.kind {
+        return builtin_to_ir_type(definition.shape, id, type_args, registry, instantiations);
     }
     let template = IRSymbol::from_identifier(&entry.identifier);
     let translated: Vec<IRType> = type_args
@@ -755,5 +657,75 @@ fn global_to_ir_type(
             entry.identifier,
             other.label(),
         ),
+    }
+}
+
+/// Structural lowering for a [`BuiltinShape`]. Generic shapes
+/// (`CPtr`, `List`, `Map`, `Set`) push an [`Instantiation`] because
+/// method monomorphization needs the entry even though the type
+/// itself carries no struct decl: call sites mangle method symbols
+/// as `List_$T$.method`, which mono materializes via
+/// `enqueue_member_methods`.
+fn builtin_to_ir_type(
+    shape: BuiltinShape,
+    id: GlobalRegistryId,
+    type_args: &[ResolvedType],
+    registry: &GlobalRegistry,
+    instantiations: &mut Vec<Instantiation>,
+) -> IRType {
+    assert_eq!(
+        type_args.len(),
+        shape.arity(),
+        "IR lower: builtin shape {shape:?} requires exactly {} type argument(s); \
+         got {} ({type_args:?})",
+        shape.arity(),
+        type_args.len(),
+    );
+    if shape.arity() > 0 {
+        instantiations.push(Instantiation {
+            template: id,
+            args: type_args.to_vec(),
+            method_args: Vec::new(),
+            owner: id,
+        });
+    }
+    let mut arg = |index: usize| {
+        Box::new(resolved_type_to_ir_type(
+            &type_args[index],
+            registry,
+            instantiations,
+        ))
+    };
+    match shape {
+        BuiltinShape::Binary => IRType::Binary,
+        BuiltinShape::Bits => IRType::Bits,
+        BuiltinShape::Bool => IRType::Bool,
+        BuiltinShape::CPtr => IRType::CPtr(arg(0)),
+        BuiltinShape::Float32 => IRType::Float32,
+        BuiltinShape::Float64 => IRType::Float64,
+        BuiltinShape::Int8 => IRType::Int8,
+        BuiltinShape::Int16 => IRType::Int16,
+        BuiltinShape::Int32 => IRType::Int32,
+        BuiltinShape::Int64 => IRType::Int64,
+        BuiltinShape::List => IRType::List(arg(0)),
+        BuiltinShape::Map => IRType::Map {
+            key: arg(0),
+            value: arg(1),
+        },
+        // `Never` has no runtime representation. The only place an
+        // expression's resolution surfaces `Never` is a fully-
+        // divergent `if`/`else`/`cond` whose merge block we still
+        // synthesize for surrounding-flow continuity but is never
+        // reached at runtime. Mapping to `Unit` is a structurally-
+        // safe placeholder until `IRType::Never` lands alongside
+        // `Kernel.panic` and friends.
+        BuiltinShape::Never => IRType::Unit,
+        BuiltinShape::Set => IRType::Set(arg(0)),
+        BuiltinShape::String => IRType::String,
+        BuiltinShape::UInt8 => IRType::UInt8,
+        BuiltinShape::UInt16 => IRType::UInt16,
+        BuiltinShape::UInt32 => IRType::UInt32,
+        BuiltinShape::UInt64 => IRType::UInt64,
+        BuiltinShape::Unit => IRType::Unit,
     }
 }

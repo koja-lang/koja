@@ -39,9 +39,9 @@
 //! types.
 
 use koja_ast::ast::{
-    Annotation, Arg, EnumDecl, EnumVariant, EnumVariantData, Expr, ExprKind, FieldPattern, File,
-    Function, ImplBlock, ImplMember, Item, MatchArm, Param, Pattern, Statement, StringPart,
-    StructDecl, StructField, TypeExpr, TypeParam, Visibility,
+    Annotation, Arg, BuiltinDecl, EnumDecl, EnumVariant, EnumVariantData, Expr, ExprKind,
+    FieldPattern, File, Function, ImplBlock, ImplMember, Item, MatchArm, Param, Pattern, Statement,
+    StringPart, StructDecl, StructField, TypeExpr, TypeParam, Visibility,
 };
 use koja_ast::identifier::Resolution;
 use koja_ast::span::Span;
@@ -88,6 +88,9 @@ fn synthesize_into_file(file: &mut File, existing: &[String]) {
         match item {
             Item::Struct(decl) if needs_struct_derive(decl, existing) => {
                 synthesized.push(synthesize_struct_impl(decl));
+            }
+            Item::Builtin(decl) if needs_builtin_derive(decl, existing) => {
+                synthesized.push(synthesize_builtin_impl(decl));
             }
             Item::Enum(decl) if needs_enum_derive(decl, existing) => {
                 synthesized.push(synthesize_enum_impl(decl));
@@ -146,6 +149,10 @@ fn needs_struct_derive(decl: &StructDecl, existing: &[String]) -> bool {
     !existing.iter().any(|n| n == &decl.path.join("."))
 }
 
+fn needs_builtin_derive(decl: &BuiltinDecl, existing: &[String]) -> bool {
+    !existing.iter().any(|n| n == &decl.path.join("."))
+}
+
 /// Empty enums (no variants) are uninhabited: a `match self end`
 /// body with no arms is rejected by typecheck, and there's no value
 /// to format anyway. Skip them.
@@ -164,6 +171,16 @@ fn synthesize_enum_impl(decl: &EnumDecl) -> Item {
     let span = decl.span.as_synthetic();
     let target = self_target_type(&decl.path, &decl.type_params, span);
     let format_body = enum_format_body(&decl.path, &decl.variants, span);
+    debug_impl_block(target, format_body, span)
+}
+
+/// A builtin derives the same body a zero-field struct does. This
+/// preserves the pre-`builtin` behavior, where compiler-owned types
+/// were field-less structs.
+fn synthesize_builtin_impl(decl: &BuiltinDecl) -> Item {
+    let span = decl.span.as_synthetic();
+    let target = self_target_type(&decl.path, &decl.type_params, span);
+    let format_body = struct_format_body(&decl.path, &[], span);
     debug_impl_block(target, format_body, span)
 }
 

@@ -361,6 +361,10 @@ fn write_doc_files(project: &koja_doc::DocProject, out_path: &Path) {
             &pkg_dir.join("index.html"),
             &koja_doc::render_package_index(pkg, project),
         );
+        for b in &pkg.builtins {
+            let html = koja_doc::render_builtin(b, pkg, project);
+            write_doc_file(&pkg_dir.join(format!("{}.html", b.name)), &html);
+        }
         for c in &pkg.constants {
             let html = koja_doc::render_constant(c, pkg, project);
             write_doc_file(&pkg_dir.join(format!("{}.html", c.name)), &html);
