@@ -47,6 +47,7 @@ mod inference;
 pub(crate) mod literals;
 mod match_expr;
 mod ops;
+mod paths;
 mod patterns;
 mod process;
 mod return_type;

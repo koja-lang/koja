@@ -1,19 +1,23 @@
-//! Bare identifier and `self` resolution.
+//! Bare identifier, qualified member, and `self` resolution.
 
-use koja_ast::ast::Diagnostic;
+use koja_ast::ast::{Diagnostic, Expr, ExprKind};
 use koja_ast::identifier::{AnonymousKind, Identifier, LocalId, Resolution, ResolvedType};
 use koja_ast::span::Span;
 
-use crate::registry::GlobalKind;
+use crate::pipeline::visibility::check_reference_visibility;
+use crate::registry::{FunctionSignature, GlobalKind};
 
 use super::ctx::Resolver;
+use super::paths::{PackageMember, lookup_package_member, static_dotted_path};
 
 /// Resolve a bare identifier expression. Locals win first. Package-
 /// level constants resolve through a global lookup so an
 /// `EARTH_RADIUS` reference at a use site stamps `Resolution::Global`
-/// and returns the constant's stamped type. Non-generic functions
-/// also resolve here as first-class values: the bare name lifts to
-/// an [`AnonymousKind::Function`] type so call-site code (the
+/// and returns the constant's stamped type, with auto-imported
+/// `Global` constants (`STDOUT`) as the fallback when the current
+/// package has no match. Non-generic functions also resolve here as
+/// first-class values: the bare name lifts to an
+/// [`AnonymousKind::Function`] type so call-site code (the
 /// fn-as-value adapter in IR lower) can wrap them in a closure value.
 /// Generic functions diagnose, since first-class references would need an
 /// inference site that doesn't exist for a bare ident. (The static-
@@ -39,30 +43,122 @@ pub(super) fn resolve_ident(
                 return def.ty.clone();
             }
             GlobalKind::Function(Some(sig)) => {
-                if !entry.type_params.is_empty() {
-                    diagnostics.push(Diagnostic::error(
-                        format!(
-                            "cannot reference generic function `{name}` as a value \
-                             (typecheck has no inference site for the type args)",
-                        ),
-                        span,
-                    ));
+                let Some(ty) =
+                    function_value_type(name, sig, &entry.type_params, span, diagnostics)
+                else {
                     return ResolvedType::unresolved();
-                }
+                };
                 *resolution = Resolution::Global(id);
-                return ResolvedType::Anonymous(AnonymousKind::Function {
-                    params: sig.params.iter().map(|p| p.ty.clone()).collect(),
-                    ret: Box::new(sig.return_type.clone()),
-                });
+                return ty;
             }
             _ => {}
         }
+    }
+    let fallback = Identifier::new("Global", vec![name.to_string()]);
+    if let Some((id, entry)) = resolver.registry.lookup(&fallback)
+        && let GlobalKind::Constant(Some(def)) = &entry.kind
+    {
+        *resolution = Resolution::Global(id);
+        return def.ty.clone();
     }
     diagnostics.push(Diagnostic::error(
         format!("unknown identifier `{name}` in this scope"),
         span,
     ));
     ResolvedType::unresolved()
+}
+
+/// Resolve a package-qualified member read: a constant
+/// (`Pkg.MAX_SIZE`) or a function value (`Pkg.helper`). The
+/// capitalized form parses as a unit enum construction and the
+/// lowercase form as a field access, so neither shape reaches
+/// [`resolve_ident`]. When the dotted path names a constant or a
+/// function, the node is rewritten to an identifier with a stamped
+/// `Resolution::Global` so IR lowering reads it through the same
+/// path as a bare name. Locals and types win over package prefixes
+/// and bail to the normal resolution paths. Members are top-level
+/// declarations, so only two-segment paths apply. Deeper chains like
+/// `Pkg.ORIGIN.x` fall through and resolve their prefix recursively.
+pub(super) fn resolve_qualified_member(
+    expr: &mut Expr,
+    resolver: &Resolver<'_>,
+    diagnostics: &mut Vec<Diagnostic>,
+) -> Option<ResolvedType> {
+    let path = static_dotted_path(&expr.kind)?;
+    let [package, name] = path.as_slice() else {
+        return None;
+    };
+    let (id, entry) = match lookup_package_member(package, name, resolver) {
+        PackageMember::Found(id, entry) => (id, entry),
+        PackageMember::NotAPackage => return None,
+        PackageMember::UnknownMember => {
+            diagnostics.push(Diagnostic::error(
+                format!("package `{package}` has no constant or function `{name}`"),
+                expr.span,
+            ));
+            return Some(ResolvedType::unresolved());
+        }
+    };
+    let ty = match &entry.kind {
+        GlobalKind::Constant(Some(definition)) => definition.ty.clone(),
+        GlobalKind::Function(Some(signature)) => {
+            let label = format!("{package}.{name}");
+            let Some(ty) = function_value_type(
+                &label,
+                signature,
+                &entry.type_params,
+                expr.span,
+                diagnostics,
+            ) else {
+                return Some(ResolvedType::unresolved());
+            };
+            ty
+        }
+        GlobalKind::Constant(None) | GlobalKind::Function(None) => panic!(
+            "resolve_qualified_member: `{}` has no stamped definition, \
+             lifting runs before body resolution",
+            entry.identifier,
+        ),
+        other => {
+            diagnostics.push(Diagnostic::error(
+                format!("`{package}.{name}` is a {}, not a value", other.label()),
+                expr.span,
+            ));
+            return Some(ResolvedType::unresolved());
+        }
+    };
+    check_reference_visibility(entry, resolver.package, expr.span, diagnostics);
+    expr.kind = ExprKind::Ident {
+        name: path.join("."),
+        resolution: Resolution::Global(id),
+    };
+    Some(ty)
+}
+
+/// Type a named function used as a first-class value. Generic
+/// functions diagnose and return `None`, since a bare reference has
+/// no inference site for the type args.
+fn function_value_type(
+    name: &str,
+    signature: &FunctionSignature,
+    type_params: &[String],
+    span: Span,
+    diagnostics: &mut Vec<Diagnostic>,
+) -> Option<ResolvedType> {
+    if !type_params.is_empty() {
+        diagnostics.push(Diagnostic::error(
+            format!(
+                "cannot reference generic function `{name}` as a value \
+                 (typecheck has no inference site for the type args)",
+            ),
+            span,
+        ));
+        return None;
+    }
+    Some(ResolvedType::Anonymous(AnonymousKind::Function {
+        params: signature.params.iter().map(|p| p.ty.clone()).collect(),
+        ret: Box::new(signature.return_type.clone()),
+    }))
 }
 
 /// Resolve a `self` keyword expression. `self` is bound by the

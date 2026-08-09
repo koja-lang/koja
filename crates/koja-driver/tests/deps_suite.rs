@@ -11,6 +11,8 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
+use koja_ast::util::dedent;
+
 fn koja_bin() -> PathBuf {
     PathBuf::from(env!("CARGO_BIN_EXE_koja"))
 }
@@ -471,5 +473,84 @@ fn path_dep_of_a_git_dep_cannot_escape_its_checkout() {
     assert!(
         stderr.contains("escapes"),
         "expected checkout-escape error: {stderr}"
+    );
+}
+
+#[test]
+fn dependency_constants_and_function_values_end_to_end() {
+    let fx = Fixture::new("dep-const");
+    let dep = fx.root.join("repos").join("constlib");
+    fs::create_dir_all(dep.join("src")).unwrap();
+    fs::write(
+        dep.join("koja.toml"),
+        "[project]\nname = \"constlib\"\nversion = \"0.1.0\"\n",
+    )
+    .unwrap();
+    fs::write(
+        dep.join("src").join("constlib.koja"),
+        dedent(
+            r#"
+            const MAX_SIZE = 4096
+            const default_timeout = 30
+
+            fn double(x: Int) -> Int
+              x * 2
+            end
+            "#,
+        ),
+    )
+    .unwrap();
+
+    let project = fx.project();
+    fs::create_dir_all(project.join("src")).unwrap();
+    fs::write(
+        project.join("koja.toml"),
+        dedent(
+            r#"
+            [project]
+            name = "root"
+            version = "0.1.0"
+            entry = "Main"
+
+            [dependencies]
+            constlib = { path = "../repos/constlib" }
+            "#,
+        ),
+    )
+    .unwrap();
+    fs::write(
+        project.join("src").join("main.koja"),
+        dedent(
+            r#"
+            alias Process.Step
+            alias Process.StopReason
+
+            struct Main
+            end
+
+            impl Process<List<String>, Unit, Unit> for Main
+              fn start(args: List<String>) -> Self ! StopReason
+                Main{}
+              end
+
+              fn handle(self, msg: Unit, from: Option<ReplyTo<Unit>>) -> Step<Self>
+                Step.Continue(self)
+              end
+
+              fn run(self) -> StopReason
+                f = Constlib.double
+                f(Constlib.MAX_SIZE + Constlib.default_timeout).print()
+                StopReason.Normal
+              end
+            end
+            "#,
+        ),
+    )
+    .unwrap();
+
+    let stdout = fx.koja_ok(&["run"]);
+    assert!(
+        stdout.contains("8252"),
+        "expected the doubled constant sum in output: {stdout}"
     );
 }

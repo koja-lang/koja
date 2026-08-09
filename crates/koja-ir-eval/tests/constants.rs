@@ -62,3 +62,26 @@ fn unit_enum_constant_materializes() {
     assert_eq!(tag.0, 0);
     assert_eq!(payload, EnumPayload::Unit);
 }
+
+const DEP_CONSTANTS: &str = "
+    const MAX = 40
+    const default_size = 2
+    const BANNER = \"koja\"
+    ";
+
+fn evaluate_with_dep(script: &str) -> Value {
+    common::evaluate_script_with_dep("Dep", &dedent(DEP_CONSTANTS), &dedent(script))
+        .expect("interpreter should not error on this fixture")
+}
+
+#[test]
+fn cross_package_primitive_constants_inline() {
+    let value = evaluate_with_dep("Dep.MAX + Dep.default_size");
+    assert_eq!(value.as_int(), Some(42));
+}
+
+#[test]
+fn cross_package_compound_constant_materializes() {
+    let value = evaluate_with_dep("\"#{Dep.BANNER}!\"");
+    assert_eq!(value.as_string(), Some("koja!"));
+}

@@ -47,8 +47,9 @@ use super::coercion::{Mismatch, check_compatible_stamping};
 use super::ctx::{Callee, Resolver};
 use super::expr::resolve_expr_with_expected;
 use super::inference::{PhantomContext, fill_from_expected, finalize_inference, unify_pairs};
+use super::paths::{PackageMember, lookup_package_member};
 use super::process::check_monitor_call_site;
-use super::types::{display_resolution, lookup_type};
+use super::types::display_resolution;
 
 /// Co-traveling call-site context shared by [`resolve_call`] /
 /// [`resolve_method_call`] and the inner generic-inference helpers.
@@ -845,23 +846,18 @@ fn try_package_function_call(
     let ExprKind::Ident { name, .. } = &receiver.kind else {
         return None;
     };
-    if resolver.scope.lookup(name).is_some() {
-        return None;
-    }
-    if lookup_type(std::slice::from_ref(name), resolver.resolution_scope()).is_some() {
-        return None;
-    }
-
     let call_span = site.span;
-    let target = Identifier::new(name, vec![method.to_string()]);
-    let Some((id, entry)) = resolver.registry.lookup(&target) else {
-        resolver.registry.iter_in_package(name).next()?;
-        resolve_args(args, None, resolver, diagnostics);
-        diagnostics.push(Diagnostic::error(
-            format!("package `{name}` has no function `{method}`"),
-            call_span,
-        ));
-        return Some(MethodCallOutcome::Method(ResolvedType::unresolved()));
+    let (id, entry) = match lookup_package_member(name, method, resolver) {
+        PackageMember::Found(id, entry) => (id, entry),
+        PackageMember::NotAPackage => return None,
+        PackageMember::UnknownMember => {
+            resolve_args(args, None, resolver, diagnostics);
+            diagnostics.push(Diagnostic::error(
+                format!("package `{name}` has no function `{method}`"),
+                call_span,
+            ));
+            return Some(MethodCallOutcome::Method(ResolvedType::unresolved()));
+        }
     };
     let signature = match &entry.kind {
         GlobalKind::Function(Some(sig)) => sig.clone(),
