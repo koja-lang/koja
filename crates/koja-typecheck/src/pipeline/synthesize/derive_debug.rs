@@ -78,7 +78,11 @@ pub(crate) fn derive_debug_package(pkg: &mut CheckedPackage) {
 fn collect_package_debug_impls(pkg: &CheckedPackage) -> Vec<String> {
     pkg.files
         .iter()
-        .flat_map(collect_existing_debug_impls)
+        .flat_map(|file| {
+            collect_existing_debug_impls(file)
+                .into_iter()
+                .chain(super::header_conformance_targets(file, DEBUG_PROTOCOL))
+        })
         .collect()
 }
 

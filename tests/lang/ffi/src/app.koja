@@ -24,10 +24,7 @@ struct FFI
   fn make_greeting(name: CPtr<UInt8>, name_len: Int64) -> CPtr<UInt8>
 end
 
-struct App
-end
-
-impl Process<(), (), ()> for App
+struct App: Process<(), (), ()>
   fn start(config: ()) -> Result<Self, StopReason>
     Result.Ok(App{})
   end

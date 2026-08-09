@@ -2,9 +2,6 @@ alias IO.Ready as IOReady
 alias Process.Step
 alias Process.StopReason
 
-struct App
-end
-
 enum AppMsg
   Tick
 end
@@ -14,7 +11,7 @@ end
 # event through its ordinary `handle` (tag-2 dispatch), not trap. The
 # test harness pre-fills STDIN so the fd is readable immediately.
 
-impl Process<App, AppMsg | IOReady, String> for App
+struct App: Process<App, AppMsg | IOReady, String>
   fn start(config: App) -> Result<Self, StopReason>
     stdin = Fd{descriptor: 0}
     stdin.watch(0)

@@ -53,6 +53,32 @@ pub(super) fn fill_bracket_list(open: &str, close: &str, items: Vec<Doc>) -> Doc
     ]))
 }
 
+/// Formats a conformance header (`: Display, Hash`) for a struct or
+/// enum declaration. Collapses onto the header line when it fits,
+/// otherwise breaks after the colon with fill-packed entries and a
+/// blank line separating the list from the body, matching wrapped
+/// function signatures.
+pub(super) fn conformance_header_doc(conformances: &[TypeExpr]) -> Doc {
+    let last = conformances.len() - 1;
+    let fill_items: Vec<Doc> = conformances
+        .iter()
+        .map(type_expr_to_doc)
+        .enumerate()
+        .map(|(i, d)| {
+            if i < last {
+                concat(vec![d, text(",")])
+            } else {
+                d
+            }
+        })
+        .collect();
+    group(concat(vec![
+        text(":"),
+        indent(2, concat(vec![line(), fill(fill_items)])),
+        if_break(nil(), hardline()),
+    ]))
+}
+
 /// Formats a struct-like body: `prefix{ field, field, ... }` with
 /// trailing-comma layout that breaks across lines when needed.
 pub(super) fn struct_body(prefix: Doc, field_docs: Vec<Doc>) -> Doc {

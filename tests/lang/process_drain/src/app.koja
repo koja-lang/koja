@@ -2,9 +2,6 @@ alias Process.Lifecycle
 alias Process.Step
 alias Process.StopReason
 
-struct App
-end
-
 enum AppMsg
   Ping
 end
@@ -13,7 +10,7 @@ end
 # running instead of stopping, so the SIGTERM drain's grace timer has to
 # force-kill it. Used by the native `lang_process_drain_hard_kill` test.
 
-impl Process<App, AppMsg, String> for App
+struct App: Process<App, AppMsg, String>
   fn start(config: App) -> Result<Self, StopReason>
     IO.puts("started")
     Result.Ok(config)

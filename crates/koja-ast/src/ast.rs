@@ -269,6 +269,20 @@ impl Diagnostic {
             span,
         }
     }
+
+    /// Build a `Warning`-severity diagnostic carrying a hint.
+    pub fn warning_with_hint(
+        message: impl Into<String>,
+        hint: impl Into<String>,
+        span: Span,
+    ) -> Self {
+        Self {
+            severity: Severity::Warning,
+            message: message.into(),
+            hint: Some(hint.into()),
+            span,
+        }
+    }
 }
 
 /// A top-level declaration within a file.
@@ -364,6 +378,9 @@ pub struct EnumDecl {
     pub visibility: Visibility,
     pub path: Vec<String>,
     pub type_params: Vec<TypeParam>,
+    /// Protocols from the conformance header: `enum Color: Display`.
+    /// The body's functions satisfy each listed protocol.
+    pub conformances: Vec<TypeExpr>,
     pub variants: Vec<EnumVariant>,
     pub functions: Vec<Function>,
     /// Nested type declarations, only `Item::Struct` / `Item::Enum`.
@@ -514,6 +531,9 @@ pub struct StructDecl {
     pub visibility: Visibility,
     pub path: Vec<String>,
     pub type_params: Vec<TypeParam>,
+    /// Protocols from the conformance header: `struct Foo: Display, Hash`.
+    /// The body's functions satisfy each listed protocol.
+    pub conformances: Vec<TypeExpr>,
     pub fields: Vec<StructField>,
     pub functions: Vec<Function>,
     /// Nested type declarations, only `Item::Struct` / `Item::Enum`.

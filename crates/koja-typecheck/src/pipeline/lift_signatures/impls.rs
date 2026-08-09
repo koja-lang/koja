@@ -14,6 +14,7 @@ use koja_ast::ast::{
     Pattern, ProtocolMethod, Statement, StringPart, TypeExpr, Visibility,
 };
 use koja_ast::identifier::{GlobalRegistryId, Identifier, Resolution, ResolvedType};
+use koja_ast::span::Span;
 
 use crate::pipeline::collect::{lookup_owner_path, nominal_target_path};
 use crate::pipeline::resolve::types::types_equivalent;
@@ -28,8 +29,67 @@ use super::ProtocolBodies;
 use super::SelfContext;
 use super::functions::lift_function_with_identifier;
 use super::types::{
-    TypeParamScope, dispatch_label, render_resolved, resolve_type_expr, type_expr_span,
+    TypeParamScope, concrete_self_type, dispatch_label, render_resolved, resolve_type_expr,
+    type_expr_span,
 };
+
+/// Where a conformance is declared, either an `impl P for T` block
+/// or a type's conformance header (`struct T: P`). Selects
+/// diagnostic wording, the member set checked against the protocol,
+/// and where synthesized default methods land.
+enum ConformanceSite<'a> {
+    /// A header entry. Members come from the type body's functions.
+    Header {
+        /// `struct Server` / `enum Color`, for diagnostics.
+        decl_label: &'a str,
+        functions: &'a mut Vec<Function>,
+        /// The protocol's entry in the header list.
+        span: Span,
+    },
+    /// An `impl P for T` block. Members come from the block, and
+    /// public non-protocol extras are rejected.
+    Impl(&'a mut ImplBlock),
+}
+
+impl ConformanceSite<'_> {
+    /// The functions that may satisfy the protocol's roster.
+    fn declared_functions(&self) -> Vec<&Function> {
+        match self {
+            Self::Header { functions, .. } => functions.iter().collect(),
+            Self::Impl(block) => block
+                .members
+                .iter()
+                .filter_map(|member| match member {
+                    ImplMember::Function(function) => Some(function),
+                    ImplMember::TypeAlias(_) => None,
+                })
+                .collect(),
+        }
+    }
+
+    /// Span for site-level diagnostics (missing methods, duplicates).
+    fn span(&self) -> Span {
+        match self {
+            Self::Header { span, .. } => *span,
+            Self::Impl(block) => block.span,
+        }
+    }
+
+    /// Parenthetical naming the site in conformance diagnostics.
+    fn context(&self, protocol: &Identifier, target: &str) -> String {
+        match self {
+            Self::Header { decl_label, .. } => format!("declared on `{decl_label}`"),
+            Self::Impl(_) => format!("on `impl {protocol} for {target}`"),
+        }
+    }
+
+    fn push_synthesized(&mut self, function: Function) {
+        match self {
+            Self::Header { functions, .. } => functions.push(function),
+            Self::Impl(block) => block.members.push(ImplMember::Function(function)),
+        }
+    }
+}
 
 /// Read-only data bundle threaded through trait-impl conformance.
 /// `Copy` so helpers can take it by value (every field is a borrow).
@@ -89,10 +149,12 @@ pub(super) fn lift_impl(
     // method-lift loop without changing behavior for the common
     // generic-aliased case.
     let resolved_target = resolve_impl_target(impl_block, &target_identifier, scope);
+    let impl_label = format!("impl ... for {}", target_identifier.last());
     let resolved = resolve_protocol_impl_heads(
-        impl_block,
+        &impl_block.trait_expr,
         &target_identifier,
         &resolved_target,
+        &impl_label,
         scope,
         diagnostics,
     );
@@ -121,22 +183,72 @@ pub(super) fn lift_impl(
         .lookup(&target_identifier)
         .expect("target entry was checked above")
         .0;
-    verify_and_synthesize_trait_impl(
-        impl_block,
-        &target_path,
+    let trait_expr = impl_block.trait_expr.clone();
+    let mut site = ConformanceSite::Impl(impl_block);
+    verify_and_synthesize_conformance(
+        &mut site,
+        &trait_expr,
         &target_identifier,
         &resolved,
         bodies,
         scope,
         diagnostics,
     );
-    record_target_conformance(
-        impl_block,
-        target_id,
-        &resolved,
-        scope.registry,
-        diagnostics,
-    );
+    record_target_conformance(&site, target_id, &resolved, scope.registry, diagnostics);
+}
+
+/// Check every conformance-header entry on a struct/enum decl
+/// (`struct T: P, Q`) against the type body's functions, reusing
+/// the impl-block verification machinery. Synthesized default
+/// methods land in `functions`, so the rest of the pipeline sees
+/// them as ordinary type-body methods.
+pub(super) fn lift_header_conformances(
+    decl_kind: &str,
+    path: &[String],
+    conformances: &[TypeExpr],
+    functions: &mut Vec<Function>,
+    bodies: &ProtocolBodies,
+    scope: &mut LiftScope<'_>,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    if conformances.is_empty() {
+        return;
+    }
+    let target_identifier = Identifier::new(scope.package, path.to_vec());
+    let Some((target_id, _)) = scope.registry.lookup(&target_identifier) else {
+        return;
+    };
+    // The header has no written target expression. The target is the
+    // decl itself with its own params projected, exactly `Self`.
+    let resolved_target = concrete_self_type(target_id, scope.registry);
+    let decl_label = format!("{decl_kind} {}", path.join("."));
+    for trait_expr in conformances {
+        let Some(resolved) = resolve_protocol_impl_heads(
+            trait_expr,
+            &target_identifier,
+            &resolved_target,
+            &decl_label,
+            scope,
+            diagnostics,
+        ) else {
+            continue;
+        };
+        let mut site = ConformanceSite::Header {
+            decl_label: &decl_label,
+            functions: &mut *functions,
+            span: type_expr_span(trait_expr),
+        };
+        verify_and_synthesize_conformance(
+            &mut site,
+            trait_expr,
+            &target_identifier,
+            &resolved,
+            bodies,
+            scope,
+            diagnostics,
+        );
+        record_target_conformance(&site, target_id, &resolved, scope.registry, diagnostics);
+    }
 }
 
 /// Lift every method in an `extend Type ... end` block. Like
@@ -286,14 +398,18 @@ fn impl_target_owners(
     }
 }
 
+/// Resolve one conformance-declaring type expression (the protocol
+/// side of `impl P for T`, or one entry in a `struct T: P` header)
+/// into [`ResolvedImplHeads`]. `site_label` names the declaration
+/// site in diagnostics (`impl ... for Server` / `struct Server`).
 fn resolve_protocol_impl_heads(
-    impl_block: &ImplBlock,
+    trait_expr: &TypeExpr,
     target_identifier: &Identifier,
     target: &ResolvedType,
+    site_label: &str,
     scope: &LiftScope<'_>,
     diagnostics: &mut Vec<Diagnostic>,
 ) -> Option<ResolvedImplHeads> {
-    let trait_expr = &impl_block.trait_expr;
     // Scope rooted at the target struct/enum: `T` in `Bag<T>`
     // resolves to `TypeParam(Bag, 0)`, matching how an inline
     // method on `struct Bag<T>` would resolve `T`. The impl's free
@@ -314,10 +430,7 @@ fn resolve_protocol_impl_heads(
     } = protocol.clone()
     else {
         diagnostics.push(Diagnostic::error(
-            format!(
-                "typecheck cannot find protocol on `impl ... for {}`",
-                target_identifier.last(),
-            ),
+            format!("typecheck cannot find protocol on `{site_label}`"),
             type_expr_span(trait_expr),
         ));
         return None;
@@ -326,7 +439,7 @@ fn resolve_protocol_impl_heads(
     if !matches!(protocol_entry.kind, GlobalKind::Protocol(_)) {
         diagnostics.push(Diagnostic::error(
             format!(
-                "`impl Trait for Type` requires a protocol on the left (`{}` is a {})",
+                "conformance on `{site_label}` requires a protocol (`{}` is a {})",
                 protocol_entry.identifier,
                 protocol_entry.kind.label(),
             ),
@@ -370,11 +483,12 @@ fn resolve_protocol_impl_heads(
 /// Record `target_id : protocol_id` on the target's struct/enum
 /// definition. Runs after conformance verification +
 /// default-body synthesis so the conformance fact is only
-/// recorded when the impl block is well-formed. Diagnoses
-/// duplicate `impl P for T` blocks against the existing
-/// conformance map.
+/// recorded when the declaring site is well-formed. Diagnoses
+/// duplicate conformance declarations (a second `impl P for T`,
+/// or a header entry doubled by either form) against the
+/// existing conformance map.
 fn record_target_conformance(
-    impl_block: &ImplBlock,
+    site: &ConformanceSite<'_>,
     target_id: GlobalRegistryId,
     resolved: &ResolvedImplHeads,
     registry: &mut GlobalRegistry,
@@ -390,40 +504,45 @@ fn record_target_conformance(
     {
         let target_label = render_resolved(&resolved.target, registry);
         let protocol_label = render_resolved(&resolved.protocol, registry);
-        diagnostics.push(Diagnostic::error(
-            format!("duplicate `impl {protocol_label} for {target_label}`"),
-            impl_block.span,
-        ));
+        let message = match site {
+            ConformanceSite::Header { decl_label, .. } => {
+                format!("duplicate conformance to `{protocol_label}` declared on `{decl_label}`")
+            }
+            ConformanceSite::Impl(_) => {
+                format!("duplicate `impl {protocol_label} for {target_label}`")
+            }
+        };
+        diagnostics.push(Diagnostic::error(message, site.span()));
     }
 }
 
-fn verify_and_synthesize_trait_impl(
-    impl_block: &mut ImplBlock,
-    target_path: &[String],
+fn verify_and_synthesize_conformance(
+    site: &mut ConformanceSite<'_>,
+    trait_expr: &TypeExpr,
     target_identifier: &Identifier,
     resolved: &ResolvedImplHeads,
     bodies: &ProtocolBodies,
     scope: &mut LiftScope<'_>,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
+    let target_path = target_identifier.path();
     let protocol_id = resolved.protocol_id;
     let protocol_entry = scope.registry.get(protocol_id).unwrap_or_else(|| {
-        panic!("verify_and_synthesize_trait_impl: protocol id {protocol_id} missing")
+        panic!("verify_and_synthesize_conformance: protocol id {protocol_id} missing")
     });
     let protocol_identifier = protocol_entry.identifier.clone();
     let GlobalKind::Protocol(Some(definition)) = &protocol_entry.kind else {
         diagnostics.push(Diagnostic::error(
             format!(
                 "internal: protocol `{protocol_identifier}` has no lifted definition while \
-                 checking `impl ... for {}`",
+                 checking conformance of `{}`",
                 target_path.join("."),
             ),
-            impl_block.span,
+            site.span(),
         ));
         return;
     };
     let definition = definition.clone();
-    let trait_expr = impl_block.trait_expr.clone();
     let impl_scope = ProtocolImplScope {
         package: scope.package,
         protocol_id,
@@ -432,28 +551,28 @@ fn verify_and_synthesize_trait_impl(
         target: &resolved.target,
         target_identifier,
         target_path,
-        trait_expr: &trait_expr,
+        trait_expr,
     };
-    verify_protocol_conformance(
-        impl_block,
-        &definition,
-        impl_scope,
-        scope.registry,
-        diagnostics,
-    );
-    let declared: HashMap<String, ()> = impl_block
-        .members
+    verify_protocol_conformance(site, &definition, impl_scope, scope.registry, diagnostics);
+    let declared: HashMap<String, ()> = site
+        .declared_functions()
         .iter()
-        .filter_map(|m| match m {
-            ImplMember::Function(function) => Some((function.name.clone(), ())),
-            ImplMember::TypeAlias(_) => None,
-        })
+        .map(|function| (function.name.clone(), ()))
         .collect();
     let to_synthesize: Vec<&ResolvedProtocolMethod> = definition
         .methods
         .iter()
         .filter(|method| method.has_default && !declared.contains_key(&method.name))
         .collect();
+    if matches!(site, ConformanceSite::Header { .. }) {
+        warn_near_miss_defaults(
+            site,
+            &to_synthesize,
+            &definition,
+            &protocol_identifier,
+            diagnostics,
+        );
+    }
     for method in to_synthesize {
         let Some(default_method) = bodies
             .get(&protocol_id)
@@ -465,19 +584,82 @@ fn verify_and_synthesize_trait_impl(
                     "internal: default body for `{protocol_identifier}.{}` missing from sidecar",
                     method.name,
                 ),
-                impl_block.span,
+                site.span(),
             ));
             continue;
         };
-        synthesize_default_method(impl_block, default_method, impl_scope, scope, diagnostics);
+        synthesize_default_method(site, default_method, impl_scope, scope, diagnostics);
     }
 }
 
-/// Clone a default `ProtocolMethod` into the impl as a synthetic
-/// `Function`, register `<package>.<target_path…>.<method_name>`, and
-/// lift its signature against the impl target.
+/// Design-doc mitigation for the header form's typo hazard. When a
+/// default-bodied method stays unimplemented and the type body has a
+/// fn whose name is a near miss, the author probably meant to
+/// override it. Impl blocks reject stray public fns outright, so
+/// only the header path warns.
+fn warn_near_miss_defaults(
+    site: &ConformanceSite<'_>,
+    omitted: &[&ResolvedProtocolMethod],
+    definition: &ProtocolDefinition,
+    protocol_identifier: &Identifier,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    let candidates: Vec<&Function> = site
+        .declared_functions()
+        .into_iter()
+        .filter(|function| !definition.methods.iter().any(|m| m.name == function.name))
+        .collect();
+    for method in omitted {
+        for function in &candidates {
+            if !names_are_near(&function.name, &method.name) {
+                continue;
+            }
+            diagnostics.push(Diagnostic::warning_with_hint(
+                format!(
+                    "`{}` does not override `{protocol_identifier}.{}`, which keeps its \
+                     default body",
+                    function.name, method.name,
+                ),
+                format!("did you mean `{}`?", method.name),
+                function.span,
+            ));
+        }
+    }
+}
+
+/// Budget scales with the name so transposition typos in mid-length
+/// names (`exicted` for `excited`, distance 2) still match without
+/// letting short names pair with unrelated ones.
+fn names_are_near(candidate: &str, target: &str) -> bool {
+    let budget = (target.len() / 3).max(1);
+    edit_distance(candidate, target) <= budget
+}
+
+/// Levenshtein distance over chars, two-row DP.
+fn edit_distance(a: &str, b: &str) -> usize {
+    let b_chars: Vec<char> = b.chars().collect();
+    let mut previous: Vec<usize> = (0..=b_chars.len()).collect();
+    for (row, a_char) in a.chars().enumerate() {
+        let mut current = vec![row + 1];
+        for (col, b_char) in b_chars.iter().enumerate() {
+            let substitution = previous[col] + usize::from(a_char != *b_char);
+            current.push(
+                substitution
+                    .min(previous[col + 1] + 1)
+                    .min(current[col] + 1),
+            );
+        }
+        previous = current;
+    }
+    *previous.last().expect("distance row is never empty")
+}
+
+/// Clone a default `ProtocolMethod` into the declaring site as a
+/// synthetic `Function`, register
+/// `<package>.<target_path…>.<method_name>`, and lift its signature
+/// against the conformance target.
 fn synthesize_default_method(
-    impl_block: &mut ImplBlock,
+    site: &mut ConformanceSite<'_>,
     method: ProtocolMethod,
     impl_scope: ProtocolImplScope<'_>,
     scope: &mut LiftScope<'_>,
@@ -527,7 +709,7 @@ fn synthesize_default_method(
         scope,
         diagnostics,
     );
-    impl_block.members.push(ImplMember::Function(function));
+    site.push_synthesized(function);
 }
 
 /// Walk a synthesized default-method `Function` and rewrite every
@@ -819,26 +1001,23 @@ fn substitute_named_in_expr(expr: &mut Expr, from: &str, to: &TypeExpr) {
 }
 
 fn verify_protocol_conformance(
-    impl_block: &ImplBlock,
+    site: &ConformanceSite<'_>,
     definition: &ProtocolDefinition,
     impl_scope: ProtocolImplScope<'_>,
     registry: &GlobalRegistry,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
-    let declared: HashMap<&str, &Function> = impl_block
-        .members
+    let declared_functions = site.declared_functions();
+    let declared: HashMap<&str, &Function> = declared_functions
         .iter()
-        .filter_map(|member| match member {
-            ImplMember::Function(function) => Some((function.name.as_str(), function)),
-            ImplMember::TypeAlias(_) => None,
-        })
+        .map(|function| (function.name.as_str(), *function))
         .collect();
     let ProtocolImplScope {
         protocol_identifier,
         target_path,
         ..
     } = impl_scope;
-    let target_label = target_path.join(".");
+    let context = site.context(protocol_identifier, &target_path.join("."));
     for method in &definition.methods {
         match declared.get(method.name.as_str()) {
             Some(impl_function) => {
@@ -854,24 +1033,28 @@ fn verify_protocol_conformance(
                 diagnostics.push(Diagnostic::error(
                     format!(
                         "missing method `{}` required by protocol `{protocol_identifier}` \
-                         (on `impl {protocol_identifier} for {target_label}`)",
+                         ({context})",
                         method.name,
                     ),
-                    impl_block.span,
+                    site.span(),
                 ));
             }
             None => {}
         }
     }
+    // Extra-method strictness applies to impl blocks only. A type
+    // body mixes protocol methods with fields and inherent functions
+    // by design, while an `impl P for T` block widening the type's
+    // public surface with non-protocol methods is rejected.
+    let ConformanceSite::Impl(_) = site else {
+        return;
+    };
     let protocol_method_names: HashMap<&str, ()> = definition
         .methods
         .iter()
         .map(|m| (m.name.as_str(), ()))
         .collect();
-    for member in &impl_block.members {
-        let ImplMember::Function(function) = member else {
-            continue;
-        };
+    for function in &declared_functions {
         // Type-private helpers may live alongside the protocol
         // methods they support. Only public extras are rejected,
         // since they would silently widen the type's public surface
@@ -883,7 +1066,7 @@ fn verify_protocol_conformance(
             diagnostics.push(Diagnostic::error_with_hint(
                 format!(
                     "method `{}` is not declared in protocol `{protocol_identifier}` \
-                     (on `impl {protocol_identifier} for {target_label}`)",
+                     ({context})",
                     function.name,
                 ),
                 "mark it `priv fn` if it is an implementation helper, or declare it \

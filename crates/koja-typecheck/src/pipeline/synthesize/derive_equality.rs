@@ -50,7 +50,11 @@ pub(crate) fn derive_equality_package(pkg: &mut CheckedPackage) {
 fn collect_package_equality_impls(pkg: &CheckedPackage) -> Vec<String> {
     pkg.files
         .iter()
-        .flat_map(collect_existing_equality_impls)
+        .flat_map(|file| {
+            collect_existing_equality_impls(file)
+                .into_iter()
+                .chain(super::header_conformance_targets(file, EQUALITY_PROTOCOL))
+        })
         .collect()
 }
 

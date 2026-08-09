@@ -163,10 +163,7 @@ priv fn app_content -> String
     "Hello, \#{name}!"
   end
 
-  struct App
-  end
-
-  impl Process<(), (), ()> for App
+  struct App: Process<(), (), ()>
     fn start(config: ()) -> Self ! StopReason
       App{}
     end

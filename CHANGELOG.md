@@ -18,6 +18,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Standard library constants such as `STDOUT` now resolve by bare name, like `Global` types and functions.
 - Struct fields and enum struct-variant fields can declare default values (`port: Int = 5432`), which fill in at constructions that omit the field, including `Option.None` and `[]` on generic fields.
 - New `builtin` declaration kind and keyword for compiler-owned types, so `String`, `Int`, `List<T>`, and friends show up in docs, hovers, and search as `builtin` instead of masquerading as structs.
+- Structs and enums can declare protocol conformances in their header (`struct App: Process<C, M, R>`), so an app entry no longer needs a separate `impl` block.
+- The compiler warns when a type body has a function whose name is a near miss of an unimplemented default protocol method, catching typos like `pritn` for `print`.
 
 ### Changed
 

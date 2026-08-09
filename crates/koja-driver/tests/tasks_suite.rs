@@ -69,14 +69,11 @@ impl Drop for Fixture {
 const ENTRY: &str = "alias Process.Step
 alias Process.StopReason
 
-struct App
-end
-
 enum AppMsg
   Go
 end
 
-impl Process<App, AppMsg, String> for App
+struct App: Process<App, AppMsg, String>
   fn start(config: App) -> Result<Self, StopReason>
     Result.Ok(config)
   end
@@ -284,7 +281,7 @@ fn new_scaffolds_a_working_project_and_rejects_bad_input() {
     assert_eq!(read_scaffold_file(&fx, ".gitignore"), "/build\n/deps\n");
 
     let app = read_scaffold_file(&fx, "src/app.koja");
-    assert!(app.contains("impl Process<(), (), ()> for App"), "{app}");
+    assert!(app.contains("struct App: Process<(), (), ()>"), "{app}");
     assert!(app.contains("\"Hello, #{name}!\""), "{app}");
 
     let app_test = read_scaffold_file(&fx, "test/app_test.koja");

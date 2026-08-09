@@ -1,10 +1,7 @@
 alias Process.Step
 alias Process.StopReason
 
-struct App
-end
-
-impl Process<(), (), ()> for App
+struct App: Process<(), (), ()>
   fn start(config: ()) -> Result<Self, StopReason>
     Result.Ok(App{})
   end
