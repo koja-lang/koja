@@ -91,8 +91,8 @@ declares its own builtin types, and adds runtime observability.
 - Add a `Runtime` observability API with global and per-process metrics,
   including mailbox depth, and document the overload contract for long-running
   services.
-- Emit position-independent Linux binaries so deployments get ASLR
-  ([GAPS.md](GAPS.md)).
+- **[DONE]** Emit position-independent Linux binaries so deployments get
+  ASLR.
 
 The rest of the 0.17 scope will be selected from evidence gathered while
 building real packages and applications. Later `0.x` releases will be added

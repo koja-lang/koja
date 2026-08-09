@@ -5,7 +5,7 @@ use std::sync::Once;
 
 use inkwell::OptimizationLevel;
 use inkwell::llvm_sys::support::LLVMParseCommandLineOptions;
-use inkwell::module::Module;
+use inkwell::module::{FlagBehavior, Module};
 use inkwell::passes::PassBuilderOptions;
 use inkwell::targets::{
     CodeModel, FileType, InitializationConfig, RelocMode, Target, TargetMachine, TargetTriple,
@@ -41,6 +41,7 @@ pub(crate) fn emit_object_file(
     opt_level: OptimizationLevel,
 ) -> Result<(), LlvmError> {
     force_selection_dag();
+    mark_position_independent_executable(module);
     Target::initialize_native(&InitializationConfig::default())
         .map_err(|e| LlvmError::ObjectEmit(format!("failed to initialize native target: {e}")))?;
 
@@ -61,7 +62,7 @@ pub(crate) fn emit_object_file(
             &cpu,
             &features,
             opt_level,
-            RelocMode::Default,
+            RelocMode::PIC,
             CodeModel::Default,
         )
         .ok_or_else(|| LlvmError::ObjectEmit("failed to create target machine".to_string()))?;
@@ -75,6 +76,18 @@ pub(crate) fn emit_object_file(
     machine
         .write_to_file(module, FileType::Object, path)
         .map_err(|e| LlvmError::ObjectEmit(format!("failed to write object file: {e}")))
+}
+
+/// Stamp the module flags clang sets under `-fpie`, recording that
+/// this module targets an executable, not a shared library. The C
+/// API cannot mark globals `dso_local`, so under [`RelocMode::PIC`]
+/// even our own definitions get GOT/PLT-style references. The linker
+/// relaxes those to direct access: symbols defined in an executable
+/// cannot be preempted.
+fn mark_position_independent_executable(module: &Module<'_>) {
+    let two = module.get_context().i32_type().const_int(2, false);
+    module.add_basic_value_flag("PIC Level", FlagBehavior::Error, two);
+    module.add_basic_value_flag("PIE Level", FlagBehavior::Error, two);
 }
 
 /// Pin instruction selection to SelectionDAG (plus FastISel) for the
