@@ -15,6 +15,7 @@ use crate::registry::{GlobalKind, ResolvedStructField, StructDefinition};
 
 use super::LiftScope;
 use super::SelfContext;
+use super::field_defaults::lift_field_default;
 use super::functions::lift_function_with_identifier;
 use super::types::{TypeParamScope, resolve_type_expr};
 
@@ -77,6 +78,7 @@ fn lift_struct_definition(
             diagnostics,
         );
         fields.push(ResolvedStructField {
+            default: lift_field_default(field, diagnostics),
             name: field.name.clone(),
             ty,
         });

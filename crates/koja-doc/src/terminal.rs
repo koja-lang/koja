@@ -112,7 +112,10 @@ fn render_full(hit: &Symbol, partials: &[&Symbol]) -> String {
             let fields: Vec<String> = s
                 .fields
                 .iter()
-                .map(|f| format!("{}: {}", f.name, f.type_name))
+                .map(|f| match &f.default {
+                    Some(default) => format!("{}: {} = {default}", f.name, f.type_name),
+                    None => format!("{}: {}", f.name, f.type_name),
+                })
                 .collect();
             push_list_section(&mut out, "Fields", &fields);
             push_functions(&mut out, &s.functions);
@@ -191,6 +194,7 @@ mod tests {
         global.structs.push(DocStruct {
             doc: Some("A growable list. Backed by a heap block.".to_string()),
             fields: vec![DocField {
+                default: None,
                 name: "length".to_string(),
                 type_name: "Int".to_string(),
             }],

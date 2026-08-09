@@ -429,7 +429,7 @@ fn run_task_compiled(
             false,
         ),
         None => (
-            env::temp_dir().join(format!("koja-run-{}-{binary_stem}", process::id())),
+            temp_binary_path(&binary_stem),
             provider.package.as_str(),
             Vec::new(),
             true,
@@ -549,10 +549,7 @@ fn build_and_keep(path: &Path, output: Option<String>, release: bool, emit_llvm:
 fn run_script_compiled(path: &Path, release: bool, args: &[String]) -> ! {
     let script = build_script(path);
     let stem = path.file_stem().and_then(OsStr::to_str).unwrap_or("app");
-    let output = env::temp_dir()
-        .join(format!("koja-run-{}-{stem}", process::id()))
-        .to_string_lossy()
-        .to_string();
+    let output = temp_binary_path(stem).to_string_lossy().to_string();
     emit_and_link_script(&script, &derive_package(path), &output, release);
     exec_binary(&output, args, true)
 }
@@ -1023,10 +1020,51 @@ fn run_project_compiled(config: &ProjectConfig, root: &Path, release: bool, args
 
 /// Exec a freshly linked binary with `args`, forward its exit code,
 /// and optionally remove it afterwards. Diverges either way.
+/// Path for a `koja run` temp binary: `$TMPDIR/koja-run/<pid>-<stem>`.
+/// [`exec_binary`] removes it after the child exits, but the file
+/// leaks when the driver dies first (Ctrl-C, a test harness kill).
+/// Sweeping the shared directory on the way in makes those leaks
+/// self-healing.
+fn temp_binary_path(stem: &str) -> PathBuf {
+    let dir = env::temp_dir().join("koja-run");
+    let _ = fs::create_dir_all(&dir);
+    sweep_stale_binaries(&dir);
+    dir.join(format!("{}-{stem}", process::id()))
+}
+
+/// Remove entries in `dir` untouched for over a day. Directories
+/// (macOS `.dSYM` bundles) remove recursively. Best-effort hygiene:
+/// every error is ignored.
+fn sweep_stale_binaries(dir: &Path) {
+    const MAX_AGE: Duration = Duration::from_secs(24 * 60 * 60);
+    let Ok(entries) = fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let stale = entry
+            .metadata()
+            .and_then(|metadata| metadata.modified())
+            .ok()
+            .and_then(|modified| modified.elapsed().ok())
+            .is_some_and(|age| age > MAX_AGE);
+        if !stale {
+            continue;
+        }
+        let path = entry.path();
+        if path.is_dir() {
+            let _ = fs::remove_dir_all(&path);
+        } else {
+            let _ = fs::remove_file(&path);
+        }
+    }
+}
+
 fn exec_binary(binary: &str, args: &[String], remove_after: bool) -> ! {
     let status = process::Command::new(binary).args(args).status();
     if remove_after {
         let _ = fs::remove_file(binary);
+        // macOS emits a debug-symbol bundle next to the binary.
+        let _ = fs::remove_dir_all(format!("{binary}.dSYM"));
     }
     match status {
         Ok(status) => process::exit(status.code().unwrap_or(1)),

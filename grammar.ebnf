@@ -28,7 +28,12 @@
    enter via `script`, where bare statements are accepted at the top level;
    the driver hoists those statements into an implicit entry function before
    the rest of the pipeline. Every production below is shared between the
-   two modes. *)
+   two modes.
+
+   `koja_source` is a synthetic root for grammar tooling. The driver picks
+   the real entry point by file extension. *)
+
+koja_source = program | script ;
 
 program = { top_level_decl } ;                              (* .koja *)
 script  = { top_level_decl | statement } ;                  (* .kojs *)
@@ -210,11 +215,11 @@ rescue_expr = ternary_expr , { "rescue" , ( IDENT | "_" ) , "->" , ternary_expr 
 ternary_expr = or_expr , [ "?" , or_expr , ":" , or_expr ] ;
 (* Note: else branch is or_expr, not ternary_expr -- nesting prohibited *)
 
-or_expr = and_expr , { IDENT_OR , and_expr } ;
-(* IDENT_OR = the identifier "or", recognized as an infix operator *)
+or_expr = and_expr , { "or" , and_expr } ;
 
-and_expr = not_expr , { IDENT_AND , not_expr } ;
-(* IDENT_AND = the identifier "and", recognized as an infix operator *)
+and_expr = not_expr , { "and" , not_expr } ;
+(* "or" and "and" are identifiers, not reserved keywords. The parser
+   recognizes them as infix operators by name. *)
 
 not_expr = "not" , not_expr
          | comparison ;
@@ -267,8 +272,10 @@ primary = literal
    tails, and rescue handlers. *)
 fail_expr = "fail" , expr ;
 
+(* An empty init list is valid when every omitted field declares a
+   default value. *)
 struct_construction = named_type , "{" ,
-                      field_init , { "," , field_init } , [ "," ] ,
+                      [ field_init , { "," , field_init } , [ "," ] ] ,
                       "}" ;
 
 field_init = IDENT , ":" , expr ;
@@ -277,7 +284,7 @@ enum_construction = named_type , "." , TYPE_IDENT                     (* unit *)
                   | named_type , "." , TYPE_IDENT ,
                     "(" , expr , { "," , expr } , ")"                 (* tuple *)
                   | named_type , "." , TYPE_IDENT ,
-                    "{" , field_init , { "," , field_init } , "}" ;   (* struct *)
+                    "{" , [ field_init , { "," , field_init } ] , "}" ; (* struct *)
 
 
 (* ========================================================================== *)
@@ -532,11 +539,20 @@ constant_decl = { annotation } , [ "priv" ] , "const" , ( IDENT | TYPE_IDENT ) ,
 IDENT       = LOWER , { LOWER | UPPER | DIGIT | "_" | "?" } ;
 TYPE_IDENT  = UPPER , { LOWER | UPPER | DIGIT } ;
 
-LOWER     = "a" | ... | "z" ;
-UPPER     = "A" | ... | "Z" ;
-DIGIT     = "0" | ... | "9" ;
-HEX_DIGIT = DIGIT | "a" | ... | "f" | "A" | ... | "F" ;
+LOWER     = "a" | "b" | "c" | "d" | "e" | "f" | "g" | "h" | "i" | "j" | "k"
+          | "l" | "m" | "n" | "o" | "p" | "q" | "r" | "s" | "t" | "u" | "v"
+          | "w" | "x" | "y" | "z" ;
+UPPER     = "A" | "B" | "C" | "D" | "E" | "F" | "G" | "H" | "I" | "J" | "K"
+          | "L" | "M" | "N" | "O" | "P" | "Q" | "R" | "S" | "T" | "U" | "V"
+          | "W" | "X" | "Y" | "Z" ;
+DIGIT     = "0" | "1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9" ;
+HEX_DIGIT = DIGIT | "a" | "b" | "c" | "d" | "e" | "f"
+                  | "A" | "B" | "C" | "D" | "E" | "F" ;
 BIN_DIGIT = "0" | "1" ;
+
+any_char_except_newline                 = ? any character except newline ? ;
+any_char_except_quote_backslash_newline = ? any character except double quote, backslash, newline ? ;
+any_char_except_triple_quote_backslash  = ? any character except a triple double quote or backslash ? ;
 
 
 (* ========================================================================== *)

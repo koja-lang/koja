@@ -9,8 +9,9 @@
 //! sidebar dropdown can pivot between packages without ambiguity.
 
 use koja_ast::ast::{
-    AnnotationValue, EnumDecl, ExtendBlock, File, Function, ImplMember, Item, Param, ProtocolDecl,
-    ProtocolMethod, StructDecl, TypeExpr, Visibility,
+    AnnotationValue, EnumDecl, Expr, ExprKind, ExtendBlock, File, Function, ImplMember, Item,
+    Literal, Param, ProtocolDecl, ProtocolMethod, StringPart, StructDecl, TypeExpr, UnaryOp,
+    Visibility,
 };
 use koja_ast::util::dedent;
 
@@ -68,9 +69,11 @@ pub struct DocEnum {
     pub variants: Vec<String>,
 }
 
-/// A struct field for display.
+/// A struct field for display. `default` is the rendered default
+/// value when the field declares one.
 #[derive(Debug)]
 pub struct DocField {
+    pub default: Option<String>,
     pub name: String,
     pub type_name: String,
 }
@@ -509,6 +512,7 @@ fn extract_struct(s: &StructDecl) -> Option<DocStruct> {
         .fields
         .iter()
         .map(|f| DocField {
+            default: f.default.as_ref().map(default_to_string),
             name: f.name.clone(),
             type_name: type_expr_to_string(&f.type_expr),
         })
@@ -528,6 +532,79 @@ fn has_doc_false(annotations: &[koja_ast::ast::Annotation]) -> bool {
     annotations
         .iter()
         .any(|a| a.name == "doc" && a.value == Some(AnnotationValue::False))
+}
+
+/// Format a default-value expression for display. Covers the shapes
+/// the compiler accepts as field defaults: literals, negated
+/// numerics, unit enum variants, binary literals, and struct, list,
+/// map, or set literals of those.
+fn default_to_string(expr: &Expr) -> String {
+    match &expr.kind {
+        ExprKind::BinaryLiteral { segments } => {
+            let parts: Vec<String> = segments
+                .iter()
+                .map(|segment| match segment.size.as_deref() {
+                    Some(size) => {
+                        format!(
+                            "{}::{}",
+                            default_to_string(&segment.value),
+                            default_to_string(size)
+                        )
+                    }
+                    None => default_to_string(&segment.value),
+                })
+                .collect();
+            format!("<<{}>>", parts.join(", "))
+        }
+        ExprKind::EnumConstruction {
+            type_path, variant, ..
+        } => format!("{}.{variant}", type_path.join(".")),
+        ExprKind::Group { expr: inner } => format!("({})", default_to_string(inner)),
+        ExprKind::List { elements } => {
+            let parts: Vec<String> = elements.iter().map(default_to_string).collect();
+            format!("[{}]", parts.join(", "))
+        }
+        ExprKind::Literal { value } => match value {
+            Literal::Bool(b) => b.to_string(),
+            Literal::Float(text) | Literal::Int(text) => text.clone(),
+            Literal::String(text) => format!("\"{text}\""),
+            Literal::Unit => "()".to_string(),
+        },
+        ExprKind::Map { entries } => {
+            if entries.is_empty() {
+                return "[:]".to_string();
+            }
+            let parts: Vec<String> = entries
+                .iter()
+                .map(|(key, value)| {
+                    format!("{}: {}", default_to_string(key), default_to_string(value))
+                })
+                .collect();
+            format!("[{}]", parts.join(", "))
+        }
+        ExprKind::String { parts, .. } => {
+            let text: String = parts
+                .iter()
+                .filter_map(|part| match part {
+                    StringPart::Literal { value, .. } => Some(value.as_str()),
+                    StringPart::Interpolation { .. } => None,
+                })
+                .collect();
+            format!("\"{text}\"")
+        }
+        ExprKind::StructConstruction { type_path, fields } => {
+            let parts: Vec<String> = fields
+                .iter()
+                .map(|field| format!("{}: {}", field.name, default_to_string(&field.value)))
+                .collect();
+            format!("{}{{{}}}", type_path.join("."), parts.join(", "))
+        }
+        ExprKind::Unary {
+            op: UnaryOp::Neg,
+            operand,
+        } => format!("-{}", default_to_string(operand)),
+        _ => "…".to_string(),
+    }
 }
 
 /// Format a type expression as a human-readable string.

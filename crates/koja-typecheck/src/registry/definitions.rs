@@ -45,8 +45,14 @@ pub struct ResolvedParam {
 
 /// One field of a [`StructDefinition`]. Surface-syntax name plus the
 /// fully-resolved field type as stamped by `lift_signatures`.
-#[derive(Clone, Debug, PartialEq, Eq)]
+///
+/// `default` holds the unresolved default-value AST when the field
+/// declares one. Construction sites that omit the field clone and
+/// re-resolve it against the substituted field type, so generic
+/// defaults (`Option.None`, `[]`) work per site.
+#[derive(Clone, Debug)]
 pub struct ResolvedStructField {
+    pub default: Option<Box<Expr>>,
     pub name: String,
     pub ty: ResolvedType,
 }
@@ -103,7 +109,7 @@ pub struct FunctionSignature {
 /// walk a separate impl table. A future incremental-cache pass
 /// may want a richer structural index over `(target, protocol)`
 /// pairs (e.g. for cross-package resolution). Revisit then.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug)]
 pub struct StructDefinition {
     pub fields: Vec<ResolvedStructField>,
     pub conformances: BTreeMap<GlobalRegistryId, Vec<ResolvedType>>,
@@ -119,7 +125,7 @@ pub struct StructDefinition {
 ///
 /// See [`StructDefinition::conformances`] for the conformance-map
 /// shape and rationale.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug)]
 pub struct EnumDefinition {
     pub variants: Vec<ResolvedEnumVariant>,
     pub conformances: BTreeMap<GlobalRegistryId, Vec<ResolvedType>>,
@@ -129,7 +135,7 @@ pub struct EnumDefinition {
 /// identifier (`Some` in `Option.Some`). `data` carries the variant's
 /// payload shape: empty for unit variants, positional types for
 /// tuple variants, named fields for struct variants.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug)]
 pub struct ResolvedEnumVariant {
     pub data: ResolvedVariantData,
     pub name: String,
@@ -142,7 +148,7 @@ pub struct ResolvedEnumVariant {
 /// shared shape lets the validation helpers in `resolve/structs.rs`
 /// be reused for both struct construction and struct-variant
 /// construction without duplicating the per-field walk.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug)]
 pub enum ResolvedVariantData {
     Struct(Vec<ResolvedStructField>),
     Tuple(Vec<ResolvedType>),

@@ -278,6 +278,12 @@ impl Walker<'_, '_> {
     }
 
     fn check_expr(&mut self, expr: &Expr) {
+        // Compiler-synthesized subtrees (field-default fills, derived
+        // impls) reuse user expressions that already warned at their
+        // declaration. Warning again per site would be noise.
+        if expr.span.synthetic {
+            return;
+        }
         match &expr.kind {
             ExprKind::Binary { left, right, .. } => {
                 self.check_expr(left);

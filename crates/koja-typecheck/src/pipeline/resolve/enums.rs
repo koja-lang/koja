@@ -27,7 +27,7 @@ use crate::registry::{
     GlobalKind, GlobalRegistry, ResolvedEnumVariant, ResolvedStructField, ResolvedVariantData,
 };
 
-use super::coercion::{Mismatch, check_compatible_stamping};
+use super::coercion::{check_compatible_stamping, mismatch_message};
 use super::ctx::{Callee, Resolver};
 use super::expr::resolve_expr;
 use super::inference::{PhantomContext, fill_from_expected, finalize_inference, unify_pairs};
@@ -94,7 +94,15 @@ pub(super) fn resolve_enum_construction(
     walk_construction_data_with_variant(data, &variant_def.data, resolver, diagnostics);
 
     if type_params.is_empty() {
-        validate_variant_payload(&enum_label, variant_def, data, span, resolver, diagnostics);
+        validate_variant_payload(
+            &enum_label,
+            enum_id,
+            variant_def,
+            data,
+            span,
+            resolver,
+            diagnostics,
+        );
         return ResolvedType::leaf(Resolution::Global(enum_id));
     }
 
@@ -113,7 +121,15 @@ pub(super) fn resolve_enum_construction(
         diagnostics,
     );
     let substituted = substitute_variant(variant_def, &subst);
-    validate_variant_payload(&enum_label, &substituted, data, span, resolver, diagnostics);
+    validate_variant_payload(
+        &enum_label,
+        enum_id,
+        &substituted,
+        data,
+        span,
+        resolver,
+        diagnostics,
+    );
     ResolvedType::Named {
         resolution: Resolution::Global(enum_id),
         type_args: subst.args(enum_id),
@@ -236,6 +252,7 @@ fn substitute_variant(variant: &ResolvedEnumVariant, subst: &Substitution) -> Re
             fields
                 .iter()
                 .map(|field| ResolvedStructField {
+                    default: field.default.clone(),
                     name: field.name.clone(),
                     ty: substitute(&field.ty, subst),
                 })
@@ -297,6 +314,7 @@ fn walk_construction_data_with_variant(
 /// types.
 fn validate_variant_payload(
     enum_label: &str,
+    enum_id: GlobalRegistryId,
     variant: &ResolvedEnumVariant,
     data: &mut EnumConstructionData,
     span: Span,
@@ -308,6 +326,7 @@ fn validate_variant_payload(
         (ResolvedVariantData::Struct(declared), EnumConstructionData::Struct(fields)) => {
             validate_named_fields(
                 &variant_label,
+                enum_id,
                 declared,
                 fields,
                 span,
@@ -364,35 +383,14 @@ fn validate_tuple_payload(
         if !actual.is_resolved() {
             continue;
         }
-        match check_compatible_stamping(expr, &actual, declared, resolver.registry) {
-            None => {}
-            Some(Mismatch::OutOfRange {
-                rendered_value,
-                width,
-            }) => {
-                diagnostics.push(Diagnostic::error(
-                    format!(
-                        "argument {} of `{variant_label}` expects `{}`: value \
-                         `{rendered_value}` does not fit in `{}` (range {})",
-                        index + 1,
-                        display_resolution(declared, resolver.registry),
-                        width.label(),
-                        width.range_label(),
-                    ),
-                    expr.span,
-                ));
-            }
-            Some(Mismatch::Incompatible) => {
-                diagnostics.push(Diagnostic::error(
-                    format!(
-                        "argument {} of `{variant_label}` expects `{}`, got `{}`",
-                        index + 1,
-                        display_resolution(declared, resolver.registry),
-                        display_resolution(&actual, resolver.registry),
-                    ),
-                    expr.span,
-                ));
-            }
+        if let Some(mismatch) =
+            check_compatible_stamping(expr, &actual, declared, resolver.registry)
+        {
+            let subject = format!("argument {} of `{variant_label}`", index + 1);
+            diagnostics.push(Diagnostic::error(
+                mismatch_message(&subject, &mismatch, declared, &actual, resolver.registry),
+                expr.span,
+            ));
         }
     }
 }

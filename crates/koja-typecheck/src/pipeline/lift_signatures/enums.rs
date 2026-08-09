@@ -21,6 +21,7 @@ use crate::registry::{
 
 use super::LiftScope;
 use super::SelfContext;
+use super::field_defaults::lift_field_default;
 use super::functions::lift_function_with_identifier;
 use super::types::{TypeParamScope, resolve_type_expr};
 
@@ -95,6 +96,7 @@ fn lift_enum_definition(
                         diagnostics,
                     );
                     resolved.push(ResolvedStructField {
+                        default: lift_field_default(field, diagnostics),
                         name: field.name.clone(),
                         ty,
                     });

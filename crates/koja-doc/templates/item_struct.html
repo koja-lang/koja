@@ -25,7 +25,7 @@
   <h2 class="section-heading" id="fields">Fields</h2>
   <ul class="fields-list">
     {% for f in s.fields %}
-    <li><span class="field-name">{{ f.name }}</span> <span class="field-type">{{ f.type_name }}</span></li>
+    <li><span class="field-name">{{ f.name }}</span> <span class="field-type">{{ f.type_name }}</span>{% if let Some(default) = f.default %} <span class="field-default">= {{ default }}</span>{% endif %}</li>
     {% endfor %}
   </ul>
   {% endif %}
