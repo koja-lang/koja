@@ -1,0 +1,32 @@
+# A formatter-wrapped head on a non-first arm must reparse: the arm
+# heuristic follows line continuations (`and`, `or`, `?`, `rescue`).
+yes = true
+no = false
+
+v =
+  cond
+    no ->
+      "first"
+
+    yes and yes and yes and yes and yes and yes and yes and yes and yes and yes
+      and yes and yes ->
+      "wrapped"
+
+    else ->
+      "other"
+  end
+
+v.print()
+
+n = 5
+
+r =
+  match n
+    0 -> "zero"
+    x when x > 0 and x < 100 and x != 13 and x != 42 and x != 99 and x != 7
+      and x != 3 ->
+      "ok"
+    _ -> "other"
+  end
+
+r.print()

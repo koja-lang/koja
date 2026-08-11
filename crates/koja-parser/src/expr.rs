@@ -27,6 +27,15 @@ pub(crate) const BP_MUL_R: u8 = 15;
 pub(crate) const BP_UNARY_R: u8 = 17;
 pub(crate) const BP_POSTFIX: u8 = 18;
 
+/// Tokens that continue the previous expression when they start a line.
+pub(crate) fn is_leading_continuation(kind: &TokenKind) -> bool {
+    match kind {
+        TokenKind::Question | TokenKind::Rescue => true,
+        TokenKind::Ident(name) => name == "and" || name == "or",
+        _ => false,
+    }
+}
+
 fn infix_bp(kind: &TokenKind) -> Option<(u8, u8)> {
     match kind {
         TokenKind::Ident(name) if name == "or" => Some((BP_OR_L, BP_OR_R)),
@@ -131,14 +140,12 @@ impl Parser {
 
         let saved = self.save_pos();
         self.skip_newlines();
-        let continues = match self.peek() {
-            TokenKind::Question => BP_TERNARY >= min_bp,
-            TokenKind::Rescue => BP_RESCUE_L >= min_bp,
-            kind @ TokenKind::Ident(name) if name == "and" || name == "or" => {
-                infix_bp(kind).is_some_and(|(left_bp, _)| left_bp >= min_bp)
-            }
-            _ => false,
-        };
+        let continues = is_leading_continuation(self.peek())
+            && match self.peek() {
+                TokenKind::Question => BP_TERNARY >= min_bp,
+                TokenKind::Rescue => BP_RESCUE_L >= min_bp,
+                kind => infix_bp(kind).is_some_and(|(left_bp, _)| left_bp >= min_bp),
+            };
         if !continues {
             self.restore_pos(saved);
         }

@@ -17,9 +17,7 @@ end
 
 enum Shape
   Circle(Int)
-  Named {
-    label: String,
-  }
+  Named{label: String}
 end
 
 fn sink_string(s: String) -> Int

@@ -48,6 +48,16 @@ impl TopLevel<'_> {
         }
     }
 
+    /// The line leading comments drain through. For items this is the
+    /// declaration keyword line, past any annotations, so a comment
+    /// between an annotation and its declaration hoists above both.
+    fn drain_line(&self) -> u32 {
+        match self {
+            TopLevel::Item(item) => item_span(item).start.line,
+            TopLevel::Stmt(stmt) => stmt_start_line(stmt),
+        }
+    }
+
     fn end_line(&self) -> u32 {
         match self {
             TopLevel::Item(item) => item_span(item).end.line,
@@ -118,15 +128,7 @@ impl<'a> Printer<'a> {
                     if prev_end.is_some() && (source_has_blank || annotated || prev_annotated) {
                         parts.push(hardline());
                     }
-                    let (comment_docs, last_comment_line) = self.comments.drain_before(start_line);
-                    for c in comment_docs {
-                        parts.push(c);
-                    }
-                    if let Some(lcl) = last_comment_line
-                        && start_line > lcl + 1
-                    {
-                        parts.push(hardline());
-                    }
+                    self.push_leading_comments(&mut parts, item_span(item).start.line, start_line);
                     parts.push(self.item_to_doc(item));
                     parts.push(hardline());
                     prev_end = Some(item_span(item).end.line);
@@ -137,19 +139,14 @@ impl<'a> Printer<'a> {
                 emitted = true;
             } else {
                 let item = &file.items[i];
-                let span = item_span(item);
                 if emitted {
                     parts.push(hardline());
                 }
-                let (comment_docs, last_comment_line) = self.comments.drain_before(span.start.line);
-                for c in comment_docs {
-                    parts.push(c);
-                }
-                if let Some(lcl) = last_comment_line
-                    && span.start.line > lcl + 1
-                {
-                    parts.push(hardline());
-                }
+                self.push_leading_comments(
+                    &mut parts,
+                    item_span(item).start.line,
+                    item_start_line(item),
+                );
                 parts.push(self.item_to_doc(item));
                 parts.push(hardline());
                 emitted = true;
@@ -188,7 +185,6 @@ impl<'a> Printer<'a> {
         for (i, node) in nodes.iter().enumerate() {
             let start_line = node.start_line();
             let next_line = self.comments.peek_before(start_line).unwrap_or(start_line);
-            let (comment_docs, last_comment_line) = self.comments.drain_before(start_line);
 
             if i > 0 {
                 let source_has_blank = next_line > prev_end + 1;
@@ -197,14 +193,7 @@ impl<'a> Printer<'a> {
                 }
             }
 
-            for c in comment_docs {
-                parts.push(c);
-            }
-            if let Some(lcl) = last_comment_line
-                && start_line > lcl + 1
-            {
-                parts.push(hardline());
-            }
+            self.push_leading_comments(&mut parts, node.drain_line(), start_line);
 
             match node {
                 TopLevel::Item(item) => parts.push(self.item_to_doc(item)),
@@ -224,6 +213,22 @@ impl<'a> Printer<'a> {
         }
 
         concat(parts)
+    }
+
+    /// Emits leading comments for a top-level element. Comments drain
+    /// through `drain_line` (the declaration keyword line, so a comment
+    /// between an annotation and its declaration hoists above both), but
+    /// the blank-line gap measures against `first_line`, the element's
+    /// first output line. Measuring against `drain_line` counted the
+    /// annotation lines as a gap and inserted a blank on the second pass.
+    fn push_leading_comments(&mut self, parts: &mut Vec<Doc>, drain_line: u32, first_line: u32) {
+        let (comment_docs, last_comment_line) = self.comments.drain_before(drain_line);
+        parts.extend(comment_docs);
+        if let Some(lcl) = last_comment_line
+            && first_line > lcl + 1
+        {
+            parts.push(hardline());
+        }
     }
 
     fn item_to_doc(&mut self, item: &Item) -> Doc {
@@ -321,6 +326,24 @@ impl<'a> Printer<'a> {
         concat(parts)
     }
 
+    /// Drains comments sitting above `line` and prepends them to the doc
+    /// `build` produces, keeping leading comments anchored to their node.
+    /// The drain must happen before `build` runs so the forward-only
+    /// cursor stays in source order.
+    pub(super) fn with_leading_comments(
+        &mut self,
+        line: u32,
+        build: impl FnOnce(&mut Self) -> Doc,
+    ) -> Doc {
+        let (cdocs, _) = self.comments.drain_before(line);
+        let doc = build(self);
+        if cdocs.is_empty() {
+            doc
+        } else {
+            concat(cdocs.into_iter().chain([doc]).collect())
+        }
+    }
+
     /// Appends nested type declarations to a type body.
     fn push_nested_to_body(&mut self, body: &mut Vec<Doc>, nested: &[Item], have_members: bool) {
         for (i, item) in nested.iter().enumerate() {
@@ -339,8 +362,19 @@ impl<'a> Printer<'a> {
         }
     }
 
-    /// Formats a single struct field with optional default value.
+    /// Formats a single struct field, attaching a trailing comment.
     fn struct_field_to_doc(&mut self, field: &StructField) -> Doc {
+        let mut d = self.struct_field_bare_to_doc(field);
+        if let Some(tc) = self.comments.drain_trailing(field.span.end.line) {
+            d = concat(vec![d, tc]);
+        }
+        d
+    }
+
+    /// The field itself (`name: Type [= default]`), no comment handling.
+    /// Split out for enum struct variants, whose joining comma must land
+    /// between the field and its trailing comment.
+    fn struct_field_bare_to_doc(&mut self, field: &StructField) -> Doc {
         let mut d = concat(vec![
             text(&field.name),
             text(": "),
@@ -348,9 +382,6 @@ impl<'a> Printer<'a> {
         ]);
         if let Some(default) = &field.default {
             d = concat(vec![d, text(" = "), self.expr_to_doc(default)]);
-        }
-        if let Some(tc) = self.comments.drain_trailing(field.span.end.line) {
-            d = concat(vec![d, tc]);
         }
         d
     }
@@ -385,6 +416,9 @@ impl<'a> Printer<'a> {
                 body.push(c);
             }
             body.push(self.enum_variant_to_doc(variant));
+            if let Some(tc) = self.comments.drain_trailing(variant.span.end.line) {
+                body.push(tc);
+            }
         }
         self.push_nested_to_body(&mut body, &e.nested, !e.variants.is_empty());
         for (i, func) in e.functions.iter().enumerate() {
@@ -415,22 +449,14 @@ impl<'a> Printer<'a> {
                 ])
             }
             EnumVariantData::Struct(fields) => {
-                let field_docs: Vec<Doc> =
-                    fields.iter().map(|f| self.struct_field_to_doc(f)).collect();
-                concat(vec![
-                    text(&variant.name),
-                    text(" {"),
-                    indent(
-                        2,
-                        concat(vec![
-                            hardline(),
-                            intersperse(field_docs, concat(vec![text(","), hardline()])),
-                            text(","),
-                        ]),
-                    ),
-                    hardline(),
-                    text("}"),
-                ])
+                let close_line = variant.span.end.line;
+                let entries = self.commented_entries(
+                    fields,
+                    close_line,
+                    |field| (field.span.start.line, field.span.end.line),
+                    |p, field| p.struct_field_bare_to_doc(field),
+                );
+                self.field_list_to_doc(text(&variant.name), entries, close_line)
             }
         }
     }
@@ -455,6 +481,15 @@ impl<'a> Printer<'a> {
         let sig = self.function_sig_to_doc(f);
         let sig_multiline = signature_wraps(&sig, indent_cols);
         parts.push(sig);
+        let sig_end = signature_end_line(
+            f.span.start.line,
+            &f.params,
+            f.return_type.as_ref(),
+            f.error_type.as_ref(),
+        );
+        if let Some(tc) = self.comments.drain_trailing(sig_end) {
+            parts.push(tc);
+        }
 
         if sig_multiline && f.body.is_some() {
             parts.push(hardline());
@@ -481,12 +516,27 @@ impl<'a> Printer<'a> {
             prefix.push('>');
         }
 
-        let params_doc: Vec<Doc> = f.params.iter().map(|p| self.param_to_doc(p)).collect();
+        let close_line = signature_end_line(
+            f.span.start.line,
+            &f.params,
+            f.return_type.as_ref(),
+            f.error_type.as_ref(),
+        );
+        let entries = self.commented_entries(
+            &f.params,
+            close_line,
+            |p| {
+                let span = param_span(p);
+                (span.start.line, span.end.line)
+            },
+            |printer, p| printer.param_to_doc(p),
+        );
         let return_doc = return_signature_doc(f.return_type.as_ref(), f.error_type.as_ref());
 
-        let params_inline = if params_doc.is_empty() {
+        let params_inline = if entries.is_empty() {
             text("")
-        } else {
+        } else if self.entries_comment_free(&entries, close_line) {
+            let params_doc: Vec<Doc> = entries.into_iter().map(|e| e.doc).collect();
             group(concat(vec![
                 text("("),
                 indent(
@@ -500,6 +550,17 @@ impl<'a> Printer<'a> {
                 softline(),
                 text(")"),
             ]))
+        } else {
+            // A parameter comment forces the broken signature. The
+            // hardlines make `signature_wraps` report multiline, which
+            // adds the blank line before the body.
+            let (stragglers, _) = self.comments.drain_before(close_line);
+            concat(vec![
+                text("("),
+                indent(2, commented_field_lines(entries, stragglers)),
+                hardline(),
+                text(")"),
+            ])
         };
 
         match return_doc {
@@ -597,6 +658,16 @@ impl<'a> Printer<'a> {
         if let Some(ret) = return_doc {
             parts.push(text(" "));
             parts.push(ret);
+        }
+
+        let sig_end = signature_end_line(
+            m.span.start.line,
+            &m.params,
+            m.return_type.as_ref(),
+            m.error_type.as_ref(),
+        );
+        if let Some(tc) = self.comments.drain_trailing(sig_end) {
+            parts.push(tc);
         }
 
         if let Some(body) = &m.body {
@@ -704,8 +775,10 @@ impl<'a> Printer<'a> {
                 } else {
                     target_doc
                 };
+                // Decided before `expr_to_doc` drains the closure's comments.
+                let inline_closure = self.closure_renders_inline(value);
                 let value_doc = self.expr_to_doc(value);
-                if is_inline_closure(value) {
+                if inline_closure {
                     // Stay inline when the closure fits, breaking after `=`
                     // (soft line) only when it overflows the line width.
                     group(concat(vec![

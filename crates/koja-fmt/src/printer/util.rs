@@ -5,8 +5,11 @@
 //! into `Doc` nodes, and provide span and text-length helpers used by the
 //! printer and expression modules.
 
+use std::mem;
+
 use crate::doc::*;
 use koja_ast::ast::*;
+use koja_ast::labels::type_expr_span;
 use koja_ast::span::Span;
 
 /// Formats a `TypeParam` as a string, including bounds if present.
@@ -77,6 +80,91 @@ pub(super) fn conformance_header_doc(conformances: &[TypeExpr]) -> Doc {
         indent(2, concat(vec![line(), fill(fill_items)])),
         if_break(nil(), hardline()),
     ]))
+}
+
+/// One element of a bracketed construct with its anchored comments.
+pub(super) struct CommentedEntry {
+    pub(super) leading: Vec<Doc>,
+    pub(super) doc: Doc,
+    pub(super) trailing: Option<Doc>,
+}
+
+impl CommentedEntry {
+    pub(super) fn comment_free(&self) -> bool {
+        self.leading.is_empty() && self.trailing.is_none()
+    }
+}
+
+/// Appends comments drained from between the last element and the
+/// closing delimiter, dropping the final hardline since the enclosing
+/// layout breaks before the delimiter itself.
+fn push_stragglers(body: &mut Vec<Doc>, mut stragglers: Vec<Doc>) {
+    if stragglers.is_empty() {
+        return;
+    }
+    stragglers.pop();
+    body.push(hardline());
+    body.extend(stragglers);
+}
+
+/// Broken field-list interior with one field per line, a comma after
+/// every field, and comments anchored to their field. Starts with the
+/// break after the opening brace. The caller closes with `hardline`
+/// and the delimiter.
+pub(super) fn commented_field_lines(entries: Vec<CommentedEntry>, stragglers: Vec<Doc>) -> Doc {
+    let mut body = Vec::new();
+    for entry in entries {
+        body.push(hardline());
+        body.extend(entry.leading);
+        body.push(entry.doc);
+        body.push(text(","));
+        if let Some(tc) = entry.trailing {
+            body.push(tc);
+        }
+    }
+    push_stragglers(&mut body, stragglers);
+    concat(body)
+}
+
+/// Broken element-list interior with comment-aware packing. Comment-free
+/// runs fill-pack, a trailing comment ends its packed line, and a leading
+/// comment takes its own line before the next run. Comma after every
+/// element except the last.
+pub(super) fn commented_element_lines(entries: Vec<CommentedEntry>, stragglers: Vec<Doc>) -> Doc {
+    let last = entries.len() - 1;
+    let mut body = vec![hardline()];
+    let mut run: Vec<Doc> = Vec::new();
+    for (i, entry) in entries.into_iter().enumerate() {
+        let elem = if i < last {
+            concat(vec![entry.doc, text(",")])
+        } else {
+            entry.doc
+        };
+        if !entry.leading.is_empty() {
+            if !run.is_empty() {
+                body.push(fill(mem::take(&mut run)));
+                body.push(hardline());
+            }
+            // Each leading comment already ends with a hardline, so the
+            // next run lands on the following line.
+            body.extend(entry.leading);
+        }
+        match entry.trailing {
+            Some(tc) => {
+                run.push(concat(vec![elem, tc]));
+                body.push(fill(mem::take(&mut run)));
+                body.push(hardline());
+            }
+            None => run.push(elem),
+        }
+    }
+    if run.is_empty() {
+        body.pop();
+    } else {
+        body.push(fill(run));
+    }
+    push_stragglers(&mut body, stragglers);
+    concat(body)
 }
 
 /// Formats a struct-like body: `prefix{ field, field, ... }` with
@@ -873,6 +961,33 @@ pub(super) fn stmt_end_line(stmt: &Statement) -> u32 {
         | Statement::Destructure { span, .. }
         | Statement::Return { span, .. }
         | Statement::Break { span, .. } => span.end.line,
+    }
+}
+
+/// Last source line of a function signature: the header's own line, or
+/// the end of the last parameter / return type / error type when the
+/// signature wraps. A wrapped signature whose bare `)` closes the
+/// parameter list on its own line is attributed to the last parameter,
+/// so a comment on that `)` line still reads as a body comment.
+pub(super) fn signature_end_line(
+    header_start: u32,
+    params: &[Param],
+    return_type: Option<&TypeExpr>,
+    error_type: Option<&TypeExpr>,
+) -> u32 {
+    let mut line = header_start;
+    for param in params {
+        line = line.max(param_span(param).end.line);
+    }
+    for type_expr in [return_type, error_type].into_iter().flatten() {
+        line = line.max(type_expr_span(type_expr).end.line);
+    }
+    line
+}
+
+pub(super) fn param_span(param: &Param) -> &Span {
+    match param {
+        Param::Regular { span, .. } | Param::Self_ { span, .. } => span,
     }
 }
 

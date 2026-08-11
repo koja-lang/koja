@@ -24,10 +24,7 @@ match s.top
 end
 
 enum Shape
-  Rect {
-    width: Int,
-    height: Int = 2,
-  }
+  Rect{width: Int, height: Int = 2}
   Dot
 end
 

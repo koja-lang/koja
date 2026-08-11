@@ -770,12 +770,12 @@ fn resolve_output_name(output: Option<String>, path: &Path) -> String {
     })
 }
 
-/// `koja check` for a project: walk every `src` directory,
-/// resolve declared dependencies, parse + typecheck the whole set,
-/// and print `<project>: OK` (or per-file ASTs when `emit_ast`
-/// is set).
+/// `koja check` for a project: walk the project's `src` and `test`
+/// directories, resolve declared dependencies, parse + typecheck the
+/// whole set, and print `<project>: OK` (or per-file ASTs when
+/// `emit_ast` is set).
 fn check_project(config: &ProjectConfig, root: &Path, emit_ast: bool) {
-    let user_files = collect_project_sources_or_exit(config, root, false);
+    let user_files = collect_project_sources_or_exit(config, root, true);
     let checked = check_bundle(
         bundle_many_with_autoimport(user_files, Some(&config.namespace())),
         ParseMode::File,
@@ -821,11 +821,21 @@ fn build_project_and_keep(
 /// Diverges either way: success exits with the binary's status, any
 /// pipeline failure or launch error prints `error: …` and exits 1.
 /// The early `no tests found` path is the lone non-diverging branch.
+/// Parse errors bail before discovery so a broken only-test-file
+/// reports its diagnostics instead of reading as "no tests found".
 fn run_project_tests(config: &ProjectConfig, root: &Path, opts: TestOptions) {
     let namespace = config.namespace();
     let user_files = collect_project_sources_or_exit(config, root, true);
     let bundled = bundle_many_with_autoimport(user_files, Some(&namespace));
     let mut parsed = parse_program(bundled, ParseMode::File);
+    if parsed.has_errors() {
+        let sources = capture_sources(&parsed);
+        eprintln!(
+            "{}",
+            render_program_diagnostics(&parse_diagnostics(&parsed), &sources)
+        );
+        process::exit(1);
+    }
 
     let tests = discover_tests(&parsed, &namespace, root);
     if tests.is_empty() {
@@ -1268,6 +1278,16 @@ fn capture_sources(parsed: &ParsedProgram) -> SourceTable {
     )
 }
 
+/// Collect every diagnostic the parse produced, across all files.
+fn parse_diagnostics(parsed: &ParsedProgram) -> Vec<Diagnostic> {
+    parsed
+        .files
+        .values()
+        .flat_map(|file| file.diagnostics.iter())
+        .cloned()
+        .collect()
+}
+
 /// Render a [`CheckFailure`]'s diagnostics to stderr and exit 1.
 /// Parse diagnostics live on the partial parse, not on
 /// `failure.diagnostics`, so both sets print.
@@ -1277,12 +1297,7 @@ fn bail_check_failure(failure: CheckFailure, sources: &SourceTable) -> ! {
         partial,
         ..
     } = failure;
-    let mut all: Vec<Diagnostic> = partial
-        .files
-        .values()
-        .flat_map(|file| file.diagnostics.iter())
-        .cloned()
-        .collect();
+    let mut all = parse_diagnostics(&partial);
     all.extend(diagnostics);
     if all.is_empty() {
         eprintln!("error: check failed with no diagnostics");
