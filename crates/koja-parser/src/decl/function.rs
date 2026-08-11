@@ -86,12 +86,31 @@ impl Parser {
             return (None, None);
         }
         let return_type = self.parse_type_expr();
-        let error_type = if self.eat(&TokenKind::Bang).is_some() {
+        let error_type = if self.eat(&TokenKind::Bang).is_some() || self.eat_bang_continuation() {
             Some(self.parse_type_expr())
         } else {
             None
         };
         (Some(return_type), error_type)
+    }
+
+    /// Consumes a `!` that starts a continuation line after the return
+    /// type, the shape a wrapped `-> T` / `! E` tail formats to. No
+    /// statement can start with `!`, so the lookahead is unambiguous.
+    fn eat_bang_continuation(&mut self) -> bool {
+        if !self.at(&TokenKind::Newline) {
+            return false;
+        }
+        let mut n = 0;
+        while matches!(self.peek_nth(n), TokenKind::Newline) {
+            n += 1;
+        }
+        if !matches!(self.peek_nth(n), TokenKind::Bang) {
+            return false;
+        }
+        self.skip_newlines();
+        self.advance();
+        true
     }
 
     pub(crate) fn parse_param_list(&mut self) -> Vec<Param> {

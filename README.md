@@ -1,4 +1,4 @@
-# Koja
+# The Koja Programming Language
 
 [![CI](https://github.com/koja-lang/koja/actions/workflows/ci.yml/badge.svg)](https://github.com/koja-lang/koja/actions/workflows/ci.yml)
 [![GitHub Release](https://img.shields.io/github/v/release/koja-lang/koja)](https://github.com/koja-lang/koja/releases)

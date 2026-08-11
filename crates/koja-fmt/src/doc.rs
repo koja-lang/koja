@@ -74,6 +74,27 @@ pub fn fill(docs: Vec<Doc>) -> Doc {
     Doc::Fill(docs)
 }
 
+/// Rewrites a document so it renders on one line regardless of width.
+/// Lines become spaces, softlines vanish, and groups, fills, and indents
+/// collapse to their flat form. Hardlines survive, so degenerate content
+/// still renders correctly. String interpolation uses this because a
+/// string literal never breaks.
+pub fn flatten(doc: Doc) -> Doc {
+    match doc {
+        Doc::Nil | Doc::Text(_) | Doc::Hardline => doc,
+        Doc::Line => space(),
+        Doc::Softline => Doc::Nil,
+        Doc::IfBreak(flat_doc, _) => flatten(*flat_doc),
+        Doc::Concat(docs) => Doc::Concat(docs.into_iter().map(flatten).collect()),
+        Doc::Indent(_, inner) => flatten(*inner),
+        Doc::Group(inner) => flatten(*inner),
+        Doc::Fill(items) => {
+            let flat: Vec<Doc> = items.into_iter().map(flatten).collect();
+            intersperse(flat, space())
+        }
+    }
+}
+
 /// Joins documents with `sep` inserted between each pair.
 pub fn intersperse(docs: Vec<Doc>, sep: Doc) -> Doc {
     let mut result = Vec::new();

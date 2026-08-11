@@ -8,6 +8,5 @@ end
 
 p = Packet{data: "hello"}
 
-result =
-  consume(p, fn (pkt: Packet) -> String pkt.data end)
+result = consume(p, fn (pkt: Packet) -> String pkt.data end)
 result.print()

@@ -30,7 +30,11 @@ pub fn format_width(source: &str, width: u32, mode: ParseMode) -> FormatResult {
         return FormatResult::ParseErrors(result.errors);
     }
 
-    let doc = printer::file_to_doc(&result.ast);
+    // The comment attachment pass locates boundary keywords (`else`,
+    // `after`) in the token stream because the AST carries no spans for
+    // them.
+    let lexed = koja_lexer::lex(source, koja_ast::span::FileId::UNKNOWN);
+    let doc = printer::file_to_doc(&result.ast, &lexed.tokens);
     let rendered = render(&doc, width);
     let mut out: String = rendered
         .lines()
@@ -1518,6 +1522,152 @@ mod tests {
     }
 
     #[test]
+    fn alias_const_type_trailing_comments_stay_on_line() {
+        assert_unchanged(
+            "
+            alias Process.Step # step alias
+
+            const N: Int32 = 4 # const trailing
+
+            type Pet = Cat | Dog # type trailing
+        ",
+        );
+    }
+
+    #[test]
+    fn declaration_header_and_end_comments_stay_on_line() {
+        assert_unchanged(
+            "
+            struct Point # header comment
+              x: Int32
+            end # end comment
+        ",
+        );
+    }
+
+    #[test]
+    fn else_body_leading_comment_stays_in_else() {
+        assert_unchanged(
+            r#"
+            fn f(n: Int32)
+              if n > 2
+                "big".print()
+              else
+                # leading comment in else body
+                "small".print()
+              end
+            end
+        "#,
+        );
+    }
+
+    #[test]
+    fn comment_before_else_stays_above_else() {
+        assert_unchanged(
+            r#"
+            fn f(n: Int32)
+              if n > 2
+                "big".print()
+              # before else
+              else # on else line
+                "small".print()
+              end
+            end
+        "#,
+        );
+    }
+
+    #[test]
+    fn cond_comment_before_else_stays_above_else() {
+        assert_unchanged(
+            r#"
+            fn f(n: Int32) -> String
+              cond
+                n > 2 -> "big"
+                # before else
+                else -> "small"
+              end
+            end
+        "#,
+        );
+    }
+
+    #[test]
+    fn comment_before_match_end_stays_inside() {
+        assert_unchanged(
+            r#"
+            fn f -> String
+              r =
+                match 1
+                  _ -> "x"
+                  # inside comment
+                end
+
+              r
+            end
+        "#,
+        );
+    }
+
+    #[test]
+    fn receive_after_boundary_comments_stay_in_place() {
+        assert_unchanged(
+            r#"
+            fn f
+              receive
+                msg: Int -> msg.print()
+              # before after
+              after 10 # timeout ms
+                "x".print()
+              end
+            end
+        "#,
+        );
+    }
+
+    #[test]
+    fn chain_statement_leading_comment_stays_above_statement() {
+        assert_unchanged(
+            r#"
+            fn f(code: Int32) -> String
+              match code
+                1 ->
+                  # wrap and copy, never free
+                  error_string(code).to_cstring().to_string().unwrap()
+                _ -> "other"
+              end
+            end
+        "#,
+        );
+    }
+
+    #[test]
+    fn broken_assignment_head_comment_hoists_above_statement() {
+        assert_fmt(
+            r#"
+            fn f -> String
+              r = # note
+                match 1
+                  _ -> "x"
+                end
+              r
+            end
+        "#,
+            r#"
+            fn f -> String
+              # note
+              r =
+                match 1
+                  _ -> "x"
+                end
+
+              r
+            end
+        "#,
+        );
+    }
+
+    #[test]
     fn method_chain_short_stays_inline() {
         assert_fmt(
             r#"
@@ -1915,7 +2065,7 @@ mod tests {
 
     #[test]
     fn heredoc_quotes_round_trip() {
-        // Lone quotes stay raw (even at line end); a would-be closing
+        // Lone quotes stay raw, even at line end. A would-be closing
         // run keeps its escaped third quote.
         assert_unchanged(
             r#"
@@ -2113,6 +2263,170 @@ mod tests {
                   "error"
               end
             end
+        "#,
+        );
+    }
+
+    #[test]
+    fn short_call_with_inline_closure_stays_glued() {
+        // The assignment only breaks when the value renders as a
+        // multi-line block. An inline-fitting closure does not count.
+        assert_unchanged_script("ref = Task.async(fn () -> Int 42 end)");
+    }
+
+    #[test]
+    fn call_with_multiline_closure_breaks_after_equals() {
+        assert_fmt_script(
+            "
+            ref = Task.async(fn () -> Int
+              a = 1
+              a + 1
+            end)
+        ",
+            "
+            ref =
+              Task.async(fn () -> Int
+                a = 1
+                a + 1
+              end)
+        ",
+        );
+    }
+
+    #[test]
+    fn closure_with_block_body_takes_broken_layout() {
+        // A single-statement body that is itself a block never
+        // collapses onto the signature line.
+        assert_unchanged_script(
+            r#"
+            g =
+              fn () -> String
+                match 1
+                  1 -> "a"
+                  _ -> "b"
+                end
+              end
+        "#,
+        );
+    }
+
+    #[test]
+    fn interpolation_never_breaks_inside_string() {
+        // The interpolation expression renders flat, so the string
+        // stays on one long line.
+        assert_unchanged_script(
+            r#"msg = "the measured value #{measured_value} exceeded the configured threshold #{threshold_value} by #{measured_value - threshold_value}""#,
+        );
+    }
+
+    #[test]
+    fn protocol_method_signature_wraps_at_width() {
+        // Protocol method signatures share the function signature
+        // renderer and wrap the same way.
+        assert_fmt(
+            "
+            protocol Transport
+              fn send_datagram_with_options(self, payload: Binary, destination_address: String, destination_port: Int32, ttl: Int32) -> Int ! SendError
+            end
+        ",
+            "
+            protocol Transport
+              fn send_datagram_with_options(
+                self,
+                payload: Binary,
+                destination_address: String,
+                destination_port: Int32,
+                ttl: Int32,
+              ) -> Int ! SendError
+            end
+        ",
+        );
+    }
+
+    #[test]
+    fn long_union_alias_packs_with_trailing_pipe() {
+        // Unions pack like symbolic operator chains.
+        assert_fmt(
+            "
+            type IncomingNetworkEvent = ConnectionEstablished | ConnectionClosed | DataReceived | HandshakeTimeout | ProtocolViolation
+        ",
+            "
+            type IncomingNetworkEvent = ConnectionEstablished | ConnectionClosed |
+              DataReceived | HandshakeTimeout | ProtocolViolation
+        ",
+        );
+    }
+
+    #[test]
+    fn generic_params_with_bounds_wrap_like_parens() {
+        // The angle-bracket list breaks one entry per line, and an
+        // entry keeps its bounds intact.
+        assert_fmt(
+            "
+            fn merge_sorted<TElement: Comparable & Hash & Equality, TCollection: Iterable & Equality>(left: TCollection, right: TCollection) -> TCollection
+              left
+            end
+        ",
+            "
+            fn merge_sorted<
+              TElement: Comparable & Hash & Equality,
+              TCollection: Iterable & Equality
+            >(left: TCollection, right: TCollection) -> TCollection
+
+              left
+            end
+        ",
+        );
+    }
+
+    #[test]
+    fn return_tail_wraps_like_a_ternary() {
+        // A wrapped `-> T ! E` tail puts each segment on its own
+        // continuation line starting with its operator, like the
+        // branches of a broken ternary.
+        assert_fmt(
+            "
+            fn parse_configuration_file(path: String) -> ConfigurationDocumentWithExtendedMetadata ! ConfigurationParseOrValidationError
+              1
+            end
+        ",
+            "
+            fn parse_configuration_file(path: String)
+              -> ConfigurationDocumentWithExtendedMetadata
+              ! ConfigurationParseOrValidationError
+
+              1
+            end
+        ",
+        );
+    }
+
+    #[test]
+    fn call_on_list_literal_breaks_the_literal_first() {
+        // The literal's brackets split before the argument list,
+        // and the call hugs the closing bracket.
+        assert_fmt_script(
+            r#"
+            names = ["alpha", "bravo", "charlie", "delta", "echo", "foxtrot"].map(name -> name.length())
+        "#,
+            r#"
+            names = [
+              "alpha", "bravo", "charlie", "delta", "echo", "foxtrot"
+            ].map(name -> name.length())
+        "#,
+        );
+    }
+
+    #[test]
+    fn call_on_map_literal_breaks_the_literal_first() {
+        assert_fmt_script(
+            r#"
+            lookup = ["alpha": 1, "bravo": 2, "charlie": 3, "delta": 4, "echo": 5].get("delta")
+        "#,
+            r#"
+            lookup = [
+              "alpha": 1, "bravo": 2, "charlie": 3, "delta": 4, "echo": 5
+            ].get("delta")
         "#,
         );
     }

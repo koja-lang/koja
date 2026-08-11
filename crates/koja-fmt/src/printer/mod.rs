@@ -3,38 +3,65 @@
 //! The entry point is [`file_to_doc`], which produces a [`Doc`] document tree
 //! that the renderer in [`crate::doc`] lays out to a target line width.
 //!
+//! Comment ownership is decided before printing by the attachment pass in
+//! [`attach`], which assigns every comment to a `(Span, Slot)` owner, and
+//! the printer consumes slots as it renders. A slot nobody consumes shows up in
+//! the end-of-print sweep, which appends the comments at the file's end so
+//! nothing is lost and fails debug builds.
+//!
 //! Internally the printer is split into submodules:
-//! - [`comments`]: source comment tracking and re-attachment
+//! - [`attach`]: the comment attachment pass and table
+//! - [`comments`]: comment rendering helpers
 //! - [`expr`]: expression and match/cond/receive arm formatting
+//! - [`seq`]: the commented-sequence builder and its layout backends
 //! - [`util`]: stateless helpers for types, patterns, spans, etc.
 
+mod attach;
 mod comments;
 mod expr;
+mod seq;
 mod util;
 
 use std::mem;
 
 use crate::doc::*;
 use koja_ast::ast::*;
+use koja_ast::span::Span;
+use koja_ast::token::Token;
 
-use comments::CommentCursor;
+use attach::{CommentTable, Slot};
+use comments::{leading_docs, trailing_doc};
+use seq::{SeqEntry, Spacing, field_lines, vertical};
 use util::*;
 
-/// Converts a parsed file into a `Doc` tree ready for rendering.
-pub fn file_to_doc(file: &File) -> Doc {
-    let mut p = Printer::new(&file.comments);
-    p.print_file(file)
+/// Converts a parsed file into a `Doc` tree ready for rendering. `tokens`
+/// is the file's token stream, used to locate boundary keywords (`else`,
+/// `after`) that carry no span in the AST.
+pub fn file_to_doc(file: &File, tokens: &[Token]) -> Doc {
+    let mut p = Printer {
+        comments: attach::attach(file, tokens),
+    };
+    let doc = p.print_file(file);
+    let rest = p.comments.drain_remaining();
+    if rest.is_empty() {
+        return doc;
+    }
+    debug_assert!(
+        false,
+        "koja-fmt: comments left unconsumed after printing: {rest:?}"
+    );
+    let (docs, _) = leading_docs(&rest);
+    concat(std::iter::once(doc).chain(docs).collect())
 }
 
-/// Holds the comment cursor used during formatting to re-attach comments
-/// at their original source positions.
-pub(super) struct Printer<'a> {
-    pub(super) comments: CommentCursor<'a>,
+/// Holds the comment table the printer consumes while rendering.
+struct Printer {
+    comments: CommentTable,
 }
 
-/// A single script top-level element, either a declaration or a
-/// statement. Used by [`Printer::print_script`] to merge `file.items`
-/// and `file.body` back into source order.
+/// A single top-level element, either a declaration or a statement. Used
+/// by [`Printer::print_file`] to merge `file.items` and `file.body` back
+/// into source order for scripts.
 enum TopLevel<'a> {
     Item(&'a Item),
     Stmt(&'a Statement),
@@ -48,20 +75,13 @@ impl TopLevel<'_> {
         }
     }
 
-    /// The line leading comments drain through. For items this is the
-    /// declaration keyword line, past any annotations, so a comment
-    /// between an annotation and its declaration hoists above both.
-    fn drain_line(&self) -> u32 {
+    /// The span that keys this node's comments. For items that is the
+    /// declaration span with annotations excluded, matching the
+    /// attachment pass.
+    fn key(&self) -> Span {
         match self {
-            TopLevel::Item(item) => item_span(item).start.line,
-            TopLevel::Stmt(stmt) => stmt_start_line(stmt),
-        }
-    }
-
-    fn end_line(&self) -> u32 {
-        match self {
-            TopLevel::Item(item) => item_span(item).end.line,
-            TopLevel::Stmt(stmt) => stmt_end_line(stmt),
+            TopLevel::Item(item) => *item_span(item),
+            TopLevel::Stmt(stmt) => stmt_span(stmt),
         }
     }
 
@@ -81,154 +101,59 @@ impl TopLevel<'_> {
     }
 }
 
-impl<'a> Printer<'a> {
-    fn new(comments: &'a [Comment]) -> Self {
-        Self {
-            comments: CommentCursor::new(comments),
-        }
-    }
-
-    /// Formats an entire file. `.kojs` scripts carry top-level
-    /// statements in `file.body`. Those interleave with declarations and
-    /// need the script-aware renderer. `.koja` modules leave `body` as
-    /// `None` and route through the declaration-only module renderer.
+impl Printer {
+    /// Formats an entire file, with top-level declarations and statements
+    /// merged in source order. `.kojs` scripts carry statements in
+    /// `file.body`, and `.koja` modules leave it `None`.
     fn print_file(&mut self, file: &File) -> Doc {
-        if file.body.is_some() {
-            self.print_script(file)
-        } else {
-            self.print_module(file)
-        }
-    }
-
-    /// Formats a declaration-only module: items with interleaved comments.
-    fn print_module(&mut self, file: &File) -> Doc {
-        let mut parts: Vec<Doc> = Vec::new();
-        let mut emitted = false;
-
-        let mut i = 0;
-
-        while i < file.items.len() {
-            if matches!(&file.items[i], Item::Constant(_) | Item::Alias(_)) {
-                if emitted {
-                    parts.push(hardline());
-                }
-
-                let anchor = mem::discriminant(&file.items[i]);
-                let mut prev_end: Option<u32> = None;
-                let mut prev_annotated = false;
-                while i < file.items.len() && mem::discriminant(&file.items[i]) == anchor {
-                    let item = &file.items[i];
-                    let annotated = !item_annotations(item).is_empty();
-                    let start_line = item_start_line(item);
-                    let next_line = self.comments.peek_before(start_line).unwrap_or(start_line);
-                    // Annotated declarations always get surrounding blank
-                    // lines. Otherwise a single blank is preserved from the
-                    // source (a wider gap collapses to one).
-                    let source_has_blank = prev_end.is_some_and(|prev| next_line > prev + 1);
-                    if prev_end.is_some() && (source_has_blank || annotated || prev_annotated) {
-                        parts.push(hardline());
-                    }
-                    self.push_leading_comments(&mut parts, item_span(item).start.line, start_line);
-                    parts.push(self.item_to_doc(item));
-                    parts.push(hardline());
-                    prev_end = Some(item_span(item).end.line);
-                    prev_annotated = annotated;
-                    i += 1;
-                }
-
-                emitted = true;
-            } else {
-                let item = &file.items[i];
-                if emitted {
-                    parts.push(hardline());
-                }
-                self.push_leading_comments(
-                    &mut parts,
-                    item_span(item).start.line,
-                    item_start_line(item),
-                );
-                parts.push(self.item_to_doc(item));
-                parts.push(hardline());
-                emitted = true;
-                i += 1;
-            }
-        }
-
-        let trailing = self.comments.drain_rest();
-        for c in trailing {
-            parts.push(c);
-        }
-
-        concat(parts)
-    }
-
-    /// Formats a script: top-level declarations and statements merged in
-    /// source order. The parser splits them into `file.items` and
-    /// `file.body`, so we re-interleave by start line to avoid reordering
-    /// the user's code. Spacing mirrors [`Self::statements_to_doc`]:
-    /// blank lines are preserved from the source and forced around block
-    /// constructs (declarations, `if`/`while`/`for`/...).
-    fn print_script(&mut self, file: &File) -> Doc {
-        let mut nodes: Vec<TopLevel<'_>> = Vec::new();
-        for item in &file.items {
-            nodes.push(TopLevel::Item(item));
-        }
+        let mut nodes: Vec<TopLevel<'_>> = file.items.iter().map(TopLevel::Item).collect();
         if let Some(body) = &file.body {
-            for stmt in body {
-                nodes.push(TopLevel::Stmt(stmt));
-            }
+            nodes.extend(body.iter().map(TopLevel::Stmt));
         }
         nodes.sort_by_key(TopLevel::start_line);
 
-        let mut parts: Vec<Doc> = Vec::new();
-        let mut prev_end: u32 = 0;
+        let module = file.body.is_none();
+        let mut entries = Vec::with_capacity(nodes.len());
         for (i, node) in nodes.iter().enumerate() {
-            let start_line = node.start_line();
-            let next_line = self.comments.peek_before(start_line).unwrap_or(start_line);
-
-            if i > 0 {
-                let source_has_blank = next_line > prev_end + 1;
-                if source_has_blank || node.is_block() || nodes[i - 1].is_block() {
-                    parts.push(hardline());
-                }
-            }
-
-            self.push_leading_comments(&mut parts, node.drain_line(), start_line);
-
-            match node {
-                TopLevel::Item(item) => parts.push(self.item_to_doc(item)),
-                TopLevel::Stmt(stmt) => parts.push(self.statement_to_doc(stmt)),
-            }
-            let end_line = node.end_line();
-            if let Some(tc) = self.comments.drain_trailing(end_line) {
-                parts.push(tc);
-            }
-            parts.push(hardline());
-            prev_end = end_line;
+            let key = node.key();
+            // In modules, a run of `const`s and a run of `alias`es read
+            // as separate groups, so force a blank at the transition.
+            let force_blank = module
+                && i > 0
+                && matches!(node, TopLevel::Item(Item::Constant(_) | Item::Alias(_)))
+                && matches!(
+                    &nodes[i - 1],
+                    TopLevel::Item(Item::Constant(_) | Item::Alias(_))
+                )
+                && match (&nodes[i - 1], node) {
+                    (TopLevel::Item(prev), TopLevel::Item(cur)) => {
+                        mem::discriminant(*prev) != mem::discriminant(*cur)
+                    }
+                    _ => false,
+                };
+            let doc = match node {
+                TopLevel::Item(item) => self.item_to_doc(item),
+                TopLevel::Stmt(stmt) => self.statement_to_doc(stmt),
+            };
+            entries.push(SeqEntry {
+                doc,
+                end_line: key.end.line,
+                force_blank,
+                is_block: node.is_block(),
+                leading: self.comments.take(key, Slot::Leading),
+                start_line: node.start_line(),
+                trailing: self.comments.take(key, Slot::Trailing),
+            });
         }
 
-        let trailing = self.comments.drain_rest();
-        for c in trailing {
-            parts.push(c);
+        let dangling = self.comments.take(file.span, Slot::Dangling);
+        if entries.is_empty() && dangling.is_empty() {
+            return nil();
         }
-
-        concat(parts)
-    }
-
-    /// Emits leading comments for a top-level element. Comments drain
-    /// through `drain_line` (the declaration keyword line, so a comment
-    /// between an annotation and its declaration hoists above both), but
-    /// the blank-line gap measures against `first_line`, the element's
-    /// first output line. Measuring against `drain_line` counted the
-    /// annotation lines as a gap and inserted a blank on the second pass.
-    fn push_leading_comments(&mut self, parts: &mut Vec<Doc>, drain_line: u32, first_line: u32) {
-        let (comment_docs, last_comment_line) = self.comments.drain_before(drain_line);
-        parts.extend(comment_docs);
-        if let Some(lcl) = last_comment_line
-            && first_line > lcl + 1
-        {
-            parts.push(hardline());
-        }
+        concat(vec![
+            vertical(entries, Spacing::Preserve, dangling),
+            hardline(),
+        ])
     }
 
     fn item_to_doc(&mut self, item: &Item) -> Doc {
@@ -246,7 +171,63 @@ impl<'a> Printer<'a> {
         }
     }
 
-    /// Formats a `struct` declaration with its fields and trailing comments.
+    /// Builds the member entry for a function inside a type body.
+    fn member_function_entry(&mut self, func: &Function) -> SeqEntry {
+        let start_line = func
+            .annotations
+            .first()
+            .map_or(func.span.start.line, |a| a.span.start.line);
+        SeqEntry {
+            doc: self.function_to_doc(func, 2),
+            end_line: func.span.end.line,
+            force_blank: true,
+            is_block: true,
+            leading: self.comments.take(func.span, Slot::Leading),
+            start_line,
+            trailing: self.comments.take(func.span, Slot::Trailing),
+        }
+    }
+
+    /// Builds the member entry for a nested type declaration.
+    fn member_nested_entry(&mut self, item: &Item) -> SeqEntry {
+        let key = *item_span(item);
+        SeqEntry {
+            doc: self.item_to_doc(item),
+            end_line: key.end.line,
+            force_blank: true,
+            is_block: true,
+            leading: self.comments.take(key, Slot::Leading),
+            start_line: item_start_line(item),
+            trailing: self.comments.take(key, Slot::Trailing),
+        }
+    }
+
+    /// Renders a type body (members between the header and `end`),
+    /// indented, with the block's dangling comments before `end`.
+    fn type_body_to_doc(&mut self, entries: Vec<SeqEntry>, owner: Span) -> Doc {
+        let dangling = self.comments.take(owner, Slot::Dangling);
+        let body = if entries.is_empty() && dangling.is_empty() {
+            nil()
+        } else {
+            indent(
+                2,
+                concat(vec![
+                    hardline(),
+                    vertical(entries, Spacing::Tight, dangling),
+                ]),
+            )
+        };
+        concat(vec![body, hardline(), text("end")])
+    }
+
+    /// Appends the header-line trailing comment, if any.
+    fn push_header_trailing(&mut self, parts: &mut Vec<Doc>, owner: Span) {
+        if let Some(tc) = trailing_doc(&self.comments.take(owner, Slot::HeaderTrailing)) {
+            parts.push(tc);
+        }
+    }
+
+    /// Formats a `struct` declaration with its fields and members.
     fn struct_to_doc(&mut self, s: &StructDecl) -> Doc {
         let mut parts = Vec::new();
         if let Some(doc) = annotations_to_doc(&s.annotations) {
@@ -267,28 +248,19 @@ impl<'a> Printer<'a> {
         if !s.conformances.is_empty() {
             parts.push(util::conformance_header_doc(&s.conformances));
         }
+        self.push_header_trailing(&mut parts, s.span);
 
-        let mut body = Vec::new();
+        let mut entries = Vec::new();
         for field in &s.fields {
-            body.push(hardline());
-            let (cdocs, _) = self.comments.drain_before(field.span.start.line);
-            for c in cdocs {
-                body.push(c);
-            }
-            body.push(self.struct_field_to_doc(field));
+            entries.push(self.struct_field_entry(field));
         }
-        self.push_nested_to_body(&mut body, &s.nested, !s.fields.is_empty());
-        for (i, func) in s.functions.iter().enumerate() {
-            if i > 0 || !s.fields.is_empty() || !s.nested.is_empty() {
-                body.push(hardline());
-            }
-            body.push(hardline());
-            body.push(self.function_to_doc(func, 2));
+        for item in &s.nested {
+            entries.push(self.member_nested_entry(item));
         }
-        self.push_trailing_body_comments(&mut body, s.span.end.line);
-        parts.push(indent(2, concat(body)));
-        parts.push(hardline());
-        parts.push(text("end"));
+        for func in &s.functions {
+            entries.push(self.member_function_entry(func));
+        }
+        parts.push(self.type_body_to_doc(entries, s.span));
         concat(parts)
     }
 
@@ -310,70 +282,33 @@ impl<'a> Printer<'a> {
             header.push('>');
         }
         parts.push(text(header));
+        self.push_header_trailing(&mut parts, b.span);
 
-        let mut body = Vec::new();
-        for (i, func) in b.functions.iter().enumerate() {
-            if i > 0 {
-                body.push(hardline());
-            }
-            body.push(hardline());
-            body.push(self.function_to_doc(func, 2));
-        }
-        self.push_trailing_body_comments(&mut body, b.span.end.line);
-        parts.push(indent(2, concat(body)));
-        parts.push(hardline());
-        parts.push(text("end"));
+        let entries = b
+            .functions
+            .iter()
+            .map(|f| self.member_function_entry(f))
+            .collect();
+        parts.push(self.type_body_to_doc(entries, b.span));
         concat(parts)
     }
 
-    /// Drains comments sitting above `line` and prepends them to the doc
-    /// `build` produces, keeping leading comments anchored to their node.
-    /// The drain must happen before `build` runs so the forward-only
-    /// cursor stays in source order.
-    pub(super) fn with_leading_comments(
-        &mut self,
-        line: u32,
-        build: impl FnOnce(&mut Self) -> Doc,
-    ) -> Doc {
-        let (cdocs, _) = self.comments.drain_before(line);
-        let doc = build(self);
-        if cdocs.is_empty() {
-            doc
-        } else {
-            concat(cdocs.into_iter().chain([doc]).collect())
+    /// Builds the member entry for a struct field.
+    fn struct_field_entry(&mut self, field: &StructField) -> SeqEntry {
+        SeqEntry {
+            doc: self.struct_field_bare_to_doc(field),
+            end_line: field.span.end.line,
+            force_blank: false,
+            is_block: false,
+            leading: self.comments.take(field.span, Slot::Leading),
+            start_line: field.span.start.line,
+            trailing: self.comments.take(field.span, Slot::Trailing),
         }
-    }
-
-    /// Appends nested type declarations to a type body.
-    fn push_nested_to_body(&mut self, body: &mut Vec<Doc>, nested: &[Item], have_members: bool) {
-        for (i, item) in nested.iter().enumerate() {
-            if i > 0 || have_members {
-                body.push(hardline());
-            }
-            body.push(hardline());
-            let (cdocs, _) = self.comments.drain_before(item_start_line(item));
-            for c in cdocs {
-                body.push(c);
-            }
-            body.push(self.item_to_doc(item));
-            if let Some(tc) = self.comments.drain_trailing(item_span(item).end.line) {
-                body.push(tc);
-            }
-        }
-    }
-
-    /// Formats a single struct field, attaching a trailing comment.
-    fn struct_field_to_doc(&mut self, field: &StructField) -> Doc {
-        let mut d = self.struct_field_bare_to_doc(field);
-        if let Some(tc) = self.comments.drain_trailing(field.span.end.line) {
-            d = concat(vec![d, tc]);
-        }
-        d
     }
 
     /// The field itself (`name: Type [= default]`), no comment handling.
-    /// Split out for enum struct variants, whose joining comma must land
-    /// between the field and its trailing comment.
+    /// The joining comma of enum struct variants must land between the
+    /// field and its trailing comment.
     fn struct_field_bare_to_doc(&mut self, field: &StructField) -> Doc {
         let mut d = concat(vec![
             text(&field.name),
@@ -407,31 +342,27 @@ impl<'a> Printer<'a> {
         if !e.conformances.is_empty() {
             parts.push(util::conformance_header_doc(&e.conformances));
         }
+        self.push_header_trailing(&mut parts, e.span);
 
-        let mut body = Vec::new();
+        let mut entries = Vec::new();
         for variant in &e.variants {
-            body.push(hardline());
-            let (cdocs, _) = self.comments.drain_before(variant.span.start.line);
-            for c in cdocs {
-                body.push(c);
-            }
-            body.push(self.enum_variant_to_doc(variant));
-            if let Some(tc) = self.comments.drain_trailing(variant.span.end.line) {
-                body.push(tc);
-            }
+            entries.push(SeqEntry {
+                doc: self.enum_variant_to_doc(variant),
+                end_line: variant.span.end.line,
+                force_blank: false,
+                is_block: false,
+                leading: self.comments.take(variant.span, Slot::Leading),
+                start_line: variant.span.start.line,
+                trailing: self.comments.take(variant.span, Slot::Trailing),
+            });
         }
-        self.push_nested_to_body(&mut body, &e.nested, !e.variants.is_empty());
-        for (i, func) in e.functions.iter().enumerate() {
-            if i > 0 || !e.variants.is_empty() || !e.nested.is_empty() {
-                body.push(hardline());
-            }
-            body.push(hardline());
-            body.push(self.function_to_doc(func, 2));
+        for item in &e.nested {
+            entries.push(self.member_nested_entry(item));
         }
-        self.push_trailing_body_comments(&mut body, e.span.end.line);
-        parts.push(indent(2, concat(body)));
-        parts.push(hardline());
-        parts.push(text("end"));
+        for func in &e.functions {
+            entries.push(self.member_function_entry(func));
+        }
+        parts.push(self.type_body_to_doc(entries, e.span));
         concat(parts)
     }
 
@@ -449,14 +380,12 @@ impl<'a> Printer<'a> {
                 ])
             }
             EnumVariantData::Struct(fields) => {
-                let close_line = variant.span.end.line;
-                let entries = self.commented_entries(
+                let entries = self.seq_entries(
                     fields,
-                    close_line,
-                    |field| (field.span.start.line, field.span.end.line),
+                    |field| field.span,
                     |p, field| p.struct_field_bare_to_doc(field),
                 );
-                self.field_list_to_doc(text(&variant.name), entries, close_line)
+                self.field_list_to_doc(text(&variant.name), entries, variant.span)
             }
         }
     }
@@ -470,9 +399,6 @@ impl<'a> Printer<'a> {
     fn function_to_doc(&mut self, f: &Function, indent_cols: u32) -> Doc {
         let mut parts = Vec::new();
 
-        let (comment_docs, _) = self.comments.drain_before(f.span.start.line);
-        parts.extend(comment_docs);
-
         if let Some(doc) = annotations_to_doc(&f.annotations) {
             parts.push(doc);
             parts.push(hardline());
@@ -481,22 +407,15 @@ impl<'a> Printer<'a> {
         let sig = self.function_sig_to_doc(f);
         let sig_multiline = signature_wraps(&sig, indent_cols);
         parts.push(sig);
-        let sig_end = signature_end_line(
-            f.span.start.line,
-            &f.params,
-            f.return_type.as_ref(),
-            f.error_type.as_ref(),
-        );
-        if let Some(tc) = self.comments.drain_trailing(sig_end) {
-            parts.push(tc);
-        }
+        self.push_header_trailing(&mut parts, f.span);
 
         if sig_multiline && f.body.is_some() {
             parts.push(hardline());
         }
 
         if let Some(body) = &f.body {
-            parts.push(self.body_to_doc(body, f.span.end.line));
+            let dangling = self.comments.take(f.span, Slot::Dangling);
+            parts.push(self.body_to_doc(body, dangling));
             parts.push(hardline());
             parts.push(text("end"));
         }
@@ -506,36 +425,37 @@ impl<'a> Printer<'a> {
     /// Formats a function signature (visibility, name, type params, params,
     /// return type) with group/indent for line-breaking.
     fn function_sig_to_doc(&mut self, f: &Function) -> Doc {
-        let mut prefix = String::from(visibility_prefix(f.visibility));
-        prefix.push_str("fn ");
-        prefix.push_str(&f.name);
-
-        if !f.type_params.is_empty() {
-            prefix.push('<');
-            prefix.push_str(&util::format_type_params(&f.type_params));
-            prefix.push('>');
-        }
-
-        let close_line = signature_end_line(
-            f.span.start.line,
+        self.signature_to_doc(
+            format!("{}fn {}", visibility_prefix(f.visibility), f.name),
+            &f.type_params,
             &f.params,
+            f.span,
             f.return_type.as_ref(),
             f.error_type.as_ref(),
-        );
-        let entries = self.commented_entries(
-            &f.params,
-            close_line,
-            |p| {
-                let span = param_span(p);
-                (span.start.line, span.end.line)
-            },
+        )
+    }
+
+    /// Formats a signature (prefix, type params, parameters, return tail)
+    /// with one wrapping shape shared by functions and protocol methods.
+    fn signature_to_doc(
+        &mut self,
+        prefix: String,
+        type_params: &[TypeParam],
+        params: &[Param],
+        owner: Span,
+        return_type: Option<&TypeExpr>,
+        error_type: Option<&TypeExpr>,
+    ) -> Doc {
+        let entries = self.seq_entries(
+            params,
+            |p| *param_span(p),
             |printer, p| printer.param_to_doc(p),
         );
-        let return_doc = return_signature_doc(f.return_type.as_ref(), f.error_type.as_ref());
+        let return_doc = return_signature_doc(return_type, error_type);
 
         let params_inline = if entries.is_empty() {
-            text("")
-        } else if self.entries_comment_free(&entries, close_line) {
+            nil()
+        } else if self.entries_comment_free(&entries, owner) {
             let params_doc: Vec<Doc> = entries.into_iter().map(|e| e.doc).collect();
             group(concat(vec![
                 text("("),
@@ -554,22 +474,26 @@ impl<'a> Printer<'a> {
             // A parameter comment forces the broken signature. The
             // hardlines make `signature_wraps` report multiline, which
             // adds the blank line before the body.
-            let (stragglers, _) = self.comments.drain_before(close_line);
+            let stragglers = self.comments.take(owner, Slot::Stragglers);
             concat(vec![
                 text("("),
-                indent(2, commented_field_lines(entries, stragglers)),
+                indent(2, field_lines(entries, stragglers)),
                 hardline(),
                 text(")"),
             ])
         };
 
+        let head = concat(vec![
+            text(prefix),
+            type_params_doc(type_params),
+            params_inline,
+        ]);
         match return_doc {
             Some(ret) => group(concat(vec![
-                text(prefix),
-                params_inline,
+                head,
                 group(indent(2, concat(vec![line(), ret]))),
             ])),
-            None => concat(vec![text(prefix), params_inline]),
+            None => head,
         }
     }
 
@@ -610,68 +534,49 @@ impl<'a> Printer<'a> {
             header.push('>');
         }
         parts.push(text(header));
+        self.push_header_trailing(&mut parts, p.span);
 
-        let mut body = Vec::new();
-        for (i, method) in p.methods.iter().enumerate() {
-            if i > 0 {
-                body.push(hardline());
-            }
-            body.push(hardline());
-            body.push(self.protocol_method_to_doc(method));
+        let mut entries = Vec::new();
+        for method in &p.methods {
+            let start_line = method
+                .annotations
+                .first()
+                .map_or(method.span.start.line, |a| a.span.start.line);
+            entries.push(SeqEntry {
+                doc: self.protocol_method_to_doc(method),
+                end_line: method.span.end.line,
+                force_blank: true,
+                is_block: true,
+                leading: self.comments.take(method.span, Slot::Leading),
+                start_line,
+                trailing: self.comments.take(method.span, Slot::Trailing),
+            });
         }
-        self.push_trailing_body_comments(&mut body, p.span.end.line);
-        parts.push(indent(2, concat(body)));
-        parts.push(hardline());
-        parts.push(text("end"));
+        parts.push(self.type_body_to_doc(entries, p.span));
         concat(parts)
     }
 
     /// Formats a protocol method (signature only, or with default body).
     fn protocol_method_to_doc(&mut self, m: &ProtocolMethod) -> Doc {
         let mut parts = Vec::new();
-        let (comment_docs, _) = self.comments.drain_before(m.span.start.line);
-        parts.extend(comment_docs);
         if let Some(doc) = annotations_to_doc(&m.annotations) {
             parts.push(doc);
             parts.push(hardline());
         }
 
-        let mut prefix = String::from("fn ");
-        prefix.push_str(&m.name);
-        if !m.type_params.is_empty() {
-            prefix.push('<');
-            prefix.push_str(&util::format_type_params(&m.type_params));
-            prefix.push('>');
-        }
-
-        let params_doc: Vec<Doc> = m.params.iter().map(|p| self.param_to_doc(p)).collect();
-        let return_doc = return_signature_doc(m.return_type.as_ref(), m.error_type.as_ref());
-
-        if params_doc.is_empty() {
-            parts.push(text(prefix));
-        } else {
-            parts.push(text(format!("{prefix}(")));
-            parts.push(intersperse(params_doc, text(", ")));
-            parts.push(text(")"));
-        }
-
-        if let Some(ret) = return_doc {
-            parts.push(text(" "));
-            parts.push(ret);
-        }
-
-        let sig_end = signature_end_line(
-            m.span.start.line,
+        parts.push(self.signature_to_doc(
+            format!("fn {}", m.name),
+            &m.type_params,
             &m.params,
+            m.span,
             m.return_type.as_ref(),
             m.error_type.as_ref(),
-        );
-        if let Some(tc) = self.comments.drain_trailing(sig_end) {
-            parts.push(tc);
-        }
+        ));
+        self.push_header_trailing(&mut parts, m.span);
 
         if let Some(body) = &m.body {
-            parts.push(self.body_to_doc(body, m.span.end.line));
+            let dangling = self.comments.take(m.span, Slot::Dangling);
+            parts.push(self.body_to_doc(body, dangling));
             parts.push(hardline());
             parts.push(text("end"));
         }
@@ -681,63 +586,46 @@ impl<'a> Printer<'a> {
 
     /// Formats an `impl Protocol for Type` block.
     fn impl_to_doc(&mut self, block: &ImplBlock) -> Doc {
-        concat(vec![
+        let mut parts = vec![
             text("impl "),
             type_expr_to_doc(&block.trait_expr),
             text(" for "),
             type_expr_to_doc(&block.target),
-            self.impl_member_body_to_doc(&block.members, block.span.end.line),
-        ])
+        ];
+        self.push_header_trailing(&mut parts, block.span);
+        parts.push(self.impl_member_body_to_doc(&block.members, block.span));
+        concat(parts)
     }
 
     /// Formats an `extend Type` block.
     fn extend_to_doc(&mut self, block: &ExtendBlock) -> Doc {
-        concat(vec![
-            text("extend "),
-            type_expr_to_doc(&block.target),
-            self.impl_member_body_to_doc(&block.members, block.span.end.line),
-        ])
+        let mut parts = vec![text("extend "), type_expr_to_doc(&block.target)];
+        self.push_header_trailing(&mut parts, block.span);
+        parts.push(self.impl_member_body_to_doc(&block.members, block.span));
+        concat(parts)
     }
 
-    /// Shared body for `impl` and `extend`: indented members + `end`.
-    fn impl_member_body_to_doc(&mut self, members: &[ImplMember], end_line: u32) -> Doc {
-        let mut body = Vec::new();
-        for (i, member) in members.iter().enumerate() {
-            if i > 0 {
-                body.push(hardline());
-            }
-            body.push(hardline());
-            body.push(self.impl_member_to_doc(member));
-        }
-        self.push_trailing_body_comments(&mut body, end_line);
-        concat(vec![indent(2, concat(body)), hardline(), text("end")])
-    }
-
-    /// Drains comments sitting between the last member of a type body and
-    /// its `end`, appending them to `body` so they stay inside the block.
-    fn push_trailing_body_comments(&mut self, body: &mut Vec<Doc>, end_line: u32) {
-        let (mut trailing, _) = self.comments.drain_before(end_line);
-        if !trailing.is_empty() {
-            // Drop the final hardline. The block's own newline before `end`
-            // provides it.
-            trailing.pop();
-            body.push(hardline());
-            body.append(&mut trailing);
-        }
-    }
-
-    /// Formats a member inside an `impl` block (function or type alias).
-    fn impl_member_to_doc(&mut self, member: &ImplMember) -> Doc {
-        match member {
-            ImplMember::Function(f) => self.function_to_doc(f, 2),
-            ImplMember::TypeAlias(ta) => {
-                let (comment_docs, _) = self.comments.drain_before(ta.span.start.line);
-                let mut parts = comment_docs;
-                parts.push(text(format!("type {} = ", ta.name)));
-                parts.push(type_expr_to_doc(&ta.type_expr));
-                concat(parts)
-            }
-        }
+    /// Shared body for `impl` and `extend`, indented members + `end`.
+    fn impl_member_body_to_doc(&mut self, members: &[ImplMember], owner: Span) -> Doc {
+        let entries = members
+            .iter()
+            .map(|member| match member {
+                ImplMember::Function(f) => self.member_function_entry(f),
+                ImplMember::TypeAlias(ta) => SeqEntry {
+                    doc: concat(vec![
+                        text(format!("type {} = ", ta.name)),
+                        type_expr_to_doc(&ta.type_expr),
+                    ]),
+                    end_line: ta.span.end.line,
+                    force_blank: true,
+                    is_block: true,
+                    leading: self.comments.take(ta.span, Slot::Leading),
+                    start_line: ta.span.start.line,
+                    trailing: self.comments.take(ta.span, Slot::Trailing),
+                },
+            })
+            .collect();
+        self.type_body_to_doc(entries, owner)
     }
 
     /// Formats a `const` declaration.
@@ -759,6 +647,69 @@ impl<'a> Printer<'a> {
         concat(parts)
     }
 
+    /// Builds sequence entries for a uniform child slice, pairing each
+    /// child's doc with the comments attached to its span.
+    fn seq_entries<T>(
+        &mut self,
+        items: &[T],
+        key_of: impl Fn(&T) -> Span,
+        mut to_doc: impl FnMut(&mut Self, &T) -> Doc,
+    ) -> Vec<SeqEntry> {
+        items
+            .iter()
+            .map(|item| {
+                let key = key_of(item);
+                SeqEntry {
+                    doc: to_doc(self, item),
+                    end_line: key.end.line,
+                    force_blank: false,
+                    is_block: false,
+                    leading: self.comments.take(key, Slot::Leading),
+                    start_line: key.start.line,
+                    trailing: self.comments.take(key, Slot::Trailing),
+                }
+            })
+            .collect()
+    }
+
+    /// True when no comment sits inside the construct, neither anchored
+    /// to an element nor pending before the closing delimiter.
+    fn entries_comment_free(&self, entries: &[SeqEntry], owner: Span) -> bool {
+        entries.iter().all(SeqEntry::comment_free) && !self.comments.has(owner, Slot::Stragglers)
+    }
+
+    /// True when an assigned value renders as a multi-line block, which
+    /// forces the break after `=`. A closure that renders inline does
+    /// not count, so `ref = Task.async(fn () -> Int 42 end)` stays glued.
+    fn forces_assignment_break(&self, expr: &Expr) -> bool {
+        if matches!(expr.kind, ExprKind::Closure { .. }) {
+            return !self.closure_renders_inline(expr);
+        }
+        if is_block_expr(expr) {
+            return true;
+        }
+        match &expr.kind {
+            ExprKind::Call { args, .. } => {
+                args.iter().any(|a| self.forces_assignment_break(&a.value))
+            }
+            ExprKind::MethodCall { receiver, args, .. } => {
+                self.forces_assignment_break(receiver)
+                    || args.iter().any(|a| self.forces_assignment_break(&a.value))
+            }
+            ExprKind::Binary { right, .. } => self.forces_assignment_break(right),
+            ExprKind::Ternary {
+                condition,
+                then_expr,
+                else_expr,
+            } => {
+                self.forces_assignment_break(condition)
+                    || self.forces_assignment_break(then_expr)
+                    || self.forces_assignment_break(else_expr)
+            }
+            _ => false,
+        }
+    }
+
     /// Formats a single statement.
     pub(super) fn statement_to_doc(&mut self, stmt: &Statement) -> Doc {
         match stmt {
@@ -775,8 +726,10 @@ impl<'a> Printer<'a> {
                 } else {
                     target_doc
                 };
-                // Decided before `expr_to_doc` drains the closure's comments.
                 let inline_closure = self.closure_renders_inline(value);
+                // Decided before rendering: rendering consumes the
+                // comment table the predicates consult.
+                let breaks = self.forces_assignment_break(value);
                 let value_doc = self.expr_to_doc(value);
                 if inline_closure {
                     // Stay inline when the closure fits, breaking after `=`
@@ -800,7 +753,7 @@ impl<'a> Printer<'a> {
                             indent(2, concat(vec![hardline(), value_doc])),
                         ])
                     }
-                } else if expr_contains_block(value) {
+                } else if breaks {
                     concat(vec![
                         lhs,
                         text(" ="),
@@ -819,8 +772,9 @@ impl<'a> Printer<'a> {
                     CompoundOp::Mul => "*=",
                     CompoundOp::Sub => "-=",
                 };
+                let breaks = self.forces_assignment_break(value);
                 let value_doc = self.expr_to_doc(value);
-                if expr_contains_block(value) {
+                if breaks {
                     concat(vec![
                         text(target.segments.join(".")),
                         text(format!(" {}", op_str)),
@@ -836,8 +790,9 @@ impl<'a> Printer<'a> {
             }
             Statement::Destructure { pattern, value, .. } => {
                 let lhs = pattern_to_doc(pattern);
+                let breaks = self.forces_assignment_break(value);
                 let value_doc = self.expr_to_doc(value);
-                if expr_contains_block(value) {
+                if breaks {
                     concat(vec![
                         lhs,
                         text(" ="),
@@ -855,89 +810,37 @@ impl<'a> Printer<'a> {
         }
     }
 
-    /// Renders a list of statements, draining interleaved comments.
-    ///
-    /// `block_end` is the line of the closing `end` keyword so we know
-    /// the upper bound for comments belonging to this block.
-    pub(super) fn statements_to_doc(&mut self, stmts: &[Statement], block_end: u32) -> Doc {
-        let mut parts = Vec::new();
-        let mut prev_end: u32 = 0;
-
-        for (i, stmt) in stmts.iter().enumerate() {
-            let stmt_line = stmt_start_line(stmt);
-            let next_line = self.comments.peek_before(stmt_line).unwrap_or(stmt_line);
-            let (comment_docs, last_comment_line) = self.comments.drain_before(stmt_line);
-
-            if i > 0 {
-                parts.push(hardline());
-                let source_has_blank = next_line > prev_end + 1;
-                if source_has_blank {
-                    parts.push(hardline());
-                } else {
-                    let prev_is_block = stmt_is_block(&stmts[i - 1]);
-                    let curr_is_block = stmt_is_block(stmt);
-                    if prev_is_block || curr_is_block {
-                        parts.push(hardline());
-                    }
+    /// Renders a list of statements with their attached comments, ending
+    /// with the region's `dangling` comments.
+    pub(super) fn statements_to_doc(&mut self, stmts: &[Statement], dangling: Vec<Comment>) -> Doc {
+        let entries: Vec<SeqEntry> = stmts
+            .iter()
+            .map(|stmt| {
+                let key = stmt_span(stmt);
+                SeqEntry {
+                    doc: self.statement_to_doc(stmt),
+                    end_line: key.end.line,
+                    force_blank: false,
+                    is_block: stmt_is_block(stmt),
+                    leading: self.comments.take(key, Slot::Leading),
+                    start_line: key.start.line,
+                    trailing: self.comments.take(key, Slot::Trailing),
                 }
-            }
-
-            for c in comment_docs {
-                parts.push(c);
-            }
-
-            if let Some(lcl) = last_comment_line
-                && stmt_line > lcl + 1
-            {
-                parts.push(hardline());
-            }
-
-            parts.push(self.statement_to_doc(stmt));
-            let end_line = stmt_end_line(stmt);
-            if let Some(tc) = self.comments.drain_trailing(end_line) {
-                parts.push(tc);
-            }
-            prev_end = end_line;
-        }
-
-        let next_trailing_line = self.comments.peek_before(block_end);
-        let (mut trailing, _) = self.comments.drain_before(block_end);
-        if !trailing.is_empty() {
-            // Drop the final hardline. The block's own newline before `end` provides it.
-            trailing.pop();
-            parts.push(hardline());
-            if let Some(cl) = next_trailing_line
-                && cl > prev_end + 1
-            {
-                parts.push(hardline());
-            }
-            for c in trailing {
-                parts.push(c);
-            }
-        }
-
-        concat(parts)
+            })
+            .collect();
+        vertical(entries, Spacing::Preserve, dangling)
     }
 
-    /// Formats an indented body block (the statements between a keyword and `end`).
-    pub(super) fn body_to_doc(&mut self, stmts: &[Statement], block_end: u32) -> Doc {
-        if stmts.is_empty() {
-            let (trailing, _) = self.comments.drain_before(block_end);
-            if trailing.is_empty() {
-                nil()
-            } else {
-                let mut parts = Vec::new();
-                for c in trailing {
-                    parts.push(hardline());
-                    parts.push(c);
-                }
-                indent(2, concat(parts))
-            }
-        } else {
-            indent(
-                2,
-                concat(vec![hardline(), self.statements_to_doc(stmts, block_end)]),
-            )
+    /// Formats an indented body block (the statements between a keyword
+    /// and `end`). `dangling` holds the comments between the last
+    /// statement and the terminator.
+    pub(super) fn body_to_doc(&mut self, stmts: &[Statement], dangling: Vec<Comment>) -> Doc {
+        if stmts.is_empty() && dangling.is_empty() {
+            return nil();
         }
+        indent(
+            2,
+            concat(vec![hardline(), self.statements_to_doc(stmts, dangling)]),
+        )
     }
 }

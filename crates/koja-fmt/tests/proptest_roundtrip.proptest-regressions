@@ -1,0 +1,9 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc 1915e3db1bdd3b77bed594dafd973522c8be67661a0ee1978d35a91f4f9182ff # shrinks to file_index = Index(5446873250111088076), injections = [(Index(4748666791251963783), true, "a")]
+cc 731c7d3d5ef811f9f4ac22cec078b09b18d7aa4d5edb08a72f63b19d18631591 # shrinks to file_index = Index(4284873623420722620), injections = [(Index(8696322206177360048), false, "a")]
+cc 943a8361f62626bed764b55095ea2437559a9b81690291293e25ee181b2713a7 # shrinks to file_index = Index(11111621430226619675), injections = [(Index(0), true, "a"), (Index(13193697748083652812), false, "a")]

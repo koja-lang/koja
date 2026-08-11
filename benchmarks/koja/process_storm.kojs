@@ -23,8 +23,7 @@ refs: List<Ref<(), Int>> = List.new()
 j = 0
 
 loop
-  refs =
-    refs.append(Task.async(fn () -> Int busy(iters) end))
+  refs = refs.append(Task.async(fn () -> Int busy(iters) end))
   j += 1
 
   if j >= procs

@@ -753,6 +753,7 @@ name = "koja-fmt"
 version = "0.17.1"
 dependencies = [
  "koja-ast",
+ "koja-lexer",
  "koja-parser",
  "proptest",
 ]

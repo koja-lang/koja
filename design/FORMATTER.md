@@ -15,8 +15,13 @@ implementation and this document disagree, the implementation is wrong.
 5. No comment is lost. Every comment in the input appears in the output.
 
 The corpus tests in `koja-fmt` enforce rules 3 and 4 over the standard
-library and the language test suite. Rules 1, 2, and 5 have no blanket
-enforcement yet. A violation of any rule is a bug, never a judgment call.
+library and the language test suite. Rule 1 is enforced by a property test
+that parses the output of formatting random parseable inputs. Rule 5 is
+enforced three ways: a corpus test compares comment multisets before and
+after formatting, a property test injects comments at random line
+boundaries of corpus files, and the printer asserts that the comment
+table is empty after printing. Rule 2 has no blanket enforcement yet. A
+violation of any rule is a bug, never a judgment call.
 
 ## Layout basics
 
@@ -35,6 +40,26 @@ enforcement yet. A violation of any rule is a bug, never a judgment call.
   continuation indent. Keyword operators (`and`, `or`) start the
   continuation line. Symbolic operators (`+`, `<>`, comparisons) end the
   previous line. An operand never splits around its operator.
+- An assignment whose value renders as a multi-line block (`match`,
+  `cond`, `if`, `receive`, a multi-line closure, or a call that contains
+  one) breaks after `=` and indents the value 2 spaces. A value that fits
+  on one line stays glued, including a call with an inline closure.
+- String interpolation (`#{...}`) renders its expression flat. The
+  segment never introduces a line break inside the string.
+- Union types pack like symbolic operator chains: `|` ends the line and
+  the continuation indents 2 spaces. This applies in type aliases,
+  parameter types, and everywhere else a type renders.
+- A generic parameter list (`<T: Hash & Equality, U>`) breaks like a
+  parameter list: one entry per line inside the angle brackets. An entry
+  keeps its bounds on one line.
+- A fallible return (`-> T ! E`) wraps like a ternary. When the tail
+  breaks, `-> T` and `! E` each take a continuation line that starts
+  with its operator, indented 2 spaces.
+- A method call on a collection literal breaks the literal's brackets
+  first and hugs the call to the closing bracket.
+- A zero-parameter signature drops its empty parens: `fn name -> X`.
+- Annotation layout (`@extern "C" @link "m"` on one line or two) is the
+  author's choice. Both spellings are stable.
 - A ternary stays inline when it fits. A broken ternary keeps the
   condition on the head line and gives each branch a continuation line
   that starts with its `?` or `:`, indented 2 spaces. A broken ternary is
@@ -67,6 +92,24 @@ Two refinements:
   type declaration header, an arm head, and an `end` line each behave as a
   line construct for comment purposes, even though they open or close a
   block.
+
+## Comment attachment
+
+Before printing, the formatter assigns every comment to an owner slot in
+one pass over the AST in source order. The printer consumes slots while it
+renders, and an empty table after printing proves no comment was dropped.
+Ownership follows three rules:
+
+1. A comment on a construct's last line trails that construct.
+2. Any other comment belongs to the innermost block that contains it.
+   Inside that block it leads the next sibling child. When no child
+   follows, it dangles before the block's terminator.
+3. A comment between an annotation and its declaration hoists above the
+   annotation.
+
+Dangling comments before `else` or `after` render above that keyword at
+the keyword's indent. The AST records no span for these keywords, so the
+pass locates them in a token stream lexed from the same source.
 
 ## Comment rules
 

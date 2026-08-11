@@ -74,8 +74,7 @@ struct OptionTest
   @test "map transforms Some value"
   fn test_map_some -> Result<Bool, String>
     x = Option.Some(42)
-    mapped =
-      x.map(fn (v: Int) -> Int v * 10 end)
+    mapped = x.map(fn (v: Int) -> Int v * 10 end)
 
     unless mapped.unwrap() == 420
       return Result.Err("expected 420")
@@ -87,8 +86,7 @@ struct OptionTest
   @test "map returns None for None"
   fn test_map_none -> Result<Bool, String>
     y: Option<Int> = Option.None
-    none_mapped =
-      y.map(fn (v: Int) -> Int v * 10 end)
+    none_mapped = y.map(fn (v: Int) -> Int v * 10 end)
 
     unless none_mapped.or(-1) == -1
       return Result.Err("expected -1")
@@ -99,8 +97,9 @@ struct OptionTest
 
   @test "then chains Some values"
   fn test_then_some -> Result<Bool, String>
-    chained =
-      Option.Some(10).then(fn (v: Int) -> Option<Int> Option.Some(v + 5) end)
+    chained = Option.Some(10).then(fn (v: Int) -> Option<Int>
+      Option.Some(v + 5)
+    end)
 
     unless chained.unwrap() == 15
       return Result.Err("expected 15")
@@ -112,8 +111,7 @@ struct OptionTest
   @test "then returns None for None"
   fn test_then_none -> Result<Bool, String>
     y: Option<Int> = Option.None
-    none_chained =
-      y.then(fn (v: Int) -> Option<Int> Option.Some(v + 5) end)
+    none_chained = y.then(fn (v: Int) -> Option<Int> Option.Some(v + 5) end)
 
     unless none_chained.or(-1) == -1
       return Result.Err("expected -1")

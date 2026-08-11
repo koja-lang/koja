@@ -56,10 +56,9 @@ struct TLSTest
         Result.Err(e) -> return Result.Err("bind: " <> e.message())
       end
 
-    server =
-      Task.async(fn () -> Result<String, String>
-        serve_tls_attempt(listener, server_config)
-      end)
+    server = Task.async(fn () -> Result<String, String>
+      serve_tls_attempt(listener, server_config)
+    end)
 
     plain =
       match TCPSocket.connect_addr(addr)
@@ -118,10 +117,9 @@ struct TLSTest
         Result.Err(e) -> return Result.Err("bind: " <> e.message())
       end
 
-    server =
-      Task.async(fn () -> Result<String, String>
-        serve_tls_echo(listener, server_config)
-      end)
+    server = Task.async(fn () -> Result<String, String>
+      serve_tls_echo(listener, server_config)
+    end)
 
     plain =
       match TCPSocket.connect_addr(addr)

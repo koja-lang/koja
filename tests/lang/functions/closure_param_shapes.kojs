@@ -47,8 +47,7 @@ apply_pair((21, true), double_if).print()
 apply_pair((21, false), double_if).print()
 
 # Aggregate return from a closure.
-built =
-  make_point(7, fn (x: Int) -> Point Point{x: x, y: x + 1} end)
+built = make_point(7, fn (x: Int) -> Point Point{x: x, y: x + 1} end)
 built.x.print()
 built.y.print()
 
