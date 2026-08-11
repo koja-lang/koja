@@ -678,8 +678,9 @@ impl<'a> Printer<'a> {
     /// consistency. Otherwise single-statement arms may stay inline.
     ///
     /// `head_line` anchors a trailing comment on the arm-head line
-    /// (`Pattern -> # note`). A commented head forces the body onto its
-    /// own line so the comment cannot swallow it.
+    /// (`Pattern -> # note`). A comment on the head or above the body
+    /// statement forces the body onto its own line so the comment
+    /// cannot swallow it or drift past the block.
     fn arm_body_to_doc(
         &mut self,
         head: Doc,
@@ -695,21 +696,26 @@ impl<'a> Printer<'a> {
             .and_then(|line| self.comments.drain_trailing(line));
 
         if body.len() == 1 && !force_break {
+            let (leading, _) = self.comments.drain_before(stmt_start_line(&body[0]));
             let mut stmt_doc = self.statement_to_doc(&body[0]);
             if let Some(tc) = self.comments.drain_trailing(stmt_end_line(&body[0])) {
                 stmt_doc = concat(vec![stmt_doc, tc]);
             }
-            return match head_trailing {
-                Some(tc) => concat(vec![
-                    head,
-                    tc,
-                    indent(2, concat(vec![hardline(), stmt_doc])),
-                ]),
-                None => group(concat(vec![
+            if head_trailing.is_none() && leading.is_empty() {
+                return group(concat(vec![
                     head,
                     indent(2, concat(vec![line(), stmt_doc])),
-                ])),
-            };
+                ]));
+            }
+            let mut parts = vec![head];
+            if let Some(tc) = head_trailing {
+                parts.push(tc);
+            }
+            let mut body_parts = vec![hardline()];
+            body_parts.extend(leading);
+            body_parts.push(stmt_doc);
+            parts.push(indent(2, concat(body_parts)));
+            return concat(parts);
         }
 
         let mut parts = vec![head];

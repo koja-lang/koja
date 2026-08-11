@@ -444,22 +444,43 @@ impl<'a> Printer<'a> {
                 ])
             }
             EnumVariantData::Struct(fields) => {
+                let entries: Vec<(Vec<Doc>, Doc, Option<Doc>)> = fields
+                    .iter()
+                    .map(|field| {
+                        let (leading, _) = self.comments.drain_before(field.span.start.line);
+                        let field_doc = self.struct_field_bare_to_doc(field);
+                        let trailing = self.comments.drain_trailing(field.span.end.line);
+                        (leading, field_doc, trailing)
+                    })
+                    .collect();
+
+                // Comment-free variants lay out like struct literals:
+                // braces hug the name and short field lists stay inline.
+                if entries
+                    .iter()
+                    .all(|(leading, _, trailing)| leading.is_empty() && trailing.is_none())
+                {
+                    let field_docs = entries.into_iter().map(|(_, d, _)| d).collect();
+                    return struct_body(text(&variant.name), field_docs);
+                }
+
+                // A comment forces the multi-line layout so the fields
+                // after it aren't commented out.
                 let mut body = Vec::new();
-                for field in fields {
+                for (leading, field_doc, trailing) in entries {
                     body.push(hardline());
-                    let (cdocs, _) = self.comments.drain_before(field.span.start.line);
-                    for c in cdocs {
+                    for c in leading {
                         body.push(c);
                     }
-                    body.push(self.struct_field_bare_to_doc(field));
+                    body.push(field_doc);
                     body.push(text(","));
-                    if let Some(tc) = self.comments.drain_trailing(field.span.end.line) {
+                    if let Some(tc) = trailing {
                         body.push(tc);
                     }
                 }
                 concat(vec![
                     text(&variant.name),
-                    text(" {"),
+                    text("{"),
                     indent(2, concat(body)),
                     hardline(),
                     text("}"),

@@ -1043,13 +1043,51 @@ mod tests {
         assert_unchanged(
             "
             enum Shape
-              Circle {
+              Circle{
                 # Distance from center to edge.
                 radius: Int,
               }
-              Rect {
+              Rect{
                 width: Int, # px
                 height: Int,
+              }
+            end
+        ",
+        );
+    }
+
+    #[test]
+    fn enum_struct_variant_short_stays_inline_with_hugging_braces() {
+        assert_fmt(
+            "
+            enum Shape
+              Circle {
+                radius: Int,
+              }
+              Rect {
+                width: Int,
+                height: Int = 2,
+              }
+            end
+        ",
+            "
+            enum Shape
+              Circle{radius: Int}
+              Rect{width: Int, height: Int = 2}
+            end
+        ",
+        );
+    }
+
+    #[test]
+    fn enum_struct_variant_long_breaks_with_trailing_commas() {
+        assert_unchanged(
+            "
+            enum Event
+              ConnectionEstablished{
+                remote_address: String,
+                negotiated_protocol_version: Int,
+                keepalive_interval_ms: Int,
               }
             end
         ",
@@ -1121,6 +1159,22 @@ mod tests {
                 1 -> # one
                   10
                 _ -> 0
+              end
+            end
+        ",
+        );
+    }
+
+    #[test]
+    fn arm_body_leading_comment_forces_broken_body() {
+        assert_unchanged(
+            "
+            fn f(x: Int) -> Bool
+              match x
+                1 -> true # awesome
+                _ ->
+                  # kinda meh
+                  false
               end
             end
         ",
