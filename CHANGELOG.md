@@ -21,6 +21,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - A comment above a field inside an enum struct variant no longer moves to before the next variant.
   - A comment between an arm head and its body no longer moves to after the end of the block.
   - A closure no longer collapses onto one line when a comment inside the body would comment out `end`.
+  - Comments inside collection literals, constructions, call arguments, parameter lists, and dot chains stay anchored to their element instead of moving below the statement.
+  - A comment between an annotation and its declaration hoists above the annotation and stays put on later passes.
 - `koja test` now reports parse errors in test files instead of printing `no tests found`.
 
 ## [0.17.0] - 2026-08-09

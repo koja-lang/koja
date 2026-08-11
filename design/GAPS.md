@@ -474,3 +474,14 @@ blocks. Clone glue then takes an `rc++` on the box instead of
 unboxing, and drop glue releases contents only when the count
 reaches zero. Path-copied structures share unchanged subtrees and
 persistent updates return to O(log n).
+
+## Formatter drops comments inside patterns
+
+Found 2026-08-10 during the F3 bracketed-construct comment work.
+`pattern_to_doc` in `koja-fmt/src/printer/util.rs` is stateless, so a
+comment inside a broken list, tuple, or binary pattern in a match head
+is not drained per element and relocates below the arm. Expression
+positions anchor comments correctly since the F3 fix. Patterns need
+the comment cursor plumbed through `pattern_to_doc` to get the same
+treatment. Rare in practice because match heads seldom carry interior
+comments.

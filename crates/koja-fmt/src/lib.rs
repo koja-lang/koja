@@ -315,6 +315,131 @@ mod tests {
     }
 
     #[test]
+    fn list_comments_stay_with_elements() {
+        assert_fmt_script(
+            "
+            list = [
+              # first element
+              1,
+              2, # trailing
+              3,
+            ]
+        ",
+            "
+            list = [
+              # first element
+              1, 2, # trailing
+              3
+            ]
+        ",
+        );
+    }
+
+    #[test]
+    fn list_packing_resumes_around_comments() {
+        assert_unchanged_script(
+            "
+            big = [
+              1, 2, # two
+              3, 4, 5, 6,
+              # header values start here
+              7, 8
+            ]
+        ",
+        );
+    }
+
+    #[test]
+    fn list_comment_before_closing_bracket_stays_inside() {
+        assert_unchanged_script(
+            "
+            closed = [
+              1, 2
+              # before the bracket
+            ]
+        ",
+        );
+    }
+
+    #[test]
+    fn map_entry_trailing_comment_stays_with_entry() {
+        assert_unchanged_script(
+            "
+            m = [
+              \"a\": 1, # first
+              \"b\": 2
+            ]
+        ",
+        );
+    }
+
+    #[test]
+    fn binary_literal_comment_breaks_its_line() {
+        assert_unchanged_script(
+            "
+            b = <<
+              1, 2, # second
+              3
+            >>
+        ",
+        );
+    }
+
+    #[test]
+    fn construction_field_comments_stay_with_fields() {
+        assert_unchanged_script(
+            "
+            p = Point{
+              # horizontal
+              x: 1,
+              y: 2, # vertical
+            }
+        ",
+        );
+    }
+
+    #[test]
+    fn call_arg_comments_stay_with_args() {
+        assert_unchanged_script(
+            "
+            r = compute(
+              # first arg
+              2,
+              3, # second
+            )
+        ",
+        );
+    }
+
+    #[test]
+    fn param_comments_force_broken_signature() {
+        assert_unchanged(
+            "
+            fn compute(
+              # the base value
+              base: Int32,
+              scale: Int32, # multiplier
+            ) -> Int32
+
+              base * scale
+            end
+        ",
+        );
+    }
+
+    #[test]
+    fn chain_comment_anchors_to_its_link() {
+        assert_unchanged_script(
+            "
+            out = [3, 1, 2]
+              .map(v -> v * 2)
+              # drop the small ones
+              .filter(v -> v > 2)
+        ",
+        );
+    }
+
+    #[test]
     fn binary_literal_formatting() {
         assert_fmt_script(
             "
@@ -966,6 +1091,67 @@ mod tests {
                 \"point\"
               end
             end
+        ",
+        );
+    }
+
+    #[test]
+    fn comment_between_annotation_and_declaration_hoists_in_one_pass() {
+        assert_fmt(
+            "
+            @doc \"Adds one.\"
+            # explains the function
+            fn add_one(x: Int32) -> Int32
+              x + 1
+            end
+        ",
+            "
+            # explains the function
+            @doc \"Adds one.\"
+            fn add_one(x: Int32) -> Int32
+              x + 1
+            end
+        ",
+        );
+        assert_unchanged(
+            "
+            # explains the function
+            @doc \"Adds one.\"
+            fn add_one(x: Int32) -> Int32
+              x + 1
+            end
+        ",
+        );
+    }
+
+    #[test]
+    fn comment_between_annotation_and_struct_hoists_instead_of_leaking() {
+        assert_fmt(
+            "
+            @doc \"A point.\"
+            # explains the struct
+            struct Point
+              x: Int32
+            end
+        ",
+            "
+            # explains the struct
+            @doc \"A point.\"
+            struct Point
+              x: Int32
+            end
+        ",
+        );
+    }
+
+    #[test]
+    fn blank_above_annotated_declaration_is_preserved() {
+        assert_unchanged(
+            "
+            # standalone comment
+
+            @doc \"N.\"
+            const N = 1
         ",
         );
     }

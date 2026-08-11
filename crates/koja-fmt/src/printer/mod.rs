@@ -48,6 +48,16 @@ impl TopLevel<'_> {
         }
     }
 
+    /// The line leading comments drain through. For items this is the
+    /// declaration keyword line, past any annotations, so a comment
+    /// between an annotation and its declaration hoists above both.
+    fn drain_line(&self) -> u32 {
+        match self {
+            TopLevel::Item(item) => item_span(item).start.line,
+            TopLevel::Stmt(stmt) => stmt_start_line(stmt),
+        }
+    }
+
     fn end_line(&self) -> u32 {
         match self {
             TopLevel::Item(item) => item_span(item).end.line,
@@ -118,15 +128,7 @@ impl<'a> Printer<'a> {
                     if prev_end.is_some() && (source_has_blank || annotated || prev_annotated) {
                         parts.push(hardline());
                     }
-                    let (comment_docs, last_comment_line) = self.comments.drain_before(start_line);
-                    for c in comment_docs {
-                        parts.push(c);
-                    }
-                    if let Some(lcl) = last_comment_line
-                        && start_line > lcl + 1
-                    {
-                        parts.push(hardline());
-                    }
+                    self.push_leading_comments(&mut parts, item_span(item).start.line, start_line);
                     parts.push(self.item_to_doc(item));
                     parts.push(hardline());
                     prev_end = Some(item_span(item).end.line);
@@ -137,19 +139,14 @@ impl<'a> Printer<'a> {
                 emitted = true;
             } else {
                 let item = &file.items[i];
-                let span = item_span(item);
                 if emitted {
                     parts.push(hardline());
                 }
-                let (comment_docs, last_comment_line) = self.comments.drain_before(span.start.line);
-                for c in comment_docs {
-                    parts.push(c);
-                }
-                if let Some(lcl) = last_comment_line
-                    && span.start.line > lcl + 1
-                {
-                    parts.push(hardline());
-                }
+                self.push_leading_comments(
+                    &mut parts,
+                    item_span(item).start.line,
+                    item_start_line(item),
+                );
                 parts.push(self.item_to_doc(item));
                 parts.push(hardline());
                 emitted = true;
@@ -188,7 +185,6 @@ impl<'a> Printer<'a> {
         for (i, node) in nodes.iter().enumerate() {
             let start_line = node.start_line();
             let next_line = self.comments.peek_before(start_line).unwrap_or(start_line);
-            let (comment_docs, last_comment_line) = self.comments.drain_before(start_line);
 
             if i > 0 {
                 let source_has_blank = next_line > prev_end + 1;
@@ -197,14 +193,7 @@ impl<'a> Printer<'a> {
                 }
             }
 
-            for c in comment_docs {
-                parts.push(c);
-            }
-            if let Some(lcl) = last_comment_line
-                && start_line > lcl + 1
-            {
-                parts.push(hardline());
-            }
+            self.push_leading_comments(&mut parts, node.drain_line(), start_line);
 
             match node {
                 TopLevel::Item(item) => parts.push(self.item_to_doc(item)),
@@ -224,6 +213,22 @@ impl<'a> Printer<'a> {
         }
 
         concat(parts)
+    }
+
+    /// Emits leading comments for a top-level element. Comments drain
+    /// through `drain_line` (the declaration keyword line, so a comment
+    /// between an annotation and its declaration hoists above both), but
+    /// the blank-line gap measures against `first_line`, the element's
+    /// first output line. Measuring against `drain_line` counted the
+    /// annotation lines as a gap and inserted a blank on the second pass.
+    fn push_leading_comments(&mut self, parts: &mut Vec<Doc>, drain_line: u32, first_line: u32) {
+        let (comment_docs, last_comment_line) = self.comments.drain_before(drain_line);
+        parts.extend(comment_docs);
+        if let Some(lcl) = last_comment_line
+            && first_line > lcl + 1
+        {
+            parts.push(hardline());
+        }
     }
 
     fn item_to_doc(&mut self, item: &Item) -> Doc {
@@ -444,47 +449,14 @@ impl<'a> Printer<'a> {
                 ])
             }
             EnumVariantData::Struct(fields) => {
-                let entries: Vec<(Vec<Doc>, Doc, Option<Doc>)> = fields
-                    .iter()
-                    .map(|field| {
-                        let (leading, _) = self.comments.drain_before(field.span.start.line);
-                        let field_doc = self.struct_field_bare_to_doc(field);
-                        let trailing = self.comments.drain_trailing(field.span.end.line);
-                        (leading, field_doc, trailing)
-                    })
-                    .collect();
-
-                // Comment-free variants lay out like struct literals:
-                // braces hug the name and short field lists stay inline.
-                if entries
-                    .iter()
-                    .all(|(leading, _, trailing)| leading.is_empty() && trailing.is_none())
-                {
-                    let field_docs = entries.into_iter().map(|(_, d, _)| d).collect();
-                    return struct_body(text(&variant.name), field_docs);
-                }
-
-                // A comment forces the multi-line layout so the fields
-                // after it aren't commented out.
-                let mut body = Vec::new();
-                for (leading, field_doc, trailing) in entries {
-                    body.push(hardline());
-                    for c in leading {
-                        body.push(c);
-                    }
-                    body.push(field_doc);
-                    body.push(text(","));
-                    if let Some(tc) = trailing {
-                        body.push(tc);
-                    }
-                }
-                concat(vec![
-                    text(&variant.name),
-                    text("{"),
-                    indent(2, concat(body)),
-                    hardline(),
-                    text("}"),
-                ])
+                let close_line = variant.span.end.line;
+                let entries = self.commented_entries(
+                    fields,
+                    close_line,
+                    |field| (field.span.start.line, field.span.end.line),
+                    |p, field| p.struct_field_bare_to_doc(field),
+                );
+                self.field_list_to_doc(text(&variant.name), entries, close_line)
             }
         }
     }
@@ -544,12 +516,27 @@ impl<'a> Printer<'a> {
             prefix.push('>');
         }
 
-        let params_doc: Vec<Doc> = f.params.iter().map(|p| self.param_to_doc(p)).collect();
+        let close_line = signature_end_line(
+            f.span.start.line,
+            &f.params,
+            f.return_type.as_ref(),
+            f.error_type.as_ref(),
+        );
+        let entries = self.commented_entries(
+            &f.params,
+            close_line,
+            |p| {
+                let span = param_span(p);
+                (span.start.line, span.end.line)
+            },
+            |printer, p| printer.param_to_doc(p),
+        );
         let return_doc = return_signature_doc(f.return_type.as_ref(), f.error_type.as_ref());
 
-        let params_inline = if params_doc.is_empty() {
+        let params_inline = if entries.is_empty() {
             text("")
-        } else {
+        } else if self.entries_comment_free(&entries, close_line) {
+            let params_doc: Vec<Doc> = entries.into_iter().map(|e| e.doc).collect();
             group(concat(vec![
                 text("("),
                 indent(
@@ -563,6 +550,17 @@ impl<'a> Printer<'a> {
                 softline(),
                 text(")"),
             ]))
+        } else {
+            // A parameter comment forces the broken signature. The
+            // hardlines make `signature_wraps` report multiline, which
+            // adds the blank line before the body.
+            let (stragglers, _) = self.comments.drain_before(close_line);
+            concat(vec![
+                text("("),
+                indent(2, commented_field_lines(entries, stragglers)),
+                hardline(),
+                text(")"),
+            ])
         };
 
         match return_doc {

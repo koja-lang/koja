@@ -75,9 +75,10 @@ impl<'a> Printer<'a> {
                 concat(vec![text("("), self.expr_to_doc(inner), text(")")])
             }
 
-            ExprKind::Call { callee, args, .. } => {
-                concat(vec![self.expr_to_doc(callee), self.call_args_to_doc(args)])
-            }
+            ExprKind::Call { callee, args, .. } => concat(vec![
+                self.expr_to_doc(callee),
+                self.call_args_to_doc(args, expr.span.end.line),
+            ]),
 
             ExprKind::MethodCall { .. } => {
                 let depth = method_chain_depth(expr);
@@ -97,7 +98,7 @@ impl<'a> Printer<'a> {
                         self.expr_to_doc(receiver),
                         text("."),
                         text(method.clone()),
-                        self.call_args_to_doc(args),
+                        self.call_args_to_doc(args, expr.span.end.line),
                     ])
                 }
             }
@@ -112,27 +113,40 @@ impl<'a> Printer<'a> {
                 if elements.is_empty() {
                     text("[]")
                 } else {
-                    let items: Vec<Doc> = elements.iter().map(|e| self.expr_to_doc(e)).collect();
-                    fill_bracket_list("[", "]", items)
+                    let close_line = expr.span.end.line;
+                    let entries = self.commented_entries(
+                        elements,
+                        close_line,
+                        |e| (e.span.start.line, e.span.end.line),
+                        |p, e| p.expr_to_doc(e),
+                    );
+                    self.element_list_to_doc("[", "]", entries, close_line)
                 }
             }
 
             ExprKind::Tuple { elements } => {
-                let items: Vec<Doc> = elements.iter().map(|e| self.expr_to_doc(e)).collect();
-                fill_bracket_list("(", ")", items)
+                let close_line = expr.span.end.line;
+                let entries = self.commented_entries(
+                    elements,
+                    close_line,
+                    |e| (e.span.start.line, e.span.end.line),
+                    |p, e| p.expr_to_doc(e),
+                );
+                self.element_list_to_doc("(", ")", entries, close_line)
             }
 
             ExprKind::Map { entries } => {
                 if entries.is_empty() {
                     text("[:]")
                 } else {
-                    let items: Vec<Doc> = entries
-                        .iter()
-                        .map(|(k, v)| {
-                            concat(vec![self.expr_to_doc(k), text(": "), self.expr_to_doc(v)])
-                        })
-                        .collect();
-                    fill_bracket_list("[", "]", items)
+                    let close_line = expr.span.end.line;
+                    let entry_docs = self.commented_entries(
+                        entries,
+                        close_line,
+                        |(k, v)| (k.span.start.line, v.span.end.line),
+                        |p, (k, v)| concat(vec![p.expr_to_doc(k), text(": "), p.expr_to_doc(v)]),
+                    );
+                    self.element_list_to_doc("[", "]", entry_docs, close_line)
                 }
             }
 
@@ -376,7 +390,7 @@ impl<'a> Printer<'a> {
                 if fields.is_empty() {
                     text(format!("{}{{}}", path_str))
                 } else {
-                    self.construction_to_doc(text(path_str), fields)
+                    self.construction_to_doc(text(path_str), fields, expr.span.end.line)
                 }
             }
 
@@ -384,11 +398,14 @@ impl<'a> Printer<'a> {
                 if segments.is_empty() {
                     text("<<>>")
                 } else {
-                    let seg_docs: Vec<Doc> = segments
-                        .iter()
-                        .map(|seg| self.binary_segment_to_doc(seg))
-                        .collect();
-                    fill_bracket_list("<<", ">>", seg_docs)
+                    let close_line = expr.span.end.line;
+                    let entries = self.commented_entries(
+                        segments,
+                        close_line,
+                        |seg| (seg.span.start.line, seg.span.end.line),
+                        |p, seg| p.binary_segment_to_doc(seg),
+                    );
+                    self.element_list_to_doc("<<", ">>", entries, close_line)
                 }
             }
 
@@ -414,7 +431,7 @@ impl<'a> Printer<'a> {
                         ])
                     }
                     EnumConstructionData::Struct(fields) => {
-                        self.construction_to_doc(text(prefix), fields)
+                        self.construction_to_doc(text(prefix), fields, expr.span.end.line)
                     }
                 }
             }
@@ -422,19 +439,30 @@ impl<'a> Printer<'a> {
     }
 
     /// Formats a parenthesized argument list for a call or method call.
-    pub(super) fn call_args_to_doc(&mut self, args: &[Arg]) -> Doc {
+    /// `close_line` is the line of the closing paren.
+    pub(super) fn call_args_to_doc(&mut self, args: &[Arg], close_line: u32) -> Doc {
         if args.is_empty() {
-            text("()")
-        } else if let [arg] = args
+            return text("()");
+        }
+        if let [arg] = args
             && arg.name.is_none()
             && (is_closure_arg(&arg.value) || is_heredoc(&arg.value))
+            && self.comments.peek_before(arg.span.start.line).is_none()
         {
             // Hug a sole trailing closure or heredoc instead of exploding
-            // the arg list.
-            concat(vec![text("("), self.arg_to_doc(arg), text(")")])
-        } else {
-            let arg_docs: Vec<Doc> = args.iter().map(|a| self.arg_to_doc(a)).collect();
-            group(concat(vec![
+            // the arg list. A pending comment before the argument rules
+            // the hug out and takes the broken layout below.
+            return concat(vec![text("("), self.arg_to_doc(arg), text(")")]);
+        }
+        let entries = self.commented_entries(
+            args,
+            close_line,
+            |a| (a.span.start.line, a.span.end.line),
+            |p, a| p.arg_to_doc(a),
+        );
+        if self.entries_comment_free(&entries, close_line) {
+            let arg_docs: Vec<Doc> = entries.into_iter().map(|e| e.doc).collect();
+            return group(concat(vec![
                 text("("),
                 indent(
                     2,
@@ -446,8 +474,15 @@ impl<'a> Printer<'a> {
                 ),
                 softline(),
                 text(")"),
-            ]))
+            ]));
         }
+        let (stragglers, _) = self.comments.drain_before(close_line);
+        concat(vec![
+            text("("),
+            indent(2, commented_field_lines(entries, stragglers)),
+            hardline(),
+            text(")"),
+        ])
     }
 
     /// Formats a single call argument, with optional keyword name.
@@ -462,38 +497,102 @@ impl<'a> Printer<'a> {
         }
     }
 
-    /// Formats a `Prefix{field: value, ...}` construction, attaching any
-    /// trailing comment on a field's line to that field. A comment forces
-    /// the multi-line layout so the fields after it aren't commented out.
-    fn construction_to_doc(&mut self, prefix: Doc, fields: &[FieldInit]) -> Doc {
-        let entries: Vec<(Doc, Option<Doc>)> = fields
+    /// Drains the comments anchored to each element of a bracketed
+    /// construct. A trailing comment belongs to the last element on its
+    /// line, and never to an element ending on the closing delimiter's
+    /// line (a comment there follows the close, not the element).
+    pub(super) fn commented_entries<T>(
+        &mut self,
+        items: &[T],
+        close_line: u32,
+        lines_of: impl Fn(&T) -> (u32, u32),
+        mut to_doc: impl FnMut(&mut Self, &T) -> Doc,
+    ) -> Vec<CommentedEntry> {
+        items
             .iter()
-            .map(|fi| {
-                let field_doc = self.field_init_to_doc(fi);
-                (field_doc, self.comments.drain_trailing(fi.span.end.line))
+            .enumerate()
+            .map(|(i, item)| {
+                let (start_line, end_line) = lines_of(item);
+                let (leading, _) = self.comments.drain_before(start_line);
+                let doc = to_doc(self, item);
+                let last_on_line = items
+                    .get(i + 1)
+                    .is_none_or(|next| lines_of(next).0 > end_line);
+                let trailing = if last_on_line && end_line < close_line {
+                    self.comments.drain_trailing(end_line)
+                } else {
+                    None
+                };
+                CommentedEntry {
+                    leading,
+                    doc,
+                    trailing,
+                }
             })
-            .collect();
+            .collect()
+    }
 
-        if entries.iter().all(|(_, comment)| comment.is_none()) {
-            return struct_body(prefix, entries.into_iter().map(|(d, _)| d).collect());
-        }
+    /// True when no comment sits inside the construct, neither anchored to
+    /// an element nor pending before the closing delimiter line.
+    pub(super) fn entries_comment_free(&self, entries: &[CommentedEntry], close_line: u32) -> bool {
+        entries.iter().all(CommentedEntry::comment_free)
+            && self.comments.peek_before(close_line).is_none()
+    }
 
-        let mut body = Vec::new();
-        for (field_doc, comment) in entries {
-            body.push(hardline());
-            body.push(field_doc);
-            body.push(text(","));
-            if let Some(comment) = comment {
-                body.push(comment);
-            }
+    /// Formats an element list (list, tuple, map, or binary literal) with
+    /// packed layout when comment-free and comment-aware packing otherwise.
+    fn element_list_to_doc(
+        &mut self,
+        open: &str,
+        close: &str,
+        entries: Vec<CommentedEntry>,
+        close_line: u32,
+    ) -> Doc {
+        if self.entries_comment_free(&entries, close_line) {
+            let items = entries.into_iter().map(|e| e.doc).collect();
+            return fill_bracket_list(open, close, items);
         }
+        let (stragglers, _) = self.comments.drain_before(close_line);
+        concat(vec![
+            text(open),
+            indent(2, commented_element_lines(entries, stragglers)),
+            hardline(),
+            text(close),
+        ])
+    }
+
+    /// Formats a `prefix{field, ...}` field list with struct-literal
+    /// layout when comment-free and one field per line otherwise.
+    pub(super) fn field_list_to_doc(
+        &mut self,
+        prefix: Doc,
+        entries: Vec<CommentedEntry>,
+        close_line: u32,
+    ) -> Doc {
+        if self.entries_comment_free(&entries, close_line) {
+            let docs = entries.into_iter().map(|e| e.doc).collect();
+            return struct_body(prefix, docs);
+        }
+        let (stragglers, _) = self.comments.drain_before(close_line);
         concat(vec![
             prefix,
             text("{"),
-            indent(2, concat(body)),
+            indent(2, commented_field_lines(entries, stragglers)),
             hardline(),
             text("}"),
         ])
+    }
+
+    /// Formats a `Prefix{field: value, ...}` construction with comments
+    /// anchored to their fields.
+    fn construction_to_doc(&mut self, prefix: Doc, fields: &[FieldInit], close_line: u32) -> Doc {
+        let entries = self.commented_entries(
+            fields,
+            close_line,
+            |fi| (fi.span.start.line, fi.span.end.line),
+            |p, fi| p.field_init_to_doc(fi),
+        );
+        self.field_list_to_doc(prefix, entries, close_line)
     }
 
     /// Formats a struct field initializer (`name: value`).
@@ -747,9 +846,20 @@ impl<'a> Printer<'a> {
     /// the anchor break its own arguments and hugs the trailing call to
     /// the closing paren, matching how a depth-1 call on a call receiver
     /// formats. Longer chains break every call onto its own line indented
-    /// 2 from the root.
+    /// 2 from the root. A comment between links forces the broken chain
+    /// and anchors to its link.
     fn method_chain_to_doc(&mut self, expr: &Expr) -> Doc {
-        let mut calls: Vec<(&str, &[Arg])> = Vec::new();
+        struct Link<'a> {
+            args: &'a [Arg],
+            end_line: u32,
+            /// Line the link's leading comments drain through. The AST has
+            /// no span for the method name, so the first argument's line
+            /// stands in (the link's end line for empty parens).
+            lead_line: u32,
+            method: &'a str,
+        }
+
+        let mut links: Vec<Link<'_>> = Vec::new();
         let mut current = expr;
         while let ExprKind::MethodCall {
             receiver,
@@ -758,45 +868,82 @@ impl<'a> Printer<'a> {
             ..
         } = &current.kind
         {
-            calls.push((method.as_str(), args.as_slice()));
+            let end_line = current.span.end.line;
+            let lead_line = args.first().map_or(end_line, |arg| arg.span.start.line);
+            links.push(Link {
+                args,
+                end_line,
+                lead_line,
+                method,
+            });
             current = receiver;
         }
-        calls.reverse();
+        links.reverse();
 
         let root_doc = self.expr_to_doc(current);
+        let last_end_line = expr.span.end.line;
 
-        // Glue the first call to a simple root, break it for call-rooted chains.
-        let anchor = if is_simple_chain_root(current) {
-            let (first_method, first_args) = calls.remove(0);
-            concat(vec![
-                root_doc,
-                text(format!(".{}", first_method)),
-                self.call_args_to_doc(first_args),
-            ])
+        // Drain comments per link in source order. The final link's
+        // trailing comment belongs to the enclosing statement.
+        let mut entries: Vec<CommentedEntry> = Vec::new();
+        for link in &links {
+            let (leading, _) = self.comments.drain_before(link.lead_line);
+            let doc = concat(vec![
+                text(format!(".{}", link.method)),
+                self.call_args_to_doc(link.args, link.end_line),
+            ]);
+            let trailing = if link.end_line < last_end_line {
+                self.comments.drain_trailing(link.end_line)
+            } else {
+                None
+            };
+            entries.push(CommentedEntry {
+                leading,
+                doc,
+                trailing,
+            });
+        }
+
+        // Glue the first call to a simple root, break it for call-rooted
+        // chains. A comment on the first call rules the glue out: glued,
+        // a trailing comment could swallow the next link when the chain
+        // collapses.
+        let glue_first = is_simple_chain_root(current)
+            && entries.first().is_some_and(CommentedEntry::comment_free);
+        let anchor = if glue_first {
+            let first = entries.remove(0);
+            concat(vec![root_doc, first.doc])
         } else {
             root_doc
         };
 
-        // With one continuation the anchor breaks its own arguments first
-        // and the trailing call hugs the closing paren, only moving to its
-        // own line when it still does not fit.
-        if let [(method, args)] = calls[..] {
-            let continuation = concat(vec![
-                softline(),
-                text(format!(".{}", method)),
-                self.call_args_to_doc(args),
-            ]);
-            return concat(vec![anchor, group(indent(2, continuation))]);
+        if entries.iter().all(CommentedEntry::comment_free) {
+            let docs: Vec<Doc> = entries.into_iter().map(|e| e.doc).collect();
+            // With one continuation the anchor breaks its own arguments
+            // first and the trailing call hugs the closing paren, only
+            // moving to its own line when it still does not fit.
+            if let [doc] = &docs[..] {
+                let continuation = concat(vec![softline(), doc.clone()]);
+                return concat(vec![anchor, group(indent(2, continuation))]);
+            }
+            let mut chain_parts = Vec::with_capacity(docs.len() * 2);
+            for doc in docs {
+                chain_parts.push(softline());
+                chain_parts.push(doc);
+            }
+            return group(concat(vec![anchor, indent(2, concat(chain_parts))]));
         }
 
-        let mut chain_parts = Vec::with_capacity(calls.len());
-        for (method, args) in calls {
-            chain_parts.push(softline());
-            chain_parts.push(text(format!(".{}", method)));
-            chain_parts.push(self.call_args_to_doc(args));
+        let mut chain_parts = Vec::new();
+        for entry in entries {
+            chain_parts.push(hardline());
+            chain_parts.extend(entry.leading);
+            chain_parts.push(entry.doc);
+            if let Some(tc) = entry.trailing {
+                chain_parts.push(tc);
+            }
         }
-
-        group(concat(vec![anchor, indent(2, concat(chain_parts))]))
+        concat(vec![anchor, indent(2, concat(chain_parts))])
     }
 }
 

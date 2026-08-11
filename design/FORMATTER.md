@@ -132,9 +132,31 @@ line, so the placement is always safe.
 
 **Comments inside bracketed constructs.** A comment inside a collection
 literal, a construction, a call argument list, or a parameter list keeps
-that construct broken (rule 4) and stays with its element. In an element
-list a comment also disables packing, because a packed line cannot carry an
-interior comment (rule 3). The commented list takes one element per line.
+that construct broken (rule 4) and stays with its element. A broken field
+list is one field per line, so the comment rides its field. In an element
+list a comment breaks only its own line and packing resumes after it: a
+trailing comment ends the packed line after its element, and a leading
+comment takes its own line above the element that starts the next packed
+run. Rule 3 holds because no code follows a comment on its line.
+
+```koja
+nums = [
+  1, 2, # two
+  3, 4, 5, 6,
+  # header values start here
+  7, 8
+]
+```
+
+**A comment between an annotation and its declaration.** It moves above
+the annotation. An annotation glues to its declaration, so nothing can sit
+between them:
+
+```koja
+# explains the function
+@doc "Adds one."
+fn add_one(x: Int32) -> Int32
+```
 
 ## Non-goals
 
