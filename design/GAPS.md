@@ -507,23 +507,6 @@ persistent updates return to O(log n).
 
 ---
 
-## A parse error in the only test file reports as "no tests found"
-
-Found 2026-08-10. `koja test` discovers `@test` functions on the
-parsed AST before it reports parse diagnostics. A file that fails to
-parse contributes no items, so when the project's only test file has
-a syntax error, discovery comes up empty and the run prints
-`no tests found` and exits 0: the error is invisible. Adding a
-second, valid test file makes discovery succeed, and the same run
-then prints the real parse errors. `koja check` does not catch it
-either, because check walks only `src`, not `test`.
-
-**Fix path:** report parse diagnostics (and fail) before the empty
-`no tests found` check in `run_project_tests`, or make `koja check`
-include `test` sources.
-
----
-
 ## Bug triage log
 
 Audited 2026-05-03 · re-triaged 2026-05-27 (seven fixed entries

@@ -7,9 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- `koja check` now checks `test/` sources in addition to `src/`.
+
 ### Fixed
 
 - Assigning to a field of a `match` pattern binding no longer corrupts memory and crashes at runtime.
+- `koja test` now reports parse errors in test files instead of printing `no tests found`.
 
 ## [0.17.0] - 2026-08-09
 

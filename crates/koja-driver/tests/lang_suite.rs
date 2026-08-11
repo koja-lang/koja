@@ -1219,3 +1219,79 @@ fn lang_test_trace() {
         "expected a carriage-return whole-line green rewrite, got:\n{stdout:?}"
     );
 }
+
+/// Write a minimal project (koja.toml + a clean `src` file + an empty
+/// `test` dir) to a fresh temp dir and return its root. Built per
+/// test rather than committed as a fixture because these tests plant
+/// intentionally broken sources.
+fn write_temp_project(tag: &str) -> PathBuf {
+    let root = std::env::temp_dir().join(format!("koja-lang-{tag}-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&root);
+    fs::create_dir_all(root.join("src")).unwrap();
+    fs::create_dir_all(root.join("test")).unwrap();
+    fs::write(
+        root.join("koja.toml"),
+        "[project]\nname = \"fixture\"\nversion = \"0.1.0\"\n",
+    )
+    .unwrap();
+    fs::write(root.join("src/lib.koja"), "fn answer -> Int\n  42\nend\n").unwrap();
+    root
+}
+
+/// A parse error in the only test file must print its diagnostics and
+/// exit 1, not report `no tests found` with exit 0.
+#[test]
+fn lang_test_reports_parse_error_in_only_test_file() {
+    let root = write_temp_project("test-parse-error");
+    // Missing `end`s make the file fail to parse.
+    fs::write(
+        root.join("test/broken_test.koja"),
+        "struct BrokenTest\n  @test \"oops\"\n  fn test_oops -> Result<Bool, String>\n",
+    )
+    .unwrap();
+
+    let (stdout, stderr, code) = run_with_timeout(|cmd| {
+        cmd.arg("test")
+            .current_dir(&root)
+            .env("KOJA_DIAGNOSTICS", "short");
+    });
+    let _ = fs::remove_dir_all(&root);
+
+    assert_eq!(code, 1, "expected exit 1\nstderr:\n{stderr}");
+    assert!(
+        !stdout.contains("no tests found"),
+        "parse errors must not read as `no tests found`, got:\n{stdout}"
+    );
+    assert!(
+        stderr.contains("broken_test.koja") && stderr.contains("error"),
+        "expected a parse diagnostic for broken_test.koja, got:\n{stderr}"
+    );
+}
+
+/// `koja check` walks `test/` alongside `src/`, so an error in a test
+/// file fails the check.
+#[test]
+fn lang_check_includes_test_sources() {
+    let root = write_temp_project("check-test-sources");
+    fs::write(
+        root.join("test/broken_test.koja"),
+        "fn broken -> Int\n  \"not an int\"\nend\n",
+    )
+    .unwrap();
+
+    let (stdout, stderr, code) = run_with_timeout(|cmd| {
+        cmd.arg("check")
+            .current_dir(&root)
+            .env("KOJA_DIAGNOSTICS", "short");
+    });
+    let _ = fs::remove_dir_all(&root);
+
+    assert_eq!(
+        code, 1,
+        "expected exit 1\nstdout:\n{stdout}\nstderr:\n{stderr}"
+    );
+    assert!(
+        stderr.contains("broken_test.koja"),
+        "expected a diagnostic for broken_test.koja, got:\n{stderr}"
+    );
+}
