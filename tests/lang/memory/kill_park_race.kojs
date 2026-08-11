@@ -73,8 +73,7 @@ end
 
 if Rt.koja_rt_sched_violations() == 0
   "kill park race: ok".print()
-
-  # The count and interleaving are in the KOJA_SCHED_TRACE=1 dump.
+# The count and interleaving are in the KOJA_SCHED_TRACE=1 dump.
 else
   "kill park race: VIOLATIONS".print()
 end

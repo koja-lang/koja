@@ -5,12 +5,12 @@
 //! into `Doc` nodes, and provide span and text-length helpers used by the
 //! printer and expression modules.
 
-use std::mem;
-
 use crate::doc::*;
 use koja_ast::ast::*;
 use koja_ast::labels::type_expr_span;
 use koja_ast::span::Span;
+
+use super::comments::leading_docs;
 
 /// Formats a `TypeParam` as a string, including bounds if present.
 /// E.g. `T`, `T: Debug`, `T: Debug & Hash`.
@@ -30,12 +30,40 @@ pub fn format_type_params(tps: &[TypeParam]) -> String {
         .join(", ")
 }
 
+/// Formats a `<T: Bound, U>` list with the same break shape as a
+/// parameter list. Each entry stays atomic, including its bounds.
+/// Returns `Nil` for an empty list.
+pub(super) fn type_params_doc(tps: &[TypeParam]) -> Doc {
+    if tps.is_empty() {
+        return nil();
+    }
+    let items: Vec<Doc> = tps.iter().map(|tp| text(format_type_param(tp))).collect();
+    group(concat(vec![
+        text("<"),
+        indent(
+            2,
+            concat(vec![
+                softline(),
+                intersperse(items, concat(vec![text(","), line()])),
+            ]),
+        ),
+        softline(),
+        text(">"),
+    ]))
+}
+
 /// Formats a comma-separated list of items using fill layout inside brackets.
 ///
 /// Items are packed left-to-right on each line. A trailing comma is added
 /// to all items except the last. The result is wrapped in a group so the
 /// whole list can collapse to a single line when it fits.
 pub(super) fn fill_bracket_list(open: &str, close: &str, items: Vec<Doc>) -> Doc {
+    group(bracket_list_body(open, close, items))
+}
+
+/// The layout of [`fill_bracket_list`] without its enclosing group, so a
+/// caller can bind the break decision to a larger group.
+pub(super) fn bracket_list_body(open: &str, close: &str, items: Vec<Doc>) -> Doc {
     let last = items.len() - 1;
     let fill_items: Vec<Doc> = items
         .into_iter()
@@ -48,12 +76,12 @@ pub(super) fn fill_bracket_list(open: &str, close: &str, items: Vec<Doc>) -> Doc
             }
         })
         .collect();
-    group(concat(vec![
+    concat(vec![
         text(open),
         indent(2, concat(vec![softline(), fill(fill_items)])),
         softline(),
         text(close),
-    ]))
+    ])
 }
 
 /// Formats a conformance header (`: Display, Hash`) for a struct or
@@ -80,91 +108,6 @@ pub(super) fn conformance_header_doc(conformances: &[TypeExpr]) -> Doc {
         indent(2, concat(vec![line(), fill(fill_items)])),
         if_break(nil(), hardline()),
     ]))
-}
-
-/// One element of a bracketed construct with its anchored comments.
-pub(super) struct CommentedEntry {
-    pub(super) leading: Vec<Doc>,
-    pub(super) doc: Doc,
-    pub(super) trailing: Option<Doc>,
-}
-
-impl CommentedEntry {
-    pub(super) fn comment_free(&self) -> bool {
-        self.leading.is_empty() && self.trailing.is_none()
-    }
-}
-
-/// Appends comments drained from between the last element and the
-/// closing delimiter, dropping the final hardline since the enclosing
-/// layout breaks before the delimiter itself.
-fn push_stragglers(body: &mut Vec<Doc>, mut stragglers: Vec<Doc>) {
-    if stragglers.is_empty() {
-        return;
-    }
-    stragglers.pop();
-    body.push(hardline());
-    body.extend(stragglers);
-}
-
-/// Broken field-list interior with one field per line, a comma after
-/// every field, and comments anchored to their field. Starts with the
-/// break after the opening brace. The caller closes with `hardline`
-/// and the delimiter.
-pub(super) fn commented_field_lines(entries: Vec<CommentedEntry>, stragglers: Vec<Doc>) -> Doc {
-    let mut body = Vec::new();
-    for entry in entries {
-        body.push(hardline());
-        body.extend(entry.leading);
-        body.push(entry.doc);
-        body.push(text(","));
-        if let Some(tc) = entry.trailing {
-            body.push(tc);
-        }
-    }
-    push_stragglers(&mut body, stragglers);
-    concat(body)
-}
-
-/// Broken element-list interior with comment-aware packing. Comment-free
-/// runs fill-pack, a trailing comment ends its packed line, and a leading
-/// comment takes its own line before the next run. Comma after every
-/// element except the last.
-pub(super) fn commented_element_lines(entries: Vec<CommentedEntry>, stragglers: Vec<Doc>) -> Doc {
-    let last = entries.len() - 1;
-    let mut body = vec![hardline()];
-    let mut run: Vec<Doc> = Vec::new();
-    for (i, entry) in entries.into_iter().enumerate() {
-        let elem = if i < last {
-            concat(vec![entry.doc, text(",")])
-        } else {
-            entry.doc
-        };
-        if !entry.leading.is_empty() {
-            if !run.is_empty() {
-                body.push(fill(mem::take(&mut run)));
-                body.push(hardline());
-            }
-            // Each leading comment already ends with a hardline, so the
-            // next run lands on the following line.
-            body.extend(entry.leading);
-        }
-        match entry.trailing {
-            Some(tc) => {
-                run.push(concat(vec![elem, tc]));
-                body.push(fill(mem::take(&mut run)));
-                body.push(hardline());
-            }
-            None => run.push(elem),
-        }
-    }
-    if run.is_empty() {
-        body.pop();
-    } else {
-        body.push(fill(run));
-    }
-    push_stragglers(&mut body, stragglers);
-    concat(body)
 }
 
 /// Formats a struct-like body: `prefix{ field, field, ... }` with
@@ -340,8 +283,22 @@ pub(super) fn type_expr_to_doc(ty: &TypeExpr) -> Doc {
             concat(vec![text("("), intersperse(parts, text(", ")), text(")")])
         }
         TypeExpr::Union { types, .. } => {
-            let parts: Vec<Doc> = types.iter().map(type_expr_to_doc).collect();
-            intersperse(parts, text(" | "))
+            // Packs like a symbolic operator chain: `|` ends the line
+            // and the continuation indents 2.
+            let last = types.len() - 1;
+            let members: Vec<Doc> = types
+                .iter()
+                .map(type_expr_to_doc)
+                .enumerate()
+                .map(|(i, doc)| {
+                    if i == last {
+                        doc
+                    } else {
+                        concat(vec![doc, text(" |")])
+                    }
+                })
+                .collect();
+            indent(2, fill(members))
         }
     }
 }
@@ -351,6 +308,10 @@ pub(super) fn type_expr_to_doc(ty: &TypeExpr) -> Doc {
 /// print (unit return, no error type). A unit return with an error
 /// type prints the bare canonical form `! E`, so `-> () ! E`
 /// normalizes on format.
+///
+/// The line before `! E` is bare, so it breaks with the caller's tail
+/// group: a wrapped tail puts `-> T` and `! E` on sibling continuation
+/// lines, like the branches of a broken ternary.
 pub(super) fn return_signature_doc(
     return_type: Option<&TypeExpr>,
     error_type: Option<&TypeExpr>,
@@ -362,7 +323,10 @@ pub(super) fn return_signature_doc(
         parts.push(type_expr_to_doc(return_type.expect("unit_return is false")));
     }
     if let Some(error_type) = error_type {
-        parts.push(text(if unit_return { "! " } else { " ! " }));
+        if !unit_return {
+            parts.push(line());
+        }
+        parts.push(text("! "));
         parts.push(type_expr_to_doc(error_type));
     }
     if parts.is_empty() {
@@ -612,12 +576,15 @@ pub(super) fn is_block_expr(expr: &Expr) -> bool {
     )
 }
 
-/// Returns `true` if the expression is a single-statement closure, which
-/// the closure printer lays out inline when it fits (e.g.
-/// `fn (x: Int) -> Int x * 2 end`). Assignments to such a closure stay
-/// on one line rather than forcing a break after `=`.
+/// Returns `true` if the expression is a closure whose single statement
+/// can render on one line (e.g. `fn (x: Int) -> Int x * 2 end`). A block
+/// or heredoc body always spans lines, so collapsing around it would
+/// fuse the signature with the block header.
 pub(super) fn is_inline_closure(expr: &Expr) -> bool {
-    matches!(&expr.kind, ExprKind::Closure { body, .. } if body.len() == 1)
+    let ExprKind::Closure { body, .. } = &expr.kind else {
+        return false;
+    };
+    matches!(&body[..], [stmt] if !stmt_renders_multiline(stmt))
 }
 
 /// Returns `true` if the value survives heredoc form. The renderer trims
@@ -650,29 +617,18 @@ pub(super) fn stmt_is_block(stmt: &Statement) -> bool {
     }
 }
 
-/// Returns `true` if the expression contains multi-line block constructs
-/// that warrant breaking after `=`.
-pub(super) fn expr_contains_block(expr: &Expr) -> bool {
-    if is_block_expr(expr) {
-        return true;
-    }
-    match &expr.kind {
-        ExprKind::Call { args, .. } => args.iter().any(|a| expr_contains_block(&a.value)),
-        ExprKind::MethodCall { receiver, args, .. } => {
-            expr_contains_block(receiver) || args.iter().any(|a| expr_contains_block(&a.value))
-        }
-        ExprKind::Binary { right, .. } => expr_contains_block(right),
-        ExprKind::Ternary {
-            condition,
-            then_expr,
-            else_expr,
-        } => {
-            expr_contains_block(condition)
-                || expr_contains_block(then_expr)
-                || expr_contains_block(else_expr)
-        }
-        _ => false,
-    }
+/// Returns `true` if the statement always renders across multiple lines
+/// (a block construct or a heredoc), so it can never collapse inline.
+pub(super) fn stmt_renders_multiline(stmt: &Statement) -> bool {
+    let value = match stmt {
+        Statement::Expr(expr) => expr,
+        Statement::Assignment { value, .. }
+        | Statement::CompoundAssign { value, .. }
+        | Statement::Destructure { value, .. } => value,
+        Statement::Return { value: Some(v), .. } => v,
+        _ => return false,
+    };
+    is_block_expr(value) || is_heredoc(value)
 }
 
 /// Returns `true` if a match/cond arm body should be formatted across
@@ -878,12 +834,14 @@ fn path_text_len(path: &[String]) -> usize {
 ///
 /// Handles indented arm spacing (extra blank lines when `any_multiline`),
 /// an optional suffix between the arms and `end` (e.g. `after` clause),
-/// and the closing `end` keyword.
+/// dangling comments between the last arm and `end`, and the closing
+/// `end` keyword.
 pub(super) fn arms_block(
     header: Doc,
     arm_docs: Vec<Doc>,
     any_multiline: bool,
     suffix: Vec<Doc>,
+    end_dangling: Vec<Comment>,
 ) -> Doc {
     let mut spaced = Vec::new();
     for (i, doc) in arm_docs.into_iter().enumerate() {
@@ -892,6 +850,12 @@ pub(super) fn arms_block(
             spaced.push(hardline());
         }
         spaced.push(doc);
+    }
+    if !end_dangling.is_empty() {
+        spaced.push(hardline());
+        let (mut docs, _) = leading_docs(&end_dangling);
+        docs.pop();
+        spaced.extend(docs);
     }
     let mut parts = vec![header];
     parts.push(indent(2, concat(spaced)));
@@ -936,39 +900,36 @@ pub(super) fn signature_wraps(signature: &Doc, indent_cols: u32) -> bool {
     render(signature, available).contains('\n')
 }
 
-fn expr_span(expr: &Expr) -> &Span {
-    &expr.span
+/// Returns the source span of a statement. `Statement::Expr` has no
+/// wrapper span, so its expression's span stands in.
+pub(super) fn stmt_span(stmt: &Statement) -> Span {
+    match stmt {
+        Statement::Expr(expr) => expr.span,
+        Statement::Assignment { span, .. }
+        | Statement::CompoundAssign { span, .. }
+        | Statement::Destructure { span, .. }
+        | Statement::Return { span, .. }
+        | Statement::Break { span, .. } => *span,
+    }
 }
 
 /// Returns the first source line of a statement.
 pub(super) fn stmt_start_line(stmt: &Statement) -> u32 {
-    match stmt {
-        Statement::Expr(expr) => expr_span(expr).start.line,
-        Statement::Assignment { span, .. }
-        | Statement::CompoundAssign { span, .. }
-        | Statement::Destructure { span, .. }
-        | Statement::Return { span, .. }
-        | Statement::Break { span, .. } => span.start.line,
-    }
+    stmt_span(stmt).start.line
 }
 
-/// Returns the last source line of a statement.
-pub(super) fn stmt_end_line(stmt: &Statement) -> u32 {
-    match stmt {
-        Statement::Expr(expr) => expr_span(expr).end.line,
-        Statement::Assignment { span, .. }
-        | Statement::CompoundAssign { span, .. }
-        | Statement::Destructure { span, .. }
-        | Statement::Return { span, .. }
-        | Statement::Break { span, .. } => span.end.line,
-    }
+/// The span of a map entry, from the key's start to the value's end.
+/// Shared by the attachment walk and the printer so both sides key the
+/// entry identically.
+pub(super) fn map_entry_span(key: &Expr, value: &Expr) -> Span {
+    Span::new(key.span.start, value.span.end, key.span.file)
 }
 
 /// Last source line of a function signature: the header's own line, or
 /// the end of the last parameter / return type / error type when the
-/// signature wraps. A wrapped signature whose bare `)` closes the
-/// parameter list on its own line is attributed to the last parameter,
-/// so a comment on that `)` line still reads as a body comment.
+/// signature wraps. The attach pass extends this to the closing `)`
+/// line, located through the token stream, when the paren sits alone
+/// on a later line.
 pub(super) fn signature_end_line(
     header_start: u32,
     params: &[Param],

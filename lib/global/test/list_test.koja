@@ -219,15 +219,13 @@ struct ListTest
 
   @test "find returns matching element"
   fn test_find -> Result<Bool, String>
-    found =
-      [10, 20, 30].find(fn (x: Int) -> Bool x > 15 end)
+    found = [10, 20, 30].find(fn (x: Int) -> Bool x > 15 end)
 
     unless found.unwrap() == 20
       return Result.Err("expected 20")
     end
 
-    not_found =
-      [10, 20, 30].find(fn (x: Int) -> Bool x > 100 end)
+    not_found = [10, 20, 30].find(fn (x: Int) -> Bool x > 100 end)
 
     if not_found.some?()
       return Result.Err("expected None")
@@ -238,8 +236,7 @@ struct ListTest
 
   @test "reduce accumulates value"
   fn test_reduce -> Result<Bool, String>
-    sum =
-      [1, 2, 3, 4].reduce(0, fn (acc: Int, x: Int) -> Int acc + x end)
+    sum = [1, 2, 3, 4].reduce(0, fn (acc: Int, x: Int) -> Int acc + x end)
 
     unless sum == 10
       return Result.Err("expected sum 10, got #{sum}")
@@ -251,8 +248,7 @@ struct ListTest
   @test "map transforms elements"
   fn test_map -> Result<Bool, String>
     nums = [1, 2, 3, 4, 5]
-    doubled =
-      nums.map(fn (n: Int) -> Int n * 2 end)
+    doubled = nums.map(fn (n: Int) -> Int n * 2 end)
 
     unless doubled.length() == 5
       return Result.Err("expected length 5")
@@ -271,8 +267,7 @@ struct ListTest
 
   @test "map changes element type"
   fn test_map_type_change -> Result<Bool, String>
-    strings =
-      [1, 2, 3].map(fn (n: Int) -> String "item_#{n}" end)
+    strings = [1, 2, 3].map(fn (n: Int) -> String "item_#{n}" end)
 
     unless strings.get(0).unwrap() == "item_1"
       return Result.Err("expected item_1")
@@ -287,8 +282,7 @@ struct ListTest
 
   @test "filter selects matching elements"
   fn test_filter -> Result<Bool, String>
-    big =
-      [1, 2, 3, 4, 5].filter(fn (n: Int) -> Bool n > 2 end)
+    big = [1, 2, 3, 4, 5].filter(fn (n: Int) -> Bool n > 2 end)
 
     unless big.length() == 3
       return Result.Err("expected length 3, got #{big.length()}")
@@ -322,10 +316,9 @@ struct ListTest
 
   @test "filter then map chaining"
   fn test_chaining -> Result<Bool, String>
-    chained =
-      [1, 2, 3, 4, 5]
-        .filter(fn (n: Int) -> Bool n > 2 end)
-        .map(fn (n: Int) -> Int n * 10 end)
+    chained = [1, 2, 3, 4, 5]
+      .filter(fn (n: Int) -> Bool n > 2 end)
+      .map(fn (n: Int) -> Int n * 10 end)
 
     unless chained.length() == 3
       return Result.Err("expected length 3")
@@ -350,8 +343,7 @@ struct ListTest
   fn test_for_in_iterators -> Result<Bool, String>
     nums: List<Int> = [1, 2, 3, 4, 5]
 
-    doubled =
-      nums.map(fn (n: Int) -> Int n * 2 end)
+    doubled = nums.map(fn (n: Int) -> Int n * 2 end)
     sum_d = 0
 
     for d in doubled
@@ -362,8 +354,7 @@ struct ListTest
       return Result.Err("expected sum 30 from doubled, got #{sum_d}")
     end
 
-    big =
-      nums.filter(fn (n: Int) -> Bool n > 2 end)
+    big = nums.filter(fn (n: Int) -> Bool n > 2 end)
     sum_b = 0
 
     for b in big
@@ -374,9 +365,8 @@ struct ListTest
       return Result.Err("expected sum 12 from filter, got #{sum_b}")
     end
 
-    chained =
-      nums.filter(fn (n: Int) -> Bool n > 2 end)
-        .map(fn (n: Int) -> Int n * 10 end)
+    chained = nums.filter(fn (n: Int) -> Bool n > 2 end)
+      .map(fn (n: Int) -> Int n * 10 end)
     sum_c = 0
 
     for c in chained

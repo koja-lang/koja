@@ -22,19 +22,16 @@
 some: Option<Int> = Option.Some(7)
 some.unwrap().print()
 
-doubled =
-  some.map(fn (x: Int) -> Int x * 2 end)
+doubled = some.map(fn (x: Int) -> Int x * 2 end)
 doubled.unwrap().print()
 
 none: Option<Int> = Option.None
 (none.or(99)).print()
 
-evens =
-  [1, 2, 3, 4, 5].filter(fn (n: Int) -> Bool n % 2 == 0 end)
+evens = [1, 2, 3, 4, 5].filter(fn (n: Int) -> Bool n % 2 == 0 end)
 evens.length().print()
 
-labels =
-  [1, 2, 3].map(fn (n: Int) -> String "item_#{n}" end)
+labels = [1, 2, 3].map(fn (n: Int) -> String "item_#{n}" end)
 
 match labels.get(0)
   Option.Some(s) -> s.print()

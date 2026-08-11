@@ -961,7 +961,7 @@ arms, struct fields, and generic call returns:
 ```koja
 z: Option<Int32> = Option.None
 
-fn empty_label() -> (Int, Option<String>)
+fn empty_label -> (Int, Option<String>)
   (1, Option.None)
 end
 ```
@@ -989,11 +989,12 @@ Generics compile via monomorphization. The compiler generates specialized native
 Pattern matching with exhaustiveness checking:
 
 ```koja
-result = match x
-  1 -> "one"
-  2 -> "two"
-  _ -> "other"
-end
+result =
+  match x
+    1 -> "one"
+    2 -> "two"
+    _ -> "other"
+  end
 ```
 
 Patterns: literals (integers, floats, booleans, strings), wildcards (`_`), variable bindings, nested patterns, enum and struct destructuring. Guards use `when`:
@@ -1188,9 +1189,10 @@ Closures use `fn (...) -> T ... end` syntax, mirroring function signatures:
 ```koja
 double = fn (x: Int32) -> Int32 x * 2 end
 
-add = fn (a: Int32, b: Int32) -> Int32
-  a + b
-end
+add =
+  fn (a: Int32, b: Int32) -> Int32
+    a + b
+  end
 ```
 
 Closure parameters are passed by value, like function parameters:
@@ -1217,9 +1219,10 @@ Closures capture variables from their enclosing scope by value. Each captured va
 
 ```koja
 multiplier = 3
-triple = fn (x: Int) -> Int
-  x * multiplier    # captures a copy of multiplier
-end
+triple =
+  fn (x: Int) -> Int
+    x * multiplier    # captures a copy of multiplier
+  end
 multiplier = 10     # does not affect triple
 triple(5).print()   # 15
 ```
@@ -2360,7 +2363,7 @@ When the C symbol name differs from the Koja function name, use `@link "lib:symb
 ```koja
 struct Crypto
   @extern "C" @link "crypto:EVP_sha256"
-  priv fn evp_sha256() -> CPtr<UInt8>
+  priv fn evp_sha256 -> CPtr<UInt8>
 
   @extern "C" @link "crypto:SHA256"
   priv fn sha256_raw(data: CPtr<UInt8>, len: Int64, out: CPtr<UInt8>) -> CPtr<UInt8>
@@ -2375,7 +2378,7 @@ A raw C pointer type. `Copy` semantics (just a machine word). No ownership track
 
 ```koja
 struct CPtr<T>
-  fn null() -> CPtr<T>
+  fn null -> CPtr<T>
   fn alloc(count: Int) -> CPtr<T>
   fn free(self)
   fn offset(self, n: Int) -> CPtr<T>

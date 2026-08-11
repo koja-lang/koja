@@ -6,12 +6,24 @@
 
 use crate::doc::*;
 use koja_ast::ast::*;
-use koja_ast::labels::pattern_span;
+use koja_ast::span::Span;
 
 use super::Printer;
+use super::attach::Slot;
+use super::comments::{leading_docs, trailing_doc};
+use super::seq::{SeqEntry, element_lines, field_lines};
 use super::util::*;
 
-impl<'a> Printer<'a> {
+/// Prepends leading comment docs to a rendered node.
+fn with_leading(leading: &[Comment], doc: Doc) -> Doc {
+    if leading.is_empty() {
+        return doc;
+    }
+    let (docs, _) = leading_docs(leading);
+    concat(docs.into_iter().chain([doc]).collect())
+}
+
+impl Printer {
     /// Formats any expression AST node into a `Doc`.
     pub(super) fn expr_to_doc(&mut self, expr: &Expr) -> Doc {
         match &expr.kind {
@@ -77,7 +89,7 @@ impl<'a> Printer<'a> {
 
             ExprKind::Call { callee, args, .. } => concat(vec![
                 self.expr_to_doc(callee),
-                self.call_args_to_doc(args, expr.span.end.line),
+                self.call_args_to_doc(args, expr.span),
             ]),
 
             ExprKind::MethodCall { .. } => {
@@ -94,12 +106,24 @@ impl<'a> Printer<'a> {
                     else {
                         unreachable!()
                     };
-                    concat(vec![
-                        self.expr_to_doc(receiver),
-                        text("."),
-                        text(method.clone()),
-                        self.call_args_to_doc(args, expr.span.end.line),
-                    ])
+                    if let Some(receiver_body) = self.collection_literal_body(receiver) {
+                        // The shared group makes the literal's brackets
+                        // split first, and the call hugs the closing
+                        // bracket.
+                        group(concat(vec![
+                            receiver_body,
+                            text("."),
+                            text(method.clone()),
+                            self.call_args_to_doc(args, expr.span),
+                        ]))
+                    } else {
+                        concat(vec![
+                            self.expr_to_doc(receiver),
+                            text("."),
+                            text(method.clone()),
+                            self.call_args_to_doc(args, expr.span),
+                        ])
+                    }
                 }
             }
 
@@ -113,40 +137,26 @@ impl<'a> Printer<'a> {
                 if elements.is_empty() {
                     text("[]")
                 } else {
-                    let close_line = expr.span.end.line;
-                    let entries = self.commented_entries(
-                        elements,
-                        close_line,
-                        |e| (e.span.start.line, e.span.end.line),
-                        |p, e| p.expr_to_doc(e),
-                    );
-                    self.element_list_to_doc("[", "]", entries, close_line)
+                    let entries = self.seq_entries(elements, |e| e.span, |p, e| p.expr_to_doc(e));
+                    self.element_list_to_doc("[", "]", entries, expr.span)
                 }
             }
 
             ExprKind::Tuple { elements } => {
-                let close_line = expr.span.end.line;
-                let entries = self.commented_entries(
-                    elements,
-                    close_line,
-                    |e| (e.span.start.line, e.span.end.line),
-                    |p, e| p.expr_to_doc(e),
-                );
-                self.element_list_to_doc("(", ")", entries, close_line)
+                let entries = self.seq_entries(elements, |e| e.span, |p, e| p.expr_to_doc(e));
+                self.element_list_to_doc("(", ")", entries, expr.span)
             }
 
             ExprKind::Map { entries } => {
                 if entries.is_empty() {
                     text("[:]")
                 } else {
-                    let close_line = expr.span.end.line;
-                    let entry_docs = self.commented_entries(
+                    let entry_docs = self.seq_entries(
                         entries,
-                        close_line,
-                        |(k, v)| (k.span.start.line, v.span.end.line),
+                        |(k, v)| map_entry_span(k, v),
                         |p, (k, v)| concat(vec![p.expr_to_doc(k), text(": "), p.expr_to_doc(v)]),
                     );
-                    self.element_list_to_doc("[", "]", entry_docs, close_line)
+                    self.element_list_to_doc("[", "]", entry_docs, expr.span)
                 }
             }
 
@@ -157,26 +167,38 @@ impl<'a> Printer<'a> {
                 then_body,
                 else_body,
             } => {
-                let mut parts = vec![
-                    self.condition_header_to_doc("if ", condition),
-                    self.body_to_doc(then_body, expr.span.end.line),
-                ];
-                if let Some(eb) = else_body {
-                    parts.push(hardline());
-                    parts.push(text("else"));
-                    parts.push(self.body_to_doc(eb, expr.span.end.line));
+                let dangling = self.comments.take(expr.span, Slot::Dangling);
+                let mut parts = vec![self.condition_header_to_doc("if ", condition, expr.span)];
+                match else_body {
+                    Some(eb) => {
+                        parts.push(self.body_to_doc(then_body, Vec::new()));
+                        parts.push(hardline());
+                        let before_else = self.comments.take(expr.span, Slot::BeforeElse);
+                        let (docs, _) = leading_docs(&before_else);
+                        parts.extend(docs);
+                        parts.push(text("else"));
+                        let else_trailing = self.comments.take(expr.span, Slot::ElseTrailing);
+                        if let Some(tc) = trailing_doc(&else_trailing) {
+                            parts.push(tc);
+                        }
+                        parts.push(self.body_to_doc(eb, dangling));
+                    }
+                    None => parts.push(self.body_to_doc(then_body, dangling)),
                 }
                 parts.push(hardline());
                 parts.push(text("end"));
                 concat(parts)
             }
 
-            ExprKind::Unless { condition, body } => concat(vec![
-                self.condition_header_to_doc("unless ", condition),
-                self.body_to_doc(body, expr.span.end.line),
-                hardline(),
-                text("end"),
-            ]),
+            ExprKind::Unless { condition, body } => {
+                let dangling = self.comments.take(expr.span, Slot::Dangling);
+                concat(vec![
+                    self.condition_header_to_doc("unless ", condition, expr.span),
+                    self.body_to_doc(body, dangling),
+                    hardline(),
+                    text("end"),
+                ])
+            }
 
             ExprKind::Match { subject, arms } => {
                 let any_multiline = arms.iter().any(|a| {
@@ -184,20 +206,24 @@ impl<'a> Printer<'a> {
                         || pattern_is_multiline(&a.pattern)
                         || arm_body_overflows(pattern_rendered_len(&a.pattern), &a.body)
                 });
-                let header = concat(vec![text("match "), self.expr_to_doc(subject)]);
+                let mut header_parts = vec![text("match "), self.expr_to_doc(subject)];
+                self.push_expr_header_trailing(&mut header_parts, expr.span);
                 let rendered: Vec<Doc> = arms
                     .iter()
-                    .enumerate()
-                    .map(|(i, arm)| {
-                        let body_end = arms
-                            .get(i + 1)
-                            .map_or(expr.span.end.line, |next| next.span.start.line);
-                        self.with_leading_comments(arm.span.start.line, |p| {
-                            p.match_arm_to_doc(arm, any_multiline, body_end)
-                        })
+                    .map(|arm| {
+                        let leading = self.comments.take(arm.span, Slot::Leading);
+                        let doc = self.match_arm_to_doc(arm, any_multiline);
+                        with_leading(&leading, doc)
                     })
                     .collect();
-                arms_block(header, rendered, any_multiline, vec![])
+                let end_dangling = self.comments.take(expr.span, Slot::Dangling);
+                arms_block(
+                    concat(header_parts),
+                    rendered,
+                    any_multiline,
+                    vec![],
+                    end_dangling,
+                )
             }
 
             ExprKind::Cond { arms, else_body } => {
@@ -210,22 +236,38 @@ impl<'a> Printer<'a> {
                             || expr_or_is_multiline(&a.condition)
                             || arm_body_overflows(expr_text_len(&a.condition), &a.body)
                     });
+                let mut header_parts = vec![text("cond")];
+                self.push_expr_header_trailing(&mut header_parts, expr.span);
                 let mut rendered: Vec<Doc> = arms
                     .iter()
-                    .enumerate()
-                    .map(|(i, arm)| {
-                        let body_end = arms
-                            .get(i + 1)
-                            .map_or(expr.span.end.line, |next| next.span.start.line);
-                        self.with_leading_comments(arm.span.start.line, |p| {
-                            p.cond_arm_to_doc(arm, any_multiline, body_end)
-                        })
+                    .map(|arm| {
+                        let leading = self.comments.take(arm.span, Slot::Leading);
+                        let doc = self.cond_arm_to_doc(arm, any_multiline);
+                        with_leading(&leading, doc)
                     })
                     .collect();
                 if let Some(body) = else_body {
-                    rendered.push(self.else_arm_to_doc(body, any_multiline, expr.span.end.line));
+                    let leading = self.comments.take(expr.span, Slot::BeforeElse);
+                    let head_trailing = self.comments.take(expr.span, Slot::ElseTrailing);
+                    let dangling = self.comments.take(expr.span, Slot::Dangling);
+                    let doc = self.arm_body_to_doc(
+                        text("else ->"),
+                        head_trailing,
+                        body,
+                        any_multiline,
+                        dangling,
+                        Vec::new(),
+                    );
+                    rendered.push(with_leading(&leading, doc));
                 }
-                arms_block(text("cond"), rendered, any_multiline, vec![])
+                let end_dangling = self.comments.take(expr.span, Slot::Dangling);
+                arms_block(
+                    concat(header_parts),
+                    rendered,
+                    any_multiline,
+                    vec![],
+                    end_dangling,
+                )
             }
 
             ExprKind::Receive {
@@ -238,55 +280,83 @@ impl<'a> Printer<'a> {
                         || pattern_is_multiline(&a.pattern)
                         || arm_body_overflows(pattern_rendered_len(&a.pattern), &a.body)
                 }) || arm_is_multiline(after_body);
+                let mut header_parts = vec![text("receive")];
+                self.push_expr_header_trailing(&mut header_parts, expr.span);
                 let rendered: Vec<Doc> = arms
                     .iter()
-                    .enumerate()
-                    .map(|(i, arm)| {
-                        let body_end = arms
-                            .get(i + 1)
-                            .map_or(expr.span.end.line, |next| next.span.start.line);
-                        self.with_leading_comments(arm.span.start.line, |p| {
-                            p.match_arm_to_doc(arm, any_multiline, body_end)
-                        })
+                    .map(|arm| {
+                        let leading = self.comments.take(arm.span, Slot::Leading);
+                        let doc = self.match_arm_to_doc(arm, any_multiline);
+                        with_leading(&leading, doc)
                     })
                     .collect();
                 let mut suffix = Vec::new();
                 if let Some(timeout) = after_timeout {
                     suffix.push(hardline());
+                    let before_after = self.comments.take(expr.span, Slot::BeforeAfter);
+                    let (docs, _) = leading_docs(&before_after);
+                    suffix.extend(docs);
                     suffix.push(text("after "));
                     suffix.push(self.expr_to_doc(timeout));
-                    suffix.push(self.body_to_doc(after_body, expr.span.end.line));
+                    let after_trailing = self.comments.take(timeout.span, Slot::HeaderTrailing);
+                    if let Some(tc) = trailing_doc(&after_trailing) {
+                        suffix.push(tc);
+                    }
+                    let dangling = self.comments.take(expr.span, Slot::Dangling);
+                    suffix.push(self.body_to_doc(after_body, dangling));
                 }
-                arms_block(text("receive"), rendered, any_multiline, suffix)
+                let end_dangling = self.comments.take(expr.span, Slot::Dangling);
+                arms_block(
+                    concat(header_parts),
+                    rendered,
+                    any_multiline,
+                    suffix,
+                    end_dangling,
+                )
             }
 
             ExprKind::For {
                 pattern,
                 iterable,
                 body,
-            } => concat(vec![
-                text("for "),
-                pattern_to_doc(pattern),
-                text(" in "),
-                self.expr_to_doc(iterable),
-                self.body_to_doc(body, expr.span.end.line),
-                hardline(),
-                text("end"),
-            ]),
+            } => {
+                let mut header_parts = vec![
+                    text("for "),
+                    pattern_to_doc(pattern),
+                    text(" in "),
+                    self.expr_to_doc(iterable),
+                ];
+                self.push_expr_header_trailing(&mut header_parts, expr.span);
+                let dangling = self.comments.take(expr.span, Slot::Dangling);
+                concat(vec![
+                    concat(header_parts),
+                    self.body_to_doc(body, dangling),
+                    hardline(),
+                    text("end"),
+                ])
+            }
 
-            ExprKind::Loop { body } => concat(vec![
-                text("loop"),
-                self.body_to_doc(body, expr.span.end.line),
-                hardline(),
-                text("end"),
-            ]),
+            ExprKind::Loop { body } => {
+                let mut header_parts = vec![text("loop")];
+                self.push_expr_header_trailing(&mut header_parts, expr.span);
+                let dangling = self.comments.take(expr.span, Slot::Dangling);
+                concat(vec![
+                    concat(header_parts),
+                    self.body_to_doc(body, dangling),
+                    hardline(),
+                    text("end"),
+                ])
+            }
 
-            ExprKind::While { condition, body } => concat(vec![
-                self.condition_header_to_doc("while ", condition),
-                self.body_to_doc(body, expr.span.end.line),
-                hardline(),
-                text("end"),
-            ]),
+            ExprKind::While { condition, body } => {
+                let dangling = self.comments.take(expr.span, Slot::Dangling);
+                concat(vec![
+                    self.condition_header_to_doc("while ", condition, expr.span),
+                    self.body_to_doc(body, dangling),
+                    hardline(),
+                    text("end"),
+                ])
+            }
 
             ExprKind::Closure {
                 params,
@@ -302,9 +372,10 @@ impl<'a> Printer<'a> {
                 }
                 let sig = concat(sig_parts);
                 if self.closure_renders_inline(expr) {
-                    // No interior comments (the gate guarantees it), so skip
-                    // the draining of statements_to_doc. An end-line trailing
-                    // comment stays pending and glues after `end`.
+                    // No interior comments (the gate guarantees it), so
+                    // the single statement prints directly. An end-line
+                    // trailing comment stays with the enclosing context
+                    // and glues after `end`.
                     let body_doc = self.statement_to_doc(&body[0]);
                     group(concat(vec![
                         sig,
@@ -313,12 +384,13 @@ impl<'a> Printer<'a> {
                         text("end"),
                     ]))
                 } else {
-                    concat(vec![
-                        sig,
-                        self.body_to_doc(body, expr.span.end.line),
-                        hardline(),
-                        text("end"),
-                    ])
+                    let mut parts = vec![sig];
+                    self.push_expr_header_trailing(&mut parts, expr.span);
+                    let dangling = self.comments.take(expr.span, Slot::Dangling);
+                    parts.push(self.body_to_doc(body, dangling));
+                    parts.push(hardline());
+                    parts.push(text("end"));
+                    concat(parts)
                 }
             }
 
@@ -390,7 +462,7 @@ impl<'a> Printer<'a> {
                 if fields.is_empty() {
                     text(format!("{}{{}}", path_str))
                 } else {
-                    self.construction_to_doc(text(path_str), fields, expr.span.end.line)
+                    self.construction_to_doc(text(path_str), fields, expr.span)
                 }
             }
 
@@ -398,14 +470,12 @@ impl<'a> Printer<'a> {
                 if segments.is_empty() {
                     text("<<>>")
                 } else {
-                    let close_line = expr.span.end.line;
-                    let entries = self.commented_entries(
+                    let entries = self.seq_entries(
                         segments,
-                        close_line,
-                        |seg| (seg.span.start.line, seg.span.end.line),
+                        |seg| seg.span,
                         |p, seg| p.binary_segment_to_doc(seg),
                     );
-                    self.element_list_to_doc("<<", ">>", entries, close_line)
+                    self.element_list_to_doc("<<", ">>", entries, expr.span)
                 }
             }
 
@@ -431,36 +501,52 @@ impl<'a> Printer<'a> {
                         ])
                     }
                     EnumConstructionData::Struct(fields) => {
-                        self.construction_to_doc(text(prefix), fields, expr.span.end.line)
+                        self.construction_to_doc(text(prefix), fields, expr.span)
                     }
                 }
             }
         }
     }
 
+    /// Appends the trailing comment attached to a block expression's
+    /// header line, if any.
+    fn push_expr_header_trailing(&mut self, parts: &mut Vec<Doc>, owner: Span) {
+        let trailing = self.comments.take(owner, Slot::HeaderTrailing);
+        if let Some(tc) = trailing_doc(&trailing) {
+            parts.push(tc);
+        }
+    }
+
     /// Formats a parenthesized argument list for a call or method call.
-    /// `close_line` is the line of the closing paren.
-    pub(super) fn call_args_to_doc(&mut self, args: &[Arg], close_line: u32) -> Doc {
+    /// `owner` is the call expression's span, which keys the stragglers
+    /// before the closing paren.
+    pub(super) fn call_args_to_doc(&mut self, args: &[Arg], owner: Span) -> Doc {
         if args.is_empty() {
-            return text("()");
+            let stragglers = self.comments.take(owner, Slot::Stragglers);
+            if stragglers.is_empty() {
+                return text("()");
+            }
+            return concat(vec![
+                text("("),
+                indent(2, field_lines(Vec::new(), stragglers)),
+                hardline(),
+                text(")"),
+            ]);
         }
         if let [arg] = args
             && arg.name.is_none()
             && (is_closure_arg(&arg.value) || is_heredoc(&arg.value))
-            && self.comments.peek_before(arg.span.start.line).is_none()
+            && !self.comments.has(arg.span, Slot::Leading)
+            && !self.comments.has(arg.span, Slot::Trailing)
+            && !self.comments.has(owner, Slot::Stragglers)
         {
             // Hug a sole trailing closure or heredoc instead of exploding
-            // the arg list. A pending comment before the argument rules
-            // the hug out and takes the broken layout below.
+            // the arg list. A comment anchored to the argument rules the
+            // hug out and takes the broken layout below.
             return concat(vec![text("("), self.arg_to_doc(arg), text(")")]);
         }
-        let entries = self.commented_entries(
-            args,
-            close_line,
-            |a| (a.span.start.line, a.span.end.line),
-            |p, a| p.arg_to_doc(a),
-        );
-        if self.entries_comment_free(&entries, close_line) {
+        let entries = self.seq_entries(args, |a| a.span, |p, a| p.arg_to_doc(a));
+        if self.entries_comment_free(&entries, owner) {
             let arg_docs: Vec<Doc> = entries.into_iter().map(|e| e.doc).collect();
             return group(concat(vec![
                 text("("),
@@ -476,10 +562,10 @@ impl<'a> Printer<'a> {
                 text(")"),
             ]));
         }
-        let (stragglers, _) = self.comments.drain_before(close_line);
+        let stragglers = self.comments.take(owner, Slot::Stragglers);
         concat(vec![
             text("("),
-            indent(2, commented_field_lines(entries, stragglers)),
+            indent(2, field_lines(entries, stragglers)),
             hardline(),
             text(")"),
         ])
@@ -497,68 +583,71 @@ impl<'a> Printer<'a> {
         }
     }
 
-    /// Drains the comments anchored to each element of a bracketed
-    /// construct. A trailing comment belongs to the last element on its
-    /// line, and never to an element ending on the closing delimiter's
-    /// line (a comment there follows the close, not the element).
-    pub(super) fn commented_entries<T>(
-        &mut self,
-        items: &[T],
-        close_line: u32,
-        lines_of: impl Fn(&T) -> (u32, u32),
-        mut to_doc: impl FnMut(&mut Self, &T) -> Doc,
-    ) -> Vec<CommentedEntry> {
-        items
-            .iter()
-            .enumerate()
-            .map(|(i, item)| {
-                let (start_line, end_line) = lines_of(item);
-                let (leading, _) = self.comments.drain_before(start_line);
-                let doc = to_doc(self, item);
-                let last_on_line = items
-                    .get(i + 1)
-                    .is_none_or(|next| lines_of(next).0 > end_line);
-                let trailing = if last_on_line && end_line < close_line {
-                    self.comments.drain_trailing(end_line)
-                } else {
-                    None
-                };
-                CommentedEntry {
-                    leading,
-                    doc,
-                    trailing,
-                }
-            })
-            .collect()
-    }
-
-    /// True when no comment sits inside the construct, neither anchored to
-    /// an element nor pending before the closing delimiter line.
-    pub(super) fn entries_comment_free(&self, entries: &[CommentedEntry], close_line: u32) -> bool {
-        entries.iter().all(CommentedEntry::comment_free)
-            && self.comments.peek_before(close_line).is_none()
-    }
-
     /// Formats an element list (list, tuple, map, or binary literal) with
     /// packed layout when comment-free and comment-aware packing otherwise.
     fn element_list_to_doc(
         &mut self,
         open: &str,
         close: &str,
-        entries: Vec<CommentedEntry>,
-        close_line: u32,
+        entries: Vec<SeqEntry>,
+        owner: Span,
     ) -> Doc {
-        if self.entries_comment_free(&entries, close_line) {
+        let comment_free = self.entries_comment_free(&entries, owner);
+        let body = self.element_list_body(open, close, entries, owner);
+        if comment_free { group(body) } else { body }
+    }
+
+    /// The element-list layout without its enclosing group, so a caller
+    /// can bind the break decision to a larger group. The commented form
+    /// is already hard-broken and needs no group.
+    fn element_list_body(
+        &mut self,
+        open: &str,
+        close: &str,
+        entries: Vec<SeqEntry>,
+        owner: Span,
+    ) -> Doc {
+        if self.entries_comment_free(&entries, owner) {
             let items = entries.into_iter().map(|e| e.doc).collect();
-            return fill_bracket_list(open, close, items);
+            return bracket_list_body(open, close, items);
         }
-        let (stragglers, _) = self.comments.drain_before(close_line);
+        let stragglers = self.comments.take(owner, Slot::Stragglers);
         concat(vec![
             text(open),
-            indent(2, commented_element_lines(entries, stragglers)),
+            indent(2, element_lines(entries, stragglers)),
             hardline(),
             text(close),
         ])
+    }
+
+    /// Builds the bracket layout for a non-empty collection literal
+    /// without its own group. `None` for anything else. A method call on
+    /// such a receiver binds the literal's break to the call's group, so
+    /// the literal splits its brackets before the argument list does.
+    fn collection_literal_body(&mut self, expr: &Expr) -> Option<Doc> {
+        let (open, close, entries) = match &expr.kind {
+            ExprKind::List { elements } if !elements.is_empty() => (
+                "[",
+                "]",
+                self.seq_entries(elements, |e| e.span, |p, e| p.expr_to_doc(e)),
+            ),
+            ExprKind::Map { entries } if !entries.is_empty() => (
+                "[",
+                "]",
+                self.seq_entries(
+                    entries,
+                    |(k, v)| map_entry_span(k, v),
+                    |p, (k, v)| concat(vec![p.expr_to_doc(k), text(": "), p.expr_to_doc(v)]),
+                ),
+            ),
+            ExprKind::Tuple { elements } => (
+                "(",
+                ")",
+                self.seq_entries(elements, |e| e.span, |p, e| p.expr_to_doc(e)),
+            ),
+            _ => return None,
+        };
+        Some(self.element_list_body(open, close, entries, expr.span))
     }
 
     /// Formats a `prefix{field, ...}` field list with struct-literal
@@ -566,18 +655,18 @@ impl<'a> Printer<'a> {
     pub(super) fn field_list_to_doc(
         &mut self,
         prefix: Doc,
-        entries: Vec<CommentedEntry>,
-        close_line: u32,
+        entries: Vec<SeqEntry>,
+        owner: Span,
     ) -> Doc {
-        if self.entries_comment_free(&entries, close_line) {
+        if self.entries_comment_free(&entries, owner) {
             let docs = entries.into_iter().map(|e| e.doc).collect();
             return struct_body(prefix, docs);
         }
-        let (stragglers, _) = self.comments.drain_before(close_line);
+        let stragglers = self.comments.take(owner, Slot::Stragglers);
         concat(vec![
             prefix,
             text("{"),
-            indent(2, commented_field_lines(entries, stragglers)),
+            indent(2, field_lines(entries, stragglers)),
             hardline(),
             text("}"),
         ])
@@ -585,14 +674,9 @@ impl<'a> Printer<'a> {
 
     /// Formats a `Prefix{field: value, ...}` construction with comments
     /// anchored to their fields.
-    fn construction_to_doc(&mut self, prefix: Doc, fields: &[FieldInit], close_line: u32) -> Doc {
-        let entries = self.commented_entries(
-            fields,
-            close_line,
-            |fi| (fi.span.start.line, fi.span.end.line),
-            |p, fi| p.field_init_to_doc(fi),
-        );
-        self.field_list_to_doc(prefix, entries, close_line)
+    fn construction_to_doc(&mut self, prefix: Doc, fields: &[FieldInit], owner: Span) -> Doc {
+        let entries = self.seq_entries(fields, |fi| fi.span, |p, fi| p.field_init_to_doc(fi));
+        self.field_list_to_doc(prefix, entries, owner)
     }
 
     /// Formats a struct field initializer (`name: value`).
@@ -634,13 +718,13 @@ impl<'a> Printer<'a> {
     /// Formats an `if` / `unless` / `while` header. Like wrapped
     /// function signatures, a wrapped condition indents two (the
     /// expression doc hangs its own continuations) and a blank line
-    /// separates it from the body.
-    fn condition_header_to_doc(&mut self, keyword: &str, condition: &Expr) -> Doc {
-        group(concat(vec![
-            text(keyword),
-            self.expr_to_doc(condition),
-            if_break(nil(), hardline()),
-        ]))
+    /// separates it from the body. `owner` keys the header's trailing
+    /// comment.
+    fn condition_header_to_doc(&mut self, keyword: &str, condition: &Expr, owner: Span) -> Doc {
+        let mut parts = vec![text(keyword), self.expr_to_doc(condition)];
+        self.push_expr_header_trailing(&mut parts, owner);
+        parts.push(if_break(nil(), hardline()));
+        group(concat(parts))
     }
 
     /// Flattens a chain of same-operator binary expressions into a list of
@@ -714,9 +798,10 @@ impl<'a> Printer<'a> {
         concat(doc_parts)
     }
 
-    /// Formats a `#{expr}` or `#{expr:spec}` interpolation segment.
+    /// Formats a `#{expr}` or `#{expr:spec}` interpolation segment. The
+    /// expression renders flat because a string literal never breaks.
     fn interpolation_to_doc(&mut self, expr: &Expr, format: Option<&str>) -> Doc {
-        let mut doc_parts = vec![text("#{"), self.expr_to_doc(expr)];
+        let mut doc_parts = vec![text("#{"), flatten(self.expr_to_doc(expr))];
         if let Some(spec) = format {
             doc_parts.push(text(format!(":{spec}")));
         }
@@ -728,113 +813,113 @@ impl<'a> Printer<'a> {
     /// inside the closure span rules it out (inlined, the comment would
     /// swallow `end`).
     pub(super) fn closure_renders_inline(&self, expr: &Expr) -> bool {
-        is_inline_closure(expr) && self.comments.peek_before(expr.span.end.line).is_none()
+        is_inline_closure(expr) && !self.comments.any_within(expr.span)
     }
 
     /// Formats a `match` arm: `pattern [when guard] -> body`.
-    pub(super) fn match_arm_to_doc(
-        &mut self,
-        arm: &MatchArm,
-        force_break: bool,
-        block_end: u32,
-    ) -> Doc {
-        let head_line = arm
-            .guard
-            .as_ref()
-            .map_or(pattern_span(&arm.pattern).end.line, |g| g.span.end.line);
+    pub(super) fn match_arm_to_doc(&mut self, arm: &MatchArm, force_break: bool) -> Doc {
         let mut head = vec![pattern_to_doc(&arm.pattern)];
         if let Some(guard) = &arm.guard {
             head.push(text(" when "));
             head.push(self.expr_to_doc(guard));
         }
         head.push(text(" ->"));
+        let head_trailing = self.comments.take(arm.span, Slot::HeaderTrailing);
+        let dangling = self.comments.take(arm.span, Slot::Dangling);
+        let trailing = self.comments.take(arm.span, Slot::Trailing);
         self.arm_body_to_doc(
             concat(head),
-            Some(head_line),
+            head_trailing,
             &arm.body,
             force_break,
-            block_end,
+            dangling,
+            trailing,
         )
     }
 
     /// Formats a `cond` arm: `condition -> body`.
-    pub(super) fn cond_arm_to_doc(
-        &mut self,
-        arm: &CondArm,
-        force_break: bool,
-        block_end: u32,
-    ) -> Doc {
-        let head_line = arm.condition.span.end.line;
+    pub(super) fn cond_arm_to_doc(&mut self, arm: &CondArm, force_break: bool) -> Doc {
         let head = concat(vec![self.expr_to_doc(&arm.condition), text(" ->")]);
-        self.arm_body_to_doc(head, Some(head_line), &arm.body, force_break, block_end)
+        let head_trailing = self.comments.take(arm.span, Slot::HeaderTrailing);
+        let dangling = self.comments.take(arm.span, Slot::Dangling);
+        let trailing = self.comments.take(arm.span, Slot::Trailing);
+        self.arm_body_to_doc(
+            head,
+            head_trailing,
+            &arm.body,
+            force_break,
+            dangling,
+            trailing,
+        )
     }
 
-    /// Formats an `else ->` arm in a `cond` expression.
-    pub(super) fn else_arm_to_doc(
-        &mut self,
-        body: &[Statement],
-        force_break: bool,
-        block_end: u32,
-    ) -> Doc {
-        let head = text("else ->");
-        self.arm_body_to_doc(head, None, body, force_break, block_end)
-    }
-
-    /// Shared formatting for all arm types (match, cond).
+    /// Shared formatting for all arm types (match, cond, receive).
     ///
     /// When `force_break` is true (because at least one sibling arm is
     /// multi-line), every arm body is indented on a new line for visual
     /// consistency. Otherwise single-statement arms may stay inline.
     ///
-    /// `head_line` anchors a trailing comment on the arm-head line
-    /// (`Pattern -> # note`). A comment on the head or above the body
-    /// statement forces the body onto its own line so the comment
-    /// cannot swallow it or drift past the block.
+    /// `head_trailing` holds the comments on the arm-head line
+    /// (`Pattern -> # note`), `dangling` the arm's trailing body
+    /// comments, and `arm_trailing` an inline arm's end-of-line comment.
+    /// Any comment forces the body onto its own line so it cannot
+    /// swallow code or drift past the block.
     fn arm_body_to_doc(
         &mut self,
         head: Doc,
-        head_line: Option<u32>,
+        head_trailing: Vec<Comment>,
         body: &[Statement],
         force_break: bool,
-        block_end: u32,
+        dangling: Vec<Comment>,
+        arm_trailing: Vec<Comment>,
     ) -> Doc {
-        // When the body starts on the head line, the per-statement
-        // trailing drain below owns that line's comments.
-        let head_trailing = head_line
-            .filter(|line| body.first().map(stmt_start_line) != Some(*line))
-            .and_then(|line| self.comments.drain_trailing(line));
+        let head_tc = trailing_doc(&head_trailing);
+        let arm_tc = trailing_doc(&arm_trailing);
 
-        if body.len() == 1 && !force_break {
-            let (leading, _) = self.comments.drain_before(stmt_start_line(&body[0]));
+        if body.len() == 1 && !force_break && dangling.is_empty() {
+            let key = stmt_span(&body[0]);
+            let leading = self.comments.take(key, Slot::Leading);
+            let stmt_trailing = self.comments.take(key, Slot::Trailing);
             let mut stmt_doc = self.statement_to_doc(&body[0]);
-            if let Some(tc) = self.comments.drain_trailing(stmt_end_line(&body[0])) {
+            if let Some(tc) = trailing_doc(&stmt_trailing) {
                 stmt_doc = concat(vec![stmt_doc, tc]);
             }
-            if head_trailing.is_none() && leading.is_empty() {
-                return group(concat(vec![
+            if head_tc.is_none() && leading.is_empty() {
+                let mut doc = group(concat(vec![
                     head,
                     indent(2, concat(vec![line(), stmt_doc])),
                 ]));
+                if let Some(tc) = arm_tc {
+                    doc = concat(vec![doc, tc]);
+                }
+                return doc;
             }
             let mut parts = vec![head];
-            if let Some(tc) = head_trailing {
+            if let Some(tc) = head_tc {
                 parts.push(tc);
             }
             let mut body_parts = vec![hardline()];
-            body_parts.extend(leading);
+            let (lead_docs, _) = leading_docs(&leading);
+            body_parts.extend(lead_docs);
             body_parts.push(stmt_doc);
             parts.push(indent(2, concat(body_parts)));
+            if let Some(tc) = arm_tc {
+                parts.push(tc);
+            }
             return concat(parts);
         }
 
         let mut parts = vec![head];
-        if let Some(tc) = head_trailing {
+        if let Some(tc) = head_tc {
             parts.push(tc);
         }
         parts.push(indent(
             2,
-            concat(vec![hardline(), self.statements_to_doc(body, block_end)]),
+            concat(vec![hardline(), self.statements_to_doc(body, dangling)]),
         ));
+        if let Some(tc) = arm_tc {
+            parts.push(tc);
+        }
         concat(parts)
     }
 
@@ -849,67 +934,50 @@ impl<'a> Printer<'a> {
     /// 2 from the root. A comment between links forces the broken chain
     /// and anchors to its link.
     fn method_chain_to_doc(&mut self, expr: &Expr) -> Doc {
-        struct Link<'a> {
-            args: &'a [Arg],
-            end_line: u32,
-            /// Line the link's leading comments drain through. The AST has
-            /// no span for the method name, so the first argument's line
-            /// stands in (the link's end line for empty parens).
-            lead_line: u32,
-            method: &'a str,
-        }
-
-        let mut links: Vec<Link<'_>> = Vec::new();
+        let mut links: Vec<&Expr> = Vec::new();
         let mut current = expr;
-        while let ExprKind::MethodCall {
-            receiver,
-            method,
-            args,
-            ..
-        } = &current.kind
-        {
-            let end_line = current.span.end.line;
-            let lead_line = args.first().map_or(end_line, |arg| arg.span.start.line);
-            links.push(Link {
-                args,
-                end_line,
-                lead_line,
-                method,
-            });
+        while let ExprKind::MethodCall { receiver, .. } = &current.kind {
+            links.push(current);
             current = receiver;
         }
         links.reverse();
 
         let root_doc = self.expr_to_doc(current);
-        let last_end_line = expr.span.end.line;
 
-        // Drain comments per link in source order. The final link's
-        // trailing comment belongs to the enclosing statement.
-        let mut entries: Vec<CommentedEntry> = Vec::new();
+        let mut entries: Vec<SeqEntry> = Vec::new();
         for link in &links {
-            let (leading, _) = self.comments.drain_before(link.lead_line);
-            let doc = concat(vec![
-                text(format!(".{}", link.method)),
-                self.call_args_to_doc(link.args, link.end_line),
-            ]);
-            let trailing = if link.end_line < last_end_line {
-                self.comments.drain_trailing(link.end_line)
-            } else {
-                None
+            let ExprKind::MethodCall {
+                method,
+                args,
+                receiver,
+                ..
+            } = &link.kind
+            else {
+                unreachable!()
             };
-            entries.push(CommentedEntry {
-                leading,
+            let doc = concat(vec![
+                text(format!(".{}", method)),
+                self.call_args_to_doc(args, link.span),
+            ]);
+            // Link comments are keyed by the receiver span. See
+            // `Attacher::walk_chain`.
+            entries.push(SeqEntry {
                 doc,
-                trailing,
+                end_line: link.span.end.line,
+                force_blank: false,
+                is_block: false,
+                leading: self.comments.take(receiver.span, Slot::Leading),
+                start_line: link.span.start.line,
+                trailing: self.comments.take(receiver.span, Slot::Trailing),
             });
         }
 
         // Glue the first call to a simple root, break it for call-rooted
-        // chains. A comment on the first call rules the glue out: glued,
-        // a trailing comment could swallow the next link when the chain
-        // collapses.
-        let glue_first = is_simple_chain_root(current)
-            && entries.first().is_some_and(CommentedEntry::comment_free);
+        // chains. A comment on the first call rules the glue out, since
+        // glued, a trailing comment could swallow the next link when the
+        // chain collapses.
+        let glue_first =
+            is_simple_chain_root(current) && entries.first().is_some_and(SeqEntry::comment_free);
         let anchor = if glue_first {
             let first = entries.remove(0);
             concat(vec![root_doc, first.doc])
@@ -917,7 +985,7 @@ impl<'a> Printer<'a> {
             root_doc
         };
 
-        if entries.iter().all(CommentedEntry::comment_free) {
+        if entries.iter().all(SeqEntry::comment_free) {
             let docs: Vec<Doc> = entries.into_iter().map(|e| e.doc).collect();
             // With one continuation the anchor breaks its own arguments
             // first and the trailing call hugs the closing paren, only
@@ -937,9 +1005,10 @@ impl<'a> Printer<'a> {
         let mut chain_parts = Vec::new();
         for entry in entries {
             chain_parts.push(hardline());
-            chain_parts.extend(entry.leading);
+            let (lead_docs, _) = leading_docs(&entry.leading);
+            chain_parts.extend(lead_docs);
             chain_parts.push(entry.doc);
-            if let Some(tc) = entry.trailing {
+            if let Some(tc) = trailing_doc(&entry.trailing) {
                 chain_parts.push(tc);
             }
         }

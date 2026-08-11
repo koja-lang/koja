@@ -188,6 +188,25 @@ fn fn_with_error_type() {
 }
 
 #[test]
+fn fn_with_error_type_on_continuation_line() {
+    // The formatter wraps a long `-> T ! E` tail with `! E` on its own
+    // continuation line.
+    let f = first_function(
+        "
+        fn read_config(path: String)
+          -> Config
+          ! String
+
+          parse(path)
+        end
+        ",
+    );
+    assert!(matches!(f.return_type, Some(TypeExpr::Named { ref path, .. }) if path == &["Config"]));
+    assert!(matches!(f.error_type, Some(TypeExpr::Named { ref path, .. }) if path == &["String"]));
+    assert_eq!(f.body.as_ref().map(Vec::len), Some(1));
+}
+
+#[test]
 fn fn_with_union_error_type() {
     let f = first_function(
         "

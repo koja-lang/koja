@@ -1,8 +1,7 @@
 struct TaskTest
   @test "async and await roundtrip"
   fn test_async_await -> Result<Bool, String>
-    t =
-      Task.async(fn () -> Int 42 end)
+    t = Task.async(fn () -> Int 42 end)
 
     match Task.await(t)
       Result.Err(_) ->

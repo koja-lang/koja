@@ -59,7 +59,8 @@ Sends an HTTP request with the given method, URL, headers,
   the full response, and closes the connection.
 """
 fn request(method: Method, url: String, headers: Headers, body: String)
-  -> Response ! Error
+  -> Response
+  ! Error
 
   parsed = URI.parse(url)
     rescue e -> fail Error.InvalidUrl(uri_error_message(e, url))

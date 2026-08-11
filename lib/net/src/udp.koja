@@ -35,7 +35,8 @@ struct UDPSocket
   sent or an error if the send fails.
   """
   fn send_to(self, data: Binary | String, addr: SocketAddress)
-    -> Int ! SocketError
+    -> Int
+    ! SocketError
 
     self.socket.send_to(data, addr) rescue _ -> fail SocketError.last()
   end

@@ -58,8 +58,7 @@ struct Cli
       return "no public repositories for #{login}"
     end
 
-    lines =
-      repos.map(fn (repo: Repo) -> String repo_line(repo) end)
+    lines = repos.map(fn (repo: Repo) -> String repo_line(repo) end)
 
     String.join(lines, "\n")
   end

@@ -59,8 +59,7 @@ struct ResultTest
   @test "map transforms Ok value"
   fn test_map_ok -> Result<Bool, String>
     ok: Result<Int, Int> = Result.Ok(42)
-    mapped =
-      ok.map(fn (v: Int) -> Int v + 8 end)
+    mapped = ok.map(fn (v: Int) -> Int v + 8 end)
 
     unless mapped.unwrap() == 50
       return Result.Err("expected 50")
@@ -72,8 +71,7 @@ struct ResultTest
   @test "map returns Err unchanged"
   fn test_map_err -> Result<Bool, String>
     err: Result<Int, Int> = Result.Err(1)
-    err_mapped =
-      err.map(fn (v: Int) -> Int v + 8 end)
+    err_mapped = err.map(fn (v: Int) -> Int v + 8 end)
 
     unless err_mapped.or(-1) == -1
       return Result.Err("expected -1")
@@ -117,8 +115,7 @@ struct ResultTest
   @test "map_err transforms Err and leaves Ok unchanged"
   fn test_map_err_transform -> Result<Bool, String>
     err: Result<Int, Int> = Result.Err(1)
-    mapped =
-      err.map_err(fn (e: Int) -> Int e + 100 end)
+    mapped = err.map_err(fn (e: Int) -> Int e + 100 end)
 
     match mapped
       Result.Ok(_) ->
@@ -131,8 +128,7 @@ struct ResultTest
     end
 
     ok: Result<Int, Int> = Result.Ok(42)
-    ok_mapped =
-      ok.map_err(fn (e: Int) -> Int e + 100 end)
+    ok_mapped = ok.map_err(fn (e: Int) -> Int e + 100 end)
 
     unless ok_mapped.or(-1) == 42
       return Result.Err("expected 42")

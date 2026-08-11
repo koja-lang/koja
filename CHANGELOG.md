@@ -5,6 +5,25 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+
+- `koja format` breaks after `=` when the assigned value is a multi-line block (`match`, `cond`, a multi-line closure, or a call containing one) and keeps short values glued, including calls with inline closures.
+
+### Fixed
+
+- Various `koja format` fixes:
+  - Long protocol method signatures, generic parameter lists, union types, and `-> T ! E` return signatures now wrap at 80 columns instead of overflowing.
+  - String interpolation never breaks inside `#{...}`, so a formatted string stays on one line.
+  - A method call on a long collection literal breaks the literal's brackets instead of the argument list.
+  - A closure with a block body (for example a `match`) no longer collapses onto one line.
+  - Trailing comments on `alias`, `const`, and `type` declarations stay on their line instead of moving below the declaration.
+  - Trailing comments on type declaration headers and `end` lines stay on their line.
+  - A comment above an `else` or `after` keyword stays there instead of moving into the branch above, and a comment leading the else body stays in the else body.
+  - A comment between the last arm and a `match`, `cond`, or `receive` terminator stays inside the block.
+  - Formatting never drops a comment: every comment now has one owner decided before printing, and tests enforce preservation over the whole corpus.
+
 ## [0.17.1] - 2026-08-11
 
 ### Changed

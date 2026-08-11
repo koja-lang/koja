@@ -46,8 +46,7 @@ struct PoolTest
         Result.Err(_) -> return Result.Err("initial checkout failed")
       end
 
-    waiter =
-      Task.async(fn () -> Result<Int, Error> pool.checkout(3000) end)
+    waiter = Task.async(fn () -> Result<Int, Error> pool.checkout(3000) end)
 
     pool.checkin(lent)
 
