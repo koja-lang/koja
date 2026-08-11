@@ -32,18 +32,21 @@
 //! warns on them but typecheck still admits the source) are never
 //! processed and contribute no orphan blocks to the CFG.
 
-use koja_ast::ast::{Expr, MatchArm};
+use koja_ast::ast::{Expr, MatchArm, Pattern};
 use koja_typecheck::GlobalRegistry;
 
 use crate::function::{BranchTarget, IRBlockId, IRInstruction, IRTerminator};
+use crate::local::IRLocalId;
 use crate::types::{IRType, ValueId};
 
 use super::arms::{ArmJoinState, join_arm_states, lower_arm_into};
+use super::bind_detach::detach_mutated_binds;
 use super::ctx::{FnLowerCtx, LowerOutput};
 use super::expr::lower_expr;
 use super::ownership::drop_discarded_temp;
 use super::patterns::{
     BindOp, ChainMode, PatternCheck, PatternInputs, PayloadBind, TestStep, lower_pattern_check,
+    require_local,
 };
 
 /// AST-side inputs to [`lower_match`]. Bundled per the same
@@ -107,6 +110,7 @@ pub(super) fn lower_match(
             subject_ty: &subject.resolution,
         };
         let (check, _) = lower_pattern_check(&arm.pattern, inputs, ctx, current_test, output)?;
+        let arm_binds = bind_slots(&arm.pattern, subject_value, &check, ctx);
         // An unguarded catch-all has no failure edge, so it never
         // needs a fall-through. Any other arm, including a
         // guarded catch-all whose guard might be false, falls
@@ -158,6 +162,7 @@ pub(super) fn lower_match(
                 },
             );
         }
+        detach_mutated_binds(&arm_binds, &arm.body, ctx, body_block);
         let arm_tail = lower_arm_into(
             &arm.body,
             ctx,
@@ -201,6 +206,37 @@ pub(super) fn lower_match(
     }
 
     Ok((result_id, merge_block))
+}
+
+/// The `(slot, type)` pairs this arm's pattern binds, the candidates
+/// for a mutation detach ([`detach_mutated_binds`]). Payload binds
+/// carry their chain's leaf type. A top-level bare binding holds the
+/// whole subject, and its write happens inside the pattern check, so
+/// it never appears in the check's bind lists.
+fn bind_slots(
+    pattern: &Pattern,
+    subject: ValueId,
+    check: &PatternCheck,
+    ctx: &FnLowerCtx,
+) -> Vec<(IRLocalId, IRType)> {
+    let payload_binds = match check {
+        PatternCheck::CatchAll { binds } => binds,
+        PatternCheck::Tests { payload_binds, .. } => payload_binds,
+    };
+    let mut slots: Vec<(IRLocalId, IRType)> = payload_binds
+        .iter()
+        .map(|bind| {
+            let leaf = bind
+                .chain
+                .last()
+                .expect("IR lower: payload bind carries an empty extraction chain");
+            (bind.local, leaf.output_type.clone())
+        })
+        .collect();
+    if let Pattern::Binding { local_id, name, .. } = pattern {
+        slots.push((require_local(*local_id, name), ctx.type_of(subject)));
+    }
+    slots
 }
 
 fn wire_test_chain(

@@ -156,7 +156,9 @@ pub(crate) struct FnLowerCtx {
     /// Slots that hold a borrowed reference rather than an owned
     /// value. Pattern binds write the subject's payload storage
     /// without a `Clone`, so no drop site may ever free these.
-    /// Monotonic, like `declared`.
+    /// A bind the arm body mutates leaves the set at arm entry via
+    /// [`Self::unmark_slot_borrowed`] after a detach clone gives the
+    /// slot its own value.
     borrowed_slots: BTreeSet<IRLocalId>,
     /// Owned match-subject temps whose arms are currently being
     /// lowered. A `return` or `break` inside an arm exits before the
@@ -268,6 +270,13 @@ impl FnLowerCtx {
     /// [`Self::mark_slot_borrowed`])?
     pub(crate) fn slot_is_borrowed(&self, local: IRLocalId) -> bool {
         self.borrowed_slots.contains(&local)
+    }
+
+    /// Clear `local`'s borrowed marking after a detach clone gave the
+    /// slot its own owned value. From here on the normal slot-drop
+    /// machinery (arm-join, exit, early-return drops) covers it.
+    pub(crate) fn unmark_slot_borrowed(&mut self, local: IRLocalId) {
+        self.borrowed_slots.remove(&local);
     }
 
     /// Mark `value` as owning a fresh heap allocation, eligible to be

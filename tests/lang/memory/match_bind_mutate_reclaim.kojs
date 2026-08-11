@@ -1,0 +1,85 @@
+# Regression: a match arm that assigns through its payload bind
+# (`committed.waiting = ...`) must first detach the bind from the
+# subject's storage. The field rebuild drops the stale leaf, which
+# would otherwise free a buffer the subject still owns, and the
+# subject's own release would then free it again. That double free
+# traps under libmalloc and corrupts the arena under glibc. The loop
+# also pins the fix against leaks via `koja_rt_live_blocks`.
+
+struct Rt
+  @extern "C"
+  fn koja_rt_live_blocks -> Int64
+end
+
+struct Committed
+  tag: String
+  waiting: List<Int>
+end
+
+fn admit(state: Result<Committed, String>, caller: Int) -> Committed
+  match state
+    Result.Ok(committed) ->
+      committed.waiting = committed.waiting.append(caller)
+      committed
+
+    Result.Err(_) ->
+      Committed{tag: "fresh", waiting: []}
+  end
+end
+
+# The mutation sits behind a branch, so the arm has a path that never
+# assigns through the bind. Both paths must stay sound. The mutating
+# path detaches, and the read-only path must not double-release the
+# subject's storage.
+fn tally(state: Result<Committed, String>, caller: Int) -> Int
+  match state
+    Result.Ok(committed) ->
+      if caller > 49
+        committed.waiting = committed.waiting.append(caller)
+      end
+
+      committed.waiting.length()
+
+    Result.Err(_) ->
+      0
+  end
+end
+
+fn run(n: Int) -> Int
+  state: Result<Committed, String> = Result.Ok(Committed{
+    tag: "live",
+    waiting: [1, 2],
+  })
+  admitted = admit(state, n)
+  admitted.waiting.length() + tally(state, n)
+end
+
+_ = run(0)
+start = Rt.koja_rt_live_blocks()
+
+i = 0
+total = 0
+
+loop
+  total += run(i)
+  i += 1
+
+  if i >= 100
+    break
+  end
+end
+
+finish = Rt.koja_rt_live_blocks()
+
+cond
+  finish != start ->
+    "match bind mutate reclaim: LEAK".print()
+    (finish - start).print()
+
+  total != 550 ->
+    "match bind mutate reclaim: BAD TOTAL".print()
+    total.print()
+
+  else ->
+    "match bind mutate reclaim: ok".print()
+end

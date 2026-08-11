@@ -45,6 +45,7 @@
 mod arms;
 mod binary_literal;
 mod binary_match;
+mod bind_detach;
 mod body;
 mod calls;
 mod closures;
