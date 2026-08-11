@@ -24,20 +24,6 @@ automatically since iteration is bounds-checked). With lazy iteration,
 
 ---
 
-## Formatter relocates trailing comments
-
-`koja format` reattaches a trailing comment on an enum variant, match or
-receive arm, or declaration header to the following item instead of keeping it
-on its line. `Shutdown # SIGTERM` becomes `Shutdown` with `# SIGTERM` on its
-own line above the next variant, inverting the comment's meaning. A
-single-statement arm whose body ends in a comment is collapsed onto the arm
-line and the comment is pushed below the enclosing block. Trailing comments on
-plain statements are unaffected. Until the printer anchors comments to the
-node they follow, formatting any source that uses these positions is lossy.
-This also blocks running documentation snippets through the formatter.
-
----
-
 ## No wrapping-arithmetic escape hatch
 
 Integer arithmetic always traps on overflow (2026-07). There are no
@@ -85,22 +71,6 @@ notation at runtime, so the gap is literal syntax only.
 **Fix path:** lexer support for an optional exponent suffix on float
 literals, plus the same round-to-infinity `OutOfRange` check float
 literals already get.
-
----
-
-## `koja format` comment edge cases
-
-Two known comment-placement gaps remain in the formatter (found
-2026-07-12 during the comment-relocation fix; both are fiddly and low
-value):
-
-- A trailing comment on a declaration header line
-  (`fn foo(x: Int) # note`) is claimed by the first body statement's
-  leading drain and moves into the body. Signatures can wrap across
-  lines, so the header's true end line isn't tracked.
-- A leading comment above a field inside a multi-line enum struct
-  variant leaks to before the next variant (`enum_variant_to_doc`
-  doesn't drain per inner field).
 
 ---
 
@@ -504,80 +474,3 @@ blocks. Clone glue then takes an `rc++` on the box instead of
 unboxing, and drop glue releases contents only when the count
 reaches zero. Path-copied structures share unchanged subtrees and
 persistent updates return to O(log n).
-
----
-
-## Bug triage log
-
-Audited 2026-05-03 · re-triaged 2026-05-27 (seven fixed entries
-removed: `Debug.format` tuple payloads, nested type-aliased unions,
-bare closure expression statements, closures capturing `self`,
-specialized self-nested impls, keyword-as-identifier silent drop, and
-`<>` concat into a returned struct field corrupting under LLVM) ·
-re-triaged 2026-06-07: the `List.append` / `Map.put` "borrow signature
-but takes ownership" double-free was removed — the value-semantics + RC
-migration dissolved it. `move` is gone, and a container now shares the
-caller's reference-counted payload rather than aliasing a slot the
-fn-exit drop frees, so there is no second free (the `text = "hello" <>
-" world"; [text]` repro runs correctly on both backends) ·
-re-triaged 2026-06-09: the "`match` arm binding a local inside a
-closure body" seal ICE was fixed — `CaptureWalker` in
-`lower/closures.rs` never registered pattern-introduced bindings
-(match/receive arms, `for` loop patterns) or assignments nested in
-`if`/`match` blocks as closure-own locals, so they were misclassified
-as captures of the enclosing function. The walker now tracks
-assignment targets as encountered and pushes a scope frame per arm /
-loop pattern (regression coverage: `lower_closures.rs`,
-`tests/lang/functions/closure_pattern_locals.kojs`) ·
-re-triaged 2026-08-10: the "double free when a `ReplyTo` moves into a
-field inside a value-producing `match`" entry was fixed, with a
-corrected diagnosis. `ReplyTo` was never the freed value (two ints,
-no drop glue). The arm's payload bind borrows the subject's storage,
-and a field assignment through the bind
-(`committed.waiting = committed.waiting.append(caller)`) dropped the
-stale field, freeing a list buffer the subject still owned. The
-subject's own release then freed it again. The double free traps
-under libmalloc and corrupts the arena under glibc, where `malloc`
-can then spin at 100% CPU. IR lowering now detaches any pattern bind
-the arm body assigns through. A clone at arm entry, after the guard,
-makes the slot an independent owner on every path, and the normal
-slot-drop machinery releases it (`lower/bind_detach.rs`, regression
-coverage: `lower_field_assignment.rs`,
-`tests/lang/memory/match_bind_mutate_reclaim.kojs`).
-
-# Audit: AST / grammar / LANGUAGE.md / ROADMAP.md / IR / codegen drift
-
-**CLOSED 2026-06-09.** The full inventory of discrepancies between
-`koja-ast`, `koja-parser`, `grammar.ebnf`, `LANGUAGE.md`,
-`design/ROADMAP.md`, and downstream `koja-ir` is resolved. Surface,
-grammar, and docs are 1-1 with what actually compiles. Resolution
-summary:
-
-- **B1 (`AssignTarget::Pattern`):** the `AssignTarget` enum was
-  deleted — `Statement::Assignment.target` is now a bare `LValue`, the
-  dead `try_expr_to_pattern` parser branch is gone (it was unreachable:
-  `try_expr_to_lvalue` converts every `Ident` first), and grammar.ebnf
-  dropped the `pattern , "=" , expr` alternative. The LANGUAGE.md
-  Planned Features section was removed entirely — the doc describes
-  only what the language actually does.
-- **B2 (`ClosureParam::Destructured`):** deleted end to end — AST
-  variant, block-closure parser arm (now a diagnostic with a hint),
-  grammar alternatives in both `closure_param` and
-  `closure_param_short`, and all downstream match arms (typecheck
-  feature-gap diagnostic, IR lower panic, fmt, debug-print).
-  Anonymous tuples now exist, but closure parameters remain name-only.
-  Destructure a tuple in the closure body when needed.
-- **Category C (grammar.ebnf vs parser):** C1 (`cond` mandatory `else`)
-  and C4 (multiline-string patterns, now parsed with expression-equal
-  dedent semantics plus an interpolation diagnostic) are fixed. C3 was
-  resolved the other way: the grammar now documents that constant names
-  accept `IDENT | TYPE_IDENT`, since SCREAMING_CASE constants
-  (`MAX_SIZE`) lex as `TYPE_IDENT` and the codebase relies on it.
-- **Category D (LANGUAGE.md drift):** D1/D2 (Process protocol +
-  copy-pasteable Counter example), D4 (`receive ... after`), D5
-  (`send_after` + `self_ref` on `Ref`), D7 (Debug derive: generics get
-  full bodies now; opaque field types render `"..."`), and D8 (struct
-  destructuring, later removed with the Planned Features section) are
-  reconciled.
-- **Category F:** F1 resolved with a grammar comment (single-line and
-  multiline annotation strings collapse into one AST payload).

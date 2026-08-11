@@ -6,6 +6,7 @@
 
 use crate::doc::*;
 use koja_ast::ast::*;
+use koja_ast::labels::pattern_span;
 
 use super::Printer;
 use super::util::*;
@@ -169,6 +170,7 @@ impl<'a> Printer<'a> {
                         || pattern_is_multiline(&a.pattern)
                         || arm_body_overflows(pattern_rendered_len(&a.pattern), &a.body)
                 });
+                let header = concat(vec![text("match "), self.expr_to_doc(subject)]);
                 let rendered: Vec<Doc> = arms
                     .iter()
                     .enumerate()
@@ -176,10 +178,11 @@ impl<'a> Printer<'a> {
                         let body_end = arms
                             .get(i + 1)
                             .map_or(expr.span.end.line, |next| next.span.start.line);
-                        self.match_arm_to_doc(arm, any_multiline, body_end)
+                        self.with_leading_comments(arm.span.start.line, |p| {
+                            p.match_arm_to_doc(arm, any_multiline, body_end)
+                        })
                     })
                     .collect();
-                let header = concat(vec![text("match "), self.expr_to_doc(subject)]);
                 arms_block(header, rendered, any_multiline, vec![])
             }
 
@@ -200,7 +203,9 @@ impl<'a> Printer<'a> {
                         let body_end = arms
                             .get(i + 1)
                             .map_or(expr.span.end.line, |next| next.span.start.line);
-                        self.cond_arm_to_doc(arm, any_multiline, body_end)
+                        self.with_leading_comments(arm.span.start.line, |p| {
+                            p.cond_arm_to_doc(arm, any_multiline, body_end)
+                        })
                     })
                     .collect();
                 if let Some(body) = else_body {
@@ -226,7 +231,9 @@ impl<'a> Printer<'a> {
                         let body_end = arms
                             .get(i + 1)
                             .map_or(expr.span.end.line, |next| next.span.start.line);
-                        self.match_arm_to_doc(arm, any_multiline, body_end)
+                        self.with_leading_comments(arm.span.start.line, |p| {
+                            p.match_arm_to_doc(arm, any_multiline, body_end)
+                        })
                     })
                     .collect();
                 let mut suffix = Vec::new();
@@ -622,13 +629,23 @@ impl<'a> Printer<'a> {
         force_break: bool,
         block_end: u32,
     ) -> Doc {
+        let head_line = arm
+            .guard
+            .as_ref()
+            .map_or(pattern_span(&arm.pattern).end.line, |g| g.span.end.line);
         let mut head = vec![pattern_to_doc(&arm.pattern)];
         if let Some(guard) = &arm.guard {
             head.push(text(" when "));
             head.push(self.expr_to_doc(guard));
         }
         head.push(text(" ->"));
-        self.arm_body_to_doc(concat(head), &arm.body, force_break, block_end)
+        self.arm_body_to_doc(
+            concat(head),
+            Some(head_line),
+            &arm.body,
+            force_break,
+            block_end,
+        )
     }
 
     /// Formats a `cond` arm: `condition -> body`.
@@ -638,8 +655,9 @@ impl<'a> Printer<'a> {
         force_break: bool,
         block_end: u32,
     ) -> Doc {
+        let head_line = arm.condition.span.end.line;
         let head = concat(vec![self.expr_to_doc(&arm.condition), text(" ->")]);
-        self.arm_body_to_doc(head, &arm.body, force_break, block_end)
+        self.arm_body_to_doc(head, Some(head_line), &arm.body, force_break, block_end)
     }
 
     /// Formats an `else ->` arm in a `cond` expression.
@@ -650,7 +668,7 @@ impl<'a> Printer<'a> {
         block_end: u32,
     ) -> Doc {
         let head = text("else ->");
-        self.arm_body_to_doc(head, body, force_break, block_end)
+        self.arm_body_to_doc(head, None, body, force_break, block_end)
     }
 
     /// Shared formatting for all arm types (match, cond).
@@ -658,27 +676,51 @@ impl<'a> Printer<'a> {
     /// When `force_break` is true (because at least one sibling arm is
     /// multi-line), every arm body is indented on a new line for visual
     /// consistency. Otherwise single-statement arms may stay inline.
+    ///
+    /// `head_line` anchors a trailing comment on the arm-head line
+    /// (`Pattern -> # note`). A commented head forces the body onto its
+    /// own line so the comment cannot swallow it.
     fn arm_body_to_doc(
         &mut self,
         head: Doc,
+        head_line: Option<u32>,
         body: &[Statement],
         force_break: bool,
         block_end: u32,
     ) -> Doc {
+        // When the body starts on the head line, the per-statement
+        // trailing drain below owns that line's comments.
+        let head_trailing = head_line
+            .filter(|line| body.first().map(stmt_start_line) != Some(*line))
+            .and_then(|line| self.comments.drain_trailing(line));
+
         if body.len() == 1 && !force_break {
-            group(concat(vec![
-                head,
-                indent(2, concat(vec![line(), self.statement_to_doc(&body[0])])),
-            ]))
-        } else {
-            concat(vec![
-                head,
-                indent(
-                    2,
-                    concat(vec![hardline(), self.statements_to_doc(body, block_end)]),
-                ),
-            ])
+            let mut stmt_doc = self.statement_to_doc(&body[0]);
+            if let Some(tc) = self.comments.drain_trailing(stmt_end_line(&body[0])) {
+                stmt_doc = concat(vec![stmt_doc, tc]);
+            }
+            return match head_trailing {
+                Some(tc) => concat(vec![
+                    head,
+                    tc,
+                    indent(2, concat(vec![hardline(), stmt_doc])),
+                ]),
+                None => group(concat(vec![
+                    head,
+                    indent(2, concat(vec![line(), stmt_doc])),
+                ])),
+            };
         }
+
+        let mut parts = vec![head];
+        if let Some(tc) = head_trailing {
+            parts.push(tc);
+        }
+        parts.push(indent(
+            2,
+            concat(vec![hardline(), self.statements_to_doc(body, block_end)]),
+        ));
+        concat(parts)
     }
 
     /// Formats a method chain of 2+ calls.

@@ -7,6 +7,7 @@
 
 use crate::doc::*;
 use koja_ast::ast::*;
+use koja_ast::labels::type_expr_span;
 use koja_ast::span::Span;
 
 /// Formats a `TypeParam` as a string, including bounds if present.
@@ -873,6 +874,33 @@ pub(super) fn stmt_end_line(stmt: &Statement) -> u32 {
         | Statement::Destructure { span, .. }
         | Statement::Return { span, .. }
         | Statement::Break { span, .. } => span.end.line,
+    }
+}
+
+/// Last source line of a function signature: the header's own line, or
+/// the end of the last parameter / return type / error type when the
+/// signature wraps. A wrapped signature whose bare `)` closes the
+/// parameter list on its own line is attributed to the last parameter,
+/// so a comment on that `)` line still reads as a body comment.
+pub(super) fn signature_end_line(
+    header_start: u32,
+    params: &[Param],
+    return_type: Option<&TypeExpr>,
+    error_type: Option<&TypeExpr>,
+) -> u32 {
+    let mut line = header_start;
+    for param in params {
+        line = line.max(param_span(param).end.line);
+    }
+    for type_expr in [return_type, error_type].into_iter().flatten() {
+        line = line.max(type_expr_span(type_expr).end.line);
+    }
+    line
+}
+
+fn param_span(param: &Param) -> &Span {
+    match param {
+        Param::Regular { span, .. } | Param::Self_ { span, .. } => span,
     }
 }
 

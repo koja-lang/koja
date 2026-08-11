@@ -14,6 +14,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - Assigning to a field of a `match` pattern binding no longer corrupts memory and crashes at runtime.
+- `koja format` now keeps trailing comments on enum variants, match/receive/cond arms, and function signatures instead of moving them to the next item.
+- `koja format` no longer moves a comment above a field inside an enum struct variant to before the next variant.
 - `koja test` now reports parse errors in test files instead of printing `no tests found`.
 
 ## [0.17.0] - 2026-08-09

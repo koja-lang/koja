@@ -1027,6 +1027,174 @@ mod tests {
     }
 
     #[test]
+    fn enum_variant_trailing_comment_stays_on_variant() {
+        assert_unchanged(
+            "
+            enum Signal
+              Reload # SIGHUP
+              Shutdown # SIGTERM
+            end
+        ",
+        );
+    }
+
+    #[test]
+    fn enum_struct_variant_field_comments_stay_on_fields() {
+        assert_unchanged(
+            "
+            enum Shape
+              Circle {
+                # Distance from center to edge.
+                radius: Int,
+              }
+              Rect {
+                width: Int, # px
+                height: Int,
+              }
+            end
+        ",
+        );
+    }
+
+    #[test]
+    fn match_arm_trailing_comment_stays_on_arm() {
+        assert_unchanged(
+            "
+            fn f(x: Int) -> Int
+              match x
+                1 -> 10 # one
+                _ -> 0
+              end
+            end
+        ",
+        );
+    }
+
+    #[test]
+    fn leading_comment_between_match_arms_stays_above_arm() {
+        assert_unchanged(
+            "
+            fn f(x: Int) -> Int
+              match x
+                1 -> 10
+                # everything else
+                _ -> 0
+              end
+            end
+        ",
+        );
+    }
+
+    #[test]
+    fn cond_arm_trailing_comment_stays_on_arm() {
+        assert_unchanged(
+            "
+            fn f(x: Int) -> Int
+              cond
+                x > 10 -> 1 # big
+                else -> 0
+              end
+            end
+        ",
+        );
+    }
+
+    #[test]
+    fn receive_arm_trailing_comment_stays_on_arm() {
+        assert_unchanged(
+            "
+            fn f -> Int
+              receive
+                n: Int -> n # next job
+              end
+            end
+        ",
+        );
+    }
+
+    #[test]
+    fn arm_head_trailing_comment_forces_broken_body() {
+        assert_unchanged(
+            "
+            fn f(x: Int) -> Int
+              match x
+                1 -> # one
+                  10
+                _ -> 0
+              end
+            end
+        ",
+        );
+    }
+
+    #[test]
+    fn collapsed_arm_keeps_body_trailing_comment() {
+        assert_fmt(
+            "
+            fn f(x: Int) -> Int
+              match x
+                1 ->
+                  10 # one
+                _ -> 0
+              end
+            end
+        ",
+            "
+            fn f(x: Int) -> Int
+              match x
+                1 -> 10 # one
+                _ -> 0
+              end
+            end
+        ",
+        );
+    }
+
+    #[test]
+    fn fn_header_trailing_comment_stays_on_signature() {
+        assert_unchanged(
+            "
+            fn f(x: Int) -> Int # doubles x
+              x * 2
+            end
+        ",
+        );
+    }
+
+    #[test]
+    fn wrapped_header_trailing_comment_stays_on_signature() {
+        assert_fmt(
+            "
+            fn f(
+              x: Int,
+            ) -> Int # note
+              x
+            end
+        ",
+            "
+            fn f(x: Int) -> Int # note
+              x
+            end
+        ",
+        );
+    }
+
+    #[test]
+    fn protocol_method_header_trailing_comment_stays_on_signature() {
+        assert_unchanged(
+            "
+            protocol Marked
+              fn mark(self) -> Int # the mark value
+
+              fn unmark(self) -> Int # resets
+                0
+              end
+            end
+        ",
+        );
+    }
+
+    #[test]
     fn method_chain_short_stays_inline() {
         assert_fmt(
             r#"

@@ -321,6 +321,24 @@ impl<'a> Printer<'a> {
         concat(parts)
     }
 
+    /// Drains comments sitting above `line` and prepends them to the doc
+    /// `build` produces, keeping leading comments anchored to their node.
+    /// The drain must happen before `build` runs so the forward-only
+    /// cursor stays in source order.
+    pub(super) fn with_leading_comments(
+        &mut self,
+        line: u32,
+        build: impl FnOnce(&mut Self) -> Doc,
+    ) -> Doc {
+        let (cdocs, _) = self.comments.drain_before(line);
+        let doc = build(self);
+        if cdocs.is_empty() {
+            doc
+        } else {
+            concat(cdocs.into_iter().chain([doc]).collect())
+        }
+    }
+
     /// Appends nested type declarations to a type body.
     fn push_nested_to_body(&mut self, body: &mut Vec<Doc>, nested: &[Item], have_members: bool) {
         for (i, item) in nested.iter().enumerate() {
@@ -339,8 +357,19 @@ impl<'a> Printer<'a> {
         }
     }
 
-    /// Formats a single struct field with optional default value.
+    /// Formats a single struct field, attaching a trailing comment.
     fn struct_field_to_doc(&mut self, field: &StructField) -> Doc {
+        let mut d = self.struct_field_bare_to_doc(field);
+        if let Some(tc) = self.comments.drain_trailing(field.span.end.line) {
+            d = concat(vec![d, tc]);
+        }
+        d
+    }
+
+    /// The field itself (`name: Type [= default]`), no comment handling.
+    /// Split out for enum struct variants, whose joining comma must land
+    /// between the field and its trailing comment.
+    fn struct_field_bare_to_doc(&mut self, field: &StructField) -> Doc {
         let mut d = concat(vec![
             text(&field.name),
             text(": "),
@@ -348,9 +377,6 @@ impl<'a> Printer<'a> {
         ]);
         if let Some(default) = &field.default {
             d = concat(vec![d, text(" = "), self.expr_to_doc(default)]);
-        }
-        if let Some(tc) = self.comments.drain_trailing(field.span.end.line) {
-            d = concat(vec![d, tc]);
         }
         d
     }
@@ -385,6 +411,9 @@ impl<'a> Printer<'a> {
                 body.push(c);
             }
             body.push(self.enum_variant_to_doc(variant));
+            if let Some(tc) = self.comments.drain_trailing(variant.span.end.line) {
+                body.push(tc);
+            }
         }
         self.push_nested_to_body(&mut body, &e.nested, !e.variants.is_empty());
         for (i, func) in e.functions.iter().enumerate() {
@@ -415,19 +444,23 @@ impl<'a> Printer<'a> {
                 ])
             }
             EnumVariantData::Struct(fields) => {
-                let field_docs: Vec<Doc> =
-                    fields.iter().map(|f| self.struct_field_to_doc(f)).collect();
+                let mut body = Vec::new();
+                for field in fields {
+                    body.push(hardline());
+                    let (cdocs, _) = self.comments.drain_before(field.span.start.line);
+                    for c in cdocs {
+                        body.push(c);
+                    }
+                    body.push(self.struct_field_bare_to_doc(field));
+                    body.push(text(","));
+                    if let Some(tc) = self.comments.drain_trailing(field.span.end.line) {
+                        body.push(tc);
+                    }
+                }
                 concat(vec![
                     text(&variant.name),
                     text(" {"),
-                    indent(
-                        2,
-                        concat(vec![
-                            hardline(),
-                            intersperse(field_docs, concat(vec![text(","), hardline()])),
-                            text(","),
-                        ]),
-                    ),
+                    indent(2, concat(body)),
                     hardline(),
                     text("}"),
                 ])
@@ -455,6 +488,15 @@ impl<'a> Printer<'a> {
         let sig = self.function_sig_to_doc(f);
         let sig_multiline = signature_wraps(&sig, indent_cols);
         parts.push(sig);
+        let sig_end = signature_end_line(
+            f.span.start.line,
+            &f.params,
+            f.return_type.as_ref(),
+            f.error_type.as_ref(),
+        );
+        if let Some(tc) = self.comments.drain_trailing(sig_end) {
+            parts.push(tc);
+        }
 
         if sig_multiline && f.body.is_some() {
             parts.push(hardline());
@@ -597,6 +639,16 @@ impl<'a> Printer<'a> {
         if let Some(ret) = return_doc {
             parts.push(text(" "));
             parts.push(ret);
+        }
+
+        let sig_end = signature_end_line(
+            m.span.start.line,
+            &m.params,
+            m.return_type.as_ref(),
+            m.error_type.as_ref(),
+        );
+        if let Some(tc) = self.comments.drain_trailing(sig_end) {
+            parts.push(tc);
         }
 
         if let Some(body) = &m.body {
