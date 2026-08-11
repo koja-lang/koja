@@ -80,6 +80,10 @@ mod tests {
         assert_fmt(source, source);
     }
 
+    fn assert_unchanged_script(source: &str) {
+        assert_fmt_script(source, source);
+    }
+
     fn assert_formatted(actual: String, expected: &str) {
         let mut expected = dedent(expected);
         if !expected.ends_with('\n') {
@@ -265,6 +269,49 @@ mod tests {
               end
         ",
         );
+    }
+
+    #[test]
+    fn closure_body_trailing_comment_forces_broken_layout() {
+        assert_fmt_script(
+            "
+            add = fn (a: Int32) -> Int32
+              a # body comment
+            end
+        ",
+            "
+            add =
+              fn (a: Int32) -> Int32
+                a # body comment
+              end
+        ",
+        );
+        assert_unchanged_script(
+            "
+            add =
+              fn (a: Int32) -> Int32
+                a # body comment
+              end
+        ",
+        );
+    }
+
+    #[test]
+    fn closure_body_leading_comment_forces_broken_layout() {
+        assert_unchanged_script(
+            "
+            g =
+              fn (x: Int32) -> Int32
+                # double it
+                x * 2
+              end
+        ",
+        );
+    }
+
+    #[test]
+    fn closure_end_line_comment_stays_inline() {
+        assert_unchanged_script("f = fn () -> Int 42 end # note");
     }
 
     #[test]
@@ -1177,6 +1224,42 @@ mod tests {
                   false
               end
             end
+        ",
+        );
+    }
+
+    #[test]
+    fn wrapped_cond_arm_head_is_stable() {
+        assert_unchanged_script(
+            "
+            v =
+              cond
+                no ->
+                  \"first\"
+
+                yes and yes and yes and yes and yes and yes and yes and yes and yes and yes
+                  and yes and yes ->
+                  \"wrapped\"
+
+                else ->
+                  \"other\"
+              end
+        ",
+        );
+    }
+
+    #[test]
+    fn wrapped_match_guard_is_stable() {
+        assert_unchanged_script(
+            "
+            r =
+              match n
+                0 -> \"zero\"
+                x when x > 0 and x < 100 and x != 13 and x != 42 and x != 99 and x != 7
+                  and x != 3 ->
+                  \"ok\"
+                _ -> \"other\"
+              end
         ",
         );
     }

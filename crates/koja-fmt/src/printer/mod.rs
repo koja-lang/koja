@@ -777,8 +777,10 @@ impl<'a> Printer<'a> {
                 } else {
                     target_doc
                 };
+                // Decided before `expr_to_doc` drains the closure's comments.
+                let inline_closure = self.closure_renders_inline(value);
                 let value_doc = self.expr_to_doc(value);
-                if is_inline_closure(value) {
+                if inline_closure {
                     // Stay inline when the closure fits, breaking after `=`
                     // (soft line) only when it overflows the line width.
                     group(concat(vec![

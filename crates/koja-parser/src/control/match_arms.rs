@@ -18,7 +18,7 @@
 use koja_ast::ast::{CondArm, Expr, ExprKind, MatchArm, Statement};
 use koja_ast::token::TokenKind;
 
-use crate::expr::BP_TERNARY;
+use crate::expr::{BP_TERNARY, is_leading_continuation};
 use crate::parser::Parser;
 
 impl Parser {
@@ -96,18 +96,34 @@ impl Parser {
         stmts
     }
 
-    /// Returns whether the current line contains an arm arrow before
-    /// a token that can only belong to a statement.
+    /// Returns whether the current logical line contains an arm arrow
+    /// before a token that can only belong to a statement. Follows line
+    /// continuations so a wrapped arm head (`a and b\n  and c ->`) is
+    /// still recognized. A `rescue` arrow belongs to the rescue handler,
+    /// never to an arm.
     fn looks_like_new_arm(&self) -> bool {
         let mut i = self.pos;
         let mut depth = 0u32;
         while i < self.tokens.len() {
             match &self.tokens[i].kind {
                 TokenKind::Arrow if depth == 0 => return true,
-                TokenKind::Eq | TokenKind::Fn if depth == 0 => return false,
-                TokenKind::Newline | TokenKind::End | TokenKind::EndOfFile if depth == 0 => {
-                    return false;
+                TokenKind::Eq | TokenKind::Fn | TokenKind::Rescue if depth == 0 => return false,
+                TokenKind::Newline if depth == 0 => {
+                    let mut next = i + 1;
+                    while next < self.tokens.len()
+                        && matches!(self.tokens[next].kind, TokenKind::Newline)
+                    {
+                        next += 1;
+                    }
+                    if next >= self.tokens.len()
+                        || !is_leading_continuation(&self.tokens[next].kind)
+                    {
+                        return false;
+                    }
+                    i = next;
+                    continue;
                 }
+                TokenKind::End | TokenKind::EndOfFile if depth == 0 => return false,
                 TokenKind::LParen | TokenKind::LBrace | TokenKind::LBracket => {
                     depth += 1;
                 }

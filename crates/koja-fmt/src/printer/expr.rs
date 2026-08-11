@@ -287,8 +287,11 @@ impl<'a> Printer<'a> {
                     sig_parts.push(type_expr_to_doc(rt));
                 }
                 let sig = concat(sig_parts);
-                if body.len() == 1 {
-                    let body_doc = self.statements_to_doc(body, expr.span.end.line);
+                if self.closure_renders_inline(expr) {
+                    // No interior comments (the gate guarantees it), so skip
+                    // the draining of statements_to_doc. An end-line trailing
+                    // comment stays pending and glues after `end`.
+                    let body_doc = self.statement_to_doc(&body[0]);
                     group(concat(vec![
                         sig,
                         indent(2, concat(vec![line(), body_doc])),
@@ -620,6 +623,13 @@ impl<'a> Printer<'a> {
         }
         doc_parts.push(text("}"));
         concat(doc_parts)
+    }
+
+    /// Whether a closure takes the collapsed single-line layout. A comment
+    /// inside the closure span rules it out (inlined, the comment would
+    /// swallow `end`).
+    pub(super) fn closure_renders_inline(&self, expr: &Expr) -> bool {
+        is_inline_closure(expr) && self.comments.peek_before(expr.span.end.line).is_none()
     }
 
     /// Formats a `match` arm: `pattern [when guard] -> body`.
