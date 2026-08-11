@@ -23,7 +23,7 @@ use koja_ir::{IRInstruction, IRType};
 
 mod common;
 
-use common::{all_instructions, lower_script_source};
+use common::{all_instructions, lower_script_source, script_function};
 
 #[test]
 fn single_segment_assignment_emits_local_write_only() {
@@ -213,6 +213,64 @@ fn composite_leaf_overwrite_acquires_rhs_and_drops_stale_value() {
     assert!(
         stale_drop,
         "expected a drop-glue call releasing the overwritten list, got {instructions:?}",
+    );
+}
+
+#[test]
+fn mutated_pattern_bind_is_detached_and_released() {
+    // `committed` borrows the subject's payload storage. The arm's
+    // field assignment must first detach it (clone the struct into
+    // the slot), or the stale-leaf drop frees a list the subject
+    // still owns and the subject's release double-frees it. Once
+    // detached, the slot owns its value and must rejoin the drop set.
+    let source = "
+        struct Committed
+          waiting: List<Int>
+        end
+
+        fn admit(state: Option<Committed>, caller: Int) -> Int
+          match state
+            Option.Some(committed) ->
+              committed.waiting = committed.waiting.append(caller)
+              committed.waiting.length()
+            Option.None -> 0
+          end
+        end
+
+        admit(Option.Some(Committed{waiting: [1]}), 2)
+        ";
+
+    let script = lower_script_source(source);
+    let function = script_function(&script, "admit");
+    let instructions: Vec<_> = all_instructions(&function.blocks).collect();
+
+    // Elaborate rewrites the composite Clone / DropLocal markers into
+    // glue calls, so match those.
+    let detach_clones = instructions
+        .iter()
+        .filter(|inst| {
+            matches!(
+                inst,
+                IRInstruction::Call { callee, .. }
+                    if callee.mangled() == "TestApp.Committed.$clone$",
+            )
+        })
+        .count();
+    assert_eq!(
+        detach_clones, 1,
+        "expected exactly one Committed clone (the arm-entry detach), got {instructions:?}",
+    );
+    let slot_release = instructions.iter().any(|inst| {
+        matches!(
+            inst,
+            IRInstruction::Call { callee, .. }
+                if callee.mangled() == "TestApp.Committed.$drop$",
+        )
+    });
+    assert!(
+        slot_release,
+        "expected the detached bind slot to rejoin the drop set \
+         (a Committed drop-glue call), got {instructions:?}",
     );
 }
 

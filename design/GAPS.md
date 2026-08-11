@@ -221,6 +221,50 @@ satisfies bounds by shape.
 
 ---
 
+## Protocol conformances stop at the package boundary
+
+Found 2026-08-09 while designing an `Encodable` protocol for the
+`messagepack` package. Two restrictions in `register_impl`
+(`koja-typecheck/src/pipeline/collect.rs`) block the serde pattern,
+where a codec package defines a protocol, implements it for the
+stdlib vocabulary types, and applications implement it for their own
+types:
+
+- `impl P for T` requires `T` to live in the impl's package. A local
+  protocol cannot be implemented for `String`, `Int`, or any other
+  foreign type. The inverse direction (foreign protocol, local type)
+  already works and carries every `Process` conformance.
+- Generic impl targets are rejected outright, even with concrete
+  arguments (`impl Encodable for List<Value>`).
+
+`extend` accepts cross-package targets but grants methods, not
+conformance facts, so bounds like `T: Encodable` never see them.
+Without the stdlib impls the protocol is useless, so every
+codec-shaped package (`MessagePack.Encodable`, a future
+`JSON.Encodable`, an ORM's `Row`) is blocked on the same wall. The
+collection-`eq` hole in the builtin-derives entry above waits on the
+same missing spelling.
+
+**Fix path,** in three steps of increasing size:
+
+1. Relax the orphan rule to Rust's: an impl is legal when the
+   protocol or the target is local. Coherence survives, since only
+   two packages can ever write a given `(protocol, type)` impl, and
+   the whole-program conformance table detects that collision at
+   typecheck time.
+2. Accept concrete generic impl targets, keying conformance facts by
+   instantiation.
+3. Conditional conformance (`impl Encodable for List<T>` requiring
+   `T: Encodable`), discharged per instantiation during
+   monomorphization like existing function bounds.
+
+Step 1 needs a policy for dot-call ambiguity when two packages add
+same-named protocol methods to one foreign type. Resolving through
+the bound only (no bare dot-call on foreign conformances) is the
+conservative default.
+
+---
+
 ## Aggregate arguments ride LLVM's unstable first-class ABI
 
 Found 2026-08-04 when the yield-check register intrinsics made union
@@ -259,6 +303,227 @@ hazard for other types remain until the general lowering lands.
 
 ---
 
+## `Fd` lacks random access, durability, and locking
+
+Found 2026-08-09 while building embedded storage. `Fd` reads only move
+forward: there is no `seek` or positioned read, no `stat` or file size,
+and no `truncate`. Any page-oriented file format (an on-disk B-tree, an
+archive reader, a large-file parser) must instead load the whole file
+with `File.read_binary`, which caps the dataset at available memory.
+Two adjacent holes make the durability story worse:
+
+- **No `sync()`.** A store that commits cannot flush the OS page cache
+  without an FFI `fsync`. The stdlib should own this one because the
+  obvious FFI call is wrong on macOS, where `fsync(2)` does not reach
+  stable storage and the real flush is the `F_FULLFSYNC` fcntl. Every
+  independent wrapper will miss that.
+- **No advisory locks.** A store cannot enforce single-process
+  ownership of its file. Two processes opening the same database
+  corrupt it silently, and `flock` is unreachable without FFI.
+
+**Fix path:** one "Fd random access and durability" pass. Runtime
+shims for `pread`/`lseek`, `fstat`, `ftruncate`, `fsync` (with the
+Darwin fcntl behind it), and `flock`, surfaced as `Fd.read_at`,
+`Fd.size`, `Fd.truncate`, `Fd.sync`, and `Fd.lock`/`try_lock`.
+
+---
+
+## No ordered map, and `Map` cannot be iterated
+
+`Map` exposes `get`, `put`, `remove`, `has?`, `length`, and `empty?`.
+There is no `keys`, `entries`, or fold, so a value stored in a `Map`
+can never be enumerated (the iteration half is the `Enumeration<T>`
+gap above wearing a different hat). And nothing in the stdlib keeps
+keys sorted, so ordered workloads (range scans, expiry queues,
+schedulers, routing tables) each hand-roll a persistent balanced tree.
+Writing one in user code works, the AA tree is about 200 lines, but
+every package that needs ordering will duplicate it.
+
+**Fix path:** give `Map` an iteration surface once the iterator
+protocol lands, and incubate a `SortedMap` (persistent balanced tree,
+`Comparable` keys, range selection) as a package with an eye toward
+stdlib promotion after a second consumer appears.
+
+---
+
+## `Binary` has no ordering and no endian helpers
+
+`Binary` derives `eq` and `hash` but no comparison, so bytewise key
+ordering is a manual `at`-loop in user code. The same codecs that need
+ordering also re-roll big-endian integer packing: an append-N-bytes
+helper and an accumulate-N-bytes reader now exist in at least two
+packages, character for character. The float side of the same story is
+the pure-arithmetic IEEE 754 decomposition workaround: without
+`Float.to_bits`/`Float.from_bits` intrinsics, any binary format that
+carries floats ships a hand-written bit-extraction module.
+
+**Fix path:** `compare` on `Binary` (and a `Comparable` conformance
+when the protocol exists), `Int.to_be_bytes(width)` with a matching
+`Binary.read_be(offset, width)`, and `Float.to_bits`/`from_bits`
+intrinsics. All are small, self-contained stdlib additions.
+
+---
+
+## No non-cryptographic checksum
+
+`Crypto` covers SHA256 and HMAC, but storage and wire formats want a
+cheap integrity check (CRC32, CRC32C, xxHash) for frame validation.
+Table-driven CRC32 is easy to write in Koja and every format
+re-implements it, byte-looped and slow compared to hardware CRC32C or
+a slice-by-8 implementation the runtime could provide. xxHash is out
+of reach entirely until wrapping arithmetic lands (see the
+wrapping-arithmetic gap above).
+
+**Fix path:** a `Checksum` module (or a `Crypto` sibling) with CRC32
+and CRC32C backed by runtime intrinsics. Revisit xxHash once wrapping
+multiplication exists.
+
+---
+
+## `call` to a dead process waits out the full timeout
+
+Found 2026-08-10 while building a request-response protocol on top of
+processes. LANGUAGE.md says `call` returns
+`Err(CallError.ProcessDown)` "if the process is dead", but the
+runtime only discovers the death when the timeout expires: killing a
+process and calling its ref with a 5000ms timeout blocks for the full
+5000ms before reporting `ProcessDown`. `alive?()` returns the right
+answer immediately, so the liveness fact exists; the call path just
+never consults it.
+
+The stall compounds across layers. A process that serves a socket and
+calls into a possibly-stopped process holds its socket open for the
+whole timeout, which blocks the remote peer's read, which stalls the
+remote peer's own message queue. One dead process can freeze healthy
+neighbors for tens of seconds of chained timeouts.
+
+**Fix path:** check liveness at send time and monitor for death
+during the wait, resolving the call with `ProcessDown` as soon as the
+callee stops. The doc contract already promises this behavior.
+
+---
+
+## Sockets have no deadlines
+
+Found 2026-08-10 while building a TCP request-response protocol.
+`TCPSocket.read_binary`, `write`, `connect`, and `TCPListener.accept`
+block with no timeout parameter and no way to bound the wait. The
+only escapes are `try_accept` (accept only) and restructuring around
+`Fd.watch`. Consequences for any wire protocol:
+
+- A peer that stalls mid-frame (or a half-open connection after a
+  crash) blocks the owning process forever. There is no way to
+  express "read, but give up after N ms".
+- `connect` to a black-holed address waits for the OS-level timeout,
+  which can be minutes.
+- Every timeout strategy degenerates to dedicating a process to the
+  blocking call and abandoning it, which leaks the process and the
+  socket.
+
+**Fix path:** deadline variants on the socket surface
+(`read_binary(count, timeout_ms)`, `connect(host, port, timeout_ms)`,
+`accept(timeout_ms)`), shimmed on `SO_RCVTIMEO`/`SO_SNDTIMEO` and a
+nonblocking connect with a poll. `Fd.watch` already proves the
+runtime can wait on readiness with a bound.
+
+---
+
+## `DateTime` has no calendar formatting or parsing
+
+Found 2026-08-10 while building a JSON API that exchanges RFC 3339
+timestamps. `DateTime` carries epoch milliseconds and arithmetic,
+but there is no way to render a calendar date ("2026-08-10T14:00:00Z")
+or parse one back. Any service with a JSON surface needs both
+directions on day one, so the civil-calendar math (days-to-date,
+leap years, month lengths, UTC offsets) gets re-implemented from
+Howard Hinnant's algorithms in user code, along with a hand-rolled
+parser and its validation table.
+
+**Fix path:** `DateTime.to_rfc3339()` and `DateTime.from_rfc3339(text)`
+in the stdlib, over an internal civil-date conversion. A general
+format-string API can wait. RFC 3339 alone covers the JSON world.
+
+---
+
+## No UUID generation
+
+Found 2026-08-10. Public APIs hand out UUIDs as resource
+identifiers, and every service re-rolls v4 generation from
+`Random.bytes(16)` plus manual hex slicing to place the version and
+variant bits. The pieces exist (`Random.bytes`, `Base.encode16`),
+but the assembly is fiddly enough to deserve one blessed
+implementation.
+
+**Fix path:** `UUID.v4() -> String` (and a `UUID.v7()` sibling for
+sortable identifiers) in the stdlib, either under `Random` or as a
+small `Global` type.
+
+---
+
+## `IPAddress` has no string rendering
+
+Found 2026-08-10 while running DNS peer discovery inside Docker.
+`Net.Socket.resolve` returns `IPAddress` values, but the type offers
+no way to render one as a dialable string: no `to_string`, and
+string interpolation falls back to the derived `Debug` format, so
+`"#{ip}:9993"` produces `IPAddress{bytes: <<192, 168, 228, 2>>}:9993`.
+Nothing can dial that, and the mistake type-checks: the code reads
+fine and fails only at runtime, off the happy path. Every consumer
+of `resolve` re-implements dotted-quad and colon-hex rendering from
+the raw bytes.
+
+**Fix path:** `IPAddress.to_string()` in the stdlib: dotted-quad for
+v4, RFC 5952 for v6. Its inverse (`IPAddress.parse(text)`) is the
+natural sibling.
+
+---
+
+## Cloning a recursive structure deep-copies the whole structure
+
+Found 2026-08-10 while chasing growing write latency in a
+database-backed service. Acquiring a struct or enum value shares its
+heap-leaf fields (`String`, `Binary`) with an `rc++`, but a composite
+constituent recurses into that constituent's own clone glue, and an
+`Indirect` box is unboxed and re-boxed rather than shared
+(`koja-ir/src/elaborate/synthesis.rs`). Cloning one node of a
+recursive type therefore copies every node beneath it.
+
+Persistent tree structures pay O(n) per update instead of O(log n).
+A path-copying tree put rebuilds its spine, and each rebuilt node's
+construction acquires the untouched sibling subtree, which
+deep-copies it. Sequential puts into the stdlib `Map` slow down
+linearly as the map grows, and the same holds for any Koja-written
+persistent tree. Measured on macOS with a 100-byte value workload:
+1ms per put at 500 entries, 15ms per put at 3000. MEMORY-MODEL.md
+promises "reference-counted and shared, copied lazily only on
+mutation", which holds for heap leaves and runtime blocks but not
+for `Indirect` boxes.
+
+**Fix path:** reference-count `Indirect` boxes like other heap
+blocks. Clone glue then takes an `rc++` on the box instead of
+unboxing, and drop glue releases contents only when the count
+reaches zero. Path-copied structures share unchanged subtrees and
+persistent updates return to O(log n).
+
+---
+
+## A parse error in the only test file reports as "no tests found"
+
+Found 2026-08-10. `koja test` discovers `@test` functions on the
+parsed AST before it reports parse diagnostics. A file that fails to
+parse contributes no items, so when the project's only test file has
+a syntax error, discovery comes up empty and the run prints
+`no tests found` and exits 0: the error is invisible. Adding a
+second, valid test file makes discovery succeed, and the same run
+then prints the real parse errors. `koja check` does not catch it
+either, because check walks only `src`, not `test`.
+
+**Fix path:** report parse diagnostics (and fail) before the empty
+`no tests found` check in `run_project_tests`, or make `koja check`
+include `test` sources.
+
+---
+
 ## Bug triage log
 
 Audited 2026-05-03 · re-triaged 2026-05-27 (seven fixed entries
@@ -280,7 +545,22 @@ closure body" seal ICE was fixed — `CaptureWalker` in
 as captures of the enclosing function. The walker now tracks
 assignment targets as encountered and pushes a scope frame per arm /
 loop pattern (regression coverage: `lower_closures.rs`,
-`tests/lang/functions/closure_pattern_locals.kojs`).
+`tests/lang/functions/closure_pattern_locals.kojs`) ·
+re-triaged 2026-08-10: the "double free when a `ReplyTo` moves into a
+field inside a value-producing `match`" entry was fixed, with a
+corrected diagnosis. `ReplyTo` was never the freed value (two ints,
+no drop glue). The arm's payload bind borrows the subject's storage,
+and a field assignment through the bind
+(`committed.waiting = committed.waiting.append(caller)`) dropped the
+stale field, freeing a list buffer the subject still owned. The
+subject's own release then freed it again. The double free traps
+under libmalloc and corrupts the arena under glibc, where `malloc`
+can then spin at 100% CPU. IR lowering now detaches any pattern bind
+the arm body assigns through. A clone at arm entry, after the guard,
+makes the slot an independent owner on every path, and the normal
+slot-drop machinery releases it (`lower/bind_detach.rs`, regression
+coverage: `lower_field_assignment.rs`,
+`tests/lang/memory/match_bind_mutate_reclaim.kojs`).
 
 # Audit: AST / grammar / LANGUAGE.md / ROADMAP.md / IR / codegen drift
 

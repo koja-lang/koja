@@ -13,6 +13,11 @@ struct Rt
   fn koja_rt_live_blocks -> Int64
 end
 
+struct Libc
+  @extern "C"
+  fn usleep(usec: UInt32) -> Int32
+end
+
 struct EchoConfig
   name: String
   tags: List<String>
@@ -65,16 +70,18 @@ end
 
 # A dead process's resources are dropped off-lock by the worker that
 # ran it, so alive?() flipping false can precede the final drops by a
-# moment. Re-read briefly before declaring a leak.
+# moment. Sleep between re-reads so a loaded machine gets real time
+# (up to 2s) to finish the drops before we declare a leak.
 finish = Rt.koja_rt_live_blocks()
 attempts = 0
 
 loop
-  if finish - start < 10 or attempts >= 100000
+  if finish - start < 10 or attempts >= 2000
     break
   end
 
   attempts += 1
+  _ = Libc.usleep(1000)
   finish = Rt.koja_rt_live_blocks()
 end
 
