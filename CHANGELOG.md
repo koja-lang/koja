@@ -22,6 +22,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Trailing comments on type declaration headers and `end` lines stay on their line.
   - A comment above an `else` or `after` keyword stays there instead of moving into the branch above, and a comment leading the else body stays in the else body.
   - A comment between the last arm and a `match`, `cond`, or `receive` terminator stays inside the block.
+  - A comment inside a list, tuple, enum, struct, or binary pattern stays anchored to its element instead of moving to the arm's head line.
   - Formatting never drops a comment: every comment now has one owner decided before printing, and tests enforce preservation over the whole corpus.
 
 ## [0.17.1] - 2026-08-11

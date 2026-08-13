@@ -191,6 +191,24 @@ nums = [
 ]
 ```
 
+**Comments inside patterns.** A comment inside a list, tuple, enum,
+struct, or binary pattern anchors to its element the same way, in match
+and receive heads, destructuring assignments, and `for` loops. The
+container breaks, the arm's `->` and any `when` guard glue to the
+closing delimiter, and nested containers anchor their own comments. The
+one exception is a comment between or-pattern alternatives, which moves
+to the head line because the alternative list has no per-line layout.
+
+```koja
+match packet
+  [
+    # version byte
+    version, flags
+  ] -> decode(version, flags)
+  _ -> drop()
+end
+```
+
 **A comment between an annotation and its declaration.** It moves above
 the annotation. An annotation glues to its declaration, so nothing can sit
 between them:

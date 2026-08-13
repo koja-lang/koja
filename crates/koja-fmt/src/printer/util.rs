@@ -335,6 +335,16 @@ pub(super) fn return_signature_doc(
     Some(concat(parts))
 }
 
+/// The qualified head of an enum pattern (`Shape.Rect`), or the bare
+/// variant when the path is empty.
+pub(super) fn enum_prefix(type_path: &[String], variant: &str) -> String {
+    if type_path.is_empty() {
+        variant.to_string()
+    } else {
+        format!("{}.{}", type_path.join("."), variant)
+    }
+}
+
 /// Formats a pattern (used in match arms, for loops, destructuring).
 pub(super) fn pattern_to_doc(pat: &Pattern) -> Doc {
     match pat {
@@ -343,24 +353,14 @@ pub(super) fn pattern_to_doc(pat: &Pattern) -> Doc {
         Pattern::Binding { name, .. } => text(name.clone()),
         Pattern::EnumUnit {
             type_path, variant, ..
-        } => {
-            if type_path.is_empty() {
-                text(variant.clone())
-            } else {
-                text(format!("{}.{}", type_path.join("."), variant))
-            }
-        }
+        } => text(enum_prefix(type_path, variant)),
         Pattern::EnumTuple {
             type_path,
             variant,
             elements,
             ..
         } => {
-            let prefix = if type_path.is_empty() {
-                variant.clone()
-            } else {
-                format!("{}.{}", type_path.join("."), variant)
-            };
+            let prefix = enum_prefix(type_path, variant);
             if elements.is_empty() {
                 text(prefix)
             } else {
@@ -378,14 +378,7 @@ pub(super) fn pattern_to_doc(pat: &Pattern) -> Doc {
             variant,
             fields,
             ..
-        } => {
-            let prefix = if type_path.is_empty() {
-                variant.clone()
-            } else {
-                format!("{}.{}", type_path.join("."), variant)
-            };
-            struct_pattern_to_doc(&prefix, fields)
-        }
+        } => struct_pattern_to_doc(&enum_prefix(type_path, variant), fields),
         Pattern::Struct {
             type_path, fields, ..
         } => struct_pattern_to_doc(&type_path.join("."), fields),
@@ -440,7 +433,7 @@ pub(super) fn pattern_to_doc(pat: &Pattern) -> Doc {
     }
 }
 
-fn binary_segment_pat_to_doc(seg: &BinarySegment) -> Doc {
+pub(super) fn binary_segment_pat_to_doc(seg: &BinarySegment) -> Doc {
     let mut parts = vec![expr_value_to_doc(&seg.value)];
     if let Some(size) = &seg.size {
         parts.push(text("::"));

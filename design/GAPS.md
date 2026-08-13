@@ -475,14 +475,13 @@ unboxing, and drop glue releases contents only when the count
 reaches zero. Path-copied structures share unchanged subtrees and
 persistent updates return to O(log n).
 
-## Formatter relocates comments inside patterns
+## Formatter relocates comments between or-pattern alternatives
 
-Found 2026-08-10 during the F3 bracketed-construct comment work.
-`pattern_to_doc` in `koja-fmt/src/printer/util.rs` is stateless, so a
-comment inside a broken list, tuple, or binary pattern in a match head
-has no per-element anchor. Since the comment attachment pass (2026-08-11)
-the comment is preserved but relocates to the arm's head line as a
-trailing comment, and the pattern collapses. Expression positions anchor
-comments correctly. Patterns need per-element spans threaded through
-`pattern_to_doc` to keep the comment inside the broken pattern. Rare in
-practice because match heads seldom carry interior comments.
+Found 2026-08-10 during the F3 bracketed-construct comment work, reduced
+2026-08-12 when the attach pass learned to walk patterns. Comments inside
+broken list, tuple, enum, struct, and binary patterns now anchor to their
+element (`koja-fmt/src/printer/pattern.rs`). The one remaining relocation
+is a comment between or-pattern alternatives (`1 | # note` on its own
+line). The or-pattern fill has no per-line anchor, so the comment is
+preserved but moves to the arm's head line. Rare in practice because
+or-pattern separators seldom carry comments.

@@ -13,12 +13,14 @@
 //! - [`attach`]: the comment attachment pass and table
 //! - [`comments`]: comment rendering helpers
 //! - [`expr`]: expression and match/cond/receive arm formatting
+//! - [`pattern`]: comment-aware pattern formatting
 //! - [`seq`]: the commented-sequence builder and its layout backends
 //! - [`util`]: stateless helpers for types, patterns, spans, etc.
 
 mod attach;
 mod comments;
 mod expr;
+mod pattern;
 mod seq;
 mod util;
 
@@ -789,7 +791,7 @@ impl Printer {
                 }
             }
             Statement::Destructure { pattern, value, .. } => {
-                let lhs = pattern_to_doc(pattern);
+                let lhs = self.pattern_to_doc(pattern);
                 let breaks = self.forces_assignment_break(value);
                 let value_doc = self.expr_to_doc(value);
                 if breaks {
