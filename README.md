@@ -83,7 +83,7 @@ copy = original
 copy.name = "production"
 
 original.name.print() # "development"
-copy.name.print()     # "production"
+copy.name.print() # "production"
 ```
 
 ### Binary Pattern Matching

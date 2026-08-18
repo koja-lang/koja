@@ -20,12 +20,12 @@ koja --version
 Grab the tarball and `.sha256` sidecar for your platform from the [releases page](https://github.com/koja-lang/koja/releases), then:
 
 ```sh
-curl -fLO https://github.com/koja-lang/koja/releases/download/v0.17.1/koja-v0.17.1-darwin-arm64.tar.gz
-curl -fLO https://github.com/koja-lang/koja/releases/download/v0.17.1/koja-v0.17.1-darwin-arm64.tar.gz.sha256
-shasum -a 256 -c koja-v0.17.1-darwin-arm64.tar.gz.sha256
-tar -xzf koja-v0.17.1-darwin-arm64.tar.gz
+curl -fLO https://github.com/koja-lang/koja/releases/download/v0.17.2/koja-v0.17.2-darwin-arm64.tar.gz
+curl -fLO https://github.com/koja-lang/koja/releases/download/v0.17.2/koja-v0.17.2-darwin-arm64.tar.gz.sha256
+shasum -a 256 -c koja-v0.17.2-darwin-arm64.tar.gz.sha256
+tar -xzf koja-v0.17.2-darwin-arm64.tar.gz
 mkdir -p ~/.local/bin
-cp koja-v0.17.1-darwin-arm64/{koja,koja-lsp} ~/.local/bin/
+cp koja-v0.17.2-darwin-arm64/{koja,koja-lsp} ~/.local/bin/
 ```
 
 (Use `sha256sum -c` on Linux, and substitute `linux-x86_64` or `linux-arm64` for `darwin-arm64`.)
@@ -41,7 +41,7 @@ steps:
   - uses: actions/checkout@v6
   - uses: koja-lang/setup-koja@v1
     with:
-      koja-version: 0.17.1
+      koja-version: 0.17.2
   - run: koja test
 ```
 

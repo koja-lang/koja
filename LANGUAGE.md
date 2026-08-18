@@ -33,7 +33,7 @@ Line comments start with `#` and extend to the end of the line. There are no blo
 
 ```koja
 # This is a comment
-x = 42  # inline comment
+x = 42 # inline comment
 ```
 
 ### Identifiers
@@ -80,12 +80,12 @@ Assignment operators: `=`, `+=`, `-=`, `*=`, `/=`.
 ### Numeric Literals
 
 ```koja
-42          # decimal integer
-3.14        # floating point
-0xFF        # hexadecimal
-0b1010      # binary
-1_000_000   # underscore separators (ignored)
-0xFF_FF     # underscores in hex
+42 # decimal integer
+3.14 # floating point
+0xFF # hexadecimal
+0b1010 # binary
+1_000_000 # underscore separators (ignored)
+0xFF_FF # underscores in hex
 ```
 
 Numeric literals coerce to any same-category type annotation. Integer literals coerce to any integer type (`x: UInt8 = 4`). Float literals coerce to any float type (`f: Float32 = 3.14`). Cross-category coercion (int to float or vice versa) is an error. Non-literal sized values widen implicitly into `Int` / `Float`. See [Numeric Widening](#numeric-widening).
@@ -97,8 +97,8 @@ A literal must fit its type. An integer literal outside the target's range is a 
 Newlines terminate statements. Line continuation is implicit after binary operators, `.`, and `,`. A line starting with `and`, `or`, `rescue`, or the ternary `?` also continues the previous expression, so wrapped conditions lead each continuation line with the operator.
 
 ```koja
-if request.valid? and request.authorized?
-  and request.body.present?
+if request.valid? and request.authorized? and request.body.present?
+  and request.rate_limit_ok?
 
   handle(request)
 end
@@ -121,16 +121,18 @@ A variable must be assigned before it is read, no matter which path the program 
 
 ```koja
 while i < 3
-  n = i * 2    # the loop may run zero times
+  n = i * 2 # the loop may run zero times
 end
-n.print()      # error: `n` does not have a value on every path
+
+n.print() # error: `n` does not have a value on every path
 
 if flag
   m = 1
 else
   m = 2
 end
-m.print()      # ok: both branches assign
+
+m.print() # ok: both branches assign
 ```
 
 A branch that always exits early (`return`, `break`, `Kernel.panic`) doesn't count against the others. Only reads are checked, so assigning to the variable again after the branch or loop is always fine. When the value depends on a branch, either assign a default first or use the expression form (`m = if flag 1 else 2 end`).
@@ -164,7 +166,7 @@ Every binding holds an independent value. Assignment copies:
 ```koja
 p1 = Point{x: 1, y: 2}
 p2 = p1
-p2.x = 10    # p1.x is still 1
+p2.x = 10 # p1.x is still 1
 ```
 
 Copies are observably independent for every type. Mutating one binding never affects another. See [Value Semantics](#value-semantics).
@@ -224,13 +226,13 @@ A compiled program's entry point is a type implementing the `Process` protocol, 
   or an `impl Protocol for Type` block), but rejected everywhere else.
 
 ```koja
-priv fn helper(x: Int32) -> Int32    # package-private
+priv fn helper(x: Int32) -> Int32 # package-private
   x * 2
 end
 
-priv const RETRY_LIMIT: Int32 = 3    # package-private
+priv const RETRY_LIMIT: Int32 = 3 # package-private
 
-priv struct Bucket                   # package-private
+priv struct Bucket # package-private
   count: Int32
 end
 
@@ -238,10 +240,10 @@ struct Counter
   value: Int32
 
   fn increment(self) -> Counter
-    Counter { value: self.tick() }    # ok: same type
+    Counter{value: self.tick()} # ok: same type
   end
 
-  priv fn tick(self) -> Int32         # type-private to Counter
+  priv fn tick(self) -> Int32 # type-private to Counter
     self.value + 1
   end
 end
@@ -262,6 +264,7 @@ fn find(items: List<Int32>, target: Int32) -> Bool
       return true
     end
   end
+
   false
 end
 ```
@@ -285,7 +288,7 @@ Parameters are passed by value. The callee receives its own independent copy of 
 
 ```koja
 fn describe(c: Config) -> String
-  c.name                 # operates on the callee's own copy
+  c.name # operates on the callee's own copy
 end
 ```
 
@@ -324,6 +327,7 @@ end
 
 ```koja
 i = 0
+
 while i < 10
   i.print()
   i += 1
@@ -334,10 +338,12 @@ end
 
 ```koja
 i = 0
+
 loop
   if i >= 5
     break
   end
+
   i += 1
 end
 ```
@@ -440,7 +446,7 @@ fn count(n: Int) -> Int
 end
 
 small: Int32 = -7
-count(small)        # Int32 widens to Int, value stays -7
+count(small) # Int32 widens to Int, value stays -7
 ```
 
 Widening applies wherever a value flows into a typed slot: call arguments, struct fields, enum payloads, return values, annotated bindings, and constant initializers. It does **not** apply to:
@@ -456,7 +462,7 @@ The inverse direction is explicit and checked. `Int` provides `to_int8`, `to_int
 ```koja
 match 300.to_int8()
   Result.Ok(v) -> v.print()
-  Result.Err(e) -> "does not fit".print()   # 300 > Int8.max
+  Result.Err(e) -> "does not fit".print() # 300 > Int8.max
 end
 ```
 
@@ -479,10 +485,10 @@ The float row is what makes the finite-only invariant airtight. `1.0 / 0.0` and 
 
 ```koja
 a = 9223372036854775807
-a + 1        # panics: integer overflow in +
+a + 1 # panics: integer overflow in +
 
 b = 0.0
-1.0 / b      # panics: non-finite float result in /
+1.0 / b # panics: non-finite float result in /
 ```
 
 ### Unit Expression
@@ -517,7 +523,8 @@ Interpolation expressions are enclosed in `#{}` and can contain any expression.
 Triple-quoted strings with automatic dedent based on closing delimiter position:
 
 ```koja
-msg = """
+msg =
+  """
   first line
   second line
   """
@@ -566,8 +573,10 @@ Short structs format inline. Long structs break across lines with trailing comma
 ```koja
 config = Config{
   name: "production",
+  region: "us-east-1",
   port: 8080,
   debug: false,
+  verbose: true,
 }
 ```
 
@@ -582,8 +591,8 @@ struct Config
   name: String
 end
 
-c = Config{name: "app"}   # host and port fill from the defaults
-Config{}                  # error: `name` has no default
+c = Config{name: "app"} # host and port fill from the defaults
+Config{} # error: `name` has no default
 ```
 
 Default values are limited to side-effect-free expressions: literals (no interpolation), negated numerics, unit enum variants, binary literals, and struct, list, map, or set literals of those. The compiler checks each default against the field type at the declaration. A default cannot use an `alias` shorthand. Write the qualified name.
@@ -606,7 +615,7 @@ enum Shape
   Rect{width: Int, height: Int = 2}
 end
 
-Shape.Rect{width: 4}   # height fills with 2
+Shape.Rect{width: 4} # height fills with 2
 ```
 
 #### Field Access
@@ -651,7 +660,7 @@ struct Counter
 end
 
 c = Counter{value: 0}
-c = c.increment()   # rebind to the returned value
+c = c.increment() # rebind to the returned value
 ```
 
 `Self` is a shorthand for the enclosing type in return positions. Use it instead of repeating the type name.
@@ -879,8 +888,8 @@ There is no positional access (`t.0`). Take a tuple apart with a destructuring a
 
 ```koja
 (name, score) = entry
-(_, score) = entry  # wildcard skips an element
-(a, (b, c)) = nested  # nesting works
+(_, score) = entry # wildcard skips an element
+(a, (b, c)) = nested # nesting works
 ```
 
 Every element pattern must be irrefutable: a binding, a wildcard, or a nested tuple of those. Use `match` for refutable patterns:
@@ -896,7 +905,7 @@ end
 Tuples support `==`/`!=` (element-wise, when every element does), `format()`, `print()`, and string interpolation:
 
 ```koja
-(1, "one").print()  # (1, "one")
+(1, "one").print() # (1, "one")
 ```
 
 A tuple containing a closure- or union-typed element (at any nesting depth) is not comparable, since closures and union values cannot be compared for equality. `==`/`!=` on such a tuple is a compile error, and the tuple does not satisfy a `T: Equality` bound. `format()` and `print()` still work, rendering opaque elements as `"..."`.
@@ -913,7 +922,8 @@ match lookup("a")
     (n, name) = hit
     name
 
-  missing: NotFound -> missing.key
+  missing: NotFound ->
+    missing.key
 end
 ```
 
@@ -973,7 +983,7 @@ A context-free unit variant still requires an annotation.
 Type annotations on variables drive generic type inference:
 
 ```koja
-list: List<Int32> = List.new()  # infers T = Int32
+list: List<Int32> = List.new() # infers T = Int32
 ```
 
 #### Implementation
@@ -1023,14 +1033,14 @@ end
 
 match p
   Point{x: 0, y: 0} -> "origin"
-  Point{x: 5}       -> "x is five"   # y is unconstrained
+  Point{x: 5} -> "x is five" # y is unconstrained
   Point{x: x, y: y} -> "(#{x}, #{y})"
 end
 
 # Enum-struct variants follow the same rules.
 match shape
   Shape.Rect{width: w, height: h} -> w * h
-  Shape.Circle{radius: r}         -> r * r * 314 / 100
+  Shape.Circle{radius: r} -> r * r * 314 / 100
 end
 ```
 
@@ -1104,7 +1114,7 @@ fn parse_port(raw: String) -> Int ! ParseError
   # ...
 end
 
-outcome = parse_port("8080")   # outcome: Result<Int, ParseError>
+outcome = parse_port("8080") # outcome: Result<Int, ParseError>
 ```
 
 Inside a `!`-spelled function, success values are unwrapped: `return value` and the trailing expression check against `T` and wrap in `Result.Ok` automatically. Writing `Result.Ok(...)` by hand in return position is a compile error pointing at the auto-wrap rule.
@@ -1139,7 +1149,7 @@ end
 ```koja
 fn load(path: String) -> Server ! ConfigError
   config = try read_config(path)
-  port = try parse_port(config.port)   # error type must fit the declared `E`
+  port = try parse_port(config.port) # error type must fit the declared `E`
   Server{config: config, port: port}
 end
 ```
@@ -1152,8 +1162,8 @@ Errors compose with ordinary [union types](#union-types). A function calling int
 
 ```koja
 fn fetch_user(id: Int) -> User ! HTTP.Error | ParseError
-  response = try HTTP.get(user_url(id))   # HTTP.Error widens
-  try parse_user(response.body)           # ParseError widens
+  response = try HTTP.get(user_url(id)) # HTTP.Error widens
+  try parse_user(response.body) # ParseError widens
 end
 ```
 
@@ -1191,6 +1201,7 @@ double = fn (x: Int32) -> Int32 x * 2 end
 
 add =
   fn (a: Int32, b: Int32) -> Int32
+    # the last expression is the return value
     a + b
   end
 ```
@@ -1219,12 +1230,14 @@ Closures capture variables from their enclosing scope by value. Each captured va
 
 ```koja
 multiplier = 3
+
 triple =
   fn (x: Int) -> Int
-    x * multiplier    # captures a copy of multiplier
+    x * multiplier # captures a copy of multiplier
   end
-multiplier = 10     # does not affect triple
-triple(5).print()   # 15
+
+multiplier = 10 # does not affect triple
+triple(5).print() # 15
 ```
 
 Captured closures use heap-allocated environment structs.
@@ -1250,8 +1263,8 @@ fn double(x: Int) -> Int
   x * 2
 end
 
-f = double          # same package
-g = Mathlib.square  # another package
+f = double # same package
+g = Mathlib.square # another package
 apply(5, f).print()
 ```
 
@@ -1278,7 +1291,7 @@ All types copy on assignment. Numeric primitives, `Bool`, `()`, and function poi
 
 ```koja
 a = 42
-b = a     # b is an independent copy
+b = a # b is an independent copy
 ```
 
 ### Field Access
@@ -1299,14 +1312,14 @@ w.count.print()
 This extends to chained access and method calls:
 
 ```koja
-w.name.length()   # reads name, then calls length on it
+w.name.length() # reads name, then calls length on it
 ```
 
 To mutate a field, use reassignment. The right-hand side transforms the current field value and the result is written back:
 
 ```koja
 w.name = w.name.upcase()
-w.name.print()              # "HELLO"
+w.name.print() # "HELLO"
 ```
 
 ---
@@ -1523,7 +1536,7 @@ The simplest way to run concurrent work. Wraps a closure, runs it in a spawned p
 
 ```koja
 ref = Task.async(fn () -> Int expensive_computation() end)
-result = Task.await(ref)  # Result<Int, Process.CallError>, times out after 5000ms
+result = Task.await(ref) # Result<Int, Process.CallError>, times out after 5000ms
 ```
 
 `Task.async(fn)` spawns the closure and returns a `Ref<(), R>`. `Task.await(ref)` sends a unit message and waits for the reply.
@@ -1535,8 +1548,11 @@ For stateful, long-lived processes, implement the `Process` protocol. `C` is the
 ```koja
 protocol Process<C, M, R>
   fn start(config: C) -> Self ! Process.StopReason
+
   fn handle(self, msg: M, from: Option<ReplyTo<R>>) -> Process.Step<Self>
+
   fn handle_signal(self, event: Process.Lifecycle) -> Process.Step<Self>
+
   fn run(self) -> Process.StopReason
 end
 ```
@@ -1595,6 +1611,7 @@ struct Counter: Process<Counter, CounterMsg, Int>
         CounterMsg.Increment -> self.count + 1
         CounterMsg.Decrement -> self.count - 1
       end
+
     ReplyTo.reply(from, next_count)
     Step.Continue(Counter{count: next_count})
   end
@@ -1611,9 +1628,9 @@ count = ref.call(CounterMsg.Increment, 5000)
 
 ```koja
 enum Process.Lifecycle
-  Shutdown    # SIGTERM
-  Interrupt   # SIGINT
-  Reload      # SIGHUP
+  Shutdown # SIGTERM
+  Interrupt # SIGINT
+  Reload # SIGHUP
 end
 ```
 
@@ -1621,8 +1638,8 @@ end
 
 ```koja
 enum Process.StopReason
-  Normal      # process finished its work
-  Shutdown    # process was told to stop
+  Normal # process finished its work
+  Shutdown # process was told to stop
 end
 ```
 
@@ -1635,7 +1652,7 @@ enum Process.ExitReason
   Normal
   Shutdown
   Killed
-  Crashed(Process.CrashInfo)   # CrashInfo carries the panic message and backtrace
+  Crashed(Process.CrashInfo) # CrashInfo carries the panic message and backtrace
 end
 ```
 
@@ -1705,8 +1722,8 @@ The underlying keywords that power the process model. `spawn` creates a new ligh
 ```koja
 receive
   envelope: (M, Option<ReplyTo<R>>) ->
+    # unpack, then handle the message
     (msg, from) = envelope
-    # handle the message
 end
 ```
 
@@ -1715,8 +1732,8 @@ An optional `after` clause bounds the wait. If no message arrives within the tim
 ```koja
 receive
   envelope: (M, Option<ReplyTo<R>>) ->
+    # unpack, then handle the message
     (msg, from) = envelope
-    # handle the message
 after 5000
   # no message within 5 seconds
 end
@@ -1773,15 +1790,15 @@ Functions: `unwrap()`, `or(default)`, `or_err(error)`, `some?()`, `none?()`, `ma
 
 ```koja
 x = Option.Some(42)
-x.unwrap().print()       # 42
-x.or(0).print()          # 42
-x.some?().print()        # true
+x.unwrap().print() # 42
+x.or(0).print() # 42
+x.some?().print() # true
 
 y: Option<Int> = Option.None
-y.or(99).print()          # 99
+y.or(99).print() # 99
 
 mapped = x.map(fn (v: Int) -> Int v * 10 end)
-mapped.unwrap().print()   # 420
+mapped.unwrap().print() # 420
 ```
 
 ### `Result<T, E>`
@@ -1797,10 +1814,10 @@ Functions: `unwrap()`, `or(default)`, `ok?()`, `err?()`, `ok()`, `err()`, `map(f
 
 ```koja
 ok: Result<Int32, Int32> = Result.Ok(42)
-ok.unwrap().print()       # 42
+ok.unwrap().print() # 42
 
 err: Result<Int32, Int32> = Result.Err(1)
-err.or(99).print()        # 99
+err.or(99).print() # 99
 ```
 
 For unwrap-or-propagate control flow, prefer `try` / `fail` / `rescue` over combinator chains. See [Error Handling](#error-handling).
@@ -1821,7 +1838,7 @@ Used by `String.slice` for substring extraction:
 ```koja
 greeting = "hello world"
 hello = greeting.slice(Range{start: 0, stop: 4})
-hello.print()  # "hello"
+hello.print() # "hello"
 ```
 
 ### `List<T>`
@@ -1833,9 +1850,9 @@ list: List<Int32> = List.new()
 list = list.append(10)
 list = list.append(20)
 
-list.length().print()   # 2
-list.get(0).unwrap().print()  # 10
-list.empty?().print()   # false
+list.length().print() # 2
+list.get(0).unwrap().print() # 10
+list.empty?().print() # false
 ```
 
 `append` returns a new list with the element added (rebind with `list = list.append(x)`). The original is unchanged. `get` returns `Option<T>` (`None` for out-of-bounds).
@@ -1873,9 +1890,9 @@ m: Map<String, Int> = Map.new()
 m = m.put("a", 1)
 m = m.put("b", 2)
 
-m.get("a").unwrap().print()  # 1
-m.has?("b").print()          # true
-m.length().print()           # 2
+m.get("a").unwrap().print() # 1
+m.has?("b").print() # true
+m.length().print() # 2
 ```
 
 Functions:
@@ -1902,8 +1919,8 @@ s = s.insert(1)
 s = s.insert(2)
 s = s.insert(1)
 
-s.length().print()   # 2
-s.has?(1).print()     # true
+s.length().print() # 2
+s.has?(1).print() # true
 ```
 
 Functions:
@@ -1918,7 +1935,7 @@ Functions:
 `Set<T>` implements `ListLiteral<T>`, so list literal syntax constructs a set when the target type is `Set<T>`:
 
 ```koja
-names: Set<String> = ["alice", "bob", "alice"]  # Set with 2 elements
+names: Set<String> = ["alice", "bob", "alice"] # Set with 2 elements
 ```
 
 ### String Methods
@@ -1962,14 +1979,14 @@ Functions:
 
 ```koja
 s = "hello world"
-s.length().print()                            # 11
-s.get(0).unwrap().print()                     # "h"
-s.contains?("world").print()                  # true
-s.starts_with?("hello").print()               # true
-s.split(" ").length().print()                 # 2
-s.upcase().print()                            # "HELLO WORLD"
-s.slice(Range{start: 0, stop: 4}).print()     # "hello"
-"  hello  ".trim().print()                    # "hello"
+s.length().print() # 11
+s.get(0).unwrap().print() # "h"
+s.contains?("world").print() # true
+s.starts_with?("hello").print() # true
+s.split(" ").length().print() # 2
+s.upcase().print() # "HELLO WORLD"
+s.slice(Range{start: 0, stop: 4}).print() # "hello"
+"  hello  ".trim().print() # "hello"
 ```
 
 `String` also implements `Equality` (content comparison via `==`) and `Hash` (FNV-1a).
@@ -2040,7 +2057,7 @@ Float-extract segments (`x: Float32` in a pattern) are not supported yet. When t
 bin = "hello".to_binary()
 bits = bin.to_bits()
 roundtrip = bits.to_binary().unwrap().to_string().unwrap()
-roundtrip.print()  # "hello"
+roundtrip.print() # "hello"
 ```
 
 ### File I/O
@@ -2128,14 +2145,14 @@ Failures distinguish malformed text from values that don't fit: `NumericConversi
 
 ```koja
 x = Int.parse("42").unwrap()
-x.print()  # 42
+x.print() # 42
 
 y = Float.parse("3.14").unwrap()
-y.print()  # 3.14
+y.print() # 3.14
 
 match Int.parse("99999999999999999999")
   Result.Ok(_) -> ()
-  Result.Err(e) -> e.print()  # OutOfRange
+  Result.Err(e) -> e.print() # OutOfRange
 end
 ```
 
@@ -2167,9 +2184,9 @@ Functions:
 
 ```koja
 uri = URI.parse("https://example.com/pkg?v=1").unwrap()
-uri.host.unwrap().print()      # "example.com"
-uri.port.unwrap().print()      # 443
-"fetching #{uri}".print()      # "fetching https://example.com/pkg?v=1"
+uri.host.unwrap().print() # "example.com"
+uri.port.unwrap().print() # 443
+"fetching #{uri}".print() # "fetching https://example.com/pkg?v=1"
 
 URI.encode("put it+й").print() # "put%20it+%D0%B9"
 ```
@@ -2188,11 +2205,11 @@ RFC 4648 encoding and decoding: base16 (hex), base64, and url-safe base64. Encod
 Base64 decoders accept both padded and unpadded input, but `=` may only appear as final padding:
 
 ```koja
-Base.encode64("foobar").print()             # "Zm9vYmFy"
-Base.decode64("Zm9vYg==").unwrap().print()  # <<102, 111, 111, 98>>
-Base.decode64("Zm9vYg").unwrap().print()    # <<102, 111, 111, 98>>
-Base.encode16(<<0, 15, 255>>).print()       # "000fff"
-Base.url_encode64(<<251, 239>>).print()     # "--8="
+Base.encode64("foobar").print() # "Zm9vYmFy"
+Base.decode64("Zm9vYg==").unwrap().print() # <<102, 111, 111, 98>>
+Base.decode64("Zm9vYg").unwrap().print() # <<102, 111, 111, 98>>
+Base.encode16(<<0, 15, 255>>).print() # "000fff"
+Base.url_encode64(<<251, 239>>).print() # "--8="
 ```
 
 ### `Path`
@@ -2210,11 +2227,11 @@ POSIX path manipulation, modeled on Elixir's `Path`. All functions are pure stri
 - `Path.relative_to(path: String, base: String) -> String`: path from `base` to `path`. Two relative paths give a minimal path that may walk up with `..`, two absolute paths only strip a shared prefix, and `path` is returned (normalized) when `base` is not a prefix or the kinds are mixed.
 
 ```koja
-Path.join(["/usr", "local/", "bin"]).print()          # "/usr/local/bin"
-Path.extname("archive.tar.gz").print()                # ".gz"
-Path.expand("/foo/bar/../baz").print()                # "/foo/baz"
-Path.split("/foo/bar").print()                        # ["/", "foo", "bar"]
-Path.relative_to("tmp/foo/bar", "tmp/bat").print()    # "../foo/bar"
+Path.join(["/usr", "local/", "bin"]).print() # "/usr/local/bin"
+Path.extname("archive.tar.gz").print() # ".gz"
+Path.expand("/foo/bar/../baz").print() # "/foo/baz"
+Path.split("/foo/bar").print() # ["/", "foo", "bar"]
+Path.relative_to("tmp/foo/bar", "tmp/bat").print() # "../foo/bar"
 ```
 
 ### `Enumeration<T>` Protocol
@@ -2222,6 +2239,7 @@ Path.relative_to("tmp/foo/bar", "tmp/bat").print()    # "../foo/bar"
 ```koja
 protocol Enumeration<T>
   fn length(self) -> Int
+
   fn get(self, index: Int) -> Option<T>
 end
 ```
@@ -2253,10 +2271,15 @@ Required for keys in `Map<K, V>` and elements in `Set<T>`. Implemented for all n
 ```koja
 protocol Bitwise
   fn band(self, other: Self) -> Self
+
   fn bor(self, other: Self) -> Self
+
   fn bxor(self, other: Self) -> Self
+
   fn bnot(self) -> Self
+
   fn bsl(self, n: Int) -> Self
+
   fn bsr(self, n: Int) -> Self
 end
 ```
@@ -2267,10 +2290,10 @@ Bitwise operations are methods rather than symbolic operators. Koja reserves `<<
 
 ```koja
 flags = 0b1010
-(flags.band(0b1100)).print()  # 8  (0b1000)
-flags.bor(0b0001).print()   # 11 (0b1011)
-1.bsl(4).print()             # 16
-16.bsr(4).print()            # 1
+(flags.band(0b1100)).print() # 8  (0b1000)
+flags.bor(0b0001).print() # 11 (0b1011)
+1.bsl(4).print() # 16
+16.bsr(4).print() # 1
 ```
 
 ### `Debug` Protocol
@@ -2278,7 +2301,9 @@ flags.bor(0b0001).print()   # 11 (0b1011)
 ```koja
 protocol Debug
   fn format(self) -> String
-  fn print(self)                # default: IO.puts(self.format())
+
+  fn print(self) # default: IO.puts(self.format())
+
   fn inspect(self) -> Self # default: prints, then returns self
 end
 ```
@@ -2289,18 +2314,18 @@ end
 
 ```koja
 p = Point{x: 1, y: 2}
-p.print()                       # Point{x: 1, y: 2}
-"point is #{p}".print()         # "point is Point{x: 1, y: 2}"
-"n = #{42}".print()             # "n = 42"
-"hello".print()                 # "hello"
-User{name: "alice"}.print()     # User{name: "alice"}
+p.print() # Point{x: 1, y: 2}
+"point is #{p}".print() # "point is Point{x: 1, y: 2}"
+"n = #{42}".print() # "n = 42"
+"hello".print() # "hello"
+User{name: "alice"}.print() # User{name: "alice"}
 ```
 
 For raw, unquoted output use `IO.puts` directly (it writes its `String` argument verbatim and adds a newline):
 
 ```koja
-IO.puts("hello")                # hello
-IO.puts(p.format())             # Point{x: 1, y: 2}
+IO.puts("hello") # hello
+IO.puts(p.format()) # Point{x: 1, y: 2}
 ```
 
 ### Literal Protocols
@@ -2366,7 +2391,8 @@ struct Crypto
   priv fn evp_sha256 -> CPtr<UInt8>
 
   @extern "C" @link "crypto:SHA256"
-  priv fn sha256_raw(data: CPtr<UInt8>, len: Int64, out: CPtr<UInt8>) -> CPtr<UInt8>
+  priv fn sha256_raw(data: CPtr<UInt8>, len: Int64, out: CPtr<UInt8>)
+    -> CPtr<UInt8>
 end
 ```
 
@@ -2410,10 +2436,10 @@ Type annotations on the variable drive generic inference for static methods like
 
 ```koja
 digest: CPtr<UInt8> = CPtr.alloc(32)
-FFI.blake3_hash(CPtr.borrow(data), data.byte_size(), digest)  # fine
+FFI.blake3_hash(CPtr.borrow(data), data.byte_size(), digest) # fine
 
-p = CPtr.borrow(data)  # compile error: a borrowed pointer cannot be bound
-owned = CPtr.copy(data)  # owned copy, free it when C is done
+p = CPtr.borrow(data) # compile error: a borrowed pointer cannot be bound
+owned = CPtr.copy(data) # owned copy, free it when C is done
 ```
 
 ### `CString`
