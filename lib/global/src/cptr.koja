@@ -41,6 +41,25 @@ builtin CPtr<T>
   """
   @intrinsic
   fn null?(self) -> Bool
+
+  @doc """
+  Returns the raw address as an `Int` bit pattern. A null pointer
+  returns 0.
+  """
+  @intrinsic
+  fn address(self) -> Int
+end
+
+impl Debug for CPtr<T>
+  @doc """
+  Renders the 64-bit address in lowercase hex,
+  `CPtr(0x00006000023a4f10)`. A null pointer renders as `CPtr(0x0)`.
+  """
+  fn format(self) -> String
+    self.null?()
+      ? "CPtr(0x0)"
+      : "CPtr(0x" <> Base.encode16(<<self.address()::64>>) <> ")"
+  end
 end
 
 extend CPtr<UInt8>

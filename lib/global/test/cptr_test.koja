@@ -95,4 +95,64 @@ struct CPtrTest
     byte_ptr.free()
     Result.Ok(true)
   end
+
+  @test "address of null is zero"
+  fn test_null_address -> Result<Bool, String>
+    null_ptr: CPtr<Int32> = CPtr.null()
+
+    unless null_ptr.address() == 0
+      return Result.Err("expected address 0 for null")
+    end
+
+    Result.Ok(true)
+  end
+
+  @test "address tracks element-width offsets"
+  fn test_offset_address -> Result<Bool, String>
+    ptr: CPtr<Int32> = CPtr.alloc(2)
+    base = ptr.address()
+    stepped = ptr.offset(1).address()
+    ptr.free()
+
+    unless base > 0
+      return Result.Err("expected a non-zero base address")
+    end
+
+    unless stepped == base + 4
+      return Result.Err("expected offset(1) to step 4 bytes")
+    end
+
+    Result.Ok(true)
+  end
+
+  @test "format renders the address in lowercase hex"
+  fn test_format -> Result<Bool, String>
+    null_ptr: CPtr<Int32> = CPtr.null()
+
+    unless null_ptr.format() == "CPtr(0x0)"
+      return Result.Err("expected CPtr(0x0), got #{null_ptr.format()}")
+    end
+
+    ptr: CPtr<Int32> = CPtr.alloc(1)
+    rendered = ptr.format()
+    ptr.free()
+
+    unless rendered.starts_with?("CPtr(0x") and rendered.ends_with?(")")
+      return Result.Err("unexpected shape #{rendered}")
+    end
+
+    digits = rendered.slice(Range{start: 7, stop: rendered.length() - 2})
+
+    unless digits.length() > 0
+      return Result.Err("expected at least one hex digit")
+    end
+
+    for c in digits
+      unless "0123456789abcdef".contains?(c)
+        return Result.Err("non-hex digit #{c} in #{rendered}")
+      end
+    end
+
+    Result.Ok(true)
+  end
 end

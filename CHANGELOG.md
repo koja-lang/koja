@@ -7,12 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `CPtr<T>` gains `address(self) -> Int` and a `Debug` impl that renders the pointer as its hex address, so `ptr.print()` shows `CPtr(0x00006000023a4f10)` instead of `CPtr{}`.
+
 ### Changed
 
 - `koja format` breaks after `=` when the assigned value is a multi-line block (`match`, `cond`, a multi-line closure, or a call containing one) and keeps short values glued, including calls with inline closures.
 
 ### Fixed
 
+- `Ref.call` to a dead process returns `Err(CallError.ProcessDown)` promptly, even when the callee dies mid-wait, instead of blocking for the full timeout.
 - Various `koja format` fixes:
   - Long protocol method signatures, generic parameter lists, union types, and `-> T ! E` return signatures now wrap at 80 columns instead of overflowing.
   - String interpolation never breaks inside `#{...}`, so a formatted string stays on one line.
@@ -23,7 +28,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - A comment above an `else` or `after` keyword stays there instead of moving into the branch above, and a comment leading the else body stays in the else body.
   - A comment between the last arm and a `match`, `cond`, or `receive` terminator stays inside the block.
   - A comment inside a list, tuple, enum, struct, or binary pattern stays anchored to its element instead of moving to the arm's head line.
-  - Formatting never drops a comment: every comment now has one owner decided before printing, and tests enforce preservation over the whole corpus.
+  - Formatting never drops a comment. Every comment now has one owner decided before printing, and tests enforce preservation over the whole corpus.
 
 ## [0.17.1] - 2026-08-11
 

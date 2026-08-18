@@ -1,9 +1,9 @@
 //! Eval coverage for the `CPtr<T>` / `CString` family. Eval backs
 //! `CPtr<T>` with a raw [`*mut u8`] so the same FFI paths the LLVM
-//! backend emits run in-process: `CPtr.null` / `null?` / `alloc` /
-//! `free` / `offset` / `read` / `write` route through libc, and
-//! `String.to_cstring` + `CString.to_string` round-trip a String
-//! through a null-terminated `malloc` copy.
+//! backend emits run in-process: `CPtr.address` / `alloc` / `free` /
+//! `null` / `null?` / `offset` / `read` / `write` route through
+//! libc, and `String.to_cstring` + `CString.to_string` round-trip a
+//! String through a null-terminated `malloc` copy.
 //!
 //! Runtime-produced block adoption is covered separately through
 //! `Random.bytes`.
@@ -172,6 +172,50 @@ fn cptr_offset_steps_by_element_width_for_uint8() {
     ))
     .expect("offset / read / write across 4 bytes should evaluate");
     assert_eq!(outcome, Value::Int(40));
+}
+
+#[test]
+fn cptr_address_of_null_is_zero() {
+    let outcome = evaluate_script(&dedent(
+        r#"
+        p: CPtr<UInt8> = CPtr.null()
+        p.address()
+        "#,
+    ))
+    .expect("CPtr.address on null should evaluate");
+    assert_eq!(outcome, Value::Int(0));
+}
+
+#[test]
+fn cptr_address_tracks_offset_stride() {
+    // Absolute addresses are entropy-dependent, but the distance
+    // between a base pointer and its `offset(3)` is exactly 3 bytes
+    // for a `UInt8` pointee.
+    let outcome = evaluate_script(&dedent(
+        r#"
+        ptr: CPtr<UInt8> = CPtr.alloc(4)
+        base = ptr.address()
+        stepped = ptr.offset(3).address()
+        ptr.free()
+        stepped - base
+        "#,
+    ))
+    .expect("address arithmetic across offset should evaluate");
+    assert_eq!(outcome, Value::Int(3));
+}
+
+#[test]
+fn cptr_format_renders_null_as_hex_zero() {
+    // Pins the stdlib `impl Debug for CPtr<T>` end to end. The null
+    // pointer is the only address with a stable rendering.
+    let outcome = evaluate_script(&dedent(
+        r#"
+        p: CPtr<UInt8> = CPtr.null()
+        p.format()
+        "#,
+    ))
+    .expect("CPtr.format on null should evaluate");
+    assert_eq!(outcome, Value::string("CPtr(0x0)"));
 }
 
 #[test]
