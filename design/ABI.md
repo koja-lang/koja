@@ -269,7 +269,7 @@ Several process externs return compact status values that LLVM interprets.
 | `koja_rt_receive_timeout`  | message tag     | delivered message                           |
 | `koja_rt_receive_timeout`  | -1              | timeout                                     |
 | `koja_rt_call_receive`     | 0               | matching reply delivered                    |
-| `koja_rt_call_receive`     | -1              | timeout                                     |
+| `koja_rt_call_receive`     | -1              | timeout, or the callee died with no reply   |
 | `koja_rt_reply`            | 0               | caller still waiting                        |
 | `koja_rt_reply`            | 1               | caller expired                              |
 | `koja_rt_is_process_alive` | 0 or 1          | dead or alive                               |
@@ -279,6 +279,10 @@ Several process externs return compact status values that LLVM interprets.
 `Ref.call` distinguishes timeout from `ProcessDown` after a `-1` result by
 querying target liveness. LLVM resolves the corresponding
 `Process.CallError` tag using the hardcoded convention above.
+`koja_rt_call_receive(i64 token, i8* out, i64 out_cap, i64 timeout_ms,
+i64 target_pid)` takes the callee's PID so the runtime returns `-1` as
+soon as the callee dies with no reply slotted, instead of waiting out
+the timeout.
 
 ## Crash unwind ABI
 

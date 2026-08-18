@@ -577,18 +577,21 @@ fn ref_call_emits_tuple_envelope_with_some_reply_to_and_receive_loop() {
     assert_contains(&ir_text, "call void @koja_rt_send(i64");
 
     // Reader side: paired `koja_rt_call_receive` against the
-    // caller's one-shot reply slot, correlated by token. Three-way
-    // dispatch on the status (timeout / process-down / Ok) feeds a
-    // single phi that returns `Result<R, CallError>`.
+    // caller's one-shot reply slot, correlated by token, with the
+    // target pid trailing so the runtime resolves a dead callee
+    // early. Three-way dispatch on the status (timeout /
+    // process-down / Ok) feeds a single phi that returns
+    // `Result<R, CallError>`.
     assert_contains(
         &ir_text,
-        "declare i64 @koja_rt_call_receive(i64, ptr, i64, i64)",
+        "declare i64 @koja_rt_call_receive(i64, ptr, i64, i64, i64)",
     );
     // The literal `100` is consumed at the `.call` call site.
     // Inside the intrinsic body the timeout flows through `%2`
-    // (the third intrinsic parameter) into the receive's last arg.
+    // (the third intrinsic parameter) into the receive's fourth arg,
+    // followed by the target pid.
     assert_contains(&ir_text, "call i64 @koja_rt_call_receive(i64");
-    assert_contains(&ir_text, "i64 %2)");
+    assert_contains(&ir_text, "i64 %2,");
     assert_contains(&ir_text, "call_timed_out");
     assert_contains(&ir_text, "call_timeout_check:");
     assert_contains(&ir_text, "call_got_reply:");

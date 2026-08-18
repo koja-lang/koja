@@ -394,6 +394,17 @@ struct MonitorEntry {
     watcher: Pid,
 }
 
+/// One in-flight `Ref.call` wait. `caller` is parked (or about to park)
+/// on `callee`'s reply for `token`. A flat list like [`MonitorEntry`],
+/// swept by the death edge so a dying callee wakes its callers instead
+/// of leaving them to their timeouts.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct CallWaiter {
+    pub callee: Pid,
+    pub caller: Pid,
+    pub token: i64,
+}
+
 /// Whether `from -> to` is a legal process lifecycle edge.
 ///
 /// Built from the audited transition sites. A worker claims a fresh or woken
@@ -495,6 +506,10 @@ pub enum Mode {
 /// decisions and monitor aliveness linearize on this lock (invariants 5
 /// and 6 in the design doc).
 struct Registry {
+    /// In-flight `Ref.call` waits, the reverse index death edges sweep.
+    /// Maintained by `take_reply_or_park` / `clear_awaiting_reply` and
+    /// evicted when either endpoint dies.
+    call_waiters: Vec<CallWaiter>,
     /// Live children by parent: the kill-cascade's reverse index.
     /// Maintained at spawn and death (both under this hold), so a death
     /// edge stages its children without scanning the arena.
@@ -507,6 +522,9 @@ struct Registry {
     monitors: Vec<MonitorEntry>,
     /// Next monitor token to mint. Starts at 1 so 0 is never valid.
     next_monitor_token: i64,
+    /// Reply waits whose callee died, staged by death edges and drained
+    /// by [`ProcessTable::take_call_downs`].
+    pending_call_downs: Vec<CallWaiter>,
     /// `ExitSignal` deliveries staged by death edges and `monitor`,
     /// drained by [`ProcessTable::take_exit_notices`].
     pending_exit_notices: Vec<ExitNotice>,
@@ -548,6 +566,11 @@ pub struct ReplyDelivery<M> {
 pub enum MailPark<M> {
     /// A message was already waiting, so nothing was parked.
     Ready(M),
+    /// The in-flight call's callee is dead and no reply is slotted, so
+    /// none can ever arrive. The wait resolves now instead of parking
+    /// until the timeout. Produced only by
+    /// [`ProcessTable::take_reply_or_park`].
+    CalleeDown,
     /// The mailbox part was empty and the process is parked.
     Parked,
     /// The park was refused over a kill tombstone. The caller should
@@ -611,11 +634,13 @@ impl<X, M: Message> ProcessTable<X, M> {
             counters: AtomicCounters::new(),
             main_pid: AtomicI64::new(0),
             registry: Mutex::new(Registry {
+                call_waiters: Vec::new(),
                 children: BTreeMap::new(),
                 free: Vec::new(),
                 mode: Mode::Running,
                 monitors: Vec::new(),
                 next_monitor_token: 1,
+                pending_call_downs: Vec::new(),
                 pending_exit_notices: Vec::new(),
                 pending_kills: Vec::new(),
             }),
@@ -916,33 +941,58 @@ impl<X, M: Message> ProcessTable<X, M> {
     /// awaited token and deadline (the call completed). A mismatched one
     /// is handed back as [`MailPark::Stale`] for the caller to drop and
     /// retry.
+    ///
+    /// A dead `callee` refuses the park as [`MailPark::CalleeDown`]. A
+    /// slotted reply still wins, since a callee that replied and then
+    /// died completed the call. The check runs inside the caller's slot
+    /// hold, which closes the park-vs-death race. A death edge that found
+    /// no `Blocked` waiter to promote must have marked the callee `Dead`
+    /// before this hold, so the check observes it.
+    ///
+    /// Also maintains the death edge's waiter index. The entry is ensured
+    /// before the check (so a callee death during the park stages a wake)
+    /// and evicted when the call resolves here. A caller that gives up at
+    /// its timeout instead evicts via
+    /// [`clear_awaiting_reply`](Self::clear_awaiting_reply).
     pub fn take_reply_or_park(
         &self,
         pid: Pid,
         token: i64,
         deadline: Option<Instant>,
+        callee: Pid,
     ) -> MailPark<M> {
-        self.with_hot(pid, |slot, hot| {
-            if let Some(reply) = hot.mailbox.take_reply() {
-                if reply.reply_token() == token {
+        self.ensure_call_waiter(pid, callee, token);
+        let park = self
+            .with_hot(pid, |slot, hot| {
+                if let Some(reply) = hot.mailbox.take_reply() {
+                    if reply.reply_token() == token {
+                        hot.awaiting_reply = None;
+                        hot.deadline = None;
+                        return MailPark::Ready(reply);
+                    }
+                    return MailPark::Stale(reply);
+                }
+                if !self.is_alive(callee) {
                     hot.awaiting_reply = None;
                     hot.deadline = None;
-                    return MailPark::Ready(reply);
+                    return MailPark::CalleeDown;
                 }
-                return MailPark::Stale(reply);
-            }
-            if !self.park_edge(pid, slot, ProcessState::Blocked) {
-                return MailPark::Refused;
-            }
-            hot.deadline = deadline;
-            hot.waiting = WaitTarget::Reply;
-            self.active.fetch_sub(1, Ordering::Relaxed);
-            MailPark::Parked
-        })
-        .unwrap_or_else(|| {
-            self.note_refused_park(pid);
-            MailPark::Refused
-        })
+                if !self.park_edge(pid, slot, ProcessState::Blocked) {
+                    return MailPark::Refused;
+                }
+                hot.deadline = deadline;
+                hot.waiting = WaitTarget::Reply;
+                self.active.fetch_sub(1, Ordering::Relaxed);
+                MailPark::Parked
+            })
+            .unwrap_or_else(|| {
+                self.note_refused_park(pid);
+                MailPark::Refused
+            });
+        if matches!(park, MailPark::Ready(_) | MailPark::CalleeDown) {
+            self.evict_call_waiter(pid);
+        }
+        park
     }
 
     /// Clears `pid`'s recorded wake deadline, so a later fired timer
@@ -960,10 +1010,12 @@ impl<X, M: Message> ProcessTable<X, M> {
         self.with_hot(pid, |_, hot| hot.awaiting_reply = Some(token));
     }
 
-    /// Clears `pid`'s awaited-reply token once its call completes (reply
-    /// received or timed out). A no-op for a stale PID.
+    /// Clears `pid`'s awaited-reply token and drops its waiter entry once
+    /// its call completes (reply received or timed out). A no-op for a
+    /// stale PID.
     pub fn clear_awaiting_reply(&self, pid: Pid) {
         self.with_hot(pid, |_, hot| hot.awaiting_reply = None);
+        self.evict_call_waiter(pid);
     }
 
     /// Whether `pid` is alive and still waiting on the reply for `token`.
@@ -1341,6 +1393,16 @@ impl<X, M: Message> ProcessTable<X, M> {
                 watcher,
             });
         }
+        // Same sweep for in-flight calls. A wait on the dead callee is
+        // staged for a wake, and a dead caller's own wait just drops.
+        let mut call_downs = Vec::new();
+        registry.call_waiters.retain(|waiter| {
+            if waiter.callee == pid && waiter.caller != pid {
+                call_downs.push(*waiter);
+            }
+            waiter.callee != pid && waiter.caller != pid
+        });
+        registry.pending_call_downs.extend(call_downs);
         // Stage the children for the cascade and drop out of the parent's
         // entry. Spawn also runs under this hold, so no child can register
         // concurrently and escape the staging. A staged child may still
@@ -1354,6 +1416,66 @@ impl<X, M: Message> ProcessTable<X, M> {
                 siblings.remove();
             }
         }
+    }
+
+    /// Ensures `caller`'s waiter entry (waiting on `callee`'s reply for
+    /// call `token`) is registered, idempotent across the wait loop's
+    /// iterations. The aliveness decision happens under the registry
+    /// hold, the same hold the death edge's sweep takes, so either the
+    /// entry is registered before the sweep or a dead endpoint refuses
+    /// the registration here (the caller's park then resolves via
+    /// [`MailPark::CalleeDown`]).
+    fn ensure_call_waiter(&self, caller: Pid, callee: Pid, token: i64) {
+        self.with_registry(|registry| {
+            let registered = registry
+                .call_waiters
+                .iter()
+                .any(|waiter| waiter.caller == caller && waiter.token == token);
+            if !registered && self.is_alive(callee) && self.is_alive(caller) {
+                registry.call_waiters.push(CallWaiter {
+                    callee,
+                    caller,
+                    token,
+                });
+            }
+        });
+    }
+
+    /// Drops `caller`'s waiter entry once its call completes. Calls are
+    /// atomic, so a caller has at most one entry.
+    fn evict_call_waiter(&self, caller: Pid) {
+        self.with_registry(|registry| {
+            registry
+                .call_waiters
+                .retain(|waiter| waiter.caller != caller);
+        });
+    }
+
+    /// Drains the reply waits staged by death edges. The adapter wakes
+    /// each via [`promote_call_waiter`](Self::promote_call_waiter).
+    pub fn take_call_downs(&self) -> Vec<CallWaiter> {
+        self.with_registry(|registry| std::mem::take(&mut registry.pending_call_downs))
+    }
+
+    /// Wakes a caller parked on a dead callee's reply, re-validating that
+    /// it is still `Blocked` on that call first (it may have been woken
+    /// by a racing reply, timed out, or died since the death edge staged
+    /// it). The woken caller re-checks the callee and resolves via
+    /// [`MailPark::CalleeDown`].
+    pub fn promote_call_waiter(&self, caller: Pid, token: i64) -> Option<Wake> {
+        self.with_hot(caller, |slot, hot| {
+            let (_, generation) = decode(caller);
+            let word = slot.lifecycle.load();
+            let still_waiting = word.generation == generation
+                && word.state == Some(ProcessState::Blocked)
+                && hot.waiting == WaitTarget::Reply
+                && hot.awaiting_reply == Some(token);
+            if !still_waiting {
+                return None;
+            }
+            hot.deadline = None;
+            self.wake_edge(caller, slot, ProcessState::Blocked)
+        })?
     }
 
     /// Registers `watcher`'s monitor on `target`, returning its token.
@@ -1774,11 +1896,12 @@ mod tests {
     fn take_reply_or_park_matches_the_token() {
         let table = TestTable::new();
         let pid = spawn_running(&table);
+        let callee = fake_spawn(&table);
         table.set_awaiting_reply(pid, 7);
 
         // No reply yet: park on the reply slot.
         assert!(matches!(
-            table.take_reply_or_park(pid, 7, None),
+            table.take_reply_or_park(pid, 7, None, callee),
             MailPark::Parked
         ));
         assert!(matches!(table.after_switch(pid), SwitchOutcome::Parked));
@@ -1786,17 +1909,177 @@ mod tests {
         assert!(table.deliver(pid, fake_reply(6)).wake.is_some());
         assert!(table.try_claim(pid));
         assert!(matches!(
-            table.take_reply_or_park(pid, 7, None),
+            table.take_reply_or_park(pid, 7, None, callee),
             MailPark::Stale(_)
         ));
         // The matching reply completes the call and clears the token.
         let delivery = table.deliver_reply(pid, 7, fake_reply(7));
         assert!(delivery.delivered);
         assert!(matches!(
-            table.take_reply_or_park(pid, 7, None),
+            table.take_reply_or_park(pid, 7, None, callee),
             MailPark::Ready(_)
         ));
         assert!(!table.is_awaiting_reply(pid, 7), "match cleared the token");
+    }
+
+    #[test]
+    fn take_reply_or_park_refuses_a_dead_callee() {
+        let table = TestTable::new();
+        let pid = spawn_running(&table);
+        let callee = fake_spawn(&table);
+        table.set_awaiting_reply(pid, 7);
+        assert!(table.kill(callee).is_some());
+
+        // No reply can ever arrive, so the park resolves instead.
+        assert!(matches!(
+            table.take_reply_or_park(pid, 7, None, callee),
+            MailPark::CalleeDown
+        ));
+        assert!(!table.is_awaiting_reply(pid, 7), "wait was resolved");
+    }
+
+    #[test]
+    fn take_reply_or_park_prefers_a_slotted_reply_over_a_dead_callee() {
+        let table = TestTable::new();
+        let pid = spawn_running(&table);
+        let callee = fake_spawn(&table);
+        table.set_awaiting_reply(pid, 7);
+
+        // The callee replies and then dies. The call completed.
+        assert!(table.deliver_reply(pid, 7, fake_reply(7)).delivered);
+        assert!(table.kill(callee).is_some());
+        assert!(matches!(
+            table.take_reply_or_park(pid, 7, None, callee),
+            MailPark::Ready(_)
+        ));
+    }
+
+    #[test]
+    fn callee_death_stages_and_promotes_a_parked_caller() {
+        let table = TestTable::new();
+        let caller = spawn_running(&table);
+        let callee = fake_spawn(&table);
+        table.set_awaiting_reply(caller, 7);
+        // The take registers the waiter entry itself.
+        assert!(matches!(
+            table.take_reply_or_park(caller, 7, None, callee),
+            MailPark::Parked
+        ));
+        assert!(matches!(table.after_switch(caller), SwitchOutcome::Parked));
+
+        // The death edge stages the wait, and the promote wakes the caller.
+        assert!(table.kill(callee).is_some());
+        let staged = table.take_call_downs();
+        assert_eq!(
+            staged,
+            vec![CallWaiter {
+                callee,
+                caller,
+                token: 7,
+            }],
+        );
+        let wake = table.promote_call_waiter(caller, 7);
+        assert_eq!(wake.map(|wake| wake.pid), Some(caller));
+        // The woken caller re-checks the callee and resolves.
+        assert!(table.try_claim(caller));
+        assert!(matches!(
+            table.take_reply_or_park(caller, 7, None, callee),
+            MailPark::CalleeDown
+        ));
+    }
+
+    #[test]
+    fn promote_call_waiter_skips_a_reply_woken_caller() {
+        let table = TestTable::new();
+        let caller = spawn_running(&table);
+        let callee = fake_spawn(&table);
+        table.set_awaiting_reply(caller, 7);
+        assert!(matches!(
+            table.take_reply_or_park(caller, 7, None, callee),
+            MailPark::Parked
+        ));
+
+        // A reply wins the race with the death edge. The staged promote
+        // must not double-wake or clobber the completed call.
+        assert!(table.deliver_reply(caller, 7, fake_reply(7)).delivered);
+        assert!(table.kill(callee).is_some());
+        assert_eq!(table.take_call_downs().len(), 1);
+        assert!(table.promote_call_waiter(caller, 7).is_none());
+    }
+
+    #[test]
+    fn caller_death_sweeps_its_waiter_entry() {
+        let table = TestTable::new();
+        let caller = spawn_running(&table);
+        let callee = fake_spawn(&table);
+        assert!(matches!(
+            table.take_reply_or_park(caller, 7, None, callee),
+            MailPark::Parked
+        ));
+
+        // A caller killed mid-call leaves no entry behind, and its own
+        // death stages no call-down.
+        assert!(table.mark_dead_if_alive(caller));
+        assert!(table.take_call_downs().is_empty());
+        assert!(table.kill(callee).is_some());
+        assert!(table.take_call_downs().is_empty(), "entry was swept");
+    }
+
+    #[test]
+    fn a_dead_callee_registers_no_waiter_entry() {
+        let table = TestTable::new();
+        let caller = spawn_running(&table);
+        let callee = fake_spawn(&table);
+        assert!(table.kill(callee).is_some());
+
+        // The callee's death sweep already ran, so a registration now
+        // would never be drained. The take refuses it and resolves.
+        assert!(matches!(
+            table.take_reply_or_park(caller, 7, None, callee),
+            MailPark::CalleeDown
+        ));
+        assert!(table.kill(caller).is_none(), "on_cpu kill defers reclaim");
+        assert!(table.take_call_downs().is_empty());
+    }
+
+    #[test]
+    fn a_timed_out_caller_evicts_its_waiter_entry() {
+        let table = TestTable::new();
+        let caller = spawn_running(&table);
+        let callee = fake_spawn(&table);
+        table.set_awaiting_reply(caller, 7);
+        assert!(matches!(
+            table.take_reply_or_park(caller, 7, None, callee),
+            MailPark::Parked
+        ));
+
+        // The timeout path gives up via `clear_awaiting_reply`, so the
+        // callee's later death stages nothing.
+        table.clear_awaiting_reply(caller);
+        assert!(table.kill(callee).is_some());
+        assert!(table.take_call_downs().is_empty(), "entry was evicted");
+    }
+
+    #[test]
+    fn a_completed_call_evicts_its_waiter_entry() {
+        let table = TestTable::new();
+        let caller = spawn_running(&table);
+        let callee = fake_spawn(&table);
+        table.set_awaiting_reply(caller, 7);
+        assert!(matches!(
+            table.take_reply_or_park(caller, 7, None, callee),
+            MailPark::Parked
+        ));
+
+        // The matching take resolves the call and drops the entry, so the
+        // callee's later death stages nothing.
+        assert!(table.deliver_reply(caller, 7, fake_reply(7)).delivered);
+        assert!(matches!(
+            table.take_reply_or_park(caller, 7, None, callee),
+            MailPark::Ready(_)
+        ));
+        assert!(table.kill(callee).is_some());
+        assert!(table.take_call_downs().is_empty(), "entry was evicted");
     }
 
     #[test]

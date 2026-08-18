@@ -161,7 +161,7 @@ fn call_to_dead_process_reports_process_down() {
           fn run(self) -> Process.StopReason
             worker = spawn Mute.start(0)
             worker.kill()
-            result = worker.call(1, 25)
+            result = worker.call(1, 5000)
             match result
               Result.Ok(_) -> Process.StopReason.Normal
               Result.Err(error) ->
@@ -174,10 +174,16 @@ fn call_to_dead_process_reports_process_down() {
         end
         "
     );
+    let started = std::time::Instant::now();
     assert_eq!(
         run_app(&source),
         Value::Int(1),
         "a call to a killed process should surface Process.CallError.ProcessDown",
+    );
+    // The dead callee resolves the call immediately, not at the timeout.
+    assert!(
+        started.elapsed() < std::time::Duration::from_millis(2500),
+        "a call to a dead process should not wait out its timeout",
     );
 }
 

@@ -1,0 +1,78 @@
+alias Process.CallError
+alias Process.Step
+alias Process.StopReason
+
+struct Mute: Process<(), Int, Int>
+  fn start(config: ()) -> Result<Self, StopReason>
+    Result.Ok(Mute{})
+  end
+
+  fn handle(self, msg: Int, from: Option<ReplyTo<Int>>) -> Step<Self>
+    Step.Continue(self)
+  end
+end
+
+# Kills the ref it carries when its delayed message arrives.
+struct Reaper: Process<Ref<Int, Int>, (), ()>
+  victim: Ref<Int, Int>
+
+  fn start(victim: Ref<Int, Int>) -> Result<Self, StopReason>
+    Result.Ok(Reaper{victim: victim})
+  end
+
+  fn handle(self, msg: (), from: Option<ReplyTo<()>>) -> Step<Self>
+    self.victim.kill()
+    Step.Done(StopReason.Normal)
+  end
+end
+
+fn report(label: String, result: Result<Int, CallError>, started: Int)
+  match result
+    Result.Ok(_) ->
+      IO.puts("#{label}: wrong reply")
+
+    Result.Err(error) ->
+      match error
+        CallError.Timeout -> IO.puts("#{label}: wrong timeout")
+        CallError.ProcessDown -> IO.puts("#{label}: process down")
+      end
+  end
+
+  elapsed = DateTime.now().timestamp_millis() - started
+
+  cond
+    elapsed < 2500 -> IO.puts("#{label}: fast")
+    else -> IO.puts("#{label}: waited out the timeout")
+  end
+end
+
+enum ProbeMsg
+  Run
+end
+
+struct Probe: Process<(), ProbeMsg, Int>
+  fn start(config: ()) -> Result<Self, StopReason>
+    Result.Ok(Probe{})
+  end
+
+  fn handle(self, msg: ProbeMsg, from: Option<ReplyTo<Int>>) -> Step<Self>
+    # An already-dead callee resolves immediately, not at the timeout.
+    dead = spawn Mute.start(())
+    dead.kill()
+    started = DateTime.now().timestamp_millis()
+    report("dead call", dead.call(1, 5000), started)
+
+    # A callee dying mid-wait wakes the parked caller.
+    victim = spawn Mute.start(())
+    reaper = spawn Reaper.start(victim)
+    reaper.send_after((), 50)
+    started = DateTime.now().timestamp_millis()
+    report("mid-wait call", victim.call(1, 5000), started)
+
+    ReplyTo.reply(from, 0)
+    Step.Done(StopReason.Normal)
+  end
+end
+
+probe = spawn Probe.start(())
+probe.call(ProbeMsg.Run, 30000)

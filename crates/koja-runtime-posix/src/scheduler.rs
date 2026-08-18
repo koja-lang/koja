@@ -550,6 +550,21 @@ fn deliver_exit_signals() -> (Vec<Envelope>, usize) {
     (leftovers, woken)
 }
 
+/// Wakes every caller whose in-flight call lost its callee to a death
+/// edge, so the call resolves to `ProcessDown` now instead of at its
+/// timeout. The promote re-validates each waiter, and the woken caller
+/// re-checks the callee itself (`MailPark::CalleeDown`). Returns how
+/// many wakes landed in a global injector.
+fn wake_call_waiters() -> usize {
+    let mut woken = 0;
+    for waiter in TABLE.take_call_downs() {
+        if let Some(wake) = TABLE.promote_call_waiter(waiter.caller, waiter.token) {
+            woken += route_wake(wake);
+        }
+    }
+    woken
+}
+
 /// Resources detached while settling a death edge, dropped by the caller
 /// after any lock is released. `leftovers` and `reclaims` are never read
 /// by name (they exist so their `Drop` runs at that controlled point).
@@ -569,8 +584,9 @@ struct SettledExits {
 /// Drains the staged kill targets, kills each with no cross-slot lock
 /// held (each kill can stage grandchildren under the registry), and
 /// repeats until nothing is staged, then delivers the staged
-/// `ExitSignal`s. Call at every site that can stage notices or kills
-/// (death edges and `koja_rt_monitor`).
+/// `ExitSignal`s and wakes callers whose callee died. Call at every
+/// site that can stage notices or kills (death edges and
+/// `koja_rt_monitor`).
 fn settle_exits() -> SettledExits {
     let mut freed = Vec::new();
     let mut reclaims = Vec::new();
@@ -586,7 +602,8 @@ fn settle_exits() -> SettledExits {
             }
         }
     }
-    let (leftovers, woken) = deliver_exit_signals();
+    let (leftovers, mut woken) = deliver_exit_signals();
+    woken += wake_call_waiters();
     SettledExits {
         freed,
         leftovers,
@@ -1286,7 +1303,9 @@ pub extern "C" fn koja_rt_receive(out: *mut u8, out_cap: i64) -> i64 {
     // yields: the owner reclaims at switch-out and the frame never resumes.
     match TABLE.receive_or_park(pid, None) {
         MailPark::Ready(envelope) => return deliver_envelope(envelope, out, out_cap),
-        MailPark::Parked | MailPark::Refused | MailPark::Stale(_) => {}
+        // `CalleeDown` and `Stale` are reply-park outcomes, never
+        // produced by `receive_or_park`.
+        MailPark::CalleeDown | MailPark::Parked | MailPark::Refused | MailPark::Stale(_) => {}
     }
 
     yield_to_scheduler();
@@ -1319,7 +1338,9 @@ pub extern "C" fn koja_rt_receive_timeout(out: *mut u8, out_cap: i64, timeout_ms
         // that lands on the next drain.
         MailPark::Parked => TIMERS.with(|timers| timers.arm_deadline(pid, deadline)),
         // A refused park (killed mid-run) arms nothing but still yields.
-        MailPark::Refused | MailPark::Stale(_) => {}
+        // `CalleeDown` and `Stale` are reply-park outcomes, never
+        // produced by `receive_or_park`.
+        MailPark::CalleeDown | MailPark::Refused | MailPark::Stale(_) => {}
     }
 
     yield_to_scheduler();
@@ -1349,17 +1370,21 @@ pub extern "C" fn koja_rt_call_token() -> i64 {
 /// Blocks until the reply correlated with `token` lands in this
 /// process's reply slot, copies its payload into `out` (at most
 /// `out_cap` bytes), and returns `0`. Returns `-1` if `timeout_ms`
-/// elapses first. A slotted reply with a different token is a stale
-/// leftover from an earlier call that timed out, so it is dropped
-/// (running its payload drop glue) and the wait continues. Queue traffic is left
-/// untouched: calls are atomic, so the caller resumes handling its
-/// mailbox only after the call completes.
+/// elapses first, or as soon as `target` (the callee) is dead with no
+/// reply slotted, since none can ever arrive. LLVM maps the `-1` to
+/// `Timeout` or `ProcessDown` by the target's liveness. A slotted reply
+/// with a different token is a stale leftover from an earlier call that
+/// timed out, so it is dropped (running its payload drop glue) and the
+/// wait continues. Queue traffic is left untouched: calls are atomic,
+/// so the caller resumes handling its mailbox only after the call
+/// completes.
 #[unsafe(no_mangle)]
 pub extern "C" fn koja_rt_call_receive(
     token: i64,
     out: *mut u8,
     out_cap: i64,
     timeout_ms: i64,
+    target: i64,
 ) -> i64 {
     let pid = CURRENT_PID.with(|c| c.get());
     let deadline = Instant::now() + duration_from_user_millis(timeout_ms);
@@ -1368,21 +1393,31 @@ pub extern "C" fn koja_rt_call_receive(
         // The timeout check comes before the reply check, so a woken
         // waiter that finds its deadline passed gives up even if a reply
         // squeaked in meanwhile. `clear_awaiting_reply` makes the sender's
-        // `Expired` answer authoritative from here on.
+        // `Expired` answer authoritative from here on (and evicts the
+        // death-edge waiter entry the takes below registered).
         if Instant::now() >= deadline {
             TABLE.clear_deadline(pid);
             TABLE.clear_awaiting_reply(pid);
             TIMERS.with(|timers| timers.cancel_deadline(pid));
-            return -1;
+            break -1;
         }
         // Check the reply slot and park in one hold, so a reply can't
         // slip between the empty check and the park. A matching take
-        // also clears the awaited token and recorded deadline.
-        match TABLE.take_reply_or_park(pid, token, Some(deadline)) {
+        // also clears the awaited token and recorded deadline. The take
+        // maintains the death-edge waiter index itself, so a callee that
+        // dies mid-park wakes this caller instead of leaving it to the
+        // timeout.
+        match TABLE.take_reply_or_park(pid, token, Some(deadline), target) {
             MailPark::Ready(envelope) => {
                 TIMERS.with(|timers| timers.cancel_deadline(pid));
                 deliver_envelope(envelope, out, out_cap);
-                return 0;
+                break 0;
+            }
+            // The target is dead and no reply is slotted. The take
+            // already resolved the wait, so only the timer remains.
+            MailPark::CalleeDown => {
+                TIMERS.with(|timers| timers.cancel_deadline(pid));
+                break -1;
             }
             // A stale leftover from an earlier timed-out call: drop it
             // (running its payload glue) and re-check immediately.
