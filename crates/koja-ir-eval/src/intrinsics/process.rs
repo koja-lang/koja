@@ -17,7 +17,7 @@ use koja_ir::{
     IRFunction, IRSymbol, IRType, IRVariantPayload, IRVariantTag, ProcessMethod, RefMethod,
     ReplyToMethod,
 };
-use koja_runtime_core::{Pid, Tag, duration_from_user_millis};
+use koja_runtime_core::{MailPark, Pid, Tag, duration_from_user_millis};
 
 use super::helpers;
 use crate::error::RuntimeError;
@@ -180,35 +180,40 @@ async fn call<R: CallResolver>(
             }),
         ),
     );
-
     let deadline = Instant::now() + duration_from_user_millis(timeout_ms);
-    loop {
-        if let Some(reply) = scheduler::take_reply(caller) {
-            // Correlate by token. A mismatch is a stale reply from an
-            // earlier call that already timed out, so discard and keep waiting.
-            if reply.reply.map(|info| info.token) == Some(token) {
-                scheduler::clear_deadline(caller);
-                scheduler::clear_awaiting_reply(caller);
-                return Ok(helpers::result_value(
-                    result_symbol.clone(),
-                    Ok(reply.value),
-                ));
-            }
-            continue;
-        }
+    let outcome = loop {
+        // The timeout check comes before the reply check, so a woken
+        // waiter that finds its deadline passed gives up even if a reply
+        // squeaked in meanwhile (mirrors native's `koja_rt_call_receive`).
         if Instant::now() >= deadline {
-            scheduler::clear_deadline(caller);
-            scheduler::clear_awaiting_reply(caller);
             let variant = if scheduler::is_alive(target) {
                 "Timeout"
             } else {
                 "ProcessDown"
             };
-            let error = helpers::err_variant_value(&result_symbol, resolver, variant)?;
-            return Ok(helpers::result_value(result_symbol.clone(), Err(error)));
+            break Err(variant);
         }
-        scheduler::park_reply(caller, Some(deadline));
-        YieldOnce::new().await;
+        // Check the reply slot and park in one hold. The take correlates
+        // by token, resolves a dead callee early, and maintains the
+        // death-edge waiter index itself, so a callee that dies mid-park
+        // wakes this caller instead of leaving it to the timeout.
+        match scheduler::take_reply_or_park(caller, token, Some(deadline), target) {
+            MailPark::Ready(reply) => break Ok(reply.value),
+            MailPark::CalleeDown => break Err("ProcessDown"),
+            // A stale leftover from an earlier timed-out call. Drop it
+            // and re-check immediately.
+            MailPark::Stale(stale) => drop(stale),
+            MailPark::Parked | MailPark::Refused => YieldOnce::new().await,
+        }
+    };
+    scheduler::clear_deadline(caller);
+    scheduler::clear_awaiting_reply(caller);
+    match outcome {
+        Ok(value) => Ok(helpers::result_value(result_symbol.clone(), Ok(value))),
+        Err(variant) => {
+            let error = helpers::err_variant_value(&result_symbol, resolver, variant)?;
+            Ok(helpers::result_value(result_symbol.clone(), Err(error)))
+        }
     }
 }
 

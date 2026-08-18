@@ -197,10 +197,13 @@ fn emit_send_after<'ctx>(
 /// `(M, Option<ReplyTo<R>>)` envelope with the second element set
 /// to `Option::Some(ReplyTo { id: caller_pid, token })`, `koja_rt_
 /// send` it to the target, then block on `koja_rt_call_receive(
-/// token, timeout)`, which waits on the caller's one-shot reply
-/// slot, discarding stale replies from earlier timed-out calls, and
-/// never touches queued business / lifecycle traffic (calls are
-/// atomic). Three-way dispatch on the result:
+/// token, timeout, target)`, which waits on the caller's one-shot
+/// reply slot, discarding stale replies from earlier timed-out
+/// calls, and never touches queued business / lifecycle traffic
+/// (calls are atomic). The runtime returns `-1` early when the
+/// target dies with no reply slotted, so a dead callee resolves as
+/// `ProcessDown` without waiting out the timeout. Three-way dispatch
+/// on the result:
 ///
 /// - `0` -> load `R` from the reply slot -> `Result.Ok(R)`.
 /// - `-1` + target alive -> `Result.Err(CallError.Timeout)`.
@@ -270,6 +273,7 @@ fn emit_call<'ctx>(
                 reply_slot.into(),
                 reply_cap.into(),
                 timeout.into(),
+                target_pid.into(),
             ],
             "reply_status",
         )?

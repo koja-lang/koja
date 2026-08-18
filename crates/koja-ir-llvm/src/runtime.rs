@@ -606,15 +606,22 @@ pub(crate) fn declare_rt_call_token_extern<'ctx>(ctx: &EmitContext<'ctx>) -> Fun
 
 /// Declare (or look up) `koja_rt_call_receive`. Signature:
 /// `i64 koja_rt_call_receive(i64 token, i8* out, i64 out_cap, i64
-/// timeout_ms)`. Blocks until the reply correlated with `token`
-/// arrives, copies its payload into `out`, and returns `0`. Returns
-/// `-1` on timeout. Stale replies (token mismatch) are discarded by
-/// the runtime.
+/// timeout_ms, i64 target_pid)`. Blocks until the reply correlated with
+/// `token` arrives, copies its payload into `out`, and returns `0`.
+/// Returns `-1` on timeout, or as soon as `target_pid` (the callee) is
+/// dead with no reply slotted. Stale replies (token mismatch) are
+/// discarded by the runtime.
 pub(crate) fn declare_rt_call_receive_extern<'ctx>(ctx: &EmitContext<'ctx>) -> FunctionValue<'ctx> {
     let ptr_ty = ctx.context.ptr_type(AddressSpace::default());
     let i64_ty = ctx.context.i64_type();
     let signature = i64_ty.fn_type(
-        &[i64_ty.into(), ptr_ty.into(), i64_ty.into(), i64_ty.into()],
+        &[
+            i64_ty.into(),
+            ptr_ty.into(),
+            i64_ty.into(),
+            i64_ty.into(),
+            i64_ty.into(),
+        ],
         false,
     );
     declare_extern(ctx, RT_CALL_RECEIVE_SYMBOL, signature)

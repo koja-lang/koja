@@ -168,16 +168,14 @@ neighbor remains open:
 Found 2026-08-08 while auditing the `builtin` migration.
 `derive_debug` and `derive_equality` synthesize the same impls for a
 `builtin` declaration that a zero-field struct gets. Builtins with
-explicit stdlib impls (the scalars, `String`, container `Debug`)
-never hit the synthesis, but the holes are live:
+explicit stdlib impls (the scalars, `String`, container and `CPtr`
+`Debug`) never hit the synthesis, but the holes are live:
 
 - `List`, `Map`, `Set`, and `CPtr` have no explicit `Equality` impl,
   so the derived `eq` compares zero fields and returns `true` for
   every pair: `[1, 2] == [3]` evaluates to `true` today. This
   pre-dates the `builtin` keyword, since the types were zero-field
   structs before.
-- `CPtr` has no explicit `Debug` impl, so `ptr.print()` renders the
-  struct-shaped `CPtr{}`.
 - `Int64`, `Float64`, `Never`, and `Unit` lean on synthesized derives
   only for conformance. At runtime the IR's `Int64`-onto-`Int` method
   collapse routes to the real intrinsic impls.
@@ -185,9 +183,8 @@ never hit the synthesis, but the holes are live:
 **Fix path:** delete the builtin arms from both derive passes and add
 explicit stdlib impls. Collection `eq` needs an element-wise walk and
 a `T: Equality` requirement on the impl target, which the language
-cannot spell yet. `CPtr` needs a real `Debug` body. The
-conformance-only holes need explicit impls or a rule that a builtin
-satisfies bounds by shape.
+cannot spell yet. The conformance-only holes need explicit impls or
+a rule that a builtin satisfies bounds by shape.
 
 ---
 
@@ -350,29 +347,6 @@ multiplication exists.
 
 ---
 
-## `call` to a dead process waits out the full timeout
-
-Found 2026-08-10 while building a request-response protocol on top of
-processes. LANGUAGE.md says `call` returns
-`Err(CallError.ProcessDown)` "if the process is dead", but the
-runtime only discovers the death when the timeout expires: killing a
-process and calling its ref with a 5000ms timeout blocks for the full
-5000ms before reporting `ProcessDown`. `alive?()` returns the right
-answer immediately, so the liveness fact exists; the call path just
-never consults it.
-
-The stall compounds across layers. A process that serves a socket and
-calls into a possibly-stopped process holds its socket open for the
-whole timeout, which blocks the remote peer's read, which stalls the
-remote peer's own message queue. One dead process can freeze healthy
-neighbors for tens of seconds of chained timeouts.
-
-**Fix path:** check liveness at send time and monitor for death
-during the wait, resolving the call with `ProcessDown` as soon as the
-callee stops. The doc contract already promises this behavior.
-
----
-
 ## Sockets have no deadlines
 
 Found 2026-08-10 while building a TCP request-response protocol.
@@ -474,14 +448,3 @@ blocks. Clone glue then takes an `rc++` on the box instead of
 unboxing, and drop glue releases contents only when the count
 reaches zero. Path-copied structures share unchanged subtrees and
 persistent updates return to O(log n).
-
-## Formatter relocates comments between or-pattern alternatives
-
-Found 2026-08-10 during the F3 bracketed-construct comment work, reduced
-2026-08-12 when the attach pass learned to walk patterns. Comments inside
-broken list, tuple, enum, struct, and binary patterns now anchor to their
-element (`koja-fmt/src/printer/pattern.rs`). The one remaining relocation
-is a comment between or-pattern alternatives (`1 | # note` on its own
-line). The or-pattern fill has no per-line anchor, so the comment is
-preserved but moves to the arm's head line. Rare in practice because
-or-pattern separators seldom carry comments.

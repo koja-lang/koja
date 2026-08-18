@@ -140,6 +140,7 @@ intrinsic_methods! {
     }
 
     CPtrMethod {
+        Address => "address",
         Alloc => "alloc",
         Borrow => "borrow",
         Copy => "copy",
@@ -634,6 +635,7 @@ mod tests {
             ("Bits", "bit_size", Id::Bits(BitsMethod::BitSize)),
             ("Bits", "byte_at", Id::Bits(BitsMethod::ByteAt)),
             ("Bits", "to_binary", Id::Bits(BitsMethod::ToBinary)),
+            ("CPtr", "address", Id::CPtr(CPtrMethod::Address)),
             ("CPtr", "alloc", Id::CPtr(CPtrMethod::Alloc)),
             ("CPtr", "borrow", Id::CPtr(CPtrMethod::Borrow)),
             ("CPtr", "copy", Id::CPtr(CPtrMethod::Copy)),

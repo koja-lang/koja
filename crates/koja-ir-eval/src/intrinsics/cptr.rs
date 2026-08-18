@@ -1,5 +1,5 @@
-//! `CPtr<T>` family: `alloc`, `borrow`, `copy`, `free`, `null`,
-//! `null?`, `offset`, `read`, `to_binary`, `write`.
+//! `CPtr<T>` family: `address`, `alloc`, `borrow`, `copy`, `free`,
+//! `null`, `null?`, `offset`, `read`, `to_binary`, `write`.
 //!
 //! Eval now backs `CPtr<T>` with a real raw pointer ([`Value::CPtr`])
 //! so the shell can exercise the same FFI paths the LLVM backend
@@ -33,6 +33,7 @@ pub(super) fn dispatch(
     args: &[Value],
 ) -> Result<Value, RuntimeError> {
     match method {
+        CPtrMethod::Address => address(args),
         CPtrMethod::Alloc => alloc(function, args),
         CPtrMethod::Borrow => borrow(args),
         CPtrMethod::Copy => copy(args),
@@ -44,6 +45,15 @@ pub(super) fn dispatch(
         CPtrMethod::ToBinary => to_binary(args),
         CPtrMethod::Write => write(function, args),
     }
+}
+
+fn address(args: &[Value]) -> Result<Value, RuntimeError> {
+    let [Value::CPtr(ptr)] = args else {
+        return Err(RuntimeError::TypeMismatch {
+            detail: format!("CPtr.address expects a single CPtr argument, got {args:?}"),
+        });
+    };
+    Ok(Value::Int(*ptr as i64))
 }
 
 fn alloc(function: &IRFunction, args: &[Value]) -> Result<Value, RuntimeError> {

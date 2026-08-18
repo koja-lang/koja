@@ -7,12 +7,13 @@
 //! `params[0].ty` for instance methods and on `return_type` for
 //! `alloc`/`null`. [`pointee`] picks the right slot.
 //!
-//! Bodies are inline LLVM IR: `null` returns `null`, `alloc` calls
-//! `malloc(count * sizeof(T))`, `free` calls libc `free`, `offset`
-//! issues a typed GEP, `read` / `write` load / store at the typed
-//! pointer, `null?` compares against `null`, `to_binary` copies
-//! `len` bytes into a managed Binary, `borrow` returns a Binary's
-//! payload pointer as-is, and `copy` mallocs an owned byte copy.
+//! Bodies are inline LLVM IR: `address` is a `ptrtoint`, `alloc`
+//! calls `malloc(count * sizeof(T))`, `borrow` returns a Binary's
+//! payload pointer as-is, `copy` mallocs an owned byte copy, `free`
+//! calls libc `free`, `null` returns `null`, `null?` compares
+//! against `null`, `offset` issues a typed GEP, `read` / `write`
+//! load / store at the typed pointer, and `to_binary` copies `len`
+//! bytes into a managed Binary.
 
 use inkwell::AddressSpace;
 use inkwell::IntPredicate;
@@ -38,6 +39,7 @@ pub(super) fn emit_cptr<'ctx>(
     ctx.builder.position_at_end(entry);
 
     match method {
+        CPtrMethod::Address => emit_address(ctx, function, llvm_function),
         CPtrMethod::Alloc => emit_alloc(ctx, function, llvm_function),
         CPtrMethod::Borrow => emit_borrow(ctx, function, llvm_function),
         CPtrMethod::Copy => emit_copy(ctx, function, llvm_function),
@@ -67,6 +69,24 @@ fn pointee(method: CPtrMethod, function: &IRFunction) -> Result<&IRType, LlvmErr
             function.symbol,
         ))),
     }
+}
+
+/// `address(self) -> Int`: the pointer value as an integer bit
+/// pattern (`ptrtoint`). A null pointer yields 0.
+fn emit_address<'ctx>(
+    ctx: &EmitContext<'ctx>,
+    function: &IRFunction,
+    llvm_function: FunctionValue<'ctx>,
+) -> Result<(), LlvmError> {
+    let self_ptr = nth_pointer(function, llvm_function, 0, "self")?;
+    let address = ctx
+        .builder
+        .build_ptr_to_int(self_ptr, ctx.context.i64_type(), "address")
+        .or_ice()?;
+    ctx.builder
+        .build_return(Some(&address))
+        .or_ice()
+        .map(|_| ())
 }
 
 fn emit_null<'ctx>(ctx: &EmitContext<'ctx>) -> Result<(), LlvmError> {

@@ -32,8 +32,8 @@ use std::time::{Duration, Instant};
 use koja_ir::IRSymbol;
 use koja_runtime_core::{
     Clock, CooperativeDriver, CooperativeRuntime, CrashInfo, Executor, ExitReason, IoPark,
-    Lifecycle, Message, MessageSource, Pid, Priority, ProcessTable, Readiness, SignalSource, Tag,
-    TimerService, WaitTarget, Wake,
+    Lifecycle, MailPark, Message, MessageSource, Pid, Priority, ProcessTable, Readiness,
+    SignalSource, Tag, TimerService, WaitTarget, Wake,
 };
 
 use crate::interpreter::{CallResolver, build_exit_signal_value};
@@ -188,11 +188,25 @@ pub(crate) fn park_receive(pid: Pid, deadline: Option<Instant>) {
     park(pid, WaitTarget::Receive, deadline);
 }
 
-/// Parks `pid` on its one-shot reply slot, so only a reply delivery (not
-/// queued business/lifecycle traffic) wakes the caller (`Ref.call`).
-/// Calls are atomic.
-pub(crate) fn park_reply(pid: Pid, deadline: Option<Instant>) {
-    park(pid, WaitTarget::Reply, deadline);
+/// Takes the reply for the in-flight call `token`, or parks `pid` on its
+/// one-shot reply slot, arming the wake deadline on a park (`Ref.call`).
+/// Calls are atomic, so only a reply delivery (not queued business or
+/// lifecycle traffic) wakes the caller. The take maintains the
+/// death-edge waiter index itself, so a callee that dies mid-park wakes
+/// the caller instead of leaving it to its timeout.
+pub(crate) fn take_reply_or_park(
+    pid: Pid,
+    token: i64,
+    deadline: Option<Instant>,
+    callee: Pid,
+) -> MailPark<EvalMessage> {
+    let park = with_table(|table| table.take_reply_or_park(pid, token, deadline, callee));
+    if matches!(park, MailPark::Parked)
+        && let Some(deadline) = deadline
+    {
+        with_timers(|timers| timers.arm_deadline(pid, deadline));
+    }
+    park
 }
 
 /// Disarms `pid`'s wake deadline, clearing the recorded instant and
@@ -244,19 +258,14 @@ pub(crate) fn schedule_timer(pid: Pid, fire_at: Instant, message: EvalMessage) {
     with_timers(|timers| timers.schedule_deliver(fire_at, pid, message));
 }
 
-/// Takes the pending reply from `pid`'s one-shot reply slot, if one has
-/// landed (`Ref.call`'s resume check).
-pub(crate) fn take_reply(pid: Pid) -> Option<EvalMessage> {
-    with_table(|table| table.take_reply(pid))
-}
-
 /// Registers `pid` as awaiting the reply for `token` (`Ref.call`), so
 /// `reply` can tell whether the caller is still listening.
 pub(crate) fn set_awaiting_reply(pid: Pid, token: i64) {
     with_table(|table| table.set_awaiting_reply(pid, token));
 }
 
-/// Clears `pid`'s awaited-reply token once its call completes.
+/// Clears `pid`'s awaited-reply token (and its death-edge waiter entry)
+/// once its call completes.
 pub(crate) fn clear_awaiting_reply(pid: Pid) {
     with_table(|table| table.clear_awaiting_reply(pid));
 }
@@ -438,6 +447,10 @@ impl Message for EvalMessage {
     fn tag(&self) -> Tag {
         self.tag
     }
+
+    fn reply_token(&self) -> i64 {
+        self.reply.as_ref().map_or(0, |info| info.token)
+    }
 }
 
 /// Yields control back to the driver exactly once. The caller parks
@@ -510,8 +523,9 @@ impl<'a, R: CallResolver> EvalExecutor<'a, R> {
     /// Settles the death edges from the resume that just finished:
     /// force-kills the staged kill-cascade targets until none remain
     /// (each kill can stage grandchildren), dropping their futures and
-    /// reclaimed resources, then delivers the staged `ExitSignal`s.
-    /// The single-threaded analog of native's per-death-site settles.
+    /// reclaimed resources, then delivers the staged `ExitSignal`s and
+    /// wakes callers whose callee died. The single-threaded analog of
+    /// native's per-death-site settles.
     fn settle_exits(&self) {
         loop {
             let staged = self.core.take_pending_kills();
@@ -526,6 +540,19 @@ impl<'a, R: CallResolver> EvalExecutor<'a, R> {
             }
         }
         self.deliver_exit_signals();
+        self.wake_call_waiters();
+    }
+
+    /// Wakes every caller whose in-flight call lost its callee to a
+    /// death edge, so the call resolves to `ProcessDown` now instead of
+    /// at its timeout. The promote re-validates each waiter, and the
+    /// woken caller re-checks the callee itself.
+    fn wake_call_waiters(&self) {
+        for waiter in self.core.take_call_downs() {
+            if let Some(wake) = self.core.promote_call_waiter(waiter.caller, waiter.token) {
+                push_wake(wake);
+            }
+        }
     }
 
     /// Synthesizes and delivers every staged `ExitSignal`, waking

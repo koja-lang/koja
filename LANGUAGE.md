@@ -1652,7 +1652,7 @@ end
 Operations on a process handle:
 
 - `cast(msg: M)`: fire-and-forget. The handler receives `from = Option.None`.
-- `call(msg: M, timeout: Int) -> Result<R, Process.CallError>`: sends a message and blocks up to `timeout` milliseconds for a reply. Returns `Result.Ok(reply)` on success, `Result.Err(CallError.Timeout)` if the process didn't reply in time, or `Result.Err(CallError.ProcessDown)` if the process is dead.
+- `call(msg: M, timeout: Int) -> Result<R, Process.CallError>`: sends a message and blocks up to `timeout` milliseconds for a reply. Returns `Result.Ok(reply)` on success, `Result.Err(CallError.Timeout)` if the process didn't reply in time, or `Result.Err(CallError.ProcessDown)` if the process is dead. A dead callee resolves the call promptly, even when it dies mid-wait, without waiting out the timeout.
 - `signal(event: Process.Lifecycle)`: sends a lifecycle signal to the process (e.g. `Lifecycle.Shutdown`). Delivered to `handle_signal`.
 - `kill()`: immediately terminates the process. No signal is sent.
 - `alive?() -> Bool`: returns `true` if the process is still running.
@@ -2283,7 +2283,7 @@ protocol Debug
 end
 ```
 
-`format` returns a round-trippable string representation of the value. `print` writes that string to stdout (via `IO.puts`) and returns `()`. `inspect` is the chainable variant. It prints and returns `self`, useful for tap-style debugging in the middle of an expression. The compiler auto-derives `Debug` for all types: primitives via intrinsics, enums as `VariantName` or `VariantName(payload)`, structs as `TypeName{field: value, ...}`. Generic types derive the same full field-by-field body as concrete ones. Fields whose type has no meaningful rendering (`CPtr<T>`, function values) render as a literal `"..."` placeholder. Implementing `format` is enough to get `print` and `inspect` for free. Custom implementations can override the derived one via `impl Debug for MyType`.
+`format` returns a round-trippable string representation of the value. `print` writes that string to stdout (via `IO.puts`) and returns `()`. `inspect` is the chainable variant. It prints and returns `self`, useful for tap-style debugging in the middle of an expression. The compiler auto-derives `Debug` for all types: primitives via intrinsics, enums as `VariantName` or `VariantName(payload)`, structs as `TypeName{field: value, ...}`. Generic types derive the same full field-by-field body as concrete ones. Fields whose type the derive does not render (`CPtr<T>`, function values) render as a literal `"..."` placeholder, though `CPtr<T>` itself has a real `Debug` impl that shows its hex address when formatted directly. Implementing `format` is enough to get `print` and `inspect` for free. Custom implementations can override the derived one via `impl Debug for MyType`.
 
 `Debug.format` for `String` is round-trippable. It wraps the contents in double quotes and escapes `\`, `"`, `\n`, `\r`, `\t`. That means `.print()` shows top-level strings quoted, and aggregates render their `String` fields quoted too:
 
@@ -2385,10 +2385,11 @@ struct CPtr<T>
   fn read(self) -> T
   fn write(self, value: T)
   fn null?(self) -> Bool
+  fn address(self) -> Int
 end
 ```
 
-`alloc` and `free` use C's `malloc` and `free`. All methods are compiler intrinsics.
+`alloc` and `free` use C's `malloc` and `free`. All methods are compiler intrinsics. `address` returns the raw address as an `Int` bit pattern (0 for null). `CPtr<T>` implements `Debug` by rendering that address as 16 hex digits: `ptr.format()` gives `CPtr(0x00006000023a4f10)` and a null pointer gives `CPtr(0x0)`.
 
 ```koja
 buf: CPtr<Int32> = CPtr.alloc(4)

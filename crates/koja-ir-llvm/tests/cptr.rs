@@ -20,3 +20,17 @@ fn negative_cptr_counts_emit_panic_guards() {
     assert_contains(&llvm, "CPtr.alloc count cannot be negative");
     assert_contains(&llvm, "CPtr.to_binary length cannot be negative");
 }
+
+#[test]
+fn cptr_address_emits_ptrtoint() {
+    let script = lower_script_source(
+        "
+        ptr: CPtr<UInt8> = CPtr.alloc(1)
+        a = ptr.address()
+        ptr.free()
+        a.print()
+        ",
+    );
+    let llvm = emit_script_llvm_ir(&script, APP_NAME).expect("emit LLVM");
+    assert_contains(&llvm, "ptrtoint ptr");
+}
