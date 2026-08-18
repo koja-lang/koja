@@ -320,9 +320,10 @@ impl Printer {
                 iterable,
                 body,
             } => {
+                let pattern_doc = self.pattern_to_doc(pattern);
                 let mut header_parts = vec![
                     text("for "),
-                    pattern_to_doc(pattern),
+                    pattern_doc,
                     text(" in "),
                     self.expr_to_doc(iterable),
                 ];
@@ -585,7 +586,7 @@ impl Printer {
 
     /// Formats an element list (list, tuple, map, or binary literal) with
     /// packed layout when comment-free and comment-aware packing otherwise.
-    fn element_list_to_doc(
+    pub(super) fn element_list_to_doc(
         &mut self,
         open: &str,
         close: &str,
@@ -818,7 +819,7 @@ impl Printer {
 
     /// Formats a `match` arm: `pattern [when guard] -> body`.
     pub(super) fn match_arm_to_doc(&mut self, arm: &MatchArm, force_break: bool) -> Doc {
-        let mut head = vec![pattern_to_doc(&arm.pattern)];
+        let mut head = vec![self.pattern_to_doc(&arm.pattern)];
         if let Some(guard) = &arm.guard {
             head.push(text(" when "));
             head.push(self.expr_to_doc(guard));

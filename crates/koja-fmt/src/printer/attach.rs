@@ -186,7 +186,8 @@ impl<'a> Attacher<'a> {
         self.push(child.key, Slot::Leading, leading);
         walk(self);
         // Comments the interior walk left behind relocate above the child
-        // rather than leak into a sibling. Patterns are the known case.
+        // rather than leak into a sibling. Or-pattern separators are the
+        // known case.
         let strays = self.take_before(child.span.end.offset);
         self.push(child.key, Slot::Leading, strays);
         let trailing = self.take_on_line(content_end_line(child.span), next_offset);
@@ -447,11 +448,15 @@ impl<'a> Attacher<'a> {
         }
         match stmt {
             Statement::Expr(expr) => self.walk_expr(expr),
-            Statement::Assignment { value, .. }
-            | Statement::CompoundAssign { value, .. }
-            | Statement::Destructure { value, .. } => {
+            Statement::Assignment { value, .. } | Statement::CompoundAssign { value, .. } => {
                 // A comment after `=` on a broken assignment's head line
                 // has no slot of its own, so hoist it above the statement.
+                let head = self.take_on_line(stmt_span(stmt).start.line, value.span.start.offset);
+                self.push(stmt_span(stmt), Slot::Leading, head);
+                self.walk_expr(value);
+            }
+            Statement::Destructure { pattern, value, .. } => {
+                self.walk_pattern(pattern);
                 let head = self.take_on_line(stmt_span(stmt).start.line, value.span.start.offset);
                 self.push(stmt_span(stmt), Slot::Leading, head);
                 self.walk_expr(value);
@@ -613,7 +618,12 @@ impl<'a> Attacher<'a> {
                 self.push(expr.span, Slot::HeaderTrailing, trailing);
                 self.walk_body(body, expr.span.end.offset, expr.span);
             }
-            ExprKind::For { iterable, body, .. } => {
+            ExprKind::For {
+                pattern,
+                iterable,
+                body,
+            } => {
+                self.walk_pattern(pattern);
                 self.walk_expr(iterable);
                 let first_stmt = body
                     .first()
@@ -748,6 +758,7 @@ impl<'a> Attacher<'a> {
             let next_offset = arms.get(i + 1).map_or(bound, |a| a.span.start.offset);
             let leading = self.take_before(arm.span.start.offset);
             self.push(arm.span, Slot::Leading, leading);
+            self.walk_pattern(&arm.pattern);
 
             let head_end = arm
                 .guard
@@ -816,6 +827,60 @@ impl<'a> Attacher<'a> {
         // An inline arm's trailing comment stays on its line.
         let trailing = self.take_on_line(content_end_line(arm_span), next_offset);
         self.push(arm_span, Slot::Trailing, trailing);
+    }
+
+    /// Walks a pattern so a comment inside a broken container anchors to
+    /// its element instead of relocating to the enclosing head line.
+    /// Comments between or-pattern alternatives stay unclaimed (the fill
+    /// layout has no per-line anchor) and relocate via the caller's sweep.
+    fn walk_pattern(&mut self, pattern: &Pattern) {
+        let span = pattern_span(pattern);
+        let inside = self.peek().is_some_and(|c| {
+            span.start.offset < c.span.start.offset && c.span.start.offset < span.end.offset
+        });
+        if !inside {
+            return;
+        }
+        match pattern {
+            Pattern::Binary { segments, .. } if !segments.is_empty() => {
+                self.walk_children(
+                    segments,
+                    |s| ChildInfo::of(s.span),
+                    |_, _| {},
+                    span.end.offset,
+                    (span, Slot::Stragglers),
+                );
+            }
+            Pattern::Constructor { elements, .. }
+            | Pattern::EnumTuple { elements, .. }
+            | Pattern::List { elements, .. }
+            | Pattern::Tuple { elements, .. }
+                if !elements.is_empty() =>
+            {
+                self.walk_children(
+                    elements,
+                    |p| ChildInfo::of(pattern_span(p)),
+                    |a, p| a.walk_pattern(p),
+                    span.end.offset,
+                    (span, Slot::Stragglers),
+                );
+            }
+            Pattern::EnumStruct { fields, .. } | Pattern::Struct { fields, .. } => {
+                self.walk_children(
+                    fields,
+                    |f| ChildInfo::of(f.span),
+                    |a, f| a.walk_pattern(&f.pattern),
+                    span.end.offset,
+                    (span, Slot::Stragglers),
+                );
+            }
+            Pattern::Or { patterns, .. } => {
+                for alternative in patterns {
+                    self.walk_pattern(alternative);
+                }
+            }
+            _ => {}
+        }
     }
 
     fn walk_args(&mut self, args: &[Arg], call_span: Span) {
