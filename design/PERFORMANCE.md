@@ -31,8 +31,9 @@ The LLVM backend is the production performance target.
 - Primitive values copy as bits.
 - `String`, `Binary`, `Bits`, and closure environments use non-atomic
   reference-counted blocks within a process.
-- Native collection copies allocate and copy their backing buffers.
-- User composites recursively copy or acquire their fields.
+- Unfused native collection copies allocate and copy their backing buffers.
+- User composites copy or acquire their fields. Recursive constituents share
+  write-once reference-counted boxes.
 - Native process boundaries physically deep-copy managed payloads.
 - The cooperative interpreter uses host values and `Rc` storage. Its
   allocation profile is not evidence for native performance.
@@ -41,9 +42,10 @@ The LLVM backend is the production performance target.
 
 There is no general in-place-when-unique optimization, reference-count
 elision pass, process-boundary move inference, or cross-process shared
-immutable block today. The one targeted exception is the tail-call rewrite,
-which transfers argument ownership across the loop back edge instead of
-paying a clone and drop on every iteration.
+immutable block today. Two targeted ownership optimizations exist. The
+tail-call rewrite transfers argument ownership across the loop back edge.
+Consume fusion reuses a dead collection receiver in compiled `append`, `put`,
+and `insert` calls.
 
 ## Measured baseline
 
@@ -95,10 +97,13 @@ Copying `List`, `Map`, or `Set` is proportional to the collection size because
 native clone glue allocates a fresh buffer and acquires every managed element.
 This is a larger cost than the phrase "cheap value copy" suggests.
 
-Potential improvements include:
+Consume fusion removes this cost when a compiled `List.append`, `Map.put`, or
+`Set.insert` receiver dies at the call site. It covers common rebind loops and
+owned temporary chains. Other mutators and unfused call shapes still copy.
 
-- eliding a collection copy when a compiler-proven owned temporary transfers
-  directly into its destination
+Remaining improvements include:
+
+- extending consume fusion to more mutators and proven receiver deaths
 - adding reference-counted collection buffers with copy-before-write
   semantics
 - specializing copies for trivial element types
@@ -224,7 +229,7 @@ equivalent fairness, correct resumption, and a meaningful measured win.
 
 1. Establish repeatable application benchmarks and regression tracking.
 2. Reduce Darwin reduction-counter overhead.
-3. Measure and optimize native collection copies and redundant glue.
+3. Measure and optimize unfused native collection copies and redundant glue.
 4. Add PGO, post-link layout, or native-library LTO only with reproducible
    measurements.
 5. Prototype last-use transfer for fresh process payloads.

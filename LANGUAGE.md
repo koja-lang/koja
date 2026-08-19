@@ -1292,7 +1292,7 @@ All types copy on assignment, and the result is always an independent value. Wha
 - Numeric primitives, `Bool`, `()`, and function pointers copy bit-for-bit.
 - `String`, `Binary`, and `Bits` share one reference-counted buffer, so a copy costs nothing regardless of size.
 - Structs and enums copy their top-level fields, and each heap-backed field follows these same rules. Recursive constituents live in reference-counted boxes that copies share, so copying a persistent tree touches only the root and an update touches only the changed path, never the whole structure.
-- `List`, `Map`, and `Set` copy their backing buffer, so a collection copy is O(n) today. The compiler skips the copy when the old value provably dies at the mutation site, as in `xs = xs.append(x)` rebind loops, so building a collection in a loop is linear, not quadratic.
+- `List`, `Map`, and `Set` copy their backing buffer, so a collection copy is O(n) today. The LLVM backend skips the copy when the old value provably dies at the mutation site. Thus, compiled `xs = xs.append(x)` rebind loops build a collection in linear time. The interpreter preserves the same behavior but can still copy each loop iteration.
 
 None of this is observable in behavior. Mutation always builds the mutated binding's own value, no binding ever observes another's changes, and a copy is always an independent value:
 

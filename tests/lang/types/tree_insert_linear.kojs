@@ -1,7 +1,7 @@
-# Wall-clock pin for reference-counted recursive boxes. 100k
-# persistent BST inserts touch only the O(log n) path per insert when
-# untouched subtrees are shared via rc++, while a deep-copy regression
-# makes every insert O(n) and blows far past the suite's 45s timeout.
+# Wall-clock pin for reference-counted recursive boxes. Each of these
+# 100k pseudorandom BST inserts touches only its search path. The
+# expected path length is O(log n). A deep-copy regression also copies
+# every untouched subtree and blows far past the suite's 45s timeout.
 #
 # LLVM-only (see LLVM_ONLY in lang_suite.rs). Eval shares host
 # storage and would only pin interpreter speed, not the box model.

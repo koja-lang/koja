@@ -35,9 +35,9 @@ reference-counted environment with drop and deep-copy functions for captures.
 Recursive composites store their recursive constituents in `Indirect` boxes.
 A box is a write-once reference-counted block. A copy of the containing value
 shares the box, and the final drop releases the boxed contents. Path-copying
-updates of persistent structures therefore share unchanged subtrees and cost
-O(log n), not O(n). Only a process-boundary deep copy unboxes and copies the
-inner value.
+updates therefore share unchanged subtrees and cost O(path length). This is
+O(log n) for a balanced tree. Only a process-boundary deep copy unboxes and
+copies the inner value.
 
 Collections use independent backing buffers. Copying a `List`, `Map`, or `Set`
 allocates and copies its buffer, then acquires each managed element. Copy cost
@@ -70,11 +70,12 @@ One uniqueness proof is implemented as consume fusion
 `Set.insert` receiver value provably dies at the call site, which covers
 `xs = xs.append(x)` rebinds and discarded owned temps, the elaborate pass
 rewrites the call to a consuming twin intrinsic and deletes the death. The
-twin reuses the receiver's buffer in place instead of copying it, so rebind
-loops mutate in O(1) amortized. The rewrite replaces "free the receiver's
-buffers here" with "reuse them here" at the same program point, so the result
-stays indistinguishable from an independent copy. The interpreter gates the
-same twins on true host-storage uniqueness and otherwise falls back to the
+LLVM backend reuses the receiver's buffer instead of copying it. Compiled
+rebind loops therefore mutate in O(1) amortized. The rewrite replaces "free
+the receiver's buffers here" with "reuse them here" at the same program point,
+so the result stays indistinguishable from an independent copy. The
+interpreter gates the same twins on true host-storage uniqueness. A rebind's
+local slot can keep the storage shared, so the interpreter can still use the
 copying path.
 
 Mutators outside the fused shapes still copy. General in-place-when-unique

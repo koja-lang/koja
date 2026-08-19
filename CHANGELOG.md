@@ -9,7 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- Growing a collection in a loop, like `xs = xs.append(x)`, now runs in linear time instead of quadratic.
+- Compiled collection rebind loops, like `xs = xs.append(x)`, now run in linear time instead of quadratic.
 - Updating a recursive value, like inserting into a tree, no longer copies the whole structure, so big trees stay fast.
 - `koja run` is no longer quadratically slow on programs that copy recursive values.
 
