@@ -1,0 +1,46 @@
+# Wall-clock pin for reference-counted recursive boxes. Each of these
+# 100k pseudorandom BST inserts touches only its search path. The
+# expected path length is O(log n). A deep-copy regression also copies
+# every untouched subtree and blows far past the suite's 45s timeout.
+#
+# LLVM-only (see LLVM_ONLY in lang_suite.rs). Eval shares host
+# storage and would only pin interpreter speed, not the box model.
+
+enum Bst
+  Empty
+  Node(Int, Bst, Bst)
+end
+
+fn insert(tree: Bst, key: Int) -> Bst
+  match tree
+    Bst.Empty -> Bst.Node(key, Bst.Empty, Bst.Empty)
+    Bst.Node(root, left, right) -> insert_at(root, left, right, key)
+  end
+end
+
+fn insert_at(root: Int, left: Bst, right: Bst, key: Int) -> Bst
+  cond
+    key < root -> Bst.Node(root, insert(left, key), right)
+    key > root -> Bst.Node(root, left, insert(right, key))
+    else -> Bst.Node(root, left, right)
+  end
+end
+
+fn size(tree: Bst) -> Int
+  match tree
+    Bst.Empty -> 0
+    Bst.Node(_, left, right) -> 1 + size(left) + size(right)
+  end
+end
+
+tree: Bst = Bst.Empty
+seed = 42
+i = 0
+
+while i < 100000
+  seed = (seed * 1103515245 + 12345) % 2147483648
+  tree = insert(tree, seed % 1000000)
+  i += 1
+end
+
+size(tree).print()

@@ -49,10 +49,10 @@ pub use function::{
     ReceiveTag,
 };
 pub use intrinsic_id::{
-    BinaryMethod, BitOp, BitsMethod, CPtrMethod, CStringMethod, DebugImpl, EqualityImpl, FloatType,
-    HashImpl, IRIntrinsicId, IntNarrowTarget, IntType, KernelMethod, ListMethod, MapMethod,
-    NumericConvert, ParseTarget, ProcessMethod, RefMethod, ReplyToMethod, RuntimeBlockMethod,
-    SetMethod, SocketMethod, StringMethod,
+    BinaryMethod, BitOp, BitsMethod, CPtrMethod, CStringMethod, ConsumingMethod, DebugImpl,
+    EqualityImpl, FloatType, HashImpl, IRIntrinsicId, IntNarrowTarget, IntType, KernelMethod,
+    ListMethod, MapMethod, NumericConvert, ParseTarget, ProcessMethod, RefMethod, ReplyToMethod,
+    RuntimeBlockMethod, SetMethod, SocketMethod, StringMethod,
 };
 pub use local::IRLocalId;
 pub use package::IRPackage;

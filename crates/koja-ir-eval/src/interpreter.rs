@@ -13,8 +13,8 @@ use std::time::Instant;
 
 use koja_ir::{
     BinaryEndian, BinarySign, BranchTarget, ConcatKind, ConstValue, EnumPayloadInit, FunctionKind,
-    IRBasicBlock, IRBlockId, IRConstantValue, IREnumDecl, IRFunction, IRInstruction, IRLocalId,
-    IRProgram, IRScript, IRStructDecl, IRSymbol, IRTerminator, IRType, IRVariantPayload,
+    IRBasicBlock, IRBlockId, IRConstantValue, IREnumDecl, IRFunction, IRInstruction, IRIntrinsicId,
+    IRLocalId, IRProgram, IRScript, IRStructDecl, IRSymbol, IRTerminator, IRType, IRVariantPayload,
     IRVariantTag, LoweredBinaryMatchLayout, LoweredBinaryPattern, LoweredBinarySegment,
     ReceiveAfter, ReceiveArm, ReceiveTag, ResolvedBinaryLayout, ValueId, pack_integer_segment,
 };
@@ -952,7 +952,7 @@ pub(crate) fn build_io_ready_value<R: CallResolver>(
     };
     Value::Enum {
         name: variant_name.to_string(),
-        payload: EnumPayload::Tuple(vec![Value::Struct {
+        payload: EnumPayload::tuple(vec![Value::Struct {
             symbol: fd_symbol.clone(),
             fields: vec![Value::Int(i64::from(fd))],
         }]),
@@ -1024,7 +1024,7 @@ fn build_exit_reason_value<R: CallResolver>(
             panic!("interpreter: `ExitReason.Crashed` payload is not a single `CrashInfo` struct");
         };
         let crash_info = notice.crash_info.clone().unwrap_or_default();
-        EnumPayload::Tuple(vec![Value::Struct {
+        EnumPayload::tuple(vec![Value::Struct {
             symbol: crash_symbol.clone(),
             fields: vec![
                 Value::String(Rc::new(crash_info.message.into_bytes())),
@@ -1079,16 +1079,33 @@ fn execute_instruction<'a, R: CallResolver>(
                 Ok(())
             }
             IRInstruction::Call { dest, callee, args } => {
-                let mut arg_values = Vec::with_capacity(args.len());
-                for arg in args {
-                    arg_values.push(lookup(&frame.values, *arg)?);
-                }
                 let callee_fn = resolver.resolve(callee.mangled()).unwrap_or_else(|| {
                     panic!(
                         "interpreter: callee `{callee}` missing from IR \
                      (seal invariant violation)",
                     )
                 });
+                // A consuming twin's receiver value is dead after the
+                // call (consume fusion proved it), so move its register
+                // into the args instead of cloning. When that leaves the
+                // backing storage uniquely held, the twin mutates it in
+                // place instead of copying.
+                let consuming = matches!(
+                    callee_fn.kind,
+                    FunctionKind::Intrinsic(IRIntrinsicId::Consuming(_))
+                );
+                let mut arg_values = Vec::with_capacity(args.len());
+                for (index, arg) in args.iter().enumerate() {
+                    let value = if consuming && index == 0 {
+                        frame
+                            .values
+                            .remove(arg)
+                            .ok_or(RuntimeError::ValueUndefined { id: *arg })?
+                    } else {
+                        lookup(&frame.values, *arg)?
+                    };
+                    arg_values.push(value);
+                }
                 let result = execute_function(callee_fn, arg_values, resolver).await?;
                 frame.values.insert(*dest, result);
                 Ok(())
@@ -1169,10 +1186,10 @@ fn execute_instruction<'a, R: CallResolver>(
                      tag {actual_tag}, so the match driver failed to gate on a tag check",
                     );
                 }
-                let field = match payload {
+                let field = match &payload {
                     EnumPayload::Tuple(values) => values
-                        .into_iter()
-                        .nth(*payload_index as usize)
+                        .get(*payload_index as usize)
+                        .cloned()
                         .unwrap_or_else(|| {
                             panic!(
                                 "interpreter: EnumPayloadFieldGet tuple index {payload_index} \
@@ -1180,9 +1197,8 @@ fn execute_instruction<'a, R: CallResolver>(
                             )
                         }),
                     EnumPayload::Struct(fields) => fields
-                        .into_iter()
-                        .nth(*payload_index as usize)
-                        .map(|(_, value)| value)
+                        .get(*payload_index as usize)
+                        .map(|(_, value)| value.clone())
                         .unwrap_or_else(|| {
                             panic!(
                                 "interpreter: EnumPayloadFieldGet struct index {payload_index} \
@@ -1259,12 +1275,11 @@ fn execute_instruction<'a, R: CallResolver>(
             IRInstruction::DropLocal { .. } => Ok(()),
             // Heap reclamation is handled by the host GC, so the IR-level
             // value-keyed drop is a no-op for the interpreter (mirrors
-            // [`IRInstruction::DropLocal`] above).
+            // [`IRInstruction::DropLocal`] above). This covers boxed
+            // `Indirect` operands too, since recursive boxes exist
+            // only in the native layout. Eval stores the inner value
+            // directly and reclaims through the host GC.
             IRInstruction::DropValue { .. } => Ok(()),
-            // Recursive boxes exist only in the native layout. Eval
-            // stores the inner value directly and reclaims through
-            // the host GC.
-            IRInstruction::FreeIndirect { .. } => Ok(()),
             IRInstruction::IndirectPresent { base, dest, .. } => {
                 let base = lookup(&frame.values, *base)?;
                 frame
@@ -1651,7 +1666,7 @@ fn materialize_enum<R: CallResolver>(
             for id in ids {
                 values.push(lookup(&frame.values, *id)?);
             }
-            EnumPayload::Tuple(values)
+            EnumPayload::tuple(values)
         }
         (EnumPayloadInit::Struct(inits), IRVariantPayload::Struct(declared)) => {
             let mut fields = Vec::with_capacity(inits.len());
@@ -1659,7 +1674,7 @@ fn materialize_enum<R: CallResolver>(
                 let value = lookup(&frame.values, init.value)?;
                 fields.push((decl_field.name.clone(), value));
             }
-            EnumPayload::Struct(fields)
+            EnumPayload::struct_fields(fields)
         }
         (init, declared) => panic!(
             "interpreter: EnumConstruct payload shape mismatch on `{symbol}.{}`, \

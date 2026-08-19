@@ -21,10 +21,12 @@ fn map_literal_lowers_to_new_and_put_chain() {
             .count(),
         1,
     );
+    // Each put's receiver is an owned temp that dies at the call, so
+    // consume fusion rewrites the chain to the buffer-consuming twin.
     assert_eq!(
         calls
             .iter()
-            .filter(|callee| callee.contains(".Map") && callee.ends_with(".put"))
+            .filter(|callee| callee.contains(".Map") && callee.ends_with(".put.$consume$"))
             .count(),
         2,
     );

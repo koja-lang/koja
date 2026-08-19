@@ -107,7 +107,7 @@ fn generic_enum_tuple_variant_construction_yields_value_enum_with_mangled_symbol
     assert_eq!(symbol.mangled(), "TestApp.Box_$Int64$");
     assert_eq!(name, "Of");
     assert_eq!(tag.0, 0);
-    assert_eq!(payload, EnumPayload::Tuple(vec![Value::Int(42)]));
+    assert_eq!(payload, EnumPayload::tuple(vec![Value::Int(42)]));
 }
 
 #[test]
@@ -130,7 +130,7 @@ fn generic_enum_struct_variant_carries_named_payload_fields() {
     assert_eq!(symbol.mangled(), "TestApp.Pair_$Int64.String$");
     assert_eq!(
         payload,
-        EnumPayload::Struct(vec![
+        EnumPayload::struct_fields(vec![
             ("a".to_string(), Value::Int(1)),
             ("b".to_string(), Value::string("x")),
         ]),

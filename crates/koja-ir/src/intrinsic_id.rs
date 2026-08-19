@@ -71,6 +71,13 @@ pub enum IRIntrinsicId {
     },
     CPtr(CPtrMethod),
     CString(CStringMethod),
+    /// Buffer-consuming twin of a copy-on-write collection mutator.
+    /// Not part of the source surface, so [`Self::from_identifier`]
+    /// never produces it. The elaborate consume-fusion pass registers
+    /// one per fused instantiation when the receiver value dies at
+    /// the call site, and the backends reuse the receiver's buffer
+    /// instead of copying it.
+    Consuming(ConsumingMethod),
     Debug(DebugImpl),
     Equality(EqualityImpl),
     Hash(HashImpl),
@@ -290,6 +297,30 @@ intrinsic_methods! {
         Slice => "slice",
         ToBinary => "to_binary",
         ToCstring => "to_cstring",
+    }
+}
+
+/// A collection mutator whose receiver value is dead after the call,
+/// so the backend may take ownership of the receiver's buffers and
+/// mutate them in place instead of copying. One variant per fused
+/// mutator. Adding a mutator (e.g. `List.replace_at`) is a
+/// variant-add here plus a row in the elaborate pass's eligibility
+/// table.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ConsumingMethod {
+    ListAppend,
+    MapPut,
+    SetInsert,
+}
+
+impl ConsumingMethod {
+    /// The `Receiver.method` path of the copying original.
+    fn path(self) -> &'static str {
+        match self {
+            Self::ListAppend => "List.append",
+            Self::MapPut => "Map.put",
+            Self::SetInsert => "Set.insert",
+        }
     }
 }
 
@@ -580,6 +611,7 @@ impl fmt::Display for IRIntrinsicId {
             Self::Bitwise { ty, op } => write!(f, "{}.{}", ty.segment(), op.segment()),
             Self::CPtr(m) => write!(f, "CPtr.{}", m.segment()),
             Self::CString(m) => write!(f, "CString.{}", m.segment()),
+            Self::Consuming(m) => write!(f, "{}.$consume$", m.path()),
             Self::Debug(impl_) => write!(f, "{}.format", impl_.segment()),
             Self::Equality(impl_) => write!(f, "{}.eq", impl_.segment()),
             Self::Hash(impl_) => write!(f, "{}.hash", impl_.segment()),

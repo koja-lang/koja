@@ -114,11 +114,30 @@ pub enum Value {
 /// already-evaluated [`Value`]s. The `Struct` arm carries
 /// `(field_name, value)` pairs in declaration order so `Display`
 /// can render named fields without a registry handle.
+///
+/// `Rc`-backed for the same reason as [`Value::Binary`]: without
+/// sharing, every clone of a recursive enum value (each match
+/// binding, argument pass, local read) deep-copies the whole
+/// subtree, which turns tree updates quadratic. Enum payloads are
+/// immutable in eval (constructs build fresh vectors), so plain
+/// `Rc` without copy-on-write suffices.
 #[derive(Debug, Clone, PartialEq)]
 pub enum EnumPayload {
-    Struct(Vec<(String, Value)>),
-    Tuple(Vec<Value>),
+    Struct(Rc<Vec<(String, Value)>>),
+    Tuple(Rc<Vec<Value>>),
     Unit,
+}
+
+impl EnumPayload {
+    /// Wrap owned struct-payload fields.
+    pub fn struct_fields(fields: Vec<(String, Value)>) -> EnumPayload {
+        EnumPayload::Struct(Rc::new(fields))
+    }
+
+    /// Wrap owned tuple-payload values.
+    pub fn tuple(values: Vec<Value>) -> EnumPayload {
+        EnumPayload::Tuple(Rc::new(values))
+    }
 }
 
 impl Value {

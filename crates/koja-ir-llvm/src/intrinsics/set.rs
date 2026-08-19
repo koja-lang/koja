@@ -19,25 +19,48 @@ pub(super) fn emit_set<'ctx>(
 ) -> Result<(), LlvmError> {
     let entry = ctx.context.append_basic_block(llvm_function, "entry");
     ctx.builder.position_at_end(entry);
-
-    let element = element(method, function)?;
-    let element_size = hashtable::ir_byte_size(ctx, element)?;
-    let layout = hashtable::HashtableLayout {
-        entry_size: element_size,
-        key_size: element_size,
-        key_ty: element,
-        value_ty: None,
-    };
+    let layout = set_layout(ctx, method, function)?;
 
     match method {
         SetMethod::EmptyQ => hashtable::emit_empty_q(ctx, function, llvm_function),
         SetMethod::FromList => hashtable::emit_set_from_list(ctx, function, llvm_function, &layout),
         SetMethod::HasQ => hashtable::emit_has_q(ctx, function, llvm_function, &layout),
-        SetMethod::Insert => hashtable::emit_set_insert(ctx, function, llvm_function, &layout),
+        SetMethod::Insert => {
+            hashtable::emit_set_insert(ctx, function, llvm_function, &layout, false)
+        }
         SetMethod::Length => hashtable::emit_length(ctx, function, llvm_function),
-        SetMethod::New => hashtable::emit_new(ctx, element_size),
+        SetMethod::New => hashtable::emit_new(ctx, layout.entry_size),
         SetMethod::Remove => hashtable::emit_remove(ctx, function, llvm_function, &layout),
     }
+}
+
+/// The consume-fusion twin of `insert`. The receiver value is dead
+/// at the call site, so the entry / state buffers are written in
+/// place instead of cloned.
+pub(super) fn emit_insert_consuming<'ctx>(
+    ctx: &EmitContext<'ctx>,
+    function: &IRFunction,
+    llvm_function: FunctionValue<'ctx>,
+) -> Result<(), LlvmError> {
+    let entry = ctx.context.append_basic_block(llvm_function, "entry");
+    ctx.builder.position_at_end(entry);
+    let layout = set_layout(ctx, SetMethod::Insert, function)?;
+    hashtable::emit_set_insert(ctx, function, llvm_function, &layout, true)
+}
+
+fn set_layout<'ctx, 'ty>(
+    ctx: &EmitContext<'ctx>,
+    method: SetMethod,
+    function: &'ty IRFunction,
+) -> Result<hashtable::HashtableLayout<'ty>, LlvmError> {
+    let element = element(method, function)?;
+    let element_size = hashtable::ir_byte_size(ctx, element)?;
+    Ok(hashtable::HashtableLayout {
+        entry_size: element_size,
+        key_size: element_size,
+        key_ty: element,
+        value_ty: None,
+    })
 }
 
 /// Resolve the element `T` for a `Set<T>` intrinsic. `new` carries

@@ -75,7 +75,7 @@ fn has_q(args: &[Value]) -> Result<Value, RuntimeError> {
     Ok(Value::Bool(entries.iter().any(|(k, _)| k == &key)))
 }
 
-fn put(args: &[Value]) -> Result<Value, RuntimeError> {
+pub(super) fn put(args: &[Value]) -> Result<Value, RuntimeError> {
     let map = expect_map(args, 0, "Map.put")?;
     let key = expect_arg(args, 1, "Map.put")?.clone();
     let value = expect_arg(args, 2, "Map.put")?.clone();

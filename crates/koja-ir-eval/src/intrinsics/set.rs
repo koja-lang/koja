@@ -51,7 +51,7 @@ fn has_q(args: &[Value]) -> Result<Value, RuntimeError> {
     Ok(Value::Bool(set.borrow().iter().any(|v| v == &item)))
 }
 
-fn insert(args: &[Value]) -> Result<Value, RuntimeError> {
+pub(super) fn insert(args: &[Value]) -> Result<Value, RuntimeError> {
     let set = expect_set(args, 0, "Set.insert")?;
     let item = expect_arg(args, 1, "Set.insert")?.clone();
     let mut items = set.borrow().clone();

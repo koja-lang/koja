@@ -1,0 +1,38 @@
+# Wall-clock pin for the consume-fusion fast path. 200k list appends
+# plus 50k map puts and 50k set inserts finish in milliseconds when
+# rebind loops mutate in place, while a copying regression would blow
+# far past the suite's 45s timeout.
+#
+# LLVM-only (see LLVM_ONLY in lang_suite.rs). Eval values share host
+# storage, so its rebind loops keep the copying path and stay
+# quadratic.
+
+xs: List<Int> = []
+i = 0
+
+while i < 200000
+  xs = xs.append(i)
+  i += 1
+end
+
+xs.length().print()
+
+m: Map<Int, Int> = Map.new()
+j = 0
+
+while j < 50000
+  m = m.put(j, j * 2)
+  j += 1
+end
+
+m.length().print()
+
+s: Set<Int> = Set.new()
+k = 0
+
+while k < 50000
+  s = s.insert(k)
+  k += 1
+end
+
+s.length().print()

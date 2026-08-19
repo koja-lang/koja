@@ -32,6 +32,13 @@ Inline primitives copy their bits.
 increments the block count. The final drop frees the allocation. Closures use a
 reference-counted environment with drop and deep-copy functions for captures.
 
+Recursive composites store their recursive constituents in `Indirect` boxes.
+A box is a write-once reference-counted block. A copy of the containing value
+shares the box, and the final drop releases the boxed contents. Path-copying
+updates therefore share unchanged subtrees and cost O(path length). This is
+O(log n) for a balanced tree. Only a process-boundary deep copy unboxes and
+copies the inner value.
+
 Collections use independent backing buffers. Copying a `List`, `Map`, or `Set`
 allocates and copies its buffer, then acquires each managed element. Copy cost
 is therefore proportional to collection size. User-defined composites recurse
@@ -54,14 +61,25 @@ allocation or reclamation mechanics.
 
 ## Functional mutation
 
-Koja mutation is expressed by returning a new value and rebinding it. Current
-collection mutators copy their backing buffer before writing. String
+Koja mutation is expressed by returning a new value and rebinding it.
+Collection mutators copy their backing buffer before writing. String
 concatenation allocates a new block.
 
-The language permits a future uniqueness proof to update storage in place, or
-to remove redundant reference-count operations, when the result is
-indistinguishable from an independent copy. General in-place-when-unique and
-reference-count optimization are not implemented today.
+One uniqueness proof is implemented as consume fusion
+(`koja-ir/src/elaborate/consume.rs`). When a `List.append`, `Map.put`, or
+`Set.insert` receiver value provably dies at the call site, which covers
+`xs = xs.append(x)` rebinds and discarded owned temps, the elaborate pass
+rewrites the call to a consuming twin intrinsic and deletes the death. The
+LLVM backend reuses the receiver's buffer instead of copying it. Compiled
+rebind loops therefore mutate in O(1) amortized. The rewrite replaces "free
+the receiver's buffers here" with "reuse them here" at the same program point,
+so the result stays indistinguishable from an independent copy. The
+interpreter gates the same twins on true host-storage uniqueness. A rebind's
+local slot can keep the storage shared, so the interpreter can still use the
+copying path.
+
+Mutators outside the fused shapes still copy. General in-place-when-unique
+and reference-count optimization are not implemented today.
 
 ## Scope and glue
 

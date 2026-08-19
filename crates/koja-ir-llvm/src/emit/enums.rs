@@ -19,7 +19,8 @@ use crate::ctx::EmitContext;
 use crate::error::{IceExt, LlvmError};
 use crate::types::ir_basic_type;
 
-use super::indirect::{emit_box_value, emit_unbox_value};
+use super::indirect::emit_unbox_value;
+use super::structs::box_or_pass_through;
 use super::{ValueMap, lookup};
 
 /// Materialize an enum-variant literal: resolve `payload` operands
@@ -158,7 +159,11 @@ pub(super) fn emit_enum_tag_get<'ctx>(
 /// into the variant's payload struct at `payload_index`, and load
 /// the field. Caller (the `match` driver) gates this on a
 /// successful tag check, so the variant's payload struct is
-/// guaranteed to be present and the index in range.
+/// guaranteed to be present and the index in range. A cycle-broken
+/// `Indirect(_)` slot unboxes for the usual unboxed instruction
+/// view, or hands the raw box pointer through when the instruction's
+/// `field_type` is itself `Indirect` (glue projects the box to
+/// `rc++` / release it).
 pub(super) fn emit_enum_payload_field_get<'ctx>(
     ctx: &EmitContext<'ctx>,
     field_type: &IRType,
@@ -170,7 +175,6 @@ pub(super) fn emit_enum_payload_field_get<'ctx>(
     let outer = ctx.enum_outer_type(ty.mangled());
     let alloca = ctx.build_entry_alloca(outer, &format!("{ty}_payload_src"));
     ctx.builder.build_store(alloca, value).or_ice()?;
-    let _ = field_type;
     let declared_payload = ctx.layouts.enum_variant_payload(ty, tag);
     let declared_ty = declared_slot_type(&declared_payload, payload_index).unwrap_or_else(|| {
         panic!(
@@ -201,7 +205,9 @@ pub(super) fn emit_enum_payload_field_get<'ctx>(
         .builder
         .build_load(field_llvm_type, field_ptr, &label)
         .or_ice()?;
-    if let IRType::Indirect(inner) = &declared_ty {
+    if let IRType::Indirect(inner) = &declared_ty
+        && !matches!(field_type, IRType::Indirect(_))
+    {
         return emit_unbox_value(
             ctx,
             inner,
@@ -224,9 +230,10 @@ fn declared_slot_type(payload: &IRVariantPayload, index: u32) -> Option<IRType> 
 }
 
 /// Walk the variant's declared payload slot types. For each
-/// [`IRType::Indirect`] slot, box the matching incoming value via
-/// [`emit_box_value`] so the store hits a ptr slot rather than the
-/// raw value.
+/// [`IRType::Indirect`] slot, box the matching incoming value (or
+/// pass an already-boxed pointer through, see
+/// [`super::structs::box_or_pass_through`]) so the store hits a ptr
+/// slot rather than the raw value.
 fn box_payload_indirects<'ctx>(
     ctx: &EmitContext<'ctx>,
     ty: &IRSymbol,
@@ -243,7 +250,7 @@ fn box_payload_indirects<'ctx>(
     for (idx, value) in payload_values.iter().enumerate() {
         let stored = match slot_types.get(idx) {
             Some(IRType::Indirect(inner)) => {
-                emit_box_value(ctx, inner, *value, &format!("{ty}_payload_{idx}_box"))?
+                box_or_pass_through(ctx, inner, *value, &format!("{ty}_payload_{idx}_box"))?
             }
             _ => *value,
         };

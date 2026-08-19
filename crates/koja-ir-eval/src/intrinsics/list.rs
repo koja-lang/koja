@@ -58,7 +58,7 @@ fn from_list(args: &[Value]) -> Result<Value, RuntimeError> {
     Ok(Value::List(list))
 }
 
-fn append(args: &[Value]) -> Result<Value, RuntimeError> {
+pub(super) fn append(args: &[Value]) -> Result<Value, RuntimeError> {
     let list = expect_list(args, 0, "List.append")?;
     let item = expect_arg(args, 1, "List.append")?.clone();
     let mut items = list.borrow().clone();

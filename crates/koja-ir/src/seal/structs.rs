@@ -145,15 +145,7 @@ pub(super) fn seal_struct_ops<'inst, 'decl>(
                     &owner,
                 );
             }
-            IRInstruction::FreeIndirect {
-                slot:
-                    IRIndirectSlot::StructField {
-                        field_index,
-                        struct_symbol,
-                    },
-                ..
-            }
-            | IRInstruction::IndirectPresent {
+            IRInstruction::IndirectPresent {
                 slot:
                     IRIndirectSlot::StructField {
                         field_index,
@@ -177,7 +169,6 @@ pub(super) fn seal_struct_ops<'inst, 'decl>(
             | IRInstruction::EnumConstruct { .. }
             | IRInstruction::EnumPayloadFieldGet { .. }
             | IRInstruction::EnumTagGet { .. }
-            | IRInstruction::FreeIndirect { .. }
             | IRInstruction::IndirectPresent { .. }
             | IRInstruction::LoadCapture { .. }
             | IRInstruction::LoadConst { .. }
@@ -243,14 +234,14 @@ fn seal_indirect_field<'decl>(
     let decl = require_struct(lookup, struct_symbol, owner);
     let Some(field) = decl.fields.get(field_index as usize) else {
         seal_panic(&format!(
-            "{owner}: FreeIndirect on `{struct_symbol}` references field index {field_index}, \
+            "{owner}: IndirectPresent on `{struct_symbol}` references field index {field_index}, \
              but the decl only has {count} field(s)",
             count = decl.fields.len(),
         ));
     };
     if !matches!(&field.ir_type, IRType::Indirect(_)) {
         seal_panic(&format!(
-            "{owner}: FreeIndirect on `{struct_symbol}.{name}` requires an Indirect field, \
+            "{owner}: IndirectPresent on `{struct_symbol}.{name}` requires an Indirect field, \
              but the decl carries `{:?}`",
             field.ir_type,
             name = field.name,
@@ -530,10 +521,11 @@ mod tests {
 
     #[test]
     #[should_panic(expected = "requires an Indirect field")]
-    fn free_indirect_rejects_inline_struct_field() {
+    fn indirect_present_rejects_inline_struct_field() {
         let decl = point_decl();
-        let inst = IRInstruction::FreeIndirect {
+        let inst = IRInstruction::IndirectPresent {
             base: ValueId(0),
+            dest: ValueId(1),
             slot: IRIndirectSlot::StructField {
                 field_index: 0,
                 struct_symbol: decl.symbol.clone(),

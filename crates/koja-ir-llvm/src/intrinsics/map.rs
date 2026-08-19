@@ -23,16 +23,7 @@ pub(super) fn emit_map<'ctx>(
     let entry = ctx.context.append_basic_block(llvm_function, "entry");
     ctx.builder.position_at_end(entry);
 
-    let (key, value) = key_value(method, function)?;
-    let key_size = hashtable::ir_byte_size(ctx, key)?;
-    let value_size = hashtable::ir_byte_size(ctx, value)?;
-    let entry_size = key_size + value_size;
-    let layout = hashtable::HashtableLayout {
-        entry_size,
-        key_size,
-        key_ty: key,
-        value_ty: Some(value),
-    };
+    let layout = map_layout(ctx, method, function)?;
 
     match method {
         MapMethod::EmptyQ => hashtable::emit_empty_q(ctx, function, llvm_function),
@@ -40,10 +31,40 @@ pub(super) fn emit_map<'ctx>(
         MapMethod::Get => hashtable::emit_map_get(ctx, function, llvm_function, &layout),
         MapMethod::HasQ => hashtable::emit_has_q(ctx, function, llvm_function, &layout),
         MapMethod::Length => hashtable::emit_length(ctx, function, llvm_function),
-        MapMethod::New => hashtable::emit_new(ctx, entry_size),
-        MapMethod::Put => hashtable::emit_map_put(ctx, function, llvm_function, &layout),
+        MapMethod::New => hashtable::emit_new(ctx, layout.entry_size),
+        MapMethod::Put => hashtable::emit_map_put(ctx, function, llvm_function, &layout, false),
         MapMethod::Remove => hashtable::emit_remove(ctx, function, llvm_function, &layout),
     }
+}
+
+/// The consume-fusion twin of `put`. The receiver value is dead at
+/// the call site, so the entry / state buffers are written in place
+/// instead of cloned.
+pub(super) fn emit_put_consuming<'ctx>(
+    ctx: &EmitContext<'ctx>,
+    function: &IRFunction,
+    llvm_function: FunctionValue<'ctx>,
+) -> Result<(), LlvmError> {
+    let entry = ctx.context.append_basic_block(llvm_function, "entry");
+    ctx.builder.position_at_end(entry);
+    let layout = map_layout(ctx, MapMethod::Put, function)?;
+    hashtable::emit_map_put(ctx, function, llvm_function, &layout, true)
+}
+
+fn map_layout<'ctx, 'ty>(
+    ctx: &EmitContext<'ctx>,
+    method: MapMethod,
+    function: &'ty IRFunction,
+) -> Result<hashtable::HashtableLayout<'ty>, LlvmError> {
+    let (key, value) = key_value(method, function)?;
+    let key_size = hashtable::ir_byte_size(ctx, key)?;
+    let value_size = hashtable::ir_byte_size(ctx, value)?;
+    Ok(hashtable::HashtableLayout {
+        entry_size: key_size + value_size,
+        key_size,
+        key_ty: key,
+        value_ty: Some(value),
+    })
 }
 
 /// Resolve `(K, V)` for a `Map<K, V>` intrinsic. `new` carries them

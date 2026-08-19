@@ -88,7 +88,7 @@ fn tuple_variant_carries_evaluated_positional_payload() {
     };
     assert_eq!(name, "Ok");
     assert_eq!(tag.0, 0);
-    assert_eq!(payload, EnumPayload::Tuple(vec![Value::Int(42)]));
+    assert_eq!(payload, EnumPayload::tuple(vec![Value::Int(42)]));
 }
 
 #[test]
@@ -107,7 +107,7 @@ fn tuple_variant_with_string_payload_carries_string_value() {
         panic!("expected Value::Enum, got {value:?}");
     };
     assert_eq!(tag.0, 1);
-    assert_eq!(payload, EnumPayload::Tuple(vec![Value::string("boom")]),);
+    assert_eq!(payload, EnumPayload::tuple(vec![Value::string("boom")]),);
 }
 
 #[test]
@@ -126,7 +126,7 @@ fn tuple_variant_with_multiple_elements_carries_all_in_order() {
     };
     assert_eq!(
         payload,
-        EnumPayload::Tuple(vec![Value::Int(7), Value::Bool(true)]),
+        EnumPayload::tuple(vec![Value::Int(7), Value::Bool(true)]),
     );
 }
 
@@ -146,7 +146,7 @@ fn struct_variant_carries_named_fields_in_declaration_order() {
     };
     assert_eq!(
         payload,
-        EnumPayload::Struct(vec![
+        EnumPayload::struct_fields(vec![
             ("w".to_string(), Value::Int(10)),
             ("h".to_string(), Value::Int(20)),
         ]),

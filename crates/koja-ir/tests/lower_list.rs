@@ -17,7 +17,8 @@
 //! script source just calls the intrinsics directly.
 
 use koja_ir::{
-    FunctionKind, IRFunction, IRInstruction, IRIntrinsicId, IRScript, IRType, ListMethod,
+    ConsumingMethod, FunctionKind, IRFunction, IRInstruction, IRIntrinsicId, IRScript, IRType,
+    ListMethod,
 };
 
 mod common;
@@ -191,22 +192,35 @@ fn list_literal_lowers_to_new_plus_append_chain() {
     let script = lower_script_source(source);
     let new = intrinsic_call(&script, "new");
     assert_list_intrinsic(new, ListMethod::New);
-    let append = intrinsic_call(&script, "append");
-    assert_list_intrinsic(append, ListMethod::Append);
     assert_eq!(new.return_type, IRType::List(Box::new(IRType::Int64)));
+
+    // Each append's receiver is an owned temp that dies at the call, so
+    // consume fusion rewrites the whole chain to the buffer-consuming
+    // twin (`elaborate::consume`).
+    let append = intrinsic_call(&script, "append.$consume$");
+    assert!(
+        matches!(
+            append.kind,
+            FunctionKind::Intrinsic(IRIntrinsicId::Consuming(ConsumingMethod::ListAppend))
+        ),
+        "expected the consuming append twin on `{}`, got {:?}",
+        append.symbol,
+        append.kind,
+    );
     assert_eq!(append.return_type, IRType::List(Box::new(IRType::Int64)));
     let append_calls = all_instructions(&script.blocks)
         .filter(|inst| {
             matches!(
                 inst,
                 IRInstruction::Call { callee, .. }
-                    if callee.mangled().contains(".List_") && callee.mangled().ends_with(".append")
+                    if callee.mangled().contains(".List_")
+                        && callee.mangled().ends_with(".append.$consume$")
             )
         })
         .count();
     assert_eq!(
         append_calls, 3,
-        "list literal `[10, 20, 30]` should expand to three `List.append` calls",
+        "list literal `[10, 20, 30]` should expand to three fused `List.append` calls",
     );
 }
 

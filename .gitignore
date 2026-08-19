@@ -18,6 +18,9 @@ justfile
 .rules
 tests/lang/ffi/libffi_helper.a
 
+# Local dev toolchain image
+/toolchain-dev/
+
 # Stub-retirement diagnostics (regen via stub/regenerate.sh)
 /stub/*.log
 /stub/*.txt

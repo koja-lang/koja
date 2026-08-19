@@ -159,14 +159,24 @@ impl Synthesizer {
         self.cfg.append(block, instruction);
     }
 
+    /// The projection view of a declared constituent type. Clone
+    /// keeps an [`IRType::Indirect`] slot boxed, because the box
+    /// pointer itself is what gets shared (`rc++`). DeepCopy unboxes
+    /// so the copy recurses into the inner value and re-boxes fresh.
+    fn projection_type(&self, declared: &IRType) -> IRType {
+        match self.mode {
+            CopyMode::Clone => declared.clone(),
+            CopyMode::DeepCopy => unbox(declared).clone(),
+        }
+    }
+
     /// Acquire `value` (typed `ty`) into `block`, returning the owned
     /// SSA value to store into the rebuilt aggregate.
     ///
-    /// `ty` may be the declared field type, including a transparent
-    /// [`IRType::Indirect`] box, but the projected `value` is already
-    /// the unboxed inner (the `FieldGet` / `EnumPayloadFieldGet`
-    /// unboxes), and the rebuild re-boxes, so disposition runs on the
-    /// inner type.
+    /// `ty` is viewed through [`Self::projection_type`], so a boxed
+    /// [`IRType::Indirect`] stays boxed under Clone (acquired inline
+    /// as an `rc++` on the box) and peels to the inner value under
+    /// DeepCopy (the rebuild re-boxes the fresh copy).
     fn acquire(
         &mut self,
         block: IRBlockId,
@@ -174,7 +184,7 @@ impl Synthesizer {
         ty: &IRType,
         packages: &[IRPackage],
     ) -> ValueId {
-        let ty = unbox(ty);
+        let ty = &self.projection_type(ty);
         match disposition(ty, packages) {
             Disposition::Trivial => value,
             Disposition::Inline => {
@@ -198,10 +208,10 @@ impl Synthesizer {
     }
 
     /// Release `value` (typed `ty`) in `block`. A no-op for `Copy`
-    /// constituents. As with [`Self::acquire`], a transparent
-    /// [`IRType::Indirect`] box peels to its inner value type.
+    /// constituents. An [`IRType::Indirect`] `ty` is the boxed
+    /// projection, released inline as an rc-aware `DropValue` (drop
+    /// contents + free at rc 1, decrement otherwise).
     fn release(&mut self, block: IRBlockId, value: ValueId, ty: &IRType, packages: &[IRPackage]) {
-        let ty = unbox(ty);
         match disposition(ty, packages) {
             Disposition::Trivial => {}
             Disposition::Inline => self.append(
@@ -241,7 +251,7 @@ impl Synthesizer {
                     base: SELF_VALUE,
                     dest: projected,
                     field_index: field.index,
-                    field_type: unbox(&field.ir_type).clone(),
+                    field_type: self.projection_type(&field.ir_type),
                     struct_symbol: symbol.clone(),
                 },
             );
@@ -307,6 +317,9 @@ impl Synthesizer {
             } else {
                 current
             };
+            // An `Indirect` field projects boxed and releases rc-aware
+            // (the `DropValue` frees contents + box at rc 1). Other
+            // fields project their declared value type.
             let projected = self.value();
             self.append(
                 release_block,
@@ -314,22 +327,12 @@ impl Synthesizer {
                     base: SELF_VALUE,
                     dest: projected,
                     field_index: field.index,
-                    field_type: unbox(&field.ir_type).clone(),
+                    field_type: field.ir_type.clone(),
                     struct_symbol: symbol.clone(),
                 },
             );
             self.release(release_block, projected, &field.ir_type, packages);
             if matches!(&field.ir_type, IRType::Indirect(_)) {
-                self.append(
-                    release_block,
-                    IRInstruction::FreeIndirect {
-                        base: SELF_VALUE,
-                        slot: IRIndirectSlot::StructField {
-                            field_index: field.index,
-                            struct_symbol: symbol.clone(),
-                        },
-                    },
-                );
                 self.cfg.set_terminator(
                     release_block,
                     IRTerminator::Branch(BranchTarget::to(current)),
@@ -433,12 +436,13 @@ impl Synthesizer {
                 IRVariantPayload::Tuple(types) => {
                     let mut values = Vec::with_capacity(types.len());
                     for (payload_index, field_ty) in types.iter().enumerate() {
+                        let projection = self.projection_type(field_ty);
                         let projected = self.enum_payload_get(
                             body,
                             symbol,
                             variant.tag,
                             payload_index as u32,
-                            field_ty,
+                            projection,
                         );
                         values.push(self.acquire(body, projected, field_ty, packages));
                     }
@@ -447,12 +451,13 @@ impl Synthesizer {
                 IRVariantPayload::Struct(fields) => {
                     let mut inits = Vec::with_capacity(fields.len());
                     for field in fields {
+                        let projection = self.projection_type(&field.ir_type);
                         let projected = self.enum_payload_get(
                             body,
                             symbol,
                             variant.tag,
                             field.index,
-                            &field.ir_type,
+                            projection,
                         );
                         let owned = self.acquire(body, projected, &field.ir_type, packages);
                         inits.push(StructFieldInit {
@@ -538,13 +543,15 @@ impl Synthesizer {
         }
     }
 
+    /// Project payload slot `payload_index` off `self`, typed exactly
+    /// `field_type` (callers pass the boxed or unboxed view).
     fn enum_payload_get(
         &mut self,
         block: IRBlockId,
         symbol: &IRSymbol,
         tag: crate::enum_decl::IRVariantTag,
         payload_index: u32,
-        field_type: &IRType,
+        field_type: IRType,
     ) -> ValueId {
         let dest = self.value();
         self.append(
@@ -554,7 +561,7 @@ impl Synthesizer {
                 value: SELF_VALUE,
                 tag,
                 payload_index,
-                field_type: unbox(field_type).clone(),
+                field_type,
                 ty: symbol.clone(),
             },
         );
@@ -571,11 +578,14 @@ impl Synthesizer {
         packages: &[IRPackage],
     ) -> IRBlockId {
         if !matches!(field_type, IRType::Indirect(_)) {
-            let projected = self.enum_payload_get(block, symbol, tag, payload_index, field_type);
+            let projected =
+                self.enum_payload_get(block, symbol, tag, payload_index, field_type.clone());
             self.release(block, projected, field_type, packages);
             return block;
         }
 
+        // Boxed slot: guard on presence (a never-written slot holds a
+        // null pointer), then project the box and release it rc-aware.
         let slot = IRIndirectSlot::EnumPayload {
             payload_index,
             tag,
@@ -587,7 +597,7 @@ impl Synthesizer {
             IRInstruction::IndirectPresent {
                 base: SELF_VALUE,
                 dest: present,
-                slot: slot.clone(),
+                slot,
             },
         );
         let release = self.block(format!("payload{payload_index}_drop"));
@@ -601,15 +611,9 @@ impl Synthesizer {
             },
         );
 
-        let projected = self.enum_payload_get(release, symbol, tag, payload_index, field_type);
+        let projected =
+            self.enum_payload_get(release, symbol, tag, payload_index, field_type.clone());
         self.release(release, projected, field_type, packages);
-        self.append(
-            release,
-            IRInstruction::FreeIndirect {
-                base: SELF_VALUE,
-                slot,
-            },
-        );
         self.cfg
             .set_terminator(release, IRTerminator::Branch(BranchTarget::to(next)));
         next

@@ -156,6 +156,29 @@ stacks:
    other crash. The guard stays as the program-fatal backstop for
    unprobed C frames.
 
+### 4. Collection buffers have no refcount, so unfused mutators copy
+
+**Severity: medium. Bug class: throughput collapse on hot paths.**
+
+`List`, `Map`, and `Set` buffers are deep-ownership with no reference
+count, so every copy is O(n). The consume-fusion pass
+(`koja-ir/src/elaborate/consume.rs`) makes `append` / `put` / `insert`
+reuse the receiver's buffer when the receiver value provably dies at
+the call site, which covers `x = x.append(y)` rebind loops and
+discarded owned temps. Every mutator call outside those shapes still
+clones the whole backing buffer. The fusion is the tactical fix for
+the hottest pattern, not the memory-model endpoint.
+
+**Fix.** Swift-style refcounted collection buffers with a uniqueness
+check at every mutator. That needs a shared-buffer frontier scheme so
+views with different lengths stay correct, and it generalizes later
+with Perceus-style reuse analysis. Recursive structures already got
+the same "give it a refcount" move. `Indirect` boxes are
+reference-counted since 0.17.3, so persistent trees share unchanged
+subtrees. Collection buffers are the remaining piece, landing as the
+0.18.0 memory-model milestone that makes MEMORY-MODEL.md's "copied
+lazily only on mutation" promise true everywhere.
+
 ---
 
 ## Launch priority
@@ -165,7 +188,7 @@ class is closed. **#1** (`loom`) is a robustness and coverage improvement.
 **#2** requires the 0.16 observability surface, while unbounded delivery
 remains the documented contract. **#3** step 1 (stack pooling) is the
 next performance item, and step 2 gates the million-process story, not
-the launch. The one-time fairness gap (preemption
+the launch. **#4** is the 0.18.0 memory-model milestone. The one-time fairness gap (preemption
 points covering only loops and tail calls, letting deep non-tail
 recursion monopolize a worker) is now closed: a `YieldCheck` sits at the
 entry of every call-containing function, lowered to an inline reduction

@@ -21,7 +21,13 @@ fn set_operations_lower_to_concrete_method_calls() {
         .collect();
 
     assert!(calls.iter().any(|callee| callee.ends_with(".has?")));
-    assert!(calls.iter().any(|callee| callee.ends_with(".insert")));
+    // The rebind's receiver dies at the call, so consume fusion
+    // rewrites the insert to the buffer-consuming twin.
+    assert!(
+        calls
+            .iter()
+            .any(|callee| callee.ends_with(".insert.$consume$"))
+    );
     assert!(calls.iter().any(|callee| callee.ends_with(".new")));
     assert_eq!(script.return_type, IRType::Bool);
 }

@@ -29,13 +29,43 @@ fn exercise -> Int
   sum_tree(tree) + sum_tree(copy)
 end
 
+# Copies share boxes (rc++), and dropping either owner in either
+# order must release every block exactly once.
+fn exercise_shared -> Int
+  tree = build_tree(5)
+  copy = tree
+  copy = Tree.Branch(copy, Tree.Leaf(1))
+  sum_tree(tree) + sum_tree(copy)
+end
+
+struct Person
+  name: String
+  spouse: Option<Person>
+end
+
+# Overwriting a boxed field of one copy must release only that
+# copy's reference, leaving the sharing copy intact.
+fn exercise_overwrite -> Int
+  alice = Person{name: "alice", spouse: Option.None}
+  bob = Person{name: "bob", spouse: Option.Some(alice)}
+  carol = bob
+  carol.spouse = Option.None
+
+  match bob.spouse
+    Option.Some(_) -> 1
+    Option.None -> 0
+  end
+end
+
 _ = exercise()
+_ = exercise_shared()
+_ = exercise_overwrite()
 start = Rt.koja_rt_live_blocks()
 i = 0
 total = 0
 
 loop
-  total += exercise()
+  total += exercise() + exercise_shared() + exercise_overwrite()
   i += 1
 
   if i == 100
@@ -47,4 +77,4 @@ finish = Rt.koja_rt_live_blocks()
 (finish == start
   ? "recursive indirect reclaim: ok"
   : "recursive indirect reclaim: LEAK").print()
-(total == 6400).print()
+(total == 13000).print()

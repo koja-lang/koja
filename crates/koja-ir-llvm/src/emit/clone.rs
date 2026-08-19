@@ -23,10 +23,14 @@
 //!   the same `{fn_ptr, env_ptr}` fat pointer. The env is shared like
 //!   an immutable heap leaf. The matching `Drop` runs
 //!   `koja_closure_rc_dec` (capture release + free at zero).
-//! - **Heap composites** (`List` / `Map` / `Set` / `Indirect`):
-//!   unreachable. Collections and boxes always own heap and are always
-//!   rewritten to a glue `Call`. One reaching here is a lowering bug
-//!   (panic loudly rather than silently alias).
+//! - **`Indirect` boxes**: an `rc++` on the box block, same header
+//!   and primitive as the leaves. Boxes are write-once, so sharing
+//!   needs no copy-on-write. The matching rc-aware `Drop` releases
+//!   contents + block at rc 1.
+//! - **Heap composites** (`List` / `Map` / `Set`): unreachable.
+//!   Collections always own heap and are always rewritten to a glue
+//!   `Call`. One reaching here is a lowering bug (panic loudly rather
+//!   than silently alias).
 
 use koja_ir::{IRType, ValueId};
 
@@ -45,10 +49,13 @@ pub(super) fn emit_clone<'ctx>(
     values: &mut ValueMap<'ctx>,
 ) -> Result<(), LlvmError> {
     let result = match ty {
-        // Share the immutable block: bump its rc and alias the same
-        // payload pointer. The block base (rc word) is `payload -
+        // Share the block: bump its rc and alias the same payload
+        // pointer. The block base (rc word) is `payload -
         // HEADER_BYTES`. The runtime skips immortal (rodata) blocks.
-        IRType::String | IRType::Binary | IRType::Bits => {
+        // An `Indirect` box shares the same header layout, so cloning
+        // one is the identical rc bump on its (write-once) block. The
+        // matching rc-aware `Drop` releases contents + block at rc 1.
+        IRType::Binary | IRType::Bits | IRType::Indirect(_) | IRType::String => {
             let payload = lookup(values, source)?.into_pointer_value();
             let base = block_base(ctx, payload, &format!("{dest}.block_base"))?;
             let rc_inc = declare_rc_inc_extern(ctx);
@@ -92,10 +99,9 @@ pub(super) fn emit_clone<'ctx>(
                 .or_ice()?;
             closure_value
         }
-        // Collections and boxed `Indirect` always own heap, so they
-        // always carry glue and must have been rewritten. Reaching
-        // here is a lowering bug.
-        IRType::Indirect(_) | IRType::List(_) | IRType::Map { .. } | IRType::Set(_) => panic!(
+        // Collections always own heap, so they always carry glue and
+        // must have been rewritten. Reaching here is a lowering bug.
+        IRType::List(_) | IRType::Map { .. } | IRType::Set(_) => panic!(
             "LLVM emit: composite `IRInstruction::Clone` of type {ty:?} reached the backend \
              (the `elaborate` sub-pass must rewrite it into a `Call @clone_T`)",
         ),

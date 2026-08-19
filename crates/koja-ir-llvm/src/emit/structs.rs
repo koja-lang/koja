@@ -30,7 +30,7 @@ pub(super) fn emit_struct_init<'ctx>(
         let raw_value = lookup(values, field.value)?;
         let declared_ty = ctx.layouts.struct_field_ir_type(ty, field.index as usize);
         let stored = match &declared_ty {
-            IRType::Indirect(inner) => emit_box_value(
+            IRType::Indirect(inner) => box_or_pass_through(
                 ctx,
                 inner,
                 raw_value,
@@ -46,11 +46,30 @@ pub(super) fn emit_struct_init<'ctx>(
         .or_ice()
 }
 
+/// Fill an `Indirect` slot: box an unboxed inner value, or store an
+/// already-boxed pointer directly (clone glue passes the shared box
+/// through). The two are distinguishable by LLVM value kind, since a
+/// box's inner type is always an aggregate (cycle breaking only
+/// stamps struct / enum / tuple / union slots), never pointer-shaped.
+pub(super) fn box_or_pass_through<'ctx>(
+    ctx: &EmitContext<'ctx>,
+    inner: &IRType,
+    value: BasicValueEnum<'ctx>,
+    label: &str,
+) -> Result<BasicValueEnum<'ctx>, LlvmError> {
+    if value.is_pointer_value() {
+        return Ok(value);
+    }
+    emit_box_value(ctx, inner, value, label)
+}
+
 /// Project a single field out of a struct-typed SSA value via a
-/// scratch entry-block alloca + GEP + load. The `field_type` passed
-/// by the instruction is the unboxed view. The decl's recorded type
-/// drives the actual load shape so cycle-broken `Indirect(_)` slots
-/// load a `ptr` then unbox.
+/// scratch entry-block alloca + GEP + load. The decl's recorded type
+/// drives the load shape. A cycle-broken `Indirect(_)` slot loads a
+/// `ptr` and then unboxes for the usual unboxed instruction view, or
+/// hands the raw box pointer through when the instruction's
+/// `field_type` is itself `Indirect` (glue and overwrite sites
+/// project the box to `rc++` / release it).
 pub(super) fn emit_field_get<'ctx>(
     ctx: &EmitContext<'ctx>,
     base: BasicValueEnum<'ctx>,
@@ -58,7 +77,6 @@ pub(super) fn emit_field_get<'ctx>(
     field_type: &IRType,
     struct_symbol: &IRSymbol,
 ) -> Result<BasicValueEnum<'ctx>, LlvmError> {
-    let _ = field_type;
     let declared_ty = ctx
         .layouts
         .struct_field_ir_type(struct_symbol, field_index as usize);
@@ -76,7 +94,9 @@ pub(super) fn emit_field_get<'ctx>(
         .builder
         .build_load(field_llvm_type, field_ptr, &label)
         .or_ice()?;
-    if let IRType::Indirect(inner) = &declared_ty {
+    if let IRType::Indirect(inner) = &declared_ty
+        && !matches!(field_type, IRType::Indirect(_))
+    {
         return emit_unbox_value(
             ctx,
             inner,

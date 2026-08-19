@@ -26,11 +26,11 @@ pub(crate) fn emit_map_put<'ctx>(
     function: &IRFunction,
     llvm_function: FunctionValue<'ctx>,
     layout: &HashtableLayout<'_>,
+    consume_receiver: bool,
 ) -> Result<(), LlvmError> {
     let i8_ty = ctx.context.i8_type();
     let i64_ty = ctx.context.i64_type();
-    let original = extract_table_fields(ctx, function, llvm_function)?;
-    let table = clone_table_buffers(ctx, llvm_function, layout, &original)?;
+    let table = writable_table(ctx, function, llvm_function, layout, consume_receiver)?;
     let key_val = nth_param(function, llvm_function, 1, "key")?;
     let value_val = nth_param(function, llvm_function, 2, "value")?;
     let value_ty = layout.value_ty.ok_or_else(|| {
@@ -104,11 +104,11 @@ pub(crate) fn emit_set_insert<'ctx>(
     function: &IRFunction,
     llvm_function: FunctionValue<'ctx>,
     layout: &HashtableLayout<'_>,
+    consume_receiver: bool,
 ) -> Result<(), LlvmError> {
     let i8_ty = ctx.context.i8_type();
     let i64_ty = ctx.context.i64_type();
-    let original = extract_table_fields(ctx, function, llvm_function)?;
-    let table = clone_table_buffers(ctx, llvm_function, layout, &original)?;
+    let table = writable_table(ctx, function, llvm_function, layout, consume_receiver)?;
     let item_val = nth_param(function, llvm_function, 1, "item")?;
     let key_ops = resolve_key_hash_ops(ctx, function, layout.key_ty)?;
 
@@ -156,6 +156,25 @@ pub(crate) fn emit_set_insert<'ctx>(
         post.capacity,
     )?;
     ret_struct(ctx, inserted)
+}
+
+/// The table a write path mutates. Copying mode clones the receiver's
+/// buffers first (copy-on-write). Consuming mode (`.$consume$` twins,
+/// see `koja_ir::elaborate::consume`) writes into the receiver's own
+/// buffers, since the receiver value is dead at the call site and its
+/// buffers would otherwise be freed there.
+fn writable_table<'ctx>(
+    ctx: &EmitContext<'ctx>,
+    function: &IRFunction,
+    llvm_function: FunctionValue<'ctx>,
+    layout: &HashtableLayout<'_>,
+    consume_receiver: bool,
+) -> Result<TableSnapshot<'ctx>, LlvmError> {
+    let original = extract_table_fields(ctx, function, llvm_function)?;
+    if consume_receiver {
+        return Ok(original);
+    }
+    clone_table_buffers(ctx, llvm_function, layout, &original)
 }
 
 /// Output of [`emit_insert_probe`]: which `update` vs `insert` block

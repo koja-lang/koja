@@ -27,7 +27,7 @@ pub(super) fn option_value(symbol: IRSymbol, value: Option<Value>) -> Value {
     match value {
         Some(v) => Value::Enum {
             name: "Some".into(),
-            payload: EnumPayload::Tuple(vec![v]),
+            payload: EnumPayload::tuple(vec![v]),
             symbol,
             tag: SOME_TAG,
         },
@@ -46,13 +46,13 @@ pub(super) fn result_value(symbol: IRSymbol, value: Result<Value, Value>) -> Val
     match value {
         Ok(v) => Value::Enum {
             name: "Ok".into(),
-            payload: EnumPayload::Tuple(vec![v]),
+            payload: EnumPayload::tuple(vec![v]),
             symbol,
             tag: OK_TAG,
         },
         Err(v) => Value::Enum {
             name: "Err".into(),
-            payload: EnumPayload::Tuple(vec![v]),
+            payload: EnumPayload::tuple(vec![v]),
             symbol,
             tag: ERR_TAG,
         },
