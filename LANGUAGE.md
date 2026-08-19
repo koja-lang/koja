@@ -8,19 +8,19 @@ Koja is a statically typed, compiled language targeting native binaries via LLVM
 
 - [Lexical Structure](#lexical-structure): Comments, Identifiers, Keywords, Operators, Numeric Literals, Line Continuation
 - [Variables and Constants](#variables-and-constants): Assignment, Type Annotations, Compound Assignment, Constants
-- [Functions](#functions): Declaration, Private Declarations, `return`, Parameters
-- [Control Flow](#control-flow): `if`/`else`, `unless`, `while`, `loop`/`break`, `for`...`in`, Ternary
-- [Types](#types): Primitives, Builtin Declarations, Numeric Widening, Arithmetic Faults, Unit, Strings, Structs, Enums, Nested Types, Union Types, Tuples, Generics
-- [Pattern Matching](#pattern-matching): `match`, OR Patterns, `cond`
-- [Error Handling](#error-handling): `! E` Signatures, `fail`, `try`, Error Unions, `rescue`
+- [Value Semantics](#value-semantics): Rules, Copy Cost
+- [Functions](#functions): Declaration, Parameters, `return`, Private Declarations
 - [Closures and Function Types](#closures-and-function-types): Block Closures, Short Closures, Capture Semantics, Function Types
-- [Value Semantics](#value-semantics): Rules, Copy Cost, Field Access
+- [Control Flow](#control-flow): `if`/`else`, `unless`, `while`, `loop`/`break`, `for`...`in`, Ternary, `cond`, Definite Assignment
+- [Types](#types): Primitives, Builtin Declarations, Numeric Widening, Arithmetic Faults, Unit, Strings, Structs, Enums, Nested Types, Union Types, Tuples, Generics
+- [Pattern Matching](#pattern-matching): `match`, OR Patterns
+- [Error Handling](#error-handling): `! E` Signatures, `fail`, `try`, Error Unions, `rescue`
 - [Protocols](#protocols): Behavioral Contracts, Impl Blocks, Static Dispatch
 - [Packages](#packages): Transparent Files, Visibility, Aliases, Dependencies
-- [Concurrency](#concurrency): Processes, `spawn`/`receive`, `Ref`, `ReplyTo`, `Task`
-- [Standard Library](#standard-library): Built-in Functions, Core Types, Collections, String Methods, Binary/Bits, File I/O, Parsing, URI, Base, Path, Protocols
-- [C FFI](#c-ffi): `@extern "C"`, `CPtr<T>`, `CString`
+- [Concurrency](#concurrency): `Task`, Processes, Lifecycle, `Ref`, `ReplyTo`, `spawn`/`receive`
 - [Annotations](#annotations): `@deprecated`, `@doc`, `@test`
+- [C FFI](#c-ffi): `@extern "C"`, `CPtr<T>`, `CString`
+- [Standard Library](#standard-library): Core Types, Collections, String Functions, Binary/Bits, File I/O, Parsing, URI, Base, Path, Protocols
 - [Tooling](#tooling): CLI Commands, Custom Tasks, LSP, Formatter
 
 ---
@@ -51,7 +51,7 @@ protocol, receive, rescue, return, self, spawn, struct, true, try,
 type, unless, when, while
 ```
 
-`and` and `or` are operator-identifiers, not reserved keywords. They act as infix boolean operators in expressions (`a and b`, `x or y`) but can also be used freely as method names, function names, or field names (e.g., `option.or(default)`).
+`and` and `or` are operator-identifiers, not reserved keywords. They act as infix boolean operators in expressions (`a and b`, `x or y`) but can also be used as function or field names (for example, `option.or(default)`).
 
 ### Operators
 
@@ -108,34 +108,14 @@ end
 
 ## Variables and Constants
 
-Variables are declared by assignment. No `let`, `var`, or `mut` keywords.
+Assignment creates a variable or rebinds an existing variable. There are no `let`, `var`, or `mut` keywords. See [Value Semantics](#value-semantics) for copy behavior.
 
 ```koja
 x = 42
 name = "koja"
 ```
 
-### Definite Assignment
-
-A variable must be assigned before it is read, no matter which path the program takes to get there. If a variable is only assigned inside one branch of an `if`, `cond`, or `match`, or inside a loop body that might never run, reading it afterward is a compile error:
-
-```koja
-while i < 3
-  n = i * 2 # the loop may run zero times
-end
-
-n.print() # error: `n` does not have a value on every path
-
-if flag
-  m = 1
-else
-  m = 2
-end
-
-m.print() # ok: both branches assign
-```
-
-A branch that always exits early (`return`, `break`, `Kernel.panic`) doesn't count against the others. Only reads are checked, so assigning to the variable again after the branch or loop is always fine. When the value depends on a branch, either assign a default first or use the expression form (`m = if flag 1 else 2 end`).
+A variable must be assigned before it is read. See [Definite Assignment](#definite-assignment) for control-flow rules.
 
 ### Type Annotations
 
@@ -158,18 +138,6 @@ x -= 2
 x *= 3
 x /= 4
 ```
-
-### Assignment and Value Semantics
-
-Every binding holds an independent value. Assignment copies:
-
-```koja
-p1 = Point{x: 1, y: 2}
-p2 = p1
-p2.x = 10 # p1.x is still 1
-```
-
-Copies are observably independent for every type. Mutating one binding never affects another. See [Value Semantics](#value-semantics).
 
 ### Constants
 
@@ -197,6 +165,37 @@ Within a package, constants are read by bare name (`MAX`). Constants from the au
 
 ---
 
+## Value Semantics
+
+Koja uses value semantics. Every binding, parameter, return, and field is an independent value, with memory managed automatically by the runtime. There are no moves, borrows, or lifetimes. Using a value never invalidates it.
+
+### Rules
+
+1. Assignment copies.
+2. Function and closure parameters are passed by value.
+3. There is no aliasing. Mutating one binding never affects another.
+4. A value is usable for as long as it is in scope.
+
+> Memory note: heap-backed values (strings, collections, composites) are reclaimed by reference counting. Blocks are shared while live and freed deterministically at scope exit when the last owner drops. This is scope-bound, not a garbage collector. There are no pauses and no background collector. See the README for production-readiness status.
+
+### Copy Cost
+
+All types copy on assignment, and the result is always an independent value. What a copy costs depends on the representation:
+
+- Numeric primitives, `Bool`, `()`, and function pointers copy bit-for-bit.
+- `String`, `Binary`, and `Bits` share one reference-counted buffer, so a copy costs nothing regardless of size.
+- Structs and enums copy their top-level fields, and each heap-backed field follows these same rules. Recursive constituents live in reference-counted boxes that copies share, so copying a persistent tree touches only the root and an update touches only the changed path, never the whole structure.
+- `List`, `Map`, and `Set` copy their backing buffer, so a collection copy is O(n) today. The LLVM backend skips the copy when the old value provably dies at the mutation site. Thus, compiled `xs = xs.append(x)` rebind loops build a collection in linear time. The interpreter preserves the same behavior but can still copy each loop iteration.
+
+None of this is observable in behavior. Mutation always builds the mutated binding's own value, no binding ever observes another's changes, and a copy is always an independent value:
+
+```koja
+a = 42
+b = a # b is an independent copy
+```
+
+---
+
 ## Functions
 
 Functions are declared with `fn`. The last expression is the implicit return value.
@@ -213,45 +212,17 @@ A fallible function declares an error type after `!`, as in `-> Int ! ParseError
 
 A compiled program's entry point is a type implementing the `Process` protocol, named by `entry` in `koja.toml`. There is no `fn main`. Scripts (`.kojs`) execute top-level statements directly. Functions may be declared at the top level or inside struct, enum, and `impl` bodies. See [Structs](#structs), [Protocols](#protocols), and [Static Functions](#static-functions).
 
-### Private Declarations
+### Parameters
 
-`priv` restricts a declaration's visibility based on where it appears:
-
-- A top-level `priv` declaration (`fn`, `struct`, `enum`, `const`, `type`,
-  `protocol`) is **package-private**: it's usable from any file in the same
-  package, but rejected from any other package.
-- A `priv fn` declared inside a `struct`, `enum`, or `impl` body is
-  **type-private**: it's callable from any other method on the same target
-  type (whether declared in the type's decl block, an `extend Type` block,
-  or an `impl Protocol for Type` block), but rejected everywhere else.
+Parameters are passed by value. The callee receives its own independent copy of each argument:
 
 ```koja
-priv fn helper(x: Int32) -> Int32 # package-private
-  x * 2
-end
-
-priv const RETRY_LIMIT: Int32 = 3 # package-private
-
-priv struct Bucket # package-private
-  count: Int32
-end
-
-struct Counter
-  value: Int32
-
-  fn increment(self) -> Counter
-    Counter{value: self.tick()} # ok: same type
-  end
-
-  priv fn tick(self) -> Int32 # type-private to Counter
-    self.value + 1
-  end
+fn describe(c: Config) -> String
+  c.name # operates on the callee's own copy
 end
 ```
 
-A public declaration cannot leak a private type through its signature. A public function whose parameter or return type names a private type, or a public struct field, enum variant payload, type alias, or protocol method that mentions one, is a compile error. Callers outside the package could see the type but never name it, so the compiler rejects the leak at the declaration site.
-
-`@doc` on a private declaration is also a compile error. Private items never appear in generated documentation, so use regular `#` comments instead.
+There is no parameter-passing modifier. Every parameter is a value.
 
 ### `return`
 
@@ -282,17 +253,127 @@ if args.empty?()
 end
 ```
 
-### Parameters
+### Private Declarations
 
-Parameters are passed by value. The callee receives its own independent copy of each argument:
+`priv` restricts a declaration's visibility based on where it appears:
+
+- A top-level `priv` declaration (`fn`, `struct`, `enum`, `const`, `type`,
+  `protocol`) is **package-private**: it's usable from any file in the same
+  package, but rejected from any other package.
+- A `priv fn` declared inside a `struct`, `enum`, or `impl` body is
+  **type-private**: it's callable from any other function on the same target
+  type (whether declared in the type's decl block, an `extend Type` block,
+  or an `impl Protocol for Type` block), but rejected everywhere else.
 
 ```koja
-fn describe(c: Config) -> String
-  c.name # operates on the callee's own copy
+priv fn helper(x: Int32) -> Int32 # package-private
+  x * 2
+end
+
+priv const RETRY_LIMIT: Int32 = 3 # package-private
+
+priv struct Bucket # package-private
+  count: Int32
+end
+
+struct Counter
+  value: Int32
+
+  fn increment(self) -> Counter
+    Counter{value: self.tick()} # ok: same type
+  end
+
+  priv fn tick(self) -> Int32 # type-private to Counter
+    self.value + 1
+  end
 end
 ```
 
-There is no parameter-passing modifier. Every parameter is a value.
+A public declaration cannot leak a private type through its signature. A public function whose parameter or return type names a private type, or a public struct field, enum variant payload, type alias, or protocol function that mentions one, is a compile error. Callers outside the package could see the type but never name it, so the compiler rejects the leak at the declaration site.
+
+`@doc` on a private declaration is also a compile error. Private items never appear in generated documentation, so use regular `#` comments instead.
+
+---
+
+## Closures and Function Types
+
+### Block Closures
+
+Closures use `fn (...) -> T ... end` syntax, mirroring function signatures:
+
+```koja
+double = fn (x: Int32) -> Int32 x * 2 end
+
+add =
+  fn (a: Int32, b: Int32) -> Int32
+    # the last expression is the return value
+    a + b
+  end
+```
+
+Closure parameters are passed by value, like function parameters:
+
+```koja
+measure = fn (data: String) -> Int data.length() end
+```
+
+### Short Closures
+
+Short closures use `param -> expr` syntax as direct call arguments, with parameter types inferred from the call:
+
+```koja
+option.map(x -> x + 1)
+list.filter(n -> n > 3)
+names.map(name -> name.upcase())
+```
+
+Both positional and named arguments accept the short form, including arguments to generic functions. Use the block form outside a call argument or when the closure needs multiple parameters or statements.
+
+### Capture Semantics
+
+Closures capture variables from their enclosing scope by value. Each captured variable is copied into the closure's environment when the closure is created, so later rebinding does not affect the closure's copy:
+
+```koja
+multiplier = 3
+
+triple =
+  fn (x: Int) -> Int
+    x * multiplier # captures a copy of multiplier
+  end
+
+multiplier = 10 # does not affect triple
+triple(5).print() # 15
+```
+
+Captured closures use heap-allocated environment structs.
+
+### Function Types
+
+Function types are written as `fn (ParamTypes) -> ReturnType`:
+
+```koja
+fn apply(x: Int32, f: fn (Int32) -> Int32) -> Int32
+  f(x)
+end
+
+apply(5, fn (n: Int32) -> Int32 n * 2 end).print()
+```
+
+### Named Functions as Values
+
+A named function's bare name is a function value. Functions in other packages are reached through the package namespace:
+
+```koja
+fn double(x: Int) -> Int
+  x * 2
+end
+
+f = double # same package
+g = Mathlib.square # another package
+apply(5, f).print()
+```
+
+Generic functions cannot be referenced as values. There is no call site to infer their type arguments from.
 
 ---
 
@@ -375,6 +456,66 @@ y = x > 2 ? "big" : "small"
 
 Nested ternaries are disallowed.
 
+### `cond`
+
+Multi-branch conditional. Koja has no `else if`, so `cond` is the idiomatic way to chain conditions. Requires an `else` arm:
+
+```koja
+fn classify(n: Int32) -> String
+  cond
+    n > 100 -> "big"
+    n > 10 -> "medium"
+    else -> "small"
+  end
+end
+```
+
+`cond` is value-producing when all arms (including `else`) produce values.
+
+Arms can use any boolean expression, including function calls:
+
+```koja
+cond
+  c.digit?() -> handle_digit(c)
+  c.whitespace?() -> skip_whitespace()
+  c == "+" -> handle_plus()
+  else -> handle_unknown(c)
+end
+```
+
+### Definite Assignment
+
+A variable must be assigned before it is read on every path. Assignment in a loop does not guarantee a value because the loop might not run:
+
+```koja
+fn last_doubled(limit: Int) -> Int
+  i = 0
+
+  while i < limit
+    doubled = i * 2
+    i += 1
+  end
+
+  doubled # error when `limit` is zero or negative
+end
+```
+
+Assignment in every branch does guarantee a value:
+
+```koja
+fn choose(flag: Bool) -> Int
+  if flag
+    choice = 1
+  else
+    choice = 2
+  end
+
+  choice
+end
+```
+
+A branch that always exits early (`return`, `break`, `Kernel.panic`) does not count against the other branches. Only reads are checked, so assigning to the variable again after the branch or loop is always valid. When a value depends on a branch, assign a default first or use the expression form.
+
 ---
 
 ## Types
@@ -410,14 +551,14 @@ instead (see [Arithmetic Faults](#arithmetic-faults)), the same way
 every `String` is valid UTF-8 by construction. Float equality is
 therefore a true equivalence relation, and comparisons are total.
 
-All types have value semantics. Assignment produces an independent copy. Numeric primitives and `Bool` copy bit-for-bit. `String`, `Binary`, `Bits`, `List`, `Map`, `Set`, structs, and enums copy their contents. The distinction is only one of cost, never of semantics.
+All types follow the same [value semantics](#value-semantics). Their representations affect copy cost, not behavior.
 
 ### Builtin Declarations
 
 The compiler owns the representation of the primitive types and the
 core collections (`List<T>`, `Map<K, V>`, `Set<T>`, `CPtr<T>`). The
 stdlib declares each one with the `builtin` keyword, which anchors its
-`@doc` comment and its methods:
+`@doc` comment and its functions:
 
 ```koja
 @doc """
@@ -453,7 +594,7 @@ Widening applies wherever a value flows into a typed slot: call arguments, struc
 
 - **Binary operators**: operands must be the same width. `Int32 + Int` is an error. Widen explicitly first.
 - **Sideways conversions**: `Int8` does not widen to `Int16`, `UInt8` does not widen to `UInt16`. Each source type has exactly one implicit target.
-- **`UInt64`**: it does not fit in `Int`. Use the checked `to_int` method.
+- **`UInt64`**: it does not fit in `Int`. Use the checked `to_int` function.
 - **Generic inference**: `T` binds to the actual type. `identity(small)` infers `T = Int32`, not `Int`.
 - **Narrowing or cross-category conversion**: `Int` never implicitly becomes `Int32`, and ints never become floats.
 
@@ -530,11 +671,11 @@ msg =
   """
 ```
 
-Content must start on the line after the opening `"""`, and the closing `"""`
-must sit on its own line (only whitespace may precede it, though code such as a
-closing `)` may follow it). This makes the closing delimiter's column an
-unambiguous dedent oracle. Both placements of the opener are idiomatic and the
-formatter preserves whichever one you write:
+Content must start on the line after the opening `"""`. The closing `"""` must
+be the first non-whitespace token on its line, but other syntax can follow it.
+The closing delimiter's column sets the dedent width. In a direct assignment,
+the opener can follow `=` or start on the next line. The formatter preserves
+that choice:
 
 ```koja
 x =
@@ -620,9 +761,23 @@ Shape.Rect{width: 4} # height fills with 2
 
 #### Field Access
 
+Field access reads an independent field value:
+
 ```koja
 p.x.print()
 p.y.print()
+```
+
+This rule also applies to chained access and function calls:
+
+```koja
+c.name.length()
+```
+
+Field assignment transforms the current field value and writes the result back:
+
+```koja
+c.name = c.name.upcase()
 ```
 
 #### Inline Functions
@@ -648,7 +803,7 @@ p.distance_squared().print()
 Point.origin().x.print()
 ```
 
-Methods receive `self` by value. A "mutating" method does not change the receiver in place. It computes a new value and returns it, and the caller rebinds:
+Functions receive `self` by value. A "mutating" function does not change the receiver in place. It computes a new value and returns it, and the caller rebinds:
 
 ```koja
 struct Counter
@@ -679,7 +834,7 @@ extend Point
 end
 ```
 
-Methods declared in an `extend` block have ambient visibility. They're callable from any package that can name the target type. Collisions on the same method name across `extend` blocks targeting the same type are a compile error.
+Functions declared in an `extend` block have ambient visibility. They're callable from any package that can name the target type. Collisions on the same function name across `extend` blocks targeting the same type are a compile error.
 
 #### Static Functions
 
@@ -699,7 +854,7 @@ config = Config.default()
 
 #### Concrete Extend Specialization
 
-`extend` blocks can target a specific instantiation of a generic type. Methods defined in a specialized extend are only available when the type argument matches:
+`extend` blocks can target a specific instantiation of a generic type. Functions defined in a specialized extend are only available when the type argument matches:
 
 ```koja
 extend CPtr<UInt8>
@@ -709,7 +864,7 @@ extend CPtr<UInt8>
 end
 ```
 
-`to_cstring` is only available on `CPtr<UInt8>`, not on `CPtr<Int32>` or other instantiations. Calling a specialized method on the wrong type argument produces a compile error with a hint showing which specialization provides the method.
+`to_cstring` is only available on `CPtr<UInt8>`, not on `CPtr<Int32>` or other instantiations. Calling a specialized function on the wrong type argument produces a compile error with a hint showing which specialization provides the function.
 
 This pointer conversion is distinct from checked
 `String.to_cstring()`. It assumes a readable NUL-terminated C buffer
@@ -1072,33 +1227,6 @@ Variable bindings inside OR patterns are disallowed.
 
 Matching only reads the subject. The matched variable can be used inside arms and after the `match` expression like any other binding.
 
-### `cond`
-
-Multi-branch conditional. Koja has no `else if`, so `cond` is the idiomatic way to chain conditions. Requires an `else` arm:
-
-```koja
-fn classify(n: Int32) -> String
-  cond
-    n > 100 -> "big"
-    n > 10 -> "medium"
-    else -> "small"
-  end
-end
-```
-
-`cond` is value-producing when all arms (including `else`) produce values.
-
-Arms can use any boolean expression, including method calls:
-
-```koja
-cond
-  c.digit?() -> handle_digit(c)
-  c.whitespace?() -> skip_whitespace()
-  c == "+" -> handle_plus()
-  else -> handle_unknown(c)
-end
-```
-
 ---
 
 ## Error Handling
@@ -1190,147 +1318,6 @@ limits = fetch_limits(url) rescue e -> Kernel.panic("config unavailable: #{e}")
 
 ---
 
-## Closures and Function Types
-
-### Block Closures
-
-Closures use `fn (...) -> T ... end` syntax, mirroring function signatures:
-
-```koja
-double = fn (x: Int32) -> Int32 x * 2 end
-
-add =
-  fn (a: Int32, b: Int32) -> Int32
-    # the last expression is the return value
-    a + b
-  end
-```
-
-Closure parameters are passed by value, like function parameters:
-
-```koja
-measure = fn (data: String) -> Int data.length() end
-```
-
-### Short Closures
-
-Short closures use `param -> expr` syntax as direct call arguments, with parameter types inferred from the call:
-
-```koja
-option.map(x -> x + 1)
-list.filter(n -> n > 3)
-names.map(name -> name.upcase())
-```
-
-Both positional and named arguments accept the short form, including arguments to generic functions. Use the block form outside a call argument or when the closure needs multiple parameters or statements.
-
-### Capture Semantics
-
-Closures capture variables from their enclosing scope by value. Each captured variable is copied into the closure's environment when the closure is created, so later rebinding does not affect the closure's copy:
-
-```koja
-multiplier = 3
-
-triple =
-  fn (x: Int) -> Int
-    x * multiplier # captures a copy of multiplier
-  end
-
-multiplier = 10 # does not affect triple
-triple(5).print() # 15
-```
-
-Captured closures use heap-allocated environment structs.
-
-### Function Types
-
-Function types are written as `fn (ParamTypes) -> ReturnType`:
-
-```koja
-fn apply(x: Int32, f: fn (Int32) -> Int32) -> Int32
-  f(x)
-end
-
-apply(5, fn (n: Int32) -> Int32 n * 2 end).print()
-```
-
-### Named Functions as Values
-
-A named function's bare name is a function value. Functions in other packages are reached through the package namespace:
-
-```koja
-fn double(x: Int) -> Int
-  x * 2
-end
-
-f = double # same package
-g = Mathlib.square # another package
-apply(5, f).print()
-```
-
-Generic functions cannot be referenced as values. There is no call site to infer their type arguments from.
-
----
-
-## Value Semantics
-
-Koja uses value semantics. Every binding, parameter, return, and field is an independent value, with memory managed automatically by the runtime. There are no moves, borrows, or lifetimes. Using a value never invalidates it.
-
-### Rules
-
-1. Assignment copies.
-2. Function and closure parameters are passed by value.
-3. There is no aliasing. Mutating one binding never affects another.
-4. A value is usable for as long as it is in scope.
-
-> Memory note: heap-backed values (strings, collections, composites) are reclaimed by reference counting. Blocks are shared while live and freed deterministically at scope exit when the last owner drops. This is scope-bound, not a garbage collector. There are no pauses and no background collector. See the README for production-readiness status.
-
-### Copy Cost
-
-All types copy on assignment, and the result is always an independent value. What a copy costs depends on the representation:
-
-- Numeric primitives, `Bool`, `()`, and function pointers copy bit-for-bit.
-- `String`, `Binary`, and `Bits` share one reference-counted buffer, so a copy costs nothing regardless of size.
-- Structs and enums copy their top-level fields, and each heap-backed field follows these same rules. Recursive constituents live in reference-counted boxes that copies share, so copying a persistent tree touches only the root and an update touches only the changed path, never the whole structure.
-- `List`, `Map`, and `Set` copy their backing buffer, so a collection copy is O(n) today. The LLVM backend skips the copy when the old value provably dies at the mutation site. Thus, compiled `xs = xs.append(x)` rebind loops build a collection in linear time. The interpreter preserves the same behavior but can still copy each loop iteration.
-
-None of this is observable in behavior. Mutation always builds the mutated binding's own value, no binding ever observes another's changes, and a copy is always an independent value:
-
-```koja
-a = 42
-b = a # b is an independent copy
-```
-
-### Field Access
-
-Field access reads the field's value, which is itself an independent value:
-
-```koja
-struct Wrapper
-  name: String
-  count: Int
-end
-
-w = Wrapper{name: "hello", count: 1}
-w.name.print()
-w.count.print()
-```
-
-This extends to chained access and method calls:
-
-```koja
-w.name.length() # reads name, then calls length on it
-```
-
-To mutate a field, use reassignment. The right-hand side transforms the current field value and the result is written back:
-
-```koja
-w.name = w.name.upcase()
-w.name.print() # "HELLO"
-```
-
----
-
 ## Protocols
 
 Protocols define behavioral contracts. A struct or enum lists its protocols after a colon in its header, and the functions in its body satisfy the contract:
@@ -1353,7 +1340,7 @@ struct Cat: Greeter, Description
 end
 ```
 
-The compiler checks completeness and signature compatibility, and synthesizes any default-bodied methods the type omits. If the body has a function whose name is a near miss of an omitted default, the compiler warns about the likely typo. Entry processes are declared this way (`struct App: Process<(), (), ()>`, see [Packages](#packages)). Protocol declarations accept `@doc` and `@deprecated`.
+The compiler checks completeness and signature compatibility, and synthesizes any default-bodied functions the type omits. If the body has a function whose name is a near miss of an omitted default, the compiler warns about the likely typo. Entry processes are declared this way (`struct App: Process<(), (), ()>`, see [Packages](#packages)). Protocol declarations accept `@doc` and `@deprecated`.
 
 `Debug` and `Equality` are auto-derived for every type, so listing one is only an override. It suppresses the derived implementation, and the body must supply `format` / `eq`:
 
@@ -1367,7 +1354,7 @@ struct Token: Debug
 end
 ```
 
-`Self` inside a protocol is sugar for an implicit first type parameter, filled in by each conforming type. A method signature that mentions `Self` resolves it to the concrete implementer. User-declared protocol type parameters (e.g. `protocol Eq<T>`) follow the `Self` slot, and the name `Self` cannot be declared explicitly.
+`Self` inside a protocol is sugar for an implicit first type parameter, filled in by each conforming type. A function signature that mentions `Self` resolves it to the concrete implementer. User-declared protocol type parameters (e.g. `protocol Eq<T>`) follow the `Self` slot, and the name `Self` cannot be declared explicitly.
 
 ### Impl Blocks
 
@@ -1383,7 +1370,7 @@ end
 
 The two forms are equivalent and check identically. Declaring the same conformance in both is a duplicate-conformance error.
 
-The impl block is the isolated-contract form. It rejects public functions the protocol does not declare (`priv fn` helpers are allowed). Use it when a conformance's methods would crowd the type body.
+The impl block is the isolated-contract form. It rejects public functions the protocol does not declare (`priv fn` helpers are allowed). Use it when a conformance's functions would crowd the type body.
 
 ### Trait Bounds
 
@@ -1409,7 +1396,7 @@ Bounds are verified at call sites. If a concrete type doesn't implement a requir
 type `Cat` does not implement protocol `Description` (required by type parameter `T` in `myapp.describe_and_greet`)
 ```
 
-Inside the function body, protocol methods can be called directly on bounded type parameters. The compiler resolves the method through the protocol's signature.
+Inside the function body, protocol functions can be called directly on bounded type parameters. The compiler resolves the function through the protocol's signature.
 
 Unbounded type parameters (`<T>`) remain valid and backwards compatible.
 
@@ -1468,7 +1455,7 @@ Access control is at the declaration level (`priv`), not the file level:
   `protocol`) is **package-private**: usable from any file in the same
   package, rejected from other packages.
 - `priv fn` declared inside a `struct`, `enum`, `extend`, or `impl` body
-  is **type-private**: callable from any other method on the same target
+  is **type-private**: callable from any other function on the same target
   type (across the decl block and any `extend` or `impl Protocol for Type`
   block on that type), rejected everywhere else.
 
@@ -1750,17 +1737,259 @@ In most cases you won't use `receive` directly. The `Process` protocol's default
 
 ---
 
+## Annotations
+
+An annotation is `@name` with an optional payload, placed before a
+declaration. Payloads are strings (single-line `"..."` or multiline
+`"""..."""`, interchangeable) or the literal `false`. By convention,
+annotations that carry prose (`@deprecated`, `@doc`) use the multiline form,
+and short labels like `@test` descriptions stay on one line.
+
+The FFI annotations `@extern` and `@link` are covered in [C FFI](#c-ffi).
+
+### `@deprecated`
+
+Marks a declaration as deprecated. Every use produces a compile warning:
+
+```koja
+@deprecated """
+Use `checksum32` instead. It handles inputs longer than 64 KiB.
+"""
+fn checksum(data: Binary) -> Int32
+  # ...
+end
+```
+
+```
+warning: `checksum` is deprecated: Use `checksum32` instead. It handles inputs longer than 64 KiB.
+```
+
+The message is required and should tell the caller what to use instead. Bare
+`@deprecated` is a compile error.
+
+`@deprecated` is accepted on functions (top-level, inline, and `impl`/`extend`
+members), structs, enums, constants, type aliases, and protocols, including
+`priv` declarations. Warnings fire at every resolved use site (calls, type
+positions, construction, patterns, constant reads), except inside the
+deprecated declaration itself and inside `impl`/`extend` blocks whose target
+is deprecated, so deprecating a type does not flag its own functions.
+
+### `@doc`
+
+Documents a function, struct, or enum:
+
+```koja
+@doc """
+Adds two integers.
+"""
+fn add(a: Int32, b: Int32) -> Int32
+  a + b
+end
+```
+
+`@doc false` excludes an item from generated documentation.
+
+`@doc` on a `priv` declaration is a compile error, since private items never appear in generated documentation.
+
+Doc strings support Markdown and are rendered by `koja doc`.
+
+### `@test`
+
+Marks a function as a test case. `koja test` discovers and runs all
+`@test`-annotated functions in `src/` and `test/` directories. Test
+functions return `Result<Bool, String>`. Any `Result.Ok` passes, while
+`Result.Err(message)` fails with the given message.
+
+```koja
+struct AdditionTest
+  @test "adds two integers"
+  fn test_addition -> Result<Bool, String>
+    result = add(2, 3)
+
+    unless result == 5
+      return Result.Err("expected 5, got #{result}")
+    end
+
+    Result.Ok(true)
+  end
+end
+```
+
+An optional string after `@test` provides a description printed during the
+test run. The runner reports every discovered test even when some fail.
+
+---
+
+## C FFI
+
+Koja can call C functions via the `@extern "C"` annotation. FFI declarations live on structs (types are namespaces). No `unsafe` keyword. Safety is the wrapper author's responsibility.
+
+### Declaring Extern Functions
+
+`@extern "C"` on a function marks it as a C declaration. `@link "libname"` tells the linker which library provides the symbol (`-l libname`). Extern functions live inside structs, which serve as namespaces.
+
+```koja
+struct FFI
+  @extern "C" @link "mylib"
+  fn add_numbers(a: Int32, b: Int32) -> Int32
+
+  @extern "C" @link "mylib"
+  fn fill_buffer(buf: CPtr<Int32>, count: Int32, value: Int32)
+end
+
+result = FFI.add_numbers(3, 4)
+result.print()
+```
+
+Extern functions have no body. Parameter and return types must be FFI-compatible: explicit-width primitives (`Int32`, `UInt8`, `Float32`, etc.), `Bool`, `CPtr<T>`, or `()`. Extern functions can coexist with normal Koja functions in the same struct. Use `priv fn` on the extern declarations and expose safe public wrappers.
+
+A `Float32` / `Float64` value returned by an extern call is checked at the call site. A NaN or infinity handed back by C panics with an `ArithmeticError` (`non-finite float returned by <name>`), keeping the finite-only float invariant intact across the FFI boundary (see [Arithmetic Faults](#arithmetic-faults)).
+
+Declare C return types at their true width and let [numeric widening](#numeric-widening) do the rest. A C `int` bound as `Int32` flows directly into `Int` contexts with correct sign extension, so negative error codes survive the trip. Reading a C `int` as `Int` would zero-extend the upper 32 bits and corrupt negative values.
+
+### Symbol Naming
+
+When the C symbol name differs from the Koja function name, use `@link "lib:symbol"` to specify the C symbol after a colon:
+
+```koja
+struct Crypto
+  @extern "C" @link "crypto:EVP_sha256"
+  priv fn evp_sha256 -> CPtr<UInt8>
+
+  @extern "C" @link "crypto:SHA256"
+  priv fn sha256_raw(data: CPtr<UInt8>, len: Int64, out: CPtr<UInt8>)
+    -> CPtr<UInt8>
+end
+```
+
+`@link "crypto"` (without a colon) uses the Koja function name as the C symbol. `@link "crypto:SHA256"` links to the C symbol `SHA256` while the Koja function name is `sha256_raw`. This keeps all Koja function names in proper `snake_case` regardless of the C library's naming conventions.
+
+### `CPtr<T>`
+
+A raw C pointer type. `Copy` semantics (just a machine word). No ownership tracking. The compiler will not auto-free memory behind a `CPtr<T>`.
+
+```koja
+struct CPtr<T>
+  fn null -> CPtr<T>
+  fn alloc(count: Int) -> CPtr<T>
+  fn free(self)
+  fn offset(self, n: Int) -> CPtr<T>
+  fn read(self) -> T
+  fn write(self, value: T)
+  fn null?(self) -> Bool
+  fn address(self) -> Int
+end
+```
+
+`alloc` and `free` use C's `malloc` and `free`. All functions are compiler intrinsics. `address` returns the raw address as an `Int` bit pattern (0 for null). `CPtr<T>` implements `Debug` by rendering that address as 16 hex digits: `ptr.format()` gives `CPtr(0x00006000023a4f10)` and a null pointer gives `CPtr(0x0)`.
+
+```koja
+buf: CPtr<Int32> = CPtr.alloc(4)
+buf.write(42)
+buf.read().print()
+buf.free()
+
+null_ptr: CPtr<Int32> = CPtr.null()
+null_ptr.null?().print()
+```
+
+Type annotations on the variable drive generic inference for static functions like `CPtr.alloc()` and `CPtr.null()`.
+
+`CPtr<UInt8>` additionally provides the two ways to get a pointer to a `Binary`'s bytes:
+
+- `CPtr.borrow(bytes: Binary) -> CPtr<UInt8>`: zero-cost view of the binary's payload. The result cannot be bound to a variable, returned, or stored. It may only be consumed within the statement that borrows it (as a call argument or chained receiver), where the source `Binary` is guaranteed to be live.
+- `CPtr.copy(bytes: Binary) -> CPtr<UInt8>`: malloc'd owned copy of the bytes. Nameable like any value. The caller frees it. Use this when a C API retains the pointer past the call.
+
+```koja
+digest: CPtr<UInt8> = CPtr.alloc(32)
+FFI.blake3_hash(CPtr.borrow(data), data.byte_size(), digest) # fine
+
+p = CPtr.borrow(data) # compile error: a borrowed pointer cannot be bound
+owned = CPtr.copy(data) # owned copy, free it when C is done
+```
+
+### `CString`
+
+A pointer-and-length descriptor for a null-terminated C string. It does
+not encode ownership. `String.to_cstring()` allocates owned memory, while
+`CPtr<UInt8>.to_cstring()` wraps an existing pointer without allocating.
+
+```koja
+struct CString
+  ptr: CPtr<UInt8>
+  len: Int
+end
+
+enum CString.ConversionError
+  InteriorNul
+  InvalidLength
+  InvalidUTF8
+  NullPointer
+end
+```
+
+Convert between Koja strings and C strings:
+
+```koja
+name = "hello"
+cs = name.to_cstring().unwrap()
+cs.len.print()
+
+back = cs.to_string().unwrap()
+(back == name).print()
+
+cs.free()
+```
+
+`String.to_cstring() -> CString ! CString.ConversionError`
+allocates a null-terminated copy via `malloc` and rejects `String`
+values containing U+0000 with `InteriorNul`.
+`CString.to_string() -> String ! CString.ConversionError` copies
+exactly `len` bytes and rejects invalid lengths, pointers, and UTF-8.
+It does not consume or free the C buffer. Call `free()` only when the
+descriptor owns malloc-compatible storage.
+
+### Passing Pointers to C
+
+`CPtr<T>` is accepted in `@extern "C"` signatures, enabling pointer-passing FFI:
+
+```koja
+struct FFI
+  @extern "C" @link "mylib"
+  fn fill_array(buf: CPtr<Int32>, count: Int32, value: Int32)
+
+  @extern "C" @link "mylib"
+  fn sum_array(buf: CPtr<Int32>, count: Int32) -> Int32
+end
+
+buf: CPtr<Int32> = CPtr.alloc(4)
+FFI.fill_array(buf, 4, 10)
+total = FFI.sum_array(buf, 4)
+total.print()
+buf.free()
+```
+
+For string-accepting C functions, pass `cs.ptr` (the `CPtr<UInt8>`) and `cs.len`:
+
+```koja
+cs = "hello".to_cstring().unwrap()
+FFI.some_c_function(cs.ptr, cs.len)
+cs.free()
+```
+
+For byte-accepting C functions, borrow a pointer to the `Binary` at the call site:
+
+```koja
+FFI.consume_bytes(CPtr.borrow(data), data.byte_size())
+```
+
+Pointers passed to C are valid for the duration of the call. A C function that keeps the pointer past the call needs `CPtr.copy` (an owned copy the caller frees).
+
+---
+
 ## Standard Library
 
 The following types and functions are available in every file with no alias needed.
-
-### Built-in Functions
-
-> **Note:** Koja uses value semantics. Every binding, parameter,
-> return, and field is an independent value. Assigning or passing a
-> value already yields an independent copy (cheaply, via reference-
-> counted sharing under the hood), so there is no `clone()`:
-> just assign or pass the value.
 
 ### `Kernel`
 
@@ -1945,7 +2174,7 @@ Functions:
 names: Set<String> = ["alice", "bob", "alice"] # Set with 2 elements
 ```
 
-### String Methods
+### String Functions
 
 `String` implements `Enumeration<String>`, so strings can be iterated character-by-character with `for`:
 
@@ -2148,7 +2377,7 @@ Static functions on `Int` and `Float` for parsing strings:
 - `Int.parse(input: String) -> Int ! NumericConversionError`: parses a string as a 64-bit signed integer.
 - `Float.parse(input: String) -> Float ! NumericConversionError`: parses a string as a 64-bit float.
 
-Failures distinguish malformed text from values that don't fit: `NumericConversionError.InvalidFormat` for text that isn't a number, `NumericConversionError.OutOfRange` for a well-formed number outside the target's range (an integer overflowing 64 bits, or a float magnitude like `1e999` that would round to infinity). Only finite floats parse. There is no literal syntax for infinities or NaN. This is the same error enum the checked narrowing methods use (see [Numeric Widening](#numeric-widening)).
+Failures distinguish malformed text from values that don't fit: `NumericConversionError.InvalidFormat` for text that isn't a number, `NumericConversionError.OutOfRange` for a well-formed number outside the target's range (an integer overflowing 64 bits, or a float magnitude like `1e999` that would round to infinity). Only finite floats parse. There is no literal syntax for infinities or NaN. This is the same error enum the checked narrowing functions use (see [Numeric Widening](#numeric-widening)).
 
 ```koja
 x = Int.parse("42").unwrap()
@@ -2291,7 +2520,7 @@ protocol Bitwise
 end
 ```
 
-Bitwise operations are methods rather than symbolic operators. Koja reserves `<<`/`>>` for binary literals, `|` for union types, and `&` for protocol composition in trait bounds. All integer types implement `Bitwise`.
+Bitwise operations are functions rather than symbolic operators. Koja reserves `<<`/`>>` for binary literals, `|` for union types, and `&` for protocol composition in trait bounds. All integer types implement `Bitwise`.
 
 `bsl` and `bsr` panic when the shift count is negative or at least the receiver's bit width (`1.bsl(64)` on an `Int`), matching the [arithmetic fault](#arithmetic-faults) contract. The other four operations never fault.
 
@@ -2358,256 +2587,6 @@ end
 ```
 
 `Map<K, V>` implements `MapLiteral<K, V>`.
-
----
-
-## C FFI
-
-Koja can call C functions via the `@extern "C"` annotation. FFI declarations live on structs (types are namespaces). No `unsafe` keyword. Safety is the wrapper author's responsibility.
-
-### Declaring Extern Functions
-
-`@extern "C"` on a function marks it as a C declaration. `@link "libname"` tells the linker which library provides the symbol (`-l libname`). Extern functions live inside structs, which serve as namespaces.
-
-```koja
-struct FFI
-  @extern "C" @link "mylib"
-  fn add_numbers(a: Int32, b: Int32) -> Int32
-
-  @extern "C" @link "mylib"
-  fn fill_buffer(buf: CPtr<Int32>, count: Int32, value: Int32)
-end
-
-result = FFI.add_numbers(3, 4)
-result.print()
-```
-
-Extern functions have no body. Parameter and return types must be FFI-compatible: explicit-width primitives (`Int32`, `UInt8`, `Float32`, etc.), `Bool`, `CPtr<T>`, or `()`. Extern functions can coexist with normal Koja functions in the same struct. Use `priv fn` on the extern declarations and expose safe public wrappers.
-
-A `Float32` / `Float64` value returned by an extern call is checked at the call site. A NaN or infinity handed back by C panics with an `ArithmeticError` (`non-finite float returned by <name>`), keeping the finite-only float invariant intact across the FFI boundary (see [Arithmetic Faults](#arithmetic-faults)).
-
-Declare C return types at their true width and let [numeric widening](#numeric-widening) do the rest. A C `int` bound as `Int32` flows directly into `Int` contexts with correct sign extension, so negative error codes survive the trip. Reading a C `int` as `Int` would zero-extend the upper 32 bits and corrupt negative values.
-
-### Symbol Naming
-
-When the C symbol name differs from the Koja function name, use `@link "lib:symbol"` to specify the C symbol after a colon:
-
-```koja
-struct Crypto
-  @extern "C" @link "crypto:EVP_sha256"
-  priv fn evp_sha256 -> CPtr<UInt8>
-
-  @extern "C" @link "crypto:SHA256"
-  priv fn sha256_raw(data: CPtr<UInt8>, len: Int64, out: CPtr<UInt8>)
-    -> CPtr<UInt8>
-end
-```
-
-`@link "crypto"` (without a colon) uses the Koja function name as the C symbol. `@link "crypto:SHA256"` links to the C symbol `SHA256` while the Koja function name is `sha256_raw`. This keeps all Koja function names in proper `snake_case` regardless of the C library's naming conventions.
-
-### `CPtr<T>`
-
-A raw C pointer type. `Copy` semantics (just a machine word). No ownership tracking. The compiler will not auto-free memory behind a `CPtr<T>`.
-
-```koja
-struct CPtr<T>
-  fn null -> CPtr<T>
-  fn alloc(count: Int) -> CPtr<T>
-  fn free(self)
-  fn offset(self, n: Int) -> CPtr<T>
-  fn read(self) -> T
-  fn write(self, value: T)
-  fn null?(self) -> Bool
-  fn address(self) -> Int
-end
-```
-
-`alloc` and `free` use C's `malloc` and `free`. All methods are compiler intrinsics. `address` returns the raw address as an `Int` bit pattern (0 for null). `CPtr<T>` implements `Debug` by rendering that address as 16 hex digits: `ptr.format()` gives `CPtr(0x00006000023a4f10)` and a null pointer gives `CPtr(0x0)`.
-
-```koja
-buf: CPtr<Int32> = CPtr.alloc(4)
-buf.write(42)
-buf.read().print()
-buf.free()
-
-null_ptr: CPtr<Int32> = CPtr.null()
-null_ptr.null?().print()
-```
-
-Type annotations on the variable drive generic inference for static methods like `CPtr.alloc()` and `CPtr.null()`.
-
-`CPtr<UInt8>` additionally provides the two ways to get a pointer to a `Binary`'s bytes:
-
-- `CPtr.borrow(bytes: Binary) -> CPtr<UInt8>`: zero-cost view of the binary's payload. The result cannot be bound to a variable, returned, or stored. It may only be consumed within the statement that borrows it (as a call argument or chained receiver), where the source `Binary` is guaranteed to be live.
-- `CPtr.copy(bytes: Binary) -> CPtr<UInt8>`: malloc'd owned copy of the bytes. Nameable like any value. The caller frees it. Use this when a C API retains the pointer past the call.
-
-```koja
-digest: CPtr<UInt8> = CPtr.alloc(32)
-FFI.blake3_hash(CPtr.borrow(data), data.byte_size(), digest) # fine
-
-p = CPtr.borrow(data) # compile error: a borrowed pointer cannot be bound
-owned = CPtr.copy(data) # owned copy, free it when C is done
-```
-
-### `CString`
-
-A pointer-and-length descriptor for a null-terminated C string. It does
-not encode ownership. `String.to_cstring()` allocates owned memory, while
-`CPtr<UInt8>.to_cstring()` wraps an existing pointer without allocating.
-
-```koja
-struct CString
-  ptr: CPtr<UInt8>
-  len: Int
-end
-
-enum CString.ConversionError
-  InteriorNul
-  InvalidLength
-  InvalidUTF8
-  NullPointer
-end
-```
-
-Convert between Koja strings and C strings:
-
-```koja
-name = "hello"
-cs = name.to_cstring().unwrap()
-cs.len.print()
-
-back = cs.to_string().unwrap()
-(back == name).print()
-
-cs.free()
-```
-
-`String.to_cstring() -> CString ! CString.ConversionError`
-allocates a null-terminated copy via `malloc` and rejects `String`
-values containing U+0000 with `InteriorNul`.
-`CString.to_string() -> String ! CString.ConversionError` copies
-exactly `len` bytes and rejects invalid lengths, pointers, and UTF-8.
-It does not consume or free the C buffer. Call `free()` only when the
-descriptor owns malloc-compatible storage.
-
-### Passing Pointers to C
-
-`CPtr<T>` is accepted in `@extern "C"` signatures, enabling pointer-passing FFI:
-
-```koja
-struct FFI
-  @extern "C" @link "mylib"
-  fn fill_array(buf: CPtr<Int32>, count: Int32, value: Int32)
-
-  @extern "C" @link "mylib"
-  fn sum_array(buf: CPtr<Int32>, count: Int32) -> Int32
-end
-
-buf: CPtr<Int32> = CPtr.alloc(4)
-FFI.fill_array(buf, 4, 10)
-total = FFI.sum_array(buf, 4)
-total.print()
-buf.free()
-```
-
-For string-accepting C functions, pass `cs.ptr` (the `CPtr<UInt8>`) and `cs.len`:
-
-```koja
-cs = "hello".to_cstring().unwrap()
-FFI.some_c_function(cs.ptr, cs.len)
-cs.free()
-```
-
-For byte-accepting C functions, borrow a pointer to the `Binary` at the call site:
-
-```koja
-FFI.consume_bytes(CPtr.borrow(data), data.byte_size())
-```
-
-Pointers passed to C are valid for the duration of the call. A C function that keeps the pointer past the call needs `CPtr.copy` (an owned copy the caller frees).
-
----
-
-## Annotations
-
-An annotation is `@name` with an optional payload, placed before a
-declaration. Payloads are strings (single-line `"..."` or multiline
-`"""..."""`, interchangeable) or the literal `false`. By convention,
-annotations that carry prose (`@deprecated`, `@doc`) use the multiline form,
-and short labels like `@test` descriptions stay on one line.
-
-The FFI annotations `@extern` and `@link` are covered in [C FFI](#c-ffi).
-
-### `@deprecated`
-
-Marks a declaration as deprecated. Every use produces a compile warning:
-
-```koja
-@deprecated """
-Use `checksum32` instead. It handles inputs longer than 64 KiB.
-"""
-fn checksum(data: Binary) -> Int32
-  # ...
-end
-```
-
-```
-warning: `checksum` is deprecated: Use `checksum32` instead. It handles inputs longer than 64 KiB.
-```
-
-The message is required and should tell the caller what to use instead. Bare
-`@deprecated` is a compile error.
-
-`@deprecated` is accepted on functions (top-level, inline, and `impl`/`extend`
-members), structs, enums, constants, type aliases, and protocols, including
-`priv` declarations. Warnings fire at every resolved use site (calls, type
-positions, construction, patterns, constant reads), except inside the
-deprecated declaration itself and inside `impl`/`extend` blocks whose target
-is deprecated, so deprecating a type does not flag its own methods.
-
-### `@doc`
-
-Documents a function, struct, or enum:
-
-```koja
-@doc """
-Adds two integers.
-"""
-fn add(a: Int32, b: Int32) -> Int32
-  a + b
-end
-```
-
-`@doc false` excludes an item from generated documentation.
-
-`@doc` on a `priv` declaration is a compile error, since private items never appear in generated documentation.
-
-Doc strings support Markdown and are rendered by `koja doc`.
-
-### `@test`
-
-Marks a function as a test case. `koja test` discovers and runs all
-`@test`-annotated functions in `src/` and `test/` directories. Test
-functions return `Result<Bool, String>`. Any `Result.Ok` passes, while
-`Result.Err(message)` fails with the given message.
-
-```koja
-struct AdditionTest
-  @test "adds two integers"
-  fn test_addition -> Result<Bool, String>
-    result = add(2, 3)
-
-    unless result == 5
-      return Result.Err("expected 5, got #{result}")
-    end
-
-    Result.Ok(true)
-  end
-end
-```
-
-An optional string after `@test` provides a description printed during the
-test run. The runner reports every discovered test even when some fail.
 
 ---
 
