@@ -1287,7 +1287,14 @@ Koja uses value semantics. Every binding, parameter, return, and field is an ind
 
 ### Copy Cost
 
-All types copy on assignment. Numeric primitives, `Bool`, `()`, and function pointers copy bit-for-bit. `String`, `Binary`, `Bits`, `List`, `Map`, `Set`, structs, and enums are heap-backed, but the copy is cheap. The underlying memory is shared, so assigning or passing a value copies nothing. Mutation works on a fresh copy, so no binding ever observes another's changes. (The compiler skips that copy when the old value provably dies at the mutation site, as in `xs = xs.append(x)` rebind loops, with no change in behavior.) The result is always an independent value:
+All types copy on assignment, and the result is always an independent value. What a copy costs depends on the representation:
+
+- Numeric primitives, `Bool`, `()`, and function pointers copy bit-for-bit.
+- `String`, `Binary`, and `Bits` share one reference-counted buffer, so a copy costs nothing regardless of size.
+- Structs and enums copy their top-level fields, and each heap-backed field follows these same rules. Recursive constituents live in reference-counted boxes that copies share, so copying a persistent tree touches only the root and an update touches only the changed path, never the whole structure.
+- `List`, `Map`, and `Set` copy their backing buffer, so a collection copy is O(n) today. The compiler skips the copy when the old value provably dies at the mutation site, as in `xs = xs.append(x)` rebind loops, so building a collection in a loop is linear, not quadratic.
+
+None of this is observable in behavior. Mutation always builds the mutated binding's own value, no binding ever observes another's changes, and a copy is always an independent value:
 
 ```koja
 a = 42
