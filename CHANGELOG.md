@@ -9,9 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- `List.append`, `Map.put`, and `Set.insert` reuse the receiver's buffer when the old value dies at the call, so rebind loops like `xs = xs.append(x)` now run in linear time instead of quadratic.
-- Copying a recursive struct or enum now shares unchanged subtrees instead of copying every node, so persistent tree updates cost O(log n) instead of O(n).
-- The interpreter shares enum payloads on copy, so recursive values no longer slow `koja run` down quadratically.
+- Growing a collection in a loop, like `xs = xs.append(x)`, now runs in linear time instead of quadratic.
+- Updating a recursive value, like inserting into a tree, no longer copies the whole structure, so big trees stay fast.
+- `koja run` is no longer quadratically slow on programs that copy recursive values.
 
 ## [0.17.2] - 2026-08-18
 
