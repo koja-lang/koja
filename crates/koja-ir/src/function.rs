@@ -971,6 +971,94 @@ impl IRInstruction {
             | IRInstruction::YieldCheck => None,
         }
     }
+
+    /// Whether this instruction reads `value` as an operand. The
+    /// consume-fusion pass uses it to prove a receiver value has no
+    /// use between its call and its death.
+    pub(crate) fn uses_value(&self, value: ValueId) -> bool {
+        match self {
+            IRInstruction::BinaryConstruct { segments, .. } => {
+                segments.iter().any(|segment| match segment {
+                    LoweredBinarySegment::Float { value: v, .. }
+                    | LoweredBinarySegment::Integer { value: v, .. }
+                    | LoweredBinarySegment::String { value: v, .. } => *v == value,
+                })
+            }
+            IRInstruction::BinaryMatch { subject, .. } => *subject == value,
+            IRInstruction::BinaryOp { lhs, rhs, .. } | IRInstruction::Concat { lhs, rhs, .. } => {
+                *lhs == value || *rhs == value
+            }
+            IRInstruction::Call { args, .. } => args.contains(&value),
+            IRInstruction::CallClosure { args, callee, .. } => {
+                *callee == value || args.contains(&value)
+            }
+            IRInstruction::Clone { source, .. } | IRInstruction::DeepCopy { source, .. } => {
+                *source == value
+            }
+            IRInstruction::Const { .. }
+            | IRInstruction::DropLocal { .. }
+            | IRInstruction::LoadCapture { .. }
+            | IRInstruction::LoadConst { .. }
+            | IRInstruction::LocalDecl { .. }
+            | IRInstruction::LocalRead { .. }
+            | IRInstruction::YieldCheck => false,
+            IRInstruction::DropValue { value: v, .. } => *v == value,
+            IRInstruction::EnumConstruct { payload, .. } => match payload {
+                EnumPayloadInit::Struct(fields) => fields.iter().any(|field| field.value == value),
+                EnumPayloadInit::Tuple(values) => values.contains(&value),
+                EnumPayloadInit::Unit => false,
+            },
+            IRInstruction::EnumPayloadFieldGet { value: v, .. }
+            | IRInstruction::EnumTagGet { value: v, .. }
+            | IRInstruction::LocalWrite { value: v, .. }
+            | IRInstruction::NumericWiden { value: v, .. }
+            | IRInstruction::UnionPayloadGet { value: v, .. }
+            | IRInstruction::UnionTagGet { value: v, .. }
+            | IRInstruction::UnionWrap { value: v, .. } => *v == value,
+            IRInstruction::FieldGet { base, .. }
+            | IRInstruction::FreeIndirect { base, .. }
+            | IRInstruction::IndirectPresent { base, .. }
+            | IRInstruction::TupleGet { base, .. } => *base == value,
+            IRInstruction::FieldSet { base, value: v, .. } => *base == value || *v == value,
+            IRInstruction::MakeClosure { captures, .. } => captures.contains(&value),
+            IRInstruction::ProcessExit { reason } => *reason == value,
+            IRInstruction::Receive { after, .. } => {
+                after.as_ref().is_some_and(|after| after.timeout == value)
+            }
+            IRInstruction::SetPriority { tag } => *tag == value,
+            IRInstruction::Spawn { config, .. } => *config == value,
+            IRInstruction::StructInit { fields, .. } => {
+                fields.iter().any(|field| field.value == value)
+            }
+            IRInstruction::TupleInit { elements, .. } => elements.contains(&value),
+            IRInstruction::UnaryOp { operand, .. } => *operand == value,
+        }
+    }
+
+    /// Whether this instruction reads, writes, declares, or drops the
+    /// storage slot `local`, including receive-arm payload binds and
+    /// binary-match segment binds.
+    pub(crate) fn touches_local(&self, local: IRLocalId) -> bool {
+        match self {
+            IRInstruction::DropLocal { local: l, .. }
+            | IRInstruction::LocalDecl { local: l, .. }
+            | IRInstruction::LocalRead { local: l, .. }
+            | IRInstruction::LocalWrite { local: l, .. } => *l == local,
+            IRInstruction::BinaryMatch { segments, .. } => {
+                segments.iter().any(|segment| match segment {
+                    LoweredBinaryPattern::BindInt { local: l, .. } => *l == local,
+                    LoweredBinaryPattern::GreedyTail { local: l, .. } => *l == Some(local),
+                    LoweredBinaryPattern::Discard { .. }
+                    | LoweredBinaryPattern::LiteralBytes { .. }
+                    | LoweredBinaryPattern::LiteralInt { .. } => false,
+                })
+            }
+            IRInstruction::Receive { arms, .. } => {
+                arms.iter().any(|arm| arm.payload_local == local)
+            }
+            _ => false,
+        }
+    }
 }
 
 /// How a basic block ends. The seal pass guarantees every targeted

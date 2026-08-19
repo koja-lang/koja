@@ -18,7 +18,7 @@ use crate::emit::enums::build_enum_value;
 use crate::error::{IceExt, LlvmError};
 use crate::intrinsics::cptr::declare_memcpy_extern;
 use crate::intrinsics::element::{acquire_buffer, acquire_value, element_slot, release_in_slot};
-use crate::runtime::declare_malloc_extern;
+use crate::runtime::{declare_free_extern, declare_malloc_extern};
 use crate::types::{ir_basic_type, list_value_type};
 
 /// `Option<T>` variant tags as the stdlib decls them: `Some` first
@@ -188,13 +188,17 @@ fn emit_append<'ctx>(
         .builder
         .build_int_add(len, i64_ty.const_int(1, false), "new_len")
         .or_ice()?;
+    // Allocate the copy with headroom (`max(2 * len, 8)`) so a rebind
+    // loop that fuses into the consuming twin from here on appends
+    // in place instead of relocating every call.
+    let new_cap = grown_capacity(ctx, len)?;
     let new_buf = copy_buffer(
         ctx,
         llvm_function,
         element(ListMethod::Append, function)?,
         buf_ptr,
         len,
-        new_len,
+        new_cap,
         elem_size,
         "append",
     )?;
@@ -210,8 +214,109 @@ fn emit_append<'ctx>(
     };
     ctx.builder.build_store(elem_ptr, item_val).or_ice()?;
 
-    let result = build_list_struct(ctx, new_buf, new_len, new_len)?;
+    let result = build_list_struct(ctx, new_buf, new_len, new_cap)?;
     ret_struct(ctx, result)
+}
+
+/// The consume-fusion twin of `append`. The receiver value is dead
+/// at the call site (see `koja_ir::elaborate::consume`), so this body
+/// owns its buffer outright. With spare capacity the item is stored
+/// in place, and a full buffer relocates to a `max(2 * cap, 8)`
+/// allocation with the old buffer freed. Element ownership rides the
+/// raw byte move, so nothing is acquired or released except the
+/// incoming item.
+pub(super) fn emit_append_consuming<'ctx>(
+    ctx: &EmitContext<'ctx>,
+    function: &IRFunction,
+    llvm_function: FunctionValue<'ctx>,
+) -> Result<(), LlvmError> {
+    let entry = ctx.context.append_basic_block(llvm_function, "entry");
+    ctx.builder.position_at_end(entry);
+    let i64_ty = ctx.context.i64_type();
+    let in_place_bb = ctx.context.append_basic_block(llvm_function, "in_place");
+    let grow_bb = ctx.context.append_basic_block(llvm_function, "grow");
+
+    let self_val = nth_list(function, llvm_function, 0, "self")?;
+    let item_val = nth_param(function, llvm_function, 1, "item")?;
+    let item_val = acquire_value(ctx, element(ListMethod::Append, function)?, item_val)?;
+
+    let buf_ptr = build_extract_pointer(ctx, self_val, 0, "buf_ptr")?;
+    let len = build_extract_int(ctx, self_val, 1, "len")?;
+    let cap = build_extract_int(ctx, self_val, 2, "cap")?;
+    let elem_size = element_byte_size(ctx, function, ListMethod::Append)?;
+    let new_len = ctx
+        .builder
+        .build_int_add(len, i64_ty.const_int(1, false), "new_len")
+        .or_ice()?;
+
+    let has_room = ctx
+        .builder
+        .build_int_compare(IntPredicate::ULT, len, cap, "has_room")
+        .or_ice()?;
+    ctx.builder
+        .build_conditional_branch(has_room, in_place_bb, grow_bb)
+        .or_ice()?;
+
+    ctx.builder.position_at_end(in_place_bb);
+    let slot = element_slot(ctx, buf_ptr, len, elem_size)?;
+    ctx.builder.build_store(slot, item_val).or_ice()?;
+    let in_place = build_list_struct(ctx, buf_ptr, new_len, cap)?;
+    ret_struct(ctx, in_place)?;
+
+    ctx.builder.position_at_end(grow_bb);
+    let new_cap = grown_capacity(ctx, cap)?;
+    let alloc_bytes = ctx
+        .builder
+        .build_int_mul(new_cap, elem_size, "alloc_bytes")
+        .or_ice()?;
+    let malloc = declare_malloc_extern(ctx);
+    let new_buf = ctx
+        .call_basic(malloc, &[alloc_bytes.into()], "new_buf")?
+        .into_pointer_value();
+    let copy_bytes = ctx
+        .builder
+        .build_int_mul(len, elem_size, "copy_bytes")
+        .or_ice()?;
+    let memcpy = declare_memcpy_extern(ctx);
+    ctx.builder
+        .build_call(
+            memcpy,
+            &[new_buf.into(), buf_ptr.into(), copy_bytes.into()],
+            "",
+        )
+        .or_ice()?;
+    let free = declare_free_extern(ctx);
+    ctx.builder
+        .build_call(free, &[buf_ptr.into()], "")
+        .or_ice()?;
+    let grown_slot = element_slot(ctx, new_buf, len, elem_size)?;
+    ctx.builder.build_store(grown_slot, item_val).or_ice()?;
+    let grown = build_list_struct(ctx, new_buf, new_len, new_cap)?;
+    ret_struct(ctx, grown)
+}
+
+/// The capacity an append that must allocate grows to, which is
+/// `max(2 * current, 8)`. Always at least `current + 1`, so the
+/// appended element fits.
+fn grown_capacity<'ctx>(
+    ctx: &EmitContext<'ctx>,
+    current: IntValue<'ctx>,
+) -> Result<IntValue<'ctx>, LlvmError> {
+    let i64_ty = ctx.context.i64_type();
+    let doubled = ctx
+        .builder
+        .build_int_mul(current, i64_ty.const_int(2, false), "doubled")
+        .or_ice()?;
+    let floor = i64_ty.const_int(INITIAL_CAPACITY, false);
+    let below_floor = ctx
+        .builder
+        .build_int_compare(IntPredicate::ULT, doubled, floor, "below_floor")
+        .or_ice()?;
+    Ok(ctx
+        .builder
+        .build_select(below_floor, floor, doubled, "grown_cap")
+        .or_ice()?
+        .into_int_value())
 }
 
 fn emit_get<'ctx>(

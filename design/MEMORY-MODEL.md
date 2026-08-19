@@ -54,14 +54,24 @@ allocation or reclamation mechanics.
 
 ## Functional mutation
 
-Koja mutation is expressed by returning a new value and rebinding it. Current
-collection mutators copy their backing buffer before writing. String
+Koja mutation is expressed by returning a new value and rebinding it.
+Collection mutators copy their backing buffer before writing. String
 concatenation allocates a new block.
 
-The language permits a future uniqueness proof to update storage in place, or
-to remove redundant reference-count operations, when the result is
-indistinguishable from an independent copy. General in-place-when-unique and
-reference-count optimization are not implemented today.
+One uniqueness proof is implemented as consume fusion
+(`koja-ir/src/elaborate/consume.rs`). When a `List.append`, `Map.put`, or
+`Set.insert` receiver value provably dies at the call site, which covers
+`xs = xs.append(x)` rebinds and discarded owned temps, the elaborate pass
+rewrites the call to a consuming twin intrinsic and deletes the death. The
+twin reuses the receiver's buffer in place instead of copying it, so rebind
+loops mutate in O(1) amortized. The rewrite replaces "free the receiver's
+buffers here" with "reuse them here" at the same program point, so the result
+stays indistinguishable from an independent copy. The interpreter gates the
+same twins on true host-storage uniqueness and otherwise falls back to the
+copying path.
+
+Mutators outside the fused shapes still copy. General in-place-when-unique
+and reference-count optimization are not implemented today.
 
 ## Scope and glue
 

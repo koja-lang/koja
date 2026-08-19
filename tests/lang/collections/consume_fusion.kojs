@@ -1,0 +1,45 @@
+# Correctness for the consume-fusion fast path. Rebind loops and
+# owned-temp chains route through the consuming mutator twins, and
+# aliases taken before a fused rebind must keep their own value.
+
+xs: List<Int> = []
+i = 0
+
+while i < 5
+  xs = xs.append(i)
+  i += 1
+end
+
+xs.print()
+
+a: List<Int> = [1, 2]
+b = a
+a = a.append(3)
+a.print()
+b.print()
+
+# The first append borrows `empty` (no fusion, `empty` stays live)
+# and the second consumes the owned intermediate.
+empty: List<Int> = List.new()
+c = empty.append(10).append(20)
+c.print()
+empty.print()
+
+m: Map<String, Int> = Map.new()
+m = m.put("one", 1)
+m = m.put("two", 2)
+m2 = m
+m = m.put("three", 3)
+m.length().print()
+m2.length().print()
+m2.has?("three").print()
+
+s: Set<Int> = Set.new()
+s = s.insert(1)
+s = s.insert(2)
+s = s.insert(2)
+s2 = s
+s = s.insert(3)
+s.length().print()
+s2.length().print()
+s2.has?(3).print()

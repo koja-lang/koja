@@ -13,7 +13,7 @@
 //! makes the wiring step compiler-checked.
 
 use inkwell::values::FunctionValue;
-use koja_ir::{IRFunction, IRIntrinsicId, KernelMethod, RuntimeBlockMethod};
+use koja_ir::{ConsumingMethod, IRFunction, IRIntrinsicId, KernelMethod, RuntimeBlockMethod};
 
 use crate::ctx::EmitContext;
 use crate::error::LlvmError;
@@ -63,6 +63,13 @@ pub(crate) fn emit_intrinsic_body<'ctx>(
         }
         IRIntrinsicId::CPtr(method) => cptr::emit_cptr(ctx, function, llvm_function, method),
         IRIntrinsicId::CString(_) => cstring::emit_to_string(ctx, function, llvm_function),
+        IRIntrinsicId::Consuming(method) => match method {
+            ConsumingMethod::ListAppend => {
+                list::emit_append_consuming(ctx, function, llvm_function)
+            }
+            ConsumingMethod::MapPut => map::emit_put_consuming(ctx, function, llvm_function),
+            ConsumingMethod::SetInsert => set::emit_insert_consuming(ctx, function, llvm_function),
+        },
         IRIntrinsicId::Debug(impl_) => debug::emit_format(ctx, function, llvm_function, impl_),
         IRIntrinsicId::Equality(impl_) => equality::emit_eq(ctx, function, llvm_function, impl_),
         IRIntrinsicId::Hash(impl_) => hash::emit_hash(ctx, function, llvm_function, impl_),

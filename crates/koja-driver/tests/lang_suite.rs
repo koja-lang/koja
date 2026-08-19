@@ -50,15 +50,20 @@ const TEST_TIMEOUT: Duration = Duration::from_secs(45);
 /// pins interpreter <-> LLVM output parity.
 const BACKENDS: [&str; 2] = ["llvm", "interpreter"];
 
-/// Fixtures (by file stem) that run under LLVM only. Currently empty: the
-/// `signal(...)`-then-busy-wait-on-`alive?()` memory fixtures used to
-/// livelock the single-threaded cooperative interpreter (the spin loop
-/// starved the signalled child), but compiler-inserted yield-checks at
-/// loop back-edges now preempt the spinner under both backends. Add a
-/// stem here only for a genuinely backend-specific fixture.
-// The stack overflow fixtures need fixed process stacks and the fault
-// handler. The interpreter recurses on the host Rust stack instead.
-const LLVM_ONLY: &[&str] = &["stack_overflow", "stack_overflow_big_frame"];
+/// Fixtures (by file stem) that run under LLVM only. Add a stem here
+/// only for a genuinely backend-specific fixture.
+///
+/// - The stack overflow fixtures need fixed process stacks and the
+///   fault handler. The interpreter recurses on the host Rust stack
+///   instead.
+/// - `append_linear` pins the consume-fusion fast path's complexity
+///   class against the 45s timeout. Eval values share host storage,
+///   so its rebind loops keep the copying path and stay quadratic.
+const LLVM_ONLY: &[&str] = &[
+    "append_linear",
+    "stack_overflow",
+    "stack_overflow_big_frame",
+];
 
 /// Whether `file` runs under the interpreter in addition to LLVM.
 fn eval_eligible(file: &Path) -> bool {

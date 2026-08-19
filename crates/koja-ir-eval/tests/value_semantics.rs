@@ -37,3 +37,60 @@ fn list_is_unchanged_after_a_helper_mutates_its_own_binding() {
         ";
     assert_eq!(evaluate(&dedent(source)).unwrap(), Value::Int(2));
 }
+
+// The tests below run through the consuming twins the consume-fusion
+// pass substitutes when the receiver value is dead at the call site
+// (see `koja_ir::elaborate::consume` and `intrinsics::consuming`).
+// Value semantics must hold unchanged whether the twin mutates in
+// place (uniquely held storage) or falls back to the copying
+// original (storage still shared with a slot or an alias).
+
+#[test]
+fn fused_rebind_loop_builds_the_full_list() {
+    let source = "
+        xs: List<Int> = []
+        i = 0
+        while i < 100
+          xs = xs.append(i)
+          i += 1
+        end
+        xs.length()
+        ";
+    assert_eq!(evaluate(&dedent(source)).unwrap(), Value::Int(100));
+}
+
+#[test]
+fn alias_taken_before_a_fused_rebind_keeps_its_value() {
+    let source = "
+        a = [1, 2]
+        b = a
+        a = a.append(3)
+        a.length() * 10 + b.length()
+        ";
+    assert_eq!(evaluate(&dedent(source)).unwrap(), Value::Int(32));
+}
+
+#[test]
+fn owned_temp_chain_consumes_the_intermediate() {
+    let source = "
+        seed: List<Int> = List.new()
+        seed.append(1).append(2).length()
+        ";
+    assert_eq!(evaluate(&dedent(source)).unwrap(), Value::Int(2));
+}
+
+#[test]
+fn fused_map_and_set_rebinds_preserve_aliases() {
+    let source = "
+        m: Map<Int, Int> = Map.new()
+        m = m.put(1, 10)
+        m2 = m
+        m = m.put(2, 20)
+        s: Set<Int> = Set.new()
+        s = s.insert(1)
+        s2 = s
+        s = s.insert(2)
+        m.length() * 1000 + m2.length() * 100 + s.length() * 10 + s2.length()
+        ";
+    assert_eq!(evaluate(&dedent(source)).unwrap(), Value::Int(2121));
+}

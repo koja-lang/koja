@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+
+- `List.append`, `Map.put`, and `Set.insert` reuse the receiver's buffer when the old value dies at the call, so rebind loops like `xs = xs.append(x)` now run in linear time instead of quadratic.
+
 ## [0.17.2] - 2026-08-18
 
 ### Added

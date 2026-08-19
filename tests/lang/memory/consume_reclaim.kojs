@@ -1,0 +1,77 @@
+# Reclaim balance for the consume-fusion fast path. Fused rebind
+# loops reuse the receiver's buffer (in place or through the grow
+# relocation), and heap elements ride the raw byte move without
+# acquire / release churn, so a full exercise must leave the
+# live-block counter unchanged.
+
+struct Rt
+  @extern "C"
+  fn koja_rt_live_blocks -> Int64
+end
+
+fn exercise(n: Int) -> Int
+  xs: List<Int> = []
+  i = 0
+
+  while i < n
+    xs = xs.append(i)
+    i += 1
+  end
+
+  # Alias before a fused rebind, both reclaimed at scope exit.
+  aliased = xs
+  xs = xs.append(n)
+
+  # Heap elements cross the in-place and grow paths.
+  ws: List<String> = []
+  w = 0
+
+  while w < n
+    ws = ws.append("w" <> w.format())
+    w += 1
+  end
+
+  m: Map<Int, Int> = Map.new()
+  j = 0
+
+  while j < n
+    m = m.put(j, j)
+    j += 1
+  end
+
+  s: Set<Int> = Set.new()
+  k = 0
+
+  while k < n
+    s = s.insert(k)
+    k += 1
+  end
+
+  xs.length() + aliased.length() + ws.length() + m.length() + s.length()
+end
+
+_ = exercise(16)
+start = Rt.koja_rt_live_blocks()
+
+i = 0
+total = 0
+
+loop
+  total += exercise(16)
+  i += 1
+
+  if i >= 50
+    break
+  end
+end
+
+finish = Rt.koja_rt_live_blocks()
+
+if finish == start
+  "consume reclaim: ok".print()
+else
+  "consume reclaim: LEAK".print()
+  (finish - start).print()
+end
+
+(total == 50 * 81).print()
