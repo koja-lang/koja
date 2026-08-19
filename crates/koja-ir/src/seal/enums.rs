@@ -123,16 +123,7 @@ pub(super) fn seal_enum_ops<'inst, 'decl>(
                 let variant = require_variant(lookup, ty, *tag, &owner, "EnumPayloadFieldGet");
                 seal_payload_field_index(&owner, ty, variant, *payload_index, field_type);
             }
-            IRInstruction::FreeIndirect {
-                slot:
-                    IRIndirectSlot::EnumPayload {
-                        payload_index,
-                        tag,
-                        ty,
-                    },
-                ..
-            }
-            | IRInstruction::IndirectPresent {
+            IRInstruction::IndirectPresent {
                 slot:
                     IRIndirectSlot::EnumPayload {
                         payload_index,
@@ -241,7 +232,7 @@ fn seal_indirect_payload(owner: &str, ty: &IRSymbol, variant: &IREnumVariant, pa
     };
     let Some(declared_type) = declared else {
         seal_panic(&format!(
-            "{owner}: FreeIndirect on `{ty}.{name}` references payload index {payload_index}, \
+            "{owner}: IndirectPresent on `{ty}.{name}` references payload index {payload_index}, \
              but the variant payload exposes {arity} field(s)",
             name = variant.name,
             arity = payload_arity(&variant.payload),
@@ -249,7 +240,7 @@ fn seal_indirect_payload(owner: &str, ty: &IRSymbol, variant: &IREnumVariant, pa
     };
     if !matches!(declared_type, IRType::Indirect(_)) {
         seal_panic(&format!(
-            "{owner}: FreeIndirect on `{ty}.{name}` payload index {payload_index} requires an \
+            "{owner}: IndirectPresent on `{ty}.{name}` payload index {payload_index} requires an \
              Indirect slot, but the decl carries `{declared_type:?}`",
             name = variant.name,
         ));
@@ -592,10 +583,11 @@ mod tests {
 
     #[test]
     #[should_panic(expected = "requires an Indirect slot")]
-    fn free_indirect_rejects_inline_enum_payload() {
+    fn indirect_present_rejects_inline_enum_payload() {
         let decl = option_decl();
-        let inst = IRInstruction::FreeIndirect {
+        let inst = IRInstruction::IndirectPresent {
             base: ValueId(0),
+            dest: ValueId(1),
             slot: IRIndirectSlot::EnumPayload {
                 payload_index: 0,
                 tag: IRVariantTag(1),

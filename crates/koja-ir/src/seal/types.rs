@@ -305,9 +305,7 @@ fn instruction_result_type(
         IRInstruction::Concat { dest, kind, .. } => (*dest, kind.ir_type()),
         IRInstruction::Const { dest, value } => (*dest, const_type(value)),
         IRInstruction::DeepCopy { dest, ty, .. } => (*dest, ty.clone()),
-        IRInstruction::DropLocal { .. }
-        | IRInstruction::DropValue { .. }
-        | IRInstruction::FreeIndirect { .. } => return None,
+        IRInstruction::DropLocal { .. } | IRInstruction::DropValue { .. } => return None,
         IRInstruction::EnumConstruct { dest, ty, .. } => (*dest, IRType::Enum(ty.clone())),
         IRInstruction::EnumPayloadFieldGet {
             dest, field_type, ..
@@ -506,15 +504,14 @@ fn seal_instruction_types(
             );
             require_value_type(values, *value, field_type, owner, "FieldSet value");
         }
-        IRInstruction::FreeIndirect { base, slot }
-        | IRInstruction::IndirectPresent { base, slot, .. } => {
+        IRInstruction::IndirectPresent { base, slot, .. } => {
             let expected = match slot {
                 IRIndirectSlot::EnumPayload { ty, .. } => IRType::Enum(ty.clone()),
                 IRIndirectSlot::StructField { struct_symbol, .. } => {
                     IRType::Struct(struct_symbol.clone())
                 }
             };
-            require_value_type(values, *base, &expected, owner, "FreeIndirect base");
+            require_value_type(values, *base, &expected, owner, "IndirectPresent base");
         }
         IRInstruction::LoadCapture {
             capture_index, ty, ..
@@ -613,10 +610,10 @@ fn seal_instruction_types(
             // the in-range field values.
             for field in fields {
                 if let Some(expected) = declaration.fields.get(field.index as usize) {
-                    require_value_type(
+                    require_slot_value_type(
                         values,
                         field.value,
-                        unboxed_type(&expected.ir_type),
+                        &expected.ir_type,
                         owner,
                         "StructInit field",
                     );
@@ -809,10 +806,10 @@ fn seal_enum_payload_types(
         (EnumPayloadInit::Struct(actual), IRVariantPayload::Struct(expected)) => {
             for field in actual {
                 if let Some(expected) = expected.get(field.index as usize) {
-                    require_value_type(
+                    require_slot_value_type(
                         values,
                         field.value,
-                        unboxed_type(&expected.ir_type),
+                        &expected.ir_type,
                         owner,
                         "EnumConstruct field",
                     );
@@ -820,13 +817,16 @@ fn seal_enum_payload_types(
             }
         }
         (EnumPayloadInit::Tuple(actual), IRVariantPayload::Tuple(expected)) => {
-            require_unboxed_argument_types(
-                actual,
-                expected,
-                values,
-                owner,
-                "EnumConstruct payload",
-            );
+            if actual.len() != expected.len() {
+                seal_panic(&format!(
+                    "{owner} EnumConstruct payload passes {} value(s), expected {}",
+                    actual.len(),
+                    expected.len()
+                ));
+            }
+            for (value, declared) in actual.iter().zip(expected) {
+                require_slot_value_type(values, *value, declared, owner, "EnumConstruct payload");
+            }
         }
         (EnumPayloadInit::Unit, IRVariantPayload::Unit) => {}
         // Payload shape mismatches panic in
@@ -879,17 +879,6 @@ fn require_argument_types(
     owner: &str,
     operation: &str,
 ) {
-    require_argument_types_with(args, expected, values, owner, operation, false);
-}
-
-fn require_argument_types_with(
-    args: &[ValueId],
-    expected: &[IRType],
-    values: &BTreeMap<ValueId, IRType>,
-    owner: &str,
-    operation: &str,
-    unbox_indirect: bool,
-) {
     if args.len() != expected.len() {
         seal_panic(&format!(
             "{owner} {operation} passes {} argument(s), expected {}",
@@ -898,11 +887,6 @@ fn require_argument_types_with(
         ));
     }
     for (index, (arg, expected)) in args.iter().zip(expected).enumerate() {
-        let expected = if unbox_indirect {
-            unboxed_type(expected)
-        } else {
-            expected
-        };
         require_value_type(
             values,
             *arg,
@@ -913,14 +897,25 @@ fn require_argument_types_with(
     }
 }
 
-fn require_unboxed_argument_types(
-    args: &[ValueId],
-    expected: &[IRType],
+/// Require `value` to fit a declared field / payload slot: the
+/// unboxed view (backends box on store), or the declared
+/// `Indirect(T)` itself (clone glue passes the shared box through).
+fn require_slot_value_type(
     values: &BTreeMap<ValueId, IRType>,
+    value: ValueId,
+    declared: &IRType,
     owner: &str,
     operation: &str,
 ) {
-    require_argument_types_with(args, expected, values, owner, operation, true);
+    let actual = value_type(values, value, owner);
+    if actual == declared {
+        return;
+    }
+    require_same_type(
+        actual,
+        unboxed_type(declared),
+        &format!("{owner} {operation} value `{value}`"),
+    );
 }
 
 fn require_local_type(

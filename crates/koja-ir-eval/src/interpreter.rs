@@ -952,7 +952,7 @@ pub(crate) fn build_io_ready_value<R: CallResolver>(
     };
     Value::Enum {
         name: variant_name.to_string(),
-        payload: EnumPayload::Tuple(vec![Value::Struct {
+        payload: EnumPayload::tuple(vec![Value::Struct {
             symbol: fd_symbol.clone(),
             fields: vec![Value::Int(i64::from(fd))],
         }]),
@@ -1024,7 +1024,7 @@ fn build_exit_reason_value<R: CallResolver>(
             panic!("interpreter: `ExitReason.Crashed` payload is not a single `CrashInfo` struct");
         };
         let crash_info = notice.crash_info.clone().unwrap_or_default();
-        EnumPayload::Tuple(vec![Value::Struct {
+        EnumPayload::tuple(vec![Value::Struct {
             symbol: crash_symbol.clone(),
             fields: vec![
                 Value::String(Rc::new(crash_info.message.into_bytes())),
@@ -1186,10 +1186,10 @@ fn execute_instruction<'a, R: CallResolver>(
                      tag {actual_tag}, so the match driver failed to gate on a tag check",
                     );
                 }
-                let field = match payload {
+                let field = match &payload {
                     EnumPayload::Tuple(values) => values
-                        .into_iter()
-                        .nth(*payload_index as usize)
+                        .get(*payload_index as usize)
+                        .cloned()
                         .unwrap_or_else(|| {
                             panic!(
                                 "interpreter: EnumPayloadFieldGet tuple index {payload_index} \
@@ -1197,9 +1197,8 @@ fn execute_instruction<'a, R: CallResolver>(
                             )
                         }),
                     EnumPayload::Struct(fields) => fields
-                        .into_iter()
-                        .nth(*payload_index as usize)
-                        .map(|(_, value)| value)
+                        .get(*payload_index as usize)
+                        .map(|(_, value)| value.clone())
                         .unwrap_or_else(|| {
                             panic!(
                                 "interpreter: EnumPayloadFieldGet struct index {payload_index} \
@@ -1276,12 +1275,11 @@ fn execute_instruction<'a, R: CallResolver>(
             IRInstruction::DropLocal { .. } => Ok(()),
             // Heap reclamation is handled by the host GC, so the IR-level
             // value-keyed drop is a no-op for the interpreter (mirrors
-            // [`IRInstruction::DropLocal`] above).
+            // [`IRInstruction::DropLocal`] above). This covers boxed
+            // `Indirect` operands too, since recursive boxes exist
+            // only in the native layout. Eval stores the inner value
+            // directly and reclaims through the host GC.
             IRInstruction::DropValue { .. } => Ok(()),
-            // Recursive boxes exist only in the native layout. Eval
-            // stores the inner value directly and reclaims through
-            // the host GC.
-            IRInstruction::FreeIndirect { .. } => Ok(()),
             IRInstruction::IndirectPresent { base, dest, .. } => {
                 let base = lookup(&frame.values, *base)?;
                 frame
@@ -1668,7 +1666,7 @@ fn materialize_enum<R: CallResolver>(
             for id in ids {
                 values.push(lookup(&frame.values, *id)?);
             }
-            EnumPayload::Tuple(values)
+            EnumPayload::tuple(values)
         }
         (EnumPayloadInit::Struct(inits), IRVariantPayload::Struct(declared)) => {
             let mut fields = Vec::with_capacity(inits.len());
@@ -1676,7 +1674,7 @@ fn materialize_enum<R: CallResolver>(
                 let value = lookup(&frame.values, init.value)?;
                 fields.push((decl_field.name.clone(), value));
             }
-            EnumPayload::Struct(fields)
+            EnumPayload::struct_fields(fields)
         }
         (init, declared) => panic!(
             "interpreter: EnumConstruct payload shape mismatch on `{symbol}.{}`, \

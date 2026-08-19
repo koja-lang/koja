@@ -1,0 +1,45 @@
+# Value semantics across shared recursive boxes. Copies of a
+# recursive value share boxes under the hood (rc++), so mutating or
+# rebuilding one copy must never show through the other.
+
+enum Tree
+  Leaf(Int)
+  Branch(Tree, Tree)
+end
+
+fn sum_tree(tree: Tree) -> Int
+  match tree
+    Tree.Leaf(value) -> value
+    Tree.Branch(left, right) -> sum_tree(left) + sum_tree(right)
+  end
+end
+
+left = Tree.Leaf(1)
+right = Tree.Branch(Tree.Leaf(2), Tree.Leaf(3))
+tree = Tree.Branch(left, right)
+
+copy = tree
+copy = Tree.Branch(copy, Tree.Leaf(10))
+
+sum_tree(tree).print()
+sum_tree(copy).print()
+
+struct Person
+  name: String
+  spouse: Option<Person>
+end
+
+alice = Person{name: "alice", spouse: Option.None}
+bob = Person{name: "bob", spouse: Option.Some(alice)}
+carol = bob
+carol.spouse = Option.None
+
+match bob.spouse
+  Option.Some(spouse) -> spouse.name.print()
+  Option.None -> "bob lost alice".print()
+end
+
+match carol.spouse
+  Option.Some(_) -> "carol kept a spouse".print()
+  Option.None -> "carol none".print()
+end

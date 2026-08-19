@@ -32,6 +32,13 @@ Inline primitives copy their bits.
 increments the block count. The final drop frees the allocation. Closures use a
 reference-counted environment with drop and deep-copy functions for captures.
 
+Recursive composites store their recursive constituents in `Indirect` boxes.
+A box is a write-once reference-counted block. A copy of the containing value
+shares the box, and the final drop releases the boxed contents. Path-copying
+updates of persistent structures therefore share unchanged subtrees and cost
+O(log n), not O(n). Only a process-boundary deep copy unboxes and copies the
+inner value.
+
 Collections use independent backing buffers. Copying a `List`, `Map`, or `Set`
 allocates and copies its buffer, then acquires each managed element. Copy cost
 is therefore proportional to collection size. User-defined composites recurse

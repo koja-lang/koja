@@ -13,7 +13,7 @@ use crate::runtime::declare_rc_dec_extern;
 use crate::types::ir_basic_type;
 
 use super::heap_layout::block_base;
-use super::{ValueMap, closures, lookup};
+use super::{ValueMap, closures, indirect, lookup};
 
 /// Materialize a `LocalDecl` as an entry-block `alloca`, stashed on
 /// the [`EmitContext`] keyed by [`IRLocalId`] for later `load` /
@@ -137,9 +137,15 @@ pub(super) fn emit_drop_value<'ctx>(
         // release. The heap-owning composites are rewritten to a
         // `Call @drop_T` by `elaborate`.
         IRType::Enum(_) | IRType::Struct(_) | IRType::Tuple(_) | IRType::Union { .. } => Ok(()),
+        // Boxed projection: the rc-aware box release (drop contents +
+        // free at rc 1, decrement otherwise, null no-op).
+        IRType::Indirect(inner) => {
+            let payload = lookup(values, value)?.into_pointer_value();
+            indirect::emit_release_box(ctx, inner, payload, &value.to_string())
+        }
         _ => panic!(
             "LLVM emit: unsupported `IRInstruction::DropValue` type {ty:?} for value \
-             `{value}`. Collections / boxes always carry glue and must be rewritten to a \
+             `{value}`. Collections always carry glue and must be rewritten to a \
              `Call @drop_T`",
         ),
     }

@@ -172,11 +172,12 @@ the hottest pattern, not the memory-model endpoint.
 **Fix.** Swift-style refcounted collection buffers with a uniqueness
 check at every mutator. That needs a shared-buffer frontier scheme so
 views with different lengths stay correct, and it generalizes later
-with Perceus-style reuse analysis. The `Indirect` box refcount entry
-in GAPS.md is the same "give it a refcount" move for recursive
-structures. The two land together as the 0.18.0 memory-model
-milestone that makes MEMORY-MODEL.md's "copied lazily only on
-mutation" promise true everywhere.
+with Perceus-style reuse analysis. Recursive structures already got
+the same "give it a refcount" move. `Indirect` boxes are
+reference-counted since 0.17.3, so persistent trees share unchanged
+subtrees. Collection buffers are the remaining piece, landing as the
+0.18.0 memory-model milestone that makes MEMORY-MODEL.md's "copied
+lazily only on mutation" promise true everywhere.
 
 ---
 

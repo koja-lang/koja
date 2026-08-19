@@ -29,10 +29,14 @@
 //! backend-synthesized body calls `deep_copy_T` per composite
 //! capture.
 //!
-//! The boxed-recursive [`IRType::Indirect`] remains value-transparent.
-//! The enclosing aggregate's glue acquires or releases the unboxed
-//! inner value, while construction allocates the box and aggregate
-//! drop or field overwrite explicitly frees it.
+//! The boxed-recursive [`IRType::Indirect`] is reference-counted and
+//! handled inline, like a leaf. The enclosing aggregate's clone glue
+//! shares the box (`Clone` on the boxed projection is an `rc++`) and
+//! its drop glue releases it rc-aware (`DropValue` drops the contents
+//! and frees at rc 1, decrements otherwise). Only deep-copy glue
+//! still unboxes, recurses, and re-boxes, keeping process isolation
+//! physical. Field overwrites of boxed slots are rewritten by
+//! [`overwrite`] to the same rc-aware release.
 //!
 //! A composite that turns out to own no heap (e.g. `struct Point { x:
 //! Int, y: Int }`) has [`needs_drop`] `== false`, so no glue is
@@ -68,6 +72,7 @@ mod consume;
 mod delivery;
 mod exit_signal;
 mod io_ready;
+mod overwrite;
 mod rewrite;
 mod synthesis;
 
@@ -75,8 +80,7 @@ use std::collections::BTreeSet;
 
 use crate::enum_decl::{IREnumDecl, IREnumVariant, IRVariantPayload};
 use crate::function::{
-    FunctionKind, IRBasicBlock, IRFunction, IRFunctionParam, IRIndirectSlot, IRInstruction,
-    IRSymbol,
+    FunctionKind, IRBasicBlock, IRFunction, IRFunctionParam, IRInstruction, IRSymbol,
 };
 use crate::intrinsic_id::{IRIntrinsicId, RefMethod, ReplyToMethod};
 use crate::local::IRLocalId;
@@ -92,7 +96,7 @@ use crate::types::IRType;
 /// synthesize / register it, and rewrite every composite acquisition
 /// / release into a glue `Call`.
 pub(crate) fn elaborate(packages: &mut [IRPackage]) {
-    insert_indirect_overwrite_frees(packages, &mut []);
+    overwrite::rewrite_indirect_overwrites(packages, &mut []);
     consume::fuse_consuming_mutators(packages, &mut []);
     let needed = discover_glue_types(packages, &[]);
     let deep_needed = discover_deep_copy_types(packages, &[]);
@@ -107,7 +111,7 @@ pub(crate) fn elaborate(packages: &mut [IRPackage]) {
 /// (which carries its own `Clone` / `Drop` sites outside any package
 /// function) and the rewrite covers it too.
 pub(crate) fn elaborate_script(packages: &mut [IRPackage], body: &mut [IRBasicBlock]) {
-    insert_indirect_overwrite_frees(packages, body);
+    overwrite::rewrite_indirect_overwrites(packages, body);
     consume::fuse_consuming_mutators(packages, body);
     let needed = discover_glue_types(packages, body);
     let deep_needed = discover_deep_copy_types(packages, body);
@@ -116,60 +120,6 @@ pub(crate) fn elaborate_script(packages: &mut [IRPackage], body: &mut [IRBasicBl
     rewrite::rewrite_blocks_standalone(body, &needed, &deep_needed);
     io_ready::deliver_io_ready(packages);
     exit_signal::deliver_exit_signal(packages);
-}
-
-fn insert_indirect_overwrite_frees(packages: &mut [IRPackage], body: &mut [IRBasicBlock]) {
-    let indirect_fields: BTreeSet<(IRSymbol, u32)> = packages
-        .iter()
-        .flat_map(|package| package.structs.values())
-        .flat_map(|decl| {
-            decl.fields
-                .iter()
-                .filter(|field| matches!(&field.ir_type, IRType::Indirect(_)))
-                .map(|field| (decl.symbol.clone(), field.index))
-        })
-        .collect();
-    if indirect_fields.is_empty() {
-        return;
-    }
-
-    for blocks in packages
-        .iter_mut()
-        .flat_map(|package| package.functions.values_mut())
-        .map(|function| function.blocks.as_mut_slice())
-        .chain(std::iter::once(body))
-    {
-        insert_block_indirect_overwrite_frees(blocks, &indirect_fields);
-    }
-}
-
-fn insert_block_indirect_overwrite_frees(
-    blocks: &mut [IRBasicBlock],
-    indirect_fields: &BTreeSet<(IRSymbol, u32)>,
-) {
-    for block in blocks {
-        let mut rewritten = Vec::with_capacity(block.instructions.len());
-        for instruction in block.instructions.drain(..) {
-            if let IRInstruction::FieldSet {
-                base,
-                field_index,
-                struct_symbol,
-                ..
-            } = &instruction
-                && indirect_fields.contains(&(struct_symbol.clone(), *field_index))
-            {
-                rewritten.push(IRInstruction::FreeIndirect {
-                    base: *base,
-                    slot: IRIndirectSlot::StructField {
-                        field_index: *field_index,
-                        struct_symbol: struct_symbol.clone(),
-                    },
-                });
-            }
-            rewritten.push(instruction);
-        }
-        block.instructions = rewritten;
-    }
 }
 
 fn register_all(
@@ -219,7 +169,8 @@ fn needs_drop_seen(ty: &IRType, packages: &[IRPackage], visited: &mut BTreeSet<I
         IRType::Binary | IRType::Bits | IRType::String => true,
         IRType::List(_) | IRType::Map { .. } | IRType::Set(_) => true,
         // The wrapper is value-transparent, but its declaration slot
-        // owns a raw box allocation independently of the inner value.
+        // owns a reference on the rc-counted box block independently
+        // of the inner value.
         IRType::Indirect(_) => true,
         IRType::Struct(symbol) => {
             if !visited.insert(symbol.clone()) {
@@ -298,11 +249,14 @@ fn is_leaf(ty: &IRType) -> bool {
 
 /// Heap-managed types the backends acquire / release / copy inline
 /// rather than through per-type glue: the leaves (`rc++` / `rc--` /
-/// `koja_heap_deep_copy` on the block base) and closures (`rc++` /
+/// `koja_heap_deep_copy` on the block base), closures (`rc++` /
 /// `koja_closure_rc_dec` / `koja_closure_deep_copy` on the env base,
-/// with per-capture work behind the env header's glue pointers).
+/// with per-capture work behind the env header's glue pointers), and
+/// `Indirect` boxes (`rc++` on clone, an rc-aware release on drop
+/// that calls the inner type's drop glue at rc 1). Deep copy never
+/// sees a boxed operand, since deep-copy glue unboxes first.
 fn is_inline_managed(ty: &IRType) -> bool {
-    is_leaf(ty) || matches!(ty, IRType::Function { .. })
+    is_leaf(ty) || matches!(ty, IRType::Function { .. } | IRType::Indirect(_))
 }
 
 /// Peel a transparent [`IRType::Indirect`] box to its inner type. A
@@ -337,7 +291,10 @@ fn discover_glue_types(packages: &[IRPackage], body: &[IRBasicBlock]) -> BTreeSe
         .flat_map(|function| function.blocks.iter());
     for block in function_blocks.chain(body.iter()) {
         for instruction in &block.instructions {
-            if let Some(ty) = clone_or_drop_type(instruction)
+            // A boxed operand (`Clone` / `DropValue` on `Indirect(T)`)
+            // is handled inline, but its rc-zero release calls the
+            // inner type's drop glue, so seed the unboxed inner.
+            if let Some(ty) = clone_or_drop_type(instruction).map(unbox)
                 && needs_glue(ty, packages)
             {
                 work.push(ty.clone());
@@ -407,9 +364,10 @@ fn close_over_constituents(mut work: Vec<IRType>, packages: &[IRPackage]) -> BTr
             continue;
         }
         for constituent in constituent_types(&ty, packages) {
-            // A boxed-recursive field is cloned / dropped as its
-            // unboxed inner value (the aggregate's own glue recurses),
-            // so close over `inner` with no standalone `Indirect` glue.
+            // A boxed-recursive field is inline-managed, but its
+            // rc-zero release and deep copy recurse into the inner
+            // type's glue, so close over `inner` with no standalone
+            // `Indirect` glue.
             let constituent = unbox(&constituent).clone();
             if needs_glue(&constituent, packages) {
                 work.push(constituent);
@@ -498,7 +456,7 @@ fn glue_registered(packages: &[IRPackage], symbol: &IRSymbol) -> bool {
 /// re-registering a symbol already present is a no-op). Aggregate
 /// bodies are synthesized here, while collection bodies stay empty for
 /// the backend to synthesize. `Indirect` never reaches here, since it
-/// is transparent and discovery closes over its inner type instead.
+/// is inline-managed and discovery closes over its inner type instead.
 fn register_glue(packages: &mut [IRPackage], ty: &IRType) {
     let (clone_blocks, drop_blocks) = if is_aggregate(ty) {
         (
@@ -613,7 +571,7 @@ mod tests {
     use super::*;
     use crate::IRProgram;
     use crate::enum_decl::{EnumPayloadInit, IREnumVariant, IRVariantTag};
-    use crate::function::{IRBasicBlock, IRBlockId, IRTerminator};
+    use crate::function::{IRBasicBlock, IRBlockId, IRIndirectSlot, IRTerminator};
     use crate::seal::seal_program;
     use crate::struct_decl::{IRStructField, StructFieldInit};
     use crate::types::{ConstValue, ValueId};
@@ -934,7 +892,7 @@ mod tests {
     }
 
     #[test]
-    fn recursive_enum_drop_releases_inner_values_before_boxes() {
+    fn recursive_enum_drop_releases_boxes_rc_aware() {
         let tree = sym("Test.Tree");
         let tree_ty = IRType::Enum(tree.clone());
         let decl = IREnumDecl {
@@ -1031,43 +989,37 @@ mod tests {
                     .is_empty()
             );
         }
+        let boxed_ty = IRType::Indirect(Box::new(tree_ty.clone()));
         let drop_glue = program
             .function(drop_glue_symbol(&tree_ty).mangled())
             .expect("drop glue registered");
+        // Each boxed payload releases as a boxed projection + rc-aware
+        // `DropValue(Indirect)`, with no inner drop call and no raw free
+        // (the release at rc 1 runs the inner drop glue in the backend).
         let release_blocks: Vec<&IRBasicBlock> = drop_glue
             .blocks
             .iter()
             .filter(|block| {
-                block
-                    .instructions
-                    .iter()
-                    .any(|instruction| matches!(instruction, IRInstruction::FreeIndirect { .. }))
+                block.instructions.iter().any(|instruction| {
+                    matches!(
+                        instruction,
+                        IRInstruction::DropValue { ty, .. } if ty == &boxed_ty
+                    )
+                })
             })
             .collect();
         assert_eq!(release_blocks.len(), 2);
         for block in release_blocks {
-            let release = block
-                .instructions
-                .iter()
-                .position(|instruction| {
-                    matches!(instruction, IRInstruction::Call { callee, .. }
-                        if callee == &drop_glue_symbol(&tree_ty))
-                })
-                .expect("inner release");
-            let free = block
-                .instructions
-                .iter()
-                .position(|instruction| {
-                    matches!(
-                        instruction,
-                        IRInstruction::FreeIndirect {
-                            slot: IRIndirectSlot::EnumPayload { .. },
-                            ..
-                        }
-                    )
-                })
-                .expect("box free");
-            assert!(release < free);
+            assert!(block.instructions.iter().any(|instruction| {
+                matches!(
+                    instruction,
+                    IRInstruction::EnumPayloadFieldGet { field_type, .. } if field_type == &boxed_ty
+                )
+            }));
+            assert!(!block.instructions.iter().any(|instruction| {
+                matches!(instruction, IRInstruction::Call { callee, .. }
+                    if callee == &drop_glue_symbol(&tree_ty))
+            }));
         }
         assert_eq!(
             drop_glue
@@ -1089,7 +1041,7 @@ mod tests {
     }
 
     #[test]
-    fn indirect_struct_overwrite_frees_replaced_box() {
+    fn indirect_struct_overwrite_releases_replaced_box() {
         let boxed = sym("Test.Boxed");
         let boxed_ty = IRType::Struct(boxed.clone());
         let decl = IRStructDecl {
@@ -1149,21 +1101,29 @@ mod tests {
 
         elaborate_and_seal(&mut program);
 
+        let boxed_field_ty = IRType::Indirect(Box::new(IRType::Int64));
         let seed = program.function("Test.seed").expect("seed function");
+        // The inner type owns no heap, so lowering emitted no stale
+        // pair. The rewrite inserts a boxed projection + rc-aware
+        // `DropValue` for the old box right before the `FieldSet`.
         let overwrite = seed.blocks[0]
             .instructions
-            .windows(2)
-            .find(|pair| matches!(pair[1], IRInstruction::FieldSet { .. }))
+            .windows(3)
+            .find(|window| matches!(window[2], IRInstruction::FieldSet { .. }))
             .expect("field overwrite");
         assert!(matches!(
             &overwrite[0],
-            IRInstruction::FreeIndirect {
-                base: free_base,
-                slot: IRIndirectSlot::StructField {
-                    field_index: 0,
-                    struct_symbol,
-                },
-            } if *free_base == base && struct_symbol == &boxed
+            IRInstruction::FieldGet {
+                base: stale_base,
+                field_type,
+                field_index: 0,
+                struct_symbol,
+                ..
+            } if *stale_base == base && field_type == &boxed_field_ty && struct_symbol == &boxed
+        ));
+        assert!(matches!(
+            &overwrite[1],
+            IRInstruction::DropValue { ty, .. } if ty == &boxed_field_ty
         ));
 
         let drop_glue = program
@@ -1177,10 +1137,7 @@ mod tests {
                 .any(|instruction| {
                     matches!(
                         instruction,
-                        IRInstruction::FreeIndirect {
-                            slot: IRIndirectSlot::StructField { .. },
-                            ..
-                        }
+                        IRInstruction::DropValue { ty, .. } if ty == &boxed_field_ty
                     )
                 })
         );

@@ -419,32 +419,3 @@ the raw bytes.
 **Fix path:** `IPAddress.to_string()` in the stdlib: dotted-quad for
 v4, RFC 5952 for v6. Its inverse (`IPAddress.parse(text)`) is the
 natural sibling.
-
----
-
-## Cloning a recursive structure deep-copies the whole structure
-
-Found 2026-08-10 while chasing growing write latency in a
-database-backed service. Acquiring a struct or enum value shares its
-heap-leaf fields (`String`, `Binary`) with an `rc++`, but a composite
-constituent recurses into that constituent's own clone glue, and an
-`Indirect` box is unboxed and re-boxed rather than shared
-(`koja-ir/src/elaborate/synthesis.rs`). Cloning one node of a
-recursive type therefore copies every node beneath it.
-
-Persistent tree structures pay O(n) per update instead of O(log n).
-A path-copying tree put rebuilds its spine, and each rebuilt node's
-construction acquires the untouched sibling subtree, which
-deep-copies it. Sequential puts into the stdlib `Map` slow down
-linearly as the map grows, and the same holds for any Koja-written
-persistent tree. Measured on macOS with a 100-byte value workload:
-1ms per put at 500 entries, 15ms per put at 3000. MEMORY-MODEL.md
-promises "reference-counted and shared, copied lazily only on
-mutation", which holds for heap leaves and runtime blocks but not
-for `Indirect` boxes.
-
-**Fix path:** reference-count `Indirect` boxes like other heap
-blocks. Clone glue then takes an `rc++` on the box instead of
-unboxing, and drop glue releases contents only when the count
-reaches zero. Path-copied structures share unchanged subtrees and
-persistent updates return to O(log n).

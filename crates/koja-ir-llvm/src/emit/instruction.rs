@@ -168,10 +168,6 @@ pub(crate) fn emit_instruction<'ctx>(
             Ok(())
         }
         IRInstruction::DropValue { value, ty } => locals::emit_drop_value(ctx, *value, ty, values),
-        IRInstruction::FreeIndirect { base, slot } => {
-            let base = lookup(values, *base)?;
-            indirect::emit_free_indirect(ctx, base, slot)
-        }
         IRInstruction::IndirectPresent { base, dest, slot } => {
             let base = lookup(values, *base)?;
             let present = indirect::emit_indirect_present(ctx, base, slot)?;

@@ -664,11 +664,6 @@ pub enum IRInstruction {
         struct_symbol: IRSymbol,
         value: ValueId,
     },
-    /// Free the raw allocation owned by an `Indirect` declaration
-    /// slot after its unboxed inner value has been released. The base
-    /// aggregate remains the operand because `Indirect` pointers are
-    /// never exposed as value-level IR.
-    FreeIndirect { base: ValueId, slot: IRIndirectSlot },
     /// `dest = base.<indirect_slot> != null`. Synthesized drop glue
     /// uses this guard because a declared but never-written local
     /// carries an all-zero aggregate value.
@@ -963,7 +958,6 @@ impl IRInstruction {
             | IRInstruction::UnionWrap { dest, .. } => Some(*dest),
             IRInstruction::DropLocal { .. }
             | IRInstruction::DropValue { .. }
-            | IRInstruction::FreeIndirect { .. }
             | IRInstruction::LocalDecl { .. }
             | IRInstruction::LocalWrite { .. }
             | IRInstruction::ProcessExit { .. }
@@ -1016,7 +1010,6 @@ impl IRInstruction {
             | IRInstruction::UnionTagGet { value: v, .. }
             | IRInstruction::UnionWrap { value: v, .. } => *v == value,
             IRInstruction::FieldGet { base, .. }
-            | IRInstruction::FreeIndirect { base, .. }
             | IRInstruction::IndirectPresent { base, .. }
             | IRInstruction::TupleGet { base, .. } => *base == value,
             IRInstruction::FieldSet { base, value: v, .. } => *base == value || *v == value,
