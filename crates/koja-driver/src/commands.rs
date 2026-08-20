@@ -89,6 +89,17 @@ struct DocInput {
     source: String,
 }
 
+pub(crate) struct DocOptions {
+    pub(crate) files: Vec<String>,
+    pub(crate) output: Option<String>,
+    pub(crate) project_only: bool,
+}
+
+pub(crate) struct DocServeOptions {
+    pub(crate) no_rebuild: bool,
+    pub(crate) port: Option<u16>,
+}
+
 /// `koja doc [file.koja ...] [-o output_dir]` -- generates HTML
 /// documentation.
 ///
@@ -99,12 +110,12 @@ struct DocInput {
 /// arguments, looks for `koja.toml` in the current directory and
 /// falls back to stdlib-only docs (written to a temp dir) when
 /// there is none.
-pub fn cmd_doc(
-    files: Vec<String>,
-    project_root: Option<&Path>,
-    output: Option<String>,
-    project_only: bool,
-) {
+pub fn cmd_doc(project_root: Option<&Path>, options: DocOptions) {
+    let DocOptions {
+        files,
+        output,
+        project_only,
+    } = options;
     if let Some(out_path) = generate_docs(&files, project_root, output, project_only) {
         println!("docs generated: {}", out_path.display());
     }
@@ -114,12 +125,12 @@ pub fn cmd_doc(
 /// as plain markdown, with no disk output. An exact name renders
 /// the full doc, partial matches list candidates, and no matches
 /// exits non-zero.
-pub fn cmd_doc_search(
-    files: Vec<String>,
-    project_root: Option<&Path>,
-    project_only: bool,
-    query: &str,
-) {
+pub fn cmd_doc_search(project_root: Option<&Path>, options: DocOptions, query: &str) {
+    let DocOptions {
+        files,
+        output: _,
+        project_only,
+    } = options;
     let discovered = discover_doc_inputs(&files, project_root, project_only);
     if discovered.inputs.is_empty() {
         eprintln!("no source files to document");
@@ -142,13 +153,16 @@ pub fn cmd_doc_search(
 /// `search-index.json` via `fetch()`, which browsers refuse for
 /// `file://` URLs. A local HTTP server is the standard workaround.
 pub fn cmd_doc_serve(
-    files: Vec<String>,
     project_root: Option<&Path>,
-    output: Option<String>,
-    project_only: bool,
-    port: Option<u16>,
-    no_rebuild: bool,
+    options: DocOptions,
+    serve_options: DocServeOptions,
 ) {
+    let DocOptions {
+        files,
+        output,
+        project_only,
+    } = options;
+    let DocServeOptions { no_rebuild, port } = serve_options;
     let out_path = if no_rebuild {
         reject_project_with_explicit_paths("doc", &files, project_root);
         let project = files
@@ -496,7 +510,7 @@ fn read_doc_input(path: &Path) -> Option<String> {
 /// `koja.toml` and formats the project's `src` and `test`
 /// directories. Directory arguments are walked recursively for
 /// `.koja` files.
-pub fn cmd_format(files: Vec<String>, project_root: Option<&Path>, check: bool) {
+pub fn cmd_format(project_root: Option<&Path>, files: Vec<String>, check: bool) {
     let resolved = resolve_format_paths(&files, project_root);
 
     let mut has_diff = false;

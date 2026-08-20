@@ -318,13 +318,14 @@ ordering also re-roll big-endian integer packing: an append-N-bytes
 helper and an accumulate-N-bytes reader now exist in at least two
 packages, character for character. The float side of the same story is
 the pure-arithmetic IEEE 754 decomposition workaround: without
-`Float.to_bits`/`Float.from_bits` intrinsics, any binary format that
+`Float.bit_pattern`/`Float.from_bit_pattern` intrinsics, any binary format that
 carries floats ships a hand-written bit-extraction module.
 
 **Fix path:** `compare` on `Binary` (and a `Comparable` conformance
 when the protocol exists), `Int.to_be_bytes(width)` with a matching
-`Binary.read_be(offset, width)`, and `Float.to_bits`/`from_bits`
-intrinsics. All are small, self-contained stdlib additions.
+`Binary.read_be(offset, width)`, plus `Float.bit_pattern` and
+`Float.from_bit_pattern` intrinsics. The `Float32` forms use `UInt32` instead of
+`UInt64`. All are small, self-contained stdlib additions.
 
 ---
 

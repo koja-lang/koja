@@ -97,6 +97,44 @@ pub enum Backend {
     Llvm,
 }
 
+#[derive(clap::Args)]
+pub(crate) struct BuildOptions {
+    /// Print LLVM IR to stdout instead of producing a binary
+    #[arg(long)]
+    pub(crate) emit_llvm: bool,
+
+    /// Source file (`.koja` / `.kojs`, omit to use `koja.toml`)
+    pub(crate) file: Option<String>,
+
+    /// Output binary name
+    #[arg(short, long)]
+    pub(crate) output: Option<String>,
+
+    /// Build with aggressive optimizations
+    #[arg(long)]
+    pub(crate) release: bool,
+}
+
+#[derive(clap::Args)]
+pub(crate) struct RunOptions {
+    /// Arguments passed to the compiled program
+    #[arg(index = 2, last = true)]
+    pub(crate) args: Vec<String>,
+
+    /// Execution backend: `interpreter` runs in-process for fast startup, while `llvm` compiles to a native binary, runs it, and forwards its exit code
+    #[arg(long, value_enum, default_value = "interpreter")]
+    pub(crate) backend: Backend,
+
+    /// Source file (`.koja` / `.kojs`), task name (`postgres.migrate`),
+    /// or omit to run the project's entry via `koja.toml`
+    #[arg(index = 1)]
+    pub(crate) file: Option<String>,
+
+    /// Build with aggressive optimizations (LLVM backend only)
+    #[arg(long)]
+    pub(crate) release: bool,
+}
+
 /// Categorized source input for a `koja` command.
 ///
 /// [`resolve_source_shape`] inspects the file extension (or, with
@@ -187,7 +225,7 @@ fn bail_resolve_error(message: String) -> ! {
 /// This is the only command that accepts a standalone `.koja` file
 /// (parsed in [`ParseMode::File`]): typecheck needs no project
 /// context, and LSP/editor flows lean on this.
-pub fn cmd_check(file: Option<String>, project_root: Option<&Path>, emit_ast: bool) {
+pub fn cmd_check(project_root: Option<&Path>, file: Option<String>, emit_ast: bool) {
     let mode = resolve_source_shape(file.as_deref(), project_root)
         .unwrap_or_else(|err| bail_resolve_error(err));
     match mode {
@@ -283,13 +321,13 @@ fn into_source_file(loaded: LoadedSource) -> SourceFile {
 /// `.kojs` script or a project. LLVM is the only backend that emits
 /// object files, so `build` has no backend dimension.
 /// `-o`/`--output` overrides the default stem-based output name.
-pub fn cmd_build(
-    file: Option<String>,
-    project_root: Option<&Path>,
-    output: Option<String>,
-    release: bool,
-    emit_llvm: bool,
-) {
+pub fn cmd_build(project_root: Option<&Path>, options: BuildOptions) {
+    let BuildOptions {
+        emit_llvm,
+        file,
+        output,
+        release,
+    } = options;
     let mode = resolve_source_shape(file.as_deref(), project_root)
         .unwrap_or_else(|err| bail_resolve_error(err));
     match mode {
@@ -315,13 +353,13 @@ pub fn cmd_build(
 /// compiled path: lower -> compile -> link -> exec the binary
 /// (forwarding `args`) -> forward its exit code. Script binaries
 /// are temp files removed after the run.
-pub fn cmd_run(
-    file: Option<String>,
-    project_root: Option<&Path>,
-    backend: Backend,
-    release: bool,
-    args: Vec<String>,
-) {
+pub fn cmd_run(project_root: Option<&Path>, options: RunOptions) {
+    let RunOptions {
+        args,
+        backend,
+        file,
+        release,
+    } = options;
     if let Some(task_name) = file.as_deref().filter(|arg| looks_like_task_name(arg)) {
         run_task(task_name, project_root, backend, release, &args);
     }
