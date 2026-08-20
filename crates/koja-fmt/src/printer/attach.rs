@@ -804,12 +804,23 @@ impl<'a> Attacher<'a> {
             .first()
             .map(|s| stmt_span(s).start.offset)
             .unwrap_or(arm_span.end.offset);
-        // Comments inside the head (multi-line patterns) relocate to the
-        // head line rather than being dropped.
+        // A wrapped head has no stable per-line anchors. Comments before its
+        // final line hoist above the arm, while only the final-line comment
+        // trails the canonical head.
         let head_comments = self.take_before(first_stmt.min(arm_span.end.offset));
-        let (on_head, above_body): (Vec<Comment>, Vec<Comment>) = head_comments
-            .into_iter()
-            .partition(|c| c.span.start.line <= head_end);
+        let mut above_body = Vec::new();
+        let mut above_head = Vec::new();
+        let mut on_head = Vec::new();
+        for comment in head_comments {
+            if comment.span.start.line < head_end {
+                above_head.push(comment);
+            } else if comment.span.start.line == head_end {
+                on_head.push(comment);
+            } else {
+                above_body.push(comment);
+            }
+        }
+        self.push(arm_span, Slot::Leading, above_head);
         self.push(arm_span, Slot::HeaderTrailing, on_head);
         if let Some(first) = body.first() {
             self.push(stmt_span(first), Slot::Leading, above_body);
