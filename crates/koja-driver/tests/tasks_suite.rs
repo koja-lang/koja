@@ -145,6 +145,30 @@ fn project_task_runs_with_args_and_error_exit() {
         stderr.contains("error: asked to fail"),
         "Err should reach stderr: {stderr}"
     );
+
+    let caller = fx.root.join("caller");
+    fs::create_dir_all(&caller).unwrap();
+    let output = Command::new(koja_bin())
+        .args([
+            "run",
+            "-S",
+            fx.root.to_str().unwrap(),
+            "myapp.greet",
+            "--",
+            "selected",
+        ])
+        .current_dir(caller)
+        .output()
+        .expect("failed to run selected project task");
+    assert!(
+        output.status.success(),
+        "selected project task failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout).trim(),
+        "hello selected"
+    );
 }
 
 #[test]
@@ -178,6 +202,30 @@ fn dependency_task_is_listed_and_runs() {
 
     let stdout = fx.koja_ok(&["run", "tooling.lint", "--", "fast"]);
     assert_eq!(stdout.trim(), "linting fast");
+
+    let caller = fx.root.join("caller");
+    fs::create_dir_all(&caller).unwrap();
+    let output = Command::new(koja_bin())
+        .args([
+            "run",
+            "-S",
+            fx.root.to_str().unwrap(),
+            "tooling.lint",
+            "--",
+            "selected",
+        ])
+        .current_dir(caller)
+        .output()
+        .expect("failed to run selected dependency task");
+    assert!(
+        output.status.success(),
+        "selected dependency task failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout).trim(),
+        "linting selected"
+    );
 }
 
 #[test]

@@ -68,6 +68,7 @@ struct RenderStyle {
 }
 
 static STYLE: OnceLock<RenderStyle> = OnceLock::new();
+static PATH_BASE: OnceLock<PathBuf> = OnceLock::new();
 
 /// Resolve and store the process-wide diagnostic style. Called once
 /// from `main` after CLI parsing. The short format never colors, so
@@ -81,6 +82,13 @@ pub fn init_style(format_flag: Option<DiagnosticFormat>, no_color: bool) {
         && env::var_os("NO_COLOR").is_none()
         && std::io::stderr().is_terminal();
     let _ = STYLE.set(RenderStyle { color, format });
+}
+
+/// Set the base directory used to shorten diagnostic paths.
+pub fn set_path_base(base: Option<&Path>) {
+    if let Some(base) = base {
+        let _ = PATH_BASE.set(base.to_path_buf());
+    }
 }
 
 fn format_from_env() -> Option<DiagnosticFormat> {
@@ -347,11 +355,13 @@ fn flatten(text: &str) -> String {
     text.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
-/// Relativize against the current directory for readability, falling
-/// back to the path as recorded.
+/// Relativize against the selected project or current directory for
+/// readability, falling back to the path as recorded.
 fn display_path(path: &Path) -> String {
-    env::current_dir()
-        .ok()
+    PATH_BASE
+        .get()
+        .cloned()
+        .or_else(|| env::current_dir().ok())
         .and_then(|cwd| path.strip_prefix(cwd).ok())
         .unwrap_or(path)
         .display()

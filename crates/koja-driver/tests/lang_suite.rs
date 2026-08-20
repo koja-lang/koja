@@ -133,6 +133,22 @@ fn run_with_timeout(configure: impl FnOnce(&mut Command)) -> (String, String, i3
     (stdout, stderr, code)
 }
 
+#[test]
+fn project_selector_runs_project_from_parent_directory() {
+    let fixtures = lang_dir();
+    let project = fixtures.join("project");
+    let expected = fs::read_to_string(project.join("expected.stdout")).unwrap();
+    let (stdout, stderr, code) = run_with_timeout(|cmd| {
+        cmd.arg("run")
+            .arg("-S")
+            .arg("project")
+            .current_dir(&fixtures);
+    });
+
+    assert_eq!(code, 0, "koja run -S failed: {stderr}");
+    assert_eq!(stdout, expected);
+}
+
 fn run_pass_dir(dir: &Path, label: &str) {
     let files = collect_test_files(dir);
     assert!(

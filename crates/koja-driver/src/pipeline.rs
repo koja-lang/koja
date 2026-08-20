@@ -97,6 +97,44 @@ pub enum Backend {
     Llvm,
 }
 
+#[derive(clap::Args)]
+pub(crate) struct BuildOptions {
+    /// Print LLVM IR to stdout instead of producing a binary
+    #[arg(long)]
+    pub(crate) emit_llvm: bool,
+
+    /// Source file (`.koja` / `.kojs`, omit to use `koja.toml`)
+    pub(crate) file: Option<String>,
+
+    /// Output binary name
+    #[arg(short, long)]
+    pub(crate) output: Option<String>,
+
+    /// Build with aggressive optimizations
+    #[arg(long)]
+    pub(crate) release: bool,
+}
+
+#[derive(clap::Args)]
+pub(crate) struct RunOptions {
+    /// Arguments passed to the compiled program
+    #[arg(index = 2, last = true)]
+    pub(crate) args: Vec<String>,
+
+    /// Execution backend: `interpreter` runs in-process for fast startup, while `llvm` compiles to a native binary, runs it, and forwards its exit code
+    #[arg(long, value_enum, default_value = "interpreter")]
+    pub(crate) backend: Backend,
+
+    /// Source file (`.koja` / `.kojs`), task name (`postgres.migrate`),
+    /// or omit to run the project's entry via `koja.toml`
+    #[arg(index = 1)]
+    pub(crate) file: Option<String>,
+
+    /// Build with aggressive optimizations (LLVM backend only)
+    #[arg(long)]
+    pub(crate) release: bool,
+}
+
 /// Categorized source input for a `koja` command.
 ///
 /// [`resolve_source_shape`] inspects the file extension (or, with
@@ -122,8 +160,14 @@ enum SourceShape {
 /// Categorize the user's input into a [`SourceShape`]. Errors are
 /// returned as `Err(message)` for the caller to print and exit
 /// non-zero.
-fn resolve_source_shape(file: Option<&str>) -> Result<SourceShape, String> {
+fn resolve_source_shape(
+    file: Option<&str>,
+    project_root: Option<&Path>,
+) -> Result<SourceShape, String> {
     if let Some(arg) = file {
+        if project_root.is_some() {
+            return Err("`--project` cannot be used with an explicit source file".into());
+        }
         let path = canonical_source_path(arg);
         return match path.extension().and_then(OsStr::to_str) {
             Some("kojs") => Ok(SourceShape::Script(path)),
@@ -134,12 +178,15 @@ fn resolve_source_shape(file: Option<&str>) -> Result<SourceShape, String> {
             )),
         };
     }
-    let cwd =
-        env::current_dir().map_err(|err| format!("cannot determine current directory: {err}"))?;
-    match project::load_project(&cwd).map_err(|err| err.to_string())? {
+    let root = match project_root {
+        Some(root) => root.to_path_buf(),
+        None => env::current_dir()
+            .map_err(|err| format!("cannot determine current directory: {err}"))?,
+    };
+    match project::load_project(&root).map_err(|err| err.to_string())? {
         Some(config) => Ok(SourceShape::Project {
             config: Box::new(config),
-            root: cwd,
+            root,
         }),
         None => {
             Err("no source file specified and no `koja.toml` found in current directory".into())
@@ -178,8 +225,9 @@ fn bail_resolve_error(message: String) -> ! {
 /// This is the only command that accepts a standalone `.koja` file
 /// (parsed in [`ParseMode::File`]): typecheck needs no project
 /// context, and LSP/editor flows lean on this.
-pub fn cmd_check(file: Option<String>, emit_ast: bool) {
-    let mode = resolve_source_shape(file.as_deref()).unwrap_or_else(|err| bail_resolve_error(err));
+pub fn cmd_check(project_root: Option<&Path>, file: Option<String>, emit_ast: bool) {
+    let mode = resolve_source_shape(file.as_deref(), project_root)
+        .unwrap_or_else(|err| bail_resolve_error(err));
     match mode {
         SourceShape::Script(path) => check_single_file(&path, ParseMode::Script, emit_ast),
         SourceShape::Program(path) => check_single_file(&path, ParseMode::File, emit_ast),
@@ -194,11 +242,11 @@ pub fn cmd_check(file: Option<String>, emit_ast: bool) {
 /// design). Delegates to [`koja_shell::run`]. The REPL
 /// crate owns session state, multiline detection, command
 /// parsing, and its own pipeline driver.
-pub fn cmd_shell() {
+pub fn cmd_shell(project_root: Option<&Path>) {
     let ShellSession {
         baseline,
         session_package,
-    } = shell_session();
+    } = shell_session(project_root);
     koja_shell::run(baseline, session_package);
 }
 
@@ -215,11 +263,17 @@ struct ShellSession {
 /// project's package. With no readable `koja.toml` (or on any load
 /// failure) fall back to a stdlib-only `REPL` session. A malformed
 /// manifest or broken dependency warns but never aborts the shell.
-fn shell_session() -> ShellSession {
-    let Ok(cwd) = env::current_dir() else {
-        return stdlib_session();
+fn shell_session(project_root: Option<&Path>) -> ShellSession {
+    let root = match project_root {
+        Some(root) => root.to_path_buf(),
+        None => {
+            let Ok(cwd) = env::current_dir() else {
+                return stdlib_session();
+            };
+            cwd
+        }
     };
-    let config = match project::load_project(&cwd) {
+    let config = match project::load_project(&root) {
         Ok(Some(config)) => config,
         Ok(None) => return stdlib_session(),
         Err(err) => {
@@ -228,7 +282,7 @@ fn shell_session() -> ShellSession {
         }
     };
     println!("loading project `{}`", config.name);
-    match ProjectLoader::new(&config, &cwd).sources(LoadOptions {
+    match ProjectLoader::new(&config, &root).sources(LoadOptions {
         extensions: &["koja"],
         include_dependencies: true,
         include_stdlib: true,
@@ -267,8 +321,15 @@ fn into_source_file(loaded: LoadedSource) -> SourceFile {
 /// `.kojs` script or a project. LLVM is the only backend that emits
 /// object files, so `build` has no backend dimension.
 /// `-o`/`--output` overrides the default stem-based output name.
-pub fn cmd_build(file: Option<String>, output: Option<String>, release: bool, emit_llvm: bool) {
-    let mode = resolve_source_shape(file.as_deref()).unwrap_or_else(|err| bail_resolve_error(err));
+pub fn cmd_build(project_root: Option<&Path>, options: BuildOptions) {
+    let BuildOptions {
+        emit_llvm,
+        file,
+        output,
+        release,
+    } = options;
+    let mode = resolve_source_shape(file.as_deref(), project_root)
+        .unwrap_or_else(|err| bail_resolve_error(err));
     match mode {
         SourceShape::Script(path) => build_and_keep(&path, output, release, emit_llvm),
         SourceShape::Program(path) => bail_program_execution(&path),
@@ -292,11 +353,18 @@ pub fn cmd_build(file: Option<String>, output: Option<String>, release: bool, em
 /// compiled path: lower -> compile -> link -> exec the binary
 /// (forwarding `args`) -> forward its exit code. Script binaries
 /// are temp files removed after the run.
-pub fn cmd_run(file: Option<String>, backend: Backend, release: bool, args: Vec<String>) {
+pub fn cmd_run(project_root: Option<&Path>, options: RunOptions) {
+    let RunOptions {
+        args,
+        backend,
+        file,
+        release,
+    } = options;
     if let Some(task_name) = file.as_deref().filter(|arg| looks_like_task_name(arg)) {
-        run_task(task_name, backend, release, &args);
+        run_task(task_name, project_root, backend, release, &args);
     }
-    let mode = resolve_source_shape(file.as_deref()).unwrap_or_else(|err| bail_resolve_error(err));
+    let mode = resolve_source_shape(file.as_deref(), project_root)
+        .unwrap_or_else(|err| bail_resolve_error(err));
     match (mode, backend) {
         (SourceShape::Script(path), Backend::Interpreter) => run_script_interpreted(&path),
         (SourceShape::Script(path), Backend::Llvm) => run_script_compiled(&path, release, &args),
@@ -324,19 +392,22 @@ pub fn cmd_run(file: Option<String>, backend: Backend, release: bool, args: Vec<
 /// stdlib roots and a second copy would collide at registration
 /// time.
 ///
-pub fn cmd_test(trace: bool, color: bool) {
-    let (config, root) = load_project_or_exit(&[
-        "error: no koja.toml found",
-        "Usage: koja test (run from a directory containing koja.toml)",
-    ]);
+pub fn cmd_test(project_root: Option<&Path>, trace: bool, color: bool) {
+    let (config, root) = load_project_or_exit(
+        project_root,
+        &[
+            "error: no koja.toml found",
+            "Usage: koja test (run from a directory containing koja.toml)",
+        ],
+    );
     run_project_tests(&config, &root, TestOptions { color, trace });
 }
 
 /// `koja tasks`: list every task name in scope. Inside a project
 /// that's the project's + dependencies' + the toolchain's. Outside
 /// one, the toolchain's only.
-pub fn cmd_tasks() {
-    let project = try_load_project();
+pub fn cmd_tasks(project_root: Option<&Path>) {
+    let project = try_load_project(project_root);
     let tasks = resolve_tasks(
         project
             .as_ref()
@@ -375,8 +446,14 @@ fn looks_like_task_name(arg: &str) -> bool {
 /// tasks compile against a stdlib-only bundle even inside a project,
 /// since scaffolding must not require the surrounding project to
 /// build.
-fn run_task(name: &str, backend: Backend, release: bool, args: &[String]) -> ! {
-    let project = try_load_project();
+fn run_task(
+    name: &str,
+    project_root: Option<&Path>,
+    backend: Backend,
+    release: bool,
+    args: &[String],
+) -> ! {
+    let project = try_load_project(project_root);
     let tasks = resolve_tasks(
         project
             .as_ref()

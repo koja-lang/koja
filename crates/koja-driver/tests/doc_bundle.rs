@@ -61,6 +61,23 @@ fn run_doc(cwd: &Path, args: &[&str]) {
 }
 
 #[test]
+fn selector_writes_default_docs_under_project_root() {
+    let tmp = tempdir();
+    let project = tmp.join("project");
+    let caller = tmp.join("caller");
+    fs::create_dir_all(&caller).unwrap();
+    write_fixture_project(&project);
+
+    run_doc(
+        &caller,
+        &["-S", project.to_str().unwrap(), "--project-only"],
+    );
+
+    assert!(project.join("doc/index.html").is_file());
+    assert!(!caller.join("doc").exists());
+}
+
+#[test]
 fn doc_bundle_emits_assets_and_stdlib_packages() {
     let tmp = tempdir();
     write_fixture_project(&tmp);

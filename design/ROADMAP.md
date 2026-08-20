@@ -23,6 +23,8 @@ The following facts constrain future planning.
   landed.
 - Git dependencies are reproducible through `koja.lock` and the `koja deps`
   command family.
+- Project-aware commands accept `-S <path>` to select a project without
+  changing the working directory.
 - `koja shell` loads projects and provides completion. Its remaining
   improvements are optional and driven by use.
 - Koja remains pre-1.0. Breaking cleanup is still allowed when it produces a
@@ -89,10 +91,13 @@ binaries.
 
 ## 0.18.0
 
-The 0.18 release adds optional function arguments and runtime observability.
+The 0.18 release adds optional function arguments, runtime observability, and
+focused standard library improvements found while building auth-manager.
 
 ### Language and tooling
 
+- **[DONE]** Add a global `-S <path>` selector for project-aware commands and
+  editor integrations.
 - Default values for function parameters, so optional arguments do not
   require a separate options struct at every call site. A defaulted function
   is callable at every arity its defaults allow. `&name/arity` references
@@ -104,6 +109,28 @@ The 0.18 release adds optional function arguments and runtime observability.
   including mailbox depth, and document the overload contract for long-running
   services. Shape the API from the telemetry and structured logging package
   work in the ecosystem-validation section, not speculatively.
+
+### Standard library quality of life
+
+- Add `DateTime.to_rfc3339()` and `DateTime.from_rfc3339(text)` for JSON API
+  timestamps ([gap](GAPS.md#datetime-has-no-calendar-formatting-or-parsing)).
+- Add `UUID.v4()` for session, API key, and node identifiers
+  ([gap](GAPS.md#no-uuid-generation)).
+- Add `IPAddress.to_string()` and `IPAddress.parse(text)` for DNS discovery and
+  dialable addresses
+  ([gap](GAPS.md#ipaddress-has-no-string-rendering)).
+- Add bytewise `Binary.compare`, big-endian integer encoding and decoding, and
+  `Float.bit_pattern` / `Float.from_bit_pattern`
+  ([gap](GAPS.md#binary-has-no-ordering-and-no-endian-helpers)).
+- Add CRC32 and CRC32C checksums for storage and wire-format integrity
+  ([gap](GAPS.md#no-non-cryptographic-checksum)).
+- Add socket read, write, connect, and accept deadlines so a stalled peer
+  cannot block its owning process forever
+  ([gap](GAPS.md#sockets-have-no-deadlines)).
+
+The larger auth-manager findings remain in [GAPS.md](GAPS.md). `Fd` random
+access and durability, ordered maps and iteration, and cross-package protocol
+conformances are not 0.18 release gates.
 
 The rest of the 0.18 scope will be selected from evidence gathered while
 building real packages and applications. Later `0.x` releases will be added
@@ -129,9 +156,8 @@ and backpressure. A supervision protocol may then be derived from repeated
 patterns. The existing monitor, parenting, crash, and lifecycle primitives are
 the stable foundation.
 
-The current shell is sufficient for this work. Inline help syntax, an explicit
-`-S` selector, and process inspection remain optional improvements rather than
-release gates.
+The current shell is sufficient for this work. Inline help syntax and process
+inspection remain optional improvements rather than release gates.
 
 ## Path to 1.0
 

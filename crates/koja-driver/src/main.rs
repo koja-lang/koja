@@ -31,6 +31,9 @@ pub mod project;
 mod serve;
 mod tasks;
 
+use std::path::{Path, PathBuf};
+use std::process;
+
 use koja_runtime as _;
 
 use clap::{Args, Parser, Subcommand};
@@ -48,6 +51,10 @@ struct Cli {
     #[arg(long, global = true, value_enum)]
     diagnostics: Option<diagnostics::DiagnosticFormat>,
 
+    /// Project directory to use instead of the current directory
+    #[arg(short = 'S', long, global = true, value_name = "DIRECTORY")]
+    project: Option<PathBuf>,
+
     #[command(subcommand)]
     command: Command,
 }
@@ -55,22 +62,7 @@ struct Cli {
 #[derive(Subcommand)]
 enum Command {
     /// Compile a source file or project to a native binary
-    Build {
-        /// Source file (`.koja` / `.kojs`, omit to use `koja.toml`)
-        file: Option<String>,
-
-        /// Output binary name
-        #[arg(short, long)]
-        output: Option<String>,
-
-        /// Print LLVM IR to stdout instead of producing a binary
-        #[arg(long)]
-        emit_llvm: bool,
-
-        /// Build with aggressive optimizations
-        #[arg(long)]
-        release: bool,
-    },
+    Build(pipeline::BuildOptions),
     /// Type-check a source file or project without compiling
     Check {
         /// Source file (`.koja` / `.kojs`, omit to use `koja.toml`)
@@ -125,23 +117,7 @@ enum Command {
         emit_ast: bool,
     },
     /// Compile and run a source file, project, or task
-    Run {
-        /// Source file (`.koja` / `.kojs`), task name (`postgres.migrate`),
-        /// or omit to run the project's entry via `koja.toml`
-        file: Option<String>,
-
-        /// Execution backend: `interpreter` runs in-process for fast startup, while `llvm` compiles to a native binary, runs it, and forwards its exit code
-        #[arg(long, value_enum, default_value = "interpreter")]
-        backend: pipeline::Backend,
-
-        /// Build with aggressive optimizations (LLVM backend only)
-        #[arg(long)]
-        release: bool,
-
-        /// Arguments passed to the compiled program
-        #[arg(last = true)]
-        args: Vec<String>,
-    },
+    Run(pipeline::RunOptions),
     /// Start an interactive REPL backed by the interpreter
     Shell,
     /// List tasks exported by the project, its dependencies, and the toolchain
@@ -227,51 +203,73 @@ fn main() {
     let cli = Cli::parse();
     let color = !cli.no_color && std::env::var("NO_COLOR").is_err();
     diagnostics::init_style(cli.diagnostics, cli.no_color);
+    let project_root = cli
+        .project
+        .as_deref()
+        .map(project::resolve_project_root)
+        .transpose()
+        .unwrap_or_else(|err| {
+            eprintln!("error: {err}");
+            process::exit(1);
+        });
+    diagnostics::set_path_base(project_root.as_deref());
 
     // Keep the on-disk stdlib extraction alive for tooling.
     // Best-effort, the pipeline compiles from embedded sources.
     let _ = koja_stdlib::extract();
 
     match cli.command {
-        Command::Build {
-            file,
-            output,
-            emit_llvm,
-            release,
-        } => pipeline::cmd_build(file, output, release, emit_llvm),
-        Command::Check { file, emit_ast } => pipeline::cmd_check(file, emit_ast),
+        Command::Build(options) => pipeline::cmd_build(project_root.as_deref(), options),
+        Command::Check { file, emit_ast } => {
+            pipeline::cmd_check(project_root.as_deref(), file, emit_ast)
+        }
         Command::Deps { action } => match action {
-            None => deps::cmd_status(),
-            Some(DepsAction::Clean { cache }) => deps::cmd_clean(cache),
-            Some(DepsAction::Get) => deps::cmd_get(None),
-            Some(DepsAction::Update { name }) => deps::cmd_get(Some(name)),
+            None => deps::cmd_status(project_root.as_deref()),
+            Some(DepsAction::Clean { cache }) => deps::cmd_clean(project_root.as_deref(), cache),
+            Some(DepsAction::Get) => deps::cmd_get(project_root.as_deref(), None),
+            Some(DepsAction::Update { name }) => deps::cmd_get(project_root.as_deref(), Some(name)),
         },
-        Command::Doc(args) => dispatch_doc(args),
-        Command::Eval { file } => pipeline::cmd_run(
-            Some(file),
-            pipeline::Backend::Interpreter,
-            false,
-            Vec::new(),
-        ),
-        Command::Format { files, check } => commands::cmd_format(files, check),
-        Command::Lex { files } => commands::cmd_lex(files),
+        Command::Doc(args) => dispatch_doc(args, project_root.as_deref()),
+        Command::Eval { file } => {
+            reject_project(project_root.as_deref(), "eval");
+            pipeline::cmd_run(
+                None,
+                pipeline::RunOptions {
+                    args: Vec::new(),
+                    backend: pipeline::Backend::Interpreter,
+                    file: Some(file),
+                    release: false,
+                },
+            )
+        }
+        Command::Format { files, check } => {
+            commands::cmd_format(project_root.as_deref(), files, check)
+        }
+        Command::Lex { files } => {
+            reject_project(project_root.as_deref(), "lex");
+            commands::cmd_lex(files)
+        }
         // Alias for the self-hosted `koja.new` toolchain task.
-        Command::New { name } => pipeline::cmd_run(
-            Some("koja.new".to_string()),
-            pipeline::Backend::Interpreter,
-            false,
-            vec![name],
-        ),
-        Command::Parse { files, emit_ast } => commands::cmd_parse(files, emit_ast),
-        Command::Run {
-            file,
-            backend,
-            release,
-            args,
-        } => pipeline::cmd_run(file, backend, release, args),
-        Command::Shell => pipeline::cmd_shell(),
-        Command::Tasks => pipeline::cmd_tasks(),
-        Command::Test { trace } => pipeline::cmd_test(trace, color),
+        Command::New { name } => {
+            reject_project(project_root.as_deref(), "new");
+            pipeline::cmd_run(
+                None,
+                pipeline::RunOptions {
+                    args: vec![name],
+                    backend: pipeline::Backend::Interpreter,
+                    file: Some("koja.new".to_string()),
+                    release: false,
+                },
+            )
+        }
+        Command::Parse { files, emit_ast } => {
+            reject_project(project_root.as_deref(), "parse");
+            commands::cmd_parse(files, emit_ast)
+        }
+        Command::Run(options) => pipeline::cmd_run(project_root.as_deref(), options),
+        Command::Shell => pipeline::cmd_shell(project_root.as_deref()),
+        Command::Tasks => pipeline::cmd_tasks(project_root.as_deref()),
+        Command::Test { trace } => pipeline::cmd_test(project_root.as_deref(), trace, color),
     }
 }
 
@@ -280,7 +278,7 @@ fn main() {
 /// serve` rebuilds (unless `--no-rebuild`) then hands the output dir
 /// to the preview server, and `koja doc search` prints matches to
 /// stdout without touching disk (`-o` is ignored).
-fn dispatch_doc(args: DocArgs) {
+fn dispatch_doc(args: DocArgs, project_root: Option<&Path>) {
     let DocArgs {
         action,
         files,
@@ -288,13 +286,29 @@ fn dispatch_doc(args: DocArgs) {
         project_only,
     } = args;
 
+    let options = commands::DocOptions {
+        files,
+        output,
+        project_only,
+    };
     match action {
-        None => commands::cmd_doc(files, output, project_only),
+        None => commands::cmd_doc(project_root, options),
         Some(DocAction::Search { query }) => {
-            commands::cmd_doc_search(files, project_only, &query);
+            commands::cmd_doc_search(project_root, options, &query);
         }
         Some(DocAction::Serve { port, no_rebuild }) => {
-            commands::cmd_doc_serve(files, output, project_only, port, no_rebuild);
+            commands::cmd_doc_serve(
+                project_root,
+                options,
+                commands::DocServeOptions { no_rebuild, port },
+            );
         }
+    }
+}
+
+fn reject_project(project_root: Option<&Path>, command: &str) {
+    if project_root.is_some() {
+        eprintln!("error: `--project` cannot be used with `koja {command}`");
+        process::exit(2);
     }
 }

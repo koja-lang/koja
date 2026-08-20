@@ -196,8 +196,9 @@ struct, or binary pattern anchors to its element the same way, in match
 and receive heads, destructuring assignments, and `for` loops. The
 container breaks, the arm's `->` and any `when` guard glue to the
 closing delimiter, and nested containers anchor their own comments. The
-one exception is a comment between or-pattern alternatives, which moves
-to the head line because the alternative list has no per-line layout.
+one exception is a comment between or-pattern alternatives. The
+alternative list has no per-line layout, so the comment hoists above the
+arm.
 
 ```koja
 match packet
@@ -206,6 +207,19 @@ match packet
     version, flags
   ] -> decode(version, flags)
   _ -> drop()
+end
+```
+
+**Comments inside wrapped arm heads.** A comment before the final physical
+line of a wrapped `match`, `cond`, or `receive` head hoists above the arm. A
+comment on the final head line stays trailing after `->`. A comment after the
+head leads the arm body.
+
+```koja
+match n
+  # bounded positive
+  x when x > 0 and x < 100 -> # selected
+    x
 end
 ```
 

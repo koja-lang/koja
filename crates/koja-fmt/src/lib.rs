@@ -1403,6 +1403,85 @@ mod tests {
     }
 
     #[test]
+    fn or_pattern_comment_hoists_above_match_arm() {
+        assert_fmt(
+            "
+            fn f(x: Int) -> Int
+              match x
+                1 |
+                # grouped cases
+                2 -> # selected
+                  10
+                _ -> 0
+              end
+            end
+        ",
+            "
+            fn f(x: Int) -> Int
+              match x
+                # grouped cases
+                1 | 2 -> # selected
+                  10
+                _ -> 0
+              end
+            end
+        ",
+        );
+    }
+
+    #[test]
+    fn wrapped_cond_head_comment_hoists_above_arm() {
+        assert_fmt(
+            "
+            fn f(x: Int) -> Int
+              cond
+                x > 0
+                # bounded positive
+                and x < 100 -> # selected
+                  1
+                else -> 0
+              end
+            end
+        ",
+            "
+            fn f(x: Int) -> Int
+              cond
+                # bounded positive
+                x > 0 and x < 100 -> # selected
+                  1
+                else -> 0
+              end
+            end
+        ",
+        );
+    }
+
+    #[test]
+    fn wrapped_receive_guard_comment_hoists_above_arm() {
+        assert_fmt(
+            "
+            fn f -> Int
+              receive
+                n: Int when n > 0
+                # bounded positive
+                and n < 100 -> # selected
+                  n
+              end
+            end
+        ",
+            "
+            fn f -> Int
+              receive
+                # bounded positive
+                n: Int when n > 0 and n < 100 -> # selected
+                  n
+              end
+            end
+        ",
+        );
+    }
+
+    #[test]
     fn arm_body_leading_comment_forces_broken_body() {
         assert_unchanged(
             "

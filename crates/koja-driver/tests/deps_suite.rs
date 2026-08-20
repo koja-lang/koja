@@ -192,6 +192,27 @@ fn head_rev(repo: &Path) -> String {
 }
 
 #[test]
+fn selector_resolves_path_dependencies_from_project_root() {
+    let fx = Fixture::new("selector-path");
+    write_package(&fx.root.join("local"), "local", &[]);
+    fx.write_project(&[("local", "{ path = \"../local\" }".into())]);
+
+    let output = Command::new(koja_bin())
+        .args(["deps", "-S", fx.project().to_str().unwrap()])
+        .current_dir(&fx.root)
+        .env("KOJA_HOME", fx.home())
+        .output()
+        .expect("failed to run selected dependency command");
+
+    assert!(
+        output.status.success(),
+        "koja deps -S failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(String::from_utf8_lossy(&output.stdout).contains("local"));
+}
+
+#[test]
 fn get_pins_annotated_tag_to_peeled_commit_and_check_runs_offline() {
     let fx = Fixture::new("offline");
     let repo = fx.make_repo("greeter", "greeter", &[]);
