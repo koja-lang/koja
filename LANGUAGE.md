@@ -2606,6 +2606,19 @@ end
 | `koja lex`    | Dump tokens                                      |
 | `koja parse`  | Dump AST                                         |
 
+### Project Selection
+
+Project-aware commands use the `koja.toml` in the current working directory by default. Use the global `-S, --project <directory>` option to select another project:
+
+```sh
+koja run -S ../my_app
+koja test --project ../my_app
+```
+
+The selector controls the manifest, sources, dependencies, build directory, default documentation output, and diagnostic paths. It does not change the command or launched program working directory. Relative file operations in the program still use the caller's working directory.
+
+The selector works with project-mode `build`, `check`, `run`, `shell`, `test`, `tasks`, `deps`, `format`, and `doc` commands. Do not combine it with a standalone source file or explicit `format` or `doc` paths.
+
 ### Project Scaffolding
 
 `koja new <name>` creates a project directory with the following structure:

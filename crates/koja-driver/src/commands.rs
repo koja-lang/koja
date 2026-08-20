@@ -29,14 +29,16 @@ fn current_dir_or_exit() -> PathBuf {
     })
 }
 
-/// Loads `koja.toml` from the current directory, returning
-/// `(config, cwd)`.
+/// Loads `koja.toml` from the selected project or current directory.
 ///
 /// On a missing `koja.toml`, prints each line in `missing_message`
 /// to stderr and exits non-zero. On any other error, prints
 /// `error: {e}` and exits.
-pub(crate) fn load_project_or_exit(missing_message: &[&str]) -> (ProjectConfig, PathBuf) {
-    match try_load_project() {
+pub(crate) fn load_project_or_exit(
+    project_root: Option<&Path>,
+    missing_message: &[&str],
+) -> (ProjectConfig, PathBuf) {
+    match try_load_project(project_root) {
         Some(loaded) => loaded,
         None => {
             for line in missing_message {
@@ -47,20 +49,31 @@ pub(crate) fn load_project_or_exit(missing_message: &[&str]) -> (ProjectConfig, 
     }
 }
 
-/// Loads `koja.toml` from the current directory if one exists,
-/// returning `(config, cwd)`. A missing manifest is `None`, while a
-/// broken one prints `error: {e}` and exits. Commands that also work
-/// projectless (the task runner) use this instead of
-/// [`load_project_or_exit`].
-pub(crate) fn try_load_project() -> Option<(ProjectConfig, PathBuf)> {
-    let cwd = current_dir_or_exit();
-    match project::load_project(&cwd) {
-        Ok(Some(config)) => Some((config, cwd)),
+/// Loads `koja.toml` from the selected project or current directory.
+/// A missing implicit project is `None`; an explicit selector was
+/// validated during CLI startup.
+pub(crate) fn try_load_project(project_root: Option<&Path>) -> Option<(ProjectConfig, PathBuf)> {
+    let root = project_root
+        .map(Path::to_path_buf)
+        .unwrap_or_else(current_dir_or_exit);
+    match project::load_project(&root) {
+        Ok(Some(config)) => Some((config, root)),
         Ok(None) => None,
         Err(e) => {
             eprintln!("error: {e}");
             process::exit(1);
         }
+    }
+}
+
+fn reject_project_with_explicit_paths(
+    command: &str,
+    paths: &[String],
+    project_root: Option<&Path>,
+) {
+    if project_root.is_some() && !paths.is_empty() {
+        eprintln!("error: `--project` cannot be used with explicit `koja {command}` paths");
+        process::exit(2);
     }
 }
 
@@ -86,8 +99,13 @@ struct DocInput {
 /// arguments, looks for `koja.toml` in the current directory and
 /// falls back to stdlib-only docs (written to a temp dir) when
 /// there is none.
-pub fn cmd_doc(files: Vec<String>, output: Option<String>, project_only: bool) {
-    if let Some(out_path) = generate_docs(&files, output, project_only) {
+pub fn cmd_doc(
+    files: Vec<String>,
+    project_root: Option<&Path>,
+    output: Option<String>,
+    project_only: bool,
+) {
+    if let Some(out_path) = generate_docs(&files, project_root, output, project_only) {
         println!("docs generated: {}", out_path.display());
     }
 }
@@ -96,8 +114,13 @@ pub fn cmd_doc(files: Vec<String>, output: Option<String>, project_only: bool) {
 /// as plain markdown, with no disk output. An exact name renders
 /// the full doc, partial matches list candidates, and no matches
 /// exits non-zero.
-pub fn cmd_doc_search(files: Vec<String>, project_only: bool, query: &str) {
-    let discovered = discover_doc_inputs(&files, project_only);
+pub fn cmd_doc_search(
+    files: Vec<String>,
+    project_root: Option<&Path>,
+    project_only: bool,
+    query: &str,
+) {
+    let discovered = discover_doc_inputs(&files, project_root, project_only);
     if discovered.inputs.is_empty() {
         eprintln!("no source files to document");
         process::exit(1);
@@ -120,16 +143,26 @@ pub fn cmd_doc_search(files: Vec<String>, project_only: bool, query: &str) {
 /// `file://` URLs. A local HTTP server is the standard workaround.
 pub fn cmd_doc_serve(
     files: Vec<String>,
+    project_root: Option<&Path>,
     output: Option<String>,
     project_only: bool,
     port: Option<u16>,
     no_rebuild: bool,
 ) {
     let out_path = if no_rebuild {
-        let stdlib_fallback = files.is_empty() && try_load_project().is_none();
-        resolve_doc_output(output, stdlib_fallback)
+        reject_project_with_explicit_paths("doc", &files, project_root);
+        let project = files
+            .is_empty()
+            .then(|| try_load_project(project_root))
+            .flatten();
+        let stdlib_fallback = files.is_empty() && project.is_none();
+        resolve_doc_output(
+            output,
+            stdlib_fallback,
+            project.as_ref().map(|(_, root)| root.as_path()),
+        )
     } else {
-        match generate_docs(&files, output, project_only) {
+        match generate_docs(&files, project_root, output, project_only) {
             Some(path) => path,
             None => return,
         }
@@ -147,8 +180,13 @@ pub fn cmd_doc_serve(
 /// "docs generated", while `serve` would skip starting the server).
 /// Fatal errors (output dir creation, file write) `process::exit`
 /// from inside.
-fn generate_docs(files: &[String], output: Option<String>, project_only: bool) -> Option<PathBuf> {
-    let discovered = discover_doc_inputs(files, project_only);
+fn generate_docs(
+    files: &[String],
+    project_root: Option<&Path>,
+    output: Option<String>,
+    project_only: bool,
+) -> Option<PathBuf> {
+    let discovered = discover_doc_inputs(files, project_root, project_only);
     if discovered.inputs.is_empty() {
         println!("no source files to document");
         return None;
@@ -160,7 +198,11 @@ fn generate_docs(files: &[String], output: Option<String>, project_only: bool) -
         return None;
     }
 
-    let out_path = resolve_doc_output(output, discovered.stdlib_fallback);
+    let out_path = resolve_doc_output(
+        output,
+        discovered.stdlib_fallback,
+        discovered.project_root.as_deref(),
+    );
     if let Err(e) = fs::create_dir_all(&out_path) {
         eprintln!("error creating output directory: {e}");
         process::exit(1);
@@ -173,12 +215,18 @@ fn generate_docs(files: &[String], output: Option<String>, project_only: bool) -
 /// Pick the doc output dir. An explicit `-o` always wins, project
 /// mode defaults to `doc`, and the stdlib fallback defaults to a
 /// per-compiler-version temp dir so `koja doc` works from any cwd.
-fn resolve_doc_output(output: Option<String>, stdlib_fallback: bool) -> PathBuf {
+fn resolve_doc_output(
+    output: Option<String>,
+    stdlib_fallback: bool,
+    project_root: Option<&Path>,
+) -> PathBuf {
     if let Some(output) = output {
         return PathBuf::from(output);
     }
     if stdlib_fallback {
         env::temp_dir().join(format!("koja-stdlib-doc-{}", env!("CARGO_PKG_VERSION")))
+    } else if let Some(root) = project_root {
+        root.join("doc")
     } else {
         PathBuf::from("doc")
     }
@@ -191,6 +239,7 @@ fn resolve_doc_output(output: Option<String>, stdlib_fallback: bool) -> PathBuf 
 struct DiscoveredDocInputs {
     inputs: Vec<DocInput>,
     project_package: String,
+    project_root: Option<PathBuf>,
     stdlib_fallback: bool,
 }
 
@@ -199,9 +248,14 @@ struct DiscoveredDocInputs {
 /// every dep's `src`). Otherwise treat each entry as a path or a
 /// directory of `.koja` files. Stdlib + deps are bundled unless
 /// `project_only` is true.
-fn discover_doc_inputs(files: &[String], project_only: bool) -> DiscoveredDocInputs {
+fn discover_doc_inputs(
+    files: &[String],
+    project_root: Option<&Path>,
+    project_only: bool,
+) -> DiscoveredDocInputs {
+    reject_project_with_explicit_paths("doc", files, project_root);
     if files.is_empty() {
-        return discover_project_doc_inputs(project_only);
+        return discover_project_doc_inputs(project_root, project_only);
     }
     discover_explicit_doc_inputs(files, project_only)
 }
@@ -212,8 +266,11 @@ fn discover_doc_inputs(files: &[String], project_only: bool) -> DiscoveredDocInp
 /// is documented on its own (empty project name, so the brand
 /// renders as plain "koja docs"); `--project-only` without a
 /// project is an error.
-fn discover_project_doc_inputs(project_only: bool) -> DiscoveredDocInputs {
-    let Some((config, cwd)) = try_load_project() else {
+fn discover_project_doc_inputs(
+    project_root: Option<&Path>,
+    project_only: bool,
+) -> DiscoveredDocInputs {
+    let Some((config, root)) = try_load_project(project_root) else {
         if project_only {
             eprintln!("error: --project-only requires a koja.toml project");
             process::exit(1);
@@ -222,11 +279,12 @@ fn discover_project_doc_inputs(project_only: bool) -> DiscoveredDocInputs {
         return DiscoveredDocInputs {
             inputs: inputs.collect(),
             project_package: String::new(),
+            project_root: None,
             stdlib_fallback: true,
         };
     };
 
-    let loaded = ProjectLoader::new(&config, &cwd)
+    let loaded = ProjectLoader::new(&config, &root)
         .sources(LoadOptions {
             extensions: &["koja"],
             include_dependencies: !project_only,
@@ -239,6 +297,7 @@ fn discover_project_doc_inputs(project_only: bool) -> DiscoveredDocInputs {
     DiscoveredDocInputs {
         inputs: loaded.into_iter().map(DocInput::from).collect(),
         project_package: config.namespace(),
+        project_root: Some(root),
         stdlib_fallback: false,
     }
 }
@@ -274,6 +333,7 @@ fn discover_explicit_doc_inputs(files: &[String], project_only: bool) -> Discove
     DiscoveredDocInputs {
         inputs,
         project_package,
+        project_root: None,
         stdlib_fallback: false,
     }
 }
@@ -436,8 +496,8 @@ fn read_doc_input(path: &Path) -> Option<String> {
 /// `koja.toml` and formats the project's `src` and `test`
 /// directories. Directory arguments are walked recursively for
 /// `.koja` files.
-pub fn cmd_format(files: Vec<String>, check: bool) {
-    let resolved = resolve_format_paths(&files);
+pub fn cmd_format(files: Vec<String>, project_root: Option<&Path>, check: bool) {
+    let resolved = resolve_format_paths(&files, project_root);
 
     let mut has_diff = false;
     let mut has_parse_errors = false;
@@ -487,9 +547,10 @@ pub fn cmd_format(files: Vec<String>, check: bool) {
 /// Resolve which files `koja format` operates on: with no arguments,
 /// the project's `src` + `test` trees, otherwise the explicit file and
 /// directory arguments. Paths are sorted for deterministic output.
-fn resolve_format_paths(files: &[String]) -> Vec<String> {
+fn resolve_format_paths(files: &[String], project_root: Option<&Path>) -> Vec<String> {
+    reject_project_with_explicit_paths("format", files, project_root);
     if files.is_empty() {
-        return project_format_paths();
+        return project_format_paths(project_root);
     }
     explicit_format_paths(files)
 }
@@ -497,17 +558,20 @@ fn resolve_format_paths(files: &[String]) -> Vec<String> {
 /// Project-mode format targets: every `.koja`/`.kojs` file under the
 /// current `koja.toml`'s `src` and `test` directories (exiting with
 /// usage help when there is no project).
-fn project_format_paths() -> Vec<String> {
-    let (config, cwd) = load_project_or_exit(&[
-        "error: no files specified and no koja.toml found",
-        "Usage: koja format [files...] [--check]",
-        "  or:  create a koja.toml in the current directory",
-    ]);
+fn project_format_paths(project_root: Option<&Path>) -> Vec<String> {
+    let (config, project_root) = load_project_or_exit(
+        project_root,
+        &[
+            "error: no files specified and no koja.toml found",
+            "Usage: koja format [files...] [--check]",
+            "  or:  create a koja.toml in the current directory",
+        ],
+    );
 
     let roots = config.src.iter().chain(config.test.iter());
     let mut paths = Vec::new();
     for root in roots {
-        let dir = cwd.join(root);
+        let dir = project_root.join(root);
         if dir.is_dir() {
             paths.extend(walk_source_files(&dir, &["koja", "kojs"]));
         }

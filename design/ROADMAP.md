@@ -23,6 +23,8 @@ The following facts constrain future planning.
   landed.
 - Git dependencies are reproducible through `koja.lock` and the `koja deps`
   command family.
+- Project-aware commands accept `-S <path>` to select a project without
+  changing the working directory.
 - `koja shell` loads projects and provides completion. Its remaining
   improvements are optional and driven by use.
 - Koja remains pre-1.0. Breaking cleanup is still allowed when it produces a
@@ -93,6 +95,8 @@ The 0.18 release adds optional function arguments and runtime observability.
 
 ### Language and tooling
 
+- **[DONE]** Add a global `-S <path>` selector for project-aware commands and
+  editor integrations.
 - Default values for function parameters, so optional arguments do not
   require a separate options struct at every call site. A defaulted function
   is callable at every arity its defaults allow. `&name/arity` references
@@ -129,9 +133,8 @@ and backpressure. A supervision protocol may then be derived from repeated
 patterns. The existing monitor, parenting, crash, and lifecycle primitives are
 the stable foundation.
 
-The current shell is sufficient for this work. Inline help syntax, an explicit
-`-S` selector, and process inspection remain optional improvements rather than
-release gates.
+The current shell is sufficient for this work. Inline help syntax and process
+inspection remain optional improvements rather than release gates.
 
 ## Path to 1.0
 

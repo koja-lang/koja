@@ -4,7 +4,7 @@
 
 use std::collections::HashMap;
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
 
@@ -250,6 +250,30 @@ pub fn load_project(dir: &Path) -> Result<Option<ProjectConfig>, String> {
     let current = parse_version(env!("CARGO_PKG_VERSION")).expect("crate version is X.Y.Z");
     check_koja_version(&config, current)?;
     Ok(Some(config))
+}
+
+/// Resolve an explicit project directory without changing the process
+/// working directory.
+pub fn resolve_project_root(path: &Path) -> Result<PathBuf, String> {
+    let root = path.canonicalize().map_err(|err| {
+        format!(
+            "cannot resolve project directory `{}`: {err}",
+            path.display()
+        )
+    })?;
+    if !root.is_dir() {
+        return Err(format!(
+            "project path `{}` is not a directory",
+            path.display()
+        ));
+    }
+    if !root.join("koja.toml").is_file() {
+        return Err(format!(
+            "no `koja.toml` found in project directory `{}`",
+            path.display()
+        ));
+    }
+    Ok(root)
 }
 
 /// Validate the `[tasks]` table. Every task name is namespaced under

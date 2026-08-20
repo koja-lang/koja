@@ -76,8 +76,9 @@ pub(crate) fn sync_project(
 }
 
 /// `koja deps get` / `koja deps update [name]`.
-pub(crate) fn cmd_get(update: Option<Option<String>>) {
-    let (config, root) = load_project_or_exit(&["error: `koja deps` requires a koja.toml"]);
+pub(crate) fn cmd_get(project_root: Option<&Path>, update: Option<Option<String>>) {
+    let (config, root) =
+        load_project_or_exit(project_root, &["error: `koja deps` requires a koja.toml"]);
     let spec = match update {
         None => UpdateSpec::None,
         Some(None) => UpdateSpec::All,
@@ -116,8 +117,9 @@ pub(crate) fn cmd_get(update: Option<Option<String>>) {
 
 /// Bare `koja deps`: print each dependency with its pin and local
 /// state. Offline and side-effect free.
-pub(crate) fn cmd_status() {
-    let (config, root) = load_project_or_exit(&["error: `koja deps` requires a koja.toml"]);
+pub(crate) fn cmd_status(project_root: Option<&Path>) {
+    let (config, root) =
+        load_project_or_exit(project_root, &["error: `koja deps` requires a koja.toml"]);
     let lockfile = Lockfile::load(&root).unwrap_or_else(|err| {
         eprintln!("error: {err}");
         process::exit(1);
@@ -167,8 +169,9 @@ pub(crate) fn cmd_status() {
 /// `koja deps clean [--cache]`: remove the materialized `deps/`
 /// tree (read-only, so plain `rm -rf` chokes on it), and optionally
 /// the global mirror cache. Never touches koja.lock.
-pub(crate) fn cmd_clean(cache: bool) {
-    let (_, root) = load_project_or_exit(&["error: `koja deps` requires a koja.toml"]);
+pub(crate) fn cmd_clean(project_root: Option<&Path>, cache: bool) {
+    let (_, root) =
+        load_project_or_exit(project_root, &["error: `koja deps` requires a koja.toml"]);
     let deps_dir = root.join("deps");
     if deps_dir.exists() {
         if let Err(err) = remove_tree(&deps_dir) {

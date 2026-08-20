@@ -76,14 +76,11 @@ literals already get.
 
 ## `koja shell` project mode
 
-`koja shell` auto-loads the project in the working directory (its `src`,
-path dependencies, and the stdlib prelude) so the REPL can call any
-package function. Known limitations:
+`koja shell` loads the current project by default. The global `-S <path>`
+selector loads another project without changing the working directory. The
+REPL loads the project's sources, path dependencies, and stdlib prelude so it
+can call any package function. Known limitations:
 
-- **No explicit project selector.** The shell detects the project from
-  the current directory only; there is no `-S <path>` flag yet to point
-  it elsewhere. The [roadmap](ROADMAP.md#ecosystem-validation) treats
-  this as an optional improvement driven by use.
 - **Whole-program re-check per input.** Each prompt re-runs the entire
   baseline (stdlib + project + history) through the pipeline — the
   existing whole-program model, fine for small projects but linear in
