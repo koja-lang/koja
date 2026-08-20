@@ -116,9 +116,8 @@ focused standard library improvements found while building auth-manager.
   timestamps ([gap](GAPS.md#datetime-has-no-calendar-formatting-or-parsing)).
 - Add `UUID.v4()` for session, API key, and node identifiers
   ([gap](GAPS.md#no-uuid-generation)).
-- Add `IPAddress.to_string()` and `IPAddress.parse(text)` for DNS discovery and
-  dialable addresses
-  ([gap](GAPS.md#ipaddress-has-no-string-rendering)).
+- **[DONE]** Add `IPAddress.to_string()` and `IPAddress.parse(text)` for DNS
+  discovery and dialable addresses.
 - Add bytewise `Binary.compare`, big-endian integer encoding and decoding, and
   `Float.bit_pattern` / `Float.from_bit_pattern`
   ([gap](GAPS.md#binary-has-no-ordering-and-no-endian-helpers)).

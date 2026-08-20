@@ -9,7 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `IPAddress` can parse and render IPv4 and IPv6 text, including compressed IPv6 and embedded IPv4 forms.
 - Project-aware CLI commands accept `-S, --project <directory>` to select a project without changing the caller's working directory.
+
+### Changed
+
+- `IPAddress.v4` accepts `UInt8` octets so out-of-range values cannot construct an address.
 
 ### Fixed
 

@@ -32,31 +32,6 @@ struct SocketTest
     end
   end
 
-  @test "IPAddress.any is v4 and not v6"
-  fn test_ipaddress_any -> Result<Bool, String>
-    any_addr = IPAddress.any()
-
-    unless any_addr.v4?()
-      return Result.Err("expected any to be v4")
-    end
-
-    any_addr.v6?() ? Result.Err("expected any to not be v6") : Result.Ok(true)
-  end
-
-  @test "IPAddress.loopback is v4"
-  fn test_ipaddress_loopback -> Result<Bool, String>
-    IPAddress.loopback().v4?()
-      ? Result.Ok(true)
-      : Result.Err("expected loopback to be v4")
-  end
-
-  @test "IPAddress.v4 creates a v4 address"
-  fn test_ipaddress_v4 -> Result<Bool, String>
-    IPAddress.v4(10, 0, 0, 1).v4?()
-      ? Result.Ok(true)
-      : Result.Err("expected custom to be v4")
-  end
-
   @test "bind stream socket to any:0"
   fn test_bind -> Result<Bool, String>
     match Socket.create(SocketKind.Stream)

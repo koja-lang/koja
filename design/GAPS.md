@@ -399,21 +399,3 @@ implementation.
 **Fix path:** `UUID.v4() -> String` (and a `UUID.v7()` sibling for
 sortable identifiers) in the stdlib, either under `Random` or as a
 small `Global` type.
-
----
-
-## `IPAddress` has no string rendering
-
-Found 2026-08-10 while running DNS peer discovery inside Docker.
-`Net.Socket.resolve` returns `IPAddress` values, but the type offers
-no way to render one as a dialable string: no `to_string`, and
-string interpolation falls back to the derived `Debug` format, so
-`"#{ip}:9993"` produces `IPAddress{bytes: <<192, 168, 228, 2>>}:9993`.
-Nothing can dial that, and the mistake type-checks: the code reads
-fine and fails only at runtime, off the happy path. Every consumer
-of `resolve` re-implements dotted-quad and colon-hex rendering from
-the raw bytes.
-
-**Fix path:** `IPAddress.to_string()` in the stdlib: dotted-quad for
-v4, RFC 5952 for v6. Its inverse (`IPAddress.parse(text)`) is the
-natural sibling.
