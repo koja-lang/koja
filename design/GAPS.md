@@ -100,6 +100,34 @@ can call any package function. Known limitations:
 
 ---
 
+## `koja doc` omits deprecation notices
+
+The compiler preserves each `@deprecated` message, but `koja-doc` extracts
+only `@doc`. Generated HTML, package listings, search results, terminal
+output, and `search-index.json` do not identify deprecated declarations or
+show their migration guidance.
+
+**Fix path:** add structured deprecation metadata to each documented
+declaration. Render it as a warning in HTML, mark deprecated search and
+package entries, print it in `koja doc search`, and include it in
+`search-index.json`.
+
+---
+
+## `koja doc` omits nested types
+
+`koja-doc` reads the parsed AST without typecheck desugaring and visits only
+top-level file items. It does not extract lexical nested types. A qualified
+top-level declaration such as `enum IPAddress.Version` is also documented as
+only `Version`, which loses its owner and can collide with other declarations.
+
+**Fix path:** recursively extract nested structs and enums, prefix lexical
+names with their owner path, and preserve full paths for qualified
+declarations. HTML pages, package listings, terminal search, and the search
+index must all use the full name.
+
+---
+
 ## Inference and ergonomics warts from the pooler build
 
 Found 2026-07-15 while building the `pooler` package (a generic

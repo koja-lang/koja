@@ -15,43 +15,59 @@ enum IPAddress.ParseError
 end
 
 @doc """
-An IP address stored as raw bytes. IPv4 addresses use 4 bytes,
-IPv6 addresses use 16 bytes.
+An IP address stored as a version and raw bytes. IPv4 addresses use
+4 bytes, and IPv6 addresses use 16 bytes.
 """
 struct IPAddress
   bytes: Binary
+  version: IPAddress.Version
+
+  @doc """
+  The version of an IP address.
+  """
+  enum Version
+    V4
+    V6
+  end
 
   @doc """
   Parses a dotted-decimal IPv4 address or an IPv6 address. IPv6 input
   can use `::` compression and an embedded IPv4 suffix.
   """
   fn parse(text: String) -> IPAddress ! IPAddress.ParseError
-    bytes = text.contains?(":")
-      ? try IPAddress.parse_v6(text)
-      : try IPAddress.parse_v4(text, text)
-
-    IPAddress{bytes: bytes}
+    text.contains?(":")
+      ? IPAddress{
+        bytes: try IPAddress.parse_v6(text),
+        version: IPAddress.Version.V6,
+      }
+      : IPAddress{
+        bytes: try IPAddress.parse_v4(text, text),
+        version: IPAddress.Version.V4,
+      }
   end
 
   @doc """
   Constructs an IPv4 address from four octets.
   """
   fn v4(a: UInt8, b: UInt8, c: UInt8, d: UInt8) -> IPAddress
-    IPAddress{bytes: <<a: UInt8, b: UInt8, c: UInt8, d: UInt8>>}
+    IPAddress{
+      bytes: <<a: UInt8, b: UInt8, c: UInt8, d: UInt8>>,
+      version: IPAddress.Version.V4,
+    }
   end
 
   @doc """
   Returns the IPv4 loopback address (127.0.0.1).
   """
   fn loopback -> IPAddress
-    IPAddress{bytes: <<127, 0, 0, 1>>}
+    IPAddress{bytes: <<127, 0, 0, 1>>, version: IPAddress.Version.V4}
   end
 
   @doc """
   Returns the IPv4 wildcard address (0.0.0.0).
   """
   fn any -> IPAddress
-    IPAddress{bytes: <<0, 0, 0, 0>>}
+    IPAddress{bytes: <<0, 0, 0, 0>>, version: IPAddress.Version.V4}
   end
 
   @doc """
@@ -61,25 +77,32 @@ struct IPAddress
   possible through direct struct construction.
   """
   fn to_string(self) -> String
-    cond
-      self.v4?() -> IPAddress.format_v4(self.bytes)
-      self.v6?() -> IPAddress.format_v6(self.bytes)
-      else -> Kernel.panic("invalid IPAddress byte length")
+    match self.version
+      IPAddress.Version.V4 -> IPAddress.format_v4(self.bytes)
+      IPAddress.Version.V6 -> IPAddress.format_v6(self.bytes)
     end
   end
 
   @doc """
   Returns true if this is an IPv4 address (4 bytes).
   """
+  @deprecated """
+  Use `address.version == IPAddress.Version.V4` instead. This function
+  will be removed in 0.19.0.
+  """
   fn v4?(self) -> Bool
-    self.bytes.byte_size() == IPV4_OCTET_COUNT
+    self.version == IPAddress.Version.V4
   end
 
   @doc """
   Returns true if this is an IPv6 address (16 bytes).
   """
+  @deprecated """
+  Use `address.version == IPAddress.Version.V6` instead. This function
+  will be removed in 0.19.0.
+  """
   fn v6?(self) -> Bool
-    self.bytes.byte_size() == IPV6_BYTE_COUNT
+    self.version == IPAddress.Version.V6
   end
 
   priv fn format_hextet(value: Int) -> String

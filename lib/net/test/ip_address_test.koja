@@ -1,29 +1,25 @@
 alias Net.IPAddress
 
 struct IPAddressTest
-  @test "IPAddress.any is v4 and not v6"
+  @test "IPAddress.any is IPv4"
   fn test_any -> Result<Bool, String>
-    any_addr = IPAddress.any()
-
-    unless any_addr.v4?()
-      return Result.Err("expected any to be v4")
-    end
-
-    any_addr.v6?() ? Result.Err("expected any to not be v6") : Result.Ok(true)
+    IPAddress.any().version == IPAddress.Version.V4
+      ? Result.Ok(true)
+      : Result.Err("expected any to be IPv4")
   end
 
-  @test "IPAddress.loopback is v4"
+  @test "IPAddress.loopback is IPv4"
   fn test_loopback -> Result<Bool, String>
-    IPAddress.loopback().v4?()
+    IPAddress.loopback().version == IPAddress.Version.V4
       ? Result.Ok(true)
-      : Result.Err("expected loopback to be v4")
+      : Result.Err("expected loopback to be IPv4")
   end
 
-  @test "IPAddress.v4 creates a v4 address"
+  @test "IPAddress.v4 creates an IPv4 address"
   fn test_v4 -> Result<Bool, String>
-    IPAddress.v4(10, 0, 0, 1).v4?()
+    IPAddress.v4(10, 0, 0, 1).version == IPAddress.Version.V4
       ? Result.Ok(true)
-      : Result.Err("expected custom to be v4")
+      : Result.Err("expected custom to be IPv4")
   end
 
   @test "IPAddress parses and renders IPv4"
@@ -93,6 +89,14 @@ struct IPAddressTest
         Result.Ok(value) -> value
         Result.Err(_) -> fail "failed to parse '#{input}'"
       end
+
+    expected_version = input.contains?(":")
+      ? IPAddress.Version.V6
+      : IPAddress.Version.V4
+
+    unless address.version == expected_version
+      fail "'#{input}' has the wrong IP version"
+    end
 
     actual = address.to_string()
 
