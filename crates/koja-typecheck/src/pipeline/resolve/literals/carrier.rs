@@ -103,11 +103,7 @@ pub(super) fn pick_carrier(
     let Some(protocol_id) = lookup_global_id(resolver, spec.protocol_name) else {
         return LiteralCarrier::Default;
     };
-    if resolver
-        .registry
-        .lookup_conformance(*id, protocol_id)
-        .is_none()
-    {
+    if !resolver.registry.conforms_any(*id, protocol_id) {
         return LiteralCarrier::Default;
     }
     let entry = match resolver.registry.get(*id) {

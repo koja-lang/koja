@@ -9,11 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `impl P for T` now accepts protocols and types from other packages, so a package can implement its own protocol for stdlib types like `String`, and adapter packages can conform one dependency's type to another dependency's protocol.
+- `impl P for T` now accepts a concrete instantiation of a generic type as the target, so a package can implement its protocol for `List<Int>` specifically.
+- Protocol impls on generic targets can require bounds on the type parameters, as in `impl Encodable for List<T: Encodable>`, and the conformance holds only for instantiations that satisfy them.
 - `IPAddress` can parse and render IPv4 and IPv6 text, including compressed IPv6 and embedded IPv4 forms.
 - Project-aware CLI commands accept `-S, --project <directory>` to select a project without changing the caller's working directory.
 
 ### Changed
 
+- **Breaking change** The `Equality` protocol function is now `equals?` instead of `eq`, following the `?` suffix convention for boolean functions.
 - `IPAddress.v4` accepts `UInt8` octets so out-of-range values cannot construct an address.
 - `IPAddress` exposes its `Version` through the `version` field.
 - `koja format` expands all `match`, `cond`, and `receive` arms when one arm requires block layout.
@@ -30,6 +34,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `koja doc` generates pages for nested types and preserves full qualified type names in listings, search results, and links.
 - `koja format` preserves separate comments in wrapped `match`, `cond`, and `receive` arm heads instead of merging their text.
 - Socket DNS and datagram receive results now initialize every `IPAddress` field without reading beyond runtime buffers.
+- `==` on lists compares length and elements instead of always returning `true`, and lists whose elements have no equality (such as closures) are rejected at compile time.
 
 ## [0.17.3] - 2026-08-19
 

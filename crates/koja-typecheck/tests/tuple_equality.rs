@@ -92,7 +92,7 @@ fn equality_bound_rejects_tuple_with_closure_element() {
     let source = format!(
         "
         fn equal<T: Equality>(left: T, right: T) -> Bool
-          left.eq(right)
+          left.equals?(right)
         end
 {CLOSURES}
         equal((f, 1), (g, 1))
@@ -112,7 +112,7 @@ fn equality_bound_rejects_nested_tuple_with_union_element() {
     assert_script_fails_with(
         "
         fn equal<T: Equality>(left: T, right: T) -> Bool
-          left.eq(right)
+          left.equals?(right)
         end
 
         struct Cat
@@ -141,7 +141,7 @@ fn comparable_elements_still_compile() {
         end
 
         fn equal<T: Equality>(left: T, right: T) -> Bool
-          left.eq(right)
+          left.equals?(right)
         end
 
         ((1, \"a\") == (1, \"a\")).print()

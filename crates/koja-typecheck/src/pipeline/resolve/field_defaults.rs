@@ -195,6 +195,7 @@ fn resolve_in_declaring_scope(
     diagnostics: &mut Vec<Diagnostic>,
 ) {
     let mut env = ResolverEnv {
+        bound_overlay: None,
         file_aliases: aliases,
         package,
         registry,

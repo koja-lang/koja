@@ -286,7 +286,7 @@ intrinsic_methods! {
     }
 
     /// Methods on `String` flagged `@intrinsic` in
-    /// [`crate::stdlib::string`]. Excludes `eq` / `hash`, which route
+    /// [`crate::stdlib::string`]. Excludes `equals?` / `hash`, which route
     /// through [`EqualityImpl::String`] / [`HashImpl::String`] alongside
     /// the other primitive impls.
     StringMethod {
@@ -341,7 +341,7 @@ pub enum DebugImpl {
     Int(IntType),
 }
 
-/// Receiver shape for `Equality.eq` impls. One variant per emitter
+/// Receiver shape for `Equality.equals?` impls. One variant per emitter
 /// shape: `icmp` for `Bool` + integers, `fcmp` for floats, and a
 /// length-aware runtime helper for `String` / `Binary` (both share
 /// the `[rc][bit_length][bytes]` payload layout). Numeric widths are
@@ -412,7 +412,7 @@ impl IRIntrinsicId {
     }
 
     /// Dispatch on the receiver's namespace first, then fall through
-    /// to the cross-receiver families (`eq` / `format` / `hash` /
+    /// to the cross-receiver families (`equals?` / `format` / `hash` /
     /// `parse` / bitwise) so receivers like `Int` and `String` can
     /// serve both.
     fn from_pair(receiver: &str, method: &str) -> Option<Self> {
@@ -445,7 +445,7 @@ impl IRIntrinsicId {
             return namespaced;
         }
         match method {
-            "eq" => EqualityImpl::from_receiver(receiver).map(Self::Equality),
+            "equals?" => EqualityImpl::from_receiver(receiver).map(Self::Equality),
             "format" => DebugImpl::from_receiver(receiver).map(Self::Debug),
             "hash" => HashImpl::from_receiver(receiver).map(Self::Hash),
             "parse" => ParseTarget::from_source(receiver).map(Self::Parse),
@@ -612,7 +612,7 @@ impl fmt::Display for IRIntrinsicId {
             Self::CString(m) => write!(f, "CString.{}", m.segment()),
             Self::Consuming(m) => write!(f, "{}.$consume$", m.path()),
             Self::Debug(impl_) => write!(f, "{}.format", impl_.segment()),
-            Self::Equality(impl_) => write!(f, "{}.eq", impl_.segment()),
+            Self::Equality(impl_) => write!(f, "{}.equals?", impl_.segment()),
             Self::Hash(impl_) => write!(f, "{}.hash", impl_.segment()),
             Self::Kernel(m) => write!(f, "Kernel.{}", m.segment()),
             Self::List(m) => write!(f, "List.{}", m.segment()),
@@ -835,9 +835,9 @@ mod tests {
         ] {
             let ty = IntType::from_source(ty_str).unwrap();
             assert_round_trip(
-                &[ty_str, "eq"],
+                &[ty_str, "equals?"],
                 IRIntrinsicId::Equality(EqualityImpl::Int(ty)),
-                &format!("{ty_str}.eq"),
+                &format!("{ty_str}.equals?"),
             );
             assert_round_trip(
                 &[ty_str, "hash"],
@@ -848,15 +848,15 @@ mod tests {
         for ty_str in ["Float", "Float32"] {
             let ty = FloatType::from_source(ty_str).unwrap();
             assert_round_trip(
-                &[ty_str, "eq"],
+                &[ty_str, "equals?"],
                 IRIntrinsicId::Equality(EqualityImpl::Float(ty)),
-                &format!("{ty_str}.eq"),
+                &format!("{ty_str}.equals?"),
             );
         }
         assert_round_trip(
-            &["Bool", "eq"],
+            &["Bool", "equals?"],
             IRIntrinsicId::Equality(EqualityImpl::Bool),
-            "Bool.eq",
+            "Bool.equals?",
         );
         assert_round_trip(
             &["Bool", "hash"],
@@ -864,9 +864,9 @@ mod tests {
             "Bool.hash",
         );
         assert_round_trip(
-            &["String", "eq"],
+            &["String", "equals?"],
             IRIntrinsicId::Equality(EqualityImpl::String),
-            "String.eq",
+            "String.equals?",
         );
         assert_round_trip(
             &["String", "hash"],
@@ -874,9 +874,9 @@ mod tests {
             "String.hash",
         );
         assert_round_trip(
-            &["Binary", "eq"],
+            &["Binary", "equals?"],
             IRIntrinsicId::Equality(EqualityImpl::Binary),
-            "Binary.eq",
+            "Binary.equals?",
         );
         assert_round_trip(
             &["Binary", "hash"],

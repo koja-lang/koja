@@ -30,15 +30,17 @@ use koja_ast::span::Span;
 use super::coercion::{Compatible, check_compatible, coercion_target_mut};
 use super::ctx::Resolver;
 use super::expr::resolve_expr;
-use super::types::{display_resolution, is_primitive, types_equivalent};
+use super::types::{
+    display_resolution, is_primitive, peel_alias, type_supports_equality, types_equivalent,
+};
 use crate::registry::{GlobalKind, GlobalRegistry};
 
-const EQ_METHOD: &str = "eq";
+const EQ_METHOD: &str = "equals?";
 
 /// Resolve `lhs == rhs` / `lhs != rhs`. Primitive operands (Bool,
 /// Int/Float widths, String) stay on the [`binary_type`] fast path.
 /// IR lowering keeps their equality operations primitive.
-/// User struct / enum operands rewrite to `lhs.eq(rhs)` (wrapped in
+/// User struct / enum operands rewrite to `lhs.equals?(rhs)` (wrapped in
 /// `not …` for `!=`) and re-resolve through the normal method-call
 /// path. `derive_equality` guarantees an `Equality` impl is present
 /// for every user type by the time resolve runs.
@@ -58,6 +60,11 @@ pub(super) fn resolve_equality_op_expr(
     let registry = resolver.registry;
     if eligible_for_primitive_equality(left, right, registry) {
         return binary_type(op, left, right, span, registry, diagnostics);
+    }
+    let left_unsupported = diagnose_equality_unsupported(left, resolver, diagnostics);
+    let right_unsupported = diagnose_equality_unsupported(right, resolver, diagnostics);
+    if left_unsupported || right_unsupported {
+        return ResolvedType::unresolved();
     }
 
     let left_taken = std::mem::replace(left.as_mut(), placeholder_expr(span));
@@ -82,6 +89,39 @@ pub(super) fn resolve_equality_op_expr(
     };
     resolve_expr(expr, resolver, diagnostics);
     expr.resolution.clone()
+}
+
+/// `==` on a nominal operand requires its full instantiation to
+/// satisfy `Equality`, not just an `equals?` method to exist. Catches
+/// conditional conformances (`List<fn () -> Int>` carries `List`'s
+/// `equals?` but no `Equality` fact), which the method-call rewrite
+/// alone would accept and monomorphization would then choke on.
+/// Non-nominal operands keep their existing rewrite-path
+/// diagnostics.
+fn diagnose_equality_unsupported(
+    operand: &Expr,
+    resolver: &Resolver<'_>,
+    diagnostics: &mut Vec<Diagnostic>,
+) -> bool {
+    let structural = peel_alias(&operand.resolution, resolver.registry);
+    let ResolvedType::Named {
+        resolution: Resolution::Global(_),
+        ..
+    } = &structural
+    else {
+        return false;
+    };
+    if type_supports_equality(&structural, resolver.bound_context()) {
+        return false;
+    }
+    diagnostics.push(Diagnostic::error(
+        format!(
+            "`{}` does not implement `Equality`, so `==` / `!=` cannot compare it",
+            display_resolution(&operand.resolution, resolver.registry),
+        ),
+        operand.span,
+    ));
+    true
 }
 
 /// True when both operands are primitive-equality-eligible. Keeps

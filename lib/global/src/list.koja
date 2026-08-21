@@ -187,6 +187,30 @@ extend List<T>
   fn slice(self, start: Int, count: Int) -> List<T>
 end
 
+impl Equality for List<T: Equality>
+  @doc """
+  Compares element by element. Two lists are equal when they have
+  the same length and the elements at each index are equal.
+  """
+  fn equals?(self, other: List<T>) -> Bool
+    unless self.length() == other.length()
+      return false
+    end
+
+    i = 0
+
+    while i < self.length()
+      unless self.get(i) == other.get(i)
+        return false
+      end
+
+      i = i + 1
+    end
+
+    true
+  end
+end
+
 @doc """
 A protocol for types that can be constructed from a list literal `[a, b, c]`.
 The compiler builds a `List<T>` from the literal elements and passes it to

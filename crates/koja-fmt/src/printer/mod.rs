@@ -586,13 +586,15 @@ impl Printer {
         concat(parts)
     }
 
-    /// Formats an `impl Protocol for Type` block.
+    /// Formats an `impl Protocol for Type` block. Conditional
+    /// bounds print inline on the matching target arg
+    /// (`impl Equality for List<T: Equality>`).
     fn impl_to_doc(&mut self, block: &ImplBlock) -> Doc {
         let mut parts = vec![
             text("impl "),
             type_expr_to_doc(&block.trait_expr),
             text(" for "),
-            type_expr_to_doc(&block.target),
+            impl_target_to_doc(&block.target, &block.target_bounds),
         ];
         self.push_header_trailing(&mut parts, block.span);
         parts.push(self.impl_member_body_to_doc(&block.members, block.span));

@@ -11,7 +11,7 @@ use koja_ast::ast::Diagnostic;
 use koja_ast::identifier::{AnonymousKind, GlobalRegistryId, Identifier, Resolution, ResolvedType};
 use koja_ast::span::Span;
 
-use super::ctx::Callee;
+use super::ctx::{BoundContext, Callee};
 use super::ops::is_primitive_equality_eligible;
 use crate::pipeline::aliases::rewrite_through_aliases;
 use crate::pipeline::lift_signatures::ResolutionScope;
@@ -353,9 +353,10 @@ pub(super) fn verify_bounds(
     callee: Callee<'_>,
     subst: &Substitution,
     span: Span,
-    registry: &GlobalRegistry,
+    ctx: BoundContext<'_>,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
+    let registry = ctx.registry;
     let Some(bounds) = registry.type_param_bounds(callee.id) else {
         return;
     };
@@ -373,7 +374,7 @@ pub(super) fn verify_bounds(
             continue;
         }
         for &protocol_id in param_bounds {
-            let Some(satisfied) = protocol_bound_satisfied(inferred, protocol_id, registry) else {
+            let Some(satisfied) = protocol_bound_satisfied(inferred, protocol_id, ctx) else {
                 continue;
             };
             if satisfied {
@@ -401,87 +402,54 @@ pub(super) fn verify_bounds(
     }
 }
 
-/// Return a concrete bound decision for supported type heads. Tuples have
-/// structural `Debug` and `Equality`. Other anonymous shapes remain deferred.
+/// Return a concrete bound decision for supported type heads,
+/// delegating to [`GlobalRegistry::bound_satisfied`]. Named types
+/// discharge against the full instantiation (a concrete
+/// `impl Render for Bag<Int>` satisfies `T: Render` for `Bag<Int>`
+/// but not `Bag<String>`, and a conditional impl checks its own
+/// bounds recursively). Tuples have structural `Debug` and
+/// `Equality`. Bare type-param heads and other anonymous shapes
+/// remain deferred, since the bound is enforced where the outer
+/// caller resolves.
 fn protocol_bound_satisfied(
     inferred: &ResolvedType,
     protocol_id: GlobalRegistryId,
-    registry: &GlobalRegistry,
+    ctx: BoundContext<'_>,
 ) -> Option<bool> {
-    match peel_alias(inferred, registry) {
+    let peeled = peel_alias(inferred, ctx.registry);
+    match &peeled {
         ResolvedType::Named {
-            resolution: Resolution::Global(target_id),
+            resolution: Resolution::Global(_),
             ..
-        } => Some(
-            registry
-                .lookup_conformance(target_id, protocol_id)
-                .is_some(),
-        ),
-        ResolvedType::Anonymous(AnonymousKind::Tuple { elements }) => {
-            Some(tuple_implements_protocol(&elements, protocol_id, registry))
         }
+        | ResolvedType::Anonymous(AnonymousKind::Tuple { .. }) => Some(
+            ctx.registry
+                .bound_satisfied(&peeled, protocol_id, ctx.overlay),
+        ),
         _ => None,
     }
 }
 
-/// Tuples have structural `Debug` unconditionally (opaque elements
-/// render as `"..."`), but structural `Equality` only when every
-/// element supports it.
-fn tuple_implements_protocol(
-    elements: &[ResolvedType],
-    protocol_id: GlobalRegistryId,
-    registry: &GlobalRegistry,
-) -> bool {
-    let Some(entry) = registry.get(protocol_id) else {
-        return false;
-    };
-    if entry.identifier.package() != "Global" || entry.identifier.path().len() != 1 {
-        return false;
-    }
-    match entry.identifier.last() {
-        "Debug" => true,
-        "Equality" => elements
-            .iter()
-            .all(|element| supports_tuple_equality(element, registry)),
-        _ => false,
-    }
-}
-
-/// True when `ty` has usable equality semantics as a tuple element:
-/// a primitive, a nominal type with an `eq` function, a type
-/// parameter (universal `Equality` bound), or a tuple of such
-/// elements. Closures and unions have no defined equality.
-pub(super) fn supports_tuple_equality(ty: &ResolvedType, registry: &GlobalRegistry) -> bool {
-    let structural = peel_alias(ty, registry);
-    match &structural {
-        ResolvedType::Anonymous(AnonymousKind::Function { .. }) | ResolvedType::Union(_) => false,
-        ResolvedType::Anonymous(AnonymousKind::Tuple { elements }) => elements
-            .iter()
-            .all(|element| supports_tuple_equality(element, registry)),
-        ResolvedType::Named {
-            resolution: Resolution::Global(id),
-            ..
-        } => named_type_has_eq(&structural, *id, registry),
-        // Type parameters ride the universal `Equality` bound, and
-        // unresolved holes were diagnosed upstream.
-        _ => true,
-    }
-}
-
-/// The nominal type declares (or derives) an `eq` function.
-pub(super) fn named_type_has_eq(
-    ty: &ResolvedType,
-    id: GlobalRegistryId,
-    registry: &GlobalRegistry,
-) -> bool {
-    if is_primitive_equality_eligible(ty, registry) {
+/// Whether `ty` can discharge `Equality`, instantiation-aware.
+/// Primitives fast-path, everything else consults the conformance
+/// records, so a conditional `impl Equality for List<T: Equality>`
+/// makes `List<fn () -> Int>` fail here even though the `equals?`
+/// method exists on `List`.
+pub(super) fn type_supports_equality(ty: &ResolvedType, ctx: BoundContext<'_>) -> bool {
+    let structural = peel_alias(ty, ctx.registry);
+    if is_primitive_equality_eligible(&structural, ctx.registry) {
         return true;
     }
-    let Some(entry) = registry.get(id) else {
+    let Some(equality_id) = equality_protocol_id(ctx.registry) else {
         return false;
     };
-    let mut eq_path = entry.identifier.path().to_vec();
-    eq_path.push("eq".to_string());
-    let eq_identifier = Identifier::new(entry.identifier.package(), eq_path);
-    registry.lookup(&eq_identifier).is_some()
+    ctx.registry
+        .bound_satisfied(&structural, equality_id, ctx.overlay)
+}
+
+/// The `Global.Equality` protocol's registry id, absent only
+/// before the stdlib has collected.
+fn equality_protocol_id(registry: &GlobalRegistry) -> Option<GlobalRegistryId> {
+    let identifier = Identifier::new("Global", vec!["Equality".to_string()]);
+    registry.lookup(&identifier).map(|(id, _)| id)
 }

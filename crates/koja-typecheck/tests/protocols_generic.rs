@@ -124,17 +124,20 @@ fn impl_records_protocol_args_on_target_conformances() {
     let checked = typecheck(&dedent(source));
     let user_id = registry_id(&checked, PACKAGE, &["User"]);
     let match_id = registry_id(&checked, PACKAGE, &["Match"]);
-    let args = checked
+    let conformance = checked
         .registry
-        .lookup_conformance(user_id, match_id)
+        .lookup_conformance(user_id, match_id, &[])
         .expect("User conforms to Match");
-    assert_eq!(args.len(), 1);
+    assert_eq!(conformance.protocol_args.len(), 1);
     let ResolvedType::Named {
         resolution: Resolution::Global(string_id),
         ..
-    } = args[0]
+    } = conformance.protocol_args[0]
     else {
-        panic!("expected protocol-arg `String`, got {:?}", args[0]);
+        panic!(
+            "expected protocol-arg `String`, got {:?}",
+            conformance.protocol_args[0],
+        );
     };
     let (expected_string_id, _) = checked
         .registry

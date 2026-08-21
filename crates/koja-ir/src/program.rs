@@ -216,13 +216,16 @@ fn stage_process_entry(
         .lookup(&Identifier::new("Global", vec!["Process".to_string()]))
         .map(|(id, _)| id)
         .expect("IR lower: `Global.Process` protocol missing from registry");
+    // The entry state is non-generic (the only shape `koja.toml` can
+    // name), so its `Process` record covers the empty instantiation.
     let protocol_args = checked
         .registry
-        .lookup_conformance(state_id, process_proto_id)
+        .lookup_conformance(state_id, process_proto_id, &[])
         .ok_or_else(|| LowerError::EntryPointNotFound {
             identifier: state.clone(),
         })?
-        .to_vec();
+        .protocol_args
+        .clone();
     let [config_resolved, _msg, _reply] = protocol_args.as_slice() else {
         panic!(
             "IR lower: `Process` impl for `{}` has {} type arg(s), expected 3",

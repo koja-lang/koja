@@ -172,7 +172,7 @@ fn tuple_call_site_satisfies_structural_protocol_bounds() {
         end
 
         fn equal<T: Equality>(left: T, right: T) -> Bool
-          left.eq(right)
+          left.equals?(right)
         end
 
         render((1, \"one\"))

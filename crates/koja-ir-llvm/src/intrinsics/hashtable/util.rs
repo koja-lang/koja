@@ -44,7 +44,7 @@ pub(super) struct TableSnapshot<'ctx> {
 }
 
 /// K-side intrinsics resolved once per `Map` / `Set` method
-/// emission: the monomorphized `hash` / `eq` functions plus the
+/// emission: the monomorphized `hash` / `equals?` functions plus the
 /// LLVM basic type for `K`. Probe paths read all three, rehash
 /// only needs `hash_fn` + `key_basic_ty` because moving an
 /// already-bucketed key into a larger buffer doesn't compare
@@ -495,7 +495,7 @@ pub(super) fn ret_basic<'ctx>(
 
 /// Resolve the Hash + Equality intrinsics for `key_ty` via the
 /// declared-function index. The lift pass stamps every primitive
-/// receiver's `hash` / `eq` as a `Global.<Type>.hash`-style
+/// receiver's `hash` / `equals?` as a `Global.<Type>.hash`-style
 /// `IRSymbol`, and per-struct impls follow the same shape with
 /// the struct's already-mangled symbol as the receiver root, so
 /// the lookup is a single index hit per side. Misses surface as
@@ -515,7 +515,7 @@ pub(super) fn resolve_hash_eq<'ctx>(
         ))
     })?;
     let hash_symbol = mangled_method_name(&receiver, &[], "hash", &[]);
-    let eq_symbol = mangled_method_name(&receiver, &[], "eq", &[]);
+    let eq_symbol = mangled_method_name(&receiver, &[], "equals?", &[]);
     let hash_fn = ctx.declared_function(&hash_symbol).ok_or_else(|| {
         LlvmError::Codegen(format!(
             "type `{key_ty:?}` does not implement Hash (no `{}` function) for `{}`",

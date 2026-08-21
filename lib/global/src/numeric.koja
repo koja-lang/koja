@@ -85,7 +85,7 @@ impl Equality for Int
   Returns `true` if both 64-bit integers are equal.
   """
   @intrinsic
-  fn eq(self, other: Int) -> Bool
+  fn equals?(self, other: Int) -> Bool
 end
 
 impl Equality for Float
@@ -93,7 +93,7 @@ impl Equality for Float
   IEEE 754 equality for 64-bit floats. `+0.0 == -0.0` is `true`.
   """
   @intrinsic
-  fn eq(self, other: Float) -> Bool
+  fn equals?(self, other: Float) -> Bool
 end
 
 impl Equality for Float32
@@ -101,7 +101,7 @@ impl Equality for Float32
   IEEE 754 equality for 32-bit floats. `+0.0 == -0.0` is `true`.
   """
   @intrinsic
-  fn eq(self, other: Float32) -> Bool
+  fn equals?(self, other: Float32) -> Bool
 end
 
 impl Equality for Int8
@@ -109,7 +109,7 @@ impl Equality for Int8
   Returns `true` if both 8-bit integers are equal.
   """
   @intrinsic
-  fn eq(self, other: Int8) -> Bool
+  fn equals?(self, other: Int8) -> Bool
 end
 
 impl Equality for Int16
@@ -117,7 +117,7 @@ impl Equality for Int16
   Returns `true` if both 16-bit integers are equal.
   """
   @intrinsic
-  fn eq(self, other: Int16) -> Bool
+  fn equals?(self, other: Int16) -> Bool
 end
 
 impl Equality for Int32
@@ -125,7 +125,7 @@ impl Equality for Int32
   Returns `true` if both 32-bit integers are equal.
   """
   @intrinsic
-  fn eq(self, other: Int32) -> Bool
+  fn equals?(self, other: Int32) -> Bool
 end
 
 impl Equality for UInt8
@@ -133,7 +133,7 @@ impl Equality for UInt8
   Returns `true` if both 8-bit unsigned integers are equal.
   """
   @intrinsic
-  fn eq(self, other: UInt8) -> Bool
+  fn equals?(self, other: UInt8) -> Bool
 end
 
 impl Equality for UInt16
@@ -141,7 +141,7 @@ impl Equality for UInt16
   Returns `true` if both 16-bit unsigned integers are equal.
   """
   @intrinsic
-  fn eq(self, other: UInt16) -> Bool
+  fn equals?(self, other: UInt16) -> Bool
 end
 
 impl Equality for UInt32
@@ -149,7 +149,7 @@ impl Equality for UInt32
   Returns `true` if both 32-bit unsigned integers are equal.
   """
   @intrinsic
-  fn eq(self, other: UInt32) -> Bool
+  fn equals?(self, other: UInt32) -> Bool
 end
 
 impl Equality for UInt64
@@ -157,7 +157,7 @@ impl Equality for UInt64
   Returns `true` if both 64-bit unsigned integers are equal.
   """
   @intrinsic
-  fn eq(self, other: UInt64) -> Bool
+  fn equals?(self, other: UInt64) -> Bool
 end
 
 impl Hash for Int

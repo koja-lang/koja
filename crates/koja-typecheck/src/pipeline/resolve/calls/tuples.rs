@@ -1,10 +1,10 @@
 //! `recv.m(args)` against an anonymous-tuple receiver. Tuples are
 //! structural (no registry entry, no impl blocks), so only the
 //! universal protocol functions resolve: `format` / `print` /
-//! `inspect` from `Debug` and `eq` from `Equality`. IR lowering
+//! `inspect` from `Debug` and `equals?` from `Equality`. IR lowering
 //! expands each of these inline per tuple shape, mirroring what
 //! `derive_debug` / `derive_equality` synthesize for nominal types.
-//! `eq` additionally requires every element (recursively) to carry
+//! `equals?` additionally requires every element (recursively) to carry
 //! valid equality semantics, while `Debug` renders opaque elements
 //! as `"..."` instead.
 
@@ -14,7 +14,9 @@ use koja_ast::span::Span;
 
 use super::super::ctx::Resolver;
 use super::super::expr::resolve_expr_with_expected;
-use super::super::types::{display_resolution, named_type_has_eq, peel_alias, types_equivalent};
+use super::super::types::{
+    display_resolution, peel_alias, type_supports_equality, types_equivalent,
+};
 use super::resolve_args;
 
 pub(super) fn resolve_tuple_method_call(
@@ -26,7 +28,7 @@ pub(super) fn resolve_tuple_method_call(
     diagnostics: &mut Vec<Diagnostic>,
 ) -> ResolvedType {
     match method {
-        "eq" => resolve_tuple_eq(receiver, args, call_span, resolver, diagnostics),
+        "equals?" => resolve_tuple_eq(receiver, args, call_span, resolver, diagnostics),
         "format" => zero_arg_return(
             "format",
             resolver.registry.primitive("String"),
@@ -56,7 +58,7 @@ pub(super) fn resolve_tuple_method_call(
             diagnostics.push(Diagnostic::error(
                 format!(
                     "no function `{other}` on tuple type `{}`. Tuples support only the \
-                     universal protocol functions `format`, `print`, `inspect`, and `eq`",
+                     universal protocol functions `format`, `print`, `inspect`, and `equals?`",
                     display_resolution(&receiver.resolution, resolver.registry),
                 ),
                 call_span,
@@ -66,7 +68,7 @@ pub(super) fn resolve_tuple_method_call(
     }
 }
 
-/// `lhs.eq(rhs)`: one argument, structurally the same tuple shape as
+/// `lhs.equals?(rhs)`: one argument, structurally the same tuple shape as
 /// the receiver. Elements compare through their own `Equality`
 /// conformance. Every element must have valid equality semantics, so
 /// closure and union elements are rejected rather than skipped.
@@ -81,7 +83,10 @@ fn resolve_tuple_eq(
     let [arg] = args else {
         resolve_args(args, None, resolver, diagnostics);
         diagnostics.push(Diagnostic::error(
-            format!("tuple `eq` takes exactly 1 argument, got {}", args.len()),
+            format!(
+                "tuple `equals?` takes exactly 1 argument, got {}",
+                args.len()
+            ),
             call_span,
         ));
         return bool_ty;
@@ -113,7 +118,7 @@ fn resolve_tuple_eq(
 }
 
 /// Every element must have valid equality semantics, or IR lowering
-/// would have no `eq` to call for it. Closures and unions have no
+/// would have no `equals?` to call for it. Closures and unions have no
 /// defined equality, so tuples containing them (at any nesting
 /// depth) reject instead of silently skipping the element.
 /// Type-param elements ride the universal-`Equality` bound.
@@ -149,9 +154,9 @@ fn check_elements_support_equality(
                 );
             }
             ResolvedType::Named {
-                resolution: Resolution::Global(id),
+                resolution: Resolution::Global(_),
                 ..
-            } if !named_type_has_eq(&structural_element, *id, resolver.registry) => {
+            } if !type_supports_equality(&structural_element, resolver.bound_context()) => {
                 emit_no_equality(
                     element,
                     format!(

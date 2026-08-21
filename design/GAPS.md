@@ -168,64 +168,74 @@ Found 2026-08-08 while auditing the `builtin` migration.
 explicit stdlib impls (the scalars, `String`, container and `CPtr`
 `Debug`) never hit the synthesis, but the holes are live:
 
-- `List`, `Map`, `Set`, and `CPtr` have no explicit `Equality` impl,
-  so the derived `eq` compares zero fields and returns `true` for
-  every pair: `[1, 2] == [3]` evaluates to `true` today. This
-  pre-dates the `builtin` keyword, since the types were zero-field
-  structs before.
+- `Map`, `Set`, and `CPtr` have no explicit `Equality` impl, so the
+  derived `equals?` compares zero fields and returns `true` for
+  every pair. This pre-dates the `builtin` keyword, since the types
+  were zero-field structs before. `List` closed this on 2026-08-21
+  with a conditional `impl Equality for List<T: Equality>` doing
+  the element-wise walk (`[1, 2] == [3]` is now `false`, and lists
+  of closures fail `==` at compile time).
 - `Int64`, `Float64`, `Never`, and `Unit` lean on synthesized derives
   only for conformance. At runtime the IR's `Int64`-onto-`Int` method
   collapse routes to the real intrinsic impls.
 
 **Fix path:** delete the builtin arms from both derive passes and add
-explicit stdlib impls. Collection `eq` needs an element-wise walk and
-a `T: Equality` requirement on the impl target, which the language
-cannot spell yet. The conformance-only holes need explicit impls or
-a rule that a builtin satisfies bounds by shape.
+explicit stdlib impls. The language can spell the conditional impl
+now (see the next entry). `Map` and `Set` `equals?` wait on entry / element
+iteration intrinsics, the same blocker as their `Debug` rendering.
+The conformance-only holes need explicit impls or a rule that a
+builtin satisfies bounds by shape.
 
 ---
 
-## Protocol conformances stop at the package boundary
+## Protocol conformance residuals
 
 Found 2026-08-09 while designing an `Encodable` protocol for the
-`messagepack` package. Two restrictions in `register_impl`
-(`koja-typecheck/src/pipeline/collect.rs`) block the serde pattern,
-where a codec package defines a protocol, implements it for the
-stdlib vocabulary types, and applications implement it for their own
-types:
+`messagepack` package. The package boundary fell on 2026-08-21:
+`impl P for T` accepts any protocol and any type, with no orphan
+rule. A codec package can implement its protocol for `String` and
+`Int`, and an adapter package can conform one dependency's type to
+another dependency's protocol (the Elixir
+`Jason.Encoder`-glue-package precedent, which a Rust-style
+protocol-or-target-local rule would forbid). Coherence is
+whole-program collision detection instead of a source restriction:
+the conformance table rejects duplicate `(protocol, type)` impls,
+and cross-package impl methods register under the target's
+namespace like `extend` does, so bare dot-call works and two
+packages adding one same-named method to a foreign type collide at
+registration. The bound-only resolution policy sketched earlier
+would have needed a new identifier shape plus mono routing, so it
+lost to the `extend` precedent. Known residual: when two
+dependencies both ship the same impl (say a protocol's package
+catches up to an adapter package), the app cannot compile the pair
+until the adapter updates. An app-level "prefer this impl" override
+can close that hole later without changing today's semantics.
 
-- `impl P for T` requires `T` to live in the impl's package. A local
-  protocol cannot be implemented for `String`, `Int`, or any other
-  foreign type. The inverse direction (foreign protocol, local type)
-  already works and carries every `Process` conformance.
-- Generic impl targets are rejected outright, even with concrete
-  arguments (`impl Encodable for List<Value>`).
+Instantiation keying landed the same day: conformance facts carry a
+`Parameterized`/`Concrete` scope, so `impl Encodable for
+List<Value>` conforms only `List<Value>`, bound discharge matches
+the full instantiation, and duplicate detection is per
+instantiation. Known residual: two concrete impls of one protocol
+for different instantiations of one type still collide on method
+names in the flat `[Type, method]` namespace, so one concrete impl
+per `(type, protocol)` is the practical limit until methods key by
+instantiation too.
 
-`extend` accepts cross-package targets but grants methods, not
-conformance facts, so bounds like `T: Encodable` never see them.
-Without the stdlib impls the protocol is useless, so every
-codec-shaped package (`MessagePack.Encodable`, a future
-`JSON.Encodable`, an ORM's `Row`) is blocked on the same wall. The
-collection-`eq` hole in the builtin-derives entry above waits on the
-same missing spelling.
+Conditional conformance landed 2026-08-21: `impl Encodable for
+List<T: Encodable>` attaches per-param bounds to the
+`Parameterized` scope, typecheck discharges them per instantiation
+and recursively (`List<List<Int>>` follows from `Int`), and the
+impl body dispatches through its own condition. Parameterized
+targets now also work outside the target's own package. The stdlib
+spells `impl Equality for List<T: Equality>` with an element-wise
+`equals?`, closing the list equality hole in the builtin-derives
+entry above.
 
-**Fix path,** in three steps of increasing size:
-
-1. Relax the orphan rule to Rust's: an impl is legal when the
-   protocol or the target is local. Coherence survives, since only
-   two packages can ever write a given `(protocol, type)` impl, and
-   the whole-program conformance table detects that collision at
-   typecheck time.
-2. Accept concrete generic impl targets, keying conformance facts by
-   instantiation.
-3. Conditional conformance (`impl Encodable for List<T>` requiring
-   `T: Encodable`), discharged per instantiation during
-   monomorphization like existing function bounds.
-
-Step 1 needs a policy for dot-call ambiguity when two packages add
-same-named protocol methods to one foreign type. Resolving through
-the bound only (no bare dot-call on foreign conformances) is the
-conservative default.
+**What remains:** targets mixing type parameters with concrete args
+(`impl P for Map<String, V>`) are rejected everywhere, `Map` / `Set`
+/ `CPtr` equality still ride the zero-field derive, and the two
+residuals above (the same impl arriving from two dependencies, one
+concrete impl per `(type, protocol)`) stay open.
 
 ---
 
@@ -312,7 +322,7 @@ stdlib promotion after a second consumer appears.
 
 ## `Binary` has no ordering and no endian helpers
 
-`Binary` derives `eq` and `hash` but no comparison, so bytewise key
+`Binary` derives `equals?` and `hash` but no comparison, so bytewise key
 ordering is a manual `at`-loop in user code. The same codecs that need
 ordering also re-roll big-endian integer packing: an append-N-bytes
 helper and an accumulate-N-bytes reader now exist in at least two

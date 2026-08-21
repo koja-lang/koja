@@ -45,7 +45,7 @@ use koja_ast::identifier::{AnonymousKind, GlobalRegistryId, Identifier, Resoluti
 use koja_typecheck::{CheckedPackage, GlobalRegistry};
 
 use crate::lower::LowerOutput;
-use crate::lower::package::{lookup_owner_path, nominal_target_path};
+use crate::lower::package::nominal_target_path;
 use crate::package::{IRPackage, insert_package_function};
 
 /// One discovered generic instantiation. Recorded by
@@ -207,14 +207,18 @@ fn index_item<'a>(
             }
         }
         Item::Impl(impl_block) => {
-            let Some(target_path) = nominal_target_path(&impl_block.target) else {
+            let Some(path) = nominal_target_path(&impl_block.target) else {
+                return;
+            };
+            let Some((_, target_package, target_path)) = registry.lookup_owner_path(path, package)
+            else {
                 return;
             };
             for member in &impl_block.members {
                 let ImplMember::Function(function) = member else {
                     continue;
                 };
-                let identifier = Identifier::member(package, target_path, &function.name);
+                let identifier = Identifier::member(&target_package, &target_path, &function.name);
                 insert_function(map, registry, &identifier, function, def_file);
             }
         }
@@ -222,7 +226,7 @@ fn index_item<'a>(
             let Some(path) = nominal_target_path(&extend_block.target) else {
                 return;
             };
-            let Some((target_package, target_path)) = lookup_owner_path(path, package, registry)
+            let Some((_, target_package, target_path)) = registry.lookup_owner_path(path, package)
             else {
                 return;
             };

@@ -36,6 +36,7 @@ mod structs;
 mod type_aliases;
 mod types;
 
+pub(crate) use impls::resolve_target_bounds;
 pub(crate) use types::{ResolutionScope, TypeParamScope, resolve_type_expr};
 
 use types::resolve_bound_to_id;

@@ -9,7 +9,7 @@ impl Equality for String
   Returns `true` if both strings have the same content.
   """
   @intrinsic
-  fn eq(self, other: String) -> Bool
+  fn equals?(self, other: String) -> Bool
 end
 
 impl Hash for String

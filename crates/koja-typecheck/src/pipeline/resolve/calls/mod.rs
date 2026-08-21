@@ -44,7 +44,7 @@ use crate::registry::{
 };
 
 use super::coercion::{Mismatch, check_compatible_stamping};
-use super::ctx::{Callee, Resolver};
+use super::ctx::{BoundContext, Callee, Resolver};
 use super::expr::resolve_expr_with_expected;
 use super::inference::{PhantomContext, fill_from_expected, finalize_inference, unify_pairs};
 use super::paths::{PackageMember, lookup_package_member};
@@ -217,8 +217,14 @@ fn resolve_function_call(
         );
         let partially_substituted_params = substitute_params(&sig.params, &partial_subst);
         resolve_closure_args(args, &partially_substituted_params, resolver, diagnostics);
-        let (substituted_params, substituted_return) =
-            infer_call_type_args(callee, &sig, args, site, resolver.registry, diagnostics);
+        let (substituted_params, substituted_return) = infer_call_type_args(
+            callee,
+            &sig,
+            args,
+            site,
+            resolver.bound_context(),
+            diagnostics,
+        );
         validate_arg_signature(
             args,
             &substituted_params,
@@ -598,7 +604,7 @@ pub(super) fn resolve_method_call(
             receiver_type_args: &mut receiver_args_inferred,
         },
         call_span,
-        resolver.registry,
+        resolver.bound_context(),
         diagnostics,
     );
     // Static dispatch's receiver.resolution starts as a bare leaf.
@@ -710,9 +716,10 @@ fn infer_call_type_args(
     sig: &FunctionSignature,
     args: &[Arg],
     site: CallSite<'_>,
-    registry: &GlobalRegistry,
+    ctx: BoundContext<'_>,
     diagnostics: &mut Vec<Diagnostic>,
 ) -> (Vec<ResolvedParam>, ResolvedType) {
+    let registry = ctx.registry;
     let CallSite {
         out_type_args,
         expected,
@@ -739,7 +746,7 @@ fn infer_call_type_args(
         &subst,
         &PhantomContext::Arguments,
         call_span,
-        registry,
+        ctx,
         diagnostics,
     );
     let substituted_params = sig

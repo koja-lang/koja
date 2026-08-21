@@ -40,7 +40,7 @@ use koja_ast::span::Span;
 use expressions::seal_expr;
 use statements::seal_statement;
 
-use crate::pipeline::collect::{lookup_owner_path, nominal_target_path};
+use crate::pipeline::collect::nominal_target_path;
 use crate::program::CheckedProgram;
 use crate::registry::{GlobalKind, GlobalRegistry};
 
@@ -184,11 +184,13 @@ fn impl_target_is_generic(target: &TypeExpr, package: &str, registry: &GlobalReg
     let Some(path) = nominal_target_path(target) else {
         return false;
     };
-    lookup_owner_path(path, package, registry).is_some_and(|(id, _, _)| {
-        registry
-            .get(id)
-            .is_some_and(|entry| !entry.type_params.is_empty())
-    })
+    registry
+        .lookup_owner_path(path, package)
+        .is_some_and(|(id, _, _)| {
+            registry
+                .get(id)
+                .is_some_and(|entry| !entry.type_params.is_empty())
+        })
 }
 
 /// Assert lift's constants pass produced a stamped

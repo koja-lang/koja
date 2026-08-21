@@ -228,6 +228,12 @@ impl<'a> Printer<'a> {
     fn impl_block(&mut self, i: &ImplBlock) {
         self.nested("ImplBlock", i.span, |p| {
             p.line(&format!("target: {}", type_expr_inline(&i.target)));
+            if !i.target_bounds.is_empty() {
+                p.line(&format!(
+                    "target_bounds: {}",
+                    format_type_params(&i.target_bounds),
+                ));
+            }
             p.line(&format!("trait: {}", type_expr_inline(&i.trait_expr)));
             if !i.members.is_empty() {
                 p.section("members", |p| {

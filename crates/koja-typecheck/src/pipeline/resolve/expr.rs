@@ -78,7 +78,7 @@ pub(super) fn resolve_expr_with_expected(
         return;
     }
     // `==` / `!=` on user struct / enum operands rewrites to
-    // `lhs.eq(rhs)` (or `not lhs.eq(rhs)`) before re-resolving.
+    // `lhs.equals?(rhs)` (or `not lhs.equals?(rhs)`) before re-resolving.
     // Primitive operands stay on the [`binary_type`] fast path.
     // Same outer-expr-rewrite shape as List / Map / MethodCall
     // above.

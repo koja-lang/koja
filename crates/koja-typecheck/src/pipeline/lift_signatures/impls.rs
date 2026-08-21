@@ -11,26 +11,26 @@ use std::collections::HashMap;
 
 use koja_ast::ast::{
     Diagnostic, Expr, ExprKind, ExtendBlock, Function, ImplBlock, ImplMember, MatchArm, Param,
-    Pattern, ProtocolMethod, Statement, StringPart, TypeExpr, Visibility,
+    Pattern, ProtocolMethod, Statement, StringPart, TypeExpr, TypeParam, Visibility,
 };
 use koja_ast::identifier::{GlobalRegistryId, Identifier, Resolution, ResolvedType};
 use koja_ast::span::Span;
 
-use crate::pipeline::collect::{lookup_owner_path, nominal_target_path};
+use crate::pipeline::collect::nominal_target_path;
 use crate::pipeline::resolve::types::types_equivalent;
 use crate::pipeline::unify::{Substitution, substitute};
 use crate::registry::{
-    Dispatch, GlobalKind, GlobalRegistry, InsertOutcome, ProtocolDefinition,
-    ResolvedProtocolMethod, VisibilityScope,
+    Conformance, ConformanceScope, Dispatch, GlobalKind, GlobalRegistry, InsertOutcome,
+    ProtocolDefinition, ResolvedProtocolMethod, VisibilityScope,
 };
 
 use super::LiftScope;
 use super::ProtocolBodies;
 use super::SelfContext;
-use super::functions::lift_function_with_identifier;
+use super::functions::{is_concrete_type, lift_function_with_identifier};
 use super::types::{
-    TypeParamScope, concrete_self_type, dispatch_label, render_resolved, resolve_type_expr,
-    type_expr_span,
+    ResolutionScope, TypeParamScope, concrete_self_type, dispatch_label, render_resolved,
+    resolve_bound_to_id, resolve_type_expr, type_expr_span,
 };
 
 /// Where a conformance is declared, either an `impl P for T` block
@@ -100,7 +100,6 @@ impl ConformanceSite<'_> {
 /// the user wrote on `trait_expr` (`Eq<String>` -> `[String]`).
 #[derive(Clone, Copy)]
 struct ProtocolImplScope<'a> {
-    package: &'a str,
     /// Registry id for the protocol, needed by default-method
     /// synthesis to recover the protocol's type-param names from
     /// [`crate::registry::GlobalRegistry::type_params`].
@@ -123,10 +122,16 @@ pub(super) fn lift_impl(
     scope: &mut LiftScope<'_>,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
-    let Some(target_path) = nominal_target_path(&impl_block.target).map(<[String]>::to_vec) else {
+    let Some(path) = nominal_target_path(&impl_block.target) else {
         return;
     };
-    let target_identifier = Identifier::new(scope.package, target_path.clone());
+    let Some((_, target_package, target_path)) =
+        scope.registry.lookup_owner_path(path, scope.package)
+    else {
+        // Collect already diagnosed. Nothing was registered.
+        return;
+    };
+    let target_identifier = Identifier::new(target_package.as_str(), target_path.clone());
     if !matches!(
         scope
             .registry
@@ -163,7 +168,8 @@ pub(super) fn lift_impl(
         let ImplMember::Function(function) = member else {
             continue;
         };
-        let method_identifier = Identifier::member(scope.package, &target_path, &function.name);
+        let method_identifier =
+            Identifier::member(target_package.as_str(), &target_path, &function.name);
         lift_function_with_identifier(
             function,
             method_identifier,
@@ -194,7 +200,7 @@ pub(super) fn lift_impl(
         scope,
         diagnostics,
     );
-    record_target_conformance(&site, target_id, &resolved, scope.registry, diagnostics);
+    record_target_conformance(&site, target_id, &resolved, scope, diagnostics);
 }
 
 /// Check every conformance-header entry on a struct/enum decl
@@ -247,7 +253,7 @@ pub(super) fn lift_header_conformances(
             scope,
             diagnostics,
         );
-        record_target_conformance(&site, target_id, &resolved, scope.registry, diagnostics);
+        record_target_conformance(&site, target_id, &resolved, scope, diagnostics);
     }
 }
 
@@ -263,7 +269,7 @@ pub(super) fn lift_extend(
         return;
     };
     let Some((_, target_package, target_path)) =
-        lookup_owner_path(path, scope.package, scope.registry)
+        scope.registry.lookup_owner_path(path, scope.package)
     else {
         return;
     };
@@ -481,29 +487,46 @@ fn resolve_protocol_impl_heads(
 }
 
 /// Record `target_id : protocol_id` on the target's struct/enum
-/// definition. Runs after conformance verification +
-/// default-body synthesis so the conformance fact is only
-/// recorded when the declaring site is well-formed. Diagnoses
-/// duplicate conformance declarations (a second `impl P for T`,
-/// or a header entry doubled by either form) against the
-/// existing conformance map.
+/// definition, classified into a [`ConformanceScope`] by the
+/// resolved target's instantiation. Runs after conformance
+/// verification + default-body synthesis so the conformance fact
+/// is only recorded when the declaring site is well-formed.
+/// Diagnoses overlapping conformance declarations (a second
+/// `impl P for T`, a header entry doubled by either form, or a
+/// concrete impl repeating an instantiation) against the existing
+/// conformance records.
 fn record_target_conformance(
     site: &ConformanceSite<'_>,
     target_id: GlobalRegistryId,
     resolved: &ResolvedImplHeads,
-    registry: &mut GlobalRegistry,
+    scope: &mut LiftScope<'_>,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
     let protocol_args: Vec<ResolvedType> = match &resolved.protocol {
         ResolvedType::Named { type_args, .. } => type_args.clone(),
         _ => Vec::new(),
     };
-    if registry
-        .record_conformance(target_id, resolved.protocol_id, protocol_args)
+    let Some(conformance_scope) = classify_conformance_scope(
+        site,
+        target_id,
+        resolved,
+        &protocol_args,
+        scope.resolution_scope(),
+        diagnostics,
+    ) else {
+        return;
+    };
+    let conformance = Conformance {
+        protocol_args,
+        scope: conformance_scope,
+    };
+    if scope
+        .registry
+        .record_conformance(target_id, resolved.protocol_id, conformance)
         .is_some()
     {
-        let target_label = render_resolved(&resolved.target, registry);
-        let protocol_label = render_resolved(&resolved.protocol, registry);
+        let target_label = render_resolved(&resolved.target, scope.registry);
+        let protocol_label = render_resolved(&resolved.protocol, scope.registry);
         let message = match site {
             ConformanceSite::Header { decl_label, .. } => {
                 format!("duplicate conformance to `{protocol_label}` declared on `{decl_label}`")
@@ -514,6 +537,139 @@ fn record_target_conformance(
         };
         diagnostics.push(Diagnostic::error(message, site.span()));
     }
+}
+
+/// Classify the resolved impl target's instantiation into a
+/// [`ConformanceScope`]. Conditional bounds only attach to
+/// parameterized targets, and targets that mix type parameters
+/// with concrete args wait on a separate matching problem, so
+/// those diagnose and return `None`.
+fn classify_conformance_scope(
+    site: &ConformanceSite<'_>,
+    target_id: GlobalRegistryId,
+    resolved: &ResolvedImplHeads,
+    protocol_args: &[ResolvedType],
+    scope: ResolutionScope<'_>,
+    diagnostics: &mut Vec<Diagnostic>,
+) -> Option<ConformanceScope> {
+    let registry = scope.registry;
+    let target_args = match &resolved.target {
+        ResolvedType::Named { type_args, .. } => type_args.as_slice(),
+        _ => &[],
+    };
+    let target_bounds: &[TypeParam] = match site {
+        ConformanceSite::Header { .. } => &[],
+        ConformanceSite::Impl(block) => &block.target_bounds,
+    };
+    if targets_own_params_in_order(target_id, target_args, registry) {
+        let bounds = match site {
+            ConformanceSite::Header { .. } => Vec::new(),
+            ConformanceSite::Impl(block) => {
+                resolve_target_bounds(&block.target, target_bounds, scope, diagnostics)
+            }
+        };
+        if target_args.is_empty() {
+            return Some(ConformanceScope::Concrete(Vec::new()));
+        }
+        return Some(ConformanceScope::Parameterized { bounds });
+    }
+    let target_label = render_resolved(&resolved.target, registry);
+    if let Some(bound) = target_bounds.first() {
+        diagnostics.push(Diagnostic::error(
+            format!(
+                "a bound in an impl target must attach to one of the target's own type \
+                 parameters (`{}` on `{target_label}` does not name one)",
+                bound.name,
+            ),
+            bound.span,
+        ));
+        return None;
+    }
+    if target_args.is_empty() {
+        return Some(ConformanceScope::Concrete(Vec::new()));
+    }
+    if !target_args.iter().all(is_concrete_type) {
+        diagnostics.push(Diagnostic::error(
+            format!(
+                "typecheck does not yet support conformance targets that mix type \
+                 parameters with concrete types (`{target_label}` waits on conditional \
+                 conformance)"
+            ),
+            site.span(),
+        ));
+        return None;
+    }
+    if !protocol_args.iter().all(is_concrete_type) {
+        let protocol_label = render_resolved(&resolved.protocol, registry);
+        diagnostics.push(Diagnostic::error(
+            format!(
+                "protocol arguments on `impl {protocol_label} for {target_label}` must be \
+                 concrete types when the target is a concrete instantiation"
+            ),
+            site.span(),
+        ));
+        return None;
+    }
+    Some(ConformanceScope::Concrete(target_args.to_vec()))
+}
+
+/// Resolve an impl's conditional target bounds into per-slot
+/// protocol ids, parallel to the target's params. The caller has
+/// already confirmed the written args are the target's own params
+/// in declaration order, so a bound's slot is the position of the
+/// written arg it names. All-empty slots mean the conformance is
+/// unconditional. Also reused by the resolve walker to rebuild the
+/// impl-local [`crate::registry::BoundOverlay`].
+pub(crate) fn resolve_target_bounds(
+    target_expr: &TypeExpr,
+    target_bounds: &[TypeParam],
+    scope: ResolutionScope<'_>,
+    diagnostics: &mut Vec<Diagnostic>,
+) -> Vec<Vec<GlobalRegistryId>> {
+    let TypeExpr::Generic { args, .. } = target_expr else {
+        return Vec::new();
+    };
+    let mut resolved = vec![Vec::new(); args.len()];
+    for bound in target_bounds {
+        let slot = args.iter().position(|arg| {
+            matches!(
+                arg,
+                TypeExpr::Named { path, .. } if path.len() == 1 && path[0] == bound.name
+            )
+        });
+        // The parser attaches each bound to a written arg, so the
+        // name always matches one.
+        let Some(slot) = slot else {
+            continue;
+        };
+        resolved[slot] = bound
+            .bounds
+            .iter()
+            .filter_map(|name| resolve_bound_to_id(name, bound.span, scope, diagnostics))
+            .collect();
+    }
+    resolved
+}
+
+/// True when `args` is exactly the target's own param list in
+/// declaration order (`Bag<T>` on `struct Bag<T>`), the shape a
+/// parameterized impl or a header conformance resolves to.
+fn targets_own_params_in_order(
+    target_id: GlobalRegistryId,
+    args: &[ResolvedType],
+    registry: &GlobalRegistry,
+) -> bool {
+    let arity = registry.type_params(target_id).map_or(0, <[String]>::len);
+    args.len() == arity
+        && args.iter().enumerate().all(|(position, arg)| {
+            matches!(
+                arg,
+                ResolvedType::Named {
+                    resolution: Resolution::TypeParam { owner, index },
+                    ..
+                } if *owner == target_id && index.as_u32() as usize == position
+            )
+        })
 }
 
 fn verify_and_synthesize_conformance(
@@ -544,7 +700,6 @@ fn verify_and_synthesize_conformance(
     };
     let definition = definition.clone();
     let impl_scope = ProtocolImplScope {
-        package: scope.package,
         protocol_id,
         protocol_identifier: &protocol_identifier,
         protocol_subst: &resolved.protocol_subst,
@@ -677,8 +832,11 @@ fn synthesize_default_method(
         span: method.span,
     };
     substitute_protocol_type_params(&mut function, impl_scope, scope);
-    let method_identifier =
-        Identifier::member(impl_scope.package, impl_scope.target_path, &function.name);
+    let method_identifier = Identifier::member(
+        impl_scope.target_identifier.package(),
+        impl_scope.target_path,
+        &function.name,
+    );
     let type_params: Vec<String> = function
         .type_params
         .iter()
@@ -1088,13 +1246,17 @@ fn check_impl_method_signature(
     diagnostics: &mut Vec<Diagnostic>,
 ) {
     let ProtocolImplScope {
-        package,
         protocol_identifier,
         protocol_subst,
+        target_identifier,
         target_path,
         ..
     } = impl_scope;
-    let method_identifier = Identifier::member(package, target_path, &impl_function.name);
+    let method_identifier = Identifier::member(
+        target_identifier.package(),
+        target_path,
+        &impl_function.name,
+    );
     let Some((_, entry)) = registry.lookup(&method_identifier) else {
         return;
     };

@@ -12,7 +12,7 @@ use koja_ast::identifier::{
 };
 use koja_ast::span::Span;
 
-use super::super::ctx::{Callee, Resolver};
+use super::super::ctx::{BoundContext, Callee, Resolver};
 use super::super::expr::resolve_expr;
 use super::super::inference::{
     PhantomContext, fill_from_expected, finalize_inference, unify_pairs,
@@ -238,9 +238,10 @@ pub(super) fn infer_method_call_type_args(
     args: &[Arg],
     outputs: MethodInferenceOutputs<'_>,
     call_span: Span,
-    registry: &GlobalRegistry,
+    ctx: BoundContext<'_>,
     diagnostics: &mut Vec<Diagnostic>,
 ) -> (Vec<ResolvedParam>, ResolvedType) {
+    let registry = ctx.registry;
     let MethodInferenceTarget {
         receiver,
         method,
@@ -291,7 +292,7 @@ pub(super) fn infer_method_call_type_args(
         &subst,
         &PhantomContext::Arguments,
         call_span,
-        registry,
+        ctx,
         diagnostics,
     );
     let substituted_params: Vec<ResolvedParam> = sig

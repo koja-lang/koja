@@ -21,7 +21,7 @@ use koja_ast::span::Span;
 
 use crate::pipeline::lift_signatures::{TypeParamScope, resolve_type_expr};
 use crate::pipeline::unify::{Substitution, substitute};
-use crate::registry::GlobalRegistry;
+use crate::registry::{Conformance, GlobalRegistry};
 
 use super::control_flow::{body_tail_type, join_arm_tails, require_bool_condition};
 use super::ctx::Resolver;
@@ -75,8 +75,8 @@ pub(super) fn resolve_spawn(
 
     let Some(protocol_args) = resolver
         .registry
-        .lookup_conformance(target_id, process_id)
-        .map(<[ResolvedType]>::to_vec)
+        .lookup_conformance(target_id, process_id, &target_args)
+        .map(|conformance| conformance.protocol_args.clone())
     else {
         let target_label = resolver
             .registry
@@ -146,10 +146,14 @@ pub(super) fn check_monitor_call_site(
     else {
         return;
     };
+    // The enclosing type has no instantiation at hand here, so take
+    // any record. A type conforms to `Process` at most once today
+    // (parameterized, or one concrete instantiation).
     let conformance = resolver
         .enclosing_type_id
-        .and_then(|type_id| registry.lookup_conformance(type_id, process_id));
-    let Some(protocol_args) = conformance else {
+        .and_then(|type_id| registry.conformance_records(type_id, process_id))
+        .and_then(<[Conformance]>::first);
+    let Some(protocol_args) = conformance.map(|c| c.protocol_args.as_slice()) else {
         diagnostics.push(Diagnostic::error_with_hint(
             "`Process.monitor` must be called from a method of a type that implements `Process`",
             "the runtime delivers the monitored process's `ExitSignal` to the calling process's mailbox",

@@ -198,6 +198,7 @@ fn synthesize_builtin_impl(decl: &BuiltinDecl) -> Item {
 fn debug_impl_block(target: TypeExpr, format_body: Expr, span: Span) -> Item {
     Item::Impl(ImplBlock {
         target,
+        target_bounds: Vec::new(),
         trait_expr: debug_trait_expr(span),
         members: vec![
             ImplMember::Function(format_function(format_body, span)),

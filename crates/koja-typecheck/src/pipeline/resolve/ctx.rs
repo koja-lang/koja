@@ -5,7 +5,7 @@ use koja_ast::identifier::{GlobalRegistryId, ResolvedType};
 
 use crate::pipeline::lift_signatures::ResolutionScope;
 use crate::pipeline::local_scope::LocalScope;
-use crate::registry::GlobalRegistry;
+use crate::registry::{BoundOverlay, GlobalRegistry};
 
 use super::error_channel::ErrorChannel;
 
@@ -20,6 +20,10 @@ use super::error_channel::ErrorChannel;
 /// `file_aliases` is the per-file alias roster powering
 /// `alias`-prefixed type name resolution inside function bodies.
 pub(super) struct ResolverEnv<'a> {
+    /// Bounds the enclosing conditional impl grants its target's
+    /// params, set by the walker for the duration of that impl's
+    /// members and `None` everywhere else.
+    pub bound_overlay: Option<BoundOverlay>,
     pub file_aliases: &'a [AliasDecl],
     pub package: &'a str,
     pub registry: &'a GlobalRegistry,
@@ -41,6 +45,7 @@ impl<'a> ResolverEnv<'a> {
         scope: &'b mut LocalScope,
     ) -> Resolver<'b> {
         Resolver {
+            bound_overlay: self.bound_overlay.as_ref(),
             current_return_type: None,
             enclosing_type,
             enclosing_type_id,
@@ -93,6 +98,11 @@ impl<'a> ResolverEnv<'a> {
 /// "passed `package` from one resolver and `aliases` from
 /// another" mismatches at the call site.
 pub(super) struct Resolver<'a> {
+    /// Bounds the enclosing conditional impl grants its target's
+    /// params (`impl Encodable for List<T: Encodable>` grants
+    /// `T: Encodable` inside the block). Merged into bounded
+    /// dispatch and bound discharge alongside declared bounds.
+    pub bound_overlay: Option<&'a BoundOverlay>,
     /// Return type of the innermost enclosing function-shape: the
     /// outer `fn` initially, swapped to a closure's return when its
     /// body resolves and restored on the way out. Threaded into
@@ -170,6 +180,27 @@ impl<'a> Resolver<'a> {
             registry: self.registry,
         }
     }
+
+    /// Project the bound-discharge inputs into a [`BoundContext`]
+    /// for the inference helpers, mirroring
+    /// [`Self::resolution_scope`]'s lifetime shape.
+    pub(super) fn bound_context(&self) -> BoundContext<'a> {
+        BoundContext {
+            overlay: self.bound_overlay,
+            registry: self.registry,
+        }
+    }
+}
+
+/// The two inputs bound discharge consults: the registry's
+/// conformance facts plus the enclosing conditional impl's granted
+/// bounds, when resolution is inside one. They always travel
+/// together from the [`Resolver`] into `verify_bounds`, so the
+/// inference helpers thread this instead of two loose parameters.
+#[derive(Clone, Copy)]
+pub(super) struct BoundContext<'a> {
+    pub overlay: Option<&'a BoundOverlay>,
+    pub registry: &'a GlobalRegistry,
 }
 
 /// Registry-side metadata for one inference target, bundled so

@@ -57,7 +57,7 @@ impl BuiltinShape {
 
     /// Whether `==` on two values of this shape stays on the
     /// backend's primitive fast path instead of rewriting to
-    /// `.eq(...)` method dispatch.
+    /// `.equals?(...)` method dispatch.
     pub fn has_primitive_equality(self) -> bool {
         match self {
             Self::Bool
@@ -84,6 +84,50 @@ impl BuiltinShape {
     }
 }
 
+/// Extra bounds a conditional impl grants its target's params while
+/// code inside that impl resolves. `impl Encodable for
+/// List<T: Encodable>` grants `TypeParam(List, 0): Encodable` to its
+/// own body, so obligations raised there can discharge through the
+/// impl's condition instead of the target's declared bounds.
+#[derive(Clone, Debug)]
+pub struct BoundOverlay {
+    /// Parallel to the owner's params, protocol ids per slot.
+    pub bounds: Vec<Vec<GlobalRegistryId>>,
+    /// The target type whose params the bounds attach to.
+    pub owner: GlobalRegistryId,
+}
+
+/// One recorded `target : protocol` fact, stamped by lift onto the
+/// target's struct/enum/builtin definition. `scope` says which
+/// instantiations of the target the fact covers, so `impl P for
+/// Bag<Int>` and `impl P for Bag<T>` record distinguishable facts.
+#[derive(Clone, Debug)]
+pub struct Conformance {
+    /// Protocol args as written on the impl (e.g. `[C, M, R]` for
+    /// `Process`). May mention the target's own params only when
+    /// `scope` is `Parameterized`.
+    pub protocol_args: Vec<ResolvedType>,
+    pub scope: ConformanceScope,
+}
+
+/// Which instantiations of the target a [`Conformance`] covers.
+/// Classified once at lift time, never re-derived from arg shapes.
+#[derive(Clone, Debug)]
+pub enum ConformanceScope {
+    /// Covers exactly these target args, as in `impl P for Bag<Int>`.
+    /// Impls on non-generic targets record as `Concrete(vec![])`, so
+    /// `Parameterized` only ever appears on generic targets.
+    Concrete(Vec<ResolvedType>),
+    /// Parameterized over the target's own params. Written as
+    /// `impl P for Bag<T>` or a header conformance on a generic
+    /// type. `bounds` parallels the target's params. A conditional
+    /// conformance like `impl Equality for List<T: Equality>`
+    /// records the required protocol ids per slot, and an empty
+    /// inner vec means that slot is unconditional, so an all-empty
+    /// `bounds` covers every instantiation.
+    Parameterized { bounds: Vec<Vec<GlobalRegistryId>> },
+}
+
 /// Payload of a [`super::GlobalKind::Builtin`] entry. Unlike the
 /// other definition carriers there is no `None` lifecycle state:
 /// the compiler owns the definition, so the shape is stamped at
@@ -92,7 +136,7 @@ impl BuiltinShape {
 /// same as on user structs.
 #[derive(Clone, Debug)]
 pub struct BuiltinDefinition {
-    pub conformances: BTreeMap<GlobalRegistryId, Vec<ResolvedType>>,
+    pub conformances: BTreeMap<GlobalRegistryId, Vec<Conformance>>,
     pub shape: BuiltinShape,
 }
 
@@ -178,12 +222,13 @@ pub struct FunctionSignature {
 /// answer "what params does this owner declare?" mid-lift.
 ///
 /// `conformances` is the per-target index of which protocols the
-/// struct implements: `protocol_id -> user-written protocol args`
-/// (e.g. `Eq -> [String]` for `impl Eq<String> for User`). The
-/// methods themselves register at `[target_head, method_name]`,
-/// so dispatch is `[target, method_name]` directly. IR doesn't
-/// walk this map. Typecheck consults it for bound enforcement
-/// (slice 2.3) and duplicate-impl detection.
+/// struct implements: `protocol_id -> [Conformance]`, one record
+/// per impl of that protocol (a parameterized impl, or one or more
+/// concrete instantiations). The methods themselves register at
+/// `[target_head, method_name]`, so dispatch is `[target,
+/// method_name]` directly. IR doesn't walk this map. Typecheck
+/// consults it for bound enforcement (slice 2.3) and duplicate-impl
+/// detection.
 ///
 /// Transitional note: this representation lets a struct/enum
 /// entry be self-contained for IR consumption: IR never has to
@@ -193,7 +238,7 @@ pub struct FunctionSignature {
 #[derive(Clone, Debug)]
 pub struct StructDefinition {
     pub fields: Vec<ResolvedStructField>,
-    pub conformances: BTreeMap<GlobalRegistryId, Vec<ResolvedType>>,
+    pub conformances: BTreeMap<GlobalRegistryId, Vec<Conformance>>,
 }
 
 /// Variant roster + protocol conformances for a user-declared
@@ -209,7 +254,7 @@ pub struct StructDefinition {
 #[derive(Clone, Debug)]
 pub struct EnumDefinition {
     pub variants: Vec<ResolvedEnumVariant>,
-    pub conformances: BTreeMap<GlobalRegistryId, Vec<ResolvedType>>,
+    pub conformances: BTreeMap<GlobalRegistryId, Vec<Conformance>>,
 }
 
 /// One variant on an [`EnumDefinition`]. `name` is the surface

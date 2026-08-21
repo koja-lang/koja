@@ -1342,7 +1342,7 @@ end
 
 The compiler checks completeness and signature compatibility, and synthesizes any default-bodied functions the type omits. If the body has a function whose name is a near miss of an omitted default, the compiler warns about the likely typo. Entry processes are declared this way (`struct App: Process<(), (), ()>`, see [Packages](#packages)). Protocol declarations accept `@doc` and `@deprecated`.
 
-`Debug` and `Equality` are auto-derived for every type, so listing one is only an override. It suppresses the derived implementation, and the body must supply `format` / `eq`:
+`Debug` and `Equality` are auto-derived for every type, so listing one is only an override. It suppresses the derived implementation, and the body must supply `format` / `equals?`:
 
 ```koja
 struct Token: Debug
@@ -1371,6 +1371,52 @@ end
 The two forms are equivalent and check identically. Declaring the same conformance in both is a duplicate-conformance error.
 
 The impl block is the isolated-contract form. It rejects public functions the protocol does not declare (`priv fn` helpers are allowed). Use it when a conformance's functions would crowd the type body.
+
+The protocol and the type can both come from other packages. A serialization package can implement its own `Encodable` for `String`, and your application can implement that same `Encodable` for a struct that a third-party package defines.
+
+```koja
+protocol Encodable
+  fn to_wire(self) -> String
+end
+
+impl Encodable for String
+  fn to_wire(self) -> String
+    self
+  end
+end
+```
+
+The compiler checks the whole program for conflicts. If two packages implement the same protocol for the same type, or give one type two functions with the same name, the build fails with an error at the conflicting declaration.
+
+A protocol can also be implemented for one concrete instantiation of a generic type, even a generic type from another package:
+
+```koja
+impl Encodable for List<Int>
+  fn to_wire(self) -> String
+    "#{self.length()} ints"
+  end
+end
+```
+
+The conformance covers `List<Int>` only. A bound like `T: Encodable` accepts `List<Int>` and rejects `List<String>`. A generic type can carry at most one impl per protocol, because every instantiation shares one set of function names.
+
+An impl can also keep the target's type parameters open, with an optional condition on each. The condition uses the same inline bound syntax as function generics:
+
+```koja
+impl Encodable for List<T: Encodable>
+  fn to_wire(self) -> String
+    result = "["
+
+    for item in self
+      result = result <> item.to_wire()
+    end
+
+    result <> "]"
+  end
+end
+```
+
+The conformance covers every `List` whose element type is itself `Encodable`, at any nesting depth. `List<Int>` qualifies once `Int` does, and so does `List<List<Int>>`. Inside the body, the condition is in force, so `item.to_wire()` dispatches through it. Without a condition (`impl Encodable for List<T>`), the conformance covers every instantiation. Conditions attach to the target's own type parameters, so a concrete argument cannot carry one (`impl Encodable for List<Int: Encodable>` is an error).
 
 ### Trait Bounds
 
@@ -2115,6 +2161,8 @@ has_big = nums.any?(fn (n: Int) -> Bool n > 3 end)
 all_pos = nums.all?(fn (n: Int) -> Bool n > 0 end)
 ```
 
+`==` compares lists element by element. Two lists are equal when they have the same length and the elements at each index are equal. The conformance is conditional (`impl Equality for List<T: Equality>`), so a list of closures is not comparable and does not satisfy a `T: Equality` bound.
+
 List literals (`[a, b, c]`) are backed by the `ListLiteral<T>` protocol. See [Literal Protocols](#literal-protocols).
 
 ### `Map<K, V>`
@@ -2486,11 +2534,11 @@ Any type implementing `Enumeration<T>` can be used with `for` loops. `List<T>` a
 
 ```koja
 protocol Equality
-  fn eq(self, other: Self) -> Bool
+  fn equals?(self, other: Self) -> Bool
 end
 ```
 
-Powers the `==` and `!=` operators. Implemented for all numeric types, `Bool`, `String`, `Binary`, and `Bits`.
+Powers the `==` and `!=` operators. Implemented for all numeric types, `Bool`, `String`, `Binary`, and `Bits`. `List<T>` implements it conditionally, element-wise, when `T` implements `Equality`.
 
 ### `Hash` Protocol
 

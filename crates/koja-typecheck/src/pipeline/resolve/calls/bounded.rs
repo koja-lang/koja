@@ -47,12 +47,25 @@ pub(super) fn resolve_bounded_method_call(
         args,
         call_span,
     } = site;
-    let declared_bounds: Vec<GlobalRegistryId> = resolver
+    let mut declared_bounds: Vec<GlobalRegistryId> = resolver
         .registry
         .type_param_bounds(owner)
         .and_then(|all| all.get(index.as_u32() as usize))
         .cloned()
         .unwrap_or_default();
+    // A conditional impl's own bounds count as declared inside its
+    // body (`impl Encodable for List<T: Encodable>` lets the body
+    // call `item.to_wire()`).
+    if let Some(overlay) = resolver.bound_overlay
+        && overlay.owner == owner
+        && let Some(granted) = overlay.bounds.get(index.as_u32() as usize)
+    {
+        for &protocol_id in granted {
+            if !declared_bounds.contains(&protocol_id) {
+                declared_bounds.push(protocol_id);
+            }
+        }
+    }
     let param_name = resolver
         .registry
         .type_param_name(owner, index)
@@ -125,7 +138,7 @@ pub(super) fn resolve_bounded_method_call(
         diagnostics,
     );
     // Substitute Self in the return type with the receiver's
-    // type-param (e.g. `Equality.eq -> Bool` is a no-op, but
+    // type-param (e.g. `Equality.equals? -> Bool` is a no-op, but
     // `Container.first -> Self` would substitute to `T`).
     // Generic protocols (slice 2.7+) will additionally substitute
     // user-declared params against the receiver's type-args.

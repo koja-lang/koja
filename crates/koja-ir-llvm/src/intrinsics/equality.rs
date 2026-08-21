@@ -1,4 +1,4 @@
-//! `Equality.eq` family. `Bool` + the 8 integer cells share an
+//! `Equality.equals?` family. `Bool` + the 8 integer cells share an
 //! `icmp eq` emitter (eval flattens both to fixed-width integers).
 //! `Float` / `Float32` use `fcmp oeq` (ordered: `NaN == NaN` is
 //! false, matching IEEE 754 and source-level `==`). `String.eq` and
