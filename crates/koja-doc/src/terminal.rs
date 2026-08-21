@@ -133,7 +133,7 @@ fn render_full(hit: &Symbol, partials: &[&Symbol]) -> String {
     }
 
     if !partials.is_empty() {
-        out.push_str("\nAlso matched:\n\n");
+        out.push_str("\n## Also matched\n\n");
         for symbol in partials {
             out.push_str(&list_line(symbol));
             out.push('\n');
@@ -168,9 +168,12 @@ fn push_doc(out: &mut String, doc: &Option<String>) {
 
 fn push_deprecation(out: &mut String, message: Option<&str>) {
     if let Some(message) = message {
-        out.push_str("\n## Deprecated\n\n");
-        out.push_str(message.trim());
-        out.push('\n');
+        out.push_str("\n> **Deprecated**\n>\n");
+        for line in message.trim().lines() {
+            out.push_str("> ");
+            out.push_str(line);
+            out.push('\n');
+        }
     }
 }
 
@@ -278,6 +281,19 @@ mod tests {
     }
 
     #[test]
+    fn deprecation_renders_as_a_multiline_blockquote() {
+        let mut text = String::new();
+        push_deprecation(
+            &mut text,
+            Some("Use `new_api` instead.\nRemoved in 0.19.0."),
+        );
+        assert_eq!(
+            text,
+            "\n> **Deprecated**\n>\n> Use `new_api` instead.\n> Removed in 0.19.0.\n"
+        );
+    }
+
+    #[test]
     fn exact_builtin_hit_renders_full_doc() {
         let project = sample_project();
         let text = hits(search(&project, "list"));
@@ -285,7 +301,7 @@ mod tests {
         assert!(text.contains("A growable list."));
         assert!(text.contains("### `fn append(self, item: T) -> List<T>`"));
         assert!(text.contains("list.append(1)"));
-        assert!(text.contains("Also matched:\n\n- Global.List.append (fn): Append an item.\n"));
+        assert!(text.contains("## Also matched\n\n- Global.List.append (fn): Append an item.\n"));
     }
 
     #[test]

@@ -240,9 +240,16 @@ fn nested_types_keep_full_names_and_deprecation_metadata() {
     let SearchOutcome::Hits(version_doc) = terminal::search(&project, "IPAddress.Version") else {
         panic!("expected nested type hit");
     };
-    assert!(version_doc.contains("## Deprecated\n\nUse `AddressFamily` instead."));
+    assert!(version_doc.contains("> **Deprecated**\n>\n> Use `AddressFamily` instead."));
     assert!(version_doc.contains("### `fn legacy(self) -> String`"));
-    assert!(version_doc.contains("## Deprecated\n\nUse `label` instead."));
+    assert!(version_doc.contains("> **Deprecated**\n>\n> Use `label` instead."));
+
+    let SearchOutcome::Hits(legacy_doc) = terminal::search(&project, "IPAddress.Version.legacy")
+    else {
+        panic!("expected deprecated function hit");
+    };
+    assert!(legacy_doc.contains("> **Deprecated**\n>\n> Use `label` instead."));
+    assert!(!legacy_doc.contains("## Deprecated"));
 
     let SearchOutcome::Hits(version_list) = terminal::search(&project, "Version") else {
         panic!("expected nested type list");
@@ -474,7 +481,7 @@ fn terminal_search_covers_exact_partial_and_none() {
     assert!(full.contains("A counter for the app."));
     assert!(full.contains("### `fn bump()`"));
     assert!(
-        full.contains("Also matched:\n\n- MyApp.Counter.bump (fn): Bump the counter by one.\n")
+        full.contains("## Also matched\n\n- MyApp.Counter.bump (fn): Bump the counter by one.\n")
     );
 
     let SearchOutcome::Hits(function) = terminal::search(&project, "Counter.bump") else {

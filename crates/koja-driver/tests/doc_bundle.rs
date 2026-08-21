@@ -380,7 +380,7 @@ fn doc_search_shows_stdlib_deprecation_guidance() {
     );
     let stdout = String::from_utf8_lossy(&search.stdout);
     assert!(stdout.contains("# Net.IPAddress.v4? (fn)"), "{stdout}");
-    assert!(stdout.contains("## Deprecated"), "{stdout}");
+    assert!(stdout.contains("> **Deprecated**"), "{stdout}");
     assert!(
         stdout.contains("Use `address.version == IPAddress.Version.V4` instead."),
         "{stdout}"
