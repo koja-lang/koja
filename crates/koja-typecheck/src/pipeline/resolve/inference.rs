@@ -17,7 +17,7 @@ use koja_ast::ast::Diagnostic;
 use koja_ast::identifier::ResolvedType;
 use koja_ast::span::Span;
 
-use super::ctx::Callee;
+use super::ctx::{BoundContext, Callee};
 use super::types::verify_bounds;
 use crate::pipeline::unify::{Conflict, Substitution, unify_into};
 use crate::registry::GlobalRegistry;
@@ -105,7 +105,7 @@ pub(super) fn finalize_inference(
     subst: &Substitution,
     context: &PhantomContext<'_>,
     span: Span,
-    registry: &GlobalRegistry,
+    ctx: BoundContext<'_>,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
     for callee in callees {
@@ -126,6 +126,6 @@ pub(super) fn finalize_inference(
                 span,
             ));
         }
-        verify_bounds(*callee, subst, span, registry, diagnostics);
+        verify_bounds(*callee, subst, span, ctx, diagnostics);
     }
 }

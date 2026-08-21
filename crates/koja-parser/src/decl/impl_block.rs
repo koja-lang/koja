@@ -33,12 +33,13 @@ impl Parser {
                 span: self.span_from(start),
             });
         }
-        let target = self.parse_type_expr();
+        let (target, target_bounds) = self.parse_impl_target();
         let members = self.parse_impl_members();
         self.expect(&TokenKind::End);
 
         Item::Impl(ImplBlock {
             target,
+            target_bounds,
             trait_expr: first_type,
             members,
             span: self.span_from(start),

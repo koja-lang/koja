@@ -31,7 +31,7 @@ pub fn format_registry(registry: &GlobalRegistry) -> String {
         writeln!(
             out,
             "  {id} {} {} @{}",
-            format_kind(&entry.kind, registry),
+            format_kind(&entry.kind, &entry.type_params, registry),
             entry.identifier.qualified_name(),
             entry.span,
         )
@@ -40,22 +40,22 @@ pub fn format_registry(registry: &GlobalRegistry) -> String {
     out
 }
 
-fn format_kind(kind: &GlobalKind, registry: &GlobalRegistry) -> String {
+fn format_kind(kind: &GlobalKind, type_params: &[String], registry: &GlobalRegistry) -> String {
     match kind {
         GlobalKind::Builtin(def) => format!(
             "builtin{}",
-            format_conformances(&def.conformances, registry)
+            format_conformances(&def.conformances, type_params, registry)
         ),
         GlobalKind::Constant(None) => "const <unlifted>".to_string(),
         GlobalKind::Constant(Some(def)) => format_constant(def, registry),
         GlobalKind::Enum(None) => "enum".to_string(),
-        GlobalKind::Enum(Some(def)) => format_enum(def, registry),
+        GlobalKind::Enum(Some(def)) => format_enum(def, type_params, registry),
         GlobalKind::Function(None) => "fn <unlifted>".to_string(),
         GlobalKind::Function(Some(sig)) => format_signature(sig, registry),
         GlobalKind::Protocol(None) => "protocol".to_string(),
         GlobalKind::Protocol(Some(def)) => format_protocol(def, registry),
         GlobalKind::Struct(None) => "struct".to_string(),
-        GlobalKind::Struct(Some(def)) => format_struct(def, registry),
+        GlobalKind::Struct(Some(def)) => format_struct(def, type_params, registry),
         GlobalKind::TypeAlias(None) => "type alias <unlifted>".to_string(),
         GlobalKind::TypeAlias(Some(expansion)) => {
             format!("type = {}", format_resolved(expansion, registry))
@@ -63,14 +63,14 @@ fn format_kind(kind: &GlobalKind, registry: &GlobalRegistry) -> String {
     }
 }
 
-fn format_enum(def: &EnumDefinition, registry: &GlobalRegistry) -> String {
+fn format_enum(def: &EnumDefinition, type_params: &[String], registry: &GlobalRegistry) -> String {
     let variants = def
         .variants
         .iter()
         .map(|v| format_variant(v, registry))
         .collect::<Vec<_>>()
         .join(", ");
-    let conformances = format_conformances(&def.conformances, registry);
+    let conformances = format_conformances(&def.conformances, type_params, registry);
     format!("enum {{{variants}}}{conformances}")
 }
 
@@ -130,20 +130,25 @@ fn format_protocol_method(method: &ResolvedProtocolMethod, registry: &GlobalRegi
     )
 }
 
-fn format_struct(def: &StructDefinition, registry: &GlobalRegistry) -> String {
+fn format_struct(
+    def: &StructDefinition,
+    type_params: &[String],
+    registry: &GlobalRegistry,
+) -> String {
     let fields = def
         .fields
         .iter()
         .map(|f| format!("{}: {}", f.name, format_resolved(&f.ty, registry)))
         .collect::<Vec<_>>()
         .join(", ");
-    let conformances = format_conformances(&def.conformances, registry);
+    let conformances = format_conformances(&def.conformances, type_params, registry);
     format!("struct {{{fields}}}{conformances}")
 }
 
 /// Render a struct/enum's protocol conformance map as a trailing
 /// `:[Proto, Proto<Arg>]` annotation. A concrete record on a
-/// generic target names its instantiation as `Proto for Self<Int>`.
+/// generic target names its instantiation as `Proto for Self<Int>`,
+/// a conditional record names its bounds as `Proto for Self<T: P>`.
 /// Empty maps render to nothing so unconformant types stay visually
 /// identical to pre-conformance renders. Args are rendered via
 /// [`format_resolved`] for stability.
@@ -152,6 +157,7 @@ fn format_conformances(
         koja_ast::identifier::GlobalRegistryId,
         Vec<Conformance>,
     >,
+    type_params: &[String],
     registry: &GlobalRegistry,
 ) -> String {
     if conformances.is_empty() {
@@ -166,14 +172,19 @@ fn format_conformances(
                 .unwrap_or_else(|| format!("<id {protocol_id}>"));
             records
                 .iter()
-                .map(move |record| format_conformance(&head, record, registry))
+                .map(move |record| format_conformance(&head, record, type_params, registry))
         })
         .collect::<Vec<_>>()
         .join(", ");
     format!(" :[{entries}]")
 }
 
-fn format_conformance(head: &str, record: &Conformance, registry: &GlobalRegistry) -> String {
+fn format_conformance(
+    head: &str,
+    record: &Conformance,
+    type_params: &[String],
+    registry: &GlobalRegistry,
+) -> String {
     let protocol = if record.protocol_args.is_empty() {
         head.to_string()
     } else {
@@ -186,8 +197,49 @@ fn format_conformance(head: &str, record: &Conformance, registry: &GlobalRegistr
         ConformanceScope::Concrete(args) if !args.is_empty() => {
             format!("{protocol} for Self<{}>", format_type_args(args, registry))
         }
+        ConformanceScope::Parameterized { bounds } if bounds.iter().any(|b| !b.is_empty()) => {
+            format!(
+                "{protocol} for Self<{}>",
+                format_bounded_params(bounds, type_params, registry)
+            )
+        }
         _ => protocol,
     }
+}
+
+/// Render a conditional record's param slots as `T: P & Q, U`,
+/// using the target's own param names.
+fn format_bounded_params(
+    bounds: &[Vec<koja_ast::identifier::GlobalRegistryId>],
+    type_params: &[String],
+    registry: &GlobalRegistry,
+) -> String {
+    bounds
+        .iter()
+        .enumerate()
+        .map(|(index, slot_bounds)| {
+            let name = type_params
+                .get(index)
+                .map(String::as_str)
+                .unwrap_or("?")
+                .to_string();
+            if slot_bounds.is_empty() {
+                return name;
+            }
+            let rendered = slot_bounds
+                .iter()
+                .map(|id| {
+                    registry
+                        .get(*id)
+                        .map(|e| e.identifier.qualified_name())
+                        .unwrap_or_else(|| format!("<id {id}>"))
+                })
+                .collect::<Vec<_>>()
+                .join(" & ");
+            format!("{name}: {rendered}")
+        })
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 fn format_type_args(args: &[ResolvedType], registry: &GlobalRegistry) -> String {

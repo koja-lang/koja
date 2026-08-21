@@ -14,7 +14,9 @@ use koja_ast::span::Span;
 
 use super::super::ctx::Resolver;
 use super::super::expr::resolve_expr_with_expected;
-use super::super::types::{display_resolution, named_type_has_eq, peel_alias, types_equivalent};
+use super::super::types::{
+    display_resolution, peel_alias, type_supports_equality, types_equivalent,
+};
 use super::resolve_args;
 
 pub(super) fn resolve_tuple_method_call(
@@ -149,9 +151,9 @@ fn check_elements_support_equality(
                 );
             }
             ResolvedType::Named {
-                resolution: Resolution::Global(id),
+                resolution: Resolution::Global(_),
                 ..
-            } if !named_type_has_eq(&structural_element, *id, resolver.registry) => {
+            } if !type_supports_equality(&structural_element, resolver.bound_context()) => {
                 emit_no_equality(
                     element,
                     format!(

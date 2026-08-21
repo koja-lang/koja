@@ -28,7 +28,7 @@ use crate::registry::{
 };
 
 use super::coercion::{check_compatible_stamping, mismatch_message};
-use super::ctx::{Callee, Resolver};
+use super::ctx::{BoundContext, Callee, Resolver};
 use super::expr::resolve_expr;
 use super::inference::{PhantomContext, fill_from_expected, finalize_inference, unify_pairs};
 use super::structs::{validate_named_fields, walk_field_inits};
@@ -117,7 +117,7 @@ pub(super) fn resolve_enum_construction(
         data,
         expected,
         span,
-        resolver.registry,
+        resolver.bound_context(),
         diagnostics,
     );
     let substituted = substitute_variant(variant_def, &subst);
@@ -155,9 +155,10 @@ fn infer_enum_type_args(
     data: &EnumConstructionData,
     expected: Option<&ResolvedType>,
     span: Span,
-    registry: &GlobalRegistry,
+    ctx: BoundContext<'_>,
     diagnostics: &mut Vec<Diagnostic>,
 ) -> Substitution {
+    let registry = ctx.registry;
     let mut subst = Substitution::single(callee.id, callee.type_params.len());
     let on_conflict = &mut |conflict: Conflict, payload_span: Span| {
         emit_conflict(
@@ -194,7 +195,7 @@ fn infer_enum_type_args(
         ResolvedVariantData::Unit => PhantomContext::UnitVariant(&variant.name),
         _ => PhantomContext::Payload(&variant.name),
     };
-    finalize_inference(&[callee], &subst, &context, span, registry, diagnostics);
+    finalize_inference(&[callee], &subst, &context, span, ctx, diagnostics);
     subst
 }
 

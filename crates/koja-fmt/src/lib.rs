@@ -1085,6 +1085,28 @@ mod tests {
     }
 
     #[test]
+    fn conditional_impl_target_bounds_round_trip() {
+        assert_unchanged(
+            "
+            impl Equality for List<T: Equality>
+              fn eq(self, other: List<T>) -> Bool
+                true
+              end
+            end
+        ",
+        );
+        assert_unchanged(
+            "
+            impl Show for Pair<A: Debug & Hash, B>
+              fn show(self) -> String
+                \"pair\"
+              end
+            end
+        ",
+        );
+    }
+
+    #[test]
     fn comment_above_annotated_impl_function_stays_above_annotation() {
         assert_unchanged(
             "

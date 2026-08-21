@@ -168,24 +168,27 @@ Found 2026-08-08 while auditing the `builtin` migration.
 explicit stdlib impls (the scalars, `String`, container and `CPtr`
 `Debug`) never hit the synthesis, but the holes are live:
 
-- `List`, `Map`, `Set`, and `CPtr` have no explicit `Equality` impl,
-  so the derived `eq` compares zero fields and returns `true` for
-  every pair: `[1, 2] == [3]` evaluates to `true` today. This
-  pre-dates the `builtin` keyword, since the types were zero-field
-  structs before.
+- `Map`, `Set`, and `CPtr` have no explicit `Equality` impl, so the
+  derived `eq` compares zero fields and returns `true` for every
+  pair. This pre-dates the `builtin` keyword, since the types were
+  zero-field structs before. `List` closed this on 2026-08-21 with
+  a conditional `impl Equality for List<T: Equality>` doing the
+  element-wise walk (`[1, 2] == [3]` is now `false`, and lists of
+  closures fail `==` at compile time).
 - `Int64`, `Float64`, `Never`, and `Unit` lean on synthesized derives
   only for conformance. At runtime the IR's `Int64`-onto-`Int` method
   collapse routes to the real intrinsic impls.
 
 **Fix path:** delete the builtin arms from both derive passes and add
-explicit stdlib impls. Collection `eq` needs an element-wise walk and
-a `T: Equality` requirement on the impl target, which the language
-cannot spell yet. The conformance-only holes need explicit impls or
-a rule that a builtin satisfies bounds by shape.
+explicit stdlib impls. The language can spell the conditional impl
+now (see the next entry). `Map` and `Set` `eq` wait on entry / element
+iteration intrinsics, the same blocker as their `Debug` rendering.
+The conformance-only holes need explicit impls or a rule that a
+builtin satisfies bounds by shape.
 
 ---
 
-## Protocol conformances cannot be conditional
+## Protocol conformance residuals
 
 Found 2026-08-09 while designing an `Encodable` protocol for the
 `messagepack` package. The package boundary fell on 2026-08-21:
@@ -218,18 +221,21 @@ names in the flat `[Type, method]` namespace, so one concrete impl
 per `(type, protocol)` is the practical limit until methods key by
 instantiation too.
 
-**What remains:** conditional conformance (`impl Encodable for
-List<T>` requiring `T: Encodable`), discharged per instantiation
-during monomorphization like existing function bounds. Until it
-lands, parameterized impl targets are rejected outside the target's
-own package, and targets mixing type parameters with concrete args
-(`impl P for Map<String, V>`) are rejected everywhere. The
-`ConformanceScope::Parameterized` variant is the extension point:
-per-param bounds attach there (empty bounds = unconditional) rather
-than a new variant.
+Conditional conformance landed 2026-08-21: `impl Encodable for
+List<T: Encodable>` attaches per-param bounds to the
+`Parameterized` scope, typecheck discharges them per instantiation
+and recursively (`List<List<Int>>` follows from `Int`), and the
+impl body dispatches through its own condition. Parameterized
+targets now also work outside the target's own package. The stdlib
+spells `impl Equality for List<T: Equality>` with an element-wise
+`eq`, closing the list-`eq` hole in the builtin-derives entry
+above.
 
-The collection-`eq` hole in the builtin-derives entry above waits on
-conditional conformance's spelling.
+**What remains:** targets mixing type parameters with concrete args
+(`impl P for Map<String, V>`) are rejected everywhere, `Map` / `Set`
+/ `CPtr` equality still ride the zero-field derive, and the two
+residuals above (the same impl arriving from two dependencies, one
+concrete impl per `(type, protocol)`) stay open.
 
 ---
 

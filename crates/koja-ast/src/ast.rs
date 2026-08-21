@@ -441,9 +441,15 @@ pub struct Function {
 /// [`ExtendBlock`], and bare `impl Type` is a parse error.
 /// Compiler-derived impls (auto-derived `Debug` / `Equality`) carry
 /// [`Span::synthetic`] spans.
+///
+/// `target_bounds` holds conditional-conformance bounds written
+/// inline on the target's type-param args (`impl Equality for
+/// List<T: Equality>`). `target` itself stays a plain [`TypeExpr`]
+/// (`List<T>`); the bounds ride alongside as [`TypeParam`]s.
 #[derive(Debug, Clone)]
 pub struct ImplBlock {
     pub target: TypeExpr,
+    pub target_bounds: Vec<TypeParam>,
     pub trait_expr: TypeExpr,
     pub members: Vec<ImplMember>,
     pub span: Span,

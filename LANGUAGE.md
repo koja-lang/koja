@@ -1398,7 +1398,25 @@ impl Encodable for List<Int>
 end
 ```
 
-The conformance covers `List<Int>` only. A bound like `T: Encodable` accepts `List<Int>` and rejects `List<String>`. A generic type can carry at most one such impl per protocol, because every instantiation shares one set of function names. Impls that keep the type parameter open, like `impl Encodable for List<T>`, only work inside the package that defines the type.
+The conformance covers `List<Int>` only. A bound like `T: Encodable` accepts `List<Int>` and rejects `List<String>`. A generic type can carry at most one impl per protocol, because every instantiation shares one set of function names.
+
+An impl can also keep the target's type parameters open, with an optional condition on each. The condition uses the same inline bound syntax as function generics:
+
+```koja
+impl Encodable for List<T: Encodable>
+  fn to_wire(self) -> String
+    result = "["
+
+    for item in self
+      result = result <> item.to_wire()
+    end
+
+    result <> "]"
+  end
+end
+```
+
+The conformance covers every `List` whose element type is itself `Encodable`, at any nesting depth. `List<Int>` qualifies once `Int` does, and so does `List<List<Int>>`. Inside the body, the condition is in force, so `item.to_wire()` dispatches through it. Without a condition (`impl Encodable for List<T>`), the conformance covers every instantiation. Conditions attach to the target's own type parameters, so a concrete argument cannot carry one (`impl Encodable for List<Int: Encodable>` is an error).
 
 ### Trait Bounds
 
@@ -2143,6 +2161,8 @@ has_big = nums.any?(fn (n: Int) -> Bool n > 3 end)
 all_pos = nums.all?(fn (n: Int) -> Bool n > 0 end)
 ```
 
+`==` compares lists element by element. Two lists are equal when they have the same length and the elements at each index are equal. The conformance is conditional (`impl Equality for List<T: Equality>`), so a list of closures is not comparable and does not satisfy a `T: Equality` bound.
+
 List literals (`[a, b, c]`) are backed by the `ListLiteral<T>` protocol. See [Literal Protocols](#literal-protocols).
 
 ### `Map<K, V>`
@@ -2518,7 +2538,7 @@ protocol Equality
 end
 ```
 
-Powers the `==` and `!=` operators. Implemented for all numeric types, `Bool`, `String`, `Binary`, and `Bits`.
+Powers the `==` and `!=` operators. Implemented for all numeric types, `Bool`, `String`, `Binary`, and `Bits`. `List<T>` implements it conditionally, element-wise, when `T` implements `Equality`.
 
 ### `Hash` Protocol
 

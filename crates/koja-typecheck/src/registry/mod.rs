@@ -30,7 +30,7 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 
 use koja_ast::ast::Literal;
 use koja_ast::identifier::{
-    GlobalRegistryId, Identifier, Resolution, ResolvedType, TypeParamIndex,
+    AnonymousKind, GlobalRegistryId, Identifier, Resolution, ResolvedType, TypeParamIndex,
 };
 use koja_ast::span::Span;
 
@@ -40,9 +40,10 @@ mod format;
 
 pub use candidates::{Candidate, CandidateDetail, CandidateKind, KEYWORDS};
 pub use definitions::{
-    BuiltinDefinition, BuiltinShape, Conformance, ConformanceScope, ConstantDefinition, Dispatch,
-    EnumDefinition, FunctionSignature, ProtocolDefinition, ResolvedEnumVariant, ResolvedParam,
-    ResolvedProtocolMethod, ResolvedStructField, ResolvedVariantData, StructDefinition,
+    BoundOverlay, BuiltinDefinition, BuiltinShape, Conformance, ConformanceScope,
+    ConstantDefinition, Dispatch, EnumDefinition, FunctionSignature, ProtocolDefinition,
+    ResolvedEnumVariant, ResolvedParam, ResolvedProtocolMethod, ResolvedStructField,
+    ResolvedVariantData, StructDefinition,
 };
 pub use format::format_registry;
 
@@ -456,9 +457,10 @@ impl GlobalRegistry {
     }
 
     /// The conformance record of `target_id` to `protocol_id` that
-    /// covers the `target_args` instantiation. `Parameterized`
-    /// covers every instantiation, `Concrete` covers exactly its
-    /// recorded args. Typecheck uses this for bound enforcement and
+    /// covers the `target_args` instantiation. `Concrete` covers
+    /// exactly its recorded args, `Parameterized` covers every
+    /// instantiation whose args discharge the record's conditional
+    /// bounds. Typecheck uses this for bound enforcement and
     /// `spawn`. IR's bounded dispatch never reaches this path (it
     /// goes straight to `[target, method_name]`).
     pub fn lookup_conformance(
@@ -467,12 +469,136 @@ impl GlobalRegistry {
         protocol_id: GlobalRegistryId,
         target_args: &[ResolvedType],
     ) -> Option<&Conformance> {
+        self.lookup_conformance_with(target_id, protocol_id, target_args, None)
+    }
+
+    /// Like [`Self::lookup_conformance`], with an impl-local
+    /// [`BoundOverlay`] so obligations raised inside a conditional
+    /// impl body can discharge through the impl's own condition.
+    pub fn lookup_conformance_with(
+        &self,
+        target_id: GlobalRegistryId,
+        protocol_id: GlobalRegistryId,
+        target_args: &[ResolvedType],
+        overlay: Option<&BoundOverlay>,
+    ) -> Option<&Conformance> {
         self.conformance_records(target_id, protocol_id)?
             .iter()
             .find(|record| match &record.scope {
                 ConformanceScope::Concrete(args) => self.type_args_equivalent(args, target_args),
-                ConformanceScope::Parameterized => true,
+                ConformanceScope::Parameterized { bounds } => {
+                    self.conformance_bounds_satisfied(bounds, target_args, overlay)
+                }
             })
+    }
+
+    /// Whether every target arg discharges its slot's conditional
+    /// bounds. Unconditional records carry empty `bounds`, and a
+    /// lookup with no args (head-level consumers) has nothing to
+    /// check, so both zip to vacuous truth.
+    fn conformance_bounds_satisfied(
+        &self,
+        bounds: &[Vec<GlobalRegistryId>],
+        target_args: &[ResolvedType],
+        overlay: Option<&BoundOverlay>,
+    ) -> bool {
+        bounds.iter().zip(target_args).all(|(slot_bounds, arg)| {
+            slot_bounds
+                .iter()
+                .all(|&protocol_id| self.bound_satisfied(arg, protocol_id, overlay))
+        })
+    }
+
+    /// Whether `ty` discharges a `ty: protocol` obligation. Named
+    /// types consult their conformance records recursively (so
+    /// `List<List<Int>>: Equality` walks down). Type params
+    /// discharge through universal protocols, their declared
+    /// bounds, or the overlay. Tuples are structurally `Debug`,
+    /// and structurally `Equality` when every element is. Other
+    /// shapes (functions, unresolved) satisfy nothing.
+    pub fn bound_satisfied(
+        &self,
+        ty: &ResolvedType,
+        protocol_id: GlobalRegistryId,
+        overlay: Option<&BoundOverlay>,
+    ) -> bool {
+        match ty {
+            ResolvedType::Named {
+                resolution: Resolution::Global(target_id),
+                type_args,
+            } => self
+                .lookup_conformance_with(*target_id, protocol_id, type_args, overlay)
+                .is_some(),
+            ResolvedType::Named {
+                resolution: Resolution::TypeParam { owner, index },
+                ..
+            } => self.type_param_bound_granted(*owner, *index, protocol_id, overlay),
+            ResolvedType::Anonymous(AnonymousKind::Tuple { elements }) => {
+                self.tuple_bound_satisfied(elements, protocol_id, overlay)
+            }
+            _ => false,
+        }
+    }
+
+    /// A type param discharges a bound through a universal
+    /// protocol, its declared bounds, or an overlay slot.
+    fn type_param_bound_granted(
+        &self,
+        owner: GlobalRegistryId,
+        index: TypeParamIndex,
+        protocol_id: GlobalRegistryId,
+        overlay: Option<&BoundOverlay>,
+    ) -> bool {
+        if self.is_universal_protocol(protocol_id) {
+            return true;
+        }
+        let slot = index.as_u32() as usize;
+        let declared = self
+            .type_param_bounds(owner)
+            .and_then(|all| all.get(slot))
+            .is_some_and(|bounds| bounds.contains(&protocol_id));
+        declared
+            || overlay.is_some_and(|o| {
+                o.owner == owner
+                    && o.bounds
+                        .get(slot)
+                        .is_some_and(|bounds| bounds.contains(&protocol_id))
+            })
+    }
+
+    /// Structural tuple conformance: `Debug` unconditionally
+    /// (opaque elements render as `"..."`), `Equality` when every
+    /// element satisfies it, nothing else.
+    fn tuple_bound_satisfied(
+        &self,
+        elements: &[ResolvedType],
+        protocol_id: GlobalRegistryId,
+        overlay: Option<&BoundOverlay>,
+    ) -> bool {
+        let Some(entry) = self.get(protocol_id) else {
+            return false;
+        };
+        if entry.identifier.package() != "Global" || entry.identifier.path().len() != 1 {
+            return false;
+        }
+        match entry.identifier.last() {
+            "Debug" => true,
+            "Equality" => elements
+                .iter()
+                .all(|element| self.bound_satisfied(element, protocol_id, overlay)),
+            _ => false,
+        }
+    }
+
+    /// Whether `protocol_id` names a universal protocol
+    /// ([`UNIVERSAL_PROTOCOLS`]), which every type param satisfies
+    /// without a declared bound.
+    pub fn is_universal_protocol(&self, protocol_id: GlobalRegistryId) -> bool {
+        self.get(protocol_id).is_some_and(|entry| {
+            entry.identifier.package() == "Global"
+                && entry.identifier.path().len() == 1
+                && UNIVERSAL_PROTOCOLS.contains(&entry.identifier.last())
+        })
     }
 
     /// Whether `target_id` conforms to `protocol_id` under any
@@ -506,7 +632,8 @@ impl GlobalRegistry {
     /// an overlapping set of instantiations.
     fn conformances_overlap(&self, a: &Conformance, b: &Conformance) -> bool {
         match (&a.scope, &b.scope) {
-            (ConformanceScope::Parameterized, _) | (_, ConformanceScope::Parameterized) => true,
+            (ConformanceScope::Parameterized { .. }, _)
+            | (_, ConformanceScope::Parameterized { .. }) => true,
             (ConformanceScope::Concrete(a_args), ConformanceScope::Concrete(b_args)) => {
                 self.type_args_equivalent(a_args, b_args)
             }

@@ -84,6 +84,19 @@ impl BuiltinShape {
     }
 }
 
+/// Extra bounds a conditional impl grants its target's params while
+/// code inside that impl resolves. `impl Encodable for
+/// List<T: Encodable>` grants `TypeParam(List, 0): Encodable` to its
+/// own body, so obligations raised there can discharge through the
+/// impl's condition instead of the target's declared bounds.
+#[derive(Clone, Debug)]
+pub struct BoundOverlay {
+    /// Parallel to the owner's params, protocol ids per slot.
+    pub bounds: Vec<Vec<GlobalRegistryId>>,
+    /// The target type whose params the bounds attach to.
+    pub owner: GlobalRegistryId,
+}
+
 /// One recorded `target : protocol` fact, stamped by lift onto the
 /// target's struct/enum/builtin definition. `scope` says which
 /// instantiations of the target the fact covers, so `impl P for
@@ -99,20 +112,20 @@ pub struct Conformance {
 
 /// Which instantiations of the target a [`Conformance`] covers.
 /// Classified once at lift time, never re-derived from arg shapes.
-///
-/// Conditional conformance, when it lands, adds per-param bounds to
-/// `Parameterized` (empty bounds = unconditional) rather than a
-/// new variant.
 #[derive(Clone, Debug)]
 pub enum ConformanceScope {
     /// Covers exactly these target args, as in `impl P for Bag<Int>`.
     /// Impls on non-generic targets record as `Concrete(vec![])`, so
     /// `Parameterized` only ever appears on generic targets.
     Concrete(Vec<ResolvedType>),
-    /// Parameterized over the target's own params, covering every
-    /// instantiation. Written as `impl P for Bag<T>` or a header
-    /// conformance on a generic type.
-    Parameterized,
+    /// Parameterized over the target's own params. Written as
+    /// `impl P for Bag<T>` or a header conformance on a generic
+    /// type. `bounds` parallels the target's params. A conditional
+    /// conformance like `impl Equality for List<T: Equality>`
+    /// records the required protocol ids per slot, and an empty
+    /// inner vec means that slot is unconditional, so an all-empty
+    /// `bounds` covers every instantiation.
+    Parameterized { bounds: Vec<Vec<GlobalRegistryId>> },
 }
 
 /// Payload of a [`super::GlobalKind::Builtin`] entry. Unlike the

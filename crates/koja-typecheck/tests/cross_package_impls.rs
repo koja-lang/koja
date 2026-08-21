@@ -302,27 +302,29 @@ fn parameterized_stdlib_conformance_matches_every_instantiation() {
 }
 
 #[test]
-fn foreign_parameterized_target_rejected() {
-    assert_packages_fail_with(
-        &[(
-            PACKAGE,
-            "main.kojs",
-            "
-            protocol Encodable
-              fn to_wire(self) -> String
-            end
+fn foreign_parameterized_target_accepted_as_blanket() {
+    // An unconditional blanket over a foreign generic type is a
+    // conscious choice now that conditional bounds are spellable.
+    typecheck_script(&dedent(
+        "
+        protocol Encodable
+          fn to_wire(self) -> String
+        end
 
-            impl Encodable for List<T>
-              fn to_wire(self) -> String
-                \"list\"
-              end
-            end
+        impl Encodable for List<T>
+          fn to_wire(self) -> String
+            \"list\"
+          end
+        end
 
-            1.print()
-            ",
-        )],
-        &["parameterized conformance for a type from another package"],
-    );
+        fn render<T: Encodable>(value: T) -> String
+          value.to_wire()
+        end
+
+        render([1, 2]).print()
+        render([\"a\"]).print()
+        ",
+    ));
 }
 
 #[test]

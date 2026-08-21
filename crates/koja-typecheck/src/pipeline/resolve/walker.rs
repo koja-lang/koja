@@ -21,13 +21,14 @@
 //! [`Param.local_id`]: koja_ast::ast::Param
 //! [`Resolution::Local`]: koja_ast::identifier::Resolution::Local
 
-use koja_ast::ast::{Diagnostic, File, Function, ImplMember, Item, Param, Statement};
+use koja_ast::ast::{Diagnostic, File, Function, ImplBlock, ImplMember, Item, Param, Statement};
 use koja_ast::identifier::{GlobalRegistryId, Identifier, ResolvedType};
 
 use crate::pipeline::aliases::collect_file_aliases;
 use crate::pipeline::collect::nominal_target_path;
+use crate::pipeline::lift_signatures::{ResolutionScope, resolve_target_bounds};
 use crate::pipeline::local_scope::LocalScope;
-use crate::registry::{FunctionSignature, GlobalKind, GlobalRegistry};
+use crate::registry::{BoundOverlay, FunctionSignature, GlobalKind, GlobalRegistry};
 
 use super::ctx::{Resolver, ResolverEnv};
 use super::error_channel::{
@@ -47,6 +48,7 @@ pub(crate) fn resolve_file(
 ) {
     let aliases = collect_file_aliases(file);
     let mut env = ResolverEnv {
+        bound_overlay: None,
         file_aliases: &aliases,
         package,
         registry,
@@ -124,6 +126,7 @@ pub(crate) fn resolve_file(
                 };
                 let enclosing_type_id =
                     enclosing_type_id(&target_package, &target_path, env.registry);
+                env.bound_overlay = impl_bound_overlay(impl_block, enclosing_type_id, &env);
                 for member in &mut impl_block.members {
                     if let ImplMember::Function(function) = member {
                         let identifier = Identifier::member(
@@ -141,6 +144,7 @@ pub(crate) fn resolve_file(
                         );
                     }
                 }
+                env.bound_overlay = None;
             }
             Item::Extend(extend_block) => {
                 // Same as the Impl arm above, but routed to the target
@@ -192,6 +196,33 @@ pub(crate) fn resolve_file(
             resolve_statement(stmt, &mut resolver, diagnostics);
         }
     }
+}
+
+/// Rebuild a conditional impl's [`BoundOverlay`] for its members'
+/// body resolution. Bound names re-resolve into a throwaway sink
+/// because lift already diagnosed any unresolvable ones.
+fn impl_bound_overlay(
+    impl_block: &ImplBlock,
+    enclosing_type_id: Option<GlobalRegistryId>,
+    env: &ResolverEnv<'_>,
+) -> Option<BoundOverlay> {
+    if impl_block.target_bounds.is_empty() {
+        return None;
+    }
+    let owner = enclosing_type_id?;
+    let scope = ResolutionScope {
+        aliases: env.file_aliases,
+        package: env.package,
+        registry: env.registry,
+    };
+    let mut sink = Vec::new();
+    let bounds = resolve_target_bounds(
+        &impl_block.target,
+        &impl_block.target_bounds,
+        scope,
+        &mut sink,
+    );
+    Some(BoundOverlay { bounds, owner })
 }
 
 /// Look up the registry id for a type declared in `package` with

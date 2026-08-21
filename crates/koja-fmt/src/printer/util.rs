@@ -251,6 +251,35 @@ pub(super) fn annotation_to_doc(ann: &Annotation) -> Doc {
 }
 
 /// Formats a type expression (`Int32`, `List<T>`, `fn(A) -> B`, etc.).
+/// Renders an impl target with its conditional bounds inlined on
+/// the matching args (`List<T: Equality>`). Args without a bound
+/// entry and non-generic targets render like any other type.
+pub(super) fn impl_target_to_doc(target: &TypeExpr, target_bounds: &[TypeParam]) -> Doc {
+    let TypeExpr::Generic { path, args, .. } = target else {
+        return type_expr_to_doc(target);
+    };
+    if target_bounds.is_empty() {
+        return type_expr_to_doc(target);
+    }
+    let args_doc: Vec<Doc> = args
+        .iter()
+        .map(|arg| match arg {
+            TypeExpr::Named { path, .. } if path.len() == 1 => target_bounds
+                .iter()
+                .find(|tp| tp.name == path[0])
+                .map(|tp| text(format_type_param(tp)))
+                .unwrap_or_else(|| type_expr_to_doc(arg)),
+            _ => type_expr_to_doc(arg),
+        })
+        .collect();
+    concat(vec![
+        text(path.join(".")),
+        text("<"),
+        intersperse(args_doc, text(", ")),
+        text(">"),
+    ])
+}
+
 pub(super) fn type_expr_to_doc(ty: &TypeExpr) -> Doc {
     match ty {
         TypeExpr::Named { path, .. } => text(path.join(".")),

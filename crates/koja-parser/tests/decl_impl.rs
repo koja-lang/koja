@@ -78,6 +78,60 @@ fn trait_impl_with_generic_target() {
 }
 
 #[test]
+fn trait_impl_with_bounded_target_param() {
+    let block = first_impl(
+        "
+        impl Equality for List<T: Equality>
+          fn eq(self, other: List<T>) -> Bool
+            true
+          end
+        end
+        ",
+    );
+    assert!(matches!(
+        &block.target,
+        TypeExpr::Generic { path, args, .. } if path == &["List"] && args.len() == 1
+    ));
+    assert_eq!(block.target_bounds.len(), 1);
+    assert_eq!(block.target_bounds[0].name, "T");
+    assert_eq!(block.target_bounds[0].bounds, vec!["Equality"]);
+}
+
+#[test]
+fn trait_impl_with_multi_bound_target_param() {
+    let block = first_impl(
+        "
+        impl Show for Pair<A: Debug & Hash, B>
+          fn show(self) -> String
+            \"pair\"
+          end
+        end
+        ",
+    );
+    let TypeExpr::Generic { args, .. } = &block.target else {
+        panic!("expected generic target, got {:?}", block.target);
+    };
+    assert_eq!(args.len(), 2);
+    assert_eq!(block.target_bounds.len(), 1);
+    assert_eq!(block.target_bounds[0].name, "A");
+    assert_eq!(block.target_bounds[0].bounds, vec!["Debug", "Hash"]);
+}
+
+#[test]
+fn bound_on_non_param_target_arg_rejected() {
+    parse_failing_with(
+        "
+        impl Show for Box<Outer.Inner: Debug>
+          fn show(self) -> String
+            \"box\"
+          end
+        end
+        ",
+        &["bounds in an impl target only apply to bare type parameters"],
+    );
+}
+
+#[test]
 fn impl_body_rejects_non_function_non_alias() {
     parse_failing_with(
         "

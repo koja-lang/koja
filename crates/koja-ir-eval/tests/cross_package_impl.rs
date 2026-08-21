@@ -83,6 +83,66 @@ fn concrete_generic_instantiation_dispatches_through_bound_and_dot_call() {
 }
 
 #[test]
+fn conditional_impl_encodes_nested_lists() {
+    // A dep implements its protocol conditionally for `List<T:
+    // Encodable>`. The script discharges the bound at two depths
+    // (`List<String>` and `List<List<String>>`), and the impl body
+    // dispatches `item.to_wire()` through the impl's own condition.
+    let value = common::evaluate_script_with_dep(
+        "Codec",
+        &dedent(
+            "
+            protocol Encodable
+              fn to_wire(self) -> String
+            end
+
+            impl Encodable for String
+              fn to_wire(self) -> String
+                self
+              end
+            end
+
+            impl Encodable for List<T: Encodable>
+              fn to_wire(self) -> String
+                result = \"[\"
+
+                for item in self
+                  result = result <> item.to_wire()
+                end
+
+                result <> \"]\"
+              end
+            end
+
+            fn render<T: Encodable>(value: T) -> String
+              value.to_wire()
+            end
+            ",
+        ),
+        "\"#{Codec.render([\"a\", \"b\"])} #{Codec.render([[\"c\"], [\"d\"]])}\"",
+    )
+    .expect("interpreter should not error on this fixture");
+    assert_eq!(value, Value::string("[ab] [[c][d]]"));
+}
+
+#[test]
+fn list_equality_compares_elements() {
+    // Pins the `==` fix: the derived zero-field List `eq` used to
+    // report every same-typed pair equal. The conditional stdlib
+    // impl compares lengths and elements.
+    let value = common::evaluate_script(&dedent(
+        "
+        same = [1, 2] == [1, 2]
+        diff = [1, 2] == [1, 3]
+        shorter = [1, 2] == [1, 2, 3]
+        \"#{same} #{diff} #{shorter}\"
+        ",
+    ))
+    .expect("interpreter should not error on this fixture");
+    assert_eq!(value, Value::string("true false false"));
+}
+
+#[test]
 fn bare_dot_call_on_foreign_conformance_runs() {
     let value = common::evaluate_script_with_dep(
         "Codec",

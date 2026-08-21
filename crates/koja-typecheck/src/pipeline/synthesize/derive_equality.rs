@@ -165,6 +165,7 @@ fn equality_impl_block(target: TypeExpr, body_expr: Expr, span: Span) -> Item {
     let other_type = target.clone();
     Item::Impl(ImplBlock {
         target,
+        target_bounds: Vec::new(),
         trait_expr: equality_trait_expr(span),
         members: vec![ImplMember::Function(eq_function(
             other_type, body_expr, span,

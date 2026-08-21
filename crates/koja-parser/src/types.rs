@@ -14,7 +14,7 @@
 //! once the canonical PascalCase forms (`Bool`, `Int32`) landed in
 //! stdlib and project sources alike.
 
-use koja_ast::ast::TypeExpr;
+use koja_ast::ast::{TypeExpr, TypeParam};
 use koja_ast::labels::type_expr_span;
 use koja_ast::span::Span;
 use koja_ast::token::TokenKind;
@@ -177,5 +177,75 @@ impl Parser {
             args,
             span: self.span_from(start),
         }
+    }
+
+    /// Parse an `impl ... for <target>` type expression. A bare
+    /// type-param arg may carry inline conditional-conformance
+    /// bounds (`impl Equality for List<T: Equality & Hash>`), which
+    /// collect as [`TypeParam`]s while the returned target stays a
+    /// plain [`TypeExpr`]. Only impl targets admit this syntax.
+    /// Non-nominal targets fall back to [`Self::parse_type_expr`].
+    pub(crate) fn parse_impl_target(&mut self) -> (TypeExpr, Vec<TypeParam>) {
+        if !matches!(self.peek(), TokenKind::TypeIdent(_)) {
+            return (self.parse_type_expr(), Vec::new());
+        }
+        let start = self.current_span();
+        let mut path = vec![self.expect_type_ident()];
+        while self.eat(&TokenKind::Dot).is_some() {
+            if matches!(self.peek(), TokenKind::TypeIdent(_)) {
+                path.push(self.expect_type_ident());
+            } else {
+                break;
+            }
+        }
+        if self.eat(&TokenKind::Lt).is_none() {
+            let target = TypeExpr::Named {
+                path,
+                span: self.span_from(start),
+            };
+            return (target, Vec::new());
+        }
+        let mut args = Vec::new();
+        let mut bounds = Vec::new();
+        loop {
+            args.push(self.parse_impl_target_arg(&mut bounds));
+            if self.eat(&TokenKind::Comma).is_none() {
+                break;
+            }
+        }
+        self.expect_gt();
+        let target = TypeExpr::Generic {
+            path,
+            args,
+            span: self.span_from(start),
+        };
+        (target, bounds)
+    }
+
+    /// One generic arg of an impl target. A `:` after the arg reads
+    /// a `Bound (& Bound)*` list into `bounds`, legal only when the
+    /// arg is a bare single-segment name (a type param).
+    fn parse_impl_target_arg(&mut self, bounds: &mut Vec<TypeParam>) -> TypeExpr {
+        let arg = self.parse_type_expr();
+        if self.eat(&TokenKind::Colon).is_none() {
+            return arg;
+        }
+        let span = type_expr_span(&arg);
+        let mut protocols = vec![self.expect_type_ident()];
+        while self.eat(&TokenKind::Ampersand).is_some() {
+            protocols.push(self.expect_type_ident());
+        }
+        match &arg {
+            TypeExpr::Named { path, .. } if path.len() == 1 => bounds.push(TypeParam {
+                name: path[0].clone(),
+                bounds: protocols,
+                span,
+            }),
+            _ => self.error(
+                "bounds in an impl target only apply to bare type parameters".to_string(),
+                span,
+            ),
+        }
+        arg
     }
 }

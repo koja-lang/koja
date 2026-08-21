@@ -379,4 +379,53 @@ struct ListTest
 
     Result.Ok(true)
   end
+
+  @test "equality compares elements"
+  fn test_equality -> Result<Bool, String>
+    unless [1, 2, 3] == [1, 2, 3]
+      return Result.Err("identical lists should be equal")
+    end
+
+    if [1, 2, 3] == [1, 2, 4]
+      return Result.Err("lists differing in one element should not be equal")
+    end
+
+    if [1, 2] == [1, 2, 3]
+      return Result.Err("lists of different lengths should not be equal")
+    end
+
+    empty_a: List<Int> = []
+    empty_b: List<Int> = []
+
+    unless empty_a == empty_b
+      return Result.Err("empty lists should be equal")
+    end
+
+    Result.Ok(true)
+  end
+
+  @test "equality on string and nested lists"
+  fn test_equality_nested -> Result<Bool, String>
+    unless ["a", "b"] == ["a", "b"]
+      return Result.Err("string lists should compare element-wise")
+    end
+
+    if ["a", "b"] == ["a", "c"]
+      return Result.Err("differing string lists should not be equal")
+    end
+
+    nested_a = [[1, 2], [3]]
+    nested_b = [[1, 2], [3]]
+    nested_c = [[1, 2], [4]]
+
+    unless nested_a == nested_b
+      return Result.Err("nested lists should compare recursively")
+    end
+
+    if nested_a == nested_c
+      return Result.Err("differing nested lists should not be equal")
+    end
+
+    Result.Ok(true)
+  end
 end

@@ -18,7 +18,7 @@ use crate::pipeline::visibility::check_reference_visibility;
 use crate::registry::{GlobalKind, GlobalRegistry, ResolvedStructField};
 
 use super::coercion::{check_compatible_stamping, mismatch_message};
-use super::ctx::{Callee, Resolver};
+use super::ctx::{BoundContext, Callee, Resolver};
 use super::expr::{resolve_expr, resolve_expr_with_expected};
 use super::field_defaults::synthesize_default_init;
 use super::inference::{PhantomContext, fill_from_expected, finalize_inference, unify_pairs};
@@ -151,7 +151,7 @@ pub(super) fn resolve_struct_construction(
         fields,
         seeded_subst,
         span,
-        resolver.registry,
+        resolver.bound_context(),
         diagnostics,
     );
     let substituted_fields = substitute_declared_fields(&definition.fields, &subst);
@@ -275,9 +275,10 @@ fn infer_struct_type_args(
     fields: &[FieldInit],
     seeded: Substitution,
     span: Span,
-    registry: &GlobalRegistry,
+    ctx: BoundContext<'_>,
     diagnostics: &mut Vec<Diagnostic>,
 ) -> Substitution {
+    let registry = ctx.registry;
     let mut subst = seeded;
     let pairs = fields.iter().filter_map(|field| {
         let (_, declared_field) = lookup_named_field(declared, &field.name)?;
@@ -291,7 +292,7 @@ fn infer_struct_type_args(
         &subst,
         &PhantomContext::Fields,
         span,
-        registry,
+        ctx,
         diagnostics,
     );
     subst
