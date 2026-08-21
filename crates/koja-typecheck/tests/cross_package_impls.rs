@@ -13,13 +13,15 @@
 //! errors. The inverse direction (foreign protocol, local type) is
 //! pinned by the existing protocol and Process suites.
 
+use koja_ast::identifier::{Resolution, ResolvedType};
 use koja_ast::util::dedent;
 use koja_parser::ParseMode;
 
 mod common;
 
 use common::{
-    PACKAGE, check_packages, diagnostic_messages, global_id, registry_id, typecheck_script,
+    PACKAGE, assert_script_fails_with, check_packages, diagnostic_messages, global_id, registry_id,
+    typecheck_script,
 };
 
 /// Check `files` expecting failure, and assert every needle appears
@@ -58,7 +60,7 @@ fn local_protocol_for_foreign_builtin_records_conformance() {
     assert!(
         checked
             .registry
-            .lookup_conformance(string_id, protocol_id)
+            .lookup_conformance(string_id, protocol_id, &[])
             .is_some(),
         "expected `String : Encodable` conformance on the Global.String entry",
     );
@@ -147,7 +149,7 @@ fn foreign_protocol_for_foreign_type_conforms() {
     assert!(
         checked
             .registry
-            .lookup_conformance(string_id, protocol_id)
+            .lookup_conformance(string_id, protocol_id, &[])
             .is_some(),
         "expected `String : Lib.Marked` conformance on the Global.String entry",
     );
@@ -197,7 +199,158 @@ fn duplicate_conformance_across_packages_diagnosed() {
 }
 
 #[test]
-fn foreign_generic_target_rejected() {
+fn foreign_generic_concrete_instantiation_conforms() {
+    // `impl Encodable for List<Int>` records a concrete fact keyed
+    // by the instantiation, so `List<Int>` conforms and
+    // `List<String>` does not.
+    let checked = typecheck_script(&dedent(
+        "
+        protocol Encodable
+          fn to_wire(self) -> String
+        end
+
+        impl Encodable for List<Int>
+          fn to_wire(self) -> String
+            \"list\"
+          end
+        end
+
+        1.print()
+        ",
+    ));
+    let list_id = global_id(&checked, "List");
+    let protocol_id = registry_id(&checked, PACKAGE, &["Encodable"]);
+    let int_arg = ResolvedType::leaf(Resolution::Global(global_id(&checked, "Int")));
+    let string_arg = ResolvedType::leaf(Resolution::Global(global_id(&checked, "String")));
+    assert!(
+        checked
+            .registry
+            .lookup_conformance(list_id, protocol_id, std::slice::from_ref(&int_arg))
+            .is_some(),
+        "expected `List<Int> : Encodable` to be recorded",
+    );
+    assert!(
+        checked
+            .registry
+            .lookup_conformance(list_id, protocol_id, std::slice::from_ref(&string_arg))
+            .is_none(),
+        "expected `List<String>` to stay unconformant",
+    );
+}
+
+#[test]
+fn bound_matches_only_the_conforming_instantiation() {
+    typecheck_script(&dedent(
+        "
+        protocol Encodable
+          fn to_wire(self) -> String
+        end
+
+        impl Encodable for List<Int>
+          fn to_wire(self) -> String
+            \"list\"
+          end
+        end
+
+        fn render<T: Encodable>(value: T) -> String
+          value.to_wire()
+        end
+
+        render([1, 2]).print()
+        ",
+    ));
+}
+
+#[test]
+fn bound_rejects_the_other_instantiation() {
+    assert_script_fails_with(
+        "
+        protocol Encodable
+          fn to_wire(self) -> String
+        end
+
+        impl Encodable for List<Int>
+          fn to_wire(self) -> String
+            \"list\"
+          end
+        end
+
+        fn render<T: Encodable>(value: T) -> String
+          value.to_wire()
+        end
+
+        render([\"a\"]).print()
+        ",
+        &["does not implement protocol `Encodable`"],
+    );
+}
+
+#[test]
+fn parameterized_stdlib_conformance_matches_every_instantiation() {
+    // `impl Debug for List<T>`-shaped stdlib facts stay
+    // parameterized, so any instantiation discharges the bound.
+    typecheck_script(&dedent(
+        "
+        fn show<T: Debug>(value: T) -> String
+          value.format()
+        end
+
+        show([1, 2]).print()
+        show([\"a\"]).print()
+        ",
+    ));
+}
+
+#[test]
+fn foreign_parameterized_target_rejected() {
+    assert_packages_fail_with(
+        &[(
+            PACKAGE,
+            "main.kojs",
+            "
+            protocol Encodable
+              fn to_wire(self) -> String
+            end
+
+            impl Encodable for List<T>
+              fn to_wire(self) -> String
+                \"list\"
+              end
+            end
+
+            1.print()
+            ",
+        )],
+        &["parameterized conformance for a type from another package"],
+    );
+}
+
+#[test]
+fn mixed_target_args_rejected() {
+    assert_packages_fail_with(
+        &[(
+            PACKAGE,
+            "main.kojs",
+            "
+            protocol Encodable
+              fn to_wire(self) -> String
+            end
+
+            impl Encodable for Map<String, V>
+              fn to_wire(self) -> String
+                \"map\"
+              end
+            end
+
+            1.print()
+            ",
+        )],
+        &["mix type parameters with concrete types"],
+    );
+}
+
+#[test]
+fn duplicate_concrete_instantiation_diagnosed() {
     assert_packages_fail_with(
         &[(
             PACKAGE,
@@ -209,14 +362,102 @@ fn foreign_generic_target_rejected() {
 
             impl Encodable for List<Int>
               fn to_wire(self) -> String
-                \"list\"
+                \"one\"
+              end
+            end
+
+            impl Encodable for List<Int>
+              fn to_wire(self) -> String
+                \"two\"
               end
             end
 
             1.print()
             ",
         )],
-        &["does not yet support conformance impls for generic types from other packages"],
+        &["duplicate `impl", "Global.List<Global.Int>`"],
+    );
+}
+
+#[test]
+fn duplicate_concrete_instantiation_across_packages_diagnosed() {
+    assert_packages_fail_with(
+        &[
+            (
+                "Lib",
+                "lib.koja",
+                "
+                protocol Encodable
+                  fn to_wire(self) -> String
+                end
+
+                impl Encodable for List<Int>
+                  fn to_wire(self) -> String
+                    \"from Lib\"
+                  end
+                end
+                ",
+            ),
+            (
+                PACKAGE,
+                "main.kojs",
+                "
+                impl Lib.Encodable for List<Int>
+                  fn to_wire(self) -> String
+                    \"from app\"
+                  end
+                end
+
+                1.print()
+                ",
+            ),
+        ],
+        &["duplicate `impl", "Global.List<Global.Int>`"],
+    );
+}
+
+#[test]
+fn distinct_instantiations_coexist_as_facts_but_collide_on_method_names() {
+    // Known limitation. `impl Encodable for List<Int>` and
+    // `impl Encodable for List<String>` are distinct conformance
+    // facts (no duplicate-impl diagnostic), but both register
+    // `to_wire` in the flat `Global.List` method namespace, so the
+    // pair still fails to compile.
+    let failure = check_packages(
+        &[(
+            PACKAGE,
+            "main.kojs",
+            "
+            protocol Encodable
+              fn to_wire(self) -> String
+            end
+
+            impl Encodable for List<Int>
+              fn to_wire(self) -> String
+                \"ints\"
+              end
+            end
+
+            impl Encodable for List<String>
+              fn to_wire(self) -> String
+                \"strings\"
+              end
+            end
+
+            1.print()
+            ",
+        )],
+        ParseMode::Script,
+    )
+    .expect_err("the shared method name must collide");
+    let messages = diagnostic_messages(&failure);
+    assert!(
+        messages.iter().any(|m| m.contains("already defined")),
+        "expected a method-name collision, got: {messages:#?}",
+    );
+    assert!(
+        !messages.iter().any(|m| m.contains("duplicate `impl")),
+        "distinct instantiations must not read as duplicate conformances, got: {messages:#?}",
     );
 }
 

@@ -40,11 +40,13 @@ mod format;
 
 pub use candidates::{Candidate, CandidateDetail, CandidateKind, KEYWORDS};
 pub use definitions::{
-    BuiltinDefinition, BuiltinShape, ConstantDefinition, Dispatch, EnumDefinition,
-    FunctionSignature, ProtocolDefinition, ResolvedEnumVariant, ResolvedParam,
+    BuiltinDefinition, BuiltinShape, Conformance, ConformanceScope, ConstantDefinition, Dispatch,
+    EnumDefinition, FunctionSignature, ProtocolDefinition, ResolvedEnumVariant, ResolvedParam,
     ResolvedProtocolMethod, ResolvedStructField, ResolvedVariantData, StructDefinition,
 };
 pub use format::format_registry;
+
+use crate::pipeline::resolve::types::types_equivalent;
 
 /// What kind of declaration a registry entry points at.
 ///
@@ -404,20 +406,31 @@ impl GlobalRegistry {
         }
     }
 
-    /// Record `target_id` as conforming to `protocol_id` with the
-    /// user-written `protocol_args` (e.g. `[String]` for
-    /// `impl Eq<String> for User`). Returns the previously-recorded
-    /// args if `target` already conformed to `protocol`. The
-    /// caller emits a "duplicate `impl P for T`" diagnostic.
-    /// Panics unless `target_id` names a struct or enum with a
-    /// stamped definition (lift orders enum/struct definition
-    /// stamping before impl conformance recording).
+    /// Record a [`Conformance`] of `target_id` to `protocol_id`.
+    /// Returns the previously-recorded record when the new one
+    /// overlaps it (a `Parameterized` record overlaps everything,
+    /// two `Concrete` records overlap when their target args are
+    /// equivalent). The caller emits the "duplicate `impl P for T`"
+    /// diagnostic. Panics unless `target_id` names a builtin or a
+    /// struct/enum with a stamped definition (lift orders
+    /// enum/struct definition stamping before impl conformance
+    /// recording).
     pub(crate) fn record_conformance(
         &mut self,
         target_id: GlobalRegistryId,
         protocol_id: GlobalRegistryId,
-        protocol_args: Vec<ResolvedType>,
-    ) -> Option<Vec<ResolvedType>> {
+        conformance: Conformance,
+    ) -> Option<Conformance> {
+        // Overlap check first, since type equivalence needs `&self`
+        // while the insert below holds the entry mutably.
+        if let Some(existing) = self
+            .conformance_records(target_id, protocol_id)
+            .unwrap_or_default()
+            .iter()
+            .find(|record| self.conformances_overlap(record, &conformance))
+        {
+            return Some(existing.clone());
+        }
         let entry = self.entries.get_mut(&target_id).unwrap_or_else(|| {
             panic!(
                 "record_conformance on missing registry id {target_id}: \
@@ -435,25 +448,50 @@ impl GlobalRegistry {
                 other.label(),
             ),
         };
-        if let Some(prev) = conformances.get(&protocol_id) {
-            return Some(prev.clone());
-        }
-        conformances.insert(protocol_id, protocol_args);
+        conformances
+            .entry(protocol_id)
+            .or_default()
+            .push(conformance);
         None
     }
 
-    /// Whether `target_id` conforms to `protocol_id`. Returns the
-    /// user-written protocol args (e.g. `[String]` for
-    /// `Eq<String>`) when present, else `None`. O(1) HashMap
-    /// lookup on the target's conformance index. IR's bounded
-    /// dispatch never reaches this path (it goes straight to
-    /// `[target, method_name]`). Typecheck uses it for
-    /// bound enforcement.
+    /// The conformance record of `target_id` to `protocol_id` that
+    /// covers the `target_args` instantiation. `Parameterized`
+    /// covers every instantiation, `Concrete` covers exactly its
+    /// recorded args. Typecheck uses this for bound enforcement and
+    /// `spawn`. IR's bounded dispatch never reaches this path (it
+    /// goes straight to `[target, method_name]`).
     pub fn lookup_conformance(
         &self,
         target_id: GlobalRegistryId,
         protocol_id: GlobalRegistryId,
-    ) -> Option<&[ResolvedType]> {
+        target_args: &[ResolvedType],
+    ) -> Option<&Conformance> {
+        self.conformance_records(target_id, protocol_id)?
+            .iter()
+            .find(|record| match &record.scope {
+                ConformanceScope::Concrete(args) => self.type_args_equivalent(args, target_args),
+                ConformanceScope::Parameterized => true,
+            })
+    }
+
+    /// Whether `target_id` conforms to `protocol_id` under any
+    /// instantiation. For consumers that only ask "which protocols"
+    /// and have no instantiation at hand (monitor, carriers, the
+    /// driver's Task check).
+    pub fn conforms_any(&self, target_id: GlobalRegistryId, protocol_id: GlobalRegistryId) -> bool {
+        self.conformance_records(target_id, protocol_id)
+            .is_some_and(|records| !records.is_empty())
+    }
+
+    /// Every recorded conformance of `target_id` to `protocol_id`,
+    /// or `None` when the entry is not a builtin/struct/enum or has
+    /// no record for that protocol.
+    pub fn conformance_records(
+        &self,
+        target_id: GlobalRegistryId,
+        protocol_id: GlobalRegistryId,
+    ) -> Option<&[Conformance]> {
         let entry = self.entries.get(&target_id)?;
         let conformances = match &entry.kind {
             GlobalKind::Builtin(def) => &def.conformances,
@@ -462,6 +500,22 @@ impl GlobalRegistry {
             _ => return None,
         };
         conformances.get(&protocol_id).map(Vec::as_slice)
+    }
+
+    /// Whether two records for one `(target, protocol)` pair claim
+    /// an overlapping set of instantiations.
+    fn conformances_overlap(&self, a: &Conformance, b: &Conformance) -> bool {
+        match (&a.scope, &b.scope) {
+            (ConformanceScope::Parameterized, _) | (_, ConformanceScope::Parameterized) => true,
+            (ConformanceScope::Concrete(a_args), ConformanceScope::Concrete(b_args)) => {
+                self.type_args_equivalent(a_args, b_args)
+            }
+        }
+    }
+
+    /// Pairwise [`types_equivalent`] over two arg lists.
+    fn type_args_equivalent(&self, a: &[ResolvedType], b: &[ResolvedType]) -> bool {
+        a.len() == b.len() && a.iter().zip(b).all(|(x, y)| types_equivalent(x, y, self))
     }
 
     /// Stamp a resolved method roster. Panics unless the entry's

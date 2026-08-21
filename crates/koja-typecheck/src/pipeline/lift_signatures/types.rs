@@ -466,11 +466,23 @@ pub(super) fn render_resolved(ty: &ResolvedType, registry: &GlobalRegistry) -> S
         }
         ResolvedType::Named {
             resolution: Resolution::Global(id),
-            ..
-        } => match registry.get(*id) {
-            Some(entry) => entry.identifier.qualified_name(),
-            None => "<unknown>".to_string(),
-        },
+            type_args,
+        } => {
+            let head = match registry.get(*id) {
+                Some(entry) => entry.identifier.qualified_name(),
+                None => "<unknown>".to_string(),
+            };
+            if type_args.is_empty() {
+                head
+            } else {
+                let rendered = type_args
+                    .iter()
+                    .map(|arg| render_resolved(arg, registry))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                format!("{head}<{rendered}>")
+            }
+        }
         ResolvedType::Named {
             resolution: Resolution::Local(_),
             ..

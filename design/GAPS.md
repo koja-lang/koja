@@ -185,14 +185,14 @@ a rule that a builtin satisfies bounds by shape.
 
 ---
 
-## Protocol conformances stop at instantiation granularity
+## Protocol conformances cannot be conditional
 
 Found 2026-08-09 while designing an `Encodable` protocol for the
 `messagepack` package. The package boundary fell on 2026-08-21:
-`impl P for T` accepts any protocol and any non-generic type, with
-no orphan rule. A codec package can implement its protocol for
-`String` and `Int`, and an adapter package can conform one
-dependency's type to another dependency's protocol (the Elixir
+`impl P for T` accepts any protocol and any type, with no orphan
+rule. A codec package can implement its protocol for `String` and
+`Int`, and an adapter package can conform one dependency's type to
+another dependency's protocol (the Elixir
 `Jason.Encoder`-glue-package precedent, which a Rust-style
 protocol-or-target-local rule would forbid). Coherence is
 whole-program collision detection instead of a source restriction:
@@ -208,19 +208,28 @@ catches up to an adapter package), the app cannot compile the pair
 until the adapter updates. An app-level "prefer this impl" override
 can close that hole later without changing today's semantics.
 
-**What remains,** in two steps of increasing size:
+Instantiation keying landed the same day: conformance facts carry a
+`Parameterized`/`Concrete` scope, so `impl Encodable for
+List<Value>` conforms only `List<Value>`, bound discharge matches
+the full instantiation, and duplicate detection is per
+instantiation. Known residual: two concrete impls of one protocol
+for different instantiations of one type still collide on method
+names in the flat `[Type, method]` namespace, so one concrete impl
+per `(type, protocol)` is the practical limit until methods key by
+instantiation too.
 
-1. Concrete generic impl targets (`impl Encodable for List<Value>`),
-   keying conformance facts by instantiation. Foreign generic
-   targets are rejected outright today, since the conformance map on
-   the target entry is keyed by protocol id only and one impl would
-   claim every `List<T>`.
-2. Conditional conformance (`impl Encodable for List<T>` requiring
-   `T: Encodable`), discharged per instantiation during
-   monomorphization like existing function bounds.
+**What remains:** conditional conformance (`impl Encodable for
+List<T>` requiring `T: Encodable`), discharged per instantiation
+during monomorphization like existing function bounds. Until it
+lands, parameterized impl targets are rejected outside the target's
+own package, and targets mixing type parameters with concrete args
+(`impl P for Map<String, V>`) are rejected everywhere. The
+`ConformanceScope::Parameterized` variant is the extension point:
+per-param bounds attach there (empty bounds = unconditional) rather
+than a new variant.
 
 The collection-`eq` hole in the builtin-derives entry above waits on
-step 2's spelling.
+conditional conformance's spelling.
 
 ---
 

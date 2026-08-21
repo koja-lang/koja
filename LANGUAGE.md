@@ -1386,7 +1386,19 @@ impl Encodable for String
 end
 ```
 
-The compiler checks the whole program for conflicts. If two packages implement the same protocol for the same type, or give one type two functions with the same name, the build fails with an error at the conflicting declaration. Implementing a protocol for a generic type from another package (for example `impl Encodable for List<Int>`) is not supported yet.
+The compiler checks the whole program for conflicts. If two packages implement the same protocol for the same type, or give one type two functions with the same name, the build fails with an error at the conflicting declaration.
+
+A protocol can also be implemented for one concrete instantiation of a generic type, even a generic type from another package:
+
+```koja
+impl Encodable for List<Int>
+  fn to_wire(self) -> String
+    "#{self.length()} ints"
+  end
+end
+```
+
+The conformance covers `List<Int>` only. A bound like `T: Encodable` accepts `List<Int>` and rejects `List<String>`. A generic type can carry at most one such impl per protocol, because every instantiation shares one set of function names. Impls that keep the type parameter open, like `impl Encodable for List<T>`, only work inside the package that defines the type.
 
 ### Trait Bounds
 

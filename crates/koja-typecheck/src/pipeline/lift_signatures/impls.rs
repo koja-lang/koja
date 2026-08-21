@@ -20,14 +20,14 @@ use crate::pipeline::collect::nominal_target_path;
 use crate::pipeline::resolve::types::types_equivalent;
 use crate::pipeline::unify::{Substitution, substitute};
 use crate::registry::{
-    Dispatch, GlobalKind, GlobalRegistry, InsertOutcome, ProtocolDefinition,
-    ResolvedProtocolMethod, VisibilityScope,
+    Conformance, ConformanceScope, Dispatch, GlobalKind, GlobalRegistry, InsertOutcome,
+    ProtocolDefinition, ResolvedProtocolMethod, VisibilityScope,
 };
 
 use super::LiftScope;
 use super::ProtocolBodies;
 use super::SelfContext;
-use super::functions::lift_function_with_identifier;
+use super::functions::{is_concrete_type, lift_function_with_identifier};
 use super::types::{
     TypeParamScope, concrete_self_type, dispatch_label, render_resolved, resolve_type_expr,
     type_expr_span,
@@ -142,17 +142,6 @@ pub(super) fn lift_impl(
         // Collect already diagnosed. Nothing was registered.
         return;
     }
-    if target_package != scope.package
-        && scope
-            .registry
-            .lookup(&target_identifier)
-            .is_some_and(|(_, e)| !e.type_params.is_empty())
-    {
-        // Foreign generic targets wait on instantiation-keyed
-        // conformance. Collect already diagnosed and skipped
-        // method registration.
-        return;
-    }
     // Resolve the impl target's type expression up front so method
     // `self` types as the impl's resolved target (e.g. `Bag<Int>`
     // for `impl Bag<Int>` or `impl P for Bag<Int>`). Concrete-arg
@@ -200,6 +189,7 @@ pub(super) fn lift_impl(
         .lookup(&target_identifier)
         .expect("target entry was checked above")
         .0;
+    let foreign_target = target_package != scope.package;
     let trait_expr = impl_block.trait_expr.clone();
     let mut site = ConformanceSite::Impl(impl_block);
     verify_and_synthesize_conformance(
@@ -211,7 +201,14 @@ pub(super) fn lift_impl(
         scope,
         diagnostics,
     );
-    record_target_conformance(&site, target_id, &resolved, scope.registry, diagnostics);
+    record_target_conformance(
+        &site,
+        target_id,
+        foreign_target,
+        &resolved,
+        scope.registry,
+        diagnostics,
+    );
 }
 
 /// Check every conformance-header entry on a struct/enum decl
@@ -264,7 +261,16 @@ pub(super) fn lift_header_conformances(
             scope,
             diagnostics,
         );
-        record_target_conformance(&site, target_id, &resolved, scope.registry, diagnostics);
+        // Header conformances always sit inside the target's own
+        // package, so the target is never foreign here.
+        record_target_conformance(
+            &site,
+            target_id,
+            false,
+            &resolved,
+            scope.registry,
+            diagnostics,
+        );
     }
 }
 
@@ -498,15 +504,18 @@ fn resolve_protocol_impl_heads(
 }
 
 /// Record `target_id : protocol_id` on the target's struct/enum
-/// definition. Runs after conformance verification +
-/// default-body synthesis so the conformance fact is only
-/// recorded when the declaring site is well-formed. Diagnoses
-/// duplicate conformance declarations (a second `impl P for T`,
-/// or a header entry doubled by either form) against the
-/// existing conformance map.
+/// definition, classified into a [`ConformanceScope`] by the
+/// resolved target's instantiation. Runs after conformance
+/// verification + default-body synthesis so the conformance fact
+/// is only recorded when the declaring site is well-formed.
+/// Diagnoses overlapping conformance declarations (a second
+/// `impl P for T`, a header entry doubled by either form, or a
+/// concrete impl repeating an instantiation) against the existing
+/// conformance records.
 fn record_target_conformance(
     site: &ConformanceSite<'_>,
     target_id: GlobalRegistryId,
+    foreign_target: bool,
     resolved: &ResolvedImplHeads,
     registry: &mut GlobalRegistry,
     diagnostics: &mut Vec<Diagnostic>,
@@ -515,8 +524,23 @@ fn record_target_conformance(
         ResolvedType::Named { type_args, .. } => type_args.clone(),
         _ => Vec::new(),
     };
+    let Some(scope) = classify_conformance_scope(
+        site,
+        target_id,
+        foreign_target,
+        resolved,
+        &protocol_args,
+        registry,
+        diagnostics,
+    ) else {
+        return;
+    };
+    let conformance = Conformance {
+        protocol_args,
+        scope,
+    };
     if registry
-        .record_conformance(target_id, resolved.protocol_id, protocol_args)
+        .record_conformance(target_id, resolved.protocol_id, conformance)
         .is_some()
     {
         let target_label = render_resolved(&resolved.target, registry);
@@ -531,6 +555,87 @@ fn record_target_conformance(
         };
         diagnostics.push(Diagnostic::error(message, site.span()));
     }
+}
+
+/// Classify the resolved impl target's instantiation into a
+/// [`ConformanceScope`]. Targets that mix type parameters with
+/// concrete args, and parameterized targets from another package,
+/// wait on conditional conformance, so those diagnose and return
+/// `None`.
+fn classify_conformance_scope(
+    site: &ConformanceSite<'_>,
+    target_id: GlobalRegistryId,
+    foreign_target: bool,
+    resolved: &ResolvedImplHeads,
+    protocol_args: &[ResolvedType],
+    registry: &GlobalRegistry,
+    diagnostics: &mut Vec<Diagnostic>,
+) -> Option<ConformanceScope> {
+    let target_args = match &resolved.target {
+        ResolvedType::Named { type_args, .. } => type_args.as_slice(),
+        _ => &[],
+    };
+    if target_args.is_empty() {
+        return Some(ConformanceScope::Concrete(Vec::new()));
+    }
+    let target_label = render_resolved(&resolved.target, registry);
+    if targets_own_params_in_order(target_id, target_args, registry) {
+        if foreign_target {
+            diagnostics.push(Diagnostic::error(
+                format!(
+                    "typecheck does not yet support parameterized conformance for a type \
+                     from another package (`{target_label}` waits on conditional conformance)"
+                ),
+                site.span(),
+            ));
+            return None;
+        }
+        return Some(ConformanceScope::Parameterized);
+    }
+    if !target_args.iter().all(is_concrete_type) {
+        diagnostics.push(Diagnostic::error(
+            format!(
+                "typecheck does not yet support conformance targets that mix type \
+                 parameters with concrete types (`{target_label}` waits on conditional \
+                 conformance)"
+            ),
+            site.span(),
+        ));
+        return None;
+    }
+    if !protocol_args.iter().all(is_concrete_type) {
+        let protocol_label = render_resolved(&resolved.protocol, registry);
+        diagnostics.push(Diagnostic::error(
+            format!(
+                "protocol arguments on `impl {protocol_label} for {target_label}` must be \
+                 concrete types when the target is a concrete instantiation"
+            ),
+            site.span(),
+        ));
+        return None;
+    }
+    Some(ConformanceScope::Concrete(target_args.to_vec()))
+}
+
+/// True when `args` is exactly the target's own param list in
+/// declaration order (`Bag<T>` on `struct Bag<T>`), the shape a
+/// parameterized impl or a header conformance resolves to.
+fn targets_own_params_in_order(
+    target_id: GlobalRegistryId,
+    args: &[ResolvedType],
+    registry: &GlobalRegistry,
+) -> bool {
+    let arity = registry.type_params(target_id).map_or(0, <[String]>::len);
+    args.len() == arity
+        && args.iter().enumerate().all(|(position, arg)| {
+            matches!(
+                arg,
+                ResolvedType::Named {
+                    resolution: Resolution::TypeParam { owner, index },
+                    ..
+                } if *owner == target_id && index.as_u32() as usize == position
+            )
+        })
 }
 
 fn verify_and_synthesize_conformance(

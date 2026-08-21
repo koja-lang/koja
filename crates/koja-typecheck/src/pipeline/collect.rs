@@ -724,17 +724,6 @@ fn register_impl(
         ));
         return;
     }
-    if target_package != package && !entry.type_params.is_empty() {
-        diagnostics.push(Diagnostic::error(
-            format!(
-                "typecheck does not yet support conformance impls for generic types \
-                 from other packages (`{}` is generic)",
-                target_path.join("."),
-            ),
-            type_expr_span(&impl_block.target),
-        ));
-        return;
-    }
     register_block_methods(
         &target_package,
         &target_path,

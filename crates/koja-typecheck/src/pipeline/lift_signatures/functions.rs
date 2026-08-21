@@ -125,10 +125,10 @@ fn concrete_impl_args(self_context: SelfContext<'_>) -> Vec<ResolvedType> {
 /// True when `ty` contains no `Resolution::TypeParam` references:
 /// either a fully-concrete `Named { resolution: Global, .. }` (with
 /// concrete `type_args` recursively) or a function type whose
-/// params and return are both concrete. Used by
-/// [`concrete_impl_args`] to gate the impl-args mangling shortcut
-/// on "no generics flow through this shape".
-fn is_concrete_type(ty: &ResolvedType) -> bool {
+/// params and return are both concrete. Gates the impl-args mangling
+/// shortcut in [`concrete_impl_args`] and conformance-scope
+/// classification in [`super::impls`].
+pub(super) fn is_concrete_type(ty: &ResolvedType) -> bool {
     match ty {
         ResolvedType::Named {
             resolution: Resolution::Global(_),

@@ -590,11 +590,7 @@ fn check_task_conformance(checked: &CheckedProgram, task_name: &str, provider: &
         eprintln!("internal error: stdlib protocol `Koja.Task` is not registered");
         process::exit(1);
     };
-    if checked
-        .registry
-        .lookup_conformance(target_id, protocol_id)
-        .is_none()
-    {
+    if !checked.registry.conforms_any(target_id, protocol_id) {
         eprintln!(
             "error: task `{task_name}` names type `{}.{}`, which does not implement `Koja.Task`",
             provider.namespace, provider.type_name

@@ -52,6 +52,37 @@ fn codec_pattern_dispatches_both_directions_through_one_bound() {
 }
 
 #[test]
+fn concrete_generic_instantiation_dispatches_through_bound_and_dot_call() {
+    // A dep implements its protocol for `List<Int>`, one concrete
+    // instantiation of a foreign generic type. The script reaches
+    // the impl method through a `T: P` bound and through bare
+    // dot-call on the matching receiver.
+    let value = common::evaluate_script_with_dep(
+        "Codec",
+        &dedent(
+            "
+            protocol Encodable
+              fn to_wire(self) -> String
+            end
+
+            impl Encodable for List<Int>
+              fn to_wire(self) -> String
+                \"#{self.length()} ints\"
+              end
+            end
+
+            fn render<T: Encodable>(value: T) -> String
+              value.to_wire()
+            end
+            ",
+        ),
+        "\"#{Codec.render([1, 2, 3])} / #{[4, 5].to_wire()}\"",
+    )
+    .expect("interpreter should not error on this fixture");
+    assert_eq!(value, Value::string("3 ints / 2 ints"));
+}
+
+#[test]
 fn bare_dot_call_on_foreign_conformance_runs() {
     let value = common::evaluate_script_with_dep(
         "Codec",

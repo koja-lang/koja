@@ -401,8 +401,11 @@ pub(super) fn verify_bounds(
     }
 }
 
-/// Return a concrete bound decision for supported type heads. Tuples have
-/// structural `Debug` and `Equality`. Other anonymous shapes remain deferred.
+/// Return a concrete bound decision for supported type heads. Named
+/// types discharge against the full instantiation, so a concrete
+/// `impl Render for Bag<Int>` satisfies `T: Render` for `Bag<Int>`
+/// but not `Bag<String>`. Tuples have structural `Debug` and
+/// `Equality`. Other anonymous shapes remain deferred.
 fn protocol_bound_satisfied(
     inferred: &ResolvedType,
     protocol_id: GlobalRegistryId,
@@ -411,10 +414,10 @@ fn protocol_bound_satisfied(
     match peel_alias(inferred, registry) {
         ResolvedType::Named {
             resolution: Resolution::Global(target_id),
-            ..
+            type_args,
         } => Some(
             registry
-                .lookup_conformance(target_id, protocol_id)
+                .lookup_conformance(target_id, protocol_id, &type_args)
                 .is_some(),
         ),
         ResolvedType::Anonymous(AnonymousKind::Tuple { elements }) => {

@@ -16,9 +16,9 @@ use std::fmt::Write as _;
 use koja_ast::identifier::{AnonymousKind, Resolution, ResolvedType};
 
 use super::{
-    ConstantDefinition, EnumDefinition, FunctionSignature, GlobalKind, GlobalRegistry,
-    ProtocolDefinition, ResolvedEnumVariant, ResolvedProtocolMethod, ResolvedVariantData,
-    StructDefinition,
+    Conformance, ConformanceScope, ConstantDefinition, EnumDefinition, FunctionSignature,
+    GlobalKind, GlobalRegistry, ProtocolDefinition, ResolvedEnumVariant, ResolvedProtocolMethod,
+    ResolvedVariantData, StructDefinition,
 };
 
 pub fn format_registry(registry: &GlobalRegistry) -> String {
@@ -142,13 +142,15 @@ fn format_struct(def: &StructDefinition, registry: &GlobalRegistry) -> String {
 }
 
 /// Render a struct/enum's protocol conformance map as a trailing
-/// `:[Proto, Proto<Arg>]` annotation. Empty maps render to nothing
-/// so unconformant types stay visually identical to pre-conformance
-/// renders. Args are rendered via [`format_resolved`] for stability.
+/// `:[Proto, Proto<Arg>]` annotation. A concrete record on a
+/// generic target names its instantiation as `Proto for Self<Int>`.
+/// Empty maps render to nothing so unconformant types stay visually
+/// identical to pre-conformance renders. Args are rendered via
+/// [`format_resolved`] for stability.
 fn format_conformances(
     conformances: &std::collections::BTreeMap<
         koja_ast::identifier::GlobalRegistryId,
-        Vec<ResolvedType>,
+        Vec<Conformance>,
     >,
     registry: &GlobalRegistry,
 ) -> String {
@@ -157,25 +159,42 @@ fn format_conformances(
     }
     let entries = conformances
         .iter()
-        .map(|(protocol_id, args)| {
+        .flat_map(|(protocol_id, records)| {
             let head = registry
                 .get(*protocol_id)
                 .map(|e| e.identifier.qualified_name())
                 .unwrap_or_else(|| format!("<id {protocol_id}>"));
-            if args.is_empty() {
-                head
-            } else {
-                let rendered = args
-                    .iter()
-                    .map(|a| format_resolved(a, registry))
-                    .collect::<Vec<_>>()
-                    .join(", ");
-                format!("{head}<{rendered}>")
-            }
+            records
+                .iter()
+                .map(move |record| format_conformance(&head, record, registry))
         })
         .collect::<Vec<_>>()
         .join(", ");
     format!(" :[{entries}]")
+}
+
+fn format_conformance(head: &str, record: &Conformance, registry: &GlobalRegistry) -> String {
+    let protocol = if record.protocol_args.is_empty() {
+        head.to_string()
+    } else {
+        format!(
+            "{head}<{}>",
+            format_type_args(&record.protocol_args, registry)
+        )
+    };
+    match &record.scope {
+        ConformanceScope::Concrete(args) if !args.is_empty() => {
+            format!("{protocol} for Self<{}>", format_type_args(args, registry))
+        }
+        _ => protocol,
+    }
+}
+
+fn format_type_args(args: &[ResolvedType], registry: &GlobalRegistry) -> String {
+    args.iter()
+        .map(|a| format_resolved(a, registry))
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 fn format_constant(def: &ConstantDefinition, registry: &GlobalRegistry) -> String {
