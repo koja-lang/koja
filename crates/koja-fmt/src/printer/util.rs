@@ -309,9 +309,9 @@ pub(super) fn type_expr_to_doc(ty: &TypeExpr) -> Doc {
 /// type prints the bare canonical form `! E`, so `-> () ! E`
 /// normalizes on format.
 ///
-/// The line before `! E` is bare, so it breaks with the caller's tail
-/// group: a wrapped tail puts `-> T` and `! E` on sibling continuation
-/// lines, like the branches of a broken ternary.
+/// The tail is its own group. When the surrounding signature breaks,
+/// `-> T ! E` remains on one continuation line if it fits. Only the
+/// tail's own overflow separates `-> T` from `! E`.
 pub(super) fn return_signature_doc(
     return_type: Option<&TypeExpr>,
     error_type: Option<&TypeExpr>,
@@ -332,7 +332,7 @@ pub(super) fn return_signature_doc(
     if parts.is_empty() {
         return None;
     }
-    Some(concat(parts))
+    Some(group(concat(parts)))
 }
 
 /// The qualified head of an enum pattern (`Shape.Rect`), or the bare

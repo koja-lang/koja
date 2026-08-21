@@ -1,8 +1,8 @@
 //! `@intrinsic` methods on `Socket` from
 //! [`koja/lib/net/src/net.koja`]:
 //!
-//! * `Socket.recv_from(self, count: Int) -> Result<(Binary, SocketAddress), String>`
-//! * `Socket.resolve(hostname: String) -> Result<List<IPAddress>, String>`
+//! * `Socket.recv_from_raw(self, count: Int) -> Result<(Binary, Binary, Int), String>`
+//! * `Socket.resolve_raw(hostname: String) -> Result<List<Binary>, String>`
 //!
 //! Both call the same runtime helpers the LLVM backend declares
 //! (`koja_socket_resolve` / `koja_socket_recv_from`), branch on the
@@ -55,8 +55,8 @@ pub(super) async fn dispatch<R: CallResolver>(
 ) -> Result<Value, RuntimeError> {
     match method {
         SocketMethod::LastError => Ok(last_error_value()),
-        SocketMethod::RecvFrom => recv_from(function, args, resolver).await,
-        SocketMethod::Resolve => resolve(function, args, resolver),
+        SocketMethod::RecvFromRaw => recv_from(function, args, resolver).await,
+        SocketMethod::ResolveRaw => resolve(function, args, resolver),
     }
 }
 
@@ -67,11 +67,11 @@ fn resolve<R: CallResolver>(
 ) -> Result<Value, RuntimeError> {
     let [Value::String(hostname)] = args else {
         return Err(RuntimeError::TypeMismatch {
-            detail: format!("Socket.resolve expects a single String argument, got {args:?}"),
+            detail: format!("Socket.resolve_raw expects a single String argument, got {args:?}"),
         });
     };
-    let result_symbol = helpers::enum_return_symbol(function, "Socket.resolve")?;
-    let ip_symbol = resolve_element_symbol(&result_symbol, resolver)?;
+    let result_symbol = helpers::enum_return_symbol(function, "Socket.resolve_raw")?;
+    validate_resolve_payload(&result_symbol, resolver)?;
 
     let c_hostname = CString::new(hostname.as_slice()).map_err(|_| RuntimeError::TypeMismatch {
         detail: "Socket.resolve: hostname contains an interior NUL byte".to_string(),
@@ -89,10 +89,7 @@ fn resolve<R: CallResolver>(
     let mut addresses = Vec::with_capacity(count);
     for i in 0..count {
         let payload = unsafe { *ip_pointers.add(i) };
-        addresses.push(Value::Struct {
-            symbol: ip_symbol.clone(),
-            fields: vec![Value::binary(abi::take_block_bytes(payload))],
-        });
+        addresses.push(Value::binary(abi::take_block_bytes(payload)));
     }
     abi::free_raw_buffer(buffer);
 
@@ -107,13 +104,12 @@ async fn recv_from<R: CallResolver>(
 ) -> Result<Value, RuntimeError> {
     let [receiver, Value::Int(count)] = args else {
         return Err(RuntimeError::TypeMismatch {
-            detail: format!("Socket.recv_from expects (Socket, Int) arguments, got {args:?}"),
+            detail: format!("Socket.recv_from_raw expects (Socket, Int) arguments, got {args:?}"),
         });
     };
     let fd = socket_fd(receiver)?;
-    let result_symbol = helpers::enum_return_symbol(function, "Socket.recv_from")?;
-    let address_symbol = recv_from_address_symbol(&result_symbol, resolver)?;
-    let ip_symbol = struct_field_symbol(&address_symbol, 0, resolver)?;
+    let result_symbol = helpers::enum_return_symbol(function, "Socket.recv_from_raw")?;
+    validate_recv_from_payload(&result_symbol, resolver)?;
 
     // Interrupted by a signal: surface an error instead of reading.
     if reactor::io_block(fd, Interest::Readable).await {
@@ -134,17 +130,10 @@ async fn recv_from<R: CallResolver>(
     let ip_payload = unsafe { *(buffer.add(RECV_FROM_IP_OFFSET) as *const *mut u8) };
     let port = unsafe { *(buffer.add(RECV_FROM_PORT_OFFSET) as *const i64) };
     let data = Value::binary(abi::take_block_bytes(data_payload));
-    let ip = Value::Struct {
-        symbol: ip_symbol,
-        fields: vec![Value::binary(abi::take_block_bytes(ip_payload))],
-    };
+    let ip = Value::binary(abi::take_block_bytes(ip_payload));
     abi::free_raw_buffer(buffer);
 
-    let address = Value::Struct {
-        symbol: address_symbol,
-        fields: vec![ip, Value::Int(port)],
-    };
-    let received = Value::Tuple(vec![data, address]);
+    let received = Value::Tuple(vec![data, ip, Value::Int(port)]);
     Ok(helpers::result_value(result_symbol, Ok(received)))
 }
 
@@ -169,71 +158,33 @@ fn socket_fd(receiver: &Value) -> Result<i32, RuntimeError> {
         return Ok(*descriptor as i32);
     }
     Err(RuntimeError::TypeMismatch {
-        detail: format!("Socket.recv_from: receiver is not a Socket{{fd: Fd}} struct: {receiver}"),
+        detail: format!(
+            "Socket.recv_from_raw: receiver is not a Socket{{fd: Fd}} struct: {receiver}"
+        ),
     })
 }
 
-/// Walk `Result<List<IPAddress>, _>` down to the `IPAddress` struct
-/// symbol via the program's enum decl.
-fn resolve_element_symbol<R: CallResolver>(
+fn validate_resolve_payload<R: CallResolver>(
     result_symbol: &IRSymbol,
     resolver: &R,
-) -> Result<IRSymbol, RuntimeError> {
-    match helpers::single_ok_payload(result_symbol, resolver, "Socket.resolve")? {
-        IRType::List(element) => match *element {
-            IRType::Struct(symbol) => Ok(symbol),
-            other => Err(payload_shape_error("Socket.resolve", &other)),
-        },
-        other => Err(payload_shape_error("Socket.resolve", &other)),
+) -> Result<(), RuntimeError> {
+    match helpers::single_ok_payload(result_symbol, resolver, "Socket.resolve_raw")? {
+        IRType::List(element) if *element == IRType::Binary => Ok(()),
+        other => Err(payload_shape_error("Socket.resolve_raw", &other)),
     }
 }
 
-/// Walk `Result<(Binary, SocketAddress), _>` down to the address
-/// struct symbol.
-fn recv_from_address_symbol<R: CallResolver>(
+fn validate_recv_from_payload<R: CallResolver>(
     result_symbol: &IRSymbol,
     resolver: &R,
-) -> Result<IRSymbol, RuntimeError> {
-    match helpers::single_ok_payload(result_symbol, resolver, "Socket.recv_from")? {
-        IRType::Tuple(elements) => match elements.as_slice() {
-            [IRType::Binary, IRType::Struct(symbol)] => Ok(symbol.clone()),
-            other => Err(RuntimeError::TypeMismatch {
-                detail: format!(
-                    "Socket.recv_from expected `(Binary, SocketAddress)`, \
-                     got tuple elements `{other:?}`"
-                ),
-            }),
-        },
-        other => Err(payload_shape_error("Socket.recv_from", &other)),
-    }
-}
-
-/// The struct symbol at field `index` of `struct_symbol`'s decl.
-/// Used to reach `IPAddress` without hardcoding identifier strings.
-fn struct_field_symbol<R: CallResolver>(
-    struct_symbol: &IRSymbol,
-    index: usize,
-    resolver: &R,
-) -> Result<IRSymbol, RuntimeError> {
-    let decl = resolver
-        .struct_decl(struct_symbol.mangled())
-        .ok_or_else(|| RuntimeError::TypeMismatch {
-            detail: format!("struct decl `{struct_symbol}` not found in program"),
-        })?;
-    let field = decl
-        .fields
-        .get(index)
-        .ok_or_else(|| RuntimeError::TypeMismatch {
-            detail: format!("struct `{struct_symbol}` has no field at index {index}"),
-        })?;
-    match &field.ir_type {
-        IRType::Struct(symbol) => Ok(symbol.clone()),
-        other => Err(RuntimeError::TypeMismatch {
-            detail: format!(
-                "field {index} of struct `{struct_symbol}` expected to be a struct, \
-                 got `{other:?}`",
-            ),
-        }),
+) -> Result<(), RuntimeError> {
+    match helpers::single_ok_payload(result_symbol, resolver, "Socket.recv_from_raw")? {
+        IRType::Tuple(elements)
+            if elements == vec![IRType::Binary, IRType::Binary, IRType::Int64] =>
+        {
+            Ok(())
+        }
+        other => Err(payload_shape_error("Socket.recv_from_raw", &other)),
     }
 }
 

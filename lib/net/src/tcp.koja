@@ -67,8 +67,7 @@ struct TCPSocket
   to skip certificate verification (testing only).
   """
   fn connect_tls_with(host: String, port: Int, config: TLSConfig)
-    -> TCPSocket
-    ! SocketError | TLSError
+    -> TCPSocket ! SocketError | TLSError
 
     socket = try TCPSocket.connect(host, port)
     try socket.upgrade_tls(host, config)
@@ -80,8 +79,7 @@ struct TCPSocket
   when verification is enabled. Returns the upgraded socket.
   """
   fn upgrade_tls(self, hostname: String, config: TLSConfig)
-    -> TCPSocket
-    ! SocketError | TLSError
+    -> TCPSocket ! SocketError | TLSError
 
     session = try TLSSession.connect(self.socket.fd, hostname, config)
     TCPSocket{socket: self.socket, tls: Option.Some(session)}

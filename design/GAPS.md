@@ -100,6 +100,34 @@ can call any package function. Known limitations:
 
 ---
 
+## `koja doc` omits deprecation notices
+
+The compiler preserves each `@deprecated` message, but `koja-doc` extracts
+only `@doc`. Generated HTML, package listings, search results, terminal
+output, and `search-index.json` do not identify deprecated declarations or
+show their migration guidance.
+
+**Fix path:** add structured deprecation metadata to each documented
+declaration. Render it as a warning in HTML, mark deprecated search and
+package entries, print it in `koja doc search`, and include it in
+`search-index.json`.
+
+---
+
+## `koja doc` omits nested types
+
+`koja-doc` reads the parsed AST without typecheck desugaring and visits only
+top-level file items. It does not extract lexical nested types. A qualified
+top-level declaration such as `enum IPAddress.Version` is also documented as
+only `Version`, which loses its owner and can collide with other declarations.
+
+**Fix path:** recursively extract nested structs and enums, prefix lexical
+names with their owner path, and preserve full paths for qualified
+declarations. HTML pages, package listings, terminal search, and the search
+index must all use the full name.
+
+---
+
 ## Inference and ergonomics warts from the pooler build
 
 Found 2026-07-15 while building the `pooler` package (a generic
@@ -399,21 +427,3 @@ implementation.
 **Fix path:** `UUID.v4() -> String` (and a `UUID.v7()` sibling for
 sortable identifiers) in the stdlib, either under `Random` or as a
 small `Global` type.
-
----
-
-## `IPAddress` has no string rendering
-
-Found 2026-08-10 while running DNS peer discovery inside Docker.
-`Net.Socket.resolve` returns `IPAddress` values, but the type offers
-no way to render one as a dialable string: no `to_string`, and
-string interpolation falls back to the derived `Debug` format, so
-`"#{ip}:9993"` produces `IPAddress{bytes: <<192, 168, 228, 2>>}:9993`.
-Nothing can dial that, and the mistake type-checks: the code reads
-fine and fails only at runtime, off the happy path. Every consumer
-of `resolve` re-implements dotted-quad and colon-hex rendering from
-the raw bytes.
-
-**Fix path:** `IPAddress.to_string()` in the stdlib: dotted-quad for
-v4, RFC 5952 for v6. Its inverse (`IPAddress.parse(text)`) is the
-natural sibling.

@@ -237,9 +237,8 @@ struct Decoder
             sb = sb.add(unescaped)
             start = i + 2
 
-            # Unknown escapes (e.g. \uXXXX) pass through verbatim:
-            # leave the backslash and escape byte in the segment.
-
+          # Unknown escapes (e.g. \uXXXX) pass through verbatim:
+          # leave the backslash and escape byte in the segment.
           Option.None ->
             ()
         end

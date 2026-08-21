@@ -1,0 +1,372 @@
+priv const ASCII_NINE: Int = 0x39
+priv const ASCII_ZERO: Int = 0x30
+priv const BITS_PER_BYTE: Int = 8
+priv const HEXTET_DIGIT_COUNT: Int = 4
+priv const IPV4_OCTET_COUNT: Int = 4
+priv const IPV6_BYTE_COUNT: Int = 16
+priv const IPV6_GROUP_COUNT: Int = 8
+priv const IPV6_MIN_COMPRESSED_GROUPS: Int = 2
+
+@doc """
+Why text could not be parsed as an IPv4 or IPv6 address.
+"""
+enum IPAddress.ParseError
+  Invalid(String)
+end
+
+@doc """
+An IP address stored as a version and raw bytes. IPv4 addresses use
+4 bytes, and IPv6 addresses use 16 bytes.
+"""
+struct IPAddress
+  bytes: Binary
+  version: IPAddress.Version
+
+  @doc """
+  The version of an IP address.
+  """
+  enum Version
+    V4
+    V6
+  end
+
+  @doc """
+  Parses a dotted-decimal IPv4 address or an IPv6 address. IPv6 input
+  can use `::` compression and an embedded IPv4 suffix.
+  """
+  fn parse(text: String) -> IPAddress ! IPAddress.ParseError
+    text.contains?(":")
+      ? IPAddress{
+        bytes: try IPAddress.parse_v6(text),
+        version: IPAddress.Version.V6,
+      }
+      : IPAddress{
+        bytes: try IPAddress.parse_v4(text, text),
+        version: IPAddress.Version.V4,
+      }
+  end
+
+  @doc """
+  Constructs an IPv4 address from four octets.
+  """
+  fn v4(a: UInt8, b: UInt8, c: UInt8, d: UInt8) -> IPAddress
+    IPAddress{
+      bytes: <<a: UInt8, b: UInt8, c: UInt8, d: UInt8>>,
+      version: IPAddress.Version.V4,
+    }
+  end
+
+  @doc """
+  Returns the IPv4 loopback address (127.0.0.1).
+  """
+  fn loopback -> IPAddress
+    IPAddress{bytes: <<127, 0, 0, 1>>, version: IPAddress.Version.V4}
+  end
+
+  @doc """
+  Returns the IPv4 wildcard address (0.0.0.0).
+  """
+  fn any -> IPAddress
+    IPAddress{bytes: <<0, 0, 0, 0>>, version: IPAddress.Version.V4}
+  end
+
+  @doc """
+  Renders IPv4 as dotted decimal and IPv6 in canonical RFC 5952 form.
+
+  Panics if `bytes` has a length other than 4 or 16, which is only
+  possible through direct struct construction.
+  """
+  fn to_string(self) -> String
+    match self.version
+      IPAddress.Version.V4 -> IPAddress.format_v4(self.bytes)
+      IPAddress.Version.V6 -> IPAddress.format_v6(self.bytes)
+    end
+  end
+
+  @doc """
+  Returns true if this is an IPv4 address (4 bytes).
+  """
+  @deprecated """
+  Use `address.version == IPAddress.Version.V4` instead. This function
+  will be removed in 0.19.0.
+  """
+  fn v4?(self) -> Bool
+    self.version == IPAddress.Version.V4
+  end
+
+  @doc """
+  Returns true if this is an IPv6 address (16 bytes).
+  """
+  @deprecated """
+  Use `address.version == IPAddress.Version.V6` instead. This function
+  will be removed in 0.19.0.
+  """
+  fn v6?(self) -> Bool
+    self.version == IPAddress.Version.V6
+  end
+
+  priv fn format_hextet(value: Int) -> String
+    hex = Base.encode16(<<value::16>>)
+    start = 0
+
+    while start < HEXTET_DIGIT_COUNT - 1 and hex.get(start).or("") == "0"
+      start += 1
+    end
+
+    hex.slice(Range{start: start, stop: HEXTET_DIGIT_COUNT - 1})
+  end
+
+  priv fn format_v4(bytes: Binary) -> String
+    match bytes
+      <<a, b, c, d>> -> "#{a}.#{b}.#{c}.#{d}"
+      _ -> Kernel.panic("invalid IPv4 byte length")
+    end
+  end
+
+  priv fn format_v6(bytes: Binary) -> String
+    match bytes
+      <<0::80, 0xFFFF::16, a, b, c, d>> ->
+        "::ffff:" <> IPAddress.format_v4(<<a, b, c, d>>)
+
+      <<a::16, b::16, c::16, d::16, e::16, f::16, g::16, h::16>> ->
+        IPAddress.format_v6_groups([a, b, c, d, e, f, g, h])
+
+      _ ->
+        Kernel.panic("invalid IPv6 byte length")
+    end
+  end
+
+  priv fn format_v6_groups(groups: List<Int>) -> String
+    (zero_start, zero_length) = IPAddress.longest_zero_run(groups)
+    out = ""
+    i = 0
+
+    while i < IPV6_GROUP_COUNT
+      if i == zero_start
+        out = out <> "::"
+        i += zero_length
+      else
+        separator = out.empty?() or out.ends_with?(":") ? "" : ":"
+        out = out <> separator <> IPAddress.format_hextet(groups.get(i).or(0))
+        i += 1
+      end
+    end
+
+    out
+  end
+
+  priv fn longest_zero_run(groups: List<Int>) -> (Int, Int)
+    best_length = 0
+    best_start = -1
+    i = 0
+
+    while i < groups.length()
+      if groups.get(i).or(0) != 0
+        i += 1
+      else
+        run_start = i
+
+        while i < groups.length() and groups.get(i).or(0) == 0
+          i += 1
+        end
+
+        run_length = i - run_start
+
+        if run_length >= IPV6_MIN_COMPRESSED_GROUPS and run_length > best_length
+          best_length = run_length
+          best_start = run_start
+        end
+      end
+    end
+
+    (best_start, best_length)
+  end
+
+  priv fn parse_hextet(text: String, address: String)
+    -> Int ! IPAddress.ParseError
+
+    size = text.length()
+
+    if size == 0 or size > HEXTET_DIGIT_COUNT
+      fail IPAddress.ParseError.Invalid(address)
+    end
+
+    padding_length = HEXTET_DIGIT_COUNT - size
+    padded = padding_length == 0
+      ? text
+      : "0000".slice(Range{start: 0, stop: padding_length - 1}) <> text
+
+    bytes = Base.decode16(padded)
+      rescue _ -> fail IPAddress.ParseError.Invalid(address)
+
+    match bytes
+      <<value::16>> -> value
+      _ -> fail IPAddress.ParseError.Invalid(address)
+    end
+  end
+
+  priv fn parse_v4(text: String, address: String)
+    -> Binary ! IPAddress.ParseError
+
+    parts = text.split(".")
+
+    if parts.length() != IPV4_OCTET_COUNT
+      fail IPAddress.ParseError.Invalid(address)
+    end
+
+    bytes: Binary = <<>>
+
+    for part in parts
+      octet = try IPAddress.parse_octet(part, address)
+      bytes = <<bytes, octet: UInt8>>
+    end
+
+    bytes
+  end
+
+  priv fn parse_octet(text: String, address: String)
+    -> UInt8 ! IPAddress.ParseError
+
+    bytes = text.to_binary()
+    size = bytes.byte_size()
+
+    if size == 0 or (size > 1 and bytes.at(0).or(0) == 48)
+      fail IPAddress.ParseError.Invalid(address)
+    end
+
+    i = 0
+
+    while i < size
+      byte = bytes.at(i).or(0)
+
+      if byte < ASCII_ZERO or byte > ASCII_NINE
+        fail IPAddress.ParseError.Invalid(address)
+      end
+
+      i += 1
+    end
+
+    value = Int.parse(text)
+      rescue _ -> fail IPAddress.ParseError.Invalid(address)
+
+    value.to_uint8() rescue _ -> fail IPAddress.ParseError.Invalid(address)
+  end
+
+  priv fn parse_v6(text: String) -> Binary ! IPAddress.ParseError
+    groups = try IPAddress.parse_v6_groups(text)
+    bytes: Binary = <<>>
+
+    for group in groups
+      bytes = <<bytes, group::16>>
+    end
+
+    bytes
+  end
+
+  priv fn parse_v6_compressed(
+    left_text: String,
+    right_text: String,
+    address: String,
+  ) -> List<Int> ! IPAddress.ParseError
+
+    left = try IPAddress.parse_v6_side(left_text, false, address)
+    right = try IPAddress.parse_v6_side(right_text, true, address)
+    present = left.length() + right.length()
+
+    if present >= IPV6_GROUP_COUNT
+      fail IPAddress.ParseError.Invalid(address)
+    end
+
+    groups = left
+    i = present
+
+    while i < IPV6_GROUP_COUNT
+      groups = groups.append(0)
+      i += 1
+    end
+
+    groups.concat(right)
+  end
+
+  priv fn parse_v6_full(text: String) -> List<Int> ! IPAddress.ParseError
+    groups = try IPAddress.parse_v6_side(text, true, text)
+
+    if groups.length() != IPV6_GROUP_COUNT
+      fail IPAddress.ParseError.Invalid(text)
+    end
+
+    groups
+  end
+
+  priv fn parse_v6_groups(text: String) -> List<Int> ! IPAddress.ParseError
+    compressed = text.split("::")
+
+    match compressed.length()
+      1 -> try IPAddress.parse_v6_full(text)
+      2 ->
+        try IPAddress.parse_v6_compressed(
+          compressed.get(0).or(""),
+          compressed.get(1).or(""),
+          text,
+        )
+      _ -> fail IPAddress.ParseError.Invalid(text)
+    end
+  end
+
+  priv fn parse_embedded_v4(text: String, allowed: Bool, address: String)
+    -> List<Int> ! IPAddress.ParseError
+
+    unless allowed
+      fail IPAddress.ParseError.Invalid(address)
+    end
+
+    match try IPAddress.parse_v4(text, address)
+      <<a, b, c, d>> ->
+        [a.bsl(BITS_PER_BYTE).bor(b), c.bsl(BITS_PER_BYTE).bor(d)]
+
+      _ ->
+        fail IPAddress.ParseError.Invalid(address)
+    end
+  end
+
+  priv fn parse_v6_side(text: String, allow_ipv4: Bool, address: String)
+    -> List<Int> ! IPAddress.ParseError
+
+    if text.empty?()
+      return List.new()
+    end
+
+    parts = text.split(":")
+    groups: List<Int> = List.new()
+    i = 0
+
+    while i < parts.length()
+      part = parts.get(i).or("")
+      part_groups = part.contains?(".")
+        ? try IPAddress.parse_embedded_v4(
+          part,
+          allow_ipv4 and i == parts.length() - 1,
+          address,
+        )
+        : [try IPAddress.parse_hextet(part, address)]
+
+      groups = groups.concat(part_groups)
+      i += 1
+    end
+
+    groups
+  end
+end
+
+priv fn ip_address_from_bytes(bytes: Binary) -> IPAddress
+  byte_size = bytes.byte_size()
+
+  version =
+    cond
+      byte_size == IPV4_OCTET_COUNT -> IPAddress.Version.V4
+      byte_size == IPV6_BYTE_COUNT -> IPAddress.Version.V6
+      else -> Kernel.panic("invalid IPAddress byte length")
+    end
+
+  IPAddress{bytes: bytes, version: version}
+end

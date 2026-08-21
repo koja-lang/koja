@@ -254,8 +254,7 @@ struct TLSSession
   the socket is not ready. Returns the established session.
   """
   fn connect(fd: Fd, hostname: String, config: TLSConfig)
-    -> TLSSession
-    ! SocketError | TLSError
+    -> TLSSession ! SocketError | TLSError
 
     ctx = ssl_ctx_new(tls_method())
 
@@ -360,8 +359,7 @@ struct TLSSession
   end
 
   priv fn add_store_certs(store: CPtr<UInt8>, bio: CPtr<UInt8>, loaded: Int)
-    -> Bool
-    ! TLSError
+    -> Bool ! TLSError
 
     no_arg: CPtr<UInt8> = CPtr.null()
     cert = pem_read_bio_x509(bio, no_arg, no_arg, no_arg)
@@ -388,8 +386,7 @@ struct TLSSession
   end
 
   priv fn configure_verification(ctx: CPtr<UInt8>, config: TLSConfig)
-    -> Bool
-    ! TLSError
+    -> Bool ! TLSError
 
     unless config.verify
       return true
@@ -493,8 +490,7 @@ struct TLSSession
   end
 
   priv fn load_identity(ctx: CPtr<UInt8>, identity: TLSIdentity)
-    -> Bool
-    ! TLSError
+    -> Bool ! TLSError
 
     try use_certificate_pem(ctx, identity.cert.pem)
     try use_private_key_pem(ctx, identity.key.pem)
@@ -513,8 +509,7 @@ struct TLSSession
   end
 
   priv fn read_loop(ssl: CPtr<UInt8>, fd: Fd, buf: CPtr<UInt8>, count: Int)
-    -> Binary
-    ! SocketError | TLSError
+    -> Binary ! SocketError | TLSError
 
     ret: Int = ssl_read(ssl, buf, count)
 
@@ -612,8 +607,7 @@ struct TLSSession
   end
 
   priv fn write_loop(ssl: CPtr<UInt8>, fd: Fd, bytes: Binary)
-    -> Int
-    ! SocketError | TLSError
+    -> Int ! SocketError | TLSError
 
     ret: Int = ssl_write(ssl, CPtr.borrow(bytes), bytes.byte_size())
 

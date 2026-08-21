@@ -9,11 +9,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `IPAddress` can parse and render IPv4 and IPv6 text, including compressed IPv6 and embedded IPv4 forms.
 - Project-aware CLI commands accept `-S, --project <directory>` to select a project without changing the caller's working directory.
+
+### Changed
+
+- `IPAddress.v4` accepts `UInt8` octets so out-of-range values cannot construct an address.
+- `IPAddress` exposes its `Version` through the `version` field.
+- `koja format` expands all `match`, `cond`, and `receive` arms when one arm requires block layout.
+- `koja format` keeps fallible return and error clauses on one continuation line when they fit.
+- `koja format` uses a blank line before an arm comment to make the comment lead the next arm.
+
+### Deprecated
+
+- `IPAddress.v4?()` and `IPAddress.v6?()` are deprecated in favor of the `version` field and will be removed in 0.19.0.
 
 ### Fixed
 
 - `koja format` preserves separate comments in wrapped `match`, `cond`, and `receive` arm heads instead of merging their text.
+- Socket DNS and datagram receive results now initialize every `IPAddress` field without reading beyond runtime buffers.
 
 ## [0.17.3] - 2026-08-19
 

@@ -66,6 +66,45 @@ the refcount, while eval copies the bytes into its value representation
 and frees the runtime block. The pointer must not be used or freed after
 adoption.
 
+## Socket result buffers
+
+The socket runtime returns raw buffers for DNS results and datagram receives.
+It returns null on error and stores the error for `koja_last_error`.
+
+`koja_socket_resolve` returns this buffer:
+
+```text
+offset 0        offset 8
+[ i64 count ][ Binary payload pointer 0 ][ Binary payload pointer 1 ] ...
+```
+
+`koja_socket_recv_from` returns this buffer:
+
+```text
+offset 0               offset 8             offset 16
+[ data Binary pointer ][ IP Binary pointer ][ i64 port ]
+```
+
+The runtime allocates each Binary block with `rc = 1`. It also allocates the
+outer result buffer. The backend frees the outer buffer after it reads the
+fields.
+
+The backend transfers each Binary pointer into an owned raw Koja value. LLVM
+keeps the pointer and refcount. Eval copies the bytes and frees the runtime
+block.
+
+The backend must return only `List<Binary>` or `(Binary, Binary, Int)` from
+these intrinsics. Standard library Koja code constructs `IPAddress` and
+`Socket.Address`.
+
+Backends must not treat the raw buffers as user struct storage. A user struct
+layout can change without a runtime ABI change.
+
+- Authoritative: `koja-runtime-posix/src/socket.rs`
+  (`koja_socket_resolve` and `koja_socket_recv_from`).
+- Mirrors: `koja-ir-llvm/src/intrinsics/socket.rs` and
+  `koja-ir-eval/src/intrinsics/socket.rs`.
+
 ## Closure environment blocks
 
 A closure env block carries a 24-byte header instead of the leaf header. Drop

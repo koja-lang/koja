@@ -10,49 +10,6 @@ enum Socket.Kind
 end
 
 @doc """
-An IP address stored as raw bytes. IPv4 addresses use 4 bytes,
-IPv6 addresses use 16 bytes.
-"""
-struct IPAddress
-  bytes: Binary
-
-  @doc """
-  Constructs an IPv4 address from four octets.
-  """
-  fn v4(a: Int, b: Int, c: Int, d: Int) -> IPAddress
-    IPAddress{bytes: <<a, b, c, d>>}
-  end
-
-  @doc """
-  Returns the IPv4 loopback address (127.0.0.1).
-  """
-  fn loopback -> IPAddress
-    IPAddress{bytes: <<127, 0, 0, 1>>}
-  end
-
-  @doc """
-  Returns the IPv4 wildcard address (0.0.0.0).
-  """
-  fn any -> IPAddress
-    IPAddress{bytes: <<0, 0, 0, 0>>}
-  end
-
-  @doc """
-  Returns true if this is an IPv4 address (4 bytes).
-  """
-  fn v4?(self) -> Bool
-    self.bytes.byte_size() == 4
-  end
-
-  @doc """
-  Returns true if this is an IPv6 address (16 bytes).
-  """
-  fn v6?(self) -> Bool
-    self.bytes.byte_size() == 16
-  end
-end
-
-@doc """
 An IP address paired with a port number.
 """
 struct Socket.Address
@@ -158,14 +115,18 @@ struct Socket
   Receives data and the sender's address (for unconnected datagram sockets).
   Returns a tuple of the data and sender address.
   """
-  @intrinsic
   fn recv_from(self, count: Int) -> (Binary, SocketAddress) ! String
+    (data, ip_bytes, port) = try self.recv_from_raw(count)
+    (data, SocketAddress{ip: ip_address_from_bytes(ip_bytes), port: port})
+  end
 
   @doc """
   Resolves a hostname to a list of IP addresses via DNS.
   """
-  @intrinsic
   fn resolve(hostname: String) -> List<IPAddress> ! String
+    addresses = try Socket.resolve_raw(hostname)
+    addresses.map(bytes -> ip_address_from_bytes(bytes))
+  end
 
   @doc """
   Sends data to the given address (for unconnected datagram sockets).
@@ -218,6 +179,12 @@ struct Socket
 
   @intrinsic
   priv fn last_error -> String
+
+  @intrinsic
+  priv fn recv_from_raw(self, count: Int) -> (Binary, Binary, Int) ! String
+
+  @intrinsic
+  priv fn resolve_raw(hostname: String) -> List<Binary> ! String
 
   @extern "C"
   priv fn koja_socket_accept(fd: Int32) -> Int32

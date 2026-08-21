@@ -1,0 +1,117 @@
+alias Net.IPAddress
+
+struct IPAddressTest
+  @test "IPAddress.any is IPv4"
+  fn test_any -> Result<Bool, String>
+    IPAddress.any().version == IPAddress.Version.V4
+      ? Result.Ok(true)
+      : Result.Err("expected any to be IPv4")
+  end
+
+  @test "IPAddress.loopback is IPv4"
+  fn test_loopback -> Result<Bool, String>
+    IPAddress.loopback().version == IPAddress.Version.V4
+      ? Result.Ok(true)
+      : Result.Err("expected loopback to be IPv4")
+  end
+
+  @test "IPAddress.v4 creates an IPv4 address"
+  fn test_v4 -> Result<Bool, String>
+    IPAddress.v4(10, 0, 0, 1).version == IPAddress.Version.V4
+      ? Result.Ok(true)
+      : Result.Err("expected custom to be IPv4")
+  end
+
+  @test "IPAddress parses and renders IPv4"
+  fn test_v4_text -> Result<Bool, String>
+    cases: List<(String, String)> = [
+      ("0.0.0.0", "0.0.0.0"), ("10.0.0.1", "10.0.0.1"),
+      ("127.0.0.1", "127.0.0.1"), ("192.168.228.2", "192.168.228.2"),
+      ("255.255.255.255", "255.255.255.255")
+    ]
+
+    for test_case in cases
+      (input, expected) = test_case
+      try IPAddressTest.assert_address_text(input, expected)
+    end
+
+    Result.Ok(true)
+  end
+
+  @test "IPAddress parses and canonically renders IPv6"
+  fn test_v6_text -> Result<Bool, String>
+    cases: List<(String, String)> = [
+      ("0:0:0:0:0:0:0:0", "::"), ("0:0:0:0:0:0:0:1", "::1"),
+      ("2001:0DB8:0000:0000:0001:0000:0000:0001", "2001:db8::1:0:0:1"),
+      ("2001:db8:0:1:1:1:1:1", "2001:db8:0:1:1:1:1:1"),
+      ("2001:db8::192.0.2.1", "2001:db8::c000:201"),
+      ("::ffff:192.0.2.128", "::ffff:192.0.2.128")
+    ]
+
+    for test_case in cases
+      (input, expected) = test_case
+      try IPAddressTest.assert_address_text(input, expected)
+    end
+
+    Result.Ok(true)
+  end
+
+  @test "IPAddress rejects invalid text"
+  fn test_invalid_text -> Result<Bool, String>
+    invalid = [
+      "", "hostname", "1.2.3", "1.2.3.4.5", "01.2.3.4", "1.2.3.256", "1.2.-3.4",
+      ":", ":::", "1::2::3", "1:2:3:4:5:6:7", "1:2:3:4:5:6:7:8:9",
+      "1:2:3:4:5:6:7:8::", "2001:db8::12345", "2001:db8::gggg",
+      "2001:192.0.2.1::1", "[2001:db8::1]", "fe80::1%en0"
+    ]
+
+    for input in invalid
+      match IPAddress.parse(input)
+        Result.Ok(address) ->
+          return Result.Err("expected '#{input}' to fail, got #{address.to_string()}")
+
+        Result.Err(error) ->
+          match error
+            IPAddress.ParseError.Invalid(rejected) ->
+              if rejected != input
+                return Result.Err("wrong rejected input '#{rejected}' for '#{input}'")
+              end
+          end
+      end
+    end
+
+    Result.Ok(true)
+  end
+
+  priv fn assert_address_text(input: String, expected: String) ! String
+    address =
+      match IPAddress.parse(input)
+        Result.Ok(value) -> value
+        Result.Err(_) -> fail "failed to parse '#{input}'"
+      end
+
+    expected_version = input.contains?(":")
+      ? IPAddress.Version.V6
+      : IPAddress.Version.V4
+
+    unless address.version == expected_version
+      fail "'#{input}' has the wrong IP version"
+    end
+
+    actual = address.to_string()
+
+    if actual != expected
+      fail "'#{input}' rendered as '#{actual}', expected '#{expected}'"
+    end
+
+    reparsed =
+      match IPAddress.parse(actual)
+        Result.Ok(value) -> value
+        Result.Err(_) -> fail "failed to parse rendered '#{actual}'"
+      end
+
+    unless reparsed == address
+      fail "'#{input}' did not round-trip through '#{actual}'"
+    end
+  end
+end

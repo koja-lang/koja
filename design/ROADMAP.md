@@ -98,6 +98,12 @@ focused standard library improvements found while building auth-manager.
 
 - **[DONE]** Add a global `-S <path>` selector for project-aware commands and
   editor integrations.
+- Show `@deprecated` notices and migration guidance in generated HTML,
+  terminal search, package listings, and the machine-readable search index
+  ([gap](GAPS.md#koja-doc-omits-deprecation-notices)).
+- Generate pages for nested structs and enums under their full qualified names
+  across HTML, package listings, terminal search, and the search index
+  ([gap](GAPS.md#koja-doc-omits-nested-types)).
 - Default values for function parameters, so optional arguments do not
   require a separate options struct at every call site. A defaulted function
   is callable at every arity its defaults allow. `&name/arity` references
@@ -116,9 +122,8 @@ focused standard library improvements found while building auth-manager.
   timestamps ([gap](GAPS.md#datetime-has-no-calendar-formatting-or-parsing)).
 - Add `UUID.v4()` for session, API key, and node identifiers
   ([gap](GAPS.md#no-uuid-generation)).
-- Add `IPAddress.to_string()` and `IPAddress.parse(text)` for DNS discovery and
-  dialable addresses
-  ([gap](GAPS.md#ipaddress-has-no-string-rendering)).
+- **[DONE]** Add `IPAddress.to_string()` and `IPAddress.parse(text)` for DNS
+  discovery and dialable addresses.
 - Add bytewise `Binary.compare`, big-endian integer encoding and decoding, and
   `Float.bit_pattern` / `Float.from_bit_pattern`
   ([gap](GAPS.md#binary-has-no-ordering-and-no-endian-helpers)).

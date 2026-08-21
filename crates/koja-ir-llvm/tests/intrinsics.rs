@@ -63,6 +63,36 @@ fn print_intrinsic_call_site_emits_void_call() {
 }
 
 #[test]
+fn socket_intrinsics_emit_only_raw_result_shapes() {
+    let source = "
+        struct Socket
+          fd: Fd
+
+          @intrinsic
+          priv fn recv_from_raw(self, count: Int)
+            -> (Binary, Binary, Int) ! String
+
+          @intrinsic
+          priv fn resolve_raw(hostname: String) -> List<Binary> ! String
+        end
+        ";
+
+    let script = common::lower_script_source_in("Net", &dedent(source));
+    let ir_text =
+        emit_script_llvm_ir(&script, APP_NAME).expect("emit_script_llvm_ir should succeed");
+
+    assert_contains(&ir_text, "define ");
+    assert_contains(&ir_text, "@Net.Socket.recv_from_raw(");
+    assert_contains(&ir_text, "@Net.Socket.resolve_raw(");
+    assert_contains(&ir_text, "call ptr @koja_socket_recv_from(");
+    assert_contains(&ir_text, "call ptr @koja_socket_resolve(");
+    assert!(
+        !ir_text.contains("IPAddress") && !ir_text.contains("Socket.Address"),
+        "socket intrinsic IR must not materialize domain address structs:\n{ir_text}",
+    );
+}
+
+#[test]
 fn user_main_runs_print_intrinsic_then_returns_void() {
     // The script body is a `Unit`-typed `print(...)` call. With
     // auto-print removed, `__koja_user_main` is the spawn thunk
