@@ -1,0 +1,4 @@
+[project]
+entry = "App"
+name = "socket_address_fields"
+version = "0.1.0"

@@ -75,9 +75,10 @@ struct SocketTest
         Result.Err("resolve failed: #{msg}")
 
       Result.Ok(addrs) ->
-        addrs.length() > 0
+        addrs.any?(address -> address.version == IPAddress.Version.V4
+          and address.to_string() == "127.0.0.1")
           ? Result.Ok(true)
-          : Result.Err("resolve returned empty list")
+          : Result.Err("resolve did not return rendered IPv4 loopback")
     end
   end
 
@@ -171,4 +172,53 @@ struct SocketTest
           : Result.Err("expected 3 bytes sent, got #{sent}")
     end
   end
+
+  @test "UDP recv_from returns a complete sender address"
+  fn test_udp_recv_from_address -> Result<Bool, String>
+    (receiver, port) = try bind_loopback_udp()
+    sender = UDPSocket.bind(0) rescue error -> fail error.message()
+    target = SocketAddress{ip: IPAddress.loopback(), port: port}
+
+    _sent = sender.send_to("ping", target) rescue error -> fail error.message()
+    (data, address) = receiver.recv_from(16)
+      rescue error -> fail error.message()
+
+    _sender_closed = sender.close()
+    _receiver_closed = receiver.close()
+
+    unless data == "ping".to_binary()
+      fail "unexpected UDP payload"
+    end
+
+    unless address.ip.version == IPAddress.Version.V4
+      fail "expected an IPv4 sender address"
+    end
+
+    unless address.ip.to_string() == "127.0.0.1"
+      fail "unexpected sender address: #{address.ip.to_string()}"
+    end
+
+    unless address.port > 0
+      fail "expected a positive sender port"
+    end
+
+    Result.Ok(true)
+  end
+end
+
+priv fn bind_loopback_udp -> (UDPSocket, Int) ! String
+  attempts = 0
+
+  while attempts < 20
+    port = Random.int(49152, 65535)
+
+    match UDPSocket.bind_addr(
+      SocketAddress{ip: IPAddress.loopback(), port: port},
+    )
+      Result.Ok(socket) -> return (socket, port)
+      Result.Err(_) -> attempts += 1
+    end
+  end
+
+  fail "could not bind a loopback UDP test socket"
 end

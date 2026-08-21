@@ -357,3 +357,16 @@ struct IPAddress
     groups
   end
 end
+
+priv fn ip_address_from_bytes(bytes: Binary) -> IPAddress
+  byte_size = bytes.byte_size()
+
+  version =
+    cond
+      byte_size == IPV4_OCTET_COUNT -> IPAddress.Version.V4
+      byte_size == IPV6_BYTE_COUNT -> IPAddress.Version.V6
+      else -> Kernel.panic("invalid IPAddress byte length")
+    end
+
+  IPAddress{bytes: bytes, version: version}
+end

@@ -112,9 +112,9 @@ pub enum IRIntrinsicId {
     RuntimeBlock(RuntimeBlockMethod),
     Set(SetMethod),
     /// `@intrinsic` methods on `Socket` from
-    /// [`koja/lib/net/src/net.koja`]. Both methods bridge into the
-    /// runtime's `koja_socket_*` C ABI (`recv_from` -> mailbox-driven
-    /// recv with sender address, `resolve` -> blocking
+    /// [`koja/lib/net/src/net.koja`]. The raw methods bridge into the
+    /// runtime's `koja_socket_*` C ABI (`recv_from_raw` -> mailbox-driven
+    /// recv with sender bytes, `resolve_raw` -> blocking
     /// `getaddrinfo`). Wrapped in an enum so adding sibling methods
     /// (e.g. `send_to_async`) is a variant-add rather than a shape
     /// change.
@@ -277,13 +277,12 @@ intrinsic_methods! {
     }
 
     /// `@intrinsic`-flagged methods on `Socket` from
-    /// [`koja/lib/net/src/net.koja`]. `RecvFrom` receives one
-    /// datagram + sender address (suspending the process until the fd
-    /// is readable), and `Resolve` is a synchronous `getaddrinfo` shim.
+    /// [`koja/lib/net/src/net.koja`]. These private raw functions keep
+    /// domain struct construction in the standard library.
     SocketMethod {
         LastError => "last_error",
-        RecvFrom => "recv_from",
-        Resolve => "resolve",
+        RecvFromRaw => "recv_from_raw",
+        ResolveRaw => "resolve_raw",
     }
 
     /// Methods on `String` flagged `@intrinsic` in
@@ -726,8 +725,16 @@ mod tests {
             ("Set", "new", Id::Set(SetMethod::New)),
             ("Set", "remove", Id::Set(SetMethod::Remove)),
             ("Socket", "last_error", Id::Socket(SocketMethod::LastError)),
-            ("Socket", "recv_from", Id::Socket(SocketMethod::RecvFrom)),
-            ("Socket", "resolve", Id::Socket(SocketMethod::Resolve)),
+            (
+                "Socket",
+                "recv_from_raw",
+                Id::Socket(SocketMethod::RecvFromRaw),
+            ),
+            (
+                "Socket",
+                "resolve_raw",
+                Id::Socket(SocketMethod::ResolveRaw),
+            ),
             (
                 "String",
                 "byte_length",

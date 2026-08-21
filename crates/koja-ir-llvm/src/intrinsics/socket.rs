@@ -1,31 +1,25 @@
 //! `@intrinsic` methods on `Socket` from
 //! [`koja/lib/net/src/net.koja`]:
 //!
-//! * `Socket.recv_from(self, count: Int) -> Result<(Binary, SocketAddress), String>`:
-//!   datagram receive. Suspends until the fd is readable.
-//! * `Socket.resolve(hostname: String) -> Result<List<IPAddress>, String>`:
-//!   synchronous `getaddrinfo` shim.
+//! * `Socket.recv_from_raw(self, count: Int) -> Result<(Binary, Binary, Int), String>`:
+//!   raw datagram receive. Suspends until the fd is readable.
+//! * `Socket.resolve_raw(hostname: String) -> Result<List<Binary>, String>`:
+//!   raw synchronous `getaddrinfo` shim.
 //!
 //! Both bodies follow the same skeleton: call the runtime helper,
 //! branch on the null sentinel, build either `Result.Err` from
 //! `koja_last_error()` or `Result.Ok` from the runtime's buffer.
-//! Built against the [`layout`]-driven struct lookups
-//! ([`Layouts::struct_type`] / [`Layouts::struct_field_ir_type`] /
-//! [`Layouts::enum_variant_payload`]) and [`build_enum_value`] for
-//! the `Result.Ok` / `Result.Err` construction. The marshaling-in-LLVM
-//! shape is a pragmatic stopgap for the `Net` test surface. The two
-//! intrinsics can be hoisted back into stdlib Koja with thinner
-//! runtime helpers once the surface stabilizes.
+//! The backend marshals only runtime ABI values. Ordinary Koja code
+//! constructs `IPAddress` and `SocketAddress`, so their layouts never
+//! become part of this boundary.
 //!
 //! [`layout`]: crate::layout
-//! [`Layouts::struct_type`]: crate::layout::Layouts::struct_type
-//! [`Layouts::struct_field_ir_type`]: crate::layout::Layouts::struct_field_ir_type
 //! [`Layouts::enum_variant_payload`]: crate::layout::Layouts::enum_variant_payload
 
 use inkwell::AddressSpace;
 use inkwell::IntPredicate;
 use inkwell::basic_block::BasicBlock;
-use inkwell::types::{BasicType, IntType};
+use inkwell::types::{BasicType, BasicTypeEnum, IntType};
 use inkwell::values::{BasicValueEnum, FunctionValue, IntValue, PointerValue, StructValue};
 use koja_ir::{IRFunction, IRSymbol, IRType, IRVariantPayload, IRVariantTag, SocketMethod};
 
@@ -65,8 +59,8 @@ pub(super) fn emit_socket<'ctx>(
     ctx.builder.position_at_end(entry);
     match method {
         SocketMethod::LastError => emit_last_error(ctx),
-        SocketMethod::RecvFrom => emit_recv_from(ctx, function, llvm_function),
-        SocketMethod::Resolve => emit_resolve(ctx, function, llvm_function),
+        SocketMethod::RecvFromRaw => emit_recv_from(ctx, function, llvm_function),
+        SocketMethod::ResolveRaw => emit_resolve(ctx, function, llvm_function),
     }
 }
 
@@ -85,19 +79,16 @@ fn emit_resolve<'ctx>(
     llvm_function: FunctionValue<'ctx>,
 ) -> Result<(), LlvmError> {
     let result_symbol = expect_enum_symbol(&function.return_type, function)?;
-    let ip_symbol = resolve_list_element_symbol(ctx, result_symbol, function)?;
-    let ip_struct = ctx.layouts.struct_type(ip_symbol.mangled());
-    let ip_size = ctx
-        .layouts
-        .target_data
-        .get_abi_size(&ip_struct.as_basic_type_enum());
+    validate_resolve_payload(ctx, result_symbol, function)?;
+
+    let binary_size = binary_pointer_size(ctx, function, "Socket.resolve_raw")?;
 
     let i64_ty = ctx.context.i64_type();
     let i8_ty = ctx.context.i8_type();
 
     let hostname = llvm_function.get_nth_param(0).ok_or_else(|| {
         LlvmError::Codegen(format!(
-            "Socket.resolve missing `hostname` param on `{}`",
+            "Socket.resolve_raw missing `hostname` param on `{}`",
             function.symbol,
         ))
     })?;
@@ -117,7 +108,7 @@ fn emit_resolve<'ctx>(
     let count = build_load_int(ctx, i64_ty, result_ptr, "count")?;
     let alloc_size = ctx
         .builder
-        .build_int_mul(count, i64_ty.const_int(ip_size, false), "alloc_sz")
+        .build_int_mul(count, i64_ty.const_int(binary_size, false), "alloc_sz")
         .or_ice()?;
 
     let malloc = declare_malloc_extern(ctx);
@@ -157,8 +148,8 @@ fn emit_recv_from<'ctx>(
     llvm_function: FunctionValue<'ctx>,
 ) -> Result<(), LlvmError> {
     let result_symbol = expect_enum_symbol(&function.return_type, function)?;
-    let (received_type, sa_symbol) = resolve_recv_from_payload(ctx, result_symbol, function)?;
-    let ip_symbol = resolve_struct_field_symbol(ctx, &sa_symbol, 0, function)?;
+    let received_type = resolve_recv_from_payload(ctx, result_symbol, function)?;
+    binary_pointer_size(ctx, function, "Socket.recv_from_raw")?;
 
     let i64_ty = ctx.context.i64_type();
     let i8_ty = ctx.context.i8_type();
@@ -168,7 +159,7 @@ fn emit_recv_from<'ctx>(
         .get_nth_param(0)
         .ok_or_else(|| {
             LlvmError::Codegen(format!(
-                "Socket.recv_from missing `self` param on `{}`",
+                "Socket.recv_from_raw missing `self` param on `{}`",
                 function.symbol,
             ))
         })?
@@ -185,7 +176,7 @@ fn emit_recv_from<'ctx>(
         .into_int_value();
     let count_val = llvm_function.get_nth_param(1).ok_or_else(|| {
         LlvmError::Codegen(format!(
-            "Socket.recv_from missing `count` param on `{}`",
+            "Socket.recv_from_raw missing `count` param on `{}`",
             function.symbol,
         ))
     })?;
@@ -234,28 +225,6 @@ fn emit_recv_from<'ctx>(
         .build_call(free, &[result_ptr.into()], "free_buf")
         .or_ice()?;
 
-    let ip_struct = ctx.layouts.struct_type(ip_symbol.mangled());
-    let ip_val = build_insert(
-        ctx,
-        ip_struct.get_undef().into(),
-        ip_bin_ptr,
-        0,
-        "ip_with_bytes",
-    )?
-    .into_struct_value();
-
-    let sa_struct = ctx.layouts.struct_type(sa_symbol.mangled());
-    let sa_val = build_insert(
-        ctx,
-        sa_struct.get_undef().into(),
-        ip_val.into(),
-        0,
-        "sa_with_ip",
-    )?
-    .into_struct_value();
-    let sa_val =
-        build_insert(ctx, sa_val.into(), recv_port, 1, "sa_with_port")?.into_struct_value();
-
     let tuple_struct = ir_basic_type(ctx, &received_type)?.into_struct_type();
     let received = build_insert(
         ctx,
@@ -265,8 +234,10 @@ fn emit_recv_from<'ctx>(
         "tuple_with_data",
     )?
     .into_struct_value();
-    let received = build_insert(ctx, received.into(), sa_val.into(), 1, "tuple_with_addr")?
-        .into_struct_value();
+    let received =
+        build_insert(ctx, received.into(), ip_bin_ptr, 1, "tuple_with_ip")?.into_struct_value();
+    let received =
+        build_insert(ctx, received.into(), recv_port, 2, "tuple_with_port")?.into_struct_value();
 
     let ok = build_enum_value(ctx, result_symbol, RESULT_OK_TAG, &[received.into()])?;
     ret(ctx, ok)
@@ -393,52 +364,82 @@ fn expect_enum_symbol<'ty>(
     }
 }
 
-/// Walk `Result<List<IPAddress>, _>` and pull out the `IRSymbol`
-/// of the `IPAddress` struct. The intrinsic emitter needs the
-/// symbol to ABI-size the element and lay out the `List` buffer.
-fn resolve_list_element_symbol(
+fn binary_pointer_size(
+    ctx: &EmitContext<'_>,
+    function: &IRFunction,
+    intrinsic_label: &str,
+) -> Result<u64, LlvmError> {
+    let binary_ty = ir_basic_type(ctx, &IRType::Binary)?;
+    let BasicTypeEnum::PointerType(binary_ptr_ty) = binary_ty else {
+        return Err(LlvmError::Codegen(format!(
+            "{intrinsic_label} on `{}` requires Binary to use the runtime pointer ABI",
+            function.symbol,
+        )));
+    };
+    let binary_size = ctx
+        .layouts
+        .target_data
+        .get_abi_size(&binary_ptr_ty.as_basic_type_enum());
+    let runtime_pointer_size = ctx.layouts.target_data.get_abi_size(
+        &ctx.context
+            .ptr_type(AddressSpace::default())
+            .as_basic_type_enum(),
+    );
+    if binary_size != runtime_pointer_size {
+        return Err(LlvmError::Codegen(format!(
+            "{intrinsic_label} on `{}` requires Binary to match the runtime pointer ABI \
+             ({binary_size} bytes != {runtime_pointer_size} bytes)",
+            function.symbol,
+        )));
+    }
+
+    Ok(binary_size)
+}
+
+/// Require the raw DNS result shape that matches the runtime pointer
+/// array. Domain address construction stays in ordinary Koja code.
+fn validate_resolve_payload(
     ctx: &EmitContext<'_>,
     result_symbol: &IRSymbol,
     function: &IRFunction,
-) -> Result<IRSymbol, LlvmError> {
-    let ok_field = single_ok_payload(ctx, result_symbol, function, "Socket.resolve")?;
+) -> Result<(), LlvmError> {
+    let ok_field = single_ok_payload(ctx, result_symbol, function, "Socket.resolve_raw")?;
     let inner = match ok_field {
         IRType::List(inner) => *inner,
         other => {
             return Err(LlvmError::Codegen(format!(
-                "Socket.resolve Ok payload expected to be List<_>, got `{other:?}`",
+                "Socket.resolve_raw Ok payload expected to be List<Binary>, got `{other:?}`",
             )));
         }
     };
     match inner {
-        IRType::Struct(symbol) => Ok(symbol),
+        IRType::Binary => Ok(()),
         other => Err(LlvmError::Codegen(format!(
-            "Socket.resolve Ok payload `List<T>` element expected to be a Struct, got `{other:?}`",
+            "Socket.resolve_raw Ok payload expected to be List<Binary>, got `List<{other:?}>`",
         ))),
     }
 }
 
-/// Walk `Result<(Binary, SocketAddress), _>` and return the tuple
-/// type plus the `SocketAddress` symbol.
+/// Walk `Result<(Binary, Binary, Int), _>` and return the raw tuple
+/// type used by the runtime buffer.
 fn resolve_recv_from_payload(
     ctx: &EmitContext<'_>,
     result_symbol: &IRSymbol,
     function: &IRFunction,
-) -> Result<(IRType, IRSymbol), LlvmError> {
-    let ok_field = single_ok_payload(ctx, result_symbol, function, "Socket.recv_from")?;
+) -> Result<IRType, LlvmError> {
+    let ok_field = single_ok_payload(ctx, result_symbol, function, "Socket.recv_from_raw")?;
     match ok_field {
         IRType::Tuple(elements) => {
-            let [IRType::Binary, IRType::Struct(address_symbol)] = elements.as_slice() else {
+            let [IRType::Binary, IRType::Binary, IRType::Int64] = elements.as_slice() else {
                 return Err(LlvmError::Codegen(format!(
-                    "Socket.recv_from Ok payload expected `(Binary, SocketAddress)`, \
+                    "Socket.recv_from_raw Ok payload expected `(Binary, Binary, Int)`, \
                      got `{elements:?}`",
                 )));
             };
-            let address_symbol = address_symbol.clone();
-            Ok((IRType::Tuple(elements), address_symbol))
+            Ok(IRType::Tuple(elements))
         }
         other => Err(LlvmError::Codegen(format!(
-            "Socket.recv_from Ok payload expected a Tuple, got `{other:?}`",
+            "Socket.recv_from_raw Ok payload expected a Tuple, got `{other:?}`",
         ))),
     }
 }
@@ -464,25 +465,6 @@ fn single_ok_payload(
         other => Err(LlvmError::Codegen(format!(
             "{intrinsic_label} on `{}` Ok variant has unexpected payload `{other:?}` \
              (expected single-field, IR seal invariant violation)",
-            function.symbol,
-        ))),
-    }
-}
-
-/// `IRSymbol` of the struct at `index` inside `struct_symbol`.
-/// The socket address walk uses it to reach `IPAddress` without
-/// hardcoding identifier strings.
-fn resolve_struct_field_symbol(
-    ctx: &EmitContext<'_>,
-    struct_symbol: &IRSymbol,
-    index: usize,
-    function: &IRFunction,
-) -> Result<IRSymbol, LlvmError> {
-    match ctx.layouts.struct_field_ir_type(struct_symbol, index) {
-        IRType::Struct(symbol) => Ok(symbol),
-        other => Err(LlvmError::Codegen(format!(
-            "field {index} of struct `{struct_symbol}` expected to be a Struct, got `{other:?}` \
-             (symbol `{}`)",
             function.symbol,
         ))),
     }

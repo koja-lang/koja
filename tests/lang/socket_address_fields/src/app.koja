@@ -1,0 +1,36 @@
+alias Net.IPAddress
+alias Net.Socket
+
+struct App: Process<(), (), ()>
+  fn start(config: ()) -> Result<Self, Process.StopReason>
+    Result.Ok(App{})
+  end
+
+  fn handle(self, msg: (), from: Option<ReplyTo<()>>) -> Process.Step<Self>
+    Process.Step.Continue(self)
+  end
+
+  fn run(self) -> Process.StopReason
+    addresses =
+      match Socket.resolve("localhost")
+        Result.Ok(found) -> found
+        Result.Err(_) -> return Process.StopReason.Shutdown
+      end
+
+    address =
+      match addresses.filter(candidate -> candidate.to_string() == "127.0.0.1")
+        .get(0)
+        Option.Some(found) -> found
+        Option.None -> return Process.StopReason.Shutdown
+      end
+
+    version =
+      match address.version
+        IPAddress.Version.V4 -> "V4"
+        IPAddress.Version.V6 -> "V6"
+      end
+
+    IO.puts("#{version} #{address.to_string()}")
+    Process.StopReason.Normal
+  end
+end

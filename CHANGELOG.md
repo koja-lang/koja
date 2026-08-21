@@ -27,6 +27,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - `koja format` preserves separate comments in wrapped `match`, `cond`, and `receive` arm heads instead of merging their text.
+- Socket DNS and datagram receive results now initialize every `IPAddress` field without reading beyond runtime buffers.
 
 ## [0.17.3] - 2026-08-19
 

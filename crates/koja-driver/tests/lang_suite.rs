@@ -149,6 +149,21 @@ fn project_selector_runs_project_from_parent_directory() {
     assert_eq!(stdout, expected);
 }
 
+#[test]
+fn socket_addresses_include_all_fields_under_both_backends() {
+    let project = lang_dir().join("socket_address_fields");
+
+    for backend in BACKENDS {
+        let backend_flag = format!("--backend={backend}");
+        let (stdout, stderr, code) = run_with_timeout(|cmd| {
+            cmd.arg("run").arg(&backend_flag).current_dir(&project);
+        });
+
+        assert_eq!(code, 0, "socket address fixture failed: {stderr}");
+        assert_eq!(stdout, "V4 127.0.0.1\n", "unexpected {backend} output");
+    }
+}
+
 fn run_pass_dir(dir: &Path, label: &str) {
     let files = collect_test_files(dir);
     assert!(

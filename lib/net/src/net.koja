@@ -115,14 +115,18 @@ struct Socket
   Receives data and the sender's address (for unconnected datagram sockets).
   Returns a tuple of the data and sender address.
   """
-  @intrinsic
   fn recv_from(self, count: Int) -> (Binary, SocketAddress) ! String
+    (data, ip_bytes, port) = try self.recv_from_raw(count)
+    (data, SocketAddress{ip: ip_address_from_bytes(ip_bytes), port: port})
+  end
 
   @doc """
   Resolves a hostname to a list of IP addresses via DNS.
   """
-  @intrinsic
   fn resolve(hostname: String) -> List<IPAddress> ! String
+    addresses = try Socket.resolve_raw(hostname)
+    addresses.map(bytes -> ip_address_from_bytes(bytes))
+  end
 
   @doc """
   Sends data to the given address (for unconnected datagram sockets).
@@ -175,6 +179,12 @@ struct Socket
 
   @intrinsic
   priv fn last_error -> String
+
+  @intrinsic
+  priv fn recv_from_raw(self, count: Int) -> (Binary, Binary, Int) ! String
+
+  @intrinsic
+  priv fn resolve_raw(hostname: String) -> List<Binary> ! String
 
   @extern "C"
   priv fn koja_socket_accept(fd: Int32) -> Int32

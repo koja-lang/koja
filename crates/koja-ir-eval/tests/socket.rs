@@ -1,7 +1,7 @@
 //! Loopback smoke tests for the eval-side socket surface: the
 //! `koja_socket_*` externs in `externs/net.rs` (blocking-fd
-//! semantics) and the `Socket.resolve` / `Socket.recv_from`
-//! intrinsics. Fixtures use the qualified `Net` stdlib package via
+//! semantics) and the raw socket intrinsics behind `Socket.resolve`
+//! and `Socket.recv_from`. Fixtures use the qualified `Net` stdlib package via
 //! [`common::evaluate_qualified_program`].
 //!
 //! Everything runs single-threaded: a loopback `connect` to a
@@ -107,39 +107,42 @@ fn udp_loopback_send_and_recv_from() {
         alias Net.Socket.Address as SocketAddress
         alias Net.UDPSocket
 
-        fn main -> Binary
+        fn main -> Bool
           receiver =
             match UDPSocket.bind({port})
               Result.Ok(r) -> r
-              Result.Err(_) -> return <<>>
+              Result.Err(_) -> return false
             end
 
           sender =
             match UDPSocket.bind(0)
               Result.Ok(s) -> s
-              Result.Err(_) -> return <<>>
+              Result.Err(_) -> return false
             end
 
           target = SocketAddress{{ip: IPAddress.loopback(), port: {port}}}
           payload = <<97, 0, 98>>.to_string().unwrap()
           match sender.send_to(payload, target)
             Result.Ok(_) -> ()
-            Result.Err(_) -> return <<>>
+            Result.Err(_) -> return false
           end
 
           match receiver.recv_from(64)
             Result.Ok(received) ->
-              (data, _) = received
-              data
+              (data, address) = received
+              data == <<97, 0, 98>>
+                and address.ip.version == IPAddress.Version.V4
+                and address.ip.to_string() == "127.0.0.1"
+                and address.port > 0
 
-            Result.Err(_) -> <<>>
+            Result.Err(_) -> false
           end
         end
         "#
     ));
     assert_eq!(
         evaluate_qualified_program(&source).expect("fixture should run"),
-        Value::binary(b"a\0b".as_slice()),
+        Value::Bool(true),
     );
 }
 
@@ -147,11 +150,18 @@ fn udp_loopback_send_and_recv_from() {
 fn resolve_loopback_hostname() {
     let source = dedent(
         r#"
+        alias Net.IPAddress
         alias Net.Socket
 
         fn main -> Bool
           match Socket.resolve("localhost")
-            Result.Ok(addrs) -> addrs.empty?() == false
+            Result.Ok(addrs) ->
+              addrs.any?(
+                address ->
+                  address.version == IPAddress.Version.V4
+                    and address.to_string() == "127.0.0.1",
+              )
+
             Result.Err(_) -> false
           end
         end
