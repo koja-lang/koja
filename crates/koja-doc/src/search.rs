@@ -32,7 +32,13 @@ pub fn search_index_json(project: &DocProject) -> String {
         out.push_str(&format!("\"name\":{},", json_str(&symbol.name)));
         out.push_str(&format!("\"kind\":{},", json_str(symbol.kind)));
         out.push_str(&format!("\"url\":{},", json_str(&symbol.url())));
-        out.push_str(&format!("\"brief\":{}", json_str(&symbol.brief())));
+        out.push_str(&format!("\"brief\":{},", json_str(&symbol.brief())));
+        match symbol.deprecated() {
+            Some(message) => {
+                out.push_str(&format!("\"deprecated\":{}", json_str(message)));
+            }
+            None => out.push_str("\"deprecated\":null"),
+        }
         out.push('}');
     }
     if !symbols.is_empty() {
@@ -77,6 +83,17 @@ impl Symbol<'_> {
             SymbolTarget::Function(f) => &f.doc,
             SymbolTarget::Protocol(p) => &p.doc,
             SymbolTarget::Struct(s) => &s.doc,
+        }
+    }
+
+    pub fn deprecated(&self) -> Option<&str> {
+        match &self.target {
+            SymbolTarget::Builtin(b) => b.deprecated.as_deref(),
+            SymbolTarget::Constant(c) => c.deprecated.as_deref(),
+            SymbolTarget::Enum(e) => e.deprecated.as_deref(),
+            SymbolTarget::Function(f) => f.deprecated.as_deref(),
+            SymbolTarget::Protocol(p) => p.deprecated.as_deref(),
+            SymbolTarget::Struct(s) => s.deprecated.as_deref(),
         }
     }
 

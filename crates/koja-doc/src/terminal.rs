@@ -80,15 +80,21 @@ fn list_line(symbol: &Symbol) -> String {
         .split_whitespace()
         .collect::<Vec<_>>()
         .join(" ");
-    if brief.is_empty() {
-        format!("- {} ({})", symbol.qualified_name(), symbol.kind)
+    let kind = if symbol.deprecated().is_some() {
+        format!("{}, deprecated", symbol.kind)
     } else {
-        format!("- {} ({}): {brief}", symbol.qualified_name(), symbol.kind)
+        symbol.kind.to_string()
+    };
+    if brief.is_empty() {
+        format!("- {} ({kind})", symbol.qualified_name())
+    } else {
+        format!("- {} ({kind}): {brief}", symbol.qualified_name())
     }
 }
 
 fn render_full(hit: &Symbol, partials: &[&Symbol]) -> String {
     let mut out = format!("# {} ({})\n", header_name(hit), hit.kind);
+    push_deprecation(&mut out, hit.deprecated());
 
     match &hit.target {
         SymbolTarget::Builtin(b) => {
@@ -127,7 +133,7 @@ fn render_full(hit: &Symbol, partials: &[&Symbol]) -> String {
     }
 
     if !partials.is_empty() {
-        out.push_str("\nAlso matched:\n\n");
+        out.push_str("\n## Also matched\n\n");
         for symbol in partials {
             out.push_str(&list_line(symbol));
             out.push('\n');
@@ -160,6 +166,17 @@ fn push_doc(out: &mut String, doc: &Option<String>) {
     }
 }
 
+fn push_deprecation(out: &mut String, message: Option<&str>) {
+    if let Some(message) = message {
+        out.push_str("\n> **Deprecated**\n>\n");
+        for line in message.trim().lines() {
+            out.push_str("> ");
+            out.push_str(line);
+            out.push('\n');
+        }
+    }
+}
+
 fn push_list_section(out: &mut String, title: &str, lines: &[String]) {
     if lines.is_empty() {
         return;
@@ -177,6 +194,7 @@ fn push_functions(out: &mut String, functions: &[DocFunction]) {
     out.push_str("\n## Functions\n");
     for f in functions {
         out.push_str(&format!("\n### `{}`\n", f.signature_text()));
+        push_deprecation(out, f.deprecated.as_deref());
         push_doc(out, &f.doc);
     }
 }
@@ -199,8 +217,10 @@ mod tests {
         let mut project = DocProject::new("MyApp");
         let global = project.ensure_package("Global", PackageKind::Stdlib);
         global.builtins.push(DocBuiltin {
+            deprecated: None,
             doc: Some("A growable list. Backed by a heap block.".to_string()),
             functions: vec![DocFunction {
+                deprecated: None,
                 doc: Some(
                     "Append an item.\n\n## Examples\n\n```koja\nlist.append(1)\n```".to_string(),
                 ),
@@ -223,6 +243,7 @@ mod tests {
             type_params: vec!["T".to_string()],
         });
         global.enums.push(DocEnum {
+            deprecated: None,
             doc: Some("An optional value.".to_string()),
             functions: vec![],
             name: "Option".to_string(),
@@ -231,6 +252,7 @@ mod tests {
 
         let app = project.ensure_package("MyApp", PackageKind::Project);
         app.structs.push(DocStruct {
+            deprecated: None,
             doc: Some("Connection settings.".to_string()),
             fields: vec![DocField {
                 default: Some("5432".to_string()),
@@ -244,16 +266,31 @@ mod tests {
 
         let json = project.ensure_package("JSON", PackageKind::Stdlib);
         json.constants.push(DocConstant {
+            deprecated: None,
             doc: Some("Maximum nesting depth.".to_string()),
             name: "MAX_DEPTH".to_string(),
         });
         json.enums.push(DocEnum {
+            deprecated: None,
             doc: None,
             functions: vec![],
             name: "Option".to_string(),
             variants: vec![],
         });
         project
+    }
+
+    #[test]
+    fn deprecation_renders_as_a_multiline_blockquote() {
+        let mut text = String::new();
+        push_deprecation(
+            &mut text,
+            Some("Use `new_api` instead.\nRemoved in 0.19.0."),
+        );
+        assert_eq!(
+            text,
+            "\n> **Deprecated**\n>\n> Use `new_api` instead.\n> Removed in 0.19.0.\n"
+        );
     }
 
     #[test]
@@ -264,7 +301,7 @@ mod tests {
         assert!(text.contains("A growable list."));
         assert!(text.contains("### `fn append(self, item: T) -> List<T>`"));
         assert!(text.contains("list.append(1)"));
-        assert!(text.contains("Also matched:\n\n- Global.List.append (fn): Append an item.\n"));
+        assert!(text.contains("## Also matched\n\n- Global.List.append (fn): Append an item.\n"));
     }
 
     #[test]

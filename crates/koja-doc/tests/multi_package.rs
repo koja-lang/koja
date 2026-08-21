@@ -9,7 +9,7 @@
 
 use koja_ast::util::dedent;
 use koja_doc::{
-    DocProject, PackageKind, extract_items, finalize_project, render_package_index,
+    DocProject, PackageKind, extract_items, finalize_project, render_enum, render_package_index,
     render_root_index, render_struct, search_index_json, terminal, terminal::SearchOutcome,
 };
 use koja_parser::ParseMode;
@@ -120,6 +120,141 @@ fn items_sort_alphabetically_within_each_package() {
     let myapp = project.find_package("MyApp").expect("MyApp present");
     let myapp_names: Vec<&str> = myapp.items.iter().map(|i| i.name.as_str()).collect();
     assert_eq!(myapp_names, vec!["Counter", "greet"]);
+}
+
+#[test]
+fn nested_types_keep_full_names_and_deprecation_metadata() {
+    let mut project = DocProject::new("Net");
+    ingest(
+        &mut project,
+        "Net",
+        PackageKind::Project,
+        "
+        @doc \"An IP address.\"
+        struct IPAddress
+          bytes: Binary
+
+          @doc \"The address version.\"
+          @deprecated \"Use `AddressFamily` instead.\"
+          enum Version
+            V4
+            V6
+          end
+
+          @doc false
+          struct Internal
+            @doc \"A visible child of a hidden owner page.\"
+            enum Child
+              One
+            end
+          end
+
+          priv struct Hidden
+            enum Secret
+              One
+            end
+          end
+        end
+
+        @doc \"An invalid address.\"
+        enum IPAddress.ParseError
+          Invalid(String)
+        end
+
+        extend IPAddress.Version
+          @doc \"Returns the old version label.\"
+          @deprecated \"Use `label` instead.\"
+          fn legacy(self) -> String
+            \"old\"
+          end
+        end
+        ",
+    );
+    ingest(
+        &mut project,
+        "Addon",
+        PackageKind::Dependency,
+        "
+        extend Net.IPAddress.Version
+          @doc \"Returns an external label.\"
+          fn external_label(self) -> String
+            \"external\"
+          end
+        end
+        ",
+    );
+    finalize_project(&mut project);
+
+    let net = project.find_package("Net").expect("Net present");
+    let names: Vec<&str> = net.items.iter().map(|item| item.name.as_str()).collect();
+    assert_eq!(
+        names,
+        vec![
+            "IPAddress",
+            "IPAddress.Internal.Child",
+            "IPAddress.ParseError",
+            "IPAddress.Version",
+        ]
+    );
+
+    let version = net
+        .enums
+        .iter()
+        .find(|item| item.name == "IPAddress.Version")
+        .expect("nested version enum");
+    assert_eq!(
+        version.deprecated.as_deref(),
+        Some("Use `AddressFamily` instead.")
+    );
+    let functions: Vec<&str> = version
+        .functions
+        .iter()
+        .map(|function| function.name.as_str())
+        .collect();
+    assert_eq!(functions, vec!["external_label", "legacy"]);
+    assert_eq!(
+        version.functions[1].deprecated.as_deref(),
+        Some("Use `label` instead.")
+    );
+
+    let html = render_enum(version, net, &project);
+    assert!(html.contains("IPAddress.Version"));
+    assert!(html.contains("class=\"deprecation-notice\""));
+    assert!(html.contains("Use <code>AddressFamily</code> instead."));
+    assert!(html.contains("Use <code>label</code> instead."));
+    let legacy_notice = html.find("Use <code>label</code> instead.").unwrap();
+    let legacy_signature = html.find("<span class=\"fn\">legacy</span>").unwrap();
+    assert!(legacy_notice < legacy_signature);
+
+    let package_html = render_package_index(net, &project);
+    assert!(package_html.contains("href=\"IPAddress.Version.html\""));
+    assert!(package_html.contains("class=\"deprecated-badge\">deprecated</span>"));
+
+    let json = search_index_json(&project);
+    assert!(json.contains("\"name\":\"IPAddress.Version\""));
+    assert!(json.contains("\"url\":\"Net/IPAddress.Version.html\""));
+    assert!(json.contains("\"deprecated\":\"Use `AddressFamily` instead.\""));
+    assert!(json.contains("\"name\":\"IPAddress.ParseError\""));
+    assert!(json.contains("\"deprecated\":null"));
+
+    let SearchOutcome::Hits(version_doc) = terminal::search(&project, "IPAddress.Version") else {
+        panic!("expected nested type hit");
+    };
+    assert!(version_doc.contains("> **Deprecated**\n>\n> Use `AddressFamily` instead."));
+    assert!(version_doc.contains("### `fn legacy(self) -> String`"));
+    assert!(version_doc.contains("> **Deprecated**\n>\n> Use `label` instead."));
+
+    let SearchOutcome::Hits(legacy_doc) = terminal::search(&project, "IPAddress.Version.legacy")
+    else {
+        panic!("expected deprecated function hit");
+    };
+    assert!(legacy_doc.contains("> **Deprecated**\n>\n> Use `label` instead."));
+    assert!(!legacy_doc.contains("## Deprecated"));
+
+    let SearchOutcome::Hits(version_list) = terminal::search(&project, "Version") else {
+        panic!("expected nested type list");
+    };
+    assert!(version_list.contains("- Net.IPAddress.Version (enum, deprecated)"));
 }
 
 #[test]
@@ -346,7 +481,7 @@ fn terminal_search_covers_exact_partial_and_none() {
     assert!(full.contains("A counter for the app."));
     assert!(full.contains("### `fn bump()`"));
     assert!(
-        full.contains("Also matched:\n\n- MyApp.Counter.bump (fn): Bump the counter by one.\n")
+        full.contains("## Also matched\n\n- MyApp.Counter.bump (fn): Bump the counter by one.\n")
     );
 
     let SearchOutcome::Hits(function) = terminal::search(&project, "Counter.bump") else {

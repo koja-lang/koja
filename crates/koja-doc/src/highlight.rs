@@ -287,6 +287,7 @@ mod tests {
 
     fn checkout_function() -> DocFunction {
         DocFunction {
+            deprecated: None,
             doc: None,
             error_type: Some("PoolError".to_string()),
             name: "checkout".to_string(),

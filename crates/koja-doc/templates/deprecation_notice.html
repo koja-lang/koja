@@ -1,0 +1,6 @@
+{% if let Some(message) = deprecated %}
+<aside class="deprecation-notice">
+  <div class="deprecation-title">Deprecated</div>
+  <div class="deprecation-message">{{ message|md }}</div>
+</aside>
+{% endif %}

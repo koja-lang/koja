@@ -15,7 +15,11 @@
   <div class="page-header">
     <h1>{{ f.name }}</h1>
     <span class="kind-chip">fn</span>
+    {% if f.deprecated.is_some() %}<span class="deprecated-badge">deprecated</span>{% endif %}
   </div>
+
+  {% let deprecated = f.deprecated %}
+  {% include "deprecation_notice.html" %}
 
   <div class="detail-signature codeblock"><code>{{ f.signature_html()|safe }}</code></div>
 

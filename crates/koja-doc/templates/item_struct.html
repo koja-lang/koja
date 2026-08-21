@@ -15,7 +15,11 @@
   <div class="page-header">
     <h1>{{ s.name }}{% if !s.type_params.is_empty() %}&lt;{{ s.type_params.join(", ") }}&gt;{% endif %}</h1>
     <span class="kind-chip">struct</span>
+    {% if s.deprecated.is_some() %}<span class="deprecated-badge">deprecated</span>{% endif %}
   </div>
+
+  {% let deprecated = s.deprecated %}
+  {% include "deprecation_notice.html" %}
 
   {% if let Some(doc) = s.doc %}
   <div class="detail-doc">{{ doc|md }}</div>
@@ -36,6 +40,7 @@
     {% for f in s.functions %}
     <div class="summary-row">
       <div class="summary-name"><a href="#fn-{{ f.name }}">{{ f.name }}</a></div>
+      {% if f.deprecated.is_some() %}<span class="deprecated-badge">deprecated</span>{% endif %}
       {% if let Some(doc) = f.doc %}<div class="summary-brief">{{ doc|brief }}</div>{% endif %}
     </div>
     {% endfor %}

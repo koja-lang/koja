@@ -26,6 +26,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `koja doc` shows deprecation notices and migration guidance in generated pages, listings, terminal search, and the search index.
+- `koja doc` generates pages for nested types and preserves full qualified type names in listings, search results, and links.
 - `koja format` preserves separate comments in wrapped `match`, `cond`, and `receive` arm heads instead of merging their text.
 - Socket DNS and datagram receive results now initialize every `IPAddress` field without reading beyond runtime buffers.
 

@@ -22,6 +22,7 @@
     <div class="item-row">
       <a class="item-name" href="{{ item.name }}.html">{{ item.name }}</a>
       <span class="item-kind">{{ item.kind }}</span>
+      {% if item.deprecated.is_some() %}<span class="deprecated-badge">deprecated</span>{% endif %}
       {% if let Some(doc) = item.doc %}<span class="item-brief">{{ doc|brief }}</span>{% endif %}
     </div>
     {% endfor %}
