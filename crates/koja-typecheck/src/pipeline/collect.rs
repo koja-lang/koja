@@ -672,12 +672,12 @@ fn register_enum(
 }
 
 /// Register every method declared in an `impl Trait for Type` block
-/// under `(package, [type_name, fn_name])`. Conformance facts
-/// (`target : protocol`) are recorded at lift time onto the target's
-/// struct/enum definition. Duplicate `impl P for T` blocks surface
-/// there. The impl's `package` is the package the block lives in,
-/// which (for now) also has to be where `Type` is declared. Cross-
-/// package protocol impls are not yet supported.
+/// under the target's qualified identifier, so cross-package impls
+/// land in the same collision-detection slot as same-package ones.
+/// There is no orphan rule: any package may conform any type to any
+/// protocol, and the whole-program conformance table catches
+/// duplicate `impl P for T` pairs at lift time, where conformance
+/// facts are recorded onto the target's struct/enum definition.
 fn register_impl(
     impl_block: &ImplBlock,
     package: &str,
@@ -685,26 +685,30 @@ fn register_impl(
     diagnostics: &mut Vec<Diagnostic>,
 ) {
     diagnose_impl_member_feature_gaps(impl_block, diagnostics);
-    let Some(target_path) = nominal_target_path(&impl_block.target) else {
+    let Some(path) = nominal_target_path(&impl_block.target) else {
         diagnostics.push(Diagnostic::error(
             "typecheck does not yet support generic impl targets".to_string(),
             type_expr_span(&impl_block.target),
         ));
         return;
     };
-    // Impls are same-package (orphan rule), so the whole dotted path is
-    // the target's path within `package`.
-    let target_identifier = Identifier::new(package, target_path.to_vec());
-    let Some((target_id, entry)) = registry.lookup(&target_identifier) else {
+    let Some((target_id, target_package, target_path)) = registry.lookup_owner_path(path, package)
+    else {
         diagnostics.push(Diagnostic::error(
-            format!(
-                "typecheck cannot extend unknown type `{}`",
-                target_path.join(".")
-            ),
+            format!("typecheck cannot extend unknown type `{}`", path.join(".")),
             type_expr_span(&impl_block.target),
         ));
         return;
     };
+    let entry = registry
+        .get(target_id)
+        .expect("lookup_owner_path returned a live id");
+    check_reference_visibility(
+        entry,
+        package,
+        type_expr_span(&impl_block.target),
+        diagnostics,
+    );
     if !matches!(
         entry.kind,
         GlobalKind::Builtin(_) | GlobalKind::Enum(_) | GlobalKind::Struct(_)
@@ -720,9 +724,20 @@ fn register_impl(
         ));
         return;
     }
+    if target_package != package && !entry.type_params.is_empty() {
+        diagnostics.push(Diagnostic::error(
+            format!(
+                "typecheck does not yet support conformance impls for generic types \
+                 from other packages (`{}` is generic)",
+                target_path.join("."),
+            ),
+            type_expr_span(&impl_block.target),
+        ));
+        return;
+    }
     register_block_methods(
-        package,
-        target_path,
+        &target_package,
+        &target_path,
         target_id,
         &impl_block.members,
         registry,
@@ -748,7 +763,7 @@ fn register_extend(
         ));
         return;
     };
-    let Some((target_id, target_package, target_path)) = lookup_owner_path(path, package, registry)
+    let Some((target_id, target_package, target_path)) = registry.lookup_owner_path(path, package)
     else {
         diagnostics.push(Diagnostic::error(
             format!("typecheck cannot extend unknown type `{}`", path.join(".")),
@@ -1001,25 +1016,6 @@ pub(crate) fn nominal_target_path(target: &TypeExpr) -> Option<&[String]> {
         TypeExpr::Named { path, .. } | TypeExpr::Generic { path, .. } => Some(path.as_slice()),
         _ => None,
     }
-}
-
-/// Resolve a target `path` to its owning `(id, package, path)`. A
-/// same-package nested type (`Outer.Inner`) wins over the
-/// `<package>.<rest>` reading, matching type/value resolution.
-pub(crate) fn lookup_owner_path(
-    path: &[String],
-    current_package: &str,
-    registry: &GlobalRegistry,
-) -> Option<(GlobalRegistryId, String, Vec<String>)> {
-    if let Some((id, _)) = registry.lookup(&Identifier::new(current_package, path.to_vec())) {
-        return Some((id, current_package.to_string(), path.to_vec()));
-    }
-    if path.len() >= 2
-        && let Some((id, _)) = registry.lookup(&Identifier::new(&path[0], path[1..].to_vec()))
-    {
-        return Some((id, path[0].clone(), path[1..].to_vec()));
-    }
-    None
 }
 
 /// Project the AST `[TypeParam]` list down to the param-name `Vec`

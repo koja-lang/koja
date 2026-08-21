@@ -185,47 +185,42 @@ a rule that a builtin satisfies bounds by shape.
 
 ---
 
-## Protocol conformances stop at the package boundary
+## Protocol conformances stop at instantiation granularity
 
 Found 2026-08-09 while designing an `Encodable` protocol for the
-`messagepack` package. Two restrictions in `register_impl`
-(`koja-typecheck/src/pipeline/collect.rs`) block the serde pattern,
-where a codec package defines a protocol, implements it for the
-stdlib vocabulary types, and applications implement it for their own
-types:
+`messagepack` package. The package boundary fell on 2026-08-21:
+`impl P for T` accepts any protocol and any non-generic type, with
+no orphan rule. A codec package can implement its protocol for
+`String` and `Int`, and an adapter package can conform one
+dependency's type to another dependency's protocol (the Elixir
+`Jason.Encoder`-glue-package precedent, which a Rust-style
+protocol-or-target-local rule would forbid). Coherence is
+whole-program collision detection instead of a source restriction:
+the conformance table rejects duplicate `(protocol, type)` impls,
+and cross-package impl methods register under the target's
+namespace like `extend` does, so bare dot-call works and two
+packages adding one same-named method to a foreign type collide at
+registration. The bound-only resolution policy sketched earlier
+would have needed a new identifier shape plus mono routing, so it
+lost to the `extend` precedent. Known residual: when two
+dependencies both ship the same impl (say a protocol's package
+catches up to an adapter package), the app cannot compile the pair
+until the adapter updates. An app-level "prefer this impl" override
+can close that hole later without changing today's semantics.
 
-- `impl P for T` requires `T` to live in the impl's package. A local
-  protocol cannot be implemented for `String`, `Int`, or any other
-  foreign type. The inverse direction (foreign protocol, local type)
-  already works and carries every `Process` conformance.
-- Generic impl targets are rejected outright, even with concrete
-  arguments (`impl Encodable for List<Value>`).
+**What remains,** in two steps of increasing size:
 
-`extend` accepts cross-package targets but grants methods, not
-conformance facts, so bounds like `T: Encodable` never see them.
-Without the stdlib impls the protocol is useless, so every
-codec-shaped package (`MessagePack.Encodable`, a future
-`JSON.Encodable`, an ORM's `Row`) is blocked on the same wall. The
-collection-`eq` hole in the builtin-derives entry above waits on the
-same missing spelling.
-
-**Fix path,** in three steps of increasing size:
-
-1. Relax the orphan rule to Rust's: an impl is legal when the
-   protocol or the target is local. Coherence survives, since only
-   two packages can ever write a given `(protocol, type)` impl, and
-   the whole-program conformance table detects that collision at
-   typecheck time.
-2. Accept concrete generic impl targets, keying conformance facts by
-   instantiation.
-3. Conditional conformance (`impl Encodable for List<T>` requiring
+1. Concrete generic impl targets (`impl Encodable for List<Value>`),
+   keying conformance facts by instantiation. Foreign generic
+   targets are rejected outright today, since the conformance map on
+   the target entry is keyed by protocol id only and one impl would
+   claim every `List<T>`.
+2. Conditional conformance (`impl Encodable for List<T>` requiring
    `T: Encodable`), discharged per instantiation during
    monomorphization like existing function bounds.
 
-Step 1 needs a policy for dot-call ambiguity when two packages add
-same-named protocol methods to one foreign type. Resolving through
-the bound only (no bare dot-call on foreign conformances) is the
-conservative default.
+The collection-`eq` hole in the builtin-derives entry above waits on
+step 2's spelling.
 
 ---
 

@@ -25,7 +25,7 @@ use koja_ast::ast::{Diagnostic, File, Function, ImplMember, Item, Param, Stateme
 use koja_ast::identifier::{GlobalRegistryId, Identifier, ResolvedType};
 
 use crate::pipeline::aliases::collect_file_aliases;
-use crate::pipeline::collect::{lookup_owner_path, nominal_target_path};
+use crate::pipeline::collect::nominal_target_path;
 use crate::pipeline::local_scope::LocalScope;
 use crate::registry::{FunctionSignature, GlobalKind, GlobalRegistry};
 
@@ -111,15 +111,26 @@ pub(crate) fn resolve_file(
                 // accepts (`impl X` and `impl X<...>`) so every param gets
                 // a `LocalId` stamped. IR lower panics on a missing one
                 // when mono later re-lowers a substituted copy of the body.
-                let Some(target_path) = nominal_target_path(&impl_block.target) else {
+                // Identifiers anchor at the target type's package so a
+                // cross-package `impl P for String` resolves its methods
+                // under `Global.String.*` where collect registered them.
+                let Some(path) = nominal_target_path(&impl_block.target) else {
                     continue;
                 };
-                let target_path = target_path.to_vec();
-                let enclosing_type_id = enclosing_type_id(env.package, &target_path, env.registry);
+                let Some((_, target_package, target_path)) =
+                    env.registry.lookup_owner_path(path, env.package)
+                else {
+                    continue;
+                };
+                let enclosing_type_id =
+                    enclosing_type_id(&target_package, &target_path, env.registry);
                 for member in &mut impl_block.members {
                     if let ImplMember::Function(function) = member {
-                        let identifier =
-                            Identifier::member(env.package, &target_path, &function.name);
+                        let identifier = Identifier::member(
+                            target_package.as_str(),
+                            &target_path,
+                            &function.name,
+                        );
                         resolve_function(
                             function,
                             &identifier,
@@ -141,7 +152,7 @@ pub(crate) fn resolve_file(
                     continue;
                 };
                 let Some((_, target_package, target_path)) =
-                    lookup_owner_path(path, env.package, env.registry)
+                    env.registry.lookup_owner_path(path, env.package)
                 else {
                     continue;
                 };

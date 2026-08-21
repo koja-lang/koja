@@ -165,8 +165,10 @@ pub(crate) fn lower_package(
 /// Lower methods declared in an `impl Trait for Type ... end` block.
 /// Unsupported targets already errored upstream, so IR silently skips
 /// them. Synthesized default-method bodies lower like any other
-/// method. They all register at `Package.Type.method` and the IR
-/// doesn't model the trait link.
+/// method. Functions key off the target's qualified identifier
+/// regardless of the impl's own package (cross-package impls carry a
+/// local protocol onto a foreign type), and the IR doesn't model the
+/// trait link.
 fn lower_impl(
     impl_block: &ImplBlock,
     package: &str,
@@ -175,15 +177,18 @@ fn lower_impl(
     output: &mut LowerOutput,
     functions: &mut BTreeMap<IRSymbol, IRFunction>,
 ) {
-    let Some(target_path) = nominal_target_path(&impl_block.target) else {
+    let Some(path) = nominal_target_path(&impl_block.target) else {
         return;
     };
-    if impl_target_is_generic(target_path, package, registry) {
+    let Some((_, target_package, target_path)) = registry.lookup_owner_path(path, package) else {
+        return;
+    };
+    if impl_target_is_generic(&target_path, target_package.as_str(), registry) {
         return;
     }
     lower_block_members(
-        package,
-        target_path,
+        target_package.as_str(),
+        &target_path,
         &impl_block.members,
         def_file,
         registry,
@@ -206,7 +211,7 @@ fn lower_extend(
     let Some(path) = nominal_target_path(&extend_block.target) else {
         return;
     };
-    let Some((target_package, target_path)) = lookup_owner_path(path, package, registry) else {
+    let Some((_, target_package, target_path)) = registry.lookup_owner_path(path, package) else {
         return;
     };
     // Protocol targets carry statics only (typecheck enforces this),
@@ -238,30 +243,6 @@ fn extend_target_is_protocol(
     registry
         .lookup(&identifier)
         .is_some_and(|(_, entry)| matches!(entry.kind, GlobalKind::Protocol(_)))
-}
-
-/// Resolve a nominal `impl`/`extend` target into its owning
-/// `(package, path)`. Twin of typecheck's `lookup_owner_path`, where a
-/// same-package nested type wins over the `<package>.<rest>` reading.
-pub(crate) fn lookup_owner_path(
-    path: &[String],
-    current_package: &str,
-    registry: &GlobalRegistry,
-) -> Option<(String, Vec<String>)> {
-    if registry
-        .lookup(&Identifier::new(current_package, path.to_vec()))
-        .is_some()
-    {
-        return Some((current_package.to_string(), path.to_vec()));
-    }
-    if path.len() >= 2
-        && registry
-            .lookup(&Identifier::new(&path[0], path[1..].to_vec()))
-            .is_some()
-    {
-        return Some((path[0].clone(), path[1..].to_vec()));
-    }
-    None
 }
 
 /// Shared member-lowering loop for [`lower_impl`] and [`lower_extend`].

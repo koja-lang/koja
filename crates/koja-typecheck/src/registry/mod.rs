@@ -762,6 +762,29 @@ impl GlobalRegistry {
         Some((id, entry))
     }
 
+    /// Resolve a nominal `impl` / `extend` target `path` to its owning
+    /// `(id, package, path)`. A same-package nested type (`Outer.Inner`)
+    /// wins over the `<package>.<rest>` reading, matching type/value
+    /// resolution, and bare stdlib names fall back to `Global`.
+    pub fn lookup_owner_path(
+        &self,
+        path: &[String],
+        current_package: &str,
+    ) -> Option<(GlobalRegistryId, String, Vec<String>)> {
+        if let Some((id, _)) = self.lookup(&Identifier::new(current_package, path.to_vec())) {
+            return Some((id, current_package.to_string(), path.to_vec()));
+        }
+        if path.len() >= 2
+            && let Some((id, _)) = self.lookup(&Identifier::new(&path[0], path[1..].to_vec()))
+        {
+            return Some((id, path[0].clone(), path[1..].to_vec()));
+        }
+        if let Some((id, _)) = self.lookup(&Identifier::new("Global", path.to_vec())) {
+            return Some((id, "Global".to_string(), path.to_vec()));
+        }
+        None
+    }
+
     /// Build a leaf [`ResolvedType`] pointing at the preloaded
     /// `Global.<name>` stdlib stub. Panics if the stub is missing.
     /// Preload is a [`Self::with_stdlib_stubs`] invariant.

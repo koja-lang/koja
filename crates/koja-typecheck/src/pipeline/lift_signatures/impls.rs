@@ -16,7 +16,7 @@ use koja_ast::ast::{
 use koja_ast::identifier::{GlobalRegistryId, Identifier, Resolution, ResolvedType};
 use koja_ast::span::Span;
 
-use crate::pipeline::collect::{lookup_owner_path, nominal_target_path};
+use crate::pipeline::collect::nominal_target_path;
 use crate::pipeline::resolve::types::types_equivalent;
 use crate::pipeline::unify::{Substitution, substitute};
 use crate::registry::{
@@ -100,7 +100,6 @@ impl ConformanceSite<'_> {
 /// the user wrote on `trait_expr` (`Eq<String>` -> `[String]`).
 #[derive(Clone, Copy)]
 struct ProtocolImplScope<'a> {
-    package: &'a str,
     /// Registry id for the protocol, needed by default-method
     /// synthesis to recover the protocol's type-param names from
     /// [`crate::registry::GlobalRegistry::type_params`].
@@ -123,10 +122,16 @@ pub(super) fn lift_impl(
     scope: &mut LiftScope<'_>,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
-    let Some(target_path) = nominal_target_path(&impl_block.target).map(<[String]>::to_vec) else {
+    let Some(path) = nominal_target_path(&impl_block.target) else {
         return;
     };
-    let target_identifier = Identifier::new(scope.package, target_path.clone());
+    let Some((_, target_package, target_path)) =
+        scope.registry.lookup_owner_path(path, scope.package)
+    else {
+        // Collect already diagnosed. Nothing was registered.
+        return;
+    };
+    let target_identifier = Identifier::new(target_package.as_str(), target_path.clone());
     if !matches!(
         scope
             .registry
@@ -135,6 +140,17 @@ pub(super) fn lift_impl(
         Some(GlobalKind::Builtin(_) | GlobalKind::Enum(_) | GlobalKind::Struct(_))
     ) {
         // Collect already diagnosed. Nothing was registered.
+        return;
+    }
+    if target_package != scope.package
+        && scope
+            .registry
+            .lookup(&target_identifier)
+            .is_some_and(|(_, e)| !e.type_params.is_empty())
+    {
+        // Foreign generic targets wait on instantiation-keyed
+        // conformance. Collect already diagnosed and skipped
+        // method registration.
         return;
     }
     // Resolve the impl target's type expression up front so method
@@ -163,7 +179,8 @@ pub(super) fn lift_impl(
         let ImplMember::Function(function) = member else {
             continue;
         };
-        let method_identifier = Identifier::member(scope.package, &target_path, &function.name);
+        let method_identifier =
+            Identifier::member(target_package.as_str(), &target_path, &function.name);
         lift_function_with_identifier(
             function,
             method_identifier,
@@ -263,7 +280,7 @@ pub(super) fn lift_extend(
         return;
     };
     let Some((_, target_package, target_path)) =
-        lookup_owner_path(path, scope.package, scope.registry)
+        scope.registry.lookup_owner_path(path, scope.package)
     else {
         return;
     };
@@ -544,7 +561,6 @@ fn verify_and_synthesize_conformance(
     };
     let definition = definition.clone();
     let impl_scope = ProtocolImplScope {
-        package: scope.package,
         protocol_id,
         protocol_identifier: &protocol_identifier,
         protocol_subst: &resolved.protocol_subst,
@@ -677,8 +693,11 @@ fn synthesize_default_method(
         span: method.span,
     };
     substitute_protocol_type_params(&mut function, impl_scope, scope);
-    let method_identifier =
-        Identifier::member(impl_scope.package, impl_scope.target_path, &function.name);
+    let method_identifier = Identifier::member(
+        impl_scope.target_identifier.package(),
+        impl_scope.target_path,
+        &function.name,
+    );
     let type_params: Vec<String> = function
         .type_params
         .iter()
@@ -1088,13 +1107,17 @@ fn check_impl_method_signature(
     diagnostics: &mut Vec<Diagnostic>,
 ) {
     let ProtocolImplScope {
-        package,
         protocol_identifier,
         protocol_subst,
+        target_identifier,
         target_path,
         ..
     } = impl_scope;
-    let method_identifier = Identifier::member(package, target_path, &impl_function.name);
+    let method_identifier = Identifier::member(
+        target_identifier.package(),
+        target_path,
+        &impl_function.name,
+    );
     let Some((_, entry)) = registry.lookup(&method_identifier) else {
         return;
     };

@@ -1372,6 +1372,22 @@ The two forms are equivalent and check identically. Declaring the same conforman
 
 The impl block is the isolated-contract form. It rejects public functions the protocol does not declare (`priv fn` helpers are allowed). Use it when a conformance's functions would crowd the type body.
 
+The protocol and the type can both come from other packages. A serialization package can implement its own `Encodable` for `String`, and your application can implement that same `Encodable` for a struct that a third-party package defines.
+
+```koja
+protocol Encodable
+  fn to_wire(self) -> String
+end
+
+impl Encodable for String
+  fn to_wire(self) -> String
+    self
+  end
+end
+```
+
+The compiler checks the whole program for conflicts. If two packages implement the same protocol for the same type, or give one type two functions with the same name, the build fails with an error at the conflicting declaration. Implementing a protocol for a generic type from another package (for example `impl Encodable for List<Int>`) is not supported yet.
+
 ### Trait Bounds
 
 Generic type parameters can be constrained to types implementing specific protocols using `:` syntax:
