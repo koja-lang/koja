@@ -127,7 +127,7 @@ fn conditional_impl_encodes_nested_lists() {
 
 #[test]
 fn list_equality_compares_elements() {
-    // Pins the `==` fix: the derived zero-field List `eq` used to
+    // Pins the `==` fix: the derived zero-field List `equals?` used to
     // report every same-typed pair equal. The conditional stdlib
     // impl compares lengths and elements.
     let value = common::evaluate_script(&dedent(

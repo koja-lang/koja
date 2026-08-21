@@ -1,5 +1,5 @@
 //! Coverage for the eval-side intrinsic families wired from
-//! auto-imported `kernel.koja`: `Equality.eq` (Bool + 8 int widths),
+//! auto-imported `kernel.koja`: `Equality.equals?` (Bool + 8 int widths),
 //! `Hash.hash` (Bool + 8 int widths), and `Kernel.panic`. The tests
 //! drive the auto-imported `.eq` / `.hash` methods and the
 //! `Kernel.panic(message)` call directly, so each family is
@@ -30,22 +30,25 @@ fn run_program(source: &str) -> Result<Value, RuntimeError> {
 
 #[test]
 fn bool_eq_true_when_operands_match() {
-    assert_eq!(run_script("true.eq(true)").unwrap(), Value::Bool(true),);
+    assert_eq!(run_script("true.equals?(true)").unwrap(), Value::Bool(true),);
 }
 
 #[test]
 fn bool_eq_false_when_operands_differ() {
-    assert_eq!(run_script("true.eq(false)").unwrap(), Value::Bool(false),);
+    assert_eq!(
+        run_script("true.equals?(false)").unwrap(),
+        Value::Bool(false),
+    );
 }
 
 #[test]
 fn int_eq_true_when_operands_match() {
-    assert_eq!(run_script("42.eq(42)").unwrap(), Value::Bool(true),);
+    assert_eq!(run_script("42.equals?(42)").unwrap(), Value::Bool(true),);
 }
 
 #[test]
 fn int_eq_false_when_operands_differ() {
-    assert_eq!(run_script("42.eq(7)").unwrap(), Value::Bool(false),);
+    assert_eq!(run_script("42.equals?(7)").unwrap(), Value::Bool(false),);
 }
 
 #[test]
@@ -53,7 +56,7 @@ fn uint8_eq_dispatches_through_narrow_impl() {
     let v = run_program(
         "
         fn eq_u8(x: UInt8, y: UInt8) -> Bool
-          x.eq(y)
+          x.equals?(y)
         end
 
         fn main -> Bool

@@ -82,7 +82,7 @@ fn trait_impl_with_bounded_target_param() {
     let block = first_impl(
         "
         impl Equality for List<T: Equality>
-          fn eq(self, other: List<T>) -> Bool
+          fn equals?(self, other: List<T>) -> Bool
             true
           end
         end

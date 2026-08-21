@@ -550,7 +550,7 @@ fn method_dispatch_kind(receiver: &Expr, registry: &GlobalRegistry) -> Dispatch 
 /// [`koja_typecheck::pipeline::resolve::types::types_equivalent`]).
 /// Until `Int` and `Float` become proper unions over their sized
 /// variants, methods registered on the unsized canonical (e.g.
-/// `Debug.format`, `Equality.eq`, `Hash.hash`) need to be reachable
+/// `Debug.format`, `Equality.equals?`, `Hash.hash`) need to be reachable
 /// through an `Int64`-resolved receiver too. Other primitive widths
 /// (`Int8`, `UInt32`, etc.) keep their own ids, since they're distinct
 /// types in the alias rule, not collapsed.

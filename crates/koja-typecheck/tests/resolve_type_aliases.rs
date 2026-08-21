@@ -300,7 +300,7 @@ fn tuple_alias_chain_supports_methods_patterns_and_destructuring() {
           (left, _) = pair
           left.print()
           match pair
-            (number, label) -> pair.eq((number, label))
+            (number, label) -> pair.equals?((number, label))
           end
         end
         ";
@@ -318,7 +318,7 @@ fn tuple_alias_satisfies_structural_protocol_bounds() {
         end
 
         fn equal<T: Equality>(left: T, right: T) -> Bool
-          left.eq(right)
+          left.equals?(right)
         end
 
         fn use_pair(pair: Pair) -> Bool

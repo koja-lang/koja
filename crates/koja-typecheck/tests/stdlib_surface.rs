@@ -27,7 +27,7 @@ const SURFACE: &[(&str, &[&str])] = &[
         &["at", "byte_size", "format", "slice", "to_bits", "to_string"],
     ),
     ("Bits", &["format", "to_binary"]),
-    ("Bool", &["eq", "format", "hash"]),
+    ("Bool", &["equals?", "format", "hash"]),
     (
         "CPtr",
         &[
@@ -94,10 +94,10 @@ const SURFACE: &[(&str, &[&str])] = &[
     ("Float", &["format", "parse"]),
     ("Float32", &["format"]),
     ("IO", &["Ready", "gets", "puts", "warn", "write"]),
-    ("Int", &["eq", "format", "hash", "parse"]),
-    ("Int8", &["eq", "format", "hash"]),
-    ("Int16", &["eq", "format", "hash"]),
-    ("Int32", &["eq", "format", "hash"]),
+    ("Int", &["equals?", "format", "hash", "parse"]),
+    ("Int8", &["equals?", "format", "hash"]),
+    ("Int16", &["equals?", "format", "hash"]),
+    ("Int32", &["equals?", "format", "hash"]),
     ("Kernel", &["panic"]),
     ("List", &["format"]),
     ("Map", &["format"]),
@@ -125,7 +125,7 @@ const SURFACE: &[(&str, &[&str])] = &[
             "downcase",
             "empty?",
             "ends_with?",
-            "eq",
+            "equals?",
             "escape_debug",
             "get",
             "graphemes",
@@ -161,10 +161,10 @@ const SURFACE: &[(&str, &[&str])] = &[
             "set_env",
         ],
     ),
-    ("UInt8", &["eq", "format", "hash"]),
-    ("UInt16", &["eq", "format", "hash"]),
-    ("UInt32", &["eq", "format", "hash"]),
-    ("UInt64", &["eq", "format", "hash"]),
+    ("UInt8", &["equals?", "format", "hash"]),
+    ("UInt16", &["equals?", "format", "hash"]),
+    ("UInt32", &["equals?", "format", "hash"]),
+    ("UInt64", &["equals?", "format", "hash"]),
 ];
 
 #[test]
@@ -205,7 +205,7 @@ fn user_code_can_call_io_apis() {
 fn user_code_can_call_eq_and_hash_through_method_chain() {
     typecheck(&dedent(
         "
-        1.eq(1)
+        1.equals?(1)
         42.hash()
         ",
     ));
@@ -227,7 +227,7 @@ fn user_code_can_call_string_apis() {
         "
         \"hello\".length()
         \"hello\".byte_length()
-        \"hello\".eq(\"hello\")
+        \"hello\".equals?(\"hello\")
         \"hello\".empty?()
         \"  hi  \".trim()
         \"hello world\".contains?(\"world\")

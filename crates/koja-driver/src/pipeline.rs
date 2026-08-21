@@ -681,7 +681,7 @@ fn bundle_many_with_autoimport(
     // inconsistent pair. The user's edited `lib/global/src` would
     // co-exist with qualified packages typechecked against the
     // older baked Global, and protocol-impl resolution gets
-    // confused (e.g. HTTP's `format`/`eq` calls fail to see the
+    // confused (e.g. HTTP's `format`/`equals?` calls fail to see the
     // user's edited `Global` protocol impls because the qualified
     // packages were lifted before user files joined the bundle).
     // Qualified deps don't tag along on a Global self-compile.

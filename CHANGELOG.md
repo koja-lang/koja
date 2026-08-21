@@ -17,6 +17,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Breaking change** The `Equality` protocol function is now `equals?` instead of `eq`, following the `?` suffix convention for boolean functions.
 - `IPAddress.v4` accepts `UInt8` octets so out-of-range values cannot construct an address.
 - `IPAddress` exposes its `Version` through the `version` field.
 - `koja format` expands all `match`, `cond`, and `receive` arms when one arm requires block layout.

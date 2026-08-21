@@ -433,7 +433,7 @@ fn protocol_bound_satisfied(
 /// Whether `ty` can discharge `Equality`, instantiation-aware.
 /// Primitives fast-path, everything else consults the conformance
 /// records, so a conditional `impl Equality for List<T: Equality>`
-/// makes `List<fn () -> Int>` fail here even though the `eq`
+/// makes `List<fn () -> Int>` fail here even though the `equals?`
 /// method exists on `List`.
 pub(super) fn type_supports_equality(ty: &ResolvedType, ctx: BoundContext<'_>) -> bool {
     let structural = peel_alias(ty, ctx.registry);

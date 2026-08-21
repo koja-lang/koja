@@ -57,7 +57,7 @@ impl BuiltinShape {
 
     /// Whether `==` on two values of this shape stays on the
     /// backend's primitive fast path instead of rewriting to
-    /// `.eq(...)` method dispatch.
+    /// `.equals?(...)` method dispatch.
     pub fn has_primitive_equality(self) -> bool {
         match self {
             Self::Bool

@@ -1106,7 +1106,7 @@ impl GlobalRegistry {
 /// Protocols that every type implicitly satisfies: the synthesizer
 /// or hand-written stdlib impls guarantee an impl for every concrete
 /// monomorphization, so a bare type-parameter `T.format()` /
-/// `T.eq(other)` resolves as if `T: Debug` / `T: Equality` were
+/// `T.equals?(other)` resolves as if `T: Debug` / `T: Equality` were
 /// declared. `Hash` joins this list once it's auto-derived too.
 /// (`Clone` was removed when value semantics made explicit
 /// duplication unnecessary: every value is already independent.)

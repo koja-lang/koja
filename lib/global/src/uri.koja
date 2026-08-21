@@ -737,7 +737,7 @@ impl Equality for URI
   `http://a` and `HTTP://A` parse to unequal URIs; normalization is a
   planned follow-up.
   """
-  fn eq(self, other: URI) -> Bool
+  fn equals?(self, other: URI) -> Bool
     URI.option_string_eq(self.fragment, other.fragment)
       and URI.option_string_eq(self.host, other.host)
       and self.path == other.path and URI.option_int_eq(self.port, other.port)

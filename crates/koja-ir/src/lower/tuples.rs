@@ -10,12 +10,12 @@
 //! tuples only), so no test blocks are ever minted here.
 //!
 //! Tuples have no nominal home for derived impls, so the universal
-//! protocol functions (`format` / `print` / `inspect` / `eq`) expand
+//! protocol functions (`format` / `print` / `inspect` / `equals?`) expand
 //! inline at each call site instead: element-wise projection plus a
 //! `Call` into each element's own conformance function, mirroring
 //! what `derive_debug` / `derive_equality` synthesize for nominal
 //! types (including the opaque-element fallbacks: closures and
-//! unions render `"..."` in `format` and are skipped in `eq`).
+//! unions render `"..."` in `format` and are skipped in `equals?`).
 
 use koja_ast::ast::{Arg, Expr, Pattern};
 use koja_ast::identifier::{AnonymousKind, ResolvedType};
@@ -157,7 +157,7 @@ fn bind_elements(
 
 // --- conformance expansion ------------------------------------------
 
-/// Lower `tuple.format()` / `print()` / `inspect()` / `eq(other)`.
+/// Lower `tuple.format()` / `print()` / `inspect()` / `equals?(other)`.
 /// Typecheck admits only these four, so anything else here is a
 /// resolve bug.
 pub(super) fn lower_tuple_conformance_call(
@@ -172,10 +172,10 @@ pub(super) fn lower_tuple_conformance_call(
     let elements = tuple_element_resolutions(&receiver.resolution, registry);
     let (receiver_value, mut current) = lower_expr(receiver, ctx, block, registry, output)?;
     match method {
-        "eq" => {
+        "equals?" => {
             let [other] = args else {
                 panic!(
-                    "IR lower: tuple `eq` reached lowering with {} args",
+                    "IR lower: tuple `equals?` reached lowering with {} args",
                     args.len()
                 );
             };
@@ -246,7 +246,7 @@ fn tuple_element_resolutions(
 }
 
 /// Closures and unions have no callable conformance functions, so
-/// `format` renders their placeholder and `eq` treats reaching one
+/// `format` renders their placeholder and `equals?` treats reaching one
 /// as a typecheck invariant violation (tuple equality on shapes
 /// containing them is rejected during resolve).
 fn is_opaque_element(ty: &ResolvedType) -> bool {
@@ -340,7 +340,7 @@ fn emit_concat(lhs: ValueId, rhs: ValueId, ctx: &mut FnLowerCtx, block: IRBlockI
 
 /// Element-wise short-circuit equality. Elements chain through
 /// `CondBranch`es into a shared merge block (false exits early), so
-/// element `eq` calls after a mismatch never run. Typecheck rejects
+/// element `equals?` calls after a mismatch never run. Typecheck rejects
 /// tuple equality on shapes with opaque elements, so every element
 /// is comparable here.
 fn emit_tuple_eq(
@@ -359,7 +359,7 @@ fn emit_tuple_eq(
             let structural = peel_alias(ty, registry);
             assert!(
                 !is_opaque_element(&structural),
-                "IR lower: tuple `eq` reached an opaque element `{ty:?}` \
+                "IR lower: tuple `equals?` reached an opaque element `{ty:?}` \
                  (typecheck resolve invariant violation)",
             );
             (index, structural)
@@ -431,7 +431,7 @@ fn emit_element_eq(
             output,
         );
     }
-    let (callee, return_ty) = conformance_method_symbol(element_ty, "eq", registry, output);
+    let (callee, return_ty) = conformance_method_symbol(element_ty, "equals?", registry, output);
     let dest = ctx.fresh_value(return_ty);
     ctx.cfg.append(
         block,

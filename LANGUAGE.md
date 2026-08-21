@@ -1342,7 +1342,7 @@ end
 
 The compiler checks completeness and signature compatibility, and synthesizes any default-bodied functions the type omits. If the body has a function whose name is a near miss of an omitted default, the compiler warns about the likely typo. Entry processes are declared this way (`struct App: Process<(), (), ()>`, see [Packages](#packages)). Protocol declarations accept `@doc` and `@deprecated`.
 
-`Debug` and `Equality` are auto-derived for every type, so listing one is only an override. It suppresses the derived implementation, and the body must supply `format` / `eq`:
+`Debug` and `Equality` are auto-derived for every type, so listing one is only an override. It suppresses the derived implementation, and the body must supply `format` / `equals?`:
 
 ```koja
 struct Token: Debug
@@ -2534,7 +2534,7 @@ Any type implementing `Enumeration<T>` can be used with `for` loops. `List<T>` a
 
 ```koja
 protocol Equality
-  fn eq(self, other: Self) -> Bool
+  fn equals?(self, other: Self) -> Bool
 end
 ```
 

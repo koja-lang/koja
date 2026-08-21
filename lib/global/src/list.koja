@@ -192,7 +192,7 @@ impl Equality for List<T: Equality>
   Compares element by element. Two lists are equal when they have
   the same length and the elements at each index are equal.
   """
-  fn eq(self, other: List<T>) -> Bool
+  fn equals?(self, other: List<T>) -> Bool
     unless self.length() == other.length()
       return false
     end

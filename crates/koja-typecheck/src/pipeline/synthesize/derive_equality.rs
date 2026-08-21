@@ -5,7 +5,7 @@
 //!
 //! Body shapes:
 //!
-//! - Struct: `self.f1.eq(other.f1) and self.f2.eq(other.f2) and …`,
+//! - Struct: `self.f1.equals?(other.f1) and self.f2.equals?(other.f2) and …`,
 //!   or `true` when the struct has no fields. Opaque field types
 //!   (mirroring [`super::derive_debug::is_opaque_type`]) are
 //!   skipped: same conservative bail as `Debug`'s `"..."`
@@ -14,7 +14,7 @@
 //!   on `other`. Matching variants compare payload-wise, mismatches
 //!   fall through to `false`. Unit-only enums collapse to
 //!   `match self … _ -> false end`.
-//! - Generic types route field / payload `.eq()` calls through the
+//! - Generic types route field / payload `.equals?()` calls through the
 //!   universal-`Equality` fallback in
 //!   [`crate::pipeline::resolve::calls::bounded`] (see
 //!   [`crate::registry::UNIVERSAL_PROTOCOLS`]).
@@ -32,7 +32,7 @@ use crate::program::CheckedPackage;
 use super::derive_debug::is_opaque_type;
 
 const BOOL_TYPE: &str = "Bool";
-const EQ_METHOD: &str = "eq";
+const EQ_METHOD: &str = "equals?";
 const EQUALITY_PROTOCOL: &str = "Equality";
 const OTHER_PARAM: &str = "other";
 
@@ -157,9 +157,9 @@ fn synthesize_builtin_impl(decl: &BuiltinDecl) -> Item {
     equality_impl_block(target, body, span)
 }
 
-/// Builds `impl Equality for Target<Params> fn eq(...) <body> end`.
+/// Builds `impl Equality for Target<Params> fn equals?(...) <body> end`.
 /// The `other: Target<Params>` param mirrors the impl target so the
-/// signature matches what the `Equality.eq(self, other: Self)`
+/// signature matches what the `Equality.equals?(self, other: Self)`
 /// protocol method substitutes to.
 fn equality_impl_block(target: TypeExpr, body_expr: Expr, span: Span) -> Item {
     let other_type = target.clone();
@@ -206,7 +206,7 @@ fn named_type(name: &str, span: Span) -> TypeExpr {
     }
 }
 
-/// Builds `fn eq(self, other: <Target>) -> Bool <body> end`.
+/// Builds `fn equals?(self, other: <Target>) -> Bool <body> end`.
 fn eq_function(other_type: TypeExpr, body_expr: Expr, span: Span) -> Function {
     Function {
         annotations: Vec::<Annotation>::new(),
@@ -233,7 +233,7 @@ fn eq_function(other_type: TypeExpr, body_expr: Expr, span: Span) -> Function {
     }
 }
 
-/// Conjoins `self.f1.eq(other.f1) and self.f2.eq(other.f2) and …`.
+/// Conjoins `self.f1.equals?(other.f1) and self.f2.equals?(other.f2) and …`.
 /// Returns `true` for fieldless structs and treats opaque-typed
 /// fields (mirroring [`super::derive_debug::is_opaque_type`]) as
 /// trivially equal: same conservative skip `Debug` uses with its
@@ -248,7 +248,7 @@ fn struct_eq_body(fields: &[StructField], span: Span) -> Expr {
     conjunction(parts, span)
 }
 
-/// `self.<name>.eq(other.<name>)` against the matching field on
+/// `self.<name>.equals?(other.<name>)` against the matching field on
 /// `other`.
 fn field_eq_call(name: &str, span: Span) -> Expr {
     let self_field = field_access(self_expr(span), name, span);
@@ -256,7 +256,7 @@ fn field_eq_call(name: &str, span: Span) -> Expr {
     method_call_one_arg(self_field, EQ_METHOD, other_field, span)
 }
 
-/// Builds the body for an enum's `eq`: outer `match self` dispatches
+/// Builds the body for an enum's `equals?`: outer `match self` dispatches
 /// on the receiver's variant. Each arm's body is `match other …`
 /// that compares against the same variant and falls through to
 /// `false` for any mismatch.

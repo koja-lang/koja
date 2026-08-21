@@ -78,7 +78,7 @@ pub enum Value {
     List(Rc<RefCell<Vec<Value>>>),
     /// Heap-backed associative map keyed by [`Value`]. Eval uses
     /// linear probes for `Eq`, matching Koja's `Equality` protocol's
-    /// `eq` shape (every key compared by value, no hashing). Same
+    /// `equals?` shape (every key compared by value, no hashing). Same
     /// `Rc<RefCell<...>>` motivation as [`Value::List`] for in-place
     /// mutation.
     Map(MapEntries),

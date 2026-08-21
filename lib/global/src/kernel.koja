@@ -74,7 +74,7 @@ end
 A protocol for types that support equality comparison.
 """
 protocol Equality
-  fn eq(self, other: Self) -> Bool
+  fn equals?(self, other: Self) -> Bool
 end
 
 impl Equality for Bool
@@ -82,7 +82,7 @@ impl Equality for Bool
   Returns `true` if both boolean values are the same.
   """
   @intrinsic
-  fn eq(self, other: Bool) -> Bool
+  fn equals?(self, other: Bool) -> Bool
 end
 
 @doc """
@@ -149,7 +149,7 @@ impl Equality for Binary
   Returns `true` when both binaries have the same length and bytes.
   """
   @intrinsic
-  fn eq(self, other: Binary) -> Bool
+  fn equals?(self, other: Binary) -> Bool
 end
 
 impl Hash for Binary
@@ -192,7 +192,7 @@ impl Equality for Bits
   bits. Storage bytes compare directly because the trailing bits of
   the last byte are always zero.
   """
-  fn eq(self, other: Bits) -> Bool
+  fn equals?(self, other: Bits) -> Bool
     size = self.bit_size()
 
     if size != other.bit_size()

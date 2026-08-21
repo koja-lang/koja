@@ -1089,7 +1089,7 @@ mod tests {
         assert_unchanged(
             "
             impl Equality for List<T: Equality>
-              fn eq(self, other: List<T>) -> Bool
+              fn equals?(self, other: List<T>) -> Bool
                 true
               end
             end

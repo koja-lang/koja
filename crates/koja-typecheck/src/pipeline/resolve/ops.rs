@@ -35,12 +35,12 @@ use super::types::{
 };
 use crate::registry::{GlobalKind, GlobalRegistry};
 
-const EQ_METHOD: &str = "eq";
+const EQ_METHOD: &str = "equals?";
 
 /// Resolve `lhs == rhs` / `lhs != rhs`. Primitive operands (Bool,
 /// Int/Float widths, String) stay on the [`binary_type`] fast path.
 /// IR lowering keeps their equality operations primitive.
-/// User struct / enum operands rewrite to `lhs.eq(rhs)` (wrapped in
+/// User struct / enum operands rewrite to `lhs.equals?(rhs)` (wrapped in
 /// `not …` for `!=`) and re-resolve through the normal method-call
 /// path. `derive_equality` guarantees an `Equality` impl is present
 /// for every user type by the time resolve runs.
@@ -92,9 +92,9 @@ pub(super) fn resolve_equality_op_expr(
 }
 
 /// `==` on a nominal operand requires its full instantiation to
-/// satisfy `Equality`, not just an `eq` method to exist. Catches
+/// satisfy `Equality`, not just an `equals?` method to exist. Catches
 /// conditional conformances (`List<fn () -> Int>` carries `List`'s
-/// `eq` but no `Equality` fact), which the method-call rewrite
+/// `equals?` but no `Equality` fact), which the method-call rewrite
 /// alone would accept and monomorphization would then choke on.
 /// Non-nominal operands keep their existing rewrite-path
 /// diagnostics.

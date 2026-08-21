@@ -26,7 +26,7 @@ fn equality_body<'a>(checked: &'a CheckedProgram, type_name: &str) -> &'a Expr {
             let ImplMember::Function(function) = member else {
                 continue;
             };
-            if function.name != "eq" {
+            if function.name != "equals?" {
                 continue;
             }
             let body = function.body.as_ref().expect("eq should have a body");
@@ -51,7 +51,7 @@ fn type_expr_head(type_expr: &TypeExpr) -> Option<&str> {
 fn count_eq_calls(expression: &Expr) -> usize {
     match &expression.kind {
         ExprKind::Binary { left, right, .. } => count_eq_calls(left) + count_eq_calls(right),
-        ExprKind::MethodCall { method, .. } if method == "eq" => 1,
+        ExprKind::MethodCall { method, .. } if method == "equals?" => 1,
         _ => 0,
     }
 }
@@ -106,7 +106,7 @@ fn manual_impl_in_sibling_file_suppresses_synthesis() {
                 "equality.koja",
                 "
                 impl Equality for Custom
-                  fn eq(self, other: Custom) -> Bool
+                  fn equals?(self, other: Custom) -> Bool
                     self.value == other.value
                   end
                 end

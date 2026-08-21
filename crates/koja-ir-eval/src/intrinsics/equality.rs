@@ -13,7 +13,7 @@ pub(super) fn dispatch(impl_: EqualityImpl, args: &[Value]) -> Result<Value, Run
     let [lhs, rhs] = args else {
         return Err(RuntimeError::TypeMismatch {
             detail: format!(
-                "Equality.eq ({impl_:?}) expects 2 arguments, got {} arg(s): {args:?}",
+                "Equality.equals? ({impl_:?}) expects 2 arguments, got {} arg(s): {args:?}",
                 args.len(),
             ),
         });
@@ -28,7 +28,7 @@ pub(super) fn dispatch(impl_: EqualityImpl, args: &[Value]) -> Result<Value, Run
         _ => {
             return Err(RuntimeError::TypeMismatch {
                 detail: format!(
-                    "Equality.eq ({impl_:?}) expects matching operands for the impl cell, \
+                    "Equality.equals? ({impl_:?}) expects matching operands for the impl cell, \
                      got {lhs:?} and {rhs:?}",
                 ),
             });

@@ -169,19 +169,19 @@ explicit stdlib impls (the scalars, `String`, container and `CPtr`
 `Debug`) never hit the synthesis, but the holes are live:
 
 - `Map`, `Set`, and `CPtr` have no explicit `Equality` impl, so the
-  derived `eq` compares zero fields and returns `true` for every
-  pair. This pre-dates the `builtin` keyword, since the types were
-  zero-field structs before. `List` closed this on 2026-08-21 with
-  a conditional `impl Equality for List<T: Equality>` doing the
-  element-wise walk (`[1, 2] == [3]` is now `false`, and lists of
-  closures fail `==` at compile time).
+  derived `equals?` compares zero fields and returns `true` for
+  every pair. This pre-dates the `builtin` keyword, since the types
+  were zero-field structs before. `List` closed this on 2026-08-21
+  with a conditional `impl Equality for List<T: Equality>` doing
+  the element-wise walk (`[1, 2] == [3]` is now `false`, and lists
+  of closures fail `==` at compile time).
 - `Int64`, `Float64`, `Never`, and `Unit` lean on synthesized derives
   only for conformance. At runtime the IR's `Int64`-onto-`Int` method
   collapse routes to the real intrinsic impls.
 
 **Fix path:** delete the builtin arms from both derive passes and add
 explicit stdlib impls. The language can spell the conditional impl
-now (see the next entry). `Map` and `Set` `eq` wait on entry / element
+now (see the next entry). `Map` and `Set` `equals?` wait on entry / element
 iteration intrinsics, the same blocker as their `Debug` rendering.
 The conformance-only holes need explicit impls or a rule that a
 builtin satisfies bounds by shape.
@@ -228,8 +228,8 @@ and recursively (`List<List<Int>>` follows from `Int`), and the
 impl body dispatches through its own condition. Parameterized
 targets now also work outside the target's own package. The stdlib
 spells `impl Equality for List<T: Equality>` with an element-wise
-`eq`, closing the list-`eq` hole in the builtin-derives entry
-above.
+`equals?`, closing the list equality hole in the builtin-derives
+entry above.
 
 **What remains:** targets mixing type parameters with concrete args
 (`impl P for Map<String, V>`) are rejected everywhere, `Map` / `Set`
@@ -322,7 +322,7 @@ stdlib promotion after a second consumer appears.
 
 ## `Binary` has no ordering and no endian helpers
 
-`Binary` derives `eq` and `hash` but no comparison, so bytewise key
+`Binary` derives `equals?` and `hash` but no comparison, so bytewise key
 ordering is a manual `at`-loop in user code. The same codecs that need
 ordering also re-roll big-endian integer packing: an append-N-bytes
 helper and an accumulate-N-bytes reader now exist in at least two
