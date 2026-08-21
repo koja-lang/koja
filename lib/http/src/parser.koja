@@ -97,8 +97,7 @@ struct Parser
   end
 
   priv fn parse_headers_loop(input: String, pos: Int, headers: Headers)
-    -> (Headers, Int)
-    ! Error
+    -> (Headers, Int) ! Error
 
     p = Parser{input: input, pos: pos}
 
@@ -158,8 +157,7 @@ struct Parser
   end
 
   priv fn parse_chunks(input: String, pos: Int, sb: StringBuilder)
-    -> String
-    ! Error
+    -> String ! Error
 
     p = Parser{input: input, pos: pos}
 

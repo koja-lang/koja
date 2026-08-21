@@ -191,8 +191,7 @@ impl Process<Config<T>, Msg<T>, Reply<T>> for Server<T>
               self.waiting = remaining
               return self
 
-              # Stale waiter whose call already timed out. Keep scanning.
-
+            # Stale waiter whose call already timed out. Keep scanning.
             Delivery.Expired ->
               ()
           end

@@ -153,6 +153,22 @@ impl<'a> Attacher<'a> {
         out
     }
 
+    /// Consumes comments before `offset` until a blank line starts a new
+    /// comment run.
+    fn take_before_without_blank(&mut self, offset: u32, previous_line: u32) -> Vec<Comment> {
+        let mut out = Vec::new();
+        let mut last_line = previous_line;
+        while let Some(comment) = self.peek() {
+            if comment.span.start.offset >= offset || comment.span.start.line > last_line + 1 {
+                break;
+            }
+            last_line = comment.span.end.line;
+            out.push(comment.clone());
+            self.pos += 1;
+        }
+        out
+    }
+
     /// Consumes comments on exactly `line` that start before `bound`.
     fn take_on_line(&mut self, line: u32, bound: u32) -> Vec<Comment> {
         let mut out = Vec::new();
@@ -651,7 +667,7 @@ impl<'a> Attacher<'a> {
                     .unwrap_or(expr.span.end.offset);
                 let trailing = self.take_on_line(subject.span.end.line, first_arm);
                 self.push(expr.span, Slot::HeaderTrailing, trailing);
-                self.walk_match_arms(arms, expr.span.end.offset, expr.span);
+                self.walk_match_arms(arms, expr.span.end.offset, expr.span, true);
                 let rest = self.take_before(expr.span.end.offset);
                 self.push(expr.span, Slot::Dangling, rest);
             }
@@ -676,7 +692,7 @@ impl<'a> Attacher<'a> {
                     None => expr.span.end.offset,
                 };
                 for (i, arm) in arms.iter().enumerate() {
-                    let is_last = i + 1 == arms.len();
+                    let is_last = i + 1 == arms.len() && else_body.is_none();
                     let next_offset = arms.get(i + 1).map_or(arms_end, |a| a.span.start.offset);
                     self.walk_cond_arm(arm, is_last, next_offset);
                 }
@@ -727,7 +743,7 @@ impl<'a> Attacher<'a> {
                     }
                     None => expr.span.end.offset,
                 };
-                self.walk_match_arms(arms, arms_end, expr.span);
+                self.walk_match_arms(arms, arms_end, expr.span, after_timeout.is_none());
                 if let Some(timeout) = after_timeout {
                     // The arms walk routed the boundary comments to
                     // Dangling. With an `after` clause they sit above it.
@@ -749,12 +765,11 @@ impl<'a> Attacher<'a> {
         }
     }
 
-    /// Walks match/receive arms. `bound` is where the region after the
-    /// arms starts (`end`, or the `after` keyword). Region-final comments
-    /// after an inline last arm dangle on `owner`.
-    fn walk_match_arms(&mut self, arms: &[MatchArm], bound: u32, owner: Span) {
+    /// Walks match/receive arms. `bound` starts the region after the arms.
+    /// `region_ends` keeps comments before `end` on the owner.
+    fn walk_match_arms(&mut self, arms: &[MatchArm], bound: u32, owner: Span, region_ends: bool) {
         for (i, arm) in arms.iter().enumerate() {
-            let is_last = i + 1 == arms.len();
+            let is_last = i + 1 == arms.len() && region_ends;
             let next_offset = arms.get(i + 1).map_or(bound, |a| a.span.start.offset);
             let leading = self.take_before(arm.span.start.offset);
             self.push(arm.span, Slot::Leading, leading);
@@ -787,11 +802,10 @@ impl<'a> Attacher<'a> {
     }
 
     /// Shared arm interior: head-line trailing, body, and the arm's
-    /// boundary policy. A block arm's interior extends to the next arm
-    /// (comments after its body stay with it), except for the last arm,
-    /// whose region-final comments belong to the enclosing construct
-    /// (they dangle before `end`, `else`, or `after`). An inline arm has
-    /// no interior, so comments after it lead the next arm.
+    /// boundary policy. A comment run directly after a non-final arm
+    /// stays with that arm. A blank line before the run makes it lead
+    /// the next arm. Region-final comments belong to the enclosing
+    /// construct and dangle before `end`, `else`, or `after`.
     fn walk_arm_interior(
         &mut self,
         arm_span: Span,
@@ -828,13 +842,12 @@ impl<'a> Attacher<'a> {
             self.push(arm_span, Slot::Dangling, above_body);
         }
 
-        let is_block = content_end_line(arm_span) > head_end;
-        let body_bound = if is_block && !is_last {
-            next_offset
-        } else {
-            arm_span.end.offset
-        };
-        self.walk_body(body, body_bound, arm_span);
+        self.walk_body(body, arm_span.end.offset, arm_span);
+        if !is_last {
+            let body_comments =
+                self.take_before_without_blank(next_offset, content_end_line(arm_span));
+            self.push(arm_span, Slot::Dangling, body_comments);
+        }
         // An inline arm's trailing comment stays on its line.
         let trailing = self.take_on_line(content_end_line(arm_span), next_offset);
         self.push(arm_span, Slot::Trailing, trailing);

@@ -344,8 +344,7 @@ struct URI
   # Splits the authority bytes `[start, stop)` into userinfo, host,
   # and port. An empty authority (as in `//`) yields an empty host.
   priv fn parse_authority(bytes: Binary, start: Int, stop: Int, uri: URI)
-    -> URI
-    ! URIError
+    -> URI ! URIError
 
     if start >= stop
       uri.host = Option.Some("")
@@ -388,8 +387,7 @@ struct URI
   # Parses the host from `[start, stop)`, stripping brackets from IP
   # literals. Returns the updated URI and the position after the host.
   priv fn parse_host(bytes: Binary, start: Int, stop: Int, uri: URI)
-    -> (URI, Int)
-    ! URIError
+    -> (URI, Int) ! URIError
 
     # '[' opens an IPv6/IPvFuture literal.
     bracketed = start < stop and URI.byte_at(bytes, start) == BYTE_LBRACKET
@@ -434,8 +432,7 @@ struct URI
   # Parses the port digits from `[start, stop)`. An empty port (as in
   # `http://host:`) is treated as absent.
   priv fn parse_port(bytes: Binary, start: Int, stop: Int, uri: URI)
-    -> URI
-    ! URIError
+    -> URI ! URIError
 
     if start >= stop
       return uri
@@ -459,8 +456,7 @@ struct URI
 
   # Parses the optional query and fragment starting at `start`.
   priv fn parse_suffix(bytes: Binary, start: Int, size: Int, uri: URI)
-    -> URI
-    ! URIError
+    -> URI ! URIError
 
     pos = start
 

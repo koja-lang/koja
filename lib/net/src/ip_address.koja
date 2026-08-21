@@ -160,8 +160,7 @@ struct IPAddress
   end
 
   priv fn parse_hextet(text: String, address: String)
-    -> Int
-    ! IPAddress.ParseError
+    -> Int ! IPAddress.ParseError
 
     size = text.length()
 
@@ -184,8 +183,7 @@ struct IPAddress
   end
 
   priv fn parse_v4(text: String, address: String)
-    -> Binary
-    ! IPAddress.ParseError
+    -> Binary ! IPAddress.ParseError
 
     parts = text.split(".")
 
@@ -204,8 +202,7 @@ struct IPAddress
   end
 
   priv fn parse_octet(text: String, address: String)
-    -> UInt8
-    ! IPAddress.ParseError
+    -> UInt8 ! IPAddress.ParseError
 
     bytes = text.to_binary()
     size = bytes.byte_size()
@@ -294,8 +291,7 @@ struct IPAddress
   end
 
   priv fn parse_embedded_v4(text: String, allowed: Bool, address: String)
-    -> List<Int>
-    ! IPAddress.ParseError
+    -> List<Int> ! IPAddress.ParseError
 
     unless allowed
       fail IPAddress.ParseError.Invalid(address)
@@ -311,8 +307,7 @@ struct IPAddress
   end
 
   priv fn parse_v6_side(text: String, allow_ipv4: Bool, address: String)
-    -> List<Int>
-    ! IPAddress.ParseError
+    -> List<Int> ! IPAddress.ParseError
 
     if text.empty?()
       return List.new()

@@ -205,6 +205,7 @@ impl Printer {
                     arm_is_multiline(&a.body)
                         || pattern_is_multiline(&a.pattern)
                         || arm_body_overflows(pattern_rendered_len(&a.pattern), &a.body)
+                        || self.arm_comments_require_block(a.span, &a.body)
                 });
                 let mut header_parts = vec![text("match "), self.expr_to_doc(subject)];
                 self.push_expr_header_trailing(&mut header_parts, expr.span);
@@ -227,14 +228,18 @@ impl Printer {
             }
 
             ExprKind::Cond { arms, else_body } => {
-                let else_multiline = else_body
-                    .as_ref()
-                    .is_some_and(|b| arm_is_multiline(b) || arm_body_overflows(0, b));
+                let else_multiline = else_body.as_ref().is_some_and(|body| {
+                    arm_is_multiline(body)
+                        || arm_body_overflows(0, body)
+                        || self.arm_comments_require_block(expr.span, body)
+                        || self.comments.has(expr.span, Slot::BeforeElse)
+                });
                 let any_multiline = else_multiline
                     || arms.iter().any(|a| {
                         arm_is_multiline(&a.body)
                             || expr_or_is_multiline(&a.condition)
                             || arm_body_overflows(expr_text_len(&a.condition), &a.body)
+                            || self.arm_comments_require_block(a.span, &a.body)
                     });
                 let mut header_parts = vec![text("cond")];
                 self.push_expr_header_trailing(&mut header_parts, expr.span);
@@ -279,7 +284,9 @@ impl Printer {
                     arm_is_multiline(&a.body)
                         || pattern_is_multiline(&a.pattern)
                         || arm_body_overflows(pattern_rendered_len(&a.pattern), &a.body)
-                }) || arm_is_multiline(after_body);
+                        || self.arm_comments_require_block(a.span, &a.body)
+                }) || after_timeout.is_some()
+                    || arm_is_multiline(after_body);
                 let mut header_parts = vec![text("receive")];
                 self.push_expr_header_trailing(&mut header_parts, expr.span);
                 let rendered: Vec<Doc> = arms
@@ -292,8 +299,11 @@ impl Printer {
                     .collect();
                 let mut suffix = Vec::new();
                 if let Some(timeout) = after_timeout {
-                    suffix.push(hardline());
                     let before_after = self.comments.take(expr.span, Slot::BeforeAfter);
+                    suffix.push(hardline());
+                    if !before_after.is_empty() {
+                        suffix.push(hardline());
+                    }
                     let (docs, _) = leading_docs(&before_after);
                     suffix.extend(docs);
                     suffix.push(text("after "));
@@ -852,6 +862,17 @@ impl Printer {
             dangling,
             trailing,
         )
+    }
+
+    /// Returns `true` when attached comments require an arm body to use
+    /// block layout. The construct applies the same layout to every arm.
+    fn arm_comments_require_block(&self, owner: Span, body: &[Statement]) -> bool {
+        self.comments.has(owner, Slot::Dangling)
+            || self.comments.has(owner, Slot::HeaderTrailing)
+            || self.comments.has(owner, Slot::Leading)
+            || body
+                .first()
+                .is_some_and(|statement| self.comments.has(stmt_span(statement), Slot::Leading))
     }
 
     /// Shared formatting for all arm types (match, cond, receive).

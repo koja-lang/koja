@@ -1346,14 +1346,57 @@ mod tests {
     }
 
     #[test]
-    fn leading_comment_between_match_arms_stays_above_arm() {
-        assert_unchanged(
+    fn adjacent_comment_between_match_arms_stays_with_previous_arm() {
+        assert_fmt(
             "
             fn f(x: Int) -> Int
               match x
                 1 -> 10
                 # everything else
                 _ -> 0
+              end
+            end
+        ",
+            "
+            fn f(x: Int) -> Int
+              match x
+                1 ->
+                  10
+                  # everything else
+
+                _ ->
+                  0
+              end
+            end
+        ",
+        );
+    }
+
+    #[test]
+    fn blank_line_controls_arm_boundary_comment_ownership() {
+        assert_fmt(
+            "
+            fn f(x: Int) -> Int
+              match x
+                1 ->
+                  10
+                  # stays inside the first arm
+
+                # leads the wildcard arm
+                _ -> 0
+              end
+            end
+        ",
+            "
+            fn f(x: Int) -> Int
+              match x
+                1 ->
+                  10
+                  # stays inside the first arm
+
+                # leads the wildcard arm
+                _ ->
+                  0
               end
             end
         ",
@@ -1389,13 +1432,24 @@ mod tests {
 
     #[test]
     fn arm_head_trailing_comment_forces_broken_body() {
-        assert_unchanged(
+        assert_fmt(
             "
             fn f(x: Int) -> Int
               match x
                 1 -> # one
                   10
                 _ -> 0
+              end
+            end
+        ",
+            "
+            fn f(x: Int) -> Int
+              match x
+                1 -> # one
+                  10
+
+                _ ->
+                  0
               end
             end
         ",
@@ -1422,7 +1476,9 @@ mod tests {
                 # grouped cases
                 1 | 2 -> # selected
                   10
-                _ -> 0
+
+                _ ->
+                  0
               end
             end
         ",
@@ -1449,7 +1505,9 @@ mod tests {
                 # bounded positive
                 x > 0 and x < 100 -> # selected
                   1
-                else -> 0
+
+                else ->
+                  0
               end
             end
         ",
@@ -1483,11 +1541,23 @@ mod tests {
 
     #[test]
     fn arm_body_leading_comment_forces_broken_body() {
-        assert_unchanged(
+        assert_fmt(
             "
             fn f(x: Int) -> Bool
               match x
                 1 -> true # awesome
+                _ ->
+                  # kinda meh
+                  false
+              end
+            end
+        ",
+            "
+            fn f(x: Int) -> Bool
+              match x
+                1 ->
+                  true # awesome
+
                 _ ->
                   # kinda meh
                   false
@@ -1818,13 +1888,53 @@ mod tests {
 
     #[test]
     fn cond_comment_before_else_stays_above_else() {
-        assert_unchanged(
+        assert_fmt(
             r#"
             fn f(n: Int32) -> String
               cond
                 n > 2 -> "big"
+
                 # before else
                 else -> "small"
+              end
+            end
+        "#,
+            r#"
+            fn f(n: Int32) -> String
+              cond
+                n > 2 ->
+                  "big"
+
+                # before else
+                else ->
+                  "small"
+              end
+            end
+        "#,
+        );
+    }
+
+    #[test]
+    fn adjacent_comment_before_cond_else_stays_with_previous_arm() {
+        assert_fmt(
+            r#"
+            fn f(n: Int32) -> String
+              cond
+                n > 2 -> "big"
+                # explains the previous case
+                else -> "small"
+              end
+            end
+        "#,
+            r#"
+            fn f(n: Int32) -> String
+              cond
+                n > 2 ->
+                  "big"
+                  # explains the previous case
+
+                else ->
+                  "small"
               end
             end
         "#,
@@ -1850,11 +1960,24 @@ mod tests {
 
     #[test]
     fn receive_after_boundary_comments_stay_in_place() {
-        assert_unchanged(
+        assert_fmt(
             r#"
             fn f
               receive
                 msg: Int -> msg.print()
+
+              # before after
+              after 10 # timeout ms
+                "x".print()
+              end
+            end
+        "#,
+            r#"
+            fn f
+              receive
+                msg: Int ->
+                  msg.print()
+
               # before after
               after 10 # timeout ms
                 "x".print()
@@ -1865,8 +1988,35 @@ mod tests {
     }
 
     #[test]
+    fn adjacent_comment_before_receive_after_stays_with_previous_arm() {
+        assert_fmt(
+            r#"
+            fn f
+              receive
+                msg: Int -> msg.print()
+              # explains message handling
+              after 10
+                "x".print()
+              end
+            end
+        "#,
+            r#"
+            fn f
+              receive
+                msg: Int ->
+                  msg.print()
+                  # explains message handling
+              after 10
+                "x".print()
+              end
+            end
+        "#,
+        );
+    }
+
+    #[test]
     fn chain_statement_leading_comment_stays_above_statement() {
-        assert_unchanged(
+        assert_fmt(
             r#"
             fn f(code: Int32) -> String
               match code
@@ -1874,6 +2024,18 @@ mod tests {
                   # wrap and copy, never free
                   error_string(code).to_cstring().to_string().unwrap()
                 _ -> "other"
+              end
+            end
+        "#,
+            r#"
+            fn f(code: Int32) -> String
+              match code
+                1 ->
+                  # wrap and copy, never free
+                  error_string(code).to_cstring().to_string().unwrap()
+
+                _ ->
+                  "other"
               end
             end
         "#,
@@ -2619,10 +2781,72 @@ mod tests {
     }
 
     #[test]
-    fn return_tail_wraps_like_a_ternary() {
-        // A wrapped `-> T ! E` tail puts each segment on its own
-        // continuation line starting with its operator, like the
-        // branches of a broken ternary.
+    fn short_fallible_return_tail_groups_on_continuation() {
+        assert_fmt(
+            "
+            priv fn parse_embedded_v4(text: String, allowed: Bool, address: String) -> List<Int> ! IPAddress.ParseError
+              []
+            end
+        ",
+            "
+            priv fn parse_embedded_v4(text: String, allowed: Bool, address: String)
+              -> List<Int> ! IPAddress.ParseError
+
+              []
+            end
+        ",
+        );
+    }
+
+    #[test]
+    fn protocol_fallible_return_tail_groups_on_continuation() {
+        assert_fmt(
+            "
+            protocol Decoder
+              fn decode_packet_with_address(self, packet: Binary, address: String) -> Int ! ParseError
+            end
+        ",
+            "
+            protocol Decoder
+              fn decode_packet_with_address(self, packet: Binary, address: String)
+                -> Int ! ParseError
+            end
+        ",
+        );
+    }
+
+    #[test]
+    fn union_and_bare_error_tails_group_on_continuation() {
+        assert_fmt(
+            "
+            fn fetch_resource_with_limits(url: String, retries: Int) -> Limits ! HTTP.Error | ParseError
+              fetch(url)
+            end
+
+            fn flush_remote_replica_with_timeout(replica: Replica, timeout: Duration) ! StoreError
+              flush(replica)
+            end
+        ",
+            "
+            fn fetch_resource_with_limits(url: String, retries: Int)
+              -> Limits ! HTTP.Error | ParseError
+
+              fetch(url)
+            end
+
+            fn flush_remote_replica_with_timeout(replica: Replica, timeout: Duration)
+              ! StoreError
+
+              flush(replica)
+            end
+        ",
+        );
+    }
+
+    #[test]
+    fn long_fallible_return_tail_splits_as_last_resort() {
+        // A tail that cannot fit on its continuation line separates the
+        // success and error clauses.
         assert_fmt(
             "
             fn parse_configuration_file(path: String) -> ConfigurationDocumentWithExtendedMetadata ! ConfigurationParseOrValidationError

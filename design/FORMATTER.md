@@ -52,9 +52,10 @@ violation of any rule is a bug, never a judgment call.
 - A generic parameter list (`<T: Hash & Equality, U>`) breaks like a
   parameter list: one entry per line inside the angle brackets. An entry
   keeps its bounds on one line.
-- A fallible return (`-> T ! E`) wraps like a ternary. When the tail
-  breaks, `-> T` and `! E` each take a continuation line that starts
-  with its operator, indented 2 spaces.
+- A fallible return (`-> T ! E`) stays grouped. When the signature moves
+  the tail to a continuation line, the return and error clauses stay on
+  that line if they fit. Only the tail's own overflow separates `-> T`
+  and `! E` onto 2-space continuation lines.
 - A method call on a collection literal breaks the literal's brackets
   first and hugs the call to the closing bracket.
 - A zero-parameter signature drops its empty parens: `fn name -> X`.
@@ -143,26 +144,36 @@ match x
 end
 ```
 
+If one arm requires block layout, all sibling arms use block layout. This
+rule also applies to `else` in `cond` and `after` in `receive`.
+
 ### Boundary cases
 
-**A comment between two arms.** If the previous arm is a block, the comment
-sits inside that block and stays with it as trailing body content. If the
-previous arm is inline, it has no interior, so the comment leads the next
-arm. Both placements keep the comment exactly where the author wrote it.
+**A comment between two arms.** A comment run directly after an arm stays
+with that arm. A blank line before the comment run makes it lead the next
+arm. Indentation does not change ownership.
 
 ```koja
 match x
-  2 ->
-    a = "t"
-    a + "wo"
-    # stays with arm 2 (previous arm is a block)
-  _ -> "many"
-end
-
-match x
   1 -> 10
-  # leads the wildcard arm (previous arm is inline)
+  # stays with arm 1
+
+  # leads the wildcard arm
   _ -> 0
+end
+```
+
+The formatter produces:
+
+```koja
+match x
+  1 ->
+    10
+    # stays with arm 1
+
+  # leads the wildcard arm
+  _ ->
+    0
 end
 ```
 
