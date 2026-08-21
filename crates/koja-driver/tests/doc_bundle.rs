@@ -108,10 +108,28 @@ fn doc_bundle_emits_assets_and_stdlib_packages() {
         doc.join("Global").join("String.html").is_file(),
         "builtin String should get a page via its `builtin` declaration"
     );
+    assert!(
+        doc.join("Net").join("IPAddress.Version.html").is_file(),
+        "lexical nested types should get qualified pages"
+    );
+    assert!(
+        doc.join("Net").join("IPAddress.ParseError.html").is_file(),
+        "qualified top-level types should keep their full names"
+    );
 
     let search_json = fs::read_to_string(doc.join("search-index.json")).unwrap();
     assert!(search_json.contains("\"pkg\":\"MyApp\""));
     assert!(search_json.contains("\"name\":\"Widget\""));
+    assert!(search_json.contains("\"name\":\"IPAddress.Version\""));
+    assert!(search_json.contains("\"name\":\"IPAddress.ParseError\""));
+    assert!(search_json.contains("\"name\":\"IPAddress.v4?\""));
+    assert!(search_json.contains("\"deprecated\":\"Use `address.version == IPAddress.Version.V4`"));
+
+    let ip_address = fs::read_to_string(doc.join("Net").join("IPAddress.html")).unwrap();
+    assert!(ip_address.contains("class=\"deprecation-notice\""));
+    assert!(
+        ip_address.contains("Use <code>address.version == IPAddress.Version.V4</code> instead.")
+    );
 }
 
 #[test]
@@ -348,6 +366,25 @@ fn doc_search_renders_builtin_primitive_types() {
     assert!(method.status.success());
     let stdout = String::from_utf8_lossy(&method.stdout);
     assert!(stdout.contains("# Global.Int.parse (fn)"), "{stdout}");
+}
+
+#[test]
+fn doc_search_shows_stdlib_deprecation_guidance() {
+    let tmp = tempdir();
+
+    let search = run_koja(&tmp, &["doc", "search", "IPAddress.v4?"]);
+    assert!(
+        search.status.success(),
+        "stdlib search failed: {}",
+        String::from_utf8_lossy(&search.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&search.stdout);
+    assert!(stdout.contains("# Net.IPAddress.v4? (fn)"), "{stdout}");
+    assert!(stdout.contains("## Deprecated"), "{stdout}");
+    assert!(
+        stdout.contains("Use `address.version == IPAddress.Version.V4` instead."),
+        "{stdout}"
+    );
 }
 
 #[test]

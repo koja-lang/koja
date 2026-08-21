@@ -9,9 +9,9 @@
 //! sidebar dropdown can pivot between packages without ambiguity.
 
 use koja_ast::ast::{
-    AnnotationValue, BuiltinDecl, EnumDecl, Expr, ExprKind, ExtendBlock, File, Function,
-    ImplMember, Item, Literal, Param, ProtocolDecl, ProtocolMethod, StringPart, StructDecl,
-    TypeExpr, UnaryOp, Visibility,
+    AnnotationKind, AnnotationValue, BuiltinDecl, EnumDecl, Expr, ExprKind, ExtendBlock, File,
+    Function, ImplMember, Item, Literal, Param, ProtocolDecl, ProtocolMethod, StringPart,
+    StructDecl, TypeExpr, UnaryOp, Visibility,
 };
 use koja_ast::util::dedent;
 
@@ -48,6 +48,7 @@ impl PackageKind {
 /// Summary of a documentable item for the flat index listing.
 #[derive(Debug)]
 pub struct DocItem {
+    pub deprecated: Option<String>,
     pub doc: Option<String>,
     pub kind: String,
     pub name: String,
@@ -56,6 +57,7 @@ pub struct DocItem {
 /// Documentation for a constant.
 #[derive(Debug)]
 pub struct DocConstant {
+    pub deprecated: Option<String>,
     pub doc: Option<String>,
     pub name: String,
 }
@@ -63,6 +65,7 @@ pub struct DocConstant {
 /// Documentation for an enum.
 #[derive(Debug)]
 pub struct DocEnum {
+    pub deprecated: Option<String>,
     pub doc: Option<String>,
     pub functions: Vec<DocFunction>,
     pub name: String,
@@ -82,6 +85,7 @@ pub struct DocField {
 /// fallible spelling `-> T ! E`.
 #[derive(Debug)]
 pub struct DocFunction {
+    pub deprecated: Option<String>,
     pub doc: Option<String>,
     pub error_type: Option<String>,
     pub name: String,
@@ -100,6 +104,7 @@ pub struct DocParam {
 /// Documentation for a protocol.
 #[derive(Debug)]
 pub struct DocProtocol {
+    pub deprecated: Option<String>,
     pub doc: Option<String>,
     pub functions: Vec<DocFunction>,
     pub name: String,
@@ -110,6 +115,7 @@ pub struct DocProtocol {
 /// fields, the compiler owns their representation.
 #[derive(Debug)]
 pub struct DocBuiltin {
+    pub deprecated: Option<String>,
     pub doc: Option<String>,
     pub functions: Vec<DocFunction>,
     pub name: String,
@@ -119,6 +125,7 @@ pub struct DocBuiltin {
 /// Documentation for a struct, including its impl functions.
 #[derive(Debug)]
 pub struct DocStruct {
+    pub deprecated: Option<String>,
     pub doc: Option<String>,
     pub fields: Vec<DocField>,
     pub functions: Vec<DocFunction>,
@@ -154,9 +161,9 @@ pub struct DocPackage {
 /// [`resolve_pending_extends`] before rendering.
 #[derive(Debug)]
 struct PendingExtend {
-    target_package: String,
-    target_name: String,
+    current_package: String,
     functions: Vec<DocFunction>,
+    target_path: Vec<String>,
 }
 
 impl DocPackage {
@@ -240,10 +247,8 @@ pub fn extract_items(file: &File, project: &mut DocProject, package: &str, kind:
                     pkg.constants.push(dc);
                 }
             }
-            Item::Enum(e) => {
-                if let Some(de) = extract_enum(e) {
-                    pkg.enums.push(de);
-                }
+            Item::Enum(_) => {
+                extract_type_item(item, pkg, &[]);
             }
             Item::Extend(ext) => {
                 if let Some(pending) = make_pending_extend(ext, package) {
@@ -261,14 +266,48 @@ pub fn extract_items(file: &File, project: &mut DocProject, package: &str, kind:
                     pkg.protocols.push(dp);
                 }
             }
-            Item::Struct(s) => {
-                if let Some(ds) = extract_struct(s) {
-                    pkg.structs.push(ds);
-                }
+            Item::Struct(_) => {
+                extract_type_item(item, pkg, &[]);
             }
             Item::TypeAlias(_) => {}
         }
     }
+}
+
+/// Extract a struct or enum and recursively flatten its lexical nested
+/// types under their full owner path. Private owners hide their subtree.
+fn extract_type_item(item: &Item, pkg: &mut DocPackage, owner_path: &[String]) {
+    match item {
+        Item::Enum(decl) => {
+            if decl.visibility == Visibility::Private {
+                return;
+            }
+            let path = nested_path(owner_path, &decl.path);
+            if let Some(extracted) = extract_enum(decl, &path) {
+                pkg.enums.push(extracted);
+            }
+            for nested in &decl.nested {
+                extract_type_item(nested, pkg, &path);
+            }
+        }
+        Item::Struct(decl) => {
+            if decl.visibility == Visibility::Private {
+                return;
+            }
+            let path = nested_path(owner_path, &decl.path);
+            if let Some(extracted) = extract_struct(decl, &path) {
+                pkg.structs.push(extracted);
+            }
+            for nested in &decl.nested {
+                extract_type_item(nested, pkg, &path);
+            }
+        }
+        _ => debug_assert!(false, "nested declarations are structs or enums"),
+    }
+}
+
+fn nested_path(owner_path: &[String], path: &[String]) -> Vec<String> {
+    owner_path.iter().chain(path).cloned().collect()
 }
 
 /// Resolve pending `extend` blocks, sort packages by
@@ -297,33 +336,53 @@ fn resolve_pending_extends(project: &mut DocProject) {
         .collect();
 
     for pending in pendings {
-        let Some(target) = project
-            .packages
-            .iter_mut()
-            .find(|p| p.name == pending.target_package)
+        let Some((package_idx, target_name)) =
+            resolve_extend_target(project, &pending.current_package, &pending.target_path)
         else {
             continue;
         };
-        if let Some(db) = target
-            .builtins
-            .iter_mut()
-            .find(|b| b.name == pending.target_name)
-        {
+        let target = &mut project.packages[package_idx];
+        if let Some(db) = target.builtins.iter_mut().find(|b| b.name == target_name) {
             db.functions.extend(pending.functions);
-        } else if let Some(ds) = target
-            .structs
-            .iter_mut()
-            .find(|s| s.name == pending.target_name)
-        {
+        } else if let Some(ds) = target.structs.iter_mut().find(|s| s.name == target_name) {
             ds.functions.extend(pending.functions);
-        } else if let Some(de) = target
-            .enums
-            .iter_mut()
-            .find(|e| e.name == pending.target_name)
-        {
+        } else if let Some(de) = target.enums.iter_mut().find(|e| e.name == target_name) {
             de.functions.extend(pending.functions);
         }
     }
+}
+
+/// Resolve an extend target like typecheck: prefer the complete path in
+/// the current package, then read the first path segment as a package.
+fn resolve_extend_target(
+    project: &DocProject,
+    current_package: &str,
+    target_path: &[String],
+) -> Option<(usize, String)> {
+    let local_name = target_path.join(".");
+    if let Some(package_idx) = project.packages.iter().position(|package| {
+        package.name == current_package && package_has_type(package, &local_name)
+    }) {
+        return Some((package_idx, local_name));
+    }
+
+    let [package_name, target_path @ ..] = target_path else {
+        return None;
+    };
+    let target_name = target_path.join(".");
+    project
+        .packages
+        .iter()
+        .position(|package| {
+            package.name == package_name.as_str() && package_has_type(package, &target_name)
+        })
+        .map(|package_idx| (package_idx, target_name))
+}
+
+fn package_has_type(package: &DocPackage, name: &str) -> bool {
+    package.builtins.iter().any(|item| item.name == name)
+        || package.enums.iter().any(|item| item.name == name)
+        || package.structs.iter().any(|item| item.name == name)
 }
 
 fn finalize_package(pkg: &mut DocPackage) {
@@ -350,6 +409,7 @@ fn finalize_package(pkg: &mut DocPackage) {
     pkg.items.clear();
     for b in &pkg.builtins {
         pkg.items.push(DocItem {
+            deprecated: b.deprecated.clone(),
             doc: b.doc.clone(),
             kind: "builtin".to_string(),
             name: b.name.clone(),
@@ -357,6 +417,7 @@ fn finalize_package(pkg: &mut DocPackage) {
     }
     for c in &pkg.constants {
         pkg.items.push(DocItem {
+            deprecated: c.deprecated.clone(),
             doc: c.doc.clone(),
             kind: "const".to_string(),
             name: c.name.clone(),
@@ -364,6 +425,7 @@ fn finalize_package(pkg: &mut DocPackage) {
     }
     for e in &pkg.enums {
         pkg.items.push(DocItem {
+            deprecated: e.deprecated.clone(),
             doc: e.doc.clone(),
             kind: "enum".to_string(),
             name: e.name.clone(),
@@ -371,6 +433,7 @@ fn finalize_package(pkg: &mut DocPackage) {
     }
     for f in &pkg.functions {
         pkg.items.push(DocItem {
+            deprecated: f.deprecated.clone(),
             doc: f.doc.clone(),
             kind: "fn".to_string(),
             name: f.name.clone(),
@@ -378,6 +441,7 @@ fn finalize_package(pkg: &mut DocPackage) {
     }
     for p in &pkg.protocols {
         pkg.items.push(DocItem {
+            deprecated: p.deprecated.clone(),
             doc: p.doc.clone(),
             kind: "protocol".to_string(),
             name: p.name.clone(),
@@ -385,6 +449,7 @@ fn finalize_package(pkg: &mut DocPackage) {
     }
     for s in &pkg.structs {
         pkg.items.push(DocItem {
+            deprecated: s.deprecated.clone(),
             doc: s.doc.clone(),
             kind: "struct".to_string(),
             name: s.name.clone(),
@@ -405,6 +470,16 @@ fn annotation_string(annotations: &[koja_ast::ast::Annotation]) -> Option<String
         })
 }
 
+fn annotation_deprecated(annotations: &[koja_ast::ast::Annotation]) -> Option<String> {
+    annotations.iter().find_map(|annotation| {
+        let AnnotationKind::Deprecated { message } = annotation.kind() else {
+            return None;
+        };
+        let message = dedent(message).trim().to_string();
+        (!message.is_empty()).then_some(message)
+    })
+}
+
 /// Build a [`PendingExtend`] from an `extend Type` block. Path
 /// interpretation mirrors typecheck/IR's `extend_target_path`,
 /// inlined so `koja-doc` doesn't need a typecheck dep.
@@ -413,11 +488,9 @@ fn make_pending_extend(ext: &ExtendBlock, current_package: &str) -> Option<Pendi
         TypeExpr::Generic { path, .. } | TypeExpr::Named { path, .. } => path,
         _ => return None,
     };
-    let (target_package, target_name) = match path.as_slice() {
-        [name] => (current_package.to_string(), name.clone()),
-        [head @ .., last] if !head.is_empty() => (head.join("."), last.clone()),
-        _ => return None,
-    };
+    if path.is_empty() {
+        return None;
+    }
 
     let functions: Vec<DocFunction> = ext
         .members
@@ -433,9 +506,9 @@ fn make_pending_extend(ext: &ExtendBlock, current_package: &str) -> Option<Pendi
     }
 
     Some(PendingExtend {
-        target_package,
-        target_name,
+        current_package: current_package.to_string(),
         functions,
+        target_path: path.clone(),
     })
 }
 
@@ -445,12 +518,13 @@ fn extract_constant(c: &koja_ast::ast::Constant) -> Option<DocConstant> {
     }
 
     Some(DocConstant {
+        deprecated: annotation_deprecated(&c.annotations),
         doc: annotation_string(&c.annotations),
         name: c.name.clone(),
     })
 }
 
-fn extract_enum(e: &EnumDecl) -> Option<DocEnum> {
+fn extract_enum(e: &EnumDecl, path: &[String]) -> Option<DocEnum> {
     if e.visibility == Visibility::Private || has_doc_false(&e.annotations) {
         return None;
     }
@@ -459,9 +533,10 @@ fn extract_enum(e: &EnumDecl) -> Option<DocEnum> {
     let functions = e.functions.iter().filter_map(extract_function).collect();
 
     Some(DocEnum {
+        deprecated: annotation_deprecated(&e.annotations),
         doc: annotation_string(&e.annotations),
         functions,
-        name: e.name().to_string(),
+        name: path.join("."),
         variants,
     })
 }
@@ -474,6 +549,7 @@ fn extract_function(f: &Function) -> Option<DocFunction> {
     let params = extract_params(&f.params);
 
     Some(DocFunction {
+        deprecated: annotation_deprecated(&f.annotations),
         doc: annotation_string(&f.annotations),
         error_type: f.error_type.as_ref().map(type_expr_to_string),
         name: f.name.clone(),
@@ -513,6 +589,7 @@ fn extract_protocol(p: &ProtocolDecl) -> Option<DocProtocol> {
         .collect();
 
     Some(DocProtocol {
+        deprecated: annotation_deprecated(&p.annotations),
         doc: annotation_string(&p.annotations),
         functions,
         name: p.name.clone(),
@@ -528,6 +605,7 @@ fn extract_protocol_method(m: &ProtocolMethod) -> Option<DocFunction> {
     let params = extract_params(&m.params);
 
     Some(DocFunction {
+        deprecated: annotation_deprecated(&m.annotations),
         doc: annotation_string(&m.annotations),
         error_type: m.error_type.as_ref().map(type_expr_to_string),
         name: m.name.clone(),
@@ -537,7 +615,7 @@ fn extract_protocol_method(m: &ProtocolMethod) -> Option<DocFunction> {
     })
 }
 
-fn extract_struct(s: &StructDecl) -> Option<DocStruct> {
+fn extract_struct(s: &StructDecl, path: &[String]) -> Option<DocStruct> {
     if s.visibility == Visibility::Private || has_doc_false(&s.annotations) {
         return None;
     }
@@ -554,10 +632,11 @@ fn extract_struct(s: &StructDecl) -> Option<DocStruct> {
     let functions = s.functions.iter().filter_map(extract_function).collect();
 
     Some(DocStruct {
+        deprecated: annotation_deprecated(&s.annotations),
         doc: annotation_string(&s.annotations),
         fields,
         functions,
-        name: s.name().to_string(),
+        name: path.join("."),
         type_params: s.type_params.iter().map(|tp| tp.name.clone()).collect(),
     })
 }
@@ -567,6 +646,7 @@ fn extract_builtin(b: &BuiltinDecl) -> Option<DocBuiltin> {
         return None;
     }
     Some(DocBuiltin {
+        deprecated: annotation_deprecated(&b.annotations),
         doc: annotation_string(&b.annotations),
         functions: b.functions.iter().filter_map(extract_function).collect(),
         name: b.name().to_string(),

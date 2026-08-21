@@ -58,6 +58,9 @@
      requires, as light as compliance allows. */
   --border-strong: #7d8ea6;
   --shadow: rgb(4 47 46 / 18%);
+  --warning: #92400e;
+  --warning-bg: #fffbeb;
+  --warning-border: #f59e0b;
   --topbar-h: 64px;
   --font-display: "Outfit", -apple-system, BlinkMacSystemFont, sans-serif;
   --font-mono: "Source Code Pro", ui-monospace, monospace;
@@ -74,6 +77,9 @@
   --chip-bg: rgb(45 212 191 / 12%);
   --border-strong: #0f766e;
   --shadow: rgb(0 0 0 / 45%);
+  --warning: #fcd34d;
+  --warning-bg: rgb(146 64 14 / 22%);
+  --warning-border: #d97706;
   color-scheme: dark;
 }
 
@@ -462,6 +468,39 @@ button:focus-visible {
   padding: 0.15rem 0.6rem;
   border-radius: 999px;
   flex-shrink: 0;
+}
+
+.deprecated-badge {
+  display: inline-flex;
+  align-items: center;
+  align-self: center;
+  color: var(--warning);
+  background: var(--warning-bg);
+  border: 1px solid var(--warning-border);
+  border-radius: 999px;
+  padding: 0.16rem 0.45rem 0.1rem;
+  font-size: 0.72rem;
+  font-weight: 600;
+  line-height: 1;
+  flex-shrink: 0;
+}
+
+.deprecation-notice {
+  margin: 1rem 0 1.5rem;
+  padding: 0.9rem 1rem;
+  color: var(--warning);
+  background: var(--warning-bg);
+  border-left: 4px solid var(--warning-border);
+  border-radius: 6px;
+}
+
+.deprecation-title {
+  font-family: var(--font-display);
+  font-weight: 600;
+}
+
+.deprecation-message p:last-child {
+  margin-bottom: 0;
 }
 
 .page-lede {

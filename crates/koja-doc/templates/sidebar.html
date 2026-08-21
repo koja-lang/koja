@@ -8,7 +8,10 @@
     {% for item in group.items %}
     <li>
       <a class="rail-item{% if let Some(active) = ctx.active_item %}{% if item.name == *active %} active{% endif %}{% endif %}"
-        href="{{ ctx.root_prefix }}{{ pkg }}/{{ item.name }}.html">{{ item.name }}</a>
+        href="{{ ctx.root_prefix }}{{ pkg }}/{{ item.name }}.html">
+        {{ item.name }}
+        {% if item.deprecated.is_some() %}<span class="rail-kind">deprecated</span>{% endif %}
+      </a>
     </li>
     {% endfor %}
   </ul>

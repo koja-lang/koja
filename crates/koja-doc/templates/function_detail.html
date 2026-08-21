@@ -1,4 +1,7 @@
 <div class="detail" id="fn-{{ f.name }}">
+  {% let deprecated = f.deprecated %}
+  {% include "deprecation_notice.html" %}
+
   <div class="detail-signature codeblock">
     <a class="anchor" href="#fn-{{ f.name }}" aria-label="Link to {{ f.name }}">#</a><code>{{ f.signature_html()|safe }}</code>
   </div>

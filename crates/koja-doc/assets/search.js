@@ -95,6 +95,9 @@
         "." +
         escapeHtml(hit.name) +
         "</span>" +
+        (hit.deprecated
+          ? '<span class="deprecated-badge">deprecated</span>'
+          : "") +
         '<span class="search-result-kind">' +
         escapeHtml(hit.kind) +
         "</span>" +
