@@ -1,38 +1,15 @@
-alias JSON.Decoder
 alias JSON.Value
 
 @doc """
-JSON glue between the `Link` model and the wire: serializing links to
-`JSON.Value` trees and pulling the `url` field out of request bodies.
+JSON request helpers.
 """
 struct JsonUtil
-  @doc """
-  Renders a single link as a JSON object.
-  """
-  fn link_to_value(link: Link) -> Value
-    Value.object(
-      [
-        ("code", Value.string(link.code)), ("url", Value.string(link.url)),
-        ("created_at", Value.string(link.created_at)),
-        ("hits", Value.int(link.hits)),
-        ("short_path", Value.string("/" <> link.code))
-      ],
-    )
-  end
-
-  @doc """
-  Renders a list of links as a JSON array.
-  """
-  fn links_to_value(links: List<Link>) -> Value
-    Value.array(collect(links, 0, List.new()))
-  end
-
   @doc """
   Extracts a non-empty `url` string from a JSON request body, or
   fails with a human-readable error describing what was wrong.
   """
   fn parse_url(body: String) -> String ! String
-    decoded = Decoder.decode(body) rescue _ -> fail "body is not valid JSON"
+    decoded = JSON.decode(body) rescue _ -> fail "body is not valid JSON"
 
     match field(decoded, "url")
       Option.None ->
@@ -48,17 +25,6 @@ struct JsonUtil
       Option.Some(_) ->
         fail "\"url\" must be a string"
     end
-  end
-
-  priv fn collect(links: List<Link>, index: Int, acc: List<Value>)
-    -> List<Value>
-
-    if index >= links.length()
-      return acc
-    end
-
-    link = links.get(index).unwrap()
-    collect(links, index + 1, acc.append(link_to_value(link)))
   end
 
   priv fn field(value: Value, key: String) -> Option<Value>

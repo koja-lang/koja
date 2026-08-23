@@ -1,9 +1,9 @@
 struct DecodeTest
   @test "decode null"
   fn test_decode_null -> Result<Bool, String>
-    match Decoder.decode("null")
+    match decode("null")
       Result.Ok(val) ->
-        result = Encoder.encode(val)
+        result = encode(val)
 
         unless result == "null"
           return Result.Err("expected \"null\", got #{result}")
@@ -18,9 +18,9 @@ struct DecodeTest
 
   @test "decode true"
   fn test_decode_true -> Result<Bool, String>
-    match Decoder.decode("true")
+    match decode("true")
       Result.Ok(val) ->
-        result = Encoder.encode(val)
+        result = encode(val)
 
         unless result == "true"
           return Result.Err("expected \"true\", got #{result}")
@@ -35,9 +35,9 @@ struct DecodeTest
 
   @test "decode integer"
   fn test_decode_integer -> Result<Bool, String>
-    match Decoder.decode("42")
+    match decode("42")
       Result.Ok(val) ->
-        result = Encoder.encode(val)
+        result = encode(val)
 
         unless result == "42"
           return Result.Err("expected \"42\", got #{result}")
@@ -52,9 +52,9 @@ struct DecodeTest
 
   @test "decode string"
   fn test_decode_string -> Result<Bool, String>
-    match Decoder.decode("\"hello\"")
+    match decode("\"hello\"")
       Result.Ok(val) ->
-        result = Encoder.encode(val)
+        result = encode(val)
 
         unless result == "\"hello\""
           return Result.Err("expected '\"hello\"', got #{result}")
@@ -69,9 +69,9 @@ struct DecodeTest
 
   @test "decode empty array"
   fn test_decode_empty_array -> Result<Bool, String>
-    match Decoder.decode("[]")
+    match decode("[]")
       Result.Ok(val) ->
-        result = Encoder.encode(val)
+        result = encode(val)
 
         unless result == "[]"
           return Result.Err("expected \"[]\", got #{result}")
@@ -86,9 +86,9 @@ struct DecodeTest
 
   @test "decode array"
   fn test_decode_array -> Result<Bool, String>
-    match Decoder.decode("[1, 2, 3]")
+    match decode("[1, 2, 3]")
       Result.Ok(val) ->
-        result = Encoder.encode(val)
+        result = encode(val)
 
         unless result == "[1,2,3]"
           return Result.Err("expected \"[1,2,3]\", got #{result}")
@@ -103,9 +103,9 @@ struct DecodeTest
 
   @test "decode object"
   fn test_decode_object -> Result<Bool, String>
-    match Decoder.decode("{\"key\": \"value\"}")
+    match decode("{\"key\": \"value\"}")
       Result.Ok(val) ->
-        result = Encoder.encode(val)
+        result = encode(val)
 
         unless result == "{\"key\":\"value\"}"
           return Result.Err("expected '{\"key\":\"value\"}', got #{result}")
@@ -122,9 +122,9 @@ struct DecodeTest
   fn test_round_trip -> Result<Bool, String>
     input = "{\"name\":\"koja\",\"version\":\"0.1.0\",\"tags\":[1,2,3]}"
 
-    match Decoder.decode(input)
+    match decode(input)
       Result.Ok(val) ->
-        output = Encoder.encode(val)
+        output = encode(val)
 
         unless output == input
           return Result.Err("round trip failed: #{output}")

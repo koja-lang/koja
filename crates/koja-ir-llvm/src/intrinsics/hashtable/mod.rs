@@ -15,8 +15,7 @@
 //!   [`resolve_hash_eq`](util::resolve_hash_eq), …) used by every
 //!   other submodule. Pure "build one instruction" wrappers with no
 //!   per-method shape.
-//! - [`lifecycle`]: allocate / inspect (`new`, `length`, `empty?`,
-//!   and the `from_map` identity).
+//! - [`lifecycle`]: allocate and inspect (`new`, `length`, `empty?`).
 //! - [`read`]: the read-only probe loop and the `get` / `has?` /
 //!   `remove` tails that consume it.
 //! - [`resize`]: the load-factor check + rehash loop reused by every
@@ -41,7 +40,7 @@ mod util;
 pub(super) use cursor::emit_next;
 pub(super) use from_list::emit_set_from_list;
 pub(super) use insert::{emit_map_put, emit_set_insert};
-pub(super) use lifecycle::{emit_empty_q, emit_identity, emit_length, emit_new};
+pub(super) use lifecycle::{emit_empty_q, emit_length, emit_new};
 pub(super) use read::{emit_has_q, emit_map_get, emit_remove};
 pub(super) use util::ir_byte_size;
 pub(crate) use util::occupied_loop;

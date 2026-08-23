@@ -1,48 +1,8 @@
-@doc """
-Converts a `Value` tree into JSON text, in either compact or
-pretty-printed form.
-"""
-struct Encoder
-  @doc """
-  Encode a `Value` tree as compact JSON with no whitespace between
-  tokens.
-
-  ## Examples
-
-  ```
-  koja> Encoder.encode(Value.bool(true))
-  "true"
-
-  koja> Encoder.encode(Value.int(123))
-  "123"
-
-  koja> Encoder.encode(Value.float(1.23))
-  "1.23"
-
-  koja> Encoder.encode(Value.string("Hello, Koja!"))
-  "Hello, Koja!"
-  ```
-  """
+priv struct Encoder
   fn encode(value: Value) -> String
     Encoder.encode_value(value)
   end
 
-  @doc """
-  Encode a `Value` tree as indented JSON for human readers, with two
-  spaces per nesting level.
-
-  ## Examples
-
-  ```
-  koja> json = Encoder.encode_pretty(Value.object([("a", Value.int(1)), ("b", Value.int(2)), ("c", Value.int(3))]))
-  koja> IO.puts(json)
-  {
-    "a": 1,
-    "b": 2,
-    "c": 3
-  }
-  ```
-  """
   fn encode_pretty(value: Value) -> String
     Encoder.encode_value_pretty(value, 0)
   end

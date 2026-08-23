@@ -28,6 +28,7 @@ const SURFACE: &[(&str, &[&str])] = &[
     ),
     ("Bits", &["format", "to_binary"]),
     ("Bool", &["equals?", "format", "hash"]),
+    ("BoolLiteral", &[]),
     (
         "CPtr",
         &[
@@ -94,14 +95,18 @@ const SURFACE: &[(&str, &[&str])] = &[
     ),
     ("Float", &["format", "parse"]),
     ("Float32", &["format"]),
+    ("FloatLiteral", &[]),
     ("IO", &["Ready", "gets", "puts", "warn", "write"]),
     ("Int", &["equals?", "format", "hash", "parse"]),
     ("Int8", &["equals?", "format", "hash"]),
     ("Int16", &["equals?", "format", "hash"]),
     ("Int32", &["equals?", "format", "hash"]),
+    ("IntLiteral", &[]),
     ("Kernel", &["panic"]),
     ("List", &["format"]),
+    ("ListLiteral", &[]),
     ("Map", &["format"]),
+    ("MapLiteral", &[]),
     ("Option", &["format"]),
     ("Range", &[]),
     (
@@ -149,6 +154,7 @@ const SURFACE: &[(&str, &[&str])] = &[
             "whitespace?",
         ],
     ),
+    ("StringLiteral", &[]),
     (
         "System",
         &[
@@ -220,6 +226,30 @@ fn user_code_can_call_checksum_apis() {
         Checksum.crc32c(<<1, 2, 3>>)
         "#,
     ));
+}
+
+#[test]
+fn user_code_can_call_json_package_apis() {
+    typecheck(&dedent(
+        r#"
+        value: JSON.Value = ["active": true, "items": [1, 2, 3]]
+        JSON.encode(value)
+        JSON.encode_pretty(value)
+        JSON.decode("{\"active\":true}")
+        "#,
+    ));
+}
+
+#[test]
+fn json_encoder_and_decoder_types_are_private() {
+    assert_script_fails_with(
+        "JSON.Encoder.encode(JSON.Value.Null)",
+        &["private struct `JSON.Encoder`"],
+    );
+    assert_script_fails_with(
+        "JSON.Decoder.decode(\"null\")",
+        &["private struct `JSON.Decoder`"],
+    );
 }
 
 #[test]

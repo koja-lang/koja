@@ -12,6 +12,20 @@ struct Link
   url: String
 end
 
+impl JSON.Encoding for Link
+  @doc """
+  Returns this link in its API response shape.
+  """
+  fn to_json(self) -> JSON.Value
+    value: JSON.Value = [
+      "code": self.code.to_json(), "created_at": self.created_at.to_json(),
+      "hits": self.hits.to_json(), "short_path": ("/" <> self.code).to_json(),
+      "url": self.url.to_json()
+    ]
+    value
+  end
+end
+
 const CODE_LENGTH: Int = 7
 const MAX_ATTEMPTS: Int = 5
 const CODE_ALPHABET: String = "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"

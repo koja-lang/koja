@@ -120,6 +120,8 @@ focused standard library improvements found while building auth-manager.
 
 ### Standard library quality of life
 
+- **[DONE]** Add contextual literal protocols, JSON literal trees, and
+  `JSON.Encoding` with package-level encode and decode functions.
 - Add `DateTime.to_rfc3339()` and `DateTime.from_rfc3339(text)` for JSON API
   timestamps ([gap](GAPS.md#datetime-has-no-calendar-formatting-or-parsing)).
 - Add `UUID.v4()` for session, API key, and node identifiers

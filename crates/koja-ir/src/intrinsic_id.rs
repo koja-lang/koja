@@ -213,7 +213,6 @@ intrinsic_methods! {
     /// from there.
     MapMethod {
         EmptyQ => "empty?",
-        FromMap => "from_map",
         Get => "get",
         HasQ => "has?",
         Length => "length",
@@ -693,7 +692,6 @@ mod tests {
             ("List", "replace_at", Id::List(ListMethod::ReplaceAt)),
             ("List", "slice", Id::List(ListMethod::Slice)),
             ("Map", "empty?", Id::Map(MapMethod::EmptyQ)),
-            ("Map", "from_map", Id::Map(MapMethod::FromMap)),
             ("Map", "get", Id::Map(MapMethod::Get)),
             ("Map", "has?", Id::Map(MapMethod::HasQ)),
             ("Map", "length", Id::Map(MapMethod::Length)),

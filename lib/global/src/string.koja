@@ -4,6 +4,22 @@ UTF-8 text, indexed by Unicode codepoint.
 builtin String
 end
 
+@doc """
+A protocol for types that can be constructed from a string literal.
+"""
+protocol StringLiteral
+  fn from_string(value: String) -> Self
+end
+
+impl StringLiteral for String
+  @doc """
+  Returns the string unchanged.
+  """
+  fn from_string(value: String) -> Self
+    value
+  end
+end
+
 impl Equality for String
   @doc """
   Returns `true` if both strings have the same content.

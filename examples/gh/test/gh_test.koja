@@ -1,6 +1,5 @@
 alias Gh.GitHub.Repo
 alias Gh.GitHub.User
-alias JSON.Decoder
 alias JSON.Value
 
 # Trimmed-down captures of real GitHub API payloads; `null` and
@@ -124,7 +123,7 @@ struct RenderTest
 end
 
 priv fn decode_fixture(raw: String) -> Result<Value, String>
-  match Decoder.decode(raw)
+  match JSON.decode(raw)
     Result.Ok(value) -> Result.Ok(value)
     Result.Err(e) -> Result.Err("fixture did not decode: #{e}")
   end

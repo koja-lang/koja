@@ -67,3 +67,57 @@ enum Value
     (key, value)
   end
 end
+
+impl BoolLiteral for Value
+  @doc """
+  Wraps a boolean literal as a JSON value.
+  """
+  fn from_bool(value: Bool) -> Self
+    Value.Bool(value)
+  end
+end
+
+impl FloatLiteral for Value
+  @doc """
+  Wraps a float literal as a JSON value.
+  """
+  fn from_float(value: Float) -> Self
+    Value.Float(value)
+  end
+end
+
+impl IntLiteral for Value
+  @doc """
+  Wraps an integer literal as a JSON value.
+  """
+  fn from_int(value: Int) -> Self
+    Value.Int(value)
+  end
+end
+
+impl ListLiteral<Value> for Value
+  @doc """
+  Wraps a list literal as a JSON array.
+  """
+  fn from_list(values: List<Value>) -> Self
+    Value.Array(values)
+  end
+end
+
+impl MapLiteral<String, Value> for Value
+  @doc """
+  Wraps ordered map-literal entries as a JSON object.
+  """
+  fn from_entries(entries: List<(String, Value)>) -> Self
+    Value.Object(entries)
+  end
+end
+
+impl StringLiteral for Value
+  @doc """
+  Wraps a string literal as a JSON value.
+  """
+  fn from_string(value: String) -> Self
+    Value.String(value)
+  end
+end

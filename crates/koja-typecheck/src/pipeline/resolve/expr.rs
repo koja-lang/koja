@@ -21,7 +21,8 @@ use super::enums::resolve_enum_construction;
 use super::error_channel::{resolve_rescue, resolve_try};
 use super::idents::{resolve_ident, resolve_qualified_member, resolve_self};
 use super::literals::{
-    resolve_binary_literal, resolve_list_literal, resolve_map_literal, resolve_tuple_literal,
+    is_scalar_literal, resolve_binary_literal, resolve_list_literal, resolve_map_literal,
+    resolve_scalar_literal, resolve_tuple_literal,
 };
 use super::match_expr::resolve_match;
 use super::ops::{binary_type, resolve_equality_op_expr, unary_type};
@@ -41,22 +42,26 @@ pub(super) fn resolve_expr(
     resolve_expr_with_expected(expr, None, resolver, diagnostics);
 }
 
-/// Resolve `expr` with an optional expected-type hint. Closure
-/// expressions consume the hint (param-from-context inference), all
-/// other shapes ignore it.
+/// Resolve `expr` with an optional expected-type hint. Closures,
+/// constructors, control flow, and literal protocols consume it.
 pub(super) fn resolve_expr_with_expected(
     expr: &mut Expr,
     expected: Option<&ResolvedType>,
     resolver: &mut Resolver<'_>,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
-    // Pre-dispatch for AST-rewriting literal shapes. List / Map
+    // Pre-dispatch for AST-rewriting literal shapes. Scalar / List / Map
     // literals can rewrite the *outer* expression in place (e.g.
     // `s: Set<Int> = [1, 2]` becomes `Set.from_list([1, 2])` post-
     // resolve). The main `match &mut expr.kind` below holds a
     // borrow on `expr.kind`, which forbids replacing the kind from
     // inside an arm. Lifting these two cases out lets their
     // resolvers take `&mut Expr` and mutate the kind freely.
+    if is_scalar_literal(expr) {
+        let ty = resolve_scalar_literal(expr, expected, resolver, diagnostics);
+        expr.resolution = ty;
+        return;
+    }
     if matches!(expr.kind, ExprKind::List { .. }) {
         let ty = resolve_list_literal(expr, expected, resolver, diagnostics);
         expr.resolution = ty;

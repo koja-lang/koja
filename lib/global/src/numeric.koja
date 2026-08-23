@@ -80,6 +80,38 @@ enum NumericConversionError
   OutOfRange
 end
 
+@doc """
+A protocol for types that can be constructed from an integer literal.
+"""
+protocol IntLiteral
+  fn from_int(value: Int) -> Self
+end
+
+impl IntLiteral for Int
+  @doc """
+  Returns the integer unchanged.
+  """
+  fn from_int(value: Int) -> Self
+    value
+  end
+end
+
+@doc """
+A protocol for types that can be constructed from a float literal.
+"""
+protocol FloatLiteral
+  fn from_float(value: Float) -> Self
+end
+
+impl FloatLiteral for Float
+  @doc """
+  Returns the float unchanged.
+  """
+  fn from_float(value: Float) -> Self
+    value
+  end
+end
+
 impl Equality for Int
   @doc """
   Returns `true` if both 64-bit integers are equal.

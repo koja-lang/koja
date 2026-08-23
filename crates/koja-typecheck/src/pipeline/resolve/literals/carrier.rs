@@ -1,27 +1,22 @@
 //! Shared "literal-protocol" carrier machinery.
 //!
-//! Each protocol-aware literal family (today `[a, b, c]` ->
-//! `ListLiteral<T>` and `["k": v, ...]` -> `MapLiteral<K, V>`, soon
-//! `123` -> `IntLiteral<T>`, `1.0` -> `FloatLiteral<T>`, `<<...>>` ->
-//! `BinaryLiteral<T>`) shares the same carrier-rewrite shape:
+//! Scalar, list, and map literal protocols share one carrier-rewrite
+//! shape:
 //!
-//! - The literal has a *default* canonical type (e.g. `List<T>`).
-//!   That's what the literal "really is": the value flowing out of
-//!   the literal node is always an instance of the default carrier.
+//! - The literal has a default canonical type such as `Int` or
+//!   `List<T>`.
 //! - When the surrounding context expects some *other* conformer
 //!   `X` of the literal's protocol, the AST is rewritten in-place
-//!   into `X.<from_method>(<canonical-literal>)` and the inner
-//!   literal keeps its canonical-default type. The synthesized
-//!   method call is dispatched through the normal method-call
-//!   resolver so generic inference + arity checks all flow the
-//!   same way.
+//!   into `X.<from_method>(<input>)`. The literal resolver chooses
+//!   the protocol input. The synthesized call uses normal static
+//!   method resolution.
 //!
 //! [`CarrierSpec`] captures the protocol's identifying strings.
 //! [`pick_carrier`] decides which branch fires based on the
 //! expected-type hint. [`dispatch_via_carrier`] performs the
 //! AST-rewrite-or-restore step. Per-shape resolvers
-//! ([`super::list`], [`super::map`]) plug their literal-specific
-//! axis-inference into this spine.
+//! ([`super::list`], [`super::map`], [`super::scalar`]) plug their
+//! literal-specific work into this spine.
 //!
 //! Protocol id resolution is registry-backed: a missing
 //! `Global.<protocol_name>` autoimport silently falls through to
@@ -49,8 +44,7 @@ pub(super) struct CarrierSpec {
     /// `IntLiteral`).
     pub protocol_name: &'static str,
 
-    /// The synthesis method on a non-default conformer. Has
-    /// signature `fn <from_method>(<param>: <DefaultCarrier>) -> Self`.
+    /// The synthesis method on a non-default conformer.
     pub from_method: &'static str,
 
     /// Diagnostic prefix for the "default carrier missing from
@@ -62,11 +56,24 @@ pub(super) struct CarrierSpec {
 /// Result of carrier selection. `Default` is the trivial-identity
 /// case where the literal stays its canonical shape and resolves
 /// to the default carrier instantiated at the inferred axes.
-/// `Other` carries everything the synthesis path needs to mint a
-/// `MethodCall` receiver (`<name>` ident at `<ident_span>`).
+/// `Other` carries the receiver path and instantiated protocol
+/// arguments for the synthesis path.
 pub(super) enum LiteralCarrier {
     Default,
-    Other { name: String, ident_span: Span },
+    Other {
+        ident_span: Span,
+        path: Vec<String>,
+        protocol_args: Vec<ResolvedType>,
+    },
+}
+
+impl LiteralCarrier {
+    pub(super) fn protocol_args(&self) -> Option<&[ResolvedType]> {
+        match self {
+            Self::Default => None,
+            Self::Other { protocol_args, .. } => Some(protocol_args),
+        }
+    }
 }
 
 /// Read a `Global.<name>` registry id, or `None` if the autoimport
@@ -92,7 +99,7 @@ pub(super) fn pick_carrier(
 ) -> LiteralCarrier {
     let Some(ResolvedType::Named {
         resolution: Resolution::Global(id),
-        ..
+        type_args,
     }) = expected
     else {
         return LiteralCarrier::Default;
@@ -103,16 +110,24 @@ pub(super) fn pick_carrier(
     let Some(protocol_id) = lookup_global_id(resolver, spec.protocol_name) else {
         return LiteralCarrier::Default;
     };
-    if !resolver.registry.conforms_any(*id, protocol_id) {
+    let Some(protocol_args) = resolver
+        .registry
+        .conformance_args(*id, protocol_id, type_args)
+    else {
         return LiteralCarrier::Default;
-    }
+    };
     let entry = match resolver.registry.get(*id) {
         Some(entry) => entry,
         None => return LiteralCarrier::Default,
     };
+    let mut path = entry.identifier.path().to_vec();
+    if !entry.identifier.is_in_global() && !entry.identifier.is_in_package(resolver.package) {
+        path.insert(0, entry.identifier.package().to_string());
+    }
     LiteralCarrier::Other {
-        name: entry.identifier.last().to_string(),
         ident_span: entry.span,
+        path,
+        protocol_args,
     }
 }
 
@@ -153,16 +168,12 @@ pub(super) fn dispatch_via_carrier(
             expr.kind = inner_kind;
             inner_resolution
         }
-        LiteralCarrier::Other { name, ident_span } => {
+        LiteralCarrier::Other {
+            ident_span, path, ..
+        } => {
             let mut inner = Expr::new(inner_kind, span);
             inner.resolution = inner_resolution;
-            let receiver = Expr::new(
-                ExprKind::Ident {
-                    name: name.clone(),
-                    resolution: Resolution::Unresolved,
-                },
-                *ident_span,
-            );
+            let receiver = static_receiver(path, *ident_span);
             expr.kind = ExprKind::MethodCall {
                 receiver: Box::new(receiver),
                 method: spec.from_method.to_string(),
@@ -183,6 +194,30 @@ pub(super) fn dispatch_via_carrier(
             resolve_method_call_expr(expr, *expected, resolver, diagnostics)
         }
     }
+}
+
+fn static_receiver(path: &[String], span: Span) -> Expr {
+    let Some((first, rest)) = path.split_first() else {
+        unreachable!("literal carrier target has an empty identifier path");
+    };
+    rest.iter().fold(
+        Expr::new(
+            ExprKind::Ident {
+                name: first.clone(),
+                resolution: Resolution::Unresolved,
+            },
+            span,
+        ),
+        |receiver, field| {
+            Expr::new(
+                ExprKind::FieldAccess {
+                    receiver: Box::new(receiver),
+                    field: field.clone(),
+                },
+                span,
+            )
+        },
+    )
 }
 
 /// Diagnostic helper: emit "{spec.missing_root_label} requires

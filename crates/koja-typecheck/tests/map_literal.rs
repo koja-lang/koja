@@ -96,3 +96,43 @@ fn map_literal_typed_binding_pins_entry_types() {
     assert_eq!(entries.len(), 2);
     assert_eq!(value.resolution, map_named_type(&checked, "String", "Int"));
 }
+
+#[test]
+fn non_generic_carrier_receives_ordered_entry_list() {
+    let source = "
+        struct Entries
+          values: List<(String, Int)>
+        end
+
+        impl MapLiteral<String, Int> for Entries
+          fn from_entries(entries: List<(String, Int)>) -> Self
+            Entries{values: entries}
+          end
+        end
+
+        entries: Entries = [\"a\": 1, \"a\": 2]
+        entries
+        ";
+    let checked = typecheck(&dedent(source));
+    let assignment = script_body(&checked).first().expect("missing assignment");
+    let Statement::Assignment { value, .. } = assignment else {
+        panic!("expected Statement::Assignment, got {assignment:?}");
+    };
+    let ExprKind::MethodCall { method, args, .. } = &value.kind else {
+        panic!("expected MapLiteral carrier call, got {:?}", value.kind);
+    };
+    assert_eq!(method, "from_entries");
+    let ExprKind::List { elements } = &args[0].value.kind else {
+        panic!(
+            "expected an ordered entry list, got {:?}",
+            args[0].value.kind
+        );
+    };
+    assert_eq!(elements.len(), 2);
+    assert!(
+        elements
+            .iter()
+            .all(|entry| matches!(entry.kind, ExprKind::Tuple { .. })),
+        "each source entry must remain an ordered tuple",
+    );
+}

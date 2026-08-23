@@ -472,6 +472,25 @@ impl GlobalRegistry {
         self.lookup_conformance_with(target_id, protocol_id, target_args, None, None)
     }
 
+    /// The protocol arguments of the conformance that covers one
+    /// target instantiation, with the target's type arguments substituted.
+    pub fn conformance_args(
+        &self,
+        target_id: GlobalRegistryId,
+        protocol_id: GlobalRegistryId,
+        target_args: &[ResolvedType],
+    ) -> Option<Vec<ResolvedType>> {
+        let conformance = self.lookup_conformance(target_id, protocol_id, target_args)?;
+        let substitution = crate::pipeline::unify::Substitution::from_args(target_id, target_args);
+        Some(
+            conformance
+                .protocol_args
+                .iter()
+                .map(|arg| crate::pipeline::unify::substitute(arg, &substitution))
+                .collect(),
+        )
+    }
+
     /// Like [`Self::lookup_conformance`], with an impl-local
     /// [`BoundOverlay`] so obligations raised inside a conditional
     /// impl body can discharge through the impl's own condition.

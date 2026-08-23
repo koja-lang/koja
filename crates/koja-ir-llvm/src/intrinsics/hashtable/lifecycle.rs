@@ -1,6 +1,4 @@
-//! Allocate / inspect emitters: `new`, `length`, `empty?`, and the
-//! `from_map` identity. None of these touch the probe loop: they
-//! either mint a fresh buffer pair or peek at the table fields.
+//! Allocate and inspect emitters for `new`, `length`, and `empty?`.
 
 use inkwell::IntPredicate;
 use inkwell::values::FunctionValue;
@@ -10,11 +8,10 @@ use crate::ctx::EmitContext;
 use crate::error::{IceExt, LlvmError};
 use crate::runtime::{declare_malloc_extern, declare_memset_extern};
 
+use super::INITIAL_CAPACITY;
 use super::util::{
-    TableSnapshot, build_table_struct, call_malloc, clone_table_buffers, extract_int,
-    extract_pointer, nth_hashtable, ret_basic, ret_struct,
+    build_table_struct, call_malloc, extract_int, nth_hashtable, ret_basic, ret_struct,
 };
-use super::{HashtableLayout, INITIAL_CAPACITY};
 
 /// `fn new() -> Self`: allocate the entries + states buffers and
 /// initialize state to `EMPTY`. Same shape for `Map.new` and
@@ -77,32 +74,4 @@ pub(crate) fn emit_empty_q<'ctx>(
         .build_int_compare(IntPredicate::EQ, len, i64_ty.const_zero(), "is_empty")
         .or_ice()?;
     ret_basic(ctx, is_empty.into())
-}
-
-/// Identity-shaped intrinsics: `Map.from_map(self) -> Self` and
-/// `Set.from_set(self) -> Self`. Value-wise an identity, but `self` is
-/// borrowed and dropped by the caller, so the result must own
-/// independent buffers, cloned rather than aliasing `self`'s.
-pub(crate) fn emit_identity<'ctx>(
-    ctx: &EmitContext<'ctx>,
-    function: &IRFunction,
-    llvm_function: FunctionValue<'ctx>,
-    layout: &HashtableLayout<'_>,
-) -> Result<(), LlvmError> {
-    let self_val = nth_hashtable(function, llvm_function, 0, "self")?;
-    let original = TableSnapshot {
-        entries_ptr: extract_pointer(ctx, self_val, 0, "entries")?,
-        states_ptr: extract_pointer(ctx, self_val, 1, "states")?,
-        length: extract_int(ctx, self_val, 2, "len")?,
-        capacity: extract_int(ctx, self_val, 3, "cap")?,
-    };
-    let cloned = clone_table_buffers(ctx, llvm_function, layout, &original)?;
-    let result = build_table_struct(
-        ctx,
-        cloned.entries_ptr,
-        cloned.states_ptr,
-        cloned.length,
-        cloned.capacity,
-    )?;
-    ret_struct(ctx, result)
 }

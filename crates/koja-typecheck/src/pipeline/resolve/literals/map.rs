@@ -1,39 +1,34 @@
-//! `["k1": v1, "k2": v2]` resolution. Mirrors [`super::list`]:
-//! the literal's *value type* is always `Map<K, V>`, and the
-//! surrounding hint chooses which `MapLiteral<K, V>` conformer
-//! the value flows into.
+//! `["k1": v1, "k2": v2]` resolution. The surrounding hint chooses
+//! which `MapLiteral<K, V>` conformer receives the entries.
 //!
 //! - No hint, or hint is `Map<K, V>`: the literal stays
 //!   [`ExprKind::Map`] on the sealed AST and stamps
-//!   `expr.resolution = Map<K, V>`. (`Map<K, V>` itself implements
-//!   `MapLiteral<K, V>` as the trivial identity, so no `from_map`
-//!   wrap is needed.)
-//! - Hint is some `X<K, V>` that has an `impl MapLiteral<K, V> for
-//!   X<K, V>` in the registry: the outer expression is rewritten
-//!   in-place into a synthesized `X.from_map(["k": v, ...])`
-//!   method call. The inner literal keeps `ExprKind::Map` and
-//!   stamps `Map<K, V>`, the outer rewritten node stamps `X<K, V>`
-//!   and dispatches through the normal method-call resolver.
+//!   `expr.resolution = Map<K, V>`. IR lowering builds the map
+//!   directly without an entry-list allocation.
+//! - Hint is some `X` that has an `impl MapLiteral<K, V> for X` in
+//!   the registry: the outer expression is rewritten in-place into
+//!   a synthesized `X.from_entries([("k", v), ...])` method call.
+//!   The ordered entry list preserves source order and duplicate keys.
 //!
 //! Carrier mechanics live in [`super::carrier`]. This file only
 //! owns map-literal-specific work (entry-take, key/value-type
 //! inference).
 
 use koja_ast::ast::{Diagnostic, Expr, ExprKind};
-use koja_ast::identifier::{Resolution, ResolvedType};
+use koja_ast::identifier::{AnonymousKind, Resolution, ResolvedType};
 
 use super::super::ctx::Resolver;
 use super::super::expr::resolve_expr_with_expected;
 use super::axis::{AxisLabel, infer_axis};
 use super::carrier::{
-    CarrierSpec, Dispatch, dispatch_via_carrier, lookup_global_id, missing_root_diagnostic,
-    pick_carrier,
+    CarrierSpec, Dispatch, LiteralCarrier, dispatch_via_carrier, lookup_global_id,
+    missing_root_diagnostic, pick_carrier,
 };
 
 const SPEC: CarrierSpec = CarrierSpec {
     root_name: "Map",
     protocol_name: "MapLiteral",
-    from_method: "from_map",
+    from_method: "from_entries",
     missing_root_label: "map literal `[k: v, ...]`",
 };
 
@@ -67,7 +62,7 @@ pub(in super::super) fn resolve_map_literal(
     };
 
     let carrier = pick_carrier(expected, map_id, &SPEC, resolver);
-    let (key_hint, value_hint) = entry_hints(expected);
+    let (key_hint, value_hint) = entry_hints(&carrier, expected);
 
     let mut entries = take_entries(&mut expr.kind);
     for (key, value) in entries.iter_mut() {
@@ -102,13 +97,49 @@ pub(in super::super) fn resolve_map_literal(
 
     let map_ty = ResolvedType::Named {
         resolution: Resolution::Global(map_id),
-        type_args: vec![key_ty, value_ty],
+        type_args: vec![key_ty.clone(), value_ty.clone()],
+    };
+
+    if matches!(&carrier, LiteralCarrier::Default) {
+        expr.kind = ExprKind::Map { entries };
+        return map_ty;
+    }
+
+    let Some(list_id) = lookup_global_id(resolver, "List") else {
+        diagnostics.push(Diagnostic::error(
+            "map literal carriers require `Global.List` to be autoimported",
+            span,
+        ));
+        expr.kind = ExprKind::Map { entries };
+        return ResolvedType::unresolved();
+    };
+    let tuple_ty = ResolvedType::Anonymous(AnonymousKind::Tuple {
+        elements: vec![key_ty, value_ty],
+    });
+    let entry_exprs = entries
+        .into_iter()
+        .map(|(key, value)| {
+            let mut entry = Expr::new(
+                ExprKind::Tuple {
+                    elements: vec![key, value],
+                },
+                span,
+            );
+            entry.resolution = tuple_ty.clone();
+            entry
+        })
+        .collect();
+    let entries_ty = ResolvedType::Named {
+        resolution: Resolution::Global(list_id),
+        type_args: vec![tuple_ty],
     };
 
     dispatch_via_carrier(
         expr,
-        ExprKind::Map { entries },
-        map_ty,
+        ExprKind::List {
+            elements: entry_exprs,
+        },
+        entries_ty,
         &Dispatch {
             expected,
             carrier,
@@ -122,9 +153,18 @@ pub(in super::super) fn resolve_map_literal(
 /// Pull `(K, V)` out of `expected.type_args[0..2]` when each slot
 /// is fully resolved. Used as the per-axis hint flowing into
 /// per-entry resolution.
-fn entry_hints(expected: Option<&ResolvedType>) -> (Option<ResolvedType>, Option<ResolvedType>) {
-    let Some(ResolvedType::Named { type_args, .. }) = expected else {
-        return (None, None);
+fn entry_hints(
+    carrier: &LiteralCarrier,
+    expected: Option<&ResolvedType>,
+) -> (Option<ResolvedType>, Option<ResolvedType>) {
+    let type_args = match carrier.protocol_args() {
+        Some(args) => args,
+        None => {
+            let Some(ResolvedType::Named { type_args, .. }) = expected else {
+                return (None, None);
+            };
+            type_args
+        }
     };
     let key = type_args.first().filter(|t| t.is_resolved()).cloned();
     let value = type_args.get(1).filter(|t| t.is_resolved()).cloned();
