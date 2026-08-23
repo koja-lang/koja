@@ -1,4 +1,4 @@
-use koja_ast::ast::{AnnotationKind, FunctionOrigin as AstFunctionOrigin, Item};
+use koja_ast::ast::{AnnotationKind, Item};
 use koja_ast::identifier::Identifier;
 use koja_ast::util::dedent;
 use koja_typecheck::{FunctionOrigin, GlobalKind};
@@ -83,7 +83,7 @@ fn expands_each_default_arity_and_resolves_calls() {
             Item::Function(function)
                 if matches!(
                     function.origin,
-                    AstFunctionOrigin::DefaultAdapter { canonical_arity: 3 }
+                    FunctionOrigin::DefaultAdapter { canonical_arity: 3 }
                 ) =>
             {
                 Some(function.params.len())

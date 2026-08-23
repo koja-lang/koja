@@ -227,3 +227,22 @@ fn named_args_diagnoses() {
         "one diagnostic per named arg; got {messages:?}"
     );
 }
+
+#[test]
+fn package_constant_called_as_function_diagnoses() {
+    let failure = common::check_packages(
+        &[
+            ("Lib", "lib.koja", "const answer = 42\n"),
+            ("TestApp", "main.kojs", "Lib.answer()\n"),
+        ],
+        koja_parser::ParseMode::Script,
+    )
+    .expect_err("calling a constant must fail");
+    let messages = diagnostic_messages(&failure);
+    assert!(
+        messages
+            .iter()
+            .any(|m| m.contains("cannot call `Lib.answer` because it is a constant")),
+        "expected constant-callee diagnostic, got {messages:?}",
+    );
+}

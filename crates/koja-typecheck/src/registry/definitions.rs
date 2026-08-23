@@ -12,7 +12,7 @@
 
 use std::collections::BTreeMap;
 
-use koja_ast::ast::Expr;
+use koja_ast::ast::{Expr, FunctionOrigin};
 use koja_ast::identifier::{GlobalRegistryId, ResolvedType};
 
 /// The compiler-provided representation behind a `builtin` type
@@ -229,7 +229,7 @@ pub struct FunctionSignature {
 ///
 /// `signature` is `None` after collect and `Some` after signature
 /// lifting. The arity and origin are fixed when collect registers the
-/// function.
+/// function. `origin` reuses the AST's [`FunctionOrigin`] unchanged.
 #[derive(Clone, Debug)]
 pub struct FunctionDefinition {
     /// Declared arity, including `self`.
@@ -238,12 +238,6 @@ pub struct FunctionDefinition {
     pub origin: FunctionOrigin,
     /// Lifted callable shape.
     pub signature: Option<FunctionSignature>,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum FunctionOrigin {
-    DefaultAdapter { canonical_arity: usize },
-    Explicit,
 }
 
 /// Field layout + protocol conformances for a user-declared struct.

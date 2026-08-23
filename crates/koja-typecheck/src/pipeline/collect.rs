@@ -25,9 +25,8 @@
 
 use koja_ast::ast::{
     Annotation, AnnotationKind, BuiltinDecl, Constant, Diagnostic, EnumDecl, ExtendBlock, File,
-    Function, FunctionOrigin as AstFunctionOrigin, ImplBlock, ImplMember, Item, Param,
-    ProtocolDecl, ProtocolMethod, StructDecl, TypeAlias, TypeExpr, TypeParam, Visibility,
-    is_intrinsic,
+    Function, ImplBlock, ImplMember, Item, Param, ProtocolDecl, ProtocolMethod, StructDecl,
+    TypeAlias, TypeExpr, TypeParam, Visibility, is_intrinsic,
 };
 use koja_ast::identifier::{GlobalRegistryId, Identifier};
 use koja_ast::labels::type_expr_span;
@@ -35,9 +34,7 @@ use koja_ast::span::Span;
 
 use crate::pipeline::visibility::check_reference_visibility;
 use crate::program::CheckedPackage;
-use crate::registry::{
-    ClaimOutcome, FunctionOrigin, GlobalKind, GlobalRegistry, InsertOutcome, VisibilityScope,
-};
+use crate::registry::{ClaimOutcome, GlobalKind, GlobalRegistry, InsertOutcome, VisibilityScope};
 
 /// Pass 1 of collect: register every named decl (functions,
 /// structs, enums, protocols, constants, type aliases) so that
@@ -269,16 +266,10 @@ fn register_function_with_identifier(
     let deprecation = deprecation_message(&function.annotations, diagnostics);
     let type_params = type_param_names(&function.type_params);
     let visibility = function_visibility_scope(function.visibility, owner_type);
-    let origin = match function.origin {
-        AstFunctionOrigin::Explicit => FunctionOrigin::Explicit,
-        AstFunctionOrigin::DefaultAdapter { canonical_arity } => {
-            FunctionOrigin::DefaultAdapter { canonical_arity }
-        }
-    };
     match registry.insert_function(
         identifier,
         function.params.len(),
-        origin,
+        function.origin,
         function.span,
         type_params,
         visibility,

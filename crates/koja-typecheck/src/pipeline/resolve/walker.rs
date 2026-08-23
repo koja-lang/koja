@@ -30,7 +30,7 @@ use crate::pipeline::aliases::collect_file_aliases;
 use crate::pipeline::collect::nominal_target_path;
 use crate::pipeline::lift_signatures::{ResolutionScope, resolve_target_bounds};
 use crate::pipeline::local_scope::LocalScope;
-use crate::registry::{BoundOverlay, FunctionSignature, GlobalKind, GlobalRegistry};
+use crate::registry::{BoundOverlay, FunctionSignature, GlobalRegistry};
 
 use super::ctx::{Resolver, ResolverEnv};
 use super::error_channel::{
@@ -336,10 +336,9 @@ fn lifted_signature<'a>(
     registry: &'a GlobalRegistry,
 ) -> Option<&'a FunctionSignature> {
     let (_, entry) = registry.lookup_function(identifier, arity)?;
-    match &entry.kind {
-        GlobalKind::Function(definition) => definition.signature.as_ref(),
-        _ => None,
-    }
+    entry
+        .function_definition()
+        .and_then(|definition| definition.signature.as_ref())
 }
 
 /// Pre-populate `scope` with the function's params (each a fresh

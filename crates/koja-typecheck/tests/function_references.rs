@@ -481,3 +481,24 @@ fn named_reference_preserves_deprecation_warning() {
             .any(|warning| warning.contains("`old_value` is deprecated"))
     );
 }
+
+#[test]
+fn reference_to_non_function_declaration_diagnoses() {
+    assert_file_fails_with(
+        &dedent(
+            r#"
+            struct Outer
+              struct Inner
+                x: Int
+              end
+
+              fn make() -> Int
+                f = &Inner/1
+                1
+              end
+            end
+            "#,
+        ),
+        &["`&Inner/1` does not name a function because `TestApp.Outer.Inner` is a struct"],
+    );
+}

@@ -390,23 +390,17 @@ fn seed_receiver_args(
 }
 
 pub(super) fn function_signature(entry: &RegistryEntry) -> Result<&FunctionSignature, Diagnostic> {
-    match &entry.kind {
-        GlobalKind::Function(definition) => definition.signature.as_ref().ok_or_else(|| {
-            panic!(
-                "resolve method call found function `{}` without a lifted signature. \
-                 lift_signatures must run before resolve",
-                entry.identifier,
-            )
-        }),
-        other => Err(Diagnostic::error(
+    if entry.function_definition().is_none() {
+        return Err(Diagnostic::error(
             format!(
                 "cannot call `{}` because it is a {}, not a function",
                 entry.identifier,
-                other.label(),
+                entry.kind.label(),
             ),
             entry.span,
-        )),
+        ));
     }
+    Ok(entry.expect_function_signature())
 }
 
 pub(super) fn method_lookup_message(

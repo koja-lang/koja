@@ -10,9 +10,8 @@
 use std::collections::HashMap;
 
 use koja_ast::ast::{
-    Diagnostic, Expr, ExprKind, ExtendBlock, Function, FunctionOrigin as AstFunctionOrigin,
-    ImplBlock, ImplMember, MatchArm, Param, Pattern, ProtocolMethod, Statement, StringPart,
-    TypeExpr, TypeParam, Visibility,
+    Diagnostic, Expr, ExprKind, ExtendBlock, Function, ImplBlock, ImplMember, MatchArm, Param,
+    Pattern, ProtocolMethod, Statement, StringPart, TypeExpr, TypeParam, Visibility,
 };
 use koja_ast::identifier::{GlobalRegistryId, Identifier, Resolution, ResolvedType};
 use koja_ast::span::Span;
@@ -21,9 +20,8 @@ use crate::pipeline::collect::nominal_target_path;
 use crate::pipeline::resolve::types::types_equivalent;
 use crate::pipeline::unify::{Substitution, substitute};
 use crate::registry::{
-    Conformance, ConformanceScope, Dispatch, FunctionOrigin, GlobalKind, GlobalRegistry,
-    InsertOutcome, ProtocolDefinition, ResolvedProtocolBound, ResolvedProtocolMethod,
-    VisibilityScope,
+    Conformance, ConformanceScope, Dispatch, GlobalKind, GlobalRegistry, InsertOutcome,
+    ProtocolDefinition, ResolvedProtocolBound, ResolvedProtocolMethod, VisibilityScope,
 };
 
 use super::LiftScope;
@@ -868,12 +866,7 @@ fn synthesize_default_method(
         scope.registry.insert_function(
             method_identifier.clone(),
             function.params.len(),
-            match function.origin {
-                AstFunctionOrigin::Explicit => FunctionOrigin::Explicit,
-                AstFunctionOrigin::DefaultAdapter { canonical_arity } => {
-                    FunctionOrigin::DefaultAdapter { canonical_arity }
-                }
-            },
+            function.origin,
             function.span,
             type_params,
             VisibilityScope::Public,
@@ -1310,10 +1303,10 @@ fn check_impl_method_signature(
     else {
         return;
     };
-    let GlobalKind::Function(definition) = &entry.kind else {
-        return;
-    };
-    let Some(actual) = &definition.signature else {
+    let Some(actual) = entry
+        .function_definition()
+        .and_then(|definition| definition.signature.as_ref())
+    else {
         return;
     };
     if expected.dispatch != actual.dispatch {

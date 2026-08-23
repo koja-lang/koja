@@ -83,12 +83,7 @@ pub(super) fn monomorphize(
             enqueue_member_methods(inst, registry, function_index, output);
         }
         GlobalKind::Function(definition) => {
-            let Some(signature) = &definition.signature else {
-                panic!(
-                    "monomorphize: function `{}` has no lifted signature",
-                    entry.identifier
-                );
-            };
+            let signature = entry.expect_function_signature();
             // Three flavors share this arm:
             //
             // - Top-level generic function (`fn id<T>(x: T)`): `template ==

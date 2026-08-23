@@ -396,9 +396,8 @@ fn lookup_sibling_method(
     registry: &GlobalRegistry,
 ) -> Option<GlobalRegistryId> {
     let entry = registry.get(receiver_id)?;
-    let mut path = entry.identifier.path().to_vec();
-    path.push(method.to_string());
-    let identifier = Identifier::new(entry.identifier.package(), path);
+    let identifier =
+        Identifier::member(entry.identifier.package(), entry.identifier.path(), method);
     registry.lookup_function(&identifier, 1).map(|(id, _)| id)
 }
 

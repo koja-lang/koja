@@ -521,14 +521,7 @@ pub(super) fn function_definition<'a>(
     arity: usize,
 ) -> Option<&'a FunctionDefinition> {
     let (_, entry) = registry.lookup_function(identifier, arity)?;
-    match &entry.kind {
-        GlobalKind::Function(definition) => Some(definition),
-        other => panic!(
-            "IR lower: function `{identifier}/{arity}` has no lifted definition \
-             ({}), lift_signatures invariant violation",
-            other.label(),
-        ),
-    }
+    Some(entry.expect_function_definition())
 }
 
 /// Translate a typecheck [`ResolvedType`] to a concrete [`IRType`].

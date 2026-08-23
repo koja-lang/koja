@@ -6,9 +6,10 @@ use koja_ast::span::Span;
 
 use crate::pipeline::visibility::check_reference_visibility;
 use crate::registry::{
-    FunctionSignature, GlobalKind, GlobalRegistry, RegistryEntry, VisibilityScope,
+    FunctionLookup, FunctionSignature, GlobalKind, GlobalRegistry, RegistryEntry, VisibilityScope,
 };
 
+use super::calls::closest_arity;
 use super::ctx::Resolver;
 use super::paths::{PackageMember, lookup_package_member, static_dotted_path};
 use super::types::lookup_type;
@@ -171,18 +172,7 @@ pub(super) fn resolve_named_function_reference(
         ));
         return ResolvedType::unresolved();
     }
-    let GlobalKind::Function(definition) = &entry.kind else {
-        panic!(
-            "named function reference `{}` resolved to a non-function",
-            entry.identifier
-        );
-    };
-    let Some(signature) = &definition.signature else {
-        panic!(
-            "named function reference `{}` has no lifted signature",
-            entry.identifier
-        );
-    };
+    let signature = entry.expect_function_signature();
     *target = Resolution::Global(id);
     function_value_type(signature)
 }
@@ -197,38 +187,47 @@ fn resolve_bare_reference<'a>(
     let name = &path[0];
     if let Some(enclosing) = resolver.enclosing_type {
         let identifier = Identifier::member(resolver.package, enclosing, name);
-        if let Some(found) = select_exact_function(
-            &identifier,
-            name,
-            arity,
-            resolver.registry,
-            span,
-            diagnostics,
-        ) {
-            return found;
-        }
-        if resolver.registry.lookup(&identifier).is_some() {
-            return None;
+        match resolver.registry.function_lookup(&identifier, arity) {
+            FunctionLookup::Found(id, entry) => return Some((id, entry)),
+            FunctionLookup::WrongArity(arities) => {
+                diagnose_wrong_arity_reference(
+                    &identifier,
+                    name,
+                    arity,
+                    &arities,
+                    span,
+                    diagnostics,
+                );
+                return None;
+            }
+            FunctionLookup::NoFunctions => {
+                if let Some((_, entry)) = resolver.registry.lookup(&identifier) {
+                    diagnose_non_function_reference(name, arity, entry, span, diagnostics);
+                    return None;
+                }
+            }
         }
     }
     let identifier = Identifier::new(resolver.package, path.to_vec());
-    select_exact_function(
-        &identifier,
-        name,
-        arity,
-        resolver.registry,
-        span,
-        diagnostics,
-    )
-    .unwrap_or_else(|| {
-        if resolver.registry.lookup(&identifier).is_none() {
-            diagnostics.push(Diagnostic::error(
-                format!("unknown named function reference `&{name}/{arity}`"),
-                span,
-            ));
+    match resolver.registry.function_lookup(&identifier, arity) {
+        FunctionLookup::Found(id, entry) => Some((id, entry)),
+        FunctionLookup::WrongArity(arities) => {
+            diagnose_wrong_arity_reference(&identifier, name, arity, &arities, span, diagnostics);
+            None
         }
-        None
-    })
+        FunctionLookup::NoFunctions => {
+            match resolver.registry.lookup(&identifier) {
+                Some((_, entry)) => {
+                    diagnose_non_function_reference(name, arity, entry, span, diagnostics)
+                }
+                None => diagnostics.push(Diagnostic::error(
+                    format!("unknown named function reference `&{name}/{arity}`"),
+                    span,
+                )),
+            }
+            None
+        }
+    }
 }
 
 fn resolve_qualified_reference<'a>(
@@ -256,15 +255,20 @@ fn resolve_qualified_reference<'a>(
         }
         let identifier =
             Identifier::member(owner.identifier.package(), owner.identifier.path(), member);
-        if let Some(found) = select_exact_function(
-            &identifier,
-            &label,
-            arity,
-            resolver.registry,
-            span,
-            diagnostics,
-        ) {
-            return found;
+        match resolver.registry.function_lookup(&identifier, arity) {
+            FunctionLookup::Found(id, entry) => return Some((id, entry)),
+            FunctionLookup::WrongArity(arities) => {
+                diagnose_wrong_arity_reference(
+                    &identifier,
+                    &label,
+                    arity,
+                    &arities,
+                    span,
+                    diagnostics,
+                );
+                return None;
+            }
+            FunctionLookup::NoFunctions => {}
         }
         if let GlobalKind::Protocol(Some(definition)) = &owner.kind
             && definition
@@ -282,14 +286,17 @@ fn resolve_qualified_reference<'a>(
             ));
             return None;
         }
-        if resolver.registry.lookup(&identifier).is_none() {
-            diagnostics.push(Diagnostic::error(
+        match resolver.registry.lookup(&identifier) {
+            Some((_, entry)) => {
+                diagnose_non_function_reference(&label, arity, entry, span, diagnostics)
+            }
+            None => diagnostics.push(Diagnostic::error(
                 format!(
                     "type `{}` has no function `{member}` with arity {arity}",
                     owner.identifier
                 ),
                 span,
-            ));
+            )),
         }
         return None;
     }
@@ -297,26 +304,35 @@ fn resolve_qualified_reference<'a>(
     if path.len() == 2 {
         let identifier = Identifier::new(&path[0], vec![member.clone()]);
         if resolver.registry.iter_in_package(&path[0]).next().is_some() {
-            return select_exact_function(
-                &identifier,
-                &label,
-                arity,
-                resolver.registry,
-                span,
-                diagnostics,
-            )
-            .unwrap_or_else(|| {
-                if resolver.registry.lookup(&identifier).is_none() {
-                    diagnostics.push(Diagnostic::error(
-                        format!(
-                            "package `{}` has no function `{member}` with arity {arity}",
-                            path[0]
-                        ),
+            return match resolver.registry.function_lookup(&identifier, arity) {
+                FunctionLookup::Found(id, entry) => Some((id, entry)),
+                FunctionLookup::WrongArity(arities) => {
+                    diagnose_wrong_arity_reference(
+                        &identifier,
+                        &label,
+                        arity,
+                        &arities,
                         span,
-                    ));
+                        diagnostics,
+                    );
+                    None
                 }
-                None
-            });
+                FunctionLookup::NoFunctions => {
+                    match resolver.registry.lookup(&identifier) {
+                        Some((_, entry)) => {
+                            diagnose_non_function_reference(&label, arity, entry, span, diagnostics)
+                        }
+                        None => diagnostics.push(Diagnostic::error(
+                            format!(
+                                "package `{}` has no function `{member}` with arity {arity}",
+                                path[0]
+                            ),
+                            span,
+                        )),
+                    }
+                    None
+                }
+            };
         }
     }
 
@@ -330,30 +346,40 @@ fn resolve_qualified_reference<'a>(
     None
 }
 
-fn select_exact_function<'a>(
+/// Diagnose `&label/arity` when functions exist under the name but
+/// none at the requested arity.
+fn diagnose_wrong_arity_reference(
     identifier: &Identifier,
     label: &str,
     arity: usize,
-    registry: &'a GlobalRegistry,
+    arities: &[usize],
     span: Span,
     diagnostics: &mut Vec<Diagnostic>,
-) -> Option<Option<(koja_ast::identifier::GlobalRegistryId, &'a RegistryEntry)>> {
-    if let Some(found) = registry.lookup_function(identifier, arity) {
-        return Some(Some(found));
-    }
-    let arities = registry.function_arities(identifier);
-    if arities.is_empty() {
-        return None;
-    }
+) {
     diagnostics.push(Diagnostic::error_with_hint(
         format!("function `{identifier}` has no arity {arity}"),
+        format!("did you mean `&{label}/{}`?", closest_arity(arities, arity)),
+        span,
+    ));
+}
+
+/// Diagnose `&label/arity` when the name resolves to a non-function
+/// declaration (a struct, constant, nested type, ...).
+fn diagnose_non_function_reference(
+    label: &str,
+    arity: usize,
+    entry: &RegistryEntry,
+    span: Span,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    diagnostics.push(Diagnostic::error(
         format!(
-            "did you mean `&{label}/{}`?",
-            closest_arity(&arities, arity)
+            "`&{label}/{arity}` does not name a function because `{}` is a {}",
+            entry.identifier,
+            entry.kind.label(),
         ),
         span,
     ));
-    Some(None)
 }
 
 fn diagnose_explicit_reference(
@@ -403,14 +429,6 @@ fn check_function_reference_visibility(
             ));
         }
     }
-}
-
-fn closest_arity(arities: &[usize], requested: usize) -> usize {
-    arities
-        .iter()
-        .copied()
-        .min_by_key(|arity| (arity.abs_diff(requested), *arity))
-        .expect("closest_arity requires at least one arity")
 }
 
 fn function_value_type(signature: &FunctionSignature) -> ResolvedType {

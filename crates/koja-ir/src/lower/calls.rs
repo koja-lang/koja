@@ -8,9 +8,7 @@ use koja_ast::ast::{Arg, Expr, ExprKind};
 use koja_ast::identifier::{
     AnonymousKind, GlobalRegistryId, Identifier, LocalId, Resolution, ResolvedType,
 };
-use koja_typecheck::{
-    Dispatch, FunctionSignature, GlobalKind, GlobalRegistry, RegistryEntry, peel_alias,
-};
+use koja_typecheck::{Dispatch, GlobalKind, GlobalRegistry, peel_alias};
 
 use super::ctx::{FnLowerCtx, LowerOutput};
 use super::expr::lower_expr;
@@ -72,8 +70,8 @@ pub(super) fn lower_call(
              (seal invariant violation)",
         )
     });
-    let signature = function_signature_from_entry(entry);
-    let definition = function_definition_from_entry(entry);
+    let signature = entry.expect_function_signature();
+    let definition = entry.expect_function_definition();
     let template_symbol = source_function_symbol(&entry.identifier, definition.arity);
     let (callee_symbol, return_ty) = if type_args.is_empty() {
         let return_ty =
@@ -313,9 +311,8 @@ pub(super) fn synthesized_method_target(
     let owner = registry
         .get(owner_id)
         .unwrap_or_else(|| panic!("IR lower: synthesized method owner id `{owner_id}` is missing"));
-    let mut path = owner.identifier.path().to_vec();
-    path.push(method.to_string());
-    let identifier = Identifier::new(owner.identifier.package(), path);
+    let identifier =
+        Identifier::member(owner.identifier.package(), owner.identifier.path(), method);
     let (id, _) = registry
         .lookup_function(&identifier, arity)
         .unwrap_or_else(|| {
@@ -382,9 +379,11 @@ pub(super) fn lower_method_call(
     let method_id = if let Resolution::Global(method_id) = target {
         method_id
     } else {
-        let mut path = struct_entry.identifier.path().to_vec();
-        path.push(method.to_string());
-        let identifier = Identifier::new(struct_entry.identifier.package(), path);
+        let identifier = Identifier::member(
+            struct_entry.identifier.package(),
+            struct_entry.identifier.path(),
+            method,
+        );
         let arity = args.len() + usize::from(dispatch == Dispatch::Instance);
         registry
             .lookup_function(&identifier, arity)
@@ -394,8 +393,8 @@ pub(super) fn lower_method_call(
     let method_entry = registry.get(method_id).unwrap_or_else(|| {
         panic!("IR lower: method target id `{method_id}` is missing from the registry")
     });
-    let definition = function_definition_from_entry(method_entry);
-    let signature = function_signature_from_entry(method_entry);
+    let definition = method_entry.expect_function_definition();
+    let signature = method_entry.expect_function_signature();
 
     let (callee_symbol, return_ty) = if receiver_type_args.is_empty() && method_type_args.is_empty()
     {
@@ -525,9 +524,11 @@ pub(super) fn conformance_method_symbol(
              registry (seal invariant violation)",
         )
     });
-    let mut method_path = struct_entry.identifier.path().to_vec();
-    method_path.push(method.to_string());
-    let method_identifier = Identifier::new(struct_entry.identifier.package(), method_path);
+    let method_identifier = Identifier::member(
+        struct_entry.identifier.package(),
+        struct_entry.identifier.path(),
+        method,
+    );
     let (method_id, method_entry) = registry
         .lookup_function(&method_identifier, arity)
         .unwrap_or_else(|| {
@@ -536,14 +537,14 @@ pub(super) fn conformance_method_symbol(
              (typecheck must have validated the call)",
             )
         });
-    let signature = function_signature_from_entry(method_entry);
+    let signature = method_entry.expect_function_signature();
     if type_args.is_empty() {
         let return_ty =
             resolved_type_to_ir_type(&signature.return_type, registry, &mut output.instantiations);
         return (
             source_function_symbol(
                 &method_entry.identifier,
-                function_definition_from_entry(method_entry).arity,
+                method_entry.expect_function_definition().arity,
             ),
             return_ty,
         );
@@ -569,30 +570,6 @@ pub(super) fn conformance_method_symbol(
     let substituted = substitute_resolved_type(&signature.return_type, type_args, struct_id);
     let return_ty = resolved_type_to_ir_type(&substituted, registry, &mut output.instantiations);
     (callee, return_ty)
-}
-
-fn function_signature_from_entry(entry: &RegistryEntry) -> &FunctionSignature {
-    function_definition_from_entry(entry)
-        .signature
-        .as_ref()
-        .unwrap_or_else(|| {
-            panic!(
-                "IR lower: callee `{}` has no lifted signature",
-                entry.identifier
-            )
-        })
-}
-
-fn function_definition_from_entry(entry: &RegistryEntry) -> &koja_typecheck::FunctionDefinition {
-    match &entry.kind {
-        GlobalKind::Function(definition) => definition,
-        other => panic!(
-            "IR lower: callee `{}` resolved to non-function entry ({}), \
-             typecheck seal violation",
-            entry.identifier,
-            other.label(),
-        ),
-    }
 }
 
 /// A bare `Ident` resolving to a struct, enum, or protocol names the

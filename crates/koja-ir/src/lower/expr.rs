@@ -644,16 +644,8 @@ fn lower_fn_as_value(
     let entry = registry.get(function_id).unwrap_or_else(|| {
         panic!("IR lower: fn-as-value id {function_id} missing from registry (seal violation)",)
     });
-    let GlobalKind::Function(definition) = &entry.kind else {
-        panic!(
-            "IR lower: fn-as-value `{name}` (id {function_id}) registers as {}, \
-             typecheck seal violation",
-            entry.kind.label(),
-        );
-    };
-    let sig = definition.signature.as_ref().unwrap_or_else(|| {
-        panic!("IR lower: fn-as-value `{name}` has no lifted signature (seal violation)")
-    });
+    let definition = entry.expect_function_definition();
+    let sig = entry.expect_function_signature();
     if !entry.type_params.is_empty() {
         panic!(
             "IR lower: fn-as-value `{name}` (id {function_id}) is generic, typecheck \

@@ -39,12 +39,12 @@ mod format;
 pub use candidates::{Candidate, CandidateDetail, CandidateKind, KEYWORDS};
 pub use definitions::{
     BoundOverlay, BuiltinDefinition, BuiltinShape, Conformance, ConformanceScope,
-    ConstantDefinition, Dispatch, EnumDefinition, FunctionDefinition, FunctionOrigin,
-    FunctionSignature, ProtocolDefinition, ResolvedEnumVariant, ResolvedParam,
-    ResolvedProtocolBound, ResolvedProtocolMethod, ResolvedStructField, ResolvedVariantData,
-    StructDefinition,
+    ConstantDefinition, Dispatch, EnumDefinition, FunctionDefinition, FunctionSignature,
+    ProtocolDefinition, ResolvedEnumVariant, ResolvedParam, ResolvedProtocolBound,
+    ResolvedProtocolMethod, ResolvedStructField, ResolvedVariantData, StructDefinition,
 };
 pub use format::format_registry;
+pub use koja_ast::ast::FunctionOrigin;
 
 use crate::pipeline::resolve::types::types_equivalent;
 
@@ -133,6 +133,42 @@ pub struct RegistryEntry {
     pub visibility: VisibilityScope,
 }
 
+impl RegistryEntry {
+    /// The function payload, or `None` when the entry is not a function.
+    pub fn function_definition(&self) -> Option<&FunctionDefinition> {
+        match &self.kind {
+            GlobalKind::Function(definition) => Some(definition),
+            _ => None,
+        }
+    }
+
+    /// The function payload of an entry the caller already proved is a
+    /// function (e.g. it came from [`GlobalRegistry::function_lookup`]).
+    pub fn expect_function_definition(&self) -> &FunctionDefinition {
+        self.function_definition().unwrap_or_else(|| {
+            panic!(
+                "`{}` is a {}, not a function",
+                self.identifier,
+                self.kind.label()
+            )
+        })
+    }
+
+    /// The lifted signature of a proven function entry. Panics when
+    /// `lift_signatures` has not stamped the signature yet.
+    pub fn expect_function_signature(&self) -> &FunctionSignature {
+        self.expect_function_definition()
+            .signature
+            .as_ref()
+            .unwrap_or_else(|| {
+                panic!(
+                    "function `{}` has no lifted signature; lift_signatures must run first",
+                    self.identifier
+                )
+            })
+    }
+}
+
 /// Typecheck-internal projection of the AST [`koja_ast::ast::Visibility`]
 /// plus the contextual scope where a `priv` decl appeared. Encoded as
 /// a single enum so illegal states (public-with-owner, private-with-no-
@@ -193,6 +229,16 @@ pub struct GlobalRegistry {
 struct NameEntries {
     functions: BTreeMap<usize, GlobalRegistryId>,
     non_function: Option<GlobalRegistryId>,
+}
+
+/// Outcome of [`GlobalRegistry::function_lookup`].
+pub enum FunctionLookup<'a> {
+    Found(GlobalRegistryId, &'a RegistryEntry),
+    /// No functions exist under this name.
+    NoFunctions,
+    /// Functions exist under this name, but none at the requested
+    /// arity. Carries every declared arity, sorted ascending.
+    WrongArity(Vec<usize>),
 }
 
 impl GlobalRegistry {
@@ -1033,7 +1079,10 @@ impl GlobalRegistry {
     }
 
     /// Reverse lookup: an [`Identifier`] to its id + entry. Used by
-    /// resolve to stamp ids onto AST reference sites.
+    /// resolve to stamp ids onto AST reference sites. A name declared
+    /// only as functions returns the highest arity, so treat the
+    /// result as "some declaration with this name" and use
+    /// [`Self::lookup_function`] to select an exact function identity.
     pub fn lookup(&self, identifier: &Identifier) -> Option<(GlobalRegistryId, &RegistryEntry)> {
         let names = self.by_identifier.get(identifier)?;
         let id = names
@@ -1051,6 +1100,20 @@ impl GlobalRegistry {
     ) -> Option<(GlobalRegistryId, &RegistryEntry)> {
         let id = *self.by_identifier.get(identifier)?.functions.get(&arity)?;
         Some((id, self.entries.get(&id)?))
+    }
+
+    /// Look up a function identity, distinguishing "no function at
+    /// this arity" from "no functions under this name at all" so
+    /// callers can build did-you-mean diagnostics.
+    pub fn function_lookup(&self, identifier: &Identifier, arity: usize) -> FunctionLookup<'_> {
+        if let Some(found) = self.lookup_function(identifier, arity) {
+            return FunctionLookup::Found(found.0, found.1);
+        }
+        let arities = self.function_arities(identifier);
+        if arities.is_empty() {
+            return FunctionLookup::NoFunctions;
+        }
+        FunctionLookup::WrongArity(arities)
     }
 
     /// Return the declared arities for every function with this name.
