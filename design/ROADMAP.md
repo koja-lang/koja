@@ -104,6 +104,8 @@ focused standard library improvements found while building auth-manager.
 - **[DONE]** Generate pages for nested structs and enums under their full
   qualified names across HTML, package listings, terminal search, and the
   search index.
+- **[DONE]** Replace indexed `Enumeration` with cursor-based traversal, require
+  nominal conformance for `for`, and support Range, Map, and Set iteration.
 - Default values for function parameters, so optional arguments do not
   require a separate options struct at every call site. A defaulted function
   is callable at every arity its defaults allow. `&name/arity` references
@@ -134,8 +136,8 @@ focused standard library improvements found while building auth-manager.
   ([gap](GAPS.md#sockets-have-no-deadlines)).
 
 The larger auth-manager findings remain in [GAPS.md](GAPS.md). `Fd` random
-access and durability, ordered maps and iteration, and cross-package protocol
-conformances are not 0.18 release gates.
+access and durability, ordered maps, and cross-package protocol conformances
+are not 0.18 release gates.
 
 The rest of the 0.18 scope will be selected from evidence gathered while
 building real packages and applications. Later `0.x` releases will be added

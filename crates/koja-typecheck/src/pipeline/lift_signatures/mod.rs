@@ -23,7 +23,7 @@ use koja_ast::identifier::{GlobalRegistryId, Identifier, ResolvedType};
 
 use crate::pipeline::aliases::collect_file_aliases;
 use crate::program::CheckedPackage;
-use crate::registry::GlobalRegistry;
+use crate::registry::{GlobalRegistry, ResolvedProtocolBound};
 
 mod builtins;
 mod constants;
@@ -39,7 +39,7 @@ mod types;
 pub(crate) use impls::resolve_target_bounds;
 pub(crate) use types::{ResolutionScope, TypeParamScope, resolve_type_expr};
 
-use types::resolve_bound_to_id;
+use types::resolve_protocol_bound;
 
 /// Mutable counterpart to [`ResolutionScope`] used by every
 /// `lift_*` function: same name-resolution inputs (alias slice,
@@ -268,10 +268,8 @@ pub(crate) fn lift_signatures(
 }
 
 /// Walk every generic-decl AST node, resolve each declared bound
-/// name to a protocol id, and stamp the parallel
-/// `Vec<Vec<GlobalRegistryId>>` onto its registry entry. Diagnoses
-/// unresolved names and bound names that resolve to non-protocol
-/// kinds via [`resolve_bound_to_id`].
+/// to a protocol id and arguments, then stamp the parallel bound
+/// lists onto its registry entry.
 fn resolve_all_bounds(
     packages: &[CheckedPackage],
     registry: &mut GlobalRegistry,
@@ -323,7 +321,8 @@ fn resolve_struct_bounds(
     let Some((id, _)) = scope.registry.lookup(&identifier) else {
         return;
     };
-    let resolved = resolve_param_bounds(&decl.type_params, scope.resolution_scope(), diagnostics);
+    let resolved =
+        resolve_param_bounds(&decl.type_params, id, scope.resolution_scope(), diagnostics);
     scope.registry.set_type_param_bounds(id, resolved);
 }
 
@@ -341,7 +340,7 @@ fn resolve_builtin_bounds(
     // diagnosed the mismatch.
     if entry.type_params.len() == decl.type_params.len() {
         let resolved =
-            resolve_param_bounds(&decl.type_params, scope.resolution_scope(), diagnostics);
+            resolve_param_bounds(&decl.type_params, id, scope.resolution_scope(), diagnostics);
         scope.registry.set_type_param_bounds(id, resolved);
     }
     for function in &decl.functions {
@@ -363,7 +362,8 @@ fn resolve_enum_bounds(
     let Some((id, _)) = scope.registry.lookup(&identifier) else {
         return;
     };
-    let resolved = resolve_param_bounds(&decl.type_params, scope.resolution_scope(), diagnostics);
+    let resolved =
+        resolve_param_bounds(&decl.type_params, id, scope.resolution_scope(), diagnostics);
     scope.registry.set_type_param_bounds(id, resolved);
     for function in &decl.functions {
         resolve_function_bounds(
@@ -399,6 +399,7 @@ fn resolve_protocol_bounds(
     let mut resolved = vec![Vec::new()];
     resolved.extend(resolve_param_bounds(
         &user_params,
+        id,
         scope.resolution_scope(),
         diagnostics,
     ));
@@ -414,28 +415,35 @@ fn resolve_function_bounds(
     let Some((id, _)) = scope.registry.lookup(&identifier) else {
         return;
     };
-    let resolved =
-        resolve_param_bounds(&function.type_params, scope.resolution_scope(), diagnostics);
+    let resolved = resolve_param_bounds(
+        &function.type_params,
+        id,
+        scope.resolution_scope(),
+        diagnostics,
+    );
     scope.registry.set_type_param_bounds(id, resolved);
 }
 
 /// Per-decl bound resolution shared by every owner kind: each AST
-/// `TypeParam`'s bound list maps to a `Vec<GlobalRegistryId>` of
-/// resolved protocol ids (skipping any name that didn't resolve so
-/// the diagnostic from `resolve_bound_to_id` is the user-visible
-/// outcome).
+/// `TypeParam`'s bound list maps to resolved protocol bounds.
+/// Invalid bounds are skipped after their diagnostics are emitted.
 fn resolve_param_bounds(
     type_params: &[koja_ast::ast::TypeParam],
+    owner: GlobalRegistryId,
     scope: ResolutionScope<'_>,
     diagnostics: &mut Vec<Diagnostic>,
-) -> Vec<Vec<GlobalRegistryId>> {
+) -> Vec<Vec<ResolvedProtocolBound>> {
+    let owners = [owner];
+    let type_param_scope = TypeParamScope::new(&owners);
     type_params
         .iter()
         .map(|param| {
             param
                 .bounds
                 .iter()
-                .filter_map(|bound| resolve_bound_to_id(bound, param.span, scope, diagnostics))
+                .filter_map(|bound| {
+                    resolve_protocol_bound(bound, type_param_scope, scope, diagnostics)
+                })
                 .collect()
         })
         .collect()

@@ -29,6 +29,7 @@ pub(super) fn dispatch<R: CallResolver>(
         StringMethod::ByteLength => byte_length(args),
         StringMethod::Get => get(function, args),
         StringMethod::Length => length(args),
+        StringMethod::Next => next(function, args),
         StringMethod::Slice => slice(args),
         StringMethod::ToBinary => to_binary(args),
         StringMethod::ToCstring => to_cstring(function, args, resolver),
@@ -96,6 +97,24 @@ fn get(function: &IRFunction, args: &[Value]) -> Result<Value, RuntimeError> {
             .nth(index as usize)
             .map(|c| Value::string(c.to_string()))
     };
+    Ok(helpers::option_value(option_symbol, value))
+}
+
+fn next(function: &IRFunction, args: &[Value]) -> Result<Value, RuntimeError> {
+    let s = expect_string_utf8(args, 0, "String.next")?;
+    let byte_offset = expect_int(args, 1, "String.next")?;
+    let option_symbol = helpers::enum_return_symbol(function, "String.next")?;
+    let value = usize::try_from(byte_offset)
+        .ok()
+        .and_then(|offset| s.get(offset..).map(|suffix| (offset, suffix)))
+        .and_then(|(offset, suffix)| {
+            suffix.chars().next().map(|character| {
+                Value::Tuple(vec![
+                    Value::string(character.to_string()),
+                    Value::Int((offset + character.len_utf8()) as i64),
+                ])
+            })
+        });
     Ok(helpers::option_value(option_symbol, value))
 }
 

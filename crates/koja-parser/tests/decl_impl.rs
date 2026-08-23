@@ -94,7 +94,10 @@ fn trait_impl_with_bounded_target_param() {
     ));
     assert_eq!(block.target_bounds.len(), 1);
     assert_eq!(block.target_bounds[0].name, "T");
-    assert_eq!(block.target_bounds[0].bounds, vec!["Equality"]);
+    assert!(matches!(
+        block.target_bounds[0].bounds.as_slice(),
+        [TypeExpr::Named { path, .. }] if path == &["Equality"]
+    ));
 }
 
 #[test]
@@ -114,7 +117,13 @@ fn trait_impl_with_multi_bound_target_param() {
     assert_eq!(args.len(), 2);
     assert_eq!(block.target_bounds.len(), 1);
     assert_eq!(block.target_bounds[0].name, "A");
-    assert_eq!(block.target_bounds[0].bounds, vec!["Debug", "Hash"]);
+    assert!(matches!(
+        block.target_bounds[0].bounds.as_slice(),
+        [
+            TypeExpr::Named { path: debug, .. },
+            TypeExpr::Named { path: hash, .. },
+        ] if debug == &["Debug"] && hash == &["Hash"]
+    ));
 }
 
 #[test]

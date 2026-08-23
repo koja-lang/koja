@@ -26,9 +26,8 @@
 //! `if`/`else` joins that may live inside the body, but the loop
 //! itself doesn't introduce one.
 //!
-//! `for` lowers via the typecheck-side `synthesize::for_desugar`
-//! into the same while + match shape; [`for_lowers_via_desugar_to_while_plus_match`]
-//! pins the resulting IR end-to-end.
+//! Resolve rewrites statement-position `for` to ordinary `loop` and
+//! `match` nodes. [`for_lowers_to_loop_plus_match`] pins that IR.
 
 use koja_ir::{BranchTarget, IRInstruction, IRTerminator, IRType};
 
@@ -232,45 +231,41 @@ fn while_with_return_inside_body_terminates_function() {
 }
 
 #[test]
-fn for_lowers_via_desugar_to_while_plus_match() {
-    // `for x in c` desugars to a while loop wrapping a match on
-    // `c.get(idx)`. We should see calls to `Counter.length` /
-    // `Counter.get` and a back-edge to the header from the body's
-    // descendant blocks.
+fn for_lowers_to_loop_plus_match() {
     let source = "
         struct Counter
           start: Int
           finish: Int
         end
 
-        extend Counter
-          fn length(self) -> Int
-            self.finish - self.start
+        impl Enumeration<Int, Int> for Counter
+          fn cursor(self) -> Int
+            self.start
           end
 
-          fn get(self, index: Int) -> Option<Int>
-            Option.Some(self.start + index)
+          fn next(self, cursor: Int) -> Option<(Int, Int)>
+            if cursor < self.finish
+              Option.Some((cursor, cursor + 1))
+            else
+              Option.None
+            end
           end
         end
 
-        c = Counter{start: 0, finish: 3}
+        fn make_counter() -> Counter
+          Counter{start: 0, finish: 3}
+        end
+
         sum = 0
-        for x in c
+        for x in make_counter()
           sum = sum + x
         end
         ";
 
     let script = lower(source);
 
-    let header = block_labeled(&script.blocks, "while_header");
-    assert!(
-        matches!(header.terminator, IRTerminator::CondBranch { .. }),
-        "while_header should terminate with CondBranch; got {:?}",
-        header.terminator,
-    );
-
-    let body = block_labeled(&script.blocks, "while_body");
-    block_labeled(&script.blocks, "while_exit");
+    let body = block_labeled(&script.blocks, "loop_body");
+    block_labeled(&script.blocks, "loop_exit");
 
     let calls: Vec<&str> = all_instructions(&script.blocks)
         .filter_map(|inst| match inst {
@@ -279,28 +274,34 @@ fn for_lowers_via_desugar_to_while_plus_match() {
         })
         .collect();
     assert!(
-        calls.iter().any(|c| c.contains("Counter.length")),
-        "for-desugar should call `Counter.length`; got calls {calls:?}",
+        calls.iter().any(|c| c.contains("Counter.cursor")),
+        "for rewrite should call `Counter.cursor`; got calls {calls:?}",
     );
     assert!(
-        calls.iter().any(|c| c.contains("Counter.get")),
-        "for-desugar should call `Counter.get`; got calls {calls:?}",
+        calls.iter().any(|c| c.contains("Counter.next")),
+        "for rewrite should call `Counter.next`; got calls {calls:?}",
+    );
+    assert_eq!(
+        calls
+            .iter()
+            .filter(|callee| callee.contains("make_counter"))
+            .count(),
+        1,
+        "for rewrite should evaluate its source once; got calls {calls:?}",
     );
 
     // Don't pin the exact match-arm block layout, only that some
-    // descendant block branches back to the header.
-    let header_id = header.id;
+    // descendant block branches back to the loop body.
     let has_back_edge = script.blocks.iter().any(|b| {
         b.id != body.id
-            && b.id != header_id
             && matches!(
                 &b.terminator,
-                IRTerminator::Branch(BranchTarget { block, .. }) if *block == header_id,
+                IRTerminator::Branch(BranchTarget { block, .. }) if *block == body.id,
             )
     });
     assert!(
         has_back_edge,
-        "for-desugar should produce a back-edge to `while_header` from \
+        "for rewrite should produce a back-edge to `loop_body` from \
          a match-arm tail block; got blocks {:?}",
         script.blocks.iter().map(|b| &b.label).collect::<Vec<_>>(),
     );

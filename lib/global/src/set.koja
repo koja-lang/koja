@@ -43,6 +43,41 @@ builtin Set<T>
   fn remove(self, item: T) -> Set<T>
 end
 
+impl Enumeration<T, Int> for Set<T>
+  @doc """
+  Returns the opaque cursor for the first set element.
+  """
+  fn cursor(self) -> Int
+    0
+  end
+
+  @doc """
+  Returns the element at or after the cursor and the next cursor.
+  Iteration order is unspecified.
+  """
+  @intrinsic
+  fn next(self, cursor: Int) -> Option<(T, Int)>
+end
+
+impl Equality for Set<T: Equality>
+  @doc """
+  Returns `true` if both sets contain the same elements.
+  """
+  fn equals?(self, other: Self) -> Bool
+    if self.length() != other.length()
+      return false
+    end
+
+    for item in self
+      unless other.has?(item)
+        return false
+      end
+    end
+
+    true
+  end
+end
+
 impl ListLiteral<T> for Set<T>
   @doc """
   Constructs a set from a list literal by inserting each element,

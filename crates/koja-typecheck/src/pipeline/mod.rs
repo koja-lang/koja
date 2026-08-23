@@ -16,9 +16,8 @@
 //!   enum / protocol payloads.
 //! - [`visibility::check_signature_leaks`]: reject private types in
 //!   public signatures.
-//! - [`synthesize::synthesize_program`]: surface-shape AST rewrites
-//!   (today: `for` desugar).
-//! - [`resolve::resolve_file`]: populate `Resolution` /
+//! - [`resolve::resolve_file`]: rewrite typed surface shapes such as
+//!   statement-position `for`, then populate `Resolution` and
 //!   `Expr.resolution` on every node.
 //! - [`borrows::check_file`]: reject `CPtr.borrow` results escaping
 //!   their borrowing statement.

@@ -1,5 +1,4 @@
-//! IR-text snapshot tests for `loop`, `while`, and `for` (the
-//! typecheck for-desugar also funnels through `while`) lowering
+//! IR-text snapshot tests for `loop`, `while`, and `for` lowering
 //! through the LLVM emitter. Pins the loop CFG-shape invariants
 //! in LLVM IR text: the named blocks (`while_header` / `while_body`
 //! / `while_exit` for `while`, and `loop_body` / `loop_exit` for
@@ -35,23 +34,24 @@ fn while_emits_header_body_exit_blocks_and_back_edge() {
 }
 
 #[test]
-fn for_emits_while_shape_and_calls_iterable_methods() {
-    // The for-desugar produces a while-shaped CFG with `Counter.length`
-    // / `Counter.get` calls and a match on `Option<Int>` inside the
-    // body, the same LLVM shape as a hand-written while + match.
+fn for_emits_loop_shape_and_calls_enumeration_functions() {
     let source = "
         struct Counter
           start: Int
           finish: Int
         end
 
-        extend Counter
-          fn length(self) -> Int
-            self.finish - self.start
+        impl Enumeration<Int, Int> for Counter
+          fn cursor(self) -> Int
+            self.start
           end
 
-          fn get(self, index: Int) -> Option<Int>
-            Option.Some(self.start + index)
+          fn next(self, cursor: Int) -> Option<(Int, Int)>
+            if cursor < self.finish
+              Option.Some((cursor, cursor + 1))
+            else
+              Option.None
+            end
           end
         end
 
@@ -62,11 +62,10 @@ fn for_emits_while_shape_and_calls_iterable_methods() {
     let script = lower(&dedent(source));
     let ir_text = emit_script_llvm_ir(&script, APP_NAME).expect("emit_script_llvm_ir");
     assert_main_shape(&ir_text);
-    assert_contains(&ir_text, "while_header");
-    assert_contains(&ir_text, "while_body");
-    assert_contains(&ir_text, "while_exit");
-    assert_contains(&ir_text, "TestApp.Counter.length");
-    assert_contains(&ir_text, "TestApp.Counter.get");
+    assert_contains(&ir_text, "loop_body");
+    assert_contains(&ir_text, "loop_exit");
+    assert_contains(&ir_text, "TestApp.Counter.cursor");
+    assert_contains(&ir_text, "TestApp.Counter.next");
 }
 
 #[test]

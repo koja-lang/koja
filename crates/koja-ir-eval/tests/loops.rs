@@ -105,24 +105,24 @@ fn nested_while_loops_iterate_correctly() {
     assert_eq!(evaluate(&dedent(source)).unwrap(), Value::Int(12));
 }
 
-/// `Enumeration<Int>` fixture for the `for` tests below. `get`
-/// always returns `Some(...)`. The desugar's `__idx < __len`
-/// guard ensures it's only called for valid indices, and a
-/// literal `None` branch needs return-type back-propagation into
-/// unit-variant inference (orthogonal feature gap).
+/// Cursor-based `Enumeration<Int, Int>` fixture.
 const ENUMERABLE_FIXTURE: &str = "
     struct Counter
       start: Int
       finish: Int
     end
 
-    extend Counter
-      fn length(self) -> Int
-        self.finish - self.start
+    impl Enumeration<Int, Int> for Counter
+      fn cursor(self) -> Int
+        self.start
       end
 
-      fn get(self, index: Int) -> Option<Int>
-        Option.Some(self.start + index)
+      fn next(self, cursor: Int) -> Option<(Int, Int)>
+        if cursor < self.finish
+          Option.Some((cursor, cursor + 1))
+        else
+          Option.None
+        end
       end
     end
     ";

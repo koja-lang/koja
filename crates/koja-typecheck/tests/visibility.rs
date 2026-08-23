@@ -676,6 +676,30 @@ fn public_fn_bound_on_priv_protocol_leaks() {
 }
 
 #[test]
+fn public_fn_parameterized_bound_on_priv_type_leaks() {
+    let failure = typecheck_script_fail(&dedent(
+        "
+        priv struct Hidden
+          value: Int
+        end
+
+        protocol Source<T>
+          fn first(self) -> T
+        end
+
+        fn tally<E: Source<Hidden>>(source: E) -> Int
+          0
+        end
+        ",
+    ));
+    assert_leak_rejected(
+        &failure,
+        "function `TestApp.tally`",
+        "struct `TestApp.Hidden`",
+    );
+}
+
+#[test]
 fn priv_fn_may_mention_priv_type() {
     typecheck_script(&dedent(
         "

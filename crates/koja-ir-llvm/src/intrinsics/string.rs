@@ -19,9 +19,9 @@ use crate::intrinsics::heap_payload;
 use crate::intrinsics::result;
 use crate::runtime::{
     declare_malloc_extern, declare_string_contains_nul_extern, declare_string_get_extern,
-    declare_string_length_extern, declare_string_slice_extern,
+    declare_string_length_extern, declare_string_next_extern, declare_string_slice_extern,
 };
-use crate::types::ir_basic_type;
+use crate::types::{ir_basic_type, tuple_struct_type};
 
 /// `Option<T>` variant tags, matching the stdlib decl order: `Some`
 /// first (tag 0), then `None`.
@@ -40,6 +40,7 @@ pub(super) fn emit_string<'ctx>(
         StringMethod::ByteLength => emit_byte_length(ctx, function, llvm_function),
         StringMethod::Get => emit_get(ctx, function, llvm_function),
         StringMethod::Length => emit_length(ctx, function, llvm_function),
+        StringMethod::Next => emit_next(ctx, function, llvm_function),
         StringMethod::Slice => emit_slice(ctx, function, llvm_function),
         StringMethod::ToBinary => emit_to_binary(ctx, function, llvm_function),
         StringMethod::ToCstring => emit_to_cstring(ctx, function, llvm_function),
@@ -141,7 +142,7 @@ fn emit_get<'ctx>(
         .call_basic(helper, &[payload.into(), index.into()], "ch")?
         .into_pointer_value();
 
-    let option_symbol = expect_enum_symbol(&function.return_type, function)?;
+    let option_symbol = expect_enum_symbol(&function.return_type, function, "String.get")?;
     let ptr_ty = ctx.context.ptr_type(AddressSpace::default());
     let is_null = ctx
         .builder
@@ -156,6 +157,64 @@ fn emit_get<'ctx>(
 
     ctx.builder.position_at_end(some_bb);
     let some = build_enum_value(ctx, option_symbol, OPTION_SOME_TAG, &[raw_ptr.into()])?;
+    ctx.builder.build_return(Some(&some)).or_ice()?;
+
+    ctx.builder.position_at_end(none_bb);
+    let none = build_enum_value(ctx, option_symbol, OPTION_NONE_TAG, &[])?;
+    ctx.builder.build_return(Some(&none)).or_ice().map(|_| ())
+}
+
+fn emit_next<'ctx>(
+    ctx: &EmitContext<'ctx>,
+    function: &IRFunction,
+    llvm_function: FunctionValue<'ctx>,
+) -> Result<(), LlvmError> {
+    let ptr_ty = ctx.context.ptr_type(AddressSpace::default());
+    let i64_ty = ctx.context.i64_type();
+    let payload = self_payload(function, llvm_function)?;
+    let cursor = llvm_function.get_nth_param(1).ok_or_else(|| {
+        LlvmError::Codegen(format!(
+            "String.next missing `cursor` param on `{}`",
+            function.symbol,
+        ))
+    })?;
+    let next_cursor = ctx.builder.build_alloca(i64_ty, "next_cursor").or_ice()?;
+    let helper = declare_string_next_extern(ctx);
+    let character = ctx
+        .call_basic(
+            helper,
+            &[payload.into(), cursor.into(), next_cursor.into()],
+            "character",
+        )?
+        .into_pointer_value();
+    let is_none = ctx
+        .builder
+        .build_int_compare(IntPredicate::EQ, character, ptr_ty.const_null(), "is_none")
+        .or_ice()?;
+    let some_bb = ctx.context.append_basic_block(llvm_function, "some");
+    let none_bb = ctx.context.append_basic_block(llvm_function, "none");
+    ctx.builder
+        .build_conditional_branch(is_none, none_bb, some_bb)
+        .or_ice()?;
+
+    let option_symbol = expect_enum_symbol(&function.return_type, function, "String.next")?;
+    ctx.builder.position_at_end(some_bb);
+    let next = ctx
+        .builder
+        .build_load(i64_ty, next_cursor, "next")
+        .or_ice()?;
+    let tuple_ty = tuple_struct_type(ctx, &[IRType::String, IRType::Int64])?;
+    let tuple = ctx
+        .builder
+        .build_insert_value(tuple_ty.get_undef(), character, 0, "with_character")
+        .or_ice()?
+        .into_struct_value();
+    let tuple = ctx
+        .builder
+        .build_insert_value(tuple, next, 1, "with_next")
+        .or_ice()?
+        .into_struct_value();
+    let some = build_enum_value(ctx, option_symbol, OPTION_SOME_TAG, &[tuple.into()])?;
     ctx.builder.build_return(Some(&some)).or_ice()?;
 
     ctx.builder.position_at_end(none_bb);
@@ -285,11 +344,12 @@ fn load_byte_count<'ctx>(
 fn expect_enum_symbol<'ty>(
     ty: &'ty IRType,
     function: &IRFunction,
+    label: &str,
 ) -> Result<&'ty IRSymbol, LlvmError> {
     match ty {
         IRType::Enum(symbol) => Ok(symbol),
         other => Err(LlvmError::Codegen(format!(
-            "String.get expected an enum-typed return, got `{other:?}` (symbol `{}`)",
+            "{label} expected an enum-typed return, got `{other:?}` (symbol `{}`)",
             function.symbol,
         ))),
     }

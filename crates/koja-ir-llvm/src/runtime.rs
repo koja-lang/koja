@@ -41,6 +41,7 @@ pub(crate) const STRING_CONTAINS_NUL_SYMBOL: &str = "koja_string_contains_nul";
 pub(crate) const STRING_EQ_SYMBOL: &str = "koja_string_eq";
 pub(crate) const STRING_GET_SYMBOL: &str = "koja_string_get";
 pub(crate) const STRING_LENGTH_SYMBOL: &str = "koja_string_length";
+pub(crate) const STRING_NEXT_SYMBOL: &str = "koja_string_next";
 pub(crate) const STRING_SLICE_SYMBOL: &str = "koja_string_slice";
 
 // `koja_rt_*` mailbox / scheduler symbols defined in
@@ -365,6 +366,16 @@ pub(crate) fn declare_string_length_extern<'ctx>(ctx: &EmitContext<'ctx>) -> Fun
     let i64_ty = ctx.context.i64_type();
     let signature = i64_ty.fn_type(&[ptr_ty.into()], false);
     declare_extern(ctx, STRING_LENGTH_SYMBOL, signature)
+}
+
+/// Declare (or look up) the `koja_string_next` runtime helper.
+/// Signature: `i8* koja_string_next(i8* payload, i64 cursor, i64* next)`.
+/// Returns a fresh one-character string, or null for an invalid cursor.
+pub(crate) fn declare_string_next_extern<'ctx>(ctx: &EmitContext<'ctx>) -> FunctionValue<'ctx> {
+    let ptr_ty = ctx.context.ptr_type(AddressSpace::default());
+    let i64_ty = ctx.context.i64_type();
+    let signature = ptr_ty.fn_type(&[ptr_ty.into(), i64_ty.into(), ptr_ty.into()], false);
+    declare_extern(ctx, STRING_NEXT_SYMBOL, signature)
 }
 
 /// Declare (or look up) the `koja_string_slice` runtime helper.

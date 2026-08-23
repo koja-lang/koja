@@ -125,4 +125,45 @@ struct MapTest
 
     Result.Ok(true)
   end
+
+  @test "iteration, equality, and debug"
+  fn test_iteration_equality_debug -> Result<Bool, String>
+    map: Map<String, Int> = ["one": 1, "two": 2, "three": 3]
+    count = 0
+    sum = 0
+
+    for (_, value) in map
+      count += 1
+      sum += value
+    end
+
+    unless count == 3 and sum == 6
+      return Result.Err("map iteration missed an entry")
+    end
+
+    same: Map<String, Int> = ["three": 3, "one": 1, "two": 2]
+    different: Map<String, Int> = ["one": 1, "two": 9, "three": 3]
+
+    unless map == same
+      return Result.Err("equal maps compared unequal")
+    end
+
+    if map == different
+      return Result.Err("different maps compared equal")
+    end
+
+    rendered = map.format()
+
+    unless rendered.starts_with?("[") and rendered.ends_with?("]")
+      return Result.Err("map debug did not use map literal syntax")
+    end
+
+    unless rendered.contains?("\"one\": 1")
+      and rendered.contains?("\"three\": 3")
+
+      return Result.Err("map debug omitted an entry")
+    end
+
+    Result.Ok(true)
+  end
 end

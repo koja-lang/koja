@@ -1132,7 +1132,15 @@ fn format_type_params(params: &[TypeParam]) -> String {
             if p.bounds.is_empty() {
                 p.name.clone()
             } else {
-                format!("{}: {}", p.name, p.bounds.join(" & "))
+                format!(
+                    "{}: {}",
+                    p.name,
+                    p.bounds
+                        .iter()
+                        .map(type_expr_brief)
+                        .collect::<Vec<_>>()
+                        .join(" & "),
+                )
             }
         })
         .collect();

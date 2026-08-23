@@ -10,11 +10,10 @@
 //! boundaries reset both fields, so an inner closure's `break`
 //! can't reach an outer-function loop.
 //!
-//! `for pat in iter ... end` runs through `synthesize::for_desugar`
-//! before resolve. The contract is nominal: `iter.get` must return
-//! `Global.Option<T>` exactly. Diagnostics come from the normal
-//! method-lookup / constructor-pattern paths (no `for`-specific
-//! validator).
+//! Statement-position `for pat in source ... end` rewrites during
+//! resolve after the source type proves nominal `Enumeration<T,
+//! Cursor>` conformance. The generated loop advances its cursor
+//! before the surface body.
 
 use koja_ast::ast::{Expr, ExprKind, Statement};
 use koja_ast::util::dedent;
@@ -28,24 +27,24 @@ use common::{
     unit_type,
 };
 
-/// `Enumeration<Int>` fixture using stdlib `Option<Int>`. `get`
-/// returns `Some(...)` unconditionally. The desugar's `__idx <
-/// __len` guard ensures it's only called for valid indices, and a
-/// literal `None` branch needs return-type back-propagation into
-/// unit-variant inference (orthogonal feature gap).
+/// Cursor-based `Enumeration<Int, Int>` fixture.
 const ENUMERABLE_FIXTURE: &str = "
     struct Counter
       start: Int
       finish: Int
     end
 
-    extend Counter
-      fn length(self) -> Int
-        self.finish - self.start
+    impl Enumeration<Int, Int> for Counter
+      fn cursor(self) -> Int
+        self.start
       end
 
-      fn get(self, index: Int) -> Option<Int>
-        Option.Some(self.start + index)
+      fn next(self, cursor: Int) -> Option<(Int, Int)>
+        if cursor < self.finish
+          Option.Some((cursor, cursor + 1))
+        else
+          Option.None
+        end
       end
     end
     ";
@@ -157,19 +156,20 @@ fn for_with_wildcard_pattern_typechecks() {
 }
 
 #[test]
-fn for_over_int_diagnoses_missing_length() {
-    // `Int` is a Global struct stub with no `length` method, so
-    // the desugar's `__it.length()` call fails to resolve.
+fn for_over_int_requires_enumeration_conformance() {
     let source = "
         for x in 5
           x
         end
         ";
-    assert_script_fails_with(source, &["has no method `length"]);
+    assert_script_fails_with(
+        source,
+        &["type `Int` in a `for` loop must implement `Enumeration<T, Cursor>`"],
+    );
 }
 
 #[test]
-fn for_over_struct_without_length_diagnoses() {
+fn for_over_unrelated_struct_requires_enumeration_conformance() {
     let source = "
         struct Bare
           x: Int
@@ -180,67 +180,116 @@ fn for_over_struct_without_length_diagnoses() {
           v
         end
         ";
-    assert_script_fails_with(source, &["has no method `length"]);
+    assert_script_fails_with(
+        source,
+        &["type `Bare` in a `for` loop must implement `Enumeration<T, Cursor>`"],
+    );
 }
 
 #[test]
-fn for_with_get_returning_non_enum_diagnoses() {
-    // `get` returns `Int`, but the desugar's `match` constructor
-    // shorthand needs an enum subject.
+fn for_rejects_refutable_header_pattern() {
     let source = "
-        struct Bad
-          x: Int
-        end
-
-        extend Bad
-          fn length(self) -> Int
-            1
-          end
-
-          fn get(self, index: Int) -> Int
-            self.x
-          end
-        end
-
-        b = Bad{x: 7}
-        for v in b
-          v
+        for 1 in [1, 2]
+          1
         end
         ";
-    assert_script_fails_with(source, &["requires an enum subject"]);
+    assert_script_fails_with(
+        source,
+        &["`for` requires an irrefutable pattern. The header contains a literal pattern."],
+    );
 }
 
 #[test]
-fn for_with_get_returning_wrong_enum_diagnoses_missing_some_none() {
-    // The desugar matches `Some` / `None` on the subject enum. An
-    // enum without those variants (here `Present` / `Absent`)
-    // flunks the constructor-shorthand variant lookup.
+fn for_requires_nominal_conformance_even_with_matching_functions() {
     let source = "
-        enum NotOption
-          Present(Int)
-          Absent
+        struct Structural
         end
 
-        struct Wrong
-          x: Int
-        end
-
-        extend Wrong
-          fn length(self) -> Int
-            1
+        extend Structural
+          fn cursor(self) -> Int
+            0
           end
 
-          fn get(self, index: Int) -> NotOption
-            NotOption.Present(self.x)
+          fn next(self, cursor: Int) -> Option<(Int, Int)>
+            Option.None
           end
         end
 
-        w = Wrong{x: 0}
-        for v in w
-          v
+        for value in Structural{}
+          value
         end
         ";
-    assert_script_fails_with(source, &["no variant `Some`", "no variant `None`"]);
+    assert_script_fails_with(
+        source,
+        &["type `Structural` in a `for` loop must implement `Enumeration<T, Cursor>`"],
+    );
+}
+
+#[test]
+fn for_accepts_parameter_with_enumeration_bound() {
+    let source = with_fixture(
+        "
+        fn sum<T: Enumeration<Int, Int>>(source: T) -> Int
+          total = 0
+          for value in source
+            total = total + value
+          end
+          total
+        end
+
+        sum(Counter{start: 1, finish: 4})
+        ",
+    );
+    let checked = typecheck(&dedent(&source));
+    assert_eq!(trailing_resolution(&checked), int_type(&checked));
+}
+
+#[test]
+fn for_rejects_parameter_without_enumeration_bound() {
+    let source = "
+        fn consume<T>(source: T) -> Unit
+          for value in source
+            value
+          end
+        end
+
+        consume(1)
+        ";
+    assert_script_fails_with(
+        source,
+        &["type `T` in a `for` loop must implement `Enumeration<T, Cursor>`"],
+    );
+}
+
+#[test]
+fn expression_position_for_stays_unsupported() {
+    let source = with_fixture(
+        "
+        c = Counter{start: 0, finish: 1}
+        value = (for item in c
+          item
+        end)
+        value
+        ",
+    );
+    assert_script_fails_with(
+        &source,
+        &["typecheck does not yet support `for` in expression position"],
+    );
+}
+
+#[test]
+fn for_with_nested_tuple_pattern_typechecks() {
+    let source = "
+        pairs = [(1, (2, 3))]
+        total = 0
+        for (a, (b, c)) in pairs
+          total = a + b + c
+        end
+        total
+        ";
+    let checked = typecheck(&dedent(source));
+    assert_eq!(trailing_resolution(&checked), int_type(&checked));
 }
 
 #[test]

@@ -18,7 +18,13 @@ pub fn format_type_param(tp: &TypeParam) -> String {
     if tp.bounds.is_empty() {
         tp.name.clone()
     } else {
-        format!("{}: {}", tp.name, tp.bounds.join(" & "))
+        let bounds = tp
+            .bounds
+            .iter()
+            .map(|bound| render(&type_expr_to_doc(bound), u32::MAX))
+            .collect::<Vec<_>>()
+            .join(" & ");
+        format!("{}: {bounds}", tp.name)
     }
 }
 

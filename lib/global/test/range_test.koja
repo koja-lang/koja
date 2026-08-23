@@ -1,0 +1,37 @@
+struct RangeTest
+  @test "inclusive, empty, and maximum ranges"
+  fn test_iteration -> Result<Bool, String>
+    values: List<Int> = List.new()
+
+    for value in Range{start: 2, stop: 4}
+      values = values.append(value)
+    end
+
+    unless values == [2, 3, 4]
+      return Result.Err("range did not include both endpoints")
+    end
+
+    count = 0
+
+    for _ in Range{start: 4, stop: 2}
+      count += 1
+    end
+
+    unless count == 0
+      return Result.Err("empty range produced a value")
+    end
+
+    maximum = 9223372036854775807
+    last = 0
+
+    for value in Range{start: maximum, stop: maximum}
+      last = value
+    end
+
+    unless last == maximum
+      return Result.Err("maximum range endpoint was not produced")
+    end
+
+    Result.Ok(true)
+  end
+end

@@ -250,7 +250,7 @@ impl Walker<'_, '_> {
         let depth = self.type_params.len();
         for param in params {
             for bound in &param.bounds {
-                self.warn_type_path(std::slice::from_ref(bound), param.span);
+                self.check_type_expr(bound);
             }
             self.type_params.push(param.name.clone());
         }

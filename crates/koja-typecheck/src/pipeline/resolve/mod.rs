@@ -43,6 +43,7 @@ mod enums;
 mod error_channel;
 mod expr;
 mod field_defaults;
+mod for_loop;
 mod idents;
 mod inference;
 pub(crate) mod literals;

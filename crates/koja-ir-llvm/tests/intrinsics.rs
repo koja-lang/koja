@@ -93,6 +93,53 @@ fn socket_intrinsics_emit_only_raw_result_shapes() {
 }
 
 #[test]
+fn string_next_emits_utf8_runtime_call_and_option_branches() {
+    let source = "
+        \"é\".next(0)
+        ";
+
+    let script = lower_as_script(&dedent(source));
+    let ir_text =
+        emit_script_llvm_ir(&script, APP_NAME).expect("emit_script_llvm_ir should succeed");
+
+    assert_contains(&ir_text, "call ptr @koja_string_next(");
+    assert_contains(&ir_text, "with_character");
+    assert_contains(&ir_text, "with_next");
+}
+
+#[test]
+fn map_next_emits_bucket_cursor_scan() {
+    let source = "
+        map: Map<String, Int> = [\"key\": 1]
+        map.next(0)
+        ";
+
+    let script = lower_as_script(&dedent(source));
+    let ir_text =
+        emit_script_llvm_ir(&script, APP_NAME).expect("emit_script_llvm_ir should succeed");
+
+    assert_contains(&ir_text, "cursor.state");
+    assert_contains(&ir_text, "cursor.occupied");
+    assert_contains(&ir_text, "cursor.result_next");
+}
+
+#[test]
+fn set_next_emits_bucket_cursor_scan() {
+    let source = "
+        set: Set<String> = [\"item\"]
+        set.next(0)
+        ";
+
+    let script = lower_as_script(&dedent(source));
+    let ir_text =
+        emit_script_llvm_ir(&script, APP_NAME).expect("emit_script_llvm_ir should succeed");
+
+    assert_contains(&ir_text, "cursor.state");
+    assert_contains(&ir_text, "cursor.occupied");
+    assert_contains(&ir_text, "cursor.result_next");
+}
+
+#[test]
 fn user_main_runs_print_intrinsic_then_returns_void() {
     // The script body is a `Unit`-typed `print(...)` call. With
     // auto-print removed, `__koja_user_main` is the spawn thunk

@@ -32,6 +32,7 @@ pub(super) fn dispatch(
         MapMethod::HasQ => has_q(args),
         MapMethod::Length => length(args),
         MapMethod::New => new(),
+        MapMethod::Next => next(function, args),
         MapMethod::Put => put(args),
         MapMethod::Remove => remove(args),
     }
@@ -65,6 +66,30 @@ fn get(function: &IRFunction, args: &[Value]) -> Result<Value, RuntimeError> {
         .iter()
         .find(|(k, _)| k == &key)
         .map(|(_, v)| v.clone());
+    Ok(helpers::option_value(option_symbol, value))
+}
+
+fn next(function: &IRFunction, args: &[Value]) -> Result<Value, RuntimeError> {
+    let map = expect_map(args, 0, "Map.next")?;
+    let slot = match expect_arg(args, 1, "Map.next")? {
+        Value::Int(slot) => *slot,
+        other => {
+            return Err(RuntimeError::TypeMismatch {
+                detail: format!("Map.next arg #1 expected Int, got `{other}`"),
+            });
+        }
+    };
+    let option_symbol = helpers::enum_return_symbol(function, "Map.next")?;
+    let entries = map.borrow();
+    let value = usize::try_from(slot)
+        .ok()
+        .and_then(|index| entries.get(index).map(|entry| (index, entry)))
+        .map(|(index, (key, value))| {
+            Value::Tuple(vec![
+                Value::Tuple(vec![key.clone(), value.clone()]),
+                Value::Int((index + 1) as i64),
+            ])
+        });
     Ok(helpers::option_value(option_symbol, value))
 }
 

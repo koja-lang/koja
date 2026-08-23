@@ -15,7 +15,9 @@ use koja_ast::identifier::{GlobalRegistryId, Resolution, ResolvedType, TypeParam
 use koja_ast::span::Span;
 
 use crate::pipeline::unify::{Substitution, substitute};
-use crate::registry::{Dispatch, GlobalKind, GlobalRegistry, ResolvedProtocolMethod};
+use crate::registry::{
+    Dispatch, GlobalKind, GlobalRegistry, ResolvedProtocolBound, ResolvedProtocolMethod,
+};
 
 use super::super::coercion::{Mismatch, check_compatible_stamping};
 use super::super::ctx::Resolver;
@@ -47,7 +49,7 @@ pub(super) fn resolve_bounded_method_call(
         args,
         call_span,
     } = site;
-    let mut declared_bounds: Vec<GlobalRegistryId> = resolver
+    let mut declared_bounds: Vec<ResolvedProtocolBound> = resolver
         .registry
         .type_param_bounds(owner)
         .and_then(|all| all.get(index.as_u32() as usize))
@@ -60,9 +62,9 @@ pub(super) fn resolve_bounded_method_call(
         && overlay.owner == owner
         && let Some(granted) = overlay.bounds.get(index.as_u32() as usize)
     {
-        for &protocol_id in granted {
-            if !declared_bounds.contains(&protocol_id) {
-                declared_bounds.push(protocol_id);
+        for bound in granted {
+            if !declared_bounds.contains(bound) {
+                declared_bounds.push(bound.clone());
             }
         }
     }
@@ -93,12 +95,12 @@ pub(super) fn resolve_bounded_method_call(
     if providers.len() > 1 {
         let labels: Vec<String> = providers
             .iter()
-            .map(|(id, _)| {
+            .map(|(bound, _)| {
                 resolver
                     .registry
-                    .get(*id)
+                    .get(bound.protocol_id)
                     .map(|e| e.identifier.last().to_string())
-                    .unwrap_or_else(|| format!("<id {id}>"))
+                    .unwrap_or_else(|| format!("<id {}>", bound.protocol_id))
             })
             .collect();
         diagnostics.push(Diagnostic::error(
@@ -111,7 +113,7 @@ pub(super) fn resolve_bounded_method_call(
         ));
         return ResolvedType::unresolved();
     }
-    let (protocol_id, protocol_method) = providers.into_iter().next().expect("len == 1");
+    let (bound, protocol_method) = providers.into_iter().next().expect("len == 1");
     if protocol_method.dispatch != Dispatch::Instance {
         diagnostics.push(Diagnostic::error(
             format!(
@@ -124,7 +126,7 @@ pub(super) fn resolve_bounded_method_call(
     }
     let _ = receiver;
     let receiver_type = type_param_ref(owner, index);
-    let self_subst = self_substitution(protocol_id, receiver_type);
+    let protocol_subst = protocol_substitution(&bound, receiver_type);
     validate_bounded_args(
         BoundedArgsSite {
             method,
@@ -132,7 +134,7 @@ pub(super) fn resolve_bounded_method_call(
             args,
             protocol_method: &protocol_method,
             call_span,
-            self_subst: &self_subst,
+            self_subst: &protocol_subst,
         },
         resolver,
         diagnostics,
@@ -142,7 +144,7 @@ pub(super) fn resolve_bounded_method_call(
     // `Container.first -> Self` would substitute to `T`).
     // Generic protocols (slice 2.7+) will additionally substitute
     // user-declared params against the receiver's type-args.
-    substitute(&protocol_method.return_type, &self_subst)
+    substitute(&protocol_method.return_type, &protocol_subst)
 }
 
 /// Build the `ResolvedType` for the bare type-parameter `T` at
@@ -160,8 +162,14 @@ fn type_param_ref(owner: GlobalRegistryId, index: TypeParamIndex) -> ResolvedTyp
 /// type-param at index 0 (see
 /// `lift_signatures/protocols.rs`), so this is the only slot the
 /// substitution needs to fill for non-generic protocols.
-fn self_substitution(protocol_id: GlobalRegistryId, receiver_type: ResolvedType) -> Substitution {
-    Substitution::from_args(protocol_id, &[receiver_type])
+fn protocol_substitution(
+    bound: &ResolvedProtocolBound,
+    receiver_type: ResolvedType,
+) -> Substitution {
+    let mut args = Vec::with_capacity(bound.args.len() + 1);
+    args.push(receiver_type);
+    args.extend(bound.args.iter().cloned());
+    Substitution::from_args(bound.protocol_id, &args)
 }
 
 /// Augment a type-parameter's declared bounds with the universal
@@ -175,13 +183,17 @@ fn self_substitution(protocol_id: GlobalRegistryId, receiver_type: ResolvedType)
 /// Universal ids are appended in [`crate::registry::UNIVERSAL_PROTOCOLS`]
 /// order, deduped against any duplicate the user already declared.
 fn effective_bounds(
-    declared: &[GlobalRegistryId],
+    declared: &[ResolvedProtocolBound],
     registry: &GlobalRegistry,
-) -> Vec<GlobalRegistryId> {
+) -> Vec<ResolvedProtocolBound> {
     let mut bounds = declared.to_vec();
-    for id in registry.universal_protocol_ids() {
-        if !bounds.contains(&id) {
-            bounds.push(id);
+    for protocol_id in registry.universal_protocol_ids() {
+        let bound = ResolvedProtocolBound {
+            args: Vec::new(),
+            protocol_id,
+        };
+        if !bounds.contains(&bound) {
+            bounds.push(bound);
         }
     }
     bounds
@@ -191,20 +203,20 @@ fn effective_bounds(
 /// declares a method named `method`. Returns clones so the caller
 /// can drop the registry borrow before validating arg shapes.
 fn collect_bound_providers(
-    bounds: &[GlobalRegistryId],
+    bounds: &[ResolvedProtocolBound],
     method: &str,
     registry: &GlobalRegistry,
-) -> Vec<(GlobalRegistryId, ResolvedProtocolMethod)> {
+) -> Vec<(ResolvedProtocolBound, ResolvedProtocolMethod)> {
     let mut providers = Vec::new();
-    for &protocol_id in bounds {
-        let Some(entry) = registry.get(protocol_id) else {
+    for bound in bounds {
+        let Some(entry) = registry.get(bound.protocol_id) else {
             continue;
         };
         let GlobalKind::Protocol(Some(definition)) = &entry.kind else {
             continue;
         };
         if let Some(found) = definition.methods.iter().find(|m| m.name == method) {
-            providers.push((protocol_id, found.clone()));
+            providers.push((bound.clone(), found.clone()));
         }
     }
     providers

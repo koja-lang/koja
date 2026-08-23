@@ -91,10 +91,20 @@ impl BuiltinShape {
 /// impl's condition instead of the target's declared bounds.
 #[derive(Clone, Debug)]
 pub struct BoundOverlay {
-    /// Parallel to the owner's params, protocol ids per slot.
-    pub bounds: Vec<Vec<GlobalRegistryId>>,
+    /// Parallel to the owner's params, protocol bounds per slot.
+    pub bounds: Vec<Vec<ResolvedProtocolBound>>,
     /// The target type whose params the bounds attach to.
     pub owner: GlobalRegistryId,
+}
+
+/// A protocol obligation with its resolved user-declared arguments.
+///
+/// `E: Enumeration<T>` records the `Enumeration` registry id and
+/// `[TypeParam(T)]`. A bare bound records an empty argument list.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ResolvedProtocolBound {
+    pub args: Vec<ResolvedType>,
+    pub protocol_id: GlobalRegistryId,
 }
 
 /// One recorded `target : protocol` fact, stamped by lift onto the
@@ -122,10 +132,12 @@ pub enum ConformanceScope {
     /// `impl P for Bag<T>` or a header conformance on a generic
     /// type. `bounds` parallels the target's params. A conditional
     /// conformance like `impl Equality for List<T: Equality>`
-    /// records the required protocol ids per slot, and an empty
+    /// records the required protocol bounds per slot, and an empty
     /// inner vec means that slot is unconditional, so an all-empty
     /// `bounds` covers every instantiation.
-    Parameterized { bounds: Vec<Vec<GlobalRegistryId>> },
+    Parameterized {
+        bounds: Vec<Vec<ResolvedProtocolBound>>,
+    },
 }
 
 /// Payload of a [`super::GlobalKind::Builtin`] entry. Unlike the

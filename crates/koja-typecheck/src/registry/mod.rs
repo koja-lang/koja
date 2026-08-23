@@ -42,8 +42,8 @@ pub use candidates::{Candidate, CandidateDetail, CandidateKind, KEYWORDS};
 pub use definitions::{
     BoundOverlay, BuiltinDefinition, BuiltinShape, Conformance, ConformanceScope,
     ConstantDefinition, Dispatch, EnumDefinition, FunctionSignature, ProtocolDefinition,
-    ResolvedEnumVariant, ResolvedParam, ResolvedProtocolMethod, ResolvedStructField,
-    ResolvedVariantData, StructDefinition,
+    ResolvedEnumVariant, ResolvedParam, ResolvedProtocolBound, ResolvedProtocolMethod,
+    ResolvedStructField, ResolvedVariantData, StructDefinition,
 };
 pub use format::format_registry;
 
@@ -111,11 +111,11 @@ impl GlobalKind {
 /// payloads are stamped.
 ///
 /// `type_param_bounds` is parallel to `type_params` (same length, same
-/// indexing). Each inner `Vec<GlobalRegistryId>` holds the protocol ids
+/// indexing). Each inner vector holds the resolved protocol bounds
 /// from a `<T: P1 & P2>` bound, in source order. Empty inner vec means
 /// the param is unbounded. Default at collect time is one empty inner
 /// vec per param. Lift's bounds-resolve sub-pass replaces it with the
-/// resolved protocol ids via [`GlobalRegistry::set_type_param_bounds`].
+/// resolved protocol bounds via [`GlobalRegistry::set_type_param_bounds`].
 ///
 /// `visibility` carries the `priv` enforcement scope as a
 /// [`VisibilityScope`]. See that enum for the three-case rationale.
@@ -130,7 +130,7 @@ pub struct RegistryEntry {
     pub kind: GlobalKind,
     pub span: Span,
     pub type_params: Vec<String>,
-    pub type_param_bounds: Vec<Vec<GlobalRegistryId>>,
+    pub type_param_bounds: Vec<Vec<ResolvedProtocolBound>>,
     pub visibility: VisibilityScope,
 }
 
@@ -469,7 +469,7 @@ impl GlobalRegistry {
         protocol_id: GlobalRegistryId,
         target_args: &[ResolvedType],
     ) -> Option<&Conformance> {
-        self.lookup_conformance_with(target_id, protocol_id, target_args, None)
+        self.lookup_conformance_with(target_id, protocol_id, target_args, None, None)
     }
 
     /// Like [`Self::lookup_conformance`], with an impl-local
@@ -481,14 +481,30 @@ impl GlobalRegistry {
         protocol_id: GlobalRegistryId,
         target_args: &[ResolvedType],
         overlay: Option<&BoundOverlay>,
+        expected_protocol_args: Option<&[ResolvedType]>,
     ) -> Option<&Conformance> {
         self.conformance_records(target_id, protocol_id)?
             .iter()
-            .find(|record| match &record.scope {
-                ConformanceScope::Concrete(args) => self.type_args_equivalent(args, target_args),
-                ConformanceScope::Parameterized { bounds } => {
-                    self.conformance_bounds_satisfied(bounds, target_args, overlay)
-                }
+            .find(|record| {
+                let scope_matches = match &record.scope {
+                    ConformanceScope::Concrete(args) => {
+                        self.type_args_equivalent(args, target_args)
+                    }
+                    ConformanceScope::Parameterized { bounds } => {
+                        self.conformance_bounds_satisfied(target_id, bounds, target_args, overlay)
+                    }
+                };
+                scope_matches
+                    && expected_protocol_args.is_none_or(|expected| {
+                        let substitution =
+                            crate::pipeline::unify::Substitution::from_args(target_id, target_args);
+                        let actual = record
+                            .protocol_args
+                            .iter()
+                            .map(|arg| crate::pipeline::unify::substitute(arg, &substitution))
+                            .collect::<Vec<_>>();
+                        self.type_args_equivalent(&actual, expected)
+                    })
             })
     }
 
@@ -498,14 +514,24 @@ impl GlobalRegistry {
     /// check, so both zip to vacuous truth.
     fn conformance_bounds_satisfied(
         &self,
-        bounds: &[Vec<GlobalRegistryId>],
+        target_id: GlobalRegistryId,
+        bounds: &[Vec<ResolvedProtocolBound>],
         target_args: &[ResolvedType],
         overlay: Option<&BoundOverlay>,
     ) -> bool {
+        let substitution = crate::pipeline::unify::Substitution::from_args(target_id, target_args);
         bounds.iter().zip(target_args).all(|(slot_bounds, arg)| {
-            slot_bounds
-                .iter()
-                .all(|&protocol_id| self.bound_satisfied(arg, protocol_id, overlay))
+            slot_bounds.iter().all(|bound| {
+                let instantiated = ResolvedProtocolBound {
+                    args: bound
+                        .args
+                        .iter()
+                        .map(|arg| crate::pipeline::unify::substitute(arg, &substitution))
+                        .collect(),
+                    protocol_id: bound.protocol_id,
+                };
+                self.bound_satisfied(arg, &instantiated, overlay)
+            })
         })
     }
 
@@ -519,7 +545,7 @@ impl GlobalRegistry {
     pub fn bound_satisfied(
         &self,
         ty: &ResolvedType,
-        protocol_id: GlobalRegistryId,
+        bound: &ResolvedProtocolBound,
         overlay: Option<&BoundOverlay>,
     ) -> bool {
         match ty {
@@ -527,14 +553,20 @@ impl GlobalRegistry {
                 resolution: Resolution::Global(target_id),
                 type_args,
             } => self
-                .lookup_conformance_with(*target_id, protocol_id, type_args, overlay)
+                .lookup_conformance_with(
+                    *target_id,
+                    bound.protocol_id,
+                    type_args,
+                    overlay,
+                    Some(&bound.args),
+                )
                 .is_some(),
             ResolvedType::Named {
                 resolution: Resolution::TypeParam { owner, index },
                 ..
-            } => self.type_param_bound_granted(*owner, *index, protocol_id, overlay),
+            } => self.type_param_bound_granted(*owner, *index, bound, overlay),
             ResolvedType::Anonymous(AnonymousKind::Tuple { elements }) => {
-                self.tuple_bound_satisfied(elements, protocol_id, overlay)
+                self.tuple_bound_satisfied(elements, bound, overlay)
             }
             _ => false,
         }
@@ -546,23 +578,31 @@ impl GlobalRegistry {
         &self,
         owner: GlobalRegistryId,
         index: TypeParamIndex,
-        protocol_id: GlobalRegistryId,
+        bound: &ResolvedProtocolBound,
         overlay: Option<&BoundOverlay>,
     ) -> bool {
-        if self.is_universal_protocol(protocol_id) {
+        if bound.args.is_empty() && self.is_universal_protocol(bound.protocol_id) {
             return true;
         }
         let slot = index.as_u32() as usize;
         let declared = self
             .type_param_bounds(owner)
             .and_then(|all| all.get(slot))
-            .is_some_and(|bounds| bounds.contains(&protocol_id));
+            .is_some_and(|bounds| {
+                bounds.iter().any(|candidate| {
+                    candidate.protocol_id == bound.protocol_id
+                        && self.type_args_equivalent(&candidate.args, &bound.args)
+                })
+            });
         declared
             || overlay.is_some_and(|o| {
                 o.owner == owner
-                    && o.bounds
-                        .get(slot)
-                        .is_some_and(|bounds| bounds.contains(&protocol_id))
+                    && o.bounds.get(slot).is_some_and(|bounds| {
+                        bounds.iter().any(|candidate| {
+                            candidate.protocol_id == bound.protocol_id
+                                && self.type_args_equivalent(&candidate.args, &bound.args)
+                        })
+                    })
             })
     }
 
@@ -572,10 +612,13 @@ impl GlobalRegistry {
     fn tuple_bound_satisfied(
         &self,
         elements: &[ResolvedType],
-        protocol_id: GlobalRegistryId,
+        bound: &ResolvedProtocolBound,
         overlay: Option<&BoundOverlay>,
     ) -> bool {
-        let Some(entry) = self.get(protocol_id) else {
+        if !bound.args.is_empty() {
+            return false;
+        }
+        let Some(entry) = self.get(bound.protocol_id) else {
             return false;
         };
         if entry.identifier.package() != "Global" || entry.identifier.path().len() != 1 {
@@ -585,7 +628,7 @@ impl GlobalRegistry {
             "Debug" => true,
             "Equality" => elements
                 .iter()
-                .all(|element| self.bound_satisfied(element, protocol_id, overlay)),
+                .all(|element| self.bound_satisfied(element, bound, overlay)),
             _ => false,
         }
     }
@@ -1029,20 +1072,23 @@ impl GlobalRegistry {
 
     /// Slice of resolved bounds on `owner`'s generic-decl params,
     /// parallel to [`Self::type_params`] (same length, same indexing).
-    /// Inner vec is the `&`-composed protocol-id list for that param.
+    /// Inner vec is the `&`-composed protocol-bound list for that param.
     /// Empty means unbounded. `None` when `owner` is unknown.
-    pub fn type_param_bounds(&self, owner: GlobalRegistryId) -> Option<&[Vec<GlobalRegistryId>]> {
+    pub fn type_param_bounds(
+        &self,
+        owner: GlobalRegistryId,
+    ) -> Option<&[Vec<ResolvedProtocolBound>]> {
         self.get(owner)
             .map(|entry| entry.type_param_bounds.as_slice())
     }
 
     /// Replace `owner`'s `type_param_bounds`. `bounds.len()` must equal
     /// the entry's `type_params.len()`. Called by lift's bounds-resolve
-    /// sub-pass after every protocol id is registered.
+    /// sub-pass after every protocol is registered.
     pub(crate) fn set_type_param_bounds(
         &mut self,
         owner: GlobalRegistryId,
-        bounds: Vec<Vec<GlobalRegistryId>>,
+        bounds: Vec<Vec<ResolvedProtocolBound>>,
     ) {
         let entry = self
             .entries

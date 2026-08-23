@@ -9,8 +9,8 @@
 //!
 //! `unless` and `while` stay Unit-typed. Loops are statement-shaped.
 //!
-//! `for` lives in [`crate::pipeline::synthesize::for_desugar`].
-//! Resolve never sees a statement-position `for`.
+//! Statement-position `for` rewrites during the body walk before its
+//! generated assignments, `loop`, and `match` nodes resolve.
 //!
 //! [`body_tail_type`], [`join_arm_tails`], and
 //! [`require_bool_condition`] are also consumed by
@@ -23,13 +23,13 @@ use koja_ast::span::Span;
 use super::ctx::Resolver;
 use super::expr::{resolve_expr, resolve_expr_with_expected};
 use super::types::{display_resolution, is_primitive, types_equivalent};
-use super::walker::{resolve_body_with_expected, resolve_statement};
+use super::walker::resolve_body_with_expected;
 use crate::registry::GlobalRegistry;
 
 pub(super) fn resolve_if(
     condition: &mut Expr,
-    then_body: &mut [Statement],
-    else_body: Option<&mut [Statement]>,
+    then_body: &mut Vec<Statement>,
+    else_body: Option<&mut Vec<Statement>>,
     expected: Option<&ResolvedType>,
     span: Span,
     resolver: &mut Resolver<'_>,
@@ -91,15 +91,13 @@ pub(super) fn resolve_ternary(
 
 pub(super) fn resolve_unless(
     condition: &mut Expr,
-    body: &mut [Statement],
+    body: &mut Vec<Statement>,
     resolver: &mut Resolver<'_>,
     diagnostics: &mut Vec<Diagnostic>,
 ) -> ResolvedType {
     resolve_expr(condition, resolver, diagnostics);
     require_bool_condition("unless", condition, resolver.registry, diagnostics);
-    for stmt in body.iter_mut() {
-        resolve_statement(stmt, resolver, diagnostics);
-    }
+    resolve_body_with_expected(body, None, resolver, diagnostics);
     resolver.registry.primitive("Unit")
 }
 
@@ -112,7 +110,7 @@ pub(super) fn resolve_unless(
 /// requires `else`, so this branch is defensive.
 pub(super) fn resolve_cond(
     arms: &mut [CondArm],
-    else_body: Option<&mut [Statement]>,
+    else_body: Option<&mut Vec<Statement>>,
     expected: Option<&ResolvedType>,
     span: Span,
     resolver: &mut Resolver<'_>,
@@ -149,7 +147,7 @@ pub(super) fn resolve_cond(
 /// `Never` shape `resolve_loop` enables doesn't apply.
 pub(super) fn resolve_while(
     condition: &mut Expr,
-    body: &mut [Statement],
+    body: &mut Vec<Statement>,
     resolver: &mut Resolver<'_>,
     diagnostics: &mut Vec<Diagnostic>,
 ) -> ResolvedType {
@@ -157,9 +155,7 @@ pub(super) fn resolve_while(
     require_bool_condition("while", condition, resolver.registry, diagnostics);
     resolver.loop_depth += 1;
     resolver.loop_break_seen.push(false);
-    for stmt in body.iter_mut() {
-        resolve_statement(stmt, resolver, diagnostics);
-    }
+    resolve_body_with_expected(body, None, resolver, diagnostics);
     resolver.loop_break_seen.pop();
     resolver.loop_depth -= 1;
     resolver.registry.primitive("Unit")
@@ -172,15 +168,13 @@ pub(super) fn resolve_while(
 /// when at least one targeted break fired (the loop yields control
 /// to its surroundings with no value at the break site).
 pub(super) fn resolve_loop(
-    body: &mut [Statement],
+    body: &mut Vec<Statement>,
     resolver: &mut Resolver<'_>,
     diagnostics: &mut Vec<Diagnostic>,
 ) -> ResolvedType {
     resolver.loop_depth += 1;
     resolver.loop_break_seen.push(false);
-    for stmt in body.iter_mut() {
-        resolve_statement(stmt, resolver, diagnostics);
-    }
+    resolve_body_with_expected(body, None, resolver, diagnostics);
     let saw_break = resolver
         .loop_break_seen
         .pop()

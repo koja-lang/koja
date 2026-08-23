@@ -6,24 +6,6 @@ compiler audits.
 
 ---
 
-## Iteration protocol limits (`Enumeration<T>`)
-
-`Enumeration<T>` requires `length()` + `get(index)`, locking `for` to
-index-based while loops. This precludes lazy iteration, streaming, and any
-non-random-access collection (maps, linked lists, generators).
-
-Pre-v1.0, replace with an `Iterator<T>` protocol using
-`next(self) -> Option<(T, Self)>`. `get` now returns `Option<T>`.
-Codegen change is contained to `compile_for` in `loops.rs`; List/String
-impls wrap existing index-based access in iterator state.
-
-The current `for` loop hides the `Option` from the user (unwraps
-automatically since iteration is bounds-checked). With lazy iteration,
-`Option` becomes the termination mechanism -- `for` desugars to
-`loop { match iter.next() ... }` and `None` breaks the loop.
-
----
-
 ## No wrapping-arithmetic escape hatch
 
 Integer arithmetic always traps on overflow (2026-07). There are no
@@ -168,23 +150,16 @@ Found 2026-08-08 while auditing the `builtin` migration.
 explicit stdlib impls (the scalars, `String`, container and `CPtr`
 `Debug`) never hit the synthesis, but the holes are live:
 
-- `Map`, `Set`, and `CPtr` have no explicit `Equality` impl, so the
-  derived `equals?` compares zero fields and returns `true` for
-  every pair. This pre-dates the `builtin` keyword, since the types
-  were zero-field structs before. `List` closed this on 2026-08-21
-  with a conditional `impl Equality for List<T: Equality>` doing
-  the element-wise walk (`[1, 2] == [3]` is now `false`, and lists
-  of closures fail `==` at compile time).
+- `CPtr` has no explicit `Equality` impl, so the derived `equals?`
+  compares zero fields and returns `true` for every pair.
 - `Int64`, `Float64`, `Never`, and `Unit` lean on synthesized derives
   only for conformance. At runtime the IR's `Int64`-onto-`Int` method
   collapse routes to the real intrinsic impls.
 
 **Fix path:** delete the builtin arms from both derive passes and add
 explicit stdlib impls. The language can spell the conditional impl
-now (see the next entry). `Map` and `Set` `equals?` wait on entry / element
-iteration intrinsics, the same blocker as their `Debug` rendering.
-The conformance-only holes need explicit impls or a rule that a
-builtin satisfies bounds by shape.
+now (see the next entry). The conformance-only holes need explicit
+impls or a rule that a builtin satisfies bounds by shape.
 
 ---
 
@@ -232,10 +207,10 @@ spells `impl Equality for List<T: Equality>` with an element-wise
 entry above.
 
 **What remains:** targets mixing type parameters with concrete args
-(`impl P for Map<String, V>`) are rejected everywhere, `Map` / `Set`
-/ `CPtr` equality still ride the zero-field derive, and the two
-residuals above (the same impl arriving from two dependencies, one
-concrete impl per `(type, protocol)`) stay open.
+(`impl P for Map<String, V>`) are rejected everywhere, `CPtr`
+equality still rides the zero-field derive, and the two residuals
+above stay open. The residuals are the same impl arriving from two
+dependencies and one concrete impl per `(type, protocol)`.
 
 ---
 
@@ -302,21 +277,14 @@ Darwin fcntl behind it), and `flock`, surfaced as `Fd.read_at`,
 
 ---
 
-## No ordered map, and `Map` cannot be iterated
+## No ordered map
 
 `Map` exposes `get`, `put`, `remove`, `has?`, `length`, and `empty?`.
-There is no `keys`, `entries`, or fold, so a value stored in a `Map`
-can never be enumerated (the iteration half is the `Enumeration<T>`
-gap above wearing a different hat). And nothing in the stdlib keeps
-keys sorted, so ordered workloads (range scans, expiry queues,
-schedulers, routing tables) each hand-roll a persistent balanced tree.
-Writing one in user code works, the AA tree is about 200 lines, but
-every package that needs ordering will duplicate it.
+It also supports finite iteration, but it does not keep keys sorted.
+Ordered workloads such as range scans and expiry queues need a separate type.
 
-**Fix path:** give `Map` an iteration surface once the iterator
-protocol lands, and incubate a `SortedMap` (persistent balanced tree,
-`Comparable` keys, range selection) as a package with an eye toward
-stdlib promotion after a second consumer appears.
+**Fix path:** incubate a `SortedMap` package with comparable keys and range
+selection. Consider stdlib promotion after a second consumer appears.
 
 ---
 

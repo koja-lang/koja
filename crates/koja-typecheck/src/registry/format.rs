@@ -210,7 +210,7 @@ fn format_conformance(
 /// Render a conditional record's param slots as `T: P & Q, U`,
 /// using the target's own param names.
 fn format_bounded_params(
-    bounds: &[Vec<koja_ast::identifier::GlobalRegistryId>],
+    bounds: &[Vec<super::ResolvedProtocolBound>],
     type_params: &[String],
     registry: &GlobalRegistry,
 ) -> String {
@@ -228,11 +228,16 @@ fn format_bounded_params(
             }
             let rendered = slot_bounds
                 .iter()
-                .map(|id| {
-                    registry
-                        .get(*id)
+                .map(|bound| {
+                    let head = registry
+                        .get(bound.protocol_id)
                         .map(|e| e.identifier.qualified_name())
-                        .unwrap_or_else(|| format!("<id {id}>"))
+                        .unwrap_or_else(|| format!("<id {}>", bound.protocol_id));
+                    if bound.args.is_empty() {
+                        head
+                    } else {
+                        format!("{head}<{}>", format_type_args(&bound.args, registry))
+                    }
                 })
                 .collect::<Vec<_>>()
                 .join(" & ");
