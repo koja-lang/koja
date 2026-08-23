@@ -329,6 +329,30 @@ fn deprecated_protocol_bound_warns() {
 }
 
 #[test]
+fn deprecated_parameterized_bound_argument_warns() {
+    let warnings = script_warnings(
+        "
+        @deprecated \"Use NewItem instead.\"
+        struct OldItem
+          value: Int
+        end
+
+        protocol Source<T>
+          fn first(self) -> T
+        end
+
+        fn describe<E: Source<OldItem>>(value: E) -> Int
+          0
+        end
+        ",
+    );
+    assert_warns(
+        &warnings,
+        &["`OldItem` is deprecated: Use NewItem instead."],
+    );
+}
+
+#[test]
 fn cross_package_use_warns() {
     let checked = check_packages(
         &[

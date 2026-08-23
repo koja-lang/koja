@@ -69,4 +69,43 @@ struct SetTest
 
     Result.Ok(true)
   end
+
+  @test "iteration, equality, and debug"
+  fn test_iteration_equality_debug -> Result<Bool, String>
+    set: Set<Int> = [1, 2, 3]
+    count = 0
+    sum = 0
+
+    for item in set
+      count += 1
+      sum += item
+    end
+
+    unless count == 3 and sum == 6
+      return Result.Err("set iteration missed an element")
+    end
+
+    same: Set<Int> = [3, 1, 2]
+    different: Set<Int> = [1, 2, 4]
+
+    unless set == same
+      return Result.Err("equal sets compared unequal")
+    end
+
+    if set == different
+      return Result.Err("different sets compared equal")
+    end
+
+    rendered = set.format()
+
+    unless rendered.starts_with?("[") and rendered.ends_with?("]")
+      return Result.Err("set debug did not use list literal syntax")
+    end
+
+    unless rendered.contains?("1") and rendered.contains?("3")
+      return Result.Err("set debug omitted an element")
+    end
+
+    Result.Ok(true)
+  end
 end

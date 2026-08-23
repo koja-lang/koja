@@ -30,6 +30,7 @@
 
 use koja_ir::{IRType, IRVariantTag};
 
+mod cursor;
 mod from_list;
 mod insert;
 mod lifecycle;
@@ -37,6 +38,7 @@ mod read;
 mod resize;
 mod util;
 
+pub(super) use cursor::emit_next;
 pub(super) use from_list::emit_set_from_list;
 pub(super) use insert::{emit_map_put, emit_set_insert};
 pub(super) use lifecycle::{emit_empty_q, emit_identity, emit_length, emit_new};

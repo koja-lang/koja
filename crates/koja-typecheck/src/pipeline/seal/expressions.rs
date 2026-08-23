@@ -84,11 +84,10 @@ pub(super) fn seal_expr(expr: &Expr, mode: SealMode) {
             expr.span,
         ),
         ExprKind::FieldAccess { receiver, .. } => seal_expr(receiver, mode),
-        // `synthesize` rewrites statement-position fors and
-        // resolve diagnoses expression-position fors. Seal should
-        // never see one.
+        // Resolve rewrites statement-position fors and diagnoses
+        // expression-position fors. Seal should never see one.
         ExprKind::For { .. } => seal_panic(
-            "typecheck seal saw an `ExprKind::For` after synthesize",
+            "typecheck seal saw an `ExprKind::For` after resolve",
             expr.span,
         ),
         ExprKind::Group { expr: inner } => seal_expr(inner, mode),

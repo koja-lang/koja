@@ -78,9 +78,9 @@ impl Parser {
         let name = self.expect_type_ident();
         let mut bounds = Vec::new();
         if self.eat(&TokenKind::Colon).is_some() {
-            bounds.push(self.expect_type_ident());
+            bounds.push(self.parse_primary_type_expr());
             while self.eat(&TokenKind::Ampersand).is_some() {
-                bounds.push(self.expect_type_ident());
+                bounds.push(self.parse_primary_type_expr());
             }
         }
         TypeParam { name, bounds, span }

@@ -433,7 +433,7 @@ end
 
 ### `for` ... `in`
 
-Iterates over any type implementing the `Enumeration<T>` protocol:
+Iterates over any type that implements `Enumeration<T, Cursor>`:
 
 ```koja
 list: List<Int32> = List.new()
@@ -446,7 +446,9 @@ for item in list
 end
 ```
 
-The loop variable is bound directly to each element. No unwrapping needed.
+The loop variable binds directly to each element. The source stays unchanged while a separate cursor advances.
+
+`for` requires a declared `Enumeration` conformance. Functions named `cursor` and `next` do not provide structural conformance.
 
 ### Ternary
 
@@ -1436,6 +1438,20 @@ fn describe_and_greet<T: Greeter & Description>(animal: T) -> String
 end
 ```
 
+Generic protocol bounds can include type arguments. The arguments can use other type parameters from the same declaration:
+
+```koja
+fn count_items<T, Cursor, E: Enumeration<T, Cursor>>(source: E) -> Int
+  count = 0
+
+  for _ in source
+    count += 1
+  end
+
+  count
+end
+```
+
 Bounds are verified at call sites. If a concrete type doesn't implement a required protocol, the compiler emits an error:
 
 ```
@@ -2177,6 +2193,10 @@ m = m.put("b", 2)
 m.get("a").unwrap().print() # 1
 m.has?("b").print() # true
 m.length().print() # 2
+
+for (key, value) in m
+  "#{key}: #{value}".print()
+end
 ```
 
 Functions:
@@ -2189,7 +2209,9 @@ Functions:
 - `length(self) -> Int`: returns the number of entries.
 - `empty?(self) -> Bool`: returns `true` if the map has no entries.
 
-`Map` does not currently support iteration. To iterate over entries, use `List<(K, V)>` as an ordered key-value collection instead.
+`for` yields `(K, V)` entries. Iteration order is unspecified.
+
+`==` compares maps by key and value. Insertion order does not affect equality.
 
 Map literals (`[key: value, ...]`) are backed by the `MapLiteral<K, V>` protocol. See [Literal Protocols](#literal-protocols).
 
@@ -2205,6 +2227,10 @@ s = s.insert(1)
 
 s.length().print() # 2
 s.has?(1).print() # true
+
+for item in s
+  item.print()
+end
 ```
 
 Functions:
@@ -2216,6 +2242,10 @@ Functions:
 - `length(self) -> Int`: returns the number of elements.
 - `empty?(self) -> Bool`: returns `true` if the set has no elements.
 
+`for` yields each element once. Iteration order is unspecified.
+
+`==` compares sets by membership. Insertion order does not affect equality.
+
 `Set<T>` implements `ListLiteral<T>`, so list literal syntax constructs a set when the target type is `Set<T>`:
 
 ```koja
@@ -2224,7 +2254,7 @@ names: Set<String> = ["alice", "bob", "alice"] # Set with 2 elements
 
 ### String Functions
 
-`String` implements `Enumeration<String>`, so strings can be iterated character-by-character with `for`:
+`String` implements `Enumeration<String, Int>`, so `for` iterates Unicode characters:
 
 ```koja
 for c in "hello"
@@ -2518,17 +2548,21 @@ Path.split("/foo/bar").print() # ["/", "foo", "bar"]
 Path.relative_to("tmp/foo/bar", "tmp/bat").print() # "../foo/bar"
 ```
 
-### `Enumeration<T>` Protocol
+### `Enumeration<T, Cursor>` Protocol
 
 ```koja
-protocol Enumeration<T>
-  fn length(self) -> Int
+protocol Enumeration<T, Cursor>
+  fn cursor(self) -> Cursor
 
-  fn get(self, index: Int) -> Option<T>
+  fn next(self, cursor: Cursor) -> Option<(T, Cursor)>
 end
 ```
 
-Any type implementing `Enumeration<T>` can be used with `for` loops. `List<T>` and `String` implement this protocol. `get` returns `Option<T>` instead of panicking on out-of-bounds access. `for` loops unwrap the `Option` automatically.
+Any type that implements `Enumeration<T, Cursor>` can be used with `for`. `List`, `String`, `Range`, `Map`, and `Set` conform.
+
+`cursor` returns the initial traversal state. `next` returns an element and the next cursor, or `None` when traversal ends.
+
+The source remains unchanged. Cursor types are implementation details, and callers must not interpret opaque cursors.
 
 ### `Equality` Protocol
 

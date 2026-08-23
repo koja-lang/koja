@@ -13,11 +13,12 @@ use std::rc::Rc;
 use koja_ir::{IRFunction, SetMethod};
 
 use crate::error::RuntimeError;
+use crate::intrinsics::helpers;
 use crate::value::{SetEntries, Value};
 
 pub(super) fn dispatch(
     method: SetMethod,
-    _function: &IRFunction,
+    function: &IRFunction,
     args: &[Value],
 ) -> Result<Value, RuntimeError> {
     match method {
@@ -27,6 +28,7 @@ pub(super) fn dispatch(
         SetMethod::Insert => insert(args),
         SetMethod::Length => length(args),
         SetMethod::New => new(),
+        SetMethod::Next => next(function, args),
         SetMethod::Remove => remove(args),
     }
 }
@@ -49,6 +51,25 @@ fn has_q(args: &[Value]) -> Result<Value, RuntimeError> {
     let set = expect_set(args, 0, "Set.has?")?;
     let item = expect_arg(args, 1, "Set.has?")?.clone();
     Ok(Value::Bool(set.borrow().iter().any(|v| v == &item)))
+}
+
+fn next(function: &IRFunction, args: &[Value]) -> Result<Value, RuntimeError> {
+    let set = expect_set(args, 0, "Set.next")?;
+    let slot = match expect_arg(args, 1, "Set.next")? {
+        Value::Int(slot) => *slot,
+        other => {
+            return Err(RuntimeError::TypeMismatch {
+                detail: format!("Set.next arg #1 expected Int, got `{other}`"),
+            });
+        }
+    };
+    let option_symbol = helpers::enum_return_symbol(function, "Set.next")?;
+    let items = set.borrow();
+    let value = usize::try_from(slot)
+        .ok()
+        .and_then(|index| items.get(index).map(|item| (index, item)))
+        .map(|(index, item)| Value::Tuple(vec![item.clone(), Value::Int((index + 1) as i64)]));
+    Ok(helpers::option_value(option_symbol, value))
 }
 
 pub(super) fn insert(args: &[Value]) -> Result<Value, RuntimeError> {

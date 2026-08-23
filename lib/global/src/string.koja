@@ -20,7 +20,22 @@ impl Hash for String
   fn hash(self) -> Int
 end
 
-impl Enumeration<String> for String
+impl Enumeration<String, Int> for String
+  @doc """
+  Returns the UTF-8 byte cursor for the first character.
+  """
+  fn cursor(self) -> Int
+    0
+  end
+
+  @doc """
+  Returns the character at the byte cursor and the next byte cursor.
+  """
+  @intrinsic
+  fn next(self, cursor: Int) -> Option<(String, Int)>
+end
+
+extend String
   @doc """
   Returns the number of Unicode codepoints in the string.
   """
@@ -28,14 +43,11 @@ impl Enumeration<String> for String
   fn length(self) -> Int
 
   @doc """
-  Returns the single-character string at the given index. Panics if the
-  index is out of bounds.
+  Returns the character at the codepoint index, or `None` if out of bounds.
   """
   @intrinsic
   fn get(self, index: Int) -> Option<String>
-end
 
-extend String
   @doc """
   Returns `true` if the string contains only ASCII alphabetic
   characters (a-z, A-Z).

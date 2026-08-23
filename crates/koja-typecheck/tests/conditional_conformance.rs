@@ -71,7 +71,10 @@ fn conditional_fact_records_per_slot_bounds() {
     let ConformanceScope::Parameterized { bounds } = &records[0].scope else {
         panic!("conditional impl should record Parameterized, got {records:?}");
     };
-    assert_eq!(bounds, &vec![vec![encodable_id]]);
+    assert_eq!(bounds.len(), 1);
+    assert_eq!(bounds[0].len(), 1);
+    assert_eq!(bounds[0][0].protocol_id, encodable_id);
+    assert!(bounds[0][0].args.is_empty());
 }
 
 #[test]

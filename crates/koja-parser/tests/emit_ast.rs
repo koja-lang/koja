@@ -76,6 +76,16 @@ fn function_add() {
 }
 
 #[test]
+fn parameterized_bound_prints_full_type_expression() {
+    let source = "fn first<T, E: Enumeration<T>>(source: E) -> T\n  source.first()\nend\n";
+    let out = format_snippet(source);
+    assert!(
+        out.contains("Function first (Public)<T, E: Enumeration<T>>"),
+        "got:\n{out}",
+    );
+}
+
+#[test]
 fn multi_feature_file() {
     let source = "\
 struct Point

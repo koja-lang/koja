@@ -38,7 +38,7 @@ impl Parser {
         }
     }
 
-    fn parse_primary_type_expr(&mut self) -> TypeExpr {
+    pub(crate) fn parse_primary_type_expr(&mut self) -> TypeExpr {
         match self.peek().clone() {
             TokenKind::Fn => self.parse_function_type(),
             TokenKind::LParen => self.parse_paren_type(),
@@ -231,9 +231,9 @@ impl Parser {
             return arg;
         }
         let span = type_expr_span(&arg);
-        let mut protocols = vec![self.expect_type_ident()];
+        let mut protocols = vec![self.parse_primary_type_expr()];
         while self.eat(&TokenKind::Ampersand).is_some() {
-            protocols.push(self.expect_type_ident());
+            protocols.push(self.parse_primary_type_expr());
         }
         match &arg {
             TypeExpr::Named { path, .. } if path.len() == 1 => bounds.push(TypeParam {

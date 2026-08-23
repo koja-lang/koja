@@ -201,7 +201,7 @@ fn message_includes_exit_signal(message_type: &ResolvedType, registry: &GlobalRe
 pub(super) fn resolve_receive(
     arms: &mut [MatchArm],
     after_timeout: Option<&mut Expr>,
-    after_body: &mut [Statement],
+    after_body: &mut Vec<Statement>,
     expected: Option<&ResolvedType>,
     span: Span,
     resolver: &mut Resolver<'_>,

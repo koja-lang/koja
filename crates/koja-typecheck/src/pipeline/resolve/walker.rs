@@ -21,7 +21,9 @@
 //! [`Param.local_id`]: koja_ast::ast::Param
 //! [`Resolution::Local`]: koja_ast::identifier::Resolution::Local
 
-use koja_ast::ast::{Diagnostic, File, Function, ImplBlock, ImplMember, Item, Param, Statement};
+use koja_ast::ast::{
+    Diagnostic, Expr, ExprKind, File, Function, ImplBlock, ImplMember, Item, Param, Statement,
+};
 use koja_ast::identifier::{GlobalRegistryId, Identifier, ResolvedType};
 
 use crate::pipeline::aliases::collect_file_aliases;
@@ -37,6 +39,7 @@ use super::error_channel::{
 };
 use super::expr::resolve_expr_with_expected;
 use super::field_defaults::{resolve_enum_defaults, resolve_struct_defaults};
+use super::for_loop::rewrite_for_statement;
 use super::return_type::{check_explicit_return, check_return_type};
 use super::statements::{resolve_assignment, resolve_compound_assignment, resolve_destructure};
 
@@ -192,9 +195,7 @@ pub(crate) fn resolve_file(
         // lets `check_explicit_return` enforce that.
         resolver.current_return_type = Some(resolver.registry.primitive("Unit"));
         resolver.in_script_body = true;
-        for stmt in body.iter_mut() {
-            resolve_statement(stmt, &mut resolver, diagnostics);
-        }
+        resolve_body_with_expected(body, None, &mut resolver, diagnostics);
     }
 }
 
@@ -453,16 +454,40 @@ pub(super) fn resolve_statement_with_expected(
 /// expected-type hint. Only the value-producing tail matters for
 /// bidirectional inference.
 pub(super) fn resolve_body_with_expected(
-    body: &mut [Statement],
+    body: &mut Vec<Statement>,
     expected: Option<&ResolvedType>,
     resolver: &mut Resolver<'_>,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
-    let Some((last, leading)) = body.split_last_mut() else {
-        return;
-    };
-    for stmt in leading {
-        resolve_statement(stmt, resolver, diagnostics);
+    let mut index = 0;
+    while index < body.len() {
+        if matches!(
+            body.get(index),
+            Some(Statement::Expr(Expr {
+                kind: ExprKind::For { .. },
+                ..
+            }))
+        ) {
+            let statement = body.remove(index);
+            match rewrite_for_statement(statement, resolver, diagnostics) {
+                Ok(replacement) => {
+                    body.splice(index..index, replacement);
+                    continue;
+                }
+                Err(statement) => {
+                    body.insert(index, *statement);
+                    index += 1;
+                    continue;
+                }
+            }
+        }
+
+        let trailing = index + 1 == body.len();
+        if trailing {
+            resolve_statement_with_expected(&mut body[index], expected, resolver, diagnostics);
+        } else {
+            resolve_statement(&mut body[index], resolver, diagnostics);
+        }
+        index += 1;
     }
-    resolve_statement_with_expected(last, expected, resolver, diagnostics);
 }

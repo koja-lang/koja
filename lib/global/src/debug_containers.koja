@@ -48,24 +48,44 @@ end
 
 impl Debug for Map<K, V>
   @doc """
-  Renders the map as `Map{N entries}` where `N` is the entry count.
-  Iteration-based `["k": v, ...]` rendering waits on a `Map.entries`
-  intrinsic; until then, this gives every map a usable `format`
-  without dragging in the iteration story.
+  Renders the map as `[key: value, ...]`.
+  Entry order is unspecified.
   """
   fn format(self) -> String
-    "Map{" <> self.length().format() <> " entries}"
+    result = "["
+    first = true
+
+    for (key, value) in self
+      unless first
+        result = result <> ", "
+      end
+
+      result = result <> key.format() <> ": " <> value.format()
+      first = false
+    end
+
+    result <> "]"
   end
 end
 
 impl Debug for Set<T>
   @doc """
-  Renders the set as `Set{N elements}` where `N` is the element
-  count. Iteration-based `{a, b}` rendering waits on a `Set.to_list`
-  intrinsic; until then, this gives every set a usable `format`
-  without dragging in the iteration story.
+  Renders the set as `[value, ...]`.
+  Element order is unspecified.
   """
   fn format(self) -> String
-    "Set{" <> self.length().format() <> " elements}"
+    result = "["
+    first = true
+
+    for item in self
+      unless first
+        result = result <> ", "
+      end
+
+      result = result <> item.format()
+      first = false
+    end
+
+    result <> "]"
   end
 end

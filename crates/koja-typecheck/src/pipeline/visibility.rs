@@ -192,7 +192,12 @@ fn collect_surface_ids(entry: &RegistryEntry, ids: &mut Vec<GlobalRegistryId>) {
         | GlobalKind::TypeAlias(None) => {}
     }
     for bounds in &entry.type_param_bounds {
-        ids.extend(bounds.iter().copied());
+        for bound in bounds {
+            ids.push(bound.protocol_id);
+            for arg in &bound.args {
+                collect_type_ids(arg, ids);
+            }
+        }
     }
 }
 

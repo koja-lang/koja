@@ -5,7 +5,26 @@ move semantics for mutations.
 builtin List<T>
 end
 
-impl Enumeration<T> for List<T>
+impl Enumeration<T, Int> for List<T>
+  @doc """
+  Returns the cursor for the first list element.
+  """
+  fn cursor(self) -> Int
+    0
+  end
+
+  @doc """
+  Returns the element at the cursor and the next cursor.
+  """
+  fn next(self, cursor: Int) -> Option<(T, Int)>
+    match self.get(cursor)
+      Option.Some(item) -> Option.Some((item, cursor + 1))
+      Option.None -> Option.None
+    end
+  end
+end
+
+extend List<T>
   @doc """
   Returns the number of elements in the list.
   """
@@ -17,9 +36,7 @@ impl Enumeration<T> for List<T>
   """
   @intrinsic
   fn get(self, index: Int) -> Option<T>
-end
 
-extend List<T>
   @doc """
   Returns `true` if `f` returns `true` for every element.
   Returns `true` for an empty list.

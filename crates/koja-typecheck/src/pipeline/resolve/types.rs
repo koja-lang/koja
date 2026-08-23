@@ -15,8 +15,8 @@ use super::ctx::{BoundContext, Callee};
 use super::ops::is_primitive_equality_eligible;
 use crate::pipeline::aliases::rewrite_through_aliases;
 use crate::pipeline::lift_signatures::ResolutionScope;
-use crate::pipeline::unify::Substitution;
-use crate::registry::{GlobalKind, GlobalRegistry, RegistryEntry};
+use crate::pipeline::unify::{Substitution, substitute};
+use crate::registry::{GlobalKind, GlobalRegistry, RegistryEntry, ResolvedProtocolBound};
 
 /// Whether `path` resolves to a registered struct or builtin. Lets
 /// the resolver tell a nested struct from a struct-shaped enum
@@ -342,10 +342,9 @@ pub(super) fn display_resolution(ty: &ResolvedType, registry: &GlobalRegistry) -
 /// inferred concrete type that fails to satisfy a bound on the
 /// corresponding generic param. Substitution slots that are still
 /// `None` (phantom) are skipped, the caller already emits a
-/// "cannot infer" diagnostic for those. Inferred [`Resolution::TypeParam`]
-/// substitutions (the bounded param being threaded into another
-/// generic call) skip the head check. The bound is enforced where
-/// the outer call's caller resolves.
+/// "cannot infer" diagnostic for those. Inferred
+/// [`Resolution::TypeParam`] substitutions compare their declared
+/// protocol bounds, including protocol arguments.
 ///
 /// Wording follows LANGUAGE.md §10's bound-enforcement message
 /// verbatim. Keep this surface stable across slices that re-use it.
@@ -373,17 +372,39 @@ pub(super) fn verify_bounds(
         if param_bounds.is_empty() {
             continue;
         }
-        for &protocol_id in param_bounds {
-            let Some(satisfied) = protocol_bound_satisfied(inferred, protocol_id, ctx) else {
+        for bound in param_bounds {
+            let instantiated_bound = ResolvedProtocolBound {
+                args: bound
+                    .args
+                    .iter()
+                    .map(|arg| substitute(arg, subst))
+                    .collect(),
+                protocol_id: bound.protocol_id,
+            };
+            let Some(satisfied) = protocol_bound_satisfied(inferred, &instantiated_bound, ctx)
+            else {
                 continue;
             };
             if satisfied {
                 continue;
             }
             let bound_label = registry
-                .get(protocol_id)
+                .get(bound.protocol_id)
                 .map(|e| e.identifier.last().to_string())
-                .unwrap_or_else(|| format!("<id {protocol_id}>"));
+                .unwrap_or_else(|| format!("<id {}>", bound.protocol_id));
+            let bound_label = if instantiated_bound.args.is_empty() {
+                bound_label
+            } else {
+                format!(
+                    "{bound_label}<{}>",
+                    instantiated_bound
+                        .args
+                        .iter()
+                        .map(|arg| display_resolution(arg, registry))
+                        .collect::<Vec<_>>()
+                        .join(", "),
+                )
+            };
             let param_name = callee
                 .type_params
                 .get(index)
@@ -408,12 +429,11 @@ pub(super) fn verify_bounds(
 /// `impl Render for Bag<Int>` satisfies `T: Render` for `Bag<Int>`
 /// but not `Bag<String>`, and a conditional impl checks its own
 /// bounds recursively). Tuples have structural `Debug` and
-/// `Equality`. Bare type-param heads and other anonymous shapes
-/// remain deferred, since the bound is enforced where the outer
-/// caller resolves.
+/// `Equality`. Type-param heads compare their declared bounds.
+/// Other anonymous shapes remain deferred.
 fn protocol_bound_satisfied(
     inferred: &ResolvedType,
-    protocol_id: GlobalRegistryId,
+    bound: &ResolvedProtocolBound,
     ctx: BoundContext<'_>,
 ) -> Option<bool> {
     let peeled = peel_alias(inferred, ctx.registry);
@@ -422,10 +442,13 @@ fn protocol_bound_satisfied(
             resolution: Resolution::Global(_),
             ..
         }
-        | ResolvedType::Anonymous(AnonymousKind::Tuple { .. }) => Some(
-            ctx.registry
-                .bound_satisfied(&peeled, protocol_id, ctx.overlay),
-        ),
+        | ResolvedType::Named {
+            resolution: Resolution::TypeParam { .. },
+            ..
+        }
+        | ResolvedType::Anonymous(AnonymousKind::Tuple { .. }) => {
+            Some(ctx.registry.bound_satisfied(&peeled, bound, ctx.overlay))
+        }
         _ => None,
     }
 }
@@ -443,8 +466,14 @@ pub(super) fn type_supports_equality(ty: &ResolvedType, ctx: BoundContext<'_>) -
     let Some(equality_id) = equality_protocol_id(ctx.registry) else {
         return false;
     };
-    ctx.registry
-        .bound_satisfied(&structural, equality_id, ctx.overlay)
+    ctx.registry.bound_satisfied(
+        &structural,
+        &ResolvedProtocolBound {
+            args: Vec::new(),
+            protocol_id: equality_id,
+        },
+        ctx.overlay,
+    )
 }
 
 /// The `Global.Equality` protocol's registry id, absent only

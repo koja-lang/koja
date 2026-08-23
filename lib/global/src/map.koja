@@ -6,6 +6,47 @@ with linear probing.
 builtin Map<K, V>
 end
 
+impl Enumeration<(K, V), Int> for Map<K, V>
+  @doc """
+  Returns the opaque cursor for the first map entry.
+  """
+  fn cursor(self) -> Int
+    0
+  end
+
+  @doc """
+  Returns the entry at or after the cursor and the next cursor.
+  Iteration order is unspecified.
+  """
+  @intrinsic
+  fn next(self, cursor: Int) -> Option<((K, V), Int)>
+end
+
+impl Equality for Map<K: Equality, V: Equality>
+  @doc """
+  Returns `true` if both maps contain equal values for the same keys.
+  """
+  fn equals?(self, other: Self) -> Bool
+    if self.length() != other.length()
+      return false
+    end
+
+    for (key, value) in self
+      match other.get(key)
+        Option.Some(other_value) ->
+          unless value.equals?(other_value)
+            return false
+          end
+
+        Option.None ->
+          return false
+      end
+    end
+
+    true
+  end
+end
+
 extend Map<K, V>
   @doc """
   Returns `true` if the map contains no entries.

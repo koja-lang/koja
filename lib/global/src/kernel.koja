@@ -61,13 +61,42 @@ struct Range
 end
 
 @doc """
-A protocol for types that can be iterated with `for`.
-Requires indexed access via `length` and `get`.
+A finite source that can be iterated with `for`.
+The source stays unchanged while a separate cursor advances.
 """
-protocol Enumeration<T>
-  fn length(self) -> Int
+protocol Enumeration<T, Cursor>
+  fn cursor(self) -> Cursor
 
-  fn get(self, index: Int) -> Option<T>
+  fn next(self, cursor: Cursor) -> Option<(T, Cursor)>
+end
+
+impl Enumeration<Int, Option<Int>> for Range
+  @doc """
+  Returns the first range value, or `None` for an empty range.
+  """
+  fn cursor(self) -> Option<Int>
+    self.start > self.stop ? Option.None : Option.Some(self.start)
+  end
+
+  @doc """
+  Returns the current range value and the next cursor.
+  """
+  fn next(self, cursor: Option<Int>) -> Option<(Int, Option<Int>)>
+    match cursor
+      Option.Some(current) when current < self.start or current > self.stop ->
+        Option.None
+
+      Option.Some(current) ->
+        next_cursor: Option<Int> = current == self.stop
+          ? Option.None
+          : Option.Some(current + 1)
+
+        Option.Some((current, next_cursor))
+
+      Option.None ->
+        Option.None
+    end
+  end
 end
 
 @doc """

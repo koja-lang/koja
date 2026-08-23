@@ -112,6 +112,33 @@ pub unsafe extern "C" fn koja_string_length(ptr: *const u8) -> i64 {
     s.chars().count() as i64
 }
 
+/// Returns the character at a UTF-8 byte cursor and writes the next cursor.
+///
+/// # Safety
+/// `ptr` must point to a valid Koja `String` payload. `next` must be writable.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn koja_string_next(
+    ptr: *const u8,
+    cursor: i64,
+    next: *mut i64,
+) -> *const u8 {
+    let s = unsafe { payload_str(ptr) };
+    let Some(offset) = usize::try_from(cursor).ok() else {
+        return ptr::null();
+    };
+    let Some(suffix) = s.get(offset..) else {
+        return ptr::null();
+    };
+    let Some(character) = suffix.chars().next() else {
+        return ptr::null();
+    };
+    unsafe {
+        *next = (offset + character.len_utf8()) as i64;
+    }
+    let mut bytes = [0; 4];
+    unsafe { alloc_koja_string(character.encode_utf8(&mut bytes).as_bytes()) }
+}
+
 /// Compares the complete byte payloads of two Koja strings.
 ///
 /// # Safety
@@ -193,4 +220,41 @@ pub unsafe extern "C" fn koja_utf8_validate(ptr: *const u8, len: i64) -> i64 {
     }
     let slice = unsafe { slice::from_raw_parts(ptr, len as usize) };
     if str::from_utf8(slice).is_ok() { 1 } else { 0 }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::memory;
+    use crate::util::BLOCK_HEADER_SIZE;
+
+    #[test]
+    fn string_next_advances_by_utf8_bytes() {
+        let input = unsafe { alloc_koja_string("éa".as_bytes()) };
+        let mut next = -1;
+        let character = unsafe { koja_string_next(input, 0, &mut next) };
+
+        assert_eq!(unsafe { string_payload_bytes(character) }, "é".as_bytes());
+        assert_eq!(next, 2);
+
+        unsafe {
+            memory::free((input as *mut u8).sub(BLOCK_HEADER_SIZE));
+            memory::free((character as *mut u8).sub(BLOCK_HEADER_SIZE));
+        }
+    }
+
+    #[test]
+    fn string_next_returns_null_for_invalid_cursors() {
+        let input = unsafe { alloc_koja_string("é".as_bytes()) };
+        let mut next = -1;
+
+        assert!(unsafe { koja_string_next(input, -1, &mut next) }.is_null());
+        assert!(unsafe { koja_string_next(input, 1, &mut next) }.is_null());
+        assert!(unsafe { koja_string_next(input, 2, &mut next) }.is_null());
+        assert_eq!(next, -1);
+
+        unsafe {
+            memory::free((input as *mut u8).sub(BLOCK_HEADER_SIZE));
+        }
+    }
 }

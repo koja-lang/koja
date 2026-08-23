@@ -218,6 +218,7 @@ intrinsic_methods! {
         HasQ => "has?",
         Length => "length",
         New => "new",
+        Next => "next",
         Put => "put",
         Remove => "remove",
     }
@@ -273,6 +274,7 @@ intrinsic_methods! {
         Insert => "insert",
         Length => "length",
         New => "new",
+        Next => "next",
         Remove => "remove",
     }
 
@@ -293,6 +295,7 @@ intrinsic_methods! {
         ByteLength => "byte_length",
         Get => "get",
         Length => "length",
+        Next => "next",
         Slice => "slice",
         ToBinary => "to_binary",
         ToCstring => "to_cstring",
@@ -695,6 +698,7 @@ mod tests {
             ("Map", "has?", Id::Map(MapMethod::HasQ)),
             ("Map", "length", Id::Map(MapMethod::Length)),
             ("Map", "new", Id::Map(MapMethod::New)),
+            ("Map", "next", Id::Map(MapMethod::Next)),
             ("Map", "put", Id::Map(MapMethod::Put)),
             ("Map", "remove", Id::Map(MapMethod::Remove)),
             (
@@ -723,6 +727,7 @@ mod tests {
             ("Set", "insert", Id::Set(SetMethod::Insert)),
             ("Set", "length", Id::Set(SetMethod::Length)),
             ("Set", "new", Id::Set(SetMethod::New)),
+            ("Set", "next", Id::Set(SetMethod::Next)),
             ("Set", "remove", Id::Set(SetMethod::Remove)),
             ("Socket", "last_error", Id::Socket(SocketMethod::LastError)),
             (
@@ -742,6 +747,7 @@ mod tests {
             ),
             ("String", "get", Id::String(StringMethod::Get)),
             ("String", "length", Id::String(StringMethod::Length)),
+            ("String", "next", Id::String(StringMethod::Next)),
             ("String", "slice", Id::String(StringMethod::Slice)),
             ("String", "to_binary", Id::String(StringMethod::ToBinary)),
             ("String", "to_cstring", Id::String(StringMethod::ToCstring)),

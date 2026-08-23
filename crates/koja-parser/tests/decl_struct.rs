@@ -110,7 +110,30 @@ fn struct_type_param_bounds() {
         ",
     );
     assert_eq!(s.type_params.len(), 1);
-    assert_eq!(s.type_params[0].bounds, vec!["Eq", "Hash"]);
+    assert!(matches!(
+        s.type_params[0].bounds.as_slice(),
+        [
+            TypeExpr::Named { path: eq, .. },
+            TypeExpr::Named { path: hash, .. },
+        ] if eq == &["Eq"] && hash == &["Hash"]
+    ));
+}
+
+#[test]
+fn struct_parameterized_type_param_bound() {
+    let s = first_struct(
+        "
+        struct Cursor<T, E: Enumeration<T>>
+          value: E
+        end
+        ",
+    );
+    assert!(matches!(
+        s.type_params[1].bounds.as_slice(),
+        [TypeExpr::Generic { path, args, .. }]
+            if path == &["Enumeration"]
+                && matches!(args.as_slice(), [TypeExpr::Named { path, .. }] if path == &["T"])
+    ));
 }
 
 #[test]

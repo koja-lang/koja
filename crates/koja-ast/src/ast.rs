@@ -351,7 +351,7 @@ pub enum Severity {
 #[derive(Debug, Clone, PartialEq)]
 pub struct TypeParam {
     pub name: String,
-    pub bounds: Vec<String>,
+    pub bounds: Vec<TypeExpr>,
     pub span: Span,
 }
 
@@ -612,7 +612,7 @@ pub struct TypeAlias {
 // Type expressions
 
 /// A type annotation in source code (e.g., `Int`, `List<String>`).
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum TypeExpr {
     /// A simple named type: `Int`, `String`, `MyStruct`.
     Named { path: Vec<String>, span: Span },

@@ -189,7 +189,7 @@ pub(super) fn resolve_expr_with_expected(
         }
         ExprKind::Cond { arms, else_body } => resolve_cond(
             arms,
-            else_body.as_deref_mut(),
+            else_body.as_mut(),
             expected,
             expr.span,
             resolver,
@@ -202,7 +202,7 @@ pub(super) fn resolve_expr_with_expected(
         } => resolve_if(
             condition,
             then_body,
-            else_body.as_deref_mut(),
+            else_body.as_mut(),
             expected,
             expr.span,
             resolver,
@@ -269,9 +269,9 @@ pub(super) fn resolve_expr_with_expected(
         ExprKind::While { condition, body } => {
             resolve_while(condition, body, resolver, diagnostics)
         }
-        // Statement-position `for` is rewritten by `synthesize`
-        // before resolve runs. Reaching here means expression
-        // position, which the pipeline does not yet support yet.
+        // The body walker rewrites statement-position `for` before
+        // expression dispatch. Reaching here means expression
+        // position, which the pipeline does not support yet.
         ExprKind::For { .. } => {
             diagnostics.push(Diagnostic::error(
                 "typecheck does not yet support `for` in expression \

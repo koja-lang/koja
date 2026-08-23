@@ -45,7 +45,7 @@ use crate::pipeline::lift_signatures::{TypeParamScope, resolve_type_expr};
 pub(super) fn resolve_closure(
     params: &mut [ClosureParam],
     return_type: &Option<TypeExpr>,
-    body: &mut [Statement],
+    body: &mut Vec<Statement>,
     expected: Option<&ResolvedType>,
     span: Span,
     resolver: &mut Resolver<'_>,

@@ -34,6 +34,6 @@ pub use registry::{
     BoundOverlay, BuiltinDefinition, BuiltinShape, Candidate, CandidateDetail, CandidateKind,
     Conformance, ConformanceScope, ConstantDefinition, Dispatch, EnumDefinition, FunctionSignature,
     GlobalKind, GlobalRegistry, KEYWORDS, ProtocolDefinition, RegistryEntry, ResolvedEnumVariant,
-    ResolvedParam, ResolvedProtocolMethod, ResolvedStructField, ResolvedVariantData,
-    StructDefinition, format_registry,
+    ResolvedParam, ResolvedProtocolBound, ResolvedProtocolMethod, ResolvedStructField,
+    ResolvedVariantData, StructDefinition, format_registry,
 };

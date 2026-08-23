@@ -167,3 +167,37 @@ fn bounded_dispatch_generic_struct_receiver_resolves_through_substitution() {
         "expected mono'd `Bag<Int>.greet` impl method, got {names:?}",
     );
 }
+
+#[test]
+fn parameterized_bound_dispatch_monomorphizes_protocol_arguments() {
+    let source = "
+        protocol Source<T>
+          fn first(self) -> T
+        end
+
+        struct IntSource
+          value: Int
+        end
+
+        impl Source<Int> for IntSource
+          fn first(self) -> Int
+            self.value
+          end
+        end
+
+        fn read<T, E: Source<T>>(source: E, fallback: T) -> T
+          source.first()
+        end
+
+        read(IntSource{value: 1}, 0)
+        0
+        ";
+
+    let script = lower_script_source(source);
+    let names = script_function_names(&script);
+    assert!(
+        names.iter().any(|name| name.starts_with("TestApp.read_$")),
+        "expected parameterized `read` specialization, got {names:?}",
+    );
+    assert!(names.contains(&"TestApp.IntSource.first".to_string()));
+}

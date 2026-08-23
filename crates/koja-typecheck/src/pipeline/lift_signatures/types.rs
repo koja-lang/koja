@@ -12,7 +12,7 @@ pub(super) use koja_ast::labels::type_expr_span;
 use crate::pipeline::aliases::rewrite_through_aliases;
 use crate::pipeline::resolve::types::canonical_union;
 use crate::pipeline::visibility::check_reference_visibility;
-use crate::registry::{Dispatch, GlobalKind, GlobalRegistry, RegistryEntry};
+use crate::registry::{Dispatch, GlobalKind, GlobalRegistry, RegistryEntry, ResolvedProtocolBound};
 
 /// Read-only name-resolution inputs threaded through type-expression
 /// resolution. `Copy` so callers pass it by value without ceremony.
@@ -395,45 +395,57 @@ fn lookup_path_entry<'r>(
     None
 }
 
-/// Resolve a `<T: Bound>` bound name to the protocol's registry id.
-/// Lookup order matches type-name resolution: file aliases first
-/// (so `<T: AliasedProtocol>` works), then `package`, then `Global`.
-/// Emits a diagnostic at `span` and returns `None` when the name
-/// doesn't resolve or names a non-protocol entry.
-pub(crate) fn resolve_bound_to_id(
-    bound: &str,
-    span: Span,
+/// Resolve one protocol bound, including its type arguments.
+pub(crate) fn resolve_protocol_bound(
+    bound: &TypeExpr,
+    type_params: TypeParamScope<'_>,
     scope: ResolutionScope<'_>,
     diagnostics: &mut Vec<Diagnostic>,
-) -> Option<GlobalRegistryId> {
-    let path = [bound.to_string()];
-    let aliased = rewrite_through_aliases(scope.aliases, &path, scope.package, scope.registry)
-        .and_then(|target| scope.registry.lookup(&target));
-    let local = Identifier::new(scope.package, vec![bound.to_string()]);
-    let global = Identifier::new("Global", vec![bound.to_string()]);
-    let Some((id, entry)) = aliased
-        .or_else(|| scope.registry.lookup(&local))
-        .or_else(|| scope.registry.lookup(&global))
+) -> Option<ResolvedProtocolBound> {
+    let resolved = resolve_type_expr(bound, type_params, scope, diagnostics);
+    let ResolvedType::Named {
+        resolution: Resolution::Global(id),
+        type_args: args,
+    } = resolved
     else {
-        diagnostics.push(Diagnostic::error(
-            format!("type-parameter bound `{bound}` does not resolve to a known protocol"),
-            span,
-        ));
         return None;
     };
+    let entry = scope.registry.get(id)?;
     if !matches!(entry.kind, GlobalKind::Protocol(_)) {
         diagnostics.push(Diagnostic::error(
             format!(
-                "type-parameter bound `{bound}` must name a protocol (`{}` is a {})",
+                "type-parameter bound `{}` must name a protocol (`{}` is a {})",
+                render_resolved(
+                    &ResolvedType::Named {
+                        resolution: Resolution::Global(id),
+                        type_args: args.clone(),
+                    },
+                    scope.registry,
+                ),
                 entry.identifier,
                 entry.kind.label(),
             ),
-            span,
+            type_expr_span(bound),
         ));
         return None;
     }
-    check_reference_visibility(entry, scope.package, span, diagnostics);
-    Some(id)
+    let expected_arity = entry.type_params.len().saturating_sub(1);
+    if args.len() != expected_arity {
+        diagnostics.push(Diagnostic::error(
+            format!(
+                "protocol `{}` expects {expected_arity} type argument{} in a bound, got {}",
+                entry.identifier,
+                if expected_arity == 1 { "" } else { "s" },
+                args.len(),
+            ),
+            type_expr_span(bound),
+        ));
+        return None;
+    }
+    Some(ResolvedProtocolBound {
+        args,
+        protocol_id: id,
+    })
 }
 
 pub(super) fn dispatch_label(dispatch: Dispatch) -> &'static str {

@@ -99,8 +99,7 @@ pub fn check_program(parsed: ParsedProgram) -> Result<CheckedProgram, CheckFailu
     // Pre-collect synthesis: append `impl Debug / Equality for T`
     // blocks so they're present when collect / lift register items.
     // Has to run before collect because the synthesizer introduces
-    // new top-level items, unlike the post-lift `synthesize_program`
-    // pass which only mutates function bodies.
+    // new top-level items.
     //
     // The "existing impls" set is collected per-package across all
     // files first so a hand-written `impl Debug for List<T>` in
@@ -133,8 +132,6 @@ pub fn check_program(parsed: ParsedProgram) -> Result<CheckedProgram, CheckFailu
     lift_signatures::lift_signatures(&mut packages, &mut registry, &mut diagnostics);
 
     visibility::check_signature_leaks(&registry, &mut diagnostics);
-
-    synthesize::synthesize_program(&mut packages);
 
     for pkg in &mut packages {
         for file in &mut pkg.files {

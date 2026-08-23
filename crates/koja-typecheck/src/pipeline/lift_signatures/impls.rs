@@ -21,7 +21,7 @@ use crate::pipeline::resolve::types::types_equivalent;
 use crate::pipeline::unify::{Substitution, substitute};
 use crate::registry::{
     Conformance, ConformanceScope, Dispatch, GlobalKind, GlobalRegistry, InsertOutcome,
-    ProtocolDefinition, ResolvedProtocolMethod, VisibilityScope,
+    ProtocolDefinition, ResolvedProtocolBound, ResolvedProtocolMethod, VisibilityScope,
 };
 
 use super::LiftScope;
@@ -30,7 +30,7 @@ use super::SelfContext;
 use super::functions::{is_concrete_type, lift_function_with_identifier};
 use super::types::{
     ResolutionScope, TypeParamScope, concrete_self_type, dispatch_label, render_resolved,
-    resolve_bound_to_id, resolve_type_expr, type_expr_span,
+    resolve_protocol_bound, resolve_type_expr, type_expr_span,
 };
 
 /// Where a conformance is declared, either an `impl P for T` block
@@ -614,7 +614,7 @@ fn classify_conformance_scope(
 }
 
 /// Resolve an impl's conditional target bounds into per-slot
-/// protocol ids, parallel to the target's params. The caller has
+/// protocol bounds, parallel to the target's params. The caller has
 /// already confirmed the written args are the target's own params
 /// in declaration order, so a bound's slot is the position of the
 /// written arg it names. All-empty slots mean the conformance is
@@ -625,11 +625,19 @@ pub(crate) fn resolve_target_bounds(
     target_bounds: &[TypeParam],
     scope: ResolutionScope<'_>,
     diagnostics: &mut Vec<Diagnostic>,
-) -> Vec<Vec<GlobalRegistryId>> {
+) -> Vec<Vec<ResolvedProtocolBound>> {
     let TypeExpr::Generic { args, .. } = target_expr else {
         return Vec::new();
     };
-    let mut resolved = vec![Vec::new(); args.len()];
+    let Some(path) = nominal_target_path(target_expr) else {
+        return Vec::new();
+    };
+    let Some((owner, _, _)) = scope.registry.lookup_owner_path(path, scope.package) else {
+        return Vec::new();
+    };
+    let owners = [owner];
+    let type_params = TypeParamScope::new(&owners);
+    let mut resolved: Vec<Vec<ResolvedProtocolBound>> = vec![Vec::new(); args.len()];
     for bound in target_bounds {
         let slot = args.iter().position(|arg| {
             matches!(
@@ -645,7 +653,7 @@ pub(crate) fn resolve_target_bounds(
         resolved[slot] = bound
             .bounds
             .iter()
-            .filter_map(|name| resolve_bound_to_id(name, bound.span, scope, diagnostics))
+            .filter_map(|bound| resolve_protocol_bound(bound, type_params, scope, diagnostics))
             .collect();
     }
     resolved
