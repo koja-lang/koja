@@ -447,7 +447,7 @@ fn finalize_package(pkg: &mut DocPackage) {
             doc: f.doc.clone(),
             kind: "fn".to_string(),
             href: f.page_name(),
-            name: format!("{}/{}", f.name, f.arity),
+            name: f.display_name(),
         });
     }
     for p in &pkg.protocols {

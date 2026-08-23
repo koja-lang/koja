@@ -46,6 +46,10 @@ fn overloads_keep_distinct_pages_and_member_anchors() {
           left + right
         end
 
+        fn even?(value: Int) -> Bool
+          value == 0
+        end
+
         struct Counter
           value: Int
 
@@ -62,16 +66,36 @@ fn overloads_keep_distinct_pages_and_member_anchors() {
     finalize_project(&mut project);
 
     let package = &project.packages[0];
-    assert_eq!(package.functions.len(), 2);
-    assert_eq!(package.functions[0].page_name(), "choose-arity-1");
-    assert_eq!(package.functions[1].page_name(), "choose-arity-2");
+    assert_eq!(package.functions.len(), 3);
+    assert_eq!(package.functions[0].page_name(), "choose-1");
+    assert_eq!(package.functions[1].page_name(), "choose-2");
+    let predicate = package
+        .functions
+        .iter()
+        .find(|f| f.name == "even?")
+        .expect("predicate function should be extracted");
+    assert_eq!(
+        predicate.page_name(),
+        "even-q-1",
+        "`?` must not appear in a URL path"
+    );
+    assert_eq!(predicate.display_name(), "even?/1");
     let first_page = render_function(&package.functions[0], package, &project);
     assert!(first_page.contains("choose"));
+    assert_eq!(
+        first_page.matches("rail-item active").count(),
+        1,
+        "the sidebar should mark exactly the current overload active"
+    );
+    assert!(
+        first_page.contains("choose/1"),
+        "the active sidebar label should be arity-qualified"
+    );
 
     let counter = &package.structs[0];
     let html = render_struct(counter, package, &project);
-    assert!(html.contains("fn-add-arity-2"));
-    assert!(html.contains("fn-add-arity-3"));
+    assert!(html.contains("fn-add-2"));
+    assert!(html.contains("fn-add-3"));
 }
 
 fn build_project() -> DocProject {
@@ -311,11 +335,11 @@ fn search_index_includes_items_and_methods() {
     assert!(json.contains("\"name\":\"Counter\""));
     assert!(json.contains("\"url\":\"MyApp/Counter.html\""));
     assert!(json.contains("\"name\":\"Counter.bump/0\""));
-    assert!(json.contains("\"url\":\"MyApp/Counter.html#fn-bump-arity-0\""));
+    assert!(json.contains("\"url\":\"MyApp/Counter.html#fn-bump-0\""));
     assert!(json.contains("\"pkg\":\"Crypto\""));
-    assert!(json.contains("\"url\":\"Crypto/SHA256.html#fn-digest-arity-0\""));
+    assert!(json.contains("\"url\":\"Crypto/SHA256.html#fn-digest-0\""));
     assert!(json.contains("\"pkg\":\"Helper\""));
-    assert!(json.contains("\"url\":\"Helper/assist-arity-0.html\""));
+    assert!(json.contains("\"url\":\"Helper/assist-0.html\""));
 }
 
 #[test]
@@ -505,8 +529,8 @@ fn struct_page_links_methods_and_other_packages() {
         .expect("SHA256");
     let html = render_struct(sha, crypto, &project);
 
-    assert!(html.contains("id=\"fn-digest-arity-0\""));
-    assert!(html.contains("href=\"#fn-digest-arity-0\""));
+    assert!(html.contains("id=\"fn-digest-0\""));
+    assert!(html.contains("href=\"#fn-digest-0\""));
     assert!(html.contains("value=\"../MyApp/index.html\""));
     assert!(html.contains("data-root-prefix=\"../\""));
     // Signatures render pre-highlighted.
@@ -581,7 +605,7 @@ fn big_struct_page_gets_on_this_page_toc() {
 
     assert!(html.contains("On this page"));
     assert!(html.contains("href=\"#fields\""));
-    assert!(html.contains("href=\"#fn-checkout-arity-2\""));
+    assert!(html.contains("href=\"#fn-checkout-2\""));
     // The fallible spelling survives into the rendered signature.
     assert!(html.contains("! <span class=\"ty\">String</span>"));
 }

@@ -376,7 +376,14 @@ button:focus-visible {
   color: var(--ink-soft);
   font-family: var(--font-mono);
   font-size: 0.88rem;
-  overflow-wrap: anywhere;
+}
+
+/* Truncate long identifiers instead of wrapping mid-name. */
+.rail-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .rail-item:hover {

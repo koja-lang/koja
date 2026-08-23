@@ -426,8 +426,9 @@ pub fn render_enum(e: &DocEnum, pkg: &DocPackage, project: &DocProject) -> Strin
 }
 
 pub fn render_function(f: &DocFunction, pkg: &DocPackage, project: &DocProject) -> String {
+    let display_name = f.display_name();
     let tmpl = FunctionTemplate {
-        ctx: PageContext::item(&f.name, Vec::new(), pkg, project),
+        ctx: PageContext::item(&display_name, Vec::new(), pkg, project),
         f,
     };
     tmpl.render().expect("failed to render function template")

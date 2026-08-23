@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Two functions may share a name when their arities differ, and generated docs give each arity its own entry.
 - Function parameters can declare trailing default values, so a function is callable at every arity its defaults allow.
 - Named function values use mandatory `&name/arity` references, including for single-arity functions.
 - `JSON.EncodeOptions` adds a `pretty?: Bool = false` field to `JSON.encode`.
@@ -43,6 +44,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `koja doc serve` no longer stalls page loads for seconds when a browser holds idle connections open.
+- `koja doc` sidebars truncate long names with a hover tooltip instead of wrapping them mid-identifier.
+- `koja doc` links to predicate function pages like `empty?` no longer break at the `?` in the URL.
 - `koja doc` shows deprecation notices and migration guidance in generated pages, listings, terminal search, and the search index.
 - `koja doc` generates pages for nested types and preserves full qualified type names in listings, search results, and links.
 - `koja format` preserves separate comments in wrapped `match`, `cond`, and `receive` arm heads instead of merging their text.

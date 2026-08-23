@@ -135,7 +135,7 @@ fn collect_package_symbols<'a>(pkg: &'a DocPackage, out: &mut Vec<Symbol<'a>>) {
     };
     let member = |owner: &'a str, f: &'a DocFunction| Symbol {
         kind: "fn",
-        name: format!("{owner}.{}/{}", f.name, f.arity),
+        name: format!("{owner}.{}", f.display_name()),
         owner: Some(owner),
         package: &pkg.name,
         target: SymbolTarget::Function(f),
@@ -153,11 +153,7 @@ fn collect_package_symbols<'a>(pkg: &'a DocPackage, out: &mut Vec<Symbol<'a>>) {
         out.extend(e.functions.iter().map(|f| member(&e.name, f)));
     }
     for f in &pkg.functions {
-        out.push(item(
-            "fn",
-            &format!("{}/{}", f.name, f.arity),
-            SymbolTarget::Function(f),
-        ));
+        out.push(item("fn", &f.display_name(), SymbolTarget::Function(f)));
     }
     for p in &pkg.protocols {
         out.push(item("protocol", &p.name, SymbolTarget::Protocol(p)));

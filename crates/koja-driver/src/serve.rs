@@ -1,8 +1,10 @@
 //! Minimal blocking HTTP/1.1 static file server for `koja doc
 //! serve`. Hand-rolled so the driver doesn't grow a new crate
-//! dependency just to preview the generated doc tree. Single-
-//! threaded (one user, mostly-cached) with `Connection: close`
-//! so we don't need keep-alive bookkeeping.
+//! dependency just to preview the generated doc tree. One thread
+//! per connection: browsers open idle speculative sockets, and
+//! handling those inline would stall every other request behind
+//! the read timeout. `Connection: close` so we don't need
+//! keep-alive bookkeeping.
 //!
 //! Path resolution canonicalizes the doc root once at startup
 //! and refuses any request whose normalized URL would escape it,
@@ -16,6 +18,7 @@ use std::fs;
 use std::io::{self, Read, Write};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr, TcpListener, TcpStream};
 use std::path::{Component, Path, PathBuf};
+use std::thread;
 use std::time::Duration;
 
 /// First port we'll try when the caller didn't pin one.
@@ -51,9 +54,12 @@ pub fn run(doc_root: &Path, port: Option<u16>) -> Result<(), ServeError> {
     for stream in listener.incoming() {
         match stream {
             Ok(stream) => {
-                if let Err(e) = handle_client(stream, &canonical_root) {
-                    eprintln!("warning: serve: {e}");
-                }
+                let doc_root = canonical_root.clone();
+                thread::spawn(move || {
+                    if let Err(e) = handle_client(stream, &doc_root) {
+                        eprintln!("warning: serve: {e}");
+                    }
+                });
             }
             Err(e) => eprintln!("warning: accept error: {e}"),
         }
