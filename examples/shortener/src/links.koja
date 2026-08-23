@@ -17,12 +17,11 @@ impl JSON.Encoding for Link
   Returns this link in its API response shape.
   """
   fn to_json(self) -> JSON.Value
-    value: JSON.Value = [
+    [
       "code": self.code.to_json(), "created_at": self.created_at.to_json(),
       "hits": self.hits.to_json(), "short_path": ("/" <> self.code).to_json(),
       "url": self.url.to_json()
     ]
-    value
   end
 end
 
