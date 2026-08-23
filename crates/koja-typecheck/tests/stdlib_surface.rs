@@ -46,6 +46,7 @@ const SURFACE: &[(&str, &[&str])] = &[
         ],
     ),
     ("CString", &["ConversionError", "free", "to_string"]),
+    ("Checksum", &["crc32", "crc32c"]),
     ("Debug", &[]),
     (
         "Fd",
@@ -208,6 +209,16 @@ fn user_code_can_call_eq_and_hash_through_method_chain() {
         1.equals?(1)
         42.hash()
         ",
+    ));
+}
+
+#[test]
+fn user_code_can_call_checksum_apis() {
+    typecheck(&dedent(
+        r#"
+        Checksum.crc32(<<1, 2, 3>>)
+        Checksum.crc32c(<<1, 2, 3>>)
+        "#,
     ));
 }
 

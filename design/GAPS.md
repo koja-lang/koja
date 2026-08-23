@@ -163,6 +163,26 @@ impls or a rule that a builtin satisfies bounds by shape.
 
 ---
 
+## Derived protocols do not inspect generic arguments
+
+Found 2026-08-23 while updating `auth_manager` for Koja 0.18.
+Derived `Debug` and `Equality` detect a direct opaque field, such as a
+function. They do not detect an opaque type inside a generic field,
+such as `List<fn (Conn) -> Conn>`. The generated function can reach IR
+lowering with an unsupported call on the function type and cause a
+compiler panic.
+
+The language must decide whether a derived protocol rejects the type
+or omits fields that cannot conform. Omitting a field can make distinct
+values compare as equal. Until this policy is defined, types with these
+fields must provide explicit protocol functions.
+
+**Fix path:** define the derivation policy, validate each generated
+protocol call before IR lowering, and report a source diagnostic when
+the type cannot derive the protocol.
+
+---
+
 ## Protocol conformance residuals
 
 Found 2026-08-09 while designing an `Encodable` protocol for the
@@ -304,22 +324,6 @@ when the protocol exists), `Int.to_be_bytes(width)` with a matching
 `Binary.read_be(offset, width)`, plus `Float.bit_pattern` and
 `Float.from_bit_pattern` intrinsics. The `Float32` forms use `UInt32` instead of
 `UInt64`. All are small, self-contained stdlib additions.
-
----
-
-## No non-cryptographic checksum
-
-`Crypto` covers SHA256 and HMAC, but storage and wire formats want a
-cheap integrity check (CRC32, CRC32C, xxHash) for frame validation.
-Table-driven CRC32 is easy to write in Koja and every format
-re-implements it, byte-looped and slow compared to hardware CRC32C or
-a slice-by-8 implementation the runtime could provide. xxHash is out
-of reach entirely until wrapping arithmetic lands (see the
-wrapping-arithmetic gap above).
-
-**Fix path:** a `Checksum` module (or a `Crypto` sibling) with CRC32
-and CRC32C backed by runtime intrinsics. Revisit xxHash once wrapping
-multiplication exists.
 
 ---
 

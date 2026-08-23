@@ -1,0 +1,44 @@
+struct ChecksumTest
+  @test "empty data has the standard zero checksums"
+  fn test_empty -> Result<Bool, String>
+    unless Checksum.crc32(<<>>) == 0
+      return Result.Err("CRC-32")
+    end
+
+    unless Checksum.crc32c(<<>>) == 0
+      return Result.Err("CRC-32C")
+    end
+
+    Result.Ok(true)
+  end
+
+  @test "checksums match the standard check values"
+  fn test_check_values -> Result<Bool, String>
+    data = "123456789".to_binary()
+
+    unless Checksum.crc32(data) == 0xCBF43926
+      return Result.Err("CRC-32")
+    end
+
+    unless Checksum.crc32c(data) == 0xE3069283
+      return Result.Err("CRC-32C")
+    end
+
+    Result.Ok(true)
+  end
+
+  @test "checksums include embedded zero bytes"
+  fn test_embedded_zero -> Result<Bool, String>
+    data = <<0, 1, 0, 255>>
+
+    unless Checksum.crc32(data) == 0x0D845AA6
+      return Result.Err("CRC-32")
+    end
+
+    unless Checksum.crc32c(data) == 0x405B8AE8
+      return Result.Err("CRC-32C")
+    end
+
+    Result.Ok(true)
+  end
+end
