@@ -129,8 +129,8 @@ focused standard library improvements found while building auth-manager.
 - Add bytewise `Binary.compare`, big-endian integer encoding and decoding, and
   `Float.bit_pattern` / `Float.from_bit_pattern`
   ([gap](GAPS.md#binary-has-no-ordering-and-no-endian-helpers)).
-- Add CRC32 and CRC32C checksums for storage and wire-format integrity
-  ([gap](GAPS.md#no-non-cryptographic-checksum)).
+- **[DONE]** Add CRC32 and CRC32C checksums for storage and wire-format
+  integrity.
 - Add socket read, write, connect, and accept deadlines so a stalled peer
   cannot block its owning process forever
   ([gap](GAPS.md#sockets-have-no-deadlines)).

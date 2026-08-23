@@ -2526,6 +2526,18 @@ Base.encode16(<<0, 15, 255>>).print() # "000fff"
 Base.url_encode64(<<251, 239>>).print() # "--8="
 ```
 
+### `Checksum`
+
+Checksums detect accidental corruption in binary data. They do not provide cryptographic authentication.
+
+- `Checksum.crc32(data: Binary) -> UInt32`: computes CRC-32/ISO-HDLC.
+- `Checksum.crc32c(data: Binary) -> UInt32`: computes CRC-32/ISCSI, also known as CRC-32C or Castagnoli.
+
+```koja
+Checksum.crc32("123456789".to_binary()) == 0xCBF43926
+Checksum.crc32c("123456789".to_binary()) == 0xE3069283
+```
+
 ### `Path`
 
 POSIX path manipulation, modeled on Elixir's `Path`. All functions are pure string operations except `expand`, which reads the current working directory and `HOME`. None of them touch the file system, so `..` resolution is lexical and assumes no symlinks.

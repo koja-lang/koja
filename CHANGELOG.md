@@ -14,6 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Protocol impls on generic targets can require bounds on the type parameters, as in `impl Encodable for List<T: Encodable>`, and the conformance holds only for instantiations that satisfy them.
 - Generic type parameters accept parameterized protocol bounds, such as `E: Enumeration<T, Cursor>`.
 - `Range`, `Map`, and `Set` support `for` iteration, with unspecified order for hash collections.
+- `Checksum.crc32` and `Checksum.crc32c` compute standard checksums for binary data.
 - `IPAddress` can parse and render IPv4 and IPv6 text, including compressed IPv6 and embedded IPv4 forms.
 - Project-aware CLI commands accept `-S, --project <directory>` to select a project without changing the caller's working directory.
 

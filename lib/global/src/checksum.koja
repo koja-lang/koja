@@ -1,0 +1,44 @@
+priv const CRC32_POLYNOMIAL: Int = 0xEDB88320
+priv const CRC32C_POLYNOMIAL: Int = 0x82F63B78
+priv const CRC_INITIAL: Int = 0xFFFFFFFF
+
+@doc """
+Checksums for detecting accidental corruption in binary data.
+These checksums do not provide cryptographic authentication.
+"""
+struct Checksum
+  @doc """
+  Computes the CRC-32/ISO-HDLC checksum of `data`.
+  """
+  fn crc32(data: Binary) -> UInt32
+    Checksum.calculate(data, CRC32_POLYNOMIAL)
+  end
+
+  @doc """
+  Computes the CRC-32/ISCSI checksum of `data`.
+  This algorithm is also known as CRC-32C or Castagnoli.
+  """
+  fn crc32c(data: Binary) -> UInt32
+    Checksum.calculate(data, CRC32C_POLYNOMIAL)
+  end
+
+  priv fn calculate(data: Binary, polynomial: Int) -> UInt32
+    crc = CRC_INITIAL
+    index = 0
+    size = data.byte_size()
+
+    while index < size
+      crc = crc.bxor(data.at(index).unwrap())
+      bit = 0
+
+      while bit < 8
+        crc = crc.band(1) == 1 ? polynomial.bxor(crc.bsr(1)) : crc.bsr(1)
+        bit += 1
+      end
+
+      index += 1
+    end
+
+    crc.bxor(CRC_INITIAL).to_uint32().unwrap()
+  end
+end
