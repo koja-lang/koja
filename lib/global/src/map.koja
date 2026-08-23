@@ -94,17 +94,25 @@ end
 
 @doc """
 A protocol for types that can be constructed from a map literal
-`[key: value, ...]`. The compiler builds a `Map<K, V>` and passes it
-to `from_map`.
+`[key: value, ...]`. The compiler passes the source entries to
+`from_entries` in their written order.
 """
 protocol MapLiteral<K, V>
-  fn from_map(map: Map<K, V>) -> Self
+  fn from_entries(entries: List<(K, V)>) -> Self
 end
 
 impl MapLiteral<K, V> for Map<K, V>
   @doc """
-  Returns the map unchanged. `Map<K, V>` is the default type for map literals.
+  Builds a map from the entries. Later entries replace earlier values
+  with equal keys.
   """
-  @intrinsic
-  fn from_map(map: Map<K, V>) -> Self
+  fn from_entries(entries: List<(K, V)>) -> Self
+    map: Map<K, V> = Map.new()
+
+    for (key, value) in entries
+      map = map.put(key, value)
+    end
+
+    map
+  end
 end

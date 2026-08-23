@@ -30,5 +30,9 @@ fn map_literal_lowers_to_new_and_put_chain() {
             .count(),
         2,
     );
+    assert!(
+        calls.iter().all(|callee| !callee.contains(".List")),
+        "default map literals must not allocate an entry list: {calls:#?}",
+    );
     assert!(matches!(script.return_type, IRType::Map { .. }));
 }

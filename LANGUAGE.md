@@ -1498,7 +1498,7 @@ struct App: Process<(), (), ()>
 end
 ```
 
-Other packages (the qualified standard library and dependencies) are reached through their package namespace: `JSON.Decoder`, `Net.TCPSocket`, `HTTP.get(...)`, `Mathlib.PI`.
+Other packages (the qualified standard library and dependencies) are reached through their package namespace: `JSON.decode(...)`, `Net.TCPSocket`, `HTTP.get(...)`, `Mathlib.PI`.
 
 A package has two names. The manifest `name` is its lowercase snake_case identity, used for the `deps/` directory, dependency keys, lockfile entries, and the default binary name. Its **namespace** is the PascalCase name code uses for qualified access, derived from `name` (`my_app` -> `MyApp`). When the derivation isn't right (acronyms, unusual casing), declare it explicitly:
 
@@ -1529,13 +1529,12 @@ When using types from qualified standard library packages or dependency packages
 
 ```koja
 alias Net.TCPSocket
-alias JSON.Decoder
-alias JSON.Encoder as JSONEncoder
+alias JSON.Value
 
 conn = TCPSocket.connect("example.com", 80)
 ```
 
-`alias Net.TCPSocket` makes `TCPSocket` available as a local name. `alias JSON.Encoder as JSONEncoder` binds a custom local name. Aliases are scoped to the declaring file and don't affect other files.
+`alias Net.TCPSocket` makes `TCPSocket` available as a local name. `alias JSON.Value` makes `Value` available as a local name. Aliases are scoped to the declaring file and don't affect other files.
 
 Aliases name types only. Package-level functions are called with qualified syntax directly, no alias needed:
 
@@ -1548,6 +1547,7 @@ response = HTTP.get("https://example.com")
 The auto-imported `Global` package provides core types (`Option`, `Result`, `List`, `Map`, `Set`, `Process`, `IO`, `File`, `URI`, `Base`, `Path`, etc.) with no alias needed. Domain-specific packages require qualified access:
 
 - **`Crypto`**: `SHA1`, `SHA256`, `SHA384`, `SHA512`, `HMAC`, `Certificate`, `PrivateKey`, `PEMError`
+- **`JSON`**: `Value`, `Encoding`, `encode`, `encode_pretty`, `decode`
 - **`Net`**: `TCPSocket`, `TCPListener`, `UDPSocket`, `Socket`, `IPAddress`, `SocketAddress`, `SocketKind`, `SocketError`, `TLSSession`, `TLSConfig`, `TLSIdentity`, `TrustStore`, `TLSError`, `VerificationError`
 
 Use `alias Crypto.SHA256` or `alias Net.TCPSocket` to access them.
@@ -2538,6 +2538,43 @@ Checksum.crc32("123456789".to_binary()) == 0xCBF43926
 Checksum.crc32c("123456789".to_binary()) == 0xE3069283
 ```
 
+### JSON package
+
+`JSON.Value` represents a JSON value tree. Contextual literals can build nested arrays and objects directly:
+
+```koja
+payload: JSON.Value = [
+  "name": "Koja",
+  "active": true,
+  "scores": [10, 20, 30],
+  "metadata": [:],
+]
+```
+
+JSON objects keep entry order and duplicate names. Use `JSON.Value.Null` for JSON null.
+
+`JSON.Encoding` converts a type to `JSON.Value` through `to_json`. `JSON.Value`, `Bool`, `Int`, `Float`, `String`, and `List<T: JSON.Encoding>` conform.
+
+```koja
+struct Point
+  x: Int
+  y: Int
+end
+
+impl JSON.Encoding for Point
+  fn to_json(self) -> JSON.Value
+    value: JSON.Value = ["x": self.x.to_json(), "y": self.y.to_json()]
+    value
+  end
+end
+
+text = JSON.encode(Point{x: 3, y: 4})
+pretty = JSON.encode_pretty(payload)
+decoded = JSON.decode(text)
+```
+
+`JSON.decode` returns `JSON.Value ! String`. Typed decoding is not part of this API.
+
 ### `Path`
 
 POSIX path manipulation, modeled on Elixir's `Path`. All functions are pure string operations except `expand`, which reads the current working directory and `HOME`. None of them touch the file system, so `..` resolution is lexical and assumes no symlinks.
@@ -2660,7 +2697,29 @@ IO.puts(p.format()) # Point{x: 1, y: 2}
 
 ### Literal Protocols
 
-List and map literals are backed by protocols, allowing custom types to opt into literal syntax.
+Literal protocols let custom types opt into contextual literal syntax. A conversion applies only to a literal expression, not to a variable or another expression.
+
+Scalar protocols receive the canonical literal value and return `Self`:
+
+```koja
+protocol BoolLiteral
+  fn from_bool(value: Bool) -> Self
+end
+
+protocol IntLiteral
+  fn from_int(value: Int) -> Self
+end
+
+protocol FloatLiteral
+  fn from_float(value: Float) -> Self
+end
+
+protocol StringLiteral
+  fn from_string(value: String) -> Self
+end
+```
+
+Negated numeric literals and interpolated strings also use these protocols. Sized numeric literal fitting stays separate, so `x: UInt8 = 4` still materializes a `UInt8` directly.
 
 **`ListLiteral<T>`**: the compiler builds a `List<T>` from `[a, b, c]` and passes it to `from_list`:
 
@@ -2672,15 +2731,17 @@ end
 
 `List<T>` and `Set<T>` implement `ListLiteral<T>`.
 
-**`MapLiteral<K, V>`**: the compiler builds a `Map<K, V>` from `[k: v, ...]` and passes it to `from_map`:
+**`MapLiteral<K, V>`**: the compiler passes `[k: v, ...]` as an ordered list of entry tuples:
 
 ```koja
 protocol MapLiteral<K, V>
-  fn from_map(map: Map<K, V>) -> Self
+  fn from_entries(entries: List<(K, V)>) -> Self
 end
 ```
 
-`Map<K, V>` implements `MapLiteral<K, V>`.
+Entry order and duplicate keys remain available to the conformer. The default `Map<K, V>` carrier still lowers directly to `Map.new().put(...)` without an intermediate entry list.
+
+Collection element, key, and value types come from the selected conformance. A non-generic type can therefore implement `ListLiteral<Item>` or `MapLiteral<Key, Value>`.
 
 ---
 

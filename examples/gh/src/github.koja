@@ -1,6 +1,5 @@
 alias HTTP.Headers
 alias HTTP.Method
-alias JSON.Decoder
 alias JSON.Value
 
 const API_ROOT: String = "https://api.github.com"
@@ -104,7 +103,7 @@ struct GitHub
   end
 
   priv fn decode(body: String) -> Value ! String
-    Decoder.decode(body) rescue e -> fail "malformed JSON from GitHub: #{e}"
+    JSON.decode(body) rescue e -> fail "malformed JSON from GitHub: #{e}"
   end
 
   priv fn fetch(path: String) -> Value ! String

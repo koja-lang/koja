@@ -3,7 +3,6 @@ alias HTTP.Method
 alias HTTP.Request
 alias HTTP.Response
 alias HTTP.Status
-alias JSON.Encoder
 alias JSON.Value
 alias Postgres.Connection
 
@@ -48,15 +47,11 @@ struct Router
   Builds a JSON error response with the given status and message.
   """
   fn error(status: Status, message: String) -> Response
-    json_response(
-      status,
-      Value.object(
-        [
-          ("error", Value.string(status.reason)),
-          ("message", Value.string(message)), ("status", Value.int(status.code))
-        ],
-      ),
-    )
+    body: Value = [
+      "error": status.reason.to_json(), "message": message.to_json(),
+      "status": status.code.to_json()
+    ]
+    json_response(status, body)
   end
 
   priv fn handle_get(path: String, query: String, conn: Connection)
@@ -96,11 +91,7 @@ struct Router
         (conn, created) = LinkStore.create(conn, url)
 
         match created
-          Result.Ok(link) ->
-            (
-              json_response(Status.created(), JsonUtil.link_to_value(link)),
-              conn
-            )
+          Result.Ok(link) -> (json_response(Status.created(), link), conn)
           Result.Err(e) -> (db_error(e), conn)
         end
     end
@@ -158,8 +149,7 @@ struct Router
     (conn, listed) = LinkStore.page(conn, limit, offset)
 
     match listed
-      Result.Ok(links) ->
-        (json_response(Status.ok(), JsonUtil.links_to_value(links)), conn)
+      Result.Ok(links) -> (json_response(Status.ok(), links), conn)
       Result.Err(e) -> (db_error(e), conn)
     end
   end
@@ -244,33 +234,21 @@ struct Router
 
       Result.Ok(maybe) ->
         match maybe
-          Option.Some(link) ->
-            (json_response(Status.ok(), JsonUtil.link_to_value(link)), conn)
+          Option.Some(link) -> (json_response(Status.ok(), link), conn)
           Option.None -> (not_found(code), conn)
         end
     end
   end
 
   priv fn info -> Response
-    json_response(
-      Status.ok(),
-      Value.object(
-        [
-          ("name", Value.string("koja-shortener")),
-          (
-            "routes",
-            Value.array(
-              [
-                Value.string("GET /links?limit=&offset="),
-                Value.string("POST /links"), Value.string("GET /links/:code"),
-                Value.string("PUT /links/:code"),
-                Value.string("DELETE /links/:code"), Value.string("GET /:code")
-              ],
-            )
-          )
-        ],
-      ),
-    )
+    body: Value = [
+      "name": "koja-shortener",
+      "routes": [
+        "GET /links?limit=&offset=", "POST /links", "GET /links/:code",
+        "PUT /links/:code", "DELETE /links/:code", "GET /:code"
+      ]
+    ]
+    json_response(Status.ok(), body)
   end
 
   priv fn not_found(code: String) -> Response
@@ -281,8 +259,8 @@ struct Router
     error(Status.internal_server_error(), message)
   end
 
-  priv fn json_response(status: Status, body: Value) -> Response
-    text = Encoder.encode_pretty(body)
+  priv fn json_response<T: JSON.Encoding>(status: Status, body: T) -> Response
+    text = JSON.encode_pretty(body)
     headers = Headers.new()
       .set("Content-Type", "application/json")
       .set("Content-Length", "#{text.byte_length()}")

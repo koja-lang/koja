@@ -26,8 +26,8 @@ use super::super::ctx::Resolver;
 use super::super::expr::resolve_expr_with_expected;
 use super::axis::{AxisLabel, infer_axis};
 use super::carrier::{
-    CarrierSpec, Dispatch, dispatch_via_carrier, lookup_global_id, missing_root_diagnostic,
-    pick_carrier,
+    CarrierSpec, Dispatch, LiteralCarrier, dispatch_via_carrier, lookup_global_id,
+    missing_root_diagnostic, pick_carrier,
 };
 
 const SPEC: CarrierSpec = CarrierSpec {
@@ -67,7 +67,7 @@ pub(in super::super) fn resolve_list_literal(
     };
 
     let carrier = pick_carrier(expected, list_id, &SPEC, resolver);
-    let element_hint = first_axis_hint(expected);
+    let element_hint = first_axis_hint(&carrier, expected);
 
     let mut elements = take_elements(&mut expr.kind);
     for element in elements.iter_mut() {
@@ -113,9 +113,18 @@ pub(in super::super) fn resolve_list_literal(
 /// Pull the first type-arg out of `expected` when both the
 /// resolution and the slot are present and resolved. Used as the
 /// element-type hint flowing into per-element resolution.
-fn first_axis_hint(expected: Option<&ResolvedType>) -> Option<ResolvedType> {
-    let ResolvedType::Named { type_args, .. } = expected? else {
-        return None;
+fn first_axis_hint(
+    carrier: &LiteralCarrier,
+    expected: Option<&ResolvedType>,
+) -> Option<ResolvedType> {
+    let type_args = match carrier.protocol_args() {
+        Some(args) => args,
+        None => {
+            let ResolvedType::Named { type_args, .. } = expected? else {
+                return None;
+            };
+            type_args
+        }
     };
     let element = type_args.first()?;
     element.is_resolved().then(|| element.clone())

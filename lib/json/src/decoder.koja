@@ -21,25 +21,10 @@ priv const BYTE_TAB: Int = 9
 priv const BYTE_UPPER_E: Int = 69
 priv const BYTE_ZERO: Int = 48
 
-@doc """
-Recursive descent parser that converts a JSON string into a Value
-tree. Scans the input's UTF-8 bytes via `Binary`, so stepping and
-lookahead are O(1) regardless of input size; positions in error
-messages are byte offsets. Fails with an error string that includes
-the position of the failure.
-"""
-struct Decoder
+priv struct Decoder
   input: Binary
   size: Int
 
-  @doc """
-  Parse a JSON string into a `Value` tree.
-
-  Numbers with a decimal point or exponent decode as `Value.Float`,
-  all others as `Value.Int`. Object entries keep their source order.
-  Fails with a message that includes the byte offset of the error,
-  such as `expected ':' after object key at position 12`.
-  """
   fn decode(input: String) -> Value ! String
     bytes = input.to_binary()
     d = Decoder{input: bytes, size: bytes.byte_size()}

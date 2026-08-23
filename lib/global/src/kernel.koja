@@ -100,6 +100,22 @@ impl Enumeration<Int, Option<Int>> for Range
 end
 
 @doc """
+A protocol for types that can be constructed from a boolean literal.
+"""
+protocol BoolLiteral
+  fn from_bool(value: Bool) -> Self
+end
+
+impl BoolLiteral for Bool
+  @doc """
+  Returns the boolean unchanged.
+  """
+  fn from_bool(value: Bool) -> Self
+    value
+  end
+end
+
+@doc """
 A protocol for types that support equality comparison.
 """
 protocol Equality

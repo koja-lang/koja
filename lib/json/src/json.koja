@@ -1,0 +1,87 @@
+@doc """
+A protocol for types that have a JSON value representation.
+"""
+protocol Encoding
+  fn to_json(self) -> Value
+end
+
+@doc """
+Encodes `value` as compact JSON text.
+"""
+fn encode<T: Encoding>(value: T) -> String
+  Encoder.encode(value.to_json())
+end
+
+@doc """
+Encodes `value` as indented JSON text.
+"""
+fn encode_pretty<T: Encoding>(value: T) -> String
+  Encoder.encode_pretty(value.to_json())
+end
+
+@doc """
+Decodes JSON text to a value tree.
+"""
+fn decode(input: String) -> Value ! String
+  try Decoder.decode(input)
+end
+
+impl Encoding for Value
+  @doc """
+  Returns this JSON value unchanged.
+  """
+  fn to_json(self) -> Value
+    self
+  end
+end
+
+impl Encoding for Bool
+  @doc """
+  Returns this boolean as a JSON value.
+  """
+  fn to_json(self) -> Value
+    Value.Bool(self)
+  end
+end
+
+impl Encoding for Float
+  @doc """
+  Returns this float as a JSON value.
+  """
+  fn to_json(self) -> Value
+    Value.Float(self)
+  end
+end
+
+impl Encoding for Int
+  @doc """
+  Returns this integer as a JSON value.
+  """
+  fn to_json(self) -> Value
+    Value.Int(self)
+  end
+end
+
+impl Encoding for String
+  @doc """
+  Returns this string as a JSON value.
+  """
+  fn to_json(self) -> Value
+    Value.String(self)
+  end
+end
+
+impl Encoding for List<T: Encoding>
+  @doc """
+  Encodes each item as a JSON array item.
+  """
+  fn to_json(self) -> Value
+    items: List<Value> = []
+
+    for item in self
+      items = items.append(item.to_json())
+    end
+
+    Value.Array(items)
+  end
+end

@@ -27,7 +27,6 @@ pub(super) fn dispatch(
 ) -> Result<Value, RuntimeError> {
     match method {
         MapMethod::EmptyQ => empty_q(args),
-        MapMethod::FromMap => from_map(args),
         MapMethod::Get => get(function, args),
         MapMethod::HasQ => has_q(args),
         MapMethod::Length => length(args),
@@ -50,11 +49,6 @@ fn length(args: &[Value]) -> Result<Value, RuntimeError> {
 fn empty_q(args: &[Value]) -> Result<Value, RuntimeError> {
     let map = expect_map(args, 0, "Map.empty?")?;
     Ok(Value::Bool(map.borrow().is_empty()))
-}
-
-fn from_map(args: &[Value]) -> Result<Value, RuntimeError> {
-    let map = expect_map(args, 0, "Map.from_map")?;
-    Ok(Value::Map(map))
 }
 
 fn get(function: &IRFunction, args: &[Value]) -> Result<Value, RuntimeError> {

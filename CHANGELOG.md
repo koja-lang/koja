@@ -15,6 +15,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Generic type parameters accept parameterized protocol bounds, such as `E: Enumeration<T, Cursor>`.
 - `Range`, `Map`, and `Set` support `for` iteration, with unspecified order for hash collections.
 - `Checksum.crc32` and `Checksum.crc32c` compute standard checksums for binary data.
+- Scalar literal protocols let custom types accept boolean, integer, float, and string literals from typed contexts.
+- `JSON.Encoding` lets user types work with `JSON.encode`, and `JSON.Value` accepts nested list and map literals.
 - `IPAddress` can parse and render IPv4 and IPv6 text, including compressed IPv6 and embedded IPv4 forms.
 - Project-aware CLI commands accept `-S, --project <directory>` to select a project without changing the caller's working directory.
 
@@ -22,6 +24,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **Breaking change** The `Equality` protocol function is now `equals?` instead of `eq`, following the `?` suffix convention for boolean functions.
 - **Breaking change** `Enumeration<T, Cursor>` uses `cursor` and `next`, and `for` requires declared conformance instead of `length` and `get` methods.
+- **Breaking change** `MapLiteral.from_entries` receives ordered source entries instead of a constructed map.
+- **Breaking change** Use `JSON.encode`, `JSON.encode_pretty`, and `JSON.decode` because the `JSON.Encoder` and `JSON.Decoder` types are now private.
 - `IPAddress.v4` accepts `UInt8` octets so out-of-range values cannot construct an address.
 - `IPAddress` exposes its `Version` through the `version` field.
 - `koja format` expands all `match`, `cond`, and `receive` arms when one arm requires block layout.
