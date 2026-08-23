@@ -74,7 +74,7 @@ fn intrinsic_call_lowers_to_normal_call_instruction() {
         ";
 
     let script = lower(source);
-    let mangled = format!("{PACKAGE}.print");
+    let mangled = format!("{PACKAGE}.print/1");
     assert_eq!(script.return_type, IRType::Unit);
 
     let block = entry_block(&script.blocks);
@@ -127,7 +127,7 @@ fn lowered_intrinsic_is_visible_via_function_lookup() {
 
     let script = lower(source);
     assert!(
-        script.function(&format!("{PACKAGE}.print")).is_some(),
+        script.function(&format!("{PACKAGE}.print/1")).is_some(),
         "intrinsic should be reachable via IRScript::function lookup",
     );
 }

@@ -449,7 +449,7 @@ fn write_doc_files(project: &koja_doc::DocProject, out_path: &Path) {
         }
         for f in &pkg.functions {
             let html = koja_doc::render_function(f, pkg, project);
-            write_doc_file(&pkg_dir.join(format!("{}.html", f.name)), &html);
+            write_doc_file(&pkg_dir.join(format!("{}.html", f.page_name())), &html);
         }
         for p in &pkg.protocols {
             let html = koja_doc::render_protocol(p, pkg, project);

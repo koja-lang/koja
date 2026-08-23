@@ -57,15 +57,15 @@ fn bounded_dispatch_monomorphizes_show_at_concrete_arg() {
     let script = lower_script_source(source);
     let names = script_function_names(&script);
     assert!(
-        names.contains(&"TestApp.show_$TestApp.Point$".to_string()),
+        names.contains(&"TestApp.show/1_$TestApp.Point$".to_string()),
         "expected mono'd `show_$TestApp.Point$`, got {names:?}",
     );
     assert!(
-        !names.iter().any(|n| n == "TestApp.show"),
+        !names.iter().any(|n| n == "TestApp.show/1"),
         "generic template `TestApp.show` must not appear in IRPackage.functions",
     );
     assert!(
-        names.contains(&"TestApp.Point.greet".to_string()),
+        names.contains(&"TestApp.Point.greet/1".to_string()),
         "expected concrete impl method `TestApp.Point.greet`, got {names:?}",
     );
 }
@@ -119,8 +119,8 @@ fn bounded_dispatch_distinct_concrete_args_mint_distinct_show_decls() {
     assert_eq!(
         shows,
         vec![
-            "TestApp.show_$TestApp.Point$".to_string(),
-            "TestApp.show_$TestApp.Tag$".to_string(),
+            "TestApp.show/1_$TestApp.Point$".to_string(),
+            "TestApp.show/1_$TestApp.Tag$".to_string(),
         ],
     );
 }
@@ -159,11 +159,11 @@ fn bounded_dispatch_generic_struct_receiver_resolves_through_substitution() {
     let script = lower_script_source(source);
     let names = script_function_names(&script);
     assert!(
-        names.contains(&"TestApp.show_$TestApp.Bag_$Int64$$".to_string()),
+        names.contains(&"TestApp.show/1_$TestApp.Bag_$Int64$$".to_string()),
         "expected mono'd `show_$Bag<Int>$`, got {names:?}",
     );
     assert!(
-        names.contains(&"TestApp.Bag_$Int64$.greet".to_string()),
+        names.contains(&"TestApp.Bag_$Int64$.greet/1".to_string()),
         "expected mono'd `Bag<Int>.greet` impl method, got {names:?}",
     );
 }
@@ -196,8 +196,10 @@ fn parameterized_bound_dispatch_monomorphizes_protocol_arguments() {
     let script = lower_script_source(source);
     let names = script_function_names(&script);
     assert!(
-        names.iter().any(|name| name.starts_with("TestApp.read_$")),
+        names
+            .iter()
+            .any(|name| name.starts_with("TestApp.read/2_$")),
         "expected parameterized `read` specialization, got {names:?}",
     );
-    assert!(names.contains(&"TestApp.IntSource.first".to_string()));
+    assert!(names.contains(&"TestApp.IntSource.first/1".to_string()));
 }

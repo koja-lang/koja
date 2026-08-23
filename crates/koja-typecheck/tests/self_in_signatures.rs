@@ -117,9 +117,13 @@ fn self_in_inherent_method_return_resolves_to_enclosing_struct() {
             vec!["Point".to_string(), "origin".to_string()],
         ))
         .expect("Point.origin registered");
-    let GlobalKind::Function(Some(signature)) = &origin_entry.kind else {
+    let GlobalKind::Function(definition) = &origin_entry.kind else {
         panic!("Point.origin should be a lifted function");
     };
+    let signature = definition
+        .signature
+        .as_ref()
+        .expect("expected lifted signature");
     let ResolvedType::Named {
         resolution: Resolution::Global(resolved_id),
         ..
@@ -168,9 +172,13 @@ fn self_in_trait_impl_method_resolves_to_concrete_target() {
             vec!["User".to_string(), "equals".to_string()],
         ))
         .expect("User.equals registered");
-    let GlobalKind::Function(Some(signature)) = &entry.kind else {
+    let GlobalKind::Function(definition) = &entry.kind else {
         panic!("User.equals should be a lifted function");
     };
+    let signature = definition
+        .signature
+        .as_ref()
+        .expect("expected lifted signature");
     let user_named = ResolvedType::leaf(Resolution::Global(user_id));
     // self
     assert_eq!(
@@ -242,9 +250,13 @@ fn self_in_generic_struct_method_carries_struct_type_args() {
             vec!["Bag".to_string(), "snapshot".to_string()],
         ))
         .expect("Bag.snapshot registered");
-    let GlobalKind::Function(Some(signature)) = &snapshot_entry.kind else {
+    let GlobalKind::Function(definition) = &snapshot_entry.kind else {
         panic!("Bag.snapshot should be a lifted function");
     };
+    let signature = definition
+        .signature
+        .as_ref()
+        .expect("expected lifted signature");
     let return_ty = &signature.return_type;
     let ResolvedType::Named {
         resolution: Resolution::Global(head_id),

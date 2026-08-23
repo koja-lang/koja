@@ -97,7 +97,7 @@ fn resolve_segment(
     if let Some(byte_length) = string_segment_byte_length(segment) {
         if segment.size.is_some() || segment.type_ann.is_some() {
             diagnostics.push(Diagnostic::error(
-                "typecheck: a `String`-valued binary pattern segment cannot \
+                "a `String`-valued binary pattern segment cannot \
                  carry a `::N` size or `:Type` annotation",
                 segment.span,
             ));
@@ -172,7 +172,7 @@ fn resolve_segment(
         }
         _ => {
             diagnostics.push(Diagnostic::error(
-                "typecheck: binary pattern segment must be a literal, an \
+                "binary pattern segment must be a literal, an \
                  identifier binding, `_`, or a string literal",
                 segment.span,
             ));
@@ -261,7 +261,7 @@ fn segment_fixed_width(segment: &BinarySegment, diagnostics: &mut Vec<Diagnostic
                 Ok(parsed) => parsed,
                 Err(_) => {
                     diagnostics.push(Diagnostic::error(
-                        format!("typecheck: invalid binary segment size literal `{n}`"),
+                        format!("invalid binary segment size literal `{n}`"),
                         size_expr.span,
                     ));
                     return None;
@@ -278,7 +278,7 @@ fn segment_fixed_width(segment: &BinarySegment, diagnostics: &mut Vec<Diagnostic
         };
         if bits == 0 {
             diagnostics.push(Diagnostic::error(
-                "typecheck: a binary segment must carry at least 1 bit",
+                "a binary segment must carry at least 1 bit",
                 segment.span,
             ));
             return None;
@@ -289,7 +289,7 @@ fn segment_fixed_width(segment: &BinarySegment, diagnostics: &mut Vec<Diagnostic
     if let Some(type_ann) = &segment.type_ann {
         let TypeExpr::Named { path, .. } = type_ann else {
             diagnostics.push(Diagnostic::error(
-                "typecheck: binary pattern segment type annotation must be a \
+                "binary pattern segment type annotation must be a \
                  primitive name",
                 segment.span,
             ));
@@ -316,8 +316,8 @@ fn segment_fixed_width(segment: &BinarySegment, diagnostics: &mut Vec<Diagnostic
             other => {
                 diagnostics.push(Diagnostic::error(
                     format!(
-                        "typecheck: binary pattern segment type annotation \
-                         `{other}` is not a recognized primitive (expected one of: \
+                        "binary pattern segment type annotation \
+                         `{other}` is not a recognized primitive (expected one of \
                          Int8/16/32/64, UInt8/16/32/64)",
                     ),
                     segment.span,

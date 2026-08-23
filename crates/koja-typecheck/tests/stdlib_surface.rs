@@ -234,7 +234,7 @@ fn user_code_can_call_json_package_apis() {
         r#"
         value: JSON.Value = ["active": true, "items": [1, 2, 3]]
         JSON.encode(value)
-        JSON.encode_pretty(value)
+        JSON.encode(value, JSON.EncodeOptions{pretty?: true})
         JSON.decode("{\"active\":true}")
         "#,
     ));

@@ -25,7 +25,7 @@ pub(super) fn lift_protocol(
     let (id, already_lifted) = match scope.registry.lookup(&identifier) {
         Some((id, entry)) => (id, matches!(entry.kind, GlobalKind::Protocol(Some(_)))),
         None => panic!(
-            "lift_signatures: protocol `{identifier}` missing from registry: \
+            "lift_signatures found protocol `{identifier}` missing from registry. This is a \
              collect invariant violation",
         ),
     };
@@ -33,11 +33,24 @@ pub(super) fn lift_protocol(
         // Duplicate decl already diagnosed by collect.
         return;
     }
-    let methods = decl
-        .methods
-        .iter()
-        .map(|method| lift_protocol_method(method, id, scope, diagnostics))
-        .collect();
+    let mut methods: Vec<ResolvedProtocolMethod> = Vec::new();
+    for method in &decl.methods {
+        let resolved = lift_protocol_method(method, id, scope, diagnostics);
+        if let Some(existing) = methods
+            .iter()
+            .find(|candidate| candidate.name == resolved.name && candidate.arity == resolved.arity)
+        {
+            diagnostics.push(Diagnostic::error(
+                format!(
+                    "protocol method `{}.{}` with arity {} is already defined",
+                    decl.name, existing.name, existing.arity
+                ),
+                method.span,
+            ));
+            continue;
+        }
+        methods.push(resolved);
+    }
     scope
         .registry
         .set_protocol_definition(id, ProtocolDefinition { methods });
@@ -81,6 +94,7 @@ fn lift_protocol_method(
         diagnostics,
     );
     ResolvedProtocolMethod {
+        arity: method.params.len(),
         dispatch,
         has_default: method.body.is_some(),
         name: method.name.clone(),

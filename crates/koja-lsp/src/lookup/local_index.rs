@@ -384,7 +384,10 @@ impl LocalIndex {
                 }
                 EnumConstructionData::Unit => {}
             },
-            ExprKind::Literal { .. } | ExprKind::Self_ { .. } | ExprKind::Ident { .. } => {}
+            ExprKind::Ident { .. }
+            | ExprKind::Literal { .. }
+            | ExprKind::NamedFunctionReference { .. }
+            | ExprKind::Self_ { .. } => {}
         }
     }
 

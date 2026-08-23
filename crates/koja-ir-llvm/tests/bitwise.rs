@@ -35,7 +35,8 @@ fn emit_intrinsic_body(source: &str, symbol: &str) -> String {
     let script = lower_as_script(&dedent(source));
     let ir_text =
         emit_script_llvm_ir(&script, APP_NAME).expect("emit_script_llvm_ir should succeed");
-    extract_function_body(&ir_text, symbol).to_string()
+    let arity = usize::from(!symbol.ends_with(".bnot")) + 1;
+    extract_function_body(&ir_text, &format!("{symbol}/{arity}")).to_string()
 }
 
 #[test]

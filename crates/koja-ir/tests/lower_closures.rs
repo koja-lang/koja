@@ -304,11 +304,11 @@ fn fn_as_value_synthesizes_captureless_wrapper_and_emits_make_closure() {
           f(x, y)
         end
 
-        apply(add, 1, 2)
+        apply(&add/2, 1, 2)
         ";
 
     let script = lower(source);
-    let wrapper = mangled_function(&script, "TestApp.add__as_closure");
+    let wrapper = mangled_function(&script, "TestApp.add/2__as_closure");
 
     let FunctionKind::Closure { env_layout } = &wrapper.kind else {
         panic!(
@@ -328,7 +328,7 @@ fn fn_as_value_synthesizes_captureless_wrapper_and_emits_make_closure() {
         .collect();
     assert_eq!(
         inner_calls,
-        vec!["TestApp.add"],
+        vec!["TestApp.add/2"],
         "wrapper body forwards directly to the wrapped fn",
     );
 
@@ -347,7 +347,7 @@ fn fn_as_value_synthesizes_captureless_wrapper_and_emits_make_closure() {
     else {
         unreachable!()
     };
-    assert_eq!(body_symbol.mangled(), "TestApp.add__as_closure");
+    assert_eq!(body_symbol.mangled(), "TestApp.add/2__as_closure");
     assert!(captures.is_empty());
     assert_eq!(*ty, int_fn_type(2));
 }
@@ -363,14 +363,14 @@ fn fn_as_value_wrapper_is_cached_across_repeated_references() {
           f(x, y)
         end
 
-        apply(add, 1, 2) + apply(add, 3, 4)
+        apply(&add/2, 1, 2) + apply(&add/2, 3, 4)
         ";
 
     let script = lower(source);
 
     let wrapper_count = script_function_names(&script)
         .iter()
-        .filter(|name| *name == "TestApp.add__as_closure")
+        .filter(|name| *name == "TestApp.add/2__as_closure")
         .count();
     assert_eq!(
         wrapper_count, 1,

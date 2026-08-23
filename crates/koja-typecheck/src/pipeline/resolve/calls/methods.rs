@@ -90,6 +90,13 @@ impl MethodReceiver {
             }
         }
     }
+
+    pub(super) fn explicit_params_for_arity(self, arity: usize) -> usize {
+        match self {
+            Self::Static { .. } => arity,
+            Self::Instance { .. } | Self::Bounded { .. } | Self::Tuple => arity.saturating_sub(1),
+        }
+    }
 }
 
 /// Inspect the receiver and pick the dispatch path. Stamps both the
@@ -384,15 +391,16 @@ fn seed_receiver_args(
 
 pub(super) fn function_signature(entry: &RegistryEntry) -> Result<&FunctionSignature, Diagnostic> {
     match &entry.kind {
-        GlobalKind::Function(Some(sig)) => Ok(sig),
-        GlobalKind::Function(None) => panic!(
-            "resolve method call: function `{}` has no lifted signature: \
-             lift_signatures must run before resolve",
-            entry.identifier,
-        ),
+        GlobalKind::Function(definition) => definition.signature.as_ref().ok_or_else(|| {
+            panic!(
+                "resolve method call found function `{}` without a lifted signature. \
+                 lift_signatures must run before resolve",
+                entry.identifier,
+            )
+        }),
         other => Err(Diagnostic::error(
             format!(
-                "cannot call `{}`: it is a {}, not a function",
+                "cannot call `{}` because it is a {}, not a function",
                 entry.identifier,
                 other.label(),
             ),

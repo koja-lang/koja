@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Function parameters can declare trailing default values, so a function is callable at every arity its defaults allow.
+- Named function values use mandatory `&name/arity` references, including for single-arity functions.
+- `JSON.EncodeOptions` adds a `pretty?: Bool = false` field to `JSON.encode`.
 - `impl P for T` now accepts protocols and types from other packages, so a package can implement its own protocol for stdlib types like `String`, and adapter packages can conform one dependency's type to another dependency's protocol.
 - `impl P for T` now accepts a concrete instantiation of a generic type as the target, so a package can implement its protocol for `List<Int>` specifically.
 - Protocol impls on generic targets can require bounds on the type parameters, as in `impl Encodable for List<T: Encodable>`, and the conformance holds only for instantiations that satisfy them.
@@ -22,6 +25,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Breaking change** Named function values require `&name/arity` syntax instead of a bare function name.
 - **Breaking change** The `Equality` protocol function is now `equals?` instead of `eq`, following the `?` suffix convention for boolean functions.
 - **Breaking change** `Enumeration<T, Cursor>` uses `cursor` and `next`, and `for` requires declared conformance instead of `length` and `get` methods.
 - **Breaking change** `MapLiteral.from_entries` receives ordered source entries instead of a constructed map.
@@ -34,6 +38,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Deprecated
 
+- `JSON.encode_pretty` is deprecated in favor of `JSON.encode(value, JSON.EncodeOptions{pretty?: true})` and will be removed in 0.19.0.
 - `IPAddress.v4?()` and `IPAddress.v6?()` are deprecated in favor of the `version` field and will be removed in 0.19.0.
 
 ### Fixed

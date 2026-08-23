@@ -249,7 +249,7 @@ fn resolve_function(
     env: &mut ResolverEnv<'_>,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
-    let signature = lifted_signature(identifier, env.registry).cloned();
+    let signature = lifted_signature(identifier, function.params.len(), env.registry).cloned();
     let mut scope = LocalScope::new();
     if let Some(signature) = &signature {
         seed_scope_with_params(function, signature, &mut scope);
@@ -313,7 +313,7 @@ fn type_param_owners(
 ) -> Vec<GlobalRegistryId> {
     let mut owners = Vec::new();
     if !function.type_params.is_empty()
-        && let Some((fn_id, _)) = registry.lookup(identifier)
+        && let Some((fn_id, _)) = registry.lookup_function(identifier, function.params.len())
     {
         owners.push(fn_id);
     }
@@ -332,11 +332,12 @@ fn type_param_owners(
 /// is best-effort but quiet here).
 fn lifted_signature<'a>(
     identifier: &Identifier,
+    arity: usize,
     registry: &'a GlobalRegistry,
 ) -> Option<&'a FunctionSignature> {
-    let (_, entry) = registry.lookup(identifier)?;
+    let (_, entry) = registry.lookup_function(identifier, arity)?;
     match &entry.kind {
-        GlobalKind::Function(Some(signature)) => Some(signature),
+        GlobalKind::Function(definition) => definition.signature.as_ref(),
         _ => None,
     }
 }

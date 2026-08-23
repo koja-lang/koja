@@ -110,17 +110,17 @@ fn fn_as_value_wrapper_emits_make_closure_with_null_env() {
           f(x, y)
         end
 
-        apply(add, 1, 2)
+        apply(&add/2, 1, 2)
         ";
     let script = lower(&dedent(source));
     let ir_text = emit_script_llvm_ir(&script, APP_NAME).expect("emit_script_llvm_ir");
     // The wrapper body for `add` carries the closure ABI (env-first),
     // and `MakeClosure` for the captureless shape stores null into
     // the env slot.
-    assert_contains(&ir_text, "define i64 @TestApp.add__as_closure(ptr ");
+    assert_contains(&ir_text, "define i64 @\"TestApp.add/2__as_closure\"(ptr ");
     // `apply` is a regular function whose `f` parameter is the fat
     // pointer struct.
-    assert_contains(&ir_text, "@TestApp.apply({ ptr, ptr }");
+    assert_contains(&ir_text, "@\"TestApp.apply/3\"({ ptr, ptr }");
     // The captureless wrapper stores `null` as the env slot.
     assert_contains(&ir_text, "store ptr null,");
 }

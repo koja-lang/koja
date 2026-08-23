@@ -7,7 +7,7 @@
 //! signatures and, inside struct/enum/impl bodies, when the *next*
 //! token starts another function declaration.
 
-use koja_ast::ast::{Annotation, Function, Item, Param, TypeExpr, Visibility};
+use koja_ast::ast::{Annotation, Function, FunctionOrigin, Item, Param, TypeExpr, Visibility};
 use koja_ast::token::TokenKind;
 
 use crate::parser::Parser;
@@ -64,6 +64,7 @@ impl Parser {
 
         Function {
             annotations,
+            origin: FunctionOrigin::Explicit,
             visibility,
             name,
             type_params,
@@ -114,7 +115,35 @@ impl Parser {
     }
 
     pub(crate) fn parse_param_list(&mut self) -> Vec<Param> {
-        self.comma_separated(&TokenKind::RParen, Self::parse_param)
+        let params = self.comma_separated(&TokenKind::RParen, Self::parse_param);
+        self.validate_trailing_default_params(&params);
+        params
+    }
+
+    fn validate_trailing_default_params(&mut self, params: &[Param]) {
+        let mut saw_default = false;
+        for param in params {
+            match param {
+                Param::Regular {
+                    default: Some(_), ..
+                } => saw_default = true,
+                Param::Regular {
+                    default: None,
+                    span,
+                    ..
+                }
+                | Param::Self_ { span, .. }
+                    if saw_default =>
+                {
+                    self.error_with_hint(
+                        "required parameters must come before default parameters".into(),
+                        "move this parameter before the first default parameter".into(),
+                        *span,
+                    );
+                }
+                Param::Regular { .. } | Param::Self_ { .. } => {}
+            }
+        }
     }
 
     fn parse_param(&mut self) -> Param {

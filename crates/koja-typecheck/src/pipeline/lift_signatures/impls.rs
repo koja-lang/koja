@@ -10,8 +10,9 @@
 use std::collections::HashMap;
 
 use koja_ast::ast::{
-    Diagnostic, Expr, ExprKind, ExtendBlock, Function, ImplBlock, ImplMember, MatchArm, Param,
-    Pattern, ProtocolMethod, Statement, StringPart, TypeExpr, TypeParam, Visibility,
+    Diagnostic, Expr, ExprKind, ExtendBlock, Function, FunctionOrigin as AstFunctionOrigin,
+    ImplBlock, ImplMember, MatchArm, Param, Pattern, ProtocolMethod, Statement, StringPart,
+    TypeExpr, TypeParam, Visibility,
 };
 use koja_ast::identifier::{GlobalRegistryId, Identifier, Resolution, ResolvedType};
 use koja_ast::span::Span;
@@ -20,8 +21,9 @@ use crate::pipeline::collect::nominal_target_path;
 use crate::pipeline::resolve::types::types_equivalent;
 use crate::pipeline::unify::{Substitution, substitute};
 use crate::registry::{
-    Conformance, ConformanceScope, Dispatch, GlobalKind, GlobalRegistry, InsertOutcome,
-    ProtocolDefinition, ResolvedProtocolBound, ResolvedProtocolMethod, VisibilityScope,
+    Conformance, ConformanceScope, Dispatch, FunctionOrigin, GlobalKind, GlobalRegistry,
+    InsertOutcome, ProtocolDefinition, ResolvedProtocolBound, ResolvedProtocolMethod,
+    VisibilityScope,
 };
 
 use super::LiftScope;
@@ -692,13 +694,13 @@ fn verify_and_synthesize_conformance(
     let target_path = target_identifier.path();
     let protocol_id = resolved.protocol_id;
     let protocol_entry = scope.registry.get(protocol_id).unwrap_or_else(|| {
-        panic!("verify_and_synthesize_conformance: protocol id {protocol_id} missing")
+        panic!("verify_and_synthesize_conformance found protocol id {protocol_id} missing")
     });
     let protocol_identifier = protocol_entry.identifier.clone();
     let GlobalKind::Protocol(Some(definition)) = &protocol_entry.kind else {
         diagnostics.push(Diagnostic::error(
             format!(
-                "internal: protocol `{protocol_identifier}` has no lifted definition while \
+                "protocol `{protocol_identifier}` has no lifted definition while \
                  checking conformance of `{}`",
                 target_path.join("."),
             ),
@@ -717,15 +719,17 @@ fn verify_and_synthesize_conformance(
         trait_expr,
     };
     verify_protocol_conformance(site, &definition, impl_scope, scope.registry, diagnostics);
-    let declared: HashMap<String, ()> = site
+    let declared: HashMap<(String, usize), ()> = site
         .declared_functions()
         .iter()
-        .map(|function| (function.name.clone(), ()))
+        .map(|function| ((function.name.clone(), function.params.len()), ()))
         .collect();
     let to_synthesize: Vec<&ResolvedProtocolMethod> = definition
         .methods
         .iter()
-        .filter(|method| method.has_default && !declared.contains_key(&method.name))
+        .filter(|method| {
+            method.has_default && !declared.contains_key(&(method.name.clone(), method.arity))
+        })
         .collect();
     if matches!(site, ConformanceSite::Header { .. }) {
         warn_near_miss_defaults(
@@ -739,12 +743,12 @@ fn verify_and_synthesize_conformance(
     for method in to_synthesize {
         let Some(default_method) = bodies
             .get(&protocol_id)
-            .and_then(|m| m.get(&method.name))
+            .and_then(|m| m.get(&(method.name.clone(), method.arity)))
             .cloned()
         else {
             diagnostics.push(Diagnostic::error(
                 format!(
-                    "internal: default body for `{protocol_identifier}.{}` missing from sidecar",
+                    "default body for `{protocol_identifier}.{}` missing from sidecar",
                     method.name,
                 ),
                 site.span(),
@@ -770,7 +774,12 @@ fn warn_near_miss_defaults(
     let candidates: Vec<&Function> = site
         .declared_functions()
         .into_iter()
-        .filter(|function| !definition.methods.iter().any(|m| m.name == function.name))
+        .filter(|function| {
+            !definition
+                .methods
+                .iter()
+                .any(|m| m.name == function.name && m.arity == function.params.len())
+        })
         .collect();
     for method in omitted {
         for function in &candidates {
@@ -830,6 +839,7 @@ fn synthesize_default_method(
 ) {
     let mut function = Function {
         annotations: Vec::new(),
+        origin: method.origin,
         visibility: Visibility::Public,
         name: method.name,
         type_params: method.type_params,
@@ -857,6 +867,13 @@ fn synthesize_default_method(
     if !matches!(
         scope.registry.insert_function(
             method_identifier.clone(),
+            function.params.len(),
+            match function.origin {
+                AstFunctionOrigin::Explicit => FunctionOrigin::Explicit,
+                AstFunctionOrigin::DefaultAdapter { canonical_arity } => {
+                    FunctionOrigin::DefaultAdapter { canonical_arity }
+                }
+            },
             function.span,
             type_params,
             VisibilityScope::Public,
@@ -1174,9 +1191,9 @@ fn verify_protocol_conformance(
     diagnostics: &mut Vec<Diagnostic>,
 ) {
     let declared_functions = site.declared_functions();
-    let declared: HashMap<&str, &Function> = declared_functions
+    let declared: HashMap<(&str, usize), &Function> = declared_functions
         .iter()
-        .map(|function| (function.name.as_str(), *function))
+        .map(|function| ((function.name.as_str(), function.params.len()), *function))
         .collect();
     let ProtocolImplScope {
         protocol_identifier,
@@ -1185,7 +1202,20 @@ fn verify_protocol_conformance(
     } = impl_scope;
     let context = site.context(protocol_identifier, &target_path.join("."));
     for method in &definition.methods {
-        match declared.get(method.name.as_str()) {
+        let dispatch_mismatch = declared_functions.iter().copied().find(|function| {
+            function.name == method.name
+                && function
+                    .params
+                    .iter()
+                    .filter(|param| !matches!(param, Param::Self_ { .. }))
+                    .count()
+                    == method.non_self_params.len()
+        });
+        match declared
+            .get(&(method.name.as_str(), method.arity))
+            .copied()
+            .or(dispatch_mismatch)
+        {
             Some(impl_function) => {
                 check_impl_method_signature(
                     method,
@@ -1215,10 +1245,10 @@ fn verify_protocol_conformance(
     let ConformanceSite::Impl(_) = site else {
         return;
     };
-    let protocol_method_names: HashMap<&str, ()> = definition
+    let protocol_method_names: HashMap<(&str, usize), ()> = definition
         .methods
         .iter()
-        .map(|m| (m.name.as_str(), ()))
+        .map(|m| ((m.name.as_str(), m.arity), ()))
         .collect();
     for function in &declared_functions {
         // Type-private helpers may live alongside the protocol
@@ -1228,7 +1258,18 @@ fn verify_protocol_conformance(
         if function.visibility == Visibility::Private {
             continue;
         }
-        if !protocol_method_names.contains_key(function.name.as_str()) {
+        let matches_receiver_mismatch = definition.methods.iter().any(|method| {
+            method.name == function.name
+                && method.non_self_params.len()
+                    == function
+                        .params
+                        .iter()
+                        .filter(|param| !matches!(param, Param::Self_ { .. }))
+                        .count()
+        });
+        if !protocol_method_names.contains_key(&(function.name.as_str(), function.params.len()))
+            && !matches_receiver_mismatch
+        {
             diagnostics.push(Diagnostic::error_with_hint(
                 format!(
                     "method `{}` is not declared in protocol `{protocol_identifier}` \
@@ -1265,10 +1306,14 @@ fn check_impl_method_signature(
         target_path,
         &impl_function.name,
     );
-    let Some((_, entry)) = registry.lookup(&method_identifier) else {
+    let Some((_, entry)) = registry.lookup_function(&method_identifier, impl_function.params.len())
+    else {
         return;
     };
-    let GlobalKind::Function(Some(actual)) = &entry.kind else {
+    let GlobalKind::Function(definition) = &entry.kind else {
+        return;
+    };
+    let Some(actual) = &definition.signature else {
         return;
     };
     if expected.dispatch != actual.dispatch {

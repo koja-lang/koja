@@ -399,7 +399,7 @@ fn lookup_sibling_method(
     let mut path = entry.identifier.path().to_vec();
     path.push(method.to_string());
     let identifier = Identifier::new(entry.identifier.package(), path);
-    registry.lookup(&identifier).map(|(id, _)| id)
+    registry.lookup_function(&identifier, 1).map(|(id, _)| id)
 }
 
 fn receiver_type_args(receiver: &ResolvedType) -> Vec<ResolvedType> {
@@ -652,7 +652,7 @@ fn build_process_body(
         entry,
         IRInstruction::Call {
             args: vec![config_read],
-            callee: mangled_method_name(state_symbol, &[], "start", &[]),
+            callee: mangled_method_name(state_symbol, &[], "start", 1, &[]),
             dest: start_result,
         },
     );
@@ -687,7 +687,7 @@ fn build_process_body(
         ok_block,
         IRInstruction::Call {
             args: vec![state_field],
-            callee: mangled_method_name(state_symbol, &[], "run", &[]),
+            callee: mangled_method_name(state_symbol, &[], "run", 1, &[]),
             dest: stop_reason,
         },
     );
@@ -822,7 +822,7 @@ fn emit_apply_priority(
         block,
         IRInstruction::Call {
             args: vec![state],
-            callee: mangled_method_name(state_symbol, &[], "priority", &[]),
+            callee: mangled_method_name(state_symbol, &[], "priority", 1, &[]),
             dest: priority_value,
         },
     );
@@ -951,7 +951,7 @@ fn finish_process_arm(
         block,
         IRInstruction::Call {
             args: vec![stop_reason],
-            callee: mangled_method_name(stop_reason_symbol, &[], "code", &[]),
+            callee: mangled_method_name(stop_reason_symbol, &[], "code", 1, &[]),
             dest: code,
         },
     );

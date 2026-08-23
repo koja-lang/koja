@@ -104,7 +104,10 @@ impl Symbol<'_> {
     fn url(&self) -> String {
         match (&self.target, self.owner) {
             (SymbolTarget::Function(f), Some(owner)) => {
-                format!("{}/{owner}.html#fn-{}", self.package, f.name)
+                format!("{}/{owner}.html#{}", self.package, f.anchor())
+            }
+            (SymbolTarget::Function(f), None) => {
+                format!("{}/{}.html", self.package, f.page_name())
             }
             _ => format!("{}/{}.html", self.package, self.name),
         }
@@ -132,7 +135,7 @@ fn collect_package_symbols<'a>(pkg: &'a DocPackage, out: &mut Vec<Symbol<'a>>) {
     };
     let member = |owner: &'a str, f: &'a DocFunction| Symbol {
         kind: "fn",
-        name: format!("{owner}.{}", f.name),
+        name: format!("{owner}.{}/{}", f.name, f.arity),
         owner: Some(owner),
         package: &pkg.name,
         target: SymbolTarget::Function(f),
@@ -150,7 +153,11 @@ fn collect_package_symbols<'a>(pkg: &'a DocPackage, out: &mut Vec<Symbol<'a>>) {
         out.extend(e.functions.iter().map(|f| member(&e.name, f)));
     }
     for f in &pkg.functions {
-        out.push(item("fn", &f.name, SymbolTarget::Function(f)));
+        out.push(item(
+            "fn",
+            &format!("{}/{}", f.name, f.arity),
+            SymbolTarget::Function(f),
+        ));
     }
     for p in &pkg.protocols {
         out.push(item("protocol", &p.name, SymbolTarget::Protocol(p)));

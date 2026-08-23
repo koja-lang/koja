@@ -191,17 +191,17 @@ impl TocEntry {
         }
     }
 
-    fn function(name: &str) -> Self {
+    fn function(function: &DocFunction) -> Self {
         Self {
-            href: format!("fn-{name}"),
-            label: name.to_string(),
+            href: function.anchor(),
+            label: format!("{}/{}", function.name, function.arity),
             mono: true,
         }
     }
 }
 
 fn function_entries(functions: &[DocFunction]) -> impl Iterator<Item = TocEntry> + '_ {
-    functions.iter().map(|f| TocEntry::function(&f.name))
+    functions.iter().map(TocEntry::function)
 }
 
 fn builtin_toc(b: &DocBuiltin) -> Vec<TocEntry> {

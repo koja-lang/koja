@@ -51,7 +51,7 @@ impl LocalScope {
         let ty = self
             .types
             .get(&id)
-            .expect("LocalScope: name table points at id missing from type table");
+            .expect("LocalScope name table points at id missing from type table");
         Some((id, ty))
     }
 

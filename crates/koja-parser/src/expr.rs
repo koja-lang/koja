@@ -182,6 +182,7 @@ impl Parser {
                             receiver: Box::new(receiver),
                             method: name,
                             args,
+                            target: Resolution::Unresolved,
                             type_args: Vec::new(),
                         },
                         span,
@@ -322,6 +323,7 @@ impl Parser {
 
     fn parse_prefix(&mut self) -> Expr {
         match self.peek().clone() {
+            TokenKind::Ampersand => self.parse_function_reference_prefix(),
             TokenKind::Break => self.parse_break_recovery(),
             TokenKind::Cond => self.parse_cond_expr(),
             TokenKind::Fail => self.parse_fail_prefix(),
@@ -380,6 +382,77 @@ impl Parser {
             },
             self.span_from(start),
         )
+    }
+
+    fn parse_function_reference_prefix(&mut self) -> Expr {
+        let start = self.current_span();
+        self.advance(); // &
+
+        let mut path = Vec::new();
+        if let Some(segment) = self.parse_function_reference_segment() {
+            path.push(segment);
+        }
+        while self.eat(&TokenKind::Dot).is_some() {
+            if let Some(segment) = self.parse_function_reference_segment() {
+                path.push(segment);
+            } else {
+                break;
+            }
+        }
+
+        self.expect(&TokenKind::Slash);
+        let arity_span = self.current_span();
+        let arity = match self.peek().clone() {
+            TokenKind::IntLit(text) => {
+                self.advance();
+                text.replace('_', "").parse::<usize>().unwrap_or_else(|_| {
+                    self.error(
+                        "function reference arity must be a decimal integer".into(),
+                        arity_span,
+                    );
+                    0
+                })
+            }
+            _ => {
+                self.error(
+                    format!(
+                        "expected function reference arity after `/`, found {}",
+                        self.peek()
+                    ),
+                    arity_span,
+                );
+                0
+            }
+        };
+
+        Expr::new(
+            ExprKind::NamedFunctionReference {
+                path,
+                arity,
+                target: Resolution::Unresolved,
+            },
+            self.span_from(start),
+        )
+    }
+
+    fn parse_function_reference_segment(&mut self) -> Option<String> {
+        let span = self.current_span();
+        match self.peek().clone() {
+            TokenKind::Ident(name) | TokenKind::TypeIdent(name) => {
+                self.advance();
+                Some(name)
+            }
+            _ => {
+                self.error(
+                    format!(
+                        "expected function name in named function reference, found {}",
+                        self.peek()
+                    ),
+                    span,
+                );
+                None
+            }
+        }
     }
 
     fn parse_identifier_prefix(&mut self, name: String) -> Expr {

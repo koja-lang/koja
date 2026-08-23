@@ -23,7 +23,7 @@ fn self_tail_call_gains_tail_terminator_and_yield_check() {
         matches!(
             block.terminator,
             IRTerminator::TailCall { ref callee, .. }
-                if callee.mangled().ends_with(".countdown")
+                if callee.mangled().ends_with(".countdown/1")
         )
     }));
     assert!(countdown.blocks.iter().any(|block| {

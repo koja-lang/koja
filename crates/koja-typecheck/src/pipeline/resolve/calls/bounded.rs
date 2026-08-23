@@ -81,7 +81,7 @@ pub(super) fn resolve_bounded_method_call(
         ));
         return ResolvedType::unresolved();
     }
-    let providers = collect_bound_providers(&bounds, method, resolver.registry);
+    let providers = collect_bound_providers(&bounds, method, args.len(), resolver.registry);
     if providers.is_empty() {
         diagnostics.push(Diagnostic::error(
             format!(
@@ -105,7 +105,7 @@ pub(super) fn resolve_bounded_method_call(
             .collect();
         diagnostics.push(Diagnostic::error(
             format!(
-                "ambiguous method `{method}` on type parameter `{param_name}`: \
+                "ambiguous method `{method}` on type parameter `{param_name}` because it is \
                  provided by both `{}` and `{}` in bounds",
                 labels[0], labels[1],
             ),
@@ -205,6 +205,7 @@ fn effective_bounds(
 fn collect_bound_providers(
     bounds: &[ResolvedProtocolBound],
     method: &str,
+    explicit_arity: usize,
     registry: &GlobalRegistry,
 ) -> Vec<(ResolvedProtocolBound, ResolvedProtocolMethod)> {
     let mut providers = Vec::new();
@@ -215,7 +216,11 @@ fn collect_bound_providers(
         let GlobalKind::Protocol(Some(definition)) = &entry.kind else {
             continue;
         };
-        if let Some(found) = definition.methods.iter().find(|m| m.name == method) {
+        if let Some(found) = definition
+            .methods
+            .iter()
+            .find(|m| m.name == method && m.non_self_params.len() == explicit_arity)
+        {
             providers.push((bound.clone(), found.clone()));
         }
     }
@@ -288,7 +293,7 @@ fn validate_bounded_args(
             }) => {
                 diagnostics.push(Diagnostic::error(
                     format!(
-                        "argument `{}` to `{method}` expects `{}`: value \
+                        "argument `{}` to `{method}` expects `{}`, but value \
                          `{rendered_value}` does not fit in `{}` (range {})",
                         expected.name,
                         display_resolution(&expected_ty, resolver.registry),

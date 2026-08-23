@@ -31,11 +31,13 @@ use common::{all_instructions, lower_script_source};
 /// between the receiver and the method), so matching by both `List_`
 /// prefix and `.<method>` suffix is more robust than a single substring.
 fn intrinsic_call<'a>(script: &'a IRScript, method_name: &str) -> &'a IRFunction {
-    let suffix = format!(".{method_name}");
+    let source_name = method_name.split('.').next().unwrap_or(method_name);
+    let source_symbol = format!(".{source_name}/");
     let mangled = all_instructions(&script.blocks)
         .find_map(|inst| match inst {
             IRInstruction::Call { callee, .. }
-                if callee.mangled().contains(".List_") && callee.mangled().ends_with(&suffix) =>
+                if callee.mangled().contains(".List_")
+                    && callee.mangled().contains(&source_symbol) =>
             {
                 Some(callee.mangled().to_string())
             }
@@ -214,7 +216,9 @@ fn list_literal_lowers_to_new_plus_append_chain() {
                 inst,
                 IRInstruction::Call { callee, .. }
                     if callee.mangled().contains(".List_")
-                        && callee.mangled().ends_with(".append.$consume$")
+                        && callee
+                            .mangled()
+                            .contains(".append/2.$consume$")
             )
         })
         .count();

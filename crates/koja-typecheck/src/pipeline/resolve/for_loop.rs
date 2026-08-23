@@ -251,6 +251,7 @@ fn method_call(receiver: Expr, method: &str, args: Vec<Arg>, span: Span) -> Expr
             receiver: Box::new(receiver),
             method: method.to_string(),
             args,
+            target: Resolution::Unresolved,
             type_args: Vec::new(),
         },
         span,

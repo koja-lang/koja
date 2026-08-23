@@ -596,7 +596,7 @@ mod tests {
         let state = sym("Test.EntryState");
         for method in ["priority", "run", "start"] {
             let stub = seed_function(
-                crate::mangling::mangled_method_name(&state, &[], method, &[]),
+                crate::mangling::mangled_method_name(&state, &[], method, 1, &[]),
                 Vec::new(),
             );
             pkg.functions.insert(stub.symbol.clone(), stub);

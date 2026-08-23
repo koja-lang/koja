@@ -305,7 +305,7 @@ fn emit_element_format(
         return emit_tuple_format(extracted, elements, ctx, block, registry, output);
     }
     let (callee, return_ty) =
-        conformance_method_symbol(&structural_element, "format", registry, output);
+        conformance_method_symbol(&structural_element, "format", 1, registry, output);
     let dest = ctx.fresh_value(return_ty);
     ctx.cfg.append(
         block,
@@ -431,7 +431,7 @@ fn emit_element_eq(
             output,
         );
     }
-    let (callee, return_ty) = conformance_method_symbol(element_ty, "equals?", registry, output);
+    let (callee, return_ty) = conformance_method_symbol(element_ty, "equals?", 2, registry, output);
     let dest = ctx.fresh_value(return_ty);
     ctx.cfg.append(
         block,

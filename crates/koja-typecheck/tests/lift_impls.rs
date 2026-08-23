@@ -40,7 +40,10 @@ fn happy_path_impl_satisfies_protocol() {
         .registry
         .lookup(&method_ident)
         .expect("Point.greet should be registered");
-    assert!(matches!(entry.kind, GlobalKind::Function(Some(_))));
+    assert!(matches!(
+        &entry.kind,
+        GlobalKind::Function(definition) if definition.signature.is_some()
+    ));
 }
 
 #[test]
@@ -65,7 +68,10 @@ fn default_body_synthesizes_when_impl_omits() {
         .registry
         .lookup(&method_ident)
         .expect("synthesized Tag.label should be registered");
-    assert!(matches!(entry.kind, GlobalKind::Function(Some(_))));
+    assert!(matches!(
+        &entry.kind,
+        GlobalKind::Function(definition) if definition.signature.is_some()
+    ));
 
     // The synthesized Function should also be present in the impl
     // block's members so resolve walks it like any other method.
@@ -210,7 +216,10 @@ fn priv_helper_in_protocol_impl_is_allowed() {
         .registry
         .lookup(&helper_ident)
         .expect("Robot.prefix should be registered as a type-private helper");
-    assert!(matches!(entry.kind, GlobalKind::Function(Some(_))));
+    assert!(matches!(
+        &entry.kind,
+        GlobalKind::Function(definition) if definition.signature.is_some()
+    ));
 }
 
 #[test]

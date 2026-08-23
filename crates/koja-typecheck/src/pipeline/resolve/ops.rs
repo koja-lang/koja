@@ -77,6 +77,7 @@ pub(super) fn resolve_equality_op_expr(
             value: right_taken,
             span,
         }],
+        target: Resolution::Unresolved,
         type_args: Vec::new(),
     };
     expr.kind = match op {

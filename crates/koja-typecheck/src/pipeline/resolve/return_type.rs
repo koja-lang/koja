@@ -68,7 +68,7 @@ pub(super) fn check_return_type(
     let Some(last) = body.last_mut() else {
         diagnostics.push(Diagnostic::error(
             format!(
-                "return type mismatch on `{}`: expected `{}`, found empty body",
+                "return type mismatch on `{}`. Expected `{}`, found empty body",
                 function.name,
                 display_resolution(expected, env.registry),
             ),
@@ -86,7 +86,7 @@ pub(super) fn check_return_type(
     let Statement::Expr(trailing) = last else {
         diagnostics.push(Diagnostic::error(
             format!(
-                "return type mismatch on `{}`: expected `{}`, found a non-expression \
+                "return type mismatch on `{}`. Expected `{}`, found a non-expression \
                  trailing statement",
                 function.name,
                 display_resolution(expected, env.registry),
@@ -181,7 +181,7 @@ pub(super) fn check_explicit_return(
         if !declares_unit {
             diagnostics.push(Diagnostic::error(
                 format!(
-                    "return is missing a value: this function returns `{}`",
+                    "return is missing a value. This function returns `{}`",
                     display_resolution(declared, registry),
                 ),
                 span,
@@ -258,7 +258,7 @@ fn mismatch_message(
                 None => String::new(),
             };
             format!(
-                "return type mismatch{site}: expected `{}`, found `{}`",
+                "return type mismatch{site}. Expected `{}`, found `{}`",
                 display_resolution(declared, registry),
                 display_resolution(actual, registry),
             )

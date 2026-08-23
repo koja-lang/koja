@@ -295,13 +295,13 @@ fn spawn_wrapper_loads_config_calls_start_then_run_on_ok() {
     assert_contains(&ir_text, "define void @TestApp.Counter.__spawn_body(i64");
     assert_contains(
         &ir_text,
-        "call %\"Global.Result_$TestApp.Counter.Global.Process.StopReason$\" @TestApp.Counter.start",
+        "call %\"Global.Result_$TestApp.Counter.Global.Process.StopReason$\" @\"TestApp.Counter.start/1\"",
     );
     assert_contains(&ir_text, "start_ok:");
     assert_contains(&ir_text, "start_err:");
     assert_contains(
         &ir_text,
-        "call %Global.Process.StopReason @TestApp.Counter.run",
+        "call %Global.Process.StopReason @\"TestApp.Counter.run/1\"",
     );
 }
 
@@ -535,7 +535,7 @@ fn ref_cast_with_unit_message_uses_i8_placeholder_in_envelope() {
     // the trailing `[3 x i64]` array.
     assert_contains(
         &ir_text,
-        "define void @\"Global.Ref_$Unit.Int64$.cast\"(%\"Global.Ref_$Unit.Int64$\" %0, i8 %1)",
+        "define void @\"Global.Ref_$Unit.Int64$.cast/2\"(%\"Global.Ref_$Unit.Int64$\" %0, i8 %1)",
     );
     assert_contains(&ir_text, "%cast_envelope = alloca { i8, [3 x i64] }");
     assert_contains(
@@ -664,7 +664,7 @@ fn process_entry_wrapper_body_calls_stopreason_code_on_both_paths() {
     );
     assert_contains(&ir_text, "start_ok:");
     assert_contains(&ir_text, "start_err:");
-    assert_contains(&ir_text, "call i64 @Global.Process.StopReason.code");
+    assert_contains(&ir_text, "call i64 @\"Global.Process.StopReason.code/1\"");
 }
 
 #[test]

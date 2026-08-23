@@ -77,9 +77,10 @@ impl<'a> LiftScope<'a> {
     }
 }
 
-/// `protocol_id -> method_name -> protocol method with default body`.
+/// `protocol_id -> (method_name, arity) -> protocol method with default body`.
 /// Local to one `lift_signatures` call.
-pub(super) type ProtocolBodies = HashMap<GlobalRegistryId, HashMap<String, ProtocolMethod>>;
+pub(super) type ProtocolBodies =
+    HashMap<GlobalRegistryId, HashMap<(String, usize), ProtocolMethod>>;
 
 /// Whether a function being lifted may declare a `self` receiver
 /// and how to type it. `Receiver { receiver, self_override }`
@@ -412,9 +413,15 @@ fn resolve_function_bounds(
     scope: &mut LiftScope<'_>,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
-    let Some((id, _)) = scope.registry.lookup(&identifier) else {
+    let Some((id, entry)) = scope
+        .registry
+        .lookup_function(&identifier, function.params.len())
+    else {
         return;
     };
+    if entry.type_params.len() != function.type_params.len() {
+        return;
+    }
     let resolved = resolve_param_bounds(
         &function.type_params,
         id,
@@ -469,7 +476,7 @@ fn collect_protocol_bodies(
                 let entry = bodies.entry(id).or_default();
                 for method in &decl.methods {
                     if method.body.is_some() {
-                        entry.insert(method.name.clone(), method.clone());
+                        entry.insert((method.name.clone(), method.params.len()), method.clone());
                     }
                 }
             }

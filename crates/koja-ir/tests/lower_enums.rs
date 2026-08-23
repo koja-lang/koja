@@ -264,7 +264,7 @@ fn inline_static_method_on_enum_lowers_into_package_function_map() {
 
     let script = lower_script_source(source);
     let function = script
-        .function("TestApp.Color.primary")
+        .function("TestApp.Color.primary/0")
         .expect("inline static method on enum missing from program");
     assert_eq!(function.kind, FunctionKind::Regular);
     assert!(!function.blocks.is_empty(), "method should have a body");
@@ -288,7 +288,7 @@ fn impl_block_on_enum_lowers_static_method_into_package_function_map() {
 
     let script = lower_script_source(source);
     let function = script
-        .function("TestApp.Color.primary")
+        .function("TestApp.Color.primary/0")
         .expect("impl-block static method on enum missing from program");
     assert_eq!(function.kind, FunctionKind::Regular);
     assert!(!function.blocks.is_empty(), "method should have a body");
@@ -316,7 +316,7 @@ fn static_method_call_on_enum_emits_call_against_qualified_symbol() {
             _ => None,
         })
         .expect("expected one Call instruction");
-    assert_eq!(callee.mangled(), "TestApp.Color.primary");
+    assert_eq!(callee.mangled(), "TestApp.Color.primary/0");
 }
 
 // Cross-decl payloads

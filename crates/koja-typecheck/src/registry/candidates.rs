@@ -68,7 +68,10 @@ impl GlobalRegistry {
             if path.len() != owner_path.len() + 1 || path[..owner_path.len()] != *owner_path {
                 continue;
             }
-            let GlobalKind::Function(Some(signature)) = &entry.kind else {
+            let GlobalKind::Function(definition) = &entry.kind else {
+                continue;
+            };
+            let Some(signature) = &definition.signature else {
                 continue;
             };
             let dispatch_matches = match signature.dispatch {
@@ -152,7 +155,10 @@ impl GlobalRegistry {
                     kind: CandidateKind::Enum,
                     label,
                 },
-                GlobalKind::Function(Some(signature)) => {
+                GlobalKind::Function(definition) => {
+                    let Some(signature) = &definition.signature else {
+                        continue;
+                    };
                     if signature.params.iter().any(|p| p.name == "self") {
                         continue;
                     }
@@ -165,7 +171,6 @@ impl GlobalRegistry {
                         label,
                     }
                 }
-                GlobalKind::Function(None) => continue,
                 GlobalKind::Protocol(_) => Candidate {
                     detail: CandidateDetail::TypeParams(&entry.type_params),
                     kind: CandidateKind::Protocol,

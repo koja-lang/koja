@@ -106,7 +106,7 @@ focused standard library improvements found while building auth-manager.
   search index.
 - **[DONE]** Replace indexed `Enumeration` with cursor-based traversal, require
   nominal conformance for `for`, and support Range, Map, and Set iteration.
-- Default values for function parameters, so optional arguments do not
+- **[DONE]** Default values for function parameters, so optional arguments do not
   require a separate options struct at every call site. A defaulted function
   is callable at every arity its defaults allow. `&name/arity` references
   pin one arity when a bare name is ambiguous. Separately declared functions

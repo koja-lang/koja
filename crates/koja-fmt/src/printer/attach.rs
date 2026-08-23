@@ -491,7 +491,10 @@ impl<'a> Attacher<'a> {
             return;
         }
         match &expr.kind {
-            ExprKind::Ident { .. } | ExprKind::Literal { .. } | ExprKind::Self_ { .. } => {}
+            ExprKind::Ident { .. }
+            | ExprKind::Literal { .. }
+            | ExprKind::NamedFunctionReference { .. }
+            | ExprKind::Self_ { .. } => {}
 
             ExprKind::Binary { left, right, .. } => {
                 self.walk_expr(left);

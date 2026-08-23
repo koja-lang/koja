@@ -18,6 +18,11 @@ use koja_ast::identifier::Identifier;
 use crate::function::IRSymbol;
 use crate::types::IRType;
 
+/// Mint the canonical internal symbol for a source function.
+pub(crate) fn source_function_symbol(identifier: &Identifier, arity: usize) -> IRSymbol {
+    IRSymbol::from_identifier(identifier).derived(&format!("/{arity}"))
+}
+
 /// Mangle `(symbol, args)` into a fresh `IRSymbol` rooted at the
 /// same identifier as `symbol`. Empty `args` returns `symbol`
 /// unchanged so non-generic callers can route through this helper
@@ -52,13 +57,15 @@ pub fn mangled_method_name(
     struct_template: &IRSymbol,
     receiver_args: &[IRType],
     method_name: &str,
+    arity: usize,
     method_args: &[IRType],
 ) -> IRSymbol {
     let receiver = mangled_type_name(struct_template, receiver_args);
+    let method = format!(".{method_name}/{arity}");
     let suffix = if method_args.is_empty() {
-        format!(".{method_name}")
+        method
     } else {
-        format!(".{method_name}{}", render_type_args(method_args))
+        format!("{method}{}", render_type_args(method_args))
     };
     receiver.derived(&suffix)
 }
@@ -86,7 +93,7 @@ pub fn global_primitive_symbol(path: &[&str]) -> IRSymbol {
 /// matches the same one [`super::lower::calls::lower_method_call`]
 /// would emit for a user-side `value.format()` call.
 pub fn debug_format_for_symbol(receiver: &IRSymbol) -> IRSymbol {
-    receiver.derived(".format")
+    receiver.derived(".format/1")
 }
 
 fn render_type_args(args: &[IRType]) -> String {
@@ -241,7 +248,7 @@ mod tests {
         assert_eq!(clone_glue_symbol(&ty).mangled(), "Test.Thing.$clone$");
         assert_ne!(
             clone_glue_symbol(&ty),
-            mangled_method_name(&symbol("Thing"), &[], "clone", &[]),
+            mangled_method_name(&symbol("Thing"), &[], "clone", 1, &[]),
         );
     }
 
@@ -251,9 +258,10 @@ mod tests {
             &symbol("Box"),
             &[IRType::String],
             "map",
+            2,
             &[IRType::List(Box::new(IRType::Int64))],
         );
-        assert_eq!(mangled.mangled(), "Test.Box_$String$.map_$List_$Int64$$");
+        assert_eq!(mangled.mangled(), "Test.Box_$String$.map/2_$List_$Int64$$");
     }
 
     #[test]

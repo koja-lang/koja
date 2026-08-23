@@ -9,7 +9,7 @@
 //! as `"..."` instead.
 
 use koja_ast::ast::{Arg, Diagnostic, Expr};
-use koja_ast::identifier::{AnonymousKind, Resolution, ResolvedType};
+use koja_ast::identifier::{AnonymousKind, Identifier, Resolution, ResolvedType};
 use koja_ast::span::Span;
 
 use super::super::ctx::Resolver;
@@ -23,10 +23,23 @@ pub(super) fn resolve_tuple_method_call(
     receiver: &Expr,
     method: &str,
     args: &mut [Arg],
+    target: &mut Resolution,
     call_span: Span,
     resolver: &mut Resolver<'_>,
     diagnostics: &mut Vec<Diagnostic>,
 ) -> ResolvedType {
+    if let Some(function_id) = tuple_method_target(method, resolver) {
+        *target = Resolution::Global(function_id);
+    } else if let ResolvedType::Named {
+        resolution: Resolution::Global(alias_id),
+        ..
+    } = receiver.resolution
+    {
+        // Alias-backed tuples keep the alias id as a structural
+        // dispatch marker. IR tuple lowering does not consume a
+        // function target.
+        *target = Resolution::Global(alias_id);
+    }
     match method {
         "equals?" => resolve_tuple_eq(receiver, args, call_span, resolver, diagnostics),
         "format" => zero_arg_return(
@@ -66,6 +79,28 @@ pub(super) fn resolve_tuple_method_call(
             ResolvedType::unresolved()
         }
     }
+}
+
+fn tuple_method_target(
+    method: &str,
+    resolver: &Resolver<'_>,
+) -> Option<koja_ast::identifier::GlobalRegistryId> {
+    let (protocol, arity) = match method {
+        "equals?" => ("Equality", 2),
+        "format" | "inspect" | "print" => ("Debug", 1),
+        _ => return None,
+    };
+    [
+        Identifier::new("Global", vec![protocol.to_string(), method.to_string()]),
+        Identifier::new("Global", vec![method.to_string()]),
+    ]
+    .iter()
+    .find_map(|identifier| {
+        resolver
+            .registry
+            .lookup_function(identifier, arity)
+            .map(|(id, _)| id)
+    })
 }
 
 /// `lhs.equals?(rhs)`: one argument, structurally the same tuple shape as

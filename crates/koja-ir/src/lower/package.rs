@@ -15,7 +15,9 @@ use koja_ast::ast::{
 use koja_ast::identifier::{
     AnonymousKind, GlobalRegistryId, Identifier, LocalId, Resolution, ResolvedType,
 };
-use koja_typecheck::{BuiltinShape, CheckedPackage, FunctionSignature, GlobalKind, GlobalRegistry};
+use koja_typecheck::{
+    BuiltinShape, CheckedPackage, FunctionDefinition, FunctionSignature, GlobalKind, GlobalRegistry,
+};
 
 use crate::constant::IRConstantValue;
 use crate::enum_decl::IREnumDecl;
@@ -24,7 +26,7 @@ use crate::function::{FunctionKind, IRFunction, IRFunctionParam, IRSourceDef, IR
 use crate::generics::Instantiation;
 use crate::intrinsic_id::IRIntrinsicId;
 use crate::local::IRLocalId;
-use crate::mangling::{mangled_type_name, union_mangle};
+use crate::mangling::{mangled_type_name, source_function_symbol, union_mangle};
 use crate::package::IRPackage;
 use crate::struct_decl::IRStructDecl;
 use crate::types::IRType;
@@ -319,8 +321,14 @@ pub(super) fn lower_function_with_identifier(
     if !function.type_params.is_empty() {
         return None;
     }
-    let signature = function_signature(registry, &identifier)?;
-    let symbol = IRSymbol::from_identifier(&identifier);
+    let definition = function_definition(registry, &identifier, function.params.len())?;
+    let signature = definition.signature.as_ref().unwrap_or_else(|| {
+        panic!(
+            "IR lower: function `{identifier}/{}` has no lifted signature",
+            function.params.len()
+        )
+    });
+    let symbol = source_function_symbol(&identifier, definition.arity);
     lower_function_inner(
         function,
         &identifier,
@@ -506,19 +514,17 @@ fn param_local_id(param: &Param) -> Option<LocalId> {
     }
 }
 
-/// Lookup the lifted [`FunctionSignature`] for `identifier`.
-/// Returns `None` when collect / lift rejected the function (IR
-/// silently skips), while a registered entry without a signature panics
-/// as an invariant violation.
-pub(super) fn function_signature<'a>(
+/// Look up one exact function definition.
+pub(super) fn function_definition<'a>(
     registry: &'a GlobalRegistry,
     identifier: &Identifier,
-) -> Option<&'a FunctionSignature> {
-    let (_, entry) = registry.lookup(identifier)?;
+    arity: usize,
+) -> Option<&'a FunctionDefinition> {
+    let (_, entry) = registry.lookup_function(identifier, arity)?;
     match &entry.kind {
-        GlobalKind::Function(Some(sig)) => Some(sig),
+        GlobalKind::Function(definition) => Some(definition),
         other => panic!(
-            "IR lower: function `{identifier}` has no lifted signature \
+            "IR lower: function `{identifier}/{arity}` has no lifted definition \
              ({}), lift_signatures invariant violation",
             other.label(),
         ),

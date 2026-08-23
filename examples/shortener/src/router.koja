@@ -260,7 +260,7 @@ struct Router
   end
 
   priv fn json_response<T: JSON.Encoding>(status: Status, body: T) -> Response
-    text = JSON.encode_pretty(body)
+    text = JSON.encode(body, JSON.EncodeOptions{pretty?: true})
     headers = Headers.new()
       .set("Content-Type", "application/json")
       .set("Content-Length", "#{text.byte_length()}")

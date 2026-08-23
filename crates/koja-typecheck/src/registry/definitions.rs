@@ -225,6 +225,27 @@ pub struct FunctionSignature {
     pub impl_args: Vec<ResolvedType>,
 }
 
+/// Function-only registry metadata, available from collect onward.
+///
+/// `signature` is `None` after collect and `Some` after signature
+/// lifting. The arity and origin are fixed when collect registers the
+/// function.
+#[derive(Clone, Debug)]
+pub struct FunctionDefinition {
+    /// Declared arity, including `self`.
+    pub arity: usize,
+    /// Source or synthesized origin.
+    pub origin: FunctionOrigin,
+    /// Lifted callable shape.
+    pub signature: Option<FunctionSignature>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FunctionOrigin {
+    DefaultAdapter { canonical_arity: usize },
+    Explicit,
+}
+
 /// Field layout + protocol conformances for a user-declared struct.
 /// Stamped onto a [`super::GlobalKind::Struct`] entry by the
 /// `lift_signatures` sub-pass. Field order matches declaration
@@ -305,6 +326,8 @@ pub struct ProtocolDefinition {
 /// not stored here (registry holds resolved types only).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ResolvedProtocolMethod {
+    /// Declared arity, including `self`.
+    pub arity: usize,
     pub dispatch: Dispatch,
     pub has_default: bool,
     pub name: String,

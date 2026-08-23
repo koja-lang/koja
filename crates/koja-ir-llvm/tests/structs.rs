@@ -165,8 +165,14 @@ fn inline_static_method_emits_named_function_definition() {
         emit_script_llvm_ir(&script, APP_NAME).expect("emit_script_llvm_ir should succeed");
 
     assert_main_shape(&ir_text);
-    assert_contains(&ir_text, "define %TestApp.Point @TestApp.Point.origin()");
-    assert_contains(&ir_text, "call %TestApp.Point @TestApp.Point.origin()");
+    assert_contains(
+        &ir_text,
+        "define %TestApp.Point @\"TestApp.Point.origin/0\"()",
+    );
+    assert_contains(
+        &ir_text,
+        "call %TestApp.Point @\"TestApp.Point.origin/0\"()",
+    );
 }
 
 #[test]
@@ -194,8 +200,14 @@ fn impl_block_static_method_emits_named_function_definition() {
         emit_script_llvm_ir(&script, APP_NAME).expect("emit_script_llvm_ir should succeed");
 
     assert_main_shape(&ir_text);
-    assert_contains(&ir_text, "define %TestApp.Point @TestApp.Point.origin()");
-    assert_contains(&ir_text, "call %TestApp.Point @TestApp.Point.origin()");
+    assert_contains(
+        &ir_text,
+        "define %TestApp.Point @\"TestApp.Point.origin/0\"()",
+    );
+    assert_contains(
+        &ir_text,
+        "call %TestApp.Point @\"TestApp.Point.origin/0\"()",
+    );
 }
 
 #[test]
@@ -217,8 +229,8 @@ fn static_method_with_args_emits_typed_signature_and_call() {
         emit_script_llvm_ir(&script, APP_NAME).expect("emit_script_llvm_ir should succeed");
 
     assert_main_shape(&ir_text);
-    assert_contains(&ir_text, "define i64 @TestApp.Point.at(i64");
-    assert_contains(&ir_text, "call i64 @TestApp.Point.at(i64 7, i64 3)");
+    assert_contains(&ir_text, "define i64 @\"TestApp.Point.at/2\"(i64");
+    assert_contains(&ir_text, "call i64 @\"TestApp.Point.at/2\"(i64 7, i64 3)");
 }
 
 #[test]
@@ -243,9 +255,15 @@ fn inline_instance_method_emits_named_function_with_self_param() {
     assert_main_shape(&ir_text);
     // The signature carries the receiver-by-value as the first
     // parameter. Inkwell emits `%TestApp.Point` for the type.
-    assert_contains(&ir_text, "define i64 @TestApp.Point.first(%TestApp.Point");
+    assert_contains(
+        &ir_text,
+        "define i64 @\"TestApp.Point.first/1\"(%TestApp.Point",
+    );
     // Call site threads the receiver value as the first arg.
-    assert_contains(&ir_text, "call i64 @TestApp.Point.first(%TestApp.Point");
+    assert_contains(
+        &ir_text,
+        "call i64 @\"TestApp.Point.first/1\"(%TestApp.Point",
+    );
 }
 
 #[test]
@@ -270,8 +288,14 @@ fn impl_block_instance_method_emits_named_function_with_self_param() {
         emit_script_llvm_ir(&script, APP_NAME).expect("emit_script_llvm_ir should succeed");
 
     assert_main_shape(&ir_text);
-    assert_contains(&ir_text, "define i64 @TestApp.Point.second(%TestApp.Point");
-    assert_contains(&ir_text, "call i64 @TestApp.Point.second(%TestApp.Point");
+    assert_contains(
+        &ir_text,
+        "define i64 @\"TestApp.Point.second/1\"(%TestApp.Point",
+    );
+    assert_contains(
+        &ir_text,
+        "call i64 @\"TestApp.Point.second/1\"(%TestApp.Point",
+    );
 }
 
 #[test]
@@ -294,7 +318,10 @@ fn instance_method_with_explicit_arg_emits_signature_and_call() {
 
     assert_main_shape(&ir_text);
     // Signature: `(self: %TestApp.Counter, delta: i64) -> i64`.
-    assert_contains(&ir_text, "define i64 @TestApp.Counter.add(%TestApp.Counter");
+    assert_contains(
+        &ir_text,
+        "define i64 @\"TestApp.Counter.add/2\"(%TestApp.Counter",
+    );
     // Call site threads the receiver value first, then the explicit
     // `5`. Inkwell emits the receiver as a register reference, so
     // pin the literal-arg suffix instead.

@@ -17,7 +17,7 @@ fn map_literal_lowers_to_new_and_put_chain() {
     assert_eq!(
         calls
             .iter()
-            .filter(|callee| callee.contains(".Map") && callee.ends_with(".new"))
+            .filter(|callee| { callee.contains(".Map") && callee.contains(".new/0") })
             .count(),
         1,
     );
@@ -26,7 +26,7 @@ fn map_literal_lowers_to_new_and_put_chain() {
     assert_eq!(
         calls
             .iter()
-            .filter(|callee| callee.contains(".Map") && callee.ends_with(".put.$consume$"))
+            .filter(|callee| { callee.contains(".Map") && callee.contains(".put/3.$consume$") })
             .count(),
         2,
     );

@@ -26,7 +26,7 @@ pub fn search(project: &DocProject, query: &str) -> SearchOutcome {
 
     let exact: Vec<&Symbol> = symbols
         .iter()
-        .filter(|s| s.name.to_lowercase() == needle || s.qualified_name().to_lowercase() == needle)
+        .filter(|symbol| matches_exact(symbol, &needle))
         .collect();
 
     if let [hit] = exact.as_slice() {
@@ -58,6 +58,17 @@ pub fn search(project: &DocProject, query: &str) -> SearchOutcome {
     };
     let header = format!("{} {word} for \"{query}\":", partials.len());
     SearchOutcome::Hits(render_list(&header, &partials))
+}
+
+fn matches_exact(symbol: &Symbol, needle: &str) -> bool {
+    let name = symbol.name.to_lowercase();
+    let qualified = symbol.qualified_name().to_lowercase();
+    name == needle
+        || qualified == needle
+        || name.split_once('/').is_some_and(|(base, _)| base == needle)
+        || qualified
+            .rsplit_once('/')
+            .is_some_and(|(base, _)| base == needle)
 }
 
 fn matches_partial(symbol: &Symbol, needle: &str) -> bool {
@@ -220,6 +231,7 @@ mod tests {
             deprecated: None,
             doc: Some("A growable list. Backed by a heap block.".to_string()),
             functions: vec![DocFunction {
+                arity: 2,
                 deprecated: None,
                 doc: Some(
                     "Append an item.\n\n## Examples\n\n```koja\nlist.append(1)\n```".to_string(),
@@ -301,7 +313,7 @@ mod tests {
         assert!(text.contains("A growable list."));
         assert!(text.contains("### `fn append(self, item: T) -> List<T>`"));
         assert!(text.contains("list.append(1)"));
-        assert!(text.contains("## Also matched\n\n- Global.List.append (fn): Append an item.\n"));
+        assert!(text.contains("## Also matched\n\n- Global.List.append/2 (fn): Append an item.\n"));
     }
 
     #[test]
@@ -317,7 +329,7 @@ mod tests {
     fn exact_function_hit_renders_signature_and_doc() {
         let project = sample_project();
         let text = hits(search(&project, "List.append"));
-        assert!(text.starts_with("# Global.List.append (fn)\n"));
+        assert!(text.starts_with("# Global.List.append/2 (fn)\n"));
         assert!(text.contains("```koja\nfn append(self, item: T) -> List<T>\n```"));
         assert!(text.contains("Append an item."));
     }
@@ -343,7 +355,7 @@ mod tests {
         let project = sample_project();
         let text = hits(search(&project, "appe"));
         assert!(text.starts_with("1 match for \"appe\":"));
-        assert!(text.contains("- Global.List.append (fn): Append an item.\n"));
+        assert!(text.contains("- Global.List.append/2 (fn): Append an item.\n"));
     }
 
     #[test]

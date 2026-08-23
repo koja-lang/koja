@@ -231,7 +231,7 @@ pub(super) fn synthesize_default_init(
     );
     debug_assert!(
         scratch.is_empty(),
-        "field default for `{}` diverged from declaration validation: {scratch:?}",
+        "field default for `{}` diverged from declaration validation. Got {scratch:?}",
         declared_field.name,
     );
     let actual = value.resolution.clone();
@@ -239,7 +239,7 @@ pub(super) fn synthesize_default_init(
         let mismatch = check_compatible_stamping(&mut value, &actual, &declared_field.ty, registry);
         debug_assert!(
             mismatch.is_none(),
-            "field default for `{}` diverged from declaration validation: {mismatch:?}",
+            "field default for `{}` diverged from declaration validation. Got {mismatch:?}",
             declared_field.name,
         );
     }

@@ -20,7 +20,7 @@ use super::tuples::lower_tuple_conformance_call;
 use crate::function::{IRBlockId, IRInstruction, IRSymbol};
 use crate::generics::{Instantiation, substitute_resolved_type};
 use crate::local::IRLocalId;
-use crate::mangling::{mangled_function_name, mangled_method_name};
+use crate::mangling::{mangled_function_name, mangled_method_name, source_function_symbol};
 use crate::types::{ConstValue, IRType, ValueId};
 
 /// Lower a `ExprKind::Call`. Seal guarantees the callee is one of:
@@ -73,7 +73,8 @@ pub(super) fn lower_call(
         )
     });
     let signature = function_signature_from_entry(entry);
-    let template_symbol = IRSymbol::from_identifier(&entry.identifier);
+    let definition = function_definition_from_entry(entry);
+    let template_symbol = source_function_symbol(&entry.identifier, definition.arity);
     let (callee_symbol, return_ty) = if type_args.is_empty() {
         let return_ty =
             resolved_type_to_ir_type(&signature.return_type, registry, &mut output.instantiations);
@@ -85,8 +86,13 @@ pub(super) fn lower_call(
             // mangles as `Global.CPtr_$UInt8$.strlen`). Match the
             // mono-side `enqueue_member_methods` output so the call
             // resolves through the IRPackage.
-            let mangled =
-                impl_pinned_call_symbol(&entry.identifier, &signature.impl_args, registry, output);
+            let mangled = impl_pinned_call_symbol(
+                &entry.identifier,
+                signature.params.len(),
+                &signature.impl_args,
+                registry,
+                output,
+            );
             (mangled, return_ty)
         }
     } else {
@@ -128,6 +134,7 @@ pub(super) fn lower_call(
 /// the typecheck-side `concrete_impl_args` filter.
 fn impl_pinned_call_symbol(
     identifier: &Identifier,
+    arity: usize,
     impl_args: &[ResolvedType],
     registry: &GlobalRegistry,
     output: &mut LowerOutput,
@@ -143,7 +150,7 @@ fn impl_pinned_call_symbol(
         .iter()
         .map(|ty| resolved_type_to_ir_type(ty, registry, &mut output.instantiations))
         .collect();
-    mangled_method_name(&owner_symbol, &arg_types, identifier.last(), &[])
+    mangled_method_name(&owner_symbol, &arg_types, identifier.last(), arity, &[])
 }
 
 /// Lower a `Resolution::Local` callee, `f(args)` where `f` is a
@@ -294,6 +301,27 @@ pub(super) struct MethodCallShape<'a> {
     pub(super) method: &'a str,
     pub(super) args: &'a [Arg],
     pub(super) method_type_args: &'a [ResolvedType],
+    pub(super) target: Resolution,
+}
+
+pub(super) fn synthesized_method_target(
+    registry: &GlobalRegistry,
+    owner_id: GlobalRegistryId,
+    method: &str,
+    arity: usize,
+) -> Resolution {
+    let owner = registry
+        .get(owner_id)
+        .unwrap_or_else(|| panic!("IR lower: synthesized method owner id `{owner_id}` is missing"));
+    let mut path = owner.identifier.path().to_vec();
+    path.push(method.to_string());
+    let identifier = Identifier::new(owner.identifier.package(), path);
+    let (id, _) = registry
+        .lookup_function(&identifier, arity)
+        .unwrap_or_else(|| {
+            panic!("IR lower: synthesized method `{identifier}/{arity}` is missing")
+        });
+    Resolution::Global(id)
 }
 
 /// Lower `ExprKind::MethodCall`. Static dispatch (`Type.method(...)`)
@@ -321,6 +349,7 @@ pub(super) fn lower_method_call(
         method,
         args,
         method_type_args,
+        target,
     } = shape;
     let structural_receiver = peel_alias(&receiver.resolution, registry);
     if matches!(
@@ -350,23 +379,38 @@ pub(super) fn lower_method_call(
         )
     });
     let receiver_type_args = receiver_type_args(receiver, dispatch);
-    let mut method_path = struct_entry.identifier.path().to_vec();
-    method_path.push(method.to_string());
-    let method_identifier = Identifier::new(struct_entry.identifier.package(), method_path);
-    let (method_id, method_entry) = registry.lookup(&method_identifier).unwrap_or_else(|| {
-        panic!(
-            "IR lower: method `{method_identifier}` missing from registry \
-             (seal invariant violation)",
-        )
+    let method_id = if let Resolution::Global(method_id) = target {
+        method_id
+    } else {
+        let mut path = struct_entry.identifier.path().to_vec();
+        path.push(method.to_string());
+        let identifier = Identifier::new(struct_entry.identifier.package(), path);
+        let arity = args.len() + usize::from(dispatch == Dispatch::Instance);
+        registry
+            .lookup_function(&identifier, arity)
+            .map(|(id, _)| id)
+            .unwrap_or_else(|| panic!("IR lower: bounded method `{identifier}/{arity}` is missing"))
+    };
+    let method_entry = registry.get(method_id).unwrap_or_else(|| {
+        panic!("IR lower: method target id `{method_id}` is missing from the registry")
     });
+    let definition = function_definition_from_entry(method_entry);
     let signature = function_signature_from_entry(method_entry);
 
-    let template_symbol = IRSymbol::from_identifier(&method_entry.identifier);
     let (callee_symbol, return_ty) = if receiver_type_args.is_empty() && method_type_args.is_empty()
     {
         let return_ty =
             resolved_type_to_ir_type(&signature.return_type, registry, &mut output.instantiations);
-        (template_symbol, return_ty)
+        (
+            mangled_method_name(
+                &IRSymbol::from_identifier(&struct_entry.identifier),
+                &[],
+                method,
+                definition.arity,
+                &[],
+            ),
+            return_ty,
+        )
     } else {
         let receiver_arg_ir: Vec<IRType> = receiver_type_args
             .iter()
@@ -377,8 +421,13 @@ pub(super) fn lower_method_call(
             .map(|ty| resolved_type_to_ir_type(ty, registry, &mut output.instantiations))
             .collect();
         let receiver_template = IRSymbol::from_identifier(&struct_entry.identifier);
-        let callee =
-            mangled_method_name(&receiver_template, &receiver_arg_ir, method, &method_arg_ir);
+        let callee = mangled_method_name(
+            &receiver_template,
+            &receiver_arg_ir,
+            method,
+            signature.params.len(),
+            &method_arg_ir,
+        );
         // Enqueue the specific method we're calling so the mono
         // worklist sees the call's `(method_id, receiver_args,
         // method_args)` triple. Static dispatch on a generic type
@@ -453,6 +502,7 @@ fn receiver_type_args(receiver: &Expr, _dispatch: Dispatch) -> Vec<ResolvedType>
 pub(super) fn conformance_method_symbol(
     receiver_ty: &ResolvedType,
     method: &str,
+    arity: usize,
     registry: &GlobalRegistry,
     output: &mut LowerOutput,
 ) -> (IRSymbol, IRType) {
@@ -478,18 +528,23 @@ pub(super) fn conformance_method_symbol(
     let mut method_path = struct_entry.identifier.path().to_vec();
     method_path.push(method.to_string());
     let method_identifier = Identifier::new(struct_entry.identifier.package(), method_path);
-    let (method_id, method_entry) = registry.lookup(&method_identifier).unwrap_or_else(|| {
-        panic!(
-            "IR lower: conformance method `{method_identifier}` missing from registry \
+    let (method_id, method_entry) = registry
+        .lookup_function(&method_identifier, arity)
+        .unwrap_or_else(|| {
+            panic!(
+                "IR lower: conformance method `{method_identifier}/{arity}` missing from registry \
              (typecheck must have validated the call)",
-        )
-    });
+            )
+        });
     let signature = function_signature_from_entry(method_entry);
     if type_args.is_empty() {
         let return_ty =
             resolved_type_to_ir_type(&signature.return_type, registry, &mut output.instantiations);
         return (
-            IRSymbol::from_identifier(&method_entry.identifier),
+            source_function_symbol(
+                &method_entry.identifier,
+                function_definition_from_entry(method_entry).arity,
+            ),
             return_ty,
         );
     }
@@ -498,7 +553,13 @@ pub(super) fn conformance_method_symbol(
         .map(|ty| resolved_type_to_ir_type(ty, registry, &mut output.instantiations))
         .collect();
     let receiver_template = IRSymbol::from_identifier(&struct_entry.identifier);
-    let callee = mangled_method_name(&receiver_template, &receiver_arg_ir, method, &[]);
+    let callee = mangled_method_name(
+        &receiver_template,
+        &receiver_arg_ir,
+        method,
+        signature.params.len(),
+        &[],
+    );
     output.instantiations.push(Instantiation {
         template: method_id,
         args: type_args.clone(),
@@ -511,8 +572,20 @@ pub(super) fn conformance_method_symbol(
 }
 
 fn function_signature_from_entry(entry: &RegistryEntry) -> &FunctionSignature {
+    function_definition_from_entry(entry)
+        .signature
+        .as_ref()
+        .unwrap_or_else(|| {
+            panic!(
+                "IR lower: callee `{}` has no lifted signature",
+                entry.identifier
+            )
+        })
+}
+
+fn function_definition_from_entry(entry: &RegistryEntry) -> &koja_typecheck::FunctionDefinition {
     match &entry.kind {
-        GlobalKind::Function(Some(sig)) => sig,
+        GlobalKind::Function(definition) => definition,
         other => panic!(
             "IR lower: callee `{}` resolved to non-function entry ({}), \
              typecheck seal violation",
@@ -843,10 +916,10 @@ fn emit_opaque_placeholder(ctx: &mut FnLowerCtx, block: IRBlockId) -> ValueId {
 /// regular function registration in `lower_function_inner` resolves
 /// it at link time.
 pub(super) fn emit_io_puts(message: ValueId, ctx: &mut FnLowerCtx, block: IRBlockId) -> IRBlockId {
-    let callee = IRSymbol::from_identifier(&Identifier::new(
-        "Global",
-        vec!["IO".to_string(), "puts".to_string()],
-    ));
+    let callee = source_function_symbol(
+        &Identifier::new("Global", vec!["IO".to_string(), "puts".to_string()]),
+        1,
+    );
     let dest = ctx.fresh_value(IRType::Unit);
     ctx.cfg.append(
         block,

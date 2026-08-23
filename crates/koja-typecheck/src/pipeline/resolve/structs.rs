@@ -104,7 +104,7 @@ pub(super) fn resolve_struct_construction(
         bare_walk_fields(fields, resolver, diagnostics);
         diagnostics.push(Diagnostic::error(
             format!(
-                "cannot construct `{}`: it is a {}, not a struct",
+                "cannot construct `{}` because it is a {}, not a struct",
                 struct_entry.identifier,
                 struct_entry.kind.label(),
             ),
@@ -114,8 +114,8 @@ pub(super) fn resolve_struct_construction(
     };
     let Some(definition) = definition else {
         panic!(
-            "typecheck: struct entry `{}` reached struct-literal validation \
-             without a stamped definition: every user struct carries \
+            "struct entry `{}` reached struct-literal validation \
+             without a stamped definition. Every user struct carries \
              `Struct(Some(_))` after lift",
             struct_entry.identifier,
         );

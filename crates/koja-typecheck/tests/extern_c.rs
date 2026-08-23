@@ -38,7 +38,10 @@ fn happy_path_explicit_width_primitives_typechecks() {
             .lookup(&id)
             .unwrap_or_else(|| panic!("`{name}` should be registered"));
         assert!(
-            matches!(entry.kind, GlobalKind::Function(Some(_))),
+            matches!(
+                &entry.kind,
+                GlobalKind::Function(definition) if definition.signature.is_some()
+            ),
             "`{name}` should have a stamped signature; got {:?}",
             entry.kind,
         );

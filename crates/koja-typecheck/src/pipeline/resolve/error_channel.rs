@@ -460,7 +460,7 @@ fn non_result_subject_diagnostic(
         display_resolution(&subject.resolution, registry),
     );
     let hint = if is_global_generic(&subject.resolution, "Option", registry) {
-        "name the error first: `.or_err(error)` turns an `Option` into a `Result`"
+        "name the error first with `.or_err(error)`, which turns an `Option` into a `Result`"
     } else {
         "only a fallible expression (one producing a `Result`) can go here"
     };

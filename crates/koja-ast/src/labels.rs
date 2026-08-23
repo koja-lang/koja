@@ -25,6 +25,7 @@ pub fn expr_kind_label(kind: &ExprKind) -> &'static str {
         ExprKind::Map { .. } => "map",
         ExprKind::Match { .. } => "match",
         ExprKind::MethodCall { .. } => "method-call",
+        ExprKind::NamedFunctionReference { .. } => "named-function-reference",
         ExprKind::Receive { .. } => "receive",
         ExprKind::Rescue { .. } => "rescue",
         ExprKind::Self_ { .. } => "self",

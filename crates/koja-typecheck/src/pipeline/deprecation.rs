@@ -23,7 +23,7 @@ use crate::pipeline::aliases::collect_file_aliases;
 use crate::pipeline::collect::nominal_target_path;
 use crate::pipeline::lift_signatures::ResolutionScope;
 use crate::pipeline::resolve::types::{lookup_type, peel_alias};
-use crate::registry::GlobalRegistry;
+use crate::registry::{GlobalKind, GlobalRegistry};
 
 pub(crate) fn check_file(
     file: &File,
@@ -377,7 +377,14 @@ impl Walker<'_, '_> {
                 resolution: Resolution::Global(id),
                 ..
             } => self.warn_use(*id, expr.span),
-            ExprKind::Ident { .. } | ExprKind::Literal { .. } | ExprKind::Self_ { .. } => {}
+            ExprKind::NamedFunctionReference {
+                target: Resolution::Global(id),
+                ..
+            } => self.warn_use(*id, expr.span),
+            ExprKind::Ident { .. }
+            | ExprKind::Literal { .. }
+            | ExprKind::NamedFunctionReference { .. }
+            | ExprKind::Self_ { .. } => {}
             ExprKind::If {
                 condition,
                 then_body,
@@ -417,7 +424,7 @@ impl Walker<'_, '_> {
                 args,
                 ..
             } => {
-                self.warn_deprecated_method(receiver, method, expr.span);
+                self.warn_deprecated_method(receiver, method, args.len(), expr.span);
                 self.check_expr(receiver);
                 for arg in args {
                     self.check_expr(&arg.value);
@@ -581,20 +588,40 @@ impl Walker<'_, '_> {
     /// The receiver's own deprecation is warned separately, by the
     /// `Ident` hook for statics or wherever the value was produced
     /// for instances.
-    fn warn_deprecated_method(&mut self, receiver: &Expr, method: &str, span: Span) {
-        let type_id = match &receiver.kind {
+    fn warn_deprecated_method(
+        &mut self,
+        receiver: &Expr,
+        method: &str,
+        explicit_arity: usize,
+        span: Span,
+    ) {
+        let static_type_id = match &receiver.kind {
             ExprKind::Ident {
                 resolution: Resolution::Global(id),
                 ..
-            } => Some(*id),
-            _ => match peel_alias(&receiver.resolution, self.scope.registry) {
+            } if self.scope.registry.get(*id).is_some_and(|entry| {
+                matches!(
+                    entry.kind,
+                    GlobalKind::Builtin(_)
+                        | GlobalKind::Enum(_)
+                        | GlobalKind::Protocol(_)
+                        | GlobalKind::Struct(_)
+                )
+            }) =>
+            {
+                Some(*id)
+            }
+            _ => None,
+        };
+        let type_id = static_type_id.or_else(|| {
+            match peel_alias(&receiver.resolution, self.scope.registry) {
                 ResolvedType::Named {
                     resolution: Resolution::Global(id),
                     ..
                 } => Some(id),
                 _ => None,
-            },
-        };
+            }
+        });
         let Some(type_id) = type_id else {
             return;
         };
@@ -606,7 +633,12 @@ impl Walker<'_, '_> {
             type_entry.identifier.path(),
             method,
         );
-        let Some((method_id, _)) = self.scope.registry.lookup(&method_identifier) else {
+        let arity = explicit_arity + usize::from(static_type_id.is_none());
+        let Some((method_id, _)) = self
+            .scope
+            .registry
+            .lookup_function(&method_identifier, arity)
+        else {
             return;
         };
         self.warn_use(method_id, span);
@@ -636,7 +668,7 @@ impl Walker<'_, '_> {
         // in sync when changing the wording.
         self.diagnostics.push(Diagnostic::warning(
             format!(
-                "`{}` is deprecated: {message}",
+                "`{}` is deprecated. {message}",
                 entry.identifier.path().join("."),
             ),
             span,

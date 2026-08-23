@@ -5,25 +5,23 @@ use koja_ast::identifier::{AnonymousKind, Identifier, LocalId, Resolution, Resol
 use koja_ast::span::Span;
 
 use crate::pipeline::visibility::check_reference_visibility;
-use crate::registry::{FunctionSignature, GlobalKind};
+use crate::registry::{
+    FunctionSignature, GlobalKind, GlobalRegistry, RegistryEntry, VisibilityScope,
+};
 
 use super::ctx::Resolver;
 use super::paths::{PackageMember, lookup_package_member, static_dotted_path};
+use super::types::lookup_type;
 
 /// Resolve a bare identifier expression. Locals win first. Package-
 /// level constants resolve through a global lookup so an
 /// `EARTH_RADIUS` reference at a use site stamps `Resolution::Global`
 /// and returns the constant's stamped type, with auto-imported
 /// `Global` constants (`STDOUT`) as the fallback when the current
-/// package has no match. Non-generic functions also resolve here as
-/// first-class values: the bare name lifts to an
-/// [`AnonymousKind::Function`] type so call-site code (the
-/// fn-as-value adapter in IR lower) can wrap them in a closure value.
-/// Generic functions diagnose, since first-class references would need an
-/// inference site that doesn't exist for a bare ident. (The static-
-/// method receiver and `Type.method(...)` call paths each handle
-/// struct-name resolution directly so they don't go through this
-/// helper.)
+/// package has no match. Named global functions require explicit
+/// `&name/arity` syntax. (The static-method receiver and
+/// `Type.method(...)` call paths each handle struct-name resolution
+/// directly so they do not go through this helper.)
 pub(super) fn resolve_ident(
     name: &str,
     resolution: &mut Resolution,
@@ -42,14 +40,9 @@ pub(super) fn resolve_ident(
                 *resolution = Resolution::Global(id);
                 return def.ty.clone();
             }
-            GlobalKind::Function(Some(sig)) => {
-                let Some(ty) =
-                    function_value_type(name, sig, &entry.type_params, span, diagnostics)
-                else {
-                    return ResolvedType::unresolved();
-                };
-                *resolution = Resolution::Global(id);
-                return ty;
+            GlobalKind::Function(_) => {
+                diagnose_explicit_reference(name, &global_id, resolver.registry, span, diagnostics);
+                return ResolvedType::unresolved();
             }
             _ => {}
         }
@@ -69,7 +62,8 @@ pub(super) fn resolve_ident(
 }
 
 /// Resolve a package-qualified member read: a constant
-/// (`Pkg.MAX_SIZE`) or a function value (`Pkg.helper`). The
+/// (`Pkg.MAX_SIZE`) or a function that needs explicit reference syntax
+/// (`Pkg.helper`). The
 /// capitalized form parses as a unit enum construction and the
 /// lowercase form as a field access, so neither shape reaches
 /// [`resolve_ident`]. When the dotted path names a constant or a
@@ -101,21 +95,19 @@ pub(super) fn resolve_qualified_member(
     };
     let ty = match &entry.kind {
         GlobalKind::Constant(Some(definition)) => definition.ty.clone(),
-        GlobalKind::Function(Some(signature)) => {
+        GlobalKind::Function(_) => {
             let label = format!("{package}.{name}");
-            let Some(ty) = function_value_type(
+            diagnose_explicit_reference(
                 &label,
-                signature,
-                &entry.type_params,
+                &entry.identifier,
+                resolver.registry,
                 expr.span,
                 diagnostics,
-            ) else {
-                return Some(ResolvedType::unresolved());
-            };
-            ty
+            );
+            return Some(ResolvedType::unresolved());
         }
-        GlobalKind::Constant(None) | GlobalKind::Function(None) => panic!(
-            "resolve_qualified_member: `{}` has no stamped definition, \
+        GlobalKind::Constant(None) => panic!(
+            "resolve_qualified_member found `{}` without a stamped definition. \
              lifting runs before body resolution",
             entry.identifier,
         ),
@@ -135,30 +127,297 @@ pub(super) fn resolve_qualified_member(
     Some(ty)
 }
 
-/// Type a named function used as a first-class value. Generic
-/// functions diagnose and return `None`, since a bare reference has
-/// no inference site for the type args.
-fn function_value_type(
-    name: &str,
-    signature: &FunctionSignature,
-    type_params: &[String],
+pub(super) fn resolve_named_function_reference(
+    path: &[String],
+    arity: usize,
+    target: &mut Resolution,
     span: Span,
+    resolver: &Resolver<'_>,
     diagnostics: &mut Vec<Diagnostic>,
-) -> Option<ResolvedType> {
-    if !type_params.is_empty() {
+) -> ResolvedType {
+    let label = path.join(".");
+    if path.is_empty() {
         diagnostics.push(Diagnostic::error(
-            format!(
-                "cannot reference generic function `{name}` as a value \
-                 (typecheck has no inference site for the type args)",
-            ),
+            "named function reference has no function name",
             span,
         ));
+        return ResolvedType::unresolved();
+    }
+
+    if resolver.scope.lookup(&path[0]).is_some() {
+        diagnostics.push(Diagnostic::error_with_hint(
+            format!("`&{label}/{arity}` cannot bind a local receiver or local function"),
+            "use the local function value directly, or wrap a receiver call in a closure",
+            span,
+        ));
+        return ResolvedType::unresolved();
+    }
+
+    let selected = if path.len() == 1 {
+        resolve_bare_reference(path, arity, resolver, span, diagnostics)
+    } else {
+        resolve_qualified_reference(path, arity, resolver, span, diagnostics)
+    };
+    let Some((id, entry)) = selected else {
+        return ResolvedType::unresolved();
+    };
+
+    check_function_reference_visibility(entry, resolver, span, diagnostics);
+    if !entry.type_params.is_empty() {
+        diagnostics.push(Diagnostic::error_with_hint(
+            format!("cannot reference generic function `{label}` directly"),
+            "wrap the call in a closure so its type arguments can be inferred",
+            span,
+        ));
+        return ResolvedType::unresolved();
+    }
+    let GlobalKind::Function(definition) = &entry.kind else {
+        panic!(
+            "named function reference `{}` resolved to a non-function",
+            entry.identifier
+        );
+    };
+    let Some(signature) = &definition.signature else {
+        panic!(
+            "named function reference `{}` has no lifted signature",
+            entry.identifier
+        );
+    };
+    *target = Resolution::Global(id);
+    function_value_type(signature)
+}
+
+fn resolve_bare_reference<'a>(
+    path: &[String],
+    arity: usize,
+    resolver: &'a Resolver<'_>,
+    span: Span,
+    diagnostics: &mut Vec<Diagnostic>,
+) -> Option<(koja_ast::identifier::GlobalRegistryId, &'a RegistryEntry)> {
+    let name = &path[0];
+    if let Some(enclosing) = resolver.enclosing_type {
+        let identifier = Identifier::member(resolver.package, enclosing, name);
+        if let Some(found) = select_exact_function(
+            &identifier,
+            name,
+            arity,
+            resolver.registry,
+            span,
+            diagnostics,
+        ) {
+            return found;
+        }
+        if resolver.registry.lookup(&identifier).is_some() {
+            return None;
+        }
+    }
+    let identifier = Identifier::new(resolver.package, path.to_vec());
+    select_exact_function(
+        &identifier,
+        name,
+        arity,
+        resolver.registry,
+        span,
+        diagnostics,
+    )
+    .unwrap_or_else(|| {
+        if resolver.registry.lookup(&identifier).is_none() {
+            diagnostics.push(Diagnostic::error(
+                format!("unknown named function reference `&{name}/{arity}`"),
+                span,
+            ));
+        }
+        None
+    })
+}
+
+fn resolve_qualified_reference<'a>(
+    path: &[String],
+    arity: usize,
+    resolver: &'a Resolver<'_>,
+    span: Span,
+    diagnostics: &mut Vec<Diagnostic>,
+) -> Option<(koja_ast::identifier::GlobalRegistryId, &'a RegistryEntry)> {
+    let member = path.last().expect("qualified path is non-empty");
+    let label = path.join(".");
+    let owner_path = &path[..path.len() - 1];
+    if let Some((_, owner)) = lookup_type(owner_path, resolver.resolution_scope()) {
+        check_reference_visibility(owner, resolver.package, span, diagnostics);
+        if !owner.type_params.is_empty() && !matches!(owner.kind, GlobalKind::Protocol(_)) {
+            diagnostics.push(Diagnostic::error_with_hint(
+                format!(
+                    "cannot reference a function on generic type `{}` directly",
+                    owner.identifier
+                ),
+                "wrap the call in a closure so the type arguments can be inferred",
+                span,
+            ));
+            return None;
+        }
+        let identifier =
+            Identifier::member(owner.identifier.package(), owner.identifier.path(), member);
+        if let Some(found) = select_exact_function(
+            &identifier,
+            &label,
+            arity,
+            resolver.registry,
+            span,
+            diagnostics,
+        ) {
+            return found;
+        }
+        if let GlobalKind::Protocol(Some(definition)) = &owner.kind
+            && definition
+                .methods
+                .iter()
+                .any(|method| method.name == *member && method.arity == arity)
+        {
+            diagnostics.push(Diagnostic::error_with_hint(
+                format!(
+                    "cannot reference abstract protocol function `{}.{member}/{arity}`",
+                    owner.identifier
+                ),
+                "reference a concrete implementation, or wrap a bounded call in a closure",
+                span,
+            ));
+            return None;
+        }
+        if resolver.registry.lookup(&identifier).is_none() {
+            diagnostics.push(Diagnostic::error(
+                format!(
+                    "type `{}` has no function `{member}` with arity {arity}",
+                    owner.identifier
+                ),
+                span,
+            ));
+        }
         return None;
     }
-    Some(ResolvedType::Anonymous(AnonymousKind::Function {
+
+    if path.len() == 2 {
+        let identifier = Identifier::new(&path[0], vec![member.clone()]);
+        if resolver.registry.iter_in_package(&path[0]).next().is_some() {
+            return select_exact_function(
+                &identifier,
+                &label,
+                arity,
+                resolver.registry,
+                span,
+                diagnostics,
+            )
+            .unwrap_or_else(|| {
+                if resolver.registry.lookup(&identifier).is_none() {
+                    diagnostics.push(Diagnostic::error(
+                        format!(
+                            "package `{}` has no function `{member}` with arity {arity}",
+                            path[0]
+                        ),
+                        span,
+                    ));
+                }
+                None
+            });
+        }
+    }
+
+    diagnostics.push(Diagnostic::error(
+        format!(
+            "unknown named function reference `&{}/{arity}`",
+            path.join(".")
+        ),
+        span,
+    ));
+    None
+}
+
+fn select_exact_function<'a>(
+    identifier: &Identifier,
+    label: &str,
+    arity: usize,
+    registry: &'a GlobalRegistry,
+    span: Span,
+    diagnostics: &mut Vec<Diagnostic>,
+) -> Option<Option<(koja_ast::identifier::GlobalRegistryId, &'a RegistryEntry)>> {
+    if let Some(found) = registry.lookup_function(identifier, arity) {
+        return Some(Some(found));
+    }
+    let arities = registry.function_arities(identifier);
+    if arities.is_empty() {
+        return None;
+    }
+    diagnostics.push(Diagnostic::error_with_hint(
+        format!("function `{identifier}` has no arity {arity}"),
+        format!(
+            "did you mean `&{label}/{}`?",
+            closest_arity(&arities, arity)
+        ),
+        span,
+    ));
+    Some(None)
+}
+
+fn diagnose_explicit_reference(
+    label: &str,
+    identifier: &Identifier,
+    registry: &GlobalRegistry,
+    span: Span,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    let arities = registry.function_arities(identifier);
+    let example = arities.first().copied().unwrap_or(0);
+    diagnostics.push(Diagnostic::error_with_hint(
+        format!("named function `{label}` requires an explicit reference"),
+        format!("write `&{label}/{example}` to select its arity"),
+        span,
+    ));
+}
+
+fn check_function_reference_visibility(
+    entry: &RegistryEntry,
+    resolver: &Resolver<'_>,
+    span: Span,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    match entry.visibility {
+        VisibilityScope::Public => {}
+        VisibilityScope::PackagePrivate => {
+            check_reference_visibility(entry, resolver.package, span, diagnostics);
+        }
+        VisibilityScope::TypePrivate(owner) if resolver.enclosing_type_id == Some(owner) => {}
+        VisibilityScope::TypePrivate(owner) => {
+            let owner_label = resolver
+                .registry
+                .get(owner)
+                .map(|owner| owner.identifier.to_string())
+                .unwrap_or_else(|| "<unknown>".to_string());
+            diagnostics.push(Diagnostic::error_with_hint(
+                format!(
+                    "private function `{}` cannot be referenced from here",
+                    entry.identifier
+                ),
+                format!(
+                    "`{}` is `priv fn`, usable only from functions on `{owner_label}`",
+                    entry.identifier
+                ),
+                span,
+            ));
+        }
+    }
+}
+
+fn closest_arity(arities: &[usize], requested: usize) -> usize {
+    arities
+        .iter()
+        .copied()
+        .min_by_key(|arity| (arity.abs_diff(requested), *arity))
+        .expect("closest_arity requires at least one arity")
+}
+
+fn function_value_type(signature: &FunctionSignature) -> ResolvedType {
+    ResolvedType::Anonymous(AnonymousKind::Function {
         params: signature.params.iter().map(|p| p.ty.clone()).collect(),
         ret: Box::new(signature.return_type.clone()),
-    }))
+    })
 }
 
 /// Resolve a `self` keyword expression. `self` is bound by the

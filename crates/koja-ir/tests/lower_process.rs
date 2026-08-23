@@ -193,7 +193,7 @@ fn entry_start_with_closure_lowers_without_duplicate_registration() {
     let program = lower_process_entry(source, "ClosureEntry");
     assert!(
         program
-            .function(&format!("{PACKAGE}.ClosureEntry.start__closure0"))
+            .function(&format!("{PACKAGE}.ClosureEntry.start/1__closure0"))
             .is_some(),
         "start's closure should be registered exactly once",
     );
@@ -265,11 +265,11 @@ fn assert_process_body_shape(program: &IRProgram, wrapper: &IRFunction, state_ma
         })
         .collect();
     assert!(
-        callees.contains(&format!("{state_mangled}.start").as_str()),
+        callees.contains(&format!("{state_mangled}.start/1").as_str()),
         "process body should call `{state_mangled}.start`, calls: {callees:?}",
     );
     assert!(
-        callees.contains(&format!("{state_mangled}.run").as_str()),
+        callees.contains(&format!("{state_mangled}.run/1").as_str()),
         "process body should call `{state_mangled}.run`, calls: {callees:?}",
     );
 
@@ -707,11 +707,13 @@ fn process_entry_lowers_to_process_entry_wrapper() {
     // start/run must be registered so the synthesized entry body can
     // dispatch through them.
     assert!(
-        program.function(&format!("{PACKAGE}.App.start")).is_some(),
+        program
+            .function(&format!("{PACKAGE}.App.start/1"))
+            .is_some(),
         "App.start must be registered when the entry is a Process state",
     );
     assert!(
-        program.function(&format!("{PACKAGE}.App.run")).is_some(),
+        program.function(&format!("{PACKAGE}.App.run/1")).is_some(),
         "App.run must be registered when the entry is a Process state",
     );
 
@@ -727,7 +729,8 @@ fn process_entry_lowers_to_process_entry_wrapper() {
     let routes_through_code = all_instructions(&body.blocks).any(|instruction| {
         matches!(
             instruction,
-            IRInstruction::Call { callee, .. } if callee.mangled() == "Global.Process.StopReason.code"
+            IRInstruction::Call { callee, .. }
+                if callee.mangled() == "Global.Process.StopReason.code/1"
         )
     });
     assert!(

@@ -57,6 +57,14 @@ impl SignatureToken {
 }
 
 impl DocFunction {
+    pub fn anchor(&self) -> String {
+        format!("fn-{}-arity-{}", self.name, self.arity)
+    }
+
+    pub fn page_name(&self) -> String {
+        format!("{}-arity-{}", self.name, self.arity)
+    }
+
     /// Break this signature into styled runs, the shared source for
     /// both the HTML and plain-text renderings.
     fn signature_segments(&self) -> Vec<(SignatureToken, String)> {
@@ -287,6 +295,7 @@ mod tests {
 
     fn checkout_function() -> DocFunction {
         DocFunction {
+            arity: 2,
             deprecated: None,
             doc: None,
             error_type: Some("PoolError".to_string()),

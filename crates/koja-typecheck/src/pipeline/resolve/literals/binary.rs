@@ -145,7 +145,7 @@ pub(in super::super) fn resolve_binary_literal(
 
 fn unaligned_run_diagnostic(span: Span) -> Diagnostic {
     Diagnostic::error(
-        "typecheck: the fixed-width segments around a `Binary` splice \
+        "the fixed-width segments around a `Binary` splice \
          must total whole bytes",
         span,
     )
@@ -164,7 +164,7 @@ pub(crate) fn resolve_segment(
     if let Some(byte_length) = string_segment_byte_length(segment) {
         if segment.size.is_some() || segment.type_ann.is_some() {
             diagnostics.push(Diagnostic::error(
-                "typecheck: a `String`-valued binary segment cannot \
+                "a `String`-valued binary segment cannot \
                  carry a `::N` size or `:Type` annotation",
                 segment.span,
             ));
@@ -181,7 +181,7 @@ pub(crate) fn resolve_segment(
                 Ok(parsed) => parsed,
                 Err(_) => {
                     diagnostics.push(Diagnostic::error(
-                        format!("typecheck: invalid binary segment size literal `{n}`"),
+                        format!("invalid binary segment size literal `{n}`"),
                         size_expr.span,
                     ));
                     return None;
@@ -202,7 +202,7 @@ pub(crate) fn resolve_segment(
         };
         if width_bits == 0 {
             diagnostics.push(Diagnostic::error(
-                "typecheck: a binary segment must carry at least 1 bit",
+                "a binary segment must carry at least 1 bit",
                 segment.span,
             ));
             return None;
@@ -213,7 +213,7 @@ pub(crate) fn resolve_segment(
         // misuse like `1.0 :: 16` doesn't silently coerce.
         if !is_primitive(&segment.value.resolution, registry, "Int") {
             diagnostics.push(Diagnostic::error(
-                "typecheck: `::N` segment size requires an `Int`-typed value",
+                "`::N` segment size requires an `Int`-typed value",
                 segment.span,
             ));
             return None;
@@ -227,7 +227,7 @@ pub(crate) fn resolve_segment(
     if let Some(type_ann) = &segment.type_ann {
         let TypeExpr::Named { path, .. } = type_ann else {
             diagnostics.push(Diagnostic::error(
-                "typecheck: binary segment type annotation must be a primitive name",
+                "binary segment type annotation must be a primitive name",
                 segment.span,
             ));
             return None;
@@ -248,7 +248,7 @@ pub(crate) fn resolve_segment(
             "Bits" | "String" => {
                 diagnostics.push(Diagnostic::error(
                     format!(
-                        "typecheck: `{name}` values cannot be spliced into a binary \
+                        "`{name}` values cannot be spliced into a binary \
                          construction (only `Binary` splices are supported, convert \
                          with `.to_binary()` first)",
                     ),
@@ -259,8 +259,8 @@ pub(crate) fn resolve_segment(
             other => {
                 diagnostics.push(Diagnostic::error(
                     format!(
-                        "typecheck: binary segment type annotation `{other}` is not \
-                         a recognized primitive (expected one of: Int8/16/32/64, \
+                        "binary segment type annotation `{other}` is not \
+                         a recognized primitive (expected one of Int8/16/32/64, \
                          UInt8/16/32/64, Float32, Float64, Binary)",
                     ),
                     segment.span,
@@ -283,7 +283,7 @@ pub(crate) fn resolve_segment(
     }
     if !is_primitive(&segment.value.resolution, registry, "Int") {
         diagnostics.push(Diagnostic::error(
-            "typecheck: bare binary segment requires an `Int`-typed value \
+            "bare binary segment requires an `Int`-typed value \
              (packed as 8 unsigned bits) or a `Binary`-typed value (spliced \
              whole); use a `: Type` / `::N` modifier to spell out any other \
              segment shape",
@@ -307,14 +307,14 @@ fn splice_segment_info(
 ) -> Option<SegmentInfo> {
     if !is_primitive(&segment.value.resolution, registry, "Binary") {
         diagnostics.push(Diagnostic::error(
-            "typecheck: a `: Binary` splice segment requires a `Binary`-typed value",
+            "a `: Binary` splice segment requires a `Binary`-typed value",
             segment.span,
         ));
         return None;
     }
     if segment.signedness.is_some() || segment.endianness.is_some() {
         diagnostics.push(Diagnostic::error(
-            "typecheck: a `Binary` splice segment cannot carry `signed` / \
+            "a `Binary` splice segment cannot carry `signed` / \
              `unsigned` or endianness modifiers",
             segment.span,
         ));

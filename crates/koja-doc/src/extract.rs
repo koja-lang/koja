@@ -51,6 +51,7 @@ pub struct DocItem {
     pub deprecated: Option<String>,
     pub doc: Option<String>,
     pub kind: String,
+    pub href: String,
     pub name: String,
 }
 
@@ -85,6 +86,7 @@ pub struct DocField {
 /// fallible spelling `-> T ! E`.
 #[derive(Debug)]
 pub struct DocFunction {
+    pub arity: usize,
     pub deprecated: Option<String>,
     pub doc: Option<String>,
     pub error_type: Option<String>,
@@ -389,21 +391,26 @@ fn finalize_package(pkg: &mut DocPackage) {
     pkg.builtins.sort_by(|a, b| a.name.cmp(&b.name));
     pkg.constants.sort_by(|a, b| a.name.cmp(&b.name));
     pkg.enums.sort_by(|a, b| a.name.cmp(&b.name));
-    pkg.functions.sort_by(|a, b| a.name.cmp(&b.name));
+    pkg.functions
+        .sort_by(|a, b| (&a.name, a.arity).cmp(&(&b.name, b.arity)));
     pkg.protocols.sort_by(|a, b| a.name.cmp(&b.name));
     pkg.structs.sort_by(|a, b| a.name.cmp(&b.name));
 
     for b in &mut pkg.builtins {
-        b.functions.sort_by(|a, b| a.name.cmp(&b.name));
+        b.functions
+            .sort_by(|a, b| (&a.name, a.arity).cmp(&(&b.name, b.arity)));
     }
     for e in &mut pkg.enums {
-        e.functions.sort_by(|a, b| a.name.cmp(&b.name));
+        e.functions
+            .sort_by(|a, b| (&a.name, a.arity).cmp(&(&b.name, b.arity)));
     }
     for p in &mut pkg.protocols {
-        p.functions.sort_by(|a, b| a.name.cmp(&b.name));
+        p.functions
+            .sort_by(|a, b| (&a.name, a.arity).cmp(&(&b.name, b.arity)));
     }
     for s in &mut pkg.structs {
-        s.functions.sort_by(|a, b| a.name.cmp(&b.name));
+        s.functions
+            .sort_by(|a, b| (&a.name, a.arity).cmp(&(&b.name, b.arity)));
     }
 
     pkg.items.clear();
@@ -412,6 +419,7 @@ fn finalize_package(pkg: &mut DocPackage) {
             deprecated: b.deprecated.clone(),
             doc: b.doc.clone(),
             kind: "builtin".to_string(),
+            href: b.name.clone(),
             name: b.name.clone(),
         });
     }
@@ -420,6 +428,7 @@ fn finalize_package(pkg: &mut DocPackage) {
             deprecated: c.deprecated.clone(),
             doc: c.doc.clone(),
             kind: "const".to_string(),
+            href: c.name.clone(),
             name: c.name.clone(),
         });
     }
@@ -428,6 +437,7 @@ fn finalize_package(pkg: &mut DocPackage) {
             deprecated: e.deprecated.clone(),
             doc: e.doc.clone(),
             kind: "enum".to_string(),
+            href: e.name.clone(),
             name: e.name.clone(),
         });
     }
@@ -436,7 +446,8 @@ fn finalize_package(pkg: &mut DocPackage) {
             deprecated: f.deprecated.clone(),
             doc: f.doc.clone(),
             kind: "fn".to_string(),
-            name: f.name.clone(),
+            href: f.page_name(),
+            name: format!("{}/{}", f.name, f.arity),
         });
     }
     for p in &pkg.protocols {
@@ -444,6 +455,7 @@ fn finalize_package(pkg: &mut DocPackage) {
             deprecated: p.deprecated.clone(),
             doc: p.doc.clone(),
             kind: "protocol".to_string(),
+            href: p.name.clone(),
             name: p.name.clone(),
         });
     }
@@ -452,6 +464,7 @@ fn finalize_package(pkg: &mut DocPackage) {
             deprecated: s.deprecated.clone(),
             doc: s.doc.clone(),
             kind: "struct".to_string(),
+            href: s.name.clone(),
             name: s.name.clone(),
         });
     }
@@ -542,13 +555,19 @@ fn extract_enum(e: &EnumDecl, path: &[String]) -> Option<DocEnum> {
 }
 
 fn extract_function(f: &Function) -> Option<DocFunction> {
-    if f.visibility == Visibility::Private || has_doc_false(&f.annotations) {
+    if matches!(
+        f.origin,
+        koja_ast::ast::FunctionOrigin::DefaultAdapter { .. }
+    ) || f.visibility == Visibility::Private
+        || has_doc_false(&f.annotations)
+    {
         return None;
     }
 
     let params = extract_params(&f.params);
 
     Some(DocFunction {
+        arity: f.params.len(),
         deprecated: annotation_deprecated(&f.annotations),
         doc: annotation_string(&f.annotations),
         error_type: f.error_type.as_ref().map(type_expr_to_string),
@@ -598,13 +617,18 @@ fn extract_protocol(p: &ProtocolDecl) -> Option<DocProtocol> {
 }
 
 fn extract_protocol_method(m: &ProtocolMethod) -> Option<DocFunction> {
-    if has_doc_false(&m.annotations) {
+    if matches!(
+        m.origin,
+        koja_ast::ast::FunctionOrigin::DefaultAdapter { .. }
+    ) || has_doc_false(&m.annotations)
+    {
         return None;
     }
 
     let params = extract_params(&m.params);
 
     Some(DocFunction {
+        arity: m.params.len(),
         deprecated: annotation_deprecated(&m.annotations),
         doc: annotation_string(&m.annotations),
         error_type: m.error_type.as_ref().map(type_expr_to_string),

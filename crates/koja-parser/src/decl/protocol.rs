@@ -7,7 +7,7 @@
 //! top-level `fn`, but the body is optional (omitted bodies indicate
 //! a required method without a default).
 
-use koja_ast::ast::{Annotation, Item, ProtocolDecl, ProtocolMethod, Visibility};
+use koja_ast::ast::{Annotation, FunctionOrigin, Item, ProtocolDecl, ProtocolMethod, Visibility};
 use koja_ast::token::TokenKind;
 
 use crate::parser::Parser;
@@ -105,6 +105,7 @@ impl Parser {
 
         ProtocolMethod {
             annotations,
+            origin: FunctionOrigin::Explicit,
             name,
             type_params,
             params,

@@ -446,7 +446,7 @@ lang_test_dir!(lang_compile_fail, "compile_fail", compile_fail);
 lang_test_dir!(lang_runtime_fail, "runtime_fail", runtime_fail);
 
 /// Backtrace smoke test: a debug `koja run` of the `panic_backtrace`
-/// fixture must surface the user's Koja call chain, meaning the `crash()`
+/// fixture must surface the user's Koja call chain, including the `crash`
 /// frame attributed to the fixture's source file. Guards against silent
 /// regressions in DWARF emission, frame-pointer maintenance, or the
 /// runtime symbolizer that would collapse the trace to "<no frames>".
@@ -461,7 +461,7 @@ fn lang_panic_backtrace_frames() {
     );
     for needle in [
         "** (panic) called unwrap on None",
-        "crash()",
+        "crash/0()",
         "panic_backtrace.kojs:",
     ] {
         assert!(

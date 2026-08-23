@@ -32,6 +32,7 @@
 pub(crate) mod aliases;
 pub(crate) mod borrows;
 pub(crate) mod collect;
+pub(crate) mod defaults;
 pub(crate) mod definite_assignment;
 pub(crate) mod deprecation;
 pub(crate) mod desugar;

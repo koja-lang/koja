@@ -58,7 +58,7 @@ fn seal_program_entry_wrappers(program: &IRProgram) {
                 ));
             };
             for method in ["priority", "run", "start"] {
-                let symbol = mangled_method_name(state_symbol, &[], method, &[]);
+                let symbol = mangled_method_name(state_symbol, &[], method, 1, &[]);
                 if program.function(symbol.mangled()).is_none() {
                     seal_panic(&format!(
                         "process entry wrapper `{owner}` references state method `{symbol}`, but \

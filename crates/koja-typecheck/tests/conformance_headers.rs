@@ -126,7 +126,10 @@ fn header_synthesizes_default_method_into_type_body() {
         .registry
         .lookup(&method_ident)
         .expect("synthesized Point.excited should be registered");
-    assert!(matches!(entry.kind, GlobalKind::Function(Some(_))));
+    assert!(matches!(
+        &entry.kind,
+        GlobalKind::Function(definition) if definition.signature.is_some()
+    ));
     let decl = find_struct_decl(&checked, "Point");
     assert!(
         decl.functions.iter().any(|f| f.name == "excited"),

@@ -48,7 +48,7 @@ fn zero_arg_call_lowers_to_single_call_instruction() {
         );
     };
     assert_eq!(args.len(), 0);
-    assert_eq!(callee.mangled(), format!("{PACKAGE}.answer"));
+    assert_eq!(callee.mangled(), format!("{PACKAGE}.answer/0"));
 
     assert_eq!(
         block.terminator,
@@ -155,8 +155,8 @@ fn nested_calls_chain_through_value_ids() {
     let IRInstruction::BinaryOp { lhs, rhs, .. } = binop else {
         panic!("instruction 2 should be BinaryOp; got {binop:?}");
     };
-    assert_eq!(a_callee.mangled(), format!("{PACKAGE}.a"));
-    assert_eq!(b_callee.mangled(), format!("{PACKAGE}.b"));
+    assert_eq!(a_callee.mangled(), format!("{PACKAGE}.a/0"));
+    assert_eq!(b_callee.mangled(), format!("{PACKAGE}.b/0"));
     assert_eq!(*lhs, *a_dest);
     assert_eq!(*rhs, *b_dest);
 }

@@ -40,18 +40,18 @@ fn identity_function_monomorphizes_at_each_concrete_arg() {
 
     let names = script_function_names(&script);
     assert!(
-        !names.iter().any(|n| n == "TestApp.id"),
+        !names.iter().any(|n| n == "TestApp.id/1"),
         "generic template `TestApp.id` must not appear in IRPackage.functions",
     );
-    assert!(names.contains(&"TestApp.id_$Int64$".to_string()));
-    assert!(names.contains(&"TestApp.id_$String$".to_string()));
+    assert!(names.contains(&"TestApp.id/1_$Int64$".to_string()));
+    assert!(names.contains(&"TestApp.id/1_$String$".to_string()));
 
-    let int_id = mangled_function(&script, "TestApp.id_$Int64$");
+    let int_id = mangled_function(&script, "TestApp.id/1_$Int64$");
     assert_eq!(int_id.return_type, IRType::Int64);
     assert_eq!(int_id.params.len(), 1);
     assert_eq!(int_id.params[0].ty, IRType::Int64);
 
-    let string_id = mangled_function(&script, "TestApp.id_$String$");
+    let string_id = mangled_function(&script, "TestApp.id/1_$String$");
     assert_eq!(string_id.return_type, IRType::String);
     assert_eq!(string_id.params.len(), 1);
     assert_eq!(string_id.params[0].ty, IRType::String);
@@ -74,7 +74,7 @@ fn idempotent_calls_dedupe_to_one_function_per_arg_set() {
         .into_iter()
         .filter(|n| n.starts_with("TestApp.id"))
         .collect();
-    assert_eq!(id_decls, vec!["TestApp.id_$Int64$".to_string()]);
+    assert_eq!(id_decls, vec!["TestApp.id/1_$Int64$".to_string()]);
 }
 
 #[test]
@@ -97,12 +97,12 @@ fn multi_param_function_mangles_args_in_declaration_order() {
     assert_eq!(
         pick_decls,
         vec![
-            "TestApp.pick_$Int64.String$".to_string(),
-            "TestApp.pick_$String.Int64$".to_string(),
+            "TestApp.pick/2_$Int64.String$".to_string(),
+            "TestApp.pick/2_$String.Int64$".to_string(),
         ],
     );
 
-    let first = mangled_function(&script, "TestApp.pick_$Int64.String$");
+    let first = mangled_function(&script, "TestApp.pick/2_$Int64.String$");
     assert_eq!(first.params[0].ty, IRType::Int64);
     assert_eq!(first.params[1].ty, IRType::String);
     assert_eq!(first.return_type, IRType::Int64);
@@ -124,9 +124,9 @@ fn generic_function_calling_another_generic_cascades_through_worklist() {
 
     let script = lower_script_source(source);
     let names = script_function_names(&script);
-    assert!(names.contains(&"TestApp.passthrough_$Int64$".to_string()));
+    assert!(names.contains(&"TestApp.passthrough/1_$Int64$".to_string()));
     assert!(
-        names.contains(&"TestApp.id_$Int64$".to_string()),
+        names.contains(&"TestApp.id/1_$Int64$".to_string()),
         "calling `passthrough(7)` must transitively monomorphize `id<Int>`; got {names:?}",
     );
 }
@@ -150,7 +150,7 @@ fn generic_function_called_with_user_struct_includes_struct_in_mangle() {
         .into_iter()
         .filter(|n| n.starts_with("TestApp.id"))
         .collect();
-    assert_eq!(id_decls, vec!["TestApp.id_$TestApp.Inner$".to_string()]);
+    assert_eq!(id_decls, vec!["TestApp.id/1_$TestApp.Inner$".to_string()]);
 }
 
 #[test]
@@ -176,7 +176,7 @@ fn generic_function_called_with_generic_arg_yields_nested_mangle() {
         .collect();
     assert_eq!(
         id_decls,
-        vec!["TestApp.id_$TestApp.Box_$Int64$$".to_string()]
+        vec!["TestApp.id/1_$TestApp.Box_$Int64$$".to_string()]
     );
 }
 
@@ -199,16 +199,16 @@ fn method_on_generic_struct_monomorphizes_with_struct_mangled_prefix() {
     let script = lower_script_source(source);
     let names = script_function_names(&script);
     assert!(
-        names.contains(&"TestApp.Pair_$Int64.String$.first".to_string()),
+        names.contains(&"TestApp.Pair_$Int64.String$.first/1".to_string()),
         "method `Pair<Int, String>.first` should monomorphize when `Pair<Int, String>` is \
          constructed; got {names:?}",
     );
     assert!(
-        !names.iter().any(|n| n == "TestApp.Pair.first"),
+        !names.iter().any(|n| n == "TestApp.Pair.first/1"),
         "generic template `TestApp.Pair.first` must not appear in IRPackage.functions",
     );
 
-    let method = mangled_function(&script, "TestApp.Pair_$Int64.String$.first");
+    let method = mangled_function(&script, "TestApp.Pair_$Int64.String$.first/1");
     assert_eq!(method.return_type, IRType::Int64);
 }
 
@@ -232,14 +232,14 @@ fn method_on_generic_struct_for_distinct_args_mints_distinct_methods() {
     let script = lower_script_source(source);
     let mut firsts: Vec<_> = script_function_names(&script)
         .into_iter()
-        .filter(|n| n.starts_with("TestApp.Pair_") && n.ends_with(".first"))
+        .filter(|n| n.starts_with("TestApp.Pair_") && n.ends_with(".first/1"))
         .collect();
     firsts.sort();
     assert_eq!(
         firsts,
         vec![
-            "TestApp.Pair_$Int64.String$.first".to_string(),
-            "TestApp.Pair_$String.Int64$.first".to_string(),
+            "TestApp.Pair_$Int64.String$.first/1".to_string(),
+            "TestApp.Pair_$String.Int64$.first/1".to_string(),
         ],
     );
 }

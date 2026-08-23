@@ -74,7 +74,7 @@ fn resolve_struct_metadata(
     let GlobalKind::Struct(definition) = &entry.kind else {
         diagnostics.push(Diagnostic::error(
             format!(
-                "cannot match against `{}`: it is a {}, not a struct",
+                "cannot match against `{}` because it is a {}, not a struct",
                 entry.identifier,
                 entry.kind.label(),
             ),
@@ -84,10 +84,7 @@ fn resolve_struct_metadata(
     };
     let Some(definition) = definition.as_ref() else {
         diagnostics.push(Diagnostic::error(
-            format!(
-                "internal: struct `{}` has no lifted definition",
-                entry.identifier
-            ),
+            format!("struct `{}` has no lifted definition", entry.identifier),
             span,
         ));
         return None;

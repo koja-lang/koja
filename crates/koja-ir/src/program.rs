@@ -283,7 +283,7 @@ fn enqueue_process_methods(
         let mut path = state_entry.identifier.path().to_vec();
         path.push(method.to_string());
         let method_ident = Identifier::new(state_entry.identifier.package(), path);
-        if let Some((method_id, _)) = registry.lookup(&method_ident) {
+        if let Some((method_id, _)) = registry.lookup_function(&method_ident, 1) {
             output.instantiations.push(Instantiation {
                 template: method_id,
                 args: Vec::new(),

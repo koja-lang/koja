@@ -6,17 +6,33 @@ protocol Encoding
 end
 
 @doc """
-Encodes `value` as compact JSON text.
+Options for JSON text encoding.
 """
-fn encode<T: Encoding>(value: T) -> String
-  Encoder.encode(value.to_json())
+struct EncodeOptions
+  pretty?: Bool = false
+end
+
+@doc """
+Encodes `value` as JSON text.
+"""
+fn encode<T: Encoding>(value: T, options: EncodeOptions = EncodeOptions{})
+  -> String
+
+  if options.pretty?
+    Encoder.encode_pretty(value.to_json())
+  else
+    Encoder.encode(value.to_json())
+  end
 end
 
 @doc """
 Encodes `value` as indented JSON text.
 """
+@deprecated """
+Use `JSON.encode(value, JSON.EncodeOptions{pretty?: true})`.
+"""
 fn encode_pretty<T: Encoding>(value: T) -> String
-  Encoder.encode_pretty(value.to_json())
+  encode(value, EncodeOptions{pretty?: true})
 end
 
 @doc """

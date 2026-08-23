@@ -9,8 +9,9 @@
 
 use koja_ast::util::dedent;
 use koja_doc::{
-    DocProject, PackageKind, extract_items, finalize_project, render_enum, render_package_index,
-    render_root_index, render_struct, search_index_json, terminal, terminal::SearchOutcome,
+    DocProject, PackageKind, extract_items, finalize_project, render_enum, render_function,
+    render_package_index, render_root_index, render_struct, search_index_json, terminal,
+    terminal::SearchOutcome,
 };
 use koja_parser::ParseMode;
 
@@ -27,6 +28,50 @@ fn parse(src: &str) -> koja_ast::ast::File {
 fn ingest(project: &mut DocProject, package: &str, kind: PackageKind, src: &str) {
     let ast = parse(src);
     extract_items(&ast, project, package, kind);
+}
+
+#[test]
+fn overloads_keep_distinct_pages_and_member_anchors() {
+    let mut project = DocProject::new("MyApp");
+    ingest(
+        &mut project,
+        "MyApp",
+        PackageKind::Project,
+        "
+        fn choose(value: Int) -> Int
+          value
+        end
+
+        fn choose(left: Int, right: Int) -> Int
+          left + right
+        end
+
+        struct Counter
+          value: Int
+
+          fn add(self, value: Int) -> Int
+            self.value + value
+          end
+
+          fn add(self, left: Int, right: Int) -> Int
+            self.value + left + right
+          end
+        end
+        ",
+    );
+    finalize_project(&mut project);
+
+    let package = &project.packages[0];
+    assert_eq!(package.functions.len(), 2);
+    assert_eq!(package.functions[0].page_name(), "choose-arity-1");
+    assert_eq!(package.functions[1].page_name(), "choose-arity-2");
+    let first_page = render_function(&package.functions[0], package, &project);
+    assert!(first_page.contains("choose"));
+
+    let counter = &package.structs[0];
+    let html = render_struct(counter, package, &project);
+    assert!(html.contains("fn-add-arity-2"));
+    assert!(html.contains("fn-add-arity-3"));
 }
 
 fn build_project() -> DocProject {
@@ -119,7 +164,7 @@ fn items_sort_alphabetically_within_each_package() {
 
     let myapp = project.find_package("MyApp").expect("MyApp present");
     let myapp_names: Vec<&str> = myapp.items.iter().map(|i| i.name.as_str()).collect();
-    assert_eq!(myapp_names, vec!["Counter", "greet"]);
+    assert_eq!(myapp_names, vec!["Counter", "greet/1"]);
 }
 
 #[test]
@@ -265,12 +310,12 @@ fn search_index_includes_items_and_methods() {
     assert!(json.contains("\"pkg\":\"MyApp\""));
     assert!(json.contains("\"name\":\"Counter\""));
     assert!(json.contains("\"url\":\"MyApp/Counter.html\""));
-    assert!(json.contains("\"name\":\"Counter.bump\""));
-    assert!(json.contains("\"url\":\"MyApp/Counter.html#fn-bump\""));
+    assert!(json.contains("\"name\":\"Counter.bump/0\""));
+    assert!(json.contains("\"url\":\"MyApp/Counter.html#fn-bump-arity-0\""));
     assert!(json.contains("\"pkg\":\"Crypto\""));
-    assert!(json.contains("\"url\":\"Crypto/SHA256.html#fn-digest\""));
+    assert!(json.contains("\"url\":\"Crypto/SHA256.html#fn-digest-arity-0\""));
     assert!(json.contains("\"pkg\":\"Helper\""));
-    assert!(json.contains("\"url\":\"Helper/assist.html\""));
+    assert!(json.contains("\"url\":\"Helper/assist-arity-0.html\""));
 }
 
 #[test]
@@ -460,8 +505,8 @@ fn struct_page_links_methods_and_other_packages() {
         .expect("SHA256");
     let html = render_struct(sha, crypto, &project);
 
-    assert!(html.contains("id=\"fn-digest\""));
-    assert!(html.contains("href=\"#fn-digest\""));
+    assert!(html.contains("id=\"fn-digest-arity-0\""));
+    assert!(html.contains("href=\"#fn-digest-arity-0\""));
     assert!(html.contains("value=\"../MyApp/index.html\""));
     assert!(html.contains("data-root-prefix=\"../\""));
     // Signatures render pre-highlighted.
@@ -481,20 +526,20 @@ fn terminal_search_covers_exact_partial_and_none() {
     assert!(full.contains("A counter for the app."));
     assert!(full.contains("### `fn bump()`"));
     assert!(
-        full.contains("## Also matched\n\n- MyApp.Counter.bump (fn): Bump the counter by one.\n")
+        full.contains("## Also matched\n\n- MyApp.Counter.bump/0 (fn): Bump the counter by one.\n")
     );
 
     let SearchOutcome::Hits(function) = terminal::search(&project, "Counter.bump") else {
         panic!("expected function hit");
     };
-    assert!(function.starts_with("# MyApp.Counter.bump (fn)\n"));
+    assert!(function.starts_with("# MyApp.Counter.bump/0 (fn)\n"));
     assert!(function.contains("```koja\nfn bump()\n```"));
 
     let SearchOutcome::Hits(list) = terminal::search(&project, "s") else {
         panic!("expected partial hits");
     };
     assert!(list.contains("- Crypto.SHA256 (struct): SHA-256 hasher."));
-    assert!(list.contains("- Helper.assist (fn): Helper utility."));
+    assert!(list.contains("- Helper.assist/0 (fn): Helper utility."));
 
     assert!(matches!(
         terminal::search(&project, "nope"),
@@ -536,7 +581,7 @@ fn big_struct_page_gets_on_this_page_toc() {
 
     assert!(html.contains("On this page"));
     assert!(html.contains("href=\"#fields\""));
-    assert!(html.contains("href=\"#fn-checkout\""));
+    assert!(html.contains("href=\"#fn-checkout-arity-2\""));
     // The fallible spelling survives into the rendered signature.
     assert!(html.contains("! <span class=\"ty\">String</span>"));
 }

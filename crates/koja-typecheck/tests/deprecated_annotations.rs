@@ -157,7 +157,7 @@ fn multiline_message_is_trimmed() {
         old_add(1, 2)
         ";
     let warnings = script_warnings(source);
-    assert_warns(&warnings, &["`old_add` is deprecated: Use `add` instead."]);
+    assert_warns(&warnings, &["`old_add` is deprecated. Use `add` instead."]);
 }
 
 // Use-site warnings
@@ -174,7 +174,7 @@ fn call_to_deprecated_function_warns() {
         old_add(1, 2)
         ",
     );
-    assert_warns(&warnings, &["`old_add` is deprecated: Use add instead."]);
+    assert_warns(&warnings, &["`old_add` is deprecated. Use add instead."]);
 }
 
 #[test]
@@ -191,7 +191,7 @@ fn deprecated_type_in_signature_position_warns() {
         end
         ",
     );
-    assert_warns(&warnings, &["`Old` is deprecated: Use New instead."]);
+    assert_warns(&warnings, &["`Old` is deprecated. Use New instead."]);
 }
 
 #[test]
@@ -207,7 +207,7 @@ fn construction_of_deprecated_struct_warns() {
         o.x
         ",
     );
-    assert_warns(&warnings, &["`Old` is deprecated: Use New instead."]);
+    assert_warns(&warnings, &["`Old` is deprecated. Use New instead."]);
 }
 
 #[test]
@@ -229,7 +229,7 @@ fn deprecated_enum_construction_and_pattern_warn() {
     );
     let hits = warnings
         .iter()
-        .filter(|w| w.contains("`Toggle` is deprecated: Use Mode instead."))
+        .filter(|w| w.contains("`Toggle` is deprecated. Use Mode instead."))
         .count();
     assert!(
         hits >= 3,
@@ -247,7 +247,7 @@ fn deprecated_constant_read_warns() {
         LIMIT + 1
         ",
     );
-    assert_warns(&warnings, &["`LIMIT` is deprecated: Use MAX instead."]);
+    assert_warns(&warnings, &["`LIMIT` is deprecated. Use MAX instead."]);
 }
 
 #[test]
@@ -266,7 +266,7 @@ fn static_call_on_deprecated_type_warns() {
         Old.origin()
         ",
     );
-    assert_warns(&warnings, &["`Old` is deprecated: Use New instead."]);
+    assert_warns(&warnings, &["`Old` is deprecated. Use New instead."]);
 }
 
 #[test]
@@ -288,7 +288,7 @@ fn call_to_deprecated_method_warns() {
     );
     assert_warns(
         &warnings,
-        &["`Point.legacy` is deprecated: Use shift instead."],
+        &["`Point.legacy` is deprecated. Use shift instead."],
     );
 }
 
@@ -308,7 +308,7 @@ fn deprecated_type_alias_use_warns() {
         end
         ",
     );
-    assert_warns(&warnings, &["`Pet` is deprecated: Use Cat directly."]);
+    assert_warns(&warnings, &["`Pet` is deprecated. Use Cat directly."]);
 }
 
 #[test]
@@ -325,7 +325,7 @@ fn deprecated_protocol_bound_warns() {
         end
         ",
     );
-    assert_warns(&warnings, &["`Show` is deprecated: Use Render instead."]);
+    assert_warns(&warnings, &["`Show` is deprecated. Use Render instead."]);
 }
 
 #[test]
@@ -348,7 +348,7 @@ fn deprecated_parameterized_bound_argument_warns() {
     );
     assert_warns(
         &warnings,
-        &["`OldItem` is deprecated: Use NewItem instead."],
+        &["`OldItem` is deprecated. Use NewItem instead."],
     );
 }
 
@@ -381,7 +381,7 @@ fn cross_package_use_warns() {
     .expect("cross-package fixture typechecks");
     assert_warns(
         &warning_messages(&checked),
-        &["`Old` is deprecated: Use New instead."],
+        &["`Old` is deprecated. Use New instead."],
     );
 }
 

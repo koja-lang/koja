@@ -153,12 +153,39 @@ pub(super) fn seal_expr(expr: &Expr, mode: SealMode) {
                 }
             }
         }
+        ExprKind::NamedFunctionReference {
+            path,
+            arity,
+            target,
+        } => {
+            if !matches!(target, Resolution::Global(_)) {
+                seal_panic(
+                    &format!(
+                        "named function reference `&{}/{arity}` has no global target",
+                        path.join(".")
+                    ),
+                    expr.span,
+                );
+            }
+        }
         ExprKind::MethodCall {
             receiver,
             args,
+            target,
             type_args,
             ..
         } => {
+            let structural_receiver = matches!(
+                receiver.resolution,
+                ResolvedType::Anonymous(AnonymousKind::Tuple { .. })
+                    | ResolvedType::Named {
+                        resolution: Resolution::TypeParam { .. },
+                        ..
+                    }
+            );
+            if !structural_receiver && !matches!(target, Resolution::Global(_)) {
+                seal_panic("method call has no exact global target", expr.span);
+            }
             // Static method calls: receiver must resolve like any
             // other `Ident` reference (its `resolution` is the
             // struct id, populated by resolve). Args follow the same

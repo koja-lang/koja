@@ -146,22 +146,67 @@ pub fn expect_diagnostics(err: LowerError) -> Vec<String> {
 
 pub fn function<'a>(program: &'a IRProgram, name: &str) -> &'a IRFunction {
     let mangled = format!("{PACKAGE}.{name}");
-    program
-        .function(&mangled)
-        .unwrap_or_else(|| panic!("missing function `{mangled}` in IRProgram"))
+    if let Some(function) = program.function(&mangled) {
+        return function;
+    }
+    let prefix = format!("{mangled}/");
+    let mut matches = program
+        .packages
+        .iter()
+        .flat_map(|package| package.functions.values())
+        .filter(|function| function.symbol.mangled().starts_with(&prefix));
+    let function = matches
+        .next()
+        .unwrap_or_else(|| panic!("missing function `{mangled}` in IRProgram"));
+    assert!(
+        matches.next().is_none(),
+        "ambiguous function `{mangled}` in IRProgram"
+    );
+    function
 }
 
 pub fn script_function<'a>(script: &'a IRScript, name: &str) -> &'a IRFunction {
-    mangled_function(script, &format!("{PACKAGE}.{name}"))
+    let mangled = format!("{PACKAGE}.{name}");
+    if let Some(function) = script.function(&mangled) {
+        return function;
+    }
+    let prefix = format!("{mangled}/");
+    let mut matches = script
+        .packages
+        .iter()
+        .flat_map(|package| package.functions.values())
+        .filter(|function| function.symbol.mangled().starts_with(&prefix));
+    let function = matches
+        .next()
+        .unwrap_or_else(|| panic!("missing function `{mangled}` in IRScript"));
+    assert!(
+        matches.next().is_none(),
+        "ambiguous function `{mangled}` in IRScript"
+    );
+    function
 }
 
 /// Fetch a function from an [`IRScript`] by its full mangled name,
 /// for monomorphization tests that assert on mangled symbols
 /// (`TestApp.id_$Int64$`).
 pub fn mangled_function<'a>(script: &'a IRScript, mangled: &str) -> &'a IRFunction {
-    script
-        .function(mangled)
-        .unwrap_or_else(|| panic!("missing function `{mangled}` in IRScript"))
+    if let Some(function) = script.function(mangled) {
+        return function;
+    }
+    let prefix = format!("{mangled}/");
+    let mut matches = script
+        .packages
+        .iter()
+        .flat_map(|package| package.functions.values())
+        .filter(|function| function.symbol.mangled().starts_with(&prefix));
+    let function = matches
+        .next()
+        .unwrap_or_else(|| panic!("missing function `{mangled}` in IRScript"));
+    assert!(
+        matches.next().is_none(),
+        "ambiguous function `{mangled}` in IRScript"
+    );
+    function
 }
 
 /// All mangled function names in the script's packages, sorted.

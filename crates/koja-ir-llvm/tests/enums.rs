@@ -327,7 +327,10 @@ fn static_method_returning_enum_emits_outer_typed_signature() {
     let ir_text =
         emit_script_llvm_ir(&script, APP_NAME).expect("emit_script_llvm_ir should succeed");
 
-    assert_contains(&ir_text, "define %TestApp.Color @TestApp.Color.primary()");
+    assert_contains(
+        &ir_text,
+        "define %TestApp.Color @\"TestApp.Color.primary/0\"()",
+    );
 }
 
 #[test]

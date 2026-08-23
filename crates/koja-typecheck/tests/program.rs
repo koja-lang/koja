@@ -88,12 +88,13 @@ fn intrinsic_fn_typechecks_without_body_and_lifts_signature() {
         .registry
         .lookup(&print_id)
         .expect("intrinsic should be registered in the GlobalRegistry");
-    let GlobalKind::Function(Some(signature)) = &entry.kind else {
-        panic!(
-            "expected Function(Some(_)) for intrinsic; got {:?}",
-            entry.kind
-        );
+    let GlobalKind::Function(definition) = &entry.kind else {
+        panic!("expected function for intrinsic; got {:?}", entry.kind);
     };
+    let signature = definition
+        .signature
+        .as_ref()
+        .expect("expected lifted signature");
     assert_eq!(signature.params.len(), 1);
     assert_eq!(signature.params[0].name, "s");
 

@@ -285,7 +285,9 @@ impl Checker<'_, '_> {
                     self.check_expr(element, state);
                 }
             }
-            ExprKind::Literal { .. } | ExprKind::Self_ { .. } => {}
+            ExprKind::Literal { .. }
+            | ExprKind::NamedFunctionReference { .. }
+            | ExprKind::Self_ { .. } => {}
             ExprKind::Loop { body } => {
                 // A `loop` body may be cut short by `break` at any
                 // point, so nothing it assigns survives the loop.

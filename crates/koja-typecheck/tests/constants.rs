@@ -282,7 +282,7 @@ fn unknown_member_in_known_package_diagnoses() {
 fn function_value_readable_cross_package() {
     check_lib_and_app(
         "
-        f = Lib.helper
+        f = &Lib.helper/0
         result: Int = f()
         result.print()
         ",
@@ -293,7 +293,7 @@ fn function_value_readable_cross_package() {
 #[test]
 fn priv_function_value_rejected_cross_package() {
     assert_app_fails_with(
-        "f = Lib.hidden_helper\nf().print()",
+        "f = &Lib.hidden_helper/0\nf().print()",
         "private function `Lib.hidden_helper` cannot be referenced from package `TestApp`",
     );
 }
@@ -301,8 +301,8 @@ fn priv_function_value_rejected_cross_package() {
 #[test]
 fn generic_function_value_diagnoses() {
     assert_app_fails_with(
-        "f = Lib.identity\nf(1).print()",
-        "cannot reference generic function `Lib.identity` as a value",
+        "f = &Lib.identity/1\nf(1).print()",
+        "cannot reference generic function `Lib.identity` directly",
     );
 }
 

@@ -95,7 +95,7 @@ fn pair_of_union_format_substitutes_to_opaque_placeholder() {
         .flat_map(|p| p.functions.iter())
         .find(|(sym, _)| {
             let m = sym.mangled();
-            m.starts_with("TestApp.Duo_$Union_") && m.ends_with(".format")
+            m.starts_with("TestApp.Duo_$Union_") && m.ends_with(".format/1")
         })
         .map(|(_, function)| function)
         .expect("expected a `TestApp.Duo_$Union_...$.format` mono in IRProgram");
@@ -126,7 +126,7 @@ fn pair_with_function_field_format_substitutes_to_opaque_placeholder() {
     let script = lower_script_source(&source);
     let all_duo_format_mangles: Vec<String> = script_function_names(&script)
         .into_iter()
-        .filter(|m| m.starts_with("TestApp.Duo_$") && m.ends_with(".format"))
+        .filter(|m| m.starts_with("TestApp.Duo_$") && m.ends_with(".format/1"))
         .collect();
     // The exact mangle for a function-typed arg includes a `Fn`
     // marker that ir can rename later. Pin the search to that
@@ -137,7 +137,7 @@ fn pair_with_function_field_format_substitutes_to_opaque_placeholder() {
         .flat_map(|p| p.functions.iter())
         .find(|(sym, _)| {
             let m = sym.mangled();
-            m.starts_with("TestApp.Duo_$Fn") && m.ends_with(".format")
+            m.starts_with("TestApp.Duo_$Fn") && m.ends_with(".format/1")
         })
         .map(|(_, function)| function)
         .unwrap_or_else(|| {

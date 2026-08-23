@@ -219,7 +219,7 @@ fn join_two_arms(
     }
     diagnostics.push(Diagnostic::error(
         format!(
-            "{keyword} arms have inconsistent types: {then_label}=`{}`, {else_label}=`{}`",
+            "{keyword} arms have inconsistent types. {then_label}=`{}`, {else_label}=`{}`",
             display_resolution(then_ty, registry),
             display_resolution(else_ty, registry),
         ),
@@ -254,7 +254,7 @@ pub(super) fn join_arm_tails(
             Some((expected_label, expected)) => {
                 diagnostics.push(Diagnostic::error(
                     format!(
-                        "{keyword} arms have inconsistent types: expected `{}` (from {expected_label}), \
+                        "{keyword} arms have inconsistent types. Expected `{}` (from {expected_label}), \
                          got `{}` (from {label})",
                         display_resolution(expected, registry),
                         display_resolution(ty, registry),

@@ -141,7 +141,7 @@ fn take_elements(kind: &mut ExprKind) -> Vec<Expr> {
     match std::mem::replace(kind, stub) {
         ExprKind::List { elements } => elements,
         other => unreachable!(
-            "resolve_list_literal called with non-List ExprKind: {}",
+            "resolve_list_literal was called with non-List ExprKind {}",
             koja_ast::labels::expr_kind_label(&other)
         ),
     }
