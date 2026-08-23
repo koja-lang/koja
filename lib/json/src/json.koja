@@ -18,21 +18,9 @@ Encodes `value` as JSON text.
 fn encode<T: Encoding>(value: T, options: EncodeOptions = EncodeOptions{})
   -> String
 
-  if options.pretty?
-    Encoder.encode_pretty(value.to_json())
-  else
-    Encoder.encode(value.to_json())
-  end
-end
-
-@doc """
-Encodes `value` as indented JSON text.
-"""
-@deprecated """
-Use `JSON.encode(value, JSON.EncodeOptions{pretty?: true})`.
-"""
-fn encode_pretty<T: Encoding>(value: T) -> String
-  encode(value, EncodeOptions{pretty?: true})
+  options.pretty?
+    ? Encoder.encode_pretty(value.to_json())
+    : Encoder.encode(value.to_json())
 end
 
 @doc """

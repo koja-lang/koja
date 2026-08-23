@@ -1584,7 +1584,7 @@ response = HTTP.get("https://example.com")
 The auto-imported `Global` package provides core types (`Option`, `Result`, `List`, `Map`, `Set`, `Process`, `IO`, `File`, `URI`, `Base`, `Path`, etc.) with no alias needed. Domain-specific packages require qualified access:
 
 - **`Crypto`**: `SHA1`, `SHA256`, `SHA384`, `SHA512`, `HMAC`, `Certificate`, `PrivateKey`, `PEMError`
-- **`JSON`**: `Value`, `Encoding`, `EncodeOptions`, `encode`, `decode` (`encode_pretty` is deprecated)
+- **`JSON`**: `Value`, `Encoding`, `EncodeOptions`, `encode`, `decode`
 - **`Net`**: `TCPSocket`, `TCPListener`, `UDPSocket`, `Socket`, `IPAddress`, `SocketAddress`, `SocketKind`, `SocketError`, `TLSSession`, `TLSConfig`, `TLSIdentity`, `TrustStore`, `TLSError`, `VerificationError`
 
 Use `alias Crypto.SHA256` or `alias Net.TCPSocket` to access them.
@@ -2610,7 +2610,7 @@ pretty = JSON.encode(payload, JSON.EncodeOptions{pretty?: true})
 decoded = JSON.decode(text)
 ```
 
-`JSON.encode` accepts an optional `JSON.EncodeOptions` argument. The `pretty?: Bool = false` field selects indented output. `JSON.encode_pretty` is deprecated and scheduled for removal in 0.19. Use `JSON.encode(value, JSON.EncodeOptions{pretty?: true})` instead.
+`JSON.encode` accepts an optional `JSON.EncodeOptions` argument. The `pretty?: Bool = false` field selects indented output, as in `JSON.encode(value, JSON.EncodeOptions{pretty?: true})`.
 
 `JSON.decode` returns `JSON.Value ! String`. Typed decoding is not part of this API.
 

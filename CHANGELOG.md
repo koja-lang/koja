@@ -30,7 +30,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Breaking change** The `Equality` protocol function is now `equals?` instead of `eq`, following the `?` suffix convention for boolean functions.
 - **Breaking change** `Enumeration<T, Cursor>` uses `cursor` and `next`, and `for` requires declared conformance instead of `length` and `get` methods.
 - **Breaking change** `MapLiteral.from_entries` receives ordered source entries instead of a constructed map.
-- **Breaking change** Use `JSON.encode`, `JSON.encode_pretty`, and `JSON.decode` because the `JSON.Encoder` and `JSON.Decoder` types are now private.
+- **Breaking change** Use `JSON.encode` and `JSON.decode` because the `JSON.Encoder` and `JSON.Decoder` types are now private.
 - `IPAddress.v4` accepts `UInt8` octets so out-of-range values cannot construct an address.
 - `IPAddress` exposes its `Version` through the `version` field.
 - `koja format` expands all `match`, `cond`, and `receive` arms when one arm requires block layout.
@@ -39,7 +39,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Deprecated
 
-- `JSON.encode_pretty` is deprecated in favor of `JSON.encode(value, JSON.EncodeOptions{pretty?: true})` and will be removed in 0.19.0.
 - `IPAddress.v4?()` and `IPAddress.v6?()` are deprecated in favor of the `version` field and will be removed in 0.19.0.
 
 ### Fixed
