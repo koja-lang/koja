@@ -1,14 +1,13 @@
 //! IR-text snapshot tests for `@intrinsic` body emission in
-//! `src/intrinsics/`. Pins the LLVM-side dispatch contract:
+//! `src/intrinsics/`, driven against the real stdlib declarations
+//! (no fixture decls). Pins the LLVM-side dispatch contract:
 //!
-//! - `Global.print` registers as an emitter that synthesizes a
-//!   `define void @"Global.print"(ptr ...) { ... call void
-//!   @__koja_print_string(ptr ...); ret void }` shape.
-//! - the script body's call site routes through `call void
-//!   @"Global.print"(ptr ...)`.
+//! - the raw socket intrinsics from the real `Net` package emit
+//!   bodies that call the `koja_socket_*` runtime helpers without
+//!   materializing domain address structs
 //! - the spawn-driven main trampoline lands `ret i64 0` after the
 //!   user body completes, regardless of the trailing expression's
-//!   value (scripts always exit 0 on normal completion).
+//!   value (scripts always exit 0 on normal completion)
 //!
 //! Byte-for-byte stdout coverage lives in the lang golden suite.
 //! Here we pin the static IR shape.
@@ -19,77 +18,33 @@ use koja_ir_llvm::emit_script_llvm_ir;
 
 mod common;
 
-use common::assert_contains;
+use common::{assert_contains, extract_function_body};
 
 const APP_NAME: &str = "intrinsics_test";
-const PACKAGE: &str = "Global";
 
 fn lower_as_script(source: &str) -> IRScript {
-    common::lower_script_source_in(PACKAGE, source)
-}
-
-#[test]
-fn print_intrinsic_emits_define_void_with_runtime_call() {
-    let source = "
-        @intrinsic
-        fn print(s: String)
-
-        print(\"hi\")
-        ";
-
-    let script = lower_as_script(&dedent(source));
-    let ir_text =
-        emit_script_llvm_ir(&script, APP_NAME).expect("emit_script_llvm_ir should succeed");
-
-    assert_contains(&ir_text, "define void @\"Global.print/1\"(ptr");
-    assert_contains(&ir_text, "call void @__koja_print_string(ptr");
-    assert_contains(&ir_text, "ret void");
-}
-
-#[test]
-fn print_intrinsic_call_site_emits_void_call() {
-    let source = "
-        @intrinsic
-        fn print(s: String)
-
-        print(\"hi\")
-        ";
-
-    let script = lower_as_script(&dedent(source));
-    let ir_text =
-        emit_script_llvm_ir(&script, APP_NAME).expect("emit_script_llvm_ir should succeed");
-
-    assert_contains(&ir_text, "call void @\"Global.print/1\"(ptr");
+    common::lower_script_source(&dedent(source))
 }
 
 #[test]
 fn socket_intrinsics_emit_only_raw_result_shapes() {
-    let source = "
-        struct Socket
-          fd: Fd
-
-          @intrinsic
-          priv fn recv_from_raw(self, count: Int)
-            -> (Binary, Binary, Int) ! String
-
-          @intrinsic
-          priv fn resolve_raw(hostname: String) -> List<Binary> ! String
-        end
-        ";
-
-    let script = common::lower_script_source_in("Net", &dedent(source));
+    // Any script body works. The qualified bundle lowers the whole
+    // `Net` package, so the raw socket intrinsics emit regardless
+    // of reachability.
+    let script = common::lower_script_source_qualified("1");
     let ir_text =
         emit_script_llvm_ir(&script, APP_NAME).expect("emit_script_llvm_ir should succeed");
 
-    assert_contains(&ir_text, "define ");
-    assert_contains(&ir_text, "@\"Net.Socket.recv_from_raw/2\"(");
-    assert_contains(&ir_text, "@\"Net.Socket.resolve_raw/1\"(");
-    assert_contains(&ir_text, "call ptr @koja_socket_recv_from(");
-    assert_contains(&ir_text, "call ptr @koja_socket_resolve(");
-    assert!(
-        !ir_text.contains("IPAddress") && !ir_text.contains("Socket.Address"),
-        "socket intrinsic IR must not materialize domain address structs:\n{ir_text}",
-    );
+    let recv_from_body = extract_function_body(&ir_text, "Net.Socket.recv_from_raw/2");
+    let resolve_body = extract_function_body(&ir_text, "Net.Socket.resolve_raw/1");
+    assert_contains(recv_from_body, "call ptr @koja_socket_recv_from(");
+    assert_contains(resolve_body, "call ptr @koja_socket_resolve(");
+    for body in [recv_from_body, resolve_body] {
+        assert!(
+            !body.contains("IPAddress") && !body.contains("Socket.Address"),
+            "socket intrinsic IR must not materialize domain address structs:\n{body}",
+        );
+    }
 }
 
 #[test]
@@ -98,7 +53,7 @@ fn string_next_emits_utf8_runtime_call_and_option_branches() {
         \"é\".next(0)
         ";
 
-    let script = lower_as_script(&dedent(source));
+    let script = lower_as_script(source);
     let ir_text =
         emit_script_llvm_ir(&script, APP_NAME).expect("emit_script_llvm_ir should succeed");
 
@@ -114,7 +69,7 @@ fn map_next_emits_bucket_cursor_scan() {
         map.next(0)
         ";
 
-    let script = lower_as_script(&dedent(source));
+    let script = lower_as_script(source);
     let ir_text =
         emit_script_llvm_ir(&script, APP_NAME).expect("emit_script_llvm_ir should succeed");
 
@@ -130,7 +85,7 @@ fn set_next_emits_bucket_cursor_scan() {
         set.next(0)
         ";
 
-    let script = lower_as_script(&dedent(source));
+    let script = lower_as_script(source);
     let ir_text =
         emit_script_llvm_ir(&script, APP_NAME).expect("emit_script_llvm_ir should succeed");
 
@@ -140,22 +95,13 @@ fn set_next_emits_bucket_cursor_scan() {
 }
 
 #[test]
-fn user_main_runs_print_intrinsic_then_returns_void() {
-    // The script body is a `Unit`-typed `print(...)` call. With
-    // auto-print removed, `__koja_user_main` is the spawn thunk
-    // carrying the user body. It should invoke `Global.print` and
-    // cap with `ret void`. The trampoline `@main` separately holds
-    // `ret i64 0` and never invokes `__koja_print_*` directly.
-    // The runtime printer is called only from inside
-    // `Global.print`'s synthesized body.
-    let source = "
-        @intrinsic
-        fn print(s: String)
-
-        print(\"silent\")
-        ";
-
-    let script = lower_as_script(&dedent(source));
+fn user_main_runs_stdout_call_then_returns_void() {
+    // The script body is a `Unit`-typed `IO.puts(...)` call.
+    // `__koja_user_main` is the spawn thunk carrying the user body.
+    // It should invoke `Global.IO.puts` and cap with `ret void`. The
+    // trampoline `@main` separately holds `ret i64 0` and never
+    // writes to stdout itself.
+    let script = lower_as_script("IO.puts(\"silent\")");
     let ir_text =
         emit_script_llvm_ir(&script, APP_NAME).expect("emit_script_llvm_ir should succeed");
 
@@ -164,45 +110,17 @@ fn user_main_runs_print_intrinsic_then_returns_void() {
 
     let user_main_body = extract_function_body(&ir_text, "__koja_user_main");
     assert!(
-        user_main_body.contains("call void @\"Global.print/1\"(ptr"),
-        "expected `__koja_user_main` to call `Global.print`; got:\n{user_main_body}",
+        user_main_body.contains("call void @\"Global.IO.puts/1\"(ptr"),
+        "expected `__koja_user_main` to call `Global.IO.puts`; got:\n{user_main_body}",
     );
     assert!(
         user_main_body.contains("ret void"),
         "expected `__koja_user_main` to end with `ret void`; got:\n{user_main_body}",
     );
-    // The runtime printer must NOT appear directly in
-    // `__koja_user_main`. It's reached only via `Global.print`.
-    assert!(
-        !user_main_body.contains("__koja_print_"),
-        "expected `__koja_user_main` not to call the runtime printer directly; got:\n{user_main_body}",
-    );
 
     let trampoline_body = extract_function_body(&ir_text, "main");
     assert!(
-        !trampoline_body.contains("__koja_print_"),
-        "expected `@main` trampoline not to call the runtime printer directly; got:\n{trampoline_body}",
+        !trampoline_body.contains("Global.IO.puts"),
+        "expected `@main` trampoline not to write to stdout directly; got:\n{trampoline_body}",
     );
-}
-
-/// Slice the LLVM IR text from `define ... @<symbol>(...) {` to its
-/// matching closing `}`. Brittle by design (pure structural
-/// extraction off the textual IR) but enough for the assertion in
-/// the unit-trailing test above.
-fn extract_function_body<'a>(ir_text: &'a str, symbol: &str) -> &'a str {
-    let needle = format!(" @{symbol}(");
-    let define_idx = ir_text
-        .find(&needle)
-        .or_else(|| {
-            let quoted = format!(" @\"{symbol}\"(");
-            ir_text.find(&quoted)
-        })
-        .unwrap_or_else(|| panic!("missing `define ... @{symbol}(` in IR text:\n{ir_text}"));
-    let body_start = ir_text[define_idx..]
-        .find('{')
-        .unwrap_or_else(|| panic!("define for `{symbol}` has no opening `{{`:\n{ir_text}"));
-    let body_end = ir_text[define_idx + body_start..]
-        .find("\n}")
-        .unwrap_or_else(|| panic!("define for `{symbol}` has no closing `}}`:\n{ir_text}"));
-    &ir_text[define_idx + body_start..define_idx + body_start + body_end]
 }

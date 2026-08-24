@@ -31,6 +31,10 @@ use koja_ir_llvm::emit_llvm_ir;
 use koja_parser::{ParseMode, SourceFile, parse_program};
 use koja_typecheck::check_program;
 
+mod common;
+
+use common::assert_contains;
+
 const PACKAGE: &str = "TestApp";
 const APP_NAME: &str = "koja_process_test";
 
@@ -106,13 +110,6 @@ fn emit_with_process_entry(source: &str, state: &str) -> String {
     emit_llvm_ir(&program, APP_NAME).expect("LLVM emit should succeed")
 }
 
-fn assert_contains(ir_text: &str, needle: &str) {
-    assert!(
-        ir_text.contains(needle),
-        "expected `{needle}` in:\n{ir_text}",
-    );
-}
-
 const COUNTER_PROCESS: &str = "
     struct Counter
       count: Int
@@ -186,9 +183,8 @@ fn spawn_wrapper_loads_config_calls_start_then_run_on_ok() {
     // The start -> run dispatch lives in the IR-synthesized body,
     // emitted by the normal instruction pipeline. start returns
     // Result<Counter, StopReason>. The name mangler qualifies
-    // StopReason with the package it was lifted from (today:
-    // `Global`, since the protocol stub lifts every type
-    // declaration into the `Global` package).
+    // StopReason with the package that declares it (`Global`, via
+    // the stdlib's `process.koja`).
     assert_contains(&ir_text, "define void @TestApp.Counter.__spawn_body(i64");
     assert_contains(
         &ir_text,

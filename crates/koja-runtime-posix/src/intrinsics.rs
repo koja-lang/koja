@@ -4,10 +4,6 @@
 //! behavior in pure Rust so the two backends produce byte-identical
 //! results.
 //!
-//! - [`__koja_print_string`]: the runtime body of the
-//!   [`Global.print`](../../koja-ir-llvm/src/intrinsics/print.rs)
-//!   intrinsic. Writes the bytes of a heap string followed by a
-//!   newline.
 //! - [`__koja_panic`]: the runtime body of `Kernel.panic`.
 //!   Routes the message through the panic backtrace formatter
 //!   (`** (panic) <message>` + filtered stack), then unwinds the
@@ -16,8 +12,6 @@
 //!   the LLVM emitter's bit-packing paths, since emitting the
 //!   sub-byte alignment logic is far cleaner in Rust than in
 //!   LLVM IR.
-
-use std::io::{self, Write};
 
 use crate::memory;
 use crate::panic::crash_unwind;
@@ -185,23 +179,4 @@ pub unsafe extern "C-unwind" fn __koja_panic(payload: *const u8) -> ! {
     let bytes = unsafe { string_payload_bytes(payload) };
     let message = String::from_utf8_lossy(bytes);
     crash_unwind(&message);
-}
-
-/// Print a `String`-flavored body value followed by a newline.
-/// Reads the `i64` bit-length 8 bytes before `payload` (the header
-/// layout shared with `Binary` / `Bits`, see `IRType::String`) and
-/// writes that many UTF-8 bytes to stdout.
-///
-/// # Safety
-///
-/// `payload` must point at the body of a heap-emitted string
-/// global (`emit_const_string` in `koja-ir-llvm`), i.e. the byte
-/// right after the `i64 bit_length` header. Calling with any
-/// other pointer is undefined behavior.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn __koja_print_string(payload: *const u8) {
-    let bytes = unsafe { string_payload_bytes(payload) };
-    let mut stdout = io::stdout().lock();
-    let _ = stdout.write_all(bytes);
-    let _ = stdout.write_all(b"\n");
 }

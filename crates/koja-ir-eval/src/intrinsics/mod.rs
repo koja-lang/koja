@@ -31,7 +31,6 @@ mod list;
 mod map;
 mod numeric;
 mod parse;
-mod print;
 mod process;
 mod runtime_block;
 mod set;
@@ -92,7 +91,6 @@ pub(crate) async fn dispatch<R: CallResolver>(
         IRIntrinsicId::Map(method) => map::dispatch(method, call),
         IRIntrinsicId::NumericConvert(convert) => numeric::dispatch(convert, call),
         IRIntrinsicId::Parse(target) => parse::dispatch(target, call),
-        IRIntrinsicId::Print => print::global_print(args),
         IRIntrinsicId::Process(method) => process::process_dispatch(method, call),
         IRIntrinsicId::Ref(method) => process::ref_dispatch(method, call).await,
         IRIntrinsicId::ReplyTo(method) => process::reply_to_dispatch(method, call).await,

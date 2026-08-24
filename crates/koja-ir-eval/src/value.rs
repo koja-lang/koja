@@ -261,9 +261,9 @@ impl fmt::Display for Value {
                     EnumPayload::Unit => Ok(()),
                 }
             }
-            // `{:?}` keeps `1.0` legible (vs `{}`'s `1`) so floats
-            // round-trip through the auto-print contract and tests
-            // can compare exact stdout.
+            // `{:?}` keeps `1.0` legible (vs `{}`'s `1`) so float
+            // rendering matches `Debug.format` and tests can compare
+            // exact stdout.
             Value::Float32(v) => write!(f, "{v:?}"),
             Value::Float64(v) => write!(f, "{v:?}"),
             Value::Int(i) => write!(f, "{i}"),

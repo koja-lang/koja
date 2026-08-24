@@ -170,10 +170,10 @@ fn cross_package_function_value_invokes_through_local() {
 #[test]
 fn closure_value_renders_through_display() {
     // A closure can be returned from a function. Its Display impl
-    // must surface a recognizable shape so `--auto-print` produces
-    // human-readable stdout for closure-typed mains. Captures render
-    // inline. The body symbol stays mangled (matches the LLVM
-    // backend's expected stdout).
+    // must surface a recognizable shape so the REPL and Debug
+    // rendering produce human-readable output for closure values.
+    // Captures render inline. The body symbol stays mangled (matches
+    // the LLVM backend's expected stdout).
     let source = "
         y = 7
         fn (x: Int) -> Int

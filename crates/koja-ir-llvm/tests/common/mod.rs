@@ -70,7 +70,15 @@ pub fn typecheck(source: &str, mode: ParseMode) -> CheckedProgram {
 }
 
 pub fn typecheck_in(package: &str, source: &str, mode: ParseMode) -> CheckedProgram {
-    let mut sources = koja_stdlib::autoimport_sources();
+    typecheck_sources(koja_stdlib::autoimport_sources(), package, source, mode)
+}
+
+fn typecheck_sources(
+    mut sources: Vec<SourceFile>,
+    package: &str,
+    source: &str,
+    mode: ParseMode,
+) -> CheckedProgram {
     sources.push(SourceFile {
         package: package.to_string(),
         path: PathBuf::from("test.koja"),
@@ -93,6 +101,17 @@ pub fn lower_script_source(source: &str) -> IRScript {
 
 pub fn lower_script_source_in(package: &str, source: &str) -> IRScript {
     let checked = typecheck_in(package, source, ParseMode::Script);
+    lower_script(&checked).expect("script lowering should succeed")
+}
+
+/// [`lower_script_source`] variant that additionally bundles the
+/// qualified stdlib packages (`Net`, …), for tests that pin the
+/// emission of qualified-package intrinsics against the real
+/// declarations instead of a hand-written fixture.
+pub fn lower_script_source_qualified(source: &str) -> IRScript {
+    let mut sources = koja_stdlib::autoimport_sources();
+    sources.extend(koja_stdlib::qualified_sources());
+    let checked = typecheck_sources(sources, PACKAGE, source, ParseMode::Script);
     lower_script(&checked).expect("script lowering should succeed")
 }
 

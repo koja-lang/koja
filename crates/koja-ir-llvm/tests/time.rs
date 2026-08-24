@@ -28,12 +28,10 @@ fn emit(source: &str) -> String {
 
 #[test]
 fn datetime_now_call_emits_extern_declare_for_runtime_symbol() {
-    // Triggering `DateTime.now()` (transitively, via
-    // `.timestamp_millis()` so the script trailing value is a
-    // primitive the auto-print scaffolding accepts) forces the
-    // emitter to declare `koja_time_now_millis` (the C-named
-    // extern backing the call) so it's resolvable at link time
-    // against `koja-runtime`.
+    // Triggering `DateTime.now()` (via `.timestamp_millis()`)
+    // forces the emitter to declare `koja_time_now_millis` (the
+    // C-named extern backing the call) so it's resolvable at link
+    // time against `koja-runtime`.
     let ir_text = emit("DateTime.now().timestamp_millis()");
 
     assert_contains(&ir_text, "declare i64 @koja_time_now_millis()");

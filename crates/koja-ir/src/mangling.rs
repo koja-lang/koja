@@ -84,18 +84,6 @@ pub fn global_primitive_symbol(path: &[&str]) -> IRSymbol {
     ))
 }
 
-/// Mint the [`IRSymbol`] of the `Debug.format` method on a struct
-/// or enum receiver carrying the (possibly-mangled) `receiver`
-/// symbol. Auto-print code paths drive off the live runtime value
-/// (whose `IRSymbol` is already mangled to its concrete
-/// monomorphization, e.g. `Global.Result_$Int64.String$`) so they
-/// bypass receiver-template reconstruction. The resulting symbol
-/// matches the same one [`super::lower::calls::lower_method_call`]
-/// would emit for a user-side `value.format()` call.
-pub fn debug_format_for_symbol(receiver: &IRSymbol) -> IRSymbol {
-    receiver.derived(".format/1")
-}
-
 fn render_type_args(args: &[IRType]) -> String {
     let rendered: Vec<String> = args.iter().map(mangle_type).collect();
     format!("_${}$", rendered.join("."))

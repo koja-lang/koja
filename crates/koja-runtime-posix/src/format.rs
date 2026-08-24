@@ -5,8 +5,7 @@
 //! callers free with the same `payload - 8` recipe used for every
 //! other Koja-emitted heap string.
 //!
-//! Single source of truth: the LLVM backend's auto-print
-//! wrapper (in `koja-runtime-posix/src/intrinsics.rs`) and `Debug.format`
+//! Single source of truth: the LLVM backend's `Debug.format`
 //! intrinsic emitters route through these helpers, so the rendered
 //! bytes match the eval interpreter's `Value::Display` impl
 //! one-for-one.
