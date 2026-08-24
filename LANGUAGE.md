@@ -239,7 +239,7 @@ greet("Koja", "?").print()
 
 A function with defaults is callable at every arity from its required parameter count through its total parameter count. The compiler builds adapter functions for omitted trailing arguments.
 
-Default expressions are independent callee-scope expressions. They cannot refer to `self` or any parameter in the same declaration.
+Default expressions are independent callee-scope expressions. They cannot refer to `self` or any parameter in the same declaration. Each omitted default evaluates at every call.
 
 Protocol declarations own defaults. Implementations inherit the callable arities and cannot repeat or redefine them.
 
@@ -254,8 +254,6 @@ fn pick(x: Int, y: Int) -> Int
   x + y
 end
 ```
-
-See [Function Arity](design/FUNCTION-ARITY.md) for the full model.
 
 ### `return`
 
