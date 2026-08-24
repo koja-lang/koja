@@ -180,7 +180,7 @@ fn take_entries(kind: &mut ExprKind) -> Vec<(Expr, Expr)> {
     match std::mem::replace(kind, stub) {
         ExprKind::Map { entries } => entries,
         other => unreachable!(
-            "resolve_map_literal called with non-Map ExprKind: {}",
+            "resolve_map_literal was called with non-Map ExprKind {}",
             koja_ast::labels::expr_kind_label(&other)
         ),
     }

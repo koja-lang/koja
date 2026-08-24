@@ -30,19 +30,19 @@ fn method_with_own_type_param_monomorphizes_with_receiver_and_method_args() {
         end
 
         b = Box{value: 1}
-        b.map(to_string)
+        b.map(&to_string/1)
         ";
 
     let script = lower_script_source(source);
     let names = script_function_names(&script);
 
-    let mangled = "TestApp.Box_$Int64$.map_$String$";
+    let mangled = "TestApp.Box_$Int64$.map/2_$String$";
     assert!(
         names.contains(&mangled.to_string()),
         "expected monomorphized method `{mangled}`; got {names:?}",
     );
     assert!(
-        !names.iter().any(|n| n == "TestApp.Box.map"),
+        !names.iter().any(|n| n == "TestApp.Box.map/2"),
         "unspecialized template `TestApp.Box.map` must not appear in IRPackage.functions",
     );
 
@@ -70,19 +70,19 @@ fn distinct_method_args_mint_distinct_specializations() {
         end
 
         b = Box{value: 1}
-        b.map(to_string)
-        b.map(double)
+        b.map(&to_string/1)
+        b.map(&double/1)
         ";
 
     let script = lower_script_source(source);
     let names = script_function_names(&script);
 
     assert!(
-        names.contains(&"TestApp.Box_$Int64$.map_$String$".to_string()),
+        names.contains(&"TestApp.Box_$Int64$.map/2_$String$".to_string()),
         "expected `Box<Int>::map<String>` specialization; got {names:?}",
     );
     assert!(
-        names.contains(&"TestApp.Box_$Int64$.map_$Int64$".to_string()),
+        names.contains(&"TestApp.Box_$Int64$.map/2_$Int64$".to_string()),
         "expected `Box<Int>::map<Int>` specialization; got {names:?}",
     );
 }
@@ -106,7 +106,7 @@ fn method_with_no_type_params_is_unaffected_by_method_args_lookup() {
     let script = lower_script_source(source);
     let names = script_function_names(&script);
 
-    let mangled = "TestApp.Pair_$Int64.String$.first";
+    let mangled = "TestApp.Pair_$Int64.String$.first/1";
     assert!(
         names.contains(&mangled.to_string()),
         "expected struct-level-only method specialization `{mangled}`; got {names:?}",

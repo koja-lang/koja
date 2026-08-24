@@ -1,7 +1,7 @@
 //! String literal resolution.
 
 use koja_ast::ast::{Diagnostic, Expr, ExprKind, Literal, StringPart};
-use koja_ast::identifier::ResolvedType;
+use koja_ast::identifier::{Resolution, ResolvedType};
 use koja_ast::span::Span;
 
 use super::calls::resolve_method_call_expr;
@@ -66,6 +66,7 @@ fn wrap_in_format(expr: &mut Box<Expr>) {
         args: Vec::new(),
         method: FORMAT_METHOD.to_string(),
         receiver: Box::new(original),
+        target: Resolution::Unresolved,
         type_args: Vec::new(),
     };
 }

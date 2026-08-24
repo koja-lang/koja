@@ -224,6 +224,37 @@ end
 
 There is no parameter-passing modifier. Every parameter is a value.
 
+### Default Parameters
+
+A parameter can declare a default value with `=`. Required parameters must come before defaulted ones:
+
+```koja
+fn greet(name: String, punctuation: String = "!") -> String
+  name <> punctuation
+end
+
+greet("Koja").print()
+greet("Koja", "?").print()
+```
+
+A function with defaults is callable at every arity from its required parameter count through its total parameter count. The compiler builds adapter functions for omitted trailing arguments.
+
+Default expressions are independent callee-scope expressions. They cannot refer to `self` or any parameter in the same declaration. Each omitted default evaluates at every call.
+
+Protocol declarations own defaults. Implementations inherit the callable arities and cannot repeat or redefine them.
+
+Two declarations with the same qualified name collide when they share an arity, even if the parameter types differ. Separate declarations may share a name only when their arities differ, and their default arity ranges must not overlap:
+
+```koja
+fn pick(x: Int) -> Int
+  x
+end
+
+fn pick(x: Int, y: Int) -> Int
+  x + y
+end
+```
+
 ### `return`
 
 Explicit `return` is available for early exits:
@@ -361,19 +392,23 @@ apply(5, fn (n: Int32) -> Int32 n * 2 end).print()
 
 ### Named Functions as Values
 
-A named function's bare name is a function value. Functions in other packages are reached through the package namespace:
+A named function reference uses `&name/arity`. The arity includes `self`.
 
 ```koja
 fn double(x: Int) -> Int
   x * 2
 end
 
-f = double # same package
-g = Mathlib.square # another package
+f = &double/1 # same package
+g = &Mathlib.square/1 # another package
+h = &Counter.increment/2 # unbound instance function: fn (Counter, Int) -> Counter
+t = &Point.translate/3 # static method: fn (Point, Int, Int) -> Point
 apply(5, f).print()
 ```
 
-Generic functions cannot be referenced as values. There is no call site to infer their type arguments from.
+Every named function value uses mandatory `&name/arity`, including a single-arity function. A bare function name is not a function value.
+
+The arity selects one exact overload, including an adapter for default parameters. Generic functions cannot be referenced directly because there is no call site to infer their type arguments. Wrap a generic or adapted call in a closure.
 
 ---
 
@@ -1342,7 +1377,7 @@ struct Cat: Greeter, Description
 end
 ```
 
-The compiler checks completeness and signature compatibility, and synthesizes any default-bodied functions the type omits. If the body has a function whose name is a near miss of an omitted default, the compiler warns about the likely typo. Entry processes are declared this way (`struct App: Process<(), (), ()>`, see [Packages](#packages)). Protocol declarations accept `@doc` and `@deprecated`.
+The compiler checks completeness and signature compatibility, and synthesizes any default-bodied functions the type omits. If the body has a function whose name is a near miss of an omitted default, the compiler warns about the likely typo. Protocol methods may declare default parameters. Implementations inherit those callable arities and cannot repeat the defaults. Entry processes are declared this way (`struct App: Process<(), (), ()>`, see [Packages](#packages)). Protocol declarations accept `@doc` and `@deprecated`.
 
 `Debug` and `Equality` are auto-derived for every type, so listing one is only an override. It suppresses the derived implementation, and the body must supply `format` / `equals?`:
 
@@ -1547,7 +1582,7 @@ response = HTTP.get("https://example.com")
 The auto-imported `Global` package provides core types (`Option`, `Result`, `List`, `Map`, `Set`, `Process`, `IO`, `File`, `URI`, `Base`, `Path`, etc.) with no alias needed. Domain-specific packages require qualified access:
 
 - **`Crypto`**: `SHA1`, `SHA256`, `SHA384`, `SHA512`, `HMAC`, `Certificate`, `PrivateKey`, `PEMError`
-- **`JSON`**: `Value`, `Encoding`, `encode`, `encode_pretty`, `decode`
+- **`JSON`**: `Value`, `Encoding`, `EncodeOptions`, `encode`, `decode`
 - **`Net`**: `TCPSocket`, `TCPListener`, `UDPSocket`, `Socket`, `IPAddress`, `SocketAddress`, `SocketKind`, `SocketError`, `TLSSession`, `TLSConfig`, `TLSIdentity`, `TrustStore`, `TLSError`, `VerificationError`
 
 Use `alias Crypto.SHA256` or `alias Net.TCPSocket` to access them.
@@ -2569,9 +2604,11 @@ impl JSON.Encoding for Point
 end
 
 text = JSON.encode(Point{x: 3, y: 4})
-pretty = JSON.encode_pretty(payload)
+pretty = JSON.encode(payload, JSON.EncodeOptions{pretty?: true})
 decoded = JSON.decode(text)
 ```
+
+`JSON.encode` accepts an optional `JSON.EncodeOptions` argument. The `pretty?: Bool = false` field selects indented output, as in `JSON.encode(value, JSON.EncodeOptions{pretty?: true})`.
 
 `JSON.decode` returns `JSON.Value ! String`. Typed decoding is not part of this API.
 

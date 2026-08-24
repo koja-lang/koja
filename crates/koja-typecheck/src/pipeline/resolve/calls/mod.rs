@@ -40,7 +40,8 @@ use methods::{
 
 use crate::pipeline::unify::{Conflict, Substitution, substitute};
 use crate::registry::{
-    FunctionSignature, GlobalKind, GlobalRegistry, RegistryEntry, ResolvedParam, VisibilityScope,
+    FunctionLookup, FunctionSignature, GlobalKind, GlobalRegistry, RegistryEntry, ResolvedParam,
+    VisibilityScope,
 };
 
 use super::coercion::{Mismatch, check_compatible_stamping};
@@ -105,40 +106,50 @@ pub(super) fn resolve_call(
         );
     }
 
-    let Some((id, entry)) = lookup_bare_callee(
+    let (id, entry) = match lookup_bare_callee(
         name,
+        args.len(),
         resolver.package,
         resolver.enclosing_type,
         resolver.registry,
-    ) else {
-        resolve_args(args, None, resolver, diagnostics);
-        diagnostics.push(Diagnostic::error(
-            format!("unknown function `{name}`"),
-            callee.span,
-        ));
-        return ResolvedType::unresolved();
-    };
-    check_callee_visibility(entry, resolver, call_span, diagnostics);
-
-    let sig = match &entry.kind {
-        GlobalKind::Function(Some(sig)) => sig.clone(),
-        GlobalKind::Function(None) => panic!(
-            "resolve_call: function `{}` has no lifted signature: \
-             lift_signatures must run before resolve",
-            entry.identifier,
-        ),
-        other => {
+    ) {
+        BareCalleeLookup::Found(found) => found,
+        BareCalleeLookup::Missing => {
             resolve_args(args, None, resolver, diagnostics);
             diagnostics.push(Diagnostic::error(
-                format!(
-                    "cannot call `{name}`: it is a {}, not a function",
-                    other.label(),
-                ),
+                format!("unknown function `{name}`"),
                 callee.span,
             ));
             return ResolvedType::unresolved();
         }
+        BareCalleeLookup::WrongArity {
+            identifier,
+            arities,
+        } => {
+            resolve_args(args, None, resolver, diagnostics);
+            let suggested_arity = closest_arity(&arities, args.len());
+            diagnostics.push(Diagnostic::error_with_hint(
+                format!("function `{identifier}` has no arity {}", args.len()),
+                call_suggestion(name, suggested_arity),
+                call_span,
+            ));
+            return ResolvedType::unresolved();
+        }
     };
+    check_callee_visibility(entry, resolver, call_span, diagnostics);
+
+    if entry.function_definition().is_none() {
+        resolve_args(args, None, resolver, diagnostics);
+        diagnostics.push(Diagnostic::error(
+            format!(
+                "cannot call `{name}` because it is a {}, not a function",
+                entry.kind.label(),
+            ),
+            callee.span,
+        ));
+        return ResolvedType::unresolved();
+    }
+    let sig = entry.expect_function_signature().clone();
     let function = FunctionCallee {
         id,
         identifier: entry.identifier.clone(),
@@ -269,11 +280,13 @@ pub(super) fn resolve_method_call_expr(
             args,
             method,
             receiver,
+            target,
             type_args,
         } => resolve_method_call(
             receiver,
             method,
             args,
+            target,
             CallSite {
                 expected,
                 out_type_args: type_args,
@@ -283,7 +296,7 @@ pub(super) fn resolve_method_call_expr(
             diagnostics,
         ),
         other => unreachable!(
-            "resolve_method_call_expr called with non-MethodCall ExprKind: {}",
+            "resolve_method_call_expr was called with non-MethodCall ExprKind {}",
             expr_kind_label(other),
         ),
     };
@@ -318,6 +331,7 @@ fn rewrite_method_call_to_package_call(expr: &mut Expr, fn_id: GlobalRegistryId)
         method,
         receiver,
         type_args,
+        ..
     } = std::mem::replace(&mut expr.kind, stub)
     else {
         unreachable!("rewrite_method_call_to_package_call called on non-MethodCall ExprKind");
@@ -380,6 +394,7 @@ pub(super) fn resolve_method_call(
     receiver: &mut Expr,
     method: &str,
     args: &mut [Arg],
+    target: &mut Resolution,
     site: CallSite<'_>,
     resolver: &mut Resolver<'_>,
     diagnostics: &mut Vec<Diagnostic>,
@@ -427,6 +442,7 @@ pub(super) fn resolve_method_call(
             receiver,
             method,
             args,
+            target,
             call_span,
             resolver,
             diagnostics,
@@ -450,22 +466,71 @@ pub(super) fn resolve_method_call(
         struct_entry.type_params.clone()
     };
 
-    let mut method_path = struct_entry.identifier.path().to_vec();
-    method_path.push(method.to_string());
-    let method_identifier = Identifier::new(struct_entry.identifier.package(), method_path);
-    let Some((method_id, method_entry)) = resolver.registry.lookup(&method_identifier) else {
-        if matches!(method_receiver, MethodReceiver::Instance { .. })
-            && let Some(field_call) =
-                try_field_callable(struct_id, receiver, method, args, resolver, diagnostics)
-        {
-            return field_call;
+    let method_identifier = Identifier::member(
+        struct_entry.identifier.package(),
+        struct_entry.identifier.path(),
+        method,
+    );
+    let declared_arity =
+        args.len() + usize::from(matches!(method_receiver, MethodReceiver::Instance { .. }));
+    let (method_id, method_entry) = match resolver
+        .registry
+        .function_lookup(&method_identifier, declared_arity)
+    {
+        FunctionLookup::Found(id, entry) => (id, entry),
+        miss => {
+            let opposite_arity =
+                args.len() + usize::from(matches!(method_receiver, MethodReceiver::Static { .. }));
+            if let Some((_, opposite_entry)) = resolver
+                .registry
+                .lookup_function(&method_identifier, opposite_arity)
+                && let Ok(signature) = function_signature(opposite_entry)
+                && signature.dispatch != method_receiver.expected_dispatch()
+            {
+                resolve_args(args, None, resolver, diagnostics);
+                diagnostics.push(Diagnostic::error(
+                    dispatch_mismatch_message(
+                        method_receiver,
+                        struct_entry,
+                        opposite_entry,
+                        method,
+                    ),
+                    call_span,
+                ));
+                return MethodCallOutcome::Method(signature.return_type.clone());
+            }
+            if let FunctionLookup::WrongArity(arities) = miss {
+                resolve_args(args, None, resolver, diagnostics);
+                let suggested_arity = closest_arity(&arities, declared_arity);
+                let explicit_arity = method_receiver.explicit_params_for_arity(suggested_arity);
+                let receiver_name = match &receiver.kind {
+                    ExprKind::Ident { name, .. } => name.as_str(),
+                    _ if matches!(method_receiver, MethodReceiver::Static { .. }) => {
+                        receiver_label.as_str()
+                    }
+                    _ => "receiver",
+                };
+                diagnostics.push(Diagnostic::error_with_hint(
+                    format!("function `{method_identifier}` has no arity {declared_arity}"),
+                    call_suggestion(&format!("{receiver_name}.{method}"), explicit_arity),
+                    call_span,
+                ));
+                return MethodCallOutcome::Method(ResolvedType::unresolved());
+            }
+            if matches!(method_receiver, MethodReceiver::Instance { .. })
+                && let Some(field_call) =
+                    try_field_callable(struct_id, receiver, method, args, resolver, diagnostics)
+            {
+                return field_call;
+            }
+            diagnostics.push(Diagnostic::error(
+                method_lookup_message(method_receiver, struct_entry, method),
+                call_span,
+            ));
+            return MethodCallOutcome::Method(ResolvedType::unresolved());
         }
-        diagnostics.push(Diagnostic::error(
-            method_lookup_message(method_receiver, struct_entry, method),
-            call_span,
-        ));
-        return MethodCallOutcome::Method(ResolvedType::unresolved());
     };
+    *target = Resolution::Global(method_id);
     check_callee_visibility(method_entry, resolver, call_span, diagnostics);
 
     let sig = match function_signature(method_entry) {
@@ -819,20 +884,53 @@ pub(super) fn emit_conflict(
 /// first step. Takes the registry directly (rather than the full
 /// [`Resolver`]) so the caller keeps `&mut` access for
 /// diagnostics and arg resolution on the not-found path.
+enum BareCalleeLookup<'a> {
+    Found((GlobalRegistryId, &'a RegistryEntry)),
+    Missing,
+    WrongArity {
+        arities: Vec<usize>,
+        identifier: Identifier,
+    },
+}
+
 fn lookup_bare_callee<'a>(
     name: &str,
+    arity: usize,
     package: &str,
     enclosing_type: Option<&[String]>,
     registry: &'a GlobalRegistry,
-) -> Option<(GlobalRegistryId, &'a RegistryEntry)> {
-    if let Some(enclosing) = enclosing_type {
-        let mut scoped_path = enclosing.to_vec();
-        scoped_path.push(name.to_string());
-        if let Some(found) = registry.lookup(&Identifier::new(package, scoped_path)) {
-            return Some(found);
-        }
+) -> BareCalleeLookup<'a> {
+    let lookup_in = |identifier: Identifier| match registry.function_lookup(&identifier, arity) {
+        FunctionLookup::Found(id, entry) => Some(BareCalleeLookup::Found((id, entry))),
+        FunctionLookup::WrongArity(arities) => Some(BareCalleeLookup::WrongArity {
+            arities,
+            identifier,
+        }),
+        // A non-function with this name still wins the scope: the
+        // caller diagnoses it as an invalid callee.
+        FunctionLookup::NoFunctions => registry.lookup(&identifier).map(BareCalleeLookup::Found),
+    };
+    if let Some(enclosing) = enclosing_type
+        && let Some(outcome) = lookup_in(Identifier::member(package, enclosing, name))
+    {
+        return outcome;
     }
-    registry.lookup(&Identifier::new(package, vec![name.to_string()]))
+    lookup_in(Identifier::new(package, vec![name.to_string()])).unwrap_or(BareCalleeLookup::Missing)
+}
+
+/// Pick the declared arity nearest to `requested`, for did-you-mean
+/// hints. Shared with named function reference resolution.
+pub(in crate::pipeline::resolve) fn closest_arity(arities: &[usize], requested: usize) -> usize {
+    arities
+        .iter()
+        .copied()
+        .min_by_key(|arity| (arity.abs_diff(requested), *arity))
+        .expect("closest_arity requires at least one arity")
+}
+
+fn call_suggestion(callee: &str, arity: usize) -> String {
+    let args = vec!["_"; arity].join(", ");
+    format!("did you mean `{callee}({args})`?")
 }
 
 /// Try to resolve `recv.method(args)` as a package-qualified
@@ -854,7 +952,7 @@ fn try_package_function_call(
         return None;
     };
     let call_span = site.span;
-    let (id, entry) = match lookup_package_member(name, method, resolver) {
+    let (_, entry) = match lookup_package_member(name, method, resolver) {
         PackageMember::Found(id, entry) => (id, entry),
         PackageMember::NotAPackage => return None,
         PackageMember::UnknownMember => {
@@ -866,15 +964,40 @@ fn try_package_function_call(
             return Some(MethodCallOutcome::Method(ResolvedType::unresolved()));
         }
     };
-    let signature = match &entry.kind {
-        GlobalKind::Function(Some(sig)) => sig.clone(),
-        GlobalKind::Function(None) => panic!(
-            "try_package_function_call: function `{}` has no lifted signature: \
-             lift_signatures must run before resolve",
-            entry.identifier,
-        ),
-        _ => return None,
+    if !matches!(entry.kind, GlobalKind::Function(_)) {
+        resolve_args(args, None, resolver, diagnostics);
+        diagnostics.push(Diagnostic::error(
+            format!(
+                "cannot call `{name}.{method}` because it is a {}, not a function",
+                entry.kind.label(),
+            ),
+            call_span,
+        ));
+        return Some(MethodCallOutcome::Method(ResolvedType::unresolved()));
+    }
+    let (id, entry) = match resolver
+        .registry
+        .function_lookup(&entry.identifier, args.len())
+    {
+        FunctionLookup::Found(id, entry) => (id, entry),
+        FunctionLookup::NoFunctions => {
+            unreachable!("the member entry was checked to be a function above")
+        }
+        FunctionLookup::WrongArity(arities) => {
+            resolve_args(args, None, resolver, diagnostics);
+            let suggested_arity = closest_arity(&arities, args.len());
+            diagnostics.push(Diagnostic::error_with_hint(
+                format!(
+                    "package `{name}` has no function `{method}` with arity {}",
+                    args.len()
+                ),
+                call_suggestion(&format!("{name}.{method}"), suggested_arity),
+                call_span,
+            ));
+            return Some(MethodCallOutcome::Method(ResolvedType::unresolved()));
+        }
     };
+    let signature = entry.expect_function_signature().clone();
     let function = FunctionCallee {
         id,
         identifier: entry.identifier.clone(),
@@ -1100,7 +1223,7 @@ fn validate_arg_signature(
             }) => {
                 diagnostics.push(Diagnostic::error(
                     format!(
-                        "argument `{}` to `{callee}` expects `{}`: value \
+                        "argument `{}` to `{callee}` expects `{}`, but value \
                          `{rendered_value}` does not fit in `{}` (range {})",
                         param.name,
                         display_resolution(&param.ty, resolver.registry),
@@ -1150,7 +1273,7 @@ fn resolve_local_call(
         resolve_args(args, None, resolver, diagnostics);
         diagnostics.push(Diagnostic::error(
             format!(
-                "cannot call `{name}`: it is `{}`, not a function",
+                "cannot call `{name}` because it is `{}`, not a function",
                 display_resolution(&local_ty, resolver.registry),
             ),
             callee_span,
@@ -1225,7 +1348,7 @@ fn validate_local_call_signature(
             }) => {
                 diagnostics.push(Diagnostic::error(
                     format!(
-                        "argument `{}` to `{callee_label}` expects `{}`: value \
+                        "argument `{}` to `{callee_label}` expects `{}`, but value \
                          `{rendered_value}` does not fit in `{}` (range {})",
                         param.name,
                         display_resolution(&param.ty, resolver.registry),

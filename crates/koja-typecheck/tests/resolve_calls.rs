@@ -94,7 +94,11 @@ fn arg_taking_call_resolves_and_registers_signature() {
         .expect("TestApp.add missing from registry");
 
     match &add_entry.kind {
-        GlobalKind::Function(Some(sig)) => {
+        GlobalKind::Function(definition) => {
+            let sig = definition
+                .signature
+                .as_ref()
+                .expect("expected lifted signature");
             assert_eq!(sig.params.len(), 2);
             assert_eq!(sig.params[0].name, "a");
             assert_eq!(sig.params[1].name, "b");
@@ -102,7 +106,7 @@ fn arg_taking_call_resolves_and_registers_signature() {
             assert_eq!(sig.params[1].ty, int);
             assert_eq!(sig.return_type, int);
         }
-        other => panic!("expected Function(Some(sig)), got {other:?}"),
+        other => panic!("expected function, got {other:?}"),
     }
 }
 
@@ -127,14 +131,24 @@ fn return_type_propagates_through_arithmetic() {
 #[test]
 fn arity_mismatch_diagnoses() {
     let source = "
-        fn add(a: Int, b: Int) -> Int
+        fn add(a: Int) -> Int
           1
         end
 
-        add(1)
+        fn add(a: Int, b: Int, c: Int) -> Int
+          3
+        end
+
+        add(1, 2)
         ";
 
-    assert_script_fails_with(source, &["expects 2 argument"]);
+    let failure = typecheck_fail(&dedent(source));
+    let diagnostic = failure
+        .diagnostics
+        .iter()
+        .find(|diagnostic| diagnostic.message.contains("has no arity 2"))
+        .expect("expected arity diagnostic");
+    assert_eq!(diagnostic.hint.as_deref(), Some("did you mean `add(_)`?"));
 }
 
 #[test]
@@ -211,5 +225,24 @@ fn named_args_diagnoses() {
     assert_eq!(
         named_count, 2,
         "one diagnostic per named arg; got {messages:?}"
+    );
+}
+
+#[test]
+fn package_constant_called_as_function_diagnoses() {
+    let failure = common::check_packages(
+        &[
+            ("Lib", "lib.koja", "const answer = 42\n"),
+            ("TestApp", "main.kojs", "Lib.answer()\n"),
+        ],
+        koja_parser::ParseMode::Script,
+    )
+    .expect_err("calling a constant must fail");
+    let messages = diagnostic_messages(&failure);
+    assert!(
+        messages
+            .iter()
+            .any(|m| m.contains("cannot call `Lib.answer` because it is a constant")),
+        "expected constant-callee diagnostic, got {messages:?}",
     );
 }

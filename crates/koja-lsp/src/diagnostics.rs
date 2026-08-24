@@ -539,7 +539,7 @@ fn to_lsp_diagnostic(d: &KojaDiagnostic) -> Diagnostic {
 /// typecheck's deprecation pass (`pipeline/deprecation.rs`). Keep the
 /// two in sync when changing the wording.
 fn is_deprecation_warning(d: &KojaDiagnostic) -> bool {
-    d.severity == KojaSeverity::Warning && d.message.contains("` is deprecated: ")
+    d.severity == KojaSeverity::Warning && d.message.contains("` is deprecated. ")
 }
 
 #[cfg(test)]

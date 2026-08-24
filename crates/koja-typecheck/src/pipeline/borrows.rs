@@ -187,7 +187,10 @@ fn check_expr(
         // Parentheses are pure grouping, so `(CPtr.borrow(b)).read()`
         // consumes the same as the unparenthesized chain.
         ExprKind::Group { expr: inner } => check_expr(inner, position, registry, diagnostics),
-        ExprKind::Ident { .. } | ExprKind::Literal { .. } | ExprKind::Self_ { .. } => {}
+        ExprKind::Ident { .. }
+        | ExprKind::Literal { .. }
+        | ExprKind::NamedFunctionReference { .. }
+        | ExprKind::Self_ { .. } => {}
         ExprKind::If {
             condition,
             then_body,
@@ -311,7 +314,7 @@ fn emit_escape(position: Position<'_>, expr: &Expr, diagnostics: &mut Vec<Diagno
     };
     diagnostics.push(Diagnostic::error(
         format!(
-            "{opening}: it is only valid within the statement that borrows it. Pass it \
+            "{opening}. It is only valid within the statement that borrows it. Pass it \
              directly to a call, or use `CPtr.copy(...)` for an owned copy",
         ),
         expr.span,

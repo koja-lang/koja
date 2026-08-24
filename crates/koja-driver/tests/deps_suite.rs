@@ -559,7 +559,7 @@ fn dependency_constants_and_function_values_end_to_end() {
               end
 
               fn run(self) -> StopReason
-                f = Constlib.double
+                f = &Constlib.double/1
                 f(Constlib.MAX_SIZE + Constlib.default_timeout).print()
                 StopReason.Normal
               end

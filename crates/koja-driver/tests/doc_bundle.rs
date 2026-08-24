@@ -122,7 +122,7 @@ fn doc_bundle_emits_assets_and_stdlib_packages() {
     assert!(search_json.contains("\"name\":\"Widget\""));
     assert!(search_json.contains("\"name\":\"IPAddress.Version\""));
     assert!(search_json.contains("\"name\":\"IPAddress.ParseError\""));
-    assert!(search_json.contains("\"name\":\"IPAddress.v4?\""));
+    assert!(search_json.contains("\"name\":\"IPAddress.v4?/1\""));
     assert!(search_json.contains("\"deprecated\":\"Use `address.version == IPAddress.Version.V4`"));
 
     let ip_address = fs::read_to_string(doc.join("Net").join("IPAddress.html")).unwrap();
@@ -323,7 +323,7 @@ fn doc_falls_back_to_stdlib_outside_project() {
         String::from_utf8_lossy(&search.stderr)
     );
     let stdout = String::from_utf8_lossy(&search.stdout);
-    assert!(stdout.contains("# Global.List.append (fn)"), "{stdout}");
+    assert!(stdout.contains("# Global.List.append/2 (fn)"), "{stdout}");
 
     // Bare generation works too, defaulting to a temp output dir.
     let generated = run_koja(&tmp, &["doc"]);
@@ -365,7 +365,7 @@ fn doc_search_renders_builtin_primitive_types() {
     let method = run_koja(&tmp, &["doc", "search", "Int.parse"]);
     assert!(method.status.success());
     let stdout = String::from_utf8_lossy(&method.stdout);
-    assert!(stdout.contains("# Global.Int.parse (fn)"), "{stdout}");
+    assert!(stdout.contains("# Global.Int.parse/1 (fn)"), "{stdout}");
 }
 
 #[test]
@@ -379,7 +379,7 @@ fn doc_search_shows_stdlib_deprecation_guidance() {
         String::from_utf8_lossy(&search.stderr)
     );
     let stdout = String::from_utf8_lossy(&search.stdout);
-    assert!(stdout.contains("# Net.IPAddress.v4? (fn)"), "{stdout}");
+    assert!(stdout.contains("# Net.IPAddress.v4?/1 (fn)"), "{stdout}");
     assert!(stdout.contains("> **Deprecated**"), "{stdout}");
     assert!(
         stdout.contains("Use `address.version == IPAddress.Version.V4` instead."),

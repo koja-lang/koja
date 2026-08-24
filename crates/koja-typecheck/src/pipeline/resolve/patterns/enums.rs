@@ -287,7 +287,7 @@ pub(super) fn lookup_pattern_enum<'a>(
     let GlobalKind::Enum(definition) = &entry.kind else {
         diagnostics.push(Diagnostic::error(
             format!(
-                "cannot match against `{}`: it is a {}, not an enum",
+                "cannot match against `{}` because it is a {}, not an enum",
                 entry.identifier,
                 entry.kind.label(),
             ),
@@ -297,10 +297,7 @@ pub(super) fn lookup_pattern_enum<'a>(
     };
     let Some(definition) = definition.as_ref() else {
         diagnostics.push(Diagnostic::error(
-            format!(
-                "internal: enum `{}` has no lifted definition",
-                entry.identifier
-            ),
+            format!("enum `{}` has no lifted definition", entry.identifier),
             span,
         ));
         return None;

@@ -11,20 +11,20 @@ fn apply(x: Int, f: fn (Int) -> Int) -> Int
 end
 
 # assign a function to a variable and call it
-f = double
+f = &double/1
 f(5).print()
 
-# pass a bare function name as an argument
-apply(10, double).print()
+# pass a named function reference as an argument
+apply(10, &double/1).print()
 
-# bare function ref with list.map
+# named function reference with list.map
 nums: List<Int> = [1, 2, 3]
-doubled = nums.map(double)
+doubled = nums.map(&double/1)
 
 for d in doubled
   d.print()
 end
 
-# bare function ref returning String
-g = greet
+# named function reference returning String
+g = &greet/1
 g("world").print()

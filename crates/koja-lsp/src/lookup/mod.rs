@@ -33,11 +33,13 @@ pub(crate) enum SymbolInfo {
         name: String,
     },
     Function {
+        arity: Option<usize>,
         name: String,
     },
     /// A method on a struct, enum, or protocol. Carries both the
     /// owning type's name and the bare method name.
     Method {
+        arity: Option<usize>,
         type_name: String,
         method_name: String,
     },
@@ -396,6 +398,7 @@ fn classify_in_package(name: &str, package: &str, registry: &GlobalRegistry) -> 
             name: name.to_string(),
         },
         GlobalKind::Function(_) => SymbolInfo::Function {
+            arity: None,
             name: name.to_string(),
         },
         GlobalKind::Struct(_) => SymbolInfo::Struct {
@@ -664,7 +667,7 @@ mod tests {
             locals: &locals,
         };
         let info = classify_name("add", &ctx).expect("classify");
-        assert!(matches!(info, SymbolInfo::Function { ref name } if name == "add"));
+        assert!(matches!(info, SymbolInfo::Function { ref name, .. } if name == "add"));
     }
 
     #[test]
@@ -734,7 +737,7 @@ mod tests {
         };
         // Cursor on the `greet` name (line 1, col 5, between `fn` and parens).
         let info = find_symbol_at(file, 1, 5, &ctx).expect("symbol at cursor");
-        assert!(matches!(info, SymbolInfo::Function { ref name } if name == "greet"));
+        assert!(matches!(info, SymbolInfo::Function { ref name, .. } if name == "greet"));
     }
 
     /// Smoke test mirroring the definition pipeline's local-index

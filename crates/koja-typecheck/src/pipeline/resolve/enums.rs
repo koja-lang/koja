@@ -60,7 +60,7 @@ pub(super) fn resolve_enum_construction(
         bare_walk_construction_data(data, resolver, diagnostics);
         diagnostics.push(Diagnostic::error(
             format!(
-                "cannot construct variant `{variant}` of `{}`: it is a {}, not an enum",
+                "cannot construct variant `{variant}` of `{}` because it is a {}, not an enum",
                 enum_entry.identifier,
                 enum_entry.kind.label(),
             ),
@@ -71,10 +71,7 @@ pub(super) fn resolve_enum_construction(
     let Some(definition) = definition else {
         bare_walk_construction_data(data, resolver, diagnostics);
         diagnostics.push(Diagnostic::error(
-            format!(
-                "internal: enum `{}` has no lifted definition",
-                enum_entry.identifier,
-            ),
+            format!("enum `{}` has no lifted definition", enum_entry.identifier,),
             span,
         ));
         return ResolvedType::leaf(Resolution::Global(enum_id));

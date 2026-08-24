@@ -163,11 +163,13 @@ fn collect_surface_ids(entry: &RegistryEntry, ids: &mut Vec<GlobalRegistryId>) {
                 }
             }
         }
-        GlobalKind::Function(Some(signature)) => {
-            for param in &signature.params {
-                collect_type_ids(&param.ty, ids);
+        GlobalKind::Function(definition) => {
+            if let Some(signature) = &definition.signature {
+                for param in &signature.params {
+                    collect_type_ids(&param.ty, ids);
+                }
+                collect_type_ids(&signature.return_type, ids);
             }
-            collect_type_ids(&signature.return_type, ids);
         }
         GlobalKind::Protocol(Some(definition)) => {
             for method in &definition.methods {
@@ -186,7 +188,6 @@ fn collect_surface_ids(entry: &RegistryEntry, ids: &mut Vec<GlobalRegistryId>) {
         GlobalKind::Builtin(_)
         | GlobalKind::Constant(None)
         | GlobalKind::Enum(None)
-        | GlobalKind::Function(None)
         | GlobalKind::Protocol(None)
         | GlobalKind::Struct(None)
         | GlobalKind::TypeAlias(None) => {}

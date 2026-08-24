@@ -35,5 +35,5 @@ fn nested_struct_and_method_mangle_with_full_path() {
         emit_script_llvm_ir(&script, APP_NAME).expect("emit_script_llvm_ir should succeed");
 
     assert_contains(&ir_text, "%TestApp.Outer.Inner = type { i64 }");
-    assert_contains(&ir_text, "@TestApp.Outer.Inner.doubled(");
+    assert_contains(&ir_text, "@\"TestApp.Outer.Inner.doubled/1\"(");
 }

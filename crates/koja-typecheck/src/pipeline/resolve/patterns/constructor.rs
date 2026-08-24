@@ -116,7 +116,7 @@ fn constructor_metadata(
     let enum_id = *enum_id;
     let Some(entry) = resolver.registry.get(enum_id) else {
         diagnostics.push(Diagnostic::error(
-            "internal: subject enum id is not registered".to_string(),
+            "subject enum id is not registered".to_string(),
             span,
         ));
         return Err(());
@@ -137,7 +137,7 @@ fn constructor_metadata(
         let known: Vec<String> = definition.variants.iter().map(|v| v.name.clone()).collect();
         diagnostics.push(Diagnostic::error(
             format!(
-                "enum `{label}` has no variant `{name}` (declared variants: `{}`)",
+                "enum `{label}` has no variant `{name}` (declared variants are `{}`)",
                 known.join("`, `"),
             ),
             span,

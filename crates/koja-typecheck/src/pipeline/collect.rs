@@ -266,7 +266,14 @@ fn register_function_with_identifier(
     let deprecation = deprecation_message(&function.annotations, diagnostics);
     let type_params = type_param_names(&function.type_params);
     let visibility = function_visibility_scope(function.visibility, owner_type);
-    match registry.insert_function(identifier, function.span, type_params, visibility) {
+    match registry.insert_function(
+        identifier,
+        function.params.len(),
+        function.origin,
+        function.span,
+        type_params,
+        visibility,
+    ) {
         InsertOutcome::Fresh(id) => stamp_deprecation(registry, id, deprecation),
         InsertOutcome::Collision { existing } => {
             diagnostics.push(Diagnostic::error_with_hint(

@@ -182,6 +182,7 @@ pub(super) fn dispatch_via_carrier(
                     span,
                     value: inner,
                 }],
+                target: Resolution::Unresolved,
                 type_args: Vec::new(),
             };
             // The synthesized call dispatches through the normal

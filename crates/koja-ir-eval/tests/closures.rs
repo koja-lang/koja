@@ -117,7 +117,7 @@ fn fn_as_value_adapter_dispatches_through_make_closure() {
           f(x, y)
         end
 
-        apply(add, 40, 2)
+        apply(&add/2, 40, 2)
         ";
     assert_eq!(evaluate(&dedent(source)).unwrap(), Value::Int(42));
 }
@@ -159,7 +159,7 @@ fn cross_package_function_value_invokes_through_local() {
         end
         ";
     let script = "
-        f = Dep.double
+        f = &Dep.double/1
         f(21)
         ";
     let value = common::evaluate_script_with_dep("Dep", &dedent(dep), &dedent(script))

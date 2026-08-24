@@ -304,6 +304,15 @@ fn find_in_expr(expr: &Expr, line: u32, col: u32, ctx: &LookupCtx<'_>) -> Option
                         type_display: display,
                     });
                 }
+                if let Resolution::Global(id) = resolution
+                    && let Some(entry) = ctx.registry.get(*id)
+                    && let koja_typecheck::GlobalKind::Function(definition) = &entry.kind
+                {
+                    return Some(SymbolInfo::Function {
+                        arity: Some(definition.arity),
+                        name: name.clone(),
+                    });
+                }
                 let mut info = classify_name(name, ctx);
                 if let Some(SymbolInfo::Variable { type_display, .. }) = &mut info
                     && expr.resolution.is_resolved()
@@ -329,6 +338,7 @@ fn find_in_expr(expr: &Expr, line: u32, col: u32, ctx: &LookupCtx<'_>) -> Option
             receiver,
             method,
             args,
+            target,
             ..
         } => {
             if span_contains(&expr.span, line, col) {
@@ -340,6 +350,18 @@ fn find_in_expr(expr: &Expr, line: u32, col: u32, ctx: &LookupCtx<'_>) -> Option
                         resolve_method_name(receiver, method, ctx)
                 {
                     return Some(SymbolInfo::Method {
+                        arity: match target {
+                            Resolution::Global(id) => Some(*id),
+                            _ => None,
+                        }
+                        .and_then(|id| {
+                            let entry = ctx.registry.get(id)?;
+                            let koja_typecheck::GlobalKind::Function(definition) = &entry.kind
+                            else {
+                                return None;
+                            };
+                            Some(definition.arity)
+                        }),
                         type_name,
                         method_name,
                     });
@@ -621,7 +643,9 @@ fn find_in_expr(expr: &Expr, line: u32, col: u32, ctx: &LookupCtx<'_>) -> Option
                 }
             }
         }
-        ExprKind::Literal { .. } | ExprKind::Self_ { .. } => {}
+        ExprKind::Literal { .. }
+        | ExprKind::NamedFunctionReference { .. }
+        | ExprKind::Self_ { .. } => {}
     }
     None
 }
@@ -851,7 +875,10 @@ fn find_expr_at_inner(expr: &Expr, line: u32, col: u32) -> Option<&Expr> {
                 .find_map(|f| find_expr_at_inner(&f.value, line, col)),
             EnumConstructionData::Unit => None,
         },
-        ExprKind::Literal { .. } | ExprKind::Self_ { .. } | ExprKind::Ident { .. } => None,
+        ExprKind::Ident { .. }
+        | ExprKind::Literal { .. }
+        | ExprKind::NamedFunctionReference { .. }
+        | ExprKind::Self_ { .. } => None,
     };
 
     Some(child.unwrap_or(expr))

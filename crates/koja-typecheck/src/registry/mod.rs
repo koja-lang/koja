@@ -15,12 +15,10 @@
 //!
 //! # Function signatures
 //!
-//! [`GlobalKind::Function`] carries its signature inline as
-//! `Option<FunctionSignature>`: `None` is the "collected but not yet
-//! lifted" state, `Some(sig)` the "lifted" state reached after
-//! `lift_signatures` runs. The variant-carried design makes illegal
-//! states unrepresentable: non-function entries literally cannot
-//! carry a signature.
+//! [`GlobalKind::Function`] carries [`FunctionDefinition`], whose
+//! signature is `None` after collect and `Some` after
+//! `lift_signatures`. Its arity and origin are function-only metadata,
+//! so non-function entries cannot carry them.
 //!
 //! Registry rendering for `koja check --emit-ast` lives in the
 //! [`format`] submodule. It's a separate concern from the data + insert
@@ -41,11 +39,12 @@ mod format;
 pub use candidates::{Candidate, CandidateDetail, CandidateKind, KEYWORDS};
 pub use definitions::{
     BoundOverlay, BuiltinDefinition, BuiltinShape, Conformance, ConformanceScope,
-    ConstantDefinition, Dispatch, EnumDefinition, FunctionSignature, ProtocolDefinition,
-    ResolvedEnumVariant, ResolvedParam, ResolvedProtocolBound, ResolvedProtocolMethod,
-    ResolvedStructField, ResolvedVariantData, StructDefinition,
+    ConstantDefinition, Dispatch, EnumDefinition, FunctionDefinition, FunctionSignature,
+    ProtocolDefinition, ResolvedEnumVariant, ResolvedParam, ResolvedProtocolBound,
+    ResolvedProtocolMethod, ResolvedStructField, ResolvedVariantData, StructDefinition,
 };
 pub use format::format_registry;
+pub use koja_ast::ast::FunctionOrigin;
 
 use crate::pipeline::resolve::types::types_equivalent;
 
@@ -74,7 +73,7 @@ pub enum GlobalKind {
     Builtin(BuiltinDefinition),
     Constant(Option<Box<ConstantDefinition>>),
     Enum(Option<EnumDefinition>),
-    Function(Option<FunctionSignature>),
+    Function(FunctionDefinition),
     Protocol(Option<ProtocolDefinition>),
     Struct(Option<StructDefinition>),
     /// `type X = ...` declared at top level. The `Option` mirrors
@@ -134,6 +133,42 @@ pub struct RegistryEntry {
     pub visibility: VisibilityScope,
 }
 
+impl RegistryEntry {
+    /// The function payload, or `None` when the entry is not a function.
+    pub fn function_definition(&self) -> Option<&FunctionDefinition> {
+        match &self.kind {
+            GlobalKind::Function(definition) => Some(definition),
+            _ => None,
+        }
+    }
+
+    /// The function payload of an entry the caller already proved is a
+    /// function (e.g. it came from [`GlobalRegistry::function_lookup`]).
+    pub fn expect_function_definition(&self) -> &FunctionDefinition {
+        self.function_definition().unwrap_or_else(|| {
+            panic!(
+                "`{}` is a {}, not a function",
+                self.identifier,
+                self.kind.label()
+            )
+        })
+    }
+
+    /// The lifted signature of a proven function entry. Panics when
+    /// `lift_signatures` has not stamped the signature yet.
+    pub fn expect_function_signature(&self) -> &FunctionSignature {
+        self.expect_function_definition()
+            .signature
+            .as_ref()
+            .unwrap_or_else(|| {
+                panic!(
+                    "function `{}` has no lifted signature; lift_signatures must run first",
+                    self.identifier
+                )
+            })
+    }
+}
+
 /// Typecheck-internal projection of the AST [`koja_ast::ast::Visibility`]
 /// plus the contextual scope where a `priv` decl appeared. Encoded as
 /// a single enum so illegal states (public-with-owner, private-with-no-
@@ -183,11 +218,27 @@ pub(crate) enum ClaimOutcome {
 #[derive(Clone, Debug, Default)]
 pub struct GlobalRegistry {
     entries: HashMap<GlobalRegistryId, RegistryEntry>,
-    by_identifier: HashMap<Identifier, GlobalRegistryId>,
+    by_identifier: HashMap<Identifier, NameEntries>,
     next_id: u32,
     /// Seeded builtin stubs not yet claimed by a `builtin`
     /// declaration. [`Self::claim_builtin_stub`] drains it.
     unclaimed_builtin_stubs: HashSet<GlobalRegistryId>,
+}
+
+#[derive(Clone, Debug, Default)]
+struct NameEntries {
+    functions: BTreeMap<usize, GlobalRegistryId>,
+    non_function: Option<GlobalRegistryId>,
+}
+
+/// Outcome of [`GlobalRegistry::function_lookup`].
+pub enum FunctionLookup<'a> {
+    Found(GlobalRegistryId, &'a RegistryEntry),
+    /// No functions exist under this name.
+    NoFunctions,
+    /// Functions exist under this name, but none at the requested
+    /// arity. Carries every declared arity, sorted ascending.
+    WrongArity(Vec<usize>),
 }
 
 impl GlobalRegistry {
@@ -300,17 +351,42 @@ impl GlobalRegistry {
     pub(crate) fn insert_function(
         &mut self,
         identifier: Identifier,
+        arity: usize,
+        origin: FunctionOrigin,
         span: Span,
         type_params: Vec<String>,
         visibility: VisibilityScope,
     ) -> InsertOutcome<'_> {
-        self.insert(
-            identifier,
-            GlobalKind::Function(None),
-            span,
-            type_params,
-            visibility,
-        )
+        let names = self.by_identifier.entry(identifier.clone()).or_default();
+        if let Some(id) = names
+            .non_function
+            .or_else(|| names.functions.get(&arity).copied())
+        {
+            return InsertOutcome::Collision {
+                existing: self.entries.get(&id).expect("reverse index is valid"),
+            };
+        }
+        let id = GlobalRegistryId::new(self.next_id);
+        self.next_id += 1;
+        names.functions.insert(arity, id);
+        let type_param_bounds = vec![Vec::new(); type_params.len()];
+        self.entries.insert(
+            id,
+            RegistryEntry {
+                deprecation: None,
+                identifier,
+                kind: GlobalKind::Function(FunctionDefinition {
+                    arity,
+                    origin,
+                    signature: None,
+                }),
+                span,
+                type_params,
+                type_param_bounds,
+                visibility,
+            },
+        );
+        InsertOutcome::Fresh(id)
     }
 
     /// Register a protocol in the `Protocol(None)` state. Method
@@ -374,7 +450,9 @@ impl GlobalRegistry {
     /// this at most once per decl, right after a fresh insert.
     pub(crate) fn set_deprecation(&mut self, id: GlobalRegistryId, message: String) {
         let entry = self.entries.get_mut(&id).unwrap_or_else(|| {
-            panic!("set_deprecation on missing registry id {id}: collect invariant violation")
+            panic!(
+                "set_deprecation on missing registry id {id}. This is a collect invariant violation"
+            )
         });
         entry.deprecation = Some(message);
     }
@@ -383,7 +461,7 @@ impl GlobalRegistry {
     /// unless the entry's kind is exactly `Enum(None)`.
     pub(crate) fn set_enum_definition(&mut self, id: GlobalRegistryId, definition: EnumDefinition) {
         let entry = self.entries.get_mut(&id).unwrap_or_else(|| {
-            panic!("set_enum_definition on missing registry id {id}: collect invariant violation")
+            panic!("set_enum_definition on missing registry id {id}. This is a collect invariant violation")
         });
         match &entry.kind {
             GlobalKind::Enum(None) => {
@@ -391,15 +469,15 @@ impl GlobalRegistry {
             }
             GlobalKind::Enum(Some(_)) => {
                 panic!(
-                    "set_enum_definition called twice on `{}`: lift_signatures must stamp \
+                    "set_enum_definition called twice on `{}`. lift_signatures must stamp \
                      each enum exactly once",
                     entry.identifier,
                 );
             }
             other => {
                 panic!(
-                    "set_enum_definition called on non-enum entry `{}` ({}): \
-                     only Enum entries carry definitions",
+                    "set_enum_definition called on non-enum entry `{}` ({}). \
+                     Only Enum entries carry definitions",
                     entry.identifier,
                     other.label(),
                 );
@@ -434,7 +512,7 @@ impl GlobalRegistry {
         }
         let entry = self.entries.get_mut(&target_id).unwrap_or_else(|| {
             panic!(
-                "record_conformance on missing registry id {target_id}: \
+                "record_conformance on missing registry id {target_id}. This is a \
                  lift invariant violation",
             )
         });
@@ -443,7 +521,7 @@ impl GlobalRegistry {
             GlobalKind::Struct(Some(def)) => &mut def.conformances,
             GlobalKind::Enum(Some(def)) => &mut def.conformances,
             other => panic!(
-                "record_conformance on `{}` ({}): only builtin and stamped \
+                "record_conformance on `{}` ({}). Only builtin and stamped \
                  struct/enum entries accept conformances",
                 entry.identifier,
                 other.label(),
@@ -716,7 +794,7 @@ impl GlobalRegistry {
     ) {
         let entry = self.entries.get_mut(&id).unwrap_or_else(|| {
             panic!(
-                "set_protocol_definition on missing registry id {id}: collect invariant violation"
+                "set_protocol_definition on missing registry id {id}. This is a collect invariant violation"
             )
         });
         match &entry.kind {
@@ -725,15 +803,15 @@ impl GlobalRegistry {
             }
             GlobalKind::Protocol(Some(_)) => {
                 panic!(
-                    "set_protocol_definition called twice on `{}`: lift_signatures must stamp \
+                    "set_protocol_definition called twice on `{}`. lift_signatures must stamp \
                      each protocol exactly once",
                     entry.identifier,
                 );
             }
             other => {
                 panic!(
-                    "set_protocol_definition called on non-protocol entry `{}` ({}): \
-                     only Protocol entries carry definitions",
+                    "set_protocol_definition called on non-protocol entry `{}` ({}). \
+                     Only Protocol entries carry definitions",
                     entry.identifier,
                     other.label(),
                 );
@@ -749,7 +827,7 @@ impl GlobalRegistry {
         definition: StructDefinition,
     ) {
         let entry = self.entries.get_mut(&id).unwrap_or_else(|| {
-            panic!("set_struct_definition on missing registry id {id}: collect invariant violation")
+            panic!("set_struct_definition on missing registry id {id}. This is a collect invariant violation")
         });
         match &entry.kind {
             GlobalKind::Struct(None) => {
@@ -757,15 +835,15 @@ impl GlobalRegistry {
             }
             GlobalKind::Struct(Some(_)) => {
                 panic!(
-                    "set_struct_definition called twice on `{}`: lift_signatures must stamp \
+                    "set_struct_definition called twice on `{}`. lift_signatures must stamp \
                      each struct exactly once",
                     entry.identifier,
                 );
             }
             other => {
                 panic!(
-                    "set_struct_definition called on non-struct entry `{}` ({}): \
-                     only Struct entries carry definitions",
+                    "set_struct_definition called on non-struct entry `{}` ({}). \
+                     Only Struct entries carry definitions",
                     entry.identifier,
                     other.label(),
                 );
@@ -781,7 +859,11 @@ impl GlobalRegistry {
         type_params: Vec<String>,
         visibility: VisibilityScope,
     ) -> InsertOutcome<'_> {
-        if let Some(&id) = self.by_identifier.get(&identifier) {
+        let names = self.by_identifier.entry(identifier.clone()).or_default();
+        if let Some(id) = names
+            .non_function
+            .or_else(|| names.functions.values().next().copied())
+        {
             let existing = self
                 .entries
                 .get(&id)
@@ -790,7 +872,7 @@ impl GlobalRegistry {
         }
         let id = GlobalRegistryId::new(self.next_id);
         self.next_id += 1;
-        self.by_identifier.insert(identifier.clone(), id);
+        names.non_function = Some(id);
         let type_param_bounds = vec![Vec::new(); type_params.len()];
         self.entries.insert(
             id,
@@ -816,7 +898,7 @@ impl GlobalRegistry {
     ) {
         let entry = self.entries.get_mut(&id).unwrap_or_else(|| {
             panic!(
-                "set_constant_definition on missing registry id {id}: collect invariant violation"
+                "set_constant_definition on missing registry id {id}. This is a collect invariant violation"
             )
         });
         match &entry.kind {
@@ -825,15 +907,15 @@ impl GlobalRegistry {
             }
             GlobalKind::Constant(Some(_)) => {
                 panic!(
-                    "set_constant_definition called twice on `{}`: lift_signatures must stamp \
+                    "set_constant_definition called twice on `{}`. lift_signatures must stamp \
                      each constant exactly once",
                     entry.identifier,
                 );
             }
             other => {
                 panic!(
-                    "set_constant_definition called on non-constant entry `{}` ({}): \
-                     only Constant entries carry definitions",
+                    "set_constant_definition called on non-constant entry `{}` ({}). \
+                     Only Constant entries carry definitions",
                     entry.identifier,
                     other.label(),
                 );
@@ -850,7 +932,7 @@ impl GlobalRegistry {
     ) {
         let entry = self.entries.get_mut(&id).unwrap_or_else(|| {
             panic!(
-                "set_type_alias_definition on missing registry id {id}: \
+                "set_type_alias_definition on missing registry id {id}. This is a \
                  collect invariant violation"
             )
         });
@@ -860,15 +942,15 @@ impl GlobalRegistry {
             }
             GlobalKind::TypeAlias(Some(_)) => {
                 panic!(
-                    "set_type_alias_definition called twice on `{}`: \
+                    "set_type_alias_definition called twice on `{}`. \
                      lift_type_aliases must stamp each alias exactly once",
                     entry.identifier,
                 );
             }
             other => {
                 panic!(
-                    "set_type_alias_definition called on non-alias entry `{}` ({}): \
-                     only TypeAlias entries carry expansions",
+                    "set_type_alias_definition called on non-alias entry `{}` ({}). \
+                     Only TypeAlias entries carry expansions",
                     entry.identifier,
                     other.label(),
                 );
@@ -901,7 +983,7 @@ impl GlobalRegistry {
     ) {
         let entry = self.entries.get_mut(&id).unwrap_or_else(|| {
             panic!(
-                "set_type_alias_definition_force on missing registry id {id}: \
+                "set_type_alias_definition_force on missing registry id {id}. This is a \
                  lift invariant violation"
             )
         });
@@ -910,35 +992,34 @@ impl GlobalRegistry {
                 entry.kind = GlobalKind::TypeAlias(Some(expansion));
             }
             other => panic!(
-                "set_type_alias_definition_force called on non-alias entry `{}` ({}): \
-                 only TypeAlias entries support force-stamp",
+                "set_type_alias_definition_force called on non-alias entry `{}` ({}). \
+                 Only TypeAlias entries support force-stamp",
                 entry.identifier,
                 other.label(),
             ),
         }
     }
 
-    /// Stamp a resolved signature onto a function entry. Panics unless
-    /// the entry's kind is exactly `Function(None)`.
+    /// Stamp a resolved signature onto a collected function entry.
     pub(crate) fn set_signature(&mut self, id: GlobalRegistryId, signature: FunctionSignature) {
         let entry = self.entries.get_mut(&id).unwrap_or_else(|| {
-            panic!("set_signature on missing registry id {id}: collect invariant violation")
+            panic!(
+                "set_signature on missing registry id {id}. This is a collect invariant violation"
+            )
         });
-        match &entry.kind {
-            GlobalKind::Function(None) => {
-                entry.kind = GlobalKind::Function(Some(signature));
+        match &mut entry.kind {
+            GlobalKind::Function(definition) if definition.signature.is_none() => {
+                definition.signature = Some(signature);
             }
-            GlobalKind::Function(Some(_)) => {
-                panic!(
-                    "set_signature called twice on `{}`: lift_signatures must stamp each \
-                     function exactly once",
-                    entry.identifier,
-                );
-            }
+            GlobalKind::Function(_) => panic!(
+                "set_signature called twice on `{}`. lift_signatures must stamp each \
+                 function exactly once",
+                entry.identifier,
+            ),
             other => {
                 panic!(
-                    "set_signature called on non-function entry `{}` ({}): \
-                     only Function entries carry signatures",
+                    "set_signature called on non-function entry `{}` ({}). \
+                     Only Function entries carry signatures",
                     entry.identifier,
                     other.label(),
                 );
@@ -959,7 +1040,7 @@ impl GlobalRegistry {
         span: Span,
         type_params: Vec<String>,
     ) -> Option<ClaimOutcome> {
-        let id = *self.by_identifier.get(identifier)?;
+        let id = self.by_identifier.get(identifier)?.non_function?;
         if !self.unclaimed_builtin_stubs.remove(&id) {
             return None;
         }
@@ -970,7 +1051,7 @@ impl GlobalRegistry {
         entry.span = span;
         let GlobalKind::Builtin(definition) = &entry.kind else {
             panic!(
-                "unclaimed stub `{}` is not a Builtin entry: seed invariant violation",
+                "unclaimed stub `{}` is not a Builtin entry. This is a seed invariant violation",
                 entry.identifier,
             );
         };
@@ -998,11 +1079,49 @@ impl GlobalRegistry {
     }
 
     /// Reverse lookup: an [`Identifier`] to its id + entry. Used by
-    /// resolve to stamp ids onto AST reference sites.
+    /// resolve to stamp ids onto AST reference sites. A name declared
+    /// only as functions returns the highest arity, so treat the
+    /// result as "some declaration with this name" and use
+    /// [`Self::lookup_function`] to select an exact function identity.
     pub fn lookup(&self, identifier: &Identifier) -> Option<(GlobalRegistryId, &RegistryEntry)> {
-        let id = *self.by_identifier.get(identifier)?;
+        let names = self.by_identifier.get(identifier)?;
+        let id = names
+            .non_function
+            .or_else(|| names.functions.values().next_back().copied())?;
         let entry = self.entries.get(&id)?;
         Some((id, entry))
+    }
+
+    /// Look up one exact function identity.
+    pub fn lookup_function(
+        &self,
+        identifier: &Identifier,
+        arity: usize,
+    ) -> Option<(GlobalRegistryId, &RegistryEntry)> {
+        let id = *self.by_identifier.get(identifier)?.functions.get(&arity)?;
+        Some((id, self.entries.get(&id)?))
+    }
+
+    /// Look up a function identity, distinguishing "no function at
+    /// this arity" from "no functions under this name at all" so
+    /// callers can build did-you-mean diagnostics.
+    pub fn function_lookup(&self, identifier: &Identifier, arity: usize) -> FunctionLookup<'_> {
+        if let Some(found) = self.lookup_function(identifier, arity) {
+            return FunctionLookup::Found(found.0, found.1);
+        }
+        let arities = self.function_arities(identifier);
+        if arities.is_empty() {
+            return FunctionLookup::NoFunctions;
+        }
+        FunctionLookup::WrongArity(arities)
+    }
+
+    /// Return the declared arities for every function with this name.
+    pub fn function_arities(&self, identifier: &Identifier) -> Vec<usize> {
+        self.by_identifier
+            .get(identifier)
+            .map(|entries| entries.functions.keys().copied().collect())
+            .unwrap_or_default()
     }
 
     /// Resolve a nominal `impl` / `extend` target `path` to its owning
@@ -1043,7 +1162,7 @@ impl GlobalRegistry {
         let ident = Identifier::new("Global", vec![name.to_string()]);
         let (id, _) = self.lookup(&ident).unwrap_or_else(|| {
             panic!(
-                "stdlib stub `Global.{name}` missing from registry: \
+                "stdlib stub `Global.{name}` missing from registry. \
                  pipeline must seed it via `GlobalRegistry::with_stdlib_stubs`",
             )
         });
@@ -1115,7 +1234,7 @@ impl GlobalRegistry {
             .unwrap_or_else(|| panic!("set_type_param_bounds on missing registry id {owner}"));
         if bounds.len() != entry.type_params.len() {
             panic!(
-                "set_type_param_bounds length mismatch on `{}`: \
+                "set_type_param_bounds length mismatch on `{}`. \
                  type_params.len() = {}, bounds.len() = {}",
                 entry.identifier,
                 entry.type_params.len(),
@@ -1199,7 +1318,7 @@ fn seed_builtin_stub(
     let id = match outcome {
         InsertOutcome::Fresh(id) => id,
         InsertOutcome::Collision { existing } => panic!(
-            "stdlib stub `Global.{name}` collided on preload with `{}`: \
+            "stdlib stub `Global.{name}` collided on preload with `{}`. \
              registry was not empty",
             existing.identifier,
         ),

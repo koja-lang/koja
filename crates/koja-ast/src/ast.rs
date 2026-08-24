@@ -427,6 +427,7 @@ pub enum EnumVariantData {
 #[derive(Debug, Clone)]
 pub struct Function {
     pub annotations: Vec<Annotation>,
+    pub origin: FunctionOrigin,
     pub visibility: Visibility,
     pub name: String,
     pub type_params: Vec<TypeParam>,
@@ -435,6 +436,13 @@ pub struct Function {
     pub error_type: Option<TypeExpr>,
     pub body: Option<Vec<Statement>>,
     pub span: Span,
+}
+
+/// Whether a function came from source or default-parameter normalization.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FunctionOrigin {
+    DefaultAdapter { canonical_arity: usize },
+    Explicit,
 }
 
 /// An `impl Protocol for Type` block. Inherent methods live in
@@ -490,6 +498,7 @@ pub struct ProtocolDecl {
 #[derive(Debug, Clone)]
 pub struct ProtocolMethod {
     pub annotations: Vec<Annotation>,
+    pub origin: FunctionOrigin,
     pub name: String,
     pub type_params: Vec<TypeParam>,
     pub params: Vec<Param>,
@@ -902,12 +911,23 @@ pub enum ExprKind {
         subject: Box<Expr>,
         arms: Vec<MatchArm>,
     },
+    /// An explicit named function reference: `&name/2` or `&Type.function/3`.
+    ///
+    /// `target` is unresolved after parse. Typecheck stamps the selected
+    /// declaration when named function reference resolution is implemented.
+    NamedFunctionReference {
+        path: Vec<String>,
+        arity: usize,
+        target: Resolution,
+    },
     /// A method or qualified call: `obj.method(args)`, `math.add(1, 2)`.
     /// `type_args` follows the same shape as [`ExprKind::Call`].
     MethodCall {
         receiver: Box<Expr>,
         method: String,
         args: Vec<Arg>,
+        /// Exact function selected by typecheck.
+        target: Resolution,
         type_args: Vec<ResolvedType>,
     },
     /// A receive block with match arms and optional timeout:

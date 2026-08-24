@@ -468,7 +468,16 @@ fn static_method_call_arity_mismatch_diagnoses() {
           Point.make(1)
         ";
 
-    assert_script_fails_with(source, &["`TestApp.Point.make`", "expects 2 arguments"]);
+    let failure = typecheck_fail(&dedent(source));
+    let diagnostic = failure
+        .diagnostics
+        .iter()
+        .find(|diagnostic| diagnostic.message.contains("has no arity 1"))
+        .expect("expected static arity diagnostic");
+    assert_eq!(
+        diagnostic.hint.as_deref(),
+        Some("did you mean `Point.make(_, _)`?")
+    );
 }
 
 #[test]
@@ -581,9 +590,13 @@ fn static_method_self_return_type_resolves_to_enclosing_struct() {
         .registry
         .lookup(&identifier)
         .expect("Point.origin registered");
-    let GlobalKind::Function(Some(sig)) = &entry.kind else {
+    let GlobalKind::Function(definition) = &entry.kind else {
         panic!("Point.origin should have a lifted signature");
     };
+    let sig = definition
+        .signature
+        .as_ref()
+        .expect("expected lifted signature");
     let ResolvedType::Named {
         resolution: Resolution::Global(point_id),
         type_args,
@@ -689,10 +702,19 @@ fn instance_method_with_args_validates_explicit_args() {
     let failure = typecheck_fail(&dedent(source));
     let messages = diagnostic_messages(&failure);
     assert!(
-        messages.iter().any(|m| m.contains("expects 1 argument")
-            || m.contains("expected 1 argument")
-            || (m.contains("`shifted`") && m.contains("argument"))),
+        messages
+            .iter()
+            .any(|m| m.contains("`TestApp.Point.shifted` has no arity 1")),
         "expected arity diagnostic for explicit args (self excluded), got {messages:?}",
+    );
+    let diagnostic = failure
+        .diagnostics
+        .iter()
+        .find(|diagnostic| diagnostic.message.contains("has no arity 1"))
+        .expect("expected instance arity diagnostic");
+    assert_eq!(
+        diagnostic.hint.as_deref(),
+        Some("did you mean `receiver.shifted(_)`?")
     );
 }
 
@@ -743,9 +765,13 @@ fn generic_protocol_impl_with_concrete_args_succeeds() {
         .registry
         .lookup(&identifier)
         .expect("User.matches registered");
-    let GlobalKind::Function(Some(sig)) = &entry.kind else {
+    let GlobalKind::Function(definition) = &entry.kind else {
         panic!("User.matches should have a lifted signature");
     };
+    let sig = definition
+        .signature
+        .as_ref()
+        .expect("expected lifted signature");
     let other_ty = &sig.params[1].ty;
     let ResolvedType::Named {
         resolution: Resolution::Global(string_id),
@@ -821,9 +847,13 @@ fn generic_target_impl_anchors_self_at_receiver_id() {
         .registry
         .lookup(&method_identifier)
         .expect("Bag.render registered");
-    let GlobalKind::Function(Some(sig)) = &entry.kind else {
+    let GlobalKind::Function(definition) = &entry.kind else {
         panic!("Bag.render should have a lifted signature");
     };
+    let sig = definition
+        .signature
+        .as_ref()
+        .expect("expected lifted signature");
     let self_ty = &sig.params[0].ty;
     let ResolvedType::Named {
         resolution: Resolution::Global(_),

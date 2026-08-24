@@ -204,7 +204,7 @@ fn check_no_duplicate(
     if let Some(prev_span) = seen.get(&alias.local_name) {
         diagnostics.push(Diagnostic::error_with_hint(
             format!(
-                "duplicate alias `{}`: a local name can refer to only one type",
+                "duplicate alias `{}` because a local name can refer to only one type",
                 alias.local_name,
             ),
             format!(

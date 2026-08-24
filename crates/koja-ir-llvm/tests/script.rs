@@ -223,10 +223,10 @@ fn call_to_helper_emits_call_in_user_main_body() {
         emit_script_llvm_ir(&script, APP_NAME).expect("emit_script_llvm_ir should succeed");
 
     assert_main_shape(&ir_text);
-    assert_contains(&ir_text, "define i64 @TestApp.answer()");
+    assert_contains(&ir_text, "define i64 @\"TestApp.answer/0\"()");
     let user_body = extract_function_body(&ir_text, "__koja_user_main");
     assert!(
-        user_body.contains("call i64 @TestApp.answer()"),
+        user_body.contains("call i64 @\"TestApp.answer/0\"()"),
         "expected `__koja_user_main` to call `TestApp.answer`:\n{user_body}",
     );
     // inkwell does not const-fold across the call boundary: the

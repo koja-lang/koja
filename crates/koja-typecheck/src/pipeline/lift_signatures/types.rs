@@ -162,7 +162,7 @@ pub(super) fn resolve_return_signature(
         .unwrap_or_else(|| {
             panic!(
                 "`Global.Result` missing from registry while lifting a `! E` \
-                 signature: stdlib must be lifted first",
+                 signature. stdlib must be lifted first",
             )
         });
     ResolvedType::Named {
@@ -261,10 +261,7 @@ fn resolve_generic(
 ) -> ResolvedType {
     if path.len() == 1 && type_params.lookup(&path[0], scope.registry).is_some() {
         diagnostics.push(Diagnostic::error(
-            format!(
-                "typecheck: type parameter `{}` cannot take type arguments",
-                path[0],
-            ),
+            format!("type parameter `{}` cannot take type arguments", path[0],),
             span,
         ));
         return ResolvedType::unresolved();

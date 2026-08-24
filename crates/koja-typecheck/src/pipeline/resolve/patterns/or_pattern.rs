@@ -68,7 +68,7 @@ pub(super) fn resolve_or_pattern(
                 }
                 if all_dup {
                     diagnostics.push(Diagnostic::warning(
-                        "or-pattern alternative is unreachable: already listed earlier in \
+                        "or-pattern alternative is unreachable because it is already listed earlier in \
                          this or-pattern",
                         alt_span,
                     ));
@@ -88,7 +88,7 @@ pub(super) fn resolve_or_pattern(
                     && !seen_alt_literals.insert(repr)
                 {
                     diagnostics.push(Diagnostic::warning(
-                        "or-pattern alternative is unreachable: already listed earlier in \
+                        "or-pattern alternative is unreachable because it is already listed earlier in \
                          this or-pattern",
                         alt_span,
                     ));

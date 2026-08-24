@@ -18,6 +18,7 @@ use crate::constant::IRConstantValue;
 use crate::function::{IRBlockId, IRInstruction, IRSymbol};
 use crate::generics::Instantiation;
 use crate::local::IRLocalId;
+use crate::mangling::source_function_symbol;
 use crate::types::{ConcatKind, ConstValue, IRType, ValueId};
 
 use super::arms::lower_result_ty;
@@ -334,10 +335,32 @@ fn lower_expr_inner(
                 output,
             )
         }
+        ExprKind::NamedFunctionReference {
+            path,
+            arity,
+            target,
+        } => {
+            let Resolution::Global(function_id) = target else {
+                panic!(
+                    "IR lower: named function reference `&{}/{arity}` has no exact target",
+                    path.join(".")
+                )
+            };
+            Ok(lower_fn_as_value(
+                *function_id,
+                &path.join("."),
+                &expr.resolution,
+                ctx,
+                block,
+                registry,
+                output,
+            ))
+        }
         ExprKind::MethodCall {
             receiver,
             method,
             args,
+            target,
             type_args,
         } => lower_method_call(
             receiver,
@@ -345,6 +368,7 @@ fn lower_expr_inner(
                 method,
                 args,
                 method_type_args: type_args,
+                target: *target,
             },
             ctx,
             block,
@@ -620,20 +644,15 @@ fn lower_fn_as_value(
     let entry = registry.get(function_id).unwrap_or_else(|| {
         panic!("IR lower: fn-as-value id {function_id} missing from registry (seal violation)",)
     });
-    let GlobalKind::Function(Some(sig)) = &entry.kind else {
-        panic!(
-            "IR lower: fn-as-value `{name}` (id {function_id}) registers as {}, \
-             typecheck seal violation",
-            entry.kind.label(),
-        );
-    };
+    let definition = entry.expect_function_definition();
+    let sig = entry.expect_function_signature();
     if !entry.type_params.is_empty() {
         panic!(
             "IR lower: fn-as-value `{name}` (id {function_id}) is generic, typecheck \
              must have diagnosed this before lowering",
         );
     }
-    let target_symbol = IRSymbol::from_identifier(&entry.identifier);
+    let target_symbol = source_function_symbol(&entry.identifier, definition.arity);
     let wrapper_symbol = synthesize_fn_as_closure_wrapper(&target_symbol, sig, registry, output);
     let ty = resolved_type_to_ir_type(expr_resolution, registry, &mut output.instantiations);
     let dest = ctx.fresh_value(ty.clone());

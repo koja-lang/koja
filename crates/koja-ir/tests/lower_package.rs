@@ -136,7 +136,7 @@ fn bare_two_plus_two_lowers_to_script_with_const_const_add_return() {
 fn script_with_helper_fn_lowers_call_through_packages() {
     let script = lower_as_script("fn helper -> Int\n  1\nend\n\nhelper() + 1\n");
 
-    let helper_mangled = format!("{PACKAGE}.helper");
+    let helper_mangled = format!("{PACKAGE}.helper/0");
     let helper = script_function(&script, "helper");
     assert_eq!(helper.symbol.mangled(), helper_mangled);
     assert_eq!(helper.return_type, IRType::Int64);

@@ -50,8 +50,10 @@ fn format_kind(kind: &GlobalKind, type_params: &[String], registry: &GlobalRegis
         GlobalKind::Constant(Some(def)) => format_constant(def, registry),
         GlobalKind::Enum(None) => "enum".to_string(),
         GlobalKind::Enum(Some(def)) => format_enum(def, type_params, registry),
-        GlobalKind::Function(None) => "fn <unlifted>".to_string(),
-        GlobalKind::Function(Some(sig)) => format_signature(sig, registry),
+        GlobalKind::Function(definition) => definition.signature.as_ref().map_or_else(
+            || "fn <unlifted>".to_string(),
+            |sig| format_signature(sig, registry),
+        ),
         GlobalKind::Protocol(None) => "protocol".to_string(),
         GlobalKind::Protocol(Some(def)) => format_protocol(def, registry),
         GlobalKind::Struct(None) => "struct".to_string(),

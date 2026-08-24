@@ -52,13 +52,26 @@ impl Backend {
         let stdlib_files = collect_stdlib_files(state);
 
         let hover_text = match &symbol {
-            SymbolInfo::Function { name } => {
-                build_function_hover(name, &state.active_package, state, registry, &stdlib_files)
-            }
+            SymbolInfo::Function { arity, name } => build_function_hover(
+                name,
+                *arity,
+                &state.active_package,
+                state,
+                registry,
+                &stdlib_files,
+            ),
             SymbolInfo::Method {
+                arity,
                 type_name,
                 method_name,
-            } => build_method_hover(type_name, method_name, state, registry, &stdlib_files),
+            } => build_method_hover(
+                type_name,
+                method_name,
+                *arity,
+                state,
+                registry,
+                &stdlib_files,
+            ),
             SymbolInfo::Builtin { name } => {
                 build_builtin_hover(name, &state.active_package, state, registry, &stdlib_files)
             }
@@ -144,56 +157,93 @@ fn lookup_global<'a>(
 
 fn build_function_hover(
     name: &str,
+    arity: Option<usize>,
     package: &str,
     state: &DocumentState,
     registry: &GlobalRegistry,
     stdlib_files: &[&File],
 ) -> Option<String> {
-    let (_, kind, type_params) = lookup_global(name, package, registry)?;
-    let GlobalKind::Function(Some(sig)) = kind else {
+    let mut signatures = Vec::new();
+    for pkg in [package, "Global"] {
+        let identifier = Identifier::new(pkg, vec![name.to_string()]);
+        let arities = arity
+            .map(|arity| vec![arity])
+            .unwrap_or_else(|| registry.function_arities(&identifier));
+        for arity in arities {
+            let Some((_, entry)) = registry.lookup_function(&identifier, arity) else {
+                continue;
+            };
+            let GlobalKind::Function(definition) = &entry.kind else {
+                continue;
+            };
+            let Some(signature) = &definition.signature else {
+                continue;
+            };
+            signatures.push(format_function_signature(
+                name,
+                signature,
+                &entry.type_params,
+                registry,
+            ));
+        }
+        if !signatures.is_empty() {
+            break;
+        }
+    }
+    if signatures.is_empty() {
         return None;
-    };
-    let signature = format_function_signature(name, sig, type_params, registry);
+    }
     let doc = resolve_doc(name, state, stdlib_files);
-    Some(format_hover(&signature, doc.as_deref()))
+    Some(format_hover(&signatures.join("\n"), doc.as_deref()))
 }
 
 fn build_method_hover(
     type_name: &str,
     method_name: &str,
+    arity: Option<usize>,
     state: &DocumentState,
     registry: &GlobalRegistry,
     stdlib_files: &[&File],
 ) -> Option<String> {
-    let (sig, _owner_pkg, type_params) = find_method_signature(type_name, method_name, registry)?;
     let display_name = format!("{type_name}.{method_name}");
-    let signature = format_function_signature(&display_name, sig, type_params, registry);
+    let signatures = find_method_signatures(type_name, method_name, arity, registry);
+    if signatures.is_empty() {
+        return None;
+    }
+    let signature = signatures
+        .into_iter()
+        .map(|(signature, type_params)| {
+            format_function_signature(&display_name, signature, type_params, registry)
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
     let mangled = format!("{type_name}_{method_name}");
     let doc = resolve_doc(&mangled, state, stdlib_files)
         .or_else(|| resolve_doc(method_name, state, stdlib_files));
     Some(format_hover(&signature, doc.as_deref()))
 }
 
-fn find_method_signature<'a>(
+fn find_method_signatures<'a>(
     type_name: &str,
     method_name: &str,
+    arity: Option<usize>,
     registry: &'a GlobalRegistry,
-) -> Option<(&'a FunctionSignature, String, &'a [String])> {
+) -> Vec<(&'a FunctionSignature, &'a [String])> {
+    let mut signatures = Vec::new();
     for (_, entry) in registry.iter() {
         let path = entry.identifier.path();
         if path.len() == 2
             && path[0] == type_name
             && path[1] == method_name
-            && let GlobalKind::Function(Some(sig)) = &entry.kind
+            && let GlobalKind::Function(definition) = &entry.kind
+            && let Some(sig) = &definition.signature
+            && arity.is_none_or(|arity| definition.arity == arity)
         {
-            return Some((
-                sig,
-                entry.identifier.package().to_string(),
-                &entry.type_params,
-            ));
+            signatures.push((sig, entry.type_params.as_slice()));
         }
     }
-    None
+    signatures.sort_by_key(|(signature, _)| signature.params.len());
+    signatures
 }
 
 fn build_builtin_hover(

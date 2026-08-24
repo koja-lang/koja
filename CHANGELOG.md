@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Two functions may share a name when their arities differ, and generated docs give each arity its own entry.
+- Function parameters can declare trailing default values, so a function is callable at every arity its defaults allow.
+- Named function values use mandatory `&name/arity` references, including for single-arity functions.
+- `JSON.EncodeOptions` adds a `pretty?: Bool = false` field to `JSON.encode`.
 - `impl P for T` now accepts protocols and types from other packages, so a package can implement its own protocol for stdlib types like `String`, and adapter packages can conform one dependency's type to another dependency's protocol.
 - `impl P for T` now accepts a concrete instantiation of a generic type as the target, so a package can implement its protocol for `List<Int>` specifically.
 - Protocol impls on generic targets can require bounds on the type parameters, as in `impl Encodable for List<T: Encodable>`, and the conformance holds only for instantiations that satisfy them.
@@ -22,10 +26,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Breaking change** Named function values require `&name/arity` syntax instead of a bare function name.
 - **Breaking change** The `Equality` protocol function is now `equals?` instead of `eq`, following the `?` suffix convention for boolean functions.
 - **Breaking change** `Enumeration<T, Cursor>` uses `cursor` and `next`, and `for` requires declared conformance instead of `length` and `get` methods.
 - **Breaking change** `MapLiteral.from_entries` receives ordered source entries instead of a constructed map.
-- **Breaking change** Use `JSON.encode`, `JSON.encode_pretty`, and `JSON.decode` because the `JSON.Encoder` and `JSON.Decoder` types are now private.
+- **Breaking change** Use `JSON.encode` and `JSON.decode` because the `JSON.Encoder` and `JSON.Decoder` types are now private.
 - `IPAddress.v4` accepts `UInt8` octets so out-of-range values cannot construct an address.
 - `IPAddress` exposes its `Version` through the `version` field.
 - `koja format` expands all `match`, `cond`, and `receive` arms when one arm requires block layout.
@@ -38,6 +43,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `koja doc serve` no longer stalls page loads for seconds when a browser holds idle connections open.
+- `koja doc` sidebars truncate long names with a hover tooltip instead of wrapping them mid-identifier.
+- `koja doc` links to predicate function pages like `empty?` no longer break at the `?` in the URL.
 - `koja doc` shows deprecation notices and migration guidance in generated pages, listings, terminal search, and the search index.
 - `koja doc` generates pages for nested types and preserves full qualified type names in listings, search results, and links.
 - `koja format` preserves separate comments in wrapped `match`, `cond`, and `receive` arm heads instead of merging their text.

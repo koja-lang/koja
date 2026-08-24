@@ -10,7 +10,7 @@ use koja_ast::identifier::{Identifier, Resolution, ResolvedType};
 use koja_ast::span::Span;
 use koja_typecheck::GlobalRegistry;
 
-use super::calls::{MethodCallShape, lower_method_call};
+use super::calls::{MethodCallShape, lower_method_call, synthesized_method_target};
 use super::ctx::{FnLowerCtx, LowerOutput};
 use crate::function::IRBlockId;
 use crate::types::ValueId;
@@ -46,6 +46,7 @@ pub(super) fn lower_list_literal(
             receiver: Box::new(new_receiver),
             method: "new".to_string(),
             args: Vec::new(),
+            target: synthesized_method_target(registry, list_id, "new", 0),
             type_args: Vec::new(),
         },
         expr_resolution.clone(),
@@ -62,6 +63,7 @@ pub(super) fn lower_list_literal(
                 receiver: Box::new(receiver),
                 method: "append".to_string(),
                 args: vec![arg],
+                target: synthesized_method_target(registry, list_id, "append", 2),
                 type_args: Vec::new(),
             },
             expr_resolution.clone(),
@@ -72,6 +74,7 @@ pub(super) fn lower_list_literal(
         receiver,
         method,
         args,
+        target,
         type_args,
     } = &chain.kind
     else {
@@ -83,6 +86,7 @@ pub(super) fn lower_list_literal(
             method,
             args,
             method_type_args: type_args,
+            target: *target,
         },
         ctx,
         block,

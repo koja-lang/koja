@@ -31,7 +31,10 @@ pub(super) fn lift_function_with_identifier(
     scope: &mut LiftScope<'_>,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
-    let Some((id, entry)) = scope.registry.lookup(&identifier) else {
+    let Some((id, entry)) = scope
+        .registry
+        .lookup_function(&identifier, function.params.len())
+    else {
         // Collect rejected this function (e.g. `self` receiver on a
         // top-level fn, collision). Nothing to stamp a signature on.
         return;
@@ -42,7 +45,10 @@ pub(super) fn lift_function_with_identifier(
     // its signature has already been stamped by the first walk.
     // Skip to avoid tripping `set_signature`'s panic-on-double-set
     // invariant.
-    if matches!(entry.kind, GlobalKind::Function(Some(_))) {
+    if matches!(
+        &entry.kind,
+        GlobalKind::Function(definition) if definition.signature.is_some()
+    ) {
         return;
     }
 
@@ -208,7 +214,7 @@ fn validate_extern_c_signature(
     if function.body.is_some() {
         diagnostics.push(Diagnostic::error(
             format!(
-                "`@extern \"C\"` functions cannot have a body: the C symbol is the \
+                "`@extern \"C\"` functions cannot have a body because the C symbol is the \
                  implementation (on `{identifier}`)"
             ),
             function.span,
@@ -339,8 +345,8 @@ fn type_param_owners(
     {
         let Some((receiver_id, _)) = registry.lookup(receiver_identifier) else {
             panic!(
-                "lift_signatures: enclosing receiver `{receiver_identifier}` missing from \
-                 registry while building type-param scope on `{identifier}`: collect \
+                "lift_signatures found enclosing receiver `{receiver_identifier}` missing from \
+                 registry while building type-param scope on `{identifier}`. This is a collect \
                  invariant violation",
             );
         };
@@ -381,9 +387,9 @@ fn lift_param(
                 None => {
                     let Some((receiver_id, _)) = scope.registry.lookup(receiver_identifier) else {
                         panic!(
-                            "lift_signatures: enclosing receiver `{receiver_identifier}` \
-                             missing from registry while lifting `self` on `{identifier}`: \
-                             collect invariant violation",
+                            "lift_signatures found enclosing receiver `{receiver_identifier}` \
+                             missing from registry while lifting `self` on `{identifier}`. \
+                             This is a collect invariant violation",
                         );
                     };
                     concrete_self_type(receiver_id, scope.registry)
@@ -395,21 +401,8 @@ fn lift_param(
             }
         }
         Param::Regular {
-            name,
-            type_expr,
-            default,
-            span,
-            ..
+            name, type_expr, ..
         } => {
-            if default.is_some() {
-                diagnostics.push(Diagnostic::error(
-                    format!(
-                        "typecheck does not yet support default parameter values \
-                         (`{identifier}.{name}`)",
-                    ),
-                    *span,
-                ));
-            }
             let ty = resolve_type_expr(
                 type_expr,
                 type_params,

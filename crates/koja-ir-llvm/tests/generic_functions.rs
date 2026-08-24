@@ -41,8 +41,8 @@ fn identity_function_distinct_args_emit_distinct_defines() {
         emit_script_llvm_ir(&script, APP_NAME).expect("emit_script_llvm_ir should succeed");
 
     assert_main_shape(&ir_text);
-    assert_contains(&ir_text, "define i64 @\"TestApp.id_$Int64$\"(i64");
-    assert_contains(&ir_text, "define ptr @\"TestApp.id_$String$\"(ptr");
+    assert_contains(&ir_text, "define i64 @\"TestApp.id/1_$Int64$\"(i64");
+    assert_contains(&ir_text, "define ptr @\"TestApp.id/1_$String$\"(ptr");
     assert!(
         !ir_text.contains("@TestApp.id("),
         "generic template `@TestApp.id` must not appear as a defined LLVM function:\n{ir_text}",
@@ -64,7 +64,7 @@ fn generic_function_call_site_targets_mangled_symbol() {
         emit_script_llvm_ir(&script, APP_NAME).expect("emit_script_llvm_ir should succeed");
 
     assert_main_shape(&ir_text);
-    assert_contains(&ir_text, "call i64 @\"TestApp.id_$Int64$\"(i64 42)");
+    assert_contains(&ir_text, "call i64 @\"TestApp.id/1_$Int64$\"(i64 42)");
 }
 
 #[test]
@@ -90,9 +90,12 @@ fn method_on_generic_struct_emits_define_with_struct_mangled_prefix() {
     assert_main_shape(&ir_text);
     assert_contains(
         &ir_text,
-        "define i64 @\"TestApp.Pair_$Int64.String$.first\"",
+        "define i64 @\"TestApp.Pair_$Int64.String$.first/1\"",
     );
-    assert_contains(&ir_text, "call i64 @\"TestApp.Pair_$Int64.String$.first\"");
+    assert_contains(
+        &ir_text,
+        "call i64 @\"TestApp.Pair_$Int64.String$.first/1\"",
+    );
     assert!(
         !ir_text.contains("@TestApp.Pair.first("),
         "generic template `@TestApp.Pair.first` must not appear as a defined LLVM function:\n{ir_text}",

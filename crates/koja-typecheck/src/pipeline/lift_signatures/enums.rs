@@ -55,7 +55,7 @@ fn lift_enum_definition(
     let identifier = Identifier::new(scope.package, decl.path.clone());
     let Some((id, entry)) = scope.registry.lookup(&identifier) else {
         panic!(
-            "lift_signatures: enum `{identifier}` missing from registry: \
+            "lift_signatures found enum `{identifier}` missing from registry. This is a \
              collect invariant violation",
         );
     };

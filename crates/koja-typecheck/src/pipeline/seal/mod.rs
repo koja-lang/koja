@@ -153,13 +153,12 @@ fn seal_registry(registry: &GlobalRegistry) {
             GlobalKind::Builtin(_)
             | GlobalKind::Constant(Some(_))
             | GlobalKind::Enum(Some(_))
-            | GlobalKind::Function(Some(_))
             | GlobalKind::Protocol(Some(_))
             | GlobalKind::Struct(Some(_))
             | GlobalKind::TypeAlias(Some(_)) => {}
+            GlobalKind::Function(definition) if definition.signature.is_some() => {}
             GlobalKind::Constant(None)
             | GlobalKind::Enum(None)
-            | GlobalKind::Function(None)
             | GlobalKind::Protocol(None)
             | GlobalKind::Struct(None)
             | GlobalKind::TypeAlias(None) => seal_panic(
@@ -167,6 +166,13 @@ fn seal_registry(registry: &GlobalRegistry) {
                     "registry entry `{}` reached seal as an unstamped {}",
                     entry.identifier,
                     entry.kind.label(),
+                ),
+                entry.span,
+            ),
+            GlobalKind::Function(_) => seal_panic(
+                &format!(
+                    "registry entry `{}` reached seal as an unstamped function",
+                    entry.identifier,
                 ),
                 entry.span,
             ),
@@ -203,7 +209,7 @@ fn seal_constant(constant: &Constant, package: &str, registry: &GlobalRegistry) 
     let Some((_, entry)) = registry.lookup(&identifier) else {
         seal_panic(
             &format!(
-                "constant `{identifier}` missing from registry: collect/lift invariant violation",
+                "constant `{identifier}` missing from registry. This is a collect/lift invariant violation",
             ),
             constant.span,
         );
@@ -212,15 +218,15 @@ fn seal_constant(constant: &Constant, package: &str, registry: &GlobalRegistry) 
         GlobalKind::Constant(Some(_)) => {}
         GlobalKind::Constant(None) => seal_panic(
             &format!(
-                "constant `{identifier}` reached seal without a stamped definition: \
-                 lift_signatures::constants invariant violation",
+                "constant `{identifier}` reached seal without a stamped definition. \
+                 This is a lift_signatures::constants invariant violation",
             ),
             constant.span,
         ),
         other => seal_panic(
             &format!(
-                "registry entry for `{identifier}` is `{}`, expected `constant`: \
-                 collect/lift invariant violation",
+                "registry entry for `{identifier}` is `{}`, expected `constant`. \
+                 This is a collect/lift invariant violation",
                 other.label(),
             ),
             constant.span,
@@ -290,7 +296,7 @@ pub(super) fn seal_resolved_type(ty: &ResolvedType, mode: SealMode, span: Span) 
 
 pub(super) fn seal_panic(message: &str, span: Span) -> ! {
     panic!(
-        "typecheck seal violation: {message} at line {}, column {}",
+        "typecheck seal violation. {message} at line {}, column {}",
         span.start.line, span.start.column
     );
 }
@@ -301,7 +307,7 @@ mod tests {
     use koja_ast::identifier::Identifier;
     use koja_ast::span::Span;
 
-    use crate::registry::{GlobalRegistry, VisibilityScope};
+    use crate::registry::{FunctionOrigin, GlobalRegistry, VisibilityScope};
 
     use super::expressions::seal_expr;
     use super::{SealMode, seal_registry};
@@ -312,6 +318,8 @@ mod tests {
         let mut registry = GlobalRegistry::new();
         registry.insert_function(
             Identifier::new("Test", vec!["pending".to_string()]),
+            0,
+            FunctionOrigin::Explicit,
             Span::default(),
             Vec::new(),
             VisibilityScope::Public,

@@ -13,8 +13,8 @@ use koja_parser::{ParsedFile, ParsedProgram};
 
 use crate::error::CheckFailure;
 use crate::pipeline::{
-    aliases, borrows, collect, definite_assignment, deprecation, desugar, lift_signatures, resolve,
-    seal, synthesize, visibility,
+    aliases, borrows, collect, defaults, definite_assignment, deprecation, desugar,
+    lift_signatures, resolve, seal, synthesize, visibility,
 };
 use crate::registry::GlobalRegistry;
 
@@ -110,6 +110,7 @@ pub fn check_program(parsed: ParsedProgram) -> Result<CheckedProgram, CheckFailu
         synthesize::derive_debug::derive_debug_package(pkg);
         synthesize::derive_equality::derive_equality_package(pkg);
     }
+    defaults::normalize_packages(&mut packages, &mut diagnostics);
 
     // Collect is a cross-file two-pass: register every declared
     // type first across every file in every package, then register

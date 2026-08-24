@@ -68,8 +68,21 @@ impl IRSymbol {
     /// human-readable C-symbol-style name for an `@extern "C"`
     /// declaration whose `@link "lib"` payload didn't supply one.
     pub fn last_segment(&self) -> &str {
-        self.0.rsplit('.').next().unwrap_or(self.0.as_str())
+        let segment = self.0.rsplit('.').next().unwrap_or(self.0.as_str());
+        strip_arity_suffix(segment)
     }
+}
+
+fn strip_arity_suffix(segment: &str) -> &str {
+    let Some(slash) = segment.rfind('/') else {
+        return segment;
+    };
+    let after = &segment[slash + 1..];
+    let arity_len = after.chars().take_while(|ch| ch.is_ascii_digit()).count();
+    if arity_len == 0 {
+        return segment;
+    }
+    &segment[..slash]
 }
 
 impl AsRef<str> for IRSymbol {

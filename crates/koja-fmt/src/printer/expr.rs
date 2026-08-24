@@ -29,6 +29,9 @@ impl Printer {
         match &expr.kind {
             ExprKind::Literal { value } => literal_to_doc(value),
             ExprKind::Ident { name, .. } => text(name.clone()),
+            ExprKind::NamedFunctionReference { path, arity, .. } => {
+                text(format!("&{}/{}", path.join("."), arity))
+            }
             ExprKind::Self_ { .. } => text("self"),
 
             // `and` / `or` chains pack densely with the operator leading

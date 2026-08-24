@@ -63,9 +63,9 @@ fn duration_from_millis_pure_koja_body_lowers_with_i64() {
     let ir_text = emit("Duration.from_millis(1500).millis()");
 
     assert_contains(&ir_text, "define ");
-    assert_contains(&ir_text, "@Global.Duration.from_millis");
+    assert_contains(&ir_text, "@\"Global.Duration.from_millis/1\"");
     assert!(
-        !ir_text.contains("declare i64 @Global.Duration.from_millis"),
+        !ir_text.contains("declare i64 @\"Global.Duration.from_millis/1\""),
         "pure-Koja function must emit a body, not just a declare; got:\n{ir_text}",
     );
 }
@@ -76,12 +76,15 @@ fn duration_millis_getter_lowers_to_field_load() {
     // function exists and returns `i64` (Koja `Int = i64`).
     let ir_text = emit("Duration.from_millis(42).millis()");
 
-    assert_contains(&ir_text, "define i64 @Global.Duration.millis");
+    assert_contains(&ir_text, "define i64 @\"Global.Duration.millis/1\"");
 }
 
 #[test]
 fn datetime_timestamp_millis_lowers_to_field_load() {
     let ir_text = emit("DateTime.now().timestamp_millis()");
 
-    assert_contains(&ir_text, "define i64 @Global.DateTime.timestamp_millis");
+    assert_contains(
+        &ir_text,
+        "define i64 @\"Global.DateTime.timestamp_millis/1\"",
+    );
 }

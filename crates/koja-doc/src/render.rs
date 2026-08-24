@@ -191,17 +191,17 @@ impl TocEntry {
         }
     }
 
-    fn function(name: &str) -> Self {
+    fn function(function: &DocFunction) -> Self {
         Self {
-            href: format!("fn-{name}"),
-            label: name.to_string(),
+            href: function.anchor(),
+            label: format!("{}/{}", function.name, function.arity),
             mono: true,
         }
     }
 }
 
 fn function_entries(functions: &[DocFunction]) -> impl Iterator<Item = TocEntry> + '_ {
-    functions.iter().map(|f| TocEntry::function(&f.name))
+    functions.iter().map(TocEntry::function)
 }
 
 fn builtin_toc(b: &DocBuiltin) -> Vec<TocEntry> {
@@ -426,8 +426,9 @@ pub fn render_enum(e: &DocEnum, pkg: &DocPackage, project: &DocProject) -> Strin
 }
 
 pub fn render_function(f: &DocFunction, pkg: &DocPackage, project: &DocProject) -> String {
+    let display_name = f.display_name();
     let tmpl = FunctionTemplate {
-        ctx: PageContext::item(&f.name, Vec::new(), pkg, project),
+        ctx: PageContext::item(&display_name, Vec::new(), pkg, project),
         f,
     };
     tmpl.render().expect("failed to render function template")

@@ -24,7 +24,7 @@ pub(super) fn lift_builtin(
     let identifier = Identifier::new(scope.package, decl.path.clone());
     let Some((id, entry)) = scope.registry.lookup(&identifier) else {
         panic!(
-            "lift_signatures: builtin `{identifier}` missing from registry: \
+            "lift_signatures found builtin `{identifier}` missing from registry. This is a \
              collect invariant violation",
         );
     };

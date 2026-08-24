@@ -19,7 +19,9 @@ use super::control_flow::{
 use super::ctx::Resolver;
 use super::enums::resolve_enum_construction;
 use super::error_channel::{resolve_rescue, resolve_try};
-use super::idents::{resolve_ident, resolve_qualified_member, resolve_self};
+use super::idents::{
+    resolve_ident, resolve_named_function_reference, resolve_qualified_member, resolve_self,
+};
 use super::literals::{
     is_scalar_literal, resolve_binary_literal, resolve_list_literal, resolve_map_literal,
     resolve_scalar_literal, resolve_tuple_literal,
@@ -176,7 +178,7 @@ pub(super) fn resolve_expr_with_expected(
             resolve_expr(value, resolver, diagnostics);
             diagnostics.push(Diagnostic::error_with_hint(
                 "`fail` exits the function and cannot be embedded in a larger expression",
-                "`fail` goes anywhere `return` does: a statement of its own or a \
+                "`fail` goes anywhere `return` does, as a statement of its own or a \
                  match arm tail",
                 expr.span,
             ));
@@ -220,6 +222,13 @@ pub(super) fn resolve_expr_with_expected(
         ExprKind::Loop { body } => resolve_loop(body, resolver, diagnostics),
         ExprKind::Match { subject, arms } => {
             resolve_match(subject, arms, expected, expr.span, resolver, diagnostics)
+        }
+        ExprKind::NamedFunctionReference {
+            path,
+            arity,
+            target,
+        } => {
+            resolve_named_function_reference(path, *arity, target, expr.span, resolver, diagnostics)
         }
         ExprKind::Receive {
             arms,

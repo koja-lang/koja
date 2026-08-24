@@ -30,7 +30,7 @@ use crate::pipeline::aliases::collect_file_aliases;
 use crate::pipeline::collect::nominal_target_path;
 use crate::pipeline::lift_signatures::{ResolutionScope, resolve_target_bounds};
 use crate::pipeline::local_scope::LocalScope;
-use crate::registry::{BoundOverlay, FunctionSignature, GlobalKind, GlobalRegistry};
+use crate::registry::{BoundOverlay, FunctionSignature, GlobalRegistry};
 
 use super::ctx::{Resolver, ResolverEnv};
 use super::error_channel::{
@@ -249,7 +249,7 @@ fn resolve_function(
     env: &mut ResolverEnv<'_>,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
-    let signature = lifted_signature(identifier, env.registry).cloned();
+    let signature = lifted_signature(identifier, function.params.len(), env.registry).cloned();
     let mut scope = LocalScope::new();
     if let Some(signature) = &signature {
         seed_scope_with_params(function, signature, &mut scope);
@@ -313,7 +313,7 @@ fn type_param_owners(
 ) -> Vec<GlobalRegistryId> {
     let mut owners = Vec::new();
     if !function.type_params.is_empty()
-        && let Some((fn_id, _)) = registry.lookup(identifier)
+        && let Some((fn_id, _)) = registry.lookup_function(identifier, function.params.len())
     {
         owners.push(fn_id);
     }
@@ -332,13 +332,13 @@ fn type_param_owners(
 /// is best-effort but quiet here).
 fn lifted_signature<'a>(
     identifier: &Identifier,
+    arity: usize,
     registry: &'a GlobalRegistry,
 ) -> Option<&'a FunctionSignature> {
-    let (_, entry) = registry.lookup(identifier)?;
-    match &entry.kind {
-        GlobalKind::Function(Some(signature)) => Some(signature),
-        _ => None,
-    }
+    let (_, entry) = registry.lookup_function(identifier, arity)?;
+    entry
+        .function_definition()
+        .and_then(|definition| definition.signature.as_ref())
 }
 
 /// Pre-populate `scope` with the function's params (each a fresh

@@ -174,7 +174,7 @@ impl<'a> Resolver<'a> {
         self.synthetic_for_slots = self
             .synthetic_for_slots
             .checked_add(1)
-            .expect("resolve: more than 2^32 `for` loops in one function");
+            .expect("resolve found more than 2^32 `for` loops in one function");
         slot
     }
 

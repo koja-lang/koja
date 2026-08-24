@@ -37,8 +37,8 @@ fn calling_extern_c_fn_surfaces_extern_not_supported() {
         "calling an extern fn from a regular fn should error at runtime, not return a value",
     );
     assert!(
-        matches!(&err, RuntimeError::ExternNotSupported { symbol } if symbol == &format!("{PACKAGE}.rand32")),
-        "expected ExternNotSupported(`{PACKAGE}.rand32`), got: {err:?}",
+        matches!(&err, RuntimeError::ExternNotSupported { symbol } if symbol == &format!("{PACKAGE}.rand32/0")),
+        "expected arity-qualified ExternNotSupported symbol, got: {err:?}",
     );
 }
 

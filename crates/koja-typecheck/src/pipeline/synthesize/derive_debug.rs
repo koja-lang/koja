@@ -40,8 +40,8 @@
 
 use koja_ast::ast::{
     Annotation, Arg, BuiltinDecl, EnumDecl, EnumVariant, EnumVariantData, Expr, ExprKind,
-    FieldPattern, File, Function, ImplBlock, ImplMember, Item, MatchArm, Param, Pattern, Statement,
-    StringPart, StructDecl, StructField, TypeExpr, TypeParam, Visibility,
+    FieldPattern, File, Function, FunctionOrigin, ImplBlock, ImplMember, Item, MatchArm, Param,
+    Pattern, Statement, StringPart, StructDecl, StructField, TypeExpr, TypeParam, Visibility,
 };
 use koja_ast::identifier::Resolution;
 use koja_ast::span::Span;
@@ -246,6 +246,7 @@ fn named_type(name: &str, span: Span) -> TypeExpr {
 fn format_function(body_expr: Expr, span: Span) -> Function {
     Function {
         annotations: Vec::<Annotation>::new(),
+        origin: FunctionOrigin::Explicit,
         visibility: Visibility::Public,
         name: FORMAT_METHOD.to_string(),
         type_params: Vec::new(),
@@ -274,12 +275,14 @@ fn print_function(span: Span) -> Function {
                 value: format_call,
                 span,
             }],
+            target: Resolution::Unresolved,
             type_args: Vec::new(),
         },
         span,
     );
     Function {
         annotations: Vec::<Annotation>::new(),
+        origin: FunctionOrigin::Explicit,
         visibility: Visibility::Public,
         name: PRINT_METHOD.to_string(),
         type_params: Vec::new(),
@@ -301,6 +304,7 @@ fn inspect_function(span: Span) -> Function {
     let print_call = method_call_no_args(self_expr(span), PRINT_METHOD, span);
     Function {
         annotations: Vec::<Annotation>::new(),
+        origin: FunctionOrigin::Explicit,
         visibility: Visibility::Public,
         name: INSPECT_METHOD.to_string(),
         type_params: Vec::new(),
@@ -334,6 +338,7 @@ fn method_call_no_args(receiver: Expr, method: &str, span: Span) -> Expr {
             receiver: Box::new(receiver),
             method: method.to_string(),
             args: Vec::<Arg>::new(),
+            target: Resolution::Unresolved,
             type_args: Vec::new(),
         },
         span,
@@ -561,6 +566,7 @@ fn interpolation_part(expr: Expr, span: Span) -> StringPart {
             receiver: Box::new(expr),
             method: FORMAT_METHOD.to_string(),
             args: Vec::<Arg>::new(),
+            target: Resolution::Unresolved,
             type_args: Vec::new(),
         },
         span,

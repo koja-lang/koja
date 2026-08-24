@@ -155,7 +155,10 @@ fn collect_assigned_in_expr(expr: &Expr, assigned: &mut BTreeSet<IRLocalId>) {
         ExprKind::Group { expr } | ExprKind::Spawn { expr } | ExprKind::Try { expr } => {
             collect_assigned_in_expr(expr, assigned);
         }
-        ExprKind::Ident { .. } | ExprKind::Literal { .. } | ExprKind::Self_ { .. } => {}
+        ExprKind::Ident { .. }
+        | ExprKind::Literal { .. }
+        | ExprKind::NamedFunctionReference { .. }
+        | ExprKind::Self_ { .. } => {}
         ExprKind::If {
             condition,
             then_body,

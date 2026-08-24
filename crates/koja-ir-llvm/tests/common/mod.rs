@@ -160,6 +160,9 @@ pub fn assert_program_shape(ir_text: &str) {
 pub fn extract_function_body<'a>(ir_text: &'a str, name: &str) -> &'a str {
     let header = "define ";
     let needle = format!("@{name}(");
+    let quoted_needle = format!("@\"{name}\"(");
+    let quoted_arity_prefix = format!("@\"{name}/");
+    let unquoted_arity_prefix = format!("@{name}/");
     let mut search_from = 0;
     let header_idx = loop {
         let Some(rel) = ir_text[search_from..].find(header) else {
@@ -170,7 +173,12 @@ pub fn extract_function_body<'a>(ir_text: &'a str, name: &str) -> &'a str {
             .find('\n')
             .map(|i| define_idx + i)
             .unwrap_or(ir_text.len());
-        if ir_text[define_idx..line_end].contains(&needle) {
+        let line = &ir_text[define_idx..line_end];
+        if line.contains(&needle)
+            || line.contains(&quoted_needle)
+            || line.contains(&quoted_arity_prefix)
+            || line.contains(&unquoted_arity_prefix)
+        {
             break define_idx;
         }
         search_from = line_end;

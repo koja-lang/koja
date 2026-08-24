@@ -8,12 +8,12 @@ use tower_lsp_server::jsonrpc::Result;
 use tower_lsp_server::ls_types::*;
 
 use koja_ast::ast::ExprKind;
-use koja_ast::identifier::Identifier;
+use koja_ast::identifier::Resolution;
 use koja_typecheck::{FunctionSignature, GlobalKind, GlobalRegistry};
 
 use crate::backend::Backend;
 use crate::format::format_resolved_type;
-use crate::lookup::{LookupCtx, find_enclosing_call, traverse_receiver_type_id};
+use crate::lookup::find_enclosing_call;
 
 impl Backend {
     /// Handles `textDocument/signatureHelp` requests by finding the
@@ -35,12 +35,6 @@ impl Backend {
             _ => return Ok(None),
         };
 
-        let ctx = LookupCtx {
-            registry,
-            package: &state.active_package,
-            locals: &state.locals,
-        };
-
         let line = pos.line + 1;
         let col = pos.character + 1;
         let call_site = match find_enclosing_call(file, line, col) {
@@ -50,16 +44,14 @@ impl Backend {
 
         let (function_name, sig) = match &call_site.expr.kind {
             ExprKind::Call { callee, .. } => {
-                let ExprKind::Ident { name, .. } = &callee.kind else {
+                let ExprKind::Ident { name, resolution } = &callee.kind else {
                     return Ok(None);
                 };
-                let sig = find_function_sig(name, &state.active_package, registry);
+                let sig = function_signature_for_target(*resolution, registry);
                 (name.clone(), sig)
             }
-            ExprKind::MethodCall {
-                receiver, method, ..
-            } => {
-                let sig = find_method_sig(receiver, method, &ctx);
+            ExprKind::MethodCall { method, target, .. } => {
+                let sig = function_signature_for_target(*target, registry);
                 (method.clone(), sig)
             }
             _ => return Ok(None),
@@ -113,35 +105,15 @@ impl Backend {
     }
 }
 
-fn find_function_sig<'a>(
-    name: &str,
-    package: &str,
-    registry: &'a GlobalRegistry,
-) -> Option<&'a FunctionSignature> {
-    for pkg in [package, "Global"] {
-        let ident = Identifier::new(pkg, vec![name.to_string()]);
-        if let Some((_, entry)) = registry.lookup(&ident)
-            && let GlobalKind::Function(Some(sig)) = &entry.kind
-        {
-            return Some(sig);
-        }
-    }
-    None
-}
-
-fn find_method_sig<'a>(
-    receiver: &koja_ast::ast::Expr,
-    method: &str,
-    ctx: &LookupCtx<'a>,
-) -> Option<&'a FunctionSignature> {
-    let type_id = traverse_receiver_type_id(receiver, ctx)?;
-    let type_entry = ctx.registry.get(type_id)?;
-    let pkg = type_entry.identifier.package();
-    let type_name = type_entry.identifier.last();
-    let method_ident = Identifier::new(pkg, vec![type_name.to_string(), method.to_string()]);
-    let (_, method_entry) = ctx.registry.lookup(&method_ident)?;
-    match &method_entry.kind {
-        GlobalKind::Function(Some(sig)) => Some(sig),
+fn function_signature_for_target(
+    target: Resolution,
+    registry: &GlobalRegistry,
+) -> Option<&FunctionSignature> {
+    let Resolution::Global(id) = target else {
+        return None;
+    };
+    match &registry.get(id)?.kind {
+        GlobalKind::Function(definition) => definition.signature.as_ref(),
         _ => None,
     }
 }

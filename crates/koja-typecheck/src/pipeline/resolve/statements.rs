@@ -124,7 +124,7 @@ pub(super) fn resolve_assignment(
             if value_ty != existing_ty {
                 diagnostics.push(Diagnostic::error(
                     format!(
-                        "cannot reassign `{name}` from `{}` to `{}`: local types are fixed at \
+                        "cannot reassign `{name}` from `{}` to `{}` because local types are fixed at \
                          declaration",
                         display_resolution(&existing_ty, resolver.registry),
                         display_resolution(&value_ty, resolver.registry),
@@ -138,7 +138,7 @@ pub(super) fn resolve_assignment(
             if assigns_to_package_constant(&name, resolver) {
                 diagnostics.push(Diagnostic::error(
                     format!(
-                        "cannot assign to `{name}`: package-level constants are immutable and \
+                        "cannot assign to `{name}` because package-level constants are immutable and \
                          cannot be reassigned like a local",
                     ),
                     span,
@@ -265,7 +265,7 @@ pub(super) fn resolve_compound_assignment(
         if assigns_to_package_constant(&name, resolver) {
             diagnostics.push(Diagnostic::error(
                 format!(
-                    "cannot apply `{op_label}=` to `{name}`: package-level constants are \
+                    "cannot apply `{op_label}=` to `{name}` because package-level constants are \
                      immutable",
                 ),
                 span,
@@ -313,7 +313,7 @@ pub(super) fn resolve_compound_assignment(
     if value_ty != leaf_ty {
         diagnostics.push(Diagnostic::error(
             format!(
-                "type mismatch on `{op_label}=` for `{}`: lhs is `{}`, rhs is `{}`",
+                "type mismatch on `{op_label}=` for `{}`. lhs is `{}`, rhs is `{}`",
                 format_lvalue(target),
                 display_resolution(&leaf_ty, resolver.registry),
                 display_resolution(&value_ty, resolver.registry),
@@ -365,7 +365,7 @@ fn resolve_field_assignment(
     if value_ty != leaf_ty {
         diagnostics.push(Diagnostic::error(
             format!(
-                "type mismatch assigning to `{}`: field has type `{}`, but the right-hand \
+                "type mismatch assigning to `{}`. Field has type `{}`, but the right-hand \
                  side has type `{}`",
                 format_lvalue(lvalue),
                 display_resolution(&leaf_ty, resolver.registry),
@@ -437,7 +437,7 @@ fn walk_field_segments(
         else {
             diagnostics.push(Diagnostic::error(
                 format!(
-                    "cannot project field `{segment}` on `{}`: field assignment requires \
+                    "cannot project field `{segment}` on `{}` because field assignment requires \
                      a struct receiver",
                     display_resolution(&current_ty, resolver.registry),
                 ),
@@ -450,7 +450,7 @@ fn walk_field_segments(
         let GlobalKind::Struct(Some(definition)) = &entry.kind else {
             diagnostics.push(Diagnostic::error(
                 format!(
-                    "cannot project field `{segment}` on `{}` ({}): field assignment \
+                    "cannot project field `{segment}` on `{}` ({}). Field assignment \
                      requires a struct receiver",
                     entry.identifier,
                     entry.kind.label(),

@@ -30,7 +30,7 @@
   <div class="summary">
     {% for f in b.functions %}
     <div class="summary-row">
-      <div class="summary-name"><a href="#fn-{{ f.name }}">{{ f.name }}</a></div>
+      <div class="summary-name"><a href="#{{ f.anchor() }}">{{ f.name }}/{{ f.arity }}</a></div>
       {% if f.deprecated.is_some() %}<span class="deprecated-badge">deprecated</span>{% endif %}
       {% if let Some(doc) = f.doc %}<div class="summary-brief">{{ doc|brief }}</div>{% endif %}
     </div>

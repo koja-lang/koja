@@ -1,1 +1,1 @@
-match against enum is not exhaustive: missing variant `Some`
+match against enum is not exhaustive. Missing variant `Some`

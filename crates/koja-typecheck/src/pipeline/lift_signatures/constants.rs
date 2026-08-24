@@ -38,7 +38,7 @@ pub(super) fn lift_constant(
     let identifier = Identifier::new(scope.package, vec![constant.name.clone()]);
     let Some((id, entry)) = scope.registry.lookup(&identifier) else {
         panic!(
-            "lift_signatures: constant `{identifier}` missing from registry: \
+            "lift_signatures found constant `{identifier}` missing from registry. This is a \
              collect invariant violation",
         );
     };

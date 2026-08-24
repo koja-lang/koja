@@ -12,7 +12,7 @@ use koja_ast::ast::{Function, ImplMember, Item, Param, TypeExpr, Visibility};
 
 mod common;
 
-use common::{first_extend, first_function, parse_clean};
+use common::{first_extend, first_function, parse_clean, parse_failing_with};
 
 fn nth_function(source: &str, idx: usize) -> Function {
     parse_clean(source)
@@ -74,6 +74,18 @@ fn fn_with_default_param() {
         Param::Regular { default, .. } => assert!(default.is_some()),
         other => panic!("expected Regular param, got {other:?}"),
     }
+}
+
+#[test]
+fn required_param_after_default_is_rejected() {
+    parse_failing_with(
+        "
+        fn greet(greeting: String = \"hello\", name: String) -> String
+          greeting <> name
+        end
+        ",
+        &["required parameters must come before default parameters"],
+    );
 }
 
 #[test]

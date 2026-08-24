@@ -57,6 +57,24 @@ impl SignatureToken {
 }
 
 impl DocFunction {
+    pub fn anchor(&self) -> String {
+        format!("fn-{}", self.page_name())
+    }
+
+    /// The arity-qualified `name/arity` label used in sidebars and
+    /// search entries.
+    pub fn display_name(&self) -> String {
+        format!("{}/{}", self.name, self.arity)
+    }
+
+    /// URL-safe `name-arity` for page file names and anchors. The `?`
+    /// in predicate names becomes `-q` because a bare `?` starts the
+    /// query string in a URL path. The mapping cannot collide with a
+    /// real function because identifiers never contain `-`.
+    pub fn page_name(&self) -> String {
+        format!("{}-{}", self.name.replace('?', "-q"), self.arity)
+    }
+
     /// Break this signature into styled runs, the shared source for
     /// both the HTML and plain-text renderings.
     fn signature_segments(&self) -> Vec<(SignatureToken, String)> {
@@ -287,6 +305,7 @@ mod tests {
 
     fn checkout_function() -> DocFunction {
         DocFunction {
+            arity: 2,
             deprecated: None,
             doc: None,
             error_type: Some("PoolError".to_string()),

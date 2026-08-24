@@ -21,8 +21,8 @@
 
 use koja_ast::ast::{
     Annotation, Arg, BinOp, BuiltinDecl, EnumDecl, EnumVariant, EnumVariantData, Expr, ExprKind,
-    FieldPattern, File, Function, ImplBlock, ImplMember, Item, Literal, MatchArm, Param, Pattern,
-    Statement, StructDecl, StructField, TypeExpr, TypeParam, Visibility,
+    FieldPattern, File, Function, FunctionOrigin, ImplBlock, ImplMember, Item, Literal, MatchArm,
+    Param, Pattern, Statement, StructDecl, StructField, TypeExpr, TypeParam, Visibility,
 };
 use koja_ast::identifier::Resolution;
 use koja_ast::span::Span;
@@ -210,6 +210,7 @@ fn named_type(name: &str, span: Span) -> TypeExpr {
 fn eq_function(other_type: TypeExpr, body_expr: Expr, span: Span) -> Function {
     Function {
         annotations: Vec::<Annotation>::new(),
+        origin: FunctionOrigin::Explicit,
         visibility: Visibility::Public,
         name: EQ_METHOD.to_string(),
         type_params: Vec::new(),
@@ -524,6 +525,7 @@ fn method_call_one_arg(receiver: Expr, method: &str, arg: Expr, span: Span) -> E
                 value: arg,
                 span,
             }],
+            target: Resolution::Unresolved,
             type_args: Vec::new(),
         },
         span,

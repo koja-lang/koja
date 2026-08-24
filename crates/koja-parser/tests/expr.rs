@@ -12,6 +12,7 @@
 //!   `expr rescue e -> handler`
 
 use koja_ast::ast::{BinOp, ClosureParam, Expr, ExprKind, Literal, UnaryOp};
+use koja_ast::identifier::Resolution;
 
 mod common;
 
@@ -27,6 +28,30 @@ fn first_call_argument(source: &str) -> Expr {
         panic!("expected call, got {expr:?}");
     };
     args.into_iter().next().expect("call argument").value
+}
+
+#[test]
+fn named_function_references_carry_path_and_arity() {
+    let cases = [
+        ("&name/2", vec!["name"], 2),
+        ("&Package.name/1", vec!["Package", "name"], 1),
+        ("&Type.function/3", vec!["Type", "function"], 3),
+    ];
+
+    for (source, expected_path, expected_arity) in cases {
+        let expr = first_script_expr(source);
+        let ExprKind::NamedFunctionReference {
+            path,
+            arity,
+            target,
+        } = expr.kind
+        else {
+            panic!("expected named function reference, got {expr:?}");
+        };
+        assert_eq!(path, expected_path);
+        assert_eq!(arity, expected_arity);
+        assert_eq!(target, Resolution::Unresolved);
+    }
 }
 
 // ---- Arithmetic precedence ----

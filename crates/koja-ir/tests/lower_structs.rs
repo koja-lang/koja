@@ -232,7 +232,7 @@ fn inline_static_method_lowers_into_package_function_map() {
 
     let script = lower_script_source(source);
     let function = script
-        .function("TestApp.Point.origin")
+        .function("TestApp.Point.origin/0")
         .expect("inline static method missing from program");
     assert_eq!(function.kind, FunctionKind::Regular);
     assert!(!function.blocks.is_empty(), "method should have a body");
@@ -257,7 +257,7 @@ fn impl_block_static_method_lowers_into_package_function_map() {
 
     let script = lower_script_source(source);
     let function = script
-        .function("TestApp.Point.origin")
+        .function("TestApp.Point.origin/0")
         .expect("impl-block static method missing from program");
     assert_eq!(function.kind, FunctionKind::Regular);
     assert!(!function.blocks.is_empty(), "method should have a body");
@@ -286,7 +286,7 @@ fn static_method_call_emits_call_against_qualified_symbol() {
             _ => None,
         })
         .expect("expected one Call instruction");
-    assert_eq!(call_callee.mangled(), "TestApp.Point.origin");
+    assert_eq!(call_callee.mangled(), "TestApp.Point.origin/0");
 
     let field_get = all_instructions(&script.blocks)
         .find_map(|inst| match inst {
@@ -322,7 +322,7 @@ fn static_method_with_args_lowers_call_with_lowered_args() {
             _ => None,
         })
         .expect("expected one Call instruction");
-    assert_eq!(callee.mangled(), "TestApp.Point.at");
+    assert_eq!(callee.mangled(), "TestApp.Point.at/2");
     assert_eq!(arg_count, 2);
 }
 
@@ -345,7 +345,7 @@ fn inline_instance_method_lowers_with_self_param_promoted() {
 
     let script = lower_script_source(source);
     let method = script
-        .function("TestApp.Point.first")
+        .function("TestApp.Point.first/1")
         .expect("inline instance method missing from program");
     assert_eq!(method.kind, FunctionKind::Regular);
     assert_eq!(
@@ -414,7 +414,7 @@ fn impl_block_instance_method_lowers_with_self_param_promoted() {
 
     let script = lower_script_source(source);
     let method = script
-        .function("TestApp.Point.first")
+        .function("TestApp.Point.first/1")
         .expect("impl-block instance method missing from program");
     assert_eq!(method.kind, FunctionKind::Regular);
     assert_eq!(method.params.len(), 1);
@@ -447,7 +447,7 @@ fn instance_method_call_prepends_receiver_to_call_args() {
             _ => None,
         })
         .expect("expected an instance Call in main");
-    assert_eq!(callee.mangled(), "TestApp.Point.shift");
+    assert_eq!(callee.mangled(), "TestApp.Point.shift/2");
     assert_eq!(
         args.len(),
         2,

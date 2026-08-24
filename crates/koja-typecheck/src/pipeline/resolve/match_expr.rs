@@ -154,7 +154,7 @@ pub(super) fn resolve_match_arms(
     {
         diagnostics.push(Diagnostic::error(
             "typecheck does not yet admit literal `match` patterns against \
-             non-primitive subjects (supported subjects: `Bool` / `String` / numeric \
+             non-primitive subjects (supported subjects are `Bool` / `String` / numeric \
              primitives)",
             subject.span,
         ));
@@ -237,7 +237,7 @@ fn diagnose_missing_union_members(
     }
     diagnostics.push(Diagnostic::error_with_hint(
         format!(
-            "match against union `{}` is not exhaustive: missing member(s) {}",
+            "match against union `{}` is not exhaustive. Missing member(s) {}",
             display_resolution(subject_ty, registry),
             missing.join(", "),
         ),
@@ -262,7 +262,7 @@ fn check_arm_reachability(
 ) {
     if has_catch_all {
         diagnostics.push(Diagnostic::warning(
-            "match arm is unreachable: a previous arm matches every value",
+            "match arm is unreachable because a previous arm matches every value",
             arm.span,
         ));
         return;
@@ -279,7 +279,7 @@ fn check_arm_reachability(
                     .all(|witness| seen.full_variants.contains(&witness.tag))
             {
                 diagnostics.push(Diagnostic::warning(
-                    "match arm is unreachable: every variant it covers is already \
+                    "match arm is unreachable because every variant it covers is already \
                      matched by an earlier arm",
                     arm.span,
                 ));
@@ -289,7 +289,7 @@ fn check_arm_reachability(
             let key = display_resolution(member, registry);
             if seen.union_members.contains(&key) {
                 diagnostics.push(Diagnostic::warning(
-                    "match arm is unreachable: an earlier arm already covers this \
+                    "match arm is unreachable because an earlier arm already covers this \
                      union member",
                     arm.span,
                 ));
@@ -300,7 +300,7 @@ fn check_arm_reachability(
             collect_literal_reprs(&arm.pattern, &mut literals);
             if !literals.is_empty() && literals.iter().all(|lit| seen.literals.contains(lit)) {
                 diagnostics.push(Diagnostic::warning(
-                    "match arm is unreachable: every literal it covers is already \
+                    "match arm is unreachable because every literal it covers is already \
                      matched by an earlier arm",
                     arm.span,
                 ));
@@ -347,8 +347,8 @@ fn diagnose_missing_enum_variants(
     let plural = if missing.len() == 1 { "" } else { "s" };
     let missing_list = missing.join("`, `");
     diagnostics.push(Diagnostic::error_with_hint(
-        format!("match against enum is not exhaustive: missing variant{plural} `{missing_list}`"),
-        format!("add a catch-all `_ -> ...` arm or handle: `{missing_list}`"),
+        format!("match against enum is not exhaustive. Missing variant{plural} `{missing_list}`"),
+        format!("add a catch-all `_ -> ...` arm or handle `{missing_list}`"),
         span,
     ));
 }

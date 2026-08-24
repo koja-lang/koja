@@ -75,7 +75,8 @@ fn self_recursive_tail_call_as_if_value_is_optimized() {
         "if-wrapped self-call must gain a tco_loop header; got:\n{body}",
     );
     assert!(
-        !body.contains("call i64 @TestApp.Counter.count_down"),
+        !body.contains("call i64 @\"TestApp.Counter.count_down/1\"")
+            && !body.contains("call i64 @TestApp.Counter.count_down"),
         "no self-`call` may survive after TCO; got:\n{body}",
     );
 }
@@ -106,7 +107,8 @@ fn self_recursive_tail_call_as_match_value_is_optimized() {
         "match-wrapped self-call must gain a tco_loop header; got:\n{body}",
     );
     assert!(
-        !body.contains("call i64 @TestApp.Counter.count_down"),
+        !body.contains("call i64 @\"TestApp.Counter.count_down/1\"")
+            && !body.contains("call i64 @TestApp.Counter.count_down"),
         "no self-`call` may survive after TCO; got:\n{body}",
     );
 }

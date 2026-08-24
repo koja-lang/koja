@@ -116,7 +116,7 @@ fn mismatch(
 ) -> Diagnostic {
     Diagnostic::error(
         format!(
-            "{collection} {axis} type mismatch: expected `{}`, found `{}`",
+            "{collection} {axis} type mismatch. Expected `{}`, found `{}`",
             display_resolution(expected, resolver.registry),
             display_resolution(&actual.resolution, resolver.registry),
         ),

@@ -514,8 +514,8 @@ pub(super) fn resolve_hash_eq<'ctx>(
             function.symbol,
         ))
     })?;
-    let hash_symbol = mangled_method_name(&receiver, &[], "hash", &[]);
-    let eq_symbol = mangled_method_name(&receiver, &[], "equals?", &[]);
+    let hash_symbol = mangled_method_name(&receiver, &[], "hash", 1, &[]);
+    let eq_symbol = mangled_method_name(&receiver, &[], "equals?", 2, &[]);
     let hash_fn = ctx.declared_function(&hash_symbol).ok_or_else(|| {
         LlvmError::Codegen(format!(
             "type `{key_ty:?}` does not implement Hash (no `{}` function) for `{}`",

@@ -263,6 +263,7 @@ arg = [ IDENT , ":" ] , ( short_closure | expr ) ;    (* positional or keyword *
 primary = literal
         | IDENT
         | "self"
+        | function_reference
         | struct_construction
         | enum_construction
         | binary_literal
@@ -321,10 +322,11 @@ short_closure = closure_param_short , "->" , expr ;
 closure_param_short = IDENT , [ ":" , type_expr ]
                     | "_" ;
 
-(* Function references are bare identifiers -- no sigil needed.
-   Since Koja has no function overloading, a bare function name
-   unambiguously refers to the function. foo() calls it, foo references it.
-   This is handled by the IDENT rule in primary. *)
+function_reference = "&" , function_ref_path , "/" , INT_LIT ;
+
+function_ref_path = function_ref_segment , { "." , function_ref_segment } ;
+
+function_ref_segment = IDENT | TYPE_IDENT ;
 
 
 (* ========================================================================== *)

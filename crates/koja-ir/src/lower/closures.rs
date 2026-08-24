@@ -438,7 +438,7 @@ impl CaptureWalker {
                     self.visit_expr(element);
                 }
             }
-            ExprKind::Literal { .. } => {}
+            ExprKind::Literal { .. } | ExprKind::NamedFunctionReference { .. } => {}
             ExprKind::Loop { body } => self.visit_statements(body),
             ExprKind::Map { entries } => {
                 for (key, value) in entries {

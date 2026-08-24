@@ -50,10 +50,20 @@ impl Backend {
         // Resolve method symbols via the registry's `[Type, method]`
         // entry, which carries an authoritative defining span.
         if let SymbolInfo::Method {
+            arity,
             type_name,
             method_name,
         } = &symbol
-            && let Some(span) = lookup_method_span(type_name, method_name, registry)
+            && let Some(span) = lookup_method_span(type_name, method_name, *arity, registry)
+        {
+            return Ok(Some(resolve_location(&uri, span, state)));
+        }
+
+        if let SymbolInfo::Function {
+            arity: Some(arity),
+            name,
+        } = &symbol
+            && let Some(span) = lookup_function_span(name, *arity, &state.active_package, registry)
         {
             return Ok(Some(resolve_location(&uri, span, state)));
         }
@@ -83,7 +93,7 @@ impl Backend {
 fn symbol_name(symbol: &SymbolInfo) -> Option<&str> {
     Some(match symbol {
         SymbolInfo::Builtin { name }
-        | SymbolInfo::Function { name }
+        | SymbolInfo::Function { name, .. }
         | SymbolInfo::Struct { name }
         | SymbolInfo::Enum { name }
         | SymbolInfo::Constant { name }
@@ -103,14 +113,38 @@ fn lookup_global_span(name: &str, package: &str, registry: &GlobalRegistry) -> O
     None
 }
 
+fn lookup_function_span(
+    name: &str,
+    arity: usize,
+    package: &str,
+    registry: &GlobalRegistry,
+) -> Option<Span> {
+    for package in [package, "Global"] {
+        let identifier = Identifier::new(package, vec![name.to_string()]);
+        if let Some((_, entry)) = registry.lookup_function(&identifier, arity) {
+            return Some(entry.span);
+        }
+    }
+    None
+}
+
 fn lookup_method_span(
     type_name: &str,
     method_name: &str,
+    arity: Option<usize>,
     registry: &GlobalRegistry,
 ) -> Option<Span> {
     for (_, entry) in registry.iter() {
         let path = entry.identifier.path();
-        if path.len() == 2 && path[0] == type_name && path[1] == method_name {
+        if path.len() == 2
+            && path[0] == type_name
+            && path[1] == method_name
+            && matches!(
+                &entry.kind,
+                koja_typecheck::GlobalKind::Function(definition)
+                    if arity.is_none_or(|arity| definition.arity == arity)
+            )
+        {
             return Some(entry.span);
         }
     }

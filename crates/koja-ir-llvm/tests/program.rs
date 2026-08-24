@@ -291,7 +291,7 @@ fn int32_arithmetic_lowers_to_i32_add() {
         body.contains("@llvm.sadd.with.overflow.i32"),
         "expected an i32-width checked add in TestApp.add32 body:\n{body}",
     );
-    assert_contains(&ir_text, "define i32 @TestApp.add32(i32 ");
+    assert_contains(&ir_text, "define i32 @\"TestApp.add32/2\"(i32 ");
 }
 
 // Helper-function definition + call coverage
@@ -324,12 +324,12 @@ fn zero_arg_call_emits_helper_define_and_call() {
     let ir_text = emit_llvm_ir(&program, APP_NAME).expect("emit_llvm_ir should succeed");
 
     assert_program_shape(&ir_text);
-    assert_contains(&ir_text, "define i64 @TestApp.answer()");
+    assert_contains(&ir_text, "define i64 @\"TestApp.answer/0\"()");
     // Helper's body folds to `ret i64 42`.
     assert_contains(&ir_text, "ret i64 42");
     let main_body = extract_function_body(&ir_text, "TestApp.main");
     assert!(
-        main_body.contains("call i64 @TestApp.answer()"),
+        main_body.contains("call i64 @\"TestApp.answer/0\"()"),
         "expected `TestApp.main` to call `TestApp.answer`:\n{main_body}",
     );
 }
@@ -354,10 +354,10 @@ fn one_arg_call_threads_int_through_helper_signature() {
     let ir_text = emit_llvm_ir(&program, APP_NAME).expect("emit_llvm_ir should succeed");
 
     assert_program_shape(&ir_text);
-    assert_contains(&ir_text, "define i64 @TestApp.id(i64");
+    assert_contains(&ir_text, "define i64 @\"TestApp.id/1\"(i64");
     let main_body = extract_function_body(&ir_text, "TestApp.main");
     assert!(
-        main_body.contains("call i64 @TestApp.id(i64 7)"),
+        main_body.contains("call i64 @\"TestApp.id/1\"(i64 7)"),
         "expected `TestApp.main` to call `TestApp.id` with `i64 7`:\n{main_body}",
     );
 }
@@ -378,10 +378,10 @@ fn multi_arg_call_threads_each_int_in_declared_order() {
     let ir_text = emit_llvm_ir(&program, APP_NAME).expect("emit_llvm_ir should succeed");
 
     assert_program_shape(&ir_text);
-    assert_contains(&ir_text, "define i64 @TestApp.pair(i64");
+    assert_contains(&ir_text, "define i64 @\"TestApp.pair/2\"(i64");
     let main_body = extract_function_body(&ir_text, "TestApp.main");
     assert!(
-        main_body.contains("call i64 @TestApp.pair(i64 2, i64 3)"),
+        main_body.contains("call i64 @\"TestApp.pair/2\"(i64 2, i64 3)"),
         "expected `TestApp.main` to call `TestApp.pair`:\n{main_body}",
     );
 }

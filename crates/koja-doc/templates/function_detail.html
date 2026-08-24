@@ -1,9 +1,9 @@
-<div class="detail" id="fn-{{ f.name }}">
+<div class="detail" id="{{ f.anchor() }}">
   {% let deprecated = f.deprecated %}
   {% include "deprecation_notice.html" %}
 
   <div class="detail-signature codeblock">
-    <a class="anchor" href="#fn-{{ f.name }}" aria-label="Link to {{ f.name }}">#</a><code>{{ f.signature_html()|safe }}</code>
+    <a class="anchor" href="#{{ f.anchor() }}" aria-label="Link to {{ f.name }}">#</a><code>{{ f.signature_html()|safe }}</code>
   </div>
 
   {% if let Some(doc) = f.doc %}

@@ -138,7 +138,7 @@ pub(crate) fn mismatch_message(
             rendered_value,
             width,
         } => format!(
-            "{subject} expects `{}`: value `{rendered_value}` does not fit in `{}` (range {})",
+            "{subject} expects `{}`, but value `{rendered_value}` does not fit in `{}` (range {})",
             display_resolution(expected, registry),
             width.label(),
             width.range_label(),

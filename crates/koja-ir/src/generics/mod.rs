@@ -249,7 +249,7 @@ fn insert_function<'a>(
     function: &'a Function,
     def_file: Option<&'a Path>,
 ) {
-    if let Some((id, _)) = registry.lookup(identifier) {
+    if let Some((id, _)) = registry.lookup_function(identifier, function.params.len()) {
         map.insert(id, FunctionAstEntry { def_file, function });
     }
 }

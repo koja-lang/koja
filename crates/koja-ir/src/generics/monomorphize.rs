@@ -18,7 +18,9 @@ use crate::enum_decl::{IREnumDecl, IREnumVariant, IRVariantPayload, IRVariantTag
 use crate::function::{IRFunction, IRSymbol};
 use crate::lower::LowerOutput;
 use crate::lower::package::{lower_function_inner, resolved_type_to_ir_type};
-use crate::mangling::{mangled_function_name, mangled_method_name, mangled_type_name};
+use crate::mangling::{
+    mangled_function_name, mangled_method_name, mangled_type_name, source_function_symbol,
+};
 use crate::package::IRPackage;
 use crate::struct_decl::{IRStructDecl, IRStructField};
 use crate::types::IRType;
@@ -80,7 +82,8 @@ pub(super) fn monomorphize(
                 .insert(decl.symbol.clone(), decl);
             enqueue_member_methods(inst, registry, function_index, output);
         }
-        GlobalKind::Function(Some(signature)) => {
+        GlobalKind::Function(definition) => {
+            let signature = entry.expect_function_signature();
             // Three flavors share this arm:
             //
             // - Top-level generic function (`fn id<T>(x: T)`): `template ==
@@ -99,7 +102,10 @@ pub(super) fn monomorphize(
                 .collect();
             let symbol = if inst.template == inst.owner {
                 assert_arity(&entry.identifier, entry.type_params.len(), &inst.args);
-                mangled_function_name(&template_symbol, &arg_types)
+                mangled_function_name(
+                    &source_function_symbol(&entry.identifier, definition.arity),
+                    &arg_types,
+                )
             } else {
                 let owner_entry = registry.get(inst.owner).unwrap_or_else(|| {
                     panic!(
@@ -123,6 +129,7 @@ pub(super) fn monomorphize(
                     &owner_symbol,
                     &arg_types,
                     entry.identifier.last(),
+                    definition.arity,
                     &method_arg_types,
                 )
             };
@@ -299,7 +306,10 @@ fn enqueue_member_methods(
     let owner_path = entry.identifier.path();
     let protocol_method_names = protocol_method_names(&entry.kind, registry);
     for (id, candidate) in registry.iter_in_package(owner_pkg) {
-        if !matches!(candidate.kind, GlobalKind::Function(Some(_))) {
+        if !matches!(
+            &candidate.kind,
+            GlobalKind::Function(definition) if definition.signature.is_some()
+        ) {
             continue;
         }
         let path = candidate.identifier.path();

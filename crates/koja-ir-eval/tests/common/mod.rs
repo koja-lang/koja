@@ -115,7 +115,7 @@ fn test_source(package: &str, source: &str) -> SourceFile {
 fn run_main(checked: CheckedProgram) -> Result<Value, RuntimeError> {
     let entry = Identifier::new(PACKAGE, vec![TEST_ENTRY_NAME.to_string()]);
     let program = lower_program(&checked, &entry).expect("lowering should succeed");
-    Interpreter::run_function(&program, &format!("{PACKAGE}.main"))
+    Interpreter::run_function(&program, &format!("{PACKAGE}.main/0"))
 }
 
 pub fn evaluate_script(source: &str) -> Result<Value, RuntimeError> {

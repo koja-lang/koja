@@ -257,7 +257,10 @@ pub fn function_signature<'a>(
         .lookup(&ident)
         .unwrap_or_else(|| panic!("`{ident}` not found in registry"));
     match &entry.kind {
-        GlobalKind::Function(Some(signature)) => signature,
+        GlobalKind::Function(definition) => definition
+            .signature
+            .as_ref()
+            .expect("function signature should be lifted"),
         other => panic!("expected lifted Function(Some(_)) for `{ident}`, got {other:?}"),
     }
 }

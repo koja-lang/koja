@@ -168,7 +168,10 @@ fn substitute_in_expr(expr: &mut Expr, args: &[ResolvedType], owner: GlobalRegis
             substitute_in_statements(body, args, owner);
         }
         ExprKind::Group { expr: inner } => substitute_in_expr(inner, args, owner),
-        ExprKind::Ident { .. } | ExprKind::Literal { .. } | ExprKind::Self_ { .. } => {}
+        ExprKind::Ident { .. }
+        | ExprKind::Literal { .. }
+        | ExprKind::NamedFunctionReference { .. }
+        | ExprKind::Self_ { .. } => {}
         ExprKind::If {
             condition,
             then_body,

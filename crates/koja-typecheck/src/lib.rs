@@ -32,8 +32,9 @@ pub use pipeline::{Substitution, peel_alias, substitute};
 pub use program::{CheckedPackage, CheckedProgram, check_program};
 pub use registry::{
     BoundOverlay, BuiltinDefinition, BuiltinShape, Candidate, CandidateDetail, CandidateKind,
-    Conformance, ConformanceScope, ConstantDefinition, Dispatch, EnumDefinition, FunctionSignature,
-    GlobalKind, GlobalRegistry, KEYWORDS, ProtocolDefinition, RegistryEntry, ResolvedEnumVariant,
-    ResolvedParam, ResolvedProtocolBound, ResolvedProtocolMethod, ResolvedStructField,
-    ResolvedVariantData, StructDefinition, format_registry,
+    Conformance, ConformanceScope, ConstantDefinition, Dispatch, EnumDefinition,
+    FunctionDefinition, FunctionOrigin, FunctionSignature, GlobalKind, GlobalRegistry, KEYWORDS,
+    ProtocolDefinition, RegistryEntry, ResolvedEnumVariant, ResolvedParam, ResolvedProtocolBound,
+    ResolvedProtocolMethod, ResolvedStructField, ResolvedVariantData, StructDefinition,
+    format_registry,
 };

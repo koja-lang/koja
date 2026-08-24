@@ -563,6 +563,7 @@ impl<'a> Printer<'a> {
                     self.match_arm(arm);
                 }
             }
+            ExprKind::NamedFunctionReference { .. } => {}
             ExprKind::MethodCall { receiver, args, .. } => {
                 self.section("receiver", |p| p.expr(receiver));
                 if !args.is_empty() {
@@ -940,6 +941,32 @@ fn expr_header(expr: &Expr) -> String {
         ExprKind::Map { entries } => format!("Map ({} entries)", entries.len()),
         ExprKind::Match { .. } => String::from("Match"),
         ExprKind::MethodCall { method, .. } => format!("MethodCall .{method}"),
+        ExprKind::NamedFunctionReference {
+            path,
+            arity,
+            target,
+        } => match target {
+            Resolution::Global(id) => {
+                format!(
+                    "NamedFunctionReference &{}/{} -> {id}",
+                    path.join("."),
+                    arity
+                )
+            }
+            Resolution::Local(local_id) => format!(
+                "NamedFunctionReference &{}/{} -> local {local_id}",
+                path.join("."),
+                arity,
+            ),
+            Resolution::TypeParam { owner, index } => format!(
+                "NamedFunctionReference &{}/{} -> type param of {owner} #{index}",
+                path.join("."),
+                arity,
+            ),
+            Resolution::Unresolved => {
+                format!("NamedFunctionReference &{}/{}", path.join("."), arity)
+            }
+        },
         ExprKind::Receive { .. } => String::from("Receive"),
         ExprKind::Rescue { binder, .. } => match binder {
             Some(name) => format!("Rescue {name}"),
@@ -1046,7 +1073,10 @@ fn expr_has_children(kind: &ExprKind) -> bool {
         ExprKind::Map { entries } => !entries.is_empty(),
         ExprKind::String { parts, .. } => !parts.is_empty(),
         ExprKind::StructConstruction { fields, .. } => !fields.is_empty(),
-        ExprKind::Ident { .. } | ExprKind::Literal { .. } | ExprKind::Self_ { .. } => false,
+        ExprKind::Ident { .. }
+        | ExprKind::Literal { .. }
+        | ExprKind::NamedFunctionReference { .. }
+        | ExprKind::Self_ { .. } => false,
     }
 }
 

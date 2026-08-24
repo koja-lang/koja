@@ -41,7 +41,7 @@ fn print_intrinsic_emits_define_void_with_runtime_call() {
     let ir_text =
         emit_script_llvm_ir(&script, APP_NAME).expect("emit_script_llvm_ir should succeed");
 
-    assert_contains(&ir_text, "define void @Global.print(ptr");
+    assert_contains(&ir_text, "define void @\"Global.print/1\"(ptr");
     assert_contains(&ir_text, "call void @__koja_print_string(ptr");
     assert_contains(&ir_text, "ret void");
 }
@@ -59,7 +59,7 @@ fn print_intrinsic_call_site_emits_void_call() {
     let ir_text =
         emit_script_llvm_ir(&script, APP_NAME).expect("emit_script_llvm_ir should succeed");
 
-    assert_contains(&ir_text, "call void @Global.print(ptr");
+    assert_contains(&ir_text, "call void @\"Global.print/1\"(ptr");
 }
 
 #[test]
@@ -82,8 +82,8 @@ fn socket_intrinsics_emit_only_raw_result_shapes() {
         emit_script_llvm_ir(&script, APP_NAME).expect("emit_script_llvm_ir should succeed");
 
     assert_contains(&ir_text, "define ");
-    assert_contains(&ir_text, "@Net.Socket.recv_from_raw(");
-    assert_contains(&ir_text, "@Net.Socket.resolve_raw(");
+    assert_contains(&ir_text, "@\"Net.Socket.recv_from_raw/2\"(");
+    assert_contains(&ir_text, "@\"Net.Socket.resolve_raw/1\"(");
     assert_contains(&ir_text, "call ptr @koja_socket_recv_from(");
     assert_contains(&ir_text, "call ptr @koja_socket_resolve(");
     assert!(
@@ -164,7 +164,7 @@ fn user_main_runs_print_intrinsic_then_returns_void() {
 
     let user_main_body = extract_function_body(&ir_text, "__koja_user_main");
     assert!(
-        user_main_body.contains("call void @Global.print(ptr"),
+        user_main_body.contains("call void @\"Global.print/1\"(ptr"),
         "expected `__koja_user_main` to call `Global.print`; got:\n{user_main_body}",
     );
     assert!(

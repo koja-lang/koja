@@ -161,10 +161,23 @@ struct EncodeTest
     Result.Ok(true)
   end
 
-  @test "encode pretty protocol value"
-  fn test_encode_pretty_protocol -> Result<Bool, String>
+  @test "encode defaults to compact output"
+  fn test_encode_default_compact -> Result<Bool, String>
     value: Value = ["active": true]
-    result = encode_pretty(value)
+    result = encode(value)
+    expected = "{\"active\":true}"
+
+    unless result == expected
+      return Result.Err("expected compact object, got #{result}")
+    end
+
+    Result.Ok(true)
+  end
+
+  @test "encode accepts pretty options"
+  fn test_encode_pretty_options -> Result<Bool, String>
+    value: Value = ["active": true]
+    result = encode(value, EncodeOptions{pretty?: true})
     expected = "{\n  \"active\": true\n}"
 
     unless result == expected

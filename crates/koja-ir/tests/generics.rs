@@ -426,7 +426,7 @@ fn static_call_on_generic_struct_registers_mono_method() {
         ";
 
     let script = lower_script_source(source);
-    let target = "TestApp.Box_$Int64$.make";
+    let target = "TestApp.Box_$Int64$.make/1";
     let function = mangled_function(&script, target);
     assert_eq!(function.symbol.mangled(), target);
 
@@ -474,7 +474,7 @@ fn receive_arm_typed_binding_substitutes_payload_type_during_mono() {
         ";
 
     let script = lower_script_source(source);
-    let target = "TestApp.Wrap_$Int64$.make";
+    let target = "TestApp.Wrap_$Int64$.make/1";
     mangled_function(&script, target);
     let outer_pair = "TestApp.Pair_$TestApp.Wrap_$Int64$.Int64$";
     script
