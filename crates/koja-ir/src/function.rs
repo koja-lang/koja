@@ -914,7 +914,8 @@ pub enum ReceiveTag {
 
 impl ReceiveTag {
     /// Wire byte the runtime stamps in the envelope tag header. Mirrors
-    /// `koja-runtime-posix/src/wire.rs` (`TAG_*`) by spec, not a shared type.
+    /// `koja-runtime-core/src/wire.rs` (`TAG_*`) by spec, not a shared
+    /// type, and a unit test pins the two against each other.
     pub fn wire_byte(self) -> u8 {
         match self {
             Self::Business => 0,
@@ -1116,5 +1117,23 @@ impl IRTerminator {
     /// args because their targets declare no [`BlockParam`]s).
     pub fn branch(block: IRBlockId) -> Self {
         Self::Branch(BranchTarget::to(block))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use koja_runtime_core::wire;
+
+    use super::ReceiveTag;
+
+    /// `wire_byte` mirrors the runtime's tag constants by spec. This
+    /// dev-dependency-only check turns drift into a test failure without
+    /// coupling the compiled crate to the runtime.
+    #[test]
+    fn receive_tag_wire_bytes_match_the_runtime() {
+        assert_eq!(ReceiveTag::Business.wire_byte(), wire::TAG_BUSINESS);
+        assert_eq!(ReceiveTag::ExitSignal.wire_byte(), wire::TAG_EXIT_SIGNAL);
+        assert_eq!(ReceiveTag::IOReady.wire_byte(), wire::TAG_IO_READY);
+        assert_eq!(ReceiveTag::Lifecycle.wire_byte(), wire::TAG_LIFECYCLE);
     }
 }

@@ -8,11 +8,11 @@
 
 use std::{ptr, str};
 
-use koja_ir::{IRFunction, IRSymbol, IRType, StringMethod};
+use koja_ir::{IRSymbol, IRType, StringMethod};
 
 use crate::error::RuntimeError;
 use crate::interpreter::CallResolver;
-use crate::intrinsics::helpers;
+use crate::intrinsics::{IntrinsicCall, helpers};
 use crate::value::Value;
 
 unsafe extern "C" {
@@ -21,18 +21,16 @@ unsafe extern "C" {
 
 pub(super) fn dispatch<R: CallResolver>(
     method: StringMethod,
-    function: &IRFunction,
-    args: &[Value],
-    resolver: &R,
+    call: IntrinsicCall<'_, R>,
 ) -> Result<Value, RuntimeError> {
     match method {
-        StringMethod::ByteLength => byte_length(args),
-        StringMethod::Get => get(function, args),
-        StringMethod::Length => length(args),
-        StringMethod::Next => next(function, args),
-        StringMethod::Slice => slice(args),
-        StringMethod::ToBinary => to_binary(args),
-        StringMethod::ToCstring => to_cstring(function, args, resolver),
+        StringMethod::ByteLength => byte_length(call.args),
+        StringMethod::Get => get(call),
+        StringMethod::Length => length(call.args),
+        StringMethod::Next => next(call),
+        StringMethod::Slice => slice(call.args),
+        StringMethod::ToBinary => to_binary(call.args),
+        StringMethod::ToCstring => to_cstring(call),
     }
 }
 
@@ -51,19 +49,15 @@ fn to_binary(args: &[Value]) -> Result<Value, RuntimeError> {
     Ok(Value::binary(bytes))
 }
 
-fn to_cstring<R: CallResolver>(
-    function: &IRFunction,
-    args: &[Value],
-    resolver: &R,
-) -> Result<Value, RuntimeError> {
-    let bytes = expect_string_bytes(args, 0, "String.to_cstring")?;
-    let result_symbol = helpers::enum_return_symbol(function, "String.to_cstring")?;
+fn to_cstring<R: CallResolver>(call: IntrinsicCall<'_, R>) -> Result<Value, RuntimeError> {
+    let bytes = expect_string_bytes(call.args, 0, "String.to_cstring")?;
+    let result_symbol = helpers::enum_return_symbol(call.function, "String.to_cstring")?;
     if bytes.contains(&0) {
-        let error = helpers::err_variant_value(&result_symbol, resolver, "InteriorNul")?;
-        return Ok(helpers::result_value(result_symbol, Err(error)));
+        let error = helpers::err_variant_value(&result_symbol, call.resolver, "InteriorNul")?;
+        return helpers::result_value(result_symbol, call.resolver, Err(error));
     }
     let cstring_symbol = result_struct_symbol(
-        &helpers::single_ok_payload(&result_symbol, resolver, "String.to_cstring")?,
+        &helpers::single_ok_payload(&result_symbol, call.resolver, "String.to_cstring")?,
         "String.to_cstring",
     )?;
     let total = bytes.len() + 1; // null terminator
@@ -83,13 +77,13 @@ fn to_cstring<R: CallResolver>(
         symbol: cstring_symbol,
         fields: vec![Value::CPtr(buf), Value::Int(bytes.len() as i64)],
     };
-    Ok(helpers::result_value(result_symbol, Ok(cstring)))
+    helpers::result_value(result_symbol, call.resolver, Ok(cstring))
 }
 
-fn get(function: &IRFunction, args: &[Value]) -> Result<Value, RuntimeError> {
-    let s = expect_string_utf8(args, 0, "String.get")?;
-    let index = expect_int(args, 1, "String.get")?;
-    let option_symbol = helpers::enum_return_symbol(function, "String.get")?;
+fn get<R: CallResolver>(call: IntrinsicCall<'_, R>) -> Result<Value, RuntimeError> {
+    let s = expect_string_utf8(call.args, 0, "String.get")?;
+    let index = expect_int(call.args, 1, "String.get")?;
+    let option_symbol = helpers::enum_return_symbol(call.function, "String.get")?;
     let value = if index < 0 {
         None
     } else {
@@ -97,13 +91,13 @@ fn get(function: &IRFunction, args: &[Value]) -> Result<Value, RuntimeError> {
             .nth(index as usize)
             .map(|c| Value::string(c.to_string()))
     };
-    Ok(helpers::option_value(option_symbol, value))
+    helpers::option_value(option_symbol, call.resolver, value)
 }
 
-fn next(function: &IRFunction, args: &[Value]) -> Result<Value, RuntimeError> {
-    let s = expect_string_utf8(args, 0, "String.next")?;
-    let byte_offset = expect_int(args, 1, "String.next")?;
-    let option_symbol = helpers::enum_return_symbol(function, "String.next")?;
+fn next<R: CallResolver>(call: IntrinsicCall<'_, R>) -> Result<Value, RuntimeError> {
+    let s = expect_string_utf8(call.args, 0, "String.next")?;
+    let byte_offset = expect_int(call.args, 1, "String.next")?;
+    let option_symbol = helpers::enum_return_symbol(call.function, "String.next")?;
     let value = usize::try_from(byte_offset)
         .ok()
         .and_then(|offset| s.get(offset..).map(|suffix| (offset, suffix)))
@@ -115,7 +109,7 @@ fn next(function: &IRFunction, args: &[Value]) -> Result<Value, RuntimeError> {
                 ])
             })
         });
-    Ok(helpers::option_value(option_symbol, value))
+    helpers::option_value(option_symbol, call.resolver, value)
 }
 
 fn slice(args: &[Value]) -> Result<Value, RuntimeError> {

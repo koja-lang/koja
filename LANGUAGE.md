@@ -17,7 +17,7 @@ Koja is a statically typed, compiled language targeting native binaries via LLVM
 - [Error Handling](#error-handling): `! E` Signatures, `fail`, `try`, Error Unions, `rescue`
 - [Protocols](#protocols): Behavioral Contracts, Impl Blocks, Static Dispatch
 - [Packages](#packages): Transparent Files, Visibility, Aliases, Dependencies
-- [Concurrency](#concurrency): `Task`, Processes, Lifecycle, `Ref`, `ReplyTo`, `spawn`/`receive`
+- [Concurrency](#concurrency): `Task`, Processes, Lifecycle, `Ref`, `ReplyTo`, `spawn`/`receive`, Runtime Observability
 - [Annotations](#annotations): `@deprecated`, `@doc`, `@test`
 - [C FFI](#c-ffi): `@extern "C"`, `CPtr<T>`, `CString`
 - [Standard Library](#standard-library): Core Types, Collections, String Functions, Binary/Bits, File I/O, Parsing, URI, Base, Path, Protocols
@@ -1832,6 +1832,44 @@ end
 
 In most cases you won't use `receive` directly. The `Process` protocol's default `run` implementation handles it for you.
 
+### Runtime Observability
+
+The `Runtime` struct answers questions about the runtime as a whole. Two instance functions on `Pid` answer questions about one process:
+
+```koja
+Runtime.process_count()                       # live processes
+Runtime.process_count(Process.State.Blocked)  # live processes in one state
+Runtime.scheduler_count()                     # scheduler threads
+Runtime.mailbox_depth()                       # the calling process's own queue
+
+pid.state()          # Option<Process.State>
+pid.mailbox_depth()  # Option<Int>
+```
+
+`Process.State` names the scheduler lifecycle: `Blocked`, `Created`, `Runnable`, `Running`, `WaitingIO`. A dead process has no state, so the `Pid` functions return `Option.None` for a dead or unknown pid. `Runtime.process_count(Process.State.Runnable)` is the run-queue depth, the count of processes ready to run that wait for a scheduler. `Runtime.process_count()` counts every live process, including the entry process and the caller. `Runtime.scheduler_count()` is the saturation denominator, since the runtime is saturated when the `Running` count reaches it. It is always 1 on the interpreter backend.
+
+Every value is a point-in-time gauge. The runtime keeps scheduling while you read, so two reads can disagree, and no read can fail. There is no process enumeration. You observe the pids you own or receive, and a supervisor that wants visibility over its workers holds their refs.
+
+#### The overload contract
+
+Mailboxes are unbounded, and the two send primitives sit on opposite sides of that fact:
+
+- `call` is the built-in backpressure. The sender blocks until the reply arrives or the timeout fires, so a slow service slows its callers instead of accumulating a backlog.
+- `cast` never blocks and gives the sender no feedback. A service that only receives casts has chosen unboundedness, and its mailbox absorbs any rate mismatch.
+
+`Runtime.mailbox_depth()` is the detector for the second case. A cast-driven service polls its own depth inside `handle` and sheds load before the backlog becomes a problem:
+
+```koja
+fn handle(self, msg: Msg, from: Option<ReplyTo<Reply>>) -> Step<Self>
+  if Runtime.mailbox_depth() > 1000
+    # Shed load. Drop stale work, switch to batch mode, or stop.
+  end
+  # ...
+end
+```
+
+Shedding means receiving and discarding. There is no selective drop, so the handler itself must get cheap when the queue is deep. The depth count covers queued system and business messages and excludes the reply slot that `Ref.call` uses.
+
 ---
 
 ## Annotations
@@ -2465,6 +2503,17 @@ content.print()
 
 Both functions panic when a key or value contains U+0000.
 `System.get_env` also panics if the host value is not valid UTF-8.
+
+### Runtime
+
+Read-only process metrics. See [Runtime Observability](#runtime-observability) for the semantics and the overload contract.
+
+- `Runtime.process_count() -> Int`: live processes.
+- `Runtime.process_count(state: Process.State) -> Int`: live processes in one lifecycle state.
+- `Runtime.scheduler_count() -> Int`: scheduler threads that run processes.
+- `Runtime.mailbox_depth() -> Int`: the calling process's queued message count.
+- `pid.state() -> Option<Process.State>`: one process's lifecycle state, `Option.None` when dead or unknown.
+- `pid.mailbox_depth() -> Option<Int>`: one process's queued message count, `Option.None` when dead or unknown.
 
 ### Console I/O
 

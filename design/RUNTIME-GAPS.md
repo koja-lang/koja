@@ -84,9 +84,9 @@ soaks are replayable by seed (the counters above become the oracle).
 Alternatively `loom` models of the `ProcessTable` protocols for true
 exhaustiveness over a small state space.
 
-### 2. Mailbox depth is not observable
+### 2. Mailbox depth observability (closed in 0.18)
 
-**Severity: medium. Bug class: invisible overload and latency collapse.**
+**Severity: closed. Bug class was: invisible overload and latency collapse.**
 
 Each process mailbox stores system and business traffic in unbounded
 `VecDeque`s. `cast`, timers, and I/O delivery keep accepting work while a
@@ -100,14 +100,16 @@ the envelopes correctly. It is demand-driven retention, so the existing
 steady-state live-block tests do not catch it. A producer that outruns a
 consumer can still grow RSS until the OS kills the program.
 
-**Fix.** Implement the `Runtime` observability API tracked in
-[ROADMAP.md](ROADMAP.md). Global and per-process snapshots must expose
-mailbox depth without changing delivery semantics. At minimum, distinguish
-system and business queue depth so operators can identify a slow consumer
-without inspecting payloads.
+**Fix (shipped in 0.18).** The `Runtime` observability API exposes live
+process counts by lifecycle state, the calling process's mailbox depth,
+and per-pid depth and state gauges on both adapters, with a both-backend
+fixture (`tests/lang/io/runtime_observability.kojs`). Delivery semantics
+are unchanged, and the overload contract in LANGUAGE.md documents `call`
+as the backpressure primitive and depth polling as the detector.
 
-Add a slow-consumer fixture that verifies depth snapshots and eventual
-reclamation on both adapters.
+One refinement stays open. The depth gauge sums the system and business
+queues, and a split reading would let operators separate a slow
+consumer from signal traffic without inspecting payloads.
 
 ### 3. Per-process mmap caps density and slows spawn
 
@@ -185,8 +187,8 @@ lazily only on mutation" promise true everywhere.
 
 No open entry blocks an experimental soft launch. The ownership-leak
 class is closed. **#1** (`loom`) is a robustness and coverage improvement.
-**#2** requires the 0.16 observability surface, while unbounded delivery
-remains the documented contract. **#3** step 1 (stack pooling) is the
+**#2** is closed. The 0.18 `Runtime` API exposes mailbox depth, while
+unbounded delivery remains the documented contract. **#3** step 1 (stack pooling) is the
 next performance item, and step 2 gates the million-process story, not
 the launch. **#4** is the 0.18.0 memory-model milestone. The one-time fairness gap (preemption
 points covering only loops and tail calls, letting deep non-tail

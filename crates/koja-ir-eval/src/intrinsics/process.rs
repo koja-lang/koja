@@ -14,60 +14,48 @@
 use std::time::Instant;
 
 use koja_ir::{
-    IRFunction, IRSymbol, IRType, IRVariantPayload, IRVariantTag, ProcessMethod, RefMethod,
-    ReplyToMethod,
+    IRFunction, IRSymbol, IRType, IRVariantPayload, ProcessMethod, RefMethod, ReplyToMethod,
 };
 use koja_runtime_core::{MailPark, Pid, Tag, duration_from_user_millis};
 
-use super::helpers;
+use super::{IntrinsicCall, helpers};
 use crate::error::RuntimeError;
 use crate::interpreter::CallResolver;
 use crate::scheduler::{self, EvalMessage, ReplyInfo, YieldOnce};
 use crate::value::Value;
 
-/// `Option<T>::Some` tag (declaration order, convention shared with
-/// [`helpers`]). Used to recover the `ReplyTo` payload type from an
-/// `Option<ReplyTo<R>>` decl when materializing a delivered call.
-const SOME_TAG: IRVariantTag = IRVariantTag(0);
-
 pub(super) async fn ref_dispatch<R: CallResolver>(
     method: RefMethod,
-    function: &IRFunction,
-    args: &[Value],
-    resolver: &R,
+    call: IntrinsicCall<'_, R>,
 ) -> Result<Value, RuntimeError> {
     match method {
-        RefMethod::AliveQ => alive(function, args),
-        RefMethod::Call => call(function, args, resolver).await,
-        RefMethod::Cast => cast(function, args),
-        RefMethod::Kill => kill(function, args),
-        RefMethod::SelfRef => self_ref(function),
-        RefMethod::SendAfter => send_after(function, args),
-        RefMethod::Signal => signal(function, args),
+        RefMethod::AliveQ => alive(call.function, call.args),
+        RefMethod::Call => ref_call(call).await,
+        RefMethod::Cast => cast(call.function, call.args),
+        RefMethod::Kill => kill(call.function, call.args),
+        RefMethod::SelfRef => self_ref(call.function),
+        RefMethod::SendAfter => send_after(call.function, call.args),
+        RefMethod::Signal => signal(call.function, call.args),
     }
 }
 
 pub(super) async fn reply_to_dispatch<R: CallResolver>(
     method: ReplyToMethod,
-    function: &IRFunction,
-    args: &[Value],
-    resolver: &R,
+    call: IntrinsicCall<'_, R>,
 ) -> Result<Value, RuntimeError> {
     match method {
-        ReplyToMethod::Send => reply_send(function, args, resolver),
+        ReplyToMethod::Send => reply_send(call),
     }
 }
 
 pub(super) fn process_dispatch<R: CallResolver>(
     method: ProcessMethod,
-    function: &IRFunction,
-    args: &[Value],
-    resolver: &R,
+    call: IntrinsicCall<'_, R>,
 ) -> Result<Value, RuntimeError> {
     match method {
-        ProcessMethod::Demonitor => demonitor(function, args),
-        ProcessMethod::Monitor => monitor(function, args),
-        ProcessMethod::Parent => parent(function, resolver),
+        ProcessMethod::Demonitor => demonitor(call.function, call.args),
+        ProcessMethod::Monitor => monitor(call.function, call.args),
+        ProcessMethod::Parent => parent(call),
     }
 }
 
@@ -155,15 +143,11 @@ fn alive(function: &IRFunction, args: &[Value]) -> Result<Value, RuntimeError> {
 /// On resume, match the reply token (discarding stale replies from earlier
 /// timed-out calls). On deadline, map to `CallError.Timeout` (target alive)
 /// or `CallError.ProcessDown` (target gone). Mirrors `emit_call`.
-async fn call<R: CallResolver>(
-    function: &IRFunction,
-    args: &[Value],
-    resolver: &R,
-) -> Result<Value, RuntimeError> {
-    let target = pid_from_ref(function, args)?;
-    let msg = nth(function, args, 1, "message")?;
-    let timeout_ms = int_arg(function, args, 2, "timeout")?;
-    let result_symbol = helpers::enum_return_symbol(function, "Ref.call")?;
+async fn ref_call<R: CallResolver>(call: IntrinsicCall<'_, R>) -> Result<Value, RuntimeError> {
+    let target = pid_from_ref(call.function, call.args)?;
+    let msg = nth(call.function, call.args, 1, "message")?;
+    let timeout_ms = int_arg(call.function, call.args, 2, "timeout")?;
+    let result_symbol = helpers::enum_return_symbol(call.function, "Ref.call")?;
 
     let caller = scheduler::current_pid();
     let token = scheduler::mint_token();
@@ -209,10 +193,10 @@ async fn call<R: CallResolver>(
     scheduler::clear_deadline(caller);
     scheduler::clear_awaiting_reply(caller);
     match outcome {
-        Ok(value) => Ok(helpers::result_value(result_symbol.clone(), Ok(value))),
+        Ok(value) => helpers::result_value(result_symbol.clone(), call.resolver, Ok(value)),
         Err(variant) => {
-            let error = helpers::err_variant_value(&result_symbol, resolver, variant)?;
-            Ok(helpers::result_value(result_symbol.clone(), Err(error)))
+            let error = helpers::err_variant_value(&result_symbol, call.resolver, variant)?;
+            helpers::result_value(result_symbol.clone(), call.resolver, Err(error))
         }
     }
 }
@@ -248,13 +232,13 @@ fn demonitor(function: &IRFunction, args: &[Value]) -> Result<Value, RuntimeErro
 
 /// `Process.parent() -> Option<Pid>`: the running process's spawner,
 /// `None` for the entry process.
-fn parent<R: CallResolver>(function: &IRFunction, resolver: &R) -> Result<Value, RuntimeError> {
-    let option_symbol = helpers::enum_return_symbol(function, "Process.parent")?;
+fn parent<R: CallResolver>(call: IntrinsicCall<'_, R>) -> Result<Value, RuntimeError> {
+    let option_symbol = helpers::enum_return_symbol(call.function, "Process.parent")?;
     let pid = scheduler::parent().map(|pid| Value::Struct {
-        symbol: option_some_struct_symbol(&option_symbol, resolver),
+        symbol: option_some_struct_symbol(&option_symbol, call.resolver),
         fields: vec![Value::Int(pid)],
     });
-    Ok(helpers::option_value(option_symbol, pid))
+    helpers::option_value(option_symbol, call.resolver, pid)
 }
 
 // ----- ReplyTo methods ----------------------------------------------------
@@ -263,20 +247,16 @@ fn parent<R: CallResolver>(function: &IRFunction, resolver: &R) -> Result<Value,
 /// originating caller's one-shot reply slot, stamped with `self`'s correlation
 /// token. Returns `Delivery.Delivered` if the caller was still awaiting the
 /// reply, `Delivery.Expired` if it had moved on. Mirrors `emit_reply_send`.
-fn reply_send<R: CallResolver>(
-    function: &IRFunction,
-    args: &[Value],
-    resolver: &R,
-) -> Result<Value, RuntimeError> {
-    let coords = reply_to_coords(function, args)?;
-    let reply = nth(function, args, 1, "reply")?;
-    let delivery_symbol = helpers::enum_return_symbol(function, "ReplyTo.send")?;
+fn reply_send<R: CallResolver>(call: IntrinsicCall<'_, R>) -> Result<Value, RuntimeError> {
+    let coords = reply_to_coords(call.function, call.args)?;
+    let reply = nth(call.function, call.args, 1, "reply")?;
+    let delivery_symbol = helpers::enum_return_symbol(call.function, "ReplyTo.send")?;
     let variant = if scheduler::reply(coords, reply) {
         "Delivered"
     } else {
         "Expired"
     };
-    helpers::unit_variant_value(&delivery_symbol, resolver, variant)
+    helpers::unit_variant_value(&delivery_symbol, call.resolver, variant)
 }
 
 // ----- message materialization --------------------------------------------
@@ -309,10 +289,11 @@ pub(crate) fn build_business_payload<R: CallResolver>(
         symbol: option_some_struct_symbol(option_symbol, resolver),
         fields: vec![Value::Int(info.caller_pid), Value::Int(info.token)],
     });
-    Value::Tuple(vec![
-        message.value,
-        helpers::option_value(option_symbol.clone(), reply_to),
-    ])
+    let option =
+        helpers::option_value(option_symbol.clone(), resolver, reply_to).unwrap_or_else(|error| {
+            panic!("interpreter: business envelope `Option` (seal invariant violation): {error:?}")
+        });
+    Value::Tuple(vec![message.value, option])
 }
 
 /// Recover the payload struct symbol from an `Option<T>` enum decl's
@@ -325,7 +306,7 @@ fn option_some_struct_symbol<R: CallResolver>(option_symbol: &IRSymbol, resolver
     let some = option_decl
         .variants
         .iter()
-        .find(|variant| variant.tag == SOME_TAG)
+        .find(|variant| variant.name == "Some")
         .unwrap_or_else(|| {
             panic!("interpreter: `Option` `{option_symbol}` has no `Some` variant (seal invariant violation)")
         });

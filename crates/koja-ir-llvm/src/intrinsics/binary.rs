@@ -36,18 +36,9 @@ use crate::emit::enums::build_enum_value;
 use crate::emit::heap_layout::load_bit_length;
 use crate::error::{IceExt, LlvmError};
 use crate::intrinsics::heap_payload;
+use crate::intrinsics::option;
 use crate::intrinsics::result;
 use crate::runtime::{declare_binary_slice_extern, declare_utf8_validate_extern};
-
-/// `enum Result<T, E>` variant tag for `Ok(T)`: declaration order
-/// in `koja/lib/global/src/kernel.koja`.
-const RESULT_OK_TAG: IRVariantTag = IRVariantTag(0);
-/// `enum Result<T, E>` variant tag for `Err(E)`.
-const RESULT_ERR_TAG: IRVariantTag = IRVariantTag(1);
-/// `enum Option<T>` variant tags: declaration order in
-/// `koja/lib/global/src/kernel.koja`.
-const OPTION_SOME_TAG: IRVariantTag = IRVariantTag(0);
-const OPTION_NONE_TAG: IRVariantTag = IRVariantTag(1);
 
 pub(super) fn emit_binary<'ctx>(
     ctx: &EmitContext<'ctx>,
@@ -188,11 +179,21 @@ fn emit_byte_lookup<'ctx>(
         .builder
         .build_int_z_extend(byte, i64_ty, "widened")
         .or_ice()?;
-    let some = build_enum_value(ctx, option_symbol, OPTION_SOME_TAG, &[widened.into()])?;
+    let some = build_enum_value(
+        ctx,
+        option_symbol,
+        option::some_tag(ctx, option_symbol),
+        &[widened.into()],
+    )?;
     ctx.builder.build_return(Some(&some)).or_ice()?;
 
     ctx.builder.position_at_end(none_bb);
-    let none = build_enum_value(ctx, option_symbol, OPTION_NONE_TAG, &[])?;
+    let none = build_enum_value(
+        ctx,
+        option_symbol,
+        option::none_tag(ctx, option_symbol),
+        &[],
+    )?;
     ctx.builder.build_return(Some(&none)).or_ice().map(|_| ())
 }
 
@@ -357,7 +358,12 @@ fn emit_to_binary<'ctx>(
     // so rc-acquire the immutable block and hand back its pointer.
     ctx.builder.position_at_end(ok_bb);
     let shared = heap_payload::share_heap_payload(ctx, function.symbol.mangled(), payload)?;
-    return_result(ctx, result_symbol, RESULT_OK_TAG, shared.into())?;
+    return_result(
+        ctx,
+        result_symbol,
+        result::ok_tag(ctx, result_symbol),
+        shared.into(),
+    )?;
 
     emit_err_branch(
         ctx,
@@ -375,7 +381,12 @@ fn emit_err_branch<'ctx>(
 ) -> Result<(), LlvmError> {
     ctx.builder.position_at_end(block);
     let err_msg = emit_string_literal_payload(ctx, message, "binary_err");
-    return_result(ctx, result_symbol, RESULT_ERR_TAG, err_msg.into())
+    return_result(
+        ctx,
+        result_symbol,
+        result::err_tag(ctx, result_symbol),
+        err_msg.into(),
+    )
 }
 
 fn return_result<'ctx>(

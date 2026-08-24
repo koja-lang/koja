@@ -40,14 +40,26 @@ mod string;
 
 pub(crate) use process::build_business_payload;
 
-/// Run the registered intrinsic `id` against `args`. `function` is
-/// the calling [`IRFunction`]: handlers that mint typed return
-/// values (`Option<T>`, `Result<T, E>`, tuples) read the
-/// receiver symbol from `function.return_type`, and pointer-typed
-/// intrinsics (`CPtr.alloc`, `CPtr.offset`, …) read the element
-/// type from `function.params[0].ty` / `function.return_type` to
-/// compute `size_of::<T>()`. `resolver` is consulted when a handler
-/// needs sibling declaration information, so no path fabricates an
+/// The bundle every resolver-aware intrinsic handler receives. `function`
+/// is the calling [`IRFunction`] (handlers read receiver symbols off its
+/// return type), `args` are the evaluated arguments (receiver first), and
+/// `resolver` looks up sibling declarations. Bundled so the next
+/// cross-cutting dependency is a new field here, not a parameter threaded
+/// through every module.
+pub(super) struct IntrinsicCall<'a, R: CallResolver> {
+    pub(super) args: &'a [Value],
+    pub(super) function: &'a IRFunction,
+    pub(super) resolver: &'a R,
+}
+
+/// Run the registered intrinsic `id` for the calling `function`.
+/// Handlers that mint typed return values (`Option<T>`,
+/// `Result<T, E>`, tuples) read the receiver symbol from
+/// `function.return_type`, and pointer-typed intrinsics
+/// (`CPtr.alloc`, `CPtr.offset`, …) read the element type from
+/// `function.params[0].ty` / `function.return_type` to compute
+/// `size_of::<T>()`. `resolver` is consulted when a handler needs
+/// sibling declaration information, so no path fabricates an
 /// `IRSymbol` from a string.
 ///
 /// `async` because the process intrinsics suspend: `Ref.call` parks on
@@ -60,34 +72,33 @@ pub(crate) async fn dispatch<R: CallResolver>(
     args: &[Value],
     resolver: &R,
 ) -> Result<Value, RuntimeError> {
+    let call = IntrinsicCall {
+        args,
+        function,
+        resolver,
+    };
     match *id {
-        IRIntrinsicId::Binary(method) => binary::binary(method, function, args, resolver),
-        IRIntrinsicId::Bits(method) => binary::bits(method, function, args),
+        IRIntrinsicId::Binary(method) => binary::binary(method, call),
+        IRIntrinsicId::Bits(method) => binary::bits(method, call),
         IRIntrinsicId::Bitwise { ty, op } => bitwise::dispatch(ty, op, args),
         IRIntrinsicId::CPtr(method) => cptr::dispatch(method, function, args),
-        IRIntrinsicId::CString(_) => cstring::to_string(function, args, resolver),
+        IRIntrinsicId::CString(_) => cstring::to_string(call),
         IRIntrinsicId::Consuming(method) => consuming::dispatch(method, args),
         IRIntrinsicId::Debug(impl_) => debug::dispatch(impl_, args),
         IRIntrinsicId::Equality(impl_) => equality::dispatch(impl_, args),
         IRIntrinsicId::Hash(impl_) => hash::dispatch(impl_, args),
         IRIntrinsicId::Kernel(KernelMethod::Panic) => kernel::panic(args),
-        IRIntrinsicId::List(method) => list::dispatch(method, function, args, resolver),
-        IRIntrinsicId::Map(method) => map::dispatch(method, function, args),
-        IRIntrinsicId::NumericConvert(convert) => {
-            numeric::dispatch(convert, function, args, resolver)
-        }
-        IRIntrinsicId::Parse(target) => parse::dispatch(target, function, args, resolver),
+        IRIntrinsicId::List(method) => list::dispatch(method, call),
+        IRIntrinsicId::Map(method) => map::dispatch(method, call),
+        IRIntrinsicId::NumericConvert(convert) => numeric::dispatch(convert, call),
+        IRIntrinsicId::Parse(target) => parse::dispatch(target, call),
         IRIntrinsicId::Print => print::global_print(args),
-        IRIntrinsicId::Process(method) => {
-            process::process_dispatch(method, function, args, resolver)
-        }
-        IRIntrinsicId::Ref(method) => process::ref_dispatch(method, function, args, resolver).await,
-        IRIntrinsicId::ReplyTo(method) => {
-            process::reply_to_dispatch(method, function, args, resolver).await
-        }
+        IRIntrinsicId::Process(method) => process::process_dispatch(method, call),
+        IRIntrinsicId::Ref(method) => process::ref_dispatch(method, call).await,
+        IRIntrinsicId::ReplyTo(method) => process::reply_to_dispatch(method, call).await,
         IRIntrinsicId::RuntimeBlock(method) => runtime_block::dispatch(method, args),
-        IRIntrinsicId::Set(method) => set::dispatch(method, function, args),
-        IRIntrinsicId::Socket(method) => socket::dispatch(method, function, args, resolver).await,
-        IRIntrinsicId::String(method) => string::dispatch(method, function, args, resolver),
+        IRIntrinsicId::Set(method) => set::dispatch(method, call),
+        IRIntrinsicId::Socket(method) => socket::dispatch(method, call).await,
+        IRIntrinsicId::String(method) => string::dispatch(method, call),
     }
 }

@@ -79,6 +79,30 @@ pub enum Lifecycle {
     Reload = 2,
 }
 
+impl Lifecycle {
+    /// The event a drained signal's wire byte names, or `None` for an
+    /// unknown byte.
+    pub fn from_index(index: i64) -> Option<Self> {
+        match index {
+            0 => Some(Self::Shutdown),
+            1 => Some(Self::Interrupt),
+            2 => Some(Self::Reload),
+            _ => None,
+        }
+    }
+
+    /// The `Process.Lifecycle` variant this event materializes as.
+    /// Backends that build the enum value resolve its tag by this name
+    /// rather than trusting stdlib declaration order.
+    pub fn variant_name(self) -> &'static str {
+        match self {
+            Self::Shutdown => "Shutdown",
+            Self::Interrupt => "Interrupt",
+            Self::Reload => "Reload",
+        }
+    }
+}
+
 /// Whether the reactor should wake for readable or writable readiness.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Interest {
@@ -184,4 +208,25 @@ pub trait Driver {
 
     /// Boot the runtime and run until the entry process dies.
     fn run(self);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Lifecycle;
+
+    /// Pins the `Process.Lifecycle` wire bytes and variant names to the
+    /// ABI.md catalog. The backends verify the stdlib declaration side;
+    /// this test verifies the Rust side.
+    #[test]
+    fn lifecycle_wire_contract_pins_codes_and_names() {
+        let events = [
+            (Lifecycle::Shutdown, 0, "Shutdown"),
+            (Lifecycle::Interrupt, 1, "Interrupt"),
+            (Lifecycle::Reload, 2, "Reload"),
+        ];
+        for (event, wire, name) in events {
+            assert_eq!(event as i64, wire);
+            assert_eq!(event.variant_name(), name);
+        }
+    }
 }

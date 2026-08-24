@@ -19,7 +19,7 @@ use koja_ir::{
     ReceiveAfter, ReceiveArm, ReceiveTag, ResolvedBinaryLayout, ValueId, pack_integer_segment,
 };
 use koja_runtime_core::{
-    CrashInfo, Driver, ExitNotice, ExitReason, Priority, Readiness, Tag, Wake,
+    CrashInfo, Driver, ExitNotice, ExitReason, Lifecycle, Priority, Readiness, Tag, Wake,
     duration_from_user_millis,
 };
 
@@ -878,9 +878,8 @@ fn dispatch_received<R: CallResolver>(
 }
 
 /// Materialize the `Lifecycle` enum value for a drained signal.
-/// `variant` is the variant index in declaration order (Shutdown=0,
-/// Interrupt=1, Reload=2), the same mapping
-/// `koja_runtime::signals::drain` documents.
+/// `variant` is the wire byte `koja_runtime::signals::drain` documents;
+/// the enum tag is resolved by variant name, never declaration order.
 fn lifecycle_value<R: CallResolver>(arm: &ReceiveArm, variant: i64, resolver: &R) -> Value {
     let IRType::Enum(symbol) = &arm.payload_type else {
         panic!(
@@ -889,21 +888,27 @@ fn lifecycle_value<R: CallResolver>(arm: &ReceiveArm, variant: i64, resolver: &R
             arm.payload_type,
         );
     };
+    let event = Lifecycle::from_index(variant).unwrap_or_else(|| {
+        panic!("interpreter: lifecycle wire byte {variant} names no `Lifecycle` event")
+    });
     let decl = resolver.enum_decl(symbol.mangled()).unwrap_or_else(|| {
         panic!("interpreter: enum `{symbol}` missing from IR (seal invariant violation)")
     });
-    let variant_decl = decl.variants.get(variant as usize).unwrap_or_else(|| {
-        panic!(
-            "interpreter: lifecycle variant index {variant} out of range for `{symbol}` \
-             ({} variant(s) declared)",
-            decl.variants.len(),
-        )
-    });
+    let variant_name = event.variant_name();
+    let variant_decl = decl
+        .variants
+        .iter()
+        .find(|decl_variant| decl_variant.name == variant_name)
+        .unwrap_or_else(|| {
+            panic!(
+                "interpreter: `{symbol}` has no `{variant_name}` variant (seal invariant violation)"
+            )
+        });
     Value::Enum {
         name: variant_decl.name.clone(),
         payload: EnumPayload::Unit,
         symbol: symbol.clone(),
-        tag: IRVariantTag(variant as u8),
+        tag: variant_decl.tag,
     }
 }
 
@@ -996,8 +1001,8 @@ pub(crate) fn build_exit_signal_value<R: CallResolver>(resolver: &R, notice: &Ex
 }
 
 /// Materialize the `ExitReason` enum value for a staged notice. The
-/// variant index is the core [`ExitReason`]'s wire code (declaration
-/// order is the pinned ABI contract).
+/// variant tag is resolved by name from the core [`ExitReason`], so
+/// stdlib declaration order is not load-bearing here.
 fn build_exit_reason_value<R: CallResolver>(
     resolver: &R,
     reason_symbol: &IRSymbol,
@@ -1008,14 +1013,17 @@ fn build_exit_reason_value<R: CallResolver>(
         .unwrap_or_else(|| {
             panic!("interpreter: enum `{reason_symbol}` missing from IR (seal invariant violation)")
         });
-    let variant_index = notice.reason as usize;
-    let variant = decl.variants.get(variant_index).unwrap_or_else(|| {
-        panic!(
-            "interpreter: exit-reason index {variant_index} out of range for `{reason_symbol}` \
-             ({} variant(s) declared)",
-            decl.variants.len(),
-        )
-    });
+    let variant_name = notice.reason.variant_name();
+    let variant = decl
+        .variants
+        .iter()
+        .find(|decl_variant| decl_variant.name == variant_name)
+        .unwrap_or_else(|| {
+            panic!(
+                "interpreter: `{reason_symbol}` has no `{variant_name}` variant \
+                 (seal invariant violation)"
+            )
+        });
     let payload = if notice.reason == ExitReason::Crashed {
         let IRVariantPayload::Tuple(types) = &variant.payload else {
             panic!("interpreter: `ExitReason.Crashed` payload is not a tuple");

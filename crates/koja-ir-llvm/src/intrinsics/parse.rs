@@ -16,17 +16,15 @@
 use inkwell::basic_block::BasicBlock;
 use inkwell::types::BasicType;
 use inkwell::values::{BasicValueEnum, FunctionValue, PointerValue};
-use koja_ir::{IRFunction, IRSymbol, IRType, IRVariantTag, ParseTarget};
+use koja_ir::{IRFunction, IRSymbol, IRType, ParseTarget};
 
 use crate::ctx::EmitContext;
 use crate::emit::enums::build_enum_value;
 use crate::error::{IceExt, LlvmError};
 use crate::intrinsics::numeric::build_conversion_error;
+use crate::intrinsics::result;
 use crate::runtime::{declare_float_parse_extern, declare_int_parse_extern};
 
-/// `enum Result<T, E>` variant tag for `Ok(T)`: declaration order
-/// in `koja/lib/global/src/kernel.koja`.
-const RESULT_OK_TAG: IRVariantTag = IRVariantTag(0);
 /// Return codes of the runtime parse helpers, per the runtime's
 /// numeric parse helper ABI: they MUST equal `koja-runtime`'s
 /// `parse_text::{PARSE_OK, PARSE_OUT_OF_RANGE}` (invalid format is
@@ -123,7 +121,12 @@ fn emit_ok_branch<'ctx>(
         .builder
         .build_load(load_ty, out_ptr, "parsed_val")
         .or_ice()?;
-    let ok = build_enum_value(ctx, result_symbol, RESULT_OK_TAG, &[parsed])?;
+    let ok = build_enum_value(
+        ctx,
+        result_symbol,
+        result::ok_tag(ctx, result_symbol),
+        &[parsed],
+    )?;
     ctx.builder.build_return(Some(&ok)).or_ice().map(|_| ())
 }
 

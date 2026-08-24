@@ -11,4 +11,5 @@ koja-typecheck = { path = "../koja-typecheck" }
 
 [dev-dependencies]
 koja-parser = { path = "../koja-parser" }
+koja-runtime-core = { path = "../koja-runtime-core" }
 koja-stdlib = { path = "../koja-stdlib" }

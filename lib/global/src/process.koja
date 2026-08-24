@@ -26,6 +26,19 @@ enum Process.Priority
   Normal
 end
 
+@doc """
+The lifecycle state of a live process, as reported by `pid.state()` and
+counted by `Runtime.process_count`. A dead process has no state, so the
+observability functions report it as `Option.None`.
+"""
+enum Process.State
+  Blocked
+  Created
+  Runnable
+  Running
+  WaitingIO
+end
+
 # Maps a stop reason to an OS exit code. Runtime-internal: IR lowering
 # routes the entry process's StopReason through `code()` to produce the
 # OS exit code. Not user API.
@@ -52,7 +65,9 @@ end
 
 @doc """
 Why a process stopped. The variant order is a wire contract shared with
-the runtime (`0=Normal`, `1=Shutdown`, `2=Killed`, `3=Crashed`).
+the runtime (`0=Normal`, `1=Shutdown`, `2=Killed`, `3=Crashed`), and
+the compiler verifies it at build time against the catalog in
+design/ABI.md.
 """
 enum Process.ExitReason
   Normal

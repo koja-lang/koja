@@ -1,0 +1,54 @@
+# The Runtime observability API on both backends: global process
+# counts, self mailbox depth, and the per-pid gauges on `Pid`. The
+# depth probe casts to itself inside one `handle` call, so the queued
+# count it reports is exact and deterministic.
+
+alias Process.Step
+alias Process.StopReason
+
+enum ProbeMsg
+  Fill(Int)
+  Noop
+end
+
+struct Probe: Process<Int, ProbeMsg, Int>
+  fn start(config: Int) -> Self ! StopReason
+    Probe{}
+  end
+
+  fn handle(self, msg: ProbeMsg, from: Option<ReplyTo<Int>>) -> Step<Self>
+    match msg
+      ProbeMsg.Fill(count) ->
+        me: Ref<ProbeMsg, Int> = Ref.self_ref()
+
+        for _ in Range{start: 1, stop: count}
+          me.cast(ProbeMsg.Noop)
+        end
+
+        ReplyTo.reply(from, Runtime.mailbox_depth())
+        Step.Continue(self)
+
+      ProbeMsg.Noop ->
+        Step.Continue(self)
+    end
+  end
+end
+
+"count_at_least_one: #{Runtime.process_count() >= 1}".print()
+"self_depth_zero: #{Runtime.mailbox_depth() == 0}".print()
+"running_at_least_one: #{Runtime.process_count(Process.State.Running) >= 1}".print()
+"schedulers_at_least_one: #{Runtime.scheduler_count() >= 1}".print()
+"invalid_pid_state_none: #{Pid{id: 0}.state().none?()}".print()
+"invalid_pid_depth_none: #{Pid{id: 0}.mailbox_depth().none?()}".print()
+
+probe = spawn Probe.start(0)
+"spawned_alive: #{probe.pid().state().some?()}".print()
+
+match probe.call(ProbeMsg.Fill(5), 5000)
+  Result.Ok(depth) -> "fill_depth: #{depth}".print()
+  Result.Err(_) -> "fill_depth: call failed".print()
+end
+
+probe.kill()
+"killed_state_none: #{probe.pid().state().none?()}".print()
+"killed_depth_none: #{probe.pid().mailbox_depth().none?()}".print()

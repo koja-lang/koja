@@ -10,29 +10,30 @@
 //! comes from `function.return_type`. The error variant tag is
 //! resolved by name via `helpers::err_variant_value`.
 
-use koja_ir::{IRFunction, ParseTarget};
+use koja_ir::ParseTarget;
 use koja_runtime::parse_text::{ParseOutcome, parse_float_text, parse_int_text};
 
 use crate::error::RuntimeError;
 use crate::interpreter::CallResolver;
-use crate::intrinsics::helpers;
+use crate::intrinsics::{IntrinsicCall, helpers};
 use crate::value::Value;
 
 pub(super) fn dispatch<R: CallResolver>(
     target: ParseTarget,
-    function: &IRFunction,
-    args: &[Value],
-    resolver: &R,
+    call: IntrinsicCall<'_, R>,
 ) -> Result<Value, RuntimeError> {
-    let bytes = match args {
+    let bytes = match call.args {
         [Value::String(bytes)] => bytes.as_slice(),
         _ => {
             return Err(RuntimeError::TypeMismatch {
-                detail: format!("{target:?}.parse expects a single String argument, got {args:?}"),
+                detail: format!(
+                    "{target:?}.parse expects a single String argument, got {:?}",
+                    call.args
+                ),
             });
         }
     };
-    let result_symbol = helpers::enum_return_symbol(function, &format!("{target:?}.parse"))?;
+    let result_symbol = helpers::enum_return_symbol(call.function, &format!("{target:?}.parse"))?;
     let outcome = match std::str::from_utf8(bytes) {
         Ok(s) => {
             let trimmed = s.trim();
@@ -49,14 +50,14 @@ pub(super) fn dispatch<R: CallResolver>(
         ParseOutcome::Ok(v) => Ok(v),
         ParseOutcome::InvalidFormat => Err(helpers::err_variant_value(
             &result_symbol,
-            resolver,
+            call.resolver,
             "InvalidFormat",
         )?),
         ParseOutcome::OutOfRange => Err(helpers::err_variant_value(
             &result_symbol,
-            resolver,
+            call.resolver,
             "OutOfRange",
         )?),
     };
-    Ok(helpers::result_value(result_symbol, parsed))
+    helpers::result_value(result_symbol, call.resolver, parsed)
 }

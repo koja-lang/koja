@@ -10,26 +10,26 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use koja_ir::{IRFunction, SetMethod};
+use koja_ir::SetMethod;
 
 use crate::error::RuntimeError;
-use crate::intrinsics::helpers;
+use crate::interpreter::CallResolver;
+use crate::intrinsics::{IntrinsicCall, helpers};
 use crate::value::{SetEntries, Value};
 
-pub(super) fn dispatch(
+pub(super) fn dispatch<R: CallResolver>(
     method: SetMethod,
-    function: &IRFunction,
-    args: &[Value],
+    call: IntrinsicCall<'_, R>,
 ) -> Result<Value, RuntimeError> {
     match method {
-        SetMethod::EmptyQ => empty_q(args),
-        SetMethod::FromList => from_list(args),
-        SetMethod::HasQ => has_q(args),
-        SetMethod::Insert => insert(args),
-        SetMethod::Length => length(args),
+        SetMethod::EmptyQ => empty_q(call.args),
+        SetMethod::FromList => from_list(call.args),
+        SetMethod::HasQ => has_q(call.args),
+        SetMethod::Insert => insert(call.args),
+        SetMethod::Length => length(call.args),
         SetMethod::New => new(),
-        SetMethod::Next => next(function, args),
-        SetMethod::Remove => remove(args),
+        SetMethod::Next => next(call),
+        SetMethod::Remove => remove(call.args),
     }
 }
 
@@ -53,9 +53,9 @@ fn has_q(args: &[Value]) -> Result<Value, RuntimeError> {
     Ok(Value::Bool(set.borrow().iter().any(|v| v == &item)))
 }
 
-fn next(function: &IRFunction, args: &[Value]) -> Result<Value, RuntimeError> {
-    let set = expect_set(args, 0, "Set.next")?;
-    let slot = match expect_arg(args, 1, "Set.next")? {
+fn next<R: CallResolver>(call: IntrinsicCall<'_, R>) -> Result<Value, RuntimeError> {
+    let set = expect_set(call.args, 0, "Set.next")?;
+    let slot = match expect_arg(call.args, 1, "Set.next")? {
         Value::Int(slot) => *slot,
         other => {
             return Err(RuntimeError::TypeMismatch {
@@ -63,13 +63,13 @@ fn next(function: &IRFunction, args: &[Value]) -> Result<Value, RuntimeError> {
             });
         }
     };
-    let option_symbol = helpers::enum_return_symbol(function, "Set.next")?;
+    let option_symbol = helpers::enum_return_symbol(call.function, "Set.next")?;
     let items = set.borrow();
     let value = usize::try_from(slot)
         .ok()
         .and_then(|index| items.get(index).map(|item| (index, item)))
         .map(|(index, item)| Value::Tuple(vec![item.clone(), Value::Int((index + 1) as i64)]));
-    Ok(helpers::option_value(option_symbol, value))
+    helpers::option_value(option_symbol, call.resolver, value)
 }
 
 pub(super) fn insert(args: &[Value]) -> Result<Value, RuntimeError> {

@@ -20,37 +20,34 @@
 
 use std::str;
 
-use koja_ir::{BinaryMethod, BitsMethod, IRFunction};
+use koja_ir::{BinaryMethod, BitsMethod};
 
 use crate::error::RuntimeError;
 use crate::interpreter::CallResolver;
-use crate::intrinsics::helpers;
+use crate::intrinsics::{IntrinsicCall, helpers};
 use crate::value::Value;
 
 pub(super) fn binary<R: CallResolver>(
     method: BinaryMethod,
-    function: &IRFunction,
-    args: &[Value],
-    resolver: &R,
+    call: IntrinsicCall<'_, R>,
 ) -> Result<Value, RuntimeError> {
     match method {
-        BinaryMethod::At => at(function, args),
-        BinaryMethod::ByteSize => byte_size(args),
-        BinaryMethod::Slice => slice(args),
-        BinaryMethod::ToBits => to_bits(args),
-        BinaryMethod::ToString => to_string(function, args, resolver),
+        BinaryMethod::At => at(call),
+        BinaryMethod::ByteSize => byte_size(call.args),
+        BinaryMethod::Slice => slice(call.args),
+        BinaryMethod::ToBits => to_bits(call.args),
+        BinaryMethod::ToString => to_string(call),
     }
 }
 
-pub(super) fn bits(
+pub(super) fn bits<R: CallResolver>(
     method: BitsMethod,
-    function: &IRFunction,
-    args: &[Value],
+    call: IntrinsicCall<'_, R>,
 ) -> Result<Value, RuntimeError> {
     match method {
-        BitsMethod::BitSize => bit_size(args),
-        BitsMethod::ByteAt => byte_at(function, args),
-        BitsMethod::ToBinary => bits_to_binary(function, args),
+        BitsMethod::BitSize => bit_size(call.args),
+        BitsMethod::ByteAt => byte_at(call),
+        BitsMethod::ToBinary => bits_to_binary(call),
     }
 }
 
@@ -66,38 +63,40 @@ fn bit_size(args: &[Value]) -> Result<Value, RuntimeError> {
     Ok(Value::Int(*bit_length as i64))
 }
 
-fn byte_at(function: &IRFunction, args: &[Value]) -> Result<Value, RuntimeError> {
-    let [Value::Bits { bytes, .. }, Value::Int(index)] = args else {
+fn byte_at<R: CallResolver>(call: IntrinsicCall<'_, R>) -> Result<Value, RuntimeError> {
+    let [Value::Bits { bytes, .. }, Value::Int(index)] = call.args else {
         return Err(RuntimeError::TypeMismatch {
             detail: format!(
-                "Bits.byte_at expects (Bits, Int) arguments, got {} arg(s): {args:?}",
-                args.len(),
+                "Bits.byte_at expects (Bits, Int) arguments, got {} arg(s): {:?}",
+                call.args.len(),
+                call.args,
             ),
         });
     };
-    let option_symbol = helpers::enum_return_symbol(function, "Bits.byte_at")?;
+    let option_symbol = helpers::enum_return_symbol(call.function, "Bits.byte_at")?;
     let byte = usize::try_from(*index)
         .ok()
         .and_then(|i| bytes.get(i))
         .map(|b| Value::Int(*b as i64));
-    Ok(helpers::option_value(option_symbol, byte))
+    helpers::option_value(option_symbol, call.resolver, byte)
 }
 
-fn at(function: &IRFunction, args: &[Value]) -> Result<Value, RuntimeError> {
-    let [Value::Binary(bytes), Value::Int(index)] = args else {
+fn at<R: CallResolver>(call: IntrinsicCall<'_, R>) -> Result<Value, RuntimeError> {
+    let [Value::Binary(bytes), Value::Int(index)] = call.args else {
         return Err(RuntimeError::TypeMismatch {
             detail: format!(
-                "Binary.at expects (Binary, Int) arguments, got {} arg(s): {args:?}",
-                args.len(),
+                "Binary.at expects (Binary, Int) arguments, got {} arg(s): {:?}",
+                call.args.len(),
+                call.args,
             ),
         });
     };
-    let option_symbol = helpers::enum_return_symbol(function, "Binary.at")?;
+    let option_symbol = helpers::enum_return_symbol(call.function, "Binary.at")?;
     let byte = usize::try_from(*index)
         .ok()
         .and_then(|i| bytes.get(i))
         .map(|b| Value::Int(*b as i64));
-    Ok(helpers::option_value(option_symbol, byte))
+    helpers::option_value(option_symbol, call.resolver, byte)
 }
 
 fn slice(args: &[Value]) -> Result<Value, RuntimeError> {
@@ -148,41 +147,39 @@ fn to_bits(args: &[Value]) -> Result<Value, RuntimeError> {
     })
 }
 
-fn to_string<R: CallResolver>(
-    function: &IRFunction,
-    args: &[Value],
-    resolver: &R,
-) -> Result<Value, RuntimeError> {
-    let [Value::Binary(bytes)] = args else {
+fn to_string<R: CallResolver>(call: IntrinsicCall<'_, R>) -> Result<Value, RuntimeError> {
+    let [Value::Binary(bytes)] = call.args else {
         return Err(RuntimeError::TypeMismatch {
             detail: format!(
-                "Binary.to_string expects a single Binary argument, got {} arg(s): {args:?}",
-                args.len(),
+                "Binary.to_string expects a single Binary argument, got {} arg(s): {:?}",
+                call.args.len(),
+                call.args,
             ),
         });
     };
-    let result_symbol = helpers::enum_return_symbol(function, "Binary.to_string")?;
+    let result_symbol = helpers::enum_return_symbol(call.function, "Binary.to_string")?;
     let parsed = match str::from_utf8(bytes) {
         Ok(_) => Ok(Value::String(bytes.clone())),
         Err(_) => Err(helpers::err_variant_value(
             &result_symbol,
-            resolver,
+            call.resolver,
             "InvalidUTF8",
         )?),
     };
-    Ok(helpers::result_value(result_symbol, parsed))
+    helpers::result_value(result_symbol, call.resolver, parsed)
 }
 
-fn bits_to_binary(function: &IRFunction, args: &[Value]) -> Result<Value, RuntimeError> {
-    let [Value::Bits { bytes, bit_length }] = args else {
+fn bits_to_binary<R: CallResolver>(call: IntrinsicCall<'_, R>) -> Result<Value, RuntimeError> {
+    let [Value::Bits { bytes, bit_length }] = call.args else {
         return Err(RuntimeError::TypeMismatch {
             detail: format!(
-                "Bits.to_binary expects a single Bits argument, got {} arg(s): {args:?}",
-                args.len(),
+                "Bits.to_binary expects a single Bits argument, got {} arg(s): {:?}",
+                call.args.len(),
+                call.args,
             ),
         });
     };
-    let result_symbol = helpers::enum_return_symbol(function, "Bits.to_binary")?;
+    let result_symbol = helpers::enum_return_symbol(call.function, "Bits.to_binary")?;
     let parsed = if bit_length.is_multiple_of(8) {
         Ok(Value::Binary(bytes.clone()))
     } else {
@@ -191,5 +188,5 @@ fn bits_to_binary(function: &IRFunction, args: &[Value]) -> Result<Value, Runtim
              has a trailing partial byte)"
         )))
     };
-    Ok(helpers::result_value(result_symbol, parsed))
+    helpers::result_value(result_symbol, call.resolver, parsed)
 }

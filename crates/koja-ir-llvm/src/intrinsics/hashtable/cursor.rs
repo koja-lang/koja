@@ -11,7 +11,8 @@ use crate::intrinsics::element::acquire_value;
 use crate::types::{ir_basic_type, tuple_struct_type};
 
 use super::util::{entry_pointer, expect_enum_symbol, extract_table_fields, nth_param, value_slot};
-use super::{HashtableLayout, OPTION_NONE_TAG, OPTION_SOME_TAG, STATE_OCCUPIED};
+use super::{HashtableLayout, STATE_OCCUPIED};
+use crate::intrinsics::option;
 
 pub(crate) fn emit_next<'ctx>(
     ctx: &EmitContext<'ctx>,
@@ -133,11 +134,21 @@ pub(crate) fn emit_next<'ctx>(
         tuple_elements(&payload_type, function)?,
         &[item, next_cursor.into()],
     )?;
-    let some = build_enum_value(ctx, option_symbol, OPTION_SOME_TAG, &[payload.into()])?;
+    let some = build_enum_value(
+        ctx,
+        option_symbol,
+        option::some_tag(ctx, option_symbol),
+        &[payload.into()],
+    )?;
     ctx.builder.build_return(Some(&some)).or_ice()?;
 
     ctx.builder.position_at_end(none);
-    let none_value = build_enum_value(ctx, option_symbol, OPTION_NONE_TAG, &[])?;
+    let none_value = build_enum_value(
+        ctx,
+        option_symbol,
+        option::none_tag(ctx, option_symbol),
+        &[],
+    )?;
     ctx.builder
         .build_return(Some(&none_value))
         .or_ice()
@@ -151,7 +162,7 @@ fn option_payload_type(
 ) -> Result<IRType, LlvmError> {
     match ctx
         .layouts
-        .enum_variant_payload(option_symbol, OPTION_SOME_TAG)
+        .enum_variant_payload(option_symbol, option::some_tag(ctx, option_symbol))
     {
         IRVariantPayload::Tuple(types) if types.len() == 1 => Ok(types.into_iter().next().unwrap()),
         other => Err(LlvmError::Codegen(format!(

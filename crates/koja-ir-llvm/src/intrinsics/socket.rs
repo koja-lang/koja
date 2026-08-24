@@ -21,23 +21,18 @@ use inkwell::IntPredicate;
 use inkwell::basic_block::BasicBlock;
 use inkwell::types::{BasicType, BasicTypeEnum, IntType};
 use inkwell::values::{BasicValueEnum, FunctionValue, IntValue, PointerValue, StructValue};
-use koja_ir::{IRFunction, IRSymbol, IRType, IRVariantPayload, IRVariantTag, SocketMethod};
+use koja_ir::{IRFunction, IRSymbol, IRType, IRVariantPayload, SocketMethod};
 
 use crate::ctx::EmitContext;
 use crate::emit::enums::build_enum_value;
 use crate::error::{IceExt, LlvmError};
 use crate::intrinsics::cptr::declare_memcpy_extern;
+use crate::intrinsics::result;
 use crate::runtime::{
     declare_free_extern, declare_last_error_extern, declare_malloc_extern,
     declare_socket_recv_from_extern, declare_socket_resolve_extern,
 };
 use crate::types::{ir_basic_type, list_value_type};
-
-/// `enum Result<T, E>` variant tag for `Ok(T)`. Lifted from
-/// `koja/lib/global/src/kernel.koja`'s declaration order.
-const RESULT_OK_TAG: IRVariantTag = IRVariantTag(0);
-/// `enum Result<T, E>` variant tag for `Err(E)`.
-const RESULT_ERR_TAG: IRVariantTag = IRVariantTag(1);
 
 /// Byte count of the `i64 count` header the runtime writes at the
 /// front of the `koja_socket_resolve` buffer. The IP-pointer array
@@ -138,7 +133,12 @@ fn emit_resolve<'ctx>(
         .or_ice()?;
 
     let list_val = build_list_struct(ctx, list_buf, count, count)?;
-    let ok = build_enum_value(ctx, result_symbol, RESULT_OK_TAG, &[list_val.into()])?;
+    let ok = build_enum_value(
+        ctx,
+        result_symbol,
+        result::ok_tag(ctx, result_symbol),
+        &[list_val.into()],
+    )?;
     ret(ctx, ok)
 }
 
@@ -239,7 +239,12 @@ fn emit_recv_from<'ctx>(
     let received =
         build_insert(ctx, received.into(), recv_port, 2, "tuple_with_port")?.into_struct_value();
 
-    let ok = build_enum_value(ctx, result_symbol, RESULT_OK_TAG, &[received.into()])?;
+    let ok = build_enum_value(
+        ctx,
+        result_symbol,
+        result::ok_tag(ctx, result_symbol),
+        &[received.into()],
+    )?;
     ret(ctx, ok)
 }
 
@@ -254,7 +259,12 @@ fn build_err<'ctx>(
 ) -> Result<BasicValueEnum<'ctx>, LlvmError> {
     let last_error = declare_last_error_extern(ctx);
     let err_msg = ctx.call_basic(last_error, &[], "err_msg")?;
-    build_enum_value(ctx, result_symbol, RESULT_ERR_TAG, &[err_msg])
+    build_enum_value(
+        ctx,
+        result_symbol,
+        result::err_tag(ctx, result_symbol),
+        &[err_msg],
+    )
 }
 
 /// Append `ok` / `err` blocks to `llvm_function` and conditional-
@@ -456,7 +466,7 @@ fn single_ok_payload(
 ) -> Result<IRType, LlvmError> {
     let payload = ctx
         .layouts
-        .enum_variant_payload(result_symbol, RESULT_OK_TAG);
+        .enum_variant_payload(result_symbol, result::ok_tag(ctx, result_symbol));
     match payload {
         IRVariantPayload::Tuple(types) if types.len() == 1 => Ok(types.into_iter().next().unwrap()),
         IRVariantPayload::Struct(fields) if fields.len() == 1 => {

@@ -22,13 +22,13 @@ use std::cell::RefCell;
 use std::ffi::CString;
 use std::rc::Rc;
 
-use koja_ir::{IRFunction, IRSymbol, IRType, SocketMethod};
+use koja_ir::{IRSymbol, IRType, SocketMethod};
 use koja_runtime_core::Interest;
 
 use crate::abi;
 use crate::error::RuntimeError;
 use crate::interpreter::CallResolver;
-use crate::intrinsics::helpers;
+use crate::intrinsics::{IntrinsicCall, helpers};
 use crate::reactor;
 use crate::value::Value;
 
@@ -49,39 +49,33 @@ unsafe extern "C" {
 
 pub(super) async fn dispatch<R: CallResolver>(
     method: SocketMethod,
-    function: &IRFunction,
-    args: &[Value],
-    resolver: &R,
+    call: IntrinsicCall<'_, R>,
 ) -> Result<Value, RuntimeError> {
     match method {
         SocketMethod::LastError => Ok(last_error_value()),
-        SocketMethod::RecvFromRaw => recv_from(function, args, resolver).await,
-        SocketMethod::ResolveRaw => resolve(function, args, resolver),
+        SocketMethod::RecvFromRaw => recv_from(call).await,
+        SocketMethod::ResolveRaw => resolve(call),
     }
 }
 
-fn resolve<R: CallResolver>(
-    function: &IRFunction,
-    args: &[Value],
-    resolver: &R,
-) -> Result<Value, RuntimeError> {
-    let [Value::String(hostname)] = args else {
+fn resolve<R: CallResolver>(call: IntrinsicCall<'_, R>) -> Result<Value, RuntimeError> {
+    let [Value::String(hostname)] = call.args else {
         return Err(RuntimeError::TypeMismatch {
-            detail: format!("Socket.resolve_raw expects a single String argument, got {args:?}"),
+            detail: format!(
+                "Socket.resolve_raw expects a single String argument, got {:?}",
+                call.args
+            ),
         });
     };
-    let result_symbol = helpers::enum_return_symbol(function, "Socket.resolve_raw")?;
-    validate_resolve_payload(&result_symbol, resolver)?;
+    let result_symbol = helpers::enum_return_symbol(call.function, "Socket.resolve_raw")?;
+    validate_resolve_payload(&result_symbol, call.resolver)?;
 
     let c_hostname = CString::new(hostname.as_slice()).map_err(|_| RuntimeError::TypeMismatch {
         detail: "Socket.resolve: hostname contains an interior NUL byte".to_string(),
     })?;
     let buffer = unsafe { koja_socket_resolve(c_hostname.as_ptr() as *const u8) };
     if buffer.is_null() {
-        return Ok(helpers::result_value(
-            result_symbol,
-            Err(last_error_value()),
-        ));
+        return helpers::result_value(result_symbol, call.resolver, Err(last_error_value()));
     }
 
     let count = unsafe { *(buffer as *const i64) }.max(0) as usize;
@@ -94,36 +88,29 @@ fn resolve<R: CallResolver>(
     abi::free_raw_buffer(buffer);
 
     let list = Value::List(Rc::new(RefCell::new(addresses)));
-    Ok(helpers::result_value(result_symbol, Ok(list)))
+    helpers::result_value(result_symbol, call.resolver, Ok(list))
 }
 
-async fn recv_from<R: CallResolver>(
-    function: &IRFunction,
-    args: &[Value],
-    resolver: &R,
-) -> Result<Value, RuntimeError> {
-    let [receiver, Value::Int(count)] = args else {
+async fn recv_from<R: CallResolver>(call: IntrinsicCall<'_, R>) -> Result<Value, RuntimeError> {
+    let [receiver, Value::Int(count)] = call.args else {
         return Err(RuntimeError::TypeMismatch {
-            detail: format!("Socket.recv_from_raw expects (Socket, Int) arguments, got {args:?}"),
+            detail: format!(
+                "Socket.recv_from_raw expects (Socket, Int) arguments, got {:?}",
+                call.args
+            ),
         });
     };
     let fd = socket_fd(receiver)?;
-    let result_symbol = helpers::enum_return_symbol(function, "Socket.recv_from_raw")?;
-    validate_recv_from_payload(&result_symbol, resolver)?;
+    let result_symbol = helpers::enum_return_symbol(call.function, "Socket.recv_from_raw")?;
+    validate_recv_from_payload(&result_symbol, call.resolver)?;
 
     // Interrupted by a signal: surface an error instead of reading.
     if reactor::io_block(fd, Interest::Readable).await {
-        return Ok(helpers::result_value(
-            result_symbol,
-            Err(last_error_value()),
-        ));
+        return helpers::result_value(result_symbol, call.resolver, Err(last_error_value()));
     }
     let buffer = unsafe { koja_socket_recv_from(fd, *count) };
     if buffer.is_null() {
-        return Ok(helpers::result_value(
-            result_symbol,
-            Err(last_error_value()),
-        ));
+        return helpers::result_value(result_symbol, call.resolver, Err(last_error_value()));
     }
 
     let data_payload = unsafe { *(buffer as *const *mut u8) };
@@ -134,7 +121,7 @@ async fn recv_from<R: CallResolver>(
     abi::free_raw_buffer(buffer);
 
     let received = Value::Tuple(vec![data, ip, Value::Int(port)]);
-    Ok(helpers::result_value(result_symbol, Ok(received)))
+    helpers::result_value(result_symbol, call.resolver, Ok(received))
 }
 
 /// `Err` payload for a failed socket call: the runtime's last-error

@@ -32,6 +32,7 @@ mod kernel;
 mod list;
 mod map;
 mod numeric;
+mod option;
 mod parse;
 mod print;
 pub(crate) mod process;

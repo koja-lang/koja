@@ -764,6 +764,7 @@ version = "0.18.0"
 dependencies = [
  "koja-ast",
  "koja-parser",
+ "koja-runtime-core",
  "koja-stdlib",
  "koja-typecheck",
 ]

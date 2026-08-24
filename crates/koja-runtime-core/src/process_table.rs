@@ -299,6 +299,36 @@ pub enum ProcessState {
     Dead,
 }
 
+impl ProcessState {
+    /// The `Process.State` wire index of a live state, an ABI contract
+    /// with the stdlib observability API (0 = `Blocked`, 1 = `Created`,
+    /// 2 = `Runnable`, 3 = `Running`, 4 = `WaitingIO`). `None` for
+    /// `Dead`, which the wire reports as absence.
+    pub fn wire_index(self) -> Option<i64> {
+        match self {
+            Self::Blocked => Some(0),
+            Self::Created => Some(1),
+            Self::Runnable => Some(2),
+            Self::Running => Some(3),
+            Self::WaitingIO => Some(4),
+            Self::Dead => None,
+        }
+    }
+
+    /// The live state a `Process.State` wire index names, or `None` for
+    /// an unknown index.
+    pub fn from_wire_index(index: i64) -> Option<Self> {
+        match index {
+            0 => Some(Self::Blocked),
+            1 => Some(Self::Created),
+            2 => Some(Self::Runnable),
+            3 => Some(Self::Running),
+            4 => Some(Self::WaitingIO),
+            _ => None,
+        }
+    }
+}
+
 /// A process's scheduling priority. The wire weight is an explicit ABI
 /// contract (0 = `Low`, 1 = `Normal`, 2 = `High`) decoded by
 /// `from_index`. The Rust enum's order fixes the ready-queue index via
@@ -343,10 +373,10 @@ impl Priority {
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub enum ExitReason {
     #[default]
-    Normal,
-    Shutdown,
-    Killed,
-    Crashed,
+    Normal = 0,
+    Shutdown = 1,
+    Killed = 2,
+    Crashed = 3,
 }
 
 impl ExitReason {
@@ -358,6 +388,18 @@ impl ExitReason {
             2 => Self::Killed,
             3 => Self::Crashed,
             _ => Self::Normal,
+        }
+    }
+
+    /// The `Process.ExitReason` variant this reason materializes as.
+    /// Backends that build the enum value resolve its tag by this name
+    /// rather than trusting stdlib declaration order.
+    pub fn variant_name(self) -> &'static str {
+        match self {
+            Self::Normal => "Normal",
+            Self::Shutdown => "Shutdown",
+            Self::Killed => "Killed",
+            Self::Crashed => "Crashed",
         }
     }
 }
@@ -706,6 +748,49 @@ impl<X, M: Message> ProcessTable<X, M> {
     pub fn has_system_mail(&self, pid: Pid) -> bool {
         self.with_hot(pid, |_, hot| hot.mailbox.has_system())
             .unwrap_or(false)
+    }
+
+    /// Count of live (non-`Dead`) processes (`Runtime.process_count`).
+    pub fn process_count(&self) -> usize {
+        self.alive.load(Ordering::Relaxed)
+    }
+
+    /// Count of processes currently in `state`
+    /// (`Runtime.process_count(state)`). An on-demand slot scan, a racy
+    /// point-in-time gauge rather than a scheduling input.
+    pub fn process_count_in(&self, state: ProcessState) -> usize {
+        (0..self.arena.len() as u32)
+            .filter(|&index| {
+                self.arena
+                    .get(index)
+                    .is_some_and(|slot| slot.lifecycle.load().state == Some(state))
+            })
+            .count()
+    }
+
+    /// The lifecycle state of `pid`, or `None` when it is dead, stale, or
+    /// out of range (`pid.state()`).
+    pub fn process_state(&self, pid: Pid) -> Option<ProcessState> {
+        let (slot, generation) = self.slot(pid)?;
+        let word = slot.lifecycle.load();
+        if word.is_alive(generation) {
+            word.state
+        } else {
+            None
+        }
+    }
+
+    /// Queued message count (system + business, excluding the one-shot
+    /// reply slot) of `pid`'s mailbox, or `None` when `pid` is dead,
+    /// stale, or out of range (`pid.mailbox_depth()`).
+    pub fn mailbox_depth(&self, pid: Pid) -> Option<usize> {
+        let (_, generation) = decode(pid);
+        self.with_hot(pid, |slot, hot| {
+            slot.lifecycle
+                .load()
+                .is_alive(generation)
+                .then(|| hot.mailbox.depth())
+        })?
     }
 
     /// Sets `pid`'s scheduling priority. Takes effect at the next enqueue,
@@ -2268,6 +2353,67 @@ mod tests {
         assert!(table.deliver(pid, fake_envelope()).wake.is_some());
         table.kill(pid);
         assert!(table.should_shutdown(), "main dead");
+    }
+
+    #[test]
+    fn observability_getters_report_counts_state_and_depth() {
+        let table = TestTable::new();
+        assert_eq!(table.process_count(), 0);
+
+        let pid = fake_spawn(&table);
+        assert_eq!(table.process_count(), 1);
+        assert_eq!(table.process_state(pid), Some(ProcessState::Created));
+        assert_eq!(table.process_count_in(ProcessState::Created), 1);
+        assert_eq!(table.process_count_in(ProcessState::Running), 0);
+        assert_eq!(table.mailbox_depth(pid), Some(0));
+
+        assert!(table.try_claim(pid));
+        assert_eq!(table.process_state(pid), Some(ProcessState::Running));
+        assert_eq!(table.process_count_in(ProcessState::Running), 1);
+
+        table.deliver(pid, fake_envelope());
+        table.deliver(pid, fake_envelope());
+        assert_eq!(table.mailbox_depth(pid), Some(2));
+
+        assert!(table.mark_dead_if_alive(pid));
+        assert_eq!(table.process_count(), 0);
+        assert_eq!(table.process_state(pid), None, "dead reads as absent");
+        assert_eq!(table.mailbox_depth(pid), None);
+        assert_eq!(table.process_state(0), None, "pid 0 never valid");
+        assert_eq!(table.mailbox_depth(0), None);
+    }
+
+    /// Pins the `Process.State` and `Process.ExitReason` wire codes and
+    /// variant names to the ABI.md catalog. The backends verify the
+    /// stdlib declaration side; this test verifies the Rust side.
+    #[test]
+    fn wire_contracts_pin_codes_and_names() {
+        let states = [
+            (ProcessState::Blocked, 0),
+            (ProcessState::Created, 1),
+            (ProcessState::Runnable, 2),
+            (ProcessState::Running, 3),
+            (ProcessState::WaitingIO, 4),
+        ];
+        for (state, wire) in states {
+            assert_eq!(state.wire_index(), Some(wire));
+            assert_eq!(ProcessState::from_wire_index(wire), Some(state));
+        }
+        assert_eq!(ProcessState::Dead.wire_index(), None);
+        assert_eq!(ProcessState::from_wire_index(5), None);
+        assert_eq!(ProcessState::from_wire_index(-1), None);
+
+        let reasons = [
+            (ExitReason::Normal, 0, "Normal"),
+            (ExitReason::Shutdown, 1, "Shutdown"),
+            (ExitReason::Killed, 2, "Killed"),
+            (ExitReason::Crashed, 3, "Crashed"),
+        ];
+        for (reason, wire, name) in reasons {
+            assert_eq!(reason as i64, wire);
+            assert_eq!(ExitReason::from_index(wire), reason);
+            assert_eq!(reason.variant_name(), name);
+        }
     }
 
     #[test]

@@ -113,10 +113,9 @@ focused standard library improvements found while building auth-manager.
   sharing a name across arities stay out of scope
   ([MISC.md](MISC.md)). Struct field defaults (0.17) reduced the urgency by
   making options structs cheap to declare and construct.
-- Add a `Runtime` observability API with global and per-process metrics,
-  including mailbox depth, and document the overload contract for long-running
-  services. Shape the API from the telemetry and structured logging package
-  work in the ecosystem-validation section, not speculatively.
+- **[DONE]** Add a `Runtime` observability API with global and per-process
+  metrics, including mailbox depth, and document the overload contract for
+  long-running services.
 
 ### Standard library quality of life
 

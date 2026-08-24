@@ -101,6 +101,11 @@ impl<M: Message> Mailbox<M> {
         !self.system.is_empty()
     }
 
+    /// Queued receive traffic, system plus business. Excludes the reply slot.
+    pub fn depth(&self) -> usize {
+        self.business.len() + self.system.len()
+    }
+
     /// Takes the pending reply, if one has arrived.
     pub fn take_reply(&mut self) -> Option<M> {
         self.reply.take()

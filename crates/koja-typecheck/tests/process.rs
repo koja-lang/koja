@@ -14,15 +14,8 @@
 //! - The receive arm binding stamps a `LocalId` on the typed
 //!   binding so IR lower can reach it.
 //!
-//! `Global.process` is not yet in `AUTOIMPORT`. Tests prepend
-//! a minimal stub that declares the surface this slice cares about
-//! (`Lifecycle`, `StopReason`, `Step`, `ReplyTo`, `Ref`, and the
-//! `Process<C, M, R>` protocol) until step 5 of the
-//! concurrency plan flips the autoimport switch on the
-//! full `process.koja`. The full file pulls in shapes the new pipeline
-//! pipeline doesn't support yet (`self.work()` field-as-callee in
-//! `Task<R>::run`). The stub keeps us focused on the spawn/receive
-//! surface this slice owns.
+//! Fixtures typecheck against the real autoimported `Global` package,
+//! including the full `process.koja` surface.
 
 use std::path::PathBuf;
 
@@ -35,53 +28,6 @@ use koja_typecheck::{CheckFailure, CheckedProgram, check_program};
 mod common;
 
 use common::{PACKAGE, diagnostic_messages, find_function, global_id, registry_id};
-
-/// Minimal stub of `process.koja`. Provides every
-/// type referenced in this slice's spawn/receive surface. The full
-/// `process.koja` is pulled in via `AUTOIMPORT` after step 5.
-const PROCESS_STUB: &str = "
-enum Process.Lifecycle
-  Shutdown
-  Interrupt
-  Reload
-end
-
-enum Process.StopReason
-  Normal
-  Shutdown
-end
-
-enum Process.Step<S>
-  Continue(S)
-  Done(Process.StopReason)
-end
-
-struct ReplyTo<R>
-  id: Int
-end
-
-struct Ref<M, R>
-  id: Int
-end
-
-enum Process.CallError
-  Timeout
-  ProcessDown
-end
-
-extend Ref<M, R>
-  @intrinsic
-  fn call(self, msg: M, timeout: Int) -> Result<R, Process.CallError>
-
-  @intrinsic
-  fn cast(self, msg: M)
-end
-
-protocol Process<C, M, R>
-  fn start(config: C) -> Result<Self, Process.StopReason>
-  fn handle(self, msg: M, from: Option<ReplyTo<R>>) -> Process.Step<Self>
-end
-";
 
 /// Aliases injected at the top of every fixture source so test bodies
 /// can spell the nested `Process.*` types with their bare leaf names.
@@ -113,11 +59,6 @@ fn typecheck_fail(source: &str) -> CheckFailure {
 
 fn parse_and_check(source: &str) -> Result<CheckedProgram, CheckFailure> {
     let mut sources = koja_stdlib::autoimport_sources();
-    sources.push(SourceFile {
-        package: "Global".to_string(),
-        path: PathBuf::from("<Global.process>"),
-        source: PROCESS_STUB.to_string(),
-    });
     sources.push(SourceFile {
         package: PACKAGE.to_string(),
         path: PathBuf::from("test.koja"),
