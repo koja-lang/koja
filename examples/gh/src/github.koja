@@ -86,10 +86,7 @@ struct GitHub
     value = try fetch("/users/#{login}/repos?sort=updated&per_page=20")
 
     match value
-      Value.Array(items) ->
-        items.map(fn (item: Value) -> GitHub.Repo
-          GitHub.Repo.from_json(item)
-        end)
+      Value.Array(items) -> items.map(item -> GitHub.Repo.from_json(item))
       _ -> fail "expected a JSON array of repositories"
     end
   end

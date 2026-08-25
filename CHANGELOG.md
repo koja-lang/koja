@@ -45,6 +45,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- A fallible function (`-> T ! E`) can now declare default parameter values, and calls that omit defaulted arguments no longer fail to typecheck.
 - `koja doc serve` no longer stalls page loads for seconds when a browser holds idle connections open.
 - `koja doc` sidebars truncate long names with a hover tooltip instead of wrapping them mid-identifier.
 - `koja doc` links to predicate function pages like `empty?` no longer break at the `?` in the URL.

@@ -145,7 +145,13 @@ fn function_adapters(function: &Function) -> Vec<Function> {
                 params: explicit_params(&function.params, arity),
                 return_type: function.return_type.clone(),
                 error_type: function.error_type.clone(),
-                body: Some(adapter_body(&function.name, &function.params, arity, span)),
+                body: Some(adapter_body(
+                    &function.name,
+                    &function.params,
+                    arity,
+                    function.error_type.is_some(),
+                    span,
+                )),
                 span,
             }
         })
@@ -166,7 +172,13 @@ fn protocol_adapters(method: &ProtocolMethod) -> Vec<ProtocolMethod> {
                 params: explicit_params(&method.params, arity),
                 return_type: method.return_type.clone(),
                 error_type: method.error_type.clone(),
-                body: Some(adapter_body(&method.name, &method.params, arity, span)),
+                body: Some(adapter_body(
+                    &method.name,
+                    &method.params,
+                    arity,
+                    method.error_type.is_some(),
+                    span,
+                )),
                 span,
             }
         })
@@ -191,6 +203,7 @@ fn adapter_body(
     name: &str,
     params: &[Param],
     arity: usize,
+    fallible: bool,
     span: koja_ast::span::Span,
 ) -> Vec<Statement> {
     let args = params
@@ -252,7 +265,21 @@ fn adapter_body(
             type_args: Vec::new(),
         }
     };
-    vec![Statement::Expr(Expr::new(kind, span))]
+    // A fallible adapter forwards through `try` because the canonical
+    // call yields the wrapped `Result` while the adapter's own
+    // Ok-autowrap expects the plain success value.
+    let call = Expr::new(kind, span);
+    let expr = if fallible {
+        Expr::new(
+            ExprKind::Try {
+                expr: Box::new(call),
+            },
+            span,
+        )
+    } else {
+        call
+    };
+    vec![Statement::Expr(expr)]
 }
 
 fn adapter_annotations(

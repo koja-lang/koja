@@ -6,9 +6,6 @@ fn fib(n: Int) -> Int
   end
 end
 
-i = 0
-
-while i < 10
+for i in Range{start: 0, stop: 9}
   fib(i).print()
-  i += 1
 end

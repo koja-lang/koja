@@ -84,7 +84,7 @@ struct App: Process<List<String>, TCPEvent, String>
   fn handle(self, msg: TCPEvent, from: Option<ReplyTo<String>>) -> Step<Self>
     match msg
       TCPEvent.Connected(client) ->
-        _ = spawn Worker.start(Worker.Config{client: client, pool: self.pool})
+        _ = spawn Worker.start(Worker{client: client, pool: self.pool})
         Step.Continue(self)
 
       TCPEvent.Closed(_) ->
@@ -121,19 +121,12 @@ response. The worker exits when the client closes, a read or write
 fails, the request asks for `Connection: close`, or the per-connection
 request budget is spent.
 """
-struct Worker
+struct Worker: Process<Worker, (), ()>
   client: TCPSocket
   pool: Pool<Connection>
-end
 
-struct Worker.Config
-  client: TCPSocket
-  pool: Pool<Connection>
-end
-
-impl Process<Worker.Config, (), ()> for Worker
-  fn start(config: Worker.Config) -> Self ! StopReason
-    Worker{client: config.client, pool: config.pool}
+  fn start(config: Worker) -> Self ! StopReason
+    config
   end
 
   fn handle(self, msg: (), from: Option<ReplyTo<()>>) -> Step<Self>
@@ -143,9 +136,7 @@ impl Process<Worker.Config, (), ()> for Worker
   fn run(self) -> StopReason
     self.serve("", MAX_REQUESTS_PER_CONNECTION)
   end
-end
 
-extend Worker
   priv fn serve(self, buffered: String, budget: Int) -> StopReason
     match read_request(self.client, buffered)
       Option.None ->
