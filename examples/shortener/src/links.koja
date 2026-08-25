@@ -62,11 +62,10 @@ struct LinkStore
       select_columns() <>
         " FROM links ORDER BY created_at DESC LIMIT #{limit} OFFSET #{offset}",
     )
-    rows: List<Link> = List.new()
 
     match outcome
       Result.Err(e) -> (conn, Result.Err(e.message()))
-      Result.Ok(qr) -> (conn, Result.Ok(map_rows(qr.rows, 0, rows)))
+      Result.Ok(qr) -> (conn, Result.Ok(qr.rows.map(row -> row_to_link(row))))
     end
   end
 
@@ -139,7 +138,7 @@ struct LinkStore
       return (conn, Result.Err("could not generate a unique code"))
     end
 
-    code = generate_code(CODE_LENGTH, "")
+    code = generate_code(CODE_LENGTH)
     (conn, outcome) = conn.query(
       "INSERT INTO links (code, url) VALUES (" <> lit(code) <> ", " <>
         lit(url) <>
@@ -167,20 +166,6 @@ struct LinkStore
       Result.Err(e) -> (conn, Result.Err(e.message()))
       Result.Ok(qr) -> (conn, Result.Ok(first_link(qr)))
     end
-  end
-
-  priv fn map_rows(
-    rows: List<List<Option<String>>>,
-    index: Int,
-    acc: List<Link>,
-  ) -> List<Link>
-
-    if index >= rows.length()
-      return acc
-    end
-
-    row = rows.get(index).unwrap()
-    map_rows(rows, index + 1, acc.append(row_to_link(row)))
   end
 
   priv fn first_link(qr: QueryResult) -> Option<Link>
@@ -213,12 +198,14 @@ struct LinkStore
     "'" <> value.replace("'", "''") <> "'"
   end
 
-  priv fn generate_code(remaining: Int, acc: String) -> String
-    if remaining <= 0
-      return acc
+  priv fn generate_code(length: Int) -> String
+    code = ""
+
+    for _ in Range{start: 1, stop: length}
+      code = code <>
+        CODE_ALPHABET.get(Random.int(0, CODE_ALPHABET.length() - 1)).or("0")
     end
 
-    char = CODE_ALPHABET.get(Random.int(0, CODE_ALPHABET.length() - 1)).or("0")
-    generate_code(remaining - 1, acc <> char)
+    code
   end
 end

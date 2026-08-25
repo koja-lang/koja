@@ -16,26 +16,24 @@ use koja_ir::{IRFunction, IRSymbol, IRType, ListMethod};
 
 use crate::error::RuntimeError;
 use crate::interpreter::CallResolver;
-use crate::intrinsics::helpers;
+use crate::intrinsics::{IntrinsicCall, helpers};
 use crate::value::Value;
 
 pub(super) fn dispatch<R: CallResolver>(
     method: ListMethod,
-    function: &IRFunction,
-    args: &[Value],
-    _resolver: &R,
+    call: IntrinsicCall<'_, R>,
 ) -> Result<Value, RuntimeError> {
     match method {
-        ListMethod::Append => append(args),
-        ListMethod::Concat => concat(args),
-        ListMethod::EmptyQ => empty_q(args),
-        ListMethod::FromList => from_list(args),
-        ListMethod::Get => get(function, args),
-        ListMethod::Length => length(args),
+        ListMethod::Append => append(call.args),
+        ListMethod::Concat => concat(call.args),
+        ListMethod::EmptyQ => empty_q(call.args),
+        ListMethod::FromList => from_list(call.args),
+        ListMethod::Get => get(call),
+        ListMethod::Length => length(call.args),
         ListMethod::New => new(),
-        ListMethod::Pop => pop(function, args),
-        ListMethod::ReplaceAt => replace_at(args),
-        ListMethod::Slice => slice(args),
+        ListMethod::Pop => pop(call),
+        ListMethod::ReplaceAt => replace_at(call.args),
+        ListMethod::Slice => slice(call.args),
     }
 }
 
@@ -74,25 +72,25 @@ fn concat(args: &[Value]) -> Result<Value, RuntimeError> {
     Ok(Value::List(Rc::new(RefCell::new(combined))))
 }
 
-fn get(function: &IRFunction, args: &[Value]) -> Result<Value, RuntimeError> {
-    let list = expect_list(args, 0, "List.get")?;
-    let index = expect_int(args, 1, "List.get")?;
-    let option_symbol = helpers::enum_return_symbol(function, "List.get")?;
+fn get<R: CallResolver>(call: IntrinsicCall<'_, R>) -> Result<Value, RuntimeError> {
+    let list = expect_list(call.args, 0, "List.get")?;
+    let index = expect_int(call.args, 1, "List.get")?;
+    let option_symbol = helpers::enum_return_symbol(call.function, "List.get")?;
     let items = list.borrow();
     let value = if index < 0 {
         None
     } else {
         items.get(index as usize).cloned()
     };
-    Ok(helpers::option_value(option_symbol, value))
+    helpers::option_value(option_symbol, call.resolver, value)
 }
 
-fn pop(function: &IRFunction, args: &[Value]) -> Result<Value, RuntimeError> {
-    let list = expect_list(args, 0, "List.pop")?;
-    let option_symbol = tuple_option_symbol(function)?;
+fn pop<R: CallResolver>(call: IntrinsicCall<'_, R>) -> Result<Value, RuntimeError> {
+    let list = expect_list(call.args, 0, "List.pop")?;
+    let option_symbol = tuple_option_symbol(call.function)?;
     let mut items = list.borrow().clone();
     let popped = items.pop();
-    let option = helpers::option_value(option_symbol, popped);
+    let option = helpers::option_value(option_symbol, call.resolver, popped)?;
     let remainder = Value::List(Rc::new(RefCell::new(items)));
     Ok(Value::Tuple(vec![option, remainder]))
 }

@@ -479,12 +479,10 @@ lang_test_dir!(lang_local_dep, "local_dep", project);
 lang_test_dir!(lang_alias_dep, "alias_dep", project);
 lang_test_dir!(lang_pkg_fn, "pkg_fn", project);
 
-/// Canary for the TypeIdentifier migration: two packages each define
-/// `struct Config`, used from a root package via aliases. Today the bare-name
-/// entries in `TypeContext::name_index` are last-write-wins, so the pipeline's own
-/// references to `Config` resolve to beta.Config (or vice versa) and the
-/// program fails at typecheck. This test must pass once the migration is
-/// complete. Until then it is the oracle that we are actually fixing the bug.
+/// Two packages each define `struct Config`, used from a root package
+/// via aliases. Pins that same-named types in different packages
+/// resolve independently (the bug the TypeIdentifier migration fixed:
+/// bare-name lookups were last-write-wins across packages).
 #[test]
 fn lang_package_collision() {
     run_project_dir(&lang_dir().join("package_collision"), "package_collision");

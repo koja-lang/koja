@@ -21,9 +21,8 @@ use super::util::{
     extract_table_fields, nth_hashtable, nth_param, resolve_key_hash_ops, ret_basic, ret_struct,
     value_slot,
 };
-use super::{
-    HashtableLayout, OPTION_NONE_TAG, OPTION_SOME_TAG, STATE_EMPTY, STATE_OCCUPIED, STATE_TOMBSTONE,
-};
+use super::{HashtableLayout, STATE_EMPTY, STATE_OCCUPIED, STATE_TOMBSTONE};
+use crate::intrinsics::option;
 
 /// Output of [`emit_read_only_probe`]. Caller positions at
 /// `found_bb` or `not_found_bb` to emit the per-method outcome.
@@ -306,10 +305,20 @@ pub(crate) fn emit_map_get<'ctx>(
     // Otherwise the receiver's table and the returned value share one
     // reference and both drop it (a double free once glue is active).
     let owned = acquire_value(ctx, value_ty, val)?;
-    let some = build_enum_value(ctx, option_symbol, OPTION_SOME_TAG, &[owned])?;
+    let some = build_enum_value(
+        ctx,
+        option_symbol,
+        option::some_tag(ctx, option_symbol),
+        &[owned],
+    )?;
     ctx.builder.build_return(Some(&some)).or_ice().map(|_| ())?;
 
     ctx.builder.position_at_end(probe.not_found_bb);
-    let none = build_enum_value(ctx, option_symbol, OPTION_NONE_TAG, &[])?;
+    let none = build_enum_value(
+        ctx,
+        option_symbol,
+        option::none_tag(ctx, option_symbol),
+        &[],
+    )?;
     ctx.builder.build_return(Some(&none)).or_ice().map(|_| ())
 }

@@ -3,9 +3,9 @@
 //! convenient "instructions then terminator" path used by every
 //! non-`main` walker) and the [`emit_instructions`] +
 //! [`emit_terminator_default`] split (used by
-//! [`crate::main_wrapper::emit_script_main`] so it can intercept the
-//! terminator and inject the auto-print call before the natural
-//! `ret`).
+//! [`crate::main_wrapper::emit_script_main`] so it can replace the
+//! natural terminator on return blocks with the `ret void` that
+//! discards the script's trailing value).
 //!
 //! Both seams accept a `values: &mut ValueMap` so callers can
 //! pre-bind parameter [`ValueId`]s to LLVM `function.get_nth_param`

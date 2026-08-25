@@ -14,26 +14,26 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use koja_ir::{IRFunction, MapMethod};
+use koja_ir::MapMethod;
 
 use crate::error::RuntimeError;
-use crate::intrinsics::helpers;
+use crate::interpreter::CallResolver;
+use crate::intrinsics::{IntrinsicCall, helpers};
 use crate::value::{MapEntries, Value};
 
-pub(super) fn dispatch(
+pub(super) fn dispatch<R: CallResolver>(
     method: MapMethod,
-    function: &IRFunction,
-    args: &[Value],
+    call: IntrinsicCall<'_, R>,
 ) -> Result<Value, RuntimeError> {
     match method {
-        MapMethod::EmptyQ => empty_q(args),
-        MapMethod::Get => get(function, args),
-        MapMethod::HasQ => has_q(args),
-        MapMethod::Length => length(args),
+        MapMethod::EmptyQ => empty_q(call.args),
+        MapMethod::Get => get(call),
+        MapMethod::HasQ => has_q(call.args),
+        MapMethod::Length => length(call.args),
         MapMethod::New => new(),
-        MapMethod::Next => next(function, args),
-        MapMethod::Put => put(args),
-        MapMethod::Remove => remove(args),
+        MapMethod::Next => next(call),
+        MapMethod::Put => put(call.args),
+        MapMethod::Remove => remove(call.args),
     }
 }
 
@@ -51,21 +51,21 @@ fn empty_q(args: &[Value]) -> Result<Value, RuntimeError> {
     Ok(Value::Bool(map.borrow().is_empty()))
 }
 
-fn get(function: &IRFunction, args: &[Value]) -> Result<Value, RuntimeError> {
-    let map = expect_map(args, 0, "Map.get")?;
-    let key = expect_arg(args, 1, "Map.get")?.clone();
-    let option_symbol = helpers::enum_return_symbol(function, "Map.get")?;
+fn get<R: CallResolver>(call: IntrinsicCall<'_, R>) -> Result<Value, RuntimeError> {
+    let map = expect_map(call.args, 0, "Map.get")?;
+    let key = expect_arg(call.args, 1, "Map.get")?.clone();
+    let option_symbol = helpers::enum_return_symbol(call.function, "Map.get")?;
     let entries = map.borrow();
     let value = entries
         .iter()
         .find(|(k, _)| k == &key)
         .map(|(_, v)| v.clone());
-    Ok(helpers::option_value(option_symbol, value))
+    helpers::option_value(option_symbol, call.resolver, value)
 }
 
-fn next(function: &IRFunction, args: &[Value]) -> Result<Value, RuntimeError> {
-    let map = expect_map(args, 0, "Map.next")?;
-    let slot = match expect_arg(args, 1, "Map.next")? {
+fn next<R: CallResolver>(call: IntrinsicCall<'_, R>) -> Result<Value, RuntimeError> {
+    let map = expect_map(call.args, 0, "Map.next")?;
+    let slot = match expect_arg(call.args, 1, "Map.next")? {
         Value::Int(slot) => *slot,
         other => {
             return Err(RuntimeError::TypeMismatch {
@@ -73,7 +73,7 @@ fn next(function: &IRFunction, args: &[Value]) -> Result<Value, RuntimeError> {
             });
         }
     };
-    let option_symbol = helpers::enum_return_symbol(function, "Map.next")?;
+    let option_symbol = helpers::enum_return_symbol(call.function, "Map.next")?;
     let entries = map.borrow();
     let value = usize::try_from(slot)
         .ok()
@@ -84,7 +84,7 @@ fn next(function: &IRFunction, args: &[Value]) -> Result<Value, RuntimeError> {
                 Value::Int((index + 1) as i64),
             ])
         });
-    Ok(helpers::option_value(option_symbol, value))
+    helpers::option_value(option_symbol, call.resolver, value)
 }
 
 fn has_q(args: &[Value]) -> Result<Value, RuntimeError> {

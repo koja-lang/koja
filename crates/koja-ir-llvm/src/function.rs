@@ -6,8 +6,8 @@
 //! at declare time) before either body has been walked.
 //!
 //! The script body (`main`) follows a different shape. See
-//! [`crate::main_wrapper::emit_script_main`] for the auto-print
-//! scaffolding.
+//! [`crate::main_wrapper::emit_script_main`] for the host `main`
+//! trampoline.
 
 use std::collections::BTreeMap;
 
@@ -161,9 +161,9 @@ fn function_signature<'ctx>(
 /// [`FunctionKind`]: `Regular` walks the IR basic blocks via
 /// [`emit::emit_block`]. `Intrinsic` routes to
 /// [`intrinsics::emit_intrinsic_body`] which synthesizes a body from
-/// the per-symbol emitter table. Only `main` gets the auto-print
-/// wrapper. `Regular` helpers keep the natural `Return`-to-`ret`
-/// emission. Pre-creates one inkwell `BasicBlock` per IR block (a
+/// the per-symbol emitter table. `Regular` helpers keep the natural
+/// `Return`-to-`ret` emission (only `main` gets the trampoline
+/// shape). Pre-creates one inkwell `BasicBlock` per IR block (a
 /// no-op for `Intrinsic`'s empty `blocks`) so `Branch` / `CondBranch`
 /// terminators can resolve to a real [`BasicBlock`]. The body's
 /// [`ValueMap`] is seeded with each [`koja_ir::IRFunctionParam`]

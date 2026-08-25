@@ -28,20 +28,18 @@ struct JsonUtil
   end
 
   priv fn field(value: Value, key: String) -> Option<Value>
-    match value
-      Value.Object(entries) -> scan(entries, key, 0)
-      _ -> Option.None
+    entries =
+      match value
+        Value.Object(object_entries) -> object_entries
+        _ -> return Option.None
+      end
+
+    for (entry_key, entry_value) in entries
+      if entry_key == key
+        return Option.Some(entry_value)
+      end
     end
-  end
 
-  priv fn scan(entries: List<(String, Value)>, key: String, index: Int)
-    -> Option<Value>
-
-    if index >= entries.length()
-      return Option.None
-    end
-
-    (entry_key, entry_value) = entries.get(index).unwrap()
-    entry_key == key ? Option.Some(entry_value) : scan(entries, key, index + 1)
+    Option.None
   end
 end

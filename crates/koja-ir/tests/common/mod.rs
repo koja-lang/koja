@@ -93,11 +93,7 @@ pub fn typecheck_in(package: &str, source: &str, mode: ParseMode) -> CheckedProg
 }
 
 pub fn typecheck_fail(source: &str, mode: ParseMode) -> CheckFailure {
-    typecheck_fail_in(PACKAGE, source, mode)
-}
-
-pub fn typecheck_fail_in(package: &str, source: &str, mode: ParseMode) -> CheckFailure {
-    parse_and_check(package, source, mode).expect_err(
+    parse_and_check(PACKAGE, source, mode).expect_err(
         "expected typecheck to fail; it succeeded (test source must produce a diagnostic)",
     )
 }

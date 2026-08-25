@@ -12,10 +12,8 @@
 //!   one body block per arm carrying its lattice-coerced tail
 //!   into a synthesized merge block.
 //!
-//! Tests deliberately inline minimal `Lifecycle` / `StopReason` /
-//! `ReplyTo` / `Ref` / `Process` definitions so the suite doesn't
-//! depend on `Global.process` being autoimported (that step is
-//! covered later in the concurrency plan).
+//! Fixtures lower against the real autoimported `Global` package,
+//! including the full `process.koja` surface.
 
 use std::path::PathBuf;
 
@@ -32,67 +30,6 @@ mod common;
 
 use common::{PACKAGE, all_instructions, block_labeled, function};
 
-/// Minimal stub of `process.koja`. Mirrors the stub in
-/// `koja-typecheck/tests/process.rs` and provides every type
-/// referenced by spawn/receive lowering. Replaced by the full
-/// `Global.process` autoimport in step 5 of the concurrency plan.
-/// Indented inline with the surrounding Rust, so
-/// [`lower_process_entry`] dedents it (along with the test source)
-/// before parsing.
-const PROCESS_STUB: &str = "
-    enum Process.Lifecycle
-      Shutdown
-      Interrupt
-      Reload
-    end
-
-    enum Process.StopReason
-      Normal
-      Shutdown
-    end
-
-    enum Process.Priority
-      Low
-      Normal
-      High
-    end
-
-    enum Process.Step<S>
-      Continue(S)
-      Done(Process.StopReason)
-    end
-
-    struct ReplyTo<R>
-      id: Int
-    end
-
-    struct Ref<M, R>
-      id: Int
-    end
-
-    protocol ExitStatus
-      fn code(self) -> Int
-    end
-
-    impl ExitStatus for Process.StopReason
-      fn code(self) -> Int
-        match self
-          Process.StopReason.Normal -> 0
-          Process.StopReason.Shutdown -> 1
-        end
-      end
-    end
-
-    protocol Process<C, M, R>
-      fn start(config: C) -> Result<Self, Process.StopReason>
-      fn handle(self, msg: M, from: Option<ReplyTo<R>>) -> Process.Step<Self>
-      fn run(self) -> Process.StopReason
-      fn priority(self) -> Process.Priority
-        Process.Priority.Normal
-      end
-    end
-    ";
-
 /// Aliases injected at the top of every fixture's `TestApp` source so
 /// the test bodies (and `TEST_ENTRY_SNIPPET`) can spell the nested
 /// `Process.*` types with their bare leaf names, mirroring how real
@@ -105,9 +42,8 @@ const PROCESS_ALIASES: &str = "\
 
 /// Synthetic Process state appended by [`lower`] so fixtures that
 /// only exercise spawn/receive lowering still give `lower_program`
-/// a valid entry. Spells out `run` because [`PROCESS_STUB`]'s
-/// protocol declares it without a default body. `priority` is
-/// defaulted there, so it is synthesized per-impl automatically.
+/// a valid entry. Spells out `run` so the entry exits immediately
+/// instead of inheriting the protocol's default receive loop.
 const TEST_ENTRY_SNIPPET: &str = "
     struct TestEntry
     end
@@ -135,11 +71,6 @@ fn lower(source: &str) -> IRProgram {
 fn lower_process_entry(source: &str, state_name: &str) -> IRProgram {
     let state = Identifier::new(PACKAGE, vec![state_name.to_string()]);
     let mut sources = koja_stdlib::autoimport_sources();
-    sources.push(SourceFile {
-        package: "Global".to_string(),
-        path: PathBuf::from("<Global.process>"),
-        source: dedent(PROCESS_STUB),
-    });
     sources.push(SourceFile {
         package: PACKAGE.to_string(),
         path: PathBuf::from("test.koja"),

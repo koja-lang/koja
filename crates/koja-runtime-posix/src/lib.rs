@@ -3,8 +3,8 @@
 //! `receive` when its mailbox is empty.
 //!
 //! The [`intrinsics`] module holds C-ABI runtime helpers called
-//! from LLVM-emitted IR (`Global.print`, `Kernel.panic`, the
-//! `Bits` pack/concat helpers).
+//! from LLVM-emitted IR (`Kernel.panic`, the `Bits` pack/concat
+//! helpers).
 
 mod fault;
 mod ffi;

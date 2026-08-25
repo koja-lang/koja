@@ -94,6 +94,50 @@ fn expands_each_default_arity_and_resolves_calls() {
     assert_eq!(adapters, vec![1, 2]);
 }
 
+/// Fallible functions can declare defaults. The synthesized adapter
+/// forwards through `try` so the canonical call's `Result` unwraps
+/// before the adapter's own Ok-autowrap.
+#[test]
+fn fallible_defaults_expand_adapters() {
+    let checked = typecheck_file(&dedent(
+        r#"
+        fn pick(flag: Bool, fallback: Int = 7) -> Int ! String
+          unless flag
+            fail "no pick"
+          end
+
+          fallback
+        end
+
+        fn ping(flag: Bool = true) ! String
+          unless flag
+            fail "no ping"
+          end
+        end
+
+        fn use -> Int ! String
+          try ping()
+          try pick(true)
+        end
+        "#,
+    ));
+
+    for (name, canonical_arity, adapter_arity) in [("pick", 2, 1), ("ping", 1, 0)] {
+        let identifier = Identifier::new(PACKAGE, vec![name.to_string()]);
+        let (_, entry) = checked
+            .registry
+            .lookup_function(&identifier, adapter_arity)
+            .unwrap();
+        let GlobalKind::Function(definition) = &entry.kind else {
+            panic!("expected function entry for `{name}`");
+        };
+        assert_eq!(
+            definition.origin,
+            FunctionOrigin::DefaultAdapter { canonical_arity }
+        );
+    }
+}
+
 #[test]
 fn method_arity_counts_self() {
     let checked = typecheck_file(&dedent(

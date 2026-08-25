@@ -53,9 +53,8 @@
 //!   in [`layout`].
 //! - [`function`]: non-entry function declare + define +
 //!   param/block seeding.
-//! - [`main_wrapper`]: `i64 main()` synthesis + auto-print + the
-//!   `__koja_app_name` global. **All temporary scaffolding**. This
-//!   file is the deletion target when `IO.puts` lands.
+//! - [`main_wrapper`]: host `main` trampoline synthesis (script and
+//!   program shapes) + the `__koja_app_name` global.
 //! - [`object`]: native `.o` emission via inkwell's `TargetMachine`.
 //! - [`program`] / [`script`]: orchestrators for the two IR shapes.
 //! - [`reductions`]: the per-arch reduction-budget strategy behind

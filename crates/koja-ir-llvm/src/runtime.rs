@@ -34,7 +34,6 @@ pub(crate) const RC_INC_SYMBOL: &str = "koja_rc_inc";
 pub(crate) const UTF8_VALIDATE_SYMBOL: &str = "koja_utf8_validate";
 pub(crate) const PACK_BITS_SYMBOL: &str = "__koja_pack_bits";
 pub(crate) const PANIC_SYMBOL: &str = "__koja_panic";
-pub(crate) const PRINT_STRING_SYMBOL: &str = "__koja_print_string";
 pub(crate) const SOCKET_RECV_FROM_SYMBOL: &str = "koja_socket_recv_from";
 pub(crate) const SOCKET_RESOLVE_SYMBOL: &str = "koja_socket_resolve";
 pub(crate) const STRING_CONTAINS_NUL_SYMBOL: &str = "koja_string_contains_nul";
@@ -83,18 +82,6 @@ fn declare_extern<'ctx>(
     }
     ctx.module
         .add_function(symbol, signature, Some(Linkage::External))
-}
-
-/// Declare (or look up) a `void(argument_type)` extern. Today's only caller
-/// is the `Global.print(s: String)` intrinsic body in
-/// [`crate::intrinsics::print`].
-pub(crate) fn declare_runtime_printer<'ctx>(
-    ctx: &EmitContext<'ctx>,
-    symbol: &str,
-    argument_type: BasicMetadataTypeEnum<'ctx>,
-) -> FunctionValue<'ctx> {
-    let signature = ctx.context.void_type().fn_type(&[argument_type], false);
-    declare_extern(ctx, symbol, signature)
 }
 
 /// Declare (or look up) one of the `koja_format_*` runtime helpers
@@ -689,10 +676,11 @@ pub(crate) fn declare_rt_is_process_alive_extern<'ctx>(
 }
 
 /// Declare (or look up) `koja_rt_main_done`. Signature:
-/// `void koja_rt_main_done()`. Called by the auto-print wrapper
-/// after `main` returns. Boots the I/O reactor and worker pool,
-/// then runs the scheduling loop until the main process (PID 1)
-/// dies. Without this call, spawned processes never execute.
+/// `void koja_rt_main_done()`. Called by the synthesized `main`
+/// trampoline after spawning the entry process. Boots the I/O
+/// reactor and worker pool, then runs the scheduling loop until the
+/// main process (PID 1) dies. Without this call, spawned processes
+/// never execute.
 pub(crate) fn declare_rt_main_done_extern<'ctx>(ctx: &EmitContext<'ctx>) -> FunctionValue<'ctx> {
     let signature = ctx.context.void_type().fn_type(&[], false);
     declare_extern(ctx, RT_MAIN_DONE_SYMBOL, signature)

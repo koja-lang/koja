@@ -32,8 +32,8 @@ use std::time::{Duration, Instant};
 use koja_ir::IRSymbol;
 use koja_runtime_core::{
     Clock, CooperativeDriver, CooperativeRuntime, CrashInfo, Executor, ExitReason, IoPark,
-    Lifecycle, MailPark, Message, MessageSource, Pid, Priority, ProcessTable, Readiness,
-    SignalSource, Tag, TimerService, WaitTarget, Wake,
+    Lifecycle, MailPark, Message, MessageSource, Pid, Priority, ProcessState, ProcessTable,
+    Readiness, SignalSource, Tag, TimerService, WaitTarget, Wake,
 };
 
 use crate::interpreter::{CallResolver, build_exit_signal_value};
@@ -239,6 +239,46 @@ pub(crate) fn runtime_installed() -> bool {
 /// cooperative scheduler's transition guard.
 pub(crate) fn sched_violations() -> i64 {
     with_table(|table| table.counters().violations as i64)
+}
+
+/// Live process count of the installed cooperative core
+/// (`Runtime.process_count`).
+pub(crate) fn process_count() -> i64 {
+    with_table(|table| table.process_count() as i64)
+}
+
+/// Live process count in the state a `Process.State` wire index names
+/// (`Runtime.process_count(state)`). An unknown index counts zero.
+pub(crate) fn process_count_by_state(state: i64) -> i64 {
+    ProcessState::from_wire_index(state).map_or(0, |state| {
+        with_table(|table| table.process_count_in(state)) as i64
+    })
+}
+
+/// Scheduler count (`Runtime.scheduler_count`). Always 1 because the
+/// cooperative backend runs one scheduler.
+pub(crate) fn scheduler_count() -> i64 {
+    1
+}
+
+/// Mailbox depth of the currently-resuming process
+/// (`Runtime.mailbox_depth`).
+pub(crate) fn self_mailbox_depth() -> i64 {
+    with_table(|table| table.mailbox_depth(current_pid())).map_or(0, |depth| depth as i64)
+}
+
+/// Mailbox depth of `pid`, or `-1` when it is dead or unknown
+/// (`pid.mailbox_depth()`).
+pub(crate) fn mailbox_depth(pid: Pid) -> i64 {
+    with_table(|table| table.mailbox_depth(pid)).map_or(-1, |depth| depth as i64)
+}
+
+/// The lifecycle state of `pid` as a `Process.State` wire index, or
+/// `-1` when it is dead or unknown (`pid.state()`).
+pub(crate) fn process_state(pid: Pid) -> i64 {
+    with_table(|table| table.process_state(pid))
+        .and_then(ProcessState::wire_index)
+        .unwrap_or(-1)
 }
 
 /// Routes `message` into `pid`'s mailbox, forwarding the wake it may
@@ -671,19 +711,8 @@ impl SignalSource for EvalSignals {
         }
         koja_runtime::signals::drain()
             .into_iter()
-            .filter_map(lifecycle_from_index)
+            .filter_map(Lifecycle::from_index)
             .collect()
-    }
-}
-
-/// Maps a drained signal's variant index (SIGTERM=0, SIGINT=1, SIGHUP=2)
-/// to its [`Lifecycle`] event, matching the runtime's wire encoding.
-fn lifecycle_from_index(index: i64) -> Option<Lifecycle> {
-    match index {
-        0 => Some(Lifecycle::Shutdown),
-        1 => Some(Lifecycle::Interrupt),
-        2 => Some(Lifecycle::Reload),
-        _ => None,
     }
 }
 

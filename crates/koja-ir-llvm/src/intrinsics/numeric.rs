@@ -17,19 +17,13 @@
 use inkwell::IntPredicate;
 use inkwell::basic_block::BasicBlock;
 use inkwell::values::{BasicValueEnum, FunctionValue, IntValue};
-use koja_ir::{
-    IRFunction, IRSymbol, IRType, IRVariantPayload, IRVariantTag, IntNarrowTarget, NumericConvert,
-};
+use koja_ir::{IRFunction, IRSymbol, IRType, IRVariantPayload, IntNarrowTarget, NumericConvert};
 
 use crate::ctx::EmitContext;
 use crate::emit::enums::build_enum_value;
 use crate::emit::ops::emit_is_finite;
 use crate::error::{IceExt, LlvmError};
-
-/// `enum Result<T, E>` variant tags: declaration order in
-/// `koja/lib/global/src/kernel.koja`.
-const RESULT_OK_TAG: IRVariantTag = IRVariantTag(0);
-const RESULT_ERR_TAG: IRVariantTag = IRVariantTag(1);
+use crate::intrinsics::result;
 
 pub(super) fn emit_numeric_convert<'ctx>(
     ctx: &EmitContext<'ctx>,
@@ -94,7 +88,12 @@ fn emit_float_to_float32<'ctx>(
         .or_ice()?;
 
     ctx.builder.position_at_end(ok_bb);
-    let ok = build_enum_value(ctx, result_symbol, RESULT_OK_TAG, &[narrowed.into()])?;
+    let ok = build_enum_value(
+        ctx,
+        result_symbol,
+        result::ok_tag(ctx, result_symbol),
+        &[narrowed.into()],
+    )?;
     ctx.builder.build_return(Some(&ok)).or_ice()?;
 
     emit_err_branch(ctx, err_bb, result_symbol)
@@ -158,7 +157,12 @@ fn emit_ok_branch<'ctx>(
             .build_int_truncate(value, target_ty, "narrowed")
             .or_ice()?
     };
-    let ok = build_enum_value(ctx, result_symbol, RESULT_OK_TAG, &[narrowed.into()])?;
+    let ok = build_enum_value(
+        ctx,
+        result_symbol,
+        result::ok_tag(ctx, result_symbol),
+        &[narrowed.into()],
+    )?;
     ctx.builder.build_return(Some(&ok)).or_ice().map(|_| ())
 }
 
@@ -186,7 +190,12 @@ pub(super) fn build_conversion_error<'ctx>(
     let error_symbol = conversion_error_symbol(ctx, result_symbol)?;
     let tag = ctx.layouts.enum_variant_tag(&error_symbol, variant);
     let error_value = build_enum_value(ctx, &error_symbol, tag, &[])?;
-    build_enum_value(ctx, result_symbol, RESULT_ERR_TAG, &[error_value])
+    build_enum_value(
+        ctx,
+        result_symbol,
+        result::err_tag(ctx, result_symbol),
+        &[error_value],
+    )
 }
 
 /// Recover `NumericConversionError`'s symbol from the `Result`'s `Err`
@@ -197,7 +206,7 @@ fn conversion_error_symbol<'ctx>(
 ) -> Result<IRSymbol, LlvmError> {
     let payload = ctx
         .layouts
-        .enum_variant_payload(result_symbol, RESULT_ERR_TAG);
+        .enum_variant_payload(result_symbol, result::err_tag(ctx, result_symbol));
     let IRVariantPayload::Tuple(types) = &payload else {
         return Err(LlvmError::Codegen(format!(
             "`{result_symbol}`'s Err variant payload is not a tuple (stdlib invariant violation)",

@@ -3,60 +3,71 @@
 //! `result_value` / `size_of_primitive` from drifting across
 //! sibling modules.
 
-use koja_ir::{IRFunction, IRSymbol, IRType, IRVariantPayload, IRVariantTag};
+use koja_ir::{IREnumVariant, IRFunction, IRSymbol, IRType, IRVariantPayload};
 
 use crate::error::RuntimeError;
 use crate::interpreter::CallResolver;
 use crate::value::{EnumPayload, Value};
 
-/// `Option<T>::Some` carries the only tuple-payload variant, and
-/// declaration-order tagging assigns it tag `0`. The `option_value`
-/// helper bakes that in so callers don't have to fish through the
-/// enum decl for each invocation.
-const SOME_TAG: IRVariantTag = IRVariantTag(0);
-const NONE_TAG: IRVariantTag = IRVariantTag(1);
-
-/// `Result<T, E>::Ok` carries the value and `::Err` carries the error.
-/// Same declaration-order convention as `Option`'s `Some` / `None`.
-const OK_TAG: IRVariantTag = IRVariantTag(0);
-const ERR_TAG: IRVariantTag = IRVariantTag(1);
+/// Find `variant_name` on `symbol`'s decl. Every helper below resolves
+/// variant tags through here, by name, so no stdlib declaration order
+/// is baked into eval-constructed values.
+fn named_variant<'d, R: CallResolver>(
+    symbol: &IRSymbol,
+    resolver: &'d R,
+    variant_name: &str,
+) -> Result<&'d IREnumVariant, RuntimeError> {
+    let decl = resolver
+        .enum_decl(symbol.mangled())
+        .ok_or_else(|| RuntimeError::TypeMismatch {
+            detail: format!("enum decl `{symbol}` not found in program"),
+        })?;
+    decl.variants
+        .iter()
+        .find(|variant| variant.name == variant_name)
+        .ok_or_else(|| RuntimeError::TypeMismatch {
+            detail: format!("enum `{symbol}` has no variant named `{variant_name}`"),
+        })
+}
 
 /// Construct an `Option<T>` value over `symbol`. `Some(value)` lands
 /// as a tuple-payload variant. `None` is a unit variant.
-pub(super) fn option_value(symbol: IRSymbol, value: Option<Value>) -> Value {
-    match value {
-        Some(v) => Value::Enum {
-            name: "Some".into(),
-            payload: EnumPayload::tuple(vec![v]),
-            symbol,
-            tag: SOME_TAG,
-        },
-        None => Value::Enum {
-            name: "None".into(),
-            payload: EnumPayload::Unit,
-            symbol,
-            tag: NONE_TAG,
-        },
-    }
+pub(super) fn option_value<R: CallResolver>(
+    symbol: IRSymbol,
+    resolver: &R,
+    value: Option<Value>,
+) -> Result<Value, RuntimeError> {
+    let (name, payload) = match value {
+        Some(v) => ("Some", EnumPayload::tuple(vec![v])),
+        None => ("None", EnumPayload::Unit),
+    };
+    let tag = named_variant(&symbol, resolver, name)?.tag;
+    Ok(Value::Enum {
+        name: name.into(),
+        payload,
+        symbol,
+        tag,
+    })
 }
 
 /// Construct a `Result<T, E>` value over `symbol`. Both arms carry
 /// a single-element tuple payload.
-pub(super) fn result_value(symbol: IRSymbol, value: Result<Value, Value>) -> Value {
-    match value {
-        Ok(v) => Value::Enum {
-            name: "Ok".into(),
-            payload: EnumPayload::tuple(vec![v]),
-            symbol,
-            tag: OK_TAG,
-        },
-        Err(v) => Value::Enum {
-            name: "Err".into(),
-            payload: EnumPayload::tuple(vec![v]),
-            symbol,
-            tag: ERR_TAG,
-        },
-    }
+pub(super) fn result_value<R: CallResolver>(
+    symbol: IRSymbol,
+    resolver: &R,
+    value: Result<Value, Value>,
+) -> Result<Value, RuntimeError> {
+    let (name, payload) = match value {
+        Ok(v) => ("Ok", EnumPayload::tuple(vec![v])),
+        Err(v) => ("Err", EnumPayload::tuple(vec![v])),
+    };
+    let tag = named_variant(&symbol, resolver, name)?.tag;
+    Ok(Value::Enum {
+        name: name.into(),
+        payload,
+        symbol,
+        tag,
+    })
 }
 
 /// Build the `<ErrEnum>.<variant>` value for a unit-variant error of a
@@ -70,19 +81,7 @@ pub(super) fn err_variant_value<R: CallResolver>(
     resolver: &R,
     variant_name: &str,
 ) -> Result<Value, RuntimeError> {
-    let result_decl =
-        resolver
-            .enum_decl(result_symbol.mangled())
-            .ok_or_else(|| RuntimeError::TypeMismatch {
-                detail: format!("enum decl `{result_symbol}` not found in program"),
-            })?;
-    let err_variant = result_decl
-        .variants
-        .iter()
-        .find(|v| v.tag == ERR_TAG)
-        .ok_or_else(|| RuntimeError::TypeMismatch {
-            detail: format!("enum `{result_symbol}` has no Err variant"),
-        })?;
+    let err_variant = named_variant(result_symbol, resolver, "Err")?;
     let IRVariantPayload::Tuple(types) = &err_variant.payload else {
         return Err(RuntimeError::TypeMismatch {
             detail: format!("`{result_symbol}`'s Err variant payload is not a tuple"),
@@ -106,24 +105,12 @@ pub(super) fn unit_variant_value<R: CallResolver>(
     resolver: &R,
     variant_name: &str,
 ) -> Result<Value, RuntimeError> {
-    let decl =
-        resolver
-            .enum_decl(enum_symbol.mangled())
-            .ok_or_else(|| RuntimeError::TypeMismatch {
-                detail: format!("enum decl `{enum_symbol}` not found in program"),
-            })?;
-    let variant = decl
-        .variants
-        .iter()
-        .find(|v| v.name == variant_name)
-        .ok_or_else(|| RuntimeError::TypeMismatch {
-            detail: format!("enum `{enum_symbol}` has no variant named `{variant_name}`"),
-        })?;
+    let tag = named_variant(enum_symbol, resolver, variant_name)?.tag;
     Ok(Value::Enum {
         name: variant_name.into(),
         payload: EnumPayload::Unit,
         symbol: enum_symbol.clone(),
-        tag: variant.tag,
+        tag,
     })
 }
 
@@ -136,19 +123,7 @@ pub(super) fn single_ok_payload<R: CallResolver>(
     resolver: &R,
     label: &str,
 ) -> Result<IRType, RuntimeError> {
-    let decl =
-        resolver
-            .enum_decl(result_symbol.mangled())
-            .ok_or_else(|| RuntimeError::TypeMismatch {
-                detail: format!("{label}: enum decl `{result_symbol}` not found in program"),
-            })?;
-    let ok_variant = decl
-        .variants
-        .iter()
-        .find(|v| v.tag == OK_TAG)
-        .ok_or_else(|| RuntimeError::TypeMismatch {
-            detail: format!("{label}: enum `{result_symbol}` has no Ok variant"),
-        })?;
+    let ok_variant = named_variant(result_symbol, resolver, "Ok")?;
     match &ok_variant.payload {
         IRVariantPayload::Tuple(types) if types.len() == 1 => Ok(types[0].clone()),
         other => Err(RuntimeError::TypeMismatch {

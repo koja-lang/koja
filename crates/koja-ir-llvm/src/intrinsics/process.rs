@@ -13,8 +13,7 @@ use inkwell::types::{BasicType, BasicTypeEnum, StructType};
 use inkwell::values::{ArrayValue, BasicValueEnum, FunctionValue, IntValue, PointerValue};
 use koja_ir::mangling::{drop_glue_symbol, envelope_drop_glue_symbol, global_primitive_symbol};
 use koja_ir::{
-    IRFunction, IRSymbol, IRType, IRVariantPayload, IRVariantTag, ProcessMethod, RefMethod,
-    ReplyToMethod,
+    IRFunction, IRSymbol, IRType, IRVariantPayload, ProcessMethod, RefMethod, ReplyToMethod,
 };
 
 use crate::ctx::EmitContext;
@@ -23,6 +22,7 @@ use crate::emit::heap_layout::is_heap_leaf;
 use crate::emit::process::serialize_to_stack;
 use crate::error::{IceExt, LlvmError};
 use crate::intrinsics::element::release_in_slot;
+use crate::intrinsics::result;
 use crate::runtime::{
     declare_rt_call_receive_extern, declare_rt_call_token_extern, declare_rt_demonitor_extern,
     declare_rt_is_process_alive_extern, declare_rt_kill_extern, declare_rt_monitor_extern,
@@ -322,24 +322,16 @@ fn emit_call<'ctx>(
         .or_ice()?;
 
     ctx.builder.position_at_end(build_timeout_bb);
-    let timeout_result = build_call_error_result(
-        ctx,
-        &result_symbol,
-        &call_error_symbol,
-        CALL_ERROR_TIMEOUT_TAG,
-    )?;
+    let timeout_result =
+        build_call_error_result(ctx, &result_symbol, &call_error_symbol, "Timeout")?;
     ctx.builder.build_unconditional_branch(merge_bb).or_ice()?;
     let timeout_block = ctx.builder.get_insert_block().expect(
         "EmitContext::emit_call lost the build_timeout insertion block before the merge phi",
     );
 
     ctx.builder.position_at_end(build_down_bb);
-    let down_result = build_call_error_result(
-        ctx,
-        &result_symbol,
-        &call_error_symbol,
-        CALL_ERROR_PROCESS_DOWN_TAG,
-    )?;
+    let down_result =
+        build_call_error_result(ctx, &result_symbol, &call_error_symbol, "ProcessDown")?;
     ctx.builder.build_unconditional_branch(merge_bb).or_ice()?;
     let down_block = ctx
         .builder
@@ -354,7 +346,7 @@ fn emit_call<'ctx>(
     let ok_result = build_enum_value(
         ctx,
         &result_symbol,
-        IRVariantTag(RESULT_OK_TAG),
+        result::ok_tag(ctx, &result_symbol),
         &[reply_value],
     )?;
     ctx.builder.build_unconditional_branch(merge_bb).or_ice()?;
@@ -735,20 +727,13 @@ fn build_delivery<'ctx>(
 
 // ----- envelope construction ----------------------------------------------
 
-/// `enum Option<T>` variant tags (declaration order in
-/// `koja/lib/global/src/option.koja`).
+/// `Option<ReplyTo<R>>` wire bytes stamped into envelope payloads.
+/// The send side writes these raw words and the receive side loads
+/// them as the enum tag, so they must equal the `Option` layout tags.
+/// The emit-time wire-order assertion in `compile_program` verifies
+/// that equality at build time (see ABI.md).
 const OPTION_SOME_TAG: u64 = 0;
 const OPTION_NONE_TAG: u64 = 1;
-
-/// `enum Result<T, E>` variant tag for `Ok(T)`.
-const RESULT_OK_TAG: u8 = 0;
-/// `enum Result<T, E>` variant tag for `Err(E)`.
-const RESULT_ERR_TAG: u8 = 1;
-
-/// `enum CallError` variant tags (declaration order in
-/// `koja/lib/global/src/process.koja`).
-const CALL_ERROR_TIMEOUT_TAG: u8 = 0;
-const CALL_ERROR_PROCESS_DOWN_TAG: u8 = 1;
 
 /// Synthesized LLVM type for the second element of an
 /// `(M, Option<ReplyTo<R>>)` envelope. `R` has no LLVM-side influence:
@@ -922,7 +907,7 @@ fn ok_payload_field_type(
 ) -> Result<IRType, LlvmError> {
     let payload = ctx
         .layouts
-        .enum_variant_payload(result_symbol, IRVariantTag(RESULT_OK_TAG));
+        .enum_variant_payload(result_symbol, result::ok_tag(ctx, result_symbol));
     match payload {
         IRVariantPayload::Tuple(types) if types.len() == 1 => Ok(types.into_iter().next().unwrap()),
         IRVariantPayload::Struct(fields) if fields.len() == 1 => {
@@ -938,19 +923,20 @@ fn ok_payload_field_type(
 /// Build a `Result.Err(CallError.<variant>)` SSA value. Two enum
 /// constructions: the inner `CallError` variant first (no payload),
 /// then the outer `Result.Err(call_error_value)`. Both go through
-/// [`build_enum_value`] so layouts agree with the rest of emit.
+/// [`build_enum_value`] with name-resolved tags so layouts agree
+/// with the rest of emit.
 fn build_call_error_result<'ctx>(
     ctx: &EmitContext<'ctx>,
     result_symbol: &IRSymbol,
     call_error_symbol: &IRSymbol,
-    call_error_tag: u8,
+    variant: &str,
 ) -> Result<BasicValueEnum<'ctx>, LlvmError> {
-    let call_error_value =
-        build_enum_value(ctx, call_error_symbol, IRVariantTag(call_error_tag), &[])?;
+    let tag = ctx.layouts.enum_variant_tag(call_error_symbol, variant);
+    let call_error_value = build_enum_value(ctx, call_error_symbol, tag, &[])?;
     build_enum_value(
         ctx,
         result_symbol,
-        IRVariantTag(RESULT_ERR_TAG),
+        result::err_tag(ctx, result_symbol),
         &[call_error_value],
     )
 }

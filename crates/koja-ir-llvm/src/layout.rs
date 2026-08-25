@@ -31,6 +31,7 @@ pub(crate) mod enum_order;
 pub(crate) mod enums;
 pub(crate) mod structs;
 pub(crate) mod unions;
+pub(crate) mod wire_contract;
 
 /// LLVM layout of a single enum decl. `variants` is indexed by
 /// [`IRVariantTag`].0 so construction can recover the per-variant
@@ -217,6 +218,14 @@ impl<'ctx> TypeLayouts<'ctx> {
             .unwrap_or_else(|| {
                 panic!("LLVM emit: enum `{enum_symbol}` has no variant named `{name}`")
             })
+    }
+
+    /// Run `f` over every registered enum's symbol and variants,
+    /// inside one registry borrow. Used by the wire-contract check.
+    pub(crate) fn for_each_enum(&self, mut f: impl FnMut(&IRSymbol, &[IREnumVariant])) {
+        for (symbol, variants) in self.enum_variants.borrow().iter() {
+            f(symbol, variants);
+        }
     }
 
     /// Closure-borrow over the `RefCell` so callers can't hold a

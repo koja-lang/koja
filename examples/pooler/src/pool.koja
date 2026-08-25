@@ -11,7 +11,7 @@ needs to know how a resource is built.
 """
 struct Config<T>
   create: fn () -> Result<T, String>
-  size: Int
+  size: Int = 10
 end
 
 @doc """
@@ -68,7 +68,7 @@ struct Pool<T>
   @doc """
   Borrows a resource, waiting up to `timeout_ms` for one to free up.
   """
-  fn checkout(self, timeout_ms: Int) -> T ! Error
+  fn checkout(self, timeout_ms: Int = 5000) -> T ! Error
     match self.ref.call(Msg.Checkout, timeout_ms)
       Result.Ok(Reply.Resource(resource)) -> resource
       Result.Ok(_) -> fail Error.Failed("unexpected checkout reply")
@@ -91,7 +91,7 @@ struct Pool<T>
   pool builds a replacement with its factory. If the factory fails, the
   pool shrinks by one and the error is returned.
   """
-  fn discard(self, timeout_ms: Int) ! Error
+  fn discard(self, timeout_ms: Int = 5000) ! Error
     match self.ref.call(Msg.Discard, timeout_ms)
       Result.Ok(Reply.Done) -> ()
       Result.Ok(Reply.Failed(reason)) -> fail Error.Failed(reason)
@@ -112,22 +112,18 @@ end
 
 # The pool process behind a `Pool` handle. Never part of the public
 # surface. `Pool.start` spawns it and the `Ref` is the only line in.
-priv struct Server<T>
+priv struct Server<T>: Process<Config<T>, Msg<T>, Reply<T>>
   available: List<T>
   create: fn () -> Result<T, String>
   waiting: List<ReplyTo<Reply<T>>>
-end
 
-impl Process<Config<T>, Msg<T>, Reply<T>> for Server<T>
   fn start(config: Config<T>) -> Self ! StopReason
     available: List<T> = List.new()
     waiting: List<ReplyTo<Reply<T>>> = List.new()
-    i = 0
 
-    while i < config.size
+    for _ in Range{start: 1, stop: config.size}
       resource = config.create() rescue _ -> fail StopReason.Shutdown
       available = available.append(resource)
-      i += 1
     end
 
     Server{available: available, create: config.create, waiting: waiting}

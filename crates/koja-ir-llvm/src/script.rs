@@ -19,6 +19,7 @@ use crate::layout::enums::{
 };
 use crate::layout::structs::{declare_struct_type, define_struct_body};
 use crate::layout::unions::{declare_union_type, define_union_body};
+use crate::layout::wire_contract::assert_wire_enum_order;
 use crate::main_wrapper::{emit_app_name_global, emit_script_main};
 
 pub(crate) fn compile_script(
@@ -56,6 +57,7 @@ pub(crate) fn compile_script(
     for decl in enums_in_dependency_order(&script.packages) {
         define_enum_completes_and_outer(ctx, decl)?;
     }
+    assert_wire_enum_order(ctx)?;
     emit_app_name_global(ctx, app_name);
     let mut declared = Vec::with_capacity(script.packages.iter().map(|p| p.functions.len()).sum());
     for package in &script.packages {

@@ -1,39 +1,42 @@
 struct JsonUtilTest
   @test "parse_url extracts a url from a JSON body"
-  fn test_parse_url_ok -> Result<Bool, String>
-    match JsonUtil.parse_url("{\"url\": \"https://example.com\"}")
-      Result.Ok("https://example.com") -> Result.Ok(true)
-      Result.Ok(other) -> Result.Err("got unexpected url `#{other}`")
-      Result.Err(e) -> Result.Err("expected Ok, got error `#{e}`")
+  fn test_parse_url_ok -> Bool ! String
+    url = JsonUtil.parse_url("{\"url\": \"https://example.com\"}")
+      rescue e -> fail "expected Ok, got error `#{e}`"
+
+    unless url == "https://example.com"
+      fail "got unexpected url `#{url}`"
     end
+
+    true
   end
 
   @test "parse_url rejects a missing url field"
-  fn test_parse_url_missing -> Result<Bool, String>
+  fn test_parse_url_missing -> Bool ! String
     match JsonUtil.parse_url("{\"href\": \"https://example.com\"}")
-      Result.Err(_) -> Result.Ok(true)
-      Result.Ok(_) -> Result.Err("expected an error for a missing url")
+      Result.Err(_) -> true
+      Result.Ok(_) -> fail "expected an error for a missing url"
     end
   end
 
   @test "parse_url rejects a non-string url"
-  fn test_parse_url_wrong_type -> Result<Bool, String>
+  fn test_parse_url_wrong_type -> Bool ! String
     match JsonUtil.parse_url("{\"url\": 42}")
-      Result.Err(_) -> Result.Ok(true)
-      Result.Ok(_) -> Result.Err("expected an error for a non-string url")
+      Result.Err(_) -> true
+      Result.Ok(_) -> fail "expected an error for a non-string url"
     end
   end
 
   @test "parse_url rejects invalid JSON"
-  fn test_parse_url_invalid -> Result<Bool, String>
+  fn test_parse_url_invalid -> Bool ! String
     match JsonUtil.parse_url("not json")
-      Result.Err(_) -> Result.Ok(true)
-      Result.Ok(_) -> Result.Err("expected an error for invalid JSON")
+      Result.Err(_) -> true
+      Result.Ok(_) -> fail "expected an error for invalid JSON"
     end
   end
 
   @test "Link encoding serializes every field"
-  fn test_link_encoding -> Result<Bool, String>
+  fn test_link_encoding -> Bool ! String
     link = Link{
       code: "abc123",
       created_at: "2026-01-01 00:00:00+00",
@@ -43,17 +46,17 @@ struct JsonUtilTest
     encoded = JSON.encode(link)
 
     unless encoded.contains?("\"code\":\"abc123\"")
-      return Result.Err("missing code in `#{encoded}`")
+      fail "missing code in `#{encoded}`"
     end
 
     unless encoded.contains?("\"hits\":7")
-      return Result.Err("missing hits in `#{encoded}`")
+      fail "missing hits in `#{encoded}`"
     end
 
     unless encoded.contains?("\"short_path\":\"/abc123\"")
-      return Result.Err("missing short_path in `#{encoded}`")
+      fail "missing short_path in `#{encoded}`"
     end
 
-    Result.Ok(true)
+    true
   end
 end

@@ -113,35 +113,40 @@ focused standard library improvements found while building auth-manager.
   sharing a name across arities stay out of scope
   ([MISC.md](MISC.md)). Struct field defaults (0.17) reduced the urgency by
   making options structs cheap to declare and construct.
-- Add a `Runtime` observability API with global and per-process metrics,
-  including mailbox depth, and document the overload contract for long-running
-  services. Shape the API from the telemetry and structured logging package
-  work in the ecosystem-validation section, not speculatively.
+- **[DONE]** Add a `Runtime` observability API with global and per-process
+  metrics, including mailbox depth, and document the overload contract for
+  long-running services.
 
 ### Standard library quality of life
 
 - **[DONE]** Add contextual literal protocols, JSON literal trees, and
   `JSON.Encoding` with package-level encode and decode functions.
-- Add `DateTime.to_rfc3339()` and `DateTime.from_rfc3339(text)` for JSON API
-  timestamps ([gap](GAPS.md#datetime-has-no-calendar-formatting-or-parsing)).
-- Add `UUID.v4()` for session, API key, and node identifiers
-  ([gap](GAPS.md#no-uuid-generation)).
 - **[DONE]** Add `IPAddress.to_string()` and `IPAddress.parse(text)` for DNS
   discovery and dialable addresses.
-- Add bytewise `Binary.compare`, big-endian integer encoding and decoding, and
-  `Float.bit_pattern` / `Float.from_bit_pattern`
-  ([gap](GAPS.md#binary-has-no-ordering-and-no-endian-helpers)).
 - **[DONE]** Add CRC32 and CRC32C checksums for storage and wire-format
   integrity.
-- Add socket read, write, connect, and accept deadlines so a stalled peer
-  cannot block its owning process forever
-  ([gap](GAPS.md#sockets-have-no-deadlines)).
 
 The larger auth-manager findings remain in [GAPS.md](GAPS.md). `Fd` random
 access and durability, ordered maps, and cross-package protocol conformances
 are not 0.18 release gates.
 
-The rest of the 0.18 scope will be selected from evidence gathered while
+## 0.19.0
+
+The 0.19 scope is still forming. These standard library items are deferred
+from 0.18, and any of them can ship in an earlier patch release.
+
+- Add socket read, write, connect, and accept deadlines so a stalled peer
+  cannot block its owning process forever
+  ([gap](GAPS.md#sockets-have-no-deadlines)).
+- Add `DateTime.to_rfc3339()` and `DateTime.from_rfc3339(text)` for JSON API
+  timestamps ([gap](GAPS.md#datetime-has-no-calendar-formatting-or-parsing)).
+- Add `UUID.v4()` for session, API key, and node identifiers
+  ([gap](GAPS.md#no-uuid-generation)).
+- Add bytewise `Binary.compare`, big-endian integer encoding and decoding, and
+  `Float.bit_pattern` / `Float.from_bit_pattern`
+  ([gap](GAPS.md#binary-has-no-ordering-and-no-endian-helpers)).
+
+The rest of the 0.19 scope will be selected from evidence gathered while
 building real packages and applications. Later `0.x` releases will be added
 only when their scope is concrete.
 

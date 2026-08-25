@@ -1,4 +1,5 @@
-//! Coverage for `@intrinsic` lowering in `src/lower/package.rs`:
+//! Coverage for `@intrinsic` lowering in `src/lower/package.rs`,
+//! driven through the real autoimported stdlib (no fixture decls):
 //!
 //! - a bodyless `@intrinsic` decl lowers to an [`IRFunction`] with
 //!   [`FunctionKind::Intrinsic`] and zero basic blocks (the backend
@@ -11,37 +12,25 @@
 //!   without panicking on the "function has no basic blocks"
 //!   contract that gates `Regular` fns
 //!
-//! Each fixture parses + typechecks + lowers in script-mode so the
-//! `@intrinsic fn print(s: String)` decl lives alongside the body
-//! that calls it. Project-mode (program) coverage waits on the
-//! stdlib-loading slice that imports intrinsics from real `lib/`
-//! files.
+//! `Global.String.length` is the probe: a non-generic `@intrinsic`
+//! instance function, so its mangled symbol is stable across tests.
 //!
 //! [`IRFunction`]: koja_ir::IRFunction
 //! [`FunctionKind`]: koja_ir::FunctionKind
 
-use koja_ir::{FunctionKind, IRInstruction, IRIntrinsicId, IRScript, IRTerminator, IRType};
+use koja_ir::{FunctionKind, IRInstruction, IRIntrinsicId, IRTerminator, IRType, StringMethod};
 use koja_parser::ParseMode;
 
 mod common;
 
-use common::{entry_block, lower_script_source_in, mangled_function, typecheck_fail_in};
+use common::{PACKAGE, entry_block, lower_script_source, mangled_function, typecheck_fail};
 
-const PACKAGE: &str = "Global";
-
-fn lower(source: &str) -> IRScript {
-    lower_script_source_in(PACKAGE, source)
-}
+const LENGTH_SYMBOL: &str = "Global.String.length";
 
 #[test]
 fn intrinsic_fn_lowers_to_function_kind_intrinsic_with_empty_blocks() {
-    let source = "
-        @intrinsic
-        fn print(s: String)
-        ";
-
-    let script = lower(source);
-    let function = mangled_function(&script, &format!("{PACKAGE}.print"));
+    let script = lower_script_source("\"koja\".length()");
+    let function = mangled_function(&script, LENGTH_SYMBOL);
 
     let FunctionKind::Intrinsic(id) = &function.kind else {
         panic!(
@@ -51,31 +40,23 @@ fn intrinsic_fn_lowers_to_function_kind_intrinsic_with_empty_blocks() {
     };
     assert_eq!(
         *id,
-        IRIntrinsicId::Print,
-        "intrinsic id should map to the `print` variant",
+        IRIntrinsicId::String(StringMethod::Length),
+        "intrinsic id should map to the `String.length` variant",
     );
     assert!(
         function.blocks.is_empty(),
         "intrinsic body should lower to zero blocks; got {} block(s)",
         function.blocks.len(),
     );
-    assert_eq!(function.return_type, IRType::Unit);
+    assert_eq!(function.return_type, IRType::Int64);
     assert_eq!(function.params.len(), 1);
     assert_eq!(function.params[0].ty, IRType::String);
 }
 
 #[test]
 fn intrinsic_call_lowers_to_normal_call_instruction() {
-    let source = "
-        @intrinsic
-        fn print(s: String)
-
-        print(\"hello\")
-        ";
-
-    let script = lower(source);
-    let mangled = format!("{PACKAGE}.print/1");
-    assert_eq!(script.return_type, IRType::Unit);
+    let script = lower_script_source("\"hello\".length()");
+    assert_eq!(script.return_type, IRType::Int64);
 
     let block = entry_block(&script.blocks);
     let call = block
@@ -86,12 +67,11 @@ fn intrinsic_call_lowers_to_normal_call_instruction() {
             _ => None,
         })
         .expect("expected a Call instruction in the script body");
-    assert_eq!(call.0.mangled(), mangled);
-    assert_eq!(call.1.len(), 1, "print takes exactly one String arg");
-    assert_eq!(
-        block.terminator,
-        IRTerminator::Return { value: None },
-        "Unit script discards the intrinsic call result",
+    assert_eq!(call.0.mangled(), format!("{LENGTH_SYMBOL}/1"));
+    assert_eq!(call.1.len(), 1, "length takes exactly the receiver arg");
+    assert!(
+        matches!(block.terminator, IRTerminator::Return { value: Some(_) }),
+        "Int script returns the intrinsic call result",
     );
 }
 
@@ -105,7 +85,7 @@ fn regular_function_still_lowers_to_kind_regular_with_blocks() {
         helper()
         ";
 
-    let script = lower(source);
+    let script = lower_script_source(source);
     let function = mangled_function(&script, &format!("{PACKAGE}.helper"));
     assert_eq!(function.kind, FunctionKind::Regular);
     assert!(
@@ -120,14 +100,9 @@ fn regular_function_still_lowers_to_kind_regular_with_blocks() {
 /// interpreter dispatch can find it by mangled symbol.
 #[test]
 fn lowered_intrinsic_is_visible_via_function_lookup() {
-    let source = "
-        @intrinsic
-        fn print(s: String)
-        ";
-
-    let script = lower(source);
+    let script = lower_script_source("\"koja\".length()");
     assert!(
-        script.function(&format!("{PACKAGE}.print/1")).is_some(),
+        script.function(&format!("{LENGTH_SYMBOL}/1")).is_some(),
         "intrinsic should be reachable via IRScript::function lookup",
     );
 }
@@ -139,19 +114,12 @@ fn lowered_intrinsic_is_visible_via_function_lookup() {
 /// function.
 #[test]
 fn intrinsic_arg_type_mismatch_diagnoses_through_typecheck() {
-    let source = "
-        @intrinsic
-        fn print(s: String)
-
-        print(1)
-        ";
-
-    let failure = typecheck_fail_in(PACKAGE, source, ParseMode::Script);
+    let failure = typecheck_fail("\"hello\".get(\"oops\")", ParseMode::Script);
     assert!(
         failure
             .diagnostics
             .iter()
-            .any(|d| d.message.contains("expects `String`")),
+            .any(|d| d.message.contains("expects `Int`")),
         "expected typecheck arg-mismatch, got: {:?}",
         failure.diagnostics,
     );

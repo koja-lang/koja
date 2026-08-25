@@ -20,7 +20,7 @@ use std::time::{Duration, Instant};
 use crossbeam_deque::{Injector, Steal, Stealer, Worker};
 use koja_runtime_core::{
     Clock, CrashInfo, Driver, Due, Executor, ExitNotice, ExitReason, Lifecycle, MailPark, Pid,
-    Priority, ProcessTable, Reclaim, SignalSource, SwitchOutcome, TimerService, Wake,
+    Priority, ProcessState, ProcessTable, Reclaim, SignalSource, SwitchOutcome, TimerService, Wake,
     duration_from_user_millis, slot_index,
 };
 
@@ -269,19 +269,8 @@ impl SignalSource for NativeSignals {
     fn drain(&self) -> Vec<Lifecycle> {
         signals::drain()
             .into_iter()
-            .map(lifecycle_from_index)
+            .filter_map(Lifecycle::from_index)
             .collect()
-    }
-}
-
-/// Maps a drained signal's wire index back to its [`Lifecycle`] variant.
-/// The indices (`0 -> Shutdown`, `1 -> Interrupt`, `2 -> Reload`) are a
-/// pinned wire ABI contract shared with the signal handler.
-fn lifecycle_from_index(index: i64) -> Lifecycle {
-    match index {
-        0 => Lifecycle::Shutdown,
-        1 => Lifecycle::Interrupt,
-        _ => Lifecycle::Reload,
     }
 }
 
@@ -1672,6 +1661,52 @@ pub extern "C" fn koja_rt_demonitor(token: i64) {
 pub extern "C" fn koja_rt_parent() -> i64 {
     let pid = CURRENT_PID.with(|c| c.get());
     TABLE.parent(pid).unwrap_or(0)
+}
+
+/// Count of live (non-`Dead`) processes, including the entry process
+/// and the caller (`Runtime.process_count`).
+#[unsafe(no_mangle)]
+pub extern "C" fn koja_rt_process_count() -> i64 {
+    TABLE.process_count() as i64
+}
+
+/// Count of live processes in the lifecycle state `state` names (a
+/// `Process.State` wire index). An unknown index counts zero.
+#[unsafe(no_mangle)]
+pub extern "C" fn koja_rt_process_count_by_state(state: i64) -> i64 {
+    ProcessState::from_wire_index(state).map_or(0, |state| TABLE.process_count_in(state) as i64)
+}
+
+/// Worker (scheduler) thread count (`Runtime.scheduler_count`), the
+/// same value [`NativeDriver::run`] sizes its pool with.
+#[unsafe(no_mangle)]
+pub extern "C" fn koja_rt_scheduler_count() -> i64 {
+    worker_count() as i64
+}
+
+/// Queued message count (system + business) of the calling process's
+/// mailbox (`Runtime.mailbox_depth`).
+#[unsafe(no_mangle)]
+pub extern "C" fn koja_rt_self_mailbox_depth() -> i64 {
+    let pid = CURRENT_PID.with(|current| current.get());
+    TABLE.mailbox_depth(pid).unwrap_or(0) as i64
+}
+
+/// Mailbox depth of `pid`, or `-1` when it is dead or unknown
+/// (`pid.mailbox_depth()`).
+#[unsafe(no_mangle)]
+pub extern "C" fn koja_rt_mailbox_depth(pid: i64) -> i64 {
+    TABLE.mailbox_depth(pid).map_or(-1, |depth| depth as i64)
+}
+
+/// The lifecycle state of `pid` as a `Process.State` wire index, or
+/// `-1` when it is dead or unknown (`pid.state()`).
+#[unsafe(no_mangle)]
+pub extern "C" fn koja_rt_process_state(pid: i64) -> i64 {
+    TABLE
+        .process_state(pid)
+        .and_then(ProcessState::wire_index)
+        .unwrap_or(-1)
 }
 
 /// Count of illegal lifecycle edges the scheduler has applied: zero in

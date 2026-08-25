@@ -27,7 +27,7 @@
 //!
 //! Errors surface as typed [`LlvmError::Codegen`] values.
 
-use koja_ir::{IRType, IRVariantTag};
+use koja_ir::IRType;
 
 mod cursor;
 mod from_list;
@@ -59,12 +59,6 @@ pub(super) const INITIAL_CAPACITY: u64 = 8;
 pub(super) const STATE_EMPTY: u64 = 0;
 pub(super) const STATE_OCCUPIED: u64 = 1;
 pub(super) const STATE_TOMBSTONE: u64 = 2;
-
-/// `Option<V>` variant tags as the stdlib declares them: `Some`
-/// first (tag 0), then `None`. Map.get mints either flavour through
-/// these so the numeric tags don't leak into the emitter body.
-pub(super) const OPTION_SOME_TAG: IRVariantTag = IRVariantTag(0);
-pub(super) const OPTION_NONE_TAG: IRVariantTag = IRVariantTag(1);
 
 /// Per-instantiation layout knob for the per-method emitters. Set
 /// passes `value_ty: None` (the entry is just `T`). Map passes

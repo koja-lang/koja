@@ -19,10 +19,8 @@
 //!   through the matching `koja_rt_*` extern declared in
 //!   [`koja_ir_llvm::runtime`].
 //!
-//! Tests inline minimal `Lifecycle` / `StopReason` / `Step` /
-//! `ReplyTo` / `Ref` / `Process` definitions so the suite doesn't
-//! depend on `Global.process` being autoimported (that step lands
-//! later in the concurrency plan).
+//! Fixtures compile against the real autoimported `Global` package,
+//! including the full `process.koja` surface.
 
 use std::path::PathBuf;
 
@@ -33,104 +31,12 @@ use koja_ir_llvm::emit_llvm_ir;
 use koja_parser::{ParseMode, SourceFile, parse_program};
 use koja_typecheck::check_program;
 
+mod common;
+
+use common::assert_contains;
+
 const PACKAGE: &str = "TestApp";
 const APP_NAME: &str = "koja_process_test";
-
-/// Minimal stub of `process.koja`. Mirrors the
-/// stubs used by `koja-ir/tests/lower_process.rs` and
-/// `koja-typecheck/tests/process.rs`.
-const PROCESS_STUB: &str = "
-    enum Process.Lifecycle
-      Shutdown
-      Interrupt
-      Reload
-    end
-
-    enum Process.StopReason
-      Normal
-      Shutdown
-    end
-
-    enum Process.Priority
-      Low
-      Normal
-      High
-    end
-
-    enum Process.CallError
-      Timeout
-      ProcessDown
-    end
-
-    enum Process.Step<S>
-      Continue(S)
-      Done(Process.StopReason)
-    end
-
-    struct ReplyTo<R>
-      id: Int
-      token: Int
-    end
-
-    enum ReplyTo.Delivery
-      Delivered
-      Expired
-    end
-
-    extend ReplyTo<R>
-      @intrinsic
-      fn send(self, reply: R) -> ReplyTo.Delivery
-    end
-
-    struct Ref<M, R>
-      id: Int
-    end
-
-    extend Ref<M, R>
-      @intrinsic
-      fn self_ref -> Ref<M, R>
-
-      @intrinsic
-      fn cast(self, msg: M)
-
-      @intrinsic
-      fn signal(self, event: Process.Lifecycle)
-
-      @intrinsic
-      fn kill(self)
-
-      @intrinsic
-      fn alive?(self) -> Bool
-
-      @intrinsic
-      fn send_after(self, msg: M, delay_ms: Int)
-
-      @intrinsic
-      fn call(self, msg: M, timeout_ms: Int) -> Result<R, Process.CallError>
-    end
-
-    protocol ExitStatus
-      fn code(self) -> Int
-    end
-
-    impl ExitStatus for Process.StopReason
-      fn code(self) -> Int
-        match self
-          Process.StopReason.Normal -> 0
-          Process.StopReason.Shutdown -> 1
-        end
-      end
-    end
-
-    protocol Process<C, M, R>
-      fn start(config: C) -> Result<Self, Process.StopReason>
-      fn handle(self, msg: M, from: Option<ReplyTo<R>>) -> Process.Step<Self>
-      fn run(self) -> Process.StopReason
-      fn priority(self) -> Process.Priority
-        Process.Priority.Normal
-      end
-    end
-    ";
 
 /// Aliases injected at the top of every fixture's `TestApp` source so
 /// test bodies (and `TEST_ENTRY_SNIPPET`) can spell the nested
@@ -144,8 +50,8 @@ const PROCESS_ALIASES: &str = "\
 
 /// Synthetic Process state appended by [`lower`] so fixtures that
 /// only exercise spawn/receive emission still give `lower_program`
-/// a valid entry. Spells out `run` because [`PROCESS_STUB`]'s
-/// protocol has no default bodies.
+/// a valid entry. Spells out `run` so the entry exits immediately
+/// instead of inheriting the protocol's default receive loop.
 const TEST_ENTRY_SNIPPET: &str = "
     struct TestEntry
     end
@@ -173,11 +79,6 @@ fn lower(source: &str) -> IRProgram {
 fn lower_process_entry(source: &str, state: &str) -> IRProgram {
     let state_id = Identifier::new(PACKAGE, vec![state.to_string()]);
     let mut sources = koja_stdlib::autoimport_sources();
-    sources.push(SourceFile {
-        package: "Global".to_string(),
-        path: PathBuf::from("<Global.process>"),
-        source: dedent(PROCESS_STUB),
-    });
     sources.push(SourceFile {
         package: PACKAGE.to_string(),
         path: PathBuf::from("test.koja"),
@@ -207,13 +108,6 @@ fn emit(source: &str) -> String {
 fn emit_with_process_entry(source: &str, state: &str) -> String {
     let program = lower_process_entry(source, state);
     emit_llvm_ir(&program, APP_NAME).expect("LLVM emit should succeed")
-}
-
-fn assert_contains(ir_text: &str, needle: &str) {
-    assert!(
-        ir_text.contains(needle),
-        "expected `{needle}` in:\n{ir_text}",
-    );
 }
 
 const COUNTER_PROCESS: &str = "
@@ -289,9 +183,8 @@ fn spawn_wrapper_loads_config_calls_start_then_run_on_ok() {
     // The start -> run dispatch lives in the IR-synthesized body,
     // emitted by the normal instruction pipeline. start returns
     // Result<Counter, StopReason>. The name mangler qualifies
-    // StopReason with the package it was lifted from (today:
-    // `Global`, since the protocol stub lifts every type
-    // declaration into the `Global` package).
+    // StopReason with the package that declares it (`Global`, via
+    // the stdlib's `process.koja`).
     assert_contains(&ir_text, "define void @TestApp.Counter.__spawn_body(i64");
     assert_contains(
         &ir_text,

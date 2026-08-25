@@ -32,8 +32,8 @@ mod kernel;
 mod list;
 mod map;
 mod numeric;
+mod option;
 mod parse;
-mod print;
 pub(crate) mod process;
 mod result;
 mod runtime_block;
@@ -82,7 +82,6 @@ pub(crate) fn emit_intrinsic_body<'ctx>(
             numeric::emit_numeric_convert(ctx, function, llvm_function, convert)
         }
         IRIntrinsicId::Parse(target) => parse::emit_parse(ctx, function, llvm_function, target),
-        IRIntrinsicId::Print => print::emit_global_print(ctx, function, llvm_function),
         IRIntrinsicId::Process(method) => {
             process::emit_process(ctx, function, llvm_function, method)
         }

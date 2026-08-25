@@ -178,10 +178,14 @@ Lifecycle and I/O payloads carry declaration-order variant bytes.
 | `Error`    | 2    |
 
 These values are authoritative in `koja-runtime-core/src/protocol.rs` and
-`wire.rs`. The declarations in `lib/global/src/process.koja` and
-`lib/global/src/io.koja` must retain the same order. LLVM reads and writes the
-variant byte directly. Eval maps the same indices through its scheduler and
-reactor adapters.
+`wire.rs`, where unit tests pin each code to its variant name. The
+declarations in `lib/global/src/process.koja` and `lib/global/src/io.koja`
+must retain the same order because LLVM reads and writes the variant byte
+directly. The compiler enforces that order: the wire-contract check in
+`koja-ir-llvm` (`layout/wire_contract.rs`) runs after enum registration and
+fails the build when a declaration diverges from this catalog. Eval does not
+depend on the order. Its scheduler and reactor adapters resolve variants by
+name through the core tables.
 
 ## Numeric parse helper return codes
 
@@ -204,34 +208,30 @@ plus an out-pointer and return a classification code:
 
 ## Kernel enum tag conventions
 
-Backends construct `Result` and `Option` values inside intrinsics
-and rely on the declaration order in `lib/global/src/result.koja` and
-`lib/global/src/option.koja`:
+Enum tags are dense declaration-order indices. Reordering a variant changes
+its tag.
+
+Every stdlib enum that a backend constructs, including `Result`, `Option`,
+and `Process.CallError`, resolves its tags by variant name at emit or eval
+time, through `TypeLayouts::enum_variant_tag` in `koja-ir-llvm` or
+declaration lookup in `koja-ir-eval`. No backend pins these tags to
+declaration order.
+
+One send-path exception remains. The native `Ref.call` / `Ref.cast` envelope
+packers stamp the `Option<ReplyTo<R>>` tag word without an enum symbol in
+hand, so `Option` must declare `Some` before `None`:
 
 | Enum     | Variant | Tag |
 | -------- | ------- | --- |
-| `Result` | `Ok`    | 0   |
-| `Result` | `Err`   | 1   |
 | `Option` | `Some`  | 0   |
 | `Option` | `None`  | 1   |
 
-Enum tags are dense declaration-order indices. Reordering a variant changes its
-tag.
+The `koja-ir-llvm` wire-contract check verifies this order on every compile,
+together with `Lifecycle`, `IO.Ready`, and `ExitReason`, so a reorder fails
+the build instead of corrupting envelopes.
 
-`Result` and `Option` are pervasive hardcoded conventions pinned by the IR
-elaborate and seal passes. LLVM also hardcodes the two
-`Process.CallError` tags:
-
-| `Process.CallError` | Tag |
-| ------------------- | --- |
-| `Timeout`           | 0   |
-| `ProcessDown`       | 1   |
-
-Lifecycle, I/O readiness, and exit-reason tags are wire contracts cataloged in
-this document. Other stdlib enums that a backend constructs must resolve their
-tags by variant name at emit or eval time, through
-`TypeLayouts::enum_variant_tag` in `koja-ir-llvm` or declaration lookup in
-`koja-ir-eval`.
+Lifecycle, I/O readiness, and exit-reason tags are wire contracts cataloged
+in this document.
 
 Alpha sorting is a source convention where no semantic order exists. It is not
 an ABI rule. Wire-contract enums and semantically ordered enums may use another
@@ -314,10 +314,24 @@ Several process externs return compact status values that LLVM interprets.
 | `koja_rt_is_process_alive` | 0 or 1          | dead or alive                               |
 | `koja_rt_parent`           | 0 or parent PID | entry process or parent                     |
 | `koja_rt_spawn`            | 0 or child PID  | refused spawn or created child              |
+| `koja_rt_mailbox_depth`    | -1 or depth     | dead pid, or queued message count           |
+| `koja_rt_process_state`    | -1 or state     | dead pid, or `Process.State` wire index     |
+
+The observability externs (`koja_rt_process_count`,
+`koja_rt_process_count_by_state`, `koja_rt_scheduler_count`,
+`koja_rt_self_mailbox_depth`, `koja_rt_mailbox_depth`,
+`koja_rt_process_state`) are declared in `lib/global/src/runtime.koja`
+and read the runtime without side effects. The state wire index is a named
+mapping (0=Blocked, 1=Created, 2=Runnable, 3=Running, 4=WaitingIO), not the
+`Process.State` declaration order. The Rust side is
+`koja_runtime_core::ProcessState::wire_index` and its inverse, pinned by a
+unit test. The Koja side is the `state_wire_index` /
+`state_from_wire_index` pair in `lib/global/src/runtime.koja`, pinned by a
+package test.
 
 `Ref.call` distinguishes timeout from `ProcessDown` after a `-1` result by
 querying target liveness. LLVM resolves the corresponding
-`Process.CallError` tag using the hardcoded convention above.
+`Process.CallError` tag by variant name.
 `koja_rt_call_receive(i64 token, i8* out, i64 out_cap, i64 timeout_ms,
 i64 target_pid)` takes the callee's PID so the runtime returns `-1` as
 soon as the callee dies with no reply slotted, instead of waiting out

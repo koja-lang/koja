@@ -64,9 +64,8 @@ fn neg_flips_int_sign() {
 #[test]
 fn string_concat_appends_payloads() {
     // End-to-end String <> String through the interpreter, pinning
-    // `concat_values`'s String arm. Phase C will add Binary/Bits
-    // coverage once `<<…>>` literals can mint those values from
-    // source.
+    // `concat_values`'s String arm. Binary/Bits concat is covered by
+    // the lang suite's binary fixtures.
     assert_eq!(
         evaluate_script("\"foo\" <> \"bar\"\n").unwrap(),
         Value::string("foobar"),

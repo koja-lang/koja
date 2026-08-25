@@ -11,22 +11,16 @@ use inkwell::IntPredicate;
 use inkwell::basic_block::BasicBlock;
 use inkwell::types::{BasicType, StructType};
 use inkwell::values::{BasicValueEnum, FunctionValue, IntValue, PointerValue, StructValue};
-use koja_ir::{IRFunction, IRSymbol, IRType, IRVariantTag, ListMethod};
+use koja_ir::{IRFunction, IRSymbol, IRType, ListMethod};
 
 use crate::ctx::EmitContext;
 use crate::emit::enums::build_enum_value;
 use crate::error::{IceExt, LlvmError};
 use crate::intrinsics::cptr::declare_memcpy_extern;
 use crate::intrinsics::element::{acquire_buffer, acquire_value, element_slot, release_in_slot};
+use crate::intrinsics::option;
 use crate::runtime::{declare_free_extern, declare_malloc_extern};
 use crate::types::{ir_basic_type, list_value_type};
-
-/// `Option<T>` variant tags as the stdlib decls them: `Some` first
-/// (tag 0), then `None`. Both intrinsic emitters that need to mint
-/// option values (`List.get`, `List.pop`) go through these so the
-/// numeric tags aren't sprinkled across call sites.
-const OPTION_SOME_TAG: IRVariantTag = IRVariantTag(0);
-const OPTION_NONE_TAG: IRVariantTag = IRVariantTag(1);
 
 /// Initial buffer capacity for `List.new`.
 const INITIAL_CAPACITY: u64 = 8;
@@ -361,11 +355,21 @@ fn emit_get<'ctx>(
         .build_load(elem_ty, elem_ptr, "elem_val")
         .or_ice()?;
     let value = acquire_value(ctx, element(ListMethod::Get, function)?, value)?;
-    let some = build_enum_value(ctx, option_symbol, OPTION_SOME_TAG, &[value])?;
+    let some = build_enum_value(
+        ctx,
+        option_symbol,
+        option::some_tag(ctx, option_symbol),
+        &[value],
+    )?;
     ctx.builder.build_return(Some(&some)).or_ice().map(|_| ())?;
 
     ctx.builder.position_at_end(oob_bb);
-    let none = build_enum_value(ctx, option_symbol, OPTION_NONE_TAG, &[])?;
+    let none = build_enum_value(
+        ctx,
+        option_symbol,
+        option::none_tag(ctx, option_symbol),
+        &[],
+    )?;
     ctx.builder.build_return(Some(&none)).or_ice().map(|_| ())?;
 
     let _ = entry;
@@ -401,7 +405,12 @@ fn emit_pop<'ctx>(
         .or_ice()?;
 
     ctx.builder.position_at_end(empty_bb);
-    let none = build_enum_value(ctx, &option_symbol, OPTION_NONE_TAG, &[])?;
+    let none = build_enum_value(
+        ctx,
+        &option_symbol,
+        option::none_tag(ctx, &option_symbol),
+        &[],
+    )?;
     // Value semantics: the returned list must own an independent
     // buffer. Handing back `self_val` directly aliases the caller's
     // receiver slot, so both would free the same buffer at scope exit
@@ -446,7 +455,12 @@ fn emit_pop<'ctx>(
         .build_load(elem_ty, elem_ptr, "elem_val")
         .or_ice()?;
     let elem_val = acquire_value(ctx, element(ListMethod::Pop, function)?, elem_val)?;
-    let some = build_enum_value(ctx, &option_symbol, OPTION_SOME_TAG, &[elem_val])?;
+    let some = build_enum_value(
+        ctx,
+        &option_symbol,
+        option::some_tag(ctx, &option_symbol),
+        &[elem_val],
+    )?;
     let new_buf = copy_buffer(
         ctx,
         llvm_function,

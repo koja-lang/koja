@@ -90,10 +90,6 @@ pub enum IRIntrinsicId {
     /// when the receiver does not fit the target.
     NumericConvert(NumericConvert),
     Parse(ParseTarget),
-    /// Transitional. The script-mode test fixture's `@intrinsic fn
-    /// print(s: String)`. Goes away when the `Debug` protocol
-    /// displaces it.
-    Print,
     /// `@intrinsic` statics on the `Process` protocol from
     /// [`koja/lib/global/src/process.koja`], dispatched on the
     /// protocol name with no receiver value.
@@ -402,12 +398,11 @@ impl IRIntrinsicId {
     /// at codegen.
     ///
     /// Strips the package prefix and walks the remaining path. All
-    /// intrinsics today are either one-segment (`print`) or
-    /// two-segment (`Type.method`). Nested-type intrinsics would
-    /// extend the match arms without changing the shape.
+    /// intrinsics today are two-segment (`Type.method`). Nested-type
+    /// intrinsics would extend the match arms without changing the
+    /// shape.
     pub fn from_identifier(identifier: &Identifier) -> Option<Self> {
         match identifier.path() {
-            [single] if single == "print" => Some(Self::Print),
             [receiver, method] => Self::from_pair(receiver, method),
             _ => None,
         }
@@ -621,7 +616,6 @@ impl fmt::Display for IRIntrinsicId {
             Self::Map(m) => write!(f, "Map.{}", m.segment()),
             Self::NumericConvert(convert) => f.write_str(&convert.path()),
             Self::Parse(target) => write!(f, "{}.parse", target.segment()),
-            Self::Print => f.write_str("print"),
             Self::Process(m) => write!(f, "Process.{}", m.segment()),
             Self::Ref(m) => write!(f, "Ref.{}", m.segment()),
             Self::ReplyTo(m) => write!(f, "ReplyTo.{}", m.segment()),
@@ -646,11 +640,6 @@ mod tests {
             .unwrap_or_else(|| panic!("expected `{path:?}` to parse"));
         assert_eq!(parsed, expected, "parsed variant for {path:?}");
         assert_eq!(parsed.to_string(), expected_display, "Display for {path:?}",);
-    }
-
-    #[test]
-    fn print_is_top_level_one_segment() {
-        assert_round_trip(&["print"], IRIntrinsicId::Print, "print");
     }
 
     /// Every namespaced `Receiver.method` intrinsic, spelled out

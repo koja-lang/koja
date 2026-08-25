@@ -15,14 +15,15 @@
 //! Treat it like the `koja_rt_*` function signatures: an ABI that any
 //! backend (LLVM today, others after self-hosting) must conform to.
 //!
-//! **This module is the authoritative definition.** The conforming
-//! constants on the backend side (`ENVELOPE_PAYLOAD_OFFSET` in
-//! `koja-ir-llvm` and `ReceiveTag::wire_byte` in `koja-ir`) mirror
-//! these values by spec, not via a shared type, because a shared crate
+//! **This module is the authoritative definition.** The runtime strips
+//! the tag header before delivery, so emitted code reads payloads at
+//! offset 0 and the header offsets stay runtime-internal. The one
+//! compiler-side mirror is `ReceiveTag::wire_byte` in `koja-ir`, which
+//! conforms by spec, not via a shared type, because a shared crate
 //! would solidify a Rust-level coupling that self-hosting is meant to
-//! remove. A mismatch needs no dedicated test: the
-//! `lang_process_*` / `lang_io` suites read garbage the moment the
-//! offsets disagree.
+//! remove. A dev-dependency unit test in `koja-ir` pins the mirror
+//! against these constants, and the `lang_process_*` / `lang_io`
+//! suites cover the rest of the shape end to end.
 //!
 //! Tags are routing classes, not payload shapes: they decide which part
 //! of the receiver's mailbox an envelope lands in (see
@@ -53,7 +54,8 @@ pub const TAG_REPLY: u8 = 3;
 pub const TAG_EXIT_SIGNAL: u8 = 4;
 
 /// Bytes reserved for the tag header. The payload begins at this
-/// offset. Backends know this value as the envelope payload offset.
+/// offset. Runtime-internal: the header is stripped before delivery,
+/// so emitted code never sees it.
 pub const TAG_HEADER_SIZE: usize = 8;
 
 /// Total size of a lifecycle envelope: tag header + one variant byte.

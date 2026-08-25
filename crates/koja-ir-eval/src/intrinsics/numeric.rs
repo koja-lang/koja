@@ -14,52 +14,56 @@ use koja_ir::{IntNarrowTarget, NumericConvert};
 
 use crate::error::RuntimeError;
 use crate::interpreter::CallResolver;
-use crate::intrinsics::helpers;
+use crate::intrinsics::{IntrinsicCall, helpers};
 use crate::value::Value;
 
 pub(super) fn dispatch<R: CallResolver>(
     convert: NumericConvert,
-    function: &koja_ir::IRFunction,
-    args: &[Value],
-    resolver: &R,
+    call: IntrinsicCall<'_, R>,
 ) -> Result<Value, RuntimeError> {
     if matches!(convert, NumericConvert::FloatToFloat32) {
-        let [Value::Float64(v)] = args else {
+        let [Value::Float64(v)] = call.args else {
             return Err(RuntimeError::TypeMismatch {
-                detail: format!("Float.to_float32 expects a single Float receiver, got {args:?}"),
+                detail: format!(
+                    "Float.to_float32 expects a single Float receiver, got {:?}",
+                    call.args
+                ),
             });
         };
-        let result_symbol = helpers::enum_return_symbol(function, "Float.to_float32")?;
+        let result_symbol = helpers::enum_return_symbol(call.function, "Float.to_float32")?;
         let narrowed = *v as f32;
         let converted = if narrowed.is_finite() {
             Ok(Value::Float32(narrowed))
         } else {
             Err(helpers::err_variant_value(
                 &result_symbol,
-                resolver,
+                call.resolver,
                 "OutOfRange",
             )?)
         };
-        return Ok(helpers::result_value(result_symbol, converted));
+        return helpers::result_value(result_symbol, call.resolver, converted);
     }
 
-    let [Value::Int(v)] = args else {
+    let [Value::Int(v)] = call.args else {
         return Err(RuntimeError::TypeMismatch {
-            detail: format!("{convert:?} expects a single integer receiver, got {args:?}"),
+            detail: format!(
+                "{convert:?} expects a single integer receiver, got {:?}",
+                call.args
+            ),
         });
     };
-    let result_symbol = helpers::enum_return_symbol(function, &format!("{convert:?}"))?;
+    let result_symbol = helpers::enum_return_symbol(call.function, &format!("{convert:?}"))?;
     let (min, max) = checked_bounds(convert);
     let converted = if (min..=max).contains(v) {
         Ok(Value::Int(*v))
     } else {
         Err(helpers::err_variant_value(
             &result_symbol,
-            resolver,
+            call.resolver,
             "OutOfRange",
         )?)
     };
-    Ok(helpers::result_value(result_symbol, converted))
+    helpers::result_value(result_symbol, call.resolver, converted)
 }
 
 /// Inclusive bounds the receiver must satisfy. Mirrors the LLVM

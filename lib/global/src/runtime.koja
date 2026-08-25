@@ -1,0 +1,115 @@
+@doc """
+Read-only observability for the process runtime.
+
+`Runtime` answers questions about the world. How many schedulers run,
+how many processes are alive, how many are in a given state, and how
+deep the calling process's own mailbox is. Questions about one
+specific process are the `pid.state()` and `pid.mailbox_depth()`
+instance functions. There is no process enumeration. You observe the
+pids you own or receive.
+
+Every value is a point-in-time gauge. The runtime keeps scheduling
+while you read, so two reads can disagree and no read can fail.
+"""
+struct Runtime
+  @doc """
+  The number of live processes, including the entry process and the
+  caller.
+  """
+  fn process_count -> Int
+    koja_rt_process_count()
+  end
+
+  @doc """
+  The number of live processes currently in `state`.
+  `Runtime.process_count(Process.State.Runnable)` is the run-queue
+  depth, the count of processes ready to run that wait for a scheduler.
+  """
+  fn process_count(state: Process.State) -> Int
+    koja_rt_process_count_by_state(state_wire_index(state))
+  end
+
+  @doc """
+  The number of scheduler threads that run processes. The runtime is
+  saturated when the `Process.State.Running` count reaches it. Always 1
+  on the cooperative interpreter backend.
+  """
+  fn scheduler_count -> Int
+    koja_rt_scheduler_count()
+  end
+
+  @doc """
+  The number of messages queued in the calling process's mailbox. The
+  count excludes the reply slot that `Ref.call` uses. Poll this from a
+  cast-driven service to notice a backlog before it becomes a problem.
+  """
+  fn mailbox_depth -> Int
+    koja_rt_self_mailbox_depth()
+  end
+
+  @extern "C"
+  priv fn koja_rt_process_count -> Int64
+
+  @extern "C"
+  priv fn koja_rt_process_count_by_state(state: Int64) -> Int64
+
+  @extern "C"
+  priv fn koja_rt_scheduler_count -> Int64
+
+  @extern "C"
+  priv fn koja_rt_self_mailbox_depth -> Int64
+end
+
+# The `Process.State` wire table shared with the runtime's
+# `koja_rt_process_state` and `koja_rt_process_count_by_state` externs.
+# This named pair is the contract (see design/ABI.md), not the enum's
+# declaration order. Keep the two functions adjacent so an edit updates
+# both directions together.
+priv fn state_wire_index(state: Process.State) -> Int
+  match state
+    Process.State.Blocked -> 0
+    Process.State.Created -> 1
+    Process.State.Runnable -> 2
+    Process.State.Running -> 3
+    Process.State.WaitingIO -> 4
+  end
+end
+
+# Inverse of `state_wire_index`. `Option.None` for an unknown index,
+# which the wire uses to report a dead process.
+priv fn state_from_wire_index(index: Int) -> Option<Process.State>
+  match index
+    0 -> Option.Some(Process.State.Blocked)
+    1 -> Option.Some(Process.State.Created)
+    2 -> Option.Some(Process.State.Runnable)
+    3 -> Option.Some(Process.State.Running)
+    4 -> Option.Some(Process.State.WaitingIO)
+    _ -> Option.None
+  end
+end
+
+extend Pid
+  @doc """
+  The number of messages queued in the process's mailbox, or
+  `Option.None` when the process is dead or unknown. A point-in-time
+  gauge, because the process keeps running while you read.
+  """
+  fn mailbox_depth(self) -> Option<Int>
+    depth = koja_rt_mailbox_depth(self.id)
+    depth < 0 ? Option.None : Option.Some(depth)
+  end
+
+  @doc """
+  The process's lifecycle state, or `Option.None` when it is dead or
+  unknown.
+  """
+  fn state(self) -> Option<Process.State>
+    state_from_wire_index(koja_rt_process_state(self.id))
+  end
+
+  @extern "C"
+  priv fn koja_rt_mailbox_depth(pid: Int64) -> Int64
+
+  @extern "C"
+  priv fn koja_rt_process_state(pid: Int64) -> Int64
+end

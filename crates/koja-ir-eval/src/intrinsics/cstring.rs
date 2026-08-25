@@ -3,21 +3,20 @@
 use std::slice;
 use std::str;
 
-use koja_ir::IRFunction;
-
 use crate::error::RuntimeError;
 use crate::interpreter::CallResolver;
-use crate::intrinsics::helpers;
+use crate::intrinsics::{IntrinsicCall, helpers};
 use crate::value::Value;
 
 pub(super) fn to_string<R: CallResolver>(
-    function: &IRFunction,
-    args: &[Value],
-    resolver: &R,
+    call: IntrinsicCall<'_, R>,
 ) -> Result<Value, RuntimeError> {
-    let [Value::Struct { fields, .. }] = args else {
+    let [Value::Struct { fields, .. }] = call.args else {
         return Err(RuntimeError::TypeMismatch {
-            detail: format!("CString.to_string expects a single CString struct, got {args:?}"),
+            detail: format!(
+                "CString.to_string expects a single CString struct, got {:?}",
+                call.args
+            ),
         });
     };
     let [Value::CPtr(ptr), Value::Int(len)] = fields.as_slice() else {
@@ -27,17 +26,17 @@ pub(super) fn to_string<R: CallResolver>(
             ),
         });
     };
-    let result_symbol = helpers::enum_return_symbol(function, "CString.to_string")?;
+    let result_symbol = helpers::enum_return_symbol(call.function, "CString.to_string")?;
     let converted = if *len < 0 {
         Err(helpers::err_variant_value(
             &result_symbol,
-            resolver,
+            call.resolver,
             "InvalidLength",
         )?)
     } else if *len > 0 && ptr.is_null() {
         Err(helpers::err_variant_value(
             &result_symbol,
-            resolver,
+            call.resolver,
             "NullPointer",
         )?)
     } else {
@@ -50,10 +49,10 @@ pub(super) fn to_string<R: CallResolver>(
             Ok(_) => Ok(Value::string(bytes)),
             Err(_) => Err(helpers::err_variant_value(
                 &result_symbol,
-                resolver,
+                call.resolver,
                 "InvalidUTF8",
             )?),
         }
     };
-    Ok(helpers::result_value(result_symbol, converted))
+    helpers::result_value(result_symbol, call.resolver, converted)
 }

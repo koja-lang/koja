@@ -8,7 +8,7 @@ use inkwell::AddressSpace;
 use inkwell::IntPredicate;
 use inkwell::types::StructType;
 use inkwell::values::{BasicValueEnum, FunctionValue, IntValue, PointerValue};
-use koja_ir::{IRFunction, IRSymbol, IRType, IRVariantTag, StringMethod};
+use koja_ir::{IRFunction, IRSymbol, IRType, StringMethod};
 
 use crate::ctx::EmitContext;
 use crate::emit::enums::build_enum_value;
@@ -16,17 +16,13 @@ use crate::emit::heap_layout::load_bit_length;
 use crate::error::{IceExt, LlvmError};
 use crate::intrinsics::cptr::declare_memcpy_extern;
 use crate::intrinsics::heap_payload;
+use crate::intrinsics::option;
 use crate::intrinsics::result;
 use crate::runtime::{
     declare_malloc_extern, declare_string_contains_nul_extern, declare_string_get_extern,
     declare_string_length_extern, declare_string_next_extern, declare_string_slice_extern,
 };
 use crate::types::{ir_basic_type, tuple_struct_type};
-
-/// `Option<T>` variant tags, matching the stdlib decl order: `Some`
-/// first (tag 0), then `None`.
-const OPTION_SOME_TAG: IRVariantTag = IRVariantTag(0);
-const OPTION_NONE_TAG: IRVariantTag = IRVariantTag(1);
 
 pub(super) fn emit_string<'ctx>(
     ctx: &EmitContext<'ctx>,
@@ -156,11 +152,21 @@ fn emit_get<'ctx>(
         .or_ice()?;
 
     ctx.builder.position_at_end(some_bb);
-    let some = build_enum_value(ctx, option_symbol, OPTION_SOME_TAG, &[raw_ptr.into()])?;
+    let some = build_enum_value(
+        ctx,
+        option_symbol,
+        option::some_tag(ctx, option_symbol),
+        &[raw_ptr.into()],
+    )?;
     ctx.builder.build_return(Some(&some)).or_ice()?;
 
     ctx.builder.position_at_end(none_bb);
-    let none = build_enum_value(ctx, option_symbol, OPTION_NONE_TAG, &[])?;
+    let none = build_enum_value(
+        ctx,
+        option_symbol,
+        option::none_tag(ctx, option_symbol),
+        &[],
+    )?;
     ctx.builder.build_return(Some(&none)).or_ice().map(|_| ())
 }
 
@@ -214,11 +220,21 @@ fn emit_next<'ctx>(
         .build_insert_value(tuple, next, 1, "with_next")
         .or_ice()?
         .into_struct_value();
-    let some = build_enum_value(ctx, option_symbol, OPTION_SOME_TAG, &[tuple.into()])?;
+    let some = build_enum_value(
+        ctx,
+        option_symbol,
+        option::some_tag(ctx, option_symbol),
+        &[tuple.into()],
+    )?;
     ctx.builder.build_return(Some(&some)).or_ice()?;
 
     ctx.builder.position_at_end(none_bb);
-    let none = build_enum_value(ctx, option_symbol, OPTION_NONE_TAG, &[])?;
+    let none = build_enum_value(
+        ctx,
+        option_symbol,
+        option::none_tag(ctx, option_symbol),
+        &[],
+    )?;
     ctx.builder.build_return(Some(&none)).or_ice().map(|_| ())
 }
 
@@ -261,7 +277,8 @@ fn cstring_struct_type<'ctx>(
     ctx: &EmitContext<'ctx>,
     result_symbol: &IRSymbol,
 ) -> Result<StructType<'ctx>, LlvmError> {
-    let cstring_type = result::single_payload_type(ctx, result_symbol, result::OK_TAG)?;
+    let cstring_type =
+        result::single_payload_type(ctx, result_symbol, result::ok_tag(ctx, result_symbol))?;
     match cstring_type {
         IRType::Struct(_) => Ok(ir_basic_type(ctx, &cstring_type)?.into_struct_type()),
         other => Err(LlvmError::Codegen(format!(
