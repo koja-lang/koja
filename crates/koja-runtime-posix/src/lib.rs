@@ -27,3 +27,7 @@ mod util;
 // native adapter re-exports the module so `crate::wire` paths keep
 // resolving.
 pub(crate) use koja_runtime_core::wire;
+
+// Shared with `koja-ir-eval` so both backends resolve codepoint
+// ranges, search bytes, and check boundaries with identical semantics.
+pub use string::{codepoint_range_to_bytes, find_bytes, is_utf8_boundary};

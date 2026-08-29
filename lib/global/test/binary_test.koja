@@ -362,6 +362,52 @@ struct BinaryTest
     Result.Ok(true)
   end
 
+  @test "Binary.find locates byte needles from an offset"
+  fn test_binary_find -> Result<Bool, String>
+    data = <<0xFF, 0x00, 0xFE, 0x00, 0xFE>>
+
+    unless data.find(<<0x00, 0xFE>>, 0) == Option.Some(1)
+      return Result.Err("first match")
+    end
+
+    unless data.find(<<0x00, 0xFE>>, 2) == Option.Some(3)
+      return Result.Err("match after from")
+    end
+
+    match data.find(<<0x00, 0xFE>>, 4)
+      Option.None -> ()
+      Option.Some(_) -> return Result.Err("from past the last match")
+    end
+
+    match data.find(<<0xAB>>, 0)
+      Option.None -> ()
+      Option.Some(_) -> return Result.Err("absent needle")
+    end
+
+    empty: Binary = <<>>
+
+    unless data.find(empty, 3) == Option.Some(3)
+      return Result.Err("empty needle matches at from")
+    end
+
+    match data.find(empty, 6)
+      Option.None -> ()
+      Option.Some(_) -> return Result.Err("from past the end")
+    end
+
+    match data.find(<<0xFF>>, 0 - 1)
+      Option.None -> ()
+      Option.Some(_) -> return Result.Err("negative from")
+    end
+
+    match <<0x01>>.find(<<0x01, 0x02>>, 0)
+      Option.None -> ()
+      Option.Some(_) -> return Result.Err("needle longer than haystack")
+    end
+
+    Result.Ok(true)
+  end
+
   @test "Binary.slice copies inclusive byte ranges and clamps"
   fn test_binary_slice -> Result<Bool, String>
     data = <<0xAA, 0xBB, 0xCC, 0xDD>>

@@ -8,6 +8,10 @@
 //!   Bounds-check against the header, then GEP + load + zext. No
 //!   runtime call.
 //! - `Binary.byte_size(self) -> Int`: divides the header by 8.
+//! - `Binary.find(self, needle: Binary, from: Int) -> Option<Int>`:
+//!   byte offset of the first occurrence of `needle` at or after
+//!   `from`, via the `koja_binary_find` runtime helper. Shares its
+//!   emitter with `String.find`.
 //! - `Binary.slice(self, range: Range) -> Binary`: copies the
 //!   inclusive byte range `[start, stop]` via the
 //!   `koja_binary_slice` runtime helper. Endpoints clamp.
@@ -38,7 +42,9 @@ use crate::error::{IceExt, LlvmError};
 use crate::intrinsics::heap_payload;
 use crate::intrinsics::option;
 use crate::intrinsics::result;
-use crate::runtime::{declare_binary_slice_extern, declare_utf8_validate_extern};
+use crate::runtime::{
+    declare_binary_find_extern, declare_binary_slice_extern, declare_utf8_validate_extern,
+};
 
 pub(super) fn emit_binary<'ctx>(
     ctx: &EmitContext<'ctx>,
@@ -52,10 +58,80 @@ pub(super) fn emit_binary<'ctx>(
     match method {
         BinaryMethod::At => emit_at(ctx, function, llvm_function),
         BinaryMethod::ByteSize => emit_byte_size(ctx, function, llvm_function),
+        BinaryMethod::Find => emit_find(
+            ctx,
+            function,
+            llvm_function,
+            declare_binary_find_extern(ctx),
+        ),
         BinaryMethod::Slice => emit_slice(ctx, function, llvm_function),
         BinaryMethod::ToBits => emit_to_bits(ctx, function, llvm_function),
         BinaryMethod::ToString => emit_to_string(ctx, function, llvm_function),
     }
+}
+
+/// `find(self, needle, from) -> Option<Int>`. Byte search is Binary's
+/// concept. `String.find` reuses this emitter because both types share
+/// the payload layout and a valid UTF-8 needle can only match on
+/// codepoint boundaries. Calls the runtime search helper and branches
+/// on its -1 sentinel to mint `None` vs `Some(byte_offset)`.
+pub(super) fn emit_find<'ctx>(
+    ctx: &EmitContext<'ctx>,
+    function: &IRFunction,
+    llvm_function: FunctionValue<'ctx>,
+    helper: FunctionValue<'ctx>,
+) -> Result<(), LlvmError> {
+    let i64_ty = ctx.context.i64_type();
+    let payload = heap_payload::pointer_param(function, llvm_function)?;
+    let needle = llvm_function.get_nth_param(1).ok_or_else(|| {
+        LlvmError::Codegen(format!(
+            "find missing `needle` param on `{}`",
+            function.symbol
+        ))
+    })?;
+    let from = llvm_function.get_nth_param(2).ok_or_else(|| {
+        LlvmError::Codegen(format!(
+            "find missing `from` param on `{}`",
+            function.symbol
+        ))
+    })?;
+    let offset = ctx
+        .call_basic(
+            helper,
+            &[payload.into(), needle.into(), from.into()],
+            "offset",
+        )?
+        .into_int_value();
+
+    let option_symbol = expect_enum_symbol(&function.return_type, function)?;
+    let absent = ctx
+        .builder
+        .build_int_compare(IntPredicate::EQ, offset, i64_ty.const_all_ones(), "absent")
+        .or_ice()?;
+
+    let some_bb = ctx.context.append_basic_block(llvm_function, "some");
+    let none_bb = ctx.context.append_basic_block(llvm_function, "none");
+    ctx.builder
+        .build_conditional_branch(absent, none_bb, some_bb)
+        .or_ice()?;
+
+    ctx.builder.position_at_end(some_bb);
+    let some = build_enum_value(
+        ctx,
+        option_symbol,
+        option::some_tag(ctx, option_symbol),
+        &[offset.into()],
+    )?;
+    ctx.builder.build_return(Some(&some)).or_ice()?;
+
+    ctx.builder.position_at_end(none_bb);
+    let none = build_enum_value(
+        ctx,
+        option_symbol,
+        option::none_tag(ctx, option_symbol),
+        &[],
+    )?;
+    ctx.builder.build_return(Some(&none)).or_ice().map(|_| ())
 }
 
 pub(super) fn emit_bits<'ctx>(

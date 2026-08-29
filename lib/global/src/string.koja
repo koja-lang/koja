@@ -59,7 +59,9 @@ extend String
   fn length(self) -> Int
 
   @doc """
-  Returns the character at the codepoint index, or `None` if out of bounds.
+  Returns the character at the codepoint index, or `None` if out of
+  bounds. The cost is linear in `index`, so prefer iteration or
+  `Binary.at` when scanning large strings.
   """
   @intrinsic
   fn get(self, index: Int) -> Option<String>
@@ -129,26 +131,7 @@ extend String
   Returns `true` if the string contains `other` as a substring.
   """
   fn contains?(self, other: String) -> Bool
-    other_len = other.length()
-    len = self.length()
-
-    cond
-      other_len == 0 -> return true
-      other_len > len -> return false
-      else -> ()
-    end
-
-    i = 0
-
-    while i <= len - other_len
-      if self.slice(Range{start: i, stop: i + other_len - 1}) == other
-        return true
-      end
-
-      i += 1
-    end
-
-    false
+    self.find(other, 0).some?()
   end
 
   @doc """
@@ -217,16 +200,20 @@ extend String
   Returns `true` if the string ends with `suffix`.
   """
   fn ends_with?(self, suffix: String) -> Bool
-    suffix_len = suffix.length()
-    len = self.length()
+    suffix_bytes = suffix.byte_length()
+    len = self.byte_length()
 
     cond
-      suffix_len == 0 -> return true
-      suffix_len > len -> return false
+      suffix_bytes == 0 -> return true
+      suffix_bytes > len -> return false
       else -> ()
     end
 
-    self.slice(Range{start: len - suffix_len, stop: len - 1}) == suffix
+    # Compare as binaries so a byte range that does not align with
+    # self's codepoint boundaries is a plain mismatch, never an error.
+    tail = self.to_binary()
+      .slice(Range{start: len - suffix_bytes, stop: len - 1})
+    tail == suffix.to_binary()
   end
 
   @doc """
@@ -251,6 +238,14 @@ extend String
 
     result
   end
+
+  # Byte offset of the first occurrence of `needle` at or after byte
+  # offset `from`, or `Option.None`. Offsets are bytes, not codepoint
+  # indices, which is why this stays package-private. A byte-level
+  # match of a valid UTF-8 needle always lands on a codepoint
+  # boundary. The public byte-offset search is `Binary.find`.
+  @intrinsic
+  priv fn find(self, needle: String, from: Int) -> Option<Int>
 
   @doc """
   Returns each grapheme cluster as a string in a list. Currently
@@ -291,19 +286,19 @@ extend String
     end
 
     result = ""
-    i = 0
-    old_len = old.length()
-    len = self.length()
+    old_bytes = old.byte_length()
+    len = self.byte_length()
+    cursor = 0
 
-    while i < len
-      if i + old_len <= len
-        and self.slice(Range{start: i, stop: i + old_len - 1}) == old
+    while cursor <= len
+      match self.find(old, cursor)
+        Option.Some(offset) ->
+          result = result <> self.slice_bytes(cursor, offset) <> new
+          cursor = offset + old_bytes
 
-        result = result <> new
-        i += old_len
-      else
-        result = result <> self.get(i).unwrap()
-        i += 1
+        Option.None ->
+          result = result <> self.slice_bytes(cursor, len)
+          cursor = len + 1
       end
     end
 
@@ -328,9 +323,18 @@ extend String
   @doc """
   Returns a substring spanning the given inclusive range of character
   indices. Clamps out-of-bounds endpoints to the string boundaries.
+  The cost is linear in `range.stop` because the scan resolves
+  codepoint indices from the start of the string.
   """
   @intrinsic
   fn slice(self, range: Range) -> String
+
+  # Copy of the byte range `[start, stop)`. Endpoints clamp to the
+  # byte length and must land on codepoint boundaries, which offsets
+  # from `find` and `byte_length` always do. Package-private for the
+  # same reason as `find`.
+  @intrinsic
+  priv fn slice_bytes(self, start: Int, stop: Int) -> String
 
   @doc """
   Splits the string on each occurrence of `separator` and returns
@@ -348,25 +352,22 @@ extend String
       return result
     end
 
-    current = ""
-    i = 0
-    sep_len = separator.length()
-    len = self.length()
+    sep_bytes = separator.byte_length()
+    len = self.byte_length()
+    cursor = 0
 
-    while i < len
-      if i + sep_len <= len
-        and self.slice(Range{start: i, stop: i + sep_len - 1}) == separator
+    while cursor <= len
+      match self.find(separator, cursor)
+        Option.Some(offset) ->
+          result = result.append(self.slice_bytes(cursor, offset))
+          cursor = offset + sep_bytes
 
-        result = result.append(current)
-        current = ""
-        i += sep_len
-      else
-        current = current <> self.get(i).unwrap()
-        i += 1
+        Option.None ->
+          result = result.append(self.slice_bytes(cursor, len))
+          cursor = len + 1
       end
     end
 
-    result = result.append(current)
     result
   end
 
@@ -374,15 +375,18 @@ extend String
   Returns `true` if the string starts with `prefix`.
   """
   fn starts_with?(self, prefix: String) -> Bool
-    prefix_len = prefix.length()
+    prefix_bytes = prefix.byte_length()
 
     cond
-      prefix_len == 0 -> return true
-      prefix_len > self.length() -> return false
+      prefix_bytes == 0 -> return true
+      prefix_bytes > self.byte_length() -> return false
       else -> ()
     end
 
-    self.slice(Range{start: 0, stop: prefix_len - 1}) == prefix
+    # Compare as binaries so a byte range that does not align with
+    # self's codepoint boundaries is a plain mismatch, never an error.
+    head = self.to_binary().slice(Range{start: 0, stop: prefix_bytes - 1})
+    head == prefix.to_binary()
   end
 
   @doc """

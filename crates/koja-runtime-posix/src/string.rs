@@ -18,6 +18,47 @@ unsafe fn payload_str<'a>(ptr: *const u8) -> &'a str {
     str::from_utf8(bytes).expect("Koja String payload must be valid UTF-8")
 }
 
+/// Byte offset of the first occurrence of `needle` in `haystack` at or
+/// after byte offset `from`, or `None`. An empty needle matches at
+/// `from`. Shared by `String.find` and `Binary.find` since both
+/// payloads are plain byte sequences, and on valid UTF-8 a byte-level
+/// match of a valid needle can only start on a codepoint boundary.
+pub fn find_bytes(haystack: &[u8], needle: &[u8], from: i64) -> Option<usize> {
+    let from = usize::try_from(from).ok()?;
+    if from > haystack.len() {
+        return None;
+    }
+    if needle.is_empty() {
+        return Some(from);
+    }
+    let mut cursor = from;
+    while cursor + needle.len() <= haystack.len() {
+        let skip = haystack[cursor..haystack.len() - needle.len() + 1]
+            .iter()
+            .position(|&byte| byte == needle[0])?;
+        let candidate = cursor + skip;
+        if haystack[candidate..candidate + needle.len()] == *needle {
+            return Some(candidate);
+        }
+        cursor = candidate + 1;
+    }
+    None
+}
+
+/// Converts a [`find_bytes`] result to the C ABI's `-1` sentinel.
+fn find_bytes_sentinel(haystack: &[u8], needle: &[u8], from: i64) -> i64 {
+    find_bytes(haystack, needle, from).map_or(-1, |offset| offset as i64)
+}
+
+/// Whether `offset` lands on a UTF-8 codepoint boundary of `bytes`,
+/// assuming `bytes` is valid UTF-8. O(1), since a boundary is the end
+/// of the buffer or any byte that is not a continuation byte. Shared
+/// with `koja-ir-eval` so `slice_bytes` never re-validates the whole
+/// payload per call, which would make callers quadratic again.
+pub fn is_utf8_boundary(bytes: &[u8], offset: usize) -> bool {
+    offset >= bytes.len() || (bytes[offset] & 0xC0) != 0x80
+}
+
 /// Attempts to parse a Koja string as a 64-bit float.
 /// Returns a [`crate::parse_text`] code (`PARSE_OK` writes the
 /// value through `out`). See [`parse_float_text`] for the
@@ -85,6 +126,30 @@ pub unsafe extern "C" fn koja_int_parse(ptr: *const u8, out: *mut i64) -> i64 {
         unsafe { *out = v };
     }
     outcome.code()
+}
+
+/// Returns the byte offset of the first occurrence of `needle` at or
+/// after byte offset `from`, or -1 when absent. See [`find_bytes`].
+///
+/// # Safety
+/// `ptr` and `needle` must point to valid Koja `String` payloads.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn koja_string_find(ptr: *const u8, needle: *const u8, from: i64) -> i64 {
+    let haystack = unsafe { string_payload_bytes(ptr) };
+    let needle = unsafe { string_payload_bytes(needle) };
+    find_bytes_sentinel(haystack, needle, from)
+}
+
+/// Returns the byte offset of the first occurrence of `needle` at or
+/// after byte offset `from`, or -1 when absent. See [`find_bytes`].
+///
+/// # Safety
+/// `ptr` and `needle` must point to valid Binary payloads.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn koja_binary_find(ptr: *const u8, needle: *const u8, from: i64) -> i64 {
+    let haystack = unsafe { string_payload_bytes(ptr) };
+    let needle = unsafe { string_payload_bytes(needle) };
+    find_bytes_sentinel(haystack, needle, from)
 }
 
 /// Returns a codepoint at `index`, or null if out of bounds.
@@ -160,33 +225,66 @@ pub unsafe extern "C" fn koja_string_contains_nul(ptr: *const u8) -> i64 {
 }
 
 /// Returns a substring spanning the inclusive codepoint range `[start, stop]`.
+/// Out-of-bounds endpoints clamp to the string boundaries. One forward
+/// scan bounded by `stop`, so the cost is O(stop) rather than O(length).
 ///
 /// # Safety
 /// `ptr` must point to a valid Koja `String` payload.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn koja_string_slice(ptr: *const u8, start: i64, stop: i64) -> *const u8 {
     let s = unsafe { payload_str(ptr) };
-    let len = s.chars().count();
+    let (byte_start, byte_end) = codepoint_range_to_bytes(s, start, stop);
+    unsafe { alloc_koja_string(&s.as_bytes()[byte_start..byte_end]) }
+}
 
-    let start = (start as usize).min(len);
-    let stop = ((stop + 1) as usize).min(len);
-    let stop = stop.max(start);
+/// Resolves an inclusive codepoint range to a byte range in one
+/// forward scan that stops at the range end. Clamps both endpoints to
+/// the string boundaries.
+pub fn codepoint_range_to_bytes(s: &str, start: i64, stop: i64) -> (usize, usize) {
+    if stop < start || stop < 0 {
+        return (0, 0);
+    }
+    let start = start.max(0) as usize;
+    let stop_exclusive = stop as usize + 1;
+    let mut byte_start = s.len();
+    let mut byte_end = s.len();
+    for (codepoint_index, (byte_offset, _)) in s.char_indices().enumerate() {
+        if codepoint_index == start {
+            byte_start = byte_offset;
+        }
+        if codepoint_index == stop_exclusive {
+            byte_end = byte_offset;
+            break;
+        }
+    }
+    (byte_start, byte_end)
+}
 
-    let byte_start = s
-        .char_indices()
-        .nth(start)
-        .map(|(i, _)| i)
-        .unwrap_or(s.len());
-    let byte_end = if stop == len {
-        s.len()
-    } else {
-        s.char_indices()
-            .nth(stop)
-            .map(|(i, _)| i)
-            .unwrap_or(s.len())
-    };
-    let slice = &s[byte_start..byte_end];
-    unsafe { alloc_koja_string(slice.as_bytes()) }
+/// Returns a copy of the byte range `[start, stop)`. Endpoints clamp
+/// to the string's byte length and must land on codepoint boundaries.
+/// Callers in the stdlib's search family only pass offsets produced by
+/// `find` and `byte_length`, which are boundaries by construction.
+///
+/// # Safety
+/// `ptr` must point to a valid Koja `String` payload.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn koja_string_slice_bytes(
+    ptr: *const u8,
+    start: i64,
+    stop: i64,
+) -> *const u8 {
+    // Raw bytes rather than `payload_str`, whose full UTF-8 validation
+    // per call would make split-style loops quadratic again.
+    let bytes = unsafe { string_payload_bytes(ptr) };
+    let start = (start.max(0) as usize).min(bytes.len());
+    let stop = (stop.max(0) as usize).min(bytes.len()).max(start);
+    // Abort on a caller invariant violation instead of forging an
+    // invalid String.
+    assert!(
+        is_utf8_boundary(bytes, start) && is_utf8_boundary(bytes, stop),
+        "String.slice_bytes offsets must land on codepoint boundaries",
+    );
+    unsafe { alloc_koja_string(&bytes[start..stop]) }
 }
 
 /// Returns a new `Binary` spanning the inclusive byte range
@@ -240,6 +338,62 @@ mod tests {
         unsafe {
             memory::free((input as *mut u8).sub(BLOCK_HEADER_SIZE));
             memory::free((character as *mut u8).sub(BLOCK_HEADER_SIZE));
+        }
+    }
+
+    #[test]
+    fn find_bytes_locates_matches_and_respects_from() {
+        let haystack = b"one,two,,three";
+        assert_eq!(find_bytes(haystack, b",", 0), Some(3));
+        assert_eq!(find_bytes(haystack, b",", 4), Some(7));
+        assert_eq!(find_bytes(haystack, b",,", 0), Some(7));
+        assert_eq!(find_bytes(haystack, b"three", 0), Some(9));
+        assert_eq!(find_bytes(haystack, b"four", 0), None);
+        assert_eq!(find_bytes(haystack, b",", 9), None);
+    }
+
+    #[test]
+    fn find_bytes_handles_empty_and_out_of_range() {
+        assert_eq!(find_bytes(b"abc", b"", 1), Some(1));
+        assert_eq!(find_bytes(b"abc", b"", 3), Some(3));
+        assert_eq!(find_bytes(b"abc", b"", 4), None);
+        assert_eq!(find_bytes(b"abc", b"a", -1), None);
+        assert_eq!(find_bytes(b"", b"a", 0), None);
+        assert_eq!(find_bytes(b"ab", b"abc", 0), None);
+    }
+
+    #[test]
+    fn find_bytes_works_on_arbitrary_bytes() {
+        let haystack = [0xff, 0x00, 0xfe, 0x00, 0xfe];
+        assert_eq!(find_bytes(&haystack, &[0x00, 0xfe], 0), Some(1));
+        assert_eq!(find_bytes(&haystack, &[0x00, 0xfe], 2), Some(3));
+    }
+
+    #[test]
+    fn codepoint_range_clamps_and_handles_multibyte() {
+        // In "héllo", h is 1 byte and é is 2.
+        let s = "héllo";
+        assert_eq!(codepoint_range_to_bytes(s, 0, 1), (0, 3));
+        assert_eq!(codepoint_range_to_bytes(s, 1, 2), (1, 4));
+        assert_eq!(codepoint_range_to_bytes(s, 2, 100), (3, 6));
+        assert_eq!(codepoint_range_to_bytes(s, -3, 0), (0, 1));
+        assert_eq!(codepoint_range_to_bytes(s, 3, 1), (0, 0));
+        assert_eq!(codepoint_range_to_bytes(s, 9, 12), (6, 6));
+    }
+
+    #[test]
+    fn string_slice_bytes_copies_the_byte_range() {
+        let input = unsafe { alloc_koja_string("héllo".as_bytes()) };
+        let piece = unsafe { koja_string_slice_bytes(input, 1, 3) };
+        assert_eq!(unsafe { string_payload_bytes(piece) }, "é".as_bytes());
+
+        let clamped = unsafe { koja_string_slice_bytes(input, 3, 99) };
+        assert_eq!(unsafe { string_payload_bytes(clamped) }, "llo".as_bytes());
+
+        unsafe {
+            memory::free((input as *mut u8).sub(BLOCK_HEADER_SIZE));
+            memory::free((piece as *mut u8).sub(BLOCK_HEADER_SIZE));
+            memory::free((clamped as *mut u8).sub(BLOCK_HEADER_SIZE));
         }
     }
 

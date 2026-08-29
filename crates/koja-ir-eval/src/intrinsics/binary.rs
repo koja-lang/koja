@@ -3,6 +3,9 @@
 //! - `Binary.at(self, index: Int) -> Option<Int>`: O(1) byte read.
 //!   Out-of-bounds indices return `None`.
 //! - `Binary.byte_size(self) -> Int`: `bytes.len()`.
+//! - `Binary.find(self, needle: Binary, from: Int) -> Option<Int>`:
+//!   byte offset of the first match at or after `from`, through the
+//!   shared `koja_runtime::find_bytes` helper.
 //! - `Binary.slice(self, range: Range) -> Binary`: copies the
 //!   inclusive byte range `[start, stop]`. Endpoints clamp to the
 //!   binary's bounds.
@@ -21,6 +24,7 @@
 use std::str;
 
 use koja_ir::{BinaryMethod, BitsMethod};
+use koja_runtime::find_bytes;
 
 use crate::error::RuntimeError;
 use crate::interpreter::CallResolver;
@@ -34,6 +38,7 @@ pub(super) fn binary<R: CallResolver>(
     match method {
         BinaryMethod::At => at(call),
         BinaryMethod::ByteSize => byte_size(call.args),
+        BinaryMethod::Find => find(call),
         BinaryMethod::Slice => slice(call.args),
         BinaryMethod::ToBits => to_bits(call.args),
         BinaryMethod::ToString => to_string(call),
@@ -97,6 +102,26 @@ fn at<R: CallResolver>(call: IntrinsicCall<'_, R>) -> Result<Value, RuntimeError
         .and_then(|i| bytes.get(i))
         .map(|b| Value::Int(*b as i64));
     helpers::option_value(option_symbol, call.resolver, byte)
+}
+
+fn find<R: CallResolver>(call: IntrinsicCall<'_, R>) -> Result<Value, RuntimeError> {
+    let [
+        Value::Binary(haystack),
+        Value::Binary(needle),
+        Value::Int(from),
+    ] = call.args
+    else {
+        return Err(RuntimeError::TypeMismatch {
+            detail: format!(
+                "Binary.find expects (Binary, Binary, Int) arguments, got {} arg(s): {:?}",
+                call.args.len(),
+                call.args,
+            ),
+        });
+    };
+    let option_symbol = helpers::enum_return_symbol(call.function, "Binary.find")?;
+    let offset = find_bytes(haystack, needle, *from).map(|offset| Value::Int(offset as i64));
+    helpers::option_value(option_symbol, call.resolver, offset)
 }
 
 fn slice(args: &[Value]) -> Result<Value, RuntimeError> {

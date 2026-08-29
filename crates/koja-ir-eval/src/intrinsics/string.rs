@@ -9,6 +9,7 @@
 use std::{ptr, str};
 
 use koja_ir::{IRSymbol, IRType, StringMethod};
+use koja_runtime::{codepoint_range_to_bytes, find_bytes, is_utf8_boundary};
 
 use crate::error::RuntimeError;
 use crate::interpreter::CallResolver;
@@ -25,10 +26,12 @@ pub(super) fn dispatch<R: CallResolver>(
 ) -> Result<Value, RuntimeError> {
     match method {
         StringMethod::ByteLength => byte_length(call.args),
+        StringMethod::Find => find(call),
         StringMethod::Get => get(call),
         StringMethod::Length => length(call.args),
         StringMethod::Next => next(call),
         StringMethod::Slice => slice(call.args),
+        StringMethod::SliceBytes => slice_bytes(call.args),
         StringMethod::ToBinary => to_binary(call.args),
         StringMethod::ToCstring => to_cstring(call),
     }
@@ -115,23 +118,35 @@ fn next<R: CallResolver>(call: IntrinsicCall<'_, R>) -> Result<Value, RuntimeErr
 fn slice(args: &[Value]) -> Result<Value, RuntimeError> {
     let s = expect_string_utf8(args, 0, "String.slice")?;
     let range = expect_range(args, 1, "String.slice")?;
-    let len = s.chars().count();
-    let start = (range.0.max(0) as usize).min(len);
-    let stop = ((range.1 + 1).max(0) as usize).min(len).max(start);
-    let byte_start = s
-        .char_indices()
-        .nth(start)
-        .map(|(i, _)| i)
-        .unwrap_or(s.len());
-    let byte_end = if stop == len {
-        s.len()
-    } else {
-        s.char_indices()
-            .nth(stop)
-            .map(|(i, _)| i)
-            .unwrap_or(s.len())
-    };
+    let (byte_start, byte_end) = codepoint_range_to_bytes(s, range.0, range.1);
     Ok(Value::string(&s.as_bytes()[byte_start..byte_end]))
+}
+
+fn find<R: CallResolver>(call: IntrinsicCall<'_, R>) -> Result<Value, RuntimeError> {
+    let haystack = expect_string_bytes(call.args, 0, "String.find")?;
+    let needle = expect_string_bytes(call.args, 1, "String.find")?;
+    let from = expect_int(call.args, 2, "String.find")?;
+    let option_symbol = helpers::enum_return_symbol(call.function, "String.find")?;
+    let offset = find_bytes(haystack, needle, from).map(|offset| Value::Int(offset as i64));
+    helpers::option_value(option_symbol, call.resolver, offset)
+}
+
+/// Byte-range copy over `[start, stop)`. Endpoints clamp to the byte
+/// length and must land on codepoint boundaries. Works on raw bytes
+/// with an O(1) boundary check because a full UTF-8 validation per
+/// call would make split-style loops quadratic again.
+fn slice_bytes(args: &[Value]) -> Result<Value, RuntimeError> {
+    let bytes = expect_string_bytes(args, 0, "String.slice_bytes")?;
+    let start = expect_int(args, 1, "String.slice_bytes")?;
+    let stop = expect_int(args, 2, "String.slice_bytes")?;
+    let start = (start.max(0) as usize).min(bytes.len());
+    let stop = (stop.max(0) as usize).min(bytes.len()).max(start);
+    if !is_utf8_boundary(bytes, start) || !is_utf8_boundary(bytes, stop) {
+        return Err(RuntimeError::Unsupported {
+            detail: "String.slice_bytes offsets must land on codepoint boundaries".to_string(),
+        });
+    }
+    Ok(Value::string(&bytes[start..stop]))
 }
 
 fn expect_arg<'a>(args: &'a [Value], index: usize, label: &str) -> Result<&'a Value, RuntimeError> {
