@@ -11,12 +11,14 @@ struct Config
   db_name: String
   db_password: String
   db_port: Int
+  db_statement_cache: Int
   db_user: String
   port: Int
 
   @doc """
   Builds a `Config` from the environment, falling back to defaults
   suitable for local development against the bundled compose stack.
+  Set `DB_STATEMENT_CACHE=0` to turn the driver statement cache off.
   """
   fn load -> Config
     Config{
@@ -24,6 +26,7 @@ struct Config
       db_name: env_or("DB_NAME", "shortener"),
       db_password: env_or("DB_PASSWORD", "shortener"),
       db_port: env_int("DB_PORT", 5433),
+      db_statement_cache: env_int("DB_STATEMENT_CACHE", 256),
       db_user: env_or("DB_USER", "postgres"),
       port: env_int("PORT", 8080),
     }

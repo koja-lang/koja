@@ -1,18 +1,17 @@
 alias Postgres.Connection
 alias Postgres.QueryResult
+alias Postgres.Value
 
 @doc """
 A shortened link: its short `code`, the target `url`, when it was
 created, and how many times it has been visited.
 """
-struct Link
+struct Link: JSON.Encoding
   code: String
   created_at: String
   hits: Int
   url: String
-end
 
-impl JSON.Encoding for Link
   @doc """
   Returns this link in its API response shape.
   """
@@ -37,10 +36,11 @@ so callers rebind to the returned connection. Driver errors are collapsed
 to their `message()` text at this boundary so the HTTP layer only
 deals in strings.
 
-The simple-query protocol has no parameter binding, so user-supplied
-text is escaped with `lit` (single quotes doubled) before
-interpolation. All reads project the same column order
-(`code, url, created_at, hits`) so row mapping is uniform.
+User-supplied text binds as `$n` parameters through the extended
+protocol (`Connection.execute`), so nothing here escapes strings.
+`page` interpolates only integers the router has validated. All reads
+project the same column order (`code, url, created_at, hits`) so row
+mapping is uniform.
 """
 struct LinkStore
   @doc """
@@ -77,7 +77,8 @@ struct LinkStore
 
     query_one(
       conn,
-      select_columns() <> " FROM links WHERE code = " <> lit(code),
+      select_columns() <> " FROM links WHERE code = $1",
+      [Value.string(code)],
     )
   end
 
@@ -90,8 +91,8 @@ struct LinkStore
 
     query_one(
       conn,
-      "UPDATE links SET url = " <> lit(url) <> " WHERE code = " <> lit(code) <>
-        " RETURNING code, url, created_at::text, hits",
+      "UPDATE links SET url = $1 WHERE code = $2 RETURNING code, url, created_at::text, hits",
+      [Value.string(url), Value.string(code)],
     )
   end
 
@@ -101,7 +102,10 @@ struct LinkStore
   fn remove(conn: Connection, code: String)
     -> (Connection, Result<Bool, String>)
 
-    (conn, outcome) = conn.query("DELETE FROM links WHERE code = " <> lit(code))
+    (conn, outcome) = conn.execute(
+      "DELETE FROM links WHERE code = $1",
+      [Value.string(code)],
+    )
 
     match outcome
       Result.Err(e) -> (conn, Result.Err(e.message()))
@@ -116,9 +120,9 @@ struct LinkStore
   fn visit(conn: Connection, code: String)
     -> (Connection, Result<Option<String>, String>)
 
-    (conn, outcome) = conn.query(
-      "UPDATE links SET hits = hits + 1 WHERE code = " <> lit(code) <>
-        " RETURNING url",
+    (conn, outcome) = conn.execute(
+      "UPDATE links SET hits = hits + 1 WHERE code = $1 RETURNING url",
+      [Value.string(code)],
     )
 
     match outcome
@@ -126,7 +130,7 @@ struct LinkStore
         (conn, Result.Err(e.message()))
 
       Result.Ok(qr) ->
-        target: Option<String> = qr.rows.get(0).map(row -> col(row, 0))
+        target: Option<String> = qr.rows.get(0).map(row -> text_at(row, 0))
         (conn, Result.Ok(target))
     end
   end
@@ -139,11 +143,11 @@ struct LinkStore
     end
 
     code = generate_code(CODE_LENGTH)
-    (conn, outcome) = conn.query(
-      "INSERT INTO links (code, url) VALUES (" <> lit(code) <> ", " <>
-        lit(url) <>
-        ") ON CONFLICT (code) DO NOTHING RETURNING code, url, created_at::text, hits",
-    )
+    (conn, outcome) = conn.execute("""
+      INSERT INTO links (code, url) VALUES ($1, $2)
+      ON CONFLICT (code) DO NOTHING
+      RETURNING code, url, created_at::text, hits
+      """, [Value.string(code), Value.string(url)])
 
     match outcome
       Result.Err(e) ->
@@ -157,10 +161,10 @@ struct LinkStore
     end
   end
 
-  priv fn query_one(conn: Connection, sql: String)
+  priv fn query_one(conn: Connection, sql: String, params: List<Value>)
     -> (Connection, Result<Option<Link>, String>)
 
-    (conn, outcome) = conn.query(sql)
+    (conn, outcome) = conn.execute(sql, params)
 
     match outcome
       Result.Err(e) -> (conn, Result.Err(e.message()))
@@ -172,30 +176,25 @@ struct LinkStore
     qr.rows.get(0).map(row -> row_to_link(row))
   end
 
-  priv fn row_to_link(row: List<Option<String>>) -> Link
-    hits = col(row, 3).to_int().or(0)
-
+  priv fn row_to_link(row: List<Value>) -> Link
     Link{
-      code: col(row, 0),
-      created_at: col(row, 2),
-      hits: hits,
-      url: col(row, 1),
+      code: text_at(row, 0),
+      created_at: text_at(row, 2),
+      hits: int_at(row, 3),
+      url: text_at(row, 1),
     }
   end
 
-  priv fn col(row: List<Option<String>>, index: Int) -> String
-    match row.get(index)
-      Option.Some(cell) -> cell.or("")
-      Option.None -> ""
-    end
+  priv fn text_at(row: List<Value>, index: Int) -> String
+    row.get(index).map(v -> v.string_or("")).or("")
+  end
+
+  priv fn int_at(row: List<Value>, index: Int) -> Int
+    row.get(index).map(v -> v.int_or(0)).or(0)
   end
 
   priv fn select_columns -> String
     "SELECT code, url, created_at::text, hits"
-  end
-
-  priv fn lit(value: String) -> String
-    "'" <> value.replace("'", "''") <> "'"
   end
 
   priv fn generate_code(length: Int) -> String

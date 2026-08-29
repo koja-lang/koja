@@ -381,3 +381,98 @@ implementation.
 **Fix path:** `UUID.v4() -> String` (and a `UUID.v7()` sibling for
 sortable identifiers) in the stdlib, either under `Random` or as a
 small `Global` type.
+
+---
+
+## No subprocess execution and no directory listing
+
+Found 2026-08-28 while building `git_hygiene`, a CLI that shells out
+to `git`. The runtime has no intrinsic to start a child process and
+none to read a directory. `koja_file_*` covers read, write, mkdir,
+rename, delete, and existence checks, but not readdir. `System`
+covers env and hostname only. Consequence: a tool that orchestrates
+other programs or walks a file tree is inexpressible in pure Koja.
+The workaround is `@extern "C"` bindings to `popen`, `fread`, and
+`pclose`, with directory walking pushed into `find` through the
+shell. That works, but it makes libc the real stdlib for CLI work
+and forces the LLVM backend (see the next entry).
+
+**Fix path:** two intrinsic families. `System.cmd(program, args)`
+returns captured output plus exit status and must park the calling
+process rather than block a scheduler thread. `File.ls(path)` returns
+directory entries. Per-entry metadata can ride the `Fd`
+random-access pass tracked above, which already owns `stat`.
+
+---
+
+## Projects that declare externs cannot use plain `koja run`
+
+Found 2026-08-28. `koja run` and task execution default to the
+interpreter, and the interpreter rejects any extern that is not in
+the eval dispatch table, so an FFI project fails at startup. `koja
+test` compiles natively, so the same code tests fine, which makes
+the run failure surprising. The `koja shell` entry above tracks the
+same limitation at the REPL prompt. The error message names the
+workaround (`--backend=llvm`), which softens the edge but does not
+remove the paper cut: the flag is needed on every `koja run` and
+every task invocation in an FFI project.
+
+**Fix path:** select the LLVM backend automatically when the
+project (or a loaded dependency) declares an extern outside the eval
+dispatch table, or accept a `backend` key in `koja.toml`. Either
+way, plain `koja run` should work in every project.
+
+---
+
+## `String.split` is quadratic on large inputs
+
+Found 2026-08-28 when `git_hygiene` appeared to hang. It was
+splitting multi-megabyte `git ls-files` output (a full
+`node_modules` tree) on newlines. A stack sample put the time in
+`String.slice` under `String.split`, consistent with re-slicing the
+remaining tail once per delimiter, which is quadratic in input
+size. A few megabytes of input turns into minutes of copying.
+Value semantics make the trap easy to hit, because the natural
+"split then filter" pipeline looks cheap. Workaround: keep large
+command output in shell tools (`wc -l` for counts, `grep` for
+filtering) so only small strings cross into Koja.
+
+**Fix path:** index-scan the source once and copy each piece
+directly, which is linear. Document the copy cost model on `String`
+either way.
+
+---
+
+## Toolchain and stdlib nits from the `git_hygiene` build
+
+Found 2026-08-28. None blocking, each with a workaround:
+
+- **`List` has no `sort`.** Ordered output needs a hand-rolled
+  insertion sort or a shell-side `sort`. A comparator-closure
+  `sort` works today. A `Comparable` conformance can follow when
+  the protocol exists (see the `Binary` ordering entry).
+- **`IO.gets` cannot distinguish end of input from an empty
+  line.** Both return `""`, so a line-oriented filter reading
+  stdin cannot terminate correctly. Workaround is reading
+  `STDIN` directly and treating the error case as end of input.
+  An `Option`-returning variant or an `IO.lines` iterator closes
+  it.
+- **`koja doc search` matches symbol names only.** Concept
+  queries like `Command` or `Shell` return no matches, and the
+  absence of a hit cannot distinguish "no such API" from "wrong
+  search term". Indexing doc bodies would let the docs answer
+  capability questions, like whether subprocess support exists
+  at all.
+- **`koja new` couples the directory name to the project name.**
+  The project name must be snake_case because the code namespace
+  derives from it, but repository hosts and checkout conventions
+  prefer dashes (`git-hygiene` on GitLab holds package
+  `git_hygiene`). Today that means creating the project and then
+  renaming the directory by hand. Two fix shapes: an optional
+  directory argument (`koja new git_hygiene git-hygiene`, the
+  Cargo and Gleam `--name` precedent), or the Cargo default
+  inverted for Koja: accept a kebab input as the directory name
+  and derive the package (`koja new git-hygiene` creates
+  `git-hygiene/` holding package `git_hygiene`, namespace
+  `GitHygiene`). Both spellings collapse to one package name, so
+  the derivation is unambiguous.

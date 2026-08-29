@@ -46,7 +46,9 @@ struct App: Process<List<String>, TCPEvent, String>
       settings.db_port,
       settings.db_user,
       settings.db_name,
-    ).with_password(settings.db_password)
+    )
+      .with_password(settings.db_password)
+      .with_statement_cache_size(settings.db_statement_cache)
 
     create =
       fn () -> Result<Connection, String>
