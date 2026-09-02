@@ -2419,8 +2419,9 @@ Float-extract segments (`x: Float32` in a pattern) are not supported yet. When t
 
 #### Functions
 
-- `at(self, index: Int) -> Option<Int>`: returns the byte at `index` as an `Int` in `0..255`, or `Option.None` out of bounds. O(1). Prefer this over `String.get` for scanning large inputs (`String.get` is O(n) per call because it counts UTF-8 codepoints from the start).
+- `at(self, index: Int) -> Option<Int>`: returns the byte at `index` as an `Int` in `0..255`, or `Option.None` out of bounds.
 - `byte_size(self) -> Int`: returns the number of bytes.
+- `find(self, needle: Binary, from: Int) -> Option<Int>`: returns the byte offset of the first occurrence of `needle` at or after byte offset `from`, or `Option.None` when there is no match. An empty needle matches at `from`.
 - `slice(self, range: Range) -> Binary`: copies the inclusive byte range `[start, stop]`. Endpoints clamp to the binary's bounds.
 - `to_bits(self) -> Bits`: zero-cost widening from bytes to bits.
 - `to_string(self) -> String ! String.ConversionError`: attempts to interpret bytes as UTF-8, failing with `InvalidUTF8` when decoding fails.
@@ -2430,7 +2431,7 @@ Float-extract segments (`x: Float32` in a pattern) are not supported yet. When t
 `Bits` functions:
 
 - `bit_size(self) -> Int`: returns the number of bits.
-- `byte_at(self, index: Int) -> Option<Int>`: returns storage byte `index` as an `Int` in `0..255`, or `Option.None` out of bounds. Bytes hold bits MSB-first with zeroed trailing padding, and the bitstring occupies `ceil(bit_size / 8)` bytes. O(1).
+- `byte_at(self, index: Int) -> Option<Int>`: returns storage byte `index` as an `Int` in `0..255`, or `Option.None` out of bounds. Bytes hold bits MSB-first with zeroed trailing padding, and the bitstring occupies `ceil(bit_size / 8)` bytes.
 
 `Bits` also implements `Equality` (bit length plus bit comparison) and `Hash`, so it works as a `Map` key or `Set` element. Its `Debug` rendering is the round-trippable literal form: whole bytes as decimals, then any trailing partial byte as `value::width`, e.g. `<<72, 101, 5::3>>`. Truncation past 64 bytes matches `Binary`.
 

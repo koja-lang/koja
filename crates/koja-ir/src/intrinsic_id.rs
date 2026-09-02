@@ -122,6 +122,7 @@ intrinsic_methods! {
     BinaryMethod {
         At => "at",
         ByteSize => "byte_size",
+        Find => "find",
         Slice => "slice",
         ToBits => "to_bits",
         ToString => "to_string",
@@ -288,10 +289,12 @@ intrinsic_methods! {
     /// the other primitive impls.
     StringMethod {
         ByteLength => "byte_length",
+        Find => "find",
         Get => "get",
         Length => "length",
         Next => "next",
         Slice => "slice",
+        SliceBytes => "slice_bytes",
         ToBinary => "to_binary",
         ToCstring => "to_cstring",
     }
@@ -651,6 +654,7 @@ mod tests {
         let cases: &[(&str, &str, Id)] = &[
             ("Binary", "at", Id::Binary(BinaryMethod::At)),
             ("Binary", "byte_size", Id::Binary(BinaryMethod::ByteSize)),
+            ("Binary", "find", Id::Binary(BinaryMethod::Find)),
             ("Binary", "slice", Id::Binary(BinaryMethod::Slice)),
             ("Binary", "to_bits", Id::Binary(BinaryMethod::ToBits)),
             ("Binary", "to_string", Id::Binary(BinaryMethod::ToString)),
@@ -732,10 +736,16 @@ mod tests {
                 "byte_length",
                 Id::String(StringMethod::ByteLength),
             ),
+            ("String", "find", Id::String(StringMethod::Find)),
             ("String", "get", Id::String(StringMethod::Get)),
             ("String", "length", Id::String(StringMethod::Length)),
             ("String", "next", Id::String(StringMethod::Next)),
             ("String", "slice", Id::String(StringMethod::Slice)),
+            (
+                "String",
+                "slice_bytes",
+                Id::String(StringMethod::SliceBytes),
+            ),
             ("String", "to_binary", Id::String(StringMethod::ToBinary)),
             ("String", "to_cstring", Id::String(StringMethod::ToCstring)),
         ];

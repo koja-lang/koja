@@ -424,22 +424,43 @@ way, plain `koja run` should work in every project.
 
 ---
 
-## `String.split` is quadratic on large inputs
+## String building by repeated concat is quadratic
 
-Found 2026-08-28 when `git_hygiene` appeared to hang. It was
-splitting multi-megabyte `git ls-files` output (a full
-`node_modules` tree) on newlines. A stack sample put the time in
-`String.slice` under `String.split`, consistent with re-slicing the
-remaining tail once per delimiter, which is quadratic in input
-size. A few megabytes of input turns into minutes of copying.
-Value semantics make the trap easy to hit, because the natural
-"split then filter" pipeline looks cheap. Workaround: keep large
-command output in shell tools (`wc -l` for counts, `grep` for
-filtering) so only small strings cross into Koja.
+Found 2026-08-29 while fixing the quadratic `String.split` (the
+2026-08-28 `git_hygiene` hang, now resolved by moving the search
+family onto byte-offset `find` / `slice_bytes` intrinsics).
+The remaining trap is the accumulator shape: `result = result <>
+piece` copies the whole accumulator every iteration because string
+concat has no consume-fusion twin, unlike `List.append`. `join`,
+`downcase`, `upcase`, `reverse`, and `escape_debug` all build
+output this way, and `replace` pays the same cost per match.
+Linear-time character loops need the fix, and any user code that
+builds a large string in a loop hits the same wall.
 
-**Fix path:** index-scan the source once and copy each piece
-directly, which is linear. Document the copy cost model on `String`
-either way.
+**Fix path:** give `Concat` a consuming twin the elaborate pass can
+fuse when the left operand dies at the call, mirroring
+`ConsumingMethod::ListAppend`. A stdlib string-builder over
+`List<String>` plus a single join does not help while `join` itself
+concat-loops, so the fusion is the root fix.
+
+---
+
+## Interpreter list-append rebinds still copy the list
+
+Found 2026-08-29 while timing the linear `String.split`. The
+elaborate pass marks `xs = xs.append(x)` consuming, and compiled
+code mutates in place, but the eval fast path requires
+`Rc::strong_count == 1` and the interpreter's local slot still
+holds a second reference at the call, so every append clones the
+whole accumulator. Measured on a 7 MB split, 131k pieces take 297 s
+under eval against 17 ms compiled, and 16x fewer pieces run 257x
+faster, the quadratic signature. Every accumulate-in-a-loop shape
+pays this under `koja run`, not just split.
+
+**Fix path:** let eval honor the consuming marker by releasing the
+receiver's local slot before the intrinsic call (the IR already
+proves the binding dies there), or thread a uniqueness hint through
+the call so the fast path can trust it without the refcount probe.
 
 ---
 

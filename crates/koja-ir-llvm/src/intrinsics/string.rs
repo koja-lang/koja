@@ -1,8 +1,8 @@
 //! `String` method intrinsics. Trivial cells inline against the
 //! `[i64 bit_length] [payload bytes]` layout (with the SSA pointer
-//! pointing at the payload), and the codepoint-aware cells (`length`, `get`,
-//! `slice`) delegate to `koja-runtime` helpers so unicode walking
-//! stays in Rust.
+//! pointing at the payload), and the walking cells (`length`, `get`,
+//! `slice`, `find`, `slice_bytes`) delegate to `koja-runtime` helpers
+//! so unicode walking and byte search stay in Rust.
 
 use inkwell::AddressSpace;
 use inkwell::IntPredicate;
@@ -19,8 +19,9 @@ use crate::intrinsics::heap_payload;
 use crate::intrinsics::option;
 use crate::intrinsics::result;
 use crate::runtime::{
-    declare_malloc_extern, declare_string_contains_nul_extern, declare_string_get_extern,
-    declare_string_length_extern, declare_string_next_extern, declare_string_slice_extern,
+    declare_malloc_extern, declare_string_contains_nul_extern, declare_string_find_extern,
+    declare_string_get_extern, declare_string_length_extern, declare_string_next_extern,
+    declare_string_slice_bytes_extern, declare_string_slice_extern,
 };
 use crate::types::{ir_basic_type, tuple_struct_type};
 
@@ -34,13 +35,50 @@ pub(super) fn emit_string<'ctx>(
     ctx.builder.position_at_end(entry);
     match method {
         StringMethod::ByteLength => emit_byte_length(ctx, function, llvm_function),
+        StringMethod::Find => super::binary::emit_find(
+            ctx,
+            function,
+            llvm_function,
+            declare_string_find_extern(ctx),
+        ),
         StringMethod::Get => emit_get(ctx, function, llvm_function),
         StringMethod::Length => emit_length(ctx, function, llvm_function),
         StringMethod::Next => emit_next(ctx, function, llvm_function),
         StringMethod::Slice => emit_slice(ctx, function, llvm_function),
+        StringMethod::SliceBytes => emit_slice_bytes(ctx, function, llvm_function),
         StringMethod::ToBinary => emit_to_binary(ctx, function, llvm_function),
         StringMethod::ToCstring => emit_to_cstring(ctx, function, llvm_function),
     }
+}
+
+/// Emits `String.slice_bytes(self, start, stop)` as a straight call
+/// into the `koja_string_slice_bytes` runtime helper with the two byte
+/// offsets.
+fn emit_slice_bytes<'ctx>(
+    ctx: &EmitContext<'ctx>,
+    function: &IRFunction,
+    llvm_function: FunctionValue<'ctx>,
+) -> Result<(), LlvmError> {
+    let payload = self_payload(function, llvm_function)?;
+    let start = llvm_function.get_nth_param(1).ok_or_else(|| {
+        LlvmError::Codegen(format!(
+            "String.slice_bytes missing `start` param on `{}`",
+            function.symbol,
+        ))
+    })?;
+    let stop = llvm_function.get_nth_param(2).ok_or_else(|| {
+        LlvmError::Codegen(format!(
+            "String.slice_bytes missing `stop` param on `{}`",
+            function.symbol,
+        ))
+    })?;
+    let helper = declare_string_slice_bytes_extern(ctx);
+    let value = ctx.call_basic(
+        helper,
+        &[payload.into(), start.into(), stop.into()],
+        "sliced",
+    )?;
+    ctx.builder.build_return(Some(&value)).or_ice().map(|_| ())
 }
 
 fn emit_byte_length<'ctx>(

@@ -168,6 +168,14 @@ extend Binary
   fn byte_size(self) -> Int
 
   @doc """
+  Returns the byte offset of the first occurrence of `needle` at or
+  after byte offset `from`, or `Option.None` when there is no match.
+  An empty needle matches at `from`.
+  """
+  @intrinsic
+  fn find(self, needle: Binary, from: Int) -> Option<Int>
+
+  @doc """
   Returns a new binary spanning the inclusive byte range
   `[range.start, range.stop]`. Endpoints clamp to the binary's bounds.
   """

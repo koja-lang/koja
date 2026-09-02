@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- `Binary.find` returns the byte offset of the first occurrence of a byte needle at or after a starting offset.
+
+### Fixed
+
+- `String.split`, `contains?`, `replace`, `starts_with?`, and `ends_with?` now run in linear time, so operations on multi-megabyte strings finish in milliseconds instead of minutes.
+
 ## [0.18.0] - 2026-08-25
 
 ### Added

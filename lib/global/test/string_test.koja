@@ -468,6 +468,92 @@ struct StringTest
     Result.Ok(true)
   end
 
+  @test "split edge cases: adjacent, boundary, and multi-byte separators"
+  fn test_split_edges -> Result<Bool, String>
+    parts: List<String> = "a,,b".split(",")
+
+    unless parts.length() == 3 and parts.get(1).unwrap() == ""
+      return Result.Err("adjacent separators keep the empty part")
+    end
+
+    parts = ",a,".split(",")
+
+    unless parts.length() == 3
+      return Result.Err("separators at both ends")
+    end
+
+    unless parts.get(0).unwrap() == "" and parts.get(2).unwrap() == ""
+      return Result.Err("boundary parts should be empty")
+    end
+
+    parts = "".split(",")
+
+    unless parts.length() == 1 and parts.get(0).unwrap() == ""
+      return Result.Err("empty input is one empty part")
+    end
+
+    parts = ",".split(",")
+
+    unless parts.length() == 2
+      return Result.Err("lone separator is two empty parts")
+    end
+
+    parts = "aébéc".split("é")
+
+    unless parts.length() == 3 and parts.get(2).unwrap() == "c"
+      return Result.Err("multi-byte separator")
+    end
+
+    parts = "héllo wörld".split(" ")
+
+    unless parts.get(1).unwrap() == "wörld"
+      return Result.Err("multi-byte content survives the copy")
+    end
+
+    parts = "mississippi".split("ss")
+
+    unless parts.length() == 3 and parts.get(1).unwrap() == "i"
+      return Result.Err("multi-character separator")
+    end
+
+    parts = "ab".split("abc")
+
+    unless parts.length() == 1 and parts.get(0).unwrap() == "ab"
+      return Result.Err("separator longer than input")
+    end
+
+    Result.Ok(true)
+  end
+
+  @test "search family on multi-byte boundaries"
+  fn test_search_multibyte_boundaries -> Result<Bool, String>
+    unless "héllo".contains?("él")
+      return Result.Err("contains multi-byte needle")
+    end
+
+    if "é".starts_with?("ab")
+      return Result.Err("prefix probe inside a codepoint")
+    end
+
+    if "aé".ends_with?("bb")
+      return Result.Err("suffix probe inside a codepoint")
+    end
+
+    unless "héllo".starts_with?("hé")
+      return Result.Err("starts_with multi-byte prefix")
+    end
+
+    unless "héllo".ends_with?("llo")
+      return Result.Err("ends_with after multi-byte prefix")
+    end
+
+    unless "héllo".replace("é", "e") == "hello"
+      return Result.Err("replace multi-byte needle")
+    end
+
+    Result.Ok(true)
+  end
+
   @test "String.join"
   fn test_join -> Result<Bool, String>
     join_parts: List<String> = ["a", "b", "c"]

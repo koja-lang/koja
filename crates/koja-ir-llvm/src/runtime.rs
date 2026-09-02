@@ -27,6 +27,7 @@ pub(crate) const FREE_SYMBOL: &str = "koja_free";
 pub(crate) const INT_PARSE_SYMBOL: &str = "koja_int_parse";
 pub(crate) const LAST_ERROR_SYMBOL: &str = "koja_last_error";
 pub(crate) const MALLOC_SYMBOL: &str = "koja_alloc";
+pub(crate) const BINARY_FIND_SYMBOL: &str = "koja_binary_find";
 pub(crate) const BINARY_SLICE_SYMBOL: &str = "koja_binary_slice";
 pub(crate) const MEMSET_SYMBOL: &str = "memset";
 pub(crate) const RC_DEC_SYMBOL: &str = "koja_rc_dec";
@@ -38,10 +39,12 @@ pub(crate) const SOCKET_RECV_FROM_SYMBOL: &str = "koja_socket_recv_from";
 pub(crate) const SOCKET_RESOLVE_SYMBOL: &str = "koja_socket_resolve";
 pub(crate) const STRING_CONTAINS_NUL_SYMBOL: &str = "koja_string_contains_nul";
 pub(crate) const STRING_EQ_SYMBOL: &str = "koja_string_eq";
+pub(crate) const STRING_FIND_SYMBOL: &str = "koja_string_find";
 pub(crate) const STRING_GET_SYMBOL: &str = "koja_string_get";
 pub(crate) const STRING_LENGTH_SYMBOL: &str = "koja_string_length";
 pub(crate) const STRING_NEXT_SYMBOL: &str = "koja_string_next";
 pub(crate) const STRING_SLICE_SYMBOL: &str = "koja_string_slice";
+pub(crate) const STRING_SLICE_BYTES_SYMBOL: &str = "koja_string_slice_bytes";
 
 // `koja_rt_*` mailbox / scheduler symbols defined in
 // `koja-runtime-posix/src/scheduler.rs`. Backend-side declare helpers
@@ -333,6 +336,28 @@ pub(crate) fn declare_string_contains_nul_extern<'ctx>(
     declare_extern(ctx, STRING_CONTAINS_NUL_SYMBOL, signature)
 }
 
+/// Declare (or look up) the `koja_string_find` runtime helper.
+/// Signature: `i64 koja_string_find(i8* payload, i8* needle, i64 from)`.
+/// Returns the byte offset of the first occurrence of `needle` at or
+/// after byte offset `from`, or -1 when absent. The `String.find`
+/// emitter branches on the -1 to mint `None` vs `Some`.
+pub(crate) fn declare_string_find_extern<'ctx>(ctx: &EmitContext<'ctx>) -> FunctionValue<'ctx> {
+    let ptr_ty = ctx.context.ptr_type(AddressSpace::default());
+    let i64_ty = ctx.context.i64_type();
+    let signature = i64_ty.fn_type(&[ptr_ty.into(), ptr_ty.into(), i64_ty.into()], false);
+    declare_extern(ctx, STRING_FIND_SYMBOL, signature)
+}
+
+/// Declare (or look up) the `koja_binary_find` runtime helper.
+/// Same contract as [`declare_string_find_extern`] over a `Binary`
+/// payload.
+pub(crate) fn declare_binary_find_extern<'ctx>(ctx: &EmitContext<'ctx>) -> FunctionValue<'ctx> {
+    let ptr_ty = ctx.context.ptr_type(AddressSpace::default());
+    let i64_ty = ctx.context.i64_type();
+    let signature = i64_ty.fn_type(&[ptr_ty.into(), ptr_ty.into(), i64_ty.into()], false);
+    declare_extern(ctx, BINARY_FIND_SYMBOL, signature)
+}
+
 /// Declare (or look up) the `koja_string_get` runtime helper.
 /// Signature: `i8* koja_string_get(i8* payload, i64 index)`. Returns
 /// a freshly-allocated payload for the codepoint at `index`, or
@@ -387,6 +412,20 @@ pub(crate) fn declare_binary_slice_extern<'ctx>(ctx: &EmitContext<'ctx>) -> Func
     let i64_ty = ctx.context.i64_type();
     let signature = ptr_ty.fn_type(&[ptr_ty.into(), i64_ty.into(), i64_ty.into()], false);
     declare_extern(ctx, BINARY_SLICE_SYMBOL, signature)
+}
+
+/// Declare (or look up) the `koja_string_slice_bytes` runtime helper.
+/// Signature: `i8* koja_string_slice_bytes(i8* payload, i64 start, i64 stop)`.
+/// Returns a freshly-allocated `String` payload covering the byte
+/// range `[start, stop)`. Endpoints clamp to the string's byte length
+/// and must land on codepoint boundaries.
+pub(crate) fn declare_string_slice_bytes_extern<'ctx>(
+    ctx: &EmitContext<'ctx>,
+) -> FunctionValue<'ctx> {
+    let ptr_ty = ctx.context.ptr_type(AddressSpace::default());
+    let i64_ty = ctx.context.i64_type();
+    let signature = ptr_ty.fn_type(&[ptr_ty.into(), i64_ty.into(), i64_ty.into()], false);
+    declare_extern(ctx, STRING_SLICE_BYTES_SYMBOL, signature)
 }
 
 /// Declare (or look up) the `__koja_panic` runtime helper.
