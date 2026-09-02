@@ -20,16 +20,14 @@ struct Holder
 end
 
 fn make_adder(n: Int) -> fn (Int) -> Int
-  adder = fn (x: Int) -> Int
-    x + n
-  end
+  adder = fn (x: Int) -> Int x + n end
+
   adder
 end
 
 fn make_offset(origin: Point, label: String) -> fn (Int) -> Int
-  offset = fn (x: Int) -> Int
-    x + origin.x + origin.y + label.length()
-  end
+  offset = fn (x: Int) -> Int x + origin.x + origin.y + label.length() end
+
   offset
 end
 
@@ -50,12 +48,10 @@ end
 (make_offset(Point{x: 1, y: 2}, "ab") == make_offset(Point{x: 2, y: 1}, "ab")).print()
 
 # Two textually identical closures at different sites are unequal.
-first = fn (x: Int) -> Int
-  x * 2
-end
-second = fn (x: Int) -> Int
-  x * 2
-end
+first = fn (x: Int) -> Int x * 2 end
+
+second = fn (x: Int) -> Int x * 2 end
+
 (first == second).print()
 (first == first).print()
 
@@ -80,9 +76,8 @@ same(&double/1, &double/1).print()
 same(make_adder(3), make_adder(4)).print()
 
 # A closure returned through another process keeps its identity.
-ref = Task.async(fn () -> fn (Int) -> Int
-  make_adder(7)
-end)
+ref = Task.async(fn () -> fn (Int) -> Int make_adder(7) end)
+
 match Task.await(ref)
   Result.Ok(returned) -> (returned == make_adder(7)).print()
   Result.Err(_) -> "error".print()
