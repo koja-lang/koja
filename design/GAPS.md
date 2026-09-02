@@ -497,3 +497,57 @@ Found 2026-08-28. None blocking, each with a workaround:
   `git-hygiene/` holding package `git_hygiene`, namespace
   `GitHygiene`). Both spellings collapse to one package name, so
   the derivation is unambiguous.
+
+---
+
+## Function references cannot be default field values
+
+Found 2026-09-01 in the same `trail` conversion. Default field
+values are limited to literals, negated numerics, unit enum
+variants, binary literals, and literal collections. A `fn` typed
+field cannot default to a named function:
+
+```koja
+struct Config
+  error_response: fn (Status, String) -> Response = &plain_error/2
+  # error: default field values are limited to literals ...
+end
+```
+
+Consequence: a config struct that carries function hooks cannot use
+the struct-literal-with-defaults idiom, so it keeps a `new` plus
+`with_` builder only to supply hook defaults. Pure data configs get
+the literal idiom (`port: Int = 5432` in postgres-koja), so the
+construction idiom splits on whether a struct holds functions. The
+`Option<fn>` field panic
+([#94](https://github.com/koja-lang/koja/issues/94)) blocks the
+other spelling, hooks as `Option` fields defaulting to
+`Option.None`.
+
+**Fix path:** allow `&name/arity` references as default field
+values. A function reference resolves statically to a known
+function, carries no evaluation order questions, and keeps the
+"defaults are data" property.
+
+---
+
+## `koja doc` verb squats on the namespace
+
+Found 2026-09-01 while reading `Process` docs from a dependent
+project. `koja doc <symbol>` reads as a lookup but runs the HTML
+generator. The argument gets treated as a path, errors, and the
+generator runs anyway:
+
+```
+$ koja doc Global.Process.MonitorRef
+error reading Global.Process.MonitorRef: No such file or directory
+docs generated: doc
+```
+
+**Fix path:** make `koja doc` a subcommand container. `koja doc
+generate` runs today's generator, `search` stays as is, and `serve`
+can generate and serve locally. A bare `koja doc <symbol>` does an
+exact-match terminal lookup, the `go doc` shape. Exact search
+already renders full symbol docs, so the machinery exists behind
+`search`. Reserved subcommand names win collisions with symbol
+names, and `koja doc search <name>` stays as the escape hatch.

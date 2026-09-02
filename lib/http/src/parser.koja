@@ -1,5 +1,3 @@
-alias JSON.StringBuilder
-
 @doc """
 Recursive descent HTTP/1.1 parser. Parses raw HTTP messages
 into Request and Response structs. Handles Content-Length
@@ -152,11 +150,10 @@ struct Parser
   end
 
   priv fn parse_chunked_body(self) -> String ! Error
-    sb = StringBuilder.new()
-    try Parser.parse_chunks(self.input, self.pos, sb)
+    try Parser.parse_chunks(self.input, self.pos, "")
   end
 
-  priv fn parse_chunks(input: String, pos: Int, sb: StringBuilder)
+  priv fn parse_chunks(input: String, pos: Int, acc: String)
     -> String ! Error
 
     p = Parser{input: input, pos: pos}
@@ -164,7 +161,7 @@ struct Parser
     size_tuple =
       match p.read_line()
         Option.Some(tuple) -> tuple
-        Option.None -> return sb.build()
+        Option.None -> return acc
       end
 
     (size_line, new_pos) = size_tuple
@@ -174,7 +171,7 @@ struct Parser
       rescue _ -> fail Error.ParseError("invalid chunk size: " <> size_str)
 
     if chunk_size == 0
-      return sb.build()
+      return acc
     end
 
     if new_pos + chunk_size > input.length()
@@ -182,11 +179,11 @@ struct Parser
     end
 
     chunk = input.slice(Range{start: new_pos, stop: new_pos + chunk_size - 1})
-    sb = sb.add(chunk)
+    acc = acc <> chunk
 
     after_chunk = new_pos + chunk_size
     next_pos = after_chunk + 2 <= input.length() ? after_chunk + 2 : after_chunk
-    try Parser.parse_chunks(input, next_pos, sb)
+    try Parser.parse_chunks(input, next_pos, acc)
   end
 
   priv fn read_line(self) -> Option<(String, Int)>

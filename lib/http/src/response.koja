@@ -1,5 +1,3 @@
-alias JSON.StringBuilder
-
 @doc """
 An HTTP response with status, headers, body, and protocol
 version. Returned by the parser when reading server responses,
@@ -32,13 +30,8 @@ struct Response
   suitable for writing to a TCP socket.
   """
   fn serialize(self) -> String
-    sb = StringBuilder.new()
-      .add(self.version)
-      .add(" ")
-      .add("#{self.status.code}")
-      .add(" ")
-      .add(self.status.reason)
-      .add("\r\n")
+    out = self.version <> " #{self.status.code} " <> self.status.reason <>
+      "\r\n"
 
     headers = self.headers
 
@@ -46,24 +39,22 @@ struct Response
       headers = headers.set("Content-Length", "#{self.body.byte_length()}")
     end
 
-    sb = Response.write_headers(sb, headers, 0).add("\r\n")
+    out = Response.write_headers(out, headers, 0) <> "\r\n"
 
     if not self.body.empty?()
-      sb = sb.add(self.body)
+      out = out <> self.body
     end
 
-    sb.build()
+    out
   end
 
-  priv fn write_headers(sb: StringBuilder, headers: Headers, i: Int)
-    -> StringBuilder
-
+  priv fn write_headers(out: String, headers: Headers, i: Int) -> String
     if i >= headers.entries.length()
-      return sb
+      return out
     end
 
     entry = headers.entries.get(i).unwrap()
-    sb = sb.add(entry.name).add(": ").add(entry.value).add("\r\n")
-    Response.write_headers(sb, headers, i + 1)
+    out = out <> entry.name <> ": " <> entry.value <> "\r\n"
+    Response.write_headers(out, headers, i + 1)
   end
 end

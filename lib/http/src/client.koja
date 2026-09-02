@@ -1,4 +1,3 @@
-alias JSON.StringBuilder
 alias Net.Socket.Error as SocketError
 alias Net.TCPSocket
 alias Net.TLSError
@@ -128,42 +127,34 @@ priv fn build_request(
   body: String,
 ) -> String
 
-  sb = StringBuilder.new()
-    .add(method.to_string())
-    .add(" ")
-    .add(path)
-    .add(" HTTP/1.1\r\n")
-    .add("Host: ")
-    .add(host)
-    .add("\r\n")
+  out = method.to_string() <> " " <> path <> " HTTP/1.1\r\n" <>
+    "Host: " <> host <> "\r\n"
 
   if not body.empty?() and not headers.has?("Content-Length")
-    sb = sb.add("Content-Length: ").add("#{body.byte_length()}").add("\r\n")
+    out = out <> "Content-Length: #{body.byte_length()}\r\n"
   end
 
-  sb = write_headers(sb, headers, 0).add("Connection: close\r\n\r\n")
+  out = write_headers(out, headers, 0) <> "Connection: close\r\n\r\n"
 
   if not body.empty?()
-    sb = sb.add(body)
+    out = out <> body
   end
 
-  sb.build()
+  out
 end
 
-priv fn write_headers(sb: StringBuilder, headers: Headers, i: Int)
-  -> StringBuilder
-
+priv fn write_headers(out: String, headers: Headers, i: Int) -> String
   if i >= headers.entries.length()
-    return sb
+    return out
   end
 
   entry = headers.entries.get(i).unwrap()
-  sb = sb.add(entry.name).add(": ").add(entry.value).add("\r\n")
-  write_headers(sb, headers, i + 1)
+  out = out <> entry.name <> ": " <> entry.value <> "\r\n"
+  write_headers(out, headers, i + 1)
 end
 
 priv fn read_response(socket: TCPSocket) -> Response ! Error
-  data = try read_all(socket, StringBuilder.new())
+  data = try read_all(socket, "")
   try Parser.parse_response(data)
 end
 
@@ -174,7 +165,7 @@ priv fn net_error_message(e: SocketError | TLSError) -> String
   end
 end
 
-priv fn read_all(socket: TCPSocket, sb: StringBuilder) -> String ! Error
+priv fn read_all(socket: TCPSocket, acc: String) -> String ! Error
   chunk = socket.read(8192)
     rescue e -> fail Error.ConnectionFailed("read failed: " <>
       net_error_message(e))
@@ -184,9 +175,8 @@ priv fn read_all(socket: TCPSocket, sb: StringBuilder) -> String ! Error
       _ -> ()
     end
 
-    return sb.build()
+    return acc
   end
 
-  sb = sb.add(chunk)
-  try read_all(socket, sb)
+  try read_all(socket, acc <> chunk)
 end
