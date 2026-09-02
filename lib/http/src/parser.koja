@@ -153,9 +153,7 @@ struct Parser
     try Parser.parse_chunks(self.input, self.pos, "")
   end
 
-  priv fn parse_chunks(input: String, pos: Int, acc: String)
-    -> String ! Error
-
+  priv fn parse_chunks(input: String, pos: Int, acc: String) -> String ! Error
     p = Parser{input: input, pos: pos}
 
     size_tuple =

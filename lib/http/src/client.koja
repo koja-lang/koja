@@ -127,8 +127,8 @@ priv fn build_request(
   body: String,
 ) -> String
 
-  out = method.to_string() <> " " <> path <> " HTTP/1.1\r\n" <>
-    "Host: " <> host <> "\r\n"
+  out = method.to_string() <> " " <> path <> " HTTP/1.1\r\n" <> "Host: " <>
+    host <> "\r\n"
 
   if not body.empty?() and not headers.has?("Content-Length")
     out = out <> "Content-Length: #{body.byte_length()}\r\n"

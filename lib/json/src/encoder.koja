@@ -24,10 +24,11 @@ priv struct Encoder
   # first because later passes introduce new backslashes.
   priv fn encode_string(s: String) -> String
     escaped = s.replace("\\", "\\\\")
-    escaped = escaped.replace("\"", "\\\"")
-    escaped = escaped.replace("\n", "\\n")
-    escaped = escaped.replace("\r", "\\r")
-    escaped = escaped.replace("\t", "\\t")
+      .replace("\"", "\\\"")
+      .replace("\n", "\\n")
+      .replace("\r", "\\r")
+      .replace("\t", "\\t")
+
     "\"" <> escaped <> "\""
   end
 
