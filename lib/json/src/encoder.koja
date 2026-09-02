@@ -19,21 +19,17 @@ priv struct Encoder
     end
   end
 
+  # Escapes with whole-string replace passes instead of a per-character
+  # loop, so cost stays linear in the string length. Backslash goes
+  # first because later passes introduce new backslashes.
   priv fn encode_string(s: String) -> String
-    sb = StringBuilder.new().add("\"")
+    escaped = s.replace("\\", "\\\\")
+      .replace("\"", "\\\"")
+      .replace("\n", "\\n")
+      .replace("\r", "\\r")
+      .replace("\t", "\\t")
 
-    for c in s
-      match c
-        "\"" -> sb = sb.add("\\\"")
-        "\\" -> sb = sb.add("\\\\")
-        "\n" -> sb = sb.add("\\n")
-        "\r" -> sb = sb.add("\\r")
-        "\t" -> sb = sb.add("\\t")
-        _ -> sb = sb.add(c)
-      end
-    end
-
-    sb.add("\"").build()
+    "\"" <> escaped <> "\""
   end
 
   priv fn encode_array(items: List<Value>) -> String
@@ -41,19 +37,19 @@ priv struct Encoder
       return "[]"
     end
 
-    sb = StringBuilder.new().add("[")
+    out = "["
     i = 0
 
     while i < items.length()
       if i > 0
-        sb = sb.add(",")
+        out = out <> ","
       end
 
-      sb = sb.add(Encoder.encode_value(items.get(i).unwrap()))
+      out = out <> Encoder.encode_value(items.get(i).unwrap())
       i += 1
     end
 
-    sb.add("]").build()
+    out <> "]"
   end
 
   priv fn encode_object(entries: List<(String, Value)>) -> String
@@ -61,21 +57,21 @@ priv struct Encoder
       return "{}"
     end
 
-    sb = StringBuilder.new().add("{")
+    out = "{"
     i = 0
 
     while i < entries.length()
       if i > 0
-        sb = sb.add(",")
+        out = out <> ","
       end
 
       (key, value) = entries.get(i).unwrap()
-      sb = sb.add(Encoder.encode_string(key))
-      sb = sb.add(":").add(Encoder.encode_value(value))
+      out = out <> Encoder.encode_string(key) <> ":" <>
+        Encoder.encode_value(value)
       i += 1
     end
 
-    sb.add("}").build()
+    out <> "}"
   end
 
   priv fn encode_value_pretty(value: Value, indent: Int) -> String
@@ -125,20 +121,20 @@ priv struct Encoder
     end
 
     inner = indent + 1
-    sb = StringBuilder.new().add("[\n")
+    out = "[\n"
     i = 0
 
     while i < items.length()
       if i > 0
-        sb = sb.add(",\n")
+        out = out <> ",\n"
       end
 
-      sb = sb.add(Encoder.make_indent(inner))
-      sb = sb.add(Encoder.encode_value_pretty(items.get(i).unwrap(), inner))
+      out = out <> Encoder.make_indent(inner)
+      out = out <> Encoder.encode_value_pretty(items.get(i).unwrap(), inner)
       i += 1
     end
 
-    sb.add("\n").add(Encoder.make_indent(indent)).add("]").build()
+    out <> "\n" <> Encoder.make_indent(indent) <> "]"
   end
 
   priv fn encode_object_pretty(entries: List<(String, Value)>, indent: Int)
@@ -149,21 +145,21 @@ priv struct Encoder
     end
 
     inner = indent + 1
-    sb = StringBuilder.new().add("{\n")
+    out = "{\n"
     i = 0
 
     while i < entries.length()
       if i > 0
-        sb = sb.add(",\n")
+        out = out <> ",\n"
       end
 
       (key, value) = entries.get(i).unwrap()
-      sb = sb.add(Encoder.make_indent(inner))
-      sb = sb.add(Encoder.encode_string(key))
-      sb = sb.add(": ").add(Encoder.encode_value_pretty(value, inner))
+      out = out <> Encoder.make_indent(inner)
+      out = out <> Encoder.encode_string(key)
+      out = out <> ": " <> Encoder.encode_value_pretty(value, inner)
       i += 1
     end
 
-    sb.add("\n").add(Encoder.make_indent(indent)).add("}").build()
+    out <> "\n" <> Encoder.make_indent(indent) <> "}"
   end
 end

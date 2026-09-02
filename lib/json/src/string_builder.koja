@@ -1,7 +1,12 @@
 @doc """
-A string builder that accumulates fragments and joins them efficiently
-using divide-and-conquer concatenation. Total work is O(N log k) instead
-of O(N*k) for k fragments totalling N characters.
+A string builder that accumulates fragments and joins them at the
+end. Deprecated since string concat now grows the left side in place
+when it holds the only reference, so a plain `out = out <> part`
+loop is already linear.
+"""
+@deprecated """
+Accumulate with `<>` directly, or use `String.join`. This struct
+will be removed in 0.19.0.
 """
 struct StringBuilder
   parts: List<String>
@@ -24,22 +29,6 @@ struct StringBuilder
   Joins all fragments into the final string.
   """
   fn build(self) -> String
-    StringBuilder.merge_join(self.parts, 0, self.parts.length())
-  end
-
-  priv fn merge_join(parts: List<String>, start: Int, end_idx: Int) -> String
-    count = end_idx - start
-
-    if count == 0
-      return ""
-    end
-
-    if count == 1
-      return parts.get(start).unwrap()
-    end
-
-    mid = start + count / 2
-    StringBuilder.merge_join(parts, start, mid) <>
-      StringBuilder.merge_join(parts, mid, end_idx)
+    String.join(self.parts, "")
   end
 end

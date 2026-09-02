@@ -174,7 +174,7 @@ priv struct Decoder
       end
 
       if b == BYTE_BACKSLASH
-        return try self.scan_escaped(start, i, open, StringBuilder.new())
+        return try self.scan_escaped(start, i, open, "")
       end
 
       i += 1
@@ -186,13 +186,8 @@ priv struct Decoder
   # Slow path for strings containing escapes. Accumulate the slices
   # between escapes plus each unescaped character. `start` tracks the
   # beginning of the pending unflushed segment.
-  priv fn scan_escaped(
-    self,
-    seg_start: Int,
-    pos: Int,
-    open: Int,
-    sb: StringBuilder,
-  ) -> (String, Int) ! String
+  priv fn scan_escaped(self, seg_start: Int, pos: Int, open: Int, acc: String)
+    -> (String, Int) ! String
 
     start = seg_start
     i = pos
@@ -202,10 +197,10 @@ priv struct Decoder
 
       if b == BYTE_QUOTE
         if start <= i - 1
-          sb = sb.add(self.text(start, i - 1))
+          acc = acc <> self.text(start, i - 1)
         end
 
-        return (sb.build(), i + 1)
+        return (acc, i + 1)
       end
 
       if b == BYTE_BACKSLASH
@@ -216,10 +211,10 @@ priv struct Decoder
         match Decoder.unescape(self.byte(i + 1))
           Option.Some(unescaped) ->
             if start <= i - 1
-              sb = sb.add(self.text(start, i - 1))
+              acc = acc <> self.text(start, i - 1)
             end
 
-            sb = sb.add(unescaped)
+            acc = acc <> unescaped
             start = i + 2
 
           # Unknown escapes (e.g. \uXXXX) pass through verbatim:
