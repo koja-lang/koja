@@ -1,0 +1,52 @@
+# A function type inside a generic struct field. The struct still
+# matches, calls the bound function, and formats. It does not derive
+# `Equality`, and that is checked in compile_fail/equality_fn_field.
+
+struct Holder
+  hook: Option<fn (Int) -> Int>
+
+  fn fire(self, n: Int) -> Int
+    match self.hook
+      Option.Some(observe) -> observe(n)
+      Option.None -> 0
+    end
+  end
+end
+
+struct Registry
+  hooks: List<fn (Int) -> Int>
+end
+
+enum Event
+  Hook(fn (Int) -> Int)
+  Nothing
+end
+
+fn doubler(x: Int) -> Int
+  x * 2
+end
+
+fn succ(x: Int) -> Int
+  x + 1
+end
+
+armed = Holder{hook: Option.Some(&doubler/1)}
+idle: Holder = Holder{hook: Option.None}
+armed.fire(21).print()
+idle.fire(21).print()
+armed.print()
+
+registry = Registry{hooks: [&doubler/1, &succ/1]}
+registry.hooks.map(hook -> hook(10)).print()
+registry.print()
+
+event = Event.Hook(&doubler/1)
+match event
+  Event.Hook(hook) -> hook(4).print()
+  Event.Nothing -> 0.print()
+end
+event.print()
+
+# Generic instantiations over conforming types keep `Equality`.
+(Option.Some(&doubler/1).some?()).print()
+(Option.Some(1) == Option.Some(1)).print()

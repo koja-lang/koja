@@ -6,30 +6,30 @@
 //! Body shapes:
 //!
 //! - Struct: `self.f1.equals?(other.f1) and self.f2.equals?(other.f2) and …`,
-//!   or `true` when the struct has no fields. Opaque field types
-//!   (mirroring [`super::derive_debug::is_opaque_type`]) are
-//!   skipped: same conservative bail as `Debug`'s `"..."`
-//!   placeholder.
+//!   or `true` when the struct has no fields. Only the compiler-internal
+//!   wrappers ([`super::derive_debug::is_internal_wrapper_type`]) are
+//!   skipped. Every other field is compared, and lift retracts the
+//!   whole impl when a field type does not conform to `Equality`
+//!   (see `lift_signatures::derived`).
 //! - Enum: nested match. Outer arm dispatches on `self`, inner arm
 //!   on `other`. Matching variants compare payload-wise, mismatches
 //!   fall through to `false`. Unit-only enums collapse to
 //!   `match self … _ -> false end`.
-//! - Generic types route field / payload `.equals?()` calls through the
-//!   universal-`Equality` fallback in
-//!   [`crate::pipeline::resolve::calls::bounded`] (see
-//!   [`crate::registry::UNIVERSAL_PROTOCOLS`]).
+//! - Generic types derive conditionally: `impl Equality for
+//!   Option<T: Equality>`, so `Option<fn () -> Int>` carries no
+//!   `Equality` fact and `==` on it is rejected before lowering.
 
 use koja_ast::ast::{
     Annotation, Arg, BinOp, BuiltinDecl, EnumDecl, EnumVariant, EnumVariantData, Expr, ExprKind,
-    FieldPattern, File, Function, FunctionOrigin, ImplBlock, ImplMember, Item, Literal, MatchArm,
-    Param, Pattern, Statement, StructDecl, StructField, TypeExpr, TypeParam, Visibility,
+    FieldPattern, File, Function, FunctionOrigin, ImplBlock, ImplMember, ImplOrigin, Item, Literal,
+    MatchArm, Param, Pattern, Statement, StructDecl, StructField, TypeExpr, TypeParam, Visibility,
 };
 use koja_ast::identifier::Resolution;
 use koja_ast::span::Span;
 
 use crate::program::CheckedPackage;
 
-use super::derive_debug::is_opaque_type;
+use super::derive_debug::is_internal_wrapper_type;
 
 const BOOL_TYPE: &str = "Bool";
 const EQ_METHOD: &str = "equals?";
@@ -135,16 +135,14 @@ fn needs_enum_derive(decl: &EnumDecl, existing: &[String]) -> bool {
 
 fn synthesize_struct_impl(decl: &StructDecl) -> Item {
     let span = decl.span.as_synthetic();
-    let target = self_target_type(&decl.path, &decl.type_params, span);
     let body = struct_eq_body(&decl.fields, span);
-    equality_impl_block(target.clone(), body, span)
+    equality_impl_block(&decl.path, &decl.type_params, body, span)
 }
 
 fn synthesize_enum_impl(decl: &EnumDecl) -> Item {
     let span = decl.span.as_synthetic();
-    let target = self_target_type(&decl.path, &decl.type_params, span);
     let body = enum_eq_body(&decl.path, &decl.variants, span);
-    equality_impl_block(target.clone(), body, span)
+    equality_impl_block(&decl.path, &decl.type_params, body, span)
 }
 
 /// A builtin derives the same body a zero-field struct does. This
@@ -152,26 +150,46 @@ fn synthesize_enum_impl(decl: &EnumDecl) -> Item {
 /// were field-less structs.
 fn synthesize_builtin_impl(decl: &BuiltinDecl) -> Item {
     let span = decl.span.as_synthetic();
-    let target = self_target_type(&decl.path, &decl.type_params, span);
     let body = struct_eq_body(&[], span);
-    equality_impl_block(target, body, span)
+    equality_impl_block(&decl.path, &decl.type_params, body, span)
 }
 
-/// Builds `impl Equality for Target<Params> fn equals?(...) <body> end`.
-/// The `other: Target<Params>` param mirrors the impl target so the
-/// signature matches what the `Equality.equals?(self, other: Self)`
-/// protocol method substitutes to.
-fn equality_impl_block(target: TypeExpr, body_expr: Expr, span: Span) -> Item {
+/// Builds `impl Equality for Target<Params: Equality> fn equals?(...)
+/// <body> end`. Each type param carries an `Equality` bound so the
+/// conformance is conditional, mirroring the hand-written stdlib
+/// `impl Equality for List<T: Equality>`. The `other: Target<Params>`
+/// param mirrors the impl target so the signature matches what the
+/// `Equality.equals?(self, other: Self)` protocol method substitutes to.
+fn equality_impl_block(
+    path: &[String],
+    type_params: &[TypeParam],
+    body_expr: Expr,
+    span: Span,
+) -> Item {
+    let target = self_target_type(path, type_params, span);
     let other_type = target.clone();
     Item::Impl(ImplBlock {
+        origin: ImplOrigin::Derived,
         target,
-        target_bounds: Vec::new(),
+        target_bounds: equality_target_bounds(type_params, span),
         trait_expr: equality_trait_expr(span),
         members: vec![ImplMember::Function(eq_function(
             other_type, body_expr, span,
         ))],
         span,
     })
+}
+
+/// One `T: Equality` bound per type param of the derived target.
+fn equality_target_bounds(type_params: &[TypeParam], span: Span) -> Vec<TypeParam> {
+    type_params
+        .iter()
+        .map(|type_param| TypeParam {
+            name: type_param.name.clone(),
+            bounds: vec![equality_trait_expr(span)],
+            span,
+        })
+        .collect()
 }
 
 /// Mirrors the type's own generic params on the impl target so the
@@ -235,15 +253,12 @@ fn eq_function(other_type: TypeExpr, body_expr: Expr, span: Span) -> Function {
 }
 
 /// Conjoins `self.f1.equals?(other.f1) and self.f2.equals?(other.f2) and …`.
-/// Returns `true` for fieldless structs and treats opaque-typed
-/// fields (mirroring [`super::derive_debug::is_opaque_type`]) as
-/// trivially equal: same conservative skip `Debug` uses with its
-/// `"..."` placeholder. A struct that's all-opaque collapses to
-/// `true`.
+/// Returns `true` for fieldless structs. Compiler-internal wrapper
+/// fields are skipped and treated as trivially equal.
 fn struct_eq_body(fields: &[StructField], span: Span) -> Expr {
     let parts: Vec<Expr> = fields
         .iter()
-        .filter(|field| !is_opaque_type(&field.type_expr))
+        .filter(|field| !is_internal_wrapper_type(&field.type_expr))
         .map(|field| field_eq_call(&field.name, span))
         .collect();
     conjunction(parts, span)
@@ -369,7 +384,7 @@ fn inner_match_for_struct(
     let pattern = enum_struct_pattern(enum_path, variant_name, fields, "__r_", span);
     let comparisons: Vec<Expr> = fields
         .iter()
-        .filter(|field| !is_opaque_type(&field.type_expr))
+        .filter(|field| !is_internal_wrapper_type(&field.type_expr))
         .map(|field| {
             method_call_one_arg(
                 ident_expr(&format!("__l_{}", field.name), span),

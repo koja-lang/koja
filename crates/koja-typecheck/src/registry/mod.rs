@@ -534,6 +534,42 @@ impl GlobalRegistry {
         None
     }
 
+    /// Drop every conformance record of `target_id` to `protocol_id`.
+    /// Lift calls this when it retracts a derived impl whose target
+    /// cannot conform. Silently a no-op on entries without a
+    /// conformance map.
+    pub(crate) fn remove_conformances(
+        &mut self,
+        target_id: GlobalRegistryId,
+        protocol_id: GlobalRegistryId,
+    ) {
+        let Some(entry) = self.entries.get_mut(&target_id) else {
+            return;
+        };
+        let conformances = match &mut entry.kind {
+            GlobalKind::Builtin(def) => &mut def.conformances,
+            GlobalKind::Struct(Some(def)) => &mut def.conformances,
+            GlobalKind::Enum(Some(def)) => &mut def.conformances,
+            _ => return,
+        };
+        conformances.remove(&protocol_id);
+    }
+
+    /// Unregister one function identity, the inverse of
+    /// [`Self::insert_function`]. Lift calls this when it retracts a
+    /// derived impl, so the method never reaches resolve or IR.
+    pub(crate) fn remove_function(&mut self, identifier: &Identifier, arity: usize) {
+        let Some(names) = self.by_identifier.get_mut(identifier) else {
+            return;
+        };
+        if let Some(id) = names.functions.remove(&arity) {
+            self.entries.remove(&id);
+        }
+        if names.functions.is_empty() && names.non_function.is_none() {
+            self.by_identifier.remove(identifier);
+        }
+    }
+
     /// The conformance record of `target_id` to `protocol_id` that
     /// covers the `target_args` instantiation. `Concrete` covers
     /// exactly its recorded args, `Parameterized` covers every
@@ -748,6 +784,36 @@ impl GlobalRegistry {
     pub fn conforms_any(&self, target_id: GlobalRegistryId, protocol_id: GlobalRegistryId) -> bool {
         self.conformance_records(target_id, protocol_id)
             .is_some_and(|records| !records.is_empty())
+    }
+
+    /// The protocol whose roster supplies `method/arity` on
+    /// `target_id`, found among the protocols the target has any
+    /// conformance record for. Method names are unique per type, so
+    /// at most one protocol can claim the pair.
+    pub fn protocol_declaring_method(
+        &self,
+        target_id: GlobalRegistryId,
+        method: &str,
+        arity: usize,
+    ) -> Option<GlobalRegistryId> {
+        let entry = self.entries.get(&target_id)?;
+        let conformances = match &entry.kind {
+            GlobalKind::Builtin(def) => &def.conformances,
+            GlobalKind::Struct(Some(def)) => &def.conformances,
+            GlobalKind::Enum(Some(def)) => &def.conformances,
+            _ => return None,
+        };
+        conformances.keys().copied().find(|protocol_id| {
+            let Some(GlobalKind::Protocol(Some(definition))) =
+                self.entries.get(protocol_id).map(|entry| &entry.kind)
+            else {
+                return false;
+            };
+            definition
+                .methods
+                .iter()
+                .any(|candidate| candidate.name == method && candidate.arity == arity)
+        })
     }
 
     /// Every recorded conformance of `target_id` to `protocol_id`,

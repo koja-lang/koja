@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Breaking change:** a struct or enum derives `Equality` only when every field and payload type implements `Equality`, so types with a function or union field no longer compare with `==` unless they write their own `equals?`.
+- `==` on a type that does not implement `Equality` now names the field or payload that blocks the derive, and diagnostics spell out type arguments such as `List<fn (Int) -> Int>`.
+
 ### Deprecated
 
 - `JSON.StringBuilder` is deprecated and will be removed in 0.19.0. Use `<>` or `String.join` instead.
@@ -14,6 +19,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - `JSON.encode` was extremely slow when a value contained one large string.
+- A struct with an `Option<fn ...>` or `List<fn ...>` field no longer crashes the compiler, and `==` on `Option<fn ...>` reports an error instead of crashing.
+- Calling a conditional protocol method on an instantiation that does not qualify, such as `equals?` on a `List<fn ...>`, is a typecheck error instead of a compiler crash.
 
 ## [0.18.1] - 2026-09-01
 

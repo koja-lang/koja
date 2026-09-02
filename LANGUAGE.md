@@ -1379,7 +1379,7 @@ end
 
 The compiler checks completeness and signature compatibility, and synthesizes any default-bodied functions the type omits. If the body has a function whose name is a near miss of an omitted default, the compiler warns about the likely typo. Protocol methods may declare default parameters. Implementations inherit those callable arities and cannot repeat the defaults. Entry processes are declared this way (`struct App: Process<(), (), ()>`, see [Packages](#packages)). Protocol declarations accept `@doc` and `@deprecated`.
 
-`Debug` and `Equality` are auto-derived for every type, so listing one is only an override. It suppresses the derived implementation, and the body must supply `format` / `equals?`:
+`Debug` and `Equality` are auto-derived for every type, so listing one is only an override. It suppresses the derived implementation, and the body must supply `format` / `equals?`. Derived `Equality` requires every field and payload type to implement `Equality`. A type with a function or union field does not derive it, and a generic type derives it conditionally (`Option<Int>` compares, `Option<fn () -> Int>` does not). Write `equals?` yourself to compare such a type.
 
 ```koja
 struct Token: Debug

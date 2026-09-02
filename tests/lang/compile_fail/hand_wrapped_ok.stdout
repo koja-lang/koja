@@ -1,1 +1,1 @@
-return type mismatch. Expected `Int`, found `Result`
+return type mismatch. Expected `Int`, found `Result<Int, MyError>`

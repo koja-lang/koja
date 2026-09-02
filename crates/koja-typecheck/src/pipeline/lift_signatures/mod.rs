@@ -27,6 +27,7 @@ use crate::registry::{GlobalRegistry, ResolvedProtocolBound};
 
 mod builtins;
 mod constants;
+mod derived;
 mod enums;
 mod field_defaults;
 mod functions;
@@ -266,6 +267,11 @@ pub(crate) fn lift_signatures(
             }
         }
     }
+    // Pass 2c: retract derived `Equality` impls whose field types do
+    // not conform. Needs every conformance fact from 2a / 2b in place
+    // so a field of type `Option<Int>` can discharge through `Option`'s
+    // own conditional record.
+    derived::retract_underivable_equality(packages, registry);
 }
 
 /// Walk every generic-decl AST node, resolve each declared bound

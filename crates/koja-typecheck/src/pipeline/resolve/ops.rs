@@ -31,7 +31,8 @@ use super::coercion::{Compatible, check_compatible, coercion_target_mut};
 use super::ctx::Resolver;
 use super::expr::resolve_expr;
 use super::types::{
-    display_resolution, is_primitive, peel_alias, type_supports_equality, types_equivalent,
+    display_resolution, equality_blocker_hint, is_primitive, peel_alias, type_supports_equality,
+    types_equivalent,
 };
 use crate::registry::{GlobalKind, GlobalRegistry};
 
@@ -42,8 +43,9 @@ const EQ_METHOD: &str = "equals?";
 /// IR lowering keeps their equality operations primitive.
 /// User struct / enum operands rewrite to `lhs.equals?(rhs)` (wrapped in
 /// `not …` for `!=`) and re-resolve through the normal method-call
-/// path. `derive_equality` guarantees an `Equality` impl is present
-/// for every user type by the time resolve runs.
+/// path. `derive_equality` supplies an `Equality` impl for every user
+/// type whose fields all conform, and [`diagnose_equality_unsupported`]
+/// rejects the rest before the rewrite.
 pub(super) fn resolve_equality_op_expr(
     expr: &mut Expr,
     resolver: &mut Resolver<'_>,
@@ -115,13 +117,15 @@ fn diagnose_equality_unsupported(
     if type_supports_equality(&structural, resolver.bound_context()) {
         return false;
     }
-    diagnostics.push(Diagnostic::error(
-        format!(
-            "`{}` does not implement `Equality`, so `==` / `!=` cannot compare it",
-            display_resolution(&operand.resolution, resolver.registry),
-        ),
-        operand.span,
-    ));
+    let message = format!(
+        "`{}` does not implement `Equality`, so `==` / `!=` cannot compare it",
+        display_resolution(&operand.resolution, resolver.registry),
+    );
+    let diagnostic = match equality_blocker_hint(&structural, resolver.bound_context()) {
+        Some(hint) => Diagnostic::error_with_hint(message, hint, operand.span),
+        None => Diagnostic::error(message, operand.span),
+    };
+    diagnostics.push(diagnostic);
     true
 }
 

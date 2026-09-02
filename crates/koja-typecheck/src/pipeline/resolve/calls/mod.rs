@@ -34,8 +34,8 @@ use koja_ast::span::Span;
 use bounded::{BoundedCall, resolve_bounded_method_call};
 use methods::{
     MethodInferenceOutputs, MethodInferenceTarget, MethodReceiver, classify_receiver,
-    dispatch_mismatch_message, function_signature, infer_method_call_type_args,
-    method_lookup_message, seed_impl_args_subst, seed_receiver_subst,
+    diagnose_unmet_conformance, dispatch_mismatch_message, function_signature,
+    infer_method_call_type_args, method_lookup_message, seed_impl_args_subst, seed_receiver_subst,
 };
 
 use crate::pipeline::unify::{Conflict, Substitution, substitute};
@@ -532,6 +532,20 @@ pub(super) fn resolve_method_call(
     };
     *target = Resolution::Global(method_id);
     check_callee_visibility(method_entry, resolver, call_span, diagnostics);
+    if matches!(method_receiver, MethodReceiver::Instance { .. })
+        && diagnose_unmet_conformance(
+            receiver,
+            struct_id,
+            method,
+            declared_arity,
+            call_span,
+            resolver,
+            diagnostics,
+        )
+    {
+        resolve_args(args, None, resolver, diagnostics);
+        return MethodCallOutcome::Method(ResolvedType::unresolved());
+    }
 
     let sig = match function_signature(method_entry) {
         Ok(sig) => sig.clone(),

@@ -40,8 +40,9 @@
 
 use koja_ast::ast::{
     Annotation, Arg, BuiltinDecl, EnumDecl, EnumVariant, EnumVariantData, Expr, ExprKind,
-    FieldPattern, File, Function, FunctionOrigin, ImplBlock, ImplMember, Item, MatchArm, Param,
-    Pattern, Statement, StringPart, StructDecl, StructField, TypeExpr, TypeParam, Visibility,
+    FieldPattern, File, Function, FunctionOrigin, ImplBlock, ImplMember, ImplOrigin, Item,
+    MatchArm, Param, Pattern, Statement, StringPart, StructDecl, StructField, TypeExpr, TypeParam,
+    Visibility,
 };
 use koja_ast::identifier::Resolution;
 use koja_ast::span::Span;
@@ -197,6 +198,7 @@ fn synthesize_builtin_impl(decl: &BuiltinDecl) -> Item {
 /// that omit them, so we inline them at synthesis time.
 fn debug_impl_block(target: TypeExpr, format_body: Expr, span: Span) -> Item {
     Item::Impl(ImplBlock {
+        origin: ImplOrigin::Derived,
         target,
         target_bounds: Vec::new(),
         trait_expr: debug_trait_expr(span),
@@ -397,24 +399,32 @@ fn field_format_part(field_name: &str, field_type: &TypeExpr, span: Span) -> Str
 /// synthesized impl, so `.format()` always resolves after
 /// monomorphization.
 ///
-/// Shared with [`super::derive_equality`]: both synthesizers bail
-/// on the same shapes (no `Debug` / `Equality` impl available).
-pub(super) fn is_opaque_type(te: &TypeExpr) -> bool {
+/// `Equality` derivation only shares the internal-wrapper carve-out
+/// ([`is_internal_wrapper_type`]). Its other non-conforming field
+/// shapes are decided semantically at lift, where the type simply
+/// does not derive `Equality`.
+fn is_opaque_type(te: &TypeExpr) -> bool {
     match te {
-        TypeExpr::Named { path, .. } => matches!(
-            path.last().map(String::as_str),
-            Some("CPtr") | Some("Indirect") | Some("Pointer")
-        ),
-        TypeExpr::Generic { path, .. } => matches!(
-            path.last().map(String::as_str),
-            Some("CPtr") | Some("Indirect") | Some("Pointer")
-        ),
+        TypeExpr::Named { .. } | TypeExpr::Generic { .. } => is_internal_wrapper_type(te),
         TypeExpr::Tuple { .. } => false,
         TypeExpr::Function { .. }
         | TypeExpr::Self_ { .. }
         | TypeExpr::Union { .. }
         | TypeExpr::Unit { .. } => true,
     }
+}
+
+/// Compiler-internal recursion-break and pointer wrappers (`CPtr`,
+/// `Indirect`, `Pointer`) that no derived protocol body should call
+/// into. Shared with [`super::derive_equality`].
+pub(super) fn is_internal_wrapper_type(te: &TypeExpr) -> bool {
+    let (TypeExpr::Named { path, .. } | TypeExpr::Generic { path, .. }) = te else {
+        return false;
+    };
+    matches!(
+        path.last().map(String::as_str),
+        Some("CPtr") | Some("Indirect") | Some("Pointer")
+    )
 }
 
 /// Builds the body for an enum's `format`:

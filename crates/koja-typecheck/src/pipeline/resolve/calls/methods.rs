@@ -23,7 +23,8 @@ use super::emit_conflict;
 use crate::pipeline::unify::{Substitution, substitute};
 use crate::pipeline::visibility::check_reference_visibility;
 use crate::registry::{
-    Dispatch, FunctionSignature, GlobalKind, GlobalRegistry, RegistryEntry, ResolvedParam,
+    ConformanceScope, Dispatch, FunctionSignature, GlobalKind, GlobalRegistry, RegistryEntry,
+    ResolvedParam,
 };
 
 /// Inputs to [`infer_method_call_type_args`]. Bundles the two
@@ -200,6 +201,69 @@ pub(super) fn classify_receiver(
             None
         }
     }
+}
+
+/// Reject an instance call to a protocol method when the receiver's
+/// instantiation does not discharge the impl's conditional bounds.
+/// `List<fn () -> Int>` carries `List`'s `equals?` in the flat method
+/// namespace, but only `List<T: Equality>` conforms, so the call has
+/// no body to monomorphize. Returns `true` after pushing the
+/// diagnostic. Concrete impls (`impl P for Bag<Int>`) are left to the
+/// receiver-domain check after inference, which names the impl's
+/// own instantiation.
+pub(super) fn diagnose_unmet_conformance(
+    receiver: &Expr,
+    struct_id: GlobalRegistryId,
+    method: &str,
+    arity: usize,
+    call_span: Span,
+    resolver: &Resolver<'_>,
+    diagnostics: &mut Vec<Diagnostic>,
+) -> bool {
+    let registry = resolver.registry;
+    let Some(protocol_id) = registry.protocol_declaring_method(struct_id, method, arity) else {
+        return false;
+    };
+    let conditional = registry
+        .conformance_records(struct_id, protocol_id)
+        .is_some_and(|records| {
+            records
+                .iter()
+                .any(|record| matches!(record.scope, ConformanceScope::Parameterized { .. }))
+        });
+    let structural = peel_alias(&receiver.resolution, registry);
+    let ResolvedType::Named { type_args, .. } = &structural else {
+        return false;
+    };
+    // Inference may still be filling the args (`List.new().equals?`),
+    // and an unresolved slot satisfies no bound. Let the later
+    // inference diagnostics own that case.
+    if !conditional
+        || !structural.is_resolved()
+        || registry
+            .lookup_conformance_with(
+                struct_id,
+                protocol_id,
+                type_args,
+                resolver.bound_overlay,
+                None,
+            )
+            .is_some()
+    {
+        return false;
+    }
+    let protocol_label = registry
+        .get(protocol_id)
+        .map(|entry| entry.identifier.last().to_string())
+        .unwrap_or_else(|| format!("<id {protocol_id}>"));
+    diagnostics.push(Diagnostic::error(
+        format!(
+            "`{}` does not implement `{protocol_label}`, so `{method}` is unavailable",
+            display_resolution(&receiver.resolution, registry),
+        ),
+        call_span,
+    ));
+    true
 }
 
 /// Rewrite the receiver expression in place to a synthetic
