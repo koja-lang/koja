@@ -30,12 +30,13 @@ use crate::function::{
     FunctionKind, IRBlockId, IRFunction, IRFunctionParam, IRInstruction, IRSymbol, IRTerminator,
 };
 use crate::local::IRLocalId;
-use crate::mangling::{closure_copy_env_symbol, closure_drop_env_symbol};
+use crate::mangling::{closure_copy_env_symbol, closure_drop_env_symbol, closure_eq_env_symbol};
 use crate::types::{IRType, ValueId};
 
 use super::body::{finalize_open_flow, lower_body};
 use super::ctx::{FnLowerCtx, LowerOutput};
 use super::drops::emit_function_exit_drops;
+use super::equality::{Conjunction, lower_value_equality};
 use super::ownership::{materialize_owned, promote_param};
 use super::package::resolved_type_to_ir_type;
 
@@ -68,7 +69,13 @@ pub(super) fn lower_block_closure(
         output,
     )?;
     output.synthesized_functions.push(synthesized);
-    synthesize_env_glue(&symbol, &captures_with_types, output);
+    synthesize_env_glue(
+        &symbol,
+        &captures_with_types,
+        closure_resolution,
+        registry,
+        output,
+    );
 
     emit_make_closure(
         symbol,
@@ -110,7 +117,13 @@ pub(super) fn lower_short_closure(
         output,
     )?;
     output.synthesized_functions.push(synthesized);
-    synthesize_env_glue(&symbol, &captures_with_types, output);
+    synthesize_env_glue(
+        &symbol,
+        &captures_with_types,
+        closure_resolution,
+        registry,
+        output,
+    );
 
     emit_make_closure(
         symbol,
@@ -124,15 +137,107 @@ pub(super) fn lower_short_closure(
 }
 
 /// Register the synthesized glue siblings (`$drop_env$` /
-/// `$copy_env$`) a capturing closure's env block needs. Shared by the
-/// block- and short-closure lowerings.
-fn synthesize_env_glue(symbol: &IRSymbol, captures: &[CaptureInfo], output: &mut LowerOutput) {
+/// `$copy_env$` / `$eq_env$`) a capturing closure's env block needs.
+/// Shared by the block- and short-closure lowerings.
+fn synthesize_env_glue(
+    symbol: &IRSymbol,
+    captures: &[CaptureInfo],
+    closure_resolution: &ResolvedType,
+    registry: &GlobalRegistry,
+    output: &mut LowerOutput,
+) {
     if let Some(drop_env) = synthesize_drop_env(symbol, captures) {
         output.synthesized_functions.push(drop_env);
     }
     if let Some(copy_env) = synthesize_copy_env(symbol, captures) {
         output.synthesized_functions.push(copy_env);
     }
+    if let Some(eq_env) = synthesize_eq_env(symbol, captures, closure_resolution, registry, output)
+    {
+        output.synthesized_functions.push(eq_env);
+    }
+}
+
+/// Build the `<body>.$eq_env$` capture-equality glue
+/// ([`FunctionKind::EqClosureGlue`]) for a closure that captures.
+/// Returns `None` for captureless closures, whose equality is settled
+/// by the site id alone.
+///
+/// The body takes the other closure as its one param and, for each
+/// capture, reads its own slot via [`IRInstruction::LoadCapture`]
+/// and the other's via [`IRInstruction::LoadCaptureOf`], then
+/// short-circuit-conjoins the pairwise equality through
+/// [`lower_value_equality`]. Both reads are borrowed, so nothing is
+/// acquired or dropped.
+fn synthesize_eq_env(
+    body_symbol: &IRSymbol,
+    captures: &[CaptureInfo],
+    closure_resolution: &ResolvedType,
+    registry: &GlobalRegistry,
+    output: &mut LowerOutput,
+) -> Option<IRFunction> {
+    let last = captures.len().checked_sub(1)?;
+    let env_layout: Vec<IRType> = captures.iter().map(|c| c.ir_type.clone()).collect();
+    let closure_ty =
+        resolved_type_to_ir_type(closure_resolution, registry, &mut output.instantiations);
+    let mut ctx = FnLowerCtx::new();
+    let other = ctx.fresh_value(closure_ty.clone());
+    let entry = ctx.fresh_block("entry");
+    let conjunction = Conjunction::new("eq_env", &mut ctx);
+    let mut current = entry;
+    for (index, capture) in captures.iter().enumerate() {
+        let own = ctx.fresh_value(capture.ir_type.clone());
+        ctx.cfg.append(
+            current,
+            IRInstruction::LoadCapture {
+                capture_index: index as u32,
+                dest: own,
+                ty: capture.ir_type.clone(),
+            },
+        );
+        let theirs = ctx.fresh_value(capture.ir_type.clone());
+        ctx.cfg.append(
+            current,
+            IRInstruction::LoadCaptureOf {
+                capture_index: index as u32,
+                closure: other,
+                dest: theirs,
+                ty: capture.ir_type.clone(),
+            },
+        );
+        let (cond, after) = lower_value_equality(
+            own,
+            theirs,
+            &capture.resolution,
+            &mut ctx,
+            current,
+            registry,
+            output,
+        );
+        if index == last {
+            let (result, merge) = conjunction.finish(cond, &mut ctx, after);
+            ctx.cfg.set_terminator(
+                merge,
+                IRTerminator::Return {
+                    value: Some(result),
+                },
+            );
+            break;
+        }
+        current = conjunction.gate(cond, &mut ctx, after);
+    }
+    Some(IRFunction {
+        blocks: ctx.into_blocks(),
+        def_location: None,
+        kind: FunctionKind::EqClosureGlue { env_layout },
+        params: vec![IRFunctionParam {
+            id: other,
+            local_id: IRLocalId::synthetic_placeholder(),
+            ty: closure_ty,
+        }],
+        return_type: IRType::Bool,
+        symbol: closure_eq_env_symbol(body_symbol),
+    })
 }
 
 /// Build the `<body>.$drop_env$` capture-release glue
@@ -222,10 +327,13 @@ enum BodyShape<'a> {
     Short(&'a Expr),
 }
 
-/// One capture, keyed by the outer [`LocalId`] it pulls from.
+/// One capture, keyed by the outer [`LocalId`] it pulls from. The
+/// resolved type stays alongside the IR type because the `$eq_env$`
+/// glue dispatches capture equality on it.
 struct CaptureInfo {
-    local_id: LocalId,
     ir_type: IRType,
+    local_id: LocalId,
+    resolution: ResolvedType,
 }
 
 fn expect_function_params(resolution: &ResolvedType) -> &[ResolvedType] {
@@ -620,8 +728,9 @@ fn resolve_capture_types(
             let ir_type =
                 resolved_type_to_ir_type(resolution, registry, &mut output.instantiations);
             CaptureInfo {
-                local_id: *local_id,
                 ir_type,
+                local_id: *local_id,
+                resolution: resolution.clone(),
             }
         })
         .collect()

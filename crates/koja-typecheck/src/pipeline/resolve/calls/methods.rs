@@ -20,6 +20,7 @@ use super::super::inference::{
 use super::super::paths::static_dotted_path;
 use super::super::types::{display_resolution, lookup_type, peel_alias};
 use super::emit_conflict;
+use super::structural::StructuralShape;
 use crate::pipeline::unify::{Substitution, substitute};
 use crate::pipeline::visibility::check_reference_visibility;
 use crate::registry::{
@@ -54,10 +55,10 @@ pub(super) struct MethodInferenceTarget<'a> {
 /// Receiver classification for method-call dispatch. `Static` and
 /// `Instance` capture the receiver's struct id. `Bounded` captures
 /// the type-param's `(owner, index)` for bounded dispatch, since the
-/// concrete struct id only emerges post-monomorphization. `Tuple`
-/// has no registry id at all: anonymous tuples are structural and
-/// admit only the universal-protocol functions, resolved by
-/// [`super::tuples::resolve_tuple_method_call`].
+/// concrete struct id only emerges post-monomorphization.
+/// `Structural` has no registry id at all: tuples, function types,
+/// and unions admit only the universal-protocol functions, resolved
+/// by [`super::structural::resolve_structural_method_call`].
 #[derive(Clone, Copy)]
 pub(super) enum MethodReceiver {
     Static {
@@ -70,14 +71,16 @@ pub(super) enum MethodReceiver {
         owner: GlobalRegistryId,
         index: TypeParamIndex,
     },
-    Tuple,
+    Structural(StructuralShape),
 }
 
 impl MethodReceiver {
     pub(super) fn expected_dispatch(self) -> Dispatch {
         match self {
             Self::Static { .. } => Dispatch::Static,
-            Self::Instance { .. } | Self::Bounded { .. } | Self::Tuple => Dispatch::Instance,
+            Self::Instance { .. } | Self::Bounded { .. } | Self::Structural(_) => {
+                Dispatch::Instance
+            }
         }
     }
 
@@ -86,7 +89,7 @@ impl MethodReceiver {
     pub(super) fn explicit_params(self, params: &[ResolvedParam]) -> &[ResolvedParam] {
         match self {
             Self::Static { .. } => params,
-            Self::Instance { .. } | Self::Bounded { .. } | Self::Tuple => {
+            Self::Instance { .. } | Self::Bounded { .. } | Self::Structural(_) => {
                 params.get(1..).unwrap_or(&[])
             }
         }
@@ -95,7 +98,9 @@ impl MethodReceiver {
     pub(super) fn explicit_params_for_arity(self, arity: usize) -> usize {
         match self {
             Self::Static { .. } => arity,
-            Self::Instance { .. } | Self::Bounded { .. } | Self::Tuple => arity.saturating_sub(1),
+            Self::Instance { .. } | Self::Bounded { .. } | Self::Structural(_) => {
+                arity.saturating_sub(1)
+            }
         }
     }
 }
@@ -155,17 +160,6 @@ pub(super) fn classify_receiver(
         return None;
     }
     let structural_receiver = peel_alias(&receiver.resolution, resolver.registry);
-    if matches!(&structural_receiver, ResolvedType::Union(_)) {
-        diagnostics.push(Diagnostic::error(
-            format!(
-                "cannot call method on union type `{}`. \
-                 Match the union first to bind a specific variant",
-                display_resolution(&receiver.resolution, resolver.registry),
-            ),
-            receiver.span,
-        ));
-        return None;
-    }
     match structural_receiver {
         ResolvedType::Named {
             resolution: Resolution::Global(struct_id),
@@ -188,7 +182,13 @@ pub(super) fn classify_receiver(
             }
             Some(MethodReceiver::Instance { struct_id })
         }
-        ResolvedType::Anonymous(AnonymousKind::Tuple { .. }) => Some(MethodReceiver::Tuple),
+        ResolvedType::Anonymous(AnonymousKind::Function { .. }) => {
+            Some(MethodReceiver::Structural(StructuralShape::Function))
+        }
+        ResolvedType::Anonymous(AnonymousKind::Tuple { .. }) => {
+            Some(MethodReceiver::Structural(StructuralShape::Tuple))
+        }
+        ResolvedType::Union(_) => Some(MethodReceiver::Structural(StructuralShape::Union)),
         ResolvedType::Named {
             resolution: Resolution::TypeParam { owner, index },
             ..
@@ -480,8 +480,8 @@ pub(super) fn method_lookup_message(
         MethodReceiver::Instance { .. } => {
             format!("`{}` has no method `{method}`", struct_entry.identifier,)
         }
-        MethodReceiver::Bounded { .. } | MethodReceiver::Tuple => {
-            unreachable!("bounded / tuple receivers don't reach this path")
+        MethodReceiver::Bounded { .. } | MethodReceiver::Structural(_) => {
+            unreachable!("bounded / structural receivers don't reach this path")
         }
     }
 }
@@ -503,8 +503,8 @@ pub(super) fn dispatch_mismatch_message(
              instead",
             method_entry.identifier, struct_entry.identifier,
         ),
-        MethodReceiver::Bounded { .. } | MethodReceiver::Tuple => {
-            unreachable!("bounded / tuple receivers don't reach this path")
+        MethodReceiver::Bounded { .. } | MethodReceiver::Structural(_) => {
+            unreachable!("bounded / structural receivers don't reach this path")
         }
     }
 }

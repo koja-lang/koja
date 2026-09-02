@@ -1,0 +1,18 @@
+true
+false
+false
+true
+true
+true
+false
+Owner{name: "a", pet: Dog{name: "Rex"}}
+true
+false
+(Cat{name: "Whiskers"}, 1)
+Cat{name: "Whiskers"}
+"Dog{name: \"Rex\"}"
+[Cat{name: "Whiskers"}, Dog{name: "Rex"}]
+true
+false
+true
+false

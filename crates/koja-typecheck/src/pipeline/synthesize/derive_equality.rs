@@ -8,21 +8,21 @@
 //! - Struct: `self.f1.equals?(other.f1) and self.f2.equals?(other.f2) and …`,
 //!   or `true` when the struct has no fields. Only the compiler-internal
 //!   wrappers ([`super::derive_debug::is_internal_wrapper_type`]) are
-//!   skipped. Every other field is compared, and lift retracts the
-//!   whole impl when a field type does not conform to `Equality`
-//!   (see `lift_signatures::derived`).
+//!   skipped. Every other field is compared: `Equality` is total, so
+//!   functions and unions compare like any other value.
 //! - Enum: nested match. Outer arm dispatches on `self`, inner arm
 //!   on `other`. Matching variants compare payload-wise, mismatches
 //!   fall through to `false`. Unit-only enums collapse to
 //!   `match self … _ -> false end`.
-//! - Generic types derive conditionally: `impl Equality for
-//!   Option<T: Equality>`, so `Option<fn () -> Int>` carries no
-//!   `Equality` fact and `==` on it is rejected before lowering.
+//! - Generic types route field / payload `.equals?()` calls through the
+//!   universal-`Equality` fallback in
+//!   [`crate::pipeline::resolve::calls::bounded`] (see
+//!   [`crate::registry::UNIVERSAL_PROTOCOLS`]).
 
 use koja_ast::ast::{
     Annotation, Arg, BinOp, BuiltinDecl, EnumDecl, EnumVariant, EnumVariantData, Expr, ExprKind,
-    FieldPattern, File, Function, FunctionOrigin, ImplBlock, ImplMember, ImplOrigin, Item, Literal,
-    MatchArm, Param, Pattern, Statement, StructDecl, StructField, TypeExpr, TypeParam, Visibility,
+    FieldPattern, File, Function, FunctionOrigin, ImplBlock, ImplMember, Item, Literal, MatchArm,
+    Param, Pattern, Statement, StructDecl, StructField, TypeExpr, TypeParam, Visibility,
 };
 use koja_ast::identifier::Resolution;
 use koja_ast::span::Span;
@@ -154,12 +154,11 @@ fn synthesize_builtin_impl(decl: &BuiltinDecl) -> Item {
     equality_impl_block(&decl.path, &decl.type_params, body, span)
 }
 
-/// Builds `impl Equality for Target<Params: Equality> fn equals?(...)
-/// <body> end`. Each type param carries an `Equality` bound so the
-/// conformance is conditional, mirroring the hand-written stdlib
-/// `impl Equality for List<T: Equality>`. The `other: Target<Params>`
-/// param mirrors the impl target so the signature matches what the
-/// `Equality.equals?(self, other: Self)` protocol method substitutes to.
+/// Builds `impl Equality for Target<Params> fn equals?(...) <body> end`.
+/// The impl is unconditional because `Equality` is total. The `other:
+/// Target<Params>` param mirrors the impl target so the signature
+/// matches what the `Equality.equals?(self, other: Self)` protocol
+/// method substitutes to.
 fn equality_impl_block(
     path: &[String],
     type_params: &[TypeParam],
@@ -169,27 +168,14 @@ fn equality_impl_block(
     let target = self_target_type(path, type_params, span);
     let other_type = target.clone();
     Item::Impl(ImplBlock {
-        origin: ImplOrigin::Derived,
         target,
-        target_bounds: equality_target_bounds(type_params, span),
+        target_bounds: Vec::new(),
         trait_expr: equality_trait_expr(span),
         members: vec![ImplMember::Function(eq_function(
             other_type, body_expr, span,
         ))],
         span,
     })
-}
-
-/// One `T: Equality` bound per type param of the derived target.
-fn equality_target_bounds(type_params: &[TypeParam], span: Span) -> Vec<TypeParam> {
-    type_params
-        .iter()
-        .map(|type_param| TypeParam {
-            name: type_param.name.clone(),
-            bounds: vec![equality_trait_expr(span)],
-            span,
-        })
-        .collect()
 }
 
 /// Mirrors the type's own generic params on the impl target so the

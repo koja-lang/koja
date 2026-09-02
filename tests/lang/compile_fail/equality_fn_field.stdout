@@ -1,1 +1,0 @@
-`Holder` does not implement `Equality`, so `==` / `!=` cannot compare it

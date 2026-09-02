@@ -161,6 +161,7 @@ pub(super) fn seal_struct_ops<'inst, 'decl>(
             | IRInstruction::Call { .. }
             | IRInstruction::CallClosure { .. }
             | IRInstruction::Clone { .. }
+            | IRInstruction::ClosureEquals { .. }
             | IRInstruction::Concat { .. }
             | IRInstruction::Const { .. }
             | IRInstruction::DeepCopy { .. }
@@ -171,6 +172,7 @@ pub(super) fn seal_struct_ops<'inst, 'decl>(
             | IRInstruction::EnumTagGet { .. }
             | IRInstruction::IndirectPresent { .. }
             | IRInstruction::LoadCapture { .. }
+            | IRInstruction::LoadCaptureOf { .. }
             | IRInstruction::LoadConst { .. }
             | IRInstruction::LocalDecl { .. }
             | IRInstruction::LocalRead { .. }

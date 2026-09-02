@@ -175,8 +175,8 @@ fn string_interpolation_struct_wraps_in_format() {
 #[test]
 fn string_interpolation_without_format_method_diagnoses() {
     // Function types have no `Debug` impl, so wrapping a
-    // closure-typed interp in `.format()` surfaces the standard
-    // receiver-shape diagnostic from the call resolver.
+    // closure-typed interp in `.format()` surfaces the structural
+    // receiver's method-set diagnostic from the call resolver.
     let source = "
         priv fn render -> String
           f = fn (x: Int) -> Int
@@ -186,5 +186,8 @@ fn string_interpolation_without_format_method_diagnoses() {
         end
         ";
 
-    assert_script_fails_with(source, &["receiver must have a struct or enum type"]);
+    assert_script_fails_with(
+        source,
+        &["no function `format` on function type `fn (Int) -> Int`"],
+    );
 }

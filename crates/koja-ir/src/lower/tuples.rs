@@ -14,22 +14,25 @@
 //! inline at each call site instead: element-wise projection plus a
 //! `Call` into each element's own conformance function, mirroring
 //! what `derive_debug` / `derive_equality` synthesize for nominal
-//! types (including the opaque-element fallbacks: closures and
-//! unions render `"..."` in `format` and are skipped in `equals?`).
+//! types. `equals?` routes through [`super::equality`], union
+//! elements through [`super::unions`], and `format` renders closure
+//! elements as `"..."`.
 
 use koja_ast::ast::{Arg, Expr, Pattern};
 use koja_ast::identifier::{AnonymousKind, ResolvedType};
 use koja_typecheck::{GlobalRegistry, peel_alias};
 
 use super::body::store_owned_into_local;
-use super::calls::{conformance_method_symbol, emit_io_puts};
+use super::calls::{conformance_method_symbol, lower_debug_family};
 use super::ctx::{FlowResult, FnLowerCtx, LowerOutput};
+use super::equality::lower_equality_call;
 use super::expr::{emit_string_const, lower_expr};
 use super::ownership::{drop_discarded_temp, materialize_owned};
 use super::package::resolved_type_to_ir_type;
-use crate::function::{BranchTarget, IRBlockId, IRInstruction, IRTerminator};
+use super::unions::{UnionSubject, emit_union_format};
+use crate::function::{IRBlockId, IRInstruction};
 use crate::local::IRLocalId;
-use crate::types::{ConcatKind, ConstValue, IRType, ValueId};
+use crate::types::{ConcatKind, IRType, ValueId};
 
 pub(super) fn lower_tuple_literal(
     elements: &[Expr],
@@ -169,66 +172,21 @@ pub(super) fn lower_tuple_conformance_call(
     registry: &GlobalRegistry,
     output: &mut LowerOutput,
 ) -> Result<(ValueId, IRBlockId), ()> {
-    let elements = tuple_element_resolutions(&receiver.resolution, registry);
-    let (receiver_value, mut current) = lower_expr(receiver, ctx, block, registry, output)?;
-    match method {
-        "equals?" => {
-            let [other] = args else {
-                panic!(
-                    "IR lower: tuple `equals?` reached lowering with {} args",
-                    args.len()
-                );
-            };
-            let (other_value, after) = lower_expr(&other.value, ctx, current, registry, output)?;
-            let (result, after) = emit_tuple_eq(
-                receiver_value,
-                other_value,
-                &elements,
-                ctx,
-                after,
-                registry,
-                output,
-            );
-            drop_discarded_temp(ctx, after, receiver_value);
-            drop_discarded_temp(ctx, after, other_value);
-            Ok((result, after))
-        }
-        "format" => {
-            let formatted =
-                emit_tuple_format(receiver_value, &elements, ctx, current, registry, output);
-            drop_discarded_temp(ctx, current, receiver_value);
-            Ok((formatted, current))
-        }
-        "inspect" => {
-            let formatted =
-                emit_tuple_format(receiver_value, &elements, ctx, current, registry, output);
-            current = emit_io_puts(formatted, ctx, current);
-            drop_discarded_temp(ctx, current, formatted);
-            // `inspect` returns the receiver unchanged so call
-            // chains preserve the value.
-            Ok((receiver_value, current))
-        }
-        "print" => {
-            let formatted =
-                emit_tuple_format(receiver_value, &elements, ctx, current, registry, output);
-            current = emit_io_puts(formatted, ctx, current);
-            drop_discarded_temp(ctx, current, formatted);
-            drop_discarded_temp(ctx, current, receiver_value);
-            let unit = ctx.fresh_value(IRType::Unit);
-            ctx.cfg.append(
-                current,
-                IRInstruction::Const {
-                    dest: unit,
-                    value: ConstValue::Unit,
-                },
-            );
-            Ok((unit, current))
-        }
-        other => panic!(
-            "IR lower: tuple method `{other}` reached lowering \
-             (typecheck resolve invariant violation)",
-        ),
+    if method == "equals?" {
+        return lower_equality_call(receiver, args, ctx, block, registry, output);
     }
+    let elements = tuple_element_resolutions(&receiver.resolution, registry);
+    lower_debug_family(
+        method,
+        receiver,
+        ctx,
+        block,
+        registry,
+        output,
+        |value, ctx, block, output| {
+            emit_tuple_format(value, &elements, ctx, block, registry, output)
+        },
+    )
 }
 
 fn tuple_element_resolutions(
@@ -245,40 +203,35 @@ fn tuple_element_resolutions(
     elements
 }
 
-/// Closures and unions have no callable conformance functions, so
-/// `format` renders their placeholder and `equals?` treats reaching one
-/// as a typecheck invariant violation (tuple equality on shapes
-/// containing them is rejected during resolve).
-fn is_opaque_element(ty: &ResolvedType) -> bool {
-    matches!(
-        ty,
-        ResolvedType::Anonymous(AnonymousKind::Function { .. }) | ResolvedType::Union(_)
-    )
-}
-
 /// Build `"(" e0.format() ", " e1.format() ... ")"` as a `Concat`
-/// chain, mirroring string-interpolation lowering.
-fn emit_tuple_format(
+/// chain, mirroring string-interpolation lowering. Union elements
+/// branch on their tag, so the result may land in a later block.
+pub(super) fn emit_tuple_format(
     value: ValueId,
     elements: &[ResolvedType],
     ctx: &mut FnLowerCtx,
     block: IRBlockId,
     registry: &GlobalRegistry,
     output: &mut LowerOutput,
-) -> ValueId {
-    let mut acc = emit_string_const("(".to_string(), ctx, block);
+) -> (ValueId, IRBlockId) {
+    let mut current = block;
+    let mut acc = emit_string_const("(".to_string(), ctx, current);
     for (index, element_ty) in elements.iter().enumerate() {
         if index > 0 {
-            let separator = emit_string_const(", ".to_string(), ctx, block);
-            acc = emit_concat(acc, separator, ctx, block);
+            let separator = emit_string_const(", ".to_string(), ctx, current);
+            acc = emit_concat(acc, separator, ctx, current);
         }
-        let piece = emit_element_format(value, index, element_ty, ctx, block, registry, output);
-        acc = emit_concat(acc, piece, ctx, block);
+        let (piece, after) =
+            emit_element_format(value, index, element_ty, ctx, current, registry, output);
+        current = after;
+        acc = emit_concat(acc, piece, ctx, current);
     }
-    let close = emit_string_const(")".to_string(), ctx, block);
-    emit_concat(acc, close, ctx, block)
+    let close = emit_string_const(")".to_string(), ctx, current);
+    (emit_concat(acc, close, ctx, current), current)
 }
 
+/// Render element `index` through its own `format`. Function
+/// elements have none and render as `"..."`, matching derived `Debug`.
 fn emit_element_format(
     base: ValueId,
     index: usize,
@@ -287,10 +240,13 @@ fn emit_element_format(
     block: IRBlockId,
     registry: &GlobalRegistry,
     output: &mut LowerOutput,
-) -> ValueId {
+) -> (ValueId, IRBlockId) {
     let structural_element = peel_alias(element_ty, registry);
-    if is_opaque_element(&structural_element) {
-        return emit_string_const("...".to_string(), ctx, block);
+    if matches!(
+        &structural_element,
+        ResolvedType::Anonymous(AnonymousKind::Function { .. })
+    ) {
+        return (emit_string_const("...".to_string(), ctx, block), block);
     }
     let extracted = emit_tuple_get(
         base,
@@ -301,22 +257,35 @@ fn emit_element_format(
         registry,
         output,
     );
-    if let ResolvedType::Anonymous(AnonymousKind::Tuple { elements }) = &structural_element {
-        return emit_tuple_format(extracted, elements, ctx, block, registry, output);
+    match &structural_element {
+        ResolvedType::Anonymous(AnonymousKind::Tuple { elements }) => {
+            emit_tuple_format(extracted, elements, ctx, block, registry, output)
+        }
+        ResolvedType::Union(members) => {
+            let union_ty = ctx.type_of(extracted);
+            let subject = UnionSubject {
+                members,
+                ty: &union_ty,
+                value: extracted,
+            };
+            emit_union_format(subject, ctx, block, registry, output)
+        }
+        _ => {
+            let (callee, return_ty) =
+                conformance_method_symbol(&structural_element, "format", 1, registry, output);
+            let dest = ctx.fresh_value(return_ty);
+            ctx.cfg.append(
+                block,
+                IRInstruction::Call {
+                    dest,
+                    callee,
+                    args: vec![extracted],
+                },
+            );
+            ctx.mark_owned(dest);
+            (dest, block)
+        }
     }
-    let (callee, return_ty) =
-        conformance_method_symbol(&structural_element, "format", 1, registry, output);
-    let dest = ctx.fresh_value(return_ty);
-    ctx.cfg.append(
-        block,
-        IRInstruction::Call {
-            dest,
-            callee,
-            args: vec![extracted],
-        },
-    );
-    ctx.mark_owned(dest);
-    dest
 }
 
 /// `Concat` copies both operands, so owned intermediates are dead
@@ -338,113 +307,9 @@ fn emit_concat(lhs: ValueId, rhs: ValueId, ctx: &mut FnLowerCtx, block: IRBlockI
     dest
 }
 
-/// Element-wise short-circuit equality. Elements chain through
-/// `CondBranch`es into a shared merge block (false exits early), so
-/// element `equals?` calls after a mismatch never run. Typecheck rejects
-/// tuple equality on shapes with opaque elements, so every element
-/// is comparable here.
-fn emit_tuple_eq(
-    lhs: ValueId,
-    rhs: ValueId,
-    elements: &[ResolvedType],
-    ctx: &mut FnLowerCtx,
-    block: IRBlockId,
-    registry: &GlobalRegistry,
-    output: &mut LowerOutput,
-) -> (ValueId, IRBlockId) {
-    let comparable: Vec<(usize, ResolvedType)> = elements
-        .iter()
-        .enumerate()
-        .map(|(index, ty)| {
-            let structural = peel_alias(ty, registry);
-            assert!(
-                !is_opaque_element(&structural),
-                "IR lower: tuple `equals?` reached an opaque element `{ty:?}` \
-                 (typecheck resolve invariant violation)",
-            );
-            (index, structural)
-        })
-        .collect();
-    let merge_block = ctx.fresh_block("tuple_eq_merge");
-    let result = ctx.declare_merge_param(merge_block, IRType::Bool);
-    let mut current = block;
-    let last = comparable.len() - 1;
-    for (position, (index, element_ty)) in comparable.into_iter().enumerate() {
-        let (cond, after) = emit_element_eq(
-            (lhs, rhs),
-            index,
-            &element_ty,
-            ctx,
-            current,
-            registry,
-            output,
-        );
-        current = after;
-        if position == last {
-            ctx.cfg.set_terminator(
-                current,
-                IRTerminator::Branch(BranchTarget::with_args(merge_block, vec![cond])),
-            );
-        } else {
-            let next = ctx.fresh_block("tuple_eq_next");
-            let short_circuit = ctx.fresh_value(IRType::Bool);
-            ctx.cfg.append(
-                current,
-                IRInstruction::Const {
-                    dest: short_circuit,
-                    value: ConstValue::Bool(false),
-                },
-            );
-            ctx.cfg.set_terminator(
-                current,
-                IRTerminator::CondBranch {
-                    cond,
-                    else_target: BranchTarget::with_args(merge_block, vec![short_circuit]),
-                    then_target: BranchTarget::to(next),
-                },
-            );
-            current = next;
-        }
-    }
-    (result, merge_block)
-}
-
-fn emit_element_eq(
-    (lhs, rhs): (ValueId, ValueId),
-    index: usize,
-    element_ty: &ResolvedType,
-    ctx: &mut FnLowerCtx,
-    block: IRBlockId,
-    registry: &GlobalRegistry,
-    output: &mut LowerOutput,
-) -> (ValueId, IRBlockId) {
-    let lhs_element = emit_tuple_get(lhs, index, element_ty, ctx, block, registry, output);
-    let rhs_element = emit_tuple_get(rhs, index, element_ty, ctx, block, registry, output);
-    if let ResolvedType::Anonymous(AnonymousKind::Tuple { elements }) = element_ty {
-        return emit_tuple_eq(
-            lhs_element,
-            rhs_element,
-            elements,
-            ctx,
-            block,
-            registry,
-            output,
-        );
-    }
-    let (callee, return_ty) = conformance_method_symbol(element_ty, "equals?", 2, registry, output);
-    let dest = ctx.fresh_value(return_ty);
-    ctx.cfg.append(
-        block,
-        IRInstruction::Call {
-            dest,
-            callee,
-            args: vec![lhs_element, rhs_element],
-        },
-    );
-    (dest, block)
-}
-
-fn emit_tuple_get(
+/// Project element `index` of a tuple value. Shared with the
+/// structural equality lowering in [`super::equality`].
+pub(super) fn emit_tuple_get(
     base: ValueId,
     index: usize,
     element_ty: &ResolvedType,

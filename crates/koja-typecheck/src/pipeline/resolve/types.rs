@@ -16,9 +16,7 @@ use super::ops::is_primitive_equality_eligible;
 use crate::pipeline::aliases::rewrite_through_aliases;
 use crate::pipeline::lift_signatures::ResolutionScope;
 use crate::pipeline::unify::{Substitution, substitute};
-use crate::registry::{
-    GlobalKind, GlobalRegistry, RegistryEntry, ResolvedProtocolBound, ResolvedVariantData,
-};
+use crate::registry::{GlobalKind, GlobalRegistry, RegistryEntry, ResolvedProtocolBound};
 
 /// Whether `path` resolves to a registered struct or builtin. Lets
 /// the resolver tell a nested struct from a struct-shaped enum
@@ -442,9 +440,9 @@ pub(super) fn verify_bounds(
 /// discharge against the full instantiation (a concrete
 /// `impl Render for Bag<Int>` satisfies `T: Render` for `Bag<Int>`
 /// but not `Bag<String>`, and a conditional impl checks its own
-/// bounds recursively). Tuples have structural `Debug` and
-/// `Equality`. Type-param heads compare their declared bounds.
-/// Other anonymous shapes remain deferred.
+/// bounds recursively). Tuples, functions, and unions have
+/// structural conformances. Type-param heads compare their declared
+/// bounds. Unresolved heads stay deferred.
 fn protocol_bound_satisfied(
     inferred: &ResolvedType,
     bound: &ResolvedProtocolBound,
@@ -460,18 +458,16 @@ fn protocol_bound_satisfied(
             resolution: Resolution::TypeParam { .. },
             ..
         }
-        | ResolvedType::Anonymous(AnonymousKind::Tuple { .. }) => {
-            Some(ctx.registry.bound_satisfied(&peeled, bound, ctx.overlay))
-        }
+        | ResolvedType::Anonymous(_)
+        | ResolvedType::Union(_) => Some(ctx.registry.bound_satisfied(&peeled, bound, ctx.overlay)),
         _ => None,
     }
 }
 
 /// Whether `ty` can discharge `Equality`, instantiation-aware.
 /// Primitives fast-path, everything else consults the conformance
-/// records, so a conditional `impl Equality for List<T: Equality>`
-/// makes `List<fn () -> Int>` fail here even though the `equals?`
-/// method exists on `List`.
+/// records (structural shapes answer through
+/// `GlobalRegistry::bound_satisfied`).
 pub(super) fn type_supports_equality(ty: &ResolvedType, ctx: BoundContext<'_>) -> bool {
     let structural = peel_alias(ty, ctx.registry);
     if is_primitive_equality_eligible(&structural, ctx.registry) {
@@ -488,61 +484,6 @@ pub(super) fn type_supports_equality(ty: &ResolvedType, ctx: BoundContext<'_>) -
         },
         ctx.overlay,
     )
-}
-
-/// Why a struct or enum instantiation is not `Equality`: the first
-/// field or variant payload whose (substituted) type fails the bound,
-/// rendered as a hint for the `==` diagnostic. `None` when the type
-/// has no non-conforming component (a hand-written impl is simply
-/// missing) or is not a struct / enum.
-pub(super) fn equality_blocker_hint(ty: &ResolvedType, ctx: BoundContext<'_>) -> Option<String> {
-    let structural = peel_alias(ty, ctx.registry);
-    let ResolvedType::Named {
-        resolution: Resolution::Global(target_id),
-        type_args,
-    } = &structural
-    else {
-        return None;
-    };
-    let entry = ctx.registry.get(*target_id)?;
-    let components: Vec<(String, &ResolvedType)> = match &entry.kind {
-        GlobalKind::Struct(Some(def)) => def
-            .fields
-            .iter()
-            .map(|field| (format!("field `{}`", field.name), &field.ty))
-            .collect(),
-        GlobalKind::Enum(Some(def)) => def
-            .variants
-            .iter()
-            .flat_map(|variant| match &variant.data {
-                ResolvedVariantData::Struct(fields) => fields
-                    .iter()
-                    .map(|field| {
-                        (
-                            format!("field `{}` of `{}`", field.name, variant.name),
-                            &field.ty,
-                        )
-                    })
-                    .collect::<Vec<_>>(),
-                ResolvedVariantData::Tuple(types) => types
-                    .iter()
-                    .map(|payload| (format!("the payload of `{}`", variant.name), payload))
-                    .collect(),
-                ResolvedVariantData::Unit => Vec::new(),
-            })
-            .collect(),
-        _ => return None,
-    };
-    let substitution = Substitution::from_args(*target_id, type_args);
-    components.into_iter().find_map(|(label, component)| {
-        let instantiated = substitute(component, &substitution);
-        (!type_supports_equality(&instantiated, ctx)).then(|| {
-            format!(
-                "{label} has type `{}`, which does not implement `Equality`",
-                display_resolution(&instantiated, ctx.registry),
-            )
-        })
-    })
 }
 
 /// The `Global.Equality` protocol's registry id, absent only

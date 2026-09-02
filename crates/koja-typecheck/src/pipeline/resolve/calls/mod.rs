@@ -22,7 +22,7 @@
 
 mod bounded;
 mod methods;
-mod tuples;
+mod structural;
 
 use koja_ast::ast::{Arg, Diagnostic, Expr, ExprKind, Literal};
 use koja_ast::identifier::{
@@ -37,6 +37,7 @@ use methods::{
     diagnose_unmet_conformance, dispatch_mismatch_message, function_signature,
     infer_method_call_type_args, method_lookup_message, seed_impl_args_subst, seed_receiver_subst,
 };
+use structural::{StructuralCall, resolve_structural_method_call};
 
 use crate::pipeline::unify::{Conflict, Substitution, substitute};
 use crate::registry::{
@@ -437,13 +438,17 @@ pub(super) fn resolve_method_call(
         };
         return MethodCallOutcome::Method(resolve_bounded_method_call(site, resolver, diagnostics));
     }
-    if matches!(method_receiver, MethodReceiver::Tuple) {
-        return MethodCallOutcome::Method(tuples::resolve_tuple_method_call(
-            receiver,
-            method,
+    if let MethodReceiver::Structural(shape) = method_receiver {
+        let site = StructuralCall {
             args,
-            target,
             call_span,
+            method,
+            receiver,
+            shape,
+            target,
+        };
+        return MethodCallOutcome::Method(resolve_structural_method_call(
+            site,
             resolver,
             diagnostics,
         ));
@@ -451,7 +456,9 @@ pub(super) fn resolve_method_call(
 
     let struct_id = match method_receiver {
         MethodReceiver::Static { struct_id } | MethodReceiver::Instance { struct_id } => struct_id,
-        MethodReceiver::Bounded { .. } | MethodReceiver::Tuple => unreachable!("handled above"),
+        MethodReceiver::Bounded { .. } | MethodReceiver::Structural(_) => {
+            unreachable!("handled above")
+        }
     };
     let Some(struct_entry) = resolver.registry.get(struct_id) else {
         return MethodCallOutcome::Method(ResolvedType::unresolved());

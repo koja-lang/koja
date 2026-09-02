@@ -30,11 +30,16 @@ use super::{require_supported_type, seal_panic};
 pub(super) fn seal_closure_decls(pkg: &IRPackage) {
     for function in pkg.functions.values() {
         match &function.kind {
-            // Both closure-shaped kinds read captures via `LoadCapture`
+            // Every closure-shaped kind reads captures via `LoadCapture`
             // keyed into `env_layout`: the user-visible body and the
-            // synthesized `$drop_env$` capture-release glue.
+            // synthesized `$drop_env$` / `$eq_env$` glue.
             FunctionKind::Closure { env_layout } | FunctionKind::DropClosureGlue { env_layout } => {
-                seal_closure_function(function, env_layout)
+                seal_closure_function(function, env_layout);
+                forbid_loadcaptureof_in(function);
+            }
+            FunctionKind::EqClosureGlue { env_layout } => {
+                seal_closure_function(function, env_layout);
+                seal_eq_glue_shape(function, env_layout);
             }
             // `CopyClosureGlue` is env-keyed too, but its body is
             // backend-synthesized (empty blocks), so there is no IR
@@ -49,16 +54,16 @@ pub(super) fn seal_closure_decls(pkg: &IRPackage) {
             | FunctionKind::Regular
             | FunctionKind::SpawnWrapper { .. } => {
                 forbid_loadcapture_in(function);
+                forbid_loadcaptureof_in(function);
             }
         }
     }
 }
 
 /// Per-closure body invariants: every `env_layout` slot is in the
-/// supported set, and every `LoadCapture` keyed into that layout
-/// is in range with a matching `ty`. Also enforces unique capture
-/// reads at the layout level (a layout slot may be read many
-/// times, that's fine. What's not fine is an out-of-range index).
+/// supported set, and every `LoadCapture` / `LoadCaptureOf` keyed
+/// into that layout is in range with a matching `ty`. A layout slot
+/// may be read many times. An out-of-range index is the violation.
 fn seal_closure_function(function: &IRFunction, env_layout: &[IRType]) {
     let owner = format!("closure `{}`", function.symbol);
     for (index, ty) in env_layout.iter().enumerate() {
@@ -66,29 +71,56 @@ fn seal_closure_function(function: &IRFunction, env_layout: &[IRType]) {
     }
     for block in &function.blocks {
         for inst in &block.instructions {
-            if let IRInstruction::LoadCapture {
-                capture_index, ty, ..
-            } = inst
-            {
-                let Some(declared) = env_layout.get(*capture_index as usize) else {
-                    seal_panic(&format!(
-                        "{owner} block {} reads capture #{capture_index}, but env_layout has \
-                         only {count} slot(s)",
-                        block.id,
-                        count = env_layout.len(),
-                    ));
-                };
-                if declared != ty {
-                    seal_panic(&format!(
-                        "{owner} block {}: LoadCapture #{capture_index} carries ty `{got:?}` \
-                         but env_layout[{capture_index}] is `{expected:?}`",
-                        block.id,
-                        got = ty,
-                        expected = declared,
-                    ));
-                }
+            let (label, capture_index, ty) = match inst {
+                IRInstruction::LoadCapture {
+                    capture_index, ty, ..
+                } => ("LoadCapture", capture_index, ty),
+                IRInstruction::LoadCaptureOf {
+                    capture_index, ty, ..
+                } => ("LoadCaptureOf", capture_index, ty),
+                _ => continue,
+            };
+            let Some(declared) = env_layout.get(*capture_index as usize) else {
+                seal_panic(&format!(
+                    "{owner} block {} reads capture #{capture_index}, but env_layout has \
+                     only {count} slot(s)",
+                    block.id,
+                    count = env_layout.len(),
+                ));
+            };
+            if declared != ty {
+                seal_panic(&format!(
+                    "{owner} block {}: {label} #{capture_index} carries ty `{got:?}` \
+                     but env_layout[{capture_index}] is `{expected:?}`",
+                    block.id,
+                    got = ty,
+                    expected = declared,
+                ));
             }
         }
+    }
+}
+
+/// `$eq_env$` takes exactly one param, the other closure as a
+/// function value, and answers `Bool`.
+fn seal_eq_glue_shape(function: &IRFunction, env_layout: &[IRType]) {
+    let owner = format!("eq glue `{}`", function.symbol);
+    if env_layout.is_empty() {
+        seal_panic(&format!(
+            "{owner} has an empty env_layout (captureless bodies register no eq glue)"
+        ));
+    }
+    match function.params.as_slice() {
+        [other] if matches!(other.ty, IRType::Function { .. }) => {}
+        params => seal_panic(&format!(
+            "{owner} must take one `IRType::Function` param, got {params:?}"
+        )),
+    }
+    if function.return_type != IRType::Bool {
+        seal_panic(&format!(
+            "{owner} must return Bool, got `{:?}`",
+            function.return_type
+        ));
     }
 }
 
@@ -103,6 +135,23 @@ fn forbid_loadcapture_in(function: &IRFunction) {
                 seal_panic(&format!(
                     "{owner} block {} emits LoadCapture #{capture_index} but the function is \
                      not a closure body (only `FunctionKind::Closure` admits captures)",
+                    block.id,
+                ));
+            }
+        }
+    }
+}
+
+/// `LoadCaptureOf` reads another closure's env against the enclosing
+/// glue's own `env_layout`, so only `$eq_env$` bodies may emit it.
+fn forbid_loadcaptureof_in(function: &IRFunction) {
+    let owner = format!("function `{}`", function.symbol);
+    for block in &function.blocks {
+        for inst in &block.instructions {
+            if let IRInstruction::LoadCaptureOf { capture_index, .. } = inst {
+                seal_panic(&format!(
+                    "{owner} block {} emits LoadCaptureOf #{capture_index} but only \
+                     `FunctionKind::EqClosureGlue` bodies read another closure's env",
                     block.id,
                 ));
             }
@@ -226,6 +275,7 @@ fn kind_label(kind: &FunctionKind) -> &'static str {
         FunctionKind::DeepCopyGlue => "DeepCopyGlue",
         FunctionKind::DropClosureGlue { .. } => "DropClosureGlue",
         FunctionKind::DropGlue => "DropGlue",
+        FunctionKind::EqClosureGlue { .. } => "EqClosureGlue",
         FunctionKind::Extern(_) => "Extern",
         FunctionKind::Intrinsic(_) => "Intrinsic",
         FunctionKind::ProcessEntryWrapper { .. } => "ProcessEntryWrapper",

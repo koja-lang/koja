@@ -2,7 +2,7 @@
 //! Bare `impl Type` is rejected with a migration diagnostic and
 //! recovered as [`ExtendBlock`] so the rest of the file still parses.
 
-use koja_ast::ast::{ExtendBlock, ImplBlock, ImplMember, ImplOrigin, Item, Visibility};
+use koja_ast::ast::{ExtendBlock, ImplBlock, ImplMember, Item, Visibility};
 use koja_ast::token::TokenKind;
 
 use crate::decl::struct_decl::TypeBodyMember;
@@ -38,7 +38,6 @@ impl Parser {
         self.expect(&TokenKind::End);
 
         Item::Impl(ImplBlock {
-            origin: ImplOrigin::Explicit,
             target,
             target_bounds,
             trait_expr: first_type,

@@ -534,42 +534,6 @@ impl GlobalRegistry {
         None
     }
 
-    /// Drop every conformance record of `target_id` to `protocol_id`.
-    /// Lift calls this when it retracts a derived impl whose target
-    /// cannot conform. Silently a no-op on entries without a
-    /// conformance map.
-    pub(crate) fn remove_conformances(
-        &mut self,
-        target_id: GlobalRegistryId,
-        protocol_id: GlobalRegistryId,
-    ) {
-        let Some(entry) = self.entries.get_mut(&target_id) else {
-            return;
-        };
-        let conformances = match &mut entry.kind {
-            GlobalKind::Builtin(def) => &mut def.conformances,
-            GlobalKind::Struct(Some(def)) => &mut def.conformances,
-            GlobalKind::Enum(Some(def)) => &mut def.conformances,
-            _ => return,
-        };
-        conformances.remove(&protocol_id);
-    }
-
-    /// Unregister one function identity, the inverse of
-    /// [`Self::insert_function`]. Lift calls this when it retracts a
-    /// derived impl, so the method never reaches resolve or IR.
-    pub(crate) fn remove_function(&mut self, identifier: &Identifier, arity: usize) {
-        let Some(names) = self.by_identifier.get_mut(identifier) else {
-            return;
-        };
-        if let Some(id) = names.functions.remove(&arity) {
-            self.entries.remove(&id);
-        }
-        if names.functions.is_empty() && names.non_function.is_none() {
-            self.by_identifier.remove(identifier);
-        }
-    }
-
     /// The conformance record of `target_id` to `protocol_id` that
     /// covers the `target_args` instantiation. `Concrete` covers
     /// exactly its recorded args, `Parameterized` covers every
@@ -685,21 +649,25 @@ impl GlobalRegistry {
             ResolvedType::Named {
                 resolution: Resolution::Global(target_id),
                 type_args,
-            } => self
-                .lookup_conformance_with(
+            } => {
+                if let Some(expansion) = self.alias_expansion(*target_id) {
+                    return self.bound_satisfied(&expansion, bound, overlay);
+                }
+                self.lookup_conformance_with(
                     *target_id,
                     bound.protocol_id,
                     type_args,
                     overlay,
                     Some(&bound.args),
                 )
-                .is_some(),
+                .is_some()
+            }
             ResolvedType::Named {
                 resolution: Resolution::TypeParam { owner, index },
                 ..
             } => self.type_param_bound_granted(*owner, *index, bound, overlay),
-            ResolvedType::Anonymous(AnonymousKind::Tuple { elements }) => {
-                self.tuple_bound_satisfied(elements, bound, overlay)
+            ResolvedType::Anonymous(_) | ResolvedType::Union(_) => {
+                self.structural_bound_satisfied(ty, bound, overlay)
             }
             _ => false,
         }
@@ -739,12 +707,15 @@ impl GlobalRegistry {
             })
     }
 
-    /// Structural tuple conformance: `Debug` unconditionally
-    /// (opaque elements render as `"..."`), `Equality` when every
-    /// element satisfies it, nothing else.
-    fn tuple_bound_satisfied(
+    /// Conformance for shapes with no impl target: tuples, function
+    /// types, and anonymous unions. All three are `Debug` (functions
+    /// render as `"..."`). Tuples and unions are `Equality` when every
+    /// element / member is, functions by site plus captures. Unions
+    /// are also `Hash` when every member is. Functions never hash:
+    /// the type cannot see its captures.
+    fn structural_bound_satisfied(
         &self,
-        elements: &[ResolvedType],
+        ty: &ResolvedType,
         bound: &ResolvedProtocolBound,
         overlay: Option<&BoundOverlay>,
     ) -> bool {
@@ -757,11 +728,18 @@ impl GlobalRegistry {
         if entry.identifier.package() != "Global" || entry.identifier.path().len() != 1 {
             return false;
         }
-        match entry.identifier.last() {
-            "Debug" => true,
-            "Equality" => elements
+        let all_satisfy = |parts: &[ResolvedType]| {
+            parts
                 .iter()
-                .all(|element| self.bound_satisfied(element, bound, overlay)),
+                .all(|part| self.bound_satisfied(part, bound, overlay))
+        };
+        match (entry.identifier.last(), ty) {
+            ("Debug", _) => true,
+            ("Equality", ResolvedType::Anonymous(AnonymousKind::Function { .. })) => true,
+            ("Equality", ResolvedType::Anonymous(AnonymousKind::Tuple { elements })) => {
+                all_satisfy(elements)
+            }
+            ("Equality" | "Hash", ResolvedType::Union(members)) => all_satisfy(members),
             _ => false,
         }
     }

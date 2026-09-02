@@ -8,10 +8,7 @@ use koja_typecheck::CheckedProgram;
 
 mod common;
 
-use common::{
-    PACKAGE, check_multi_file, global_id, registry_id, typecheck_script as typecheck,
-    typecheck_script_fail,
-};
+use common::{PACKAGE, check_multi_file, global_id, registry_id, typecheck_script as typecheck};
 
 fn equality_impl<'a>(checked: &'a CheckedProgram, type_name: &str) -> Option<&'a ImplBlock> {
     let package = checked
@@ -199,7 +196,7 @@ fn struct_fields_synthesize_conjunction() {
 }
 
 #[test]
-fn generic_derive_bounds_every_type_param_by_equality() {
+fn generic_derive_is_unconditional() {
     let source = "
         struct Pair<A, B>
           first: A
@@ -211,42 +208,18 @@ fn generic_derive_bounds_every_type_param_by_equality() {
 
     let checked = typecheck(&dedent(source));
     let block = equality_impl(&checked, "Pair").expect("Pair should derive Equality");
-    let bounds: Vec<(&str, Vec<Option<&str>>)> = block
-        .target_bounds
-        .iter()
-        .map(|param| {
-            (
-                param.name.as_str(),
-                param.bounds.iter().map(type_expr_head).collect(),
-            )
-        })
-        .collect();
-    assert_eq!(
-        bounds,
-        vec![("A", vec![Some("Equality")]), ("B", vec![Some("Equality")])]
-    );
+    assert!(block.target_bounds.is_empty());
 }
 
 #[test]
-fn function_field_retracts_the_derived_impl() {
+fn function_fields_derive_equality() {
     let source = "
         struct Holder
           hook: fn (Int) -> Int
           n: Int
         end
 
-        1
-        ";
-
-    let checked = typecheck(&dedent(source));
-    assert!(!derives_equality(&checked, "Holder"));
-    assert!(equality_impl(&checked, "Holder").is_none());
-}
-
-#[test]
-fn function_inside_generic_field_retracts_the_derived_impl() {
-    let source = "
-        struct Holder
+        struct Optional
           hook: Option<fn (Int) -> Int>
         end
 
@@ -258,32 +231,14 @@ fn function_inside_generic_field_retracts_the_derived_impl() {
         ";
 
     let checked = typecheck(&dedent(source));
-    assert!(!derives_equality(&checked, "Holder"));
-    assert!(!derives_equality(&checked, "Registry"));
+    assert!(derives_equality(&checked, "Holder"));
+    assert!(derives_equality(&checked, "Optional"));
+    assert!(derives_equality(&checked, "Registry"));
+    assert_eq!(count_eq_calls(equality_body(&checked, "Holder")), 2);
 }
 
 #[test]
-fn retraction_propagates_to_containing_types() {
-    let source = "
-        struct Inner
-          f: fn (Int) -> Int
-        end
-
-        struct Outer
-          inner: Inner
-          n: Int
-        end
-
-        1
-        ";
-
-    let checked = typecheck(&dedent(source));
-    assert!(!derives_equality(&checked, "Inner"));
-    assert!(!derives_equality(&checked, "Outer"));
-}
-
-#[test]
-fn function_payload_retracts_the_derived_enum_impl() {
+fn function_payload_derives_enum_equality() {
     let source = "
         enum Event
           Hook(fn (Int) -> Int)
@@ -294,59 +249,47 @@ fn function_payload_retracts_the_derived_enum_impl() {
         ";
 
     let checked = typecheck(&dedent(source));
-    assert!(!derives_equality(&checked, "Event"));
+    assert!(derives_equality(&checked, "Event"));
 }
 
 #[test]
-fn conforming_fields_keep_the_derived_impl() {
+fn union_field_derives_equality() {
     let source = "
-        struct Point
-          x: Int
-          tags: List<String>
-          label: Option<String>
-          pair: (Int, String)
+        struct Cat
+          name: String
+        end
+
+        struct Dog
+          name: String
+        end
+
+        type Pet = Cat | Dog
+
+        struct Owner
+          pet: Pet
         end
 
         1
         ";
 
     let checked = typecheck(&dedent(source));
-    assert!(derives_equality(&checked, "Point"));
+    assert!(derives_equality(&checked, "Owner"));
+    assert_eq!(count_eq_calls(equality_body(&checked, "Owner")), 1);
 }
 
 #[test]
-fn equality_on_retracted_type_names_the_blocking_field() {
+fn equality_on_function_holding_types_resolves_to_bool() {
     let source = "
         struct Holder
           hook: Option<fn (Int) -> Int>
         end
 
-        fn same(a: Holder, b: Holder) -> Bool
-          a == b
-        end
-
-        1
-        ";
-
-    let failure = typecheck_script_fail(&dedent(source));
-    let diagnostic = failure
-        .diagnostics
-        .iter()
-        .find(|d| d.message.contains("does not implement `Equality`"))
-        .expect("== on a retracted type should be rejected");
-    assert_eq!(
-        diagnostic.hint.as_deref(),
-        Some(
-            "field `hook` has type `Option<fn (Int) -> Int>`, which does not implement `Equality`"
-        ),
-    );
-}
-
-#[test]
-fn equality_on_generic_instantiation_names_the_payload() {
-    let source = "
         fn double(x: Int) -> Int
           x * 2
+        end
+
+        fn same(a: Holder, b: Holder) -> Bool
+          a == b
         end
 
         a: Option<fn (Int) -> Int> = Option.Some(&double/1)
@@ -354,34 +297,32 @@ fn equality_on_generic_instantiation_names_the_payload() {
         a == b
         ";
 
-    let failure = typecheck_script_fail(&dedent(source));
-    let diagnostic = failure
-        .diagnostics
-        .iter()
-        .find(|d| d.message.contains("does not implement `Equality`"))
-        .expect("== on Option<fn> should be rejected");
-    assert_eq!(
-        diagnostic.hint.as_deref(),
-        Some(
-            "the payload of `Some` has type `fn (Int) -> Int`, which does not implement `Equality`"
-        ),
-    );
+    typecheck(&dedent(source));
 }
 
 #[test]
 fn conditional_protocol_method_is_unavailable_on_unmet_instantiation() {
     let source = "
-        fn double(x: Int) -> Int
-          x * 2
+        protocol Show
+          fn show(self) -> String
         end
 
-        a: List<fn (Int) -> Int> = [&double/1]
-        b: List<fn (Int) -> Int> = [&double/1]
-        a.equals?(b)
+        struct Box<T>
+          value: T
+        end
+
+        impl Show for Box<T: Show>
+          fn show(self) -> String
+            self.value.show()
+          end
+        end
+
+        b = Box{value: 1}
+        b.show()
         ";
 
     common::assert_script_fails_with(
         source,
-        &["`List<fn (Int) -> Int>` does not implement `Equality`, so `equals?` is unavailable"],
+        &["`Box<Int>` does not implement `Show`, so `show` is unavailable"],
     );
 }

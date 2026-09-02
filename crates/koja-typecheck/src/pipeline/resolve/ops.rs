@@ -31,8 +31,7 @@ use super::coercion::{Compatible, check_compatible, coercion_target_mut};
 use super::ctx::Resolver;
 use super::expr::resolve_expr;
 use super::types::{
-    display_resolution, equality_blocker_hint, is_primitive, peel_alias, type_supports_equality,
-    types_equivalent,
+    display_resolution, is_primitive, peel_alias, type_supports_equality, types_equivalent,
 };
 use crate::registry::{GlobalKind, GlobalRegistry};
 
@@ -44,8 +43,8 @@ const EQ_METHOD: &str = "equals?";
 /// User struct / enum operands rewrite to `lhs.equals?(rhs)` (wrapped in
 /// `not …` for `!=`) and re-resolve through the normal method-call
 /// path. `derive_equality` supplies an `Equality` impl for every user
-/// type whose fields all conform, and [`diagnose_equality_unsupported`]
-/// rejects the rest before the rewrite.
+/// type without a hand-written one, and [`diagnose_equality_unsupported`]
+/// rejects instantiations a hand-written conditional impl leaves out.
 pub(super) fn resolve_equality_op_expr(
     expr: &mut Expr,
     resolver: &mut Resolver<'_>,
@@ -96,11 +95,11 @@ pub(super) fn resolve_equality_op_expr(
 
 /// `==` on a nominal operand requires its full instantiation to
 /// satisfy `Equality`, not just an `equals?` method to exist. Catches
-/// conditional conformances (`List<fn () -> Int>` carries `List`'s
-/// `equals?` but no `Equality` fact), which the method-call rewrite
-/// alone would accept and monomorphization would then choke on.
-/// Non-nominal operands keep their existing rewrite-path
-/// diagnostics.
+/// the few builtins without one (`CPtr`, `Unit`) and any hand-written
+/// conditional impl, which the method-call rewrite alone would accept
+/// and monomorphization would then choke on. Structural operands
+/// (tuples, functions, unions) keep their rewrite-path diagnostics,
+/// and unresolved operands already reported.
 fn diagnose_equality_unsupported(
     operand: &Expr,
     resolver: &Resolver<'_>,
@@ -117,15 +116,13 @@ fn diagnose_equality_unsupported(
     if type_supports_equality(&structural, resolver.bound_context()) {
         return false;
     }
-    let message = format!(
-        "`{}` does not implement `Equality`, so `==` / `!=` cannot compare it",
-        display_resolution(&operand.resolution, resolver.registry),
-    );
-    let diagnostic = match equality_blocker_hint(&structural, resolver.bound_context()) {
-        Some(hint) => Diagnostic::error_with_hint(message, hint, operand.span),
-        None => Diagnostic::error(message, operand.span),
-    };
-    diagnostics.push(diagnostic);
+    diagnostics.push(Diagnostic::error(
+        format!(
+            "`{}` does not implement `Equality`, so `==` / `!=` cannot compare it",
+            display_resolution(&operand.resolution, resolver.registry),
+        ),
+        operand.span,
+    ));
     true
 }
 

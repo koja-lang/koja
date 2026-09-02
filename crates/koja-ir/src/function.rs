@@ -255,6 +255,22 @@ pub enum FunctionKind {
     DropClosureGlue {
         env_layout: Vec<IRType>,
     },
+    /// Synthesized per-closure-body capture-equality glue
+    /// (`<body>.$eq_env$`). Its address is stamped into the env
+    /// block's `eq_fn` header word by [`IRInstruction::MakeClosure`],
+    /// and [`IRInstruction::ClosureEquals`] calls it once both sides
+    /// carry the same `site_id`. Shape is closure-like (implicit
+    /// `env_ptr` at LLVM position 0) with one user-visible param, the
+    /// other closure as an [`IRType::Function`] fat pointer, and a
+    /// `Bool` return. The body reads each capture via
+    /// [`IRInstruction::LoadCapture`] (own env) and
+    /// [`IRInstruction::LoadCaptureOf`] (the other env) and
+    /// short-circuit-conjoins their equality. Real IR, so `elaborate`
+    /// and both backends run it like a [`Self::Closure`] body.
+    /// Captureless bodies register none (null `eq_fn`).
+    EqClosureGlue {
+        env_layout: Vec<IRType>,
+    },
     /// Synthesized per-type drop glue (`<T>.$drop$`). The drop analog
     /// of [`Self::CloneGlue`]. It releases every heap-managed field /
     /// payload / element of `params[0].ty`, then frees any collection
@@ -554,6 +570,19 @@ pub enum IRInstruction {
         source: ValueId,
         ty: IRType,
     },
+    /// `dest: Bool = lhs == rhs` for two closure values of the same
+    /// [`IRType::Function`] `ty`. Two closures are equal when they
+    /// were built from the same function or closure expression and
+    /// their captures are equal. Backends compare the `site_id`
+    /// header words first, then call the env's `eq_fn`
+    /// ([`FunctionKind::EqClosureGlue`]) with `lhs`'s env and `rhs`.
+    /// A null `eq_fn` (captureless body) means equal sites suffice.
+    ClosureEquals {
+        dest: ValueId,
+        lhs: ValueId,
+        rhs: ValueId,
+        ty: IRType,
+    },
     /// `dest = lhs <> rhs` for the heap-payload family (`String`,
     /// `Binary`, `Bits`). Separate from [`Self::BinaryOp`] because
     /// the LLVM emission shape differs:
@@ -740,6 +769,17 @@ pub enum IRInstruction {
     /// captures are structurally read-only inside the body.
     LoadCapture {
         capture_index: u32,
+        dest: ValueId,
+        ty: IRType,
+    },
+    /// `dest = closure.env.<capture_index>`: read a capture out of
+    /// another closure value's env. Only valid inside a
+    /// [`FunctionKind::EqClosureGlue`] body, whose `other` parameter
+    /// is a closure built from the same body as the glue's own env,
+    /// so `capture_index` keys into the same `env_layout`.
+    LoadCaptureOf {
+        capture_index: u32,
+        closure: ValueId,
         dest: ValueId,
         ty: IRType,
     },
@@ -947,6 +987,7 @@ impl IRInstruction {
             | IRInstruction::Call { dest, .. }
             | IRInstruction::CallClosure { dest, .. }
             | IRInstruction::Clone { dest, .. }
+            | IRInstruction::ClosureEquals { dest, .. }
             | IRInstruction::Concat { dest, .. }
             | IRInstruction::Const { dest, .. }
             | IRInstruction::DeepCopy { dest, .. }
@@ -957,6 +998,7 @@ impl IRInstruction {
             | IRInstruction::FieldSet { dest, .. }
             | IRInstruction::IndirectPresent { dest, .. }
             | IRInstruction::LoadCapture { dest, .. }
+            | IRInstruction::LoadCaptureOf { dest, .. }
             | IRInstruction::LoadConst { dest, .. }
             | IRInstruction::LocalRead { dest, .. }
             | IRInstruction::MakeClosure { dest, .. }
@@ -993,9 +1035,9 @@ impl IRInstruction {
                 })
             }
             IRInstruction::BinaryMatch { subject, .. } => *subject == value,
-            IRInstruction::BinaryOp { lhs, rhs, .. } | IRInstruction::Concat { lhs, rhs, .. } => {
-                *lhs == value || *rhs == value
-            }
+            IRInstruction::BinaryOp { lhs, rhs, .. }
+            | IRInstruction::ClosureEquals { lhs, rhs, .. }
+            | IRInstruction::Concat { lhs, rhs, .. } => *lhs == value || *rhs == value,
             IRInstruction::Call { args, .. } => args.contains(&value),
             IRInstruction::CallClosure { args, callee, .. } => {
                 *callee == value || args.contains(&value)
@@ -1027,6 +1069,7 @@ impl IRInstruction {
             | IRInstruction::IndirectPresent { base, .. }
             | IRInstruction::TupleGet { base, .. } => *base == value,
             IRInstruction::FieldSet { base, value: v, .. } => *base == value || *v == value,
+            IRInstruction::LoadCaptureOf { closure, .. } => *closure == value,
             IRInstruction::MakeClosure { captures, .. } => captures.contains(&value),
             IRInstruction::ProcessExit { reason } => *reason == value,
             IRInstruction::Receive { after, .. } => {

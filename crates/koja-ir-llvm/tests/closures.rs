@@ -4,15 +4,17 @@
 //!
 //! - **Closure ABI**: `FunctionKind::Closure` bodies declare an
 //!   extra `ptr` parameter at LLVM position 0 (the env pointer).
-//! - **`MakeClosure`**: malloc the env block (or null for the
-//!   captureless adapter shape), store each capture, and pack the
-//!   `{fn_ptr, env_ptr}` fat pointer for downstream use.
+//! - **`MakeClosure`**: malloc the env block (or point at the body's
+//!   static immortal env for the captureless shape), store each
+//!   capture, and pack the `{fn_ptr, env_ptr}` fat pointer.
 //! - **`CallClosure`**: extract the fat-pointer fields and dispatch
 //!   indirectly, prepending the env pointer to user args.
 //! - **`LoadCapture`**: `getelementptr inbounds` into the body's env
 //!   block followed by a typed `load`.
+//! - **`ClosureEquals`**: compare env header site ids, then dispatch
+//!   the body's `$eq_env$` glue over the captures.
 //! - **Fn-as-value adapter** dispatches through the same fat-pointer
-//!   shape with a null env.
+//!   shape with the static env.
 //!
 //! Driven through script mode: the closures live in the top-level
 //! script body, which the backend lowers into the `__koja_user_main`
@@ -100,7 +102,7 @@ fn load_capture_indexes_through_env_struct() {
 }
 
 #[test]
-fn fn_as_value_wrapper_emits_make_closure_with_null_env() {
+fn fn_as_value_wrapper_emits_make_closure_with_static_env() {
     let source = "
         fn add(x: Int, y: Int) -> Int
           x + y
@@ -115,14 +117,47 @@ fn fn_as_value_wrapper_emits_make_closure_with_null_env() {
     let script = lower(&dedent(source));
     let ir_text = emit_script_llvm_ir(&script, APP_NAME).expect("emit_script_llvm_ir");
     // The wrapper body for `add` carries the closure ABI (env-first),
-    // and `MakeClosure` for the captureless shape stores null into
-    // the env slot.
+    // and `MakeClosure` for the captureless shape points at the body's
+    // static immortal env instead of allocating.
     assert_contains(&ir_text, "define i64 @\"TestApp.add/2__as_closure\"(ptr ");
     // `apply` is a regular function whose `f` parameter is the fat
     // pointer struct.
     assert_contains(&ir_text, "@\"TestApp.apply/3\"({ ptr, ptr }");
-    // The captureless wrapper stores `null` as the env slot.
-    assert_contains(&ir_text, "store ptr null,");
+    // The static env is a private constant with an immortal (negative)
+    // rc, null drop / copy / eq glue, and a nonzero site id.
+    assert_contains(
+        &ir_text,
+        "@\"TestApp.add/2__as_closure.$env$\" = private constant { i64, ptr, ptr, i64, ptr } { i64 -9223372036854775808, ptr null, ptr null, i64 ",
+    );
+}
+
+#[test]
+fn closure_equals_compares_site_ids_then_dispatches_eq_glue() {
+    let source = "
+        y = 10
+        f = fn (x: Int) -> Int
+          x + y
+        end
+        g = f
+        (f == g).print()
+        ";
+    let script = lower(&dedent(source));
+    let ir_text = emit_script_llvm_ir(&script, APP_NAME).expect("emit_script_llvm_ir");
+    // `ClosureEquals` loads both site ids out of the env headers and
+    // short-circuits on mismatch before calling the header's eq glue.
+    assert_contains(&ir_text, "closure_eq.same_site");
+    assert_contains(&ir_text, "closure_eq.captureless");
+    assert_contains(&ir_text, "closure_eq.captures_equal");
+    // The capturing body gets `$eq_env$` glue with the closure ABI:
+    // env-first, then the other closure as a fat pointer.
+    assert_contains(
+        &ir_text,
+        "define i1 @\"TestApp.__script_body__closure0.$eq_env$\"(ptr ",
+    );
+    assert_contains(&ir_text, "__script_body__closure0.env.site_id");
+    assert_contains(&ir_text, "__script_body__closure0.env.eq_fn");
+    // Inside the glue, `LoadCaptureOf` reads the other closure's env.
+    assert_contains(&ir_text, "capture_of.0");
 }
 
 #[test]

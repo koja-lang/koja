@@ -1,11 +1,12 @@
-//! Regression coverage for the opaque-receiver shortcut in
+//! Regression coverage for structural `Debug` receivers in
 //! [`koja_ir::lower::calls::lower_method_call`]. When a bounded
 //! `Debug.{format, print, inspect}` call's receiver, post
-//! monomorphic substitution, resolves to an anonymous type
-//! ([`ResolvedType::Union`] or
-//! [`ResolvedType::Anonymous(AnonymousKind::Function)`]), the call
-//! emits a constant `"..."` placeholder instead of routing through
-//! `receiver_struct_id`.
+//! monomorphic substitution, resolves to a type with no nominal
+//! `format`, the call expands inline instead of routing through
+//! `receiver_struct_id`: a union dispatches on its tag to the carried
+//! member's `format`, a function value renders as the literal
+//! `"..."` (mirroring `derive_debug`'s opaque-field rule at the AST
+//! layer).
 //!
 //! This guards the bug originally hit through the stdlib's (since
 //! removed) parametric `impl Debug for Pair<A, B>`, whose body calls
@@ -16,12 +17,6 @@
 //! value, hence the panic we hit when loading `Net.tcp.koja`'s
 //! `Process<TCPServerConfig, TCPServerMsg | IOReady, String>` impl.
 //! The fixtures below declare their own equivalent parametric impl.
-//!
-//! The behavioral contract mirrors `derive_debug`'s opaque-field
-//! rule at the AST layer
-//! ([`koja_typecheck::pipeline::synthesize::derive_debug::is_opaque_type`]),
-//! where anonymous types render as the literal `"..."`. Keep the
-//! two layers in sync.
 
 use koja_ir::{ConstValue, IRFunction, IRInstruction};
 
@@ -62,12 +57,13 @@ fn collect_string_consts(function: &IRFunction) -> Vec<String> {
 }
 
 #[test]
-fn pair_of_union_format_substitutes_to_opaque_placeholder() {
+fn pair_of_union_format_dispatches_on_the_tag() {
     // `Duo<A, B>.format()`'s parametric body calls
     // `self.first.format()`. With `A = Foo | Bar`, the substituted
-    // body's receiver is `Union(...)`. Without the opaque shortcut
-    // this would panic in `receiver_struct_id`. We exercise the path
-    // by passing a union-typed pair into `format`.
+    // body's receiver is `Union(...)`. Without the structural route
+    // this would panic in `receiver_struct_id`. The expansion reads
+    // the tag and calls the carried member's `format`, never a
+    // placeholder.
     let source = format!(
         "{DUO_SNIPPET}
         enum Foo
@@ -99,10 +95,15 @@ fn pair_of_union_format_substitutes_to_opaque_placeholder() {
         })
         .map(|(_, function)| function)
         .expect("expected a `TestApp.Duo_$Union_...$.format` mono in IRProgram");
+    assert!(
+        all_instructions(&mono.blocks)
+            .any(|instr| matches!(instr, IRInstruction::UnionTagGet { .. })),
+        "expected the union `format` expansion to read the tag",
+    );
     let consts = collect_string_consts(mono);
     assert!(
-        consts.iter().any(|s| s == "..."),
-        "expected opaque `...` placeholder in Duo format mono; saw consts {consts:?}",
+        !consts.iter().any(|s| s == "..."),
+        "union receivers format their member, not a placeholder; saw consts {consts:?}",
     );
 }
 

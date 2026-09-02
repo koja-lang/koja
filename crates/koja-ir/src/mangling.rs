@@ -208,6 +208,31 @@ pub fn closure_copy_env_symbol(body: &IRSymbol) -> IRSymbol {
     body.derived(".$copy_env$")
 }
 
+/// Symbol of the synthesized capture-equality glue for a closure body
+/// (`<body>.$eq_env$`). Equality analog of [`closure_drop_env_symbol`],
+/// with the same rooting and collision-free guarantee. Minted by
+/// `crate::lower::closures` (which builds the
+/// `FunctionKind::EqClosureGlue` body) and resolved by the LLVM
+/// backend at `MakeClosure` (which stamps its address into the env
+/// header's `eq_fn` word).
+pub fn closure_eq_env_symbol(body: &IRSymbol) -> IRSymbol {
+    body.derived(".$eq_env$")
+}
+
+/// The identity a closure value carries for equality: a 64-bit
+/// FNV-1a hash of its body symbol, stamped into the env header's
+/// `site_id` word at `MakeClosure`. Two closures built from the same
+/// function or closure expression share a body and so a site id.
+/// Data rather than a code pointer, so backend function merging
+/// cannot fold two distinct expressions together.
+pub fn closure_site_id(body: &IRSymbol) -> u64 {
+    const FNV_OFFSET_BASIS: u64 = 0xcbf29ce484222325;
+    const FNV_PRIME: u64 = 0x100000001b3;
+    body.mangled().bytes().fold(FNV_OFFSET_BASIS, |hash, byte| {
+        (hash ^ u64::from(byte)).wrapping_mul(FNV_PRIME)
+    })
+}
+
 /// The symbol the per-type glue hangs off. Named types (struct /
 /// enum / union) carry their own package-qualified [`IRSymbol`], so
 /// the glue stays in their package. The structural primitive

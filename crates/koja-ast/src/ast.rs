@@ -448,7 +448,7 @@ pub enum FunctionOrigin {
 /// An `impl Protocol for Type` block. Inherent methods live in
 /// [`ExtendBlock`], and bare `impl Type` is a parse error.
 /// Compiler-derived impls (auto-derived `Debug` / `Equality`) carry
-/// [`Span::synthetic`] spans and [`ImplOrigin::Derived`].
+/// [`Span::synthetic`] spans.
 ///
 /// `target_bounds` holds conditional-conformance bounds written
 /// inline on the target's type-param args (`impl Equality for
@@ -456,21 +456,11 @@ pub enum FunctionOrigin {
 /// (`List<T>`); the bounds ride alongside as [`TypeParam`]s.
 #[derive(Debug, Clone)]
 pub struct ImplBlock {
-    pub origin: ImplOrigin,
     pub target: TypeExpr,
     pub target_bounds: Vec<TypeParam>,
     pub trait_expr: TypeExpr,
     pub members: Vec<ImplMember>,
     pub span: Span,
-}
-
-/// Whether an impl block came from source or from a derive pass. Lift
-/// may retract a derived impl whose target cannot conform, where a
-/// source impl would get a diagnostic instead.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ImplOrigin {
-    Derived,
-    Explicit,
 }
 
 /// An `extend Type` block: attaches inherent methods (and type
