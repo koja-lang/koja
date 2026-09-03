@@ -1,0 +1,70 @@
+# Union values are `Equality`, `Debug`, and (when every member is)
+# `Hash`. Two unions are equal when they carry the same member and the
+# payloads are equal. `format` renders the carried member.
+
+struct Cat: Hash
+  name: String
+
+  fn hash(self) -> Int
+    self.name.hash()
+  end
+end
+
+struct Dog: Hash
+  name: String
+
+  fn hash(self) -> Int
+    self.name.hash()
+  end
+end
+
+type Pet = Cat | Dog
+
+struct Owner
+  name: String
+  pet: Pet
+end
+
+fn same<T>(a: T, b: T) -> Bool
+  a.equals?(b)
+end
+
+whiskers: Pet = Cat{name: "Whiskers"}
+also_whiskers: Pet = Cat{name: "Whiskers"}
+mittens: Pet = Cat{name: "Mittens"}
+rex: Pet = Dog{name: "Rex"}
+
+# Same member, equal payload.
+(whiskers == also_whiskers).print()
+# Same member, different payload.
+(whiskers == mittens).print()
+# Different members.
+(whiskers == rex).print()
+(whiskers != rex).print()
+
+# Inline unions compare the same way.
+inline_a: Cat | Dog = Dog{name: "Rex"}
+(inline_a == rex).print()
+
+# Derived `Equality` and `Debug` on a struct with an alias-union field.
+(Owner{name: "a", pet: whiskers} == Owner{name: "a", pet: also_whiskers}).print()
+(Owner{name: "a", pet: whiskers} == Owner{name: "a", pet: rex}).print()
+Owner{name: "a", pet: rex}.print()
+
+# Tuples with union elements.
+((whiskers, 1) == (also_whiskers, 1)).print()
+((whiskers, 1) == (rex, 1)).print()
+(whiskers, 1).print()
+
+# `Debug` on the union itself.
+whiskers.print()
+rex.format().print()
+[whiskers, rex].print()
+
+# `Hash` folds the tag into the member hash.
+(whiskers.hash() == also_whiskers.hash()).print()
+(whiskers.hash() == rex.hash()).print()
+
+# Bounded dispatch on a bare type parameter.
+same(whiskers, also_whiskers).print()
+same(whiskers, rex).print()

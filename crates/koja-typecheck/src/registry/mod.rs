@@ -649,21 +649,25 @@ impl GlobalRegistry {
             ResolvedType::Named {
                 resolution: Resolution::Global(target_id),
                 type_args,
-            } => self
-                .lookup_conformance_with(
+            } => {
+                if let Some(expansion) = self.alias_expansion(*target_id) {
+                    return self.bound_satisfied(&expansion, bound, overlay);
+                }
+                self.lookup_conformance_with(
                     *target_id,
                     bound.protocol_id,
                     type_args,
                     overlay,
                     Some(&bound.args),
                 )
-                .is_some(),
+                .is_some()
+            }
             ResolvedType::Named {
                 resolution: Resolution::TypeParam { owner, index },
                 ..
             } => self.type_param_bound_granted(*owner, *index, bound, overlay),
-            ResolvedType::Anonymous(AnonymousKind::Tuple { elements }) => {
-                self.tuple_bound_satisfied(elements, bound, overlay)
+            ResolvedType::Anonymous(_) | ResolvedType::Union(_) => {
+                self.structural_bound_satisfied(ty, bound, overlay)
             }
             _ => false,
         }
@@ -703,12 +707,15 @@ impl GlobalRegistry {
             })
     }
 
-    /// Structural tuple conformance: `Debug` unconditionally
-    /// (opaque elements render as `"..."`), `Equality` when every
-    /// element satisfies it, nothing else.
-    fn tuple_bound_satisfied(
+    /// Conformance for shapes with no impl target: tuples, function
+    /// types, and anonymous unions. All three are `Debug` (functions
+    /// render as `"..."`). Tuples and unions are `Equality` when every
+    /// element / member is, functions by site plus captures. Unions
+    /// are also `Hash` when every member is. Functions never hash:
+    /// the type cannot see its captures.
+    fn structural_bound_satisfied(
         &self,
-        elements: &[ResolvedType],
+        ty: &ResolvedType,
         bound: &ResolvedProtocolBound,
         overlay: Option<&BoundOverlay>,
     ) -> bool {
@@ -721,11 +728,18 @@ impl GlobalRegistry {
         if entry.identifier.package() != "Global" || entry.identifier.path().len() != 1 {
             return false;
         }
-        match entry.identifier.last() {
-            "Debug" => true,
-            "Equality" => elements
+        let all_satisfy = |parts: &[ResolvedType]| {
+            parts
                 .iter()
-                .all(|element| self.bound_satisfied(element, bound, overlay)),
+                .all(|part| self.bound_satisfied(part, bound, overlay))
+        };
+        match (entry.identifier.last(), ty) {
+            ("Debug", _) => true,
+            ("Equality", ResolvedType::Anonymous(AnonymousKind::Function { .. })) => true,
+            ("Equality", ResolvedType::Anonymous(AnonymousKind::Tuple { elements })) => {
+                all_satisfy(elements)
+            }
+            ("Equality" | "Hash", ResolvedType::Union(members)) => all_satisfy(members),
             _ => false,
         }
     }
@@ -748,6 +762,36 @@ impl GlobalRegistry {
     pub fn conforms_any(&self, target_id: GlobalRegistryId, protocol_id: GlobalRegistryId) -> bool {
         self.conformance_records(target_id, protocol_id)
             .is_some_and(|records| !records.is_empty())
+    }
+
+    /// The protocol whose roster supplies `method/arity` on
+    /// `target_id`, found among the protocols the target has any
+    /// conformance record for. Method names are unique per type, so
+    /// at most one protocol can claim the pair.
+    pub fn protocol_declaring_method(
+        &self,
+        target_id: GlobalRegistryId,
+        method: &str,
+        arity: usize,
+    ) -> Option<GlobalRegistryId> {
+        let entry = self.entries.get(&target_id)?;
+        let conformances = match &entry.kind {
+            GlobalKind::Builtin(def) => &def.conformances,
+            GlobalKind::Struct(Some(def)) => &def.conformances,
+            GlobalKind::Enum(Some(def)) => &def.conformances,
+            _ => return None,
+        };
+        conformances.keys().copied().find(|protocol_id| {
+            let Some(GlobalKind::Protocol(Some(definition))) =
+                self.entries.get(protocol_id).map(|entry| &entry.kind)
+            else {
+                return false;
+            };
+            definition
+                .methods
+                .iter()
+                .any(|candidate| candidate.name == method && candidate.arity == arity)
+        })
     }
 
     /// Every recorded conformance of `target_id` to `protocol_id`,

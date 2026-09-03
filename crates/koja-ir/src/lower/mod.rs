@@ -54,6 +54,7 @@ mod control_flow;
 mod ctx;
 mod drops;
 mod enums;
+mod equality;
 mod expr;
 mod list_literal;
 mod loops;
@@ -66,6 +67,7 @@ mod patterns;
 mod process;
 mod structs;
 mod tuples;
+mod unions;
 
 pub(crate) use body::lower_body_to_blocks;
 pub(crate) use ctx::LowerOutput;

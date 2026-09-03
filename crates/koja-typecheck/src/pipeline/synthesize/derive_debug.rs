@@ -397,24 +397,31 @@ fn field_format_part(field_name: &str, field_type: &TypeExpr, span: Span) -> Str
 /// synthesized impl, so `.format()` always resolves after
 /// monomorphization.
 ///
-/// Shared with [`super::derive_equality`]: both synthesizers bail
-/// on the same shapes (no `Debug` / `Equality` impl available).
-pub(super) fn is_opaque_type(te: &TypeExpr) -> bool {
+/// `Equality` derivation only shares the internal-wrapper carve-out
+/// ([`is_internal_wrapper_type`]): every other field type, functions
+/// included, is `Equality`.
+fn is_opaque_type(te: &TypeExpr) -> bool {
     match te {
-        TypeExpr::Named { path, .. } => matches!(
-            path.last().map(String::as_str),
-            Some("CPtr") | Some("Indirect") | Some("Pointer")
-        ),
-        TypeExpr::Generic { path, .. } => matches!(
-            path.last().map(String::as_str),
-            Some("CPtr") | Some("Indirect") | Some("Pointer")
-        ),
+        TypeExpr::Named { .. } | TypeExpr::Generic { .. } => is_internal_wrapper_type(te),
         TypeExpr::Tuple { .. } => false,
         TypeExpr::Function { .. }
         | TypeExpr::Self_ { .. }
         | TypeExpr::Union { .. }
         | TypeExpr::Unit { .. } => true,
     }
+}
+
+/// Compiler-internal recursion-break and pointer wrappers (`CPtr`,
+/// `Indirect`, `Pointer`) that no derived protocol body should call
+/// into. Shared with [`super::derive_equality`].
+pub(super) fn is_internal_wrapper_type(te: &TypeExpr) -> bool {
+    let (TypeExpr::Named { path, .. } | TypeExpr::Generic { path, .. }) = te else {
+        return false;
+    };
+    matches!(
+        path.last().map(String::as_str),
+        Some("CPtr") | Some("Indirect") | Some("Pointer")
+    )
 }
 
 /// Builds the body for an enum's `format`:

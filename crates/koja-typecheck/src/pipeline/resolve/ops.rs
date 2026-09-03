@@ -42,8 +42,9 @@ const EQ_METHOD: &str = "equals?";
 /// IR lowering keeps their equality operations primitive.
 /// User struct / enum operands rewrite to `lhs.equals?(rhs)` (wrapped in
 /// `not …` for `!=`) and re-resolve through the normal method-call
-/// path. `derive_equality` guarantees an `Equality` impl is present
-/// for every user type by the time resolve runs.
+/// path. `derive_equality` supplies an `Equality` impl for every user
+/// type without a hand-written one, and [`diagnose_equality_unsupported`]
+/// rejects instantiations a hand-written conditional impl leaves out.
 pub(super) fn resolve_equality_op_expr(
     expr: &mut Expr,
     resolver: &mut Resolver<'_>,
@@ -94,11 +95,11 @@ pub(super) fn resolve_equality_op_expr(
 
 /// `==` on a nominal operand requires its full instantiation to
 /// satisfy `Equality`, not just an `equals?` method to exist. Catches
-/// conditional conformances (`List<fn () -> Int>` carries `List`'s
-/// `equals?` but no `Equality` fact), which the method-call rewrite
-/// alone would accept and monomorphization would then choke on.
-/// Non-nominal operands keep their existing rewrite-path
-/// diagnostics.
+/// the few builtins without one (`CPtr`, `Unit`) and any hand-written
+/// conditional impl, which the method-call rewrite alone would accept
+/// and monomorphization would then choke on. Structural operands
+/// (tuples, functions, unions) keep their rewrite-path diagnostics,
+/// and unresolved operands already reported.
 fn diagnose_equality_unsupported(
     operand: &Expr,
     resolver: &Resolver<'_>,

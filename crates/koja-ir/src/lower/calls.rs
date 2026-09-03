@@ -11,10 +11,12 @@ use koja_ast::identifier::{
 use koja_typecheck::{Dispatch, GlobalKind, GlobalRegistry, peel_alias};
 
 use super::ctx::{FnLowerCtx, LowerOutput};
-use super::expr::lower_expr;
+use super::equality::lower_equality_call;
+use super::expr::{emit_string_const, lower_expr};
 use super::ownership::{drop_discarded_temp, materialize_boundary_copy};
 use super::package::resolved_type_to_ir_type;
 use super::tuples::lower_tuple_conformance_call;
+use super::unions::lower_union_conformance_call;
 use crate::function::{IRBlockId, IRInstruction, IRSymbol};
 use crate::generics::{Instantiation, substitute_resolved_type};
 use crate::local::IRLocalId;
@@ -348,15 +350,44 @@ pub(super) fn lower_method_call(
         method_type_args,
         target,
     } = shape;
+    // Structural receivers have no nominal method to call, so their
+    // universal-protocol functions expand inline. Every route lands
+    // here after monomorphization: `f == g`, a derived body comparing
+    // or formatting a function / union / tuple field, a stdlib
+    // conditional impl at `T = fn`, and bounded `a.equals?(b)` on a
+    // type parameter.
     let structural_receiver = peel_alias(&receiver.resolution, registry);
-    if matches!(
-        &structural_receiver,
-        ResolvedType::Anonymous(AnonymousKind::Tuple { .. })
-    ) {
-        return lower_tuple_conformance_call(receiver, method, args, ctx, block, registry, output);
-    }
-    if let Some(opaque) = opaque_debug_method(method, &structural_receiver) {
-        return lower_opaque_debug_call(opaque, receiver, ctx, block, registry, output);
+    match &structural_receiver {
+        ResolvedType::Anonymous(AnonymousKind::Tuple { .. }) => {
+            return lower_tuple_conformance_call(
+                receiver, method, args, ctx, block, registry, output,
+            );
+        }
+        ResolvedType::Union(_) if method == "equals?" => {
+            return lower_equality_call(receiver, args, ctx, block, registry, output);
+        }
+        ResolvedType::Union(_) => {
+            return lower_union_conformance_call(
+                receiver, method, args, ctx, block, registry, output,
+            );
+        }
+        ResolvedType::Anonymous(AnonymousKind::Function { .. }) if method == "equals?" => {
+            return lower_equality_call(receiver, args, ctx, block, registry, output);
+        }
+        // Function values have no `format` of their own and render as
+        // `"..."`, matching what `derive_debug` emits for function fields.
+        ResolvedType::Anonymous(AnonymousKind::Function { .. }) => {
+            return lower_debug_family(
+                method,
+                receiver,
+                ctx,
+                block,
+                registry,
+                output,
+                |_, ctx, block, _| (emit_string_const("...".to_string(), ctx, block), block),
+            );
+        }
+        _ => {}
     }
     let dispatch = method_dispatch_kind(receiver, registry);
     let (prepend, current_block) = match dispatch {
@@ -777,83 +808,59 @@ fn release_call_temps(
     }
 }
 
-/// `Debug` protocol methods that get the opaque-receiver shortcut.
-/// Mirrors the AST-layer opaque-field rule in
-/// [`koja_typecheck::pipeline::synthesize::derive_debug`] (the
-/// `is_opaque_type` helper there). Keep the two layers in sync: if
-/// you add a new opaque shape to one, add it to the other.
+/// The `Debug` protocol's three entry points, which share one
+/// `format` expansion and differ only in what they do with it.
 #[derive(Clone, Copy)]
-enum OpaqueDebugMethod {
+enum DebugMethod {
     Format,
     Inspect,
     Print,
 }
 
-/// Recognize a bounded `Debug.{format, print, inspect}` call whose
-/// receiver, after monomorphic substitution, resolved to a type that
-/// the pipeline treats as opaque to `format` (a union or a function/closure
-/// type). Returning `Some` short-circuits the regular instance-method
-/// path in [`lower_method_call`], where `receiver_struct_id` would
-/// otherwise panic because anonymous types have no `Named { Global }`
-/// receiver to look a method up against.
-///
-/// Today's opaque set mirrors `derive_debug`'s `is_opaque_type` for
-/// struct/enum field rendering: `TypeExpr::Function` and
-/// `TypeExpr::Union`. `TypeExpr::Self_` / `TypeExpr::Unit` map to a
-/// `Named { Global }` receiver at this layer (`Self` is the enclosing
-/// type, `()` is `Global.Unit`), so they don't need a sibling arm.
-///
-/// Aliases peel earlier in typecheck, so a direct `ResolvedType::Union`
-/// or `ResolvedType::Anonymous(Function)` is what reaches here, with no
-/// alias-walking needed.
-fn opaque_debug_method(method: &str, ty: &ResolvedType) -> Option<OpaqueDebugMethod> {
-    let kind = match method {
-        "format" => OpaqueDebugMethod::Format,
-        "inspect" => OpaqueDebugMethod::Inspect,
-        "print" => OpaqueDebugMethod::Print,
-        _ => return None,
-    };
-    match ty {
-        ResolvedType::Anonymous(AnonymousKind::Function { .. }) | ResolvedType::Union(_) => {
-            Some(kind)
+impl DebugMethod {
+    fn from_name(method: &str) -> Option<Self> {
+        match method {
+            "format" => Some(Self::Format),
+            "inspect" => Some(Self::Inspect),
+            "print" => Some(Self::Print),
+            _ => None,
         }
-        _ => None,
     }
 }
 
-/// Emit the opaque-receiver shortcut for the `Debug` protocol. The
-/// behavioral contract matches what `derive_debug` already emits at
-/// the AST layer for opaque struct fields:
+/// Lower `receiver.format()` / `print()` / `inspect()` for a receiver
+/// whose rendering expands inline. `format` builds the `String` from
+/// the lowered receiver value (owned when heap-managed). Behavior
+/// matches derived `Debug`:
 ///
-/// * `format(self) -> String` returns the literal `"..."`.
-/// * `print(self) -> Unit` writes `"..."` to stdout via `IO.puts` and
-///   returns `Unit`.
-/// * `inspect(self) -> Self` writes `"..."` via `IO.puts` and returns
-///   the receiver value unchanged, so call chains preserve the value.
-///
-/// The receiver is lowered exactly once: the `Inspect` arm passes it
-/// through as the result. The `Format` and `Print` arms still lower
-/// it for side effects (closure captures, owner reads) even though
-/// they discard the value.
-fn lower_opaque_debug_call(
-    method: OpaqueDebugMethod,
+/// * `format(self) -> String` returns the rendering.
+/// * `print(self) -> Unit` writes it via `IO.puts` and returns `Unit`.
+/// * `inspect(self) -> Self` writes it and returns the receiver
+///   unchanged, so call chains preserve the value.
+pub(super) fn lower_debug_family(
+    method: &str,
     receiver: &Expr,
     ctx: &mut FnLowerCtx,
     block: IRBlockId,
     registry: &GlobalRegistry,
     output: &mut LowerOutput,
+    format: impl FnOnce(ValueId, &mut FnLowerCtx, IRBlockId, &mut LowerOutput) -> (ValueId, IRBlockId),
 ) -> Result<(ValueId, IRBlockId), ()> {
-    let (receiver_value, mut current) = lower_expr(receiver, ctx, block, registry, output)?;
-    let placeholder = emit_opaque_placeholder(ctx, current);
+    let method = DebugMethod::from_name(method).unwrap_or_else(|| {
+        panic!(
+            "IR lower: `{method}` is not a Debug function (typecheck resolve invariant violation)"
+        )
+    });
+    let (receiver_value, current) = lower_expr(receiver, ctx, block, registry, output)?;
+    let (formatted, mut current) = format(receiver_value, ctx, current, output);
     match method {
-        OpaqueDebugMethod::Format => {
-            // `format` discards the receiver (returns the literal), so a
-            // fresh-temp receiver is dead now.
+        DebugMethod::Format => {
             drop_discarded_temp(ctx, current, receiver_value);
-            Ok((placeholder, current))
+            Ok((formatted, current))
         }
-        OpaqueDebugMethod::Print => {
-            current = emit_io_puts(placeholder, ctx, current);
+        DebugMethod::Print => {
+            current = emit_io_puts(formatted, ctx, current);
+            drop_discarded_temp(ctx, current, formatted);
             drop_discarded_temp(ctx, current, receiver_value);
             let unit = ctx.fresh_value(IRType::Unit);
             ctx.cfg.append(
@@ -865,26 +872,12 @@ fn lower_opaque_debug_call(
             );
             Ok((unit, current))
         }
-        OpaqueDebugMethod::Inspect => {
-            // `inspect` returns the receiver unchanged. It is moved out,
-            // not discarded.
-            current = emit_io_puts(placeholder, ctx, current);
+        DebugMethod::Inspect => {
+            current = emit_io_puts(formatted, ctx, current);
+            drop_discarded_temp(ctx, current, formatted);
             Ok((receiver_value, current))
         }
     }
-}
-
-/// Allocate a fresh `String`-typed value holding the literal `"..."`.
-fn emit_opaque_placeholder(ctx: &mut FnLowerCtx, block: IRBlockId) -> ValueId {
-    let dest = ctx.fresh_value(IRType::String);
-    ctx.cfg.append(
-        block,
-        IRInstruction::Const {
-            dest,
-            value: ConstValue::String("...".to_string()),
-        },
-    );
-    dest
 }
 
 /// Emit `Global.IO.puts(<message>)` and return the block the call

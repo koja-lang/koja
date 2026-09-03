@@ -18,17 +18,18 @@ pub const BLOCK_HEADER_SIZE: usize = 16;
 /// bit_length` word. The rc word sits a further `LENGTH_OFFSET` before
 /// that (i.e. at the block base, `BLOCK_HEADER_SIZE` before payload).
 ///
-/// A closure env block carries a 24-byte header instead: `[i64
-/// rc][ptr drop_fn][ptr copy_fn]`. `drop_fn` (`LENGTH_OFFSET` bytes
-/// past the base) is the address of the closure's capture-release
-/// glue (or null when no capture is heap-managed). `copy_fn`
-/// ([`COPY_FN_OFFSET`] bytes past the base) is the address of its
-/// env deep-copy glue (or null when the closure was built outside
-/// lowering and can never cross a process boundary). Captures follow
-/// the header. The base pointer is the env pointer itself, so
-/// [`koja_rc_inc`] / [`koja_closure_rc_dec`] operate on the env
-/// directly. Mirrored codegen-side by `koja-ir-llvm`'s
-/// `CLOSURE_ENV_HEADER_FIELDS`.
+/// A closure env block carries a 40-byte header instead: `[i64
+/// rc][ptr drop_fn][ptr copy_fn][i64 site_id][ptr eq_fn]`. `drop_fn`
+/// (`LENGTH_OFFSET` bytes past the base) is the address of the
+/// closure's capture-release glue (or null when no capture is
+/// heap-managed). `copy_fn` ([`COPY_FN_OFFSET`] bytes past the base)
+/// is the address of its env deep-copy glue (or null when the closure
+/// was built outside lowering and can never cross a process
+/// boundary). `site_id` and `eq_fn` are only read by compiled
+/// `ClosureEquals` code. Captures follow the header. The base pointer
+/// is the env pointer itself, so [`koja_rc_inc`] /
+/// [`koja_closure_rc_dec`] operate on the env directly. Mirrored
+/// codegen-side by `koja-ir-llvm`'s `CLOSURE_ENV_HEADER_FIELDS`.
 pub const LENGTH_OFFSET: usize = 8;
 /// Distance in bytes from a closure env base to its `ptr copy_fn`
 /// header word (see the closure env header note on
@@ -186,10 +187,11 @@ pub unsafe extern "C" fn koja_heap_deep_copy(payload: *mut u8) -> *mut u8 {
 /// Deep-copy a closure env block through the `copy_fn` glue stamped
 /// in its header (see the closure env header note on
 /// [`LENGTH_OFFSET`]), returning a fresh env with `rc = 1` and every
-/// heap-managed capture recursively copied. Null (a captureless
-/// closure) returns null. A non-null env whose `copy_fn` is null
-/// cannot cross a process boundary. That is a compiler invariant
-/// violation, so the runtime aborts rather than alias the env.
+/// heap-managed capture recursively copied. Null and immortal envs
+/// (`rc < 0`, the static env of a captureless closure) are shared
+/// as-is. A heap env whose `copy_fn` is null cannot cross a process
+/// boundary. That is a compiler invariant violation, so the runtime
+/// aborts rather than alias the env.
 ///
 /// # Safety
 /// `env` must be null or the base of a live closure env block whose
@@ -201,6 +203,9 @@ pub unsafe extern "C" fn koja_closure_deep_copy(env: *mut u8) -> *mut u8 {
         return env;
     }
     unsafe {
+        if *env.cast::<i64>() < 0 {
+            return env;
+        }
         let copy_fn = *env.add(COPY_FN_OFFSET).cast::<*const u8>();
         assert!(
             !copy_fn.is_null(),

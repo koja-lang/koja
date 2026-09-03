@@ -13,9 +13,10 @@
 //!   bindings, enum tuple payloads) by stamping
 //!   `Coercion::UnionWiden(target)` on the source `Expr` so IR
 //!   lower can emit the matching `UnionWrap`.
-//! - **Diagnostics**: bare `FieldAccess` / `MethodCall` against a
-//!   union receiver surfaces a precise "match the union first"
-//!   error instead of falling through to "unknown method".
+//! - **Diagnostics**: bare `FieldAccess` against a union receiver
+//!   surfaces a precise "match the union first" error, and a
+//!   `MethodCall` admits only the universal protocol functions
+//!   (`equals?`, the `Debug` family, `hash`) before saying the same.
 //! - **Match exhaustiveness**: typed-binding arms over a union
 //!   subject either cover every member or surface a precise
 //!   missing-member diagnostic. A duplicate member arm warns as
@@ -280,10 +281,62 @@ fn method_call_on_union_diagnoses() {
     assert!(
         messages
             .iter()
-            .any(|m| m.to_lowercase().contains("union")
-                && (m.contains("method") || m.contains("match"))),
+            .any(|m| m.contains("no function `label` on union type")),
         "expected union-receiver method-call diagnostic, got {messages:?}",
     );
+}
+
+#[test]
+fn universal_protocol_calls_on_union_resolve() {
+    // `equals?`, the `Debug` family, and `hash` (when every member
+    // hashes) are the only functions a union receiver admits.
+    let source = "
+        struct A: Hash
+          x: Int
+
+          fn hash(self) -> Int
+            self.x
+          end
+        end
+
+        struct B: Hash
+          y: Int
+
+          fn hash(self) -> Int
+            self.y
+          end
+        end
+
+        v: A | B = A{x: 1}
+        w: A | B = B{y: 2}
+        (v == w).print()
+        v.equals?(w).print()
+        v.format().print()
+        v.print()
+        v.hash().print()
+        ";
+    typecheck(&dedent(source));
+}
+
+#[test]
+fn union_hash_requires_every_member_to_hash() {
+    let source = "
+        struct A: Hash
+          x: Int
+
+          fn hash(self) -> Int
+            self.x
+          end
+        end
+
+        struct B
+          y: Int
+        end
+
+        v: A | B = A{x: 1}
+        v.hash().print()
+        ";
+    assert_script_fails_with(source, &["cannot hash unions containing `B`"]);
 }
 
 #[test]

@@ -1,1 +1,1 @@
-no method `to_cstring` on `CPtr`
+no method `to_cstring` on `CPtr<Int32>` (method `Global.CPtr.to_cstring` is defined for `CPtr<UInt8>`)

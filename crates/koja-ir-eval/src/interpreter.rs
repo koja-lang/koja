@@ -11,6 +11,7 @@ use std::pin::Pin;
 use std::rc::Rc;
 use std::time::Instant;
 
+use koja_ir::mangling::closure_eq_env_symbol;
 use koja_ir::{
     BinaryEndian, BinarySign, BranchTarget, ConcatKind, ConstValue, EnumPayloadInit, FunctionKind,
     IRBasicBlock, IRBlockId, IRConstantValue, IREnumDecl, IRFunction, IRInstruction, IRIntrinsicId,
@@ -566,6 +567,11 @@ fn execute_function<'a, R: CallResolver>(
              `CallClosure` (seal invariant violation)",
                 function.symbol,
             ),
+            FunctionKind::EqClosureGlue { .. } => panic!(
+                "interpreter: direct `Call` to `$eq_env$` glue `{}`, which must dispatch via \
+             `ClosureEquals` (seal invariant violation)",
+                function.symbol,
+            ),
             // The env glue siblings exist only to back the LLVM env block
             // ABI (teardown via the header's `drop_fn`, process-boundary
             // copy via `copy_fn`). The interpreter's `Value::Closure`
@@ -619,11 +625,11 @@ fn execute_function<'a, R: CallResolver>(
     })
 }
 
-/// Dispatch a [`FunctionKind::Closure`] body with its captured
-/// environment. Mirrors [`execute_function`] for `Regular` bodies,
-/// but seeds `frame.captures` so [`IRInstruction::LoadCapture`] can
-/// index into the env array. `captures.len()` matches the body's
-/// `env_layout` (seal invariant).
+/// Dispatch a [`FunctionKind::Closure`] body (or its `$eq_env$`
+/// glue) with its captured environment. Mirrors [`execute_function`]
+/// for `Regular` bodies, but seeds `frame.captures` so
+/// [`IRInstruction::LoadCapture`] can index into the env array.
+/// `captures.len()` matches the body's `env_layout` (seal invariant).
 fn execute_closure_function<'a, R: CallResolver>(
     function: &'a IRFunction,
     args: Vec<Value>,
@@ -640,7 +646,9 @@ fn execute_closure_function<'a, R: CallResolver>(
             args.len(),
         );
         let env_layout = match &function.kind {
-            FunctionKind::Closure { env_layout } => env_layout,
+            FunctionKind::Closure { env_layout } | FunctionKind::EqClosureGlue { env_layout } => {
+                env_layout
+            }
             other => panic!(
                 "interpreter: `execute_closure_function` on non-Closure kind {other:?} for `{}`",
                 function.symbol,
@@ -667,6 +675,48 @@ fn execute_closure_function<'a, R: CallResolver>(
             ),
         }
     })
+}
+
+/// The BEAM rule behind [`IRInstruction::ClosureEquals`]: same body
+/// symbol (the eval stand-in for the LLVM `site_id`), then equal
+/// captures. Capture comparison runs the body's `$eq_env$` glue with
+/// the lhs captures as the frame and the rhs closure as its one
+/// param, so eval and LLVM execute the same user `equals?` bodies.
+async fn closures_equal<R: CallResolver>(
+    lhs: Value,
+    rhs: Value,
+    resolver: &R,
+) -> Result<bool, RuntimeError> {
+    let (lhs_body, lhs_captures) = expect_closure(lhs, "ClosureEquals")?;
+    let (rhs_body, rhs_captures) = expect_closure(rhs.clone(), "ClosureEquals")?;
+    if lhs_body != rhs_body {
+        return Ok(false);
+    }
+    if lhs_captures.is_empty() && rhs_captures.is_empty() {
+        return Ok(true);
+    }
+    let eq_symbol = closure_eq_env_symbol(&lhs_body);
+    let eq_glue = resolver.resolve(eq_symbol.mangled()).unwrap_or_else(|| {
+        panic!(
+            "interpreter: closure body `{lhs_body}` has captures but no `$eq_env$` glue \
+         (lowering invariant violation)",
+        )
+    });
+    match execute_closure_function(eq_glue, vec![rhs], lhs_captures, resolver).await? {
+        Value::Bool(equal) => Ok(equal),
+        other => Err(RuntimeError::TypeMismatch {
+            detail: format!("`$eq_env$` glue must return Bool, got {other}"),
+        }),
+    }
+}
+
+fn expect_closure(value: Value, instruction: &str) -> Result<(IRSymbol, Vec<Value>), RuntimeError> {
+    match value {
+        Value::Closure { body, captures } => Ok((body, captures)),
+        other => Err(RuntimeError::TypeMismatch {
+            detail: format!("{instruction} expects a Closure operand, got {other}"),
+        }),
+    }
 }
 
 /// Drive a function body starting at `blocks[0]` until a `Return`
@@ -1411,6 +1461,33 @@ fn execute_instruction<'a, R: CallResolver>(
                 let result =
                     execute_closure_function(body_fn, arg_values, captures, resolver).await?;
                 frame.values.insert(*dest, result);
+                Ok(())
+            }
+            IRInstruction::ClosureEquals { dest, lhs, rhs, .. } => {
+                let lhs_value = lookup(&frame.values, *lhs)?;
+                let rhs_value = lookup(&frame.values, *rhs)?;
+                let equal = closures_equal(lhs_value, rhs_value, resolver).await?;
+                frame.values.insert(*dest, Value::Bool(equal));
+                Ok(())
+            }
+            IRInstruction::LoadCaptureOf {
+                capture_index,
+                closure,
+                dest,
+                ty: _,
+            } => {
+                let (_, captures) =
+                    expect_closure(lookup(&frame.values, *closure)?, "LoadCaptureOf")?;
+                let value = captures
+                    .into_iter()
+                    .nth(*capture_index as usize)
+                    .unwrap_or_else(|| {
+                        panic!(
+                            "interpreter: LoadCaptureOf index {capture_index} out of range \
+                         (seal invariant violation)",
+                        )
+                    });
+                frame.values.insert(*dest, value);
                 Ok(())
             }
             IRInstruction::LoadCapture {

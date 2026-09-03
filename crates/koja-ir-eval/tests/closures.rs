@@ -191,3 +191,55 @@ fn closure_value_renders_through_display() {
         "single Int capture should render as `env=[7]`, got `{rendered}`",
     );
 }
+
+#[test]
+fn closure_equality_compares_body_then_captures() {
+    // Same site with equal captures is `true`, same site with
+    // different captures runs the `$eq_env$` glue and is `false`,
+    // and two textually identical lambdas at different sites never
+    // compare equal.
+    let source = "
+        fn make(n: Int) -> fn (Int) -> Int
+          adder = fn (x: Int) -> Int
+            x + n
+          end
+          adder
+        end
+
+        a = make(1)
+        b = make(1)
+        c = make(2)
+        d = fn (x: Int) -> Int
+          x + 1
+        end
+        e = fn (x: Int) -> Int
+          x + 1
+        end
+        \"#{a == b} #{a == c} #{d == e} #{d == d}\"
+        ";
+    assert_eq!(evaluate_string(source), "true false false true");
+}
+
+#[test]
+fn named_function_references_compare_by_definition() {
+    let source = "
+        fn double(x: Int) -> Int
+          x * 2
+        end
+
+        fn triple(x: Int) -> Int
+          x * 3
+        end
+
+        \"#{&double/1 == &double/1} #{&double/1 == &triple/1}\"
+        ";
+    assert_eq!(evaluate_string(source), "true false");
+}
+
+fn evaluate_string(source: &str) -> String {
+    let value = evaluate(&dedent(source)).unwrap();
+    let Value::String(bytes) = value else {
+        panic!("expected Value::String, got {value:?}");
+    };
+    String::from_utf8(bytes.to_vec()).unwrap()
+}

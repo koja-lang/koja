@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `==` works on function values. Two functions are equal when they come from the same function or closure expression and their captured values are equal.
+- `==` works on union values. Two unions are equal when they carry the same member and the payloads are equal.
+- Union values implement `Debug` and `Hash` through their current member, so `pet.print()` shows the member and a union works as a `Map` key.
+
+### Changed
+
+- Derived `Equality` now compares function fields instead of skipping them, so two structs that hold different functions no longer compare equal.
+- Diagnostics spell out type arguments such as `List<fn (Int) -> Int>`.
+
 ### Deprecated
 
 - `JSON.StringBuilder` is deprecated and will be removed in 0.19.0. Use `<>` or `String.join` instead.
@@ -14,6 +25,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - `JSON.encode` was extremely slow when a value contained one large string.
+- A struct with an `Option<fn ...>` or `List<fn ...>` field no longer crashes the compiler.
+- Calling a conditional protocol method on an instantiation that does not qualify is a typecheck error instead of a compiler crash.
 
 ## [0.18.1] - 2026-09-01
 

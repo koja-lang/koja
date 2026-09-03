@@ -150,15 +150,14 @@ fn generic_threading_requires_the_declared_bound() {
 }
 
 #[test]
-fn equality_gate_rejects_function_element_lists() {
-    assert_script_fails_with(
+fn equality_gate_accepts_function_element_lists() {
+    typecheck_script(&dedent(
         "
         f = fn () -> Int 1 end
         g = fn () -> Int 2 end
         ([f] == [g]).print()
         ",
-        &["does not implement `Equality`"],
-    );
+    ));
 }
 
 #[test]

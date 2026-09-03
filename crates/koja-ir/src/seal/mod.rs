@@ -192,7 +192,9 @@ pub(super) fn instruction_operands(inst: &IRInstruction) -> Vec<ValueId> {
         IRInstruction::Clone { source, .. } | IRInstruction::DeepCopy { source, .. } => {
             vec![*source]
         }
-        IRInstruction::Concat { lhs, rhs, .. } => vec![*lhs, *rhs],
+        IRInstruction::ClosureEquals { lhs, rhs, .. } | IRInstruction::Concat { lhs, rhs, .. } => {
+            vec![*lhs, *rhs]
+        }
         IRInstruction::Const { .. } => vec![],
         IRInstruction::EnumConstruct { payload, .. } => match payload {
             EnumPayloadInit::Struct(fields) => fields.iter().map(|f| f.value).collect(),
@@ -209,6 +211,7 @@ pub(super) fn instruction_operands(inst: &IRInstruction) -> Vec<ValueId> {
         // `LoadCapture` reads from the enclosing closure's env, not
         // a `ValueId`, so there is nothing to validate in the per-block walk.
         IRInstruction::LoadCapture { .. } => vec![],
+        IRInstruction::LoadCaptureOf { closure, .. } => vec![*closure],
         // `LoadConst` reads from the package constant pool, not a
         // `ValueId`, so it has no operand to validate here. The
         // pool entry is checked against the program-level constants

@@ -1,8 +1,9 @@
-//! Tuple equality element gating. Tuples support `==` / `!=` only
-//! when every element (recursively) has valid equality semantics:
-//! closure and union elements reject instead of being silently
-//! skipped, and the structural `Equality` bound is element-
-//! conditional so `fn f<T: Equality>` cannot accept bad shapes.
+//! Tuple equality element gating. Tuples support `==` / `!=` when
+//! every element (recursively) is `Equality`. Function and union
+//! elements compare like any other value, so only an instantiation
+//! left out by a hand-written conditional impl rejects, and the
+//! structural `Equality` bound is element-conditional so
+//! `fn f<T: Equality>` follows the same rule.
 
 use koja_ast::util::dedent;
 
@@ -39,63 +40,91 @@ const CLOSURES: &str = "
     end
     ";
 
-#[test]
-fn closure_element_diagnoses() {
-    let source = format!("{CLOSURES}((f, 1) == (g, 1)).print()");
-    assert_fails_with_hint(
-        &source,
-        &[
-            "cannot compare tuples containing",
-            "closures cannot be compared for equality",
-        ],
-    );
-}
+const PETS: &str = "
+    struct Cat
+      name: String
+    end
+
+    struct Dog
+      name: String
+    end
+
+    type Pet = Cat | Dog
+
+    pet: Pet = Cat{name: \"Whiskers\"}
+    ";
 
 #[test]
-fn closure_element_diagnoses_through_not_equals() {
-    let source = format!("{CLOSURES}((f, 1) != (g, 1)).print()");
-    assert_fails_with_hint(&source, &["closures cannot be compared for equality"]);
-}
-
-#[test]
-fn nested_tuple_hiding_a_closure_diagnoses() {
-    let source = format!("{CLOSURES}((1, (2, f)) == (1, (2, g))).print()");
-    assert_fails_with_hint(&source, &["closures cannot be compared for equality"]);
-}
-
-#[test]
-fn union_element_diagnoses() {
-    assert_fails_with_hint(
+fn closure_elements_compare() {
+    let source = format!(
+        "{CLOSURES}
+        ((f, 1) == (g, 1)).print()
+        ((f, 1) != (g, 1)).print()
+        ((1, (2, f)) == (1, (2, g))).print()
         "
-        struct Cat
-          name: String
-        end
-
-        struct Dog
-          name: String
-        end
-
-        type Pet = Cat | Dog
-
-        pet: Pet = Cat{name: \"Whiskers\"}
-        ((pet, 1) == (pet, 1)).print()
-        ",
-        &[
-            "cannot compare tuples containing",
-            "union values cannot be compared for equality",
-        ],
     );
+    typecheck_script(&dedent(&source));
 }
 
 #[test]
-fn equality_bound_rejects_tuple_with_closure_element() {
+fn union_elements_compare() {
+    let source = format!("{PETS}((pet, 1) == (pet, 1)).print()");
+    typecheck_script(&dedent(&source));
+}
+
+#[test]
+fn equality_bound_admits_tuples_with_closure_and_union_elements() {
     let source = format!(
         "
         fn equal<T: Equality>(left: T, right: T) -> Bool
           left.equals?(right)
         end
 {CLOSURES}
-        equal((f, 1), (g, 1))
+{PETS}
+        equal((f, 1), (g, 1)).print()
+        equal((1, (2, pet)), (1, (2, pet))).print()
+        "
+    );
+    typecheck_script(&dedent(&source));
+}
+
+/// A hand-written conditional impl is the one way a type can miss
+/// `Equality`: `Box<Float>` conforms, `Box<String>` does not.
+const CONDITIONAL_BOX: &str = "
+    struct Box<T>
+      value: T
+    end
+
+    impl Equality for Box<T: Hash>
+      fn equals?(self, other: Self) -> Bool
+        self.value.hash() == other.value.hash()
+      end
+    end
+
+    boxed = Box{value: 1.5}
+    ";
+
+#[test]
+fn non_equality_element_diagnoses() {
+    let source = format!("{CONDITIONAL_BOX}((boxed, 1) == (boxed, 1)).print()");
+    assert_fails_with_hint(
+        &source,
+        &[
+            "cannot compare tuples containing `Box<Float>`",
+            "`Box<Float>` does not implement `Equality`",
+        ],
+    );
+}
+
+#[test]
+fn equality_bound_rejects_tuple_with_non_equality_element() {
+    let source = format!(
+        "
+        fn equal<T: Equality>(left: T, right: T) -> Bool
+          left.equals?(right)
+        end
+{CONDITIONAL_BOX}
+        equal((boxed, 1), (boxed, 1))
         "
     );
     assert_script_fails_with(
@@ -108,27 +137,10 @@ fn equality_bound_rejects_tuple_with_closure_element() {
 }
 
 #[test]
-fn equality_bound_rejects_nested_tuple_with_union_element() {
+fn mismatched_tuple_shapes_diagnose() {
     assert_script_fails_with(
-        "
-        fn equal<T: Equality>(left: T, right: T) -> Bool
-          left.equals?(right)
-        end
-
-        struct Cat
-          name: String
-        end
-
-        struct Dog
-          name: String
-        end
-
-        type Pet = Cat | Dog
-
-        pet: Pet = Cat{name: \"Whiskers\"}
-        equal((1, (2, pet)), (1, (2, pet)))
-        ",
-        &["does not implement protocol `Equality`"],
+        "((1, 2) == (1, \"a\")).print()",
+        &["Tuple equality requires both sides to have the same type"],
     );
 }
 
@@ -154,7 +166,7 @@ fn comparable_elements_still_compile() {
 
 #[test]
 fn debug_bound_still_admits_tuples_with_closure_elements() {
-    // `Debug` stays unconditional: opaque elements render as "...".
+    // `Debug` stays unconditional: function elements render as "...".
     let source = format!(
         "
         fn render<T: Debug>(value: T) -> String

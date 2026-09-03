@@ -384,3 +384,86 @@ fn fn_as_value_wrapper_is_cached_across_repeated_references() {
         "each fn-as-value site still emits its own MakeClosure",
     );
 }
+
+#[test]
+fn capturing_closure_synthesizes_eq_env_glue_over_both_envs() {
+    let source = "
+        y = 10
+        f = fn (x: Int) -> Int
+          x + y
+        end
+        g = f
+        f == g
+        ";
+
+    let script = lower(source);
+
+    let glue = mangled_function(&script, "TestApp.__script_body__closure0.$eq_env$");
+    let FunctionKind::EqClosureGlue { env_layout } = &glue.kind else {
+        panic!("expected EqClosureGlue, got {:?}", glue.kind);
+    };
+    assert_eq!(env_layout.len(), 1, "one Int capture in the env layout");
+    assert_eq!(glue.return_type, IRType::Bool);
+    assert_eq!(
+        glue.params.len(),
+        1,
+        "the other closure is the one user param"
+    );
+    assert_eq!(glue.params[0].ty, int_fn_type(1));
+
+    // The glue reads its own capture and the same slot of the other
+    // closure, then compares them.
+    let own_loads = load_captures_in(glue);
+    assert_eq!(own_loads.len(), 1);
+    let other_loads: Vec<_> = all_instructions(&glue.blocks)
+        .filter(|i| {
+            matches!(
+                i,
+                IRInstruction::LoadCaptureOf {
+                    capture_index: 0,
+                    ..
+                }
+            )
+        })
+        .collect();
+    assert_eq!(
+        other_loads.len(),
+        1,
+        "one LoadCaptureOf for the single capture"
+    );
+
+    // `f == g` in the outer body dispatches to `ClosureEquals`, never
+    // a direct `Call` to the glue.
+    let equals: Vec<_> = all_instructions(&script.blocks)
+        .filter(|i| matches!(i, IRInstruction::ClosureEquals { .. }))
+        .collect();
+    assert_eq!(equals.len(), 1);
+    let IRInstruction::ClosureEquals { ty, .. } = equals[0] else {
+        unreachable!()
+    };
+    assert_eq!(*ty, int_fn_type(1));
+}
+
+#[test]
+fn captureless_closure_has_no_eq_env_glue() {
+    let source = "
+        f = fn (x: Int) -> Int
+          x + 1
+        end
+        g = f
+        f == g
+        ";
+
+    let script = lower(source);
+
+    assert!(
+        !script_function_names(&script)
+            .iter()
+            .any(|name| name.ends_with(".$eq_env$")),
+        "captureless bodies compare by site id alone and need no glue",
+    );
+    let equals = all_instructions(&script.blocks)
+        .filter(|i| matches!(i, IRInstruction::ClosureEquals { .. }))
+        .count();
+    assert_eq!(equals, 1);
+}

@@ -285,7 +285,8 @@ fn is_primitive_pair(
 
 /// Human-readable rendering of a [`ResolvedType`] for diagnostics:
 /// dereferences `Global` heads through the registry so users see
-/// `Int` rather than an opaque `#0`.
+/// `Int` rather than an opaque `#0`, and spells out type arguments
+/// (`Option<fn (Int) -> Int>`) since conformance often hinges on them.
 pub(super) fn display_resolution(ty: &ResolvedType, registry: &GlobalRegistry) -> String {
     match ty {
         ResolvedType::Anonymous(AnonymousKind::Function { params, ret }) => {
@@ -309,11 +310,22 @@ pub(super) fn display_resolution(ty: &ResolvedType, registry: &GlobalRegistry) -
         }
         ResolvedType::Named {
             resolution: Resolution::Global(id),
-            ..
-        } => match registry.get(*id) {
-            Some(entry) => entry.identifier.last().to_string(),
-            None => format!("<id {id}>"),
-        },
+            type_args,
+        } => {
+            let head = match registry.get(*id) {
+                Some(entry) => entry.identifier.last().to_string(),
+                None => format!("<id {id}>"),
+            };
+            if type_args.is_empty() {
+                return head;
+            }
+            let rendered = type_args
+                .iter()
+                .map(|arg| display_resolution(arg, registry))
+                .collect::<Vec<_>>()
+                .join(", ");
+            format!("{head}<{rendered}>")
+        }
         ResolvedType::Named {
             resolution: Resolution::Local(local_id),
             ..
@@ -428,9 +440,9 @@ pub(super) fn verify_bounds(
 /// discharge against the full instantiation (a concrete
 /// `impl Render for Bag<Int>` satisfies `T: Render` for `Bag<Int>`
 /// but not `Bag<String>`, and a conditional impl checks its own
-/// bounds recursively). Tuples have structural `Debug` and
-/// `Equality`. Type-param heads compare their declared bounds.
-/// Other anonymous shapes remain deferred.
+/// bounds recursively). Tuples, functions, and unions have
+/// structural conformances. Type-param heads compare their declared
+/// bounds. Unresolved heads stay deferred.
 fn protocol_bound_satisfied(
     inferred: &ResolvedType,
     bound: &ResolvedProtocolBound,
@@ -446,18 +458,16 @@ fn protocol_bound_satisfied(
             resolution: Resolution::TypeParam { .. },
             ..
         }
-        | ResolvedType::Anonymous(AnonymousKind::Tuple { .. }) => {
-            Some(ctx.registry.bound_satisfied(&peeled, bound, ctx.overlay))
-        }
+        | ResolvedType::Anonymous(_)
+        | ResolvedType::Union(_) => Some(ctx.registry.bound_satisfied(&peeled, bound, ctx.overlay)),
         _ => None,
     }
 }
 
 /// Whether `ty` can discharge `Equality`, instantiation-aware.
 /// Primitives fast-path, everything else consults the conformance
-/// records, so a conditional `impl Equality for List<T: Equality>`
-/// makes `List<fn () -> Int>` fail here even though the `equals?`
-/// method exists on `List`.
+/// records (structural shapes answer through
+/// `GlobalRegistry::bound_satisfied`).
 pub(super) fn type_supports_equality(ty: &ResolvedType, ctx: BoundContext<'_>) -> bool {
     let structural = peel_alias(ty, ctx.registry);
     if is_primitive_equality_eligible(&structural, ctx.registry) {

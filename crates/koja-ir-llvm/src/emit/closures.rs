@@ -11,10 +11,15 @@
 //! [`crate::ctx::EmitContext`] so `LoadCapture` can GEP into the
 //! right slot at body-emit time.
 
-use inkwell::AddressSpace;
-use inkwell::types::BasicTypeEnum;
-use inkwell::values::{BasicMetadataValueEnum, BasicValueEnum, FunctionValue, PointerValue};
-use koja_ir::mangling::{closure_copy_env_symbol, closure_drop_env_symbol};
+use inkwell::module::Linkage;
+use inkwell::types::StructType;
+use inkwell::values::{
+    BasicMetadataValueEnum, BasicValueEnum, FunctionValue, IntValue, PointerValue,
+};
+use inkwell::{AddressSpace, IntPredicate};
+use koja_ir::mangling::{
+    closure_copy_env_symbol, closure_drop_env_symbol, closure_eq_env_symbol, closure_site_id,
+};
 use koja_ir::{IRFunction, IRLocalId, IRSymbol, IRType, ValueId};
 
 use crate::ctx::{ClosureFrame, EmitContext};
@@ -23,15 +28,17 @@ use crate::intrinsics::cptr::declare_memcpy_extern;
 use crate::intrinsics::element::deep_copy_in_slot;
 use crate::runtime::{declare_closure_rc_dec_extern, declare_malloc_extern};
 use crate::types::{
-    CLOSURE_ENV_HEADER_FIELDS, closure_body_signature, closure_fat_ptr_type, env_struct_type,
-    ir_basic_type,
+    CLOSURE_ENV_HEADER_FIELDS, ENV_COPY_FN_FIELD, ENV_DROP_FN_FIELD, ENV_EQ_FN_FIELD, ENV_RC_FIELD,
+    ENV_SITE_ID_FIELD, closure_body_signature, closure_fat_ptr_type, env_header_fields,
+    env_struct_type, ir_basic_type,
 };
 
+use super::heap_layout::RC_IMMORTAL;
 use super::{ValueMap, lookup};
 
-/// Materialize the closure value: malloc the env block (skipped for
-/// captureless adapters where the env is never read), store each
-/// capture by index, then build the `{fn_ptr, env_ptr}` fat
+/// Materialize the closure value: malloc the env block (or point at
+/// the body's static immortal env for captureless adapters), store
+/// each capture by index, then build the `{fn_ptr, env_ptr}` fat
 /// pointer. The fn_ptr resolves through the declared-functions
 /// index so the caller's [`crate::program::compile_program`]
 /// declare-then-define ordering keeps the lookup populated.
@@ -54,28 +61,186 @@ pub(super) fn emit_make_closure<'ctx>(
     });
     let fn_ptr = body_fn.as_global_value().as_pointer_value();
     let env_ptr = if capture_values.is_empty() {
-        ctx.context.ptr_type(AddressSpace::default()).const_null()
+        static_immortal_env(ctx, body)
     } else {
-        let drop_fn = env_glue_ptr(ctx, &closure_drop_env_symbol(body));
-        let copy_fn = env_glue_ptr(ctx, &closure_copy_env_symbol(body));
-        emit_env_alloc_and_store(ctx, body, &capture_values, drop_fn, copy_fn)?
+        emit_env_alloc_and_store(ctx, body, &capture_values)?
     };
     build_closure_fat_pointer(ctx, body, fn_ptr, env_ptr)
 }
 
+/// The header words every env of `body` carries: `drop_fn` /
+/// `copy_fn` / `eq_fn` glue addresses (null where lowering registered
+/// no sibling) and the body's site id.
+struct EnvHeader<'ctx> {
+    copy_fn: PointerValue<'ctx>,
+    drop_fn: PointerValue<'ctx>,
+    eq_fn: PointerValue<'ctx>,
+    site_id: IntValue<'ctx>,
+}
+
+impl<'ctx> EnvHeader<'ctx> {
+    fn for_body(ctx: &EmitContext<'ctx>, body: &IRSymbol) -> Self {
+        Self {
+            copy_fn: env_glue_ptr(ctx, &closure_copy_env_symbol(body)),
+            drop_fn: env_glue_ptr(ctx, &closure_drop_env_symbol(body)),
+            eq_fn: env_glue_ptr(ctx, &closure_eq_env_symbol(body)),
+            site_id: ctx
+                .context
+                .i64_type()
+                .const_int(closure_site_id(body), false),
+        }
+    }
+}
+
 /// Resolve the address of one of a closure's env glue siblings
-/// (`<body>.$drop_env$` capture-release or `<body>.$copy_env$` env
-/// deep-copy) for stashing in the env header. A missing function
-/// yields a null pointer: lowering omits `$drop_env$` when no capture
-/// is heap-managed (the runtime then frees the env without
-/// per-capture teardown), and only hand-built IR omits `$copy_env$`
-/// (the runtime aborts if such an env ever crosses a process
-/// boundary).
+/// (`$drop_env$` / `$copy_env$` / `$eq_env$`) for stashing in the env
+/// header. A missing function yields a null pointer: lowering omits
+/// `$drop_env$` when no capture is heap-managed (the runtime then
+/// frees the env without per-capture teardown), omits `$eq_env$` for
+/// captureless bodies (equal site ids settle equality), and only
+/// hand-built IR omits `$copy_env$` (the runtime aborts if such an
+/// env ever crosses a process boundary).
 fn env_glue_ptr<'ctx>(ctx: &EmitContext<'ctx>, glue: &IRSymbol) -> PointerValue<'ctx> {
     match ctx.declared_function(glue) {
         Some(function) => function.as_global_value().as_pointer_value(),
         None => ctx.context.ptr_type(AddressSpace::default()).const_null(),
     }
+}
+
+/// The per-body static env a captureless closure points at:
+/// `{RC_IMMORTAL, null, null, site_id, null}` in rodata, minted once
+/// per module under `<body>.$env$`. Immortal rc makes every inc / dec
+/// / deep-copy a no-op, the same convention string literals use, so
+/// captureless closures still stay borrowed in lowering while carrying
+/// a real site id for [`emit_closure_equals`].
+fn static_immortal_env<'ctx>(ctx: &EmitContext<'ctx>, body: &IRSymbol) -> PointerValue<'ctx> {
+    let name = format!("{}.$env$", body.mangled());
+    if let Some(existing) = ctx.module.get_global(&name) {
+        return existing.as_pointer_value();
+    }
+    let header = EnvHeader::for_body(ctx, body);
+    let header_ty = ctx.context.struct_type(&env_header_fields(ctx), false);
+    let initializer = header_ty.const_named_struct(&[
+        ctx.context
+            .i64_type()
+            .const_int(RC_IMMORTAL as u64, false)
+            .into(),
+        header.drop_fn.into(),
+        header.copy_fn.into(),
+        header.site_id.into(),
+        header.eq_fn.into(),
+    ]);
+    let global = ctx.module.add_global(header_ty, None, &name);
+    global.set_initializer(&initializer);
+    global.set_constant(true);
+    global.set_linkage(Linkage::Private);
+    global.as_pointer_value()
+}
+
+/// `lhs == rhs` on two closure values of the same function type:
+///
+/// ```text
+/// site_id(lhs) != site_id(rhs)  -> false
+/// eq_fn(lhs) == null            -> true   (captureless body)
+/// otherwise                     -> eq_fn(lhs_env, rhs)
+/// ```
+///
+/// `eq_fn` is the body's `$eq_env$` glue, called with the closure-body
+/// ABI: `lhs`'s env at position 0 and `rhs` as the one user param.
+pub(super) fn emit_closure_equals<'ctx>(
+    ctx: &EmitContext<'ctx>,
+    lhs: ValueId,
+    rhs: ValueId,
+    ty: &IRType,
+    values: &ValueMap<'ctx>,
+) -> Result<BasicValueEnum<'ctx>, LlvmError> {
+    let lhs_value = lookup(values, lhs)?;
+    let rhs_value = lookup(values, rhs)?;
+    let function = ctx
+        .builder
+        .get_insert_block()
+        .and_then(|block| block.get_parent())
+        .ok_or_else(|| {
+            LlvmError::Codegen("LLVM emit: ClosureEquals emitted outside a function body".into())
+        })?;
+    let captures_block = ctx
+        .context
+        .append_basic_block(function, "closure_eq.captures");
+    let call_block = ctx.context.append_basic_block(function, "closure_eq.call");
+    let merge_block = ctx.context.append_basic_block(function, "closure_eq.merge");
+    let bool_ty = ctx.context.bool_type();
+
+    let lhs_env = load_closure_env_ptr(ctx, lhs_value, "closure_eq.lhs")?;
+    let rhs_env = load_closure_env_ptr(ctx, rhs_value, "closure_eq.rhs")?;
+    let header_ty = ctx.context.struct_type(&env_header_fields(ctx), false);
+    let lhs_site = load_env_header_word(ctx, header_ty, lhs_env, ENV_SITE_ID_FIELD, "lhs.site")?;
+    let rhs_site = load_env_header_word(ctx, header_ty, rhs_env, ENV_SITE_ID_FIELD, "rhs.site")?;
+    let same_site = ctx
+        .builder
+        .build_int_compare(
+            IntPredicate::EQ,
+            lhs_site.into_int_value(),
+            rhs_site.into_int_value(),
+            "closure_eq.same_site",
+        )
+        .or_ice()?;
+    let site_block = ctx.builder.get_insert_block().expect("positioned");
+    ctx.builder
+        .build_conditional_branch(same_site, captures_block, merge_block)
+        .or_ice()?;
+
+    ctx.builder.position_at_end(captures_block);
+    let eq_fn = load_env_header_word(ctx, header_ty, lhs_env, ENV_EQ_FN_FIELD, "lhs.eq_fn")?
+        .into_pointer_value();
+    let captureless = ctx
+        .builder
+        .build_is_null(eq_fn, "closure_eq.captureless")
+        .or_ice()?;
+    ctx.builder
+        .build_conditional_branch(captureless, merge_block, call_block)
+        .or_ice()?;
+
+    ctx.builder.position_at_end(call_block);
+    let signature = closure_body_signature(ctx, std::slice::from_ref(ty), &IRType::Bool)?;
+    let captures_equal = ctx
+        .builder
+        .build_indirect_call(
+            signature,
+            eq_fn,
+            &[lhs_env.into(), rhs_value.into()],
+            "closure_eq.captures_equal",
+        )
+        .or_ice()?
+        .try_as_basic_value()
+        .basic()
+        .ok_or_else(|| LlvmError::Codegen("LLVM emit: closure eq glue returned void".into()))?;
+    ctx.builder
+        .build_unconditional_branch(merge_block)
+        .or_ice()?;
+
+    ctx.builder.position_at_end(merge_block);
+    let phi = ctx.builder.build_phi(bool_ty, "closure_eq").or_ice()?;
+    phi.add_incoming(&[
+        (&bool_ty.const_zero(), site_block),
+        (&bool_ty.const_all_ones(), captures_block),
+        (&captures_equal, call_block),
+    ]);
+    Ok(phi.as_basic_value())
+}
+
+fn load_env_header_word<'ctx>(
+    ctx: &EmitContext<'ctx>,
+    header_ty: StructType<'ctx>,
+    env_ptr: PointerValue<'ctx>,
+    field: u32,
+    label: &str,
+) -> Result<BasicValueEnum<'ctx>, LlvmError> {
+    let slot = ctx
+        .builder
+        .build_struct_gep(header_ty, env_ptr, field, &format!("{label}.slot"))
+        .or_ice()?;
+    let word_ty = env_header_fields(ctx)[field as usize];
+    ctx.builder.build_load(word_ty, slot, label).or_ice()
 }
 
 /// Indirect call through a fat-pointer closure value. Splits the
@@ -148,6 +313,36 @@ pub(super) fn emit_load_capture<'ctx>(
     } = ctx.closure_frame().unwrap_or_else(|| {
         panic!("LLVM emit: LoadCapture outside a closure body (seal invariant violation)")
     });
+    load_capture_slot(ctx, env_struct, env_ptr, capture_index, ty, "capture")
+}
+
+/// Read capture `capture_index` out of another closure value's env.
+/// Only valid inside an `$eq_env$` body (seal-enforced), whose
+/// `other` param shares the active frame's `env_struct` layout, so
+/// the same GEP shape applies to the foreign env pointer.
+pub(super) fn emit_load_capture_of<'ctx>(
+    ctx: &EmitContext<'ctx>,
+    closure: ValueId,
+    capture_index: u32,
+    ty: &IRType,
+    values: &ValueMap<'ctx>,
+) -> Result<BasicValueEnum<'ctx>, LlvmError> {
+    let ClosureFrame { env_struct, .. } = ctx.closure_frame().unwrap_or_else(|| {
+        panic!("LLVM emit: LoadCaptureOf outside a closure body (seal invariant violation)")
+    });
+    let closure_value = lookup(values, closure)?;
+    let env_ptr = load_closure_env_ptr(ctx, closure_value, "capture_of")?;
+    load_capture_slot(ctx, env_struct, env_ptr, capture_index, ty, "capture_of")
+}
+
+fn load_capture_slot<'ctx>(
+    ctx: &EmitContext<'ctx>,
+    env_struct: StructType<'ctx>,
+    env_ptr: PointerValue<'ctx>,
+    capture_index: u32,
+    ty: &IRType,
+    label: &str,
+) -> Result<BasicValueEnum<'ctx>, LlvmError> {
     let slot_ptr = ctx
         .builder
         .build_struct_gep(
@@ -159,7 +354,7 @@ pub(super) fn emit_load_capture<'ctx>(
         .or_ice()?;
     let llvm_ty = ir_basic_type(ctx, ty)?;
     ctx.builder
-        .build_load(llvm_ty, slot_ptr, &format!("capture.{capture_index}"))
+        .build_load(llvm_ty, slot_ptr, &format!("{label}.{capture_index}"))
         .or_ice()
 }
 
@@ -201,8 +396,8 @@ pub(super) fn emit_drop_closure_env<'ctx>(
 /// process boundary:
 ///
 /// 1. malloc a block the size of the env struct and `memcpy` the
-///    whole source env over it: header (`drop_fn` / `copy_fn`) and
-///    `Copy` captures land correct as-is.
+///    whole source env over it: header (`drop_fn` / `copy_fn` /
+///    `site_id` / `eq_fn`) and `Copy` captures land correct as-is.
 /// 2. reset the fresh block's rc to 1 (the source's count came along
 ///    in the copy).
 /// 3. deep-copy every heap-managed capture in place
@@ -281,26 +476,19 @@ pub(crate) fn load_closure_env_ptr<'ctx>(
         .map(|v| v.into_pointer_value())
 }
 
-/// Heap-allocate the env block, stamp its `[i64 rc][ptr drop_fn][ptr
-/// copy_fn]` header (rc = 1, `drop_fn` / `copy_fn` = the env glue
-/// siblings or null), populate each capture slot via `getelementptr
-/// inbounds`, and return the env base pointer (which doubles as the
-/// rc word for `koja_rc_inc` / `koja_closure_rc_dec`). Empty layouts
-/// short-circuit before this is called (see [`emit_make_closure`]).
+/// Heap-allocate the env block, stamp its header (rc = 1, the glue
+/// siblings or null, and the body's site id), populate each capture
+/// slot via `getelementptr inbounds`, and return the env base pointer
+/// (which doubles as the rc word for `koja_rc_inc` /
+/// `koja_closure_rc_dec`). Empty layouts take the static env path
+/// instead (see [`emit_make_closure`]).
 fn emit_env_alloc_and_store<'ctx>(
     ctx: &EmitContext<'ctx>,
     body: &IRSymbol,
     captures: &[BasicValueEnum<'ctx>],
-    drop_fn: PointerValue<'ctx>,
-    copy_fn: PointerValue<'ctx>,
 ) -> Result<PointerValue<'ctx>, LlvmError> {
     let i64_ty = ctx.context.i64_type();
-    let ptr_ty = ctx.context.ptr_type(AddressSpace::default());
-    let mut field_types: Vec<BasicTypeEnum<'ctx>> =
-        Vec::with_capacity(captures.len() + CLOSURE_ENV_HEADER_FIELDS as usize);
-    field_types.push(i64_ty.into());
-    field_types.push(ptr_ty.into());
-    field_types.push(ptr_ty.into());
+    let mut field_types = env_header_fields(ctx);
     field_types.extend(captures.iter().map(|c| c.get_type()));
     let env_struct = ctx.context.struct_type(&field_types, false);
     let size_bytes = ctx.layouts.target_data.get_abi_size(&env_struct);
@@ -309,17 +497,17 @@ fn emit_env_alloc_and_store<'ctx>(
     let env_ptr = ctx
         .call_basic(malloc, &[size_value.into()], &format!("{body}.env"))?
         .into_pointer_value();
-    store_env_field(
-        ctx,
-        env_struct,
-        env_ptr,
-        0,
-        i64_ty.const_int(1, false).into(),
-        body,
-        "rc",
-    )?;
-    store_env_field(ctx, env_struct, env_ptr, 1, drop_fn.into(), body, "drop_fn")?;
-    store_env_field(ctx, env_struct, env_ptr, 2, copy_fn.into(), body, "copy_fn")?;
+    let header = EnvHeader::for_body(ctx, body);
+    let header_words: [(u32, BasicValueEnum<'ctx>, &str); 5] = [
+        (ENV_RC_FIELD, i64_ty.const_int(1, false).into(), "rc"),
+        (ENV_DROP_FN_FIELD, header.drop_fn.into(), "drop_fn"),
+        (ENV_COPY_FN_FIELD, header.copy_fn.into(), "copy_fn"),
+        (ENV_SITE_ID_FIELD, header.site_id.into(), "site_id"),
+        (ENV_EQ_FN_FIELD, header.eq_fn.into(), "eq_fn"),
+    ];
+    for (field, value, tag) in header_words {
+        store_env_field(ctx, env_struct, env_ptr, field, value, body, tag)?;
+    }
     for (index, capture) in captures.iter().enumerate() {
         let field = index as u32 + CLOSURE_ENV_HEADER_FIELDS;
         store_env_field(

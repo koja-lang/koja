@@ -1,0 +1,84 @@
+# Function values are `Equality`: two are equal when they come from the
+# same function or closure expression and their captured values are
+# equal. Textually identical closures at different sites are unequal.
+
+fn double(x: Int) -> Int
+  x * 2
+end
+
+fn succ(x: Int) -> Int
+  x + 1
+end
+
+struct Point
+  x: Int
+  y: Int
+end
+
+struct Holder
+  hook: Option<fn (Int) -> Int>
+end
+
+fn make_adder(n: Int) -> fn (Int) -> Int
+  adder = fn (x: Int) -> Int x + n end
+
+  adder
+end
+
+fn make_offset(origin: Point, label: String) -> fn (Int) -> Int
+  offset = fn (x: Int) -> Int x + origin.x + origin.y + label.length() end
+
+  offset
+end
+
+fn same<T>(a: T, b: T) -> Bool
+  a.equals?(b)
+end
+
+# Named references compare by name.
+(&double/1 == &double/1).print()
+(&double/1 == &succ/1).print()
+(&double/1 != &succ/1).print()
+
+# Same site, equal captures.
+(make_adder(1) == make_adder(1)).print()
+(make_adder(1) == make_adder(2)).print()
+(make_offset(Point{x: 1, y: 2}, "ab") == make_offset(Point{x: 1, y: 2}, "ab")).print()
+(make_offset(Point{x: 1, y: 2}, "ab") == make_offset(Point{x: 1, y: 2}, "cd")).print()
+(make_offset(Point{x: 1, y: 2}, "ab") == make_offset(Point{x: 2, y: 1}, "ab")).print()
+
+# Two textually identical closures at different sites are unequal.
+first = fn (x: Int) -> Int x * 2 end
+
+second = fn (x: Int) -> Int x * 2 end
+
+(first == second).print()
+(first == first).print()
+
+# Captureless closures compare equal to themselves after copies.
+copy = first
+(first == copy).print()
+
+# Function values inside generic and derived types.
+(Option.Some(&double/1) == Option.Some(&double/1)).print()
+(Option.Some(&double/1) == Option.Some(&succ/1)).print()
+(Holder{hook: Option.Some(&double/1)} == Holder{hook: Option.Some(&double/1)}).print()
+(Holder{hook: Option.Some(&double/1)} == Holder{hook: Option.Some(&succ/1)}).print()
+idle: Holder = Holder{hook: Option.None}
+(idle == Holder{hook: Option.Some(&double/1)}).print()
+([&double/1, &succ/1] == [&double/1, &succ/1]).print()
+([&double/1] == [&succ/1]).print()
+((&double/1, 1) == (&double/1, 1)).print()
+((&double/1, 1) == (&succ/1, 1)).print()
+
+# Bounded dispatch on a bare type parameter.
+same(&double/1, &double/1).print()
+same(make_adder(3), make_adder(4)).print()
+
+# A closure returned through another process keeps its identity.
+ref = Task.async(fn () -> fn (Int) -> Int make_adder(7) end)
+
+match Task.await(ref)
+  Result.Ok(returned) -> (returned == make_adder(7)).print()
+  Result.Err(_) -> "error".print()
+end

@@ -302,6 +302,7 @@ fn instruction_result_type(
             dest, result_ty, ..
         } => (*dest, result_ty.clone()),
         IRInstruction::Clone { dest, ty, .. } => (*dest, ty.clone()),
+        IRInstruction::ClosureEquals { dest, .. } => (*dest, IRType::Bool),
         IRInstruction::Concat { dest, kind, .. } => (*dest, kind.ir_type()),
         IRInstruction::Const { dest, value } => (*dest, const_type(value)),
         IRInstruction::DeepCopy { dest, ty, .. } => (*dest, ty.clone()),
@@ -320,9 +321,9 @@ fn instruction_result_type(
             ..
         } => (*dest, IRType::Struct(struct_symbol.clone())),
         IRInstruction::IndirectPresent { dest, .. } => (*dest, IRType::Bool),
-        IRInstruction::LoadCapture { dest, ty, .. } | IRInstruction::LoadConst { dest, ty, .. } => {
-            (*dest, ty.clone())
-        }
+        IRInstruction::LoadCapture { dest, ty, .. }
+        | IRInstruction::LoadCaptureOf { dest, ty, .. }
+        | IRInstruction::LoadConst { dest, ty, .. } => (*dest, ty.clone()),
         IRInstruction::LocalDecl { .. } => return None,
         IRInstruction::LocalRead { dest, ty, .. } => (*dest, ty.clone()),
         IRInstruction::LocalWrite { .. } => return None,
@@ -439,6 +440,15 @@ fn seal_instruction_types(
         IRInstruction::Clone { source, ty, .. } => {
             require_value_type(values, *source, ty, owner, "copy source");
         }
+        IRInstruction::ClosureEquals { lhs, rhs, ty, .. } => {
+            if !matches!(ty, IRType::Function { .. }) {
+                seal_panic(&format!(
+                    "{owner} ClosureEquals operand type `{ty:?}` is not a function type"
+                ));
+            }
+            require_value_type(values, *lhs, ty, owner, "ClosureEquals lhs");
+            require_value_type(values, *rhs, ty, owner, "ClosureEquals rhs");
+        }
         IRInstruction::Concat { kind, lhs, rhs, .. } => {
             let expected = kind.ir_type();
             require_value_type(values, *lhs, &expected, owner, "Concat lhs");
@@ -524,12 +534,35 @@ fn seal_instruction_types(
                 return;
             };
             let (FunctionKind::Closure { env_layout }
-            | FunctionKind::DropClosureGlue { env_layout }) = &function.kind
+            | FunctionKind::DropClosureGlue { env_layout }
+            | FunctionKind::EqClosureGlue { env_layout }) = &function.kind
             else {
                 return;
             };
             if let Some(expected) = env_layout.get(*capture_index as usize) {
                 require_same_type(ty, expected, &format!("{owner} LoadCapture type"));
+            }
+        }
+        IRInstruction::LoadCaptureOf {
+            capture_index,
+            closure,
+            ty,
+            ..
+        } => {
+            // The other closure must share the glue's own function
+            // type, so its env has the glue's `env_layout`.
+            let Some(function) = function else {
+                return;
+            };
+            let FunctionKind::EqClosureGlue { env_layout } = &function.kind else {
+                return;
+            };
+            let [other] = function.params.as_slice() else {
+                return;
+            };
+            require_value_type(values, *closure, &other.ty, owner, "LoadCaptureOf closure");
+            if let Some(expected) = env_layout.get(*capture_index as usize) {
+                require_same_type(ty, expected, &format!("{owner} LoadCaptureOf type"));
             }
         }
         IRInstruction::LoadConst { const_id, ty, .. } => {

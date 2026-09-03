@@ -353,6 +353,7 @@ fn walk_instruction(instruction: &IRInstruction, out: &mut BTreeMap<IRSymbol, IR
             walk_type(result_ty, out);
         }
         IRInstruction::Clone { ty, .. }
+        | IRInstruction::ClosureEquals { ty, .. }
         | IRInstruction::DeepCopy { ty, .. }
         | IRInstruction::DropLocal { ty, .. }
         | IRInstruction::DropValue { ty, .. } => walk_type(ty, out),
@@ -361,6 +362,7 @@ fn walk_instruction(instruction: &IRInstruction, out: &mut BTreeMap<IRSymbol, IR
             walk_type(field_type, out)
         }
         IRInstruction::LoadCapture { ty, .. }
+        | IRInstruction::LoadCaptureOf { ty, .. }
         | IRInstruction::LoadConst { ty, .. }
         | IRInstruction::LocalDecl { ty, .. }
         | IRInstruction::LocalRead { ty, .. }

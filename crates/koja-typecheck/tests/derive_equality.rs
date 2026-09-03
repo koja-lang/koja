@@ -1,27 +1,38 @@
-use koja_ast::ast::{BinOp, Expr, ExprKind, ImplMember, Item, Literal, Statement, TypeExpr};
+use koja_ast::ast::{
+    BinOp, Expr, ExprKind, ImplBlock, ImplMember, Item, Literal, Statement, TypeExpr,
+};
+use koja_ast::identifier::Identifier;
 use koja_ast::util::dedent;
 use koja_parser::ParseMode;
 use koja_typecheck::CheckedProgram;
 
 mod common;
 
-use common::{PACKAGE, check_multi_file, typecheck_script as typecheck};
+use common::{PACKAGE, check_multi_file, global_id, registry_id, typecheck_script as typecheck};
 
-fn equality_body<'a>(checked: &'a CheckedProgram, type_name: &str) -> &'a Expr {
+fn equality_impl<'a>(checked: &'a CheckedProgram, type_name: &str) -> Option<&'a ImplBlock> {
     let package = checked
         .packages
         .iter()
         .find(|package| package.package == PACKAGE)
         .expect("test package should be present");
-    for item in package.files.iter().flat_map(|file| &file.items) {
-        let Item::Impl(block) = item else {
-            continue;
-        };
-        if type_expr_head(&block.trait_expr) != Some("Equality")
-            || type_expr_head(&block.target) != Some(type_name)
-        {
-            continue;
-        }
+    package
+        .files
+        .iter()
+        .flat_map(|file| &file.items)
+        .find_map(|item| match item {
+            Item::Impl(block)
+                if type_expr_head(&block.trait_expr) == Some("Equality")
+                    && type_expr_head(&block.target) == Some(type_name) =>
+            {
+                Some(block)
+            }
+            _ => None,
+        })
+}
+
+fn equality_body<'a>(checked: &'a CheckedProgram, type_name: &str) -> &'a Expr {
+    if let Some(block) = equality_impl(checked, type_name) {
         for member in &block.members {
             let ImplMember::Function(function) = member else {
                 continue;
@@ -37,6 +48,21 @@ fn equality_body<'a>(checked: &'a CheckedProgram, type_name: &str) -> &'a Expr {
         }
     }
     panic!("no synthesized `Equality for {type_name}` impl found");
+}
+
+/// Whether the test package's `type_name` records an `Equality`
+/// conformance and still registers `equals?/2`.
+fn derives_equality(checked: &CheckedProgram, type_name: &str) -> bool {
+    let target_id = registry_id(checked, PACKAGE, &[type_name]);
+    let equality_id = global_id(checked, "Equality");
+    let method = Identifier::new(PACKAGE, vec![type_name.to_string(), "equals?".to_string()]);
+    let conforms = checked.registry.conforms_any(target_id, equality_id);
+    let registered = checked.registry.lookup_function(&method, 2).is_some();
+    assert_eq!(
+        conforms, registered,
+        "conformance fact and `equals?` registration must agree for `{type_name}`"
+    );
+    conforms
 }
 
 fn type_expr_head(type_expr: &TypeExpr) -> Option<&str> {
@@ -167,4 +193,136 @@ fn struct_fields_synthesize_conjunction() {
     let body = equality_body(&checked, "Point");
     assert!(matches!(body.kind, ExprKind::Binary { op: BinOp::And, .. }));
     assert_eq!(count_eq_calls(body), 2);
+}
+
+#[test]
+fn generic_derive_is_unconditional() {
+    let source = "
+        struct Pair<A, B>
+          first: A
+          second: B
+        end
+
+        1
+        ";
+
+    let checked = typecheck(&dedent(source));
+    let block = equality_impl(&checked, "Pair").expect("Pair should derive Equality");
+    assert!(block.target_bounds.is_empty());
+}
+
+#[test]
+fn function_fields_derive_equality() {
+    let source = "
+        struct Holder
+          hook: fn (Int) -> Int
+          n: Int
+        end
+
+        struct Optional
+          hook: Option<fn (Int) -> Int>
+        end
+
+        struct Registry
+          hooks: List<fn (Int) -> Int>
+        end
+
+        1
+        ";
+
+    let checked = typecheck(&dedent(source));
+    assert!(derives_equality(&checked, "Holder"));
+    assert!(derives_equality(&checked, "Optional"));
+    assert!(derives_equality(&checked, "Registry"));
+    assert_eq!(count_eq_calls(equality_body(&checked, "Holder")), 2);
+}
+
+#[test]
+fn function_payload_derives_enum_equality() {
+    let source = "
+        enum Event
+          Hook(fn (Int) -> Int)
+          Nothing
+        end
+
+        1
+        ";
+
+    let checked = typecheck(&dedent(source));
+    assert!(derives_equality(&checked, "Event"));
+}
+
+#[test]
+fn union_field_derives_equality() {
+    let source = "
+        struct Cat
+          name: String
+        end
+
+        struct Dog
+          name: String
+        end
+
+        type Pet = Cat | Dog
+
+        struct Owner
+          pet: Pet
+        end
+
+        1
+        ";
+
+    let checked = typecheck(&dedent(source));
+    assert!(derives_equality(&checked, "Owner"));
+    assert_eq!(count_eq_calls(equality_body(&checked, "Owner")), 1);
+}
+
+#[test]
+fn equality_on_function_holding_types_resolves_to_bool() {
+    let source = "
+        struct Holder
+          hook: Option<fn (Int) -> Int>
+        end
+
+        fn double(x: Int) -> Int
+          x * 2
+        end
+
+        fn same(a: Holder, b: Holder) -> Bool
+          a == b
+        end
+
+        a: Option<fn (Int) -> Int> = Option.Some(&double/1)
+        b: Option<fn (Int) -> Int> = Option.Some(&double/1)
+        a == b
+        ";
+
+    typecheck(&dedent(source));
+}
+
+#[test]
+fn conditional_protocol_method_is_unavailable_on_unmet_instantiation() {
+    let source = "
+        protocol Show
+          fn show(self) -> String
+        end
+
+        struct Box<T>
+          value: T
+        end
+
+        impl Show for Box<T: Show>
+          fn show(self) -> String
+            self.value.show()
+          end
+        end
+
+        b = Box{value: 1}
+        b.show()
+        ";
+
+    common::assert_script_fails_with(
+        source,
+        &["`Box<Int>` does not implement `Show`, so `show` is unavailable"],
+    );
 }

@@ -76,6 +76,11 @@ pub(crate) fn emit_instruction<'ctx>(
         IRInstruction::Clone { dest, source, ty } => {
             clone::emit_clone(ctx, *dest, *source, ty, values)
         }
+        IRInstruction::ClosureEquals { dest, lhs, rhs, ty } => {
+            let result = closures::emit_closure_equals(ctx, *lhs, *rhs, ty, values)?;
+            values.insert(*dest, result);
+            Ok(())
+        }
         IRInstruction::DeepCopy { dest, source, ty } => {
             deep_copy::emit_deep_copy(ctx, *dest, *source, ty, values)
         }
@@ -180,6 +185,16 @@ pub(crate) fn emit_instruction<'ctx>(
             ty,
         } => {
             let value = closures::emit_load_capture(ctx, *capture_index, ty)?;
+            values.insert(*dest, value);
+            Ok(())
+        }
+        IRInstruction::LoadCaptureOf {
+            capture_index,
+            closure,
+            dest,
+            ty,
+        } => {
+            let value = closures::emit_load_capture_of(ctx, *closure, *capture_index, ty, values)?;
             values.insert(*dest, value);
             Ok(())
         }

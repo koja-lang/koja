@@ -195,3 +195,50 @@ fn struct_field_union_round_trips_through_field_read() {
     };
     assert_eq!(std::str::from_utf8(&bytes).unwrap(), "whiskers");
 }
+
+#[test]
+fn union_equality_compares_tag_then_payload() {
+    let source = "
+        struct Cat
+          name: String
+        end
+
+        struct Dog
+          name: String
+        end
+
+        type Pet = Cat | Dog
+
+        a: Pet = Cat{name: \"whiskers\"}
+        b: Pet = Cat{name: \"whiskers\"}
+        c: Pet = Cat{name: \"tom\"}
+        d: Pet = Dog{name: \"whiskers\"}
+        \"#{a == b} #{a == c} #{a == d}\"
+        ";
+    let value = evaluate_script(&dedent(source));
+    let Value::String(bytes) = value else {
+        panic!("expected Value::String, got {value:?}");
+    };
+    assert_eq!(std::str::from_utf8(&bytes).unwrap(), "true false false");
+}
+
+#[test]
+fn union_format_dispatches_to_the_member() {
+    let source = "
+        struct Cat
+          name: String
+        end
+
+        struct Dog
+          name: String
+        end
+
+        pet: Cat | Dog = Dog{name: \"rex\"}
+        pet.format()
+        ";
+    let value = evaluate_script(&dedent(source));
+    let Value::String(bytes) = value else {
+        panic!("expected Value::String, got {value:?}");
+    };
+    assert_eq!(std::str::from_utf8(&bytes).unwrap(), "Dog{name: \"rex\"}");
+}
