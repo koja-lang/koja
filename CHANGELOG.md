@@ -5,6 +5,21 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- `koja build --target-cpu native` and `koja run --target-cpu native` generate code for the build machine's CPU when the binary will only run there.
+
+### Changed
+
+- `koja --help` groups flags under `Code generation` and `Global options` sections.
+
+### Fixed
+
+- Compiled binaries no longer target the build machine's CPU, so a binary built on one x86_64 or aarch64 host runs on any other host of that architecture.
+- `koja run --release` and `koja run --target-cpu` now compile through LLVM instead of being ignored by the interpreter. Combining them with an explicit `--backend=interpreter` is an error.
+
 ## [0.18.2] - 2026-09-02
 
 ### Added

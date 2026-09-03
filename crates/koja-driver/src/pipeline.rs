@@ -71,6 +71,7 @@ use koja_ast::ast::{Diagnostic, Severity};
 use koja_ast::identifier::Identifier;
 use koja_ir::{IRProgram, IRScript, lower_program, lower_script};
 use koja_ir_eval::{Interpreter, RuntimeError, Value};
+use koja_ir_llvm::CompileOptions;
 use koja_parser::{FileId, ParseMode, ParsedProgram, SourceFile, parse_file, parse_program};
 use koja_test::{HARNESS_ENTRY, TestOptions, discover_tests, generate_harness};
 use koja_typecheck::{CheckFailure, CheckedProgram, check_program, format_registry};
@@ -86,19 +87,81 @@ use crate::tasks::{TASK_HARNESS_ENTRY, TaskProvider, generate_task_harness, reso
 ///
 /// `koja run` defaults to [`Backend::Interpreter`] (fast feedback,
 /// no link step) and accepts `--backend=llvm` to compile + exec.
-/// `koja build` carries no backend flag: only LLVM emits object
-/// files.
+/// Any code generation flag also selects `llvm` (see
+/// [`resolve_backend`]). `koja build` carries no backend flag: only
+/// LLVM emits object files.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, clap::ValueEnum)]
 pub enum Backend {
-    /// Run in-process via [`koja_ir_eval`].
+    /// Run in-process through the interpreter
     Interpreter,
-    /// Compile + link via [`koja_ir_llvm`], exec the binary, and
-    /// forward its exit code.
+    /// Compile and link a native binary, run it, and forward its exit code
     Llvm,
+}
+
+/// CLI spelling of [`koja_ir_llvm::TargetCpu`]. Lives here so the
+/// backend crate stays free of clap.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, clap::ValueEnum)]
+pub enum TargetCpu {
+    /// Every instruction the build machine supports.
+    Native,
+    /// A baseline that runs on any machine of the build architecture.
+    #[default]
+    Portable,
+}
+
+impl From<TargetCpu> for koja_ir_llvm::TargetCpu {
+    fn from(target_cpu: TargetCpu) -> Self {
+        match target_cpu {
+            TargetCpu::Native => Self::Native,
+            TargetCpu::Portable => Self::Portable,
+        }
+    }
+}
+
+/// Flags that shape the emitted machine code, shared by every command
+/// that drives the LLVM backend. Flattened into [`BuildOptions`] and
+/// [`RunOptions`] so a new knob lands once and reads the same in
+/// both `--help` outputs.
+#[derive(Clone, Copy, Debug, Default, clap::Args)]
+pub(crate) struct CodegenArgs {
+    /// Build with aggressive optimizations
+    #[arg(long, help_heading = CODEGEN_HEADING)]
+    pub(crate) release: bool,
+
+    /// CPU the binary may assume (defaults to `portable`). `portable` runs on any machine of the build architecture, `native` uses every instruction the build machine supports
+    #[arg(long, value_enum, help_heading = CODEGEN_HEADING)]
+    pub(crate) target_cpu: Option<TargetCpu>,
+}
+
+/// `--help` section for [`CodegenArgs`]. Set per arg rather than
+/// through `next_help_heading`, which would leak onto whatever the
+/// parent declares after the flatten.
+const CODEGEN_HEADING: &str = "Code generation";
+
+impl CodegenArgs {
+    fn compile_options(self) -> CompileOptions {
+        CompileOptions {
+            release: self.release,
+            target_cpu: self.target_cpu.unwrap_or_default().into(),
+        }
+    }
+
+    /// The first flag the user passed explicitly, if any. Asking for
+    /// code generation is how `koja run` learns the user wants the
+    /// compiled path.
+    fn explicit_flag(self) -> Option<&'static str> {
+        if self.release {
+            return Some("--release");
+        }
+        self.target_cpu.map(|_| "--target-cpu")
+    }
 }
 
 #[derive(clap::Args)]
 pub(crate) struct BuildOptions {
+    #[command(flatten)]
+    pub(crate) codegen: CodegenArgs,
+
     /// Print LLVM IR to stdout instead of producing a binary
     #[arg(long)]
     pub(crate) emit_llvm: bool,
@@ -109,10 +172,6 @@ pub(crate) struct BuildOptions {
     /// Output binary name
     #[arg(short, long)]
     pub(crate) output: Option<String>,
-
-    /// Build with aggressive optimizations
-    #[arg(long)]
-    pub(crate) release: bool,
 }
 
 #[derive(clap::Args)]
@@ -121,18 +180,49 @@ pub(crate) struct RunOptions {
     #[arg(index = 2, last = true)]
     pub(crate) args: Vec<String>,
 
-    /// Execution backend: `interpreter` runs in-process for fast startup, while `llvm` compiles to a native binary, runs it, and forwards its exit code
-    #[arg(long, value_enum, default_value = "interpreter")]
-    pub(crate) backend: Backend,
+    /// Execution backend. `interpreter` runs in-process for fast startup, while `llvm` compiles to a native binary, runs it, and forwards its exit code. Defaults to `interpreter`, or `llvm` when any code generation flag is passed
+    #[arg(long, value_enum)]
+    pub(crate) backend: Option<Backend>,
+
+    #[command(flatten)]
+    pub(crate) codegen: CodegenArgs,
 
     /// Source file (`.koja` / `.kojs`), task name (`postgres.migrate`),
     /// or omit to run the project's entry via `koja.toml`
     #[arg(index = 1)]
     pub(crate) file: Option<String>,
+}
 
-    /// Build with aggressive optimizations (LLVM backend only)
-    #[arg(long)]
-    pub(crate) release: bool,
+impl RunOptions {
+    /// Interpreter-backed invocation of `file` with `args`, for the
+    /// `eval` and `new` aliases in `main.rs`.
+    pub(crate) fn interpreted(file: String, args: Vec<String>) -> Self {
+        Self {
+            args,
+            backend: Some(Backend::Interpreter),
+            codegen: CodegenArgs::default(),
+            file: Some(file),
+        }
+    }
+}
+
+/// Pick the `run` backend. `--backend` wins when given. Otherwise a
+/// code generation flag selects the compiled path, since asking for
+/// `--release` is asking for the compiler, and a bare `koja run`
+/// interprets. A code generation flag on an explicit interpreter run
+/// is an error rather than a silent no-op.
+fn resolve_backend(explicit: Option<Backend>, codegen: CodegenArgs) -> Backend {
+    match (explicit, codegen.explicit_flag()) {
+        (Some(Backend::Interpreter), Some(flag)) => {
+            eprintln!(
+                "error: `{flag}` has no effect on the interpreter. Drop it or pass `--backend=llvm`."
+            );
+            process::exit(1);
+        }
+        (Some(backend), _) => backend,
+        (None, Some(_)) => Backend::Llvm,
+        (None, None) => Backend::Interpreter,
+    }
 }
 
 /// Categorized source input for a `koja` command.
@@ -323,18 +413,19 @@ fn into_source_file(loaded: LoadedSource) -> SourceFile {
 /// `-o`/`--output` overrides the default stem-based output name.
 pub fn cmd_build(project_root: Option<&Path>, options: BuildOptions) {
     let BuildOptions {
+        codegen,
         emit_llvm,
         file,
         output,
-        release,
     } = options;
+    let compile = codegen.compile_options();
     let mode = resolve_source_shape(file.as_deref(), project_root)
         .unwrap_or_else(|err| bail_resolve_error(err));
     match mode {
-        SourceShape::Script(path) => build_and_keep(&path, output, release, emit_llvm),
+        SourceShape::Script(path) => build_and_keep(&path, output, compile, emit_llvm),
         SourceShape::Program(path) => bail_program_execution(&path),
         SourceShape::Project { config, root } => {
-            build_project_and_keep(&config, &root, output, release, emit_llvm)
+            build_project_and_keep(&config, &root, output, compile, emit_llvm)
         }
     }
 }
@@ -343,7 +434,7 @@ pub fn cmd_build(project_root: Option<&Path>, options: BuildOptions) {
 /// execute a `.kojs` script or a project through the chosen
 /// backend.
 ///
-/// `--backend` defaults to [`Backend::Interpreter`]. Scripts:
+/// `--backend` resolves through [`resolve_backend`]. Scripts:
 /// parse Script -> check -> [`lower_script`] ->
 /// [`Interpreter::run_script`], exiting 0 on success and 1 on any
 /// pipeline failure. Projects: collect -> parse -> check ->
@@ -357,24 +448,26 @@ pub fn cmd_run(project_root: Option<&Path>, options: RunOptions) {
     let RunOptions {
         args,
         backend,
+        codegen,
         file,
-        release,
     } = options;
+    let backend = resolve_backend(backend, codegen);
+    let compile = codegen.compile_options();
     if let Some(task_name) = file.as_deref().filter(|arg| looks_like_task_name(arg)) {
-        run_task(task_name, project_root, backend, release, &args);
+        run_task(task_name, project_root, backend, compile, &args);
     }
     let mode = resolve_source_shape(file.as_deref(), project_root)
         .unwrap_or_else(|err| bail_resolve_error(err));
     match (mode, backend) {
         (SourceShape::Script(path), Backend::Interpreter) => run_script_interpreted(&path),
-        (SourceShape::Script(path), Backend::Llvm) => run_script_compiled(&path, release, &args),
+        (SourceShape::Script(path), Backend::Llvm) => run_script_compiled(&path, compile, &args),
         (SourceShape::Program(path), Backend::Interpreter)
         | (SourceShape::Program(path), Backend::Llvm) => bail_program_execution(&path),
         (SourceShape::Project { config, root }, Backend::Interpreter) => {
             run_project_interpreted(&config, &root, &args)
         }
         (SourceShape::Project { config, root }, Backend::Llvm) => {
-            run_project_compiled(&config, &root, release, &args)
+            run_project_compiled(&config, &root, compile, &args)
         }
     }
 }
@@ -450,7 +543,7 @@ fn run_task(
     name: &str,
     project_root: Option<&Path>,
     backend: Backend,
-    release: bool,
+    compile: CompileOptions,
     args: &[String],
 ) -> ! {
     let project = try_load_project(project_root);
@@ -479,7 +572,7 @@ fn run_task(
     match backend {
         Backend::Interpreter => interpret_program(&program, args),
         Backend::Llvm => {
-            run_task_compiled(&program, name, provider, project.as_ref(), release, args)
+            run_task_compiled(&program, name, provider, project.as_ref(), compile, args)
         }
     }
 }
@@ -493,14 +586,14 @@ fn run_task_compiled(
     name: &str,
     provider: &TaskProvider,
     project: Option<&(ProjectConfig, PathBuf)>,
-    release: bool,
+    compile: CompileOptions,
     args: &[String],
 ) -> ! {
     let binary_stem = format!("task_{}", name.replace('.', "_"));
     let (binary, app_name, link_roots, remove_after) = match project.filter(|_| !provider.toolchain)
     {
         Some((config, root)) => (
-            project_build_dir(root, release).join(binary_stem),
+            project_build_dir(root, compile.release).join(binary_stem),
             config.name.as_str(),
             vec![root.as_path()],
             false,
@@ -513,7 +606,7 @@ fn run_task_compiled(
         ),
     };
     let binary = binary.to_string_lossy().to_string();
-    emit_and_link_program(program, app_name, &binary, &link_roots, release);
+    emit_and_link_program(program, app_name, &binary, &link_roots, compile);
     exec_binary(&binary, args, remove_after)
 }
 
@@ -604,7 +697,7 @@ fn check_task_conformance(checked: &CheckedProgram, task_name: &str, provider: &
 /// by `cmd_build` when the user picks the LLVM backend. When
 /// `emit_llvm` is set, print the textual LLVM IR to stdout and
 /// short-circuit before linking. No `.o`, no binary.
-fn build_and_keep(path: &Path, output: Option<String>, release: bool, emit_llvm: bool) {
+fn build_and_keep(path: &Path, output: Option<String>, compile: CompileOptions, emit_llvm: bool) {
     let script = build_script(path);
     let app_name = derive_package(path);
     if emit_llvm {
@@ -612,18 +705,18 @@ fn build_and_keep(path: &Path, output: Option<String>, release: bool, emit_llvm:
         return;
     }
     let output = resolve_output_name(output, path);
-    emit_and_link_script(&script, &app_name, &output, release);
+    emit_and_link_script(&script, &app_name, &output, compile);
     println!("compiled: {output}");
 }
 
 /// Build the `.kojs` script at `path` into a temp binary, exec
 /// it with `args`, forward the exit code, and remove the temp
 /// binary. Diverges either way (binary status or launch error).
-fn run_script_compiled(path: &Path, release: bool, args: &[String]) -> ! {
+fn run_script_compiled(path: &Path, compile: CompileOptions, args: &[String]) -> ! {
     let script = build_script(path);
     let stem = path.file_stem().and_then(OsStr::to_str).unwrap_or("app");
     let output = temp_binary_path(stem).to_string_lossy().to_string();
-    emit_and_link_script(&script, &derive_package(path), &output, release);
+    emit_and_link_script(&script, &derive_package(path), &output, compile);
     exec_binary(&output, args, true)
 }
 
@@ -789,18 +882,21 @@ fn print_program_ir(program: &IRProgram, app_name: &str) {
 /// native binary at `output`. `app_name` flows into the binary's
 /// `__koja_app_name` global (panic backtrace label) and
 /// `script.link_libraries` becomes the `cc -l<name>` set.
-fn emit_and_link_script(script: &IRScript, app_name: &str, output: &str, release: bool) {
+fn emit_and_link_script(script: &IRScript, app_name: &str, output: &str, compile: CompileOptions) {
     let object_path = format!("{output}.o");
-    if let Err(err) = koja_ir_llvm::compile_script(
-        script,
-        app_name,
-        Path::new(&object_path),
-        &koja_ir_llvm::CompileOptions { release },
-    ) {
+    if let Err(err) =
+        koja_ir_llvm::compile_script(script, app_name, Path::new(&object_path), &compile)
+    {
         eprintln!("error: {err}");
         process::exit(1);
     }
-    link_object(&object_path, output, &script.link_libraries, &[], release);
+    link_object(
+        &object_path,
+        output,
+        &script.link_libraries,
+        &[],
+        compile.release,
+    );
 }
 
 fn link_object(
@@ -868,7 +964,7 @@ fn build_project_and_keep(
     config: &ProjectConfig,
     root: &Path,
     output: Option<String>,
-    release: bool,
+    compile: CompileOptions,
     emit_llvm: bool,
 ) {
     let program = build_project_program(config, root);
@@ -878,9 +974,9 @@ fn build_project_and_keep(
     }
     let output = match output {
         Some(o) => o,
-        None => default_project_output(config, root, release),
+        None => default_project_output(config, root, compile.release),
     };
-    emit_and_link_program(&program, &config.name, &output, &[root], release);
+    emit_and_link_program(&program, &config.name, &output, &[root], compile);
     println!("compiled: {output}");
 }
 
@@ -937,7 +1033,13 @@ fn run_project_tests(config: &ProjectConfig, root: &Path, opts: TestOptions) {
         .join(format!("{}_test", config.binary_name()))
         .to_string_lossy()
         .to_string();
-    emit_and_link_program(&program, &config.name, &binary, &[root], false);
+    emit_and_link_program(
+        &program,
+        &config.name,
+        &binary,
+        &[root],
+        CompileOptions::default(),
+    );
 
     // Trace runs are meant for interactive debugging (and the
     // per-binary timeout would kill a long diagnostic session), so
@@ -1090,14 +1192,19 @@ fn interpret_program(program: &IRProgram, args: &[String]) -> ! {
 /// `koja run` for a project: build into a temp binary, exec
 /// with `args`, forward the exit code, and remove the binary.
 /// Diverges either way (binary status or launch error).
-fn run_project_compiled(config: &ProjectConfig, root: &Path, release: bool, args: &[String]) -> ! {
+fn run_project_compiled(
+    config: &ProjectConfig,
+    root: &Path,
+    compile: CompileOptions,
+    args: &[String],
+) -> ! {
     let program = build_project_program(config, root);
-    let build_dir = project_build_dir(root, release);
+    let build_dir = project_build_dir(root, compile.release);
     let binary = build_dir
         .join(config.binary_name())
         .to_string_lossy()
         .to_string();
-    emit_and_link_program(&program, &config.name, &binary, &[root], release);
+    emit_and_link_program(&program, &config.name, &binary, &[root], compile);
     exec_binary(&binary, args, false)
 }
 
@@ -1257,7 +1364,7 @@ fn emit_and_link_program(
     app_name: &str,
     output: &str,
     extra_lib_search_paths: &[&Path],
-    release: bool,
+    compile: CompileOptions,
 ) {
     if let Some(parent) = Path::new(output).parent()
         && !parent.as_os_str().is_empty()
@@ -1270,12 +1377,9 @@ fn emit_and_link_program(
         process::exit(1);
     }
     let object_path = format!("{output}.o");
-    if let Err(err) = koja_ir_llvm::compile_program(
-        program,
-        app_name,
-        Path::new(&object_path),
-        &koja_ir_llvm::CompileOptions { release },
-    ) {
+    if let Err(err) =
+        koja_ir_llvm::compile_program(program, app_name, Path::new(&object_path), &compile)
+    {
         eprintln!("error: {err}");
         process::exit(1);
     }
@@ -1284,7 +1388,7 @@ fn emit_and_link_program(
         output,
         &program.link_libraries,
         extra_lib_search_paths,
-        release,
+        compile.release,
     );
 }
 

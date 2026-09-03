@@ -2879,6 +2879,20 @@ The selector controls the manifest, sources, dependencies, build directory, defa
 
 The selector works with project-mode `build`, `check`, `run`, `shell`, `test`, `tasks`, `deps`, `format`, and `doc` commands. Do not combine it with a standalone source file or explicit `format` or `doc` paths.
 
+### Execution Backend
+
+`koja run` executes through the interpreter by default for fast startup. Pass `--backend=llvm`, or any code generation flag such as `--release`, to compile a native binary and run that instead. `koja build` always compiles.
+
+### Target CPU
+
+Compiled binaries target a portable baseline for the build architecture, so a binary built on one machine runs on any other machine of the same architecture. The baseline is `x86-64-v2` on x86_64 and `generic` on aarch64. Two builds of the same commit produce the same instruction set.
+
+Pass `--target-cpu native` to `koja build` or `koja run` to use every instruction the build machine supports. The binary is then only guaranteed to run on that machine.
+
+```sh
+koja build --release --target-cpu native
+```
+
 ### Project Scaffolding
 
 `koja new <name>` creates a project directory with the following structure:

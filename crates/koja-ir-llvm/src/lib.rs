@@ -43,7 +43,7 @@
 //! - [`ctx`]: [`ctx::EmitContext`] bundle (inkwell context + module +
 //!   builder + per-emission counters + per-function slot table),
 //!   the value threaded through every emit operation.
-//! - [`layout`]: type-layout registry + host `TargetData` plus the
+//! - [`layout`]: type-layout registry + target `TargetData` plus the
 //!   pre-emit submodules (`layout::structs`, `layout::enums`) that
 //!   mint LLVM types from sealed IR decls. Held as
 //!   `EmitContext::layouts`.
@@ -55,11 +55,14 @@
 //!   param/block seeding.
 //! - [`main_wrapper`]: host `main` trampoline synthesis (script and
 //!   program shapes) + the `__koja_app_name` global.
-//! - [`object`]: native `.o` emission via inkwell's `TargetMachine`.
+//! - [`object`]: native `.o` emission through the context's
+//!   `TargetMachine`.
 //! - [`program`] / [`script`]: orchestrators for the two IR shapes.
 //! - [`reductions`]: the per-arch reduction-budget strategy behind
 //!   `YieldCheck` (reserved register on aarch64, thread-local on
-//!   x86_64) and the host feature string both target machines use.
+//!   x86_64) and the target feature that reserves the register.
+//! - [`target`]: triple, CPU, and feature selection behind the one
+//!   `TargetMachine` each compile builds.
 //! - [`types`]: `IRType` -> inkwell `IntType` mapping.
 
 mod constant_pool;
@@ -76,9 +79,11 @@ mod program;
 mod reductions;
 mod runtime;
 mod script;
+mod target;
 mod types;
 
 pub use error::LlvmError;
+pub use target::TargetCpu;
 
 use std::path::Path;
 
@@ -88,6 +93,7 @@ use inkwell::module::Module;
 use koja_ir::{IRProgram, IRScript};
 
 use crate::ctx::EmitContext;
+use crate::target::TargetSpec;
 
 /// Codegen knobs for the `compile_*` entry points. Kept inkwell-free
 /// so the driver API stays decoupled from LLVM types, and a struct
@@ -98,6 +104,9 @@ use crate::ctx::EmitContext;
 pub struct CompileOptions {
     /// Engage the LLVM optimization pipeline (`-O3`). Off keeps `-O0`.
     pub release: bool,
+    /// CPU the emitted code may assume. Defaults to a portable
+    /// baseline for the build architecture.
+    pub target_cpu: TargetCpu,
 }
 
 impl CompileOptions {
@@ -121,11 +130,11 @@ pub fn compile_program(
     options: &CompileOptions,
 ) -> Result<(), LlvmError> {
     let context = Context::create();
-    let ctx = EmitContext::new(&context, app_name, true);
+    let ctx = emit_context(&context, app_name, true, options)?;
     program::compile_program(&ctx, program, app_name)?;
     ctx.finalize_debug_info();
     verify_module(&ctx.module)?;
-    object::emit_object_file(&ctx.module, output, options.opt_level())
+    object::emit_object_file(&ctx, output, options.opt_level())
 }
 
 /// Compile a sealed [`IRProgram`] and return its LLVM IR text, for
@@ -133,7 +142,7 @@ pub fn compile_program(
 /// subprocess.
 pub fn emit_llvm_ir(program: &IRProgram, app_name: &str) -> Result<String, LlvmError> {
     let context = Context::create();
-    let ctx = EmitContext::new(&context, app_name, false);
+    let ctx = emit_context(&context, app_name, false, &CompileOptions::default())?;
     program::compile_program(&ctx, program, app_name)?;
     verify_module(&ctx.module)?;
     Ok(ctx.module.print_to_string().to_string())
@@ -147,20 +156,36 @@ pub fn compile_script(
     options: &CompileOptions,
 ) -> Result<(), LlvmError> {
     let context = Context::create();
-    let ctx = EmitContext::new(&context, app_name, true);
+    let ctx = emit_context(&context, app_name, true, options)?;
     script::compile_script(&ctx, script, app_name)?;
     ctx.finalize_debug_info();
     verify_module(&ctx.module)?;
-    object::emit_object_file(&ctx.module, output, options.opt_level())
+    object::emit_object_file(&ctx, output, options.opt_level())
 }
 
 /// Counterpart to [`emit_llvm_ir`] for script-mode sources.
 pub fn emit_script_llvm_ir(script: &IRScript, app_name: &str) -> Result<String, LlvmError> {
     let context = Context::create();
-    let ctx = EmitContext::new(&context, app_name, false);
+    let ctx = emit_context(&context, app_name, false, &CompileOptions::default())?;
     script::compile_script(&ctx, script, app_name)?;
     verify_module(&ctx.module)?;
     Ok(ctx.module.print_to_string().to_string())
+}
+
+/// Build the emit context around the compile's single target machine.
+fn emit_context<'ctx>(
+    context: &'ctx Context,
+    app_name: &str,
+    emit_debug_info: bool,
+    options: &CompileOptions,
+) -> Result<EmitContext<'ctx>, LlvmError> {
+    let target_machine = TargetSpec::new(options.target_cpu).target_machine(options.opt_level())?;
+    Ok(EmitContext::new(
+        context,
+        app_name,
+        emit_debug_info,
+        target_machine,
+    ))
 }
 
 /// Run LLVM's module verifier on the freshly built module. Any
