@@ -29,6 +29,7 @@ use inkwell::basic_block::BasicBlock;
 use inkwell::builder::Builder;
 use inkwell::context::Context;
 use inkwell::module::Module;
+use inkwell::targets::TargetMachine;
 use inkwell::types::{BasicType, StructType};
 use inkwell::values::BasicMetadataValueEnum;
 use inkwell::values::BasicValueEnum;
@@ -48,9 +49,13 @@ pub(crate) struct EmitContext<'ctx> {
     pub(crate) context: &'ctx Context,
     pub(crate) module: Module<'ctx>,
     /// Type-layout registry: struct + enum LLVM type handles plus
-    /// the host [`inkwell::targets::TargetData`] used by the enum
+    /// the target [`inkwell::targets::TargetData`] used by the enum
     /// layout computation. See [`crate::layout`].
     pub(crate) layouts: TypeLayouts<'ctx>,
+    /// The one target machine for this compile. Layout numbers come
+    /// from it and the object emitter writes through it, so the two
+    /// cannot disagree. See [`crate::target`].
+    pub(crate) target_machine: TargetMachine,
     /// Counter for `koja_<prefix>.<n>` global names: strings,
     /// binary, bits constants all share a single sequence so each
     /// emitted global symbol is unique. `Cell<u32>` because emission
@@ -155,16 +160,24 @@ impl<'ctx> EmitContext<'ctx> {
     /// `emit_debug_info` engages DWARF emission, set by the
     /// object-emitting `compile_*` entry points and left off by the
     /// `emit_*_llvm_ir` snapshot paths so their IR stays metadata-free.
-    pub(crate) fn new(context: &'ctx Context, module_name: &str, emit_debug_info: bool) -> Self {
-        let layouts = TypeLayouts::new();
+    /// `target_machine` is the compile's single machine, built from
+    /// [`crate::target::TargetSpec`].
+    pub(crate) fn new(
+        context: &'ctx Context,
+        module_name: &str,
+        emit_debug_info: bool,
+        target_machine: TargetMachine,
+    ) -> Self {
+        let layouts = TypeLayouts::new(&target_machine);
         let module = context.create_module(module_name);
-        layouts.pin_module_data_layout(&module);
+        layouts.pin_module_target(&module, &target_machine);
         let debug = emit_debug_info.then(|| DebugInfo::new(context, &module, module_name));
         Self {
             builder: context.create_builder(),
             context,
             module,
             layouts,
+            target_machine,
             payload_counter: Cell::new(0),
             local_slots: RefCell::new(HashMap::new()),
             constant_pool: RefCell::new(None),

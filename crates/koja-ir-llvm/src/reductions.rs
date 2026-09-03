@@ -39,7 +39,6 @@
 use inkwell::IntPredicate;
 use inkwell::basic_block::BasicBlock;
 use inkwell::intrinsics::Intrinsic;
-use inkwell::targets::TargetMachine;
 use inkwell::values::{BasicMetadataValueEnum, FunctionValue, IntValue};
 
 use crate::ctx::EmitContext;
@@ -53,6 +52,10 @@ use crate::runtime::{
 /// entry pointer, so the pick avoids both by a margin.
 const BUDGET_REGISTER: &str = "x26";
 
+/// LLVM target feature that removes [`BUDGET_REGISTER`] from the
+/// allocator.
+const BUDGET_REGISTER_FEATURE: &str = "+reserve-x26";
+
 /// Whether the host keeps the budget in [`BUDGET_REGISTER`] instead of
 /// the thread-local. Compile-time constant: the backend only targets
 /// the host triple.
@@ -60,20 +63,11 @@ fn budget_register_enabled() -> bool {
     cfg!(target_arch = "aarch64")
 }
 
-/// Host CPU feature string for target-machine construction, with the
-/// budget-register reservation appended where the register scheme is
-/// active. Both target machines (object emission and layout) must use
-/// this so compiled code never allocates the reserved register.
-pub(crate) fn host_cpu_features() -> String {
-    let mut features = TargetMachine::get_host_cpu_features().to_string();
-    if budget_register_enabled() {
-        if !features.is_empty() {
-            features.push(',');
-        }
-        features.push_str("+reserve-");
-        features.push_str(BUDGET_REGISTER);
-    }
-    features
+/// Target feature reserving [`BUDGET_REGISTER`] where the register
+/// scheme is active. [`crate::target::TargetSpec`] puts it on the
+/// target machine so compiled code never allocates the register.
+pub(crate) fn budget_register_feature() -> Option<&'static str> {
+    budget_register_enabled().then_some(BUDGET_REGISTER_FEATURE)
 }
 
 /// Emit [`koja_ir::IRInstruction::YieldCheck`], spending one reduction

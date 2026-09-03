@@ -1,31 +1,25 @@
 //! LLVM type layouts and the type-creation pre-emit phase.
 //!
-//! Owns the host [`TargetData`] plus `IRSymbol -> StructType` /
+//! Owns the target [`TargetData`] plus `IRSymbol -> StructType` /
 //! `IRSymbol -> EnumLayout` registries, and the per-shape pre-emit
 //! submodules ([`structs`], [`enums`]) that mint LLVM types from
 //! sealed IR decls. `crate::emit` is reserved for IR-instruction
 //! lowering. Type creation lives here.
 //!
-//! `TypeLayouts::new` runs once from [`crate::ctx::EmitContext::new`].
-//! `pin_module_data_layout` then aligns the module's data layout
-//! with the host triple so `get_abi_size` / `get_abi_alignment`
-//! match what the object emitter eventually pins. Every panic in
-//! this file marks an invariant violation upstream (lower / merge
-//! produced a duplicate symbol, or pre-emit ordering missed a
-//! decl). None are recoverable.
+//! `TypeLayouts::new` runs once from [`crate::ctx::EmitContext::new`]
+//! against the compile's single target machine, so `get_abi_size` /
+//! `get_abi_alignment` match the object emitter by construction.
+//! Every panic in this file marks an invariant violation upstream
+//! (lower / merge produced a duplicate symbol, or pre-emit ordering
+//! missed a decl). None are recoverable.
 
 use std::cell::RefCell;
 use std::collections::BTreeMap;
 
-use inkwell::OptimizationLevel;
 use inkwell::module::Module;
-use inkwell::targets::{
-    CodeModel, InitializationConfig, RelocMode, Target, TargetData, TargetMachine,
-};
+use inkwell::targets::{TargetData, TargetMachine};
 use inkwell::types::StructType;
 use koja_ir::{IREnumVariant, IRSymbol, IRType, IRVariantPayload, IRVariantTag};
-
-use crate::reductions;
 
 pub(crate) mod enum_order;
 pub(crate) mod enums;
@@ -84,9 +78,9 @@ pub(crate) struct TypeLayouts<'ctx> {
 }
 
 impl<'ctx> TypeLayouts<'ctx> {
-    pub(crate) fn new() -> Self {
+    pub(crate) fn new(target_machine: &TargetMachine) -> Self {
         Self {
-            target_data: host_target_data(),
+            target_data: target_machine.get_target_data(),
             struct_types: RefCell::new(BTreeMap::new()),
             struct_fields: RefCell::new(BTreeMap::new()),
             enum_layouts: RefCell::new(BTreeMap::new()),
@@ -95,10 +89,11 @@ impl<'ctx> TypeLayouts<'ctx> {
         }
     }
 
-    /// Pin `module`'s data layout to the host target's so subsequent
-    /// `get_abi_size` / `get_abi_alignment` queries match what the
-    /// object emitter will eventually pin.
-    pub(crate) fn pin_module_data_layout(&self, module: &Module<'ctx>) {
+    /// Stamp `module` with the target's triple and data layout so the
+    /// IR is self describing and `get_abi_size` / `get_abi_alignment`
+    /// queries match what the object emitter writes.
+    pub(crate) fn pin_module_target(&self, module: &Module<'ctx>, target_machine: &TargetMachine) {
+        module.set_triple(&target_machine.get_triple());
         module.set_data_layout(&self.target_data.get_data_layout());
     }
 
@@ -287,28 +282,4 @@ impl<'ctx> TypeLayouts<'ctx> {
         });
         layout.outer
     }
-}
-
-/// Host-triple [`TargetData`] matching the CPU / features /
-/// reloc-mode used by [`crate::object::emit_object_file`] so layout
-/// numbers fed into enum sizing match the eventual object output.
-fn host_target_data() -> TargetData {
-    Target::initialize_native(&InitializationConfig::default())
-        .expect("LLVM emit: failed to initialize native target");
-    let triple = TargetMachine::get_default_triple();
-    let target = Target::from_triple(&triple)
-        .expect("LLVM emit: failed to resolve native target from triple");
-    let cpu = TargetMachine::get_host_cpu_name().to_string();
-    let features = reductions::host_cpu_features();
-    let machine = target
-        .create_target_machine(
-            &triple,
-            &cpu,
-            &features,
-            OptimizationLevel::None,
-            RelocMode::PIC,
-            CodeModel::Default,
-        )
-        .expect("LLVM emit: failed to create native target machine");
-    machine.get_target_data()
 }

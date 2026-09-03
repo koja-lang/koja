@@ -40,6 +40,7 @@ use clap::{Args, Parser, Subcommand};
 
 #[derive(Parser)]
 #[command(name = "koja", version, about = "The Koja language compiler")]
+#[command(next_help_heading = "Global options")]
 struct Cli {
     /// Disable colored output
     #[arg(long, global = true)]
@@ -232,15 +233,7 @@ fn main() {
         Command::Doc(args) => dispatch_doc(args, project_root.as_deref()),
         Command::Eval { file } => {
             reject_project(project_root.as_deref(), "eval");
-            pipeline::cmd_run(
-                None,
-                pipeline::RunOptions {
-                    args: Vec::new(),
-                    backend: pipeline::Backend::Interpreter,
-                    file: Some(file),
-                    release: false,
-                },
-            )
+            pipeline::cmd_run(None, pipeline::RunOptions::interpreted(file, Vec::new()))
         }
         Command::Format { files, check } => {
             commands::cmd_format(project_root.as_deref(), files, check)
@@ -254,12 +247,7 @@ fn main() {
             reject_project(project_root.as_deref(), "new");
             pipeline::cmd_run(
                 None,
-                pipeline::RunOptions {
-                    args: vec![name],
-                    backend: pipeline::Backend::Interpreter,
-                    file: Some("koja.new".to_string()),
-                    release: false,
-                },
+                pipeline::RunOptions::interpreted("koja.new".to_string(), vec![name]),
             )
         }
         Command::Parse { files, emit_ast } => {
