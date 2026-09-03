@@ -5,9 +5,11 @@
 //! element acquired as an owned value, mirroring struct literals.
 //! `(x, y) = value` statements extract each element with
 //! [`IRInstruction::TupleGet`], acquire it, and store it through the
-//! same local-slot path as plain assignment. Destructure patterns
-//! are irrefutable by typecheck (bindings, wildcards, and nested
-//! tuples only), so no test blocks are ever minted here.
+//! same local-slot path as plain assignment, so a binding that names
+//! an existing local rebinds that slot (dropping the stale value)
+//! rather than declaring a new one. Destructure patterns are
+//! irrefutable by typecheck (bindings, wildcards, and nested tuples
+//! only), so no test blocks are ever minted here.
 //!
 //! Tuples have no nominal home for derived impls, so the universal
 //! protocol functions (`format` / `print` / `inspect` / `equals?`) expand

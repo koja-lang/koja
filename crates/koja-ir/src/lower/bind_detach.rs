@@ -22,6 +22,7 @@ use crate::local::IRLocalId;
 use crate::types::IRType;
 
 use super::ctx::FnLowerCtx;
+use super::patterns::pattern_binding_ids;
 
 /// Clone every heap-managed bind in `binds` that `body` assigns
 /// through, write the owned copy back into its slot, and clear its
@@ -74,12 +75,11 @@ pub(super) fn detach_mutated_binds(
     }
 }
 
-/// Head locals of every assignment statement in `body`, recursing
-/// into nested statement bodies (loops, conditionals, nested matches,
-/// closures). Single-segment reassignment mints a fresh `LocalId`, so
-/// only a field assignment can hit an existing bind slot, but
-/// collecting every head keeps the walk simple. Non-bind ids never
-/// intersect the bind set.
+/// Every local `body` writes, recursing into nested statement bodies
+/// (loops, conditionals, nested matches, closures). Assignment and
+/// destructuring rebind an existing name in place, so a whole-slot
+/// write can hit a bind just like a field write can. Non-bind ids
+/// never intersect the bind set.
 fn collect_assigned_locals(body: &[Statement], assigned: &mut BTreeSet<IRLocalId>) {
     for statement in body {
         match statement {
@@ -91,9 +91,15 @@ fn collect_assigned_locals(body: &[Statement], assigned: &mut BTreeSet<IRLocalId
                 collect_assigned_in_expr(value, assigned);
             }
             Statement::Break { .. } => {}
-            Statement::Destructure { value, .. } | Statement::Expr(value) => {
+            Statement::Destructure { pattern, value, .. } => {
+                assigned.extend(
+                    pattern_binding_ids(pattern)
+                        .into_iter()
+                        .map(IRLocalId::from_local_id),
+                );
                 collect_assigned_in_expr(value, assigned);
             }
+            Statement::Expr(value) => collect_assigned_in_expr(value, assigned),
             Statement::Return { value, .. } => {
                 if let Some(value) = value {
                     collect_assigned_in_expr(value, assigned);

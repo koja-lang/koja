@@ -165,11 +165,13 @@ impl LocalIndex {
 
     fn walk_pattern(&mut self, pat: &Pattern) {
         match pat {
+            // A destructure binding may rebind an existing local.
+            // Keep the declaring site so hover still has the type.
             Pattern::Binding {
                 local_id: Some(id),
                 name,
                 span,
-            } => self.insert(
+            } => self.insert_if_absent(
                 *id,
                 LocalInfo {
                     name: name.clone(),
@@ -412,5 +414,9 @@ impl LocalIndex {
 
     fn insert(&mut self, id: LocalId, info: LocalInfo) {
         self.by_id.insert(id.as_u32(), info);
+    }
+
+    fn insert_if_absent(&mut self, id: LocalId, info: LocalInfo) {
+        self.by_id.entry(id.as_u32()).or_insert(info);
     }
 }

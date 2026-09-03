@@ -20,9 +20,10 @@ impl LocalScope {
     }
 
     /// Mint a fresh [`LocalId`] for `name` and register its type.
-    /// Replaces any previous declaration of the same name. The
-    /// resolver routes both fresh declarations and same-type
-    /// reassignments through this helper.
+    /// Replaces any previous declaration of the same name. Pattern
+    /// bindings and closure params shadow through this helper.
+    /// Assignment and destructuring reuse the existing id instead
+    /// when the name is already in scope.
     pub(crate) fn declare(&mut self, name: &str, ty: ResolvedType) -> LocalId {
         let id = LocalId::new(self.next_id);
         self.next_id += 1;

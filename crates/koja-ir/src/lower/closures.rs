@@ -39,6 +39,7 @@ use super::drops::emit_function_exit_drops;
 use super::equality::{Conjunction, lower_value_equality};
 use super::ownership::{materialize_owned, promote_param};
 use super::package::resolved_type_to_ir_type;
+use super::patterns::pattern_binding_ids;
 
 /// Lower a `fn (x: T) -> U ... end` closure expression.
 pub(super) fn lower_block_closure(
@@ -662,57 +663,6 @@ impl CaptureWalker {
 
     fn visit_binary_segment(&mut self, segment: &BinarySegment) {
         self.visit_expr(&segment.value);
-    }
-}
-
-/// Collect every [`LocalId`] a pattern binds: `Binding` and
-/// `TypedBinding` slots, recursing through enum / struct / list /
-/// constructor payloads and OR branches. Binary-pattern segment
-/// bindings carry their ids on the segment's `Ident` expression
-/// resolution.
-fn pattern_binding_ids(pattern: &Pattern) -> HashSet<LocalId> {
-    let mut ids = HashSet::new();
-    collect_pattern_binding_ids(pattern, &mut ids);
-    ids
-}
-
-fn collect_pattern_binding_ids(pattern: &Pattern, ids: &mut HashSet<LocalId>) {
-    match pattern {
-        Pattern::Binding { local_id, .. } | Pattern::TypedBinding { local_id, .. } => {
-            if let Some(id) = local_id {
-                ids.insert(*id);
-            }
-        }
-        Pattern::Binary { segments, .. } => {
-            for segment in segments {
-                if let ExprKind::Ident {
-                    resolution: Resolution::Local(id),
-                    ..
-                } = &segment.value.kind
-                {
-                    ids.insert(*id);
-                }
-            }
-        }
-        Pattern::Constructor { elements, .. }
-        | Pattern::EnumTuple { elements, .. }
-        | Pattern::List { elements, .. }
-        | Pattern::Tuple { elements, .. } => {
-            for element in elements {
-                collect_pattern_binding_ids(element, ids);
-            }
-        }
-        Pattern::EnumStruct { fields, .. } | Pattern::Struct { fields, .. } => {
-            for field in fields {
-                collect_pattern_binding_ids(&field.pattern, ids);
-            }
-        }
-        Pattern::Or { patterns, .. } => {
-            for branch in patterns {
-                collect_pattern_binding_ids(branch, ids);
-            }
-        }
-        Pattern::EnumUnit { .. } | Pattern::Literal { .. } | Pattern::Wildcard { .. } => {}
     }
 }
 

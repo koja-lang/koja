@@ -254,6 +254,33 @@ fn resolve_tuple_pattern(
     resolver: &mut Resolver<'_>,
     diagnostics: &mut Vec<Diagnostic>,
 ) -> PatternCoverage {
+    let Some(element_types) =
+        tuple_element_types(subject_ty, elements.len(), span, resolver, diagnostics)
+    else {
+        return PatternCoverage::Other;
+    };
+    let mut all_catch_all = true;
+    for (pattern, element_ty) in elements.iter_mut().zip(&element_types) {
+        let coverage = resolve_pattern(pattern, element_ty, resolver, diagnostics);
+        all_catch_all &= matches!(coverage, PatternCoverage::CatchAll);
+    }
+    if all_catch_all {
+        PatternCoverage::CatchAll
+    } else {
+        PatternCoverage::Other
+    }
+}
+
+/// Element types of a tuple subject with `arity` elements. Diagnoses
+/// a non-tuple subject or an arity mismatch and returns `None`.
+/// Shared by match-arm tuple patterns and destructuring assignment.
+pub(super) fn tuple_element_types(
+    subject_ty: &ResolvedType,
+    arity: usize,
+    span: Span,
+    resolver: &Resolver<'_>,
+    diagnostics: &mut Vec<Diagnostic>,
+) -> Option<Vec<ResolvedType>> {
     let peeled = peel_alias(subject_ty, resolver.registry);
     let ResolvedType::Anonymous(AnonymousKind::Tuple {
         elements: element_types,
@@ -268,31 +295,20 @@ fn resolve_tuple_pattern(
                 span,
             ));
         }
-        return PatternCoverage::Other;
+        return None;
     };
-    if elements.len() != element_types.len() {
+    if arity != element_types.len() {
         diagnostics.push(Diagnostic::error(
             format!(
-                "tuple pattern has {} elements but subject `{}` has {}",
-                elements.len(),
+                "tuple pattern has {arity} elements but subject `{}` has {}",
                 display_resolution(subject_ty, resolver.registry),
                 element_types.len(),
             ),
             span,
         ));
-        return PatternCoverage::Other;
+        return None;
     }
-    let element_types = element_types.clone();
-    let mut all_catch_all = true;
-    for (pattern, element_ty) in elements.iter_mut().zip(&element_types) {
-        let coverage = resolve_pattern(pattern, element_ty, resolver, diagnostics);
-        all_catch_all &= matches!(coverage, PatternCoverage::CatchAll);
-    }
-    if all_catch_all {
-        PatternCoverage::CatchAll
-    } else {
-        PatternCoverage::Other
-    }
+    Some(element_types.clone())
 }
 
 /// Rewrite an `EnumStruct` pattern whose path names a struct into a

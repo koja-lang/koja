@@ -1084,7 +1084,9 @@ There is no positional access (`t.0`). Take a tuple apart with a destructuring a
 (a, (b, c)) = nested # nesting works
 ```
 
-Every element pattern must be irrefutable: a binding, a wildcard, or a nested tuple of those. Use `match` for refutable patterns:
+Every element pattern must be irrefutable: a binding, a wildcard, or a nested tuple of those. Each name follows the same rules as plain assignment. A name that already exists in scope is rebound and must keep its type, and a new name is declared. This makes `(conn, result) = conn.execute(query)` inside a loop body update the enclosing `conn`.
+
+Use `match` for refutable patterns:
 
 ```koja
 match point
