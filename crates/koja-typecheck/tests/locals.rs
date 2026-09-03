@@ -1,8 +1,9 @@
 //! Typecheck coverage for the locals slice: variable
 //! declaration, reassignment, parameter references, compound
 //! assignment (`+=`, `-=`, `*=`, `/=`), and the feature-gap
-//! diagnostics that fence off out-of-scope shapes (multi-segment
-//! lvalues, pattern destructuring, type annotations on reassignment,
+//! tuple destructuring (rebinding existing locals, declaring new
+//! ones), and the diagnostics that fence off out-of-scope shapes
+//! (multi-segment lvalues, type annotations on reassignment,
 //! type-changing reassignment).
 //!
 //! Per-function locals are addressed by [`LocalId`], so on success
@@ -20,8 +21,8 @@
 //! [`LValue::local_id`]: koja_ast::ast::LValue::local_id
 //! [`Resolution::Local`]: koja_ast::identifier::Resolution::Local
 
-use koja_ast::ast::{CompoundOp, ExprKind, Statement};
-use koja_ast::identifier::Resolution;
+use koja_ast::ast::{CompoundOp, ExprKind, Pattern, Statement};
+use koja_ast::identifier::{LocalId, Resolution};
 use koja_ast::util::dedent;
 use koja_typecheck::CheckedProgram;
 
@@ -418,4 +419,125 @@ fn local_does_not_leak_across_functions() {
             .any(|m| m.contains('x') && (m.contains("undefined") || m.contains("unknown"))),
         "expected unknown-identifier diagnostic in `second`, got {messages:?}",
     );
+}
+
+/// The `LocalId` stamped on a single-segment `Assignment`.
+fn assignment_local_id(stmt: &Statement) -> LocalId {
+    let Statement::Assignment { target, .. } = stmt else {
+        panic!("expected Assignment, got {stmt:?}");
+    };
+    target.local_id.expect("Assignment should stamp local_id")
+}
+
+/// The `LocalId`s stamped on each element of a flat
+/// `Destructure` tuple pattern, in order.
+fn destructure_local_ids(stmt: &Statement) -> Vec<LocalId> {
+    let Statement::Destructure { pattern, .. } = stmt else {
+        panic!("expected Destructure, got {stmt:?}");
+    };
+    let Pattern::Tuple { elements, .. } = pattern else {
+        panic!("expected tuple pattern, got {pattern:?}");
+    };
+    elements
+        .iter()
+        .map(|element| {
+            let Pattern::Binding { local_id, .. } = element else {
+                panic!("expected binding element, got {element:?}");
+            };
+            local_id.expect("destructure binding should stamp local_id")
+        })
+        .collect()
+}
+
+#[test]
+fn destructure_in_branch_rebinds_outer_locals() {
+    let source = "
+        fn main
+          n = 0
+          ok = false
+          if true
+            (n, ok) = (1, true)
+          end
+          n
+        end
+        ";
+
+    let checked = typecheck(&dedent(source));
+    let body = function_body(&checked, "main");
+    let n_id = assignment_local_id(&body[0]);
+    let ok_id = assignment_local_id(&body[1]);
+
+    let Statement::Expr(branch) = &body[2] else {
+        panic!("expected `if` statement, got {:?}", body[2]);
+    };
+    let ExprKind::If { then_body, .. } = &branch.kind else {
+        panic!("expected If, got {:?}", branch.kind);
+    };
+    assert_eq!(
+        destructure_local_ids(&then_body[0]),
+        vec![n_id, ok_id],
+        "destructure inside a branch must rebind the enclosing locals",
+    );
+
+    let Statement::Expr(trailing) = &body[3] else {
+        panic!("expected trailing expr");
+    };
+    let ExprKind::Ident { resolution, .. } = &trailing.kind else {
+        panic!("expected trailing Ident");
+    };
+    assert_eq!(*resolution, Resolution::Local(n_id));
+}
+
+#[test]
+fn destructure_mixed_pattern_rebinds_and_declares() {
+    let source = "
+        fn main
+          n = 0
+          (n, fresh) = (1, \"x\")
+          fresh
+        end
+        ";
+
+    let checked = typecheck(&dedent(source));
+    let body = function_body(&checked, "main");
+    let n_id = assignment_local_id(&body[0]);
+    let ids = destructure_local_ids(&body[1]);
+    assert_eq!(ids[0], n_id, "existing name must rebind");
+    assert_ne!(ids[1], n_id, "new name must mint its own LocalId");
+
+    let Statement::Expr(trailing) = &body[2] else {
+        panic!("expected trailing expr");
+    };
+    let ExprKind::Ident { resolution, .. } = &trailing.kind else {
+        panic!("expected trailing Ident");
+    };
+    assert_eq!(*resolution, Resolution::Local(ids[1]));
+    assert_eq!(trailing.resolution, global_leaf(&checked, "String"));
+}
+
+#[test]
+fn destructure_rebinding_with_different_type_diagnoses() {
+    let source = "
+        fn main
+          n = 0
+          (n, ok) = (\"oops\", true)
+          n
+        end
+        ";
+
+    assert_file_fails_with(source, &["reassign", "n"]);
+}
+
+#[test]
+fn destructure_onto_package_constant_diagnoses() {
+    let source = "
+        const LIMIT: Int = 10
+
+        fn main
+          (LIMIT, ok) = (1, true)
+          ok
+        end
+        ";
+
+    assert_file_fails_with(source, &["LIMIT", "constant"]);
 }

@@ -710,7 +710,8 @@ pub enum Statement {
     /// An irrefutable tuple destructuring assignment such as
     /// `(a, b) = expr`. The pattern is restricted to bindings,
     /// wildcards, and nested tuples. Refutable shapes are rejected
-    /// during parse and resolve.
+    /// during parse and resolve. Each binding follows assignment
+    /// rules. An existing local is rebound, a new name is declared.
     Destructure {
         pattern: Pattern,
         value: Expr,

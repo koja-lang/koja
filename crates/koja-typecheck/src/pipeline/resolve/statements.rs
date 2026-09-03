@@ -1,11 +1,11 @@
 //! Statement-level resolution helpers.
 //!
 //! Covers `Statement::Assignment` (declaration + same-type
-//! reassignment + multi-segment field write) and
+//! reassignment + multi-segment field write),
+//! `Statement::Destructure` (`(a, b) = rhs`, each name following the
+//! same declaration-vs-reassignment rules), and
 //! `Statement::CompoundAssign` (`x += rhs`, reassignment-only on
 //! an arithmetic local, supports field-path targets like `p.x += 1`).
-//! Pattern destructuring still surfaces as a feature-gap diagnostic
-//! here so later passes never see that shape.
 //!
 //! Declaration vs. reassignment vs. field write lives in
 //! [`resolve_assignment`]:
@@ -55,7 +55,7 @@ use crate::registry::GlobalKind;
 use super::coercion::check_compatible_stamping;
 use super::ctx::Resolver;
 use super::expr::{resolve_expr, resolve_expr_with_expected};
-use super::patterns::resolve_pattern;
+use super::patterns::tuple_element_types;
 use super::types::{display_resolution, is_arithmetic_type};
 
 /// Resolve a `target = value` statement. Validates target shape,
@@ -103,84 +103,44 @@ pub(super) fn resolve_assignment(
     let name = lvalue.segments[0].clone();
 
     let value_ty = value.resolution.clone();
-    let local_id = match resolver.scope.lookup(&name) {
-        Some((existing_id, existing_ty)) => {
-            let existing_ty = existing_ty.clone();
-            if let Some(annotation) = type_annotation {
+    let already_declared = resolver.scope.lookup(&name).is_some();
+    if let Some(annotation) = type_annotation.filter(|_| already_declared) {
+        diagnostics.push(Diagnostic::error(
+            format!(
+                "typecheck only allows type annotations on the first declaration \
+                 of a local (`{name}` was already declared)",
+            ),
+            annotation_span(annotation),
+        ));
+        return;
+    }
+    let declared_ty = match expected_ty {
+        Some(annotated) => {
+            if value_ty.is_resolved()
+                && check_compatible_stamping(value, &value_ty, &annotated, resolver.registry)
+                    .is_some()
+            {
                 diagnostics.push(Diagnostic::error(
                     format!(
-                        "typecheck only allows type annotations on the first declaration \
-                         of a local (`{name}` was already declared)",
-                    ),
-                    annotation_span(annotation),
-                ));
-                return;
-            }
-            if !value_ty.is_resolved() {
-                // The rhs already triggered its own diagnostic. Stay
-                // quiet to avoid piling on with a type-mismatch.
-                return;
-            }
-            if value_ty != existing_ty {
-                diagnostics.push(Diagnostic::error(
-                    format!(
-                        "cannot reassign `{name}` from `{}` to `{}` because local types are fixed at \
-                         declaration",
-                        display_resolution(&existing_ty, resolver.registry),
+                        "type annotation on `{name}` says `{}`, but the \
+                         right-hand side has type `{}`",
+                        display_resolution(&annotated, resolver.registry),
                         display_resolution(&value_ty, resolver.registry),
                     ),
                     span,
                 ));
             }
-            existing_id
+            annotated
         }
         None => {
-            if assigns_to_package_constant(&name, resolver) {
-                diagnostics.push(Diagnostic::error(
-                    format!(
-                        "cannot assign to `{name}` because package-level constants are immutable and \
-                         cannot be reassigned like a local",
-                    ),
-                    span,
-                ));
+            if !value_ty.is_resolved() {
+                // The rhs already triggered its own diagnostic. On a
+                // first declaration, leave the local out of scope so
+                // later references diagnose as unknown rather than as
+                // a typed hole.
                 return;
             }
-            let declared_ty = match expected_ty {
-                Some(annotated) => {
-                    if value_ty.is_resolved()
-                        && check_compatible_stamping(
-                            value,
-                            &value_ty,
-                            &annotated,
-                            resolver.registry,
-                        )
-                        .is_some()
-                    {
-                        diagnostics.push(Diagnostic::error(
-                            format!(
-                                "type annotation on `{name}` says `{}`, but the \
-                                 right-hand side has type `{}`",
-                                display_resolution(&annotated, resolver.registry),
-                                display_resolution(&value_ty, resolver.registry),
-                            ),
-                            span,
-                        ));
-                    }
-                    annotated
-                }
-                None => {
-                    if !value_ty.is_resolved() {
-                        // Without an annotation we can only infer
-                        // from the rhs. If that failed, leave the
-                        // local out of scope so later references
-                        // diagnose as unknown rather than as a typed
-                        // hole.
-                        return;
-                    }
-                    value_ty
-                }
-            };
-            resolver.scope.declare(&name, declared_ty)
+            value_ty
         }
     };
 
@@ -188,13 +148,53 @@ pub(super) fn resolve_assignment(
     // re-walking scope. Single-segment is the only shape that reaches
     // here. Multi-segment field writes routed to
     // `resolve_field_assignment` above and bailed early.
-    lvalue.local_id = Some(local_id);
+    lvalue.local_id = rebind_or_declare_local(&name, declared_ty, span, resolver, diagnostics);
+}
+
+/// Bind `name` to a value of type `ty` the way `name = value` does.
+/// An existing local is rebound and keeps its `LocalId` (local types
+/// are fixed at declaration, so `ty` must match), a new name is
+/// declared. Shared by plain assignment and destructuring.
+fn rebind_or_declare_local(
+    name: &str,
+    ty: ResolvedType,
+    span: Span,
+    resolver: &mut Resolver<'_>,
+    diagnostics: &mut Vec<Diagnostic>,
+) -> Option<LocalId> {
+    if let Some((existing_id, existing_ty)) = resolver.scope.lookup(name) {
+        if ty != *existing_ty {
+            diagnostics.push(Diagnostic::error(
+                format!(
+                    "cannot reassign `{name}` from `{}` to `{}` because local types are fixed at \
+                     declaration",
+                    display_resolution(existing_ty, resolver.registry),
+                    display_resolution(&ty, resolver.registry),
+                ),
+                span,
+            ));
+        }
+        return Some(existing_id);
+    }
+    if assigns_to_package_constant(name, resolver) {
+        diagnostics.push(Diagnostic::error(
+            format!(
+                "cannot assign to `{name}` because package-level constants are immutable and \
+                 cannot be reassigned like a local",
+            ),
+            span,
+        ));
+        return None;
+    }
+    Some(resolver.scope.declare(name, ty))
 }
 
 /// Resolve a `(a, b) = value` statement. The value resolves first,
 /// then the pattern binds element-wise against its tuple type. Only
 /// bindings, wildcards, and nested tuples are allowed, so the
-/// pattern can never fail at runtime.
+/// pattern can never fail at runtime. Each name follows assignment
+/// rules, so `(n, ok) = step(n)` inside a loop body writes the
+/// enclosing `n` instead of declaring a shadow.
 pub(super) fn resolve_destructure(
     pattern: &mut Pattern,
     value: &mut Expr,
@@ -209,7 +209,41 @@ pub(super) fn resolve_destructure(
         return;
     }
     let subject_ty = value.resolution.clone();
-    resolve_pattern(pattern, &subject_ty, resolver, diagnostics);
+    bind_destructure_pattern(pattern, &subject_ty, resolver, diagnostics);
+}
+
+/// Stamp every binding in an irrefutable destructure pattern via
+/// [`rebind_or_declare_local`], recursing into nested tuples.
+fn bind_destructure_pattern(
+    pattern: &mut Pattern,
+    subject_ty: &ResolvedType,
+    resolver: &mut Resolver<'_>,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    match pattern {
+        Pattern::Binding {
+            local_id,
+            name,
+            span,
+        } => {
+            *local_id =
+                rebind_or_declare_local(name, subject_ty.clone(), *span, resolver, diagnostics);
+        }
+        Pattern::Tuple { elements, span } => {
+            let Some(element_types) =
+                tuple_element_types(subject_ty, elements.len(), *span, resolver, diagnostics)
+            else {
+                return;
+            };
+            for (element, element_ty) in elements.iter_mut().zip(&element_types) {
+                bind_destructure_pattern(element, element_ty, resolver, diagnostics);
+            }
+        }
+        Pattern::Wildcard { .. } => {}
+        other => unreachable!(
+            "destructure_pattern_is_irrefutable admitted a refutable {other:?} pattern"
+        ),
+    }
 }
 
 /// True when every leaf is a binding, wildcard, or nested tuple.

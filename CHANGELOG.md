@@ -19,6 +19,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Compiled binaries no longer target the build machine's CPU, so a binary built on one x86_64 or aarch64 host runs on any other host of that architecture.
 - `koja run --release` and `koja run --target-cpu` now compile through LLVM instead of being ignored by the interpreter. Combining them with an explicit `--backend=interpreter` is an error.
+- `(a, b) = expr` inside a loop or branch body now rebinds existing variables like plain assignment instead of declaring shadow copies that vanish at the end of the body.
 
 ## [0.18.2] - 2026-09-02
 

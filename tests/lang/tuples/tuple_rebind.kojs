@@ -1,0 +1,102 @@
+# Destructuring assignment follows the same rules as plain
+# assignment. A name that already exists in scope is rebound, so a
+# `(a, b) = expr` inside a loop or branch body writes the enclosing
+# locals instead of declaring shadow copies. New names are declared.
+
+fn step(n: Int) -> (Int, Bool)
+  (n + 1, true)
+end
+
+# Regression guard for issue 98: threading state through a
+# tuple-returning call inside a `for` body.
+fn tuple_loop -> Int
+  n = 0
+
+  for _ in [1, 2, 3]
+    (n, ok) = step(n)
+  end
+
+  n
+end
+
+fn plain_loop -> Int
+  n = 0
+
+  for _ in [1, 2, 3]
+    n = n + 1
+  end
+
+  n
+end
+
+IO.puts("#{tuple_loop()} #{plain_loop()}")
+
+# Inside an `if` body the read after the branch used to fail
+# definite assignment because the destructure looked like a fresh
+# declaration on one path.
+fn branch_rebind(flag: Bool) -> Int
+  n = 10
+
+  if flag
+    (n, _) = step(n)
+  end
+
+  n
+end
+
+branch_rebind(true).print()
+branch_rebind(false).print()
+
+# Mixed pattern. `total` rebinds, `last` is declared by the
+# destructure and stays visible afterwards.
+total = 0
+(total, last) = (total + 5, "five")
+total.print()
+last.print()
+
+# Nested tuple rebinding.
+x = 0
+y = 0
+label = ""
+
+for i in [1, 2]
+  (x, (y, label)) = (x + i, (y + i * 10, "step #{i}"))
+end
+
+x.print()
+y.print()
+label.print()
+
+# Heap-managed rebinding in a loop drops the stale value each
+# iteration and keeps the latest one.
+acc = "start"
+count = 0
+
+for word in ["a", "b", "c"]
+  (acc, count) = ("#{acc}-#{word}", count + 1)
+end
+
+acc.print()
+count.print()
+
+# Destructuring onto a match bind inside the arm body. The bind
+# borrows the subject's payload, so the overwrite must detach it
+# first.
+enum Holder
+  Text(String)
+  Empty
+end
+
+fn rewrite(h: Holder) -> String
+  match h
+    Holder.Text(s) ->
+      (s, _) = ("#{s}!", 0)
+      s
+
+    Holder.Empty ->
+      "empty"
+  end
+end
+
+rewrite(Holder.Text("hi")).print()
+rewrite(Holder.Empty).print()

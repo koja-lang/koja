@@ -40,8 +40,10 @@ mod or_pattern;
 mod structs;
 mod tuples;
 
-use koja_ast::ast::{Diagnostic, Pattern};
-use koja_ast::identifier::{GlobalRegistryId, LocalId, ResolvedType};
+use std::collections::HashSet;
+
+use koja_ast::ast::{Diagnostic, ExprKind, Pattern};
+use koja_ast::identifier::{GlobalRegistryId, LocalId, Resolution, ResolvedType};
 use koja_ast::labels::{pattern_kind_label, pattern_span};
 use koja_typecheck::GlobalRegistry;
 
@@ -57,6 +59,56 @@ use crate::local::IRLocalId;
 use crate::types::{IRType, ValueId};
 
 use literals::emit_literal_eq;
+
+/// Collect every [`LocalId`] a pattern binds, recursing through
+/// enum / struct / list / constructor payloads and OR branches.
+/// Binary-pattern segment bindings carry their ids on the segment's
+/// `Ident` expression resolution.
+pub(super) fn pattern_binding_ids(pattern: &Pattern) -> HashSet<LocalId> {
+    let mut ids = HashSet::new();
+    collect_pattern_binding_ids(pattern, &mut ids);
+    ids
+}
+
+fn collect_pattern_binding_ids(pattern: &Pattern, ids: &mut HashSet<LocalId>) {
+    match pattern {
+        Pattern::Binding { local_id, .. } | Pattern::TypedBinding { local_id, .. } => {
+            if let Some(id) = local_id {
+                ids.insert(*id);
+            }
+        }
+        Pattern::Binary { segments, .. } => {
+            for segment in segments {
+                if let ExprKind::Ident {
+                    resolution: Resolution::Local(id),
+                    ..
+                } = &segment.value.kind
+                {
+                    ids.insert(*id);
+                }
+            }
+        }
+        Pattern::Constructor { elements, .. }
+        | Pattern::EnumTuple { elements, .. }
+        | Pattern::List { elements, .. }
+        | Pattern::Tuple { elements, .. } => {
+            for element in elements {
+                collect_pattern_binding_ids(element, ids);
+            }
+        }
+        Pattern::EnumStruct { fields, .. } | Pattern::Struct { fields, .. } => {
+            for field in fields {
+                collect_pattern_binding_ids(&field.pattern, ids);
+            }
+        }
+        Pattern::Or { patterns, .. } => {
+            for branch in patterns {
+                collect_pattern_binding_ids(branch, ids);
+            }
+        }
+        Pattern::EnumUnit { .. } | Pattern::Literal { .. } | Pattern::Wildcard { .. } => {}
+    }
+}
 
 /// Read-only inputs threaded through every recursive helper.
 /// Bundling them keeps `lower_pattern_check` and its per-shape

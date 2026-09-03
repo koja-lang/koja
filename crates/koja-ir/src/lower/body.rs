@@ -295,10 +295,10 @@ pub(super) fn store_owned_into_local(
         // Reassignment of a live heap-managed slot. Free the prior
         // owned value before overwriting so the old allocation
         // doesn't leak (a heap-leaf `rc--`, a composite `drop_T`).
-        // The slot is never a borrowed pattern bind. Reassigning a
-        // name mints a fresh `LocalId` (`LocalScope::declare`), and
-        // binds are written only by pattern lowering, so this stale
-        // drop always releases a slot-owned value.
+        // The slot is never a borrowed pattern bind here. Any bind
+        // the arm body assigns through (plain or destructure) was
+        // detached into an owned copy at arm entry (`bind_detach`),
+        // so this stale drop always releases a slot-owned value.
         let stale = ctx.fresh_value(value_ty.clone());
         ctx.cfg.append(
             current,
