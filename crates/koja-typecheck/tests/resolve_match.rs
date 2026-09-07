@@ -30,15 +30,16 @@
 //!   nested payload coverage
 
 use koja_ast::ast::{ExprKind, Pattern};
-use koja_ast::identifier::Resolution;
+use koja_ast::identifier::{AnonymousKind, Resolution, ResolvedType};
 use koja_ast::util::dedent;
+use koja_typecheck::CheckedProgram;
 
 mod common;
 
 use common::{
-    assert_script_fails_with, function_body, int_type, last_expr, string_type, trailing_expr,
-    trailing_resolution, typecheck_script as typecheck, typecheck_script_fail as typecheck_fail,
-    warning_messages,
+    assert_script_fails_with, bool_type, function_body, global_named, int_type, last_expr,
+    string_type, trailing_expr, trailing_resolution, typecheck_script as typecheck,
+    typecheck_script_fail as typecheck_fail, warning_messages,
 };
 
 fn assert_missing_variant(source: &str, variant: &str) {
@@ -1431,6 +1432,114 @@ fn match_guarded_nested_arm_does_not_count_toward_coverage() {
           classify(Option.None)
         ";
     assert_script_fails_with(source, &["not exhaustive", "`Option.Some(Color.Green)`"]);
+}
+
+/// Typecheck a script and return the type of its trailing expression.
+fn binding_type(source: &str) -> (CheckedProgram, ResolvedType) {
+    let checked = typecheck(&dedent(source));
+    let ty = trailing_resolution(&checked);
+    (checked, ty)
+}
+
+#[test]
+fn match_binding_joins_result_payloads_across_arms() {
+    let (checked, ty) = binding_type(
+        "
+        flag = true
+        r = match flag
+          true -> Result.Ok(true)
+          false -> Result.Err(\"nope\")
+        end
+        r
+        ",
+    );
+    assert_eq!(
+        ty,
+        global_named(
+            &checked,
+            "Result",
+            vec![bool_type(&checked), string_type(&checked)]
+        )
+    );
+}
+
+#[test]
+fn match_binding_fills_unit_variant_from_sibling_arm() {
+    let (checked, ty) = binding_type(
+        "
+        flag = true
+        o = match flag
+          true -> Option.Some(1)
+          false -> Option.None
+        end
+        o
+        ",
+    );
+    assert_eq!(
+        ty,
+        global_named(&checked, "Option", vec![int_type(&checked)])
+    );
+}
+
+#[test]
+fn match_binding_merges_holes_inside_tuples() {
+    let (checked, ty) = binding_type(
+        "
+        flag = true
+        t = match flag
+          true -> (1, Option.None)
+          false -> (2, Option.Some(\"x\"))
+        end
+        t
+        ",
+    );
+    let option_string = global_named(&checked, "Option", vec![string_type(&checked)]);
+    assert_eq!(
+        ty,
+        ResolvedType::Anonymous(AnonymousKind::Tuple {
+            elements: vec![int_type(&checked), option_string],
+        })
+    );
+}
+
+#[test]
+fn match_binding_with_conflicting_partial_payloads_keeps_first_pass_errors() {
+    let failure = typecheck_fail(&dedent(
+        "
+        flag = true
+        r = match flag
+          true -> Result.Ok(1)
+          false -> Result.Ok(\"s\")
+        end
+        ",
+    ));
+    let messages: Vec<&str> = failure
+        .diagnostics
+        .iter()
+        .map(|diagnostic| diagnostic.message.as_str())
+        .collect();
+    assert_eq!(messages.len(), 2, "got {messages:?}");
+    assert!(
+        messages
+            .iter()
+            .all(|message| message.contains("cannot infer type parameter `E`")),
+        "got {messages:?}"
+    );
+}
+
+#[test]
+fn match_binding_with_holes_in_every_arm_still_cannot_infer() {
+    assert_script_fails_with(
+        "
+        flag = true
+        o = match flag
+          true -> Option.None
+          false -> Option.None
+        end
+        o
+        ",
+        &["cannot infer type parameter `T` of `Global.Option`"],
+    );
 }
 
 #[test]

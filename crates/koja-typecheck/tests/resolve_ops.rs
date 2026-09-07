@@ -339,3 +339,28 @@ fn unary_neg_on_unsigned_int_is_rejected() {
         a = produce_u8()\n  -a\n";
     assert_script_fails_with(source, &["signed Int or Float"]);
 }
+
+#[test]
+fn equality_infers_generic_right_operand_from_left() {
+    let source = "p: CPtr<Int> = CPtr.alloc(1)\np == CPtr.null()\n";
+    assert_trailing_is(source, "Bool");
+}
+
+#[test]
+fn equality_infers_generic_left_operand_from_right() {
+    for source in [
+        "p: CPtr<Int> = CPtr.alloc(1)\nCPtr.null() == p\n",
+        "p: CPtr<Int> = CPtr.alloc(1)\nCPtr.null() != p\n",
+        "o = Option.Some(3)\nOption.None == o\n",
+    ] {
+        assert_trailing_is(source, "Bool");
+    }
+}
+
+#[test]
+fn equality_with_generic_calls_on_both_sides_still_cannot_infer() {
+    assert_script_fails_with(
+        "CPtr.null() == CPtr.null()\n",
+        &["cannot infer type parameter `T` of `Global.CPtr`"],
+    );
+}

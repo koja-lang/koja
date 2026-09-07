@@ -87,52 +87,6 @@ can call any package function. Known limitations:
 
 ---
 
-## Inference and ergonomics warts from the pooler build
-
-Found 2026-07-15 while building the `pooler` package (a generic
-`Process` implementation, the first real one outside the stdlib). The
-blocking bug is fixed. `spawn` on a generic process target was not
-substituting the call site's type args into the conformance's `M`/`R`,
-and the monomorphizer skipped `LValue.head_resolved_type` on field
-assignments (regression coverage in
-`tests/lang/generics/generic_process_spawn.kojs`). Also fixed
-2026-07-16: `priv fn` helpers inside `impl Protocol for Type` blocks
-were rejected despite LANGUAGE.md allowing them; the conformance check
-now skips private members and only rejects public extras (regression
-coverage in `tests/lang/protocols/priv_impl_helper.kojs`). Two
-non-blocking warts remain, each with a workaround.
-
-- **`==` operands get no expected type from each other.**
-  `p == CPtr.null()` and `CPtr.null() == p` both fail with "cannot
-  infer type parameter `T` of `CPtr`" because
-  `resolve_equality_op_expr` resolves each side with no hint. The
-  same call infers fine as an argument or with an annotated binding,
-  since those sites pre-seed from the expected type. The fix is
-  local to `ops.rs`. Resolve one side, then pass its type as the
-  expected hint to the other, with a speculative first pass so the
-  generic call can sit on either side. Workaround is
-  `null: CPtr<Int> = CPtr.null()` before the comparison. The earlier
-  form of this entry blamed unit variants
-  (`consume(Signal.Done)` with `consume<T>(s: Signal<T>)`), but that
-  program is ambiguous. Nothing mentions `T`, so the error is
-  correct. Unit variants infer wherever `T` is determinable, from a
-  concrete parameter type, an `extend Box<T>` scope, or the expected
-  return type.
-- **`x = match … end` doesn't cross-infer generic payloads.** Arms
-  building `Result.Ok(true)` / `Result.Err("nope")` each fail inside
-  their own construction with "cannot infer type parameter", before
-  any join runs, because enum construction reports a phantom type
-  parameter eagerly when there is no expected type. The same match
-  as a trailing expression compiles because the function return type
-  flows in as the hint. The fix has to let a partially inferred type
-  such as `Result<Bool, ?E>` leave the arm, join arms by unifying the
-  holes, and report only the holes that survive the join. That
-  touches every consumer that trusts `is_resolved()`. Workaround is
-  restructuring so the match is in return position, or annotating
-  the binding.
-
----
-
 ## Runtime: adjacent issues from the worker-migration TLS audit
 
 Found while root-causing the 2026-07 Linux shutdown crash (a process

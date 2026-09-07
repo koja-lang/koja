@@ -1,6 +1,8 @@
 //! `match` expression resolution. Walks the subject and every arm
 //! body, checks coverage, and joins the arm tails using the same
 //! lattice [`super::control_flow`] uses for `if` / `cond` / ternary.
+//! With no expected type the arms hint each other (see
+//! [`super::speculation::resolve_arms`]).
 //!
 //! Coverage is a usefulness question (see
 //! [`super::patterns::SubjectCoverage`]). The match is exhaustive
@@ -32,6 +34,7 @@ use super::patterns::{
     DeconstructedPattern, SubjectCoverage, is_enum_or_union_subject, is_match_subject_primitive,
     resolve_pattern,
 };
+use super::speculation::{ArmSet, ArmTail, Restorable, resolve_arms};
 use super::types::display_resolution;
 use super::walker::resolve_body_with_expected;
 use crate::registry::GlobalRegistry;
@@ -42,7 +45,7 @@ const MAX_LISTED_WITNESSES: usize = 3;
 
 pub(super) fn resolve_match(
     subject: &mut Expr,
-    arms: &mut [MatchArm],
+    arms: &mut Vec<MatchArm>,
     expected: Option<&ResolvedType>,
     span: Span,
     resolver: &mut Resolver<'_>,
@@ -68,7 +71,7 @@ pub(super) fn resolve_match(
 pub(super) fn resolve_match_arms(
     keyword: &str,
     subject: &Expr,
-    arms: &mut [MatchArm],
+    arms: &mut Vec<MatchArm>,
     expected: Option<&ResolvedType>,
     span: Span,
     resolver: &mut Resolver<'_>,
@@ -84,35 +87,29 @@ pub(super) fn resolve_match_arms(
         return ResolvedType::unresolved();
     }
 
-    let mut has_literal_arm = false;
-    let mut tails: Vec<(String, ResolvedType)> = Vec::with_capacity(arms.len());
-    for (index, arm) in arms.iter_mut().enumerate() {
-        if matches!(arm.pattern, Pattern::Literal { .. }) {
-            has_literal_arm = true;
-        }
-        let scope_snapshot = resolver.scope.snapshot();
-        resolve_pattern(&mut arm.pattern, &subject_ty, resolver, diagnostics);
-        if let Some(guard) = &mut arm.guard {
-            resolve_expr(guard, resolver, diagnostics);
-            require_bool_condition("match arm guard", guard, resolver.registry, diagnostics);
-        }
-        resolve_body_with_expected(&mut arm.body, expected, resolver, diagnostics);
-        resolver.scope.restore(scope_snapshot);
-        tails.push((
-            arm_label(keyword, index),
-            body_tail_type(&arm.body, resolver.registry),
-        ));
-    }
+    let has_literal_arm = arms
+        .iter()
+        .any(|arm| matches!(arm.pattern, Pattern::Literal { .. }));
+    let tails = resolve_arms(
+        &mut MatchArms {
+            arms,
+            keyword,
+            subject_ty: &subject_ty,
+        },
+        expected,
+        resolver,
+        diagnostics,
+    );
 
     if has_literal_arm
         && subject_ty.is_resolved()
         && !is_enum_or_union_subject(&subject_ty, resolver.registry)
         && !is_match_subject_primitive(&subject_ty, resolver.registry)
     {
-        diagnostics.push(Diagnostic::error(
+        diagnostics.push(Diagnostic::error_with_hint(
             "typecheck does not yet admit literal `match` patterns against \
-             non-primitive subjects (supported subjects are `Bool` / `String` / numeric \
-             primitives)",
+             non-primitive subjects",
+            "literal patterns are supported for `Bool`, `String`, and numeric subjects",
             subject.span,
         ));
     }
@@ -120,6 +117,52 @@ pub(super) fn resolve_match_arms(
     check_coverage(arms, &subject_ty, span, resolver.registry, diagnostics);
 
     join_arm_tails(keyword, &tails, span, resolver.registry, diagnostics)
+}
+
+/// The arms of one `match`, resolved against the subject's type.
+struct MatchArms<'a> {
+    arms: &'a mut Vec<MatchArm>,
+    keyword: &'a str,
+    subject_ty: &'a ResolvedType,
+}
+
+impl Restorable for MatchArms<'_> {
+    type Saved = Vec<MatchArm>;
+
+    fn save(&self) -> Vec<MatchArm> {
+        self.arms.clone()
+    }
+
+    fn restore(&mut self, saved: Vec<MatchArm>) {
+        *self.arms = saved;
+    }
+}
+
+impl ArmSet for MatchArms<'_> {
+    /// Resolve every arm's pattern, guard, and body against `hint`.
+    fn resolve(
+        &mut self,
+        hint: Option<&ResolvedType>,
+        resolver: &mut Resolver<'_>,
+        diagnostics: &mut Vec<Diagnostic>,
+    ) -> Vec<ArmTail> {
+        let mut tails = Vec::with_capacity(self.arms.len());
+        for (index, arm) in self.arms.iter_mut().enumerate() {
+            let scope_snapshot = resolver.scope.snapshot();
+            resolve_pattern(&mut arm.pattern, self.subject_ty, resolver, diagnostics);
+            if let Some(guard) = &mut arm.guard {
+                resolve_expr(guard, resolver, diagnostics);
+                require_bool_condition("match arm guard", guard, resolver.registry, diagnostics);
+            }
+            resolve_body_with_expected(&mut arm.body, hint, resolver, diagnostics);
+            resolver.scope.restore(scope_snapshot);
+            tails.push((
+                arm_label(self.keyword, index),
+                body_tail_type(&arm.body, resolver.registry),
+            ));
+        }
+        tails
+    }
 }
 
 /// Join-diagnostic label for one arm. A desugared `rescue` names

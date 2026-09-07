@@ -492,3 +492,93 @@ fn equality_protocol_id(registry: &GlobalRegistry) -> Option<GlobalRegistryId> {
     let identifier = Identifier::new("Global", vec!["Equality".to_string()]);
     registry.lookup(&identifier).map(|(id, _)| id)
 }
+
+/// Fill the holes in two partially inferred types from each other.
+/// `Result<Bool, ?>` and `Result<?, String>` merge to
+/// `Result<Bool, String>`. Returns `None` when the shapes disagree,
+/// which the caller leaves for the ordinary join diagnostic.
+pub(super) fn merge_partial(a: &ResolvedType, b: &ResolvedType) -> Option<ResolvedType> {
+    match (a, b) {
+        (ResolvedType::Unresolved, other) | (other, ResolvedType::Unresolved) => {
+            Some(other.clone())
+        }
+        (
+            ResolvedType::Named {
+                resolution,
+                type_args,
+            },
+            ResolvedType::Named {
+                resolution: other_resolution,
+                type_args: other_args,
+            },
+        ) if resolution == other_resolution => Some(ResolvedType::Named {
+            resolution: *resolution,
+            type_args: merge_partial_all(type_args, other_args)?,
+        }),
+        (
+            ResolvedType::Anonymous(AnonymousKind::Tuple { elements }),
+            ResolvedType::Anonymous(AnonymousKind::Tuple {
+                elements: other_elements,
+            }),
+        ) => Some(ResolvedType::Anonymous(AnonymousKind::Tuple {
+            elements: merge_partial_all(elements, other_elements)?,
+        })),
+        _ => None,
+    }
+}
+
+fn merge_partial_all(a: &[ResolvedType], b: &[ResolvedType]) -> Option<Vec<ResolvedType>> {
+    if a.len() != b.len() {
+        return None;
+    }
+    a.iter().zip(b).map(|(x, y)| merge_partial(x, y)).collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn global(id: u32) -> Resolution {
+        Resolution::Global(GlobalRegistryId::new(id))
+    }
+
+    fn named(id: u32, type_args: Vec<ResolvedType>) -> ResolvedType {
+        ResolvedType::Named {
+            resolution: global(id),
+            type_args,
+        }
+    }
+
+    #[test]
+    fn merge_partial_fills_holes_from_either_side() {
+        let left = named(1, vec![named(2, vec![]), ResolvedType::unresolved()]);
+        let right = named(1, vec![ResolvedType::unresolved(), named(3, vec![])]);
+        let merged = merge_partial(&left, &right).expect("same head merges");
+        assert_eq!(merged, named(1, vec![named(2, vec![]), named(3, vec![])]));
+    }
+
+    #[test]
+    fn merge_partial_rejects_different_heads() {
+        assert!(merge_partial(&named(1, vec![]), &named(2, vec![])).is_none());
+    }
+
+    #[test]
+    fn merge_partial_walks_tuples() {
+        let tuple = |inner| {
+            ResolvedType::Anonymous(AnonymousKind::Tuple {
+                elements: vec![named(9, vec![]), inner],
+            })
+        };
+        let left = tuple(named(1, vec![ResolvedType::unresolved()]));
+        let right = tuple(named(1, vec![named(2, vec![])]));
+        let merged = merge_partial(&left, &right).expect("tuples merge elementwise");
+        assert_eq!(merged, tuple(named(1, vec![named(2, vec![])])));
+    }
+
+    #[test]
+    fn merge_partial_keeps_hole_when_both_sides_have_it() {
+        let hole = named(1, vec![ResolvedType::unresolved()]);
+        let merged = merge_partial(&hole, &hole).expect("same shape merges");
+        assert!(!merged.is_resolved());
+    }
+}

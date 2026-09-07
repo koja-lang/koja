@@ -29,7 +29,8 @@ use koja_ast::span::Span;
 
 use super::coercion::{Compatible, check_compatible, coercion_target_mut};
 use super::ctx::Resolver;
-use super::expr::resolve_expr;
+use super::expr::{resolve_expr, resolve_expr_with_expected};
+use super::speculation::Speculation;
 use super::types::{
     display_resolution, is_primitive, peel_alias, type_supports_equality, types_equivalent,
 };
@@ -54,8 +55,7 @@ pub(super) fn resolve_equality_op_expr(
         unreachable!("resolve_equality_op_expr called on non-Binary");
     };
     let op = *op;
-    resolve_expr(left, resolver, diagnostics);
-    resolve_expr(right, resolver, diagnostics);
+    resolve_operands_with_sibling_hint(left, right, resolver, diagnostics);
 
     let span = expr.span;
     let registry = resolver.registry;
@@ -91,6 +91,31 @@ pub(super) fn resolve_equality_op_expr(
     };
     resolve_expr(expr, resolver, diagnostics);
     expr.resolution.clone()
+}
+
+/// Resolve both operands so a generic call on either side can take
+/// its type parameters from the other side. `p == CPtr.null()` gives
+/// the left type to the right as the expected hint. `CPtr.null() == p`
+/// fails a trial resolve of the left, so the right resolves first and
+/// the left resolves again with the right's type as the hint. When
+/// both sides are unresolvable the retry re-emits the trial's errors.
+fn resolve_operands_with_sibling_hint(
+    mut left: &mut Expr,
+    right: &mut Expr,
+    resolver: &mut Resolver<'_>,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    let mut trial = Speculation::begin(&left, resolver);
+    resolve_expr(left, resolver, trial.diagnostics());
+    if left.resolution.is_resolved() {
+        trial.commit(diagnostics);
+        resolve_expr_with_expected(right, Some(&left.resolution), resolver, diagnostics);
+        return;
+    }
+    trial.rollback(&mut left, resolver);
+    resolve_expr(right, resolver, diagnostics);
+    let hint = right.resolution.is_resolved().then_some(&right.resolution);
+    resolve_expr_with_expected(left, hint, resolver, diagnostics);
 }
 
 /// `==` on a nominal operand requires its full instantiation to
