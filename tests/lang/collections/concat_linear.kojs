@@ -1,0 +1,61 @@
+# Wall-clock pin for the consuming `<>` fast path. 200k pieces built
+# through a plain rebind, an interpolation accumulator, a two-link
+# chain, and `String.join` finish in milliseconds when the
+# accumulator grows in place, while a copying regression would blow
+# far past the suite's 45s timeout.
+#
+# LLVM-only (see LLVM_ONLY in lang_suite.rs). The interpreter is
+# linear here too, but its per-step constant puts 200k steps too
+# close to the timeout.
+
+n = 200000
+
+result = ""
+i = 0
+
+while i < n
+  result = result <> "piece"
+  i += 1
+end
+
+result.byte_length().print()
+
+interpolated = ""
+j = 0
+
+while j < n
+  interpolated = "#{interpolated}#{j % 10}"
+  j += 1
+end
+
+interpolated.byte_length().print()
+
+chained = ""
+k = 0
+
+while k < n
+  chained = chained <> "," <> "x"
+  k += 1
+end
+
+chained.byte_length().print()
+
+parts: List<String> = []
+p = 0
+
+while p < n
+  parts = parts.append("ab")
+  p += 1
+end
+
+String.join(parts, "-").byte_length().print()
+
+bytes: Binary = <<>>
+b = 0
+
+while b < n
+  bytes = bytes <> <<1, 2, 3>>
+  b += 1
+end
+
+bytes.byte_size().print()

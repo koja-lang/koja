@@ -297,6 +297,7 @@ fn emit_concat(lhs: ValueId, rhs: ValueId, ctx: &mut FnLowerCtx, block: IRBlockI
     ctx.cfg.append(
         block,
         IRInstruction::Concat {
+            consumes_lhs: false,
             dest,
             kind: ConcatKind::String,
             lhs,

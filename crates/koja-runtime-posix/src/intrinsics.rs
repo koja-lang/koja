@@ -12,10 +12,66 @@
 //!   the LLVM emitter's bit-packing paths, since emitting the
 //!   sub-byte alignment logic is far cleaner in Rust than in
 //!   LLVM IR.
+//! - [`__koja_concat_bytes_owned`]: the consuming `<>` for `String`
+//!   / `Binary`, which grows the lhs block in place when it is
+//!   uniquely owned.
+
+use std::ptr;
 
 use crate::memory;
 use crate::panic::crash_unwind;
-use crate::util::{BLOCK_HEADER_SIZE, read_bit_length, string_payload_bytes, write_block_header};
+use crate::util::{
+    BITS_PER_BYTE, BLOCK_HEADER_SIZE, LENGTH_OFFSET, grow_unique_block, koja_rc_dec,
+    read_bit_length, string_payload_bytes, write_block_header,
+};
+
+/// Consuming byte concat: `lhs <> rhs` where the IR proved `lhs`
+/// dies at the concat. When the lhs block is uniquely owned it is
+/// grown in place through [`grow_unique_block`] and `rhs` is
+/// appended at its old end, so builder loops run in linear time.
+/// Otherwise (shared or immortal lhs) the copying layout is
+/// allocated and `lhs` is released, standing in for the drop that
+/// consume fusion deleted. `with_nul` is non-zero for `String`,
+/// which keeps a trailing NUL past the payload.
+///
+/// # Safety
+/// `lhs` and `rhs` must point at the bodies of live heap leaf
+/// blocks. `lhs` must not be read again by the caller. It is either
+/// moved or released here.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __koja_concat_bytes_owned(
+    lhs: *mut u8,
+    rhs: *const u8,
+    with_nul: i64,
+) -> *const u8 {
+    let with_nul = with_nul != 0;
+    let l_bits = unsafe { read_bit_length(lhs) };
+    let r_bits = unsafe { read_bit_length(rhs) };
+    let l_bytes = (l_bits as usize) / BITS_PER_BYTE;
+    let r_bytes = (r_bits as usize) / BITS_PER_BYTE;
+    let nul_bytes = usize::from(with_nul);
+
+    let (payload, release) = match unsafe { grow_unique_block(lhs, r_bytes + nul_bytes) } {
+        Some(grown) => (grown, None),
+        None => {
+            let base = memory::alloc(BLOCK_HEADER_SIZE + l_bytes + r_bytes + nul_bytes);
+            let fresh = unsafe { write_block_header(base, 0) };
+            unsafe { ptr::copy_nonoverlapping(lhs, fresh, l_bytes) };
+            (fresh, Some(lhs))
+        }
+    };
+    unsafe {
+        ptr::copy_nonoverlapping(rhs, payload.add(l_bytes), r_bytes);
+        *payload.sub(LENGTH_OFFSET).cast::<i64>() = l_bits + r_bits;
+        if with_nul {
+            *payload.add(l_bytes + r_bytes) = 0;
+        }
+        if let Some(shared) = release {
+            koja_rc_dec(shared.sub(BLOCK_HEADER_SIZE));
+        }
+    }
+    payload
+}
 
 /// Concatenate two `Bits` values produced by the LLVM backend.
 /// Reads `bit_length` from each operand's `payload - 8` header,

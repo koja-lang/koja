@@ -66,17 +66,28 @@ Collection mutators copy their backing buffer before writing. String
 concatenation allocates a new block.
 
 One uniqueness proof is implemented as consume fusion
-(`koja-ir/src/elaborate/consume.rs`). When a `List.append`, `Map.put`, or
-`Set.insert` receiver value provably dies at the call site, which covers
-`xs = xs.append(x)` rebinds and discarded owned temps, the elaborate pass
-rewrites the call to a consuming twin intrinsic and deletes the death. The
-LLVM backend reuses the receiver's buffer instead of copying it. Compiled
-rebind loops therefore mutate in O(1) amortized. The rewrite replaces "free
-the receiver's buffers here" with "reuse them here" at the same program point,
-so the result stays indistinguishable from an independent copy. The
-interpreter gates the same twins on true host-storage uniqueness. A rebind's
-local slot can keep the storage shared, so the interpreter can still use the
-copying path.
+(`koja-ir/src/elaborate/consume.rs`). The pass walks consuming sites, which
+are instructions that can take over their receiver's storage: the
+`List.append`, `Map.put`, and `Set.insert` calls, and `<>` on `String` and
+`Binary`. When the receiver value provably dies at the site, which covers
+`xs = xs.append(x)` and `s = s <> piece` rebinds, chains like
+`s = s <> a <> b`, and discarded owned temps, the pass rewrites the site
+into its consuming form and deletes the death. A mutator call becomes a
+consuming twin intrinsic. A concat is flagged `consumes_lhs`. The rewrite
+replaces "free the receiver's storage here" with "reuse it here" at the same
+program point, so the result stays indistinguishable from an independent copy.
+
+The IR proof covers the value. For rc-shared leaf blocks the runtime covers
+the block: the consuming concat helper checks `rc == 1` before growing the
+block in place, and otherwise copies and releases the operand itself.
+Collection buffers are deep-copied on `Clone`, so the twins mutate in place
+unconditionally. Compiled rebind loops therefore build collections and
+strings in O(1) amortized per step. The interpreter gates both forms on true
+host-storage uniqueness. Before a consuming site it drops the holders the IR
+proves dead (the slot a rebind is about to overwrite, and registers defined
+later in the block), so the same rebind loops are linear under eval. A holder
+the IR cannot see as dead, such as a read of the accumulator in another block
+of the loop body, makes the interpreter use the copying path.
 
 Mutators outside the fused shapes still copy. General in-place-when-unique
 and reference-count optimization are not implemented today.

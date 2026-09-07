@@ -76,6 +76,30 @@ pub unsafe fn realloc(ptr: *mut u8, size: usize) -> *mut u8 {
     new_ptr
 }
 
+/// Bytes the allocator actually reserved for the live block at `ptr`,
+/// which may exceed the requested size. In-place growth uses this
+/// slack as spare capacity so heap blocks need no capacity header.
+/// Platforms without a usable-size query report `0`, which makes
+/// every growth reallocate.
+///
+/// # Safety
+/// `ptr` must be a live allocation from this funnel.
+pub unsafe fn usable_size(ptr: *mut u8) -> usize {
+    #[cfg(target_os = "macos")]
+    {
+        unsafe { libc::malloc_size(ptr.cast()) }
+    }
+    #[cfg(target_os = "linux")]
+    {
+        unsafe { libc::malloc_usable_size(ptr.cast()) }
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+    {
+        let _ = ptr;
+        0
+    }
+}
+
 /// Free a block previously returned by [`alloc`] / [`realloc`] (or the
 /// codegen `koja_alloc`). Null is a no-op.
 ///

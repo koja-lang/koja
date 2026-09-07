@@ -3,9 +3,9 @@
 # rebind loops mutate in place, while a copying regression would blow
 # far past the suite's 45s timeout.
 #
-# LLVM-only (see LLVM_ONLY in lang_suite.rs). Eval values share host
-# storage, so its rebind loops keep the copying path and stay
-# quadratic.
+# LLVM-only (see LLVM_ONLY in lang_suite.rs). The interpreter is
+# linear here too, but its per-step constant puts 200k steps too
+# close to the timeout.
 
 xs: List<Int> = []
 i = 0

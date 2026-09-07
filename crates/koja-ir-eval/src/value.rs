@@ -197,6 +197,19 @@ impl Value {
         }
     }
 
+    /// Whether both values are views of the same reference-counted
+    /// storage, for the kinds the consuming sites mutate in place.
+    pub fn shares_storage(&self, other: &Value) -> bool {
+        match (self, other) {
+            (Value::Binary(a), Value::Binary(b)) | (Value::String(a), Value::String(b)) => {
+                Rc::ptr_eq(a, b)
+            }
+            (Value::List(a), Value::List(b)) | (Value::Set(a), Value::Set(b)) => Rc::ptr_eq(a, b),
+            (Value::Map(a), Value::Map(b)) => Rc::ptr_eq(a, b),
+            _ => false,
+        }
+    }
+
     /// Borrow a [`Value::String`] as `&str` when its bytes are
     /// valid UTF-8. Returns `None` for non-string values or when
     /// the payload isn't valid UTF-8, where callers that need

@@ -14,6 +14,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - `koja --help` groups flags under `Code generation` and `Global options` sections.
+- Compiled string and binary builder loops (`s = s <> piece`, interpolation accumulators, `String.join`, `String.replace`) now run in linear time instead of copying the accumulator on every step.
+- Chained rebinds like `xs = xs.append(a).append(b)` now reuse the buffer at every step instead of only the last.
+- `koja run` under the interpreter now builds `xs = xs.append(x)` and `s = s <> piece` loops in linear time instead of copying the accumulator on every step.
 
 ### Fixed
 

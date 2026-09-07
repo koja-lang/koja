@@ -5,14 +5,14 @@
 //!
 //! Eval values share `Rc`s freely (clone glue is an identity here),
 //! so buffer reuse is gated on true runtime uniqueness rather than
-//! the IR proof alone. The interpreter moves the dead receiver's
-//! register into the call args, and when that leaves the backing
-//! storage with a single strong reference the twin mutates it in
-//! place. Any other holder (a slot awaiting overwrite in a rebind
-//! loop, an earlier alias, a closure capture) forces the copying
-//! original, which produces the same result. Rebind loops therefore
-//! stay copying under eval, and the linear-time guarantee is pinned
-//! on the LLVM backend only.
+//! the IR proof alone. Before the call the interpreter drops the
+//! holders the IR proves dead (the slot a rebind is about to
+//! overwrite and stale registers, see `release_dead_holders`) and
+//! moves the receiver's register into the call args. When that leaves
+//! the backing storage with a single strong reference the twin
+//! mutates it in place. Any other holder (an earlier alias, a closure
+//! capture, a read of the accumulator in another block of the loop)
+//! forces the copying original, which produces the same result.
 
 use std::rc::Rc;
 

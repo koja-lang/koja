@@ -90,14 +90,14 @@ use crate::struct_decl::IRStructDecl;
 use crate::types::IRType;
 
 /// Run the elaborate sub-pass over a program's package set: fuse
-/// dead-receiver collection mutator calls into their consuming twins
-/// ([`consume`], before discovery so deleted drops seed no glue),
+/// dead-receiver mutator calls and byte concats into their consuming
+/// forms ([`consume`], before discovery so deleted drops seed no glue),
 /// then discover the heap-managed composites that need glue,
 /// synthesize / register it, and rewrite every composite acquisition
 /// / release into a glue `Call`.
 pub(crate) fn elaborate(packages: &mut [IRPackage]) {
     overwrite::rewrite_indirect_overwrites(packages, &mut []);
-    consume::fuse_consuming_mutators(packages, &mut []);
+    consume::fuse_consuming_sites(packages, &mut []);
     let needed = discover_glue_types(packages, &[]);
     let deep_needed = discover_deep_copy_types(packages, &[]);
     register_all(packages, &needed, &deep_needed);
@@ -112,7 +112,7 @@ pub(crate) fn elaborate(packages: &mut [IRPackage]) {
 /// function) and the rewrite covers it too.
 pub(crate) fn elaborate_script(packages: &mut [IRPackage], body: &mut [IRBasicBlock]) {
     overwrite::rewrite_indirect_overwrites(packages, body);
-    consume::fuse_consuming_mutators(packages, body);
+    consume::fuse_consuming_sites(packages, body);
     let needed = discover_glue_types(packages, body);
     let deep_needed = discover_deep_copy_types(packages, body);
     register_all(packages, &needed, &deep_needed);

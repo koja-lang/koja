@@ -67,8 +67,10 @@ can call any package function. Known limitations:
   baseline (stdlib + project + history) through the pipeline — the
   existing whole-program model, fine for small projects but linear in
   session length.
-- **No FFI from the prompt.** Calling an `@extern "C"` function errors
-  with `RuntimeError::Unsupported`; the interpreter has no FFI, same as
+- **No user FFI from the prompt.** The interpreter dispatches stdlib
+  externs through a hand-written table, so stdlib FFI works at the
+  prompt. Calling a user-declared `@extern "C"` function errors with
+  `RuntimeError::ExternNotSupported`, same as
   `koja run --backend=interpreter`.
 - **`Global` self-edit inconsistency.** `ProjectLoader` skips any stdlib
   package whose name matches the project (its `seen_packages` set), so a
@@ -229,7 +231,7 @@ Two consequences:
   back to SelectionDAG for functions it cannot select, so one module
   could mix both and corrupt aggregates at call boundaries. The old
   union type `{ i8, [N x i8] }` split entirely into byte pieces and
-  was the visible casualty. `object.rs` now pins `-global-isel=0` so
+  was the visible casualty. `target.rs` now pins `-global-isel=0` so
   every function uses one selector. Any type with a `Bool`, `Unit`, or
   `Int8` field still produces byte pieces, so the pin must stay until
   the ABI changes.
@@ -404,43 +406,23 @@ way, plain `koja run` should work in every project.
 
 ---
 
-## String building by repeated concat is quadratic
+## Unique composites are rebuilt on field write
 
-Found 2026-08-29 while fixing the quadratic `String.split` (the
-2026-08-28 `git_hygiene` hang, now resolved by moving the search
-family onto byte-offset `find` / `slice_bytes` intrinsics).
-The remaining trap is the accumulator shape: `result = result <>
-piece` copies the whole accumulator every iteration because string
-concat has no consume-fusion twin, unlike `List.append`. `join`,
-`downcase`, `upcase`, `reverse`, and `escape_debug` all build
-output this way, and `replace` pays the same cost per match.
-Linear-time character loops need the fix, and any user code that
-builds a large string in a loop hits the same wall.
+Found 2026-09-03 while making `<>` consuming. `p.x += dx` on a struct
+or enum builds a fresh composite and releases the old one even when
+the old value provably dies at the write and no other binding shares
+it. Small structs copy cheaply, but a struct holding a heap field, or
+an enum variant with a large payload, pays an allocation and a
+release per field write in a rebind loop.
 
-**Fix path:** give `Concat` a consuming twin the elaborate pass can
-fuse when the left operand dies at the call, mirroring
-`ConsumingMethod::ListAppend`. A stdlib string-builder over
-`List<String>` plus a single join does not help while `join` itself
-concat-loops, so the fusion is the root fix.
-
----
-
-## Interpreter list-append rebinds still copy the list
-
-Found 2026-08-29 while timing the linear `String.split`. The
-elaborate pass marks `xs = xs.append(x)` consuming, and compiled
-code mutates in place, but the eval fast path requires
-`Rc::strong_count == 1` and the interpreter's local slot still
-holds a second reference at the call, so every append clones the
-whole accumulator. Measured on a 7 MB split, 131k pieces take 297 s
-under eval against 17 ms compiled, and 16x fewer pieces run 257x
-faster, the quadratic signature. Every accumulate-in-a-loop shape
-pays this under `koja run`, not just split.
-
-**Fix path:** let eval honor the consuming marker by releasing the
-receiver's local slot before the intrinsic call (the IR already
-proves the binding dies there), or thread a uniqueness hint through
-the call so the fast path can trust it without the refcount probe.
+**Fix path:** the two building blocks exist. `ConsumingSite` in
+`koja-ir/src/elaborate/consume.rs` matches an instruction whose
+receiver dies there (collection mutators and byte `<>` today), and
+`grow_unique_block` in `koja-runtime-posix/src/util.rs` is the
+`rc == 1` gate that lets a runtime helper reuse a block in place. A
+`FieldSet` site would add the third arm: flag the instruction when the
+base value dies there, and have the backend write the field into the
+existing block when its refcount is one.
 
 ---
 
@@ -452,12 +434,12 @@ Found 2026-08-28. None blocking, each with a workaround:
   insertion sort or a shell-side `sort`. A comparator-closure
   `sort` works today. A `Comparable` conformance can follow when
   the protocol exists (see the `Binary` ordering entry).
-- **`IO.gets` cannot distinguish end of input from an empty
-  line.** Both return `""`, so a line-oriented filter reading
-  stdin cannot terminate correctly. Workaround is reading
-  `STDIN` directly and treating the error case as end of input.
-  An `Option`-returning variant or an `IO.lines` iterator closes
-  it.
+- **`IO.gets` hangs at end of input.** `Fd.read` returns `Ok("")`
+  at end of stream, and `gets_loop` only stops on `"\n"` or an
+  error, so a line-oriented filter reading stdin never terminates
+  once input runs out. Workaround is reading `STDIN` directly and
+  treating an empty read as end of input. An `Option`-returning
+  variant or an `IO.lines` iterator closes it.
 - **`koja doc search` matches symbol names only.** Concept
   queries like `Command` or `Shell` return no matches, and the
   absence of a hit cannot distinguish "no such API" from "wrong
@@ -499,10 +481,10 @@ the struct-literal-with-defaults idiom, so it keeps a `new` plus
 `with_` builder only to supply hook defaults. Pure data configs get
 the literal idiom (`port: Int = 5432` in postgres-koja), so the
 construction idiom splits on whether a struct holds functions. The
-`Option<fn>` field panic
-([#94](https://github.com/koja-lang/koja/issues/94)) blocks the
-other spelling, hooks as `Option` fields defaulting to
-`Option.None`.
+other spelling, hooks as `Option<fn>` fields defaulting to
+`Option.None`, works since
+[#94](https://github.com/koja-lang/koja/issues/94) closed, at the
+cost of a `match` at every call site.
 
 **Fix path:** allow `&name/arity` references as default field
 values. A function reference resolves statically to a known

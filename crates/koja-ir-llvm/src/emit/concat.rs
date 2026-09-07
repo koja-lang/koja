@@ -1,35 +1,51 @@
-//! `Concat` emission. `String` and `Binary` byte-align and inline a
-//! `malloc + memcpy + memcpy + (NUL)` shape. `Bits` defers to the
-//! `__koja_concat_bits` runtime helper because sub-byte
-//! alignment is far cleaner in Rust than LLVM IR.
+//! `Concat` emission. Copying `String` and `Binary` concats
+//! byte-align and inline a `malloc + memcpy + memcpy + (NUL)` shape.
+//! Consuming ones (`consumes_lhs`, set by consume fusion) call the
+//! `__koja_concat_bytes_owned` runtime helper, which grows the lhs
+//! block in place when its refcount is one. `Bits` defers to the
+//! `__koja_concat_bits` runtime helper because sub-byte alignment is
+//! far cleaner in Rust than LLVM IR.
 
 use inkwell::values::{BasicValueEnum, IntValue, PointerValue};
 use koja_ir::ConcatKind;
 
 use crate::ctx::EmitContext;
 use crate::error::{IceExt, LlvmError};
-use crate::runtime::{declare_concat_bits_extern, declare_malloc_extern};
+use crate::runtime::{
+    declare_concat_bits_extern, declare_concat_bytes_owned_extern, declare_malloc_extern,
+};
 
 use super::heap_layout::{block_alloc_size, init_heap_block, load_bit_length};
 
 /// Lower an `IRInstruction::Concat` to its per-kind shape. `String`
-/// and `Binary` both byte-align: the common shape is `malloc(8 +
+/// and `Binary` both byte-align: the copying shape is `malloc(8 +
 /// total_bytes [+1])` + two `memcpy`s + (String only) trailing
-/// `\0`. `Bits` defers to the `__koja_concat_bits` runtime
-/// helper.
+/// `\0`, and the consuming shape is one runtime call. `Bits` always
+/// defers to the `__koja_concat_bits` runtime helper.
 pub(super) fn emit_concat<'ctx>(
     ctx: &EmitContext<'ctx>,
     kind: ConcatKind,
+    consumes_lhs: bool,
     lhs: BasicValueEnum<'ctx>,
     rhs: BasicValueEnum<'ctx>,
 ) -> Result<BasicValueEnum<'ctx>, LlvmError> {
+    let with_nul = matches!(kind, ConcatKind::String);
     match kind {
         ConcatKind::Bits => {
             let helper = declare_concat_bits_extern(ctx);
             ctx.call_basic(helper, &[lhs.into(), rhs.into()], "concat_bits")
         }
+        ConcatKind::String | ConcatKind::Binary if consumes_lhs => {
+            let helper = declare_concat_bytes_owned_extern(ctx);
+            let with_nul = ctx.context.i64_type().const_int(with_nul.into(), false);
+            ctx.call_basic(
+                helper,
+                &[lhs.into(), rhs.into(), with_nul.into()],
+                "concat_owned",
+            )
+        }
         ConcatKind::String | ConcatKind::Binary => {
-            emit_byte_aligned_concat(ctx, lhs, rhs, matches!(kind, ConcatKind::String))
+            emit_byte_aligned_concat(ctx, lhs, rhs, with_nul)
         }
     }
 }

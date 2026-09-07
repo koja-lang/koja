@@ -1,0 +1,32 @@
+# String builder loops in one process, the shape that copied the whole
+# accumulator on every step before consuming `<>`. Appends 10M pieces
+# to a single accumulator through a plain rebind and through an
+# interpolation with a formatted integer. BEAM's counterpart leans on
+# its binary append optimization, which is the same idea: grow the
+# buffer in place while the reference is unique.
+
+n = 10000000
+
+t0 = DateTime.now().timestamp_millis()
+s = ""
+i = 0
+
+while i < n
+  s = s <> "piece"
+  i += 1
+end
+
+t1 = DateTime.now().timestamp_millis()
+"concat_ms #{t1 - t0} bytes #{s.byte_length()}".print()
+
+t2 = DateTime.now().timestamp_millis()
+acc = ""
+j = 0
+
+while j < n
+  acc = "#{acc}#{j % 10}"
+  j += 1
+end
+
+t3 = DateTime.now().timestamp_millis()
+"interp_ms #{t3 - t2} bytes #{acc.byte_length()}".print()

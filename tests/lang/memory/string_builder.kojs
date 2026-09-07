@@ -1,0 +1,122 @@
+# Consuming `<>` for String and Binary. Rebind loops grow the
+# accumulator's block in place when it is uniquely owned, and copy
+# when it is shared, so the results must match the copying path
+# byte for byte and the live-block counter must balance.
+
+struct Rt
+  @extern "C"
+  fn koja_rt_live_blocks -> Int64
+end
+
+fn pieces(n: Int) -> List<String>
+  out: List<String> = []
+  i = 0
+
+  while i < n
+    out = out.append("p#{i}")
+    i += 1
+  end
+
+  out
+end
+
+fn by_concat(parts: List<String>) -> String
+  result = ""
+
+  for part in parts
+    result = result <> part
+  end
+
+  result
+end
+
+fn by_interpolation(parts: List<String>) -> String
+  result = ""
+
+  for part in parts
+    result = "#{result}#{part}"
+  end
+
+  result
+end
+
+fn by_chain(parts: List<String>) -> String
+  result = ""
+
+  for part in parts
+    result = result <> "," <> part
+  end
+
+  result
+end
+
+fn by_binary(parts: List<String>) -> Binary
+  result: Binary = <<>>
+  sep: Binary = <<44>>
+
+  for part in parts
+    result = result <> sep <> part.to_binary()
+  end
+
+  result
+end
+
+# A saved alias must keep its value while the accumulator grows.
+fn shared_accumulator(parts: List<String>) -> Bool
+  acc = "seed"
+  saved = acc
+
+  for part in parts
+    acc = acc <> part
+  end
+
+  saved == "seed" and acc.byte_length() > saved.byte_length()
+end
+
+# Every builder must agree with `String.join`, and the shared
+# accumulator must keep its alias intact.
+fn consistent?(n: Int) -> Bool
+  parts = pieces(n)
+  joined = String.join(parts, "")
+  chained = "," <> String.join(parts, ",")
+  ok = by_concat(parts) == joined
+  ok = ok and by_interpolation(parts) == joined
+  ok = ok and by_chain(parts) == chained
+  ok = ok and by_binary(parts) == chained.to_binary()
+  ok and shared_accumulator(parts)
+end
+
+fn exercise(n: Int) -> Int
+  parts = pieces(n)
+  total = by_concat(parts).byte_length()
+  total += by_interpolation(parts).byte_length()
+  total += by_chain(parts).byte_length()
+  total + by_binary(parts).byte_size()
+end
+
+_ = exercise(16)
+start = Rt.koja_rt_live_blocks()
+
+i = 0
+total = 0
+
+loop
+  total += exercise(16)
+  i += 1
+
+  if i >= 50
+    break
+  end
+end
+
+finish = Rt.koja_rt_live_blocks()
+
+if finish == start
+  "string builder: ok".print()
+else
+  "string builder: LEAK".print()
+  (finish - start).print()
+end
+
+consistent?(16).print()
+(total == 50 * exercise(16)).print()

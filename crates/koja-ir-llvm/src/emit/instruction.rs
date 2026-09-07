@@ -85,6 +85,7 @@ pub(crate) fn emit_instruction<'ctx>(
             deep_copy::emit_deep_copy(ctx, *dest, *source, ty, values)
         }
         IRInstruction::Concat {
+            consumes_lhs,
             dest,
             kind,
             lhs,
@@ -92,7 +93,7 @@ pub(crate) fn emit_instruction<'ctx>(
         } => {
             let lhs_value = lookup(values, *lhs)?;
             let rhs_value = lookup(values, *rhs)?;
-            let result = concat::emit_concat(ctx, *kind, lhs_value, rhs_value)?;
+            let result = concat::emit_concat(ctx, *kind, *consumes_lhs, lhs_value, rhs_value)?;
             values.insert(*dest, result);
             Ok(())
         }
