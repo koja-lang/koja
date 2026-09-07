@@ -60,22 +60,26 @@ struct IO
   Prints a prompt and reads a line from stdin (up to the newline).
   Returns the line without the trailing newline character. At end of
   input, returns the partial line read so far, which is `""` when no
-  input remains.
+  input remains. Panics when the line is not valid UTF-8.
   """
   fn gets(prompt: String) -> String
     IO.write(prompt)
-    IO.gets_loop("")
+    line = IO.gets_loop(<<>>)
+    line.to_string()
+      rescue _ -> Kernel.panic("IO.gets: input is not valid UTF-8")
   end
 
-  # An empty read is end of stream, not an empty line, so it ends the
-  # line instead of recursing forever.
-  priv fn gets_loop(acc: String) -> String
-    match STDIN.read(1)
-      Result.Ok(char) ->
-        if char == "\n" or char == ""
+  # Bytes accumulate raw and decode once per line, since a multi-byte
+  # character split across single-byte reads is not valid UTF-8 on its
+  # own. An empty read is end of stream, not an empty line, so it ends
+  # the line instead of recursing forever.
+  priv fn gets_loop(acc: Binary) -> Binary
+    match STDIN.read_binary(1)
+      Result.Ok(byte) ->
+        if byte == <<>> or byte == <<10>>
           acc
         else
-          IO.gets_loop(acc <> char)
+          IO.gets_loop(acc <> byte)
         end
 
       Result.Err(_) ->

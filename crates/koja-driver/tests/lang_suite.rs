@@ -106,15 +106,45 @@ fn run_with_timeout(configure: impl FnOnce(&mut Command)) -> (String, String, i3
     if let Some(lib_path) = library_path() {
         cmd.env("LIBRARY_PATH", &lib_path);
     }
+    spawn_and_wait(cmd, None)
+}
+
+/// Run `cmd` in `dir` with `stdin` pre-filled and the write end closed,
+/// so the child sees the bytes and then end of input.
+fn run_with_stdin(mut cmd: Command, dir: &Path, stdin: &[u8]) -> (String, String, i32) {
+    cmd.current_dir(dir);
+    if let Some(lib_path) = library_path() {
+        cmd.env("LIBRARY_PATH", &lib_path);
+    }
+    spawn_and_wait(cmd, Some(stdin))
+}
+
+/// Spawn `cmd`, feed `stdin` when given, and wait up to `TEST_TIMEOUT`.
+/// A timeout or wait error kills the child and yields code `-1` with
+/// the reason in the stderr slot, so callers only assert on the code.
+fn spawn_and_wait(mut cmd: Command, stdin: Option<&[u8]>) -> (String, String, i32) {
+    use std::io::Write;
+
     cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
+    if stdin.is_some() {
+        cmd.stdin(Stdio::piped());
+    }
 
     let mut child = cmd.spawn().expect("failed to execute koja");
-    let deadline = std::time::Instant::now() + TEST_TIMEOUT;
+    if let Some(bytes) = stdin {
+        child
+            .stdin
+            .take()
+            .expect("child stdin already taken")
+            .write_all(bytes)
+            .expect("failed to pre-fill stdin");
+    }
 
+    let deadline = Instant::now() + TEST_TIMEOUT;
     loop {
         match child.try_wait() {
             Ok(Some(_)) => break,
-            Ok(None) if std::time::Instant::now() >= deadline => {
+            Ok(None) if Instant::now() >= deadline => {
                 let _ = child.kill();
                 let _ = child.wait();
                 return (
@@ -559,9 +589,22 @@ fn build_ffi_helper_lib(dir: &Path) -> PathBuf {
     lib_path
 }
 
-/// `koja run --backend=llvm` in a project fixture `dir` with
-/// `libffi_helper.a` on the library path.
-fn run_ffi_project(dir: &Path) -> (String, String, i32) {
+/// Output of one FFI fixture run.
+struct FfiRun {
+    code: i32,
+    dir: PathBuf,
+    stderr: String,
+    stdout: String,
+}
+
+/// Build `libffi_helper.a` into the project fixture `name`, run it
+/// with `koja run --backend=llvm` and the archive on the library
+/// path, then remove the archive.
+fn run_ffi_fixture(name: &str) -> FfiRun {
+    let dir = lang_dir().join(name);
+    assert!(dir.exists(), "test fixture {name}/ not found");
+    let lib_path = build_ffi_helper_lib(&dir);
+
     let ffi_lib_path = match library_path() {
         Some(existing) => format!("{}:{}", dir.display(), existing),
         None => dir.display().to_string(),
@@ -569,16 +612,20 @@ fn run_ffi_project(dir: &Path) -> (String, String, i32) {
     let output = Command::new(koja_bin())
         .arg("run")
         .arg("--backend=llvm")
-        .current_dir(dir)
+        .current_dir(&dir)
         .env("LIBRARY_PATH", &ffi_lib_path)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .output()
         .expect("failed to execute koja");
-    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
-    let code = output.status.code().unwrap_or(-1);
-    (stdout, stderr, code)
+    let _ = fs::remove_file(&lib_path);
+
+    FfiRun {
+        code: output.status.code().unwrap_or(-1),
+        dir,
+        stderr: String::from_utf8_lossy(&output.stderr).to_string(),
+        stdout: String::from_utf8_lossy(&output.stdout).to_string(),
+    }
 }
 
 /// LLVM-only: links a user-provided C static library (`@link`), which the
@@ -586,21 +633,19 @@ fn run_ffi_project(dir: &Path) -> (String, String, i32) {
 /// symbols).
 #[test]
 fn lang_ffi() {
-    let dir = lang_dir().join("ffi");
-    assert!(dir.exists(), "test fixture ffi/ not found");
-
-    let lib_path = build_ffi_helper_lib(&dir);
-    let (stdout, stderr, code) = run_ffi_project(&dir);
-    let _ = fs::remove_file(&lib_path);
+    let run = run_ffi_fixture("ffi");
 
     assert!(
-        code == 0,
-        "ffi: expected exit code 0, got {code}\nstderr:\n{stderr}\nstdout:\n{stdout}"
+        run.code == 0,
+        "ffi: expected exit code 0, got {}\nstderr:\n{}\nstdout:\n{}",
+        run.code,
+        run.stderr,
+        run.stdout
     );
 
-    let expected = fs::read_to_string(dir.join("expected.stdout")).unwrap();
-    if stdout != expected {
-        let diff = diff_lines(&stdout, &expected);
+    let expected = fs::read_to_string(run.dir.join("expected.stdout")).unwrap();
+    if run.stdout != expected {
+        let diff = diff_lines(&run.stdout, &expected);
         panic!("\n--- FAIL: ffi ---\n{diff}");
     }
 }
@@ -630,20 +675,17 @@ fn lang_cptr_nan_read_traps() {
 /// Run the FFI fixture `name` and assert it dies with `pattern` on
 /// stderr.
 fn assert_ffi_project_faults(name: &str, pattern: &str) {
-    let dir = lang_dir().join(name);
-    assert!(dir.exists(), "test fixture {name}/ not found");
-
-    let lib_path = build_ffi_helper_lib(&dir);
-    let (stdout, stderr, code) = run_ffi_project(&dir);
-    let _ = fs::remove_file(&lib_path);
+    let run = run_ffi_fixture(name);
 
     assert!(
-        code != 0,
-        "{name}: expected a fault exit, got 0\nstdout:\n{stdout}"
+        run.code != 0,
+        "{name}: expected a fault exit, got 0\nstdout:\n{}",
+        run.stdout
     );
     assert!(
-        stderr.contains(pattern),
-        "{name}: stderr missing {pattern:?}\nstderr:\n{stderr}"
+        run.stderr.contains(pattern),
+        "{name}: stderr missing {pattern:?}\nstderr:\n{}",
+        run.stderr
     );
 }
 
@@ -750,7 +792,7 @@ fn run_process_io(backend: &str) {
 
     let mut cmd = Command::new(koja_bin());
     cmd.arg("run").arg(format!("--backend={backend}"));
-    let (stdout, stderr, code) = run_with_stdin(cmd, &dir, b"go\n", &label);
+    let (stdout, stderr, code) = run_with_stdin(cmd, &dir, b"go\n");
 
     assert!(
         code == 1,
@@ -764,53 +806,6 @@ fn run_process_io(backend: &str) {
     }
 }
 
-/// Run `cmd` in `dir` with `stdin` pre-filled and the write end closed,
-/// so the child sees the bytes and then end of input. Kills the child
-/// after `TEST_TIMEOUT`.
-fn run_with_stdin(
-    mut cmd: Command,
-    dir: &Path,
-    stdin: &[u8],
-    label: &str,
-) -> (String, String, i32) {
-    use std::io::Write;
-
-    cmd.current_dir(dir);
-    if let Some(lib_path) = library_path() {
-        cmd.env("LIBRARY_PATH", &lib_path);
-    }
-    cmd.stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
-
-    let mut child = cmd.spawn().expect("failed to execute koja");
-    child
-        .stdin
-        .take()
-        .expect("child stdin already taken")
-        .write_all(stdin)
-        .expect("failed to pre-fill stdin");
-
-    let deadline = std::time::Instant::now() + TEST_TIMEOUT;
-    loop {
-        match child.try_wait() {
-            Ok(Some(_)) => break,
-            Ok(None) if std::time::Instant::now() >= deadline => {
-                let _ = child.kill();
-                let _ = child.wait();
-                panic!("{label}: timed out after {}s", TEST_TIMEOUT.as_secs());
-            }
-            Ok(None) => std::thread::sleep(Duration::from_millis(50)),
-            Err(e) => panic!("{label}: wait error: {e}"),
-        }
-    }
-
-    let output = child.wait_with_output().expect("failed to collect output");
-    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
-    (stdout, stderr, output.status.code().unwrap_or(-1))
-}
-
 /// `IO.gets` must end a line at end of input instead of spinning on the
 /// empty reads `Fd.read` returns there. It lives here because `gets`
 /// reads `STDIN` directly and a stdlib test cannot redirect it. When
@@ -820,7 +815,13 @@ fn run_with_stdin(
 fn lang_io_gets_ends_at_eof() {
     let dir = lang_dir().join("io_gets");
     assert!(dir.exists(), "test fixture io_gets/ not found");
-    let cases: [(&[u8], &str); 2] = [(b"a\n", "[a]\n[]\n[]\n"), (b"a\n\nb", "[a]\n[]\n[b]\n")];
+    let cases: [(&[u8], &str); 3] = [
+        (b"a\n", "[a]\n[]\n[]\n"),
+        (b"a\n\nb", "[a]\n[]\n[b]\n"),
+        // Multi-byte characters arrive one byte at a time and must
+        // survive the trip.
+        ("héllo wörld\n".as_bytes(), "[héllo wörld]\n[]\n[]\n"),
+    ];
 
     for backend in BACKENDS {
         for (stdin, expected) in cases {
@@ -829,7 +830,7 @@ fn lang_io_gets_ends_at_eof() {
             cmd.arg("run")
                 .arg(format!("--backend={backend}"))
                 .arg("gets_eof.kojs");
-            let (stdout, stderr, code) = run_with_stdin(cmd, &dir, stdin, &label);
+            let (stdout, stderr, code) = run_with_stdin(cmd, &dir, stdin);
             assert!(code == 0, "{label}: exit {code}\nstderr:\n{stderr}");
             if stdout != expected {
                 panic!("\n--- FAIL: {label} ---\n{}", diff_lines(&stdout, expected));

@@ -34,7 +34,7 @@ use koja_ast::span::Span;
 
 use crate::program::CheckedPackage;
 
-use super::derive_debug::is_internal_wrapper_type;
+use super::derive_debug::{has_impl, is_internal_wrapper_type};
 
 const BOOL_TYPE: &str = "Bool";
 const EQ_METHOD: &str = "equals?";
@@ -121,14 +121,14 @@ fn type_expr_path(te: &TypeExpr) -> Option<String> {
 }
 
 fn needs_struct_derive(decl: &StructDecl, existing: &[String]) -> bool {
-    !existing.iter().any(|n| n == &decl.path.join("."))
+    !has_impl(existing, &decl.path)
 }
 
 /// Empty enums (no variants) are uninhabited: a `match self end`
 /// body with no arms is rejected by typecheck, and the type has no
 /// value to compare anyway. Skip synthesis.
 fn needs_enum_derive(decl: &EnumDecl, existing: &[String]) -> bool {
-    !decl.variants.is_empty() && !existing.iter().any(|n| n == &decl.path.join("."))
+    !decl.variants.is_empty() && !has_impl(existing, &decl.path)
 }
 
 fn synthesize_struct_impl(decl: &StructDecl) -> Item {

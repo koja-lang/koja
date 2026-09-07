@@ -29,6 +29,7 @@ mod lower;
 pub mod mangling;
 mod merge;
 mod package;
+pub mod panics;
 mod program;
 mod script;
 mod seal;
@@ -61,8 +62,8 @@ pub use script::{IRScript, lower_script};
 pub use struct_decl::{IRStructDecl, IRStructField, StructFieldInit};
 pub use tail_calls::function_has_tail_call;
 pub use types::{
-    BinaryEndian, BinarySign, CPTR_READ_NON_FINITE_MESSAGE, ConcatKind, ConstValue, IRBinOp,
-    IRType, IRUnaryOp, LoweredBinaryMatchLayout, LoweredBinaryPattern, LoweredBinarySegment,
-    NEG_OVERFLOW_MESSAGE, ResolvedBinaryLayout, ValueId,
+    BinaryEndian, BinarySign, ConcatKind, ConstValue, IRBinOp, IRType, IRUnaryOp,
+    LoweredBinaryMatchLayout, LoweredBinaryPattern, LoweredBinarySegment, ResolvedBinaryLayout,
+    ValueId,
 };
 pub use union_decl::IRUnionDecl;

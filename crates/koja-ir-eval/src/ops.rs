@@ -16,7 +16,8 @@
 
 use std::ops::{Add, Div, Mul, Rem, Sub};
 
-use koja_ir::{BinarySign, IRBinOp, IRType, IRUnaryOp, NEG_OVERFLOW_MESSAGE};
+use koja_ir::panics::NEG_OVERFLOW_MESSAGE;
+use koja_ir::{BinarySign, IRBinOp, IRType, IRUnaryOp};
 
 use crate::error::RuntimeError;
 use crate::value::Value;

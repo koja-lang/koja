@@ -26,6 +26,10 @@
 //! impls live in the same files and [`collect_existing_debug_impls`]
 //! detects them.
 //!
+//! Builtins are never synthesized. The synthesizer cannot know how an
+//! opaque type should render, so each builtin carries an explicit impl
+//! in the stdlib and a missing one surfaces as a missing conformance.
+//!
 //! ## Opaque field types
 //!
 //! Fields whose type is opaque to the synthesizer (`CPtr<T>`,
@@ -39,9 +43,9 @@
 //! types.
 
 use koja_ast::ast::{
-    Annotation, Arg, BuiltinDecl, EnumDecl, EnumVariant, EnumVariantData, Expr, ExprKind,
-    FieldPattern, File, Function, FunctionOrigin, ImplBlock, ImplMember, Item, MatchArm, Param,
-    Pattern, Statement, StringPart, StructDecl, StructField, TypeExpr, TypeParam, Visibility,
+    Annotation, Arg, EnumDecl, EnumVariant, EnumVariantData, Expr, ExprKind, FieldPattern, File,
+    Function, FunctionOrigin, ImplBlock, ImplMember, Item, MatchArm, Param, Pattern, Statement,
+    StringPart, StructDecl, StructField, TypeExpr, TypeParam, Visibility,
 };
 use koja_ast::identifier::Resolution;
 use koja_ast::span::Span;
@@ -92,9 +96,6 @@ fn synthesize_into_file(file: &mut File, existing: &[String]) {
         match item {
             Item::Struct(decl) if needs_struct_derive(decl, existing) => {
                 synthesized.push(synthesize_struct_impl(decl));
-            }
-            Item::Builtin(decl) if needs_builtin_derive(decl, existing) => {
-                synthesized.push(synthesize_builtin_impl(decl));
             }
             Item::Enum(decl) if needs_enum_derive(decl, existing) => {
                 synthesized.push(synthesize_enum_impl(decl));
@@ -150,18 +151,19 @@ fn type_expr_head(te: &TypeExpr) -> Option<&str> {
 }
 
 fn needs_struct_derive(decl: &StructDecl, existing: &[String]) -> bool {
-    !existing.iter().any(|n| n == &decl.path.join("."))
-}
-
-fn needs_builtin_derive(decl: &BuiltinDecl, existing: &[String]) -> bool {
-    !existing.iter().any(|n| n == &decl.path.join("."))
+    !has_impl(existing, &decl.path)
 }
 
 /// Empty enums (no variants) are uninhabited: a `match self end`
 /// body with no arms is rejected by typecheck, and there's no value
 /// to format anyway. Skip them.
 fn needs_enum_derive(decl: &EnumDecl, existing: &[String]) -> bool {
-    !decl.variants.is_empty() && !existing.iter().any(|n| n == &decl.path.join("."))
+    !decl.variants.is_empty() && !has_impl(existing, &decl.path)
+}
+
+/// Whether `existing` (dotted impl targets) already covers the decl at `path`.
+pub(super) fn has_impl(existing: &[String], path: &[String]) -> bool {
+    existing.contains(&path.join("."))
 }
 
 fn synthesize_struct_impl(decl: &StructDecl) -> Item {
@@ -175,16 +177,6 @@ fn synthesize_enum_impl(decl: &EnumDecl) -> Item {
     let span = decl.span.as_synthetic();
     let target = self_target_type(&decl.path, &decl.type_params, span);
     let format_body = enum_format_body(&decl.path, &decl.variants, span);
-    debug_impl_block(target, format_body, span)
-}
-
-/// A builtin derives the same body a zero-field struct does. This
-/// preserves the pre-`builtin` behavior, where compiler-owned types
-/// were field-less structs.
-fn synthesize_builtin_impl(decl: &BuiltinDecl) -> Item {
-    let span = decl.span.as_synthetic();
-    let target = self_target_type(&decl.path, &decl.type_params, span);
-    let format_body = struct_format_body(&decl.path, &[], span);
     debug_impl_block(target, format_body, span)
 }
 

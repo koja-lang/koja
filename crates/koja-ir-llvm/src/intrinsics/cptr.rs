@@ -20,7 +20,8 @@ use inkwell::IntPredicate;
 use inkwell::module::Linkage;
 use inkwell::types::BasicType;
 use inkwell::values::{BasicValueEnum, FunctionValue, IntValue, PointerValue};
-use koja_ir::{CPTR_READ_NON_FINITE_MESSAGE, CPtrMethod, IRFunction, IRType};
+use koja_ir::panics::CPTR_READ_NON_FINITE_MESSAGE;
+use koja_ir::{CPtrMethod, IRFunction, IRType};
 
 use crate::ctx::EmitContext;
 use crate::emit::heap_layout::{block_alloc_size, init_heap_block, load_bit_length};

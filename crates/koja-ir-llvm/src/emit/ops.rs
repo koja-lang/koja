@@ -13,7 +13,8 @@
 use inkwell::intrinsics::Intrinsic;
 use inkwell::values::{BasicValueEnum, FloatValue, IntValue, PointerValue};
 use inkwell::{FloatPredicate, IntPredicate};
-use koja_ir::{BinarySign, IRBinOp, IRType, IRUnaryOp, NEG_OVERFLOW_MESSAGE};
+use koja_ir::panics::NEG_OVERFLOW_MESSAGE;
+use koja_ir::{BinarySign, IRBinOp, IRType, IRUnaryOp};
 
 use crate::ctx::EmitContext;
 use crate::error::{IceExt, LlvmError};

@@ -28,7 +28,8 @@ struct Fd
 
   @doc """
   Reads up to `count` bytes from the file descriptor.
-  Returns the data read as a string, or an error message.
+  Returns the data read as a string, or an error message. Returns
+  `""` at end of stream.
   """
   fn read(self, count: Int) -> String ! String
     bytes = try self.read_binary(count)
@@ -39,7 +40,7 @@ struct Fd
   Reads up to `count` bytes from the file descriptor as raw bytes.
   Unlike `read`, this does not assume the data is UTF-8 text, making it
   suitable for binary wire protocols. Returns the bytes read, or an
-  error message.
+  error message. Returns an empty binary at end of stream.
   """
   fn read_binary(self, count: Int) -> Binary ! String
     ptr = koja_fd_read(self.descriptor, count)
