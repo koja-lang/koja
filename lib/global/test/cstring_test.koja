@@ -1,98 +1,93 @@
 struct CStringTest
   @test "basic round-trip"
-  fn test_round_trip -> Result<Bool, String>
+  fn test_round_trip ! String
     s = "hello world"
     cs = s.to_cstring().unwrap()
 
-    unless cs.len == 11
-      return Result.Err("expected len 11, got #{cs.len}")
+    if cs.len != 11
+      fail "expected len 11, got #{cs.len}"
     end
 
     back = cs.to_string().unwrap()
 
-    unless back == s
-      return Result.Err("round-trip failed: #{back}")
+    if back != s
+      fail "round-trip failed: #{back}"
     end
 
     cs.free()
-    Result.Ok(true)
   end
 
   @test "empty string"
-  fn test_empty -> Result<Bool, String>
+  fn test_empty ! String
     cs = "".to_cstring().unwrap()
 
-    unless cs.len == 0
-      return Result.Err("expected len 0")
+    if cs.len != 0
+      fail "expected len 0"
     end
 
-    unless cs.to_string().unwrap() == ""
-      return Result.Err("expected empty string")
+    if cs.to_string().unwrap() != ""
+      fail "expected empty string"
     end
 
     cs.free()
-    Result.Ok(true)
   end
 
   @test "string with special characters"
-  fn test_special_chars -> Result<Bool, String>
+  fn test_special_chars ! String
     special = "hello\tworld\n"
     cs = special.to_cstring().unwrap()
 
-    unless cs.len == 12
-      return Result.Err("expected len 12, got #{cs.len}")
+    if cs.len != 12
+      fail "expected len 12, got #{cs.len}"
     end
 
-    unless cs.to_string().unwrap() == special
-      return Result.Err("round-trip failed")
+    if cs.to_string().unwrap() != special
+      fail "round-trip failed"
     end
 
     cs.free()
-    Result.Ok(true)
   end
 
   @test "longer string"
-  fn test_long_string -> Result<Bool, String>
+  fn test_long_string ! String
     long = "the quick brown fox jumps over the lazy dog"
     cs = long.to_cstring().unwrap()
 
-    unless cs.len == 43
-      return Result.Err("expected len 43, got #{cs.len}")
+    if cs.len != 43
+      fail "expected len 43, got #{cs.len}"
     end
 
-    unless cs.to_string().unwrap() == long
-      return Result.Err("round-trip failed")
+    if cs.to_string().unwrap() != long
+      fail "round-trip failed"
     end
 
     cs.free()
-    Result.Ok(true)
   end
 
   @test "original string unaffected after conversion"
-  fn test_original_unaffected -> Result<Bool, String>
+  fn test_original_unaffected ! String
     original = "unchanged"
     cs = original.to_cstring().unwrap()
 
-    unless original == "unchanged"
-      return Result.Err("original was modified")
+    if original != "unchanged"
+      fail "original was modified"
     end
 
     cs.free()
-    Result.Ok(true)
   end
 
   @test "rejects interior NUL"
-  fn test_interior_nul -> Result<Bool, String>
+  fn test_interior_nul ! String
     value = <<97, 0, 98>>.to_string().unwrap()
 
     match value.to_cstring()
-      Result.Err(CString.ConversionError.InteriorNul) -> Result.Ok(true)
-      _ -> Result.Err("expected InteriorNul")
+      Result.Err(CString.ConversionError.InteriorNul) -> ()
+      _ -> fail "expected InteriorNul"
     end
   end
 
   @test "rejects invalid UTF-8"
-  fn test_invalid_utf8 -> Result<Bool, String>
+  fn test_invalid_utf8 ! String
     ptr: CPtr<UInt8> = CPtr.alloc(1)
     ptr.write(255)
     cs = CString{ptr: ptr, len: 1}
@@ -100,41 +95,43 @@ struct CStringTest
     cs.free()
 
     match converted
-      Result.Err(CString.ConversionError.InvalidUTF8) -> Result.Ok(true)
-      _ -> Result.Err("expected InvalidUTF8")
+      Result.Err(CString.ConversionError.InvalidUTF8) -> ()
+      _ -> fail "expected InvalidUTF8"
     end
   end
 
   @test "rejects invalid length"
-  fn test_invalid_length -> Result<Bool, String>
+  fn test_invalid_length ! String
     cs = CString{ptr: CPtr.null(), len: -1}
 
     match cs.to_string()
-      Result.Err(CString.ConversionError.InvalidLength) -> Result.Ok(true)
-      _ -> Result.Err("expected InvalidLength")
+      Result.Err(CString.ConversionError.InvalidLength) -> ()
+      _ -> fail "expected InvalidLength"
     end
   end
 
   @test "rejects null pointer with nonzero length"
-  fn test_null_pointer -> Result<Bool, String>
+  fn test_null_pointer ! String
     cs = CString{ptr: CPtr.null(), len: 1}
 
     match cs.to_string()
-      Result.Err(CString.ConversionError.NullPointer) -> Result.Ok(true)
-      _ -> Result.Err("expected NullPointer")
+      Result.Err(CString.ConversionError.NullPointer) -> ()
+      _ -> fail "expected NullPointer"
     end
   end
 
   @test "accepts null pointer with zero length"
-  fn test_null_empty -> Result<Bool, String>
+  fn test_null_empty ! String
     cs = CString{ptr: CPtr.null(), len: 0}
 
     match cs.to_string()
       Result.Err(_) ->
-        Result.Err("expected empty string")
+        fail "expected empty string"
 
       Result.Ok(value) ->
-        value == "" ? Result.Ok(true) : Result.Err("expected empty string")
+        if value != ""
+          fail "expected empty string"
+        end
     end
   end
 end

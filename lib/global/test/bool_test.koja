@@ -1,83 +1,73 @@
 struct BoolTest
   @test "and"
-  fn test_and -> Result<Bool, String>
-    unless true and true
-      return Result.Err("true and true")
+  fn test_and ! String
+    if not (true and true)
+      fail "true and true"
     end
 
     if true and false
-      return Result.Err("true and false")
+      fail "true and false"
     end
 
     if false and true
-      return Result.Err("false and true")
+      fail "false and true"
     end
 
     if false and false
-      return Result.Err("false and false")
+      fail "false and false"
     end
-
-    Result.Ok(true)
   end
 
   @test "or"
-  fn test_or -> Result<Bool, String>
-    unless true or true
-      return Result.Err("true or true")
+  fn test_or ! String
+    if not (true or true)
+      fail "true or true"
     end
 
-    unless true or false
-      return Result.Err("true or false")
+    if not (true or false)
+      fail "true or false"
     end
 
-    unless false or true
-      return Result.Err("false or true")
+    if not (false or true)
+      fail "false or true"
     end
 
     if false or false
-      return Result.Err("false or false")
+      fail "false or false"
     end
-
-    Result.Ok(true)
   end
 
   @test "logical operators short-circuit"
-  fn test_short_circuit -> Result<Bool, String>
+  fn test_short_circuit ! String
     if false and BoolTest.panic_bool()
-      return Result.Err("false and rhs should be false")
+      fail "false and rhs should be false"
     end
 
-    unless true or BoolTest.panic_bool()
-      return Result.Err("true or rhs should be true")
+    if not (true or BoolTest.panic_bool())
+      fail "true or rhs should be true"
     end
-
-    Result.Ok(true)
   end
 
   @test "not"
-  fn test_not -> Result<Bool, String>
-    unless not true == false
-      return Result.Err("not true")
+  fn test_not ! String
+    if true == false
+      fail "not true"
     end
 
-    unless not false == true
-      return Result.Err("not false")
+    if false == true
+      fail "not false"
     end
-
-    Result.Ok(true)
   end
 
   @test "combined logical expressions"
-  fn test_combined -> Result<Bool, String>
-    unless true and not false == true
-      return Result.Err("and with not and ==")
+  fn test_combined ! String
+    if not (true and not false == true)
+      fail "and with not and =="
     end
 
     if not true or false
-      return Result.Err("not true or false should be false")
+      fail "not true or false should be false"
     end
-
-    Result.Ok(true)
   end
 
   priv fn panic_bool -> Bool

@@ -2,28 +2,28 @@ alias Net.IPAddress
 
 struct IPAddressTest
   @test "IPAddress.any is IPv4"
-  fn test_any -> Result<Bool, String>
-    IPAddress.any().version == IPAddress.Version.V4
-      ? Result.Ok(true)
-      : Result.Err("expected any to be IPv4")
+  fn test_any ! String
+    if IPAddress.any().version != IPAddress.Version.V4
+      fail "expected any to be IPv4"
+    end
   end
 
   @test "IPAddress.loopback is IPv4"
-  fn test_loopback -> Result<Bool, String>
-    IPAddress.loopback().version == IPAddress.Version.V4
-      ? Result.Ok(true)
-      : Result.Err("expected loopback to be IPv4")
+  fn test_loopback ! String
+    if IPAddress.loopback().version != IPAddress.Version.V4
+      fail "expected loopback to be IPv4"
+    end
   end
 
   @test "IPAddress.v4 creates an IPv4 address"
-  fn test_v4 -> Result<Bool, String>
-    IPAddress.v4(10, 0, 0, 1).version == IPAddress.Version.V4
-      ? Result.Ok(true)
-      : Result.Err("expected custom to be IPv4")
+  fn test_v4 ! String
+    if IPAddress.v4(10, 0, 0, 1).version != IPAddress.Version.V4
+      fail "expected custom to be IPv4"
+    end
   end
 
   @test "IPAddress parses and renders IPv4"
-  fn test_v4_text -> Result<Bool, String>
+  fn test_v4_text ! String
     cases: List<(String, String)> = [
       ("0.0.0.0", "0.0.0.0"), ("10.0.0.1", "10.0.0.1"),
       ("127.0.0.1", "127.0.0.1"), ("192.168.228.2", "192.168.228.2"),
@@ -34,12 +34,10 @@ struct IPAddressTest
       (input, expected) = test_case
       try IPAddressTest.assert_address_text(input, expected)
     end
-
-    Result.Ok(true)
   end
 
   @test "IPAddress parses and canonically renders IPv6"
-  fn test_v6_text -> Result<Bool, String>
+  fn test_v6_text ! String
     cases: List<(String, String)> = [
       ("0:0:0:0:0:0:0:0", "::"), ("0:0:0:0:0:0:0:1", "::1"),
       ("2001:0DB8:0000:0000:0001:0000:0000:0001", "2001:db8::1:0:0:1"),
@@ -52,12 +50,10 @@ struct IPAddressTest
       (input, expected) = test_case
       try IPAddressTest.assert_address_text(input, expected)
     end
-
-    Result.Ok(true)
   end
 
   @test "IPAddress rejects invalid text"
-  fn test_invalid_text -> Result<Bool, String>
+  fn test_invalid_text ! String
     invalid = [
       "", "hostname", "1.2.3", "1.2.3.4.5", "01.2.3.4", "1.2.3.256", "1.2.-3.4",
       ":", ":::", "1::2::3", "1:2:3:4:5:6:7", "1:2:3:4:5:6:7:8:9",
@@ -68,19 +64,14 @@ struct IPAddressTest
     for input in invalid
       match IPAddress.parse(input)
         Result.Ok(address) ->
-          return Result.Err("expected '#{input}' to fail, got #{address.to_string()}")
+          fail "expected '#{input}' to fail, got #{address.to_string()}"
 
-        Result.Err(error) ->
-          match error
-            IPAddress.ParseError.Invalid(rejected) ->
-              if rejected != input
-                return Result.Err("wrong rejected input '#{rejected}' for '#{input}'")
-              end
+        Result.Err(IPAddress.ParseError.Invalid(rejected)) ->
+          if rejected != input
+            fail "wrong rejected input '#{rejected}' for '#{input}'"
           end
       end
     end
-
-    Result.Ok(true)
   end
 
   priv fn assert_address_text(input: String, expected: String) ! String
@@ -94,7 +85,7 @@ struct IPAddressTest
       ? IPAddress.Version.V6
       : IPAddress.Version.V4
 
-    unless address.version == expected_version
+    if address.version != expected_version
       fail "'#{input}' has the wrong IP version"
     end
 
@@ -110,7 +101,7 @@ struct IPAddressTest
         Result.Err(_) -> fail "failed to parse rendered '#{actual}'"
       end
 
-    unless reparsed == address
+    if reparsed != address
       fail "'#{input}' did not round-trip through '#{actual}'"
     end
   end

@@ -2,109 +2,96 @@ alias File.Mode as FileMode
 
 struct FileTest
   @test "read /dev/null returns empty string"
-  fn test_read_dev_null -> Result<Bool, String>
+  fn test_read_dev_null ! String
     match File.read("/dev/null")
       Result.Ok(contents) ->
-        contents.empty?()
-          ? Result.Ok(true)
-          : Result.Err("expected empty, got '#{contents}'")
+        if not contents.empty?()
+          fail "expected empty, got '#{contents}'"
+        end
 
       Result.Err(msg) ->
-        Result.Err("read /dev/null failed: #{msg}")
+        fail "read /dev/null failed: #{msg}"
     end
   end
 
   @test "read nonexistent file returns Err"
-  fn test_read_nonexistent -> Result<Bool, String>
+  fn test_read_nonexistent ! String
     match File.read("/tmp/nonexistent_koja_file_test_12345")
-      Result.Ok(_) -> Result.Err("expected Err for nonexistent file")
-      Result.Err(_) -> Result.Ok(true)
+      Result.Ok(_) -> fail "expected Err for nonexistent file"
+      Result.Err(_) -> ()
     end
   end
 
   @test "write and read roundtrip"
-  fn test_write_read_roundtrip -> Result<Bool, String>
+  fn test_write_read_roundtrip ! String
     path = "/tmp/koja_file_test_write.txt"
 
-    match File.write(path, "hello from koja")
-      Result.Err(msg) -> return Result.Err("write failed: #{msg}")
-      Result.Ok(_) -> ()
-    end
+    File.write(path, "hello from koja")
+      rescue msg -> fail "write failed: #{msg}"
 
     match File.read(path)
       Result.Err(msg) ->
         File.delete(path)
-        return Result.Err("read back failed: #{msg}")
+        fail "read back failed: #{msg}"
 
       Result.Ok(contents) ->
         File.delete(path)
 
-        unless contents == "hello from koja"
-          return Result.Err("expected 'hello from koja', got '#{contents}'")
+        if contents != "hello from koja"
+          fail "expected 'hello from koja', got '#{contents}'"
         end
     end
-
-    Result.Ok(true)
   end
 
   @test "open for read on /dev/null succeeds"
-  fn test_open_read -> Result<Bool, String>
+  fn test_open_read ! String
     match File.open("/dev/null", FileMode.Read)
-      Result.Ok(file) ->
-        _ = file.close()
-        Result.Ok(true)
-
-      Result.Err(msg) ->
-        Result.Err("open /dev/null failed: #{msg}")
+      Result.Ok(file) -> _ = file.close()
+      Result.Err(msg) -> fail "open /dev/null failed: #{msg}"
     end
   end
 
   @test "open nonexistent file for read returns Err"
-  fn test_open_nonexistent -> Result<Bool, String>
+  fn test_open_nonexistent ! String
     match File.open("/tmp/nonexistent_koja_file_test_12345", FileMode.Read)
-      Result.Ok(_) -> Result.Err("expected Err for nonexistent file")
-      Result.Err(_) -> Result.Ok(true)
+      Result.Ok(_) -> fail "expected Err for nonexistent file"
+      Result.Err(_) -> ()
     end
   end
 
   @test "open for write, write via fd, read back"
-  fn test_open_write -> Result<Bool, String>
+  fn test_open_write ! String
     path = "/tmp/koja_file_test_handle_write.txt"
 
     match File.open(path, FileMode.Write)
-      Result.Err(msg) -> return Result.Err("open for write failed: #{msg}")
+      Result.Err(msg) -> fail "open for write failed: #{msg}"
       Result.Ok(file) -> file.fd.write("handle write")
     end
 
     match File.read(path)
       Result.Err(msg) ->
         File.delete(path)
-        return Result.Err("read back failed: #{msg}")
+        fail "read back failed: #{msg}"
 
       Result.Ok(contents) ->
         File.delete(path)
 
-        unless contents == "handle write"
-          return Result.Err("expected 'handle write', got '#{contents}'")
+        if contents != "handle write"
+          fail "expected 'handle write', got '#{contents}'"
         end
     end
-
-    Result.Ok(true)
   end
 
   @test "open for append adds to existing content"
-  fn test_open_append -> Result<Bool, String>
+  fn test_open_append ! String
     path = "/tmp/koja_file_test_append.txt"
 
-    match File.write(path, "first")
-      Result.Err(msg) -> return Result.Err("initial write failed: #{msg}")
-      Result.Ok(_) -> ()
-    end
+    File.write(path, "first") rescue msg -> fail "initial write failed: #{msg}"
 
     match File.open(path, FileMode.Append)
       Result.Err(msg) ->
         File.delete(path)
-        return Result.Err("open for append failed: #{msg}")
+        fail "open for append failed: #{msg}"
 
       Result.Ok(file) ->
         file.fd.write(" second")
@@ -113,68 +100,55 @@ struct FileTest
     match File.read(path)
       Result.Err(msg) ->
         File.delete(path)
-        return Result.Err("read appended failed: #{msg}")
+        fail "read appended failed: #{msg}"
 
       Result.Ok(contents) ->
         File.delete(path)
 
-        unless contents == "first second"
-          return Result.Err("expected 'first second', got '#{contents}'")
+        if contents != "first second"
+          fail "expected 'first second', got '#{contents}'"
         end
     end
-
-    Result.Ok(true)
   end
 
   @test "exists? returns true for /dev/null"
-  fn test_exists_true -> Result<Bool, String>
-    File.exists?("/dev/null")
-      ? Result.Ok(true)
-      : Result.Err("expected /dev/null to exist")
+  fn test_exists_true ! String
+    if not File.exists?("/dev/null")
+      fail "expected /dev/null to exist"
+    end
   end
 
   @test "exists? returns false for nonexistent file"
-  fn test_exists_false -> Result<Bool, String>
-    File.exists?("/tmp/nonexistent_koja_file_test_99999")
-      ? Result.Err("expected nonexistent file to not exist")
-      : Result.Ok(true)
+  fn test_exists_false ! String
+    if File.exists?("/tmp/nonexistent_koja_file_test_99999")
+      fail "expected nonexistent file to not exist"
+    end
   end
 
   @test "delete removes a file"
-  fn test_delete -> Result<Bool, String>
+  fn test_delete ! String
     path = "/tmp/koja_file_test_delete.txt"
 
-    match File.write(path, "delete me")
-      Result.Err(msg) -> return Result.Err("write failed: #{msg}")
-      Result.Ok(_) -> ()
-    end
+    File.write(path, "delete me") rescue msg -> fail "write failed: #{msg}"
 
-    match File.delete(path)
-      Result.Err(msg) -> return Result.Err("delete failed: #{msg}")
-      Result.Ok(_) -> ()
-    end
+    File.delete(path) rescue msg -> fail "delete failed: #{msg}"
 
     if File.exists?(path)
-      return Result.Err("file still exists after delete")
+      fail "file still exists after delete"
     end
-
-    Result.Ok(true)
   end
 
   @test "rename moves a file"
-  fn test_rename -> Result<Bool, String>
+  fn test_rename ! String
     src = "/tmp/koja_file_test_rename_src.txt"
     dst = "/tmp/koja_file_test_rename_dst.txt"
 
-    match File.write(src, "rename me")
-      Result.Err(msg) -> return Result.Err("write failed: #{msg}")
-      Result.Ok(_) -> ()
-    end
+    File.write(src, "rename me") rescue msg -> fail "write failed: #{msg}"
 
     match File.rename(src, dst)
       Result.Err(msg) ->
         File.delete(src)
-        return Result.Err("rename failed: #{msg}")
+        fail "rename failed: #{msg}"
 
       Result.Ok(_) ->
         ()
@@ -182,109 +156,89 @@ struct FileTest
 
     if File.exists?(src)
       File.delete(dst)
-      return Result.Err("source still exists after rename")
+      fail "source still exists after rename"
     end
 
     match File.read(dst)
       Result.Err(msg) ->
         File.delete(dst)
-        return Result.Err("read renamed failed: #{msg}")
+        fail "read renamed failed: #{msg}"
 
       Result.Ok(contents) ->
         File.delete(dst)
 
-        unless contents == "rename me"
-          return Result.Err("expected 'rename me', got '#{contents}'")
+        if contents != "rename me"
+          fail "expected 'rename me', got '#{contents}'"
         end
     end
-
-    Result.Ok(true)
   end
 
   @test "close returns Ok"
-  fn test_close -> Result<Bool, String>
+  fn test_close ! String
     match File.open("/dev/null", FileMode.Read)
-      Result.Err(msg) ->
-        Result.Err("open failed: #{msg}")
-
-      Result.Ok(file) ->
-        match file.close()
-          Result.Ok(_) -> Result.Ok(true)
-          Result.Err(msg) -> Result.Err("close failed: #{msg}")
-        end
+      Result.Err(msg) -> fail "open failed: #{msg}"
+      Result.Ok(file) -> file.close() rescue msg -> fail "close failed: #{msg}"
     end
   end
 
   @test "binary write and read preserve arbitrary bytes"
-  fn test_binary_roundtrip -> Result<Bool, String>
+  fn test_binary_roundtrip ! String
     path = "/tmp/koja_file_test_binary.bin"
     expected: Binary = <<97, 0, 255>>
 
-    match File.write(path, expected)
-      Result.Err(message) -> return Result.Err("write failed: #{message}")
-      Result.Ok(_) -> ()
-    end
+    File.write(path, expected) rescue message -> fail "write failed: #{message}"
 
     match File.read_binary(path)
       Result.Err(message) ->
         File.delete(path)
-        Result.Err("read failed: #{message}")
+        fail "read failed: #{message}"
 
       Result.Ok(actual) ->
         File.delete(path)
 
         match actual
-          <<97, 0, 255>> -> Result.Ok(true)
-          _ -> Result.Err("binary contents changed")
+          <<97, 0, 255>> -> ()
+          _ -> fail "binary contents changed"
         end
     end
   end
 
   @test "text read rejects invalid UTF-8"
-  fn test_text_read_invalid_utf8 -> Result<Bool, String>
+  fn test_text_read_invalid_utf8 ! String
     path = "/tmp/koja_file_test_invalid_utf8.bin"
 
-    match File.write(path, <<255>>)
-      Result.Err(message) -> return Result.Err("write failed: #{message}")
-      Result.Ok(_) -> ()
-    end
+    File.write(path, <<255>>) rescue message -> fail "write failed: #{message}"
 
     result = File.read(path)
     File.delete(path)
 
     match result
-      Result.Err(_) -> Result.Ok(true)
-      Result.Ok(_) -> Result.Err("invalid UTF-8 decoded as text")
+      Result.Err(_) -> ()
+      Result.Ok(_) -> fail "invalid UTF-8 decoded as text"
     end
   end
 
   @test "mkdir creates a directory that dir? sees and rmdir removes"
-  fn test_mkdir_rmdir -> Result<Bool, String>
+  fn test_mkdir_rmdir ! String
     path = "/tmp/koja_file_test_mkdir"
     File.rmdir(path)
 
-    match File.mkdir(path)
-      Result.Err(msg) -> return Result.Err("mkdir failed: #{msg}")
-      Result.Ok(_) -> ()
-    end
+    File.mkdir(path) rescue msg -> fail "mkdir failed: #{msg}"
 
-    unless File.dir?(path)
+    if not File.dir?(path)
       File.rmdir(path)
-      return Result.Err("dir? false for created directory")
+      fail "dir? false for created directory"
     end
 
-    match File.rmdir(path)
-      Result.Err(msg) -> return Result.Err("rmdir failed: #{msg}")
-      Result.Ok(_) -> ()
-    end
+    File.rmdir(path) rescue msg -> fail "rmdir failed: #{msg}"
 
-    File.exists?(path)
-      ? Result.Err("directory still exists after rmdir")
-      : Result.Ok(true)
+    if File.exists?(path)
+      fail "directory still exists after rmdir"
+    end
   end
 
   @test "mkdir errors when the directory already exists"
-  fn test_mkdir_existing -> Result<Bool, String>
+  fn test_mkdir_existing ! String
     path = "/tmp/koja_file_test_mkdir_existing"
     File.mkdir_p(path)
 
@@ -292,28 +246,25 @@ struct FileTest
     File.rmdir(path)
 
     match result
-      Result.Err(_) -> Result.Ok(true)
-      Result.Ok(_) -> Result.Err("mkdir on existing directory should error")
+      Result.Err(_) -> ()
+      Result.Ok(_) -> fail "mkdir on existing directory should error"
     end
   end
 
   @test "mkdir errors when the parent is missing"
-  fn test_mkdir_missing_parent -> Result<Bool, String>
+  fn test_mkdir_missing_parent ! String
     match File.mkdir("/tmp/koja_file_test_no_parent/child")
-      Result.Err(_) -> Result.Ok(true)
-      Result.Ok(_) -> Result.Err("mkdir without parent should error")
+      Result.Err(_) -> ()
+      Result.Ok(_) -> fail "mkdir without parent should error"
     end
   end
 
   @test "mkdir_p creates missing parents and is idempotent"
-  fn test_mkdir_p -> Result<Bool, String>
+  fn test_mkdir_p ! String
     parent = "/tmp/koja_file_test_mkdir_p"
     nested = "#{parent}/a/b"
 
-    match File.mkdir_p(nested)
-      Result.Err(msg) -> return Result.Err("mkdir_p failed: #{msg}")
-      Result.Ok(_) -> ()
-    end
+    File.mkdir_p(nested) rescue msg -> fail "mkdir_p failed: #{msg}"
 
     repeat = File.mkdir_p(nested)
     ok = File.dir?(nested)
@@ -321,47 +272,39 @@ struct FileTest
     File.rmdir("#{parent}/a")
     File.rmdir(parent)
 
-    unless ok
-      return Result.Err("dir? false for nested directory")
+    if not ok
+      fail "dir? false for nested directory"
     end
 
-    match repeat
-      Result.Err(msg) ->
-        Result.Err("mkdir_p on existing directory errored: #{msg}")
-
-      Result.Ok(_) ->
-        Result.Ok(true)
-    end
+    repeat rescue msg -> fail "mkdir_p on existing directory errored: #{msg}"
   end
 
   @test "rmdir errors on a non-empty directory"
-  fn test_rmdir_non_empty -> Result<Bool, String>
+  fn test_rmdir_non_empty ! String
     path = "/tmp/koja_file_test_rmdir_full"
     File.mkdir_p(path)
 
-    match File.write("#{path}/occupant.txt", "here")
-      Result.Err(msg) -> return Result.Err("write failed: #{msg}")
-      Result.Ok(_) -> ()
-    end
+    File.write("#{path}/occupant.txt", "here")
+      rescue msg -> fail "write failed: #{msg}"
 
     result = File.rmdir(path)
     File.delete("#{path}/occupant.txt")
     File.rmdir(path)
 
     match result
-      Result.Err(_) -> Result.Ok(true)
-      Result.Ok(_) -> Result.Err("rmdir on non-empty directory should error")
+      Result.Err(_) -> ()
+      Result.Ok(_) -> fail "rmdir on non-empty directory should error"
     end
   end
 
   @test "dir? is false for regular files and missing paths"
-  fn test_dir_false_cases -> Result<Bool, String>
+  fn test_dir_false_cases ! String
     if File.dir?("/dev/null")
-      return Result.Err("dir? true for /dev/null")
+      fail "dir? true for /dev/null"
     end
 
-    File.dir?("/tmp/koja_file_test_missing_dir_99999")
-      ? Result.Err("dir? true for missing path")
-      : Result.Ok(true)
+    if File.dir?("/tmp/koja_file_test_missing_dir_99999")
+      fail "dir? true for missing path"
+    end
   end
 end

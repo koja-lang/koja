@@ -1,226 +1,214 @@
 struct IntTest
   @test "integer arithmetic"
-  fn test_arithmetic_int -> Result<Bool, String>
-    unless 2 + 3 == 5
-      return Result.Err("add")
+  fn test_arithmetic_int ! String
+    if 2 + 3 != 5
+      fail "add"
     end
 
-    unless 10 - 4 == 6
-      return Result.Err("sub")
+    if 10 - 4 != 6
+      fail "sub"
     end
 
-    unless 6 * 7 == 42
-      return Result.Err("mul")
+    if 6 * 7 != 42
+      fail "mul"
     end
 
-    unless 20 / 4 == 5
-      return Result.Err("div")
+    if 20 / 4 != 5
+      fail "div"
     end
 
-    unless 17 % 5 == 2
-      return Result.Err("mod")
+    if 17 % 5 != 2
+      fail "mod"
     end
 
-    unless -3 + 10 == 7
-      return Result.Err("negative add")
+    if -3 + 10 != 7
+      fail "negative add"
     end
 
-    unless 0 * 100 == 0
-      return Result.Err("zero mul")
+    if 0 * 100 != 0
+      fail "zero mul"
     end
-
-    Result.Ok(true)
   end
 
   @test "float arithmetic"
-  fn test_arithmetic_float -> Result<Bool, String>
-    unless 1.5 + 2.5 == 4.0
-      return Result.Err("float add")
+  fn test_arithmetic_float ! String
+    if 1.5 + 2.5 != 4.0
+      fail "float add"
     end
 
-    unless 10.0 - 3.5 == 6.5
-      return Result.Err("float sub")
+    if 10.0 - 3.5 != 6.5
+      fail "float sub"
     end
 
-    unless 2.0 * 3.0 == 6.0
-      return Result.Err("float mul")
+    if 2.0 * 3.0 != 6.0
+      fail "float mul"
     end
 
-    unless 7.0 / 2.0 == 3.5
-      return Result.Err("float div")
+    if 7.0 / 2.0 != 3.5
+      fail "float div"
     end
-
-    Result.Ok(true)
   end
 
   @test "comparison operators"
-  fn test_comparison -> Result<Bool, String>
-    unless 1 == 1
-      return Result.Err("eq reflexive")
+  fn test_comparison ! String
+    if 1 != 1
+      fail "eq reflexive"
     end
 
     if 1 == 2
-      return Result.Err("eq distinct")
+      fail "eq distinct"
     end
 
-    unless 1 != 2
-      return Result.Err("neq distinct")
+    if 1 == 2
+      fail "neq distinct"
     end
 
     if 1 != 1
-      return Result.Err("neq reflexive")
+      fail "neq reflexive"
     end
 
-    unless 3 < 5
-      return Result.Err("lt")
+    if 3 >= 5
+      fail "lt"
     end
 
     if 5 < 3
-      return Result.Err("lt false")
+      fail "lt false"
     end
 
-    unless 5 > 3
-      return Result.Err("gt")
+    if 5 <= 3
+      fail "gt"
     end
 
     if 3 > 5
-      return Result.Err("gt false")
+      fail "gt false"
     end
 
-    unless 3 <= 3
-      return Result.Err("lte eq")
+    if 3 > 3
+      fail "lte eq"
     end
 
-    unless 3 <= 4
-      return Result.Err("lte strict")
+    if 3 > 4
+      fail "lte strict"
     end
 
     if 4 <= 3
-      return Result.Err("lte false")
+      fail "lte false"
     end
 
-    unless 5 >= 5
-      return Result.Err("gte eq")
+    if 5 < 5
+      fail "gte eq"
     end
 
-    unless 5 >= 4
-      return Result.Err("gte strict")
+    if 5 < 4
+      fail "gte strict"
     end
 
     if 4 >= 5
-      return Result.Err("gte false")
+      fail "gte false"
     end
-
-    Result.Ok(true)
   end
 
   @test "compound assignment"
-  fn test_compound_assignment -> Result<Bool, String>
+  fn test_compound_assignment ! String
     x = 10
     x += 5
 
-    unless x == 15
-      return Result.Err("+=")
+    if x != 15
+      fail "+="
     end
 
     x -= 3
 
-    unless x == 12
-      return Result.Err("-=")
+    if x != 12
+      fail "-="
     end
 
     x *= 4
 
-    unless x == 48
-      return Result.Err("*=")
+    if x != 48
+      fail "*="
     end
 
     x /= 6
 
-    unless x == 8
-      return Result.Err("/=")
+    if x != 8
+      fail "/="
     end
-
-    Result.Ok(true)
   end
 
   @test "primitive integer widths and underscore literal"
-  fn test_primitives -> Result<Bool, String>
+  fn test_primitives ! String
     i8: Int8 = 127
     i16: Int16 = 32000
     i32: Int32 = 42
     i: Int = 100
 
-    unless i8 == 127
-      return Result.Err("Int8")
+    if i8 != 127
+      fail "Int8"
     end
 
-    unless i16 == 32000
-      return Result.Err("Int16")
+    if i16 != 32000
+      fail "Int16"
     end
 
-    unless i32 == 42
-      return Result.Err("Int32")
+    if i32 != 42
+      fail "Int32"
     end
 
-    unless i == 100
-      return Result.Err("Int")
+    if i != 100
+      fail "Int"
     end
 
-    unless 1_000 == 1000
-      return Result.Err("underscore int literal")
+    if 1_000 != 1000
+      fail "underscore int literal"
     end
-
-    Result.Ok(true)
   end
 
   @test "numeric widening into Int slots"
-  fn test_widening -> Result<Bool, String>
+  fn test_widening ! String
     i32: Int32 = -42
     widened: Int = i32
 
-    unless widened == -42
-      return Result.Err("Int32 sign extension")
+    if widened != -42
+      fail "Int32 sign extension"
     end
 
     byte: UInt8 = 255
     wide_byte: Int = byte
 
-    unless wide_byte == 255
-      return Result.Err("UInt8 zero extension")
+    if wide_byte != 255
+      fail "UInt8 zero extension"
     end
 
     u16: UInt16 = 65535
     wide_u16: Int = u16
 
-    unless wide_u16 == 65535
-      return Result.Err("UInt16 zero extension")
+    if wide_u16 != 65535
+      fail "UInt16 zero extension"
     end
-
-    Result.Ok(true)
   end
 
   @test "checked narrowing round-trips"
-  fn test_narrowing -> Result<Bool, String>
+  fn test_narrowing ! String
     match 127.to_int8()
       Result.Ok(v) ->
         wide: Int = v
 
-        unless wide == 127
-          return Result.Err("to_int8 round-trip")
+        if wide != 127
+          fail "to_int8 round-trip"
         end
 
       Result.Err(e) ->
-        return Result.Err("to_int8 in range")
+        fail "to_int8 in range"
     end
 
     match 128.to_int8()
-      Result.Ok(v) -> return Result.Err("to_int8 out of range")
+      Result.Ok(v) -> fail "to_int8 out of range"
       Result.Err(e) -> ()
     end
 
     match (-129).to_int8()
-      Result.Ok(v) -> return Result.Err("to_int8 below range")
+      Result.Ok(v) -> fail "to_int8 below range"
       Result.Err(e) -> ()
     end
 
@@ -228,16 +216,16 @@ struct IntTest
       Result.Ok(v) ->
         wide: Int = v
 
-        unless wide == -1234
-          return Result.Err("to_int32 round-trip")
+        if wide != -1234
+          fail "to_int32 round-trip"
         end
 
       Result.Err(e) ->
-        return Result.Err("to_int32 in range")
+        fail "to_int32 in range"
     end
 
     match (-1).to_uint64()
-      Result.Ok(v) -> return Result.Err("to_uint64 negative")
+      Result.Ok(v) -> fail "to_uint64 negative"
       Result.Err(e) -> ()
     end
 
@@ -245,18 +233,16 @@ struct IntTest
       Result.Ok(v) ->
         match v.to_int()
           Result.Ok(i) ->
-            unless i == 10
-              return Result.Err("UInt64 to_int round-trip")
+            if i != 10
+              fail "UInt64 to_int round-trip"
             end
 
           Result.Err(e) ->
-            return Result.Err("UInt64 to_int in range")
+            fail "UInt64 to_int in range"
         end
 
       Result.Err(e) ->
-        return Result.Err("to_uint64 in range")
+        fail "to_uint64 in range"
     end
-
-    Result.Ok(true)
   end
 end

@@ -1949,27 +1949,28 @@ Doc strings support Markdown and are rendered by `koja doc`.
 ### `@test`
 
 Marks a function as a test case. `koja test` discovers and runs all
-`@test`-annotated functions in `src/` and `test/` directories. Test
-functions return `Result<Bool, String>`. Any `Result.Ok` passes, while
-`Result.Err(message)` fails with the given message.
+`@test`-annotated functions in `src/` and `test/` directories. A test is
+a fallible function with a `String` error. Returning normally passes,
+and `fail message` fails with that message. Setup calls propagate with
+`try`, so a failed setup reads as a failed test.
 
 ```koja
 struct AdditionTest
   @test "adds two integers"
-  fn test_addition -> Result<Bool, String>
+  fn test_addition ! String
     result = add(2, 3)
 
-    unless result == 5
-      return Result.Err("expected 5, got #{result}")
+    if result != 5
+      fail "expected 5, got #{result}"
     end
-
-    Result.Ok(true)
   end
 end
 ```
 
 An optional string after `@test` provides a description printed during the
 test run. The runner reports every discovered test even when some fail.
+Tests declared as `-> Result<T, String>` still run. Any `Result.Ok` passes
+and `Result.Err(message)` fails.
 
 ---
 

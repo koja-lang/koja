@@ -1,133 +1,115 @@
 struct HeadersTest
   @test "Headers.new creates empty collection"
-  fn test_headers_new -> Result<Bool, String>
+  fn test_headers_new ! String
     h = Headers.new()
 
     if h.has?("Content-Type")
-      return Result.Err("new headers should be empty")
+      fail "new headers should be empty"
     end
-
-    Result.Ok(true)
   end
 
   @test "Headers.append adds a header"
-  fn test_headers_append -> Result<Bool, String>
+  fn test_headers_append ! String
     h = Headers.new()
     h = h.append("Content-Type", "text/html")
 
-    unless h.get("Content-Type").unwrap() == "text/html"
-      return Result.Err("expected text/html")
+    if h.get("Content-Type").unwrap() != "text/html"
+      fail "expected text/html"
     end
-
-    Result.Ok(true)
   end
 
   @test "Headers.get is case-insensitive"
-  fn test_headers_case_insensitive -> Result<Bool, String>
+  fn test_headers_case_insensitive ! String
     h = Headers.new()
     h = h.append("Content-Type", "text/html")
 
-    unless h.get("content-type").unwrap() == "text/html"
-      return Result.Err("lowercase lookup failed")
+    if h.get("content-type").unwrap() != "text/html"
+      fail "lowercase lookup failed"
     end
 
-    unless h.get("CONTENT-TYPE").unwrap() == "text/html"
-      return Result.Err("uppercase lookup failed")
+    if h.get("CONTENT-TYPE").unwrap() != "text/html"
+      fail "uppercase lookup failed"
     end
-
-    Result.Ok(true)
   end
 
   @test "Headers.get returns None for missing header"
-  fn test_headers_get_missing -> Result<Bool, String>
+  fn test_headers_get_missing ! String
     h = Headers.new()
 
     if h.get("X-Missing").some?()
-      return Result.Err("expected None for missing header")
+      fail "expected None for missing header"
     end
-
-    Result.Ok(true)
   end
 
   @test "Headers.get_all returns all values"
-  fn test_headers_get_all -> Result<Bool, String>
+  fn test_headers_get_all ! String
     h = Headers.new()
     h = h.append("Set-Cookie", "a=1")
     h = h.append("Set-Cookie", "b=2")
     all = h.get_all("Set-Cookie")
 
-    unless all.length() == 2
-      return Result.Err("expected 2 values, got #{all.length()}")
+    if all.length() != 2
+      fail "expected 2 values, got #{all.length()}"
     end
 
-    unless all.get(0).unwrap() == "a=1"
-      return Result.Err("expected first cookie a=1")
+    if all.get(0).unwrap() != "a=1"
+      fail "expected first cookie a=1"
     end
 
-    unless all.get(1).unwrap() == "b=2"
-      return Result.Err("expected second cookie b=2")
+    if all.get(1).unwrap() != "b=2"
+      fail "expected second cookie b=2"
     end
-
-    Result.Ok(true)
   end
 
   @test "Headers.set replaces existing header"
-  fn test_headers_set -> Result<Bool, String>
+  fn test_headers_set ! String
     h = Headers.new()
     h = h.append("Content-Type", "text/plain")
     h = h.set("Content-Type", "text/html")
 
-    unless h.get("Content-Type").unwrap() == "text/html"
-      return Result.Err("expected replaced value")
+    if h.get("Content-Type").unwrap() != "text/html"
+      fail "expected replaced value"
     end
 
     all = h.get_all("Content-Type")
 
-    unless all.length() == 1
-      return Result.Err("expected single value after set")
+    if all.length() != 1
+      fail "expected single value after set"
     end
-
-    Result.Ok(true)
   end
 
   @test "Headers.has? checks for header presence"
-  fn test_headers_has -> Result<Bool, String>
+  fn test_headers_has ! String
     h = Headers.new().append("Host", "example.com")
 
-    unless h.has?("Host")
-      return Result.Err("expected Host to exist")
+    if not h.has?("Host")
+      fail "expected Host to exist"
     end
 
-    unless h.has?("host")
-      return Result.Err("case insensitive has failed")
+    if not h.has?("host")
+      fail "case insensitive has failed"
     end
 
     if h.has?("X-Missing")
-      return Result.Err("expected missing to not exist")
+      fail "expected missing to not exist"
     end
-
-    Result.Ok(true)
   end
 
   @test "Headers.content_length parses integer value"
-  fn test_headers_content_length -> Result<Bool, String>
+  fn test_headers_content_length ! String
     h = Headers.new().append("Content-Length", "42")
 
-    unless h.content_length().unwrap() == 42
-      return Result.Err("expected 42")
+    if h.content_length().unwrap() != 42
+      fail "expected 42"
     end
-
-    Result.Ok(true)
   end
 
   @test "Headers.content_length returns None when missing"
-  fn test_headers_content_length_missing -> Result<Bool, String>
+  fn test_headers_content_length_missing ! String
     h = Headers.new()
 
     if h.content_length().some?()
-      return Result.Err("expected None")
+      fail "expected None"
     end
-
-    Result.Ok(true)
   end
 end

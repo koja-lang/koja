@@ -1,39 +1,37 @@
 struct ClientTest
   @test "request rejects an invalid URI before networking"
-  fn test_request_invalid_uri -> Result<Bool, String>
-    ClientTest.expect_invalid_url(
+  fn test_request_invalid_uri ! String
+    try ClientTest.expect_invalid_url(
       "http://exa mple.com/",
       "invalid URI component",
     )
   end
 
   @test "request rejects an unsupported scheme before networking"
-  fn test_request_unsupported_scheme -> Result<Bool, String>
-    ClientTest.expect_invalid_url(
+  fn test_request_unsupported_scheme ! String
+    try ClientTest.expect_invalid_url(
       "ftp://example.com/file",
       "unsupported URL scheme",
     )
   end
 
   @test "request rejects a missing host before networking"
-  fn test_request_missing_host -> Result<Bool, String>
-    ClientTest.expect_invalid_url("http:///path", "missing host")
+  fn test_request_missing_host ! String
+    try ClientTest.expect_invalid_url("http:///path", "missing host")
   end
 
-  priv fn expect_invalid_url(url: String, expected: String)
-    -> Result<Bool, String>
-
+  priv fn expect_invalid_url(url: String, expected: String) ! String
     match request(Method.Get, url, Headers.new(), "")
       Result.Err(Error.InvalidUrl(message)) ->
-        message.contains?(expected)
-          ? Result.Ok(true)
-          : Result.Err("expected '#{expected}' in '#{message}'")
+        if not message.contains?(expected)
+          fail "expected '#{expected}' in '#{message}'"
+        end
 
       Result.Err(error) ->
-        Result.Err("expected InvalidUrl, got '#{error.message()}'")
+        fail "expected InvalidUrl, got '#{error.message()}'"
 
       Result.Ok(_) ->
-        Result.Err("expected InvalidUrl for '#{url}'")
+        fail "expected InvalidUrl for '#{url}'"
     end
   end
 end

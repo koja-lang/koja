@@ -12,178 +12,150 @@ end
 
 struct EncodeTest
   @test "encode null"
-  fn test_encode_null -> Result<Bool, String>
+  fn test_encode_null ! String
     result = encode(Value.null())
 
-    unless result == "null"
-      return Result.Err("expected \"null\", got #{result}")
+    if result != "null"
+      fail "expected \"null\", got #{result}"
     end
-
-    Result.Ok(true)
   end
 
   @test "encode true"
-  fn test_encode_true -> Result<Bool, String>
+  fn test_encode_true ! String
     result = encode(Value.bool(true))
 
-    unless result == "true"
-      return Result.Err("expected \"true\", got #{result}")
+    if result != "true"
+      fail "expected \"true\", got #{result}"
     end
-
-    Result.Ok(true)
   end
 
   @test "encode false"
-  fn test_encode_false -> Result<Bool, String>
+  fn test_encode_false ! String
     result = encode(Value.bool(false))
 
-    unless result == "false"
-      return Result.Err("expected \"false\", got #{result}")
+    if result != "false"
+      fail "expected \"false\", got #{result}"
     end
-
-    Result.Ok(true)
   end
 
   @test "encode integer"
-  fn test_encode_int -> Result<Bool, String>
+  fn test_encode_int ! String
     result = encode(Value.int(42))
 
-    unless result == "42"
-      return Result.Err("expected \"42\", got #{result}")
+    if result != "42"
+      fail "expected \"42\", got #{result}"
     end
-
-    Result.Ok(true)
   end
 
   @test "encode string"
-  fn test_encode_string -> Result<Bool, String>
+  fn test_encode_string ! String
     result = encode(Value.string("hello"))
 
-    unless result == "\"hello\""
-      return Result.Err("expected '\"hello\"', got #{result}")
+    if result != "\"hello\""
+      fail "expected '\"hello\"', got #{result}"
     end
-
-    Result.Ok(true)
   end
 
   @test "encode empty array"
-  fn test_encode_empty_array -> Result<Bool, String>
+  fn test_encode_empty_array ! String
     result = encode(Value.array([]))
 
-    unless result == "[]"
-      return Result.Err("expected \"[]\", got #{result}")
+    if result != "[]"
+      fail "expected \"[]\", got #{result}"
     end
-
-    Result.Ok(true)
   end
 
   @test "encode array with elements"
-  fn test_encode_array -> Result<Bool, String>
+  fn test_encode_array ! String
     result = encode(Value.array([Value.int(1), Value.int(2), Value.int(3)]))
 
-    unless result == "[1,2,3]"
-      return Result.Err("expected \"[1,2,3]\", got #{result}")
+    if result != "[1,2,3]"
+      fail "expected \"[1,2,3]\", got #{result}"
     end
-
-    Result.Ok(true)
   end
 
   @test "encode empty object"
-  fn test_encode_empty_object -> Result<Bool, String>
+  fn test_encode_empty_object ! String
     result = encode(Value.object([]))
 
-    unless result == "{}"
-      return Result.Err("expected \"{}\", got #{result}")
+    if result != "{}"
+      fail "expected \"{}\", got #{result}"
     end
-
-    Result.Ok(true)
   end
 
   @test "encode object"
-  fn test_encode_object -> Result<Bool, String>
+  fn test_encode_object ! String
     result = encode(Value.object([Value.entry("name", Value.string("koja"))]))
 
-    unless result == "{\"name\":\"koja\"}"
-      return Result.Err("expected '{\"name\":\"koja\"}', got #{result}")
+    if result != "{\"name\":\"koja\"}"
+      fail "expected '{\"name\":\"koja\"}', got #{result}"
     end
-
-    Result.Ok(true)
   end
 
   @test "encode protocol values"
-  fn test_encode_protocol_values -> Result<Bool, String>
-    unless encode(true) == "true"
-      return Result.Err("failed to encode Bool")
+  fn test_encode_protocol_values ! String
+    if encode(true) != "true"
+      fail "failed to encode Bool"
     end
 
-    unless encode(-42) == "-42"
-      return Result.Err("failed to encode Int")
+    if encode(-42) != "-42"
+      fail "failed to encode Int"
     end
 
-    unless encode(1.5) == "1.5"
-      return Result.Err("failed to encode Float")
+    if encode(1.5) != "1.5"
+      fail "failed to encode Float"
     end
 
-    unless encode("hello") == "\"hello\""
-      return Result.Err("failed to encode String")
+    if encode("hello") != "\"hello\""
+      fail "failed to encode String"
     end
 
-    unless encode([1, 2, 3]) == "[1,2,3]"
-      return Result.Err("failed to encode List<Int>")
+    if encode([1, 2, 3]) != "[1,2,3]"
+      fail "failed to encode List<Int>"
     end
-
-    Result.Ok(true)
   end
 
   @test "encode nested JSON literals"
-  fn test_encode_nested_literals -> Result<Bool, String>
+  fn test_encode_nested_literals ! String
     value: Value = [
       "first": 1, "first": 2, "nested": [true, -3, 1.5, "x"], "empty": [:]
     ]
     result = encode(value)
     expected = "{\"first\":1,\"first\":2,\"nested\":[true,-3,1.5,\"x\"],\"empty\":{}}"
 
-    unless result == expected
-      return Result.Err("expected #{expected}, got #{result}")
+    if result != expected
+      fail "expected #{expected}, got #{result}"
     end
-
-    Result.Ok(true)
   end
 
   @test "encode user protocol implementation"
-  fn test_encode_user_protocol -> Result<Bool, String>
+  fn test_encode_user_protocol ! String
     result = encode(EncodedPoint{x: 3, y: 4})
 
-    unless result == "{\"x\":3,\"y\":4}"
-      return Result.Err("expected point object, got #{result}")
+    if result != "{\"x\":3,\"y\":4}"
+      fail "expected point object, got #{result}"
     end
-
-    Result.Ok(true)
   end
 
   @test "encode defaults to compact output"
-  fn test_encode_default_compact -> Result<Bool, String>
+  fn test_encode_default_compact ! String
     value: Value = ["active": true]
     result = encode(value)
     expected = "{\"active\":true}"
 
-    unless result == expected
-      return Result.Err("expected compact object, got #{result}")
+    if result != expected
+      fail "expected compact object, got #{result}"
     end
-
-    Result.Ok(true)
   end
 
   @test "encode accepts pretty options"
-  fn test_encode_pretty_options -> Result<Bool, String>
+  fn test_encode_pretty_options ! String
     value: Value = ["active": true]
     result = encode(value, EncodeOptions{pretty?: true})
     expected = "{\n  \"active\": true\n}"
 
-    unless result == expected
-      return Result.Err("expected pretty object, got #{result}")
+    if result != expected
+      fail "expected pretty object, got #{result}"
     end
-
-    Result.Ok(true)
   end
 end

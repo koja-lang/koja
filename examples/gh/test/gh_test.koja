@@ -9,93 +9,85 @@ const REPO_JSON: String = "{\"full_name\": \"octocat/Hello-World\", \"descriptio
 
 struct FieldsTest
   @test "text folds null and missing keys to empty string"
-  fn test_text_zero_values -> Bool ! String
+  fn test_text_zero_values ! String
     value = try decode_fixture(USER_JSON)
 
-    unless Fields.text(value, "bio") == ""
+    if Fields.text(value, "bio") != ""
       fail "null bio should read as empty"
     end
 
-    unless Fields.text(value, "no_such_key") == ""
+    if Fields.text(value, "no_such_key") != ""
       fail "missing key should read as empty"
     end
 
-    unless Fields.text(value, "login") == "octocat"
+    if Fields.text(value, "login") != "octocat"
       fail "expected login to be octocat"
     end
-
-    true
   end
 
   @test "number and flag read typed fields"
-  fn test_number_and_flag -> Bool ! String
+  fn test_number_and_flag ! String
     value = try decode_fixture(REPO_JSON)
 
-    unless Fields.number(value, "stargazers_count") == 2500
+    if Fields.number(value, "stargazers_count") != 2500
       fail "expected 2500 stars"
     end
 
-    unless Fields.number(value, "missing") == 0
+    if Fields.number(value, "missing") != 0
       fail "missing number should read as 0"
     end
 
     if Fields.flag(value, "fork")
       fail "expected fork to be false"
     end
-
-    true
   end
 end
 
 struct RenderTest
   @test "user payload renders a profile"
-  fn test_render_user -> Bool ! String
+  fn test_render_user ! String
     value = try decode_fixture(USER_JSON)
     rendered = Cli.render_user(User.from_json(value))
 
-    unless rendered.contains?("The Octocat (@octocat)")
+    if not rendered.contains?("The Octocat (@octocat)")
       fail "missing title line in:\n#{rendered}"
     end
 
-    unless rendered.contains?("joined: 2011-01-25")
+    if not rendered.contains?("joined: 2011-01-25")
       fail "missing joined date in:\n#{rendered}"
     end
 
-    unless rendered.contains?("8 public repos · 9999 followers · 9 following")
+    if not rendered.contains?("8 public repos · 9999 followers · 9 following")
       fail "missing counts line in:\n#{rendered}"
     end
-
-    true
   end
 
   @test "repo payload renders a detail view"
-  fn test_render_repo -> Bool ! String
+  fn test_render_repo ! String
     value = try decode_fixture(REPO_JSON)
     rendered = Cli.render_repo(Repo.from_json(value))
 
-    unless rendered.contains?("octocat/Hello-World")
+    if not rendered.contains?("octocat/Hello-World")
       fail "missing repo name in:\n#{rendered}"
     end
 
-    unless rendered.contains?("stars: 2500")
+    if not rendered.contains?("stars: 2500")
       fail "missing stars in:\n#{rendered}"
     end
 
-    unless rendered.contains?("My first repository on GitHub!")
+    if not rendered.contains?("My first repository on GitHub!")
       fail "missing description in:\n#{rendered}"
     end
-
-    true
   end
 
   @test "unknown commands and missing args fail with usage hints"
-  fn test_dispatch_errors -> Bool ! String
+  fn test_dispatch_errors ! String
     match Cli.dispatch(["frobnicate"])
       Result.Ok(_) ->
         fail "unknown command should fail"
 
       Result.Err(e) ->
-        unless e.contains?("unknown command: frobnicate")
+        if not e.contains?("unknown command: frobnicate")
           fail "unexpected message: #{e}"
         end
     end
@@ -105,12 +97,10 @@ struct RenderTest
         fail "missing login should fail"
 
       Result.Err(e) ->
-        unless e.contains?("missing argument")
+        if not e.contains?("missing argument")
           fail "unexpected message: #{e}"
         end
     end
-
-    true
   end
 end
 

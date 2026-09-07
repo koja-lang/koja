@@ -2,35 +2,25 @@ alias File.Mode as FileMode
 
 struct FdTest
   @test "close returns Ok on valid fd"
-  fn test_close_ok -> Result<Bool, String>
+  fn test_close_ok ! String
     match File.open("/dev/null", FileMode.Read)
       Result.Ok(file) ->
-        match file.fd.close()
-          Result.Ok(_) -> Result.Ok(true)
-          Result.Err(msg) -> Result.Err("expected Ok, got Err: #{msg}")
-        end
-
-      Result.Err(msg) ->
-        Result.Err("failed to open /dev/null: #{msg}")
+        file.fd.close() rescue msg -> fail "expected Ok, got Err: #{msg}"
+      Result.Err(msg) -> fail "failed to open /dev/null: #{msg}"
     end
   end
 
   @test "close consumes the fd"
-  fn test_close_via_file -> Result<Bool, String>
+  fn test_close_via_file ! String
     match File.open("/dev/null", FileMode.Read)
       Result.Ok(file) ->
-        match file.close()
-          Result.Ok(_) -> Result.Ok(true)
-          Result.Err(msg) -> Result.Err("file close failed: #{msg}")
-        end
-
-      Result.Err(msg) ->
-        Result.Err("failed to open /dev/null: #{msg}")
+        file.close() rescue msg -> fail "file close failed: #{msg}"
+      Result.Err(msg) -> fail "failed to open /dev/null: #{msg}"
     end
   end
 
   @test "close on opened writable file"
-  fn test_close_writable -> Result<Bool, String>
+  fn test_close_writable ! String
     path = "/tmp/koja_fd_close_test.txt"
 
     match File.open(path, FileMode.Write)
@@ -38,18 +28,15 @@ struct FdTest
         result = file.close()
         File.delete(path)
 
-        match result
-          Result.Ok(_) -> Result.Ok(true)
-          Result.Err(msg) -> Result.Err("close writable failed: #{msg}")
-        end
+        result rescue msg -> fail "close writable failed: #{msg}"
 
       Result.Err(msg) ->
-        Result.Err("failed to open for write: #{msg}")
+        fail "failed to open for write: #{msg}"
     end
   end
 
   @test "write returns byte count on success"
-  fn test_write_ok -> Result<Bool, String>
+  fn test_write_ok ! String
     path = "/tmp/koja_fd_write_test.txt"
 
     match File.open(path, FileMode.Write)
@@ -58,24 +45,22 @@ struct FdTest
           Result.Ok(n) ->
             File.delete(path)
 
-            if n == 5
-              Result.Ok(true)
-            else
-              Result.Err("expected 5 bytes written, got #{n}")
+            if n != 5
+              fail "expected 5 bytes written, got #{n}"
             end
 
           Result.Err(msg) ->
             File.delete(path)
-            Result.Err("write failed: #{msg}")
+            fail "write failed: #{msg}"
         end
 
       Result.Err(msg) ->
-        Result.Err("failed to open for write: #{msg}")
+        fail "failed to open for write: #{msg}"
     end
   end
 
   @test "write and read back roundtrip"
-  fn test_write_roundtrip -> Result<Bool, String>
+  fn test_write_roundtrip ! String
     path = "/tmp/koja_fd_write_roundtrip.txt"
 
     match File.open(path, FileMode.Write)
@@ -86,47 +71,40 @@ struct FdTest
           Result.Ok(contents) ->
             File.delete(path)
 
-            if contents == "koja write test"
-              Result.Ok(true)
-            else
-              Result.Err("expected 'koja write test', got '#{contents}'")
+            if contents != "koja write test"
+              fail "expected 'koja write test', got '#{contents}'"
             end
 
           Result.Err(msg) ->
             File.delete(path)
-            Result.Err("read back failed: #{msg}")
+            fail "read back failed: #{msg}"
         end
 
       Result.Err(msg) ->
-        Result.Err("failed to open for write: #{msg}")
+        fail "failed to open for write: #{msg}"
     end
   end
 
   @test "write to /dev/null succeeds"
-  fn test_write_devnull -> Result<Bool, String>
+  fn test_write_devnull ! String
     match File.open("/dev/null", FileMode.Write)
       Result.Ok(file) ->
-        match file.fd.write("discard me")
-          Result.Ok(_) -> Result.Ok(true)
-          Result.Err(msg) -> Result.Err("write to /dev/null failed: #{msg}")
-        end
-
-      Result.Err(msg) ->
-        Result.Err("failed to open /dev/null: #{msg}")
+        file.fd.write("discard me")
+          rescue msg -> fail "write to /dev/null failed: #{msg}"
+      Result.Err(msg) -> fail "failed to open /dev/null: #{msg}"
     end
   end
 
   @test "watch and unwatch do not crash"
-  fn test_watch_unwatch -> Result<Bool, String>
+  fn test_watch_unwatch ! String
     match File.open("/dev/null", FileMode.Read)
       Result.Ok(file) ->
         file.fd.watch(0)
         file.fd.unwatch()
         _ = file.close()
-        Result.Ok(true)
 
       Result.Err(msg) ->
-        Result.Err("failed to open /dev/null: #{msg}")
+        fail "failed to open /dev/null: #{msg}"
     end
   end
 end

@@ -1,60 +1,54 @@
 struct MethodTest
   @test "Method.to_string returns uppercase method name"
-  fn test_method_to_string -> Result<Bool, String>
-    unless Method.Get.to_string() == "GET"
-      return Result.Err("expected GET")
+  fn test_method_to_string ! String
+    if Method.Get.to_string() != "GET"
+      fail "expected GET"
     end
 
-    unless Method.Post.to_string() == "POST"
-      return Result.Err("expected POST")
+    if Method.Post.to_string() != "POST"
+      fail "expected POST"
     end
 
-    unless Method.Put.to_string() == "PUT"
-      return Result.Err("expected PUT")
+    if Method.Put.to_string() != "PUT"
+      fail "expected PUT"
     end
 
-    unless Method.Delete.to_string() == "DELETE"
-      return Result.Err("expected DELETE")
+    if Method.Delete.to_string() != "DELETE"
+      fail "expected DELETE"
     end
 
-    unless Method.Patch.to_string() == "PATCH"
-      return Result.Err("expected PATCH")
+    if Method.Patch.to_string() != "PATCH"
+      fail "expected PATCH"
     end
 
-    unless Method.Head.to_string() == "HEAD"
-      return Result.Err("expected HEAD")
+    if Method.Head.to_string() != "HEAD"
+      fail "expected HEAD"
     end
 
-    unless Method.Options.to_string() == "OPTIONS"
-      return Result.Err("expected OPTIONS")
+    if Method.Options.to_string() != "OPTIONS"
+      fail "expected OPTIONS"
     end
-
-    Result.Ok(true)
   end
 
   @test "Method.from_string parses valid methods"
-  fn test_method_from_string_valid -> Result<Bool, String>
-    unless Method.from_string("GET").unwrap().to_string() == "GET"
-      return Result.Err("GET roundtrip failed")
+  fn test_method_from_string_valid ! String
+    if Method.from_string("GET").unwrap().to_string() != "GET"
+      fail "GET roundtrip failed"
     end
 
-    unless Method.from_string("POST").unwrap().to_string() == "POST"
-      return Result.Err("POST roundtrip failed")
+    if Method.from_string("POST").unwrap().to_string() != "POST"
+      fail "POST roundtrip failed"
     end
 
-    unless Method.from_string("DELETE").unwrap().to_string() == "DELETE"
-      return Result.Err("DELETE roundtrip failed")
+    if Method.from_string("DELETE").unwrap().to_string() != "DELETE"
+      fail "DELETE roundtrip failed"
     end
-
-    Result.Ok(true)
   end
 
   @test "Method.from_string rejects unknown methods"
-  fn test_method_from_string_invalid -> Result<Bool, String>
-    unless Method.from_string("INVALID").err?()
-      return Result.Err("expected error for INVALID method")
+  fn test_method_from_string_invalid ! String
+    if not Method.from_string("INVALID").err?()
+      fail "expected error for INVALID method"
     end
-
-    Result.Ok(true)
   end
 end
