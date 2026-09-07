@@ -100,19 +100,19 @@ pub(super) fn resolve_equality_op_expr(
 /// the left resolves again with the right's type as the hint. When
 /// both sides are unresolvable the retry re-emits the trial's errors.
 fn resolve_operands_with_sibling_hint(
-    left: &mut Expr,
+    mut left: &mut Expr,
     right: &mut Expr,
     resolver: &mut Resolver<'_>,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
-    let mut trial = Speculation::begin(left, resolver);
+    let mut trial = Speculation::begin(&left, resolver);
     resolve_expr(left, resolver, trial.diagnostics());
     if left.resolution.is_resolved() {
         trial.commit(diagnostics);
         resolve_expr_with_expected(right, Some(&left.resolution), resolver, diagnostics);
         return;
     }
-    trial.rollback(left, resolver);
+    trial.rollback(&mut left, resolver);
     resolve_expr(right, resolver, diagnostics);
     let hint = right.resolution.is_resolved().then_some(&right.resolution);
     resolve_expr_with_expected(left, hint, resolver, diagnostics);

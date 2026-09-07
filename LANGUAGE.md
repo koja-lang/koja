@@ -1172,9 +1172,10 @@ end
 found = Option.Some(3) != Option.None
 ```
 
-The arms of a `match` bound to an unannotated variable also fill each
-other's gaps. `Result.Ok(true)` in one arm and `Result.Err("nope")` in
-another give the binding type `Result<Bool, String>`:
+The arms of a `match`, `if`, `cond`, or `?:` bound to an unannotated
+variable also fill each other's gaps. `Result.Ok(true)` in one arm and
+`Result.Err("nope")` in another give the binding type
+`Result<Bool, String>`:
 
 ```koja
 r = match flag

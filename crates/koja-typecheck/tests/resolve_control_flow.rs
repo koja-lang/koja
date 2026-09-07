@@ -11,13 +11,15 @@
 //! Mismatched arm types surface a diagnostic and the surface
 //! expression resolves to `Unresolved`.
 
+use koja_ast::identifier::ResolvedType;
 use koja_ast::util::dedent;
+use koja_typecheck::CheckedProgram;
 
 mod common;
 
 use common::{
-    assert_script_fails_with, function_body, int_type, last_expr, never_type, trailing_resolution,
-    typecheck_script as typecheck, unit_type,
+    assert_script_fails_with, bool_type, function_body, global_named, int_type, last_expr,
+    never_type, string_type, trailing_resolution, typecheck_script as typecheck, unit_type,
 };
 
 #[test]
@@ -209,4 +211,72 @@ fn nested_if_inside_unless_resolves_to_unit() {
         ";
     let checked = typecheck(&dedent(source));
     assert_eq!(trailing_resolution(&checked), unit_type(&checked));
+}
+
+/// `Result<Bool, String>` as the harness's `ResolvedType`.
+fn result_bool_string(checked: &CheckedProgram) -> ResolvedType {
+    global_named(
+        checked,
+        "Result",
+        vec![bool_type(checked), string_type(checked)],
+    )
+}
+
+#[test]
+fn if_else_binding_joins_result_payloads_across_arms() {
+    let source = "
+        flag = true
+        r = if flag
+          Result.Ok(true)
+        else
+          Result.Err(\"nope\")
+        end
+        r
+        ";
+    let checked = typecheck(&dedent(source));
+    assert_eq!(trailing_resolution(&checked), result_bool_string(&checked));
+}
+
+#[test]
+fn cond_binding_joins_result_payloads_across_arms() {
+    let source = "
+        flag = true
+        r = cond
+          flag -> Result.Ok(true)
+          not flag -> Result.Ok(false)
+          else -> Result.Err(\"nope\")
+        end
+        r
+        ";
+    let checked = typecheck(&dedent(source));
+    assert_eq!(trailing_resolution(&checked), result_bool_string(&checked));
+}
+
+#[test]
+fn ternary_binding_fills_unit_variant_from_sibling_arm() {
+    let source = "
+        flag = true
+        o = flag ? Option.Some(1) : Option.None
+        o
+        ";
+    let checked = typecheck(&dedent(source));
+    assert_eq!(
+        trailing_resolution(&checked),
+        global_named(&checked, "Option", vec![int_type(&checked)])
+    );
+}
+
+#[test]
+fn cond_binding_with_holes_in_every_arm_still_cannot_infer() {
+    let source = "
+        flag = true
+        o = cond
+          flag -> Option.None
+          else -> Option.None
+        end
+        ";
+    assert_script_fails_with(
+        source,
+        &["cannot infer type parameter `T` of `Global.Option`"],
+    );
 }

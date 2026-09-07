@@ -5,7 +5,8 @@
 //! arm tail type joins. The join is strict equality (no coercion)
 //! with `Never` as the lattice bottom (`T ∪ Never = T`). Divergent
 //! arms (bodies that end in `return`) contribute `Never` and so
-//! don't constrain the join.
+//! don't constrain the join. With no expected type the arms hint
+//! each other through [`super::speculation::resolve_arms`].
 //!
 //! `unless` and `while` stay Unit-typed. Loops are statement-shaped.
 //!
@@ -22,6 +23,7 @@ use koja_ast::span::Span;
 
 use super::ctx::Resolver;
 use super::expr::{resolve_expr, resolve_expr_with_expected};
+use super::speculation::{ArmSet, ArmTail, Restorable, resolve_arms};
 use super::types::{display_resolution, is_primitive, types_equivalent};
 use super::walker::resolve_body_with_expected;
 use crate::registry::GlobalRegistry;
@@ -37,26 +39,66 @@ pub(super) fn resolve_if(
 ) -> ResolvedType {
     resolve_expr(condition, resolver, diagnostics);
     require_bool_condition("if", condition, resolver.registry, diagnostics);
-    resolve_body_with_expected(then_body, expected, resolver, diagnostics);
     let Some(else_body) = else_body else {
         // No-`else` `if` is statement-shaped: there's no else-arm
         // to join, so the surface expression is `Unit`. Matches the
         // pre-block-params behavior. Future "if-as-expression"
         // ergonomics that admit `if cond then 1 end` (Optional-typed
         // implicit None) is a separate slice.
+        resolve_body_with_expected(then_body, expected, resolver, diagnostics);
         return resolver.registry.primitive("Unit");
     };
-    resolve_body_with_expected(else_body, expected, resolver, diagnostics);
-    let then_tail = body_tail_type(then_body, resolver.registry);
-    let else_tail = body_tail_type(else_body, resolver.registry);
-    join_two_arms(
-        "if/else",
-        ("then", &then_tail),
-        ("else", &else_tail),
-        span,
-        resolver.registry,
+    let tails = resolve_arms(
+        &mut IfArms {
+            else_body,
+            then_body,
+        },
+        expected,
+        resolver,
         diagnostics,
-    )
+    );
+    join_two_arms("if/else", &tails, span, resolver.registry, diagnostics)
+}
+
+/// The two bodies of an `if` / `else`.
+struct IfArms<'a> {
+    else_body: &'a mut Vec<Statement>,
+    then_body: &'a mut Vec<Statement>,
+}
+
+impl Restorable for IfArms<'_> {
+    type Saved = (Vec<Statement>, Vec<Statement>);
+
+    fn save(&self) -> Self::Saved {
+        (self.then_body.clone(), self.else_body.clone())
+    }
+
+    fn restore(&mut self, (then_body, else_body): Self::Saved) {
+        *self.then_body = then_body;
+        *self.else_body = else_body;
+    }
+}
+
+impl ArmSet for IfArms<'_> {
+    fn resolve(
+        &mut self,
+        hint: Option<&ResolvedType>,
+        resolver: &mut Resolver<'_>,
+        diagnostics: &mut Vec<Diagnostic>,
+    ) -> Vec<ArmTail> {
+        resolve_body_with_expected(self.then_body, hint, resolver, diagnostics);
+        resolve_body_with_expected(self.else_body, hint, resolver, diagnostics);
+        vec![
+            (
+                "then".to_string(),
+                body_tail_type(self.then_body, resolver.registry),
+            ),
+            (
+                "else".to_string(),
+                body_tail_type(self.else_body, resolver.registry),
+            ),
+        ]
+    }
 }
 
 /// Resolve a `cond ? then_expr : else_expr` ternary. Same arm-tail
@@ -77,16 +119,51 @@ pub(super) fn resolve_ternary(
 ) -> ResolvedType {
     resolve_expr(condition, resolver, diagnostics);
     require_bool_condition("ternary", condition, resolver.registry, diagnostics);
-    resolve_expr_with_expected(then_expr, expected, resolver, diagnostics);
-    resolve_expr_with_expected(else_expr, expected, resolver, diagnostics);
-    join_two_arms(
-        "ternary",
-        ("then", &then_expr.resolution),
-        ("else", &else_expr.resolution),
-        span,
-        resolver.registry,
+    let tails = resolve_arms(
+        &mut TernaryArms {
+            else_expr,
+            then_expr,
+        },
+        expected,
+        resolver,
         diagnostics,
-    )
+    );
+    join_two_arms("ternary", &tails, span, resolver.registry, diagnostics)
+}
+
+/// The two value expressions of a `?:` ternary.
+struct TernaryArms<'a> {
+    else_expr: &'a mut Expr,
+    then_expr: &'a mut Expr,
+}
+
+impl Restorable for TernaryArms<'_> {
+    type Saved = (Expr, Expr);
+
+    fn save(&self) -> Self::Saved {
+        (self.then_expr.clone(), self.else_expr.clone())
+    }
+
+    fn restore(&mut self, (then_expr, else_expr): Self::Saved) {
+        *self.then_expr = then_expr;
+        *self.else_expr = else_expr;
+    }
+}
+
+impl ArmSet for TernaryArms<'_> {
+    fn resolve(
+        &mut self,
+        hint: Option<&ResolvedType>,
+        resolver: &mut Resolver<'_>,
+        diagnostics: &mut Vec<Diagnostic>,
+    ) -> Vec<ArmTail> {
+        resolve_expr_with_expected(self.then_expr, hint, resolver, diagnostics);
+        resolve_expr_with_expected(self.else_expr, hint, resolver, diagnostics);
+        vec![
+            ("then".to_string(), self.then_expr.resolution.clone()),
+            ("else".to_string(), self.else_expr.resolution.clone()),
+        ]
+    }
 }
 
 pub(super) fn resolve_unless(
@@ -116,25 +193,80 @@ pub(super) fn resolve_cond(
     resolver: &mut Resolver<'_>,
     diagnostics: &mut Vec<Diagnostic>,
 ) -> ResolvedType {
-    let mut tails: Vec<(String, ResolvedType)> = Vec::with_capacity(arms.len() + 1);
-    for (index, arm) in arms.iter_mut().enumerate() {
+    for arm in arms.iter_mut() {
         resolve_expr(&mut arm.condition, resolver, diagnostics);
         require_bool_condition("cond", &arm.condition, resolver.registry, diagnostics);
-        resolve_body_with_expected(&mut arm.body, expected, resolver, diagnostics);
-        tails.push((
-            format!("arm #{}", index + 1),
-            body_tail_type(&arm.body, resolver.registry),
-        ));
     }
-    let else_tail = match else_body {
-        Some(stmts) => {
-            resolve_body_with_expected(stmts, expected, resolver, diagnostics);
-            body_tail_type(stmts, resolver.registry)
+    let tails = match else_body {
+        Some(else_body) => resolve_arms(
+            &mut CondArms { arms, else_body },
+            expected,
+            resolver,
+            diagnostics,
+        ),
+        None => {
+            let mut tails = resolve_cond_arm_bodies(arms, expected, resolver, diagnostics);
+            tails.push(("else".to_string(), resolver.registry.primitive("Unit")));
+            tails
         }
-        None => resolver.registry.primitive("Unit"),
     };
-    tails.push(("else".to_string(), else_tail));
     join_arm_tails("cond", &tails, span, resolver.registry, diagnostics)
+}
+
+/// Resolve every `cond` arm body against `hint` and label the tails.
+fn resolve_cond_arm_bodies(
+    arms: &mut [CondArm],
+    hint: Option<&ResolvedType>,
+    resolver: &mut Resolver<'_>,
+    diagnostics: &mut Vec<Diagnostic>,
+) -> Vec<ArmTail> {
+    arms.iter_mut()
+        .enumerate()
+        .map(|(index, arm)| {
+            resolve_body_with_expected(&mut arm.body, hint, resolver, diagnostics);
+            (
+                format!("arm #{}", index + 1),
+                body_tail_type(&arm.body, resolver.registry),
+            )
+        })
+        .collect()
+}
+
+/// The arm bodies and else body of a `cond`. Conditions are
+/// resolved before this is built.
+struct CondArms<'a> {
+    arms: &'a mut [CondArm],
+    else_body: &'a mut Vec<Statement>,
+}
+
+impl Restorable for CondArms<'_> {
+    type Saved = (Vec<CondArm>, Vec<Statement>);
+
+    fn save(&self) -> Self::Saved {
+        (self.arms.to_vec(), self.else_body.clone())
+    }
+
+    fn restore(&mut self, (arms, else_body): Self::Saved) {
+        self.arms.clone_from_slice(&arms);
+        *self.else_body = else_body;
+    }
+}
+
+impl ArmSet for CondArms<'_> {
+    fn resolve(
+        &mut self,
+        hint: Option<&ResolvedType>,
+        resolver: &mut Resolver<'_>,
+        diagnostics: &mut Vec<Diagnostic>,
+    ) -> Vec<ArmTail> {
+        let mut tails = resolve_cond_arm_bodies(self.arms, hint, resolver, diagnostics);
+        resolve_body_with_expected(self.else_body, hint, resolver, diagnostics);
+        tails.push((
+            "else".to_string(),
+            body_tail_type(self.else_body, resolver.registry),
+        ));
+        tails
+    }
 }
 
 /// Resolve a `while cond ... end` loop. Condition must be `Bool`.
@@ -192,14 +324,14 @@ pub(super) fn resolve_loop(
 /// offending arms ("then" / "else") stays terse.
 fn join_two_arms(
     keyword: &str,
-    then_tail: (&str, &ResolvedType),
-    else_tail: (&str, &ResolvedType),
+    tails: &[ArmTail],
     span: Span,
     registry: &GlobalRegistry,
     diagnostics: &mut Vec<Diagnostic>,
 ) -> ResolvedType {
-    let (then_label, then_ty) = then_tail;
-    let (else_label, else_ty) = else_tail;
+    let [(then_label, then_ty), (else_label, else_ty)] = tails else {
+        unreachable!("join_two_arms called with {} tails", tails.len());
+    };
     if !then_ty.is_resolved() || !else_ty.is_resolved() {
         return ResolvedType::unresolved();
     }

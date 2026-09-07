@@ -30,7 +30,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `IO.gets` no longer stops at the first non-ASCII character.
 - `==` on two `CPtr` values now compares their addresses instead of always returning `true`.
 - `CPtr<Float32>.read()` and `CPtr<Float64>.read()` now panic on a NaN or infinity, matching the check on floats returned by extern calls.
-- `x = match ... end` now infers generic payload types across arms, so `Result.Ok(true)` in one arm and `Result.Err("nope")` in another give `Result<Bool, String>` without an annotation.
+- A `match`, `if`, `cond`, or `?:` bound to a variable now infers generic payload types across its arms, so `Result.Ok(true)` in one arm and `Result.Err("nope")` in another give `Result<Bool, String>` without an annotation.
 - `==` and `!=` now infer a generic call on one side from the other operand, so `p == CPtr.null()` and `Option.None == value` need no annotation.
 
 ## [0.18.2] - 2026-09-02

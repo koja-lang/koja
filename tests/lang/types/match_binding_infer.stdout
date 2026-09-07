@@ -4,5 +4,12 @@ Some(1)
 None
 (1, None)
 (2, Some("x"))
+Ok(true)
+Err("nope")
+Ok("a")
+Ok("b")
+Err(10)
+Some(1)
+None
 false
 true

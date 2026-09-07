@@ -1,29 +1,62 @@
-# A `match` bound to an unannotated local infers generic payload
-# types across its arms. Each arm alone leaves a hole (`Result.Ok`
-# never names `E`, `Option.None` never names `T`) that a sibling
-# arm fills.
+# A `match`, `if`, `cond`, or `?:` bound to an unannotated local
+# infers generic payload types across its arms. Each arm alone
+# leaves a hole (`Result.Ok` never names `E`, `Option.None` never
+# names `T`) that a sibling arm fills.
 fn parse(flag: Bool) -> Result<Bool, String>
-  r = match flag
-    true -> Result.Ok(true)
-    false -> Result.Err("nope")
-  end
+  r =
+    match flag
+      true -> Result.Ok(true)
+      false -> Result.Err("nope")
+    end
+
   r
 end
 
 fn first(flag: Bool) -> Option<Int>
-  o = match flag
-    true -> Option.Some(1)
-    false -> Option.None
-  end
+  o =
+    match flag
+      true -> Option.Some(1)
+      false -> Option.None
+    end
+
   o
 end
 
 fn tagged(flag: Bool) -> (Int, Option<String>)
-  t = match flag
-    true -> (1, Option.None)
-    false -> (2, Option.Some("x"))
-  end
+  t =
+    match flag
+      true -> (1, Option.None)
+      false -> (2, Option.Some("x"))
+    end
+
   t
+end
+
+fn parse_if(flag: Bool) -> Result<Bool, String>
+  r =
+    if flag
+      Result.Ok(true)
+    else
+      Result.Err("nope")
+    end
+
+  r
+end
+
+fn grade(n: Int) -> Result<String, Int>
+  r =
+    cond
+      n > 90 -> Result.Ok("a")
+      n > 80 -> Result.Ok("b")
+      else -> Result.Err(n)
+    end
+
+  r
+end
+
+fn first_ternary(flag: Bool) -> Option<Int>
+  o = flag ? Option.Some(1) : Option.None
+  o
 end
 
 parse(true).print()
@@ -32,6 +65,13 @@ first(true).print()
 first(false).print()
 tagged(true).print()
 tagged(false).print()
+parse_if(true).print()
+parse_if(false).print()
+grade(95).print()
+grade(85).print()
+grade(10).print()
+first_ternary(true).print()
+first_ternary(false).print()
 
 # `==` gives one operand's type to the other, so a generic call on
 # either side needs no annotation.

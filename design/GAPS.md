@@ -87,40 +87,6 @@ can call any package function. Known limitations:
 
 ---
 
-## Inference and ergonomics warts from the pooler build
-
-Found 2026-07-15 while building the `pooler` package (a generic
-`Process` implementation, the first real one outside the stdlib). The
-blocking bug is fixed. `spawn` on a generic process target was not
-substituting the call site's type args into the conformance's `M`/`R`,
-and the monomorphizer skipped `LValue.head_resolved_type` on field
-assignments (regression coverage in
-`tests/lang/generics/generic_process_spawn.kojs`). Also fixed
-2026-07-16: `priv fn` helpers inside `impl Protocol for Type` blocks
-were rejected despite LANGUAGE.md allowing them; the conformance check
-now skips private members and only rejects public extras (regression
-coverage in `tests/lang/protocols/priv_impl_helper.kojs`). Also fixed
-2026-09-07: `==` operands now hint each other (`CPtr.null() == p`
-infers `T` from `p`), and `x = match … end` joins partially inferred
-arm tails so `Result.Ok(true)` / `Result.Err("nope")` arms infer
-`Result<Bool, String>` with no annotation (regression coverage in
-`tests/lang/types/match_binding_infer.kojs`). One non-blocking wart
-remains, with a workaround.
-
-- **`x = if … end`, `cond`, and `?:` don't cross-infer generic
-  payloads.** The `match` fix resolves the arms on trial, merges the
-  holes in their tails (`Result<Bool, ?>` with `Result<?, String>`),
-  and resolves again with the merged type as the hint. The other
-  value-producing control-flow forms in `control_flow/` still resolve
-  each arm once with no hint, so `r = cond flag -> Result.Ok(true)
-else -> Result.Err("nope") end` fails with "cannot infer type
-  parameter". The `Speculation` helper and `merge_partial` are
-  shared, so wiring them into `resolve_if` / `resolve_cond` / the
-  ternary is mechanical. Workaround is placing the expression in
-  return position, or annotating the binding.
-
----
-
 ## Runtime: adjacent issues from the worker-migration TLS audit
 
 Found while root-causing the 2026-07 Linux shutdown crash (a process

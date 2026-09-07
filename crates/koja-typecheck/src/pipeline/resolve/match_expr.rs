@@ -2,7 +2,7 @@
 //! body, checks coverage, and joins the arm tails using the same
 //! lattice [`super::control_flow`] uses for `if` / `cond` / ternary.
 //! With no expected type the arms hint each other (see
-//! [`resolve_arm_bodies_with_sibling_hint`]).
+//! [`super::speculation::resolve_arms`]).
 //!
 //! Coverage is a usefulness question (see
 //! [`super::patterns::SubjectCoverage`]). The match is exhaustive
@@ -27,15 +27,15 @@ use koja_ast::identifier::ResolvedType;
 use koja_ast::labels::pattern_span;
 use koja_ast::span::Span;
 
-use super::control_flow::{body_tail_type, is_never, join_arm_tails, require_bool_condition};
+use super::control_flow::{body_tail_type, join_arm_tails, require_bool_condition};
 use super::ctx::Resolver;
 use super::expr::resolve_expr;
 use super::patterns::{
     DeconstructedPattern, SubjectCoverage, is_enum_or_union_subject, is_match_subject_primitive,
     resolve_pattern,
 };
-use super::speculation::Speculation;
-use super::types::{display_resolution, merge_partial};
+use super::speculation::{ArmSet, ArmTail, Restorable, resolve_arms};
+use super::types::display_resolution;
 use super::walker::resolve_body_with_expected;
 use crate::registry::GlobalRegistry;
 
@@ -87,22 +87,19 @@ pub(super) fn resolve_match_arms(
         return ResolvedType::unresolved();
     }
 
-    let ArmPass {
-        has_literal_arm,
-        tails,
-    } = match expected {
-        Some(hint) => resolve_arm_bodies(
-            keyword,
+    let has_literal_arm = arms
+        .iter()
+        .any(|arm| matches!(arm.pattern, Pattern::Literal { .. }));
+    let tails = resolve_arms(
+        &mut MatchArms {
             arms,
-            &subject_ty,
-            Some(hint),
-            resolver,
-            diagnostics,
-        ),
-        None => {
-            resolve_arm_bodies_with_sibling_hint(keyword, arms, &subject_ty, resolver, diagnostics)
-        }
-    };
+            keyword,
+            subject_ty: &subject_ty,
+        },
+        expected,
+        resolver,
+        diagnostics,
+    );
 
     if has_literal_arm
         && subject_ty.is_resolved()
@@ -122,102 +119,50 @@ pub(super) fn resolve_match_arms(
     join_arm_tails(keyword, &tails, span, resolver.registry, diagnostics)
 }
 
-/// What one walk over the arm bodies learned.
-struct ArmPass {
-    has_literal_arm: bool,
-    tails: Vec<(String, ResolvedType)>,
+/// The arms of one `match`, resolved against the subject's type.
+struct MatchArms<'a> {
+    arms: &'a mut Vec<MatchArm>,
+    keyword: &'a str,
+    subject_ty: &'a ResolvedType,
 }
 
-/// Resolve every arm's pattern, guard, and body against `expected`.
-fn resolve_arm_bodies(
-    keyword: &str,
-    arms: &mut [MatchArm],
-    subject_ty: &ResolvedType,
-    expected: Option<&ResolvedType>,
-    resolver: &mut Resolver<'_>,
-    diagnostics: &mut Vec<Diagnostic>,
-) -> ArmPass {
-    let mut has_literal_arm = false;
-    let mut tails = Vec::with_capacity(arms.len());
-    for (index, arm) in arms.iter_mut().enumerate() {
-        if matches!(arm.pattern, Pattern::Literal { .. }) {
-            has_literal_arm = true;
+impl Restorable for MatchArms<'_> {
+    type Saved = Vec<MatchArm>;
+
+    fn save(&self) -> Vec<MatchArm> {
+        self.arms.clone()
+    }
+
+    fn restore(&mut self, saved: Vec<MatchArm>) {
+        *self.arms = saved;
+    }
+}
+
+impl ArmSet for MatchArms<'_> {
+    /// Resolve every arm's pattern, guard, and body against `hint`.
+    fn resolve(
+        &mut self,
+        hint: Option<&ResolvedType>,
+        resolver: &mut Resolver<'_>,
+        diagnostics: &mut Vec<Diagnostic>,
+    ) -> Vec<ArmTail> {
+        let mut tails = Vec::with_capacity(self.arms.len());
+        for (index, arm) in self.arms.iter_mut().enumerate() {
+            let scope_snapshot = resolver.scope.snapshot();
+            resolve_pattern(&mut arm.pattern, self.subject_ty, resolver, diagnostics);
+            if let Some(guard) = &mut arm.guard {
+                resolve_expr(guard, resolver, diagnostics);
+                require_bool_condition("match arm guard", guard, resolver.registry, diagnostics);
+            }
+            resolve_body_with_expected(&mut arm.body, hint, resolver, diagnostics);
+            resolver.scope.restore(scope_snapshot);
+            tails.push((
+                arm_label(self.keyword, index),
+                body_tail_type(&arm.body, resolver.registry),
+            ));
         }
-        let scope_snapshot = resolver.scope.snapshot();
-        resolve_pattern(&mut arm.pattern, subject_ty, resolver, diagnostics);
-        if let Some(guard) = &mut arm.guard {
-            resolve_expr(guard, resolver, diagnostics);
-            require_bool_condition("match arm guard", guard, resolver.registry, diagnostics);
-        }
-        resolve_body_with_expected(&mut arm.body, expected, resolver, diagnostics);
-        resolver.scope.restore(scope_snapshot);
-        tails.push((
-            arm_label(keyword, index),
-            body_tail_type(&arm.body, resolver.registry),
-        ));
+        tails
     }
-    ArmPass {
-        has_literal_arm,
-        tails,
-    }
-}
-
-/// Resolve the arms with no outer hint, letting the arms hint each
-/// other. `x = match ...` with `Result.Ok(true)` in one arm and
-/// `Result.Err("nope")` in another leaves each arm with a hole the
-/// other arm fills. A trial pass collects the partial tails, and when
-/// merging them yields a complete type the arms resolve again with
-/// that type as the expected hint. The trial's diagnostics are
-/// dropped in that case, so only pass two reports.
-fn resolve_arm_bodies_with_sibling_hint(
-    keyword: &str,
-    arms: &mut Vec<MatchArm>,
-    subject_ty: &ResolvedType,
-    resolver: &mut Resolver<'_>,
-    diagnostics: &mut Vec<Diagnostic>,
-) -> ArmPass {
-    let mut trial = Speculation::begin(arms, resolver);
-    let pass = resolve_arm_bodies(
-        keyword,
-        arms,
-        subject_ty,
-        None,
-        resolver,
-        trial.diagnostics(),
-    );
-    let Some(hint) = sibling_hint(&pass.tails, resolver.registry) else {
-        trial.commit(diagnostics);
-        return pass;
-    };
-    trial.rollback(arms, resolver);
-    resolve_arm_bodies(
-        keyword,
-        arms,
-        subject_ty,
-        Some(&hint),
-        resolver,
-        diagnostics,
-    )
-}
-
-/// Merge the partial arm tails into one complete type. `None` when
-/// every tail already resolved, when the shapes disagree, or when a
-/// hole survives the merge, since a second pass could not improve
-/// on the first in any of those cases.
-fn sibling_hint(
-    tails: &[(String, ResolvedType)],
-    registry: &GlobalRegistry,
-) -> Option<ResolvedType> {
-    let mut tails = tails
-        .iter()
-        .map(|(_, ty)| ty)
-        .filter(|ty| !is_never(ty, registry));
-    if tails.clone().all(ResolvedType::is_resolved) {
-        return None;
-    }
-    let first = tails.next()?.clone();
-    let merged = tails.try_fold(first, |merged, ty| merge_partial(&merged, ty))?;
-    merged.is_resolved().then_some(merged)
 }
 
 /// Join-diagnostic label for one arm. A desugared `rescue` names
