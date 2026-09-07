@@ -2,11 +2,12 @@
 //! `List.append` / `Map.put` / `Set.insert` call whose receiver value
 //! dies at the call site is rewritten to its `.$consume$` twin with
 //! the death deleted, that the twin registers as an empty-bodied
-//! `Consuming` intrinsic next to the original, and that a receiver
-//! that stays live keeps the copying intrinsic.
+//! `Consuming` intrinsic next to the original, that a `String` /
+//! `Binary` `<>` whose lhs dies there is flagged `consumes_lhs`, and
+//! that a receiver that stays live keeps the copying form.
 
 use koja_ir::{
-    ConsumingMethod, FunctionKind, IRBasicBlock, IRInstruction, IRIntrinsicId, IRScript,
+    ConcatKind, ConsumingMethod, FunctionKind, IRBasicBlock, IRInstruction, IRIntrinsicId, IRScript,
 };
 
 mod common;
@@ -38,6 +39,27 @@ fn copying_calls(blocks: &[IRBasicBlock], method: &str) -> usize {
     callees(blocks)
         .into_iter()
         .filter(|callee| callee.contains(method) && !callee.contains(".$consume$"))
+        .count()
+}
+
+/// `(consumes_lhs, kind)` of every `Concat` across `blocks`, in
+/// emission order.
+fn concats(blocks: &[IRBasicBlock]) -> Vec<(bool, ConcatKind)> {
+    all_instructions(blocks)
+        .filter_map(|instruction| match instruction {
+            IRInstruction::Concat {
+                consumes_lhs, kind, ..
+            } => Some((*consumes_lhs, *kind)),
+            _ => None,
+        })
+        .collect()
+}
+
+/// Count of consuming `Concat`s across `blocks`.
+fn consuming_concats(blocks: &[IRBasicBlock]) -> usize {
+    concats(blocks)
+        .into_iter()
+        .filter(|(consumes_lhs, _)| *consumes_lhs)
         .count()
 }
 
@@ -242,4 +264,168 @@ fn alias_taken_before_the_rebind_still_fuses() {
         "the rebind should fuse even with an earlier alias of the slot",
     );
     assert_eq!(copying_calls(blocks, "append"), 0);
+}
+
+#[test]
+fn chained_rebind_fuses_every_append_link() {
+    let source = "
+        fn twice(n: Int) -> List<Int>
+          xs: List<Int> = []
+          xs = xs.append(n).append(n + 1)
+          xs
+        end
+
+        twice(1).length()
+    ";
+
+    let script = lower(source);
+    let blocks = &script_function(&script, "twice").blocks;
+    assert_eq!(
+        consuming_callees(blocks).len(),
+        2,
+        "both links of the chained rebind should fuse",
+    );
+    assert_eq!(copying_calls(blocks, "append"), 0);
+}
+
+#[test]
+fn concat_rebind_loop_consumes_lhs() {
+    let source = "
+        fn build(n: Int) -> String
+          result = \"\"
+          i = 0
+          while i < n
+            result = result <> \"x\"
+            i += 1
+          end
+          result
+        end
+
+        build(3).byte_length()
+    ";
+
+    let script = lower(source);
+    let blocks = &script_function(&script, "build").blocks;
+    assert_eq!(
+        concats(blocks),
+        vec![(true, ConcatKind::String)],
+        "the rebind loop's concat should consume its lhs",
+    );
+}
+
+#[test]
+fn interpolation_accumulator_consumes_lhs() {
+    let source = "
+        fn build(n: Int) -> String
+          result = \"\"
+          i = 0
+          while i < n
+            result = \"#{result}-#{i}\"
+            i += 1
+          end
+          result
+        end
+
+        build(3).byte_length()
+    ";
+
+    let script = lower(source);
+    let blocks = &script_function(&script, "build").blocks;
+    // `result <> "-"` reads the slot and carries into `<> i.format()`,
+    // so both links consume.
+    assert_eq!(consuming_concats(blocks), 2);
+    assert!(
+        concats(blocks)
+            .iter()
+            .all(|(consumes_lhs, _)| *consumes_lhs),
+        "every link of the interpolation chain should consume: {:?}",
+        concats(blocks),
+    );
+}
+
+#[test]
+fn concat_chain_rebind_consumes_every_link() {
+    let source = "
+        fn build(parts: List<String>) -> String
+          result = \"\"
+          for part in parts
+            result = result <> \",\" <> part
+          end
+          result
+        end
+
+        build([\"a\"]).byte_length()
+    ";
+
+    let script = lower(source);
+    let blocks = &script_function(&script, "build").blocks;
+    assert_eq!(
+        concats(blocks),
+        vec![(true, ConcatKind::String), (true, ConcatKind::String)],
+        "the slot read carries through the chain, so both links consume",
+    );
+}
+
+#[test]
+fn owned_temp_concat_consumes_lhs() {
+    let source = "
+        fn wrap(s: String) -> String
+          (s <> \"[\") <> \"]\"
+        end
+
+        wrap(\"a\").byte_length()
+    ";
+
+    let script = lower(source);
+    let blocks = &script_function(&script, "wrap").blocks;
+    assert_eq!(
+        concats(blocks),
+        vec![(false, ConcatKind::String), (true, ConcatKind::String)],
+        "the borrowed `s` keeps copying, the owned intermediate consumes",
+    );
+}
+
+#[test]
+fn live_concat_lhs_keeps_copying() {
+    let source = "
+        fn keep(s: String) -> Int
+          t = s <> \"!\"
+          t.byte_length() + s.byte_length()
+        end
+
+        keep(\"a\")
+    ";
+
+    let script = lower(source);
+    let blocks = &script_function(&script, "keep").blocks;
+    assert_eq!(consuming_concats(blocks), 0, "a live lhs must not consume");
+}
+
+#[test]
+fn self_concat_and_bits_keep_copying() {
+    let source = "
+        fn double(s: String) -> String
+          s = s <> s
+          s
+        end
+
+        fn bits(b: Bits) -> Bits
+          b = b <> <<1::1>>
+          b
+        end
+
+        double(\"a\").byte_length() + bits(<<1::1>>).bit_size()
+    ";
+
+    let script = lower(source);
+    assert_eq!(
+        consuming_concats(&script_function(&script, "double").blocks),
+        0,
+        "`s <> s` reads the lhs block as rhs, so it must not consume",
+    );
+    assert_eq!(
+        concats(&script_function(&script, "bits").blocks),
+        vec![(false, ConcatKind::Bits)],
+        "Bits has no in-place form",
+    );
 }

@@ -36,14 +36,18 @@ numbers would dominate the signal, so we use the in-workload timing instead.
 | `koja/loop.kojs`          | Tight 200M-iteration counting loop — raw integer/branch speed.                                                         |
 | `koja/recursion.kojs`     | `fib(35)` — recursive call overhead.                                                                                   |
 | `koja/tail_scan.kojs`     | 200M tail-recursive iterations threading a `String` param — self-tail-call loopification and back-edge ownership cost. |
+| `koja/string_build.kojs`  | 10M appends to one `String` accumulator, plain `<>` and interpolation — in-place growth of a uniquely owned buffer.    |
 | `koja/msg_roundtrip.kojs` | 1M synchronous `call`/reply round-trips to one process.                                                                |
 | `koja/spawn_reply.kojs`   | 100k spawn-then-call-then-exit cycles — process churn.                                                                 |
 | `koja/process_storm.kojs` | 10k processes spawned concurrently, each doing CPU work.                                                               |
 
-BEAM equivalents live in `beam/` (`compute.erl`, `concurrency.erl`,
-`storm.erl`) and mirror the same workloads, including a `tail_scan`
-counterpart in `compute.erl` (BEAM has native tail-call optimization, so
-it is the natural baseline for loopified recursion).
+BEAM equivalents live in `beam/` (`compute.erl`, `strings.erl`,
+`concurrency.erl`, `storm.erl`) and mirror the same workloads, including a
+`tail_scan` counterpart in `compute.erl` (BEAM has native tail-call
+optimization, so it is the natural baseline for loopified recursion) and
+the `string_build` loops in `strings.erl` (BEAM's binary append
+optimization grows a uniquely referenced binary in place, the same
+mechanism as Koja's consuming `<>`).
 
 ## Soak tests (`soak/`)
 

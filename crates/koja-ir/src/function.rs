@@ -591,14 +591,17 @@ pub enum IRInstruction {
     /// - `Bits`: extern `__koja_concat_bits` runtime helper
     ///   (sub-byte alignment is far cleaner in Rust than LLVM IR).
     ///
-    /// Result is freshly-allocated heap storage with the same
-    /// `[i64 bit_length][payload]` layout as the operands. Both
-    /// operands flow through unchanged. `<>` does
-    /// **not** consume them at the IR level (consumption is a
-    /// surface-language concept, and at the IR layer the result is a
-    /// fresh value and the operands' lifetimes are managed by their
-    /// own slots).
+    /// Result is heap storage with the same `[i64 bit_length][payload]`
+    /// layout as the operands. Lowering always emits the copying form
+    /// (`consumes_lhs: false`), where both operands flow through
+    /// unchanged and their lifetimes stay with their own slots.
+    /// Consume fusion sets `consumes_lhs` when `lhs` provably dies at
+    /// this instruction, so the backend may grow `lhs`'s block in
+    /// place. The block may still be rc-shared or immortal, so the
+    /// backend checks `rc == 1` at runtime and otherwise copies and
+    /// releases `lhs` itself.
     Concat {
+        consumes_lhs: bool,
         dest: ValueId,
         kind: ConcatKind,
         lhs: ValueId,
@@ -1088,7 +1091,7 @@ impl IRInstruction {
     /// Whether this instruction reads, writes, declares, or drops the
     /// storage slot `local`, including receive-arm payload binds and
     /// binary-match segment binds.
-    pub(crate) fn touches_local(&self, local: IRLocalId) -> bool {
+    pub fn touches_local(&self, local: IRLocalId) -> bool {
         match self {
             IRInstruction::DropLocal { local: l, .. }
             | IRInstruction::LocalDecl { local: l, .. }

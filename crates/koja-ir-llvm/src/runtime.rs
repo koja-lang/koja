@@ -17,6 +17,7 @@ pub(crate) const CLOSURE_DEEP_COPY_SYMBOL: &str = "koja_closure_deep_copy";
 pub(crate) const CLOSURE_RC_DEC_SYMBOL: &str = "koja_closure_rc_dec";
 pub(crate) const HEAP_DEEP_COPY_SYMBOL: &str = "koja_heap_deep_copy";
 pub(crate) const CONCAT_BITS_SYMBOL: &str = "__koja_concat_bits";
+pub(crate) const CONCAT_BYTES_OWNED_SYMBOL: &str = "__koja_concat_bytes_owned";
 pub(crate) const FORMAT_BOOL_SYMBOL: &str = "koja_format_bool";
 pub(crate) const FORMAT_F32_SYMBOL: &str = "koja_format_f32";
 pub(crate) const FORMAT_F64_SYMBOL: &str = "koja_format_f64";
@@ -298,6 +299,20 @@ pub(crate) fn declare_concat_bits_extern<'ctx>(ctx: &EmitContext<'ctx>) -> Funct
     let ptr_ty = ctx.context.ptr_type(AddressSpace::default());
     let signature = ptr_ty.fn_type(&[ptr_ty.into(), ptr_ty.into()], false);
     declare_extern(ctx, CONCAT_BITS_SYMBOL, signature)
+}
+
+/// Declare (or look up) the `__koja_concat_bytes_owned` runtime
+/// helper. Signature: `i8* __koja_concat_bytes_owned(i8*
+/// lhs_payload, i8* rhs_payload, i64 with_nul)`. The consuming
+/// `String` / `Binary` concat: grows lhs in place when its block is
+/// uniquely owned, otherwise copies and releases lhs.
+pub(crate) fn declare_concat_bytes_owned_extern<'ctx>(
+    ctx: &EmitContext<'ctx>,
+) -> FunctionValue<'ctx> {
+    let ptr_ty = ctx.context.ptr_type(AddressSpace::default());
+    let i64_ty = ctx.context.i64_type();
+    let signature = ptr_ty.fn_type(&[ptr_ty.into(), ptr_ty.into(), i64_ty.into()], false);
+    declare_extern(ctx, CONCAT_BYTES_OWNED_SYMBOL, signature)
 }
 
 /// Declare (or look up) the `__koja_pack_bits` runtime helper.

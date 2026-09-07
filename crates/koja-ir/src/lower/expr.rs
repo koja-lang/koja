@@ -162,6 +162,7 @@ fn lower_expr_inner(
                 ctx.cfg.append(
                     block,
                     IRInstruction::Concat {
+                        consumes_lhs: false,
                         dest,
                         kind,
                         lhs,
@@ -756,6 +757,7 @@ fn lower_string(
         ctx.cfg.append(
             block,
             IRInstruction::Concat {
+                consumes_lhs: false,
                 dest,
                 kind: ConcatKind::String,
                 lhs: acc,

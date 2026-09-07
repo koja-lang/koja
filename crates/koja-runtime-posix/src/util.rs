@@ -66,6 +66,37 @@ pub unsafe fn write_block_header(base: *mut u8, bit_length: i64) -> *mut u8 {
     }
 }
 
+/// Smallest allocation an in-place growth reallocates to, so short
+/// builders stop reallocating after the first step.
+const MIN_GROWN_BLOCK: usize = 64;
+
+/// Make room for `extra_bytes` past the current payload of a leaf
+/// block that this caller solely owns. Capacity comes from the
+/// allocator's slack ([`memory::usable_size`]), and a short block
+/// reallocates to double the needed size, so repeated growth is
+/// amortized O(1). Returns the possibly moved payload, or `None` when
+/// the block is shared (`rc > 1`) or immortal (`rc < 0`) and the
+/// caller must copy and release instead. `bit_length` is left for the
+/// caller to update.
+///
+/// # Safety
+/// `payload` must point at the body of a live heap leaf block.
+pub unsafe fn grow_unique_block(payload: *mut u8, extra_bytes: usize) -> Option<*mut u8> {
+    unsafe {
+        let base = payload.sub(BLOCK_HEADER_SIZE);
+        if *base.cast::<i64>() != 1 {
+            return None;
+        }
+        let used_bytes = (read_bit_length(payload) as usize).div_ceil(BITS_PER_BYTE);
+        let needed = BLOCK_HEADER_SIZE + used_bytes + extra_bytes;
+        if memory::usable_size(base) >= needed {
+            return Some(payload);
+        }
+        let grown = memory::realloc(base, (needed * 2).max(MIN_GROWN_BLOCK));
+        Some(grown.add(BLOCK_HEADER_SIZE))
+    }
+}
+
 /// Increment the refcount of an rc-managed leaf heap block. `base`
 /// points at the block base (the `i64 rc` word). Immortal blocks
 /// (statically-allocated rodata payloads, stamped with a negative
@@ -412,5 +443,44 @@ pub unsafe extern "C" fn koja_rt_build_argv(argc: i32, argv: *const *const u8, o
             length: count as i64,
             capacity: count as i64,
         };
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    unsafe fn free_block(payload: *const u8) {
+        unsafe { memory::free((payload as *mut u8).sub(BLOCK_HEADER_SIZE)) };
+    }
+
+    #[test]
+    fn grow_unique_block_keeps_payload_and_reserves_room() {
+        let payload = unsafe { alloc_koja_string(b"abc") } as *mut u8;
+        let grown = unsafe { grow_unique_block(payload, 1000) }.expect("unique block grows");
+        assert_eq!(unsafe { string_payload_bytes(grown) }, b"abc");
+        let base = unsafe { grown.sub(BLOCK_HEADER_SIZE) };
+        assert!(unsafe { memory::usable_size(base) } >= BLOCK_HEADER_SIZE + 3 + 1000);
+        unsafe { free_block(grown) };
+    }
+
+    #[test]
+    fn grow_unique_block_reuses_slack_without_moving() {
+        let payload = unsafe { alloc_koja_string(b"abc") } as *mut u8;
+        let grown = unsafe { grow_unique_block(payload, 1000) }.expect("unique block grows");
+        let again = unsafe { grow_unique_block(grown, 1) }.expect("unique block grows");
+        assert_eq!(again, grown, "growth within slack must not move the block");
+        unsafe { free_block(again) };
+    }
+
+    #[test]
+    fn grow_unique_block_refuses_shared_and_immortal_blocks() {
+        let payload = unsafe { alloc_koja_string(b"abc") } as *mut u8;
+        let base = unsafe { payload.sub(BLOCK_HEADER_SIZE) };
+        unsafe { koja_rc_inc(base) };
+        assert!(unsafe { grow_unique_block(payload, 1) }.is_none());
+        unsafe { *base.cast::<i64>() = i64::MIN };
+        assert!(unsafe { grow_unique_block(payload, 1) }.is_none());
+        unsafe { free_block(payload) };
     }
 }

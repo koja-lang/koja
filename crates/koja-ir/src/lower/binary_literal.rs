@@ -190,6 +190,7 @@ fn concat_operands(operands: Vec<ValueId>, ctx: &mut FnLowerCtx, block: IRBlockI
         ctx.cfg.append(
             block,
             IRInstruction::Concat {
+                consumes_lhs: false,
                 dest,
                 kind: ConcatKind::Binary,
                 lhs: acc,

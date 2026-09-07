@@ -8,7 +8,7 @@
 //! `libkoja_runtime.a` staticlib, because the platform-agnostic core
 //! crate deliberately exports no C-ABI symbols of its own.
 
-pub(crate) use koja_runtime_core::memory::{alloc, free, realloc};
+pub(crate) use koja_runtime_core::memory::{alloc, free, realloc, usable_size};
 
 /// Current net count of live heap blocks. The steady-state leak
 /// fixtures read this to assert a zero delta across a repeated

@@ -7,6 +7,7 @@
 use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::future::Future;
+use std::iter::once;
 use std::pin::Pin;
 use std::rc::Rc;
 use std::time::Instant;
@@ -719,6 +720,88 @@ fn expect_closure(value: Value, instruction: &str) -> Result<(IRSymbol, Vec<Valu
     }
 }
 
+/// Drop the dead references that would defeat a consuming site's
+/// uniqueness gate under eval, so `xs = xs.append(x)` and
+/// `s = s <> piece` loops mutate in place instead of copying on every
+/// step. Two kinds of holder are dead by construction:
+///
+/// - Registers defined at or after the site in this block still hold
+///   values from an earlier pass over the block. A def later in a
+///   block cannot dominate an earlier point in it, so nothing can
+///   read them before they are redefined.
+/// - The slot the receiver was read from, when the site's rebind is
+///   the next thing to touch it. Consume fusion deleted that slot's
+///   stale read and drop, so its `Rc` is dead until the `LocalWrite`.
+fn release_dead_holders<R: CallResolver>(
+    instruction: &IRInstruction,
+    rest: &[IRInstruction],
+    frame: &mut Frame,
+    resolver: &R,
+) {
+    let Some(receiver) = consuming_receiver(instruction, resolver) else {
+        return;
+    };
+    for defined in once(instruction)
+        .chain(rest)
+        .filter_map(IRInstruction::dest)
+    {
+        frame.values.remove(&defined);
+    }
+    let Some(receiver_value) = frame.values.get(&receiver) else {
+        return;
+    };
+    if let Some(slot) = rebound_slot(rest, receiver_value, &frame.locals) {
+        frame.locals.insert(slot, Value::Unit);
+    }
+}
+
+/// The receiver a consuming site takes over, or `None` for any other
+/// instruction.
+fn consuming_receiver<R: CallResolver>(
+    instruction: &IRInstruction,
+    resolver: &R,
+) -> Option<ValueId> {
+    match instruction {
+        IRInstruction::Call { callee, args, .. } => {
+            let callee_fn = resolver.resolve(callee.mangled())?;
+            let consuming = matches!(
+                callee_fn.kind,
+                FunctionKind::Intrinsic(IRIntrinsicId::Consuming(_))
+            );
+            consuming.then(|| args.first().copied()).flatten()
+        }
+        IRInstruction::Concat {
+            consumes_lhs: true,
+            lhs,
+            ..
+        } => Some(*lhs),
+        _ => None,
+    }
+}
+
+/// The slot whose current value shares `receiver`'s storage and whose
+/// next touch in `rest` is a `LocalWrite`. Only a fused rebind leaves
+/// that shape, since an ordinary reassignment reads and drops the
+/// stale value first.
+fn rebound_slot(
+    rest: &[IRInstruction],
+    receiver: &Value,
+    locals: &BTreeMap<IRLocalId, Value>,
+) -> Option<IRLocalId> {
+    rest.iter().enumerate().find_map(|(index, instruction)| {
+        let IRInstruction::LocalWrite { local, .. } = instruction else {
+            return None;
+        };
+        let shares = locals
+            .get(local)
+            .is_some_and(|slot| slot.shares_storage(receiver));
+        let untouched = rest[..index]
+            .iter()
+            .all(|earlier| !earlier.touches_local(*local));
+        (shares && untouched).then_some(*local)
+    })
+}
+
 /// Drive a function body starting at `blocks[0]` until a `Return`
 /// exits. The frame is shared across every block. Unknown branch
 /// targets panic per the seal contract. The interpreter imposes no
@@ -737,7 +820,7 @@ fn execute_blocks<'a, R: CallResolver>(
             .id;
         'blocks: loop {
             let block = find_block(blocks, current);
-            for instruction in &block.instructions {
+            for (index, instruction) in block.instructions.iter().enumerate() {
                 // `Receive` transfers control to an arm (or after) body
                 // block instead of defining a value (lowering places it
                 // last in its block with an `Unreachable` terminator),
@@ -747,6 +830,12 @@ fn execute_blocks<'a, R: CallResolver>(
                     current = execute_receive(arms, after.as_ref(), frame, resolver).await?;
                     continue 'blocks;
                 }
+                release_dead_holders(
+                    instruction,
+                    &block.instructions[index + 1..],
+                    frame,
+                    resolver,
+                );
                 execute_instruction(instruction, frame, resolver).await?;
             }
             match &block.terminator {
@@ -1180,14 +1269,29 @@ fn execute_instruction<'a, R: CallResolver>(
                 Ok(())
             }
             IRInstruction::Concat {
+                consumes_lhs,
                 dest,
                 kind,
                 lhs,
                 rhs,
             } => {
-                let left = lookup(&frame.values, *lhs)?;
+                // A consumed lhs is dead after the concat, so move its
+                // register out and extend the buffer in place when
+                // that leaves it uniquely held. Same uniqueness gate as
+                // the consuming collection twins.
                 let right = lookup(&frame.values, *rhs)?;
-                let result = concat_values(*kind, &left, &right)?;
+                let result = if *consumes_lhs {
+                    let left = frame
+                        .values
+                        .remove(lhs)
+                        .ok_or(RuntimeError::ValueUndefined { id: *lhs })?;
+                    match extend_unique_bytes(left, &right) {
+                        Ok(extended) => extended,
+                        Err(left) => concat_values(*kind, &left, &right)?,
+                    }
+                } else {
+                    concat_values(*kind, &lookup(&frame.values, *lhs)?, &right)?
+                };
                 frame.values.insert(*dest, result);
                 Ok(())
             }
@@ -1773,6 +1877,23 @@ fn materialize_enum<R: CallResolver>(
         symbol: symbol.clone(),
         tag,
     })
+}
+
+/// Append `right`'s bytes onto `left` in place when `left` is a
+/// uniquely held `String` / `Binary` of the same kind. Hands `left`
+/// back untouched otherwise, so the caller can fall back to the
+/// copying concat.
+fn extend_unique_bytes(mut left: Value, right: &Value) -> Result<Value, Value> {
+    let (bytes, extra) = match (&mut left, right) {
+        (Value::Binary(bytes), Value::Binary(extra))
+        | (Value::String(bytes), Value::String(extra)) => (bytes, extra),
+        _ => return Err(left),
+    };
+    let Some(unique) = Rc::get_mut(bytes) else {
+        return Err(left);
+    };
+    unique.extend_from_slice(extra);
+    Ok(left)
 }
 
 /// Apply `<>` to two heap-payload values. Mirrors the LLVM

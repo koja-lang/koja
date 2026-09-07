@@ -1,34 +1,47 @@
-//! Consume-fusion sub-pass. Rewrites a collection-mutator call whose
-//! receiver value dies at the call site into a call to a
-//! buffer-consuming twin intrinsic, deleting the death.
+//! Consume-fusion sub-pass. Rewrites a buffer-building instruction
+//! whose receiver value dies at that instruction into its consuming
+//! form, deleting the death.
 //!
-//! Deep ownership guarantees no two live values ever share a buffer,
-//! so a receiver released right after a `List.append` / `Map.put` /
-//! `Set.insert` call would have its buffers freed there anyway. Fusing
-//! that release into the call lets the backend take ownership of the
-//! buffers and mutate them in place, so `x = x.append(y)` loops become
-//! O(1) amortized instead of O(n) per call. The rewrite is
-//! release-point-preserving, as it replaces "free the receiver's
-//! buffers here" with "reuse them here", so any alias the reuse could
+//! A receiver released right after `r = f(recv, ...)` would have its
+//! storage freed there anyway. Fusing that release into the
+//! instruction lets the backend take ownership of the storage and
+//! extend it in place, so `x = x.append(y)` and `s = s <> piece`
+//! loops become O(1) amortized instead of O(n) per step. The rewrite
+//! is release-point-preserving, as it replaces "free the receiver's
+//! storage here" with "reuse it here", so any alias the reuse could
 //! break would already be a use-after-free under the copying path.
 //!
-//! Two lowered shapes fuse, both local to one basic block:
+//! Two kinds of [`ConsumingSite`] fuse:
+//!
+//! - **Collection mutators** (`List.append`, `Map.put`, `Set.insert`).
+//!   Collection buffers are deep-copied on `Clone`, so the IR death
+//!   proof alone is enough and the call is rewritten to a consuming
+//!   twin intrinsic that mutates in place unconditionally.
+//! - **Byte concat** (`<>` on `String` / `Binary`). Leaf blocks are
+//!   rc-shared on `Clone`, so the IR proof only covers the value. The
+//!   instruction is flagged `consumes_lhs` and the runtime checks
+//!   `rc == 1` before growing in place, otherwise it copies and does
+//!   the release the fusion deleted.
+//!
+//! Two lowered death shapes match, both local to one basic block:
 //!
 //! - **Owned temp** (fluent chains, `release_call_temps`): a
-//!   `drop_value(recv)` follows `r = f(recv, ...)` with no use of
-//!   `recv` between. The drop is deleted.
+//!   `drop_value(recv)` follows the site with no use of `recv`
+//!   between. The drop is deleted.
 //! - **Slot rebind** (`x = x.append(y)`, see
-//!   `lower::body::store_owned_into_local`): the call takes its
+//!   `lower::body::store_owned_into_local`): the site takes its
 //!   receiver from `recv = read x` and is followed by the
 //!   reassignment trio `stale = read x`, `drop_value(stale)`,
-//!   `write x, r`. The stale read and its drop are deleted, and only
-//!   drops of *other* values may sit between the call and the trio
-//!   (owned values never alias the receiver's buffers).
+//!   `write x, r`. The stale read and its drop are deleted. Between
+//!   the site and the trio nothing may read `recv` or touch `x`.
+//!   Further eligible sites there carry the result forward
+//!   (`x = x.append(a).append(b)`, `s = s <> a <> b`), and the trio
+//!   must write the last carrier, so every link of the chain fuses.
 //!
-//! Any shape that does not match keeps the copying intrinsic. Twins
-//! are registered per fused instantiation with the original's
-//! signature, a `.$consume$`-suffixed symbol, and
-//! [`IRIntrinsicId::Consuming`] for backend dispatch.
+//! Any shape that does not match keeps the copying form. Twins are
+//! registered per fused instantiation with the original's signature,
+//! a `.$consume$`-suffixed symbol, and [`IRIntrinsicId::Consuming`]
+//! for backend dispatch.
 
 use std::collections::BTreeMap;
 
@@ -36,7 +49,7 @@ use crate::function::{FunctionKind, IRBasicBlock, IRFunction, IRInstruction, IRS
 use crate::intrinsic_id::{ConsumingMethod, IRIntrinsicId, ListMethod, MapMethod, SetMethod};
 use crate::local::IRLocalId;
 use crate::package::IRPackage;
-use crate::types::ValueId;
+use crate::types::{ConcatKind, ValueId};
 
 /// One eligible mutator instantiation, carrying the consuming
 /// dispatch id and the twin symbol fused call sites are rewritten to.
@@ -45,14 +58,101 @@ struct EligibleMutator {
     twin: IRSymbol,
 }
 
+/// Eligible mutator instantiations keyed by mangled callee symbol.
+type EligibleMutators = BTreeMap<String, EligibleMutator>;
+
+/// An instruction that may take ownership of its receiver's storage
+/// when the receiver dies there.
+enum ConsumingSite {
+    /// `<>` on `String` / `Binary`. Fusing sets `consumes_lhs`.
+    Concat { receiver: ValueId, result: ValueId },
+    /// `List.append` / `Map.put` / `Set.insert`. Fusing rewrites the
+    /// callee to its consuming twin.
+    Mutator {
+        original: IRSymbol,
+        receiver: ValueId,
+        result: ValueId,
+    },
+}
+
+impl ConsumingSite {
+    /// The site at `block.instructions[index]`, or `None` when the
+    /// instruction is not one of the fusable shapes.
+    fn at(
+        block: &IRBasicBlock,
+        index: usize,
+        eligible: &EligibleMutators,
+    ) -> Option<ConsumingSite> {
+        match &block.instructions[index] {
+            IRInstruction::Call { dest, callee, args } => {
+                if !eligible.contains_key(callee.mangled()) {
+                    return None;
+                }
+                let (&receiver, rest) = args.split_first()?;
+                if rest.contains(&receiver) {
+                    return None;
+                }
+                Some(ConsumingSite::Mutator {
+                    original: callee.clone(),
+                    receiver,
+                    result: *dest,
+                })
+            }
+            IRInstruction::Concat {
+                consumes_lhs: false,
+                dest,
+                kind: ConcatKind::Binary | ConcatKind::String,
+                lhs,
+                rhs,
+            } if lhs != rhs => Some(ConsumingSite::Concat {
+                receiver: *lhs,
+                result: *dest,
+            }),
+            _ => None,
+        }
+    }
+
+    fn receiver(&self) -> ValueId {
+        match self {
+            ConsumingSite::Concat { receiver, .. } | ConsumingSite::Mutator { receiver, .. } => {
+                *receiver
+            }
+        }
+    }
+
+    fn result(&self) -> ValueId {
+        match self {
+            ConsumingSite::Concat { result, .. } | ConsumingSite::Mutator { result, .. } => *result,
+        }
+    }
+
+    /// Rewrite `instruction` (the one this site was matched at) into
+    /// its consuming form, recording a fused mutator original.
+    fn apply(
+        self,
+        instruction: &mut IRInstruction,
+        eligible: &EligibleMutators,
+        fused: &mut BTreeMap<IRSymbol, ConsumingMethod>,
+    ) {
+        match (self, instruction) {
+            (ConsumingSite::Concat { .. }, IRInstruction::Concat { consumes_lhs, .. }) => {
+                *consumes_lhs = true;
+            }
+            (ConsumingSite::Mutator { original, .. }, IRInstruction::Call { callee, .. }) => {
+                let mutator = &eligible[original.mangled()];
+                *callee = mutator.twin.clone();
+                fused.insert(original, mutator.method);
+            }
+            _ => unreachable!("consume fusion applied a site to a different instruction"),
+        }
+    }
+}
+
 /// Run the fusion over every function body (and, for scripts, the
 /// inline `body`), then register a consuming twin for each mutator
 /// instantiation that actually fused.
-pub(super) fn fuse_consuming_mutators(packages: &mut [IRPackage], body: &mut [IRBasicBlock]) {
+pub(super) fn fuse_consuming_sites(packages: &mut [IRPackage], body: &mut [IRBasicBlock]) {
     let eligible = eligible_mutators(packages);
-    if eligible.is_empty() {
-        return;
-    }
 
     let mut fused: BTreeMap<IRSymbol, ConsumingMethod> = BTreeMap::new();
     let function_blocks = packages
@@ -80,7 +180,7 @@ fn consuming_method(id: &IRIntrinsicId) -> Option<ConsumingMethod> {
 
 /// Collect every eligible mutator instantiation, keyed by its mangled
 /// symbol for call-site lookup.
-fn eligible_mutators(packages: &[IRPackage]) -> BTreeMap<String, EligibleMutator> {
+fn eligible_mutators(packages: &[IRPackage]) -> EligibleMutators {
     packages
         .iter()
         .flat_map(|package| package.functions.values())
@@ -100,7 +200,7 @@ fn eligible_mutators(packages: &[IRPackage]) -> BTreeMap<String, EligibleMutator
         .collect()
 }
 
-/// Where a fused call's receiver dies, in instruction indices
+/// Where a fused site's receiver dies, in instruction indices
 /// relative to the enclosing block.
 enum ReceiverDeath {
     /// `drop_value(recv)` at the index. Deleted.
@@ -111,21 +211,20 @@ enum ReceiverDeath {
     SlotRebind { stale_read_index: usize },
 }
 
-/// Scan one block for eligible calls whose receiver dies at the call
-/// site, rewriting each into its consuming twin and recording the
-/// fused originals.
+/// Scan one block for eligible sites whose receiver dies there,
+/// rewriting each into its consuming form and recording the fused
+/// mutator originals.
 fn fuse_block(
     block: &mut IRBasicBlock,
-    eligible: &BTreeMap<String, EligibleMutator>,
+    eligible: &EligibleMutators,
     fused: &mut BTreeMap<IRSymbol, ConsumingMethod>,
 ) {
-    let mut call_index = 0;
-    while call_index < block.instructions.len() {
-        let Some((original, death)) = match_fusion(block, call_index, eligible) else {
-            call_index += 1;
+    let mut index = 0;
+    while index < block.instructions.len() {
+        let Some((site, death)) = match_fusion(block, index, eligible) else {
+            index += 1;
             continue;
         };
-        let mutator = &eligible[original.mangled()];
         match death {
             ReceiverDeath::OwnedTemp { drop_index } => {
                 block.instructions.remove(drop_index);
@@ -136,53 +235,39 @@ fn fuse_block(
                     .drain(stale_read_index..stale_read_index + 2);
             }
         }
-        let IRInstruction::Call { callee, .. } = &mut block.instructions[call_index] else {
-            unreachable!("consume fusion matched a non-call instruction");
-        };
-        *callee = mutator.twin.clone();
-        fused.insert(original, mutator.method);
-        call_index += 1;
+        site.apply(&mut block.instructions[index], eligible, fused);
+        index += 1;
     }
 }
 
-/// Match one call site against the two fusable shapes. Returns the
-/// original callee symbol and the receiver's death, or `None` when
-/// the instruction is not an eligible call or the receiver stays
-/// live.
+/// Match one instruction against the two fusable shapes. Returns the
+/// site and the receiver's death, or `None` when the instruction is
+/// not an eligible site or the receiver stays live.
 fn match_fusion(
     block: &IRBasicBlock,
-    call_index: usize,
-    eligible: &BTreeMap<String, EligibleMutator>,
-) -> Option<(IRSymbol, ReceiverDeath)> {
-    let IRInstruction::Call { dest, callee, args } = &block.instructions[call_index] else {
-        return None;
-    };
-    if !eligible.contains_key(callee.mangled()) {
-        return None;
-    }
-    let (&receiver, rest) = args.split_first()?;
-    if rest.contains(&receiver) {
-        return None;
-    }
-
-    let death = owned_temp_death(block, call_index, receiver)
-        .or_else(|| slot_rebind_death(block, call_index, receiver, *dest))?;
-    Some((callee.clone(), death))
+    index: usize,
+    eligible: &EligibleMutators,
+) -> Option<(ConsumingSite, ReceiverDeath)> {
+    let site = ConsumingSite::at(block, index, eligible)?;
+    let receiver = site.receiver();
+    let death = owned_temp_death(block, index, receiver)
+        .or_else(|| slot_rebind_death(block, index, receiver, site.result(), eligible))?;
+    Some((site, death))
 }
 
 /// Match the owned-temp shape, where the first use of `receiver`
-/// after the call is its own `drop_value`, in the same block.
+/// after the site is its own `drop_value`, in the same block.
 fn owned_temp_death(
     block: &IRBasicBlock,
-    call_index: usize,
+    site_index: usize,
     receiver: ValueId,
 ) -> Option<ReceiverDeath> {
-    for (offset, instruction) in block.instructions[call_index + 1..].iter().enumerate() {
+    for (offset, instruction) in block.instructions[site_index + 1..].iter().enumerate() {
         if let IRInstruction::DropValue { value, .. } = instruction
             && *value == receiver
         {
             return Some(ReceiverDeath::OwnedTemp {
-                drop_index: call_index + 1 + offset,
+                drop_index: site_index + 1 + offset,
             });
         }
         if instruction.uses_value(receiver) {
@@ -193,45 +278,59 @@ fn owned_temp_death(
 }
 
 /// Match the slot-rebind shape, where `receiver` was read from a slot
-/// that is untouched up to the call, and the call is followed (across
-/// other-value drops only) by the stale-read / drop / write trio on
-/// the same slot.
+/// that is untouched up to the site, and the site is followed by the
+/// stale-read / drop / write trio on the same slot. Between the two,
+/// nothing may read `receiver` or touch the slot, since both name the
+/// storage being consumed. Everything else is allowed, including
+/// further eligible sites that carry the result forward. The trio
+/// must write the last carrier, so a chain like `x = x.append(a).append(b)`
+/// rebinds the slot in one step and every link consumes.
 fn slot_rebind_death(
     block: &IRBasicBlock,
-    call_index: usize,
+    site_index: usize,
     receiver: ValueId,
     result: ValueId,
+    eligible: &EligibleMutators,
 ) -> Option<ReceiverDeath> {
-    let slot = receiver_slot(block, call_index, receiver)?;
-    for (offset, instruction) in block.instructions[call_index + 1..].iter().enumerate() {
-        match instruction {
-            // Drops of other values release owned storage, which deep
-            // ownership guarantees never aliases the receiver's
-            // buffers. Anything else could read the consumed value.
-            IRInstruction::DropValue { value, .. } if *value != receiver => continue,
-            IRInstruction::DropLocal { local, .. } if *local != slot => continue,
-            IRInstruction::LocalRead { dest, local, .. } if *local == slot => {
-                let stale_read_index = call_index + 1 + offset;
-                return rebind_trio_matches(block, stale_read_index, *dest, slot, result)
-                    .then_some(ReceiverDeath::SlotRebind { stale_read_index });
-            }
-            _ => return None,
+    let slot = receiver_slot(block, site_index, receiver)?;
+    let mut carrier = result;
+    for index in site_index + 1..block.instructions.len() {
+        let instruction = &block.instructions[index];
+        if instruction.uses_value(receiver) {
+            return None;
+        }
+        if let IRInstruction::LocalRead { dest, local, .. } = instruction
+            && *local == slot
+        {
+            return rebind_trio_matches(block, index, *dest, slot, carrier).then_some(
+                ReceiverDeath::SlotRebind {
+                    stale_read_index: index,
+                },
+            );
+        }
+        if instruction.touches_local(slot) {
+            return None;
+        }
+        if let Some(link) = ConsumingSite::at(block, index, eligible)
+            && link.receiver() == carrier
+        {
+            carrier = link.result();
         }
     }
     None
 }
 
 /// The slot `receiver` was read from, provided the slot is untouched
-/// and the receiver unused between that read and the call (so the
-/// slot still holds the receiver's value at the call).
-fn receiver_slot(block: &IRBasicBlock, call_index: usize, receiver: ValueId) -> Option<IRLocalId> {
-    let read_index = block.instructions[..call_index]
+/// and the receiver unused between that read and the site (so the
+/// slot still holds the receiver's value at the site).
+fn receiver_slot(block: &IRBasicBlock, site_index: usize, receiver: ValueId) -> Option<IRLocalId> {
+    let read_index = block.instructions[..site_index]
         .iter()
         .position(|instruction| instruction.dest() == Some(receiver))?;
     let IRInstruction::LocalRead { local, .. } = &block.instructions[read_index] else {
         return None;
     };
-    let untouched = block.instructions[read_index + 1..call_index]
+    let untouched = block.instructions[read_index + 1..site_index]
         .iter()
         .all(|instruction| !instruction.touches_local(*local) && !instruction.uses_value(receiver));
     untouched.then_some(*local)

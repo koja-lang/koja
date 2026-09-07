@@ -142,6 +142,71 @@ fn bits_concat_helper_routes_through_runtime() {
     assert_contains(&ir_text, "call ptr @__koja_concat_bits(");
 }
 
+#[test]
+fn concat_rebind_loop_routes_through_owned_helper() {
+    // Consume fusion flags the accumulator's `<>` as consuming, so
+    // the emitter calls the runtime helper that grows the block in
+    // place instead of the inline copying shape.
+    let source = "
+        fn build(n: Int) -> String
+          result = \"\"
+          i = 0
+          while i < n
+            result = result <> \"x\"
+            i += 1
+          end
+          result
+        end
+
+        fn main
+          1
+        end
+    ";
+
+    let program = lower(&dedent(source));
+    let ir_text = emit_llvm_ir(&program, APP_NAME).expect("emit_llvm_ir should succeed");
+
+    assert_program_shape(&ir_text);
+    assert_contains(
+        &ir_text,
+        "declare ptr @__koja_concat_bytes_owned(ptr, ptr, i64)",
+    );
+    let body = extract_function_body(&ir_text, "TestApp.build");
+    assert_contains(body, "call ptr @__koja_concat_bytes_owned(");
+    assert!(
+        !body.contains("@llvm.memcpy"),
+        "the fused rebind should not keep the inline copying shape:\n{body}",
+    );
+}
+
+#[test]
+fn borrowed_concat_keeps_the_inline_copying_shape() {
+    // Both operands are parameters that outlive the concat, so the
+    // function keeps the copying `malloc + memcpy` shape. The stdlib
+    // linked into the module has its own fused builders, so the
+    // check is per function rather than per module.
+    let source = "
+        fn join(a: String, b: String) -> String
+          a <> b
+        end
+
+        fn main
+          1
+        end
+    ";
+
+    let program = lower(&dedent(source));
+    let ir_text = emit_llvm_ir(&program, APP_NAME).expect("emit_llvm_ir should succeed");
+
+    assert_program_shape(&ir_text);
+    let body = extract_function_body(&ir_text, "TestApp.join");
+    assert_contains(body, "@llvm.memcpy.p0.p0.i64");
+    assert!(
+        !body.contains("@__koja_concat_bytes_owned"),
+        "a borrowed concat should not call the consuming helper:\n{body}",
+    );
+}
+
 // `fn main` body: literals, arithmetic, boolean, comparison
 //
 // These tests pin that the body compiles cleanly as a plain

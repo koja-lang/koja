@@ -404,43 +404,23 @@ way, plain `koja run` should work in every project.
 
 ---
 
-## String building by repeated concat is quadratic
+## Unique composites are rebuilt on field write
 
-Found 2026-08-29 while fixing the quadratic `String.split` (the
-2026-08-28 `git_hygiene` hang, now resolved by moving the search
-family onto byte-offset `find` / `slice_bytes` intrinsics).
-The remaining trap is the accumulator shape: `result = result <>
-piece` copies the whole accumulator every iteration because string
-concat has no consume-fusion twin, unlike `List.append`. `join`,
-`downcase`, `upcase`, `reverse`, and `escape_debug` all build
-output this way, and `replace` pays the same cost per match.
-Linear-time character loops need the fix, and any user code that
-builds a large string in a loop hits the same wall.
+Found 2026-09-03 while making `<>` consuming. `p.x += dx` on a struct
+or enum builds a fresh composite and releases the old one even when
+the old value provably dies at the write and no other binding shares
+it. Small structs copy cheaply, but a struct holding a heap field, or
+an enum variant with a large payload, pays an allocation and a
+release per field write in a rebind loop.
 
-**Fix path:** give `Concat` a consuming twin the elaborate pass can
-fuse when the left operand dies at the call, mirroring
-`ConsumingMethod::ListAppend`. A stdlib string-builder over
-`List<String>` plus a single join does not help while `join` itself
-concat-loops, so the fusion is the root fix.
-
----
-
-## Interpreter list-append rebinds still copy the list
-
-Found 2026-08-29 while timing the linear `String.split`. The
-elaborate pass marks `xs = xs.append(x)` consuming, and compiled
-code mutates in place, but the eval fast path requires
-`Rc::strong_count == 1` and the interpreter's local slot still
-holds a second reference at the call, so every append clones the
-whole accumulator. Measured on a 7 MB split, 131k pieces take 297 s
-under eval against 17 ms compiled, and 16x fewer pieces run 257x
-faster, the quadratic signature. Every accumulate-in-a-loop shape
-pays this under `koja run`, not just split.
-
-**Fix path:** let eval honor the consuming marker by releasing the
-receiver's local slot before the intrinsic call (the IR already
-proves the binding dies there), or thread a uniqueness hint through
-the call so the fast path can trust it without the refcount probe.
+**Fix path:** the two building blocks exist. `ConsumingSite` in
+`koja-ir/src/elaborate/consume.rs` matches an instruction whose
+receiver dies there (collection mutators and byte `<>` today), and
+`grow_unique_block` in `koja-runtime-posix/src/util.rs` is the
+`rc == 1` gate that lets a runtime helper reuse a block in place. A
+`FieldSet` site would add the third arm: flag the instruction when the
+base value dies there, and have the backend write the field into the
+existing block when its refcount is one.
 
 ---
 
