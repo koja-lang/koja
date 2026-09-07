@@ -9,151 +9,125 @@ alias Net.UDPSocket
 
 struct SocketTest
   @test "create stream socket"
-  fn test_create_stream -> Result<Bool, String>
+  fn test_create_stream ! String
     match Socket.create(SocketKind.Stream)
-      Result.Err(msg) ->
-        Result.Err("stream create failed: #{msg}")
-
-      Result.Ok(s) ->
-        _ = s.close()
-        Result.Ok(true)
+      Result.Err(msg) -> fail "stream create failed: #{msg}"
+      Result.Ok(s) -> _ = s.close()
     end
   end
 
   @test "create datagram socket"
-  fn test_create_datagram -> Result<Bool, String>
+  fn test_create_datagram ! String
     match Socket.create(SocketKind.Datagram)
-      Result.Err(msg) ->
-        Result.Err("datagram create failed: #{msg}")
-
-      Result.Ok(s) ->
-        _ = s.close()
-        Result.Ok(true)
+      Result.Err(msg) -> fail "datagram create failed: #{msg}"
+      Result.Ok(s) -> _ = s.close()
     end
   end
 
   @test "bind stream socket to any:0"
-  fn test_bind -> Result<Bool, String>
+  fn test_bind ! String
     match Socket.create(SocketKind.Stream)
       Result.Err(msg) ->
-        Result.Err("create for bind failed: #{msg}")
+        fail "create for bind failed: #{msg}"
 
       Result.Ok(s) ->
         match s.bind(SocketAddress{ip: IPAddress.any(), port: 0})
-          Result.Err(msg) ->
-            Result.Err("bind failed: #{msg}")
-
-          Result.Ok(bound) ->
-            _ = bound.close()
-            Result.Ok(true)
+          Result.Err(msg) -> fail "bind failed: #{msg}"
+          Result.Ok(bound) -> _ = bound.close()
         end
     end
   end
 
   @test "connect to loopback:1 is refused"
-  fn test_connect_refused -> Result<Bool, String>
+  fn test_connect_refused ! String
     match Socket.create(SocketKind.Stream)
       Result.Err(msg) ->
-        Result.Err("create for connect failed: #{msg}")
+        fail "create for connect failed: #{msg}"
 
       Result.Ok(s) ->
         match s.connect(SocketAddress{ip: IPAddress.loopback(), port: 1})
           Result.Ok(conn) ->
             _ = conn.close()
-            Result.Err("expected connection refused")
+            fail "expected connection refused"
 
           Result.Err(_) ->
-            Result.Ok(true)
+            ()
         end
     end
   end
 
   @test "resolve localhost returns non-empty list"
-  fn test_resolve_localhost -> Result<Bool, String>
+  fn test_resolve_localhost ! String
     match Socket.resolve("localhost")
       Result.Err(msg) ->
-        Result.Err("resolve failed: #{msg}")
+        fail "resolve failed: #{msg}"
 
       Result.Ok(addrs) ->
-        addrs.any?(address -> address.version == IPAddress.Version.V4
-          and address.to_string() == "127.0.0.1")
-          ? Result.Ok(true)
-          : Result.Err("resolve did not return rendered IPv4 loopback")
+        rendered_loopback = addrs.any?(address -> address.version ==
+            IPAddress.Version.V4 and address.to_string() == "127.0.0.1")
+
+        if not rendered_loopback
+          fail "resolve did not return rendered IPv4 loopback"
+        end
     end
   end
 
   @test "TCPListener.bind to port 0"
-  fn test_tcp_listener_bind -> Result<Bool, String>
+  fn test_tcp_listener_bind ! String
     match TCPListener.bind(0)
-      Result.Err(e) ->
-        Result.Err("tcp listener bind failed: " <> e.message())
-
-      Result.Ok(listener) ->
-        _ = listener.close()
-        Result.Ok(true)
+      Result.Err(e) -> fail "tcp listener bind failed: " <> e.message()
+      Result.Ok(listener) -> _ = listener.close()
     end
   end
 
   @test "TCPSocket.connect_addr to loopback:1 is refused"
-  fn test_tcp_connect_refused -> Result<Bool, String>
+  fn test_tcp_connect_refused ! String
     match TCPSocket.connect_addr(
       SocketAddress{ip: IPAddress.loopback(), port: 1},
     )
       Result.Ok(conn) ->
         _ = conn.close()
-        Result.Err("expected tcp connection refused")
+        fail "expected tcp connection refused"
 
       Result.Err(SocketError.ConnectionRefused) ->
-        Result.Ok(true)
+        ()
 
       Result.Err(e) ->
-        Result.Err("expected ConnectionRefused, got: " <> e.message())
+        fail "expected ConnectionRefused, got: " <> e.message()
     end
   end
 
   @test "UDPSocket.bind to port 0"
-  fn test_udp_bind -> Result<Bool, String>
+  fn test_udp_bind ! String
     match UDPSocket.bind(0)
-      Result.Err(e) ->
-        Result.Err("udp bind failed: " <> e.message())
-
-      Result.Ok(sock) ->
-        _ = sock.close()
-        Result.Ok(true)
+      Result.Err(e) -> fail "udp bind failed: " <> e.message()
+      Result.Ok(sock) -> _ = sock.close()
     end
   end
 
   @test "UDPSocket.bind_addr with loopback"
-  fn test_udp_bind_addr -> Result<Bool, String>
+  fn test_udp_bind_addr ! String
     match UDPSocket.bind_addr(SocketAddress{ip: IPAddress.loopback(), port: 0})
-      Result.Err(e) ->
-        Result.Err("udp bind_addr failed: " <> e.message())
-
-      Result.Ok(sock) ->
-        _ = sock.close()
-        Result.Ok(true)
+      Result.Err(e) -> fail "udp bind_addr failed: " <> e.message()
+      Result.Ok(sock) -> _ = sock.close()
     end
   end
 
   @test "TCPListener.bind_addr with loopback"
-  fn test_tcp_listener_bind_addr -> Result<Bool, String>
+  fn test_tcp_listener_bind_addr ! String
     match TCPListener.bind_addr(
       SocketAddress{ip: IPAddress.loopback(), port: 0},
     )
-      Result.Err(e) ->
-        Result.Err("tcp listener bind_addr failed: " <> e.message())
-
-      Result.Ok(listener) ->
-        _ = listener.close()
-        Result.Ok(true)
+      Result.Err(e) -> fail "tcp listener bind_addr failed: " <> e.message()
+      Result.Ok(listener) -> _ = listener.close()
     end
   end
 
   @test "UDP send preserves embedded NUL length"
-  fn test_udp_send_embedded_nul -> Result<Bool, String>
+  fn test_udp_send_embedded_nul ! String
     socket =
       match Socket.create(SocketKind.Datagram)
-        Result.Err(message) -> return Result.Err(message)
+        Result.Err(message) -> fail message
         Result.Ok(value) -> value
       end
 
@@ -164,17 +138,17 @@ struct SocketTest
 
     match result
       Result.Err(message) ->
-        Result.Err(message)
+        fail message
 
       Result.Ok(sent) ->
-        sent == 3
-          ? Result.Ok(true)
-          : Result.Err("expected 3 bytes sent, got #{sent}")
+        if sent != 3
+          fail "expected 3 bytes sent, got #{sent}"
+        end
     end
   end
 
   @test "UDP recv_from returns a complete sender address"
-  fn test_udp_recv_from_address -> Result<Bool, String>
+  fn test_udp_recv_from_address ! String
     (receiver, port) = try bind_loopback_udp()
     sender = UDPSocket.bind(0) rescue error -> fail error.message()
     target = SocketAddress{ip: IPAddress.loopback(), port: port}
@@ -186,23 +160,21 @@ struct SocketTest
     _sender_closed = sender.close()
     _receiver_closed = receiver.close()
 
-    unless data == "ping".to_binary()
+    if data != "ping".to_binary()
       fail "unexpected UDP payload"
     end
 
-    unless address.ip.version == IPAddress.Version.V4
+    if address.ip.version != IPAddress.Version.V4
       fail "expected an IPv4 sender address"
     end
 
-    unless address.ip.to_string() == "127.0.0.1"
+    if address.ip.to_string() != "127.0.0.1"
       fail "unexpected sender address: #{address.ip.to_string()}"
     end
 
-    unless address.port > 0
+    if address.port <= 0
       fail "expected a positive sender port"
     end
-
-    Result.Ok(true)
   end
 end
 

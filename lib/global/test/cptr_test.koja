@@ -1,194 +1,185 @@
 struct CPtrTest
   @test "null pointer is null"
-  fn test_null -> Result<Bool, String>
+  fn test_null ! String
     null_ptr: CPtr<Int32> = CPtr.null()
 
-    unless null_ptr.null?()
-      return Result.Err("expected null")
+    if not null_ptr.null?()
+      fail "expected null"
     end
-
-    Result.Ok(true)
   end
 
   @test "alloc, write, read"
-  fn test_alloc_write_read -> Result<Bool, String>
+  fn test_alloc_write_read ! String
     ptr: CPtr<Int32> = CPtr.alloc(3)
 
     if ptr.null?()
-      return Result.Err("alloc returned null")
+      fail "alloc returned null"
     end
 
     ptr.write(42)
 
-    unless ptr.read() == 42
-      return Result.Err("expected 42")
+    if ptr.read() != 42
+      fail "expected 42"
     end
 
     ptr.free()
-    Result.Ok(true)
   end
 
   @test "offset write and read"
-  fn test_offset -> Result<Bool, String>
+  fn test_offset ! String
     ptr: CPtr<Int32> = CPtr.alloc(3)
     ptr.write(42)
     ptr.offset(1).write(100)
     ptr.offset(2).write(200)
 
-    unless ptr.offset(1).read() == 100
-      return Result.Err("expected 100 at offset 1")
+    if ptr.offset(1).read() != 100
+      fail "expected 100 at offset 1"
     end
 
-    unless ptr.offset(2).read() == 200
-      return Result.Err("expected 200 at offset 2")
+    if ptr.offset(2).read() != 200
+      fail "expected 200 at offset 2"
     end
 
-    unless ptr.read() == 42
-      return Result.Err("first element should be unchanged")
+    if ptr.read() != 42
+      fail "first element should be unchanged"
     end
 
     ptr.free()
-    Result.Ok(true)
   end
 
   @test "overwrite and verify"
-  fn test_overwrite -> Result<Bool, String>
+  fn test_overwrite ! String
     ptr: CPtr<Int32> = CPtr.alloc(1)
     ptr.write(42)
     ptr.write(99)
 
-    unless ptr.read() == 99
-      return Result.Err("expected 99 after overwrite")
+    if ptr.read() != 99
+      fail "expected 99 after overwrite"
     end
 
     ptr.free()
-    Result.Ok(true)
   end
 
   @test "Float pointer"
-  fn test_float -> Result<Bool, String>
+  fn test_float ! String
     ptr: CPtr<Float> = CPtr.alloc(1)
     ptr.write(3.14)
 
-    unless ptr.read() == 3.14
-      return Result.Err("expected 3.14")
+    if ptr.read() != 3.14
+      fail "expected 3.14"
     end
 
     ptr.free()
-    Result.Ok(true)
   end
 
   @test "UInt8 pointer"
-  fn test_uint8 -> Result<Bool, String>
+  fn test_uint8 ! String
     byte_ptr: CPtr<UInt8> = CPtr.alloc(2)
     byte_ptr.write(65)
     byte_ptr.offset(1).write(0)
 
-    unless byte_ptr.read() == 65
-      return Result.Err("expected 65")
+    if byte_ptr.read() != 65
+      fail "expected 65"
     end
 
-    unless byte_ptr.offset(1).read() == 0
-      return Result.Err("expected 0")
+    if byte_ptr.offset(1).read() != 0
+      fail "expected 0"
     end
 
     byte_ptr.free()
-    Result.Ok(true)
   end
 
   @test "address of null is zero"
-  fn test_null_address -> Result<Bool, String>
+  fn test_null_address ! String
     null_ptr: CPtr<Int32> = CPtr.null()
 
-    unless null_ptr.address() == 0
-      return Result.Err("expected address 0 for null")
+    if null_ptr.address() != 0
+      fail "expected address 0 for null"
     end
-
-    Result.Ok(true)
   end
 
   @test "address tracks element-width offsets"
-  fn test_offset_address -> Result<Bool, String>
+  fn test_offset_address ! String
     ptr: CPtr<Int32> = CPtr.alloc(2)
     base = ptr.address()
     stepped = ptr.offset(1).address()
     ptr.free()
 
-    unless base > 0
-      return Result.Err("expected a non-zero base address")
+    if base <= 0
+      fail "expected a non-zero base address"
     end
 
-    unless stepped == base + 4
-      return Result.Err("expected offset(1) to step 4 bytes")
+    if stepped != base + 4
+      fail "expected offset(1) to step 4 bytes"
     end
-
-    Result.Ok(true)
   end
 
   @test "format renders the address in lowercase hex"
-  fn test_format -> Result<Bool, String>
+  fn test_format ! String
     null_ptr: CPtr<Int32> = CPtr.null()
 
-    unless null_ptr.format() == "CPtr(0x0)"
-      return Result.Err("expected CPtr(0x0), got #{null_ptr.format()}")
+    if null_ptr.format() != "CPtr(0x0)"
+      fail "expected CPtr(0x0), got #{null_ptr.format()}"
     end
 
     ptr: CPtr<Int32> = CPtr.alloc(1)
     rendered = ptr.format()
     ptr.free()
 
-    unless rendered.starts_with?("CPtr(0x") and rendered.ends_with?(")")
-      return Result.Err("unexpected shape #{rendered}")
+    if not (rendered.starts_with?("CPtr(0x") and rendered.ends_with?(")"))
+      fail "unexpected shape #{rendered}"
     end
 
     digits = rendered.slice(Range{start: 7, stop: rendered.length() - 2})
 
-    unless digits.length() > 0
-      return Result.Err("expected at least one hex digit")
+    if digits.length() <= 0
+      fail "expected at least one hex digit"
     end
 
     for c in digits
-      unless "0123456789abcdef".contains?(c)
-        return Result.Err("non-hex digit #{c} in #{rendered}")
+      if not "0123456789abcdef".contains?(c)
+        fail "non-hex digit #{c} in #{rendered}"
       end
     end
-
-    Result.Ok(true)
   end
 
   @test "distinct allocations are not equal"
-  fn test_distinct_not_equal -> Result<Bool, String>
+  fn test_distinct_not_equal ! String
     a: CPtr<Int32> = CPtr.alloc(1)
     b: CPtr<Int32> = CPtr.alloc(1)
     equal = a == b
     a.free()
     b.free()
 
-    equal ? Result.Err("distinct allocations compared equal") : Result.Ok(true)
+    if equal
+      fail "distinct allocations compared equal"
+    end
   end
 
   @test "copies of one pointer are equal"
-  fn test_same_pointer_equal -> Result<Bool, String>
+  fn test_same_pointer_equal ! String
     a: CPtr<Int32> = CPtr.alloc(1)
     b = a
     equal = a == b
     a.free()
 
-    equal
-      ? Result.Ok(true)
-      : Result.Err("copies of one pointer compared unequal")
+    if not equal
+      fail "copies of one pointer compared unequal"
+    end
   end
 
   @test "null equals null"
-  fn test_null_equal -> Result<Bool, String>
+  fn test_null_equal ! String
     a: CPtr<Int32> = CPtr.null()
     b: CPtr<Int32> = CPtr.null()
 
-    a == b ? Result.Ok(true) : Result.Err("null pointers compared unequal")
+    if a != b
+      fail "null pointers compared unequal"
+    end
   end
 
   @test "null comparison infers the pointer type from the other operand"
-  fn test_null_comparison_infers_type -> Result<Bool, String>
+  fn test_null_comparison_infers_type ! String
     a: CPtr<Int32> = CPtr.alloc(1)
     left_null = CPtr.null() == a
     right_null = a == CPtr.null()
@@ -196,22 +187,15 @@ struct CPtrTest
     a.free()
 
     cond
-      left_null ->
-        Result.Err("null on the left compared equal to a live pointer")
-
-      right_null ->
-        Result.Err("null on the right compared equal to a live pointer")
-
-      not_null ->
-        Result.Ok(true)
-
-      else ->
-        Result.Err("`!=` against null returned false for a live pointer")
+      left_null -> fail "null on the left compared equal to a live pointer"
+      right_null -> fail "null on the right compared equal to a live pointer"
+      not_null -> ()
+      else -> fail "`!=` against null returned false for a live pointer"
     end
   end
 
   @test "offset pointer differs from its base"
-  fn test_offset_not_equal -> Result<Bool, String>
+  fn test_offset_not_equal ! String
     base: CPtr<Int32> = CPtr.alloc(2)
     stepped = base.offset(1)
     equal = base == stepped
@@ -219,9 +203,9 @@ struct CPtrTest
     base.free()
 
     cond
-      equal -> Result.Err("offset pointer compared equal to its base")
-      back_equal -> Result.Ok(true)
-      else -> Result.Err("offset(-1) did not return to the base address")
+      equal -> fail "offset pointer compared equal to its base"
+      back_equal -> ()
+      else -> fail "offset(-1) did not return to the base address"
     end
   end
 end

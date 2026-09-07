@@ -1,455 +1,439 @@
 struct BinaryTest
   @test "empty binary literal has byte_size 0"
-  fn test_empty_binary_literal -> Result<Bool, String>
+  fn test_empty_binary_literal ! String
     empty: Binary = <<>>
 
-    unless empty.byte_size() == 0
-      return Result.Err("empty byte_size")
+    if empty.byte_size() != 0
+      fail "empty byte_size"
     end
 
     match empty
-      <<>> -> Result.Ok(true)
-      _ -> Result.Err("empty pattern")
+      <<>> -> ()
+      _ -> fail "empty pattern"
     end
   end
 
   @test "single byte 0xFF literal"
-  fn test_single_byte_literal -> Result<Bool, String>
+  fn test_single_byte_literal ! String
     one = <<0xFF>>
 
-    unless one.byte_size() == 1
-      return Result.Err("single byte size")
+    if one.byte_size() != 1
+      fail "single byte size"
     end
 
     match one
-      <<0xFF>> -> Result.Ok(true)
-      _ -> Result.Err("0xFF pattern")
+      <<0xFF>> -> ()
+      _ -> fail "0xFF pattern"
     end
   end
 
   @test "multi-byte header literal spells Hello"
-  fn test_multi_byte_header_literal -> Result<Bool, String>
+  fn test_multi_byte_header_literal ! String
     header = <<0x48, 0x65, 0x6C, 0x6C, 0x6F>>
 
-    unless header.byte_size() == 5
-      return Result.Err("header byte_size")
+    if header.byte_size() != 5
+      fail "header byte_size"
     end
 
     match header
-      <<0x48, 0x65, 0x6C, 0x6C, 0x6F>> -> Result.Ok(true)
-      _ -> Result.Err("header bytes")
+      <<0x48, 0x65, 0x6C, 0x6C, 0x6F>> -> ()
+      _ -> fail "header bytes"
     end
   end
 
   @test "sized 16-bit big-endian segment 0x0102"
-  fn test_sized_u16_be -> Result<Bool, String>
+  fn test_sized_u16_be ! String
     wide = <<0x0102::16>>
 
-    unless wide.byte_size() == 2
-      return Result.Err("wide byte_size")
+    if wide.byte_size() != 2
+      fail "wide byte_size"
     end
 
     match wide
-      <<0x01, 0x02>> -> Result.Ok(true)
-      _ -> Result.Err("wide bytes")
+      <<0x01, 0x02>> -> ()
+      _ -> fail "wide bytes"
     end
   end
 
   @test "two-byte unit segment for small integer"
-  fn test_two_byte_unit_segment -> Result<Bool, String>
+  fn test_two_byte_unit_segment ! String
     chunk = <<3::2 byte>>
 
-    unless chunk.byte_size() == 2
-      return Result.Err("chunk byte_size")
+    if chunk.byte_size() != 2
+      fail "chunk byte_size"
     end
 
     match chunk
-      <<0x00, 0x03>> -> Result.Ok(true)
-      _ -> Result.Err("chunk bytes")
+      <<0x00, 0x03>> -> ()
+      _ -> fail "chunk bytes"
     end
   end
 
   @test "mixed literal: bytes and 16-bit value 1024"
-  fn test_mixed_packet_literal -> Result<Bool, String>
+  fn test_mixed_packet_literal ! String
     packet = <<0xFF, 0x00, 1024::16>>
 
-    unless packet.byte_size() == 4
-      return Result.Err("packet byte_size")
+    if packet.byte_size() != 4
+      fail "packet byte_size"
     end
 
     match packet
-      <<0xFF, 0x00, 0x04, 0x00>> -> Result.Ok(true)
-      _ -> Result.Err("packet bytes")
+      <<0xFF, 0x00, 0x04, 0x00>> -> ()
+      _ -> fail "packet bytes"
     end
   end
 
   @test "16-bit little-endian literal segment"
-  fn test_u16_little_endian_literal -> Result<Bool, String>
+  fn test_u16_little_endian_literal ! String
     le = <<0x0102::16 little>>
 
-    unless le.byte_size() == 2
-      return Result.Err("le byte_size")
+    if le.byte_size() != 2
+      fail "le byte_size"
     end
 
     match le
-      <<0x02, 0x01>> -> Result.Ok(true)
-      _ -> Result.Err("le bytes")
+      <<0x02, 0x01>> -> ()
+      _ -> fail "le bytes"
     end
   end
 
   @test "signed -1 in 8-bit segment"
-  fn test_signed_negative_byte -> Result<Bool, String>
+  fn test_signed_negative_byte ! String
     neg = <<-1::8 signed>>
 
-    unless neg.byte_size() == 1
-      return Result.Err("neg byte_size")
+    if neg.byte_size() != 1
+      fail "neg byte_size"
     end
 
     match neg
-      <<0xFF>> -> Result.Ok(true)
-      _ -> Result.Err("signed -1 byte")
+      <<0xFF>> -> ()
+      _ -> fail "signed -1 byte"
     end
   end
 
   @test "variable value in sized segment"
-  fn test_variable_in_binary_segment -> Result<Bool, String>
+  fn test_variable_in_binary_segment ! String
     port: Int = 8080
     msg = <<0x01, port::16>>
 
-    unless msg.byte_size() == 3
-      return Result.Err("msg byte_size")
+    if msg.byte_size() != 3
+      fail "msg byte_size"
     end
 
     match msg
-      <<0x01, 0x1F, 0x90>> -> Result.Ok(true)
-      _ -> Result.Err("port bytes")
+      <<0x01, 0x1F, 0x90>> -> ()
+      _ -> fail "port bytes"
     end
   end
 
   @test "32-bit segment 0xDEADBEEF"
-  fn test_u32_segment -> Result<Bool, String>
+  fn test_u32_segment ! String
     big_val = <<0xDEADBEEF::32>>
 
-    unless big_val.byte_size() == 4
-      return Result.Err("big_val byte_size")
+    if big_val.byte_size() != 4
+      fail "big_val byte_size"
     end
 
     match big_val
-      <<0xDE, 0xAD, 0xBE, 0xEF>> -> Result.Ok(true)
-      _ -> Result.Err("u32 bytes")
+      <<0xDE, 0xAD, 0xBE, 0xEF>> -> ()
+      _ -> fail "u32 bytes"
     end
   end
 
   @test "match exact three-byte literal pattern"
-  fn test_match_exact_literal -> Result<Bool, String>
+  fn test_match_exact_literal ! String
     # --- binary_match.koja ---
 
     data = <<0x01, 0x02, 0x03>>
 
     match data
-      <<0x01, 0x02, 0x03>> -> Result.Ok(true)
-      _ -> Result.Err("exact literal match")
+      <<0x01, 0x02, 0x03>> -> ()
+      _ -> fail "exact literal match"
     end
   end
 
   @test "match binds tag and 16-bit field"
-  fn test_match_tag_and_length_fields -> Result<Bool, String>
+  fn test_match_tag_and_length_fields ! String
     packet = <<0xAB, 0x00, 0x10>>
 
     match packet
       <<tag::8, _length::16>> ->
-        unless tag == 0xAB
-          return Result.Err("tag binding")
+        if tag != 0xAB
+          fail "tag binding"
         end
 
-        Result.Ok(true)
-
       _ ->
-        Result.Err("tag pattern")
+        fail "tag pattern"
     end
   end
 
   @test "match dispatches on first byte and binds second"
-  fn test_match_dispatch_first_byte -> Result<Bool, String>
+  fn test_match_dispatch_first_byte ! String
     msg1 = <<0x01, 0xFF>>
 
     match msg1
       <<0x02, _::8>> ->
-        Result.Err("wrong arm type 2")
+        fail "wrong arm type 2"
 
       <<0x01, val::8>> ->
-        unless val == 0xFF
-          return Result.Err("val binding")
+        if val != 0xFF
+          fail "val binding"
         end
 
-        Result.Ok(true)
-
       _ ->
-        Result.Err("dispatch arm")
+        fail "dispatch arm"
     end
   end
 
   @test "match greedy rest: Binary after first byte"
-  fn test_match_greedy_rest -> Result<Bool, String>
+  fn test_match_greedy_rest ! String
     stream = <<0xAA, 0xBB, 0xCC, 0xDD>>
 
     match stream
       <<header::8, rest: Binary>> ->
-        unless header == 0xAA
-          return Result.Err("header")
+        if header != 0xAA
+          fail "header"
         end
 
-        unless rest.byte_size() == 3
-          return Result.Err("rest byte_size")
+        if rest.byte_size() != 3
+          fail "rest byte_size"
         end
 
         match rest
-          <<0xBB, 0xCC, 0xDD>> -> Result.Ok(true)
-          _ -> Result.Err("rest bytes")
+          <<0xBB, 0xCC, 0xDD>> -> ()
+          _ -> fail "rest bytes"
         end
 
       _ ->
-        Result.Err("stream pattern")
+        fail "stream pattern"
     end
   end
 
   @test "match 16-bit little-endian value in pattern"
-  fn test_match_u16_little_in_pattern -> Result<Bool, String>
+  fn test_match_u16_little_in_pattern ! String
     le_data = <<0x02, 0x01>>
 
     match le_data
       <<val::16 little>> ->
-        unless val == 0x0102
-          return Result.Err("le val")
+        if val != 0x0102
+          fail "le val"
         end
 
-        Result.Ok(true)
-
       _ ->
-        Result.Err("le pattern")
+        fail "le pattern"
     end
   end
 
   @test "match discards leading bytes and binds payload"
-  fn test_match_discard_and_payload -> Result<Bool, String>
+  fn test_match_discard_and_payload ! String
     frame = <<0x00, 0x00, 0x00, 0x42>>
 
     match frame
       <<_::24, payload::8>> ->
-        unless payload == 0x42
-          return Result.Err("payload")
+        if payload != 0x42
+          fail "payload"
         end
 
-        Result.Ok(true)
-
       _ ->
-        Result.Err("discard pattern")
+        fail "discard pattern"
     end
   end
 
   @test "pattern too short for data falls through"
-  fn test_match_insufficient_pattern_length -> Result<Bool, String>
+  fn test_match_insufficient_pattern_length ! String
     short = <<0x01>>
 
     match short
-      <<_::8, _::8, _::8>> -> Result.Err("should not match three bytes")
-      _ -> Result.Ok(true)
+      <<_::8, _::8, _::8>> -> fail "should not match three bytes"
+      _ -> ()
     end
   end
 
   @test "empty binary matches empty pattern"
-  fn test_match_empty_binary -> Result<Bool, String>
+  fn test_match_empty_binary ! String
     empty: Binary = <<>>
 
     match empty
-      <<>> -> Result.Ok(true)
-      _ -> Result.Err("empty match")
+      <<>> -> ()
+      _ -> fail "empty match"
     end
   end
 
   @test "string segment in binary construction"
-  fn test_string_segment_construction -> Result<Bool, String>
+  fn test_string_segment_construction ! String
     # --- binary_string_segment.koja ---
 
     pkt = <<"HELLO", 0x01>>
 
-    unless pkt.byte_size() == 6
-      return Result.Err("pkt byte_size")
+    if pkt.byte_size() != 6
+      fail "pkt byte_size"
     end
 
     match pkt
-      <<0x48, 0x45, 0x4C, 0x4C, 0x4F, 0x01>> -> Result.Ok(true)
-      _ -> Result.Err("string seg bytes")
+      <<0x48, 0x45, 0x4C, 0x4C, 0x4F, 0x01>> -> ()
+      _ -> fail "string seg bytes"
     end
   end
 
   @test "string literal pattern matches byte sequence"
-  fn test_string_pattern_hi -> Result<Bool, String>
+  fn test_string_pattern_hi ! String
     data = <<0x48, 0x49>>
 
     match data
-      <<"HI">> -> Result.Ok(true)
-      _ -> Result.Err("HI pattern")
+      <<"HI">> -> ()
+      _ -> fail "HI pattern"
     end
   end
 
   @test "string prefix and bound u8 in pattern"
-  fn test_string_prefix_and_u8 -> Result<Bool, String>
+  fn test_string_prefix_and_u8 ! String
     frame = <<0x4F, 0x4B, 0x2A>>
 
     match frame
       <<"OK", val::8>> ->
-        unless val == 0x2A
-          return Result.Err("val after OK")
+        if val != 0x2A
+          fail "val after OK"
         end
 
-        Result.Ok(true)
-
       _ ->
-        Result.Err("OK val pattern")
+        fail "OK val pattern"
     end
   end
 
   @test "multi-arm HTTP verb: GET path capture"
-  fn test_string_dispatch_get_path -> Result<Bool, String>
+  fn test_string_dispatch_get_path ! String
     msg = <<0x47, 0x45, 0x54, 0x20, 0x2F>>
 
     match msg
       <<"POST", _rest: Binary>> ->
-        Result.Err("matched POST")
+        fail "matched POST"
 
       <<"GET ", path: Binary>> ->
-        unless path.byte_size() == 1
-          return Result.Err("path size")
+        if path.byte_size() != 1
+          fail "path size"
         end
 
         match path
-          <<0x2F>> -> Result.Ok(true)
-          _ -> Result.Err("path bytes")
+          <<0x2F>> -> ()
+          _ -> fail "path bytes"
         end
 
       _ ->
-        Result.Err("GET arm")
+        fail "GET arm"
     end
   end
 
   @test "Binary.at reads bytes in O(1) and rejects out-of-bounds"
-  fn test_binary_at -> Result<Bool, String>
+  fn test_binary_at ! String
     data = <<0x01, 0xFF, 0x7F>>
 
-    unless data.at(0) == Option.Some(1)
-      return Result.Err("at(0)")
+    if data.at(0) != Option.Some(1)
+      fail "at(0)"
     end
 
-    unless data.at(1) == Option.Some(255)
-      return Result.Err("at(1)")
+    if data.at(1) != Option.Some(255)
+      fail "at(1)"
     end
 
-    unless data.at(2) == Option.Some(127)
-      return Result.Err("at(2)")
+    if data.at(2) != Option.Some(127)
+      fail "at(2)"
     end
 
     match data.at(3)
       Option.None -> ()
-      Option.Some(_) -> return Result.Err("at(3) past end")
+      Option.Some(_) -> fail "at(3) past end"
     end
 
     match data.at(0 - 1)
       Option.None -> ()
-      Option.Some(_) -> return Result.Err("at(-1)")
+      Option.Some(_) -> fail "at(-1)"
     end
-
-    Result.Ok(true)
   end
 
   @test "Binary.find locates byte needles from an offset"
-  fn test_binary_find -> Result<Bool, String>
+  fn test_binary_find ! String
     data = <<0xFF, 0x00, 0xFE, 0x00, 0xFE>>
 
-    unless data.find(<<0x00, 0xFE>>, 0) == Option.Some(1)
-      return Result.Err("first match")
+    if data.find(<<0x00, 0xFE>>, 0) != Option.Some(1)
+      fail "first match"
     end
 
-    unless data.find(<<0x00, 0xFE>>, 2) == Option.Some(3)
-      return Result.Err("match after from")
+    if data.find(<<0x00, 0xFE>>, 2) != Option.Some(3)
+      fail "match after from"
     end
 
     match data.find(<<0x00, 0xFE>>, 4)
       Option.None -> ()
-      Option.Some(_) -> return Result.Err("from past the last match")
+      Option.Some(_) -> fail "from past the last match"
     end
 
     match data.find(<<0xAB>>, 0)
       Option.None -> ()
-      Option.Some(_) -> return Result.Err("absent needle")
+      Option.Some(_) -> fail "absent needle"
     end
 
     empty: Binary = <<>>
 
-    unless data.find(empty, 3) == Option.Some(3)
-      return Result.Err("empty needle matches at from")
+    if data.find(empty, 3) != Option.Some(3)
+      fail "empty needle matches at from"
     end
 
     match data.find(empty, 6)
       Option.None -> ()
-      Option.Some(_) -> return Result.Err("from past the end")
+      Option.Some(_) -> fail "from past the end"
     end
 
     match data.find(<<0xFF>>, 0 - 1)
       Option.None -> ()
-      Option.Some(_) -> return Result.Err("negative from")
+      Option.Some(_) -> fail "negative from"
     end
 
     match <<0x01>>.find(<<0x01, 0x02>>, 0)
       Option.None -> ()
-      Option.Some(_) -> return Result.Err("needle longer than haystack")
+      Option.Some(_) -> fail "needle longer than haystack"
     end
-
-    Result.Ok(true)
   end
 
   @test "Binary.slice copies inclusive byte ranges and clamps"
-  fn test_binary_slice -> Result<Bool, String>
+  fn test_binary_slice ! String
     data = <<0xAA, 0xBB, 0xCC, 0xDD>>
 
     match data.slice(Range{start: 1, stop: 2})
       <<0xBB, 0xCC>> -> ()
-      _ -> return Result.Err("middle slice")
+      _ -> fail "middle slice"
     end
 
     match data.slice(Range{start: 2, stop: 99})
       <<0xCC, 0xDD>> -> ()
-      _ -> return Result.Err("clamped stop")
+      _ -> fail "clamped stop"
     end
 
     empty = data.slice(Range{start: 3, stop: 1})
 
-    unless empty.byte_size() == 0
-      return Result.Err("inverted range is empty")
+    if empty.byte_size() != 0
+      fail "inverted range is empty"
     end
-
-    Result.Ok(true)
   end
 
   @test "String.to_binary UTF-8 bytes"
-  fn test_string_to_binary -> Result<Bool, String>
+  fn test_string_to_binary ! String
     # --- binary_type_conversions.koja ---
 
     s = "hello"
     bin = s.to_binary()
 
-    unless bin.byte_size() == 5
-      return Result.Err("hello byte_size")
+    if bin.byte_size() != 5
+      fail "hello byte_size"
     end
 
     match bin
-      <<0x68, 0x65, 0x6C, 0x6C, 0x6F>> -> Result.Ok(true)
-      _ -> Result.Err("hello bytes")
+      <<0x68, 0x65, 0x6C, 0x6C, 0x6F>> -> ()
+      _ -> fail "hello bytes"
     end
   end
 
   @test "Binary.to_bits widens and round-trips with to_binary"
-  fn test_binary_to_bits_round_trip -> Result<Bool, String>
+  fn test_binary_to_bits_round_trip ! String
     b: Binary = <<0xAB, 0xCD>>
     bits = b.to_bits()
 
@@ -457,55 +441,51 @@ struct BinaryTest
       Result.Ok(b2) ->
         match b2
           <<0xAB, 0xCD>> ->
-            unless b2.byte_size() == 2
-              return Result.Err("round trip size")
+            if b2.byte_size() != 2
+              fail "round trip size"
             end
 
-            Result.Ok(true)
-
           _ ->
-            Result.Err("round trip bytes")
+            fail "round trip bytes"
         end
 
       Result.Err(msg) ->
-        Result.Err("to_binary: #{msg}")
+        fail "to_binary: #{msg}"
     end
   end
 
   @test "Binary.to_string succeeds for valid UTF-8"
-  fn test_binary_to_string_valid -> Result<Bool, String>
+  fn test_binary_to_string_valid ! String
     valid: Binary = <<0x68, 0x69>>
 
     match valid.to_string()
       Result.Ok(str) ->
-        unless str == "hi"
-          return Result.Err("valid utf8 string")
+        if str != "hi"
+          fail "valid utf8 string"
         end
 
-        Result.Ok(true)
-
       Result.Err(msg) ->
-        Result.Err("unexpected err: #{msg}")
+        fail "unexpected err: #{msg}"
     end
   end
 
   @test "Binary.to_string fails for invalid UTF-8"
-  fn test_binary_to_string_invalid -> Result<Bool, String>
+  fn test_binary_to_string_invalid ! String
     invalid: Binary = <<0xFF, 0xFE>>
 
     match invalid.to_string()
       Result.Ok(_) ->
-        Result.Err("should not decode invalid utf8")
+        fail "should not decode invalid utf8"
 
       Result.Err(error) ->
         match error
-          String.ConversionError.InvalidUTF8 -> Result.Ok(true)
+          String.ConversionError.InvalidUTF8 -> ()
         end
     end
   end
 
   @test "Bits.to_binary on byte-aligned bits from Binary"
-  fn test_bits_to_binary_aligned -> Result<Bool, String>
+  fn test_bits_to_binary_aligned ! String
     aligned: Binary = <<0x01, 0x02>>
     as_bits = aligned.to_bits()
 
@@ -513,93 +493,85 @@ struct BinaryTest
       Result.Ok(b2) ->
         match b2
           <<0x01, 0x02>> ->
-            unless b2.byte_size() == 2
-              return Result.Err("aligned size")
+            if b2.byte_size() != 2
+              fail "aligned size"
             end
 
-            Result.Ok(true)
-
           _ ->
-            Result.Err("aligned bytes")
+            fail "aligned bytes"
         end
 
       Result.Err(msg) ->
-        Result.Err("aligned to_binary: #{msg}")
+        fail "aligned to_binary: #{msg}"
     end
   end
 
   @test "Binary equality compares length and bytes"
-  fn test_binary_equality -> Result<Bool, String>
+  fn test_binary_equality ! String
     a = <<83, 0, 0, 0, 4>>
     b = <<83, 0, 0, 0, 4>>
 
-    unless a == b
-      return Result.Err("equal binaries compared unequal")
+    if a != b
+      fail "equal binaries compared unequal"
     end
 
-    unless a != <<83, 0, 0, 0>>
-      return Result.Err("prefix compared equal")
+    if a == <<83, 0, 0, 0>>
+      fail "prefix compared equal"
     end
 
-    unless a != <<83, 0, 0, 0, 5>>
-      return Result.Err("differing byte compared equal")
+    if a == <<83, 0, 0, 0, 5>>
+      fail "differing byte compared equal"
     end
 
     empty: Binary = <<>>
 
-    unless empty == <<>>
-      return Result.Err("empty binaries compared unequal")
+    if empty != <<>>
+      fail "empty binaries compared unequal"
     end
-
-    Result.Ok(true)
   end
 
   @test "Binary hash is byte-stable and length-sensitive"
-  fn test_binary_hash -> Result<Bool, String>
+  fn test_binary_hash ! String
     a = <<1, 2, 3>>
     b = <<1, 2, 3>>
 
-    unless a.hash() == b.hash()
-      return Result.Err("equal binaries hashed differently")
+    if a.hash() != b.hash()
+      fail "equal binaries hashed differently"
     end
 
-    unless a.hash() != <<1, 2>>.hash()
-      return Result.Err("prefix hashed identically")
+    if a.hash() == <<1, 2>>.hash()
+      fail "prefix hashed identically"
     end
-
-    Result.Ok(true)
   end
 
   @test "Binary keys work in Map and Set"
-  fn test_binary_hash_collections -> Result<Bool, String>
+  fn test_binary_hash_collections ! String
     key = <<0x51, 0x00>>
     m: Map<Binary, String> = Map.new()
     m = m.put(key, "query")
 
-    unless m.get(<<0x51, 0x00>>) == Option.Some("query")
-      return Result.Err("map lookup by equal key missed")
+    if m.get(<<0x51, 0x00>>) != Option.Some("query")
+      fail "map lookup by equal key missed"
     end
 
     s: Set<Binary> = Set.new()
     s = s.insert(key)
 
-    unless s.has?(<<0x51, 0x00>>)
-      return Result.Err("set membership by equal key missed")
+    if not s.has?(<<0x51, 0x00>>)
+      fail "set membership by equal key missed"
     end
-
-    Result.Ok(true)
   end
 
   @test "Binary format renders the byte list, truncated past 64"
-  fn test_binary_format -> Result<Bool, String>
-    unless <<83, 0, 0, 0, 4>>.format() == "<<83, 0, 0, 0, 4>>"
-      return Result.Err("short format: #{<<83, 0, 0, 0, 4>>.format()}")
+  fn test_binary_format ! String
+    if <<83, 0, 0, 0, 4>>.format() != "<<83, 0, 0, 0, 4>>"
+      fail "short format: #{<<83, 0, 0, 0, 4>>.format()}"
     end
 
     empty: Binary = <<>>
 
-    unless empty.format() == "<<>>"
-      return Result.Err("empty format: #{empty.format()}")
+    if empty.format() != "<<>>"
+      fail "empty format: #{empty.format()}"
     end
 
     big: Binary = <<>>
@@ -610,134 +582,120 @@ struct BinaryTest
       i += 1
     end
 
-    unless big.format().ends_with?(", ...>>")
-      return Result.Err("expected truncation marker: #{big.format()}")
+    if not big.format().ends_with?(", ...>>")
+      fail "expected truncation marker: #{big.format()}"
     end
-
-    Result.Ok(true)
   end
 
   @test "Bits.bit_size counts bits including a partial byte"
-  fn test_bits_bit_size -> Result<Bool, String>
-    unless <<0x48, 0x65, 5::3>>.bit_size() == 19
-      return Result.Err("partial bit_size")
+  fn test_bits_bit_size ! String
+    if <<0x48, 0x65, 5::3>>.bit_size() != 19
+      fail "partial bit_size"
     end
 
-    unless <<0x01, 0x02>>.to_bits().bit_size() == 16
-      return Result.Err("aligned bit_size")
+    if <<0x01, 0x02>>.to_bits().bit_size() != 16
+      fail "aligned bit_size"
     end
 
     empty: Binary = <<>>
 
-    unless empty.to_bits().bit_size() == 0
-      return Result.Err("empty bit_size")
+    if empty.to_bits().bit_size() != 0
+      fail "empty bit_size"
     end
-
-    Result.Ok(true)
   end
 
   @test "Bits.byte_at reads storage bytes and rejects out-of-bounds"
-  fn test_bits_byte_at -> Result<Bool, String>
+  fn test_bits_byte_at ! String
     bits = <<0x48, 0x65, 5::3>>
 
-    unless bits.byte_at(0) == Option.Some(0x48)
-      return Result.Err("byte_at(0)")
+    if bits.byte_at(0) != Option.Some(0x48)
+      fail "byte_at(0)"
     end
 
     # The partial byte stores its bits MSB-first with zero padding.
-    unless bits.byte_at(2) == Option.Some(0xA0)
-      return Result.Err("byte_at(2) partial")
+    if bits.byte_at(2) != Option.Some(0xA0)
+      fail "byte_at(2) partial"
     end
 
     match bits.byte_at(3)
       Option.None -> ()
-      Option.Some(_) -> return Result.Err("byte_at(3) past end")
+      Option.Some(_) -> fail "byte_at(3) past end"
     end
 
     match bits.byte_at(0 - 1)
       Option.None -> ()
-      Option.Some(_) -> return Result.Err("byte_at(-1)")
+      Option.Some(_) -> fail "byte_at(-1)"
     end
-
-    Result.Ok(true)
   end
 
   @test "Bits equality compares bit length and bits"
-  fn test_bits_equality -> Result<Bool, String>
-    unless <<5::3>> == <<5::3>>
-      return Result.Err("equal bits compared unequal")
+  fn test_bits_equality ! String
+    if <<5::3>> != <<5::3>>
+      fail "equal bits compared unequal"
     end
 
-    unless <<5::3>> != <<4::3>>
-      return Result.Err("differing bits compared equal")
+    if <<5::3>> == <<4::3>>
+      fail "differing bits compared equal"
     end
 
     # Same storage byte 0x10, different bit lengths.
-    unless <<16>>.to_bits() != <<1::4>>
-      return Result.Err("same bytes at different lengths compared equal")
+    if <<16>>.to_bits() == <<1::4>>
+      fail "same bytes at different lengths compared equal"
     end
 
     empty: Binary = <<>>
 
-    unless empty.to_bits() == empty.to_bits()
-      return Result.Err("empty bits compared unequal")
+    if empty.to_bits() != empty.to_bits()
+      fail "empty bits compared unequal"
     end
-
-    Result.Ok(true)
   end
 
   @test "Bits hash is bit-stable and length-sensitive"
-  fn test_bits_hash -> Result<Bool, String>
-    unless <<5::3>>.hash() == <<5::3>>.hash()
-      return Result.Err("equal bits hashed differently")
+  fn test_bits_hash ! String
+    if <<5::3>>.hash() != <<5::3>>.hash()
+      fail "equal bits hashed differently"
     end
 
-    unless <<16>>.to_bits().hash() != <<1::4>>.hash()
-      return Result.Err("same bytes at different lengths hashed identically")
+    if <<16>>.to_bits().hash() == <<1::4>>.hash()
+      fail "same bytes at different lengths hashed identically"
     end
-
-    Result.Ok(true)
   end
 
   @test "Bits keys work in Map and Set"
-  fn test_bits_hash_collections -> Result<Bool, String>
+  fn test_bits_hash_collections ! String
     m: Map<Bits, String> = Map.new()
     m = m.put(<<5::3>>, "partial")
 
-    unless m.get(<<5::3>>) == Option.Some("partial")
-      return Result.Err("map lookup by equal key missed")
+    if m.get(<<5::3>>) != Option.Some("partial")
+      fail "map lookup by equal key missed"
     end
 
     s: Set<Bits> = Set.new()
     s = s.insert(<<5::3>>)
 
-    unless s.has?(<<5::3>>)
-      return Result.Err("set membership by equal key missed")
+    if not s.has?(<<5::3>>)
+      fail "set membership by equal key missed"
     end
-
-    Result.Ok(true)
   end
 
   @test "Bits format renders the round-trippable literal form"
-  fn test_bits_format -> Result<Bool, String>
-    unless <<72, 101, 5::3>>.format() == "<<72, 101, 5::3>>"
-      return Result.Err("partial format: #{<<72, 101, 5::3>>.format()}")
+  fn test_bits_format ! String
+    if <<72, 101, 5::3>>.format() != "<<72, 101, 5::3>>"
+      fail "partial format: #{<<72, 101, 5::3>>.format()}"
     end
 
-    unless <<72, 101>>.to_bits().format() == "<<72, 101>>"
-      return Result.Err("aligned format: #{<<72, 101>>.to_bits().format()}")
+    if <<72, 101>>.to_bits().format() != "<<72, 101>>"
+      fail "aligned format: #{<<72, 101>>.to_bits().format()}"
     end
 
     empty: Binary = <<>>
 
-    unless empty.to_bits().format() == "<<>>"
-      return Result.Err("empty format: #{empty.to_bits().format()}")
+    if empty.to_bits().format() != "<<>>"
+      fail "empty format: #{empty.to_bits().format()}"
     end
 
-    unless <<5::3>>.format() == "<<5::3>>"
-      return Result.Err("partial-only format: #{<<5::3>>.format()}")
+    if <<5::3>>.format() != "<<5::3>>"
+      fail "partial-only format: #{<<5::3>>.format()}"
     end
-
-    Result.Ok(true)
   end
 end

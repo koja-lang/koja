@@ -9,7 +9,7 @@ struct PoolTest
   end
 
   @test "checkout lends a resource and checkin returns the updated value"
-  fn test_round_trip -> Bool ! String
+  fn test_round_trip ! String
     pool = int_pool(1)
     first = pool.checkout(1000) rescue _ -> fail "first checkout failed"
 
@@ -22,15 +22,13 @@ struct PoolTest
     second = pool.checkout(1000) rescue _ -> fail "second checkout failed"
     pool.stop()
 
-    unless second == 8
+    if second != 8
       fail "expected checked-in 8, got #{second}"
     end
-
-    true
   end
 
   @test "an exhausted pool queues callers until a checkin"
-  fn test_waitlist -> Bool ! String
+  fn test_waitlist ! String
     pool = int_pool(1)
     lent = pool.checkout(1000) rescue _ -> fail "initial checkout failed"
     waiter = Task.async(fn () -> Result<Int, Error> pool.checkout(3000) end)
@@ -40,16 +38,11 @@ struct PoolTest
     outcome = Task.await(waiter) rescue _ -> fail "waiter task failed"
     pool.stop()
 
-    match outcome
-      Result.Ok(_) -> ()
-      Result.Err(_) -> fail "queued checkout should be answered by checkin"
-    end
-
-    true
+    outcome rescue _ -> fail "queued checkout should be answered by checkin"
   end
 
   @test "checkout times out when every resource stays lent"
-  fn test_timeout -> Bool ! String
+  fn test_timeout ! String
     pool = int_pool(1)
     _ = pool.checkout(1000) rescue _ -> fail "initial checkout failed"
 
@@ -57,14 +50,14 @@ struct PoolTest
     pool.stop()
 
     match second
-      Result.Err(Error.Timeout) -> true
+      Result.Err(Error.Timeout) -> ()
       Result.Err(_) -> fail "expected Timeout error"
       Result.Ok(_) -> fail "checkout should not succeed on an exhausted pool"
     end
   end
 
   @test "discard builds a replacement resource"
-  fn test_discard -> Bool ! String
+  fn test_discard ! String
     pool = int_pool(1)
     _ = pool.checkout(1000) rescue _ -> fail "initial checkout failed"
 
@@ -75,15 +68,13 @@ struct PoolTest
 
     pool.stop()
 
-    unless replacement == 7
+    if replacement != 7
       fail "expected replacement 7, got #{replacement}"
     end
-
-    true
   end
 
   @test "a failing factory brings the pool down"
-  fn test_start_failure -> Bool ! String
+  fn test_start_failure ! String
     config = Config{
       create: fn () -> Result<Int, String> Result.Err("boom") end,
       size: 1,
@@ -92,7 +83,7 @@ struct PoolTest
     pool = Pool.start(config)
 
     match pool.checkout(1000)
-      Result.Err(Error.PoolDown) -> true
+      Result.Err(Error.PoolDown) -> ()
       Result.Err(_) -> fail "expected PoolDown error"
       Result.Ok(_) -> fail "checkout should not succeed on a dead pool"
     end

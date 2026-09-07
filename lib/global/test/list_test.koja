@@ -1,127 +1,113 @@
 struct ListTest
   @test "new, append, get, length"
-  fn test_new_append_get -> Result<Bool, String>
+  fn test_new_append_get ! String
     list: List<Int> = List.new()
     list = list.append(10)
     list = list.append(20)
     list = list.append(30)
 
-    unless list.length() == 3
-      return Result.Err("expected length 3, got #{list.length()}")
+    if list.length() != 3
+      fail "expected length 3, got #{list.length()}"
     end
 
-    unless list.get(0).unwrap() == 10
-      return Result.Err("expected 10 at index 0")
+    if list.get(0).unwrap() != 10
+      fail "expected 10 at index 0"
     end
 
-    unless list.get(1).unwrap() == 20
-      return Result.Err("expected 20 at index 1")
+    if list.get(1).unwrap() != 20
+      fail "expected 20 at index 1"
     end
 
-    unless list.get(2).unwrap() == 30
-      return Result.Err("expected 30 at index 2")
+    if list.get(2).unwrap() != 30
+      fail "expected 30 at index 2"
     end
 
     if list.empty?()
-      return Result.Err("should not be empty")
+      fail "should not be empty"
     end
-
-    Result.Ok(true)
   end
 
   @test "literal syntax"
-  fn test_literal -> Result<Bool, String>
+  fn test_literal ! String
     nums = [10, 20, 30]
 
-    unless nums.length() == 3
-      return Result.Err("expected length 3")
+    if nums.length() != 3
+      fail "expected length 3"
     end
 
-    unless nums.get(0).unwrap() == 10
-      return Result.Err("expected 10 at 0")
+    if nums.get(0).unwrap() != 10
+      fail "expected 10 at 0"
     end
 
-    unless nums.get(2).unwrap() == 30
-      return Result.Err("expected 30 at 2")
+    if nums.get(2).unwrap() != 30
+      fail "expected 30 at 2"
     end
-
-    Result.Ok(true)
   end
 
   @test "empty literal"
-  fn test_empty_literal -> Result<Bool, String>
+  fn test_empty_literal ! String
     empty: List<Int> = []
 
-    unless empty.length() == 0
-      return Result.Err("expected length 0")
+    if empty.length() != 0
+      fail "expected length 0"
     end
 
-    unless empty.empty?()
-      return Result.Err("should be empty")
+    if not empty.empty?()
+      fail "should be empty"
     end
-
-    Result.Ok(true)
   end
 
   @test "string list"
-  fn test_string_list -> Result<Bool, String>
+  fn test_string_list ! String
     words = ["hello", "world"]
 
-    unless words.get(0).unwrap() == "hello"
-      return Result.Err("expected hello")
+    if words.get(0).unwrap() != "hello"
+      fail "expected hello"
     end
 
-    unless words.get(1).unwrap() == "world"
-      return Result.Err("expected world")
+    if words.get(1).unwrap() != "world"
+      fail "expected world"
     end
-
-    Result.Ok(true)
   end
 
   @test "single element literal"
-  fn test_single_element -> Result<Bool, String>
+  fn test_single_element ! String
     single = [42]
 
-    unless single.length() == 1
-      return Result.Err("expected length 1")
+    if single.length() != 1
+      fail "expected length 1"
     end
 
-    unless single.get(0).unwrap() == 42
-      return Result.Err("expected 42")
+    if single.get(0).unwrap() != 42
+      fail "expected 42"
     end
-
-    Result.Ok(true)
   end
 
   @test "first returns first element"
-  fn test_first -> Result<Bool, String>
+  fn test_first ! String
     list = [10, 20, 30, 40, 50]
 
-    unless list.first().unwrap() == 10
-      return Result.Err("expected first 10")
+    if list.first().unwrap() != 10
+      fail "expected first 10"
     end
-
-    Result.Ok(true)
   end
 
   @test "pop removes last element"
-  fn test_pop -> Result<Bool, String>
+  fn test_pop ! String
     list = [10, 20, 30, 40, 50]
     (popped, remaining) = list.pop()
 
-    unless popped.unwrap() == 50
-      return Result.Err("expected popped value 50")
+    if popped.unwrap() != 50
+      fail "expected popped value 50"
     end
 
-    unless remaining.length() == 4
-      return Result.Err("expected remaining length 4")
+    if remaining.length() != 4
+      fail "expected remaining length 4"
     end
-
-    Result.Ok(true)
   end
 
   @test "pop until empty"
-  fn test_pop_empty -> Result<Bool, String>
+  fn test_pop_empty ! String
     rest = [1, 2, 3]
     (_, rest) = rest.pop()
     (_, rest) = rest.pop()
@@ -129,218 +115,190 @@ struct ListTest
     (popped, _) = rest.pop()
 
     if popped.some?()
-      return Result.Err("expected None from empty pop")
+      fail "expected None from empty pop"
     end
-
-    Result.Ok(true)
   end
 
   @test "replace_at in bounds"
-  fn test_replace_at -> Result<Bool, String>
+  fn test_replace_at ! String
     updated = [1, 2, 3].replace_at(1, 99)
 
-    unless updated.get(1).unwrap() == 99
-      return Result.Err("expected 99 at index 1")
+    if updated.get(1).unwrap() != 99
+      fail "expected 99 at index 1"
     end
-
-    Result.Ok(true)
   end
 
   @test "replace_at out of bounds is no-op"
-  fn test_replace_at_oob -> Result<Bool, String>
+  fn test_replace_at_oob ! String
     same = [1, 2, 3].replace_at(10, 99)
 
-    unless same.length() == 3
-      return Result.Err("expected length 3")
+    if same.length() != 3
+      fail "expected length 3"
     end
-
-    Result.Ok(true)
   end
 
   @test "slice extracts sublist"
-  fn test_slice -> Result<Bool, String>
+  fn test_slice ! String
     sliced = [10, 20, 30, 40, 50].slice(1, 3)
 
-    unless sliced.length() == 3
-      return Result.Err("expected length 3, got #{sliced.length()}")
+    if sliced.length() != 3
+      fail "expected length 3, got #{sliced.length()}"
     end
 
-    unless sliced.first().unwrap() == 20
-      return Result.Err("expected first 20")
+    if sliced.first().unwrap() != 20
+      fail "expected first 20"
     end
 
-    unless sliced.last().unwrap() == 40
-      return Result.Err("expected last 40")
+    if sliced.last().unwrap() != 40
+      fail "expected last 40"
     end
-
-    Result.Ok(true)
   end
 
   @test "slice clamps to bounds"
-  fn test_slice_clamped -> Result<Bool, String>
+  fn test_slice_clamped ! String
     clamped = [1, 2, 3].slice(1, 100)
 
-    unless clamped.length() == 2
-      return Result.Err("expected length 2, got #{clamped.length()}")
+    if clamped.length() != 2
+      fail "expected length 2, got #{clamped.length()}"
     end
-
-    Result.Ok(true)
   end
 
   @test "concat joins two lists"
-  fn test_concat -> Result<Bool, String>
+  fn test_concat ! String
     combined = [1, 2].concat([3, 4, 5])
 
-    unless combined.length() == 5
-      return Result.Err("expected length 5")
+    if combined.length() != 5
+      fail "expected length 5"
     end
 
-    unless combined.last().unwrap() == 5
-      return Result.Err("expected last 5")
+    if combined.last().unwrap() != 5
+      fail "expected last 5"
     end
-
-    Result.Ok(true)
   end
 
   @test "reverse reverses order"
-  fn test_reverse -> Result<Bool, String>
+  fn test_reverse ! String
     rev = [1, 2, 3].reverse()
 
-    unless rev.first().unwrap() == 3
-      return Result.Err("expected first 3")
+    if rev.first().unwrap() != 3
+      fail "expected first 3"
     end
 
-    unless rev.last().unwrap() == 1
-      return Result.Err("expected last 1")
+    if rev.last().unwrap() != 1
+      fail "expected last 1"
     end
-
-    Result.Ok(true)
   end
 
   @test "find returns matching element"
-  fn test_find -> Result<Bool, String>
+  fn test_find ! String
     found = [10, 20, 30].find(fn (x: Int) -> Bool x > 15 end)
 
-    unless found.unwrap() == 20
-      return Result.Err("expected 20")
+    if found.unwrap() != 20
+      fail "expected 20"
     end
 
     not_found = [10, 20, 30].find(fn (x: Int) -> Bool x > 100 end)
 
     if not_found.some?()
-      return Result.Err("expected None")
+      fail "expected None"
     end
-
-    Result.Ok(true)
   end
 
   @test "reduce accumulates value"
-  fn test_reduce -> Result<Bool, String>
+  fn test_reduce ! String
     sum = [1, 2, 3, 4].reduce(0, fn (acc: Int, x: Int) -> Int acc + x end)
 
-    unless sum == 10
-      return Result.Err("expected sum 10, got #{sum}")
+    if sum != 10
+      fail "expected sum 10, got #{sum}"
     end
-
-    Result.Ok(true)
   end
 
   @test "map transforms elements"
-  fn test_map -> Result<Bool, String>
+  fn test_map ! String
     nums = [1, 2, 3, 4, 5]
     doubled = nums.map(fn (n: Int) -> Int n * 2 end)
 
-    unless doubled.length() == 5
-      return Result.Err("expected length 5")
+    if doubled.length() != 5
+      fail "expected length 5"
     end
 
-    unless doubled.get(0).unwrap() == 2
-      return Result.Err("expected 2 at 0")
+    if doubled.get(0).unwrap() != 2
+      fail "expected 2 at 0"
     end
 
-    unless doubled.get(4).unwrap() == 10
-      return Result.Err("expected 10 at 4")
+    if doubled.get(4).unwrap() != 10
+      fail "expected 10 at 4"
     end
-
-    Result.Ok(true)
   end
 
   @test "map changes element type"
-  fn test_map_type_change -> Result<Bool, String>
+  fn test_map_type_change ! String
     strings = [1, 2, 3].map(fn (n: Int) -> String "item_#{n}" end)
 
-    unless strings.get(0).unwrap() == "item_1"
-      return Result.Err("expected item_1")
+    if strings.get(0).unwrap() != "item_1"
+      fail "expected item_1"
     end
 
-    unless strings.get(2).unwrap() == "item_3"
-      return Result.Err("expected item_3")
+    if strings.get(2).unwrap() != "item_3"
+      fail "expected item_3"
     end
-
-    Result.Ok(true)
   end
 
   @test "filter selects matching elements"
-  fn test_filter -> Result<Bool, String>
+  fn test_filter ! String
     big = [1, 2, 3, 4, 5].filter(fn (n: Int) -> Bool n > 2 end)
 
-    unless big.length() == 3
-      return Result.Err("expected length 3, got #{big.length()}")
+    if big.length() != 3
+      fail "expected length 3, got #{big.length()}"
     end
 
-    unless big.first().unwrap() == 3
-      return Result.Err("expected first 3")
+    if big.first().unwrap() != 3
+      fail "expected first 3"
     end
-
-    Result.Ok(true)
   end
 
   @test "any? and all? predicates"
-  fn test_any_all -> Result<Bool, String>
+  fn test_any_all ! String
     nums = [1, 2, 3, 4, 5]
 
-    unless nums.any?(fn (n: Int) -> Bool n > 4 end)
-      return Result.Err("any? should find 5")
+    if not nums.any?(fn (n: Int) -> Bool n > 4 end)
+      fail "any? should find 5"
     end
 
-    unless nums.all?(fn (n: Int) -> Bool n > 0 end)
-      return Result.Err("all? should pass for positive")
+    if not nums.all?(fn (n: Int) -> Bool n > 0 end)
+      fail "all? should pass for positive"
     end
 
     if nums.all?(fn (n: Int) -> Bool n > 3 end)
-      return Result.Err("all? should fail for > 3")
+      fail "all? should fail for > 3"
     end
-
-    Result.Ok(true)
   end
 
   @test "filter then map chaining"
-  fn test_chaining -> Result<Bool, String>
+  fn test_chaining ! String
     chained = [1, 2, 3, 4, 5]
       .filter(fn (n: Int) -> Bool n > 2 end)
       .map(fn (n: Int) -> Int n * 10 end)
 
-    unless chained.length() == 3
-      return Result.Err("expected length 3")
+    if chained.length() != 3
+      fail "expected length 3"
     end
 
-    unless chained.get(0).unwrap() == 30
-      return Result.Err("expected 30 at 0")
+    if chained.get(0).unwrap() != 30
+      fail "expected 30 at 0"
     end
 
-    unless chained.get(1).unwrap() == 40
-      return Result.Err("expected 40 at 1")
+    if chained.get(1).unwrap() != 40
+      fail "expected 40 at 1"
     end
 
-    unless chained.get(2).unwrap() == 50
-      return Result.Err("expected 50 at 2")
+    if chained.get(2).unwrap() != 50
+      fail "expected 50 at 2"
     end
-
-    Result.Ok(true)
   end
 
   @test "for-in iterates map, filter, and chained lists"
-  fn test_for_in_iterators -> Result<Bool, String>
+  fn test_for_in_iterators ! String
     nums: List<Int> = [1, 2, 3, 4, 5]
 
     doubled = nums.map(fn (n: Int) -> Int n * 2 end)
@@ -350,8 +308,8 @@ struct ListTest
       sum_d += d
     end
 
-    unless sum_d == 30
-      return Result.Err("expected sum 30 from doubled, got #{sum_d}")
+    if sum_d != 30
+      fail "expected sum 30 from doubled, got #{sum_d}"
     end
 
     big = nums.filter(fn (n: Int) -> Bool n > 2 end)
@@ -361,8 +319,8 @@ struct ListTest
       sum_b += b
     end
 
-    unless sum_b == 12
-      return Result.Err("expected sum 12 from filter, got #{sum_b}")
+    if sum_b != 12
+      fail "expected sum 12 from filter, got #{sum_b}"
     end
 
     chained = nums.filter(fn (n: Int) -> Bool n > 2 end)
@@ -373,59 +331,53 @@ struct ListTest
       sum_c += c
     end
 
-    unless sum_c == 120
-      return Result.Err("expected sum 120 from chained, got #{sum_c}")
+    if sum_c != 120
+      fail "expected sum 120 from chained, got #{sum_c}"
     end
-
-    Result.Ok(true)
   end
 
   @test "equality compares elements"
-  fn test_equality -> Result<Bool, String>
-    unless [1, 2, 3] == [1, 2, 3]
-      return Result.Err("identical lists should be equal")
+  fn test_equality ! String
+    if [1, 2, 3] != [1, 2, 3]
+      fail "identical lists should be equal"
     end
 
     if [1, 2, 3] == [1, 2, 4]
-      return Result.Err("lists differing in one element should not be equal")
+      fail "lists differing in one element should not be equal"
     end
 
     if [1, 2] == [1, 2, 3]
-      return Result.Err("lists of different lengths should not be equal")
+      fail "lists of different lengths should not be equal"
     end
 
     empty_a: List<Int> = []
     empty_b: List<Int> = []
 
-    unless empty_a == empty_b
-      return Result.Err("empty lists should be equal")
+    if empty_a != empty_b
+      fail "empty lists should be equal"
     end
-
-    Result.Ok(true)
   end
 
   @test "equality on string and nested lists"
-  fn test_equality_nested -> Result<Bool, String>
-    unless ["a", "b"] == ["a", "b"]
-      return Result.Err("string lists should compare element-wise")
+  fn test_equality_nested ! String
+    if ["a", "b"] != ["a", "b"]
+      fail "string lists should compare element-wise"
     end
 
     if ["a", "b"] == ["a", "c"]
-      return Result.Err("differing string lists should not be equal")
+      fail "differing string lists should not be equal"
     end
 
     nested_a = [[1, 2], [3]]
     nested_b = [[1, 2], [3]]
     nested_c = [[1, 2], [4]]
 
-    unless nested_a == nested_b
-      return Result.Err("nested lists should compare recursively")
+    if nested_a != nested_b
+      fail "nested lists should compare recursively"
     end
 
     if nested_a == nested_c
-      return Result.Err("differing nested lists should not be equal")
+      fail "differing nested lists should not be equal"
     end
-
-    Result.Ok(true)
   end
 end

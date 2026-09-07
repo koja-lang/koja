@@ -1,113 +1,97 @@
 struct StatusTest
   @test "Status.ok returns 200"
-  fn test_status_ok -> Result<Bool, String>
+  fn test_status_ok ! String
     s = Status.ok()
 
-    unless s.code == 200
-      return Result.Err("expected code 200")
+    if s.code != 200
+      fail "expected code 200"
     end
 
-    unless s.reason == "OK"
-      return Result.Err("expected reason OK")
+    if s.reason != "OK"
+      fail "expected reason OK"
     end
-
-    Result.Ok(true)
   end
 
   @test "Status.not_found returns 404"
-  fn test_status_not_found -> Result<Bool, String>
+  fn test_status_not_found ! String
     s = Status.not_found()
 
-    unless s.code == 404
-      return Result.Err("expected code 404")
+    if s.code != 404
+      fail "expected code 404"
     end
-
-    Result.Ok(true)
   end
 
   @test "Status.internal_server_error returns 500"
-  fn test_status_internal_server_error -> Result<Bool, String>
+  fn test_status_internal_server_error ! String
     s = Status.internal_server_error()
 
-    unless s.code == 500
-      return Result.Err("expected code 500")
+    if s.code != 500
+      fail "expected code 500"
     end
-
-    Result.Ok(true)
   end
 
   @test "Status.new creates custom status"
-  fn test_status_new -> Result<Bool, String>
+  fn test_status_new ! String
     s = Status.new(418, "I'm a Teapot")
 
-    unless s.code == 418
-      return Result.Err("expected code 418")
+    if s.code != 418
+      fail "expected code 418"
     end
 
-    unless s.reason == "I'm a Teapot"
-      return Result.Err("expected custom reason")
+    if s.reason != "I'm a Teapot"
+      fail "expected custom reason"
     end
-
-    Result.Ok(true)
   end
 
   @test "Status.ok? checks 2xx range"
-  fn test_status_ok_predicate -> Result<Bool, String>
-    unless Status.ok().ok?()
-      return Result.Err("200 should be ok")
+  fn test_status_ok_predicate ! String
+    if not Status.ok().ok?()
+      fail "200 should be ok"
     end
 
-    unless Status.created().ok?()
-      return Result.Err("201 should be ok")
+    if not Status.created().ok?()
+      fail "201 should be ok"
     end
 
     if Status.not_found().ok?()
-      return Result.Err("404 should not be ok")
+      fail "404 should not be ok"
     end
-
-    Result.Ok(true)
   end
 
   @test "Status.redirect? checks 3xx range"
-  fn test_status_redirect_predicate -> Result<Bool, String>
-    unless Status.new(301, "Moved").redirect?()
-      return Result.Err("301 should be redirect")
+  fn test_status_redirect_predicate ! String
+    if not Status.new(301, "Moved").redirect?()
+      fail "301 should be redirect"
     end
 
     if Status.ok().redirect?()
-      return Result.Err("200 should not be redirect")
+      fail "200 should not be redirect"
     end
-
-    Result.Ok(true)
   end
 
   @test "Status.client_error? checks 4xx range"
-  fn test_status_client_error_predicate -> Result<Bool, String>
-    unless Status.bad_request().client_error?()
-      return Result.Err("400 should be client error")
+  fn test_status_client_error_predicate ! String
+    if not Status.bad_request().client_error?()
+      fail "400 should be client error"
     end
 
-    unless Status.not_found().client_error?()
-      return Result.Err("404 should be client error")
+    if not Status.not_found().client_error?()
+      fail "404 should be client error"
     end
 
     if Status.ok().client_error?()
-      return Result.Err("200 should not be client error")
+      fail "200 should not be client error"
     end
-
-    Result.Ok(true)
   end
 
   @test "Status.server_error? checks 5xx range"
-  fn test_status_server_error_predicate -> Result<Bool, String>
-    unless Status.internal_server_error().server_error?()
-      return Result.Err("500 should be server error")
+  fn test_status_server_error_predicate ! String
+    if not Status.internal_server_error().server_error?()
+      fail "500 should be server error"
     end
 
     if Status.ok().server_error?()
-      return Result.Err("200 should not be server error")
+      fail "200 should not be server error"
     end
-
-    Result.Ok(true)
   end
 end

@@ -12,40 +12,40 @@ const TLS_TEST_KEY_PATH: String = "test/fixtures/localhost_key.pem"
 
 struct TLSTest
   @test "TLS loopback handshake and echo roundtrip"
-  fn test_tls_echo_roundtrip -> Result<Bool, String>
+  fn test_tls_echo_roundtrip ! String
     server_config =
       match server_test_config()
         Result.Ok(c) -> c
-        Result.Err(e) -> return Result.Err(e)
+        Result.Err(e) -> fail e
       end
 
-    run_echo_roundtrip(43117, server_config, TLSConfig.insecure())
+    try run_echo_roundtrip(43117, server_config, TLSConfig.insecure())
   end
 
   @test "verifying client accepts a server trusted via custom CA PEM"
-  fn test_tls_verify_custom_ca -> Result<Bool, String>
+  fn test_tls_verify_custom_ca ! String
     server_config =
       match server_test_config()
         Result.Ok(c) -> c
-        Result.Err(e) -> return Result.Err(e)
+        Result.Err(e) -> fail e
       end
 
     ca =
       match read_test_certificate()
         Result.Ok(c) -> c
-        Result.Err(e) -> return Result.Err(e)
+        Result.Err(e) -> fail e
       end
 
     client_config = TLSConfig.client().with_ca(ca)
-    run_echo_roundtrip(43119, server_config, client_config)
+    try run_echo_roundtrip(43119, server_config, client_config)
   end
 
   @test "verifying client rejects a self-signed server certificate"
-  fn test_tls_verify_rejects_self_signed -> Result<Bool, String>
+  fn test_tls_verify_rejects_self_signed ! String
     server_config =
       match server_test_config()
         Result.Ok(c) -> c
-        Result.Err(e) -> return Result.Err(e)
+        Result.Err(e) -> fail e
       end
 
     addr = SocketAddress{ip: IPAddress.loopback(), port: 43118}
@@ -53,7 +53,7 @@ struct TLSTest
     listener =
       match TCPListener.bind_addr(addr)
         Result.Ok(l) -> l
-        Result.Err(e) -> return Result.Err("bind: " <> e.message())
+        Result.Err(e) -> fail "bind: " <> e.message()
       end
 
     server = Task.async(fn () -> Result<String, String>
@@ -63,7 +63,7 @@ struct TLSTest
     plain =
       match TCPSocket.connect_addr(addr)
         Result.Ok(s) -> s
-        Result.Err(e) -> return Result.Err("connect: " <> e.message())
+        Result.Err(e) -> fail "connect: " <> e.message()
       end
 
     upgraded = plain.upgrade_tls("localhost", TLSConfig.client())
@@ -82,23 +82,21 @@ struct TLSTest
 
     match upgraded
       Result.Ok(_) ->
-        Result.Err("handshake should have failed certificate verification")
+        fail "handshake should have failed certificate verification"
 
       Result.Err(e) ->
         match e
           tls_error: TLSError ->
             match tls_error
-              TLSError.VerificationFailed(_) ->
-                Result.Ok(true)
-
+              TLSError.VerificationFailed(_) -> ()
               _ ->
-                Result.Err("expected verification failure, got: " <>
-                  tls_error.message())
+                fail "expected verification failure, got: " <>
+                  tls_error.message()
             end
 
           socket_error: SocketError ->
-            Result.Err("expected verification failure, got: " <>
-              socket_error.message())
+            fail "expected verification failure, got: " <>
+              socket_error.message()
         end
     end
   end
@@ -107,14 +105,14 @@ struct TLSTest
     port: Int,
     server_config: TLSConfig,
     client_config: TLSConfig,
-  ) -> Result<Bool, String>
+  ) ! String
 
     addr = SocketAddress{ip: IPAddress.loopback(), port: port}
 
     listener =
       match TCPListener.bind_addr(addr)
         Result.Ok(l) -> l
-        Result.Err(e) -> return Result.Err("bind: " <> e.message())
+        Result.Err(e) -> fail "bind: " <> e.message()
       end
 
     server = Task.async(fn () -> Result<String, String>
@@ -124,32 +122,30 @@ struct TLSTest
     plain =
       match TCPSocket.connect_addr(addr)
         Result.Ok(s) -> s
-        Result.Err(e) -> return Result.Err("connect: " <> e.message())
+        Result.Err(e) -> fail "connect: " <> e.message()
       end
 
     if plain.tls?()
-      return Result.Err("expected tls? to be false before upgrade")
+      fail "expected tls? to be false before upgrade"
     end
 
     client =
       match plain.upgrade_tls("localhost", client_config)
         Result.Ok(s) -> s
-        Result.Err(e) -> return Result.Err("upgrade_tls: " <> net_message(e))
+        Result.Err(e) -> fail "upgrade_tls: " <> net_message(e)
       end
 
-    unless client.tls?()
-      return Result.Err("expected tls? to be true after upgrade")
+    if not client.tls?()
+      fail "expected tls? to be true after upgrade"
     end
 
-    match client.write("hello over tls")
-      Result.Err(e) -> return Result.Err("client write: " <> net_message(e))
-      Result.Ok(_) -> ()
-    end
+    client.write("hello over tls")
+      rescue e -> fail "client write: " <> net_message(e)
 
     echoed =
       match client.read(1024)
         Result.Ok(d) -> d
-        Result.Err(e) -> return Result.Err("client read: " <> net_message(e))
+        Result.Err(e) -> fail "client read: " <> net_message(e)
       end
 
     match client.close()
@@ -161,26 +157,24 @@ struct TLSTest
         Result.Ok(outcome) ->
           match outcome
             Result.Ok(d) -> d
-            Result.Err(e) -> return Result.Err("server: " <> e)
+            Result.Err(e) -> fail "server: " <> e
           end
 
         Result.Err(_) ->
-          return Result.Err("server task did not finish")
+          fail "server task did not finish"
       end
 
     match listener.close()
       _ -> ()
     end
 
-    unless echoed == "hello over tls"
-      return Result.Err("expected echo, got #{echoed}")
+    if echoed != "hello over tls"
+      fail "expected echo, got #{echoed}"
     end
 
-    unless server_seen == "hello over tls"
-      return Result.Err("server saw #{server_seen}")
+    if server_seen != "hello over tls"
+      fail "server saw #{server_seen}"
     end
-
-    Result.Ok(true)
   end
 
   priv fn serve_tls_attempt(listener: TCPListener, config: TLSConfig)

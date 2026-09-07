@@ -1,107 +1,97 @@
 struct MapTest
   @test "new, put, has?, length"
-  fn test_new_put_has -> Result<Bool, String>
+  fn test_new_put_has ! String
     m: Map<String, Int> = Map.new()
     m = m.put("hello", 10)
     m = m.put("world", 20)
     m = m.put("hello", 30)
 
-    unless m.length() == 2
-      return Result.Err("expected length 2, got #{m.length()}")
+    if m.length() != 2
+      fail "expected length 2, got #{m.length()}"
     end
 
-    unless m.has?("hello")
-      return Result.Err("expected has hello")
+    if not m.has?("hello")
+      fail "expected has hello"
     end
 
     if m.has?("missing")
-      return Result.Err("should not have missing")
+      fail "should not have missing"
     end
 
     if m.empty?()
-      return Result.Err("should not be empty")
+      fail "should not be empty"
     end
-
-    Result.Ok(true)
   end
 
   @test "remove deletes key"
-  fn test_remove -> Result<Bool, String>
+  fn test_remove ! String
     m: Map<String, Int> = Map.new()
     m = m.put("hello", 10)
     m = m.put("world", 20)
     m = m.remove("hello")
 
-    unless m.length() == 1
-      return Result.Err("expected length 1 after remove")
+    if m.length() != 1
+      fail "expected length 1 after remove"
     end
 
     if m.has?("hello")
-      return Result.Err("hello should be removed")
+      fail "hello should be removed"
     end
-
-    Result.Ok(true)
   end
 
   @test "literal syntax"
-  fn test_literal -> Result<Bool, String>
+  fn test_literal ! String
     m: Map<String, Int> = ["hello": 10, "world": 20]
 
-    unless m.length() == 2
-      return Result.Err("expected length 2")
+    if m.length() != 2
+      fail "expected length 2"
     end
 
-    unless m.has?("hello")
-      return Result.Err("expected has hello")
+    if not m.has?("hello")
+      fail "expected has hello"
     end
 
-    unless m.has?("world")
-      return Result.Err("expected has world")
+    if not m.has?("world")
+      fail "expected has world"
     end
 
     if m.has?("missing")
-      return Result.Err("should not have missing")
+      fail "should not have missing"
     end
-
-    Result.Ok(true)
   end
 
   @test "empty literal"
-  fn test_empty_literal -> Result<Bool, String>
+  fn test_empty_literal ! String
     empty: Map<String, Int> = [:]
 
-    unless empty.length() == 0
-      return Result.Err("expected length 0")
+    if empty.length() != 0
+      fail "expected length 0"
     end
 
-    unless empty.empty?()
-      return Result.Err("should be empty")
+    if not empty.empty?()
+      fail "should be empty"
     end
-
-    Result.Ok(true)
   end
 
   @test "int keys"
-  fn test_int_keys -> Result<Bool, String>
+  fn test_int_keys ! String
     m: Map<Int, String> = [1: "one", 2: "two", 3: "three"]
 
-    unless m.length() == 3
-      return Result.Err("expected length 3")
+    if m.length() != 3
+      fail "expected length 3"
     end
 
-    unless m.has?(1)
-      return Result.Err("expected has 1")
+    if not m.has?(1)
+      fail "expected has 1"
     end
 
     if m.has?(4)
-      return Result.Err("should not have 4")
+      fail "should not have 4"
     end
-
-    Result.Ok(true)
   end
 
   @test "resize preserves entries"
-  fn test_resize -> Result<Bool, String>
+  fn test_resize ! String
     m: Map<Int, String> = [1: "one", 2: "two", 3: "three"]
     m = m.put(4, "four")
     m = m.put(5, "five")
@@ -111,23 +101,21 @@ struct MapTest
     m = m.put(9, "nine")
     m = m.put(10, "ten")
 
-    unless m.length() == 10
-      return Result.Err("expected length 10 after resize, got #{m.length()}")
+    if m.length() != 10
+      fail "expected length 10 after resize, got #{m.length()}"
     end
 
-    unless m.has?(1)
-      return Result.Err("lost key 1 after resize")
+    if not m.has?(1)
+      fail "lost key 1 after resize"
     end
 
-    unless m.has?(10)
-      return Result.Err("missing key 10 after resize")
+    if not m.has?(10)
+      fail "missing key 10 after resize"
     end
-
-    Result.Ok(true)
   end
 
   @test "iteration, equality, and debug"
-  fn test_iteration_equality_debug -> Result<Bool, String>
+  fn test_iteration_equality_debug ! String
     map: Map<String, Int> = ["one": 1, "two": 2, "three": 3]
     count = 0
     sum = 0
@@ -137,33 +125,31 @@ struct MapTest
       sum += value
     end
 
-    unless count == 3 and sum == 6
-      return Result.Err("map iteration missed an entry")
+    if not (count == 3 and sum == 6)
+      fail "map iteration missed an entry"
     end
 
     same: Map<String, Int> = ["three": 3, "one": 1, "two": 2]
     different: Map<String, Int> = ["one": 1, "two": 9, "three": 3]
 
-    unless map == same
-      return Result.Err("equal maps compared unequal")
+    if map != same
+      fail "equal maps compared unequal"
     end
 
     if map == different
-      return Result.Err("different maps compared equal")
+      fail "different maps compared equal"
     end
 
     rendered = map.format()
 
-    unless rendered.starts_with?("[") and rendered.ends_with?("]")
-      return Result.Err("map debug did not use map literal syntax")
+    if not (rendered.starts_with?("[") and rendered.ends_with?("]"))
+      fail "map debug did not use map literal syntax"
     end
 
-    unless rendered.contains?("\"one\": 1")
+    if not rendered.contains?("\"one\": 1")
       and rendered.contains?("\"three\": 3")
 
-      return Result.Err("map debug omitted an entry")
+      fail "map debug omitted an entry"
     end
-
-    Result.Ok(true)
   end
 end

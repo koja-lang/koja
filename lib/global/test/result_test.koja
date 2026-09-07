@@ -1,139 +1,121 @@
 struct ResultTest
   @test "unwrap returns Ok value"
-  fn test_unwrap -> Result<Bool, String>
+  fn test_unwrap ! String
     ok: Result<Int, Int> = Result.Ok(42)
 
-    unless ok.unwrap() == 42
-      return Result.Err("expected 42")
+    if ok.unwrap() != 42
+      fail "expected 42"
     end
-
-    Result.Ok(true)
   end
 
   @test "or returns Ok value"
-  fn test_or_ok -> Result<Bool, String>
+  fn test_or_ok ! String
     ok: Result<Int, Int> = Result.Ok(42)
 
-    unless ok.or(0) == 42
-      return Result.Err("expected 42")
+    if ok.or(0) != 42
+      fail "expected 42"
     end
-
-    Result.Ok(true)
   end
 
   @test "or returns default for Err"
-  fn test_or_err -> Result<Bool, String>
+  fn test_or_err ! String
     err: Result<Int, Int> = Result.Err(1)
 
-    unless err.or(99) == 99
-      return Result.Err("expected 99")
+    if err.or(99) != 99
+      fail "expected 99"
     end
-
-    Result.Ok(true)
   end
 
   @test "ok? and err? predicates"
-  fn test_predicates -> Result<Bool, String>
+  fn test_predicates ! String
     ok: Result<Int, Int> = Result.Ok(42)
     err: Result<Int, Int> = Result.Err(1)
 
-    unless ok.ok?()
-      return Result.Err("Ok should be ok?")
+    if not ok.ok?()
+      fail "Ok should be ok?"
     end
 
     if ok.err?()
-      return Result.Err("Ok should not be err?")
+      fail "Ok should not be err?"
     end
 
     if err.ok?()
-      return Result.Err("Err should not be ok?")
+      fail "Err should not be ok?"
     end
 
-    unless err.err?()
-      return Result.Err("Err should be err?")
+    if not err.err?()
+      fail "Err should be err?"
     end
-
-    Result.Ok(true)
   end
 
   @test "map transforms Ok value"
-  fn test_map_ok -> Result<Bool, String>
+  fn test_map_ok ! String
     ok: Result<Int, Int> = Result.Ok(42)
     mapped = ok.map(fn (v: Int) -> Int v + 8 end)
 
-    unless mapped.unwrap() == 50
-      return Result.Err("expected 50")
+    if mapped.unwrap() != 50
+      fail "expected 50"
     end
-
-    Result.Ok(true)
   end
 
   @test "map returns Err unchanged"
-  fn test_map_err -> Result<Bool, String>
+  fn test_map_err ! String
     err: Result<Int, Int> = Result.Err(1)
     err_mapped = err.map(fn (v: Int) -> Int v + 8 end)
 
-    unless err_mapped.or(-1) == -1
-      return Result.Err("expected -1")
+    if err_mapped.or(-1) != -1
+      fail "expected -1"
     end
-
-    Result.Ok(true)
   end
 
   @test "ok converts Ok to Some and Err to None"
-  fn test_ok -> Result<Bool, String>
+  fn test_ok ! String
     ok: Result<Int, Int> = Result.Ok(42)
     err: Result<Int, Int> = Result.Err(1)
 
-    unless ok.ok().or(-1) == 42
-      return Result.Err("expected Some(42)")
+    if ok.ok().or(-1) != 42
+      fail "expected Some(42)"
     end
 
-    unless err.ok().none?()
-      return Result.Err("expected None")
+    if not err.ok().none?()
+      fail "expected None"
     end
-
-    Result.Ok(true)
   end
 
   @test "err converts Err to Some and Ok to None"
-  fn test_err -> Result<Bool, String>
+  fn test_err ! String
     ok: Result<Int, Int> = Result.Ok(42)
     err: Result<Int, Int> = Result.Err(1)
 
-    unless err.err().or(-1) == 1
-      return Result.Err("expected Some(1)")
+    if err.err().or(-1) != 1
+      fail "expected Some(1)"
     end
 
-    unless ok.err().none?()
-      return Result.Err("expected None")
+    if not ok.err().none?()
+      fail "expected None"
     end
-
-    Result.Ok(true)
   end
 
   @test "map_err transforms Err and leaves Ok unchanged"
-  fn test_map_err_transform -> Result<Bool, String>
+  fn test_map_err_transform ! String
     err: Result<Int, Int> = Result.Err(1)
     mapped = err.map_err(fn (e: Int) -> Int e + 100 end)
 
     match mapped
       Result.Ok(_) ->
-        return Result.Err("expected Err")
+        fail "expected Err"
 
       Result.Err(e) ->
-        unless e == 101
-          return Result.Err("expected 101")
+        if e != 101
+          fail "expected 101"
         end
     end
 
     ok: Result<Int, Int> = Result.Ok(42)
     ok_mapped = ok.map_err(fn (e: Int) -> Int e + 100 end)
 
-    unless ok_mapped.or(-1) == 42
-      return Result.Err("expected 42")
+    if ok_mapped.or(-1) != 42
+      fail "expected 42"
     end
-
-    Result.Ok(true)
   end
 end

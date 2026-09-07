@@ -131,10 +131,12 @@ fn trace_result_line(
 /// [`HARNESS_ENTRY`] struct implementing `Process<(), (), ()>`
 /// whose `run` executes the tests.
 ///
-/// Each `@test` function must return `Result<Bool, String>`. The
-/// harness calls each test as `StructName.fn_name()`, matches on the
-/// result to track pass/fail counts, and continues running all tests
-/// even when some fail. `run` stops with `StopReason.Shutdown`
+/// Each `@test` function returns some `Result<_, String>`. The idiom is
+/// a unit `! String` body that passes by returning and fails with
+/// `fail message`, but any success type works because the harness only
+/// matches `Result.Ok(_)`. The harness calls each test as
+/// `StructName.fn_name()`, matches on the result to track pass/fail
+/// counts, and continues running all tests even when some fail. `run` stops with `StopReason.Shutdown`
 /// (exit 1) when any test failed, `StopReason.Normal` (exit 0)
 /// otherwise.
 ///

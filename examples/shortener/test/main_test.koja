@@ -1,42 +1,40 @@
 struct JsonUtilTest
   @test "parse_url extracts a url from a JSON body"
-  fn test_parse_url_ok -> Bool ! String
+  fn test_parse_url_ok ! String
     url = JsonUtil.parse_url("{\"url\": \"https://example.com\"}")
       rescue e -> fail "expected Ok, got error `#{e}`"
 
-    unless url == "https://example.com"
+    if url != "https://example.com"
       fail "got unexpected url `#{url}`"
     end
-
-    true
   end
 
   @test "parse_url rejects a missing url field"
-  fn test_parse_url_missing -> Bool ! String
+  fn test_parse_url_missing ! String
     match JsonUtil.parse_url("{\"href\": \"https://example.com\"}")
-      Result.Err(_) -> true
+      Result.Err(_) -> ()
       Result.Ok(_) -> fail "expected an error for a missing url"
     end
   end
 
   @test "parse_url rejects a non-string url"
-  fn test_parse_url_wrong_type -> Bool ! String
+  fn test_parse_url_wrong_type ! String
     match JsonUtil.parse_url("{\"url\": 42}")
-      Result.Err(_) -> true
+      Result.Err(_) -> ()
       Result.Ok(_) -> fail "expected an error for a non-string url"
     end
   end
 
   @test "parse_url rejects invalid JSON"
-  fn test_parse_url_invalid -> Bool ! String
+  fn test_parse_url_invalid ! String
     match JsonUtil.parse_url("not json")
-      Result.Err(_) -> true
+      Result.Err(_) -> ()
       Result.Ok(_) -> fail "expected an error for invalid JSON"
     end
   end
 
   @test "Link encoding serializes every field"
-  fn test_link_encoding -> Bool ! String
+  fn test_link_encoding ! String
     link = Link{
       code: "abc123",
       created_at: "2026-01-01 00:00:00+00",
@@ -45,18 +43,16 @@ struct JsonUtilTest
     }
     encoded = JSON.encode(link)
 
-    unless encoded.contains?("\"code\":\"abc123\"")
+    if not encoded.contains?("\"code\":\"abc123\"")
       fail "missing code in `#{encoded}`"
     end
 
-    unless encoded.contains?("\"hits\":7")
+    if not encoded.contains?("\"hits\":7")
       fail "missing hits in `#{encoded}`"
     end
 
-    unless encoded.contains?("\"short_path\":\"/abc123\"")
+    if not encoded.contains?("\"short_path\":\"/abc123\"")
       fail "missing short_path in `#{encoded}`"
     end
-
-    true
   end
 end

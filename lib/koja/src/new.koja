@@ -214,7 +214,8 @@ priv fn agents_content -> String
   Set `KOJA_DIAGNOSTICS=short` to print each diagnostic on one line.
 
   - `koja check` type checks without compiling
-  - `koja test` runs `@test` functions from `src/` and `test/`
+  - `koja test` runs `@test` functions from `src/` and `test/`. A test
+    is a `! String` function. Returning passes, `fail "message"` fails.
   - `koja run` builds and executes the project
   - `koja format` formats the project in place (`--check` to verify)
 
@@ -263,15 +264,12 @@ priv fn app_test_content -> String
   """
   struct AppTest
     @test "greet builds a greeting message"
-    fn test_greet -> Result<Bool, String>
+    fn test_greet ! String
       actual = greet("Koja")
-      expected = "Hello, Koja!"
 
-      unless actual == expected
-        return Result.Err("expected `\#{expected}`, got `\#{actual}`")
+      if actual != "Hello, Koja!"
+        fail "expected `Hello, Koja!`, got `\#{actual}`"
       end
-
-      Result.Ok(true)
     end
   end
   """

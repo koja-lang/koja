@@ -82,7 +82,7 @@ struct ControlFlowTest
   end
 
   @test "for loops accumulate and iterate strings"
-  fn test_for_loops -> Result<Bool, String>
+  fn test_for_loops ! String
     list: List<Int> = List.new()
     list = list.append(1)
     list = list.append(2)
@@ -94,8 +94,8 @@ struct ControlFlowTest
       sum += item
     end
 
-    unless sum == 6
-      return Result.Err("for sum over list")
+    if sum != 6
+      fail "for sum over list"
     end
 
     acc = ""
@@ -104,23 +104,21 @@ struct ControlFlowTest
       acc = acc <> c
     end
 
-    unless acc == "abc"
-      return Result.Err("for over string codepoints")
+    if acc != "abc"
+      fail "for over string codepoints"
     end
-
-    Result.Ok(true)
   end
 
   @test "if else nested and classify"
-  fn test_if_else -> Result<Bool, String>
+  fn test_if_else ! String
     branch = ""
 
     if true
       branch = "yes"
     end
 
-    unless branch == "yes"
-      return Result.Err("if true branch")
+    if branch != "yes"
+      fail "if true branch"
     end
 
     branch2 = ""
@@ -131,8 +129,8 @@ struct ControlFlowTest
       branch2 = "else branch"
     end
 
-    unless branch2 == "else branch"
-      return Result.Err("if false else branch")
+    if branch2 != "else branch"
+      fail "if false else branch"
     end
 
     x = 5
@@ -144,33 +142,31 @@ struct ControlFlowTest
       cmp = "not greater"
     end
 
-    unless cmp == "greater"
-      return Result.Err("if comparison")
+    if cmp != "greater"
+      fail "if comparison"
     end
 
     y = x > 2 ? "big" : "small"
 
-    unless y == "big"
-      return Result.Err("ternary")
+    if y != "big"
+      fail "ternary"
     end
 
-    unless ControlFlowTest.classify_size(200) == "big"
-      return Result.Err("classify big")
+    if ControlFlowTest.classify_size(200) != "big"
+      fail "classify big"
     end
 
-    unless ControlFlowTest.classify_size(50) == "medium"
-      return Result.Err("classify medium")
+    if ControlFlowTest.classify_size(50) != "medium"
+      fail "classify medium"
     end
 
-    unless ControlFlowTest.classify_size(3) == "small"
-      return Result.Err("classify small")
+    if ControlFlowTest.classify_size(3) != "small"
+      fail "classify small"
     end
-
-    Result.Ok(true)
   end
 
   @test "loop and break"
-  fn test_loop_break -> Result<Bool, String>
+  fn test_loop_break ! String
     i = 0
     count = 0
 
@@ -183,15 +179,13 @@ struct ControlFlowTest
       i += 1
     end
 
-    unless count == 3
-      return Result.Err("loop iterations before break")
+    if count != 3
+      fail "loop iterations before break"
     end
-
-    Result.Ok(true)
   end
 
   @test "match integers and wildcards"
-  fn test_match_integers -> Result<Bool, String>
+  fn test_match_integers ! String
     x = 3
 
     label =
@@ -202,8 +196,8 @@ struct ControlFlowTest
         _ -> "other"
       end
 
-    unless label == "three"
-      return Result.Err("match literal 3")
+    if label != "three"
+      fail "match literal 3"
     end
 
     y = 99
@@ -214,8 +208,8 @@ struct ControlFlowTest
       _ -> kind = "wildcard"
     end
 
-    unless kind == "wildcard"
-      return Result.Err("match wildcard")
+    if kind != "wildcard"
+      fail "match wildcard"
     end
 
     z = 42
@@ -226,29 +220,27 @@ struct ControlFlowTest
         val -> "got #{val}"
       end
 
-    unless msg == "got 42"
-      return Result.Err("match bind pattern")
+    if msg != "got 42"
+      fail "match bind pattern"
     end
-
-    Result.Ok(true)
   end
 
   @test "match plain and tagged enums"
-  fn test_match_enums -> Result<Bool, String>
-    unless ControlFlowTest.color_name(Color.Red) == "red"
-      return Result.Err("color Red")
+  fn test_match_enums ! String
+    if ControlFlowTest.color_name(Color.Red) != "red"
+      fail "color Red"
     end
 
-    unless ControlFlowTest.color_name(Color.Blue) == "blue"
-      return Result.Err("color Blue")
+    if ControlFlowTest.color_name(Color.Blue) != "blue"
+      fail "color Blue"
     end
 
-    unless ControlFlowTest.shape_area(Shape.Circle(5)) == 75
-      return Result.Err("circle area")
+    if ControlFlowTest.shape_area(Shape.Circle(5)) != 75
+      fail "circle area"
     end
 
-    unless ControlFlowTest.shape_area(Shape.Rect(4, 6)) == 24
-      return Result.Err("rect area")
+    if ControlFlowTest.shape_area(Shape.Rect(4, 6)) != 24
+      fail "rect area"
     end
 
     opt: Option<Int> = Option.Some(10)
@@ -260,72 +252,68 @@ struct ControlFlowTest
         Option.None -> "none"
       end
 
-    unless bucket == "big some"
-      return Result.Err("Option match with guard")
+    if bucket != "big some"
+      fail "Option match with guard"
     end
-
-    Result.Ok(true)
   end
 
   @test "match OR patterns"
-  fn test_match_or -> Result<Bool, String>
-    unless ControlFlowTest.classify_or(1) == "small"
-      return Result.Err("or classify 1")
+  fn test_match_or ! String
+    if ControlFlowTest.classify_or(1) != "small"
+      fail "or classify 1"
     end
 
-    unless ControlFlowTest.classify_or(2) == "small"
-      return Result.Err("or classify 2")
+    if ControlFlowTest.classify_or(2) != "small"
+      fail "or classify 2"
     end
 
-    unless ControlFlowTest.classify_or(5) == "medium"
-      return Result.Err("or classify 5")
+    if ControlFlowTest.classify_or(5) != "medium"
+      fail "or classify 5"
     end
 
-    unless ControlFlowTest.classify_or(99) == "large"
-      return Result.Err("or classify 99")
+    if ControlFlowTest.classify_or(99) != "large"
+      fail "or classify 99"
     end
 
-    unless ControlFlowTest.bracket_kind("(") == "bracket"
-      return Result.Err("bracket paren")
+    if ControlFlowTest.bracket_kind("(") != "bracket"
+      fail "bracket paren"
     end
 
-    unless ControlFlowTest.bracket_kind("]") == "bracket"
-      return Result.Err("bracket square close")
+    if ControlFlowTest.bracket_kind("]") != "bracket"
+      fail "bracket square close"
     end
 
-    unless ControlFlowTest.bracket_kind("x") == "other"
-      return Result.Err("bracket other")
+    if ControlFlowTest.bracket_kind("x") != "other"
+      fail "bracket other"
     end
 
-    unless ControlFlowTest.color_warmth(Color.Red) == "warm"
-      return Result.Err("warmth red")
+    if ControlFlowTest.color_warmth(Color.Red) != "warm"
+      fail "warmth red"
     end
 
-    unless ControlFlowTest.color_warmth(Color.Green) == "cool"
-      return Result.Err("warmth green")
+    if ControlFlowTest.color_warmth(Color.Green) != "cool"
+      fail "warmth green"
     end
 
-    unless ControlFlowTest.color_warmth(Color.Blue) == "cool"
-      return Result.Err("warmth blue")
+    if ControlFlowTest.color_warmth(Color.Blue) != "cool"
+      fail "warmth blue"
     end
 
-    unless ControlFlowTest.or_with_guard(3) == "three"
-      return Result.Err("or guard three")
+    if ControlFlowTest.or_with_guard(3) != "three"
+      fail "or guard three"
     end
 
-    unless ControlFlowTest.or_with_guard(1) == "small"
-      return Result.Err("or guard one")
+    if ControlFlowTest.or_with_guard(1) != "small"
+      fail "or guard one"
     end
 
-    unless ControlFlowTest.or_with_guard(7) == "other"
-      return Result.Err("or guard other")
+    if ControlFlowTest.or_with_guard(7) != "other"
+      fail "or guard other"
     end
-
-    Result.Ok(true)
   end
 
   @test "unless"
-  fn test_unless -> Result<Bool, String>
+  fn test_unless ! String
     ran_false = false
 
     unless false
@@ -333,7 +321,7 @@ struct ControlFlowTest
     end
 
     unless ran_false
-      return Result.Err("unless false should run body")
+      fail "unless false should run body"
     end
 
     ran_true = false
@@ -343,7 +331,7 @@ struct ControlFlowTest
     end
 
     if ran_true
-      return Result.Err("unless true should not run body")
+      fail "unless true should not run body"
     end
 
     x = 10
@@ -354,7 +342,7 @@ struct ControlFlowTest
     end
 
     unless ok_high
-      return Result.Err("unless x > 20 should run when condition is false")
+      fail "unless x > 20 should run when condition is false"
     end
 
     ok_low = false
@@ -364,14 +352,12 @@ struct ControlFlowTest
     end
 
     unless ok_low
-      return Result.Err("unless x < 5 should run when condition is false")
+      fail "unless x < 5 should run when condition is false"
     end
-
-    Result.Ok(true)
   end
 
   @test "while accumulation"
-  fn test_while -> Result<Bool, String>
+  fn test_while ! String
     i = 0
     seen = 0
 
@@ -380,8 +366,8 @@ struct ControlFlowTest
       i += 1
     end
 
-    unless seen == 5
-      return Result.Err("while iteration count")
+    if seen != 5
+      fail "while iteration count"
     end
 
     sum = 0
@@ -392,24 +378,20 @@ struct ControlFlowTest
       n += 1
     end
 
-    unless sum == 55
-      return Result.Err("while sum 1..10")
+    if sum != 55
+      fail "while sum 1..10"
     end
-
-    Result.Ok(true)
   end
 
   @test "cond with multiple statements per branch"
-  fn test_cond_multistatement -> Result<Bool, String>
+  fn test_cond_multistatement ! String
     c = CondStmtCounter.new()
     c = c.apply(5)
     c = c.apply(-2)
     c = c.apply(0)
 
-    unless c.value == 3
-      return Result.Err("cond counter value")
+    if c.value != 3
+      fail "cond counter value"
     end
-
-    Result.Ok(true)
   end
 end
