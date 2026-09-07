@@ -3,11 +3,9 @@
 //! variants ([`super::enums::resolve_enum_struct_pattern`]).
 //!
 //! Field positions accept any pattern shape: wildcards, bindings,
-//! literals, nested structs, nested enums, or-alternatives. Coverage
-//! is `PatternCoverage::CatchAll` only when every *listed* field's
-//! own coverage is catch-all (omitted fields are implicit
-//! wildcards), otherwise `PatternCoverage::Other`. IR lowering picks
-//! up the field bindings and any chained literal checks via
+//! literals, nested structs, nested enums, or-alternatives. Omitted
+//! fields are implicit wildcards. IR lowering picks up the field
+//! bindings and any chained literal checks via
 //! [`super::super::super::lower::patterns`].
 
 use koja_ast::ast::{Diagnostic, FieldPattern};
@@ -16,7 +14,7 @@ use koja_ast::span::Span;
 
 use super::super::ctx::Resolver;
 use super::super::types::{display_resolution, lookup_type};
-use super::{PatternCoverage, resolve_pattern};
+use super::resolve_pattern;
 use crate::pipeline::unify::{Substitution, substitute};
 use crate::pipeline::visibility::check_reference_visibility;
 use crate::registry::{GlobalKind, ResolvedStructField};
@@ -28,11 +26,11 @@ pub(super) fn resolve_struct_pattern(
     span: Span,
     resolver: &mut Resolver<'_>,
     diagnostics: &mut Vec<Diagnostic>,
-) -> PatternCoverage {
+) {
     let resolved = resolve_struct_metadata(type_path, subject_ty, span, resolver, diagnostics);
     let Some(metadata) = resolved else {
         resolve_field_patterns_unbound(fields, resolver, diagnostics);
-        return PatternCoverage::CatchAll;
+        return;
     };
     walk_field_patterns(
         &metadata.label,
@@ -40,7 +38,7 @@ pub(super) fn resolve_struct_pattern(
         &metadata.declared,
         resolver,
         diagnostics,
-    )
+    );
 }
 
 struct StructPatternMetadata {
@@ -128,10 +126,7 @@ fn resolve_struct_metadata(
 /// Walk a `FieldPattern` list against a substituted declared
 /// roster: lookup by name, recurse into the sub-pattern with the
 /// field's declared type. Diagnoses unknown fields and duplicate
-/// field-name patterns. Returns the merged coverage across the
-/// listed fields: catch-all only when every listed field's own
-/// coverage is catch-all (omitted fields are implicit wildcards).
-/// Used by both [`resolve_struct_pattern`] and
+/// field-name patterns. Used by both [`resolve_struct_pattern`] and
 /// [`super::enums::resolve_enum_struct_pattern`].
 pub(super) fn walk_field_patterns(
     owner_label: &str,
@@ -139,9 +134,8 @@ pub(super) fn walk_field_patterns(
     declared: &[ResolvedStructField],
     resolver: &mut Resolver<'_>,
     diagnostics: &mut Vec<Diagnostic>,
-) -> PatternCoverage {
+) {
     let mut seen: Vec<bool> = vec![false; declared.len()];
-    let mut all_catch_all = true;
     for field in fields {
         let lookup = declared
             .iter()
@@ -174,20 +168,12 @@ pub(super) fn walk_field_patterns(
             continue;
         }
         seen[index] = true;
-        let field_coverage = resolve_pattern(
+        resolve_pattern(
             &mut field.pattern,
             &declared_field.ty,
             resolver,
             diagnostics,
         );
-        if !matches!(field_coverage, PatternCoverage::CatchAll) {
-            all_catch_all = false;
-        }
-    }
-    if all_catch_all {
-        PatternCoverage::CatchAll
-    } else {
-        PatternCoverage::Other
     }
 }
 

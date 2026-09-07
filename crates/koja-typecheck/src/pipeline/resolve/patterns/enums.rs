@@ -2,8 +2,7 @@
 //! `EnumStruct`. Owns the shared enum-lookup helpers
 //! ([`lookup_pattern_enum`], [`build_enum_substitution`],
 //! [`declared_shape_label`]) that the constructor shorthand
-//! ([`super::constructor`]) and the exhaustiveness checker
-//! ([`super::super::match_expr`]) re-use.
+//! ([`super::constructor`]) re-uses.
 //!
 //! The metadata-then-mutate split inside each shape ends the
 //! immutable registry borrow before the resolver re-borrows itself
@@ -15,8 +14,8 @@ use koja_ast::span::Span;
 
 use super::super::ctx::Resolver;
 use super::super::types::{display_resolution, lookup_type};
+use super::resolve_pattern;
 use super::structs::{resolve_field_patterns_unbound, walk_field_patterns};
-use super::{PatternCoverage, VariantWitness, resolve_pattern};
 use crate::pipeline::unify::{Substitution, substitute};
 use crate::pipeline::visibility::check_reference_visibility;
 use crate::registry::{EnumDefinition, GlobalKind, ResolvedStructField, ResolvedVariantData};
@@ -28,17 +27,17 @@ pub(super) fn resolve_enum_unit_pattern(
     span: Span,
     resolver: &Resolver<'_>,
     diagnostics: &mut Vec<Diagnostic>,
-) -> PatternCoverage {
+) {
     let Some(target) = lookup_pattern_enum(type_path, subject_ty, span, resolver, diagnostics)
     else {
-        return PatternCoverage::Other;
+        return;
     };
-    let Some((variant_index, variant)) = target.definition.lookup_variant(variant_name) else {
+    let Some((_, variant)) = target.definition.lookup_variant(variant_name) else {
         diagnostics.push(Diagnostic::error(
             format!("`{}` has no variant `{variant_name}`", target.label),
             span,
         ));
-        return PatternCoverage::Other;
+        return;
     };
     if !matches!(variant.data, ResolvedVariantData::Unit) {
         diagnostics.push(Diagnostic::error(
@@ -50,10 +49,6 @@ pub(super) fn resolve_enum_unit_pattern(
             span,
         ));
     }
-    PatternCoverage::Variants(vec![VariantWitness {
-        full: true,
-        tag: variant_index,
-    }])
 }
 
 pub(super) fn resolve_enum_tuple_pattern(
@@ -64,8 +59,8 @@ pub(super) fn resolve_enum_tuple_pattern(
     span: Span,
     resolver: &mut Resolver<'_>,
     diagnostics: &mut Vec<Diagnostic>,
-) -> PatternCoverage {
-    let resolved = resolve_enum_tuple_metadata(
+) {
+    let element_types = resolve_enum_tuple_element_types(
         type_path,
         variant_name,
         elements.len(),
@@ -74,24 +69,13 @@ pub(super) fn resolve_enum_tuple_pattern(
         resolver,
         diagnostics,
     );
-    let Some(metadata) = resolved else {
+    let Some(element_types) = element_types else {
         resolve_enum_tuple_elements_unbound(elements, resolver, diagnostics);
-        return PatternCoverage::Other;
+        return;
     };
-    let mut full = true;
-    for (element, element_ty) in elements.iter_mut().zip(metadata.element_types.iter()) {
-        let element_coverage = resolve_pattern(element, element_ty, resolver, diagnostics);
-        if !matches!(element_coverage, PatternCoverage::CatchAll) {
-            full = false;
-        }
+    for (element, element_ty) in elements.iter_mut().zip(element_types.iter()) {
+        resolve_pattern(element, element_ty, resolver, diagnostics);
     }
-    // Partial payload patterns do not exhaust the outer variant.
-    // Recognizing several partial arms that jointly cover the payload
-    // requires a future pattern-matrix analysis.
-    PatternCoverage::Variants(vec![VariantWitness {
-        full,
-        tag: metadata.variant_index,
-    }])
 }
 
 pub(super) fn resolve_enum_struct_pattern(
@@ -102,7 +86,7 @@ pub(super) fn resolve_enum_struct_pattern(
     span: Span,
     resolver: &mut Resolver<'_>,
     diagnostics: &mut Vec<Diagnostic>,
-) -> PatternCoverage {
+) {
     let resolved = resolve_enum_struct_metadata(
         type_path,
         variant_name,
@@ -113,37 +97,23 @@ pub(super) fn resolve_enum_struct_pattern(
     );
     let Some(metadata) = resolved else {
         resolve_field_patterns_unbound(fields, resolver, diagnostics);
-        return PatternCoverage::Other;
+        return;
     };
     let owner_label = format!("{}.{variant_name}", metadata.label);
-    let field_coverage = walk_field_patterns(
+    walk_field_patterns(
         &owner_label,
         fields,
         &metadata.declared,
         resolver,
         diagnostics,
     );
-    // `walk_field_patterns` returns `CatchAll` only when every
-    // listed field's coverage is a catch-all (omitted fields are
-    // implicit wildcards).
-    let full = matches!(field_coverage, PatternCoverage::CatchAll);
-    PatternCoverage::Variants(vec![VariantWitness {
-        full,
-        tag: metadata.variant_index,
-    }])
 }
 
-struct EnumTuplePatternMetadata {
-    element_types: Vec<ResolvedType>,
-    variant_index: u32,
-}
-
-/// Resolve everything needed to descend into the elements: the enum,
-/// the variant, the substituted element types. Splits out so the
-/// immutable borrow of the registry ends before
-/// [`resolve_enum_tuple_pattern`] re-borrows the resolver mutably to
-/// recurse into payload sub-patterns.
-fn resolve_enum_tuple_metadata(
+/// Resolve the enum and variant, then return the substituted element
+/// types. Splits out so the immutable borrow of the registry ends
+/// before [`resolve_enum_tuple_pattern`] re-borrows the resolver
+/// mutably to recurse into payload sub-patterns.
+fn resolve_enum_tuple_element_types(
     type_path: &[String],
     variant_name: &str,
     supplied_arity: usize,
@@ -151,9 +121,9 @@ fn resolve_enum_tuple_metadata(
     span: Span,
     resolver: &Resolver<'_>,
     diagnostics: &mut Vec<Diagnostic>,
-) -> Option<EnumTuplePatternMetadata> {
+) -> Option<Vec<ResolvedType>> {
     let target = lookup_pattern_enum(type_path, subject_ty, span, resolver, diagnostics)?;
-    let Some((variant_index, variant)) = target.definition.lookup_variant(variant_name) else {
+    let Some((_, variant)) = target.definition.lookup_variant(variant_name) else {
         diagnostics.push(Diagnostic::error(
             format!("`{}` has no variant `{variant_name}`", target.label),
             span,
@@ -184,17 +154,12 @@ fn resolve_enum_tuple_metadata(
         ));
     }
     let subst = build_enum_substitution(target.enum_id, subject_ty);
-    let element_types = declared.iter().map(|ty| substitute(ty, &subst)).collect();
-    Some(EnumTuplePatternMetadata {
-        element_types,
-        variant_index,
-    })
+    Some(declared.iter().map(|ty| substitute(ty, &subst)).collect())
 }
 
 struct EnumStructPatternMetadata {
     declared: Vec<ResolvedStructField>,
     label: String,
-    variant_index: u32,
 }
 
 /// Resolve the variant + substituted field roster for an
@@ -210,7 +175,7 @@ fn resolve_enum_struct_metadata(
     diagnostics: &mut Vec<Diagnostic>,
 ) -> Option<EnumStructPatternMetadata> {
     let target = lookup_pattern_enum(type_path, subject_ty, span, resolver, diagnostics)?;
-    let Some((variant_index, variant)) = target.definition.lookup_variant(variant_name) else {
+    let Some((_, variant)) = target.definition.lookup_variant(variant_name) else {
         diagnostics.push(Diagnostic::error(
             format!("`{}` has no variant `{variant_name}`", target.label),
             span,
@@ -240,7 +205,6 @@ fn resolve_enum_struct_metadata(
     Some(EnumStructPatternMetadata {
         declared,
         label: target.label,
-        variant_index,
     })
 }
 

@@ -14,7 +14,7 @@ use koja_ast::identifier::{Resolution, ResolvedType};
 
 use super::super::ctx::Resolver;
 use super::super::types::display_resolution;
-use super::{PatternCoverage, resolve_pattern};
+use super::resolve_pattern;
 use crate::registry::{GlobalKind, ResolvedVariantData};
 
 pub(super) fn resolve_constructor_pattern(
@@ -22,7 +22,7 @@ pub(super) fn resolve_constructor_pattern(
     subject_ty: &ResolvedType,
     resolver: &mut Resolver<'_>,
     diagnostics: &mut Vec<Diagnostic>,
-) -> PatternCoverage {
+) {
     match constructor_metadata(pat, subject_ty, resolver, diagnostics) {
         Ok(metadata) => {
             let Pattern::Constructor {
@@ -50,7 +50,7 @@ pub(super) fn resolve_constructor_pattern(
                     span,
                 },
             };
-            resolve_pattern(pat, subject_ty, resolver, diagnostics)
+            resolve_pattern(pat, subject_ty, resolver, diagnostics);
         }
         Err(()) => {
             let Pattern::Constructor { elements, .. } = pat else {
@@ -59,7 +59,6 @@ pub(super) fn resolve_constructor_pattern(
             for element in elements.iter_mut() {
                 resolve_pattern(element, &ResolvedType::unresolved(), resolver, diagnostics);
             }
-            PatternCoverage::Other
         }
     }
 }

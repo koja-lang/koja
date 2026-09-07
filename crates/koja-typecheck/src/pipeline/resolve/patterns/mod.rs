@@ -9,10 +9,9 @@
 //! `Constructor` rewrites in place to the corresponding `EnumTuple`
 //! / `EnumUnit` after looking the variant up on the subject's enum,
 //! so seal / generics-substitute / lowering never see the shape.
-//! Every other shape diagnoses a feature gap. Returns
-//! [`PatternCoverage`] so [`super::match_expr::resolve_match`] can
-//! run the catch-all-or-exhaustiveness check without re-walking the
-//! arm.
+//! Every other shape diagnoses a feature gap. Coverage is not
+//! computed here. [`super::match_expr`] runs [`usefulness`] over the
+//! resolved arms once every pattern has its types.
 //!
 //! # Module layout
 //!
@@ -22,11 +21,12 @@
 //!   plus the shared enum-lookup / generic-substitution helpers.
 //! - [`structs`]: plain-struct destructure and the field-pattern
 //!   walker shared with struct-shaped enum variants.
-//! - [`or_pattern`]: `A | B | C` alternatives with intra-or-pattern
-//!   reachability warnings.
+//! - [`or_pattern`]: `A | B | C` alternatives.
 //! - [`literals`]: literal-vs-subject type checking and the
-//!   canonical literal-string representation used by the cross-arm
-//!   reachability machinery.
+//!   canonical literal text that usefulness keys duplicate literals
+//!   on.
+//! - [`usefulness`]: exhaustiveness and reachability over the
+//!   resolved arm patterns.
 
 mod binary;
 mod constructor;
@@ -34,6 +34,7 @@ mod enums;
 mod literals;
 mod or_pattern;
 mod structs;
+mod usefulness;
 
 use koja_ast::ast::{Diagnostic, Pattern};
 use koja_ast::identifier::{AnonymousKind, Resolution, ResolvedType};
@@ -43,45 +44,16 @@ use koja_ast::span::Span;
 use super::ctx::Resolver;
 use super::types::{display_resolution, is_primitive, names_struct, peel_alias, types_equivalent};
 use crate::pipeline::lift_signatures::{TypeParamScope, resolve_type_expr};
-use crate::registry::{EnumDefinition, GlobalKind, GlobalRegistry};
+use crate::registry::{GlobalKind, GlobalRegistry};
 
-use literals::literal_repr;
-
-/// One variant a pattern covers, with `full = true` when the inner
-/// pattern is itself a catch-all (every inhabitant of the variant
-/// matches). Narrowing inner patterns set `full = false`.
-pub(super) struct VariantWitness {
-    pub full: bool,
-    pub tag: u32,
-}
-
-/// What a pattern admits at runtime. Drives the
-/// catch-all-or-exhaustiveness rule in
-/// [`super::match_expr::resolve_match`].
-pub(super) enum PatternCoverage {
-    /// Wildcard / binding: admits every value of the subject.
-    CatchAll,
-    /// `EnumUnit` / `EnumTuple` (or an `Or` of those): admits the
-    /// listed variant tags. Exhaustiveness and reachability use only
-    /// witnesses whose payload patterns are `full`.
-    Variants(Vec<VariantWitness>),
-    /// `TypedBinding` matched against a union subject: admits
-    /// values whose runtime tag corresponds to `member`. Drives
-    /// union exhaustiveness in [`super::match_expr::resolve_match`].
-    UnionMember(ResolvedType),
-    /// Literal patterns and `Or`s of literals. The arm fires for a
-    /// specific runtime value but does not contribute to enum
-    /// exhaustiveness. Primitive subjects use the strict
-    /// catch-all-required rule.
-    Other,
-}
+pub(super) use usefulness::{DeconstructedPattern, SubjectCoverage};
 
 pub(super) fn resolve_pattern(
     pat: &mut Pattern,
     subject_ty: &ResolvedType,
     resolver: &mut Resolver<'_>,
     diagnostics: &mut Vec<Diagnostic>,
-) -> PatternCoverage {
+) {
     // Mirror of the value-side rewrite: `A.B { … }` becomes a `Struct`
     // pattern when the path names a struct.
     rewrite_dotted_struct_pattern(pat, resolver);
@@ -89,10 +61,9 @@ pub(super) fn resolve_pattern(
         Pattern::Binding { local_id, name, .. } => {
             let id = resolver.scope.declare(name, subject_ty.clone());
             *local_id = Some(id);
-            PatternCoverage::CatchAll
         }
         Pattern::Constructor { .. } => {
-            constructor::resolve_constructor_pattern(pat, subject_ty, resolver, diagnostics)
+            constructor::resolve_constructor_pattern(pat, subject_ty, resolver, diagnostics);
         }
         Pattern::EnumStruct {
             fields,
@@ -141,19 +112,16 @@ pub(super) fn resolve_pattern(
             literal_coercion,
             span,
             value,
-        } => {
-            literals::check_literal_matches_subject(
-                value,
-                literal_coercion,
-                subject_ty,
-                *span,
-                resolver,
-                diagnostics,
-            );
-            PatternCoverage::Other
-        }
+        } => literals::check_literal_matches_subject(
+            value,
+            literal_coercion,
+            subject_ty,
+            *span,
+            resolver,
+            diagnostics,
+        ),
         Pattern::Or { patterns, span } => {
-            or_pattern::resolve_or_pattern(patterns, subject_ty, *span, resolver, diagnostics)
+            or_pattern::resolve_or_pattern(patterns, subject_ty, *span, resolver, diagnostics);
         }
         Pattern::Struct {
             fields,
@@ -168,9 +136,9 @@ pub(super) fn resolve_pattern(
             resolver,
             diagnostics,
         ),
-        Pattern::Wildcard { .. } => PatternCoverage::CatchAll,
+        Pattern::Wildcard { .. } => {}
         Pattern::Binary { segments, span } => {
-            binary::resolve_binary_pattern(segments, subject_ty, *span, resolver, diagnostics)
+            binary::resolve_binary_pattern(segments, subject_ty, *span, resolver, diagnostics);
         }
         Pattern::List { .. } => {
             diagnostics.push(Diagnostic::error(
@@ -178,10 +146,9 @@ pub(super) fn resolve_pattern(
                  list ops + a stable `List<T>` layout)",
                 pattern_span(pat),
             ));
-            PatternCoverage::Other
         }
         Pattern::Tuple { elements, span } => {
-            resolve_tuple_pattern(elements, subject_ty, *span, resolver, diagnostics)
+            resolve_tuple_pattern(elements, subject_ty, *span, resolver, diagnostics);
         }
         Pattern::TypedBinding {
             local_id,
@@ -197,7 +164,7 @@ pub(super) fn resolve_pattern(
                 diagnostics,
             );
             if !resolved.is_resolved() {
-                return PatternCoverage::Other;
+                return;
             }
             let peeled_subject = peel_alias(subject_ty, resolver.registry);
             match &peeled_subject {
@@ -214,7 +181,7 @@ pub(super) fn resolve_pattern(
                             ),
                             *span,
                         ));
-                        return PatternCoverage::Other;
+                        return;
                     }
                 }
                 _ if subject_ty.is_resolved()
@@ -228,46 +195,32 @@ pub(super) fn resolve_pattern(
                         ),
                         *span,
                     ));
-                    return PatternCoverage::Other;
+                    return;
                 }
                 _ => {}
             }
             let id = resolver.scope.declare(name, resolved.clone());
             *local_id = Some(id);
-            *resolved_type = Some(resolved.clone());
-            // Key coverage on the peeled type so an alias arm (e.g.
-            // `hit: Hit` where `type Hit = (Int, String)`) matches the
-            // union's canonical member key.
-            PatternCoverage::UnionMember(peel_alias(&resolved, resolver.registry))
+            *resolved_type = Some(resolved);
         }
     }
 }
 
-/// Resolve a `(a, b)` pattern against a tuple subject. Coverage is
-/// the conservative product rule. The pattern is a catch-all only
-/// when every element is, and anything narrower counts as `Other`
-/// so the match still needs a catch-all arm.
+/// Resolve a `(a, b)` pattern against a tuple subject.
 fn resolve_tuple_pattern(
     elements: &mut [Pattern],
     subject_ty: &ResolvedType,
     span: Span,
     resolver: &mut Resolver<'_>,
     diagnostics: &mut Vec<Diagnostic>,
-) -> PatternCoverage {
+) {
     let Some(element_types) =
         tuple_element_types(subject_ty, elements.len(), span, resolver, diagnostics)
     else {
-        return PatternCoverage::Other;
+        return;
     };
-    let mut all_catch_all = true;
     for (pattern, element_ty) in elements.iter_mut().zip(&element_types) {
-        let coverage = resolve_pattern(pattern, element_ty, resolver, diagnostics);
-        all_catch_all &= matches!(coverage, PatternCoverage::CatchAll);
-    }
-    if all_catch_all {
-        PatternCoverage::CatchAll
-    } else {
-        PatternCoverage::Other
+        resolve_pattern(pattern, element_ty, resolver, diagnostics);
     }
 }
 
@@ -364,41 +317,21 @@ pub(super) fn is_match_subject_primitive(
         .any(|name| is_primitive(subject_ty, registry, name))
 }
 
-/// Lookup the [`EnumDefinition`] whose `Global(id)` head matches
-/// `subject_ty`. Returns `None` for non-enum / unresolved subjects.
-/// Used by [`super::match_expr::resolve_match`] to drive the
-/// structural exhaustiveness check.
-pub(super) fn match_subject_enum<'a>(
+/// True when `subject_ty` peels to an enum or a union, the two
+/// subject kinds whose arms may mix literal payload patterns with
+/// structural ones.
+pub(super) fn is_enum_or_union_subject(
     subject_ty: &ResolvedType,
-    registry: &'a GlobalRegistry,
-) -> Option<&'a EnumDefinition> {
-    let ResolvedType::Named {
-        resolution: Resolution::Global(id),
-        ..
-    } = subject_ty
-    else {
-        return None;
-    };
-    let entry = registry.get(*id)?;
-    let GlobalKind::Enum(definition) = &entry.kind else {
-        return None;
-    };
-    definition.as_ref()
-}
-
-/// Walk `pattern` and append a canonical string representation of
-/// every `Literal` / `Or`-of-literal alternative it contains. Used
-/// by [`super::match_expr::resolve_match`] to detect cross-arm
-/// literal duplication (`1 -> _, 1 -> _`) without re-walking the
-/// pattern's enum / struct / binding shapes.
-pub(super) fn collect_literal_reprs(pattern: &Pattern, out: &mut Vec<String>) {
-    match pattern {
-        Pattern::Literal { value, .. } => out.push(literal_repr(value)),
-        Pattern::Or { patterns, .. } => {
-            for alt in patterns {
-                collect_literal_reprs(alt, out);
-            }
-        }
-        _ => {}
+    registry: &GlobalRegistry,
+) -> bool {
+    match peel_alias(subject_ty, registry) {
+        ResolvedType::Union(_) => true,
+        ResolvedType::Named {
+            resolution: Resolution::Global(id),
+            ..
+        } => registry
+            .get(id)
+            .is_some_and(|entry| matches!(entry.kind, GlobalKind::Enum(_))),
+        _ => false,
     }
 }

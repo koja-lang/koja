@@ -39,11 +39,9 @@ use koja_ast::span::Span;
 
 use super::super::ctx::Resolver;
 use super::super::types::{display_resolution, is_primitive};
-use super::PatternCoverage;
 
-/// Resolve a `<<segments>>` pattern against `subject_ty`. Returns
-/// [`PatternCoverage::Other`]. Binary patterns never satisfy the
-/// catch-all rule, so the match driver requires a separate
+/// Resolve a `<<segments>>` pattern against `subject_ty`. Binary
+/// patterns never cover the subject, so the match still needs a
 /// wildcard arm for exhaustiveness.
 pub(super) fn resolve_binary_pattern(
     segments: &mut [BinarySegment],
@@ -51,7 +49,7 @@ pub(super) fn resolve_binary_pattern(
     span: Span,
     resolver: &mut Resolver<'_>,
     diagnostics: &mut Vec<Diagnostic>,
-) -> PatternCoverage {
+) {
     let is_binary_subject = is_primitive(subject_ty, resolver.registry, "Binary");
     let is_bits_subject = is_primitive(subject_ty, resolver.registry, "Bits");
     if subject_ty.is_resolved() && !(is_binary_subject || is_bits_subject) {
@@ -62,7 +60,7 @@ pub(super) fn resolve_binary_pattern(
             ),
             span,
         ));
-        return PatternCoverage::Other;
+        return;
     }
 
     let mut total_fixed_bits: u64 = 0;
@@ -79,7 +77,6 @@ pub(super) fn resolve_binary_pattern(
             diagnostics,
         );
     }
-    PatternCoverage::Other
 }
 
 /// Per-segment dispatch on the `seg.value` shape: string literal /

@@ -115,12 +115,6 @@ non-blocking warts remain, each with a workaround.
   function return type as the expected hint) compiles. The arms could
   unify against each other. Workaround is restructuring so the match
   is in return position, or annotating the binding.
-- **Nested enum patterns defeat exhaustiveness.** Splitting
-  `Result.Err` by payload (`Result.Err(CallError.Timeout)` +
-  `Result.Err(CallError.ProcessDown)`) reports "missing variant
-  `Err`" because the checker doesn't combine nested coverage into
-  coverage of the outer variant. Workaround is a `Result.Err(_)`
-  catch-all arm with an inner match on the payload.
 
 ---
 

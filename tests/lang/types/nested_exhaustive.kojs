@@ -1,0 +1,62 @@
+# Nested payload arms combine into coverage of the outer variant, so
+# none of these matches needs a catch-all. Lowering closes each arm
+# chain with a trap that must never fire.
+enum Color
+  Red
+  Green
+end
+
+enum CallError
+  Timeout
+  ProcessDown
+end
+
+struct Flags
+  a: Bool
+  b: Bool
+end
+
+fn color_name(op: Option<Color>) -> String
+  match op
+    Option.Some(Color.Red) -> "red"
+    Option.Some(Color.Green) -> "green"
+    Option.None -> "none"
+  end
+end
+
+fn outcome(r: Result<Int, CallError>) -> Int
+  match r
+    Result.Ok(v) -> v
+    Result.Err(CallError.Timeout) -> -1
+    Result.Err(CallError.ProcessDown) -> -2
+  end
+end
+
+fn pair_code(flags: (Bool, Bool)) -> Int
+  match flags
+    (true, true) -> 3
+    (true, false) -> 2
+    (false, _) -> 0
+  end
+end
+
+fn flag_code(f: Flags) -> Int
+  match f
+    Flags{a: true} -> 1
+    Flags{a: false, b: true} -> 2
+    Flags{a: false, b: false} -> 3
+  end
+end
+
+color_name(Option.Some(Color.Red)).print()
+color_name(Option.Some(Color.Green)).print()
+color_name(Option.None).print()
+outcome(Result.Ok(7)).print()
+outcome(Result.Err(CallError.Timeout)).print()
+outcome(Result.Err(CallError.ProcessDown)).print()
+pair_code((true, true)).print()
+pair_code((true, false)).print()
+pair_code((false, true)).print()
+flag_code(Flags{a: true, b: false}).print()
+flag_code(Flags{a: false, b: true}).print()
+flag_code(Flags{a: false, b: false}).print()

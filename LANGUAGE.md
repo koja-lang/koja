@@ -1211,11 +1211,13 @@ match x
 end
 ```
 
-An enum variant counts as exhaustively covered only when its payload
-patterns match every payload value. A literal or nested pattern such as
-`Option.Some(Color.Red)` does not cover every `Some`. Multiple partial
-payload arms are not combined, so bind the payload and use an inner
-`match`, or add a full payload arm such as `Option.Some(_)`.
+Coverage is structural. Enum variants, `Bool`, tuples, structs and union
+members each split into their constructors, and nested payload arms
+combine, so `Option.Some(Color.Red)`, `Option.Some(Color.Green)` and
+`Option.None` exhaust an `Option<Color>` with two colors. A subject of
+any other type, such as `Int` or `String`, needs a wildcard or binding
+arm. A non-exhaustive match reports a pattern it does not cover, and an
+arm that earlier arms already cover gets a warning.
 
 Struct destructuring works for both plain structs and enum-struct variants. Field syntax is always `name: pattern`. There is no shorthand form. To bind a field under its own name, write `x: x`. Unlisted fields are implicit wildcards, and an empty `{}` matches any value of that type:
 
