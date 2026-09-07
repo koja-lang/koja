@@ -23,6 +23,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Compiled binaries no longer target the build machine's CPU, so a binary built on one x86_64 or aarch64 host runs on any other host of that architecture.
 - `koja run --release` and `koja run --target-cpu` now compile through LLVM instead of being ignored by the interpreter. Combining them with an explicit `--backend=interpreter` is an error.
 - `(a, b) = expr` inside a loop or branch body now rebinds existing variables like plain assignment instead of declaring shadow copies that vanish at the end of the body.
+- `IO.gets` now returns at end of input instead of hanging.
+- `IO.gets` no longer stops at the first non-ASCII character.
+- `==` on two `CPtr` values now compares their addresses instead of always returning `true`.
+- `CPtr<Float32>.read()` and `CPtr<Float64>.read()` now panic on a NaN or infinity, matching the check on floats returned by extern calls.
 
 ## [0.18.2] - 2026-09-02
 

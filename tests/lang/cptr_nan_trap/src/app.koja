@@ -1,0 +1,26 @@
+# A NaN read through `CPtr<Float64>.read()` must trap at the read.
+# Foreign memory is the other boundary, with extern returns, where a
+# non-finite value could enter the finite-only `Float` types.
+alias Process.Step
+alias Process.StopReason
+
+struct FFI
+  @extern "C" @link "ffi_helper"
+  fn nan_ptr_c -> CPtr<Float64>
+end
+
+struct App: Process<(), (), ()>
+  fn start(config: ()) -> Result<Self, StopReason>
+    Result.Ok(App{})
+  end
+
+  fn handle(self, msg: (), from: Option<ReplyTo<()>>) -> Step<Self>
+    Step.Continue(self)
+  end
+
+  fn run(self) -> StopReason
+    poison: Float = FFI.nan_ptr_c().read()
+    poison.print()
+    StopReason.Normal
+  end
+end

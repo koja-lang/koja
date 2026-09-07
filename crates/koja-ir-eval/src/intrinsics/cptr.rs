@@ -16,6 +16,7 @@
 use std::ptr;
 use std::slice;
 
+use koja_ir::panics::CPTR_READ_NON_FINITE_MESSAGE;
 use koja_ir::{CPtrMethod, IRFunction, IRType};
 
 use crate::error::RuntimeError;
@@ -236,36 +237,66 @@ fn receiver_pointee_size(function: &IRFunction, label: &str) -> Result<usize, Ru
     helpers::size_of_primitive(pointee, label)
 }
 
+/// Read a `T` from `ptr` without an alignment requirement.
+///
+/// # Safety
+/// `ptr` must address `size_of::<T>()` readable bytes.
+unsafe fn read_as<T: Copy>(ptr: *mut u8) -> T {
+    unsafe { (ptr as *const T).read_unaligned() }
+}
+
+/// Write `value` at `ptr` without an alignment requirement.
+///
+/// # Safety
+/// `ptr` must address `size_of::<T>()` writable bytes.
+unsafe fn write_as<T>(ptr: *mut u8, value: T) {
+    unsafe { (ptr as *mut T).write_unaligned(value) }
+}
+
 fn read_primitive(ptr: *mut u8, ty: &IRType, label: &str) -> Result<Value, RuntimeError> {
-    let value = match ty {
-        IRType::Bool => Value::Bool(unsafe { *ptr } != 0),
-        IRType::CPtr(_) => {
-            let p = unsafe { *(ptr as *const *mut u8) };
-            Value::CPtr(p)
-        }
-        IRType::Float32 => Value::Float32(unsafe { (ptr as *const f32).read_unaligned() }),
-        IRType::Float64 => Value::Float64(unsafe { (ptr as *const f64).read_unaligned() }),
-        IRType::Int8 => Value::Int(unsafe { *(ptr as *const i8) } as i64),
-        IRType::Int16 => Value::Int(unsafe { (ptr as *const i16).read_unaligned() } as i64),
-        IRType::Int32 => Value::Int(unsafe { (ptr as *const i32).read_unaligned() } as i64),
-        IRType::Int64 => Value::Int(unsafe { (ptr as *const i64).read_unaligned() }),
-        IRType::UInt8 => Value::Int(unsafe { *ptr } as i64),
-        IRType::UInt16 => Value::Int(unsafe { (ptr as *const u16).read_unaligned() } as i64),
-        IRType::UInt32 => Value::Int(unsafe { (ptr as *const u32).read_unaligned() } as i64),
-        IRType::UInt64 => {
+    // SAFETY: the caller checked `ptr` is non-null and the IR type
+    // fixes the pointee width; foreign memory is trusted, as with FFI.
+    let value = unsafe {
+        match ty {
+            IRType::Bool => Value::Bool(read_as::<u8>(ptr) != 0),
+            IRType::CPtr(_) => Value::CPtr(read_as::<*mut u8>(ptr)),
+            IRType::Float32 => {
+                let v = read_as::<f32>(ptr);
+                finite_float(v.is_finite(), Value::Float32(v))?
+            }
+            IRType::Float64 => {
+                let v = read_as::<f64>(ptr);
+                finite_float(v.is_finite(), Value::Float64(v))?
+            }
+            IRType::Int8 => Value::Int(read_as::<i8>(ptr) as i64),
+            IRType::Int16 => Value::Int(read_as::<i16>(ptr) as i64),
+            IRType::Int32 => Value::Int(read_as::<i32>(ptr) as i64),
+            IRType::Int64 => Value::Int(read_as::<i64>(ptr)),
+            IRType::UInt8 => Value::Int(read_as::<u8>(ptr) as i64),
+            IRType::UInt16 => Value::Int(read_as::<u16>(ptr) as i64),
+            IRType::UInt32 => Value::Int(read_as::<u32>(ptr) as i64),
             // `u64::MAX` round-trips through `Value::Int(i64)` as `-1`,
-            // mirroring `materialize_const`'s `UInt64 -> Int64`
-            // cast (eval doesn't carry a distinct unsigned variant).
-            let v = unsafe { (ptr as *const u64).read_unaligned() };
-            Value::Int(v as i64)
-        }
-        other => {
-            return Err(RuntimeError::Unsupported {
-                detail: format!("{label}: cannot read `T = {other:?}` (primitive types only)",),
-            });
+            // mirroring `materialize_const`'s `UInt64 -> Int64` cast
+            // (eval doesn't carry a distinct unsigned variant).
+            IRType::UInt64 => Value::Int(read_as::<u64>(ptr) as i64),
+            other => {
+                return Err(RuntimeError::Unsupported {
+                    detail: format!("{label}: cannot read `T = {other:?}` (primitive types only)"),
+                });
+            }
         }
     };
     Ok(value)
+}
+
+/// Foreign memory is the other boundary (with extern returns) where
+/// NaN or inf could enter a finite-only float type.
+fn finite_float(is_finite: bool, value: Value) -> Result<Value, RuntimeError> {
+    is_finite
+        .then_some(value)
+        .ok_or_else(|| RuntimeError::Panicked {
+            message: CPTR_READ_NON_FINITE_MESSAGE.to_string(),
+        })
 }
 
 fn write_primitive(
@@ -274,37 +305,71 @@ fn write_primitive(
     value: &Value,
     label: &str,
 ) -> Result<(), RuntimeError> {
-    match (ty, value) {
-        (IRType::Bool, Value::Bool(b)) => unsafe { *ptr = u8::from(*b) },
-        (IRType::CPtr(_), Value::CPtr(p)) => unsafe { (ptr as *mut *mut u8).write_unaligned(*p) },
-        (IRType::Float32, Value::Float32(v)) => unsafe {
-            (ptr as *mut f32).write_unaligned(*v);
-        },
-        (IRType::Float32, Value::Float64(v)) => unsafe {
-            (ptr as *mut f32).write_unaligned(*v as f32);
-        },
-        (IRType::Float64, Value::Float32(v)) => unsafe {
-            (ptr as *mut f64).write_unaligned(f64::from(*v));
-        },
-        (IRType::Float64, Value::Float64(v)) => unsafe {
-            (ptr as *mut f64).write_unaligned(*v);
-        },
-        (IRType::Int8, Value::Int(v)) => unsafe { *(ptr as *mut i8) = *v as i8 },
-        (IRType::Int16, Value::Int(v)) => unsafe { (ptr as *mut i16).write_unaligned(*v as i16) },
-        (IRType::Int32, Value::Int(v)) => unsafe { (ptr as *mut i32).write_unaligned(*v as i32) },
-        (IRType::Int64, Value::Int(v)) => unsafe { (ptr as *mut i64).write_unaligned(*v) },
-        (IRType::UInt8, Value::Int(v)) => unsafe { *ptr = *v as u8 },
-        (IRType::UInt16, Value::Int(v)) => unsafe { (ptr as *mut u16).write_unaligned(*v as u16) },
-        (IRType::UInt32, Value::Int(v)) => unsafe { (ptr as *mut u32).write_unaligned(*v as u32) },
-        (IRType::UInt64, Value::Int(v)) => unsafe { (ptr as *mut u64).write_unaligned(*v as u64) },
-        (other_ty, other_v) => {
-            return Err(RuntimeError::Unsupported {
-                detail: format!(
-                    "{label}: cannot write `{other_v}` as `T = {other_ty:?}` (primitive \
-                     types only)",
-                ),
-            });
+    // SAFETY: as in `read_primitive`.
+    unsafe {
+        match (ty, value) {
+            (IRType::Bool, Value::Bool(b)) => write_as(ptr, u8::from(*b)),
+            (IRType::CPtr(_), Value::CPtr(p)) => write_as(ptr, *p),
+            (IRType::Float32, Value::Float32(v)) => write_as(ptr, *v),
+            (IRType::Float32, Value::Float64(v)) => write_as(ptr, *v as f32),
+            (IRType::Float64, Value::Float32(v)) => write_as(ptr, f64::from(*v)),
+            (IRType::Float64, Value::Float64(v)) => write_as(ptr, *v),
+            (IRType::Int8, Value::Int(v)) => write_as(ptr, *v as i8),
+            (IRType::Int16, Value::Int(v)) => write_as(ptr, *v as i16),
+            (IRType::Int32, Value::Int(v)) => write_as(ptr, *v as i32),
+            (IRType::Int64, Value::Int(v)) => write_as(ptr, *v),
+            (IRType::UInt8, Value::Int(v)) => write_as(ptr, *v as u8),
+            (IRType::UInt16, Value::Int(v)) => write_as(ptr, *v as u16),
+            (IRType::UInt32, Value::Int(v)) => write_as(ptr, *v as u32),
+            (IRType::UInt64, Value::Int(v)) => write_as(ptr, *v as u64),
+            (other_ty, other_v) => {
+                return Err(RuntimeError::Unsupported {
+                    detail: format!(
+                        "{label}: cannot write `{other_v}` as `T = {other_ty:?}` (primitive \
+                         types only)",
+                    ),
+                });
+            }
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn read_f64(bits: u64) -> Result<Value, RuntimeError> {
+        let mut bytes = bits.to_ne_bytes();
+        read_primitive(bytes.as_mut_ptr(), &IRType::Float64, "test")
+    }
+
+    fn read_f32(bits: u32) -> Result<Value, RuntimeError> {
+        let mut bytes = bits.to_ne_bytes();
+        read_primitive(bytes.as_mut_ptr(), &IRType::Float32, "test")
+    }
+
+    #[test]
+    fn finite_float_reads_pass_through() {
+        assert!(matches!(read_f64(1.5f64.to_bits()), Ok(Value::Float64(v)) if v == 1.5));
+        assert!(matches!(read_f32(2.5f32.to_bits()), Ok(Value::Float32(v)) if v == 2.5));
+    }
+
+    #[test]
+    fn non_finite_float_reads_trap() {
+        for bits in [
+            f64::NAN.to_bits(),
+            f64::INFINITY.to_bits(),
+            f64::NEG_INFINITY.to_bits(),
+        ] {
+            let Err(RuntimeError::Panicked { message }) = read_f64(bits) else {
+                panic!("expected a panic for bits {bits:#x}");
+            };
+            assert_eq!(message, CPTR_READ_NON_FINITE_MESSAGE);
+        }
+        assert!(matches!(
+            read_f32(f32::NAN.to_bits()),
+            Err(RuntimeError::Panicked { .. })
+        ));
+    }
 }

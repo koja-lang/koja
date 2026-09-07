@@ -130,6 +130,25 @@ impl Equality for Bool
   fn equals?(self, other: Bool) -> Bool
 end
 
+impl Equality for Unit
+  @doc """
+  Always `true`, since `Unit` has one value.
+  """
+  fn equals?(self, other: Unit) -> Bool
+    true
+  end
+end
+
+impl Equality for Never
+  @doc """
+  Never called, since no `Never` value exists. The conformance lets
+  derived `Equality` on enums like `Result<T, Never>` typecheck.
+  """
+  fn equals?(self, other: Never) -> Bool
+    true
+  end
+end
+
 @doc """
 A protocol for types that can produce a hash value for use in
 hash-based collections like `Map<K, V>` and `Set<T>`.

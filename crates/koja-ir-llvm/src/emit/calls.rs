@@ -3,6 +3,7 @@
 //! statically-resolved [`koja_ir::IRInstruction::Call`] form.
 
 use inkwell::values::{BasicMetadataValueEnum, BasicValueEnum};
+use koja_ir::panics::extern_non_finite_message;
 use koja_ir::{IRSymbol, ValueId};
 
 use crate::ctx::EmitContext;
@@ -45,8 +46,7 @@ pub(super) fn emit_call<'ctx>(
     if let (BasicValueEnum::FloatValue(float), Some(c_name)) =
         (result, ctx.extern_float_return(callee))
     {
-        let message = format!("non-finite float returned by {c_name}");
-        emit_finite_guard(ctx, float, &message)?;
+        emit_finite_guard(ctx, float, &extern_non_finite_message(&c_name))?;
     }
     Ok(result)
 }

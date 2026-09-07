@@ -14,6 +14,13 @@ double nan_c(void) {
     return 0.0 / 0.0;
 }
 
+static double nan_cell;
+
+double *nan_ptr_c(void) {
+    nan_cell = 0.0 / 0.0;
+    return &nan_cell;
+}
+
 int32_t mul_c(int32_t a, int32_t b) {
     return a * b;
 }

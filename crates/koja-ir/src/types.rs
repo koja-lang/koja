@@ -87,10 +87,8 @@ pub enum IRBinOp {
     Sub,
 }
 
-/// `ArithmeticError` panic message for negating a signed type's
-/// minimum value. Shared verbatim by both backends.
-pub const NEG_OVERFLOW_MESSAGE: &str = "integer overflow in unary -";
-
+/// Panic messages that depend on the operator. Operator-independent
+/// messages live in [`crate::panics`].
 impl IRBinOp {
     /// Panic message for a zero divisor (`Div` / `Mod` only).
     pub fn division_by_zero_message(&self) -> String {

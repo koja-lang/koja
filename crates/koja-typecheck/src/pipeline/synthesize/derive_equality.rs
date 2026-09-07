@@ -18,18 +18,23 @@
 //!   universal-`Equality` fallback in
 //!   [`crate::pipeline::resolve::calls::bounded`] (see
 //!   [`crate::registry::UNIVERSAL_PROTOCOLS`]).
+//!
+//! Builtins are never synthesized. The synthesizer cannot know what
+//! equality means for an opaque type (a zero-field body once made every
+//! `CPtr` pair compare equal), so each builtin carries an explicit impl
+//! in the stdlib and a missing one surfaces as a missing conformance.
 
 use koja_ast::ast::{
-    Annotation, Arg, BinOp, BuiltinDecl, EnumDecl, EnumVariant, EnumVariantData, Expr, ExprKind,
-    FieldPattern, File, Function, FunctionOrigin, ImplBlock, ImplMember, Item, Literal, MatchArm,
-    Param, Pattern, Statement, StructDecl, StructField, TypeExpr, TypeParam, Visibility,
+    Annotation, Arg, BinOp, EnumDecl, EnumVariant, EnumVariantData, Expr, ExprKind, FieldPattern,
+    File, Function, FunctionOrigin, ImplBlock, ImplMember, Item, Literal, MatchArm, Param, Pattern,
+    Statement, StructDecl, StructField, TypeExpr, TypeParam, Visibility,
 };
 use koja_ast::identifier::Resolution;
 use koja_ast::span::Span;
 
 use crate::program::CheckedPackage;
 
-use super::derive_debug::is_internal_wrapper_type;
+use super::derive_debug::{has_impl, is_internal_wrapper_type};
 
 const BOOL_TYPE: &str = "Bool";
 const EQ_METHOD: &str = "equals?";
@@ -64,9 +69,6 @@ fn synthesize_into_file(file: &mut File, existing: &[String]) {
         match item {
             Item::Struct(decl) if needs_struct_derive(decl, existing) => {
                 synthesized.push(synthesize_struct_impl(decl));
-            }
-            Item::Builtin(decl) if needs_builtin_derive(decl, existing) => {
-                synthesized.push(synthesize_builtin_impl(decl));
             }
             Item::Enum(decl) if needs_enum_derive(decl, existing) => {
                 synthesized.push(synthesize_enum_impl(decl));
@@ -119,18 +121,14 @@ fn type_expr_path(te: &TypeExpr) -> Option<String> {
 }
 
 fn needs_struct_derive(decl: &StructDecl, existing: &[String]) -> bool {
-    !existing.iter().any(|n| n == &decl.path.join("."))
-}
-
-fn needs_builtin_derive(decl: &BuiltinDecl, existing: &[String]) -> bool {
-    !existing.iter().any(|n| n == &decl.path.join("."))
+    !has_impl(existing, &decl.path)
 }
 
 /// Empty enums (no variants) are uninhabited: a `match self end`
 /// body with no arms is rejected by typecheck, and the type has no
 /// value to compare anyway. Skip synthesis.
 fn needs_enum_derive(decl: &EnumDecl, existing: &[String]) -> bool {
-    !decl.variants.is_empty() && !existing.iter().any(|n| n == &decl.path.join("."))
+    !decl.variants.is_empty() && !has_impl(existing, &decl.path)
 }
 
 fn synthesize_struct_impl(decl: &StructDecl) -> Item {
@@ -142,15 +140,6 @@ fn synthesize_struct_impl(decl: &StructDecl) -> Item {
 fn synthesize_enum_impl(decl: &EnumDecl) -> Item {
     let span = decl.span.as_synthetic();
     let body = enum_eq_body(&decl.path, &decl.variants, span);
-    equality_impl_block(&decl.path, &decl.type_params, body, span)
-}
-
-/// A builtin derives the same body a zero-field struct does. This
-/// preserves the pre-`builtin` behavior, where compiler-owned types
-/// were field-less structs.
-fn synthesize_builtin_impl(decl: &BuiltinDecl) -> Item {
-    let span = decl.span.as_synthetic();
-    let body = struct_eq_body(&[], span);
     equality_impl_block(&decl.path, &decl.type_params, body, span)
 }
 

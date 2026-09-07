@@ -90,6 +90,16 @@ impl Debug for Unit
   end
 end
 
+impl Debug for Never
+  @doc """
+  Never called, since no `Never` value exists. The conformance lets
+  derived `Debug` on enums like `Result<T, Never>` typecheck.
+  """
+  fn format(self) -> String
+    "Never"
+  end
+end
+
 impl Debug for Binary
   @doc """
   Renders the byte-list form, `<<83, 0, 0, 0, 4>>`. Truncates after

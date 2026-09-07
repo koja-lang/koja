@@ -50,6 +50,16 @@ builtin CPtr<T>
   fn address(self) -> Int
 end
 
+impl Equality for CPtr<T>
+  @doc """
+  Two pointers are equal when they hold the same address. The pointed-to
+  values are not compared.
+  """
+  fn equals?(self, other: CPtr<T>) -> Bool
+    self.address() == other.address()
+  end
+end
+
 impl Debug for CPtr<T>
   @doc """
   Renders the 64-bit address in lowercase hex,

@@ -12,19 +12,20 @@
 //! payload pointer as-is, `copy` mallocs an owned byte copy, `free`
 //! calls libc `free`, `null` returns `null`, `null?` compares
 //! against `null`, `offset` issues a typed GEP, `read` / `write`
-//! load / store at the typed pointer, and `to_binary` copies `len`
-//! bytes into a managed Binary.
+//! load / store at the typed pointer (a float `read` traps on NaN or
+//! inf), and `to_binary` copies `len` bytes into a managed Binary.
 
 use inkwell::AddressSpace;
 use inkwell::IntPredicate;
 use inkwell::module::Linkage;
 use inkwell::types::BasicType;
 use inkwell::values::{BasicValueEnum, FunctionValue, IntValue, PointerValue};
+use koja_ir::panics::CPTR_READ_NON_FINITE_MESSAGE;
 use koja_ir::{CPtrMethod, IRFunction, IRType};
 
 use crate::ctx::EmitContext;
 use crate::emit::heap_layout::{block_alloc_size, init_heap_block, load_bit_length};
-use crate::emit::ops::emit_fault_guard;
+use crate::emit::ops::{emit_fault_guard, emit_finite_guard};
 use crate::error::{IceExt, LlvmError};
 use crate::runtime::{declare_free_extern, declare_malloc_extern};
 use crate::types::ir_basic_type;
@@ -244,6 +245,11 @@ fn emit_read<'ctx>(
         .builder
         .build_load(element_ty, self_ptr, "read_val")
         .or_ice()?;
+    // Foreign memory is the other boundary (with extern returns) where
+    // NaN or inf could enter a finite-only float type.
+    if let BasicValueEnum::FloatValue(float) = val {
+        emit_finite_guard(ctx, float, CPTR_READ_NON_FINITE_MESSAGE)?;
+    }
     ctx.builder.build_return(Some(&val)).or_ice().map(|_| ())
 }
 

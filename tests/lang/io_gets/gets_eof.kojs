@@ -1,0 +1,6 @@
+# Driven by lang_io_gets_ends_at_eof with piped stdin. Each read is
+# bracketed so an empty line and end of input both show as `[]`, and
+# the third read past end of input must return instead of hanging.
+IO.puts("[#{IO.gets("")}]")
+IO.puts("[#{IO.gets("")}]")
+IO.puts("[#{IO.gets("")}]")

@@ -155,4 +155,50 @@ struct CPtrTest
 
     Result.Ok(true)
   end
+
+  @test "distinct allocations are not equal"
+  fn test_distinct_not_equal -> Result<Bool, String>
+    a: CPtr<Int32> = CPtr.alloc(1)
+    b: CPtr<Int32> = CPtr.alloc(1)
+    equal = a == b
+    a.free()
+    b.free()
+
+    equal ? Result.Err("distinct allocations compared equal") : Result.Ok(true)
+  end
+
+  @test "copies of one pointer are equal"
+  fn test_same_pointer_equal -> Result<Bool, String>
+    a: CPtr<Int32> = CPtr.alloc(1)
+    b = a
+    equal = a == b
+    a.free()
+
+    equal
+      ? Result.Ok(true)
+      : Result.Err("copies of one pointer compared unequal")
+  end
+
+  @test "null equals null"
+  fn test_null_equal -> Result<Bool, String>
+    a: CPtr<Int32> = CPtr.null()
+    b: CPtr<Int32> = CPtr.null()
+
+    a == b ? Result.Ok(true) : Result.Err("null pointers compared unequal")
+  end
+
+  @test "offset pointer differs from its base"
+  fn test_offset_not_equal -> Result<Bool, String>
+    base: CPtr<Int32> = CPtr.alloc(2)
+    stepped = base.offset(1)
+    equal = base == stepped
+    back_equal = stepped.offset(-1) == base
+    base.free()
+
+    cond
+      equal -> Result.Err("offset pointer compared equal to its base")
+      back_equal -> Result.Ok(true)
+      else -> Result.Err("offset(-1) did not return to the base address")
+    end
+  end
 end
