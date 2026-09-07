@@ -320,33 +320,13 @@ covers env and hostname only. Consequence: a tool that orchestrates
 other programs or walks a file tree is inexpressible in pure Koja.
 The workaround is `@extern "C"` bindings to `popen`, `fread`, and
 `pclose`, with directory walking pushed into `find` through the
-shell. That works, but it makes libc the real stdlib for CLI work
-and forces the LLVM backend (see the next entry).
+shell. That works, but it makes libc the real stdlib for CLI work.
 
 **Fix path:** two intrinsic families. `System.cmd(program, args)`
 returns captured output plus exit status and must park the calling
 process rather than block a scheduler thread. `File.ls(path)` returns
 directory entries. Per-entry metadata can ride the `Fd`
 random-access pass tracked above, which already owns `stat`.
-
----
-
-## Projects that declare externs cannot use plain `koja run`
-
-Found 2026-08-28. `koja run` and task execution default to the
-interpreter, and the interpreter rejects any extern that is not in
-the eval dispatch table, so an FFI project fails at startup. `koja
-test` compiles natively, so the same code tests fine, which makes
-the run failure surprising. The `koja shell` entry above tracks the
-same limitation at the REPL prompt. The error message names the
-workaround (`--backend=llvm`), which softens the edge but does not
-remove the paper cut: the flag is needed on every `koja run` and
-every task invocation in an FFI project.
-
-**Fix path:** select the LLVM backend automatically when the
-project (or a loaded dependency) declares an extern outside the eval
-dispatch table, or accept a `backend` key in `koja.toml`. Either
-way, plain `koja run` should work in every project.
 
 ---
 
@@ -385,25 +365,6 @@ Found 2026-08-28. None blocking, each with a workaround:
   0.19 changes `gets` to return `Option<String>` over a
   caller-supplied reader, which also moves the `io_gets` lang
   fixture into the stdlib test suite.
-- **`koja doc search` matches symbol names only.** Concept
-  queries like `Command` or `Shell` return no matches, and the
-  absence of a hit cannot distinguish "no such API" from "wrong
-  search term". Indexing doc bodies would let the docs answer
-  capability questions, like whether subprocess support exists
-  at all.
-- **`koja new` couples the directory name to the project name.**
-  The project name must be snake_case because the code namespace
-  derives from it, but repository hosts and checkout conventions
-  prefer dashes (`git-hygiene` on GitLab holds package
-  `git_hygiene`). Today that means creating the project and then
-  renaming the directory by hand. Two fix shapes: an optional
-  directory argument (`koja new git_hygiene git-hygiene`, the
-  Cargo and Gleam `--name` precedent), or the Cargo default
-  inverted for Koja: accept a kebab input as the directory name
-  and derive the package (`koja new git-hygiene` creates
-  `git-hygiene/` holding package `git_hygiene`, namespace
-  `GitHygiene`). Both spellings collapse to one package name, so
-  the derivation is unambiguous.
 
 ---
 
@@ -438,23 +399,26 @@ function, carries no evaluation order questions, and keeps the
 
 ---
 
-## `koja doc` verb squats on the namespace
+## `koja doc` does not render protocol conformances
 
-Found 2026-09-01 while reading `Process` docs from a dependent
-project. `koja doc <symbol>` reads as a lookup but runs the HTML
-generator. The argument gets treated as a path, errors, and the
-generator runs anyway:
+Found 2026-09-07 in a stdlib doc audit. Doc extraction skips
+`impl Protocol for Type` blocks entirely, so any `@doc` inside one
+(for example the case-sensitivity note on `impl Equality for URI`)
+never reaches the HTML, `koja doc search`, or `koja doc <symbol>`.
+Header conformances (`struct Point: Hash`) are not listed on the
+type page either, and the requirement functions declared in the
+type body render as ordinary functions with no link to the protocol
+that owns their contract.
 
-```
-$ koja doc Global.Process.MonitorRef
-error reading Global.Process.MonitorRef: No such file or directory
-docs generated: doc
-```
+Consequence: a reader of `Float` cannot see that it conforms to
+`Equality`, and a reader of `URI.equals?` cannot find the doc that
+explains its behavior. The stdlib convention that follows from this
+is that conformance functions carry no `@doc` unless the type's
+behavior has a detail the protocol requirement cannot state.
 
-**Fix path:** make `koja doc` a subcommand container. `koja doc
-generate` runs today's generator, `search` stays as is, and `serve`
-can generate and serve locally. A bare `koja doc <symbol>` does an
-exact-match terminal lookup, the `go doc` shape. Exact search
-already renders full symbol docs, so the machinery exists behind
-`search`. Reserved subcommand names win collisions with symbol
-names, and `koja doc search <name>` stays as the escape hatch.
+**Fix path:** render a "Conforms to" section on each struct, enum,
+and builtin page that lists every conformance from the header and
+from `impl` blocks. Under each protocol, list the requirement
+functions, use the implementation's `@doc` when it has one, and
+fall back to the protocol requirement's `@doc` otherwise. Index
+those entries in search so `koja doc URI.equals?` resolves.

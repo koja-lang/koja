@@ -65,8 +65,15 @@ A finite source that can be iterated with `for`.
 The source stays unchanged while a separate cursor advances.
 """
 protocol Enumeration<T, Cursor>
+  @doc """
+  Returns the cursor that points at the first element.
+  """
   fn cursor(self) -> Cursor
 
+  @doc """
+  Returns the element at `cursor` and the cursor that follows it, or
+  `Option.None` when iteration is complete.
+  """
   fn next(self, cursor: Cursor) -> Option<(T, Cursor)>
 end
 
@@ -103,6 +110,10 @@ end
 A protocol for types that can be constructed from a boolean literal.
 """
 protocol BoolLiteral
+  @doc """
+  Builds `Self` from a `true` or `false` literal. The compiler calls
+  this when a boolean literal appears where `Self` is expected.
+  """
   fn from_bool(value: Bool) -> Self
 end
 
@@ -119,6 +130,10 @@ end
 A protocol for types that support equality comparison.
 """
 protocol Equality
+  @doc """
+  Returns `true` when `self` and `other` are equal. `==` and `!=`
+  call this function.
+  """
   fn equals?(self, other: Self) -> Bool
 end
 
@@ -154,6 +169,10 @@ A protocol for types that can produce a hash value for use in
 hash-based collections like `Map<K, V>` and `Set<T>`.
 """
 protocol Hash
+  @doc """
+  Returns a hash of `self`. Values that compare equal with `equals?`
+  must return the same hash, so `Map` and `Set` can find them.
+  """
   fn hash(self) -> Int
 end
 

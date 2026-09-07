@@ -98,6 +98,10 @@ A protocol for types that can be constructed from a map literal
 `from_entries` in their written order.
 """
 protocol MapLiteral<K, V>
+  @doc """
+  Builds `Self` from the key-value pairs of a map literal, in written
+  order.
+  """
   fn from_entries(entries: List<(K, V)>) -> Self
 end
 

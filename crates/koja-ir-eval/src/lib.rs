@@ -52,3 +52,11 @@ mod value;
 pub use error::RuntimeError;
 pub use interpreter::Interpreter;
 pub use value::{EnumPayload, Value};
+
+/// Whether the interpreter has a handler for the `@extern "C"`
+/// symbol `link_name`. The driver asks before defaulting to the
+/// interpreter so an FFI project falls through to LLVM instead of
+/// failing at its first foreign call.
+pub fn supports_extern(link_name: &str) -> bool {
+    externs::SUPPORTED_EXTERNS.binary_search(&link_name).is_ok()
+}

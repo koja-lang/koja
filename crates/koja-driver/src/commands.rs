@@ -90,7 +90,6 @@ struct DocInput {
 }
 
 pub(crate) struct DocOptions {
-    pub(crate) files: Vec<String>,
     pub(crate) output: Option<String>,
     pub(crate) project_only: bool,
 }
@@ -100,44 +99,44 @@ pub(crate) struct DocServeOptions {
     pub(crate) port: Option<u16>,
 }
 
-/// `koja doc [file.koja ...] [-o output_dir]` -- generates HTML
-/// documentation.
+/// `koja doc [-o output_dir]` -- generates HTML documentation.
 ///
 /// Bundles the project's own sources, every path dependency's
 /// sources, and the embedded stdlib package set together so the
 /// generated tree is a one-stop browsable reference. Pass
-/// `--project-only` to skip stdlib + deps. With no positional
-/// arguments, looks for `koja.toml` in the current directory and
-/// falls back to stdlib-only docs (written to a temp dir) when
-/// there is none.
+/// `--project-only` to skip stdlib + deps. Looks for `koja.toml` in
+/// the current directory and falls back to stdlib-only docs (written
+/// to a temp dir) when there is none.
 pub fn cmd_doc(project_root: Option<&Path>, options: DocOptions) {
     let DocOptions {
-        files,
         output,
         project_only,
     } = options;
-    if let Some(out_path) = generate_docs(&files, project_root, output, project_only) {
+    if let Some(out_path) = generate_docs(project_root, output, project_only) {
         println!("docs generated: {}", out_path.display());
+    }
+}
+
+/// `koja doc <symbol>` -- print one symbol's doc as plain markdown,
+/// with no disk output. Exact names only. A miss exits non-zero and
+/// points at `koja doc search` for substring queries.
+pub fn cmd_doc_lookup(project_root: Option<&Path>, options: DocOptions, symbol: &str) {
+    let project = load_doc_project(project_root, options.project_only);
+    match koja_doc::terminal::lookup(&project, symbol) {
+        SearchOutcome::Hits(text) => print!("{text}"),
+        SearchOutcome::NoMatches => {
+            eprintln!("no symbol named \"{symbol}\". Try `koja doc search {symbol}`");
+            process::exit(1);
+        }
     }
 }
 
 /// `koja doc search <query>` -- look up a symbol and print its doc
 /// as plain markdown, with no disk output. An exact name renders
-/// the full doc, partial matches list candidates, and no matches
-/// exits non-zero.
+/// the full doc, partial matches on names and doc bodies list
+/// candidates, and no matches exits non-zero.
 pub fn cmd_doc_search(project_root: Option<&Path>, options: DocOptions, query: &str) {
-    let DocOptions {
-        files,
-        output: _,
-        project_only,
-    } = options;
-    let discovered = discover_doc_inputs(&files, project_root, project_only);
-    if discovered.inputs.is_empty() {
-        eprintln!("no source files to document");
-        process::exit(1);
-    }
-
-    let project = extract_doc_project(discovered.inputs, &discovered.project_package);
+    let project = load_doc_project(project_root, options.project_only);
     match koja_doc::terminal::search(&project, query) {
         SearchOutcome::Hits(text) => print!("{text}"),
         SearchOutcome::NoMatches => {
@@ -145,6 +144,17 @@ pub fn cmd_doc_search(project_root: Option<&Path>, options: DocOptions, query: &
             process::exit(1);
         }
     }
+}
+
+/// Discover and extract the doc project for the terminal commands,
+/// exiting when there is nothing to document.
+fn load_doc_project(project_root: Option<&Path>, project_only: bool) -> koja_doc::DocProject {
+    let discovered = discover_doc_inputs(project_root, project_only);
+    if discovered.inputs.is_empty() {
+        eprintln!("no source files to document");
+        process::exit(1);
+    }
+    extract_doc_project(discovered.inputs, &discovered.project_package)
 }
 
 /// `koja doc serve [-o output_dir] [--port N] [--no-rebuild]` --
@@ -158,25 +168,19 @@ pub fn cmd_doc_serve(
     serve_options: DocServeOptions,
 ) {
     let DocOptions {
-        files,
         output,
         project_only,
     } = options;
     let DocServeOptions { no_rebuild, port } = serve_options;
     let out_path = if no_rebuild {
-        reject_project_with_explicit_paths("doc", &files, project_root);
-        let project = files
-            .is_empty()
-            .then(|| try_load_project(project_root))
-            .flatten();
-        let stdlib_fallback = files.is_empty() && project.is_none();
+        let project = try_load_project(project_root);
         resolve_doc_output(
             output,
-            stdlib_fallback,
+            project.is_none(),
             project.as_ref().map(|(_, root)| root.as_path()),
         )
     } else {
-        match generate_docs(&files, project_root, output, project_only) {
+        match generate_docs(project_root, output, project_only) {
             Some(path) => path,
             None => return,
         }
@@ -195,12 +199,11 @@ pub fn cmd_doc_serve(
 /// Fatal errors (output dir creation, file write) `process::exit`
 /// from inside.
 fn generate_docs(
-    files: &[String],
     project_root: Option<&Path>,
     output: Option<String>,
     project_only: bool,
 ) -> Option<PathBuf> {
-    let discovered = discover_doc_inputs(files, project_root, project_only);
+    let discovered = discover_doc_inputs(project_root, project_only);
     if discovered.inputs.is_empty() {
         println!("no source files to document");
         return None;
@@ -257,33 +260,13 @@ struct DiscoveredDocInputs {
     stdlib_fallback: bool,
 }
 
-/// Resolves the list of source files `koja doc` will process. Empty
-/// `files` means project mode (walk `src` from `koja.toml` and
-/// every dep's `src`). Otherwise treat each entry as a path or a
-/// directory of `.koja` files. Stdlib + deps are bundled unless
-/// `project_only` is true.
-fn discover_doc_inputs(
-    files: &[String],
-    project_root: Option<&Path>,
-    project_only: bool,
-) -> DiscoveredDocInputs {
-    reject_project_with_explicit_paths("doc", files, project_root);
-    if files.is_empty() {
-        return discover_project_doc_inputs(project_root, project_only);
-    }
-    discover_explicit_doc_inputs(files, project_only)
-}
-
-/// Project-mode doc inputs: no files given, so load `src` from the
+/// Resolves the source files `koja doc` will process: `src` from the
 /// current `koja.toml`, plus every dependency's `src` and the stdlib
 /// unless `project_only`. Without a `koja.toml` the bundled stdlib
 /// is documented on its own (empty project name, so the brand
 /// renders as plain "koja docs"); `--project-only` without a
 /// project is an error.
-fn discover_project_doc_inputs(
-    project_root: Option<&Path>,
-    project_only: bool,
-) -> DiscoveredDocInputs {
+fn discover_doc_inputs(project_root: Option<&Path>, project_only: bool) -> DiscoveredDocInputs {
     let Some((config, root)) = try_load_project(project_root) else {
         if project_only {
             eprintln!("error: --project-only requires a koja.toml project");
@@ -312,42 +295,6 @@ fn discover_project_doc_inputs(
         inputs: loaded.into_iter().map(DocInput::from).collect(),
         project_package: config.namespace(),
         project_root: Some(root),
-        stdlib_fallback: false,
-    }
-}
-
-/// Explicit-file doc inputs: each entry in `files` is a `.koja` file
-/// or a directory of them, all tagged under the synthetic `Docs`
-/// package. The stdlib is appended unless `project_only`.
-fn discover_explicit_doc_inputs(files: &[String], project_only: bool) -> DiscoveredDocInputs {
-    let project_package = "Docs".to_string();
-    let mut inputs = Vec::new();
-    for input in files {
-        let p = Path::new(input);
-        if p.is_dir() {
-            collect_doc_inputs(
-                p,
-                &project_package,
-                koja_doc::PackageKind::Project,
-                &mut inputs,
-            );
-        } else if let Some(text) = read_doc_input(p) {
-            inputs.push(DocInput {
-                kind: koja_doc::PackageKind::Project,
-                label: input.clone(),
-                package: project_package.clone(),
-                source: text,
-            });
-        }
-    }
-    if !project_only {
-        inputs.extend(loader::stdlib_sources().into_iter().map(DocInput::from));
-    }
-
-    DiscoveredDocInputs {
-        inputs,
-        project_package,
-        project_root: None,
         stdlib_fallback: false,
     }
 }
@@ -472,37 +419,6 @@ fn write_doc_bytes(path: &Path, content: &[u8]) {
         process::exit(1);
     }
     println!("  {}", path.display());
-}
-
-/// Recursively collect `.koja` files from `dir`, reading each
-/// into memory and tagging it with `package` + `kind` for the
-/// doc pipeline.
-fn collect_doc_inputs(
-    dir: &Path,
-    package: &str,
-    kind: koja_doc::PackageKind,
-    out: &mut Vec<DocInput>,
-) {
-    for path in walk_source_files(dir, &["koja"]) {
-        if let Some(text) = read_doc_input(&path) {
-            out.push(DocInput {
-                kind,
-                label: path.display().to_string(),
-                package: package.to_string(),
-                source: text,
-            });
-        }
-    }
-}
-
-fn read_doc_input(path: &Path) -> Option<String> {
-    match fs::read_to_string(path) {
-        Ok(s) => Some(s),
-        Err(e) => {
-            eprintln!("error reading {}: {e}", path.display());
-            None
-        }
-    }
 }
 
 /// `koja format [files...] [--check]` -- formats Koja source files

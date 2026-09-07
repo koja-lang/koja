@@ -1,8 +1,10 @@
-//! Terminal doc search backing `koja doc search`. Matches a query
-//! against every doc-visible symbol and renders plain markdown
-//! (no ANSI escapes) for terminal and AI consumption. An exact
-//! name hit renders the full doc, anything else renders a match
-//! list in roster order.
+//! Terminal doc lookup backing `koja doc <symbol>` and `koja doc
+//! search`. Matches against every doc-visible symbol and renders
+//! plain markdown (no ANSI escapes) for terminal and AI consumption.
+//! An exact name hit renders the full doc, anything else renders a
+//! match list in roster order.
+
+use std::ptr;
 
 use crate::extract::{DocFunction, DocProject};
 use crate::search::{Symbol, SymbolTarget, collect_symbols};
@@ -19,45 +21,81 @@ pub enum SearchOutcome {
 /// Match `query` against every symbol in `project`, case-insensitive.
 /// An exact hit on `Name`, `Owner.fn`, or their package-qualified
 /// spellings renders the full doc. Several exact hits render a
-/// disambiguation list. Otherwise substring hits render a match list.
+/// disambiguation list. Otherwise substring hits on names, then on
+/// doc bodies, render a match list.
 pub fn search(project: &DocProject, query: &str) -> SearchOutcome {
     let symbols = collect_symbols(project);
     let needle = query.to_lowercase();
 
-    let exact: Vec<&Symbol> = symbols
-        .iter()
-        .filter(|symbol| matches_exact(symbol, &needle))
-        .collect();
+    match exact_hits(&symbols, &needle).as_slice() {
+        [hit] => {
+            let partials = partial_hits(&symbols, &needle, Some(hit));
+            SearchOutcome::Hits(render_full(hit, &partials))
+        }
+        [] => {
+            let partials = partial_hits(&symbols, &needle, None);
+            if partials.is_empty() {
+                return SearchOutcome::NoMatches;
+            }
+            let word = if partials.len() == 1 {
+                "match"
+            } else {
+                "matches"
+            };
+            let header = format!("{} {word} for \"{query}\":", partials.len());
+            SearchOutcome::Hits(render_list(&header, &partials))
+        }
+        exact => SearchOutcome::Hits(render_disambiguation(query, exact)),
+    }
+}
 
-    if let [hit] = exact.as_slice() {
-        let partials: Vec<&Symbol> = symbols
-            .iter()
-            .filter(|s| !std::ptr::eq(*s, *hit) && matches_partial(s, &needle))
-            .collect();
-        return SearchOutcome::Hits(render_full(hit, &partials));
-    }
-    if !exact.is_empty() {
-        let header = format!(
-            "\"{query}\" matches {} symbols. Use a qualified name:",
-            exact.len()
-        );
-        return SearchOutcome::Hits(render_list(&header, &exact));
-    }
+/// Exact-name lookup for `koja doc <symbol>`. One hit renders the
+/// full doc, several render a disambiguation list, and no hit is
+/// [`SearchOutcome::NoMatches`] with no substring fallback, so a
+/// mistyped name does not turn into a long candidate list.
+pub fn lookup(project: &DocProject, name: &str) -> SearchOutcome {
+    let symbols = collect_symbols(project);
+    let needle = name.to_lowercase();
 
-    let partials: Vec<&Symbol> = symbols
-        .iter()
-        .filter(|s| matches_partial(s, &needle))
-        .collect();
-    if partials.is_empty() {
-        return SearchOutcome::NoMatches;
+    match exact_hits(&symbols, &needle).as_slice() {
+        [] => SearchOutcome::NoMatches,
+        [hit] => SearchOutcome::Hits(render_full(hit, &[])),
+        exact => SearchOutcome::Hits(render_disambiguation(name, exact)),
     }
-    let word = if partials.len() == 1 {
-        "match"
-    } else {
-        "matches"
-    };
-    let header = format!("{} {word} for \"{query}\":", partials.len());
-    SearchOutcome::Hits(render_list(&header, &partials))
+}
+
+fn exact_hits<'a, 'p>(symbols: &'a [Symbol<'p>], needle: &str) -> Vec<&'a Symbol<'p>> {
+    symbols
+        .iter()
+        .filter(|symbol| matches_exact(symbol, needle))
+        .collect()
+}
+
+/// Substring hits in roster order, name matches first and then
+/// symbols whose doc body mentions the needle. `exclude` drops the
+/// exact hit the caller already rendered.
+fn partial_hits<'a, 'p>(
+    symbols: &'a [Symbol<'p>],
+    needle: &str,
+    exclude: Option<&Symbol<'p>>,
+) -> Vec<&'a Symbol<'p>> {
+    let candidates = symbols
+        .iter()
+        .filter(|symbol| !exclude.is_some_and(|hit| ptr::eq(*symbol, hit)));
+    let by_name = candidates
+        .clone()
+        .filter(|symbol| matches_name(symbol, needle));
+    let by_body =
+        candidates.filter(|symbol| !matches_name(symbol, needle) && matches_body(symbol, needle));
+    by_name.chain(by_body).collect()
+}
+
+fn render_disambiguation(query: &str, exact: &[&Symbol]) -> String {
+    let header = format!(
+        "\"{query}\" matches {} symbols. Use a qualified name:",
+        exact.len()
+    );
+    render_list(&header, exact)
 }
 
 fn matches_exact(symbol: &Symbol, needle: &str) -> bool {
@@ -71,8 +109,15 @@ fn matches_exact(symbol: &Symbol, needle: &str) -> bool {
             .is_some_and(|(base, _)| base == needle)
 }
 
-fn matches_partial(symbol: &Symbol, needle: &str) -> bool {
+fn matches_name(symbol: &Symbol, needle: &str) -> bool {
     symbol.qualified_name().to_lowercase().contains(needle)
+}
+
+fn matches_body(symbol: &Symbol, needle: &str) -> bool {
+    symbol
+        .doc()
+        .as_deref()
+        .is_some_and(|doc| doc.to_lowercase().contains(needle))
 }
 
 fn render_list(header: &str, symbols: &[&Symbol]) -> String {
@@ -229,7 +274,9 @@ mod tests {
         let global = project.ensure_package("Global", PackageKind::Stdlib);
         global.builtins.push(DocBuiltin {
             deprecated: None,
-            doc: Some("A growable list. Backed by a heap block.".to_string()),
+            doc: Some(
+                "A growable list. Backed by a heap block. Items may be optional.".to_string(),
+            ),
             functions: vec![DocFunction {
                 arity: 2,
                 deprecated: None,
@@ -256,7 +303,7 @@ mod tests {
         });
         global.enums.push(DocEnum {
             deprecated: None,
-            doc: Some("An optional value.".to_string()),
+            doc: Some("An optional value. `Config.port` reads one.".to_string()),
             functions: vec![],
             name: "Option".to_string(),
             variants: vec!["Some(T)".to_string(), "None".to_string()],
@@ -362,5 +409,53 @@ mod tests {
     fn no_match_reports_none() {
         let project = sample_project();
         assert!(matches!(search(&project, "zzz"), SearchOutcome::NoMatches));
+    }
+
+    #[test]
+    fn body_only_query_lists_symbols_that_mention_it() {
+        let project = sample_project();
+        let text = hits(search(&project, "heap block"));
+        assert_eq!(
+            text,
+            "1 match for \"heap block\":\n\n- Global.List (builtin): A growable list.\n"
+        );
+    }
+
+    #[test]
+    fn name_hits_come_before_body_hits() {
+        let project = sample_project();
+        let text = hits(search(&project, "opt"));
+        assert_eq!(
+            text,
+            "3 matches for \"opt\":\n\n\
+             - Global.Option (enum): An optional value.\n\
+             - JSON.Option (enum)\n\
+             - Global.List (builtin): A growable list.\n"
+        );
+    }
+
+    #[test]
+    fn exact_hit_also_lists_body_matches() {
+        let project = sample_project();
+        let text = hits(search(&project, "config"));
+        assert!(text.starts_with("# MyApp.Config (struct)\n"));
+        assert!(text.ends_with("## Also matched\n\n- Global.Option (enum): An optional value.\n"));
+    }
+
+    #[test]
+    fn lookup_renders_exact_hit_without_trailer() {
+        let project = sample_project();
+        let text = hits(lookup(&project, "Config"));
+        assert!(text.starts_with("# MyApp.Config (struct)\n"));
+        assert!(!text.contains("## Also matched"));
+    }
+
+    #[test]
+    fn lookup_disambiguates_but_never_falls_back_to_substrings() {
+        let project = sample_project();
+        let text = hits(lookup(&project, "option"));
+        assert!(text.starts_with("\"option\" matches 2 symbols."));
+        assert!(matches!(lookup(&project, "appe"), SearchOutcome::NoMatches));
+        assert!(matches!(lookup(&project, "heap"), SearchOutcome::NoMatches));
     }
 }

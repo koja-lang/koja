@@ -598,7 +598,8 @@ struct FfiRun {
 }
 
 /// Build `libffi_helper.a` into the project fixture `name`, run it
-/// with `koja run --backend=llvm` and the archive on the library
+/// with `koja run` (no `--backend`, so the driver must pick LLVM on
+/// its own for the `@link` externs) and the archive on the library
 /// path, then remove the archive.
 fn run_ffi_fixture(name: &str) -> FfiRun {
     let dir = lang_dir().join(name);
@@ -611,7 +612,6 @@ fn run_ffi_fixture(name: &str) -> FfiRun {
     };
     let output = Command::new(koja_bin())
         .arg("run")
-        .arg("--backend=llvm")
         .current_dir(&dir)
         .env("LIBRARY_PATH", &ffi_lib_path)
         .stdout(Stdio::piped())
@@ -628,9 +628,9 @@ fn run_ffi_fixture(name: &str) -> FfiRun {
     }
 }
 
-/// LLVM-only: links a user-provided C static library (`@link`), which the
+/// Links a user-provided C static library (`@link`), which the
 /// interpreter cannot resolve (no linker / dlopen path for arbitrary
-/// symbols).
+/// symbols). A bare `koja run` must notice and compile natively.
 #[test]
 fn lang_ffi() {
     let run = run_ffi_fixture("ffi");
@@ -648,6 +648,29 @@ fn lang_ffi() {
         let diff = diff_lines(&run.stdout, &expected);
         panic!("\n--- FAIL: ffi ---\n{diff}");
     }
+}
+
+/// An explicit `--backend=interpreter` still wins over the extern
+/// check, so the interpreter's own diagnostic surfaces. No archive
+/// is built: the interpreter fails before any link step, and
+/// `lang_ffi` may be building its own copy in the same directory.
+#[test]
+fn lang_ffi_explicit_interpreter_reports_missing_handler() {
+    let dir = lang_dir().join("ffi");
+    let (stdout, stderr, code) = run_with_timeout(|cmd| {
+        cmd.arg("run")
+            .arg("--backend=interpreter")
+            .current_dir(&dir);
+    });
+
+    assert!(
+        code != 0,
+        "ffi: expected the interpreter to reject the extern\nstdout:\n{stdout}"
+    );
+    assert!(
+        stderr.contains("is not registered in the eval dispatch table"),
+        "ffi: unexpected stderr:\n{stderr}"
+    );
 }
 
 /// A NaN handed back by an `@extern "C"` call must trap at the call

@@ -332,21 +332,31 @@ end
 A lightweight async task that runs a function in a spawned process and
 returns its result via `Task.await`.
 """
-struct Task<R>
+struct Task<R>: Process<Task<R>, (), R>
   work: fn () -> R
-end
 
-extend Task<R>
+  @doc """
+  Spawns a process that runs `fun` once and holds the result until
+  `Task.await` collects it.
+
+  ```koja
+  ref = Task.async(fn () -> Int expensive_work() end)
+  ```
+  """
   fn async(fun: fn () -> R) -> Ref<(), R>
     spawn Task.start(Task{work: fun})
   end
 
+  @doc """
+  Blocks until the task started by `Task.async` finishes and returns
+  its result. Times out after 5 seconds with `CallError.Timeout`,
+  and returns `CallError.ProcessDown` when the task process exited
+  before replying.
+  """
   fn await(reference: Ref<(), R>) -> Result<R, Process.CallError>
     reference.call((), 5000)
   end
-end
 
-impl Process<Task<R>, (), R> for Task<R>
   fn start(config: Task<R>) -> Self ! Process.StopReason
     config
   end

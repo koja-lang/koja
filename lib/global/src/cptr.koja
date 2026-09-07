@@ -1,3 +1,8 @@
+@doc """
+A raw pointer to `T` for C FFI. Memory obtained from `alloc` is not
+reference counted, so the owner must call `free`. Reads and writes
+through a null or dangling pointer are undefined behavior.
+"""
 builtin CPtr<T>
   @doc """
   Allocates memory for `count` elements of type T using C's malloc.

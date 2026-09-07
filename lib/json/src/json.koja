@@ -2,6 +2,10 @@
 A protocol for types that have a JSON value representation.
 """
 protocol Encoding
+  @doc """
+  Converts `self` to a JSON `Value` tree. `JSON.encode` calls this
+  before it writes text.
+  """
   fn to_json(self) -> Value
 end
 

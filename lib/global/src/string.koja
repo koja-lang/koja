@@ -8,6 +8,10 @@ end
 A protocol for types that can be constructed from a string literal.
 """
 protocol StringLiteral
+  @doc """
+  Builds `Self` from a string literal. The compiler calls this when a
+  literal such as `"text"` appears where `Self` is expected.
+  """
   fn from_string(value: String) -> Self
 end
 
