@@ -162,16 +162,13 @@ struct URITest
       Result.Ok(uri) ->
         fail "expected error, got #{uri}"
 
-      Result.Err(err) ->
-        match err
-          URIError.InvalidURI(part) ->
-            if part != ">"
-              fail "expected part >, got #{part}"
-            end
-
-          _ ->
-            fail "expected InvalidURI, got #{err}"
+      Result.Err(URIError.InvalidURI(part)) ->
+        if part != ">"
+          fail "expected part >, got #{part}"
         end
+
+      Result.Err(err) ->
+        fail "expected InvalidURI, got #{err}"
     end
   end
 

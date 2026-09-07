@@ -422,3 +422,33 @@ from `impl` blocks. Under each protocol, list the requirement
 functions, use the implementation's `@doc` when it has one, and
 fall back to the protocol requirement's `@doc` otherwise. Index
 those entries in search so `koja doc URI.equals?` resolves.
+
+---
+
+## Enum variant patterns do not match through a union subject
+
+Found 2026-09-07 while flattening test matches after structural
+exhaustiveness landed. A variant pattern against a subject whose type
+is a union that contains the variant's enum is rejected, even when
+the variant name resolves to exactly one member:
+
+```koja
+match socket.upgrade_tls(host, config) # ! SocketError | TLSError
+  Result.Err(TLSError.VerificationFailed(_)) -> ()
+  # error: match arm pattern targets `Net.TLSError`, but the subject
+  # has type `Error | TLSError`
+  Result.Err(e) -> fail net_message(e)
+end
+```
+
+Consequence: code that routes on one variant of one member of an
+error union needs a typed member pattern first
+(`Result.Err(tls_error: TLSError)`) and an inner `match` on the
+binding. This is the same two-level shape that structural
+exhaustiveness removed for plain enum payloads.
+
+**Fix path:** when the subject is a union, resolve a variant pattern
+to the member that declares that enum and narrow to it before the
+variant test. Coverage then treats the arm as a partial cover of that
+member, so `Result.Err(e)` after it still reads as the remaining
+cases.

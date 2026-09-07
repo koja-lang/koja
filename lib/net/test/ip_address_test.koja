@@ -66,12 +66,9 @@ struct IPAddressTest
         Result.Ok(address) ->
           fail "expected '#{input}' to fail, got #{address.to_string()}"
 
-        Result.Err(error) ->
-          match error
-            IPAddress.ParseError.Invalid(rejected) ->
-              if rejected != input
-                fail "wrong rejected input '#{rejected}' for '#{input}'"
-              end
+        Result.Err(IPAddress.ParseError.Invalid(rejected)) ->
+          if rejected != input
+            fail "wrong rejected input '#{rejected}' for '#{input}'"
           end
       end
     end

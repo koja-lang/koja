@@ -84,20 +84,15 @@ struct TLSTest
       Result.Ok(_) ->
         fail "handshake should have failed certificate verification"
 
-      Result.Err(e) ->
-        match e
-          tls_error: TLSError ->
-            match tls_error
-              TLSError.VerificationFailed(_) -> ()
-              _ ->
-                fail "expected verification failure, got: " <>
-                  tls_error.message()
-            end
-
-          socket_error: SocketError ->
-            fail "expected verification failure, got: " <>
-              socket_error.message()
+      Result.Err(tls_error: TLSError) ->
+        match tls_error
+          TLSError.VerificationFailed(_) -> ()
+          _ ->
+            fail "expected verification failure, got: " <> tls_error.message()
         end
+
+      Result.Err(socket_error: SocketError) ->
+        fail "expected verification failure, got: " <> socket_error.message()
     end
   end
 
@@ -154,14 +149,9 @@ struct TLSTest
 
     server_seen =
       match Task.await(server)
-        Result.Ok(outcome) ->
-          match outcome
-            Result.Ok(d) -> d
-            Result.Err(e) -> fail "server: " <> e
-          end
-
-        Result.Err(_) ->
-          fail "server task did not finish"
+        Result.Ok(Result.Ok(d)) -> d
+        Result.Ok(Result.Err(e)) -> fail "server: " <> e
+        Result.Err(_) -> fail "server task did not finish"
       end
 
     match listener.close()

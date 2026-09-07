@@ -438,19 +438,9 @@ struct BinaryTest
     bits = b.to_bits()
 
     match bits.to_binary()
-      Result.Ok(b2) ->
-        match b2
-          <<0xAB, 0xCD>> ->
-            if b2.byte_size() != 2
-              fail "round trip size"
-            end
-
-          _ ->
-            fail "round trip bytes"
-        end
-
-      Result.Err(msg) ->
-        fail "to_binary: #{msg}"
+      Result.Ok(<<0xAB, 0xCD>>) -> ()
+      Result.Ok(_) -> fail "round trip bytes"
+      Result.Err(msg) -> fail "to_binary: #{msg}"
     end
   end
 
@@ -474,13 +464,8 @@ struct BinaryTest
     invalid: Binary = <<0xFF, 0xFE>>
 
     match invalid.to_string()
-      Result.Ok(_) ->
-        fail "should not decode invalid utf8"
-
-      Result.Err(error) ->
-        match error
-          String.ConversionError.InvalidUTF8 -> ()
-        end
+      Result.Ok(_) -> fail "should not decode invalid utf8"
+      Result.Err(String.ConversionError.InvalidUTF8) -> ()
     end
   end
 
@@ -490,19 +475,9 @@ struct BinaryTest
     as_bits = aligned.to_bits()
 
     match as_bits.to_binary()
-      Result.Ok(b2) ->
-        match b2
-          <<0x01, 0x02>> ->
-            if b2.byte_size() != 2
-              fail "aligned size"
-            end
-
-          _ ->
-            fail "aligned bytes"
-        end
-
-      Result.Err(msg) ->
-        fail "aligned to_binary: #{msg}"
+      Result.Ok(<<0x01, 0x02>>) -> ()
+      Result.Ok(_) -> fail "aligned bytes"
+      Result.Err(msg) -> fail "aligned to_binary: #{msg}"
     end
   end
 

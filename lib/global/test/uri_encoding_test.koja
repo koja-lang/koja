@@ -74,16 +74,13 @@ struct URIEncodingTest
       Result.Ok(decoded) ->
         fail "expected error, got #{decoded}"
 
-      Result.Err(err) ->
-        match err
-          URIError.InvalidPercentEncoding(part) ->
-            if part != "%ZZ"
-              fail "expected part %ZZ, got #{part}"
-            end
-
-          _ ->
-            fail "expected InvalidPercentEncoding, got #{err}"
+      Result.Err(URIError.InvalidPercentEncoding(part)) ->
+        if part != "%ZZ"
+          fail "expected part %ZZ, got #{part}"
         end
+
+      Result.Err(err) ->
+        fail "expected InvalidPercentEncoding, got #{err}"
     end
   end
 
@@ -101,14 +98,9 @@ struct URIEncodingTest
   @test "decode rejects invalid UTF-8"
   fn test_decode_invalid_utf8 ! String
     match URI.decode("%FF")
-      Result.Ok(decoded) ->
-        fail "expected error, got #{decoded}"
-
-      Result.Err(err) ->
-        match err
-          URIError.InvalidUTF8 -> ()
-          _ -> fail "expected InvalidUTF8, got #{err}"
-        end
+      Result.Ok(decoded) -> fail "expected error, got #{decoded}"
+      Result.Err(URIError.InvalidUTF8) -> ()
+      Result.Err(err) -> fail "expected InvalidUTF8, got #{err}"
     end
   end
 
