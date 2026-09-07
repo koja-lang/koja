@@ -259,6 +259,11 @@ struct TCPServer
   owner: Ref<TCPEvent, String>
 end
 
+@doc """
+Messages a `TCPServer` accepts. `AcceptReady` asks the server to
+accept every pending connection now instead of waiting for the next
+`IOReady` wakeup.
+"""
 enum TCPServer.Msg
   AcceptReady
 end

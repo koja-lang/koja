@@ -84,6 +84,10 @@ end
 A protocol for types that can be constructed from an integer literal.
 """
 protocol IntLiteral
+  @doc """
+  Builds `Self` from an integer literal. The compiler calls this when
+  a literal such as `42` appears where `Self` is expected.
+  """
   fn from_int(value: Int) -> Self
 end
 
@@ -100,6 +104,10 @@ end
 A protocol for types that can be constructed from a float literal.
 """
 protocol FloatLiteral
+  @doc """
+  Builds `Self` from a float literal. The compiler calls this when a
+  literal such as `2.5` appears where `Self` is expected.
+  """
   fn from_float(value: Float) -> Self
 end
 

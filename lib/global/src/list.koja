@@ -235,6 +235,9 @@ The compiler builds a `List<T>` from the literal elements and passes it to
 custom collection types.
 """
 protocol ListLiteral<T>
+  @doc """
+  Builds `Self` from the elements of a list literal, in written order.
+  """
   fn from_list(list: List<T>) -> Self
 end
 
