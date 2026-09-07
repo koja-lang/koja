@@ -5,37 +5,33 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.18.3] - 2026-09-07
 
 ### Added
 
-- `koja build --target-cpu native` and `koja run --target-cpu native` generate code for the build machine's CPU when the binary will only run there.
 - `koja doc <symbol>` prints one symbol's documentation to the terminal, such as `koja doc List.append` or `koja doc Process.MonitorRef`.
+- `koja doc search` now matches words in documentation bodies, not only symbol names, so a concept query like `koja doc search timeout` lists the symbols that mention it.
 - `koja new` accepts a path in kebab, snake, or Pascal case, so `koja new my-app` creates `my-app/` holding package `my_app`.
 
 ### Changed
 
-- `koja --help` groups flags under `Code generation` and `Global options` sections.
-- Compiled string and binary builder loops (`s = s <> piece`, interpolation accumulators, `String.join`, `String.replace`) now run in linear time instead of copying the accumulator on every step.
+- Compiled binaries now target a portable baseline for their architecture, so a binary built on one x86_64 or aarch64 host runs on any other, and `--target-cpu native` opts back into the build machine's CPU.
+- Builder loops such as `xs = xs.append(x)`, `s = s <> piece`, interpolation accumulators, `String.join`, and `String.replace` now run in linear time in both compiled code and `koja run` instead of copying the accumulator on every step.
 - Chained rebinds like `xs = xs.append(a).append(b)` now reuse the buffer at every step instead of only the last.
-- `koja run` under the interpreter now builds `xs = xs.append(x)` and `s = s <> piece` loops in linear time instead of copying the accumulator on every step.
 - When a `match` misses a case, the error now shows the exact pattern to add, such as `Option.Some(Color.Green)`.
+- `koja --help` groups flags under `Code generation` and `Global options` sections.
 
 ### Fixed
 
 - A `match` can now handle a variant's payload across several arms, such as `Result.Err(CallError.Timeout)` and `Result.Err(CallError.ProcessDown)`, without a redundant `Result.Err(_)` catch-all.
-- A `match` arm that can never run now gets a warning even when the overlap is inside a payload, tuple or struct.
-- Compiled binaries no longer target the build machine's CPU, so a binary built on one x86_64 or aarch64 host runs on any other host of that architecture.
-- `koja run --release` and `koja run --target-cpu` now compile through LLVM instead of being ignored by the interpreter. Combining them with an explicit `--backend=interpreter` is an error.
 - `(a, b) = expr` inside a loop or branch body now rebinds existing variables like plain assignment instead of declaring shadow copies that vanish at the end of the body.
-- `IO.gets` now returns at end of input instead of hanging.
-- `IO.gets` no longer stops at the first non-ASCII character.
-- `==` on two `CPtr` values now compares their addresses instead of always returning `true`.
-- `CPtr<Float32>.read()` and `CPtr<Float64>.read()` now panic on a NaN or infinity, matching the check on floats returned by extern calls.
+- `koja run` now compiles through LLVM when you pass `--release` or `--target-cpu`, or when the project declares a C extern the interpreter cannot run, instead of ignoring the flags or failing until you pass `--backend=llvm`.
 - A `match`, `if`, `cond`, or `?:` bound to a variable now infers generic payload types across its arms, so `Result.Ok(true)` in one arm and `Result.Err("nope")` in another give `Result<Bool, String>` without an annotation.
 - `==` and `!=` now infer a generic call on one side from the other operand, so `p == CPtr.null()` and `Option.None == value` need no annotation.
-- `koja run` and task runs in a project that declares a C extern the interpreter cannot run now compile through LLVM on their own instead of failing until you pass `--backend=llvm`.
-- `koja doc search` now matches words in documentation bodies, not only symbol names, so a concept query like `koja doc search timeout` lists the symbols that mention it.
+- A `match` arm that can never run now gets a warning even when the overlap is inside a payload, tuple or struct.
+- `IO.gets` now returns at end of input instead of hanging, and reads non-ASCII text in full instead of stopping at the first non-ASCII character.
+- `==` on two `CPtr` values now compares their addresses instead of always returning `true`.
+- `CPtr<Float32>.read()` and `CPtr<Float64>.read()` now panic on a NaN or infinity, matching the check on floats returned by extern calls.
 
 ## [0.18.2] - 2026-09-02
 
