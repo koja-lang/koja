@@ -2880,7 +2880,7 @@ Collection element, key, and value types come from the selected conformance. A n
 | `koja tasks`  | List tasks from the project, deps, and toolchain |
 | `koja deps`   | Fetch and inspect dependencies (`get`, `update`) |
 | `koja format` | Opinionated code formatter (`--check` for CI)    |
-| `koja doc`    | Generate static HTML documentation               |
+| `koja doc`    | Generate HTML docs, or print one symbol's doc    |
 | `koja lex`    | Dump tokens                                      |
 | `koja parse`  | Dump AST                                         |
 
@@ -2895,11 +2895,19 @@ koja test --project ../my_app
 
 The selector controls the manifest, sources, dependencies, build directory, default documentation output, and diagnostic paths. It does not change the command or launched program working directory. Relative file operations in the program still use the caller's working directory.
 
-The selector works with project-mode `build`, `check`, `run`, `shell`, `test`, `tasks`, `deps`, `format`, and `doc` commands. Do not combine it with a standalone source file or explicit `format` or `doc` paths.
+The selector works with project-mode `build`, `check`, `run`, `shell`, `test`, `tasks`, `deps`, `format`, and `doc` commands. Do not combine it with a standalone source file or explicit `format` paths.
 
 ### Execution Backend
 
 `koja run` executes through the interpreter by default for fast startup. Pass `--backend=llvm`, or any code generation flag such as `--release`, to compile a native binary and run that instead. `koja build` always compiles.
+
+A program that declares an `@extern "C"` function the interpreter has no handler for compiles through LLVM on its own, so an FFI project runs with a bare `koja run`. Pass `--backend=interpreter` to force the interpreter and see which extern is missing.
+
+### Documentation
+
+`koja doc` generates an HTML tree for the project, its dependencies, and the standard library (`--project-only` skips the last two). Outside a project it documents the standard library alone. `koja doc serve` generates and hosts the tree locally.
+
+`koja doc <symbol>` prints one symbol's doc to the terminal as plain markdown: `koja doc List.append`, `koja doc Process.MonitorRef`. `koja doc search <query>` lists every symbol whose name or documentation contains the query, and renders the full doc when the query is an exact name.
 
 ### Target CPU
 
@@ -2913,7 +2921,7 @@ koja build --release --target-cpu native
 
 ### Project Scaffolding
 
-`koja new <name>` creates a project directory with the following structure:
+`koja new <path>` creates a project directory with the following structure:
 
 ```
 my_app/
@@ -2921,6 +2929,8 @@ my_app/
   src/
     app.koja
 ```
+
+The directory is created as typed. The package name is the last path segment in snake_case, so `koja new my_app`, `koja new my-app`, and `koja new MyApp` all scaffold package `my_app` with namespace `MyApp`. A nested path like `koja new projects/my-app` creates the intermediate directories.
 
 The `koja.toml` file defines the project configuration:
 

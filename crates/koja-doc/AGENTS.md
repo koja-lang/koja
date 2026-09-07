@@ -21,10 +21,10 @@ emits a `doc/<Pkg>/<Item>.html` tree alongside a root package roster
   method (deep-linked to `#fn-<name>`). Doubles as the AI-friendly bundle.
   Also owns the crate-internal `Symbol` enumeration that `terminal.rs`
   shares.
-- `terminal.rs`: `koja doc search` backend. Matches a query against every
-  symbol and renders plain markdown: an exact name hit prints the full doc
-  (signatures via `DocFunction::signature_text()`), anything else prints a
-  match list.
+- `terminal.rs`: `koja doc <symbol>` and `koja doc search` backend. Renders
+  plain markdown: an exact name hit prints the full doc (signatures via
+  `DocFunction::signature_text()`), and `search` also lists substring hits
+  on names first and doc bodies second. `lookup` never lists substrings.
 - `style.rs`: embeds `templates/style.css`, `assets/doc.js` (theme toggle,
   mobile rail, scroll spy), `assets/search.js` (fuzzy search), and the
   self-hosted woff2 fonts under `assets/fonts/`.

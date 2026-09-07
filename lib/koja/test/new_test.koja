@@ -8,24 +8,64 @@ struct NewTest
         Result.Err("expected usage error")
 
       Result.Err(message) ->
-        message == "usage: koja new <name>"
+        message == "usage: koja new <path>"
           ? Result.Ok(true)
           : Result.Err("unexpected message: #{message}")
     end
   end
 
-  @test "run rejects a non-snake_case name"
+  @test "snake_case normalizes kebab, Pascal, and acronym spellings"
+  fn test_snake_case -> Result<Bool, String>
+    cases = [
+      ["git_hygiene", "git_hygiene"], ["git-hygiene", "git_hygiene"],
+      ["GitHygiene", "git_hygiene"], ["My-App", "my_app"],
+      ["HTTPServer", "http_server"], ["v2Client", "v2_client"]
+    ]
+
+    for pair in cases
+      input = pair.get(0).unwrap()
+      expected = pair.get(1).unwrap()
+      actual = snake_case(input)
+
+      unless actual == expected
+        return Result.Err("snake_case(#{input}) gave #{actual}, expected #{expected}")
+      end
+    end
+
+    Result.Ok(true)
+  end
+
+  @test "run rejects a name no spelling can repair"
   fn test_bad_name -> Result<Bool, String>
-    match New.run(["MyApp"])
+    match New.run(["9lives"])
       Result.Ok(_) ->
         Result.Err("expected validation error")
 
       Result.Err(message) ->
-        expected = "project name must be lowercase snake_case (like `my_app`). The code namespace is derived from it (`my_app` -> `MyApp`)"
+        expected = "cannot derive a package name from '9lives'. Use ASCII letters, digits, `-` and `_`, starting with a letter"
         message == expected
           ? Result.Ok(true)
           : Result.Err("unexpected message: #{message}")
     end
+  end
+
+  @test "run derives the package from a kebab-case nested path"
+  fn test_kebab_path -> Result<Bool, String>
+    parent = "koja_new_test_nested"
+    path = "#{parent}/Kebab-Case"
+    cleanup_scaffold(path)
+    File.rmdir(parent)
+
+    match New.run([path])
+      Result.Err(message) -> return Result.Err("run failed: #{message}")
+      Result.Ok(_) -> ()
+    end
+
+    toml = File.read("#{path}/koja.toml")
+    cleanup_scaffold(path)
+    File.rmdir(parent)
+
+    check_marker(toml, "name = \"kebab_case\"", "koja.toml")
   end
 
   @test "run refuses an existing directory"

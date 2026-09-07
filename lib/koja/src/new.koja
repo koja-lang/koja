@@ -1,41 +1,52 @@
 @doc """
-The `koja.new` toolchain task backing `koja new <name>`. Scaffolds a
+The `koja.new` toolchain task backing `koja new <path>`. Scaffolds a
 new project directory with `koja.toml`, `.gitignore`, `AGENTS.md`, a
 starter `Process` entry in `src/`, and a starter test in `test/`.
+
+The directory is created as typed. The package name is the last
+path segment in snake_case, so `my-app`, `MyApp`, and `my_app` all
+scaffold package `my_app`.
 """
 struct New
 end
 
 impl Koja.Task for New
   fn run(args: List<String>) ! String
-    name = try args.get(0).or_err("usage: koja new <name>")
+    path = strip_trailing_slashes(
+      try args.get(0).or_err("usage: koja new <path>"),
+    )
+    name = snake_case(Path.basename(path))
 
     unless valid_project_name?(name)
-      fail "project name must be lowercase snake_case (like `my_app`). The code namespace is derived from it (`my_app` -> `MyApp`)"
+      fail "cannot derive a package name from '#{path}'. Use ASCII letters, digits, `-` and `_`, starting with a letter"
     end
 
-    if File.exists?(name)
-      fail "directory '#{name}' already exists"
+    if File.exists?(path)
+      fail "directory '#{path}' already exists"
     end
 
-    File.mkdir_p("#{name}/src")
+    File.mkdir_p("#{path}/src")
       rescue message -> fail "cannot create directory: #{message}"
 
-    File.mkdir_p("#{name}/test")
+    File.mkdir_p("#{path}/test")
       rescue message -> fail "cannot create directory: #{message}"
 
-    try write_scaffold(name)
+    try write_scaffold(path, name)
 
-    IO.puts("created project '#{name}'")
+    IO.puts(
+      path == name
+        ? "created project '#{name}'"
+        : "created project '#{name}' in #{path}/",
+    )
   end
 end
 
-priv fn write_scaffold(name: String) ! String
-  try write_file("#{name}/koja.toml", toml_content(name))
-  try write_file("#{name}/.gitignore", gitignore_content())
-  try write_file("#{name}/AGENTS.md", agents_content())
-  try write_file("#{name}/src/app.koja", app_content())
-  try write_file("#{name}/test/app_test.koja", app_test_content())
+priv fn write_scaffold(path: String, name: String) ! String
+  try write_file("#{path}/koja.toml", toml_content(name))
+  try write_file("#{path}/.gitignore", gitignore_content())
+  try write_file("#{path}/AGENTS.md", agents_content())
+  try write_file("#{path}/src/app.koja", app_content())
+  try write_file("#{path}/test/app_test.koja", app_test_content())
 end
 
 # Appends the trailing newline the heredoc closing delimiter strips.
@@ -63,8 +74,76 @@ priv fn ascii_lowercase?(char: String) -> Bool
   "abcdefghijklmnopqrstuvwxyz".contains?(char)
 end
 
+priv fn ascii_uppercase?(char: String) -> Bool
+  "ABCDEFGHIJKLMNOPQRSTUVWXYZ".contains?(char)
+end
+
 priv fn ascii_digit?(char: String) -> Bool
   "0123456789".contains?(char)
+end
+
+priv fn strip_trailing_slashes(path: String) -> String
+  path.length() > 1 and path.ends_with?("/")
+    ? strip_trailing_slashes(
+      path.slice(Range{start: 0, stop: path.length() - 2}),
+    )
+    : path
+end
+
+# Lowercases `word` and inserts `_` at every case boundary, so kebab,
+# snake, and Pascal spellings all land on the same snake_case name.
+# A boundary sits before an uppercase letter that follows a lowercase
+# letter or digit (`gitHygiene`), or that starts a new word after an
+# acronym (`HTTPServer` -> `http_server`).
+priv fn snake_case(word: String) -> String
+  chars = word.codepoints()
+  out = ""
+  i = 0
+
+  while i < chars.length()
+    char = chars.get(i).unwrap()
+
+    cond
+      char == "-" ->
+        out = out <> "_"
+
+      ascii_uppercase?(char) ->
+        if word_boundary?(chars, i)
+          out = out <> "_"
+        end
+
+        out = out <> char.downcase()
+
+      else ->
+        out = out <> char
+    end
+
+    i += 1
+  end
+
+  out
+end
+
+priv fn word_boundary?(chars: List<String>, i: Int) -> Bool
+  match chars.get(i - 1)
+    Option.None ->
+      false
+
+    Option.Some(prev) ->
+      cond
+        ascii_lowercase?(prev) or ascii_digit?(prev) ->
+          true
+
+        ascii_uppercase?(prev) ->
+          match chars.get(i + 1)
+            Option.Some(next) -> ascii_lowercase?(next)
+            Option.None -> false
+          end
+
+        else ->
+          false
+      end
+  end
 end
 
 # Stamp the scaffolding compiler's minor as the minimum. Pre-1.0
@@ -122,9 +201,9 @@ priv fn agents_content -> String
 
   ## Look up documentation
 
-  `koja doc search <query>` prints docs for any stdlib or project
-  symbol. An exact name renders the full doc. A partial name lists
-  candidates.
+  `koja doc <symbol>` prints the full doc for any stdlib or project
+  symbol, like `koja doc List.append`. `koja doc search <query>`
+  lists every symbol whose name or doc mentions the query.
 
   The standard library sources are extracted to `~/.koja/stdlib/`,
   one directory per compiler build. Read or grep them there when the

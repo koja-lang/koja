@@ -10,6 +10,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - `koja build --target-cpu native` and `koja run --target-cpu native` generate code for the build machine's CPU when the binary will only run there.
+- `koja doc <symbol>` prints one symbol's documentation to the terminal, such as `koja doc List.append` or `koja doc Process.MonitorRef`.
+- `koja new` accepts a path in kebab, snake, or Pascal case, so `koja new my-app` creates `my-app/` holding package `my_app`.
 
 ### Changed
 
@@ -32,6 +34,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `CPtr<Float32>.read()` and `CPtr<Float64>.read()` now panic on a NaN or infinity, matching the check on floats returned by extern calls.
 - A `match`, `if`, `cond`, or `?:` bound to a variable now infers generic payload types across its arms, so `Result.Ok(true)` in one arm and `Result.Err("nope")` in another give `Result<Bool, String>` without an annotation.
 - `==` and `!=` now infer a generic call on one side from the other operand, so `p == CPtr.null()` and `Option.None == value` need no annotation.
+- `koja run` and task runs in a project that declares a C extern the interpreter cannot run now compile through LLVM on their own instead of failing until you pass `--backend=llvm`.
+- `koja doc search` now matches words in documentation bodies, not only symbol names, so a concept query like `koja doc search timeout` lists the symbols that mention it.
 
 ## [0.18.2] - 2026-09-02
 

@@ -48,7 +48,9 @@
 //!   `IO.puts` / `value.print()` explicitly for output) or
 //!   [`Interpreter::run_program`] (projects, where the Process entry's
 //!   exit code becomes the driver's exit status). Fast feedback,
-//!   no link step.
+//!   no link step. A program that declares an `@extern "C"` the
+//!   interpreter has no handler for falls through to `llvm` instead
+//!   (see [`BackendChoice`]).
 //! - `run --backend=llvm`: lower -> [`koja_ir_llvm::compile_script`]
 //!   / [`koja_ir_llvm::compile_program`] -> link -> exec the binary
 //!   -> forward its exit code.
@@ -69,8 +71,8 @@ use std::time::{Duration, Instant};
 
 use koja_ast::ast::{Diagnostic, Severity};
 use koja_ast::identifier::Identifier;
-use koja_ir::{IRProgram, IRScript, lower_program, lower_script};
-use koja_ir_eval::{Interpreter, RuntimeError, Value};
+use koja_ir::{FunctionKind, IRPackage, IRProgram, IRScript, lower_program, lower_script};
+use koja_ir_eval::{Interpreter, RuntimeError, Value, supports_extern};
 use koja_ir_llvm::CompileOptions;
 use koja_parser::{FileId, ParseMode, ParsedProgram, SourceFile, parse_file, parse_program};
 use koja_test::{HARNESS_ENTRY, TestOptions, discover_tests, generate_harness};
@@ -87,9 +89,9 @@ use crate::tasks::{TASK_HARNESS_ENTRY, TaskProvider, generate_task_harness, reso
 ///
 /// `koja run` defaults to [`Backend::Interpreter`] (fast feedback,
 /// no link step) and accepts `--backend=llvm` to compile + exec.
-/// Any code generation flag also selects `llvm` (see
-/// [`resolve_backend`]). `koja build` carries no backend flag: only
-/// LLVM emits object files.
+/// Any code generation flag, or an extern the interpreter cannot
+/// run, also selects `llvm` (see [`BackendChoice`]). `koja build`
+/// carries no backend flag: only LLVM emits object files.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, clap::ValueEnum)]
 pub enum Backend {
     /// Run in-process through the interpreter
@@ -206,12 +208,53 @@ impl RunOptions {
     }
 }
 
-/// Pick the `run` backend. `--backend` wins when given. Otherwise a
-/// code generation flag selects the compiled path, since asking for
-/// `--release` is asking for the compiler, and a bare `koja run`
-/// interprets. A code generation flag on an explicit interpreter run
-/// is an error rather than a silent no-op.
-fn resolve_backend(explicit: Option<Backend>, codegen: CodegenArgs) -> Backend {
+/// What the command line said about the `run` backend. The flags
+/// alone cannot always decide: a bare `koja run` wants the interpreter
+/// unless the lowered program declares an extern the interpreter has
+/// no handler for, so [`BackendChoice::settle`] runs after lowering.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum BackendChoice {
+    /// No flag. Interpret unless the program needs a native link.
+    Auto,
+    /// `--backend` or a code generation flag named the backend.
+    Forced(Backend),
+}
+
+impl BackendChoice {
+    fn settle(self, packages: &[IRPackage]) -> Backend {
+        match self {
+            Self::Forced(backend) => backend,
+            Self::Auto if declares_unsupported_extern(packages) => Backend::Llvm,
+            Self::Auto => Backend::Interpreter,
+        }
+    }
+}
+
+/// Whether any `@extern "C"` in `packages` is missing from the
+/// interpreter's dispatch table, which means only LLVM can run it.
+fn declares_unsupported_extern(packages: &[IRPackage]) -> bool {
+    packages
+        .iter()
+        .flat_map(|package| package.functions.values())
+        .any(|function| match &function.kind {
+            FunctionKind::Extern(attrs) => {
+                let link_name = attrs
+                    .link_name
+                    .as_deref()
+                    .unwrap_or_else(|| function.symbol.last_segment());
+                !supports_extern(link_name)
+            }
+            _ => false,
+        })
+}
+
+/// Read the `run` backend off the flags. `--backend` wins when given.
+/// Otherwise a code generation flag selects the compiled path, since
+/// asking for `--release` is asking for the compiler, and a bare
+/// `koja run` is left for [`BackendChoice::settle`]. A code generation
+/// flag on an explicit interpreter run is an error rather than a
+/// silent no-op.
+fn resolve_backend(explicit: Option<Backend>, codegen: CodegenArgs) -> BackendChoice {
     match (explicit, codegen.explicit_flag()) {
         (Some(Backend::Interpreter), Some(flag)) => {
             eprintln!(
@@ -219,9 +262,9 @@ fn resolve_backend(explicit: Option<Backend>, codegen: CodegenArgs) -> Backend {
             );
             process::exit(1);
         }
-        (Some(backend), _) => backend,
-        (None, Some(_)) => Backend::Llvm,
-        (None, None) => Backend::Interpreter,
+        (Some(backend), _) => BackendChoice::Forced(backend),
+        (None, Some(_)) => BackendChoice::Forced(Backend::Llvm),
+        (None, None) => BackendChoice::Auto,
     }
 }
 
@@ -451,23 +494,28 @@ pub fn cmd_run(project_root: Option<&Path>, options: RunOptions) {
         codegen,
         file,
     } = options;
-    let backend = resolve_backend(backend, codegen);
+    let choice = resolve_backend(backend, codegen);
     let compile = codegen.compile_options();
     if let Some(task_name) = file.as_deref().filter(|arg| looks_like_task_name(arg)) {
-        run_task(task_name, project_root, backend, compile, &args);
+        run_task(task_name, project_root, choice, compile, &args);
     }
     let mode = resolve_source_shape(file.as_deref(), project_root)
         .unwrap_or_else(|err| bail_resolve_error(err));
-    match (mode, backend) {
-        (SourceShape::Script(path), Backend::Interpreter) => run_script_interpreted(&path),
-        (SourceShape::Script(path), Backend::Llvm) => run_script_compiled(&path, compile, &args),
-        (SourceShape::Program(path), Backend::Interpreter)
-        | (SourceShape::Program(path), Backend::Llvm) => bail_program_execution(&path),
-        (SourceShape::Project { config, root }, Backend::Interpreter) => {
-            run_project_interpreted(&config, &root, &args)
+    match mode {
+        SourceShape::Script(path) => {
+            let script = build_script(&path);
+            match choice.settle(&script.packages) {
+                Backend::Interpreter => run_script_interpreted(&script),
+                Backend::Llvm => run_script_compiled(&script, &path, compile, &args),
+            }
         }
-        (SourceShape::Project { config, root }, Backend::Llvm) => {
-            run_project_compiled(&config, &root, compile, &args)
+        SourceShape::Program(path) => bail_program_execution(&path),
+        SourceShape::Project { config, root } => {
+            let program = build_project_program(&config, &root);
+            match choice.settle(&program.packages) {
+                Backend::Interpreter => interpret_program(&program, &args),
+                Backend::Llvm => run_project_compiled(&program, &config, &root, compile, &args),
+            }
         }
     }
 }
@@ -542,7 +590,7 @@ fn looks_like_task_name(arg: &str) -> bool {
 fn run_task(
     name: &str,
     project_root: Option<&Path>,
-    backend: Backend,
+    choice: BackendChoice,
     compile: CompileOptions,
     args: &[String],
 ) -> ! {
@@ -569,7 +617,7 @@ fn run_task(
             .expect("non-toolchain tasks only resolve inside a project");
         build_task_program(config, root, name, provider)
     };
-    match backend {
+    match choice.settle(&program.packages) {
         Backend::Interpreter => interpret_program(&program, args),
         Backend::Llvm => {
             run_task_compiled(&program, name, provider, project.as_ref(), compile, args)
@@ -712,22 +760,25 @@ fn build_and_keep(path: &Path, output: Option<String>, compile: CompileOptions, 
 /// Build the `.kojs` script at `path` into a temp binary, exec
 /// it with `args`, forward the exit code, and remove the temp
 /// binary. Diverges either way (binary status or launch error).
-fn run_script_compiled(path: &Path, compile: CompileOptions, args: &[String]) -> ! {
-    let script = build_script(path);
+fn run_script_compiled(
+    script: &IRScript,
+    path: &Path,
+    compile: CompileOptions,
+    args: &[String],
+) -> ! {
     let stem = path.file_stem().and_then(OsStr::to_str).unwrap_or("app");
     let output = temp_binary_path(stem).to_string_lossy().to_string();
-    emit_and_link_script(&script, &derive_package(path), &output, compile);
+    emit_and_link_script(script, &derive_package(path), &output, compile);
     exec_binary(&output, args, true)
 }
 
-/// Run the `.kojs` script at `path` through the interpreter and
-/// discard the trailing value. Scripts always exit 0 on normal
-/// completion, matching the LLVM backend's `main` trampoline (see
+/// Run a lowered `.kojs` script through the interpreter and discard
+/// the trailing value. Scripts always exit 0 on normal completion,
+/// matching the LLVM backend's `main` trampoline (see
 /// `koja-ir-llvm/src/main_wrapper.rs`). Runtime failures print
 /// `error: …` and exit 1.
-fn run_script_interpreted(path: &Path) {
-    let script = build_script(path);
-    if let Err(error) = Interpreter::run_script(&script) {
+fn run_script_interpreted(script: &IRScript) {
+    if let Err(error) = Interpreter::run_script(script) {
         eprintln!("error: {error}");
         process::exit(1);
     }
@@ -1161,11 +1212,6 @@ fn splice_generated_source(parsed: &mut ParsedProgram, package: String, tag: &st
 /// project and execute the Process entry in-process, no codegen or
 /// link. Features the interpreter does not cover yet surface a
 /// runtime error plus a `--backend=llvm` hint. Diverges either way.
-fn run_project_interpreted(config: &ProjectConfig, root: &Path, args: &[String]) -> ! {
-    let program = build_project_program(config, root);
-    interpret_program(&program, args)
-}
-
 /// Execute a lowered [`IRProgram`]'s Process entry in-process via
 /// [`Interpreter::run_program`] and exit with its code. Shared by the
 /// project and task interpreter paths.
@@ -1189,22 +1235,22 @@ fn interpret_program(program: &IRProgram, args: &[String]) -> ! {
     }
 }
 
-/// `koja run` for a project: build into a temp binary, exec
-/// with `args`, forward the exit code, and remove the binary.
-/// Diverges either way (binary status or launch error).
+/// `koja run` for a lowered project: link into the build dir, exec
+/// with `args`, and forward the exit code. Diverges either way
+/// (binary status or launch error).
 fn run_project_compiled(
+    program: &IRProgram,
     config: &ProjectConfig,
     root: &Path,
     compile: CompileOptions,
     args: &[String],
 ) -> ! {
-    let program = build_project_program(config, root);
     let build_dir = project_build_dir(root, compile.release);
     let binary = build_dir
         .join(config.binary_name())
         .to_string_lossy()
         .to_string();
-    emit_and_link_program(&program, &config.name, &binary, &[root], compile);
+    emit_and_link_program(program, &config.name, &binary, &[root], compile);
     exec_binary(&binary, args, false)
 }
 
@@ -1482,4 +1528,51 @@ fn bail_check_failure(failure: CheckFailure, sources: &SourceTable) -> ! {
         eprintln!("{}", render_program_diagnostics(&all, sources));
     }
     process::exit(1);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn lower_test_script(source: &str) -> IRScript {
+        let checked = check_bundle(
+            bundle_with_autoimport(SourceFile {
+                package: "Probe".to_string(),
+                path: PathBuf::from("probe.kojs"),
+                source: source.to_string(),
+            }),
+            ParseMode::Script,
+        );
+        lower_script(&checked).expect("script lowers")
+    }
+
+    const USER_EXTERN: &str = "struct FFI\n  @extern \"C\"\n  fn abs(x: Int32) -> Int32\nend\n\
+                               FFI.abs(-1).print()\n";
+
+    // Also proves every extern the bundled stdlib declares has an
+    // interpreter handler, otherwise a stdlib-only script would
+    // never interpret.
+    #[test]
+    fn auto_settles_to_interpreter_without_user_externs() {
+        let script = lower_test_script("1.print()\n");
+        assert_eq!(
+            BackendChoice::Auto.settle(&script.packages),
+            Backend::Interpreter
+        );
+    }
+
+    #[test]
+    fn auto_settles_to_llvm_for_an_extern_without_a_handler() {
+        let script = lower_test_script(USER_EXTERN);
+        assert_eq!(BackendChoice::Auto.settle(&script.packages), Backend::Llvm);
+    }
+
+    #[test]
+    fn forced_backend_ignores_externs() {
+        let script = lower_test_script(USER_EXTERN);
+        assert_eq!(
+            BackendChoice::Forced(Backend::Interpreter).settle(&script.packages),
+            Backend::Interpreter
+        );
+    }
 }

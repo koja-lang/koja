@@ -299,11 +299,11 @@ fn read_scaffold_file(fx: &Fixture, relative: &str) -> String {
 fn new_scaffolds_a_working_project_and_rejects_bad_input() {
     let fx = Fixture::new("new");
 
-    let stderr = fx.koja_err(&["new", "MyApp"]);
+    let stderr = fx.koja_err(&["new", "9lives"]);
     assert!(
         stderr.contains(
-            "error: project name must be lowercase snake_case (like `my_app`). \
-             The code namespace is derived from it (`my_app` -> `MyApp`)"
+            "error: cannot derive a package name from '9lives'. Use ASCII letters, \
+             digits, `-` and `_`, starting with a letter"
         ),
         "unexpected stderr: {stderr}"
     );
@@ -313,6 +313,17 @@ fn new_scaffolds_a_working_project_and_rejects_bad_input() {
     assert!(
         stderr.contains("error: directory 'taken' already exists"),
         "unexpected stderr: {stderr}"
+    );
+
+    let stdout = fx.koja_ok(&["new", "git-hygiene/"]);
+    assert_eq!(
+        stdout.trim(),
+        "created project 'git_hygiene' in git-hygiene/"
+    );
+    assert!(
+        fs::read_to_string(fx.root.join("git-hygiene/koja.toml"))
+            .unwrap()
+            .contains("name = \"git_hygiene\""),
     );
 
     let stdout = fx.koja_ok(&["new", "my_app"]);

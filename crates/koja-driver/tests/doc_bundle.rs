@@ -1,5 +1,5 @@
-//! Smoke tests for `koja doc`, `koja doc search`, and
-//! `koja doc --project-only`.
+//! Smoke tests for `koja doc`, `koja doc <symbol>`, `koja doc
+//! search`, and `koja doc --project-only`.
 //!
 //! Spins the compiled `koja` binary against a tiny fixture
 //! project and asserts the on-disk doc tree: a root
@@ -32,7 +32,7 @@ fn write_fixture_project(root: &Path) {
     .unwrap();
     fs::write(
         src_dir.join("main.koja"),
-        "@doc \"A widget.\"\nstruct Widget\n  count: Int\nend\n\nfn main\n  0\nend\n",
+        "@doc \"A widget. Counts sprockets.\"\nstruct Widget\n  count: Int\nend\n\nfn main\n  0\nend\n",
     )
     .unwrap();
 }
@@ -304,12 +304,46 @@ fn doc_search_renders_exact_partial_and_no_match() {
         "{stdout}"
     );
 
+    // A word that appears only in the doc body still finds the symbol.
+    let body = run_koja(&tmp, &["doc", "search", "sprockets"]);
+    assert!(body.status.success());
+    let stdout = String::from_utf8_lossy(&body.stdout);
+    assert!(
+        stdout.contains("- MyApp.Widget (struct): A widget."),
+        "{stdout}"
+    );
+
     let none = run_koja(&tmp, &["doc", "search", "zzzz-no-such-symbol"]);
     assert!(
         !none.status.success(),
         "no-match search should exit nonzero"
     );
     assert!(String::from_utf8_lossy(&none.stderr).contains("no matches"));
+}
+
+#[test]
+fn doc_symbol_looks_up_exact_names_only() {
+    let tmp = tempdir();
+    write_fixture_project(&tmp);
+
+    let exact = run_koja(&tmp, &["doc", "Widget"]);
+    assert!(
+        exact.status.success(),
+        "lookup failed: {}",
+        String::from_utf8_lossy(&exact.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&exact.stdout);
+    assert!(stdout.starts_with("# MyApp.Widget (struct)"), "{stdout}");
+    assert!(stdout.contains("A widget."), "{stdout}");
+    assert!(!tmp.join("doc").exists(), "lookup must not generate HTML");
+
+    let partial = run_koja(&tmp, &["doc", "widg"]);
+    assert!(!partial.status.success(), "substrings are not lookups");
+    let stderr = String::from_utf8_lossy(&partial.stderr);
+    assert!(
+        stderr.contains("no symbol named \"widg\". Try `koja doc search widg`"),
+        "{stderr}"
+    );
 }
 
 #[test]
@@ -324,6 +358,14 @@ fn doc_falls_back_to_stdlib_outside_project() {
     );
     let stdout = String::from_utf8_lossy(&search.stdout);
     assert!(stdout.contains("# Global.List.append/2 (fn)"), "{stdout}");
+
+    let lookup = run_koja(&tmp, &["doc", "List.append"]);
+    assert!(lookup.status.success());
+    let stdout = String::from_utf8_lossy(&lookup.stdout);
+    assert!(
+        stdout.starts_with("# Global.List.append/2 (fn)"),
+        "{stdout}"
+    );
 
     // Bare generation works too, defaulting to a temp output dir.
     let generated = run_koja(&tmp, &["doc"]);

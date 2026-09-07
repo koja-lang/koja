@@ -105,8 +105,8 @@ enum Command {
     },
     /// Create a new Koja project
     New {
-        /// Project name (used as directory name)
-        name: String,
+        /// Directory to create. The package name is its last segment in snake_case (`my-app` and `MyApp` both give `my_app`)
+        path: String,
     },
     /// Dump the parsed AST
     Parse {
@@ -131,14 +131,14 @@ enum Command {
     },
 }
 
-/// Arguments for `koja doc`. The optional `action` subcommand
-/// turns the bare `koja doc` into a one-shot generator and
-/// `koja doc serve` into a generate-then-host preview server.
-/// Shared flags live on the parent so they apply to both.
+/// Arguments for `koja doc`. Bare `koja doc` is a one-shot
+/// generator, `koja doc <symbol>` prints one symbol's doc, and the
+/// `action` subcommands cover substring search and the preview
+/// server. Shared flags live on the parent so they apply to all.
 #[derive(Args)]
 struct DocArgs {
-    /// Source files or directories (omit to use koja.toml)
-    files: Vec<String>,
+    /// Symbol to print docs for (`List.append`, `JSON.Decoder`). Omit to generate HTML docs
+    symbol: Option<String>,
 
     /// Output directory for generated HTML (defaults to `doc`, or a
     /// temp dir when documenting the stdlib outside a project)
@@ -243,11 +243,11 @@ fn main() {
             commands::cmd_lex(files)
         }
         // Alias for the self-hosted `koja.new` toolchain task.
-        Command::New { name } => {
+        Command::New { path } => {
             reject_project(project_root.as_deref(), "new");
             pipeline::cmd_run(
                 None,
-                pipeline::RunOptions::interpreted("koja.new".to_string(), vec![name]),
+                pipeline::RunOptions::interpreted("koja.new".to_string(), vec![path]),
             )
         }
         Command::Parse { files, emit_ast } => {
@@ -263,28 +263,32 @@ fn main() {
 
 /// Route `koja doc [...]` and its subcommands to the right handler.
 /// Bare `koja doc` falls through to the static generator, `koja doc
-/// serve` rebuilds (unless `--no-rebuild`) then hands the output dir
-/// to the preview server, and `koja doc search` prints matches to
-/// stdout without touching disk (`-o` is ignored).
+/// <symbol>` and `koja doc search` print to stdout without touching
+/// disk (`-o` is ignored), and `koja doc serve` rebuilds (unless
+/// `--no-rebuild`) then hands the output dir to the preview server.
 fn dispatch_doc(args: DocArgs, project_root: Option<&Path>) {
     let DocArgs {
         action,
-        files,
         output,
         project_only,
+        symbol,
     } = args;
 
     let options = commands::DocOptions {
-        files,
         output,
         project_only,
     };
-    match action {
-        None => commands::cmd_doc(project_root, options),
-        Some(DocAction::Search { query }) => {
+    match (action, symbol) {
+        (None, None) => commands::cmd_doc(project_root, options),
+        (None, Some(symbol)) => commands::cmd_doc_lookup(project_root, options, &symbol),
+        (Some(_), Some(symbol)) => {
+            eprintln!("error: `koja doc {symbol}` takes no subcommand");
+            process::exit(1);
+        }
+        (Some(DocAction::Search { query }), None) => {
             commands::cmd_doc_search(project_root, options, &query);
         }
-        Some(DocAction::Serve { port, no_rebuild }) => {
+        (Some(DocAction::Serve { port, no_rebuild }), None) => {
             commands::cmd_doc_serve(
                 project_root,
                 options,
