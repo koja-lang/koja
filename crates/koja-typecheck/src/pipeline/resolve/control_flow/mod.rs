@@ -287,7 +287,7 @@ pub(super) fn body_tail_type(body: &[Statement], registry: &GlobalRegistry) -> R
     }
 }
 
-fn is_never(ty: &ResolvedType, registry: &GlobalRegistry) -> bool {
+pub(super) fn is_never(ty: &ResolvedType, registry: &GlobalRegistry) -> bool {
     is_primitive(ty, registry, "Never")
 }
 

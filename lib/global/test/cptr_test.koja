@@ -187,6 +187,29 @@ struct CPtrTest
     a == b ? Result.Ok(true) : Result.Err("null pointers compared unequal")
   end
 
+  @test "null comparison infers the pointer type from the other operand"
+  fn test_null_comparison_infers_type -> Result<Bool, String>
+    a: CPtr<Int32> = CPtr.alloc(1)
+    left_null = CPtr.null() == a
+    right_null = a == CPtr.null()
+    not_null = a != CPtr.null()
+    a.free()
+
+    cond
+      left_null ->
+        Result.Err("null on the left compared equal to a live pointer")
+
+      right_null ->
+        Result.Err("null on the right compared equal to a live pointer")
+
+      not_null ->
+        Result.Ok(true)
+
+      else ->
+        Result.Err("`!=` against null returned false for a live pointer")
+    end
+  end
+
   @test "offset pointer differs from its base"
   fn test_offset_not_equal -> Result<Bool, String>
     base: CPtr<Int32> = CPtr.alloc(2)

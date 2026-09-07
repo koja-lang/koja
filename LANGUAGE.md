@@ -1160,13 +1160,26 @@ end
 
 Generic enum unit variants infer from an enclosing expected type. Expected
 types come from annotations, function and closure returns, control-flow
-arms, struct fields, and generic call returns:
+arms, struct fields, generic call returns, and the other operand of `==`:
 
 ```koja
 z: Option<Int32> = Option.None
 
 fn empty_label -> (Int, Option<String>)
   (1, Option.None)
+end
+
+found = Option.Some(3) != Option.None
+```
+
+The arms of a `match` bound to an unannotated variable also fill each
+other's gaps. `Result.Ok(true)` in one arm and `Result.Err("nope")` in
+another give the binding type `Result<Bool, String>`:
+
+```koja
+r = match flag
+  true -> Result.Ok(true)
+  false -> Result.Err("nope")
 end
 ```
 
@@ -2032,7 +2045,7 @@ null_ptr: CPtr<Int32> = CPtr.null()
 null_ptr.null?().print()
 ```
 
-Type annotations on the variable drive generic inference for static functions like `CPtr.alloc()` and `CPtr.null()`.
+Type annotations on the variable drive generic inference for static functions like `CPtr.alloc()` and `CPtr.null()`. In a comparison the other operand supplies the type, so `p == CPtr.null()` needs no annotation.
 
 `CPtr<UInt8>` additionally provides the two ways to get a pointer to a `Binary`'s bytes:
 

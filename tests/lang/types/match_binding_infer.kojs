@@ -1,0 +1,40 @@
+# A `match` bound to an unannotated local infers generic payload
+# types across its arms. Each arm alone leaves a hole (`Result.Ok`
+# never names `E`, `Option.None` never names `T`) that a sibling
+# arm fills.
+fn parse(flag: Bool) -> Result<Bool, String>
+  r = match flag
+    true -> Result.Ok(true)
+    false -> Result.Err("nope")
+  end
+  r
+end
+
+fn first(flag: Bool) -> Option<Int>
+  o = match flag
+    true -> Option.Some(1)
+    false -> Option.None
+  end
+  o
+end
+
+fn tagged(flag: Bool) -> (Int, Option<String>)
+  t = match flag
+    true -> (1, Option.None)
+    false -> (2, Option.Some("x"))
+  end
+  t
+end
+
+parse(true).print()
+parse(false).print()
+first(true).print()
+first(false).print()
+tagged(true).print()
+tagged(false).print()
+
+# `==` gives one operand's type to the other, so a generic call on
+# either side needs no annotation.
+some = Option.Some(3)
+(Option.None == some).print()
+(some != Option.None).print()

@@ -154,7 +154,12 @@ pub(super) fn classify_receiver(
         return Some(MethodReceiver::Static { struct_id });
     }
 
-    resolve_expr(receiver, resolver, diagnostics);
+    // The `==` rewrite hands over a receiver it already resolved,
+    // possibly with a hint from the other operand that a bare
+    // re-resolve would lose.
+    if !receiver.resolution.is_resolved() {
+        resolve_expr(receiver, resolver, diagnostics);
+    }
     if !receiver.resolution.is_resolved() {
         // Receiver already triggered its own diagnostic.
         return None;

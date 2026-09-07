@@ -26,6 +26,8 @@
 //!   `Result.Ok` auto-wrapping for `! E` functions.
 //! - [`ops`]: literal, binary, and unary type rules.
 //! - [`return_type`]: trailing-expression-vs-declared-return checking.
+//! - [`speculation`]: trial resolution with rollback, so sibling
+//!   expressions (`match` arms, `==` operands) can hint each other.
 //! - [`types`]: registry-backed [`ResolvedType`] predicates and
 //!   diagnostic rendering.
 //! - [`ctx`]: `Resolver`, the package + registry + scope bundle
@@ -53,6 +55,7 @@ mod paths;
 mod patterns;
 mod process;
 mod return_type;
+mod speculation;
 mod statements;
 mod strings;
 mod structs;

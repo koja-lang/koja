@@ -99,37 +99,25 @@ assignments (regression coverage in
 2026-07-16: `priv fn` helpers inside `impl Protocol for Type` blocks
 were rejected despite LANGUAGE.md allowing them; the conformance check
 now skips private members and only rejects public extras (regression
-coverage in `tests/lang/protocols/priv_impl_helper.kojs`). Two
-non-blocking warts remain, each with a workaround.
+coverage in `tests/lang/protocols/priv_impl_helper.kojs`). Also fixed
+2026-09-07: `==` operands now hint each other (`CPtr.null() == p`
+infers `T` from `p`), and `x = match … end` joins partially inferred
+arm tails so `Result.Ok(true)` / `Result.Err("nope")` arms infer
+`Result<Bool, String>` with no annotation (regression coverage in
+`tests/lang/types/match_binding_infer.kojs`). One non-blocking wart
+remains, with a workaround.
 
-- **`==` operands get no expected type from each other.**
-  `p == CPtr.null()` and `CPtr.null() == p` both fail with "cannot
-  infer type parameter `T` of `CPtr`" because
-  `resolve_equality_op_expr` resolves each side with no hint. The
-  same call infers fine as an argument or with an annotated binding,
-  since those sites pre-seed from the expected type. The fix is
-  local to `ops.rs`. Resolve one side, then pass its type as the
-  expected hint to the other, with a speculative first pass so the
-  generic call can sit on either side. Workaround is
-  `null: CPtr<Int> = CPtr.null()` before the comparison. The earlier
-  form of this entry blamed unit variants
-  (`consume(Signal.Done)` with `consume<T>(s: Signal<T>)`), but that
-  program is ambiguous. Nothing mentions `T`, so the error is
-  correct. Unit variants infer wherever `T` is determinable, from a
-  concrete parameter type, an `extend Box<T>` scope, or the expected
-  return type.
-- **`x = match … end` doesn't cross-infer generic payloads.** Arms
-  building `Result.Ok(true)` / `Result.Err("nope")` each fail inside
-  their own construction with "cannot infer type parameter", before
-  any join runs, because enum construction reports a phantom type
-  parameter eagerly when there is no expected type. The same match
-  as a trailing expression compiles because the function return type
-  flows in as the hint. The fix has to let a partially inferred type
-  such as `Result<Bool, ?E>` leave the arm, join arms by unifying the
-  holes, and report only the holes that survive the join. That
-  touches every consumer that trusts `is_resolved()`. Workaround is
-  restructuring so the match is in return position, or annotating
-  the binding.
+- **`x = if … end`, `cond`, and `?:` don't cross-infer generic
+  payloads.** The `match` fix resolves the arms on trial, merges the
+  holes in their tails (`Result<Bool, ?>` with `Result<?, String>`),
+  and resolves again with the merged type as the hint. The other
+  value-producing control-flow forms in `control_flow/` still resolve
+  each arm once with no hint, so `r = cond flag -> Result.Ok(true)
+else -> Result.Err("nope") end` fails with "cannot infer type
+  parameter". The `Speculation` helper and `merge_partial` are
+  shared, so wiring them into `resolve_if` / `resolve_cond` / the
+  ternary is mechanical. Workaround is placing the expression in
+  return position, or annotating the binding.
 
 ---
 

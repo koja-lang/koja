@@ -1,0 +1,8 @@
+Ok(true)
+Err("nope")
+Some(1)
+None
+(1, None)
+(2, Some("x"))
+false
+true
