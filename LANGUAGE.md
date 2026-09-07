@@ -1980,7 +1980,7 @@ result.print()
 
 Extern functions have no body. Parameter and return types must be FFI-compatible: explicit-width primitives (`Int32`, `UInt8`, `Float32`, etc.), `Bool`, `CPtr<T>`, or `()`. Extern functions can coexist with normal Koja functions in the same struct. Use `priv fn` on the extern declarations and expose safe public wrappers.
 
-A `Float32` / `Float64` value returned by an extern call is checked at the call site. A NaN or infinity handed back by C panics with an `ArithmeticError` (`non-finite float returned by <name>`), keeping the finite-only float invariant intact across the FFI boundary (see [Arithmetic Faults](#arithmetic-faults)).
+A `Float32` / `Float64` value returned by an extern call is checked at the call site. A NaN or infinity handed back by C panics with an `ArithmeticError` (`non-finite float returned by <name>`), keeping the finite-only float invariant intact across the FFI boundary (see [Arithmetic Faults](#arithmetic-faults)). `CPtr<Float32>.read()` and `CPtr<Float64>.read()` apply the same check (`non-finite float read by CPtr.read`), so a NaN in a C-filled buffer cannot enter a `Float` either.
 
 Declare C return types at their true width and let [numeric widening](#numeric-widening) do the rest. A C `int` bound as `Int32` flows directly into `Int` contexts with correct sign extension, so negative error codes survive the trip. Reading a C `int` as `Int` would zero-extend the upper 32 bits and corrupt negative values.
 
@@ -2018,7 +2018,7 @@ struct CPtr<T>
 end
 ```
 
-`alloc` and `free` use C's `malloc` and `free`. All functions are compiler intrinsics. `address` returns the raw address as an `Int` bit pattern (0 for null). `CPtr<T>` implements `Debug` by rendering that address as 16 hex digits: `ptr.format()` gives `CPtr(0x00006000023a4f10)` and a null pointer gives `CPtr(0x0)`.
+`alloc` and `free` use C's `malloc` and `free`. All functions are compiler intrinsics. `address` returns the raw address as an `Int` bit pattern (0 for null). `CPtr<T>` implements `Debug` by rendering that address as 16 hex digits: `ptr.format()` gives `CPtr(0x00006000023a4f10)` and a null pointer gives `CPtr(0x0)`. `==` on two pointers compares their addresses, not the pointed-to values.
 
 ```koja
 buf: CPtr<Int32> = CPtr.alloc(4)

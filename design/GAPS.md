@@ -24,22 +24,25 @@ guard.
 
 ---
 
-## `CPtr` float reads bypass the finite-only invariant
+## No carrier type for full IEEE floats
 
-A non-finite float returned by an `@extern "C"` call traps at the call
-site, but `CPtr<Float64>.read()` (and `Float32`) does not. A NaN or
-infinity sitting in a C-filled buffer walks straight into a `Float`,
-silently breaking the invariant. This is consistent with the FFI
-stance that safety is the wrapper author's responsibility, but it is
-currently undocumented rather than decided.
+Both FFI boundaries now trap on a non-finite float: an `@extern "C"`
+return and `CPtr<Float64>.read()` (and `Float32`). That keeps the
+finite-only `Float` invariant, but it makes C APIs that use NaN as a
+legitimate value unusable. `strtod` on bad input, statistics
+libraries that mark missing data with NaN, and audio or GPU buffers
+that carry inf by design all fault before user code can inspect the
+value.
 
-**Fix path options:** guard `read` (costs a check on the bulk-transfer
-path), document `CPtr` as an unchecked boundary, or offer both a
-checked and an unchecked read. A carrier type for full IEEE values
-(the `Binary`-to-`String` pattern applied to floats) would subsume
-this: pointer reads and extern returns typed as IEEE floats make no
-finiteness promise, and the checked crossing moves to an explicit
-conversion.
+**Fix path:** a `CFloat64` / `CFloat32` builtin that carries the raw
+IEEE bit pattern, on the `CString`-to-`String` model. It offers
+`to_float() -> Float ! NonFinite` as the only way into `Float`, plus
+`nan?`, `infinite?`, `bits`, and `from_bits`, with `Equality` and
+`Hash` by bit pattern. No arithmetic and no ordering, so it stays a
+transport type instead of a second float with NaN semantics. An
+extern declared `-> CFloat64` and a `CPtr<CFloat64>.read()` skip the
+guard, while the `Float64` spellings keep it. Build it when a real
+FFI consumer hits the trap.
 
 ---
 
@@ -141,27 +144,6 @@ neighbor remains open:
   cost that made yield checks half of `fib(35)`'s runtime. The x86-64
   register fix waits on LLVM's `+reserve-r8..r15`, which landed after
   the LLVM 22 branch.
-
----
-
-## Builtins inherit zero-field struct derives
-
-Found 2026-08-08 while auditing the `builtin` migration.
-`derive_debug` and `derive_equality` synthesize the same impls for a
-`builtin` declaration that a zero-field struct gets. Builtins with
-explicit stdlib impls (the scalars, `String`, container and `CPtr`
-`Debug`) never hit the synthesis, but the holes are live:
-
-- `CPtr` has no explicit `Equality` impl, so the derived `equals?`
-  compares zero fields and returns `true` for every pair.
-- `Int64`, `Float64`, `Never`, and `Unit` lean on synthesized derives
-  only for conformance. At runtime the IR's `Int64`-onto-`Int` method
-  collapse routes to the real intrinsic impls.
-
-**Fix path:** delete the builtin arms from both derive passes and add
-explicit stdlib impls. The language can spell the conditional impl
-now (see the next entry). The conformance-only holes need explicit
-impls or a rule that a builtin satisfies bounds by shape.
 
 ---
 
@@ -434,12 +416,13 @@ Found 2026-08-28. None blocking, each with a workaround:
   insertion sort or a shell-side `sort`. A comparator-closure
   `sort` works today. A `Comparable` conformance can follow when
   the protocol exists (see the `Binary` ordering entry).
-- **`IO.gets` hangs at end of input.** `Fd.read` returns `Ok("")`
-  at end of stream, and `gets_loop` only stops on `"\n"` or an
-  error, so a line-oriented filter reading stdin never terminates
-  once input runs out. Workaround is reading `STDIN` directly and
-  treating an empty read as end of input. An `Option`-returning
-  variant or an `IO.lines` iterator closes it.
+- **`IO.gets` cannot distinguish end of input from an empty
+  line.** Both return `""`, so a line-oriented filter reading
+  stdin cannot tell where input stops. Workaround is reading
+  `STDIN` directly and treating an empty read as end of input.
+  0.19 changes `gets` to return `Option<String>` over a
+  caller-supplied reader, which also moves the `io_gets` lang
+  fixture into the stdlib test suite.
 - **`koja doc search` matches symbol names only.** Concept
   queries like `Command` or `Shell` return no matches, and the
   absence of a hit cannot distinguish "no such API" from "wrong

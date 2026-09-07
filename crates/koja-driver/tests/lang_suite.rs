@@ -611,8 +611,27 @@ fn lang_ffi() {
 /// it there. LLVM-only for the same `@link` reason as `lang_ffi`.
 #[test]
 fn lang_ffi_nan_return_traps() {
-    let dir = lang_dir().join("ffi_nan_trap");
-    assert!(dir.exists(), "test fixture ffi_nan_trap/ not found");
+    assert_ffi_project_faults(
+        "ffi_nan_trap",
+        "** (panic) non-finite float returned by nan_c",
+    );
+}
+
+/// Foreign memory is the other producer of non-finite floats, so a
+/// NaN read through `CPtr<Float64>.read()` must trap at the read.
+#[test]
+fn lang_cptr_nan_read_traps() {
+    assert_ffi_project_faults(
+        "cptr_nan_trap",
+        "** (panic) non-finite float read by CPtr.read",
+    );
+}
+
+/// Run the FFI fixture `name` and assert it dies with `pattern` on
+/// stderr.
+fn assert_ffi_project_faults(name: &str, pattern: &str) {
+    let dir = lang_dir().join(name);
+    assert!(dir.exists(), "test fixture {name}/ not found");
 
     let lib_path = build_ffi_helper_lib(&dir);
     let (stdout, stderr, code) = run_ffi_project(&dir);
@@ -620,12 +639,11 @@ fn lang_ffi_nan_return_traps() {
 
     assert!(
         code != 0,
-        "ffi_nan_trap: expected a fault exit, got 0\nstdout:\n{stdout}"
+        "{name}: expected a fault exit, got 0\nstdout:\n{stdout}"
     );
-    let pattern = "** (panic) non-finite float returned by nan_c";
     assert!(
         stderr.contains(pattern),
-        "ffi_nan_trap: stderr missing {pattern:?}\nstderr:\n{stderr}"
+        "{name}: stderr missing {pattern:?}\nstderr:\n{stderr}"
     );
 }
 
@@ -725,15 +743,39 @@ fn lang_process_io() {
 }
 
 fn run_process_io(backend: &str) {
-    use std::io::Write;
-
     let dir = lang_dir().join("process_io");
     assert!(dir.exists(), "test fixture process_io/ not found");
     let expected = fs::read_to_string(dir.join("expected.stdout")).unwrap();
+    let label = format!("process_io ({backend})");
 
-    let backend_flag = format!("--backend={backend}");
     let mut cmd = Command::new(koja_bin());
-    cmd.arg("run").arg(&backend_flag).current_dir(&dir);
+    cmd.arg("run").arg(format!("--backend={backend}"));
+    let (stdout, stderr, code) = run_with_stdin(cmd, &dir, b"go\n", &label);
+
+    assert!(
+        code == 1,
+        "{label}: expected exit code 1 (StopReason.Shutdown), got {code}\nstderr:\n{stderr}"
+    );
+    if stdout != expected {
+        panic!(
+            "\n--- FAIL: {label} ---\n{}",
+            diff_lines(&stdout, &expected)
+        );
+    }
+}
+
+/// Run `cmd` in `dir` with `stdin` pre-filled and the write end closed,
+/// so the child sees the bytes and then end of input. Kills the child
+/// after `TEST_TIMEOUT`.
+fn run_with_stdin(
+    mut cmd: Command,
+    dir: &Path,
+    stdin: &[u8],
+    label: &str,
+) -> (String, String, i32) {
+    use std::io::Write;
+
+    cmd.current_dir(dir);
     if let Some(lib_path) = library_path() {
         cmd.env("LIBRARY_PATH", &lib_path);
     }
@@ -742,13 +784,11 @@ fn run_process_io(backend: &str) {
         .stderr(Stdio::piped());
 
     let mut child = cmd.spawn().expect("failed to execute koja");
-    // Bytes wait in the pipe (closing the write end leaves it at readable
-    // EOF), so the fd is ready by the time the process watches it.
     child
         .stdin
         .take()
         .expect("child stdin already taken")
-        .write_all(b"go\n")
+        .write_all(stdin)
         .expect("failed to pre-fill stdin");
 
     let deadline = std::time::Instant::now() + TEST_TIMEOUT;
@@ -758,30 +798,43 @@ fn run_process_io(backend: &str) {
             Ok(None) if std::time::Instant::now() >= deadline => {
                 let _ = child.kill();
                 let _ = child.wait();
-                panic!(
-                    "process_io ({backend}): timed out after {}s",
-                    TEST_TIMEOUT.as_secs()
-                );
+                panic!("{label}: timed out after {}s", TEST_TIMEOUT.as_secs());
             }
             Ok(None) => std::thread::sleep(Duration::from_millis(50)),
-            Err(e) => panic!("process_io ({backend}): wait error: {e}"),
+            Err(e) => panic!("{label}: wait error: {e}"),
         }
     }
 
     let output = child.wait_with_output().expect("failed to collect output");
     let stdout = String::from_utf8_lossy(&output.stdout).to_string();
     let stderr = String::from_utf8_lossy(&output.stderr).to_string();
-    let code = output.status.code().unwrap_or(-1);
+    (stdout, stderr, output.status.code().unwrap_or(-1))
+}
 
-    assert!(
-        code == 1,
-        "process_io ({backend}): expected exit code 1 (StopReason.Shutdown), got {code}\nstderr:\n{stderr}"
-    );
-    if stdout != expected {
-        panic!(
-            "\n--- FAIL: process_io ({backend}) ---\n{}",
-            diff_lines(&stdout, &expected)
-        );
+/// `IO.gets` must end a line at end of input instead of spinning on the
+/// empty reads `Fd.read` returns there. It lives here because `gets`
+/// reads `STDIN` directly and a stdlib test cannot redirect it. When
+/// 0.19 changes `gets` to return `Option<String>` over a caller-supplied
+/// reader, this moves to `lib/global/test`.
+#[test]
+fn lang_io_gets_ends_at_eof() {
+    let dir = lang_dir().join("io_gets");
+    assert!(dir.exists(), "test fixture io_gets/ not found");
+    let cases: [(&[u8], &str); 2] = [(b"a\n", "[a]\n[]\n[]\n"), (b"a\n\nb", "[a]\n[]\n[b]\n")];
+
+    for backend in BACKENDS {
+        for (stdin, expected) in cases {
+            let label = format!("io_gets ({backend}, {stdin:?})");
+            let mut cmd = Command::new(koja_bin());
+            cmd.arg("run")
+                .arg(format!("--backend={backend}"))
+                .arg("gets_eof.kojs");
+            let (stdout, stderr, code) = run_with_stdin(cmd, &dir, stdin, &label);
+            assert!(code == 0, "{label}: exit {code}\nstderr:\n{stderr}");
+            if stdout != expected {
+                panic!("\n--- FAIL: {label} ---\n{}", diff_lines(&stdout, expected));
+            }
+        }
     }
 }
 

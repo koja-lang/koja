@@ -16,7 +16,7 @@
 use std::ptr;
 use std::slice;
 
-use koja_ir::{CPtrMethod, IRFunction, IRType};
+use koja_ir::{CPTR_READ_NON_FINITE_MESSAGE, CPtrMethod, IRFunction, IRType};
 
 use crate::error::RuntimeError;
 use crate::intrinsics::helpers;
@@ -243,8 +243,14 @@ fn read_primitive(ptr: *mut u8, ty: &IRType, label: &str) -> Result<Value, Runti
             let p = unsafe { *(ptr as *const *mut u8) };
             Value::CPtr(p)
         }
-        IRType::Float32 => Value::Float32(unsafe { (ptr as *const f32).read_unaligned() }),
-        IRType::Float64 => Value::Float64(unsafe { (ptr as *const f64).read_unaligned() }),
+        IRType::Float32 => {
+            let v = unsafe { (ptr as *const f32).read_unaligned() };
+            finite_float(v.is_finite(), Value::Float32(v))?
+        }
+        IRType::Float64 => {
+            let v = unsafe { (ptr as *const f64).read_unaligned() };
+            finite_float(v.is_finite(), Value::Float64(v))?
+        }
         IRType::Int8 => Value::Int(unsafe { *(ptr as *const i8) } as i64),
         IRType::Int16 => Value::Int(unsafe { (ptr as *const i16).read_unaligned() } as i64),
         IRType::Int32 => Value::Int(unsafe { (ptr as *const i32).read_unaligned() } as i64),
@@ -266,6 +272,16 @@ fn read_primitive(ptr: *mut u8, ty: &IRType, label: &str) -> Result<Value, Runti
         }
     };
     Ok(value)
+}
+
+/// Foreign memory is the other boundary (with extern returns) where
+/// NaN or inf could enter a finite-only float type.
+fn finite_float(is_finite: bool, value: Value) -> Result<Value, RuntimeError> {
+    is_finite
+        .then_some(value)
+        .ok_or_else(|| RuntimeError::Panicked {
+            message: CPTR_READ_NON_FINITE_MESSAGE.to_string(),
+        })
 }
 
 fn write_primitive(
@@ -307,4 +323,43 @@ fn write_primitive(
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn read_f64(bits: u64) -> Result<Value, RuntimeError> {
+        let mut bytes = bits.to_ne_bytes();
+        read_primitive(bytes.as_mut_ptr(), &IRType::Float64, "test")
+    }
+
+    fn read_f32(bits: u32) -> Result<Value, RuntimeError> {
+        let mut bytes = bits.to_ne_bytes();
+        read_primitive(bytes.as_mut_ptr(), &IRType::Float32, "test")
+    }
+
+    #[test]
+    fn finite_float_reads_pass_through() {
+        assert!(matches!(read_f64(1.5f64.to_bits()), Ok(Value::Float64(v)) if v == 1.5));
+        assert!(matches!(read_f32(2.5f32.to_bits()), Ok(Value::Float32(v)) if v == 2.5));
+    }
+
+    #[test]
+    fn non_finite_float_reads_trap() {
+        for bits in [
+            f64::NAN.to_bits(),
+            f64::INFINITY.to_bits(),
+            f64::NEG_INFINITY.to_bits(),
+        ] {
+            let Err(RuntimeError::Panicked { message }) = read_f64(bits) else {
+                panic!("expected a panic for bits {bits:#x}");
+            };
+            assert_eq!(message, CPTR_READ_NON_FINITE_MESSAGE);
+        }
+        assert!(matches!(
+            read_f32(f32::NAN.to_bits()),
+            Err(RuntimeError::Panicked { .. })
+        ));
+    }
 }
