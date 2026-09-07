@@ -67,8 +67,10 @@ can call any package function. Known limitations:
   baseline (stdlib + project + history) through the pipeline — the
   existing whole-program model, fine for small projects but linear in
   session length.
-- **No FFI from the prompt.** Calling an `@extern "C"` function errors
-  with `RuntimeError::Unsupported`; the interpreter has no FFI, same as
+- **No user FFI from the prompt.** The interpreter dispatches stdlib
+  externs through a hand-written table, so stdlib FFI works at the
+  prompt. Calling a user-declared `@extern "C"` function errors with
+  `RuntimeError::ExternNotSupported`, same as
   `koja run --backend=interpreter`.
 - **`Global` self-edit inconsistency.** `ProjectLoader` skips any stdlib
   package whose name matches the project (its `seen_packages` set), so a
@@ -229,7 +231,7 @@ Two consequences:
   back to SelectionDAG for functions it cannot select, so one module
   could mix both and corrupt aggregates at call boundaries. The old
   union type `{ i8, [N x i8] }` split entirely into byte pieces and
-  was the visible casualty. `object.rs` now pins `-global-isel=0` so
+  was the visible casualty. `target.rs` now pins `-global-isel=0` so
   every function uses one selector. Any type with a `Bool`, `Unit`, or
   `Int8` field still produces byte pieces, so the pin must stay until
   the ABI changes.
@@ -432,12 +434,12 @@ Found 2026-08-28. None blocking, each with a workaround:
   insertion sort or a shell-side `sort`. A comparator-closure
   `sort` works today. A `Comparable` conformance can follow when
   the protocol exists (see the `Binary` ordering entry).
-- **`IO.gets` cannot distinguish end of input from an empty
-  line.** Both return `""`, so a line-oriented filter reading
-  stdin cannot terminate correctly. Workaround is reading
-  `STDIN` directly and treating the error case as end of input.
-  An `Option`-returning variant or an `IO.lines` iterator closes
-  it.
+- **`IO.gets` hangs at end of input.** `Fd.read` returns `Ok("")`
+  at end of stream, and `gets_loop` only stops on `"\n"` or an
+  error, so a line-oriented filter reading stdin never terminates
+  once input runs out. Workaround is reading `STDIN` directly and
+  treating an empty read as end of input. An `Option`-returning
+  variant or an `IO.lines` iterator closes it.
 - **`koja doc search` matches symbol names only.** Concept
   queries like `Command` or `Shell` return no matches, and the
   absence of a hit cannot distinguish "no such API" from "wrong
@@ -479,10 +481,10 @@ the struct-literal-with-defaults idiom, so it keeps a `new` plus
 `with_` builder only to supply hook defaults. Pure data configs get
 the literal idiom (`port: Int = 5432` in postgres-koja), so the
 construction idiom splits on whether a struct holds functions. The
-`Option<fn>` field panic
-([#94](https://github.com/koja-lang/koja/issues/94)) blocks the
-other spelling, hooks as `Option` fields defaulting to
-`Option.None`.
+other spelling, hooks as `Option<fn>` fields defaulting to
+`Option.None`, works since
+[#94](https://github.com/koja-lang/koja/issues/94) closed, at the
+cost of a `match` at every call site.
 
 **Fix path:** allow `&name/arity` references as default field
 values. A function reference resolves statically to a known
