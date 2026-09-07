@@ -3,21 +3,21 @@
 //! - subject + arm bodies resolve under the same rules as anywhere else
 //! - the surface expression's type is the join of every reaching arm tail
 //!   (with `Never` as the lattice bottom: divergent arms don't constrain it)
-//! - a wildcard / binding catch-all is required, except for enum subjects
-//!   with full structural variant coverage and `Bool` subjects with both
-//!   `true` and `false` literal coverage
-//! - missing-variant and missing-catch-all errors carry suggestion hints
+//! - coverage is structural. Enum variants, `Bool`, tuples, structs and
+//!   unions split into constructors and nested payload patterns combine,
+//!   so `Some(Red)` + `Some(Green)` + `None` exhausts `Option<Color>`.
+//!   Every other subject type needs a wildcard / binding catch-all
+//! - a non-exhaustive match names a witness pattern for a missing case
+//!   and carries a suggestion hint
 //! - `pattern when expr -> body` guards resolve `expr` against `Bool` in
 //!   the post-pattern-bind scope, and a guarded arm does not contribute
-//!   to catch-all detection or enum variant coverage
+//!   to coverage
 //! - struct destructure patterns (`Type{ field: x, ... }` for plain
 //!   structs, `Type.Variant{ field: x, ... }` for struct-variant enums)
 //!   resolve each named field against the declared roster, accept any
 //!   nested pattern shape (wildcard / binding / literal / nested
 //!   struct / nested enum / or-alternatives), and stamp a `LocalId`
-//!   on every binding. Omitted fields are implicit wildcards. The arm
-//!   counts as a catch-all only when every listed field's own
-//!   coverage is catch-all
+//!   on every binding. Omitted fields are implicit wildcards
 //! - constructor shorthand (`Some(x)` / `None` against an enum subject)
 //!   rewrites in place to the corresponding `EnumTuple` / `EnumUnit`,
 //!   reusing every downstream invariant
@@ -25,9 +25,9 @@
 //!   `Pattern::Binary`) and literal patterns over non-primitive subjects
 //!   diagnose feature gaps
 //! - bindings stamp a `LocalId` on the AST node
-//! - reachability/redundancy fires warning-severity diagnostics for arms
-//!   following an unguarded catch-all, duplicate enum-variant or literal
-//!   arms, and overlapping alternatives within an or-pattern
+//! - reachability fires warning-severity diagnostics for any arm (or
+//!   or-pattern alternative) that earlier arms already cover, including
+//!   nested payload coverage
 
 use koja_ast::ast::{ExprKind, Pattern};
 use koja_ast::identifier::Resolution;
@@ -644,9 +644,9 @@ fn match_guarded_full_payload_does_not_exhaust_outer_variant() {
 #[test]
 fn match_some_with_distinct_enum_payloads_does_not_warn_unreachable() {
     // Narrowing inner patterns under the same outer variant
-    // (`Some(Color.Red)` / `Some(Color.Green)`) used to trip the
-    // cross-arm reachability check because variant coverage only
-    // tracked the outer tag.
+    // (`Some(Color.Red)` / `Some(Color.Green)`) are distinct rows,
+    // and together with `None` they exhaust the subject without a
+    // catch-all.
     let source = "
         enum Color
           Red
@@ -658,7 +658,6 @@ fn match_some_with_distinct_enum_payloads_does_not_warn_unreachable() {
             Option.Some(Color.Red) -> 1
             Option.Some(Color.Green) -> 2
             Option.None -> 0
-            _ -> 99
           end
         end
 
@@ -719,7 +718,7 @@ fn match_some_binding_then_narrow_some_warns_unreachable() {
     assert!(
         warnings
             .iter()
-            .any(|m| m.contains("unreachable") && m.contains("variant")),
+            .any(|m| m.contains("unreachable") && m.contains("already match every value")),
         "expected unreachable-variant warning after Some(x), got: {warnings:?}",
     );
 }
@@ -872,7 +871,7 @@ fn match_duplicate_literal_arm_warns_unreachable() {
     assert!(
         warnings
             .iter()
-            .any(|m| m.contains("unreachable") && m.contains("literal")),
+            .any(|m| m.contains("unreachable") && m.contains("already match every value")),
         "expected duplicate-literal warning, got: {warnings:?}",
     );
 }
@@ -900,7 +899,7 @@ fn match_duplicate_enum_variant_arm_warns_unreachable() {
     assert!(
         warnings
             .iter()
-            .any(|m| m.contains("unreachable") && m.contains("variant")),
+            .any(|m| m.contains("unreachable") && m.contains("already match every value")),
         "expected duplicate-variant warning, got: {warnings:?}",
     );
 }
@@ -1020,13 +1019,13 @@ fn match_bool_exhaustive_without_catch_all_typechecks() {
 }
 
 #[test]
-fn match_bool_only_true_arm_still_requires_catch_all() {
+fn match_bool_only_true_arm_reports_missing_false() {
     let source = "
           match true
             true -> 1
           end
         ";
-    assert_script_fails_with(source, &["must include a wildcard"]);
+    assert_script_fails_with(source, &["not exhaustive", "`false`"]);
 }
 
 #[test]
@@ -1237,5 +1236,224 @@ fn match_typed_binding_against_non_union_diagnoses() {
             && d.message.contains("Int")),
         "expected typed-binding-against-non-union diagnostic, got: {:?}",
         failure.diagnostics,
+    );
+}
+
+#[test]
+fn match_nested_enum_payload_arms_combine_into_outer_coverage() {
+    // `Some(Red)` and `Some(Green)` together cover every `Some`, so
+    // no catch-all is needed and nothing warns.
+    let source = "
+        enum Color
+          Red
+          Green
+        end
+
+        fn classify(op: Option<Color>) -> Int
+          match op
+            Option.Some(Color.Red) -> 1
+            Option.Some(Color.Green) -> 2
+            Option.None -> 0
+          end
+        end
+
+          classify(Option.Some(Color.Red))
+        ";
+    let checked = typecheck(&dedent(source));
+    assert_eq!(trailing_resolution(&checked), int_type(&checked));
+    assert!(warning_messages(&checked).is_empty());
+}
+
+#[test]
+fn match_nested_result_error_split_by_payload_is_exhaustive() {
+    let source = "
+        enum CallError
+          Timeout
+          ProcessDown
+        end
+
+        fn classify(r: Result<Int, CallError>) -> Int
+          match r
+            Result.Ok(v) -> v
+            Result.Err(CallError.Timeout) -> -1
+            Result.Err(CallError.ProcessDown) -> -2
+          end
+        end
+
+          classify(Result.Ok(1))
+        ";
+    let checked = typecheck(&dedent(source));
+    assert_eq!(trailing_resolution(&checked), int_type(&checked));
+    assert!(warning_messages(&checked).is_empty());
+}
+
+#[test]
+fn match_nested_missing_case_reports_witness_pattern() {
+    let source = "
+        enum Color
+          Red
+          Green
+        end
+
+        fn classify(op: Option<Color>) -> Int
+          match op
+            Option.Some(Color.Red) -> 1
+            Option.None -> 0
+          end
+        end
+
+          classify(Option.None)
+        ";
+    assert_script_fails_with(source, &["not exhaustive", "`Option.Some(Color.Green)`"]);
+}
+
+#[test]
+fn match_bool_tuple_arms_combine_without_catch_all() {
+    let source = "
+        fn classify(flags: (Bool, Bool)) -> Int
+          match flags
+            (true, true) -> 3
+            (true, false) -> 2
+            (false, _) -> 0
+          end
+        end
+
+          classify((true, true))
+        ";
+    let checked = typecheck(&dedent(source));
+    assert_eq!(trailing_resolution(&checked), int_type(&checked));
+    assert!(warning_messages(&checked).is_empty());
+}
+
+#[test]
+fn match_tuple_missing_case_reports_positional_witness() {
+    let source = "
+        fn classify(flags: (Bool, Bool)) -> Int
+          match flags
+            (true, _) -> 1
+            (false, true) -> 2
+          end
+        end
+
+          classify((true, true))
+        ";
+    assert_script_fails_with(source, &["not exhaustive", "`(false, false)`"]);
+}
+
+#[test]
+fn match_struct_bool_fields_combine_and_report_named_witness() {
+    let source = "
+        struct Flags
+          a: Bool
+          b: Bool
+        end
+
+        fn classify(f: Flags) -> Int
+          match f
+            Flags{a: true} -> 1
+            Flags{a: false, b: true} -> 2
+          end
+        end
+
+          classify(Flags{a: true, b: true})
+        ";
+    assert_script_fails_with(source, &["not exhaustive", "`Flags{a: false, b: false}`"]);
+}
+
+#[test]
+fn match_or_pattern_alternatives_each_count_toward_coverage() {
+    let source = "
+        enum Color
+          Red
+          Green
+          Blue
+        end
+
+        fn classify(c: Color) -> Int
+          match c
+            Color.Red | Color.Green -> 1
+            Color.Blue -> 2
+          end
+        end
+
+          classify(Color.Blue)
+        ";
+    let checked = typecheck(&dedent(source));
+    assert_eq!(trailing_resolution(&checked), int_type(&checked));
+    assert!(warning_messages(&checked).is_empty());
+}
+
+#[test]
+fn match_nested_full_coverage_makes_later_payload_arm_unreachable() {
+    let source = "
+        enum Color
+          Red
+          Green
+        end
+
+        fn classify(op: Option<Color>) -> Int
+          match op
+            Option.Some(Color.Red) -> 1
+            Option.Some(Color.Green) -> 2
+            Option.Some(_) -> 3
+            Option.None -> 0
+          end
+        end
+
+          classify(Option.None)
+        ";
+    let checked = typecheck(&dedent(source));
+    let warnings = warning_messages(&checked);
+    assert_eq!(
+        warnings.len(),
+        1,
+        "expected exactly the `Some(_)` arm to warn, got: {warnings:?}",
+    );
+    assert!(warnings[0].contains("already match every value"));
+}
+
+#[test]
+fn match_guarded_nested_arm_does_not_count_toward_coverage() {
+    let source = "
+        enum Color
+          Red
+          Green
+        end
+
+        fn classify(op: Option<Color>) -> Int
+          match op
+            Option.Some(Color.Red) -> 1
+            Option.Some(Color.Green) when 1 > 0 -> 2
+            Option.None -> 0
+          end
+        end
+
+          classify(Option.None)
+        ";
+    assert_script_fails_with(source, &["not exhaustive", "`Option.Some(Color.Green)`"]);
+}
+
+#[test]
+fn match_many_missing_cases_lists_three_then_counts_the_rest() {
+    let source = "
+        enum Suit
+          Clubs
+          Diamonds
+          Hearts
+          Spades
+          Stars
+        end
+
+        fn classify(s: Suit) -> Int
+          match s
+            Suit.Clubs -> 1
+          end
+        end
+
+          classify(Suit.Clubs)
+        ";
+    assert_script_fails_with(
+        source,
+        &["`Suit.Diamonds`, `Suit.Hearts`, `Suit.Spades` and 1 more"],
     );
 }

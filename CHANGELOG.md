@@ -17,9 +17,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Compiled string and binary builder loops (`s = s <> piece`, interpolation accumulators, `String.join`, `String.replace`) now run in linear time instead of copying the accumulator on every step.
 - Chained rebinds like `xs = xs.append(a).append(b)` now reuse the buffer at every step instead of only the last.
 - `koja run` under the interpreter now builds `xs = xs.append(x)` and `s = s <> piece` loops in linear time instead of copying the accumulator on every step.
+- When a `match` misses a case, the error now shows the exact pattern to add, such as `Option.Some(Color.Green)`.
 
 ### Fixed
 
+- A `match` can now handle a variant's payload across several arms, such as `Result.Err(CallError.Timeout)` and `Result.Err(CallError.ProcessDown)`, without a redundant `Result.Err(_)` catch-all.
+- A `match` arm that can never run now gets a warning even when the overlap is inside a payload, tuple or struct.
 - Compiled binaries no longer target the build machine's CPU, so a binary built on one x86_64 or aarch64 host runs on any other host of that architecture.
 - `koja run --release` and `koja run --target-cpu` now compile through LLVM instead of being ignored by the interpreter. Combining them with an explicit `--backend=interpreter` is an error.
 - `(a, b) = expr` inside a loop or branch body now rebinds existing variables like plain assignment instead of declaring shadow copies that vanish at the end of the body.

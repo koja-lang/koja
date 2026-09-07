@@ -1,16 +1,8 @@
 //! Or-pattern resolution: `A | B | C`. Alternatives are restricted
-//! to literal / `EnumUnit` (no bindings) so coverage attribution
-//! stays straightforward: every alternative reports its own
-//! [`PatternCoverage`] and the whole or-pattern reports the
-//! union.
-//!
-//! Intra-or-pattern reachability fires here as warnings: an
-//! alternative whose tags / literals are entirely covered by an
-//! earlier alternative in the same or-pattern is unreachable. The
-//! cross-arm version (an alternative covered by an earlier *arm*'s
-//! pattern) lives in [`super::super::match_expr`].
-
-use std::collections::{BTreeMap, BTreeSet};
+//! to literal / `EnumUnit` (no bindings) so the arm binds nothing
+//! whichever alternative fires. Reachability of each alternative,
+//! within the or-pattern and against earlier arms, is a usefulness
+//! question answered in [`super::super::match_expr`].
 
 use koja_ast::ast::{Diagnostic, Pattern};
 use koja_ast::identifier::ResolvedType;
@@ -18,8 +10,7 @@ use koja_ast::labels::{pattern_kind_label, pattern_span};
 use koja_ast::span::Span;
 
 use super::super::ctx::Resolver;
-use super::literals::literal_repr;
-use super::{PatternCoverage, VariantWitness, resolve_pattern};
+use super::resolve_pattern;
 
 pub(super) fn resolve_or_pattern(
     patterns: &mut [Pattern],
@@ -27,16 +18,11 @@ pub(super) fn resolve_or_pattern(
     span: Span,
     resolver: &mut Resolver<'_>,
     diagnostics: &mut Vec<Diagnostic>,
-) -> PatternCoverage {
+) {
     if patterns.is_empty() {
         diagnostics.push(Diagnostic::error("or-pattern is empty", span));
-        return PatternCoverage::Other;
+        return;
     }
-    let mut variant_fullness: BTreeMap<u32, bool> = BTreeMap::new();
-    let mut all_literal = true;
-    let mut all_enum_units = true;
-    let mut seen_alt_literals: BTreeSet<String> = BTreeSet::new();
-    let mut seen_alt_variants: BTreeSet<u32> = BTreeSet::new();
     for alternative in patterns.iter_mut() {
         if !is_admitted_or_alternative(alternative) {
             diagnostics.push(Diagnostic::error(
@@ -47,72 +33,9 @@ pub(super) fn resolve_or_pattern(
                 ),
                 pattern_span(alternative),
             ));
-            all_literal = false;
-            all_enum_units = false;
             continue;
         }
-        let alt_span = pattern_span(alternative);
-        let pre_literal = match alternative {
-            Pattern::Literal { value, .. } => Some(literal_repr(value)),
-            _ => None,
-        };
-        match resolve_pattern(alternative, subject_ty, resolver, diagnostics) {
-            PatternCoverage::Variants(witnesses) => {
-                all_literal = false;
-                let mut all_dup = !witnesses.is_empty();
-                for witness in &witnesses {
-                    if !seen_alt_variants.insert(witness.tag) {
-                        continue;
-                    }
-                    all_dup = false;
-                }
-                if all_dup {
-                    diagnostics.push(Diagnostic::warning(
-                        "or-pattern alternative is unreachable because it is already listed earlier in \
-                         this or-pattern",
-                        alt_span,
-                    ));
-                }
-                // Combined fullness per tag is the AND across every
-                // alternative covering that tag.
-                for witness in witnesses {
-                    variant_fullness
-                        .entry(witness.tag)
-                        .and_modify(|combined| *combined &= witness.full)
-                        .or_insert(witness.full);
-                }
-            }
-            PatternCoverage::Other => {
-                all_enum_units = false;
-                if let Some(repr) = pre_literal
-                    && !seen_alt_literals.insert(repr)
-                {
-                    diagnostics.push(Diagnostic::warning(
-                        "or-pattern alternative is unreachable because it is already listed earlier in \
-                         this or-pattern",
-                        alt_span,
-                    ));
-                }
-            }
-            PatternCoverage::CatchAll | PatternCoverage::UnionMember(_) => {
-                // CatchAll only reachable via an unhandled future shape.
-                // The single-test guard above already rejects bindings /
-                // wildcards inside or-patterns. UnionMember inside an
-                // or-pattern isn't a supported surface. Collapse to Other
-                // so the outer match runs its "non-exhaustive" rule.
-                all_literal = false;
-                all_enum_units = false;
-            }
-        }
-    }
-    if all_enum_units && !all_literal {
-        let witnesses = variant_fullness
-            .into_iter()
-            .map(|(tag, full)| VariantWitness { full, tag })
-            .collect();
-        PatternCoverage::Variants(witnesses)
-    } else {
-        PatternCoverage::Other
+        resolve_pattern(alternative, subject_ty, resolver, diagnostics);
     }
 }
 

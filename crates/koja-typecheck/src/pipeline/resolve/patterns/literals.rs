@@ -1,7 +1,6 @@
 //! Literal-pattern helpers: subject-vs-literal type checking and
-//! the canonical literal-string representation used by
-//! [`super::collect_literal_reprs`] and by [`super::or_pattern`]
-//! for intra-or-pattern overlap detection.
+//! the canonical literal text [`super::usefulness`] keys duplicate
+//! literal arms on.
 
 use koja_ast::ast::{Diagnostic, Literal};
 use koja_ast::coercion::LiteralCoercion;
@@ -88,12 +87,10 @@ pub(super) fn check_literal_matches_subject(
     ));
 }
 
-/// Canonical surface-string form of a literal pattern's value.
-/// Stable enough to use as a dedupe key for cross-arm literal-arm
-/// reachability checks. Strings are wrapped in quotes so an `Int`
-/// literal "true" never collides with a `Bool` literal `true`
-/// (subjects in the same `match` always have the same type, so the
-/// collision is theoretical, but the wrapping costs nothing).
+/// Canonical surface-string form of a literal pattern's value, used
+/// as the identity of literal arms in usefulness. Strings are wrapped
+/// in quotes so a `String` literal `"true"` never collides with a
+/// `Bool` literal `true`.
 pub(super) fn literal_repr(value: &Literal) -> String {
     match value {
         Literal::Bool(b) => b.to_string(),

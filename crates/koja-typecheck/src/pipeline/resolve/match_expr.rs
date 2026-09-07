@@ -1,51 +1,44 @@
 //! `match` expression resolution. Walks the subject and every arm
-//! body, requires a wildcard / binding catch-all (or full structural
-//! variant coverage for enum subjects), and joins the arm tails using
-//! the same lattice [`super::control_flow`] uses for `if` / `cond` /
-//! ternary.
+//! body, checks coverage, and joins the arm tails using the same
+//! lattice [`super::control_flow`] uses for `if` / `cond` / ternary.
+//!
+//! Coverage is a usefulness question (see
+//! [`super::patterns::SubjectCoverage`]). The match is exhaustive
+//! when a wildcard row is not useful against the unguarded arms,
+//! and nested payload patterns combine, so `Some(Red)`, `Some(Green)`
+//! and `None` exhaust an `Option<Color>` with two colors. A missing
+//! case prints as a witness pattern the user can paste into a new
+//! arm.
 //!
 //! Arm guards (`pattern when expr -> body`) resolve in the
 //! post-pattern-bind scope so the guard sees pattern-introduced
-//! locals. Guarded arms are excluded from coverage attribution: a
-//! guard can fail at runtime, so `Color.Red when ...` does not
-//! cover `Red`.
+//! locals. A guard can fail at runtime, so guarded arms never join
+//! the coverage matrix, but they are still tested for reachability.
 //!
-//! Reachability / redundancy is reported as warning-severity
-//! diagnostics: arm-after-catch-all, duplicate enum variant or
-//! literal across arms, and overlapping alternatives within a
-//! single or-pattern. Warnings ride the `CheckedProgram`'s success
-//! path, they do not gate IR lowering.
-//!
-//! `Bool` subjects relax the catch-all rule: if both `true` and
-//! `false` literal arms appear (directly or as or-pattern
-//! alternatives), the match is exhaustive without `_`.
-
-use std::collections::BTreeSet;
+//! Reachability is reported as warning-severity diagnostics. An arm
+//! (or one alternative of an or-pattern) whose row is not useful
+//! against the rows above it is unreachable. Warnings ride the
+//! `CheckedProgram`'s success path, they do not gate IR lowering.
 
 use koja_ast::ast::{Diagnostic, Expr, MatchArm, Pattern};
 use koja_ast::identifier::ResolvedType;
+use koja_ast::labels::pattern_span;
 use koja_ast::span::Span;
 
 use super::control_flow::{body_tail_type, join_arm_tails, require_bool_condition};
 use super::ctx::Resolver;
 use super::expr::resolve_expr;
 use super::patterns::{
-    PatternCoverage, collect_literal_reprs, is_match_subject_primitive, match_subject_enum,
+    DeconstructedPattern, SubjectCoverage, is_enum_or_union_subject, is_match_subject_primitive,
     resolve_pattern,
 };
-use super::types::{display_resolution, is_primitive, peel_alias};
+use super::types::display_resolution;
 use super::walker::resolve_body_with_expected;
-use crate::registry::{EnumDefinition, GlobalRegistry};
+use crate::registry::GlobalRegistry;
 
-/// Rolling coverage used for exhaustiveness and arm reachability.
-/// Enum variants count only when their payload patterns match every
-/// inhabitant of the variant.
-#[derive(Default)]
-struct SeenCoverage {
-    full_variants: BTreeSet<u32>,
-    literals: BTreeSet<String>,
-    union_members: BTreeSet<String>,
-}
+/// Missing patterns listed before the diagnostic collapses the rest
+/// into a count.
+const MAX_LISTED_WITNESSES: usize = 3;
 
 pub(super) fn resolve_match(
     subject: &mut Expr,
@@ -91,65 +84,29 @@ pub(super) fn resolve_match_arms(
         return ResolvedType::unresolved();
     }
 
-    let mut has_catch_all = false;
     let mut has_literal_arm = false;
-    let mut seen = SeenCoverage::default();
     let mut tails: Vec<(String, ResolvedType)> = Vec::with_capacity(arms.len());
     for (index, arm) in arms.iter_mut().enumerate() {
         if matches!(arm.pattern, Pattern::Literal { .. }) {
             has_literal_arm = true;
         }
         let scope_snapshot = resolver.scope.snapshot();
-        let coverage = resolve_pattern(&mut arm.pattern, &subject_ty, resolver, diagnostics);
+        resolve_pattern(&mut arm.pattern, &subject_ty, resolver, diagnostics);
         if let Some(guard) = &mut arm.guard {
             resolve_expr(guard, resolver, diagnostics);
             require_bool_condition("match arm guard", guard, resolver.registry, diagnostics);
         }
         resolve_body_with_expected(&mut arm.body, expected, resolver, diagnostics);
         resolver.scope.restore(scope_snapshot);
-        check_arm_reachability(
-            arm,
-            &coverage,
-            has_catch_all,
-            &seen,
-            resolver.registry,
-            diagnostics,
-        );
-        if arm.guard.is_none() {
-            match &coverage {
-                PatternCoverage::CatchAll => has_catch_all = true,
-                PatternCoverage::Variants(witnesses) => {
-                    for witness in witnesses {
-                        if witness.full {
-                            seen.full_variants.insert(witness.tag);
-                        }
-                    }
-                }
-                PatternCoverage::UnionMember(member) => {
-                    let key = display_resolution(member, resolver.registry);
-                    seen.union_members.insert(key);
-                }
-                PatternCoverage::Other => {
-                    let mut literals: Vec<String> = Vec::new();
-                    collect_literal_reprs(&arm.pattern, &mut literals);
-                    for literal in literals {
-                        seen.literals.insert(literal);
-                    }
-                }
-            }
-        }
         tails.push((
             arm_label(keyword, index),
             body_tail_type(&arm.body, resolver.registry),
         ));
     }
 
-    let subject_enum = match_subject_enum(&subject_ty, resolver.registry);
-    let subject_union_members = subject_union_member_keys(&subject_ty, resolver.registry);
     if has_literal_arm
         && subject_ty.is_resolved()
-        && subject_enum.is_none()
-        && subject_union_members.is_none()
+        && !is_enum_or_union_subject(&subject_ty, resolver.registry)
         && !is_match_subject_primitive(&subject_ty, resolver.registry)
     {
         diagnostics.push(Diagnostic::error(
@@ -160,29 +117,7 @@ pub(super) fn resolve_match_arms(
         ));
     }
 
-    if !has_catch_all {
-        if let Some(definition) = subject_enum {
-            diagnose_missing_enum_variants(definition, &seen.full_variants, span, diagnostics);
-        } else if let Some(member_keys) = subject_union_members {
-            diagnose_missing_union_members(
-                &member_keys,
-                &seen.union_members,
-                &subject_ty,
-                resolver.registry,
-                span,
-                diagnostics,
-            );
-        } else if !is_bool_exhaustive(&subject_ty, &seen.literals, resolver.registry) {
-            let subject_label = display_resolution(&subject_ty, resolver.registry);
-            diagnostics.push(Diagnostic::error_with_hint(
-                "match must include a wildcard `_` or binding catch-all arm",
-                format!(
-                    "the subject has type `{subject_label}`, so add a catch-all `_ -> ...` arm"
-                ),
-                span,
-            ));
-        }
-    }
+    check_coverage(arms, &subject_ty, span, resolver.registry, diagnostics);
 
     join_arm_tails(keyword, &tails, span, resolver.registry, diagnostics)
 }
@@ -198,157 +133,110 @@ fn arm_label(keyword: &str, index: usize) -> String {
     }
 }
 
-/// If `subject` peels to a union, return the canonical
-/// `display_resolution` key for each member (in canonical order)
-/// for exhaustiveness comparison. `None` for any other subject.
-fn subject_union_member_keys(
-    subject: &ResolvedType,
-    registry: &GlobalRegistry,
-) -> Option<Vec<String>> {
-    let ResolvedType::Union(members) = peel_alias(subject, registry) else {
-        return None;
-    };
-    Some(
-        members
-            .iter()
-            .map(|m| display_resolution(m, registry))
-            .collect(),
-    )
-}
-
-/// Emit a single diagnostic listing every union member that no
-/// arm covered. Members are listed in canonical (sorted) order so
-/// the message is stable across runs.
-fn diagnose_missing_union_members(
-    member_keys: &[String],
-    covered: &BTreeSet<String>,
+/// Reachability warnings per arm, then the exhaustiveness error.
+/// Skipped when any arm fails to deconstruct, since resolution
+/// already reported the shape mismatch.
+fn check_coverage(
+    arms: &[MatchArm],
     subject_ty: &ResolvedType,
-    registry: &GlobalRegistry,
     span: Span,
+    registry: &GlobalRegistry,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
-    let missing: Vec<&str> = member_keys
+    let coverage = SubjectCoverage::new(subject_ty, registry);
+    let Some(rows) = arms
         .iter()
-        .filter(|key| !covered.contains(*key))
-        .map(String::as_str)
-        .collect();
+        .map(|arm| coverage.deconstruct(&arm.pattern))
+        .collect::<Option<Vec<_>>>()
+    else {
+        return;
+    };
+
+    let mut matrix: Vec<&DeconstructedPattern> = Vec::with_capacity(arms.len());
+    for (arm, row) in arms.iter().zip(&rows) {
+        check_arm_reachability(arm, row, &matrix, &coverage, diagnostics);
+        if arm.guard.is_none() {
+            matrix.push(row);
+        }
+    }
+
+    let missing = coverage.missing_patterns(&matrix);
     if missing.is_empty() {
         return;
     }
+    if missing.iter().any(|witness| witness == "_") {
+        let subject_label = display_resolution(subject_ty, registry);
+        diagnostics.push(Diagnostic::error_with_hint(
+            "match must include a wildcard `_` or binding catch-all arm",
+            format!("the subject has type `{subject_label}`, so add a catch-all `_ -> ...` arm"),
+            span,
+        ));
+        return;
+    }
+    let listed = format_witness_list(&missing);
     diagnostics.push(Diagnostic::error_with_hint(
-        format!(
-            "match against union `{}` is not exhaustive. Missing member(s) {}",
-            display_resolution(subject_ty, registry),
-            missing.join(", "),
-        ),
-        "add a typed-binding arm for each member, or a catch-all `_ -> ...`",
+        format!("match is not exhaustive. Missing pattern(s) {listed}"),
+        format!("add a catch-all `_ -> ...` arm or handle {listed}"),
         span,
     ));
 }
 
-/// Emit warning-severity reachability diagnostics for one arm.
-/// Walks the catch-all-already-fired check first, then duplicate-
-/// variant / duplicate-literal coverage against the rolling
-/// accumulators. Does not mutate the accumulators. The caller
-/// updates them after this returns so the warning is keyed on the
-/// state the arm actually saw.
-fn check_arm_reachability(
+/// Warn when no value can reach `row` past the unguarded rows above
+/// it. Or-pattern alternatives are tested one at a time, against the
+/// earlier arms plus the alternatives before them, so a duplicate
+/// inside one or-pattern warns too.
+fn check_arm_reachability<'a>(
     arm: &MatchArm,
-    coverage: &PatternCoverage,
-    has_catch_all: bool,
-    seen: &SeenCoverage,
-    registry: &GlobalRegistry,
+    row: &'a DeconstructedPattern,
+    earlier: &[&'a DeconstructedPattern],
+    coverage: &SubjectCoverage<'_>,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
-    if has_catch_all {
+    if earlier
+        .iter()
+        .any(|other| **other == DeconstructedPattern::Wildcard)
+    {
         diagnostics.push(Diagnostic::warning(
             "match arm is unreachable because a previous arm matches every value",
             arm.span,
         ));
         return;
     }
-    match coverage {
-        PatternCoverage::CatchAll => {}
-        PatternCoverage::Variants(witnesses) => {
-            // Only `full` witnesses shadow sibling arms. Narrowing
-            // patterns share the outer tag without subsuming each
-            // other.
-            if !witnesses.is_empty()
-                && witnesses
-                    .iter()
-                    .all(|witness| seen.full_variants.contains(&witness.tag))
-            {
-                diagnostics.push(Diagnostic::warning(
-                    "match arm is unreachable because every variant it covers is already \
-                     matched by an earlier arm",
-                    arm.span,
-                ));
-            }
+    let (DeconstructedPattern::Or(alternatives), Pattern::Or { patterns, .. }) =
+        (row, &arm.pattern)
+    else {
+        if !coverage.is_useful(earlier, row) {
+            diagnostics.push(Diagnostic::warning(
+                "match arm is unreachable because earlier arms already match every value it \
+                 covers",
+                arm.span,
+            ));
         }
-        PatternCoverage::UnionMember(member) => {
-            let key = display_resolution(member, registry);
-            if seen.union_members.contains(&key) {
-                diagnostics.push(Diagnostic::warning(
-                    "match arm is unreachable because an earlier arm already covers this \
-                     union member",
-                    arm.span,
-                ));
-            }
-        }
-        PatternCoverage::Other => {
-            let mut literals: Vec<String> = Vec::new();
-            collect_literal_reprs(&arm.pattern, &mut literals);
-            if !literals.is_empty() && literals.iter().all(|lit| seen.literals.contains(lit)) {
-                diagnostics.push(Diagnostic::warning(
-                    "match arm is unreachable because every literal it covers is already \
-                     matched by an earlier arm",
-                    arm.span,
-                ));
-            }
-        }
-    }
-}
-
-/// True when `subject_ty` is `Global.Bool` and both `true` and
-/// `false` literal arms have already been collected. Used to short-
-/// circuit the missing-catch-all error for fully-covered `Bool`
-/// matches.
-fn is_bool_exhaustive(
-    subject_ty: &ResolvedType,
-    seen_literals: &BTreeSet<String>,
-    registry: &GlobalRegistry,
-) -> bool {
-    is_primitive(subject_ty, registry, "Bool")
-        && seen_literals.contains("true")
-        && seen_literals.contains("false")
-}
-
-fn diagnose_missing_enum_variants(
-    definition: &EnumDefinition,
-    covered: &BTreeSet<u32>,
-    span: Span,
-    diagnostics: &mut Vec<Diagnostic>,
-) {
-    let missing: Vec<&str> = definition
-        .variants
-        .iter()
-        .enumerate()
-        .filter_map(|(index, variant)| {
-            if covered.contains(&(index as u32)) {
-                None
-            } else {
-                Some(variant.name.as_str())
-            }
-        })
-        .collect();
-    if missing.is_empty() {
         return;
+    };
+    let mut seen: Vec<&DeconstructedPattern> = earlier.to_vec();
+    for (alternative, pattern) in alternatives.iter().zip(patterns) {
+        if !coverage.is_useful(&seen, alternative) {
+            diagnostics.push(Diagnostic::warning(
+                "or-pattern alternative is unreachable because earlier arms or alternatives \
+                 already match every value it covers",
+                pattern_span(pattern),
+            ));
+        }
+        seen.push(alternative);
     }
-    let plural = if missing.len() == 1 { "" } else { "s" };
-    let missing_list = missing.join("`, `");
-    diagnostics.push(Diagnostic::error_with_hint(
-        format!("match against enum is not exhaustive. Missing variant{plural} `{missing_list}`"),
-        format!("add a catch-all `_ -> ...` arm or handle `{missing_list}`"),
-        span,
-    ));
+}
+
+fn format_witness_list(missing: &[String]) -> String {
+    let listed: Vec<String> = missing
+        .iter()
+        .take(MAX_LISTED_WITNESSES)
+        .map(|witness| format!("`{witness}`"))
+        .collect();
+    let hidden = missing.len().saturating_sub(MAX_LISTED_WITNESSES);
+    if hidden == 0 {
+        listed.join(", ")
+    } else {
+        format!("{} and {hidden} more", listed.join(", "))
+    }
 }

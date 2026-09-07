@@ -1,1 +1,1 @@
-match against enum is not exhaustive. Missing variant `Some`
+match is not exhaustive. Missing pattern(s) `Option.Some(Color.Green)`
