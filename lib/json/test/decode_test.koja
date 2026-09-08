@@ -120,4 +120,30 @@ struct DecodeTest
         fail "decode failed: #{msg}"
     end
   end
+
+  # The decoder recurses once per element. A long array pins that
+  # the recursion runs in constant stack and keeps one live copy of
+  # the accumulator, since a few thousand frames would overflow the
+  # process stack and per-frame copies would use quadratic memory.
+  @test "decode long array"
+  fn test_decode_long_array ! String
+    count = 5000
+    parts: List<String> = List.new()
+
+    for i in Range{start: 0, stop: count - 1}
+      parts = parts.append("#{i}.5")
+    end
+
+    input = "[" <> String.join(parts, ",") <> "]"
+
+    match try decode(input)
+      Value.Array(items) ->
+        if items.length() != count
+          fail "expected #{count} items, got #{items.length()}"
+        end
+
+      _ ->
+        fail "expected an array"
+    end
+  end
 end

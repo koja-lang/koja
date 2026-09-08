@@ -1164,6 +1164,26 @@ impl IRTerminator {
     pub fn branch(block: IRBlockId) -> Self {
         Self::Branch(BranchTarget::to(block))
     }
+
+    /// Whether `value` flows out of the block through this terminator,
+    /// as a branch edge arg, the returned value, or a tail-call arg.
+    pub(crate) fn uses_value(&self, value: ValueId) -> bool {
+        match self {
+            IRTerminator::Branch(target) => target.args.contains(&value),
+            IRTerminator::CondBranch {
+                cond,
+                else_target,
+                then_target,
+            } => {
+                *cond == value
+                    || else_target.args.contains(&value)
+                    || then_target.args.contains(&value)
+            }
+            IRTerminator::Return { value: returned } => *returned == Some(value),
+            IRTerminator::TailCall { args, .. } => args.contains(&value),
+            IRTerminator::Unreachable => false,
+        }
+    }
 }
 
 #[cfg(test)]

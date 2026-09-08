@@ -23,7 +23,7 @@
 //!   `rc == 1` before growing in place, otherwise it copies and does
 //!   the release the fusion deleted.
 //!
-//! Two lowered death shapes match, both local to one basic block:
+//! Three lowered death shapes match, all local to one basic block:
 //!
 //! - **Owned temp** (fluent chains, `release_call_temps`): a
 //!   `drop_value(recv)` follows the site with no use of `recv`
@@ -37,6 +37,14 @@
 //!   Further eligible sites there carry the result forward
 //!   (`x = x.append(a).append(b)`, `s = s <> a <> b`), and the trio
 //!   must write the last carrier, so every link of the chain fuses.
+//! - **Slot exit** (`f(n - 1, acc.append(x))` in tail position): the
+//!   site takes its receiver from `recv = read x` and the next
+//!   instruction touching `x` is its `drop_local x`, with nothing
+//!   reading `recv` before it or in the terminator. The slot's
+//!   storage dies at that drop, so the drop is deleted and the site
+//!   takes it over. The slot then holds a dead pointer that nothing
+//!   reads: a tail-call back-edge stores the new arg over it, or the
+//!   function returns.
 //!
 //! Any shape that does not match keeps the copying form. Twins are
 //! registered per fused instantiation with the original's signature,
@@ -205,6 +213,9 @@ fn eligible_mutators(packages: &[IRPackage]) -> EligibleMutators {
 enum ReceiverDeath {
     /// `drop_value(recv)` at the index. Deleted.
     OwnedTemp { drop_index: usize },
+    /// `drop_local x` at the index, where `x` is the slot the receiver
+    /// was read from. Deleted.
+    SlotExit { drop_index: usize },
     /// `stale = read x` at the index, immediately followed by
     /// `drop_value(stale)` and `write x, result`. The first two are
     /// deleted.
@@ -226,7 +237,7 @@ fn fuse_block(
             continue;
         };
         match death {
-            ReceiverDeath::OwnedTemp { drop_index } => {
+            ReceiverDeath::OwnedTemp { drop_index } | ReceiverDeath::SlotExit { drop_index } => {
                 block.instructions.remove(drop_index);
             }
             ReceiverDeath::SlotRebind { stale_read_index } => {
@@ -251,7 +262,8 @@ fn match_fusion(
     let site = ConsumingSite::at(block, index, eligible)?;
     let receiver = site.receiver();
     let death = owned_temp_death(block, index, receiver)
-        .or_else(|| slot_rebind_death(block, index, receiver, site.result(), eligible))?;
+        .or_else(|| slot_rebind_death(block, index, receiver, site.result(), eligible))
+        .or_else(|| slot_exit_death(block, index, receiver))?;
     Some((site, death))
 }
 
@@ -315,6 +327,38 @@ fn slot_rebind_death(
             && link.receiver() == carrier
         {
             carrier = link.result();
+        }
+    }
+    None
+}
+
+/// Match the slot-exit shape, where `receiver` was read from a slot
+/// that is untouched up to the site, and the first instruction after
+/// the site to touch the slot is its `drop_local`. Nothing may read
+/// `receiver` before that drop or in the terminator, since the fused
+/// site takes over the storage the drop would have released.
+fn slot_exit_death(
+    block: &IRBasicBlock,
+    site_index: usize,
+    receiver: ValueId,
+) -> Option<ReceiverDeath> {
+    let slot = receiver_slot(block, site_index, receiver)?;
+    if block.terminator.uses_value(receiver) {
+        return None;
+    }
+    for (offset, instruction) in block.instructions[site_index + 1..].iter().enumerate() {
+        if instruction.uses_value(receiver) {
+            return None;
+        }
+        if let IRInstruction::DropLocal { local, .. } = instruction
+            && *local == slot
+        {
+            return Some(ReceiverDeath::SlotExit {
+                drop_index: site_index + 1 + offset,
+            });
+        }
+        if instruction.touches_local(slot) {
+            return None;
         }
     }
     None

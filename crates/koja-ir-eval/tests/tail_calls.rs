@@ -89,3 +89,28 @@ fn self_recursive_unit_tail_call_runs_in_constant_stack() {
         ";
     assert_eq!(evaluate(&dedent(source)).unwrap(), Value::Int(0));
 }
+
+#[test]
+fn try_forwarded_self_call_runs_in_constant_stack() {
+    // `try self(...)` in tail position forwards the callee's Result at
+    // typecheck instead of unwrapping and rewrapping it, so the
+    // recursion loopifies. Without forwarding the `match` desugar sits
+    // between the call and the return and 100 000 frames overflow.
+    let source = "
+        fn count(n: Int, acc: Int) -> Int ! String
+          if n == 0
+            return acc
+          end
+
+          try count(n - 1, acc + 1)
+        end
+
+        fn main -> Int
+          match count(100000, 0)
+            Result.Ok(total) -> total
+            Result.Err(_) -> -1
+          end
+        end
+        ";
+    assert_eq!(evaluate(&dedent(source)).unwrap(), Value::Int(100000));
+}

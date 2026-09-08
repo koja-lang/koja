@@ -35,7 +35,7 @@ use crate::registry::{BoundOverlay, FunctionSignature, GlobalRegistry};
 use super::ctx::{Resolver, ResolverEnv};
 use super::error_channel::{
     channel_for_signature, hand_wrapped_result, is_fail_statement, ok_wrap_return,
-    resolve_fail_statement, return_site_expected,
+    resolve_fail_statement, resolve_return_try, return_site_expected,
 };
 use super::expr::resolve_expr_with_expected;
 use super::field_defaults::{resolve_enum_defaults, resolve_struct_defaults};
@@ -292,7 +292,7 @@ fn resolve_function(
             }
             _ => expected,
         };
-        resolve_body_with_expected(body, trailing_expected.as_ref(), &mut resolver, diagnostics);
+        resolve_function_body(body, trailing_expected.as_ref(), &mut resolver, diagnostics);
     }
 
     if let Some(signature) = signature {
@@ -438,14 +438,69 @@ pub(super) fn resolve_statement_with_expected(
         }
         Statement::Return { value, span } => {
             if let Some(value) = value {
-                let expected =
-                    return_site_expected(value, resolver.current_return_type.as_ref(), resolver);
-                resolve_expr_with_expected(value, expected.as_ref(), resolver, diagnostics);
+                if matches!(value.kind, ExprKind::Try { .. }) {
+                    // A forwarded `return try X` already carries the
+                    // declared `Result`, so it needs no check or wrap.
+                    if resolve_return_try(value, resolver, diagnostics) {
+                        return;
+                    }
+                } else {
+                    let expected = return_site_expected(
+                        value,
+                        resolver.current_return_type.as_ref(),
+                        resolver,
+                    );
+                    resolve_expr_with_expected(value, expected.as_ref(), resolver, diagnostics);
+                }
             }
             check_explicit_return(value.as_mut(), *span, resolver, diagnostics);
             ok_wrap_return(value, *span, resolver);
         }
     }
+}
+
+/// Resolve a function body. Same as [`resolve_body_with_expected`],
+/// except a trailing `try X` in a `!`-spelled function goes through
+/// [`resolve_return_try`]: when it forwards, the statement becomes an
+/// explicit `return X`, the shape a trailing `fail` already takes and
+/// the one `check_return_type` leaves alone. When it does not forward
+/// the statement stays a trailing expression so its diagnostics keep
+/// the trailing-position wording.
+fn resolve_function_body(
+    body: &mut Vec<Statement>,
+    trailing_expected: Option<&ResolvedType>,
+    resolver: &mut Resolver<'_>,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    let ok_wraps = resolver
+        .error_channel
+        .as_ref()
+        .is_some_and(|channel| channel.ok_wraps);
+    let trailing_try = matches!(
+        body.last(),
+        Some(Statement::Expr(Expr {
+            kind: ExprKind::Try { .. },
+            ..
+        }))
+    );
+    if !(ok_wraps && trailing_try) {
+        resolve_body_with_expected(body, trailing_expected, resolver, diagnostics);
+        return;
+    }
+    let Some(Statement::Expr(mut trailing)) = body.pop() else {
+        unreachable!("trailing statement matched as a `try` expression");
+    };
+    resolve_body_with_expected(body, None, resolver, diagnostics);
+    let span = trailing.span;
+    let forwarded = resolve_return_try(&mut trailing, resolver, diagnostics);
+    body.push(if forwarded {
+        Statement::Return {
+            value: Some(trailing),
+            span,
+        }
+    } else {
+        Statement::Expr(trailing)
+    });
 }
 
 /// Walk every statement in `body`, resolving the trailing

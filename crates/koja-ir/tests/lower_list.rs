@@ -115,9 +115,12 @@ fn list_length_lowers_to_intrinsic_length_returning_int() {
 
 #[test]
 fn list_append_lowers_to_intrinsic_append_with_element_param() {
+    // `my_list` is read again afterwards so the receiver stays live
+    // and the call keeps the copying intrinsic under test.
     let source = "
         my_list: List<Int> = List.new()
         my_list.append(42)
+        my_list.length()
         ";
     let script = lower_script_source(source);
     let append = intrinsic_call(&script, "append");

@@ -171,7 +171,7 @@ fn fused_rebind_deletes_the_stale_read_and_drop() {
 }
 
 #[test]
-fn owned_temp_chain_fuses_second_append_only() {
+fn owned_temp_chain_fuses_every_append() {
     let source = "
         fn chain(seed: List<Int>) -> List<Int>
           seed.append(1).append(2)
@@ -184,14 +184,86 @@ fn owned_temp_chain_fuses_second_append_only() {
     let blocks = &script_function(&script, "chain").blocks;
     assert_eq!(
         consuming_callees(blocks).len(),
-        1,
-        "the owned intermediate's append should fuse",
+        2,
+        "the `seed` slot dies at the exit drop and the intermediate is an owned temp, so both fuse",
     );
+    assert_eq!(copying_calls(blocks, "append"), 0);
+}
+
+#[test]
+fn append_passed_to_a_tail_call_fuses_at_the_slot_exit() {
+    let source = "
+        fn build(n: Int, acc: List<Int>) -> List<Int>
+          match n
+            0 -> acc
+            _ -> build(n - 1, acc.append(n))
+          end
+        end
+
+        build(3, []).length()
+    ";
+
+    let script = lower(source);
+    let blocks = &script_function(&script, "build").blocks;
     assert_eq!(
-        copying_calls(blocks, "append"),
+        consuming_callees(blocks).len(),
         1,
-        "the borrowed `seed` receiver must keep the copying append",
+        "the receiver's slot dies at the exit drop before the back-edge, so the append fuses",
     );
+    assert_eq!(copying_calls(blocks, "append"), 0);
+    let fused_block = blocks
+        .iter()
+        .find(|block| {
+            block.instructions.iter().any(|instruction| {
+                matches!(
+                    instruction,
+                    IRInstruction::Call { callee, .. } if callee.mangled().contains(".$consume$")
+                )
+            })
+        })
+        .expect("a block holds the fused append");
+    let list_drops = fused_block
+        .instructions
+        .iter()
+        .filter(|instruction| {
+            matches!(instruction, IRInstruction::DropLocal { ty, .. } if ty.is_heap_managed())
+        })
+        .count();
+    assert_eq!(
+        list_drops, 0,
+        "the accumulator slot's exit drop is the death the fusion deleted",
+    );
+    // The fused result is an owned temp forwarded through the tail
+    // call, so it moves through the back-edge with no clone glue.
+    assert!(
+        !fused_block.instructions.iter().any(|instruction| matches!(
+            instruction,
+            IRInstruction::Call { callee, .. } if callee.mangled().contains(".$clone$")
+        )),
+        "the appended list must not be cloned before the back-edge: {:#?}",
+        fused_block.instructions,
+    );
+}
+
+#[test]
+fn slot_written_before_its_exit_drop_keeps_the_copying_intrinsic() {
+    let source = "
+        fn reset(xs: List<Int>) -> List<Int>
+          ys = xs.append(1)
+          xs = ys
+          ys
+        end
+
+        reset([2]).length()
+    ";
+
+    let script = lower(source);
+    let blocks = &script_function(&script, "reset").blocks;
+    assert!(
+        consuming_callees(blocks).is_empty(),
+        "a slot rewritten before its exit drop still holds live storage at the site",
+    );
+    assert_eq!(copying_calls(blocks, "append"), 1);
 }
 
 #[test]
@@ -380,8 +452,8 @@ fn owned_temp_concat_consumes_lhs() {
     let blocks = &script_function(&script, "wrap").blocks;
     assert_eq!(
         concats(blocks),
-        vec![(false, ConcatKind::String), (true, ConcatKind::String)],
-        "the borrowed `s` keeps copying, the owned intermediate consumes",
+        vec![(true, ConcatKind::String), (true, ConcatKind::String)],
+        "the `s` slot dies at the exit drop and the intermediate is an owned temp, so both consume",
     );
 }
 

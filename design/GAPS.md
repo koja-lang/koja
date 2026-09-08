@@ -452,3 +452,44 @@ to the member that declares that enum and narrow to it before the
 variant test. Coverage then treats the arm as a partial cover of that
 member, so `Result.Err(e)` after it still reads as the remaining
 cases.
+
+## `try` on a self-call is a tail call only at the return statement
+
+Found 2026-09-07 while fixing stack growth in the JSON decoder. In a
+`-> T ! E` function, `try X` at a return site (explicit `return try X`
+or the trailing statement) forwards to `X` when `X` already produces
+the function's own `Result<T, E>`, so a `try self(...)` there becomes
+a real tail call. Two neighbouring shapes still desugar to the
+unwrap-then-rewrap `match`, which hides the call from the tail-call
+pass and grows the stack per step:
+
+- `try self(...)` as the trailing expression of a `match` or `if` arm.
+  A plain self-call in an arm is already a tail call, so adding `try`
+  is what breaks it.
+- A callee whose error type is a strict subset of the caller's. The
+  widen is a real `UnionWrap`, so the site is not the identity.
+
+Consequence: the failure mode is a data-dependent stack overflow that
+compiles without a warning.
+
+**Fix path:** resolve the arm case at the desugar by treating a `try`
+that is the value of a return-position arm as a return site. For the
+widening case either widen the `Result` as a whole with an operation
+the tail-call pass recognizes, or teach the pass to see through a
+`UnionWrap` on the error payload. A diagnostic for the remaining
+shapes is the fallback if either proves large.
+
+## Eval backend copies a tail-recursive list accumulator per step
+
+Found 2026-09-07. A tail-recursive `List` accumulator that the LLVM
+backend builds in O(1) amortized per step is quadratic in the eval
+backend, so a 100,000-step build takes minutes under `koja test` and
+`.kojs` scripts while the compiled binary finishes in well under a
+second. The eval runtime gates the consuming twins on a true unique
+check, and the passthrough that hands the argument to the next
+iteration does not keep the accumulator unique there.
+
+**Fix path:** trace the refcount of the accumulator across the
+`TailCall` back-edge in the interpreter and find where the extra
+reference comes from, then either release it before the mutator runs
+or hand the buffer to the mutator by move.

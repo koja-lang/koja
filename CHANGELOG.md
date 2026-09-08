@@ -5,6 +5,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- `try self.f(...)` in tail position of a `! E` function is now a real tail call, so accumulator recursion through `try` runs in constant stack and keeps one live copy of the accumulator instead of one per step.
+- Passing `acc.append(x)` as an argument to a tail call, such as `build(n - 1, acc.append(n))`, now reuses the list buffer instead of copying it on every step.
+- A collection or string parameter that is not read again after a mutator or `<>` now hands its buffer to that call instead of copying it.
+
 ## [0.18.3] - 2026-09-07
 
 ### Added

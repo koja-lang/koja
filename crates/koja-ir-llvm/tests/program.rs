@@ -181,13 +181,14 @@ fn concat_rebind_loop_routes_through_owned_helper() {
 
 #[test]
 fn borrowed_concat_keeps_the_inline_copying_shape() {
-    // Both operands are parameters that outlive the concat, so the
-    // function keeps the copying `malloc + memcpy` shape. The stdlib
-    // linked into the module has its own fused builders, so the
+    // The lhs is read again after the concat, so it stays live there
+    // and the function keeps the copying `malloc + memcpy` shape. The
+    // stdlib linked into the module has its own fused builders, so the
     // check is per function rather than per module.
     let source = "
-        fn join(a: String, b: String) -> String
-          a <> b
+        fn join(a: String, b: String) -> Int
+          joined = a <> b
+          joined.byte_length() + a.byte_length()
         end
 
         fn main
