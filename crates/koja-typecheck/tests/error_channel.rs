@@ -413,6 +413,148 @@ fn try_in_closure_targets_the_closure_channel() {
     typecheck(&with_prelude(source));
 }
 
+// Try forwarding
+
+/// The forwarded shape: a trailing `return` whose value is the bare
+/// subject call, with no `match` desugar and no `Result.Ok` wrap.
+fn assert_forwarded_call(statement: Option<&Statement>) {
+    let Some(Statement::Return {
+        value: Some(value), ..
+    }) = statement
+    else {
+        panic!("expected a trailing `return`, got {statement:?}");
+    };
+    assert!(
+        matches!(value.kind, ExprKind::Call { .. }),
+        "expected the forwarded subject call, got {:?}",
+        value.kind,
+    );
+}
+
+#[test]
+fn trailing_try_of_same_result_type_forwards() {
+    let source = "
+        fn twice(s: String) -> Int ! MyError
+          try parse(s)
+        end
+
+          twice(\"1\")
+        ";
+    let checked = typecheck(&with_prelude(source));
+    let body = function_body(&checked, "twice");
+    assert_forwarded_call(body.last());
+    let signature = function_signature(&checked, PACKAGE, &["twice"]);
+    let Some(Statement::Return {
+        value: Some(value), ..
+    }) = body.last()
+    else {
+        unreachable!("asserted above");
+    };
+    assert_eq!(value.resolution, signature.return_type);
+}
+
+#[test]
+fn explicit_return_try_of_same_result_type_forwards() {
+    let source = "
+        fn twice(s: String) -> Int ! MyError
+          if s == \"2\"
+            return try parse(\"1\")
+          end
+
+          0
+        end
+
+          twice(\"1\")
+        ";
+    let checked = typecheck(&with_prelude(source));
+    let body = function_body(&checked, "twice");
+    let Some(Statement::Expr(Expr {
+        kind: ExprKind::If { then_body, .. },
+        ..
+    })) = body.first()
+    else {
+        panic!("expected a leading `if`, got {:?}", body.first());
+    };
+    assert_forwarded_call(then_body.last());
+}
+
+#[test]
+fn trailing_try_of_unit_success_forwards_without_ok_unit() {
+    let source = "
+        fn check(s: String) ! MyError
+          try validate(s)
+        end
+
+        fn validate(s: String) ! MyError
+          if s != \"1\"
+            fail MyError.Nope
+          end
+        end
+
+          check(\"1\")
+        ";
+    let checked = typecheck(&with_prelude(source));
+    let body = function_body(&checked, "check");
+    assert_eq!(body.len(), 1, "no `Result.Ok(())` may be appended");
+    assert_forwarded_call(body.last());
+}
+
+#[test]
+fn trailing_try_with_narrower_error_type_keeps_the_match() {
+    let source = "
+        enum NetError
+          Timeout
+        end
+
+        fn combined(s: String) -> Int ! MyError | NetError
+          try parse(s)
+        end
+
+          combined(\"1\")
+        ";
+    let checked = typecheck(&with_prelude(source));
+    let body = function_body(&checked, "combined");
+    let Some(Statement::Expr(trailing)) = body.last() else {
+        panic!("expected a trailing expression, got {:?}", body.last());
+    };
+    assert_ok_construction(trailing);
+}
+
+#[test]
+fn trailing_try_in_closure_does_not_forward() {
+    // Closures have no `!` spelling, so their trailing `try` keeps
+    // the unwrapping match and types as the subject's Ok type.
+    let source = "
+        fn run() -> Int
+          unwrap = fn (s: String) -> Result<Int, MyError>
+            Result.Ok(try parse(s))
+          end
+          unwrap(\"1\") rescue _ -> 0
+        end
+
+          run()
+        ";
+    typecheck(&with_prelude(source));
+}
+
+#[test]
+fn non_trailing_try_is_not_forwarded() {
+    let source = "
+        fn plus_one(s: String) -> Int ! MyError
+          n = try parse(s)
+          n + 1
+        end
+
+          plus_one(\"1\")
+        ";
+    let checked = typecheck(&with_prelude(source));
+    let body = function_body(&checked, "plus_one");
+    let Some(Statement::Assignment { value, .. }) = body.first() else {
+        panic!("expected the try binding");
+    };
+    assert!(matches!(value.kind, ExprKind::Match { .. }));
+}
+
 // Diagnostics
 
 #[test]

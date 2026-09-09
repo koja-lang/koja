@@ -31,6 +31,7 @@ use crate::function::{
     BranchTarget, FunctionKind, IRBasicBlock, IRBlockId, IRFunction, IRInstruction, IRSymbol,
     IRTerminator,
 };
+use crate::local::IRLocalId;
 use crate::package::IRPackage;
 use crate::types::{IRType, ValueId};
 
@@ -322,10 +323,11 @@ fn apply_plan(
     // `clone_T` call (or a register copy for an all-`Copy` aggregate).
     //
     // A passthrough arg skips the acquire entirely: when the arg reads
-    // a slot whose trailing `DropLocal` sits in this block, ownership
-    // moves through the back-edge instead. The drop is elided and no
-    // clone is emitted, so `scan(s, i + 1)`-style loops carry zero rc
-    // traffic per iteration.
+    // a slot whose trailing `DropLocal` sits in this block, or is an
+    // owned temp whose trailing `DropValue` does, ownership moves
+    // through the back-edge instead. The drop is elided and no clone
+    // is emitted, so `scan(s, i + 1)` and `build(n - 1, acc.append(x))`
+    // loops carry zero rc traffic and no buffer copy per iteration.
     let mut args = plan.args;
     let mut clones = Vec::new();
     let mut elided_drops: Vec<usize> = Vec::new();
@@ -360,19 +362,37 @@ fn apply_plan(
     };
 }
 
-/// The trailing-drop index that `arg` may consume as a move. The move
-/// requires `arg` to be a `LocalRead` of some slot in this block, the
-/// slot never written after that read, and a `DropLocal` of the slot
-/// in the trailing drop region (at or past `call_index`, the `Call`
-/// already removed). `taken` holds drop indices consumed by earlier
-/// args, so two args reading the same slot elide at most one drop
-/// between them (the second still needs its own acquire).
+/// The trailing-drop index that `arg` may consume as a move. Two
+/// shapes qualify, both in the trailing drop region (at or past
+/// `call_index`, the `Call` already removed): an owned temp `arg`
+/// with its own `DropValue` there, or a `LocalRead` of a slot never
+/// written after the read with a `DropLocal` of that slot there.
+/// `taken` holds drop indices consumed by earlier args, so two args
+/// carrying the same value elide at most one drop between them (the
+/// second still needs its own acquire).
 fn passthrough_drop(
     block: &IRBasicBlock,
     call_index: usize,
     arg: ValueId,
     taken: &[usize],
 ) -> Option<usize> {
+    let slot = passthrough_slot(block, call_index, arg);
+    block.instructions[call_index..]
+        .iter()
+        .enumerate()
+        .map(|(offset, inst)| (call_index + offset, inst))
+        .filter(|(index, _)| !taken.contains(index))
+        .find_map(|(index, inst)| match inst {
+            IRInstruction::DropValue { value, .. } if *value == arg => Some(index),
+            IRInstruction::DropLocal { local, .. } if Some(*local) == slot => Some(index),
+            _ => None,
+        })
+}
+
+/// The slot `arg` reads in this block, provided the slot is never
+/// written after that read (so its trailing `DropLocal` releases the
+/// value `arg` still holds). `None` for any other arg.
+fn passthrough_slot(block: &IRBasicBlock, call_index: usize, arg: ValueId) -> Option<IRLocalId> {
     let read_index = block.instructions[..call_index]
         .iter()
         .position(|inst| matches!(inst, IRInstruction::LocalRead { dest, .. } if *dest == arg))?;
@@ -383,19 +403,7 @@ fn passthrough_drop(
     let rewritten_after_read = block.instructions[read_index + 1..]
         .iter()
         .any(|inst| matches!(inst, IRInstruction::LocalWrite { local, .. } if *local == slot));
-    if rewritten_after_read {
-        return None;
-    }
-    block.instructions[call_index..]
-        .iter()
-        .enumerate()
-        .map(|(offset, inst)| (call_index + offset, inst))
-        .find_map(|(index, inst)| match inst {
-            IRInstruction::DropLocal { local, .. } if *local == slot && !taken.contains(&index) => {
-                Some(index)
-            }
-            _ => None,
-        })
+    (!rewritten_after_read).then_some(slot)
 }
 
 #[cfg(test)]
@@ -587,6 +595,94 @@ mod tests {
             )),
             "a passthrough arg needs neither the acquire nor the slot drop: {:?}",
             block.instructions,
+        );
+    }
+
+    #[test]
+    fn owned_temp_arg_with_trailing_drop_value_moves_without_clone() {
+        // `f(g(s))`: the arg is the owned result of an inner call whose
+        // `DropValue` sits in the trailing region. It moves through the
+        // back-edge, so no acquire and no drop remain.
+        let symbol = IRSymbol::synthetic("Test.loop_temp".to_string());
+        let param_ty = IRType::String;
+        let inner = IRSymbol::synthetic("Test.step".to_string());
+        let read = ValueId(1);
+        let temp = ValueId(2);
+        let call_dest = ValueId(3);
+        let function = IRFunction {
+            def_location: None,
+            blocks: vec![IRBasicBlock {
+                id: IRBlockId(0),
+                label: "entry".to_string(),
+                params: Vec::new(),
+                instructions: vec![
+                    IRInstruction::LocalDecl {
+                        local: local(0),
+                        ty: param_ty.clone(),
+                    },
+                    IRInstruction::LocalWrite {
+                        local: local(0),
+                        value: ValueId(0),
+                    },
+                    IRInstruction::LocalRead {
+                        dest: read,
+                        local: local(0),
+                        ty: param_ty.clone(),
+                    },
+                    IRInstruction::Call {
+                        dest: temp,
+                        callee: inner,
+                        args: vec![read],
+                    },
+                    IRInstruction::Call {
+                        dest: call_dest,
+                        callee: symbol.clone(),
+                        args: vec![temp],
+                    },
+                    IRInstruction::DropValue {
+                        value: temp,
+                        ty: param_ty.clone(),
+                    },
+                    IRInstruction::DropLocal {
+                        local: local(0),
+                        ty: param_ty.clone(),
+                    },
+                ],
+                terminator: IRTerminator::Return {
+                    value: Some(call_dest),
+                },
+            }],
+            kind: FunctionKind::Regular,
+            params: vec![IRFunctionParam {
+                id: ValueId(0),
+                local_id: local(0),
+                ty: param_ty.clone(),
+            }],
+            return_type: param_ty,
+            symbol: symbol.clone(),
+        };
+        let mut packages = vec![package_with(function)];
+        rewrite_tail_calls(&mut packages);
+        let function = packages[0].functions.get(symbol.mangled()).unwrap();
+        let block = &function.blocks[0];
+        let IRTerminator::TailCall { args, .. } = &block.terminator else {
+            panic!("expected TailCall, got {:?}", block.terminator);
+        };
+        assert_eq!(args, &vec![temp], "the owned temp is forwarded as-is");
+        assert!(
+            !block.instructions.iter().any(|inst| matches!(
+                inst,
+                IRInstruction::Clone { .. } | IRInstruction::DropValue { .. }
+            )),
+            "the temp needs neither an acquire nor its drop: {:?}",
+            block.instructions,
+        );
+        assert!(
+            block
+                .instructions
+                .iter()
+                .any(|inst| matches!(inst, IRInstruction::DropLocal { .. })),
+            "the slot the temp was built from is not forwarded, so its drop stays",
         );
     }
 

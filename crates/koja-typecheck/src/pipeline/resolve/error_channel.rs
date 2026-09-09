@@ -103,7 +103,46 @@ pub(super) fn resolve_try(
     resolver: &mut Resolver<'_>,
     diagnostics: &mut Vec<Diagnostic>,
 ) -> ResolvedType {
-    let span = expr.span;
+    let subject = take_resolved_try_subject(expr, resolver, diagnostics);
+    desugar_try(expr, subject, resolver, diagnostics)
+}
+
+/// Resolve `try X` at a return site of a `!`-spelled function. When
+/// `X` already produces the function's declared `Result<T, E>`, the
+/// unwrap-then-rewrap is the identity, so the node becomes `X` itself
+/// and the caller must not Ok-wrap it. Returns `true` in that case.
+/// Otherwise the ordinary [`resolve_try`] desugar applies and the
+/// caller checks and wraps the site as usual.
+///
+/// Forwarding matters because a forwarded `try self.f(...)` lowers to
+/// a plain call-then-return, which the IR tail-call pass loopifies.
+/// Wrapped in the `match` desugar it is not a tail call, and every
+/// accumulator recursion in a `! E` function grows the stack per step.
+pub(super) fn resolve_return_try(
+    expr: &mut Expr,
+    resolver: &mut Resolver<'_>,
+    diagnostics: &mut Vec<Diagnostic>,
+) -> bool {
+    let subject = take_resolved_try_subject(expr, resolver, diagnostics);
+    let forwards = resolver.error_channel.as_ref().is_some_and(|channel| {
+        channel.ok_wraps
+            && types_equivalent(&subject.resolution, &channel.result, resolver.registry)
+    });
+    if forwards {
+        *expr = *subject;
+        return true;
+    }
+    expr.resolution = desugar_try(expr, subject, resolver, diagnostics);
+    false
+}
+
+/// Pull the subject out of a `Try` node and resolve it, leaving a
+/// placeholder kind behind for the desugar to overwrite.
+fn take_resolved_try_subject(
+    expr: &mut Expr,
+    resolver: &mut Resolver<'_>,
+    diagnostics: &mut Vec<Diagnostic>,
+) -> Box<Expr> {
     let taken = std::mem::replace(
         &mut expr.kind,
         ExprKind::Literal {
@@ -111,9 +150,22 @@ pub(super) fn resolve_try(
         },
     );
     let ExprKind::Try { expr: mut subject } = taken else {
-        unreachable!("resolve_try dispatched on a non-Try expression");
+        unreachable!("try resolution dispatched on a non-Try expression");
     };
     resolve_expr(&mut subject, resolver, diagnostics);
+    subject
+}
+
+/// Rewrite `expr` (a `Try` node whose subject is already resolved)
+/// into the unwrap `match`, diagnosing a missing channel or a
+/// non-`Result` subject.
+fn desugar_try(
+    expr: &mut Expr,
+    subject: Box<Expr>,
+    resolver: &mut Resolver<'_>,
+    diagnostics: &mut Vec<Diagnostic>,
+) -> ResolvedType {
+    let span = expr.span;
     let subject_result = result_type_args(&subject.resolution, resolver.registry);
     if subject.resolution.is_resolved() {
         if resolver.error_channel.is_none() {

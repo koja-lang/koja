@@ -114,6 +114,38 @@ fn self_recursive_tail_call_as_match_value_is_optimized() {
 }
 
 #[test]
+fn try_forwarded_self_call_is_optimized() {
+    // `try self(...)` in tail position of a `! E` function forwards
+    // the callee's Result at typecheck, so the self-call is a plain
+    // call-then-return and loopifies like any other.
+    let source = "
+        fn build(n: Int, acc: List<Int>) -> List<Int> ! String
+          if n == 0
+            return acc
+          end
+
+          acc = acc.append(n)
+          try build(n - 1, acc)
+        end
+
+        fn main
+          build(3, List.new())
+        end
+        ";
+    let program = lower(&dedent(source));
+    let ir_text = emit_llvm_ir(&program, APP_NAME).expect("emit_llvm_ir");
+    let body = extract_function_body(&ir_text, "TestApp.build");
+    assert!(
+        body.contains("tco_loop"),
+        "try-forwarded self-call must gain a tco_loop header; got:\n{body}",
+    );
+    assert!(
+        !body.contains("@\"TestApp.build/2\"("),
+        "no self-`call` may survive after TCO; got:\n{body}",
+    );
+}
+
+#[test]
 fn tail_call_back_edge_zeroes_body_slots() {
     // The back-edge must reset every non-parameter slot to zero so an
     // iteration that doesn't revisit a slot's declaring block (e.g. a

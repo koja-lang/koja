@@ -71,8 +71,10 @@ are instructions that can take over their receiver's storage: the
 `List.append`, `Map.put`, and `Set.insert` calls, and `<>` on `String` and
 `Binary`. When the receiver value provably dies at the site, which covers
 `xs = xs.append(x)` and `s = s <> piece` rebinds, chains like
-`s = s <> a <> b`, and discarded owned temps, the pass rewrites the site
-into its consuming form and deletes the death. A mutator call becomes a
+`s = s <> a <> b`, discarded owned temps, and a receiver read from a slot
+whose next event is its exit `DropLocal` (the accumulator in
+`f(n - 1, acc.append(n))`), the pass rewrites the site into its consuming
+form and deletes the death. A mutator call becomes a
 consuming twin intrinsic. A concat is flagged `consumes_lhs`. The rewrite
 replaces "free the receiver's storage here" with "reuse it here" at the same
 program point, so the result stays indistinguishable from an independent copy.
