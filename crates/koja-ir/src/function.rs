@@ -1027,8 +1027,9 @@ impl IRInstruction {
 
     /// Whether this instruction reads `value` as an operand. The
     /// consume-fusion pass uses it to prove a receiver value has no
-    /// use between its call and its death.
-    pub(crate) fn uses_value(&self, value: ValueId) -> bool {
+    /// use between its call and its death, and the eval backend uses
+    /// it to find dead holders of a consumed receiver.
+    pub fn uses_value(&self, value: ValueId) -> bool {
         match self {
             IRInstruction::BinaryConstruct { segments, .. } => {
                 segments.iter().any(|segment| match segment {
@@ -1167,7 +1168,7 @@ impl IRTerminator {
 
     /// Whether `value` flows out of the block through this terminator,
     /// as a branch edge arg, the returned value, or a tail-call arg.
-    pub(crate) fn uses_value(&self, value: ValueId) -> bool {
+    pub fn uses_value(&self, value: ValueId) -> bool {
         match self {
             IRTerminator::Branch(target) => target.args.contains(&value),
             IRTerminator::CondBranch {

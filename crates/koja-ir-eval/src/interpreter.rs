@@ -723,7 +723,7 @@ fn expect_closure(value: Value, instruction: &str) -> Result<(IRSymbol, Vec<Valu
 /// Drop the dead references that would defeat a consuming site's
 /// uniqueness gate under eval, so `xs = xs.append(x)` and
 /// `s = s <> piece` loops mutate in place instead of copying on every
-/// step. Two kinds of holder are dead by construction:
+/// step. Three kinds of holder are dead by construction:
 ///
 /// - Registers defined at or after the site in this block still hold
 ///   values from an earlier pass over the block. A def later in a
@@ -732,9 +732,16 @@ fn expect_closure(value: Value, instruction: &str) -> Result<(IRSymbol, Vec<Valu
 /// - The slot the receiver was read from, when the site's rebind is
 ///   the next thing to touch it. Consume fusion deleted that slot's
 ///   stale read and drop, so its `Rc` is dead until the `LocalWrite`.
+/// - When the block exits the frame (`Return` or `TailCall`), every
+///   register and slot that shares the receiver's storage and that
+///   nothing after the site reads. The frame ends at the terminator,
+///   so no later block can observe them. This is the
+///   `f(n - 1, acc.append(x))` shape, where the param register and
+///   the promoted slot both still hold the accumulator.
 fn release_dead_holders<R: CallResolver>(
     instruction: &IRInstruction,
     rest: &[IRInstruction],
+    terminator: &IRTerminator,
     frame: &mut Frame,
     resolver: &R,
 ) {
@@ -752,6 +759,60 @@ fn release_dead_holders<R: CallResolver>(
     };
     if let Some(slot) = rebound_slot(rest, receiver_value, &frame.locals) {
         frame.locals.insert(slot, Value::Unit);
+    }
+    if matches!(
+        terminator,
+        IRTerminator::Return { .. } | IRTerminator::TailCall { .. }
+    ) {
+        release_exit_holders(receiver, once(instruction).chain(rest), terminator, frame);
+    }
+}
+
+/// Release every holder of `receiver`'s storage that a frame-exiting
+/// block never reads again: registers no instruction in `remaining`
+/// (the site and everything after it) or the terminator uses, and
+/// slots no instruction in `remaining` touches. A holder that is
+/// still read (an alias slot with its own exit drop, a register the
+/// terminator forwards) stays, and the twin falls back to its copying
+/// original.
+fn release_exit_holders<'a>(
+    receiver: ValueId,
+    remaining: impl Iterator<Item = &'a IRInstruction> + Clone,
+    terminator: &IRTerminator,
+    frame: &mut Frame,
+) {
+    let Some(receiver_value) = frame.values.get(&receiver).cloned() else {
+        return;
+    };
+    let dead_registers: Vec<ValueId> = frame
+        .values
+        .iter()
+        .filter(|(id, value)| {
+            **id != receiver
+                && value.shares_storage(&receiver_value)
+                && !terminator.uses_value(**id)
+                && !remaining
+                    .clone()
+                    .any(|instruction| instruction.uses_value(**id))
+        })
+        .map(|(id, _)| *id)
+        .collect();
+    for id in dead_registers {
+        frame.values.remove(&id);
+    }
+    let dead_slots: Vec<IRLocalId> = frame
+        .locals
+        .iter()
+        .filter(|(local, value)| {
+            value.shares_storage(&receiver_value)
+                && !remaining
+                    .clone()
+                    .any(|instruction| instruction.touches_local(**local))
+        })
+        .map(|(local, _)| *local)
+        .collect();
+    for local in dead_slots {
+        frame.locals.insert(local, Value::Unit);
     }
 }
 
@@ -833,6 +894,7 @@ fn execute_blocks<'a, R: CallResolver>(
                 release_dead_holders(
                     instruction,
                     &block.instructions[index + 1..],
+                    &block.terminator,
                     frame,
                     resolver,
                 );

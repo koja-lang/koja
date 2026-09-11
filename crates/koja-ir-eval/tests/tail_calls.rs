@@ -3,12 +3,19 @@
 //! at constant depth (no overflow on 100 000 iterations) and
 //! produce the same value-level results as the LLVM backend.
 
+use std::time::{Duration, Instant};
+
 use koja_ast::util::dedent;
 use koja_ir_eval::Value;
 
 mod common;
 
 use common::evaluate_program as evaluate;
+
+/// Generous ceiling for the accumulator tests below. A linear build
+/// of 100 000 steps finishes well inside it even on a slow CI host,
+/// while the quadratic copying path takes minutes.
+const ACCUMULATOR_CEILING: Duration = Duration::from_secs(20);
 
 #[test]
 fn self_recursive_tail_call_runs_in_constant_stack() {
@@ -113,4 +120,58 @@ fn try_forwarded_self_call_runs_in_constant_stack() {
         end
         ";
     assert_eq!(evaluate(&dedent(source)).unwrap(), Value::Int(100000));
+}
+
+#[test]
+fn tail_recursive_list_accumulator_mutates_in_place() {
+    // `acc.append(n)` fuses into the consuming twin at the slot exit.
+    // The interpreter has to release the param register and the
+    // promoted slot before the call, or the twin sees a shared `Rc`
+    // and copies the whole list on every step.
+    let source = "
+        fn build(n: Int, acc: List<Int>) -> List<Int>
+          if n == 0
+            acc
+          else
+            build(n - 1, acc.append(n))
+          end
+        end
+
+        fn main -> Int
+          build(100000, []).length()
+        end
+        ";
+    let started = Instant::now();
+    assert_eq!(evaluate(&dedent(source)).unwrap(), Value::Int(100000));
+    let elapsed = started.elapsed();
+    assert!(
+        elapsed < ACCUMULATOR_CEILING,
+        "list accumulator took {elapsed:?}, the twin is copying per step",
+    );
+}
+
+#[test]
+fn tail_recursive_string_accumulator_mutates_in_place() {
+    // Same shape over `<>`, which fuses to `Concat { consumes_lhs }`
+    // and gates on the same uniqueness check.
+    let source = "
+        fn build(n: Int, acc: String) -> String
+          if n == 0
+            acc
+          else
+            build(n - 1, acc <> \"ab\")
+          end
+        end
+
+        fn main -> Int
+          build(100000, \"\").byte_length()
+        end
+        ";
+    let started = Instant::now();
+    assert_eq!(evaluate(&dedent(source)).unwrap(), Value::Int(200000));
+    let elapsed = started.elapsed();
+    assert!(
+        elapsed < ACCUMULATOR_CEILING,
+        "string accumulator took {elapsed:?}, the concat is copying per step",
+    );
 }

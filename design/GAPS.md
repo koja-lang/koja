@@ -478,18 +478,3 @@ widening case either widen the `Result` as a whole with an operation
 the tail-call pass recognizes, or teach the pass to see through a
 `UnionWrap` on the error payload. A diagnostic for the remaining
 shapes is the fallback if either proves large.
-
-## Eval backend copies a tail-recursive list accumulator per step
-
-Found 2026-09-07. A tail-recursive `List` accumulator that the LLVM
-backend builds in O(1) amortized per step is quadratic in the eval
-backend, so a 100,000-step build takes minutes under `koja test` and
-`.kojs` scripts while the compiled binary finishes in well under a
-second. The eval runtime gates the consuming twins on a true unique
-check, and the passthrough that hands the argument to the next
-iteration does not keep the accumulator unique there.
-
-**Fix path:** trace the refcount of the accumulator across the
-`TailCall` back-edge in the interpreter and find where the extra
-reference comes from, then either release it before the mutator runs
-or hand the buffer to the mutator by move.

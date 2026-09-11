@@ -71,6 +71,27 @@ fn alias_taken_before_a_fused_rebind_keeps_its_value() {
 }
 
 #[test]
+fn alias_taken_before_a_tail_consumed_append_keeps_its_value() {
+    // The append fuses at the slot exit and the block ends in a tail
+    // call, so the interpreter releases the holders it can prove dead
+    // before the twin runs. `ys` still has its own exit drop in the
+    // block, so it must stay and force the copying path. Its length,
+    // observed after the append, must not include the new element.
+    let source = "
+        fn build(n: Int, acc: List<Int>, seen: Int) -> Int
+          if n == 0
+            return seen
+          end
+          ys = acc
+          build(n - 1, acc.append(n), ys.length())
+        end
+
+        build(3, [], -1)
+        ";
+    assert_eq!(evaluate(&dedent(source)).unwrap(), Value::Int(2));
+}
+
+#[test]
 fn owned_temp_chain_consumes_the_intermediate() {
     let source = "
         seed: List<Int> = List.new()
