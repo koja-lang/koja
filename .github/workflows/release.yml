@@ -154,3 +154,24 @@ jobs:
           GH_REPO: ${{ github.repository }}
           TAG: ${{ github.ref_name }}
         run: gh release upload "$TAG" dist/koja-v*.tar.gz dist/koja-v*.tar.gz.sha256 --clobber
+
+      # The catalog at releases.kojalang.org owns its own format. This
+      # job only hands it the version and the artifacts through
+      # bin/generate, then pushes with a deploy key scoped to that repo.
+      - uses: actions/checkout@v6
+        with:
+          repository: koja-lang/releases
+          ssh-key: ${{ secrets.RELEASES_DEPLOY_KEY }}
+          path: releases
+
+      - name: Record the release in the catalog
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
+        run: |
+          releases/bin/generate "$VERSION" dist
+          cd releases
+          git config user.name "koja-lang-bot"
+          git config user.email "bot@kojalang.org"
+          git add -A
+          git commit -m "feat: koja $VERSION"
+          git push

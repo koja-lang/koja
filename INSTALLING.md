@@ -17,18 +17,19 @@ koja --version
 
 ### Manual download
 
-Grab the tarball and `.sha256` sidecar for your platform from the [releases page](https://github.com/koja-lang/koja/releases), then:
+Read the newest version from the [release catalog](https://releases.kojalang.org), then grab the tarball and `.sha256` sidecar for your platform:
 
 ```sh
-curl -fLO https://github.com/koja-lang/koja/releases/download/v0.18.3/koja-v0.18.3-darwin-arm64.tar.gz
-curl -fLO https://github.com/koja-lang/koja/releases/download/v0.18.3/koja-v0.18.3-darwin-arm64.tar.gz.sha256
-shasum -a 256 -c koja-v0.18.3-darwin-arm64.tar.gz.sha256
-tar -xzf koja-v0.18.3-darwin-arm64.tar.gz
+version=$(curl -fsSL https://releases.kojalang.org/latest)
+curl -fLO "https://github.com/koja-lang/koja/releases/download/v$version/koja-v$version-darwin-arm64.tar.gz"
+curl -fLO "https://github.com/koja-lang/koja/releases/download/v$version/koja-v$version-darwin-arm64.tar.gz.sha256"
+shasum -a 256 -c "koja-v$version-darwin-arm64.tar.gz.sha256"
+tar -xzf "koja-v$version-darwin-arm64.tar.gz"
 mkdir -p ~/.local/bin
-cp koja-v0.18.3-darwin-arm64/{koja,koja-lsp} ~/.local/bin/
+cp "koja-v$version-darwin-arm64"/{koja,koja-lsp} ~/.local/bin/
 ```
 
-(Use `sha256sum -c` on Linux, and substitute `linux-x86_64` or `linux-arm64` for `darwin-arm64`.)
+(Use `sha256sum -c` on Linux, and substitute `linux-x86_64` or `linux-arm64` for `darwin-arm64`. To pin a release, set `version` yourself.)
 
 Make sure `~/.local/bin` is on your `PATH`, then run `koja --version`.
 
@@ -41,11 +42,11 @@ steps:
   - uses: actions/checkout@v6
   - uses: koja-lang/setup-koja@v1
     with:
-      koja-version: 0.18.3
+      koja-version-file: koja.toml
   - run: koja test
 ```
 
-A version like `0.18` installs the newest matching release, and `koja-version-file` reads the version from `.tool-versions` or `koja.toml`. The action also registers a problem matcher, so compile diagnostics annotate pull requests. See the [action README](https://github.com/koja-lang/setup-koja#readme) for all inputs.
+`koja-version-file` reads the version from `koja.toml` or `.tool-versions`, and `koja-version` pins one directly: an exact version, or a line like `0.18` that installs the newest matching release. The action also registers a problem matcher, so compile diagnostics annotate pull requests. See the [action README](https://github.com/koja-lang/setup-koja#readme) for all inputs.
 
 ### Docker
 
