@@ -13,7 +13,7 @@ use super::{GlobalKind, GlobalRegistry, VisibilityScope};
 pub const KEYWORDS: &[&str] = &[
     "break", "builtin", "cond", "const", "else", "end", "enum", "extend", "false", "fn", "for",
     "if", "impl", "in", "loop", "match", "priv", "protocol", "receive", "return", "self", "spawn",
-    "struct", "true", "type", "unless", "when", "while",
+    "struct", "true", "type", "when", "while",
 ];
 
 /// What kind of declaration or member a [`Candidate`] names.

@@ -1,9 +1,10 @@
-//! Coverage for control-flow expressions: `if`, `unless`, `match`,
-//! `cond`, `for`, `loop`, `while`, `receive`.
+//! Coverage for control-flow expressions: `if`, `match`, `cond`,
+//! `for`, `loop`, `while`, `receive`.
 //!
 //! Pins:
 //! - block-shape parsing (each form terminates with `end`)
 //! - `if`/`else` body presence
+//! - the removed `unless` form fails with a hint and recovers cleanly
 //! - `match` arm count, with-and-without `when` guards, or-patterns
 //! - `cond` requires `else ->` and rejects without it
 //! - `for pattern in iterable` binds correctly
@@ -90,8 +91,8 @@ fn else_if_is_rejected() {
 }
 
 #[test]
-fn unless_form() {
-    let expr = first_function_expr(
+fn unless_is_rejected_with_replacement_hint() {
+    let result = parse_failing_with(
         "
         fn run
           unless x
@@ -99,8 +100,21 @@ fn unless_form() {
           end
         end
         ",
+        &["`unless` was removed in 0.19"],
     );
-    assert!(matches!(expr.kind, ExprKind::Unless { .. }));
+    assert_eq!(
+        result.errors.len(),
+        1,
+        "recovery should report nothing else"
+    );
+    let hint = result.errors[0]
+        .hint
+        .as_ref()
+        .expect("removal diagnostic carries a hint");
+    assert!(
+        hint.contains("if not cond"),
+        "hint should name the replacement: {hint}"
+    );
 }
 
 #[test]

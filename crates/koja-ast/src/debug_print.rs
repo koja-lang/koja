@@ -635,14 +635,6 @@ impl<'a> Printer<'a> {
                 }
             }
             ExprKind::Unary { operand, .. } => self.expr(operand),
-            ExprKind::Unless { condition, body } => {
-                self.section("condition", |p| p.expr(condition));
-                self.section("body", |p| {
-                    for stmt in body {
-                        p.statement(stmt);
-                    }
-                });
-            }
             ExprKind::While { condition, body } => {
                 self.section("condition", |p| p.expr(condition));
                 self.section("body", |p| {
@@ -989,7 +981,6 @@ fn expr_header(expr: &Expr) -> String {
         ExprKind::Try { .. } => String::from("Try"),
         ExprKind::Tuple { elements } => format!("Tuple ({} elems)", elements.len()),
         ExprKind::Unary { op, .. } => format!("Unary {}", format_unary_op(*op)),
-        ExprKind::Unless { .. } => String::from("Unless"),
         ExprKind::While { .. } => String::from("While"),
     };
     if !matches!(expr.resolution, ResolvedType::Unresolved) {
@@ -1066,7 +1057,6 @@ fn expr_has_children(kind: &ExprKind) -> bool {
         | ExprKind::Try { .. }
         | ExprKind::Tuple { .. }
         | ExprKind::Unary { .. }
-        | ExprKind::Unless { .. }
         | ExprKind::While { .. } => true,
         ExprKind::EnumConstruction { data, .. } => !matches!(data, EnumConstructionData::Unit),
         ExprKind::List { elements } => !elements.is_empty(),

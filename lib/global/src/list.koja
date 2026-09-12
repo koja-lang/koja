@@ -45,7 +45,7 @@ extend List<T>
     result = true
 
     for item in self
-      unless f(item)
+      if not f(item)
         result = false
       end
     end
@@ -210,14 +210,14 @@ impl Equality for List<T: Equality>
   the same length and the elements at each index are equal.
   """
   fn equals?(self, other: List<T>) -> Bool
-    unless self.length() == other.length()
+    if self.length() != other.length()
       return false
     end
 
     i = 0
 
     while i < self.length()
-      unless self.get(i) == other.get(i)
+      if self.get(i) != other.get(i)
         return false
       end
 

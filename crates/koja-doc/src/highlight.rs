@@ -9,7 +9,7 @@ const KEYWORDS: &[&str] = &[
     "after", "alias", "and", "as", "break", "cond", "const", "else", "end", "enum", "extend",
     "fail", "false", "fn", "for", "if", "impl", "in", "loop", "match", "not", "or", "priv",
     "protocol", "receive", "rescue", "return", "self", "spawn", "struct", "true", "try", "type",
-    "unless", "when", "while",
+    "when", "while",
 ];
 
 /// Highlight a Koja code block. Returns inner HTML for a `<code>`

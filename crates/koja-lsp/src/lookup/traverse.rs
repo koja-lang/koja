@@ -492,16 +492,6 @@ fn find_in_expr(expr: &Expr, line: u32, col: u32, ctx: &LookupCtx<'_>) -> Option
                 return find_in_expr(body, line, col, ctx);
             }
         }
-        ExprKind::Unless { condition, body } => {
-            if span_contains(&expr.span, line, col) {
-                if let Some(info) = find_in_expr(condition, line, col, ctx) {
-                    return Some(info);
-                }
-                if let Some(info) = find_in_body(body, line, col, ctx) {
-                    return Some(info);
-                }
-            }
-        }
         ExprKind::List { elements } => {
             if span_contains(&expr.span, line, col) {
                 for e in elements {
@@ -801,8 +791,6 @@ fn find_expr_at_inner(expr: &Expr, line: u32, col: u32) -> Option<&Expr> {
             find_expr_at_in_body(body, line, col)
         }
         ExprKind::ShortClosure { body, .. } => find_expr_at_inner(body, line, col),
-        ExprKind::Unless { condition, body } => find_expr_at_inner(condition, line, col)
-            .or_else(|| find_expr_at_in_body(body, line, col)),
         ExprKind::List { elements } => elements
             .iter()
             .find_map(|e| find_expr_at_inner(e, line, col)),
@@ -1021,9 +1009,6 @@ fn find_call_inner<'a>(expr: &'a Expr, line: u32, col: u32) -> Option<CallSite<'
             find_call_in_body(body, line, col)
         }
         ExprKind::ShortClosure { body, .. } => find_call_inner(body, line, col),
-        ExprKind::Unless { condition, body } => {
-            find_call_inner(condition, line, col).or_else(|| find_call_in_body(body, line, col))
-        }
         ExprKind::List { elements } => elements.iter().find_map(|e| find_call_inner(e, line, col)),
         ExprKind::Map { entries } => entries.iter().find_map(|(k, v)| {
             find_call_inner(k, line, col).or_else(|| find_call_inner(v, line, col))

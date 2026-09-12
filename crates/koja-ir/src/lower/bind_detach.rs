@@ -245,7 +245,7 @@ fn collect_assigned_in_expr(expr: &Expr, assigned: &mut BTreeSet<IRLocalId>) {
             collect_assigned_in_expr(else_expr, assigned);
         }
         ExprKind::Unary { operand, .. } => collect_assigned_in_expr(operand, assigned),
-        ExprKind::Unless { condition, body } | ExprKind::While { condition, body } => {
+        ExprKind::While { condition, body } => {
             collect_assigned_in_expr(condition, assigned);
             collect_assigned_locals(body, assigned);
         }

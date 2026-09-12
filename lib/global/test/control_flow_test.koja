@@ -312,47 +312,47 @@ struct ControlFlowTest
     end
   end
 
-  @test "unless"
-  fn test_unless ! String
+  @test "if not guards"
+  fn test_if_not ! String
     ran_false = false
 
-    unless false
+    if not false
       ran_false = true
     end
 
-    unless ran_false
-      fail "unless false should run body"
+    if not ran_false
+      fail "if not false should run body"
     end
 
     ran_true = false
 
-    unless true
+    if not true
       ran_true = true
     end
 
     if ran_true
-      fail "unless true should not run body"
+      fail "if not true should not run body"
     end
 
     x = 10
     ok_high = false
 
-    unless x > 20
+    if not x > 20
       ok_high = true
     end
 
-    unless ok_high
-      fail "unless x > 20 should run when condition is false"
+    if not ok_high
+      fail "if not x > 20 should run when the comparison is false"
     end
 
     ok_low = false
 
-    unless x < 5
+    if not x < 5
       ok_low = true
     end
 
-    unless ok_low
-      fail "unless x < 5 should run when condition is false"
+    if not ok_low
+      fail "if not x < 5 should run when the comparison is false"
     end
   end
 

@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Removed
+
+- **Breaking change.** The `unless` keyword is removed. Write `if not cond` instead. `not` binds tighter than `and` and `or`, so a compound condition needs parentheses (`if not (a and b)`) or De Morgan (`if a != x and b != y`). The word stays reserved, and the parser reports the replacement when it meets an old `unless` block.
+
 ## [0.18.4] - 2026-09-12
 
 ### Fixed

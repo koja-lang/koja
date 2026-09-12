@@ -13,9 +13,7 @@ use koja_ast::labels::expr_kind_label;
 use super::calls::{CallSite, resolve_call, resolve_method_call_expr};
 use super::closures::{resolve_closure, resolve_short_closure};
 use super::coercion::check_float_literal_finite;
-use super::control_flow::{
-    resolve_cond, resolve_if, resolve_loop, resolve_ternary, resolve_unless, resolve_while,
-};
+use super::control_flow::{resolve_cond, resolve_if, resolve_loop, resolve_ternary, resolve_while};
 use super::ctx::Resolver;
 use super::enums::resolve_enum_construction;
 use super::error_channel::{resolve_rescue, resolve_try};
@@ -276,9 +274,6 @@ pub(super) fn resolve_expr_with_expected(
         ExprKind::Unary { op, operand } => {
             resolve_expr(operand, resolver, diagnostics);
             unary_type(*op, operand, expr.span, resolver.registry, diagnostics)
-        }
-        ExprKind::Unless { condition, body } => {
-            resolve_unless(condition, body, resolver, diagnostics)
         }
         ExprKind::While { condition, body } => {
             resolve_while(condition, body, resolver, diagnostics)

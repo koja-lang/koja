@@ -125,7 +125,7 @@ struct Path
   fn split(path: String) -> List<String>
     segments = path.split("/").filter(segment -> segment != "")
 
-    unless absolute?(path)
+    if not absolute?(path)
       return segments
     end
 
@@ -259,7 +259,7 @@ struct Path
     i = 0
 
     while i < limit
-      unless a.get(i).or("") == b.get(i).or("")
+      if a.get(i).or("") != b.get(i).or("")
         return i
       end
 

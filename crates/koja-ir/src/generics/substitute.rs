@@ -281,10 +281,6 @@ fn substitute_in_expr(expr: &mut Expr, args: &[ResolvedType], owner: GlobalRegis
             }
         }
         ExprKind::Unary { operand, .. } => substitute_in_expr(operand, args, owner),
-        ExprKind::Unless { condition, body } => {
-            substitute_in_expr(condition, args, owner);
-            substitute_in_statements(body, args, owner);
-        }
         ExprKind::While { condition, body } => {
             substitute_in_expr(condition, args, owner);
             substitute_in_statements(body, args, owner);

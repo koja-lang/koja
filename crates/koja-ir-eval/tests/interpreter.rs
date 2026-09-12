@@ -265,13 +265,13 @@ fn if_with_false_condition_falls_through_to_merge() {
 }
 
 #[test]
-fn unless_with_false_condition_executes_body() {
-    // `unless cond` runs the body when cond is `false`. The early
+fn if_not_with_false_condition_executes_body() {
+    // `if not cond` runs the body when cond is `false`. The early
     // `return 1` therefore fires when the cond is the literal
     // `false`.
     let source = "
         fn pick -> Int
-          unless false
+          if not false
             return 1
           end
           2
@@ -283,10 +283,10 @@ fn unless_with_false_condition_executes_body() {
 }
 
 #[test]
-fn unless_with_true_condition_skips_body() {
+fn if_not_with_true_condition_skips_body() {
     let source = "
         fn pick -> Int
-          unless true
+          if not true
             return 1
           end
           2

@@ -102,7 +102,7 @@ fn fallible_defaults_expand_adapters() {
     let checked = typecheck_file(&dedent(
         r#"
         fn pick(flag: Bool, fallback: Int = 7) -> Int ! String
-          unless flag
+          if not flag
             fail "no pick"
           end
 
@@ -110,7 +110,7 @@ fn fallible_defaults_expand_adapters() {
         end
 
         fn ping(flag: Bool = true) ! String
-          unless flag
+          if not flag
             fail "no ping"
           end
         end

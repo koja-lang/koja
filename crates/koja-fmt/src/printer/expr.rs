@@ -193,16 +193,6 @@ impl Printer {
                 concat(parts)
             }
 
-            ExprKind::Unless { condition, body } => {
-                let dangling = self.comments.take(expr.span, Slot::Dangling);
-                concat(vec![
-                    self.condition_header_to_doc("unless ", condition, expr.span),
-                    self.body_to_doc(body, dangling),
-                    hardline(),
-                    text("end"),
-                ])
-            }
-
             ExprKind::Match { subject, arms } => {
                 let any_multiline = arms.iter().any(|a| {
                     arm_is_multiline(&a.body)

@@ -69,7 +69,7 @@ impl Equality for Set<T: Equality>
     end
 
     for item in self
-      unless other.has?(item)
+      if not other.has?(item)
         return false
       end
     end

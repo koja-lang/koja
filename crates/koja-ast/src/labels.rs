@@ -37,7 +37,6 @@ pub fn expr_kind_label(kind: &ExprKind) -> &'static str {
         ExprKind::Try { .. } => "try",
         ExprKind::Tuple { .. } => "tuple",
         ExprKind::Unary { .. } => "unary",
-        ExprKind::Unless { .. } => "unless",
         ExprKind::While { .. } => "while",
     }
 }

@@ -210,7 +210,7 @@ fn bare_error_signature_lifts_to_result_of_unit() {
         end
 
         fn note(flag: Bool) ! MyError
-          unless flag
+          if not flag
             fail MyError.Nope
           end
         end
@@ -332,7 +332,7 @@ fn try_and_fail_widen_errors_into_declared_union() {
         end
 
         fn fetch(ok: Bool) -> String ! NetError
-          unless ok
+          if not ok
             fail NetError.Timeout
           end
           \"1\"

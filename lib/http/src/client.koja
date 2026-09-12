@@ -67,7 +67,7 @@ fn request(method: Method, url: String, headers: Headers, body: String)
     Error.InvalidUrl("URL must be absolute and use http or https: " <> url),
   )
 
-  unless scheme == "http" or scheme == "https"
+  if scheme != "http" and scheme != "https"
     fail Error.InvalidUrl("unsupported URL scheme '#{scheme}': " <> url)
   end
 

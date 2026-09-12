@@ -987,11 +987,6 @@ pub enum ExprKind {
     Tuple { elements: Vec<Expr> },
     /// A unary operation: `-x`, `not flag`.
     Unary { op: UnaryOp, operand: Box<Expr> },
-    /// An unless guard: `unless cond ... end`.
-    Unless {
-        condition: Box<Expr>,
-        body: Vec<Statement>,
-    },
     /// A while loop: `while cond ... end`.
     While {
         condition: Box<Expr>,

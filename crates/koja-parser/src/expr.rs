@@ -350,7 +350,7 @@ impl Parser {
             TokenKind::True => self.parse_literal_prefix(Literal::Bool(true)),
             TokenKind::Try => self.parse_try_prefix(),
             TokenKind::TypeIdent(_) => self.parse_type_construction(),
-            TokenKind::Unless => self.parse_unless_expr(),
+            TokenKind::Unless => self.parse_unless_removed(),
             TokenKind::While => self.parse_while_expr(),
             _ => self.parse_unknown_prefix(),
         }

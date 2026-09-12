@@ -120,51 +120,6 @@ pub(super) fn lower_if(
     Ok((result_id, merge_block))
 }
 
-/// Lower an `unless cond do body end`. Same wiring as `lower_if`'s
-/// no-else path with the cond arms swapped: cond=true bypasses to
-/// merge with `Unit`, cond=false runs the body. Statement-shaped
-/// only. `unless` has no `else` arm, so the result type is always
-/// `Unit`.
-pub(super) fn lower_unless(
-    condition: &Expr,
-    body: &[Statement],
-    ctx: &mut FnLowerCtx,
-    block: IRBlockId,
-    registry: &GlobalRegistry,
-    output: &mut LowerOutput,
-) -> Result<(ValueId, IRBlockId), ()> {
-    let (cond_value, block) = lower_expr(condition, ctx, block, registry, output)?;
-    let body_block = ctx.fresh_block("unless_body");
-    let merge_block = ctx.fresh_block("unless_merge");
-    let result_id = ctx.declare_merge_param(merge_block, IRType::Unit);
-
-    let bypass_unit = emit_unit(ctx, block);
-    ctx.cfg.set_terminator(
-        block,
-        IRTerminator::CondBranch {
-            cond: cond_value,
-            else_target: BranchTarget::to(body_block),
-            then_target: BranchTarget::with_args(merge_block, vec![bypass_unit]),
-        },
-    );
-    let entry_snapshot = ctx.snapshot_slot_states();
-    let body_tail = lower_arm_into(
-        body,
-        ctx,
-        body_block,
-        merge_block,
-        &IRType::Unit,
-        registry,
-        output,
-    )?;
-    let body_post = ctx.snapshot_slot_states();
-    // Merge the body-arm post-state with the bypass-arm post-state
-    // (= entry snapshot, since the cond=true path skips the body
-    // and writes no slots).
-    join_arm_states(ctx, vec![(body_tail, body_post), (None, entry_snapshot)]);
-    Ok((result_id, merge_block))
-}
-
 /// AST-side inputs to [`lower_cond`]. See [`IfLowering`] for the
 /// motivation.
 pub(super) struct CondLowering<'a> {
