@@ -290,6 +290,7 @@ pub(crate) fn element_slot<'ctx>(
         .builder
         .build_int_mul(index, element_size, "elem.off")
         .or_ice()?;
+    // SAFETY: callers bound `index` by the buffer's element count.
     unsafe {
         ctx.builder
             .build_gep(i8_ty, buf, &[offset], "elem.ptr")

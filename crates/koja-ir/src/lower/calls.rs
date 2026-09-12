@@ -155,7 +155,7 @@ fn impl_pinned_call_symbol(
 
 /// Lower a `Resolution::Local` callee, `f(args)` where `f` is a
 /// closure-typed local slot. Reads the slot through the normal
-/// local-or-capture path ([`super::expr::lower_local_read`] is the
+/// local-or-capture path (`expr::lower_local_read` is the
 /// equivalent path, but here we inline because we already hold the
 /// slot's resolved type), lowers each arg in sequence, then emits
 /// [`IRInstruction::CallClosure`] dispatching through the loaded
@@ -628,7 +628,7 @@ fn method_dispatch_kind(receiver: &Expr, registry: &GlobalRegistry) -> Dispatch 
 /// Collapse `Global.Int64` / `Global.Float64` onto `Global.Int` /
 /// `Global.Float` for method lookup. The typecheck pass treats these
 /// pairs as alias-equivalent (see
-/// [`koja_typecheck::pipeline::resolve::types::types_equivalent`]).
+/// the typecheck `types_equivalent` helper).
 /// Until `Int` and `Float` become proper unions over their sized
 /// variants, methods registered on the unsized canonical (e.g.
 /// `Debug.format`, `Equality.equals?`, `Hash.hash`) need to be reachable
@@ -704,13 +704,11 @@ fn receiver_struct_id(
     }
 }
 
-/// Per-call inputs to [`emit_call`], bundled so the emitter
-/// signature stays narrow regardless of how many derived fields the
-/// caller computed. `prepend` is the receiver [`ValueId`] for
-/// instance dispatch (filling `params[0]` / `self`), `None` for
-/// bare calls and static method dispatch. `callee_symbol` is
-/// already mangled if the callee is a generic instantiation, and
-/// `return_ty` is already substituted.
+/// Per-call inputs to [`emit_call`]. `prepend` is the receiver
+/// [`ValueId`] for instance dispatch, `None` for bare calls and
+/// static method dispatch. `callee_symbol` is already mangled if the
+/// callee is a generic instantiation, and `return_ty` is already
+/// substituted.
 struct CallSite<'a> {
     callee_symbol: IRSymbol,
     return_ty: IRType,
@@ -882,7 +880,7 @@ pub(super) fn lower_debug_family(
 
 /// Emit `Global.IO.puts(<message>)` and return the block the call
 /// landed in. The callee symbol matches the one stamped by lift for
-/// the `IO.puts` function in [`koja/lib/global/src/io.koja`], so the
+/// the `IO.puts` function in `koja/lib/global/src/io.koja`, so the
 /// regular function registration in `lower_function_inner` resolves
 /// it at link time.
 pub(super) fn emit_io_puts(message: ValueId, ctx: &mut FnLowerCtx, block: IRBlockId) -> IRBlockId {

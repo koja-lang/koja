@@ -236,6 +236,8 @@ pub(super) fn emit_insert_probe<'ctx>(
     pidx_phi.add_incoming(&[(&start_slot, entry_block)]);
     let pidx = pidx_phi.as_basic_value().into_int_value();
 
+    // SAFETY: `pidx` is masked to `capacity - 1`, so the GEP stays
+    // inside the `states` buffer.
     let s_ptr = unsafe {
         ctx.builder
             .build_gep(i8_ty, table.states_ptr, &[pidx], "s_ptr")

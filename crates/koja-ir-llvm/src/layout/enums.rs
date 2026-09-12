@@ -11,14 +11,8 @@
 //! complete + outer bodies once every transitively-referenced
 //! payload is set.
 //!
-//! The complete + outer phase has a sub-ordering requirement of its
-//! own: a variant complete body sizes its padding from
-//! `get_abi_alignment(payload)`, and the outer body sizes itself
-//! from `max(get_abi_size(complete))` across variants. Both
-//! return 0/1 when the payload references an opaque inner enum
-//! outer. [`crate::program::compile_program`] walks `decl_order`
-//! (a topologically-sorted enum list) so every dependency's outer
-//! is already set when an enum's complete+outer phase runs.
+//! The complete + outer phase must run in the dependency order
+//! [`super::enum_order`] computes, for the reason given there.
 //!
 //! ## Layout (Rust-style, alignment-correct)
 //!
@@ -28,14 +22,14 @@
 //! - **Per-variant complete**: `{ i8 tag, [pad x i8], payload }` for
 //!   non-Unit (`pad = align(payload) - 1` so the payload starts at
 //!   its natural alignment, `[0 x i8]` when align is 1). The
-//!   payload always lives at field index 2, so the construction
-//!   emitter doesn't have to special-case the no-padding subcase.
+//!   payload always lives at [`COMPLETE_PAYLOAD_INDEX`], so the
+//!   construction emitter has no no-padding special case.
 //!   `{ i8 tag }` for Unit. Name: `<enum>.<variant>`.
 //! - **Outer**: `{ [count x iN] }` where `N = max_align * 8` and
 //!   `count * max_align >= max_complete_size` (rounded up). The
 //!   `iN` chunks give LLVM the max-align hint a flat `[M x i8]`
-//!   would lose. Construction (see [`crate::emit::instruction`]'s
-//!   `emit_enum_construct`) allocas the outer, GEPs through the
+//!   would lose. Construction (see `emit_enum_construct` in
+//!   [`crate::emit::enums`]) allocas the outer, GEPs through the
 //!   complete struct for the tag and the payload for fields, then
 //!   loads the populated outer as the SSA result.
 
@@ -48,6 +42,10 @@ use crate::ctx::EmitContext;
 use crate::error::LlvmError;
 use crate::layout::{EnumLayout, VariantLayout};
 use crate::types::ir_basic_type;
+
+/// Field index of the payload in a non-Unit per-variant complete
+/// struct: `{ i8 tag, [pad x i8], payload }`.
+pub(crate) const COMPLETE_PAYLOAD_INDEX: u32 = 2;
 
 pub(crate) fn declare_enum_type<'ctx>(ctx: &EmitContext<'ctx>, decl: &IREnumDecl) {
     ctx.context.opaque_struct_type(decl.symbol.mangled());
@@ -78,12 +76,8 @@ pub(crate) fn define_enum_payload_bodies<'ctx>(
 
 /// Set every variant's complete body and the enum's outer chunk
 /// body, then register the variant layouts. Must run after every
-/// transitively-referenced enum's outer body has been set,
-/// otherwise `get_abi_alignment` on a variant payload that names an
-/// opaque enum outer returns 1 instead of the real alignment, which
-/// would collapse the padding and outer chunk count. The caller
-/// ([`crate::program::compile_program`]) drives this in
-/// topological dependency order.
+/// transitively referenced enum's outer body has been set (see
+/// [`super::enum_order`]).
 pub(crate) fn define_enum_completes_and_outer<'ctx>(
     ctx: &EmitContext<'ctx>,
     decl: &IREnumDecl,

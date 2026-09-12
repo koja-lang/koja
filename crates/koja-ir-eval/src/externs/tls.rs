@@ -11,12 +11,10 @@
 //! `const`-qualified, matching the call shape the LLVM backend
 //! emits off the same `@extern "C"` declarations).
 //!
-//! Blocking-fd note: eval sockets are blocking (see
-//! [`crate::externs::net`]), so `SSL_connect` / `SSL_accept` /
-//! `SSL_read` / `SSL_write` block until the operation completes and
-//! never surface `SSL_ERROR_WANT_READ` / `WANT_WRITE`. The
-//! stdlib's `fd.block(...)` retry path simply never runs under
-//! eval.
+//! Eval sockets are non-blocking (see [`crate::externs::net`]), so
+//! `SSL_connect` / `SSL_accept` / `SSL_read` / `SSL_write` surface
+//! `SSL_ERROR_WANT_READ` / `WANT_WRITE` like they do natively. The
+//! stdlib's `fd.block(...)` retry path parks on eval's own reactor.
 
 use crate::externs::marshal::pass_through_externs;
 

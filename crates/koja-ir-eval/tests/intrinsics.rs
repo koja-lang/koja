@@ -1,15 +1,7 @@
 //! Coverage for the eval-side intrinsic dispatch in
 //! `src/intrinsics/`, driven through the full pipeline against the
 //! real autoimported stdlib. Byte-for-byte stdout assertions live in
-//! the `koja-driver` e2e suite (`lang_suite.rs`), where the whole
-//! binary's stdout is captured via `Command::output`.
-//!
-//! Unregistered intrinsic ids (e.g. `@intrinsic fn missing`) used to
-//! surface at runtime as [`RuntimeError::UnknownIntrinsic`]. They
-//! now fail at lift time because [`koja_ir::IRIntrinsicId`]'s
-//! source-axis mapper returns `None` for paths that aren't part of
-//! the registered universe. That contract is exercised by
-//! `crates/koja-ir/tests/lower_intrinsics.rs`.
+//! the `koja-driver` e2e suite (`lang_suite.rs`).
 
 use koja_ast::util::dedent;
 use koja_ir_eval::{RuntimeError, Value};

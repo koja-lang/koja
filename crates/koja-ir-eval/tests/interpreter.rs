@@ -12,9 +12,7 @@
 //!   callee, nested calls in arithmetic, script-mode helper-fn
 //!   resolution.
 //! - `IRTerminator::CondBranch` dispatch: `if` and `unless` selecting
-//!   between two arms at runtime, with helper functions whose `if` /
-//!   `unless` cond is a literal Bool (identifier references inside
-//!   bodies aren't resolved until the locals slice).
+//!   between two arms at runtime.
 //!
 //! Operator math (`apply_binary_op` / `apply_unary_op`) lives in
 //! `tests/ops.rs`, paired with `src/ops.rs`.

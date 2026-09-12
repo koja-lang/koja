@@ -1,16 +1,6 @@
-//! Runtime coverage for the enum slice in
-//! [`koja_ir_eval::Interpreter`]: `IRInstruction::EnumConstruct`
-//! materializes a [`Value::Enum`] carrying the receiver's symbol,
-//! the discriminant tag, the variant name (cached for `Display`),
-//! and the per-shape [`EnumPayload`]:
-//!
-//! - **Unit**: `Color.Red` -> `EnumPayload::Unit`
-//! - **Tuple**: `Result.Ok(42)` -> `EnumPayload::Tuple([Int(42)])`
-//! - **Struct**: `Shape.Rect{w: 1, h: 2}` ->
-//!   `EnumPayload::Struct([("w", Int(1)), ("h", Int(2))])`
-//!
-//! Plus the `Display` rendering for each shape so the runtime
-//! printer (when it gains an enum arm) sees a stable surface.
+//! Runtime coverage for enums: `IRInstruction::EnumConstruct`
+//! materializes a [`Value::Enum`] with the matching [`EnumPayload`]
+//! shape, and each shape has a stable `Display` rendering.
 
 use koja_ast::util::dedent;
 use koja_ir_eval::{EnumPayload, Value};

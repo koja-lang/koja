@@ -28,9 +28,9 @@
 //!
 //! Block allocation is lazy: body / guard / next-test blocks are
 //! minted only after the arm's [`PatternCheck`] is known. This way
-//! arms following an unguarded catch-all (Phase 5 reachability
-//! warns on them but typecheck still admits the source) are never
-//! processed and contribute no orphan blocks to the CFG.
+//! arms following an unguarded catch-all (reachability warns on
+//! them but typecheck still admits the source) are never processed
+//! and contribute no orphan blocks to the CFG.
 
 use koja_ast::ast::{Expr, MatchArm, Pattern};
 use koja_typecheck::GlobalRegistry;
@@ -49,9 +49,7 @@ use super::patterns::{
     require_local,
 };
 
-/// AST-side inputs to [`lower_match`]. Bundled per the same
-/// `too_many_arguments` discipline [`super::control_flow::IfLowering`]
-/// uses.
+/// AST-side inputs to [`lower_match`].
 pub(super) struct MatchLowering<'a> {
     pub(super) subject: &'a Expr,
     pub(super) arms: &'a [MatchArm],

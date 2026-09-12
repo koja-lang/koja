@@ -43,19 +43,15 @@ use crate::value::{EnumPayload, Value};
 /// `impl Future` cycle between the call-tree functions.
 type EvalFuture<'a, T> = Pin<Box<dyn Future<Output = Result<T, RuntimeError>> + 'a>>;
 
+/// Entry point for running sealed IR in-process. Stateless, since
+/// each run installs its own thread-local scheduler state.
 pub struct Interpreter;
 
 impl Interpreter {
     /// Execute the project-mode entry and report its exit code as a
-    /// [`Value::Int`]. The entry is always a
-    /// [`FunctionKind::ProcessEntryWrapper`] (seal guarantees it).
-    /// The interpreter executes the IR-synthesized
-    /// `<state>.__entry_body` the wrapper's IR `Call` names, where
-    /// the full `start` -> `run` -> `StopReason.code` dispatch lives.
-    /// `args` carries the user-facing program arguments (everything
-    /// after the program name). An argv-shaped
-    /// `Process<List<String>, _, _>` entry receives them as its
-    /// config, other config types zero-init via
+    /// [`Value::Int`]. `args` are the program arguments after the
+    /// program name. A `Process<List<String>, _, _>` entry receives
+    /// them as its config, other config types zero-init via
     /// [`default_value_for_type`].
     pub fn run_program(program: &IRProgram, args: &[String]) -> Result<Value, RuntimeError> {
         let entry = program.entry_function();
@@ -88,13 +84,8 @@ impl Interpreter {
         let executor = EvalExecutor::new(Rc::clone(&runtime.core), program);
         executor.install_future(main, entry_future);
 
-        // The driver installs the signal handlers (SIGTERM/SIGINT/SIGHUP)
-        // and drains them into PID 1's mailbox, the same boot the native
-        // runtime performs. Draining is gated on the program actually
-        // having a `Lifecycle`-arm `receive`: the latch flags are
-        // process-global, so an indifferent run must not steal them from a
-        // concurrent one (eval runs share one host process, unlike native
-        // ones).
+        // Drain OS signals into PID 1's mailbox only when the program
+        // has a `Lifecycle` receive arm (see `EvalSignals`).
         let signals = EvalSignals::new(program_uses_lifecycle(program));
         EvalDriver::new(
             runtime,
@@ -326,10 +317,7 @@ async fn run_script_body(script: &IRScript) -> Result<Value, RuntimeError> {
     }
 }
 
-/// Whether any of `blocks` has a `receive` with a `Lifecycle` arm,
-/// i.e. whether the run observes OS lifecycle signals at all. Gates
-/// signal draining so a run that ignores lifecycle events leaves the
-/// process-global signal latches for a run that wants them.
+/// Whether any of `blocks` has a `receive` with a `Lifecycle` arm.
 fn blocks_use_lifecycle<'a>(blocks: impl Iterator<Item = &'a IRBasicBlock>) -> bool {
     blocks
         .flat_map(|block| &block.instructions)
@@ -511,18 +499,11 @@ fn coerce_return(value: Value, return_type: &IRType) -> Value {
     }
 }
 
-/// Run `function` in a fresh frame with `args` positionally bound to
-/// its param `ValueId`s. Param promotion (entry-block `LocalDecl` +
-/// `LocalWrite`) means the body reads from the slot, not the raw
-/// param id, so seeding `frame.values` keeps the promotion's
-/// `LocalWrite { value: param.id }` resolvable. `@intrinsic`-tagged
-/// functions route to [`crate::intrinsics`].
-///
-/// Wraps the body walk in a tail-call trampoline: an
-/// [`IRTerminator::TailCall`] surfaces from `execute_blocks` as
-/// `BlockOutcome::TailRestart(new_args)`, which we re-seed the
-/// frame with and re-enter the same body, keeping host-stack
-/// usage flat across any number of recursive tail calls.
+/// Run `function` in a fresh frame with `args` bound to its param
+/// `ValueId`s. `@intrinsic` functions route to [`crate::intrinsics`].
+/// An [`IRTerminator::TailCall`] surfaces as
+/// `BlockOutcome::TailRestart`, which re-seeds the frame and re-enters
+/// the same body so the host stack stays flat.
 fn execute_function<'a, R: CallResolver>(
     function: &'a IRFunction,
     args: Vec<Value>,
@@ -554,11 +535,10 @@ fn execute_function<'a, R: CallResolver>(
                     }),
                 };
             }
-            // Acquisition / release glue is a no-op under the interpreter:
-            // every host `Value` is independent (deep-cloned on `lookup`)
-            // and reclaimed by the host GC, so a clone is a rebind of the
-            // argument and a drop returns unit. Short-circuiting here means
-            // eval never executes a glue body.
+            // Acquisition / release glue is a no-op under the interpreter.
+            // Host values share `Rc` storage and are reclaimed when the
+            // last `Rc` drops, so a clone is a rebind of the argument and
+            // a drop returns unit. Eval never executes a glue body.
             FunctionKind::CloneGlue | FunctionKind::DeepCopyGlue => {
                 return Ok(args.into_iter().next().unwrap_or(Value::Unit));
             }
@@ -745,6 +725,8 @@ fn release_dead_registers<R: CallResolver>(
     {
         frame.values.remove(&defined);
     }
+    // Only a frame exit ends every register's life at once. A branch
+    // keeps the frame, and its targets may still read the registers.
     if matches!(
         terminator,
         IRTerminator::Return { .. } | IRTerminator::TailCall { .. }
@@ -808,11 +790,8 @@ fn consuming_receiver<R: CallResolver>(
 }
 
 /// Drive a function body starting at `blocks[0]` until a `Return`
-/// exits. The frame is shared across every block. Unknown branch
-/// targets panic per the seal contract. The interpreter imposes no
-/// step or iteration cap: real programs have legitimate infinite
-/// loops, and test harnesses provide their own timeouts if a test
-/// accidentally diverges.
+/// or `TailCall` exits. The frame is shared across every block, and
+/// there is no step cap.
 fn execute_blocks<'a, R: CallResolver>(
     blocks: &'a [IRBasicBlock],
     frame: &'a mut Frame,
@@ -1023,8 +1002,7 @@ fn dispatch_received<R: CallResolver>(
 }
 
 /// Materialize the `Lifecycle` enum value for a drained signal.
-/// `variant` is the wire byte `koja_runtime::signals::drain` documents;
-/// the enum tag is resolved by variant name, never declaration order.
+/// `variant` is the wire byte `koja_runtime::signals::drain` documents.
 fn lifecycle_value<R: CallResolver>(arm: &ReceiveArm, variant: i64, resolver: &R) -> Value {
     let IRType::Enum(symbol) = &arm.payload_type else {
         panic!(
@@ -1116,8 +1094,7 @@ pub(crate) fn build_io_ready_value<R: CallResolver>(
 const EXIT_SIGNAL_SYMBOL: &str = "Global.Process.ExitSignal";
 
 /// Materialize the `Process.ExitSignal{ pid, reason }` value for one
-/// staged exit notice, mirroring the native wire payload. Symbols are
-/// recovered from the monomorphized decls rather than fabricated.
+/// staged exit notice, mirroring the native wire payload.
 pub(crate) fn build_exit_signal_value<R: CallResolver>(resolver: &R, notice: &ExitNotice) -> Value {
     let decl = resolver.struct_decl(EXIT_SIGNAL_SYMBOL).unwrap_or_else(|| {
         panic!(
@@ -1145,9 +1122,8 @@ pub(crate) fn build_exit_signal_value<R: CallResolver>(resolver: &R, notice: &Ex
     }
 }
 
-/// Materialize the `ExitReason` enum value for a staged notice. The
-/// variant tag is resolved by name from the core [`ExitReason`], so
-/// stdlib declaration order is not load-bearing here.
+/// Materialize the `ExitReason` enum value for a staged notice from
+/// the core [`ExitReason`].
 fn build_exit_reason_value<R: CallResolver>(
     resolver: &R,
     reason_symbol: &IRSymbol,
@@ -1263,11 +1239,11 @@ fn execute_instruction<'a, R: CallResolver>(
                 frame.values.insert(*dest, result);
                 Ok(())
             }
-            // The host `Value` is deep-cloned on every `lookup`, so a
-            // `Clone` is just a re-bind: the result is already an
-            // independent copy with no shared backing. `DeepCopy` (the
-            // process-boundary copy) gets the same treatment for the
-            // same reason.
+            // A `Clone` is a rebind. `lookup` already bumped the `Rc`, and
+            // sharing is safe because every mutation goes through a
+            // uniqueness check or builds a fresh value. `DeepCopy` (the
+            // process-boundary copy) gets the same treatment for the same
+            // reason.
             IRInstruction::Clone { dest, source, .. }
             | IRInstruction::DeepCopy { dest, source, .. } => {
                 let value = lookup(&frame.values, *source)?;
@@ -1440,17 +1416,13 @@ fn execute_instruction<'a, R: CallResolver>(
                 frame.values.insert(*dest, Value::Struct { fields, symbol });
                 Ok(())
             }
+            // Drop the slot's `Rc` so the consuming site that follows
+            // sees a unique value.
             IRInstruction::ConsumeLocal { local } => {
                 frame.locals.insert(*local, Value::Unit);
                 Ok(())
             }
             IRInstruction::DropLocal { .. } => Ok(()),
-            // Heap reclamation is handled by the host GC, so the IR-level
-            // value-keyed drop is a no-op for the interpreter (mirrors
-            // [`IRInstruction::DropLocal`] above). This covers boxed
-            // `Indirect` operands too, since recursive boxes exist
-            // only in the native layout. Eval stores the inner value
-            // directly and reclaims through the host GC.
             IRInstruction::DropValue { .. } => Ok(()),
             IRInstruction::IndirectPresent { base, dest, .. } => {
                 let base = lookup(&frame.values, *base)?;
@@ -1459,14 +1431,9 @@ fn execute_instruction<'a, R: CallResolver>(
                     .insert(*dest, Value::Bool(!matches!(base, Value::Unit)));
                 Ok(())
             }
-            // The LLVM backend zero-initializes the slot at the decl
-            // site so scope-exit drop glue can run on never-written
-            // slots (e.g. the payload local of a receive arm that did
-            // not fire). Mirror with a `Unit` placeholder. Eval's drop
-            // glue short-circuits, so the placeholder is only ever
-            // observed by a glue-feeding `LocalRead`, never by user
-            // code (a user-level read-before-write cannot pass
-            // typecheck).
+            // A `Unit` placeholder so a never-written slot (the
+            // payload local of an untaken receive arm) still reads at
+            // scope exit.
             IRInstruction::LocalDecl { local, .. } => {
                 frame.locals.insert(*local, Value::Unit);
                 Ok(())
@@ -1784,6 +1751,9 @@ fn execute_instruction<'a, R: CallResolver>(
     })
 }
 
+/// Read a register. The clone is an `Rc` bump for heap-backed
+/// values, so the register and the result share storage until one
+/// of them is released.
 fn lookup(values: &BTreeMap<ValueId, Value>, id: ValueId) -> Result<Value, RuntimeError> {
     values
         .get(&id)
@@ -1986,7 +1956,8 @@ fn append_bits(dest: &mut [u8], start_bit: u64, src: &[u8], length: u64) {
     }
     // Bit-shift each source byte right by `shift`, OR'd into the
     // current dest byte's low bits + the next dest byte's high
-    // bits.
+    // bits. Source padding bits past `length` are zero, so a spill
+    // of them is harmless.
     let mut remaining = length;
     let mut src_idx = 0;
     let mut dest_idx = dest_byte_start;
@@ -1994,7 +1965,7 @@ fn append_bits(dest: &mut [u8], start_bit: u64, src: &[u8], length: u64) {
         let byte = src[src_idx];
         dest[dest_idx] |= byte >> shift;
         let next_bits = remaining.min(8);
-        let consumed_in_low = next_bits + (shift as u64).saturating_sub(0);
+        let consumed_in_low = next_bits + shift as u64;
         if consumed_in_low > 8 - shift as u64 && dest_idx + 1 < dest.len() {
             dest[dest_idx + 1] |= byte << (8 - shift);
         }
@@ -2285,9 +2256,7 @@ fn extract_bit_range(bytes: &[u8], start_bit: u64, length: u64) -> Vec<u8> {
     out
 }
 
-/// Materialize a `ConstValue` as a runtime [`Value`]. Every int
-/// width collapses to `Value::Int(i64)` (the seal pass keeps
-/// width-mismatched flows out, but the arms stay exhaustive).
+/// Materialize a `ConstValue` as a runtime [`Value`].
 fn materialize_const(value: &ConstValue) -> Value {
     match value {
         ConstValue::Binary(bytes) => Value::binary(bytes.clone()),

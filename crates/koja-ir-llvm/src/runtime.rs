@@ -88,12 +88,10 @@ fn declare_extern<'ctx>(
         .add_function(symbol, signature, Some(Linkage::External))
 }
 
-/// Declare (or look up) one of the `koja_format_*` runtime helpers
-/// used by `Debug.format` primitive intrinsics. Signature:
-/// `i8* koja_format_<ty>(<argument_type> value)`. Each helper
-/// formats `value` into a freshly-allocated length-prefixed Koja
-/// string and returns the payload pointer (8 bytes past the
-/// `i64 bit_length` header).
+/// Declare (or look up) one of the `koja_format_*` runtime helpers.
+/// Signature: `i8* koja_format_<ty>(<argument_type> value)`. Each
+/// formats `value` into a fresh Koja string and returns the payload
+/// pointer.
 pub(crate) fn declare_runtime_format<'ctx>(
     ctx: &EmitContext<'ctx>,
     symbol: &str,
@@ -104,78 +102,58 @@ pub(crate) fn declare_runtime_format<'ctx>(
     declare_extern(ctx, symbol, signature)
 }
 
-/// Declare (or look up) the `koja_free` extern: the runtime
-/// allocator funnel's free (a sizeless libc-`free` passthrough, see
-/// `koja-runtime-posix/src/mem.rs`). The drop emitter calls this once per
-/// heap-typed slot at function exit. Signature is `void(i8*)`. The
-/// heap-block pointers are computed by adjusting the SSA payload
-/// pointer (`payload - 8`) before the call so the funnel sees the
-/// allocator's block base.
+/// Declare (or look up) the `koja_free` extern, the runtime allocator
+/// funnel's free. Signature: `void koja_free(i8* base)`, taking the
+/// block base.
 pub(crate) fn declare_free_extern<'ctx>(ctx: &EmitContext<'ctx>) -> FunctionValue<'ctx> {
     let ptr_ty = ctx.context.ptr_type(AddressSpace::default());
     let signature = ctx.context.void_type().fn_type(&[ptr_ty.into()], false);
     declare_extern(ctx, FREE_SYMBOL, signature)
 }
 
-/// Declare (or look up) the `koja_rc_inc` extern: the runtime's
-/// refcount increment for an rc-managed leaf heap block. Signature:
-/// `void koja_rc_inc(i8* base)`, where `base` is the block base (the
-/// `i64 rc` word, `payload - HEADER_BYTES`). Immortal (rodata) blocks
-/// carry a negative sentinel rc and are skipped by the runtime. The
-/// `Clone` emitter calls this once per acquired heap-leaf value.
+/// Declare (or look up) the `koja_rc_inc` extern. Signature:
+/// `void koja_rc_inc(i8* base)`, taking the block base. Immortal
+/// blocks are skipped by the runtime.
 pub(crate) fn declare_rc_inc_extern<'ctx>(ctx: &EmitContext<'ctx>) -> FunctionValue<'ctx> {
     let ptr_ty = ctx.context.ptr_type(AddressSpace::default());
     let signature = ctx.context.void_type().fn_type(&[ptr_ty.into()], false);
     declare_extern(ctx, RC_INC_SYMBOL, signature)
 }
 
-/// Declare (or look up) the `koja_rc_dec` extern: the runtime's
-/// refcount decrement for an rc-managed leaf heap block, freeing the
-/// block when the count hits zero. Signature: `void koja_rc_dec(i8*
-/// base)` (block base, as for [`declare_rc_inc_extern`]). The drop
-/// emitter calls this once per heap-leaf slot at scope exit / per
-/// discarded heap-leaf value.
+/// Declare (or look up) the `koja_rc_dec` extern, which frees the
+/// block when the count hits zero. Signature:
+/// `void koja_rc_dec(i8* base)`, taking the block base.
 pub(crate) fn declare_rc_dec_extern<'ctx>(ctx: &EmitContext<'ctx>) -> FunctionValue<'ctx> {
     let ptr_ty = ctx.context.ptr_type(AddressSpace::default());
     let signature = ctx.context.void_type().fn_type(&[ptr_ty.into()], false);
     declare_extern(ctx, RC_DEC_SYMBOL, signature)
 }
 
-/// Declare (or look up) the `koja_closure_rc_dec` extern: the
-/// runtime's refcount decrement for a closure env block. Signature:
-/// `void koja_closure_rc_dec(i8* env)`, where `env` is the env block
-/// base (the `i64 rc` word). At zero it runs the env header's
-/// capture-release glue (if non-null) and frees the block. Null /
-/// immortal envs are no-ops. The closure `Drop` emitter calls this
-/// once per closure-typed slot at scope exit / per discarded closure
-/// value.
+/// Declare (or look up) the `koja_closure_rc_dec` extern. Signature:
+/// `void koja_closure_rc_dec(i8* env)`, taking the env block base. At
+/// zero it runs the env header's capture-release glue (if non-null)
+/// and frees the block. Null and immortal envs are no-ops.
 pub(crate) fn declare_closure_rc_dec_extern<'ctx>(ctx: &EmitContext<'ctx>) -> FunctionValue<'ctx> {
     let ptr_ty = ctx.context.ptr_type(AddressSpace::default());
     let signature = ctx.context.void_type().fn_type(&[ptr_ty.into()], false);
     declare_extern(ctx, CLOSURE_RC_DEC_SYMBOL, signature)
 }
 
-/// Declare (or look up) the `koja_heap_deep_copy` extern: the
-/// runtime's deep copy for an rc-managed leaf heap block. Signature:
+/// Declare (or look up) the `koja_heap_deep_copy` extern. Signature:
 /// `i8* koja_heap_deep_copy(i8* payload)`. Returns a fresh payload
-/// pointer with `rc = 1` and the bytes copied (immortal rodata
-/// blocks are shared as-is, null returns null). The `DeepCopy`
-/// emitter calls this once per heap-leaf value crossing a process
-/// boundary.
+/// with `rc = 1` and the bytes copied. Immortal blocks are shared
+/// as-is and null returns null.
 pub(crate) fn declare_heap_deep_copy_extern<'ctx>(ctx: &EmitContext<'ctx>) -> FunctionValue<'ctx> {
     let ptr_ty = ctx.context.ptr_type(AddressSpace::default());
     let signature = ptr_ty.fn_type(&[ptr_ty.into()], false);
     declare_extern(ctx, HEAP_DEEP_COPY_SYMBOL, signature)
 }
 
-/// Declare (or look up) the `koja_closure_deep_copy` extern: the
-/// runtime's deep copy for a closure env block. Signature:
-/// `i8* koja_closure_deep_copy(i8* env)`. Dispatches through the env
-/// header's `copy_fn` glue and returns a fresh env base with `rc = 1`
-/// and every heap-managed capture recursively copied (null envs
-/// return null). The `DeepCopy` emitter calls this once per closure
-/// value crossing a process boundary, then rebuilds the fat pointer
-/// around the fresh env.
+/// Declare (or look up) the `koja_closure_deep_copy` extern.
+/// Signature: `i8* koja_closure_deep_copy(i8* env)`. Dispatches
+/// through the env header's `copy_fn` glue and returns a fresh env
+/// base with `rc = 1` and every heap-managed capture copied. Null
+/// envs return null.
 pub(crate) fn declare_closure_deep_copy_extern<'ctx>(
     ctx: &EmitContext<'ctx>,
 ) -> FunctionValue<'ctx> {
@@ -187,11 +165,8 @@ pub(crate) fn declare_closure_deep_copy_extern<'ctx>(
 /// Declare (or look up) the `koja_int_parse` runtime helper.
 /// Signature: `i64 koja_int_parse(i8* input_payload, i64* out)`.
 /// Parses the input as a base-10 i64, writes the result to `*out`,
-/// and returns `1` on success / `0` on failure (leaving `*out`
-/// untouched). The `Int.parse` intrinsic emitter allocates a
-/// stack slot for `out`, branches on the return code, and wraps
-/// the parsed value (or a literal `"invalid integer"`) into
-/// `Result<Int, String>`.
+/// and returns `1` on success or `0` on failure (leaving `*out`
+/// untouched).
 pub(crate) fn declare_int_parse_extern<'ctx>(ctx: &EmitContext<'ctx>) -> FunctionValue<'ctx> {
     let ptr_ty = ctx.context.ptr_type(AddressSpace::default());
     let i64_ty = ctx.context.i64_type();
@@ -201,8 +176,7 @@ pub(crate) fn declare_int_parse_extern<'ctx>(ctx: &EmitContext<'ctx>) -> Functio
 
 /// Declare (or look up) the `koja_float_parse` runtime helper.
 /// Signature: `i64 koja_float_parse(i8* input_payload, f64* out)`.
-/// Same return convention as [`declare_int_parse_extern`]. The
-/// `Float.parse` intrinsic emitter follows the same skeleton.
+/// Same return convention as [`declare_int_parse_extern`].
 pub(crate) fn declare_float_parse_extern<'ctx>(ctx: &EmitContext<'ctx>) -> FunctionValue<'ctx> {
     let ptr_ty = ctx.context.ptr_type(AddressSpace::default());
     let i64_ty = ctx.context.i64_type();
@@ -211,25 +185,18 @@ pub(crate) fn declare_float_parse_extern<'ctx>(ctx: &EmitContext<'ctx>) -> Funct
 }
 
 /// Declare (or look up) the `koja_last_error` runtime helper.
-/// Signature: `i8* koja_last_error()`. Returns a freshly-allocated
-/// Koja string payload (8 bytes past its `i64 bit_length` header)
-/// describing the last I/O error set via `set_last_error` on the
-/// calling thread. Falls back to `"unknown error"` when no error
-/// is set. The socket intrinsics (`Socket.recv_from`,
-/// `Socket.resolve`) wrap this pointer directly into the
-/// `Result.Err(String)` branch.
+/// Signature: `i8* koja_last_error()`. Returns a fresh Koja string
+/// describing the last I/O error set on the calling thread, or
+/// `"unknown error"` when none is set.
 pub(crate) fn declare_last_error_extern<'ctx>(ctx: &EmitContext<'ctx>) -> FunctionValue<'ctx> {
     let ptr_ty = ctx.context.ptr_type(AddressSpace::default());
     let signature = ptr_ty.fn_type(&[], false);
     declare_extern(ctx, LAST_ERROR_SYMBOL, signature)
 }
 
-/// Declare (or look up) the `koja_alloc` extern: the runtime
-/// allocator funnel's alloc (a libc-`malloc` passthrough that aborts
-/// on OOM, see `koja-runtime-posix/src/mem.rs`). The concat /
-/// binary-construct emitters call this for the heap block base.
-/// Signature: `i8* koja_alloc(i64)` (the runtime targets 64-bit
-/// hosts, so the argument type matches `size_t` on those targets).
+/// Declare (or look up) the `koja_alloc` extern, the runtime
+/// allocator funnel's alloc, which aborts on OOM. Signature:
+/// `i8* koja_alloc(i64)`.
 pub(crate) fn declare_malloc_extern<'ctx>(ctx: &EmitContext<'ctx>) -> FunctionValue<'ctx> {
     let i64_ty = ctx.context.i64_type();
     let ptr_ty = ctx.context.ptr_type(AddressSpace::default());
@@ -239,8 +206,7 @@ pub(crate) fn declare_malloc_extern<'ctx>(ctx: &EmitContext<'ctx>) -> FunctionVa
 
 /// Declare (or look up) the `koja_utf8_validate` runtime helper.
 /// Signature: `i64 koja_utf8_validate(i8* ptr, i64 len)`. Returns
-/// `1` if `[ptr..ptr+len)` is valid UTF-8, `0` otherwise. Called
-/// from `Binary.to_string` to gate the heap-clone path.
+/// `1` if `[ptr..ptr+len)` is valid UTF-8, `0` otherwise.
 pub(crate) fn declare_utf8_validate_extern<'ctx>(ctx: &EmitContext<'ctx>) -> FunctionValue<'ctx> {
     let i64_ty = ctx.context.i64_type();
     let ptr_ty = ctx.context.ptr_type(AddressSpace::default());
@@ -248,9 +214,7 @@ pub(crate) fn declare_utf8_validate_extern<'ctx>(ctx: &EmitContext<'ctx>) -> Fun
     declare_extern(ctx, UTF8_VALIDATE_SYMBOL, signature)
 }
 
-/// Declare (or look up) the libc `memset` extern. The hashtable
-/// `new` emitter calls this to zero-clear the freshly-malloc'd
-/// `states` buffer (so every slot starts as `EMPTY`). Signature:
+/// Declare (or look up) the libc `memset` extern. Signature:
 /// `i8* memset(i8* dst, i32 value, i64 n)`.
 pub(crate) fn declare_memset_extern<'ctx>(ctx: &EmitContext<'ctx>) -> FunctionValue<'ctx> {
     let ptr_ty = ctx.context.ptr_type(AddressSpace::default());
@@ -265,8 +229,6 @@ pub(crate) fn declare_memset_extern<'ctx>(ctx: &EmitContext<'ctx>) -> FunctionVa
 /// Suspends the calling process until the fd is readable, then
 /// receives one datagram and returns a heap-allocated
 /// `[*u8 data, *u8 ip_bin, i64 port]` triple (or null on error).
-/// The `Socket.recv_from` intrinsic emitter marshals the triple
-/// into a `(Binary, SocketAddress)` SSA value.
 pub(crate) fn declare_socket_recv_from_extern<'ctx>(
     ctx: &EmitContext<'ctx>,
 ) -> FunctionValue<'ctx> {
@@ -281,20 +243,16 @@ pub(crate) fn declare_socket_recv_from_extern<'ctx>(
 /// Signature: `i8* koja_socket_resolve(i8* hostname_payload)`.
 /// Wraps `getaddrinfo` and returns a heap-allocated
 /// `[i64 count, *u8 ip0, *u8 ip1, ...]` buffer (or null on error).
-/// The `Socket.resolve` intrinsic emitter copies the trailing
-/// pointer array into a fresh `List<IPAddress>` element buffer.
 pub(crate) fn declare_socket_resolve_extern<'ctx>(ctx: &EmitContext<'ctx>) -> FunctionValue<'ctx> {
     let ptr_ty = ctx.context.ptr_type(AddressSpace::default());
     let signature = ptr_ty.fn_type(&[ptr_ty.into()], false);
     declare_extern(ctx, SOCKET_RESOLVE_SYMBOL, signature)
 }
 
-/// Declare (or look up) the `__koja_concat_bits` runtime
-/// helper. Signature: `i8* __koja_concat_bits(i8* lhs_payload,
-/// i8* rhs_payload)`. Reads bit-lengths from each operand's `-8`
-/// header, allocates a new `[i64 bit_length][ceil((L+R)/8) bytes]`
-/// block, and bit-shifts rhs to land at the lhs trailing partial
-/// byte. Sub-byte alignment is far cleaner in Rust than LLVM IR.
+/// Declare (or look up) the `__koja_concat_bits` runtime helper.
+/// Signature: `i8* __koja_concat_bits(i8* lhs_payload, i8*
+/// rhs_payload)`. Allocates a fresh block and bit-shifts rhs to land
+/// at the lhs trailing partial byte.
 pub(crate) fn declare_concat_bits_extern<'ctx>(ctx: &EmitContext<'ctx>) -> FunctionValue<'ctx> {
     let ptr_ty = ctx.context.ptr_type(AddressSpace::default());
     let signature = ptr_ty.fn_type(&[ptr_ty.into(), ptr_ty.into()], false);
@@ -318,8 +276,7 @@ pub(crate) fn declare_concat_bytes_owned_extern<'ctx>(
 /// Declare (or look up) the `__koja_pack_bits` runtime helper.
 /// Signature: `void __koja_pack_bits(i8* payload, i64 value,
 /// i8 width, i64 bit_offset)`. Packs `width` bits of `value` into
-/// `payload` MSB-first starting at `bit_offset`. The binary-literal
-/// emitter calls this for sub-byte segment widths.
+/// `payload` MSB-first starting at `bit_offset`.
 pub(crate) fn declare_pack_bits_extern<'ctx>(ctx: &EmitContext<'ctx>) -> FunctionValue<'ctx> {
     let ptr_ty = ctx.context.ptr_type(AddressSpace::default());
     let i64_ty = ctx.context.i64_type();
@@ -354,8 +311,7 @@ pub(crate) fn declare_string_contains_nul_extern<'ctx>(
 /// Declare (or look up) the `koja_string_find` runtime helper.
 /// Signature: `i64 koja_string_find(i8* payload, i8* needle, i64 from)`.
 /// Returns the byte offset of the first occurrence of `needle` at or
-/// after byte offset `from`, or -1 when absent. The `String.find`
-/// emitter branches on the -1 to mint `None` vs `Some`.
+/// after byte offset `from`, or -1 when absent.
 pub(crate) fn declare_string_find_extern<'ctx>(ctx: &EmitContext<'ctx>) -> FunctionValue<'ctx> {
     let ptr_ty = ctx.context.ptr_type(AddressSpace::default());
     let i64_ty = ctx.context.i64_type();
@@ -376,8 +332,7 @@ pub(crate) fn declare_binary_find_extern<'ctx>(ctx: &EmitContext<'ctx>) -> Funct
 /// Declare (or look up) the `koja_string_get` runtime helper.
 /// Signature: `i8* koja_string_get(i8* payload, i64 index)`. Returns
 /// a freshly-allocated payload for the codepoint at `index`, or
-/// `null` when out-of-bounds. The `String.get` emitter branches
-/// on the null to mint `None` vs `Some`.
+/// `null` when out-of-bounds.
 pub(crate) fn declare_string_get_extern<'ctx>(ctx: &EmitContext<'ctx>) -> FunctionValue<'ctx> {
     let ptr_ty = ctx.context.ptr_type(AddressSpace::default());
     let i64_ty = ctx.context.i64_type();
@@ -444,10 +399,7 @@ pub(crate) fn declare_string_slice_bytes_extern<'ctx>(
 }
 
 /// Declare (or look up) the `__koja_panic` runtime helper.
-/// Signature: `void __koja_panic(i8* message_payload)`. The
-/// `Kernel.panic` intrinsic body calls this with the `String`
-/// payload pointer (i.e. 8 bytes past the length header) and
-/// trails the call with `unreachable`. The runtime side prints
+/// Signature: `void __koja_panic(i8* message_payload)`. Prints
 /// `panic: <message>` to stderr and aborts.
 pub(crate) fn declare_panic_extern<'ctx>(ctx: &EmitContext<'ctx>) -> FunctionValue<'ctx> {
     let ptr_ty = ctx.context.ptr_type(AddressSpace::default());
@@ -541,7 +493,6 @@ pub(crate) fn declare_rt_send_lifecycle_extern<'ctx>(
 /// Declare (or look up) `koja_rt_process_exit`. Signature:
 /// `void koja_rt_process_exit(i64 reason)`. Records the terminating
 /// process's exit reason (0=Normal, 1=Shutdown, ...) on its control block.
-/// Emitted in the process-body tail from the process's own `StopReason`.
 pub(crate) fn declare_rt_process_exit_extern<'ctx>(ctx: &EmitContext<'ctx>) -> FunctionValue<'ctx> {
     let i64_ty = ctx.context.i64_type();
     let signature = ctx.context.void_type().fn_type(&[i64_ty.into()], false);
@@ -550,8 +501,7 @@ pub(crate) fn declare_rt_process_exit_extern<'ctx>(ctx: &EmitContext<'ctx>) -> F
 
 /// Declare (or look up) `koja_rt_set_priority`. Signature:
 /// `void koja_rt_set_priority(i64 level)`. Sets the current process's
-/// scheduling weight (0=Low, 1=Normal, 2=High). Called once per process
-/// body, right after `start` succeeds.
+/// scheduling weight (0=Low, 1=Normal, 2=High).
 pub(crate) fn declare_rt_set_priority_extern<'ctx>(ctx: &EmitContext<'ctx>) -> FunctionValue<'ctx> {
     let i64_ty = ctx.context.i64_type();
     let signature = ctx.context.void_type().fn_type(&[i64_ty.into()], false);
@@ -570,9 +520,7 @@ pub(crate) fn declare_rt_yield_check_extern<'ctx>(ctx: &EmitContext<'ctx>) -> Fu
 }
 
 /// Declare (or look up) `u32 koja_rt_reductions_grant()`, the running
-/// process's reduction grant for the current quantum. Called once at
-/// every compiled process entry on the register strategy to seed the
-/// budget register.
+/// process's reduction grant for the current quantum.
 pub(crate) fn declare_rt_reductions_grant_extern<'ctx>(
     ctx: &EmitContext<'ctx>,
 ) -> FunctionValue<'ctx> {
@@ -708,8 +656,7 @@ pub(crate) fn declare_rt_demonitor_extern<'ctx>(ctx: &EmitContext<'ctx>) -> Func
 
 /// Declare (or look up) `koja_rt_parent`. Signature:
 /// `i64 koja_rt_parent()`. Returns the calling process's parent PID,
-/// or 0 for the entry process (mapped to `Option.None` by the
-/// emitter).
+/// or 0 for the entry process.
 pub(crate) fn declare_rt_parent_extern<'ctx>(ctx: &EmitContext<'ctx>) -> FunctionValue<'ctx> {
     let i64_ty = ctx.context.i64_type();
     let signature = i64_ty.fn_type(&[], false);
@@ -719,8 +666,7 @@ pub(crate) fn declare_rt_parent_extern<'ctx>(ctx: &EmitContext<'ctx>) -> Functio
 /// Declare (or look up) `koja_rt_is_process_alive`. Signature:
 /// `i64 koja_rt_is_process_alive(i64 pid)`. Returns 1 when the
 /// target process is alive, 0 otherwise (including out-of-range
-/// pids). The `Ref.alive?` emitter trims the result down to `i1`
-/// before handing it back as a `Bool`.
+/// pids).
 pub(crate) fn declare_rt_is_process_alive_extern<'ctx>(
     ctx: &EmitContext<'ctx>,
 ) -> FunctionValue<'ctx> {
@@ -730,11 +676,8 @@ pub(crate) fn declare_rt_is_process_alive_extern<'ctx>(
 }
 
 /// Declare (or look up) `koja_rt_main_done`. Signature:
-/// `void koja_rt_main_done()`. Called by the synthesized `main`
-/// trampoline after spawning the entry process. Boots the I/O
-/// reactor and worker pool, then runs the scheduling loop until the
-/// main process (PID 1) dies. Without this call, spawned processes
-/// never execute.
+/// `void koja_rt_main_done()`. Boots the I/O reactor and worker pool,
+/// then runs the scheduling loop until PID 1 dies.
 pub(crate) fn declare_rt_main_done_extern<'ctx>(ctx: &EmitContext<'ctx>) -> FunctionValue<'ctx> {
     let signature = ctx.context.void_type().fn_type(&[], false);
     declare_extern(ctx, RT_MAIN_DONE_SYMBOL, signature)
@@ -743,9 +686,7 @@ pub(crate) fn declare_rt_main_done_extern<'ctx>(ctx: &EmitContext<'ctx>) -> Func
 /// Declare (or look up) `koja_rt_build_argv`. Signature:
 /// `void koja_rt_build_argv(i32 argc, i8** argv, i8* out)`. Builds a
 /// `List<String>` from C `argc`/`argv` (skipping `argv[0]`) and
-/// writes it into `*out`. Used by the process-entry `main`
-/// trampoline when the entry state's `Process<C, ..>` impl picks
-/// `C = List<String>`.
+/// writes it into `*out`.
 pub(crate) fn declare_rt_build_argv_extern<'ctx>(ctx: &EmitContext<'ctx>) -> FunctionValue<'ctx> {
     let ptr_ty = ctx.context.ptr_type(AddressSpace::default());
     let i32_ty = ctx.context.i32_type();

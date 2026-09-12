@@ -8,7 +8,7 @@
 //!
 //! ## What counts as composite glue
 //!
-//! Lowering ([`crate::lower::ownership`]) emits an
+//! Lowering emits an
 //! [`IRInstruction::Clone`] at every ownership acquisition and an
 //! [`IRInstruction::DropLocal`] / [`IRInstruction::DropValue`] at every
 //! release, for any `is_heap_managed` type. Two buckets bottom out
@@ -89,12 +89,14 @@ use crate::package::{IRPackage, insert_package_function};
 use crate::struct_decl::IRStructDecl;
 use crate::types::IRType;
 
-/// Run the elaborate sub-pass over a program's package set: fuse
-/// dead-receiver mutator calls and byte concats into their consuming
-/// forms ([`consume`], before discovery so deleted drops seed no glue),
-/// then discover the heap-managed composites that need glue,
-/// synthesize / register it, and rewrite every composite acquisition
-/// / release into a glue `Call`.
+/// Run the elaborate sub-pass over a program's package set. In order:
+/// rewrite boxed-slot overwrites ([`overwrite`]), fuse dead-receiver
+/// mutator calls and byte concats into their consuming forms
+/// ([`consume`], before discovery so deleted drops seed no glue),
+/// discover the heap-managed composites that need glue, synthesize
+/// and register it, rewrite every composite acquisition and release
+/// into a glue `Call`, then splice the `IOReady` ([`io_ready`]) and
+/// `ExitSignal` ([`exit_signal`]) delivery arms into process loops.
 pub(crate) fn elaborate(packages: &mut [IRPackage]) {
     overwrite::rewrite_indirect_overwrites(packages, &mut []);
     consume::fuse_consuming_sites(packages, &mut []);
@@ -106,7 +108,7 @@ pub(crate) fn elaborate(packages: &mut [IRPackage]) {
     exit_signal::deliver_exit_signal(packages);
 }
 
-/// Run the elaborate sub-pass for a script: same three steps as
+/// Run the elaborate sub-pass for a script. Same steps as
 /// [`elaborate`], but discovery also scans the inline script `body`
 /// (which carries its own `Clone` / `Drop` sites outside any package
 /// function) and the rewrite covers it too.
@@ -490,10 +492,8 @@ fn register_glue(packages: &mut [IRPackage], ty: &IRType) {
     );
 }
 
-/// Register the deep-copy glue shell for `ty` (idempotent, like
-/// [`register_glue`]). Same two body shapes as the clone half:
-/// aggregate bodies are synthesized here, collection bodies stay
-/// empty for the backend to synthesize.
+/// Register the deep-copy glue shell for `ty`. Idempotent, with the
+/// same two body shapes as [`register_glue`].
 fn register_deep_copy_glue(packages: &mut [IRPackage], ty: &IRType) {
     let blocks = if is_aggregate(ty) {
         synthesis::copy_body(ty, packages, synthesis::CopyMode::DeepCopy)

@@ -234,8 +234,8 @@ fn struct_pattern_nested_extracts_inner_struct_via_chained_bind() {
 
 #[test]
 fn struct_pattern_nested_option_none_does_not_segfault_on_payload_read() {
-    // Phase 4g regression: None must not trigger a payload
-    // projection in any of the Some-shaped arms.
+    // None must not trigger a payload projection in any of the
+    // Some-shaped arms.
     let source = "
         struct Point
           x: Int

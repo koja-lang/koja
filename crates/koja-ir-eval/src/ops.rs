@@ -48,9 +48,8 @@ pub(crate) fn apply_binary_op(
 }
 
 /// Inclusive value range of the integer type, computed from width +
-/// signedness. `Value::Int` stores every width in an `i64` (unsigned
-/// 64-bit values bit-preserved), so faults are detected by exact
-/// `i128` arithmetic against this range.
+/// signedness. Faults are detected by exact `i128` arithmetic against
+/// this range.
 fn int_range(ty: &IRType) -> (i128, i128) {
     let width = ty.int_bit_width().unwrap_or(64);
     match ty.int_sign() {
@@ -59,9 +58,8 @@ fn int_range(ty: &IRType) -> (i128, i128) {
     }
 }
 
-/// The operand's mathematical value. Signed operands read the stored
-/// `i64` directly, unsigned operands reinterpret its bit pattern
-/// (`UInt64` values above `i64::MAX` are stored as negative `i64`).
+/// The operand's mathematical value. Unsigned operands reinterpret
+/// the stored bit pattern (see [`Value::Int`]).
 fn int_operand(ty: &IRType, stored: i64) -> i128 {
     match ty.int_sign() {
         Some(BinarySign::Unsigned) => (stored as u64) as i128,
@@ -99,6 +97,8 @@ fn apply_int_arith(
     Ok(Value::Int(exact as u64 as i64))
 }
 
+/// `==` / `!=` on the primitive kinds. Lowering routes composite
+/// `==` through `equals?` calls, so only primitives reach here.
 fn apply_equality(op: IRBinOp, lhs: Value, rhs: Value) -> Result<Value, RuntimeError> {
     let equal = match (&lhs, &rhs) {
         (Value::Bool(a), Value::Bool(b)) => a == b,

@@ -2,8 +2,8 @@
 //! site monomorphizes to a separate intrinsic body via the receiver
 //! pinning (`Global.CPtr_$UInt8$.alloc` and `Global.CPtr_$Float32$.alloc`
 //! emit distinct functions). The dispatch id stays the bare
-//! `CPtr.<method>` since [`crate::intrinsics::emitter_for`] cannot see
-//! the type args otherwise. The pointee `IRType` lives on
+//! `CPtr.<method>` since [`crate::intrinsics::emit_intrinsic_body`]
+//! cannot see the type args otherwise. The pointee `IRType` lives on
 //! `params[0].ty` for instance methods and on `return_type` for
 //! `alloc`/`null`. [`pointee`] picks the right slot.
 //!
@@ -225,6 +225,8 @@ fn emit_offset<'ctx>(
     let element_ty = ir_basic_type(ctx, inner)?;
     let self_ptr = nth_pointer(function, llvm_function, 0, "self")?;
     let n = nth_int(function, llvm_function, 1, "n")?;
+    // SAFETY: `CPtr` is the raw pointer surface. Staying inside the
+    // allocation is the Koja caller's contract, not this emitter's.
     let gep = unsafe {
         ctx.builder
             .build_gep(element_ty, self_ptr, &[n], "offset_ptr")
@@ -283,11 +285,11 @@ fn emit_null_check<'ctx>(
     ctx.builder.build_return(Some(&cmp)).or_ice().map(|_| ())
 }
 
-/// `to_binary(self, len): Binary`: malloc a `[i64 bit_len][len bytes]`
-/// block and `memcpy` `len` bytes from the source pointer. Returns a
-/// pointer to the payload (`base + 8`) per the `Binary` ABI.
-/// Caller retains ownership of `self`. The produced `Binary` is a
-/// fresh owned heap allocation.
+/// `to_binary(self, len): Binary`: malloc a heap block and `memcpy`
+/// `len` bytes from the source pointer. Returns the payload pointer
+/// (`base + HEADER_BYTES`) per the `Binary` ABI. Caller retains
+/// ownership of `self`. The produced `Binary` is a fresh owned heap
+/// allocation.
 fn emit_to_binary<'ctx>(
     ctx: &EmitContext<'ctx>,
     function: &IRFunction,

@@ -1,11 +1,6 @@
-//! `Set<T>` family: heap-backed unique-element container. Eval
-//! stores elements in `Rc<RefCell<Vec<Value>>>`, but under value
-//! semantics every mutator (`insert`, `remove`) is copy-on-write:
-//! it clones the receiver's element vec into a fresh `Rc` before
-//! mutating, so a shared binding is never observably mutated through
-//! another alias. A linear probe over the element vec gives the
-//! right semantics. The LLVM backend's open-addressing hash table
-//! is purely a perf detail that's invisible at the Koja level.
+//! `Set<T>` family. Every mutator here builds a fresh `Rc`. The
+//! in-place twins live in [`super::consuming`]. Lookups are linear
+//! probes over the element vec.
 
 use std::cell::RefCell;
 use std::rc::Rc;

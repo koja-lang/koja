@@ -10,12 +10,10 @@
 //!                       └─Branch (break)──▶ exit (continue lowering)
 //! ```
 //!
-//! Loop-carried state lives in alloca slots, not block params: the pipeline's
-//! mutable bindings already model state through
-//! [`crate::IRInstruction::LocalDecl`] + [`crate::IRInstruction::LocalWrite`]
-//! against per-slot allocas, and each iteration's body re-reads /
-//! writes the slot directly. Block-param SSA stays for `if`/`else`
-//! arm joins inside the loop body, unchanged.
+//! Loop-carried state lives in local slots
+//! ([`crate::IRInstruction::LocalDecl`] +
+//! [`crate::IRInstruction::LocalWrite`]), not block params. Each
+//! iteration re-reads and writes the slot directly.
 //!
 //! Both shapes produce a `Unit` `ValueId` from the exit block so
 //! callers can continue threading values through the open flow. The
@@ -23,7 +21,7 @@
 //! [`super::package::resolved_type_to_ir_type`] maps `Never -> Unit`,
 //! so the IR-level value is always concrete `Unit`.
 //!
-//! `break` is lowered in [`super::body::lower_break_stmt`].
+//! `break` is lowered in `body::lower_break_stmt`.
 //! `lower_loop` only manages the [`FnLowerCtx::push_loop_exit`] /
 //! [`FnLowerCtx::pop_loop_exit`] bookkeeping that gives `break` an
 //! exit block to target.
@@ -124,7 +122,7 @@ fn drop_body_scoped_bindings(
 ///   terminator is the back-edge [`IRTerminator::Branch`] to itself.
 ///   A body that closes its own flow (an early `return` or `break`)
 ///   leaves no back-edge.
-/// - `exit`: only reachable via [`super::body::lower_break_stmt`].
+/// - `exit`: only reachable via `body::lower_break_stmt`.
 ///   Produces a fresh `Const::Unit` so the caller can keep threading.
 ///   When the body has no `break`, the exit block stays unreachable.
 ///   That's intentional and harmless (every emitted block carries

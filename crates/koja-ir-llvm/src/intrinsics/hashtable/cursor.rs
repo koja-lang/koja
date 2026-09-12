@@ -1,4 +1,10 @@
 //! Raw cursor scan shared by `Map.next` and `Set.next`.
+//!
+//! A cursor is a bucket index. `next(cursor)` scans forward from it
+//! for the first occupied bucket and returns `Some((entry, slot + 1))`
+//! so the caller passes the result back in to continue. A negative
+//! cursor or one at or past `capacity` yields `None`. The order is
+//! bucket order, which only holds while the table is not resized.
 
 use inkwell::IntPredicate;
 use inkwell::values::{BasicValueEnum, FunctionValue, StructValue};
@@ -71,6 +77,7 @@ pub(crate) fn emit_next<'ctx>(
         .or_ice()?;
 
     ctx.builder.position_at_end(check);
+    // SAFETY: `slot` was checked against `capacity` in `scan`.
     let state_ptr = unsafe {
         ctx.builder
             .build_gep(i8_ty, table.states_ptr, &[slot], "cursor.state_ptr")

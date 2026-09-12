@@ -420,7 +420,8 @@ fn walk_instruction(instruction: &IRInstruction, out: &mut BTreeMap<IRSymbol, IR
 }
 
 /// Per-segment IRType walker for the binary-pattern instruction.
-/// Only [`LoweredBinaryPattern::BindInt`] / [`LoweredBinaryPattern::GreedyTail`]
+/// Only [`crate::LoweredBinaryPattern::BindInt`] /
+/// [`crate::LoweredBinaryPattern::GreedyTail`]
 /// carry types. The rest are pure shape + bit-offset metadata.
 fn walk_binary_pattern(
     segment: &crate::types::LoweredBinaryPattern,

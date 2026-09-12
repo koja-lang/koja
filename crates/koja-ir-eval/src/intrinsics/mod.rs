@@ -52,19 +52,9 @@ pub(super) struct IntrinsicCall<'a, R: CallResolver> {
 }
 
 /// Run the registered intrinsic `id` for the calling `function`.
-/// Handlers that mint typed return values (`Option<T>`,
-/// `Result<T, E>`, tuples) read the receiver symbol from
-/// `function.return_type`, and pointer-typed intrinsics
-/// (`CPtr.alloc`, `CPtr.offset`, …) read the element type from
-/// `function.params[0].ty` / `function.return_type` to compute
-/// `size_of::<T>()`. `resolver` is consulted when a handler needs
-/// sibling declaration information, so no path fabricates an
-/// `IRSymbol` from a string.
-///
-/// `async` because the process intrinsics suspend: `Ref.call` parks on
-/// the caller's reply slot and yields to the driver until the reply lands
-/// (or the timeout fires). Every other intrinsic resolves synchronously
-/// and just returns its value through the state machine.
+/// Handlers read return-type symbols and element types from
+/// `function` and sibling declarations from `resolver`. `async`
+/// because `Ref.call` parks until its reply lands.
 pub(crate) async fn dispatch<R: CallResolver>(
     id: &IRIntrinsicId,
     function: &IRFunction,

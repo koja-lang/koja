@@ -18,7 +18,7 @@
 //!   `params`/`return_type` signature.
 //!
 //! Both checks panic on violation through [`super::seal_panic`], since
-//! closure seal failures indicate a [`crate::lower::closures`] bug,
+//! closure seal failures indicate a closure lowering bug,
 //! not a user error.
 
 use crate::function::{FunctionKind, IRFunction, IRInstruction, IRSymbol};

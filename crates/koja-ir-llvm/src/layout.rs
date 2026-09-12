@@ -9,6 +9,8 @@
 //! `TypeLayouts::new` runs once from [`crate::ctx::EmitContext::new`]
 //! against the compile's single target machine, so `get_abi_size` /
 //! `get_abi_alignment` match the object emitter by construction.
+//! No Koja value type has an ABI alignment above 8, so an `i64`
+//! array sized to a value's byte width can hold it.
 //! Every panic in this file marks an invariant violation upstream
 //! (lower / merge produced a duplicate symbol, or pre-emit ordering
 //! missed a decl). None are recoverable.
@@ -53,9 +55,9 @@ pub(crate) struct UnionLayout<'ctx> {
 }
 
 /// Type-layout registry held as [`crate::ctx::EmitContext::layouts`].
-/// `target_data` is `pub(crate)` because [`enums::define_enum_bodies`]
-/// and [`crate::types`] consult it directly. The registries stay
-/// private behind accessors so `RefCell` borrows can't leak.
+/// `target_data` is `pub(crate)` because [`enums`] and [`crate::types`]
+/// consult it directly. The registries stay private behind accessors
+/// so `RefCell` borrows cannot leak.
 pub(crate) struct TypeLayouts<'ctx> {
     pub(crate) target_data: TargetData,
     struct_types: RefCell<BTreeMap<IRSymbol, StructType<'ctx>>>,

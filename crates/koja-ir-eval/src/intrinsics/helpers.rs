@@ -71,11 +71,8 @@ pub(super) fn result_value<R: CallResolver>(
 }
 
 /// Build the `<ErrEnum>.<variant>` value for a unit-variant error of a
-/// `Result<T, ErrEnum>` intrinsic. The error enum's symbol comes from the
-/// `Result` decl's `Err` payload and the variant tag is resolved by name,
-/// so neither the stdlib's mangling scheme nor any enum's declaration
-/// order is baked in here. Shared by the checked-narrowing / parse
-/// intrinsics (`NumericConversionError`) and `Ref.call` (`CallError`).
+/// `Result<T, ErrEnum>` intrinsic. The error enum's symbol comes from
+/// the `Result` decl's `Err` payload.
 pub(super) fn err_variant_value<R: CallResolver>(
     result_symbol: &IRSymbol,
     resolver: &R,
@@ -97,9 +94,9 @@ pub(super) fn err_variant_value<R: CallResolver>(
     unit_variant_value(error_symbol, resolver, variant_name)
 }
 
-/// Build a unit-variant value `<enum>.<variant>` directly, resolving the tag
-/// by name so the enum's declaration order isn't baked in. Used where an
-/// intrinsic returns a bare enum (e.g. `ReplyTo.send -> ReplyTo.Delivery`).
+/// Build a unit-variant value `<enum>.<variant>` directly. Used where
+/// an intrinsic returns a bare enum (e.g. `ReplyTo.send ->
+/// ReplyTo.Delivery`).
 pub(super) fn unit_variant_value<R: CallResolver>(
     enum_symbol: &IRSymbol,
     resolver: &R,

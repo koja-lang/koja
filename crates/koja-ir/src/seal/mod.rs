@@ -6,81 +6,13 @@
 //!
 //! [`COMPILER-NORTHSTAR.md`]: ../../design/COMPILER-NORTHSTAR.md
 //!
-//! Layout map:
-//!
-//! - [`program`]: entry point [`seal_program`] plus
-//!   `seal_program_calls` (cross-function call-target lookup against
-//!   the assembled `IRProgram`).
-//! - [`script`]: entry point [`seal_script`] plus
-//!   `seal_script_calls` (mirror for the script-shaped output, with
-//!   `IRScript::function` as the lookup table).
-//! - [`function`]: `seal_package` / `seal_function` / `seal_block` /
-//!   `collect_block_ids`. Shared between the program and script
-//!   paths because both shapes contain `IRPackage` fragments and
-//!   both apply the same per-block invariants (operand
-//!   defined-before-use, terminator-target validity, supported
-//!   `ConstValue` / `IRType` widths).
-//! - [`structs`]: the `seal_struct_decls` check (per-package decl
-//!   shape)
-//!   plus `seal_struct_ops` (cross-instruction `StructInit` /
-//!   `FieldGet` validation, fed by an `IRSymbol -> IRStructDecl`
-//!   closure the program / script paths supply).
-//! - This module ([`mod.rs`]): shared helpers used by all
-//!   submodules: [`seal_panic`], [`require_supported_type`],
-//!   [`require_supported_const`], [`instruction_operands`],
-//!   [`terminator_operands`], [`terminator_targets`].
-//!
-//! Invariants asserted (program path):
-//!
-//! 1. The entry-point [`crate::IRSymbol`] resolves to a registered
-//!    function.
-//! 2. Every function in every package keys at its own symbol
-//!    (`pkg.functions[sym].symbol == sym`).
-//! 3. Per-function body shape matches its [`crate::FunctionKind`]:
-//!    `Regular` carries at least one basic block, and `Intrinsic`
-//!    carries zero (the body is synthesized at emit time by the
-//!    backend's `intrinsics/` dispatch).
-//! 4. Every basic-block id is unique within its function.
-//! 5. Every operand referenced by an instruction or terminator points
-//!    at a `ValueId` whose definition dominates the using block, i.e.
-//!    the def lives in the using block itself or in some block that
-//!    sits on every path from the entry block to it. Function
-//!    parameter `ValueId`s seed the entry block's scope, so body
-//!    references to params are valid without a distinct
-//!    "definition" instruction. Block parameters define their
-//!    `dest` on entry to the declaring block, so the dominator-tree
-//!    walk picks them up at the right level. Cross-block value flow
-//!    via local slots (`LocalDecl` / `LocalWrite` / `LocalRead`)
-//!    flows on top of this and is checked separately by
-//!    `seal_locals`.
-//! 6. Every `IRTerminator::Branch` / `CondBranch` target is a block
-//!    that exists in the same function.
-//! 7. Every `IRInstruction::Call`'s `callee` symbol resolves to a
-//!    function that actually exists somewhere in the `IRProgram` /
-//!    `IRScript`.
-//! 8. **Transient slice invariant**: every [`ConstValue`] that flows
-//!    through the IR is one of `Bool`, `Float64`, `Int64`, `String`,
-//!    or `Unit`. The narrower / unsigned / `Float32` width variants
-//!    exist in the [`ConstValue`] vocabulary but are forbidden until
-//!    literal width inference lands, as there's no surface syntax that
-//!    materializes them yet. The [`IRType`] vocabulary is broader:
-//!    every variant is admitted, since FFI signatures (and any
-//!    regular function that propagates an FFI value) legitimately
-//!    surface explicit-width primitives (`Int8`..`UInt64`,
-//!    `Float32`/`Float64`, `CPtr<T>`).
-//! 9. Every struct declaration has dense, declaration-order field
-//!    indices (`0..n`), unique field names, and field types in the
-//!    transient set. Every `IRInstruction::StructInit` carries
-//!    exactly the decl's field count, field-init indices match
-//!    declaration positions, and `ty` resolves to a registered
-//!    decl. Every `IRInstruction::FieldGet` has a `field_index`
-//!    in range and a `field_type` that matches
-//!    `IRStructField::ir_type` on the resolved decl.
-//!
-//! The script path ([`seal_script`]) re-asserts (3)–(9) on the
-//! implicit-function shape ([`crate::IRScript::blocks`] +
-//! [`crate::IRScript::return_type`]), and re-asserts (7) using
-//! [`crate::IRScript::packages`] as the call-target lookup.
+//! [`program`] and [`script`] are the entry points for the two IR
+//! shapes. The submodules split by what they check: [`function`]
+//! (block shape, dominance of operand definitions, branch targets,
+//! locals, tail calls), [`types`] (per-instruction operand and result
+//! types), [`structs`], [`enums`], and [`closures`] (decl shape and
+//! the instructions that project them). Every `Call` must resolve to
+//! a function somewhere in the program or script.
 
 use crate::enum_decl::EnumPayloadInit;
 use crate::function::{IRBlockId, IRInstruction, IRTerminator};
@@ -97,18 +29,9 @@ mod types;
 pub(crate) use program::seal_program;
 pub(crate) use script::seal_script;
 
-/// Every [`IRType`] variant is admitted. The narrower / explicit-
-/// width numeric variants and `CPtr<T>` are reachable through
-/// extern-fn signatures (`FunctionKind::Extern` declarations) and
-/// through regular function bodies that propagate FFI values. The
-/// rest are reachable through ordinary user code. Inner `CPtr`
-/// pointees recurse so `CPtr<CPtr<UInt8>>` rejects nothing
-/// structurally.
-///
-/// Kept as a function (not deleted) so the per-edge call sites in
-/// [`function::seal_function`] retain their location-aware error
-/// surface, useful when seal panics ever loosen back into recoverable
-/// diagnostics. See module docstring invariant 8.
+/// Every [`IRType`] variant is admitted. The walk recurses into
+/// pointee, element, and member types so a future restriction has a
+/// location-aware hook at every edge.
 pub(super) fn require_supported_type(ty: &IRType, location: &dyn Fn() -> String) {
     match ty {
         IRType::Binary
@@ -167,12 +90,9 @@ pub(super) fn require_supported_type(ty: &IRType, location: &dyn Fn() -> String)
     }
 }
 
+/// Every [`ConstValue`] variant is admitted. The hook exists so a
+/// future variant opts in explicitly.
 pub(super) fn require_supported_const(value: &ConstValue, location: &dyn Fn() -> String) {
-    // Every [`ConstValue`] variant is currently admitted. Narrow-int
-    // and narrow-float widths landed alongside literal-fit coercion.
-    // Helper exists so future additions to `ConstValue` (e.g. a
-    // bigint variant) can opt in explicitly rather than implicitly
-    // by dint of being defined.
     let _ = (value, location);
 }
 
@@ -215,16 +135,13 @@ pub(super) fn instruction_operands(inst: &IRInstruction) -> Vec<ValueId> {
         // `LoadConst` reads from the package constant pool, not a
         // `ValueId`, so it has no operand to validate here. The
         // pool entry is checked against the program-level constants
-        // index by `seal_loadconst_pool`.
+        // index by `seal_program_loadconst_pool` and
+        // `seal_script_loadconst_pool`.
         IRInstruction::LoadConst { .. } => vec![],
-        // `ConsumeLocal` and `DropLocal` consume a slot, not a
-        // `ValueId`. The slot's existence is checked by
-        // `seal_locals_in_function` and they produce nothing.
-        // `LocalDecl` declares the slot, with nothing in scope yet to read.
-        // `LocalRead` reads the slot named by `local`, not a `ValueId`,
-        // so the per-block defined-set walk has nothing to validate
-        // here. `local` is checked against the per-function decl set
-        // by `seal_locals_in_function`.
+        // `ConsumeLocal`, `DropLocal`, `LocalDecl`, and `LocalRead`
+        // name a slot, not a `ValueId`, so the per-block defined-set
+        // walk has nothing to validate here. The slot is checked
+        // against the per-function decl set by `seal_locals`.
         IRInstruction::ConsumeLocal { .. }
         | IRInstruction::DropLocal { .. }
         | IRInstruction::LocalDecl { .. }

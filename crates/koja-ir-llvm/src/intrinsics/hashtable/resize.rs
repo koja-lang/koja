@@ -37,6 +37,8 @@ pub(super) fn emit_resize_if_needed<'ctx>(
         .context
         .append_basic_block(llvm_function, "after_resize");
 
+    // Grow before the insert would push the load past 3/4:
+    // `(length + 1) * 4 > capacity * 3`.
     let len_plus_1 = ctx
         .builder
         .build_int_add(table.length, i64_ty.const_int(1, false), "len_plus_1")
@@ -185,6 +187,8 @@ fn emit_rehash_loop<'ctx>(
         .or_ice()?;
 
     ctx.builder.position_at_end(rehash_body);
+    // SAFETY: `ri` runs over `0..old.capacity` and every new-table
+    // slot is masked to `new_cap - 1`.
     let state_at_ri_ptr = unsafe {
         ctx.builder
             .build_gep(i8_ty, old.states_ptr, &[ri], "old_state_ptr")

@@ -49,24 +49,16 @@ use crate::local::IRLocalId;
 use crate::types::{IRType, ValueId};
 
 /// Per-package write-back bag threaded through every `lower_*`
-/// helper. Bundling these sinks keeps helper signatures under the
-/// clippy `too_many_arguments` threshold and makes the "what flows
-/// back upward" group explicit. Read-only inputs (the typecheck
-/// registry) stay separate args, since they have a different direction
-/// of flow and don't share lifetime scope.
-///
-/// `lower_program` / `lower_script` construct one [`LowerOutput`]
-/// up front, thread `&mut output` through the per-package walks,
-/// then destructure it: `diagnostics` short-circuits with
+/// helper. `lower_program` / `lower_script` build one up front and
+/// destructure it after the walk. `diagnostics` short-circuits with
 /// [`crate::error::LowerError::Diagnostics`] and `instantiations`
 /// feeds [`crate::generics::instantiate`].
 #[derive(Default)]
 pub(crate) struct LowerOutput {
     pub(crate) diagnostics: Vec<Diagnostic>,
     /// Cache of fn-as-value adapter wrappers, keyed by the wrapped
-    /// function's symbol. One wrapper per named fn used as a value.
-    /// `synthesize_fn_as_closure_wrappers` reads the cache before
-    /// minting to keep the package's function table dedup'd.
+    /// function's symbol, so each named fn used as a value gets one
+    /// wrapper.
     pub(crate) fn_as_closure_wrappers: BTreeMap<IRSymbol, IRSymbol>,
     pub(crate) instantiations: Vec<Instantiation>,
     /// Dedupe set for [`crate::FunctionKind::SpawnWrapper`] symbols

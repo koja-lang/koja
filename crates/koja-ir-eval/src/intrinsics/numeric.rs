@@ -1,9 +1,8 @@
 //! Explicit numeric conversions out of the hub types, the eval
 //! mirror of the LLVM backend's `intrinsics/numeric.rs`.
 //!
-//! All sized integers live as canonical `Value::Int(i64)` here, so
-//! a successful narrowing is just a bounds check (no representation
-//! change). `Float.to_float32` converts the variant and requires
+//! A successful integer narrowing is just a bounds check, since the
+//! stored `i64` does not change. `Float.to_float32` converts the variant and requires
 //! the rounded result to stay finite (the finite-only `Float`
 //! invariant). The checked conversions mint
 //! `NumericConversionError.OutOfRange` on failure, recovering the

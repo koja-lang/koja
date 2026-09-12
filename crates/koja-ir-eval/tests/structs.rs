@@ -1,16 +1,8 @@
-//! Runtime coverage for the struct slice in
-//! [`koja_ir_eval::Interpreter`]: `IRInstruction::StructInit`
-//! materializes a [`Value::Struct`] with positional fields, and
-//! `IRInstruction::FieldGet` projects a field by index without
-//! re-cloning the receiver. Mixed-type fields (Int + Bool + String)
-//! and nested structs (a struct held by another struct) exercise
-//! the cross-type and recursive paths.
-//!
-//! The script-mode path (no `fn main` wrapper) is the unit under test
-//! because the trailing expression's runtime [`Value`] becomes the
-//! script's return value, which is exactly what we want to inspect.
-//! Project-mode coverage of the same instruction set lives in
-//! `tests/interpreter.rs`.
+//! Runtime coverage for structs: `IRInstruction::StructInit`
+//! materializes a [`Value::Struct`] with positional fields and
+//! `IRInstruction::FieldGet` projects a field by index. Script mode
+//! is the unit under test because the trailing expression's
+//! [`Value`] becomes the script's return value.
 
 use koja_ast::util::dedent;
 use koja_ir_eval::Value;

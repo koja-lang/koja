@@ -1,27 +1,10 @@
-//! Runtime coverage for monomorphized generic decls.
-//!
-//! Pins the contract that a `Pair<Int, String>` construction reaches
-//! the interpreter as a [`Value::Struct`] tagged with the mangled
-//! monomorphized [`IRSymbol`] (`TestApp.Pair_$Int64.String$`), and a
-//! generic-enum construction (`Box.Of(42)`) reaches it as a
-//! [`Value::Enum`] tagged with `TestApp.Box_$Int64$`. The
-//! interpreter has no generics-aware code path: the symbol is
-//! whatever the IR `EnumConstruct` / `StructInit` carries, so a
-//! green test here also pins that monomorphization is fully
-//! resolved by the time the IR reaches eval.
-//!
-//! Distinct args round-tripping through eval with distinct symbols
-//! makes the dedup-by-instantiation-set contract observable. Every
-//! value reaching the interpreter carries the mangled name, so the
-//! test fixture observes the closure-pass result end-to-end without
-//! reaching back into [`koja_ir`] internals.
-//!
-//! Field-access *through* a generic value (`Pair{...}.a`) isn't
-//! exercised here: typecheck doesn't yet substitute `TypeParam`
-//! into a `FieldAccess`'s result resolution, so those programs hit
-//! a seal violation upstream of IR. They land with a future
-//! typecheck slice. The IR contract is concretely pinned by the
-//! construction-shaped tests in this file.
+//! Runtime coverage for monomorphized generic decls. A
+//! `Pair<Int, String>` construction reaches the interpreter as a
+//! [`Value::Struct`] tagged with the mangled [`IRSymbol`]
+//! (`TestApp.Pair_$Int64.String$`), and `Box.Of(42)` as a
+//! [`Value::Enum`] tagged with `TestApp.Box_$Int64$`. Distinct args
+//! round-tripping with distinct symbols makes the
+//! dedup-by-instantiation contract observable.
 
 use koja_ast::util::dedent;
 use koja_ir_eval::{EnumPayload, Value};

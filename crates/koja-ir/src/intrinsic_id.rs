@@ -1,21 +1,10 @@
-//! Typed dispatch id for `@intrinsic`-annotated functions. Replaces
-//! the prior free-form `id: String` (joined from the function's
-//! identifier path) with an exhaustive enum so both backends
-//! ([`koja_ir_llvm`] and [`koja_ir_eval`]) match a
-//! finite, compiler-checked universe instead of re-parsing strings
-//! through ad-hoc `matches_id` / `method_for` / `op_from_id`
-//! helpers.
-//!
-//! [`IRIntrinsicId::from_identifier`] is the only producer: lift
-//! consumes a function's [`Identifier`], strips the package prefix,
-//! and walks the remaining path segments. An unknown segmentation
-//! returns `None` so the caller can surface a clean diagnostic
-//! (typo'd `@intrinsic` decl) instead of panicking at codegen.
-//!
-//! [`Display`] mirrors the historical `id` strings (`"Kernel.panic"`,
-//! `"CPtr.null?"`, `"Int8.band"`) so existing diagnostics and test
-//! fixtures keep their wording. Backends never go through `Display`
-//! for dispatch, since they pattern-match the enum directly.
+//! Typed dispatch id for `@intrinsic`-annotated functions, an
+//! exhaustive enum both backends match on.
+//! [`IRIntrinsicId::from_identifier`] is the only producer. It strips
+//! the package prefix from the function's [`Identifier`] and walks
+//! the remaining segments, returning `None` for an unknown shape so
+//! the caller can report a diagnostic. [`std::fmt::Display`] renders the
+//! dotted form (`"Kernel.panic"`, `"Int8.band"`) for diagnostics.
 
 use std::fmt;
 
@@ -91,12 +80,12 @@ pub enum IRIntrinsicId {
     NumericConvert(NumericConvert),
     Parse(ParseTarget),
     /// `@intrinsic` statics on the `Process` protocol from
-    /// [`koja/lib/global/src/process.koja`], dispatched on the
+    /// `koja/lib/global/src/process.koja`, dispatched on the
     /// protocol name with no receiver value.
     Process(ProcessMethod),
     /// `@intrinsic` methods on `Ref<M, R>` from
-    /// [`koja/lib/global/src/process.koja`]. The `M` / `R` type
-    /// parameters don't appear here. They ride the
+    /// `koja/lib/global/src/process.koja`. The `M` / `R` type
+    /// parameters do not appear here. They ride the
     /// [`crate::IRFunction`] signature, the same way `List<T>`'s
     /// element type does.
     Ref(RefMethod),
@@ -108,7 +97,7 @@ pub enum IRIntrinsicId {
     RuntimeBlock(RuntimeBlockMethod),
     Set(SetMethod),
     /// `@intrinsic` methods on `Socket` from
-    /// [`koja/lib/net/src/net.koja`]. The raw methods bridge into the
+    /// `koja/lib/net/src/net.koja`. The raw methods bridge into the
     /// runtime's `koja_socket_*` C ABI (`recv_from_raw` -> mailbox-driven
     /// recv with sender bytes, `resolve_raw` -> blocking
     /// `getaddrinfo`). Wrapped in an enum so adding sibling methods
@@ -234,7 +223,7 @@ intrinsic_methods! {
     }
 
     /// `@intrinsic`-flagged methods on `Ref<M, R>` from
-    /// [`koja/lib/global/src/process.koja`]. `Cast` / `Call` / `Signal` /
+    /// `koja/lib/global/src/process.koja`. `Cast` / `Call` / `Signal` /
     /// `Kill` / `AliveQ` / `SendAfter` cover the public mailbox surface.
     /// `SelfRef` is the only zero-argument constructor (the others are
     /// receiver-bound).
@@ -275,7 +264,7 @@ intrinsic_methods! {
     }
 
     /// `@intrinsic`-flagged methods on `Socket` from
-    /// [`koja/lib/net/src/net.koja`]. These private raw functions keep
+    /// `koja/lib/net/src/net.koja`. These private raw functions keep
     /// domain struct construction in the standard library.
     SocketMethod {
         LastError => "last_error",
@@ -284,7 +273,7 @@ intrinsic_methods! {
     }
 
     /// Methods on `String` flagged `@intrinsic` in
-    /// [`crate::stdlib::string`]. Excludes `equals?` / `hash`, which route
+    /// `koja/lib/global/src/string.koja`. Excludes `equals?` / `hash`, which route
     /// through [`EqualityImpl::String`] / [`HashImpl::String`] alongside
     /// the other primitive impls.
     StringMethod {
@@ -565,7 +554,7 @@ impl BitOp {
 }
 
 impl NumericConvert {
-    /// The `Receiver.method` rendering used by [`Display`].
+    /// The `Receiver.method` rendering used by [`std::fmt::Display`].
     fn path(self) -> String {
         match self {
             Self::FloatToFloat32 => "Float.to_float32".to_string(),

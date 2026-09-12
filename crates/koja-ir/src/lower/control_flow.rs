@@ -1,13 +1,13 @@
 //! `if` / `unless` / `cond` lowering. Each builds a CFG fragment
 //! whose merge block carries the join value as a typed
-//! [`BlockParam`]. Reaching arms branch into the merge with the
+//! [`crate::BlockParam`]. Reaching arms branch into the merge with the
 //! arm's tail value as the per-edge [`BranchTarget::args`] payload.
-//! Diverging arms (early `return`) close their own flow and don't
+//! Diverging arms (early `return`) close their own flow and do not
 //! contribute an edge to the merge. The seal pass admits a merge
 //! block with fewer incomings than predecessors.
 //!
 //! The "no-else `if` / `unless` are statement-shaped" path stays
-//! Unit-typed: the merge block's [`BlockParam`] is `Unit` and the
+//! Unit-typed: the merge block's [`crate::BlockParam`] is `Unit` and the
 //! cond=false / cond=true edge that bypasses the body passes a
 //! freshly-emitted `Const::Unit` so every edge carries a
 //! type-matching arg.
@@ -22,10 +22,7 @@ use super::arms::{ArmJoinState, emit_unit, join_arm_states, lower_arm_into, lowe
 use super::ctx::{FnLowerCtx, LowerOutput};
 use super::expr::lower_expr;
 
-/// AST-side inputs to [`lower_if`]. Bundled so the helper signature
-/// stays under the clippy `too_many_arguments` threshold without
-/// losing per-field readability at the dispatch site (which builds
-/// one of these inline from `ExprKind::If`'s own fields).
+/// AST-side inputs to [`lower_if`].
 pub(super) struct IfLowering<'a> {
     pub(super) condition: &'a Expr,
     pub(super) else_body: Option<&'a [Statement]>,
@@ -34,7 +31,7 @@ pub(super) struct IfLowering<'a> {
 }
 
 /// Lower an `if cond do then_body else else_body end`. The merge
-/// block declares one [`BlockParam`] typed by `result_ty`, every
+/// block declares one [`crate::BlockParam`] typed by `result_ty`, every
 /// reaching arm hands its tail value to the merge as a per-edge
 /// branch arg, and the surface expression's value is the merge
 /// param's `ValueId`.
@@ -177,7 +174,7 @@ pub(super) struct CondLowering<'a> {
 }
 
 /// Lower a `cond a do … b do … else … end` chain. Same merge-block
-/// shape as `lower_if`'s with-else path: one [`BlockParam`] typed
+/// shape as `lower_if`'s with-else path: one [`crate::BlockParam`] typed
 /// by `result_ty`, every reaching arm body branches to merge with
 /// its tail value, the else-body covers the "no arm matched" exit.
 ///
@@ -297,11 +294,11 @@ pub(super) struct TernaryLowering<'a> {
 }
 
 /// Lower a `cond ? then_expr : else_expr` ternary. Same merge-block
-/// shape as `lower_if`'s with-else path: one [`BlockParam`] typed
+/// shape as `lower_if`'s with-else path: one [`crate::BlockParam`] typed
 /// by `result_ty`, each arm branches into the merge with the arm's
 /// expression value as the per-edge branch arg. Strictly simpler
 /// than `lower_if` because the arms are single expressions: no
-/// statement-body walk, no [`FlowResult::Closed`] bookkeeping (a
+/// statement-body walk, no [`super::ctx::FlowResult::Closed`] bookkeeping (a
 /// ternary arm cannot syntactically contain a `return`).
 pub(super) fn lower_ternary(
     inputs: TernaryLowering<'_>,

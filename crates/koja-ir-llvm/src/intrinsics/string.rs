@@ -1,8 +1,8 @@
 //! `String` method intrinsics. Trivial cells inline against the
-//! `[i64 bit_length] [payload bytes]` layout (with the SSA pointer
-//! pointing at the payload), and the walking cells (`length`, `get`,
-//! `slice`, `find`, `slice_bytes`) delegate to `koja-runtime` helpers
-//! so unicode walking and byte search stay in Rust.
+//! [`crate::emit::heap_layout`] block, and the walking cells
+//! (`length`, `get`, `slice`, `find`, `slice_bytes`) delegate to
+//! `koja-runtime` helpers so unicode walking and byte search stay in
+//! Rust.
 
 use inkwell::AddressSpace;
 use inkwell::IntPredicate;
@@ -347,6 +347,8 @@ fn emit_cstring_success<'ctx>(
     ctx.builder
         .build_call(memcpy, &[buf.into(), payload.into(), byte_len.into()], "")
         .or_ice()?;
+    // SAFETY: `alloc_size` is `byte_len + 1`, so the NUL slot is
+    // inside `buf`.
     let nul_ptr = unsafe {
         ctx.builder
             .build_in_bounds_gep(i8_ty, buf, &[byte_len], "nul")
