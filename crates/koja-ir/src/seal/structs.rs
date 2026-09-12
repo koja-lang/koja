@@ -164,6 +164,7 @@ pub(super) fn seal_struct_ops<'inst, 'decl>(
             | IRInstruction::ClosureEquals { .. }
             | IRInstruction::Concat { .. }
             | IRInstruction::Const { .. }
+            | IRInstruction::ConsumeLocal { .. }
             | IRInstruction::DeepCopy { .. }
             | IRInstruction::DropLocal { .. }
             | IRInstruction::DropValue { .. }

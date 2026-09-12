@@ -478,3 +478,36 @@ widening case either widen the `Result` as a whole with an operation
 the tail-call pass recognizes, or teach the pass to see through a
 `UnionWrap` on the error payload. A diagnostic for the remaining
 shapes is the fallback if either proves large.
+
+## Eval registers outlive their last use
+
+Found 2026-09-11 while making tail-recursive accumulators linear
+under the interpreter. An IR register is an SSA borrow with no
+lifetime. An eval register owns an `Rc` clone of its value and stays
+in the frame until the frame ends. The consuming twins gate in-place
+mutation on `Rc::strong_count == 1`, so every register that still
+holds the accumulator after its last use is a reason to copy.
+
+The slot side is solved. Consume fusion emits `ConsumeLocal` before
+the site and the interpreter clears the slot there. The register side
+is covered by two rules in `release_dead_registers` in
+`koja-ir-eval/src/interpreter.rs`, both scoped to a consuming site:
+
+- Registers defined at or after the site in the same block are stale
+  copies from an earlier pass over a loop body.
+- In a block that ends in `Return` or `TailCall`, registers that
+  share the receiver's storage and that nothing from the site onward
+  reads. In `f(n - 1, acc.append(n))` these are the param register
+  and its promotion `Clone`.
+
+Consequence: a consuming site whose block does not exit the frame,
+and whose stale holder was defined in an earlier block, still copies
+under eval. Compiled code is unaffected. The rules also scan the
+frame once per consuming site, which is a cost the IR does not have.
+
+**Fix path:** a per-function last-use table for registers whose uses
+all sit in their defining block, computed once and cached by symbol.
+At the last use `lookup` becomes `remove`. The param register then
+dies at its `Clone`, the clone at its `LocalWrite`, and the receiver
+at the call, so the count is exactly one with no site-specific rules
+and both rules above delete.

@@ -74,22 +74,29 @@ are instructions that can take over their receiver's storage: the
 `s = s <> a <> b`, discarded owned temps, and a receiver read from a slot
 whose next event is its exit `DropLocal` (the accumulator in
 `f(n - 1, acc.append(n))`), the pass rewrites the site into its consuming
-form and deletes the death. A mutator call becomes a
-consuming twin intrinsic. A concat is flagged `consumes_lhs`. The rewrite
-replaces "free the receiver's storage here" with "reuse it here" at the same
-program point, so the result stays indistinguishable from an independent copy.
+form. A mutator call becomes a consuming twin intrinsic. A concat is flagged
+`consumes_lhs`. An owned temp's death is deleted. A slot's death is replaced
+by a `ConsumeLocal` instruction directly before the site, so the handoff of
+the slot's storage is explicit in the IR rather than inferred from the
+surrounding shape. The rewrite replaces "free the receiver's storage here"
+with "reuse it here" at the same program point, so the result stays
+indistinguishable from an independent copy.
 
 The IR proof covers the value. For rc-shared leaf blocks the runtime covers
 the block: the consuming concat helper checks `rc == 1` before growing the
 block in place, and otherwise copies and releases the operand itself.
 Collection buffers are deep-copied on `Clone`, so the twins mutate in place
-unconditionally. Compiled rebind loops therefore build collections and
-strings in O(1) amortized per step. The interpreter gates both forms on true
-host-storage uniqueness. Before a consuming site it drops the holders the IR
-proves dead (the slot a rebind is about to overwrite, and registers defined
-later in the block), so the same rebind loops are linear under eval. A holder
-the IR cannot see as dead, such as a read of the accumulator in another block
-of the loop body, makes the interpreter use the copying path.
+unconditionally. Compiled code emits nothing for `ConsumeLocal`, since the
+site already holds the pointer. Compiled rebind loops therefore build
+collections and strings in O(1) amortized per step. The interpreter gates
+both forms on true host-storage uniqueness. It clears the slot at
+`ConsumeLocal`, and before the site it drops the registers it can prove dead
+(stale registers from an earlier pass over the block, and in a frame-exiting
+block every register that shares the receiver's storage and is never read
+again), so rebind loops and tail-recursive accumulators are linear under
+eval. A holder the interpreter cannot see as dead, such as a read of the
+accumulator in another block of the loop body, makes it use the copying
+path. See "Eval registers outlive their last use" in `GAPS.md`.
 
 Mutators outside the fused shapes still copy. General in-place-when-unique
 and reference-count optimization are not implemented today.

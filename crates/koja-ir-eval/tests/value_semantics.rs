@@ -72,11 +72,8 @@ fn alias_taken_before_a_fused_rebind_keeps_its_value() {
 
 #[test]
 fn alias_taken_before_a_tail_consumed_append_keeps_its_value() {
-    // The append fuses at the slot exit and the block ends in a tail
-    // call, so the interpreter releases the holders it can prove dead
-    // before the twin runs. `ys` still has its own exit drop in the
-    // block, so it must stay and force the copying path. Its length,
-    // observed after the append, must not include the new element.
+    // `ys` is still read after the append, so the twin must copy
+    // rather than mutate the shared list.
     let source = "
         fn build(n: Int, acc: List<Int>, seen: Int) -> Int
           if n == 0

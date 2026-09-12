@@ -217,15 +217,16 @@ pub(super) fn instruction_operands(inst: &IRInstruction) -> Vec<ValueId> {
         // pool entry is checked against the program-level constants
         // index by `seal_loadconst_pool`.
         IRInstruction::LoadConst { .. } => vec![],
-        // `DropLocal` consumes a slot, not a `ValueId`. The slot's
-        // existence is checked by `seal_locals_in_function` and it
-        // produces nothing.
+        // `ConsumeLocal` and `DropLocal` consume a slot, not a
+        // `ValueId`. The slot's existence is checked by
+        // `seal_locals_in_function` and they produce nothing.
         // `LocalDecl` declares the slot, with nothing in scope yet to read.
         // `LocalRead` reads the slot named by `local`, not a `ValueId`,
         // so the per-block defined-set walk has nothing to validate
         // here. `local` is checked against the per-function decl set
         // by `seal_locals_in_function`.
-        IRInstruction::DropLocal { .. }
+        IRInstruction::ConsumeLocal { .. }
+        | IRInstruction::DropLocal { .. }
         | IRInstruction::LocalDecl { .. }
         | IRInstruction::LocalRead { .. } => vec![],
         IRInstruction::DropValue { value, .. } => vec![*value],

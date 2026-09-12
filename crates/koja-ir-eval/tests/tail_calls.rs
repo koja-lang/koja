@@ -12,9 +12,8 @@ mod common;
 
 use common::evaluate_program as evaluate;
 
-/// Generous ceiling for the accumulator tests below. A linear build
-/// of 100 000 steps finishes well inside it even on a slow CI host,
-/// while the quadratic copying path takes minutes.
+/// A linear build of 100 000 steps takes well under a second. The
+/// quadratic copying path takes minutes.
 const ACCUMULATOR_CEILING: Duration = Duration::from_secs(20);
 
 #[test]
@@ -124,10 +123,6 @@ fn try_forwarded_self_call_runs_in_constant_stack() {
 
 #[test]
 fn tail_recursive_list_accumulator_mutates_in_place() {
-    // `acc.append(n)` fuses into the consuming twin at the slot exit.
-    // The interpreter has to release the param register and the
-    // promoted slot before the call, or the twin sees a shared `Rc`
-    // and copies the whole list on every step.
     let source = "
         fn build(n: Int, acc: List<Int>) -> List<Int>
           if n == 0
@@ -152,8 +147,6 @@ fn tail_recursive_list_accumulator_mutates_in_place() {
 
 #[test]
 fn tail_recursive_string_accumulator_mutates_in_place() {
-    // Same shape over `<>`, which fuses to `Concat { consumes_lhs }`
-    // and gates on the same uniqueness check.
     let source = "
         fn build(n: Int, acc: String) -> String
           if n == 0

@@ -406,6 +406,7 @@ fn walk_instruction(instruction: &IRInstruction, out: &mut BTreeMap<IRSymbol, IR
         | IRInstruction::Call { .. }
         | IRInstruction::Concat { .. }
         | IRInstruction::Const { .. }
+        | IRInstruction::ConsumeLocal { .. }
         | IRInstruction::EnumConstruct { .. }
         | IRInstruction::EnumTagGet { .. }
         | IRInstruction::IndirectPresent { .. }

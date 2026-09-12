@@ -720,25 +720,16 @@ fn expect_closure(value: Value, instruction: &str) -> Result<(IRSymbol, Vec<Valu
     }
 }
 
-/// Drop the dead references that would defeat a consuming site's
-/// uniqueness gate under eval, so `xs = xs.append(x)` and
-/// `s = s <> piece` loops mutate in place instead of copying on every
-/// step. Three kinds of holder are dead by construction:
+/// Drop the dead registers that would defeat a consuming site's
+/// uniqueness gate. An eval register owns an `Rc` clone until the
+/// frame ends, so two kinds are released here:
 ///
-/// - Registers defined at or after the site in this block still hold
-///   values from an earlier pass over the block. A def later in a
-///   block cannot dominate an earlier point in it, so nothing can
-///   read them before they are redefined.
-/// - The slot the receiver was read from, when the site's rebind is
-///   the next thing to touch it. Consume fusion deleted that slot's
-///   stale read and drop, so its `Rc` is dead until the `LocalWrite`.
-/// - When the block exits the frame (`Return` or `TailCall`), every
-///   register and slot that shares the receiver's storage and that
-///   nothing after the site reads. The frame ends at the terminator,
-///   so no later block can observe them. This is the
-///   `f(n - 1, acc.append(x))` shape, where the param register and
-///   the promoted slot both still hold the accumulator.
-fn release_dead_holders<R: CallResolver>(
+/// - Registers defined at or after the site in this block. They hold
+///   values from an earlier pass over the block that nothing reads
+///   before they are redefined.
+/// - When the block exits the frame, every register that shares the
+///   receiver's storage and that nothing from the site onward reads.
+fn release_dead_registers<R: CallResolver>(
     instruction: &IRInstruction,
     rest: &[IRInstruction],
     terminator: &IRTerminator,
@@ -754,28 +745,18 @@ fn release_dead_holders<R: CallResolver>(
     {
         frame.values.remove(&defined);
     }
-    let Some(receiver_value) = frame.values.get(&receiver) else {
-        return;
-    };
-    if let Some(slot) = rebound_slot(rest, receiver_value, &frame.locals) {
-        frame.locals.insert(slot, Value::Unit);
-    }
     if matches!(
         terminator,
         IRTerminator::Return { .. } | IRTerminator::TailCall { .. }
     ) {
-        release_exit_holders(receiver, once(instruction).chain(rest), terminator, frame);
+        release_exit_registers(receiver, once(instruction).chain(rest), terminator, frame);
     }
 }
 
-/// Release every holder of `receiver`'s storage that a frame-exiting
-/// block never reads again: registers no instruction in `remaining`
-/// (the site and everything after it) or the terminator uses, and
-/// slots no instruction in `remaining` touches. A holder that is
-/// still read (an alias slot with its own exit drop, a register the
-/// terminator forwards) stays, and the twin falls back to its copying
-/// original.
-fn release_exit_holders<'a>(
+/// Release every register holding `receiver`'s storage that neither
+/// `remaining` (the site and everything after it) nor the terminator
+/// reads.
+fn release_exit_registers<'a>(
     receiver: ValueId,
     remaining: impl Iterator<Item = &'a IRInstruction> + Clone,
     terminator: &IRTerminator,
@@ -784,7 +765,7 @@ fn release_exit_holders<'a>(
     let Some(receiver_value) = frame.values.get(&receiver).cloned() else {
         return;
     };
-    let dead_registers: Vec<ValueId> = frame
+    let dead: Vec<ValueId> = frame
         .values
         .iter()
         .filter(|(id, value)| {
@@ -797,22 +778,8 @@ fn release_exit_holders<'a>(
         })
         .map(|(id, _)| *id)
         .collect();
-    for id in dead_registers {
+    for id in dead {
         frame.values.remove(&id);
-    }
-    let dead_slots: Vec<IRLocalId> = frame
-        .locals
-        .iter()
-        .filter(|(local, value)| {
-            value.shares_storage(&receiver_value)
-                && !remaining
-                    .clone()
-                    .any(|instruction| instruction.touches_local(**local))
-        })
-        .map(|(local, _)| *local)
-        .collect();
-    for local in dead_slots {
-        frame.locals.insert(local, Value::Unit);
     }
 }
 
@@ -838,29 +805,6 @@ fn consuming_receiver<R: CallResolver>(
         } => Some(*lhs),
         _ => None,
     }
-}
-
-/// The slot whose current value shares `receiver`'s storage and whose
-/// next touch in `rest` is a `LocalWrite`. Only a fused rebind leaves
-/// that shape, since an ordinary reassignment reads and drops the
-/// stale value first.
-fn rebound_slot(
-    rest: &[IRInstruction],
-    receiver: &Value,
-    locals: &BTreeMap<IRLocalId, Value>,
-) -> Option<IRLocalId> {
-    rest.iter().enumerate().find_map(|(index, instruction)| {
-        let IRInstruction::LocalWrite { local, .. } = instruction else {
-            return None;
-        };
-        let shares = locals
-            .get(local)
-            .is_some_and(|slot| slot.shares_storage(receiver));
-        let untouched = rest[..index]
-            .iter()
-            .all(|earlier| !earlier.touches_local(*local));
-        (shares && untouched).then_some(*local)
-    })
 }
 
 /// Drive a function body starting at `blocks[0]` until a `Return`
@@ -891,7 +835,7 @@ fn execute_blocks<'a, R: CallResolver>(
                     current = execute_receive(arms, after.as_ref(), frame, resolver).await?;
                     continue 'blocks;
                 }
-                release_dead_holders(
+                release_dead_registers(
                     instruction,
                     &block.instructions[index + 1..],
                     &block.terminator,
@@ -1494,6 +1438,10 @@ fn execute_instruction<'a, R: CallResolver>(
                 });
                 *slot = new_field;
                 frame.values.insert(*dest, Value::Struct { fields, symbol });
+                Ok(())
+            }
+            IRInstruction::ConsumeLocal { local } => {
+                frame.locals.insert(*local, Value::Unit);
                 Ok(())
             }
             IRInstruction::DropLocal { .. } => Ok(()),
