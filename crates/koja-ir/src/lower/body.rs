@@ -133,7 +133,7 @@ fn lower_statement(
             })
         }
         Statement::Return { value, .. } => {
-            let return_value = match value.as_ref() {
+            match value.as_ref() {
                 Some(expr) => {
                     let (id, next) = lower_expr(expr, ctx, block, registry, output)?;
                     // Acquire the result as an owned value *before* the
@@ -144,16 +144,13 @@ fn lower_statement(
                     emit_function_exit_drops(ctx, next);
                     ctx.cfg
                         .set_terminator(next, IRTerminator::Return { value: Some(owned) });
-                    Some(owned)
                 }
                 None => {
                     emit_function_exit_drops(ctx, block);
                     ctx.cfg
                         .set_terminator(block, IRTerminator::Return { value: None });
-                    None
                 }
-            };
-            let _ = return_value;
+            }
             Ok(FlowResult::Closed)
         }
         Statement::Assignment { target, value, .. } => {

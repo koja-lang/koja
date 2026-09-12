@@ -16,7 +16,7 @@
 
 use crate::enum_decl::EnumPayloadInit;
 use crate::function::{IRBlockId, IRInstruction, IRTerminator};
-use crate::types::{ConstValue, IRType, ValueId};
+use crate::types::{IRType, ValueId};
 
 mod closures;
 mod enums;
@@ -88,12 +88,6 @@ pub(super) fn require_supported_type(ty: &IRType, location: &dyn Fn() -> String)
             }
         }
     }
-}
-
-/// Every [`ConstValue`] variant is admitted. The hook exists so a
-/// future variant opts in explicitly.
-pub(super) fn require_supported_const(value: &ConstValue, location: &dyn Fn() -> String) {
-    let _ = (value, location);
 }
 
 pub(super) fn instruction_operands(inst: &IRInstruction) -> Vec<ValueId> {
