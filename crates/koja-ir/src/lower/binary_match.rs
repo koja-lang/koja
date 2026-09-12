@@ -101,7 +101,7 @@ fn lower_segment(
         return Some(LoweredBinaryPattern::LiteralBytes { bit_offset, bytes });
     }
 
-    if let Some(tail) = lower_greedy_tail(segment, bit_offset, ctx, registry, output) {
+    if let Some(tail) = lower_greedy_tail(segment, bit_offset, ctx) {
         return Some(tail);
     }
 
@@ -176,8 +176,6 @@ fn lower_greedy_tail(
     segment: &BinarySegment,
     bit_offset: u64,
     ctx: &mut FnLowerCtx,
-    registry: &GlobalRegistry,
-    output: &mut LowerOutput,
 ) -> Option<LoweredBinaryPattern> {
     if segment.size.is_some() {
         return None;
@@ -203,8 +201,6 @@ fn lower_greedy_tail(
         ExprKind::Ident { name, .. } if name == "_" => None,
         _ => return None,
     };
-    let _ = registry;
-    let _ = output;
     Some(LoweredBinaryPattern::GreedyTail {
         bit_offset,
         local,

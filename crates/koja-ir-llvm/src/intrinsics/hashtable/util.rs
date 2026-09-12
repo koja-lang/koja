@@ -1,18 +1,7 @@
-//! Low-level building blocks shared across every hashtable submodule.
-//!
-//! Two flavours of helper live here:
-//!
-//! - Instruction wrappers ([`call_malloc`], [`call_hash`], [`call_eq`],
-//!   [`advance_slot`], [`entry_pointer`], [`build_table_struct`],
-//!   [`build_empty_table`]) that bundle the inkwell builder calls +
-//!   error plumbing into a single line at the call site.
-//! - Symbol / type resolution ([`resolve_hash_eq`],
-//!   [`expect_enum_symbol`]) for crossing from sealed IR
-//!   ([`IRType`] / [`IRSymbol`]) to monomorphized inkwell
-//!   [`FunctionValue`]s via [`koja_ir::mangling`].
-//!
-//! Everything is `pub(super)`: visible to sibling submodules, hidden
-//! from the rest of the crate.
+//! Low-level building blocks shared across every hashtable submodule:
+//! instruction wrappers around the inkwell builder, and symbol
+//! resolution from sealed IR types to monomorphized `hash` / `eq`
+//! [`FunctionValue`]s.
 
 use inkwell::IntPredicate;
 use inkwell::types::BasicTypeEnum;
@@ -157,14 +146,9 @@ pub(super) fn call_malloc<'ctx>(
         .into_pointer_value())
 }
 
-/// Copy-on-write clone of a table's buffers into fresh allocations.
-/// Under value semantics every hashtable mutator clones the entries +
-/// states buffers before writing, so a binding shared by assignment is
-/// never mutated in place through another alias. After the `memcpy`s
-/// every occupied bucket is *acquired* (`rc++` a heap-leaf key/value,
-/// deep-clone a composite), so the copy owns independent references and
-/// the shared payloads don't double-free once both tables are reclaimed
-/// by drop glue.
+/// Clone a table's entries and states buffers into fresh allocations,
+/// then acquire every occupied bucket so the copy owns independent
+/// references.
 pub(super) fn clone_table_buffers<'ctx>(
     ctx: &EmitContext<'ctx>,
     llvm_function: FunctionValue<'ctx>,
@@ -253,6 +237,8 @@ pub(super) fn value_slot<'ctx>(
 ) -> Result<PointerValue<'ctx>, LlvmError> {
     let i8_ty = ctx.context.i8_type();
     let offset = ctx.context.i64_type().const_int(key_size, false);
+    // SAFETY: GEPs in this file index bucket slots masked to
+    // `capacity - 1` or step within one bucket entry.
     unsafe {
         ctx.builder
             .build_gep(i8_ty, entry_ptr, &[offset], "val_ptr")

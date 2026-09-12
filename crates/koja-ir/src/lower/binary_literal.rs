@@ -14,7 +14,7 @@
 //! chain of [`IRInstruction::Concat`]s. Neither backend knows
 //! splices exist.
 //!
-//! Pairs with [`koja_typecheck::pipeline::resolve::binary_literal`].
+//! Pairs with the typecheck `resolve::binary_literal` pass.
 //! The two layers have to agree on width arithmetic, but the
 //! typecheck side enforces type correctness while the lower side
 //! just stamps offsets.

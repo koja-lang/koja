@@ -133,13 +133,10 @@ pub(crate) fn emit_string_literal_payload<'ctx>(
     emit_const_payload(ctx, bytes, (bytes.len() as u64) * 8, true, prefix)
 }
 
-/// Emit a heap-payload literal as a private constant global with the
-/// rc header layout: `{ i64 rc, i64 bit_length, [N (+1) x i8] bytes }`.
-/// The `rc` is the immortal sentinel ([`RC_IMMORTAL`]) so the runtime
-/// rc dec/inc treat the rodata block as never-freed. Returns a
-/// const-GEP to the payload (`HEADER_BYTES` past the base) so the
-/// runtime helpers read `*(payload - LENGTH_OFFSET)` for the bit
-/// length without any layout translation.
+/// Emit a heap-payload literal as a private constant global in the
+/// [`super::heap_layout`] block shape, with `rc` set to
+/// [`RC_IMMORTAL`] so the runtime never frees the rodata block.
+/// Returns a const-GEP to the payload.
 ///
 /// `with_nul` adds a trailing `\0` byte to the payload array, used
 /// by `String` for libc compat. `Binary` and `Bits` pass `false`:
@@ -174,6 +171,8 @@ fn emit_const_payload<'ctx>(
     global.set_initializer(&initializer);
     global.set_constant(true);
     global.set_linkage(Linkage::Private);
+    // SAFETY: the global was just defined with the header, so the
+    // payload starts `HEADER_BYTES` in.
     unsafe {
         global
             .as_pointer_value()

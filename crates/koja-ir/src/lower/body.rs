@@ -42,7 +42,7 @@ use super::tuples::lower_destructure;
 /// any closures that surface inside the body. `lower_script`
 /// passes a `<package>.__script_body` shape so script-body closures
 /// get unique mangled names (`<package>.__script_body__closure0`).
-/// `None` callers have no closures in scope (legacy / test-only).
+/// `None` callers have no closures in scope.
 ///
 /// `Err(())` means "a feature-gap diagnostic was already pushed and
 /// the caller should drop this body / function from the surrounding
@@ -119,18 +119,10 @@ fn lower_statement(
     match stmt {
         Statement::Expr(expr) => {
             let (value, next) = lower_expr(expr, ctx, block, registry, output)?;
-            // A statement-position expression typed `Never` (today: a
-            // call to `@intrinsic Kernel.panic`, signature rewritten by
-            // the typecheck `override_divergent_return` pass) cannot
-            // reach the next statement. Cap the open block with
-            // `Unreachable` and report `Closed` so surrounding
-            // arm-merge / fallthrough paths skip the would-be branch
-            // edge. Without this, a match arm tail of `panic(...)`
-            // emits a `Branch` with the `Unit`-typed call result as a
-            // branch arg into a merge block whose param is the `T` the
-            // other arms produce, which the LLVM emitter rejects with
-            // an "undefined SSA value" since calls to void-returning
-            // funcs don't register their dest in the value map.
+            // A `Never`-typed statement expression cannot reach the
+            // next statement. Cap the block with `Unreachable` and
+            // report `Closed` so arm-merge and fallthrough paths skip
+            // the would-be branch edge.
             if is_never(&expr.resolution, registry) {
                 ctx.cfg.set_terminator(next, IRTerminator::Unreachable);
                 return Ok(FlowResult::Closed);
@@ -205,30 +197,12 @@ fn lower_break_statement(
     Ok(FlowResult::Closed)
 }
 
-/// Lower a `Statement::Assignment` to (optional) `LocalDecl` + `LocalWrite`,
-/// dispatching to [`lower_field_assignment`] for multi-segment field
-/// writes (`p.x = …`).
-///
-/// Typecheck-resolve has already stamped the target with
-/// [`Resolution::Local`] on its head (`LValue::local_id`), the
-/// head's [`ResolvedType`] (`LValue::head_resolved_type`, multi-
-/// segment only), and rejected pattern destructuring. This helper
-/// assumes the well-typed shape and panics on deviation.
-///
-/// First write of a single-segment local emits a `LocalDecl` into
-/// the function's entry block (regardless of which block the
-/// assignment statement surface-syntactically lives in) so backends
-/// see a single decl per slot at the canonical entry-block position.
-/// Subsequent writes (and every multi-segment field write) just emit
-/// the rebuild in the currently-open block.
-///
-/// Returns `Open { value: None, ... }` because assignment is
-/// statement-level vocabulary. Its trailing value is the rhs's
-/// [`ValueId`], but no surface syntax in this slice consumes it
-/// directly. (Trailing-expression-of-body checking runs on the
-/// trailing `Statement::Expr`, not on assignments.)
-///
-/// [`LocalId`]: koja_ast::identifier::LocalId
+/// Lower a `Statement::Assignment` to an optional `LocalDecl` plus a
+/// `LocalWrite`, dispatching to [`lower_field_assignment`] for
+/// multi-segment field writes (`p.x = ...`). The first write of a
+/// local emits its `LocalDecl` into the entry block so backends see
+/// one decl per slot. Returns `Open { value: None, .. }` because no
+/// surface syntax consumes an assignment's value.
 fn lower_assignment(
     lvalue: &LValue,
     value: &Expr,
@@ -701,7 +675,7 @@ fn lower_compound_assignment(
 /// True when `ty` is the registry-tracked `Global.Never` primitive.
 /// Cheaper than threading a "divergent expression" flag down from
 /// resolve, since typecheck already stamps `expr.resolution` with the
-/// callee's return type, which for [`Kernel.panic`] is rewritten to
+/// callee's return type, which for `Kernel.panic` is rewritten to
 /// `Never` by the lift_signatures pass. Callees with no Never return
 /// (the common case) early-out on the first guard.
 fn is_never(ty: &ResolvedType, registry: &GlobalRegistry) -> bool {

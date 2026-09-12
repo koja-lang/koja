@@ -1,13 +1,9 @@
 //! Externs declared in `lib/net/src/net.koja` and
 //! `lib/net/src/error.koja`.
 //!
-//! Eval reuses the runtime's `koja_socket_*` symbols (sockaddr building,
-//! last-error recording) over **non-blocking** fds: the runtime creates
-//! them non-blocking and eval keeps them that way. Because the native
-//! blocking entry points (`accept` / `send_to`) park via the *native*
-//! reactor on `EAGAIN`, which eval cannot drive, eval waits for readiness
-//! through its own [`crate::reactor`] *first* and only then delegates, so
-//! the native syscall succeeds on its first try:
+//! Eval reuses the runtime's `koja_socket_*` symbols over the
+//! non-blocking fds the runtime creates, waiting for readiness through
+//! [`crate::reactor`] before each native call (see there for why).
 //!
 //! - `accept` / `send_to` [`io_block`](crate::reactor::io_block) for
 //!   readiness, then call the native symbol.

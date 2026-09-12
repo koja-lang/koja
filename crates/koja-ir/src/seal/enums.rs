@@ -247,7 +247,7 @@ fn seal_indirect_payload(owner: &str, ty: &IRSymbol, variant: &IREnumVariant, pa
     }
 }
 
-/// See [`super::structs::field_type_matches`]. Decl-side
+/// See `structs::field_type_matches`. Decl-side
 /// `Indirect(T)` matches an instruction-side `T`.
 fn field_type_matches(declared: &IRType, requested: &IRType) -> bool {
     if declared == requested {

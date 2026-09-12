@@ -6,7 +6,7 @@
 
 use inkwell::IntPredicate;
 use inkwell::basic_block::BasicBlock;
-use inkwell::values::{BasicValueEnum, FunctionValue, IntValue, PhiValue, PointerValue};
+use inkwell::values::{BasicValueEnum, FunctionValue, PointerValue};
 use koja_ir::IRFunction;
 
 use crate::ctx::EmitContext;
@@ -26,14 +26,11 @@ use crate::intrinsics::option;
 
 /// Output of [`emit_read_only_probe`]. Caller positions at
 /// `found_bb` or `not_found_bb` to emit the per-method outcome.
-/// `pidx` / `s_ptr` / `e_ptr` are valid in `found_bb`.
+/// `s_ptr` / `e_ptr` are valid in `found_bb`.
 struct ReadOnlyProbe<'ctx> {
-    advance_bb: BasicBlock<'ctx>,
     e_ptr: PointerValue<'ctx>,
     found_bb: BasicBlock<'ctx>,
     not_found_bb: BasicBlock<'ctx>,
-    pidx: IntValue<'ctx>,
-    pidx_phi: PhiValue<'ctx>,
     s_ptr: PointerValue<'ctx>,
 }
 
@@ -44,10 +41,7 @@ struct ReadOnlyProbe<'ctx> {
 /// (typically the entry block). On return the builder sits at an
 /// unspecified location and the caller positions itself at the
 /// returned `found_bb` / `not_found_bb` blocks to emit the outcome.
-/// The `advance` edge wires itself. The caller does **not** need
-/// to mutate the returned `pidx_phi` directly (it's exposed so
-/// callers can attach extra incoming edges from custom entry-side
-/// branching, e.g. `put`'s resize-or-not phi).
+/// The `advance` edge wires itself.
 fn emit_read_only_probe<'ctx>(
     ctx: &EmitContext<'ctx>,
     function: &IRFunction,
@@ -89,6 +83,8 @@ fn emit_read_only_probe<'ctx>(
     pidx_phi.add_incoming(&[(&start_slot, entry_block)]);
     let pidx = pidx_phi.as_basic_value().into_int_value();
 
+    // SAFETY: `pidx` is masked to `capacity - 1`, so the GEP stays
+    // inside the `states` buffer.
     let s_ptr = unsafe {
         ctx.builder
             .build_gep(i8_ty, table.states_ptr, &[pidx], "s_ptr")
@@ -143,12 +139,9 @@ fn emit_read_only_probe<'ctx>(
     ctx.builder.build_unconditional_branch(probe_bb).or_ice()?;
 
     Ok(ReadOnlyProbe {
-        advance_bb,
         e_ptr,
         found_bb,
         not_found_bb,
-        pidx,
-        pidx_phi,
         s_ptr,
     })
 }
@@ -172,8 +165,6 @@ pub(crate) fn emit_has_q<'ctx>(
         key_val,
         &key_ops,
     )?;
-    let _ = (probe.e_ptr, probe.pidx, probe.s_ptr, probe.pidx_phi);
-
     ctx.builder.position_at_end(probe.found_bb);
     ret_basic(ctx, i1_ty.const_int(1, false).into())?;
     ctx.builder.position_at_end(probe.not_found_bb);
@@ -190,9 +181,7 @@ pub(crate) fn emit_remove<'ctx>(
     let i64_ty = ctx.context.i64_type();
     // emit_remove keeps the manual 4-step extract because it needs
     // `self_val` for the not-found return, and `extract_table_fields`
-    // discards the original struct. Copy-on-write: the found path
-    // tombstones a fresh clone of the buffers, so the receiver's
-    // table is never mutated in place through a shared binding.
+    // discards the original struct.
     let self_val = nth_hashtable(function, llvm_function, 0, "self")?;
     let original = TableSnapshot {
         entries_ptr: extract_pointer(ctx, self_val, 0, "entries")?,
@@ -212,8 +201,6 @@ pub(crate) fn emit_remove<'ctx>(
         key_val,
         &key_ops,
     )?;
-    let _ = (probe.pidx, probe.pidx_phi, probe.advance_bb);
-
     ctx.builder.position_at_end(probe.found_bb);
     // The clone acquired this bucket's key (and value). Tombstoning
     // drops it from the table, so release that reference now,
@@ -239,10 +226,8 @@ pub(crate) fn emit_remove<'ctx>(
     )?;
     ret_struct(ctx, removed)?;
 
-    // Not found: nothing is removed, but `self` is borrowed and dropped
-    // by the caller, so returning `self_val` would alias its buffers and
-    // double-free (and would also leak the clone made above). Return the
-    // untouched clone instead, an independent copy the caller owns.
+    // Not found. Return the untouched clone made above rather than
+    // `self_val`, which the caller drops.
     ctx.builder.position_at_end(probe.not_found_bb);
     let unchanged = build_table_struct(
         ctx,
@@ -283,8 +268,6 @@ pub(crate) fn emit_map_get<'ctx>(
         key_val,
         &key_ops,
     )?;
-    let _ = (probe.pidx, probe.pidx_phi, probe.advance_bb, probe.s_ptr);
-
     ctx.builder.position_at_end(probe.found_bb);
     let val_ptr = unsafe {
         ctx.builder

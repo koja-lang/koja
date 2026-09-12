@@ -1,12 +1,6 @@
-//! `Map<K, V>` family: heap-backed associative container. Eval
-//! stores entries in `Rc<RefCell<Vec<(Value, Value)>>>`, but under
-//! value semantics every mutator (`put`, `remove`) is
-//! copy-on-write: it clones the receiver's entry vec into a fresh
-//! `Rc` before mutating, so a shared binding is never observably
-//! mutated through another alias. A linear probe over the entry vec
-//! gives the right semantics. The LLVM backend's open-addressing
-//! hash table is purely a perf detail that's invisible at the Koja
-//! level.
+//! `Map<K, V>` family. Every mutator here builds a fresh `Rc`. The
+//! in-place twins live in [`super::consuming`]. Lookups are linear
+//! probes over the entry vec.
 //!
 //! `get` materializes an `Option<V>` value directly. The receiver
 //! symbol for the option shape flows from `function.return_type`.

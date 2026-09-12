@@ -669,14 +669,6 @@ fn lower_fn_as_value(
     (dest, block)
 }
 
-/// Fold a literal-arg to `UnaryOp::Neg` directly into a typed
-/// `ConstValue` at the recorded coercion width. Returns `None` for
-/// shapes the typecheck pass would never have stamped a coercion
-/// on (non-literal operand, group-wrapped non-literal, etc.),
-/// letting the caller fall back to the regular runtime negate.
-/// Hex / binary literals reach this helper through `parse_int_literal`
-/// for the unsigned escape hatch (`-1: UInt8` is rejected at
-/// typecheck so it never reaches here, but `0xFF: Int8` does).
 /// Pull the typecheck-stamped numeric width off `expr`'s
 /// `literal_coercion` slot, when present. Reserved for the leaf
 /// sites that emit a typed `Const` opcode (literal, negated-literal
@@ -688,6 +680,14 @@ fn literal_width(expr: &Expr) -> Option<NumericLiteralWidth> {
         .and_then(LiteralCoercion::numeric_width)
 }
 
+/// Fold a literal-arg to `UnaryOp::Neg` directly into a typed
+/// `ConstValue` at the recorded coercion width. Returns `None` for
+/// shapes the typecheck pass would never have stamped a coercion
+/// on (non-literal operand, group-wrapped non-literal, etc.),
+/// letting the caller fall back to the regular runtime negate.
+/// Hex / binary literals reach this helper through `parse_int_literal`
+/// for the unsigned escape hatch (`-1: UInt8` is rejected at
+/// typecheck so it never reaches here, but `0xFF: Int8` does).
 fn fold_negated_literal_const(operand: &Expr, target: NumericLiteralWidth) -> Option<ConstValue> {
     match &operand.kind {
         ExprKind::Group { expr } => fold_negated_literal_const(expr, target),

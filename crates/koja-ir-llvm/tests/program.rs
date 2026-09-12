@@ -62,8 +62,8 @@ fn binary_concat_helper_emits_inline_malloc_and_memcpy() {
 
 #[test]
 fn binary_literal_emits_malloc_and_byte_packing() {
-    // `<<1, 2, 3>>` lowers to BinaryConstruct -> inline malloc(11)
-    // (8-byte header + 3 payload bytes), `memset` the payload to
+    // `<<1, 2, 3>>` lowers to BinaryConstruct -> inline malloc(19)
+    // (16-byte header + 3 payload bytes), `memset` the payload to
     // zero, then per-byte stores at offsets 0..2. Pin the malloc
     // declaration and the memset zero-init shape since both sit on
     // every BinaryConstruct path.

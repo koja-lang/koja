@@ -6,13 +6,13 @@
 //!    this closure's scope.
 //! 2. **Body synthesis**: mint a `<enclosing>__closure<N>` symbol
 //!    and a [`FunctionKind::Closure`] [`IRFunction`] whose body
-//!    lowers under a fresh ctx whose [`ClosureState::set_captures`]
+//!    lowers under a fresh ctx whose [`super::ctx::ClosureState::set_captures`]
 //!    redirects outer-local idents through env-loads.
 //! 3. **Fn-as-value adapter**: wrap a named function in a
 //!    captureless [`FunctionKind::Closure`] so it can flow through
 //!    closure-typed slots ([`synthesize_fn_as_closure_wrapper`]).
 //!
-//! [`MakeClosure`] is then emitted in the outer block, reading each
+//! [`IRInstruction::MakeClosure`] is then emitted in the outer block, reading each
 //! capture through the outer ctx's normal local-or-capture path.
 //! Captures copy into the env (value semantics, so the outer binding
 //! stays live).
@@ -740,7 +740,7 @@ fn synthesize_body(
 }
 
 /// Mint and promote the closure body's user-visible parameters,
-/// mirroring [`crate::lower::package::lower_params`] but driven by
+/// mirroring `package::lower_params` but driven by
 /// a [`ClosureParam`] / param-type pair instead of an AST
 /// `Function`.
 fn lower_closure_params(
@@ -885,7 +885,7 @@ pub(super) fn synthesize_fn_as_closure_wrapper(
 }
 
 /// Hand-build the wrapper [`IRFunction`]. Mirrors
-/// [`super::package::lower_params`] for parameter promotion, then
+/// `package::lower_params` for parameter promotion, then
 /// reads each slot back, calls `target_symbol`, and returns the
 /// result. Owned heap params drop at fn exit through the standard
 /// [`emit_function_exit_drops`] helper.
@@ -956,7 +956,7 @@ fn mint_wrapper_params(
 }
 
 /// Read each promoted slot back into a fresh `ValueId` for the
-/// inner [`IRInstruction::Call`]. Mirrors [`super::calls::emit_call`]'s
+/// inner [`IRInstruction::Call`]. Mirrors `calls::emit_call`'s
 /// arg-lowering shape (`LocalRead` per arg) so callee semantics
 /// match a hand-written `fn (x) -> target(x) end` shim.
 fn read_wrapper_args(

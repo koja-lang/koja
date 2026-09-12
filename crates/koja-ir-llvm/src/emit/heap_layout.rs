@@ -10,28 +10,14 @@
 //! `payload - HEADER_BYTES` ([`block_base`]) and a fresh `malloc`
 //! derives its payload via `base + HEADER_BYTES` ([`payload_from_base`]).
 //!
-//! ## Reference counting (value-semantics baseline)
+//! `Clone` is an rc increment and `Drop` an rc decrement that frees at
+//! zero. Rodata literals carry the negative sentinel rc
+//! [`RC_IMMORTAL`] so inc/dec are no-ops and they never reach `free`.
 //!
-//! `Clone` is an rc increment and `Drop` an rc decrement (freeing at
-//! zero): the value-semantics model, made cheap by sharing immutable
-//! blocks rather than deep-copying. The rc word is the **first** word
-//! of every rc-managed block (uniform across leaf and, later,
-//! collection/closure buffers), so one runtime primitive pair
-//! operating on the block base serves every type. The only per-type
-//! knowledge is the payload->base offset, which lives here.
-//! Statically-allocated (rodata) literals carry a negative sentinel rc
-//! ([`RC_IMMORTAL`]) so inc/dec are no-ops and they never reach `free`.
-//!
-//! This module exists so the header arithmetic lives in exactly one
-//! place per crate. It is deliberately **not** shared with
-//! `koja-runtime` via a common crate: the IR->backend boundary is a
-//! sealed, serializable handoff and the runtime is a leaf
-//! `staticlib`, so the ABI constants are mirrored there
-//! (`koja-runtime`'s `util::{BLOCK_HEADER_SIZE, LENGTH_OFFSET}` and the
-//! `rc < 0` immortal test). The two are the runtime heap ABI
-//! convention, kept in sync by hand rather than a shared dependency.
-//! `koja-ir`'s `types.rs` doc comments are the authoritative human
-//! spec for which types are heap-backed.
+//! `koja-runtime` mirrors these constants by hand
+//! (`util::{BLOCK_HEADER_SIZE, LENGTH_OFFSET}` and the `rc < 0`
+//! immortal test) because it is a leaf `staticlib` with no shared
+//! dependency on this crate.
 
 use inkwell::values::{IntValue, PointerValue};
 use koja_ir::IRType;
@@ -49,17 +35,13 @@ pub(crate) fn is_heap_leaf(ty: &IRType) -> bool {
     matches!(ty, IRType::Binary | IRType::Bits | IRType::String)
 }
 
-/// Size in bytes of the length header that precedes every heap
-/// payload. The SSA pointer addresses the first payload byte. The
-/// `i64 bit_length` sits [`LENGTH_OFFSET`] before it and the `i64 rc`
-/// sits `HEADER_BYTES` before it (at the block base).
+/// Distance in bytes from a payload pointer back to the block base.
 ///
 /// API contract: MUST equal `koja-runtime`'s `util::BLOCK_HEADER_SIZE`.
 pub(crate) const HEADER_BYTES: u64 = 16;
 
 /// Distance in bytes from a payload pointer back to its `i64
-/// bit_length` word. The `i64 rc` sits a further `LENGTH_OFFSET`
-/// before that, at the block base ([`HEADER_BYTES`] before payload).
+/// bit_length` word.
 ///
 /// API contract: MUST equal `koja-runtime`'s `util::LENGTH_OFFSET`.
 pub(crate) const LENGTH_OFFSET: u64 = 8;
@@ -88,10 +70,8 @@ pub(crate) fn neg_header_offset<'ctx>(ctx: &EmitContext<'ctx>) -> IntValue<'ctx>
         .const_int((-(HEADER_BYTES as i64)) as u64, true)
 }
 
-/// GEP from a payload pointer back to its block base: `payload -
-/// HEADER_BYTES`. This is the pointer to hand to `koja_rc_inc` /
-/// `koja_rc_dec` (the `i64 rc` word lives here). The `i64 bit_length`
-/// sits [`LENGTH_OFFSET`] after it.
+/// GEP from a payload pointer back to its block base, the pointer
+/// `koja_rc_inc` / `koja_rc_dec` take.
 ///
 /// A null payload selects a null base rather than the wrapped
 /// `0 - HEADER_BYTES` address, so the (null-safe) runtime rc
@@ -104,6 +84,9 @@ pub(crate) fn block_base<'ctx>(
     name: &str,
 ) -> Result<PointerValue<'ctx>, LlvmError> {
     let i8_ty = ctx.context.i8_type();
+    // SAFETY: every GEP in this file moves between a block's header
+    // and its payload, both inside the one allocation `HEADER_BYTES`
+    // apart. The null case is selected away below.
     let raw_base = unsafe {
         ctx.builder
             .build_gep(i8_ty, payload, &[neg_header_offset(ctx)], name)

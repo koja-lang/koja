@@ -53,14 +53,14 @@ use crate::types::ir_basic_type;
 
 const APP_NAME_SYMBOL: &str = "__koja_app_name";
 const ENTRY_SYMBOL: &str = "main";
-/// Module-level `i32` global the [`FunctionKind::ProcessEntryWrapper`]
-/// body writes the entry process's exit code into. The synthesized
+/// Module-level `i32` global the
+/// [`koja_ir::FunctionKind::ProcessEntryWrapper`] body writes the
+/// entry process's exit code into. The synthesized
 /// `main` trampoline returns its value after the scheduler joins.
 /// Scripts never touch this global (they always return 0 from
 /// `main`).
 pub(crate) const EXIT_CODE_SYMBOL: &str = "__koja_exit_code";
-/// Thunk that carries the user body. Single `i8*` parameter
-/// (ignored) so it matches `koja_rt_spawn`'s `ProcessFn` typedef.
+/// Thunk that carries the user body, `ProcessFn`-shaped.
 const USER_MAIN_SYMBOL: &str = "__koja_user_main";
 
 /// Emit `__koja_app_name` as a null-terminated C-string constant.
@@ -93,7 +93,7 @@ pub(crate) fn emit_exit_code_global(ctx: &EmitContext<'_>) {
 ///
 /// 1. `void __koja_user_main(i8*)` carrying the script body.
 /// 2. `i64 main()` trampoline that calls
-///    `koja_rt_spawn(__koja_user_main, null, 0)` to register the
+///    `koja_rt_spawn(__koja_user_main, null, 0, null)` to register the
 ///    body as PID 1, then `koja_rt_main_done()` to boot the
 ///    scheduler (which runs until PID 1 dies), then `ret i64 0`.
 ///
@@ -112,9 +112,8 @@ pub(crate) fn emit_script_main<'ctx>(
 }
 
 /// Define `void __koja_user_main(i8*)` carrying the script body.
-/// The single pointer parameter is ignored, present only to match
-/// `koja_rt_spawn`'s `ProcessFn` signature so the trampoline can
-/// hand the function pointer over directly.
+/// The pointer parameter is ignored (see
+/// [`crate::runtime::declare_rt_spawn_extern`] for the shape).
 fn define_user_main<'ctx>(
     ctx: &EmitContext<'ctx>,
     blocks: &[IRBasicBlock],
@@ -175,21 +174,15 @@ fn define_user_main<'ctx>(
 }
 
 /// Synthesize the `main` trampoline for a Process-entry program.
-/// The entry IR function is a [`FunctionKind::ProcessEntryWrapper`]
-/// already declared+defined like any other helper. This trampoline
+/// The entry IR function is a
+/// [`koja_ir::FunctionKind::ProcessEntryWrapper`] already declared and
+/// defined like any other helper. This trampoline
 /// only handles host-side argv plumbing and the exit-code return.
 ///
-/// Signature picks:
-/// - `i32 main(i32, ptr)` iff the wrapper's config type lowers to
-///   `IRType::List(String)` (the entry state is
-///   `Process<List<String>, _, _>`). The body calls
-///   `koja_rt_build_argv(argc, argv, &config_alloca)` to build a
-///   `List<String>` in place before spawning.
-/// - `i32 main()` otherwise. The config alloca is zero-initialized.
-///   Non-`List<String>` configs aren't reachable from `koja.toml`
-///   today (Process configs that aren't `List<String>` only make
-///   sense for spawn-from-user-code, not the project entry), but
-///   the shape leaves the door open.
+/// `main` takes `(i32, ptr)` and builds the config through
+/// `koja_rt_build_argv` when the entry config type is
+/// `List<String>`. Otherwise it takes no arguments and the config
+/// alloca is zero-initialized.
 pub(crate) fn emit_process_entry_main<'ctx>(
     ctx: &EmitContext<'ctx>,
     entry: &IRFunction,
@@ -291,16 +284,11 @@ pub(crate) fn emit_process_entry_main<'ctx>(
         .map(|_| ())
 }
 
-/// Define `i64 main()` as a minimal trampoline that hands the
-/// user-body thunk to the runtime as the entry process.
-///
-/// `koja_rt_spawn(__koja_user_main, null, 0)` registers the thunk
-/// as PID 1 with a zero-byte config (the thunk ignores the
-/// pointer). `koja_rt_main_done()` boots the I/O reactor + worker
-/// pool and runs the scheduling loop until PID 1 dies. Returning
-/// `0` from `main` after the scheduler joins keeps the host exit
-/// status at success unless the runtime itself exited with a
-/// non-zero status (lifecycle paths handle that on their own).
+/// Define `i64 main()` as a minimal trampoline. It spawns the
+/// user-body thunk as PID 1 with a zero-byte config and no drop glue,
+/// runs the scheduler to completion via `koja_rt_main_done()`, and
+/// returns `0`. A non-zero runtime exit is handled by the lifecycle
+/// paths themselves.
 fn define_main_trampoline<'ctx>(ctx: &EmitContext<'ctx>) -> Result<(), LlvmError> {
     let i64_type = ctx.context.i64_type();
     let ptr_type = ctx.context.ptr_type(AddressSpace::default());

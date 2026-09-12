@@ -43,12 +43,8 @@ fn bare_two_plus_two_emits_const_add_then_ret_void() {
 
 #[test]
 fn large_int_literal_compiles_with_user_main_ret_void() {
-    // 64-bit literals widen past `i32`. The IR `IRType::Int`
-    // tracks it as a 64-bit integer. With auto-print gone the only
-    // observable IR-text effect is that compilation succeeds and
-    // `__koja_user_main` caps with `ret void`, pinned here so a
-    // future regression that drops i64 literal support shows up
-    // as a compile-time miss.
+    // A literal past `i32` must still compile. The only observable
+    // effect is that `__koja_user_main` ends with `ret void`.
     let script = lower_as_script("5000000000\n");
     let ir_text =
         emit_script_llvm_ir(&script, APP_NAME).expect("emit_script_llvm_ir should succeed");
@@ -114,14 +110,8 @@ fn string_literal_emits_rc_header_layout() {
 
 #[test]
 fn string_concat_emits_inline_malloc_and_memcpy() {
-    // `<>` for `String`/`Binary` lowers to inline LLVM:
-    //   1. read both `i64 bit_length`s from the `payload-8` headers
-    //      (negative GEP + load),
-    //   2. derive byte counts via `>> 3`,
-    //   3. `malloc(HEADER_BYTES + total_bytes [+1])` for the new block,
-    //   4. init the rc header (`rc = 1`, combined bit_length),
-    //   5. `memcpy` lhs payload, `memcpy` rhs payload, and (String
-    //      only) write a trailing `\0`.
+    // `<>` for `String` / `Binary` lowers inline. It reads both
+    // lengths, allocates the new block, then `memcpy`s both payloads.
     let script = lower_as_script("\"foo\" <> \"bar\"\n");
     let ir_text =
         emit_script_llvm_ir(&script, APP_NAME).expect("emit_script_llvm_ir should succeed");
@@ -173,12 +163,8 @@ fn float_arithmetic_emits_fadd_or_const_folds() {
         emit_script_llvm_ir(&script, APP_NAME).expect("emit_script_llvm_ir should succeed");
 
     assert_main_shape(&ir_text);
-    // inkwell may or may not const-fold the add. If it doesn't,
-    // we'll see `fadd double` in the user body. With auto-print
-    // gone there's no value-side sink to observe folded value at,
-    // so const-fold cases just leave a no-op body capped by
-    // `ret void`. Pin either shape: the operator on un-folded,
-    // or the body's `ret void` on folded.
+    // inkwell may or may not const-fold the add, so pin either the
+    // `fadd double` or the `ret void` a folded body ends with.
     let user_body = extract_function_body(&ir_text, "__koja_user_main");
     assert!(
         user_body.contains("fadd double") || user_body.contains("ret void"),
@@ -204,12 +190,8 @@ fn float_compare_emits_ordered_predicate_or_const_folds() {
 
 #[test]
 fn call_to_helper_emits_call_in_user_main_body() {
-    // Script mode wires the same helper-declare-then-call shape
-    // through `emit_script_llvm_ir`: helper lives in a package
-    // fragment, the implicit `__koja_user_main` body issues the
-    // call and feeds the result through arithmetic. With auto-print
-    // gone the result lands in an unobserved SSA register, and the
-    // body ends in `ret void`.
+    // The helper lives in a package fragment and the implicit
+    // `__koja_user_main` body calls it.
     let source = "
         fn answer -> Int
           42

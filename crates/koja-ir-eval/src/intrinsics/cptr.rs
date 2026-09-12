@@ -1,17 +1,7 @@
-//! `CPtr<T>` family: `address`, `alloc`, `borrow`, `copy`, `free`,
-//! `null`, `null?`, `offset`, `read`, `to_binary`, `write`.
-//!
-//! Eval now backs `CPtr<T>` with a real raw pointer ([`Value::CPtr`])
-//! so the shell can exercise the same FFI paths the LLVM backend
-//! emits. Each handler that needs element-width info reads `T` from
-//! the calling [`IRFunction`]'s signature (return type for `alloc`
-//! / `read`, first-param type for `offset` / `write`) and computes
-//! `size_of::<T>()` via [`helpers::size_of_primitive`]. Non-primitive
-//! pointee types surface
-//! [`crate::error::RuntimeError::Unsupported`] with a pointer to
-//! `--backend=llvm`.
-//!
-//! `to_binary` byte-copies `len` bytes into a fresh `Value::Binary`.
+//! `CPtr<T>` family over a real raw pointer ([`Value::CPtr`]).
+//! Handlers read `T` from the calling [`IRFunction`]'s signature and
+//! size it via [`helpers::size_of_primitive`]. Non-primitive pointee
+//! types surface [`crate::error::RuntimeError::Unsupported`].
 
 use std::ptr;
 use std::slice;
@@ -275,9 +265,6 @@ fn read_primitive(ptr: *mut u8, ty: &IRType, label: &str) -> Result<Value, Runti
             IRType::UInt8 => Value::Int(read_as::<u8>(ptr) as i64),
             IRType::UInt16 => Value::Int(read_as::<u16>(ptr) as i64),
             IRType::UInt32 => Value::Int(read_as::<u32>(ptr) as i64),
-            // `u64::MAX` round-trips through `Value::Int(i64)` as `-1`,
-            // mirroring `materialize_const`'s `UInt64 -> Int64` cast
-            // (eval doesn't carry a distinct unsigned variant).
             IRType::UInt64 => Value::Int(read_as::<u64>(ptr) as i64),
             other => {
                 return Err(RuntimeError::Unsupported {

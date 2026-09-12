@@ -1,6 +1,6 @@
 //! LLVM emit for `IRInstruction::Spawn` / `IRInstruction::Receive`
-//! and the [`FunctionKind::SpawnWrapper`] / [`FunctionKind::ProcessEntryWrapper`]
-//! bodies. The mailbox surface lives in `koja-runtime-posix/src/scheduler.rs`.
+//! and the [`koja_ir::FunctionKind::SpawnWrapper`] /
+//! [`koja_ir::FunctionKind::ProcessEntryWrapper`] bodies. The mailbox surface lives in `koja-runtime-posix/src/scheduler.rs`.
 //! This module is the sole call site for the `koja_rt_*` declares
 //! minted in [`crate::runtime`].
 //!
@@ -11,10 +11,8 @@
 //!   into the IR-synthesized `<state>.__spawn_body` that carries the
 //!   real semantics (`start`, the `Result` match, the `run` chain)
 //!   under normal ownership lowering. The shim declaration's IR
-//!   signature is ignored at LLVM declare time:
-//!   [`crate::function::function_signature`] hard-codes a
-//!   `void wrapper(i8*)` shape so the symbol is callable through
-//!   `koja_rt_spawn`'s `ProcessFn` typedef.
+//!   signature is ignored at LLVM declare time in favor of the
+//!   `ProcessFn` shape `koja_rt_spawn` takes.
 //! - [`emit_spawn_wrapper_body`] / [`emit_process_entry_wrapper_body`]
 //!   fill the shim body: load the typed config out of the
 //!   runtime-provided pointer and call the process body the IR
@@ -23,9 +21,8 @@
 //!   nothing beyond this ABI adaptation.
 //! - [`emit_spawn`] emits the host-side `IRInstruction::Spawn`:
 //!   serializes the config blob into a stack alloca, calls
-//!   `koja_rt_spawn(wrapper_ptr, blob_ptr, blob_size)` to mint a
-//!   pid, and wraps the pid in a `Ref<M, R>` struct value at
-//!   `dest`.
+//!   `koja_rt_spawn` to mint a pid, and wraps the pid in a
+//!   `Ref<M, R>` struct value at `dest`.
 //! - [`emit_receive`] emits the host-side `IRInstruction::Receive`:
 //!   calls `koja_rt_receive` (or `koja_rt_receive_timeout` when
 //!   `after` is present), inspects the envelope's tag byte,
@@ -293,21 +290,11 @@ pub(super) fn emit_set_priority<'ctx>(
 
 /// Emit a single `IRInstruction::Receive`. Allocates a payload scratch
 /// slot sized to the widest arm payload, calls `koja_rt_receive` (or
-/// `koja_rt_receive_timeout` when `after` is present) to copy the next
-/// message's payload into it (the runtime strips the tag header and
-/// frees the transport buffer), then branches into the arm whose tag
-/// matches the returned wire tag. Dispatch always exits through an
-/// arm, so anything staged after the `Receive` in the host IR block
-/// (payload-local drops, the terminator) is dead. It gets parked in
-/// a fresh `receive_dead` block to keep the dispatcher's own blocks
-/// verifier-clean.
-///
-/// `dest` and `result_type` come from the IR for symmetry with
-/// other instruction emitters. The host block never reads `dest`
-/// because dispatch always exits via an arm, so we don't bind
-/// anything in `values` for it. Each arm body branches to the
-/// `receive_merge` block declared by the lowerer, which is the SSA
-/// site that actually defines the `dest` value.
+/// `koja_rt_receive_timeout` when `after` is present), then branches
+/// into the arm whose tag matches the returned wire tag. Dispatch
+/// always exits through an arm, so the rest of the host IR block is
+/// dead and lands in a `receive_dead` block. `dest` is never bound
+/// here, since the lowerer's `receive_merge` block defines it.
 pub(super) fn emit_receive<'ctx>(
     ctx: &EmitContext<'ctx>,
     after: Option<&ReceiveAfter>,
@@ -338,8 +325,8 @@ pub(super) fn emit_receive<'ctx>(
 }
 
 /// Allocate the scratch slot the runtime copies the delivered payload
-/// into. Sized to the widest arm payload and 8-aligned (an `i64` array,
-/// since every Koja value type is at most 8-aligned), so one slot
+/// into. An `i64` array sized to the widest arm payload (see
+/// [`crate::layout`] for why that alignment suffices), so one slot
 /// serves whichever arm matches. Returns the slot pointer and its byte
 /// capacity. The runtime clamps the copy to that capacity.
 fn build_payload_slot<'ctx>(

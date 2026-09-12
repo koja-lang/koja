@@ -1,22 +1,9 @@
-//! [`CFGBuilder`]: an explicit accumulator for a function's
-//! control-flow graph during lowering.
-//!
-//! Lowering passes a `&mut CFGBuilder` plus the currently-open
-//! [`IRBlockId`] through every recursive call. Each `lower_*` helper
-//! mutates the builder (adds blocks, appends instructions, sets
-//! terminators) and returns the new "open" block (or signals a
-//! closed-flow with no fall-through). The builder owns no state
-//! between calls beyond its block list, so lowering is referentially
-//! transparent: given the same `(builder snapshot, open, expr)` it
-//! produces the same result.
-//!
-//! Block ids stay function-unique (minted by [`crate::FnLowerCtx`])
-//! so terminator references resolve regardless of which builder
-//! produced the block. The builder owns no counters.
-//!
-//! Deliberately minimal: no loop-scoping bookkeeping (loop lowering
-//! tracks its own exit blocks) and no `into_blocks` escape hatch,
-//! since no walker drops the closed-set.
+//! [`CFGBuilder`], the accumulator for a function's control-flow
+//! graph during lowering. Each `lower_*` helper takes `&mut
+//! CFGBuilder` plus the currently open [`IRBlockId`], mutates the
+//! builder, and returns the new open block or signals closed flow.
+//! Block ids are minted by the lowering `FnLowerCtx`, so the builder
+//! owns no counters.
 
 use std::collections::HashMap;
 
@@ -45,15 +32,15 @@ pub(crate) struct CFGBuilder {
 }
 
 impl CFGBuilder {
-    /// Empty builder. Block / value counters live on
-    /// [`crate::FnLowerCtx`]. The builder only owns the block list.
+    /// Empty builder. Block / value counters live on the lowering
+    /// `FnLowerCtx`. The builder only owns the block list.
     pub(crate) fn new() -> Self {
         Self::default()
     }
 
     /// Add a fresh empty block with the given id and human-readable
     /// label. Caller must have minted `id` via
-    /// [`crate::FnLowerCtx::fresh_block`]. The new block starts open,
+    /// `FnLowerCtx::fresh_block`. The new block starts open,
     /// meaning its terminator slot holds a placeholder `Branch(id)` that
     /// callers must overwrite via [`Self::set_terminator`] before
     /// the block is sealed.
@@ -106,9 +93,9 @@ impl CFGBuilder {
     }
 
     /// Consume the builder and return the accumulated block list
-    /// plus the set of closed block ids. The seal pass uses the
-    /// closed-set to assert every block carries an explicitly-set
-    /// terminator before it reaches downstream consumers.
+    /// plus the set of closed block ids. `FnLowerCtx::into_blocks`
+    /// uses the closed set to assert every block carries an
+    /// explicitly set terminator before it leaves lowering.
     pub(crate) fn into_blocks_with_closed(self) -> (Vec<IRBasicBlock>, HashMap<IRBlockId, ()>) {
         (self.blocks, self.closed)
     }

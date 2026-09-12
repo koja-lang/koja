@@ -1,17 +1,5 @@
-//! Drop-pipeline regression for the value-semantics reference-counting
-//! baseline.
-//!
-//! Drop glue is enabled: a heap-leaf local (`String` / `Binary` /
-//! `Bits`) is reference-counted, so lowering emits a `DropLocal`
-//! (`rc--`, freeing at zero) at scope exit. Acquisition sites
-//! (`Clone` = `rc++`) keep the count balanced. A binding shared by
-//! assignment, returned out of the function, captured in a struct
-//! field, or passed as an argument each acquires its own reference, so
-//! the per-slot drop is safe rather than a double-free. These tests
-//! pin that heap locals carry a `DropLocal` while purely scalar
-//! functions carry none, guarding against accidentally dropping the
-//! glue (regressing to the old leak baseline) or emitting drops for
-//! non-heap slots.
+//! Pins that heap-managed locals carry a `DropLocal` at scope exit
+//! while purely scalar functions carry none.
 
 use koja_ir::{IRBasicBlock, IRInstruction};
 

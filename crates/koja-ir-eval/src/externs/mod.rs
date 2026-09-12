@@ -1,29 +1,16 @@
-//! Per-backend dispatch table for `@extern "C"` function bodies on
-//! the eval interpreter side. Mirrors [`crate::intrinsics`] in
-//! shape: each registered extern is keyed by its C symbol name,
-//! the same string the LLVM backend declares the function under
-//! ([`koja_ir::IRExternAttrs::link_name`] when present, or
-//! [`koja_ir::IRSymbol::last_segment`] otherwise), and routed
-//! to a hand-written handler that calls into `koja-runtime` (or
-//! libc) over the same C ABI symbol the LLVM backend would.
+//! Dispatch table for `@extern "C"` function bodies, keyed by the C
+//! symbol name ([`koja_ir::IRExternAttrs::link_name`] or the last
+//! symbol segment). Each handler calls the same `koja-runtime` or
+//! libc symbol the LLVM backend links against, so both backends run
+//! the same machine code for the body. Modules here mirror the
+//! stdlib source files that declare the externs.
 //!
-//! Modules in this folder mirror the stdlib source files that
-//! declare the extern (`@extern "C"` shims live next to the methods
-//! that call them in `lib/global/src/<name>.koja`), so a reader can
-//! cross-reference one-to-one. Calling into the runtime via
-//! `extern "C"` (rather than re-implementing the body in pure Rust)
-//! keeps eval byte-equivalent with the LLVM backend by construction:
-//! both backends execute the same machine code for the body.
-//!
-//! Adding a new extern: drop / extend the sibling `<name>.rs` module
-//! matching the Koja source file, list the symbol in a
-//! [`marshal::pass_through_externs!`] invocation (or hand-write the
-//! handler when it needs more than arg/return marshaling), then
-//! add a `"c_symbol" => handler(args)` row to the [`extern_table!`]
-//! invocation, keeping ASCII order. Externs not in the table fall
-//! through with `None` so the caller can surface
-//! [`RuntimeError::ExternNotSupported`] with the mangled symbol
-//! attached for the diagnostic.
+//! Adding a new extern: list the symbol in a
+//! [`marshal::pass_through_externs!`] invocation or hand-write the
+//! handler, then add its row to the `extern_table!` invocation below
+//! in ASCII order.
+//! Symbols not in the table fall through as `None` and surface as
+//! [`RuntimeError::ExternNotSupported`].
 
 use crate::error::RuntimeError;
 use crate::value::Value;

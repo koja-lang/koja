@@ -73,6 +73,8 @@ impl IRSymbol {
     }
 }
 
+/// Drop a trailing `/N` arity suffix (`greet/1` -> `greet`). A `/`
+/// followed by anything other than digits is kept.
 fn strip_arity_suffix(segment: &str) -> &str {
     let Some(slash) = segment.rfind('/') else {
         return segment;
@@ -128,168 +130,80 @@ impl fmt::Display for IRBlockId {
     }
 }
 
-/// How a function's body is materialized at emission time.
+/// How a function's body is materialized. The seal pass enforces the
+/// per-kind body shape. Kinds with empty `blocks` get their body
+/// from the backend.
 ///
-/// - `Regular` carries non-empty blocks the backend walks.
-/// - `Intrinsic(id)` carries empty blocks and a typed
-///   [`IRIntrinsicId`]. Both backends `match` exhaustively on that
-///   enum to synthesize the body, so adding an intrinsic is a
-///   compile-time wiring requirement on every consumer. The id is
-///   decoupled from [`IRSymbol::mangled`] so monomorphized symbols
-///   can share an emitter without per-mangling table entries.
-/// - `Extern(attrs)` carries empty blocks and an FFI-linked
-///   declaration only. The backend declares the function under
-///   the C symbol named by [`IRExternAttrs::link_name`] (or the
-///   function's bare last-segment when `None`) and emits no body,
-///   and call sites resolve through an `IRSymbol`-keyed function
-///   index built at declare time.
-/// - `Closure { env_layout }` carries non-empty blocks like
-///   `Regular`. The backend prepends an implicit `env_ptr`
-///   parameter pointing at a heap struct laid out per `env_layout`.
-///   Body code reads captures via [`IRInstruction::LoadCapture`]
-///   indexed into that layout, and [`IRInstruction::MakeClosure`]
-///   is the only writer.
-/// - `SpawnWrapper { state }` is the entrypoint thunk a spawned
-///   process executes. It has a single `i8*` config parameter, and the
-///   body calls `state.start(config)` (which returns
-///   `Result<state, StopReason>`) and on `Ok` chains into `state.run()`.
-///   Minted by the spawn-wrapper monomorphization planner,
-///   content-addressed by `state` so every `spawn S.start(...)` site
-///   for the same monomorphized state cell shares one wrapper symbol.
-///   Distinct instantiations get distinct wrappers exactly like generic
-///   structs do.
-/// - `ProcessEntryWrapper { state }` is the project-mode entry
-///   thunk minted when `koja.toml`'s `entry` names a PascalCase
-///   `Process<C, M, R>` type. Same `void(i8*)` shape and `start ->
-///   run` dispatch as `SpawnWrapper`, but the LLVM emit pass also
-///   funnels the resulting `StopReason` through `ExitStatus.code()`
-///   and stores it in the module-level `__koja_exit_code` global
-///   that the synthesized `main` trampoline returns from. One per
-///   program (the entry can't be generic, as `koja.toml` names a
-///   single concrete state type).
-///
-/// Per-kind body shape is enforced by the seal pass. The
-/// `Extern`, `Intrinsic`, `SpawnWrapper`, and `ProcessEntryWrapper`
-/// variants carry data, which is why this enum is not `Copy`.
-/// `Clone` callers compose the per-fn metadata without ambient
-/// interior mutation.
+/// The `$clone$` / `$drop$` / `$deep_copy$` glue kinds are
+/// synthesized by [`crate::elaborate`], which also explains when a
+/// composite `Clone` / `Drop` / `DeepCopy` becomes a glue `Call`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum FunctionKind {
-    /// Synthesized per-type clone glue (`<T>.$clone$`). Registered by
-    /// the `elaborate` sub-pass for every heap-managed composite type
-    /// (`List` / `Map` / `Set` / heap-owning structs, enums, tuples,
-    /// and unions). The operand type is `params[0].ty`, and the
-    /// return type matches it. Lowering's composite `IRInstruction::Clone`
-    /// is rewritten into a `call` to this glue, so backends only ever
-    /// see leaf `Clone`s inline and a uniform `call` for composites.
-    ///
-    /// Its body is born one of two ways:
-    /// - **Aggregates** (`Struct` / `Enum` / `Tuple` / `Union`): `elaborate::synth`
-    ///   builds a full CFG (project each field / payload, acquire it,
-    ///   rebuild). `blocks` is non-empty and the LLVM backend walks it
-    ///   like a [`Self::Regular`] body.
-    /// - **Collections**: a runtime-shaped deep-copy the LLVM backend
-    ///   synthesizes from the operand type at emit time, so `blocks`
-    ///   lowers empty like [`Self::Intrinsic`].
-    ///
-    /// Eval reclaims via its host GC and never invokes the glue.
+    /// Per-type clone glue (`<T>.$clone$`) for a heap-managed
+    /// composite. Takes and returns `params[0].ty`. Aggregates carry
+    /// a synthesized CFG. Collections carry empty `blocks`.
     CloneGlue,
-    Closure {
-        env_layout: Vec<IRType>,
-    },
-    /// Synthesized per-closure-body env deep-copy glue
-    /// (`<body>.$copy_env$`). The copy analog of
-    /// [`Self::DropClosureGlue`]: its address is stamped into the env
-    /// block's `copy_fn` header word by [`IRInstruction::MakeClosure`],
-    /// and the runtime calls it (`*mut u8 -> *mut u8` over the env
-    /// base) when the closure crosses a process boundary, returning a
-    /// fresh env with `rc = 1` and every heap-managed capture
-    /// deep-copied.
-    ///
-    /// Unlike `DropClosureGlue` the body cannot be expressed in IR
-    /// (it returns a raw env pointer, which has no IR type), so
-    /// `blocks` lowers empty and the LLVM backend synthesizes the
-    /// whole body from `env_layout` at emit time (the same treatment
-    /// collection [`Self::CloneGlue`] bodies get). Lowering registers
-    /// one for every closure that captures, since any closure value
-    /// may flow into a send. Eval copies closures structurally via
-    /// its host `Value` model and never invokes it.
-    CopyClosureGlue {
-        env_layout: Vec<IRType>,
-    },
-    /// Synthesized per-type deep-copy glue (`<T>.$deep_copy$`). The
-    /// process-boundary analog of [`Self::CloneGlue`]: where clone
-    /// shares immutable heap blocks with an `rc++`, deep copy
-    /// produces a physically independent value with no storage shared
-    /// with the source, so the copy can be handed to another process
-    /// without cross-process rc traffic. Registered by the
-    /// `elaborate` sub-pass for every heap-managed composite type
-    /// reachable from an [`IRInstruction::DeepCopy`] site or a
-    /// [`Self::CopyClosureGlue`] env layout. Operand and return type
-    /// are both `params[0].ty`. Same two body shapes as
-    /// [`Self::CloneGlue`]: an `elaborate`-synthesized CFG for
-    /// aggregates, an emit-time backend body (empty `blocks`) for
-    /// collections. Eval's host `Value`s are already independent, so
-    /// it short-circuits the call to an identity.
+    /// A closure body. The backend prepends an implicit `env_ptr`
+    /// parameter to a heap env laid out per `env_layout`. The body
+    /// reads captures via [`IRInstruction::LoadCapture`], and
+    /// [`IRInstruction::MakeClosure`] is the only writer.
+    Closure { env_layout: Vec<IRType> },
+    /// Per-closure-body env deep-copy glue (`<body>.$copy_env$`).
+    /// Stamped into the env header's `copy_fn` word by
+    /// [`IRInstruction::MakeClosure`] and called by the runtime when
+    /// the closure crosses a process boundary. Returns a raw env
+    /// pointer, which has no IR type, so `blocks` is always empty.
+    /// Registered for every closure that captures.
+    CopyClosureGlue { env_layout: Vec<IRType> },
+    /// Per-type deep-copy glue (`<T>.$deep_copy$`) for a heap-managed
+    /// composite reachable from an [`IRInstruction::DeepCopy`] site or
+    /// a [`Self::CopyClosureGlue`] env layout. Takes and returns
+    /// `params[0].ty` and shares no storage with its argument. Same
+    /// body shapes as [`Self::CloneGlue`].
     DeepCopyGlue,
-    /// Synthesized per-closure-body capture-release glue
-    /// (`<body>.$drop_env$`). A closure env is type-erased behind the
-    /// structural [`IRType::Function`], so a `Drop` at a closure-typed
-    /// slot can't statically pick the right capture-release routine.
-    /// Each closure that owns at least one heap-managed capture gets
-    /// this sibling function, whose address is stamped into the env
-    /// block's header by [`IRInstruction::MakeClosure`], and the
-    /// runtime calls it (with the env pointer) when the env's refcount
-    /// hits zero, before freeing the block.
-    ///
-    /// Shape is closure-like: an implicit `env_ptr` parameter at LLVM
-    /// position 0 and a body that reads each heap-managed capture via
-    /// [`IRInstruction::LoadCapture`] (indexed into `env_layout`) and
-    /// [`IRInstruction::DropValue`]s it, returning `Unit`. Unlike
-    /// [`Self::Closure`] it carries no user-visible params and is never
-    /// the target of a `MakeClosure`. Born as real IR during lowering
-    /// so [`crate::elaborate`] discovers any composite capture's
-    /// `drop_T` and rewrites the composite `DropValue`s into glue
-    /// calls, exactly as for a `Regular` body. Eval reclaims via its
-    /// host GC and never invokes it.
-    DropClosureGlue {
-        env_layout: Vec<IRType>,
-    },
-    /// Synthesized per-closure-body capture-equality glue
-    /// (`<body>.$eq_env$`). Its address is stamped into the env
-    /// block's `eq_fn` header word by [`IRInstruction::MakeClosure`],
-    /// and [`IRInstruction::ClosureEquals`] calls it once both sides
-    /// carry the same `site_id`. Shape is closure-like (implicit
-    /// `env_ptr` at LLVM position 0) with one user-visible param, the
-    /// other closure as an [`IRType::Function`] fat pointer, and a
-    /// `Bool` return. The body reads each capture via
-    /// [`IRInstruction::LoadCapture`] (own env) and
-    /// [`IRInstruction::LoadCaptureOf`] (the other env) and
-    /// short-circuit-conjoins their equality. Real IR, so `elaborate`
-    /// and both backends run it like a [`Self::Closure`] body.
-    /// Captureless bodies register none (null `eq_fn`).
-    EqClosureGlue {
-        env_layout: Vec<IRType>,
-    },
-    /// Synthesized per-type drop glue (`<T>.$drop$`). The drop analog
-    /// of [`Self::CloneGlue`]. It releases every heap-managed field /
-    /// payload / element of `params[0].ty`, then frees any collection
-    /// backing buffer. Returns `Unit`. Lowering's composite
-    /// `DropLocal` / `DropValue` is rewritten into a `call` to this
-    /// glue. Same two body shapes as [`Self::CloneGlue`]: an
-    /// `elaborate`-synthesized CFG for aggregates, an emit-time
-    /// backend body (empty `blocks`) for collections / `Indirect`.
-    /// Eval reclaims via its host GC and never invokes it.
+    /// Per-closure-body capture-release glue (`<body>.$drop_env$`).
+    /// Stamped into the env header by [`IRInstruction::MakeClosure`]
+    /// and called by the runtime when the env's refcount reaches zero.
+    /// Closure-shaped (implicit `env_ptr`, no user params, returns
+    /// `Unit`). Real IR, so `elaborate` rewrites its composite
+    /// `DropValue`s like any body. Registered for every closure with
+    /// a heap-managed capture.
+    DropClosureGlue { env_layout: Vec<IRType> },
+    /// Per-closure-body capture-equality glue (`<body>.$eq_env$`).
+    /// Stamped into the env header's `eq_fn` word by
+    /// [`IRInstruction::MakeClosure`] and called by
+    /// [`IRInstruction::ClosureEquals`] when both sides share a
+    /// `site_id`. Closure-shaped with one user param, the other
+    /// closure, and a `Bool` return. Real IR. Captureless bodies
+    /// register none.
+    EqClosureGlue { env_layout: Vec<IRType> },
+    /// Per-type drop glue (`<T>.$drop$`) for a heap-managed composite.
+    /// Releases every heap-managed constituent of `params[0].ty` and
+    /// returns `Unit`. Same body shapes as [`Self::CloneGlue`], with
+    /// `Indirect` on the empty-`blocks` side.
     DropGlue,
+    /// An FFI declaration with empty `blocks`. The backend declares
+    /// the C symbol named by [`IRExternAttrs::link_name`] (or the
+    /// function's last path segment when `None`) and emits no body.
     Extern(IRExternAttrs),
+    /// A builtin with empty `blocks`. Backends match exhaustively on
+    /// the [`IRIntrinsicId`] to synthesize the body. The id is
+    /// independent of [`IRSymbol::mangled`] so monomorphized symbols
+    /// can share one emitter.
     Intrinsic(IRIntrinsicId),
-    ProcessEntryWrapper {
-        state: IRType,
-    },
+    /// Project-mode entry thunk, minted when `koja.toml`'s `entry`
+    /// names a `Process<C, M, R>` type. Same shape as
+    /// [`Self::SpawnWrapper`], and the backend also stores the
+    /// resulting exit code where the host `main` can return it. One
+    /// per program.
+    ProcessEntryWrapper { state: IRType },
+    /// User-written body with non-empty `blocks`.
     Regular,
-    SpawnWrapper {
-        state: IRType,
-    },
+    /// The thunk a spawned process runs. Takes one raw config
+    /// pointer, calls `state.start(config)`, and on `Ok` chains into
+    /// `state.run()`. Content-addressed by `state`, so every spawn of
+    /// the same monomorphized state shares one wrapper.
+    SpawnWrapper { state: IRType },
 }
 
 /// Source-definition location of a callable, captured at lower time
@@ -329,6 +243,9 @@ impl IRFunction {
         IRBlockId(max.map_or(0, |id| id + 1))
     }
 
+    /// One past the highest local id in use. Receive payload locals
+    /// are scanned directly because the arm can be planned before
+    /// its `LocalDecl` is appended.
     pub(crate) fn next_local_id(&self) -> IRLocalId {
         let mut max = 0;
         for param in &self.params {
@@ -492,31 +409,14 @@ pub enum IRInstruction {
         layout: ResolvedBinaryLayout,
         segments: Vec<LoweredBinarySegment>,
     },
-    /// `dest = match <subject> against <segments>`: assemble a
-    /// `Bool` (`i1`) success value from a runtime test against
-    /// `subject`'s `Binary`/`Bits` payload at the bit offsets
-    /// recorded in `segments`. As a side effect, every
-    /// [`LoweredBinaryPattern::BindInt`] / [`LoweredBinaryPattern::GreedyTail`]
-    /// segment extracts its slice of the subject into the
-    /// pre-declared local slot named on the segment. The
-    /// lowering layer emits the matching [`IRInstruction::LocalDecl`]
-    /// in the function's entry block, so seal's
-    /// "every-write-is-dominated-by-a-decl" rule still holds.
-    ///
-    /// LLVM emission is:
-    ///
-    /// 1. Compare the subject's runtime bit length against
-    ///    `layout.fixed_bits` (equality when
-    ///    `!layout.has_greedy_tail`, unsigned-greater-or-equal
-    ///    when there is a greedy tail).
-    /// 2. For each segment, extract its slice at `bit_offset` and
-    ///    AND its per-segment success bit into the running result.
-    /// 3. For [`LoweredBinaryPattern::BindInt`] segments, store
-    ///    the extracted (and sign-extended when `sign == Signed`)
-    ///    integer into the slot. For
-    ///    [`LoweredBinaryPattern::GreedyTail`] segments, allocate
-    ///    a fresh `[i64 bit_length][payload]` value, copy the
-    ///    remaining bytes, and store the payload pointer.
+    /// `dest: Bool = match subject against segments`. The subject's
+    /// bit length must equal `layout.fixed_bits`, or be at least that
+    /// when `layout.has_greedy_tail`, and every literal segment must
+    /// match at its `bit_offset`. On success each
+    /// [`LoweredBinaryPattern::BindInt`] and
+    /// [`LoweredBinaryPattern::GreedyTail`] segment writes its slice
+    /// of the subject into the local slot named on the segment.
+    /// Lowering declares those slots in the entry block.
     BinaryMatch {
         dest: ValueId,
         layout: LoweredBinaryMatchLayout,
@@ -541,31 +441,14 @@ pub enum IRInstruction {
         param_types: Vec<IRType>,
         result_ty: IRType,
     },
-    /// `dest = clone(source)`: a value-semantics acquisition that
-    /// yields an independent owner of `source` (statically typed `ty`).
-    /// The drop-glue lowering emits this at every *ownership
-    /// acquisition* of a heap value (binding, parameter promotion,
-    /// field/element store, return) so each owner can drop at scope
-    /// exit without aliasing another owner. Under reference counting
-    /// the independence is logical, not physical: immutable blocks are
-    /// shared and the bookkeeping is an `rc++`. The source stays live.
-    ///
-    /// Backend lowering by `ty`:
-    /// - Leaf heap (`String` / `Binary` / `Bits`): an `rc_inc` on the
-    ///   block base (`payload - HEADER_BYTES`), where `dest` re-binds the
-    ///   same payload pointer. Eval relies on its host GC and treats
-    ///   the looked-up value as already independent.
-    /// - Stack/`Copy` leaf types (`Int`, `Float`, `Bool`, …): a plain
-    ///   register copy, where `dest` aliases the same immutable SSA value.
-    /// - Closure (`Function`): an `rc_inc` on the captured env block,
-    ///   aliasing the same `{fn_ptr, env_ptr}` fat pointer.
-    /// - No-glue aggregates (`Struct` / `Enum` / `Union` whose fields
-    ///   are all `Copy`): a register copy, like the scalar leaves.
-    /// - Heap composites (`List` / `Map` / `Set` / `Indirect` and
-    ///   heap-owning structs and enums): rewritten by the `elaborate`
-    ///   sub-pass into a `Call` to a synthesized per-type `clone_T`, so
-    ///   the backend never recurses inline. One surviving to a backend
-    ///   is a lowering bug.
+    /// `dest = clone(source)`. Acquires a new owner of `source`
+    /// (statically typed `ty`) so each owner can drop at scope exit
+    /// without releasing another owner's storage. Lowering emits one
+    /// at every ownership acquisition (binding, parameter promotion,
+    /// field or element store, return). The source stays live.
+    /// Backends handle leaf types inline. Heap composites are
+    /// rewritten by [`crate::elaborate`] into a glue `Call` before
+    /// they reach a backend.
     Clone {
         dest: ValueId,
         source: ValueId,
@@ -585,22 +468,12 @@ pub enum IRInstruction {
         ty: IRType,
     },
     /// `dest = lhs <> rhs` for the heap-payload family (`String`,
-    /// `Binary`, `Bits`). Separate from [`Self::BinaryOp`] because
-    /// the LLVM emission shape differs:
-    ///
-    /// - `String` / `Binary`: inline `malloc` + two `memcpy`s.
-    /// - `Bits`: extern `__koja_concat_bits` runtime helper
-    ///   (sub-byte alignment is far cleaner in Rust than LLVM IR).
-    ///
-    /// Result is heap storage with the same `[i64 bit_length][payload]`
-    /// layout as the operands. Lowering always emits the copying form
-    /// (`consumes_lhs: false`), where both operands flow through
-    /// unchanged and their lifetimes stay with their own slots.
-    /// Consume fusion sets `consumes_lhs` when `lhs` provably dies at
-    /// this instruction, so the backend may grow `lhs`'s block in
-    /// place. The block may still be rc-shared or immortal, so the
-    /// backend checks `rc == 1` at runtime and otherwise copies and
-    /// releases `lhs` itself.
+    /// `Binary`, `Bits`). The result is a fresh heap value of the
+    /// same `kind`. Lowering always emits `consumes_lhs: false`, where
+    /// both operands flow through unchanged. Consume fusion sets
+    /// `consumes_lhs` when `lhs` provably dies here, which lets the
+    /// backend grow `lhs`'s storage in place when it is uniquely held
+    /// and otherwise copy and release `lhs` itself.
     Concat {
         consumes_lhs: bool,
         dest: ValueId,
@@ -616,32 +489,13 @@ pub enum IRInstruction {
     /// nothing reads before a `LocalWrite` or the frame exit.
     /// Produces no value.
     ConsumeLocal { local: IRLocalId },
-    /// `dest = deep_copy(source)`: a process-boundary copy that
-    /// yields a *physically* independent value, with no heap storage
-    /// shared with `source`, transitively. Where [`Self::Clone`]
-    /// models intra-process acquisition (`rc++`, copy-on-write),
-    /// `DeepCopy` is emitted at send / spawn sites so the payload a
-    /// process hands off never aliases blocks the sender might
-    /// mutate or release. Koja's rc bookkeeping is unsynchronized,
-    /// so sharing across processes is unsound. The source stays
-    /// live (the sender's own copy drops normally at scope exit).
-    ///
-    /// Backend lowering by `ty` mirrors `Clone`'s shape:
-    /// - Leaf heap (`String` / `Binary` / `Bits`): runtime
-    ///   `koja_heap_deep_copy` (fresh block, `rc = 1`, bytes copied).
-    /// - Stack/`Copy` leaf types: a plain register copy.
-    /// - Closure (`Function`): runtime `koja_closure_deep_copy`,
-    ///   which dispatches through the env header's `copy_fn` glue
-    ///   ([`FunctionKind::CopyClosureGlue`]), and the fat pointer is
-    ///   rebuilt around the fresh env.
-    /// - No-glue aggregates: a register copy.
-    /// - Heap composites: rewritten by `elaborate` into a `Call` to
-    ///   a synthesized per-type `deep_copy_T`
-    ///   ([`FunctionKind::DeepCopyGlue`]). One surviving to a
-    ///   backend is a lowering bug.
-    ///
-    /// Eval's host `Value`s are deep-cloned on every lookup, so a
-    /// `DeepCopy` there is a re-bind, exactly like its `Clone`.
+    /// `dest = deep_copy(source)`. A process-boundary copy that
+    /// shares no heap storage with `source`, transitively. Lowering
+    /// emits one at send and spawn sites, since rc bookkeeping is
+    /// unsynchronized and sharing across processes is unsound. The
+    /// source stays live. Backends handle leaf types inline. Heap
+    /// composites are rewritten by [`crate::elaborate`] into a glue
+    /// `Call` before they reach a backend.
     DeepCopy {
         dest: ValueId,
         source: ValueId,
@@ -707,7 +561,7 @@ pub enum IRInstruction {
     /// IR-lowerer's responsibility. It must emit a synthetic
     /// `DropLocal`-style free of the previous payload before the
     /// `FieldSet` (mirrors the local-reassignment overwrite drop in
-    /// [`crate::lower::body`]) so the new write doesn't leak.
+    /// body lowering) so the new write does not leak.
     FieldSet {
         base: ValueId,
         dest: ValueId,
@@ -724,22 +578,16 @@ pub enum IRInstruction {
         dest: ValueId,
         slot: IRIndirectSlot,
     },
-    /// Free the heap storage currently held by `local`'s slot. Emitted
-    /// by the lowering layer at function exits (return, fall-through)
-    /// for slots whose [`IRType`] is heap-allocated. Reads the slot's
-    /// current pointer, computes `payload - 8` to recover the allocator
-    /// block base, and calls extern `free`. A `DropLocal` reaching a
-    /// backend always indicates a slot the backend must free. Produces
-    /// no value.
+    /// Release the ownership held by `local`'s slot. Lowering emits
+    /// one at every function exit for slots whose [`IRType`] is
+    /// heap-managed. Backends handle leaf types inline. Heap
+    /// composites are rewritten by [`crate::elaborate`] into a glue
+    /// `Call`. Produces no value.
     DropLocal { local: IRLocalId, ty: IRType },
-    /// Free the heap storage held by `value`. Value-keyed analog of
-    /// [`Self::DropLocal`], used by [`Self::FieldSet`] lowering when
-    /// the leaf field is heap-typed. The field-write reads the old
-    /// payload via [`Self::FieldGet`] into an SSA value, drops it
-    /// with this instruction, then `FieldSet`s the new payload in.
-    /// Same `payload - 8` GEP + extern `free` shape as `DropLocal`,
-    /// just sourced from a register instead of a slot. Eval is a
-    /// no-op (the host GC reclaims). Produces no value.
+    /// Release the ownership held by `value`. Register-keyed analog
+    /// of [`Self::DropLocal`], emitted where an owner dies without a
+    /// slot, such as the old payload of a [`Self::FieldSet`] or a
+    /// dead temporary. Produces no value.
     DropValue { value: ValueId, ty: IRType },
     /// Declare a local-variable storage slot. Emitted exactly once
     /// per [`IRLocalId`] per function in the entry block (LLVM hoists
@@ -1142,17 +990,11 @@ pub enum IRTerminator {
     },
     /// Exit the function with `value` (or `Unit` when `None`).
     Return { value: Option<ValueId> },
-    /// Reinvoke `callee` with `args`, reusing the current frame's
-    /// stack. Stamped by the post-merge [`crate::lower::tail_calls`]
-    /// pass on call-then-return shapes where `callee` matches the
-    /// enclosing function's symbol, i.e. self-recursive tail calls.
-    /// Backends turn this into in-frame state rebinding plus a jump:
-    /// LLVM stores each `arg` into the matching parameter slot and
-    /// branches to the function's loop header, while the interpreter
-    /// signals its trampoline to restart the body with `args` as the
-    /// new bindings. Cross-function tail calls aren't admitted yet.
-    /// Extending here is a one-line drop of the self-callee check
-    /// in the rewrite pass plus a backend musttail emit.
+    /// Reinvoke `callee` with `args` in the current frame. Stamped by
+    /// the post-merge [`crate::tail_calls`] pass on call-then-return
+    /// shapes where `callee` is the enclosing function, so only
+    /// self-recursive tail calls appear. Backends rebind the
+    /// parameters to `args` and jump to the body's start.
     TailCall {
         args: Vec<ValueId>,
         callee: IRSymbol,

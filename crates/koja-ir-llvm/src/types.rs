@@ -3,11 +3,11 @@
 //! unsigned widths share their LLVM width (signedness is
 //! per-instruction, not per-type). `Float32` / `Float64` map to
 //! `f32` / `f64` IEEE 754. `String` maps to a default-AS pointer
-//! (the header layout lives in
-//! [`crate::emit::instruction::emit_const_string`]). `Struct(_)`
-//! resolves through the pre-emitted [`crate::ctx::EmitContext`] struct
-//! type map. `Enum(_)` resolves through the pre-emitted enum-layout
-//! map ([`crate::ctx::EmitContext::enum_outer_type`]).
+//! (the header layout lives in [`crate::emit::heap_layout`]).
+//! `Struct(_)` resolves through the pre-emitted
+//! [`crate::layout::TypeLayouts::struct_type`] map. `Enum(_)` resolves
+//! through the pre-emitted enum-layout map
+//! ([`crate::ctx::EmitContext::enum_outer_type`]).
 //!
 //! [`ir_byte_size`] / [`ir_alignment`] are the target-aware adapters
 //! the enum-layout pre-emit phase calls to compute per-variant
@@ -85,15 +85,16 @@ pub(crate) fn ir_int_type<'ctx>(
 /// type param to `Unit` (enum payloads, collection elements, struct
 /// fields, params) lay out cleanly. The byte is never observed at
 /// runtime. Unit constants emit `i8 0` and Unit
-/// returns still route through `void` in
-/// [`crate::function::function_signature`].
+/// returns still route through `void` in the function signature
+/// built by [`crate::function::declare_function`].
 /// Ints / `Bool` route through [`ir_int_type`]. `Float32` / `Float64`
 /// map to `f32` / `f64`. `String` is a default-AS pointer.
-/// `Struct(symbol)` resolves through [`EmitContext::struct_type`]
-/// (registered by the pre-emit phase). `Enum(symbol)` resolves
+/// `Struct(symbol)` resolves through
+/// [`crate::layout::TypeLayouts::struct_type`] (registered by the
+/// pre-emit phase). `Enum(symbol)` resolves
 /// through [`EmitContext::enum_outer_type`] (the outer opaque blob
-/// registered by [`crate::layout::enums::declare_enum_type`] +
-/// [`crate::layout::enums::define_enum_bodies`]).
+/// registered by [`crate::layout::enums::declare_enum_type`] and
+/// [`crate::layout::enums::define_enum_completes_and_outer`]).
 pub(crate) fn ir_basic_type<'ctx>(
     ctx: &EmitContext<'ctx>,
     ty: &IRType,

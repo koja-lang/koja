@@ -17,6 +17,9 @@ use super::structs::{package_instructions, script_body_instructions, seal_struct
 use super::types::{TypeEnvironment, seal_package_types, seal_script_body_types};
 use super::{require_supported_type, seal_panic};
 
+/// Assert every sealed-IR invariant over a script. The packages get
+/// the same checks as a program, and the implicit body gets the
+/// per-function checks with no params.
 pub(crate) fn seal_script(script: &IRScript) {
     let type_environment = TypeEnvironment::new(&script.packages);
     for pkg in &script.packages {
@@ -46,7 +49,7 @@ pub(crate) fn seal_script(script: &IRScript) {
     seal_script_no_loadcapture(script);
 }
 
-/// Mirror of [`super::program::seal_program_closure_ops`] for the
+/// Mirror of `program::seal_program_closure_ops` for the
 /// script shape: validates every `MakeClosure` against the
 /// assembled `IRScript::function` lookup. Walks the script body
 /// itself plus every package fragment.
@@ -106,7 +109,7 @@ fn collect_script_block_params(
 }
 
 /// Cross-IR struct check for script-shaped output. Mirrors
-/// [`super::program::seal_program_struct_ops`]: walks both the
+/// `program::seal_program_struct_ops`: walks both the
 /// implicit script body and every package fragment, validating each
 /// `StructInit` / `FieldGet` against the assembled struct lookup.
 fn seal_script_struct_ops(script: &IRScript) {
@@ -118,7 +121,7 @@ fn seal_script_struct_ops(script: &IRScript) {
 }
 
 /// Cross-IR enum check for script-shaped output. Mirrors
-/// [`super::program::seal_program_struct_ops`] / `seal_program_enum_ops`:
+/// `program::seal_program_struct_ops` / `seal_program_enum_ops`:
 /// walks both the implicit script body and every package fragment,
 /// validating each `EnumConstruct` against the assembled enum lookup.
 fn seal_script_enum_ops(script: &IRScript) {
@@ -129,7 +132,7 @@ fn seal_script_enum_ops(script: &IRScript) {
     }
 }
 
-/// Script counterpart of [`super::program::seal_program_loadconst_pool`].
+/// Script counterpart of `program::seal_program_loadconst_pool`.
 /// Walks both the inline script body and every package fragment,
 /// asserting each `LoadConst::const_id` resolves through the
 /// assembled constant lookup.

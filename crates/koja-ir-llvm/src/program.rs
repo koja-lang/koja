@@ -5,44 +5,12 @@
 //! the host `main` trampoline ([`emit_process_entry_main`]) that
 //! spawns the entry wrapper and returns the stored exit code.
 //!
-//! Struct + enum types are pre-emitted in two phases (declare
-//! opaque, then set body) across every package so a struct- or
-//! enum-typed parameter, return type, or payload field resolves
-//! before any function signature is built. The two-phase
-//! declare-then-define pattern on functions lets mutually-recursive
-//! calls resolve through `module.get_function` before either body
-//! has been walked.
-//!
-//! Phase ordering rationale: structs and enums share a single
-//! declare-then-define pair so a struct field can carry an
-//! `IRType::Enum(_)` and an enum's tuple/struct variant can carry
-//! an `IRType::Struct(_)`. Both forward references resolve through
-//! the opaque placeholders the declare phase mints up-front.
-//!
-//! The define phase splits into four sub-steps so size and
-//! alignment queries always see fully-bodied operands:
-//!
-//! 1. Set every union and struct body across all packages
-//!    ([`define_union_body`] / [`define_struct_body`]). Neither
-//!    queries `get_abi_size` so opaque inner enum references in a
-//!    struct field are fine.
-//! 2. Set every enum variant *payload* body across all packages
-//!    ([`define_enum_payload_bodies`]). Same property: no size
-//!    query, so opaque inner enum-outer references in a payload
-//!    field are still fine.
-//! 3. Sort the enum decls in dependency order (every enum E whose
-//!    payload references enum F is placed after F).
-//! 4. Walk the sorted decls and set each one's variant *complete*
-//!    body and outer chunk body ([`define_enum_completes_and_outer`]).
-//!    These query `get_abi_size` / `get_abi_alignment`, so every
-//!    transitively-referenced enum outer must already be bodied.
-//!    The topological order guarantees that.
-//!
-//! Without step 3 a stdlib enum like `Option<TestApp.TokenKind>`
-//! in `Global` would have its complete body set before
-//! `TestApp.TokenKind`'s outer, leaving the variant payload
-//! reading an opaque inner (`align 1`, `size 0`) and collapsing
-//! the outer chunk count to a single byte (wire-format wrong).
+//! Types and functions are both declared opaque across every package
+//! before any body is set, so forward references between structs,
+//! enums, and mutually recursive functions resolve through
+//! placeholders. Bodies that answer size and alignment queries
+//! (enum complete and outer structs) are set last, in the dependency
+//! order [`enums_in_dependency_order`] computes.
 
 use koja_ir::IRProgram;
 

@@ -1,3 +1,6 @@
+//! Helpers for intrinsics that return `Result<T, E>`: tag lookup
+//! for the concrete `Result` enum and `Ok` / unit `Err` construction.
+
 use inkwell::values::BasicValueEnum;
 use koja_ir::{IRFunction, IRSymbol, IRType, IRVariantPayload, IRVariantTag};
 

@@ -7,7 +7,7 @@
 //!   dense in declaration order, field names are unique, every
 //!   field's `ir_type` is in the transient set.
 //! - [`seal_struct_ops`] runs across the assembled
-//!   [`IRProgram`] / [`IRScript`] (call site supplies the cross-
+//!   [`crate::IRProgram`] / [`crate::IRScript`] (call site supplies the cross-
 //!   package struct lookup) and validates every
 //!   [`IRInstruction::StructInit`] / [`IRInstruction::FieldGet`]
 //!   against the matching decl: target struct is registered,

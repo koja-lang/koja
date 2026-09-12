@@ -24,21 +24,13 @@ pub enum RuntimeError {
     /// interpreter has no registered handler for. Indicates a missing
     /// registration in `crate::intrinsics`, not a user error.
     UnknownIntrinsic { symbol: String },
-    /// An `@extern "C"` (FFI-linked) function was called whose C
-    /// symbol isn't registered in [`crate::externs::dispatch`]. The
-    /// eval backend exposes a curated subset of `koja-runtime`
-    /// symbols (the ones the auto-imported stdlib needs). Calls
-    /// outside that subset surface this error so users see exactly
-    /// which symbol needs a handler instead of a silent `Unit`
-    /// return.
+    /// An `@extern "C"` function was called whose C symbol has no
+    /// handler in [`crate::externs::dispatch`].
     ExternNotSupported { symbol: String },
-    /// Reached an `IRTerminator::Unreachable`. Lowering only emits
-    /// these on the failure edge of an exhaustive `match`, so
-    /// hitting one means typecheck's exhaustiveness analysis is
-    /// wrong (or the IR was constructed by hand outside the
-    /// pipeline).
+    /// Reached an `IRTerminator::Unreachable`, which means an
+    /// upstream exhaustiveness or divergence judgment was wrong.
     UnreachableExecuted,
-    /// Catch-all for IR shapes the interpreter doesn't yet handle.
+    /// Catch-all for IR shapes the interpreter does not yet handle.
     Unsupported { detail: String },
     /// An operand referenced a `ValueId` not yet defined in the
     /// current frame. Seal contract violation if it happens on a

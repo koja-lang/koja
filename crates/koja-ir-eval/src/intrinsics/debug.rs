@@ -37,10 +37,8 @@ pub(super) fn dispatch(impl_: DebugImpl, args: &[Value]) -> Result<Value, Runtim
     Ok(Value::string(rendered))
 }
 
-/// Signed widths render via `{}` (decimal, optional `-`). Unsigned
-/// widths reinterpret the stored `i64` through `u64` so values with
-/// the high bit set render as the original unsigned magnitude
-/// (matching the LLVM backend's `koja_format_u64` path).
+/// Signed widths render in decimal. Unsigned widths reinterpret the
+/// stored `i64` through `u64` first.
 fn format_int(ty: IntType, raw: i64) -> String {
     if ty.is_signed() {
         format!("{raw}")

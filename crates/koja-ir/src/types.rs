@@ -24,11 +24,6 @@ impl std::fmt::Display for ValueId {
 /// identity, not separate fields. `Float32` / `Float64` are IEEE 754
 /// payloads (copy types per `LANGUAGE.md`). `String` carries raw
 /// UTF-8, which backends materialize per [`IRType::String`].
-///
-/// **Transient invariant**: the seal pass currently asserts only
-/// `Int64` / `Float64` flow through. The other width variants exist
-/// in the vocabulary so future stdlib stub expansion + literal width
-/// inference can stamp them without reshuffling the IR shape.
 #[derive(Debug, Clone, PartialEq)]
 pub enum ConstValue {
     /// Empty / literal-only `Binary` payload: exactly `bytes.len()`
@@ -161,10 +156,9 @@ pub enum BinaryEndian {
 
 /// Signedness modifier on an integer binary segment. Mirrors the
 /// AST [`koja_ast::ast::BinarySignedness`] one-for-one. Does not
-/// affect packing (we always pack the low `width` bits of the
-/// already-evaluated value). Kept on the IR for round-trip with
-/// future binary patterns where signed vs unsigned changes the
-/// extraction shape.
+/// affect packing, which always takes the low `width` bits of the
+/// already-evaluated value. Binary patterns read it to pick sign or
+/// zero extension.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BinarySign {
     Signed,
@@ -372,83 +366,26 @@ impl ConcatKind {
     }
 }
 
-/// The IR type lattice. Mirrors [`ConstValue`] one-for-one on the
-/// integer + float side, where each Koja stdlib `Int{N}` / `UInt{N}` /
-/// `Float{N}` primitive struct gets its own variant. Width and
-/// signedness/precision are part of the variant identity, not
-/// separate fields, so illegal states (e.g. `bits: 7`) are
-/// unrepresentable.
+/// The IR type lattice. Every variant names a fully monomorphized
+/// type. Generic decl bodies are never lowered to `IRType`, since
+/// [`crate::generics::instantiate`] substitutes concrete args first.
 ///
-/// `Float32` / `Float64` are IEEE 754 by-value primitives, **copy
-/// types** per `LANGUAGE.md`, distinct from `String`'s move-type
-/// status. `Float64` backs `Global.Float`, while `Float32`
-/// only enters via explicit annotations / casts (a future slice).
-///
-/// `String` / `Binary` / `Bits` are the bit-length-header family.
-/// The LLVM value for each is a single default-AS pointer whose
-/// pointee is `[i64 bit_length][payload bytes]`, with the `i64`
-/// placed 8 bytes **before** the pointer. Per-type rules:
-///
-/// - `String`: UTF-8 payload, trailing `\0` (libc compat),
-///   `bit_length = byte_length * 8`.
-/// - `Binary`: arbitrary bytes, no terminator, `bit_length =
-///   byte_length * 8` (always a multiple of 8).
-/// - `Bits`: arbitrary bits, no terminator, `bit_length` may be a
-///   non-multiple of 8. The payload occupies `ceil(bit_length / 8)`
-///   bytes and trailing bits in the last byte are zero-padded.
-///
-/// All three are heap-allocated, and the future drop-glue pass frees
-/// them at scope exit via [`crate::IRInstruction::DropLocal`].
-/// `CString` is a struct, not a member of this family.
-///
-/// `Struct(symbol)` names a user-declared (non-generic) struct by
-/// the same mangled [`IRSymbol`] used as the key on
-/// [`crate::IRPackage::structs`]. Field layout is recovered through
-/// the matching [`crate::IRStructDecl`], and backends that need the
-/// per-field width / offset thread that lookup directly. Generic
-/// instantiations get a richer key in the follow-up generics slice.
-///
-/// `Enum(symbol)` names a user-declared enum by the same mangled
-/// [`IRSymbol`] used as the key on [`crate::IRPackage::enums`].
-/// Variant layout is recovered through the matching
-/// [`crate::IREnumDecl`], and the LLVM backend lays it out as an outer
-/// opaque blob with per-variant complete + payload structs (see
-/// [`crate::IREnumDecl`]'s module-level docs).
-///
-/// `CPtr(pointee)` is the FFI pointer wrapper. At the LLVM layer
-/// every `CPtr<T>` lowers to an opaque `ptr` (default address
-/// space), regardless of `T`. The pointee is preserved here so
-/// the IR carries enough type information for future safety checks
-/// and for surfaces (mangling, debug printing) that distinguish
-/// `CPtr<UInt8>` from `CPtr<Float32>`. Pointee variants are
-/// themselves unrestricted, so `CPtr<CPtr<T>>` is a valid shape.
-///
-/// `List(element)` is the heap-backed dynamic array. Layout is
-/// `{ buf_ptr: i8*, length: i64, capacity: i64 }` regardless of
-/// `T`. The element type is preserved so backends can compute
-/// element size for indexed addressing. Like `CPtr`, `List` is
-/// modeled as a primitive (no `IRStructDecl` ever materializes)
-/// because all storage lives off-heap behind `buf_ptr`.
-///
-/// `Map(key, value)` and `Set(element)` are the heap-backed
-/// hash-tables. Both share a common 4-field layout,
-/// `{ entries_ptr: i8*, states_ptr: i8*, length: i64, capacity: i64 }`,
-/// regardless of the inner types, and backends specialize entry-stride
-/// per `(K, V)` / `T` instantiation. Same primitive treatment as
-/// `List`, so no `IRStructDecl` materializes, and storage lives off-heap.
-///
-/// **Concrete-only**: every variant of `IRType` names a fully
-/// monomorphized type. There is no "generic parameter" variant,
-/// because generic-decl bodies are never lowered to `IRType`. Instead
-/// [`crate::generics::instantiate`] substitutes [`koja_ast::identifier::ResolvedType`]
-/// templates against concrete args from the typecheck registry,
-/// then lowers the substituted shape into concrete `IRType`s. This
-/// is the IR vocabulary backends consume.
+/// Width and signedness are part of each integer and float variant's
+/// identity, mirroring [`ConstValue`]. `Struct` and `Enum` name a
+/// user declaration by the mangled [`IRSymbol`] that keys
+/// [`crate::IRPackage::structs`] and [`crate::IRPackage::enums`].
+/// `CPtr`, `List`, `Map`, and `Set` are primitives with no decl.
+/// Backends own the storage layout of every variant.
 #[derive(Debug, Clone, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub enum IRType {
+    /// Arbitrary bytes, `bit_length` a multiple of 8.
     Binary,
+    /// Arbitrary bits. The payload occupies `ceil(bit_length / 8)`
+    /// bytes and the trailing bits of the last byte are zero.
     Bits,
     Bool,
+    /// FFI pointer. The pointee is kept for mangling and display, and
+    /// `CPtr<CPtr<T>>` is a valid shape.
     CPtr(Box<IRType>),
     Enum(IRSymbol),
     Float32,
@@ -476,6 +413,7 @@ pub enum IRType {
         value: Box<IRType>,
     },
     Set(Box<IRType>),
+    /// UTF-8 bytes with a trailing `\0` for libc compatibility.
     String,
     Struct(IRSymbol),
     /// Anonymous tuple. Identity is the element shape, so the type
@@ -488,14 +426,10 @@ pub enum IRType {
     UInt32,
     UInt64,
     /// Tagged union of two or more member types. `mangled` is the
-    /// canonical symbol (`Union_<m1>_or_<m2>...`) shared across
-    /// every distinct surface union with the same canonical
-    /// member set, so backends key their cached layout off it.
-    /// `members` is the canonical (sorted) member type vector
-    /// inherited from the surface `ResolvedType::Union`. Backends
-    /// look up `mangled` in the program-level `UnionDecl` registry
-    /// to discover `max_payload_size` for the `{ i64, [M x i64] }`
-    /// LLVM struct layout.
+    /// canonical symbol (`Union_<m1>_or_<m2>...`) shared by every
+    /// surface union with the same member set, and `members` is that
+    /// set in canonical order. Backends key their layout off
+    /// `mangled` through the program-level `UnionDecl` registry.
     Union {
         mangled: IRSymbol,
         members: Vec<IRType>,
@@ -511,29 +445,12 @@ impl IRType {
         matches!(self, Self::Float32 | Self::Float64)
     }
 
-    /// True for types value-semantics lowering acquires on binding and
-    /// releases at scope exit: the heap leaves (`Binary` / `Bits` /
-    /// `String`) plus every composite that *might* own heap storage
-    /// (collections, boxed-recursive `Indirect`, and any struct / enum
-    /// / union, conservatively).
-    ///
-    /// The predicate is intentionally structural, because generic struct /
-    /// enum instantiations don't exist yet during per-package lowering,
-    /// so the precise "does this aggregate actually own heap" question
-    /// is deferred to the post-merge [`crate::elaborate`] pass (see
-    /// [`crate::elaborate::needs_drop`]). The conservatism is safe and
-    /// cheap, since a composite that turns out to be all-`Copy` gets no glue
-    /// registered, so the backend renders its `Clone` as a register
-    /// copy and its `Drop` as a no-op.
-    ///
-    /// Closures (`Function`) are counted here too, since a closure value
-    /// owns a heap env, cloned by an `rc++` on the env block and
-    /// released by an `rc--` that, at zero, runs the body's
-    /// capture-release glue (`FunctionKind::DropClosureGlue`) before
-    /// freeing. The acquire / release ops are picked structurally, so
-    /// the backend renders a `Clone` / `Drop` of `Function` inline
-    /// against the env header, dispatching capture teardown through
-    /// the env-carried glue pointer rather than the value's type.
+    /// True for types lowering acquires on binding and releases at
+    /// scope exit. This is structural and conservative, since every
+    /// struct, enum, tuple, and union counts whether or not it owns
+    /// heap. The precise question is answered after merge by
+    /// [`crate::elaborate::needs_drop`], and an all-`Copy` composite
+    /// gets no glue.
     pub fn is_heap_managed(&self) -> bool {
         match self {
             Self::Binary | Self::Bits | Self::String => true,

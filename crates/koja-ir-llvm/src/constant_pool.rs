@@ -1,7 +1,7 @@
 //! Flat snapshot of every package's pooled compound constants,
-//! flattened once at compile entry so [`EmitContext`] can resolve a
-//! [`koja_ir::IRInstruction::LoadConst`] without threading
-//! `&[IRPackage]` through [`crate::emit::emit_instruction`]. Keys use
+//! flattened once at compile entry so [`crate::ctx::EmitContext`] can
+//! resolve a [`koja_ir::IRInstruction::LoadConst`] without threading
+//! `&[IRPackage]` through instruction emission. Keys use
 //! [`IRSymbol`] identity (opaque to LLVM), not detached `String`/`&str`,
 //! matching [`koja_ir::IRPackage::constants`].
 
