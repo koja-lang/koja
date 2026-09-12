@@ -5,12 +5,12 @@
 //!
 //! Eval values share `Rc`s freely (clone glue is an identity here),
 //! so buffer reuse is gated on true runtime uniqueness rather than
-//! the IR proof alone. Before the call the interpreter drops the
-//! holders the IR proves dead (the slot a rebind is about to
-//! overwrite and stale registers, see `release_dead_holders`) and
-//! moves the receiver's register into the call args. When that leaves
-//! the backing storage with a single strong reference the twin
-//! mutates it in place. Any other holder (an earlier alias, a closure
+//! the IR proof alone. Before the call the interpreter clears the
+//! slot the IR hands over (`ConsumeLocal`), drops the registers it
+//! can prove dead (see `release_dead_registers`), and moves the
+//! receiver's register into the call args. When that leaves the
+//! backing storage with a single strong reference the twin mutates
+//! it in place. Any other holder (an earlier alias, a closure
 //! capture, a read of the accumulator in another block of the loop)
 //! forces the copying original, which produces the same result.
 

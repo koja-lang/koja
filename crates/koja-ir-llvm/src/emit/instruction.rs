@@ -102,6 +102,7 @@ pub(crate) fn emit_instruction<'ctx>(
             values.insert(*dest, constant);
             Ok(())
         }
+        IRInstruction::ConsumeLocal { .. } => Ok(()),
         IRInstruction::DropLocal { local, ty } => locals::emit_drop_local(ctx, *local, ty),
         IRInstruction::EnumConstruct {
             dest,

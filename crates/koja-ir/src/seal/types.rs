@@ -306,7 +306,9 @@ fn instruction_result_type(
         IRInstruction::Concat { dest, kind, .. } => (*dest, kind.ir_type()),
         IRInstruction::Const { dest, value } => (*dest, const_type(value)),
         IRInstruction::DeepCopy { dest, ty, .. } => (*dest, ty.clone()),
-        IRInstruction::DropLocal { .. } | IRInstruction::DropValue { .. } => return None,
+        IRInstruction::ConsumeLocal { .. }
+        | IRInstruction::DropLocal { .. }
+        | IRInstruction::DropValue { .. } => return None,
         IRInstruction::EnumConstruct { dest, ty, .. } => (*dest, IRType::Enum(ty.clone())),
         IRInstruction::EnumPayloadFieldGet {
             dest, field_type, ..
@@ -454,7 +456,7 @@ fn seal_instruction_types(
             require_value_type(values, *lhs, &expected, owner, "Concat lhs");
             require_value_type(values, *rhs, &expected, owner, "Concat rhs");
         }
-        IRInstruction::Const { .. } => {}
+        IRInstruction::Const { .. } | IRInstruction::ConsumeLocal { .. } => {}
         IRInstruction::DeepCopy { source, ty, .. } => {
             require_value_type(values, *source, ty, owner, "copy source");
         }

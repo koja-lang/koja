@@ -1,6 +1,8 @@
 //! Consume-fusion sub-pass. Rewrites a buffer-building instruction
 //! whose receiver value dies at that instruction into its consuming
-//! form, deleting the death.
+//! form. An owned temp's death is deleted. A slot's death is replaced
+//! by a [`IRInstruction::ConsumeLocal`] before the site, so the
+//! handoff of the slot's storage is explicit in the IR.
 //!
 //! A receiver released right after `r = f(recv, ...)` would have its
 //! storage freed there anyway. Fusing that release into the
@@ -32,19 +34,21 @@
 //!   `lower::body::store_owned_into_local`): the site takes its
 //!   receiver from `recv = read x` and is followed by the
 //!   reassignment trio `stale = read x`, `drop_value(stale)`,
-//!   `write x, r`. The stale read and its drop are deleted. Between
-//!   the site and the trio nothing may read `recv` or touch `x`.
-//!   Further eligible sites there carry the result forward
+//!   `write x, r`. The stale read and its drop are deleted and a
+//!   `consume_local x` is placed before the site. Between the site
+//!   and the trio nothing may read `recv` or touch `x`. Further
+//!   eligible sites there carry the result forward
 //!   (`x = x.append(a).append(b)`, `s = s <> a <> b`), and the trio
 //!   must write the last carrier, so every link of the chain fuses.
 //! - **Slot exit** (`f(n - 1, acc.append(x))` in tail position): the
 //!   site takes its receiver from `recv = read x` and the next
 //!   instruction touching `x` is its `drop_local x`, with nothing
 //!   reading `recv` before it or in the terminator. The slot's
-//!   storage dies at that drop, so the drop is deleted and the site
-//!   takes it over. The slot then holds a dead pointer that nothing
-//!   reads: a tail-call back-edge stores the new arg over it, or the
-//!   function returns.
+//!   storage dies at that drop, so the drop is deleted and a
+//!   `consume_local x` before the site hands the storage over. The
+//!   slot then holds a dead pointer that nothing reads, since a
+//!   tail-call back-edge stores the new arg over it or the function
+//!   returns.
 //!
 //! Any shape that does not match keeps the copying form. Twins are
 //! registered per fused instantiation with the original's signature,
@@ -213,13 +217,28 @@ fn eligible_mutators(packages: &[IRPackage]) -> EligibleMutators {
 enum ReceiverDeath {
     /// `drop_value(recv)` at the index. Deleted.
     OwnedTemp { drop_index: usize },
-    /// `drop_local x` at the index, where `x` is the slot the receiver
-    /// was read from. Deleted.
-    SlotExit { drop_index: usize },
-    /// `stale = read x` at the index, immediately followed by
-    /// `drop_value(stale)` and `write x, result`. The first two are
+    /// `drop_local slot` at the index, where `slot` is the one the
+    /// receiver was read from. Deleted.
+    SlotExit { drop_index: usize, slot: IRLocalId },
+    /// `stale = read slot` at the index, immediately followed by
+    /// `drop_value(stale)` and `write slot, result`. The first two are
     /// deleted.
-    SlotRebind { stale_read_index: usize },
+    SlotRebind {
+        slot: IRLocalId,
+        stale_read_index: usize,
+    },
+}
+
+impl ReceiverDeath {
+    /// The slot the site takes over, when the receiver was read from one.
+    fn consumed_slot(&self) -> Option<IRLocalId> {
+        match self {
+            ReceiverDeath::OwnedTemp { .. } => None,
+            ReceiverDeath::SlotExit { slot, .. } | ReceiverDeath::SlotRebind { slot, .. } => {
+                Some(*slot)
+            }
+        }
+    }
 }
 
 /// Scan one block for eligible sites whose receiver dies there,
@@ -237,14 +256,23 @@ fn fuse_block(
             continue;
         };
         match death {
-            ReceiverDeath::OwnedTemp { drop_index } | ReceiverDeath::SlotExit { drop_index } => {
+            ReceiverDeath::OwnedTemp { drop_index }
+            | ReceiverDeath::SlotExit { drop_index, .. } => {
                 block.instructions.remove(drop_index);
             }
-            ReceiverDeath::SlotRebind { stale_read_index } => {
+            ReceiverDeath::SlotRebind {
+                stale_read_index, ..
+            } => {
                 block
                     .instructions
                     .drain(stale_read_index..stale_read_index + 2);
             }
+        }
+        if let Some(local) = death.consumed_slot() {
+            block
+                .instructions
+                .insert(index, IRInstruction::ConsumeLocal { local });
+            index += 1;
         }
         site.apply(&mut block.instructions[index], eligible, fused);
         index += 1;
@@ -316,6 +344,7 @@ fn slot_rebind_death(
         {
             return rebind_trio_matches(block, index, *dest, slot, carrier).then_some(
                 ReceiverDeath::SlotRebind {
+                    slot,
                     stale_read_index: index,
                 },
             );
@@ -355,6 +384,7 @@ fn slot_exit_death(
         {
             return Some(ReceiverDeath::SlotExit {
                 drop_index: site_index + 1 + offset,
+                slot,
             });
         }
         if instruction.touches_local(slot) {

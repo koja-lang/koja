@@ -71,6 +71,24 @@ fn alias_taken_before_a_fused_rebind_keeps_its_value() {
 }
 
 #[test]
+fn alias_taken_before_a_tail_consumed_append_keeps_its_value() {
+    // `ys` is still read after the append, so the twin must copy
+    // rather than mutate the shared list.
+    let source = "
+        fn build(n: Int, acc: List<Int>, seen: Int) -> Int
+          if n == 0
+            return seen
+          end
+          ys = acc
+          build(n - 1, acc.append(n), ys.length())
+        end
+
+        build(3, [], -1)
+        ";
+    assert_eq!(evaluate(&dedent(source)).unwrap(), Value::Int(2));
+}
+
+#[test]
 fn owned_temp_chain_consumes_the_intermediate() {
     let source = "
         seed: List<Int> = List.new()

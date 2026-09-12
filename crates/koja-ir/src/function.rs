@@ -337,7 +337,8 @@ impl IRFunction {
         for block in &self.blocks {
             for instruction in &block.instructions {
                 match instruction {
-                    IRInstruction::DropLocal { local, .. }
+                    IRInstruction::ConsumeLocal { local }
+                    | IRInstruction::DropLocal { local, .. }
                     | IRInstruction::LocalDecl { local, .. }
                     | IRInstruction::LocalRead { local, .. }
                     | IRInstruction::LocalWrite { local, .. } => max = max.max(local.as_u32()),
@@ -609,6 +610,12 @@ pub enum IRInstruction {
     },
     /// `dest = <constant>`.
     Const { dest: ValueId, value: ConstValue },
+    /// Hand the storage held by `local`'s slot to the consuming site
+    /// that follows. Consume fusion emits this in place of the death
+    /// it fused away. Afterwards the slot holds a dead value that
+    /// nothing reads before a `LocalWrite` or the frame exit.
+    /// Produces no value.
+    ConsumeLocal { local: IRLocalId },
     /// `dest = deep_copy(source)`: a process-boundary copy that
     /// yields a *physically* independent value, with no heap storage
     /// shared with `source`, transitively. Where [`Self::Clone`]
@@ -1015,7 +1022,8 @@ impl IRInstruction {
             | IRInstruction::UnionPayloadGet { dest, .. }
             | IRInstruction::UnionTagGet { dest, .. }
             | IRInstruction::UnionWrap { dest, .. } => Some(*dest),
-            IRInstruction::DropLocal { .. }
+            IRInstruction::ConsumeLocal { .. }
+            | IRInstruction::DropLocal { .. }
             | IRInstruction::DropValue { .. }
             | IRInstruction::LocalDecl { .. }
             | IRInstruction::LocalWrite { .. }
@@ -1025,10 +1033,8 @@ impl IRInstruction {
         }
     }
 
-    /// Whether this instruction reads `value` as an operand. The
-    /// consume-fusion pass uses it to prove a receiver value has no
-    /// use between its call and its death.
-    pub(crate) fn uses_value(&self, value: ValueId) -> bool {
+    /// Whether this instruction reads `value` as an operand.
+    pub fn uses_value(&self, value: ValueId) -> bool {
         match self {
             IRInstruction::BinaryConstruct { segments, .. } => {
                 segments.iter().any(|segment| match segment {
@@ -1049,6 +1055,7 @@ impl IRInstruction {
                 *source == value
             }
             IRInstruction::Const { .. }
+            | IRInstruction::ConsumeLocal { .. }
             | IRInstruction::DropLocal { .. }
             | IRInstruction::LoadCapture { .. }
             | IRInstruction::LoadConst { .. }
@@ -1093,7 +1100,8 @@ impl IRInstruction {
     /// binary-match segment binds.
     pub fn touches_local(&self, local: IRLocalId) -> bool {
         match self {
-            IRInstruction::DropLocal { local: l, .. }
+            IRInstruction::ConsumeLocal { local: l }
+            | IRInstruction::DropLocal { local: l, .. }
             | IRInstruction::LocalDecl { local: l, .. }
             | IRInstruction::LocalRead { local: l, .. }
             | IRInstruction::LocalWrite { local: l, .. } => *l == local,
@@ -1167,7 +1175,7 @@ impl IRTerminator {
 
     /// Whether `value` flows out of the block through this terminator,
     /// as a branch edge arg, the returned value, or a tail-call arg.
-    pub(crate) fn uses_value(&self, value: ValueId) -> bool {
+    pub fn uses_value(&self, value: ValueId) -> bool {
         match self {
             IRTerminator::Branch(target) => target.args.contains(&value),
             IRTerminator::CondBranch {

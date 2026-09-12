@@ -10,8 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - `try self.f(...)` in tail position of a `! E` function is now a real tail call, so accumulator recursion through `try` runs in constant stack and keeps one live copy of the accumulator instead of one per step.
-- Passing `acc.append(x)` as an argument to a tail call, such as `build(n - 1, acc.append(n))`, now reuses the list buffer instead of copying it on every step.
-- A collection or string parameter that is not read again after a mutator or `<>` now hands its buffer to that call instead of copying it.
+- Recursive builder functions such as `build(n - 1, acc.append(n))` and `build(n - 1, acc <> piece)` now run in linear time under the interpreter as well as in compiled binaries, instead of copying the accumulator on every step.
 
 ## [0.18.3] - 2026-09-07
 

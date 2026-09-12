@@ -1,13 +1,16 @@
 //! Consume-fusion regressions (`elaborate::consume`). Pins that a
 //! `List.append` / `Map.put` / `Set.insert` call whose receiver value
 //! dies at the call site is rewritten to its `.$consume$` twin with
-//! the death deleted, that the twin registers as an empty-bodied
-//! `Consuming` intrinsic next to the original, that a `String` /
-//! `Binary` `<>` whose lhs dies there is flagged `consumes_lhs`, and
-//! that a receiver that stays live keeps the copying form.
+//! the death deleted (and a `ConsumeLocal` handing over the slot when
+//! the receiver came from one), that the twin registers as an
+//! empty-bodied `Consuming` intrinsic next to the original, that a
+//! `String` / `Binary` `<>` whose lhs dies there is flagged
+//! `consumes_lhs`, and that a receiver that stays live keeps the
+//! copying form.
 
 use koja_ir::{
-    ConcatKind, ConsumingMethod, FunctionKind, IRBasicBlock, IRInstruction, IRIntrinsicId, IRScript,
+    ConcatKind, ConsumingMethod, FunctionKind, IRBasicBlock, IRInstruction, IRIntrinsicId,
+    IRLocalId, IRScript, ValueId,
 };
 
 mod common;
@@ -61,6 +64,38 @@ fn consuming_concats(blocks: &[IRBasicBlock]) -> usize {
         .into_iter()
         .filter(|(consumes_lhs, _)| *consumes_lhs)
         .count()
+}
+
+/// The slots handed over by every `ConsumeLocal` across `blocks`, in
+/// emission order.
+fn consumed_slots(blocks: &[IRBasicBlock]) -> Vec<IRLocalId> {
+    all_instructions(blocks)
+        .filter_map(|instruction| match instruction {
+            IRInstruction::ConsumeLocal { local } => Some(*local),
+            _ => None,
+        })
+        .collect()
+}
+
+/// The slot handed over directly before the fused call at
+/// `call_index`, or `None` when no `ConsumeLocal` sits there.
+fn slot_consumed_before(block: &IRBasicBlock, call_index: usize) -> Option<IRLocalId> {
+    match block.instructions.get(call_index.checked_sub(1)?) {
+        Some(IRInstruction::ConsumeLocal { local }) => Some(*local),
+        _ => None,
+    }
+}
+
+/// The slot read into `value` within `block`, when its def is a
+/// `LocalRead`.
+fn slot_read_into(block: &IRBasicBlock, value: ValueId) -> Option<IRLocalId> {
+    block
+        .instructions
+        .iter()
+        .find_map(|instruction| match instruction {
+            IRInstruction::LocalRead { dest, local, .. } if *dest == value => Some(*local),
+            _ => None,
+        })
 }
 
 /// The registered twin function whose symbol contains `needle`,
@@ -160,12 +195,16 @@ fn fused_rebind_deletes_the_stale_read_and_drop() {
         }) else {
             continue;
         };
-        assert!(
-            matches!(
-                block.instructions.get(call_index + 1),
-                Some(IRInstruction::LocalWrite { .. })
-            ),
-            "a fused rebind should be followed directly by the slot write",
+        let Some(IRInstruction::LocalWrite { local: written, .. }) =
+            block.instructions.get(call_index + 1)
+        else {
+            panic!("a fused rebind should be followed directly by the slot write");
+        };
+        assert_eq!(
+            slot_consumed_before(block, call_index),
+            Some(*written),
+            "the fused rebind should hand over the slot it rewrites: {:#?}",
+            block.instructions,
         );
     }
 }
@@ -188,6 +227,11 @@ fn owned_temp_chain_fuses_every_append() {
         "the `seed` slot dies at the exit drop and the intermediate is an owned temp, so both fuse",
     );
     assert_eq!(copying_calls(blocks, "append"), 0);
+    assert_eq!(
+        consumed_slots(blocks).len(),
+        1,
+        "only the first link reads a slot, so only it hands one over",
+    );
 }
 
 #[test]
@@ -232,6 +276,26 @@ fn append_passed_to_a_tail_call_fuses_at_the_slot_exit() {
     assert_eq!(
         list_drops, 0,
         "the accumulator slot's exit drop is the death the fusion deleted",
+    );
+    let call_index = fused_block
+        .instructions
+        .iter()
+        .position(|instruction| {
+            matches!(
+                instruction,
+                IRInstruction::Call { callee, .. } if callee.mangled().contains(".$consume$")
+            )
+        })
+        .expect("the fused append is in this block");
+    let IRInstruction::Call { args, .. } = &fused_block.instructions[call_index] else {
+        unreachable!("position matched a Call");
+    };
+    let receiver_slot = slot_read_into(fused_block, args[0]).expect("the receiver is a slot read");
+    assert_eq!(
+        slot_consumed_before(fused_block, call_index),
+        Some(receiver_slot),
+        "the exit drop is replaced by a handoff of the accumulator slot: {:#?}",
+        fused_block.instructions,
     );
     // The fused result is an owned temp forwarded through the tail
     // call, so it moves through the back-edge with no clone glue.
