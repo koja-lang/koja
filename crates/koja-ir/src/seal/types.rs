@@ -120,6 +120,8 @@ fn insert_unique<'a, T>(
     }
 }
 
+/// Type-check every function body in `package`. Bodiless kinds
+/// (externs, intrinsics, backend-synthesized glue) are skipped.
 pub(super) fn seal_package_types(package: &IRPackage, environment: &TypeEnvironment<'_>) {
     for function in package.functions.values() {
         seal_function_types(function, environment);
@@ -145,6 +147,8 @@ impl ReturnSite<'_> {
     }
 }
 
+/// Type-check a script body, which has no params and allows a
+/// `Return` anywhere.
 pub(super) fn seal_script_body_types(
     blocks: &[IRBasicBlock],
     return_type: &IRType,
@@ -172,6 +176,9 @@ fn seal_function_types(function: &IRFunction, environment: &TypeEnvironment<'_>)
     );
 }
 
+/// Two passes over a body. The first collects every local and value
+/// type, the second checks each use against them, so use order
+/// within the body does not matter.
 fn seal_body_types(
     blocks: &[IRBasicBlock],
     params: &[IRFunctionParam],
@@ -213,6 +220,8 @@ fn collect_local_types(
             }
         }
     }
+    // A param slot only exists when the body promoted the param, so
+    // a missing decl is not an error.
     for param in params {
         let Some(declared) = locals.get(&param.local_id) else {
             continue;
@@ -260,6 +269,8 @@ fn insert_value_type(
     }
 }
 
+/// The `(dest, type)` an instruction defines, or `None` for
+/// instructions with no result.
 fn instruction_result_type(
     instruction: &IRInstruction,
     environment: &TypeEnvironment<'_>,
@@ -799,6 +810,8 @@ fn seal_branch_types(
     values: &BTreeMap<ValueId, IRType>,
     owner: &str,
 ) {
+    // The structural seal already rejects unknown targets, so only
+    // the argument types are checked here.
     let Some(block) = blocks.iter().find(|block| block.id == target) else {
         return;
     };

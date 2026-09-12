@@ -148,6 +148,8 @@ fn emit_valid_string<'ctx>(
             "",
         )
         .or_ice()?;
+    // SAFETY: the block was sized to `byte_len + 1`, so the NUL slot
+    // is inside it.
     let nul_ptr = unsafe {
         ctx.builder
             .build_in_bounds_gep(ctx.context.i8_type(), payload_ptr, &[byte_len], "nul_ptr")

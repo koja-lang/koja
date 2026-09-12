@@ -17,8 +17,8 @@ use super::closures::seal_closure_decls;
 use super::enums::seal_enum_decls;
 use super::structs::seal_struct_decls;
 use super::{
-    instruction_operands, require_supported_const, require_supported_type, seal_panic,
-    terminator_operands, terminator_targets,
+    instruction_operands, require_supported_type, seal_panic, terminator_operands,
+    terminator_targets,
 };
 
 pub(super) fn seal_package(pkg: &IRPackage) {
@@ -284,25 +284,19 @@ pub(super) fn seal_block(
     block_params: &BTreeMap<IRBlockId, Vec<IRType>>,
 ) {
     for instruction in &block.instructions {
-        match instruction {
-            IRInstruction::Const { value, dest } => {
-                require_supported_const(value, &|| format!("{owner} const instruction at {dest}"));
-            }
-            IRInstruction::Receive { after, arms, .. } => {
-                for target in arms
-                    .iter()
-                    .map(|arm| arm.body)
-                    .chain(after.iter().map(|after| after.body))
-                {
-                    if !block_ids.contains(&target) {
-                        seal_panic(&format!(
-                            "{owner} block {} Receive targets unknown block `{target}`",
-                            block.id,
-                        ));
-                    }
+        if let IRInstruction::Receive { after, arms, .. } = instruction {
+            for target in arms
+                .iter()
+                .map(|arm| arm.body)
+                .chain(after.iter().map(|after| after.body))
+            {
+                if !block_ids.contains(&target) {
+                    seal_panic(&format!(
+                        "{owner} block {} Receive targets unknown block `{target}`",
+                        block.id,
+                    ));
                 }
             }
-            _ => {}
         }
     }
     for target in terminator_targets(&block.terminator) {

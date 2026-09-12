@@ -1,5 +1,5 @@
 //! Eval handlers for the `Equality` intrinsic family: `Bool`,
-//! 8 integer cells (flattened to [`Value::Int(i64)`]), `Float` /
+//! 8 integer cells (flattened to [`Value::Int`]), `Float` /
 //! `Float32` (IEEE-754 ordered: `NaN != NaN`), `String`, and
 //! `Binary`. Mismatched shapes surface a typed
 //! [`RuntimeError::TypeMismatch`] instead of coercing.

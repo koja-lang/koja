@@ -4,8 +4,8 @@
 //! [`koja_ir_llvm::intrinsics::process`]. Pins:
 //!
 //! - **Spawn**: serializes config to a stack alloca, calls
-//!   `koja_rt_spawn(wrapper, blob, size)`, wraps the returned pid
-//!   in the `Ref<M, R>` struct.
+//!   `koja_rt_spawn(wrapper, blob, size, drop_glue)`, wraps the
+//!   returned pid in the `Ref<M, R>` struct.
 //! - **SpawnWrapper body**: declared as `void(i8*)`. Loads the
 //!   typed config, calls `<state>.start`, branches on the
 //!   `Result.tag`, chains into `<state>.run` on Ok.

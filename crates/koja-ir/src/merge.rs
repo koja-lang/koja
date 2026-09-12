@@ -1,5 +1,5 @@
 //! Merge sub-pass: stitch the per-package [`IRPackage`] fragments
-//! produced by [`crate::lower_package`] into a single working
+//! produced by [`crate::lower::lower_package`] into a single working
 //! [`IRProgram`].
 //!
 //! Multiple source groups may share a package label, notably when
@@ -12,6 +12,9 @@ use crate::IRProgram;
 use crate::function::IRSymbol;
 use crate::package::IRPackage;
 
+/// Fold fragments that share a package label into one [`IRPackage`],
+/// keeping first-seen order. A symbol declared in two fragments of
+/// the same package panics.
 pub(crate) fn coalesce(fragments: Vec<IRPackage>) -> Vec<IRPackage> {
     let mut packages: Vec<IRPackage> = Vec::new();
     for mut fragment in fragments {
@@ -56,6 +59,8 @@ pub(crate) fn coalesce(fragments: Vec<IRPackage>) -> Vec<IRPackage> {
     packages
 }
 
+/// Wrap coalesced packages into a working [`IRProgram`]. Link
+/// libraries are collected by a later pass.
 pub(crate) fn merge(packages: Vec<IRPackage>, entry_point: IRSymbol) -> IRProgram {
     IRProgram {
         entry_point,

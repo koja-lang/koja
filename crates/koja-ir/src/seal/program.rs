@@ -15,6 +15,9 @@ use super::seal_panic;
 use super::structs::{package_instructions, seal_struct_ops};
 use super::types::{TypeEnvironment, seal_package_types};
 
+/// Assert every sealed-IR invariant over a merged program. Per-package
+/// checks run first, then the cross-package ones that need the whole
+/// function table.
 pub(crate) fn seal_program(program: &IRProgram) {
     let Some(entry) = program.function(program.entry_point.mangled()) else {
         seal_panic(&format!(

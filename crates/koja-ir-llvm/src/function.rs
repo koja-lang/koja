@@ -29,29 +29,11 @@ use crate::error::{IceExt, LlvmError};
 use crate::intrinsics;
 use crate::types::{closure_body_signature, env_struct_type, ir_basic_type};
 
-/// Declare an LLVM function for `function`. The signature mirrors
-/// the IR exactly: each [`koja_ir::IRFunctionParam::ty`]
-/// becomes its LLVM basic type and the return type does the same.
-/// `Unit` returns / params surface as feature-gap diagnostics
-/// through [`ir_basic_type`].
-///
-/// The LLVM symbol name is picked per-kind:
-///
-/// - `Regular` / `Intrinsic` declare under
-///   [`koja_ir::IRSymbol::mangled`] (the internal form).
-/// - `Extern(attrs)` declares under
-///   [`koja_ir::IRExternAttrs::link_name`] when present, or
-///   the function's bare last segment otherwise (`TestApp.cosf` ->
-///   `cosf`). The IRSymbol stays the call-site's resolution key,
-///   regardless of the LLVM name.
-///
-/// Idempotent: if `module.get_function(name)` already exists for a
-/// previously-seen `link_name` (multiple decls of the same C
-/// symbol), reuse the existing handle rather than colliding. The
-/// returned [`FunctionValue`] is also registered in the
-/// `IRSymbol -> FunctionValue` index on `ctx` so call sites can
-/// resolve through [`EmitContext::declared_function`] without
-/// re-deriving the alias name.
+/// Declare an LLVM function for `function` and register it under its
+/// [`koja_ir::IRSymbol`] on `ctx`. `Extern` declares under its
+/// `link_name` (or bare last segment), everything else under the
+/// mangled name. Repeated decls of one C symbol reuse the existing
+/// handle.
 pub(crate) fn declare_function<'ctx>(
     ctx: &EmitContext<'ctx>,
     function: &IRFunction,
@@ -160,18 +142,11 @@ fn function_signature<'ctx>(
     })
 }
 
-/// Define a non-entry function's body. Dispatches on
-/// [`FunctionKind`]: `Regular` walks the IR basic blocks via
-/// [`emit::emit_block`]. `Intrinsic` routes to
-/// [`intrinsics::emit_intrinsic_body`] which synthesizes a body from
-/// the per-symbol emitter table. `Regular` helpers keep the natural
-/// `Return`-to-`ret` emission (only `main` gets the trampoline
-/// shape). Pre-creates one inkwell `BasicBlock` per IR block (a
-/// no-op for `Intrinsic`'s empty `blocks`) so `Branch` / `CondBranch`
-/// terminators can resolve to a real [`BasicBlock`]. The body's
-/// [`ValueMap`] is seeded with each [`koja_ir::IRFunctionParam`]
-/// bound to the matching `function.get_nth_param(i)` LLVM value
-/// before walking the entry block.
+/// Define a function's body, dispatching on [`FunctionKind`]. Bodies
+/// with IR blocks get one [`BasicBlock`] per IR block up front and a
+/// [`ValueMap`] seeded with the parameters, then walk through
+/// [`emit::emit_block`]. Glue and intrinsic kinds synthesize their
+/// bodies.
 pub(crate) fn define_function<'ctx>(
     ctx: &EmitContext<'ctx>,
     function: &IRFunction,
@@ -268,11 +243,9 @@ pub(crate) fn define_function<'ctx>(
             param_slots,
         });
     }
-    // Blocks unreachable from the entry block (e.g. the merge of a
-    // value-producing `if`/`else` whose arms both diverge) get
-    // `unreachable` instead of their natural terminator. The
-    // IR layer doesn't model `IRTerminator::Unreachable` yet.
-    // The LLVM boundary's reachability walk is the stand-in.
+    // Blocks no edge leads to (e.g. the merge of a value-producing
+    // `if`/`else` whose arms both diverge) get `unreachable` instead
+    // of their natural terminator.
     let reachable = emit::reachable_blocks(&function.blocks);
     let result = (|| -> Result<(), LlvmError> {
         for block in &function.blocks {
@@ -303,12 +276,8 @@ pub(crate) fn define_function<'ctx>(
 /// Create and register the entry-block `alloca` for every `LocalDecl`
 /// in a TCO body before any block is walked, returning the
 /// non-parameter `(local, type)` pairs for [`TcoFrame::body_slots`].
-///
-/// A `TailCall` back-edge zeroes every body slot, and the terminator
-/// can be emitted before a later block's `LocalDecl` has run, so the
-/// slots must all exist up front. [`crate::emit`]'s `LocalDecl`
-/// emitter detects the pre-registered slot and only emits its
-/// zero-init store.
+/// The back-edge can be emitted before a later block's `LocalDecl`
+/// has run, so the slots must all exist up front.
 fn preregister_local_slots<'ctx>(
     ctx: &EmitContext<'ctx>,
     function: &IRFunction,
@@ -343,7 +312,7 @@ fn preregister_local_slots<'ctx>(
 /// builder branches to the per-function `tco_loop` header, the
 /// rest of the IR entry's instructions emit into that header, and
 /// the natural terminator caps it. Subsequent
-/// [`IRTerminator::TailCall`] terminators in any block then store
+/// [`koja_ir::IRTerminator::TailCall`] terminators in any block then store
 /// fresh args into the matching param slots and branch back to
 /// the same `tco_loop` header, a constant-stack iteration.
 ///
@@ -395,7 +364,7 @@ fn emit_entry_with_tco_split<'ctx>(
 /// then `LocalWrite` pair (2). A heap-managed param additionally
 /// *acquires* the borrowed argument into its owning slot between the
 /// two (3): an inline `Clone` for a heap leaf / no-glue aggregate, or
-/// the `Call` the [`koja_ir::elaborate`] pass rewrote a composite
+/// the `Call` the `koja_ir` elaborate pass rewrote a composite
 /// clone into. The optional acquire is detected structurally (by its
 /// operand referencing the incoming param) so the count tracks
 /// whatever lowering and elaborate produced without re-deriving the

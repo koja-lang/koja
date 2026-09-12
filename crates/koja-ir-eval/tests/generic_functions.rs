@@ -1,16 +1,7 @@
-//! End-to-end runtime coverage for the generics slice's function
-//! arm. Every fixture here drives `parse -> check -> lower -> run` and
-//! observes the trailing [`Value`]. Green tests pin that the
-//! monomorphization closure pass produces functions the interpreter
-//! can dispatch by mangled symbol without any generics-aware code
-//! inside `koja-ir-eval`.
-//!
-//! The interpreter never sees a [`Resolution::TypeParam`]. It only
-//! consults [`IRSymbol`]s on `Call` instructions and [`IRFunction`]s
-//! in [`IRPackage::functions`]. So a green test for `id(1)` returning
-//! `1` is also a contract that the IR pipeline reached eval with a
-//! concrete `id_$Int64$` decl and a `Call` against the matching
-//! mangled symbol.
+//! End-to-end runtime coverage for generic functions. The interpreter
+//! has no generics-aware code, so a green test pins that
+//! monomorphization produced a concrete decl (`id_$Int64$`) and a
+//! `Call` against the matching mangled symbol.
 
 use koja_ast::util::dedent;
 use koja_ir_eval::Value;

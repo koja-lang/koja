@@ -1,6 +1,7 @@
 //! Eval's cooperative implementation of the `koja-runtime-core`
 //! scheduler protocol, the second implementor after the native
-//! `koja-runtime-posix` adapter.
+//! `koja-runtime-posix` adapter. Docs here name the native counterpart
+//! they mirror where one exists.
 //!
 //! The defining asymmetry with native: eval's [`Executor`] **is** the
 //! interpreter. A process is an `async` interpreter future owned here in
@@ -13,7 +14,7 @@
 //!
 //! The run loop itself is the shared [`CooperativeDriver`]. This module
 //! supplies the capabilities behind it. The running process reaches back
-//! into the core table through the [`CORE`] and [`CURRENT_PID`]
+//! into the core table through the `RUNTIME` and `CURRENT_PID`
 //! thread-locals, so `receive` and `spawn` need no parameter threading
 //! through the interpreter. `spawn` requests are staged in
 //! [`PENDING_SPAWNS`] and fulfilled by the executor (which holds the
@@ -64,24 +65,24 @@ pub(crate) type EvalDriver<'a, R> =
 
 thread_local! {
     /// The shared state (table, ready queue, timers) for the in-flight
-    /// `run_program`, installed for the duration of the run. The
-    /// cooperative analog of native's global `TABLE` / deques / `TIMERS`,
-    /// per-thread so parallel test runs stay isolated.
+    /// `run_program`, installed for the duration of the run. Per-thread
+    /// so parallel test runs stay isolated. Mirrors native `TABLE`, the
+    /// deques, and `TIMERS`.
     static RUNTIME: RefCell<Option<EvalRuntime>> = const { RefCell::new(None) };
     /// The PID the executor is currently resuming, set around each
-    /// `resume`. Mirrors native's per-worker `CURRENT_PID`.
+    /// `resume`. Mirrors native per-worker `CURRENT_PID`.
     static CURRENT_PID: Cell<Pid> = const { Cell::new(0) };
     /// Reductions the resuming process may still spend before a `YieldCheck`
     /// forces it to yield. Seeded from the PCB's budget on each resume so the
     /// per-check decrement is a plain `Cell` write, never a table borrow.
-    /// The cooperative analog of native's `REDUCTIONS_LEFT`.
+    /// Mirrors native `REDUCTIONS_LEFT`.
     static REDUCTIONS_LEFT: Cell<u32> = const { Cell::new(0) };
     /// `spawn` requests raised during a resume, drained and fulfilled by
     /// the executor before the driver claims the next process.
     static PENDING_SPAWNS: RefCell<Vec<PendingSpawn>> = const { RefCell::new(Vec::new()) };
-    /// Monotonic `Ref.call` correlation-token source, the cooperative
-    /// analog of native's `koja_rt_call_token`. Reset per run so token
-    /// values stay deterministic across parallel tests.
+    /// Monotonic `Ref.call` correlation-token source. Reset per run so
+    /// token values stay deterministic across parallel tests. Mirrors
+    /// native `koja_rt_call_token`.
     static NEXT_TOKEN: Cell<i64> = const { Cell::new(1) };
 }
 
@@ -154,8 +155,8 @@ fn with_table<T>(f: impl FnOnce(&EvalTable) -> T) -> T {
     with_runtime(|runtime| f(&runtime.core))
 }
 
-/// Pushes a wake fact onto the installed driver's ready queue. The
-/// cooperative analog of native's `route_wake`.
+/// Pushes a wake fact onto the installed driver's ready queue. Mirrors
+/// native `route_wake`.
 fn push_wake(wake: Wake) {
     with_runtime(|runtime| runtime.ready.borrow_mut().push(wake));
 }
@@ -312,8 +313,8 @@ pub(crate) fn clear_awaiting_reply(pid: Pid) {
 
 /// Routes `value` to `coords.caller_pid`'s reply slot if that process is
 /// still awaiting `coords.token`, returning whether it was delivered. A
-/// reply for a caller that already gave up is dropped here (`false`), the
-/// cooperative analog of native's `reply_or_expire`.
+/// reply for a caller that already gave up is dropped here (`false`).
+/// Mirrors native `reply_or_expire`.
 pub(crate) fn reply(coords: ReplyInfo, value: Value) -> bool {
     let caller = coords.caller_pid;
     let token = coords.token;
@@ -367,17 +368,17 @@ pub(crate) fn parent() -> Option<Pid> {
 }
 
 /// Sets the currently-resuming process's scheduling priority from a
-/// `Priority` variant index (0=Low, 1=Normal, 2=High). The cooperative
-/// analog of native's `koja_rt_set_priority`.
+/// `Priority` variant index (0=Low, 1=Normal, 2=High). Mirrors
+/// native `koja_rt_set_priority`.
 pub(crate) fn set_priority(level: i64) {
     let pid = current_pid();
     with_table(|table| table.set_priority(pid, Priority::from_index(level)));
 }
 
 /// Records the currently-resuming process's exit reason from a wire code
-/// (0=Normal, 1=Shutdown, ...). The cooperative analog of native's
-/// `koja_rt_process_exit`. Runs in the process-body tail just before the
-/// process completes, so the reason is set when `mark_dead_if_alive` fires.
+/// (0=Normal, 1=Shutdown, ...). Runs in the process-body tail just
+/// before the process completes, so the reason is set when
+/// `mark_dead_if_alive` fires. Mirrors native `koja_rt_process_exit`.
 pub(crate) fn process_exit(reason: i64) {
     let pid = current_pid();
     with_table(|table| table.set_exit_reason(pid, ExitReason::from_index(reason)));
@@ -399,10 +400,10 @@ pub(crate) fn grace_period() -> Duration {
 /// Spends one reduction for the currently-resuming process. Returns `true`
 /// when its budget is exhausted, having re-queued it (`Running -> Runnable`)
 /// so the caller should yield ([`YieldOnce`]) and let the driver round-robin
-/// to a peer. The cooperative analog of native's `koja_rt_yield_check`: the
-/// common (not-exhausted) path is a lock-free [`REDUCTIONS_LEFT`] decrement,
-/// touching the table only to re-queue at zero. A no-op (`false`) in function
-/// mode, where IR runs with no driver to yield to.
+/// to a peer. The common (not-exhausted) path is a lock-free
+/// [`REDUCTIONS_LEFT`] decrement, touching the table only to re-queue at
+/// zero. A no-op (`false`) in function mode, where IR runs with no driver
+/// to yield to. Mirrors native `koja_rt_yield_check`.
 pub(crate) fn reduce() -> bool {
     if !runtime_installed() {
         return false;
@@ -541,7 +542,7 @@ impl<'a, R: CallResolver> EvalExecutor<'a, R> {
     }
 
     /// Register a process's body. The entry future is installed here by
-    /// `run_program`. Children are installed by [`install_pending_spawns`].
+    /// `run_program`. Children are installed by `install_pending_spawns`.
     pub(crate) fn install_future(&self, pid: Pid, future: ProcessFuture<'a>) {
         self.futures.borrow_mut().insert(pid, future);
     }
@@ -564,8 +565,8 @@ impl<'a, R: CallResolver> EvalExecutor<'a, R> {
     /// force-kills the staged kill-cascade targets until none remain
     /// (each kill can stage grandchildren), dropping their futures and
     /// reclaimed resources, then delivers the staged `ExitSignal`s and
-    /// wakes callers whose callee died. The single-threaded analog of
-    /// native's per-death-site settles.
+    /// wakes callers whose callee died. Mirrors the native per-death-site
+    /// settles.
     fn settle_exits(&self) {
         loop {
             let staged = self.core.take_pending_kills();
@@ -629,6 +630,8 @@ impl<R: CallResolver> Executor for EvalExecutor<'_, R> {
         // a no-op resume.
         let taken = self.futures.borrow_mut().remove(&pid);
         if let Some(mut future) = taken {
+            // A noop waker is enough because the driver, not the
+            // future, decides when to resume a process.
             let mut context = Context::from_waker(std::task::Waker::noop());
             // Backstop for an unexpected host unwind. A user `Kernel.panic` is
             // a `RuntimeError`, not a Rust panic, so it never reaches here.

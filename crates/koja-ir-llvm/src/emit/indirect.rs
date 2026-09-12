@@ -16,6 +16,7 @@ use koja_ir::{IRIndirectSlot, IRType};
 use crate::ctx::EmitContext;
 use crate::error::{IceExt, LlvmError};
 use crate::intrinsics::element::release_in_slot;
+use crate::layout::enums::COMPLETE_PAYLOAD_INDEX;
 use crate::runtime::{declare_free_extern, declare_malloc_extern, declare_rc_dec_extern};
 use crate::types::ir_basic_type;
 
@@ -176,7 +177,12 @@ fn indirect_pointer<'ctx>(
             });
             let payload_ptr = ctx
                 .builder
-                .build_struct_gep(complete, alloca, 2, &format!("{ty}_indirect_payload"))
+                .build_struct_gep(
+                    complete,
+                    alloca,
+                    COMPLETE_PAYLOAD_INDEX,
+                    &format!("{ty}_indirect_payload"),
+                )
                 .or_ice()?;
             let field_ptr = ctx
                 .builder

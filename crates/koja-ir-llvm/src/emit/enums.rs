@@ -17,6 +17,7 @@ use koja_ir::{EnumPayloadInit, IRSymbol, IRType, IRVariantPayload, IRVariantTag,
 
 use crate::ctx::EmitContext;
 use crate::error::{IceExt, LlvmError};
+use crate::layout::enums::COMPLETE_PAYLOAD_INDEX;
 use crate::types::ir_basic_type;
 
 use super::indirect::emit_unbox_value;
@@ -284,7 +285,12 @@ fn build_payload_gep<'ctx>(
     alloca: PointerValue<'ctx>,
 ) -> Result<PointerValue<'ctx>, LlvmError> {
     ctx.builder
-        .build_struct_gep(complete, alloca, 2, &format!("{ty}_payload"))
+        .build_struct_gep(
+            complete,
+            alloca,
+            COMPLETE_PAYLOAD_INDEX,
+            &format!("{ty}_payload"),
+        )
         .or_ice()
 }
 

@@ -8,7 +8,6 @@
 //! signature, then generates the same shape of IR regardless of `T`.
 
 use inkwell::IntPredicate;
-use inkwell::basic_block::BasicBlock;
 use inkwell::types::{BasicType, StructType};
 use inkwell::values::{BasicValueEnum, FunctionValue, IntValue, PointerValue, StructValue};
 use koja_ir::{IRFunction, IRSymbol, IRType, ListMethod};
@@ -39,12 +38,12 @@ pub(super) fn emit_list<'ctx>(
         ListMethod::Concat => emit_concat(ctx, function, llvm_function),
         ListMethod::EmptyQ => emit_empty_q(ctx, function, llvm_function),
         ListMethod::FromList => emit_from_list(ctx, function, llvm_function),
-        ListMethod::Get => emit_get(ctx, function, llvm_function, entry),
+        ListMethod::Get => emit_get(ctx, function, llvm_function),
         ListMethod::Length => emit_length(ctx, function, llvm_function),
         ListMethod::New => emit_new(ctx, function),
-        ListMethod::Pop => emit_pop(ctx, function, llvm_function, entry),
-        ListMethod::ReplaceAt => emit_replace_at(ctx, function, llvm_function, entry),
-        ListMethod::Slice => emit_slice(ctx, function, llvm_function, entry),
+        ListMethod::Pop => emit_pop(ctx, function, llvm_function),
+        ListMethod::ReplaceAt => emit_replace_at(ctx, function, llvm_function),
+        ListMethod::Slice => emit_slice(ctx, function, llvm_function),
     }
 }
 
@@ -128,17 +127,13 @@ fn emit_from_list<'ctx>(
     llvm_function: FunctionValue<'ctx>,
 ) -> Result<(), LlvmError> {
     // `List<T>` is the `ListLiteral<T>` carrier, so this is value-wise an
-    // identity. But `self` is borrowed and the caller drops it, so the
-    // result must own an independent buffer rather than alias `self`'s.
+    // identity that still has to return an independent buffer.
     let self_val = nth_list(function, llvm_function, 0, "self")?;
     let cloned = clone_list_value(ctx, function, llvm_function, ListMethod::FromList, self_val)?;
     ret_struct(ctx, cloned)
 }
 
-/// Deep-clone a `List` value into an independent buffer the caller owns
-/// outright. Every intrinsic return obeys this contract: `self` is
-/// borrowed and released by the caller, so handing back `self_val`
-/// (or any struct sharing its buffer) would double-free at scope exit.
+/// Clone a `List` value into an independent buffer the caller owns.
 fn clone_list_value<'ctx>(
     ctx: &EmitContext<'ctx>,
     function: &IRFunction,
@@ -201,6 +196,9 @@ fn emit_append<'ctx>(
         .builder
         .build_int_mul(len, elem_size, "byte_off")
         .or_ice()?;
+    // SAFETY: every index GEP in this file is either bounds-checked
+    // against the list length first or targets a buffer this
+    // function just sized to hold it.
     let elem_ptr = unsafe {
         ctx.builder
             .build_gep(i8_ty, new_buf, &[byte_offset], "elem_ptr")
@@ -317,7 +315,6 @@ fn emit_get<'ctx>(
     ctx: &EmitContext<'ctx>,
     function: &IRFunction,
     llvm_function: FunctionValue<'ctx>,
-    entry: BasicBlock<'ctx>,
 ) -> Result<(), LlvmError> {
     let i8_ty = ctx.context.i8_type();
     let option_symbol = expect_enum_symbol(&function.return_type, function, ListMethod::Get)?;
@@ -372,7 +369,6 @@ fn emit_get<'ctx>(
     )?;
     ctx.builder.build_return(Some(&none)).or_ice().map(|_| ())?;
 
-    let _ = entry;
     Ok(())
 }
 
@@ -380,7 +376,6 @@ fn emit_pop<'ctx>(
     ctx: &EmitContext<'ctx>,
     function: &IRFunction,
     llvm_function: FunctionValue<'ctx>,
-    entry: BasicBlock<'ctx>,
 ) -> Result<(), LlvmError> {
     let i8_ty = ctx.context.i8_type();
     let i64_ty = ctx.context.i64_type();
@@ -411,12 +406,8 @@ fn emit_pop<'ctx>(
         option::none_tag(ctx, &option_symbol),
         &[],
     )?;
-    // Value semantics: the returned list must own an independent
-    // buffer. Handing back `self_val` directly aliases the caller's
-    // receiver slot, so both would free the same buffer at scope exit
-    // (double free). Clone into a fresh buffer instead. `len` is zero
-    // on this branch, so this allocates an empty buffer and copies
-    // nothing, mirroring the nonempty branch's `copy_buffer`.
+    // `len` is zero on this branch, so this allocates an empty buffer
+    // and copies nothing, mirroring the nonempty branch's `copy_buffer`.
     let empty_buf = copy_buffer(
         ctx,
         llvm_function,
@@ -478,7 +469,6 @@ fn emit_pop<'ctx>(
         .or_ice()
         .map(|_| ())?;
 
-    let _ = entry;
     Ok(())
 }
 
@@ -486,7 +476,6 @@ fn emit_replace_at<'ctx>(
     ctx: &EmitContext<'ctx>,
     function: &IRFunction,
     llvm_function: FunctionValue<'ctx>,
-    entry: BasicBlock<'ctx>,
 ) -> Result<(), LlvmError> {
     let in_bounds_bb = ctx.context.append_basic_block(llvm_function, "in_bounds");
     let done_bb = ctx.context.append_basic_block(llvm_function, "done");
@@ -529,10 +518,8 @@ fn emit_replace_at<'ctx>(
     let replaced = build_list_struct(ctx, new_buf, len, len)?;
     ret_struct(ctx, replaced)?;
 
-    // Out of bounds: no element changes, but `self` is borrowed and the
-    // caller drops it, so the result must own an independent buffer
-    // rather than alias `self`'s (which would double-free at scope
-    // exit). Clone the unchanged list, mirroring the in-bounds path.
+    // Out of bounds. No element changes, but the result still has to
+    // own its buffer, so clone the unchanged list.
     ctx.builder.position_at_end(done_bb);
     let unchanged = clone_list_value(
         ctx,
@@ -543,7 +530,6 @@ fn emit_replace_at<'ctx>(
     )?;
     ret_struct(ctx, unchanged)?;
 
-    let _ = entry;
     Ok(())
 }
 
@@ -551,7 +537,6 @@ fn emit_slice<'ctx>(
     ctx: &EmitContext<'ctx>,
     function: &IRFunction,
     llvm_function: FunctionValue<'ctx>,
-    entry: BasicBlock<'ctx>,
 ) -> Result<(), LlvmError> {
     let i8_ty = ctx.context.i8_type();
     let i64_ty = ctx.context.i64_type();
@@ -649,7 +634,6 @@ fn emit_slice<'ctx>(
     let empty_result = build_list_struct(ctx, empty_buf, i64_ty.const_zero(), i64_ty.const_zero())?;
     ret_struct(ctx, empty_result)?;
 
-    let _ = entry;
     Ok(())
 }
 
@@ -729,13 +713,8 @@ fn emit_concat<'ctx>(
 // --- helpers --------------------------------------------------------------
 
 /// Allocate a fresh `new_cap`-capacity buffer, copy the first
-/// `copy_count` elements out of `src`, then *acquire* each copy so the
-/// new buffer owns independent references. Under value semantics every
-/// list mutator is copy-on-write: it builds a new buffer instead of
-/// touching `src`, so a binding shared by assignment is never
-/// observably changed through another alias, and balancing the
-/// refcount here is what stops the shared payloads from double-freeing
-/// once both the source and the copy are reclaimed by drop glue.
+/// `copy_count` elements out of `src`, then acquire each copy so the
+/// new buffer owns independent references.
 #[allow(clippy::too_many_arguments)]
 fn copy_buffer<'ctx>(
     ctx: &EmitContext<'ctx>,

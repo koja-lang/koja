@@ -1,24 +1,9 @@
-//! IR-lowering coverage for the bounded-dispatch slice (Slice 2.10).
-//!
-//! `fn show<T: Greeter>(value: T) -> String` calls `value.greet()`
-//! inside its body. At typecheck the receiver stays
-//! `TypeParam(show, 0)`; at IR mono the substitute walker rewrites
-//! it to the concrete struct, and `lower_method_call` resolves
-//! `[receiver_struct, "greet"]` against the registry to find the
-//! concrete impl method. This file pins:
-//!
-//! - The mono'd `show` function exists and lowers without
-//!   surfacing diagnostics (i.e. the substituted body sealed cleanly
-//!   and the method call resolved to a concrete callee).
-//! - Distinct concrete instantiations mint distinct mono'd `show`s.
-//! - The concrete impl method (e.g. `Point.greet`) is lowered into
-//!   the IR package alongside the mono'd `show`.
-//!
-//! No `protocol_impls` table walk lives at the call site. The
-//! receiver-substitute path through [`super::lower::expr::lower_method_call`]
-//! reuses the same lookup an inherent method goes through, so this
-//! test mirrors the inherent-method-on-concrete-type shape rather
-//! than asserting on any IR-side rewrite hook.
+//! IR-lowering coverage for bounded dispatch. `fn show<T: Greeter>`
+//! calls `value.greet()`, and monomorphization rewrites the receiver
+//! to the concrete struct so `lower_method_call` resolves the impl
+//! method like an inherent one. Pins that each instantiation lowers
+//! cleanly, that distinct instantiations mint distinct `show`s, and
+//! that the impl method lands in the package.
 
 mod common;
 

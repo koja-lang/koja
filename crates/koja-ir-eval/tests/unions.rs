@@ -1,23 +1,8 @@
-//! Runtime coverage for the union slice in
-//! [`koja_ir_eval::Interpreter`]: a member-typed value flowing
-//! through a union slot materializes a [`Value::Union`] carrying the
-//! union's mangled symbol, the canonical-position tag, and the boxed
-//! payload. A typed-binding `match` arm extracts the payload back out
-//! and binds it as the named local for the body's expression.
-//!
-//! The fixtures pin runtime behavior across the four shapes the
-//! goldens exercise:
-//!
-//! - widening a single member into a 2-/3-member union and matching
-//!   the catch-all
-//! - alias-fronted unions (`type X = A | B`): the runtime sees the
-//!   underlying tagged-union shape with no alias-specific encoding
-//! - enum-in-union: each member is itself a tagged enum, and the
-//!   typed-binding arm extracts an `Enum` value the body can match
-//!   on again
-//! - struct-field union: a struct field holds a union value, and
-//!   reading the field yields the same `Value::Union` shape
-//!   construction would.
+//! Runtime coverage for unions. A member-typed value flowing through
+//! a union slot materializes a [`Value::Union`] with the union's
+//! mangled symbol, the canonical-position tag, and the boxed payload.
+//! Covers widening, alias-fronted unions, enum-in-union, and
+//! struct-field unions.
 
 use koja_ast::util::dedent;
 use koja_ir_eval::Value;

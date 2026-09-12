@@ -1,20 +1,7 @@
-//! Runtime coverage for Slice 2.10, bounded dispatch through a
-//! generic function with a protocol-bound type-param.
-//!
-//! `parse -> check -> lower -> run` for fixtures where the trailing
-//! expression / `main` calls a generic function with a `<T: P>`
-//! bound on its type-param, and the body invokes a method declared
-//! by `P`. Mono substitutes `T` with the concrete struct/enum at
-//! the call site. Lower's `[receiver_struct, method_name]` lookup
-//! resolves to the `impl P for T` block's method, and the interpreter
-//! dispatches by mangled symbol just like any inherent method
-//! call.
-//!
-//! The runtime never sees a `Resolution::TypeParam`, just like the
-//! existing generic-function tests. The green tests here pin that
-//! the substitute walker rewrote receiver resolutions correctly
-//! and that the impl-block method made it into the IRPackage
-//! function table under the expected mangled name.
+//! Runtime coverage for bounded dispatch through a generic function
+//! with a protocol-bound type-param. Monomorphization substitutes
+//! `T` at the call site, so the interpreter dispatches the `impl P
+//! for T` method by mangled symbol like any inherent method.
 
 use koja_ast::util::dedent;
 use koja_ir_eval::Value;

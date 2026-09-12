@@ -13,7 +13,7 @@ use crate::union_decl::IRUnionDecl;
 /// Per-package IR fragment exposed to backends. Holds only
 /// fully-monomorphized concrete decls. Generic templates and the
 /// instantiation set are pipeline-internal scratch state owned by
-/// [`crate::generics`] and dropped before the sealed [`IRProgram`]
+/// [`crate::generics`] and dropped before the sealed [`crate::IRProgram`]
 /// is returned, so backends never observe a generic template.
 #[derive(Debug, Clone)]
 pub struct IRPackage {
@@ -55,6 +55,9 @@ pub struct IRPackage {
     pub unions: BTreeMap<IRSymbol, IRUnionDecl>,
 }
 
+/// Register a synthesized function in the package named `owner`.
+/// Panics if the package is missing or the symbol is already taken,
+/// since both are compiler bugs.
 pub(crate) fn insert_package_function(
     packages: &mut [IRPackage],
     owner: &str,

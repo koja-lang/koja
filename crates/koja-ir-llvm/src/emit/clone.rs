@@ -1,36 +1,9 @@
-//! `IRInstruction::Clone` emission: the acquisition half of the
-//! value-semantics rc glue. Mirrors [`super::locals::emit_drop_value`]:
-//! both are value-keyed, type-dispatched, and bottom out in the
-//! runtime rc primitives.
-//!
-//! Three buckets, keyed on the static [`IRType`]:
-//!
-//! - **Leaf heap** (`String` / `Binary` / `Bits`): a refcount
-//!   increment. Cloning a value-semantics heap value shares the
-//!   immutable block rather than deep-copying it: `dest` re-binds the
-//!   *same* payload pointer and the block's rc is bumped via
-//!   [`declare_rc_inc_extern`] on its base (`payload - HEADER_BYTES`).
-//!   The matching `Drop` decrements, freeing at zero.
-//! - **Copy leaves** (`Bool`, the int / uint / float families, `Unit`,
-//!   raw `CPtr`): a register copy. SSA values are immutable, so `dest`
-//!   simply re-binds the source value (no rc, no allocation).
-//! - **No-glue aggregates** (`Struct` / `Enum` / `Union` whose every
-//!   field is `Copy`): a register copy, exactly like the scalar
-//!   leaves. The `elaborate` IR sub-pass rewrites only the
-//!   *heap-owning* composites into a `Call` to a synthesized per-type
-//!   `clone_T`, so a scalar aggregate is all that survives to here.
-//! - **Closure** (`Function`): an `rc++` on the env block, aliasing
-//!   the same `{fn_ptr, env_ptr}` fat pointer. The env is shared like
-//!   an immutable heap leaf. The matching `Drop` runs
-//!   `koja_closure_rc_dec` (capture release + free at zero).
-//! - **`Indirect` boxes**: an `rc++` on the box block, same header
-//!   and primitive as the leaves. Boxes are write-once, so sharing
-//!   needs no copy-on-write. The matching rc-aware `Drop` releases
-//!   contents + block at rc 1.
-//! - **Heap composites** (`List` / `Map` / `Set`): unreachable.
-//!   Collections always own heap and are always rewritten to a glue
-//!   `Call`. One reaching here is a lowering bug (panic loudly rather
-//!   than silently alias).
+//! `IRInstruction::Clone` emission, the acquisition half of the
+//! value-semantics rc glue. Heap leaves, `Indirect` boxes, and
+//! closure envs share their block through an `rc++`. Everything else
+//! that reaches here is a register copy, because `elaborate` has
+//! already rewritten every heap-owning composite into a `Call` to
+//! its `clone_T` glue.
 
 use koja_ir::{IRType, ValueId};
 
@@ -49,12 +22,6 @@ pub(super) fn emit_clone<'ctx>(
     values: &mut ValueMap<'ctx>,
 ) -> Result<(), LlvmError> {
     let result = match ty {
-        // Share the block: bump its rc and alias the same payload
-        // pointer. The block base (rc word) is `payload -
-        // HEADER_BYTES`. The runtime skips immortal (rodata) blocks.
-        // An `Indirect` box shares the same header layout, so cloning
-        // one is the identical rc bump on its (write-once) block. The
-        // matching rc-aware `Drop` releases contents + block at rc 1.
         IRType::Binary | IRType::Bits | IRType::Indirect(_) | IRType::String => {
             let payload = lookup(values, source)?.into_pointer_value();
             let base = block_base(ctx, payload, &format!("{dest}.block_base"))?;
@@ -77,18 +44,9 @@ pub(super) fn emit_clone<'ctx>(
         | IRType::UInt32
         | IRType::UInt64
         | IRType::Unit => lookup(values, source)?,
-        // No-glue aggregates (a struct / enum / union whose every
-        // field is `Copy`): a register copy, like the scalar leaves.
-        // `elaborate` rewrites only the heap-owning composites into
-        // `Call @clone_T`, so any aggregate surviving to here owns no
-        // heap and aliasing its immutable SSA value is sound.
         IRType::Enum(_) | IRType::Struct(_) | IRType::Tuple(_) | IRType::Union { .. } => {
             lookup(values, source)?
         }
-        // Closure: share the env block. `rc++` on the env (null /
-        // immortal envs are no-ops in the runtime), then alias the same
-        // `{fn_ptr, env_ptr}` fat pointer. The matching `Drop` runs
-        // `koja_closure_rc_dec`, which releases captures + frees at zero.
         IRType::Function { .. } => {
             let closure_value = lookup(values, source)?;
             let env_ptr =
@@ -99,8 +57,6 @@ pub(super) fn emit_clone<'ctx>(
                 .or_ice()?;
             closure_value
         }
-        // Collections always own heap, so they always carry glue and
-        // must have been rewritten. Reaching here is a lowering bug.
         IRType::List(_) | IRType::Map { .. } | IRType::Set(_) => panic!(
             "LLVM emit: composite `IRInstruction::Clone` of type {ty:?} reached the backend \
              (the `elaborate` sub-pass must rewrite it into a `Call @clone_T`)",

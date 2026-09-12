@@ -116,11 +116,9 @@ pub(super) fn emit_field_set<'ctx>(
     ctx: &EmitContext<'ctx>,
     base: BasicValueEnum<'ctx>,
     field_index: u32,
-    field_type: &IRType,
     struct_symbol: &IRSymbol,
     value: BasicValueEnum<'ctx>,
 ) -> Result<BasicValueEnum<'ctx>, LlvmError> {
-    let _ = field_type;
     let declared_ty = ctx
         .layouts
         .struct_field_ir_type(struct_symbol, field_index as usize);

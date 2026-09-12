@@ -1,33 +1,7 @@
-//! Coverage for `loop` and `while` lowering in `src/lower/loops.rs`.
-//!
-//! Pins the three-block CFG shape for `while`:
-//!
-//! - Open block branches unconditionally to `while_header`.
-//! - Header lowers the condition and terminates with
-//!   [`IRTerminator::CondBranch`] to body / exit.
-//! - Body lowers its statements and emits a back-edge
-//!   [`IRTerminator::Branch`] to the header.
-//! - Exit emits a fresh `Const::Unit` and continues the surrounding
-//!   flow.
-//!
-//! And the two-block CFG shape for `loop` (no header, since there is
-//! no condition):
-//!
-//! - Open block branches unconditionally to `loop_body`.
-//! - Body emits a back-edge [`IRTerminator::Branch`] to itself.
-//!   `break` inside the body closes its own flow with a
-//!   `Branch(loop_exit)`.
-//! - Exit emits a fresh `Const::Unit` (only reachable when at least
-//!   one `break` fires).
-//!
-//! Loop-carried state lives in alloca slots
-//! ([`IRInstruction::LocalRead`] / [`IRInstruction::LocalWrite`]),
-//! with no block params on the header. Block-param SSA stays for the
-//! `if`/`else` joins that may live inside the body, but the loop
-//! itself doesn't introduce one.
-//!
-//! Resolve rewrites statement-position `for` to ordinary `loop` and
-//! `match` nodes. [`for_lowers_to_loop_plus_match`] pins that IR.
+//! Coverage for `loop` and `while` lowering. Pins the CFG shapes
+//! described in `src/lower/loops.rs`, that loop-carried state lives
+//! in local slots rather than block params, and that a
+//! statement-position `for` lowers as `loop` plus `match`.
 
 use koja_ir::{BranchTarget, IRInstruction, IRTerminator, IRType};
 

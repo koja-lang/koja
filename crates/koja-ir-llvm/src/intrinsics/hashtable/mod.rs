@@ -25,7 +25,7 @@
 //! - [`from_list`]: `Set.from_list` and the inline `Set.insert` call
 //!   it emits per element.
 //!
-//! Errors surface as typed [`LlvmError::Codegen`] values.
+//! Errors surface as typed [`crate::error::LlvmError::Codegen`] values.
 
 use koja_ir::IRType;
 
@@ -45,9 +45,9 @@ pub(super) use read::{emit_has_q, emit_map_get, emit_remove};
 pub(super) use util::ir_byte_size;
 pub(crate) use util::occupied_loop;
 
-/// Initial bucket count for a freshly-allocated hashtable. Shared
-/// across backends so eval / native / future JIT all agree on the
-/// first-resize threshold.
+/// Initial bucket count for a freshly-allocated hashtable. Capacity
+/// must stay a power of two, since probing wraps with
+/// `slot & (capacity - 1)` and growth doubles it.
 pub(super) const INITIAL_CAPACITY: u64 = 8;
 
 /// Per-byte state of a single bucket. `STATE_EMPTY` is `memset`-

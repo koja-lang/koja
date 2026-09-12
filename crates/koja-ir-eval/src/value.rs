@@ -12,31 +12,31 @@ use std::str;
 
 use koja_ir::{IRSymbol, IRVariantTag};
 
-/// `Map<K, V>` storage: `(key, value)` pairs in insertion order.
-/// Eval doesn't need a real hash table. Linear probes over a Vec
-/// give the right semantics in tests' tiny working sets, and `Map`
-/// values are `Rc<RefCell<...>>` for the same copy-on-write
-/// reasons as [`Value::List`].
+/// `Map<K, V>` storage, `(key, value)` pairs in insertion order.
+/// Linear probes over a `Vec` give the right semantics without a
+/// hash table.
 pub type MapEntries = Rc<RefCell<Vec<(Value, Value)>>>;
 
-/// `Set<T>` storage: unique elements in insertion order. Same
-/// motivation as [`MapEntries`] for the `Rc<RefCell<...>>` shape.
+/// `Set<T>` storage, unique elements in insertion order.
 pub type SetEntries = Rc<RefCell<Vec<Value>>>;
 
+/// A runtime value. Heap-backed variants share their storage through
+/// `Rc`, so `Value::clone` is a refcount bump. Value semantics hold
+/// because a mutator either builds a fresh value or, when the storage
+/// is uniquely held, mutates it in place (see
+/// `intrinsics::consuming`). No mutation is observable through
+/// another binding.
+///
+/// The derived `PartialEq` is structural and is what `Map` key and
+/// `Set` element lookups use, so two values with equal contents
+/// match regardless of which `Rc` holds them.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Value {
-    /// Shared heap bytes with `bit_length` implicitly `bytes.len() * 8`.
-    /// `Rc`-backed (like the collections) so `Value::clone` is a
-    /// refcount bump, not a buffer copy. The interpreter clones
-    /// values on every local read and argument pass, and deep-copying
-    /// payloads made that O(len) per touch. Binaries are immutable in
-    /// eval (every operation builds a fresh buffer), so plain `Rc`
-    /// without `RefCell` suffices.
+    /// Heap bytes with `bit_length` implicitly `bytes.len() * 8`.
     Binary(Rc<Vec<u8>>),
-    /// Shared heap bits. `bit_length` may be a non-multiple of 8.
-    /// The payload occupies `ceil(bit_length / 8)` bytes, with
-    /// trailing bits in the last byte zero-padded. `Rc`-backed for
-    /// the same reason as [`Value::Binary`].
+    /// Heap bits. `bit_length` may be a non-multiple of 8. The
+    /// payload occupies `ceil(bit_length / 8)` bytes, with trailing
+    /// bits in the last byte zero-padded.
     Bits {
         bytes: Rc<Vec<u8>>,
         bit_length: u64,
@@ -68,25 +68,19 @@ pub enum Value {
     },
     Float32(f32),
     Float64(f64),
+    /// Every integer width, signed or unsigned, stored in one `i64`.
+    /// Unsigned 64-bit values keep their bit pattern, so `u64::MAX`
+    /// is stored as `-1`. Sites that need the width read it from the
+    /// [`koja_ir::IRType`] in hand.
     Int(i64),
-    /// Heap-backed dynamic array. Shared `Rc<RefCell>` so the
-    /// collection intrinsics (`append`, `pop`, `concat`) can mutate
-    /// the underlying buffer via copy-on-write. The interpreter
-    /// copies the `Rc`, not the `Vec`, and clones the buffer before a
-    /// mutation when the value is shared, matching the value-semantics
-    /// model where no mutation is observable through another binding.
+    /// Heap-backed dynamic array.
     List(Rc<RefCell<Vec<Value>>>),
-    /// Heap-backed associative map keyed by [`Value`]. Eval uses
-    /// linear probes for `Eq`, matching Koja's `Equality` protocol's
-    /// `equals?` shape (every key compared by value, no hashing). Same
-    /// `Rc<RefCell<...>>` motivation as [`Value::List`] for in-place
-    /// mutation.
+    /// Heap-backed map keyed by [`Value`], compared by `==` like
+    /// Koja's `Equality` protocol.
     Map(MapEntries),
-    /// Heap-backed unique-element set. Same shape rationale as
-    /// [`Value::Map`].
+    /// Heap-backed unique-element set.
     Set(SetEntries),
-    /// Valid UTF-8 bytes backing a Koja `String`. `Rc` sharing mirrors
-    /// the LLVM runtime's immutable refcounted heap blocks.
+    /// Valid UTF-8 bytes backing a Koja `String`.
     String(Rc<Vec<u8>>),
     Struct {
         symbol: IRSymbol,
@@ -109,18 +103,11 @@ pub enum Value {
     Unit,
 }
 
-/// Materialized payload for a [`Value::Enum`]. Mirrors
-/// [`koja_ir::IRVariantPayload`] one-to-one but carries
-/// already-evaluated [`Value`]s. The `Struct` arm carries
+/// Materialized payload for a [`Value::Enum`], mirroring
+/// [`koja_ir::IRVariantPayload`]. The `Struct` arm carries
 /// `(field_name, value)` pairs in declaration order so `Display`
-/// can render named fields without a registry handle.
-///
-/// `Rc`-backed for the same reason as [`Value::Binary`]: without
-/// sharing, every clone of a recursive enum value (each match
-/// binding, argument pass, local read) deep-copies the whole
-/// subtree, which turns tree updates quadratic. Enum payloads are
-/// immutable in eval (constructs build fresh vectors), so plain
-/// `Rc` without copy-on-write suffices.
+/// can render named fields without a registry handle. Payloads are
+/// immutable, so plain `Rc` sharing suffices.
 #[derive(Debug, Clone, PartialEq)]
 pub enum EnumPayload {
     Struct(Rc<Vec<(String, Value)>>),
@@ -165,6 +152,7 @@ impl Value {
         Value::String(Rc::new(bytes))
     }
 
+    /// Read a [`Value::Bool`], or `None` for any other variant.
     pub fn as_bool(&self) -> Option<bool> {
         match self {
             Value::Bool(b) => Some(*b),
@@ -172,6 +160,7 @@ impl Value {
         }
     }
 
+    /// Read a [`Value::Float64`], or `None` for any other variant.
     pub fn as_float64(&self) -> Option<f64> {
         match self {
             Value::Float64(v) => Some(*v),
@@ -179,6 +168,7 @@ impl Value {
         }
     }
 
+    /// Read a [`Value::Int`], or `None` for any other variant.
     pub fn as_int(&self) -> Option<i64> {
         match self {
             Value::Int(i) => Some(*i),

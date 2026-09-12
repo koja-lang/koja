@@ -150,6 +150,8 @@ fn offset_ptr<'ctx>(
 ) -> Result<PointerValue<'ctx>, LlvmError> {
     let i8_ty = ctx.context.i8_type();
     let offset = ctx.context.i64_type().const_int(bytes, false);
+    // SAFETY: `bytes` is the key size, which the entry layout
+    // places inside the same bucket.
     unsafe { ctx.builder.build_gep(i8_ty, base, &[offset], name).or_ice() }
 }
 

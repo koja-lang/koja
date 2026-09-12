@@ -1,13 +1,11 @@
 //! Eval handlers for the 48-cell `Bitwise` intrinsic family.
 //!
-//! Eval collapses every integer width (`Int{8,16,32,64}` /
-//! `UInt{8,16,32,64}`) to [`Value::Int(i64)`](crate::Value::Int),
-//! so the AND/OR/XOR ops are width-agnostic at this layer and
-//! operate directly on i64. `bnot` and the shifts are computed at
-//! the receiver's width ([`IntType`] carries it), with results
-//! masked and re-extended to match the LLVM backend's native
-//! narrow-int instructions. Shift counts outside `0 <= n < width`
-//! trap with the shared [`BitOp::shift_count_message`] panic.
+//! AND/OR/XOR operate directly on the stored `i64`. `bnot` and the
+//! shifts are computed at the receiver's width ([`IntType`] carries
+//! it), with results masked and re-extended to match the LLVM
+//! backend's native narrow-int instructions. Shift counts outside
+//! `0 <= n < width` trap with the shared
+//! [`BitOp::shift_count_message`] panic.
 
 use koja_ir::{BitOp, IntType};
 

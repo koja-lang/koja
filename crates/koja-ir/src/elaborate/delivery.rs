@@ -17,6 +17,9 @@ pub(super) struct BusinessEnvelope {
     pub payload_local: IRLocalId,
 }
 
+/// Add a synthesized `receive` arm and declare its payload local in
+/// the entry block, so every arm local has a `LocalDecl` like the
+/// lowered ones.
 pub(super) fn append_delivery_arm(
     function: &mut IRFunction,
     block_index: usize,
@@ -37,6 +40,9 @@ pub(super) fn append_delivery_arm(
     arms.push(arm);
 }
 
+/// The three instructions that wrap `message` into the
+/// `(M, Option<ReplyTo>)` envelope a business arm delivers, ending
+/// with the write into the arm's payload local.
 pub(super) fn envelope_instructions(
     message: ValueId,
     reply_none: ValueId,

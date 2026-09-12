@@ -3,12 +3,10 @@
 //! Three families:
 //!
 //! - **Plain fd I/O** (`koja_fd_close` / `koja_fd_read` / `koja_fd_write`):
-//!   call into [`koja_runtime::fs`] over libc so eval and the LLVM
+//!   call into `koja_runtime::fs` over libc so eval and the LLVM
 //!   backend observe the same kernel return values and koja-heap string
 //!   layout. `read` / `write` first [`io_block`](crate::reactor::io_block)
-//!   for readiness (cooperatively parking the process, or blocking the
-//!   thread in function mode) so the native call's syscall succeeds on its
-//!   first try. Eval never reaches the native `io_block` it can't drive.
+//!   for readiness, as [`crate::reactor`] describes.
 //! - **File-path operations** (`koja_file_*`): wrap the runtime's
 //!   path-based helpers. The runtime owns null-termination and CStr
 //!   parsing on the C side. Regular files are always ready, so no `io_block`.
@@ -18,9 +16,8 @@
 //!   scheduler), so `Fd.block` parks on readiness and `Fd.watch` delivers
 //!   `IOReady` messages through the driver.
 //!
-//! `Value::Int` carries every sized-integer width inside eval. The
-//! generated handlers narrow on the way out (`as i32`) at the C ABI
-//! boundary.
+//! The generated handlers narrow `Value::Int` on the way out
+//! (`as i32`) at the C ABI boundary.
 
 use std::ptr;
 

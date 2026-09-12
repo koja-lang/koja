@@ -1,13 +1,13 @@
-//! Loopback smoke tests for the eval-side socket surface: the
-//! `koja_socket_*` externs in `externs/net.rs` (blocking-fd
-//! semantics) and the raw socket intrinsics behind `Socket.resolve`
-//! and `Socket.recv_from`. Fixtures use the qualified `Net` stdlib package via
+//! Loopback smoke tests for the eval-side socket surface, the
+//! `koja_socket_*` externs in `externs/net.rs` and the raw socket
+//! intrinsics behind `Socket.resolve` and `Socket.recv_from`.
+//! Fixtures use the qualified `Net` stdlib package via
 //! [`common::evaluate_qualified_program`].
 //!
-//! Everything runs single-threaded: a loopback `connect` to a
+//! Everything runs single-threaded. A loopback `connect` to a
 //! listening backlog completes without a concurrent `accept`, and a
 //! datagram queued by `send_to` is immediately readable, so the
-//! sequential fixtures never deadlock on the blocking fds.
+//! sequential fixtures never wait on a peer that cannot run.
 
 mod common;
 

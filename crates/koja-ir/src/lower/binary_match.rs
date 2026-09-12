@@ -96,12 +96,11 @@ fn lower_segment(
     registry: &GlobalRegistry,
     output: &mut LowerOutput,
 ) -> Option<LoweredBinaryPattern> {
-    if let Some((bytes, byte_length)) = string_segment_bytes(segment) {
-        let _ = byte_length;
+    if let Some(bytes) = string_segment_bytes(segment) {
         return Some(LoweredBinaryPattern::LiteralBytes { bit_offset, bytes });
     }
 
-    if let Some(tail) = lower_greedy_tail(segment, bit_offset, ctx, registry, output) {
+    if let Some(tail) = lower_greedy_tail(segment, bit_offset, ctx) {
         return Some(tail);
     }
 
@@ -176,8 +175,6 @@ fn lower_greedy_tail(
     segment: &BinarySegment,
     bit_offset: u64,
     ctx: &mut FnLowerCtx,
-    registry: &GlobalRegistry,
-    output: &mut LowerOutput,
 ) -> Option<LoweredBinaryPattern> {
     if segment.size.is_some() {
         return None;
@@ -203,8 +200,6 @@ fn lower_greedy_tail(
         ExprKind::Ident { name, .. } if name == "_" => None,
         _ => return None,
     };
-    let _ = registry;
-    let _ = output;
     Some(LoweredBinaryPattern::GreedyTail {
         bit_offset,
         local,
@@ -243,7 +238,7 @@ fn segment_fixed_width(segment: &BinarySegment) -> Option<u64> {
 /// Read out the literal bytes of a string-segment value. Returns
 /// `None` for non-string and for interpolated strings (typecheck
 /// already rejects the latter, so this is belt-and-suspenders).
-fn string_segment_bytes(segment: &BinarySegment) -> Option<(Vec<u8>, u64)> {
+fn string_segment_bytes(segment: &BinarySegment) -> Option<Vec<u8>> {
     let ExprKind::String { parts, .. } = &segment.value.kind else {
         return None;
     };
@@ -254,8 +249,7 @@ fn string_segment_bytes(segment: &BinarySegment) -> Option<(Vec<u8>, u64)> {
             StringPart::Interpolation { .. } => return None,
         }
     }
-    let byte_length = bytes.len() as u64;
-    Some((bytes, byte_length))
+    Some(bytes)
 }
 
 fn ast_endianness_to_ir(endian: Option<BinaryEndianness>) -> BinaryEndian {

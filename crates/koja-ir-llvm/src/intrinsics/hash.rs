@@ -87,6 +87,8 @@ fn emit_bytes_hash<'ctx>(
         .or_ice()?;
 
     ctx.builder.position_at_end(body_bb);
+    // SAFETY: `at_end` exits the loop before `idx` reaches
+    // `byte_count`.
     let byte_ptr = unsafe {
         ctx.builder
             .build_gep(i8_ty, str_ptr, &[idx], "byte_ptr")

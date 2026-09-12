@@ -11,7 +11,6 @@ use koja_ast::ast::{BinOp, Diagnostic, Expr, ExprKind, Literal, StringPart, Unar
 use koja_ast::coercion::Coercion;
 use koja_ast::identifier::{GlobalRegistryId, LocalId, Resolution, ResolvedType};
 use koja_ast::labels::expr_kind_label;
-use koja_ast::span::Span;
 use koja_typecheck::{GlobalKind, GlobalRegistry, LiteralCoercion, NumericLiteralWidth};
 
 use crate::constant::IRConstantValue;
@@ -245,7 +244,6 @@ fn lower_expr_inner(
                 *global_id,
                 name,
                 &expr.resolution,
-                expr.span,
                 ctx,
                 block,
                 registry,
@@ -546,12 +544,10 @@ fn lower_local_read(
 /// [`lower_constant_ident`], and non-generic functions used as values
 /// flow through [`lower_fn_as_value`] (synthesizing a captureless
 /// closure wrapper and emitting [`IRInstruction::MakeClosure`]).
-#[allow(clippy::too_many_arguments)]
 fn lower_global_ident(
     global_id: GlobalRegistryId,
     name: &str,
     expr_resolution: &ResolvedType,
-    span: Span,
     ctx: &mut FnLowerCtx,
     block: IRBlockId,
     registry: &GlobalRegistry,
@@ -562,7 +558,7 @@ fn lower_global_ident(
     });
     match &entry.kind {
         GlobalKind::Constant(_) => {
-            lower_constant_ident(global_id, name, span, ctx, block, registry, output)
+            lower_constant_ident(global_id, name, ctx, block, registry, output)
         }
         GlobalKind::Function(_) => lower_fn_as_value(
             global_id,
@@ -588,7 +584,6 @@ fn lower_global_ident(
 fn lower_constant_ident(
     constant_id: GlobalRegistryId,
     name: &str,
-    span: Span,
     ctx: &mut FnLowerCtx,
     block: IRBlockId,
     registry: &GlobalRegistry,
@@ -610,7 +605,6 @@ fn lower_constant_ident(
             entry.kind.label(),
         );
     };
-    let _ = span;
     let ty = resolved_type_to_ir_type(&def.ty, registry, &mut output.instantiations);
     if pools_in_constant_pool(&value) {
         let const_id = IRSymbol::from_identifier(&entry.identifier);
@@ -669,14 +663,6 @@ fn lower_fn_as_value(
     (dest, block)
 }
 
-/// Fold a literal-arg to `UnaryOp::Neg` directly into a typed
-/// `ConstValue` at the recorded coercion width. Returns `None` for
-/// shapes the typecheck pass would never have stamped a coercion
-/// on (non-literal operand, group-wrapped non-literal, etc.),
-/// letting the caller fall back to the regular runtime negate.
-/// Hex / binary literals reach this helper through `parse_int_literal`
-/// for the unsigned escape hatch (`-1: UInt8` is rejected at
-/// typecheck so it never reaches here, but `0xFF: Int8` does).
 /// Pull the typecheck-stamped numeric width off `expr`'s
 /// `literal_coercion` slot, when present. Reserved for the leaf
 /// sites that emit a typed `Const` opcode (literal, negated-literal
@@ -688,6 +674,14 @@ fn literal_width(expr: &Expr) -> Option<NumericLiteralWidth> {
         .and_then(LiteralCoercion::numeric_width)
 }
 
+/// Fold a literal-arg to `UnaryOp::Neg` directly into a typed
+/// `ConstValue` at the recorded coercion width. Returns `None` for
+/// shapes the typecheck pass would never have stamped a coercion
+/// on (non-literal operand, group-wrapped non-literal, etc.),
+/// letting the caller fall back to the regular runtime negate.
+/// Hex / binary literals reach this helper through `parse_int_literal`
+/// for the unsigned escape hatch (`-1: UInt8` is rejected at
+/// typecheck so it never reaches here, but `0xFF: Int8` does).
 fn fold_negated_literal_const(operand: &Expr, target: NumericLiteralWidth) -> Option<ConstValue> {
     match &operand.kind {
         ExprKind::Group { expr } => fold_negated_literal_const(expr, target),

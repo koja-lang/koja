@@ -1,10 +1,4 @@
 //! Externs declared in `lib/global/src/cptr.koja`.
-//!
-//! - `@extern "C" fn strlen(s: CPtr<UInt8>) -> Int64`: libc's
-//!   `strlen`. Used by `CPtr<UInt8>.to_cstring` (private) to compute
-//!   the length of a null-terminated C string. Calls straight into
-//!   libc so eval observes the same byte count the LLVM backend
-//!   would.
 
 use crate::error::RuntimeError;
 use crate::externs::marshal::type_mismatch;

@@ -10,10 +10,9 @@
 //! - [`Instantiation`]: one `(template, args, owner)` triple
 //!   recorded at lowering time. Type instantiations come from
 //!   [`crate::lower::package::resolved_type_to_ir_type`], function
-//!   instantiations come from [`crate::lower::expr::lower_call`],
-//!   and inline-method instantiations come from
-//!   [`monomorphize::enqueue_member_methods`] when a generic
-//!   struct/enum is mono'd.
+//!   instantiations come from call lowering, and inline-method
+//!   instantiations come from `monomorphize::enqueue_member_methods`
+//!   when a generic struct/enum is instantiated.
 //! - [`instantiate`]: the worklist driver. Dedupes by
 //!   [`BTreeSet`] and dispatches each `(template, args, owner)`
 //!   triple to the right [`monomorphize`] arm: struct, enum, or

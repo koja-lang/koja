@@ -1,16 +1,7 @@
-//! Runtime coverage for the locals slice in
-//! [`koja_ir_eval::Interpreter`]. The IR's local-slot
-//! instructions ([`IRInstruction::LocalDecl`] /
-//! [`IRInstruction::LocalRead`] / [`IRInstruction::LocalWrite`])
-//! lower to per-frame storage in the interpreter. These tests pin
-//! the observable behavior end-to-end:
-//!
-//! - Variable declaration + read returns the bound value.
-//! - Reassignment overwrites the slot in place.
-//! - Function parameters are reachable from the body via the same
-//!   `LocalRead` path body-level locals use (param promotion).
-//! - Nested calls keep their `Frame`s isolated (one function's
-//!   slot doesn't leak into the caller's slot).
+//! Runtime coverage for local slots ([`IRInstruction::LocalDecl`] /
+//! [`IRInstruction::LocalRead`] / [`IRInstruction::LocalWrite`]):
+//! declaration and read, reassignment, param promotion, and frame
+//! isolation across nested calls.
 
 use koja_ast::util::dedent;
 use koja_ir_eval::Value;

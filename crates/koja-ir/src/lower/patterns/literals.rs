@@ -1,7 +1,7 @@
 //! Literal-pattern lowering: emit `subject == const(value)` as a
 //! single `Bool` value. Shared between the `Pattern::Literal` arm
 //! of [`super::lower_pattern_check`] and the literal alternative
-//! arm of [`super::or_pattern::emit_or_alternative`].
+//! arm of `or_pattern::emit_or_alternative`.
 
 use koja_ast::ast::{Diagnostic, Literal};
 use koja_ast::span::Span;

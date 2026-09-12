@@ -15,28 +15,19 @@
 //! `Wrapper { inner: TokenKind }` still threads `TokenKind`'s outer
 //! into the dependency set.
 //!
-//! Pure IR-data walk, no LLVM types touched here. Lives next to
-//! the body-define modules so the order constraint and the consumer
-//! sit side-by-side.
+//! Unresolved references (symbols missing from the program) are
+//! skipped rather than treated as errors. They contribute no size
+//! dependency this walk can honor.
+//!
+//! Pure IR-data walk, no LLVM types touched here.
 
 use std::collections::{BTreeMap, BTreeSet};
 
 use koja_ir::{IREnumDecl, IRPackage, IRStructField, IRSymbol, IRType, IRVariantPayload};
 
 /// Topologically sort every enum decl across `packages` so an enum
-/// E whose payload references enum F lands after F. Used by
-/// [`crate::program::compile_program`] /
-/// [`crate::script::compile_script`] to drive
-/// [`super::enums::define_enum_completes_and_outer`] in an order
-/// where every size / alignment query sees a fully-bodied operand.
-///
-/// Struct fields are followed transitively because a struct payload
-/// inside an enum variant pulls in the structs' nested enums too
-/// (e.g. `Option<Wrapper>` where `Wrapper { inner: TokenKind }`).
-/// Unresolved references (symbols missing from the program, e.g.
-/// stdlib-internal types still threaded as opaque) are skipped
-/// instead of panicking. They contribute no size dependency we can
-/// honor here.
+/// whose payload references another enum lands after it. See the
+/// module doc for why.
 pub(crate) fn enums_in_dependency_order(packages: &[IRPackage]) -> Vec<&IREnumDecl> {
     let enum_index = build_enum_index(packages);
     let struct_field_index = build_struct_field_index(packages);
@@ -138,13 +129,8 @@ fn collect_type_enum_refs(
             deps.insert(symbol.clone());
         }
         IRType::Struct(symbol) => {
-            // Walk the struct's field types so a struct payload
-            // (e.g. `Some(Wrapper { inner: TokenKind })`) still
-            // contributes its nested enum dependencies. The
-            // struct's body is already set by this point, but its
-            // size depends on the inner enum being bodied.
-            // Honoring the chain here keeps the chunk count
-            // honest for outer-enum size computation upstream.
+            // The struct's body is already set, but its size still
+            // depends on any inner enum being bodied.
             if let Some(fields) = struct_field_index.get(symbol) {
                 for field in *fields {
                     collect_type_enum_refs(&field.ir_type, struct_field_index, deps);

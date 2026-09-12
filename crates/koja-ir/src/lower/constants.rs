@@ -56,7 +56,7 @@ pub(super) fn pools_in_constant_pool(value: &IRConstantValue) -> bool {
     }
 }
 
-/// Walk the registry's stamped [`ConstantDefinition`](koja_typecheck::registry::ConstantDefinition) for `id` into
+/// Walk the registry's stamped [`koja_typecheck::ConstantDefinition`] for `id` into
 /// an [`IRConstantValue`]. Reads the stamped definition rather than
 /// any AST `Constant.value`. Both are correct, but the registry
 /// copy is what IR considers authoritative (the AST may be

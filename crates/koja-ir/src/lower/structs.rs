@@ -3,7 +3,7 @@
 //! [`super::ops`]: one helper per AST shape.
 //!
 //! Decl lowering pulls the canonical field layout off the typecheck
-//! registry's [`GlobalKind::Struct(Some(definition))`] so we never
+//! registry's [`GlobalKind::Struct`] definition so we never
 //! re-resolve a `TypeExpr` here. Construction and field access do
 //! the same: typecheck has already validated names and types, so
 //! IR's job is purely "stamp positional indices and the resolved

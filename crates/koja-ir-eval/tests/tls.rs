@@ -4,8 +4,9 @@
 //! `SSL_accept`/`SSL_connect` handshakes, `SSL_read`/`SSL_write`).
 //!
 //! The handshake needs both peers to make progress concurrently and
-//! eval fds are blocking, so the server runs in its own interpreter
-//! on a spawned thread while the client runs on the test thread.
+//! one interpreter runs one script, so the server runs in its own
+//! interpreter on a spawned thread while the client runs on the test
+//! thread.
 //! Sequencing: the server writes a sentinel file once its listener
 //! is bound (loopback `connect` succeeds from that point, before
 //! `accept` is even called). The client waits for the sentinel.

@@ -237,7 +237,7 @@ pub(super) fn lower_receive(
 
 /// Lower one receive arm. Pulls the typed-binding's local id +
 /// resolved payload type off the pattern (stamped during typecheck-
-/// resolve in [`koja_typecheck::pipeline::resolve::process`]),
+/// resolve in the typecheck `resolve::process` pass),
 /// declares the corresponding payload slot in the function's entry
 /// block, then walks the arm's body in a fresh body block, branching
 /// the tail back to `merge_block` with the lattice-coerced result.

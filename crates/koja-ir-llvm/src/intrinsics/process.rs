@@ -190,22 +190,12 @@ fn emit_send_after<'ctx>(
     ctx.builder.build_return(None).or_ice().map(|_| ())
 }
 
-/// `Ref.call(self, msg: M, timeout: Int) -> Result<R, CallError>`:
-/// the synchronous request/reply primitive.
+/// `Ref.call(self, msg: M, timeout: Int) -> Result<R, CallError>`.
+/// Mint a token with `koja_rt_call_token`, send a
+/// `(M, Some(ReplyTo { id: caller_pid, token }))` envelope, then
+/// block on `koja_rt_call_receive`. Its result maps as:
 ///
-/// Mint a correlation token via `koja_rt_call_token()`, build a
-/// `(M, Option<ReplyTo<R>>)` envelope with the second element set
-/// to `Option::Some(ReplyTo { id: caller_pid, token })`, `koja_rt_
-/// send` it to the target, then block on `koja_rt_call_receive(
-/// token, timeout, target)`, which waits on the caller's one-shot
-/// reply slot, discarding stale replies from earlier timed-out
-/// calls, and never touches queued business / lifecycle traffic
-/// (calls are atomic). The runtime returns `-1` early when the
-/// target dies with no reply slotted, so a dead callee resolves as
-/// `ProcessDown` without waiting out the timeout. Three-way dispatch
-/// on the result:
-///
-/// - `0` -> load `R` from the reply slot -> `Result.Ok(R)`.
+/// - `0` -> `Result.Ok(R)` loaded from the reply slot.
 /// - `-1` + target alive -> `Result.Err(CallError.Timeout)`.
 /// - `-1` + target dead -> `Result.Err(CallError.ProcessDown)`.
 fn emit_call<'ctx>(

@@ -1,3 +1,7 @@
+//! `RuntimeBlock.*` family. `adopt_binary` takes a `CPtr` to a
+//! payload the runtime allocated with a Koja heap header and returns
+//! it as a `Binary` without a copy, so the caller must not free it.
+
 use inkwell::values::FunctionValue;
 use koja_ir::IRFunction;
 

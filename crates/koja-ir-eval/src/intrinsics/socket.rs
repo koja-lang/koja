@@ -1,22 +1,13 @@
 //! `@intrinsic` methods on `Socket` from
-//! [`koja/lib/net/src/net.koja`]:
+//! `koja/lib/net/src/net.koja`:
 //!
 //! * `Socket.recv_from_raw(self, count: Int) -> Result<(Binary, Binary, Int), String>`
 //! * `Socket.resolve_raw(hostname: String) -> Result<List<Binary>, String>`
 //!
-//! Both call the same runtime helpers the LLVM backend declares
-//! (`koja_socket_resolve` / `koja_socket_recv_from`), branch on the
-//! null sentinel, and unpack the returned heap buffer into eval
-//! [`Value`]s, the eval analogue of the LLVM backend's
-//! `intrinsics/socket.rs` emitters. Where LLVM transfers buffer
-//! ownership into the constructed value, eval copies the bytes out
-//! and frees the blocks through `koja_free` (keeping the runtime's
-//! live-block accounting balanced).
-//!
-//! `recv_from` waits for the socket to be readable through eval's
-//! [`crate::reactor`] (cooperatively parking the process, or blocking the
-//! thread in function mode) before delegating to the native receiver, the
-//! same pre-wait-then-delegate pattern as the `externs/net.rs` wrappers.
+//! Both call the runtime helpers (`koja_socket_resolve` /
+//! `koja_socket_recv_from`), copy the returned heap buffer into eval
+//! [`Value`]s, and free it through `koja_free`. `recv_from` waits for
+//! readability through [`crate::reactor`] first.
 
 use std::cell::RefCell;
 use std::ffi::CString;

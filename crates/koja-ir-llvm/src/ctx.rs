@@ -1,23 +1,9 @@
 //! Bundle of the inkwell handles every emission step needs (the
 //! borrowed [`Context`], a fresh [`Module`], and a [`Builder`] tied
 //! to the same `'ctx` lifetime), the per-emission counters and
-//! per-function slot table, and a handle on the type-layout
-//! registry [`crate::layout::TypeLayouts`].
-//!
-//! Deliberately a passive bundle with no business logic. Every
-//! orchestration concern (program / script entry, function emission,
-//! main-wrapper synthesis, instruction-level emission) lives in its
-//! own module and takes `&EmitContext` as a parameter, so this struct
-//! never grows into a god object. Type-layout machinery (struct +
-//! enum registries, host `TargetData`) lives in [`crate::layout`]
-//! and is accessed through the [`Self::layouts`] field. Emission
-//! call sites that need it go through `ctx.layouts.<method>(…)`
-//! so the layered design stays visible at every reference.
-//!
-//! Named [`EmitContext`] rather than `LlvmCtx` because the role is
-//! "context threaded through every emit operation," and to avoid
-//! visual collision with [`inkwell::context::Context`] (which we
-//! borrow inside).
+//! per-function state, and the type-layout registry
+//! [`crate::layout::TypeLayouts`]. A passive bundle that every
+//! emission module takes as a `&EmitContext` parameter.
 
 use std::cell::{Cell, RefCell};
 use std::collections::{BTreeMap, HashMap};
@@ -48,69 +34,49 @@ pub(crate) struct EmitContext<'ctx> {
     pub(crate) builder: Builder<'ctx>,
     pub(crate) context: &'ctx Context,
     pub(crate) module: Module<'ctx>,
-    /// Type-layout registry: struct + enum LLVM type handles plus
-    /// the target [`inkwell::targets::TargetData`] used by the enum
-    /// layout computation. See [`crate::layout`].
+    /// Struct + enum LLVM type handles plus the target
+    /// [`inkwell::targets::TargetData`]. See [`crate::layout`].
     pub(crate) layouts: TypeLayouts<'ctx>,
     /// The one target machine for this compile. Layout numbers come
     /// from it and the object emitter writes through it, so the two
     /// cannot disagree. See [`crate::target`].
     pub(crate) target_machine: TargetMachine,
-    /// Counter for `koja_<prefix>.<n>` global names: strings,
-    /// binary, bits constants all share a single sequence so each
-    /// emitted global symbol is unique. `Cell<u32>` because emission
-    /// walks `&EmitContext` immutably.
+    /// Counter for `koja_<prefix>.<n>` global names. One sequence
+    /// across strings, binaries, and bits keeps each symbol unique.
     payload_counter: Cell<u32>,
-    /// Per-function local-variable slot map: `IRLocalId ->
-    /// PointerValue` (the LLVM `alloca` materializing the slot).
-    /// Populated as `LocalDecl` instructions emit, consumed by
-    /// `LocalRead` / `LocalWrite` to recover the stack pointer for
-    /// `load` / `store`. Reset between functions through
-    /// [`Self::reset_locals`] since slot identity is per-function.
+    /// Per-function `IRLocalId` to `alloca` map, reset between
+    /// functions through [`Self::reset_locals`].
     local_slots: RefCell<HashMap<IRLocalId, PointerValue<'ctx>>>,
     /// Merged `IRPackage::constants` from the input program / script.
     /// Set by [`Self::attach_constant_pool`] before any instruction
-    /// emission. [`IRInstruction::LoadConst`] requires it.
+    /// emission. [`koja_ir::IRInstruction::LoadConst`] requires it.
     pub(crate) constant_pool: RefCell<Option<Arc<ConstantPoolSnapshot>>>,
     /// One LLVM SSA value per pooled constant [`IRSymbol`]: first
     /// `LoadConst` materializes (enum / struct aggregate or string
     /// global), later references reuse the cached handle.
     pub(crate) load_const_cache: RefCell<BTreeMap<IRSymbol, BasicValueEnum<'ctx>>>,
-    /// `IRSymbol -> FunctionValue` index populated at function
-    /// declare time. Decouples call-site resolution from the LLVM
-    /// symbol name. `@extern "C"` declarations may declare under a
-    /// `link_name` alias (`fn cosf` -> `@cos`), so `module.get_function`
-    /// keyed at the IR's mangled name would miss. Instruction
-    /// emission goes through [`Self::declared_function`] /
-    /// [`Self::register_declared_function`] instead.
+    /// `IRSymbol -> FunctionValue` index populated at declare time.
+    /// `@extern "C"` declarations may declare under a `link_name`
+    /// alias, so `module.get_function` keyed at the IR's mangled name
+    /// would miss.
     declared_functions: RefCell<BTreeMap<IRSymbol, FunctionValue<'ctx>>>,
     /// `@extern "C"` declarations returning `Float` / `Float32`,
     /// mapped to their C-visible name. Call sites consult this to
     /// emit the finiteness trap that keeps foreign NaN / inf out of
     /// the finite-only `Float` types.
     extern_float_returns: RefCell<BTreeMap<IRSymbol, String>>,
-    /// Per-function closure-emit frame, set while a
-    /// `FunctionKind::Closure` body is being defined and cleared
-    /// when it returns. `LoadCapture` reads `env_ptr` + `env_struct`
-    /// to GEP its slot. Non-closure bodies see `None`.
+    /// Per-function closure-emit frame, `Some` only while a
+    /// `FunctionKind::Closure` body is being defined.
     closure_frame: RefCell<Option<ClosureFrame<'ctx>>>,
-    /// Per-function `IRBlockId -> BasicBlock` map. Set by
-    /// [`crate::function::define_function`] before the body walk and
-    /// cleared on return. The [`IRInstruction::Receive`] emitter in
-    /// [`crate::emit::process`] consults it to resolve arm body
-    /// blocks (the host block ends with the dispatch + the IR-level
-    /// `Unreachable` terminator). Non-Receive emit sites continue to
-    /// take `block_map` by parameter through the existing seam.
+    /// Per-function `IRBlockId -> BasicBlock` map, set by
+    /// [`crate::function::define_function`] around the body walk.
+    /// The [`koja_ir::IRInstruction::Receive`] emitter reads it to
+    /// resolve arm body blocks. Other emit sites take `block_map` by
+    /// parameter.
     current_block_map: RefCell<Option<BTreeMap<IRBlockId, BasicBlock<'ctx>>>>,
-    /// Per-function tail-call-optimization frame, set by
-    /// [`crate::function::define_function`] for any function whose
-    /// IR carries an [`koja_ir::IRTerminator::TailCall`].
-    /// Carries the synthesized loop-header LLVM block and the
-    /// per-param `(local_id, type)` slots the
-    /// [`koja_ir::IRTerminator::TailCall`] terminator emitter
-    /// stores its new args into before branching back to the
-    /// header. `None` for non-TCO functions. The terminator emitter
-    /// panics if it ever fires without a frame staged.
+    /// Per-function tail-call frame, `Some` only for functions whose
+    /// IR carries a [`koja_ir::IRTerminator::TailCall`]. See
+    /// [`TcoFrame`].
     tco_frame: RefCell<Option<TcoFrame<'ctx>>>,
     /// DWARF emitter, present only on the object-emitting `compile_*`
     /// paths. `None` keeps the `emit_*_llvm_ir` snapshot paths free of
@@ -144,7 +110,7 @@ pub(crate) struct TcoFrame<'ctx> {
 /// `env_ptr` is the body's first LLVM parameter (the env pointer
 /// the caller's `MakeClosure` malloc'd). `env_struct` is the LLVM
 /// type assembled from the body's `FunctionKind::Closure::env_layout`
-/// so [`crate::emit::instruction`] can GEP into the right field.
+/// so instruction emission can GEP into the right field.
 #[derive(Clone, Copy)]
 pub(crate) struct ClosureFrame<'ctx> {
     pub(crate) env_ptr: PointerValue<'ctx>,
@@ -315,8 +281,8 @@ impl<'ctx> EmitContext<'ctx> {
     }
 
     /// Stage the per-function `IRBlockId -> BasicBlock` map for
-    /// emit sites that don't otherwise see it (today: the
-    /// [`IRInstruction::Receive`] dispatcher). Pairs with
+    /// emit sites that do not otherwise see it (today: the
+    /// [`koja_ir::IRInstruction::Receive`] dispatcher). Pairs with
     /// [`Self::clear_block_map`]. Calling twice without a clear in
     /// between panics so the per-function scope stays explicit.
     pub(crate) fn set_block_map(&self, block_map: BTreeMap<IRBlockId, BasicBlock<'ctx>>) {
@@ -335,10 +301,10 @@ impl<'ctx> EmitContext<'ctx> {
     }
 
     /// Resolve `block_id` to its registered `BasicBlock`. Misses
-    /// panic, because the [`IRInstruction::Receive`] emitter calls
+    /// panic, because the [`koja_ir::IRInstruction::Receive`] emitter calls
     /// into this only after the per-function block-declare phase has
     /// run, so a miss means the lowerer produced an arm body block
-    /// that wasn't placed in the function's `blocks` list.
+    /// that was not placed in the function's `blocks` list.
     pub(crate) fn block_for(&self, block_id: IRBlockId) -> BasicBlock<'ctx> {
         *self
             .current_block_map
@@ -420,7 +386,8 @@ impl<'ctx> EmitContext<'ctx> {
     }
 
     /// Wire the flattened constant pool built from input packages.
-    /// Must run before emitting any IR that can contain [`LoadConst`].
+    /// Must run before emitting any IR that can contain
+    /// [`koja_ir::IRInstruction::LoadConst`].
     pub(crate) fn attach_constant_pool(&self, pool: Arc<ConstantPoolSnapshot>) {
         *self.constant_pool.borrow_mut() = Some(pool);
     }
@@ -471,23 +438,14 @@ impl<'ctx> EmitContext<'ctx> {
         })
     }
 
-    /// Drop every registered slot. Called between function emissions
-    /// so the per-function slot table doesn't bleed across `IRSymbol`
-    /// boundaries.
+    /// Drop every registered slot. Called between function emissions.
     pub(crate) fn reset_locals(&self) {
         self.local_slots.borrow_mut().clear();
     }
 
-    /// Resolve the opaque outer `StructType` for an enum by its
-    /// mangled name. Outer types are minted (and so registered in the
-    /// LLVM context's name table) by [`crate::layout::enums::declare_enum_type`].
-    /// This accessor is a thin alias over [`Context::get_struct_type`]
-    /// so emission sites read with intent: "the enum outer for
-    /// `<symbol>`" rather than "named LLVM struct by string." Bodies
-    /// only land later in [`crate::layout::enums::define_enum_bodies`],
-    /// but the opaque handle is stable across both phases, which is
-    /// what struct field / enum payload positions need before the
-    /// body-define pass runs.
+    /// Resolve the outer `StructType` for an enum by its mangled name.
+    /// [`crate::layout::enums::declare_enum_type`] mints it, and the
+    /// handle is stable before and after the body is set.
     pub(crate) fn enum_outer_type(&self, mangled: &str) -> StructType<'ctx> {
         self.context.get_struct_type(mangled).unwrap_or_else(|| {
             panic!(

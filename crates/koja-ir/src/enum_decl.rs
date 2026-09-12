@@ -5,69 +5,25 @@
 //! package-qualified name, mirroring [`crate::IRStructDecl`]) and
 //! carries variant metadata in declaration order. Each
 //! [`IREnumVariant`] carries an [`IRVariantTag`] equal to its
-//! 0-based position, and the tag width caps the variant count at 256
-//! (the LLVM layout uses an `i8` discriminant). Variant order
-//! matches declaration order so eval / LLVM index by position.
+//! 0-based position, so backends index by position. The `u8` tag
+//! caps the variant count at 256.
 //!
 //! The [`IRVariantPayload::Struct`] arm and the
-//! [`EnumPayloadInit::Struct`] arm intentionally reuse
-//! [`crate::IRStructField`] and [`crate::StructFieldInit`], since a
-//! struct variant's payload layout is structurally a struct, and
-//! the construction-site init is structurally a `StructInit::fields`.
-//! Reusing keeps the seal helpers (dense-index / unique-name /
-//! supported-type checks, init canonicalization) usable as-is for
-//! struct-variant payloads without duplicating the validation
-//! pipeline.
+//! [`EnumPayloadInit::Struct`] arm reuse [`crate::IRStructField`]
+//! and [`crate::StructFieldInit`], since a struct variant's payload
+//! is structurally a struct. The seal helpers for structs then apply
+//! to struct-variant payloads as is.
 //!
-//! ## LLVM layout (Rust-style)
-//!
-//! Each enum gets three families of LLVM types:
-//!
-//! - `%<enum>` (outer): an opaque blob sized + aligned to fit the
-//!   largest complete variant struct. `{ [N x i<max_align*8>] }`,
-//!   where the `iN` chunks are the trick that gives LLVM "this storage is
-//!   aligned to max_align" (a plain `[M x i8]` is alignment-1
-//!   regardless of size).
-//! - `%<enum>.<variant>` (per-variant complete): non-packed
-//!   `{ i8 tag, [pad x i8] padding, %<enum>.<variant>.payload }`,
-//!   or just `{ i8 tag }` for Unit. The padding aligns the payload
-//!   struct to its natural alignment so each payload field lands at
-//!   a properly-aligned offset.
-//! - `%<enum>.<variant>.payload` (per-variant payload): non-packed
-//!   `struct_type(&fields, false)` over the variant's payload field
-//!   types in declaration order. Skipped for Unit variants.
-//!
-//! Construction allocas the outer type (correct size + alignment),
-//! then GEPs through the per-variant complete type for the tag and
-//! the per-variant payload struct for fields. With opaque pointers
-//! (`ptr`), the same alloca pointer flows through different GEPs
-//! typed as different structs, so no `bitcast` instruction is emitted
-//! at the LLVM IR level.
-//!
-//! We avoid a packed `{ i8, [N x i8] }` layout because
-//! it misaligns payload fields (technically UB, relying on
-//! x86_64 / ARM64 tolerating misaligned access). The Rust-style
-//! layout is correct on every target LLVM supports.
+//! Storage layout belongs to the backends.
 
 use crate::function::IRSymbol;
 use crate::struct_decl::{IRStructField, StructFieldInit};
 use crate::types::{IRType, ValueId};
 
-/// Discriminant tag for an enum variant. Wraps a `u8` because the
-/// LLVM layout uses an `i8` field for the tag, which keeps the tag width
-/// contract on the type rather than scattered across call sites.
-///
-/// Mirrors the opaque-newtype pattern other IR identifiers use
-/// ([`crate::IRBlockId`], [`crate::ValueId`], [`crate::IRLocalId`]).
-/// It is distinct from raw `u8` so the type system distinguishes "this is
-/// a variant tag" from "this is some other byte." `Display` renders
-/// `#0`, `#1`, … to align with `bb<n>` / `%<n>` IR text-format
-/// conventions.
-///
-/// **Transient invariant**: capped at 256 variants total per enum.
-/// Lowering bounds-checks `position <= u8::MAX` and surfaces a
-/// feature-gap diagnostic on overflow. The cap goes away when we
-/// widen the tag (a follow-up beyond this slice).
+/// Discriminant tag for an enum variant, equal to its 0-based
+/// declaration position. The `u8` width is the ABI tag width, so
+/// lowering rejects enums with more than 256 variants. `Display`
+/// renders `#<n>` to match the `bb<n>` / `%<n>` IR text format.
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct IRVariantTag(pub u8);
 

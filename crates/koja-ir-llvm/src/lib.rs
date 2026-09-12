@@ -4,30 +4,6 @@
 //! emitting native object code via [`inkwell`] instead of
 //! interpreting in-process.
 //!
-//! # Slice scope
-//!
-//! Emits a single-module LLVM IR program with one external `main`
-//! symbol of signature `i64 ()`. `main` always returns 0. The
-//! body's value is fed to a runtime printer
-//! ([`koja-runtime-posix/src/intrinsics.rs`](../../koja-runtime-posix/src/intrinsics.rs))
-//! before the return so the binary's observable behavior matches
-//! the eval interpreter's `print value, exit 0` contract. Temporary
-//! scaffolding that goes away with `IO.puts`.
-//!
-//! Supported IR vocabulary:
-//!
-//! - `Const(Bool, Int8..Int64, UInt8..UInt64)`.
-//! - `BinaryOp::{Add, Eq, Gt, GtEq, Lt, LtEq, NotEq}`:
-//!   `Sub`/`Mul`/`Div`/`Mod` are feature-gap follow-ups.
-//! - `UnaryOp::{Neg, Not}`.
-//! - `Call`: direct calls to functions declared in the same
-//!   module, resolved by mangled name. Param `ValueId`s are seeded
-//!   into the body's value map up front so any future
-//!   parameter-reference lowering already finds its operands.
-//! - `Return`.
-//!
-//! # Public API
-//!
 //! Two pairs of entry points, one per IR shape:
 //!
 //! - [`compile_program`] / [`emit_llvm_ir`] for project-mode source
@@ -38,32 +14,11 @@
 //! `compile_*` writes a native object file at the requested path.
 //! Linking lives in `koja-driver`.
 //!
-//! # Module layout
-//!
-//! - [`ctx`]: [`ctx::EmitContext`] bundle (inkwell context + module +
-//!   builder + per-emission counters + per-function slot table),
-//!   the value threaded through every emit operation.
-//! - [`layout`]: type-layout registry + target `TargetData` plus the
-//!   pre-emit submodules (`layout::structs`, `layout::enums`) that
-//!   mint LLVM types from sealed IR decls. Held as
-//!   `EmitContext::layouts`.
-//! - [`emit`]: IR-instruction-to-LLVM-instruction layer.
-//!   `mod.rs` (block seams + lookups), `instruction.rs` (dispatch +
-//!   const + call), `ops.rs` (binary + unary). Type creation lives
-//!   in [`layout`].
-//! - [`function`]: non-entry function declare + define +
-//!   param/block seeding.
-//! - [`main_wrapper`]: host `main` trampoline synthesis (script and
-//!   program shapes) + the `__koja_app_name` global.
-//! - [`object`]: native `.o` emission through the context's
-//!   `TargetMachine`.
-//! - [`program`] / [`script`]: orchestrators for the two IR shapes.
-//! - [`reductions`]: the per-arch reduction-budget strategy behind
-//!   `YieldCheck` (reserved register on aarch64, thread-local on
-//!   x86_64) and the target feature that reserves the register.
-//! - [`target`]: triple, CPU, and feature selection behind the one
-//!   `TargetMachine` each compile builds.
-//! - [`types`]: `IRType` -> inkwell `IntType` mapping.
+//! [`program`] and [`script`] orchestrate a compile. [`layout`] mints
+//! LLVM types from sealed IR decls, [`function`] declares and defines
+//! functions, [`emit`] lowers instructions, [`intrinsics`] synthesizes
+//! `@intrinsic` bodies, and [`runtime`] declares the `koja-runtime`
+//! externs they call.
 
 mod constant_pool;
 mod ctx;

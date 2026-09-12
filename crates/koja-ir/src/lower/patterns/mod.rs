@@ -146,7 +146,7 @@ pub(super) enum PatternCheck {
 }
 
 /// Wiring discipline for a chain of [`TestStep`]s. Drives the
-/// `then`/`else` choice in [`super::match_expr::wire_test_chain`].
+/// `then`/`else` choice in `match_expr::wire_test_chain`.
 #[derive(Clone, Copy, Eq, PartialEq)]
 pub(super) enum ChainMode {
     /// Every step must succeed for the arm to fire. Interior

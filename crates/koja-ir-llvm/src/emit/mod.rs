@@ -1,41 +1,11 @@
-//! Per-block emission seams. Every IR block flows through exactly
-//! one of these. Orchestrators choose between [`emit_block`] (the
-//! convenient "instructions then terminator" path used by every
-//! non-`main` walker) and the [`emit_instructions`] +
-//! [`emit_terminator_default`] split (used by
-//! [`crate::main_wrapper::emit_script_main`] so it can replace the
-//! natural terminator on return blocks with the `ret void` that
-//! discards the script's trailing value).
-//!
-//! Both seams accept a `values: &mut ValueMap` so callers can
-//! pre-bind parameter [`ValueId`]s to LLVM `function.get_nth_param`
-//! values before the body walk and so cross-block walks can thread
-//! a single value map through every IR block. They also accept a
-//! [`BlockMap`] so `Branch` / `CondBranch` terminators can resolve
-//! their target [`IRBlockId`] to a real
-//! [`inkwell::basic_block::BasicBlock`].
-//!
-//! # Module layout
-//!
-//! - This file: block seams, lookups, type aliases.
-//! - [`instruction`]: per-instruction dispatch (`emit_instruction`).
-//! - [`ops`]: binary + unary operator emission, parallel to
-//!   `koja-ir-eval/src/ops.rs`.
-//! - [`binary_construct`]: `BinaryConstruct` literal emission.
-//! - [`calls`]: direct-call (`Call`) emission.
-//! - [`closures`]: closure-shaped instructions (`MakeClosure`,
-//!   `CallClosure`, `LoadCapture`) and the `IRType::Function` arm of
-//!   `DropLocal`.
-//! - [`concat`]: `Concat` emission.
-//! - [`constants`]: `Const` and `LoadConst` emission.
-//! - [`enums`]: `EnumConstruct`, `EnumTagGet`, `EnumPayloadFieldGet`.
-//! - [`locals`]: `LocalDecl` / `LocalRead` / `LocalWrite` /
-//!   `DropLocal` (heap arms).
-//! - [`structs`]: `StructInit`, `FieldGet`.
-//!
-//! Type-creation pre-emit (struct + enum LLVM types from sealed IR
-//! decls) lives in [`crate::layout`], not here. This module is
-//! reserved for the IR-instruction-to-LLVM-instruction layer.
+//! IR-instruction-to-LLVM-instruction layer. Every IR block flows
+//! through [`emit_block`], or through the [`emit_instructions`] +
+//! [`emit_terminator_default`] split when the caller replaces the
+//! natural terminator ([`crate::main_wrapper::emit_script_main`]).
+//! Both take a [`ValueMap`] so callers can pre-bind parameter
+//! [`ValueId`]s and thread one map across blocks, and a [`BlockMap`]
+//! to resolve branch targets. [`instruction`] dispatches per
+//! instruction to the sibling modules named after what they emit.
 
 use std::collections::{BTreeMap, HashSet, VecDeque};
 
@@ -69,10 +39,8 @@ mod unions;
 
 pub(crate) use instruction::emit_instruction as emit_instruction_external;
 
-/// Per-function SSA index. The migration to [`BasicValueEnum`] (from
-/// `IntValue`) is what lets pointer-typed values (e.g. `IRType::String`
-/// payload pointers) flow alongside ints. Op sites that need the int
-/// narrow at the seam through [`lookup_int`].
+/// Per-function SSA index. Op sites that need an int narrow through
+/// [`lookup_int`].
 pub(crate) type ValueMap<'ctx> = BTreeMap<ValueId, BasicValueEnum<'ctx>>;
 pub(crate) type BlockMap<'ctx> = BTreeMap<IRBlockId, BasicBlock<'ctx>>;
 
@@ -98,10 +66,9 @@ pub(crate) type PhiMap<'ctx> = BTreeMap<IRBlockId, Vec<PhiValue<'ctx>>>;
 /// Empty `blocks` returns an empty set. One-block functions return
 /// `{blocks[0].id}`.
 ///
-/// Mirrors what `IRTerminator::Unreachable` would express more
-/// directly once it lands alongside `Kernel.panic` and the other
-/// `Never`-returning vocabulary. Until then this CFG walk is the
-/// boundary's stand-in.
+/// `IRTerminator::Unreachable` marks a block the IR already knows
+/// diverges. This walk also catches blocks no edge leads to, such as
+/// the merge of an `if` whose arms both diverge.
 pub(crate) fn reachable_blocks(blocks: &[IRBasicBlock]) -> HashSet<IRBlockId> {
     let mut reachable = HashSet::new();
     let Some(entry) = blocks.first() else {
@@ -328,26 +295,11 @@ pub(crate) fn emit_terminator_default<'ctx>(
     }
 }
 
-/// Lower an [`IRTerminator::TailCall`] to the per-function TCO
-/// scheme: store each `args[i]` into the matching parameter's
-/// local slot, zero every body slot, then branch back to the
-/// synthesized `tco_loop` header staged on
-/// [`EmitContext::tco_frame`] by
-/// [`crate::function::define_function`]. Reuses the already-
-/// allocated entry-block alloca so there's no per-iteration stack
-/// growth. The CFG just loops back through the same slots and
-/// the body re-runs against fresh values.
-///
-/// The body-slot zeroing restores the fresh-activation invariant
-/// the trailing exit drops rely on: those drops have already
-/// released every slot's heap, so any slot the next iteration's
-/// taken path doesn't re-declare must read as zero (a no-op drop)
-/// at that iteration's exit, not as the stale released value.
-///
-/// The seal pass guarantees `args.len()` matches the function's
-/// param arity. Missing the TCO frame here is a compiler bug
-/// (define_function should have staged it whenever any block in
-/// the function carries a `TailCall`).
+/// Lower an [`IRTerminator::TailCall`]. Store each `args[i]` into the
+/// matching parameter slot, zero every body slot (see
+/// [`crate::ctx::TcoFrame`] for why), then branch to the loop header.
+/// The seal pass guarantees `args.len()` matches the param arity, and
+/// a missing frame is a compiler bug.
 fn emit_tail_call<'ctx>(
     ctx: &EmitContext<'ctx>,
     args: &[ValueId],

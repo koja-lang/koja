@@ -18,9 +18,10 @@ use crate::runtime::{
 use super::heap_layout::{block_alloc_size, init_heap_block, load_bit_length};
 
 /// Lower an `IRInstruction::Concat` to its per-kind shape. `String`
-/// and `Binary` both byte-align: the copying shape is `malloc(8 +
-/// total_bytes [+1])` + two `memcpy`s + (String only) trailing
-/// `\0`, and the consuming shape is one runtime call. `Bits` always
+/// and `Binary` both byte-align. The copying shape is
+/// `malloc(HEADER_BYTES + total_bytes [+1])` + two `memcpy`s +
+/// (String only) trailing `\0`, and the consuming shape is one
+/// runtime call. `Bits` always
 /// defers to the `__koja_concat_bits` runtime helper.
 pub(super) fn emit_concat<'ctx>(
     ctx: &EmitContext<'ctx>,
@@ -91,6 +92,8 @@ fn emit_byte_aligned_concat<'ctx>(
         .build_memcpy(payload, 1, l_ptr, 1, l_bytes)
         .or_ice()?;
 
+    // SAFETY: the block was sized to `l_bytes + r_bytes`, so
+    // `payload + l_bytes` stays inside it.
     let mid = unsafe {
         ctx.builder
             .build_in_bounds_gep(i8_ty, payload, &[l_bytes], "cat_mid")

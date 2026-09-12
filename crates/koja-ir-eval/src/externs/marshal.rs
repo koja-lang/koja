@@ -42,7 +42,7 @@ macro_rules! c_type {
 
 /// Koja ABI token + `&Value` -> raw C argument. Expands inside a
 /// handler. A shape mismatch early-returns the handler's uniform
-/// [`type_mismatch`](super::marshal::type_mismatch) error.
+/// [`type_mismatch`] error.
 macro_rules! unmarshal_arg {
     (CPtr, $value:expr, $symbol:expr, $signature:expr, $args:expr) => {
         match $value {

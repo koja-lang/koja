@@ -2,7 +2,7 @@
 //! Mirrors [`super::structs`]: one helper per AST shape.
 //!
 //! Decl lowering pulls the canonical variant roster off the
-//! typecheck registry's [`GlobalKind::Enum(Some(definition))`] so we
+//! typecheck registry's [`GlobalKind::Enum`] definition so we
 //! never re-resolve a `TypeExpr` here. Construction does the same:
 //! typecheck has already validated names and types, so IR's job is
 //! purely "stamp positional indices onto the variant tag and the
@@ -38,7 +38,7 @@ use super::structs::canonicalize_struct_inits;
 
 /// The variant being constructed, bundled so the per-shape helpers
 /// take one identity arg instead of two. Mirrors the `&RegistryEntry`
-/// pattern in [`super::expr::emit_call`] (which threads a single
+/// pattern in `calls::emit_call` (which threads a single
 /// identity object through the bare- vs instance-call dispatch).
 /// Keeps `lower_struct_variant` under the clippy arg-count
 /// threshold without bundling the ambient
@@ -55,10 +55,9 @@ struct VariantTarget {
 /// Lower an `Item::Enum` against the typecheck registry. Returns
 /// `None` for generic decls (they specialize through
 /// [`crate::generics::instantiate`] off the typecheck registry) and
-/// for decls where any feature-gap diagnostic surfaced. Tag
-/// bounds-check (variant count > 256) surfaces as a feature-gap
-/// diagnostic. The LLVM `i8` tag width caps the variant count, and
-/// widening is a follow-up beyond this slice.
+/// for decls where any feature-gap diagnostic surfaced. More than
+/// 256 variants surfaces as a feature-gap diagnostic, since the `u8`
+/// [`IRVariantTag`] caps the count.
 pub(super) fn lower_enum_decl(
     decl: &EnumDecl,
     package: &str,

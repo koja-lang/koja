@@ -1,45 +1,22 @@
 //! Eval's cooperative I/O reactor, the second [`Reactor`] implementor
-//! after the native `koja-runtime-posix` adapter, and the shape a future
-//! `koja-runtime-wasi` adapter reuses (`poll_oneoff` in place of POSIX
-//! `poll(2)`).
+//! after the native `koja-runtime-posix` adapter. Eval is
+//! single-threaded, so registration state is a thread-local
+//! [`REGISTRY`] shared between the extern handlers that register fds
+//! and the [`CooperativeDriver`](koja_runtime_core::CooperativeDriver)
+//! that polls it when the ready queue empties.
 //!
-//! Native runs its reactor on a dedicated thread and context-switches
-//! blocked processes. Eval is single-threaded, so the reactor's
-//! registration state is a thread-local [`REGISTRY`] shared between the
-//! extern handlers that register fds ([`crate::externs::fd`]'s `io_block`
-//! / `watch`) and the [`CooperativeDriver`](koja_runtime_core::CooperativeDriver)
-//! that polls it when the ready queue empties. Both run on the one
-//! interpreter thread, so a plain `RefCell` borrow held across single
-//! operations is sufficient.
+//! Two readiness paths. [`io_block`] parks the process `WaitingIO`
+//! against a [`Waker::Resume`], or blocks the thread on the fd in
+//! function mode where no driver runs. `watch` registers a
+//! [`Waker::Deliver`] and the driver mints an `IOReady` message when
+//! the fd fires. Registration is oneshot.
 //!
-//! Two readiness paths, one waker vocabulary (mirroring native):
-//!
-//! - **`io_block`** (a syscall hit `EAGAIN`, or a `Fd.block`): the process
-//!   parks `WaitingIO` against a [`Waker::Resume`], and the driver promotes
-//!   it when the fd fires. In *function* mode (a plain `koja eval` of a
-//!   non-process body, driven by [`block_on`](crate::scheduler::block_on)
-//!   with no driver loop) there is no one to promote it, so `io_block`
-//!   blocks the single thread on the fd instead. Both are legal under the
-//!   scheduler protocol.
-//! - **`watch`** (`Fd.watch`): registers a [`Waker::Deliver`], and the
-//!   driver mints an `IOReady` message for the watcher when the fd fires.
-//!
-//! Registration is oneshot: a fired fd is dropped from the registry (a
-//! `Fd.watch` owner re-arms by watching again), matching the native
-//! poller's `PollMode::Oneshot`.
-//!
-//! ## Why pre-wait then delegate
-//!
-//! The native `koja_fd_read` / `koja_socket_accept` / ... symbols couple the
-//! syscall and its koja-heap marshaling with the *native* `io_block`
-//! (native table + asm context switch), which eval cannot drive. Eval's
-//! cooperative wrappers ([`crate::externs::fd`], [`crate::externs::net`])
-//! therefore [`io_block`] for readiness *first*, then call the native
-//! symbol on an fd that is now ready, so its internal `block_until_ready`
-//! completes on the first syscall and the native `io_block` is never
-//! reached. The invariant that makes this sound: eval is single-threaded,
-//! so nothing drains the fd between the readiness check and the immediate
-//! delegated syscall.
+//! The native `koja_fd_*` and `koja_socket_*` symbols park through the
+//! native `io_block`, which eval cannot drive. Eval's wrappers
+//! therefore wait for readiness here first and only then call the
+//! native symbol, so its own wait completes on the first syscall.
+//! This is sound because eval is single-threaded and nothing drains
+//! the fd between the readiness check and the delegated syscall.
 
 use std::cell::RefCell;
 use std::collections::HashMap;

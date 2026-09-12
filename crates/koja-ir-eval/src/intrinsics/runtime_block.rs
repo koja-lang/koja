@@ -1,3 +1,7 @@
+//! `RuntimeBlock.*` family. `adopt_binary` takes a `CPtr` to a
+//! payload the runtime allocated with a Koja heap header, copies the
+//! bytes into a [`Value::Binary`], and releases the block.
+
 use koja_ir::RuntimeBlockMethod;
 
 use crate::abi;

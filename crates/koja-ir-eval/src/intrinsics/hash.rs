@@ -1,5 +1,5 @@
 //! Eval handlers for the `Hash` intrinsic family: `Bool` and the
-//! 8 integer cells (flattened to [`Value::Int(i64)`]) feed their
+//! 8 integer cells (flattened to [`Value::Int`]) feed their
 //! native bit pattern through SplitMix64. `String` and `Binary`
 //! walk each payload byte through FNV-1a (offset basis
 //! `0xcbf29ce484222325`, prime `0x100000001b3`) so eval and native

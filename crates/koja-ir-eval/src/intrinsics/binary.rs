@@ -1,25 +1,5 @@
-//! `Binary.*` and `Bits.*` family.
-//!
-//! - `Binary.at(self, index: Int) -> Option<Int>`: O(1) byte read.
-//!   Out-of-bounds indices return `None`.
-//! - `Binary.byte_size(self) -> Int`: `bytes.len()`.
-//! - `Binary.find(self, needle: Binary, from: Int) -> Option<Int>`:
-//!   byte offset of the first match at or after `from`, through the
-//!   shared `koja_runtime::find_bytes` helper.
-//! - `Binary.slice(self, range: Range) -> Binary`: copies the
-//!   inclusive byte range `[start, stop]`. Endpoints clamp to the
-//!   binary's bounds.
-//! - `Binary.to_bits(self) -> Bits`: zero-cost widening. Reuses
-//!   the existing byte vec with `bit_length = bytes.len() * 8`.
-//! - `Binary.to_string(self) -> Result<String, String.ConversionError>`:
-//!   UTF-8 validate the bytes and materialize the `Result` enum
-//!   via the receiver symbol on `function.return_type`.
-//! - `Bits.bit_size(self) -> Int`: the stored `bit_length`.
-//! - `Bits.byte_at(self, index: Int) -> Option<Int>`: storage byte
-//!   read over the `ceil(bit_length / 8)` bytes the value carries.
-//! - `Bits.to_binary(self) -> Result<Binary, String>`: require
-//!   byte-aligned bit_length and return `Ok(Binary)`, else
-//!   `Err(reason)`.
+//! `Binary.*` and `Bits.*` family. Slices clamp to the value's
+//! bounds, and `Bits.to_binary` requires a byte-aligned length.
 
 use std::str;
 

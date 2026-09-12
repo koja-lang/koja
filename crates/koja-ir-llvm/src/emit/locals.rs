@@ -1,7 +1,7 @@
 //! Local-slot emission: `LocalDecl`, `LocalRead`, `LocalWrite`, and
 //! the type-keyed `DropLocal` dispatcher. Heap payloads (`String`,
-//! `Binary`, `Bits`) free through their `payload-8` block-base
-//! header. Closure-typed slots delegate to
+//! `Binary`, `Bits`) release through the rc word at their block
+//! base. Closure-typed slots delegate to
 //! [`super::closures::emit_drop_closure_env`].
 
 use inkwell::values::BasicValueEnum;
@@ -21,14 +21,9 @@ use super::{ValueMap, closures, indirect, lookup};
 /// [`crate::function::define_function`]), in which case the existing
 /// alloca is reused.
 ///
-/// The slot is zero-initialized *at the decl site* (not the hoisted
-/// alloca), so re-entering the declaring block (a loop body, a TCO
-/// iteration) restores the fresh-slot state. Exit drops therefore
-/// always see either a live value or zero, and dropping zero is a
-/// no-op (null-safe rc primitives + null-propagating
-/// [`block_base`]). This is what makes it safe to "drop a slot the
-/// taken path never wrote", e.g. the payload local of an untaken
-/// `receive` arm.
+/// The slot is zero-initialized at the decl site, not the hoisted
+/// alloca, so re-entering the declaring block restores the fresh-slot
+/// state and an exit drop of a never-written slot is a no-op.
 pub(super) fn emit_local_decl<'ctx>(
     ctx: &EmitContext<'ctx>,
     local: IRLocalId,
@@ -75,15 +70,12 @@ pub(super) fn emit_local_write<'ctx>(
     ctx.builder.build_store(slot, value).or_ice().map(|_| ())
 }
 
-/// `String`, `Binary`, and `Bits` all share the single
-/// `[i64 rc][i64 bit_length][payload]` layout (SSA pointer at the
-/// payload), so a single block-base GEP + `koja_rc_dec` covers all
-/// three: the rc is decremented and the block freed at zero (immortal
-/// rodata blocks are skipped by the runtime). `Function`-typed slots
-/// delegate to the closure drop helper, and no-glue aggregate slots
-/// are a no-op. Collections / boxes panic loudly, because they
-/// always carry glue and must have been rewritten to a
-/// `Call @drop_T` by `elaborate`.
+/// Heap leaves (`String`, `Binary`, `Bits`) drop through one
+/// `koja_rc_dec` on the block base. `Function`-typed slots delegate
+/// to the closure drop helper, and no-glue aggregate slots are a
+/// no-op. Collections and boxes panic, because they always carry
+/// glue and must have been rewritten to a `Call @drop_T` by
+/// `elaborate`.
 pub(super) fn emit_drop_local<'ctx>(
     ctx: &EmitContext<'ctx>,
     local: IRLocalId,

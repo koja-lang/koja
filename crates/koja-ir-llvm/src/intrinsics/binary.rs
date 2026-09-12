@@ -1,8 +1,6 @@
-//! `Binary.*` and `Bits.*` intrinsic family. Both layouts share the
-//! `[i64 bit_length][ceil(bit_length / 8) bytes]` heap shape. The
-//! returned pointer points at the payload, with the bit-length
-//! header at offset `-8`. Conversions between `Binary` and `Bits`
-//! are zero-cost when the lengths line up.
+//! `Binary.*` and `Bits.*` intrinsic family. Both share the
+//! [`crate::emit::heap_layout`] block shape, so conversions between
+//! them are zero-cost when the lengths line up.
 //!
 //! - `Binary.at(self, index: Int) -> Option<Int>`: O(1) byte read.
 //!   Bounds-check against the header, then GEP + load + zext. No
@@ -241,6 +239,8 @@ fn emit_byte_lookup<'ctx>(
         .or_ice()?;
 
     ctx.builder.position_at_end(some_bb);
+    // SAFETY: `in_bounds` checked `0 <= index < byte_count` before
+    // this block.
     let byte_ptr = unsafe {
         ctx.builder
             .build_in_bounds_gep(i8_ty, payload, &[index], "byte_ptr")

@@ -46,7 +46,7 @@ use crate::intrinsics::cptr::{declare_memcmp_extern, declare_memcpy_extern};
 use crate::runtime::declare_malloc_extern;
 
 use super::constants::emit_string_literal_payload;
-use super::heap_layout::{block_alloc_size, init_heap_block};
+use super::heap_layout::{LENGTH_OFFSET, block_alloc_size, init_heap_block};
 use super::{ValueMap, lookup};
 
 /// Lower an `IRInstruction::BinaryMatch`. Returns the `i1` success
@@ -125,21 +125,22 @@ pub(super) fn emit_binary_match<'ctx>(
     Ok(result.as_basic_value().into_int_value())
 }
 
-/// Read `i64 bit_length` from `payload - 8`. The IR contract puts
-/// the SSA pointer at the payload, with the length header eight
-/// bytes earlier.
+/// Read the subject's `i64 bit_length` header.
 fn load_subject_bit_length<'ctx>(
     ctx: &EmitContext<'ctx>,
     payload: PointerValue<'ctx>,
 ) -> Result<IntValue<'ctx>, LlvmError> {
     let i8_ty = ctx.context.i8_type();
     let i64_ty = ctx.context.i64_type();
+    // SAFETY: GEPs in this file step back to the block header or
+    // forward by offsets the match layout bounds-checked against
+    // `bit_length`.
     let header = unsafe {
         ctx.builder
             .build_gep(
                 i8_ty,
                 payload,
-                &[i64_ty.const_int((-8i64) as u64, true)],
+                &[i64_ty.const_int((LENGTH_OFFSET as i64).wrapping_neg() as u64, true)],
                 "bin_pat_len_ptr",
             )
             .or_ice()?
@@ -254,18 +255,8 @@ fn emit_segment_bind<'ctx>(
             *width,
         ),
         LoweredBinaryPattern::GreedyTail {
-            bit_offset,
-            local,
-            ty,
-        } => emit_greedy_tail(
-            ctx,
-            payload,
-            bit_length,
-            byte_length,
-            *bit_offset,
-            *local,
-            ty,
-        ),
+            bit_offset, local, ..
+        } => emit_greedy_tail(ctx, payload, bit_length, byte_length, *bit_offset, *local),
     }
 }
 
@@ -404,7 +395,6 @@ fn emit_greedy_tail<'ctx>(
     byte_length: IntValue<'ctx>,
     bit_offset: u64,
     local: Option<IRLocalId>,
-    ty: &IRType,
 ) -> Result<(), LlvmError> {
     if !bit_offset.is_multiple_of(8) {
         return Err(LlvmError::Codegen(format!(
@@ -452,7 +442,6 @@ fn emit_greedy_tail<'ctx>(
             "tail_cpy",
         )
         .or_ice()?;
-    let _ = ty;
     let slot = ctx.local_slot(local);
     ctx.builder
         .build_store(slot, tail_payload)

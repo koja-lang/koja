@@ -1,22 +1,6 @@
-//! Coverage for the eval-side `Bitwise` intrinsic family wired in
-//! `src/intrinsics/bitwise.rs`. The auto-imported `Global.bitwise`
-//! source brings every `band` / `bor` / `bxor` / `bnot` / `bsl` /
-//! `bsr` method into scope, so test bodies just call them as
-//! ordinary methods on integer literals.
-//!
-//! Eval flattens every integer width to [`Value::Int(i64)`], so
-//! these tests double as the canonical specification of the
-//! interpreter's bitwise semantics: AND / OR / XOR are
-//! width-agnostic, NOT is `!lhs` on i64 (so `Int.bnot(0) = -1`),
-//! left shift uses native `wrapping_shl`, and right shift branches
-//! on the receiver type (`Int.bsr` arithmetic, `UInt*.bsr`
-//! logical). The unsigned-shift divergence isn't asserted at the
-//! eval layer today: every integer width collapses to i64 in
-//! [`Value`] and the narrow widths only show up via literal
-//! coercion at typed param / return slots, so `UInt*.bsr` and
-//! `Int.bsr` agree on every value representable as a non-negative
-//! i64. The divergence is pinned at the LLVM emitter layer
-//! (`tests/intrinsics.rs`) where the emitted `lshr` vs `ashr` is
+//! Coverage for the eval-side `Bitwise` intrinsic family in
+//! `src/intrinsics/bitwise.rs`. The unsigned right-shift divergence
+//! is pinned at the LLVM emitter layer, where `lshr` vs `ashr` is
 //! observable.
 
 use koja_ast::util::dedent;

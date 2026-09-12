@@ -1,9 +1,5 @@
-//! `List<T>` family: heap-backed dynamic array. Eval stores elements
-//! in `Rc<RefCell<Vec<Value>>>`, but under value semantics every
-//! mutator (`append`, `concat`, `pop`, `replace_at`) is
-//! copy-on-write: it clones the receiver's backing vec into a fresh
-//! `Rc` before mutating, so a shared binding (`b = a`) is never
-//! observably mutated through another alias.
+//! `List<T>` family. Every mutator here builds a fresh `Rc`. The
+//! in-place twins live in [`super::consuming`].
 //!
 //! `get` and `pop` materialize `Option<T>` / `(Option<T>, List<T>)`
 //! values directly. Their concrete return types flow from the

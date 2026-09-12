@@ -5,21 +5,8 @@
 //! / [`IRInstruction::DropValue`]).
 //!
 //! Lowering emits these `Clone` / `Drop` markers for every
-//! [`IRType::is_heap_managed`] type. What each lowers to is decided
-//! downstream:
-//!
-//! - **heap leaf** (`String` / `Binary` / `Bits`): an inline `rc++` /
-//!   `rc--` on the `[i64 rc][i64 bit_length][payload]` block. Immutable
-//!   blocks are shared rather than deep-copied, immortal rodata literals
-//!   carry a sentinel rc so inc/dec are no-ops.
-//! - **composite** (`List` / `Map` / `Set` / struct / enum / union /
-//!   boxed `Indirect`): the [`crate::elaborate`] sub-pass rewrites the
-//!   marker into a synthesized `clone_T` / `drop_T` call, or, for an
-//!   all-`Copy` aggregate that needs no glue, the backend renders the
-//!   `Clone` as a register copy and the `Drop` as a no-op.
-//! - **closure** (`Function`): an inline `rc++` / `rc--` on the env
-//!   block, the `rc--` running the body's capture-release glue at zero
-//!   (see `crate::lower::closures` and `FunctionKind::DropClosureGlue`).
+//! [`IRType::is_heap_managed`] type. [`crate::elaborate`] decides
+//! what each lowers to.
 //!
 //! Four lowering-side primitives:
 //!
@@ -45,11 +32,7 @@ use super::ctx::FnLowerCtx;
 /// - An already-owned value is *moved* (returned as-is).
 /// - A borrowed heap-managed value (literal, `const`, slot/field read,
 ///   parameter) is *cloned* into a fresh owned value so the acquirer
-///   gets storage it can drop without disturbing the source. For a
-///   heap leaf the emitted `Clone` is an inline `rc++`. For a composite
-///   the [`crate::elaborate`] pass rewrites it into a `clone_T` call
-///   (or, for an all-`Copy` aggregate that needs no glue, the backend
-///   renders it as a plain register copy).
+///   gets storage it can drop without disturbing the source.
 ///
 /// The emitted `Clone` lands in `block`, before any sibling drop of
 /// the source, so the copy is always taken while the source is live.
@@ -151,10 +134,7 @@ pub(super) fn promote_param(
 
 /// Release every heap-managed local slot at a control-flow exit
 /// `block` (function return / fall-through). Each slot owns its value
-/// under value semantics, so the `Drop` is unconditional: a heap leaf
-/// `rc--`s (freeing at zero), a composite is rewritten to a `drop_T`
-/// call by [`crate::elaborate`] (or a no-op for an all-`Copy`
-/// aggregate).
+/// under value semantics, so the `Drop` is unconditional.
 pub(super) fn emit_slot_drops(ctx: &mut FnLowerCtx, block: IRBlockId) {
     for (local, ty) in ctx.heap_managed_slots() {
         ctx.cfg

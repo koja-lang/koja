@@ -1,12 +1,10 @@
-//! `Kernel.panic(message: String)`: abort the process with a
-//! diagnostic. Routes through the runtime's symbolicated
-//! stack-trace helper (calls `__koja_panic` with the message),
-//! falling back to libc `abort` if the helper isn't linked.
-//! Either way the body ends in
-//! `unreachable` so LLVM treats the call as divergent. Paired with
-//! the IR-level `Statement::Expr` Never-detection that caps the
-//! enclosing block with `IRTerminator::Unreachable`, the typed
-//! Never return is preserved end to end.
+//! `Kernel.panic(message: String)` aborts the process with a
+//! diagnostic. The body calls the runtime's `__koja_panic` with the
+//! message and ends in `unreachable` so LLVM treats the call as
+//! divergent. Paired with the IR-level `Statement::Expr`
+//! Never-detection that caps the enclosing block with
+//! `IRTerminator::Unreachable`, the typed Never return is preserved
+//! end to end.
 
 use inkwell::values::FunctionValue;
 use koja_ir::IRFunction;

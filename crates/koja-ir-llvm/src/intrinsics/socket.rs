@@ -1,5 +1,5 @@
 //! `@intrinsic` methods on `Socket` from
-//! [`koja/lib/net/src/net.koja`]:
+//! `koja/lib/net/src/net.koja`:
 //!
 //! * `Socket.recv_from_raw(self, count: Int) -> Result<(Binary, Binary, Int), String>`:
 //!   raw datagram receive. Suspends until the fd is readable.
@@ -12,9 +12,6 @@
 //! The backend marshals only runtime ABI values. Ordinary Koja code
 //! constructs `IPAddress` and `SocketAddress`, so their layouts never
 //! become part of this boundary.
-//!
-//! [`layout`]: crate::layout
-//! [`Layouts::enum_variant_payload`]: crate::layout::Layouts::enum_variant_payload
 
 use inkwell::AddressSpace;
 use inkwell::IntPredicate;
@@ -338,6 +335,8 @@ fn build_gep_offset<'ctx>(
     offset: IntValue<'ctx>,
     name: &str,
 ) -> Result<PointerValue<'ctx>, LlvmError> {
+    // SAFETY: callers pass field offsets of the runtime result
+    // structs, which the runtime allocated in full.
     unsafe {
         ctx.builder
             .build_gep(elem_ty, base, &[offset], name)

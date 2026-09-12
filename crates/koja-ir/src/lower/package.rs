@@ -1,8 +1,8 @@
 //! Package- and function-shaped lowering entry points. Walks a
 //! sealed [`CheckedPackage`] into an [`IRPackage`] fragment, delegating
 //! per-function body work to [`super::body`]. Also owns the
-//! [`GlobalRegistry`] adapters ([`function_signature`],
-//! [`resolved_type_to_ir_type`]) so siblings import a stable seam.
+//! [`GlobalRegistry`] adapters such as [`resolved_type_to_ir_type`]
+//! so siblings import a stable seam.
 //!
 //! Top-level / inline-struct / `impl`-block functions all flow
 //! through [`lower_function_with_identifier`]. Only the
@@ -300,7 +300,7 @@ pub(crate) fn nominal_target_path(target: &TypeExpr) -> Option<&[String]> {
 
 /// Lower one [`Function`] under `identifier`. `@intrinsic`-annotated
 /// functions become [`FunctionKind::Intrinsic`] with empty blocks
-/// (backends synthesize bodies from a mangled-symbol table).
+/// (backends synthesize bodies keyed by [`crate::IRIntrinsicId`]).
 /// `@extern "C"`-annotated functions become [`FunctionKind::Extern`]
 /// with empty blocks and the parsed `link_name` / `link_lib` attrs,
 /// and regular functions become [`FunctionKind::Regular`] with at least

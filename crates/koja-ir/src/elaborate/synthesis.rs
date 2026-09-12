@@ -7,7 +7,7 @@
 //!
 //! Every body's single parameter is [`SELF_VALUE`] (`ValueId(0)`),
 //! typed as the operand. Fresh SSA values number from 1 and blocks
-//! from 0, so the bodies stand alone (no [`crate::FnLowerCtx`]
+//! from 0, so the bodies stand alone (no lowering `FnLowerCtx`
 //! counter to thread). The shapes mirror what lowering already emits
 //! for field projection (`FieldGet` / `StructInit`), enum match
 //! dispatch (`EnumTagGet` + `Int8` tag compare + `CondBranch`), and
@@ -118,7 +118,7 @@ fn disposition(ty: &IRType, packages: &[IRPackage]) -> Disposition {
 
 /// Self-contained CFG accumulator for one glue body: a [`CFGBuilder`]
 /// plus the fresh-value / fresh-block counters lowering would
-/// otherwise own on [`crate::FnLowerCtx`]. `mode` selects the copy
+/// otherwise own on its `FnLowerCtx`. `mode` selects the copy
 /// family [`Self::acquire`] emits. Drop bodies never consult it.
 struct Synthesizer {
     cfg: CFGBuilder,

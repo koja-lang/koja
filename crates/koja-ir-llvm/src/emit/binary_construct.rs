@@ -22,7 +22,6 @@
 //! `IRType::Binary` (when `layout.byte_aligned`) or `IRType::Bits` on
 //! the destination value.
 
-use inkwell::IntPredicate;
 use inkwell::values::{BasicValueEnum, IntValue, PointerValue};
 use koja_ir::{BinaryEndian, LoweredBinarySegment, ResolvedBinaryLayout, ValueId};
 
@@ -127,6 +126,8 @@ fn emit_segment<'ctx>(
             let i8_ty = ctx.context.i8_type();
             let i64_ty = ctx.context.i64_type();
             let str_ptr = lookup(values, *value)?.into_pointer_value();
+            // SAFETY: segment offsets come from the literal layout,
+            // which sized the block to hold every segment.
             let dest = unsafe {
                 ctx.builder
                     .build_in_bounds_gep(
@@ -252,9 +253,6 @@ fn lookup_int_widened<'ctx>(
             .or_ice()?,
         std::cmp::Ordering::Equal => raw,
     };
-    // Use the predicate constant so the unused-import lint stays
-    // honest if we drop the `widen` path.
-    let _ = IntPredicate::EQ;
     Ok(widened)
 }
 

@@ -13,7 +13,7 @@
 //!   The cheap default: Koja blocks are immutable and value semantics
 //!   makes the sharing invisible, so a same-layout reinterpret
 //!   (`Binary` ↔ `Bits`, `String` -> `Binary`) is just an `rc++`.
-//!   Mirrors [`crate::emit::clone`]'s heap-leaf arm.
+//!   Mirrors the heap-leaf arm of `Clone` emission.
 //! - [`copy_heap_payload`]: deep-copy the header + payload into a
 //!   fresh `rc = 1` block. Required only when the result block differs
 //!   from the source: `String`'s trailing libc NUL means
@@ -94,6 +94,7 @@ pub(crate) fn copy_heap_payload<'ctx>(
         .or_ice()?;
 
     if with_nul {
+        // SAFETY: `with_nul` adds one byte to the allocation above.
         let nul = unsafe {
             ctx.builder
                 .build_in_bounds_gep(i8_ty, dst_payload, &[byte_count], "nul")

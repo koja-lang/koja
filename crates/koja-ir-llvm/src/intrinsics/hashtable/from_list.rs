@@ -1,9 +1,8 @@
 //! `Set.from_list(items)`: walk the list's flat buffer and fold
 //! each element into a fresh `Set` via [`call_set_insert_inline`].
 //! Lives in its own module because it stitches together pieces from
-//! every other submodule ([`build_empty_table`](super::util::build_empty_table),
-//! [`emit_resize_if_needed`](super::resize::emit_resize_if_needed),
-//! [`emit_insert_probe`](super::insert::emit_insert_probe)) without
+//! every other submodule ([`build_empty_table`],
+//! [`emit_resize_if_needed`], [`emit_insert_probe`]) without
 //! belonging to any of them.
 
 use inkwell::IntPredicate;
@@ -13,7 +12,7 @@ use koja_ir::IRFunction;
 use crate::ctx::EmitContext;
 use crate::error::{IceExt, LlvmError};
 use crate::intrinsics::element::acquire_value;
-use crate::types::{hashtable_value_type, ir_basic_type, list_value_type};
+use crate::types::{hashtable_value_type, ir_basic_type};
 
 use super::insert::emit_insert_probe;
 use super::resize::emit_resize_if_needed;
@@ -43,8 +42,6 @@ pub(crate) fn emit_set_from_list<'ctx>(
             )));
         }
     };
-    let list_ty = list_value_type(ctx);
-    let _ = list_ty;
     let list_ptr = ctx
         .builder
         .build_extract_value(list_val, 0, "list_ptr")
@@ -94,6 +91,8 @@ pub(crate) fn emit_set_from_list<'ctx>(
             "byte_off",
         )
         .or_ice()?;
+    // SAFETY: the loop bounds `i_val` by the list length, so the
+    // GEP stays inside the element buffer.
     let elem_ptr = unsafe {
         ctx.builder
             .build_gep(i8_ty, list_ptr, &[byte_offset], "elem_ptr")

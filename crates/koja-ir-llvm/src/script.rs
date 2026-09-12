@@ -4,9 +4,9 @@
 //! body as `main` (the spawn-driven trampoline in
 //! [`crate::main_wrapper`]), then define each helper's body.
 //!
-//! Same shape as [`crate::program::compile_program`] minus the
-//! "skip the entry function" step, since script-mode has no
-//! `fn main` item. `script.blocks` is the body that becomes `main`.
+//! Same shape as [`crate::program::compile_program`], except the
+//! body that becomes `main` is `script.blocks` rather than an entry
+//! function, since script mode has no `fn main` item.
 
 use koja_ir::IRScript;
 

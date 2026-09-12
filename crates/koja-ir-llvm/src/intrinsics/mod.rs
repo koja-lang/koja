@@ -1,5 +1,5 @@
 //! Per-backend dispatch table for `@intrinsic` function bodies.
-//! Mirrors the eval interpreter's [`koja_ir_eval::intrinsics`]
+//! Mirrors the eval interpreter's `koja_ir_eval::intrinsics`
 //! shape: each registered intrinsic is keyed by its
 //! [`koja_ir::FunctionKind::Intrinsic`] payload (an
 //! [`IRIntrinsicId`], a typed enum the lift pass mints from the
@@ -11,6 +11,13 @@
 //! `pub(super) fn emit_<name>`, wire its arm in [`emit_intrinsic_body`],
 //! and pin a 1-1 test in `tests/intrinsics.rs`. The exhaustive match
 //! makes the wiring step compiler-checked.
+//!
+//! Ownership contract for collection intrinsics: `self` is borrowed
+//! and the caller drops it, so a returned collection must own an
+//! independent buffer. Returning `self` or anything that shares its
+//! buffer would double-free at scope exit. Mutators are therefore
+//! copy-on-write, and every copied element is acquired
+//! ([`element`]) so the copy owns its own references.
 
 use inkwell::values::FunctionValue;
 use koja_ir::{ConsumingMethod, IRFunction, IRIntrinsicId, KernelMethod, RuntimeBlockMethod};
