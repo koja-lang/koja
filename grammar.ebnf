@@ -270,7 +270,6 @@ primary = literal
         | closure
         
         | if_expr
-        | unless_expr
         | match_expr
         | cond_expr
         | for_expr
@@ -337,10 +336,6 @@ if_expr = "if" , expr ,
           { statement } ,
           [ "else" , { statement } ] ,
           "end" ;
-
-unless_expr = "unless" , expr ,
-              { statement } ,
-              "end" ;
 
 match_expr = "match" , expr ,
              { match_arm } ,
