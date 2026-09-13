@@ -30,9 +30,12 @@ fn write_fixture_project(root: &Path) {
         "[project]\nentry = \"main\"\nname = \"my_app\"\nversion = \"0.1.0\"\n",
     )
     .unwrap();
+    // `legacy_count` is the deprecated symbol the deprecation
+    // rendering tests look for, so the stdlib does not have to
+    // carry one.
     fs::write(
         src_dir.join("main.koja"),
-        "@doc \"A widget. Counts sprockets.\"\nstruct Widget\n  count: Int\nend\n\nfn main\n  0\nend\n",
+        "@doc \"A widget. Counts sprockets.\"\nstruct Widget\n  count: Int\n\n  @doc \"Returns the sprocket count.\"\n  @deprecated \"Use `count` instead.\"\n  fn legacy_count(self) -> Int\n    self.count\n  end\nend\n\nfn main\n  0\nend\n",
     )
     .unwrap();
 }
@@ -122,14 +125,12 @@ fn doc_bundle_emits_assets_and_stdlib_packages() {
     assert!(search_json.contains("\"name\":\"Widget\""));
     assert!(search_json.contains("\"name\":\"IPAddress.Version\""));
     assert!(search_json.contains("\"name\":\"IPAddress.ParseError\""));
-    assert!(search_json.contains("\"name\":\"IPAddress.v4?/1\""));
-    assert!(search_json.contains("\"deprecated\":\"Use `address.version == IPAddress.Version.V4`"));
+    assert!(search_json.contains("\"name\":\"Widget.legacy_count/1\""));
+    assert!(search_json.contains("\"deprecated\":\"Use `count` instead.\""));
 
-    let ip_address = fs::read_to_string(doc.join("Net").join("IPAddress.html")).unwrap();
-    assert!(ip_address.contains("class=\"deprecation-notice\""));
-    assert!(
-        ip_address.contains("Use <code>address.version == IPAddress.Version.V4</code> instead.")
-    );
+    let widget = fs::read_to_string(doc.join("MyApp").join("Widget.html")).unwrap();
+    assert!(widget.contains("class=\"deprecation-notice\""));
+    assert!(widget.contains("Use <code>count</code> instead."));
 }
 
 #[test]
@@ -411,22 +412,23 @@ fn doc_search_renders_builtin_primitive_types() {
 }
 
 #[test]
-fn doc_search_shows_stdlib_deprecation_guidance() {
+fn doc_search_shows_deprecation_guidance() {
     let tmp = tempdir();
+    write_fixture_project(&tmp);
 
-    let search = run_koja(&tmp, &["doc", "search", "IPAddress.v4?"]);
+    let search = run_koja(&tmp, &["doc", "search", "Widget.legacy_count"]);
     assert!(
         search.status.success(),
-        "stdlib search failed: {}",
+        "project search failed: {}",
         String::from_utf8_lossy(&search.stderr)
     );
     let stdout = String::from_utf8_lossy(&search.stdout);
-    assert!(stdout.contains("# Net.IPAddress.v4?/1 (fn)"), "{stdout}");
-    assert!(stdout.contains("> **Deprecated**"), "{stdout}");
     assert!(
-        stdout.contains("Use `address.version == IPAddress.Version.V4` instead."),
+        stdout.contains("# MyApp.Widget.legacy_count/1 (fn)"),
         "{stdout}"
     );
+    assert!(stdout.contains("> **Deprecated**"), "{stdout}");
+    assert!(stdout.contains("Use `count` instead."), "{stdout}");
 }
 
 #[test]
