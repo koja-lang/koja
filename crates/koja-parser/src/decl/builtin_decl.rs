@@ -1,7 +1,7 @@
 //! `builtin Name<...> ... end`.
 //!
-//! Declares a compiler-owned type. The body admits only functions, so
-//! fields and nested types are parse errors.
+//! Declares a compiler-owned type. The body admits functions and
+//! `test` blocks, so fields and nested types are parse errors.
 
 use koja_ast::ast::{Annotation, BuiltinDecl, Item, Visibility};
 use koja_ast::token::TokenKind;
@@ -23,8 +23,10 @@ impl Parser {
 
         self.skip_newlines();
         let mut functions = Vec::new();
+        let mut tests = Vec::new();
         while !self.at(&TokenKind::End) && !self.at_eof() {
             match self.peek() {
+                TokenKind::Test => tests.push(self.parse_test_decl()),
                 TokenKind::Fn | TokenKind::Priv | TokenKind::At => {
                     match self.parse_type_body_member("builtin") {
                         TypeBodyMember::Function(function) => functions.push(*function),
@@ -62,6 +64,7 @@ impl Parser {
             type_params,
             functions,
             span: self.span_from(start),
+            tests,
         })
     }
 }

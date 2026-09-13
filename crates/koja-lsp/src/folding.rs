@@ -77,13 +77,15 @@ fn collect_item_folds(file: &File, ranges: &mut Vec<FoldingRange>) {
                         collect_statement_folds(body, ranges);
                     }
                 }
+                collect_tests_folds(&b.tests, ranges);
             }
             Item::Struct(s) => collect_struct_folds(s, ranges),
-            Item::Test(t) => collect_test_folds(t, ranges),
+            Item::Test(t) => collect_tests_folds(std::slice::from_ref(t), ranges),
             Item::Enum(e) => {
                 if let Some(r) = span_fold(&e.span, Some(FoldingRangeKind::Region)) {
                     ranges.push(r);
                 }
+                collect_tests_folds(&e.tests, ranges);
                 collect_nested_folds(&e.nested, ranges);
             }
             Item::Impl(imp) => {
@@ -103,6 +105,7 @@ fn collect_item_folds(file: &File, ranges: &mut Vec<FoldingRange>) {
                         }
                     }
                 }
+                collect_tests_folds(&imp.tests, ranges);
             }
             Item::Extend(ext) => {
                 if let Some(r) = span_fold(&ext.span, Some(FoldingRangeKind::Region)) {
@@ -118,6 +121,7 @@ fn collect_item_folds(file: &File, ranges: &mut Vec<FoldingRange>) {
                         }
                     }
                 }
+                collect_tests_folds(&ext.tests, ranges);
             }
             Item::Protocol(p) => {
                 if let Some(r) = span_fold(&p.span, Some(FoldingRangeKind::Region)) {
@@ -154,17 +158,17 @@ fn collect_struct_folds(s: &StructDecl, ranges: &mut Vec<FoldingRange>) {
             collect_statement_folds(body, ranges);
         }
     }
-    for t in &s.tests {
-        collect_test_folds(t, ranges);
-    }
+    collect_tests_folds(&s.tests, ranges);
     collect_nested_folds(&s.nested, ranges);
 }
 
-fn collect_test_folds(t: &TestDecl, ranges: &mut Vec<FoldingRange>) {
-    if let Some(r) = span_fold(&t.span, Some(FoldingRangeKind::Region)) {
-        ranges.push(r);
+fn collect_tests_folds(tests: &[TestDecl], ranges: &mut Vec<FoldingRange>) {
+    for t in tests {
+        if let Some(r) = span_fold(&t.span, Some(FoldingRangeKind::Region)) {
+            ranges.push(r);
+        }
+        collect_statement_folds(&t.body, ranges);
     }
-    collect_statement_folds(&t.body, ranges);
 }
 
 fn collect_nested_folds(nested: &[Item], ranges: &mut Vec<FoldingRange>) {
@@ -174,6 +178,7 @@ fn collect_nested_folds(nested: &[Item], ranges: &mut Vec<FoldingRange>) {
                 if let Some(r) = span_fold(&e.span, Some(FoldingRangeKind::Region)) {
                     ranges.push(r);
                 }
+                collect_tests_folds(&e.tests, ranges);
                 collect_nested_folds(&e.nested, ranges);
             }
             Item::Struct(s) => collect_struct_folds(s, ranges),

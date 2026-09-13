@@ -178,6 +178,7 @@ impl<'a> Printer<'a> {
                     }
                 });
             }
+            p.tests_section(&e.tests);
         });
     }
 
@@ -254,6 +255,7 @@ impl<'a> Printer<'a> {
                     }
                 });
             }
+            p.tests_section(&i.tests);
         });
     }
 
@@ -267,6 +269,7 @@ impl<'a> Printer<'a> {
                     }
                 });
             }
+            p.tests_section(&e.tests);
         });
     }
 
@@ -342,6 +345,7 @@ impl<'a> Printer<'a> {
                     }
                 });
             }
+            p.tests_section(&b.tests);
         });
     }
 
@@ -367,12 +371,17 @@ impl<'a> Printer<'a> {
                     }
                 });
             }
-            if !s.tests.is_empty() {
-                p.section("tests", |p| {
-                    for t in &s.tests {
-                        p.test_decl(t);
-                    }
-                });
+            p.tests_section(&s.tests);
+        });
+    }
+
+    fn tests_section(&mut self, tests: &[TestDecl]) {
+        if tests.is_empty() {
+            return;
+        }
+        self.section("tests", |p| {
+            for t in tests {
+                p.test_decl(t);
             }
         });
     }

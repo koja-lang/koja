@@ -17,7 +17,7 @@
 
 use std::path::Path;
 
-use koja_ast::ast::{AnnotationValue, Function, Item, StructDecl, synthesized_test_name};
+use koja_ast::ast::{AnnotationValue, Function, Item, TestDecl, TypeExpr, synthesized_test_name};
 use koja_parser::ParsedProgram;
 
 /// Name of the synthesized test-harness entry type. Reserved for
@@ -48,36 +48,48 @@ pub struct TestCase {
     pub file: String,
     pub fn_name: String,
     pub line: u32,
-    /// `None` for a top-level `test` block, the owning struct's full
-    /// path for a member (`["Outer", "Inner"]` when nested).
-    pub struct_path: Option<Vec<String>>,
+    /// `None` for a top-level `test` block.
+    pub owner: Option<Owner>,
+}
+
+/// The type a member test became a method on.
+#[derive(Clone, Debug)]
+pub struct Owner {
+    /// The trace group header. The type path for a struct, enum, or
+    /// builtin body, `Type: Protocol` for an `impl` block, and the
+    /// target type for an `extend` block.
+    pub group: String,
+    /// The qualified type path the harness calls through,
+    /// `["Outer", "Inner"]` for a nested type.
+    pub path: Vec<String>,
 }
 
 impl TestCase {
     /// The qualified call the harness emits.
     fn call_path(&self) -> String {
-        match &self.struct_path {
-            Some(path) => format!("{}.{}", path.join("."), self.fn_name),
+        match &self.owner {
+            Some(owner) => format!("{}.{}", owner.path.join("."), self.fn_name),
             None => self.fn_name.clone(),
         }
     }
 
-    /// The trace group header. Struct tests group under the struct
-    /// path, top-level tests under their file.
+    /// The trace group header. Member tests group under their owner,
+    /// top-level tests under their file.
     fn group(&self) -> String {
-        match &self.struct_path {
-            Some(path) => path.join("."),
+        match &self.owner {
+            Some(owner) => owner.group.clone(),
             None => self.file.clone(),
         }
     }
 }
 
 /// Walks the parsed program and collects top-level `test` blocks,
-/// struct-member `test` blocks (through nested structs and enums),
-/// and `@test`-annotated struct functions. Only scans files belonging
-/// to the current project (matched by the per-file `package` field),
-/// so deps' fixtures don't sneak into the harness. `root` relativizes
-/// each test's source path for clean, navigable `path:line` output.
+/// member `test` blocks in struct, enum, impl, extend, and builtin
+/// bodies (through nested types), and `@test`-annotated struct
+/// functions. Only scans files belonging to the current project
+/// (matched by the per-file `package` field), so deps' fixtures don't
+/// sneak into the harness. `root` relativizes each test's source path
+/// for clean, navigable `path:line` output.
 pub fn discover_tests(parsed: &ParsedProgram, project_name: &str, root: &Path) -> Vec<TestCase> {
     let mut tests = Vec::new();
 
@@ -116,16 +128,16 @@ struct Collector<'a> {
 }
 
 impl Collector<'_> {
-    fn push(&mut self, description: String, struct_path: Option<Vec<String>>, line: u32) {
+    fn push(&mut self, description: String, owner: Option<&Owner>, line: u32) {
         let fn_name = synthesized_test_name(self.path, line);
-        self.push_named(description, fn_name, struct_path, line);
+        self.push_named(description, fn_name, owner, line);
     }
 
     fn push_named(
         &mut self,
         description: String,
         fn_name: String,
-        struct_path: Option<Vec<String>>,
+        owner: Option<&Owner>,
         line: u32,
     ) {
         self.tests.push(TestCase {
@@ -133,50 +145,88 @@ impl Collector<'_> {
             file: self.file.to_string(),
             fn_name,
             line,
-            struct_path,
+            owner: owner.cloned(),
         });
     }
 
-    fn nested(&mut self, item: &Item, owner: &[String]) {
+    fn member_tests(&mut self, tests: &[TestDecl], owner: &Owner) {
+        for test in tests {
+            self.push(test.description.clone(), Some(owner), test.span.start.line);
+        }
+    }
+
+    fn nested(&mut self, item: &Item, outer: &[String]) {
         match item {
-            Item::Struct(s) => self.struct_decl(s, owner),
+            Item::Builtin(b) => {
+                let owner = Owner::type_path(qualify(outer, &b.path));
+                self.member_tests(&b.tests, &owner);
+            }
             Item::Enum(e) => {
-                let path = qualify(owner, &e.path);
+                let owner = Owner::type_path(qualify(outer, &e.path));
+                self.member_tests(&e.tests, &owner);
                 for nested in &e.nested {
-                    self.nested(nested, &path);
+                    self.nested(nested, &owner.path);
+                }
+            }
+            Item::Extend(block) => {
+                if let Some(path) = type_expr_path(&block.target) {
+                    let owner = Owner::type_path(path);
+                    self.member_tests(&block.tests, &owner);
+                }
+            }
+            Item::Impl(block) => {
+                if let Some(path) = type_expr_path(&block.target) {
+                    let group = match type_expr_path(&block.trait_expr) {
+                        Some(protocol) => format!("{}: {}", path.join("."), protocol.join(".")),
+                        None => path.join("."),
+                    };
+                    let owner = Owner { group, path };
+                    self.member_tests(&block.tests, &owner);
+                }
+            }
+            Item::Struct(s) => {
+                let owner = Owner::type_path(qualify(outer, &s.path));
+                self.member_tests(&s.tests, &owner);
+                for func in &s.functions {
+                    if let Some(description) = annotated_test_description(func) {
+                        self.push_named(
+                            description,
+                            func.name.clone(),
+                            Some(&owner),
+                            func.span.start.line,
+                        );
+                    }
+                }
+                for nested in &s.nested {
+                    self.nested(nested, &owner.path);
                 }
             }
             _ => {}
         }
     }
+}
 
-    fn struct_decl(&mut self, s: &StructDecl, owner: &[String]) {
-        let path = qualify(owner, &s.path);
-        for test in &s.tests {
-            self.push(
-                test.description.clone(),
-                Some(path.clone()),
-                test.span.start.line,
-            );
-        }
-        for func in &s.functions {
-            if let Some(description) = annotated_test_description(func) {
-                self.push_named(
-                    description,
-                    func.name.clone(),
-                    Some(path.clone()),
-                    func.span.start.line,
-                );
-            }
-        }
-        for nested in &s.nested {
-            self.nested(nested, &path);
+impl Owner {
+    fn type_path(path: Vec<String>) -> Self {
+        Owner {
+            group: path.join("."),
+            path,
         }
     }
 }
 
-fn qualify(owner: &[String], path: &[String]) -> Vec<String> {
-    owner.iter().chain(path).cloned().collect()
+fn qualify(outer: &[String], path: &[String]) -> Vec<String> {
+    outer.iter().chain(path).cloned().collect()
+}
+
+/// The type path of an `impl` or `extend` target. Type arguments are
+/// dropped because the harness calls the static method through the
+/// bare type. Targets that are not named types have no path.
+fn type_expr_path(target: &TypeExpr) -> Option<Vec<String>> {
+    match target {
+        TypeExpr::Named { path, .. } | TypeExpr::Generic { path, .. } => Some(path.clone()),
+        _ => None,
+    }
 }
 
 /// The description of an `@test` function, or `None` when the

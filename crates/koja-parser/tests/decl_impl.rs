@@ -148,7 +148,7 @@ fn impl_body_rejects_non_function_non_alias() {
           count: Int
         end
         ",
-        &["expected function or type alias in block body"],
+        &["expected function, type alias, or test in block body"],
     );
 }
 

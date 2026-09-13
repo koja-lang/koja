@@ -1375,8 +1375,10 @@ fn lang_test_assert() {
 }
 
 /// `test "..."` blocks end to end. `koja test --trace` runs top-level
-/// blocks grouped under their file, struct blocks under the struct
-/// path (nested included), and reports a failing `assert` at its line.
+/// blocks grouped under their file, struct and enum blocks under the
+/// type path (nested included), `impl` blocks under `Type: Protocol`,
+/// `extend` blocks under the target, and reports a failing `assert` at
+/// its line.
 /// `koja run` on both backends strips the blocks in `src/` without
 /// linking `Test`. One test because both commands share the fixture's
 /// build dir.
@@ -1389,7 +1391,10 @@ fn lang_test_decl() {
     );
     for needle in [
         "src/app.koja\n  a test block in src is stripped from builds (src/app.koja:23) ... ok",
-        "Stack\n  a struct test in src is stripped from builds (src/stack.koja:20) ... ok",
+        "Color\n  red is primary (src/color.koja:18) ... ok",
+        "Color: Named\n  names the lowercase color (src/color.koja:32) ... ok",
+        "Stack\n  doubled appends the size (src/color.koja:42) ... ok",
+        "a struct test in src is stripped from builds (src/stack.koja:20) ... ok",
         "StackTest\n  push grows the stack (test/stack_test.koja:8) ... ok",
         "peek on an empty stack is None (test/stack_test.koja:12) ... ok",
         "a failing assert names the line (test/stack_test.koja:17) ... FAIL",
@@ -1399,7 +1404,7 @@ fn lang_test_decl() {
         "two tests may share a description (test/top_level_test.koja:9) ... ok",
         "a trailing expression needs no unit (test/top_level_test.koja:13) ... ok",
         "test/stack_test.koja:18:12: failure: assert Stack.new().push(1).size() == 2 (left: 1, right: 2)",
-        "9 successful tests. 1 failures.",
+        "12 successful tests. 1 failures.",
     ] {
         assert!(
             stdout.contains(needle),

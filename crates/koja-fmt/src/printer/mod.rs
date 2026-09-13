@@ -317,11 +317,14 @@ impl Printer {
         parts.push(text(header));
         self.push_header_trailing(&mut parts, b.span);
 
-        let entries = b
+        let mut entries: Vec<SeqEntry> = b
             .functions
             .iter()
             .map(|f| self.member_function_entry(f))
             .collect();
+        for test in &b.tests {
+            entries.push(self.member_test_entry(test));
+        }
         parts.push(self.type_body_to_doc(entries, b.span));
         concat(parts)
     }
@@ -394,6 +397,9 @@ impl Printer {
         }
         for func in &e.functions {
             entries.push(self.member_function_entry(func));
+        }
+        for test in &e.tests {
+            entries.push(self.member_test_entry(test));
         }
         parts.push(self.type_body_to_doc(entries, e.span));
         concat(parts)
@@ -628,7 +634,7 @@ impl Printer {
             impl_target_to_doc(&block.target, &block.target_bounds),
         ];
         self.push_header_trailing(&mut parts, block.span);
-        parts.push(self.impl_member_body_to_doc(&block.members, block.span));
+        parts.push(self.impl_member_body_to_doc(&block.members, &block.tests, block.span));
         concat(parts)
     }
 
@@ -636,13 +642,18 @@ impl Printer {
     fn extend_to_doc(&mut self, block: &ExtendBlock) -> Doc {
         let mut parts = vec![text("extend "), type_expr_to_doc(&block.target)];
         self.push_header_trailing(&mut parts, block.span);
-        parts.push(self.impl_member_body_to_doc(&block.members, block.span));
+        parts.push(self.impl_member_body_to_doc(&block.members, &block.tests, block.span));
         concat(parts)
     }
 
     /// Shared body for `impl` and `extend`, indented members + `end`.
-    fn impl_member_body_to_doc(&mut self, members: &[ImplMember], owner: Span) -> Doc {
-        let entries = members
+    fn impl_member_body_to_doc(
+        &mut self,
+        members: &[ImplMember],
+        tests: &[TestDecl],
+        owner: Span,
+    ) -> Doc {
+        let mut entries: Vec<SeqEntry> = members
             .iter()
             .map(|member| match member {
                 ImplMember::Function(f) => self.member_function_entry(f),
@@ -660,6 +671,9 @@ impl Printer {
                 },
             })
             .collect();
+        for test in tests {
+            entries.push(self.member_test_entry(test));
+        }
         self.type_body_to_doc(entries, owner)
     }
 

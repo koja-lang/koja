@@ -284,7 +284,11 @@ impl<'a> Attacher<'a> {
             Item::Builtin(b) => self.walk_decl_body(
                 b.span,
                 b.span.start.line,
-                b.functions.iter().map(Member::Function).collect(),
+                b.functions
+                    .iter()
+                    .map(Member::Function)
+                    .chain(b.tests.iter().map(Member::Test))
+                    .collect(),
             ),
             Item::Constant(c) => self.walk_expr(&c.value),
             Item::Enum(e) => {
@@ -294,19 +298,20 @@ impl<'a> Attacher<'a> {
                     .map(Member::Variant)
                     .chain(e.nested.iter().map(Member::Nested))
                     .chain(e.functions.iter().map(Member::Function))
+                    .chain(e.tests.iter().map(Member::Test))
                     .collect();
                 self.walk_decl_body(e.span, header_end_line(e.span, &e.conformances), members);
             }
             Item::Extend(e) => self.walk_decl_body(
                 e.span,
                 header_end_line_impl(&e.target, None, e.span),
-                impl_members(&e.members),
+                impl_members(&e.members, &e.tests),
             ),
             Item::Function(f) => self.walk_function(f),
             Item::Impl(i) => self.walk_decl_body(
                 i.span,
                 header_end_line_impl(&i.target, Some(&i.trait_expr), i.span),
-                impl_members(&i.members),
+                impl_members(&i.members, &i.tests),
             ),
             Item::Protocol(p) => self.walk_decl_body(
                 p.span,
@@ -1048,13 +1053,14 @@ impl Member<'_> {
     }
 }
 
-fn impl_members(members: &[ImplMember]) -> Vec<Member<'_>> {
+fn impl_members<'a>(members: &'a [ImplMember], tests: &'a [TestDecl]) -> Vec<Member<'a>> {
     members
         .iter()
         .map(|m| match m {
             ImplMember::Function(f) => Member::Function(f),
             ImplMember::TypeAlias(t) => Member::TypeAlias(t),
         })
+        .chain(tests.iter().map(Member::Test))
         .collect()
 }
 

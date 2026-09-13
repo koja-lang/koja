@@ -1,15 +1,17 @@
 //! Typecheck pins for the `test "..."` declaration.
 //!
 //! - With `Test` linked, a top-level test becomes a package-private
-//!   function and a struct test a public method, both named
-//!   `__test_<stem>_<line>` with `FunctionOrigin::Test` and a
+//!   function and a struct, enum, impl, or extend test a public method,
+//!   all named `__test_<stem>_<line>` with `FunctionOrigin::Test` and a
 //!   `! Test.Failure` channel.
-//! - Without `Test`, both are dropped and the program still checks.
+//! - Without `Test`, all are dropped and the program still checks.
 //! - A body that breaks the channel reports inside the test block.
 
 use std::path::PathBuf;
 
-use koja_ast::ast::{FunctionOrigin, Item, TypeExpr, Visibility, synthesized_test_name};
+use koja_ast::ast::{
+    FunctionOrigin, ImplMember, Item, TypeExpr, Visibility, synthesized_test_name,
+};
 use koja_ast::util::dedent;
 use koja_parser::{ParseMode, SourceFile, parse_program};
 use koja_typecheck::check_program;
@@ -122,6 +124,104 @@ fn nested_struct_test_rides_the_hoist() {
         .expect("Outer.Inner hoisted to the top level");
     assert_eq!(inner.functions.len(), 1);
     assert_test_function(&inner.functions[0], 5, Visibility::Public);
+}
+
+const MEMBER_SOURCE: &str = "
+    protocol Named
+      fn name(self) -> String
+    end
+
+    enum Color
+      Red
+
+      test \"red is a color\"
+        assert Color.Red == Color.Red
+      end
+    end
+
+    impl Named for Color
+      fn name(self) -> String
+        \"red\"
+      end
+
+      test \"names red\"
+        assert Color.Red.name() == \"red\"
+      end
+    end
+
+    extend Color
+      fn shout(self) -> String
+        \"RED\"
+      end
+
+      test \"shouts red\"
+        assert Color.Red.shout() == \"RED\"
+      end
+    end
+    ";
+
+fn member_test(members: &[ImplMember]) -> Option<&koja_ast::ast::Function> {
+    members.iter().find_map(|member| match member {
+        ImplMember::Function(f) if f.origin == FunctionOrigin::Test => Some(f),
+        _ => None,
+    })
+}
+
+#[test]
+fn enum_impl_and_extend_tests_become_public_methods() {
+    let checked = typecheck_file(&dedent(MEMBER_SOURCE));
+    let file = test_file(&checked);
+    let mut seen = 0;
+    for item in &file.items {
+        match item {
+            Item::Enum(e) => {
+                assert!(e.tests.is_empty());
+                let function = e
+                    .functions
+                    .iter()
+                    .find(|f| f.origin == FunctionOrigin::Test)
+                    .expect("enum test desugared");
+                assert_test_function(function, 8, Visibility::Public);
+                seen += 1;
+            }
+            Item::Impl(block) if !block.span.synthetic => {
+                assert!(block.tests.is_empty());
+                let function = member_test(&block.members).expect("impl test desugared");
+                assert_test_function(function, 18, Visibility::Public);
+                seen += 1;
+            }
+            Item::Extend(block) => {
+                assert!(block.tests.is_empty());
+                let function = member_test(&block.members).expect("extend test desugared");
+                assert_test_function(function, 28, Visibility::Public);
+                seen += 1;
+            }
+            _ => {}
+        }
+    }
+    assert_eq!(seen, 3, "one desugared test per body");
+}
+
+#[test]
+fn without_the_test_package_member_tests_are_dropped() {
+    let checked = check_without_test_package(MEMBER_SOURCE);
+    for item in &test_file(&checked).items {
+        match item {
+            Item::Enum(e) => {
+                assert!(e.tests.is_empty());
+                assert!(e.functions.is_empty());
+            }
+            Item::Impl(block) => {
+                assert!(block.tests.is_empty());
+                assert!(member_test(&block.members).is_none());
+            }
+            Item::Extend(block) => {
+                assert!(block.tests.is_empty());
+                assert!(member_test(&block.members).is_none());
+            }
+            _ => {}
+        }
+    }
 }
 
 #[test]

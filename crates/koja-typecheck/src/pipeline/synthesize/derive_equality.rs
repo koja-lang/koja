@@ -164,6 +164,7 @@ fn equality_impl_block(
             other_type, body_expr, span,
         ))],
         span,
+        tests: Vec::new(),
     })
 }
 

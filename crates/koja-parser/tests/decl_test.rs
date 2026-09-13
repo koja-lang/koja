@@ -2,7 +2,8 @@
 //!
 //! Pins:
 //! - top-level `test` becomes `Item::Test` with its description
-//! - `test` inside a struct body lands in `StructDecl.tests`
+//! - `test` inside a struct, enum, impl, extend, or builtin body lands
+//!   in that declaration's `tests`, and a protocol body rejects it
 //! - an empty body parses
 //! - the description must be a plain string, so a missing string or
 //!   an interpolation is an error
@@ -14,8 +15,8 @@ use koja_ast::ast::{Item, Statement};
 mod common;
 
 use common::{
-    assert_hint_contains, first_struct, first_test, parse_clean, parse_clean_script,
-    parse_failing_with,
+    assert_hint_contains, first_builtin, first_enum, first_extend, first_impl, first_struct,
+    first_test, parse_clean, parse_clean_script, parse_failing_with,
 };
 
 #[test]
@@ -95,6 +96,103 @@ fn struct_body_collects_tests_beside_fields_and_functions() {
         ["push grows the stack", "pop shrinks the stack"]
     );
     assert_eq!(s.tests[0].body.len(), 1);
+}
+
+#[test]
+fn enum_body_collects_tests_beside_variants_and_functions() {
+    let e = first_enum(
+        r#"
+        enum Color
+          Red
+          Green
+
+          fn primary?(self) -> Bool
+            true
+          end
+
+          test "red is primary"
+            1
+          end
+        end
+        "#,
+    );
+    assert_eq!(e.variants.len(), 2);
+    assert_eq!(e.functions.len(), 1);
+    assert_eq!(e.tests.len(), 1);
+    assert_eq!(e.tests[0].description, "red is primary");
+}
+
+#[test]
+fn impl_body_collects_tests_beside_methods() {
+    let block = first_impl(
+        r#"
+        impl Display for Color
+          fn format(self) -> String
+            "red"
+          end
+
+          test "formats red"
+          end
+        end
+        "#,
+    );
+    assert_eq!(block.members.len(), 1);
+    assert_eq!(block.tests.len(), 1);
+    assert_eq!(block.tests[0].description, "formats red");
+}
+
+#[test]
+fn extend_body_collects_tests_beside_methods() {
+    let block = first_extend(
+        r#"
+        extend List<Int>
+          fn total(self) -> Int
+            0
+          end
+
+          test "total of empty is zero"
+          end
+        end
+        "#,
+    );
+    assert_eq!(block.members.len(), 1);
+    assert_eq!(block.tests.len(), 1);
+    assert_eq!(block.tests[0].description, "total of empty is zero");
+}
+
+#[test]
+fn builtin_body_collects_tests_beside_functions() {
+    let b = first_builtin(
+        r#"
+        builtin Handle
+          fn id(self) -> Int
+            0
+          end
+
+          test "id is stable"
+          end
+        end
+        "#,
+    );
+    assert_eq!(b.functions.len(), 1);
+    assert_eq!(b.tests.len(), 1);
+    assert_eq!(b.tests[0].description, "id is stable");
+}
+
+#[test]
+fn protocol_body_rejects_tests() {
+    let result = parse_failing_with(
+        r#"
+        protocol Shape
+          fn area(self) -> Int
+
+          test "not here"
+          end
+        end
+        "#,
+        &["`test` is not valid in a protocol body"],
+    );
+    assert_hint_contains(&result, "`impl` block of a conforming type");
 }
 
 #[test]

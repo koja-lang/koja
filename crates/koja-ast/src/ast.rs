@@ -400,6 +400,8 @@ pub struct EnumDecl {
     /// Nested type declarations, only `Item::Struct` / `Item::Enum`.
     pub nested: Vec<Item>,
     pub span: Span,
+    /// `test "..."` blocks declared in the body.
+    pub tests: Vec<TestDecl>,
 }
 
 impl EnumDecl {
@@ -493,6 +495,9 @@ pub struct ImplBlock {
     pub trait_expr: TypeExpr,
     pub members: Vec<ImplMember>,
     pub span: Span,
+    /// `test "..."` blocks declared in the body. They become methods
+    /// on `target`.
+    pub tests: Vec<TestDecl>,
 }
 
 /// An `extend Type` block: attaches inherent methods (and type
@@ -504,6 +509,9 @@ pub struct ExtendBlock {
     pub target: TypeExpr,
     pub members: Vec<ImplMember>,
     pub span: Span,
+    /// `test "..."` blocks declared in the body. They become methods
+    /// on `target`.
+    pub tests: Vec<TestDecl>,
 }
 
 /// A member within an `impl` or `extend` block.
@@ -606,8 +614,9 @@ impl StructDecl {
 
 /// A builtin type declaration, `builtin String ... end`.
 ///
-/// Declares a compiler-owned type. The body admits only functions, so
-/// fields and nested types are syntactically unwritable.
+/// Declares a compiler-owned type. The body admits functions and
+/// `test` blocks, so fields and nested types are syntactically
+/// unwritable.
 #[derive(Debug, Clone)]
 pub struct BuiltinDecl {
     pub annotations: Vec<Annotation>,
@@ -616,6 +625,8 @@ pub struct BuiltinDecl {
     pub type_params: Vec<TypeParam>,
     pub functions: Vec<Function>,
     pub span: Span,
+    /// `test "..."` blocks declared in the body.
+    pub tests: Vec<TestDecl>,
 }
 
 impl BuiltinDecl {

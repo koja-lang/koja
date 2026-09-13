@@ -13,13 +13,14 @@ impl Parser {
         self.advance();
 
         let target = self.parse_type_expr();
-        let members = self.parse_impl_members();
+        let body = self.parse_impl_members();
         self.expect(&TokenKind::End);
 
         Item::Extend(ExtendBlock {
             target,
-            members,
+            members: body.members,
             span: self.span_from(start),
+            tests: body.tests,
         })
     }
 }

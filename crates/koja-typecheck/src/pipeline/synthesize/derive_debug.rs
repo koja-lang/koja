@@ -198,6 +198,7 @@ fn debug_impl_block(target: TypeExpr, format_body: Expr, span: Span) -> Item {
             ImplMember::Function(inspect_function(span)),
         ],
         span,
+        tests: Vec::new(),
     })
 }
 

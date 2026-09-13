@@ -77,7 +77,7 @@ conformance_list = type_expr , { "," , type_expr } ;
 
 struct_field = IDENT , ":" , type_expr , [ "=" , expr ] ;
 
-enum_member = enum_variant | function_decl | struct_decl | enum_decl ;
+enum_member = enum_variant | function_decl | struct_decl | enum_decl | test_decl ;
 
 enum_decl = { annotation } , [ "priv" ] , "enum" , decl_path , [ type_params ] ,
             [ ":" , conformance_list ] ,
@@ -89,10 +89,10 @@ enum_variant = TYPE_IDENT                                           (* unit *)
              | TYPE_IDENT , "{" , struct_field , { "," , struct_field } , "}" ; (* struct *)
 
 (* Builtin types: compiler-owned representations (`String`, `List<T>`).
-   Always public. The body admits only functions. *)
+   Always public. The body admits only functions and tests. *)
 
 builtin_decl = { annotation } , "builtin" , decl_path , [ type_params ] ,
-               { function_decl } ,
+               { function_decl | test_decl } ,
                "end" ;
 
 type_params = "<" , type_param , { "," , type_param } , ">" ;
@@ -146,7 +146,8 @@ extend_block = "extend" , type_expr ,
                "end" ;
 
 impl_member = function_decl
-            | type_alias ;
+            | type_alias
+            | test_decl ;
 
 type_alias = "type" , TYPE_IDENT , "=" , type_expr ;
 

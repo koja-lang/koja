@@ -11,7 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - The `Test` package, with `Test.Failure`, `Test.Assertion`, `Test.require`, `Test.skip`, and `Test.crashes`. It links only for `koja test` and `koja check`, so a build cannot name `Test.Failure` or leave an `assert` in production code.
 - The `assert` keyword. `assert a == b` fails a `! Test.Failure` function with the source text, file, line, and both operands rendered through `Debug`. `assert cond, "message"` adds a message. Any other condition records its source text.
-- The `test "description" ... end` declaration at the top level and inside a struct body. Each block becomes a `! Test.Failure` function named `__test_<file stem>_<line>` under `koja test` and is dropped from every other command. `koja test --trace` groups top-level tests under their file and struct tests under the struct path.
+- The `test "description" ... end` declaration at the top level and inside `struct`, `enum`, `impl`, `extend`, and `builtin` bodies. Each block becomes a `! Test.Failure` function named `__test_<file stem>_<line>` under `koja test` and is dropped from every other command, so tests can live next to the code they cover in `src/`. `koja test --trace` groups top-level tests under their file, type members under the type path, `impl` tests under `Type: Protocol`, and `extend` tests under the target type.
 
 ### Removed
 

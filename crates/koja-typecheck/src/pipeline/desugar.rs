@@ -4,15 +4,16 @@
 //! - Lexically nested type declarations hoist to qualified top-level
 //!   items, the same flat shape the qualified form
 //!   (`struct Owner.Nested`) produces.
-//! - `test "..."` blocks become private functions with a
-//!   `! Test.Failure` channel when the `Test` package is linked, and
-//!   are dropped when it is not, so a build never type checks a test
-//!   body.
+//! - `test "..."` blocks become functions with a `! Test.Failure`
+//!   channel when the `Test` package is linked, and are dropped when it
+//!   is not, so a build never type checks a test body. Top-level blocks
+//!   become package-private functions. Blocks inside a struct, enum,
+//!   impl, extend, or builtin body become public methods on that type.
 
 use std::path::Path;
 
 use koja_ast::ast::{
-    File, Function, FunctionOrigin, Item, StructDecl, TestDecl, TypeExpr, Visibility,
+    File, Function, FunctionOrigin, ImplMember, Item, TestDecl, TypeExpr, Visibility,
     synthesized_test_name,
 };
 
@@ -64,28 +65,63 @@ fn desugar_tests(file: &mut File, tests_linked: bool) {
     file.items = items;
 }
 
+/// Member tests stay public. `priv` on a method is type-private, which
+/// would hide the test from the harness spliced into the package.
 fn desugar_nested_tests(items: &mut [Item], path: Option<&Path>, tests_linked: bool) {
     for item in items {
         match item {
-            Item::Struct(decl) => desugar_struct_tests(decl, path, tests_linked),
-            Item::Enum(decl) => desugar_nested_tests(&mut decl.nested, path, tests_linked),
+            Item::Builtin(decl) => {
+                member_tests(&mut decl.tests, &mut decl.functions, path, tests_linked);
+            }
+            Item::Enum(decl) => {
+                member_tests(&mut decl.tests, &mut decl.functions, path, tests_linked);
+                desugar_nested_tests(&mut decl.nested, path, tests_linked);
+            }
+            Item::Extend(block) => {
+                impl_member_tests(&mut block.tests, &mut block.members, path, tests_linked);
+            }
+            Item::Impl(block) => {
+                impl_member_tests(&mut block.tests, &mut block.members, path, tests_linked);
+            }
+            Item::Struct(decl) => {
+                member_tests(&mut decl.tests, &mut decl.functions, path, tests_linked);
+                desugar_nested_tests(&mut decl.nested, path, tests_linked);
+            }
             _ => {}
         }
     }
 }
 
-/// Member tests stay public. `priv` on a method is type-private, which
-/// would hide the test from the harness spliced into the package.
-fn desugar_struct_tests(decl: &mut StructDecl, path: Option<&Path>, tests_linked: bool) {
-    let tests = std::mem::take(&mut decl.tests);
+fn member_tests(
+    tests: &mut Vec<TestDecl>,
+    functions: &mut Vec<Function>,
+    path: Option<&Path>,
+    tests_linked: bool,
+) {
+    let tests = std::mem::take(tests);
     if tests_linked {
-        decl.functions.extend(
+        functions.extend(
             tests
                 .into_iter()
                 .map(|test| test_function(test, path, Visibility::Public)),
         );
     }
-    desugar_nested_tests(&mut decl.nested, path, tests_linked);
+}
+
+fn impl_member_tests(
+    tests: &mut Vec<TestDecl>,
+    members: &mut Vec<ImplMember>,
+    path: Option<&Path>,
+    tests_linked: bool,
+) {
+    let tests = std::mem::take(tests);
+    if tests_linked {
+        members.extend(
+            tests
+                .into_iter()
+                .map(|test| ImplMember::Function(test_function(test, path, Visibility::Public))),
+        );
+    }
 }
 
 fn test_function(test: TestDecl, path: Option<&Path>, visibility: Visibility) -> Function {
