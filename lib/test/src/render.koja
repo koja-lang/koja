@@ -1,0 +1,170 @@
+@doc """
+The elapsed-time label the human reporters print, `3ms`.
+"""
+fn elapsed_label(ms: Int) -> String
+  "#{ms}ms"
+end
+
+@doc """
+One line for `outcome` in the short style. A pass is
+`file:line: ok: description (3ms)`, an assertion is the line
+`Assertion.render` builds, and every other outcome is
+`file:line: <kind>: <reason>` where the kind is `failure`, `skipped`,
+`crash`, or `timeout`.
+"""
+fn render_short(spec: Spec, outcome: Outcome) -> String
+  match outcome
+    Outcome.Passed(ms) ->
+      "#{spec.id()}: ok: #{spec.description} (#{elapsed_label(ms)})"
+
+    Outcome.Failed(Failure.Assertion(assertion), _) ->
+      assertion.render()
+
+    Outcome.Failed(Failure.Error(message), _) ->
+      "#{spec.id()}: failure: #{message}"
+
+    Outcome.Failed(Failure.Skipped(reason), _) ->
+      "#{spec.id()}: skipped: #{reason}"
+
+    Outcome.Crashed(reason, _) ->
+      "#{spec.id()}: crash: #{first_line(reason)}"
+
+    Outcome.TimedOut(ms) ->
+      "#{spec.id()}: timeout: #{timeout_reason(ms)}"
+  end
+end
+
+@doc """
+A block for `outcome` in the pretty style, laid out like a compiler
+diagnostic. An assertion draws the source line with the expression
+underlined, both operands as labels, and the message as a `= help:`
+row. The other outcomes print a severity line and a location row, and
+a crash adds its backtrace under the gutter. A pass renders as the
+short `ok` line.
+"""
+fn render_pretty(spec: Spec, outcome: Outcome, color: Bool) -> String
+  palette = Palette{color: color}
+
+  match outcome
+    Outcome.Passed(_) ->
+      render_short(spec, outcome)
+
+    Outcome.Failed(Failure.Assertion(assertion), _) ->
+      pretty_assertion(assertion, palette)
+
+    Outcome.Failed(Failure.Error(message), _) ->
+      pretty_block(spec, "failure", message, [], palette)
+
+    Outcome.Failed(Failure.Skipped(reason), _) ->
+      pretty_block(spec, "skipped", reason, [], palette)
+
+    Outcome.Crashed(reason, _) ->
+      lines = reason.split("\n")
+      pretty_block(
+        spec,
+        "crash",
+        first_line(reason),
+        lines.slice(1, lines.length() - 1),
+        palette,
+      )
+
+    Outcome.TimedOut(ms) ->
+      pretty_block(spec, "timeout", timeout_reason(ms), [], palette)
+  end
+end
+
+priv fn timeout_reason(ms: Int) -> String
+  "no result after #{elapsed_label(ms)}"
+end
+
+priv fn first_line(text: String) -> String
+  text.split("\n").first().or("")
+end
+
+priv fn repeat(text: String, count: Int) -> String
+  result = ""
+  i = 0
+
+  while i < count
+    result = result <> text
+    i += 1
+  end
+
+  result
+end
+
+# The snippet layout shared with `koja check`.
+#
+# failure: assertion failed
+# ╭─ test/stack_test.koja:23:5
+# │
+# 23 │     assert popped == 3
+# │            ──────────
+# │            left:  2
+# │            right: 3
+# = help: pops the most recent value
+priv fn pretty_assertion(assertion: Assertion, palette: Palette) -> String
+  line_label = "#{assertion.line}"
+  pad = repeat(" ", line_label.length())
+  bar = palette.dim("│")
+  gutter = "#{pad} #{bar}"
+  indent = repeat(" ", assertion.column - 1)
+  underline = palette.accent(repeat("─", assertion.expression.length()))
+  head = palette.severity("failure:")
+  title = palette.bold("assertion failed")
+  corner = palette.dim("╭─")
+  location = "#{assertion.file}:#{assertion.line}:#{assertion.column}"
+
+  rows: List<String> = [
+    "#{head} #{title}", "#{pad} #{corner} #{location}", gutter,
+    "#{line_label} #{bar} #{assertion.source_line}",
+    "#{gutter} #{indent}#{underline}"
+  ]
+
+  match (assertion.left, assertion.right)
+    (Option.Some(left), Option.Some(right)) ->
+      left_label = palette.accent("left:  #{left}")
+      right_label = palette.accent("right: #{right}")
+      rows = rows.append("#{gutter} #{indent}#{left_label}")
+      rows = rows.append("#{gutter} #{indent}#{right_label}")
+
+    _ ->
+      ()
+  end
+
+  match assertion.message
+    Option.Some(message) ->
+      help = palette.accent("= help:")
+      rows = rows.append("#{pad} #{help} #{message}")
+
+    Option.None ->
+      ()
+  end
+
+  String.join(rows, "\n")
+end
+
+# A severity line and a location row for outcomes with no source
+# snippet, plus one dim row per `detail` line under the gutter.
+priv fn pretty_block(
+  spec: Spec,
+  kind: String,
+  message: String,
+  details: List<String>,
+  palette: Palette,
+) -> String
+
+  pad = repeat(" ", "#{spec.line}".length())
+  head = palette.severity("#{kind}:")
+  title = palette.bold(message)
+  corner = palette.dim("╭─")
+  bar = palette.dim("│")
+
+  rows: List<String> = ["#{head} #{title}", "#{pad} #{corner} #{spec.id()}"]
+
+  for detail in details
+    rows = rows.append("#{pad} #{bar} #{palette.dim(detail)}")
+  end
+
+  String.join(rows, "\n")
+end

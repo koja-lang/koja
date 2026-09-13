@@ -1,0 +1,72 @@
+@doc """
+The two output styles of the human reporters. They follow the
+compiler's diagnostics. `Pretty` draws a source snippet for each
+failure and `Short` prints one line per failure for pipes, editors,
+and agents.
+"""
+enum Style
+  Pretty
+  Short
+
+  @doc """
+  Reads a style name. Anything but `pretty` is `Short`.
+  """
+  fn parse(name: String) -> Style
+    name == "pretty" ? Style.Pretty : Style.Short
+  end
+end
+
+@doc """
+What the driver decided for this run. `koja test` resolves the flags
+and the diagnostics style, then hands them to the harness as
+environment variables that `from_env` reads. No argument parsing
+happens in Koja.
+
+  - `color` says whether the human reporters emit ANSI codes.
+  - `out` is a file path for the machine reporters instead of stderr.
+  - `reporter` names the reporter, `dots`, `trace`, or `json`.
+  - `style` is the human output style.
+  - `timeout_ms` is the deadline for each spec.
+"""
+struct Options
+  color: Bool = false
+  out: Option<String> = Option.None
+  reporter: String = "dots"
+  style: Style = Style.Short
+  timeout_ms: Int = 60000
+
+  @doc """
+  Builds the options from `KOJA_TEST_COLOR`, `KOJA_TEST_OUT`,
+  `KOJA_TEST_REPORTER`, `KOJA_TEST_STYLE`, and `KOJA_TEST_TIMEOUT_MS`.
+  A missing, empty, or unreadable variable keeps the field default.
+  """
+  fn from_env -> Options
+    defaults = Options{}
+
+    Options{
+      color: Options.env_or("KOJA_TEST_COLOR", "0") == "1",
+      out: Options.env("KOJA_TEST_OUT"),
+      reporter: Options.env_or("KOJA_TEST_REPORTER", defaults.reporter),
+      style: Style.parse(Options.env_or("KOJA_TEST_STYLE", "short")),
+      timeout_ms: Options.timeout_from_env(defaults.timeout_ms),
+    }
+  end
+
+  priv fn env(key: String) -> Option<String>
+    match System.get_env(key)
+      Option.Some(value) -> value.empty?() ? Option.None : Option.Some(value)
+      Option.None -> Option.None
+    end
+  end
+
+  priv fn env_or(key: String, default: String) -> String
+    Options.env(key).or(default)
+  end
+
+  priv fn timeout_from_env(default: Int) -> Int
+    match Options.env("KOJA_TEST_TIMEOUT_MS")
+      Option.Some(text) -> Int.parse(text).or(default)
+      Option.None -> default
+    end
+  end
+end

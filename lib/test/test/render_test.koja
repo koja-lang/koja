@@ -1,0 +1,117 @@
+struct RenderTest
+  priv fn spec -> Spec
+    Spec{
+      description: "pops in reverse order",
+      file: "test/stack_test.koja",
+      group: "StackTest",
+      line: 14,
+      run: fn () -> Result<(), Failure> Result.Ok(()) end,
+    }
+  end
+
+  priv fn assertion(message: Option<String>) -> Assertion
+    Assertion{
+      column: 12,
+      expression: "popped == 3",
+      file: "test/stack_test.koja",
+      left: Option.Some("2"),
+      line: 23,
+      message: message,
+      right: Option.Some("3"),
+      source_line: "    assert popped == 3",
+    }
+  end
+
+  test "a pass renders as one ok line in both styles"
+    spec = RenderTest.spec()
+    expected = "test/stack_test.koja:14: ok: pops in reverse order (3ms)"
+
+    assert render_short(spec, Outcome.Passed(3)) == expected
+    assert render_pretty(spec, Outcome.Passed(3), false) == expected
+  end
+
+  test "short style renders an assertion through Assertion.render"
+    outcome = Outcome.Failed(Failure.Assertion(RenderTest.assertion(Option.None)), 1)
+    expected = "test/stack_test.koja:23:12: failure: assert popped == 3 (left: 2, right: 3)"
+
+    assert render_short(RenderTest.spec(), outcome) == expected
+  end
+
+  test "short style names the kind for the other outcomes"
+    spec = RenderTest.spec()
+
+    error = render_short(spec, Outcome.Failed(Failure.Error("boom"), 1))
+    skipped = render_short(spec, Outcome.Failed(Failure.Skipped("no db"), 0))
+    crashed = render_short(
+      spec,
+      Outcome.Crashed("index 5 out of bounds\n  at list.koja:40", 12),
+    )
+    timed_out = render_short(spec, Outcome.TimedOut(60000))
+
+    assert error == "test/stack_test.koja:14: failure: boom"
+    assert skipped == "test/stack_test.koja:14: skipped: no db"
+    assert crashed == "test/stack_test.koja:14: crash: index 5 out of bounds"
+    assert timed_out ==
+      "test/stack_test.koja:14: timeout: no result after 60000ms"
+  end
+
+  test "pretty style draws the snippet with operand labels"
+    outcome = Outcome.Failed(Failure.Assertion(RenderTest.assertion(Option.None)), 1)
+    expected = String.join(
+      [
+        "failure: assertion failed", "   ╭─ test/stack_test.koja:23:12",
+        "   │", "23 │     assert popped == 3",
+        "   │            ───────────",
+        "   │            left:  2", "   │            right: 3"
+      ],
+      "\n",
+    )
+
+    assert render_pretty(RenderTest.spec(), outcome, false) == expected
+  end
+
+  test "pretty style adds the message as a help row"
+    outcome = Outcome.Failed(Failure.Assertion(RenderTest.assertion(
+      Option.Some("pops the most recent value"),
+    )), 1)
+    rendered = render_pretty(RenderTest.spec(), outcome, false)
+
+    assert rendered.ends_with?("\n   = help: pops the most recent value")
+  end
+
+  test "pretty style prints a location row for an error"
+    outcome = Outcome.Failed(Failure.Error("connection refused"), 1)
+    expected = "failure: connection refused\n   ╭─ test/stack_test.koja:14"
+
+    assert render_pretty(RenderTest.spec(), outcome, false) == expected
+  end
+
+  test "pretty style puts a backtrace under the gutter"
+    outcome = Outcome.Crashed("index 5 out of bounds\n  at list.koja:40", 12)
+    expected = String.join(
+      [
+        "crash: index 5 out of bounds", "   ╭─ test/stack_test.koja:14",
+        "   │   at list.koja:40"
+      ],
+      "\n",
+    )
+
+    assert render_pretty(RenderTest.spec(), outcome, false) == expected
+  end
+
+  test "color wraps the severity word and leaves the text intact"
+    outcome = Outcome.Failed(Failure.Error("boom"), 1)
+    plain = render_pretty(RenderTest.spec(), outcome, false)
+    colored = render_pretty(RenderTest.spec(), outcome, true)
+
+    assert plain != colored
+    assert colored.contains?("[1;31mfailure:")
+    assert colored.contains?("[0m")
+    assert colored.contains?("boom")
+  end
+
+  test "elapsed_label appends the unit"
+    assert elapsed_label(0) == "0ms"
+    assert elapsed_label(452) == "452ms"
+  end
+end

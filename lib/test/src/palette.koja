@@ -1,0 +1,45 @@
+# ANSI styling for the human reporters, mirroring the compiler's
+# diagnostics palette. Bold red marks the severity word, red the
+# accents, dim the gutters, and green a pass. With `color` off every
+# method returns its input unchanged.
+priv struct Palette
+  color: Bool
+
+  fn accent(self, text: String) -> String
+    self.wrap(text, "31")
+  end
+
+  fn bold(self, text: String) -> String
+    self.wrap(text, "1")
+  end
+
+  fn dim(self, text: String) -> String
+    self.wrap(text, "2")
+  end
+
+  fn green(self, text: String) -> String
+    self.wrap(text, "32")
+  end
+
+  fn red(self, text: String) -> String
+    self.wrap(text, "31")
+  end
+
+  fn severity(self, text: String) -> String
+    self.wrap(text, "1;31")
+  end
+
+  priv fn wrap(self, text: String, code: String) -> String
+    if not self.color
+      return text
+    end
+
+    esc = Palette.escape()
+    "#{esc}[#{code}m#{text}#{esc}[0m"
+  end
+
+  # The lexer has no `\e` escape, so the byte comes from a binary.
+  priv fn escape -> String
+    <<0x1b>>.to_string().unwrap()
+  end
+end

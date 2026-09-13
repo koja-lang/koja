@@ -1,0 +1,51 @@
+struct OptionsTest
+  priv fn clear
+    System.set_env("KOJA_TEST_COLOR", "")
+    System.set_env("KOJA_TEST_OUT", "")
+    System.set_env("KOJA_TEST_REPORTER", "")
+    System.set_env("KOJA_TEST_STYLE", "")
+    System.set_env("KOJA_TEST_TIMEOUT_MS", "")
+  end
+
+  test "from_env keeps the defaults when nothing is set"
+    OptionsTest.clear()
+    options = Options.from_env()
+
+    assert options.color == false
+    assert options.out.none?()
+    assert options.reporter == "dots"
+    assert options.style == Style.Short
+    assert options.timeout_ms == 60000
+  end
+
+  test "from_env reads every variable"
+    OptionsTest.clear()
+    System.set_env("KOJA_TEST_COLOR", "1")
+    System.set_env("KOJA_TEST_OUT", "build/report.jsonl")
+    System.set_env("KOJA_TEST_REPORTER", "json")
+    System.set_env("KOJA_TEST_STYLE", "pretty")
+    System.set_env("KOJA_TEST_TIMEOUT_MS", "250")
+    options = Options.from_env()
+
+    assert options.color
+    assert options.out == Option.Some("build/report.jsonl")
+    assert options.reporter == "json"
+    assert options.style == Style.Pretty
+    assert options.timeout_ms == 250
+    OptionsTest.clear()
+  end
+
+  test "an unreadable timeout keeps the default"
+    OptionsTest.clear()
+    System.set_env("KOJA_TEST_TIMEOUT_MS", "soon")
+
+    assert Options.from_env().timeout_ms == 60000
+    OptionsTest.clear()
+  end
+
+  test "Style.parse accepts pretty and falls back to short"
+    assert Style.parse("pretty") == Style.Pretty
+    assert Style.parse("short") == Style.Short
+    assert Style.parse("anything") == Style.Short
+  end
+end

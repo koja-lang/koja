@@ -1,0 +1,49 @@
+@doc """
+How one spec ended. Every variant carries the elapsed milliseconds.
+
+  - `Passed` is a body that returned `Result.Ok`.
+  - `Failed` is a body that returned `Result.Err`. The `Failure` inside
+    says whether it was an assertion, an error, or a skip.
+  - `Crashed` is a body whose process died before it returned. The
+    string is the panic message, followed by the backtrace when the
+    runtime has one.
+  - `TimedOut` is a body that was still running at its deadline.
+"""
+enum Outcome
+  Crashed(String, Int)
+  Failed(Failure, Int)
+  Passed(Int)
+  TimedOut(Int)
+
+  @doc """
+  The milliseconds the spec ran for.
+  """
+  fn elapsed_ms(self) -> Int
+    match self
+      Outcome.Crashed(_, ms) -> ms
+      Outcome.Failed(_, ms) -> ms
+      Outcome.Passed(ms) -> ms
+      Outcome.TimedOut(ms) -> ms
+    end
+  end
+
+  @doc """
+  `true` only for `Passed`.
+  """
+  fn ok?(self) -> Bool
+    match self
+      Outcome.Passed(_) -> true
+      _ -> false
+    end
+  end
+
+  @doc """
+  `true` when the body ended with `Failure.Skipped`.
+  """
+  fn skipped?(self) -> Bool
+    match self
+      Outcome.Failed(Failure.Skipped(_), _) -> true
+      _ -> false
+    end
+  end
+end
