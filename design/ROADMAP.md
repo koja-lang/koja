@@ -6,8 +6,10 @@ duplicate the complete feature inventory.
 
 For the current language, see [LANGUAGE.md](../LANGUAGE.md). Use `koja help`
 for the CLI surface, generated package documentation for library APIs, and
-[CHANGELOG.md](../CHANGELOG.md) for changes between releases. The former
-phase-based roadmap is preserved in
+[CHANGELOG.md](../CHANGELOG.md) for changes between releases. The 0.16 to
+0.18 release history is preserved in
+[archive/20260912-ROADMAP.md](archive/20260912-ROADMAP.md), and the older
+phase-based roadmap in
 [archive/20260722-ROADMAP.md](archive/20260722-ROADMAP.md).
 
 ## Current baseline
@@ -21,134 +23,118 @@ The following facts constrain future planning.
 - Process crash containment, monitors, parenting, kill cascades, lifecycle
   delivery, graceful drain, preemption, priorities, and timer scheduling have
   landed.
+- Fallible functions declare `-> T ! E` and use `try`, `fail`, and `rescue`
+  ([ERROR-HANDLING.md](ERROR-HANDLING.md)).
+- Struct fields and function parameters take default values. Iteration is
+  cursor-based through nominal `Enumeration` conformance.
+- `@deprecated` marks library surface for removal, and generated
+  documentation shows the migration guidance.
+- The `Runtime` API exposes global and per-process metrics.
 - Git dependencies are reproducible through `koja.lock` and the `koja deps`
   command family.
 - Project-aware commands accept `-S <path>` to select a project without
   changing the working directory.
 - `koja shell` loads projects and provides completion. Its remaining
   improvements are optional and driven by use.
+- Linux binaries are position-independent. Tagged releases build for every
+  supported host and publish checksummed tarballs through
+  [koja-lang/releases](https://github.com/koja-lang/releases).
 - Koja remains pre-1.0. Breaking cleanup is still allowed when it produces a
   clearer long-term language.
 
-## 0.16.0
-
-The 0.16 release closes the remaining known language contracts, ships
-anonymous tuples, and adds the error channel.
-
-### Language and tooling
-
-- **[DONE]** Core anonymous tuple support and standard API migrations
-- **[DONE]** Lexical nested type declarations with formatter, LSP, and editor
-  grammar support
-- **[DONE]** A CLI task protocol modeled on `Mix.Tasks` (`Koja.Task` + `[tasks]` manifest exports)
-- **[DONE]** An `@deprecated` compile annotation
-- **[DONE]** Deprecation of `Pair<A, B>` with guidance to use anonymous tuples
-- **[DONE]** Error channel notation over `Result`: `-> T ! E` signatures with
-  `try`, `fail`, and `rescue` ([ERROR-HANDLING.md](ERROR-HANDLING.md))
-
-### Correctness and production gates
-
-- **[DONE]** Type-check and coercion-stamp every explicit `return`. Script behavior must
-  remain consistent across both backends.
-- **[DONE]** Reject reads of locals that are not definitely assigned on every path.
-- **[DONE]** Reject tuple equality when any element lacks valid equality semantics.
-- **[DONE]** Make the formatter round-trip multiline string literals byte-exactly.
-  Heredoc-style content must survive formatting without dedent or lexing
-  corruption.
-
-The release is complete when these items are implemented, documented, and
-covered by tests on both backends where applicable. The VSCode, Vim, and
-tree-sitter integrations pick up anonymous tuple support after the release
-ships. That is ecosystem work, not a release gate.
-
-## 0.17.0
-
-The 0.17 release removes deprecated surface, modernizes type declarations
-with conformance headers, struct field defaults, and the `builtin`
-declaration kind, and hardens Linux deployments with position-independent
-binaries.
-
-### Language and tooling
-
-- **[DONE]** Make public constants and functions referenceable across package
-  boundaries (carried over from 0.16).
-- **[DONE]** Attribute LSP diagnostics to their originating file in multi-file
-  projects (carried over from 0.16).
-- **[DONE]** Default values for struct and enum struct-variant fields,
-  re-evaluated at each construction site.
-- **[DONE]** Remove `Pair<A, B>` after its 0.16 deprecation period. The
-  changelog covers migration to anonymous tuple construction, destructuring,
-  and patterns.
-- **[DONE]** Inline protocol conformance on type declarations:
-  `struct MyApp: Process<C, M, R>` takes a comma-separated protocol list and
-  desugars to the equivalent `impl` blocks. Enums take the same syntax. The
-  main motivation is making application entry types read less awkwardly.
-- **[DONE]** A `builtin` declaration kind for compiler-owned types. It
-  replaces the `@intrinsic struct` workaround, the construction special
-  cases, and the name-keyed IR shape match.
-- **[DONE]** Emit position-independent Linux binaries so deployments get
-  ASLR.
-
-## 0.18.0
-
-The 0.18 release adds optional function arguments, runtime observability, and
-focused standard library improvements found while building auth-manager.
-
-### Language and tooling
-
-- **[DONE]** Add a global `-S <path>` selector for project-aware commands and
-  editor integrations.
-- **[DONE]** Show `@deprecated` notices and migration guidance in generated
-  HTML, terminal search, package listings, and the machine-readable search
-  index.
-- **[DONE]** Generate pages for nested structs and enums under their full
-  qualified names across HTML, package listings, terminal search, and the
-  search index.
-- **[DONE]** Replace indexed `Enumeration` with cursor-based traversal, require
-  nominal conformance for `for`, and support Range, Map, and Set iteration.
-- **[DONE]** Default values for function parameters, so optional arguments do not
-  require a separate options struct at every call site. A defaulted function
-  is callable at every arity its defaults allow. `&name/arity` references
-  pin one arity when a bare name is ambiguous. Separately declared functions
-  sharing a name across arities stay out of scope
-  ([MISC.md](MISC.md)). Struct field defaults (0.17) reduced the urgency by
-  making options structs cheap to declare and construct.
-- **[DONE]** Add a `Runtime` observability API with global and per-process
-  metrics, including mailbox depth, and document the overload contract for
-  long-running services.
-
-### Standard library quality of life
-
-- **[DONE]** Add contextual literal protocols, JSON literal trees, and
-  `JSON.Encoding` with package-level encode and decode functions.
-- **[DONE]** Add `IPAddress.to_string()` and `IPAddress.parse(text)` for DNS
-  discovery and dialable addresses.
-- **[DONE]** Add CRC32 and CRC32C checksums for storage and wire-format
-  integrity.
-
-The larger auth-manager findings remain in [GAPS.md](GAPS.md). `Fd` random
-access and durability, ordered maps, and cross-package protocol conformances
-are not 0.18 release gates.
-
 ## 0.19.0
 
-The 0.19 scope is still forming. These standard library items are deferred
-from 0.18, and any of them can ship in an earlier patch release.
+The 0.19 release is a developer experience release. It finishes the breaking
+cleanup announced in 0.18, replaces the test boilerplate with a `test`
+declaration and compiler-known assertions, brings the language server up to
+the features users miss first, and bounds socket waits.
+
+### Breaking cleanup
+
+- **[DONE]** Remove the `unless` keyword. The parser reports a targeted error
+  with the `if not cond` replacement, and `unless` stays reserved.
+- **[DONE]** Remove `JSON.StringBuilder` and `IPAddress.v4?()` / `v6?()`
+  after their 0.18 deprecations.
+- Change `IO.gets` to return `Option<String>` over a caller-supplied reader
+  so callers can tell end of input from an empty line
+  ([gap](GAPS.md#toolchain-and-stdlib-nits-from-the-git_hygiene-build)).
+
+### Language
+
+- Let `alias` name a package-level function or constant, not only a type.
+  `alias JSON.decode` binds `decode` in the file, every arity included, and
+  `alias Pkg.DEFAULT_PORT` binds the constant. `as` renames either one. The shadow rule stays a hard error, so there is no precedence
+  between an alias and a same-package name. The test surface is what made
+  the types-only carve-out visible, and the fix is to remove the carve-out
+  for every registry kind, not to add an import form.
+
+### Testing
+
+The design is accepted in [TESTING.md](TESTING.md).
+
+- Add a `test "description"` declaration at the top level and inside
+  structs. Structs are suites and nested structs are the hierarchy. The
+  body's channel is `Test.Failure` and nothing else. Setup errors enter
+  through `try Test.require(...)`, and `fail "message"` keeps working because
+  `Test.Failure` conforms to `StringLiteral`.
+- Add an `assert` statement. Koja has no macros, so only the compiler can
+  stamp the source expression, the file, the line, and the `Debug` rendering
+  of both operands into a `Test.Failure`. Assertions are hard: the first
+  failure ends the test.
+- Add a `Test` package with the `Test.Failure` enum and three functions:
+  `require` for setup, `skip`, and `crashes` for a body that must panic. The loader links it only when tests are included, which keeps
+  `assert` out of application code without a special rule.
+- Make the `Test` package the runner. `Test.Runner` runs each test in its
+  own process with a deadline, so a crash or a hang is one failure and not
+  the end of the run, and feeds a `Test.Reporter`. The `dots`, `trace`, and
+  `json` reporters ship, and any package can add one.
+- The human reporters follow the pretty and short styles of compiler
+  diagnostics.
+- Run `koja test` on the interpreter by default, with `--backend llvm` for
+  the native run. The CI recipes run both, which turns every test suite
+  into a parity check between the backends.
+- Deprecate `@test` in 0.19 for removal in 0.20. Migration is by hand or by
+  agent. No formatter rewrite.
+
+### Language server
+
+The list is closed. Anything not named here is 0.20 material.
+
+- Find references and rename, built on one reference index over the resolved
+  AST. Document highlight falls out of the same index.
+- Code actions attached to diagnostics, so teaching diagnostics become
+  one-keystroke fixes.
+- Inlay hints for inferred binding types and parameter names at call sites.
+- Incremental text synchronization in place of full-document sync.
+- A run-test code lens on each `test` declaration.
+- A `FEATURES.md` in `koja-lsp` that lists the supported and the declined
+  protocol methods.
+
+### Runtime
 
 - Add socket read, write, connect, and accept deadlines so a stalled peer
   cannot block its owning process forever
-  ([gap](GAPS.md#sockets-have-no-deadlines)).
-- Add `DateTime.to_rfc3339()` and `DateTime.from_rfc3339(text)` for JSON API
-  timestamps ([gap](GAPS.md#datetime-has-no-calendar-formatting-or-parsing)).
-- Add `UUID.v4()` for session, API key, and node identifiers
-  ([gap](GAPS.md#no-uuid-generation)).
-- Add bytewise `Binary.compare`, big-endian integer encoding and decoding, and
-  `Float.bit_pattern` / `Float.from_bit_pattern`
-  ([gap](GAPS.md#binary-has-no-ordering-and-no-endian-helpers)).
+  ([gap](GAPS.md#sockets-have-no-deadlines)). Sockets are non-blocking
+  through the reactor on both backends, so a deadline is a bounded reactor
+  wait, the same mechanism `receive ... after` and `Fd.watch` use, not a
+  socket option.
+- Give the interpreter general C FFI. Today it dispatches `@extern "C"`
+  calls by symbol name to hand-written shims, so `koja run` and the test
+  runner cannot execute a project with its own externs. The extern surface
+  is explicit-width primitives, `Bool`, `CPtr<T>`, and `()`, so a `dlopen`
+  of each `@link` library and a libffi call cover it. The reactor-aware
+  shims for files, sockets, and TLS stay as overrides. This is a gate for
+  running tests on the interpreter by default.
 
-The rest of the 0.19 scope will be selected from evidence gathered while
-building real packages and applications. Later `0.x` releases will be added
-only when their scope is concrete.
+The deferred standard library items stay in [GAPS.md](GAPS.md) and can ship
+in any patch release: RFC 3339 formatting and parsing, `UUID.v4()`,
+`Binary.compare` and endian helpers, `List.sort`, `System.cmd`, and
+`File.ls`. `Fd` random access, durability, and locking also stay there. None
+of them is a 0.19 release gate. The tree-sitter grammar, the editor
+extensions, and kojalang.org pick up the `unless` removal and the `test`
+syntax after the release ships. That is ecosystem work, not a release gate.
+
+Later `0.x` releases will be added only when their scope is concrete.
 
 ## Ecosystem validation
 

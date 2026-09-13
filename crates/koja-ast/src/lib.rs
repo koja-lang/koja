@@ -9,11 +9,6 @@
 //! - Pattern matching with exhaustive `match` / `when` guards
 //! - String interpolation via `#{expr}`
 //! - Value-semantics memory (deep-copy on acquisition) without GC
-//!
-//! See the project-root design documents for full details:
-//! - `ROADMAP.md`: phases, feature status, and guiding principles
-//! - `MEMORY.md`: ownership, borrowing, and allocation model
-//! - `CONCURRENCY.md`: tasks, actors, and runtime design
 
 pub mod ast;
 pub mod coercion;

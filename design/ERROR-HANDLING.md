@@ -1,7 +1,8 @@
 # Error Handling
 
 **Status: implemented (2026-07-31). The `koja test` contract changes
-wait on a follow-up.** This document records the design rationale.
+are designed in [TESTING.md](TESTING.md).** This document records the
+design rationale.
 [LANGUAGE.md](../LANGUAGE.md) documents the shipped surface. One
 correction from the draft: the `Option` bridge already existed in the
 stdlib as `Option.or_err`, so the design added no new method and the
@@ -300,6 +301,12 @@ process for the supervisor to handle. Separately, some stdlib
 regardless of syntax.
 
 ## `koja test` rides along
+
+The bare `! String` contract below shipped in 0.18.3. The assertion
+helper sketch that follows it is superseded by [TESTING.md](TESTING.md),
+which replaces the helpers with a `test` declaration, an `assert`
+statement, and a `Test.Failure` enum as the only type on the test channel.
+The text stays as the record of how the design got there.
 
 The `@test` contract is already the error channel, hand-rolled. Test
 functions return `Result<Bool, String>`, `Err` is the failure message,
