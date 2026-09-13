@@ -1,0 +1,170 @@
+struct ReportersTest
+  priv fn esc -> String
+    <<0x1b>>.to_string().unwrap()
+  end
+
+  priv fn spec -> Spec
+    Spec{
+      description: "pops in reverse order",
+      file: "test/stack_test.koja",
+      group: "StackTest",
+      line: 14,
+      run: fn () -> Result<(), Failure> Result.Ok(()) end,
+    }
+  end
+
+  priv fn plan -> Plan
+    Plan{specs: [ReportersTest.spec()]}
+  end
+
+  test "summary_line leaves zero counts out"
+    summary = Summary{passed: 12}
+
+    assert summary_line(summary, false) == "12 successful tests. 0 failures."
+  end
+
+  test "summary_line adds crashed, timed out, and skipped when present"
+    summary = Summary{
+      crashed: 1,
+      failed: 2,
+      passed: 3,
+      skipped: 4,
+      timed_out: 5,
+    }
+    expected = "3 successful tests. 2 failures. 1 crashed. 5 timed out. 4 skipped."
+
+    assert summary_line(summary, false) == expected
+  end
+
+  test "summary_line is green when ok and red otherwise"
+    assert summary_line(Summary{passed: 1}, true).starts_with?(
+      ReportersTest.esc() <> "[32m",
+    )
+    assert summary_line(Summary{failed: 1}, true).starts_with?(
+      ReportersTest.esc() <> "[31m",
+    )
+  end
+
+  test "dots in the short style collects failures and skips without printing"
+    reporter = DotsReporter.new(Options{style: Style.Short})
+      .started(ReportersTest.plan())
+      .spec_finished(ReportersTest.spec(), Outcome.Passed(1))
+      .spec_finished(
+        ReportersTest.spec(),
+        Outcome.Failed(Failure.Error("boom"), 1),
+      )
+      .spec_finished(
+        ReportersTest.spec(),
+        Outcome.Failed(Failure.Skipped("no db"), 0),
+      )
+      .spec_finished(ReportersTest.spec(), Outcome.Crashed("bang", 2))
+
+    assert reporter.failures ==
+      [
+        "test/stack_test.koja:14: failure: boom",
+        "test/stack_test.koja:14: crash: bang"
+      ]
+    assert reporter.skips == ["test/stack_test.koja:14: skipped: no db"]
+  end
+
+  test "trace in the short style prints no group headers"
+    reporter = TraceReporter.new(Options{style: Style.Short})
+      .spec_started(ReportersTest.spec())
+
+    assert reporter.last_group.none?()
+  end
+
+  test "json events have the documented shapes"
+    spec = ReportersTest.spec()
+    started = JSON.encode(JsonReporter.started_event(ReportersTest.plan()))
+    spec_started = JSON.encode(JsonReporter.spec_started_event(spec))
+    passed = JSON.encode(
+      JsonReporter.spec_finished_event(spec, Outcome.Passed(3)),
+    )
+    skipped = JSON.encode(
+      JsonReporter.spec_finished_event(
+        spec,
+        Outcome.Failed(Failure.Skipped("no db"), 0),
+      ),
+    )
+    crashed = JSON.encode(
+      JsonReporter.spec_finished_event(spec, Outcome.Crashed("bang", 12)),
+    )
+    timed_out = JSON.encode(
+      JsonReporter.spec_finished_event(spec, Outcome.TimedOut(60000)),
+    )
+    finished = JSON.encode(
+      JsonReporter.finished_event(
+        Summary{failed: 2, passed: 10, skipped: 1, elapsed_ms: 75},
+      ),
+    )
+
+    assert started == "{\"event\":\"started\",\"total\":1}"
+    assert spec_started ==
+      "{\"event\":\"spec_started\",\"id\":\"test/stack_test.koja:14\",\"group\":\"StackTest\",\"description\":\"pops in reverse order\"}"
+    assert passed ==
+      "{\"event\":\"spec_finished\",\"id\":\"test/stack_test.koja:14\",\"outcome\":\"passed\",\"ms\":3}"
+    assert skipped ==
+      "{\"event\":\"spec_finished\",\"id\":\"test/stack_test.koja:14\",\"outcome\":\"skipped\",\"ms\":0,\"reason\":\"no db\"}"
+    assert crashed ==
+      "{\"event\":\"spec_finished\",\"id\":\"test/stack_test.koja:14\",\"outcome\":\"crashed\",\"ms\":12,\"reason\":\"bang\"}"
+    assert timed_out ==
+      "{\"event\":\"spec_finished\",\"id\":\"test/stack_test.koja:14\",\"outcome\":\"timed_out\",\"ms\":60000}"
+    assert finished ==
+      "{\"event\":\"finished\",\"passed\":10,\"failed\":2,\"skipped\":1,\"crashed\":0,\"timed_out\":0,\"ms\":75}"
+  end
+
+  test "json failure objects carry the assertion fields or the error message"
+    spec = ReportersTest.spec()
+    assertion = Assertion{
+      column: 12,
+      expression: "popped == 3",
+      file: "test/stack_test.koja",
+      left: Option.Some("2"),
+      line: 23,
+      message: Option.None,
+      right: Option.Some("3"),
+      source_line: "    assert popped == 3",
+    }
+    failed = JSON.encode(
+      JsonReporter.spec_finished_event(
+        spec,
+        Outcome.Failed(Failure.Assertion(assertion), 1),
+      ),
+    )
+    error = JSON.encode(
+      JsonReporter.spec_finished_event(
+        spec,
+        Outcome.Failed(Failure.Error("boom"), 1),
+      ),
+    )
+
+    assert failed ==
+      "{\"event\":\"spec_finished\",\"id\":\"test/stack_test.koja:14\",\"outcome\":\"failed\",\"ms\":1,\"failure\":{\"kind\":\"assertion\",\"expression\":\"popped == 3\",\"file\":\"test/stack_test.koja\",\"line\":23,\"column\":12,\"source_line\":\"    assert popped == 3\",\"left\":\"2\",\"right\":\"3\",\"message\":null}}"
+    assert error ==
+      "{\"event\":\"spec_finished\",\"id\":\"test/stack_test.koja:14\",\"outcome\":\"failed\",\"ms\":1,\"failure\":{\"kind\":\"error\",\"message\":\"boom\"}}"
+  end
+
+  test "json writes one line per event to the out file"
+    path = "/tmp/koja_test_json_reporter.jsonl"
+
+    if File.exists?(path)
+      _ = File.delete(path)
+    end
+
+    JsonReporter.new(Options{out: Option.Some(path)})
+      .started(ReportersTest.plan())
+      .spec_finished(ReportersTest.spec(), Outcome.Passed(3))
+      .finished(Summary{passed: 1, elapsed_ms: 3})
+
+    content = try require(File.read(path))
+    lines = content.split("\n")
+
+    assert lines.length() == 4
+    assert lines.get(0) == Option.Some("{\"event\":\"started\",\"total\":1}")
+    assert lines.get(2) ==
+      Option.Some("{\"event\":\"finished\",\"passed\":1,\"failed\":0,\"skipped\":0,\"crashed\":0,\"timed_out\":0,\"ms\":3}")
+    assert lines.get(3) == Option.Some("")
+    _ = File.delete(path)
+  end
+end

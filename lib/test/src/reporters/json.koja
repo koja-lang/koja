@@ -1,0 +1,223 @@
+alias JSON.Value
+
+@doc """
+The machine reporter. Writes one JSON object per line to stderr, or
+to the `--out` file, so a spec that prints to stdout cannot corrupt
+the stream. The event shapes are part of the `Test` package's public
+surface.
+
+```
+{"event":"started","total":13}
+{"event":"spec_started","id":"test/stack_test.koja:14","group":"StackTest","description":"pops in reverse order"}
+{"event":"spec_finished","id":"test/stack_test.koja:14","outcome":"passed","ms":3}
+{"event":"spec_finished","id":"test/stack_test.koja:22","outcome":"failed","ms":1,"failure":{"kind":"assertion",...}}
+{"event":"spec_finished","id":"test/stack_test.koja:30","outcome":"crashed","ms":12,"reason":"index 5 out of bounds"}
+{"event":"spec_finished","id":"test/stack_test.koja:38","outcome":"skipped","ms":0,"reason":"DATABASE_URL is not set"}
+{"event":"spec_finished","id":"test/stack_test.koja:46","outcome":"timed_out","ms":60000}
+{"event":"finished","passed":10,"failed":2,"skipped":1,"crashed":0,"timed_out":0,"ms":75}
+```
+
+The `failure` object has a `kind` of `assertion`, with `expression`,
+`file`, `line`, `column`, `source_line`, `left`, `right`, and
+`message`, or a `kind` of `error` with `message`. A skip is its own
+`outcome` value because CI counts skips apart from failures.
+"""
+struct JsonReporter
+  sink: JsonReporter.Sink
+
+  @doc """
+  Opens the `--out` file when `options.out` is set, otherwise writes
+  to stderr. A file that cannot be opened falls back to stderr with
+  one warning.
+  """
+  fn new(options: Options) -> JsonReporter
+    match options.out
+      Option.Some(path) ->
+        match File.open(path, File.Mode.Write)
+          Result.Ok(file) ->
+            JsonReporter{sink: JsonReporter.Sink.File(file)}
+
+          Result.Err(message) ->
+            IO.warn(
+              "koja test: cannot open #{path} (#{message}), writing events to stderr",
+            )
+            JsonReporter{sink: JsonReporter.Sink.Stderr}
+        end
+
+      Option.None ->
+        JsonReporter{sink: JsonReporter.Sink.Stderr}
+    end
+  end
+
+  @doc """
+  The `started` event for `plan`.
+  """
+  fn started_event(plan: Plan) -> Value
+    Value.object(
+      [
+        Value.entry("event", Value.string("started")),
+        Value.entry("total", Value.int(plan.total()))
+      ],
+    )
+  end
+
+  @doc """
+  The `spec_started` event for `spec`.
+  """
+  fn spec_started_event(spec: Spec) -> Value
+    Value.object(
+      [
+        Value.entry("event", Value.string("spec_started")),
+        Value.entry("id", Value.string(spec.id())),
+        Value.entry("group", Value.string(spec.group)),
+        Value.entry("description", Value.string(spec.description))
+      ],
+    )
+  end
+
+  @doc """
+  The `spec_finished` event for `spec` and `outcome`.
+  """
+  fn spec_finished_event(spec: Spec, outcome: Outcome) -> Value
+    head = [
+      Value.entry("event", Value.string("spec_finished")),
+      Value.entry("id", Value.string(spec.id())),
+      Value.entry("outcome", Value.string(JsonReporter.outcome_name(outcome))),
+      Value.entry("ms", Value.int(outcome.elapsed_ms()))
+    ]
+
+    tail =
+      match outcome
+        Outcome.Passed(_) ->
+          []
+
+        Outcome.TimedOut(_) ->
+          []
+
+        Outcome.Crashed(reason, _) ->
+          [Value.entry("reason", Value.string(reason))]
+
+        Outcome.Failed(Failure.Skipped(reason), _) ->
+          [Value.entry("reason", Value.string(reason))]
+
+        Outcome.Failed(failure, _) ->
+          [Value.entry("failure", JsonReporter.failure_value(failure))]
+      end
+
+    Value.object(head.concat(tail))
+  end
+
+  @doc """
+  The `finished` event for `summary`.
+  """
+  fn finished_event(summary: Summary) -> Value
+    Value.object(
+      [
+        Value.entry("event", Value.string("finished")),
+        Value.entry("passed", Value.int(summary.passed)),
+        Value.entry("failed", Value.int(summary.failed)),
+        Value.entry("skipped", Value.int(summary.skipped)),
+        Value.entry("crashed", Value.int(summary.crashed)),
+        Value.entry("timed_out", Value.int(summary.timed_out)),
+        Value.entry("ms", Value.int(summary.elapsed_ms))
+      ],
+    )
+  end
+
+  priv fn outcome_name(outcome: Outcome) -> String
+    match outcome
+      Outcome.Passed(_) -> "passed"
+      Outcome.Failed(Failure.Skipped(_), _) -> "skipped"
+      Outcome.Failed(_, _) -> "failed"
+      Outcome.Crashed(_, _) -> "crashed"
+      Outcome.TimedOut(_) -> "timed_out"
+    end
+  end
+
+  priv fn failure_value(failure: Failure) -> Value
+    match failure
+      Failure.Assertion(assertion) ->
+        Value.object(
+          [
+            Value.entry("kind", Value.string("assertion")),
+            Value.entry("expression", Value.string(assertion.expression)),
+            Value.entry("file", Value.string(assertion.file)),
+            Value.entry("line", Value.int(assertion.line)),
+            Value.entry("column", Value.int(assertion.column)),
+            Value.entry("source_line", Value.string(assertion.source_line)),
+            Value.entry("left", JsonReporter.optional(assertion.left)),
+            Value.entry("right", JsonReporter.optional(assertion.right)),
+            Value.entry("message", JsonReporter.optional(assertion.message))
+          ],
+        )
+
+      Failure.Error(message) ->
+        Value.object(
+          [
+            Value.entry("kind", Value.string("error")),
+            Value.entry("message", Value.string(message))
+          ],
+        )
+
+      Failure.Skipped(reason) ->
+        Value.object(
+          [
+            Value.entry("kind", Value.string("skipped")),
+            Value.entry("message", Value.string(reason))
+          ],
+        )
+    end
+  end
+
+  priv fn optional(text: Option<String>) -> Value
+    match text
+      Option.Some(value) -> Value.string(value)
+      Option.None -> Value.null()
+    end
+  end
+
+  priv fn emit(self, value: Value)
+    line = JSON.encode(value)
+
+    match self.sink
+      JsonReporter.Sink.Stderr -> IO.warn(line)
+      JsonReporter.Sink.File(file) -> _ = file.fd.write(line <> "\n")
+    end
+  end
+end
+
+@doc """
+Where the JSON lines go.
+"""
+enum JsonReporter.Sink
+  File(File)
+  Stderr
+end
+
+impl Reporter for JsonReporter
+  fn started(self, plan: Plan) -> Self
+    self.emit(JsonReporter.started_event(plan))
+    self
+  end
+
+  fn spec_started(self, spec: Spec) -> Self
+    self.emit(JsonReporter.spec_started_event(spec))
+    self
+  end
+
+  fn spec_finished(self, spec: Spec, outcome: Outcome) -> Self
+    self.emit(JsonReporter.spec_finished_event(spec, outcome))
+    self
+  end
+
+  fn finished(self, summary: Summary) -> Self
+    self.emit(JsonReporter.finished_event(summary))
+
+    match self.sink
+      JsonReporter.Sink.File(file) -> _ = file.close()
+      JsonReporter.Sink.Stderr -> ()
+    end
+
+    self
+  end
+end

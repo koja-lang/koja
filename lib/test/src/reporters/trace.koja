@@ -1,0 +1,80 @@
+@doc """
+The reporter behind `koja test --trace`. In the pretty style it prints
+a header each time the group changes and one line per spec. The
+description and location are written before the body runs, so a spec
+that hangs or crashes leaves its name as the last output, and
+` ... ok (3ms)` or the failure word follows when it ends. The failures
+block and the summary line come last, as with `dots`.
+
+In the short style every spec prints one greppable line as it ends,
+`file:line: ok: description (3ms)` for a pass and the failure line
+otherwise, then the summary line.
+"""
+struct TraceReporter
+  color: Bool
+  failures: List<String> = []
+  last_group: Option<String> = Option.None
+  skips: List<String> = []
+  style: Style
+
+  fn new(options: Options) -> TraceReporter
+    TraceReporter{color: options.color, style: options.style}
+  end
+
+  priv fn result_word(outcome: Outcome, palette: Palette) -> String
+    match outcome
+      Outcome.Passed(_) -> palette.green("ok")
+      Outcome.Failed(Failure.Skipped(_), _) -> palette.dim("skip")
+      Outcome.Failed(_, _) -> palette.red("FAIL")
+      Outcome.Crashed(_, _) -> palette.red("CRASH")
+      Outcome.TimedOut(_) -> palette.red("TIMEOUT")
+    end
+  end
+end
+
+impl Reporter for TraceReporter
+  fn started(self, plan: Plan) -> Self
+    self
+  end
+
+  fn spec_started(self, spec: Spec) -> Self
+    if self.style == Style.Short
+      return self
+    end
+
+    if self.last_group != Option.Some(spec.group)
+      if self.last_group.some?()
+        IO.puts("")
+      end
+
+      IO.puts(spec.group)
+      self.last_group = Option.Some(spec.group)
+    end
+
+    IO.write("  #{spec.description} (#{spec.id()})")
+    self
+  end
+
+  fn spec_finished(self, spec: Spec, outcome: Outcome) -> Self
+    match self.style
+      Style.Pretty ->
+        word = TraceReporter.result_word(outcome, Palette{color: self.color})
+        IO.puts(" ... #{word} (#{elapsed_label(outcome.elapsed_ms())})")
+        self.failures = push(
+          self.failures,
+          failure_entry(spec, outcome, self.style, self.color),
+        )
+        self.skips = push(self.skips, skip_entry(spec, outcome))
+
+      Style.Short ->
+        IO.puts(render_short(spec, outcome))
+    end
+
+    self
+  end
+
+  fn finished(self, summary: Summary) -> Self
+    print_tail(self.failures, self.skips, summary, self.style, self.color)
+    self
+  end
+end

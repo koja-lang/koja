@@ -1,0 +1,103 @@
+@doc """
+The summary line the human reporters end with. Counts that are zero
+for crashes, timeouts, and skips are left out, so the common line is
+`12 successful tests. 0 failures.`
+"""
+fn summary_line(summary: Summary, color: Bool) -> String
+  palette = Palette{color: color}
+  parts: List<String> = [
+    "#{summary.passed} successful tests.", "#{summary.failed} failures."
+  ]
+
+  if summary.crashed > 0
+    parts = parts.append("#{summary.crashed} crashed.")
+  end
+
+  if summary.timed_out > 0
+    parts = parts.append("#{summary.timed_out} timed out.")
+  end
+
+  if summary.skipped > 0
+    parts = parts.append("#{summary.skipped} skipped.")
+  end
+
+  line = String.join(parts, " ")
+  summary.ok?() ? palette.green(line) : palette.red(line)
+end
+
+# The block after the specs in both human reporters. Failures come
+# first, each rendered block separated by a blank line under a
+# `Failures:` header, then the skipped lines under `Skipped:`, then the
+# summary line. In the short style the blocks have no headers and no
+# blank lines, one rendered line per entry.
+priv fn print_tail(
+  failures: List<String>,
+  skips: List<String>,
+  summary: Summary,
+  style: Style,
+  color: Bool,
+)
+
+  match style
+    Style.Pretty ->
+      if not failures.empty?()
+        IO.puts("")
+        IO.puts("Failures:")
+
+        for failure in failures
+          IO.puts("")
+          IO.puts(failure)
+        end
+      end
+
+      if not skips.empty?()
+        IO.puts("")
+        IO.puts("Skipped:")
+        IO.puts("")
+
+        for skip in skips
+          IO.puts(skip)
+        end
+      end
+
+      IO.puts("")
+
+    Style.Short ->
+      for failure in failures
+        IO.puts(failure)
+      end
+
+      for skip in skips
+        IO.puts(skip)
+      end
+  end
+
+  IO.puts(summary_line(summary, color))
+end
+
+# Renders `outcome` for the failures block in `style`. A pass or a
+# skip renders as nothing, because neither belongs in that block.
+priv fn failure_entry(spec: Spec, outcome: Outcome, style: Style, color: Bool)
+  -> Option<String>
+
+  if outcome.ok?() or outcome.skipped?()
+    return Option.None
+  end
+
+  match style
+    Style.Pretty -> Option.Some(render_pretty(spec, outcome, color))
+    Style.Short -> Option.Some(render_short(spec, outcome))
+  end
+end
+
+# The one-line skipped entry for the summary block, in both styles.
+priv fn skip_entry(spec: Spec, outcome: Outcome) -> Option<String>
+  outcome.skipped?() ? Option.Some(render_short(spec, outcome)) : Option.None
+end
+
+priv fn push(list: List<String>, entry: Option<String>) -> List<String>
+  match entry
+    Option.Some(text) -> list.append(text)
+    Option.None -> list
+  end
+end
