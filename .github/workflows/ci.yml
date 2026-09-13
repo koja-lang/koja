@@ -97,15 +97,17 @@ jobs:
           cargo build --release -p koja-runtime-posix
       - name: Build koja CLI
         run: cargo build -p koja-driver
-      - name: Stdlib package tests
+      - name: Stdlib package tests (both backends)
         run: |
           koja="$PWD/target/debug/koja"
           failed=0
-          for pkg in lib/*/; do
-            if [ -d "${pkg}test" ]; then
-              echo "=== testing $(basename "$pkg") ==="
-              (cd "$pkg" && "$koja" test --trace) || failed=1
-            fi
+          for backend in interpreter llvm; do
+            for pkg in lib/*/; do
+              if [ -d "${pkg}test" ]; then
+                echo "=== testing $(basename "$pkg") ($backend) ==="
+                (cd "$pkg" && "$koja" test --trace --backend "$backend") || failed=1
+              fi
+            done
           done
           if [ "$failed" -ne 0 ]; then
             echo "stdlib tests failed"

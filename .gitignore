@@ -17,6 +17,8 @@
 justfile
 .rules
 tests/lang/ffi/libffi_helper.a
+tests/lang/ffi/libffi_helper.dylib
+tests/lang/ffi/libffi_helper.so
 
 # Local dev toolchain image
 /toolchain-dev/

@@ -9,8 +9,11 @@
 //! [`marshal::pass_through_externs!`] invocation or hand-write the
 //! handler, then add its row to the `extern_table!` invocation below
 //! in ASCII order.
-//! Symbols not in the table fall through as `None` and surface as
-//! [`RuntimeError::ExternNotSupported`].
+//! Symbols not in the table fall through as `None`. The interpreter
+//! then tries [`foreign`], which resolves the symbol through the
+//! dynamic loader and calls it through libffi. Only a symbol that
+//! neither tier can run surfaces as
+//! [`RuntimeError::ExternUnresolved`].
 
 use crate::error::RuntimeError;
 use crate::value::Value;
@@ -18,6 +21,7 @@ use crate::value::Value;
 mod cptr;
 mod crypto;
 mod fd;
+pub(crate) mod foreign;
 mod kernel;
 mod marshal;
 mod net;
@@ -41,6 +45,8 @@ macro_rules! extern_table {
         }
     ) => {
         /// Every C symbol `dispatch` can run, in ASCII order.
+        /// [`foreign::ForeignTable::resolve`] skips these so a shim
+        /// always wins over a loader lookup of the same name.
         pub(crate) const SUPPORTED_EXTERNS: &[&str] = &[$($symbol,)*];
 
         $(#[$meta])*
@@ -59,7 +65,7 @@ macro_rules! extern_table {
 extern_table! {
     /// Run the registered extern under C symbol `link_name` against
     /// `args`. Returns `None` when no handler is registered so the
-    /// caller can surface [`RuntimeError::ExternNotSupported`].
+    /// caller can fall through to [`foreign`].
     ///
     /// `async` because the cooperative I/O externs suspend: `koja_io_block`
     /// and the fd / socket read-write wrappers park the process (or, in
@@ -162,8 +168,8 @@ extern_table! {
 mod tests {
     use super::SUPPORTED_EXTERNS;
 
-    // `supports_extern` binary-searches the table, so the rows must
-    // stay in ASCII order.
+    // `ForeignTable::resolve` binary-searches the table, so the rows
+    // must stay in ASCII order.
     #[test]
     fn table_is_sorted_and_unique() {
         assert!(SUPPORTED_EXTERNS.windows(2).all(|pair| pair[0] < pair[1]));

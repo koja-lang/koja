@@ -49,8 +49,8 @@
 //!   [`Interpreter::run_program`] (projects, where the Process entry's
 //!   exit code becomes the driver's exit status). Fast feedback,
 //!   no link step. A program that declares an `@extern "C"` the
-//!   interpreter has no handler for falls through to `llvm` instead
-//!   (see [`BackendChoice`]).
+//!   interpreter cannot resolve through the dynamic loader falls
+//!   through to `llvm` instead (see [`BackendChoice`]).
 //! - `run --backend=llvm`: lower -> [`koja_ir_llvm::compile_script`]
 //!   / [`koja_ir_llvm::compile_program`] -> link -> exec the binary
 //!   -> forward its exit code.
@@ -71,8 +71,8 @@ use std::time::Duration;
 
 use koja_ast::ast::{Diagnostic, Severity};
 use koja_ast::identifier::Identifier;
-use koja_ir::{FunctionKind, IRPackage, IRProgram, IRScript, lower_program, lower_script};
-use koja_ir_eval::{Interpreter, RuntimeError, Value, supports_extern};
+use koja_ir::{IRPackage, IRProgram, IRScript, lower_program, lower_script};
+use koja_ir_eval::{ForeignTable, Interpreter, RuntimeError, Unresolved, Value};
 use koja_ir_llvm::CompileOptions;
 use koja_parser::{FileId, ParseMode, ParsedProgram, SourceFile, parse_file, parse_program};
 use koja_test::{HARNESS_ENTRY, discover_tests, generate_harness};
@@ -90,7 +90,7 @@ use crate::tasks::{TASK_HARNESS_ENTRY, TaskProvider, generate_task_harness, reso
 /// `koja run` defaults to [`Backend::Interpreter`] (fast feedback,
 /// no link step) and accepts `--backend=llvm` to compile + exec.
 /// Any code generation flag, or an extern the interpreter cannot
-/// run, also selects `llvm` (see [`BackendChoice`]). `koja build`
+/// resolve, also selects `llvm` (see [`BackendChoice`]). `koja build`
 /// carries no backend flag: only LLVM emits object files.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, clap::ValueEnum)]
 pub enum Backend {
@@ -214,7 +214,7 @@ impl RunOptions {
 /// runner and reporters take no arguments of their own.
 #[derive(clap::Args, Debug, Default)]
 pub(crate) struct TestOptions {
-    /// Execution backend. Defaults to `interpreter`, or `llvm` when the project declares a C extern the interpreter cannot call
+    /// Execution backend. Defaults to `interpreter`, or `llvm` when the project declares a C extern the interpreter cannot resolve
     #[arg(long, value_enum)]
     pub(crate) backend: Option<Backend>,
 
@@ -272,8 +272,8 @@ impl TestOptions {
 
 /// What the command line said about the `run` backend. The flags
 /// alone cannot always decide: a bare `koja run` wants the interpreter
-/// unless the lowered program declares an extern the interpreter has
-/// no handler for, so [`BackendChoice::settle`] runs after lowering.
+/// unless the lowered program declares an extern the interpreter
+/// cannot resolve, so [`BackendChoice::settle`] runs after lowering.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum BackendChoice {
     /// No flag. Interpret unless the program needs a native link.
@@ -282,32 +282,70 @@ enum BackendChoice {
     Forced(Backend),
 }
 
-impl BackendChoice {
-    fn settle(self, packages: &[IRPackage]) -> Backend {
+/// The backend a run settled on. The interpreter arm carries the
+/// [`ForeignTable`] that settled it, so the run calls exactly the
+/// symbols the decision was made on.
+enum Settled {
+    Interpreter(ForeignTable),
+    Llvm,
+}
+
+impl Settled {
+    #[cfg(test)]
+    fn backend(&self) -> Backend {
         match self {
-            Self::Forced(backend) => backend,
-            Self::Auto if declares_unsupported_extern(packages) => Backend::Llvm,
-            Self::Auto => Backend::Interpreter,
+            Self::Interpreter(_) => Backend::Interpreter,
+            Self::Llvm => Backend::Llvm,
         }
     }
 }
 
-/// Whether any `@extern "C"` in `packages` is missing from the
-/// interpreter's dispatch table, which means only LLVM can run it.
-fn declares_unsupported_extern(packages: &[IRPackage]) -> bool {
-    packages
-        .iter()
-        .flat_map(|package| package.functions.values())
-        .any(|function| match &function.kind {
-            FunctionKind::Extern(attrs) => {
-                let link_name = attrs
-                    .link_name
-                    .as_deref()
-                    .unwrap_or_else(|| function.symbol.last_segment());
-                !supports_extern(link_name)
+impl BackendChoice {
+    /// Resolves every `@extern "C"` in `packages` against the
+    /// interpreter's shims, the `@link` libraries under
+    /// `search_paths`, and the running process. `Auto` interprets
+    /// when everything resolves and compiles otherwise. A forced
+    /// interpreter with unresolved symbols is an error, since the
+    /// user ruled out the only backend that could run them.
+    fn settle(
+        self,
+        packages: &[IRPackage],
+        search_paths: &[&Path],
+    ) -> Result<Settled, Vec<Unresolved>> {
+        match self {
+            Self::Forced(Backend::Llvm) => Ok(Settled::Llvm),
+            Self::Forced(Backend::Interpreter) => {
+                let table = ForeignTable::resolve(packages, search_paths);
+                let missing: Vec<Unresolved> = table.unresolved().into_iter().cloned().collect();
+                if missing.is_empty() {
+                    Ok(Settled::Interpreter(table))
+                } else {
+                    Err(missing)
+                }
             }
-            _ => false,
-        })
+            Self::Auto => {
+                let table = ForeignTable::resolve(packages, search_paths);
+                if table.unresolved().is_empty() {
+                    Ok(Settled::Interpreter(table))
+                } else {
+                    Ok(Settled::Llvm)
+                }
+            }
+        }
+    }
+}
+
+/// Reports every extern a forced interpreter run cannot resolve and
+/// exits 1.
+fn bail_unresolved(missing: Vec<Unresolved>) -> ! {
+    eprintln!("error: the interpreter cannot resolve every `@extern \"C\"` in this program");
+    for unresolved in &missing {
+        eprintln!("  {unresolved}");
+    }
+    eprintln!(
+        "hint: build each @link library as a shared library, or drop `--backend=interpreter`"
+    );
+    process::exit(1);
 }
 
 /// Read the `run` backend off the flags. `--backend` wins when given.
@@ -566,17 +604,24 @@ pub fn cmd_run(project_root: Option<&Path>, options: RunOptions) {
     match mode {
         SourceShape::Script(path) => {
             let script = build_script(&path);
-            match choice.settle(&script.packages) {
-                Backend::Interpreter => run_script_interpreted(&script),
-                Backend::Llvm => run_script_compiled(&script, &path, compile, &args),
+            let search = script_search_paths(&path);
+            match choice
+                .settle(&script.packages, &search)
+                .unwrap_or_else(|missing| bail_unresolved(missing))
+            {
+                Settled::Interpreter(foreign) => run_script_interpreted(&script, foreign),
+                Settled::Llvm => run_script_compiled(&script, &path, compile, &args),
             }
         }
         SourceShape::Program(path) => bail_program_execution(&path),
         SourceShape::Project { config, root } => {
             let program = build_project_program(&config, &root);
-            match choice.settle(&program.packages) {
-                Backend::Interpreter => interpret_program(&program, &args),
-                Backend::Llvm => run_project_compiled(&program, &config, &root, compile, &args),
+            match choice
+                .settle(&program.packages, &[root.as_path()])
+                .unwrap_or_else(|missing| bail_unresolved(missing))
+            {
+                Settled::Interpreter(foreign) => interpret_program(&program, &args, foreign),
+                Settled::Llvm => run_project_compiled(&program, &config, &root, compile, &args),
             }
         }
     }
@@ -681,9 +726,13 @@ fn run_task(
             .expect("non-toolchain tasks only resolve inside a project");
         build_task_program(config, root, name, provider)
     };
-    match choice.settle(&program.packages) {
-        Backend::Interpreter => interpret_program(&program, args),
-        Backend::Llvm => {
+    let search: Vec<&Path> = project.iter().map(|(_, root)| root.as_path()).collect();
+    match choice
+        .settle(&program.packages, &search)
+        .unwrap_or_else(|missing| bail_unresolved(missing))
+    {
+        Settled::Interpreter(foreign) => interpret_program(&program, args, foreign),
+        Settled::Llvm => {
             run_task_compiled(&program, name, provider, project.as_ref(), compile, args)
         }
     }
@@ -841,11 +890,17 @@ fn run_script_compiled(
 /// matching the LLVM backend's `main` trampoline (see
 /// `koja-ir-llvm/src/main_wrapper.rs`). Runtime failures print
 /// `error: …` and exit 1.
-fn run_script_interpreted(script: &IRScript) {
-    if let Err(error) = Interpreter::run_script(script) {
+fn run_script_interpreted(script: &IRScript, foreign: ForeignTable) {
+    if let Err(error) = Interpreter::run_script_with(script, foreign) {
         eprintln!("error: {error}");
         process::exit(1);
     }
+}
+
+/// Where a script's `@link` libraries are looked for first, the
+/// script's own directory.
+fn script_search_paths(path: &Path) -> Vec<&Path> {
+    path.parent().into_iter().collect()
 }
 
 /// Typecheck a single source file in the requested parse mode.
@@ -1183,17 +1238,20 @@ fn run_project_tests(config: &ProjectConfig, root: &Path, options: &TestOptions)
         Some(backend) => BackendChoice::Forced(backend),
         None => BackendChoice::Auto,
     };
-    match choice.settle(&program.packages) {
-        Backend::Interpreter => {
+    match choice
+        .settle(&program.packages, &[root])
+        .unwrap_or_else(|missing| bail_unresolved(missing))
+    {
+        Settled::Interpreter(foreign) => {
             // The interpreter runs the harness on this thread, and
             // `System.get_env` reads the driver's own environment.
             // Nothing else is running yet, so setting it is sound.
             for (key, value) in &env {
                 unsafe { env::set_var(key, value) };
             }
-            interpret_program(&program, &[]);
+            interpret_program(&program, &[], foreign);
         }
-        Backend::Llvm => {
+        Settled::Llvm => {
             let binary = project_build_dir(root, false)
                 .join(format!("{}_test", config.binary_name()))
                 .to_string_lossy()
@@ -1284,8 +1342,8 @@ fn splice_generated_source(parsed: &mut ParsedProgram, package: String, tag: &st
 /// Execute a lowered [`IRProgram`]'s Process entry in-process via
 /// [`Interpreter::run_program`] and exit with its code. Shared by the
 /// project and task interpreter paths.
-fn interpret_program(program: &IRProgram, args: &[String]) -> ! {
-    match Interpreter::run_program(program, args) {
+fn interpret_program(program: &IRProgram, args: &[String], foreign: ForeignTable) -> ! {
+    match Interpreter::run_program_with(program, args, foreign) {
         Ok(Value::Int(code)) => process::exit(code as i32),
         Ok(other) => {
             eprintln!("error: process entry returned non-integer exit value `{other}`");
@@ -1618,33 +1676,56 @@ mod tests {
         lower_script(&checked).expect("script lowers")
     }
 
-    const USER_EXTERN: &str = "struct FFI\n  @extern \"C\"\n  fn abs(x: Int32) -> Int32\nend\n\
+    /// `abs` has no shim, so it resolves through the running
+    /// process (libc).
+    const LIBC_EXTERN: &str = "struct FFI\n  @extern \"C\"\n  fn abs(x: Int32) -> Int32\nend\n\
                                FFI.abs(-1).print()\n";
+
+    /// A `@link` library that exists nowhere, so the loader misses.
+    const MISSING_EXTERN: &str = "struct FFI\n  @extern \"C\"\n  @link \"koja_no_such_lib\"\n  \
+                                  fn koja_no_such_fn(x: Int32) -> Int32\nend\n\
+                                  FFI.koja_no_such_fn(-1).print()\n";
+
+    fn settle(choice: BackendChoice, source: &str) -> Result<Settled, Vec<Unresolved>> {
+        let script = lower_test_script(source);
+        choice.settle(&script.packages, &[])
+    }
 
     // Also proves every extern the bundled stdlib declares has an
     // interpreter handler, otherwise a stdlib-only script would
     // never interpret.
     #[test]
     fn auto_settles_to_interpreter_without_user_externs() {
-        let script = lower_test_script("1.print()\n");
-        assert_eq!(
-            BackendChoice::Auto.settle(&script.packages),
-            Backend::Interpreter
-        );
+        let settled = settle(BackendChoice::Auto, "1.print()\n").expect("auto never errors");
+        assert_eq!(settled.backend(), Backend::Interpreter);
     }
 
     #[test]
-    fn auto_settles_to_llvm_for_an_extern_without_a_handler() {
-        let script = lower_test_script(USER_EXTERN);
-        assert_eq!(BackendChoice::Auto.settle(&script.packages), Backend::Llvm);
+    fn auto_settles_to_interpreter_for_an_extern_the_loader_finds() {
+        let settled = settle(BackendChoice::Auto, LIBC_EXTERN).expect("auto never errors");
+        assert_eq!(settled.backend(), Backend::Interpreter);
     }
 
     #[test]
-    fn forced_backend_ignores_externs() {
-        let script = lower_test_script(USER_EXTERN);
-        assert_eq!(
-            BackendChoice::Forced(Backend::Interpreter).settle(&script.packages),
-            Backend::Interpreter
-        );
+    fn auto_settles_to_llvm_for_an_extern_the_loader_cannot_find() {
+        let settled = settle(BackendChoice::Auto, MISSING_EXTERN).expect("auto never errors");
+        assert_eq!(settled.backend(), Backend::Llvm);
+    }
+
+    #[test]
+    fn forced_llvm_never_resolves() {
+        let settled = settle(BackendChoice::Forced(Backend::Llvm), MISSING_EXTERN)
+            .expect("llvm never errors");
+        assert_eq!(settled.backend(), Backend::Llvm);
+    }
+
+    #[test]
+    fn forced_interpreter_lists_every_unresolved_extern() {
+        let missing = settle(BackendChoice::Forced(Backend::Interpreter), MISSING_EXTERN)
+            .err()
+            .expect("forced interpreter reports the miss");
+        assert_eq!(missing.len(), 1);
+        assert_eq!(missing[0].c_name, "koja_no_such_fn");
+        assert_eq!(missing[0].link_lib.as_deref(), Some("koja_no_such_lib"));
     }
 }

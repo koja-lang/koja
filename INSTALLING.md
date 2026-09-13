@@ -33,6 +33,8 @@ cp "koja-v$version-darwin-arm64"/{koja,koja-lsp} ~/.local/bin/
 
 Make sure `~/.local/bin` is on your `PATH`, then run `koja --version`.
 
+The binaries link the system `libffi`, which the interpreter uses to call `@extern "C"` functions. macOS ships it. On Debian and Ubuntu it is the `libffi8` package, which is present on any system with LLVM or Python installed.
+
 ### GitHub Actions
 
 The [setup-koja](https://github.com/koja-lang/setup-koja) action installs the toolchain on Linux and macOS runners and adds it to `PATH`:

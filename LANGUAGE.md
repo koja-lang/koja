@@ -1996,6 +1996,8 @@ result.print()
 
 Extern functions have no body. Parameter and return types must be FFI-compatible: explicit-width primitives (`Int32`, `UInt8`, `Float32`, etc.), `Bool`, `CPtr<T>`, or `()`. Extern functions can coexist with normal Koja functions in the same struct. Use `priv fn` on the extern declarations and expose safe public wrappers.
 
+Both backends call extern functions. The compiled binary links the `@link` library with `-l`, and the interpreter loads it as a shared library and calls the symbol through libffi (see [Execution Backend](#execution-backend)).
+
 A `Float32` / `Float64` value returned by an extern call is checked at the call site. A NaN or infinity handed back by C panics with an `ArithmeticError` (`non-finite float returned by <name>`), keeping the finite-only float invariant intact across the FFI boundary (see [Arithmetic Faults](#arithmetic-faults)). `CPtr<Float32>.read()` and `CPtr<Float64>.read()` apply the same check (`non-finite float read by CPtr.read`), so a NaN in a C-filled buffer cannot enter a `Float` either.
 
 Declare C return types at their true width and let [numeric widening](#numeric-widening) do the rest. A C `int` bound as `Int32` flows directly into `Int` contexts with correct sign extension, so negative error codes survive the trip. Reading a C `int` as `Int` would zero-extend the upper 32 bits and corrupt negative values.
@@ -2901,7 +2903,9 @@ The selector works with project-mode `build`, `check`, `run`, `shell`, `test`, `
 
 `koja run` executes through the interpreter by default for fast startup. Pass `--backend=llvm`, or any code generation flag such as `--release`, to compile a native binary and run that instead. `koja build` always compiles.
 
-A program that declares an `@extern "C"` function the interpreter has no handler for compiles through LLVM on its own, so an FFI project runs with a bare `koja run`. Pass `--backend=interpreter` to force the interpreter and see which extern is missing.
+The interpreter runs `@extern "C"` functions too. After lowering, the driver resolves every extern the program declares. A symbol with a built-in handler uses it. Any other symbol is looked up through the dynamic loader, first as `lib<name>.dylib` or `lib<name>.so` for its `@link` library under the project root (or the script's directory), then on the loader's own search path, then in the running process, which covers libc and libm. When every symbol resolves, the program runs on the interpreter and each foreign call goes through libffi with the declared signature. When one does not resolve, a bare `koja run` compiles through LLVM instead, so an FFI project always runs. Pass `--backend=interpreter` to force the interpreter, and the driver lists every extern it could not resolve.
+
+A static archive (`.a`) cannot be loaded at run time, so a project that ships only one compiles through LLVM. Build the library as a shared library next to the archive to run it on the interpreter.
 
 ### Documentation
 

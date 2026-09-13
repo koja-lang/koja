@@ -70,11 +70,14 @@ can call any package function. Known limitations:
   baseline (stdlib + project + history) through the pipeline — the
   existing whole-program model, fine for small projects but linear in
   session length.
-- **No user FFI from the prompt.** The interpreter dispatches stdlib
-  externs through a hand-written table, so stdlib FFI works at the
-  prompt. Calling a user-declared `@extern "C"` function errors with
-  `RuntimeError::ExternNotSupported`, same as
-  `koja run --backend=interpreter`.
+- **User FFI from the prompt needs a shared library.** The interpreter
+  resolves a user-declared `@extern "C"` through the dynamic loader, so a
+  `@link` library works at the prompt when it is a shared library on the
+  loader's search path (`DYLD_LIBRARY_PATH` or `LD_LIBRARY_PATH`). The
+  shell does not add the project root to that search the way `koja run`
+  does. A library that exists only as a static archive does not load, and
+  calling one of its externs errors with `RuntimeError::ExternUnresolved`,
+  same as `koja run --backend=interpreter`.
 - **`Global` self-edit inconsistency.** `ProjectLoader` skips any stdlib
   package whose name matches the project (its `seen_packages` set), so a
   project named like a stdlib package — even `Global` — does not

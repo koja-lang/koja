@@ -25,8 +25,14 @@ pub enum RuntimeError {
     /// registration in `crate::intrinsics`, not a user error.
     UnknownIntrinsic { symbol: String },
     /// An `@extern "C"` function was called whose C symbol has no
-    /// handler in [`crate::externs::dispatch`].
-    ExternNotSupported { symbol: String },
+    /// handler in [`crate::externs::dispatch`] and that the dynamic
+    /// loader could not find either. `reason` is the loader's text.
+    ExternUnresolved {
+        c_name: String,
+        link_lib: Option<String>,
+        reason: String,
+        symbol: String,
+    },
     /// Reached an `IRTerminator::Unreachable`, which means an
     /// upstream exhaustiveness or divergence judgment was wrong.
     UnreachableExecuted,
@@ -49,13 +55,25 @@ impl fmt::Display for RuntimeError {
                     "unknown intrinsic `{symbol}`: no eval handler registered"
                 )
             }
-            RuntimeError::ExternNotSupported { symbol } => {
-                write!(
-                    f,
-                    "extern \"C\" `{symbol}` is not registered in the eval \
-                     dispatch table. Use --backend=llvm or add a handler \
-                     in `koja-ir-eval/src/externs`",
-                )
+            RuntimeError::ExternUnresolved {
+                c_name,
+                link_lib,
+                reason,
+                symbol,
+            } => {
+                write!(f, "extern \"C\" `{c_name}` (`{symbol}`)")?;
+                if let Some(lib) = link_lib {
+                    write!(f, " with @link \"{lib}\"")?;
+                }
+                write!(f, " could not be resolved: {reason}.")?;
+                if let Some(lib) = link_lib {
+                    write!(
+                        f,
+                        " Build `{lib}` as a shared library or run with --backend=llvm",
+                    )
+                } else {
+                    write!(f, " Run with --backend=llvm")
+                }
             }
             RuntimeError::UnreachableExecuted => write!(
                 f,

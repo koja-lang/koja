@@ -92,10 +92,11 @@ The design is accepted in [TESTING.md](TESTING.md).
   diagnostics.
 - Run `koja test` on the interpreter by default, with `--backend llvm` for
   the native run. Done in phase 3 with the same backend selection as
-  `koja run`, so a project with a C extern the interpreter cannot call
-  still falls back to LLVM until the interpreter has general C FFI. The CI
-  recipes run both, which turns every test suite into a parity check
-  between the backends.
+  `koja run`. Since phase 4 the interpreter resolves a project's own
+  externs through the dynamic loader, so only a project whose `@link`
+  library exists solely as a static archive still compiles. The CI recipes
+  run both, which turns every test suite into a parity check between the
+  backends.
 - Deprecate `@test` in 0.19 for removal in 0.20. Migration is by hand or by
   agent. No formatter rewrite.
 
@@ -121,13 +122,14 @@ The list is closed. Anything not named here is 0.20 material.
   through the reactor on both backends, so a deadline is a bounded reactor
   wait, the same mechanism `receive ... after` and `Fd.watch` use, not a
   socket option.
-- Give the interpreter general C FFI. Today it dispatches `@extern "C"`
-  calls by symbol name to hand-written shims, so `koja run` and the test
-  runner cannot execute a project with its own externs. The extern surface
-  is explicit-width primitives, `Bool`, `CPtr<T>`, and `()`, so a `dlopen`
-  of each `@link` library and a libffi call cover it. The reactor-aware
-  shims for files, sockets, and TLS stay as overrides. This is a gate for
-  running tests on the interpreter by default.
+- Give the interpreter general C FFI. Done. An `@extern "C"` with no
+  hand-written shim resolves through the dynamic loader, in the `@link`
+  library as a shared library under the project root, on the loader's
+  search path, or in the running process, and runs through libffi with
+  the declared signature. The reactor-aware shims for files, sockets, and
+  TLS stay as overrides. A project whose `@link` library exists only as a
+  static archive still compiles through LLVM, since the loader cannot open
+  a `.a`.
 
 The deferred standard library items stay in [GAPS.md](GAPS.md) and can ship
 in any patch release: RFC 3339 formatting and parsing, `UUID.v4()`,

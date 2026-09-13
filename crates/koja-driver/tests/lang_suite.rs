@@ -562,8 +562,19 @@ fn lang_binary_is_position_independent() {
     let _ = fs::remove_dir_all(&dir);
 }
 
+/// Which builds of `ffi/ffi_helper.c` an FFI fixture run gets.
+/// The interpreter loads the shared library and the compiled path
+/// links the archive, so a run with only one of them pins which
+/// backend the driver picked.
+#[derive(Clone, Copy)]
+enum HelperLibs {
+    Both,
+    SharedOnly,
+    StaticOnly,
+}
+
 /// Compile `ffi/ffi_helper.c` into `libffi_helper.a` inside `dir`
-/// and return the archive's path. Callers remove it when done.
+/// and return the archive's path.
 fn build_ffi_helper_lib(dir: &Path) -> PathBuf {
     let c_src = lang_dir().join("ffi").join("ffi_helper.c");
     let lib_path = dir.join("libffi_helper.a");
@@ -589,94 +600,171 @@ fn build_ffi_helper_lib(dir: &Path) -> PathBuf {
     lib_path
 }
 
+/// Compile `ffi/ffi_helper.c` into the platform shared library
+/// (`libffi_helper.dylib` or `libffi_helper.so`) inside `dir`, where
+/// the interpreter's loader looks first.
+fn build_ffi_helper_shared(dir: &Path) -> PathBuf {
+    let c_src = lang_dir().join("ffi").join("ffi_helper.c");
+    let suffix = if cfg!(target_os = "macos") {
+        "dylib"
+    } else {
+        "so"
+    };
+    let lib_path = dir.join(format!("libffi_helper.{suffix}"));
+
+    let cc_status = Command::new("cc")
+        .args(["-shared", "-fPIC", "-o"])
+        .arg(&lib_path)
+        .arg(&c_src)
+        .status()
+        .expect("failed to run cc");
+    assert!(cc_status.success(), "C shared library build failed");
+    lib_path
+}
+
 /// Output of one FFI fixture run.
 struct FfiRun {
     code: i32,
-    dir: PathBuf,
+    /// Whether the driver compiled natively. Only the compiled path
+    /// writes `build/` into the project.
+    compiled: bool,
     stderr: String,
     stdout: String,
 }
 
-/// Build `libffi_helper.a` into the project fixture `name`, run it
-/// with `koja run` (no `--backend`, so the driver must pick LLVM on
-/// its own for the `@link` externs) and the archive on the library
-/// path, then remove the archive.
-fn run_ffi_fixture(name: &str) -> FfiRun {
-    let dir = lang_dir().join(name);
-    assert!(dir.exists(), "test fixture {name}/ not found");
-    let lib_path = build_ffi_helper_lib(&dir);
+/// Copy the project fixture `name` (its `koja.toml` and `src/`) into
+/// a fresh temp dir, build the requested helper libraries next to
+/// it, run `koja run` there with `backend` (`None` leaves the driver
+/// to settle), and remove the copy. A private copy keeps parallel
+/// tests from seeing each other's libraries.
+fn run_ffi_fixture(name: &str, libs: HelperLibs, backend: Option<&str>) -> FfiRun {
+    let fixture = lang_dir().join(name);
+    assert!(fixture.exists(), "test fixture {name}/ not found");
+    let tag = format!("{name}-{}-{}", libs as u8, backend.unwrap_or("auto"));
+    let dir = std::env::temp_dir().join(format!("koja-ffi-{tag}-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&dir);
+    fs::create_dir_all(dir.join("src")).unwrap();
+    fs::copy(fixture.join("koja.toml"), dir.join("koja.toml")).unwrap();
+    for entry in fs::read_dir(fixture.join("src")).unwrap() {
+        let path = entry.unwrap().path();
+        fs::copy(&path, dir.join("src").join(path.file_name().unwrap())).unwrap();
+    }
+    if matches!(libs, HelperLibs::Both | HelperLibs::StaticOnly) {
+        build_ffi_helper_lib(&dir);
+    }
+    if matches!(libs, HelperLibs::Both | HelperLibs::SharedOnly) {
+        build_ffi_helper_shared(&dir);
+    }
 
     let ffi_lib_path = match library_path() {
         Some(existing) => format!("{}:{}", dir.display(), existing),
         None => dir.display().to_string(),
     };
-    let output = Command::new(koja_bin())
-        .arg("run")
+    let mut cmd = Command::new(koja_bin());
+    cmd.arg("run");
+    if let Some(backend) = backend {
+        cmd.arg(format!("--backend={backend}"));
+    }
+    let output = cmd
         .current_dir(&dir)
         .env("LIBRARY_PATH", &ffi_lib_path)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .output()
         .expect("failed to execute koja");
-    let _ = fs::remove_file(&lib_path);
+    let compiled = dir.join("build").exists();
+    let _ = fs::remove_dir_all(&dir);
 
     FfiRun {
         code: output.status.code().unwrap_or(-1),
-        dir,
+        compiled,
         stderr: String::from_utf8_lossy(&output.stderr).to_string(),
         stdout: String::from_utf8_lossy(&output.stdout).to_string(),
     }
 }
 
-/// Links a user-provided C static library (`@link`), which the
-/// interpreter cannot resolve (no linker / dlopen path for arbitrary
-/// symbols). A bare `koja run` must notice and compile natively.
-#[test]
-fn lang_ffi() {
-    let run = run_ffi_fixture("ffi");
-
+fn assert_ffi_output(name: &str, run: &FfiRun, label: &str) {
     assert!(
         run.code == 0,
-        "ffi: expected exit code 0, got {}\nstderr:\n{}\nstdout:\n{}",
+        "{name} ({label}): expected exit code 0, got {}\nstderr:\n{}\nstdout:\n{}",
         run.code,
         run.stderr,
         run.stdout
     );
-
-    let expected = fs::read_to_string(run.dir.join("expected.stdout")).unwrap();
+    let expected = fs::read_to_string(lang_dir().join(name).join("expected.stdout")).unwrap();
     if run.stdout != expected {
         let diff = diff_lines(&run.stdout, &expected);
-        panic!("\n--- FAIL: ffi ---\n{diff}");
+        panic!("\n--- FAIL: {name} ({label}) ---\n{diff}");
     }
 }
 
-/// An explicit `--backend=interpreter` still wins over the extern
-/// check, so the interpreter's own diagnostic surfaces. No archive
-/// is built: the interpreter fails before any link step, and
-/// `lang_ffi` may be building its own copy in the same directory.
+/// Every FFI-admissible type crosses a user `@link` library on both
+/// backends and prints the same golden. The interpreter resolves the
+/// shared library through the dynamic loader and calls it through
+/// libffi, and the compiled path links the archive.
 #[test]
-fn lang_ffi_explicit_interpreter_reports_missing_handler() {
-    let dir = lang_dir().join("ffi");
-    let (stdout, stderr, code) = run_with_timeout(|cmd| {
-        cmd.arg("run")
-            .arg("--backend=interpreter")
-            .current_dir(&dir);
-    });
+fn lang_ffi() {
+    for backend in BACKENDS {
+        let run = run_ffi_fixture("ffi", HelperLibs::Both, Some(backend));
+        assert_ffi_output("ffi", &run, backend);
+    }
+}
 
+/// A bare `koja run` with the shared library on the project root
+/// settles on the interpreter. No native build happens.
+#[test]
+fn lang_ffi_auto_interprets_when_the_shared_library_resolves() {
+    let run = run_ffi_fixture("ffi", HelperLibs::SharedOnly, None);
+    assert_ffi_output("ffi", &run, "auto, shared");
     assert!(
-        code != 0,
-        "ffi: expected the interpreter to reject the extern\nstdout:\n{stdout}"
-    );
-    assert!(
-        stderr.contains("is not registered in the eval dispatch table"),
-        "ffi: unexpected stderr:\n{stderr}"
+        !run.compiled,
+        "ffi: expected the interpreter, but the driver compiled natively\nstderr:\n{}",
+        run.stderr
     );
 }
 
+/// `dlopen` cannot load a static archive, so a project that ships
+/// only `libffi_helper.a` still runs, through LLVM.
+#[test]
+fn lang_ffi_auto_compiles_when_only_a_static_archive_exists() {
+    let run = run_ffi_fixture("ffi", HelperLibs::StaticOnly, None);
+    assert_ffi_output("ffi", &run, "auto, static");
+    assert!(
+        run.compiled,
+        "ffi: expected the LLVM fallback, but nothing was built\nstderr:\n{}",
+        run.stderr
+    );
+}
+
+/// An explicit `--backend=interpreter` with no loadable library is
+/// an error up front. The driver lists every unresolved extern and
+/// says what would fix it, instead of failing at the first call.
+#[test]
+fn lang_ffi_explicit_interpreter_lists_unresolved_externs() {
+    let run = run_ffi_fixture("ffi", HelperLibs::StaticOnly, Some("interpreter"));
+    assert!(
+        run.code != 0,
+        "ffi: expected the interpreter to reject the externs\nstdout:\n{}",
+        run.stdout
+    );
+    for expected in [
+        "cannot resolve every `@extern \"C\"`",
+        "`add_c` (@link \"ffi_helper\")",
+        "`make_greeting` (@link \"ffi_helper\")",
+        "shared library",
+    ] {
+        assert!(
+            run.stderr.contains(expected),
+            "ffi: stderr missing {expected:?}\nstderr:\n{}",
+            run.stderr
+        );
+    }
+}
+
 /// A NaN handed back by an `@extern "C"` call must trap at the call
-/// site. The FFI boundary is the one remaining producer of
-/// non-finite floats, and the finite-only `Float` invariant closes
-/// it there. LLVM-only for the same `@link` reason as `lang_ffi`.
+/// site on both backends. The FFI boundary is the one remaining
+/// producer of non-finite floats, and the finite-only `Float`
+/// invariant closes it there.
 #[test]
 fn lang_ffi_nan_return_traps() {
     assert_ffi_project_faults(
@@ -695,21 +783,23 @@ fn lang_cptr_nan_read_traps() {
     );
 }
 
-/// Run the FFI fixture `name` and assert it dies with `pattern` on
-/// stderr.
+/// Run the FFI fixture `name` on both backends and assert each dies
+/// with `pattern` on stderr.
 fn assert_ffi_project_faults(name: &str, pattern: &str) {
-    let run = run_ffi_fixture(name);
+    for backend in BACKENDS {
+        let run = run_ffi_fixture(name, HelperLibs::Both, Some(backend));
 
-    assert!(
-        run.code != 0,
-        "{name}: expected a fault exit, got 0\nstdout:\n{}",
-        run.stdout
-    );
-    assert!(
-        run.stderr.contains(pattern),
-        "{name}: stderr missing {pattern:?}\nstderr:\n{}",
-        run.stderr
-    );
+        assert!(
+            run.code != 0,
+            "{name} ({backend}): expected a fault exit, got 0\nstdout:\n{}",
+            run.stdout
+        );
+        assert!(
+            run.stderr.contains(pattern),
+            "{name} ({backend}): stderr missing {pattern:?}\nstderr:\n{}",
+            run.stderr
+        );
+    }
 }
 
 /// Lifecycle signal delivery under both backends: the compiled binary
