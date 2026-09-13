@@ -142,8 +142,6 @@ fn collect_item_folds(file: &File, ranges: &mut Vec<FoldingRange>) {
     }
 }
 
-/// A struct folds as a region, and so do its functions, its `test`
-/// blocks, and any nested type.
 fn collect_struct_folds(s: &StructDecl, ranges: &mut Vec<FoldingRange>) {
     if let Some(r) = span_fold(&s.span, Some(FoldingRangeKind::Region)) {
         ranges.push(r);

@@ -539,10 +539,7 @@ pub(super) fn resolve_body_with_expected(
         }
 
         // Statement-position `assert` desugars to plain statements
-        // that the loop then resolves on the next iterations. The
-        // inner `fail` reaches `resolve_fail_statement` like any
-        // other. On a channel error only the condition comes back,
-        // so it still resolves for further diagnostics.
+        // that the loop then resolves on the next iterations.
         if is_assert_statement(&body[index]) {
             let statement = body.remove(index);
             let replacement = rewrite_assert_statement(statement, resolver, diagnostics);

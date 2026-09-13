@@ -329,8 +329,6 @@ impl<'a> Attacher<'a> {
         }
     }
 
-    /// Walks a `test` block. Takes the header line's trailing comment,
-    /// then walks the body like a function's.
     fn walk_test(&mut self, t: &TestDecl) {
         let hoisted = self.take_before(t.span.start.offset);
         self.push(t.span, Slot::Leading, hoisted);

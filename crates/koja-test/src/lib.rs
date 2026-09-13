@@ -167,9 +167,6 @@ pub fn generate_harness(tests: &[TestCase], opts: TestOptions) -> String {
     for test in tests {
         let escaped_desc = escape_koja_string(&test.description);
         let location = escape_koja_string(&format!("{}:{}", test.file, test.line));
-        // Interpolation leaves a `String` payload bare and renders
-        // any other error type through `Debug`, so `! String` and
-        // `! Test.Failure` tests share one harness.
         let failure_append = format!(
             "      failures = failures.append(\"  #{{failed}}) {escaped_desc} ({location})\\n     #{{msg}}\")\n",
         );

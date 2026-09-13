@@ -38,7 +38,6 @@ const TEST_PACKAGE: &str = "Test";
 const FAILURE_TYPE: &str = "Failure";
 const ASSERTION_TYPE: &str = "Assertion";
 
-/// True when `stmt` is a statement-position `assert`.
 pub(super) fn is_assert_statement(stmt: &Statement) -> bool {
     matches!(
         stmt,
@@ -162,8 +161,6 @@ fn comparison_operands(condition: Box<Expr>) -> Result<(BinOp, Expr, Expr), Box<
     }
 }
 
-/// True when the enclosing function's error channel is exactly
-/// `Test.Failure`.
 fn channel_is_test_failure(resolver: &Resolver<'_>) -> bool {
     let Some(channel) = &resolver.error_channel else {
         return false;

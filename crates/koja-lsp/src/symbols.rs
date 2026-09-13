@@ -516,8 +516,8 @@ fn struct_symbol(s: &StructDecl) -> DocumentSymbol {
     }
 }
 
-/// Builds a [`DocumentSymbol`] for a `test` block. The description
-/// is the name, since a test has no identifier of its own.
+/// The description is the name, since a test has no identifier of
+/// its own.
 fn test_symbol(t: &TestDecl) -> DocumentSymbol {
     let range = span_to_range(&t.span);
     #[allow(deprecated)]
