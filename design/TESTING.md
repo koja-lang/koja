@@ -581,8 +581,8 @@ must cover each one.
 
 - Lexer: `test` and `assert` tokens.
 - Parser: `Item::Test` and struct-member tests, `ExprKind::Assert`, `@test`
-  still parsed as an annotation. A post-parse pass fills the expression
-  text and source line from the file by span.
+  still parsed as an annotation. The parser slices the expression text and
+  source line from its own source while it builds the node.
 - Typecheck: channel construction for `test`, `assert` desugaring beside
   `fail` in the error channel resolver, the `@test` deprecation warning,
   `test` items stripped when tests are not loaded, completion `KEYWORDS`.
@@ -733,17 +733,21 @@ more commits at its boundary, so a bisect can name the phase.
    when `include_tests` is set: today every qualified stdlib package is
    linked into every build, so this is a filter with a test that
    `koja build` cannot name `Test.Failure`. The `assert` keyword, the
-   parser node, a post-parse pass that fills `expression` and
-   `source_line` from the file by span, the error-channel resolver arm
-   beside `fail`, the formatter, and LSP traversal. The existing harness
+   parser node with `expression` and `source_line` sliced from the
+   parser's own source, the error-channel resolver arm beside `fail`, the
+   formatter, and LSP traversal. The existing harness
    accepts `@test fn ... ! Test.Failure` and renders the failure through
    `Debug`. About 700 lines of Rust and 200 of Koja.
 2. **`test` declaration.** The `test` keyword, `Item::Test` at the top
    level and as a struct member, and a pass before `collect` that
-   desugars each test into a synthesized `fn __test_<line> ! Test.Failure`
-   or strips it when tests are not loaded, so typecheck, IR, and both
-   backends never learn a new item kind. Discovery in `koja-test` walks
-   `Item::Test` through nested structs. The formatter, LSP symbols and
+   desugars each test into a synthesized
+   `fn __test_<file stem>_<line> ! Test.Failure` or strips it when tests
+   are not loaded, so typecheck, IR, and both backends never learn a new
+   item kind. The stem keeps two files with a test on the same line from
+   colliding. Top-level tests are package-private and member tests are
+   public, because `priv` on a method is type-private and the harness
+   lives outside the struct. Discovery in `koja-test` walks `Item::Test`
+   through nested structs. The formatter, LSP symbols and
    folding, the shell block-depth counter, and the three keyword tables.
    About 500 lines of Rust.
 3. **Runner and reporters.** `Test.Runner`, `Case`, `Plan`, `Summary`,

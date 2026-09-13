@@ -47,7 +47,11 @@ top_level_decl = struct_decl
                | function_decl
                | constant_decl
                | type_alias_decl
-               | alias_decl ;
+               | alias_decl
+               | test_decl ;
+
+(* The test description has no interpolation. *)
+test_decl = "test" , string_lit , { statement } , "end" ;
 
 
 (* ========================================================================== *)
@@ -60,7 +64,7 @@ top_level_decl = struct_decl
 
 decl_path = TYPE_IDENT , { "." , TYPE_IDENT } ;
 
-struct_member = struct_field | function_decl | struct_decl | enum_decl ;
+struct_member = struct_field | function_decl | struct_decl | enum_decl | test_decl ;
 
 struct_decl = { annotation } , [ "priv" ] , "struct" , decl_path , [ type_params ] ,
               [ ":" , conformance_list ] ,
@@ -278,6 +282,7 @@ primary = literal
         | receive_expr
         | spawn_expr
         | fail_expr
+        | assert_expr
         | "(" , expr , "," , expr , { "," , expr } , ")"     (* tuple *)
         | "(" , expr , ")" ;                                 (* grouping *)
 
@@ -285,6 +290,10 @@ primary = literal
    an expression but is only valid in statement position, match/cond arm
    tails, and rescue handlers. *)
 fail_expr = "fail" , expr ;
+
+(* Same statement-position rule as fail_expr. The second expr is the
+   failure message. *)
+assert_expr = "assert" , expr , [ "," , expr ] ;
 
 (* An empty init list is valid when every omitted field declares a
    default value. *)
@@ -570,10 +579,10 @@ any_char_except_triple_quote_backslash  = ? any character except a triple double
 (* Reserved keywords                                                          *)
 (* ========================================================================== *)
 
-(* after, alias, break, cond, const, else, end, enum, extend, fail,      *)
-(* false, fn, for, if, impl, in, loop, match, not, priv, protocol,       *)
-(* receive, rescue, return, self, spawn, struct, true, try, type,        *)
-(* unless, when, while                                                   *)
+(* after, alias, assert, break, cond, const, else, end, enum, extend,    *)
+(* fail, false, fn, for, if, impl, in, loop, match, not, priv,           *)
+(* protocol, receive, rescue, return, self, spawn, struct, test, true,   *)
+(* try, type, unless, when, while                                        *)
 (*                                                                       *)
 (* Note: `and`, `or`, and `as` are contextual identifiers, not reserved  *)
 (* keywords. `and`/`or` are recognized as infix operators by the parser  *)

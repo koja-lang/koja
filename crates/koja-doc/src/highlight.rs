@@ -6,10 +6,10 @@
 use crate::extract::DocFunction;
 
 const KEYWORDS: &[&str] = &[
-    "after", "alias", "and", "as", "break", "cond", "const", "else", "end", "enum", "extend",
-    "fail", "false", "fn", "for", "if", "impl", "in", "loop", "match", "not", "or", "priv",
-    "protocol", "receive", "rescue", "return", "self", "spawn", "struct", "true", "try", "type",
-    "when", "while",
+    "after", "alias", "and", "as", "assert", "break", "cond", "const", "else", "end", "enum",
+    "extend", "fail", "false", "fn", "for", "if", "impl", "in", "loop", "match", "not", "or",
+    "priv", "protocol", "receive", "rescue", "return", "self", "spawn", "struct", "test", "true",
+    "try", "type", "when", "while",
 ];
 
 /// Highlight a Koja code block. Returns inner HTML for a `<code>`
@@ -285,6 +285,13 @@ mod tests {
         assert!(html.contains("<span class=\"st\">&quot;hi #{name}&quot;</span>"));
         assert!(html.contains("<span class=\"cm\"># welcome</span>"));
         assert!(html.contains("<span class=\"kw\">end</span>"));
+    }
+
+    #[test]
+    fn test_and_assert_are_keywords() {
+        let html = highlight_koja("test \"adds\"\n  assert 1 + 1 == 2\nend");
+        assert!(html.contains("<span class=\"kw\">test</span>"));
+        assert!(html.contains("<span class=\"kw\">assert</span>"));
     }
 
     #[test]
