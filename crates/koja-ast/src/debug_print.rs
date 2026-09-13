@@ -454,6 +454,14 @@ impl<'a> Printer<'a> {
 
     fn expr_children(&mut self, kind: &ExprKind) {
         match kind {
+            ExprKind::Assert {
+                condition, message, ..
+            } => {
+                self.expr(condition);
+                if let Some(message) = message {
+                    self.expr(message);
+                }
+            }
             ExprKind::Binary { left, right, .. } => {
                 self.expr(left);
                 self.expr(right);
@@ -519,14 +527,6 @@ impl<'a> Printer<'a> {
                     }
                 }
             },
-            ExprKind::Assert {
-                condition, message, ..
-            } => {
-                self.expr(condition);
-                if let Some(message) = message {
-                    self.expr(message);
-                }
-            }
             ExprKind::Fail { value } => self.expr(value),
             ExprKind::FieldAccess { receiver, .. } => {
                 self.expr(receiver);
@@ -926,6 +926,7 @@ impl<'a> Printer<'a> {
 
 fn expr_header(expr: &Expr) -> String {
     let mut out = match &expr.kind {
+        ExprKind::Assert { .. } => String::from("Assert"),
         ExprKind::Binary { op, .. } => format!("Binary {}", format_bin_op(*op)),
         ExprKind::BinaryLiteral { .. } => String::from("BinaryLiteral"),
         ExprKind::Call { .. } => String::from("Call"),
@@ -941,7 +942,6 @@ fn expr_header(expr: &Expr) -> String {
             variant,
             enum_ctor_data_label(data),
         ),
-        ExprKind::Assert { .. } => String::from("Assert"),
         ExprKind::Fail { .. } => String::from("Fail"),
         ExprKind::FieldAccess { field, .. } => format!("FieldAccess .{field}"),
         ExprKind::For { .. } => String::from("For"),

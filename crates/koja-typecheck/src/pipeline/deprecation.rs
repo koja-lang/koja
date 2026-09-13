@@ -300,6 +300,14 @@ impl Walker<'_, '_> {
             return;
         }
         match &expr.kind {
+            ExprKind::Assert {
+                condition, message, ..
+            } => {
+                self.check_expr(condition);
+                if let Some(message) = message {
+                    self.check_expr(message);
+                }
+            }
             ExprKind::Binary { left, right, .. } => {
                 self.check_expr(left);
                 self.check_expr(right);
@@ -363,14 +371,6 @@ impl Walker<'_, '_> {
                 }
             }
             ExprKind::Fail { value } => self.check_expr(value),
-            ExprKind::Assert {
-                condition, message, ..
-            } => {
-                self.check_expr(condition);
-                if let Some(message) = message {
-                    self.check_expr(message);
-                }
-            }
             ExprKind::FieldAccess { receiver, .. } => self.check_expr(receiver),
             ExprKind::For {
                 pattern,

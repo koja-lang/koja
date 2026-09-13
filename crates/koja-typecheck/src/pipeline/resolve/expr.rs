@@ -119,6 +119,23 @@ pub(super) fn resolve_expr_with_expected(
         return;
     }
     let ty = match &mut expr.kind {
+        // Statement-position `assert`s desugar in the walker, so one
+        // reaching here is embedded in a larger expression.
+        ExprKind::Assert {
+            condition, message, ..
+        } => {
+            resolve_expr(condition, resolver, diagnostics);
+            if let Some(message) = message {
+                resolve_expr(message, resolver, diagnostics);
+            }
+            diagnostics.push(Diagnostic::error_with_hint(
+                "`assert` ends the test on failure and cannot be embedded in a larger \
+                 expression",
+                "write `assert` as a statement of its own",
+                expr.span,
+            ));
+            ResolvedType::unresolved()
+        }
         ExprKind::Binary { op, left, right } => {
             resolve_expr(left, resolver, diagnostics);
             resolve_expr(right, resolver, diagnostics);
@@ -178,23 +195,6 @@ pub(super) fn resolve_expr_with_expected(
                 "`fail` exits the function and cannot be embedded in a larger expression",
                 "`fail` goes anywhere `return` does, as a statement of its own or a \
                  match arm tail",
-                expr.span,
-            ));
-            ResolvedType::unresolved()
-        }
-        // Statement-position `assert`s desugar in the walker, so one
-        // reaching here is embedded in a larger expression.
-        ExprKind::Assert {
-            condition, message, ..
-        } => {
-            resolve_expr(condition, resolver, diagnostics);
-            if let Some(message) = message {
-                resolve_expr(message, resolver, diagnostics);
-            }
-            diagnostics.push(Diagnostic::error_with_hint(
-                "`assert` ends the test on failure and cannot be embedded in a larger \
-                 expression",
-                "write `assert` as a statement of its own",
                 expr.span,
             ));
             ResolvedType::unresolved()

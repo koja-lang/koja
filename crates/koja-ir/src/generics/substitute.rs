@@ -108,6 +108,14 @@ fn substitute_in_lvalue(lvalue: &mut LValue, args: &[ResolvedType], owner: Globa
 fn substitute_in_expr(expr: &mut Expr, args: &[ResolvedType], owner: GlobalRegistryId) {
     expr.resolution = substitute_resolved_type(&expr.resolution, args, owner);
     match &mut expr.kind {
+        ExprKind::Assert {
+            condition, message, ..
+        } => {
+            substitute_in_expr(condition, args, owner);
+            if let Some(message) = message {
+                substitute_in_expr(message, args, owner);
+            }
+        }
         ExprKind::Binary { left, right, .. } => {
             substitute_in_expr(left, args, owner);
             substitute_in_expr(right, args, owner);
@@ -157,14 +165,6 @@ fn substitute_in_expr(expr: &mut Expr, args: &[ResolvedType], owner: GlobalRegis
             EnumConstructionData::Unit => {}
         },
         ExprKind::Fail { value } => substitute_in_expr(value, args, owner),
-        ExprKind::Assert {
-            condition, message, ..
-        } => {
-            substitute_in_expr(condition, args, owner);
-            if let Some(message) = message {
-                substitute_in_expr(message, args, owner);
-            }
-        }
         ExprKind::FieldAccess { receiver, .. } => substitute_in_expr(receiver, args, owner),
         ExprKind::For {
             pattern,

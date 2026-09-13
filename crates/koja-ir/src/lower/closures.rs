@@ -471,6 +471,14 @@ impl CaptureWalker {
 
     fn visit_expr(&mut self, expr: &Expr) {
         match &expr.kind {
+            ExprKind::Assert {
+                condition, message, ..
+            } => {
+                self.visit_expr(condition);
+                if let Some(message) = message {
+                    self.visit_expr(message);
+                }
+            }
             ExprKind::Binary { left, right, .. } => {
                 self.visit_expr(left);
                 self.visit_expr(right);
@@ -512,14 +520,6 @@ impl CaptureWalker {
                 }
             },
             ExprKind::Fail { value } => self.visit_expr(value),
-            ExprKind::Assert {
-                condition, message, ..
-            } => {
-                self.visit_expr(condition);
-                if let Some(message) = message {
-                    self.visit_expr(message);
-                }
-            }
             ExprKind::FieldAccess { receiver, .. } => self.visit_expr(receiver),
             ExprKind::For {
                 pattern,

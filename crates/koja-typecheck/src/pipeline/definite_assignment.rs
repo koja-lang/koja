@@ -179,6 +179,14 @@ impl Checker<'_, '_> {
 
     fn check_expr(&mut self, expr: &Expr, state: &mut FlowState) {
         match &expr.kind {
+            ExprKind::Assert {
+                condition, message, ..
+            } => {
+                self.check_expr(condition, state);
+                if let Some(message) = message {
+                    self.check_expr(message, state);
+                }
+            }
             ExprKind::Binary { left, right, .. } => {
                 self.check_expr(left, state);
                 self.check_expr(right, state);
@@ -243,14 +251,6 @@ impl Checker<'_, '_> {
             ExprKind::Fail { value } => {
                 self.check_expr(value, state);
                 state.diverge();
-            }
-            ExprKind::Assert {
-                condition, message, ..
-            } => {
-                self.check_expr(condition, state);
-                if let Some(message) = message {
-                    self.check_expr(message, state);
-                }
             }
             ExprKind::FieldAccess { receiver, .. } => self.check_expr(receiver, state),
             // Post-resolve success paths never contain `For` (it
