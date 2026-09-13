@@ -1,0 +1,128 @@
+@doc """
+Runs a `Plan` one spec at a time and reports through `R`. Each spec
+gets its own `SpecProcess`, which the runner monitors. The body's
+`SpecDone` message becomes `Passed` or `Failed`, a monitor signal
+that arrives first becomes `Crashed`, and a deadline miss kills the
+spec and becomes `TimedOut`. After each spec the runner waits for the
+spec process to be gone, so a registered name from one spec cannot
+collide with the next.
+
+The runner stops with `StopReason.Shutdown` when the summary is not
+ok, and the harness maps that to the exit status.
+"""
+struct Runner<R: Reporter>:
+  Process<Runner<R>, SpecDone | Process.ExitSignal, ()>
+
+  options: Options
+  plan: Plan
+  reporter: R
+
+  fn start(config: Runner<R>) -> Self ! Process.StopReason
+    config
+  end
+
+  fn handle(self, msg: SpecDone | Process.ExitSignal, from: Option<ReplyTo<()>>)
+    -> Process.Step<Self>
+
+    Process.Step.Continue(self)
+  end
+
+  fn run(self) -> Process.StopReason
+    reporter = self.reporter.started(self.plan)
+    summary = Summary{}
+
+    for spec in self.plan.specs
+      reporter = reporter.spec_started(spec)
+      outcome = self.run_spec(spec)
+      summary = summary.record(outcome)
+      reporter = reporter.spec_finished(spec, outcome)
+    end
+
+    reporter.finished(summary)
+    summary.ok?() ? Process.StopReason.Normal : Process.StopReason.Shutdown
+  end
+
+  priv fn run_spec(self, spec: Spec) -> Outcome
+    me: Ref<SpecDone | Process.ExitSignal, ()> = Ref.self_ref()
+    started = DateTime.now().timestamp_millis()
+    child = spawn SpecProcess.start(SpecProcess{body: spec.run, runner: me})
+    Process.monitor(child.pid())
+
+    receive
+      envelope: (SpecDone | Process.ExitSignal, Option<ReplyTo<()>>) ->
+        (message, _) = envelope
+        elapsed = DateTime.now().timestamp_millis() - started
+
+        match message
+          done: SpecDone ->
+            self.await_exit(child)
+
+            match done.result
+              Result.Ok(_) -> Outcome.Passed(elapsed)
+              Result.Err(failure) -> Outcome.Failed(failure, elapsed)
+            end
+
+          signal: Process.ExitSignal ->
+            Outcome.Crashed(self.crash_reason(signal.reason), elapsed)
+        end
+
+      event: Process.Lifecycle ->
+        child.kill()
+        self.await_exit(child)
+        Outcome.Crashed("the run was interrupted", DateTime.now()
+            .timestamp_millis() - started)
+    after self.options.timeout_ms
+      child.kill()
+      self.await_exit(child)
+      Outcome.TimedOut(self.options.timeout_ms)
+    end
+  end
+
+  # Drains the mailbox until the spec process's exit signal arrives,
+  # so nothing from this spec is left for the next one. A late
+  # `SpecDone` from a spec that raced its deadline is dropped here.
+  # If the signal takes more than five seconds the child is killed,
+  # and after five more the runner gives up on it.
+  priv fn await_exit(self, child: Ref<(), ()>)
+    attempts = 0
+
+    loop
+      finished =
+        receive
+          envelope: (SpecDone | Process.ExitSignal, Option<ReplyTo<()>>) ->
+            (message, _) = envelope
+
+            match message
+              signal: Process.ExitSignal -> true
+              _ -> false
+            end
+
+          event: Process.Lifecycle ->
+            false
+        after 5000
+          child.kill()
+          attempts += 1
+          attempts >= 2
+        end
+
+      if finished
+        break
+      end
+    end
+  end
+
+  priv fn crash_reason(self, reason: Process.ExitReason) -> String
+    match reason
+      Process.ExitReason.Crashed(info) ->
+        info.backtrace.empty?()
+          ? info.message
+          : "#{info.message}\n#{info.backtrace}"
+
+      Process.ExitReason.Killed ->
+        "the test process was killed before it reported a result"
+
+      _ ->
+        "the test process exited before it reported a result"
+    end
+  end
+end

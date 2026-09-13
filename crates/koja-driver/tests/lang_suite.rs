@@ -1275,8 +1275,16 @@ fn run_koja_test_trace(extra_args: &[&str]) -> (String, String, i32) {
 }
 
 /// Run `koja test <extra args>` in the `tests/lang/<fixture>` project
-/// and return `(stdout, stderr, exit_code)`.
+/// with the pretty output style and return `(stdout, stderr,
+/// exit_code)`. The human reporters follow the diagnostics style, and
+/// stderr is a pipe here, so the style is pinned through the
+/// environment.
 fn run_koja_test_in(fixture: &str, extra_args: &[&str]) -> (String, String, i32) {
+    run_koja_test_styled(fixture, extra_args, "pretty")
+}
+
+/// [`run_koja_test_in`] with an explicit `KOJA_DIAGNOSTICS` style.
+fn run_koja_test_styled(fixture: &str, extra_args: &[&str], style: &str) -> (String, String, i32) {
     let project_dir = lang_dir().join(fixture);
     assert!(
         project_dir.exists(),
@@ -1284,13 +1292,13 @@ fn run_koja_test_in(fixture: &str, extra_args: &[&str]) -> (String, String, i32)
     );
 
     let mut cmd = Command::new(koja_bin());
-    cmd.arg("test").args(extra_args).current_dir(&project_dir);
+    cmd.arg("test")
+        .args(extra_args)
+        .current_dir(&project_dir)
+        .env("KOJA_DIAGNOSTICS", style);
     if let Some(lib_path) = library_path() {
         cmd.env("LIBRARY_PATH", lib_path);
     }
-    // The colored path is gated on NO_COLOR being unset. Clear it so the
-    // assertions are stable regardless of the surrounding environment.
-    cmd.env_remove("NO_COLOR");
 
     let output = cmd.output().expect("failed to execute koja test");
     (
@@ -1300,96 +1308,89 @@ fn run_koja_test_in(fixture: &str, extra_args: &[&str]) -> (String, String, i32)
     )
 }
 
-/// `koja test --trace` groups by struct, prints each test's name with
-/// its `path:line` plus same-line result + timing, honors `--no-color`,
-/// and (with color) rewrites each completed line whole in the result
-/// color. Both invocations live in one test because they share the
-/// fixture's build dir/binary path, and running them as separate `#[test]`s
-/// would race under the parallel harness.
-#[test]
-fn lang_test_trace() {
-    // No-color: clean appended output, no ANSI escapes.
-    let (stdout, stderr, code) = run_koja_test_trace(&["--trace", "--no-color"]);
-    assert_eq!(
-        code, 0,
-        "expected all fixture tests to pass\nstderr:\n{stderr}"
-    );
-    for needle in [
-        "AlphaTest",
-        "BetaTest",
-        "first alpha test (test/alpha_test.koja:",
-        "beta passes (test/beta_test.koja:",
-        "... ok (",
-        "ms)",
-    ] {
+/// Assert that every needle appears in `haystack`.
+fn assert_contains_all(label: &str, haystack: &str, needles: &[&str]) {
+    for needle in needles {
         assert!(
-            stdout.contains(needle),
-            "expected trace stdout to contain {needle:?}, got:\n{stdout}"
+            haystack.contains(needle),
+            "expected {label} to contain {needle:?}, got:\n{haystack}"
         );
     }
-    assert!(
-        !stdout.contains('\u{1b}'),
-        "expected --no-color to strip ANSI escapes, got:\n{stdout}"
-    );
+}
 
-    // Color: each completed line is rewritten whole in green via a
-    // leading CR (the uncolored pre-run name stays as the crash anchor).
+/// `koja test --trace` groups by struct and prints each test's name
+/// with its `path:line` plus same-line result + timing. Color follows
+/// the diagnostics rule, which needs a terminal, so a piped run never
+/// carries ANSI escapes.
+#[test]
+fn lang_test_trace() {
     let (stdout, stderr, code) = run_koja_test_trace(&["--trace"]);
     assert_eq!(
         code, 0,
         "expected all fixture tests to pass\nstderr:\n{stderr}"
     );
+    assert_contains_all(
+        "trace stdout",
+        &stdout,
+        &[
+            "AlphaTest\n  first alpha test (test/alpha_test.koja:",
+            "BetaTest\n  beta passes (test/beta_test.koja:",
+            "... ok (",
+            "ms)",
+            "3 successful tests. 0 failures.",
+        ],
+    );
     assert!(
-        stdout.contains("\r\u{1b}[32m  first alpha test (test/alpha_test.koja:"),
-        "expected a carriage-return whole-line green rewrite, got:\n{stdout:?}"
+        !stdout.contains('\u{1b}'),
+        "expected piped output to carry no ANSI escapes, got:\n{stdout}"
     );
 }
 
 /// `assert`, `Test.require`, `Test.skip`, `Test.crashes`, and
 /// `fail "..."` on a `! Test.Failure` channel, end to end through the
-/// `@test` harness. Passing tests pass, and each failing test renders
-/// its `Test.Failure` through `Debug` in the short diagnostic style.
+/// `@test` harness. Passing tests pass, each failing test renders its
+/// `Test.Failure` as a pretty snippet in the failures block, and the
+/// skipped test lands in its own block and count.
 #[test]
 fn lang_test_assert() {
-    let (stdout, stderr, code) = run_koja_test_in("test_assert", &["--trace", "--no-color"]);
+    let (stdout, stderr, code) = run_koja_test_in("test_assert", &["--trace"]);
     assert_eq!(
         code, 1,
         "the fixture has deliberate failures\nstdout:\n{stdout}\nstderr:\n{stderr}"
     );
-    for needle in [
-        "push then pop (test/stack_test.koja:3) ... ok",
-        "require unwraps a setup step (test/stack_test.koja:22) ... ok",
-        "crashes sees a panic (test/stack_test.koja:34)",
-        "test/stack_test.koja:12:12: failure: assert popped == 3 (left: 2, right: 3)",
-        "test/stack_test.koja:18:12: failure: assert stack.empty?(): one element left",
-        "test/stack_test.koja:46:12: failure: assert [1, 2].length() > 5 (left: 2, right: 5)",
-        "skipped: no fixture here",
-        "a plain message",
-        "3 successful tests. 5 failures.",
-    ] {
-        assert!(
-            stdout.contains(needle),
-            "expected stdout to contain {needle:?}, got:\n{stdout}"
-        );
-    }
+    assert_contains_all(
+        "stdout",
+        &stdout,
+        &[
+            "push then pop (test/stack_test.koja:3) ... ok",
+            "require unwraps a setup step (test/stack_test.koja:22) ... ok",
+            "skip ends the test as skipped (test/stack_test.koja:28) ... skip",
+            "crashes sees a panic (test/stack_test.koja:34) ... ok",
+            "failure: assertion failed\n   ╭─ test/stack_test.koja:12:12\n",
+            "12 │     assert popped == 3\n",
+            "left:  2\n",
+            "right: 3\n",
+            "18 │     assert stack.empty?(), \"one element left\"\n",
+            "= help: one element left",
+            "failure: a plain message\n   ╭─ test/stack_test.koja:40\n",
+            "46 │     assert [1, 2].length() > 5\n",
+            "Skipped:\n\ntest/stack_test.koja:28: skipped: no fixture here",
+            "3 successful tests. 4 failures. 1 skipped.",
+        ],
+    );
 }
 
 /// `test "..."` blocks end to end. `koja test --trace` runs top-level
 /// blocks grouped under their file, struct and enum blocks under the
 /// type path (nested included), `impl` blocks under `Type: Protocol`,
 /// `extend` blocks under the target, and reports a failing `assert` at
-/// its line.
-/// `koja run` on both backends strips the blocks in `src/` without
-/// linking `Test`. One test because both commands share the fixture's
+/// its line. The same run with `--backend llvm` gives the same result,
+/// and `koja run` on both backends strips the blocks in `src/` without
+/// linking `Test`. One test because every command shares the fixture's
 /// build dir.
 #[test]
 fn lang_test_decl() {
-    let (stdout, stderr, code) = run_koja_test_in("test_decl", &["--trace", "--no-color"]);
-    assert_eq!(
-        code, 1,
-        "the fixture has one deliberate failure\nstdout:\n{stdout}\nstderr:\n{stderr}"
-    );
-    for needle in [
+    let needles = [
         "src/app.koja\n  a test block in src is stripped from builds (src/app.koja:23) ... ok",
         "Color\n  red is primary (src/color.koja:18) ... ok",
         "Color: Named\n  names the lowercase color (src/color.koja:32) ... ok",
@@ -1403,16 +1404,144 @@ fn lang_test_decl() {
         "two tests may share a description (test/top_level_test.koja:5) ... ok",
         "two tests may share a description (test/top_level_test.koja:9) ... ok",
         "a trailing expression needs no unit (test/top_level_test.koja:13) ... ok",
-        "test/stack_test.koja:18:12: failure: assert Stack.new().push(1).size() == 2 (left: 1, right: 2)",
+        "failure: assertion failed\n   ╭─ test/stack_test.koja:18:12\n",
+        "18 │     assert Stack.new().push(1).size() == 2\n",
+        "left:  1\n",
+        "right: 2\n",
         "12 successful tests. 1 failures.",
-    ] {
-        assert!(
-            stdout.contains(needle),
-            "expected stdout to contain {needle:?}, got:\n{stdout}"
+    ];
+
+    for backend in BACKENDS {
+        let (stdout, stderr, code) =
+            run_koja_test_in("test_decl", &["--trace", &format!("--backend={backend}")]);
+        assert_eq!(
+            code, 1,
+            "the fixture has one deliberate failure ({backend})\nstdout:\n{stdout}\nstderr:\n{stderr}"
         );
+        assert_contains_all(&format!("stdout ({backend})"), &stdout, &needles);
     }
 
     run_project_dir_with(&lang_dir().join("test_decl"), "test_decl", &[]);
+}
+
+/// The short style prints one greppable line per test and per failure,
+/// with no headers, blocks, or snippets.
+#[test]
+fn lang_test_short_style() {
+    let (stdout, stderr, code) = run_koja_test_styled("test_short", &["--trace"], "short");
+    assert_eq!(
+        code, 1,
+        "the fixture has one deliberate failure\nstdout:\n{stdout}\nstderr:\n{stderr}"
+    );
+    assert_contains_all(
+        "stdout",
+        &stdout,
+        &[
+            "test/short_test.koja:2: ok: a passing test (",
+            "test/short_test.koja:7:12: failure: assert 1 + 1 == 3 (left: 2, right: 3)\n",
+            "test/short_test.koja:10: skipped: not today\n",
+            "1 successful tests. 1 failures. 1 skipped.\n",
+        ],
+    );
+    assert!(
+        !stdout.contains("╭─") && !stdout.contains("Failures:"),
+        "expected no pretty snippet or block in short style, got:\n{stdout}"
+    );
+}
+
+/// `--reporter json` writes one JSON object per line to stderr and
+/// nothing to stdout, and `--out` sends the same stream to a file.
+#[test]
+fn lang_test_json_reporter() {
+    let (stdout, stderr, code) = run_koja_test_in("test_short", &["--reporter", "json"]);
+    assert_eq!(
+        code, 1,
+        "the fixture has one deliberate failure\nstdout:\n{stdout}\nstderr:\n{stderr}"
+    );
+    assert!(
+        stdout.is_empty(),
+        "expected the json reporter to leave stdout empty, got:\n{stdout}"
+    );
+    let lines: Vec<&str> = stderr.lines().collect();
+    assert_eq!(
+        lines.len(),
+        8,
+        "expected started, three spec pairs, and finished\nstderr:\n{stderr}"
+    );
+    assert_eq!(lines[0], r#"{"event":"started","total":3}"#);
+    assert_contains_all(
+        "stderr",
+        &stderr,
+        &[
+            r#"{"event":"spec_started","id":"test/short_test.koja:2","group":"ShortTest","description":"a passing test"}"#,
+            r#"{"event":"spec_finished","id":"test/short_test.koja:2","outcome":"passed","ms":"#,
+            r#"{"event":"spec_finished","id":"test/short_test.koja:6","outcome":"failed","ms":"#,
+            r#""failure":{"kind":"assertion","expression":"1 + 1 == 3","file":"test/short_test.koja","line":7,"column":12,"source_line":"    assert 1 + 1 == 3","left":"2","right":"3","message":null}"#,
+            r#"{"event":"spec_finished","id":"test/short_test.koja:10","outcome":"skipped","ms":"#,
+            r#""reason":"not today"}"#,
+            r#"{"event":"finished","passed":1,"failed":1,"skipped":1,"crashed":0,"timed_out":0,"ms":"#,
+        ],
+    );
+
+    let out = std::env::temp_dir().join(format!("koja-test-json-{}.jsonl", std::process::id()));
+    let out_arg = out.to_string_lossy().into_owned();
+    let (stdout, stderr, code) =
+        run_koja_test_in("test_short", &["--reporter", "json", "--out", &out_arg]);
+    let written = fs::read_to_string(&out).unwrap_or_default();
+    let _ = fs::remove_file(&out);
+    assert_eq!(code, 1, "stdout:\n{stdout}\nstderr:\n{stderr}");
+    assert!(
+        stderr.is_empty(),
+        "expected --out to take the stream off stderr, got:\n{stderr}"
+    );
+    assert_eq!(
+        written.lines().count(),
+        8,
+        "expected the same eight lines in the --out file, got:\n{written}"
+    );
+}
+
+/// Every test runs in its own process. A crash is reported as that
+/// test's outcome with the panic message, a test that misses the
+/// `--timeout` deadline is killed and reported as timed out, and the
+/// tests after both still run. The deadline leaves room for the LLVM
+/// panic handler, which symbolicates a backtrace before the process
+/// dies.
+#[test]
+fn lang_test_crash_is_contained() {
+    for backend in BACKENDS {
+        let (stdout, stderr, code) = run_koja_test_in(
+            "test_crash",
+            &[
+                "--trace",
+                "--timeout",
+                "3000",
+                &format!("--backend={backend}"),
+            ],
+        );
+        assert_eq!(
+            code, 1,
+            "the fixture crashes and hangs on purpose ({backend})\nstdout:\n{stdout}\nstderr:\n{stderr}"
+        );
+        assert_contains_all(
+            &format!("stdout ({backend})"),
+            &stdout,
+            &[
+                "runs before the crash (test/contain_test.koja:4) ... ok",
+                "a crash is contained (test/contain_test.koja:8)",
+                "... CRASH (",
+                "a hang is killed at the deadline (test/contain_test.koja:13) ... TIMEOUT (3000ms)",
+                "runs after the crash and the hang (test/contain_test.koja:18) ... ok",
+                "crash: called unwrap on None\n",
+                "timeout: no result after 3000ms\n",
+                "2 successful tests. 0 failures. 1 crashed. 1 timed out.",
+            ],
+        );
+        assert!(
+            stderr.contains("** (panic) called unwrap on None"),
+            "expected the panic on stderr ({backend}), got:\n{stderr}"
+        );
+    }
 }
 
 /// Write a minimal project (koja.toml + a clean `src` file + an empty

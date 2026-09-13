@@ -124,11 +124,7 @@ enum Command {
     /// List tasks exported by the project, its dependencies, and the toolchain
     Tasks,
     /// Run tests (requires koja.toml)
-    Test {
-        /// Print each test name and per-test timing as it runs instead of progress dots
-        #[arg(long)]
-        trace: bool,
-    },
+    Test(pipeline::TestOptions),
 }
 
 /// Arguments for `koja doc`. Bare `koja doc` is a one-shot
@@ -202,7 +198,6 @@ enum DocAction {
 
 fn main() {
     let cli = Cli::parse();
-    let color = !cli.no_color && std::env::var("NO_COLOR").is_err();
     diagnostics::init_style(cli.diagnostics, cli.no_color);
     let project_root = cli
         .project
@@ -257,7 +252,7 @@ fn main() {
         Command::Run(options) => pipeline::cmd_run(project_root.as_deref(), options),
         Command::Shell => pipeline::cmd_shell(project_root.as_deref()),
         Command::Tasks => pipeline::cmd_tasks(project_root.as_deref()),
-        Command::Test { trace } => pipeline::cmd_test(project_root.as_deref(), trace, color),
+        Command::Test(options) => pipeline::cmd_test(project_root.as_deref(), options),
     }
 }
 

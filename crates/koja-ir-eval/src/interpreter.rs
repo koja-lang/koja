@@ -2114,8 +2114,7 @@ fn execute_binary_match(
                 // signed literal and its two's-complement bit
                 // pattern agree under the mask, so the sign
                 // modifier doesn't change the test.
-                let extracted = extract_integer_segment(bytes, *width, *endian, *bit_offset);
-                if extracted != (*value as u64) & width_mask(*width) {
+                if !literal_segment_matches(bytes, *width, *endian, *bit_offset, *value) {
                     return Ok(false);
                 }
             }
@@ -2168,10 +2167,61 @@ fn execute_binary_match(
     Ok(true)
 }
 
+/// Whether the `width` bits at `start_bit` equal the low `width` bits
+/// of `value`. Widths up to 64 go through [`extract_integer_segment`].
+/// Wider literals compare byte by byte against the sign-extended
+/// two's complement encoding of `value`, since no machine word holds
+/// them.
+fn literal_segment_matches(
+    bytes: &[u8],
+    width: u64,
+    endian: BinaryEndian,
+    start_bit: u64,
+    value: i128,
+) -> bool {
+    if width <= 64 {
+        let extracted = extract_integer_segment(bytes, width, endian, start_bit);
+        return extracted == (value as u64) & width_mask(width);
+    }
+    let fill = if value < 0 { 0xFF } else { 0x00 };
+    // The byte of `value` at `significance` places from the least
+    // significant end, with sign fill past the 128-bit payload.
+    let value_byte = |significance: u64| -> u8 {
+        if significance >= 16 {
+            fill
+        } else {
+            (value >> (significance * 8)) as u8
+        }
+    };
+    if start_bit.is_multiple_of(8) && width.is_multiple_of(8) {
+        let num_bytes = width / 8;
+        let start_byte = (start_bit / 8) as usize;
+        return (0..num_bytes).all(|i| {
+            let significance = match endian {
+                BinaryEndian::Little => i,
+                BinaryEndian::Big => num_bytes - 1 - i,
+            };
+            bytes[start_byte + i as usize] == value_byte(significance)
+        });
+    }
+    // A sub-byte offset or width walks the bits MSB-first, which is
+    // the only order a sub-byte run can have.
+    (0..width).all(|i| {
+        let bit_pos = start_bit + i;
+        let byte = (bit_pos / 8) as usize;
+        let bit_in_byte = 7 - (bit_pos % 8) as u32;
+        let actual = (bytes[byte] >> bit_in_byte) & 1;
+        let significance = width - 1 - i;
+        let expected = (value_byte(significance / 8) >> (significance % 8)) & 1;
+        actual == expected
+    })
+}
+
 /// Inverse of [`pack_integer_segment`]: read `width` bits at
 /// `start_bit` as an unsigned integer, byte-shuffled per `endian`
 /// on the byte-aligned fast path, MSB-first on the sub-byte path
-/// (where endianness is meaningless).
+/// (where endianness is meaningless). Callers keep `width` at or
+/// under 64.
 fn extract_integer_segment(bytes: &[u8], width: u64, endian: BinaryEndian, start_bit: u64) -> u64 {
     if width == 0 {
         return 0;

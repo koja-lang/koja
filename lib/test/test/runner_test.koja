@@ -1,0 +1,182 @@
+struct RunnerTest
+  test "the runner reports every outcome kind and stops with Shutdown"
+    path = "/tmp/koja_test_runner.jsonl"
+
+    if File.exists?(path)
+      _ = File.delete(path)
+    end
+
+    plan = Plan{
+      specs: [
+        RunnerTest.spec("passes", 1, &RunnerTest.passes/0),
+        RunnerTest.spec("fails", 2, &RunnerTest.fails/0),
+        RunnerTest.spec("skips", 3, &RunnerTest.skips/0),
+        RunnerTest.spec("crashes", 4, &RunnerTest.crashes_body/0)
+      ],
+    }
+    options = Options{
+      out: Option.Some(path),
+      reporter: "json",
+      timeout_ms: 5000,
+    }
+    probe = spawn RunnerProbe.start(RunnerProbe{options: options, plan: plan})
+    reason = try require(probe.call(RunnerProbe.Ask{}, 30000))
+
+    assert reason == "shutdown"
+
+    content = try require(File.read(path))
+    lines = content.split("\n")
+
+    assert lines.get(0) == Option.Some("{\"event\":\"started\",\"total\":4}")
+    assert lines.get(2)
+      .or("")
+      .contains?("\"id\":\"test/runner_test.koja:1\",\"outcome\":\"passed\"")
+    assert lines.get(4).or("").contains?("\"outcome\":\"failed\",\"ms\":")
+    assert lines.get(4)
+      .or("")
+      .contains?("{\"kind\":\"error\",\"message\":\"boom\"}")
+    assert lines.get(6).or("").contains?("\"outcome\":\"skipped\",\"ms\":")
+    assert lines.get(6).or("").contains?("\"reason\":\"no database\"")
+    assert lines.get(8).or("").contains?("\"outcome\":\"crashed\",\"ms\":")
+    assert lines.get(9)
+      .or("")
+      .starts_with?(
+        "{\"event\":\"finished\",\"passed\":1,\"failed\":1,\"skipped\":1,\"crashed\":1,\"timed_out\":0,",
+      )
+    _ = File.delete(path)
+  end
+
+  test "an all-passing plan stops with Normal"
+    path = "/tmp/koja_test_runner_ok.jsonl"
+    plan = Plan{specs: [RunnerTest.spec("passes", 1, &RunnerTest.passes/0)]}
+    options = Options{out: Option.Some(path), reporter: "json"}
+    probe = spawn RunnerProbe.start(RunnerProbe{options: options, plan: plan})
+
+    assert try require(probe.call(RunnerProbe.Ask{}, 30000)) == "normal"
+
+    _ = File.delete(path)
+  end
+
+  priv fn spec(
+    description: String,
+    line: Int,
+    body: fn () -> Result<(), Failure>,
+  ) -> Spec
+
+    Spec{
+      description: description,
+      file: "test/runner_test.koja",
+      group: "RunnerTest",
+      line: line,
+      run: body,
+    }
+  end
+
+  priv fn passes ! Failure
+    ()
+  end
+
+  priv fn fails ! Failure
+    fail "boom"
+  end
+
+  priv fn skips ! Failure
+    try skip("no database")
+  end
+
+  priv fn crashes_body ! Failure
+    missing: Option<Int> = Option.None
+    _ = missing.unwrap()
+  end
+end
+
+# Spawns a runner with a `JsonReporter`, monitors it, and answers one
+# `Ask` with the runner's exit reason once both have arrived.
+struct RunnerProbe:
+  Process<RunnerProbe, Process.ExitSignal | RunnerProbe.Ask, String>
+
+  options: Options
+  plan: Plan
+
+  fn start(config: RunnerProbe) -> Self ! Process.StopReason
+    config
+  end
+
+  fn handle(
+    self,
+    msg: Process.ExitSignal | RunnerProbe.Ask,
+    from: Option<ReplyTo<String>>,
+  ) -> Process.Step<Self>
+
+    Process.Step.Continue(self)
+  end
+
+  fn run(self) -> Process.StopReason
+    runner = RunnerProbe.spawn_runner(self.plan, self.options)
+    Process.monitor(runner.pid())
+    reason: Option<String> = Option.None
+    caller: Option<ReplyTo<String>> = Option.None
+
+    loop
+      receive
+        envelope: (Process.ExitSignal | RunnerProbe.Ask, Option<ReplyTo<String>>) ->
+          (message, from) = envelope
+
+          match message
+            signal: Process.ExitSignal ->
+              reason = Option.Some(RunnerProbe.reason_name(signal.reason))
+            _ -> caller = from
+          end
+
+        event: Process.Lifecycle ->
+          return Process.StopReason.Shutdown
+      after 20000
+        reason = Option.Some("timeout")
+      end
+
+      match (reason, caller)
+        (Option.Some(text), Option.Some(reply_to)) ->
+          _ = reply_to.send(text)
+          return Process.StopReason.Normal
+
+        _ ->
+          ()
+      end
+    end
+  end
+
+  priv fn spawn_runner(plan: Plan, options: Options)
+    -> Ref<SpecDone | Process.ExitSignal, ()>
+
+    match options.reporter
+      "json" ->
+        spawn Runner.start(
+          Runner{
+            options: options,
+            plan: plan,
+            reporter: JsonReporter.new(options),
+          },
+        )
+      _ ->
+        spawn Runner.start(
+          Runner{
+            options: options,
+            plan: plan,
+            reporter: DotsReporter.new(options),
+          },
+        )
+    end
+  end
+
+  priv fn reason_name(reason: Process.ExitReason) -> String
+    match reason
+      Process.ExitReason.Normal -> "normal"
+      Process.ExitReason.Shutdown -> "shutdown"
+      Process.ExitReason.Killed -> "killed"
+      Process.ExitReason.Crashed(info) -> "crashed: #{info.message}"
+    end
+  end
+end
+
+struct RunnerProbe.Ask
+end

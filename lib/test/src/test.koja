@@ -105,6 +105,54 @@ fn crashes<R>(body: fn () -> R) -> Bool
   end
 end
 
+@doc """
+Starts the runner for `plan` with the reporter `options.reporter`
+names, `dots`, `trace`, or `json`, and returns its handle. The
+generated harness calls this from its entry process, monitors the
+handle, and turns the runner's exit into the exit status. An unknown
+reporter name falls back to `dots` with one warning on stderr.
+"""
+fn run(plan: Plan, options: Options) -> Ref<SpecDone | Process.ExitSignal, ()>
+  match options.reporter
+    "trace" ->
+      spawn Runner.start(
+        Runner{
+          options: options,
+          plan: plan,
+          reporter: TraceReporter.new(options),
+        },
+      )
+
+    "json" ->
+      spawn Runner.start(
+        Runner{
+          options: options,
+          plan: plan,
+          reporter: JsonReporter.new(options),
+        },
+      )
+
+    "dots" ->
+      spawn Runner.start(
+        Runner{
+          options: options,
+          plan: plan,
+          reporter: DotsReporter.new(options),
+        },
+      )
+
+    other ->
+      IO.warn("koja test: unknown reporter `#{other}`, using dots")
+      spawn Runner.start(
+        Runner{
+          options: options,
+          plan: plan,
+          reporter: DotsReporter.new(options),
+        },
+      )
+  end
+end
+
 impl StringLiteral for Failure
   @doc """
   Lets `fail "message"` type check on a `Test.Failure` channel. The

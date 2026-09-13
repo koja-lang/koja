@@ -67,6 +67,9 @@ violation of any rule is a bug, never a judgment call.
   still a line construct, so a trailing comment follows the last branch.
 - Enum struct variants lay out like struct literals. Braces hug the variant
   name, and short field lists stay on one line.
+- Declarations keep source order. The formatter never reorders top-level
+  items or the members of a type body, so a `test` block stays where the
+  author put it among fields, nested types, and functions.
 - The formatter renders through a Wadler-style document algebra. A group
   collapses onto one line when it fits and breaks otherwise.
 

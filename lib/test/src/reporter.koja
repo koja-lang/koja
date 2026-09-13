@@ -1,0 +1,16 @@
+@doc """
+Receives the events of one run. Reporters are values. Each method
+returns the reporter to use for the next event, so a reporter can
+accumulate state without a process. The runner calls `started` once,
+then `spec_started` and `spec_finished` for each spec in order, then
+`finished` once.
+"""
+protocol Reporter
+  fn started(self, plan: Plan) -> Self
+
+  fn spec_started(self, spec: Spec) -> Self
+
+  fn spec_finished(self, spec: Spec, outcome: Outcome) -> Self
+
+  fn finished(self, summary: Summary) -> Self
+end

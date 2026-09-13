@@ -1,0 +1,44 @@
+@doc """
+The counts for one run. `failed` counts assertion and error failures,
+and `skipped` counts specs that ended with `Failure.Skipped`. A skip
+is not a failure, so `ok?` ignores it.
+"""
+struct Summary
+  crashed: Int = 0
+  elapsed_ms: Int = 0
+  failed: Int = 0
+  passed: Int = 0
+  skipped: Int = 0
+  timed_out: Int = 0
+
+  @doc """
+  `true` when nothing failed, crashed, or timed out.
+  """
+  fn ok?(self) -> Bool
+    self.failed == 0 and self.crashed == 0 and self.timed_out == 0
+  end
+
+  @doc """
+  Returns the summary with `outcome` counted.
+  """
+  fn record(self, outcome: Outcome) -> Summary
+    self.elapsed_ms = self.elapsed_ms + outcome.elapsed_ms()
+
+    match outcome
+      Outcome.Crashed(_, _) -> self.crashed = self.crashed + 1
+      Outcome.Failed(Failure.Skipped(_), _) -> self.skipped = self.skipped + 1
+      Outcome.Failed(_, _) -> self.failed = self.failed + 1
+      Outcome.Passed(_) -> self.passed = self.passed + 1
+      Outcome.TimedOut(_) -> self.timed_out = self.timed_out + 1
+    end
+
+    self
+  end
+
+  @doc """
+  How many specs ran, whatever their outcome.
+  """
+  fn total(self) -> Int
+    self.passed + self.failed + self.skipped + self.crashed + self.timed_out
+  end
+end

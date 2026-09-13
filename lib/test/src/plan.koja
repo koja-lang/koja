@@ -1,0 +1,14 @@
+@doc """
+The specs one run will execute, in the order the harness registered
+them. Discovery orders them by file and then by line.
+"""
+struct Plan
+  specs: List<Spec>
+
+  @doc """
+  How many specs the run will execute.
+  """
+  fn total(self) -> Int
+    self.specs.length()
+  end
+end

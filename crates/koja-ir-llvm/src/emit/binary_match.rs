@@ -266,6 +266,9 @@ fn emit_segment_bind<'ctx>(
 /// alignment. The literal-only path that hits sub-byte widths
 /// is `<<x::3, _::5>>`-style and isn't required by any current
 /// test.
+///
+/// Widths past 64 bits do not fit the `i64` compare, so they become
+/// a `memcmp` against the literal's encoded bytes instead.
 fn emit_literal_int<'ctx>(
     ctx: &EmitContext<'ctx>,
     payload: PointerValue<'ctx>,
@@ -281,8 +284,12 @@ fn emit_literal_int<'ctx>(
              width={width}) is not yet supported",
         )));
     }
-    let i64_ty = ctx.context.i64_type();
     let num_bytes = width / 8;
+    if width > 64 {
+        let bytes = encode_wide_literal(value, num_bytes, endian);
+        return emit_literal_bytes(ctx, payload, bit_offset, &bytes);
+    }
+    let i64_ty = ctx.context.i64_type();
     let byte_offset = bit_offset / 8;
     let extracted = extract_int(ctx, payload, byte_offset, num_bytes, endian)?;
     let mask = mask_for_width(ctx, width);
@@ -298,6 +305,29 @@ fn emit_literal_int<'ctx>(
     ctx.builder
         .build_int_compare(IntPredicate::EQ, masked_ext, masked_lit, "lit_eq")
         .or_ice()
+}
+
+/// The two's complement encoding of `value` over `num_bytes` bytes in
+/// `endian` order. Bytes past the 128-bit payload take the sign fill,
+/// so a negative literal stays negative at any width.
+fn encode_wide_literal(value: i128, num_bytes: u64, endian: BinaryEndian) -> Vec<u8> {
+    let fill = if value < 0 { 0xFF } else { 0x00 };
+    let value_byte = |significance: u64| -> u8 {
+        if significance >= 16 {
+            fill
+        } else {
+            (value >> (significance * 8)) as u8
+        }
+    };
+    (0..num_bytes)
+        .map(|i| {
+            let significance = match endian {
+                BinaryEndian::Little => i,
+                BinaryEndian::Big => num_bytes - 1 - i,
+            };
+            value_byte(significance)
+        })
+        .collect()
 }
 
 /// Compare a run of bytes at `bit_offset / 8` against an emitted

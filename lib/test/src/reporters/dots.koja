@@ -1,0 +1,56 @@
+@doc """
+The default reporter. In the pretty style it prints one character per
+spec as it finishes, `.` for a pass, `X` for a failure, crash, or
+timeout, and `s` for a skip, then the failures block and the summary
+line. In the short style it prints no progress, only the failure
+lines and the summary, which matches `koja check` printing nothing
+when nothing is wrong.
+"""
+struct DotsReporter
+  color: Bool
+  failures: List<String> = []
+  skips: List<String> = []
+  style: Style
+
+  fn new(options: Options) -> DotsReporter
+    DotsReporter{color: options.color, style: options.style}
+  end
+end
+
+impl Reporter for DotsReporter
+  fn started(self, plan: Plan) -> Self
+    self
+  end
+
+  fn spec_started(self, spec: Spec) -> Self
+    self
+  end
+
+  fn spec_finished(self, spec: Spec, outcome: Outcome) -> Self
+    if self.style == Style.Pretty
+      palette = Palette{color: self.color}
+
+      cond
+        outcome.ok?() -> IO.write(palette.green("."))
+        outcome.skipped?() -> IO.write(palette.dim("s"))
+        else -> IO.write(palette.red("X"))
+      end
+    end
+
+    self.failures = push(
+      self.failures,
+      failure_entry(spec, outcome, self.style, self.color),
+    )
+    self.skips = push(self.skips, skip_entry(spec, outcome))
+    self
+  end
+
+  fn finished(self, summary: Summary) -> Self
+    if self.style == Style.Pretty and summary.total() > 0
+      IO.puts("")
+    end
+
+    print_tail(self.failures, self.skips, summary, self.style, self.color)
+    self
+  end
+end

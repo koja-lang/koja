@@ -2989,6 +2989,59 @@ mod tests {
     }
 
     #[test]
+    fn type_body_members_keep_source_order() {
+        assert_unchanged(
+            r#"
+            struct Stack
+              items: List<Int>
+
+              test "push grows the stack"
+                assert Stack.new().push(1).size() == 1
+              end
+
+              fn push(self, value: Int) -> Stack
+                self
+              end
+
+              struct Frame
+              end
+
+              @doc "Removes the top item."
+              fn pop(self) -> Stack
+                self
+              end
+
+              test "pop shrinks the stack"
+              end
+            end
+
+            enum Color
+              Red
+              Green
+
+              test "red is primary"
+                assert Color.Red.primary?()
+              end
+
+              fn primary?(self) -> Bool
+                true
+              end
+            end
+
+            impl Display for Color
+              test "formats red"
+                assert Color.Red.format() == "red"
+              end
+
+              fn format(self) -> String
+                "red"
+              end
+            end
+        "#,
+        );
+    }
+
+    #[test]
     fn enum_impl_and_extend_tests_are_stable() {
         assert_unchanged(
             r#"

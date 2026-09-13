@@ -39,7 +39,7 @@
 //!
 //! ## Backend selection
 //!
-//! Only `run` has a backend dimension. It accepts
+//! `run` and `test` have a backend dimension. Both accept
 //! `--backend={interpreter,llvm}` (see [`Backend`]):
 //!
 //! - `run` defaults to [`Backend::Interpreter`]: lower -> run via
@@ -57,17 +57,17 @@
 //! - `build` is always LLVM: lower -> compile -> link -> keep the
 //!   binary at the output path. The interpreter has no codegen
 //!   surface, so `build` carries no backend flag.
+//! - `test` settles the backend the same way `run` does, so a project
+//!   whose tests need no native extern runs without a link step.
 //! - `check` and `shell` have no backend dimension.
 
 use std::env;
 use std::ffi::OsStr;
 use std::fs;
-use std::io;
 use std::os::unix::process::ExitStatusExt;
 use std::path::{Path, PathBuf};
 use std::process;
-use std::thread;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use koja_ast::ast::{Diagnostic, Severity};
 use koja_ast::identifier::Identifier;
@@ -75,11 +75,11 @@ use koja_ir::{FunctionKind, IRPackage, IRProgram, IRScript, lower_program, lower
 use koja_ir_eval::{Interpreter, RuntimeError, Value, supports_extern};
 use koja_ir_llvm::CompileOptions;
 use koja_parser::{FileId, ParseMode, ParsedProgram, SourceFile, parse_file, parse_program};
-use koja_test::{HARNESS_ENTRY, TestOptions, discover_tests, generate_harness};
+use koja_test::{HARNESS_ENTRY, discover_tests, generate_harness};
 use koja_typecheck::{CheckFailure, CheckedProgram, check_program, format_registry};
 
 use crate::commands::{load_project_or_exit, try_load_project};
-use crate::diagnostics::{SourceTable, render_program_diagnostics};
+use crate::diagnostics::{DiagnosticFormat, SourceTable, render_program_diagnostics};
 use crate::link::{self, LinkOptions};
 use crate::loader::{self, ErrorPolicy, LoadOptions, LoadedSource, ProjectLoader};
 use crate::project::{self, ProjectConfig};
@@ -205,6 +205,68 @@ impl RunOptions {
             codegen: CodegenArgs::default(),
             file: Some(file),
         }
+    }
+}
+
+/// Arguments for `koja test`. The flags resolve into `KOJA_TEST_*`
+/// environment variables that the `Test` package reads in the test
+/// process (see `Test.Options.from_env` in `lib/test`), so the
+/// runner and reporters take no arguments of their own.
+#[derive(clap::Args, Debug, Default)]
+pub(crate) struct TestOptions {
+    /// Execution backend. Defaults to `interpreter`, or `llvm` when the project declares a C extern the interpreter cannot call
+    #[arg(long, value_enum)]
+    pub(crate) backend: Option<Backend>,
+
+    /// Write machine-readable reporter output to this file instead of stderr
+    #[arg(long, value_name = "PATH")]
+    pub(crate) out: Option<PathBuf>,
+
+    /// Reporter to use, one of `dots` (default), `trace`, or `json`
+    #[arg(long, conflicts_with = "trace")]
+    pub(crate) reporter: Option<String>,
+
+    /// Deadline per test in milliseconds (default 60000). A test that misses it is killed and reported as timed out
+    #[arg(long, value_name = "MS")]
+    pub(crate) timeout: Option<u64>,
+
+    /// Print each test name and per-test timing as it runs instead of progress dots. Same as `--reporter trace`
+    #[arg(long)]
+    pub(crate) trace: bool,
+}
+
+impl TestOptions {
+    /// The `KOJA_TEST_*` variables for the test process. Style and
+    /// color follow the diagnostics rule, so `--diagnostics`,
+    /// `KOJA_DIAGNOSTICS`, `--no-color`, `NO_COLOR`, and whether
+    /// stderr is a terminal all apply the way they do to `koja check`.
+    fn env(&self) -> Vec<(&'static str, String)> {
+        let reporter = if self.trace {
+            "trace"
+        } else {
+            self.reporter.as_deref().unwrap_or("dots")
+        };
+        let style = match crate::diagnostics::current_format() {
+            DiagnosticFormat::Pretty => "pretty",
+            DiagnosticFormat::Short => "short",
+        };
+        let color = if crate::diagnostics::color_enabled() {
+            "1"
+        } else {
+            "0"
+        };
+        let mut env = vec![
+            ("KOJA_TEST_COLOR", color.to_string()),
+            ("KOJA_TEST_REPORTER", reporter.to_string()),
+            ("KOJA_TEST_STYLE", style.to_string()),
+        ];
+        if let Some(out) = &self.out {
+            env.push(("KOJA_TEST_OUT", out.to_string_lossy().into_owned()));
+        }
+        if let Some(timeout) = self.timeout {
+            env.push(("KOJA_TEST_TIMEOUT_MS", timeout.to_string()));
+        }
+        env
     }
 }
 
@@ -520,11 +582,11 @@ pub fn cmd_run(project_root: Option<&Path>, options: RunOptions) {
     }
 }
 
-/// `koja test`: discover `@test`-annotated functions in the
-/// current project, synthesize a Process-shaped harness type,
-/// lower the whole thing through the pipeline, link via LLVM, and
-/// exec the resulting binary so its exit code surfaces test
-/// success/failure.
+/// `koja test` discovers `test` blocks and `@test` functions in the
+/// current project, synthesizes a Process-shaped harness type that
+/// registers them with the `Test` package, lowers the whole thing
+/// through the pipeline, and runs it on the settled backend so the
+/// runner's exit code surfaces test success/failure.
 ///
 /// Requires an `koja.toml` in the current directory. Walks
 /// `config.src` AND `config.test` for the project itself, while
@@ -532,8 +594,7 @@ pub fn cmd_run(project_root: Option<&Path>, options: RunOptions) {
 /// project IS `Global`, since lib/global/src already provides the
 /// stdlib roots and a second copy would collide at registration
 /// time.
-///
-pub fn cmd_test(project_root: Option<&Path>, trace: bool, color: bool) {
+pub fn cmd_test(project_root: Option<&Path>, options: TestOptions) {
     let (config, root) = load_project_or_exit(
         project_root,
         &[
@@ -541,7 +602,7 @@ pub fn cmd_test(project_root: Option<&Path>, trace: bool, color: bool) {
             "Usage: koja test (run from a directory containing koja.toml)",
         ],
     );
-    run_project_tests(&config, &root, TestOptions { color, trace });
+    run_project_tests(&config, &root, &options);
 }
 
 /// `koja tasks`: list every task name in scope. Inside a project
@@ -837,9 +898,13 @@ fn bundle_many_with_autoimport(
     // confused (e.g. HTTP's `format`/`equals?` calls fail to see the
     // user's edited `Global` protocol impls because the qualified
     // packages were lifted before user files joined the bundle).
-    // Qualified deps don't tag along on a Global self-compile.
+    // Qualified deps don't tag along on a Global self-compile, except
+    // for a test build, where the harness needs `Test` and `Test`
+    // needs `JSON` for its json reporter.
     if skip_package != Some("Global") {
         sources.extend(koja_stdlib::qualified_sources_for(include_tests));
+    } else if include_tests {
+        sources.extend(koja_stdlib::test_build_sources());
     }
     if let Some(skip) = skip_package {
         sources.retain(|file| file.package != skip);
@@ -1046,18 +1111,23 @@ fn build_project_and_keep(
 }
 
 /// `koja test` for a project: walk `src` + `test`, parse, discover
-/// `@test` functions, splice the synthetic Process harness into the
-/// parsed program, lower with the harness as entry, link, exec the
-/// binary, and forward its exit code. The temp binary is removed
+/// tests, splice the synthetic Process harness into the parsed
+/// program, lower with the harness as entry, settle the backend, and
+/// run. The interpreter runs in-process with the `KOJA_TEST_*`
+/// variables set on the driver itself. LLVM links a temp binary,
+/// runs it with the variables in its environment, and removes it
 /// after the run so repeated invocations don't accumulate artifacts
 /// under `build/debug/`.
 ///
-/// Diverges either way: success exits with the binary's status, any
-/// pipeline failure or launch error prints `error: …` and exits 1.
+/// There is no driver-side deadline. The `Test` runner applies
+/// `--timeout` to each spec and kills the one that misses it.
+///
+/// Diverges either way. Success exits with the harness's status, and
+/// any pipeline failure or launch error prints `error: …` and exits 1.
 /// The early `no tests found` path is the lone non-diverging branch.
 /// Parse errors bail before discovery so a broken only-test-file
 /// reports its diagnostics instead of reading as "no tests found".
-fn run_project_tests(config: &ProjectConfig, root: &Path, opts: TestOptions) {
+fn run_project_tests(config: &ProjectConfig, root: &Path, options: &TestOptions) {
     let namespace = config.namespace();
     // `assert` stamps each file's path into the failure it reports at
     // run time, and the test binary has no project root to relativize
@@ -1095,7 +1165,7 @@ fn run_project_tests(config: &ProjectConfig, root: &Path, opts: TestOptions) {
         &mut parsed,
         namespace.clone(),
         "__test_harness__",
-        generate_harness(&tests, opts),
+        generate_harness(&tests),
     );
 
     let checked = check_parsed(parsed);
@@ -1108,55 +1178,57 @@ fn run_project_tests(config: &ProjectConfig, root: &Path, opts: TestOptions) {
         }
     };
 
-    let binary = project_build_dir(root, false)
-        .join(format!("{}_test", config.binary_name()))
-        .to_string_lossy()
-        .to_string();
-    emit_and_link_program(
-        &program,
-        &config.name,
-        &binary,
-        &[root],
-        CompileOptions::default(),
-    );
-
-    // Trace runs are meant for interactive debugging (and the
-    // per-binary timeout would kill a long diagnostic session), so
-    // skip the deadline there, matching `mix test --trace`.
-    let timeout = (!opts.trace).then_some(TEST_BINARY_TIMEOUT);
-    let status = run_test_binary_with_timeout(&binary, timeout);
-    let _ = fs::remove_file(&binary);
-
-    match status {
-        TestBinaryOutcome::Exited(code) => process::exit(code),
-        TestBinaryOutcome::LaunchFailed(err) => {
-            eprintln!("error: failed to exec `{binary}`: {err}");
-            process::exit(1);
+    let env = options.env();
+    let choice = match options.backend {
+        Some(backend) => BackendChoice::Forced(backend),
+        None => BackendChoice::Auto,
+    };
+    match choice.settle(&program.packages) {
+        Backend::Interpreter => {
+            // The interpreter runs the harness on this thread, and
+            // `System.get_env` reads the driver's own environment.
+            // Nothing else is running yet, so setting it is sound.
+            for (key, value) in &env {
+                unsafe { env::set_var(key, value) };
+            }
+            interpret_program(&program, &[]);
         }
-        TestBinaryOutcome::Signaled(signal) => {
-            let name = signal_name(signal).map_or_else(String::new, |n| format!(" ({n})"));
-            eprintln!("error: test binary terminated by signal {signal}{name}");
-            process::exit(1);
-        }
-        TestBinaryOutcome::TimedOut => {
-            eprintln!(
-                "error: test binary `{binary}` exceeded {}s timeout and was killed",
-                TEST_BINARY_TIMEOUT.as_secs(),
+        Backend::Llvm => {
+            let binary = project_build_dir(root, false)
+                .join(format!("{}_test", config.binary_name()))
+                .to_string_lossy()
+                .to_string();
+            emit_and_link_program(
+                &program,
+                &config.name,
+                &binary,
+                &[root],
+                CompileOptions::default(),
             );
-            process::exit(1);
+            let status = process::Command::new(&binary).envs(env).status();
+            let _ = fs::remove_file(&binary);
+
+            match status {
+                Ok(status) => match status.code() {
+                    Some(code) => process::exit(code),
+                    // A killed child has no exit code. Surface the
+                    // signal so a runtime crash can't masquerade as a
+                    // plain failure.
+                    None => {
+                        let signal = status.signal().unwrap_or(0);
+                        let name =
+                            signal_name(signal).map_or_else(String::new, |n| format!(" ({n})"));
+                        eprintln!("error: test binary terminated by signal {signal}{name}");
+                        process::exit(1);
+                    }
+                },
+                Err(err) => {
+                    eprintln!("error: failed to exec `{binary}`: {err}");
+                    process::exit(1);
+                }
+            }
         }
     }
-}
-
-/// Wall-clock cap on a `koja test` binary so a deadlocked runtime
-/// surfaces as a failed test instead of hanging the dev loop.
-const TEST_BINARY_TIMEOUT: Duration = Duration::from_secs(60);
-
-enum TestBinaryOutcome {
-    Exited(i32),
-    LaunchFailed(io::Error),
-    Signaled(i32),
-    TimedOut,
 }
 
 /// Names for the fatal signals a test binary plausibly dies from, so a
@@ -1176,37 +1248,6 @@ fn signal_name(signal: i32) -> Option<&'static str> {
         15 => "SIGTERM",
         _ => return None,
     })
-}
-
-/// Spawn `binary` and poll `try_wait` until it exits or the
-/// deadline passes. On timeout, kill the child and report. A `None`
-/// timeout waits indefinitely (used by `--trace`).
-fn run_test_binary_with_timeout(binary: &str, timeout: Option<Duration>) -> TestBinaryOutcome {
-    let mut child = match process::Command::new(binary).spawn() {
-        Ok(c) => c,
-        Err(e) => return TestBinaryOutcome::LaunchFailed(e),
-    };
-
-    let deadline = timeout.map(|t| Instant::now() + t);
-    loop {
-        match child.try_wait() {
-            Ok(Some(status)) => {
-                return match status.code() {
-                    Some(code) => TestBinaryOutcome::Exited(code),
-                    // A killed child has no exit code. Surface the signal so
-                    // a runtime crash can't masquerade as a plain failure.
-                    None => TestBinaryOutcome::Signaled(status.signal().unwrap_or(0)),
-                };
-            }
-            Ok(None) if deadline.is_some_and(|d| Instant::now() >= d) => {
-                let _ = child.kill();
-                let _ = child.wait();
-                return TestBinaryOutcome::TimedOut;
-            }
-            Ok(None) => thread::sleep(Duration::from_millis(50)),
-            Err(e) => return TestBinaryOutcome::LaunchFailed(e),
-        }
-    }
 }
 
 /// Parse a driver-generated source and splice it into `parsed` under

@@ -352,7 +352,7 @@ top level and inside structs, recursively through nested structs. Discovery
 is static, which the LSP code lens and the filters depend on. During 0.19
 the runner also discovers `@test` functions so both forms run together.
 
-Filters:
+Filters, which ship on a branch after phase 3:
 
 - `--filter <text>` keeps tests whose description or struct path contains
   the text.
@@ -366,34 +366,62 @@ at all still prints `no tests found` and exits 0.
 ### The `Test` package is the runner
 
 The compiler owns discovery and the `Test` package owns execution and
-reporting. The generated harness is a registration list and nothing else:
+reporting. The generated harness is a registration list and nothing else.
+It is an entry process, because `Process.monitor` is only callable from a
+`Process` whose message type includes `Process.ExitSignal`:
 
 ```koja
-Test.Runner.new()
-  .add(Test.Case{
-    group: "StackTest",
-    description: "pops in reverse order",
-    file: "test/stack_test.koja",
-    line: 14,
-    run: &StackTest.__test_14/0,
-  })
-  .run(Test.Options.from_env())
+struct KojaTestHarness
+end
+
+impl Process<(), Process.ExitSignal, ()> for KojaTestHarness
+  fn run(self) -> Process.StopReason
+    specs: List<Test.Spec> = [
+      Test.Spec{
+        description: "pops in reverse order",
+        file: "test/stack_test.koja",
+        group: "StackTest",
+        line: 14,
+        run: &StackTest.__test_stack_test_14/0,
+      },
+    ]
+    runner = Test.run(Test.Plan{specs: specs}, Test.Options.from_env())
+    Process.monitor(runner.pid())
+
+    receive
+      envelope: (Process.ExitSignal, Option<ReplyTo<()>>) ->
+        (signal, _) = envelope
+
+        match signal.reason
+          Process.ExitReason.Normal -> Process.StopReason.Normal
+          _ -> Process.StopReason.Shutdown
+        end
+    end
+  end
+end
 ```
 
-`Test.Case.run` is `fn () -> () ! Test.Failure` for every case, because
-every test body has that exact channel. The harness emits a plain function
-reference and nothing adapts per test.
+One registered test is a `Test.Spec`, not a `Test.Case`, because
+`Global.Case` is reserved for string casing. `Test.Spec.run` is
+`fn () -> Result<(), Test.Failure>` for every spec, because every test
+body has that exact channel and function types carry no `!`. The harness
+emits a plain function reference for a `test` block. For an `@test`
+function on another error type it emits a closure that maps `Err(e)` to
+`Test.Failure.Error` with `e` interpolated, and that adapter leaves with
+`@test` in 0.20.
 
-The runner is a real Koja program that uses processes, monitors, timers,
-function references, and `JSON.Encoding`. It ships to every user, which
-makes it the most exercised Koja library in existence. That is the point:
-the roadmap says real applications validate the language, and this one
-cannot be skipped.
+`Test.run` spawns a `Test.Runner` for the reporter the options name and
+returns its handle. The runner is a real Koja program that uses processes,
+monitors, `receive ... after`, function references, and `JSON.encode`. It
+ships to every user, which makes it the most exercised Koja library in
+existence. That is the point: the roadmap says real applications validate
+the language, and this one cannot be skipped.
 
 The driver keeps compile, exec, and the exit status. It resolves the flags
-and the diagnostics style, hands them to the binary as environment
-variables, and `Test.Options.from_env()` reads them through
-`System.get_env`. No argument parsing happens in Koja.
+and the diagnostics style, hands them to the program as `KOJA_TEST_*`
+environment variables, and `Test.Options.from_env()` reads them through
+`System.get_env`. On the interpreter the driver sets them in its own
+process before the program starts. No argument parsing happens in Koja.
 
 ### Interpreter by default
 
@@ -405,7 +433,10 @@ recipes run both, so every test suite doubles as a parity check between
 the two backends, an invariant the language suite fixtures check today on
 their own.
 
-This depends on the interpreter gaining general C FFI. Today it dispatches
+Since phase 3 the driver settles the backend for `koja test` the way it
+does for `koja run`: the interpreter unless the project declares a C
+extern the interpreter cannot call, in which case it falls back to LLVM.
+Phase 4 removes the fallback cases. Today the interpreter dispatches
 `@extern "C"` calls by symbol name to hand-written shims, so a project with
 its own externs cannot run on it at all. The extern surface is
 explicit-width primitives, `Bool`, `CPtr<T>`, and `()`, with no structs by
@@ -419,44 +450,55 @@ blocks one worker natively.
 
 ### One process per test
 
-`Test.Runner` spawns each case in its own process and monitors it.
+`Test.Runner` spawns each spec in a `Test.SpecProcess` and monitors it.
+The spec process runs the body and casts `Test.SpecDone{result}` back to
+the runner, so the runner's message type is
+`Test.SpecDone | Process.ExitSignal`.
 
 ```koja
 enum Outcome
-  Passed(Int)                   # elapsed milliseconds
+  Crashed(String, Int)          # the crash reason, then elapsed milliseconds
   Failed(Test.Failure, Int)     # Assertion, Error, or Skipped
-  Crashed(String, Int)          # the crash reason and stack trace
-  TimedOut(Int)
+  Passed(Int)
+  TimedOut(Int)                 # the deadline that was missed
 end
 ```
 
-- A normal return is `Passed`.
-- A `Result.Err(failure)` is `Failed` with the variant. The runner reads
-  `Skipped` out of it for the summary count and the exit status.
-- A crash is `Crashed`. The runner survives and continues.
-- Each case has a deadline, 60 seconds by default and settable with
-  `--timeout <secs>`. The runner waits with `receive ... after`, kills a
-  case that misses its deadline, and reports `TimedOut`. There is no
+- A `SpecDone` with `Result.Ok` is `Passed`.
+- A `SpecDone` with `Result.Err(failure)` is `Failed` with the variant.
+  The runner reads `Skipped` out of it for the summary count and the exit
+  status.
+- An `ExitSignal` before any `SpecDone` is `Crashed`. `ExitReason.Crashed`
+  supplies the panic message and, when the runtime has one, the
+  backtrace. The interpreter's backtrace is empty. A `Killed` or
+  `Shutdown` exit before the result is `Crashed` with a fixed reason. The
+  runner survives and continues.
+- Each spec has a deadline, 60 seconds by default and settable with
+  `--timeout <ms>`. The runner waits with `receive ... after`, kills a
+  spec that misses its deadline, and reports `TimedOut`. There is no
   global timeout, and `--trace` no longer changes any timeout.
-- The case process is the parent of everything the body spawns, so the
-  kill cascade tears the tree down when the case ends. The runner waits
-  until that tree is dead before it starts the next case, so a registered
-  name from one test cannot collide with the next.
+- The spec process is the parent of everything the body spawns, so the
+  kill cascade tears the tree down when the spec ends. The runner waits
+  for the spec's own `ExitSignal` before it starts the next spec, so a
+  registered name from one test cannot collide with the next.
 
-Cases run one at a time in 0.19. Parallel execution is deferred until the
-process-per-test model has run for a while.
+Specs run one at a time in 0.19. Parallel execution is deferred until the
+process-per-test model has run for a while. Elapsed time is whole
+milliseconds from `DateTime.now()`, so a fast test reports `0ms` until the
+runtime has a monotonic clock
+([gap](GAPS.md#no-monotonic-clock-and-no-sub-millisecond-time)).
 
 ### Panics in tests
 
-A panic in a test body is `Crashed`, one red line with the stack trace, and
-the run continues. That changes what counts as good style in a test.
+A panic in a test body is `Crashed`, one red block with the panic message
+and the run continues. That changes what counts as good style in a test.
 `value = option.unwrap()` is not a smell when each test is its own process:
-the failure is contained, and the stack trace names the line. Until a
-caller-location intrinsic exists, that is more than `try Test.require(...)`
-can report, since `require` carries no line. Use `require` when the domain
-error's rendering matters, and `unwrap` when the line does. `Test.crashes`
-is the same isolation applied on purpose: it is the one place a test wants
-the panic.
+the failure is contained and the message names the cause. The crash line
+waits on a caller-location intrinsic, and so does `try Test.require(...)`,
+since `require` carries no line either. Use `require` when the domain
+error's rendering matters, and `unwrap` when the panic message does.
+`Test.crashes` is the same isolation applied on purpose: it is the one
+place a test wants the panic.
 
 ### Reporters
 
@@ -470,17 +512,22 @@ connection does:
 ```koja
 protocol Reporter
   fn started(self, plan: Test.Plan) -> Self
-  fn case_started(self, case: Test.Case) -> Self
-  fn case_finished(self, case: Test.Case, outcome: Test.Outcome) -> Self
+  fn spec_started(self, spec: Test.Spec) -> Self
+  fn spec_finished(self, spec: Test.Spec, outcome: Test.Outcome) -> Self
   fn finished(self, summary: Test.Summary) -> Self
 end
 ```
 
+`Test.Runner<R: Reporter>` is generic over the reporter, so each built-in
+reporter is a separate monomorphization and no dispatch enum sits between
+the runner and the protocol.
+
 Three reporters ship in 0.19, selected with `--reporter <name>`:
 
-- `dots` is the default: one dot or `X` per case, a failures block, and a
-  summary line. This is what a developer expects from `koja test`.
-- `trace` prints a group header and one line per case with its location
+- `dots` is the default: one dot or `X` per spec, `s` for a skip, a
+  failures block, and a summary line. This is what a developer expects
+  from `koja test`.
+- `trace` prints a group header and one line per spec with its location
   and elapsed time. `--trace` is an alias for `--reporter trace`. This is
   what a developer reaches for when something is confusing.
 - `json` writes one event per line. This is what CI, the LSP code lens,
@@ -488,12 +535,13 @@ Three reporters ship in 0.19, selected with `--reporter <name>`:
 
 ```
 {"event":"started","total":13}
-{"event":"case_started","id":"test/stack_test.koja:14","group":"StackTest","description":"pops in reverse order"}
-{"event":"case_finished","id":"test/stack_test.koja:14","outcome":"passed","ms":3}
-{"event":"case_finished","id":"test/stack_test.koja:22","outcome":"failed","ms":1,"failure":{"kind":"assertion","expression":"popped == 3","file":"test/stack_test.koja","line":23,"source_line":"    assert popped == 3","left":"2","right":"3","message":null}}
-{"event":"case_finished","id":"test/stack_test.koja:30","outcome":"crashed","ms":12,"reason":"index 5 out of bounds"}
-{"event":"case_finished","id":"test/stack_test.koja:38","outcome":"skipped","ms":0,"reason":"DATABASE_URL is not set"}
-{"event":"finished","passed":10,"failed":2,"skipped":1}
+{"event":"spec_started","id":"test/stack_test.koja:14","group":"StackTest","description":"pops in reverse order"}
+{"event":"spec_finished","id":"test/stack_test.koja:14","outcome":"passed","ms":3}
+{"event":"spec_finished","id":"test/stack_test.koja:22","outcome":"failed","ms":1,"failure":{"kind":"assertion","expression":"popped == 3","file":"test/stack_test.koja","line":23,"column":12,"source_line":"    assert popped == 3","left":"2","right":"3","message":null}}
+{"event":"spec_finished","id":"test/stack_test.koja:30","outcome":"crashed","ms":12,"reason":"index 5 out of bounds"}
+{"event":"spec_finished","id":"test/stack_test.koja:38","outcome":"skipped","ms":0,"reason":"DATABASE_URL is not set"}
+{"event":"spec_finished","id":"test/stack_test.koja:46","outcome":"timed_out","ms":60000}
+{"event":"finished","passed":10,"failed":2,"skipped":1,"crashed":0,"timed_out":0,"ms":75}
 ```
 
 The `failure` object carries a `kind` of `assertion` or `error`. `Skipped`
@@ -505,10 +553,11 @@ Machine reporters write to stderr by default, or to a file with
 Human reporters write to stdout. The `json` event shapes are part of the
 `Test` package's public surface and follow its versioning.
 
-A user reporter is any type that conforms to `Test.Reporter`.
-`--reporter MyPkg.Junit` makes the generated harness name that type, and
-the compiler checks the conformance. That is a plugin system with no
-dynamic loading, and a JUnit XML reporter is its first proof.
+A user reporter is any type that conforms to `Test.Reporter`. On a branch
+after phase 3, `--reporter MyPkg.Junit` makes the generated harness name
+that type, and the compiler checks the conformance. That is a plugin
+system with no dynamic loading, and a JUnit XML reporter is its first
+proof.
 
 ### Output style
 
@@ -523,43 +572,46 @@ design.
 
 Pretty draws a source snippet at the assertion line from
 `Test.Assertion.source_line`, so no source file access is needed at run
-time.
-The expression is underlined, both operands are labels, and the message is
-a help block:
+time. The glyphs are the ones `koja check` draws. The expression is
+underlined, both operands are labels, and the message is a help row:
 
 ```
 failure: assertion failed
-  --> test/stack_test.koja:23:5
-   |
-23 |     assert popped == 3
-   |            ^^^^^^^^^^^
-   |            left:  2
-   |            right: 3
-   |
+   ╭─ test/stack_test.koja:23:12
+   │
+23 │     assert popped == 3
+   │            ──────────
+   │            left:  2
+   │            right: 3
    = help: pops the most recent value
 ```
 
 Short prints one line per failure for pipes, editors, and agents:
 
 ```
-test/stack_test.koja:23:5: failure: assert popped == 3 (left: 2, right: 3)
+test/stack_test.koja:23:12: failure: assert popped == 3 (left: 2, right: 3)
 ```
 
 In short style `dots` prints no dots, only the failure lines and the
 summary, which matches `koja check` printing nothing when nothing is wrong.
-`trace` in short style prints one line per case with its location and
+`trace` in short style prints one line per spec with its location and
 result, which is a complete greppable log:
 
 ```
 test/stack_test.koja:14: ok: pops in reverse order (3ms)
-test/stack_test.koja:23:5: failure: assert popped == 3 (left: 2, right: 3)
+test/stack_test.koja:23:12: failure: assert popped == 3 (left: 2, right: 3)
+test/stack_test.koja:30: crash: index 5 out of bounds
+test/stack_test.koja:46: timeout: no result after 60000ms
 ```
 
-An `Error` failure prints its message in place of the operand labels, and
-a skipped test prints one line with its reason in the summary block, not
-in the failures block.
+An `Error` failure, a crash, and a timeout print a severity line and a
+location row with no snippet, and a crash adds its backtrace under the
+gutter when the runtime has one. A skipped test prints one line with its
+reason under a `Skipped:` header, not in the failures block. Both human
+reporters end with the summary line, `12 successful tests. 0 failures.`,
+with crashed, timed out, and skipped counts appended only when non-zero.
 
-The exit status is 1 when any case fails, crashes, or times out, and 0
+The exit status is 1 when any spec fails, crashes, or times out, and 0
 otherwise. Skipped tests do not affect it.
 
 ## Compatibility and migration
@@ -592,9 +644,10 @@ must cover each one.
 - Typecheck: channel construction for `test`, `assert` desugaring beside
   `fail` in the error channel resolver, the `@test` deprecation warning,
   `test` items stripped when tests are not loaded, completion `KEYWORDS`.
-- Driver: `koja test` generates the registration harness, resolves
-  `--reporter`, `--trace`, `--filter`, `--only`, `--timeout`, `--out`, and
-  the diagnostics style, and passes them to the binary as environment.
+- Driver: `koja test` generates the registration harness, settles the
+  backend from `--backend`, resolves `--reporter`, `--trace`, `--timeout`,
+  `--out`, and the diagnostics style, and passes them to the program as
+  `KOJA_TEST_*` environment. `--filter` and `--only` follow phase 3.
 - Formatter: printing for both constructs.
 - LSP: folding, document symbols, traversal, and later the run-test code
   lens and failures as diagnostics. The LSP project loader today bundles
@@ -626,7 +679,7 @@ out of the type system with no special rule.
 
 **`Test.Failure | E` on the test channel.** An earlier draft let a test
 declare `! E` so setup errors could propagate with a bare `try`. Then the
-channel type differed per test, `Test.Case.run` needed a per-test adapter,
+channel type differed per test, `Test.Spec.run` needed a per-test adapter,
 the runner needed an `Errored` outcome beside `Failed`, and a skip had no
 clean way to travel. One `Test.Failure` enum with an `Error` variant costs
 `Test.require(...)` around each setup call and removes all four problems.
@@ -759,24 +812,27 @@ more commits at its boundary, so a bisect can name the phase.
    tests as `Type: Protocol`. The formatter, LSP symbols and folding, the
    shell block-depth counter, and the three keyword tables. About 700
    lines of Rust.
-3. **Runner and reporters.** `Test.Runner`, `Case`, `Plan`, `Summary`,
+3. **Runner and reporters.** `Test.Runner`, `Spec`, `Plan`, `Summary`,
    `Outcome`, `Options.from_env`, the `Reporter` protocol, and the `dots`,
    `trace`, and `json` reporters in both output styles. The runner is a
    `Process` whose `M` includes `Process.ExitSignal`, and
-   `ExitReason.Crashed(CrashInfo)` supplies the crash line. The generated
-   harness shrinks to the registration list, and the driver passes flags
-   and the diagnostics style as environment. Two checks before the
-   wording above is final: whether `Ref.kill` on a case cascades to the
-   processes the case spawned, and whether the `json` stream on stderr
-   survives the exec path unchanged. About 1,200 lines of Koja and 250 of
-   Rust.
+   `ExitReason.Crashed(CrashInfo)` supplies the crash message. The
+   generated harness shrinks to the registration list, the driver passes
+   flags and the diagnostics style as environment, and `koja test` gains
+   `--backend`, `--reporter`, `--timeout`, and `--out`. The two checks
+   resolved as yes: a parent's exit force-kills its children
+   transitively, and the test binary inherits stderr so the `json`
+   stream passes through the exec path unchanged. Follow-up branch:
+   `--filter`, `--only`, and the `--reporter MyPkg.Type` extension point.
+   About 1,200 lines of Koja and 250 of Rust.
 4. **Interpreter C FFI.** A `dlopen` per `@link` library and a libffi call
    for the extern surface, with the 89 hand-written shims kept as
    overrides by symbol. The `libffi` crate builds bundled so the release
-   tarballs stay self-contained, which is a release pipeline change. Then
-   `koja test` defaults to the interpreter with `--backend llvm` for the
-   native run, and the CI recipes run both. Independent of the first three
-   phases. About 500 lines of Rust.
+   tarballs stay self-contained, which is a release pipeline change.
+   `koja test` already settles on the interpreter and falls back to LLVM
+   for a project with an extern the interpreter cannot call. This phase
+   removes the fallback cases, and the CI recipes run both backends.
+   Independent of the first three phases. About 500 lines of Rust.
 5. **Migration.** The stdlib's tests, the `koja new` scaffold, and the
    examples move to `test` and `assert` one package per pull request, each
    run on both backends. Then the `@test` deprecation warning,

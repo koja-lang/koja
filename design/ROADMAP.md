@@ -91,8 +91,11 @@ The design is accepted in [TESTING.md](TESTING.md).
 - The human reporters follow the pretty and short styles of compiler
   diagnostics.
 - Run `koja test` on the interpreter by default, with `--backend llvm` for
-  the native run. The CI recipes run both, which turns every test suite
-  into a parity check between the backends.
+  the native run. Done in phase 3 with the same backend selection as
+  `koja run`, so a project with a C extern the interpreter cannot call
+  still falls back to LLVM until the interpreter has general C FFI. The CI
+  recipes run both, which turns every test suite into a parity check
+  between the backends.
 - Deprecate `@test` in 0.19 for removal in 0.20. Migration is by hand or by
   agent. No formatter rewrite.
 

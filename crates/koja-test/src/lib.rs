@@ -5,11 +5,13 @@
 //! `@test`-annotated function belonging to the current project.
 //! [`generate_harness`] then
 //! produces a Koja source string for a synthetic
-//! [`HARNESS_ENTRY`] type implementing `Process<(), (), ()>` whose
-//! `run` invokes each test, tracks pass/fail counts, and stops with
-//! `StopReason.Shutdown` (exit 1) when anything fails. The driver
-//! splices that harness into the parsed program and lowers with
-//! [`HARNESS_ENTRY`] as the project's Process entry.
+//! [`HARNESS_ENTRY`] type implementing
+//! `Process<(), Process.ExitSignal, ()>` whose `run` registers every
+//! test as a `Test.Spec`, hands the plan to `Test.run`, and maps the
+//! runner's exit into `StopReason`. Running and reporting live in the
+//! `Test` package (`lib/test`). The driver splices the harness into
+//! the parsed program and lowers with [`HARNESS_ENTRY`] as the
+//! project's Process entry.
 //!
 //! Kept backend-agnostic on purpose: this crate only depends on
 //! the AST + parser surface, so any backend can share the same
@@ -26,22 +28,10 @@ use koja_parser::ParsedProgram;
 /// struct name emitted by [`generate_harness`].
 pub const HARNESS_ENTRY: &str = "KojaTestHarness";
 
-/// Output knobs for the synthesized harness.
-///
-/// `trace` swaps the compact dots-and-summary output for one group
-/// header per struct and one timed line per test (modeled on
-/// `mix test --trace`), and `color` gates the ANSI escapes so
-/// `--no-color` / `NO_COLOR` reach the generated source.
-#[derive(Clone, Copy, Debug, Default)]
-pub struct TestOptions {
-    pub color: bool,
-    pub trace: bool,
-}
-
-/// A discovered test, called as `Outer.Inner.fn_name()` or bare
-/// `fn_name()` from the generated harness. `file` and `line` record
-/// the source location (`file` is rendered relative to the project
-/// root) for navigable trace and failure output.
+/// A discovered test, registered as `Outer.Inner.fn_name` or bare
+/// `fn_name` by the generated harness. `file` and `line` record the
+/// source location (`file` is rendered relative to the project root)
+/// for navigable trace and failure output.
 #[derive(Clone, Debug)]
 pub struct TestCase {
     pub description: String,
@@ -50,6 +40,21 @@ pub struct TestCase {
     pub line: u32,
     /// `None` for a top-level `test` block.
     pub owner: Option<Owner>,
+    pub shape: Shape,
+}
+
+/// How the harness turns a test function into a `Test.Spec.run`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Shape {
+    /// The function already is `fn () -> Result<(), Test.Failure>`,
+    /// so the harness registers a reference to it. Every `test` block
+    /// and every `@test` function on a `Test.Failure` channel.
+    Spec,
+    /// An `@test` function on some other `Result<_, E>`. The harness
+    /// wraps the call in a closure that keeps `Ok` and turns `Err(e)`
+    /// into `Test.Failure.Error` with `e` interpolated, so a `String`
+    /// renders bare and everything else through `Debug`.
+    Legacy,
 }
 
 /// The type a member test became a method on.
@@ -65,7 +70,7 @@ pub struct Owner {
 }
 
 impl TestCase {
-    /// The qualified call the harness emits.
+    /// The qualified function the harness registers.
     fn call_path(&self) -> String {
         match &self.owner {
             Some(owner) => format!("{}.{}", owner.path.join("."), self.fn_name),
@@ -106,6 +111,7 @@ pub fn discover_tests(parsed: &ParsedProgram, project_name: &str, root: &Path) -
             .into_owned();
         let mut collector = Collector {
             file: &display_path,
+            package: project_name,
             path: file.ast.path.as_deref(),
             tests: &mut tests,
         };
@@ -123,6 +129,7 @@ pub fn discover_tests(parsed: &ParsedProgram, project_name: &str, root: &Path) -
 
 struct Collector<'a> {
     file: &'a str,
+    package: &'a str,
     path: Option<&'a Path>,
     tests: &'a mut Vec<TestCase>,
 }
@@ -130,7 +137,7 @@ struct Collector<'a> {
 impl Collector<'_> {
     fn push(&mut self, description: String, owner: Option<&Owner>, line: u32) {
         let fn_name = synthesized_test_name(self.path, line);
-        self.push_named(description, fn_name, owner, line);
+        self.push_named(description, fn_name, owner, line, Shape::Spec);
     }
 
     fn push_named(
@@ -139,6 +146,7 @@ impl Collector<'_> {
         fn_name: String,
         owner: Option<&Owner>,
         line: u32,
+        shape: Shape,
     ) {
         self.tests.push(TestCase {
             description,
@@ -146,6 +154,7 @@ impl Collector<'_> {
             fn_name,
             line,
             owner: owner.cloned(),
+            shape,
         });
     }
 
@@ -194,6 +203,7 @@ impl Collector<'_> {
                             func.name.clone(),
                             Some(&owner),
                             func.span.start.line,
+                            annotated_test_shape(func, self.package),
                         );
                     }
                 }
@@ -240,174 +250,120 @@ fn annotated_test_description(func: &Function) -> Option<String> {
     })
 }
 
+/// Whether an `@test` function already has the `Test.Spec.run` shape,
+/// a unit success value on a `Test.Failure` channel. Inside the `Test`
+/// package itself the channel is spelled `Failure`.
+fn annotated_test_shape(func: &Function, package: &str) -> Shape {
+    let unit_success = match &func.return_type {
+        None => true,
+        Some(TypeExpr::Unit { .. }) => true,
+        Some(_) => false,
+    };
+    let failure_channel = match func.error_type.as_ref().and_then(type_expr_path) {
+        Some(path) => path == ["Test", "Failure"] || (package == "Test" && path == ["Failure"]),
+        None => false,
+    };
+    if unit_success && failure_channel {
+        Shape::Spec
+    } else {
+        Shape::Legacy
+    }
+}
+
 /// Escape a Rust string for embedding inside a double-quoted Koja
 /// string literal in the generated harness source.
 fn escape_koja_string(s: &str) -> String {
     s.replace('\\', "\\\\").replace('"', "\\\"")
 }
 
-/// The completion line for one trace-mode test.
-///
-/// In color mode the whole line is rewritten in the result color: a
-/// leading `\r` returns to column 0 and the name + location + result
-/// are reprinted colored, overwriting the uncolored pre-run anchor
-/// (which stays put on a crash, preserving attribution). In no-color
-/// mode the result is appended to the existing name line so piped
-/// output carries no carriage returns.
-fn trace_result_line(
-    opts: TestOptions,
-    escaped_desc: &str,
-    location: &str,
-    word: &str,
-    color: &str,
-    reset: &str,
-) -> String {
-    if opts.color {
-        format!(
-            "      IO.puts(\"\\r{color}  {escaped_desc} ({location}) ... {word} (#{{test_elapsed_ms}}ms){reset}\")\n"
-        )
-    } else {
-        format!("      IO.puts(\" ... {word} (#{{test_elapsed_ms}}ms)\")\n")
+/// The `run` field of one registered spec. A reference to the test
+/// function when it already has the spec shape, or a closure that
+/// adapts a legacy result.
+fn spec_run(test: &TestCase) -> String {
+    let call = test.call_path();
+    match test.shape {
+        Shape::Spec => format!("&{call}/0"),
+        Shape::Legacy => format!(
+            r##"fn () -> Result<(), Test.Failure>
+        match {call}()
+          Result.Ok(_) -> Result.Ok(())
+          Result.Err(error) -> Result.Err(Test.Failure.Error("#{{error}}"))
+        end
+      end"##
+        ),
     }
 }
 
 /// Generate the Koja source for the test harness file: a
-/// [`HARNESS_ENTRY`] struct implementing `Process<(), (), ()>`
-/// whose `run` executes the tests.
+/// [`HARNESS_ENTRY`] struct implementing
+/// `Process<(), Process.ExitSignal, ()>` whose `run` registers the
+/// tests and waits for the runner.
 ///
-/// Each `@test` function returns some `Result<_, E>`. The idiom is a
-/// unit `! String` or `! Test.Failure` body that passes by returning
-/// and fails with `fail` or `assert`. Any success type works because
-/// the harness only matches `Result.Ok(_)`, and any `E` works because
-/// the failure text interpolates `msg`, which renders a `String` bare
-/// and everything else through `Debug`. The harness calls each test
-/// through its [`TestCase::call_path`], matches on the result to track
-/// pass/fail counts, and continues running all tests even when some
-/// fail. `run` stops with `StopReason.Shutdown` (exit 1) when any test
-/// failed, `StopReason.Normal` (exit 0) otherwise.
-///
-/// Default output is a row of pass/fail dots followed by a summary.
-/// [`TestOptions::trace`] swaps this for one header per
-/// [`TestCase::group`] and one timed line per test: the test name and
-/// `path:line` are
-/// written first (no newline) so a crashing test leaves its name
-/// dangling as the last output, then ` ... ok/FAIL (Nms)` is appended
-/// once the test returns.
+/// Each test becomes one `Test.Spec` with its description, location,
+/// group (the owner type, or the file for a top-level block), and a
+/// `run` built by [`spec_run`]. The harness hands the plan to
+/// `Test.run` with `Test.Options.from_env`, so every flag the driver
+/// resolved arrives through `KOJA_TEST_*` variables, then monitors
+/// the runner and maps its exit to the process result. A `Normal`
+/// exit means every spec passed or was skipped, and anything else is
+/// `StopReason.Shutdown` (exit 1).
 ///
 /// No imports are needed, since the gather-then-check pipeline makes
-/// every project type visible to every file automatically.
-pub fn generate_harness(tests: &[TestCase], opts: TestOptions) -> String {
-    let (green, red, reset) = if opts.color {
-        ("\x1b[32m", "\x1b[31m", "\x1b[0m")
-    } else {
-        ("", "", "")
-    };
-
-    let mut body = String::new();
-    body.push_str("  failures: List<String> = []\n");
-    body.push_str("  passed = 0\n");
-    body.push_str("  failed = 0\n");
-
-    let mut prev_group: Option<String> = None;
+/// every project type visible to every file automatically, and the
+/// `Test` package is linked into every test build.
+pub fn generate_harness(tests: &[TestCase]) -> String {
+    let mut specs = String::new();
     for test in tests {
-        let escaped_desc = escape_koja_string(&test.description);
-        let location = escape_koja_string(&format!("{}:{}", test.file, test.line));
-        let failure_append = format!(
-            "      failures = failures.append(\"  #{{failed}}) {escaped_desc} ({location})\\n     #{{msg}}\")\n",
-        );
-        let call = test.call_path();
-
-        if opts.trace {
-            let group = test.group();
-            if prev_group.as_deref() != Some(group.as_str()) {
-                if prev_group.is_some() {
-                    body.push_str("  IO.puts(\"\")\n");
-                }
-                body.push_str(&format!("  IO.puts(\"{}\")\n", escape_koja_string(&group)));
-                prev_group = Some(group);
-            }
-            body.push_str(&format!("  IO.write(\"  {escaped_desc} ({location})\")\n"));
-            body.push_str("  test_start_ms = DateTime.now().timestamp_millis()\n");
-            body.push_str(&format!("  match {call}()\n"));
-            body.push_str("    Result.Ok(_) ->\n");
-            body.push_str("      passed = passed + 1\n");
-            body.push_str(
-                "      test_elapsed_ms = DateTime.now().timestamp_millis() - test_start_ms\n",
-            );
-            body.push_str(&trace_result_line(
-                opts,
-                &escaped_desc,
-                &location,
-                "ok",
-                green,
-                reset,
-            ));
-            body.push_str("    Result.Err(msg) ->\n");
-            body.push_str("      failed = failed + 1\n");
-            body.push_str(
-                "      test_elapsed_ms = DateTime.now().timestamp_millis() - test_start_ms\n",
-            );
-            body.push_str(&trace_result_line(
-                opts,
-                &escaped_desc,
-                &location,
-                "FAIL",
-                red,
-                reset,
-            ));
-            body.push_str(&failure_append);
-            body.push_str("  end\n");
-        } else {
-            body.push_str(&format!("  match {call}()\n"));
-            body.push_str("    Result.Ok(_) ->\n");
-            body.push_str("      passed = passed + 1\n");
-            body.push_str(&format!("      IO.write(\"{green}.{reset}\")\n"));
-            body.push_str("    Result.Err(msg) ->\n");
-            body.push_str("      failed = failed + 1\n");
-            body.push_str(&format!("      IO.write(\"{red}X{reset}\")\n"));
-            body.push_str(&failure_append);
-            body.push_str("  end\n");
-        }
+        specs.push_str(&format!(
+            r#"      Test.Spec{{
+        description: "{description}",
+        file: "{file}",
+        group: "{group}",
+        line: {line},
+        run: {run},
+      }},
+"#,
+            description = escape_koja_string(&test.description),
+            file = escape_koja_string(&test.file),
+            group = escape_koja_string(&test.group()),
+            line = test.line,
+            run = spec_run(test),
+        ));
     }
 
-    body.push_str("  IO.puts(\"\")\n");
-    body.push_str("  if failed > 0\n");
-    body.push_str("    IO.puts(\"\")\n");
-    body.push_str("    IO.puts(\"Failures:\")\n");
-    body.push_str("    IO.puts(\"\")\n");
-    body.push_str("    for f in failures\n");
-    body.push_str("      IO.puts(f)\n");
-    body.push_str("      IO.puts(\"\")\n");
-    body.push_str("    end\n");
-    body.push_str(&format!(
-        "    IO.puts(\"{red}#{{passed}} successful tests. #{{failed}} failures.{reset}\")\n"
-    ));
-    body.push_str("  else\n");
-    body.push_str(&format!(
-        "    IO.puts(\"{green}#{{passed}} successful tests. #{{failed}} failures.{reset}\")\n"
-    ));
-    body.push_str("  end\n");
-    body.push_str("  cond\n");
-    body.push_str("    failed > 0 -> Process.StopReason.Shutdown\n");
-    body.push_str("    else -> Process.StopReason.Normal\n");
-    body.push_str("  end\n");
+    format!(
+        r#"struct {HARNESS_ENTRY}
+end
 
-    let mut source = String::new();
-    source.push_str(&format!("struct {HARNESS_ENTRY}\nend\n\n"));
-    source.push_str(&format!("impl Process<(), (), ()> for {HARNESS_ENTRY}\n"));
-    source.push_str(&format!(
-        "  fn start(config: ()) -> Self ! Process.StopReason\n    \
-           {HARNESS_ENTRY}{{}}\n  \
-         end\n\n"
-    ));
-    source.push_str(
-        "  fn handle(self, msg: (), from: Option<ReplyTo<()>>) -> Process.Step<Self>\n    \
-           Process.Step.Continue(self)\n  \
-         end\n\n",
-    );
-    source.push_str("  fn run(self) -> Process.StopReason\n");
-    source.push_str(&body);
-    source.push_str("  end\nend\n");
+impl Process<(), Process.ExitSignal, ()> for {HARNESS_ENTRY}
+  fn start(config: ()) -> Self ! Process.StopReason
+    {HARNESS_ENTRY}{{}}
+  end
 
-    source
+  fn handle(self, msg: Process.ExitSignal, from: Option<ReplyTo<()>>) -> Process.Step<Self>
+    Process.Step.Continue(self)
+  end
+
+  fn run(self) -> Process.StopReason
+    specs: List<Test.Spec> = [
+{specs}    ]
+    runner = Test.run(Test.Plan{{specs: specs}}, Test.Options.from_env())
+    Process.monitor(runner.pid())
+
+    receive
+      envelope: (Process.ExitSignal, Option<ReplyTo<()>>) ->
+        (signal, _) = envelope
+
+        match signal.reason
+          Process.ExitReason.Normal -> Process.StopReason.Normal
+          _ -> Process.StopReason.Shutdown
+        end
+
+      event: Process.Lifecycle ->
+        Process.StopReason.Shutdown
+    end
+  end
+end
+"#
+    )
 }

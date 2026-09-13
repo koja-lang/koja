@@ -1,0 +1,32 @@
+# Each test runs in its own process. A crash or a hang in one must be
+# reported as that test's outcome and leave the rest of the run alone.
+struct ContainTest
+  test "runs before the crash"
+    assert 1 + 1 == 2
+  end
+
+  test "a crash is contained"
+    missing: Option<Int> = Option.None
+    _ = missing.unwrap()
+  end
+
+  test "a hang is killed at the deadline"
+    mute = spawn Mute.start(())
+    _ = mute.call((), 30000)
+  end
+
+  test "runs after the crash and the hang"
+    assert [1, 2, 3].length() == 3
+  end
+end
+
+# Never replies, so a `call` on it blocks until its deadline.
+struct Mute: Process<(), (), ()>
+  fn start(config: ()) -> Self ! Process.StopReason
+    Mute{}
+  end
+
+  fn handle(self, msg: (), from: Option<ReplyTo<()>>) -> Process.Step<Self>
+    Process.Step.Continue(self)
+  end
+end

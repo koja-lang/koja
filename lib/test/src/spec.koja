@@ -1,0 +1,21 @@
+@doc """
+One registered test. The generated harness builds one `Spec` per
+`test` block and `@test` function it discovered, and the runner calls
+`run` in its own process. `group` is the trace header, the struct path
+for member tests and the file for top-level tests. `file` and `line`
+name the declaration.
+"""
+struct Spec
+  description: String
+  file: String
+  group: String
+  line: Int
+  run: fn () -> Result<(), Failure>
+
+  @doc """
+  The `file:line` key that names this spec in reporter output.
+  """
+  fn id(self) -> String
+    "#{self.file}:#{self.line}"
+  end
+end
