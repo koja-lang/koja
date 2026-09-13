@@ -131,10 +131,12 @@ fn trace_result_line(
 /// [`HARNESS_ENTRY`] struct implementing `Process<(), (), ()>`
 /// whose `run` executes the tests.
 ///
-/// Each `@test` function returns some `Result<_, String>`. The idiom is
-/// a unit `! String` body that passes by returning and fails with
-/// `fail message`, but any success type works because the harness only
-/// matches `Result.Ok(_)`. The harness calls each test as
+/// Each `@test` function returns some `Result<_, E>`. The idiom is a
+/// unit `! String` or `! Test.Failure` body that passes by returning
+/// and fails with `fail` or `assert`. Any success type works because
+/// the harness only matches `Result.Ok(_)`, and any `E` works because
+/// the failure text interpolates `msg`, which renders a `String` bare
+/// and everything else through `Debug`. The harness calls each test as
 /// `StructName.fn_name()`, matches on the result to track pass/fail
 /// counts, and continues running all tests even when some fail. `run` stops with `StopReason.Shutdown`
 /// (exit 1) when any test failed, `StopReason.Normal` (exit 0)
@@ -166,7 +168,7 @@ pub fn generate_harness(tests: &[TestCase], opts: TestOptions) -> String {
         let escaped_desc = escape_koja_string(&test.description);
         let location = escape_koja_string(&format!("{}:{}", test.file, test.line));
         let failure_append = format!(
-            "      failures = failures.append(\"  #{{failed}}) {escaped_desc} ({location})\\n     \" <> msg)\n",
+            "      failures = failures.append(\"  #{{failed}}) {escaped_desc} ({location})\\n     #{{msg}}\")\n",
         );
 
         if opts.trace {

@@ -111,6 +111,14 @@ fn collect_assigned_locals(body: &[Statement], assigned: &mut BTreeSet<IRLocalId
 
 fn collect_assigned_in_expr(expr: &Expr, assigned: &mut BTreeSet<IRLocalId>) {
     match &expr.kind {
+        ExprKind::Assert {
+            condition, message, ..
+        } => {
+            collect_assigned_in_expr(condition, assigned);
+            if let Some(message) = message {
+                collect_assigned_in_expr(message, assigned);
+            }
+        }
         ExprKind::Binary { left, right, .. } => {
             collect_assigned_in_expr(left, assigned);
             collect_assigned_in_expr(right, assigned);

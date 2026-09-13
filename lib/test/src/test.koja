@@ -1,0 +1,130 @@
+@doc """
+The one type a test body can send down its error channel. Every test
+declared with `test "..."` has the channel `! Test.Failure`, and so does
+a helper that asserts.
+
+  - `Assertion` comes from an `assert` statement and carries the source
+    expression, its location, and the rendering of both operands.
+  - `Error` is a setup step that failed, mapped through `Test.require`,
+    or a plain `fail "message"`. A string literal after `fail` converts
+    through `StringLiteral`.
+  - `Skipped` comes from `Test.skip` and means the test cannot run here.
+"""
+enum Failure
+  Assertion(Assertion)
+  Error(String)
+  Skipped(String)
+end
+
+@doc """
+What the compiler records when an `assert` fails. `expression` is the
+source text of the condition, `source_line` is the full line that holds
+it, and `column` is where the condition starts on that line. `left` and
+`right` are the `Debug` renderings of both operands for the comparison
+forms (`==`, `!=`, `<`, `<=`, `>`, `>=`) and `Option.None` otherwise.
+"""
+struct Assertion
+  column: Int
+  expression: String
+  file: String
+  left: Option<String>
+  line: Int
+  message: Option<String>
+  right: Option<String>
+  source_line: String
+
+  @doc """
+  The short diagnostic line for this assertion.
+  """
+  fn render(self) -> String
+    head = "#{self.file}:#{self.line}:#{self.column}: failure: assert #{self.expression}"
+
+    operands =
+      match (self.left, self.right)
+        (Option.Some(left), Option.Some(right)) ->
+          " (left: #{left}, right: #{right})"
+
+        _ ->
+          ""
+      end
+
+    note =
+      match self.message
+        Option.Some(message) -> ": #{message}"
+        Option.None -> ""
+      end
+
+    head <> operands <> note
+  end
+end
+
+@doc """
+Unwraps a setup step that must succeed before the claim under test.
+Call it with `try`. The `Err` payload becomes `Failure.Error` with its
+`Debug` rendering, so the failure names the cause without a backtrace.
+
+```koja
+conn = try Test.require(connect_trust())
+```
+"""
+fn require<T, E>(outcome: Result<T, E>) -> T ! Failure
+  match outcome
+    Result.Ok(value) -> value
+    Result.Err(error) -> fail Failure.Error("#{error}")
+  end
+end
+
+@doc """
+Ends the test as skipped. Call it with `try` from the body once the
+condition that makes the test impossible here is known.
+
+```koja
+if System.get_env("DATABASE_URL") == Option.None
+  try Test.skip("DATABASE_URL is not set")
+end
+```
+"""
+fn skip(reason: String) ! Failure
+  fail Failure.Skipped(reason)
+end
+
+@doc """
+Runs `body` in its own process and returns `true` when that process
+crashed. A body that returns is `false`. A body that is still running
+after five seconds is `false` as well.
+
+```koja
+assert Test.crashes(fn () list.get(5).unwrap() end)
+```
+"""
+fn crashes<R>(body: fn () -> R) -> Bool
+  match Task.await(Task.async(body))
+    Result.Ok(_) -> false
+    Result.Err(Process.CallError.ProcessDown) -> true
+    Result.Err(Process.CallError.Timeout) -> false
+  end
+end
+
+impl StringLiteral for Failure
+  @doc """
+  Lets `fail "message"` type check on a `Test.Failure` channel. The
+  literal becomes `Failure.Error`.
+  """
+  fn from_string(value: String) -> Self
+    Failure.Error(value)
+  end
+end
+
+impl Debug for Failure
+  @doc """
+  Renders the failure in the short diagnostic style, one line per
+  failure: `file:line:column: failure: assert expr (left: a, right: b)`.
+  """
+  fn format(self) -> String
+    match self
+      Failure.Assertion(assertion) -> assertion.render()
+      Failure.Error(message) -> message
+      Failure.Skipped(reason) -> "skipped: #{reason}"
+    end
+  end
+end

@@ -132,6 +132,16 @@ fn check_expr(
         emit_escape(position, expr, diagnostics);
     }
     match &expr.kind {
+        // Only an `assert` that failed its channel check survives
+        // resolve. Walk it so the operands still get checked.
+        ExprKind::Assert {
+            condition, message, ..
+        } => {
+            check_expr(condition, Position::Consumed, registry, diagnostics);
+            if let Some(message) = message {
+                check_expr(message, Position::Consumed, registry, diagnostics);
+            }
+        }
         ExprKind::Binary { left, right, .. } => {
             check_expr(left, Position::Escaping, registry, diagnostics);
             check_expr(right, Position::Escaping, registry, diagnostics);

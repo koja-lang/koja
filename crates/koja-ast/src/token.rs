@@ -31,6 +31,7 @@ pub enum TokenKind {
 
     // Keywords
     After,
+    Assert,
     Break,
     Builtin,
     Cond,
@@ -56,6 +57,7 @@ pub enum TokenKind {
     Self_,
     Spawn,
     Struct,
+    Test,
     Try,
     Type,
     Unless,
@@ -134,6 +136,7 @@ impl TokenKind {
         Some(match self {
             Self::After => "after",
             Self::Alias => "alias",
+            Self::Assert => "assert",
             Self::Break => "break",
             Self::Builtin => "builtin",
             Self::Cond => "cond",
@@ -160,6 +163,7 @@ impl TokenKind {
             Self::Self_ => "self",
             Self::Spawn => "spawn",
             Self::Struct => "struct",
+            Self::Test => "test",
             Self::True => "true",
             Self::Try => "try",
             Self::Type => "type",

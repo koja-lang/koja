@@ -1,4 +1,4 @@
-use koja_ast::ast::{Arg, BinOp, Expr, ExprKind, Literal, UnaryOp};
+use koja_ast::ast::{Arg, AssertSource, BinOp, Expr, ExprKind, Literal, UnaryOp};
 use koja_ast::identifier::Resolution;
 use koja_ast::span::Span;
 use koja_ast::token::TokenKind;
@@ -324,6 +324,7 @@ impl Parser {
     fn parse_prefix(&mut self) -> Expr {
         match self.peek().clone() {
             TokenKind::Ampersand => self.parse_function_reference_prefix(),
+            TokenKind::Assert => self.parse_assert_prefix(),
             TokenKind::Break => self.parse_break_recovery(),
             TokenKind::Cond => self.parse_cond_expr(),
             TokenKind::Fail => self.parse_fail_prefix(),
@@ -379,6 +380,33 @@ impl Parser {
         Expr::new(
             ExprKind::Fail {
                 value: Box::new(value),
+            },
+            self.span_from(start),
+        )
+    }
+
+    /// `assert cond` or `assert cond, message`. The condition's source
+    /// text and its line are sliced here, where the text is in hand.
+    fn parse_assert_prefix(&mut self) -> Expr {
+        let start = self.current_span();
+        self.advance(); // assert
+        let condition = self.parse_expr();
+        let message = if self.eat(&TokenKind::Comma).is_some() {
+            self.skip_newlines();
+            Some(Box::new(self.parse_expr()))
+        } else {
+            None
+        };
+        let source = AssertSource {
+            expression: self.source_slice(condition.span).to_string(),
+            file: self.display_path.clone(),
+            source_line: self.source_line(condition.span).to_string(),
+        };
+        Expr::new(
+            ExprKind::Assert {
+                condition: Box::new(condition),
+                message,
+                source,
             },
             self.span_from(start),
         )

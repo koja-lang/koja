@@ -147,6 +147,23 @@ pub fn qualified_sources() -> Vec<SourceFile> {
     sources_from_table(QUALIFIED, None)
 }
 
+/// The stdlib package that is linked only when a project loads with
+/// its tests. `Test.Failure` is the only type `assert` accepts on the
+/// error channel, so leaving the package out of `koja build` and
+/// `koja run` is what keeps `assert` out of application code.
+pub const TEST_PACKAGE: &str = "Test";
+
+/// [`qualified_sources`] with the [`TEST_PACKAGE`] removed unless
+/// `include_tests` is set. Every compile bundle in the driver goes
+/// through this so the rule has one home.
+pub fn qualified_sources_for(include_tests: bool) -> Vec<SourceFile> {
+    let mut sources = qualified_sources();
+    if !include_tests {
+        sources.retain(|file| file.package != TEST_PACKAGE);
+    }
+    sources
+}
+
 /// [`autoimport_sources`] with paths rooted at an [`extract`]ion, so
 /// diagnostics and go-to-definition land in real files.
 pub fn autoimport_sources_at(extraction_root: &Path) -> Vec<SourceFile> {

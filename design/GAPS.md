@@ -511,3 +511,27 @@ At the last use `lookup` becomes `remove`. The param register then
 dies at its `Clone`, the clone at its `LocalWrite`, and the receiver
 at the call, so the count is exactly one with no site-specific rules
 and both rules above delete.
+
+## No zero-parameter short closure
+
+Found 2026-09-13 while writing the `Test.crashes` example. A short
+closure takes exactly one parameter. `expr_to_closure_params` in
+`koja-parser/src/construct/closure.rs` accepts an identifier, `_`, or
+a parenthesized identifier on the left of `->`, and rejects the unit
+literal:
+
+```koja
+assert Test.crashes(() -> list.get(5).unwrap())
+# error: invalid closure parameter list
+```
+
+Consequence: every thunk argument takes the block form, so a one
+expression body carries `fn ()` and `end` around it.
+`Test.crashes(fn () list.get(5).unwrap() end)` and
+`Task.async(fn () compute() end)` are the common cases.
+
+**Fix path:** one more arm in `expr_to_closure_params` that maps the
+unit literal to an empty parameter list. `ShortClosure` typecheck and
+lowering do not depend on the parameter count. A parser test and a
+`tests/lang` case cover it, and the `crashes` examples switch to
+`() -> ...`.

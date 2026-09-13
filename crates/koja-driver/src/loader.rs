@@ -246,6 +246,10 @@ struct Collection {
 /// already carry a package set (e.g. a project + its deps) filter out
 /// duplicates themselves. [`ProjectLoader::sources`] does so to avoid
 /// documenting a package twice when run from inside a stdlib package.
+///
+/// The `Test` package is always here. Documentation and the shell are
+/// not compiles, so the link-only-with-tests rule that
+/// `bundle_many_with_autoimport` enforces does not apply to them.
 pub(crate) fn stdlib_sources() -> Vec<LoadedSource> {
     koja_stdlib::autoimport_sources()
         .into_iter()

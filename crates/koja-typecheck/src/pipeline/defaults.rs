@@ -392,6 +392,14 @@ fn check_default_expr(
             }
             EnumConstructionData::Unit => {}
         },
+        ExprKind::Assert {
+            condition, message, ..
+        } => {
+            check_default_expr(condition, forbidden, has_self, scopes, diagnostics);
+            if let Some(message) = message {
+                check_default_expr(message, forbidden, has_self, scopes, diagnostics);
+            }
+        }
         ExprKind::Fail { value }
         | ExprKind::Try { expr: value }
         | ExprKind::Unary { operand: value, .. }

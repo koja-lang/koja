@@ -24,7 +24,14 @@ impl Parser {
     pub(crate) fn parse_annotation(&mut self) -> Annotation {
         let start = self.current_span();
         self.advance(); // @
-        let name = self.expect_ident();
+        // `test` is a keyword since the `test "..."` block landed, but
+        // the `@test` annotation stays readable through its
+        // deprecation window.
+        let name = if self.eat(&TokenKind::Test).is_some() {
+            "test".to_string()
+        } else {
+            self.expect_ident()
+        };
         let value = self.parse_annotation_value();
         Annotation {
             name,

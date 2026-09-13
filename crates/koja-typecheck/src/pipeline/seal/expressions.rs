@@ -23,6 +23,10 @@ pub(super) fn seal_expr(expr: &Expr, mode: SealMode) {
     // construction-site value.
     seal_resolved_type(&expr.resolution, mode, expr.span);
     match &expr.kind {
+        ExprKind::Assert { .. } => seal_panic(
+            "typecheck seal saw an `ExprKind::Assert` after resolve",
+            expr.span,
+        ),
         ExprKind::Binary { left, right, .. } => {
             seal_expr(left, mode);
             seal_expr(right, mode);

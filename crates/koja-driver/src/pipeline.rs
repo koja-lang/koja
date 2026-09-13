@@ -610,7 +610,10 @@ fn run_task(
     };
 
     let program = if provider.toolchain {
-        lower_task_harness(bundle_many_with_autoimport(Vec::new(), None), provider)
+        lower_task_harness(
+            bundle_many_with_autoimport(Vec::new(), None, false),
+            provider,
+        )
     } else {
         let (config, root) = project
             .as_ref()
@@ -675,7 +678,7 @@ fn build_task_program(
     provider: &TaskProvider,
 ) -> IRProgram {
     let user_files = collect_project_sources_or_exit(config, root, false);
-    let bundled = bundle_many_with_autoimport(user_files, Some(&config.namespace()));
+    let bundled = bundle_many_with_autoimport(user_files, Some(&config.namespace()), false);
 
     let checked = check_bundle(bundled.clone(), ParseMode::File);
     check_task_conformance(&checked, task_name, provider);
@@ -787,7 +790,7 @@ fn run_script_interpreted(script: &IRScript) {
 /// Typecheck a single source file in the requested parse mode.
 /// Shared by the `Script` and `Program` arms of `cmd_check`.
 fn check_single_file(path: &Path, mode: ParseMode, emit_ast: bool) {
-    let (checked, _) = read_and_check(path, mode);
+    let (checked, _) = read_and_check(path, mode, true);
     if emit_ast {
         emit_checked_ast(&checked);
     } else {
@@ -801,8 +804,8 @@ fn check_single_file(path: &Path, mode: ParseMode, emit_ast: bool) {
 /// the registry sees their declarations before any user code that
 /// references them. Single-file callers never declare project
 /// membership, hence `skip_package: None`.
-fn bundle_with_autoimport(user: SourceFile) -> Vec<SourceFile> {
-    bundle_many_with_autoimport(vec![user], None)
+fn bundle_with_autoimport(user: SourceFile, include_tests: bool) -> Vec<SourceFile> {
+    bundle_many_with_autoimport(vec![user], None, include_tests)
 }
 
 /// Multi-file counterpart to [`bundle_with_autoimport`] for
@@ -814,9 +817,15 @@ fn bundle_with_autoimport(user: SourceFile) -> Vec<SourceFile> {
 /// `lib/json`, …) the on-disk sources already provide every decl
 /// the autoimport would inject, and a second copy would collide at
 /// registry seal time.
+///
+/// `include_tests` links the `Test` package. It is true exactly when
+/// the project's test sources are loaded (`koja test`, `koja check`),
+/// so a build never sees `Test.Failure` and `assert` cannot type
+/// check in application code.
 fn bundle_many_with_autoimport(
     user_files: Vec<SourceFile>,
     skip_package: Option<&str>,
+    include_tests: bool,
 ) -> Vec<SourceFile> {
     let mut sources = koja_stdlib::autoimport_sources();
     // Qualified stdlib packages (Crypto, HTTP, JSON, Net, …)
@@ -830,7 +839,7 @@ fn bundle_many_with_autoimport(
     // packages were lifted before user files joined the bundle).
     // Qualified deps don't tag along on a Global self-compile.
     if skip_package != Some("Global") {
-        sources.extend(koja_stdlib::qualified_sources());
+        sources.extend(koja_stdlib::qualified_sources_for(include_tests));
     }
     if let Some(skip) = skip_package {
         sources.retain(|file| file.package != skip);
@@ -845,7 +854,7 @@ fn bundle_many_with_autoimport(
 /// failure. `cmd_run` and `cmd_build` use this for the `.kojs`
 /// path.
 fn build_script(path: &Path) -> IRScript {
-    let (checked, _package) = read_and_check(path, ParseMode::Script);
+    let (checked, _package) = read_and_check(path, ParseMode::Script, false);
     match lower_script(&checked) {
         Ok(script) => script,
         Err(err) => {
@@ -857,16 +866,21 @@ fn build_script(path: &Path) -> IRScript {
 
 /// Read, bundle, parse, and typecheck one source file. Returns the
 /// sealed [`CheckedProgram`] and the derived package name. Bails
-/// the process on read / parse / typecheck failures.
-fn read_and_check(path: &Path, mode: ParseMode) -> (CheckedProgram, String) {
+/// the process on read / parse / typecheck failures. `include_tests`
+/// links the `Test` package: `koja check` on a single file passes
+/// true, the run and build paths pass false.
+fn read_and_check(path: &Path, mode: ParseMode, include_tests: bool) -> (CheckedProgram, String) {
     let source = read_source_or_exit(path);
     let package = derive_package(path);
     let checked = check_bundle(
-        bundle_with_autoimport(SourceFile {
-            package: package.clone(),
-            path: path.to_path_buf(),
-            source,
-        }),
+        bundle_with_autoimport(
+            SourceFile {
+                package: package.clone(),
+                path: path.to_path_buf(),
+                source,
+            },
+            include_tests,
+        ),
         mode,
     );
     (checked, package)
@@ -997,7 +1011,7 @@ fn resolve_output_name(output: Option<String>, path: &Path) -> String {
 fn check_project(config: &ProjectConfig, root: &Path, emit_ast: bool) {
     let user_files = collect_project_sources_or_exit(config, root, true);
     let checked = check_bundle(
-        bundle_many_with_autoimport(user_files, Some(&config.namespace())),
+        bundle_many_with_autoimport(user_files, Some(&config.namespace()), true),
         ParseMode::File,
     );
     if emit_ast {
@@ -1045,8 +1059,22 @@ fn build_project_and_keep(
 /// reports its diagnostics instead of reading as "no tests found".
 fn run_project_tests(config: &ProjectConfig, root: &Path, opts: TestOptions) {
     let namespace = config.namespace();
-    let user_files = collect_project_sources_or_exit(config, root, true);
-    let bundled = bundle_many_with_autoimport(user_files, Some(&namespace));
+    // `assert` stamps each file's path into the failure it reports at
+    // run time, and the test binary has no project root to relativize
+    // against. Hand the parser root-relative paths so a failure reads
+    // `test/stack_test.koja:12:12` like the harness lines do.
+    let user_files = collect_project_sources_or_exit(config, root, true)
+        .into_iter()
+        .map(|file| SourceFile {
+            path: file
+                .path
+                .strip_prefix(root)
+                .map(Path::to_path_buf)
+                .unwrap_or(file.path),
+            ..file
+        })
+        .collect();
+    let bundled = bundle_many_with_autoimport(user_files, Some(&namespace), true);
     let mut parsed = parse_program(bundled, ParseMode::File);
     if parsed.has_errors() {
         let sources = capture_sources(&parsed);
@@ -1317,7 +1345,7 @@ fn exec_binary(binary: &str, args: &[String], remove_after: bool) -> ! {
 fn build_project_program(config: &ProjectConfig, root: &Path) -> IRProgram {
     let user_files = collect_project_sources_or_exit(config, root, false);
     let checked = check_bundle(
-        bundle_many_with_autoimport(user_files, Some(&config.namespace())),
+        bundle_many_with_autoimport(user_files, Some(&config.namespace()), false),
         ParseMode::File,
     );
     let entry = resolve_project_entry(config);
@@ -1536,11 +1564,14 @@ mod tests {
 
     fn lower_test_script(source: &str) -> IRScript {
         let checked = check_bundle(
-            bundle_with_autoimport(SourceFile {
-                package: "Probe".to_string(),
-                path: PathBuf::from("probe.kojs"),
-                source: source.to_string(),
-            }),
+            bundle_with_autoimport(
+                SourceFile {
+                    package: "Probe".to_string(),
+                    path: PathBuf::from("probe.kojs"),
+                    source: source.to_string(),
+                },
+                false,
+            ),
             ParseMode::Script,
         );
         lower_script(&checked).expect("script lowers")

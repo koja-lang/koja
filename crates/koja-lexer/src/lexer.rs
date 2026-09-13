@@ -165,6 +165,7 @@ impl<'source> Lexer<'source> {
         match name.as_str() {
             "after" => TokenKind::After,
             "alias" => TokenKind::Alias,
+            "assert" => TokenKind::Assert,
             "break" => TokenKind::Break,
             "builtin" => TokenKind::Builtin,
             "cond" => TokenKind::Cond,
@@ -191,6 +192,7 @@ impl<'source> Lexer<'source> {
             "self" => TokenKind::Self_,
             "spawn" => TokenKind::Spawn,
             "struct" => TokenKind::Struct,
+            "test" => TokenKind::Test,
             "true" => TokenKind::True,
             "try" => TokenKind::Try,
             "type" => TokenKind::Type,
@@ -816,6 +818,7 @@ mod tests {
         let cases = [
             ("after", TokenKind::After),
             ("alias", TokenKind::Alias),
+            ("assert", TokenKind::Assert),
             ("break", TokenKind::Break),
             ("builtin", TokenKind::Builtin),
             ("cond", TokenKind::Cond),
@@ -842,6 +845,7 @@ mod tests {
             ("self", TokenKind::Self_),
             ("spawn", TokenKind::Spawn),
             ("struct", TokenKind::Struct),
+            ("test", TokenKind::Test),
             ("true", TokenKind::True),
             ("try", TokenKind::Try),
             ("type", TokenKind::Type),

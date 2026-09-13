@@ -238,7 +238,7 @@ pub fn extract_items(file: &File, project: &mut DocProject, package: &str, kind:
 
     for item in &file.items {
         match item {
-            Item::Alias(_) => {}
+            Item::Alias(_) | Item::Test(_) => {}
             Item::Builtin(b) => {
                 if let Some(db) = extract_builtin(b) {
                     pkg.builtins.push(db);

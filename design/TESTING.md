@@ -164,10 +164,12 @@ universal protocol, so the forms add no bound beyond what `==` already
 requires. Any other expression records only its source text, and `left` and
 `right` are `Option.None`.
 
-The parser captures the source text of `cond` and the full source line
-that holds it, because the typecheck phase does not keep source and the
-test binary has no file access at run time. `file` and `line` come from the
-span as well.
+A pass after parsing captures the source text of `cond` and the full
+source line that holds it, by slicing the file at the node's span. The
+parser sees tokens only and the typecheck phase does not keep source, and
+the test binary has no file access at run time, so this is the one point
+where both the AST and the text are in hand. `file` and `line` come from
+the span as well.
 
 ### The `Test` package
 
@@ -198,9 +200,8 @@ struct Assertion
 end
 
 fn require<T, E: Debug>(outcome: Result<T, E>) -> T ! Failure
-fn require<T>(option: Option<T>, what: String) -> T ! Failure
 fn skip(reason: String) ! Failure
-fn crashes(body: fn () -> ()) -> Bool
+fn crashes<R>(body: fn () -> R) -> Bool
 ```
 
 `Failure` is the only type on a test's channel, so one enum describes every
@@ -208,19 +209,22 @@ way a test can end short of a crash, and the runner matches on it.
 
 `require` is for setup, and its name says so. A test calls it with `try`
 on a step that must succeed before the claim under test, and it returns the
-unwrapped value. It is one name at two arities: `require/1` takes a
-`Result` and `require/2` takes an `Option` and a label. A domain error
-becomes `Error` with its `Debug` rendering, and a missing `Option` becomes
-`Error` with the label:
+unwrapped value. It takes a `Result`, and a domain error becomes `Error`
+with its `Debug` rendering:
 
 ```koja
 test "decodes a payload"
   conn = try Test.require(connect_trust())
   row = try Test.require(conn.query_one("SELECT 1"))
-  value = try Test.require(row.cell(0), "cell 0")
-  assert value == "1"
+  assert row.cell(0) == Option.Some("1")
 end
 ```
+
+There is no `Option` form. Same-name functions at distinct arities are
+deferred (see MISC.md), and an `Option` in a test is one of three things
+with a home already. A claim about it is an `assert`, as above. A gate on
+it is `Test.skip`. A fixture bug is `unwrap`, which panics with the line
+under process isolation.
 
 The name is deliberate. An earlier draft called this `Test.ok`, and
 `try Test.ok(connect_trust())` read as the assertion under test when it was
@@ -245,7 +249,7 @@ on an abnormal exit:
 
 ```koja
 test "rejects an index past the end"
-  assert Test.crashes(fn -> list.get(5) end)
+  assert Test.crashes(fn () list.get(5).unwrap() end)
 end
 ```
 
@@ -442,11 +446,11 @@ A panic in a test body is `Crashed`, one red line with the stack trace, and
 the run continues. That changes what counts as good style in a test.
 `value = option.unwrap()` is not a smell when each test is its own process:
 the failure is contained, and the stack trace names the line. Until a
-caller-location intrinsic exists, that is more than
-`try Test.require(option, "cell 0")` can report, since `require` carries
-no line. Use `require` when the failure message matters, and `unwrap` when
-the line does. `Test.crashes` is the same isolation applied on purpose: it
-is the one place a test wants the panic.
+caller-location intrinsic exists, that is more than `try Test.require(...)`
+can report, since `require` carries no line. Use `require` when the domain
+error's rendering matters, and `unwrap` when the line does. `Test.crashes`
+is the same isolation applied on purpose: it is the one place a test wants
+the panic.
 
 ### Reporters
 
@@ -576,9 +580,9 @@ The following surfaces change with the keywords. Later implementation plans
 must cover each one.
 
 - Lexer: `test` and `assert` tokens.
-- Parser: `Item::Test` and struct-member tests, `ExprKind::Assert` with the
-  captured expression text and source line, `@test` still parsed as an
-  annotation.
+- Parser: `Item::Test` and struct-member tests, `ExprKind::Assert`, `@test`
+  still parsed as an annotation. A post-parse pass fills the expression
+  text and source line from the file by span.
 - Typecheck: channel construction for `test`, `assert` desugaring beside
   `fail` in the error channel resolver, the `@test` deprecation warning,
   `test` items stripped when tests are not loaded, completion `KEYWORDS`.
@@ -714,19 +718,53 @@ visual style is kept as a specification.
 
 ## Phases
 
-1. `Test` package with `Test.Failure`, `require`, `skip`, `crashes`, and
-   the `StringLiteral` conformance, the `assert` statement, and a
-   harness that accepts any `E: Debug` payload and renders `Test.Failure`
-   through the existing concatenation path. Usable at once from
-   `@test fn ... ! Test.Failure`.
-2. `test` declaration and static discovery.
-3. `Test.Runner` and `Test.Reporter`: one process per case, deadlines, the
-   `dots`, `trace`, and `json` reporters, `--filter`, `--only`, `--out`,
-   and the driver's environment handoff. The generated harness shrinks to
-   the registration list.
-4. General C FFI in the interpreter, then `koja test` defaults to the
-   interpreter with `--backend llvm` for the native run, and the CI recipes
-   run both. This phase is independent of the first three and can land in
-   any order relative to them.
-5. Stdlib and scaffold migration, then the `@test` deprecation warning,
+Five phases, on four branches. Phases 1 and 2 share a branch because
+`assert` is usable from `@test` on the day it lands and `test` is a
+desugaring on top of it, so the old harness carries both. Phase 3 is its
+own branch because it is the largest piece and the one most likely to
+raise runtime questions. Phase 4 is its own branch because it adds a
+native dependency and changes the release build. Phase 5 is one pull
+request per package after the surface is on `main`. Each phase is one or
+more commits at its boundary, so a bisect can name the phase.
+
+1. **`Test` package and `assert`.** `lib/test` with `Test.Failure`,
+   `Test.Assertion`, `require`, `skip`, `crashes`, and the
+   `StringLiteral` and `Debug` conformances. The loader links `Test` only
+   when `include_tests` is set: today every qualified stdlib package is
+   linked into every build, so this is a filter with a test that
+   `koja build` cannot name `Test.Failure`. The `assert` keyword, the
+   parser node, a post-parse pass that fills `expression` and
+   `source_line` from the file by span, the error-channel resolver arm
+   beside `fail`, the formatter, and LSP traversal. The existing harness
+   accepts `@test fn ... ! Test.Failure` and renders the failure through
+   `Debug`. About 700 lines of Rust and 200 of Koja.
+2. **`test` declaration.** The `test` keyword, `Item::Test` at the top
+   level and as a struct member, and a pass before `collect` that
+   desugars each test into a synthesized `fn __test_<line> ! Test.Failure`
+   or strips it when tests are not loaded, so typecheck, IR, and both
+   backends never learn a new item kind. Discovery in `koja-test` walks
+   `Item::Test` through nested structs. The formatter, LSP symbols and
+   folding, the shell block-depth counter, and the three keyword tables.
+   About 500 lines of Rust.
+3. **Runner and reporters.** `Test.Runner`, `Case`, `Plan`, `Summary`,
+   `Outcome`, `Options.from_env`, the `Reporter` protocol, and the `dots`,
+   `trace`, and `json` reporters in both output styles. The runner is a
+   `Process` whose `M` includes `Process.ExitSignal`, and
+   `ExitReason.Crashed(CrashInfo)` supplies the crash line. The generated
+   harness shrinks to the registration list, and the driver passes flags
+   and the diagnostics style as environment. Two checks before the
+   wording above is final: whether `Ref.kill` on a case cascades to the
+   processes the case spawned, and whether the `json` stream on stderr
+   survives the exec path unchanged. About 1,200 lines of Koja and 250 of
+   Rust.
+4. **Interpreter C FFI.** A `dlopen` per `@link` library and a libffi call
+   for the extern surface, with the 89 hand-written shims kept as
+   overrides by symbol. The `libffi` crate builds bundled so the release
+   tarballs stay self-contained, which is a release pipeline change. Then
+   `koja test` defaults to the interpreter with `--backend llvm` for the
+   native run, and the CI recipes run both. Independent of the first three
+   phases. About 500 lines of Rust.
+5. **Migration.** The stdlib's tests, the `koja new` scaffold, and the
+   examples move to `test` and `assert` one package per pull request, each
+   run on both backends. Then the `@test` deprecation warning,
    `LANGUAGE.md`, `CHANGELOG.md`, `grammar.ebnf`, and the sibling repos.

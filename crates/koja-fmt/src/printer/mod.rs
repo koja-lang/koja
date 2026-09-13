@@ -169,7 +169,35 @@ impl Printer {
             Item::Protocol(p) => self.protocol_to_doc(p),
             Item::Alias(a) => alias_to_doc(a),
             Item::Constant(c) => self.constant_to_doc(c),
+            Item::Test(t) => self.test_to_doc(t),
             Item::TypeAlias(t) => type_alias_to_doc(t),
+        }
+    }
+
+    /// Formats a `test "description" ... end` block.
+    fn test_to_doc(&mut self, t: &TestDecl) -> Doc {
+        let mut parts = vec![text(format!(
+            "test \"{}\"",
+            escape_string_literal(&t.description)
+        ))];
+        self.push_header_trailing(&mut parts, t.span);
+        let dangling = self.comments.take(t.span, Slot::Dangling);
+        parts.push(self.body_to_doc(&t.body, dangling));
+        parts.push(hardline());
+        parts.push(text("end"));
+        concat(parts)
+    }
+
+    /// Builds the member entry for a `test` block inside a struct body.
+    fn member_test_entry(&mut self, t: &TestDecl) -> SeqEntry {
+        SeqEntry {
+            doc: self.test_to_doc(t),
+            end_line: t.span.end.line,
+            force_blank: true,
+            is_block: true,
+            leading: self.comments.take(t.span, Slot::Leading),
+            start_line: t.span.start.line,
+            trailing: self.comments.take(t.span, Slot::Trailing),
         }
     }
 
@@ -261,6 +289,9 @@ impl Printer {
         }
         for func in &s.functions {
             entries.push(self.member_function_entry(func));
+        }
+        for test in &s.tests {
+            entries.push(self.member_test_entry(test));
         }
         parts.push(self.type_body_to_doc(entries, s.span));
         concat(parts)

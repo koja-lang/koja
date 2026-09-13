@@ -32,6 +32,7 @@ use crate::pipeline::lift_signatures::{ResolutionScope, resolve_target_bounds};
 use crate::pipeline::local_scope::LocalScope;
 use crate::registry::{BoundOverlay, FunctionSignature, GlobalRegistry};
 
+use super::assert::{is_assert_statement, rewrite_assert_statement};
 use super::ctx::{Resolver, ResolverEnv};
 use super::error_channel::{
     channel_for_signature, hand_wrapped_result, is_fail_statement, ok_wrap_return,
@@ -535,6 +536,15 @@ pub(super) fn resolve_body_with_expected(
                     continue;
                 }
             }
+        }
+
+        // Statement-position `assert` desugars to plain statements
+        // that the loop then resolves on the next iterations.
+        if is_assert_statement(&body[index]) {
+            let statement = body.remove(index);
+            let replacement = rewrite_assert_statement(statement, resolver, diagnostics);
+            body.splice(index..index, replacement);
+            continue;
         }
 
         let trailing = index + 1 == body.len();

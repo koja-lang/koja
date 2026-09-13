@@ -523,6 +523,18 @@ fn find_in_expr(expr: &Expr, line: u32, col: u32, ctx: &LookupCtx<'_>) -> Option
                 return find_in_expr(value, line, col, ctx);
             }
         }
+        ExprKind::Assert {
+            condition, message, ..
+        } => {
+            if span_contains(&condition.span, line, col) {
+                return find_in_expr(condition, line, col, ctx);
+            }
+            if let Some(message) = message
+                && span_contains(&message.span, line, col)
+            {
+                return find_in_expr(message, line, col, ctx);
+            }
+        }
         ExprKind::Rescue {
             subject, handler, ..
         } => {
@@ -801,6 +813,13 @@ fn find_expr_at_inner(expr: &Expr, line: u32, col: u32) -> Option<&Expr> {
             find_expr_at_inner(inner, line, col)
         }
         ExprKind::Fail { value } => find_expr_at_inner(value, line, col),
+        ExprKind::Assert {
+            condition, message, ..
+        } => find_expr_at_inner(condition, line, col).or_else(|| {
+            message
+                .as_ref()
+                .and_then(|message| find_expr_at_inner(message, line, col))
+        }),
         ExprKind::Rescue {
             subject, handler, ..
         } => find_expr_at_inner(subject, line, col)

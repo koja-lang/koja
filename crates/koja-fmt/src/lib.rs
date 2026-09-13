@@ -2915,4 +2915,90 @@ mod tests {
         "#,
         );
     }
+
+    #[test]
+    fn top_level_test_block_is_stable() {
+        assert_unchanged(
+            r#"
+            test "push then pop returns the value"
+              stack = Stack.new()
+              stack.push(1)
+              assert stack.pop() == Option.Some(1)
+            end
+        "#,
+        );
+    }
+
+    #[test]
+    fn empty_test_block_keeps_end_on_its_own_line() {
+        assert_fmt(
+            r#"
+            test "nothing yet" end
+        "#,
+            r#"
+            test "nothing yet"
+            end
+        "#,
+        );
+    }
+
+    #[test]
+    fn test_description_escapes_round_trip() {
+        assert_unchanged(
+            r#"
+            test "quotes \"inside\" and a tab\t"
+              1
+            end
+        "#,
+        );
+    }
+
+    #[test]
+    fn struct_tests_print_after_functions_with_blank_lines() {
+        assert_fmt(
+            r#"
+            struct Stack
+              items: List<Int>
+              fn push(self, value: Int) -> Stack
+                self
+              end
+              test "push grows the stack"
+                assert Stack.new().push(1).size() == 1
+              end
+              test "pop shrinks the stack"
+              end
+            end
+        "#,
+            r#"
+            struct Stack
+              items: List<Int>
+
+              fn push(self, value: Int) -> Stack
+                self
+              end
+
+              test "push grows the stack"
+                assert Stack.new().push(1).size() == 1
+              end
+
+              test "pop shrinks the stack"
+              end
+            end
+        "#,
+        );
+    }
+
+    #[test]
+    fn test_block_comments_stay_in_place() {
+        assert_unchanged(
+            r#"
+            # leading
+            test "with comments" # header
+              # inside
+              1
+              # before end
+            end
+        "#,
+        );
+    }
 }
