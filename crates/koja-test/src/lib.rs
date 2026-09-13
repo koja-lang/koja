@@ -1,8 +1,9 @@
 //! Test discovery and harness synthesis for `koja test`.
 //!
 //! The driver feeds a parsed project (sources + test fixtures) into
-//! [`discover_tests`] to enumerate every `@test`-annotated function
-//! belonging to the current project. [`generate_harness`] then
+//! [`discover_tests`] to enumerate every `test "..."` block and
+//! `@test`-annotated function belonging to the current project.
+//! [`generate_harness`] then
 //! produces a Koja source string for a synthetic
 //! [`HARNESS_ENTRY`] type implementing `Process<(), (), ()>` whose
 //! `run` invokes each test, tracks pass/fail counts, and stops with
@@ -16,7 +17,7 @@
 
 use std::path::Path;
 
-use koja_ast::ast::{AnnotationValue, Item};
+use koja_ast::ast::{AnnotationValue, Function, Item, StructDecl, synthesized_test_name};
 use koja_parser::ParsedProgram;
 
 /// Name of the synthesized test-harness entry type. Reserved for
@@ -37,24 +38,46 @@ pub struct TestOptions {
     pub trace: bool,
 }
 
-/// A discovered `@test` function inside a struct, called as
-/// `StructName.fn_name()` from the generated harness. `file` and
-/// `line` record the source location (`file` is rendered relative
-/// to the project root) for navigable trace and failure output.
+/// A discovered test, called as `Outer.Inner.fn_name()` or bare
+/// `fn_name()` from the generated harness. `file` and `line` record
+/// the source location (`file` is rendered relative to the project
+/// root) for navigable trace and failure output.
 #[derive(Clone, Debug)]
 pub struct TestCase {
     pub description: String,
     pub file: String,
     pub fn_name: String,
     pub line: u32,
-    pub struct_name: String,
+    /// `None` for a top-level `test` block, the owning struct's full
+    /// path for a member (`["Outer", "Inner"]` when nested).
+    pub struct_path: Option<Vec<String>>,
 }
 
-/// Walks the parsed program and collects `@test`-annotated functions
-/// inside structs. Only scans files belonging to the current project
-/// (matched by the per-file `package` field), so deps' fixtures don't
-/// sneak into the harness. `root` relativizes each test's source path
-/// for clean, navigable `path:line` output.
+impl TestCase {
+    /// The qualified call the harness emits.
+    fn call_path(&self) -> String {
+        match &self.struct_path {
+            Some(path) => format!("{}.{}", path.join("."), self.fn_name),
+            None => self.fn_name.clone(),
+        }
+    }
+
+    /// The trace group header. Struct tests group under the struct
+    /// path, top-level tests under their file.
+    fn group(&self) -> String {
+        match &self.struct_path {
+            Some(path) => path.join("."),
+            None => self.file.clone(),
+        }
+    }
+}
+
+/// Walks the parsed program and collects top-level `test` blocks,
+/// struct-member `test` blocks (through nested structs and enums),
+/// and `@test`-annotated struct functions. Only scans files belonging
+/// to the current project (matched by the per-file `package` field),
+/// so deps' fixtures don't sneak into the harness. `root` relativizes
+/// each test's source path for clean, navigable `path:line` output.
 pub fn discover_tests(parsed: &ParsedProgram, project_name: &str, root: &Path) -> Vec<TestCase> {
     let mut tests = Vec::new();
 
@@ -69,31 +92,102 @@ pub fn discover_tests(parsed: &ParsedProgram, project_name: &str, root: &Path) -
             .unwrap_or(&file.path)
             .to_string_lossy()
             .into_owned();
+        let mut collector = Collector {
+            file: &display_path,
+            path: file.ast.path.as_deref(),
+            tests: &mut tests,
+        };
 
         for item in &file.ast.items {
-            let Item::Struct(s) = item else {
-                continue;
-            };
-            for func in &s.functions {
-                let Some(ann) = func.annotations.iter().find(|a| a.name == "test") else {
-                    continue;
-                };
-                let description = match &ann.value {
-                    Some(AnnotationValue::String(s)) => s.clone(),
-                    _ => func.name.clone(),
-                };
-                tests.push(TestCase {
-                    description,
-                    file: display_path.clone(),
-                    fn_name: func.name.clone(),
-                    line: func.span.start.line,
-                    struct_name: s.name().to_string(),
-                });
+            match item {
+                Item::Test(t) => collector.push(t.description.clone(), None, t.span.start.line),
+                _ => collector.nested(item, &[]),
             }
         }
     }
 
     tests
+}
+
+struct Collector<'a> {
+    file: &'a str,
+    path: Option<&'a Path>,
+    tests: &'a mut Vec<TestCase>,
+}
+
+impl Collector<'_> {
+    fn push(&mut self, description: String, struct_path: Option<Vec<String>>, line: u32) {
+        let fn_name = synthesized_test_name(self.path, line);
+        self.push_named(description, fn_name, struct_path, line);
+    }
+
+    fn push_named(
+        &mut self,
+        description: String,
+        fn_name: String,
+        struct_path: Option<Vec<String>>,
+        line: u32,
+    ) {
+        self.tests.push(TestCase {
+            description,
+            file: self.file.to_string(),
+            fn_name,
+            line,
+            struct_path,
+        });
+    }
+
+    fn nested(&mut self, item: &Item, owner: &[String]) {
+        match item {
+            Item::Struct(s) => self.struct_decl(s, owner),
+            Item::Enum(e) => {
+                let path = qualify(owner, &e.path);
+                for nested in &e.nested {
+                    self.nested(nested, &path);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn struct_decl(&mut self, s: &StructDecl, owner: &[String]) {
+        let path = qualify(owner, &s.path);
+        for test in &s.tests {
+            self.push(
+                test.description.clone(),
+                Some(path.clone()),
+                test.span.start.line,
+            );
+        }
+        for func in &s.functions {
+            if let Some(description) = annotated_test_description(func) {
+                self.push_named(
+                    description,
+                    func.name.clone(),
+                    Some(path.clone()),
+                    func.span.start.line,
+                );
+            }
+        }
+        for nested in &s.nested {
+            self.nested(nested, &path);
+        }
+    }
+}
+
+fn qualify(owner: &[String], path: &[String]) -> Vec<String> {
+    owner.iter().chain(path).cloned().collect()
+}
+
+/// The description of an `@test` function, or `None` when the
+/// function has no `@test` annotation. A bare `@test` falls back to
+/// the function name.
+fn annotated_test_description(func: &Function) -> Option<String> {
+    let ann = func.annotations.iter().find(|a| a.name == "test")?;
+    Some(match &ann.value {
+        Some(AnnotationValue::String(s)) => s.clone(),
+        _ => func.name.clone(),
+    })
 }
 
 /// Escape a Rust string for embedding inside a double-quoted Koja
@@ -136,15 +230,16 @@ fn trace_result_line(
 /// and fails with `fail` or `assert`. Any success type works because
 /// the harness only matches `Result.Ok(_)`, and any `E` works because
 /// the failure text interpolates `msg`, which renders a `String` bare
-/// and everything else through `Debug`. The harness calls each test as
-/// `StructName.fn_name()`, matches on the result to track pass/fail
-/// counts, and continues running all tests even when some fail. `run` stops with `StopReason.Shutdown`
-/// (exit 1) when any test failed, `StopReason.Normal` (exit 0)
-/// otherwise.
+/// and everything else through `Debug`. The harness calls each test
+/// through its [`TestCase::call_path`], matches on the result to track
+/// pass/fail counts, and continues running all tests even when some
+/// fail. `run` stops with `StopReason.Shutdown` (exit 1) when any test
+/// failed, `StopReason.Normal` (exit 0) otherwise.
 ///
 /// Default output is a row of pass/fail dots followed by a summary.
-/// [`TestOptions::trace`] swaps this for one group header per struct
-/// and one timed line per test: the test name and `path:line` are
+/// [`TestOptions::trace`] swaps this for one header per
+/// [`TestCase::group`] and one timed line per test: the test name and
+/// `path:line` are
 /// written first (no newline) so a crashing test leaves its name
 /// dangling as the last output, then ` ... ok/FAIL (Nms)` is appended
 /// once the test returns.
@@ -163,28 +258,27 @@ pub fn generate_harness(tests: &[TestCase], opts: TestOptions) -> String {
     body.push_str("  passed = 0\n");
     body.push_str("  failed = 0\n");
 
-    let mut prev_struct: Option<&str> = None;
+    let mut prev_group: Option<String> = None;
     for test in tests {
         let escaped_desc = escape_koja_string(&test.description);
         let location = escape_koja_string(&format!("{}:{}", test.file, test.line));
         let failure_append = format!(
             "      failures = failures.append(\"  #{{failed}}) {escaped_desc} ({location})\\n     #{{msg}}\")\n",
         );
+        let call = test.call_path();
 
         if opts.trace {
-            if prev_struct != Some(test.struct_name.as_str()) {
-                if prev_struct.is_some() {
+            let group = test.group();
+            if prev_group.as_deref() != Some(group.as_str()) {
+                if prev_group.is_some() {
                     body.push_str("  IO.puts(\"\")\n");
                 }
-                body.push_str(&format!("  IO.puts(\"{}\")\n", test.struct_name));
-                prev_struct = Some(test.struct_name.as_str());
+                body.push_str(&format!("  IO.puts(\"{}\")\n", escape_koja_string(&group)));
+                prev_group = Some(group);
             }
             body.push_str(&format!("  IO.write(\"  {escaped_desc} ({location})\")\n"));
             body.push_str("  test_start_ms = DateTime.now().timestamp_millis()\n");
-            body.push_str(&format!(
-                "  match {}.{}()\n",
-                test.struct_name, test.fn_name
-            ));
+            body.push_str(&format!("  match {call}()\n"));
             body.push_str("    Result.Ok(_) ->\n");
             body.push_str("      passed = passed + 1\n");
             body.push_str(
@@ -214,10 +308,7 @@ pub fn generate_harness(tests: &[TestCase], opts: TestOptions) -> String {
             body.push_str(&failure_append);
             body.push_str("  end\n");
         } else {
-            body.push_str(&format!(
-                "  match {}.{}()\n",
-                test.struct_name, test.fn_name
-            ));
+            body.push_str(&format!("  match {call}()\n"));
             body.push_str("    Result.Ok(_) ->\n");
             body.push_str("      passed = passed + 1\n");
             body.push_str(&format!("      IO.write(\"{green}.{reset}\")\n"));

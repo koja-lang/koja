@@ -1,0 +1,20 @@
+struct StackTest
+  struct Nested
+    test "a nested struct groups under its full path"
+      assert 1 + 1 == 2
+    end
+  end
+
+  test "push grows the stack"
+    assert Stack.new().push(1).size() == 1
+  end
+
+  test "peek on an empty stack is None"
+    stack = Stack.new()
+    assert stack.peek().none?()
+  end
+
+  test "a failing assert names the line"
+    assert Stack.new().push(1).size() == 2
+  end
+end

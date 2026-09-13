@@ -1,0 +1,25 @@
+alias Process.Step
+alias Process.StopReason
+
+# A `test` block next to production code. `koja run` and `koja build`
+# strip it without linking `Test`, so the `assert` never type checks
+# outside `koja test`.
+
+struct App: Process<(), (), ()>
+  fn start(config: ()) -> Result<Self, StopReason>
+    Result.Ok(App{})
+  end
+
+  fn handle(self, msg: (), from: Option<ReplyTo<()>>) -> Step<Self>
+    Step.Continue(self)
+  end
+
+  fn run(self) -> StopReason
+    Stack.new().push(1).push(2).size().print()
+    StopReason.Normal
+  end
+end
+
+test "a test block in src is stripped from builds"
+  assert Stack.new().size() == 0
+end

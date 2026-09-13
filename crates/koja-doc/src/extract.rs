@@ -557,7 +557,7 @@ fn extract_enum(e: &EnumDecl, path: &[String]) -> Option<DocEnum> {
 fn extract_function(f: &Function) -> Option<DocFunction> {
     if matches!(
         f.origin,
-        koja_ast::ast::FunctionOrigin::DefaultAdapter { .. }
+        koja_ast::ast::FunctionOrigin::DefaultAdapter { .. } | koja_ast::ast::FunctionOrigin::Test
     ) || f.visibility == Visibility::Private
         || has_doc_false(&f.annotations)
     {

@@ -6,7 +6,7 @@
 //! nodes. [`Pattern`]s appear in `match` arms, `for` loops, and destructuring
 //! assignments.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use crate::coercion::{Coercion, LiteralCoercion};
 use crate::identifier::{LocalId, Resolution, ResolvedType};
@@ -452,11 +452,29 @@ pub struct Function {
     pub span: Span,
 }
 
-/// Whether a function came from source or default-parameter normalization.
+/// Whether a function came from source, default-parameter
+/// normalization, or a desugared `test` block.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FunctionOrigin {
     DefaultAdapter { canonical_arity: usize },
     Explicit,
+    Test,
+}
+
+/// The function name a `test` block desugars to,
+/// `__test_<file stem>_<line>`. The stem keeps top-level tests in two
+/// files of one package from colliding on a line number. Typecheck and
+/// test discovery both call this so the harness names match.
+pub fn synthesized_test_name(path: Option<&Path>, line: u32) -> String {
+    let stem = path
+        .and_then(Path::file_stem)
+        .map(|stem| stem.to_string_lossy())
+        .unwrap_or_default();
+    let stem: String = stem
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { '_' })
+        .collect();
+    format!("__test_{stem}_{line}")
 }
 
 /// An `impl Protocol for Type` block. Inherent methods live in
