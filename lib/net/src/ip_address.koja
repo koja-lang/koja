@@ -83,28 +83,6 @@ struct IPAddress
     end
   end
 
-  @doc """
-  Returns true if this is an IPv4 address (4 bytes).
-  """
-  @deprecated """
-  Use `address.version == IPAddress.Version.V4` instead. This function
-  will be removed in 0.19.0.
-  """
-  fn v4?(self) -> Bool
-    self.version == IPAddress.Version.V4
-  end
-
-  @doc """
-  Returns true if this is an IPv6 address (16 bytes).
-  """
-  @deprecated """
-  Use `address.version == IPAddress.Version.V6` instead. This function
-  will be removed in 0.19.0.
-  """
-  fn v6?(self) -> Bool
-    self.version == IPAddress.Version.V6
-  end
-
   priv fn format_hextet(value: Int) -> String
     hex = Base.encode16(<<value::16>>)
     start = 0

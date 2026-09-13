@@ -10,6 +10,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Removed
 
 - **Breaking change.** The `unless` keyword is removed. Write `if not cond` instead. `not` binds tighter than `and` and `or`, so a compound condition needs parentheses (`if not (a and b)`) or De Morgan (`if a != x and b != y`). The word stays reserved, and the parser reports the replacement when it meets an old `unless` block.
+- **Breaking change.** `JSON.StringBuilder` is removed after its 0.18.2 deprecation. Accumulate with `<>` or use `String.join`.
+- **Breaking change.** `IPAddress.v4?()` and `IPAddress.v6?()` are removed after their 0.18.0 deprecation. Compare `address.version` with `IPAddress.Version.V4` or `IPAddress.Version.V6`.
 
 ## [0.18.4] - 2026-09-12
 
