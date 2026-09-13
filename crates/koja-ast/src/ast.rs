@@ -6,7 +6,7 @@
 //! nodes. [`Pattern`]s appear in `match` arms, `for` loops, and destructuring
 //! assignments.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use crate::coercion::{Coercion, LiteralCoercion};
 use crate::identifier::{LocalId, Resolution, ResolvedType};
@@ -400,6 +400,8 @@ pub struct EnumDecl {
     /// Nested type declarations, only `Item::Struct` / `Item::Enum`.
     pub nested: Vec<Item>,
     pub span: Span,
+    /// `test "..."` blocks declared in the body.
+    pub tests: Vec<TestDecl>,
 }
 
 impl EnumDecl {
@@ -452,11 +454,29 @@ pub struct Function {
     pub span: Span,
 }
 
-/// Whether a function came from source or default-parameter normalization.
+/// Whether a function came from source, default-parameter
+/// normalization, or a desugared `test` block.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FunctionOrigin {
     DefaultAdapter { canonical_arity: usize },
     Explicit,
+    Test,
+}
+
+/// The function name a `test` block desugars to,
+/// `__test_<file stem>_<line>`. The stem keeps top-level tests in two
+/// files of one package from colliding on a line number. Typecheck and
+/// test discovery both call this so the harness names match.
+pub fn synthesized_test_name(path: Option<&Path>, line: u32) -> String {
+    let stem = path
+        .and_then(Path::file_stem)
+        .map(|stem| stem.to_string_lossy())
+        .unwrap_or_default();
+    let stem: String = stem
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { '_' })
+        .collect();
+    format!("__test_{stem}_{line}")
 }
 
 /// An `impl Protocol for Type` block. Inherent methods live in
@@ -475,6 +495,9 @@ pub struct ImplBlock {
     pub trait_expr: TypeExpr,
     pub members: Vec<ImplMember>,
     pub span: Span,
+    /// `test "..."` blocks declared in the body. They become methods
+    /// on `target`.
+    pub tests: Vec<TestDecl>,
 }
 
 /// An `extend Type` block: attaches inherent methods (and type
@@ -486,6 +509,9 @@ pub struct ExtendBlock {
     pub target: TypeExpr,
     pub members: Vec<ImplMember>,
     pub span: Span,
+    /// `test "..."` blocks declared in the body. They become methods
+    /// on `target`.
+    pub tests: Vec<TestDecl>,
 }
 
 /// A member within an `impl` or `extend` block.
@@ -588,8 +614,9 @@ impl StructDecl {
 
 /// A builtin type declaration, `builtin String ... end`.
 ///
-/// Declares a compiler-owned type. The body admits only functions, so
-/// fields and nested types are syntactically unwritable.
+/// Declares a compiler-owned type. The body admits functions and
+/// `test` blocks, so fields and nested types are syntactically
+/// unwritable.
 #[derive(Debug, Clone)]
 pub struct BuiltinDecl {
     pub annotations: Vec<Annotation>,
@@ -598,6 +625,8 @@ pub struct BuiltinDecl {
     pub type_params: Vec<TypeParam>,
     pub functions: Vec<Function>,
     pub span: Span,
+    /// `test "..."` blocks declared in the body.
+    pub tests: Vec<TestDecl>,
 }
 
 impl BuiltinDecl {

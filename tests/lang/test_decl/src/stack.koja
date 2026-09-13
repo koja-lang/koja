@@ -1,0 +1,23 @@
+struct Stack
+  items: List<Int>
+
+  fn new -> Stack
+    Stack{items: []}
+  end
+
+  fn push(self, item: Int) -> Stack
+    Stack{items: self.items.append(item)}
+  end
+
+  fn size(self) -> Int
+    self.items.length()
+  end
+
+  fn peek(self) -> Option<Int>
+    self.items.get(self.items.length() - 1)
+  end
+
+  test "a struct test in src is stripped from builds"
+    assert Stack.new().push(7).peek() == Option.Some(7)
+  end
+end

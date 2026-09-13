@@ -93,8 +93,12 @@ end
 ```
 
 - `test` is a keyword. The description is a string literal and is required.
-- A test may appear at the top level of a file or as a member of a struct,
-  beside functions and nested types.
+- A test may appear at the top level of a file or as a member wherever a
+  `fn` gets a concrete owner type: a `struct`, `enum`, `impl`, `extend`, or
+  `builtin` body. A member test becomes a method on that type, so it can
+  reach the type's `priv` members. A `protocol` body rejects `test`, since
+  a protocol has no concrete type to call. Its tests belong in the `impl`
+  block of a conforming type.
 - The body has no parameters and no `self`. The success type is `()` and
   the error channel is `Test.Failure`. There is no `! E` form. A domain
   error enters the channel through `try Test.require(...)`, which renders it
@@ -329,9 +333,11 @@ struct ParserTest
 end
 ```
 
-The runner names a test by its struct path and description:
-`ParserTest.Literals` then `parses a decimal integer`. Top-level tests are
-grouped under their file path. This reuses a namespace unit the language
+The runner names a test by its owner and description:
+`ParserTest.Literals` then `parses a decimal integer`. A struct, enum, or
+builtin test groups under the type path, an `impl` test under
+`Type: Protocol`, an `extend` test under the target type, and a top-level
+test under its file path. This reuses a namespace unit the language
 already has, keeps discovery static, and reads like Swift Testing suites to
 a model. A `describe "text"` keyword would add only a sentence in place of a
 PascalCase group name. It stays deferred until nested structs have been used
@@ -581,8 +587,8 @@ must cover each one.
 
 - Lexer: `test` and `assert` tokens.
 - Parser: `Item::Test` and struct-member tests, `ExprKind::Assert`, `@test`
-  still parsed as an annotation. A post-parse pass fills the expression
-  text and source line from the file by span.
+  still parsed as an annotation. The parser slices the expression text and
+  source line from its own source while it builds the node.
 - Typecheck: channel construction for `test`, `assert` desugaring beside
   `fail` in the error channel resolver, the `@test` deprecation warning,
   `test` items stripped when tests are not loaded, completion `KEYWORDS`.
@@ -733,19 +739,26 @@ more commits at its boundary, so a bisect can name the phase.
    when `include_tests` is set: today every qualified stdlib package is
    linked into every build, so this is a filter with a test that
    `koja build` cannot name `Test.Failure`. The `assert` keyword, the
-   parser node, a post-parse pass that fills `expression` and
-   `source_line` from the file by span, the error-channel resolver arm
-   beside `fail`, the formatter, and LSP traversal. The existing harness
+   parser node with `expression` and `source_line` sliced from the
+   parser's own source, the error-channel resolver arm beside `fail`, the
+   formatter, and LSP traversal. The existing harness
    accepts `@test fn ... ! Test.Failure` and renders the failure through
    `Debug`. About 700 lines of Rust and 200 of Koja.
 2. **`test` declaration.** The `test` keyword, `Item::Test` at the top
-   level and as a struct member, and a pass before `collect` that
-   desugars each test into a synthesized `fn __test_<line> ! Test.Failure`
-   or strips it when tests are not loaded, so typecheck, IR, and both
-   backends never learn a new item kind. Discovery in `koja-test` walks
-   `Item::Test` through nested structs. The formatter, LSP symbols and
-   folding, the shell block-depth counter, and the three keyword tables.
-   About 500 lines of Rust.
+   level and as a member of `struct`, `enum`, `impl`, `extend`, and
+   `builtin` bodies, and a pass before `collect` that desugars each test
+   into a synthesized `fn __test_<file stem>_<line> ! Test.Failure` or
+   strips it when tests are not loaded, so typecheck, IR, and both
+   backends never learn a new item kind. The stem keeps two files with a
+   test on the same line from colliding. Top-level tests are
+   package-private and member tests are public, because `priv` on a
+   method is type-private and the harness lives outside the type. The
+   protocol-member check in an `impl` block skips desugared tests, since
+   they exist only under `koja test` and widen nothing. Discovery in
+   `koja-test` walks every body through nested types and groups `impl`
+   tests as `Type: Protocol`. The formatter, LSP symbols and folding, the
+   shell block-depth counter, and the three keyword tables. About 700
+   lines of Rust.
 3. **Runner and reporters.** `Test.Runner`, `Case`, `Plan`, `Summary`,
    `Outcome`, `Options.from_env`, the `Reporter` protocol, and the `dots`,
    `trace`, and `json` reporters in both output styles. The runner is a

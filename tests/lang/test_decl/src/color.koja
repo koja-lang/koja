@@ -1,0 +1,45 @@
+protocol Named
+  fn name(self) -> String
+end
+
+enum Color
+  Red
+  Green
+  Blue
+
+  fn primary?(self) -> Bool
+    match self
+      Color.Red -> true
+      Color.Green -> true
+      Color.Blue -> false
+    end
+  end
+
+  test "red is primary"
+    assert Color.Red.primary?()
+  end
+end
+
+impl Named for Color
+  fn name(self) -> String
+    match self
+      Color.Red -> "red"
+      Color.Green -> "green"
+      Color.Blue -> "blue"
+    end
+  end
+
+  test "names the lowercase color"
+    assert Color.Green.name() == "green"
+  end
+end
+
+extend Stack
+  fn doubled(self) -> Stack
+    Stack{items: self.items.append(self.size())}
+  end
+
+  test "doubled appends the size"
+    assert Stack.new().push(4).doubled().size() == 2
+  end
+end

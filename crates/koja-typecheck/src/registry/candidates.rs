@@ -11,9 +11,9 @@ use super::{GlobalKind, GlobalRegistry, VisibilityScope};
 
 /// Koja language keywords offered as completions.
 pub const KEYWORDS: &[&str] = &[
-    "break", "builtin", "cond", "const", "else", "end", "enum", "extend", "false", "fn", "for",
-    "if", "impl", "in", "loop", "match", "priv", "protocol", "receive", "return", "self", "spawn",
-    "struct", "true", "type", "when", "while",
+    "assert", "break", "builtin", "cond", "const", "else", "end", "enum", "extend", "false", "fn",
+    "for", "if", "impl", "in", "loop", "match", "priv", "protocol", "receive", "return", "self",
+    "spawn", "struct", "test", "true", "type", "when", "while",
 ];
 
 /// What kind of declaration or member a [`Candidate`] names.

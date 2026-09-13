@@ -519,6 +519,7 @@ fn is_input_complete(source: &str) -> bool {
             | TokenKind::Protocol
             | TokenKind::Receive
             | TokenKind::Struct
+            | TokenKind::Test
             | TokenKind::Unless
             | TokenKind::While => block_depth += 1,
             TokenKind::End => block_depth -= 1,
@@ -681,6 +682,12 @@ mod tests {
             Ok(rendered) => assert_eq!(rendered.as_deref(), Some("\"hi\"")),
             Err(error) => panic!("expected quoted string render, got:\n{error}"),
         }
+    }
+
+    #[test]
+    fn test_block_waits_for_end() {
+        assert!(!is_input_complete("test \"adds\"\n  assert 1 + 1 == 2"));
+        assert!(is_input_complete("test \"adds\"\n  assert 1 + 1 == 2\nend"));
     }
 
     #[test]

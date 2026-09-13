@@ -568,8 +568,10 @@ mod tests {
     use super::*;
 
     fn diag(file: FileId) -> KojaDiagnostic {
-        let mut span = Span::default();
-        span.file = file;
+        let span = Span {
+            file,
+            ..Span::default()
+        };
         KojaDiagnostic::error("boom", span)
     }
 

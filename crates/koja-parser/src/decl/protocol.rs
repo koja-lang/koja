@@ -49,6 +49,17 @@ impl Parser {
                         );
                     }
                 }
+                TokenKind::Test => {
+                    let span = self.current_span();
+                    self.error_with_hint(
+                        "`test` is not valid in a protocol body".to_string(),
+                        "a protocol has no concrete type to test. Put the test in the \
+                         `impl` block of a conforming type"
+                            .to_string(),
+                        span,
+                    );
+                    self.parse_test_decl();
+                }
                 _ => {
                     let span = self.current_span();
                     self.error(
@@ -94,14 +105,17 @@ impl Parser {
         let (return_type, error_type) = self.parse_return_signature();
 
         self.skip_newlines();
-        let body =
-            if !self.at(&TokenKind::End) && !self.at(&TokenKind::Fn) && !self.at(&TokenKind::At) {
-                let stmts = self.parse_block();
-                self.expect(&TokenKind::End);
-                Some(stmts)
-            } else {
-                None
-            };
+        let body = if !self.at(&TokenKind::End)
+            && !self.at(&TokenKind::Fn)
+            && !self.at(&TokenKind::At)
+            && !self.at(&TokenKind::Test)
+        {
+            let stmts = self.parse_block();
+            self.expect(&TokenKind::End);
+            Some(stmts)
+        } else {
+            None
+        };
 
         ProtocolMethod {
             annotations,

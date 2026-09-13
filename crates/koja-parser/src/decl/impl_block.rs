@@ -2,11 +2,18 @@
 //! Bare `impl Type` is rejected with a migration diagnostic and
 //! recovered as [`ExtendBlock`] so the rest of the file still parses.
 
-use koja_ast::ast::{ExtendBlock, ImplBlock, ImplMember, Item, Visibility};
+use koja_ast::ast::{ExtendBlock, ImplBlock, ImplMember, Item, TestDecl, Visibility};
 use koja_ast::token::TokenKind;
 
 use crate::decl::struct_decl::TypeBodyMember;
 use crate::parser::Parser;
+
+/// The parsed body of an `impl` or `extend` block.
+#[derive(Default)]
+pub(crate) struct ImplBody {
+    pub(crate) members: Vec<ImplMember>,
+    pub(crate) tests: Vec<TestDecl>,
+}
 
 impl Parser {
     pub(crate) fn parse_impl_item(&mut self) -> Item {
@@ -25,33 +32,35 @@ impl Parser {
                     .to_string(),
                 impl_span,
             );
-            let members = self.parse_impl_members();
+            let body = self.parse_impl_members();
             self.expect(&TokenKind::End);
             return Item::Extend(ExtendBlock {
                 target: first_type,
-                members,
+                members: body.members,
                 span: self.span_from(start),
+                tests: body.tests,
             });
         }
         let (target, target_bounds) = self.parse_impl_target();
-        let members = self.parse_impl_members();
+        let body = self.parse_impl_members();
         self.expect(&TokenKind::End);
 
         Item::Impl(ImplBlock {
             target,
             target_bounds,
             trait_expr: first_type,
-            members,
+            members: body.members,
             span: self.span_from(start),
+            tests: body.tests,
         })
     }
 
-    /// Parse the body of an `impl` or `extend` block (methods +
-    /// inline `type` aliases). Leaves the trailing `end` for the
-    /// caller to consume.
-    pub(crate) fn parse_impl_members(&mut self) -> Vec<ImplMember> {
+    /// Parse the body of an `impl` or `extend` block (methods, inline
+    /// `type` aliases, and `test` blocks). Leaves the trailing `end`
+    /// for the caller to consume.
+    pub(crate) fn parse_impl_members(&mut self) -> ImplBody {
         self.skip_newlines();
-        let mut members = Vec::new();
+        let mut body = ImplBody::default();
         while !self.at(&TokenKind::End) && !self.at_eof() {
             self.skip_newlines();
             if self.at(&TokenKind::End) {
@@ -66,7 +75,7 @@ impl Parser {
                     let member_span = self.current_span();
                     match self.parse_type_body_member("impl") {
                         TypeBodyMember::Function(func) => {
-                            members.push(ImplMember::Function(*func));
+                            body.members.push(ImplMember::Function(*func));
                         }
                         TypeBodyMember::Nested(_) => {
                             self.error_with_hint(
@@ -83,13 +92,14 @@ impl Parser {
                 }
                 TokenKind::Type => {
                     let alias = self.parse_type_alias(Vec::new(), Visibility::Public);
-                    members.push(ImplMember::TypeAlias(alias));
+                    body.members.push(ImplMember::TypeAlias(alias));
                 }
+                TokenKind::Test => body.tests.push(self.parse_test_decl()),
                 _ => {
                     let span = self.current_span();
                     self.error(
                         format!(
-                            "expected function or type alias in block body, found {}",
+                            "expected function, type alias, or test in block body, found {}",
                             self.peek()
                         ),
                         span,
@@ -99,6 +109,6 @@ impl Parser {
             }
             self.skip_newlines();
         }
-        members
+        body
     }
 }

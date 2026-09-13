@@ -1374,6 +1374,47 @@ fn lang_test_assert() {
     }
 }
 
+/// `test "..."` blocks end to end. `koja test --trace` runs top-level
+/// blocks grouped under their file, struct and enum blocks under the
+/// type path (nested included), `impl` blocks under `Type: Protocol`,
+/// `extend` blocks under the target, and reports a failing `assert` at
+/// its line.
+/// `koja run` on both backends strips the blocks in `src/` without
+/// linking `Test`. One test because both commands share the fixture's
+/// build dir.
+#[test]
+fn lang_test_decl() {
+    let (stdout, stderr, code) = run_koja_test_in("test_decl", &["--trace", "--no-color"]);
+    assert_eq!(
+        code, 1,
+        "the fixture has one deliberate failure\nstdout:\n{stdout}\nstderr:\n{stderr}"
+    );
+    for needle in [
+        "src/app.koja\n  a test block in src is stripped from builds (src/app.koja:23) ... ok",
+        "Color\n  red is primary (src/color.koja:18) ... ok",
+        "Color: Named\n  names the lowercase color (src/color.koja:32) ... ok",
+        "Stack\n  doubled appends the size (src/color.koja:42) ... ok",
+        "a struct test in src is stripped from builds (src/stack.koja:20) ... ok",
+        "StackTest\n  push grows the stack (test/stack_test.koja:8) ... ok",
+        "peek on an empty stack is None (test/stack_test.koja:12) ... ok",
+        "a failing assert names the line (test/stack_test.koja:17) ... FAIL",
+        "StackTest.Nested\n  a nested struct groups under its full path (test/stack_test.koja:3) ... ok",
+        "test/top_level_test.koja\n  a top-level test groups under its file (test/top_level_test.koja:1) ... ok",
+        "two tests may share a description (test/top_level_test.koja:5) ... ok",
+        "two tests may share a description (test/top_level_test.koja:9) ... ok",
+        "a trailing expression needs no unit (test/top_level_test.koja:13) ... ok",
+        "test/stack_test.koja:18:12: failure: assert Stack.new().push(1).size() == 2 (left: 1, right: 2)",
+        "12 successful tests. 1 failures.",
+    ] {
+        assert!(
+            stdout.contains(needle),
+            "expected stdout to contain {needle:?}, got:\n{stdout}"
+        );
+    }
+
+    run_project_dir_with(&lang_dir().join("test_decl"), "test_decl", &[]);
+}
+
 /// Write a minimal project (koja.toml + a clean `src` file + an empty
 /// `test` dir) to a fresh temp dir and return its root. Built per
 /// test rather than committed as a fixture because these tests plant

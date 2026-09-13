@@ -74,9 +74,9 @@ pub(crate) fn collect_file_decls(
             }
             Item::Impl(_) => {}
             Item::Extend(_) => {}
-            // Test blocks desugar to functions in the pass before
-            // collect, or are dropped when `Test` is not linked.
-            Item::Test(_) => {}
+            Item::Test(_) => {
+                unreachable!("desugar turns test blocks into functions or drops them")
+            }
             Item::Constant(constant) => {
                 register_constant(constant, package, registry, diagnostics);
             }

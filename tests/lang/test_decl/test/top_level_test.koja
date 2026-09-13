@@ -1,0 +1,15 @@
+test "a top-level test groups under its file"
+  assert Stack.new().size() == 0
+end
+
+test "two tests may share a description"
+  assert true
+end
+
+test "two tests may share a description"
+  assert not false
+end
+
+test "a trailing expression needs no unit"
+  Stack.new().push(1)
+end

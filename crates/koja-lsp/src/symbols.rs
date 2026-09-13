@@ -160,6 +160,17 @@ fn collect_workspace_symbols(file: &File, query: &str, results: &mut Vec<SymbolI
                         ));
                     }
                 }
+                for t in &b.tests {
+                    if matches(&t.description) {
+                        results.push(symbol_info(
+                            &t.description,
+                            SymbolKind::EVENT,
+                            &uri,
+                            &t.span,
+                            Some(b.name().to_string()),
+                        ));
+                    }
+                }
             }
             Item::Function(f) => {
                 if matches(&f.name) {
@@ -225,6 +236,7 @@ fn collect_workspace_symbols(file: &File, query: &str, results: &mut Vec<SymbolI
                 }
                 collect_member_workspace_symbols(
                     &imp.members,
+                    &imp.tests,
                     &type_expr_label(&imp.target),
                     &uri,
                     query,
@@ -234,6 +246,7 @@ fn collect_workspace_symbols(file: &File, query: &str, results: &mut Vec<SymbolI
             Item::Extend(ext) => {
                 collect_member_workspace_symbols(
                     &ext.members,
+                    &ext.tests,
                     &type_expr_label(&ext.target),
                     &uri,
                     query,
@@ -260,7 +273,7 @@ fn collect_type_workspace_symbols(
             &e.span,
             &e.functions,
             &e.nested,
-            &[][..],
+            &e.tests[..],
         ),
         Item::Struct(s) => (
             s.name(),
@@ -308,9 +321,10 @@ fn collect_type_workspace_symbols(
     }
 }
 
-/// Collects the function members of an `impl`/`extend` block.
+/// Collects the function members and tests of an `impl`/`extend` block.
 fn collect_member_workspace_symbols(
     members: &[ImplMember],
+    tests: &[TestDecl],
     container: &str,
     uri: &Uri,
     query: &str,
@@ -326,6 +340,17 @@ fn collect_member_workspace_symbols(
                 SymbolKind::METHOD,
                 uri,
                 &f.span,
+                Some(container.to_string()),
+            ));
+        }
+    }
+    for t in tests {
+        if matches(&t.description) {
+            results.push(symbol_info(
+                &t.description,
+                SymbolKind::EVENT,
+                uri,
+                &t.span,
                 Some(container.to_string()),
             ));
         }
@@ -364,14 +389,7 @@ fn build_document_symbols(file: &File) -> Vec<DocumentSymbol> {
                 }
                 let range = span_to_range(&imp.span);
                 let target_name = type_expr_label(&imp.target);
-                let children: Vec<DocumentSymbol> = imp
-                    .members
-                    .iter()
-                    .filter_map(|m| match m {
-                        ImplMember::Function(f) => Some(function_symbol(f)),
-                        _ => None,
-                    })
-                    .collect();
+                let children = member_symbols(&imp.members, &imp.tests);
 
                 #[allow(deprecated)]
                 symbols.push(DocumentSymbol {
@@ -392,14 +410,7 @@ fn build_document_symbols(file: &File) -> Vec<DocumentSymbol> {
             Item::Extend(ext) => {
                 let range = span_to_range(&ext.span);
                 let target_name = type_expr_label(&ext.target);
-                let children: Vec<DocumentSymbol> = ext
-                    .members
-                    .iter()
-                    .filter_map(|m| match m {
-                        ImplMember::Function(f) => Some(function_symbol(f)),
-                        _ => None,
-                    })
-                    .collect();
+                let children = member_symbols(&ext.members, &ext.tests);
 
                 #[allow(deprecated)]
                 symbols.push(DocumentSymbol {
@@ -481,9 +492,22 @@ fn build_document_symbols(file: &File) -> Vec<DocumentSymbol> {
 }
 
 /// Builds a [`DocumentSymbol`] for a builtin declaration.
+/// Children of an `impl`/`extend` block: its methods, then its tests.
+fn member_symbols(members: &[ImplMember], tests: &[TestDecl]) -> Vec<DocumentSymbol> {
+    members
+        .iter()
+        .filter_map(|m| match m {
+            ImplMember::Function(f) => Some(function_symbol(f)),
+            _ => None,
+        })
+        .chain(tests.iter().map(test_symbol))
+        .collect()
+}
+
 fn builtin_symbol(b: &BuiltinDecl) -> DocumentSymbol {
     let range = span_to_range(&b.span);
-    let children: Vec<DocumentSymbol> = b.functions.iter().map(function_symbol).collect();
+    let mut children: Vec<DocumentSymbol> = b.functions.iter().map(function_symbol).collect();
+    children.extend(b.tests.iter().map(test_symbol));
     #[allow(deprecated)]
     DocumentSymbol {
         name: b.name().to_string(),
@@ -556,6 +580,7 @@ fn enum_symbol(e: &EnumDecl) -> DocumentSymbol {
         .collect();
     children.extend(nested_symbols(&e.nested));
     children.extend(e.functions.iter().map(function_symbol));
+    children.extend(e.tests.iter().map(test_symbol));
     #[allow(deprecated)]
     DocumentSymbol {
         name: e.name().to_string(),

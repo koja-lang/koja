@@ -2989,6 +2989,46 @@ mod tests {
     }
 
     #[test]
+    fn enum_impl_and_extend_tests_are_stable() {
+        assert_unchanged(
+            r#"
+            enum Color
+              Red
+              Green
+
+              fn primary?(self) -> Bool
+                true
+              end
+
+              test "red is primary" # header
+                assert Color.Red.primary?()
+              end
+            end
+
+            impl Display for Color
+              fn format(self) -> String
+                "red"
+              end
+
+              test "formats red"
+                assert Color.Red.format() == "red"
+              end
+            end
+
+            extend List<Int>
+              fn total(self) -> Int
+                0
+              end
+
+              test "total of empty is zero"
+                assert [].total() == 0
+              end
+            end
+        "#,
+        );
+    }
+
+    #[test]
     fn test_block_comments_stay_in_place() {
         assert_unchanged(
             r#"

@@ -10,8 +10,9 @@
 use std::collections::HashMap;
 
 use koja_ast::ast::{
-    Diagnostic, Expr, ExprKind, ExtendBlock, Function, ImplBlock, ImplMember, MatchArm, Param,
-    Pattern, ProtocolMethod, Statement, StringPart, TypeExpr, TypeParam, Visibility,
+    Diagnostic, Expr, ExprKind, ExtendBlock, Function, FunctionOrigin, ImplBlock, ImplMember,
+    MatchArm, Param, Pattern, ProtocolMethod, Statement, StringPart, TypeExpr, TypeParam,
+    Visibility,
 };
 use koja_ast::identifier::{GlobalRegistryId, Identifier, Resolution, ResolvedType};
 use koja_ast::span::Span;
@@ -1247,8 +1248,10 @@ fn verify_protocol_conformance(
         // Type-private helpers may live alongside the protocol
         // methods they support. Only public extras are rejected,
         // since they would silently widen the type's public surface
-        // from inside a conformance block.
-        if function.visibility == Visibility::Private {
+        // from inside a conformance block. Desugared `test` blocks
+        // are public so the harness can call them, and exist only
+        // under `koja test`, so they widen nothing.
+        if function.visibility == Visibility::Private || function.origin == FunctionOrigin::Test {
             continue;
         }
         let matches_receiver_mismatch = definition.methods.iter().any(|method| {
