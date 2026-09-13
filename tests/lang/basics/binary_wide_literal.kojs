@@ -1,0 +1,17 @@
+# A literal segment wider than 64 bits has to compare every byte, not
+# only the low eight. The second subject differs from the pattern in
+# its first byte, which is the one a 64-bit compare would drop.
+fn classify(bytes: Binary) -> String
+  match bytes
+    <<0::80, 0xFFFF::16, a, b, c, d>> -> "mapped #{a}.#{b}.#{c}.#{d}"
+    <<0x0102030405060708090A::80, tail::8>> -> "counting then #{tail}"
+    _ -> "other"
+  end
+end
+
+IO.puts(classify(<<0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xFF, 0xFF, 192, 0, 2, 128>>))
+IO.puts(classify(<<1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xFF, 0xFF, 192, 0, 2, 128>>))
+IO.puts(classify(<<0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0xFF, 0xFF, 192, 0, 2, 128>>))
+IO.puts(classify(<<0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xFF, 0xFE, 192, 0, 2, 128>>))
+IO.puts(classify(<<1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 7>>))
+IO.puts(classify(<<0, 2, 3, 4, 5, 6, 7, 8, 9, 10, 7>>))

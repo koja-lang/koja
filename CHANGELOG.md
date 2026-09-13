@@ -9,9 +9,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- The `Test` package, with `Test.Failure`, `Test.Assertion`, `Test.require`, `Test.skip`, and `Test.crashes`. It links only for `koja test` and `koja check`, so a build cannot name `Test.Failure` or leave an `assert` in production code.
-- The `assert` keyword. `assert a == b` fails a `! Test.Failure` function with the source text, file, line, and both operands rendered through `Debug`. `assert cond, "message"` adds a message. Any other condition records its source text.
-- The `test "description" ... end` declaration at the top level and inside `struct`, `enum`, `impl`, `extend`, and `builtin` bodies. Each block becomes a `! Test.Failure` function named `__test_<file stem>_<line>` under `koja test` and is dropped from every other command, so tests can live next to the code they cover in `src/`. `koja test --trace` groups top-level tests under their file, type members under the type path, `impl` tests under `Type: Protocol`, and `extend` tests under the target type.
+- The `test "description" ... end` declaration. A test block goes at the top level of a file or inside a `struct`, `enum`, `impl`, `extend`, or `builtin` body, so tests can sit next to the code they cover in `src/`. Blocks compile only under `koja test` and are dropped from every other command. Existing `@test` functions keep working alongside them.
+- The `assert` keyword, for test bodies. `assert a == b` fails the test with the source text, file, line, and both operands rendered through `Debug`. `assert cond, "message"` adds a message. Any other condition records its source text.
+- The `Test` package. `Test.Failure` is the one error type a test body can fail with. `Test.require` unwraps a setup step that must succeed, `Test.skip` ends a test as skipped with a reason, and `Test.crashes` checks that a closure panics. The package also holds the runner and its reporters, so `koja test` is a Koja program. It links only for `koja test` and `koja check`, so a build cannot name `Test.Failure` or leave an `assert` in production code.
+- `koja test` flags. `--reporter <name>` selects `dots` (the default), `trace`, or `json`, and `--trace` stays as an alias for `--reporter trace`. The `json` reporter writes one event per line to stderr, or to a file with `--out <path>`, for CI and editors. `--timeout <ms>` sets the deadline for each test. `--backend {interpreter,llvm}` picks the backend the way `koja run` does.
+
+### Changed
+
+- `koja test` runs on the interpreter by default and falls back to LLVM when the project declares a C extern the interpreter cannot call. Pass `--backend llvm` for the native run.
+- `koja test` runs each test in its own process. A crash or a hang is one failed test instead of the end of the run. The deadline is per test and defaults to 60 seconds, replacing the 60 second limit on the whole run.
+- `koja test` output follows the compiler's diagnostics style. `--trace` groups tests under their file, type, `Type: Protocol`, or extend target. A failed assertion draws its source line with the expression underlined and both operands labeled in the pretty style, or prints one `file:line:column: failure: ...` line in the short style. `--diagnostics`, `KOJA_DIAGNOSTICS`, `--no-color`, and `NO_COLOR` apply to `koja test` as they do to `koja check`, so piped output carries no color.
+- `koja format` keeps the members of a type body in source order. A `test` block, a nested type, and a function stay where the author put them instead of grouping by kind.
+
+### Fixed
+
+- A binary pattern literal segment wider than 64 bits, such as `<<0::80, rest: Binary>>`, now matches correctly. The interpreter panicked on the width and compiled code compared only part of the segment, so a value with a set high byte matched `<<0::80>>`.
+- A `receive` in a helper method of a process whose message type includes `Process.ExitSignal` no longer fails LLVM code generation with `local slot not registered`.
 
 ### Removed
 

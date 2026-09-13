@@ -114,6 +114,19 @@ fn style() -> RenderStyle {
     })
 }
 
+/// The resolved format, for output that follows the diagnostics
+/// style without being a diagnostic. `koja test` hands it to the
+/// test reporters.
+pub fn current_format() -> DiagnosticFormat {
+    style().format
+}
+
+/// Whether the resolved style colors its output. See
+/// [`current_format`].
+pub fn color_enabled() -> bool {
+    style().color
+}
+
 /// Render diagnostics in the process style. The returned block has
 /// no trailing newline. Pretty rendering degrades gracefully: an
 /// empty source keeps the header and location lines, an unresolved

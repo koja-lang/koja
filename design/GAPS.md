@@ -535,3 +535,78 @@ unit literal to an empty parameter list. `ShortClosure` typecheck and
 lowering do not depend on the parameter count. A parser test and a
 `tests/lang` case cover it, and the `crashes` examples switch to
 `() -> ...`.
+
+---
+
+## No monotonic clock and no sub-millisecond time
+
+Found 2026-09-13 while building the `Test` runner. The only clock the
+runtime exposes is `koja_time_now_millis`, read through
+`DateTime.now().timestamp_millis()`. It is wall time, so a clock
+adjustment during a measurement moves the result, and it is whole
+milliseconds, so anything faster than one millisecond measures as zero.
+
+Consequence: `koja test --trace` reports `0ms` for most unit tests, and
+a benchmark or a timeout written in Koja has the same floor. The `Test`
+package keeps the unit in one place (`Outcome` and the `json` reporter)
+and the human reporters call one `elapsed_label` helper, so the swap
+touches one type.
+
+**Fix path:** two runtime externs, `koja_time_now_micros` for wall time
+and `koja_time_monotonic_nanos` for an `Instant` type that only
+supports `now`, `elapsed`, and subtraction. `Duration` gains micro and
+nanosecond constructors and accessors. `Outcome` then carries a
+`Duration` and the reporters print sub-millisecond values.
+
+---
+
+## `assert` operands lose contextual typing
+
+Found 2026-09-13 while migrating the postgres-koja tests. The `assert`
+desugaring binds each operand of a comparison to a temporary before the
+comparison, so the operands are typed alone and the right one never
+sees the left one's type:
+
+```koja
+(cache, missed) = cache.hit("k")
+assert missed == Option.None
+# error: cannot infer type parameter `T` of `Global.Option` from unit variant `None`
+```
+
+The same comparison in an `if` typechecks, because `==` infers a unit
+variant from the other operand. The `assert` form has to spell the
+type (`none: Option<String> = Option.None`) or switch to a predicate
+(`assert missed.none?()`), and the predicate form gives up the operand
+rendering in the failure.
+
+**Fix path:** in the `assert` desugar, typecheck the right operand with
+the left operand's type as the expected type before binding it, the way
+the `==` resolver already does for the plain expression. A
+`tests/lang/test_*` fixture with `assert x == Option.None` and
+`assert Message.decode(frame) == Backend.ReadyForQuery` covers both the
+generic and the plain unit variant.
+
+---
+
+## `_` is a typed local, not a discard
+
+Found 2026-09-13 while migrating the postgres-koja tests. Assigning to
+`_` declares a local named `_` with the value's type, so a second
+`_ = ...` of another type in the same body is a reassignment error:
+
+```koja
+_ = conn.close()          # Result<(), Error>
+_ = try setup(conn)       # QueryResult
+# error: cannot reassign `_` from `QueryResult` to `Result<Unit, Error>`
+# because local types are fixed at declaration
+```
+
+Consequence: a body that discards two results of different types has to
+drop the binding on the second (`try setup(conn)` as a bare statement)
+or invent names for values it never reads.
+
+**Fix path:** treat `_` on the left of `=` as a discard in the assign
+resolver, so it typechecks the right side, marks the value as used, and
+binds nothing. Pattern positions already treat `_` this way. A
+`tests/lang` case with two differently typed discards in one body covers
+it.

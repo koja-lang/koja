@@ -1,0 +1,13 @@
+struct ShortTest
+  test "a passing test"
+    assert 1 + 1 == 2
+  end
+
+  test "a failing test"
+    assert 1 + 1 == 3
+  end
+
+  test "a skipped test"
+    try Test.skip("not today")
+  end
+end

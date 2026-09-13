@@ -234,7 +234,11 @@ impl Printer {
 
     /// Renders a type body (members between the header and `end`),
     /// indented, with the block's dangling comments before `end`.
-    fn type_body_to_doc(&mut self, entries: Vec<SeqEntry>, owner: Span) -> Doc {
+    /// Members print in source order. The AST keeps fields, nested
+    /// types, functions, and `test` blocks in separate lists, so the
+    /// entries arrive grouped by kind and sort back by line here.
+    fn type_body_to_doc(&mut self, mut entries: Vec<SeqEntry>, owner: Span) -> Doc {
+        entries.sort_by_key(|entry| entry.start_line);
         let dangling = self.comments.take(owner, Slot::Dangling);
         let body = if entries.is_empty() && dangling.is_empty() {
             nil()

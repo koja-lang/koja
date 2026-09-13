@@ -1,36 +1,4 @@
 struct RunnerTest
-  priv fn spec(
-    description: String,
-    line: Int,
-    body: fn () -> Result<(), Failure>,
-  ) -> Spec
-
-    Spec{
-      description: description,
-      file: "test/runner_test.koja",
-      group: "RunnerTest",
-      line: line,
-      run: body,
-    }
-  end
-
-  priv fn passes ! Failure
-    ()
-  end
-
-  priv fn fails ! Failure
-    fail "boom"
-  end
-
-  priv fn skips ! Failure
-    try skip("no database")
-  end
-
-  priv fn crashes_body ! Failure
-    missing: Option<Int> = Option.None
-    _ = missing.unwrap()
-  end
-
   test "the runner reports every outcome kind and stops with Shutdown"
     path = "/tmp/koja_test_runner.jsonl"
 
@@ -87,6 +55,38 @@ struct RunnerTest
     assert try require(probe.call(RunnerProbe.Ask{}, 30000)) == "normal"
 
     _ = File.delete(path)
+  end
+
+  priv fn spec(
+    description: String,
+    line: Int,
+    body: fn () -> Result<(), Failure>,
+  ) -> Spec
+
+    Spec{
+      description: description,
+      file: "test/runner_test.koja",
+      group: "RunnerTest",
+      line: line,
+      run: body,
+    }
+  end
+
+  priv fn passes ! Failure
+    ()
+  end
+
+  priv fn fails ! Failure
+    fail "boom"
+  end
+
+  priv fn skips ! Failure
+    try skip("no database")
+  end
+
+  priv fn crashes_body ! Failure
+    missing: Option<Int> = Option.None
+    _ = missing.unwrap()
   end
 end
 
