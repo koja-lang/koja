@@ -44,7 +44,7 @@ struct FailureTest
 
   @test "crashes is true for a body that panics"
   fn test_crashes_true ! Failure
-    if not crashes(fn () -> () Kernel.panic("on purpose") end)
+    if not crashes(fn () Kernel.panic("on purpose") end)
       fail "expected the body to crash"
     end
   end

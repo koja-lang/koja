@@ -200,9 +200,8 @@ struct Assertion
 end
 
 fn require<T, E: Debug>(outcome: Result<T, E>) -> T ! Failure
-fn require<T>(option: Option<T>, what: String) -> T ! Failure
 fn skip(reason: String) ! Failure
-fn crashes(body: fn () -> ()) -> Bool
+fn crashes<R>(body: fn () -> R) -> Bool
 ```
 
 `Failure` is the only type on a test's channel, so one enum describes every
@@ -210,19 +209,22 @@ way a test can end short of a crash, and the runner matches on it.
 
 `require` is for setup, and its name says so. A test calls it with `try`
 on a step that must succeed before the claim under test, and it returns the
-unwrapped value. It is one name at two arities: `require/1` takes a
-`Result` and `require/2` takes an `Option` and a label. A domain error
-becomes `Error` with its `Debug` rendering, and a missing `Option` becomes
-`Error` with the label:
+unwrapped value. It takes a `Result`, and a domain error becomes `Error`
+with its `Debug` rendering:
 
 ```koja
 test "decodes a payload"
   conn = try Test.require(connect_trust())
   row = try Test.require(conn.query_one("SELECT 1"))
-  value = try Test.require(row.cell(0), "cell 0")
-  assert value == "1"
+  assert row.cell(0) == Option.Some("1")
 end
 ```
+
+There is no `Option` form. Same-name functions at distinct arities are
+deferred (see MISC.md), and an `Option` in a test is one of three things
+with a home already. A claim about it is an `assert`, as above. A gate on
+it is `Test.skip`. A fixture bug is `unwrap`, which panics with the line
+under process isolation.
 
 The name is deliberate. An earlier draft called this `Test.ok`, and
 `try Test.ok(connect_trust())` read as the assertion under test when it was
@@ -247,7 +249,7 @@ on an abnormal exit:
 
 ```koja
 test "rejects an index past the end"
-  assert Test.crashes(fn -> list.get(5) end)
+  assert Test.crashes(fn () list.get(5).unwrap() end)
 end
 ```
 
@@ -444,11 +446,11 @@ A panic in a test body is `Crashed`, one red line with the stack trace, and
 the run continues. That changes what counts as good style in a test.
 `value = option.unwrap()` is not a smell when each test is its own process:
 the failure is contained, and the stack trace names the line. Until a
-caller-location intrinsic exists, that is more than
-`try Test.require(option, "cell 0")` can report, since `require` carries
-no line. Use `require` when the failure message matters, and `unwrap` when
-the line does. `Test.crashes` is the same isolation applied on purpose: it
-is the one place a test wants the panic.
+caller-location intrinsic exists, that is more than `try Test.require(...)`
+can report, since `require` carries no line. Use `require` when the domain
+error's rendering matters, and `unwrap` when the line does. `Test.crashes`
+is the same isolation applied on purpose: it is the one place a test wants
+the panic.
 
 ### Reporters
 
@@ -726,7 +728,7 @@ request per package after the surface is on `main`. Each phase is one or
 more commits at its boundary, so a bisect can name the phase.
 
 1. **`Test` package and `assert`.** `lib/test` with `Test.Failure`,
-   `Test.Assertion`, `require/1`, `require/2`, `skip`, `crashes`, and the
+   `Test.Assertion`, `require`, `skip`, `crashes`, and the
    `StringLiteral` and `Debug` conformances. The loader links `Test` only
    when `include_tests` is set: today every qualified stdlib package is
    linked into every build, so this is a filter with a test that

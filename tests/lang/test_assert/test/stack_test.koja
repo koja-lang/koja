@@ -32,8 +32,8 @@ struct StackTest
 
   @test "crashes sees a panic"
   fn test_crashes ! Test.Failure
-    assert Test.crashes(fn () -> () Kernel.panic("boom") end)
-    assert not Test.crashes(fn () () end)
+    assert Test.crashes(fn () Kernel.panic("boom") end)
+    assert not Test.crashes(fn () 42 end)
   end
 
   @test "fail with a string literal"
