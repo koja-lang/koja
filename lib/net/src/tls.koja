@@ -388,7 +388,7 @@ struct TLSSession
   priv fn configure_verification(ctx: CPtr<UInt8>, config: TLSConfig)
     -> Bool ! TLSError
 
-    unless config.verify
+    if not config.verify
       return true
     end
 

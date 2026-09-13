@@ -34,9 +34,9 @@ fn if_with_bool_condition_resolves_to_unit() {
 }
 
 #[test]
-fn unless_with_bool_condition_resolves_to_unit() {
+fn if_not_with_bool_condition_resolves_to_unit() {
     let source = "
-        unless false
+        if not false
           1
         end
         ";
@@ -52,16 +52,6 @@ fn if_with_int_condition_diagnoses() {
         end
         ";
     assert_script_fails_with(source, &["`if` condition must be `Bool`"]);
-}
-
-#[test]
-fn unless_with_int_condition_diagnoses() {
-    let source = "
-        unless 1
-          2
-        end
-        ";
-    assert_script_fails_with(source, &["`unless` condition must be `Bool`"]);
 }
 
 #[test]
@@ -201,9 +191,9 @@ fn ternary_with_int_condition_diagnoses() {
 }
 
 #[test]
-fn nested_if_inside_unless_resolves_to_unit() {
+fn nested_if_inside_if_not_resolves_to_unit() {
     let source = "
-        unless false
+        if not false
           if true
             1
           end

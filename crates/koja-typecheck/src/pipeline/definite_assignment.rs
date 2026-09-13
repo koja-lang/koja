@@ -373,9 +373,9 @@ impl Checker<'_, '_> {
             }
             ExprKind::Try { expr: inner } => self.check_expr(inner, state),
             ExprKind::Unary { operand, .. } => self.check_expr(operand, state),
-            ExprKind::Unless { condition, body } | ExprKind::While { condition, body } => {
-                // `unless` has no else arm and a `while` body may run
-                // zero times: neither contributes past itself.
+            ExprKind::While { condition, body } => {
+                // A `while` body may run zero times, so it contributes
+                // nothing past itself.
                 self.check_expr(condition, state);
                 let mut body_state = state.clone();
                 self.check_body(body, &mut body_state);

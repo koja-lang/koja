@@ -597,7 +597,6 @@ pub(super) fn is_block_expr(expr: &Expr) -> bool {
             | ExprKind::Cond { .. }
             | ExprKind::For { .. }
             | ExprKind::Loop { .. }
-            | ExprKind::Unless { .. }
             | ExprKind::While { .. }
             | ExprKind::Closure { .. }
             | ExprKind::Receive { .. }

@@ -289,10 +289,6 @@ fn check_expr(
         ExprKind::Unary { operand, .. } => {
             check_expr(operand, Position::Escaping, registry, diagnostics);
         }
-        ExprKind::Unless { condition, body } => {
-            check_expr(condition, Position::Escaping, registry, diagnostics);
-            check_body(body, Position::Escaping, registry, diagnostics);
-        }
         ExprKind::While { condition, body } => {
             check_expr(condition, Position::Escaping, registry, diagnostics);
             check_body(body, Position::Escaping, registry, diagnostics);

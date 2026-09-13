@@ -27,7 +27,7 @@ use super::closures::{lower_block_closure, lower_short_closure, synthesize_fn_as
 use super::constants::{constant_value_from_registry, pools_in_constant_pool};
 use super::control_flow::{
     CondLowering, IfLowering, TernaryLowering, lower_cond, lower_if, lower_short_circuit,
-    lower_ternary, lower_unless,
+    lower_ternary,
 };
 use super::ctx::{FnLowerCtx, LowerOutput};
 use super::enums::lower_enum_construction;
@@ -435,9 +435,6 @@ fn lower_expr_inner(
                 },
             );
             Ok((dest, block))
-        }
-        ExprKind::Unless { condition, body } => {
-            lower_unless(condition, body, ctx, block, registry, output)
         }
         ExprKind::While { condition, body } => {
             lower_while(condition, body, ctx, block, registry, output)

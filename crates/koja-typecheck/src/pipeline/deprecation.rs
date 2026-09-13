@@ -478,7 +478,7 @@ impl Walker<'_, '_> {
             }
             ExprKind::Try { expr: inner } => self.check_expr(inner),
             ExprKind::Unary { operand, .. } => self.check_expr(operand),
-            ExprKind::Unless { condition, body } | ExprKind::While { condition, body } => {
+            ExprKind::While { condition, body } => {
                 self.check_expr(condition);
                 self.check_body(body);
             }

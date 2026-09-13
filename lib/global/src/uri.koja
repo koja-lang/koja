@@ -134,7 +134,7 @@ struct URI
     i = 0
 
     while i < size
-      unless URI.unescaped_byte?(URI.byte_at(bytes, i))
+      if not URI.unescaped_byte?(URI.byte_at(bytes, i))
         if seg_start <= i - 1
           parts = parts.append(URI.text(bytes, seg_start, i - 1))
         end
@@ -377,7 +377,7 @@ struct URI
     end
 
     # Only ':' (introducing the port) may follow the host.
-    unless URI.colon_byte?(URI.byte_at(bytes, after_host))
+    if not URI.colon_byte?(URI.byte_at(bytes, after_host))
       fail URIError.InvalidURI(URI.text(bytes, after_host, after_host))
     end
 
@@ -392,7 +392,7 @@ struct URI
     # '[' opens an IPv6/IPvFuture literal.
     bracketed = start < stop and URI.byte_at(bytes, start) == BYTE_LBRACKET
 
-    unless bracketed
+    if not bracketed
       # The host ends at the port ':' or the authority's end.
       host_end =
         match URI.find_byte(bytes, BYTE_COLON, start, stop)
@@ -441,7 +441,7 @@ struct URI
     i = start
 
     while i < stop
-      unless URI.digit_byte?(URI.byte_at(bytes, i))
+      if not URI.digit_byte?(URI.byte_at(bytes, i))
         fail URIError.InvalidURI(URI.text(bytes, i, i))
       end
 
@@ -588,7 +588,7 @@ struct URI
       return Option.None
     end
 
-    unless URI.alpha_byte?(URI.byte_at(bytes, 0))
+    if not URI.alpha_byte?(URI.byte_at(bytes, 0))
       return Option.None
     end
 
@@ -601,7 +601,7 @@ struct URI
         return Option.Some(i)
       end
 
-      unless URI.scheme_byte?(b)
+      if not URI.scheme_byte?(b)
         return Option.None
       end
 
@@ -687,7 +687,7 @@ struct URI
 
         i += 3
       else
-        unless allowed(b)
+        if not allowed(b)
           fail URIError.InvalidURI(URI.text(bytes, i, i))
         end
 

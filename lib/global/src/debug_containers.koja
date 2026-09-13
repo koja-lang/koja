@@ -56,7 +56,7 @@ impl Debug for Map<K, V>
     first = true
 
     for (key, value) in self
-      unless first
+      if not first
         result = result <> ", "
       end
 
@@ -78,7 +78,7 @@ impl Debug for Set<T>
     first = true
 
     for item in self
-      unless first
+      if not first
         result = result <> ", "
       end
 

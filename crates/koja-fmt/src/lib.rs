@@ -2622,7 +2622,7 @@ mod tests {
         assert_unchanged(
             "
             fn caller(flag: Bool) -> Int ! MyError
-              unless flag
+              if not flag
                 fail MyError.Nope
               end
 

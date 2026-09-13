@@ -284,10 +284,6 @@ impl LocalIndex {
                 }
                 self.walk_expr(body);
             }
-            ExprKind::Unless { condition, body } => {
-                self.walk_expr(condition);
-                self.walk_body(body);
-            }
             ExprKind::List { elements } => {
                 for e in elements {
                     self.walk_expr(e);

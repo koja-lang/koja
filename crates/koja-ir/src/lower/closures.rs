@@ -625,10 +625,6 @@ impl CaptureWalker {
                 }
             }
             ExprKind::Unary { operand, .. } => self.visit_expr(operand),
-            ExprKind::Unless { condition, body } => {
-                self.visit_expr(condition);
-                self.visit_statements(body);
-            }
             ExprKind::While { condition, body } => {
                 self.visit_expr(condition);
                 self.visit_statements(body);

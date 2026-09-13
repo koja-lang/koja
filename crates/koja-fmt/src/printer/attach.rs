@@ -627,7 +627,7 @@ impl<'a> Attacher<'a> {
                 }
             }
 
-            ExprKind::Unless { condition, body } | ExprKind::While { condition, body } => {
+            ExprKind::While { condition, body } => {
                 self.walk_expr(condition);
                 let first_stmt = body
                     .first()

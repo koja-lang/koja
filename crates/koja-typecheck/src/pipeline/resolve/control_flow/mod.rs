@@ -1,5 +1,5 @@
-//! Control-flow expression resolution: `if` / `else`, `unless`,
-//! `cond ... end`, the `?:` ternary, and `while`.
+//! Control-flow expression resolution: `if` / `else`, `cond ... end`,
+//! the `?:` ternary, and `while`.
 //!
 //! `if`, `cond`, and ternary are value-producing when every reaching
 //! arm tail type joins. The join is strict equality (no coercion)
@@ -8,7 +8,7 @@
 //! don't constrain the join. With no expected type the arms hint
 //! each other through [`super::speculation::resolve_arms`].
 //!
-//! `unless` and `while` stay Unit-typed. Loops are statement-shaped.
+//! `while` stays Unit-typed. Loops are statement-shaped.
 //!
 //! Statement-position `for` rewrites during the body walk before its
 //! generated assignments, `loop`, and `match` nodes resolve.
@@ -164,18 +164,6 @@ impl ArmSet for TernaryArms<'_> {
             ("else".to_string(), self.else_expr.resolution.clone()),
         ]
     }
-}
-
-pub(super) fn resolve_unless(
-    condition: &mut Expr,
-    body: &mut Vec<Statement>,
-    resolver: &mut Resolver<'_>,
-    diagnostics: &mut Vec<Diagnostic>,
-) -> ResolvedType {
-    resolve_expr(condition, resolver, diagnostics);
-    require_bool_condition("unless", condition, resolver.registry, diagnostics);
-    resolve_body_with_expected(body, None, resolver, diagnostics);
-    resolver.registry.primitive("Unit")
 }
 
 /// Resolve a `cond ... end` chain: every arm's condition is a `Bool`,

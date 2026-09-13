@@ -257,12 +257,6 @@ pub(super) fn seal_expr(expr: &Expr, mode: SealMode) {
             }
         }
         ExprKind::Unary { operand, .. } => seal_expr(operand, mode),
-        ExprKind::Unless { condition, body } => {
-            seal_expr(condition, mode);
-            for stmt in body {
-                seal_statement(stmt, mode);
-            }
-        }
         ExprKind::While { condition, body } => {
             seal_expr(condition, mode);
             for stmt in body {

@@ -11,7 +11,7 @@ Koja is a statically typed, compiled language targeting native binaries via LLVM
 - [Value Semantics](#value-semantics): Rules, Copy Cost
 - [Functions](#functions): Declaration, Parameters, `return`, Private Declarations
 - [Closures and Function Types](#closures-and-function-types): Block Closures, Short Closures, Capture Semantics, Function Types
-- [Control Flow](#control-flow): `if`/`else`, `unless`, `while`, `loop`/`break`, `for`...`in`, Ternary, `cond`, Definite Assignment
+- [Control Flow](#control-flow): `if`/`else`, `while`, `loop`/`break`, `for`...`in`, Ternary, `cond`, Definite Assignment
 - [Types](#types): Primitives, Builtin Declarations, Numeric Widening, Arithmetic Faults, Unit, Strings, Structs, Enums, Nested Types, Union Types, Tuples, Generics
 - [Pattern Matching](#pattern-matching): `match`, OR Patterns
 - [Error Handling](#error-handling): `! E` Signatures, `fail`, `try`, Error Unions, `rescue`
@@ -50,6 +50,8 @@ fail, false, fn, for, if, impl, in, loop, match, not, priv,
 protocol, receive, rescue, return, self, spawn, struct, true, try,
 type, unless, when, while
 ```
+
+`unless` was removed in 0.19 but stays reserved, so the compiler can point an old `unless cond` at its replacement `if not cond`.
 
 `and` and `or` are operator-identifiers, not reserved keywords. They act as infix boolean operators in expressions (`a and b`, `x or y`) but can also be used as function or field names (for example, `option.or(default)`).
 
@@ -428,13 +430,10 @@ end
 
 There is no `else if`. For multi-way branching, use [`cond`](#cond).
 
-### `unless`
-
-`unless` executes its body when the condition is `false`. It is a
-single-branch conditional and does not accept `else`.
+Guard clauses negate the condition with `not`. `not` binds tighter than `and` and `or`, so a compound condition needs parentheses: `if not (a and b)`.
 
 ```koja
-unless ready?
+if not ready?
   "not ready".print()
 end
 ```
@@ -1318,7 +1317,7 @@ The `!` spelling is opt-in per declaration. A function declared `-> Result<T, E>
 
 ```koja
 fn read_config(path: String) -> Config ! ConfigError
-  unless File.exists?(path)
+  if not File.exists?(path)
     fail ConfigError.Missing(path)
   end
   # ...

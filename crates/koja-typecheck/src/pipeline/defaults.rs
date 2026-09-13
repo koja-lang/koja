@@ -410,15 +410,8 @@ fn check_default_expr(
             check_body(body, forbidden, has_self, scopes, diagnostics);
             scopes.pop();
         }
-        ExprKind::While {
-            condition: iterable,
-            body,
-        }
-        | ExprKind::Unless {
-            condition: iterable,
-            body,
-        } => {
-            check_default_expr(iterable, forbidden, has_self, scopes, diagnostics);
+        ExprKind::While { condition, body } => {
+            check_default_expr(condition, forbidden, has_self, scopes, diagnostics);
             check_body(body, forbidden, has_self, scopes, diagnostics);
         }
         ExprKind::If {

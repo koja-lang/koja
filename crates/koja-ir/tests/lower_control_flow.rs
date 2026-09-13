@@ -187,54 +187,6 @@ fn if_else_lowers_to_four_blocks_with_typed_merge_param() {
 }
 
 #[test]
-fn unless_swaps_then_and_else_relative_to_if() {
-    let source = "
-        fn cond_false -> Bool
-          false
-        end
-
-        unless cond_false()
-          1
-        end
-        ";
-
-    let script = lower(source);
-    let entry = entry_block(&script.blocks);
-    let IRTerminator::CondBranch {
-        else_target,
-        then_target,
-        ..
-    } = &entry.terminator
-    else {
-        panic!(
-            "expected entry to terminate in CondBranch; got {:?}",
-            entry.terminator
-        );
-    };
-
-    // For `unless`, cond=true bypasses to merge with `Unit` (then
-    // target has args), cond=false runs the body (else target has
-    // none).
-    assert_eq!(
-        then_target.args.len(),
-        1,
-        "unless's then-target should bypass body and carry a Unit arg",
-    );
-    assert!(
-        else_target.args.is_empty(),
-        "unless's else-target should branch to the body block with no args",
-    );
-
-    let merge_block = script
-        .blocks
-        .iter()
-        .find(|b| b.id == then_target.block)
-        .expect("merge-block missing");
-    assert_eq!(merge_block.label, "unless_merge");
-    assert_eq!(merge_block.params.len(), 1);
-}
-
-#[test]
 fn if_function_returns_unit() {
     let source = "
         fn cond_true -> Bool

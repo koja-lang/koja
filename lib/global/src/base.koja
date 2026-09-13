@@ -212,7 +212,7 @@ struct Base
     n = s0.bsl(18).bor(s1.bsl(12))
 
     if s2 == SEXTET_PAD
-      unless s3 == SEXTET_PAD and last
+      if not (s3 == SEXTET_PAD and last)
         fail BaseError.InvalidPadding
       end
 
@@ -226,7 +226,7 @@ struct Base
     n = n.bor(s2.bsl(6))
 
     if s3 == SEXTET_PAD
-      unless last
+      if not last
         fail BaseError.InvalidPadding
       end
 

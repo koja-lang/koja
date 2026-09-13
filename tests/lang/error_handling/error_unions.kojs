@@ -12,7 +12,7 @@ end
 type AppError = ParseError | NetError
 
 fn fetch(ok: Bool) -> String ! NetError
-  unless ok
+  if not ok
     fail NetError.Timeout
   end
 

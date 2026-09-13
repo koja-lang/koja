@@ -316,7 +316,7 @@ struct IPAddress
   priv fn parse_embedded_v4(text: String, allowed: Bool, address: String)
     -> List<Int> ! IPAddress.ParseError
 
-    unless allowed
+    if not allowed
       fail IPAddress.ParseError.Invalid(address)
     end
 

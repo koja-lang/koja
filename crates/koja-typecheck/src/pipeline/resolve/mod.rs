@@ -20,8 +20,8 @@
 //!   Shares carrier-protocol mechanics across protocol-aware
 //!   literal families.
 //! - [`strings`]: string literal resolution.
-//! - [`control_flow`]: `if` / `unless` (Unit-typed, value-producing
-//!   forms land with locals).
+//! - [`control_flow`]: `if` (Unit-typed, value-producing forms land
+//!   with locals).
 //! - [`error_channel`]: `try` / `fail` / `rescue` desugaring and
 //!   `Result.Ok` auto-wrapping for `! E` functions.
 //! - [`ops`]: literal, binary, and unary type rules.

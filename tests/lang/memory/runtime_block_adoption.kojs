@@ -10,7 +10,7 @@ struct Harness
     while i < 100
       bytes = Random.bytes(64)
 
-      unless bytes.byte_size() == 64
+      if bytes.byte_size() != 64
         Kernel.panic("wrong random byte length")
       end
 

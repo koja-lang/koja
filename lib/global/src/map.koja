@@ -34,7 +34,7 @@ impl Equality for Map<K: Equality, V: Equality>
     for (key, value) in self
       match other.get(key)
         Option.Some(other_value) ->
-          unless value.equals?(other_value)
+          if not value.equals?(other_value)
             return false
           end
 
