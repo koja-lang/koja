@@ -59,9 +59,9 @@ fn datetime_now_calls_runtime_extern_for_wall_clock() {
 }
 
 #[test]
-fn unknown_extern_surfaces_as_extern_not_supported() {
+fn unknown_extern_surfaces_as_extern_unresolved() {
     // Sanity-pin the negative path: an `@extern "C"` whose C
-    // symbol isn't registered in the eval dispatch table still
+    // symbol is neither shimmed nor findable by the loader still
     // surfaces an explicit error rather than silently returning
     // `Unit` or panicking.
     let source = dedent(
@@ -75,12 +75,12 @@ fn unknown_extern_surfaces_as_extern_not_supported() {
     let err = evaluate_script(&source)
         .expect_err("calling an unregistered extern from eval should fail at runtime");
     match err {
-        RuntimeError::ExternNotSupported { symbol } => {
+        RuntimeError::ExternUnresolved { symbol, .. } => {
             assert!(
                 symbol.contains("unregistered_runtime_symbol"),
-                "expected ExternNotSupported to mention the symbol; got `{symbol}`",
+                "expected ExternUnresolved to mention the symbol; got `{symbol}`",
             );
         }
-        other => panic!("expected ExternNotSupported, got {other:?}"),
+        other => panic!("expected ExternUnresolved, got {other:?}"),
     }
 }

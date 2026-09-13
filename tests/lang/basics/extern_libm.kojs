@@ -1,0 +1,23 @@
+# A script can call libm with no helper library built. The
+# interpreter resolves `@link "m"` through the dynamic loader and
+# calls through libffi, and the compiled path links `-lm`.
+@extern "C"
+@link "m"
+fn cos(x: Float64) -> Float64
+
+@extern "C"
+@link "m"
+fn floor(x: Float64) -> Float64
+
+# No `@link` at all, so the symbol comes from the running process,
+# which links libc.
+@extern "C"
+fn abs(x: Int32) -> Int32
+
+one: Float = cos(0.0)
+one.print()
+
+two: Float = floor(2.75)
+two.print()
+
+abs(-7).print()

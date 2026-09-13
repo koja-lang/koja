@@ -12,6 +12,39 @@ struct FFI
   fn half_c(x: Float64) -> Float64
 
   @extern "C" @link "ffi_helper"
+  fn negate_i8(x: Int8) -> Int8
+
+  @extern "C" @link "ffi_helper"
+  fn max_u8(x: UInt8) -> UInt8
+
+  @extern "C" @link "ffi_helper"
+  fn negate_i16(x: Int16) -> Int16
+
+  @extern "C" @link "ffi_helper"
+  fn max_u16(x: UInt16) -> UInt16
+
+  @extern "C" @link "ffi_helper"
+  fn max_u32(x: UInt32) -> UInt32
+
+  @extern "C" @link "ffi_helper"
+  fn negate_i64(x: Int64) -> Int64
+
+  @extern "C" @link "ffi_helper"
+  fn low_i32(x: Int64) -> Int32
+
+  @extern "C" @link "ffi_helper"
+  fn shift_u64(x: UInt64) -> UInt64
+
+  @extern "C" @link "ffi_helper"
+  fn is_even(x: Int32) -> Bool
+
+  @extern "C" @link "ffi_helper"
+  fn flip(x: Bool) -> Bool
+
+  @extern "C" @link "ffi_helper"
+  fn halve_f32(x: Float32) -> Float32
+
+  @extern "C" @link "ffi_helper"
   fn fill_array(buf: CPtr<Int32>, count: Int32, value: Int32)
 
   @extern "C" @link "ffi_helper"
@@ -44,6 +77,21 @@ struct App: Process<(), (), ()>
     # A finite float return passes the FFI finiteness trap.
     halved: Float = FFI.half_c(3.0)
     halved.print()
+
+    # Every other admissible width. Negative and above-signed-range
+    # results catch a wrong read width or extension.
+    FFI.negate_i8(100).print()
+    FFI.max_u8(1).print()
+    FFI.negate_i16(300).print()
+    FFI.max_u16(1).print()
+    FFI.max_u32(1).print()
+    FFI.low_i32(FFI.negate_i64(5)).print()
+    FFI.shift_u64(7).print()
+    FFI.is_even(4).print()
+    FFI.is_even(5).print()
+    FFI.flip(true).print()
+    quarter: Float32 = FFI.halve_f32(0.5.to_float32().unwrap())
+    quarter.print()
 
     # Phase 2: pointer FFI
     # Allocate a buffer, let C fill it, read it back

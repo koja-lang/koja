@@ -433,20 +433,28 @@ recipes run both, so every test suite doubles as a parity check between
 the two backends, an invariant the language suite fixtures check today on
 their own.
 
-Since phase 3 the driver settles the backend for `koja test` the way it
-does for `koja run`: the interpreter unless the project declares a C
-extern the interpreter cannot call, in which case it falls back to LLVM.
-Phase 4 removes the fallback cases. Today the interpreter dispatches
-`@extern "C"` calls by symbol name to hand-written shims, so a project with
-its own externs cannot run on it at all. The extern surface is
-explicit-width primitives, `Bool`, `CPtr<T>`, and `()`, with no structs by
-value, callbacks, or variadics, so a `dlopen` of each `@link` library and
-a libffi call with the declared signature cover it. The non-finite float
-check at extern call sites applies on both backends. The shims for files,
-sockets, and TLS stay as overrides keyed by symbol, because they park the
-calling process on the cooperative reactor instead of blocking. A plain C
-call that blocks still blocks the interpreter's scheduler, the same way it
-blocks one worker natively.
+The driver settles the backend for `koja test` the way it does for
+`koja run`. After lowering it resolves every `@extern "C"` the program
+declares. A symbol with a hand-written shim in the interpreter uses the
+shim. Any other symbol is looked up through the dynamic loader, first in
+the `@link` library as a shared library under the project root, then on
+the loader's own search path, then in the running process, which covers
+libc and libm. When every symbol resolves the run is interpreted and each
+foreign call goes through libffi with the declared signature. When one
+does not resolve, a bare `koja test` compiles through LLVM instead, and
+`--backend interpreter` lists every unresolved symbol and exits. The
+extern surface is explicit-width primitives, `Bool`, `CPtr<T>`, and `()`,
+with no structs by value, callbacks, or variadics, so libffi's primitive
+types cover it. The non-finite float check at extern call sites applies on
+both backends. The shims for files, sockets, and TLS stay as overrides
+keyed by symbol, because they park the calling process on the cooperative
+reactor instead of blocking. A plain C call that blocks still blocks the
+interpreter's scheduler, the same way it blocks one worker natively.
+
+The one shape that still compiles is a project whose `@link` library
+exists only as a static archive, since the loader cannot open a `.a`.
+Building the library as a shared library next to it is enough to run the
+tests on the interpreter.
 
 ### One process per test
 
@@ -781,8 +789,9 @@ Five phases, on four branches. Phases 1 and 2 share a branch because
 `assert` is usable from `@test` on the day it lands and `test` is a
 desugaring on top of it, so the old harness carries both. Phase 3 is its
 own branch because it is the largest piece and the one most likely to
-raise runtime questions. Phase 4 is its own branch because it adds a
-native dependency and changes the release build. Phase 5 is one pull
+raise runtime questions. Phase 4 is its own branch because it touches the
+interpreter's extern dispatch and the driver's backend selection and
+nothing in the test surface. Phase 5 is one pull
 request per package after the surface is on `main`. Each phase is one or
 more commits at its boundary, so a bisect can name the phase.
 
@@ -826,13 +835,15 @@ more commits at its boundary, so a bisect can name the phase.
    `--filter`, `--only`, and the `--reporter MyPkg.Type` extension point.
    About 1,200 lines of Koja and 250 of Rust.
 4. **Interpreter C FFI.** A `dlopen` per `@link` library and a libffi call
-   for the extern surface, with the 89 hand-written shims kept as
-   overrides by symbol. The `libffi` crate builds bundled so the release
-   tarballs stay self-contained, which is a release pipeline change.
-   `koja test` already settles on the interpreter and falls back to LLVM
-   for a project with an extern the interpreter cannot call. This phase
-   removes the fallback cases, and the CI recipes run both backends.
-   Independent of the first three phases. About 500 lines of Rust.
+   for the extern surface, with the hand-written shims kept as overrides
+   by symbol. The `libffi` crate links the system libffi, which the
+   `koja` binary already loads through LLVM on every supported platform,
+   so the release build did not change. The driver resolves every extern
+   after lowering and settles the backend on the result, so `koja run` and
+   `koja test` interpret an FFI project whose libraries are shared
+   libraries and compile one that ships only a static archive. The
+   language suite runs the FFI fixtures on both backends. Independent of
+   the first three phases. About 500 lines of Rust.
 5. **Migration.** The stdlib's tests, the `koja new` scaffold, and the
    examples move to `test` and `assert` one package per pull request, each
    run on both backends. Then the `@test` deprecation warning,

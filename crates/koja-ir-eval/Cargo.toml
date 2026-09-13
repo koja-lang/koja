@@ -12,6 +12,11 @@ koja-runtime-core = { path = "../koja-runtime-core" }
 # POSIX syscall externs only (koja_socket_*, koja_fd_*, koja_time_*,
 # parse_text, signals); eval never uses this crate's scheduler.
 koja-runtime-posix = { path = "../koja-runtime-posix" }
+# `system` links the libffi the host already provides. The `koja`
+# binary links it through LLVM on every supported platform, so this
+# adds no runtime dependency and no C build step.
+libffi = { version = "5", features = ["system"] }
+libloading = "0.8"
 
 [dev-dependencies]
 koja-ast = { path = "../koja-ast" }

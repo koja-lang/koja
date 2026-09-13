@@ -27,6 +27,7 @@ use koja_runtime_core::{
 
 use crate::error::RuntimeError;
 use crate::externs;
+use crate::externs::foreign::ForeignTable;
 use crate::intrinsics;
 use crate::ops::{apply_binary_op, apply_unary_op};
 use crate::reactor::EvalReactor;
@@ -54,6 +55,19 @@ impl Interpreter {
     /// them as its config, other config types zero-init via
     /// [`default_value_for_type`].
     pub fn run_program(program: &IRProgram, args: &[String]) -> Result<Value, RuntimeError> {
+        let foreign = ForeignTable::resolve(&program.packages, &[]);
+        Self::run_program_with(program, args, foreign)
+    }
+
+    /// [`Self::run_program`] with a [`ForeignTable`] the caller
+    /// resolved, so the driver can settle the backend on the same
+    /// resolution the run then uses.
+    pub fn run_program_with(
+        program: &IRProgram,
+        args: &[String],
+        foreign: ForeignTable,
+    ) -> Result<Value, RuntimeError> {
+        let _foreign = externs::foreign::install(foreign);
         let entry = program.entry_function();
         assert!(
             matches!(entry.kind, FunctionKind::ProcessEntryWrapper { .. }),
@@ -123,6 +137,16 @@ impl Interpreter {
     /// script's static [`IRScript::return_type`] is `Unit`. See
     /// [`coerce_return`] for the rationale.
     pub fn run_script(script: &IRScript) -> Result<Value, RuntimeError> {
+        let foreign = ForeignTable::resolve(&script.packages, &[]);
+        Self::run_script_with(script, foreign)
+    }
+
+    /// [`Self::run_script`] with a caller-resolved [`ForeignTable`].
+    pub fn run_script_with(
+        script: &IRScript,
+        foreign: ForeignTable,
+    ) -> Result<Value, RuntimeError> {
+        let _foreign = externs::foreign::install(foreign);
         // Run the implicit body as PID 1 under the shared cooperative
         // driver (same boot as `run_program`) so top-level `spawn` /
         // `receive` / timers / I/O engage the runtime instead of tripping
@@ -528,9 +552,17 @@ fn execute_function<'a, R: CallResolver>(
                     .link_name
                     .as_deref()
                     .unwrap_or_else(|| function.symbol.last_segment());
-                return match externs::dispatch(c_symbol, &args).await {
+                // A shim in the dispatch table wins. Anything else
+                // goes through the foreign table the run installed.
+                if let Some(result) = externs::dispatch(c_symbol, &args).await {
+                    return result;
+                }
+                return match externs::foreign::call(function, &args) {
                     Some(result) => result,
-                    None => Err(RuntimeError::ExternNotSupported {
+                    None => Err(RuntimeError::ExternUnresolved {
+                        c_name: c_symbol.to_string(),
+                        link_lib: attrs.link_lib.clone(),
+                        reason: "no foreign table was resolved for this run".to_string(),
                         symbol: function.symbol.mangled().to_string(),
                     }),
                 };
