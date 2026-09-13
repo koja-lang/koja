@@ -1,0 +1,32 @@
+@doc """
+The message a spec process sends the runner when its body returns.
+A body that crashes sends nothing, and the runner learns of it from
+the monitor's `Process.ExitSignal` instead.
+"""
+struct SpecDone
+  result: Result<(), Failure>
+end
+
+@doc """
+The process one spec body runs in. The runner spawns one per spec and
+is its parent, so everything the body spawns dies with it. `body` is
+the spec's `run` and `runner` is where the result goes.
+"""
+struct SpecProcess: Process<SpecProcess, (), ()>
+  body: fn () -> Result<(), Failure>
+  runner: Ref<SpecDone | Process.ExitSignal, ()>
+
+  fn start(config: SpecProcess) -> Self ! Process.StopReason
+    config
+  end
+
+  fn handle(self, msg: (), from: Option<ReplyTo<()>>) -> Process.Step<Self>
+    Process.Step.Continue(self)
+  end
+
+  fn run(self) -> Process.StopReason
+    result = self.body()
+    self.runner.cast(SpecDone{result: result})
+    Process.StopReason.Normal
+  end
+end

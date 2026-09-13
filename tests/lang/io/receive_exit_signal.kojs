@@ -1,0 +1,92 @@
+alias Process.ExitReason
+alias Process.ExitSignal
+alias Process.Step
+alias Process.StopReason
+
+# A hand-written `receive` whose `M` is exactly `ExitSignal`, placed as
+# the first statement of a method. The elaborate pass synthesizes the
+# exit-signal delivery arm for such a receive, and its payload local
+# has to be declared before the receive when both live in the entry
+# block. Both backends must agree.
+struct Watcher: Process<(), ExitSignal, Int>
+  fn start(config: ()) -> Result<Self, StopReason>
+    Result.Ok(Watcher{})
+  end
+
+  fn handle(self, msg: ExitSignal, from: Option<ReplyTo<Int>>) -> Step<Self>
+    Step.Continue(self)
+  end
+
+  fn run(self) -> StopReason
+    task = Task.async(fn () -> Int Kernel.panic("boom") end)
+    Process.monitor(task.pid())
+    IO.puts("watcher: #{self.wait_exit()}")
+    StopReason.Normal
+  end
+
+  priv fn wait_exit(self) -> String
+    receive
+      envelope: (ExitSignal, Option<ReplyTo<Int>>) ->
+        (signal, _) = envelope
+
+        match signal.reason
+          ExitReason.Crashed(info) -> "crashed: #{info.message}"
+          ExitReason.Normal -> "normal"
+          ExitReason.Shutdown -> "shutdown"
+          ExitReason.Killed -> "killed"
+        end
+
+      event: Process.Lifecycle ->
+        "lifecycle"
+    after 5000
+      "timeout"
+    end
+  end
+end
+
+# The two arms above also have to be exercised on a `receive` that is
+# the first statement of `run` itself, where the entry block holds the
+# receive directly.
+struct FirstStatement: Process<Ref<(), Int>, ExitSignal, Int>
+  fn start(target: Ref<(), Int>) -> Result<Self, StopReason>
+    Process.monitor(target.pid())
+    Result.Ok(FirstStatement{})
+  end
+
+  fn handle(self, msg: ExitSignal, from: Option<ReplyTo<Int>>) -> Step<Self>
+    Step.Continue(self)
+  end
+
+  fn run(self) -> StopReason
+    receive
+      envelope: (ExitSignal, Option<ReplyTo<Int>>) ->
+        (message, _) = envelope
+        IO.puts("first statement: #{message.reason}")
+        StopReason.Normal
+
+      event: Process.Lifecycle ->
+        StopReason.Shutdown
+    after 5000
+      IO.puts("first statement: timeout")
+      StopReason.Shutdown
+    end
+  end
+end
+
+fn wait_for(target: Ref<ExitSignal, Int>)
+  deadline = DateTime.now().timestamp_millis() + 5000
+
+  while target.alive?() and DateTime.now().timestamp_millis() < deadline
+    ()
+  end
+end
+
+watcher = spawn Watcher.start(())
+wait_for(watcher)
+
+quiet = Task.async(fn () -> Int 1 end)
+first = spawn FirstStatement.start(quiet)
+Task.await(quiet)
+wait_for(first)
+
+IO.puts("done")

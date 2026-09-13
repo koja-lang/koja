@@ -19,19 +19,29 @@ pub(super) struct BusinessEnvelope {
 
 /// Add a synthesized `receive` arm and declare its payload local in
 /// the entry block, so every arm local has a `LocalDecl` like the
-/// lowered ones.
+/// lowered ones. A `receive` written as the first statement of a
+/// method lives in the entry block itself, and the emitter walks
+/// instructions in order, so in that case the decl goes right before
+/// the `receive` rather than at the end of the block. It cannot go at
+/// the front, because the entry block opens with the parameter
+/// promotion prefix the emitter checks.
 pub(super) fn append_delivery_arm(
     function: &mut IRFunction,
     block_index: usize,
     receive_index: usize,
     arm: ReceiveArm,
 ) {
-    function.blocks[0]
-        .instructions
-        .push(IRInstruction::LocalDecl {
-            local: arm.payload_local,
-            ty: arm.payload_type.clone(),
-        });
+    let decl = IRInstruction::LocalDecl {
+        local: arm.payload_local,
+        ty: arm.payload_type.clone(),
+    };
+    let receive_index = if block_index == 0 {
+        function.blocks[0].instructions.insert(receive_index, decl);
+        receive_index + 1
+    } else {
+        function.blocks[0].instructions.push(decl);
+        receive_index
+    };
     let IRInstruction::Receive { arms, .. } =
         &mut function.blocks[block_index].instructions[receive_index]
     else {
