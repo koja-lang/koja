@@ -500,6 +500,14 @@ impl<'a> Printer<'a> {
                     }
                 }
             },
+            ExprKind::Assert {
+                condition, message, ..
+            } => {
+                self.expr(condition);
+                if let Some(message) = message {
+                    self.expr(message);
+                }
+            }
             ExprKind::Fail { value } => self.expr(value),
             ExprKind::FieldAccess { receiver, .. } => {
                 self.expr(receiver);
@@ -914,6 +922,7 @@ fn expr_header(expr: &Expr) -> String {
             variant,
             enum_ctor_data_label(data),
         ),
+        ExprKind::Assert { .. } => String::from("Assert"),
         ExprKind::Fail { .. } => String::from("Fail"),
         ExprKind::FieldAccess { field, .. } => format!("FieldAccess .{field}"),
         ExprKind::For { .. } => String::from("For"),
@@ -1036,7 +1045,8 @@ fn format_resolved_type(ty: &ResolvedType) -> String {
 
 fn expr_has_children(kind: &ExprKind) -> bool {
     match kind {
-        ExprKind::Binary { .. }
+        ExprKind::Assert { .. }
+        | ExprKind::Binary { .. }
         | ExprKind::BinaryLiteral { .. }
         | ExprKind::Call { .. }
         | ExprKind::Closure { .. }

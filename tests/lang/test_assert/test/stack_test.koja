@@ -1,0 +1,55 @@
+struct StackTest
+  @test "push then pop"
+  fn test_push_pop ! Test.Failure
+    stack = [1, 2, 3]
+    popped = stack.get(2)
+    assert popped == Option.Some(3)
+  end
+
+  @test "a comparison failure renders both operands"
+  fn test_comparison_failure ! Test.Failure
+    popped = 2
+    assert popped == 3
+  end
+
+  @test "a plain condition failure records the expression"
+  fn test_plain_failure ! Test.Failure
+    stack = [1]
+    assert stack.empty?(), "one element left"
+  end
+
+  @test "require unwraps a setup step"
+  fn test_require ! Test.Failure
+    value = try Test.require(StackTest.parse("42"))
+    assert value == 42
+  end
+
+  @test "skip ends the test as skipped"
+  fn test_skip ! Test.Failure
+    try Test.skip("no fixture here")
+    assert false
+  end
+
+  @test "crashes sees a panic"
+  fn test_crashes ! Test.Failure
+    assert Test.crashes(fn () -> () Kernel.panic("boom") end)
+    assert not Test.crashes(fn () () end)
+  end
+
+  @test "fail with a string literal"
+  fn test_fail_literal ! Test.Failure
+    fail "a plain message"
+  end
+
+  @test "an ordering failure renders both operands"
+  fn test_ordering_failure ! Test.Failure
+    assert [1, 2].length() > 5
+  end
+
+  priv fn parse(text: String) -> Int ! String
+    match text.to_int()
+      Result.Ok(value) -> value
+      Result.Err(_) -> fail "not a number: #{text}"
+    end
+  end
+end

@@ -221,7 +221,7 @@ fn build_rewrite(
     ]
 }
 
-fn assign_local(name: &str, value: Expr, span: Span) -> Statement {
+pub(super) fn assign_local(name: &str, value: Expr, span: Span) -> Statement {
     Statement::Assignment {
         target: LValue {
             head_resolved_type: None,
@@ -235,7 +235,7 @@ fn assign_local(name: &str, value: Expr, span: Span) -> Statement {
     }
 }
 
-fn ident(name: &str, span: Span) -> Expr {
+pub(super) fn ident(name: &str, span: Span) -> Expr {
     Expr::new(
         ExprKind::Ident {
             name: name.to_string(),
@@ -245,7 +245,7 @@ fn ident(name: &str, span: Span) -> Expr {
     )
 }
 
-fn method_call(receiver: Expr, method: &str, args: Vec<Arg>, span: Span) -> Expr {
+pub(super) fn method_call(receiver: Expr, method: &str, args: Vec<Arg>, span: Span) -> Expr {
     Expr::new(
         ExprKind::MethodCall {
             receiver: Box::new(receiver),

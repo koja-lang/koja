@@ -157,6 +157,14 @@ fn substitute_in_expr(expr: &mut Expr, args: &[ResolvedType], owner: GlobalRegis
             EnumConstructionData::Unit => {}
         },
         ExprKind::Fail { value } => substitute_in_expr(value, args, owner),
+        ExprKind::Assert {
+            condition, message, ..
+        } => {
+            substitute_in_expr(condition, args, owner);
+            if let Some(message) = message {
+                substitute_in_expr(message, args, owner);
+            }
+        }
         ExprKind::FieldAccess { receiver, .. } => substitute_in_expr(receiver, args, owner),
         ExprKind::For {
             pattern,

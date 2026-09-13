@@ -512,6 +512,14 @@ impl CaptureWalker {
                 }
             },
             ExprKind::Fail { value } => self.visit_expr(value),
+            ExprKind::Assert {
+                condition, message, ..
+            } => {
+                self.visit_expr(condition);
+                if let Some(message) = message {
+                    self.visit_expr(message);
+                }
+            }
             ExprKind::FieldAccess { receiver, .. } => self.visit_expr(receiver),
             ExprKind::For {
                 pattern,

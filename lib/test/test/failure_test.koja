@@ -1,0 +1,108 @@
+struct FailureTest
+  @test "require unwraps an Ok"
+  fn test_require_ok ! Failure
+    outcome: Result<Int, String> = Result.Ok(41)
+    value = try require(outcome)
+
+    if value != 41
+      fail "expected 41, got #{value}"
+    end
+  end
+
+  @test "require maps an Err to Failure.Error with its Debug rendering"
+  fn test_require_err ! Failure
+    outcome = FailureTest.needs_int(Result.Err(Base.Error.InvalidLength))
+
+    match outcome
+      Result.Err(Failure.Error(message)) ->
+        if message != "Base.Error.InvalidLength"
+          fail "expected Base.Error.InvalidLength, got #{message}"
+        end
+
+      _ ->
+        fail "expected Failure.Error"
+    end
+  end
+
+  @test "a string literal after fail becomes Failure.Error"
+  fn test_string_literal ! Failure
+    outcome = FailureTest.always_fails()
+
+    if outcome != Result.Err(Failure.Error("boom"))
+      fail "expected Failure.Error(boom), got #{outcome}"
+    end
+  end
+
+  @test "skip sends Failure.Skipped"
+  fn test_skip ! Failure
+    outcome = FailureTest.skips()
+
+    if outcome != Result.Err(Failure.Skipped("no database"))
+      fail "expected Failure.Skipped, got #{outcome}"
+    end
+  end
+
+  @test "crashes is true for a body that panics"
+  fn test_crashes_true ! Failure
+    if not crashes(fn () -> () Kernel.panic("on purpose") end)
+      fail "expected the body to crash"
+    end
+  end
+
+  @test "crashes is false for a body that returns"
+  fn test_crashes_false ! Failure
+    if crashes(fn () () end)
+      fail "expected the body to return"
+    end
+  end
+
+  @test "Debug renders an assertion in the short style"
+  fn test_assertion_render ! Failure
+    failure = Failure.Assertion(Assertion{
+      column: 5,
+      expression: "popped == 3",
+      file: "test/stack_test.koja",
+      left: Option.Some("2"),
+      line: 23,
+      message: Option.None,
+      right: Option.Some("3"),
+      source_line: "    assert popped == 3",
+    })
+    expected = "test/stack_test.koja:23:5: failure: assert popped == 3 (left: 2, right: 3)"
+
+    if failure.format() != expected
+      fail "got #{failure.format()}"
+    end
+  end
+
+  @test "Debug renders an assertion message"
+  fn test_assertion_render_message ! Failure
+    failure = Failure.Assertion(Assertion{
+      column: 3,
+      expression: "stack.empty?()",
+      file: "test/stack_test.koja",
+      left: Option.None,
+      line: 9,
+      message: Option.Some("drained"),
+      right: Option.None,
+      source_line: "  assert stack.empty?(), \"drained\"",
+    })
+    expected = "test/stack_test.koja:9:3: failure: assert stack.empty?(): drained"
+
+    if failure.format() != expected
+      fail "got #{failure.format()}"
+    end
+  end
+
+  priv fn needs_int(outcome: Result<Int, Base.Error>) -> Int ! Failure
+    try require(outcome)
+  end
+
+  priv fn always_fails ! Failure
+    fail "boom"
+  end
+
+  priv fn skips ! Failure
+    try skip("no database")
+  end
+end

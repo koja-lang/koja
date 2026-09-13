@@ -165,6 +165,7 @@ impl<'source> Lexer<'source> {
         match name.as_str() {
             "after" => TokenKind::After,
             "alias" => TokenKind::Alias,
+            "assert" => TokenKind::Assert,
             "break" => TokenKind::Break,
             "builtin" => TokenKind::Builtin,
             "cond" => TokenKind::Cond,
@@ -816,6 +817,7 @@ mod tests {
         let cases = [
             ("after", TokenKind::After),
             ("alias", TokenKind::Alias),
+            ("assert", TokenKind::Assert),
             ("break", TokenKind::Break),
             ("builtin", TokenKind::Builtin),
             ("cond", TokenKind::Cond),

@@ -1,4 +1,5 @@
 use std::path::Path;
+use std::rc::Rc;
 
 use koja_ast::ast::{Comment, Diagnostic, File, Item, Severity, Statement, Visibility};
 use koja_ast::span::{FileId, Position, Span};
@@ -55,6 +56,13 @@ pub(crate) struct Parser {
     pub(crate) pos: usize,
     pub(crate) errors: Vec<Diagnostic>,
     pub(crate) pending_token: Option<TokenKind>,
+    /// The text the tokens came from. `assert` slices it by span to
+    /// record the condition's source text, since no later stage keeps
+    /// the text alongside the AST.
+    pub(crate) source: Rc<str>,
+    /// The display path of the file, `test/stack_test.koja`, or
+    /// `<unknown>` for the bare-string entry points.
+    pub(crate) display_path: String,
 }
 
 /// Snapshot of `Parser` state for speculative parsing. Restoring
@@ -67,14 +75,41 @@ pub(crate) struct Checkpoint {
 }
 
 impl Parser {
-    pub(crate) fn new(lex_result: LexResult) -> Self {
+    pub(crate) fn new(lex_result: LexResult, source: &str, display_path: Option<&Path>) -> Self {
         Self {
             tokens: lex_result.tokens,
             comments: lex_result.comments,
             pos: 0,
             errors: lex_result.errors,
             pending_token: None,
+            source: Rc::from(source),
+            display_path: display_path
+                .map(|path| path.display().to_string())
+                .unwrap_or_else(|| "<unknown>".to_string()),
         }
+    }
+
+    /// The source text under `span`. Empty when the span falls
+    /// outside the text, which only a synthesized span can do.
+    pub(crate) fn source_slice(&self, span: Span) -> &str {
+        let start = span.start.offset as usize;
+        let end = span.end.offset as usize;
+        self.source.get(start..end).unwrap_or("")
+    }
+
+    /// The full line that contains `span.start`, without its line
+    /// terminator.
+    pub(crate) fn source_line(&self, span: Span) -> &str {
+        let offset = (span.start.offset as usize).min(self.source.len());
+        let line_start = self.source[..offset]
+            .rfind('\n')
+            .map(|index| index + 1)
+            .unwrap_or(0);
+        let line_end = self.source[offset..]
+            .find('\n')
+            .map(|index| offset + index)
+            .unwrap_or(self.source.len());
+        self.source[line_start..line_end].trim_end_matches('\r')
     }
 
     // =========================================================================
@@ -484,8 +519,20 @@ pub fn parse(source: &str, mode: ParseMode) -> ParseResult {
 
 /// Parses `source` with every span attributed to `file`.
 pub fn parse_in_file(source: &str, mode: ParseMode, file: FileId) -> ParseResult {
+    parse_in_file_at(source, mode, file, None)
+}
+
+/// [`parse_in_file`] with the file's display path, which `assert`
+/// records in the failure it reports. [`crate::parse_file`] passes
+/// the [`crate::SourceFile`] path.
+pub fn parse_in_file_at(
+    source: &str,
+    mode: ParseMode,
+    file: FileId,
+    display_path: Option<&Path>,
+) -> ParseResult {
     let lex_result = lex(source, file);
-    let mut parser = Parser::new(lex_result);
+    let mut parser = Parser::new(lex_result, source, display_path);
     let ast = parser.parse_file(mode);
     ParseResult {
         ast,

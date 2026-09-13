@@ -23,7 +23,7 @@ use koja_ast::ast::{Diagnostic, File, Severity};
 use koja_ast::span::FileId;
 
 use crate::ParseMode;
-use crate::parse_in_file;
+use crate::parser::parse_in_file_at;
 
 /// Derive a package's PascalCase code namespace from its lowercase
 /// snake_case manifest name (`my_app` -> `MyApp`). Total in this
@@ -83,7 +83,7 @@ impl ParsedFile {
 /// (typecheck, codegen) do not have to thread the per-file identity
 /// alongside the AST. Every span carries `file`.
 pub fn parse_file(source: SourceFile, mode: ParseMode, file: FileId) -> ParsedFile {
-    let result = parse_in_file(&source.source, mode, file);
+    let result = parse_in_file_at(&source.source, mode, file, Some(&source.path));
     let mut ast = result.ast;
     ast.path = Some(source.path.clone());
     ast.package = source.package.clone();

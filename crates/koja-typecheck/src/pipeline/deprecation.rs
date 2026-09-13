@@ -360,6 +360,14 @@ impl Walker<'_, '_> {
                 }
             }
             ExprKind::Fail { value } => self.check_expr(value),
+            ExprKind::Assert {
+                condition, message, ..
+            } => {
+                self.check_expr(condition);
+                if let Some(message) = message {
+                    self.check_expr(message);
+                }
+            }
             ExprKind::FieldAccess { receiver, .. } => self.check_expr(receiver),
             ExprKind::For {
                 pattern,

@@ -177,6 +177,16 @@ fn check_expr(
         ExprKind::Fail { value } => {
             check_expr(value, Position::Returned, registry, diagnostics);
         }
+        // Only an `assert` that failed its channel check survives
+        // resolve. Walk it so the operands still get checked.
+        ExprKind::Assert {
+            condition, message, ..
+        } => {
+            check_expr(condition, Position::Consumed, registry, diagnostics);
+            if let Some(message) = message {
+                check_expr(message, Position::Consumed, registry, diagnostics);
+            }
+        }
         ExprKind::FieldAccess { receiver, .. } => {
             check_expr(receiver, Position::Escaping, registry, diagnostics);
         }

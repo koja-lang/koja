@@ -1271,10 +1271,16 @@ fn lang_release_fault_parity_test() {
 /// Run `koja test <extra args>` in the `test_trace` fixture and return
 /// `(stdout, stderr, exit_code)`.
 fn run_koja_test_trace(extra_args: &[&str]) -> (String, String, i32) {
-    let project_dir = lang_dir().join("test_trace");
+    run_koja_test_in("test_trace", extra_args)
+}
+
+/// Run `koja test <extra args>` in the `tests/lang/<fixture>` project
+/// and return `(stdout, stderr, exit_code)`.
+fn run_koja_test_in(fixture: &str, extra_args: &[&str]) -> (String, String, i32) {
+    let project_dir = lang_dir().join(fixture);
     assert!(
         project_dir.exists(),
-        "test fixture tests/lang/test_trace/ not found"
+        "test fixture tests/lang/{fixture}/ not found"
     );
 
     let mut cmd = Command::new(koja_bin());
@@ -1337,6 +1343,35 @@ fn lang_test_trace() {
         stdout.contains("\r\u{1b}[32m  first alpha test (test/alpha_test.koja:"),
         "expected a carriage-return whole-line green rewrite, got:\n{stdout:?}"
     );
+}
+
+/// `assert`, `Test.require`, `Test.skip`, `Test.crashes`, and
+/// `fail "..."` on a `! Test.Failure` channel, end to end through the
+/// `@test` harness. Passing tests pass, and each failing test renders
+/// its `Test.Failure` through `Debug` in the short diagnostic style.
+#[test]
+fn lang_test_assert() {
+    let (stdout, stderr, code) = run_koja_test_in("test_assert", &["--trace", "--no-color"]);
+    assert_eq!(
+        code, 1,
+        "the fixture has deliberate failures\nstdout:\n{stdout}\nstderr:\n{stderr}"
+    );
+    for needle in [
+        "push then pop (test/stack_test.koja:3) ... ok",
+        "require unwraps a setup step (test/stack_test.koja:22) ... ok",
+        "crashes sees a panic (test/stack_test.koja:34)",
+        "test/stack_test.koja:12:12: failure: assert popped == 3 (left: 2, right: 3)",
+        "test/stack_test.koja:18:12: failure: assert stack.empty?(): one element left",
+        "test/stack_test.koja:46:12: failure: assert [1, 2].length() > 5 (left: 2, right: 5)",
+        "skipped: no fixture here",
+        "a plain message",
+        "3 successful tests. 5 failures.",
+    ] {
+        assert!(
+            stdout.contains(needle),
+            "expected stdout to contain {needle:?}, got:\n{stdout}"
+        );
+    }
 }
 
 /// Write a minimal project (koja.toml + a clean `src` file + an empty
@@ -1412,5 +1447,44 @@ fn lang_check_includes_test_sources() {
     assert!(
         stderr.contains("broken_test.koja"),
         "expected a diagnostic for broken_test.koja, got:\n{stderr}"
+    );
+}
+
+/// The `Test` package is linked only when tests are loaded. A `src/`
+/// file that names `Test.Failure` passes `koja check` (which loads the
+/// test directories) and fails `koja build` (which does not). This
+/// is the whole mechanism that keeps `assert` out of application code.
+#[test]
+fn lang_test_package_links_only_with_tests() {
+    let root = write_temp_project("test-package-link");
+    fs::write(
+        root.join("src/outcome.koja"),
+        "struct Outcome\n  failure: Option<Test.Failure>\nend\n",
+    )
+    .unwrap();
+
+    let (stdout, stderr, code) = run_with_timeout(|cmd| {
+        cmd.arg("check")
+            .current_dir(&root)
+            .env("KOJA_DIAGNOSTICS", "short");
+    });
+    assert_eq!(
+        code, 0,
+        "expected `koja check` to see Test.Failure\nstdout:\n{stdout}\nstderr:\n{stderr}"
+    );
+
+    let (stdout, stderr, code) = run_with_timeout(|cmd| {
+        cmd.arg("build")
+            .current_dir(&root)
+            .env("KOJA_DIAGNOSTICS", "short");
+    });
+    let _ = fs::remove_dir_all(&root);
+    assert_eq!(
+        code, 1,
+        "expected `koja build` to reject Test.Failure\nstdout:\n{stdout}\nstderr:\n{stderr}"
+    );
+    assert!(
+        stderr.contains("outcome.koja") && stderr.contains("Test.Failure"),
+        "expected a diagnostic naming Test.Failure in outcome.koja, got:\n{stderr}"
     );
 }

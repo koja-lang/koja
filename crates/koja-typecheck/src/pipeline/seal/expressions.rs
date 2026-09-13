@@ -83,6 +83,10 @@ pub(super) fn seal_expr(expr: &Expr, mode: SealMode) {
             "typecheck seal saw an `ExprKind::Fail` after resolve",
             expr.span,
         ),
+        ExprKind::Assert { .. } => seal_panic(
+            "typecheck seal saw an `ExprKind::Assert` after resolve",
+            expr.span,
+        ),
         ExprKind::FieldAccess { receiver, .. } => seal_expr(receiver, mode),
         // Resolve rewrites statement-position fors and diagnoses
         // expression-position fors. Seal should never see one.

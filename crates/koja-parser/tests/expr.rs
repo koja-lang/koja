@@ -11,7 +11,7 @@
 //! - the error-channel forms `try expr`, `fail expr`, and
 //!   `expr rescue e -> handler`
 
-use koja_ast::ast::{BinOp, ClosureParam, Expr, ExprKind, Literal, UnaryOp};
+use koja_ast::ast::{BinOp, ClosureParam, Expr, ExprKind, Item, Literal, Statement, UnaryOp};
 use koja_ast::identifier::Resolution;
 
 mod common;
@@ -402,6 +402,63 @@ fn fail_takes_a_full_expression() {
         panic!("expected Fail, got {expr:?}");
     };
     assert!(matches!(value.kind, ExprKind::EnumConstruction { .. }));
+}
+
+#[test]
+fn assert_takes_a_condition_and_captures_its_source() {
+    let expr = first_script_expr("assert popped == 3");
+    let ExprKind::Assert {
+        condition,
+        message,
+        source,
+    } = &expr.kind
+    else {
+        panic!("expected Assert, got {expr:?}");
+    };
+    assert!(is_binop(condition, BinOp::Eq));
+    assert!(message.is_none());
+    assert_eq!(source.expression, "popped == 3");
+    assert_eq!(source.source_line, "assert popped == 3");
+    assert_eq!(source.file, "<unknown>");
+}
+
+#[test]
+fn assert_takes_an_optional_message_after_a_comma() {
+    let expr = first_script_expr("assert stack.empty?(), \"drained #{n}\"");
+    let ExprKind::Assert {
+        condition,
+        message,
+        source,
+    } = &expr.kind
+    else {
+        panic!("expected Assert, got {expr:?}");
+    };
+    assert!(matches!(condition.kind, ExprKind::MethodCall { .. }));
+    let message = message.as_ref().expect("message");
+    assert!(matches!(message.kind, ExprKind::String { .. }));
+    // The captured expression stops at the comma, and the line is
+    // the whole line.
+    assert_eq!(source.expression, "stack.empty?()");
+    assert_eq!(source.source_line, "assert stack.empty?(), \"drained #{n}\"");
+}
+
+#[test]
+fn assert_source_line_keeps_indentation_and_is_the_holding_line() {
+    let file = common::parse_clean(
+        "fn check ! Test.Failure\n  x = 2\n  assert x ==\n    3, \"two lines\"\n  ()\nend\n",
+    );
+    let Item::Function(function) = &file.items[0] else {
+        panic!("expected a function");
+    };
+    let body = function.body.as_ref().expect("body");
+    let Statement::Expr(expr) = &body[1] else {
+        panic!("expected an expression statement");
+    };
+    let ExprKind::Assert { source, .. } = &expr.kind else {
+        panic!("expected Assert, got {expr:?}");
+    };
+    assert_eq!(source.expression, "x ==\n    3");
+    assert_eq!(source.source_line, "  assert x ==");
 }
 
 #[test]

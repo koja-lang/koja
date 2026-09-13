@@ -1,0 +1,4 @@
+[project]
+name = "test"
+namespace = "Test"
+version = "0.1.0"

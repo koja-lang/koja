@@ -505,6 +505,14 @@ impl<'a> Attacher<'a> {
             | ExprKind::Spawn { expr: inner }
             | ExprKind::Try { expr: inner } => self.walk_expr(inner),
             ExprKind::Fail { value } => self.walk_expr(value),
+            ExprKind::Assert {
+                condition, message, ..
+            } => {
+                self.walk_expr(condition);
+                if let Some(message) = message {
+                    self.walk_expr(message);
+                }
+            }
             ExprKind::FieldAccess { receiver, .. } => self.walk_expr(receiver),
             ExprKind::Rescue {
                 subject, handler, ..

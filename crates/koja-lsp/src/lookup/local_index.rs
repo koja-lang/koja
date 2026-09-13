@@ -299,6 +299,14 @@ impl LocalIndex {
                 self.walk_expr(inner)
             }
             ExprKind::Fail { value } => self.walk_expr(value),
+            ExprKind::Assert {
+                condition, message, ..
+            } => {
+                self.walk_expr(condition);
+                if let Some(message) = message {
+                    self.walk_expr(message);
+                }
+            }
             // The rescue binder has no LocalId in the AST (resolve
             // desugars it into a match pattern), so only the
             // subexpressions are indexed.

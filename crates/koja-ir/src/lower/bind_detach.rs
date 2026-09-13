@@ -153,6 +153,14 @@ fn collect_assigned_in_expr(expr: &Expr, assigned: &mut BTreeSet<IRLocalId>) {
             EnumConstructionData::Unit => {}
         },
         ExprKind::Fail { value } => collect_assigned_in_expr(value, assigned),
+        ExprKind::Assert {
+            condition, message, ..
+        } => {
+            collect_assigned_in_expr(condition, assigned);
+            if let Some(message) = message {
+                collect_assigned_in_expr(message, assigned);
+            }
+        }
         ExprKind::FieldAccess { receiver, .. } => collect_assigned_in_expr(receiver, assigned),
         ExprKind::For { iterable, body, .. } => {
             collect_assigned_in_expr(iterable, assigned);

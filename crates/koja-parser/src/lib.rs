@@ -10,7 +10,7 @@ mod types;
 
 pub use koja_ast::ast;
 pub use koja_ast::span::FileId;
-pub use parser::{ParseMode, ParseResult, parse, parse_in_file};
+pub use parser::{ParseMode, ParseResult, parse, parse_in_file, parse_in_file_at};
 pub use program::{
     ParsedFile, ParsedProgram, SourceFile, derive_namespace, parse_file, parse_program,
 };

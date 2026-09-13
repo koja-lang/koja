@@ -7,6 +7,7 @@ use crate::span::Span;
 
 pub fn expr_kind_label(kind: &ExprKind) -> &'static str {
     match kind {
+        ExprKind::Assert { .. } => "assert",
         ExprKind::Binary { .. } => "binary",
         ExprKind::BinaryLiteral { .. } => "binary-literal",
         ExprKind::Call { .. } => "call",

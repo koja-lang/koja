@@ -415,6 +415,17 @@ impl Printer {
 
             ExprKind::Fail { value } => concat(vec![text("fail "), self.expr_to_doc(value)]),
 
+            ExprKind::Assert {
+                condition, message, ..
+            } => {
+                let mut parts = vec![text("assert "), self.expr_to_doc(condition)];
+                if let Some(message) = message {
+                    parts.push(text(", "));
+                    parts.push(self.expr_to_doc(message));
+                }
+                concat(parts)
+            }
+
             // Breaks into the two-line idiom with `rescue` leading
             // the continuation line, mirroring how it parses.
             ExprKind::Rescue {

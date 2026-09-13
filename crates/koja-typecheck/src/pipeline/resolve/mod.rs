@@ -24,6 +24,8 @@
 //!   with locals).
 //! - [`error_channel`]: `try` / `fail` / `rescue` desugaring and
 //!   `Result.Ok` auto-wrapping for `! E` functions.
+//! - [`assert`]: statement-position `assert` desugaring onto `if` and
+//!   `fail Test.Failure.Assertion(...)`.
 //! - [`ops`]: literal, binary, and unary type rules.
 //! - [`return_type`]: trailing-expression-vs-declared-return checking.
 //! - [`speculation`]: trial resolution with rollback, so sibling
@@ -36,6 +38,7 @@
 //! [`Resolution::Local`]: koja_ast::identifier::Resolution::Local
 //! [`ResolvedType`]: koja_ast::identifier::ResolvedType
 
+mod assert;
 mod calls;
 mod closures;
 pub(crate) mod coercion;

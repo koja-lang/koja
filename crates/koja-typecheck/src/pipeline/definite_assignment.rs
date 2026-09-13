@@ -244,6 +244,14 @@ impl Checker<'_, '_> {
                 self.check_expr(value, state);
                 state.diverge();
             }
+            ExprKind::Assert {
+                condition, message, ..
+            } => {
+                self.check_expr(condition, state);
+                if let Some(message) = message {
+                    self.check_expr(message, state);
+                }
+            }
             ExprKind::FieldAccess { receiver, .. } => self.check_expr(receiver, state),
             // Post-resolve success paths never contain `For` (it
             // desugars before resolve). Walk defensively on the

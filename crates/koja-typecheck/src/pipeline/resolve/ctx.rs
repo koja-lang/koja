@@ -58,6 +58,7 @@ impl<'a> ResolverEnv<'a> {
             registry: self.registry,
             scope,
             synthetic_for_slots: 0,
+            synthetic_assert_slots: 0,
             type_param_owners,
         }
     }
@@ -158,6 +159,9 @@ pub(super) struct Resolver<'a> {
     pub scope: &'a mut LocalScope,
     /// Per-function counter for collision-free synthetic `for` locals.
     pub synthetic_for_slots: u32,
+    /// Per-function counter for the operand locals an `assert`
+    /// comparison binds.
+    pub synthetic_assert_slots: u32,
     /// Owner chain that any in-body type annotation resolves against,
     /// innermost first (function's own id when it declares
     /// type-params, then receiver). Mirrors
@@ -175,6 +179,15 @@ impl<'a> Resolver<'a> {
             .synthetic_for_slots
             .checked_add(1)
             .expect("resolve found more than 2^32 `for` loops in one function");
+        slot
+    }
+
+    pub(super) fn next_assert_slot(&mut self) -> u32 {
+        let slot = self.synthetic_assert_slots;
+        self.synthetic_assert_slots = self
+            .synthetic_assert_slots
+            .checked_add(1)
+            .expect("resolve found more than 2^32 `assert` statements in one function");
         slot
     }
 

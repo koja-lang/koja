@@ -833,6 +833,20 @@ impl Expr {
     }
 }
 
+/// The source text an `assert` failure reports. The parser fills it
+/// by slicing the file at the condition's span, because it is the one
+/// stage that holds both the AST and the text. Line and column come
+/// from the condition's span at typecheck.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AssertSource {
+    /// The condition's source text, `popped == 3`.
+    pub expression: String,
+    /// The display path of the file, `test/stack_test.koja`.
+    pub file: String,
+    /// The full line that holds the condition, indentation kept.
+    pub source_line: String,
+}
+
 /// The specific kind of an expression node.
 #[derive(Debug, Clone)]
 pub enum ExprKind {
@@ -888,6 +902,16 @@ pub enum ExprKind {
     },
     /// A parenthesized grouping: `(expr)`.
     Group { expr: Box<Expr> },
+    /// A test assertion: `assert cond` or `assert cond, message`.
+    /// Statement position only, like `fail`. Typecheck desugars it to
+    /// an `if not cond ... fail Test.Failure.Assertion(...) end` that
+    /// carries the parser-captured source text. The error channel of
+    /// the enclosing function must be `Test.Failure`.
+    Assert {
+        condition: Box<Expr>,
+        message: Option<Box<Expr>>,
+        source: AssertSource,
+    },
     /// A variable reference: `x`, `my_var`.
     Ident {
         name: String,

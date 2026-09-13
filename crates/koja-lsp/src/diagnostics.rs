@@ -40,6 +40,8 @@ struct ProjectStub {
     namespace: Option<String>,
     #[serde(default = "default_src")]
     src: Vec<String>,
+    #[serde(default = "default_test")]
+    test: Vec<String>,
 }
 
 impl ProjectStub {
@@ -59,6 +61,10 @@ struct DepStub {
 
 fn default_src() -> Vec<String> {
     vec!["src".to_string()]
+}
+
+fn default_test() -> Vec<String> {
+    vec!["test".to_string()]
 }
 
 /// Derives a package name for an LSP-owned file from its on-disk path.
@@ -130,6 +136,17 @@ fn collect_sibling_sources(
 
     push_package_files(
         &parsed.project.src,
+        project_root,
+        &namespace,
+        current_path,
+        overlays,
+        &mut files,
+    );
+    // The LSP is check-shaped: `koja check` loads the test
+    // directories, so test files see each other and `assert` in a
+    // test file resolves against the `Test` package in the bundle.
+    push_package_files(
+        &parsed.project.test,
         project_root,
         &namespace,
         current_path,
