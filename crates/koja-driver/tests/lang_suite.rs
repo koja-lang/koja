@@ -562,15 +562,26 @@ fn lang_binary_is_position_independent() {
     let _ = fs::remove_dir_all(&dir);
 }
 
-/// Which builds of `ffi/ffi_helper.c` an FFI fixture run gets.
-/// The interpreter loads the shared library and the compiled path
-/// links the archive, so a run with only one of them pins which
-/// backend the driver picked.
+/// Which build of `ffi/ffi_helper.c` an FFI fixture run gets. The
+/// interpreter loads the shared library and the compiled path links
+/// the archive, so the library also pins which backend the driver
+/// picked on a bare run. The two are never built together, since a
+/// linker given both prefers the shared library, and the compiled
+/// binary then needs it on the loader path at run time.
 #[derive(Clone, Copy)]
 enum HelperLibs {
-    Both,
-    SharedOnly,
-    StaticOnly,
+    Shared,
+    Static,
+}
+
+impl HelperLibs {
+    /// The library shape the explicit backend `backend` consumes.
+    fn for_backend(backend: &str) -> Self {
+        match backend {
+            "interpreter" => Self::Shared,
+            _ => Self::Static,
+        }
+    }
 }
 
 /// Compile `ffi/ffi_helper.c` into `libffi_helper.a` inside `dir`
@@ -649,12 +660,10 @@ fn run_ffi_fixture(name: &str, libs: HelperLibs, backend: Option<&str>) -> FfiRu
         let path = entry.unwrap().path();
         fs::copy(&path, dir.join("src").join(path.file_name().unwrap())).unwrap();
     }
-    if matches!(libs, HelperLibs::Both | HelperLibs::StaticOnly) {
-        build_ffi_helper_lib(&dir);
-    }
-    if matches!(libs, HelperLibs::Both | HelperLibs::SharedOnly) {
-        build_ffi_helper_shared(&dir);
-    }
+    match libs {
+        HelperLibs::Shared => build_ffi_helper_shared(&dir),
+        HelperLibs::Static => build_ffi_helper_lib(&dir),
+    };
 
     let ffi_lib_path = match library_path() {
         Some(existing) => format!("{}:{}", dir.display(), existing),
@@ -705,7 +714,7 @@ fn assert_ffi_output(name: &str, run: &FfiRun, label: &str) {
 #[test]
 fn lang_ffi() {
     for backend in BACKENDS {
-        let run = run_ffi_fixture("ffi", HelperLibs::Both, Some(backend));
+        let run = run_ffi_fixture("ffi", HelperLibs::for_backend(backend), Some(backend));
         assert_ffi_output("ffi", &run, backend);
     }
 }
@@ -714,7 +723,7 @@ fn lang_ffi() {
 /// settles on the interpreter. No native build happens.
 #[test]
 fn lang_ffi_auto_interprets_when_the_shared_library_resolves() {
-    let run = run_ffi_fixture("ffi", HelperLibs::SharedOnly, None);
+    let run = run_ffi_fixture("ffi", HelperLibs::Shared, None);
     assert_ffi_output("ffi", &run, "auto, shared");
     assert!(
         !run.compiled,
@@ -727,7 +736,7 @@ fn lang_ffi_auto_interprets_when_the_shared_library_resolves() {
 /// only `libffi_helper.a` still runs, through LLVM.
 #[test]
 fn lang_ffi_auto_compiles_when_only_a_static_archive_exists() {
-    let run = run_ffi_fixture("ffi", HelperLibs::StaticOnly, None);
+    let run = run_ffi_fixture("ffi", HelperLibs::Static, None);
     assert_ffi_output("ffi", &run, "auto, static");
     assert!(
         run.compiled,
@@ -741,7 +750,7 @@ fn lang_ffi_auto_compiles_when_only_a_static_archive_exists() {
 /// says what would fix it, instead of failing at the first call.
 #[test]
 fn lang_ffi_explicit_interpreter_lists_unresolved_externs() {
-    let run = run_ffi_fixture("ffi", HelperLibs::StaticOnly, Some("interpreter"));
+    let run = run_ffi_fixture("ffi", HelperLibs::Static, Some("interpreter"));
     assert!(
         run.code != 0,
         "ffi: expected the interpreter to reject the externs\nstdout:\n{}",
@@ -787,7 +796,7 @@ fn lang_cptr_nan_read_traps() {
 /// with `pattern` on stderr.
 fn assert_ffi_project_faults(name: &str, pattern: &str) {
     for backend in BACKENDS {
-        let run = run_ffi_fixture(name, HelperLibs::Both, Some(backend));
+        let run = run_ffi_fixture(name, HelperLibs::for_backend(backend), Some(backend));
 
         assert!(
             run.code != 0,
