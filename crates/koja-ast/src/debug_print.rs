@@ -19,7 +19,7 @@ use crate::ast::{
     CondArm, Constant, EnumConstructionData, EnumDecl, EnumVariant, EnumVariantData, Expr,
     ExprKind, ExtendBlock, FieldInit, FieldPattern, File, Function, ImplBlock, ImplMember, Item,
     LValue, Literal, MatchArm, Param, Pattern, ProtocolDecl, ProtocolMethod, Statement, StringPart,
-    StructDecl, StructField, TypeAlias, TypeExpr, TypeParam, UnaryOp, Visibility,
+    StructDecl, StructField, TestDecl, TypeAlias, TypeExpr, TypeParam, UnaryOp, Visibility,
 };
 use crate::identifier::{AnonymousKind, Resolution, ResolvedType};
 use crate::span::Span;
@@ -124,8 +124,20 @@ impl<'a> Printer<'a> {
             Item::Impl(i) => self.impl_block(i),
             Item::Protocol(p) => self.protocol(p),
             Item::Struct(s) => self.struct_decl(s),
+            Item::Test(t) => self.test_decl(t),
             Item::TypeAlias(t) => self.type_alias(t),
         }
+    }
+
+    fn test_decl(&mut self, t: &TestDecl) {
+        let header = format!("TestDecl {:?}", t.description);
+        self.nested(&header, t.span, |p| {
+            p.section("body", |p| {
+                for statement in &t.body {
+                    p.statement(statement);
+                }
+            });
+        });
     }
 
     fn alias(&mut self, alias: &AliasDecl) {
@@ -352,6 +364,13 @@ impl<'a> Printer<'a> {
                 p.section("functions", |p| {
                     for f in &s.functions {
                         p.function("Function", f);
+                    }
+                });
+            }
+            if !s.tests.is_empty() {
+                p.section("tests", |p| {
+                    for t in &s.tests {
+                        p.test_decl(t);
                     }
                 });
             }

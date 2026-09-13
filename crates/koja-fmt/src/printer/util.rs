@@ -147,6 +147,7 @@ pub(super) fn item_span(item: &Item) -> &Span {
         Item::Impl(i) => &i.span,
         Item::Protocol(p) => &p.span,
         Item::Struct(s) => &s.span,
+        Item::Test(t) => &t.span,
         Item::TypeAlias(t) => &t.span,
     }
 }
@@ -155,7 +156,7 @@ pub(super) fn item_span(item: &Item) -> &Span {
 /// item kinds that cannot carry any.
 pub(super) fn item_annotations(item: &Item) -> &[Annotation] {
     match item {
-        Item::Alias(_) | Item::Extend(_) | Item::Impl(_) => &[],
+        Item::Alias(_) | Item::Extend(_) | Item::Impl(_) | Item::Test(_) => &[],
         Item::Builtin(b) => &b.annotations,
         Item::Constant(c) => &c.annotations,
         Item::Enum(e) => &e.annotations,

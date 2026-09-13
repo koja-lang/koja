@@ -302,7 +302,21 @@ pub enum Item {
     Impl(ImplBlock),
     Protocol(ProtocolDecl),
     Struct(StructDecl),
+    Test(TestDecl),
     TypeAlias(TypeAlias),
+}
+
+/// A test declaration, `test "description" ... end`, at the top level
+/// or inside a struct body. The body has no parameters, a unit
+/// success type, and the error channel `Test.Failure`. Typecheck
+/// desugars it to a synthesized [`Function`] when the `Test` package
+/// is linked and drops it otherwise, so a build never sees one.
+#[derive(Debug, Clone)]
+pub struct TestDecl {
+    pub body: Vec<Statement>,
+    /// The plain string after `test`. Two tests may share one.
+    pub description: String,
+    pub span: Span,
 }
 
 /// The root AST node representing a single Koja source file.
@@ -554,6 +568,9 @@ pub struct StructDecl {
     /// Nested type declarations, only `Item::Struct` / `Item::Enum`.
     pub nested: Vec<Item>,
     pub span: Span,
+    /// `test "..."` blocks declared in the body. The struct is their
+    /// suite.
+    pub tests: Vec<TestDecl>,
 }
 
 impl StructDecl {

@@ -80,7 +80,7 @@ pub(super) fn rewrite_assert_statement(
     let condition_span = condition.span;
     let slot = resolver.next_assert_slot();
     let mut statements = Vec::with_capacity(3);
-    let (condition, left, right) = match comparison_operands(*condition) {
+    let (condition, left, right) = match comparison_operands(condition) {
         Ok((op, left, right)) => {
             let left_name = format!("$assert_left_{slot}");
             let right_name = format!("$assert_right_{slot}");
@@ -100,21 +100,14 @@ pub(super) fn rewrite_assert_statement(
                 some(format_call(&right_name, span), span),
             )
         }
-        Err(condition) => (condition, none(span), none(span)),
+        Err(condition) => (*condition, none(span), none(span)),
     };
 
     let message = match message {
         Some(message) => some(*message, span),
         None => none(span),
     };
-    let assertion = assertion_construction(
-        &source,
-        condition_span,
-        left,
-        right,
-        message,
-        span,
-    );
+    let assertion = assertion_construction(&source, condition_span, left, right, message, span);
     let failure = Expr::new(
         ExprKind::EnumConstruction {
             type_path: vec![TEST_PACKAGE.to_string(), FAILURE_TYPE.to_string()],
@@ -154,7 +147,8 @@ pub(super) fn rewrite_assert_statement(
 
 /// Split a comparison condition into its operator and operands. Any
 /// other shape comes back whole.
-fn comparison_operands(condition: Expr) -> Result<(BinOp, Expr, Expr), Expr> {
+fn comparison_operands(condition: Box<Expr>) -> Result<(BinOp, Expr, Expr), Box<Expr>> {
+    let condition = *condition;
     match condition.kind {
         ExprKind::Binary { op, left, right }
             if matches!(
@@ -164,10 +158,7 @@ fn comparison_operands(condition: Expr) -> Result<(BinOp, Expr, Expr), Expr> {
         {
             Ok((op, *left, *right))
         }
-        kind => Err(Expr {
-            kind,
-            ..condition
-        }),
+        kind => Err(Box::new(Expr { kind, ..condition })),
     }
 }
 

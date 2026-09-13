@@ -66,7 +66,10 @@ fn assertion_fields(statement: &Statement) -> &[FieldInit] {
         data: EnumConstructionData::Tuple(failure_args),
     } = &err_args[0].kind
     else {
-        panic!("expected Test.Failure.Assertion(...), got {:?}", err_args[0]);
+        panic!(
+            "expected Test.Failure.Assertion(...), got {:?}",
+            err_args[0]
+        );
     };
     assert_eq!(type_path, &["Test", "Failure"]);
     assert_eq!(variant, "Assertion");
@@ -155,7 +158,9 @@ fn assert_without_the_test_package_names_the_package() {
     assert!(
         failure.diagnostics.iter().any(|d| {
             d.message.contains("`assert` needs the `Test` package")
-                && d.hint.as_deref().is_some_and(|h| h.contains("Kernel.panic"))
+                && d.hint
+                    .as_deref()
+                    .is_some_and(|h| h.contains("Kernel.panic"))
         }),
         "got: {:#?}",
         failure.diagnostics,
@@ -230,12 +235,21 @@ fn other_conditions_keep_only_the_source_text() {
     ));
     let body = function_body(&checked, "check");
     assert!(
-        matches!(&body[0], Statement::Expr(Expr { kind: ExprKind::If { .. }, .. })),
+        matches!(
+            &body[0],
+            Statement::Expr(Expr {
+                kind: ExprKind::If { .. },
+                ..
+            })
+        ),
         "no operand bindings for a non-comparison form, got {:?}",
         body[0]
     );
     let fields = assertion_fields(&body[0]);
-    assert_eq!(string_literal(field(fields, "expression")), "items.empty?()");
+    assert_eq!(
+        string_literal(field(fields, "expression")),
+        "items.empty?()"
+    );
     assert_eq!(option_variant(field(fields, "left")), "None");
     assert_eq!(option_variant(field(fields, "right")), "None");
     // The message is built inside the `if`, so it only evaluates on

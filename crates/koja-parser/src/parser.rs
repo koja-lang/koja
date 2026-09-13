@@ -437,6 +437,7 @@ impl Parser {
             | TokenKind::Priv
             | TokenKind::Protocol
             | TokenKind::Struct
+            | TokenKind::Test
             | TokenKind::Type => true,
             TokenKind::Fn => matches!(self.peek_nth(1), TokenKind::Ident(_)),
             _ => false,
@@ -479,6 +480,9 @@ impl Parser {
             }
             TokenKind::Alias if annotations.is_empty() && visibility == Visibility::Public => {
                 Some(self.parse_alias_item())
+            }
+            TokenKind::Test if annotations.is_empty() && visibility == Visibility::Public => {
+                Some(Item::Test(self.parse_test_decl()))
             }
             _ if visibility == Visibility::Private => {
                 let span = self.current_span();

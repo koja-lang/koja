@@ -8,7 +8,9 @@
 use tower_lsp_server::jsonrpc::Result;
 use tower_lsp_server::ls_types::*;
 
-use koja_ast::ast::{Comment, Expr, ExprKind, File, ImplMember, Item, Statement};
+use koja_ast::ast::{
+    Comment, Expr, ExprKind, File, ImplMember, Item, Statement, StructDecl, TestDecl,
+};
 use koja_ast::span::Span;
 
 use crate::backend::Backend;
@@ -76,12 +78,8 @@ fn collect_item_folds(file: &File, ranges: &mut Vec<FoldingRange>) {
                     }
                 }
             }
-            Item::Struct(s) => {
-                if let Some(r) = span_fold(&s.span, Some(FoldingRangeKind::Region)) {
-                    ranges.push(r);
-                }
-                collect_nested_folds(&s.nested, ranges);
-            }
+            Item::Struct(s) => collect_struct_folds(s, ranges),
+            Item::Test(t) => collect_test_folds(t, ranges),
             Item::Enum(e) => {
                 if let Some(r) = span_fold(&e.span, Some(FoldingRangeKind::Region)) {
                     ranges.push(r);
@@ -144,17 +142,45 @@ fn collect_item_folds(file: &File, ranges: &mut Vec<FoldingRange>) {
     }
 }
 
-fn collect_nested_folds(nested: &[Item], ranges: &mut Vec<FoldingRange>) {
-    for item in nested {
-        let (span, inner) = match item {
-            Item::Enum(e) => (&e.span, &e.nested),
-            Item::Struct(s) => (&s.span, &s.nested),
-            _ => continue,
-        };
-        if let Some(r) = span_fold(span, Some(FoldingRangeKind::Region)) {
+/// A struct folds as a region, and so do its functions, its `test`
+/// blocks, and any nested type.
+fn collect_struct_folds(s: &StructDecl, ranges: &mut Vec<FoldingRange>) {
+    if let Some(r) = span_fold(&s.span, Some(FoldingRangeKind::Region)) {
+        ranges.push(r);
+    }
+    for f in &s.functions {
+        if let Some(r) = span_fold(&f.span, Some(FoldingRangeKind::Region)) {
             ranges.push(r);
         }
-        collect_nested_folds(inner, ranges);
+        if let Some(body) = &f.body {
+            collect_statement_folds(body, ranges);
+        }
+    }
+    for t in &s.tests {
+        collect_test_folds(t, ranges);
+    }
+    collect_nested_folds(&s.nested, ranges);
+}
+
+fn collect_test_folds(t: &TestDecl, ranges: &mut Vec<FoldingRange>) {
+    if let Some(r) = span_fold(&t.span, Some(FoldingRangeKind::Region)) {
+        ranges.push(r);
+    }
+    collect_statement_folds(&t.body, ranges);
+}
+
+fn collect_nested_folds(nested: &[Item], ranges: &mut Vec<FoldingRange>) {
+    for item in nested {
+        match item {
+            Item::Enum(e) => {
+                if let Some(r) = span_fold(&e.span, Some(FoldingRangeKind::Region)) {
+                    ranges.push(r);
+                }
+                collect_nested_folds(&e.nested, ranges);
+            }
+            Item::Struct(s) => collect_struct_folds(s, ranges),
+            _ => {}
+        }
     }
 }
 

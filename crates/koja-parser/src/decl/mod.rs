@@ -27,6 +27,7 @@ pub(crate) mod function;
 pub(crate) mod impl_block;
 pub(crate) mod protocol;
 pub(crate) mod struct_decl;
+pub(crate) mod test_decl;
 
 use koja_ast::ast::{Statement, TypeExpr, TypeParam};
 use koja_ast::token::TokenKind;

@@ -79,6 +79,9 @@ impl Walker<'_, '_> {
             Item::Impl(block) => self.check_impl(block),
             Item::Protocol(decl) => self.check_protocol(decl),
             Item::Struct(decl) => self.check_struct(decl),
+            // Test blocks desugar to functions before this pass, or
+            // are dropped, so none reach here.
+            Item::Test(_) => {}
             Item::TypeAlias(alias) => self.check_type_alias(alias),
         }
     }

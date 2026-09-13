@@ -20,7 +20,7 @@
 
 use koja_ast::ast::{
     AliasDecl, BuiltinDecl, Constant, EnumDecl, Expr, ExprKind, ExtendBlock, File, Function,
-    ImplBlock, Item, MatchArm, ProtocolDecl, Statement, StructDecl, TypeExpr,
+    ImplBlock, Item, MatchArm, ProtocolDecl, Statement, StructDecl, TestDecl, TypeExpr,
 };
 use koja_ast::util::dedent;
 use koja_parser::{ParseMode, ParseResult, parse};
@@ -153,6 +153,7 @@ first_item_fn!(first_function, Function, Function, "function");
 first_item_fn!(first_impl, Impl, ImplBlock, "impl block");
 first_item_fn!(first_protocol, Protocol, ProtocolDecl, "protocol");
 first_item_fn!(first_struct, Struct, StructDecl, "struct");
+first_item_fn!(first_test, Test, TestDecl, "test");
 
 /// First expression in `body`, looking through assignment values.
 pub fn body_expr(body: Vec<Statement>) -> Option<Expr> {

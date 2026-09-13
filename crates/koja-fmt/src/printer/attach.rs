@@ -320,11 +320,27 @@ impl<'a> Attacher<'a> {
                     .map(Member::Field)
                     .chain(s.nested.iter().map(Member::Nested))
                     .chain(s.functions.iter().map(Member::Function))
+                    .chain(s.tests.iter().map(Member::Test))
                     .collect();
                 self.walk_decl_body(s.span, header_end_line(s.span, &s.conformances), members);
             }
+            Item::Test(t) => self.walk_test(t),
             Item::TypeAlias(_) => {}
         }
+    }
+
+    /// Walks a `test` block. Takes the header line's trailing comment,
+    /// then walks the body like a function's.
+    fn walk_test(&mut self, t: &TestDecl) {
+        let hoisted = self.take_before(t.span.start.offset);
+        self.push(t.span, Slot::Leading, hoisted);
+        let first = t
+            .body
+            .first()
+            .map_or(t.span.end.offset, |s| stmt_span(s).start.offset);
+        let trailing = self.take_on_line(t.span.start.line, first);
+        self.push(t.span, Slot::HeaderTrailing, trailing);
+        self.walk_body(&t.body, t.span.end.offset, t.span);
     }
 
     /// Walks any declaration body. Takes the comment trailing the header
@@ -996,6 +1012,7 @@ enum Member<'a> {
     Function(&'a Function),
     Nested(&'a Item),
     ProtocolMethod(&'a ProtocolMethod),
+    Test(&'a TestDecl),
     TypeAlias(&'a TypeAlias),
     Variant(&'a EnumVariant),
 }
@@ -1014,6 +1031,7 @@ impl Member<'_> {
                     .map_or(m.span.start.offset, |a| a.span.start.offset),
                 span: m.span,
             },
+            Member::Test(t) => ChildInfo::of(t.span),
             Member::TypeAlias(t) => ChildInfo::of(t.span),
             Member::Variant(v) => ChildInfo::of(v.span),
         }
@@ -1025,6 +1043,7 @@ impl Member<'_> {
             Member::Function(f) => attacher.walk_function(f),
             Member::Nested(n) => attacher.walk_item(n),
             Member::ProtocolMethod(m) => attacher.walk_protocol_method(m),
+            Member::Test(t) => attacher.walk_test(t),
             Member::TypeAlias(_) => {}
             Member::Variant(v) => attacher.walk_variant(v),
         }

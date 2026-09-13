@@ -439,7 +439,10 @@ fn assert_takes_an_optional_message_after_a_comma() {
     // The captured expression stops at the comma, and the line is
     // the whole line.
     assert_eq!(source.expression, "stack.empty?()");
-    assert_eq!(source.source_line, "assert stack.empty?(), \"drained #{n}\"");
+    assert_eq!(
+        source.source_line,
+        "assert stack.empty?(), \"drained #{n}\""
+    );
 }
 
 #[test]

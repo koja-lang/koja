@@ -238,7 +238,8 @@ pub fn extract_items(file: &File, project: &mut DocProject, package: &str, kind:
 
     for item in &file.items {
         match item {
-            Item::Alias(_) => {}
+            // Tests are not API. Their bodies are not documented.
+            Item::Alias(_) | Item::Test(_) => {}
             Item::Builtin(b) => {
                 if let Some(db) = extract_builtin(b) {
                     pkg.builtins.push(db);

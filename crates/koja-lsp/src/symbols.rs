@@ -11,7 +11,7 @@ use tower_lsp_server::jsonrpc::Result;
 use tower_lsp_server::ls_types::*;
 
 use koja_ast::ast::{
-    BuiltinDecl, EnumDecl, File, Function, ImplMember, Item, Param, StructDecl, TypeExpr,
+    BuiltinDecl, EnumDecl, File, Function, ImplMember, Item, Param, StructDecl, TestDecl, TypeExpr,
     TypeParam, Visibility,
 };
 use koja_ast::span::Span;
@@ -175,6 +175,17 @@ fn collect_workspace_symbols(file: &File, query: &str, results: &mut Vec<SymbolI
             Item::Struct(_) | Item::Enum(_) => {
                 collect_type_workspace_symbols(item, None, &uri, query, results);
             }
+            Item::Test(t) => {
+                if matches(&t.description) {
+                    results.push(symbol_info(
+                        &t.description,
+                        SymbolKind::EVENT,
+                        &uri,
+                        &t.span,
+                        None,
+                    ));
+                }
+            }
             Item::Constant(c) => {
                 if matches(&c.name) {
                     results.push(symbol_info(
@@ -242,14 +253,22 @@ fn collect_type_workspace_symbols(
     results: &mut Vec<SymbolInformation>,
 ) {
     let matches = |name: &str| query.is_empty() || name.to_ascii_lowercase().contains(query);
-    let (name, kind, span, functions, nested) = match item {
-        Item::Enum(e) => (e.name(), SymbolKind::ENUM, &e.span, &e.functions, &e.nested),
+    let (name, kind, span, functions, nested, tests) = match item {
+        Item::Enum(e) => (
+            e.name(),
+            SymbolKind::ENUM,
+            &e.span,
+            &e.functions,
+            &e.nested,
+            &[][..],
+        ),
         Item::Struct(s) => (
             s.name(),
             SymbolKind::STRUCT,
             &s.span,
             &s.functions,
             &s.nested,
+            &s.tests[..],
         ),
         _ => return,
     };
@@ -269,6 +288,17 @@ fn collect_type_workspace_symbols(
                 SymbolKind::METHOD,
                 uri,
                 &f.span,
+                Some(name.to_string()),
+            ));
+        }
+    }
+    for t in tests {
+        if matches(&t.description) {
+            results.push(symbol_info(
+                &t.description,
+                SymbolKind::EVENT,
+                uri,
+                &t.span,
                 Some(name.to_string()),
             ));
         }
@@ -312,6 +342,7 @@ fn build_document_symbols(file: &File) -> Vec<DocumentSymbol> {
             Item::Builtin(b) => symbols.push(builtin_symbol(b)),
             Item::Function(f) => symbols.push(function_symbol(f)),
             Item::Struct(s) => symbols.push(struct_symbol(s)),
+            Item::Test(t) => symbols.push(test_symbol(t)),
             Item::Enum(e) => symbols.push(enum_symbol(e)),
             Item::Constant(c) => {
                 let range = span_to_range(&c.span);
@@ -471,6 +502,7 @@ fn struct_symbol(s: &StructDecl) -> DocumentSymbol {
     let range = span_to_range(&s.span);
     let mut children = nested_symbols(&s.nested);
     children.extend(s.functions.iter().map(function_symbol));
+    children.extend(s.tests.iter().map(test_symbol));
     #[allow(deprecated)]
     DocumentSymbol {
         name: s.name().to_string(),
@@ -481,6 +513,23 @@ fn struct_symbol(s: &StructDecl) -> DocumentSymbol {
         range,
         selection_range: range,
         children: children_option(children),
+    }
+}
+
+/// Builds a [`DocumentSymbol`] for a `test` block. The description
+/// is the name, since a test has no identifier of its own.
+fn test_symbol(t: &TestDecl) -> DocumentSymbol {
+    let range = span_to_range(&t.span);
+    #[allow(deprecated)]
+    DocumentSymbol {
+        name: t.description.clone(),
+        detail: Some("test".to_string()),
+        kind: SymbolKind::EVENT,
+        tags: None,
+        deprecated: None,
+        range,
+        selection_range: range,
+        children: None,
     }
 }
 

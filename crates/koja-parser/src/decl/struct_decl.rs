@@ -32,6 +32,7 @@ impl Parser {
         let mut fields = Vec::new();
         let mut functions = Vec::new();
         let mut nested = Vec::new();
+        let mut tests = Vec::new();
         while !self.at(&TokenKind::End) && !self.at_eof() {
             match self.peek().clone() {
                 TokenKind::Fn
@@ -42,6 +43,9 @@ impl Parser {
                     TypeBodyMember::Function(function) => functions.push(*function),
                     TypeBodyMember::Nested(item) => nested.push(*item),
                 },
+                // `test` takes no `priv` and no annotations, so it
+                // does not go through the shared member prefix.
+                TokenKind::Test => tests.push(self.parse_test_decl()),
                 _ => {
                     fields.push(self.parse_struct_field());
                 }
@@ -60,6 +64,7 @@ impl Parser {
             functions,
             nested,
             span: self.span_from(start),
+            tests,
         })
     }
 
