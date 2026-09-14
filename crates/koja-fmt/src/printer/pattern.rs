@@ -26,7 +26,7 @@ impl Printer {
                 let entries = self.seq_entries(
                     segments,
                     |seg| seg.span,
-                    |_, seg| util::binary_segment_pat_to_doc(seg),
+                    |p, seg| p.binary_segment_to_doc(seg),
                 );
                 self.element_list_to_doc("<<", ">>", entries, *span)
             }

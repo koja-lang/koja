@@ -32,6 +32,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - A binary pattern literal segment wider than 64 bits, such as `<<0::80, rest: Binary>>`, now matches correctly. The interpreter panicked on the width and compiled code compared only part of the segment, so a value with a set high byte matched `<<0::80>>`.
 - A `receive` in a helper method of a process whose message type includes `Process.ExitSignal` no longer fails LLVM code generation with `local slot not registered`.
+- `koja format` renders a binary pattern segment whose value or size is an expression, such as `<<head::len * 8>>`. The formatter wrote `<expr>` in its place.
+- `koja format` keeps the `\#{` escape in a string pattern. The formatter dropped the backslash, so the output re-parsed as an interpolation.
 
 ### Removed
 

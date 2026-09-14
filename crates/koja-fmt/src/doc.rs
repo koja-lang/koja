@@ -1,75 +1,70 @@
 /// Wadler-Lindig document algebra extended with Fill for dense packing.
+/// The free functions below are the constructors.
 #[derive(Debug, Clone)]
 pub enum Doc {
     Nil,
+    /// A text fragment that never breaks across lines.
     Text(String),
+    /// A line break in every mode.
     Hardline,
     /// " " in flat mode, newline+indent in break mode.
     Line,
     /// "" in flat mode, newline+indent in break mode.
     Softline,
     Concat(Vec<Doc>),
+    /// Adds `n` spaces to the indentation of the inner document.
     Indent(u32, Box<Doc>),
+    /// Lays the inner document out flat when it fits in the page width,
+    /// otherwise in break mode.
     Group(Box<Doc>),
+    /// Dense packing: each item is placed flat, breaking to a new line
+    /// only when an item would exceed the page width.
     Fill(Vec<Doc>),
     /// Emits first doc in flat mode, second in break mode.
     IfBreak(Box<Doc>, Box<Doc>),
 }
 
-/// The empty document.
 pub fn nil() -> Doc {
     Doc::Nil
 }
 
-/// A literal text fragment that is never broken across lines.
 pub fn text(s: impl Into<String>) -> Doc {
     Doc::Text(s.into())
 }
 
-/// An unconditional line break that always emits a newline.
 pub fn hardline() -> Doc {
     Doc::Hardline
 }
 
-/// " " in flat mode, newline in break mode.
 pub fn line() -> Doc {
     Doc::Line
 }
 
-/// "" in flat mode, newline in break mode.
 pub fn softline() -> Doc {
     Doc::Softline
 }
 
-/// Emits `flat_doc` when the enclosing group fits on one line,
-/// `break_doc` when it breaks.
 pub fn if_break(flat_doc: Doc, break_doc: Doc) -> Doc {
     Doc::IfBreak(Box::new(flat_doc), Box::new(break_doc))
 }
 
-/// Trailing comma: "," in break mode, nothing in flat mode.
+/// "," in break mode, nothing in flat mode.
 pub fn trailing_comma() -> Doc {
     if_break(nil(), text(","))
 }
 
-/// Joins a list of documents sequentially with no separator.
 pub fn concat(docs: Vec<Doc>) -> Doc {
     Doc::Concat(docs)
 }
 
-/// Increases the indentation level by `n` spaces for the inner document.
 pub fn indent(n: u32, doc: Doc) -> Doc {
     Doc::Indent(n, Box::new(doc))
 }
 
-/// Tries to lay out the inner document on a single line (flat mode).
-/// Falls back to break mode if it doesn't fit within the page width.
 pub fn group(doc: Doc) -> Doc {
     Doc::Group(Box::new(doc))
 }
 
-/// Dense packing: each item is placed flat, breaking to a new line only
-/// when an item would exceed the page width.
 pub fn fill(docs: Vec<Doc>) -> Doc {
     Doc::Fill(docs)
 }
@@ -95,7 +90,6 @@ pub fn flatten(doc: Doc) -> Doc {
     }
 }
 
-/// Joins documents with `sep` inserted between each pair.
 pub fn intersperse(docs: Vec<Doc>, sep: Doc) -> Doc {
     let mut result = Vec::new();
     for (i, doc) in docs.into_iter().enumerate() {
@@ -107,12 +101,6 @@ pub fn intersperse(docs: Vec<Doc>, sep: Doc) -> Doc {
     Doc::Concat(result)
 }
 
-/// Joins documents with unconditional line breaks between each pair.
-pub fn join_hardline(docs: Vec<Doc>) -> Doc {
-    intersperse(docs, hardline())
-}
-
-/// A single space character.
 pub fn space() -> Doc {
     text(" ")
 }
@@ -141,7 +129,6 @@ pub fn render(doc: &Doc, width: u32) -> String {
     out
 }
 
-/// Emits a newline followed by `ind` spaces of indentation.
 fn emit_newline(out: &mut String, col: &mut u32, ind: u32) {
     out.push('\n');
     for _ in 0..ind {
@@ -151,7 +138,7 @@ fn emit_newline(out: &mut String, col: &mut u32, ind: u32) {
 }
 
 /// Fill rendering: pack items left-to-right separated by single spaces,
-/// breaking before an item that doesn't fit on the current line.
+/// breaking before an item that does not fit on the current line.
 ///
 /// Items carry their own separators without the inter-item space, either
 /// trailing (`","`, `" |"`) so a break leaves the separator at the end of
@@ -171,7 +158,6 @@ fn render_fill(out: &mut String, col: &mut u32, ind: u32, items: &[Doc], width: 
     }
 }
 
-/// Renders a single doc node into the output buffer using a local stack.
 fn render_doc_into(out: &mut String, col: &mut u32, ind: u32, mode: Mode, doc: &Doc, width: u32) {
     let mut stack: Vec<(u32, Mode, &Doc)> = vec![(ind, mode, doc)];
     while let Some((ind, mode, d)) = stack.pop() {
@@ -275,9 +261,4 @@ fn fits(mut remaining: u32, stack: &[(u32, Mode, &Doc)]) -> bool {
         }
     }
     true
-}
-
-/// Renders a document tree using the default line width (80 columns).
-pub fn render_default(doc: &Doc) -> String {
-    render(doc, DEFAULT_WIDTH)
 }

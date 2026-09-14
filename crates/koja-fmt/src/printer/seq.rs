@@ -83,7 +83,7 @@ pub(super) fn vertical(entries: Vec<SeqEntry>, spacing: Spacing, dangling: Vec<C
         if let Some(tc) = trailing_doc(&entry.trailing) {
             parts.push(tc);
         }
-        // `force_blank` demands a blank before its own entry only;
+        // `force_blank` demands a blank before its own entry only.
         // `is_block` wants space on both sides.
         prev_forces = match spacing {
             Spacing::Preserve => entry.is_block,
@@ -109,7 +109,7 @@ pub(super) fn vertical(entries: Vec<SeqEntry>, spacing: Spacing, dangling: Vec<C
 
 /// Appends region-final comments after the last element, without the
 /// final hardline (the enclosing layout breaks before its delimiter).
-fn push_stragglers(body: &mut Vec<Doc>, stragglers: &[Comment]) {
+pub(super) fn push_stragglers(body: &mut Vec<Doc>, stragglers: &[Comment]) {
     if stragglers.is_empty() {
         return;
     }
