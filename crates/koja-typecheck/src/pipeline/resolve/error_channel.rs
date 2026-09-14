@@ -494,7 +494,7 @@ fn result_type_args(
 }
 
 fn is_global_named(id: GlobalRegistryId, name: &str, registry: &GlobalRegistry) -> bool {
-    let target = Identifier::new("Global", vec![name.to_string()]);
+    let target = Identifier::single("Global", name);
     registry
         .lookup(&target)
         .is_some_and(|(target_id, _)| target_id == id)

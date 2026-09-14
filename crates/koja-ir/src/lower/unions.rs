@@ -285,7 +285,7 @@ fn emit_union_hash(
 
 fn global_int_type(registry: &GlobalRegistry) -> ResolvedType {
     let (id, _) = registry
-        .lookup(&Identifier::new("Global", vec!["Int".to_string()]))
+        .lookup(&Identifier::single("Global", "Int"))
         .expect("`Global.Int` is registered before any body lowers");
     ResolvedType::leaf(Resolution::Global(id))
 }

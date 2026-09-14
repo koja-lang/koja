@@ -84,7 +84,7 @@ pub(super) fn lookup_package_member<'a>(
     if lookup_type(&[package.to_string()], resolver.resolution_scope()).is_some() {
         return PackageMember::NotAPackage;
     }
-    let target = Identifier::new(package, vec![member.to_string()]);
+    let target = Identifier::single(package, member);
     if let Some((id, entry)) = resolver.registry.lookup(&target) {
         return PackageMember::Found(id, entry);
     }

@@ -91,7 +91,7 @@ fn typecheck_sources(
 pub fn lower_program_source(source: &str) -> IRProgram {
     let with_entry = format!("{source}\n{TEST_ENTRY_SNIPPET}");
     let checked = typecheck(&with_entry, ParseMode::File);
-    let entry = Identifier::new(PACKAGE, vec![TEST_ENTRY_NAME.to_string()]);
+    let entry = Identifier::single(PACKAGE, TEST_ENTRY_NAME);
     lower_program(&checked, &entry).expect("lowering should succeed")
 }
 

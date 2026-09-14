@@ -25,7 +25,7 @@ pub(super) fn lower_map_literal(
     output: &mut LowerOutput,
 ) -> Result<(ValueId, IRBlockId), ()> {
     let map_id = registry
-        .lookup(&Identifier::new("Global", vec!["Map".to_string()]))
+        .lookup(&Identifier::single("Global", "Map"))
         .map(|(id, _)| id)
         .unwrap_or_else(|| {
             panic!(

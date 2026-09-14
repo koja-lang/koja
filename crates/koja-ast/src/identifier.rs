@@ -29,6 +29,11 @@ impl Identifier {
         Self { package, path }
     }
 
+    /// Identifier for a top-level declaration, a one-segment path.
+    pub fn single(package: impl Into<String>, name: impl Into<String>) -> Self {
+        Self::new(package, vec![name.into()])
+    }
+
     /// Identifier for a member of the type at `owner_path` within
     /// `package`: `owner_path ++ [member]`. Covers both a method on a
     /// type (`Point` + `dist` -> `Point.dist`) and a method on a nested

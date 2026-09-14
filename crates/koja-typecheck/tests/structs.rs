@@ -607,7 +607,7 @@ fn static_method_self_return_type_resolves_to_enclosing_struct() {
             sig.return_type
         );
     };
-    let point_identifier = Identifier::new("TestApp", vec!["Point".to_string()]);
+    let point_identifier = Identifier::single("TestApp", "Point");
     let (expected_id, _) = program
         .registry
         .lookup(&point_identifier)
@@ -783,7 +783,7 @@ fn generic_protocol_impl_with_concrete_args_succeeds() {
     let string_id = *string_id;
     let (expected_string_id, _) = program
         .registry
-        .lookup(&Identifier::new("Global", vec!["String".to_string()]))
+        .lookup(&Identifier::single("Global", "String"))
         .expect("String registered");
     assert_eq!(string_id, expected_string_id);
 }
@@ -874,7 +874,7 @@ fn generic_target_impl_anchors_self_at_receiver_id() {
         );
     };
     let owner = *owner;
-    let bag_identifier = Identifier::new(PACKAGE, vec!["Bag".to_string()]);
+    let bag_identifier = Identifier::single(PACKAGE, "Bag");
     let (bag_id, _) = program
         .registry
         .lookup(&bag_identifier)

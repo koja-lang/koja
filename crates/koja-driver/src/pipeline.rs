@@ -839,7 +839,7 @@ fn check_task_conformance(checked: &CheckedProgram, task_name: &str, provider: &
         );
         process::exit(1);
     };
-    let protocol_id = Identifier::new("Koja".to_string(), vec!["Task".to_string()]);
+    let protocol_id = Identifier::single("Koja", "Task");
     let Some((protocol_id, _)) = checked.registry.lookup(&protocol_id) else {
         eprintln!("internal error: stdlib protocol `Koja.Task` is not registered");
         process::exit(1);
@@ -1224,7 +1224,7 @@ fn run_project_tests(config: &ProjectConfig, root: &Path, options: &TestOptions)
     );
 
     let checked = check_parsed(parsed);
-    let entry = Identifier::new(namespace, vec![HARNESS_ENTRY.to_string()]);
+    let entry = Identifier::single(namespace, HARNESS_ENTRY);
     let program = match lower_program(&checked, &entry) {
         Ok(program) => program,
         Err(err) => {
@@ -1475,7 +1475,7 @@ fn resolve_project_entry(config: &ProjectConfig) -> Identifier {
         );
         process::exit(1);
     }
-    Identifier::new(config.namespace(), vec![entry.to_string()])
+    Identifier::single(config.namespace(), entry)
 }
 
 /// Collect the project's compiler inputs: the project's own `src`

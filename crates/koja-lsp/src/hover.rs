@@ -147,7 +147,7 @@ fn lookup_global<'a>(
     registry: &'a GlobalRegistry,
 ) -> Option<(Identifier, &'a GlobalKind, &'a [String])> {
     for pkg in [package, "Global"] {
-        let ident = Identifier::new(pkg, vec![name.to_string()]);
+        let ident = Identifier::single(pkg, name);
         if let Some((_, entry)) = registry.lookup(&ident) {
             return Some((ident, &entry.kind, &entry.type_params));
         }
@@ -165,7 +165,7 @@ fn build_function_hover(
 ) -> Option<String> {
     let mut signatures = Vec::new();
     for pkg in [package, "Global"] {
-        let identifier = Identifier::new(pkg, vec![name.to_string()]);
+        let identifier = Identifier::single(pkg, name);
         let arities = arity
             .map(|arity| vec![arity])
             .unwrap_or_else(|| registry.function_arities(&identifier));

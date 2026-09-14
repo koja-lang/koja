@@ -223,7 +223,7 @@ pub fn assert_registered(checked: &CheckedProgram, segments: &[&str]) {
 }
 
 pub fn struct_definition<'a>(checked: &'a CheckedProgram, name: &str) -> &'a StructDefinition {
-    let ident = Identifier::new(PACKAGE, vec![name.to_string()]);
+    let ident = Identifier::single(PACKAGE, name);
     let (_, entry) = checked
         .registry
         .lookup(&ident)
@@ -235,7 +235,7 @@ pub fn struct_definition<'a>(checked: &'a CheckedProgram, name: &str) -> &'a Str
 }
 
 pub fn enum_definition<'a>(checked: &'a CheckedProgram, name: &str) -> &'a EnumDefinition {
-    let ident = Identifier::new(PACKAGE, vec![name.to_string()]);
+    let ident = Identifier::single(PACKAGE, name);
     let (_, entry) = checked
         .registry
         .lookup(&ident)

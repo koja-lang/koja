@@ -3,8 +3,8 @@
 //! declaration span.
 //!
 //! Pins:
-//! - `already defined` lands on the duplicate's name and its hint
-//!   cites the line of the earlier name
+//! - `already defined` lands on the duplicate's name and its related
+//!   location is the earlier name
 //! - nested-type owner errors land on the leaf name
 //! - signature-leak errors land on the leaking declaration's name
 //! - `RegistryEntry::name_span` slices back to the name text while
@@ -48,10 +48,10 @@ fn duplicate_function_points_at_the_second_name() {
     let diagnostic = diagnostic_containing(&failure.diagnostics, "already defined");
     assert_eq!(text_at(&source, &diagnostic.span), "greet");
     assert_eq!(diagnostic.span.start.line, 5);
-    assert_eq!(
-        diagnostic.hint.as_deref(),
-        Some("previous function definition is at line 1"),
-    );
+    let related = diagnostic.related.as_ref().expect("related location");
+    assert_eq!(related.message, "previous function definition");
+    assert_eq!(text_at(&source, &related.span), "greet");
+    assert_eq!(related.span.start.line, 1);
 }
 
 #[test]
@@ -71,6 +71,33 @@ fn duplicate_struct_points_at_the_second_name() {
     let diagnostic = diagnostic_containing(&failure.diagnostics, "already defined");
     assert_eq!(text_at(&source, &diagnostic.span), "Point");
     assert_eq!(diagnostic.span.start.line, 5);
+}
+
+/// The derived `Debug` and `Equality` impls are synthesized for the
+/// first declaration only, so they add no errors of their own.
+#[test]
+fn duplicate_struct_reports_once() {
+    let source = dedent(
+        "
+        struct Point
+          x: Int
+        end
+
+        struct Point
+          y: Int
+        end
+        ",
+    );
+    let failure = typecheck_file_fail(&source);
+    let messages: Vec<&str> = failure
+        .diagnostics
+        .iter()
+        .map(|d| d.message.as_str())
+        .collect();
+    assert_eq!(
+        messages,
+        vec![format!("`{PACKAGE}.Point` is already defined")]
+    );
 }
 
 #[test]
@@ -122,14 +149,14 @@ fn registry_entry_keeps_both_spans() {
 
     let (_, point) = checked
         .registry
-        .lookup(&Identifier::new(PACKAGE, vec!["Point".to_string()]))
+        .lookup(&Identifier::single(PACKAGE, "Point"))
         .expect("Point is registered");
     assert_eq!(text_at(&source, &point.name_span), "Point");
     assert!(text_at(&source, &point.span).starts_with("struct Point<T>"));
 
     let (_, origin) = checked
         .registry
-        .lookup_function(&Identifier::new(PACKAGE, vec!["origin".to_string()]), 0)
+        .lookup_function(&Identifier::single(PACKAGE, "origin"), 0)
         .expect("origin is registered");
     assert_eq!(text_at(&source, &origin.name_span), "origin");
     assert!(text_at(&source, &origin.span).starts_with("fn origin"));

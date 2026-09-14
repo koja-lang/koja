@@ -26,7 +26,9 @@ impl FileId {
 }
 
 /// A source range defined by a start and end position, plus the file it
-/// came from.
+/// came from. `end` is exclusive. It is the position of the first
+/// character after the range, so a one-line span covers columns
+/// `start.column..end.column`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Span {
     pub start: Position,

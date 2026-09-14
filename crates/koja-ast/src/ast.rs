@@ -46,15 +46,10 @@ pub enum Visibility {
 
 // Top level
 
-/// A declared name and the position of its token.
-///
-/// Declarations carry a `Name` instead of a bare `String` so that a
-/// diagnostic about the declaration, an editor's selection range, or a
-/// rename can point at the name token alone. `span` on the declaration
-/// covers the whole node.
-///
-/// Synthesized declarations (derived impls, default-parameter adapters,
-/// desugared `test` blocks) copy a source span or a synthetic span here.
+/// A declared name and the span of its token, so a diagnostic, an
+/// editor selection, or a rename can point at the name alone. The
+/// declaration's own `span` covers the whole node. Synthesized
+/// declarations carry a synthetic span here.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Name {
     pub text: String,
@@ -285,6 +280,18 @@ pub struct Diagnostic {
     pub message: String,
     pub hint: Option<String>,
     pub span: Span,
+    /// A second location that explains the diagnostic, such as the
+    /// earlier definition behind `already defined`. Boxed to keep
+    /// `Diagnostic` small.
+    pub related: Option<Box<Related>>,
+}
+
+/// A source location with a short label, such as `previous function
+/// definition` or `declared here`.
+#[derive(Debug, Clone)]
+pub struct Related {
+    pub message: String,
+    pub span: Span,
 }
 
 impl Diagnostic {
@@ -295,6 +302,7 @@ impl Diagnostic {
             message: message.into(),
             hint: None,
             span,
+            related: None,
         }
     }
 
@@ -309,6 +317,7 @@ impl Diagnostic {
             message: message.into(),
             hint: Some(hint.into()),
             span,
+            related: None,
         }
     }
 
@@ -319,6 +328,7 @@ impl Diagnostic {
             message: message.into(),
             hint: None,
             span,
+            related: None,
         }
     }
 
@@ -333,7 +343,17 @@ impl Diagnostic {
             message: message.into(),
             hint: Some(hint.into()),
             span,
+            related: None,
         }
+    }
+
+    /// Attach a second location. See [`Related`].
+    pub fn with_related(mut self, message: impl Into<String>, span: Span) -> Self {
+        self.related = Some(Box::new(Related {
+            message: message.into(),
+            span,
+        }));
+        self
     }
 }
 

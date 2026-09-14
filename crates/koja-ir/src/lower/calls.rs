@@ -651,7 +651,7 @@ fn canonical_receiver_id(id: GlobalRegistryId, registry: &GlobalRegistry) -> Glo
         "Int64" => "Int",
         _ => return id,
     };
-    let canonical_ident = Identifier::new("Global", vec![canonical.to_string()]);
+    let canonical_ident = Identifier::single("Global", canonical);
     registry
         .lookup(&canonical_ident)
         .map(|(id, _)| id)

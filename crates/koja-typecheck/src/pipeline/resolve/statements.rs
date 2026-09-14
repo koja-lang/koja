@@ -570,7 +570,7 @@ fn format_lvalue(lvalue: &LValue) -> String {
 /// package (same namespace as locals for single-segment assignment
 /// targets).
 fn assigns_to_package_constant(name: &str, resolver: &Resolver<'_>) -> bool {
-    let identifier = Identifier::new(resolver.package, vec![name.to_string()]);
+    let identifier = Identifier::single(resolver.package, name);
     resolver
         .registry
         .lookup(&identifier)

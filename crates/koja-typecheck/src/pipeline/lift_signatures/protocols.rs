@@ -21,7 +21,7 @@ pub(super) fn lift_protocol(
     scope: &mut LiftScope<'_>,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
-    let identifier = Identifier::new(scope.package, vec![decl.name.text.clone()]);
+    let identifier = Identifier::single(scope.package, decl.name.text.clone());
     let (id, already_lifted) = match scope.registry.lookup(&identifier) {
         Some((id, entry)) => (id, matches!(entry.kind, GlobalKind::Protocol(Some(_)))),
         None => panic!(

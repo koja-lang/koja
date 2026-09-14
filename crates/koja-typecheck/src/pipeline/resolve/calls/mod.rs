@@ -936,7 +936,7 @@ fn lookup_bare_callee<'a>(
     {
         return outcome;
     }
-    lookup_in(Identifier::new(package, vec![name.to_string()])).unwrap_or(BareCalleeLookup::Missing)
+    lookup_in(Identifier::single(package, name)).unwrap_or(BareCalleeLookup::Missing)
 }
 
 /// Pick the declared arity nearest to `requested`, for did-you-mean
@@ -1056,20 +1056,21 @@ fn check_callee_visibility(
     match entry.visibility {
         VisibilityScope::Public => unreachable!("Public always passes callee_is_visible"),
         VisibilityScope::PackagePrivate => {
-            diagnostics.push(Diagnostic::error_with_hint(
-                format!(
-                    "private function `{}` cannot be called from package `{}`",
-                    entry.identifier, resolver.package,
-                ),
-                format!(
-                    "`{}` is `priv fn`, callable only from package `{}` \
-                     (declared at line {})",
-                    entry.identifier,
-                    entry.identifier.package(),
-                    entry.span.start.line,
-                ),
-                call_span,
-            ));
+            diagnostics.push(
+                Diagnostic::error_with_hint(
+                    format!(
+                        "private function `{}` cannot be called from package `{}`",
+                        entry.identifier, resolver.package,
+                    ),
+                    format!(
+                        "`{}` is `priv fn`, callable only from package `{}`",
+                        entry.identifier,
+                        entry.identifier.package(),
+                    ),
+                    call_span,
+                )
+                .with_related("declared here", entry.name_span),
+            );
         }
         VisibilityScope::TypePrivate(owner) => {
             let owner_label = resolver
@@ -1077,18 +1078,20 @@ fn check_callee_visibility(
                 .get(owner)
                 .map(|e| e.identifier.to_string())
                 .unwrap_or_else(|| "<unknown>".to_string());
-            diagnostics.push(Diagnostic::error_with_hint(
-                format!(
-                    "private method `{}` cannot be called from here",
-                    entry.identifier,
-                ),
-                format!(
-                    "`{}` is `priv fn`, callable only from methods on `{owner_label}` \
-                     (declared at line {})",
-                    entry.identifier, entry.span.start.line,
-                ),
-                call_span,
-            ));
+            diagnostics.push(
+                Diagnostic::error_with_hint(
+                    format!(
+                        "private method `{}` cannot be called from here",
+                        entry.identifier,
+                    ),
+                    format!(
+                        "`{}` is `priv fn`, callable only from methods on `{owner_label}`",
+                        entry.identifier,
+                    ),
+                    call_span,
+                )
+                .with_related("declared here", entry.name_span),
+            );
         }
     }
 }

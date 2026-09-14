@@ -291,7 +291,7 @@ fn user_code_can_call_system_apis() {
 #[test]
 fn debug_protocol_registers_with_format_print_inspect() {
     let checked = typecheck("1\n");
-    let id = Identifier::new("Global", vec!["Debug".to_string()]);
+    let id = Identifier::single("Global", "Debug");
     let (_, entry) = checked
         .registry
         .lookup(&id)

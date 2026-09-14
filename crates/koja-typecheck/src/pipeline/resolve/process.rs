@@ -63,7 +63,7 @@ pub(super) fn resolve_spawn(
 
     let Some(process_id) = resolver
         .registry
-        .lookup(&Identifier::new("Global", vec!["Process".to_string()]))
+        .lookup(&Identifier::single("Global", "Process"))
         .map(|(id, _)| id)
     else {
         diagnostics.push(Diagnostic::error(
@@ -102,7 +102,7 @@ pub(super) fn resolve_spawn(
 
     let Some(ref_id) = resolver
         .registry
-        .lookup(&Identifier::new("Global", vec!["Ref".to_string()]))
+        .lookup(&Identifier::single("Global", "Ref"))
         .map(|(id, _)| id)
     else {
         diagnostics.push(Diagnostic::error(
@@ -141,7 +141,7 @@ pub(super) fn check_monitor_call_site(
     }
     let registry = resolver.registry;
     let Some(process_id) = registry
-        .lookup(&Identifier::new("Global", vec!["Process".to_string()]))
+        .lookup(&Identifier::single("Global", "Process"))
         .map(|(id, _)| id)
     else {
         return;

@@ -72,10 +72,13 @@ const STRING_TYPE: &str = "String";
 /// hand-written impl and a synthesized one and trip the
 /// `duplicate impl` collision in
 /// [`crate::pipeline::collect`].
+///
+/// Synthesized targets join `existing` too, so a type declared twice
+/// gets one derived impl and collect reports the duplicate once.
 pub(crate) fn derive_debug_package(pkg: &mut CheckedPackage) {
-    let existing = collect_package_debug_impls(pkg);
+    let mut existing = collect_package_debug_impls(pkg);
     for file in &mut pkg.files {
-        synthesize_into_file(file, &existing);
+        synthesize_into_file(file, &mut existing);
     }
 }
 
@@ -90,15 +93,17 @@ fn collect_package_debug_impls(pkg: &CheckedPackage) -> Vec<String> {
         .collect()
 }
 
-fn synthesize_into_file(file: &mut File, existing: &[String]) {
+fn synthesize_into_file(file: &mut File, existing: &mut Vec<String>) {
     let mut synthesized: Vec<Item> = Vec::new();
     for item in &file.items {
         match item {
             Item::Struct(decl) if needs_struct_derive(decl, existing) => {
                 synthesized.push(synthesize_struct_impl(decl));
+                existing.push(name_texts(&decl.path).join("."));
             }
             Item::Enum(decl) if needs_enum_derive(decl, existing) => {
                 synthesized.push(synthesize_enum_impl(decl));
+                existing.push(name_texts(&decl.path).join("."));
             }
             _ => {}
         }

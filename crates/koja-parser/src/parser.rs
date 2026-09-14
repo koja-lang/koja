@@ -243,6 +243,7 @@ impl Parser {
                 message,
                 hint,
                 span,
+                related: None,
             });
             self.advance()
         }
@@ -367,6 +368,7 @@ impl Parser {
             message,
             hint: None,
             span,
+            related: None,
         });
     }
 
@@ -376,6 +378,7 @@ impl Parser {
             message,
             hint: Some(hint),
             span,
+            related: None,
         });
     }
 

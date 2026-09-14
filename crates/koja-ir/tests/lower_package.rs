@@ -175,7 +175,7 @@ fn lower_program_reports_missing_entry_state() {
         ";
 
     let checked = typecheck(source, ParseMode::File);
-    let missing = Identifier::new(PACKAGE, vec!["App".to_string()]);
+    let missing = Identifier::single(PACKAGE, "App");
     let err =
         lower_program(&checked, &missing).expect_err("missing entry state should be reported");
     match err {
@@ -193,7 +193,7 @@ fn lower_program_reports_entry_state_without_process_impl() {
         ";
 
     let checked = typecheck(source, ParseMode::File);
-    let state = Identifier::new(PACKAGE, vec!["App".to_string()]);
+    let state = Identifier::single(PACKAGE, "App");
     let err = lower_program(&checked, &state)
         .expect_err("entry state without a Process impl should be reported");
     match err {

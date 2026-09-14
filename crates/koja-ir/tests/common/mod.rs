@@ -81,7 +81,7 @@ pub fn with_test_entry(source: &str) -> String {
 
 /// The synthetic entry's identifier (`TestApp.TestEntry`).
 pub fn test_entry_identifier() -> Identifier {
-    Identifier::new(PACKAGE, vec![TEST_ENTRY_NAME.to_string()])
+    Identifier::single(PACKAGE, TEST_ENTRY_NAME)
 }
 
 pub fn typecheck(source: &str, mode: ParseMode) -> CheckedProgram {

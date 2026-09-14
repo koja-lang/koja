@@ -1109,7 +1109,7 @@ pub(crate) fn receiver_type_id(receiver: &Expr, ctx: &LookupCtx<'_>) -> Option<G
 fn lookup_type(name: &str, ctx: &LookupCtx<'_>) -> Option<GlobalRegistryId> {
     use koja_ast::identifier::Identifier;
     for pkg in [ctx.package, "Global"] {
-        let ident = Identifier::new(pkg, vec![name.to_string()]);
+        let ident = Identifier::single(pkg, name);
         if let Some((id, _)) = ctx.registry.lookup(&ident) {
             return Some(id);
         }

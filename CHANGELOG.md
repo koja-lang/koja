@@ -23,8 +23,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `koja test` output follows the compiler's diagnostics style. `--trace` groups tests under their file, type, `Type: Protocol`, or extend target. A failed assertion draws its source line with the expression underlined and both operands labeled in the pretty style, or prints one `file:line:column: failure: ...` line in the short style. `--diagnostics`, `KOJA_DIAGNOSTICS`, `--no-color`, and `NO_COLOR` apply to `koja test` as they do to `koja check`, so piped output carries no color.
 - `koja format` keeps the members of a type body in source order. A `test` block, a nested type, and a function stay where the author put them instead of grouping by kind.
 - In `assert a == b` the right operand is typed from the left, so a literal or a unit variant on the right takes the left's type. `assert count == 0` against a `UInt32` and `assert stack.peek() == Option.None` now typecheck without an annotated local.
-- Diagnostics about a declaration point at its name instead of the whole declaration. `already defined`, the nested-type owner checks, and the private signature leak check underline the name token, and `already defined` cites the line of the earlier name.
-- The language server selects the name in the outline view and lands go-to-definition on the name of a function, method, type, constant, or protocol instead of the whole declaration.
+- Errors about a declaration, such as `already defined`, underline its name instead of the whole declaration.
+- Errors that involve a second declaration show where it is. `already defined` shows the earlier definition, a duplicate alias shows the earlier alias, and an error about a `priv` item shows where it is declared. The terminal draws the second location under the first, and editors link to it.
+- In the editor, the outline view and go-to-definition select the name of a function, type, constant, or protocol instead of the whole declaration.
 
 ### Deprecated
 
@@ -36,6 +37,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A `receive` in a helper method of a process whose message type includes `Process.ExitSignal` no longer fails LLVM code generation with `local slot not registered`.
 - `koja format` renders a binary pattern segment whose value or size is an expression, such as `<<head::len * 8>>`. The formatter wrote `<expr>` in its place.
 - `koja format` keeps the `\#{` escape in a string pattern. The formatter dropped the backslash, so the output re-parsed as an interpolation.
+- A type declared twice reports one error. It also no longer reports an error for each duplicate derived `Debug` and `Equality` method.
+- The underline in a terminal error no longer runs one column past the end of the code it points at.
 
 ### Removed
 

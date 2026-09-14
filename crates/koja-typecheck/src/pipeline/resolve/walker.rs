@@ -63,7 +63,7 @@ pub(crate) fn resolve_file(
     for item in &mut file.items {
         match item {
             Item::Function(function) => {
-                let identifier = Identifier::new(env.package, vec![function.name.text.clone()]);
+                let identifier = Identifier::single(env.package, function.name.text.clone());
                 resolve_function(function, &identifier, None, None, &mut env, diagnostics);
             }
             Item::Struct(decl) => {

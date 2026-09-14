@@ -56,7 +56,7 @@ pub(crate) fn collect_file_decls(
                 register_enum(decl, package, registry, diagnostics);
             }
             Item::Function(function) => {
-                let identifier = Identifier::new(package, vec![function.name.text.clone()]);
+                let identifier = Identifier::single(package, function.name.text.clone());
                 register_function_with_identifier(
                     function,
                     identifier,
@@ -278,19 +278,18 @@ fn register_function_with_identifier(
 
 /// The id of a fresh registry entry, or the `already defined` error
 /// for the duplicate declaration whose name sits at `name_span`. The
-/// hint points at the earlier declaration's name so both ends of the
-/// collision land on a name token.
+/// related location is the earlier declaration's name, so both ends
+/// of the collision land on a name token.
 fn fresh_id(outcome: InsertOutcome<'_>, name_span: Span) -> Result<GlobalRegistryId, Diagnostic> {
     match outcome {
         InsertOutcome::Fresh(id) => Ok(id),
-        InsertOutcome::Collision { existing } => Err(Diagnostic::error_with_hint(
+        InsertOutcome::Collision { existing } => Err(Diagnostic::error(
             format!("`{}` is already defined", existing.identifier),
-            format!(
-                "previous {} definition is at line {}",
-                existing.kind.label(),
-                existing.name_span.start.line
-            ),
             name_span,
+        )
+        .with_related(
+            format!("previous {} definition", existing.kind.label()),
+            existing.name_span,
         )),
     }
 }
@@ -477,9 +476,9 @@ fn register_ordinary_struct(
 
 /// Finish a struct-entry insert. A fresh entry takes its deprecation.
 /// On collision the existing entry's id is returned so the caller can
-/// still register inline methods against whatever type already owns
-/// the name: the duplicate decl is itself diagnosed, and methods
-/// declared under it would otherwise dangle.
+/// still register inline methods against the type that owns the name.
+/// The duplicate decl is diagnosed on its own, and its methods would
+/// otherwise dangle.
 fn record_struct_insert(
     inserted: Result<GlobalRegistryId, Diagnostic>,
     identifier: &Identifier,
@@ -853,7 +852,7 @@ fn register_protocol(
         &decl.annotations,
         diagnostics,
     );
-    let identifier = Identifier::new(package, vec![decl.name.text.clone()]);
+    let identifier = Identifier::single(package, decl.name.text.clone());
     let mut type_params = vec!["Self".to_string()];
     for param in &decl.type_params {
         if param.name == "Self" {
@@ -904,7 +903,7 @@ fn register_constant(
         &constant.annotations,
         diagnostics,
     );
-    let identifier = Identifier::new(package, vec![constant.name.text.clone()]);
+    let identifier = Identifier::single(package, constant.name.text.clone());
     let visibility = package_visibility_scope(constant.visibility);
     let deprecation = deprecation_message(&constant.annotations, diagnostics);
     let outcome =
@@ -934,7 +933,7 @@ fn register_type_alias(
         &alias.annotations,
         diagnostics,
     );
-    let identifier = Identifier::new(package, vec![alias.name.text.clone()]);
+    let identifier = Identifier::single(package, alias.name.text.clone());
     let visibility = package_visibility_scope(alias.visibility);
     let deprecation = deprecation_message(&alias.annotations, diagnostics);
     let outcome = registry.insert_type_alias(identifier, alias.span, alias.name.span, visibility);

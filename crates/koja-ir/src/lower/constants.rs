@@ -27,7 +27,7 @@ pub(super) fn lower_constant_pool_entry(
     package: &str,
     registry: &GlobalRegistry,
 ) -> Option<(IRSymbol, IRConstantValue)> {
-    let identifier = Identifier::new(package, vec![constant.name.text.clone()]);
+    let identifier = Identifier::single(package, constant.name.text.clone());
     let (id, entry) = registry.lookup(&identifier)?;
     if !matches!(entry.kind, GlobalKind::Constant(Some(_))) {
         return None;

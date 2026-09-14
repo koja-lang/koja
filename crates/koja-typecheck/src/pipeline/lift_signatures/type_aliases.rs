@@ -45,7 +45,7 @@ pub(super) fn lift_type_aliases(
                 let Item::TypeAlias(alias) = item else {
                     continue;
                 };
-                let identifier = Identifier::new(scope.package, vec![alias.name.text.clone()]);
+                let identifier = Identifier::single(scope.package, alias.name.text.clone());
                 let Some((id, _)) = scope.registry.lookup(&identifier) else {
                     continue;
                 };
@@ -86,7 +86,7 @@ fn diagnose_alias_cycles(
                 let Item::TypeAlias(alias) = item else {
                     continue;
                 };
-                let identifier = Identifier::new(&pkg.package, vec![alias.name.text.clone()]);
+                let identifier = Identifier::single(&pkg.package, alias.name.text.clone());
                 if let Some((id, entry)) = registry.lookup(&identifier) {
                     alias_sites.push(AliasSite {
                         id,

@@ -336,24 +336,26 @@ impl Backend {
             );
         }
 
-        self.publish_grouped(uri, version, &active_path, grouped)
+        self.publish_grouped(uri, version, &active_path, grouped, &source_paths)
             .await;
     }
 
     /// Publish each file's diagnostics to its own URI and clear the
-    /// URIs that lost theirs since the previous pass.
+    /// URIs that lost theirs since the previous pass. `source_paths`
+    /// resolves the file of a related location to its URI.
     async fn publish_grouped(
         &self,
         uri: Uri,
         version: Option<i32>,
         active_path: &Path,
         mut grouped: HashMap<PathBuf, Vec<KojaDiagnostic>>,
+        source_paths: &[PathBuf],
     ) {
         let active_diags: Vec<Diagnostic> = grouped
             .remove(active_path)
             .unwrap_or_default()
             .iter()
-            .map(to_lsp_diagnostic)
+            .map(|d| to_lsp_diagnostic(d, source_paths, &uri))
             .collect();
 
         let mut publishes: Vec<(Uri, Vec<Diagnostic>)> = Vec::new();
@@ -366,7 +368,11 @@ impl Backend {
                 continue;
             };
             now_published.insert(sibling_uri.clone());
-            publishes.push((sibling_uri, diags.iter().map(to_lsp_diagnostic).collect()));
+            let converted = diags
+                .iter()
+                .map(|d| to_lsp_diagnostic(d, source_paths, &sibling_uri))
+                .collect();
+            publishes.push((sibling_uri, converted));
         }
 
         let stale: Vec<Uri> = {
@@ -526,8 +532,10 @@ fn group_by_file(
     grouped
 }
 
-/// Converts a Koja compiler diagnostic to an LSP diagnostic.
-fn to_lsp_diagnostic(d: &KojaDiagnostic) -> Diagnostic {
+/// Converts a Koja compiler diagnostic to an LSP diagnostic. A
+/// related location becomes `related_information`, falling back to
+/// `own_uri` when its file id is not in `source_paths`.
+fn to_lsp_diagnostic(d: &KojaDiagnostic, source_paths: &[PathBuf], own_uri: &Uri) -> Diagnostic {
     let severity = match d.severity {
         KojaSeverity::Error => DiagnosticSeverity::ERROR,
         KojaSeverity::Warning => DiagnosticSeverity::WARNING,
@@ -541,11 +549,26 @@ fn to_lsp_diagnostic(d: &KojaDiagnostic) -> Diagnostic {
 
     let tags = is_deprecation_warning(d).then(|| vec![DiagnosticTag::DEPRECATED]);
 
+    let related_information = d.related.as_ref().map(|related| {
+        let uri = source_paths
+            .get(related.span.file.0 as usize)
+            .and_then(|path| path_to_uri(path))
+            .unwrap_or_else(|| own_uri.clone());
+        vec![DiagnosticRelatedInformation {
+            location: Location {
+                uri,
+                range: span_to_range(&related.span),
+            },
+            message: related.message.clone(),
+        }]
+    });
+
     Diagnostic {
         range: span_to_range(&d.span),
         severity: Some(severity),
         source: Some("koja".to_string()),
         message,
+        related_information,
         tags,
         ..Default::default()
     }
@@ -627,5 +650,38 @@ mod tests {
 
         let stale = stale_uris(&published, &now_published, &active);
         assert_eq!(stale, vec![lost]);
+    }
+
+    #[test]
+    fn related_location_resolves_to_its_own_file() {
+        let active = Uri::from_str("file:///proj/src/main.koja").unwrap();
+        let source_paths = vec![
+            PathBuf::from("/proj/src/main.koja"),
+            PathBuf::from("/proj/src/util.koja"),
+        ];
+        let related_span = Span {
+            file: FileId(1),
+            ..Span::default()
+        };
+        let diagnostic = diag(FileId(0)).with_related("previous function definition", related_span);
+
+        let converted = to_lsp_diagnostic(&diagnostic, &source_paths, &active);
+        let related = converted.related_information.expect("related information");
+        assert_eq!(related.len(), 1);
+        assert_eq!(related[0].message, "previous function definition");
+        assert_eq!(
+            related[0].location.uri,
+            Uri::from_str("file:///proj/src/util.koja").unwrap()
+        );
+    }
+
+    #[test]
+    fn related_location_with_unresolved_file_stays_in_own_uri() {
+        let active = Uri::from_str("file:///proj/src/main.koja").unwrap();
+        let diagnostic = diag(FileId(0)).with_related("declared here", Span::default());
+
+        let converted = to_lsp_diagnostic(&diagnostic, &[], &active);
+        let related = converted.related_information.expect("related information");
+        assert_eq!(related[0].location.uri, active);
     }
 }

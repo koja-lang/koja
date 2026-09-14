@@ -213,7 +213,7 @@ fn stage_process_entry(
             })?;
     let process_proto_id = checked
         .registry
-        .lookup(&Identifier::new("Global", vec!["Process".to_string()]))
+        .lookup(&Identifier::single("Global", "Process"))
         .map(|(id, _)| id)
         .expect("IR lower: `Global.Process` protocol missing from registry");
     // The entry state is non-generic (the only shape `koja.toml` can

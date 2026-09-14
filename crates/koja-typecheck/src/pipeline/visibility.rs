@@ -34,20 +34,22 @@ pub(crate) fn check_reference_visibility(
     {
         return;
     }
-    diagnostics.push(Diagnostic::error_with_hint(
-        format!(
-            "private {} `{}` cannot be referenced from package `{referrer_package}`",
-            entry.kind.label(),
-            entry.identifier,
-        ),
-        format!(
-            "`{}` is `priv`, usable only from package `{}` (declared at line {})",
-            entry.identifier,
-            entry.identifier.package(),
-            entry.name_span.start.line,
-        ),
-        span,
-    ));
+    diagnostics.push(
+        Diagnostic::error_with_hint(
+            format!(
+                "private {} `{}` cannot be referenced from package `{referrer_package}`",
+                entry.kind.label(),
+                entry.identifier,
+            ),
+            format!(
+                "`{}` is `priv`, usable only from package `{}`",
+                entry.identifier,
+                entry.identifier.package(),
+            ),
+            span,
+        )
+        .with_related("declared here", entry.name_span),
+    );
 }
 
 /// Reject every public declaration whose signature surface mentions a

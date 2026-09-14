@@ -259,7 +259,7 @@ fn resolve_union_hash(
 }
 
 fn protocol_bound(name: &str, registry: &GlobalRegistry) -> Option<ResolvedProtocolBound> {
-    let identifier = Identifier::new("Global", vec![name.to_string()]);
+    let identifier = Identifier::single("Global", name);
     registry
         .lookup(&identifier)
         .map(|(protocol_id, _)| ResolvedProtocolBound {

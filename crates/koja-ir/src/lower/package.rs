@@ -88,8 +88,7 @@ pub(crate) fn lower_package(
                     }
                 }
                 Item::Function(function) => {
-                    let identifier =
-                        Identifier::new(&pkg.package, vec![function.name.text.clone()]);
+                    let identifier = Identifier::single(&pkg.package, function.name.text.clone());
                     if let Some(lowered) = lower_function_with_identifier(
                         function, identifier, def_file, registry, output,
                     ) {

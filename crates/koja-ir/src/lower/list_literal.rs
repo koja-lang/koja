@@ -25,7 +25,7 @@ pub(super) fn lower_list_literal(
     output: &mut LowerOutput,
 ) -> Result<(ValueId, IRBlockId), ()> {
     let list_id = registry
-        .lookup(&Identifier::new("Global", vec!["List".to_string()]))
+        .lookup(&Identifier::single("Global", "List"))
         .map(|(id, _)| id)
         .unwrap_or_else(|| {
             panic!(

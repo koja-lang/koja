@@ -18,7 +18,7 @@ use koja_parser::ParseMode;
 /// Lower `source` (an entry named `App`) and run it with no args.
 fn run_app(source: &str) -> Value {
     let checked = typecheck(&dedent(source), ParseMode::File);
-    let entry = Identifier::new(PACKAGE, vec!["App".to_string()]);
+    let entry = Identifier::single(PACKAGE, "App");
     let program = lower_program(&checked, &entry).expect("lowering should succeed");
     Interpreter::run_program(&program, &[]).expect("entry should run to completion")
 }

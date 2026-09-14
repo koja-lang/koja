@@ -30,7 +30,7 @@ fn dot_candidates_use_stable_kind_then_label_order() {
         ";
 
     let checked = typecheck(&dedent(source));
-    let identifier = Identifier::new(PACKAGE, vec!["Sample".to_string()]);
+    let identifier = Identifier::single(PACKAGE, "Sample");
     let (sample_id, _) = checked
         .registry
         .lookup(&identifier)

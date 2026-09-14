@@ -32,7 +32,7 @@ fn happy_path_explicit_width_primitives_typechecks() {
     let checked = typecheck(&dedent(source));
 
     for name in ["cosf", "sleep", "unit_effect", "pure_bool"] {
-        let id = Identifier::new(PACKAGE, vec![name.to_string()]);
+        let id = Identifier::single(PACKAGE, name);
         let (_, entry) = checked
             .registry
             .lookup(&id)
@@ -64,7 +64,7 @@ fn cptr_pointee_typechecks_for_any_t() {
     let checked = typecheck(&dedent(source));
 
     for name in ["malloc", "free", "opaque_handle"] {
-        let id = Identifier::new(PACKAGE, vec![name.to_string()]);
+        let id = Identifier::single(PACKAGE, name);
         assert!(
             checked.registry.lookup(&id).is_some(),
             "`{name}` should be registered",
@@ -87,7 +87,7 @@ fn link_annotations_are_accepted_metadata() {
     let checked = typecheck(&dedent(source));
 
     for name in ["cosf", "sha256_init"] {
-        let id = Identifier::new(PACKAGE, vec![name.to_string()]);
+        let id = Identifier::single(PACKAGE, name);
         assert!(
             checked.registry.lookup(&id).is_some(),
             "`{name}` should be registered alongside `@link`",

@@ -166,7 +166,7 @@ pub(crate) fn lift_signatures(
                     Item::Enum(decl) => enums::lift_enum(decl, &mut scope, diagnostics),
                     Item::Function(function) => {
                         let identifier =
-                            Identifier::new(scope.package, vec![function.name.text.clone()]);
+                            Identifier::single(scope.package, function.name.text.clone());
                         functions::lift_function_with_identifier(
                             function,
                             identifier,
@@ -290,7 +290,7 @@ fn resolve_all_bounds(
                     Item::Enum(decl) => resolve_enum_bounds(decl, &mut scope, diagnostics),
                     Item::Function(function) => resolve_function_bounds(
                         function,
-                        Identifier::new(scope.package, vec![function.name.text.clone()]),
+                        Identifier::single(scope.package, function.name.text.clone()),
                         &mut scope,
                         diagnostics,
                     ),
@@ -387,7 +387,7 @@ fn resolve_protocol_bounds(
     scope: &mut LiftScope<'_>,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
-    let identifier = Identifier::new(scope.package, vec![decl.name.text.clone()]);
+    let identifier = Identifier::single(scope.package, decl.name.text.clone());
     let Some((id, _)) = scope.registry.lookup(&identifier) else {
         return;
     };
@@ -475,7 +475,7 @@ fn collect_protocol_bodies(
                 let Item::Protocol(decl) = item else {
                     continue;
                 };
-                let identifier = Identifier::new(&pkg.package, vec![decl.name.text.clone()]);
+                let identifier = Identifier::single(&pkg.package, decl.name.text.clone());
                 let Some((id, _)) = registry.lookup(&identifier) else {
                     continue;
                 };

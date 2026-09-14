@@ -252,7 +252,7 @@ mod tests {
     use super::*;
 
     fn symbol(name: &str) -> IRSymbol {
-        IRSymbol::from_identifier(&Identifier::new("Test", vec![name.to_string()]))
+        IRSymbol::from_identifier(&Identifier::single("Test", name))
     }
 
     #[test]

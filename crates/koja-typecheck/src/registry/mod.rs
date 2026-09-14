@@ -105,7 +105,7 @@ impl GlobalKind {
 /// [`GlobalKind`], source spans, and any generic-decl param names
 /// declared on it. `span` covers the whole declaration and
 /// `name_span` its name token, so a diagnostic or an editor can point
-/// at the name alone. Both come from the AST node at collect time.
+/// at the name alone.
 /// `type_params` is stamped at collect time directly from the
 /// AST so [`GlobalRegistry::type_params`] is queryable mid-lift,
 /// before [`StructDefinition`] / [`EnumDefinition`] / signature
@@ -1224,7 +1224,7 @@ impl GlobalRegistry {
     /// semantics, so the lookup lives here rather than getting
     /// duplicated per pass.
     pub(crate) fn primitive(&self, name: &str) -> ResolvedType {
-        let ident = Identifier::new("Global", vec![name.to_string()]);
+        let ident = Identifier::single("Global", name);
         let (id, _) = self.lookup(&ident).unwrap_or_else(|| {
             panic!(
                 "stdlib stub `Global.{name}` missing from registry. \
@@ -1345,7 +1345,7 @@ impl GlobalRegistry {
         UNIVERSAL_PROTOCOLS
             .iter()
             .filter_map(|name| {
-                let identifier = Identifier::new("Global", vec![(*name).to_string()]);
+                let identifier = Identifier::single("Global", *name);
                 self.lookup(&identifier).map(|(id, _)| id)
             })
             .collect()
@@ -1374,7 +1374,7 @@ fn seed_builtin_stub(
         shape,
     });
     let outcome = reg.insert(
-        Identifier::new("Global", vec![name.to_string()]),
+        Identifier::single("Global", name),
         kind,
         Span::default(),
         Span::default(),
@@ -1418,7 +1418,7 @@ mod tests {
     #[test]
     fn claim_builtin_stub_stamps_spans_and_consumes_stub() {
         let mut reg = GlobalRegistry::with_stdlib_stubs();
-        let identifier = Identifier::new("Global", vec!["String".to_string()]);
+        let identifier = Identifier::single("Global", "String");
 
         let Some(ClaimOutcome::Claimed(id)) =
             reg.claim_builtin_stub(&identifier, decl_span(), name_span(), Vec::new())
@@ -1438,7 +1438,7 @@ mod tests {
     #[test]
     fn claim_builtin_stub_adopts_declared_param_names() {
         let mut reg = GlobalRegistry::with_stdlib_stubs();
-        let identifier = Identifier::new("Global", vec!["List".to_string()]);
+        let identifier = Identifier::single("Global", "List");
 
         let Some(ClaimOutcome::Claimed(id)) = reg.claim_builtin_stub(
             &identifier,
@@ -1454,7 +1454,7 @@ mod tests {
     #[test]
     fn claim_builtin_stub_reports_arity_mismatch() {
         let mut reg = GlobalRegistry::with_stdlib_stubs();
-        let identifier = Identifier::new("Global", vec!["Map".to_string()]);
+        let identifier = Identifier::single("Global", "Map");
 
         let Some(ClaimOutcome::ArityMismatch { id, expected_arity }) =
             reg.claim_builtin_stub(&identifier, decl_span(), name_span(), vec!["K".to_string()])
@@ -1472,7 +1472,7 @@ mod tests {
     #[test]
     fn claim_builtin_stub_rejects_non_builtin_identifiers() {
         let mut reg = GlobalRegistry::with_stdlib_stubs();
-        let user_struct = Identifier::new("App", vec!["Config".to_string()]);
+        let user_struct = Identifier::single("App", "Config");
         let InsertOutcome::Fresh(_) = reg.insert_struct(
             user_struct.clone(),
             Span::default(),
@@ -1487,7 +1487,7 @@ mod tests {
             reg.claim_builtin_stub(&user_struct, decl_span(), name_span(), Vec::new())
                 .is_none()
         );
-        let missing = Identifier::new("App", vec!["Missing".to_string()]);
+        let missing = Identifier::single("App", "Missing");
         assert!(
             reg.claim_builtin_stub(&missing, decl_span(), name_span(), Vec::new())
                 .is_none()

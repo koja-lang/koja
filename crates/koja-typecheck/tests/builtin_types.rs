@@ -24,7 +24,7 @@ const BUILTINS: &[&str] = &[
 fn stdlib_declarations_claim_every_builtin_stub() {
     let checked = typecheck_script("x = 1");
     for name in BUILTINS {
-        let identifier = Identifier::new("Global", vec![(*name).to_string()]);
+        let identifier = Identifier::single("Global", *name);
         let (_, entry) = checked
             .registry
             .lookup(&identifier)

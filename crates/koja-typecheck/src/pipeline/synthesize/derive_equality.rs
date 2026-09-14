@@ -45,10 +45,12 @@ const OTHER_PARAM: &str = "other";
 /// that doesn't already have one. Existing impls are scanned across
 /// the whole package first so a hand-written impl in one file
 /// suppresses synthesis in any other file of the same package.
+/// Synthesized targets join `existing` too, so a type declared twice
+/// gets one derived impl and collect reports the duplicate once.
 pub(crate) fn derive_equality_package(pkg: &mut CheckedPackage) {
-    let existing = collect_package_equality_impls(pkg);
+    let mut existing = collect_package_equality_impls(pkg);
     for file in &mut pkg.files {
-        synthesize_into_file(file, &existing);
+        synthesize_into_file(file, &mut existing);
     }
 }
 
@@ -63,15 +65,17 @@ fn collect_package_equality_impls(pkg: &CheckedPackage) -> Vec<String> {
         .collect()
 }
 
-fn synthesize_into_file(file: &mut File, existing: &[String]) {
+fn synthesize_into_file(file: &mut File, existing: &mut Vec<String>) {
     let mut synthesized: Vec<Item> = Vec::new();
     for item in &file.items {
         match item {
             Item::Struct(decl) if needs_struct_derive(decl, existing) => {
                 synthesized.push(synthesize_struct_impl(decl));
+                existing.push(name_texts(&decl.path).join("."));
             }
             Item::Enum(decl) if needs_enum_derive(decl, existing) => {
                 synthesized.push(synthesize_enum_impl(decl));
+                existing.push(name_texts(&decl.path).join("."));
             }
             _ => {}
         }

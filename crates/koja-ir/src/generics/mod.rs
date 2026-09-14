@@ -184,7 +184,7 @@ fn index_item<'a>(
 ) {
     match item {
         Item::Function(function) => {
-            let identifier = Identifier::new(package, vec![function.name.text.clone()]);
+            let identifier = Identifier::single(package, function.name.text.clone());
             insert_function(map, registry, &identifier, function, def_file);
         }
         Item::Builtin(decl) => {

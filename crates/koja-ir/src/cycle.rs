@@ -259,7 +259,7 @@ mod tests {
     use std::collections::BTreeMap;
 
     fn sym(name: &str) -> IRSymbol {
-        IRSymbol::from_identifier(&Identifier::new("TestApp", vec![name.to_string()]))
+        IRSymbol::from_identifier(&Identifier::single("TestApp", name))
     }
 
     fn make_package(structs: Vec<IRStructDecl>, enums: Vec<IREnumDecl>) -> IRPackage {

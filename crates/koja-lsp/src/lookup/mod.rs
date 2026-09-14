@@ -392,7 +392,7 @@ pub(crate) fn classify_name(name: &str, ctx: &LookupCtx<'_>) -> Option<SymbolInf
 }
 
 fn classify_in_package(name: &str, package: &str, registry: &GlobalRegistry) -> Option<SymbolInfo> {
-    let identifier = Identifier::new(package, vec![name.to_string()]);
+    let identifier = Identifier::single(package, name);
     let (_, entry) = registry.lookup(&identifier)?;
     Some(match &entry.kind {
         GlobalKind::Builtin(_) => SymbolInfo::Builtin {
