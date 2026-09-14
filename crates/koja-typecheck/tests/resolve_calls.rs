@@ -87,7 +87,7 @@ fn arg_taking_call_resolves_and_registers_signature() {
         assert_eq!(arg.value.resolution, int);
     }
 
-    let add_ident = Identifier::new(PACKAGE, vec!["add".to_string()]);
+    let add_ident = Identifier::single(PACKAGE, "add");
     let (_, add_entry) = checked
         .registry
         .lookup(&add_ident)

@@ -6,7 +6,7 @@
 //! error sentinel so later phases can still walk the rest of the
 //! file.
 
-use koja_ast::ast::{Annotation, Constant, Item, Visibility};
+use koja_ast::ast::{Annotation, Constant, Item, Name, Visibility};
 use koja_ast::token::TokenKind;
 
 use crate::parser::{ERROR_IDENT, Parser};
@@ -19,19 +19,19 @@ impl Parser {
     ) -> Item {
         let start = self.current_span();
         self.expect(&TokenKind::Const);
+        let name_span = self.current_span();
         let name = match self.peek().clone() {
             TokenKind::Ident(name) | TokenKind::TypeIdent(name) => {
                 self.advance();
-                name
+                Name::new(name, name_span)
             }
             _ => {
-                let span = self.current_span();
                 self.error(
                     format!("expected constant name, found {}", self.peek()),
-                    span,
+                    name_span,
                 );
                 self.advance();
-                ERROR_IDENT.to_string()
+                Name::new(ERROR_IDENT, name_span)
             }
         };
         let type_annotation = if self.peek() == &TokenKind::Colon {

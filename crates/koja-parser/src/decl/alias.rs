@@ -21,7 +21,7 @@ impl Parser {
     ) -> TypeAlias {
         let start = self.current_span();
         self.advance(); // type
-        let name = self.expect_type_ident();
+        let name = self.expect_type_name();
         self.expect(&TokenKind::Eq);
         let type_expr = self.parse_type_expr();
         TypeAlias {

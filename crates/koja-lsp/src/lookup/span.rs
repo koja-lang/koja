@@ -22,12 +22,6 @@ pub(crate) fn span_contains(span: &Span, line: u32, col: u32) -> bool {
     true
 }
 
-/// Returns `true` if the cursor is on the name portion of the span's
-/// start line.
-pub(crate) fn span_contains_name(_name: &str, span: &Span, line: u32, col: u32) -> bool {
-    !span.synthetic && span.start.line == line && col >= span.start.column && col <= span.end.column
-}
-
 /// Extracts the doc string from a `@doc` annotation, if present.
 pub(crate) fn annotation_doc(annotations: &[Annotation]) -> Option<String> {
     annotations

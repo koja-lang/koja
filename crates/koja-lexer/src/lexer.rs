@@ -154,6 +154,7 @@ impl<'source> Lexer<'source> {
             message: message.into(),
             hint: Some(hint.into()),
             span,
+            related: None,
         });
     }
 
@@ -667,6 +668,7 @@ impl<'source> Lexer<'source> {
             message: format!("unexpected character '{character}'"),
             hint,
             span: self.span(start),
+            related: None,
         });
     }
 }

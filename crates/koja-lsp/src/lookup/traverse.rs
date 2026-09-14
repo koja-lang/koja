@@ -11,31 +11,6 @@ use super::span::span_contains;
 use super::{LookupCtx, SymbolInfo, classify_name};
 use crate::format::format_resolved_type;
 
-/// Attempts to match a function name identifier at the cursor position.
-///
-/// Accounts for the `fn ` keyword prefix when calculating the identifier's
-/// column range.
-pub(crate) fn find_in_ident_at_name(
-    name: &str,
-    span: &Span,
-    line: u32,
-    col: u32,
-    ctx: &LookupCtx<'_>,
-) -> Option<SymbolInfo> {
-    if span.start.line != line {
-        return None;
-    }
-    let name_start = span.start.column;
-    let fn_keyword_len = if name_start >= 4 { 3 } else { 0 };
-    let ident_start = name_start + fn_keyword_len;
-    let ident_end = ident_start + name.len() as u32;
-
-    if col >= ident_start && col <= ident_end {
-        return classify_name(name, ctx);
-    }
-    None
-}
-
 /// Searches function parameters for type annotations at the cursor position.
 pub(crate) fn find_in_params(
     params: &[Param],
@@ -1134,7 +1109,7 @@ pub(crate) fn receiver_type_id(receiver: &Expr, ctx: &LookupCtx<'_>) -> Option<G
 fn lookup_type(name: &str, ctx: &LookupCtx<'_>) -> Option<GlobalRegistryId> {
     use koja_ast::identifier::Identifier;
     for pkg in [ctx.package, "Global"] {
-        let ident = Identifier::new(pkg, vec![name.to_string()]);
+        let ident = Identifier::single(pkg, name);
         if let Some((id, _)) = ctx.registry.lookup(&ident) {
             return Some(id);
         }

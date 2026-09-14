@@ -141,7 +141,7 @@ fn impl_records_protocol_args_on_target_conformances() {
     };
     let (expected_string_id, _) = checked
         .registry
-        .lookup(&Identifier::new("Global", vec!["String".to_string()]))
+        .lookup(&Identifier::single("Global", "String"))
         .expect("String registered");
     assert_eq!(string_id, expected_string_id);
 }

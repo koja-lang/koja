@@ -68,7 +68,7 @@ const WATCH_ENTRY: &str = r#"
 fn run_watch_entry(fd: i32) -> i64 {
     let source = dedent(WATCH_ENTRY).replace("__FD__", &fd.to_string());
     let checked = typecheck(&source, ParseMode::File);
-    let entry = Identifier::new(PACKAGE, vec!["App".to_string()]);
+    let entry = Identifier::single(PACKAGE, "App");
     let program = lower_program(&checked, &entry).expect("lowering should succeed");
     match Interpreter::run_program(&program, &[]).expect("entry should run to completion") {
         Value::Int(code) => code,

@@ -13,7 +13,7 @@ use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
 use koja_ast::ast::{Diagnostic, Severity};
-use koja_ast::span::FileId;
+use koja_ast::span::{FileId, Span};
 
 /// Source files for rendering, indexed by [`FileId`]. A diagnostic
 /// whose file id misses the table renders without a location.
@@ -161,28 +161,41 @@ fn render_with_style(
     rendered.join(separator)
 }
 
-/// `path:line:col: severity: message (hint: ...)`. Newlines in the
-/// message and hint flatten to spaces so one diagnostic is always
-/// exactly one line.
+/// `path:line:col: severity: message (hint: ...) (related at
+/// path:line:col)`. Newlines in the message and hint flatten to
+/// spaces so one diagnostic is always exactly one line.
 fn render_short(diagnostic: &Diagnostic, sources: &SourceTable) -> String {
-    let location = match sources.resolve(diagnostic.span.file) {
-        Some((path, _)) => format!(
-            "{}:{}:{}",
-            display_path(path),
-            diagnostic.span.start.line,
-            diagnostic.span.start.column,
-        ),
-        None => "<unknown>".to_string(),
-    };
     let mut line = format!(
-        "{location}: {}: {}",
+        "{}: {}: {}",
+        short_location(diagnostic.span, sources),
         severity_name(diagnostic.severity),
         flatten(&diagnostic.message),
     );
     if let Some(hint) = &diagnostic.hint {
         line.push_str(&format!(" (hint: {})", flatten(hint)));
     }
+    if let Some(related) = &diagnostic.related {
+        line.push_str(&format!(
+            " ({} at {})",
+            flatten(&related.message),
+            short_location(related.span, sources),
+        ));
+    }
     line
+}
+
+/// `path:line:col`, or `<unknown>` when the span's file is not in
+/// the table.
+fn short_location(span: Span, sources: &SourceTable) -> String {
+    match sources.resolve(span.file) {
+        Some((path, _)) => format!(
+            "{}:{}:{}",
+            display_path(path),
+            span.start.line,
+            span.start.column,
+        ),
+        None => "<unknown>".to_string(),
+    }
 }
 
 /// Box-drawing snippet layout:
@@ -199,7 +212,24 @@ fn render_short(diagnostic: &Diagnostic, sources: &SourceTable) -> String {
 /// ```
 ///
 /// Long or multiline hints fall back to a `= help:` block after the
-/// snippet instead of the inline label.
+/// snippet instead of the inline label. A related location renders
+/// as a second snippet with its message as the label.
+///
+/// ```text
+/// error: `App.greet` is already defined
+///    ╭─ src/main.koja:5:4
+///    │
+///  4 │
+///  5 │ fn greet
+///    │    ─────
+///  6 │   2
+///    ╭─ src/main.koja:1:4
+///    │
+///  1 │ fn greet
+///    │    ──┬──
+///    │      ╰─ previous function definition
+///  2 │   1
+/// ```
 fn render_pretty(diagnostic: &Diagnostic, sources: &SourceTable, color: bool) -> String {
     let palette = Palette {
         color,
@@ -211,39 +241,68 @@ fn render_pretty(diagnostic: &Diagnostic, sources: &SourceTable, color: bool) ->
         palette.bold(&diagnostic.message),
     );
 
-    let inline_hint = diagnostic
-        .hint
-        .as_deref()
-        .filter(|hint| !hint.contains('\n') && hint.chars().count() <= INLINE_HINT_LIMIT);
+    let hint = diagnostic.hint.as_deref();
+    let inline_hint = hint.filter(|hint| fits_inline(hint));
+    let help = hint.filter(|_| inline_hint.is_none());
 
     if let Some((path, source)) = sources.resolve(diagnostic.span.file) {
-        let source = (!source.is_empty()).then_some(source);
         out.push('\n');
         out.push_str(&render_snippet(
-            diagnostic,
+            Snippet {
+                span: diagnostic.span,
+                label: inline_hint,
+                help,
+            },
             path,
             source,
-            inline_hint,
             &palette,
         ));
-    } else if let Some(hint) = &diagnostic.hint {
+    } else if let Some(hint) = hint {
         out.push('\n');
-        out.push_str(&render_help_block(hint, "", &palette));
+        out.push_str(&render_help_block("help", hint, "", &palette));
+    }
+
+    if let Some(related) = &diagnostic.related {
+        let label = Some(related.message.as_str()).filter(|message| fits_inline(message));
+        let note = label.is_none().then_some(related.message.as_str());
+        out.push('\n');
+        if let Some((path, source)) = sources.resolve(related.span.file) {
+            out.push_str(&render_snippet(
+                Snippet {
+                    span: related.span,
+                    label,
+                    help: note,
+                },
+                path,
+                source,
+                &palette,
+            ));
+        } else {
+            out.push_str(&render_help_block("note", &related.message, "", &palette));
+        }
     }
     out
 }
 
+/// Whether `text` can sit on the `╰─` row under an underline.
+fn fits_inline(text: &str) -> bool {
+    !text.contains('\n') && text.chars().count() <= INLINE_HINT_LIMIT
+}
+
+/// One underlined source range with its optional inline label and
+/// trailing `= help:` text.
+struct Snippet<'a> {
+    span: Span,
+    label: Option<&'a str>,
+    help: Option<&'a str>,
+}
+
 /// The location line plus, when the source is available, the
-/// context/source/underline rows. A hint too long for an inline
-/// label lands as a trailing `= help:` block.
-fn render_snippet(
-    diagnostic: &Diagnostic,
-    path: &Path,
-    source: Option<&str>,
-    inline_hint: Option<&str>,
-    palette: &Palette,
-) -> String {
-    let span = diagnostic.span;
+/// context/source/underline rows. `help` lands as a trailing
+/// `= help:` block.
+fn render_snippet(snippet: Snippet<'_>, path: &Path, source: &str, palette: &Palette) -> String {
+    let Snippet { span, label, help } = snippet;
+    let source = (!source.is_empty()).then_some(source);
     let line_number = span.start.line as usize;
     let lines: Vec<&str> = source.map(|s| s.lines().collect()).unwrap_or_default();
     // Line numbers are 1-based and `lines` is 0-based.
@@ -273,46 +332,38 @@ fn render_snippet(
             rows.push(palette.dim(&format!("{:>width$} │ {text}", line_number - 1)));
         }
         rows.push(format!("{} {source_line}", gutter(line_number.to_string())));
-        rows.extend(underline_rows(
-            diagnostic,
-            source_line,
-            inline_hint,
-            &gutter,
-            palette,
-        ));
+        rows.extend(underline_rows(span, source_line, label, &gutter, palette));
         if let Some(text) = context_after {
             rows.push(palette.dim(&format!("{:>width$} │ {text}", line_number + 1)));
         }
     }
-    if let Some(hint) = &diagnostic.hint
-        && inline_hint.is_none()
-    {
-        rows.push(render_help_block(hint, &pad, palette));
+    if let Some(help) = help {
+        rows.push(render_help_block("help", help, &pad, palette));
     }
     rows.join("\n")
 }
 
-/// The `───┬───` row, plus the `╰─ hint` row when an inline hint is
+/// The `───┬───` row, plus the `╰─ label` row when a label is
 /// present. Multi-line spans underline from the start column to the
-/// end of the first line.
+/// end of the first line. Columns are 1-based and `end` is exclusive,
+/// so both convert to 0-based indexes by subtracting one.
 fn underline_rows(
-    diagnostic: &Diagnostic,
+    span: Span,
     source_line: &str,
-    inline_hint: Option<&str>,
+    label: Option<&str>,
     gutter: &impl Fn(String) -> String,
     palette: &Palette,
 ) -> Vec<String> {
-    let span = diagnostic.span;
     let start = span.start.column.saturating_sub(1) as usize;
     let end = if span.start.line == span.end.line {
-        (span.end.column as usize).max(start + 1)
+        (span.end.column.saturating_sub(1) as usize).max(start + 1)
     } else {
         source_line.chars().count().max(start + 1)
     };
     let length = end.saturating_sub(start).max(1);
     let indent = " ".repeat(start);
 
-    let Some(hint) = inline_hint else {
+    let Some(label) = label else {
         let underline = "─".repeat(length);
         return vec![format!(
             "{} {indent}{}",
@@ -335,19 +386,20 @@ fn underline_rows(
         format!(
             "{} {label_indent}{}",
             gutter(String::new()),
-            palette.accent(&format!("╰─ {hint}")),
+            palette.accent(&format!("╰─ {label}")),
         ),
     ]
 }
 
-/// `= help:` block for hints too long for an inline label. `pad`
-/// matches the snippet gutter so the `=` aligns with the `│` rows.
-/// Continuation lines align under the first.
-fn render_help_block(hint: &str, pad: &str, palette: &Palette) -> String {
-    let mut lines = hint.lines();
+/// `= help:` (or `= note:`) block for text too long for an inline
+/// label. `pad` matches the snippet gutter so the `=` aligns with the
+/// `│` rows. Continuation lines align under the first.
+fn render_help_block(kind: &str, text: &str, pad: &str, palette: &Palette) -> String {
+    let mut lines = text.lines();
     let first = lines.next().unwrap_or_default();
-    let mut out = format!("{pad} {} {first}", palette.accent("= help:"));
-    let continuation_indent = " ".repeat(pad.len() + 9);
+    let heading = format!("= {kind}:");
+    let mut out = format!("{pad} {} {first}", palette.accent(&heading));
+    let continuation_indent = " ".repeat(pad.len() + heading.len() + 2);
     for line in lines {
         out.push_str(&format!("\n{continuation_indent}{line}"));
     }
@@ -442,6 +494,7 @@ mod tests {
         }
     }
 
+    /// `end_column` is exclusive, as the lexer produces it.
     fn span(line: u32, start_column: u32, end_column: u32) -> Span {
         Span::new(
             position(line, start_column),
@@ -478,7 +531,7 @@ mod tests {
         let diagnostic = Diagnostic::error_with_hint(
             "unknown function `Point.orign`",
             "did you mean `origin`?",
-            span(2, 7, 17),
+            span(2, 7, 18),
         );
         let expected = "\
 error: unknown function `Point.orign`
@@ -499,7 +552,7 @@ error: unknown function `Point.orign`
     fn pretty_long_hint_falls_back_to_help_block() {
         let hint = "describe the replacement, for example a fully qualified path like `Global.New`";
         let diagnostic =
-            Diagnostic::error_with_hint("unknown function `Point.orign`", hint, span(2, 7, 17));
+            Diagnostic::error_with_hint("unknown function `Point.orign`", hint, span(2, 7, 18));
         let expected = format!(
             "\
 error: unknown function `Point.orign`
@@ -532,7 +585,7 @@ error: unknown function `Point.orign`
 
     #[test]
     fn pretty_missing_source_keeps_header_and_location() {
-        let diagnostic = Diagnostic::error("something failed", span(2, 7, 17));
+        let diagnostic = Diagnostic::error("something failed", span(2, 7, 18));
         let table = SourceTable::new(vec![(PathBuf::from(FILE), String::new())]);
         let expected = "\
 error: something failed
@@ -548,7 +601,7 @@ error: something failed
         let diagnostic = Diagnostic::error_with_hint(
             "public signature leaks private type",
             "mark the type public",
-            span(2, 7, 17),
+            span(2, 7, 18),
         );
         let expected = "\
 error: public signature leaks private type
@@ -560,11 +613,59 @@ error: public signature leaks private type
     }
 
     #[test]
+    fn pretty_related_location_renders_a_second_snippet() {
+        let diagnostic = Diagnostic::error("`App.setup` is already defined", span(2, 7, 12))
+            .with_related("previous function definition", span(1, 4, 9));
+        let expected = "\
+error: `App.setup` is already defined
+  ╭─ src/main.koja:2:7
+  │
+1 │ fn setup() -> Point
+2 │   p = Point.orign()
+  │       ─────
+3 │ end
+  ╭─ src/main.koja:1:4
+  │
+1 │ fn setup() -> Point
+  │    ──┬──
+  │      ╰─ previous function definition
+2 │   p = Point.orign()";
+        assert_eq!(
+            render(&[diagnostic], &sources(), DiagnosticFormat::Pretty),
+            expected,
+        );
+    }
+
+    #[test]
+    fn pretty_related_without_source_falls_back_to_note() {
+        let diagnostic =
+            Diagnostic::error("boom", span(2, 7, 12)).with_related("declared here", span(1, 4, 9));
+        let expected = "\
+error: boom
+ = note: declared here";
+        assert_eq!(
+            render(&[diagnostic], &no_sources(), DiagnosticFormat::Pretty),
+            expected,
+        );
+    }
+
+    #[test]
+    fn short_appends_related_location() {
+        let diagnostic = Diagnostic::error("`App.setup` is already defined", span(2, 7, 12))
+            .with_related("previous function definition", span(1, 4, 9));
+        assert_eq!(
+            render(&[diagnostic], &sources(), DiagnosticFormat::Short),
+            "src/main.koja:2:7: error: `App.setup` is already defined \
+             (previous function definition at src/main.koja:1:4)",
+        );
+    }
+
+    #[test]
     fn short_renders_one_line_with_flattened_message_and_hint() {
         let diagnostic = Diagnostic::error_with_hint(
             "unknown function\n`Point.orign`",
             "did you mean `origin`?",
-            span(2, 7, 17),
+            span(2, 7, 18),
         );
         assert_eq!(
             render(&[diagnostic], &sources(), DiagnosticFormat::Short),

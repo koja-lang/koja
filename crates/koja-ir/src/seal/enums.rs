@@ -326,7 +326,7 @@ mod tests {
     use super::{seal_enum_decls, seal_enum_ops};
 
     fn symbol(name: &str) -> IRSymbol {
-        IRSymbol::from_identifier(&Identifier::new("TestApp", vec![name.to_string()]))
+        IRSymbol::from_identifier(&Identifier::single("TestApp", name))
     }
 
     fn option_decl() -> IREnumDecl {

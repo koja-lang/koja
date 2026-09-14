@@ -34,7 +34,7 @@ fn single_bound_lifts_into_registry_type_param_bounds() {
     let checked = typecheck(&dedent(source));
     let (show_id, _) = checked
         .registry
-        .lookup(&Identifier::new(PACKAGE, vec!["show".to_string()]))
+        .lookup(&Identifier::single(PACKAGE, "show"))
         .expect("show exists");
     let bounds = checked
         .registry
@@ -43,7 +43,7 @@ fn single_bound_lifts_into_registry_type_param_bounds() {
     assert_eq!(bounds.len(), 1);
     let (greeter_id, _) = checked
         .registry
-        .lookup(&Identifier::new(PACKAGE, vec!["Greeter".to_string()]))
+        .lookup(&Identifier::single(PACKAGE, "Greeter"))
         .expect("Greeter exists");
     assert_eq!(bounds[0].len(), 1);
     assert_eq!(bounds[0][0].protocol_id, greeter_id);
@@ -69,7 +69,7 @@ fn multi_bound_lifts_with_each_protocol_listed_in_order() {
     let checked = typecheck(&dedent(source));
     let (render_id, _) = checked
         .registry
-        .lookup(&Identifier::new(PACKAGE, vec!["render".to_string()]))
+        .lookup(&Identifier::single(PACKAGE, "render"))
         .expect("render exists");
     let bounds = checked
         .registry
@@ -79,11 +79,11 @@ fn multi_bound_lifts_with_each_protocol_listed_in_order() {
 
     let (greeter_id, _) = checked
         .registry
-        .lookup(&Identifier::new(PACKAGE, vec!["Greeter".to_string()]))
+        .lookup(&Identifier::single(PACKAGE, "Greeter"))
         .expect("Greeter exists");
     let (shower_id, _) = checked
         .registry
-        .lookup(&Identifier::new(PACKAGE, vec!["Shower".to_string()]))
+        .lookup(&Identifier::single(PACKAGE, "Shower"))
         .expect("Shower exists");
     assert_eq!(
         bounds[0]

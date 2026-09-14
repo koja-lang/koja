@@ -10,8 +10,8 @@
 
 use koja_ast::ast::{
     AnnotationKind, AnnotationValue, BuiltinDecl, EnumDecl, Expr, ExprKind, ExtendBlock, File,
-    Function, ImplMember, Item, Literal, Param, ProtocolDecl, ProtocolMethod, StringPart,
-    StructDecl, TypeExpr, UnaryOp, Visibility,
+    Function, ImplMember, Item, Literal, Name, Param, ProtocolDecl, ProtocolMethod, StringPart,
+    StructDecl, TypeExpr, UnaryOp, Visibility, name_texts,
 };
 use koja_ast::util::dedent;
 
@@ -308,8 +308,8 @@ fn extract_type_item(item: &Item, pkg: &mut DocPackage, owner_path: &[String]) {
     }
 }
 
-fn nested_path(owner_path: &[String], path: &[String]) -> Vec<String> {
-    owner_path.iter().chain(path).cloned().collect()
+fn nested_path(owner_path: &[String], path: &[Name]) -> Vec<String> {
+    owner_path.iter().cloned().chain(name_texts(path)).collect()
 }
 
 /// Resolve pending `extend` blocks, sort packages by
@@ -533,7 +533,7 @@ fn extract_constant(c: &koja_ast::ast::Constant) -> Option<DocConstant> {
     Some(DocConstant {
         deprecated: annotation_deprecated(&c.annotations),
         doc: annotation_string(&c.annotations),
-        name: c.name.clone(),
+        name: c.name.text.clone(),
     })
 }
 
@@ -571,7 +571,7 @@ fn extract_function(f: &Function) -> Option<DocFunction> {
         deprecated: annotation_deprecated(&f.annotations),
         doc: annotation_string(&f.annotations),
         error_type: f.error_type.as_ref().map(type_expr_to_string),
-        name: f.name.clone(),
+        name: f.name.text.clone(),
         params,
         return_type: f.return_type.as_ref().map(type_expr_to_string),
         type_params: f.type_params.iter().map(|tp| tp.name.clone()).collect(),
@@ -611,7 +611,7 @@ fn extract_protocol(p: &ProtocolDecl) -> Option<DocProtocol> {
         deprecated: annotation_deprecated(&p.annotations),
         doc: annotation_string(&p.annotations),
         functions,
-        name: p.name.clone(),
+        name: p.name.text.clone(),
         type_params: p.type_params.iter().map(|tp| tp.name.clone()).collect(),
     })
 }
@@ -632,7 +632,7 @@ fn extract_protocol_method(m: &ProtocolMethod) -> Option<DocFunction> {
         deprecated: annotation_deprecated(&m.annotations),
         doc: annotation_string(&m.annotations),
         error_type: m.error_type.as_ref().map(type_expr_to_string),
-        name: m.name.clone(),
+        name: m.name.text.clone(),
         params,
         return_type: m.return_type.as_ref().map(type_expr_to_string),
         type_params: m.type_params.iter().map(|tp| tp.name.clone()).collect(),

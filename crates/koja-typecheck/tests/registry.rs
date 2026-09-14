@@ -21,7 +21,7 @@ fn stdlib_stubs_land_in_registry_as_builtins() {
     let checked = check_empty_main();
 
     for name in STDLIB_STUBS {
-        let ident = Identifier::new("Global", vec![(*name).to_string()]);
+        let ident = Identifier::single("Global", *name);
         let (id, entry) = checked.registry.lookup(&ident).unwrap_or_else(|| {
             panic!("stdlib stub `Global.{name}` missing from registry after check_program")
         });
@@ -57,14 +57,14 @@ fn stdlib_stubs_precede_user_decls() {
     // User decl: TestApp.main. Must exist and must have been assigned
     // a strictly-greater id than every stdlib stub, since the preload
     // runs before `collect`.
-    let main_ident = Identifier::new(PACKAGE, vec!["main".to_string()]);
+    let main_ident = Identifier::single(PACKAGE, "main");
     let (main_id, _) = checked
         .registry
         .lookup(&main_ident)
         .expect("TestApp.main missing from registry");
 
     for name in STDLIB_STUBS {
-        let ident = Identifier::new("Global", vec![(*name).to_string()]);
+        let ident = Identifier::single("Global", *name);
         let (stub_id, _) = checked.registry.lookup(&ident).expect("stub missing");
         assert!(
             stub_id < main_id,

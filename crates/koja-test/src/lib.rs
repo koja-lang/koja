@@ -19,7 +19,9 @@
 
 use std::path::Path;
 
-use koja_ast::ast::{AnnotationValue, Function, Item, TestDecl, TypeExpr, synthesized_test_name};
+use koja_ast::ast::{
+    AnnotationValue, Function, Item, Name, TestDecl, TypeExpr, name_texts, synthesized_test_name,
+};
 use koja_parser::ParsedProgram;
 
 /// Name of the synthesized test-harness entry type. Reserved for
@@ -200,7 +202,7 @@ impl Collector<'_> {
                     if let Some(description) = annotated_test_description(func) {
                         self.push_named(
                             description,
-                            func.name.clone(),
+                            func.name.text.clone(),
                             Some(&owner),
                             func.span.start.line,
                             annotated_test_shape(func, self.package),
@@ -225,8 +227,8 @@ impl Owner {
     }
 }
 
-fn qualify(outer: &[String], path: &[String]) -> Vec<String> {
-    outer.iter().chain(path).cloned().collect()
+fn qualify(outer: &[String], path: &[Name]) -> Vec<String> {
+    outer.iter().cloned().chain(name_texts(path)).collect()
 }
 
 /// The type path of an `impl` or `extend` target. Type arguments are
@@ -246,7 +248,7 @@ fn annotated_test_description(func: &Function) -> Option<String> {
     let ann = func.annotations.iter().find(|a| a.name == "test")?;
     Some(match &ann.value {
         Some(AnnotationValue::String(s)) => s.clone(),
-        _ => func.name.clone(),
+        _ => func.name.text.clone(),
     })
 }
 

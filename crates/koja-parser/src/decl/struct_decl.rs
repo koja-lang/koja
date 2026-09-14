@@ -4,7 +4,7 @@
 //! and nested type declarations. The [`Parser::parse_type_body_member`]
 //! helper is shared with `enum` and `impl` bodies.
 
-use koja_ast::ast::{Annotation, Function, Item, StructDecl, StructField, Visibility};
+use koja_ast::ast::{Annotation, Function, Item, StructDecl, StructField, Visibility, name_texts};
 use koja_ast::token::TokenKind;
 
 use crate::parser::Parser;
@@ -148,7 +148,7 @@ impl Parser {
             self.error(
                 format!(
                     "nested type declarations take a single name, found `{}`. The enclosing type's prefix is implied",
-                    path.join(".")
+                    name_texts(path).join(".")
                 ),
                 keyword_span,
             );

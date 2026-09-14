@@ -34,7 +34,7 @@ pub(super) fn resolve_ident(
         *resolution = Resolution::Local(local_id);
         return ty.clone();
     }
-    let global_id = Identifier::new(resolver.package, vec![name.to_string()]);
+    let global_id = Identifier::single(resolver.package, name);
     if let Some((id, entry)) = resolver.registry.lookup(&global_id) {
         match &entry.kind {
             GlobalKind::Constant(Some(def)) => {
@@ -48,7 +48,7 @@ pub(super) fn resolve_ident(
             _ => {}
         }
     }
-    let fallback = Identifier::new("Global", vec![name.to_string()]);
+    let fallback = Identifier::single("Global", name);
     if let Some((id, entry)) = resolver.registry.lookup(&fallback)
         && let GlobalKind::Constant(Some(def)) = &entry.kind
     {
@@ -302,7 +302,7 @@ fn resolve_qualified_reference<'a>(
     }
 
     if path.len() == 2 {
-        let identifier = Identifier::new(&path[0], vec![member.clone()]);
+        let identifier = Identifier::single(&path[0], member.clone());
         if resolver.registry.iter_in_package(&path[0]).next().is_some() {
             return match resolver.registry.function_lookup(&identifier, arity) {
                 FunctionLookup::Found(id, entry) => Some((id, entry)),

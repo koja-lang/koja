@@ -21,7 +21,7 @@
 
 use koja_ast::ast::{
     AliasDecl, Diagnostic, EnumConstructionData, EnumDecl, EnumVariantData, Expr, ExprKind,
-    FieldInit, StructDecl, StructField,
+    FieldInit, StructDecl, StructField, name_texts,
 };
 use koja_ast::identifier::{GlobalRegistryId, Identifier, ResolvedType};
 use koja_ast::span::Span;
@@ -42,7 +42,7 @@ pub(super) fn resolve_struct_defaults(
     env: &ResolverEnv<'_>,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
-    let identifier = Identifier::new(env.package, decl.path.clone());
+    let identifier = Identifier::new(env.package, name_texts(&decl.path));
     let Some((_, entry)) = env.registry.lookup(&identifier) else {
         return;
     };
@@ -66,7 +66,7 @@ pub(super) fn resolve_enum_defaults(
     env: &ResolverEnv<'_>,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
-    let identifier = Identifier::new(env.package, decl.path.clone());
+    let identifier = Identifier::new(env.package, name_texts(&decl.path));
     let Some((_, entry)) = env.registry.lookup(&identifier) else {
         return;
     };

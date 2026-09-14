@@ -35,7 +35,7 @@ pub(super) fn lift_constant(
     scope: &mut LiftScope<'_>,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
-    let identifier = Identifier::new(scope.package, vec![constant.name.clone()]);
+    let identifier = Identifier::single(scope.package, constant.name.text.clone());
     let Some((id, entry)) = scope.registry.lookup(&identifier) else {
         panic!(
             "lift_signatures found constant `{identifier}` missing from registry. This is a \
@@ -456,7 +456,7 @@ fn lookup_constant_type_identifier(
     {
         return target;
     }
-    Identifier::new(scope.package, vec![name.to_string()])
+    Identifier::single(scope.package, name)
 }
 
 fn render_type(ty: &ResolvedType, registry: &GlobalRegistry) -> String {

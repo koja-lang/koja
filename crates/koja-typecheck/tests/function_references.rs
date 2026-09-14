@@ -186,7 +186,7 @@ fn resolves_default_adapter_by_its_exact_arity() {
         end
         "#,
     ));
-    let identifier = Identifier::new(PACKAGE, vec!["greet".to_string()]);
+    let identifier = Identifier::single(PACKAGE, "greet");
     let (_, entry) = checked.registry.lookup_function(&identifier, 1).unwrap();
     let GlobalKind::Function(definition) = &entry.kind else {
         panic!("expected function entry");

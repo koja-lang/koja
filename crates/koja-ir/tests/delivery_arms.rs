@@ -8,7 +8,7 @@ use common::{PACKAGE, all_instructions, typecheck};
 
 fn lower_entry(source: &str) -> koja_ir::IRProgram {
     let checked = typecheck(source, ParseMode::File);
-    let entry = Identifier::new(PACKAGE, vec!["App".to_string()]);
+    let entry = Identifier::single(PACKAGE, "App");
     lower_program(&checked, &entry).expect("lowering should succeed")
 }
 

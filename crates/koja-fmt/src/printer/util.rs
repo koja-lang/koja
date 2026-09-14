@@ -299,7 +299,7 @@ pub(super) fn type_alias_to_doc(t: &TypeAlias) -> Doc {
     push_annotations(&mut parts, &t.annotations);
     parts.push(text(visibility_prefix(t.visibility)));
     parts.push(text("type "));
-    parts.push(text(&t.name));
+    parts.push(text(&t.name.text));
     parts.push(text(" = "));
     parts.push(type_expr_to_doc(&t.type_expr));
     concat(parts)

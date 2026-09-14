@@ -69,7 +69,7 @@ fn lower(source: &str) -> IRProgram {
 }
 
 fn lower_process_entry(source: &str, state_name: &str) -> IRProgram {
-    let state = Identifier::new(PACKAGE, vec![state_name.to_string()]);
+    let state = Identifier::single(PACKAGE, state_name);
     let mut sources = koja_stdlib::autoimport_sources();
     sources.push(SourceFile {
         package: PACKAGE.to_string(),

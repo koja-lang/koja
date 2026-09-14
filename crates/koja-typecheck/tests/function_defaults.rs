@@ -20,7 +20,7 @@ fn registers_top_level_overloads_by_exact_arity() {
         end
         "#,
     ));
-    let identifier = Identifier::new(PACKAGE, vec!["pick".to_string()]);
+    let identifier = Identifier::single(PACKAGE, "pick");
 
     let (one, _) = checked.registry.lookup_function(&identifier, 1).unwrap();
     let (two, _) = checked.registry.lookup_function(&identifier, 2).unwrap();
@@ -58,7 +58,7 @@ fn expands_each_default_arity_and_resolves_calls() {
         end
         "#,
     ));
-    let identifier = Identifier::new(PACKAGE, vec!["sum".to_string()]);
+    let identifier = Identifier::single(PACKAGE, "sum");
 
     for arity in 1..=3 {
         let (_, entry) = checked
@@ -123,7 +123,7 @@ fn fallible_defaults_expand_adapters() {
     ));
 
     for (name, canonical_arity, adapter_arity) in [("pick", 2, 1), ("ping", 1, 0)] {
-        let identifier = Identifier::new(PACKAGE, vec![name.to_string()]);
+        let identifier = Identifier::single(PACKAGE, name);
         let (_, entry) = checked
             .registry
             .lookup_function(&identifier, adapter_arity)

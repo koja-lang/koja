@@ -25,8 +25,8 @@
 
 use koja_ast::ast::{
     Annotation, AnnotationKind, BuiltinDecl, Constant, Diagnostic, EnumDecl, ExtendBlock, File,
-    Function, ImplBlock, ImplMember, Item, Param, ProtocolDecl, ProtocolMethod, StructDecl,
-    TypeAlias, TypeExpr, TypeParam, Visibility, is_intrinsic,
+    Function, ImplBlock, ImplMember, Item, Name, Param, ProtocolDecl, ProtocolMethod, StructDecl,
+    TypeAlias, TypeExpr, TypeParam, Visibility, is_intrinsic, name_texts,
 };
 use koja_ast::identifier::{GlobalRegistryId, Identifier};
 use koja_ast::labels::type_expr_span;
@@ -56,7 +56,7 @@ pub(crate) fn collect_file_decls(
                 register_enum(decl, package, registry, diagnostics);
             }
             Item::Function(function) => {
-                let identifier = Identifier::new(package, vec![function.name.clone()]);
+                let identifier = Identifier::single(package, function.name.text.clone());
                 register_function_with_identifier(
                     function,
                     identifier,
@@ -121,7 +121,6 @@ pub(crate) fn validate_nested_types(
                             &pkg.package,
                             decl.owner_path(),
                             decl.name(),
-                            decl.span,
                             packages,
                             registry,
                             diagnostics,
@@ -132,7 +131,6 @@ pub(crate) fn validate_nested_types(
                             &pkg.package,
                             decl.owner_path(),
                             decl.name(),
-                            decl.span,
                             packages,
                             registry,
                             diagnostics,
@@ -147,22 +145,21 @@ pub(crate) fn validate_nested_types(
 
 fn validate_nested_owner(
     package: &str,
-    owner_path: &[String],
-    leaf: &str,
-    span: Span,
+    owner_path: &[Name],
+    leaf: &Name,
     packages: &[CheckedPackage],
     registry: &GlobalRegistry,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
-    let owner_name = owner_path.join(".");
-    let owner_identifier = Identifier::new(package, owner_path.to_vec());
+    let owner_name = name_texts(owner_path).join(".");
+    let owner_identifier = Identifier::new(package, name_texts(owner_path));
     let Some((_, entry)) = registry.lookup(&owner_identifier) else {
         diagnostics.push(Diagnostic::error(
             format!(
                 "nested type `{leaf}` must be declared under a type in the same \
                  package (`{owner_name}` is not a known type in `{package}`)"
             ),
-            span,
+            leaf.span,
         ));
         return;
     };
@@ -172,7 +169,7 @@ fn validate_nested_owner(
             if enum_has_variant(packages, package, owner_path, leaf) {
                 diagnostics.push(Diagnostic::error(
                     format!("nested type `{leaf}` collides with a variant of `{owner_name}`"),
-                    span,
+                    leaf.span,
                 ));
             }
         }
@@ -181,7 +178,7 @@ fn validate_nested_owner(
                 "nested type `{leaf}` cannot be declared under `{owner_name}` (a {})",
                 entry.kind.label(),
             ),
-            span,
+            leaf.span,
         )),
     }
 }
@@ -192,8 +189,8 @@ fn validate_nested_owner(
 fn enum_has_variant(
     packages: &[CheckedPackage],
     package: &str,
-    owner_path: &[String],
-    name: &str,
+    owner_path: &[Name],
+    name: &Name,
 ) -> bool {
     packages
         .iter()
@@ -204,7 +201,11 @@ fn enum_has_variant(
             Item::Enum(decl) if decl.path == owner_path => Some(decl),
             _ => None,
         })
-        .any(|decl| decl.variants.iter().any(|variant| variant.name == name))
+        .any(|decl| {
+            decl.variants
+                .iter()
+                .any(|variant| variant.name == name.text)
+        })
 }
 
 /// Pass 2: register every `impl` and `extend` block. Runs after
@@ -267,28 +268,29 @@ fn register_function_with_identifier(
         return;
     }
     let deprecation = deprecation_message(&function.annotations, diagnostics);
-    let type_params = type_param_names(&function.type_params);
     let visibility = function_visibility_scope(function.visibility, owner_type);
-    match registry.insert_function(
-        identifier,
-        function.params.len(),
-        function.origin,
-        function.span,
-        type_params,
-        visibility,
-    ) {
-        InsertOutcome::Fresh(id) => stamp_deprecation(registry, id, deprecation),
-        InsertOutcome::Collision { existing } => {
-            diagnostics.push(Diagnostic::error_with_hint(
-                format!("`{}` is already defined", existing.identifier),
-                format!(
-                    "previous {} definition is at line {}",
-                    existing.kind.label(),
-                    existing.span.start.line
-                ),
-                function.span,
-            ));
-        }
+    let outcome = registry.insert_function(identifier, function, visibility);
+    match fresh_id(outcome, function.name.span) {
+        Ok(id) => stamp_deprecation(registry, id, deprecation),
+        Err(diagnostic) => diagnostics.push(diagnostic),
+    }
+}
+
+/// The id of a fresh registry entry, or the `already defined` error
+/// for the duplicate declaration whose name sits at `name_span`. The
+/// related location is the earlier declaration's name, so both ends
+/// of the collision land on a name token.
+fn fresh_id(outcome: InsertOutcome<'_>, name_span: Span) -> Result<GlobalRegistryId, Diagnostic> {
+    match outcome {
+        InsertOutcome::Fresh(id) => Ok(id),
+        InsertOutcome::Collision { existing } => Err(Diagnostic::error(
+            format!("`{}` is already defined", existing.identifier),
+            name_span,
+        )
+        .with_related(
+            format!("previous {} definition", existing.kind.label()),
+            existing.name_span,
+        )),
     }
 }
 
@@ -321,7 +323,7 @@ fn package_visibility_scope(visibility: Visibility) -> VisibilityScope {
 /// `@doc` on a private declaration is a compile error. Private items
 /// never surface in generated docs, so the docstring is dead metadata.
 fn diagnose_doc_on_private(
-    name: &str,
+    name: &Name,
     kind_label: &str,
     visibility: Visibility,
     annotations: &[Annotation],
@@ -438,10 +440,11 @@ fn register_struct(
     );
     diagnose_intrinsic_on_struct(decl, diagnostics);
     let deprecation = deprecation_message(&decl.annotations, diagnostics);
-    let identifier = Identifier::new(package, decl.path.clone());
+    let path = name_texts(&decl.path);
+    let identifier = Identifier::new(package, path.clone());
     let struct_id = register_ordinary_struct(decl, &identifier, deprecation, registry, diagnostics);
     for function in &decl.functions {
-        let method_identifier = Identifier::member(package, &decl.path, &function.name);
+        let method_identifier = Identifier::member(package, &path, function.name.as_str());
         register_function_with_identifier(
             function,
             method_identifier,
@@ -460,46 +463,36 @@ fn register_ordinary_struct(
     registry: &mut GlobalRegistry,
     diagnostics: &mut Vec<Diagnostic>,
 ) -> Option<GlobalRegistryId> {
-    insert_struct_entry(
-        identifier,
+    let outcome = registry.insert_struct(
+        identifier.clone(),
         decl.span,
+        decl.name().span,
         type_param_names(&decl.type_params),
         package_visibility_scope(decl.visibility),
-        deprecation,
-        registry,
-        diagnostics,
-    )
+    );
+    let inserted = fresh_id(outcome, decl.name().span);
+    record_struct_insert(inserted, identifier, deprecation, registry, diagnostics)
 }
 
-/// Shared struct-entry insert with the standard collision
-/// diagnostic. On collision the existing entry's id is returned so
-/// the caller can still register inline methods against whatever
-/// type already owns the name: the duplicate decl is itself
-/// diagnosed, and methods declared under it would otherwise dangle.
-fn insert_struct_entry(
+/// Finish a struct-entry insert. A fresh entry takes its deprecation.
+/// On collision the existing entry's id is returned so the caller can
+/// still register inline methods against the type that owns the name.
+/// The duplicate decl is diagnosed on its own, and its methods would
+/// otherwise dangle.
+fn record_struct_insert(
+    inserted: Result<GlobalRegistryId, Diagnostic>,
     identifier: &Identifier,
-    span: Span,
-    type_params: Vec<String>,
-    visibility: VisibilityScope,
     deprecation: Option<String>,
     registry: &mut GlobalRegistry,
     diagnostics: &mut Vec<Diagnostic>,
 ) -> Option<GlobalRegistryId> {
-    match registry.insert_struct(identifier.clone(), span, type_params, visibility) {
-        InsertOutcome::Fresh(id) => {
+    match inserted {
+        Ok(id) => {
             stamp_deprecation(registry, id, deprecation);
             Some(id)
         }
-        InsertOutcome::Collision { existing } => {
-            diagnostics.push(Diagnostic::error_with_hint(
-                format!("`{}` is already defined", existing.identifier),
-                format!(
-                    "previous {} definition is at line {}",
-                    existing.kind.label(),
-                    existing.span.start.line
-                ),
-                span,
-            ));
+        Err(diagnostic) => {
+            diagnostics.push(diagnostic);
             registry.lookup(identifier).map(|(id, _)| id)
         }
     }
@@ -547,9 +540,11 @@ fn register_builtin(
         diagnostics,
     );
     let deprecation = deprecation_message(&decl.annotations, diagnostics);
-    let identifier = Identifier::new(package, decl.path.clone());
+    let path = name_texts(&decl.path);
+    let identifier = Identifier::new(package, path.clone());
     let type_params = type_param_names(&decl.type_params);
-    let builtin_id = match registry.claim_builtin_stub(&identifier, decl.span, type_params) {
+    let claim = registry.claim_builtin_stub(&identifier, decl.span, decl.name().span, type_params);
+    let builtin_id = match claim {
         Some(ClaimOutcome::Claimed(id)) => {
             stamp_deprecation(registry, id, deprecation);
             Some(id)
@@ -562,7 +557,7 @@ fn register_builtin(
                     if expected_arity == 1 { "" } else { "s" },
                     decl.type_params.len(),
                 ),
-                decl.span,
+                decl.name().span,
             ));
             stamp_deprecation(registry, id, deprecation);
             Some(id)
@@ -574,22 +569,22 @@ fn register_builtin(
                     "`builtin` declares a compiler-provided type like `String` or `List`. \
                      Declare an ordinary type with `struct` or `enum`."
                         .to_string(),
-                    decl.span,
+                    decl.name().span,
                 ));
             }
-            insert_struct_entry(
-                &identifier,
+            let outcome = registry.insert_struct(
+                identifier.clone(),
                 decl.span,
+                decl.name().span,
                 type_param_names(&decl.type_params),
                 package_visibility_scope(decl.visibility),
-                deprecation,
-                registry,
-                diagnostics,
-            )
+            );
+            let inserted = fresh_id(outcome, decl.name().span);
+            record_struct_insert(inserted, &identifier, deprecation, registry, diagnostics)
         }
     };
     for function in &decl.functions {
-        let method_identifier = Identifier::member(package, &decl.path, &function.name);
+        let method_identifier = Identifier::member(package, &path, function.name.as_str());
         register_function_with_identifier(
             function,
             method_identifier,
@@ -646,30 +641,29 @@ fn register_enum(
         diagnostics,
     );
     let deprecation = deprecation_message(&decl.annotations, diagnostics);
-    let identifier = Identifier::new(package, decl.path.clone());
+    let path = name_texts(&decl.path);
+    let identifier = Identifier::new(package, path.clone());
     let type_params = type_param_names(&decl.type_params);
     let visibility = package_visibility_scope(decl.visibility);
-    let enum_id = match registry.insert_enum(identifier.clone(), decl.span, type_params, visibility)
-    {
-        InsertOutcome::Fresh(id) => {
+    let outcome = registry.insert_enum(
+        identifier.clone(),
+        decl.span,
+        decl.name().span,
+        type_params,
+        visibility,
+    );
+    let enum_id = match fresh_id(outcome, decl.name().span) {
+        Ok(id) => {
             stamp_deprecation(registry, id, deprecation);
             Some(id)
         }
-        InsertOutcome::Collision { existing } => {
-            diagnostics.push(Diagnostic::error_with_hint(
-                format!("`{}` is already defined", existing.identifier),
-                format!(
-                    "previous {} definition is at line {}",
-                    existing.kind.label(),
-                    existing.span.start.line
-                ),
-                decl.span,
-            ));
+        Err(diagnostic) => {
+            diagnostics.push(diagnostic);
             registry.lookup(&identifier).map(|(id, _)| id)
         }
     };
     for function in &decl.functions {
-        let method_identifier = Identifier::member(package, &decl.path, &function.name);
+        let method_identifier = Identifier::member(package, &path, function.name.as_str());
         register_function_with_identifier(
             function,
             method_identifier,
@@ -825,7 +819,8 @@ fn register_block_methods(
         let ImplMember::Function(function) = member else {
             continue;
         };
-        let method_identifier = Identifier::member(target_package, target_path, &function.name);
+        let method_identifier =
+            Identifier::member(target_package, target_path, function.name.as_str());
         register_function_with_identifier(
             function,
             method_identifier,
@@ -857,7 +852,7 @@ fn register_protocol(
         &decl.annotations,
         diagnostics,
     );
-    let identifier = Identifier::new(package, vec![decl.name.clone()]);
+    let identifier = Identifier::single(package, decl.name.text.clone());
     let mut type_params = vec!["Self".to_string()];
     for param in &decl.type_params {
         if param.name == "Self" {
@@ -874,19 +869,16 @@ fn register_protocol(
     }
     let visibility = package_visibility_scope(decl.visibility);
     let deprecation = deprecation_message(&decl.annotations, diagnostics);
-    match registry.insert_protocol(identifier, decl.span, type_params, visibility) {
-        InsertOutcome::Fresh(id) => stamp_deprecation(registry, id, deprecation),
-        InsertOutcome::Collision { existing } => {
-            diagnostics.push(Diagnostic::error_with_hint(
-                format!("`{}` is already defined", existing.identifier),
-                format!(
-                    "previous {} definition is at line {}",
-                    existing.kind.label(),
-                    existing.span.start.line
-                ),
-                decl.span,
-            ));
-        }
+    let outcome = registry.insert_protocol(
+        identifier,
+        decl.span,
+        decl.name.span,
+        type_params,
+        visibility,
+    );
+    match fresh_id(outcome, decl.name.span) {
+        Ok(id) => stamp_deprecation(registry, id, deprecation),
+        Err(diagnostic) => diagnostics.push(diagnostic),
     }
 }
 
@@ -911,22 +903,14 @@ fn register_constant(
         &constant.annotations,
         diagnostics,
     );
-    let identifier = Identifier::new(package, vec![constant.name.clone()]);
+    let identifier = Identifier::single(package, constant.name.text.clone());
     let visibility = package_visibility_scope(constant.visibility);
     let deprecation = deprecation_message(&constant.annotations, diagnostics);
-    match registry.insert_constant(identifier, constant.span, visibility) {
-        InsertOutcome::Fresh(id) => stamp_deprecation(registry, id, deprecation),
-        InsertOutcome::Collision { existing } => {
-            diagnostics.push(Diagnostic::error_with_hint(
-                format!("`{}` is already defined", existing.identifier),
-                format!(
-                    "previous {} definition is at line {}",
-                    existing.kind.label(),
-                    existing.span.start.line
-                ),
-                constant.span,
-            ));
-        }
+    let outcome =
+        registry.insert_constant(identifier, constant.span, constant.name.span, visibility);
+    match fresh_id(outcome, constant.name.span) {
+        Ok(id) => stamp_deprecation(registry, id, deprecation),
+        Err(diagnostic) => diagnostics.push(diagnostic),
     }
 }
 
@@ -949,27 +933,18 @@ fn register_type_alias(
         &alias.annotations,
         diagnostics,
     );
-    let identifier = Identifier::new(package, vec![alias.name.clone()]);
+    let identifier = Identifier::single(package, alias.name.text.clone());
     let visibility = package_visibility_scope(alias.visibility);
     let deprecation = deprecation_message(&alias.annotations, diagnostics);
-    match registry.insert_type_alias(identifier, alias.span, visibility) {
-        InsertOutcome::Fresh(id) => stamp_deprecation(registry, id, deprecation),
-        InsertOutcome::Collision { existing } => {
-            diagnostics.push(Diagnostic::error_with_hint(
-                format!("`{}` is already defined", existing.identifier),
-                format!(
-                    "previous {} definition is at line {}",
-                    existing.kind.label(),
-                    existing.span.start.line
-                ),
-                alias.span,
-            ));
-        }
+    let outcome = registry.insert_type_alias(identifier, alias.span, alias.name.span, visibility);
+    match fresh_id(outcome, alias.name.span) {
+        Ok(id) => stamp_deprecation(registry, id, deprecation),
+        Err(diagnostic) => diagnostics.push(diagnostic),
     }
 }
 
 fn diagnose_alias_annotations(
-    alias_name: &str,
+    alias_name: &Name,
     annotations: &[Annotation],
     diagnostics: &mut Vec<Diagnostic>,
 ) {
@@ -988,7 +963,7 @@ fn diagnose_alias_annotations(
 }
 
 fn diagnose_constant_annotations(
-    constant_name: &str,
+    constant_name: &Name,
     annotations: &[Annotation],
     diagnostics: &mut Vec<Diagnostic>,
 ) {
@@ -1129,7 +1104,7 @@ fn diagnose_protocol_feature_gaps(decl: &ProtocolDecl, diagnostics: &mut Vec<Dia
 }
 
 fn diagnose_protocol_method_feature_gaps(
-    protocol_name: &str,
+    protocol_name: &Name,
     method: &ProtocolMethod,
     diagnostics: &mut Vec<Diagnostic>,
 ) {

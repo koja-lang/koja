@@ -202,17 +202,19 @@ fn check_no_duplicate(
     diagnostics: &mut Vec<Diagnostic>,
 ) -> bool {
     if let Some(prev_span) = seen.get(&alias.local_name) {
-        diagnostics.push(Diagnostic::error_with_hint(
-            format!(
-                "duplicate alias `{}` because a local name can refer to only one type",
-                alias.local_name,
+        diagnostics.push(
+            Diagnostic::error(
+                format!(
+                    "duplicate alias `{}` because a local name can refer to only one type",
+                    alias.local_name,
+                ),
+                alias.span,
+            )
+            .with_related(
+                format!("the previous alias for `{}`", alias.local_name),
+                *prev_span,
             ),
-            format!(
-                "the previous alias for `{}` was at line {}",
-                alias.local_name, prev_span.start.line,
-            ),
-            alias.span,
-        ));
+        );
         return false;
     }
     seen.insert(alias.local_name.clone(), alias.span);
@@ -233,11 +235,8 @@ fn check_no_shadow(
 ) {
     let local_name = alias.local_name.clone();
     let scopes: [(&str, Identifier); 2] = [
-        (package, Identifier::new(package, vec![local_name.clone()])),
-        (
-            "Global",
-            Identifier::new("Global", vec![local_name.clone()]),
-        ),
+        (package, Identifier::single(package, local_name.clone())),
+        ("Global", Identifier::single("Global", local_name.clone())),
     ];
     for (label, candidate) in scopes {
         let Some((_, entry)) = registry.lookup(&candidate) else {

@@ -14,11 +14,10 @@ use koja_typecheck::{GlobalKind, GlobalRegistry};
 
 pub(crate) use local_index::LocalIndex;
 pub(crate) use span::span_contains;
-use span::span_contains_name;
 pub(crate) use traverse::{
     find_enclosing_call, find_expr_at, receiver_type_id as traverse_receiver_type_id,
 };
-use traverse::{find_in_ident_at_name, find_in_params, find_in_statement, find_in_type_expr};
+use traverse::{find_in_params, find_in_statement, find_in_type_expr};
 
 /// Describes the kind and identity of a symbol found at a cursor position.
 #[derive(Debug)]
@@ -84,7 +83,9 @@ pub(crate) fn find_symbol_at(
                 if !span_contains(&f.span, line, col) {
                     continue;
                 }
-                if let Some(info) = find_in_ident_at_name(&f.name, &f.span, line, col, ctx) {
+                if span_contains(&f.name.span, line, col)
+                    && let Some(info) = classify_name(f.name.as_str(), ctx)
+                {
                     return Some(info);
                 }
                 if let Some(info) = find_in_params(&f.params, line, col, ctx) {
@@ -148,9 +149,9 @@ pub(crate) fn find_symbol_at(
                 if !span_contains(&b.span, line, col) {
                     continue;
                 }
-                if span_contains_name(b.name(), &b.span, line, col) {
+                if span_contains(&b.name().span, line, col) {
                     return Some(SymbolInfo::Builtin {
-                        name: b.name().to_string(),
+                        name: b.name().text.clone(),
                     });
                 }
                 if let Some(info) = find_in_inline_functions(&b.functions, line, col, ctx) {
@@ -161,9 +162,9 @@ pub(crate) fn find_symbol_at(
                 if !span_contains(&s.span, line, col) {
                     continue;
                 }
-                if span_contains_name(s.name(), &s.span, line, col) {
+                if span_contains(&s.name().span, line, col) {
                     return Some(SymbolInfo::Struct {
-                        name: s.name().to_string(),
+                        name: s.name().text.clone(),
                     });
                 }
                 for conformance in &s.conformances {
@@ -184,9 +185,9 @@ pub(crate) fn find_symbol_at(
                 if !span_contains(&e.span, line, col) {
                     continue;
                 }
-                if span_contains_name(e.name(), &e.span, line, col) {
+                if span_contains(&e.name().span, line, col) {
                     return Some(SymbolInfo::Enum {
-                        name: e.name().to_string(),
+                        name: e.name().text.clone(),
                     });
                 }
                 for conformance in &e.conformances {
@@ -222,9 +223,9 @@ pub(crate) fn find_symbol_at(
                     {
                         return Some(info);
                     }
-                    if span_contains_name(&c.name, &c.span, line, col) {
+                    if span_contains(&c.name.span, line, col) {
                         return Some(SymbolInfo::Constant {
-                            name: c.name.clone(),
+                            name: c.name.text.clone(),
                         });
                     }
                 }
@@ -340,7 +341,7 @@ pub(crate) fn find_doc_for(file: &File, name: &str) -> Option<String> {
 
 /// Helper for `find_doc_for`: looks up a function inside a list of
 /// inline methods on a struct or enum.
-fn doc_in_methods(functions: &[Function], type_name: &str, name: &str) -> Option<String> {
+fn doc_in_methods(functions: &[Function], type_name: &Name, name: &str) -> Option<String> {
     for f in functions {
         if f.name == name || format!("{type_name}_{}", f.name) == name {
             return span::annotation_doc(&f.annotations);
@@ -391,7 +392,7 @@ pub(crate) fn classify_name(name: &str, ctx: &LookupCtx<'_>) -> Option<SymbolInf
 }
 
 fn classify_in_package(name: &str, package: &str, registry: &GlobalRegistry) -> Option<SymbolInfo> {
-    let identifier = Identifier::new(package, vec![name.to_string()]);
+    let identifier = Identifier::single(package, name);
     let (_, entry) = registry.lookup(&identifier)?;
     Some(match &entry.kind {
         GlobalKind::Builtin(_) => SymbolInfo::Builtin {

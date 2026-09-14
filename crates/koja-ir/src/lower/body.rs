@@ -686,7 +686,7 @@ fn is_never(ty: &ResolvedType, registry: &GlobalRegistry) -> bool {
     if !type_args.is_empty() {
         return false;
     }
-    let never_id = match registry.lookup(&Identifier::new("Global", vec!["Never".to_string()])) {
+    let never_id = match registry.lookup(&Identifier::single("Global", "Never")) {
         Some((id, _)) => id,
         None => return false,
     };

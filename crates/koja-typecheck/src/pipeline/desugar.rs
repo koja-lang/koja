@@ -13,7 +13,7 @@
 use std::path::Path;
 
 use koja_ast::ast::{
-    File, Function, FunctionOrigin, ImplMember, Item, TestDecl, TypeExpr, Visibility,
+    File, Function, FunctionOrigin, ImplMember, Item, Name, TestDecl, TypeExpr, Visibility,
     synthesized_test_name,
 };
 
@@ -130,7 +130,7 @@ fn test_function(test: TestDecl, path: Option<&Path>, visibility: Visibility) ->
         annotations: Vec::new(),
         origin: FunctionOrigin::Test,
         visibility,
-        name: synthesized_test_name(path, span.start.line),
+        name: Name::new(synthesized_test_name(path, span.start.line), span),
         type_params: Vec::new(),
         params: Vec::new(),
         return_type: None,
@@ -163,6 +163,6 @@ fn hoist_item(mut item: Item, out: &mut Vec<Item>) {
     }
 }
 
-fn prefix_path(path: &mut Vec<String>, owner: &[String]) {
+fn prefix_path(path: &mut Vec<Name>, owner: &[Name]) {
     path.splice(0..0, owner.iter().cloned());
 }

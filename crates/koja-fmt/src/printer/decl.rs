@@ -35,7 +35,7 @@ impl Printer {
             format!(
                 "{}builtin {}",
                 visibility_prefix(b.visibility),
-                b.path.join(".")
+                name_texts(&b.path).join(".")
             ),
             &b.type_params,
             &[],
@@ -59,7 +59,7 @@ impl Printer {
         push_annotations(&mut parts, &c.annotations);
         parts.push(text(visibility_prefix(c.visibility)));
         parts.push(text("const "));
-        parts.push(text(&c.name));
+        parts.push(text(&c.name.text));
         if let Some(type_ann) = &c.type_annotation {
             parts.push(text(": "));
             parts.push(type_expr_to_doc(type_ann));
@@ -74,7 +74,7 @@ impl Printer {
             format!(
                 "{}enum {}",
                 visibility_prefix(e.visibility),
-                e.path.join(".")
+                name_texts(&e.path).join(".")
             ),
             &e.type_params,
             &e.conformances,
@@ -308,7 +308,7 @@ impl Printer {
             format!(
                 "{}struct {}",
                 visibility_prefix(s.visibility),
-                s.path.join(".")
+                name_texts(&s.path).join(".")
             ),
             &s.type_params,
             &s.conformances,

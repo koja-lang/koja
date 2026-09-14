@@ -48,7 +48,7 @@ impl Backend {
         };
 
         // Resolve method symbols via the registry's `[Type, method]`
-        // entry, which carries an authoritative defining span.
+        // entry, which carries the defining name's span.
         if let SymbolInfo::Method {
             arity,
             type_name,
@@ -105,9 +105,9 @@ fn symbol_name(symbol: &SymbolInfo) -> Option<&str> {
 
 fn lookup_global_span(name: &str, package: &str, registry: &GlobalRegistry) -> Option<Span> {
     for pkg in [package, "Global"] {
-        let ident = Identifier::new(pkg, vec![name.to_string()]);
+        let ident = Identifier::single(pkg, name);
         if let Some((_, entry)) = registry.lookup(&ident) {
-            return Some(entry.span);
+            return Some(entry.name_span);
         }
     }
     None
@@ -120,9 +120,9 @@ fn lookup_function_span(
     registry: &GlobalRegistry,
 ) -> Option<Span> {
     for package in [package, "Global"] {
-        let identifier = Identifier::new(package, vec![name.to_string()]);
+        let identifier = Identifier::single(package, name);
         if let Some((_, entry)) = registry.lookup_function(&identifier, arity) {
-            return Some(entry.span);
+            return Some(entry.name_span);
         }
     }
     None
@@ -145,7 +145,7 @@ fn lookup_method_span(
                     if arity.is_none_or(|arity| definition.arity == arity)
             )
         {
-            return Some(entry.span);
+            return Some(entry.name_span);
         }
     }
     None

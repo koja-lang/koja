@@ -45,7 +45,7 @@ const ARGV_ENTRY: &str = r#"
 
 fn run_argv_entry(args: &[&str]) -> Value {
     let checked = typecheck(&dedent(ARGV_ENTRY), ParseMode::File);
-    let entry = Identifier::new(PACKAGE, vec!["ArgvEntry".to_string()]);
+    let entry = Identifier::single(PACKAGE, "ArgvEntry");
     let program = lower_program(&checked, &entry).expect("lowering should succeed");
     let args: Vec<String> = args.iter().map(|s| s.to_string()).collect();
     Interpreter::run_program(&program, &args).expect("entry should run to completion")

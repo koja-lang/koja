@@ -489,7 +489,7 @@ pub(super) fn type_supports_equality(ty: &ResolvedType, ctx: BoundContext<'_>) -
 /// The `Global.Equality` protocol's registry id, absent only
 /// before the stdlib has collected.
 fn equality_protocol_id(registry: &GlobalRegistry) -> Option<GlobalRegistryId> {
-    let identifier = Identifier::new("Global", vec!["Equality".to_string()]);
+    let identifier = Identifier::single("Global", "Equality");
     registry.lookup(&identifier).map(|(id, _)| id)
 }
 

@@ -26,14 +26,14 @@ fn fn_main_two_plus_two_typechecks_to_int() {
 
     let checked = typecheck(&dedent(source));
 
-    let main_id = Identifier::new(PACKAGE, vec!["main".to_string()]);
+    let main_id = Identifier::single(PACKAGE, "main");
     assert!(
         checked.registry.lookup(&main_id).is_some(),
         "registry is missing `{main_id}`; registry: {:?}",
         checked.registry,
     );
 
-    let int_ident = Identifier::new("Global", vec!["Int".to_string()]);
+    let int_ident = Identifier::single("Global", "Int");
     let (int_id, int_entry) = checked
         .registry
         .lookup(&int_ident)
@@ -83,7 +83,7 @@ fn intrinsic_fn_typechecks_without_body_and_lifts_signature() {
 
     let checked = typecheck(&dedent(source));
 
-    let print_id = Identifier::new(PACKAGE, vec!["print".to_string()]);
+    let print_id = Identifier::single(PACKAGE, "print");
     let (_, entry) = checked
         .registry
         .lookup(&print_id)
@@ -98,7 +98,7 @@ fn intrinsic_fn_typechecks_without_body_and_lifts_signature() {
     assert_eq!(signature.params.len(), 1);
     assert_eq!(signature.params[0].name, "s");
 
-    let string_id = Identifier::new("Global", vec!["String".to_string()]);
+    let string_id = Identifier::single("Global", "String");
     let (string_global_id, _) = checked
         .registry
         .lookup(&string_id)
@@ -108,7 +108,7 @@ fn intrinsic_fn_typechecks_without_body_and_lifts_signature() {
         ResolvedType::leaf(Resolution::Global(string_global_id)),
     );
 
-    let unit_id = Identifier::new("Global", vec!["Unit".to_string()]);
+    let unit_id = Identifier::single("Global", "Unit");
     let (unit_global_id, _) = checked
         .registry
         .lookup(&unit_id)

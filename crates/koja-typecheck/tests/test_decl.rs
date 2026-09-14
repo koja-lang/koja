@@ -53,10 +53,10 @@ fn check_without_test_package(source: &str) -> koja_typecheck::CheckedProgram {
 
 fn assert_test_function(function: &koja_ast::ast::Function, line: u32, visibility: Visibility) {
     assert_eq!(
-        function.name,
+        function.name.text,
         synthesized_test_name(Some(&PathBuf::from("test.koja")), line)
     );
-    assert_eq!(function.name, format!("__test_test_{line}"));
+    assert_eq!(function.name.as_str(), format!("__test_test_{line}"));
     assert_eq!(function.origin, FunctionOrigin::Test);
     assert_eq!(function.visibility, visibility);
     assert!(function.params.is_empty());

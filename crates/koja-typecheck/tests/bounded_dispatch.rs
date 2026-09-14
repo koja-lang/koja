@@ -136,7 +136,7 @@ fn bounded_method_call_protocol_method_lifted_with_signature() {
     let checked = typecheck(&dedent(source));
     let (_, entry) = checked
         .registry
-        .lookup(&Identifier::new(PACKAGE, vec!["Greeter".to_string()]))
+        .lookup(&Identifier::single(PACKAGE, "Greeter"))
         .expect("Greeter exists");
     let GlobalKind::Protocol(Some(definition)) = &entry.kind else {
         panic!("expected lifted protocol, got {:?}", entry.kind);

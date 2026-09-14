@@ -39,7 +39,7 @@ mod substitute;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
-use koja_ast::ast::{Function, ImplMember, Item};
+use koja_ast::ast::{Function, ImplMember, Item, name_texts};
 use koja_ast::identifier::{AnonymousKind, GlobalRegistryId, Identifier, Resolution, ResolvedType};
 use koja_typecheck::{CheckedPackage, GlobalRegistry};
 
@@ -184,24 +184,27 @@ fn index_item<'a>(
 ) {
     match item {
         Item::Function(function) => {
-            let identifier = Identifier::new(package, vec![function.name.clone()]);
+            let identifier = Identifier::single(package, function.name.text.clone());
             insert_function(map, registry, &identifier, function, def_file);
         }
         Item::Builtin(decl) => {
+            let path = name_texts(&decl.path);
             for function in &decl.functions {
-                let identifier = Identifier::member(package, &decl.path, &function.name);
+                let identifier = Identifier::member(package, &path, function.name.as_str());
                 insert_function(map, registry, &identifier, function, def_file);
             }
         }
         Item::Struct(decl) => {
+            let path = name_texts(&decl.path);
             for function in &decl.functions {
-                let identifier = Identifier::member(package, &decl.path, &function.name);
+                let identifier = Identifier::member(package, &path, function.name.as_str());
                 insert_function(map, registry, &identifier, function, def_file);
             }
         }
         Item::Enum(decl) => {
+            let path = name_texts(&decl.path);
             for function in &decl.functions {
-                let identifier = Identifier::member(package, &decl.path, &function.name);
+                let identifier = Identifier::member(package, &path, function.name.as_str());
                 insert_function(map, registry, &identifier, function, def_file);
             }
         }
@@ -217,7 +220,8 @@ fn index_item<'a>(
                 let ImplMember::Function(function) = member else {
                     continue;
                 };
-                let identifier = Identifier::member(&target_package, &target_path, &function.name);
+                let identifier =
+                    Identifier::member(&target_package, &target_path, function.name.as_str());
                 insert_function(map, registry, &identifier, function, def_file);
             }
         }
@@ -233,7 +237,8 @@ fn index_item<'a>(
                 let ImplMember::Function(function) = member else {
                     continue;
                 };
-                let identifier = Identifier::member(&target_package, &target_path, &function.name);
+                let identifier =
+                    Identifier::member(&target_package, &target_path, function.name.as_str());
                 insert_function(map, registry, &identifier, function, def_file);
             }
         }

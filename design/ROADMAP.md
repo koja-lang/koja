@@ -121,7 +121,7 @@ The design is accepted in [TESTING.md](TESTING.md).
   through the reactor on both backends, so a deadline is a bounded reactor
   wait, the same mechanism `receive ... after` and `Fd.watch` use, not a
   socket option.
-- Give the interpreter general C FFI. Done. An `@extern "C"` with no
+- **[DONE]** Give the interpreter general C FFI. Done. An `@extern "C"` with no
   hand-written shim resolves through the dynamic loader, in the `@link`
   library as a shared library under the project root, on the loader's
   search path, or in the running process, and runs through libffi with

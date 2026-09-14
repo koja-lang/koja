@@ -108,7 +108,7 @@ fn self_in_inherent_method_return_resolves_to_enclosing_struct() {
     let checked = typecheck(&dedent(source));
     let (point_id, _) = checked
         .registry
-        .lookup(&Identifier::new(PACKAGE, vec!["Point".to_string()]))
+        .lookup(&Identifier::single(PACKAGE, "Point"))
         .expect("Point registered");
     let (_, origin_entry) = checked
         .registry
@@ -163,7 +163,7 @@ fn self_in_trait_impl_method_resolves_to_concrete_target() {
     let checked = typecheck(&dedent(source));
     let (user_id, _) = checked
         .registry
-        .lookup(&Identifier::new(PACKAGE, vec!["User".to_string()]))
+        .lookup(&Identifier::single(PACKAGE, "User"))
         .expect("User registered");
     let (_, entry) = checked
         .registry
@@ -241,7 +241,7 @@ fn self_in_generic_struct_method_carries_struct_type_args() {
     let checked = typecheck(&dedent(source));
     let (bag_id, _) = checked
         .registry
-        .lookup(&Identifier::new(PACKAGE, vec!["Bag".to_string()]))
+        .lookup(&Identifier::single(PACKAGE, "Bag"))
         .expect("Bag registered");
     let (_, snapshot_entry) = checked
         .registry

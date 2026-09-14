@@ -14,7 +14,7 @@ mod common;
 use common::{PACKAGE, assert_script_fails_with, typecheck_script as typecheck};
 
 fn protocol_definition<'a>(checked: &'a CheckedProgram, name: &str) -> &'a ProtocolDefinition {
-    let ident = Identifier::new(PACKAGE, vec![name.to_string()]);
+    let ident = Identifier::single(PACKAGE, name);
     let (_, entry) = checked
         .registry
         .lookup(&ident)

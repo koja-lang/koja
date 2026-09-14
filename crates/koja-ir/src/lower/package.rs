@@ -10,7 +10,7 @@
 
 use koja_ast::ast::{
     Diagnostic, ExtendBlock, Function, ImplBlock, ImplMember, Item, Param, TypeExpr, is_extern_c,
-    is_intrinsic,
+    is_intrinsic, name_texts,
 };
 use koja_ast::identifier::{
     AnonymousKind, GlobalRegistryId, Identifier, LocalId, Resolution, ResolvedType,
@@ -75,9 +75,10 @@ pub(crate) fn lower_package(
                         enums.insert(lowered.symbol.clone(), lowered);
                     }
                     if decl.type_params.is_empty() {
+                        let path = name_texts(&decl.path);
                         for function in &decl.functions {
                             let identifier =
-                                Identifier::member(&pkg.package, &decl.path, &function.name);
+                                Identifier::member(&pkg.package, &path, function.name.as_str());
                             if let Some(lowered) = lower_function_with_identifier(
                                 function, identifier, def_file, registry, output,
                             ) {
@@ -87,7 +88,7 @@ pub(crate) fn lower_package(
                     }
                 }
                 Item::Function(function) => {
-                    let identifier = Identifier::new(&pkg.package, vec![function.name.clone()]);
+                    let identifier = Identifier::single(&pkg.package, function.name.text.clone());
                     if let Some(lowered) = lower_function_with_identifier(
                         function, identifier, def_file, registry, output,
                     ) {
@@ -99,9 +100,10 @@ pub(crate) fn lower_package(
                         structs.insert(lowered.symbol.clone(), lowered);
                     }
                     if decl.type_params.is_empty() {
+                        let path = name_texts(&decl.path);
                         for function in &decl.functions {
                             let identifier =
-                                Identifier::member(&pkg.package, &decl.path, &function.name);
+                                Identifier::member(&pkg.package, &path, function.name.as_str());
                             if let Some(lowered) = lower_function_with_identifier(
                                 function, identifier, def_file, registry, output,
                             ) {
@@ -116,9 +118,10 @@ pub(crate) fn lower_package(
                 // through monomorphization like any generic type.
                 Item::Builtin(decl) => {
                     if decl.type_params.is_empty() {
+                        let path = name_texts(&decl.path);
                         for function in &decl.functions {
                             let identifier =
-                                Identifier::member(&pkg.package, &decl.path, &function.name);
+                                Identifier::member(&pkg.package, &path, function.name.as_str());
                             if let Some(lowered) = lower_function_with_identifier(
                                 function, identifier, def_file, registry, output,
                             ) {
@@ -263,7 +266,7 @@ fn lower_block_members(
         let ImplMember::Function(function) = member else {
             continue;
         };
-        let identifier = Identifier::member(target_package, target_path, &function.name);
+        let identifier = Identifier::member(target_package, target_path, function.name.as_str());
         if let Some(lowered) =
             lower_function_with_identifier(function, identifier, def_file, registry, output)
         {

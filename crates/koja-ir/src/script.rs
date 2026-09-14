@@ -256,5 +256,5 @@ fn locate_script_body_location(checked: &CheckedProgram) -> Option<IRSourceDef> 
 /// the script body. Yields `<package>.__script_body`, and child closures
 /// then derive `<package>.__script_body__closure<N>` off it.
 fn synthesize_script_body_symbol(package: &str) -> IRSymbol {
-    IRSymbol::from_identifier(&Identifier::new(package, vec!["__script_body".to_string()]))
+    IRSymbol::from_identifier(&Identifier::single(package, "__script_body"))
 }

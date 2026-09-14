@@ -81,7 +81,7 @@ impl LiteralCarrier {
 /// protocol-id lookup since both speak the same `Global.<name>`
 /// shape.
 pub(super) fn lookup_global_id(resolver: &Resolver<'_>, name: &str) -> Option<GlobalRegistryId> {
-    let ident = Identifier::new("Global", vec![name.to_string()]);
+    let ident = Identifier::single("Global", name);
     resolver.registry.lookup(&ident).map(|(id, _)| id)
 }
 

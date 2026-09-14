@@ -3,7 +3,7 @@
 pub(crate) mod derive_debug;
 pub(crate) mod derive_equality;
 
-use koja_ast::ast::{File, Item, TypeExpr};
+use koja_ast::ast::{File, Item, TypeExpr, name_texts};
 
 /// Type paths whose conformance header lists `protocol` by leaf
 /// name (`Debug` in `struct T: Debug`). The derive passes treat a
@@ -20,7 +20,7 @@ pub(super) fn header_conformance_targets(file: &File, protocol: &str) -> Vec<Str
             conformances
                 .iter()
                 .any(|entry| conformance_head(entry) == Some(protocol))
-                .then(|| path.join("."))
+                .then(|| name_texts(path).join("."))
         })
         .collect()
 }

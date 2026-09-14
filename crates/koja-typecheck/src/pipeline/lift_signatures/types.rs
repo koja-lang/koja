@@ -155,7 +155,7 @@ pub(super) fn resolve_return_signature(
         return success;
     };
     let error = resolve_type_expr(error_expr, type_params, scope, diagnostics);
-    let result_identifier = Identifier::new("Global", vec!["Result".to_string()]);
+    let result_identifier = Identifier::single("Global", "Result");
     let (result_id, _) = scope
         .registry
         .lookup(&result_identifier)
