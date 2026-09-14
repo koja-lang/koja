@@ -72,37 +72,36 @@ the features users miss first, and bounds socket waits.
 
 The design is accepted in [TESTING.md](TESTING.md).
 
-- Add a `test "description"` declaration at the top level and inside
+- **[DONE]** Add a `test "description"` declaration at the top level and inside
   structs. Structs are suites and nested structs are the hierarchy. The
   body's channel is `Test.Failure` and nothing else. Setup errors enter
   through `try Test.require(...)`, and `fail "message"` keeps working because
   `Test.Failure` conforms to `StringLiteral`.
-- Add an `assert` statement. Koja has no macros, so only the compiler can
+- **[DONE]** Add an `assert` statement. Koja has no macros, so only the compiler can
   stamp the source expression, the file, the line, and the `Debug` rendering
   of both operands into a `Test.Failure`. Assertions are hard: the first
   failure ends the test.
-- Add a `Test` package with the `Test.Failure` enum and three functions:
+- **[DONE]** Add a `Test` package with the `Test.Failure` enum and three functions:
   `require` for setup, `skip`, and `crashes` for a body that must panic. The loader links it only when tests are included, which keeps
   `assert` out of application code without a special rule.
-- Make the `Test` package the runner. `Test.Runner` runs each test in its
+- **[DONE]** Make the `Test` package the runner. `Test.Runner` runs each test in its
   own process with a deadline, so a crash or a hang is one failure and not
   the end of the run, and feeds a `Test.Reporter`. The `dots`, `trace`, and
   `json` reporters ship, and any package can add one.
-- The human reporters follow the pretty and short styles of compiler
+- **[DONE]** The human reporters follow the pretty and short styles of compiler
   diagnostics.
-- Run `koja test` on the interpreter by default, with `--backend llvm` for
+- **[DONE]** Run `koja test` on the interpreter by default, with `--backend llvm` for
   the native run. Done in phase 3 with the same backend selection as
   `koja run`. Since phase 4 the interpreter resolves a project's own
   externs through the dynamic loader, so only a project whose `@link`
   library exists solely as a static archive still compiles. The CI recipes
   run both, which turns every test suite into a parity check between the
   backends.
-- Deprecate `@test` in 0.19 for removal in 0.20. Migration is by hand or by
-  agent. No formatter rewrite.
+- **[DONE]** Deprecate `@test` in 0.19 for removal in 0.20. Done. The stdlib and the
+  `koja new` scaffold migrated by hand, and every remaining annotation
+  warns. The examples migrate after the release. No formatter rewrite.
 
 ### Language server
-
-The list is closed. Anything not named here is 0.20 material.
 
 - Find references and rename, built on one reference index over the resolved
   AST. Document highlight falls out of the same index.

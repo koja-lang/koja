@@ -212,6 +212,7 @@ impl Walker<'_, '_> {
     }
 
     fn check_function(&mut self, function: &Function) {
+        self.warn_legacy_test(function);
         if is_deprecated(&function.annotations) {
             return;
         }
@@ -665,6 +666,21 @@ impl Walker<'_, '_> {
         {
             self.warn_use(*id, span);
         }
+    }
+
+    /// The `@test` annotation is the pre-0.19 test form. The harness
+    /// still runs it, so the warning is the only nudge toward `test`
+    /// blocks. Desugared blocks carry no annotation, so they never
+    /// reach here with one.
+    fn warn_legacy_test(&mut self, function: &Function) {
+        let Some(annotation) = function.annotations.iter().find(|a| a.name == "test") else {
+            return;
+        };
+        self.diagnostics.push(Diagnostic::warning_with_hint(
+            "`@test` is deprecated. Koja 0.20 removes it.",
+            "move the body into a `test \"description\"` block",
+            annotation.span,
+        ));
     }
 
     fn warn_use(&mut self, id: GlobalRegistryId, span: Span) {

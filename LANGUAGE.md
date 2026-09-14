@@ -18,7 +18,8 @@ Koja is a statically typed, compiled language targeting native binaries via LLVM
 - [Protocols](#protocols): Behavioral Contracts, Impl Blocks, Static Dispatch
 - [Packages](#packages): Transparent Files, Visibility, Aliases, Dependencies
 - [Concurrency](#concurrency): `Task`, Processes, Lifecycle, `Ref`, `ReplyTo`, `spawn`/`receive`, Runtime Observability
-- [Annotations](#annotations): `@deprecated`, `@doc`, `@test`
+- [Testing](#testing): `test` Blocks, `assert`, `Test.Failure`, Setup and Skips, Panics, Running Tests
+- [Annotations](#annotations): `@deprecated`, `@doc`, `@test` (deprecated)
 - [C FFI](#c-ffi): `@extern "C"`, `CPtr<T>`, `CString`
 - [Standard Library](#standard-library): Core Types, Collections, String Functions, Binary/Bits, File I/O, Parsing, URI, Base, Path, Protocols
 - [Tooling](#tooling): CLI Commands, Custom Tasks, LSP, Formatter
@@ -45,10 +46,10 @@ x = 42 # inline comment
 ### Keywords
 
 ```
-after, alias, break, builtin, cond, const, else, end, enum, extend,
-fail, false, fn, for, if, impl, in, loop, match, not, priv,
-protocol, receive, rescue, return, self, spawn, struct, true, try,
-type, unless, when, while
+after, alias, assert, break, builtin, cond, const, else, end, enum,
+extend, fail, false, fn, for, if, impl, in, loop, match, not, priv,
+protocol, receive, rescue, return, self, spawn, struct, test, true,
+try, type, unless, when, while
 ```
 
 `unless` was removed in 0.19 but stays reserved, so the compiler can point an old `unless cond` at its replacement `if not cond`.
@@ -1889,13 +1890,170 @@ Shedding means receiving and discarding. There is no selective drop, so the hand
 
 ---
 
+## Testing
+
+A test is a `test` block. `koja test` finds every block in `src/` and `test/`, runs each one in its own process, and reports the result.
+
+```koja
+test "greet builds a greeting message"
+  assert greet("Koja") == "Hello, Koja!"
+end
+```
+
+### `test` Blocks
+
+A `test` block takes a required string description and a body. The body has no parameters and no `self`. Reaching `end` passes the test. An `assert` that is false, a `fail`, or a `try` that propagates an error fails it.
+
+A block goes at the top level of a file or inside a `struct`, `enum`, `impl`, `extend`, or `builtin` body. A member block becomes a method on that type, so it can reach the type's `priv` functions and fields. A `protocol` body rejects `test`, since a protocol has no concrete type to call. Its tests belong in the `impl` block of a conforming type.
+
+```koja
+struct Stack
+  items: List<Int>
+
+  fn push(self, item: Int) -> Stack
+    Stack{items: self.items.append(item)}
+  end
+
+  test "push grows the stack"
+    stack = Stack{items: List.new()}
+    assert stack.push(1).items.length() == 1
+  end
+end
+```
+
+Blocks compile only under `koja test` and `koja check`. Every other command drops them before type checking, so a block in `src/` never reaches a build. Two blocks in one scope may share a description. The runner tells them apart by line.
+
+The runner groups a test by its owner. A top-level block groups under its file path, a `struct`, `enum`, or `builtin` block under the type path, an `impl` block under `Type: Protocol`, and an `extend` block under the target type. Nested types give a hierarchy, so `ParserTest.Literals` is a group inside `ParserTest`.
+
+### `assert`
+
+`assert` is a statement, like `fail`. It is valid where `Test.Failure` is on the enclosing error channel, which means a `test` body or a helper that declares `! Test.Failure`. Anywhere else it is a compile error.
+
+```koja
+assert cond
+assert cond, "message"
+```
+
+When `cond` is false the statement fails the test with the source text of the condition, the file, the line, and the column. The message is any `String` expression and is evaluated only on failure. Assertions are hard. The first failure ends the test.
+
+The compiler recognizes the six comparison forms, `==`, `!=`, `<`, `<=`, `>`, and `>=`, binds each operand once, and records both values rendered through `Debug`. A failure then shows what was compared:
+
+```
+failure: assertion failed
+   ╭─ test/stack_test.koja:23:12
+   │
+23 │     assert popped == 3
+   │            ──────────
+   │            left:  2
+   │            right: 3
+```
+
+In a comparison the right operand takes the left operand's type, so `assert count == 0` checks against a `UInt32` and `assert stack.peek() == Option.None` infers the `Option` argument. Any other condition records its source text only.
+
+A helper that asserts declares `! Test.Failure` and is called with `try`:
+
+```koja
+priv fn assert_route(path: String, expected: String) ! Test.Failure
+  assert Router.match(path) == expected, "route for #{path}"
+end
+
+test "matches static paths"
+  try assert_route("/health", "health")
+  try assert_route("/", "root")
+end
+```
+
+### `Test.Failure`
+
+`Test.Failure` is the one error type on a test's channel. It is an enum in the `Test` package:
+
+```koja
+enum Failure
+  Assertion(Assertion)   # from assert
+  Error(String)          # a domain error or a message
+  Skipped(String)        # from Test.skip
+end
+```
+
+`Test.Failure` conforms to `StringLiteral`, so `fail "message"` inside a test produces `Failure.Error("message")` through the ordinary literal rule. Interpolated strings convert the same way. A `String` variable does not, and `fail Test.Failure.Error(message)` is the explicit form for that case.
+
+The `Test` package links only for `koja test` and `koja check`. A build cannot name `Test.Failure`, so it cannot put it on a channel, so an `assert` cannot survive in application code. `Kernel.panic` stays the crash verb outside tests.
+
+### Setup and Skips
+
+`Test.require` unwraps a `Result` that must succeed before the claim under test. An `Err` fails the test with the error's `Debug` rendering:
+
+```koja
+test "decodes a payload"
+  conn = try Test.require(connect())
+  row = try Test.require(conn.query_one("SELECT 1"))
+  assert row.cell(0) == Option.Some("1")
+end
+```
+
+There is no `Option` form. A claim about an `Option` is an `assert`, a gate on it is `Test.skip`, and a fixture bug is `unwrap`, which panics in the test's own process.
+
+An expected error needs no helper, because `Result` answers the question as a value and `assert` renders it:
+
+```koja
+test "rejects malformed input"
+  assert Base.decode64("Zm9v!GFy") == Result.Err(Base.Error.InvalidCharacter("!"))
+end
+```
+
+`Test.skip` ends the test as skipped with a reason. It is a call from the body, so the condition runs on every run. A known failure is `try Test.skip("#214: returns the wrong sign")` as the first line. The summary lists every skip, which keeps it from being forgotten.
+
+```koja
+test "round-trips through a live database"
+  if System.get_env("DATABASE_URL").none?()
+    try Test.skip("DATABASE_URL is not set")
+  end
+  # ...
+end
+```
+
+### Panics
+
+`Test.crashes` takes a closure, runs it in a child process, and returns `true` on an abnormal exit. A body that returns is `false`. A body that returns a `Result.Err` is also `false`, because an error on the channel is not a crash.
+
+```koja
+test "rejects an index past the end"
+  assert Test.crashes(fn () list.get(5).unwrap() end)
+end
+```
+
+A panic in the test body itself is contained the same way. The runner reports that test as crashed with the panic message and continues with the next one.
+
+### Running Tests
+
+`koja test` runs on the interpreter by default and compiles through LLVM when the project declares a C extern the interpreter cannot resolve. `--backend {interpreter,llvm}` picks one explicitly.
+
+| Flag                | Effect                                                                       |
+| ------------------- | ---------------------------------------------------------------------------- |
+| `--reporter <name>` | `dots` (default), `trace`, or `json`                                         |
+| `--trace`           | Same as `--reporter trace`, a group header and one line per test with timing |
+| `--out <path>`      | Write the `json` stream to a file instead of stderr                          |
+| `--timeout <ms>`    | Deadline per test, default 60000. A test that misses it is killed            |
+
+The `dots` and `trace` reporters follow the compiler's diagnostics style, so `--diagnostics`, `KOJA_DIAGNOSTICS`, `--no-color`, and `NO_COLOR` apply. The pretty style draws the source snippet above. The short style prints one line per failure:
+
+```
+test/stack_test.koja:23:12: failure: assert popped == 3 (left: 2, right: 3)
+```
+
+The `json` reporter writes one event per line for CI and editors. Its shapes are part of the `Test` package's public surface.
+
+The exit status is 1 when any test fails, crashes, or times out, and 0 otherwise. Skipped tests do not affect it.
+
+---
+
 ## Annotations
 
 An annotation is `@name` with an optional payload, placed before a
 declaration. Payloads are strings (single-line `"..."` or multiline
 `"""..."""`, interchangeable) or the literal `false`. By convention,
 annotations that carry prose (`@deprecated`, `@doc`) use the multiline form,
-and short labels like `@test` descriptions stay on one line.
+and short labels like `@link` library names stay on one line.
 
 The FFI annotations `@extern` and `@link` are covered in [C FFI](#c-ffi).
 
@@ -1947,29 +2105,16 @@ Doc strings support Markdown and are rendered by `koja doc`.
 
 ### `@test`
 
-Marks a function as a test case. `koja test` discovers and runs all
-`@test`-annotated functions in `src/` and `test/` directories. A test is
-a fallible function with a `String` error. Returning normally passes,
-and `fail message` fails with that message. Setup calls propagate with
-`try`, so a failed setup reads as a failed test.
+Deprecated in 0.19 and removed in 0.20. Use a [`test` block](#testing).
 
-```koja
-struct AdditionTest
-  @test "adds two integers"
-  fn test_addition ! String
-    result = add(2, 3)
+`@test "description"` on a function marks it as a test case. `koja test` still runs it, on a `! String` or `! Test.Failure` channel or with a `-> Result<T, String>` return, and reports a warning at the annotation:
 
-    if result != 5
-      fail "expected 5, got #{result}"
-    end
-  end
-end
+```
+warning: `@test` is deprecated. Koja 0.20 removes it.
+help: move the body into a `test "description"` block
 ```
 
-An optional string after `@test` provides a description printed during the
-test run. The runner reports every discovered test even when some fail.
-Tests declared as `-> Result<T, String>` still run. Any `Result.Ok` passes
-and `Result.Err(message)` fails.
+Old and new forms run side by side in one project, so a package can migrate one file at a time.
 
 ---
 
@@ -2878,7 +3023,7 @@ Collection element, key, and value types come from the selected conformance. A n
 | `koja build`  | Compile to a native binary via LLVM              |
 | `koja run`    | Build and execute in one step                    |
 | `koja check`  | Type check without compiling                     |
-| `koja test`   | Run `@test`-annotated functions                  |
+| `koja test`   | Run the project's `test` blocks                  |
 | `koja tasks`  | List tasks from the project, deps, and toolchain |
 | `koja deps`   | Fetch and inspect dependencies (`get`, `update`) |
 | `koja format` | Opinionated code formatter (`--check` for CI)    |
@@ -2929,10 +3074,16 @@ koja build --release --target-cpu native
 
 ```
 my_app/
+  .gitignore
+  AGENTS.md
   koja.toml
   src/
     app.koja
+  test/
+    app_test.koja
 ```
+
+`src/app.koja` holds a `greet` function and the `App` process entry. `test/app_test.koja` holds one `test` block that asserts on `greet`, so `koja test` passes from the first command. `AGENTS.md` is a short guide to the language and the CLI for coding agents.
 
 The directory is created as typed. The package name is the last path segment in snake_case, so `koja new my_app`, `koja new my-app`, and `koja new MyApp` all scaffold package `my_app` with namespace `MyApp`. A nested path like `koja new projects/my-app` creates the intermediate directories.
 

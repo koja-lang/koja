@@ -476,6 +476,67 @@ fn impl_on_deprecated_target_does_not_warn() {
     );
 }
 
+// The legacy `@test` annotation
+
+#[test]
+fn legacy_test_annotation_warns_at_the_annotation() {
+    let source = "
+        struct StackTest
+          @test \"push then pop\"
+          fn test_push_pop ! String
+            ()
+          end
+        end
+
+        @test
+        fn top_level_legacy ! String
+          ()
+        end
+        ";
+    let checked = typecheck_file(&dedent(source));
+    let warnings: Vec<_> = checked
+        .diagnostics
+        .iter()
+        .filter(|d| d.severity == Severity::Warning)
+        .collect();
+    assert_eq!(warnings.len(), 2, "one warning per `@test`: {warnings:#?}");
+    for warning in &warnings {
+        assert_eq!(
+            warning.message,
+            "`@test` is deprecated. Koja 0.20 removes it."
+        );
+        assert_eq!(
+            warning.hint.as_deref(),
+            Some("move the body into a `test \"description\"` block")
+        );
+    }
+    // The span is the annotation, not the function it decorates.
+    assert_eq!(warnings[0].span.start.line, 2);
+    assert_eq!(warnings[1].span.start.line, 8);
+}
+
+#[test]
+fn test_blocks_do_not_warn() {
+    let source = "
+        struct Stack
+          items: List<Int>
+
+          test \"member block\"
+            assert Stack{items: List.new()}.items.length() == 0
+          end
+        end
+
+        test \"top-level block\"
+          assert 1 == 1
+        end
+        ";
+    let warnings = warning_messages(&typecheck_file(&dedent(source)));
+    assert!(
+        warnings.is_empty(),
+        "desugared test blocks must not warn: {warnings:?}",
+    );
+}
+
 // Diagnostic file attribution
 
 #[test]
