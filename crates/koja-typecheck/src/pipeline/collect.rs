@@ -26,7 +26,7 @@
 use koja_ast::ast::{
     Annotation, AnnotationKind, BuiltinDecl, Constant, Diagnostic, EnumDecl, ExtendBlock, File,
     Function, ImplBlock, ImplMember, Item, Name, Param, ProtocolDecl, ProtocolMethod, StructDecl,
-    TypeAlias, TypeExpr, TypeParam, Visibility, is_intrinsic, name_texts,
+    TypeAlias, TypeExpr, Visibility, is_intrinsic, name_texts,
 };
 use koja_ast::identifier::{GlobalRegistryId, Identifier};
 use koja_ast::labels::type_expr_span;
@@ -50,10 +50,10 @@ pub(crate) fn collect_file_decls(
     for item in &file.items {
         match item {
             Item::Builtin(decl) => {
-                register_builtin(decl, package, registry, diagnostics);
+                register_type_decl(decl, package, registry, diagnostics);
             }
             Item::Enum(decl) => {
-                register_enum(decl, package, registry, diagnostics);
+                register_type_decl(decl, package, registry, diagnostics);
             }
             Item::Function(function) => {
                 let identifier = Identifier::single(package, function.name.text.clone());
@@ -70,7 +70,7 @@ pub(crate) fn collect_file_decls(
                 register_protocol(decl, package, registry, diagnostics);
             }
             Item::Struct(decl) => {
-                register_struct(decl, package, registry, diagnostics);
+                register_type_decl(decl, package, registry, diagnostics);
             }
             Item::Impl(_) => {}
             Item::Extend(_) => {}
@@ -424,62 +424,85 @@ fn reject_self_param(
     true
 }
 
-fn register_struct(
-    decl: &StructDecl,
+/// A type declaration with a body of inline methods: `struct`,
+/// `enum`, or `builtin`. [`register_type_decl`] drives the shared
+/// registration steps and calls back here for the two that differ,
+/// the feature-gap checks and the registry insert.
+trait TypeDecl {
+    fn header(&self) -> TypeDeclHeader<'_>;
+
+    fn diagnose_feature_gaps(&self, diagnostics: &mut Vec<Diagnostic>);
+
+    /// Insert the entry, or return the `already defined` error.
+    /// Any other diagnostic the insert raises goes to `diagnostics`.
+    fn insert(
+        &self,
+        identifier: &Identifier,
+        registry: &mut GlobalRegistry,
+        diagnostics: &mut Vec<Diagnostic>,
+    ) -> Result<GlobalRegistryId, Diagnostic>;
+}
+
+/// The parts of a [`TypeDecl`] that registration reads.
+struct TypeDeclHeader<'a> {
+    /// The keyword, for diagnostics.
+    label: &'static str,
+    path: &'a [Name],
+    functions: &'a [Function],
+    visibility: Visibility,
+    annotations: &'a [Annotation],
+}
+
+impl TypeDeclHeader<'_> {
+    fn name(&self) -> &Name {
+        self.path.last().expect("declaration path is non-empty")
+    }
+}
+
+/// Register a type decl plus every inline method on it, and surface
+/// every feature-gap diagnostic up front. The decl always registers,
+/// even on collision or in the presence of feature gaps, so downstream
+/// resolve sees a populated registry for diagnostic-friendly error
+/// messages.
+fn register_type_decl<D: TypeDecl>(
+    decl: &D,
     package: &str,
     registry: &mut GlobalRegistry,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
-    diagnose_struct_feature_gaps(decl, diagnostics);
+    let header = decl.header();
+    decl.diagnose_feature_gaps(diagnostics);
     diagnose_doc_on_private(
-        decl.name(),
-        "struct",
-        decl.visibility,
-        &decl.annotations,
+        header.name(),
+        header.label,
+        header.visibility,
+        header.annotations,
         diagnostics,
     );
-    diagnose_intrinsic_on_struct(decl, diagnostics);
-    let deprecation = deprecation_message(&decl.annotations, diagnostics);
-    let path = name_texts(&decl.path);
+    let deprecation = deprecation_message(header.annotations, diagnostics);
+    let path = name_texts(header.path);
     let identifier = Identifier::new(package, path.clone());
-    let struct_id = register_ordinary_struct(decl, &identifier, deprecation, registry, diagnostics);
-    for function in &decl.functions {
+    let inserted = decl.insert(&identifier, registry, diagnostics);
+    let type_id = record_type_insert(inserted, &identifier, deprecation, registry, diagnostics);
+    for function in header.functions {
         let method_identifier = Identifier::member(package, &path, function.name.as_str());
         register_function_with_identifier(
             function,
             method_identifier,
             SelfContext::AllowSelf,
-            struct_id,
+            type_id,
             registry,
             diagnostics,
         );
     }
 }
 
-fn register_ordinary_struct(
-    decl: &StructDecl,
-    identifier: &Identifier,
-    deprecation: Option<String>,
-    registry: &mut GlobalRegistry,
-    diagnostics: &mut Vec<Diagnostic>,
-) -> Option<GlobalRegistryId> {
-    let outcome = registry.insert_struct(
-        identifier.clone(),
-        decl.span,
-        decl.name().span,
-        type_param_names(&decl.type_params),
-        package_visibility_scope(decl.visibility),
-    );
-    let inserted = fresh_id(outcome, decl.name().span);
-    record_struct_insert(inserted, identifier, deprecation, registry, diagnostics)
-}
-
-/// Finish a struct-entry insert. A fresh entry takes its deprecation.
+/// Finish a type-entry insert. A fresh entry takes its deprecation.
 /// On collision the existing entry's id is returned so the caller can
 /// still register inline methods against the type that owns the name.
 /// The duplicate decl is diagnosed on its own, and its methods would
 /// otherwise dangle.
-fn record_struct_insert(
+fn record_type_insert(
     inserted: Result<GlobalRegistryId, Diagnostic>,
     identifier: &Identifier,
     deprecation: Option<String>,
@@ -494,6 +517,119 @@ fn record_struct_insert(
         Err(diagnostic) => {
             diagnostics.push(diagnostic);
             registry.lookup(identifier).map(|(id, _)| id)
+        }
+    }
+}
+
+impl TypeDecl for StructDecl {
+    fn header(&self) -> TypeDeclHeader<'_> {
+        TypeDeclHeader {
+            label: "struct",
+            path: &self.path,
+            functions: &self.functions,
+            visibility: self.visibility,
+            annotations: &self.annotations,
+        }
+    }
+
+    fn diagnose_feature_gaps(&self, diagnostics: &mut Vec<Diagnostic>) {
+        diagnose_struct_feature_gaps(self, diagnostics);
+        diagnose_intrinsic_on_struct(self, diagnostics);
+    }
+
+    fn insert(
+        &self,
+        identifier: &Identifier,
+        registry: &mut GlobalRegistry,
+        _diagnostics: &mut Vec<Diagnostic>,
+    ) -> Result<GlobalRegistryId, Diagnostic> {
+        let visibility = package_visibility_scope(self.visibility);
+        let outcome = registry.insert_struct(identifier.clone(), self, visibility);
+        fresh_id(outcome, self.name().span)
+    }
+}
+
+impl TypeDecl for EnumDecl {
+    fn header(&self) -> TypeDeclHeader<'_> {
+        TypeDeclHeader {
+            label: "enum",
+            path: &self.path,
+            functions: &self.functions,
+            visibility: self.visibility,
+            annotations: &self.annotations,
+        }
+    }
+
+    fn diagnose_feature_gaps(&self, diagnostics: &mut Vec<Diagnostic>) {
+        diagnose_enum_feature_gaps(self, diagnostics);
+    }
+
+    fn insert(
+        &self,
+        identifier: &Identifier,
+        registry: &mut GlobalRegistry,
+        _diagnostics: &mut Vec<Diagnostic>,
+    ) -> Result<GlobalRegistryId, Diagnostic> {
+        let visibility = package_visibility_scope(self.visibility);
+        let outcome = registry.insert_enum(identifier.clone(), self, visibility);
+        fresh_id(outcome, self.name().span)
+    }
+}
+
+/// A `builtin` declaration claims the compiler's seeded stub. An
+/// unknown name is a compile error, and the decl then inserts as an
+/// ordinary type so duplicates get the standard `already defined`
+/// diagnostic and the decl's methods never dangle.
+impl TypeDecl for BuiltinDecl {
+    fn header(&self) -> TypeDeclHeader<'_> {
+        TypeDeclHeader {
+            label: "builtin",
+            path: &self.path,
+            functions: &self.functions,
+            visibility: self.visibility,
+            annotations: &self.annotations,
+        }
+    }
+
+    fn diagnose_feature_gaps(&self, diagnostics: &mut Vec<Diagnostic>) {
+        diagnose_builtin_feature_gaps(self, diagnostics);
+    }
+
+    fn insert(
+        &self,
+        identifier: &Identifier,
+        registry: &mut GlobalRegistry,
+        diagnostics: &mut Vec<Diagnostic>,
+    ) -> Result<GlobalRegistryId, Diagnostic> {
+        match registry.claim_builtin_stub(identifier, self) {
+            Some(ClaimOutcome::Claimed(id)) => Ok(id),
+            Some(ClaimOutcome::ArityMismatch { id, expected_arity }) => {
+                diagnostics.push(Diagnostic::error(
+                    format!(
+                        "builtin `{}` takes exactly {expected_arity} type parameter{}, found {}",
+                        self.name(),
+                        if expected_arity == 1 { "" } else { "s" },
+                        self.type_params.len(),
+                    ),
+                    self.name().span,
+                ));
+                Ok(id)
+            }
+            None => {
+                if registry.lookup(identifier).is_none() {
+                    diagnostics.push(Diagnostic::error_with_hint(
+                        format!("`{identifier}` is not a builtin type"),
+                        "`builtin` declares a compiler-provided type like `String` or `List`. \
+                         Declare an ordinary type with `struct` or `enum`."
+                            .to_string(),
+                        self.name().span,
+                    ));
+                }
+                let visibility = package_visibility_scope(self.visibility);
+                let outcome =
+                    registry.insert_unclaimed_builtin(identifier.clone(), self, visibility);
+                fresh_id(outcome, self.name().span)
+            }
         }
     }
 }
@@ -520,82 +656,6 @@ fn diagnose_intrinsic_on_struct(decl: &StructDecl, diagnostics: &mut Vec<Diagnos
     ));
 }
 
-/// Register a `builtin` declaration by claiming the compiler's
-/// seeded stub. An unknown name is a compile error. Failed claims
-/// fall back to an ordinary struct insert so duplicates get the
-/// standard "already defined" diagnostic and the decl's methods
-/// never dangle.
-fn register_builtin(
-    decl: &BuiltinDecl,
-    package: &str,
-    registry: &mut GlobalRegistry,
-    diagnostics: &mut Vec<Diagnostic>,
-) {
-    diagnose_builtin_feature_gaps(decl, diagnostics);
-    diagnose_doc_on_private(
-        decl.name(),
-        "builtin",
-        decl.visibility,
-        &decl.annotations,
-        diagnostics,
-    );
-    let deprecation = deprecation_message(&decl.annotations, diagnostics);
-    let path = name_texts(&decl.path);
-    let identifier = Identifier::new(package, path.clone());
-    let type_params = type_param_names(&decl.type_params);
-    let claim = registry.claim_builtin_stub(&identifier, decl.span, decl.name().span, type_params);
-    let builtin_id = match claim {
-        Some(ClaimOutcome::Claimed(id)) => {
-            stamp_deprecation(registry, id, deprecation);
-            Some(id)
-        }
-        Some(ClaimOutcome::ArityMismatch { id, expected_arity }) => {
-            diagnostics.push(Diagnostic::error(
-                format!(
-                    "builtin `{}` takes exactly {expected_arity} type parameter{}, found {}",
-                    decl.name(),
-                    if expected_arity == 1 { "" } else { "s" },
-                    decl.type_params.len(),
-                ),
-                decl.name().span,
-            ));
-            stamp_deprecation(registry, id, deprecation);
-            Some(id)
-        }
-        None => {
-            if registry.lookup(&identifier).is_none() {
-                diagnostics.push(Diagnostic::error_with_hint(
-                    format!("`{identifier}` is not a builtin type"),
-                    "`builtin` declares a compiler-provided type like `String` or `List`. \
-                     Declare an ordinary type with `struct` or `enum`."
-                        .to_string(),
-                    decl.name().span,
-                ));
-            }
-            let outcome = registry.insert_struct(
-                identifier.clone(),
-                decl.span,
-                decl.name().span,
-                type_param_names(&decl.type_params),
-                package_visibility_scope(decl.visibility),
-            );
-            let inserted = fresh_id(outcome, decl.name().span);
-            record_struct_insert(inserted, &identifier, deprecation, registry, diagnostics)
-        }
-    };
-    for function in &decl.functions {
-        let method_identifier = Identifier::member(package, &path, function.name.as_str());
-        register_function_with_identifier(
-            function,
-            method_identifier,
-            SelfContext::AllowSelf,
-            builtin_id,
-            registry,
-            diagnostics,
-        );
-    }
-}
-
 /// Shape and annotation checks for `builtin` declarations.
 fn diagnose_builtin_feature_gaps(decl: &BuiltinDecl, diagnostics: &mut Vec<Diagnostic>) {
     if decl.visibility != Visibility::Public {
@@ -618,60 +678,6 @@ fn diagnose_builtin_feature_gaps(decl: &BuiltinDecl, diagnostics: &mut Vec<Diagn
             ),
             annotation.span,
         ));
-    }
-}
-
-/// Register an enum decl + every inline method on it, and surface
-/// every feature-gap diagnostic up front. Mirrors [`register_struct`]:
-/// the decl always registers (even on collision or in the presence
-/// of feature gaps) so downstream resolve sees a populated registry
-/// for diagnostic-friendly error messages.
-fn register_enum(
-    decl: &EnumDecl,
-    package: &str,
-    registry: &mut GlobalRegistry,
-    diagnostics: &mut Vec<Diagnostic>,
-) {
-    diagnose_enum_feature_gaps(decl, diagnostics);
-    diagnose_doc_on_private(
-        decl.name(),
-        "enum",
-        decl.visibility,
-        &decl.annotations,
-        diagnostics,
-    );
-    let deprecation = deprecation_message(&decl.annotations, diagnostics);
-    let path = name_texts(&decl.path);
-    let identifier = Identifier::new(package, path.clone());
-    let type_params = type_param_names(&decl.type_params);
-    let visibility = package_visibility_scope(decl.visibility);
-    let outcome = registry.insert_enum(
-        identifier.clone(),
-        decl.span,
-        decl.name().span,
-        type_params,
-        visibility,
-    );
-    let enum_id = match fresh_id(outcome, decl.name().span) {
-        Ok(id) => {
-            stamp_deprecation(registry, id, deprecation);
-            Some(id)
-        }
-        Err(diagnostic) => {
-            diagnostics.push(diagnostic);
-            registry.lookup(&identifier).map(|(id, _)| id)
-        }
-    };
-    for function in &decl.functions {
-        let method_identifier = Identifier::member(package, &path, function.name.as_str());
-        register_function_with_identifier(
-            function,
-            method_identifier,
-            SelfContext::AllowSelf,
-            enum_id,
-            registry,
-            diagnostics,
-        );
     }
 }
 
@@ -869,13 +875,7 @@ fn register_protocol(
     }
     let visibility = package_visibility_scope(decl.visibility);
     let deprecation = deprecation_message(&decl.annotations, diagnostics);
-    let outcome = registry.insert_protocol(
-        identifier,
-        decl.span,
-        decl.name.span,
-        type_params,
-        visibility,
-    );
+    let outcome = registry.insert_protocol(identifier, decl, type_params, visibility);
     match fresh_id(outcome, decl.name.span) {
         Ok(id) => stamp_deprecation(registry, id, deprecation),
         Err(diagnostic) => diagnostics.push(diagnostic),
@@ -906,8 +906,7 @@ fn register_constant(
     let identifier = Identifier::single(package, constant.name.text.clone());
     let visibility = package_visibility_scope(constant.visibility);
     let deprecation = deprecation_message(&constant.annotations, diagnostics);
-    let outcome =
-        registry.insert_constant(identifier, constant.span, constant.name.span, visibility);
+    let outcome = registry.insert_constant(identifier, constant, visibility);
     match fresh_id(outcome, constant.name.span) {
         Ok(id) => stamp_deprecation(registry, id, deprecation),
         Err(diagnostic) => diagnostics.push(diagnostic),
@@ -936,7 +935,7 @@ fn register_type_alias(
     let identifier = Identifier::single(package, alias.name.text.clone());
     let visibility = package_visibility_scope(alias.visibility);
     let deprecation = deprecation_message(&alias.annotations, diagnostics);
-    let outcome = registry.insert_type_alias(identifier, alias.span, alias.name.span, visibility);
+    let outcome = registry.insert_type_alias(identifier, alias, visibility);
     match fresh_id(outcome, alias.name.span) {
         Ok(id) => stamp_deprecation(registry, id, deprecation),
         Err(diagnostic) => diagnostics.push(diagnostic),
@@ -990,15 +989,6 @@ pub(crate) fn nominal_target_path(target: &TypeExpr) -> Option<&[String]> {
         TypeExpr::Named { path, .. } | TypeExpr::Generic { path, .. } => Some(path.as_slice()),
         _ => None,
     }
-}
-
-/// Project the AST `[TypeParam]` list down to the param-name `Vec`
-/// the registry stores. Bounds are not stamped here. `lift_signatures`
-/// resolves bound names against registered protocols once every
-/// protocol id exists, then writes them through
-/// [`crate::registry::GlobalRegistry::set_type_param_bounds`].
-fn type_param_names(type_params: &[TypeParam]) -> Vec<String> {
-    type_params.iter().map(|p| p.name.clone()).collect()
 }
 
 /// Diagnose every feature gap on a struct decl up front so collect
