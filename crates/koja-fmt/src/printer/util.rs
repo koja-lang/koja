@@ -10,11 +10,11 @@ use koja_ast::ast::*;
 use koja_ast::labels::type_expr_span;
 use koja_ast::span::Span;
 
-use super::comments::leading_docs;
+use super::Printer;
 
 /// Formats a `TypeParam` as a string, including bounds if present.
 /// E.g. `T`, `T: Debug`, `T: Debug & Hash`.
-pub fn format_type_param(tp: &TypeParam) -> String {
+pub(super) fn format_type_param(tp: &TypeParam) -> String {
     if tp.bounds.is_empty() {
         tp.name.clone()
     } else {
@@ -28,8 +28,7 @@ pub fn format_type_param(tp: &TypeParam) -> String {
     }
 }
 
-/// Formats a list of `TypeParam`s as a comma-separated string.
-pub fn format_type_params(tps: &[TypeParam]) -> String {
+pub(super) fn format_type_params(tps: &[TypeParam]) -> String {
     tps.iter()
         .map(format_type_param)
         .collect::<Vec<_>>()
@@ -119,23 +118,102 @@ pub(super) fn conformance_header_doc(conformances: &[TypeExpr]) -> Doc {
 /// Formats a struct-like body: `prefix{ field, field, ... }` with
 /// trailing-comma layout that breaks across lines when needed.
 pub(super) fn struct_body(prefix: Doc, field_docs: Vec<Doc>) -> Doc {
+    concat(vec![prefix, delimited_list("{", "}", field_docs)])
+}
+
+/// A comma-separated list between `open` and `close` that stays on one
+/// line when it fits and otherwise puts one item per line with a
+/// trailing comma. The shape of parameter lists, call arguments, and
+/// struct bodies.
+pub(super) fn delimited_list(open: &str, close: &str, items: Vec<Doc>) -> Doc {
     group(concat(vec![
-        prefix,
-        text("{"),
+        text(open),
         indent(
             2,
             concat(vec![
                 softline(),
-                intersperse(field_docs, concat(vec![text(","), line()])),
+                intersperse(items, concat(vec![text(","), line()])),
                 trailing_comma(),
             ]),
         ),
         softline(),
-        text("}"),
+        text(close),
     ]))
 }
 
-/// Returns the source span for any top-level `Item`.
+/// `interior` between `open` and `close`, always broken: the interior
+/// is indented and `close` sits on its own line. `interior` supplies
+/// its own leading line break.
+pub(super) fn broken_list(open: &str, close: &str, interior: Doc) -> Doc {
+    concat(vec![
+        text(open),
+        indent(2, interior),
+        hardline(),
+        text(close),
+    ])
+}
+
+/// A single top-level element, either a declaration or a statement.
+/// `.kojs` scripts carry statements in `file.body` next to `file.items`,
+/// and both the attach pass and the printer walk them merged back into
+/// source order.
+pub(super) enum TopLevel<'a> {
+    Item(&'a Item),
+    Stmt(&'a Statement),
+}
+
+impl TopLevel<'_> {
+    /// First source line as authored, annotations included.
+    pub(super) fn start_line(&self) -> u32 {
+        match self {
+            TopLevel::Item(item) => item_start_line(item),
+            TopLevel::Stmt(stmt) => stmt_span(stmt).start.line,
+        }
+    }
+
+    /// First source offset as authored, annotations included.
+    pub(super) fn lead_offset(&self) -> u32 {
+        match self {
+            TopLevel::Item(item) => item_lead_offset(item),
+            TopLevel::Stmt(stmt) => stmt_span(stmt).start.offset,
+        }
+    }
+
+    /// The span that keys this node's comments. For items that is the
+    /// declaration span with annotations excluded.
+    pub(super) fn key(&self) -> Span {
+        match self {
+            TopLevel::Item(item) => *item_span(item),
+            TopLevel::Stmt(stmt) => stmt_span(stmt),
+        }
+    }
+
+    /// Whether this element forces blank-line separation from its
+    /// neighbors. Multi-line declarations, annotated declarations, and
+    /// block statements read better with surrounding blank lines, while
+    /// bare single-line `const`/`alias` declarations flow with adjacent
+    /// statements.
+    pub(super) fn is_block(&self) -> bool {
+        match self {
+            TopLevel::Item(item @ (Item::Constant(_) | Item::Alias(_) | Item::TypeAlias(_))) => {
+                !item_annotations(item).is_empty()
+            }
+            TopLevel::Item(_) => true,
+            TopLevel::Stmt(stmt) => stmt_is_block(stmt),
+        }
+    }
+}
+
+/// The file's items and script statements merged into source order.
+pub(super) fn top_level_nodes(file: &File) -> Vec<TopLevel<'_>> {
+    let mut nodes: Vec<TopLevel<'_>> = file.items.iter().map(TopLevel::Item).collect();
+    if let Some(body) = &file.body {
+        nodes.extend(body.iter().map(TopLevel::Stmt));
+    }
+    nodes.sort_by_key(TopLevel::lead_offset);
+    nodes
+}
+
 pub(super) fn item_span(item: &Item) -> &Span {
     match item {
         Item::Alias(a) => &a.span,
@@ -171,10 +249,28 @@ pub(super) fn item_annotations(item: &Item) -> &[Annotation] {
 /// sit outside the declaration span. Blank-line detection between
 /// items must measure from here, not from the declaration keyword.
 pub(super) fn item_start_line(item: &Item) -> u32 {
-    item_annotations(item)
+    lead_line(item_annotations(item), *item_span(item))
+}
+
+/// First source offset of an item including leading annotations.
+pub(super) fn item_lead_offset(item: &Item) -> u32 {
+    lead_offset(item_annotations(item), *item_span(item))
+}
+
+/// First source line of a declaration whose annotations sit outside
+/// its span.
+pub(super) fn lead_line(annotations: &[Annotation], span: Span) -> u32 {
+    annotations
         .first()
-        .map(|a| a.span.start.line)
-        .unwrap_or_else(|| item_span(item).start.line)
+        .map_or(span.start.line, |a| a.span.start.line)
+}
+
+/// First source offset of a declaration whose annotations sit outside
+/// its span.
+pub(super) fn lead_offset(annotations: &[Annotation], span: Span) -> u32 {
+    annotations
+        .first()
+        .map_or(span.start.offset, |a| a.span.start.offset)
 }
 
 /// The `priv ` keyword prefix for a private declaration, empty for
@@ -186,7 +282,6 @@ pub(super) fn visibility_prefix(visibility: Visibility) -> &'static str {
     }
 }
 
-/// Formats an `alias` declaration (`alias pkg.Type` or `alias pkg.Type as Name`).
 pub(super) fn alias_to_doc(a: &AliasDecl) -> Doc {
     let mut parts = Vec::new();
     parts.push(text("alias "));
@@ -199,13 +294,9 @@ pub(super) fn alias_to_doc(a: &AliasDecl) -> Doc {
     concat(parts)
 }
 
-/// Formats a `type` alias declaration (`type Name = TypeExpr`).
 pub(super) fn type_alias_to_doc(t: &TypeAlias) -> Doc {
     let mut parts = Vec::new();
-    if let Some(doc) = annotations_to_doc(&t.annotations) {
-        parts.push(doc);
-        parts.push(hardline());
-    }
+    push_annotations(&mut parts, &t.annotations);
     parts.push(text(visibility_prefix(t.visibility)));
     parts.push(text("type "));
     parts.push(text(&t.name));
@@ -214,10 +305,19 @@ pub(super) fn type_alias_to_doc(t: &TypeAlias) -> Doc {
     concat(parts)
 }
 
+/// Appends a declaration's annotations and the line break that
+/// separates them from the declaration. Nothing when there are none.
+pub(super) fn push_annotations(parts: &mut Vec<Doc>, annotations: &[Annotation]) {
+    if let Some(doc) = annotations_to_doc(annotations) {
+        parts.push(doc);
+        parts.push(hardline());
+    }
+}
+
 /// Formats a list of annotations, preserving the stacked/inline layout.
 /// Annotations on the same line are joined with a space, annotations on
 /// separate lines with hardlines.
-pub(super) fn annotations_to_doc(annotations: &[Annotation]) -> Option<Doc> {
+fn annotations_to_doc(annotations: &[Annotation]) -> Option<Doc> {
     if annotations.is_empty() {
         return None;
     }
@@ -236,8 +336,7 @@ pub(super) fn annotations_to_doc(annotations: &[Annotation]) -> Option<Doc> {
     Some(concat(parts))
 }
 
-/// Formats a single annotation (`@doc`, `@spec`, etc.).
-pub(super) fn annotation_to_doc(ann: &Annotation) -> Doc {
+fn annotation_to_doc(ann: &Annotation) -> Doc {
     match &ann.value {
         Some(AnnotationValue::String(val)) => {
             if val.contains('\n') {
@@ -257,7 +356,6 @@ pub(super) fn annotation_to_doc(ann: &Annotation) -> Doc {
     }
 }
 
-/// Formats a type expression (`Int32`, `List<T>`, `fn(A) -> B`, etc.).
 /// Renders an impl target with its conditional bounds inlined on
 /// the matching args (`List<T: Equality>`). Args without a bound
 /// entry and non-generic targets render like any other type.
@@ -381,7 +479,8 @@ pub(super) fn enum_prefix(type_path: &[String], variant: &str) -> String {
     }
 }
 
-/// Formats a pattern (used in match arms, for loops, destructuring).
+/// The comment-free pattern layout. [`Printer::pattern_to_doc`] falls
+/// back to this when no comment sits inside the pattern.
 pub(super) fn pattern_to_doc(pat: &Pattern) -> Doc {
     match pat {
         Pattern::Wildcard { .. } => text("_"),
@@ -450,7 +549,15 @@ pub(super) fn pattern_to_doc(pat: &Pattern) -> Doc {
             if segments.is_empty() {
                 text("<<>>")
             } else {
-                let seg_docs: Vec<Doc> = segments.iter().map(binary_segment_pat_to_doc).collect();
+                // Segment values are full expressions, so they go
+                // through the expression printer. This path only runs
+                // for comment-free patterns, so an empty table renders
+                // the same as the commented printer would.
+                let mut p = Printer::pure();
+                let seg_docs: Vec<Doc> = segments
+                    .iter()
+                    .map(|seg| p.binary_segment_to_doc(seg))
+                    .collect();
                 fill_bracket_list("<<", ">>", seg_docs)
             }
         }
@@ -469,60 +576,7 @@ pub(super) fn pattern_to_doc(pat: &Pattern) -> Doc {
     }
 }
 
-pub(super) fn binary_segment_pat_to_doc(seg: &BinarySegment) -> Doc {
-    let mut parts = vec![expr_value_to_doc(&seg.value)];
-    if let Some(size) = &seg.size {
-        parts.push(text("::"));
-        parts.push(expr_value_to_doc(size));
-        if seg.unit == BinaryUnit::Byte {
-            parts.push(text(" byte"));
-        }
-        if let Some(s) = &seg.signedness {
-            parts.push(text(match s {
-                BinarySignedness::Signed => " signed",
-                BinarySignedness::Unsigned => " unsigned",
-            }));
-        }
-        if let Some(e) = &seg.endianness {
-            parts.push(text(match e {
-                BinaryEndianness::Big => " big",
-                BinaryEndianness::Little => " little",
-            }));
-        }
-    } else if let Some(ta) = &seg.type_ann {
-        parts.push(text(": "));
-        parts.push(type_expr_to_doc(ta));
-    }
-    concat(parts)
-}
-
-fn expr_value_to_doc(expr: &Expr) -> Doc {
-    match &expr.kind {
-        ExprKind::Ident { name, .. } => text(name.clone()),
-        ExprKind::Literal { value } => literal_to_doc(value),
-        ExprKind::String { parts, .. } => {
-            let mut doc_parts = vec![text("\"")];
-            for part in parts {
-                match part {
-                    StringPart::Literal { value, .. } => {
-                        doc_parts.push(text(escape_string_literal(value)));
-                    }
-                    StringPart::Interpolation { expr, .. } => {
-                        doc_parts.push(text("#{"));
-                        doc_parts.push(expr_value_to_doc(expr));
-                        doc_parts.push(text("}"));
-                    }
-                }
-            }
-            doc_parts.push(text("\""));
-            concat(doc_parts)
-        }
-        _ => text("<expr>"),
-    }
-}
-
-/// Formats a single field pattern inside a struct destructure.
-pub(super) fn field_pattern_to_doc(fp: &FieldPattern) -> Doc {
+fn field_pattern_to_doc(fp: &FieldPattern) -> Doc {
     concat(vec![
         text(&fp.name),
         text(": "),
@@ -550,27 +604,17 @@ fn struct_pattern_to_doc(prefix: &str, fields: &[FieldPattern]) -> Doc {
     ]))
 }
 
-/// Formats a literal value.
 pub(super) fn literal_to_doc(lit: &Literal) -> Doc {
     match lit {
         Literal::Bool(true) => text("true"),
         Literal::Bool(false) => text("false"),
         Literal::Float(s) => text(s.clone()),
         Literal::Int(s) => text(s.clone()),
-        Literal::String(s) => {
-            let escaped = s
-                .replace('\\', "\\\\")
-                .replace('"', "\\\"")
-                .replace('\n', "\\n")
-                .replace('\r', "\\r")
-                .replace('\t', "\\t");
-            text(format!("\"{}\"", escaped))
-        }
+        Literal::String(s) => text(format!("\"{}\"", escape_string_literal(s))),
         Literal::Unit => text("()"),
     }
 }
 
-/// Formats a closure parameter.
 pub(super) fn closure_param_to_doc(cp: &ClosureParam) -> Doc {
     match cp {
         ClosureParam::Name {
@@ -588,8 +632,7 @@ pub(super) fn closure_param_to_doc(cp: &ClosureParam) -> Doc {
     }
 }
 
-/// Returns `true` if the expression is a multi-line block construct
-/// (if, match, cond, for, loop, unless, while, closure, receive).
+/// True for the `keyword ... end` constructs, which always span lines.
 pub(super) fn is_block_expr(expr: &Expr) -> bool {
     matches!(
         expr.kind,
@@ -633,8 +676,7 @@ pub(super) fn is_heredoc(expr: &Expr) -> bool {
     matches!(&expr.kind, ExprKind::String { multiline: true, parts } if heredoc_representable(parts))
 }
 
-/// Returns `true` if the statement is or contains a block expression
-/// at its top level (if, match, cond, while, for, loop, etc.).
+/// True when the statement is, or assigns, a block expression.
 pub(super) fn stmt_is_block(stmt: &Statement) -> bool {
     match stmt {
         Statement::Expr(expr) => is_block_expr(expr),
@@ -702,19 +744,7 @@ pub(super) fn pattern_is_multiline(pattern: &Pattern) -> bool {
 
 fn pattern_text_len(pattern: &Pattern) -> usize {
     match pattern {
-        Pattern::Literal { value, .. } => match value {
-            Literal::Int(n) => n.to_string().len(),
-            Literal::Float(f) => f.to_string().len(),
-            Literal::String(s) => s.len() + 2,
-            Literal::Bool(b) => {
-                if *b {
-                    4
-                } else {
-                    5
-                }
-            }
-            Literal::Unit => 2,
-        },
+        Pattern::Literal { value, .. } => literal_text_len(value),
         Pattern::Binding { name, .. } => name.len(),
         Pattern::Wildcard { .. } => 1,
         Pattern::Or { patterns, .. } => {
@@ -739,8 +769,7 @@ pub(super) fn expr_or_is_multiline(expr: &Expr) -> bool {
         ..
     } = &expr.kind
     {
-        let mut operands = Vec::new();
-        collect_binop_exprs(expr, op, &mut operands);
+        let operands = binop_operands(expr, op);
         if operands.len() <= 1 {
             return false;
         }
@@ -752,32 +781,51 @@ pub(super) fn expr_or_is_multiline(expr: &Expr) -> bool {
     false
 }
 
-fn collect_binop_exprs<'a>(expr: &'a Expr, target_op: &BinOp, out: &mut Vec<&'a Expr>) {
-    if let ExprKind::Binary { op, left, right } = &expr.kind
-        && std::mem::discriminant(op) == std::mem::discriminant(target_op)
-    {
-        collect_binop_exprs(left, target_op, out);
-        collect_binop_exprs(right, target_op, out);
-        return;
+/// The operands of a same-operator binary chain (`a + b + c`), left to
+/// right. A subtree under a different operator is one operand.
+pub(super) fn binop_operands<'a>(expr: &'a Expr, op: &BinOp) -> Vec<&'a Expr> {
+    fn collect<'a>(expr: &'a Expr, target_op: &BinOp, out: &mut Vec<&'a Expr>) {
+        if let ExprKind::Binary { op, left, right } = &expr.kind
+            && std::mem::discriminant(op) == std::mem::discriminant(target_op)
+        {
+            collect(left, target_op, out);
+            collect(right, target_op, out);
+            return;
+        }
+        out.push(expr);
     }
-    out.push(expr);
+    let mut out = Vec::new();
+    collect(expr, op, &mut out);
+    out
+}
+
+/// A method chain split into its root and the `.method(args)` links,
+/// root-first. A plain call has one link, and a non-call has none.
+pub(super) fn chain_links(expr: &Expr) -> (&Expr, Vec<&Expr>) {
+    let mut links = Vec::new();
+    let mut current = expr;
+    while let ExprKind::MethodCall { receiver, .. } = &current.kind {
+        links.push(current);
+        current = receiver;
+    }
+    links.reverse();
+    (current, links)
+}
+
+fn literal_text_len(lit: &Literal) -> usize {
+    match lit {
+        Literal::Bool(true) => 4,
+        Literal::Bool(false) => 5,
+        Literal::Float(f) => f.len(),
+        Literal::Int(n) => n.len(),
+        Literal::String(s) => s.len() + 2,
+        Literal::Unit => 2,
+    }
 }
 
 pub(super) fn expr_text_len(expr: &Expr) -> usize {
     match &expr.kind {
-        ExprKind::Literal { value } => match value {
-            Literal::Int(n) => n.to_string().len(),
-            Literal::Float(f) => f.to_string().len(),
-            Literal::String(s) => s.len() + 2,
-            Literal::Bool(b) => {
-                if *b {
-                    4
-                } else {
-                    5
-                }
-            }
-            Literal::Unit => 2,
-        },
+        ExprKind::Literal { value } => literal_text_len(value),
         ExprKind::Ident { name, .. } => name.len(),
         ExprKind::Self_ { .. } => 4,
         ExprKind::Binary { op, left, right } => {
@@ -858,42 +906,6 @@ fn path_text_len(path: &[String]) -> usize {
     path.iter().map(|s| s.len()).sum::<usize>() + path.len().saturating_sub(1)
 }
 
-/// Assembles a `keyword ... arms ... end` block.
-///
-/// Handles indented arm spacing (extra blank lines when `any_multiline`),
-/// an optional suffix between the arms and `end` (e.g. `after` clause),
-/// dangling comments between the last arm and `end`, and the closing
-/// `end` keyword.
-pub(super) fn arms_block(
-    header: Doc,
-    arm_docs: Vec<Doc>,
-    any_multiline: bool,
-    suffix: Vec<Doc>,
-    end_dangling: Vec<Comment>,
-) -> Doc {
-    let mut spaced = Vec::new();
-    for (i, doc) in arm_docs.into_iter().enumerate() {
-        spaced.push(hardline());
-        if any_multiline && i > 0 {
-            spaced.push(hardline());
-        }
-        spaced.push(doc);
-    }
-    if !end_dangling.is_empty() {
-        spaced.push(hardline());
-        let (mut docs, _) = leading_docs(&end_dangling);
-        docs.pop();
-        spaced.extend(docs);
-    }
-    let mut parts = vec![header];
-    parts.push(indent(2, concat(spaced)));
-    parts.extend(suffix);
-    parts.push(hardline());
-    parts.push(text("end"));
-    concat(parts)
-}
-
-/// Returns the source-code string for a binary operator.
 pub(super) fn binop_str(op: &BinOp) -> &'static str {
     match op {
         BinOp::Add => "+",
@@ -913,8 +925,7 @@ pub(super) fn binop_str(op: &BinOp) -> &'static str {
     }
 }
 
-/// Returns `true` if the type expression is `()`.
-pub(super) fn is_unit_type(ty: &TypeExpr) -> bool {
+fn is_unit_type(ty: &TypeExpr) -> bool {
     matches!(ty, TypeExpr::Unit { .. })
 }
 
@@ -939,11 +950,6 @@ pub(super) fn stmt_span(stmt: &Statement) -> Span {
         | Statement::Return { span, .. }
         | Statement::Break { span, .. } => *span,
     }
-}
-
-/// Returns the first source line of a statement.
-pub(super) fn stmt_start_line(stmt: &Statement) -> u32 {
-    stmt_span(stmt).start.line
 }
 
 /// The span of a map entry, from the key's start to the value's end.
