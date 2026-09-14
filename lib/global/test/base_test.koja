@@ -1,191 +1,96 @@
-struct BaseTest
-  # Typed constructors so `==` comparisons can infer both Result
-  # parameters.
-  priv fn ok(bytes: Binary) -> Result<Binary, Base.Error>
-    Result.Ok(bytes)
+test "encode64 matches the RFC 4648 vectors"
+  vectors: List<(String, String)> = [
+    ("", ""), ("f", "Zg=="), ("fo", "Zm8="), ("foo", "Zm9v"),
+    ("foob", "Zm9vYg=="), ("fooba", "Zm9vYmE="), ("foobar", "Zm9vYmFy")
+  ]
+
+  for vector in vectors
+    (input, expected) = vector
+    assert Base.encode64(input) == expected
+  end
+end
+
+test "decode64 reverses the RFC 4648 vectors"
+  vectors: List<(String, String)> = [
+    ("", ""), ("Zg==", "f"), ("Zm8=", "fo"), ("Zm9v", "foo"),
+    ("Zm9vYmFy", "foobar")
+  ]
+
+  for vector in vectors
+    (input, expected) = vector
+    assert Base.decode64(input) == ok(expected.to_binary())
+  end
+end
+
+test "decode64 accepts unpadded input"
+  assert Base.decode64("Zg") == ok("f".to_binary())
+  assert Base.decode64("Zm8") == ok("fo".to_binary())
+  assert Base.decode64("Zm9vYg") == ok("foob".to_binary())
+end
+
+test "base64 round-trips every byte value"
+  all = every_byte()
+
+  assert Base.decode64(Base.encode64(all)) == ok(all)
+  assert Base.url_decode64(Base.url_encode64(all)) == ok(all)
+end
+
+test "url-safe base64 swaps + and / for - and _"
+  data = <<251, 239>>
+
+  assert Base.encode64(data) == "++8="
+  assert Base.url_encode64(data) == "--8="
+end
+
+test "each base64 alphabet rejects the other's symbols"
+  assert Base.url_decode64("++8=") == err(Base.Error.InvalidCharacter("+"))
+  assert Base.decode64("--8=") == err(Base.Error.InvalidCharacter("-"))
+end
+
+test "decode64 rejects malformed input"
+  assert Base.decode64("Zm9v!GFy") == err(Base.Error.InvalidCharacter("!"))
+  assert Base.decode64("Zm==YmFy") == err(Base.Error.InvalidPadding)
+  assert Base.decode64("=m9v") == err(Base.Error.InvalidPadding)
+  assert Base.decode64("Zm9vY") == err(Base.Error.InvalidLength)
+end
+
+test "encode16 renders lowercase hex"
+  assert Base.encode16(<<>>) == ""
+  assert Base.encode16("Hello") == "48656c6c6f"
+  assert Base.encode16(<<0, 15, 255>>) == "000fff"
+end
+
+test "decode16 accepts both cases and round-trips"
+  assert Base.decode16("48656c6c6f") == ok("Hello".to_binary())
+  assert Base.decode16("48656C6C6F") == ok("Hello".to_binary())
+
+  all = every_byte()
+  assert Base.decode16(Base.encode16(all)) == ok(all)
+end
+
+test "decode16 rejects malformed input"
+  assert Base.decode16("abc") == err(Base.Error.InvalidLength)
+  assert Base.decode16("4g") == err(Base.Error.InvalidCharacter("g"))
+end
+
+# Typed constructors so `==` comparisons can infer both Result
+# parameters.
+priv fn ok(bytes: Binary) -> Result<Binary, Base.Error>
+  Result.Ok(bytes)
+end
+
+priv fn err(error: Base.Error) -> Result<Binary, Base.Error>
+  Result.Err(error)
+end
+
+priv fn every_byte -> Binary
+  all: Binary = <<>>
+  i = 0
+
+  while i < 256
+    all = <<all, i>>
+    i += 1
   end
 
-  priv fn err(error: Base.Error) -> Result<Binary, Base.Error>
-    Result.Err(error)
-  end
-
-  @test "encode64 matches the RFC 4648 vectors"
-  fn test_encode64_vectors ! String
-    if Base.encode64("") != ""
-      fail "empty"
-    end
-
-    if Base.encode64("f") != "Zg=="
-      fail "f"
-    end
-
-    if Base.encode64("fo") != "Zm8="
-      fail "fo"
-    end
-
-    if Base.encode64("foo") != "Zm9v"
-      fail "foo"
-    end
-
-    if Base.encode64("foob") != "Zm9vYg=="
-      fail "foob"
-    end
-
-    if Base.encode64("fooba") != "Zm9vYmE="
-      fail "fooba"
-    end
-
-    if Base.encode64("foobar") != "Zm9vYmFy"
-      fail "foobar"
-    end
-  end
-
-  @test "decode64 reverses the RFC 4648 vectors"
-  fn test_decode64_vectors ! String
-    if Base.decode64("") != ok(<<>>)
-      fail "empty"
-    end
-
-    if Base.decode64("Zg==") != ok("f".to_binary())
-      fail "f"
-    end
-
-    if Base.decode64("Zm8=") != ok("fo".to_binary())
-      fail "fo"
-    end
-
-    if Base.decode64("Zm9v") != ok("foo".to_binary())
-      fail "foo"
-    end
-
-    if Base.decode64("Zm9vYmFy") != ok("foobar".to_binary())
-      fail "foobar"
-    end
-  end
-
-  @test "decode64 accepts unpadded input"
-  fn test_decode64_unpadded ! String
-    if Base.decode64("Zg") != ok("f".to_binary())
-      fail "two chars"
-    end
-
-    if Base.decode64("Zm8") != ok("fo".to_binary())
-      fail "three chars"
-    end
-
-    if Base.decode64("Zm9vYg") != ok("foob".to_binary())
-      fail "padded prefix, unpadded tail"
-    end
-  end
-
-  @test "base64 round-trips every byte value"
-  fn test_base64_round_trip ! String
-    all: Binary = <<>>
-    i = 0
-
-    while i < 256
-      all = <<all, i>>
-      i += 1
-    end
-
-    if Base.decode64(Base.encode64(all)) != ok(all)
-      fail "standard round-trip"
-    end
-
-    if Base.url_decode64(Base.url_encode64(all)) != ok(all)
-      fail "url-safe round-trip"
-    end
-  end
-
-  @test "url-safe base64 swaps + and / for - and _"
-  fn test_url_encode64_alphabet ! String
-    data = <<251, 239>>
-
-    if Base.encode64(data) != "++8="
-      fail "standard: #{Base.encode64(data)}"
-    end
-
-    if Base.url_encode64(data) != "--8="
-      fail "url-safe: #{Base.url_encode64(data)}"
-    end
-  end
-
-  @test "each base64 alphabet rejects the other's symbols"
-  fn test_base64_alphabet_mismatch ! String
-    if Base.url_decode64("++8=") != err(Base.Error.InvalidCharacter("+"))
-      fail "url decoder accepted +"
-    end
-
-    if Base.decode64("--8=") != err(Base.Error.InvalidCharacter("-"))
-      fail "standard decoder accepted -"
-    end
-  end
-
-  @test "decode64 rejects malformed input"
-  fn test_decode64_errors ! String
-    if Base.decode64("Zm9v!GFy") != err(Base.Error.InvalidCharacter("!"))
-      fail "invalid character"
-    end
-
-    if Base.decode64("Zm==YmFy") != err(Base.Error.InvalidPadding)
-      fail "padding mid-input"
-    end
-
-    if Base.decode64("=m9v") != err(Base.Error.InvalidPadding)
-      fail "leading padding"
-    end
-
-    if Base.decode64("Zm9vY") != err(Base.Error.InvalidLength)
-      fail "remainder of one"
-    end
-  end
-
-  @test "encode16 renders lowercase hex"
-  fn test_encode16 ! String
-    if Base.encode16(<<>>) != ""
-      fail "empty"
-    end
-
-    if Base.encode16("Hello") != "48656c6c6f"
-      fail "Hello: #{Base.encode16("Hello")}"
-    end
-
-    if Base.encode16(<<0, 15, 255>>) != "000fff"
-      fail "edge bytes: #{Base.encode16(<<0, 15, 255>>)}"
-    end
-  end
-
-  @test "decode16 accepts both cases and round-trips"
-  fn test_decode16 ! String
-    if Base.decode16("48656c6c6f") != ok("Hello".to_binary())
-      fail "lowercase"
-    end
-
-    if Base.decode16("48656C6C6F") != ok("Hello".to_binary())
-      fail "uppercase"
-    end
-
-    all: Binary = <<>>
-    i = 0
-
-    while i < 256
-      all = <<all, i>>
-      i += 1
-    end
-
-    if Base.decode16(Base.encode16(all)) != ok(all)
-      fail "round-trip"
-    end
-  end
-
-  @test "decode16 rejects malformed input"
-  fn test_decode16_errors ! String
-    if Base.decode16("abc") != err(Base.Error.InvalidLength)
-      fail "odd length"
-    end
-
-    if Base.decode16("4g") != err(Base.Error.InvalidCharacter("g"))
-      fail "invalid character"
-    end
-  end
+  all
 end

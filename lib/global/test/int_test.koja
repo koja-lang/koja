@@ -1,248 +1,92 @@
-struct IntTest
-  @test "integer arithmetic"
-  fn test_arithmetic_int ! String
-    if 2 + 3 != 5
-      fail "add"
-    end
+test "integer arithmetic"
+  assert 2 + 3 == 5
+  assert 10 - 4 == 6
+  assert 6 * 7 == 42
+  assert 20 / 4 == 5
+  assert 17 % 5 == 2
+  assert -3 + 10 == 7
+  assert 0 * 100 == 0
+end
 
-    if 10 - 4 != 6
-      fail "sub"
-    end
+test "float arithmetic"
+  assert 1.5 + 2.5 == 4.0
+  assert 10.0 - 3.5 == 6.5
+  assert 2.0 * 3.0 == 6.0
+  assert 7.0 / 2.0 == 3.5
+end
 
-    if 6 * 7 != 42
-      fail "mul"
-    end
+test "comparison operators"
+  assert 1 == 1
+  assert not (1 == 2)
+  assert 1 != 2
+  assert not (1 != 1)
+  assert 3 < 5
+  assert not (5 < 3)
+  assert 5 > 3
+  assert not (3 > 5)
+  assert 3 <= 3
+  assert 3 <= 4
+  assert not (4 <= 3)
+  assert 5 >= 5
+  assert 5 >= 4
+  assert not (4 >= 5)
+end
 
-    if 20 / 4 != 5
-      fail "div"
-    end
+test "compound assignment"
+  x = 10
+  x += 5
+  assert x == 15
 
-    if 17 % 5 != 2
-      fail "mod"
-    end
+  x -= 3
+  assert x == 12
 
-    if -3 + 10 != 7
-      fail "negative add"
-    end
+  x *= 4
+  assert x == 48
 
-    if 0 * 100 != 0
-      fail "zero mul"
-    end
-  end
+  x /= 6
+  assert x == 8
+end
 
-  @test "float arithmetic"
-  fn test_arithmetic_float ! String
-    if 1.5 + 2.5 != 4.0
-      fail "float add"
-    end
+test "primitive integer widths and underscore literal"
+  i8: Int8 = 127
+  i16: Int16 = 32000
+  i32: Int32 = 42
+  i: Int = 100
 
-    if 10.0 - 3.5 != 6.5
-      fail "float sub"
-    end
+  assert i8 == 127
+  assert i16 == 32000
+  assert i32 == 42
+  assert i == 100
+  assert 1_000 == 1000
+end
 
-    if 2.0 * 3.0 != 6.0
-      fail "float mul"
-    end
+test "numeric widening into Int slots"
+  i32: Int32 = -42
+  widened: Int = i32
+  assert widened == -42
 
-    if 7.0 / 2.0 != 3.5
-      fail "float div"
-    end
-  end
+  byte: UInt8 = 255
+  wide_byte: Int = byte
+  assert wide_byte == 255
 
-  @test "comparison operators"
-  fn test_comparison ! String
-    if 1 != 1
-      fail "eq reflexive"
-    end
+  u16: UInt16 = 65535
+  wide_u16: Int = u16
+  assert wide_u16 == 65535
+end
 
-    if 1 == 2
-      fail "eq distinct"
-    end
+test "checked narrowing round-trips"
+  small = try Test.require(127.to_int8())
+  assert small == 127
 
-    if 1 == 2
-      fail "neq distinct"
-    end
+  assert 128.to_int8().err?()
+  assert (-129).to_int8().err?()
 
-    if 1 != 1
-      fail "neq reflexive"
-    end
+  medium = try Test.require((-1234).to_int32())
+  assert medium == -1234
 
-    if 3 >= 5
-      fail "lt"
-    end
+  assert (-1).to_uint64().err?()
 
-    if 5 < 3
-      fail "lt false"
-    end
-
-    if 5 <= 3
-      fail "gt"
-    end
-
-    if 3 > 5
-      fail "gt false"
-    end
-
-    if 3 > 3
-      fail "lte eq"
-    end
-
-    if 3 > 4
-      fail "lte strict"
-    end
-
-    if 4 <= 3
-      fail "lte false"
-    end
-
-    if 5 < 5
-      fail "gte eq"
-    end
-
-    if 5 < 4
-      fail "gte strict"
-    end
-
-    if 4 >= 5
-      fail "gte false"
-    end
-  end
-
-  @test "compound assignment"
-  fn test_compound_assignment ! String
-    x = 10
-    x += 5
-
-    if x != 15
-      fail "+="
-    end
-
-    x -= 3
-
-    if x != 12
-      fail "-="
-    end
-
-    x *= 4
-
-    if x != 48
-      fail "*="
-    end
-
-    x /= 6
-
-    if x != 8
-      fail "/="
-    end
-  end
-
-  @test "primitive integer widths and underscore literal"
-  fn test_primitives ! String
-    i8: Int8 = 127
-    i16: Int16 = 32000
-    i32: Int32 = 42
-    i: Int = 100
-
-    if i8 != 127
-      fail "Int8"
-    end
-
-    if i16 != 32000
-      fail "Int16"
-    end
-
-    if i32 != 42
-      fail "Int32"
-    end
-
-    if i != 100
-      fail "Int"
-    end
-
-    if 1_000 != 1000
-      fail "underscore int literal"
-    end
-  end
-
-  @test "numeric widening into Int slots"
-  fn test_widening ! String
-    i32: Int32 = -42
-    widened: Int = i32
-
-    if widened != -42
-      fail "Int32 sign extension"
-    end
-
-    byte: UInt8 = 255
-    wide_byte: Int = byte
-
-    if wide_byte != 255
-      fail "UInt8 zero extension"
-    end
-
-    u16: UInt16 = 65535
-    wide_u16: Int = u16
-
-    if wide_u16 != 65535
-      fail "UInt16 zero extension"
-    end
-  end
-
-  @test "checked narrowing round-trips"
-  fn test_narrowing ! String
-    match 127.to_int8()
-      Result.Ok(v) ->
-        wide: Int = v
-
-        if wide != 127
-          fail "to_int8 round-trip"
-        end
-
-      Result.Err(e) ->
-        fail "to_int8 in range"
-    end
-
-    match 128.to_int8()
-      Result.Ok(v) -> fail "to_int8 out of range"
-      Result.Err(e) -> ()
-    end
-
-    match (-129).to_int8()
-      Result.Ok(v) -> fail "to_int8 below range"
-      Result.Err(e) -> ()
-    end
-
-    match (-1234).to_int32()
-      Result.Ok(v) ->
-        wide: Int = v
-
-        if wide != -1234
-          fail "to_int32 round-trip"
-        end
-
-      Result.Err(e) ->
-        fail "to_int32 in range"
-    end
-
-    match (-1).to_uint64()
-      Result.Ok(v) -> fail "to_uint64 negative"
-      Result.Err(e) -> ()
-    end
-
-    match 10.to_uint64()
-      Result.Ok(v) ->
-        match v.to_int()
-          Result.Ok(i) ->
-            if i != 10
-              fail "UInt64 to_int round-trip"
-            end
-
-          Result.Err(e) ->
-            fail "UInt64 to_int in range"
-        end
-
-      Result.Err(e) ->
-        fail "to_uint64 in range"
-    end
-  end
+  wide = try Test.require(10.to_uint64())
+  back = try Test.require(wide.to_int())
+  assert back == 10
 end

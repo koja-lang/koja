@@ -1,76 +1,32 @@
-struct BoolTest
-  @test "and"
-  fn test_and ! String
-    if not (true and true)
-      fail "true and true"
-    end
+test "and"
+  assert true and true
+  assert not (true and false)
+  assert not (false and true)
+  assert not (false and false)
+end
 
-    if true and false
-      fail "true and false"
-    end
+test "or"
+  assert true or true
+  assert true or false
+  assert false or true
+  assert not (false or false)
+end
 
-    if false and true
-      fail "false and true"
-    end
+test "logical operators short-circuit"
+  assert not (false and panic_bool())
+  assert true or panic_bool()
+end
 
-    if false and false
-      fail "false and false"
-    end
-  end
+test "not"
+  assert true != false
+  assert false != true
+end
 
-  @test "or"
-  fn test_or ! String
-    if not (true or true)
-      fail "true or true"
-    end
+test "combined logical expressions"
+  assert true and not false == true
+  assert not (not true or false)
+end
 
-    if not (true or false)
-      fail "true or false"
-    end
-
-    if not (false or true)
-      fail "false or true"
-    end
-
-    if false or false
-      fail "false or false"
-    end
-  end
-
-  @test "logical operators short-circuit"
-  fn test_short_circuit ! String
-    if false and BoolTest.panic_bool()
-      fail "false and rhs should be false"
-    end
-
-    if not (true or BoolTest.panic_bool())
-      fail "true or rhs should be true"
-    end
-  end
-
-  @test "not"
-  fn test_not ! String
-    if true == false
-      fail "not true"
-    end
-
-    if false == true
-      fail "not false"
-    end
-  end
-
-  @test "combined logical expressions"
-  fn test_combined ! String
-    if not (true and not false == true)
-      fail "and with not and =="
-    end
-
-    if not true or false
-      fail "not true or false should be false"
-    end
-  end
-
-  priv fn panic_bool -> Bool
-    Kernel.panic("short-circuited expression ran")
-  end
+priv fn panic_bool -> Bool
+  Kernel.panic("short-circuited expression ran")
 end

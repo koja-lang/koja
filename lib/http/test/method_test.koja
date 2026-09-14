@@ -1,54 +1,22 @@
-struct MethodTest
-  @test "Method.to_string returns uppercase method name"
-  fn test_method_to_string ! String
-    if Method.Get.to_string() != "GET"
-      fail "expected GET"
-    end
+test "Method.to_string returns uppercase method name"
+  cases: List<(Method, String)> = [
+    (Method.Get, "GET"), (Method.Post, "POST"), (Method.Put, "PUT"),
+    (Method.Delete, "DELETE"), (Method.Patch, "PATCH"), (Method.Head, "HEAD"),
+    (Method.Options, "OPTIONS")
+  ]
 
-    if Method.Post.to_string() != "POST"
-      fail "expected POST"
-    end
-
-    if Method.Put.to_string() != "PUT"
-      fail "expected PUT"
-    end
-
-    if Method.Delete.to_string() != "DELETE"
-      fail "expected DELETE"
-    end
-
-    if Method.Patch.to_string() != "PATCH"
-      fail "expected PATCH"
-    end
-
-    if Method.Head.to_string() != "HEAD"
-      fail "expected HEAD"
-    end
-
-    if Method.Options.to_string() != "OPTIONS"
-      fail "expected OPTIONS"
-    end
+  for test_case in cases
+    (method, expected) = test_case
+    assert method.to_string() == expected
   end
+end
 
-  @test "Method.from_string parses valid methods"
-  fn test_method_from_string_valid ! String
-    if Method.from_string("GET").unwrap().to_string() != "GET"
-      fail "GET roundtrip failed"
-    end
-
-    if Method.from_string("POST").unwrap().to_string() != "POST"
-      fail "POST roundtrip failed"
-    end
-
-    if Method.from_string("DELETE").unwrap().to_string() != "DELETE"
-      fail "DELETE roundtrip failed"
-    end
+test "Method.from_string parses valid methods"
+  for name in ["GET", "POST", "DELETE"]
+    assert Method.from_string(name).unwrap().to_string() == name
   end
+end
 
-  @test "Method.from_string rejects unknown methods"
-  fn test_method_from_string_invalid ! String
-    if not Method.from_string("INVALID").err?()
-      fail "expected error for INVALID method"
-    end
-  end
+test "Method.from_string rejects unknown methods"
+  assert Method.from_string("INVALID").err?()
 end

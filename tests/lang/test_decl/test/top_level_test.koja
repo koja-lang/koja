@@ -13,3 +13,12 @@ end
 test "a trailing expression needs no unit"
   Stack.new().push(1)
 end
+
+test "the right operand takes the left operand's type"
+  assert Stack.new().peek() == Option.None
+  assert Checksum.crc32(<<>>) == 0
+  small: Int8 = -3
+  assert small == -3
+  ratio: Float32 = 1.5
+  assert ratio == 1.5
+end

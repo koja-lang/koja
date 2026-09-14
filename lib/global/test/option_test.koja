@@ -1,133 +1,74 @@
-struct OptionTest
-  @test "unwrap returns value from Some"
-  fn test_unwrap ! String
-    x = Option.Some(42)
+test "unwrap returns value from Some"
+  x = Option.Some(42)
+  assert x.unwrap() == 42
+end
 
-    if x.unwrap() != 42
-      fail "expected 42"
-    end
-  end
+test "or returns value from Some"
+  x = Option.Some(42)
+  assert x.or(0) == 42
+end
 
-  @test "or returns value from Some"
-  fn test_or_some ! String
-    x = Option.Some(42)
+test "or returns default from None"
+  y: Option<Int> = Option.None
+  assert y.or(99) == 99
+end
 
-    if x.or(0) != 42
-      fail "expected 42"
-    end
-  end
+test "some? and none? predicates"
+  x = Option.Some(42)
+  y: Option<Int> = Option.None
 
-  @test "or returns default from None"
-  fn test_or_none ! String
-    y: Option<Int> = Option.None
+  assert x.some?()
+  assert not x.none?()
+  assert not y.some?()
+  assert y.none?()
+end
 
-    if y.or(99) != 99
-      fail "expected 99"
-    end
-  end
+test "unwrap on string Some"
+  s = Option.Some("hello")
 
-  @test "some? and none? predicates"
-  fn test_predicates ! String
-    x = Option.Some(42)
-    y: Option<Int> = Option.None
+  assert s.unwrap() == "hello"
+  assert s.or("default") == "hello"
+end
 
-    if not x.some?()
-      fail "Some should be some?"
-    end
+test "map transforms Some value"
+  x = Option.Some(42)
+  mapped = x.map(fn (v: Int) -> Int v * 10 end)
+  assert mapped.unwrap() == 420
+end
 
-    if x.none?()
-      fail "Some should not be none?"
-    end
+test "map returns None for None"
+  y: Option<Int> = Option.None
+  none_mapped = y.map(fn (v: Int) -> Int v * 10 end)
+  assert none_mapped.or(-1) == -1
+end
 
-    if y.some?()
-      fail "None should not be some?"
-    end
+test "then chains Some values"
+  chained = Option.Some(10).then(fn (v: Int) -> Option<Int>
+    Option.Some(v + 5)
+  end)
 
-    if not y.none?()
-      fail "None should be none?"
-    end
-  end
+  assert chained.unwrap() == 15
+end
 
-  @test "unwrap on string Some"
-  fn test_unwrap_string ! String
-    s = Option.Some("hello")
+test "then returns None for None"
+  y: Option<Int> = Option.None
+  none_chained = y.then(fn (v: Int) -> Option<Int> Option.Some(v + 5) end)
+  assert none_chained.or(-1) == -1
+end
 
-    if s.unwrap() != "hello"
-      fail "expected hello"
-    end
+test "or_err converts Some to Ok"
+  converted: Result<Int, String> = Option.Some(42).or_err("missing")
+  assert converted.or(-1) == 42
+end
 
-    if s.or("default") != "hello"
-      fail "expected hello from or"
-    end
-  end
+test "or_err converts None to Err"
+  none: Option<Int> = Option.None
+  converted = none.or_err("missing")
 
-  @test "map transforms Some value"
-  fn test_map_some ! String
-    x = Option.Some(42)
-    mapped = x.map(fn (v: Int) -> Int v * 10 end)
+  assert converted.err?()
 
-    if mapped.unwrap() != 420
-      fail "expected 420"
-    end
-  end
-
-  @test "map returns None for None"
-  fn test_map_none ! String
-    y: Option<Int> = Option.None
-    none_mapped = y.map(fn (v: Int) -> Int v * 10 end)
-
-    if none_mapped.or(-1) != -1
-      fail "expected -1"
-    end
-  end
-
-  @test "then chains Some values"
-  fn test_then_some ! String
-    chained = Option.Some(10).then(fn (v: Int) -> Option<Int>
-      Option.Some(v + 5)
-    end)
-
-    if chained.unwrap() != 15
-      fail "expected 15"
-    end
-  end
-
-  @test "then returns None for None"
-  fn test_then_none ! String
-    y: Option<Int> = Option.None
-    none_chained = y.then(fn (v: Int) -> Option<Int> Option.Some(v + 5) end)
-
-    if none_chained.or(-1) != -1
-      fail "expected -1"
-    end
-  end
-
-  @test "or_err converts Some to Ok"
-  fn test_or_err_some ! String
-    converted: Result<Int, String> = Option.Some(42).or_err("missing")
-
-    if converted.or(-1) != 42
-      fail "expected 42"
-    end
-  end
-
-  @test "or_err converts None to Err"
-  fn test_or_err_none ! String
-    none: Option<Int> = Option.None
-    converted = none.or_err("missing")
-
-    if not converted.err?()
-      fail "expected Err"
-    end
-
-    match converted
-      Result.Ok(_) ->
-        fail "expected Err"
-
-      Result.Err(e) ->
-        if e != "missing"
-          fail "wrong error"
-        end
-    end
+  match converted
+    Result.Ok(_) -> fail "expected Err"
+    Result.Err(e) -> assert e == "missing"
   end
 end

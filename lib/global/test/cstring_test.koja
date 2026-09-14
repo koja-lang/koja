@@ -1,137 +1,93 @@
-struct CStringTest
-  @test "basic round-trip"
-  fn test_round_trip ! String
-    s = "hello world"
-    cs = s.to_cstring().unwrap()
+test "basic round-trip"
+  s = "hello world"
+  cs = s.to_cstring().unwrap()
 
-    if cs.len != 11
-      fail "expected len 11, got #{cs.len}"
-    end
+  assert cs.len == 11
+  assert cs.to_string().unwrap() == s
 
-    back = cs.to_string().unwrap()
+  cs.free()
+end
 
-    if back != s
-      fail "round-trip failed: #{back}"
-    end
+test "empty string"
+  cs = "".to_cstring().unwrap()
 
-    cs.free()
+  assert cs.len == 0
+  assert cs.to_string().unwrap() == ""
+
+  cs.free()
+end
+
+test "string with special characters"
+  special = "hello\tworld\n"
+  cs = special.to_cstring().unwrap()
+
+  assert cs.len == 12
+  assert cs.to_string().unwrap() == special
+
+  cs.free()
+end
+
+test "longer string"
+  long = "the quick brown fox jumps over the lazy dog"
+  cs = long.to_cstring().unwrap()
+
+  assert cs.len == 43
+  assert cs.to_string().unwrap() == long
+
+  cs.free()
+end
+
+test "original string unaffected after conversion"
+  original = "unchanged"
+  cs = original.to_cstring().unwrap()
+
+  assert original == "unchanged"
+
+  cs.free()
+end
+
+test "rejects interior NUL"
+  value = <<97, 0, 98>>.to_string().unwrap()
+
+  match value.to_cstring()
+    Result.Err(CString.ConversionError.InteriorNul) -> ()
+    _ -> fail "expected InteriorNul"
   end
+end
 
-  @test "empty string"
-  fn test_empty ! String
-    cs = "".to_cstring().unwrap()
+test "rejects invalid UTF-8"
+  ptr: CPtr<UInt8> = CPtr.alloc(1)
+  ptr.write(255)
+  cs = CString{ptr: ptr, len: 1}
+  converted = cs.to_string()
+  cs.free()
 
-    if cs.len != 0
-      fail "expected len 0"
-    end
-
-    if cs.to_string().unwrap() != ""
-      fail "expected empty string"
-    end
-
-    cs.free()
+  match converted
+    Result.Err(CString.ConversionError.InvalidUTF8) -> ()
+    _ -> fail "expected InvalidUTF8"
   end
+end
 
-  @test "string with special characters"
-  fn test_special_chars ! String
-    special = "hello\tworld\n"
-    cs = special.to_cstring().unwrap()
+test "rejects invalid length"
+  cs = CString{ptr: CPtr.null(), len: -1}
 
-    if cs.len != 12
-      fail "expected len 12, got #{cs.len}"
-    end
-
-    if cs.to_string().unwrap() != special
-      fail "round-trip failed"
-    end
-
-    cs.free()
+  match cs.to_string()
+    Result.Err(CString.ConversionError.InvalidLength) -> ()
+    _ -> fail "expected InvalidLength"
   end
+end
 
-  @test "longer string"
-  fn test_long_string ! String
-    long = "the quick brown fox jumps over the lazy dog"
-    cs = long.to_cstring().unwrap()
+test "rejects null pointer with nonzero length"
+  cs = CString{ptr: CPtr.null(), len: 1}
 
-    if cs.len != 43
-      fail "expected len 43, got #{cs.len}"
-    end
-
-    if cs.to_string().unwrap() != long
-      fail "round-trip failed"
-    end
-
-    cs.free()
+  match cs.to_string()
+    Result.Err(CString.ConversionError.NullPointer) -> ()
+    _ -> fail "expected NullPointer"
   end
+end
 
-  @test "original string unaffected after conversion"
-  fn test_original_unaffected ! String
-    original = "unchanged"
-    cs = original.to_cstring().unwrap()
-
-    if original != "unchanged"
-      fail "original was modified"
-    end
-
-    cs.free()
-  end
-
-  @test "rejects interior NUL"
-  fn test_interior_nul ! String
-    value = <<97, 0, 98>>.to_string().unwrap()
-
-    match value.to_cstring()
-      Result.Err(CString.ConversionError.InteriorNul) -> ()
-      _ -> fail "expected InteriorNul"
-    end
-  end
-
-  @test "rejects invalid UTF-8"
-  fn test_invalid_utf8 ! String
-    ptr: CPtr<UInt8> = CPtr.alloc(1)
-    ptr.write(255)
-    cs = CString{ptr: ptr, len: 1}
-    converted = cs.to_string()
-    cs.free()
-
-    match converted
-      Result.Err(CString.ConversionError.InvalidUTF8) -> ()
-      _ -> fail "expected InvalidUTF8"
-    end
-  end
-
-  @test "rejects invalid length"
-  fn test_invalid_length ! String
-    cs = CString{ptr: CPtr.null(), len: -1}
-
-    match cs.to_string()
-      Result.Err(CString.ConversionError.InvalidLength) -> ()
-      _ -> fail "expected InvalidLength"
-    end
-  end
-
-  @test "rejects null pointer with nonzero length"
-  fn test_null_pointer ! String
-    cs = CString{ptr: CPtr.null(), len: 1}
-
-    match cs.to_string()
-      Result.Err(CString.ConversionError.NullPointer) -> ()
-      _ -> fail "expected NullPointer"
-    end
-  end
-
-  @test "accepts null pointer with zero length"
-  fn test_null_empty ! String
-    cs = CString{ptr: CPtr.null(), len: 0}
-
-    match cs.to_string()
-      Result.Err(_) ->
-        fail "expected empty string"
-
-      Result.Ok(value) ->
-        if value != ""
-          fail "expected empty string"
-        end
-    end
-  end
+test "accepts null pointer with zero length"
+  cs = CString{ptr: CPtr.null(), len: 0}
+  value = try Test.require(cs.to_string())
+  assert value == ""
 end

@@ -1,38 +1,18 @@
-struct ChecksumTest
-  @test "empty data has the standard zero checksums"
-  fn test_empty ! String
-    if Checksum.crc32(<<>>) != 0
-      fail "CRC-32"
-    end
+test "empty data has the standard zero checksums"
+  assert Checksum.crc32(<<>>) == 0
+  assert Checksum.crc32c(<<>>) == 0
+end
 
-    if Checksum.crc32c(<<>>) != 0
-      fail "CRC-32C"
-    end
-  end
+test "checksums match the standard check values"
+  data = "123456789".to_binary()
 
-  @test "checksums match the standard check values"
-  fn test_check_values ! String
-    data = "123456789".to_binary()
+  assert Checksum.crc32(data) == 0xCBF43926
+  assert Checksum.crc32c(data) == 0xE3069283
+end
 
-    if Checksum.crc32(data) != 0xCBF43926
-      fail "CRC-32"
-    end
+test "checksums include embedded zero bytes"
+  data = <<0, 1, 0, 255>>
 
-    if Checksum.crc32c(data) != 0xE3069283
-      fail "CRC-32C"
-    end
-  end
-
-  @test "checksums include embedded zero bytes"
-  fn test_embedded_zero ! String
-    data = <<0, 1, 0, 255>>
-
-    if Checksum.crc32(data) != 0x0D845AA6
-      fail "CRC-32"
-    end
-
-    if Checksum.crc32c(data) != 0x405B8AE8
-      fail "CRC-32C"
-    end
-  end
+  assert Checksum.crc32(data) == 0x0D845AA6
+  assert Checksum.crc32c(data) == 0x405B8AE8
 end

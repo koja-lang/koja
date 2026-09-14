@@ -1,121 +1,66 @@
-struct ResultTest
-  @test "unwrap returns Ok value"
-  fn test_unwrap ! String
-    ok: Result<Int, Int> = Result.Ok(42)
+test "unwrap returns Ok value"
+  ok: Result<Int, Int> = Result.Ok(42)
+  assert ok.unwrap() == 42
+end
 
-    if ok.unwrap() != 42
-      fail "expected 42"
-    end
+test "or returns Ok value"
+  ok: Result<Int, Int> = Result.Ok(42)
+  assert ok.or(0) == 42
+end
+
+test "or returns default for Err"
+  err: Result<Int, Int> = Result.Err(1)
+  assert err.or(99) == 99
+end
+
+test "ok? and err? predicates"
+  ok: Result<Int, Int> = Result.Ok(42)
+  err: Result<Int, Int> = Result.Err(1)
+
+  assert ok.ok?()
+  assert not ok.err?()
+  assert not err.ok?()
+  assert err.err?()
+end
+
+test "map transforms Ok value"
+  ok: Result<Int, Int> = Result.Ok(42)
+  mapped = ok.map(fn (v: Int) -> Int v + 8 end)
+  assert mapped.unwrap() == 50
+end
+
+test "map returns Err unchanged"
+  err: Result<Int, Int> = Result.Err(1)
+  err_mapped = err.map(fn (v: Int) -> Int v + 8 end)
+  assert err_mapped.or(-1) == -1
+end
+
+test "ok converts Ok to Some and Err to None"
+  ok: Result<Int, Int> = Result.Ok(42)
+  err: Result<Int, Int> = Result.Err(1)
+
+  assert ok.ok().or(-1) == 42
+  assert err.ok().none?()
+end
+
+test "err converts Err to Some and Ok to None"
+  ok: Result<Int, Int> = Result.Ok(42)
+  err: Result<Int, Int> = Result.Err(1)
+
+  assert err.err().or(-1) == 1
+  assert ok.err().none?()
+end
+
+test "map_err transforms Err and leaves Ok unchanged"
+  err: Result<Int, Int> = Result.Err(1)
+  mapped = err.map_err(fn (e: Int) -> Int e + 100 end)
+
+  match mapped
+    Result.Ok(_) -> fail "expected Err"
+    Result.Err(e) -> assert e == 101
   end
 
-  @test "or returns Ok value"
-  fn test_or_ok ! String
-    ok: Result<Int, Int> = Result.Ok(42)
-
-    if ok.or(0) != 42
-      fail "expected 42"
-    end
-  end
-
-  @test "or returns default for Err"
-  fn test_or_err ! String
-    err: Result<Int, Int> = Result.Err(1)
-
-    if err.or(99) != 99
-      fail "expected 99"
-    end
-  end
-
-  @test "ok? and err? predicates"
-  fn test_predicates ! String
-    ok: Result<Int, Int> = Result.Ok(42)
-    err: Result<Int, Int> = Result.Err(1)
-
-    if not ok.ok?()
-      fail "Ok should be ok?"
-    end
-
-    if ok.err?()
-      fail "Ok should not be err?"
-    end
-
-    if err.ok?()
-      fail "Err should not be ok?"
-    end
-
-    if not err.err?()
-      fail "Err should be err?"
-    end
-  end
-
-  @test "map transforms Ok value"
-  fn test_map_ok ! String
-    ok: Result<Int, Int> = Result.Ok(42)
-    mapped = ok.map(fn (v: Int) -> Int v + 8 end)
-
-    if mapped.unwrap() != 50
-      fail "expected 50"
-    end
-  end
-
-  @test "map returns Err unchanged"
-  fn test_map_err ! String
-    err: Result<Int, Int> = Result.Err(1)
-    err_mapped = err.map(fn (v: Int) -> Int v + 8 end)
-
-    if err_mapped.or(-1) != -1
-      fail "expected -1"
-    end
-  end
-
-  @test "ok converts Ok to Some and Err to None"
-  fn test_ok ! String
-    ok: Result<Int, Int> = Result.Ok(42)
-    err: Result<Int, Int> = Result.Err(1)
-
-    if ok.ok().or(-1) != 42
-      fail "expected Some(42)"
-    end
-
-    if not err.ok().none?()
-      fail "expected None"
-    end
-  end
-
-  @test "err converts Err to Some and Ok to None"
-  fn test_err ! String
-    ok: Result<Int, Int> = Result.Ok(42)
-    err: Result<Int, Int> = Result.Err(1)
-
-    if err.err().or(-1) != 1
-      fail "expected Some(1)"
-    end
-
-    if not ok.err().none?()
-      fail "expected None"
-    end
-  end
-
-  @test "map_err transforms Err and leaves Ok unchanged"
-  fn test_map_err_transform ! String
-    err: Result<Int, Int> = Result.Err(1)
-    mapped = err.map_err(fn (e: Int) -> Int e + 100 end)
-
-    match mapped
-      Result.Ok(_) ->
-        fail "expected Err"
-
-      Result.Err(e) ->
-        if e != 101
-          fail "expected 101"
-        end
-    end
-
-    ok: Result<Int, Int> = Result.Ok(42)
-    ok_mapped = ok.map_err(fn (e: Int) -> Int e + 100 end)
-
-    if ok_mapped.or(-1) != 42
-      fail "expected 42"
-    end
-  end
+  ok: Result<Int, Int> = Result.Ok(42)
+  ok_mapped = ok.map_err(fn (e: Int) -> Int e + 100 end)
+  assert ok_mapped.or(-1) == 42
 end

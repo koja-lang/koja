@@ -1,115 +1,57 @@
-struct HeadersTest
-  @test "Headers.new creates empty collection"
-  fn test_headers_new ! String
-    h = Headers.new()
+test "Headers.new creates empty collection"
+  h = Headers.new()
+  assert not h.has?("Content-Type")
+end
 
-    if h.has?("Content-Type")
-      fail "new headers should be empty"
-    end
-  end
+test "Headers.append adds a header"
+  h = Headers.new().append("Content-Type", "text/html")
+  assert h.get("Content-Type").unwrap() == "text/html"
+end
 
-  @test "Headers.append adds a header"
-  fn test_headers_append ! String
-    h = Headers.new()
-    h = h.append("Content-Type", "text/html")
+test "Headers.get is case-insensitive"
+  h = Headers.new().append("Content-Type", "text/html")
 
-    if h.get("Content-Type").unwrap() != "text/html"
-      fail "expected text/html"
-    end
-  end
+  assert h.get("content-type").unwrap() == "text/html"
+  assert h.get("CONTENT-TYPE").unwrap() == "text/html"
+end
 
-  @test "Headers.get is case-insensitive"
-  fn test_headers_case_insensitive ! String
-    h = Headers.new()
-    h = h.append("Content-Type", "text/html")
+test "Headers.get returns None for missing header"
+  h = Headers.new()
+  assert h.get("X-Missing").none?()
+end
 
-    if h.get("content-type").unwrap() != "text/html"
-      fail "lowercase lookup failed"
-    end
+test "Headers.get_all returns all values"
+  h = Headers.new().append("Set-Cookie", "a=1").append("Set-Cookie", "b=2")
+  all = h.get_all("Set-Cookie")
 
-    if h.get("CONTENT-TYPE").unwrap() != "text/html"
-      fail "uppercase lookup failed"
-    end
-  end
+  assert all.length() == 2
+  assert all.get(0).unwrap() == "a=1"
+  assert all.get(1).unwrap() == "b=2"
+end
 
-  @test "Headers.get returns None for missing header"
-  fn test_headers_get_missing ! String
-    h = Headers.new()
+test "Headers.set replaces existing header"
+  h = Headers.new()
+    .append("Content-Type", "text/plain")
+    .set("Content-Type", "text/html")
 
-    if h.get("X-Missing").some?()
-      fail "expected None for missing header"
-    end
-  end
+  assert h.get("Content-Type").unwrap() == "text/html"
+  assert h.get_all("Content-Type").length() == 1
+end
 
-  @test "Headers.get_all returns all values"
-  fn test_headers_get_all ! String
-    h = Headers.new()
-    h = h.append("Set-Cookie", "a=1")
-    h = h.append("Set-Cookie", "b=2")
-    all = h.get_all("Set-Cookie")
+test "Headers.has? checks for header presence"
+  h = Headers.new().append("Host", "example.com")
 
-    if all.length() != 2
-      fail "expected 2 values, got #{all.length()}"
-    end
+  assert h.has?("Host")
+  assert h.has?("host")
+  assert not h.has?("X-Missing")
+end
 
-    if all.get(0).unwrap() != "a=1"
-      fail "expected first cookie a=1"
-    end
+test "Headers.content_length parses integer value"
+  h = Headers.new().append("Content-Length", "42")
+  assert h.content_length().unwrap() == 42
+end
 
-    if all.get(1).unwrap() != "b=2"
-      fail "expected second cookie b=2"
-    end
-  end
-
-  @test "Headers.set replaces existing header"
-  fn test_headers_set ! String
-    h = Headers.new()
-    h = h.append("Content-Type", "text/plain")
-    h = h.set("Content-Type", "text/html")
-
-    if h.get("Content-Type").unwrap() != "text/html"
-      fail "expected replaced value"
-    end
-
-    all = h.get_all("Content-Type")
-
-    if all.length() != 1
-      fail "expected single value after set"
-    end
-  end
-
-  @test "Headers.has? checks for header presence"
-  fn test_headers_has ! String
-    h = Headers.new().append("Host", "example.com")
-
-    if not h.has?("Host")
-      fail "expected Host to exist"
-    end
-
-    if not h.has?("host")
-      fail "case insensitive has failed"
-    end
-
-    if h.has?("X-Missing")
-      fail "expected missing to not exist"
-    end
-  end
-
-  @test "Headers.content_length parses integer value"
-  fn test_headers_content_length ! String
-    h = Headers.new().append("Content-Length", "42")
-
-    if h.content_length().unwrap() != 42
-      fail "expected 42"
-    end
-  end
-
-  @test "Headers.content_length returns None when missing"
-  fn test_headers_content_length_missing ! String
-    h = Headers.new()
-
-    if h.content_length().some?()
-      fail "expected None"
-    end
-  end
+test "Headers.content_length returns None when missing"
+  h = Headers.new()
+  assert h.content_length().none?()
 end

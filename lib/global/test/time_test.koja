@@ -1,39 +1,16 @@
-struct TimeTest
-  @test "DateTime.now has positive epoch millis"
-  fn test_now_reasonable ! String
-    t = DateTime.now()
+test "DateTime.now has positive epoch millis"
+  assert DateTime.now().timestamp_millis() > 0
+end
 
-    if t.timestamp_millis() <= 0
-      fail "expected positive timestamp_millis from DateTime.now()"
-    end
-  end
+test "Duration.from_secs"
+  assert Duration.from_secs(5).millis() == 5000
+end
 
-  @test "Duration.from_secs"
-  fn test_duration_from_secs ! String
-    d = Duration.from_secs(5)
+test "Duration.from_millis"
+  assert Duration.from_millis(1500).millis() == 1500
+end
 
-    if d.millis() != 5000
-      fail "from_secs(5) should be 5000 ms"
-    end
-  end
-
-  @test "Duration.from_millis"
-  fn test_duration_from_millis ! String
-    d = Duration.from_millis(1500)
-
-    if d.millis() != 1500
-      fail "from_millis(1500) should be 1500 ms"
-    end
-  end
-
-  @test "Duration zero"
-  fn test_duration_zero ! String
-    if Duration.from_secs(0).millis() != 0
-      fail "from_secs(0)"
-    end
-
-    if Duration.from_millis(0).millis() != 0
-      fail "from_millis(0)"
-    end
-  end
+test "Duration zero"
+  assert Duration.from_secs(0).millis() == 0
+  assert Duration.from_millis(0).millis() == 0
 end

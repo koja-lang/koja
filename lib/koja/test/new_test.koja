@@ -1,135 +1,107 @@
-struct NewTest
-  @test "run without arguments returns usage"
-  fn test_usage ! String
-    args: List<String> = []
+test "run without arguments returns usage"
+  args: List<String> = []
 
-    match New.run(args)
-      Result.Ok(_) ->
-        fail "expected usage error"
-
-      Result.Err(message) ->
-        if message != "usage: koja new <path>"
-          fail "unexpected message: #{message}"
-        end
-    end
+  match New.run(args)
+    Result.Ok(_) -> fail "expected usage error"
+    Result.Err(message) -> assert message == "usage: koja new <path>"
   end
+end
 
-  @test "snake_case normalizes kebab, Pascal, and acronym spellings"
-  fn test_snake_case ! String
-    cases = [
-      ["git_hygiene", "git_hygiene"], ["git-hygiene", "git_hygiene"],
-      ["GitHygiene", "git_hygiene"], ["My-App", "my_app"],
-      ["HTTPServer", "http_server"], ["v2Client", "v2_client"]
-    ]
+test "snake_case normalizes kebab, Pascal, and acronym spellings"
+  cases: List<(String, String)> = [
+    ("git_hygiene", "git_hygiene"), ("git-hygiene", "git_hygiene"),
+    ("GitHygiene", "git_hygiene"), ("My-App", "my_app"),
+    ("HTTPServer", "http_server"), ("v2Client", "v2_client")
+  ]
 
-    for pair in cases
-      input = pair.get(0).unwrap()
-      expected = pair.get(1).unwrap()
-      actual = snake_case(input)
-
-      if actual != expected
-        fail "snake_case(#{input}) gave #{actual}, expected #{expected}"
-      end
-    end
+  for pair in cases
+    (input, expected) = pair
+    assert snake_case(input) == expected
   end
+end
 
-  @test "run rejects a name no spelling can repair"
-  fn test_bad_name ! String
-    match New.run(["9lives"])
-      Result.Ok(_) ->
-        fail "expected validation error"
+test "run rejects a name no spelling can repair"
+  match New.run(["9lives"])
+    Result.Ok(_) ->
+      fail "expected validation error"
 
-      Result.Err(message) ->
-        expected = "cannot derive a package name from '9lives'. Use ASCII letters, digits, `-` and `_`, starting with a letter"
-
-        if message != expected
-          fail "unexpected message: #{message}"
-        end
-    end
+    Result.Err(message) ->
+      expected = "cannot derive a package name from '9lives'. Use ASCII letters, digits, `-` and `_`, starting with a letter"
+      assert message == expected
   end
+end
 
-  @test "run derives the package from a kebab-case nested path"
-  fn test_kebab_path ! String
-    parent = "koja_new_test_nested"
-    path = "#{parent}/Kebab-Case"
-    cleanup_scaffold(path)
-    File.rmdir(parent)
+test "run derives the package from a kebab-case nested path"
+  parent = "koja_new_test_nested"
+  path = "#{parent}/Kebab-Case"
+  cleanup_scaffold(path)
+  File.rmdir(parent)
 
-    New.run([path]) rescue message -> fail "run failed: #{message}"
+  try Test.require(New.run([path]))
 
-    toml = File.read("#{path}/koja.toml")
-    cleanup_scaffold(path)
-    File.rmdir(parent)
+  toml = File.read("#{path}/koja.toml")
+  cleanup_scaffold(path)
+  File.rmdir(parent)
 
-    try check_marker(toml, "name = \"kebab_case\"", "koja.toml")
+  try check_marker(toml, "name = \"kebab_case\"", "koja.toml")
+end
+
+test "run refuses an existing directory"
+  name = "koja_new_test_existing"
+
+  try Test.require(File.mkdir_p(name))
+
+  result = New.run([name])
+  File.rmdir(name)
+
+  match result
+    Result.Ok(_) -> fail "expected existing-directory error"
+    Result.Err(message) ->
+      assert message == "directory '#{name}' already exists"
   end
+end
 
-  @test "run refuses an existing directory"
-  fn test_existing_directory ! String
-    name = "koja_new_test_existing"
+test "run scaffolds a complete project"
+  name = "koja_new_test_scaffold"
+  cleanup_scaffold(name)
 
-    File.mkdir_p(name) rescue message -> fail "setup mkdir failed: #{message}"
+  try Test.require(New.run([name]))
 
-    result = New.run([name])
-    File.rmdir(name)
+  toml = File.read("#{name}/koja.toml")
+  gitignore = File.read("#{name}/.gitignore")
+  agents = File.read("#{name}/AGENTS.md")
+  app = File.read("#{name}/src/app.koja")
+  app_test = File.read("#{name}/test/app_test.koja")
+  cleanup_scaffold(name)
 
-    match result
-      Result.Ok(_) ->
-        fail "expected existing-directory error"
+  try check_marker(toml, "name = \"#{name}\"", "koja.toml")
+  try check_marker(gitignore, "/build", ".gitignore")
+  try check_marker(agents, "koja doc search", "AGENTS.md")
+  try check_marker(app, "struct App: Process<(), (), ()>", "src/app.koja")
+  try check_marker(
+    app_test,
+    "test \"greet builds a greeting message\"",
+    "test/app_test.koja",
+  )
+end
 
-      Result.Err(message) ->
-        if message != "directory '#{name}' already exists"
-          fail "unexpected message: #{message}"
-        end
-    end
-  end
+priv fn check_marker(
+  contents: Result<String, String>,
+  marker: String,
+  label: String,
+) ! Test.Failure
 
-  @test "run scaffolds a complete project"
-  fn test_scaffold ! String
-    name = "koja_new_test_scaffold"
-    cleanup_scaffold(name)
+  text = try Test.require(contents)
+  assert text.contains?(marker), "#{label} is missing `#{marker}`"
+end
 
-    New.run([name]) rescue message -> fail "run failed: #{message}"
-
-    toml = File.read("#{name}/koja.toml")
-    gitignore = File.read("#{name}/.gitignore")
-    agents = File.read("#{name}/AGENTS.md")
-    app = File.read("#{name}/src/app.koja")
-    app_test = File.read("#{name}/test/app_test.koja")
-    cleanup_scaffold(name)
-
-    try check_marker(toml, "name = \"#{name}\"", "koja.toml")
-    try check_marker(gitignore, "/build", ".gitignore")
-    try check_marker(agents, "koja doc search", "AGENTS.md")
-    try check_marker(app, "struct App: Process<(), (), ()>", "src/app.koja")
-    try check_marker(app_test, "fn test_greet ! String", "test/app_test.koja")
-  end
-
-  priv fn check_marker(
-    contents: Result<String, String>,
-    marker: String,
-    label: String,
-  ) ! String
-
-    match contents
-      Result.Err(message) ->
-        fail "cannot read #{label}: #{message}"
-
-      Result.Ok(text) ->
-        if not text.contains?(marker)
-          fail "#{label} is missing `#{marker}`"
-        end
-    end
-  end
-
-  priv fn cleanup_scaffold(name: String)
-    File.delete("#{name}/koja.toml")
-    File.delete("#{name}/.gitignore")
-    File.delete("#{name}/AGENTS.md")
-    File.delete("#{name}/src/app.koja")
-    File.delete("#{name}/test/app_test.koja")
-    File.rmdir("#{name}/src")
-    File.rmdir("#{name}/test")
-    File.rmdir(name)
-  end
+priv fn cleanup_scaffold(name: String)
+  File.delete("#{name}/koja.toml")
+  File.delete("#{name}/.gitignore")
+  File.delete("#{name}/AGENTS.md")
+  File.delete("#{name}/src/app.koja")
+  File.delete("#{name}/test/app_test.koja")
+  File.rmdir("#{name}/src")
+  File.rmdir("#{name}/test")
+  File.rmdir(name)
 end

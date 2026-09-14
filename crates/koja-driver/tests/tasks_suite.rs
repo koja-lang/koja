@@ -344,7 +344,8 @@ fn new_scaffolds_a_working_project_and_rejects_bad_input() {
     assert!(app.contains("\"Hello, #{name}!\""), "{app}");
 
     let app_test = read_scaffold_file(&fx, "test/app_test.koja");
-    assert!(app_test.contains("@test \"greet builds a greeting message\""));
+    assert!(app_test.contains("test \"greet builds a greeting message\""));
+    assert!(app_test.contains("assert greet(\"Koja\") == \"Hello, Koja!\""));
 
     // The scaffold typechecks from the first command.
     let output = Command::new(koja_bin())
@@ -355,6 +356,19 @@ fn new_scaffolds_a_working_project_and_rejects_bad_input() {
     assert!(
         output.status.success(),
         "koja check failed in scaffold:\nstderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    // And its starter test passes.
+    let output = Command::new(koja_bin())
+        .args(["test", "--backend", "interpreter"])
+        .current_dir(fx.root.join("my_app"))
+        .output()
+        .expect("failed to run koja test");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        output.status.success() && stdout.contains("1 successful test"),
+        "koja test failed in scaffold:\nstdout: {stdout}\nstderr: {}",
         String::from_utf8_lossy(&output.stderr)
     );
 }

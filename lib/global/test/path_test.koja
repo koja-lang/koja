@@ -1,297 +1,121 @@
-struct PathTest
-  # Renders a component list for comparison, "|" cannot appear in the
-  # vectors used here.
-  priv fn parts(segments: List<String>) -> String
-    String.join(segments, "|")
+test "absolute? recognizes a leading slash"
+  assert Path.absolute?("/")
+  assert Path.absolute?("/usr/local")
+  assert not Path.absolute?("usr/local")
+  assert not Path.absolute?("")
+end
+
+test "basename returns the last component"
+  cases: List<(String, String)> = [
+    ("foo", "foo"), ("foo/bar", "bar"), ("foo/bar/", "bar"), ("/", ""),
+    ("//", ""), ("", "")
+  ]
+
+  for test_case in cases
+    (input, expected) = test_case
+    assert Path.basename(input) == expected
   end
+end
 
-  @test "absolute? recognizes a leading slash"
-  fn test_absolute ! String
-    if not Path.absolute?("/")
-      fail "/"
-    end
+test "dirname returns the directory component"
+  cases: List<(String, String)> = [
+    ("/foo/bar.ex", "/foo"), ("/foo/bar/", "/foo/bar"), ("bar.ex", "."),
+    ("foo//bar", "foo"), ("/foo", "/"), ("/", "/"), ("", ".")
+  ]
 
-    if not Path.absolute?("/usr/local")
-      fail "/usr/local"
-    end
-
-    if Path.absolute?("usr/local")
-      fail "usr/local"
-    end
-
-    if Path.absolute?("")
-      fail "empty"
-    end
+  for test_case in cases
+    (input, expected) = test_case
+    assert Path.dirname(input) == expected
   end
+end
 
-  @test "basename returns the last component"
-  fn test_basename ! String
-    if Path.basename("foo") != "foo"
-      fail "foo"
-    end
+test "extname returns the last dot segment of the basename"
+  cases: List<(String, String)> = [
+    ("foo.erl", ".erl"), ("~/foo/bar", ""), (".gitignore", ""), ("foo.", "."),
+    ("foo.d/bar", ""), ("archive.tar.gz", ".gz")
+  ]
 
-    if Path.basename("foo/bar") != "bar"
-      fail "foo/bar"
-    end
-
-    if Path.basename("foo/bar/") != "bar"
-      fail "trailing slash"
-    end
-
-    if Path.basename("/") != ""
-      fail "root"
-    end
-
-    if Path.basename("//") != ""
-      fail "double root"
-    end
-
-    if Path.basename("") != ""
-      fail "empty"
-    end
+  for test_case in cases
+    (input, expected) = test_case
+    assert Path.extname(input) == expected
   end
+end
 
-  @test "dirname returns the directory component"
-  fn test_dirname ! String
-    if Path.dirname("/foo/bar.ex") != "/foo"
-      fail "/foo/bar.ex"
-    end
+test "rootname strips exactly the extension"
+  assert Path.rootname("/foo/bar.ex") == "/foo/bar"
+  assert Path.rootname("archive.tar.gz") == "archive.tar"
+  assert Path.rootname("foo") == "foo"
+  # Unlike Elixir, a dotfile has no extension so it passes through.
+  assert Path.rootname(".gitignore") == ".gitignore"
+end
 
-    if Path.dirname("/foo/bar/") != "/foo/bar"
-      fail "trailing slash"
-    end
+test "join collapses separators and skips empty segments"
+  assert Path.join(["/", "foo", "bar/"]) == "/foo/bar"
+  assert Path.join(["/foo", "/bar/"]) == "/foo/bar"
+  assert Path.join(["", "foo"]) == "foo"
+  assert Path.join(["foo"]) == "foo"
+  assert Path.join(["/"]) == "/"
 
-    if Path.dirname("bar.ex") != "."
-      fail "bar.ex"
-    end
+  empty: List<String> = List.new()
+  assert Path.join(empty) == ""
+end
 
-    if Path.dirname("foo//bar") != "foo"
-      fail "duplicate slashes"
-    end
+test "split breaks a path into components"
+  none: List<String> = []
+  assert Path.split("") == none
+  assert Path.split("/") == ["/"]
+  assert Path.split("/foo/bar") == ["/", "foo", "bar"]
+  assert Path.split("foo/bar") == ["foo", "bar"]
+  assert Path.split("/foo//bar/") == ["/", "foo", "bar"]
+end
 
-    if Path.dirname("/foo") != "/"
-      fail "/foo"
-    end
+test "expand resolves dot segments lexically"
+  assert Path.expand("/foo/bar/../baz") == "/foo/baz"
+  assert Path.expand("/foo/../../baz") == "/baz"
+  assert Path.expand("/foo/./bar") == "/foo/bar"
+end
 
-    if Path.dirname("/") != "/"
-      fail "root"
-    end
+test "expand resolves relative paths against the working directory"
+  cwd = System.cwd().unwrap()
 
-    if Path.dirname("") != "."
-      fail "empty"
-    end
-  end
+  assert Path.expand("foo") == Path.join([cwd, "foo"])
+  assert Path.expand("foo/..") == cwd
+  assert Path.expand("") == cwd
+end
 
-  @test "extname returns the last dot segment of the basename"
-  fn test_extname ! String
-    if Path.extname("foo.erl") != ".erl"
-      fail "foo.erl"
-    end
+test "expand replaces a leading tilde with HOME"
+  saved = System.get_env("HOME")
+  System.set_env("HOME", "/home/koja")
 
-    if Path.extname("~/foo/bar") != ""
-      fail "no extension"
-    end
+  tilde_only = Path.expand("~")
+  tilde_child = Path.expand("~/projects")
+  tilde_user = Path.expand("~other")
 
-    if Path.extname(".gitignore") != ""
-      fail "dotfile"
-    end
+  System.set_env("HOME", saved.or(""))
 
-    if Path.extname("foo.") != "."
-      fail "trailing dot"
-    end
+  assert tilde_only == "/home/koja"
+  assert tilde_child == "/home/koja/projects"
+  # "~other" is a plain relative component, not a user expansion.
+  assert tilde_user == Path.join([System.cwd().unwrap(), "~other"])
+end
 
-    if Path.extname("foo.d/bar") != ""
-      fail "dot in directory"
-    end
+test "relative_to walks between relative paths"
+  assert Path.relative_to("tmp/foo/bar", "tmp") == "foo/bar"
+  assert Path.relative_to("tmp/foo/bar", "tmp/bat") == "../foo/bar"
+  assert Path.relative_to("foo", "foo") == "."
+  assert Path.relative_to("foo/../bar", "baz") == "../bar"
+end
 
-    if Path.extname("archive.tar.gz") != ".gz"
-      fail "multiple dots"
-    end
-  end
+test "relative_to strips a shared absolute prefix"
+  assert Path.relative_to("/usr/local/foo", "/usr/local") == "foo"
+  assert Path.relative_to("/usr/local/foo", "/") == "usr/local/foo"
+  assert Path.relative_to("/usr/local/foo", "/etc") == "/usr/local/foo"
+  assert Path.relative_to("/usr/local/foo", "/usr/local/foo") == "."
+  assert Path.relative_to("/usr/local/../foo/bar", "/usr/foo") == "bar"
+end
 
-  @test "rootname strips exactly the extension"
-  fn test_rootname ! String
-    if Path.rootname("/foo/bar.ex") != "/foo/bar"
-      fail "/foo/bar.ex"
-    end
-
-    if Path.rootname("archive.tar.gz") != "archive.tar"
-      fail "archive.tar.gz"
-    end
-
-    if Path.rootname("foo") != "foo"
-      fail "foo"
-    end
-
-    # Unlike Elixir, a dotfile has no extension so it passes through.
-    if Path.rootname(".gitignore") != ".gitignore"
-      fail "dotfile"
-    end
-  end
-
-  @test "join collapses separators and skips empty segments"
-  fn test_join ! String
-    if Path.join(["/", "foo", "bar/"]) != "/foo/bar"
-      fail "root and trailing slash"
-    end
-
-    if Path.join(["/foo", "/bar/"]) != "/foo/bar"
-      fail "absolute right side"
-    end
-
-    if Path.join(["", "foo"]) != "foo"
-      fail "empty segment"
-    end
-
-    if Path.join(["foo"]) != "foo"
-      fail "single segment"
-    end
-
-    if Path.join(["/"]) != "/"
-      fail "root only"
-    end
-
-    empty: List<String> = List.new()
-
-    if Path.join(empty) != ""
-      fail "empty list"
-    end
-  end
-
-  @test "split breaks a path into components"
-  fn test_split ! String
-    if parts(Path.split("")) != ""
-      fail "empty"
-    end
-
-    if parts(Path.split("/")) != "/"
-      fail "root"
-    end
-
-    if parts(Path.split("/foo/bar")) != "/|foo|bar"
-      fail "/foo/bar"
-    end
-
-    if parts(Path.split("foo/bar")) != "foo|bar"
-      fail "foo/bar"
-    end
-
-    if parts(Path.split("/foo//bar/")) != "/|foo|bar"
-      fail "duplicate and trailing slashes"
-    end
-  end
-
-  @test "expand resolves dot segments lexically"
-  fn test_expand_lexical ! String
-    if Path.expand("/foo/bar/../baz") != "/foo/baz"
-      fail "parent segment"
-    end
-
-    if Path.expand("/foo/../../baz") != "/baz"
-      fail "clamped at root"
-    end
-
-    if Path.expand("/foo/./bar") != "/foo/bar"
-      fail "current segment"
-    end
-  end
-
-  @test "expand resolves relative paths against the working directory"
-  fn test_expand_cwd ! String
-    cwd = System.cwd().unwrap()
-
-    if Path.expand("foo") != Path.join([cwd, "foo"])
-      fail "plain relative"
-    end
-
-    if Path.expand("foo/..") != cwd
-      fail "collapses to cwd"
-    end
-
-    if Path.expand("") != cwd
-      fail "empty is cwd"
-    end
-  end
-
-  @test "expand replaces a leading tilde with HOME"
-  fn test_expand_home ! String
-    saved = System.get_env("HOME")
-    System.set_env("HOME", "/home/koja")
-
-    tilde_only = Path.expand("~")
-    tilde_child = Path.expand("~/projects")
-    tilde_user = Path.expand("~other")
-
-    System.set_env("HOME", saved.or(""))
-
-    if tilde_only != "/home/koja"
-      fail "bare tilde"
-    end
-
-    if tilde_child != "/home/koja/projects"
-      fail "tilde child"
-    end
-
-    # "~other" is a plain relative component, not a user expansion.
-    if tilde_user != Path.join([System.cwd().unwrap(), "~other"])
-      fail "tilde user"
-    end
-  end
-
-  @test "relative_to walks between relative paths"
-  fn test_relative_to_relative ! String
-    if Path.relative_to("tmp/foo/bar", "tmp") != "foo/bar"
-      fail "prefix"
-    end
-
-    if Path.relative_to("tmp/foo/bar", "tmp/bat") != "../foo/bar"
-      fail "sibling traversal"
-    end
-
-    if Path.relative_to("foo", "foo") != "."
-      fail "equal"
-    end
-
-    if Path.relative_to("foo/../bar", "baz") != "../bar"
-      fail "normalizes first"
-    end
-  end
-
-  @test "relative_to strips a shared absolute prefix"
-  fn test_relative_to_absolute ! String
-    if Path.relative_to("/usr/local/foo", "/usr/local") != "foo"
-      fail "prefix"
-    end
-
-    if Path.relative_to("/usr/local/foo", "/") != "usr/local/foo"
-      fail "root base"
-    end
-
-    if Path.relative_to("/usr/local/foo", "/etc") != "/usr/local/foo"
-      fail "not a prefix"
-    end
-
-    if Path.relative_to("/usr/local/foo", "/usr/local/foo") != "."
-      fail "equal"
-    end
-
-    if Path.relative_to("/usr/local/../foo/bar", "/usr/foo") != "bar"
-      fail "normalizes first"
-    end
-  end
-
-  @test "relative_to returns the path unchanged for mixed kinds"
-  fn test_relative_to_mixed ! String
-    if Path.relative_to("/usr/foo/bar", "tmp/bat") != "/usr/foo/bar"
-      fail "absolute path, relative base"
-    end
-
-    if Path.relative_to("foo", "/usr/local") != "foo"
-      fail "relative path, absolute base"
-    end
-
-    if Path.relative_to("foo/../bar", "/usr/local") != "bar"
-      fail "normalized mixed"
-    end
-  end
+test "relative_to returns the path unchanged for mixed kinds"
+  assert Path.relative_to("/usr/foo/bar", "tmp/bat") == "/usr/foo/bar"
+  assert Path.relative_to("foo", "/usr/local") == "foo"
+  assert Path.relative_to("foo/../bar", "/usr/local") == "bar"
 end

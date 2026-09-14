@@ -1,38 +1,21 @@
-struct ServerTest
-  @test "Response.new sets Content-Length and version"
-  fn test_response_new ! String
-    resp = Response.new(Status.ok(), "hello")
+test "Response.new sets Content-Length and version"
+  resp = Response.new(Status.ok(), "hello")
 
-    if resp.status.code != 200
-      fail "expected 200"
-    end
+  assert resp.status.code == 200
+  assert resp.version == "HTTP/1.1"
+  assert resp.headers.get("Content-Length").unwrap() == "5"
+  assert resp.body == "hello"
+end
 
-    if resp.version != "HTTP/1.1"
-      fail "expected HTTP/1.1"
-    end
+test "Request.body_as_binary converts body"
+  req = Request{
+    body: "test",
+    headers: Headers.new(),
+    method: Method.Get,
+    path: "/",
+    version: "HTTP/1.1",
+  }
+  bin = req.body_as_binary()
 
-    if resp.headers.get("Content-Length").unwrap() != "5"
-      fail "expected Content-Length 5"
-    end
-
-    if resp.body != "hello"
-      fail "expected body hello"
-    end
-  end
-
-  @test "Request.body_as_binary converts body"
-  fn test_request_body_as_binary ! String
-    req = Request{
-      body: "test",
-      headers: Headers.new(),
-      method: Method.Get,
-      path: "/",
-      version: "HTTP/1.1",
-    }
-    bin = req.body_as_binary()
-
-    if bin.byte_size() != 4
-      fail "expected 4 bytes, got #{bin.byte_size()}"
-    end
-  end
+  assert bin.byte_size() == 4
 end

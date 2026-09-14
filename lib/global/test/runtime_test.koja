@@ -50,123 +50,83 @@ priv fn wait_for_blocked(pid: Pid, attempts: Int) -> Bool
   blocked
 end
 
-struct RuntimeTest
-  @test "the state wire table pins the ABI integers"
-  fn test_state_wire_table ! String
-    cond
-      not state_pinned?(Process.State.Blocked, 0) ->
-        fail "Blocked is wire index 0"
-      not state_pinned?(Process.State.Created, 1) ->
-        fail "Created is wire index 1"
-      not state_pinned?(Process.State.Runnable, 2) ->
-        fail "Runnable is wire index 2"
-      not state_pinned?(Process.State.Running, 3) ->
-        fail "Running is wire index 3"
-      not state_pinned?(Process.State.WaitingIO, 4) ->
-        fail "WaitingIO is wire index 4"
-      state_from_wire_index(5).some?() -> fail "index 5 names no state"
-      state_from_wire_index(-1).some?() -> fail "index -1 names no state"
-      else -> ()
-    end
+test "the state wire table pins the ABI integers"
+  pinned: List<(Process.State, Int)> = [
+    (Process.State.Blocked, 0), (Process.State.Created, 1),
+    (Process.State.Runnable, 2), (Process.State.Running, 3),
+    (Process.State.WaitingIO, 4)
+  ]
+
+  for entry in pinned
+    (state, index) = entry
+    assert state_pinned?(state, index)
   end
 
-  @test "an idle process parks as Blocked"
-  fn test_blocked_state ! String
-    probe = spawn RuntimeProbe.start(0)
-    pid = probe.pid()
-    # Synchronize on a reply so the probe has entered its receive loop,
-    # then poll out the window where it still winds down the handler.
-    sync = probe.call(RuntimeProbeMsg.Fill(0), 5000)
+  assert state_from_wire_index(5).none?()
+  assert state_from_wire_index(-1).none?()
+end
 
-    # Kill the probe before failing so a failed assertion does not leak it.
-    outcome: Result<(), String> =
-      cond
-        sync.err?() -> Result.Err("probe call failed")
-        wait_for_blocked(pid, 1000000) -> Result.Ok(())
-        else -> Result.Err("idle probe never reported Blocked")
-      end
+test "an idle process parks as Blocked"
+  probe = spawn RuntimeProbe.start(0)
+  pid = probe.pid()
+  # Synchronize on a reply so the probe has entered its receive loop,
+  # then poll out the window where it still winds down the handler.
+  sync = probe.call(RuntimeProbeMsg.Fill(0), 5000)
+  blocked = sync.ok?() and wait_for_blocked(pid, 1000000)
 
-    probe.kill()
-    try outcome
-  end
+  # Kill the probe before failing so a failed assertion does not leak it.
+  probe.kill()
+  try Test.require(sync)
+  assert blocked
+end
 
-  @test "self mailbox depth counts queued casts exactly"
-  fn test_self_depth ! String
-    probe = spawn RuntimeProbe.start(0)
+test "self mailbox depth counts queued casts exactly"
+  probe = spawn RuntimeProbe.start(0)
+  reply = probe.call(RuntimeProbeMsg.Fill(5), 5000)
+  probe.kill()
 
-    outcome: Result<(), String> =
-      match probe.call(RuntimeProbeMsg.Fill(5), 5000)
-        Result.Ok(5) -> Result.Ok(())
-        Result.Ok(depth) -> Result.Err("expected depth 5, got #{depth}")
-        Result.Err(_) -> Result.Err("probe call failed")
-      end
+  depth = try Test.require(reply)
+  assert depth == 5
+end
 
-    probe.kill()
-    try outcome
-  end
+test "process_count sees spawned processes"
+  before = Runtime.process_count()
+  a = spawn RuntimeProbe.start(0)
+  b = spawn RuntimeProbe.start(0)
+  during = Runtime.process_count()
+  a.kill()
+  b.kill()
 
-  @test "process_count sees spawned processes"
-  fn test_process_count ! String
-    before = Runtime.process_count()
-    a = spawn RuntimeProbe.start(0)
-    b = spawn RuntimeProbe.start(0)
-    during = Runtime.process_count()
-    a.kill()
-    b.kill()
+  assert before >= 1
+  assert during >= before + 2
+end
 
-    cond
-      before < 1 -> fail "caller not counted: #{before}"
-      during < before + 2 -> fail "spawns not counted: #{before} -> #{during}"
-      else -> ()
-    end
-  end
+test "the caller is a running process"
+  assert Runtime.process_count(Process.State.Running) >= 1
+end
 
-  @test "the caller is a running process"
-  fn test_running_count ! String
-    running = Runtime.process_count(Process.State.Running)
+test "at least one scheduler is online"
+  assert Runtime.scheduler_count() >= 1
+end
 
-    if running < 1
-      fail "expected >= 1, got #{running}"
-    end
-  end
+test "a live pid has a state and a depth"
+  probe = spawn RuntimeProbe.start(0)
+  pid = probe.pid()
+  state = pid.state()
+  depth = pid.mailbox_depth()
+  probe.kill()
 
-  @test "at least one scheduler is online"
-  fn test_scheduler_count ! String
-    schedulers = Runtime.scheduler_count()
+  assert state.some?()
+  assert depth.some?()
+end
 
-    if schedulers < 1
-      fail "expected >= 1, got #{schedulers}"
-    end
-  end
+test "dead and invalid pids read as None"
+  probe = spawn RuntimeProbe.start(0)
+  pid = probe.pid()
+  probe.kill()
 
-  @test "a live pid has a state and a depth"
-  fn test_live_pid_gauges ! String
-    probe = spawn RuntimeProbe.start(0)
-    pid = probe.pid()
-
-    outcome: Result<(), String> =
-      cond
-        pid.state().none?() -> Result.Err("live pid has no state")
-        pid.mailbox_depth().none?() -> Result.Err("live pid has no depth")
-        else -> Result.Ok(())
-      end
-
-    probe.kill()
-    try outcome
-  end
-
-  @test "dead and invalid pids read as None"
-  fn test_dead_pid ! String
-    probe = spawn RuntimeProbe.start(0)
-    pid = probe.pid()
-    probe.kill()
-
-    cond
-      pid.state().some?() -> fail "killed pid still has a state"
-      pid.mailbox_depth().some?() -> fail "killed pid still has a depth"
-      Pid{id: 0}.state().some?() -> fail "pid 0 has a state"
-      Pid{id: 0}.mailbox_depth().some?() -> fail "pid 0 has a depth"
-      else -> ()
-    end
-  end
+  assert pid.state().none?()
+  assert pid.mailbox_depth().none?()
+  assert Pid{id: 0}.state().none?()
+  assert Pid{id: 0}.mailbox_depth().none?()
 end

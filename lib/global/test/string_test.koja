@@ -1,624 +1,245 @@
-struct StringTest
-  @test "escape sequences: tab, quote, backslash"
-  fn test_escape_sequences ! String
-    # --- strings.koja: escapes, interpolation, heredoc ---
+test "escape sequences: tab, quote, backslash"
+  # --- strings.koja: escapes, interpolation, heredoc ---
+  assert "tab:\there" == "tab:\t" <> "here"
+  assert "quote: \"yes\"" == "quote: " <> "\"" <> "yes" <> "\""
+  assert "backslash: \\" == "backslash: " <> "\\"
+end
 
-    if "tab:\there" != "tab:\t" <> "here"
-      fail "tab escape"
-    end
+test "string interpolation: variable and expression"
+  name = "koja"
 
-    if "quote: \"yes\"" != "quote: " <> "\"" <> "yes" <> "\""
-      fail "quote escape"
-    end
+  assert "hello #{name}" == "hello koja"
+  assert "1 + 2 = #{1 + 2}" == "1 + 2 = 3"
+end
 
-    if "backslash: \\" != "backslash: " <> "\\"
-      fail "backslash escape"
-    end
+test "heredoc dedents trailing lines"
+  msg = """
+  first line
+  second line
+  """
+
+  assert msg == "first line\nsecond line"
+end
+
+test "digit? and whitespace? on literals"
+  assert "123456790".digit?()
+  assert not "notdigit".digit?()
+  assert " \n\r\t".whitespace?()
+  assert not "notwhitespace ".whitespace?()
+end
+
+test "byte_length and length for ASCII"
+  # --- string_intrinsics.koja ---
+  s = "hello"
+
+  assert s.byte_length() == 5
+  assert s.length() == 5
+end
+
+test "get returns Option of single-codepoint strings"
+  s = "hello"
+
+  assert s.get(0) == Option.Some("h")
+  assert s.get(4) == Option.Some("o")
+end
+
+test "for loop iterates codepoints in order"
+  acc = ""
+
+  for c in "abc"
+    acc = acc <> c
   end
 
-  @test "string interpolation: variable and expression"
-  fn test_interpolation ! String
-    name = "koja"
+  assert acc == "abc"
+  assert "abc".length() == 3
+end
 
-    if "hello #{name}" != "hello koja"
-      fail "variable interpolation"
-    end
+test "slice with inclusive Range"
+  s = "hello"
+  assert s.slice(Range{start: 1, stop: 3}) == "ell"
+end
 
-    if "1 + 2 = #{1 + 2}" != "1 + 2 = 3"
-      fail "expression interpolation"
-    end
+test "to_binary and to_string round trip"
+  bin = "test".to_binary()
+  val = try Test.require(bin.to_string())
+  assert val == "test"
+end
+
+test "Int.parse success and failure"
+  val = try Test.require(Int.parse("42"))
+  assert val == 42
+
+  match Int.parse("not_a_number")
+    Result.Ok(_) -> fail "expected parse failure"
+    Result.Err(NumericConversionError.InvalidFormat) -> ()
+    Result.Err(_) -> fail "wrong error kind"
   end
 
-  @test "heredoc dedents trailing lines"
-  fn test_heredoc ! String
-    msg = """
-    first line
-    second line
-    """
+  match Int.parse("99999999999999999999")
+    Result.Ok(_) -> fail "expected overflow failure"
+    Result.Err(NumericConversionError.OutOfRange) -> ()
+    Result.Err(_) -> fail "overflow should be OutOfRange"
+  end
+end
 
-    if msg != "first line\nsecond line"
-      fail "heredoc content"
-    end
+test "Float.parse success and failure"
+  val = try Test.require(Float.parse("3.14"))
+  assert val == 3.14
+
+  match Float.parse("bad")
+    Result.Ok(_) -> fail "expected parse failure"
+    Result.Err(NumericConversionError.InvalidFormat) -> ()
+    Result.Err(_) -> fail "wrong error kind"
   end
 
-  @test "digit? and whitespace? on literals"
-  fn test_literal_digit_whitespace ! String
-    if not "123456790".digit?()
-      fail "expected digit? true for all digits"
-    end
-
-    if "notdigit".digit?()
-      fail "expected digit? false for letters"
-    end
-
-    if not " \n\r\t".whitespace?()
-      fail "expected whitespace? true"
-    end
-
-    if "notwhitespace ".whitespace?()
-      fail "expected whitespace? false when text present"
-    end
+  match Float.parse("1e999")
+    Result.Ok(_) -> fail "expected overflow failure"
+    Result.Err(NumericConversionError.OutOfRange) -> ()
+    Result.Err(_) -> fail "overflow should be OutOfRange"
   end
 
-  @test "byte_length and length for ASCII"
-  fn test_byte_length_and_length_ascii ! String
-    # --- string_intrinsics.koja ---
+  match Float.parse("inf")
+    Result.Ok(_) -> fail "inf should not parse"
+    Result.Err(NumericConversionError.InvalidFormat) -> ()
+    Result.Err(_) -> fail "inf should be InvalidFormat"
+  end
+end
 
-    s = "hello"
+test "Unicode length vs byte_length and get"
+  emoji = "héllo"
 
-    if s.byte_length() != 5
-      fail "byte_length ascii"
-    end
+  assert emoji.length() == 5
+  assert emoji.byte_length() == 6
+  assert emoji.get(1) == Option.Some("é")
+end
 
-    if s.length() != 5
-      fail "length ascii"
-    end
+test "empty?"
+  # --- string_stdlib.koja ---
+  assert "".empty?()
+  assert not "hello".empty?()
+end
+
+test "at: valid index, out of bounds, negative"
+  assert "hello".at(1) == Option.Some("e")
+  assert "hello".at(10).none?()
+  assert "hello".at(-1).none?()
+end
+
+test "contains?"
+  assert "hello world".contains?("world")
+  assert not "hello world".contains?("xyz")
+  assert "hello".contains?("")
+  assert not "".contains?("a")
+end
+
+test "starts_with? and ends_with?"
+  assert "hello world".starts_with?("hello")
+  assert not "hello world".starts_with?("world")
+  assert "hello".starts_with?("")
+  assert not "hi".starts_with?("hello")
+
+  assert "hello world".ends_with?("world")
+  assert not "hello world".ends_with?("hello")
+  assert "hello".ends_with?("")
+  assert not "hi".ends_with?("hello")
+end
+
+test "trim_start, trim_end, trim"
+  assert "  hello  ".trim_start() == "hello  "
+  assert "hello".trim_start() == "hello"
+  assert "  hello  ".trim_end() == "  hello"
+  assert "hello".trim_end() == "hello"
+  assert "  hello  ".trim() == "hello"
+  assert "hello".trim() == "hello"
+end
+
+test "upcase and downcase"
+  assert "hello".upcase() == "HELLO"
+  assert "Hello World 123".upcase() == "HELLO WORLD 123"
+  assert "HELLO".downcase() == "hello"
+  assert "Hello World 123".downcase() == "hello world 123"
+end
+
+test "replace"
+  assert "hello world".replace("world", "koja") == "hello koja"
+  assert "aaa".replace("a", "bb") == "bbbbbb"
+  assert "hello".replace("xyz", "!") == "hello"
+  assert "hello".replace("", "!") == "hello"
+end
+
+test "reverse"
+  assert "hello".reverse() == "olleh"
+  assert "".reverse() == ""
+  assert "a".reverse() == "a"
+end
+
+test "split"
+  assert "a,b,c".split(",") == ["a", "b", "c"]
+  assert "hi".split("") == ["h", "i"]
+end
+
+test "split edge cases: adjacent, boundary, and multi-byte separators"
+  assert "a,,b".split(",") == ["a", "", "b"]
+  assert ",a,".split(",") == ["", "a", ""]
+  assert "".split(",") == [""]
+  assert ",".split(",") == ["", ""]
+  assert "aébéc".split("é") == ["a", "b", "c"]
+  assert "héllo wörld".split(" ") == ["héllo", "wörld"]
+  assert "mississippi".split("ss") == ["mi", "i", "ippi"]
+  assert "ab".split("abc") == ["ab"]
+end
+
+test "search family on multi-byte boundaries"
+  assert "héllo".contains?("él")
+  assert not "é".starts_with?("ab")
+  assert not "aé".ends_with?("bb")
+  assert "héllo".starts_with?("hé")
+  assert "héllo".ends_with?("llo")
+  assert "héllo".replace("é", "e") == "hello"
+end
+
+test "String.join"
+  join_parts: List<String> = ["a", "b", "c"]
+  assert String.join(join_parts, ", ") == "a, b, c"
+
+  join_one: List<String> = ["one"]
+  assert String.join(join_one, "-") == "one"
+
+  join_empty: List<String> = List.new()
+  assert String.join(join_empty, ",") == ""
+end
+
+test "alpha?, digit?, whitespace? (stdlib)"
+  assert "hello".alpha?()
+  assert not "hello123".alpha?()
+  assert "".alpha?()
+  assert "123".digit?()
+  assert not "12a".digit?()
+  assert " \t\n".whitespace?()
+  assert not " x ".whitespace?()
+end
+
+test "codepoints and graphemes"
+  assert "abc".codepoints() == ["a", "b", "c"]
+  assert "hi".graphemes() == ["h", "i"]
+end
+
+test "to_int and to_float"
+  int_val = try Test.require("42".to_int())
+  assert int_val == 42
+
+  match "bad".to_int()
+    Result.Ok(_) -> fail "to_int bad expected err"
+    Result.Err(NumericConversionError.InvalidFormat) -> ()
+    Result.Err(_) -> fail "to_int bad kind"
   end
 
-  @test "get returns Option of single-codepoint strings"
-  fn test_get_indices ! String
-    s = "hello"
-
-    match s.get(0)
-      Option.Some(ch) ->
-        if ch != "h"
-          fail "get(0)"
-        end
-
-      Option.None ->
-        fail "get(0) expected Some"
-    end
-
-    match s.get(4)
-      Option.Some(ch) ->
-        if ch != "o"
-          fail "get(4)"
-        end
-
-      Option.None ->
-        fail "get(4) expected Some"
-    end
-  end
-
-  @test "for loop iterates codepoints in order"
-  fn test_for_iteration ! String
-    acc = ""
-
-    for c in "abc"
-      acc = acc <> c
-    end
-
-    if acc != "abc"
-      fail "for iteration concatenation"
-    end
-
-    if "abc".length() != 3
-      fail "iterated string length"
-    end
-  end
-
-  @test "slice with inclusive Range"
-  fn test_slice_range ! String
-    s = "hello"
-    sub = s.slice(Range{start: 1, stop: 3})
-
-    if sub != "ell"
-      fail "slice(1..3)"
-    end
-  end
-
-  @test "to_binary and to_string round trip"
-  fn test_binary_string_round_trip ! String
-    bin = "test".to_binary()
-
-    match bin.to_string()
-      Result.Ok(val) ->
-        if val != "test"
-          fail "binary round trip"
-        end
-
-      Result.Err(msg) ->
-        fail "to_string failed: #{msg}"
-    end
-  end
-
-  @test "Int.parse success and failure"
-  fn test_int_parse ! String
-    match Int.parse("42")
-      Result.Ok(val) ->
-        if val != 42
-          fail "Int.parse 42"
-        end
-
-      Result.Err(msg) ->
-        fail "unexpected err: #{msg}"
-    end
-
-    match Int.parse("not_a_number")
-      Result.Ok(_) -> fail "expected parse failure"
-      Result.Err(NumericConversionError.InvalidFormat) -> ()
-      Result.Err(_) -> fail "wrong error kind"
-    end
-
-    match Int.parse("99999999999999999999")
-      Result.Ok(_) -> fail "expected overflow failure"
-      Result.Err(NumericConversionError.OutOfRange) -> ()
-      Result.Err(_) -> fail "overflow should be OutOfRange"
-    end
-  end
-
-  @test "Float.parse success and failure"
-  fn test_float_parse ! String
-    match Float.parse("3.14")
-      Result.Ok(val) ->
-        if val != 3.14
-          fail "Float.parse 3.14"
-        end
-
-      Result.Err(msg) ->
-        fail "unexpected err: #{msg}"
-    end
-
-    match Float.parse("bad")
-      Result.Ok(_) -> fail "expected parse failure"
-      Result.Err(NumericConversionError.InvalidFormat) -> ()
-      Result.Err(_) -> fail "wrong error kind"
-    end
-
-    match Float.parse("1e999")
-      Result.Ok(_) -> fail "expected overflow failure"
-      Result.Err(NumericConversionError.OutOfRange) -> ()
-      Result.Err(_) -> fail "overflow should be OutOfRange"
-    end
-
-    match Float.parse("inf")
-      Result.Ok(_) -> fail "inf should not parse"
-      Result.Err(NumericConversionError.InvalidFormat) -> ()
-      Result.Err(_) -> fail "inf should be InvalidFormat"
-    end
-  end
-
-  @test "Unicode length vs byte_length and get"
-  fn test_unicode_metrics ! String
-    emoji = "héllo"
-
-    if emoji.length() != 5
-      fail "unicode length"
-    end
-
-    if emoji.byte_length() != 6
-      fail "unicode byte_length"
-    end
-
-    match emoji.get(1)
-      Option.Some(ch) ->
-        if ch != "é"
-          fail "get(1) should be é"
-        end
-
-      Option.None ->
-        fail "get(1) expected Some"
-    end
-  end
-
-  @test "empty?"
-  fn test_empty_q ! String
-    # --- string_stdlib.koja ---
-
-    if not "".empty?()
-      fail "empty string should be empty?"
-    end
-
-    if "hello".empty?()
-      fail "non-empty should not be empty?"
-    end
-  end
-
-  @test "at: valid index, out of bounds, negative"
-  fn test_at ! String
-    match "hello".at(1)
-      Option.Some(c) ->
-        if c != "e"
-          fail "at(1)"
-        end
-
-      Option.None ->
-        fail "at(1) expected Some"
-    end
-
-    match "hello".at(10)
-      Option.Some(_) -> fail "at(10) expected None"
-      Option.None -> ()
-    end
-
-    match "hello".at(-1)
-      Option.Some(_) -> fail "at(-1) expected None"
-      Option.None -> ()
-    end
-  end
-
-  @test "contains?"
-  fn test_contains_q ! String
-    if not "hello world".contains?("world")
-      fail "contains substring"
-    end
-
-    if "hello world".contains?("xyz")
-      fail "should not contain xyz"
-    end
-
-    if not "hello".contains?("")
-      fail "empty needle should match"
-    end
-
-    if "".contains?("a")
-      fail "empty haystack should not contain a"
-    end
-  end
-
-  @test "starts_with? and ends_with?"
-  fn test_starts_ends_with ! String
-    if not "hello world".starts_with?("hello")
-      fail "starts_with hello"
-    end
-
-    if "hello world".starts_with?("world")
-      fail "starts_with world"
-    end
-
-    if not "hello".starts_with?("")
-      fail "starts_with empty prefix"
-    end
-
-    if "hi".starts_with?("hello")
-      fail "hi should not start with hello"
-    end
-
-    if not "hello world".ends_with?("world")
-      fail "ends_with world"
-    end
-
-    if "hello world".ends_with?("hello")
-      fail "ends_with hello"
-    end
-
-    if not "hello".ends_with?("")
-      fail "ends_with empty suffix"
-    end
-
-    if "hi".ends_with?("hello")
-      fail "hi should not end with hello"
-    end
-  end
-
-  @test "trim_start, trim_end, trim"
-  fn test_trim_variants ! String
-    if "  hello  ".trim_start() != "hello  "
-      fail "trim_start with spaces"
-    end
-
-    if "hello".trim_start() != "hello"
-      fail "trim_start noop"
-    end
-
-    if "  hello  ".trim_end() != "  hello"
-      fail "trim_end with spaces"
-    end
-
-    if "hello".trim_end() != "hello"
-      fail "trim_end noop"
-    end
-
-    if "  hello  ".trim() != "hello"
-      fail "trim both sides"
-    end
-
-    if "hello".trim() != "hello"
-      fail "trim noop"
-    end
-  end
-
-  @test "upcase and downcase"
-  fn test_case_conversion ! String
-    if "hello".upcase() != "HELLO"
-      fail "upcase hello"
-    end
-
-    if "Hello World 123".upcase() != "HELLO WORLD 123"
-      fail "upcase mixed"
-    end
-
-    if "HELLO".downcase() != "hello"
-      fail "downcase HELLO"
-    end
-
-    if "Hello World 123".downcase() != "hello world 123"
-      fail "downcase mixed"
-    end
-  end
-
-  @test "replace"
-  fn test_replace ! String
-    if "hello world".replace("world", "koja") != "hello koja"
-      fail "replace world"
-    end
-
-    if "aaa".replace("a", "bb") != "bbbbbb"
-      fail "replace overlapping expansion"
-    end
-
-    if "hello".replace("xyz", "!") != "hello"
-      fail "replace missing needle"
-    end
-
-    if "hello".replace("", "!") != "hello"
-      fail "replace empty old is no-op"
-    end
-  end
-
-  @test "reverse"
-  fn test_reverse ! String
-    if "hello".reverse() != "olleh"
-      fail "reverse hello"
-    end
-
-    if "".reverse() != ""
-      fail "reverse empty"
-    end
-
-    if "a".reverse() != "a"
-      fail "reverse single"
-    end
-  end
-
-  @test "split"
-  fn test_split ! String
-    parts: List<String> = "a,b,c".split(",")
-
-    if parts.length() != 3
-      fail "split comma length"
-    end
-
-    if parts.get(0).unwrap() != "a"
-      fail "split part 0"
-    end
-
-    if parts.get(1).unwrap() != "b"
-      fail "split part 1"
-    end
-
-    if parts.get(2).unwrap() != "c"
-      fail "split part 2"
-    end
-
-    parts = "hi".split("")
-
-    if parts.length() != 2
-      fail "split empty sep length"
-    end
-
-    if parts.get(0).unwrap() != "h"
-      fail "split empty sep 0"
-    end
-
-    if parts.get(1).unwrap() != "i"
-      fail "split empty sep 1"
-    end
-  end
-
-  @test "split edge cases: adjacent, boundary, and multi-byte separators"
-  fn test_split_edges ! String
-    parts: List<String> = "a,,b".split(",")
-
-    if not (parts.length() == 3 and parts.get(1).unwrap() == "")
-      fail "adjacent separators keep the empty part"
-    end
-
-    parts = ",a,".split(",")
-
-    if parts.length() != 3
-      fail "separators at both ends"
-    end
-
-    if not (parts.get(0).unwrap() == "" and parts.get(2).unwrap() == "")
-      fail "boundary parts should be empty"
-    end
-
-    parts = "".split(",")
-
-    if not (parts.length() == 1 and parts.get(0).unwrap() == "")
-      fail "empty input is one empty part"
-    end
-
-    parts = ",".split(",")
-
-    if parts.length() != 2
-      fail "lone separator is two empty parts"
-    end
-
-    parts = "aébéc".split("é")
-
-    if not (parts.length() == 3 and parts.get(2).unwrap() == "c")
-      fail "multi-byte separator"
-    end
-
-    parts = "héllo wörld".split(" ")
-
-    if parts.get(1).unwrap() != "wörld"
-      fail "multi-byte content survives the copy"
-    end
-
-    parts = "mississippi".split("ss")
-
-    if not (parts.length() == 3 and parts.get(1).unwrap() == "i")
-      fail "multi-character separator"
-    end
-
-    parts = "ab".split("abc")
-
-    if not (parts.length() == 1 and parts.get(0).unwrap() == "ab")
-      fail "separator longer than input"
-    end
-  end
-
-  @test "search family on multi-byte boundaries"
-  fn test_search_multibyte_boundaries ! String
-    if not "héllo".contains?("él")
-      fail "contains multi-byte needle"
-    end
-
-    if "é".starts_with?("ab")
-      fail "prefix probe inside a codepoint"
-    end
-
-    if "aé".ends_with?("bb")
-      fail "suffix probe inside a codepoint"
-    end
-
-    if not "héllo".starts_with?("hé")
-      fail "starts_with multi-byte prefix"
-    end
-
-    if not "héllo".ends_with?("llo")
-      fail "ends_with after multi-byte prefix"
-    end
-
-    if "héllo".replace("é", "e") != "hello"
-      fail "replace multi-byte needle"
-    end
-  end
-
-  @test "String.join"
-  fn test_join ! String
-    join_parts: List<String> = ["a", "b", "c"]
-
-    if String.join(join_parts, ", ") != "a, b, c"
-      fail "join three"
-    end
-
-    join_one: List<String> = ["one"]
-
-    if String.join(join_one, "-") != "one"
-      fail "join one"
-    end
-
-    join_empty: List<String> = List.new()
-
-    if String.join(join_empty, ",") != ""
-      fail "join empty list"
-    end
-  end
-
-  @test "alpha?, digit?, whitespace? (stdlib)"
-  fn test_stdlib_character_predicates ! String
-    if not "hello".alpha?()
-      fail "hello alpha?"
-    end
-
-    if "hello123".alpha?()
-      fail "hello123 not alpha"
-    end
-
-    if not "".alpha?()
-      fail "empty alpha? vacuous"
-    end
-
-    if not "123".digit?()
-      fail "123 digit?"
-    end
-
-    if "12a".digit?()
-      fail "12a not digit"
-    end
-
-    if not " \t\n".whitespace?()
-      fail "whitespace only"
-    end
-
-    if " x ".whitespace?()
-      fail " x  not all whitespace"
-    end
-  end
-
-  @test "codepoints and graphemes"
-  fn test_codepoints_graphemes ! String
-    cp: List<String> = "abc".codepoints()
-
-    if cp.length() != 3
-      fail "codepoints length"
-    end
-
-    if cp.get(0).unwrap() != "a"
-      fail "codepoints first"
-    end
-
-    if cp.get(2).unwrap() != "c"
-      fail "codepoints last"
-    end
-
-    cp = "hi".graphemes()
-
-    if cp.length() != 2
-      fail "graphemes length"
-    end
-
-    if cp.get(0).unwrap() != "h"
-      fail "graphemes first"
-    end
-  end
-
-  @test "to_int and to_float"
-  fn test_to_int_to_float ! String
-    match "42".to_int()
-      Result.Ok(val) ->
-        if val != 42
-          fail "to_int 42"
-        end
-
-      Result.Err(msg) ->
-        fail "to_int err: #{msg}"
-    end
-
-    match "bad".to_int()
-      Result.Ok(_) -> fail "to_int bad expected err"
-      Result.Err(NumericConversionError.InvalidFormat) -> ()
-      Result.Err(_) -> fail "to_int bad kind"
-    end
-
-    match "3.14".to_float()
-      Result.Ok(val) ->
-        if val != 3.14
-          fail "to_float 3.14"
-        end
-
-      Result.Err(msg) ->
-        fail "to_float err: #{msg}"
-    end
-
-    match "bad".to_float()
-      Result.Ok(_) -> fail "to_float bad expected err"
-      Result.Err(NumericConversionError.InvalidFormat) -> ()
-      Result.Err(_) -> fail "to_float bad kind"
-    end
+  float_val = try Test.require("3.14".to_float())
+  assert float_val == 3.14
+
+  match "bad".to_float()
+    Result.Ok(_) -> fail "to_float bad expected err"
+    Result.Err(NumericConversionError.InvalidFormat) -> ()
+    Result.Err(_) -> fail "to_float bad kind"
   end
 end
