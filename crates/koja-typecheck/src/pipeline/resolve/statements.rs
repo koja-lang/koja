@@ -52,7 +52,7 @@ use crate::pipeline::lift_signatures::{TypeParamScope, resolve_type_expr};
 use crate::pipeline::unify::{Substitution, substitute};
 use crate::registry::GlobalKind;
 
-use super::coercion::check_compatible_stamping;
+use super::coercion::{Compatible, check_compatible, check_compatible_stamping};
 use super::ctx::Resolver;
 use super::expr::{resolve_expr, resolve_expr_with_expected};
 use super::patterns::tuple_element_types;
@@ -99,7 +99,63 @@ pub(super) fn resolve_assignment(
         resolved.is_resolved().then_some(resolved)
     });
     resolve_expr_with_expected(value, expected_ty.as_ref(), resolver, diagnostics);
+    declare_assignment_target(
+        lvalue,
+        type_annotation,
+        expected_ty,
+        value,
+        span,
+        resolver,
+        diagnostics,
+    );
+}
 
+/// Resolve `name = value` with `hint` as the expected type of `value`,
+/// the way `==` types its right operand against its left. The hint
+/// drives inference for unit variants and generic constructors, and
+/// an integer or float literal that fits the hinted width takes that
+/// width. Any other value keeps its own type, so a mismatch surfaces
+/// where the local is used, not as an annotation error on a
+/// synthesized name.
+pub(super) fn resolve_hinted_assignment(
+    lvalue: &mut LValue,
+    hint: Option<&ResolvedType>,
+    value: &mut Expr,
+    span: Span,
+    resolver: &mut Resolver<'_>,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    resolve_expr_with_expected(value, hint, resolver, diagnostics);
+    let coerced = hint.filter(|hint| {
+        value.resolution.is_resolved()
+            && matches!(
+                check_compatible(value, &value.resolution, hint, resolver.registry),
+                Compatible::Coerced(_)
+            )
+    });
+    declare_assignment_target(
+        lvalue,
+        None,
+        coerced.cloned(),
+        value,
+        span,
+        resolver,
+        diagnostics,
+    );
+}
+
+/// Declare or rebind the single-segment target of an assignment whose
+/// value has already resolved. `annotated` is the resolved form of
+/// `type_annotation` when one was written.
+fn declare_assignment_target(
+    lvalue: &mut LValue,
+    type_annotation: Option<&TypeExpr>,
+    annotated: Option<ResolvedType>,
+    value: &mut Expr,
+    span: Span,
+    resolver: &mut Resolver<'_>,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
     let name = lvalue.segments[0].clone();
 
     let value_ty = value.resolution.clone();
@@ -114,7 +170,7 @@ pub(super) fn resolve_assignment(
         ));
         return;
     }
-    let declared_ty = match expected_ty {
+    let declared_ty = match annotated {
         Some(annotated) => {
             if value_ty.is_resolved()
                 && check_compatible_stamping(value, &value_ty, &annotated, resolver.registry)

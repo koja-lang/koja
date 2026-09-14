@@ -27,371 +27,269 @@ struct CondStmtCounter
   end
 end
 
-struct ControlFlowTest
-  fn classify_size(n: Int) -> String
-    cond
-      n > 100 -> "big"
-      n > 10 -> "medium"
-      else -> "small"
-    end
+test "for loops accumulate and iterate strings"
+  list: List<Int> = List.new()
+  list = list.append(1)
+  list = list.append(2)
+  list = list.append(3)
+
+  sum = 0
+
+  for item in list
+    sum += item
   end
 
-  fn color_name(c: Color) -> String
-    match c
-      Red -> "red"
-      Green -> "green"
-      Blue -> "blue"
-    end
+  assert sum == 6
+
+  acc = ""
+
+  for c in "abc"
+    acc = acc <> c
   end
 
-  fn shape_area(s: Shape) -> Int
-    match s
-      Shape.Circle(r) -> r * r * 3
-      Shape.Rect(w, h) -> w * h
-    end
+  assert acc == "abc"
+end
+
+test "if else nested and classify"
+  branch = ""
+
+  if true
+    branch = "yes"
   end
 
-  fn classify_or(n: Int) -> String
-    match n
-      1 | 2 | 3 -> "small"
-      4 | 5 | 6 -> "medium"
-      _ -> "large"
-    end
+  assert branch == "yes"
+
+  branch2 = ""
+
+  if false
+    branch2 = "nope"
+  else
+    branch2 = "else branch"
   end
 
-  fn bracket_kind(ch: String) -> String
-    match ch
-      "(" | ")" | "[" | "]" -> "bracket"
+  assert branch2 == "else branch"
+
+  x = 5
+  cmp = ""
+
+  if x > 3
+    cmp = "greater"
+  else
+    cmp = "not greater"
+  end
+
+  assert cmp == "greater"
+
+  y = x > 2 ? "big" : "small"
+  assert y == "big"
+
+  assert classify_size(200) == "big"
+  assert classify_size(50) == "medium"
+  assert classify_size(3) == "small"
+end
+
+test "loop and break"
+  i = 0
+  count = 0
+
+  loop
+    if i >= 3
+      break
+    end
+
+    count += 1
+    i += 1
+  end
+
+  assert count == 3
+end
+
+test "match integers and wildcards"
+  x = 3
+
+  label =
+    match x
+      1 -> "one"
+      2 -> "two"
+      3 -> "three"
       _ -> "other"
     end
+
+  assert label == "three"
+
+  y = 99
+  kind = ""
+
+  match y
+    1 -> kind = "one"
+    _ -> kind = "wildcard"
   end
 
-  fn color_warmth(c: Color) -> String
-    match c
-      Color.Red -> "warm"
-      Color.Green | Color.Blue -> "cool"
+  assert kind == "wildcard"
+
+  z = 42
+
+  msg =
+    match z
+      0 -> "zero"
+      val -> "got #{val}"
     end
+
+  assert msg == "got 42"
+end
+
+test "match plain and tagged enums"
+  assert color_name(Color.Red) == "red"
+  assert color_name(Color.Blue) == "blue"
+  assert shape_area(Shape.Circle(5)) == 75
+  assert shape_area(Shape.Rect(4, 6)) == 24
+
+  opt: Option<Int> = Option.Some(10)
+
+  bucket =
+    match opt
+      Option.Some(v) when v > 5 -> "big some"
+      Option.Some(_) -> "small some"
+      Option.None -> "none"
+    end
+
+  assert bucket == "big some"
+end
+
+test "match OR patterns"
+  assert classify_or(1) == "small"
+  assert classify_or(2) == "small"
+  assert classify_or(5) == "medium"
+  assert classify_or(99) == "large"
+
+  assert bracket_kind("(") == "bracket"
+  assert bracket_kind("]") == "bracket"
+  assert bracket_kind("x") == "other"
+
+  assert color_warmth(Color.Red) == "warm"
+  assert color_warmth(Color.Green) == "cool"
+  assert color_warmth(Color.Blue) == "cool"
+
+  assert or_with_guard(3) == "three"
+  assert or_with_guard(1) == "small"
+  assert or_with_guard(7) == "other"
+end
+
+test "if not guards"
+  ran_false = false
+
+  if not false
+    ran_false = true
   end
 
-  fn or_with_guard(n: Int) -> String
-    match n
-      1 | 2 | 3 when n > 2 -> "three"
-      1 | 2 | 3 -> "small"
-      _ -> "other"
-    end
+  assert ran_false
+
+  ran_true = false
+
+  if not true
+    ran_true = true
   end
 
-  @test "for loops accumulate and iterate strings"
-  fn test_for_loops ! String
-    list: List<Int> = List.new()
-    list = list.append(1)
-    list = list.append(2)
-    list = list.append(3)
+  assert not ran_true
 
-    sum = 0
+  x = 10
+  ok_high = false
 
-    for item in list
-      sum += item
-    end
-
-    if sum != 6
-      fail "for sum over list"
-    end
-
-    acc = ""
-
-    for c in "abc"
-      acc = acc <> c
-    end
-
-    if acc != "abc"
-      fail "for over string codepoints"
-    end
+  if not x > 20
+    ok_high = true
   end
 
-  @test "if else nested and classify"
-  fn test_if_else ! String
-    branch = ""
+  assert ok_high
 
-    if true
-      branch = "yes"
-    end
+  ok_low = false
 
-    if branch != "yes"
-      fail "if true branch"
-    end
-
-    branch2 = ""
-
-    if false
-      branch2 = "nope"
-    else
-      branch2 = "else branch"
-    end
-
-    if branch2 != "else branch"
-      fail "if false else branch"
-    end
-
-    x = 5
-    cmp = ""
-
-    if x > 3
-      cmp = "greater"
-    else
-      cmp = "not greater"
-    end
-
-    if cmp != "greater"
-      fail "if comparison"
-    end
-
-    y = x > 2 ? "big" : "small"
-
-    if y != "big"
-      fail "ternary"
-    end
-
-    if ControlFlowTest.classify_size(200) != "big"
-      fail "classify big"
-    end
-
-    if ControlFlowTest.classify_size(50) != "medium"
-      fail "classify medium"
-    end
-
-    if ControlFlowTest.classify_size(3) != "small"
-      fail "classify small"
-    end
+  if not x < 5
+    ok_low = true
   end
 
-  @test "loop and break"
-  fn test_loop_break ! String
-    i = 0
-    count = 0
+  assert ok_low
+end
 
-    loop
-      if i >= 3
-        break
-      end
+test "while accumulation"
+  i = 0
+  seen = 0
 
-      count += 1
-      i += 1
-    end
-
-    if count != 3
-      fail "loop iterations before break"
-    end
+  while i < 5
+    seen += 1
+    i += 1
   end
 
-  @test "match integers and wildcards"
-  fn test_match_integers ! String
-    x = 3
+  assert seen == 5
 
-    label =
-      match x
-        1 -> "one"
-        2 -> "two"
-        3 -> "three"
-        _ -> "other"
-      end
+  sum = 0
+  n = 1
 
-    if label != "three"
-      fail "match literal 3"
-    end
-
-    y = 99
-    kind = ""
-
-    match y
-      1 -> kind = "one"
-      _ -> kind = "wildcard"
-    end
-
-    if kind != "wildcard"
-      fail "match wildcard"
-    end
-
-    z = 42
-
-    msg =
-      match z
-        0 -> "zero"
-        val -> "got #{val}"
-      end
-
-    if msg != "got 42"
-      fail "match bind pattern"
-    end
+  while n <= 10
+    sum += n
+    n += 1
   end
 
-  @test "match plain and tagged enums"
-  fn test_match_enums ! String
-    if ControlFlowTest.color_name(Color.Red) != "red"
-      fail "color Red"
-    end
+  assert sum == 55
+end
 
-    if ControlFlowTest.color_name(Color.Blue) != "blue"
-      fail "color Blue"
-    end
+test "cond with multiple statements per branch"
+  c = CondStmtCounter.new()
+  c = c.apply(5)
+  c = c.apply(-2)
+  c = c.apply(0)
 
-    if ControlFlowTest.shape_area(Shape.Circle(5)) != 75
-      fail "circle area"
-    end
+  assert c.value == 3
+end
 
-    if ControlFlowTest.shape_area(Shape.Rect(4, 6)) != 24
-      fail "rect area"
-    end
-
-    opt: Option<Int> = Option.Some(10)
-
-    bucket =
-      match opt
-        Option.Some(v) when v > 5 -> "big some"
-        Option.Some(_) -> "small some"
-        Option.None -> "none"
-      end
-
-    if bucket != "big some"
-      fail "Option match with guard"
-    end
+priv fn classify_size(n: Int) -> String
+  cond
+    n > 100 -> "big"
+    n > 10 -> "medium"
+    else -> "small"
   end
+end
 
-  @test "match OR patterns"
-  fn test_match_or ! String
-    if ControlFlowTest.classify_or(1) != "small"
-      fail "or classify 1"
-    end
-
-    if ControlFlowTest.classify_or(2) != "small"
-      fail "or classify 2"
-    end
-
-    if ControlFlowTest.classify_or(5) != "medium"
-      fail "or classify 5"
-    end
-
-    if ControlFlowTest.classify_or(99) != "large"
-      fail "or classify 99"
-    end
-
-    if ControlFlowTest.bracket_kind("(") != "bracket"
-      fail "bracket paren"
-    end
-
-    if ControlFlowTest.bracket_kind("]") != "bracket"
-      fail "bracket square close"
-    end
-
-    if ControlFlowTest.bracket_kind("x") != "other"
-      fail "bracket other"
-    end
-
-    if ControlFlowTest.color_warmth(Color.Red) != "warm"
-      fail "warmth red"
-    end
-
-    if ControlFlowTest.color_warmth(Color.Green) != "cool"
-      fail "warmth green"
-    end
-
-    if ControlFlowTest.color_warmth(Color.Blue) != "cool"
-      fail "warmth blue"
-    end
-
-    if ControlFlowTest.or_with_guard(3) != "three"
-      fail "or guard three"
-    end
-
-    if ControlFlowTest.or_with_guard(1) != "small"
-      fail "or guard one"
-    end
-
-    if ControlFlowTest.or_with_guard(7) != "other"
-      fail "or guard other"
-    end
+priv fn color_name(c: Color) -> String
+  match c
+    Red -> "red"
+    Green -> "green"
+    Blue -> "blue"
   end
+end
 
-  @test "if not guards"
-  fn test_if_not ! String
-    ran_false = false
-
-    if not false
-      ran_false = true
-    end
-
-    if not ran_false
-      fail "if not false should run body"
-    end
-
-    ran_true = false
-
-    if not true
-      ran_true = true
-    end
-
-    if ran_true
-      fail "if not true should not run body"
-    end
-
-    x = 10
-    ok_high = false
-
-    if not x > 20
-      ok_high = true
-    end
-
-    if not ok_high
-      fail "if not x > 20 should run when the comparison is false"
-    end
-
-    ok_low = false
-
-    if not x < 5
-      ok_low = true
-    end
-
-    if not ok_low
-      fail "if not x < 5 should run when the comparison is false"
-    end
+priv fn shape_area(s: Shape) -> Int
+  match s
+    Shape.Circle(r) -> r * r * 3
+    Shape.Rect(w, h) -> w * h
   end
+end
 
-  @test "while accumulation"
-  fn test_while ! String
-    i = 0
-    seen = 0
-
-    while i < 5
-      seen += 1
-      i += 1
-    end
-
-    if seen != 5
-      fail "while iteration count"
-    end
-
-    sum = 0
-    n = 1
-
-    while n <= 10
-      sum += n
-      n += 1
-    end
-
-    if sum != 55
-      fail "while sum 1..10"
-    end
+priv fn classify_or(n: Int) -> String
+  match n
+    1 | 2 | 3 -> "small"
+    4 | 5 | 6 -> "medium"
+    _ -> "large"
   end
+end
 
-  @test "cond with multiple statements per branch"
-  fn test_cond_multistatement ! String
-    c = CondStmtCounter.new()
-    c = c.apply(5)
-    c = c.apply(-2)
-    c = c.apply(0)
+priv fn bracket_kind(ch: String) -> String
+  match ch
+    "(" | ")" | "[" | "]" -> "bracket"
+    _ -> "other"
+  end
+end
 
-    if c.value != 3
-      fail "cond counter value"
-    end
+priv fn color_warmth(c: Color) -> String
+  match c
+    Color.Red -> "warm"
+    Color.Green | Color.Blue -> "cool"
+  end
+end
+
+priv fn or_with_guard(n: Int) -> String
+  match n
+    1 | 2 | 3 when n > 2 -> "three"
+    1 | 2 | 3 -> "small"
+    _ -> "other"
   end
 end

@@ -1,122 +1,58 @@
 alias URI.Error as URIError
 
-struct URIEncodingTest
-  @test "encode escapes only forbidden characters"
-  fn test_encode ! String
-    encoded = URI.encode("ftp://s-ite.tld/?value=put it+й")
+test "encode escapes only forbidden characters"
+  encoded = URI.encode("ftp://s-ite.tld/?value=put it+й")
+  assert encoded == "ftp://s-ite.tld/?value=put%20it+%D0%B9"
+end
 
-    if encoded != "ftp://s-ite.tld/?value=put%20it+%D0%B9"
-      fail "unexpected encoding: #{encoded}"
-    end
+test "encode keeps reserved and unreserved characters"
+  input = "abc123-._~:/?#[]@!$&'()*+,;="
+  assert URI.encode(input) == input
+end
+
+test "encode uses uppercase hex"
+  assert URI.encode("a b") == "a%20b"
+end
+
+test "decode unescapes percent sequences"
+  decoded = try Test.require(URI.decode("https%3A%2F%2Fkoja-lang.org"))
+  assert decoded == "https://koja-lang.org"
+end
+
+test "decode accepts lowercase hex"
+  decoded = try Test.require(URI.decode("%2fpath"))
+  assert decoded == "/path"
+end
+
+test "decode passes strings without escapes through"
+  decoded = try Test.require(URI.decode("plain-text_~123"))
+  assert decoded == "plain-text_~123"
+end
+
+test "decode rejects malformed percent sequences"
+  match URI.decode("bad%ZZsequence")
+    Result.Ok(decoded) -> fail "expected error, got #{decoded}"
+    Result.Err(URIError.InvalidPercentEncoding(part)) -> assert part == "%ZZ"
+    Result.Err(err) -> fail "expected InvalidPercentEncoding, got #{err}"
   end
+end
 
-  @test "encode keeps reserved and unreserved characters"
-  fn test_encode_passthrough ! String
-    input = "abc123-._~:/?#[]@!$&'()*+,;="
-    encoded = URI.encode(input)
+test "decode rejects truncated percent sequences"
+  assert URI.decode("truncated%2").err?()
+  assert URI.decode("truncated%").err?()
+end
 
-    if encoded != input
-      fail "unexpected encoding: #{encoded}"
-    end
+test "decode rejects invalid UTF-8"
+  match URI.decode("%FF")
+    Result.Ok(decoded) -> fail "expected error, got #{decoded}"
+    Result.Err(URIError.InvalidUTF8) -> ()
+    Result.Err(err) -> fail "expected InvalidUTF8, got #{err}"
   end
+end
 
-  @test "encode uses uppercase hex"
-  fn test_encode_hex_case ! String
-    encoded = URI.encode("a b")
-
-    if encoded != "a%20b"
-      fail "unexpected encoding: #{encoded}"
-    end
-  end
-
-  @test "decode unescapes percent sequences"
-  fn test_decode ! String
-    match URI.decode("https%3A%2F%2Fkoja-lang.org")
-      Result.Ok(decoded) ->
-        if decoded != "https://koja-lang.org"
-          fail "unexpected decoding: #{decoded}"
-        end
-
-      Result.Err(err) ->
-        fail "expected Ok, got #{err}"
-    end
-  end
-
-  @test "decode accepts lowercase hex"
-  fn test_decode_lowercase ! String
-    match URI.decode("%2fpath")
-      Result.Ok(decoded) ->
-        if decoded != "/path"
-          fail "unexpected decoding: #{decoded}"
-        end
-
-      Result.Err(err) ->
-        fail "expected Ok, got #{err}"
-    end
-  end
-
-  @test "decode passes strings without escapes through"
-  fn test_decode_passthrough ! String
-    match URI.decode("plain-text_~123")
-      Result.Ok(decoded) ->
-        if decoded != "plain-text_~123"
-          fail "unexpected decoding: #{decoded}"
-        end
-
-      Result.Err(err) ->
-        fail "expected Ok, got #{err}"
-    end
-  end
-
-  @test "decode rejects malformed percent sequences"
-  fn test_decode_malformed ! String
-    match URI.decode("bad%ZZsequence")
-      Result.Ok(decoded) ->
-        fail "expected error, got #{decoded}"
-
-      Result.Err(URIError.InvalidPercentEncoding(part)) ->
-        if part != "%ZZ"
-          fail "expected part %ZZ, got #{part}"
-        end
-
-      Result.Err(err) ->
-        fail "expected InvalidPercentEncoding, got #{err}"
-    end
-  end
-
-  @test "decode rejects truncated percent sequences"
-  fn test_decode_truncated ! String
-    if not URI.decode("truncated%2").err?()
-      fail "expected error for truncated sequence"
-    end
-
-    if not URI.decode("truncated%").err?()
-      fail "expected error for bare percent"
-    end
-  end
-
-  @test "decode rejects invalid UTF-8"
-  fn test_decode_invalid_utf8 ! String
-    match URI.decode("%FF")
-      Result.Ok(decoded) -> fail "expected error, got #{decoded}"
-      Result.Err(URIError.InvalidUTF8) -> ()
-      Result.Err(err) -> fail "expected InvalidUTF8, got #{err}"
-    end
-  end
-
-  @test "decode reverses encode"
-  fn test_round_trip ! String
-    input = "hello world/й?=100%"
-    encoded = URI.encode(input)
-
-    match URI.decode(encoded)
-      Result.Ok(decoded) ->
-        if decoded != input
-          fail "round trip failed: #{input} -> #{encoded} -> #{decoded}"
-        end
-
-      Result.Err(err) ->
-        fail "expected Ok, got #{err}"
-    end
-  end
+test "decode reverses encode"
+  input = "hello world/й?=100%"
+  encoded = URI.encode(input)
+  decoded = try Test.require(URI.decode(encoded))
+  assert decoded == input
 end

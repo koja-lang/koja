@@ -1,149 +1,60 @@
-struct DecodeTest
-  @test "decode null"
-  fn test_decode_null ! String
-    match decode("null")
-      Result.Ok(val) ->
-        result = encode(val)
+test "decode null"
+  val = try Test.require(decode("null"))
+  assert encode(val) == "null"
+end
 
-        if result != "null"
-          fail "expected \"null\", got #{result}"
-        end
+test "decode true"
+  val = try Test.require(decode("true"))
+  assert encode(val) == "true"
+end
 
-      Result.Err(msg) ->
-        fail "decode failed: #{msg}"
-    end
+test "decode integer"
+  val = try Test.require(decode("42"))
+  assert encode(val) == "42"
+end
+
+test "decode string"
+  val = try Test.require(decode("\"hello\""))
+  assert encode(val) == "\"hello\""
+end
+
+test "decode empty array"
+  val = try Test.require(decode("[]"))
+  assert encode(val) == "[]"
+end
+
+test "decode array"
+  val = try Test.require(decode("[1, 2, 3]"))
+  assert encode(val) == "[1,2,3]"
+end
+
+test "decode object"
+  val = try Test.require(decode("{\"key\": \"value\"}"))
+  assert encode(val) == "{\"key\":\"value\"}"
+end
+
+test "round trip object"
+  input = "{\"name\":\"koja\",\"version\":\"0.1.0\",\"tags\":[1,2,3]}"
+  val = try Test.require(decode(input))
+  assert encode(val) == input
+end
+
+# The decoder recurses once per element. A long array pins that
+# the recursion runs in constant stack and keeps one live copy of
+# the accumulator, since a few thousand frames would overflow the
+# process stack and per-frame copies would use quadratic memory.
+test "decode long array"
+  count = 5000
+  parts: List<String> = List.new()
+
+  for i in Range{start: 0, stop: count - 1}
+    parts = parts.append("#{i}.5")
   end
 
-  @test "decode true"
-  fn test_decode_true ! String
-    match decode("true")
-      Result.Ok(val) ->
-        result = encode(val)
+  input = "[" <> String.join(parts, ",") <> "]"
 
-        if result != "true"
-          fail "expected \"true\", got #{result}"
-        end
-
-      Result.Err(msg) ->
-        fail "decode failed: #{msg}"
-    end
-  end
-
-  @test "decode integer"
-  fn test_decode_integer ! String
-    match decode("42")
-      Result.Ok(val) ->
-        result = encode(val)
-
-        if result != "42"
-          fail "expected \"42\", got #{result}"
-        end
-
-      Result.Err(msg) ->
-        fail "decode failed: #{msg}"
-    end
-  end
-
-  @test "decode string"
-  fn test_decode_string ! String
-    match decode("\"hello\"")
-      Result.Ok(val) ->
-        result = encode(val)
-
-        if result != "\"hello\""
-          fail "expected '\"hello\"', got #{result}"
-        end
-
-      Result.Err(msg) ->
-        fail "decode failed: #{msg}"
-    end
-  end
-
-  @test "decode empty array"
-  fn test_decode_empty_array ! String
-    match decode("[]")
-      Result.Ok(val) ->
-        result = encode(val)
-
-        if result != "[]"
-          fail "expected \"[]\", got #{result}"
-        end
-
-      Result.Err(msg) ->
-        fail "decode failed: #{msg}"
-    end
-  end
-
-  @test "decode array"
-  fn test_decode_array ! String
-    match decode("[1, 2, 3]")
-      Result.Ok(val) ->
-        result = encode(val)
-
-        if result != "[1,2,3]"
-          fail "expected \"[1,2,3]\", got #{result}"
-        end
-
-      Result.Err(msg) ->
-        fail "decode failed: #{msg}"
-    end
-  end
-
-  @test "decode object"
-  fn test_decode_object ! String
-    match decode("{\"key\": \"value\"}")
-      Result.Ok(val) ->
-        result = encode(val)
-
-        if result != "{\"key\":\"value\"}"
-          fail "expected '{\"key\":\"value\"}', got #{result}"
-        end
-
-      Result.Err(msg) ->
-        fail "decode failed: #{msg}"
-    end
-  end
-
-  @test "round trip object"
-  fn test_round_trip ! String
-    input = "{\"name\":\"koja\",\"version\":\"0.1.0\",\"tags\":[1,2,3]}"
-
-    match decode(input)
-      Result.Ok(val) ->
-        output = encode(val)
-
-        if output != input
-          fail "round trip failed: #{output}"
-        end
-
-      Result.Err(msg) ->
-        fail "decode failed: #{msg}"
-    end
-  end
-
-  # The decoder recurses once per element. A long array pins that
-  # the recursion runs in constant stack and keeps one live copy of
-  # the accumulator, since a few thousand frames would overflow the
-  # process stack and per-frame copies would use quadratic memory.
-  @test "decode long array"
-  fn test_decode_long_array ! String
-    count = 5000
-    parts: List<String> = List.new()
-
-    for i in Range{start: 0, stop: count - 1}
-      parts = parts.append("#{i}.5")
-    end
-
-    input = "[" <> String.join(parts, ",") <> "]"
-
-    match try decode(input)
-      Value.Array(items) ->
-        if items.length() != count
-          fail "expected #{count} items, got #{items.length()}"
-        end
-
-      _ ->
-        fail "expected an array"
-    end
+  match try Test.require(decode(input))
+    Value.Array(items) -> assert items.length() == count
+    _ -> fail "expected an array"
   end
 end

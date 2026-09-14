@@ -1,43 +1,20 @@
-struct RandomTest
-  @test "Random.bytes sizes"
-  fn test_bytes_sizes ! String
-    if Random.bytes(0).byte_size() != 0
-      fail "bytes(0) size"
-    end
+test "Random.bytes sizes"
+  for size in [0, 1, 16, 100]
+    assert Random.bytes(size).byte_size() == size
+  end
+end
 
-    if Random.bytes(1).byte_size() != 1
-      fail "bytes(1) size"
-    end
+test "Random.int range"
+  trials = 0
 
-    if Random.bytes(16).byte_size() != 16
-      fail "bytes(16) size"
-    end
+  while trials < 32
+    n = Random.int(1, 10)
 
-    if Random.bytes(100).byte_size() != 100
-      fail "bytes(100) size"
-    end
+    assert n >= 1
+    assert n <= 10
+
+    trials += 1
   end
 
-  @test "Random.int range"
-  fn test_int_inclusive_range ! String
-    trials = 0
-
-    while trials < 32
-      n = Random.int(1, 10)
-
-      if n < 1
-        fail "Random.int below min"
-      end
-
-      if n > 10
-        fail "Random.int above max"
-      end
-
-      trials += 1
-    end
-
-    if Random.int(42, 42) != 42
-      fail "singleton range should return that value"
-    end
-  end
+  assert Random.int(42, 42) == 42
 end

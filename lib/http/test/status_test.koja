@@ -1,97 +1,43 @@
-struct StatusTest
-  @test "Status.ok returns 200"
-  fn test_status_ok ! String
-    s = Status.ok()
+test "Status.ok returns 200"
+  s = Status.ok()
 
-    if s.code != 200
-      fail "expected code 200"
-    end
+  assert s.code == 200
+  assert s.reason == "OK"
+end
 
-    if s.reason != "OK"
-      fail "expected reason OK"
-    end
-  end
+test "Status.not_found returns 404"
+  assert Status.not_found().code == 404
+end
 
-  @test "Status.not_found returns 404"
-  fn test_status_not_found ! String
-    s = Status.not_found()
+test "Status.internal_server_error returns 500"
+  assert Status.internal_server_error().code == 500
+end
 
-    if s.code != 404
-      fail "expected code 404"
-    end
-  end
+test "Status.new creates custom status"
+  s = Status.new(418, "I'm a Teapot")
 
-  @test "Status.internal_server_error returns 500"
-  fn test_status_internal_server_error ! String
-    s = Status.internal_server_error()
+  assert s.code == 418
+  assert s.reason == "I'm a Teapot"
+end
 
-    if s.code != 500
-      fail "expected code 500"
-    end
-  end
+test "Status.ok? checks 2xx range"
+  assert Status.ok().ok?()
+  assert Status.created().ok?()
+  assert not Status.not_found().ok?()
+end
 
-  @test "Status.new creates custom status"
-  fn test_status_new ! String
-    s = Status.new(418, "I'm a Teapot")
+test "Status.redirect? checks 3xx range"
+  assert Status.new(301, "Moved").redirect?()
+  assert not Status.ok().redirect?()
+end
 
-    if s.code != 418
-      fail "expected code 418"
-    end
+test "Status.client_error? checks 4xx range"
+  assert Status.bad_request().client_error?()
+  assert Status.not_found().client_error?()
+  assert not Status.ok().client_error?()
+end
 
-    if s.reason != "I'm a Teapot"
-      fail "expected custom reason"
-    end
-  end
-
-  @test "Status.ok? checks 2xx range"
-  fn test_status_ok_predicate ! String
-    if not Status.ok().ok?()
-      fail "200 should be ok"
-    end
-
-    if not Status.created().ok?()
-      fail "201 should be ok"
-    end
-
-    if Status.not_found().ok?()
-      fail "404 should not be ok"
-    end
-  end
-
-  @test "Status.redirect? checks 3xx range"
-  fn test_status_redirect_predicate ! String
-    if not Status.new(301, "Moved").redirect?()
-      fail "301 should be redirect"
-    end
-
-    if Status.ok().redirect?()
-      fail "200 should not be redirect"
-    end
-  end
-
-  @test "Status.client_error? checks 4xx range"
-  fn test_status_client_error_predicate ! String
-    if not Status.bad_request().client_error?()
-      fail "400 should be client error"
-    end
-
-    if not Status.not_found().client_error?()
-      fail "404 should be client error"
-    end
-
-    if Status.ok().client_error?()
-      fail "200 should not be client error"
-    end
-  end
-
-  @test "Status.server_error? checks 5xx range"
-  fn test_status_server_error_predicate ! String
-    if not Status.internal_server_error().server_error?()
-      fail "500 should be server error"
-    end
-
-    if Status.ok().server_error?()
-      fail "200 should not be server error"
-    end
-  end
+test "Status.server_error? checks 5xx range"
+  assert Status.internal_server_error().server_error?()
+  assert not Status.ok().server_error?()
 end

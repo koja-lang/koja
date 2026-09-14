@@ -6,76 +6,53 @@ const FAKE_ENCRYPTED_KEY: String = "-----BEGIN ENCRYPTED PRIVATE KEY-----\nMIIF\
 const FAKE_PKCS8_KEY: String = "-----BEGIN PRIVATE KEY-----\nMIGH\n-----END PRIVATE KEY-----\n"
 const FAKE_RSA_KEY: String = "-----BEGIN RSA PRIVATE KEY-----\nMIIE\n-----END RSA PRIVATE KEY-----\n"
 
-struct CertificateTest
-  @test "Certificate.parse accepts a CERTIFICATE block"
-  fn test_accepts_certificate ! String
-    match Certificate.parse(FAKE_CERT)
-      Result.Ok(cert) ->
-        if cert.pem != FAKE_CERT
-          fail "expected pem text to be preserved"
-        end
+test "Certificate.parse accepts a CERTIFICATE block"
+  cert = try Test.require(Certificate.parse(FAKE_CERT))
+  assert cert.pem == FAKE_CERT
+end
 
-      Result.Err(e) ->
-        fail "expected Ok, got: " <> e.message()
-    end
-  end
-
-  @test "Certificate.parse points out a swapped private key"
-  fn test_rejects_private_key ! String
-    match Certificate.parse(FAKE_PKCS8_KEY)
-      Result.Err(PEMError.CertificateIsPrivateKey) -> ()
-      Result.Err(e) -> fail "unexpected error: " <> e.message()
-      Result.Ok(_) -> fail "expected private key input to be rejected"
-    end
-  end
-
-  @test "Certificate.parse rejects non-PEM text"
-  fn test_rejects_garbage ! String
-    match Certificate.parse("not a certificate")
-      Result.Err(PEMError.NoCertificateBlock) -> ()
-      Result.Err(e) -> fail "unexpected error: " <> e.message()
-      Result.Ok(_) -> fail "expected garbage input to be rejected"
-    end
+test "Certificate.parse points out a swapped private key"
+  match Certificate.parse(FAKE_PKCS8_KEY)
+    Result.Err(PEMError.CertificateIsPrivateKey) -> ()
+    Result.Err(e) -> fail "unexpected error: #{e.message()}"
+    Result.Ok(_) -> fail "expected private key input to be rejected"
   end
 end
 
-struct PrivateKeyTest
-  @test "PrivateKey.parse accepts PKCS#8, RSA, and EC blocks"
-  fn test_accepts_key_labels ! String
-    PrivateKey.parse(FAKE_PKCS8_KEY)
-      rescue e -> fail "PKCS#8 rejected: " <> e.message()
-
-    PrivateKey.parse(FAKE_RSA_KEY)
-      rescue e -> fail "RSA rejected: " <> e.message()
-
-    PrivateKey.parse(FAKE_EC_KEY)
-      rescue e -> fail "EC rejected: " <> e.message()
+test "Certificate.parse rejects non-PEM text"
+  match Certificate.parse("not a certificate")
+    Result.Err(PEMError.NoCertificateBlock) -> ()
+    Result.Err(e) -> fail "unexpected error: #{e.message()}"
+    Result.Ok(_) -> fail "expected garbage input to be rejected"
   end
+end
 
-  @test "PrivateKey.parse rejects passphrase-protected keys"
-  fn test_rejects_encrypted_key ! String
-    match PrivateKey.parse(FAKE_ENCRYPTED_KEY)
-      Result.Err(PEMError.EncryptedKeyUnsupported) -> ()
-      Result.Err(e) -> fail "unexpected error: " <> e.message()
-      Result.Ok(_) -> fail "expected encrypted key to be rejected"
-    end
+test "PrivateKey.parse accepts PKCS#8, RSA, and EC blocks"
+  try Test.require(PrivateKey.parse(FAKE_PKCS8_KEY))
+  try Test.require(PrivateKey.parse(FAKE_RSA_KEY))
+  try Test.require(PrivateKey.parse(FAKE_EC_KEY))
+end
+
+test "PrivateKey.parse rejects passphrase-protected keys"
+  match PrivateKey.parse(FAKE_ENCRYPTED_KEY)
+    Result.Err(PEMError.EncryptedKeyUnsupported) -> ()
+    Result.Err(e) -> fail "unexpected error: #{e.message()}"
+    Result.Ok(_) -> fail "expected encrypted key to be rejected"
   end
+end
 
-  @test "PrivateKey.parse points out a swapped certificate"
-  fn test_rejects_certificate ! String
-    match PrivateKey.parse(FAKE_CERT)
-      Result.Err(PEMError.PrivateKeyIsCertificate) -> ()
-      Result.Err(e) -> fail "unexpected error: " <> e.message()
-      Result.Ok(_) -> fail "expected certificate input to be rejected"
-    end
+test "PrivateKey.parse points out a swapped certificate"
+  match PrivateKey.parse(FAKE_CERT)
+    Result.Err(PEMError.PrivateKeyIsCertificate) -> ()
+    Result.Err(e) -> fail "unexpected error: #{e.message()}"
+    Result.Ok(_) -> fail "expected certificate input to be rejected"
   end
+end
 
-  @test "PrivateKey.parse rejects non-PEM text"
-  fn test_rejects_garbage ! String
-    match PrivateKey.parse("not a key")
-      Result.Err(PEMError.NoPrivateKeyBlock) -> ()
-      Result.Err(e) -> fail "unexpected error: " <> e.message()
-      Result.Ok(_) -> fail "expected garbage input to be rejected"
-    end
+test "PrivateKey.parse rejects non-PEM text"
+  match PrivateKey.parse("not a key")
+    Result.Err(PEMError.NoPrivateKeyBlock) -> ()
+    Result.Err(e) -> fail "unexpected error: #{e.message()}"
+    Result.Ok(_) -> fail "expected garbage input to be rejected"
   end
 end

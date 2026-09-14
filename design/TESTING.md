@@ -1,10 +1,10 @@
 # Testing
 
-**Status: design accepted (2026-09-12), not implemented.** This document is
-normative for the `test` declaration, the `assert` statement, the `Test`
-package, and the `koja test` runner. [LANGUAGE.md](../LANGUAGE.md) documents
-the shipped surface. The `@test` contract described there stays valid
-through 0.19 and is removed in 0.20. The assertion helper sketch in
+**Status: design accepted (2026-09-12), implemented in 0.19.** This
+document is normative for the `test` declaration, the `assert` statement,
+the `Test` package, and the `koja test` runner. [LANGUAGE.md](../LANGUAGE.md)
+documents the shipped surface. The `@test` contract described there stays
+valid through 0.19 and is removed in 0.20. The assertion helper sketch in
 [ERROR-HANDLING.md](ERROR-HANDLING.md#koja-test-rides-along) is superseded
 by this document.
 
@@ -625,18 +625,19 @@ otherwise. Skipped tests do not affect it.
 ## Compatibility and migration
 
 - `@test "description"` on a `fn ... ! String` keeps working through 0.19.
-  The compiler reports a deprecation warning that names the `test`
-  declaration. The warning lands after the stdlib has migrated, so a clean
-  stdlib build never carries hundreds of warnings. The annotation and its
-  runner path are removed in 0.20.
+  The compiler reports a deprecation warning at the annotation, with a hint
+  that names the `test` declaration. The warning landed after the stdlib
+  migrated, so a clean stdlib build carries no warnings. The annotation and
+  its runner path are removed in 0.20.
 - Old and new tests coexist in one run and one struct.
 - No formatter rewrite and no migration command. Flattening a wrapper struct
   into `test` blocks changes name resolution for helpers, which is not a
   trivia change, and turning `if x != y` then `fail` into `assert x == y`
-  loses or reshapes the message. The stdlib's tests, the `koja new`
-  scaffold, and the examples migrate by hand or by agent within the 0.19
-  cycle.
-- `test` and `assert` become keywords. Neither is used as an identifier in
+  loses or reshapes the message. The stdlib's tests and the `koja new`
+  scaffold migrated by hand in the 0.19 cycle. The examples migrate after
+  0.19 ships, so a reader on the release still sees the form the release
+  notes describe.
+- `test` and `assert` are keywords. Neither was used as an identifier in
   the stdlib or the language suite. The annotation parser keeps accepting
   `@test` while the token exists.
 
@@ -844,7 +845,12 @@ more commits at its boundary, so a bisect can name the phase.
    libraries and compile one that ships only a static archive. The
    language suite runs the FFI fixtures on both backends. Independent of
    the first three phases. About 500 lines of Rust.
-5. **Migration.** The stdlib's tests, the `koja new` scaffold, and the
-   examples move to `test` and `assert` one package per pull request, each
-   run on both backends. Then the `@test` deprecation warning,
-   `LANGUAGE.md`, `CHANGELOG.md`, `grammar.ebnf`, and the sibling repos.
+5. **Migration.** Done. The stdlib's tests and the `koja new` scaffold
+   moved to `test` and `assert`, each package run on both backends with
+   its test count unchanged. Migrating the stdlib exposed one compiler
+   gap: `assert` bound its operands before the resolver saw the `==`, so
+   the right operand lost the left's type. The desugaring now resolves
+   the left operand first and hands its type to the right. Then the
+   `@test` deprecation warning, `LANGUAGE.md`, and `CHANGELOG.md`.
+   `grammar.ebnf` already carried both constructs. The examples and the
+   sibling repos follow after 0.19 ships.

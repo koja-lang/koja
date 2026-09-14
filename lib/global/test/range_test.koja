@@ -1,35 +1,26 @@
-struct RangeTest
-  @test "inclusive, empty, and maximum ranges"
-  fn test_iteration ! String
-    values: List<Int> = List.new()
+test "inclusive, empty, and maximum ranges"
+  values: List<Int> = List.new()
 
-    for value in Range{start: 2, stop: 4}
-      values = values.append(value)
-    end
-
-    if values != [2, 3, 4]
-      fail "range did not include both endpoints"
-    end
-
-    count = 0
-
-    for _ in Range{start: 4, stop: 2}
-      count += 1
-    end
-
-    if count != 0
-      fail "empty range produced a value"
-    end
-
-    maximum = 9223372036854775807
-    last = 0
-
-    for value in Range{start: maximum, stop: maximum}
-      last = value
-    end
-
-    if last != maximum
-      fail "maximum range endpoint was not produced"
-    end
+  for value in Range{start: 2, stop: 4}
+    values = values.append(value)
   end
+
+  assert values == [2, 3, 4]
+
+  count = 0
+
+  for _ in Range{start: 4, stop: 2}
+    count += 1
+  end
+
+  assert count == 0
+
+  maximum = 9223372036854775807
+  last = 0
+
+  for value in Range{start: maximum, stop: maximum}
+    last = value
+  end
+
+  assert last == maximum
 end

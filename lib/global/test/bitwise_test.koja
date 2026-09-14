@@ -1,41 +1,15 @@
-struct BitwiseTest
-  @test "band bor bxor bnot bsl bsr"
-  fn test_bitwise_ops ! String
-    if 5.band(3) != 1
-      fail "band"
-    end
+test "band bor bxor bnot bsl bsr"
+  assert 5.band(3) == 1
+  assert 5.bor(3) == 7
+  assert 5.bxor(3) == 6
+  assert 0.bnot() == -1
+  assert 1.bsl(4) == 16
+  assert 16.bsr(4) == 1
+end
 
-    if 5.bor(3) != 7
-      fail "bor"
-    end
+test "chained bitwise on flags"
+  flags = 0xFF
 
-    if 5.bxor(3) != 6
-      fail "bxor"
-    end
-
-    if 0.bnot() != -1
-      fail "bnot"
-    end
-
-    if 1.bsl(4) != 16
-      fail "bsl"
-    end
-
-    if 16.bsr(4) != 1
-      fail "bsr"
-    end
-  end
-
-  @test "chained bitwise on flags"
-  fn test_flags_chain ! String
-    flags = 0xFF
-
-    if flags.band(0x0F) != 15
-      fail "flags band 0x0F"
-    end
-
-    if flags.band(0x0F).bor(0x30) != 63
-      fail "band then bor"
-    end
-  end
+  assert flags.band(0x0F) == 15
+  assert flags.band(0x0F).bor(0x30) == 63
 end

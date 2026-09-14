@@ -1,16 +1,5 @@
-struct TaskTest
-  @test "async and await roundtrip"
-  fn test_async_await ! String
-    t = Task.async(fn () -> Int 42 end)
-
-    match Task.await(t)
-      Result.Err(_) ->
-        fail "Task.await returned Err"
-
-      Result.Ok(v) ->
-        if v != 42
-          fail "expected 42, got #{v}"
-        end
-    end
-  end
+test "async and await roundtrip"
+  t = Task.async(fn () -> Int 42 end)
+  v = try Test.require(Task.await(t))
+  assert v == 42
 end

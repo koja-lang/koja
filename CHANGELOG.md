@@ -22,6 +22,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `koja test` runs each test in its own process. A crash or a hang is one failed test instead of the end of the run. The deadline is per test and defaults to 60 seconds, replacing the 60 second limit on the whole run.
 - `koja test` output follows the compiler's diagnostics style. `--trace` groups tests under their file, type, `Type: Protocol`, or extend target. A failed assertion draws its source line with the expression underlined and both operands labeled in the pretty style, or prints one `file:line:column: failure: ...` line in the short style. `--diagnostics`, `KOJA_DIAGNOSTICS`, `--no-color`, and `NO_COLOR` apply to `koja test` as they do to `koja check`, so piped output carries no color.
 - `koja format` keeps the members of a type body in source order. A `test` block, a nested type, and a function stay where the author put them instead of grouping by kind.
+- In `assert a == b` the right operand is typed from the left, so a literal or a unit variant on the right takes the left's type. `assert count == 0` against a `UInt32` and `assert stack.peek() == Option.None` now typecheck without an annotated local.
+
+### Deprecated
+
+- `@test` is deprecated and will be removed in 0.20. Every annotation reports a warning that points at the `test "description"` block. The function still runs under `koja test` until then.
 
 ### Fixed
 

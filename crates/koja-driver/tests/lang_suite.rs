@@ -1420,7 +1420,8 @@ fn assert_contains_all(label: &str, haystack: &str, needles: &[&str]) {
 /// `koja test --trace` groups by struct and prints each test's name
 /// with its `path:line` plus same-line result + timing. Color follows
 /// the diagnostics rule, which needs a terminal, so a piped run never
-/// carries ANSI escapes.
+/// carries ANSI escapes. The fixture keeps the legacy `@test` form, so
+/// every annotation also warns on stderr while the tests still run.
 #[test]
 fn lang_test_trace() {
     let (stdout, stderr, code) = run_koja_test_trace(&["--trace"]);
@@ -1443,11 +1444,27 @@ fn lang_test_trace() {
         !stdout.contains('\u{1b}'),
         "expected piped output to carry no ANSI escapes, got:\n{stdout}"
     );
+    assert_contains_all(
+        "trace stderr",
+        &stderr,
+        &[
+            "warning: `@test` is deprecated. Koja 0.20 removes it.\n  ╭─ test/alpha_test.koja:2:3\n",
+            "2 │   @test \"first alpha test\"\n",
+            "╰─ move the body into a `test \"description\"` block",
+            "╭─ test/alpha_test.koja:7:3\n",
+            "╭─ test/beta_test.koja:2:3\n",
+        ],
+    );
+    assert_eq!(
+        stderr.matches("`@test` is deprecated").count(),
+        3,
+        "one warning per annotation:\n{stderr}"
+    );
 }
 
 /// `assert`, `Test.require`, `Test.skip`, `Test.crashes`, and
-/// `fail "..."` on a `! Test.Failure` channel, end to end through the
-/// `@test` harness. Passing tests pass, each failing test renders its
+/// `fail "..."` inside top-level `test` blocks, end to end through the
+/// harness. Passing tests pass, each failing test renders its
 /// `Test.Failure` as a pretty snippet in the failures block, and the
 /// skipped test lands in its own block and count.
 #[test]
@@ -1461,19 +1478,19 @@ fn lang_test_assert() {
         "stdout",
         &stdout,
         &[
-            "push then pop (test/stack_test.koja:3) ... ok",
-            "require unwraps a setup step (test/stack_test.koja:22) ... ok",
-            "skip ends the test as skipped (test/stack_test.koja:28) ... skip",
-            "crashes sees a panic (test/stack_test.koja:34) ... ok",
-            "failure: assertion failed\n   ╭─ test/stack_test.koja:12:12\n",
-            "12 │     assert popped == 3\n",
+            "push then pop (test/stack_test.koja:1) ... ok",
+            "require unwraps a setup step (test/stack_test.koja:17) ... ok",
+            "skip ends the test as skipped (test/stack_test.koja:22) ... skip",
+            "crashes sees a panic (test/stack_test.koja:27) ... ok",
+            "failure: assertion failed\n  ╭─ test/stack_test.koja:9:10\n",
+            "9 │   assert popped == 3\n",
             "left:  2\n",
             "right: 3\n",
-            "18 │     assert stack.empty?(), \"one element left\"\n",
+            "14 │   assert stack.empty?(), \"one element left\"\n",
             "= help: one element left",
-            "failure: a plain message\n   ╭─ test/stack_test.koja:40\n",
-            "46 │     assert [1, 2].length() > 5\n",
-            "Skipped:\n\ntest/stack_test.koja:28: skipped: no fixture here",
+            "failure: a plain message\n   ╭─ test/stack_test.koja:32\n",
+            "37 │   assert [1, 2].length() > 5\n",
+            "Skipped:\n\ntest/stack_test.koja:22: skipped: no fixture here",
             "3 successful tests. 4 failures. 1 skipped.",
         ],
     );
@@ -1503,11 +1520,12 @@ fn lang_test_decl() {
         "two tests may share a description (test/top_level_test.koja:5) ... ok",
         "two tests may share a description (test/top_level_test.koja:9) ... ok",
         "a trailing expression needs no unit (test/top_level_test.koja:13) ... ok",
+        "the right operand takes the left operand's type (test/top_level_test.koja:17) ... ok",
         "failure: assertion failed\n   ╭─ test/stack_test.koja:18:12\n",
         "18 │     assert Stack.new().push(1).size() == 2\n",
         "left:  1\n",
         "right: 2\n",
-        "12 successful tests. 1 failures.",
+        "13 successful tests. 1 failures.",
     ];
 
     for backend in BACKENDS {

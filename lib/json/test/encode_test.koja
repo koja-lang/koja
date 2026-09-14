@@ -10,152 +10,72 @@ impl Encoding for EncodedPoint
   end
 end
 
-struct EncodeTest
-  @test "encode null"
-  fn test_encode_null ! String
-    result = encode(Value.null())
+test "encode null"
+  assert encode(Value.null()) == "null"
+end
 
-    if result != "null"
-      fail "expected \"null\", got #{result}"
-    end
-  end
+test "encode true"
+  assert encode(Value.bool(true)) == "true"
+end
 
-  @test "encode true"
-  fn test_encode_true ! String
-    result = encode(Value.bool(true))
+test "encode false"
+  assert encode(Value.bool(false)) == "false"
+end
 
-    if result != "true"
-      fail "expected \"true\", got #{result}"
-    end
-  end
+test "encode integer"
+  assert encode(Value.int(42)) == "42"
+end
 
-  @test "encode false"
-  fn test_encode_false ! String
-    result = encode(Value.bool(false))
+test "encode string"
+  assert encode(Value.string("hello")) == "\"hello\""
+end
 
-    if result != "false"
-      fail "expected \"false\", got #{result}"
-    end
-  end
+test "encode empty array"
+  assert encode(Value.array([])) == "[]"
+end
 
-  @test "encode integer"
-  fn test_encode_int ! String
-    result = encode(Value.int(42))
+test "encode array with elements"
+  assert encode(Value.array([Value.int(1), Value.int(2), Value.int(3)])) ==
+    "[1,2,3]"
+end
 
-    if result != "42"
-      fail "expected \"42\", got #{result}"
-    end
-  end
+test "encode empty object"
+  assert encode(Value.object([])) == "{}"
+end
 
-  @test "encode string"
-  fn test_encode_string ! String
-    result = encode(Value.string("hello"))
+test "encode object"
+  assert encode(Value.object([Value.entry("name", Value.string("koja"))])) ==
+    "{\"name\":\"koja\"}"
+end
 
-    if result != "\"hello\""
-      fail "expected '\"hello\"', got #{result}"
-    end
-  end
+test "encode protocol values"
+  assert encode(true) == "true"
+  assert encode(-42) == "-42"
+  assert encode(1.5) == "1.5"
+  assert encode("hello") == "\"hello\""
+  assert encode([1, 2, 3]) == "[1,2,3]"
+end
 
-  @test "encode empty array"
-  fn test_encode_empty_array ! String
-    result = encode(Value.array([]))
+test "encode nested JSON literals"
+  value: Value = [
+    "first": 1, "first": 2, "nested": [true, -3, 1.5, "x"], "empty": [:]
+  ]
+  expected = "{\"first\":1,\"first\":2,\"nested\":[true,-3,1.5,\"x\"],\"empty\":{}}"
 
-    if result != "[]"
-      fail "expected \"[]\", got #{result}"
-    end
-  end
+  assert encode(value) == expected
+end
 
-  @test "encode array with elements"
-  fn test_encode_array ! String
-    result = encode(Value.array([Value.int(1), Value.int(2), Value.int(3)]))
+test "encode user protocol implementation"
+  assert encode(EncodedPoint{x: 3, y: 4}) == "{\"x\":3,\"y\":4}"
+end
 
-    if result != "[1,2,3]"
-      fail "expected \"[1,2,3]\", got #{result}"
-    end
-  end
+test "encode defaults to compact output"
+  value: Value = ["active": true]
+  assert encode(value) == "{\"active\":true}"
+end
 
-  @test "encode empty object"
-  fn test_encode_empty_object ! String
-    result = encode(Value.object([]))
-
-    if result != "{}"
-      fail "expected \"{}\", got #{result}"
-    end
-  end
-
-  @test "encode object"
-  fn test_encode_object ! String
-    result = encode(Value.object([Value.entry("name", Value.string("koja"))]))
-
-    if result != "{\"name\":\"koja\"}"
-      fail "expected '{\"name\":\"koja\"}', got #{result}"
-    end
-  end
-
-  @test "encode protocol values"
-  fn test_encode_protocol_values ! String
-    if encode(true) != "true"
-      fail "failed to encode Bool"
-    end
-
-    if encode(-42) != "-42"
-      fail "failed to encode Int"
-    end
-
-    if encode(1.5) != "1.5"
-      fail "failed to encode Float"
-    end
-
-    if encode("hello") != "\"hello\""
-      fail "failed to encode String"
-    end
-
-    if encode([1, 2, 3]) != "[1,2,3]"
-      fail "failed to encode List<Int>"
-    end
-  end
-
-  @test "encode nested JSON literals"
-  fn test_encode_nested_literals ! String
-    value: Value = [
-      "first": 1, "first": 2, "nested": [true, -3, 1.5, "x"], "empty": [:]
-    ]
-    result = encode(value)
-    expected = "{\"first\":1,\"first\":2,\"nested\":[true,-3,1.5,\"x\"],\"empty\":{}}"
-
-    if result != expected
-      fail "expected #{expected}, got #{result}"
-    end
-  end
-
-  @test "encode user protocol implementation"
-  fn test_encode_user_protocol ! String
-    result = encode(EncodedPoint{x: 3, y: 4})
-
-    if result != "{\"x\":3,\"y\":4}"
-      fail "expected point object, got #{result}"
-    end
-  end
-
-  @test "encode defaults to compact output"
-  fn test_encode_default_compact ! String
-    value: Value = ["active": true]
-    result = encode(value)
-    expected = "{\"active\":true}"
-
-    if result != expected
-      fail "expected compact object, got #{result}"
-    end
-  end
-
-  @test "encode accepts pretty options"
-  fn test_encode_pretty_options ! String
-    value: Value = ["active": true]
-    result = encode(value, EncodeOptions{pretty?: true})
-    expected = "{\n  \"active\": true\n}"
-
-    if result != expected
-      fail "expected pretty object, got #{result}"
-    end
-  end
+test "encode accepts pretty options"
+  value: Value = ["active": true]
+  assert encode(value, EncodeOptions{pretty?: true}) ==
+    "{\n  \"active\": true\n}"
 end

@@ -563,31 +563,70 @@ nanosecond constructors and accessors. `Outcome` then carries a
 
 ---
 
-## `assert` operands lose contextual typing
+## `assert` types its comparison left to right only
 
-Found 2026-09-13 while migrating the postgres-koja tests. The `assert`
-desugaring binds each operand of a comparison to a temporary before the
-comparison, so the operands are typed alone and the right one never
-sees the left one's type:
+The `assert` desugaring binds each operand of a comparison to a
+temporary so the failure can render both values. The right operand
+resolves with the left operand's type as the expected type, so
+`assert missed == Option.None` and `assert crc == 0` on a `UInt32`
+typecheck the way the same `if` does. The reverse direction does not:
 
 ```koja
-(cache, missed) = cache.hit("k")
-assert missed == Option.None
-# error: cannot infer type parameter `T` of `Global.Option` from unit variant `None`
+assert CPtr.null() == p
+# error: cannot infer type parameter `T` of `Global.CPtr`
 ```
 
-The same comparison in an `if` typechecks, because `==` infers a unit
-variant from the other operand. The `assert` form has to spell the
-type (`none: Option<String> = Option.None`) or switch to a predicate
-(`assert missed.none?()`), and the predicate form gives up the operand
-rendering in the failure.
+An `if` handles this shape with a speculative resolve of the left
+operand and a retry from the right (`resolve_operands_with_sibling_hint`
+in `ops.rs`). The `assert` walker resolves the bindings as statements
+and has no speculation for them. Put the concrete value on the left.
 
-**Fix path:** in the `assert` desugar, typecheck the right operand with
-the left operand's type as the expected type before binding it, the way
-the `==` resolver already does for the plain expression. A
-`tests/lang/test_*` fixture with `assert x == Option.None` and
-`assert Message.decode(frame) == Backend.ReadyForQuery` covers both the
-generic and the plain unit variant.
+**Fix path:** try the left binding under a `Speculation`, and when it
+fails, roll back, resolve the right binding first, and resolve the left
+with the right's type as the hint. The speculation helper works on
+expressions, so it needs a statement-shaped wrapper or the assert walker
+needs to bind the operand expressions directly.
+
+---
+
+## Numeric literals are typed in two places
+
+An integer or float literal gets its type from two mechanisms that do
+not know about each other.
+
+The literal resolver (`literals/scalar.rs`) takes an expected type, but
+for an integer literal it only acts when that type is a user type that
+implements `IntLiteral`. Then it dispatches through `from_int`. When the
+expected type is a builtin width such as `UInt32`, the literal resolves
+as `Int` and the expected type is ignored.
+
+The slot owner then runs `check_compatible` (`coercion.rs`). It sees a
+literal whose value fits the slot's width and stamps
+`NumericLiteralWidth` on the node, so lowering emits that width while
+`resolution` still says `Int`. Annotated locals, `==` and arithmetic in
+`binary_type`, argument checks, and return checks each call it.
+
+So a literal's type is decided by its consumer for the width types and
+by the literal for `IntLiteral` carriers. Every new consumer has to
+remember the second step. The `assert` operand bindings are the latest
+site to do so (`resolve_hinted_assignment` checks for
+`Compatible::Coerced` after resolving with the hint).
+
+**Fix path:** make the expected type the single owner of literal
+typing. `resolve_scalar_literal` treats the builtin width types the way
+it treats `IntLiteral` carriers: an expected `UInt32` yields resolution
+`UInt32`, the range check runs there, and the node carries the same
+`NumericLiteralWidth` stamp lowering already reads. `Compatible::Coerced`
+then only serves consumers that resolve a literal before they know the
+slot type, and each of those can thread an expected type and drop the
+arm. `resolve_hinted_assignment` loses its coercion check once this
+lands.
+
+The further step, a provisional `{integer}` type that unifies with the
+first concrete width it meets and defaults to `Int` at the end of the
+function, would remove hints and coercions both. Koja's resolver is a
+single pass and local types are fixed at declaration, so that is a
+different resolver, not a change to this one.
 
 ---
 

@@ -42,7 +42,9 @@ use super::expr::resolve_expr_with_expected;
 use super::field_defaults::{resolve_enum_defaults, resolve_struct_defaults};
 use super::for_loop::rewrite_for_statement;
 use super::return_type::{check_explicit_return, check_return_type};
-use super::statements::{resolve_assignment, resolve_compound_assignment, resolve_destructure};
+use super::statements::{
+    resolve_assignment, resolve_compound_assignment, resolve_destructure, resolve_hinted_assignment,
+};
 
 pub(crate) fn resolve_file(
     file: &mut File,
@@ -539,11 +541,20 @@ pub(super) fn resolve_body_with_expected(
         }
 
         // Statement-position `assert` desugars to plain statements
-        // that the loop then resolves on the next iterations.
+        // that the loop then resolves on the next iterations. A
+        // comparison's operand bindings resolve here instead, so the
+        // right operand sees the left's type the way it does in `==`.
         if is_assert_statement(&body[index]) {
             let statement = body.remove(index);
-            let replacement = rewrite_assert_statement(statement, resolver, diagnostics);
-            body.splice(index..index, replacement);
+            let rewrite = rewrite_assert_statement(statement, resolver, diagnostics);
+            body.splice(index..index, rewrite.statements);
+            if let Some(left_name) = rewrite.comparison_left {
+                resolve_statement(&mut body[index], resolver, diagnostics);
+                index += 1;
+                let hint = resolver.scope.lookup(&left_name).map(|(_, ty)| ty.clone());
+                resolve_hinted_operand(&mut body[index], hint.as_ref(), resolver, diagnostics);
+                index += 1;
+            }
             continue;
         }
 
@@ -555,4 +566,24 @@ pub(super) fn resolve_body_with_expected(
         }
         index += 1;
     }
+}
+
+/// Resolve the right operand binding of a desugared `assert`
+/// comparison with the left operand's type as the expected type.
+fn resolve_hinted_operand(
+    statement: &mut Statement,
+    hint: Option<&ResolvedType>,
+    resolver: &mut Resolver<'_>,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    let Statement::Assignment {
+        target,
+        value,
+        span,
+        ..
+    } = statement
+    else {
+        unreachable!("assert comparison desugars its operands to assignments");
+    };
+    resolve_hinted_assignment(target, hint, value, *span, resolver, diagnostics);
 }

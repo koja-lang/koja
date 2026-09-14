@@ -1,310 +1,181 @@
 alias File.Mode as FileMode
 
-struct FileTest
-  @test "read /dev/null returns empty string"
-  fn test_read_dev_null ! String
-    match File.read("/dev/null")
-      Result.Ok(contents) ->
-        if not contents.empty?()
-          fail "expected empty, got '#{contents}'"
-        end
+test "read /dev/null returns empty string"
+  contents = try Test.require(File.read("/dev/null"))
+  assert contents.empty?()
+end
 
-      Result.Err(msg) ->
-        fail "read /dev/null failed: #{msg}"
-    end
+test "read nonexistent file returns Err"
+  assert File.read("/tmp/nonexistent_koja_file_test_12345").err?()
+end
+
+test "write and read roundtrip"
+  path = "/tmp/koja_file_test_write.txt"
+
+  try Test.require(File.write(path, "hello from koja"))
+  read = File.read(path)
+  File.delete(path)
+
+  contents = try Test.require(read)
+  assert contents == "hello from koja"
+end
+
+test "open for read on /dev/null succeeds"
+  file = try Test.require(File.open("/dev/null", FileMode.Read))
+  _ = file.close()
+end
+
+test "open nonexistent file for read returns Err"
+  missing = "/tmp/nonexistent_koja_file_test_12345"
+  assert File.open(missing, FileMode.Read).err?()
+end
+
+test "open for write, write via fd, read back"
+  path = "/tmp/koja_file_test_handle_write.txt"
+
+  file = try Test.require(File.open(path, FileMode.Write))
+  file.fd.write("handle write")
+  read = File.read(path)
+  File.delete(path)
+
+  contents = try Test.require(read)
+  assert contents == "handle write"
+end
+
+test "open for append adds to existing content"
+  path = "/tmp/koja_file_test_append.txt"
+
+  try Test.require(File.write(path, "first"))
+  opened = File.open(path, FileMode.Append)
+
+  match opened
+    Result.Ok(file) -> _ = file.fd.write(" second")
+    Result.Err(_) -> ()
   end
 
-  @test "read nonexistent file returns Err"
-  fn test_read_nonexistent ! String
-    match File.read("/tmp/nonexistent_koja_file_test_12345")
-      Result.Ok(_) -> fail "expected Err for nonexistent file"
-      Result.Err(_) -> ()
-    end
-  end
+  read = File.read(path)
+  File.delete(path)
 
-  @test "write and read roundtrip"
-  fn test_write_read_roundtrip ! String
-    path = "/tmp/koja_file_test_write.txt"
+  try Test.require(opened)
+  contents = try Test.require(read)
+  assert contents == "first second"
+end
 
-    File.write(path, "hello from koja")
-      rescue msg -> fail "write failed: #{msg}"
+test "exists? returns true for /dev/null"
+  assert File.exists?("/dev/null")
+end
 
-    match File.read(path)
-      Result.Err(msg) ->
-        File.delete(path)
-        fail "read back failed: #{msg}"
+test "exists? returns false for nonexistent file"
+  assert not File.exists?("/tmp/nonexistent_koja_file_test_99999")
+end
 
-      Result.Ok(contents) ->
-        File.delete(path)
+test "delete removes a file"
+  path = "/tmp/koja_file_test_delete.txt"
 
-        if contents != "hello from koja"
-          fail "expected 'hello from koja', got '#{contents}'"
-        end
-    end
-  end
+  try Test.require(File.write(path, "delete me"))
+  try Test.require(File.delete(path))
+  assert not File.exists?(path)
+end
 
-  @test "open for read on /dev/null succeeds"
-  fn test_open_read ! String
-    match File.open("/dev/null", FileMode.Read)
-      Result.Ok(file) -> _ = file.close()
-      Result.Err(msg) -> fail "open /dev/null failed: #{msg}"
-    end
-  end
+test "rename moves a file"
+  src = "/tmp/koja_file_test_rename_src.txt"
+  dst = "/tmp/koja_file_test_rename_dst.txt"
 
-  @test "open nonexistent file for read returns Err"
-  fn test_open_nonexistent ! String
-    match File.open("/tmp/nonexistent_koja_file_test_12345", FileMode.Read)
-      Result.Ok(_) -> fail "expected Err for nonexistent file"
-      Result.Err(_) -> ()
-    end
-  end
+  try Test.require(File.write(src, "rename me"))
+  renamed = File.rename(src, dst)
+  src_exists = File.exists?(src)
+  read = File.read(dst)
+  File.delete(src)
+  File.delete(dst)
 
-  @test "open for write, write via fd, read back"
-  fn test_open_write ! String
-    path = "/tmp/koja_file_test_handle_write.txt"
+  try Test.require(renamed)
+  assert not src_exists
+  contents = try Test.require(read)
+  assert contents == "rename me"
+end
 
-    match File.open(path, FileMode.Write)
-      Result.Err(msg) -> fail "open for write failed: #{msg}"
-      Result.Ok(file) -> file.fd.write("handle write")
-    end
+test "close returns Ok"
+  file = try Test.require(File.open("/dev/null", FileMode.Read))
+  try Test.require(file.close())
+end
 
-    match File.read(path)
-      Result.Err(msg) ->
-        File.delete(path)
-        fail "read back failed: #{msg}"
+test "binary write and read preserve arbitrary bytes"
+  path = "/tmp/koja_file_test_binary.bin"
+  expected: Binary = <<97, 0, 255>>
 
-      Result.Ok(contents) ->
-        File.delete(path)
+  try Test.require(File.write(path, expected))
+  read = File.read_binary(path)
+  File.delete(path)
 
-        if contents != "handle write"
-          fail "expected 'handle write', got '#{contents}'"
-        end
-    end
-  end
+  actual = try Test.require(read)
+  assert actual == expected
+end
 
-  @test "open for append adds to existing content"
-  fn test_open_append ! String
-    path = "/tmp/koja_file_test_append.txt"
+test "text read rejects invalid UTF-8"
+  path = "/tmp/koja_file_test_invalid_utf8.bin"
 
-    File.write(path, "first") rescue msg -> fail "initial write failed: #{msg}"
+  try Test.require(File.write(path, <<255>>))
+  result = File.read(path)
+  File.delete(path)
 
-    match File.open(path, FileMode.Append)
-      Result.Err(msg) ->
-        File.delete(path)
-        fail "open for append failed: #{msg}"
+  assert result.err?()
+end
 
-      Result.Ok(file) ->
-        file.fd.write(" second")
-    end
+test "mkdir creates a directory that dir? sees and rmdir removes"
+  path = "/tmp/koja_file_test_mkdir"
+  File.rmdir(path)
 
-    match File.read(path)
-      Result.Err(msg) ->
-        File.delete(path)
-        fail "read appended failed: #{msg}"
+  try Test.require(File.mkdir(path))
+  created = File.dir?(path)
+  removed = File.rmdir(path)
 
-      Result.Ok(contents) ->
-        File.delete(path)
+  assert created
+  try Test.require(removed)
+  assert not File.exists?(path)
+end
 
-        if contents != "first second"
-          fail "expected 'first second', got '#{contents}'"
-        end
-    end
-  end
+test "mkdir errors when the directory already exists"
+  path = "/tmp/koja_file_test_mkdir_existing"
+  File.mkdir_p(path)
 
-  @test "exists? returns true for /dev/null"
-  fn test_exists_true ! String
-    if not File.exists?("/dev/null")
-      fail "expected /dev/null to exist"
-    end
-  end
+  result = File.mkdir(path)
+  File.rmdir(path)
 
-  @test "exists? returns false for nonexistent file"
-  fn test_exists_false ! String
-    if File.exists?("/tmp/nonexistent_koja_file_test_99999")
-      fail "expected nonexistent file to not exist"
-    end
-  end
+  assert result.err?()
+end
 
-  @test "delete removes a file"
-  fn test_delete ! String
-    path = "/tmp/koja_file_test_delete.txt"
+test "mkdir errors when the parent is missing"
+  assert File.mkdir("/tmp/koja_file_test_no_parent/child").err?()
+end
 
-    File.write(path, "delete me") rescue msg -> fail "write failed: #{msg}"
+test "mkdir_p creates missing parents and is idempotent"
+  parent = "/tmp/koja_file_test_mkdir_p"
+  nested = "#{parent}/a/b"
 
-    File.delete(path) rescue msg -> fail "delete failed: #{msg}"
+  try Test.require(File.mkdir_p(nested))
+  repeat = File.mkdir_p(nested)
+  created = File.dir?(nested)
+  File.rmdir(nested)
+  File.rmdir("#{parent}/a")
+  File.rmdir(parent)
 
-    if File.exists?(path)
-      fail "file still exists after delete"
-    end
-  end
+  assert created
+  try Test.require(repeat)
+end
 
-  @test "rename moves a file"
-  fn test_rename ! String
-    src = "/tmp/koja_file_test_rename_src.txt"
-    dst = "/tmp/koja_file_test_rename_dst.txt"
+test "rmdir errors on a non-empty directory"
+  path = "/tmp/koja_file_test_rmdir_full"
+  File.mkdir_p(path)
 
-    File.write(src, "rename me") rescue msg -> fail "write failed: #{msg}"
+  try Test.require(File.write("#{path}/occupant.txt", "here"))
+  result = File.rmdir(path)
+  File.delete("#{path}/occupant.txt")
+  File.rmdir(path)
 
-    match File.rename(src, dst)
-      Result.Err(msg) ->
-        File.delete(src)
-        fail "rename failed: #{msg}"
+  assert result.err?()
+end
 
-      Result.Ok(_) ->
-        ()
-    end
-
-    if File.exists?(src)
-      File.delete(dst)
-      fail "source still exists after rename"
-    end
-
-    match File.read(dst)
-      Result.Err(msg) ->
-        File.delete(dst)
-        fail "read renamed failed: #{msg}"
-
-      Result.Ok(contents) ->
-        File.delete(dst)
-
-        if contents != "rename me"
-          fail "expected 'rename me', got '#{contents}'"
-        end
-    end
-  end
-
-  @test "close returns Ok"
-  fn test_close ! String
-    match File.open("/dev/null", FileMode.Read)
-      Result.Err(msg) -> fail "open failed: #{msg}"
-      Result.Ok(file) -> file.close() rescue msg -> fail "close failed: #{msg}"
-    end
-  end
-
-  @test "binary write and read preserve arbitrary bytes"
-  fn test_binary_roundtrip ! String
-    path = "/tmp/koja_file_test_binary.bin"
-    expected: Binary = <<97, 0, 255>>
-
-    File.write(path, expected) rescue message -> fail "write failed: #{message}"
-
-    match File.read_binary(path)
-      Result.Err(message) ->
-        File.delete(path)
-        fail "read failed: #{message}"
-
-      Result.Ok(actual) ->
-        File.delete(path)
-
-        match actual
-          <<97, 0, 255>> -> ()
-          _ -> fail "binary contents changed"
-        end
-    end
-  end
-
-  @test "text read rejects invalid UTF-8"
-  fn test_text_read_invalid_utf8 ! String
-    path = "/tmp/koja_file_test_invalid_utf8.bin"
-
-    File.write(path, <<255>>) rescue message -> fail "write failed: #{message}"
-
-    result = File.read(path)
-    File.delete(path)
-
-    match result
-      Result.Err(_) -> ()
-      Result.Ok(_) -> fail "invalid UTF-8 decoded as text"
-    end
-  end
-
-  @test "mkdir creates a directory that dir? sees and rmdir removes"
-  fn test_mkdir_rmdir ! String
-    path = "/tmp/koja_file_test_mkdir"
-    File.rmdir(path)
-
-    File.mkdir(path) rescue msg -> fail "mkdir failed: #{msg}"
-
-    if not File.dir?(path)
-      File.rmdir(path)
-      fail "dir? false for created directory"
-    end
-
-    File.rmdir(path) rescue msg -> fail "rmdir failed: #{msg}"
-
-    if File.exists?(path)
-      fail "directory still exists after rmdir"
-    end
-  end
-
-  @test "mkdir errors when the directory already exists"
-  fn test_mkdir_existing ! String
-    path = "/tmp/koja_file_test_mkdir_existing"
-    File.mkdir_p(path)
-
-    result = File.mkdir(path)
-    File.rmdir(path)
-
-    match result
-      Result.Err(_) -> ()
-      Result.Ok(_) -> fail "mkdir on existing directory should error"
-    end
-  end
-
-  @test "mkdir errors when the parent is missing"
-  fn test_mkdir_missing_parent ! String
-    match File.mkdir("/tmp/koja_file_test_no_parent/child")
-      Result.Err(_) -> ()
-      Result.Ok(_) -> fail "mkdir without parent should error"
-    end
-  end
-
-  @test "mkdir_p creates missing parents and is idempotent"
-  fn test_mkdir_p ! String
-    parent = "/tmp/koja_file_test_mkdir_p"
-    nested = "#{parent}/a/b"
-
-    File.mkdir_p(nested) rescue msg -> fail "mkdir_p failed: #{msg}"
-
-    repeat = File.mkdir_p(nested)
-    ok = File.dir?(nested)
-    File.rmdir(nested)
-    File.rmdir("#{parent}/a")
-    File.rmdir(parent)
-
-    if not ok
-      fail "dir? false for nested directory"
-    end
-
-    repeat rescue msg -> fail "mkdir_p on existing directory errored: #{msg}"
-  end
-
-  @test "rmdir errors on a non-empty directory"
-  fn test_rmdir_non_empty ! String
-    path = "/tmp/koja_file_test_rmdir_full"
-    File.mkdir_p(path)
-
-    File.write("#{path}/occupant.txt", "here")
-      rescue msg -> fail "write failed: #{msg}"
-
-    result = File.rmdir(path)
-    File.delete("#{path}/occupant.txt")
-    File.rmdir(path)
-
-    match result
-      Result.Err(_) -> ()
-      Result.Ok(_) -> fail "rmdir on non-empty directory should error"
-    end
-  end
-
-  @test "dir? is false for regular files and missing paths"
-  fn test_dir_false_cases ! String
-    if File.dir?("/dev/null")
-      fail "dir? true for /dev/null"
-    end
-
-    if File.dir?("/tmp/koja_file_test_missing_dir_99999")
-      fail "dir? true for missing path"
-    end
-  end
+test "dir? is false for regular files and missing paths"
+  assert not File.dir?("/dev/null")
+  assert not File.dir?("/tmp/koja_file_test_missing_dir_99999")
 end
