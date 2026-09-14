@@ -14,6 +14,7 @@ use koja_ast::ast::{
     BuiltinDecl, EnumDecl, File, Function, ImplMember, Item, Param, StructDecl, TestDecl, TypeExpr,
     TypeParam, Visibility,
 };
+use koja_ast::labels::type_expr_span;
 use koja_ast::span::Span;
 
 use crate::backend::Backend;
@@ -140,23 +141,18 @@ fn collect_workspace_symbols(file: &File, query: &str, results: &mut Vec<SymbolI
         match item {
             Item::Alias(_) => {}
             Item::Builtin(b) => {
-                if matches(b.name()) {
-                    results.push(symbol_info(
-                        b.name(),
-                        SymbolKind::STRUCT,
-                        &uri,
-                        &b.span,
-                        None,
-                    ));
+                let name = b.name().as_str();
+                if matches(name) {
+                    results.push(symbol_info(name, SymbolKind::STRUCT, &uri, &b.span, None));
                 }
                 for f in &b.functions {
-                    if matches(&f.name) {
+                    if matches(f.name.as_str()) {
                         results.push(symbol_info(
-                            &f.name,
+                            f.name.as_str(),
                             SymbolKind::METHOD,
                             &uri,
                             &f.span,
-                            Some(b.name().to_string()),
+                            Some(name.to_string()),
                         ));
                     }
                 }
@@ -167,15 +163,15 @@ fn collect_workspace_symbols(file: &File, query: &str, results: &mut Vec<SymbolI
                             SymbolKind::EVENT,
                             &uri,
                             &t.span,
-                            Some(b.name().to_string()),
+                            Some(name.to_string()),
                         ));
                     }
                 }
             }
             Item::Function(f) => {
-                if matches(&f.name) {
+                if matches(f.name.as_str()) {
                     results.push(symbol_info(
-                        &f.name,
+                        f.name.as_str(),
                         SymbolKind::FUNCTION,
                         &uri,
                         &f.span,
@@ -198,9 +194,9 @@ fn collect_workspace_symbols(file: &File, query: &str, results: &mut Vec<SymbolI
                 }
             }
             Item::Constant(c) => {
-                if matches(&c.name) {
+                if matches(c.name.as_str()) {
                     results.push(symbol_info(
-                        &c.name,
+                        c.name.as_str(),
                         SymbolKind::CONSTANT,
                         &uri,
                         &c.span,
@@ -209,9 +205,9 @@ fn collect_workspace_symbols(file: &File, query: &str, results: &mut Vec<SymbolI
                 }
             }
             Item::Protocol(p) => {
-                if matches(&p.name) {
+                if matches(p.name.as_str()) {
                     results.push(symbol_info(
-                        &p.name,
+                        p.name.as_str(),
                         SymbolKind::INTERFACE,
                         &uri,
                         &p.span,
@@ -220,9 +216,9 @@ fn collect_workspace_symbols(file: &File, query: &str, results: &mut Vec<SymbolI
                 }
             }
             Item::TypeAlias(t) => {
-                if matches(&t.name) {
+                if matches(t.name.as_str()) {
                     results.push(symbol_info(
-                        &t.name,
+                        t.name.as_str(),
                         SymbolKind::TYPE_PARAMETER,
                         &uri,
                         &t.span,
@@ -268,7 +264,7 @@ fn collect_type_workspace_symbols(
     let matches = |name: &str| query.is_empty() || name.to_ascii_lowercase().contains(query);
     let (name, kind, span, functions, nested, tests) = match item {
         Item::Enum(e) => (
-            e.name(),
+            e.name().as_str(),
             SymbolKind::ENUM,
             &e.span,
             &e.functions,
@@ -276,7 +272,7 @@ fn collect_type_workspace_symbols(
             &e.tests[..],
         ),
         Item::Struct(s) => (
-            s.name(),
+            s.name().as_str(),
             SymbolKind::STRUCT,
             &s.span,
             &s.functions,
@@ -295,9 +291,9 @@ fn collect_type_workspace_symbols(
         ));
     }
     for f in functions {
-        if matches(&f.name) {
+        if matches(f.name.as_str()) {
             results.push(symbol_info(
-                &f.name,
+                f.name.as_str(),
                 SymbolKind::METHOD,
                 uri,
                 &f.span,
@@ -333,10 +329,10 @@ fn collect_member_workspace_symbols(
     let matches = |name: &str| query.is_empty() || name.to_ascii_lowercase().contains(query);
     for member in members {
         if let ImplMember::Function(f) = member
-            && matches(&f.name)
+            && matches(f.name.as_str())
         {
             results.push(symbol_info(
-                &f.name,
+                f.name.as_str(),
                 SymbolKind::METHOD,
                 uri,
                 &f.span,
@@ -370,16 +366,15 @@ fn build_document_symbols(file: &File) -> Vec<DocumentSymbol> {
             Item::Test(t) => symbols.push(test_symbol(t)),
             Item::Enum(e) => symbols.push(enum_symbol(e)),
             Item::Constant(c) => {
-                let range = span_to_range(&c.span);
                 #[allow(deprecated)]
                 symbols.push(DocumentSymbol {
-                    name: c.name.clone(),
+                    name: c.name.text.clone(),
                     detail: detail_with_visibility(c.visibility, None),
                     kind: SymbolKind::CONSTANT,
                     tags: None,
                     deprecated: None,
-                    range,
-                    selection_range: range,
+                    range: span_to_range(&c.span),
+                    selection_range: span_to_range(&c.name.span),
                     children: None,
                 });
             }
@@ -387,7 +382,6 @@ fn build_document_symbols(file: &File) -> Vec<DocumentSymbol> {
                 if imp.span.synthetic {
                     continue;
                 }
-                let range = span_to_range(&imp.span);
                 let target_name = type_expr_label(&imp.target);
                 let children = member_symbols(&imp.members, &imp.tests);
 
@@ -398,17 +392,12 @@ fn build_document_symbols(file: &File) -> Vec<DocumentSymbol> {
                     kind: SymbolKind::MODULE,
                     tags: None,
                     deprecated: None,
-                    range,
-                    selection_range: range,
-                    children: if children.is_empty() {
-                        None
-                    } else {
-                        Some(children)
-                    },
+                    range: span_to_range(&imp.span),
+                    selection_range: span_to_range(&type_expr_span(&imp.target)),
+                    children: children_option(children),
                 });
             }
             Item::Extend(ext) => {
-                let range = span_to_range(&ext.span);
                 let target_name = type_expr_label(&ext.target);
                 let children = member_symbols(&ext.members, &ext.tests);
 
@@ -419,31 +408,25 @@ fn build_document_symbols(file: &File) -> Vec<DocumentSymbol> {
                     kind: SymbolKind::MODULE,
                     tags: None,
                     deprecated: None,
-                    range,
-                    selection_range: range,
-                    children: if children.is_empty() {
-                        None
-                    } else {
-                        Some(children)
-                    },
+                    range: span_to_range(&ext.span),
+                    selection_range: span_to_range(&type_expr_span(&ext.target)),
+                    children: children_option(children),
                 });
             }
             Item::Protocol(p) => {
-                let range = span_to_range(&p.span);
                 let children: Vec<DocumentSymbol> = p
                     .methods
                     .iter()
                     .map(|m| {
-                        let mrange = span_to_range(&m.span);
                         #[allow(deprecated)]
                         DocumentSymbol {
-                            name: m.name.clone(),
+                            name: m.name.text.clone(),
                             detail: None,
                             kind: SymbolKind::METHOD,
                             tags: None,
                             deprecated: None,
-                            range: mrange,
-                            selection_range: mrange,
+                            range: span_to_range(&m.span),
+                            selection_range: span_to_range(&m.name.span),
                             children: None,
                         }
                     })
@@ -451,7 +434,7 @@ fn build_document_symbols(file: &File) -> Vec<DocumentSymbol> {
 
                 #[allow(deprecated)]
                 symbols.push(DocumentSymbol {
-                    name: p.name.clone(),
+                    name: p.name.text.clone(),
                     detail: detail_with_visibility(
                         p.visibility,
                         type_params_detail(&p.type_params),
@@ -459,20 +442,15 @@ fn build_document_symbols(file: &File) -> Vec<DocumentSymbol> {
                     kind: SymbolKind::INTERFACE,
                     tags: None,
                     deprecated: None,
-                    range,
-                    selection_range: range,
-                    children: if children.is_empty() {
-                        None
-                    } else {
-                        Some(children)
-                    },
+                    range: span_to_range(&p.span),
+                    selection_range: span_to_range(&p.name.span),
+                    children: children_option(children),
                 });
             }
             Item::TypeAlias(ta) => {
-                let range = span_to_range(&ta.span);
                 #[allow(deprecated)]
                 symbols.push(DocumentSymbol {
-                    name: ta.name.clone(),
+                    name: ta.name.text.clone(),
                     detail: detail_with_visibility(
                         ta.visibility,
                         Some(type_expr_label(&ta.type_expr)),
@@ -480,8 +458,8 @@ fn build_document_symbols(file: &File) -> Vec<DocumentSymbol> {
                     kind: SymbolKind::TYPE_PARAMETER,
                     tags: None,
                     deprecated: None,
-                    range,
-                    selection_range: range,
+                    range: span_to_range(&ta.span),
+                    selection_range: span_to_range(&ta.name.span),
                     children: None,
                 });
             }
@@ -505,37 +483,35 @@ fn member_symbols(members: &[ImplMember], tests: &[TestDecl]) -> Vec<DocumentSym
 }
 
 fn builtin_symbol(b: &BuiltinDecl) -> DocumentSymbol {
-    let range = span_to_range(&b.span);
     let mut children: Vec<DocumentSymbol> = b.functions.iter().map(function_symbol).collect();
     children.extend(b.tests.iter().map(test_symbol));
     #[allow(deprecated)]
     DocumentSymbol {
-        name: b.name().to_string(),
+        name: b.name().text.clone(),
         detail: type_params_detail(&b.type_params),
         kind: SymbolKind::STRUCT,
         tags: None,
         deprecated: None,
-        range,
-        selection_range: range,
+        range: span_to_range(&b.span),
+        selection_range: span_to_range(&b.name().span),
         children: children_option(children),
     }
 }
 
 /// Builds a [`DocumentSymbol`] for a struct declaration.
 fn struct_symbol(s: &StructDecl) -> DocumentSymbol {
-    let range = span_to_range(&s.span);
     let mut children = nested_symbols(&s.nested);
     children.extend(s.functions.iter().map(function_symbol));
     children.extend(s.tests.iter().map(test_symbol));
     #[allow(deprecated)]
     DocumentSymbol {
-        name: s.name().to_string(),
+        name: s.name().text.clone(),
         detail: detail_with_visibility(s.visibility, type_params_detail(&s.type_params)),
         kind: SymbolKind::STRUCT,
         tags: None,
         deprecated: None,
-        range,
-        selection_range: range,
+        range: span_to_range(&s.span),
+        selection_range: span_to_range(&s.name().span),
         children: children_option(children),
     }
 }
@@ -559,7 +535,6 @@ fn test_symbol(t: &TestDecl) -> DocumentSymbol {
 
 /// Builds a [`DocumentSymbol`] for an enum declaration.
 fn enum_symbol(e: &EnumDecl) -> DocumentSymbol {
-    let range = span_to_range(&e.span);
     let mut children: Vec<DocumentSymbol> = e
         .variants
         .iter()
@@ -583,13 +558,13 @@ fn enum_symbol(e: &EnumDecl) -> DocumentSymbol {
     children.extend(e.tests.iter().map(test_symbol));
     #[allow(deprecated)]
     DocumentSymbol {
-        name: e.name().to_string(),
+        name: e.name().text.clone(),
         detail: detail_with_visibility(e.visibility, type_params_detail(&e.type_params)),
         kind: SymbolKind::ENUM,
         tags: None,
         deprecated: None,
-        range,
-        selection_range: range,
+        range: span_to_range(&e.span),
+        selection_range: span_to_range(&e.name().span),
         children: children_option(children),
     }
 }
@@ -615,7 +590,6 @@ fn children_option(children: Vec<DocumentSymbol>) -> Option<Vec<DocumentSymbol>>
 
 /// Builds a [`DocumentSymbol`] for a function declaration.
 fn function_symbol(f: &Function) -> DocumentSymbol {
-    let range = span_to_range(&f.span);
     let params: Vec<String> = f
         .params
         .iter()
@@ -635,13 +609,13 @@ fn function_symbol(f: &Function) -> DocumentSymbol {
 
     #[allow(deprecated)]
     DocumentSymbol {
-        name: f.name.clone(),
+        name: f.name.text.clone(),
         detail: detail_with_visibility(f.visibility, Some(detail)),
         kind: SymbolKind::FUNCTION,
         tags: None,
         deprecated: None,
-        range,
-        selection_range: range,
+        range: span_to_range(&f.span),
+        selection_range: span_to_range(&f.name.span),
         children: None,
     }
 }

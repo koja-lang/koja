@@ -44,8 +44,8 @@
 
 use koja_ast::ast::{
     Annotation, Arg, EnumDecl, EnumVariant, EnumVariantData, Expr, ExprKind, FieldPattern, File,
-    Function, FunctionOrigin, ImplBlock, ImplMember, Item, MatchArm, Param, Pattern, Statement,
-    StringPart, StructDecl, StructField, TypeExpr, TypeParam, Visibility,
+    Function, FunctionOrigin, ImplBlock, ImplMember, Item, MatchArm, Name, Param, Pattern,
+    Statement, StringPart, StructDecl, StructField, TypeExpr, TypeParam, Visibility, name_texts,
 };
 use koja_ast::identifier::Resolution;
 use koja_ast::span::Span;
@@ -162,8 +162,8 @@ fn needs_enum_derive(decl: &EnumDecl, existing: &[String]) -> bool {
 }
 
 /// Whether `existing` (dotted impl targets) already covers the decl at `path`.
-pub(super) fn has_impl(existing: &[String], path: &[String]) -> bool {
-    existing.contains(&path.join("."))
+pub(super) fn has_impl(existing: &[String], path: &[Name]) -> bool {
+    existing.contains(&name_texts(path).join("."))
 }
 
 fn synthesize_struct_impl(decl: &StructDecl) -> Item {
@@ -205,22 +205,16 @@ fn debug_impl_block(target: TypeExpr, format_body: Expr, span: Span) -> Item {
 /// Builds the `Target<Params>` type expression on the `impl ... for`
 /// side, mirroring the type's own generic parameters so the impl
 /// monomorphizes per concrete instantiation.
-fn self_target_type(path: &[String], type_params: &[TypeParam], span: Span) -> TypeExpr {
+fn self_target_type(path: &[Name], type_params: &[TypeParam], span: Span) -> TypeExpr {
+    let path = name_texts(path);
     if type_params.is_empty() {
-        TypeExpr::Named {
-            path: path.to_vec(),
-            span,
-        }
+        TypeExpr::Named { path, span }
     } else {
         let args = type_params
             .iter()
             .map(|tp| named_type(&tp.name, span))
             .collect();
-        TypeExpr::Generic {
-            path: path.to_vec(),
-            args,
-            span,
-        }
+        TypeExpr::Generic { path, args, span }
     }
 }
 
@@ -241,7 +235,7 @@ fn format_function(body_expr: Expr, span: Span) -> Function {
         annotations: Vec::<Annotation>::new(),
         origin: FunctionOrigin::Explicit,
         visibility: Visibility::Public,
-        name: FORMAT_METHOD.to_string(),
+        name: Name::new(FORMAT_METHOD, span),
         type_params: Vec::new(),
         params: vec![Param::Self_ {
             local_id: None,
@@ -277,7 +271,7 @@ fn print_function(span: Span) -> Function {
         annotations: Vec::<Annotation>::new(),
         origin: FunctionOrigin::Explicit,
         visibility: Visibility::Public,
-        name: PRINT_METHOD.to_string(),
+        name: Name::new(PRINT_METHOD, span),
         type_params: Vec::new(),
         params: vec![Param::Self_ {
             local_id: None,
@@ -299,7 +293,7 @@ fn inspect_function(span: Span) -> Function {
         annotations: Vec::<Annotation>::new(),
         origin: FunctionOrigin::Explicit,
         visibility: Visibility::Public,
-        name: INSPECT_METHOD.to_string(),
+        name: Name::new(INSPECT_METHOD, span),
         type_params: Vec::new(),
         params: vec![Param::Self_ {
             local_id: None,
@@ -340,8 +334,8 @@ fn method_call_no_args(receiver: Expr, method: &str, span: Span) -> Expr {
 
 /// Builds the body for a struct's `format`:
 /// `"Name{field1: #{self.field1.format()}, field2: #{self.field2.format()}}"`.
-fn struct_format_body(path: &[String], fields: &[StructField], span: Span) -> Expr {
-    let surface = path.join(".");
+fn struct_format_body(path: &[Name], fields: &[StructField], span: Span) -> Expr {
+    let surface = name_texts(path).join(".");
     let mut parts: Vec<StringPart> = Vec::new();
     parts.push(literal_part(format!("{surface}{{"), span));
     for (idx, field) in fields.iter().enumerate() {
@@ -419,7 +413,7 @@ pub(super) fn is_internal_wrapper_type(te: &TypeExpr) -> bool {
 
 /// Builds the body for an enum's `format`:
 /// `match self <arms> end` where each arm renders one variant.
-fn enum_format_body(enum_path: &[String], variants: &[EnumVariant], span: Span) -> Expr {
+fn enum_format_body(enum_path: &[Name], variants: &[EnumVariant], span: Span) -> Expr {
     let arms = variants
         .iter()
         .map(|v| variant_match_arm(enum_path, v, span))
@@ -433,9 +427,9 @@ fn enum_format_body(enum_path: &[String], variants: &[EnumVariant], span: Span) 
     )
 }
 
-fn variant_match_arm(enum_path: &[String], variant: &EnumVariant, span: Span) -> MatchArm {
-    let type_path = enum_path.to_vec();
-    let display = format!("{}.{}", enum_path.join("."), variant.name);
+fn variant_match_arm(enum_path: &[Name], variant: &EnumVariant, span: Span) -> MatchArm {
+    let type_path = name_texts(enum_path);
+    let display = format!("{}.{}", type_path.join("."), variant.name);
     let (pattern, body_expr) = match &variant.data {
         EnumVariantData::Unit => (
             Pattern::EnumUnit {

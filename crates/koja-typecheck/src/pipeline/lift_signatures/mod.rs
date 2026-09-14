@@ -17,7 +17,7 @@ use std::collections::HashMap;
 
 use koja_ast::ast::{
     AliasDecl, BuiltinDecl, Diagnostic, EnumDecl, Function, Item, ProtocolDecl, ProtocolMethod,
-    StructDecl,
+    StructDecl, name_texts,
 };
 use koja_ast::identifier::{GlobalRegistryId, Identifier, ResolvedType};
 
@@ -166,7 +166,7 @@ pub(crate) fn lift_signatures(
                     Item::Enum(decl) => enums::lift_enum(decl, &mut scope, diagnostics),
                     Item::Function(function) => {
                         let identifier =
-                            Identifier::new(scope.package, vec![function.name.clone()]);
+                            Identifier::new(scope.package, vec![function.name.text.clone()]);
                         functions::lift_function_with_identifier(
                             function,
                             identifier,
@@ -290,7 +290,7 @@ fn resolve_all_bounds(
                     Item::Enum(decl) => resolve_enum_bounds(decl, &mut scope, diagnostics),
                     Item::Function(function) => resolve_function_bounds(
                         function,
-                        Identifier::new(scope.package, vec![function.name.clone()]),
+                        Identifier::new(scope.package, vec![function.name.text.clone()]),
                         &mut scope,
                         diagnostics,
                     ),
@@ -300,7 +300,11 @@ fn resolve_all_bounds(
                         for function in &decl.functions {
                             resolve_function_bounds(
                                 function,
-                                Identifier::member(scope.package, &decl.path, &function.name),
+                                Identifier::member(
+                                    scope.package,
+                                    &name_texts(&decl.path),
+                                    function.name.as_str(),
+                                ),
                                 &mut scope,
                                 diagnostics,
                             );
@@ -318,7 +322,7 @@ fn resolve_struct_bounds(
     scope: &mut LiftScope<'_>,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
-    let identifier = Identifier::new(scope.package, decl.path.clone());
+    let identifier = Identifier::new(scope.package, name_texts(&decl.path));
     let Some((id, _)) = scope.registry.lookup(&identifier) else {
         return;
     };
@@ -332,7 +336,8 @@ fn resolve_builtin_bounds(
     scope: &mut LiftScope<'_>,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
-    let identifier = Identifier::new(scope.package, decl.path.clone());
+    let path = name_texts(&decl.path);
+    let identifier = Identifier::new(scope.package, path.clone());
     let Some((id, entry)) = scope.registry.lookup(&identifier) else {
         return;
     };
@@ -347,7 +352,7 @@ fn resolve_builtin_bounds(
     for function in &decl.functions {
         resolve_function_bounds(
             function,
-            Identifier::member(scope.package, &decl.path, &function.name),
+            Identifier::member(scope.package, &path, function.name.as_str()),
             scope,
             diagnostics,
         );
@@ -359,7 +364,8 @@ fn resolve_enum_bounds(
     scope: &mut LiftScope<'_>,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
-    let identifier = Identifier::new(scope.package, decl.path.clone());
+    let path = name_texts(&decl.path);
+    let identifier = Identifier::new(scope.package, path.clone());
     let Some((id, _)) = scope.registry.lookup(&identifier) else {
         return;
     };
@@ -369,7 +375,7 @@ fn resolve_enum_bounds(
     for function in &decl.functions {
         resolve_function_bounds(
             function,
-            Identifier::member(scope.package, &decl.path, &function.name),
+            Identifier::member(scope.package, &path, function.name.as_str()),
             scope,
             diagnostics,
         );
@@ -381,7 +387,7 @@ fn resolve_protocol_bounds(
     scope: &mut LiftScope<'_>,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
-    let identifier = Identifier::new(scope.package, vec![decl.name.clone()]);
+    let identifier = Identifier::new(scope.package, vec![decl.name.text.clone()]);
     let Some((id, _)) = scope.registry.lookup(&identifier) else {
         return;
     };
@@ -469,14 +475,17 @@ fn collect_protocol_bodies(
                 let Item::Protocol(decl) = item else {
                     continue;
                 };
-                let identifier = Identifier::new(&pkg.package, vec![decl.name.clone()]);
+                let identifier = Identifier::new(&pkg.package, vec![decl.name.text.clone()]);
                 let Some((id, _)) = registry.lookup(&identifier) else {
                     continue;
                 };
                 let entry = bodies.entry(id).or_default();
                 for method in &decl.methods {
                     if method.body.is_some() {
-                        entry.insert((method.name.clone(), method.params.len()), method.clone());
+                        entry.insert(
+                            (method.name.text.clone(), method.params.len()),
+                            method.clone(),
+                        );
                     }
                 }
             }

@@ -113,7 +113,7 @@ pub(super) fn check_return_type(
             mismatch,
             expected,
             &actual,
-            Some(&function.name),
+            Some(function.name.as_str()),
             env.registry,
         );
         let hint = auto_wrap_hint(channel.as_ref(), &actual, env.registry);

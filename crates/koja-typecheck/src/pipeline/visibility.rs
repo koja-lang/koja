@@ -44,7 +44,7 @@ pub(crate) fn check_reference_visibility(
             "`{}` is `priv`, usable only from package `{}` (declared at line {})",
             entry.identifier,
             entry.identifier.package(),
-            entry.span.start.line,
+            entry.name_span.start.line,
         ),
         span,
     ));
@@ -88,7 +88,7 @@ pub(crate) fn check_signature_leaks(registry: &GlobalRegistry, diagnostics: &mut
                         entry.identifier.last(),
                         leaked.identifier.last(),
                     ),
-                    entry.span,
+                    entry.name_span,
                 ),
             ));
         }

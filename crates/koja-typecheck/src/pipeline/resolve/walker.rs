@@ -23,6 +23,7 @@
 
 use koja_ast::ast::{
     Diagnostic, Expr, ExprKind, File, Function, ImplBlock, ImplMember, Item, Param, Statement,
+    name_texts,
 };
 use koja_ast::identifier::{GlobalRegistryId, Identifier, ResolvedType};
 
@@ -62,18 +63,19 @@ pub(crate) fn resolve_file(
     for item in &mut file.items {
         match item {
             Item::Function(function) => {
-                let identifier = Identifier::new(env.package, vec![function.name.clone()]);
+                let identifier = Identifier::new(env.package, vec![function.name.text.clone()]);
                 resolve_function(function, &identifier, None, None, &mut env, diagnostics);
             }
             Item::Struct(decl) => {
                 resolve_struct_defaults(decl, &env, diagnostics);
-                let enclosing_type_id = enclosing_type_id(env.package, &decl.path, env.registry);
+                let path = name_texts(&decl.path);
+                let enclosing_type_id = enclosing_type_id(env.package, &path, env.registry);
                 for function in &mut decl.functions {
-                    let identifier = Identifier::member(env.package, &decl.path, &function.name);
+                    let identifier = Identifier::member(env.package, &path, function.name.as_str());
                     resolve_function(
                         function,
                         &identifier,
-                        Some(&decl.path),
+                        Some(&path),
                         enclosing_type_id,
                         &mut env,
                         diagnostics,
@@ -81,13 +83,14 @@ pub(crate) fn resolve_file(
                 }
             }
             Item::Builtin(decl) => {
-                let enclosing_type_id = enclosing_type_id(env.package, &decl.path, env.registry);
+                let path = name_texts(&decl.path);
+                let enclosing_type_id = enclosing_type_id(env.package, &path, env.registry);
                 for function in &mut decl.functions {
-                    let identifier = Identifier::member(env.package, &decl.path, &function.name);
+                    let identifier = Identifier::member(env.package, &path, function.name.as_str());
                     resolve_function(
                         function,
                         &identifier,
-                        Some(&decl.path),
+                        Some(&path),
                         enclosing_type_id,
                         &mut env,
                         diagnostics,
@@ -96,13 +99,14 @@ pub(crate) fn resolve_file(
             }
             Item::Enum(decl) => {
                 resolve_enum_defaults(decl, &env, diagnostics);
-                let enclosing_type_id = enclosing_type_id(env.package, &decl.path, env.registry);
+                let path = name_texts(&decl.path);
+                let enclosing_type_id = enclosing_type_id(env.package, &path, env.registry);
                 for function in &mut decl.functions {
-                    let identifier = Identifier::member(env.package, &decl.path, &function.name);
+                    let identifier = Identifier::member(env.package, &path, function.name.as_str());
                     resolve_function(
                         function,
                         &identifier,
-                        Some(&decl.path),
+                        Some(&path),
                         enclosing_type_id,
                         &mut env,
                         diagnostics,
@@ -138,7 +142,7 @@ pub(crate) fn resolve_file(
                         let identifier = Identifier::member(
                             target_package.as_str(),
                             &target_path,
-                            &function.name,
+                            function.name.as_str(),
                         );
                         resolve_function(
                             function,
@@ -173,7 +177,7 @@ pub(crate) fn resolve_file(
                         let identifier = Identifier::member(
                             target_package.as_str(),
                             &target_path,
-                            &function.name,
+                            function.name.as_str(),
                         );
                         resolve_function(
                             function,

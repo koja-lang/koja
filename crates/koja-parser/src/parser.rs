@@ -1,7 +1,7 @@
 use std::path::Path;
 use std::rc::Rc;
 
-use koja_ast::ast::{Comment, Diagnostic, File, Item, Severity, Statement, Visibility};
+use koja_ast::ast::{Comment, Diagnostic, File, Item, Name, Severity, Statement, Visibility};
 use koja_ast::span::{FileId, Position, Span};
 use koja_ast::token::{Token, TokenKind};
 use koja_lexer::{LexResult, lex};
@@ -279,6 +279,19 @@ impl Parser {
         }
     }
 
+    /// [`Self::expect_ident`] with the token's span, for declared names.
+    pub(crate) fn expect_name(&mut self) -> Name {
+        let span = self.current_span();
+        Name::new(self.expect_ident(), span)
+    }
+
+    /// [`Self::expect_type_ident`] with the token's span, for declared
+    /// type names.
+    pub(crate) fn expect_type_name(&mut self) -> Name {
+        let span = self.current_span();
+        Name::new(self.expect_type_ident(), span)
+    }
+
     pub(crate) fn expect_type_ident(&mut self) -> String {
         match self.peek().clone() {
             TokenKind::TypeIdent(name) => {
@@ -301,11 +314,11 @@ impl Parser {
     /// nested type) into its full path. The last segment is the
     /// declared type's leaf name. Any preceding segments are the
     /// owning type path.
-    pub(crate) fn parse_decl_path(&mut self) -> Vec<String> {
-        let mut segments = vec![self.expect_type_ident()];
+    pub(crate) fn parse_decl_path(&mut self) -> Vec<Name> {
+        let mut segments = vec![self.expect_type_name()];
         while self.at(&TokenKind::Dot) && matches!(self.peek_nth(1), TokenKind::TypeIdent(_)) {
             self.advance(); // .
-            segments.push(self.expect_type_ident());
+            segments.push(self.expect_type_name());
         }
         segments
     }

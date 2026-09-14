@@ -46,6 +46,58 @@ pub enum Visibility {
 
 // Top level
 
+/// A declared name and the position of its token.
+///
+/// Declarations carry a `Name` instead of a bare `String` so that a
+/// diagnostic about the declaration, an editor's selection range, or a
+/// rename can point at the name token alone. `span` on the declaration
+/// covers the whole node.
+///
+/// Synthesized declarations (derived impls, default-parameter adapters,
+/// desugared `test` blocks) copy a source span or a synthetic span here.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Name {
+    pub text: String,
+    pub span: Span,
+}
+
+impl Name {
+    pub fn new(text: impl Into<String>, span: Span) -> Self {
+        Self {
+            text: text.into(),
+            span,
+        }
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.text
+    }
+}
+
+impl std::fmt::Display for Name {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.text)
+    }
+}
+
+impl PartialEq<str> for Name {
+    fn eq(&self, other: &str) -> bool {
+        self.text == other
+    }
+}
+
+impl PartialEq<&str> for Name {
+    fn eq(&self, other: &&str) -> bool {
+        self.text == *other
+    }
+}
+
+/// The texts of a declaration path, for building an `Identifier` or
+/// joining with `.`.
+pub fn name_texts(names: &[Name]) -> Vec<String> {
+    names.iter().map(|name| name.text.clone()).collect()
+}
+
 /// The value attached to an annotation.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AnnotationValue {
@@ -374,7 +426,7 @@ pub struct TypeParam {
 pub struct Constant {
     pub annotations: Vec<Annotation>,
     pub visibility: Visibility,
-    pub name: String,
+    pub name: Name,
     pub type_annotation: Option<TypeExpr>,
     pub value: Expr,
     pub span: Span,
@@ -390,7 +442,7 @@ pub struct Constant {
 pub struct EnumDecl {
     pub annotations: Vec<Annotation>,
     pub visibility: Visibility,
-    pub path: Vec<String>,
+    pub path: Vec<Name>,
     pub type_params: Vec<TypeParam>,
     /// Protocols from the conformance header: `enum Color: Display`.
     /// The body's functions satisfy each listed protocol.
@@ -406,13 +458,13 @@ pub struct EnumDecl {
 
 impl EnumDecl {
     /// The enum's own (leaf) name, the last path segment.
-    pub fn name(&self) -> &str {
+    pub fn name(&self) -> &Name {
         self.path.last().expect("enum path is non-empty")
     }
 
     /// The owning type path for a nested enum (everything before the
     /// leaf), empty for a top-level enum.
-    pub fn owner_path(&self) -> &[String] {
+    pub fn owner_path(&self) -> &[Name] {
         &self.path[..self.path.len() - 1]
     }
 }
@@ -445,7 +497,7 @@ pub struct Function {
     pub annotations: Vec<Annotation>,
     pub origin: FunctionOrigin,
     pub visibility: Visibility,
-    pub name: String,
+    pub name: Name,
     pub type_params: Vec<TypeParam>,
     pub params: Vec<Param>,
     pub return_type: Option<TypeExpr>,
@@ -526,7 +578,7 @@ pub enum ImplMember {
 pub struct ProtocolDecl {
     pub annotations: Vec<Annotation>,
     pub visibility: Visibility,
-    pub name: String,
+    pub name: Name,
     pub type_params: Vec<TypeParam>,
     pub methods: Vec<ProtocolMethod>,
     pub span: Span,
@@ -539,7 +591,7 @@ pub struct ProtocolDecl {
 pub struct ProtocolMethod {
     pub annotations: Vec<Annotation>,
     pub origin: FunctionOrigin,
-    pub name: String,
+    pub name: Name,
     pub type_params: Vec<TypeParam>,
     pub params: Vec<Param>,
     pub return_type: Option<TypeExpr>,
@@ -584,7 +636,7 @@ pub enum Param {
 pub struct StructDecl {
     pub annotations: Vec<Annotation>,
     pub visibility: Visibility,
-    pub path: Vec<String>,
+    pub path: Vec<Name>,
     pub type_params: Vec<TypeParam>,
     /// Protocols from the conformance header: `struct Foo: Display, Hash`.
     /// The body's functions satisfy each listed protocol.
@@ -601,13 +653,13 @@ pub struct StructDecl {
 
 impl StructDecl {
     /// The struct's own (leaf) name, the last path segment.
-    pub fn name(&self) -> &str {
+    pub fn name(&self) -> &Name {
         self.path.last().expect("struct path is non-empty")
     }
 
     /// The owning type path for a nested struct (everything before the
     /// leaf), empty for a top-level struct.
-    pub fn owner_path(&self) -> &[String] {
+    pub fn owner_path(&self) -> &[Name] {
         &self.path[..self.path.len() - 1]
     }
 }
@@ -621,7 +673,7 @@ impl StructDecl {
 pub struct BuiltinDecl {
     pub annotations: Vec<Annotation>,
     pub visibility: Visibility,
-    pub path: Vec<String>,
+    pub path: Vec<Name>,
     pub type_params: Vec<TypeParam>,
     pub functions: Vec<Function>,
     pub span: Span,
@@ -631,7 +683,7 @@ pub struct BuiltinDecl {
 
 impl BuiltinDecl {
     /// The builtin's own (leaf) name, the last path segment.
-    pub fn name(&self) -> &str {
+    pub fn name(&self) -> &Name {
         self.path.last().expect("builtin path is non-empty")
     }
 }
@@ -659,7 +711,7 @@ pub struct AliasDecl {
 pub struct TypeAlias {
     pub annotations: Vec<Annotation>,
     pub visibility: Visibility,
-    pub name: String,
+    pub name: Name,
     pub type_expr: TypeExpr,
     pub span: Span,
 }

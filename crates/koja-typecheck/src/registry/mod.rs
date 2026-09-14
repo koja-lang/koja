@@ -26,7 +26,7 @@
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 
-use koja_ast::ast::Literal;
+use koja_ast::ast::{Function, Literal};
 use koja_ast::identifier::{
     AnonymousKind, GlobalRegistryId, Identifier, Resolution, ResolvedType, TypeParamIndex,
 };
@@ -102,9 +102,11 @@ impl GlobalKind {
 }
 
 /// A single registered declaration: canonical [`Identifier`],
-/// [`GlobalKind`], source span (used for "already defined here"
-/// diagnostic notes), and any generic-decl param names declared on
-/// it. `type_params` is stamped at collect time directly from the
+/// [`GlobalKind`], source spans, and any generic-decl param names
+/// declared on it. `span` covers the whole declaration and
+/// `name_span` its name token, so a diagnostic or an editor can point
+/// at the name alone. Both come from the AST node at collect time.
+/// `type_params` is stamped at collect time directly from the
 /// AST so [`GlobalRegistry::type_params`] is queryable mid-lift,
 /// before [`StructDefinition`] / [`EnumDefinition`] / signature
 /// payloads are stamped.
@@ -127,6 +129,7 @@ pub struct RegistryEntry {
     pub deprecation: Option<String>,
     pub identifier: Identifier,
     pub kind: GlobalKind,
+    pub name_span: Span,
     pub span: Span,
     pub type_params: Vec<String>,
     pub type_param_bounds: Vec<Vec<ResolvedProtocolBound>>,
@@ -304,12 +307,14 @@ impl GlobalRegistry {
         &mut self,
         identifier: Identifier,
         span: Span,
+        name_span: Span,
         visibility: VisibilityScope,
     ) -> InsertOutcome<'_> {
         self.insert(
             identifier,
             GlobalKind::Constant(None),
             span,
+            name_span,
             Vec::new(),
             visibility,
         )
@@ -325,6 +330,7 @@ impl GlobalRegistry {
         &mut self,
         identifier: Identifier,
         span: Span,
+        name_span: Span,
         type_params: Vec<String>,
         visibility: VisibilityScope,
     ) -> InsertOutcome<'_> {
@@ -332,6 +338,7 @@ impl GlobalRegistry {
             identifier,
             GlobalKind::Enum(None),
             span,
+            name_span,
             type_params,
             visibility,
         )
@@ -339,9 +346,9 @@ impl GlobalRegistry {
 
     /// Register a function in the `Function(None)` state. The
     /// signature is stamped in later by [`Self::set_signature`].
-    /// `type_params` carries the function's own declared generic
-    /// params (not the enclosing struct/impl's). Chained scopes are
-    /// rebuilt at resolve time.
+    /// Arity, origin, spans, and the function's own declared generic
+    /// params (not the enclosing struct/impl's) are read from the AST
+    /// node. Chained type-param scopes are rebuilt at resolve time.
     ///
     /// `visibility` captures the `priv fn` enforcement scope as a
     /// [`VisibilityScope`]: `Public` for default `fn`, or the
@@ -351,12 +358,10 @@ impl GlobalRegistry {
     pub(crate) fn insert_function(
         &mut self,
         identifier: Identifier,
-        arity: usize,
-        origin: FunctionOrigin,
-        span: Span,
-        type_params: Vec<String>,
+        function: &Function,
         visibility: VisibilityScope,
     ) -> InsertOutcome<'_> {
+        let arity = function.params.len();
         let names = self.by_identifier.entry(identifier.clone()).or_default();
         if let Some(id) = names
             .non_function
@@ -369,6 +374,11 @@ impl GlobalRegistry {
         let id = GlobalRegistryId::new(self.next_id);
         self.next_id += 1;
         names.functions.insert(arity, id);
+        let type_params: Vec<String> = function
+            .type_params
+            .iter()
+            .map(|param| param.name.clone())
+            .collect();
         let type_param_bounds = vec![Vec::new(); type_params.len()];
         self.entries.insert(
             id,
@@ -377,10 +387,11 @@ impl GlobalRegistry {
                 identifier,
                 kind: GlobalKind::Function(FunctionDefinition {
                     arity,
-                    origin,
+                    origin: function.origin,
                     signature: None,
                 }),
-                span,
+                name_span: function.name.span,
+                span: function.span,
                 type_params,
                 type_param_bounds,
                 visibility,
@@ -395,6 +406,7 @@ impl GlobalRegistry {
         &mut self,
         identifier: Identifier,
         span: Span,
+        name_span: Span,
         type_params: Vec<String>,
         visibility: VisibilityScope,
     ) -> InsertOutcome<'_> {
@@ -402,6 +414,7 @@ impl GlobalRegistry {
             identifier,
             GlobalKind::Protocol(None),
             span,
+            name_span,
             type_params,
             visibility,
         )
@@ -414,6 +427,7 @@ impl GlobalRegistry {
         &mut self,
         identifier: Identifier,
         span: Span,
+        name_span: Span,
         type_params: Vec<String>,
         visibility: VisibilityScope,
     ) -> InsertOutcome<'_> {
@@ -421,6 +435,7 @@ impl GlobalRegistry {
             identifier,
             GlobalKind::Struct(None),
             span,
+            name_span,
             type_params,
             visibility,
         )
@@ -435,12 +450,14 @@ impl GlobalRegistry {
         &mut self,
         identifier: Identifier,
         span: Span,
+        name_span: Span,
         visibility: VisibilityScope,
     ) -> InsertOutcome<'_> {
         self.insert(
             identifier,
             GlobalKind::TypeAlias(None),
             span,
+            name_span,
             Vec::new(),
             visibility,
         )
@@ -900,6 +917,7 @@ impl GlobalRegistry {
         identifier: Identifier,
         kind: GlobalKind,
         span: Span,
+        name_span: Span,
         type_params: Vec<String>,
         visibility: VisibilityScope,
     ) -> InsertOutcome<'_> {
@@ -924,6 +942,7 @@ impl GlobalRegistry {
                 deprecation: None,
                 identifier,
                 kind,
+                name_span,
                 span,
                 type_params,
                 type_param_bounds,
@@ -1072,7 +1091,7 @@ impl GlobalRegistry {
     }
 
     /// Claim a seeded builtin stub for a `builtin` declaration.
-    /// Stamps the declaration's span onto the entry so later
+    /// Stamps the declaration's spans onto the entry so later
     /// collisions point at real source, and consumes the stub so a
     /// second claim collides like any duplicate. When the declared
     /// type-param arity matches the stub's shape, the entry adopts
@@ -1082,6 +1101,7 @@ impl GlobalRegistry {
         &mut self,
         identifier: &Identifier,
         span: Span,
+        name_span: Span,
         type_params: Vec<String>,
     ) -> Option<ClaimOutcome> {
         let id = self.by_identifier.get(identifier)?.non_function?;
@@ -1093,6 +1113,7 @@ impl GlobalRegistry {
             .get_mut(&id)
             .expect("reverse index points at a missing forward entry");
         entry.span = span;
+        entry.name_span = name_span;
         let GlobalKind::Builtin(definition) = &entry.kind else {
             panic!(
                 "unclaimed stub `{}` is not a Builtin entry. This is a seed invariant violation",
@@ -1356,6 +1377,7 @@ fn seed_builtin_stub(
         Identifier::new("Global", vec![name.to_string()]),
         kind,
         Span::default(),
+        Span::default(),
         type_params,
         VisibilityScope::Public,
     );
@@ -1376,29 +1398,38 @@ mod tests {
 
     use super::*;
 
-    fn decl_span() -> Span {
+    fn span_on_line_3(start: u32, end: u32) -> Span {
         let position = |column| Position {
             offset: column,
             line: 3,
             column,
         };
-        Span::new(position(1), position(20), FileId::UNKNOWN)
+        Span::new(position(start), position(end), FileId::UNKNOWN)
+    }
+
+    fn decl_span() -> Span {
+        span_on_line_3(1, 20)
+    }
+
+    fn name_span() -> Span {
+        span_on_line_3(9, 15)
     }
 
     #[test]
-    fn claim_builtin_stub_stamps_span_and_consumes_stub() {
+    fn claim_builtin_stub_stamps_spans_and_consumes_stub() {
         let mut reg = GlobalRegistry::with_stdlib_stubs();
         let identifier = Identifier::new("Global", vec!["String".to_string()]);
 
         let Some(ClaimOutcome::Claimed(id)) =
-            reg.claim_builtin_stub(&identifier, decl_span(), Vec::new())
+            reg.claim_builtin_stub(&identifier, decl_span(), name_span(), Vec::new())
         else {
             panic!("seeded `Global.String` stub should be claimable");
         };
         assert_eq!(reg.get(id).unwrap().span, decl_span());
+        assert_eq!(reg.get(id).unwrap().name_span, name_span());
 
         assert!(
-            reg.claim_builtin_stub(&identifier, Span::default(), Vec::new())
+            reg.claim_builtin_stub(&identifier, Span::default(), Span::default(), Vec::new())
                 .is_none(),
             "a stub claims at most once",
         );
@@ -1409,9 +1440,12 @@ mod tests {
         let mut reg = GlobalRegistry::with_stdlib_stubs();
         let identifier = Identifier::new("Global", vec!["List".to_string()]);
 
-        let Some(ClaimOutcome::Claimed(id)) =
-            reg.claim_builtin_stub(&identifier, decl_span(), vec!["Elem".to_string()])
-        else {
+        let Some(ClaimOutcome::Claimed(id)) = reg.claim_builtin_stub(
+            &identifier,
+            decl_span(),
+            name_span(),
+            vec!["Elem".to_string()],
+        ) else {
             panic!("seeded `Global.List` stub should be claimable");
         };
         assert_eq!(reg.type_params(id), Some(&["Elem".to_string()][..]));
@@ -1423,7 +1457,7 @@ mod tests {
         let identifier = Identifier::new("Global", vec!["Map".to_string()]);
 
         let Some(ClaimOutcome::ArityMismatch { id, expected_arity }) =
-            reg.claim_builtin_stub(&identifier, decl_span(), vec!["K".to_string()])
+            reg.claim_builtin_stub(&identifier, decl_span(), name_span(), vec!["K".to_string()])
         else {
             panic!("wrong arity should report a mismatch");
         };
@@ -1442,6 +1476,7 @@ mod tests {
         let InsertOutcome::Fresh(_) = reg.insert_struct(
             user_struct.clone(),
             Span::default(),
+            Span::default(),
             Vec::new(),
             VisibilityScope::Public,
         ) else {
@@ -1449,12 +1484,12 @@ mod tests {
         };
 
         assert!(
-            reg.claim_builtin_stub(&user_struct, decl_span(), Vec::new())
+            reg.claim_builtin_stub(&user_struct, decl_span(), name_span(), Vec::new())
                 .is_none()
         );
         let missing = Identifier::new("App", vec!["Missing".to_string()]);
         assert!(
-            reg.claim_builtin_stub(&missing, decl_span(), Vec::new())
+            reg.claim_builtin_stub(&missing, decl_span(), name_span(), Vec::new())
                 .is_none()
         );
     }

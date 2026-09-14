@@ -20,6 +20,7 @@ use crate::ast::{
     ExprKind, ExtendBlock, FieldInit, FieldPattern, File, Function, ImplBlock, ImplMember, Item,
     LValue, Literal, MatchArm, Param, Pattern, ProtocolDecl, ProtocolMethod, Statement, StringPart,
     StructDecl, StructField, TestDecl, TypeAlias, TypeExpr, TypeParam, UnaryOp, Visibility,
+    name_texts,
 };
 use crate::identifier::{AnonymousKind, Resolution, ResolvedType};
 use crate::span::Span;
@@ -159,7 +160,7 @@ impl<'a> Printer<'a> {
     fn enum_decl(&mut self, e: &EnumDecl) {
         let header = format!(
             "EnumDecl {}{}",
-            e.path.join("."),
+            name_texts(&e.path).join("."),
             format_type_params(&e.type_params)
         );
         self.nested(&header, e.span, |p| {
@@ -333,7 +334,7 @@ impl<'a> Printer<'a> {
     fn builtin_decl(&mut self, b: &BuiltinDecl) {
         let header = format!(
             "BuiltinDecl {}{}",
-            b.path.join("."),
+            name_texts(&b.path).join("."),
             format_type_params(&b.type_params)
         );
         self.nested(&header, b.span, |p| {
@@ -352,7 +353,7 @@ impl<'a> Printer<'a> {
     fn struct_decl(&mut self, s: &StructDecl) {
         let header = format!(
             "StructDecl {}{}",
-            s.path.join("."),
+            name_texts(&s.path).join("."),
             format_type_params(&s.type_params)
         );
         self.nested(&header, s.span, |p| {

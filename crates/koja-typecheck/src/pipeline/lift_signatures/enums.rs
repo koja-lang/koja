@@ -12,7 +12,7 @@
 
 use std::collections::BTreeMap;
 
-use koja_ast::ast::{Diagnostic, EnumDecl, EnumVariantData};
+use koja_ast::ast::{Diagnostic, EnumDecl, EnumVariantData, name_texts};
 use koja_ast::identifier::Identifier;
 
 use crate::registry::{
@@ -31,9 +31,10 @@ pub(super) fn lift_enum(
     diagnostics: &mut Vec<Diagnostic>,
 ) {
     lift_enum_definition(decl, scope, diagnostics);
-    let enum_identifier = Identifier::new(scope.package, decl.path.clone());
+    let path = name_texts(&decl.path);
+    let enum_identifier = Identifier::new(scope.package, path.clone());
     for function in &decl.functions {
-        let method_identifier = Identifier::member(scope.package, &decl.path, &function.name);
+        let method_identifier = Identifier::member(scope.package, &path, function.name.as_str());
         lift_function_with_identifier(
             function,
             method_identifier,
@@ -52,7 +53,7 @@ fn lift_enum_definition(
     scope: &mut LiftScope<'_>,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
-    let identifier = Identifier::new(scope.package, decl.path.clone());
+    let identifier = Identifier::new(scope.package, name_texts(&decl.path));
     let Some((id, entry)) = scope.registry.lookup(&identifier) else {
         panic!(
             "lift_signatures found enum `{identifier}` missing from registry. This is a \

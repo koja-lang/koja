@@ -16,7 +16,9 @@
 //! registry, then hands off to the per-shape helper based on the
 //! variant's declared payload.
 
-use koja_ast::ast::{AnnotationKind, Diagnostic, EnumConstructionData, EnumDecl, Expr, FieldInit};
+use koja_ast::ast::{
+    AnnotationKind, Diagnostic, EnumConstructionData, EnumDecl, Expr, FieldInit, name_texts,
+};
 use koja_ast::identifier::{Identifier, Resolution, ResolvedType};
 use koja_typecheck::{
     EnumDefinition, GlobalKind, GlobalRegistry, RegistryEntry, ResolvedVariantData,
@@ -67,7 +69,7 @@ pub(super) fn lower_enum_decl(
     if has_feature_gap(decl, &mut output.diagnostics) {
         return None;
     }
-    let identifier = Identifier::new(package, decl.path.clone());
+    let identifier = Identifier::new(package, name_texts(&decl.path));
     let entry = registry.lookup(&identifier).map(|(_, entry)| entry)?;
     let GlobalKind::Enum(Some(definition)) = &entry.kind else {
         panic!(

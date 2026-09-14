@@ -15,7 +15,7 @@
 
 use std::collections::BTreeMap;
 
-use koja_ast::ast::{AnnotationKind, Diagnostic, Expr, FieldInit, StructDecl};
+use koja_ast::ast::{AnnotationKind, Diagnostic, Expr, FieldInit, StructDecl, name_texts};
 use koja_ast::identifier::{Identifier, Resolution, ResolvedType};
 use koja_typecheck::{
     GlobalKind, GlobalRegistry, RegistryEntry, ResolvedStructField, StructDefinition,
@@ -49,7 +49,7 @@ pub(super) fn lower_struct_decl(
     if has_feature_gap(decl, &mut output.diagnostics) {
         return None;
     }
-    let identifier = Identifier::new(package, decl.path.clone());
+    let identifier = Identifier::new(package, name_texts(&decl.path));
     let entry = registry.lookup(&identifier).map(|(_, entry)| entry)?;
     let GlobalKind::Struct(Some(definition)) = &entry.kind else {
         panic!(

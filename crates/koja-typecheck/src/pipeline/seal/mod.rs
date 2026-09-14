@@ -33,7 +33,7 @@ mod expressions;
 mod patterns;
 mod statements;
 
-use koja_ast::ast::{Constant, File, Function, ImplMember, Item, TypeExpr};
+use koja_ast::ast::{Constant, File, Function, ImplMember, Item, TypeExpr, name_texts};
 use koja_ast::identifier::{AnonymousKind, Identifier, Resolution, ResolvedType};
 use koja_ast::span::Span;
 
@@ -85,7 +85,7 @@ fn seal_file(file: &File, package: &str, registry: &GlobalRegistry) {
                 assert!(
                     decl.nested.is_empty(),
                     "sealed struct `{}` still carries nested declarations",
-                    decl.path.join(".")
+                    name_texts(&decl.path).join(".")
                 );
                 let owner_generic = !decl.type_params.is_empty();
                 for function in &decl.functions {
@@ -104,7 +104,7 @@ fn seal_file(file: &File, package: &str, registry: &GlobalRegistry) {
                 assert!(
                     decl.nested.is_empty(),
                     "sealed enum `{}` still carries nested declarations",
-                    decl.path.join(".")
+                    name_texts(&decl.path).join(".")
                 );
                 let owner_generic = !decl.type_params.is_empty();
                 for function in &decl.functions {
@@ -205,7 +205,7 @@ fn impl_target_is_generic(target: &TypeExpr, package: &str, registry: &GlobalReg
 /// already constrained to literals + struct/enum-of-literals, so the
 /// reused [`seal_expr`] walk is sufficient.
 fn seal_constant(constant: &Constant, package: &str, registry: &GlobalRegistry) {
-    let identifier = Identifier::new(package, vec![constant.name.clone()]);
+    let identifier = Identifier::new(package, vec![constant.name.text.clone()]);
     let Some((_, entry)) = registry.lookup(&identifier) else {
         seal_panic(
             &format!(
@@ -303,7 +303,7 @@ pub(super) fn seal_panic(message: &str, span: Span) -> ! {
 
 #[cfg(test)]
 mod tests {
-    use koja_ast::ast::{Expr, ExprKind, Literal};
+    use koja_ast::ast::{Expr, ExprKind, Function, Literal, Name, Visibility};
     use koja_ast::identifier::Identifier;
     use koja_ast::span::Span;
 
@@ -315,13 +315,22 @@ mod tests {
     #[test]
     #[should_panic(expected = "reached seal as an unstamped function")]
     fn registry_rejects_unstamped_entry() {
+        let pending = Function {
+            annotations: Vec::new(),
+            origin: FunctionOrigin::Explicit,
+            visibility: Visibility::Public,
+            name: Name::new("pending", Span::default()),
+            type_params: Vec::new(),
+            params: Vec::new(),
+            return_type: None,
+            error_type: None,
+            body: None,
+            span: Span::default(),
+        };
         let mut registry = GlobalRegistry::new();
         registry.insert_function(
             Identifier::new("Test", vec!["pending".to_string()]),
-            0,
-            FunctionOrigin::Explicit,
-            Span::default(),
-            Vec::new(),
+            &pending,
             VisibilityScope::Public,
         );
 

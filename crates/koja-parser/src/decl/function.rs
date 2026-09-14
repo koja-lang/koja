@@ -29,7 +29,7 @@ impl Parser {
         let start = self.current_span();
         self.advance(); // fn
 
-        let name = self.expect_ident();
+        let name = self.expect_name();
         let type_params = self.parse_optional_type_params();
 
         let params = if self.eat(&TokenKind::LParen).is_some() {

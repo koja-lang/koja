@@ -4,7 +4,7 @@ use std::collections::HashSet;
 
 use koja_ast::ast::{
     AnnotationKind, Arg, ClosureParam, Diagnostic, EnumConstructionData, Expr, ExprKind, Function,
-    FunctionOrigin, ImplMember, Item, Param, Pattern, ProtocolMethod, Statement, StringPart,
+    FunctionOrigin, ImplMember, Item, Name, Param, Pattern, ProtocolMethod, Statement, StringPart,
 };
 use koja_ast::identifier::Resolution;
 
@@ -140,13 +140,13 @@ fn function_adapters(function: &Function) -> Vec<Function> {
                     canonical_arity: function.params.len(),
                 },
                 visibility: function.visibility,
-                name: function.name.clone(),
+                name: Name::new(&function.name.text, function.name.span.as_synthetic()),
                 type_params: function.type_params.clone(),
                 params: explicit_params(&function.params, arity),
                 return_type: function.return_type.clone(),
                 error_type: function.error_type.clone(),
                 body: Some(adapter_body(
-                    &function.name,
+                    function.name.as_str(),
                     &function.params,
                     arity,
                     function.error_type.is_some(),
@@ -167,13 +167,13 @@ fn protocol_adapters(method: &ProtocolMethod) -> Vec<ProtocolMethod> {
                 origin: FunctionOrigin::DefaultAdapter {
                     canonical_arity: method.params.len(),
                 },
-                name: method.name.clone(),
+                name: Name::new(&method.name.text, method.name.span.as_synthetic()),
                 type_params: method.type_params.clone(),
                 params: explicit_params(&method.params, arity),
                 return_type: method.return_type.clone(),
                 error_type: method.error_type.clone(),
                 body: Some(adapter_body(
-                    &method.name,
+                    method.name.as_str(),
                     &method.params,
                     arity,
                     method.error_type.is_some(),

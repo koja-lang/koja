@@ -11,8 +11,8 @@ use std::collections::HashMap;
 
 use koja_ast::ast::{
     Diagnostic, Expr, ExprKind, ExtendBlock, Function, FunctionOrigin, ImplBlock, ImplMember,
-    MatchArm, Param, Pattern, ProtocolMethod, Statement, StringPart, TypeExpr, TypeParam,
-    Visibility,
+    MatchArm, Name, Param, Pattern, ProtocolMethod, Statement, StringPart, TypeExpr, TypeParam,
+    Visibility, name_texts,
 };
 use koja_ast::identifier::{GlobalRegistryId, Identifier, Resolution, ResolvedType};
 use koja_ast::span::Span;
@@ -169,8 +169,11 @@ pub(super) fn lift_impl(
         let ImplMember::Function(function) = member else {
             continue;
         };
-        let method_identifier =
-            Identifier::member(target_package.as_str(), &target_path, &function.name);
+        let method_identifier = Identifier::member(
+            target_package.as_str(),
+            &target_path,
+            function.name.as_str(),
+        );
         lift_function_with_identifier(
             function,
             method_identifier,
@@ -211,7 +214,7 @@ pub(super) fn lift_impl(
 /// them as ordinary type-body methods.
 pub(super) fn lift_header_conformances(
     decl_kind: &str,
-    path: &[String],
+    path: &[Name],
     conformances: &[TypeExpr],
     functions: &mut Vec<Function>,
     bodies: &ProtocolBodies,
@@ -221,14 +224,15 @@ pub(super) fn lift_header_conformances(
     if conformances.is_empty() {
         return;
     }
-    let target_identifier = Identifier::new(scope.package, path.to_vec());
+    let path_texts = name_texts(path);
+    let target_identifier = Identifier::new(scope.package, path_texts.clone());
     let Some((target_id, _)) = scope.registry.lookup(&target_identifier) else {
         return;
     };
     // The header has no written target expression. The target is the
     // decl itself with its own params projected, exactly `Self`.
     let resolved_target = concrete_self_type(target_id, scope.registry);
-    let decl_label = format!("{decl_kind} {}", path.join("."));
+    let decl_label = format!("{decl_kind} {}", path_texts.join("."));
     for trait_expr in conformances {
         let Some(resolved) = resolve_protocol_impl_heads(
             trait_expr,
@@ -297,8 +301,11 @@ pub(super) fn lift_extend(
         let ImplMember::Function(function) = member else {
             continue;
         };
-        let method_identifier =
-            Identifier::member(target_package.as_str(), &target_path, &function.name);
+        let method_identifier = Identifier::member(
+            target_package.as_str(),
+            &target_path,
+            function.name.as_str(),
+        );
         lift_function_with_identifier(
             function,
             method_identifier,
@@ -721,7 +728,7 @@ fn verify_and_synthesize_conformance(
     let declared: HashMap<(String, usize), ()> = site
         .declared_functions()
         .iter()
-        .map(|function| ((function.name.clone(), function.params.len()), ()))
+        .map(|function| ((function.name.text.clone(), function.params.len()), ()))
         .collect();
     let to_synthesize: Vec<&ResolvedProtocolMethod> = definition
         .methods
@@ -777,12 +784,12 @@ fn warn_near_miss_defaults(
             !definition
                 .methods
                 .iter()
-                .any(|m| m.name == function.name && m.arity == function.params.len())
+                .any(|m| m.name == function.name.text && m.arity == function.params.len())
         })
         .collect();
     for method in omitted {
         for function in &candidates {
-            if !names_are_near(&function.name, &method.name) {
+            if !names_are_near(function.name.as_str(), &method.name) {
                 continue;
             }
             diagnostics.push(Diagnostic::warning_with_hint(
@@ -852,13 +859,8 @@ fn synthesize_default_method(
     let method_identifier = Identifier::member(
         impl_scope.target_identifier.package(),
         impl_scope.target_path,
-        &function.name,
+        function.name.as_str(),
     );
-    let type_params: Vec<String> = function
-        .type_params
-        .iter()
-        .map(|p| p.name.clone())
-        .collect();
     // Synthesized protocol-default methods are always public: the
     // protocol itself declared them, and `ProtocolMethod` doesn't
     // carry a `Visibility` field at the AST level. They register
@@ -866,11 +868,8 @@ fn synthesize_default_method(
     if !matches!(
         scope.registry.insert_function(
             method_identifier.clone(),
-            function.params.len(),
-            function.origin,
-            function.span,
-            type_params,
-            VisibilityScope::Public,
+            &function,
+            VisibilityScope::Public
         ),
         InsertOutcome::Fresh(_)
     ) {
@@ -1197,7 +1196,7 @@ fn verify_protocol_conformance(
     let context = site.context(protocol_identifier, &target_path.join("."));
     for method in &definition.methods {
         let dispatch_mismatch = declared_functions.iter().copied().find(|function| {
-            function.name == method.name
+            function.name.text == method.name
                 && function
                     .params
                     .iter()
@@ -1255,7 +1254,7 @@ fn verify_protocol_conformance(
             continue;
         }
         let matches_receiver_mismatch = definition.methods.iter().any(|method| {
-            method.name == function.name
+            method.name == function.name.text
                 && method.non_self_params.len()
                     == function
                         .params
@@ -1300,7 +1299,7 @@ fn check_impl_method_signature(
     let method_identifier = Identifier::member(
         target_identifier.package(),
         target_path,
-        &impl_function.name,
+        impl_function.name.as_str(),
     );
     let Some((_, entry)) = registry.lookup_function(&method_identifier, impl_function.params.len())
     else {
