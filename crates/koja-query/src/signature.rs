@@ -7,11 +7,11 @@
 //! is synthetic and only exists to satisfy the AST shape.
 
 use koja_ast::ast::{Function, FunctionOrigin, Name, Param, TypeExpr, TypeParam, Visibility};
-use koja_ast::identifier::{
-    AnonymousKind, GlobalRegistryId, Identifier, Resolution, ResolvedType,
-};
+use koja_ast::identifier::{AnonymousKind, GlobalRegistryId, Identifier, Resolution, ResolvedType};
 use koja_ast::span::Span;
-use koja_typecheck::{FunctionSignature, GlobalKind, GlobalRegistry, RegistryEntry, VisibilityScope};
+use koja_typecheck::{
+    FunctionSignature, GlobalKind, GlobalRegistry, RegistryEntry, VisibilityScope,
+};
 
 use crate::Analysis;
 
@@ -30,11 +30,7 @@ pub fn function_signature(analysis: &Analysis<'_>, id: GlobalRegistryId) -> Opti
     let signature = definition.signature.as_ref()?;
     let function = build_function(registry, id, entry, signature);
     let display_name = entry.identifier.path().join(".");
-    Some(koja_fmt::format_signature(
-        &function,
-        &display_name,
-        WIDTH,
-    ))
+    Some(koja_fmt::format_signature(&function, &display_name, WIDTH))
 }
 
 fn build_function(
@@ -56,9 +52,7 @@ fn build_function(
                 .map(|bounds| {
                     bounds
                         .iter()
-                        .map(|bound| {
-                            named(registry, bound.protocol_id, &bound.args)
-                        })
+                        .map(|bound| named(registry, bound.protocol_id, &bound.args))
                         .collect()
                 })
                 .unwrap_or_default(),

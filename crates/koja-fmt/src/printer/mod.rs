@@ -55,7 +55,10 @@ pub fn file_to_doc(file: &File, tokens: &[Token]) -> Doc {
 /// caller may hand in a synthesized node with placeholder spans.
 pub fn signature_to_doc(function: &Function, display_name: &str) -> Doc {
     Printer::pure().signature_to_doc(
-        format!("{}fn {display_name}", visibility_prefix(function.visibility)),
+        format!(
+            "{}fn {display_name}",
+            visibility_prefix(function.visibility)
+        ),
         &function.type_params,
         &function.params,
         function.span,
