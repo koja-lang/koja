@@ -8,7 +8,7 @@
 
 use koja_ast::ast::{
     Diagnostic, EnumConstructionData, Expr, ExprKind, File, Function, ImplMember, Item, LValue,
-    Statement, StringPart,
+    Statement, StringPart, path_text,
 };
 use koja_ast::identifier::Resolution;
 
@@ -311,7 +311,7 @@ fn emit_escape(position: Position<'_>, expr: &Expr, diagnostics: &mut Vec<Diagno
         Position::Bound(target) => {
             format!(
                 "a borrowed pointer cannot be bound to `{}`",
-                target.segments.join("."),
+                path_text(&target.segments),
             )
         }
         Position::Consumed => return,

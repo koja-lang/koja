@@ -65,7 +65,7 @@ impl Parser {
 
     fn parse_enum_variant(&mut self) -> EnumVariant {
         let start = self.current_span();
-        let name = self.expect_type_ident();
+        let name = self.expect_type_name();
 
         let data = if self.eat(&TokenKind::LParen).is_some() {
             let types = self.comma_separated(&TokenKind::RParen, Self::parse_type_expr);

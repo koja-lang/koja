@@ -70,7 +70,7 @@ impl Parser {
 
     pub(crate) fn parse_struct_field(&mut self) -> StructField {
         let start = self.current_span();
-        let name = self.expect_ident();
+        let name = self.expect_name();
         self.expect(&TokenKind::Colon);
         let type_expr = self.parse_type_expr();
         let default = if self.eat(&TokenKind::Eq).is_some() {

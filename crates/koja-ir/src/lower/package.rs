@@ -9,8 +9,8 @@
 //! [`Identifier`] differs.
 
 use koja_ast::ast::{
-    Diagnostic, ExtendBlock, Function, ImplBlock, ImplMember, Item, Param, TypeExpr, is_extern_c,
-    is_intrinsic, name_texts,
+    Diagnostic, ExtendBlock, Function, ImplBlock, ImplMember, Item, Name, Param, TypeExpr,
+    is_extern_c, is_intrinsic, name_texts,
 };
 use koja_ast::identifier::{
     AnonymousKind, GlobalRegistryId, Identifier, LocalId, Resolution, ResolvedType,
@@ -294,7 +294,7 @@ fn impl_target_is_generic(
 /// The dotted type path of an `impl`/`extend` target. `pub(crate)` so
 /// [`crate::generics`] reuses the same shape match when building the
 /// AST function index.
-pub(crate) fn nominal_target_path(target: &TypeExpr) -> Option<&[String]> {
+pub(crate) fn nominal_target_path(target: &TypeExpr) -> Option<&[Name]> {
     match target {
         TypeExpr::Named { path, .. } | TypeExpr::Generic { path, .. } => Some(path.as_slice()),
         _ => None,

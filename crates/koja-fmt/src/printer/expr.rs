@@ -76,7 +76,7 @@ impl Printer {
             ExprKind::FieldAccess { receiver, field } => concat(vec![
                 self.expr_to_doc(receiver),
                 text("."),
-                text(field.clone()),
+                text(&field.text),
             ]),
             ExprKind::For {
                 pattern,
@@ -131,7 +131,7 @@ impl Printer {
                 ..
             } => self.method_call_to_doc(expr, receiver, method, args),
             ExprKind::NamedFunctionReference { path, arity, .. } => {
-                text(format!("&{}/{}", path.join("."), arity))
+                text(format!("&{}/{}", path_text(path), arity))
             }
             ExprKind::Receive {
                 arms,
@@ -173,7 +173,7 @@ impl Printer {
             }
             ExprKind::String { parts, multiline } => self.string_to_doc(parts, *multiline),
             ExprKind::StructConstruction { type_path, fields } => {
-                let path_str = type_path.join(".");
+                let path_str = path_text(type_path);
                 if fields.is_empty() {
                     text(format!("{}{{}}", path_str))
                 } else {
@@ -256,7 +256,7 @@ impl Printer {
         &mut self,
         expr: &Expr,
         receiver: &Expr,
-        method: &str,
+        method: &Name,
         args: &[Arg],
     ) -> Doc {
         if matches!(receiver.kind, ExprKind::MethodCall { .. }) {
@@ -265,7 +265,7 @@ impl Printer {
         let call = |p: &mut Self| {
             concat(vec![
                 text("."),
-                text(method),
+                text(&method.text),
                 p.call_args_to_doc(args, expr.span),
             ])
         };
@@ -587,7 +587,7 @@ impl Printer {
 
     fn field_init_to_doc(&mut self, fi: &FieldInit) -> Doc {
         concat(vec![
-            text(&fi.name),
+            text(&fi.name.text),
             text(": "),
             self.expr_to_doc(&fi.value),
         ])

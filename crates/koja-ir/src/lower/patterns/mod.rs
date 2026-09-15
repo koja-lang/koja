@@ -42,7 +42,7 @@ mod tuples;
 
 use std::collections::HashSet;
 
-use koja_ast::ast::{Diagnostic, ExprKind, Pattern};
+use koja_ast::ast::{Diagnostic, ExprKind, Name, Pattern};
 use koja_ast::identifier::{GlobalRegistryId, LocalId, Resolution, ResolvedType};
 use koja_ast::labels::{pattern_kind_label, pattern_span};
 use koja_typecheck::GlobalRegistry;
@@ -390,7 +390,7 @@ pub(super) fn lower_pattern_check(
 
 fn lower_binding_check(
     local_id: Option<LocalId>,
-    name: &str,
+    name: &Name,
     inputs: &PatternInputs<'_>,
     ctx: &mut FnLowerCtx,
     block: IRBlockId,
@@ -429,7 +429,7 @@ fn lower_binding_check(
 
 /// Pin a binding's `LocalId` invariant: every pattern binding must
 /// already carry a stamped id from the typecheck-resolve walk.
-pub(super) fn require_local(local_id: Option<LocalId>, name: &str) -> IRLocalId {
+pub(super) fn require_local(local_id: Option<LocalId>, name: &Name) -> IRLocalId {
     let id = local_id.unwrap_or_else(|| {
         panic!(
             "IR lower: pattern binding `{name}` reaches lower without a \

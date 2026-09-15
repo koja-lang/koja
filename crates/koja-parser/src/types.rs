@@ -14,7 +14,7 @@
 //! once the canonical PascalCase forms (`Bool`, `Int32`) landed in
 //! stdlib and project sources alike.
 
-use koja_ast::ast::{TypeExpr, TypeParam};
+use koja_ast::ast::{Name, TypeExpr, TypeParam};
 use koja_ast::labels::type_expr_span;
 use koja_ast::span::Span;
 use koja_ast::token::TokenKind;
@@ -58,7 +58,7 @@ impl Parser {
                 );
                 self.advance();
                 TypeExpr::Named {
-                    path: vec![ERROR_IDENT.to_string()],
+                    path: vec![Name::new(ERROR_IDENT, span)],
                     span,
                 }
             }
@@ -132,12 +132,12 @@ impl Parser {
 
         loop {
             match self.peek().clone() {
-                TokenKind::Ident(_) => path.push(self.expect_ident()),
+                TokenKind::Ident(_) => path.push(self.expect_name()),
                 TokenKind::TypeIdent(_) => {
-                    path.push(self.expect_type_ident());
+                    path.push(self.expect_type_name());
                     while self.eat(&TokenKind::Dot).is_some() {
                         if matches!(self.peek(), TokenKind::TypeIdent(_)) {
-                            path.push(self.expect_type_ident());
+                            path.push(self.expect_type_name());
                         } else {
                             break;
                         }
@@ -157,7 +157,7 @@ impl Parser {
         self.parse_optional_generic_args(path, start)
     }
 
-    fn parse_optional_generic_args(&mut self, path: Vec<String>, start: Span) -> TypeExpr {
+    fn parse_optional_generic_args(&mut self, path: Vec<Name>, start: Span) -> TypeExpr {
         if self.eat(&TokenKind::Lt).is_none() {
             return TypeExpr::Named {
                 path,
@@ -190,10 +190,10 @@ impl Parser {
             return (self.parse_type_expr(), Vec::new());
         }
         let start = self.current_span();
-        let mut path = vec![self.expect_type_ident()];
+        let mut path = vec![self.expect_type_name()];
         while self.eat(&TokenKind::Dot).is_some() {
             if matches!(self.peek(), TokenKind::TypeIdent(_)) {
-                path.push(self.expect_type_ident());
+                path.push(self.expect_type_name());
             } else {
                 break;
             }

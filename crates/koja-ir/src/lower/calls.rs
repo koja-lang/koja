@@ -4,7 +4,7 @@
 //! same registry-driven mangling / instantiation-recording shape and
 //! benefit from a single emitter ([`emit_call`]).
 
-use koja_ast::ast::{Arg, Expr, ExprKind};
+use koja_ast::ast::{Arg, Expr, ExprKind, Name};
 use koja_ast::identifier::{
     AnonymousKind, GlobalRegistryId, Identifier, LocalId, Resolution, ResolvedType,
 };
@@ -298,7 +298,7 @@ fn lower_closure_expr_call(
 /// at clippy's seven-arg threshold without dropping any of the
 /// values.
 pub(super) struct MethodCallShape<'a> {
-    pub(super) method: &'a str,
+    pub(super) method: &'a Name,
     pub(super) args: &'a [Arg],
     pub(super) method_type_args: &'a [ResolvedType],
     pub(super) target: Resolution,
@@ -350,6 +350,7 @@ pub(super) fn lower_method_call(
         method_type_args,
         target,
     } = shape;
+    let method = method.as_str();
     // Structural receivers have no nominal method to call, so their
     // universal-protocol functions expand inline. Every route lands
     // here after monomorphization: `f == g`, a derived body comparing

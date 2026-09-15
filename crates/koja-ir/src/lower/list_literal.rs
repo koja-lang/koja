@@ -5,7 +5,7 @@
 //! `MethodCall` tree here so the emitted IR is byte-for-byte identical
 //! to a hand-written `List.new().append(a).append(b)`.
 
-use koja_ast::ast::{Arg, Expr, ExprKind};
+use koja_ast::ast::{Arg, Expr, ExprKind, Name};
 use koja_ast::identifier::{Identifier, Resolution, ResolvedType};
 use koja_ast::span::Span;
 use koja_typecheck::GlobalRegistry;
@@ -44,7 +44,7 @@ pub(super) fn lower_list_literal(
     let new_call = stamped_expr(
         ExprKind::MethodCall {
             receiver: Box::new(new_receiver),
-            method: "new".to_string(),
+            method: Name::new("new", span),
             args: Vec::new(),
             target: synthesized_method_target(registry, list_id, "new", 0),
             type_args: Vec::new(),
@@ -61,7 +61,7 @@ pub(super) fn lower_list_literal(
         stamped_expr(
             ExprKind::MethodCall {
                 receiver: Box::new(receiver),
-                method: "append".to_string(),
+                method: Name::new("append", span),
                 args: vec![arg],
                 target: synthesized_method_target(registry, list_id, "append", 2),
                 type_args: Vec::new(),

@@ -5,7 +5,7 @@
 //! Every other shape is a feature-gap diagnostic in resolve and
 //! never reaches seal on the success path.
 
-use koja_ast::ast::{BinarySegment, ExprKind, Pattern};
+use koja_ast::ast::{BinarySegment, ExprKind, Name, Pattern};
 use koja_ast::identifier::Resolution;
 use koja_ast::labels::{pattern_kind_label, pattern_span};
 use koja_ast::span::Span;
@@ -150,14 +150,14 @@ fn seal_binary_segment(segment: &BinarySegment) {
     }
 }
 
-fn seal_enum_path(type_path: &[String], variant: &str, span: Span) {
+fn seal_enum_path(type_path: &[Name], variant: &Name, span: Span) {
     if type_path.is_empty() {
         seal_panic(
             &format!("enum pattern `{variant}` carries an empty type path"),
             span,
         );
     }
-    if variant.is_empty() {
+    if variant.text.is_empty() {
         seal_panic("enum pattern carries an empty variant name", span);
     }
 }

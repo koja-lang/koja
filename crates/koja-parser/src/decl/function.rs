@@ -156,7 +156,7 @@ impl Parser {
             };
         }
 
-        let name = self.expect_ident();
+        let name = self.expect_name();
         self.expect(&TokenKind::Colon);
         let type_expr = self.parse_type_expr();
         let default = if self.eat(&TokenKind::Eq).is_some() {

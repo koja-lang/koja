@@ -221,7 +221,7 @@ fn adapter_body(
                 };
                 Expr::new(
                     ExprKind::Ident {
-                        name: name.clone(),
+                        name: name.text.clone(),
                         resolution: Resolution::Unresolved,
                     },
                     span,
@@ -247,7 +247,7 @@ fn adapter_body(
     let kind = if matches!(params.first(), Some(Param::Self_ { .. })) {
         ExprKind::MethodCall {
             receiver: Box::new(Expr::new(ExprKind::Self_ { local_id: None }, span)),
-            method: name.to_string(),
+            method: Name::new(name, span),
             args,
             target: Resolution::Unresolved,
             type_args: Vec::new(),
@@ -518,7 +518,7 @@ fn closure_bindings(params: &[ClosureParam]) -> HashSet<String> {
     params
         .iter()
         .filter_map(|param| match param {
-            ClosureParam::Name { name, .. } => Some(name.clone()),
+            ClosureParam::Name { name, .. } => Some(name.text.clone()),
             ClosureParam::Wildcard { .. } => None,
         })
         .collect()
@@ -533,7 +533,7 @@ fn pattern_bindings(pattern: &Pattern) -> HashSet<String> {
 fn collect_pattern_bindings(pattern: &Pattern, bindings: &mut HashSet<String>) {
     match pattern {
         Pattern::Binding { name, .. } | Pattern::TypedBinding { name, .. } => {
-            bindings.insert(name.clone());
+            bindings.insert(name.text.clone());
         }
         Pattern::Constructor { elements, .. }
         | Pattern::EnumTuple { elements, .. }

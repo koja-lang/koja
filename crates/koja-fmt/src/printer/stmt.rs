@@ -44,7 +44,7 @@ impl Printer {
                 value,
                 span,
             } => {
-                let target_doc = text(target.segments.join("."));
+                let target_doc = text(path_text(&target.segments));
                 let lhs = match type_annotation {
                     Some(te) => concat(vec![target_doc, text(": "), type_expr_to_doc(te)]),
                     None => target_doc,
@@ -55,7 +55,7 @@ impl Printer {
             Statement::CompoundAssign {
                 target, op, value, ..
             } => {
-                let lhs = text(target.segments.join("."));
+                let lhs = text(path_text(&target.segments));
                 self.assign_to_doc(lhs, compound_op_str(op), value)
             }
             Statement::Destructure { pattern, value, .. } => {

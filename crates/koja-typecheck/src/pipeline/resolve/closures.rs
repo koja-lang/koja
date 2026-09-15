@@ -217,7 +217,7 @@ fn declare_closure_params(
     for (param, param_ty) in params.iter_mut().zip(resolved.iter()) {
         match param {
             ClosureParam::Name { local_id, name, .. } => {
-                let id = resolver.scope.declare(name, param_ty.clone());
+                let id = resolver.scope.declare(name.as_str(), param_ty.clone());
                 *local_id = Some(id);
             }
             ClosureParam::Wildcard { local_id, .. } => {

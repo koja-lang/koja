@@ -17,7 +17,7 @@
 //! regardless of per-init mismatches so the surrounding tree stays
 //! stable.
 
-use koja_ast::ast::{Diagnostic, EnumConstructionData, Expr};
+use koja_ast::ast::{Diagnostic, EnumConstructionData, Expr, Name, name_texts, path_text};
 use koja_ast::identifier::{GlobalRegistryId, Resolution, ResolvedType, TypeParamIndex};
 use koja_ast::span::Span;
 
@@ -35,20 +35,22 @@ use super::structs::{validate_named_fields, walk_field_inits};
 use super::types::{display_resolution, lookup_type};
 
 pub(super) fn resolve_enum_construction(
-    type_path: &[String],
-    variant: &str,
+    type_path: &[Name],
+    variant: &Name,
     data: &mut EnumConstructionData,
     expected: Option<&ResolvedType>,
     span: Span,
     resolver: &mut Resolver<'_>,
     diagnostics: &mut Vec<Diagnostic>,
 ) -> ResolvedType {
-    let Some((enum_id, enum_entry)) = lookup_type(type_path, resolver.resolution_scope()) else {
+    let Some((enum_id, enum_entry)) =
+        lookup_type(&name_texts(type_path), resolver.resolution_scope())
+    else {
         bare_walk_construction_data(data, resolver, diagnostics);
         diagnostics.push(Diagnostic::error(
             format!(
                 "typecheck does not recognize the enum type `{}`",
-                type_path.join("."),
+                path_text(type_path),
             ),
             span,
         ));
@@ -79,7 +81,7 @@ pub(super) fn resolve_enum_construction(
 
     let enum_label = enum_entry.identifier.to_string();
     let type_params = enum_entry.type_params.clone();
-    let Some((_, variant_def)) = definition.lookup_variant(variant) else {
+    let Some((_, variant_def)) = definition.lookup_variant(variant.as_str()) else {
         bare_walk_construction_data(data, resolver, diagnostics);
         diagnostics.push(Diagnostic::error(
             format!("`{enum_label}` has no variant `{variant}`"),
@@ -177,7 +179,7 @@ fn infer_enum_type_args(
         }
         (ResolvedVariantData::Struct(declared), EnumConstructionData::Struct(inits)) => {
             let pairs = inits.iter().filter_map(|init| {
-                let declared_field = declared.iter().find(|f| f.name == init.name)?;
+                let declared_field = declared.iter().find(|f| init.name == f.name.as_str())?;
                 Some((&declared_field.ty, &init.value.resolution, init.span))
             });
             unify_pairs(pairs, &mut subst, registry, on_conflict);

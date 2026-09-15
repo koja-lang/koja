@@ -19,7 +19,7 @@ use std::io::{self, IsTerminal, Write};
 use std::path::{Path, PathBuf};
 use std::process;
 
-use koja_ast::ast::{Diagnostic, Expr, ExprKind, Statement};
+use koja_ast::ast::{Diagnostic, Expr, ExprKind, Name, Statement};
 use koja_ast::identifier::Resolution;
 use koja_ast::token::TokenKind;
 use koja_ir::{IRScript, IRType, lower_script};
@@ -479,7 +479,7 @@ fn wrap_trailing_in_format(parsed: &mut ParsedProgram, fragment_path: &Path) {
     body.push(Statement::Expr(Expr::new(
         ExprKind::MethodCall {
             receiver: Box::new(expr),
-            method: "format".to_string(),
+            method: Name::new("format", span),
             args: Vec::new(),
             target: Resolution::Unresolved,
             type_args: Vec::new(),

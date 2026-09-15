@@ -27,8 +27,8 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
 
 use koja_ast::ast::{
-    BuiltinDecl, Constant, EnumDecl, Function, Literal, ProtocolDecl, StructDecl, TypeAlias,
-    TypeParam,
+    BuiltinDecl, Constant, EnumDecl, Function, Literal, Name, ProtocolDecl, StructDecl, TypeAlias,
+    TypeParam, name_texts,
 };
 use koja_ast::identifier::{
     AnonymousKind, GlobalRegistryId, Identifier, Resolution, ResolvedType, TypeParamIndex,
@@ -1210,19 +1210,20 @@ impl GlobalRegistry {
     /// resolution, and bare stdlib names fall back to `Global`.
     pub fn lookup_owner_path(
         &self,
-        path: &[String],
+        path: &[Name],
         current_package: &str,
     ) -> Option<(GlobalRegistryId, String, Vec<String>)> {
-        if let Some((id, _)) = self.lookup(&Identifier::new(current_package, path.to_vec())) {
-            return Some((id, current_package.to_string(), path.to_vec()));
+        let path = name_texts(path);
+        if let Some((id, _)) = self.lookup(&Identifier::new(current_package, path.clone())) {
+            return Some((id, current_package.to_string(), path));
         }
         if path.len() >= 2
             && let Some((id, _)) = self.lookup(&Identifier::new(&path[0], path[1..].to_vec()))
         {
             return Some((id, path[0].clone(), path[1..].to_vec()));
         }
-        if let Some((id, _)) = self.lookup(&Identifier::new("Global", path.to_vec())) {
-            return Some((id, "Global".to_string(), path.to_vec()));
+        if let Some((id, _)) = self.lookup(&Identifier::new("Global", path.clone())) {
+            return Some((id, "Global".to_string(), path));
         }
         None
     }
@@ -1381,7 +1382,7 @@ pub const UNIVERSAL_PROTOCOLS: &[&str] = &["Debug", "Equality"];
 /// [`GlobalRegistry::set_type_param_bounds`], once every protocol id
 /// exists.
 fn type_param_names(type_params: &[TypeParam]) -> Vec<String> {
-    type_params.iter().map(|p| p.name.clone()).collect()
+    type_params.iter().map(|p| p.name.text.clone()).collect()
 }
 
 /// Seed a builtin stub under `Global.<name>` carrying `shape` and an
@@ -1449,7 +1450,7 @@ mod tests {
             type_params: params
                 .iter()
                 .map(|param| TypeParam {
-                    name: param.to_string(),
+                    name: Name::new(*param, name_span()),
                     bounds: Vec::new(),
                     span: name_span(),
                 })

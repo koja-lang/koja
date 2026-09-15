@@ -7,7 +7,7 @@
 //! - `priv fn` members
 //! - inline `type Alias = TypeExpr` members
 
-use koja_ast::ast::{ImplMember, TypeExpr, Visibility};
+use koja_ast::ast::{ImplMember, TypeExpr, Visibility, name_texts};
 
 mod common;
 
@@ -80,7 +80,7 @@ fn extend_with_dotted_target() {
     );
     match &block.target {
         TypeExpr::Named { path, .. } => {
-            assert_eq!(path, &vec!["Net".to_string(), "TCPSocket".to_string()]);
+            assert_eq!(name_texts(path), ["Net", "TCPSocket"]);
         }
         other => panic!("expected dotted Named target, got {other:?}"),
     }

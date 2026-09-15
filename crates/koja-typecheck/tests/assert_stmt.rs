@@ -13,7 +13,7 @@
 
 use std::path::PathBuf;
 
-use koja_ast::ast::{EnumConstructionData, Expr, ExprKind, FieldInit, Statement};
+use koja_ast::ast::{EnumConstructionData, Expr, ExprKind, FieldInit, Statement, name_texts};
 use koja_ast::util::dedent;
 use koja_parser::{ParseMode, SourceFile, parse_program};
 use koja_typecheck::check_program;
@@ -95,8 +95,8 @@ fn option_variant(expr: &Expr) -> &str {
     else {
         panic!("expected an Option construction, got {expr:?}");
     };
-    assert_eq!(type_path, &["Option"]);
-    variant
+    assert_eq!(name_texts(type_path), ["Option"]);
+    variant.as_str()
 }
 
 fn string_literal(expr: &Expr) -> String {

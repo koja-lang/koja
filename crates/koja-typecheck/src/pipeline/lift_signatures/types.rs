@@ -1,7 +1,7 @@
 //! Type-expression resolution + small label/span helpers shared by
 //! every other submodule under `lift_signatures/`.
 
-use koja_ast::ast::{AliasDecl, Diagnostic, TypeExpr};
+use koja_ast::ast::{AliasDecl, Diagnostic, Name, TypeExpr, name_texts, path_text};
 use koja_ast::identifier::{
     AnonymousKind, GlobalRegistryId, Identifier, Resolution, ResolvedType, TypeParamIndex,
 };
@@ -252,14 +252,18 @@ pub(crate) fn concrete_self_type(
 /// soon as the registry carries the target (no movement here when
 /// nested-type lifting lands).
 fn resolve_generic(
-    path: &[String],
+    path: &[Name],
     args: &[TypeExpr],
     span: Span,
     type_params: TypeParamScope<'_>,
     scope: ResolutionScope<'_>,
     diagnostics: &mut Vec<Diagnostic>,
 ) -> ResolvedType {
-    if path.len() == 1 && type_params.lookup(&path[0], scope.registry).is_some() {
+    if path.len() == 1
+        && type_params
+            .lookup(path[0].as_str(), scope.registry)
+            .is_some()
+    {
         diagnostics.push(Diagnostic::error(
             format!("type parameter `{}` cannot take type arguments", path[0],),
             span,
@@ -281,14 +285,14 @@ fn resolve_generic(
 }
 
 fn resolve_named(
-    path: &[String],
+    path: &[Name],
     span: Span,
     type_params: TypeParamScope<'_>,
     scope: ResolutionScope<'_>,
     diagnostics: &mut Vec<Diagnostic>,
 ) -> ResolvedType {
     if path.len() == 1
-        && let Some((owner, index)) = type_params.lookup(&path[0], scope.registry)
+        && let Some((owner, index)) = type_params.lookup(path[0].as_str(), scope.registry)
     {
         return ResolvedType::leaf(Resolution::TypeParam { owner, index });
     }
@@ -320,7 +324,7 @@ fn resolve_named(
 /// path is: `HTTP.Headers` resolves identically to `Headers` one
 /// segment shallower, just against a different identifier shape.
 pub(crate) fn resolve_path_to_global(
-    path: &[String],
+    path: &[Name],
     span: Span,
     scope: ResolutionScope<'_>,
     diagnostics: &mut Vec<Diagnostic>,
@@ -334,13 +338,14 @@ pub(crate) fn resolve_path_to_global(
 /// visibility gate sees the resolved entry once regardless of which
 /// precedence step hit.
 fn lookup_path_entry<'r>(
-    path: &[String],
+    path: &[Name],
     span: Span,
     scope: ResolutionScope<'r>,
     diagnostics: &mut Vec<Diagnostic>,
 ) -> Option<(GlobalRegistryId, &'r RegistryEntry)> {
+    let texts = name_texts(path);
     if let Some(target) =
-        rewrite_through_aliases(scope.aliases, path, scope.package, scope.registry)
+        rewrite_through_aliases(scope.aliases, &texts, scope.package, scope.registry)
     {
         if let Some(hit) = scope.registry.lookup(&target) {
             return Some(hit);
@@ -351,17 +356,17 @@ fn lookup_path_entry<'r>(
         ));
         return None;
     }
-    let local = Identifier::new(scope.package, path.to_vec());
+    let local = Identifier::new(scope.package, texts.clone());
     if let Some(hit) = scope.registry.lookup(&local) {
         return Some(hit);
     }
-    if path.len() >= 2 {
-        let head_as_pkg = Identifier::new(&path[0], path[1..].to_vec());
+    if texts.len() >= 2 {
+        let head_as_pkg = Identifier::new(&texts[0], texts[1..].to_vec());
         if let Some(hit) = scope.registry.lookup(&head_as_pkg) {
             return Some(hit);
         }
     }
-    let candidate = Identifier::new("Global", path.to_vec());
+    let candidate = Identifier::new("Global", texts);
     if let Some((id, entry)) = scope.registry.lookup(&candidate) {
         // Single-segment fallthrough into `Global.<name>` is reserved
         // for the stdlib builtins (`Int`, `String`, …). Those
@@ -385,7 +390,7 @@ fn lookup_path_entry<'r>(
         format!(
             "typecheck does not recognize the type name `{}` (no same-package or \
              `Global.*` entry registered)",
-            path.join("."),
+            path_text(path),
         ),
         span,
     ));

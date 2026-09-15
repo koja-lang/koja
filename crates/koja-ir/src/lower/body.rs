@@ -13,7 +13,7 @@
 //! diagnostic propagates back to `lower_program` /
 //! `lower_script` via the shared `diagnostics` accumulator.
 
-use koja_ast::ast::{CompoundOp, Expr, LValue, Statement};
+use koja_ast::ast::{CompoundOp, Expr, LValue, Statement, path_text};
 use koja_ast::identifier::{Identifier, LocalId, Resolution, ResolvedType};
 use koja_ast::span::Span;
 use koja_typecheck::{GlobalKind, GlobalRegistry, StructDefinition, Substitution, substitute};
@@ -321,7 +321,7 @@ fn lower_field_assignment(
         panic!(
             "IR lower: multi-segment assignment target `{}` carries no head \
              ResolvedType (typecheck resolve invariant violation)",
-            lvalue.segments.join("."),
+            path_text(&lvalue.segments),
         )
     });
 
@@ -466,12 +466,15 @@ fn build_field_chain(
         };
         let struct_id = *struct_id;
         let definition = registry_struct(registry, struct_id);
-        let (field_index, declared) = definition.lookup_field(segment).unwrap_or_else(|| {
-            panic!(
-                "IR lower: field-assignment segment `{segment}` is not a declared \
+        let (field_index, declared) =
+            definition
+                .lookup_field(segment.as_str())
+                .unwrap_or_else(|| {
+                    panic!(
+                        "IR lower: field-assignment segment `{segment}` is not a declared \
                  field on the receiver struct (typecheck resolve invariant violation)",
-            )
-        });
+                    )
+                });
         let subst = Substitution::from_args(struct_id, type_args);
         let substituted = substitute(&declared.ty, &subst);
         let field_ir_type =
@@ -568,7 +571,7 @@ fn lower_compound_assignment(
         panic!(
             "IR lower: multi-segment compound-assign target `{}` carries no head \
              ResolvedType (typecheck resolve invariant violation)",
-            target.segments.join("."),
+            path_text(&target.segments),
         )
     });
     let plan = build_field_chain(&head_ty, target, registry, output);
@@ -712,7 +715,7 @@ fn expect_local_id(lvalue: &LValue) -> LocalId {
         panic!(
             "IR lower: assignment target `{}` carries no LocalId (typecheck \
              resolve invariant violation)",
-            lvalue.segments.join("."),
+            path_text(&lvalue.segments),
         )
     })
 }

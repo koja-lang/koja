@@ -2,7 +2,7 @@
 //! functions (top-level, inline struct methods, impl-block methods)
 //! via the [`super::SelfContext`] knob.
 
-use koja_ast::ast::{Diagnostic, Function, Param, TypeExpr, is_extern_c, is_intrinsic};
+use koja_ast::ast::{Diagnostic, Function, Param, TypeExpr, is_extern_c, is_intrinsic, path_text};
 use koja_ast::identifier::{AnonymousKind, GlobalRegistryId, Identifier, Resolution, ResolvedType};
 
 use crate::registry::{Dispatch, FunctionSignature, GlobalKind, GlobalRegistry, ResolvedParam};
@@ -304,7 +304,7 @@ fn is_ffi_admissible_type(ty: &ResolvedType, registry: &GlobalRegistry) -> bool 
 /// rejected (full pretty-printing lives in `koja-fmt`).
 fn type_expr_label(ty: &TypeExpr) -> String {
     match ty {
-        TypeExpr::Named { path, .. } | TypeExpr::Generic { path, .. } => path.join("."),
+        TypeExpr::Named { path, .. } | TypeExpr::Generic { path, .. } => path_text(path),
         TypeExpr::Self_ { .. } => "Self".to_string(),
         TypeExpr::Unit { .. } => "Unit".to_string(),
         TypeExpr::Function { .. } => "<function type>".to_string(),
@@ -410,7 +410,7 @@ fn lift_param(
                 diagnostics,
             );
             ResolvedParam {
-                name: name.clone(),
+                name: name.text.clone(),
                 ty,
             }
         }

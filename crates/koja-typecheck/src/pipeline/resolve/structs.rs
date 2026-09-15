@@ -7,7 +7,9 @@
 //! over in [`super::types`] alongside the other registry-backed
 //! type predicates.
 
-use koja_ast::ast::{Diagnostic, EnumConstructionData, Expr, ExprKind, FieldInit};
+use koja_ast::ast::{
+    Diagnostic, EnumConstructionData, Expr, ExprKind, FieldInit, Name, name_texts, path_text,
+};
 use koja_ast::identifier::{
     AnonymousKind, GlobalRegistryId, Resolution, ResolvedType, TypeParamIndex,
 };
@@ -52,9 +54,9 @@ pub(super) fn rewrite_dotted_struct_construction(expr: &mut Expr, resolver: &Res
 }
 
 /// `type_path ++ [variant]`.
-fn joined(type_path: &[String], variant: &str) -> Vec<String> {
-    let mut path = type_path.to_vec();
-    path.push(variant.to_string());
+fn joined(type_path: &[Name], variant: &Name) -> Vec<String> {
+    let mut path = name_texts(type_path);
+    path.push(variant.text.clone());
     path
 }
 
@@ -68,20 +70,21 @@ fn joined(type_path: &[String], variant: &str) -> Vec<String> {
 /// is always the struct's leaf type regardless of per-field
 /// mismatches so the surrounding expression stays stable.
 pub(super) fn resolve_struct_construction(
-    type_path: &[String],
+    type_path: &[Name],
     fields: &mut Vec<FieldInit>,
     expected: Option<&ResolvedType>,
     span: Span,
     resolver: &mut Resolver<'_>,
     diagnostics: &mut Vec<Diagnostic>,
 ) -> ResolvedType {
-    let Some((struct_id, struct_entry)) = lookup_type(type_path, resolver.resolution_scope())
+    let Some((struct_id, struct_entry)) =
+        lookup_type(&name_texts(type_path), resolver.resolution_scope())
     else {
         bare_walk_fields(fields, resolver, diagnostics);
         diagnostics.push(Diagnostic::error(
             format!(
                 "typecheck does not recognize the struct type `{}`",
-                type_path.join("."),
+                path_text(type_path),
             ),
             span,
         ));
@@ -407,18 +410,18 @@ pub(super) fn validate_named_fields(
 
 fn lookup_named_field<'a>(
     declared: &'a [ResolvedStructField],
-    name: &str,
+    name: &Name,
 ) -> Option<(u32, &'a ResolvedStructField)> {
     declared
         .iter()
         .enumerate()
-        .find(|(_, field)| field.name == name)
+        .find(|(_, field)| field.name == name.text)
         .map(|(index, field)| (index as u32, field))
 }
 
 pub(super) fn resolve_field_access(
     receiver: &mut Expr,
-    field: &str,
+    field: &Name,
     span: Span,
     resolver: &mut Resolver<'_>,
     diagnostics: &mut Vec<Diagnostic>,
@@ -472,7 +475,7 @@ pub(super) fn resolve_field_access(
         ));
         return ResolvedType::unresolved();
     };
-    let Some((_, declared)) = definition.lookup_field(field) else {
+    let Some((_, declared)) = definition.lookup_field(field.as_str()) else {
         diagnostics.push(Diagnostic::error(
             format!("`{}` has no field `{field}`", entry.identifier),
             span,

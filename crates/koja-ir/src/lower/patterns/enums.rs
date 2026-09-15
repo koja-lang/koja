@@ -12,7 +12,7 @@
 //! by the tag-check success edge, so the `EnumPayloadFieldGet`
 //! projection is safe.
 
-use koja_ast::ast::{FieldPattern, Pattern};
+use koja_ast::ast::{FieldPattern, Name, Pattern};
 use koja_ast::identifier::{GlobalRegistryId, Resolution, ResolvedType};
 use koja_typecheck::ResolvedVariantData;
 
@@ -27,7 +27,7 @@ use crate::function::{IRBlockId, IRInstruction, IRSymbol};
 use crate::types::{ConstValue, IRBinOp, IRType, ValueId};
 
 pub(super) fn lower_enum_struct_check(
-    variant_name: &str,
+    variant_name: &Name,
     fields: &[FieldPattern],
     inputs: &PatternInputs<'_>,
     ctx: &mut FnLowerCtx,
@@ -75,7 +75,7 @@ pub(super) fn lower_enum_struct_check(
 }
 
 pub(super) fn lower_enum_tuple_check(
-    variant_name: &str,
+    variant_name: &Name,
     elements: &[Pattern],
     inputs: &PatternInputs<'_>,
     ctx: &mut FnLowerCtx,
@@ -129,7 +129,7 @@ pub(super) fn lower_enum_tuple_check(
 /// [`super::single_test`] so no payload extraction happens for
 /// unit-variant patterns.
 pub(super) fn emit_enum_tag_eq(
-    variant_name: &str,
+    variant_name: &Name,
     inputs: &PatternInputs<'_>,
     ctx: &mut FnLowerCtx,
     block: IRBlockId,
@@ -233,7 +233,7 @@ fn walk_enum_struct_fields(
         let (payload_index, declared) = declared_fields
             .iter()
             .enumerate()
-            .find(|(_, decl)| decl.name == field.name)
+            .find(|(_, decl)| decl.name == field.name.text)
             .unwrap_or_else(|| {
                 panic!(
                     "IR lower: enum struct pattern `{}.{variant}.{name}` references \
@@ -288,7 +288,7 @@ impl EnumPatternMetadata<'_> {
 /// subject + variant name: registry entry, mangled symbol, tag,
 /// owner-id, and a borrowed view of the declared payload shape.
 fn enum_pattern_metadata<'a>(
-    variant_name: &str,
+    variant_name: &Name,
     inputs: &'a PatternInputs<'_>,
     output: &mut LowerOutput,
 ) -> EnumPatternMetadata<'a> {
@@ -299,13 +299,15 @@ fn enum_pattern_metadata<'a>(
         inputs.registry,
         &mut output.instantiations,
     );
-    let (variant_index, variant) = definition.lookup_variant(variant_name).unwrap_or_else(|| {
-        panic!(
-            "IR lower: enum `{}` has no variant `{variant_name}` \
+    let (variant_index, variant) = definition
+        .lookup_variant(variant_name.as_str())
+        .unwrap_or_else(|| {
+            panic!(
+                "IR lower: enum `{}` has no variant `{variant_name}` \
              (typecheck invariant violation)",
-            entry.identifier,
-        )
-    });
+                entry.identifier,
+            )
+        });
     let owner = match inputs.subject_ty {
         ResolvedType::Named {
             resolution: Resolution::Global(id),

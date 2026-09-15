@@ -6,7 +6,7 @@
 //! [`super::ops`] (literal / binary / unary). Every successful arm
 //! returns the [`ResolvedType`] to stamp on `expr.resolution`.
 
-use koja_ast::ast::{BinOp, Diagnostic, Expr, ExprKind};
+use koja_ast::ast::{BinOp, Diagnostic, Expr, ExprKind, name_texts};
 use koja_ast::identifier::ResolvedType;
 use koja_ast::labels::expr_kind_label;
 
@@ -242,9 +242,14 @@ pub(super) fn resolve_expr_with_expected(
             path,
             arity,
             target,
-        } => {
-            resolve_named_function_reference(path, *arity, target, expr.span, resolver, diagnostics)
-        }
+        } => resolve_named_function_reference(
+            &name_texts(path),
+            *arity,
+            target,
+            expr.span,
+            resolver,
+            diagnostics,
+        ),
         ExprKind::Receive {
             arms,
             after_timeout,

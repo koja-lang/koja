@@ -36,7 +36,7 @@ mod or_pattern;
 mod structs;
 mod usefulness;
 
-use koja_ast::ast::{Diagnostic, Pattern};
+use koja_ast::ast::{Diagnostic, Pattern, name_texts};
 use koja_ast::identifier::{AnonymousKind, Resolution, ResolvedType};
 use koja_ast::labels::pattern_span;
 use koja_ast::span::Span;
@@ -59,7 +59,7 @@ pub(super) fn resolve_pattern(
     rewrite_dotted_struct_pattern(pat, resolver);
     match pat {
         Pattern::Binding { local_id, name, .. } => {
-            let id = resolver.scope.declare(name, subject_ty.clone());
+            let id = resolver.scope.declare(name.as_str(), subject_ty.clone());
             *local_id = Some(id);
         }
         Pattern::Constructor { .. } => {
@@ -199,7 +199,7 @@ pub(super) fn resolve_pattern(
                 }
                 _ => {}
             }
-            let id = resolver.scope.declare(name, resolved.clone());
+            let id = resolver.scope.declare(name.as_str(), resolved.clone());
             *local_id = Some(id);
             *resolved_type = Some(resolved);
         }
@@ -276,8 +276,8 @@ fn rewrite_dotted_struct_pattern(pat: &mut Pattern, resolver: &Resolver<'_>) {
     else {
         return;
     };
-    let mut full = type_path.clone();
-    full.push(variant.clone());
+    let mut full = name_texts(type_path);
+    full.push(variant.text.clone());
     if !names_struct(&full, resolver.resolution_scope()) {
         return;
     }

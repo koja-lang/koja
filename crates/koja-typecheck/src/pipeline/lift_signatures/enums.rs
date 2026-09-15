@@ -98,7 +98,7 @@ fn lift_enum_definition(
                     );
                     resolved.push(ResolvedStructField {
                         default: lift_field_default(field, diagnostics),
-                        name: field.name.clone(),
+                        name: field.name.text.clone(),
                         ty,
                     });
                 }
@@ -127,7 +127,7 @@ fn lift_enum_definition(
         };
         variants.push(ResolvedEnumVariant {
             data,
-            name: variant.name.clone(),
+            name: variant.name.text.clone(),
         });
     }
     scope.registry.set_enum_definition(

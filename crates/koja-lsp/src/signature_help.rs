@@ -52,7 +52,7 @@ impl Backend {
             }
             ExprKind::MethodCall { method, target, .. } => {
                 let sig = function_signature_for_target(*target, registry);
-                (method.clone(), sig)
+                (method.text.clone(), sig)
             }
             _ => return Ok(None),
         };

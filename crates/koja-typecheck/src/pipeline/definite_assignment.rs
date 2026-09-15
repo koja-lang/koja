@@ -471,7 +471,7 @@ impl Checker<'_, '_> {
     /// local before storing through it.
     fn check_lvalue_head(&mut self, target: &LValue, state: &FlowState) {
         if let Some(id) = target.local_id {
-            self.check_read(id, &target.segments[0], target.span, state);
+            self.check_read(id, target.segments[0].as_str(), target.span, state);
         }
     }
 

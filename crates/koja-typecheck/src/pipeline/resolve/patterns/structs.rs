@@ -8,7 +8,7 @@
 //! bindings and any chained literal checks via
 //! [`super::super::super::lower::patterns`].
 
-use koja_ast::ast::{Diagnostic, FieldPattern};
+use koja_ast::ast::{Diagnostic, FieldPattern, Name, name_texts, path_text};
 use koja_ast::identifier::{Resolution, ResolvedType};
 use koja_ast::span::Span;
 
@@ -20,7 +20,7 @@ use crate::pipeline::visibility::check_reference_visibility;
 use crate::registry::{GlobalKind, ResolvedStructField};
 
 pub(super) fn resolve_struct_pattern(
-    type_path: &[String],
+    type_path: &[Name],
     fields: &mut [FieldPattern],
     subject_ty: &ResolvedType,
     span: Span,
@@ -52,17 +52,18 @@ struct StructPatternMetadata {
 /// generic type-args via `subject_ty.type_args`, so
 /// `Bag<Int>{ item: x }` views `item` as `Int`.
 fn resolve_struct_metadata(
-    type_path: &[String],
+    type_path: &[Name],
     subject_ty: &ResolvedType,
     span: Span,
     resolver: &Resolver<'_>,
     diagnostics: &mut Vec<Diagnostic>,
 ) -> Option<StructPatternMetadata> {
-    let Some((struct_id, entry)) = lookup_type(type_path, resolver.resolution_scope()) else {
+    let Some((struct_id, entry)) = lookup_type(&name_texts(type_path), resolver.resolution_scope())
+    else {
         diagnostics.push(Diagnostic::error(
             format!(
                 "typecheck does not recognize the struct type `{}`",
-                type_path.join("."),
+                path_text(type_path),
             ),
             span,
         ));
@@ -140,7 +141,7 @@ pub(super) fn walk_field_patterns(
         let lookup = declared
             .iter()
             .enumerate()
-            .find(|(_, declared_field)| declared_field.name == field.name);
+            .find(|(_, declared_field)| declared_field.name == field.name.text);
         let Some((index, declared_field)) = lookup else {
             diagnostics.push(Diagnostic::error(
                 format!("`{owner_label}` has no field `{}`", field.name),

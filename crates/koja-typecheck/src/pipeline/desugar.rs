@@ -135,7 +135,7 @@ fn test_function(test: TestDecl, path: Option<&Path>, visibility: Visibility) ->
         params: Vec::new(),
         return_type: None,
         error_type: Some(TypeExpr::Named {
-            path: vec![TEST_PACKAGE.to_string(), FAILURE_TYPE.to_string()],
+            path: vec![Name::new(TEST_PACKAGE, span), Name::new(FAILURE_TYPE, span)],
             span,
         }),
         body: Some(test.body),

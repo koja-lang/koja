@@ -15,7 +15,7 @@
 
 use std::collections::BTreeMap;
 
-use koja_ast::ast::{AliasDecl, Diagnostic, Item};
+use koja_ast::ast::{AliasDecl, Diagnostic, Item, Name, name_texts, path_text};
 use koja_ast::identifier::{GlobalRegistryId, Identifier};
 
 use crate::pipeline::visibility::check_reference_visibility;
@@ -42,7 +42,7 @@ pub(crate) fn rewrite_through_aliases(
     registry: &GlobalRegistry,
 ) -> Option<Identifier> {
     let head = path.first()?;
-    let alias = aliases.iter().find(|a| a.local_name == *head)?;
+    let alias = aliases.iter().find(|a| a.local_name == head.as_str())?;
     if alias.path.len() < 2 {
         return None;
     }
@@ -59,11 +59,12 @@ pub(crate) fn rewrite_through_aliases(
 /// (targets are always qualified). Shared by [`rewrite_through_aliases`]
 /// and [`validate_file_aliases`] so use sites and the validator agree.
 fn lookup_alias_target<'r>(
-    target_path: &[String],
+    target_path: &[Name],
     package: &str,
     registry: &'r GlobalRegistry,
 ) -> Option<(GlobalRegistryId, &'r RegistryEntry)> {
-    if let Some(hit) = registry.lookup(&Identifier::new(package, target_path.to_vec())) {
+    let target_path = name_texts(target_path);
+    if let Some(hit) = registry.lookup(&Identifier::new(package, target_path.clone())) {
         return Some(hit);
     }
     if target_path.len() >= 2
@@ -72,7 +73,7 @@ fn lookup_alias_target<'r>(
     {
         return Some(hit);
     }
-    registry.lookup(&Identifier::new("Global", target_path.to_vec()))
+    registry.lookup(&Identifier::new("Global", target_path))
 }
 
 /// Walk every file in `packages`, validating each [`AliasDecl`].
@@ -140,7 +141,7 @@ fn validate_file_aliases<'a>(
             diagnostics.push(Diagnostic::error(
                 format!(
                     "alias target `{}` is not a registered type",
-                    alias.path.join("."),
+                    path_text(&alias.path),
                 ),
                 alias.span,
             ));
@@ -164,7 +165,7 @@ fn check_path_length(alias: &AliasDecl, diagnostics: &mut Vec<Diagnostic>) -> bo
     diagnostics.push(Diagnostic::error(
         format!(
             "alias path must be `Package.Type` (qualified), got `{}`",
-            alias.path.join("."),
+            path_text(&alias.path),
         ),
         alias.span,
     ));
@@ -201,7 +202,7 @@ fn check_no_duplicate(
     seen: &mut BTreeMap<String, koja_ast::span::Span>,
     diagnostics: &mut Vec<Diagnostic>,
 ) -> bool {
-    if let Some(prev_span) = seen.get(&alias.local_name) {
+    if let Some(prev_span) = seen.get(alias.local_name.as_str()) {
         diagnostics.push(
             Diagnostic::error(
                 format!(
@@ -217,7 +218,7 @@ fn check_no_duplicate(
         );
         return false;
     }
-    seen.insert(alias.local_name.clone(), alias.span);
+    seen.insert(alias.local_name.text.clone(), alias.span);
     true
 }
 
@@ -233,10 +234,10 @@ fn check_no_shadow(
     registry: &GlobalRegistry,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
-    let local_name = alias.local_name.clone();
+    let local_name = alias.local_name.as_str();
     let scopes: [(&str, Identifier); 2] = [
-        (package, Identifier::single(package, local_name.clone())),
-        ("Global", Identifier::single("Global", local_name.clone())),
+        (package, Identifier::single(package, local_name)),
+        ("Global", Identifier::single("Global", local_name)),
     ];
     for (label, candidate) in scopes {
         let Some((_, entry)) = registry.lookup(&candidate) else {

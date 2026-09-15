@@ -82,7 +82,7 @@ pub(crate) fn find_in_type_expr(
         TypeExpr::Named { path, span } => {
             if span_contains(span, line, col) {
                 let name = path.last()?;
-                return classify_name(name, ctx);
+                return classify_name(name.as_str(), ctx);
             }
         }
         TypeExpr::Generic { path, args, span } => {
@@ -93,7 +93,7 @@ pub(crate) fn find_in_type_expr(
                     }
                 }
                 let name = path.last()?;
-                return classify_name(name, ctx);
+                return classify_name(name.as_str(), ctx);
             }
         }
         TypeExpr::Union { types, span } => {
@@ -152,7 +152,7 @@ fn find_in_pattern(pat: &Pattern, line: u32, col: u32, ctx: &LookupCtx<'_>) -> O
         } => {
             if span_contains(span, line, col) {
                 let name = type_path.first()?;
-                return classify_name(name, ctx);
+                return classify_name(name.as_str(), ctx);
             }
         }
         Pattern::EnumTuple {
@@ -168,7 +168,7 @@ fn find_in_pattern(pat: &Pattern, line: u32, col: u32, ctx: &LookupCtx<'_>) -> O
                     }
                 }
                 let name = type_path.first()?;
-                return classify_name(name, ctx);
+                return classify_name(name.as_str(), ctx);
             }
         }
         Pattern::EnumStruct {
@@ -190,7 +190,7 @@ fn find_in_pattern(pat: &Pattern, line: u32, col: u32, ctx: &LookupCtx<'_>) -> O
                     }
                 }
                 let name = type_path.first()?;
-                return classify_name(name, ctx);
+                return classify_name(name.as_str(), ctx);
             }
         }
         Pattern::Constructor {
@@ -205,7 +205,7 @@ fn find_in_pattern(pat: &Pattern, line: u32, col: u32, ctx: &LookupCtx<'_>) -> O
                         return Some(info);
                     }
                 }
-                return classify_name(name, ctx);
+                return classify_name(name.as_str(), ctx);
             }
         }
         Pattern::List { elements, span } => {
@@ -429,13 +429,13 @@ fn find_in_expr(expr: &Expr, line: u32, col: u32, ctx: &LookupCtx<'_>) -> Option
         ExprKind::StructConstruction { type_path, .. } => {
             if span_contains(&expr.span, line, col) {
                 let name = type_path.last()?;
-                return classify_name(name, ctx);
+                return classify_name(name.as_str(), ctx);
             }
         }
         ExprKind::EnumConstruction { type_path, .. } => {
             if span_contains(&expr.span, line, col) {
                 let name = type_path.first()?;
-                return classify_name(name, ctx);
+                return classify_name(name.as_str(), ctx);
             }
         }
         ExprKind::While { condition, body } => {
@@ -1121,7 +1121,7 @@ fn lookup_type(name: &str, ctx: &LookupCtx<'_>) -> Option<GlobalRegistryId> {
 /// can locate the right method entry. Returns `(type_name, method_name)`.
 fn resolve_method_name(
     receiver: &Expr,
-    method: &str,
+    method: &Name,
     ctx: &LookupCtx<'_>,
 ) -> Option<(String, String)> {
     use koja_ast::identifier::Identifier;
@@ -1129,14 +1129,14 @@ fn resolve_method_name(
     let type_entry = ctx.registry.get(type_id)?;
     let type_name = type_entry.identifier.last().to_string();
     let pkg = type_entry.identifier.package().to_string();
-    let method_ident = Identifier::new(&pkg, vec![type_name.clone(), method.to_string()]);
+    let method_ident = Identifier::new(&pkg, vec![type_name.clone(), method.text.clone()]);
     ctx.registry.lookup(&method_ident)?;
-    Some((type_name, method.to_string()))
+    Some((type_name, method.text.clone()))
 }
 
 /// Returns true if the cursor is positioned on the method name portion of a
 /// method call (after the `.`), not on the receiver or arguments.
-fn cursor_on_method(receiver: &Expr, method: &str, span: &Span, line: u32, col: u32) -> bool {
+fn cursor_on_method(receiver: &Expr, method: &Name, span: &Span, line: u32, col: u32) -> bool {
     let recv_end = match &receiver.kind {
         ExprKind::Literal { .. }
         | ExprKind::Ident { .. }
@@ -1147,6 +1147,6 @@ fn cursor_on_method(receiver: &Expr, method: &str, span: &Span, line: u32, col: 
         _ => return span_contains(span, line, col),
     };
     let method_start = recv_end + 1;
-    let method_end = method_start + method.len() as u32;
+    let method_end = method_start + method.text.len() as u32;
     line == receiver.span.end.line && col >= method_start && col < method_end
 }

@@ -17,7 +17,7 @@
 //! `FieldAccess` / unit-`EnumConstruction` prefix into the type-path
 //! prefix of an enum construction.
 
-use koja_ast::ast::{EnumConstructionData, Expr, ExprKind, FieldInit};
+use koja_ast::ast::{EnumConstructionData, Expr, ExprKind, FieldInit, Name, path_text};
 use koja_ast::identifier::Resolution;
 use koja_ast::span::Span;
 use koja_ast::token::TokenKind;
@@ -27,13 +27,13 @@ use crate::parser::{ERROR_IDENT, Parser};
 impl Parser {
     pub(crate) fn parse_type_construction(&mut self) -> Expr {
         let start = self.current_span();
-        let first = self.expect_type_ident();
+        let first = self.expect_type_name();
         let mut path = vec![first];
 
         while self.at(&TokenKind::Dot) {
             if matches!(self.peek_nth(1), TokenKind::TypeIdent(_)) {
                 self.advance(); // .
-                let seg = self.expect_type_ident();
+                let seg = self.expect_type_name();
 
                 if self.at(&TokenKind::LBrace)
                     || self.at(&TokenKind::LParen)
@@ -77,7 +77,7 @@ impl Parser {
             self.expect(&TokenKind::RParen);
             let callee = Expr::new(
                 ExprKind::Ident {
-                    name: path.join("."),
+                    name: path_text(&path),
                     resolution: Resolution::Unresolved,
                 },
                 self.span_from(start),
@@ -93,7 +93,7 @@ impl Parser {
         } else {
             Expr::new(
                 ExprKind::Ident {
-                    name: path.join("."),
+                    name: path_text(&path),
                     resolution: Resolution::Unresolved,
                 },
                 self.span_from(start),
@@ -103,8 +103,8 @@ impl Parser {
 
     pub(crate) fn parse_enum_construction_tail(
         &mut self,
-        type_path: Vec<String>,
-        variant: String,
+        type_path: Vec<Name>,
+        variant: Name,
         start: Span,
     ) -> Expr {
         if self.eat(&TokenKind::LParen).is_some() {
@@ -156,7 +156,7 @@ impl Parser {
         let mut fields = Vec::new();
         while !self.at(&TokenKind::RBrace) && !self.at_eof() {
             let field_start = self.current_span();
-            let name = self.expect_ident();
+            let name = self.expect_name();
             self.expect(&TokenKind::Colon);
             let value = self.parse_expr();
             fields.push(FieldInit {
@@ -178,9 +178,9 @@ impl Parser {
     /// which then needs to be unrolled into `["pkg", "Type"]` so the
     /// outer `EnumConstruction` carries the right `type_path` and
     /// `variant`.
-    pub(crate) fn extract_type_path(&self, expr: &Expr) -> Vec<String> {
+    pub(crate) fn extract_type_path(&self, expr: &Expr) -> Vec<Name> {
         match &expr.kind {
-            ExprKind::Ident { name, .. } => vec![name.clone()],
+            ExprKind::Ident { name, .. } => vec![Name::new(name.clone(), expr.span)],
             ExprKind::FieldAccess {
                 receiver, field, ..
             } => {
@@ -197,7 +197,7 @@ impl Parser {
                 path.push(variant.clone());
                 path
             }
-            _ => vec![ERROR_IDENT.to_string()],
+            _ => vec![Name::new(ERROR_IDENT, expr.span)],
         }
     }
 }

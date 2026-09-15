@@ -5,7 +5,7 @@
 //! equivalent `MethodCall` tree here so the emitted IR is identical to
 //! a hand-written `Map.new().put(k1, v1).put(k2, v2)`.
 
-use koja_ast::ast::{Arg, Expr, ExprKind};
+use koja_ast::ast::{Arg, Expr, ExprKind, Name};
 use koja_ast::identifier::{Identifier, Resolution, ResolvedType};
 use koja_ast::span::Span;
 use koja_typecheck::GlobalRegistry;
@@ -44,7 +44,7 @@ pub(super) fn lower_map_literal(
     let new_call = stamped_expr(
         ExprKind::MethodCall {
             receiver: Box::new(new_receiver),
-            method: "new".to_string(),
+            method: Name::new("new", span),
             args: Vec::new(),
             target: synthesized_method_target(registry, map_id, "new", 0),
             type_args: Vec::new(),
@@ -66,7 +66,7 @@ pub(super) fn lower_map_literal(
         stamped_expr(
             ExprKind::MethodCall {
                 receiver: Box::new(receiver),
-                method: "put".to_string(),
+                method: Name::new("put", span),
                 args: vec![key_arg, value_arg],
                 target: synthesized_method_target(registry, map_id, "put", 3),
                 type_args: Vec::new(),
