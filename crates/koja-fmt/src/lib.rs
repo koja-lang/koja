@@ -2,7 +2,7 @@ pub mod doc;
 pub mod printer;
 
 use doc::{DEFAULT_WIDTH, render};
-use koja_ast::ast::Diagnostic;
+use koja_ast::ast::{Diagnostic, Function};
 use koja_parser::ParseMode;
 
 /// The result of formatting a source string.
@@ -47,4 +47,18 @@ pub fn format_width(source: &str, width: u32, mode: ParseMode) -> FormatResult {
     }
 
     FormatResult::Ok(out)
+}
+
+/// Formats a function header the way [`format`] would print it at
+/// column 0, wrapping at `width`. `display_name` replaces the
+/// function's own name, so a hover can show `Type.method`. The body,
+/// annotations, and comments are left out. Editors call this to show a
+/// signature that matches the formatter.
+pub fn format_signature(function: &Function, display_name: &str, width: u32) -> String {
+    let doc = printer::signature_to_doc(function, display_name);
+    render(&doc, width)
+        .lines()
+        .map(str::trim_end)
+        .collect::<Vec<_>>()
+        .join("\n")
 }

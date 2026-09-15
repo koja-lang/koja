@@ -9,11 +9,11 @@ use tower_lsp_server::jsonrpc::Result;
 use tower_lsp_server::ls_types::*;
 
 use koja_ast::ast::ExprKind;
+use koja_query::display::{format_function_signature, format_resolved_type};
+use koja_query::expr_at::{find_expr_at, receiver_type_id};
 use koja_typecheck::{Candidate, CandidateDetail, CandidateKind, GlobalKind, GlobalRegistry};
 
 use crate::backend::Backend;
-use crate::format::{format_function_signature, format_resolved_type};
-use crate::lookup::{LookupCtx, find_expr_at, traverse_receiver_type_id};
 
 impl Backend {
     /// Handles `textDocument/completion` requests by returning keyword
@@ -32,22 +32,16 @@ impl Backend {
             Some(s) => s,
             None => return Ok(Some(CompletionResponse::Array(items))),
         };
-        let (file, registry) = match (state.active_file(), state.registry()) {
+        let (file, registry) = match (state.active_file(), state.registry.as_deref()) {
             (Some(f), Some(r)) => (f, r),
             _ => return Ok(Some(CompletionResponse::Array(items))),
-        };
-
-        let ctx = LookupCtx {
-            registry,
-            package: &state.active_package,
-            locals: &state.locals,
         };
 
         let line = pos.line + 1;
         let col = pos.character + 1;
         if let Some(expr) = find_expr_at(file, line, col)
             && let ExprKind::FieldAccess { receiver, .. } = &expr.kind
-            && let Some(type_id) = traverse_receiver_type_id(receiver, &ctx)
+            && let Some(type_id) = receiver_type_id(receiver, registry)
         {
             let is_static = matches!(&receiver.kind, ExprKind::Ident { .. })
                 && matches!(

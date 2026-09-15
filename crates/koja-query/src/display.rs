@@ -1,7 +1,6 @@
-//! Human-readable rendering of pipeline types for hover and
-//! completion. Mirrors `display_resolution` in `koja-typecheck`
-//! (today private), duplicated here as a small local printer rather
-//! than promoting the upstream helper.
+//! Human-readable rendering of registry types for hover and
+//! completion. Mirrors `display_resolution` in `koja-typecheck`,
+//! which stays private to that crate.
 
 use koja_ast::identifier::{AnonymousKind, Resolution, ResolvedType};
 use koja_typecheck::{
@@ -10,7 +9,7 @@ use koja_typecheck::{
 };
 
 /// Render a [`ResolvedType`] as a short, user-facing string.
-pub(crate) fn format_resolved_type(ty: &ResolvedType, registry: &GlobalRegistry) -> String {
+pub fn format_resolved_type(ty: &ResolvedType, registry: &GlobalRegistry) -> String {
     match ty {
         ResolvedType::Anonymous(AnonymousKind::Function { params, ret }) => {
             let rendered_params = params
@@ -76,7 +75,7 @@ pub(crate) fn format_resolved_type(ty: &ResolvedType, registry: &GlobalRegistry)
 
 /// Render a [`FunctionSignature`] under `display_name`, including
 /// type-parameter names from the owning [`RegistryEntry`].
-pub(crate) fn format_function_signature(
+pub fn format_function_signature(
     display_name: &str,
     sig: &FunctionSignature,
     type_params: &[String],
@@ -106,7 +105,7 @@ fn format_param(p: &ResolvedParam, registry: &GlobalRegistry) -> String {
 
 /// Render a struct's hover signature: `struct Name<Tp,...>` followed
 /// by each field on its own indented line.
-pub(crate) fn format_struct_def(
+pub fn format_struct_def(
     name: &str,
     type_params: &[String],
     fields: &[ResolvedStructField],
@@ -131,7 +130,7 @@ pub(crate) fn format_struct_def(
 
 /// Render an enum's hover signature: `enum Name<Tp,...>` followed by
 /// each variant on its own indented line.
-pub(crate) fn format_enum_def(
+pub fn format_enum_def(
     name: &str,
     type_params: &[String],
     variants: &[ResolvedEnumVariant],
@@ -174,7 +173,7 @@ pub(crate) fn format_enum_def(
 
 /// Render a protocol's hover signature: `protocol Name<Tp,...>`
 /// followed by each method on its own indented line.
-pub(crate) fn format_protocol_def(
+pub fn format_protocol_def(
     name: &str,
     type_params: &[String],
     methods: &[ResolvedProtocolMethod],

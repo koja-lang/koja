@@ -36,5 +36,5 @@ pub use registry::{
     FunctionDefinition, FunctionOrigin, FunctionSignature, GlobalKind, GlobalRegistry, KEYWORDS,
     ProtocolDefinition, RegistryEntry, ResolvedEnumVariant, ResolvedParam, ResolvedProtocolBound,
     ResolvedProtocolMethod, ResolvedStructField, ResolvedVariantData, StructDefinition,
-    format_registry,
+    VisibilityScope, format_registry,
 };

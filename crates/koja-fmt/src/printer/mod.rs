@@ -50,6 +50,20 @@ pub fn file_to_doc(file: &File, tokens: &[Token]) -> Doc {
     concat(std::iter::once(doc).chain(docs).collect())
 }
 
+/// Converts a function header into a `Doc`, with `display_name` in
+/// place of the declared name. No comments are consulted, so the
+/// caller may hand in a synthesized node with placeholder spans.
+pub fn signature_to_doc(function: &Function, display_name: &str) -> Doc {
+    Printer::pure().signature_to_doc(
+        format!("{}fn {display_name}", visibility_prefix(function.visibility)),
+        &function.type_params,
+        &function.params,
+        function.span,
+        function.return_type.as_ref(),
+        function.error_type.as_ref(),
+    )
+}
+
 /// Holds the comment table the printer consumes while rendering. The
 /// `*_to_doc` methods live in the sibling modules by topic: `decl`,
 /// `stmt`, `expr`, `pattern`.

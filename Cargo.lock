@@ -812,6 +812,7 @@ dependencies = [
  "koja-ast",
  "koja-fmt",
  "koja-parser",
+ "koja-query",
  "koja-stdlib",
  "koja-typecheck",
  "serde",
@@ -827,6 +828,17 @@ dependencies = [
  "koja-ast",
  "koja-lexer",
  "proptest",
+]
+
+[[package]]
+name = "koja-query"
+version = "0.19.0"
+dependencies = [
+ "koja-ast",
+ "koja-fmt",
+ "koja-parser",
+ "koja-stdlib",
+ "koja-typecheck",
 ]
 
 [[package]]

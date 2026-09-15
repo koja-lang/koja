@@ -5,7 +5,7 @@
 //! handler modules.
 
 use std::collections::{HashMap, HashSet};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use tokio::sync::RwLock;
@@ -14,45 +14,88 @@ use tower_lsp_server::ls_types::*;
 use tower_lsp_server::{Client, LanguageServer};
 
 use koja_ast::ast::File;
+use koja_ast::span::FileId;
 use koja_parser::{ParseMode, ParsedProgram, SourceFile};
-use koja_typecheck::{CheckedProgram, GlobalRegistry};
+use koja_query::symbol::symbol_at;
+use koja_query::{Analysis, ReferenceIndex, Symbol};
+use koja_typecheck::GlobalRegistry;
 
-use crate::lookup::LocalIndex;
+use crate::convert::path_to_uri;
 
-/// Cached state for a single open document. Holds the parsed program
-/// and the optional sealed [`CheckedProgram`] from the typecheck
-/// pipeline. On typecheck failure we keep the parsed AST so AST-only
-/// handlers (symbols, folding) still work.
+/// Cached state for a single open document.
+///
+/// `parsed` holds every file in the bundle as typecheck left it,
+/// whether typecheck succeeded or reported errors. `registry` is the
+/// registry from the same run, `None` only when parsing failed. The
+/// two together back every navigation query, so hover, definition,
+/// and references keep working while the program has type errors.
 pub(crate) struct DocumentState {
     pub(crate) source: String,
     pub(crate) active_path: PathBuf,
     pub(crate) active_package: String,
     pub(crate) parsed: ParsedProgram,
-    pub(crate) checked: Option<CheckedProgram>,
-    pub(crate) locals: LocalIndex,
+    pub(crate) registry: Option<Box<GlobalRegistry>>,
+    /// File table indexed by `FileId`, in the parse order spans
+    /// refer to.
+    pub(crate) source_paths: Vec<PathBuf>,
+    /// True when the run produced an error diagnostic. Rename
+    /// refuses to act on such a program.
+    pub(crate) has_errors: bool,
+    /// Paths of the user's project files, the active buffer
+    /// included. Everything else in the bundle is stdlib.
+    pub(crate) project_paths: HashSet<PathBuf>,
+    /// Reference index over `project_paths`.
+    pub(crate) index: ReferenceIndex,
 }
 
 impl DocumentState {
-    /// The currently-edited file, preferring the sealed AST from
-    /// `checked` and falling back to the parsed AST when typecheck
-    /// failed.
+    /// The currently-edited file.
     pub(crate) fn active_file(&self) -> Option<&File> {
-        if let Some(checked) = &self.checked {
-            for pkg in &checked.packages {
-                for file in &pkg.files {
-                    if file.path.as_deref() == Some(self.active_path.as_path()) {
-                        return Some(file);
-                    }
-                }
-            }
-        }
         self.parsed
             .get(&self.active_path)
             .map(|parsed_file| &parsed_file.ast)
     }
 
-    pub(crate) fn registry(&self) -> Option<&GlobalRegistry> {
-        self.checked.as_ref().map(|c| &c.registry)
+    /// Query view over the cached program. `None` when parsing
+    /// failed and no registry exists.
+    pub(crate) fn analysis(&self) -> Option<Analysis<'_>> {
+        let registry = self.registry.as_deref()?;
+        Some(Analysis::new(
+            self.parsed.iter().map(|parsed_file| &parsed_file.ast),
+            registry,
+            &self.source_paths,
+            self.has_errors,
+        ))
+    }
+
+    pub(crate) fn is_project_file(&self, path: &Path) -> bool {
+        self.project_paths.contains(path)
+    }
+
+    /// The symbol under an LSP (0-indexed) position in the active
+    /// file.
+    pub(crate) fn symbol_at<'a>(
+        &self,
+        analysis: &Analysis<'a>,
+        position: Position,
+    ) -> Option<Symbol<'a>> {
+        let file = analysis.file_id(&self.active_path)?;
+        symbol_at(
+            analysis,
+            &self.index,
+            file,
+            position.line + 1,
+            position.character + 1,
+        )
+    }
+
+    /// The URI of the file a span points into, or `fallback` when
+    /// the file id does not resolve.
+    pub(crate) fn uri_of(&self, analysis: &Analysis<'_>, file: FileId, fallback: &Uri) -> Uri {
+        analysis
+            .path_of(file)
+            .and_then(path_to_uri)
+            .unwrap_or_else(|| fallback.clone())
     }
 }
 
@@ -141,6 +184,12 @@ impl LanguageServer for Backend {
                 }),
                 workspace_symbol_provider: Some(OneOf::Left(true)),
                 folding_range_provider: Some(FoldingRangeProviderCapability::Simple(true)),
+                references_provider: Some(OneOf::Left(true)),
+                document_highlight_provider: Some(OneOf::Left(true)),
+                rename_provider: Some(OneOf::Right(RenameOptions {
+                    prepare_provider: Some(true),
+                    work_done_progress_options: Default::default(),
+                })),
                 ..Default::default()
             },
             server_info: Some(ServerInfo {
@@ -218,6 +267,28 @@ impl LanguageServer for Backend {
 
     async fn folding_range(&self, params: FoldingRangeParams) -> Result<Option<Vec<FoldingRange>>> {
         self.handle_folding_range(params).await
+    }
+
+    async fn references(&self, params: ReferenceParams) -> Result<Option<Vec<Location>>> {
+        self.handle_references(params).await
+    }
+
+    async fn document_highlight(
+        &self,
+        params: DocumentHighlightParams,
+    ) -> Result<Option<Vec<DocumentHighlight>>> {
+        self.handle_document_highlight(params).await
+    }
+
+    async fn prepare_rename(
+        &self,
+        params: TextDocumentPositionParams,
+    ) -> Result<Option<PrepareRenameResponse>> {
+        self.handle_prepare_rename(params).await
+    }
+
+    async fn rename(&self, params: RenameParams) -> Result<Option<WorkspaceEdit>> {
+        self.handle_rename(params).await
     }
 
     async fn formatting(&self, params: DocumentFormattingParams) -> Result<Option<Vec<TextEdit>>> {
