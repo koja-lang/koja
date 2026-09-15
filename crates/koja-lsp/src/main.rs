@@ -4,9 +4,10 @@ mod convert;
 mod definition;
 mod diagnostics;
 mod folding;
-mod format;
+mod highlight;
 mod hover;
-mod lookup;
+mod references;
+mod rename;
 mod signature_help;
 mod symbols;
 

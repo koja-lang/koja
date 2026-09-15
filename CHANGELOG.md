@@ -14,9 +14,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The `Test` package. `Test.Failure` is the one error type a test body can fail with. `Test.require` unwraps a setup step that must succeed, `Test.skip` ends a test as skipped with a reason, and `Test.crashes` checks that a closure panics. The package also holds the runner and its reporters, so `koja test` is a Koja program. It links only for `koja test` and `koja check`, so a build cannot name `Test.Failure` or leave an `assert` in production code.
 - `koja test` flags. `--reporter <name>` selects `dots` (the default), `trace`, or `json`, and `--trace` stays as an alias for `--reporter trace`. The `json` reporter writes one event per line to stderr, or to a file with `--out <path>`, for CI and editors. `--timeout <ms>` sets the deadline for each test. `--backend {interpreter,llvm}` picks the backend the way `koja run` does.
 - The interpreter calls `@extern "C"` functions. A symbol without a built-in handler resolves through the dynamic loader, in the `@link` library as a shared library under the project root, on the loader's search path, or in the running process, and runs through libffi with the declared signature. Every FFI-admissible type crosses the boundary, and a non-finite float return traps as it does in compiled code. `koja run` and `koja test` now interpret an FFI project whose libraries are shared libraries.
+- New language server features:
+  - Find references lists every use of a function, type, constant, local, or type parameter across the project.
+  - Rename rewrites every use in one edit. It refuses, with a reason, when the program has errors, when the symbol is declared in the stdlib, or when the symbol is `self` or a method that implements a protocol.
+  - Document highlight marks the uses in the open file and tells reads from writes.
 
 ### Changed
 
+- Hover, go-to-definition, and completion keep working while the program has type errors. Before, an error anywhere in the project turned them off until it was fixed.
+- Hover shows a function signature the way `koja format` writes it. A long parameter list breaks one parameter per line, `self` stays bare, and a `-> T ! E` return keeps that spelling.
 - `koja test` runs on the interpreter by default and falls back to LLVM when the project declares a C extern the interpreter cannot resolve, which now means a `@link` library that exists only as a static archive. Pass `--backend llvm` for the native run.
 - `koja run --backend=interpreter` and `koja test --backend interpreter` on a project with an extern the loader cannot find report every unresolved symbol up front, with the library name and the loader's reason, instead of failing at the first call.
 - `koja test` runs each test in its own process. A crash or a hang is one failed test instead of the end of the run. The deadline is per test and defaults to 60 seconds, replacing the 60 second limit on the whole run.

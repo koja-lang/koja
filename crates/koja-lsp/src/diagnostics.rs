@@ -20,11 +20,11 @@ use tower_lsp_server::ls_types::*;
 
 use koja_ast::ast::{Diagnostic as KojaDiagnostic, Severity as KojaSeverity};
 use koja_parser::{ParseMode, ParsedProgram, SourceFile, parse_program};
-use koja_typecheck::{CheckedProgram, check_program};
+use koja_query::{Analysis, ReferenceIndex};
+use koja_typecheck::{CheckedPackage, CheckedProgram, check_program};
 
 use crate::backend::{Backend, DocumentState};
 use crate::convert::{path_to_uri, span_to_range, uri_to_path};
-use crate::lookup::LocalIndex;
 
 #[derive(Deserialize)]
 struct KojaToml {
@@ -301,25 +301,58 @@ impl Backend {
             .flat_map(|file| file.diagnostics.iter().cloned())
             .collect();
 
-        // On typecheck failure keep the partial ParsedProgram so
-        // AST-only handlers (symbols, folding) still see something
-        // useful. `source_paths` keeps the original parse order that
-        // spans' file ids index into.
-        let (checked, parsed_for_state, source_paths) = match check_program(parsed) {
+        // Both arms keep the post-typecheck ASTs and the registry.
+        // Typecheck runs every pass before it reports errors, so the
+        // failure path carries the same stamps as the success path
+        // and navigation stays available. `source_paths` keeps the
+        // parse order that span file ids index into.
+        let (parsed_for_state, registry, source_paths, has_errors) = match check_program(parsed) {
             Ok(checked) => {
                 all_diags.extend(checked.diagnostics.iter().cloned());
-                let rebuilt = rebuild_parsed_from_checked(&checked);
-                let source_paths = checked.source_paths.clone();
-                (Some(checked), rebuilt, source_paths)
+                let CheckedProgram {
+                    packages,
+                    registry,
+                    source_paths,
+                    ..
+                } = checked;
+                (
+                    parsed_from_packages(packages),
+                    Some(Box::new(registry)),
+                    source_paths,
+                    false,
+                )
             }
             Err(failure) => {
                 all_diags.extend(failure.diagnostics);
-                (None, failure.partial, failure.source_paths)
+                (
+                    failure.partial,
+                    failure.registry,
+                    failure.source_paths,
+                    true,
+                )
             }
         };
 
         let grouped = group_by_file(all_diags, &source_paths, &active_path, &project_paths);
-        let locals = LocalIndex::build(&parsed_for_state, &active_path);
+        let mut project_paths = project_paths;
+        project_paths.insert(active_path.clone());
+
+        let index = match &registry {
+            Some(registry) => {
+                let analysis = Analysis::new(
+                    parsed_for_state.iter().map(|parsed_file| &parsed_file.ast),
+                    registry,
+                    &source_paths,
+                    has_errors,
+                );
+                ReferenceIndex::build_filtered(&analysis, |file| {
+                    file.path
+                        .as_deref()
+                        .is_some_and(|path| project_paths.contains(path))
+                })
+            }
+            None => ReferenceIndex::default(),
+        };
 
         {
             let mut docs = self.documents.write().await;
@@ -330,8 +363,11 @@ impl Backend {
                     active_path: active_path.clone(),
                     active_package,
                     parsed: parsed_for_state,
-                    checked,
-                    locals,
+                    registry,
+                    source_paths: source_paths.clone(),
+                    has_errors,
+                    project_paths,
+                    index,
                 },
             );
         }
@@ -467,18 +503,16 @@ fn filter_stdlib(src: &[SourceFile], active_package: &str) -> Vec<SourceFile> {
         .collect()
 }
 
-/// Build a fresh [`ParsedProgram`] from a sealed [`CheckedProgram`]
-/// so the cached `DocumentState` exposes the post-check ASTs to
-/// downstream handlers without holding onto the original parsed map.
-/// The reconstructed program is `package`/`path`-keyed exactly like
-/// the parser's output, with empty per-file diagnostics (the
-/// check-phase already drained them).
-fn rebuild_parsed_from_checked(checked: &CheckedProgram) -> ParsedProgram {
+/// Regroup the checked packages into a [`ParsedProgram`] so the
+/// cached `DocumentState` holds the post-check ASTs in the shape the
+/// parser produces. Per-file diagnostics are empty because the check
+/// phase already drained them.
+fn parsed_from_packages(packages: Vec<CheckedPackage>) -> ParsedProgram {
     use std::collections::BTreeMap;
     let mut files = BTreeMap::new();
     let mut order = Vec::new();
-    for pkg in &checked.packages {
-        for file in &pkg.files {
+    for pkg in packages {
+        for file in pkg.files {
             let path = file
                 .path
                 .clone()
@@ -487,7 +521,7 @@ fn rebuild_parsed_from_checked(checked: &CheckedProgram) -> ParsedProgram {
             files.insert(
                 path.clone(),
                 koja_parser::ParsedFile {
-                    ast: file.clone(),
+                    ast: file,
                     diagnostics: Vec::new(),
                     package: pkg.package.clone(),
                     path,

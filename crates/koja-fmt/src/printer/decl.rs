@@ -160,7 +160,7 @@ impl Printer {
 
     /// Formats a signature (prefix, type params, parameters, return tail)
     /// with one wrapping shape shared by functions and protocol methods.
-    fn signature_to_doc(
+    pub(super) fn signature_to_doc(
         &mut self,
         prefix: String,
         type_params: &[TypeParam],

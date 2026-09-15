@@ -9,11 +9,11 @@ use tower_lsp_server::ls_types::*;
 
 use koja_ast::ast::ExprKind;
 use koja_ast::identifier::Resolution;
+use koja_query::display::format_resolved_type;
+use koja_query::expr_at::find_enclosing_call;
 use koja_typecheck::{FunctionSignature, GlobalKind, GlobalRegistry};
 
 use crate::backend::Backend;
-use crate::format::format_resolved_type;
-use crate::lookup::find_enclosing_call;
 
 impl Backend {
     /// Handles `textDocument/signatureHelp` requests by finding the
@@ -30,7 +30,7 @@ impl Backend {
             Some(s) => s,
             None => return Ok(None),
         };
-        let (file, registry) = match (state.active_file(), state.registry()) {
+        let (file, registry) = match (state.active_file(), state.registry.as_deref()) {
             (Some(f), Some(r)) => (f, r),
             _ => return Ok(None),
         };

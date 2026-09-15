@@ -103,15 +103,16 @@ The design is accepted in [TESTING.md](TESTING.md).
 
 ### Language server
 
-- Find references and rename, built on one reference index over the resolved
-  AST. Document highlight falls out of the same index.
+- **[DONE]** Find references and rename, built on one reference index over the
+  resolved AST in the `koja-query` crate. Document highlight falls out of the
+  same index.
 - Code actions attached to diagnostics, so teaching diagnostics become
   one-keystroke fixes.
 - Inlay hints for inferred binding types and parameter names at call sites.
 - Incremental text synchronization in place of full-document sync.
 - A run-test code lens on each `test` declaration.
-- A `FEATURES.md` in `koja-lsp` that lists the supported and the declined
-  protocol methods.
+- **[DONE]** A `FEATURES.md` in `koja-lsp` that lists the supported and the
+  declined protocol methods.
 
 ### Runtime
 

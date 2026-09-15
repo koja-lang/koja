@@ -1,6 +1,9 @@
 mod common;
 
 use common::*;
+use koja_ast::util::dedent;
+use koja_fmt::format_signature;
+use koja_parser::ParseMode;
 
 #[test]
 fn error_channel_signature_stays_inline() {
@@ -207,5 +210,71 @@ fn long_fallible_return_tail_splits_as_last_resort() {
               1
             end
         ",
+    );
+}
+
+// format_signature renders a header alone, the way an editor hover
+// shows it.
+
+fn first_function(source: &str) -> koja_ast::ast::Function {
+    let result = koja_parser::parse(&koja_ast::util::dedent(source), ParseMode::File);
+    assert!(result.errors.is_empty(), "{:?}", result.errors);
+    match result.ast.items.into_iter().next() {
+        Some(koja_ast::ast::Item::Function(f)) => f,
+        other => panic!("expected a function, got {other:?}"),
+    }
+}
+
+#[test]
+fn format_signature_keeps_a_short_header_on_one_line() {
+    let f = first_function(
+        "
+            fn add(a: Int, b: Int) -> Int
+              a + b
+            end
+        ",
+    );
+    assert_eq!(
+        format_signature(&f, "add", 80),
+        "fn add(a: Int, b: Int) -> Int"
+    );
+}
+
+#[test]
+fn format_signature_breaks_a_long_header_one_parameter_per_line() {
+    let f = first_function(
+        "
+            priv fn prepare_and_run(self, key: String, sql: String, oids: List<Int>, texts: List<Option<String>>, stale_close: Binary) -> (Connection, Result<QueryResult, Error>)
+            end
+        ",
+    );
+    assert_eq!(
+        format_signature(&f, "Connection.prepare_and_run", 80),
+        dedent(
+            "
+            priv fn Connection.prepare_and_run(
+              self,
+              key: String,
+              sql: String,
+              oids: List<Int>,
+              texts: List<Option<String>>,
+              stale_close: Binary,
+            ) -> (Connection, Result<QueryResult, Error>)"
+        )
+        .trim_start()
+    );
+}
+
+#[test]
+fn format_signature_keeps_bounds_and_the_error_tail() {
+    let f = first_function(
+        "
+            fn load<T: Decode>(path: String) -> T ! IOError
+            end
+        ",
+    );
+    assert_eq!(
+        format_signature(&f, "load", 80),
+        "fn load<T: Decode>(path: String) -> T ! IOError"
     );
 }

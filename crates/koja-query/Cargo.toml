@@ -1,0 +1,15 @@
+[package]
+name = "koja-query"
+description = "Position and reference queries over a typechecked Koja program"
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+
+[dependencies]
+koja-ast = { path = "../koja-ast" }
+koja-fmt = { path = "../koja-fmt" }
+koja-parser = { path = "../koja-parser" }
+koja-typecheck = { path = "../koja-typecheck" }
+
+[dev-dependencies]
+koja-stdlib = { path = "../koja-stdlib" }

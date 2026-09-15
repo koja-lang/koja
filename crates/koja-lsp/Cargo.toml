@@ -13,6 +13,7 @@ path = "src/main.rs"
 koja-ast = { path = "../koja-ast" }
 koja-fmt = { path = "../koja-fmt" }
 koja-parser = { path = "../koja-parser" }
+koja-query = { path = "../koja-query" }
 koja-stdlib = { path = "../koja-stdlib" }
 koja-typecheck = { path = "../koja-typecheck" }
 serde = { version = "1", features = ["derive"] }
