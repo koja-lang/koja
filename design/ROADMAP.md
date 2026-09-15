@@ -108,7 +108,7 @@ The design is accepted in [TESTING.md](TESTING.md).
   same index.
 - Code actions attached to diagnostics, so teaching diagnostics become
   one-keystroke fixes.
-- Inlay hints for inferred binding types and parameter names at call sites.
+- **[DONE]** Inlay hints for inferred binding types and parameter names at call sites.
 - Incremental text synchronization in place of full-document sync.
 - A run-test code lens on each `test` declaration.
 - **[DONE]** A `FEATURES.md` in `koja-lsp` that lists the supported and the

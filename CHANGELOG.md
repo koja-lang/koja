@@ -18,6 +18,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Find references lists every use of a function, type, constant, local, or type parameter across the project.
   - Rename rewrites every use in one edit. It refuses, with a reason, when the program has errors, when the symbol is declared in the stdlib, or when the symbol is `self` or a method that implements a protocol.
   - Document highlight marks the uses in the open file and tells reads from writes.
+  - Inlay hints show the inferred type after a binding, a closure parameter, or a tuple destructure that has no annotation, and the parameter name before each positional argument.
 
 ### Changed
 

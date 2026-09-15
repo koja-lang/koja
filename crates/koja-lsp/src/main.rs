@@ -6,6 +6,7 @@ mod diagnostics;
 mod folding;
 mod highlight;
 mod hover;
+mod inlay_hint;
 mod references;
 mod rename;
 mod signature_help;

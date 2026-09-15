@@ -8,10 +8,8 @@ use tower_lsp_server::jsonrpc::Result;
 use tower_lsp_server::ls_types::*;
 
 use koja_ast::ast::ExprKind;
-use koja_ast::identifier::Resolution;
 use koja_query::display::format_resolved_type;
-use koja_query::expr_at::find_enclosing_call;
-use koja_typecheck::{FunctionSignature, GlobalKind, GlobalRegistry};
+use koja_query::expr_at::{find_enclosing_call, signature_for_target};
 
 use crate::backend::Backend;
 
@@ -47,11 +45,11 @@ impl Backend {
                 let ExprKind::Ident { name, resolution } = &callee.kind else {
                     return Ok(None);
                 };
-                let sig = function_signature_for_target(*resolution, registry);
+                let sig = signature_for_target(*resolution, registry);
                 (name.clone(), sig)
             }
             ExprKind::MethodCall { method, target, .. } => {
-                let sig = function_signature_for_target(*target, registry);
+                let sig = signature_for_target(*target, registry);
                 (method.text.clone(), sig)
             }
             _ => return Ok(None),
@@ -102,18 +100,5 @@ impl Backend {
             active_signature: Some(0),
             active_parameter: Some(active_param),
         }))
-    }
-}
-
-fn function_signature_for_target(
-    target: Resolution,
-    registry: &GlobalRegistry,
-) -> Option<&FunctionSignature> {
-    let Resolution::Global(id) = target else {
-        return None;
-    };
-    match &registry.get(id)?.kind {
-        GlobalKind::Function(definition) => definition.signature.as_ref(),
-        _ => None,
     }
 }

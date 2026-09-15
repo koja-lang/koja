@@ -19,6 +19,7 @@ pub mod display;
 pub mod docs;
 pub mod expr_at;
 pub mod index;
+pub mod inlay;
 pub mod position;
 pub mod rename;
 pub mod signature;
