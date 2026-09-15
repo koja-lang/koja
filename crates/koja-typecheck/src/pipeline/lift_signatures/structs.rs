@@ -20,14 +20,14 @@ use super::functions::lift_function_with_identifier;
 use super::types::{TypeParamScope, resolve_type_expr};
 
 pub(super) fn lift_struct(
-    decl: &StructDecl,
+    decl: &mut StructDecl,
     scope: &mut LiftScope<'_>,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
     lift_struct_definition(decl, scope, diagnostics);
     let path = name_texts(&decl.path);
     let struct_identifier = Identifier::new(scope.package, path.clone());
-    for function in &decl.functions {
+    for function in &mut decl.functions {
         let method_identifier = Identifier::member(scope.package, &path, function.name.as_str());
         lift_function_with_identifier(
             function,
@@ -43,7 +43,7 @@ pub(super) fn lift_struct(
 }
 
 fn lift_struct_definition(
-    decl: &StructDecl,
+    decl: &mut StructDecl,
     scope: &mut LiftScope<'_>,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
@@ -71,9 +71,9 @@ fn lift_struct_definition(
     let type_params = TypeParamScope::new(&owners);
 
     let mut fields = Vec::with_capacity(decl.fields.len());
-    for field in &decl.fields {
+    for field in &mut decl.fields {
         let ty = resolve_type_expr(
-            &field.type_expr,
+            &mut field.type_expr,
             type_params,
             scope.resolution_scope(),
             diagnostics,

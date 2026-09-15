@@ -818,6 +818,7 @@ impl<'a> Printer<'a> {
                 type_path,
                 variant,
                 span,
+                ..
             } => {
                 let header = enum_pattern_header("EnumUnit", type_path, variant);
                 self.header(&header, *span);
@@ -827,6 +828,7 @@ impl<'a> Printer<'a> {
                 variant,
                 elements,
                 span,
+                ..
             } => {
                 let header = enum_pattern_header("EnumTuple", type_path, variant);
                 self.nested(&header, *span, |p| {
@@ -840,6 +842,7 @@ impl<'a> Printer<'a> {
                 variant,
                 fields,
                 span,
+                ..
             } => {
                 let header = enum_pattern_header("EnumStruct", type_path, variant);
                 self.nested(&header, *span, |p| {
@@ -864,6 +867,7 @@ impl<'a> Printer<'a> {
                 type_path,
                 fields,
                 span,
+                ..
             } => {
                 let header = format!("Struct {}", path_text(type_path));
                 self.nested(&header, *span, |p| {

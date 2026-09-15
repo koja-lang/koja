@@ -57,10 +57,7 @@ impl Parser {
                     span,
                 );
                 self.advance();
-                TypeExpr::Named {
-                    path: vec![Name::new(ERROR_IDENT, span)],
-                    span,
-                }
+                TypeExpr::named(vec![Name::new(ERROR_IDENT, span)], span)
             }
         }
     }
@@ -147,10 +144,7 @@ impl Parser {
                 _ => break,
             }
             if self.eat(&TokenKind::Dot).is_none() {
-                return TypeExpr::Named {
-                    path,
-                    span: self.span_from(start),
-                };
+                return TypeExpr::named(path, self.span_from(start));
             }
         }
 
@@ -159,10 +153,7 @@ impl Parser {
 
     fn parse_optional_generic_args(&mut self, path: Vec<Name>, start: Span) -> TypeExpr {
         if self.eat(&TokenKind::Lt).is_none() {
-            return TypeExpr::Named {
-                path,
-                span: self.span_from(start),
-            };
+            return TypeExpr::named(path, self.span_from(start));
         }
         let mut args = vec![self.parse_type_expr()];
         while self.eat(&TokenKind::Comma).is_some() {
@@ -172,11 +163,7 @@ impl Parser {
         // Note: we don't route this through `comma_separated`
         // because the closing token here (`Gt` or the `>>`
         // ambiguity) needs the special `expect_gt` handling.
-        TypeExpr::Generic {
-            path,
-            args,
-            span: self.span_from(start),
-        }
+        TypeExpr::generic(path, args, self.span_from(start))
     }
 
     /// Parse an `impl ... for <target>` type expression. A bare
@@ -199,10 +186,7 @@ impl Parser {
             }
         }
         if self.eat(&TokenKind::Lt).is_none() {
-            let target = TypeExpr::Named {
-                path,
-                span: self.span_from(start),
-            };
+            let target = TypeExpr::named(path, self.span_from(start));
             return (target, Vec::new());
         }
         let mut args = Vec::new();
@@ -214,11 +198,7 @@ impl Parser {
             }
         }
         self.expect_gt();
-        let target = TypeExpr::Generic {
-            path,
-            args,
-            span: self.span_from(start),
-        };
+        let target = TypeExpr::generic(path, args, self.span_from(start));
         (target, bounds)
     }
 

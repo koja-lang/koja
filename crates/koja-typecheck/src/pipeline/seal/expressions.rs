@@ -12,7 +12,7 @@ use koja_ast::labels::{expr_kind_label, pattern_kind_label, pattern_span};
 
 use super::patterns::seal_pattern;
 use super::statements::seal_statement;
-use super::{SealMode, seal_panic, seal_resolved_type};
+use super::{SealMode, seal_optional_type_expr, seal_panic, seal_resolved_type, seal_type_expr};
 
 pub(super) fn seal_expr(expr: &Expr, mode: SealMode) {
     // The callee position of a `Call` is the one carve-out: function
@@ -49,8 +49,13 @@ pub(super) fn seal_expr(expr: &Expr, mode: SealMode) {
                 seal_resolved_type(ty, mode, expr.span);
             }
         }
-        ExprKind::Closure { params, body, .. } => {
+        ExprKind::Closure {
+            params,
+            return_type,
+            body,
+        } => {
             seal_closure_params(params, expr);
+            seal_optional_type_expr(return_type.as_ref());
             for stmt in body {
                 seal_statement(stmt, mode);
             }
@@ -332,6 +337,13 @@ fn seal_closure_params(params: &[ClosureParam], outer: &Expr) {
                 &format!("closure parameter `{name}` missing local_id after typecheck"),
                 outer.span,
             );
+        }
+        if let ClosureParam::Name {
+            type_expr: Some(type_expr),
+            ..
+        } = param
+        {
+            seal_type_expr(type_expr);
         }
     }
 }

@@ -78,7 +78,7 @@ fn qualified_type_has_one_span_per_segment() {
     let Item::Struct(s) = &ast.items[0] else {
         panic!("expected a struct")
     };
-    let TypeExpr::Named { path, span } = &s.fields[0].type_expr else {
+    let TypeExpr::Named { path, span, .. } = &s.fields[0].type_expr else {
         panic!("expected a named type")
     };
     assert_path(&source, path, &["Process", "ExitSignal"]);

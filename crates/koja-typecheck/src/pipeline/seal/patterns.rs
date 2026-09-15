@@ -10,7 +10,7 @@ use koja_ast::identifier::Resolution;
 use koja_ast::labels::{pattern_kind_label, pattern_span};
 use koja_ast::span::Span;
 
-use super::{SealMode, seal_panic, seal_resolved_type};
+use super::{SealMode, seal_panic, seal_resolved_type, seal_type_expr, seal_type_path};
 
 pub(super) fn seal_pattern(pattern: &Pattern, mode: SealMode) {
     match pattern {
@@ -32,11 +32,11 @@ pub(super) fn seal_pattern(pattern: &Pattern, mode: SealMode) {
         Pattern::EnumStruct {
             fields,
             type_path,
+            type_resolution,
             variant,
             span,
-            ..
         } => {
-            seal_enum_path(type_path, variant, *span);
+            seal_enum_path(type_path, *type_resolution, variant, *span);
             for field in fields {
                 seal_pattern(&field.pattern, mode);
             }
@@ -44,21 +44,21 @@ pub(super) fn seal_pattern(pattern: &Pattern, mode: SealMode) {
         Pattern::EnumTuple {
             elements,
             type_path,
+            type_resolution,
             variant,
             span,
-            ..
         } => {
-            seal_enum_path(type_path, variant, *span);
+            seal_enum_path(type_path, *type_resolution, variant, *span);
             for element in elements {
                 seal_pattern(element, mode);
             }
         }
         Pattern::EnumUnit {
             type_path,
+            type_resolution,
             variant,
             span,
-            ..
-        } => seal_enum_path(type_path, variant, *span),
+        } => seal_enum_path(type_path, *type_resolution, variant, *span),
         Pattern::Literal { .. } | Pattern::Wildcard { .. } => {}
         Pattern::Or { patterns, span } => {
             if patterns.is_empty() {
@@ -71,12 +71,13 @@ pub(super) fn seal_pattern(pattern: &Pattern, mode: SealMode) {
         Pattern::Struct {
             fields,
             type_path,
+            type_resolution,
             span,
-            ..
         } => {
             if type_path.is_empty() {
                 seal_panic("struct pattern carries an empty type path", *span);
             }
+            seal_type_path(type_path, *type_resolution, *span);
             for field in fields {
                 seal_pattern(&field.pattern, mode);
             }
@@ -95,9 +96,10 @@ pub(super) fn seal_pattern(pattern: &Pattern, mode: SealMode) {
             local_id,
             name,
             resolved_type,
+            type_expr,
             span,
-            ..
         } => {
+            seal_type_expr(type_expr);
             if local_id.is_none() {
                 seal_panic(
                     &format!(
@@ -150,7 +152,7 @@ fn seal_binary_segment(segment: &BinarySegment) {
     }
 }
 
-fn seal_enum_path(type_path: &[Name], variant: &Name, span: Span) {
+fn seal_enum_path(type_path: &[Name], type_resolution: Resolution, variant: &Name, span: Span) {
     if type_path.is_empty() {
         seal_panic(
             &format!("enum pattern `{variant}` carries an empty type path"),
@@ -160,4 +162,5 @@ fn seal_enum_path(type_path: &[Name], variant: &Name, span: Span) {
     if variant.text.is_empty() {
         seal_panic("enum pattern carries an empty variant name", span);
     }
+    seal_type_path(type_path, type_resolution, span);
 }

@@ -79,13 +79,15 @@ pub(crate) fn find_in_type_expr(
     ctx: &LookupCtx<'_>,
 ) -> Option<SymbolInfo> {
     match type_expr {
-        TypeExpr::Named { path, span } => {
+        TypeExpr::Named { path, span, .. } => {
             if span_contains(span, line, col) {
                 let name = path.last()?;
                 return classify_name(name.as_str(), ctx);
             }
         }
-        TypeExpr::Generic { path, args, span } => {
+        TypeExpr::Generic {
+            path, args, span, ..
+        } => {
             if span_contains(span, line, col) {
                 for arg in args {
                     if let Some(info) = find_in_type_expr(arg, line, col, ctx) {

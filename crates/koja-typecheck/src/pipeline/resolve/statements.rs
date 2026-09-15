@@ -64,14 +64,14 @@ use super::types::{display_resolution, is_arithmetic_type};
 /// writes route through [`resolve_field_assignment`].
 pub(super) fn resolve_assignment(
     lvalue: &mut LValue,
-    type_annotation: Option<&TypeExpr>,
+    type_annotation: Option<&mut TypeExpr>,
     value: &mut Expr,
     span: Span,
     resolver: &mut Resolver<'_>,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
     if lvalue.segments.len() >= 2 {
-        if let Some(annotation) = type_annotation {
+        if let Some(annotation) = &type_annotation {
             diagnostics.push(Diagnostic::error(
                 format!(
                     "typecheck does not allow type annotations on field-write \
@@ -89,6 +89,7 @@ pub(super) fn resolve_assignment(
     // an expected type. Bidirectional inference uses this to drive
     // shapes like `result: List<T> = List.new()`, where the annotation's
     // `T` constrains `List.new`'s otherwise-unconstrained type param.
+    let annotation_span = type_annotation.as_deref().map(annotation_span);
     let expected_ty: Option<ResolvedType> = type_annotation.and_then(|annotation| {
         let resolved = resolve_type_expr(
             annotation,
@@ -101,7 +102,7 @@ pub(super) fn resolve_assignment(
     resolve_expr_with_expected(value, expected_ty.as_ref(), resolver, diagnostics);
     declare_assignment_target(
         lvalue,
-        type_annotation,
+        annotation_span,
         expected_ty,
         value,
         span,
@@ -146,10 +147,10 @@ pub(super) fn resolve_hinted_assignment(
 
 /// Declare or rebind the single-segment target of an assignment whose
 /// value has already resolved. `annotated` is the resolved form of
-/// `type_annotation` when one was written.
+/// the written type annotation, and `annotation_span` locates it.
 fn declare_assignment_target(
     lvalue: &mut LValue,
-    type_annotation: Option<&TypeExpr>,
+    annotation_span: Option<Span>,
     annotated: Option<ResolvedType>,
     value: &mut Expr,
     span: Span,
@@ -160,13 +161,13 @@ fn declare_assignment_target(
 
     let value_ty = value.resolution.clone();
     let already_declared = resolver.scope.lookup(&name).is_some();
-    if let Some(annotation) = type_annotation.filter(|_| already_declared) {
+    if let Some(span) = annotation_span.filter(|_| already_declared) {
         diagnostics.push(Diagnostic::error(
             format!(
                 "typecheck only allows type annotations on the first declaration \
                  of a local (`{name}` was already declared)",
             ),
-            annotation_span(annotation),
+            span,
         ));
         return;
     }

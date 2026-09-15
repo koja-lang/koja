@@ -33,7 +33,10 @@ mod expressions;
 mod patterns;
 mod statements;
 
-use koja_ast::ast::{Constant, File, Function, ImplMember, Item, TypeExpr, name_texts};
+use koja_ast::ast::{
+    Constant, EnumVariantData, File, Function, ImplMember, Item, Name, Param, ProtocolMethod,
+    StructField, TypeExpr, TypeParam, name_texts, path_text,
+};
 use koja_ast::identifier::{AnonymousKind, Identifier, Resolution, ResolvedType};
 use koja_ast::span::Span;
 
@@ -87,6 +90,9 @@ fn seal_file(file: &File, package: &str, registry: &GlobalRegistry) {
                     "sealed struct `{}` still carries nested declarations",
                     name_texts(&decl.path).join(".")
                 );
+                seal_type_params(&decl.type_params);
+                seal_type_exprs(&decl.conformances);
+                seal_struct_fields(&decl.fields);
                 let owner_generic = !decl.type_params.is_empty();
                 for function in &decl.functions {
                     let generic = owner_generic || !function.type_params.is_empty();
@@ -94,6 +100,7 @@ fn seal_file(file: &File, package: &str, registry: &GlobalRegistry) {
                 }
             }
             Item::Builtin(decl) => {
+                seal_type_params(&decl.type_params);
                 let owner_generic = !decl.type_params.is_empty();
                 for function in &decl.functions {
                     let generic = owner_generic || !function.type_params.is_empty();
@@ -106,6 +113,15 @@ fn seal_file(file: &File, package: &str, registry: &GlobalRegistry) {
                     "sealed enum `{}` still carries nested declarations",
                     name_texts(&decl.path).join(".")
                 );
+                seal_type_params(&decl.type_params);
+                seal_type_exprs(&decl.conformances);
+                for variant in &decl.variants {
+                    match &variant.data {
+                        EnumVariantData::Unit => {}
+                        EnumVariantData::Tuple(types) => seal_type_exprs(types),
+                        EnumVariantData::Struct(fields) => seal_struct_fields(fields),
+                    }
+                }
                 let owner_generic = !decl.type_params.is_empty();
                 for function in &decl.functions {
                     let generic = owner_generic || !function.type_params.is_empty();
@@ -113,6 +129,9 @@ fn seal_file(file: &File, package: &str, registry: &GlobalRegistry) {
                 }
             }
             Item::Impl(impl_block) => {
+                seal_type_expr(&impl_block.target);
+                seal_type_params(&impl_block.target_bounds);
+                seal_type_expr(&impl_block.trait_expr);
                 let target_generic = impl_target_is_generic(&impl_block.target, package, registry);
                 for member in &impl_block.members {
                     if let ImplMember::Function(function) = member {
@@ -122,6 +141,7 @@ fn seal_file(file: &File, package: &str, registry: &GlobalRegistry) {
                 }
             }
             Item::Extend(extend_block) => {
+                seal_type_expr(&extend_block.target);
                 let target_generic =
                     impl_target_is_generic(&extend_block.target, package, registry);
                 for member in &extend_block.members {
@@ -134,7 +154,14 @@ fn seal_file(file: &File, package: &str, registry: &GlobalRegistry) {
             Item::Constant(constant) => {
                 seal_constant(constant, package, registry);
             }
-            _ => {}
+            Item::Protocol(decl) => {
+                seal_type_params(&decl.type_params);
+                for method in &decl.methods {
+                    seal_protocol_method_signature(method);
+                }
+            }
+            Item::TypeAlias(alias) => seal_type_expr(&alias.type_expr),
+            Item::Alias(_) | Item::Test(_) => {}
         }
     }
     if let Some(body) = file.body.as_ref() {
@@ -232,15 +259,105 @@ fn seal_constant(constant: &Constant, package: &str, registry: &GlobalRegistry) 
             constant.span,
         ),
     }
+    if let Some(annotation) = &constant.type_annotation {
+        seal_type_expr(annotation);
+    }
     seal_expr(&constant.value, SealMode::Concrete);
 }
 
 fn seal_function(function: &Function, mode: SealMode) {
+    seal_type_params(&function.type_params);
+    seal_params(&function.params);
+    seal_optional_type_expr(function.return_type.as_ref());
+    seal_optional_type_expr(function.error_type.as_ref());
     let Some(body) = function.body.as_ref() else {
         return;
     };
     for stmt in body {
         seal_statement(stmt, mode);
+    }
+}
+
+/// Protocol method bodies are default implementations. Lift clones
+/// them into each conforming type and resolves the clones, so only
+/// the signature is sealed here.
+fn seal_protocol_method_signature(method: &ProtocolMethod) {
+    seal_type_params(&method.type_params);
+    seal_params(&method.params);
+    seal_optional_type_expr(method.return_type.as_ref());
+    seal_optional_type_expr(method.error_type.as_ref());
+}
+
+fn seal_params(params: &[Param]) {
+    for param in params {
+        if let Param::Regular { type_expr, .. } = param {
+            seal_type_expr(type_expr);
+        }
+    }
+}
+
+fn seal_type_params(type_params: &[TypeParam]) {
+    for param in type_params {
+        seal_type_exprs(&param.bounds);
+    }
+}
+
+fn seal_struct_fields(fields: &[StructField]) {
+    for field in fields {
+        seal_type_expr(&field.type_expr);
+    }
+}
+
+fn seal_type_exprs(types: &[TypeExpr]) {
+    for ty in types {
+        seal_type_expr(ty);
+    }
+}
+
+pub(super) fn seal_optional_type_expr(ty: Option<&TypeExpr>) {
+    if let Some(ty) = ty {
+        seal_type_expr(ty);
+    }
+}
+
+/// Assert every named type path under `ty` carries a stamp. `Self`
+/// and `()` name nothing and carry none.
+pub(super) fn seal_type_expr(ty: &TypeExpr) {
+    match ty {
+        TypeExpr::Named {
+            path,
+            resolution,
+            span,
+        } => seal_type_path(path, *resolution, *span),
+        TypeExpr::Generic {
+            path,
+            args,
+            resolution,
+            span,
+        } => {
+            seal_type_path(path, *resolution, *span);
+            seal_type_exprs(args);
+        }
+        TypeExpr::Function {
+            params,
+            return_type,
+            ..
+        } => {
+            seal_type_exprs(params);
+            seal_type_expr(return_type);
+        }
+        TypeExpr::Tuple { elements, .. } => seal_type_exprs(elements),
+        TypeExpr::Union { types, .. } => seal_type_exprs(types),
+        TypeExpr::Self_ { .. } | TypeExpr::Unit { .. } => {}
+    }
+}
+
+pub(super) fn seal_type_path(path: &[Name], resolution: Resolution, span: Span) {
+    if !resolution.is_resolved() {
+        seal_panic(
+            &format!("type path `{}` missing resolution", path_text(path)),
+            span,
+        );
     }
 }
 
@@ -303,14 +420,14 @@ pub(super) fn seal_panic(message: &str, span: Span) -> ! {
 
 #[cfg(test)]
 mod tests {
-    use koja_ast::ast::{Expr, ExprKind, Function, Literal, Name, Visibility};
-    use koja_ast::identifier::Identifier;
+    use koja_ast::ast::{Expr, ExprKind, Function, Literal, Name, TypeExpr, Visibility};
+    use koja_ast::identifier::{Identifier, Resolution};
     use koja_ast::span::Span;
 
     use crate::registry::{FunctionOrigin, GlobalRegistry, VisibilityScope};
 
     use super::expressions::seal_expr;
-    use super::{SealMode, seal_registry};
+    use super::{SealMode, seal_registry, seal_type_expr};
 
     #[test]
     #[should_panic(expected = "reached seal as an unstamped function")]
@@ -335,6 +452,25 @@ mod tests {
         );
 
         seal_registry(&registry);
+    }
+
+    #[test]
+    #[should_panic(expected = "type path `Int` missing resolution")]
+    fn rejects_unstamped_type_path_argument() {
+        let span = Span::default();
+        let registry = GlobalRegistry::with_stdlib_stubs();
+        let (list, _) = registry
+            .lookup(&Identifier::single("Global", "Int"))
+            .expect("stub registry has Int");
+        // The head is stamped, so the walk has to descend into the
+        // argument to find the miss.
+        let ty = TypeExpr::Generic {
+            path: vec![Name::new("List", span)],
+            args: vec![TypeExpr::named(vec![Name::new("Int", span)], span)],
+            resolution: Resolution::Global(list),
+            span,
+        };
+        seal_type_expr(&ty);
     }
 
     #[test]

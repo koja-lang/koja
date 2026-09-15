@@ -187,9 +187,10 @@ fn desugar_try(
         expr.kind = ExprKind::Try { expr: subject };
         return ResolvedType::unresolved();
     }
+    let binder_span = span.as_synthetic();
     let fail_tail = Expr::new(
         ExprKind::Fail {
-            value: Box::new(ident_expr(TRY_ERR_BINDER, span)),
+            value: Box::new(ident_expr(TRY_ERR_BINDER, binder_span)),
         },
         span,
     );
@@ -197,7 +198,7 @@ fn desugar_try(
         unwrap_arm(TRY_OK_BINDER, span),
         variant_arm(
             "Err",
-            binding_pattern(TRY_ERR_BINDER, span),
+            binding_pattern(TRY_ERR_BINDER, binder_span),
             fail_tail,
             span,
         ),
@@ -461,10 +462,11 @@ pub(super) fn ok_unit_construction(
 /// and the stamped resolution, so no further resolve pass is
 /// needed (or safe) on the synthesized node.
 fn result_construction(variant: &str, payload: Expr, result: &ResolvedType, span: Span) -> Expr {
+    let name_span = span.as_synthetic();
     let mut construction = Expr::new(
         ExprKind::EnumConstruction {
-            type_path: vec![Name::new("Result", span)],
-            variant: Name::new(variant, span),
+            type_path: vec![Name::new("Result", name_span)],
+            variant: Name::new(variant, name_span),
             data: EnumConstructionData::Tuple(vec![payload]),
         },
         span,
@@ -531,22 +533,25 @@ fn is_global_generic(ty: &ResolvedType, name: &str, registry: &GlobalRegistry) -
 }
 
 /// The shared `Ok(binder) -> binder` unwrap arm of both desugars.
+/// The binder is hidden, so its pattern and read are synthetic.
 fn unwrap_arm(binder: &str, span: Span) -> MatchArm {
+    let binder_span = span.as_synthetic();
     variant_arm(
         "Ok",
-        binding_pattern(binder, span),
-        ident_expr(binder, span),
+        binding_pattern(binder, binder_span),
+        ident_expr(binder, binder_span),
         span,
     )
 }
 
 /// A `<variant>(element) -> tail` match arm. The constructor
 /// shorthand pattern resolves the variant against the subject's
-/// enum, exactly as a user-written `Ok(x)` arm would.
+/// enum, exactly as a user-written `Ok(x)` arm would. The variant
+/// name is compiler-synthesized, so its span is synthetic.
 fn variant_arm(variant: &str, element: Pattern, tail: Expr, span: Span) -> MatchArm {
     MatchArm {
         pattern: Pattern::Constructor {
-            name: Name::new(variant, span),
+            name: Name::new(variant, span.as_synthetic()),
             elements: vec![element],
             span,
         },
@@ -556,6 +561,8 @@ fn variant_arm(variant: &str, element: Pattern, tail: Expr, span: Span) -> Match
     }
 }
 
+/// A binding pattern at `span`. Callers pass the user's own span for
+/// a written binder and a synthetic span for a hidden one.
 fn binding_pattern(name: &str, span: Span) -> Pattern {
     Pattern::Binding {
         local_id: None,

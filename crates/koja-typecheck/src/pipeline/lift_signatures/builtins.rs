@@ -17,7 +17,7 @@ use super::SelfContext;
 use super::functions::lift_function_with_identifier;
 
 pub(super) fn lift_builtin(
-    decl: &BuiltinDecl,
+    decl: &mut BuiltinDecl,
     scope: &mut LiftScope<'_>,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
@@ -38,7 +38,7 @@ pub(super) fn lift_builtin(
             },
         );
     }
-    for function in &decl.functions {
+    for function in &mut decl.functions {
         let method_identifier = Identifier::member(scope.package, &path, function.name.as_str());
         lift_function_with_identifier(
             function,

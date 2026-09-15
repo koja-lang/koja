@@ -17,7 +17,7 @@ use super::LiftScope;
 use super::types::{TypeParamScope, resolve_return_signature, resolve_type_expr};
 
 pub(super) fn lift_protocol(
-    decl: &ProtocolDecl,
+    decl: &mut ProtocolDecl,
     scope: &mut LiftScope<'_>,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
@@ -34,7 +34,7 @@ pub(super) fn lift_protocol(
         return;
     }
     let mut methods: Vec<ResolvedProtocolMethod> = Vec::new();
-    for method in &decl.methods {
+    for method in &mut decl.methods {
         let resolved = lift_protocol_method(method, id, scope, diagnostics);
         if let Some(existing) = methods
             .iter()
@@ -57,7 +57,7 @@ pub(super) fn lift_protocol(
 }
 
 fn lift_protocol_method(
-    method: &ProtocolMethod,
+    method: &mut ProtocolMethod,
     protocol_id: GlobalRegistryId,
     scope: &mut LiftScope<'_>,
     diagnostics: &mut Vec<Diagnostic>,
@@ -70,7 +70,7 @@ fn lift_protocol_method(
     let type_params = TypeParamScope::new(&owners);
     let non_self_params = method
         .params
-        .iter()
+        .iter_mut()
         .filter_map(|param| match param {
             Param::Regular {
                 name, type_expr, ..
@@ -87,8 +87,8 @@ fn lift_protocol_method(
         })
         .collect();
     let return_type = resolve_return_signature(
-        method.return_type.as_ref(),
-        method.error_type.as_ref(),
+        method.return_type.as_mut(),
+        method.error_type.as_mut(),
         type_params,
         scope.resolution_scope(),
         diagnostics,

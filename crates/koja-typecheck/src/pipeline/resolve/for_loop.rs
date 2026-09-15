@@ -160,16 +160,19 @@ fn build_rewrite(
         span,
     )));
 
+    // The user wrote the loop pattern only. Every other name in the
+    // rewrite is compiler-synthesized and carries a synthetic span.
+    let name_span = span.as_synthetic();
     let some_arm = MatchArm {
         pattern: Pattern::Constructor {
-            name: Name::new("Some", span),
+            name: Name::new("Some", name_span),
             elements: vec![Pattern::Tuple {
                 elements: vec![
                     pattern,
                     Pattern::Binding {
                         local_id: None,
-                        name: Name::new(rest_name, span),
-                        span,
+                        name: Name::new(rest_name, name_span),
+                        span: name_span,
                     },
                 ],
                 span,
@@ -182,7 +185,7 @@ fn build_rewrite(
     };
     let none_arm = MatchArm {
         pattern: Pattern::Constructor {
-            name: Name::new("None", span),
+            name: Name::new("None", name_span),
             elements: Vec::new(),
             span,
         },
@@ -221,12 +224,14 @@ fn build_rewrite(
     ]
 }
 
+/// Assign a compiler-synthesized hidden local. The segment name is
+/// synthetic so reference lookups skip it.
 pub(super) fn assign_local(name: &str, value: Expr, span: Span) -> Statement {
     Statement::Assignment {
         target: LValue {
             head_resolved_type: None,
             local_id: None,
-            segments: vec![Name::new(name, span)],
+            segments: vec![Name::new(name, span.as_synthetic())],
             span,
         },
         type_annotation: None,
@@ -235,21 +240,25 @@ pub(super) fn assign_local(name: &str, value: Expr, span: Span) -> Statement {
     }
 }
 
+/// Read a compiler-synthesized hidden local. The whole expression is
+/// synthetic because the user never wrote this identifier.
 pub(super) fn ident(name: &str, span: Span) -> Expr {
     Expr::new(
         ExprKind::Ident {
             name: name.to_string(),
             resolution: Resolution::Unresolved,
         },
-        span,
+        span.as_synthetic(),
     )
 }
 
+/// Call a compiler-synthesized method. The call keeps the given span
+/// and only the method name is synthetic.
 pub(super) fn method_call(receiver: Expr, method: &str, args: Vec<Arg>, span: Span) -> Expr {
     Expr::new(
         ExprKind::MethodCall {
             receiver: Box::new(receiver),
-            method: Name::new(method, span),
+            method: Name::new(method, span.as_synthetic()),
             args,
             target: Resolution::Unresolved,
             type_args: Vec::new(),

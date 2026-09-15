@@ -44,7 +44,7 @@ use crate::pipeline::lift_signatures::{TypeParamScope, resolve_type_expr};
 /// [`AnonymousKind::Function`] type.
 pub(super) fn resolve_closure(
     params: &mut [ClosureParam],
-    return_type: &Option<TypeExpr>,
+    return_type: &mut Option<TypeExpr>,
     body: &mut Vec<Statement>,
     expected: Option<&ResolvedType>,
     span: Span,
@@ -139,7 +139,7 @@ pub(super) fn resolve_short_closure(
 /// context. Both missing diagnoses and substitutes
 /// [`ResolvedType::Unresolved`].
 fn bind_closure_params(
-    params: &[ClosureParam],
+    params: &mut [ClosureParam],
     expected_params: Option<&[ResolvedType]>,
     span: Span,
     resolver: &Resolver<'_>,
@@ -159,7 +159,7 @@ fn bind_closure_params(
         ));
     }
     params
-        .iter()
+        .iter_mut()
         .enumerate()
         .map(|(index, param)| {
             let context = expected_params.and_then(|p| p.get(index));
@@ -169,7 +169,7 @@ fn bind_closure_params(
 }
 
 fn resolve_closure_param(
-    param: &ClosureParam,
+    param: &mut ClosureParam,
     expected: Option<&ResolvedType>,
     resolver: &Resolver<'_>,
     diagnostics: &mut Vec<Diagnostic>,
@@ -251,11 +251,11 @@ fn closure_return_type(
 /// seed `current_return_type` for body resolution and fall through
 /// as the closure's published return type.
 fn resolve_return_annotation(
-    annotation: &Option<TypeExpr>,
+    annotation: &mut Option<TypeExpr>,
     resolver: &Resolver<'_>,
     diagnostics: &mut Vec<Diagnostic>,
 ) -> Option<ResolvedType> {
-    let type_expr = annotation.as_ref()?;
+    let type_expr = annotation.as_mut()?;
     Some(resolve_type_expr(
         type_expr,
         TypeParamScope::default(),

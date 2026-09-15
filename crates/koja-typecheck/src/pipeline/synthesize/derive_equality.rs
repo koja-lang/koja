@@ -178,13 +178,13 @@ fn equality_impl_block(
 fn self_target_type(path: &[Name], type_params: &[TypeParam], span: Span) -> TypeExpr {
     let path = synthetic_path(path, span);
     if type_params.is_empty() {
-        TypeExpr::Named { path, span }
+        TypeExpr::named(path, span)
     } else {
         let args = type_params
             .iter()
             .map(|tp| named_type(tp.name.as_str(), span))
             .collect();
-        TypeExpr::Generic { path, args, span }
+        TypeExpr::generic(path, args, span)
     }
 }
 
@@ -193,10 +193,7 @@ fn equality_trait_expr(span: Span) -> TypeExpr {
 }
 
 fn named_type(name: &str, span: Span) -> TypeExpr {
-    TypeExpr::Named {
-        path: vec![Name::new(name, span)],
-        span,
-    }
+    TypeExpr::named(vec![Name::new(name, span)], span)
 }
 
 /// Builds `fn equals?(self, other: <Target>) -> Bool <body> end`.
@@ -407,6 +404,7 @@ fn wildcard_false_arm(span: Span) -> MatchArm {
 fn enum_unit_pattern(enum_path: &[Name], variant_name: &Name, span: Span) -> Pattern {
     Pattern::EnumUnit {
         type_path: synthetic_path(enum_path, span),
+        type_resolution: Resolution::Unresolved,
         variant: Name::new(variant_name.as_str(), span),
         span,
     }
@@ -428,6 +426,7 @@ fn enum_tuple_pattern(
         .collect();
     Pattern::EnumTuple {
         type_path: synthetic_path(enum_path, span),
+        type_resolution: Resolution::Unresolved,
         variant: Name::new(variant_name.as_str(), span),
         elements,
         span,
@@ -455,6 +454,7 @@ fn enum_struct_pattern(
         .collect();
     Pattern::EnumStruct {
         type_path: synthetic_path(enum_path, span),
+        type_resolution: Resolution::Unresolved,
         variant: Name::new(variant_name.as_str(), span),
         fields: field_patterns,
         span,

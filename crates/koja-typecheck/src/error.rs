@@ -11,6 +11,10 @@
 //!   sealed**: its annotations are whatever resolve managed to
 //!   stamp before halting. LSPs and `koja check` consume this
 //!   for partial diagnostics rendering.
+//! - `registry`: the [`GlobalRegistry`] as it stood when typecheck
+//!   halted, so a consumer can follow the stamps on `partial`.
+//!   `None` when the parser already failed and typecheck never
+//!   built one.
 //!
 //! Compiler-bug failure modes (seal invariant violations) panic
 //! through [`crate::pipeline::seal`] and never surface here.
@@ -20,6 +24,8 @@ use std::path::{Path, PathBuf};
 use koja_ast::ast::Diagnostic;
 use koja_ast::span::FileId;
 use koja_parser::ParsedProgram;
+
+use crate::registry::GlobalRegistry;
 
 /// Failure result of [`crate::check_program`].
 ///
@@ -32,6 +38,9 @@ use koja_parser::ParsedProgram;
 pub struct CheckFailure {
     pub diagnostics: Vec<Diagnostic>,
     pub partial: ParsedProgram,
+    /// Registry at the point typecheck halted. `None` on parse
+    /// failure. Boxed so the error variant stays small.
+    pub registry: Option<Box<GlobalRegistry>>,
     /// File table indexed by [`FileId`], in original parse order.
     /// `partial` may regroup files, so resolve spans through this.
     pub source_paths: Vec<PathBuf>,

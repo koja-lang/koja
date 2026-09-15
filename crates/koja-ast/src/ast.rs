@@ -773,11 +773,24 @@ pub struct TypeAlias {
 #[derive(Debug, Clone, PartialEq)]
 pub enum TypeExpr {
     /// A simple named type: `Int`, `String`, `MyStruct`.
-    Named { path: Vec<Name>, span: Span },
+    ///
+    /// `resolution` is [`Resolution::Unresolved`] after parse. Typecheck
+    /// stamps the head of `path` with the registry entry or type
+    /// parameter it names, and consumers read the stamp instead of
+    /// looking the path up again.
+    Named {
+        path: Vec<Name>,
+        resolution: Resolution,
+        span: Span,
+    },
     /// A generic type with type arguments: `List<Int>`, `Map<String, Int>`.
+    ///
+    /// `resolution` stamps the head of `path` as on [`Self::Named`].
+    /// Each argument carries its own stamp.
     Generic {
         path: Vec<Name>,
         args: Vec<TypeExpr>,
+        resolution: Resolution,
         span: Span,
     },
     /// The unit type: `()`.
@@ -796,6 +809,27 @@ pub enum TypeExpr {
     Tuple { elements: Vec<TypeExpr>, span: Span },
     /// A union type: `A | B | C`.
     Union { types: Vec<TypeExpr>, span: Span },
+}
+
+impl TypeExpr {
+    /// Build a [`Self::Named`] with an unresolved stamp.
+    pub fn named(path: Vec<Name>, span: Span) -> Self {
+        TypeExpr::Named {
+            path,
+            resolution: Resolution::Unresolved,
+            span,
+        }
+    }
+
+    /// Build a [`Self::Generic`] with an unresolved stamp.
+    pub fn generic(path: Vec<Name>, args: Vec<TypeExpr>, span: Span) -> Self {
+        TypeExpr::Generic {
+            path,
+            args,
+            resolution: Resolution::Unresolved,
+            span,
+        }
+    }
 }
 
 // Statements
@@ -1301,14 +1335,22 @@ pub enum Pattern {
         span: Span,
     },
     /// A unit enum variant: `Color.Red`.
+    ///
+    /// `type_resolution` is [`Resolution::Unresolved`] after parse.
+    /// Typecheck stamps it with the enum entry `type_path` names. The
+    /// variant is a member of that entry, so it carries no stamp of
+    /// its own. The same field on [`Self::EnumTuple`],
+    /// [`Self::EnumStruct`], and [`Self::Struct`] works the same way.
     EnumUnit {
         type_path: Vec<Name>,
+        type_resolution: Resolution,
         variant: Name,
         span: Span,
     },
     /// A tuple enum variant: `Option.Some(x)`.
     EnumTuple {
         type_path: Vec<Name>,
+        type_resolution: Resolution,
         variant: Name,
         elements: Vec<Pattern>,
         span: Span,
@@ -1316,6 +1358,7 @@ pub enum Pattern {
     /// A struct enum variant: `Shape.Rect { width, height }`.
     EnumStruct {
         type_path: Vec<Name>,
+        type_resolution: Resolution,
         variant: Name,
         fields: Vec<FieldPattern>,
         span: Span,
@@ -1332,6 +1375,7 @@ pub enum Pattern {
     /// and matches any value of that struct type.
     Struct {
         type_path: Vec<Name>,
+        type_resolution: Resolution,
         fields: Vec<FieldPattern>,
         span: Span,
     },

@@ -118,15 +118,16 @@ pub(crate) fn lift_signatures(
     // Pass 1a: protocols. Lifted first so protocol method rosters
     // exist for the bounds-resolve sub-pass below and for trait-impl
     // conformance in pass 2.
-    for pkg in packages.iter() {
-        for file in &pkg.files {
+    for pkg in packages.iter_mut() {
+        let package = pkg.package.clone();
+        for file in &mut pkg.files {
             let aliases = collect_file_aliases(file);
             let mut scope = LiftScope {
                 aliases: &aliases,
-                package: &pkg.package,
+                package: &package,
                 registry,
             };
-            for item in &file.items {
+            for item in &mut file.items {
                 if let Item::Protocol(decl) = item {
                     protocols::lift_protocol(decl, &mut scope, diagnostics);
                 }
@@ -152,15 +153,16 @@ pub(crate) fn lift_signatures(
     // matter inside this pass: every signature resolution either
     // hits a protocol (already lifted) or another struct/enum
     // (already registered with type_params at collect).
-    for pkg in packages.iter() {
-        for file in &pkg.files {
+    for pkg in packages.iter_mut() {
+        let package = pkg.package.clone();
+        for file in &mut pkg.files {
             let aliases = collect_file_aliases(file);
             let mut scope = LiftScope {
                 aliases: &aliases,
-                package: &pkg.package,
+                package: &package,
                 registry,
             };
-            for item in &file.items {
+            for item in &mut file.items {
                 match item {
                     Item::Builtin(decl) => builtins::lift_builtin(decl, &mut scope, diagnostics),
                     Item::Enum(decl) => enums::lift_enum(decl, &mut scope, diagnostics),
@@ -222,7 +224,7 @@ pub(crate) fn lift_signatures(
                     Item::Enum(decl) => impls::lift_header_conformances(
                         "enum",
                         &decl.path,
-                        &decl.conformances,
+                        &mut decl.conformances,
                         &mut decl.functions,
                         &bodies,
                         &mut scope,
@@ -231,7 +233,7 @@ pub(crate) fn lift_signatures(
                     Item::Struct(decl) => impls::lift_header_conformances(
                         "struct",
                         &decl.path,
-                        &decl.conformances,
+                        &mut decl.conformances,
                         &mut decl.functions,
                         &bodies,
                         &mut scope,
@@ -272,19 +274,20 @@ pub(crate) fn lift_signatures(
 /// to a protocol id and arguments, then stamp the parallel bound
 /// lists onto its registry entry.
 fn resolve_all_bounds(
-    packages: &[CheckedPackage],
+    packages: &mut [CheckedPackage],
     registry: &mut GlobalRegistry,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
-    for pkg in packages {
-        for file in &pkg.files {
+    for pkg in packages.iter_mut() {
+        let package = pkg.package.clone();
+        for file in &mut pkg.files {
             let aliases = collect_file_aliases(file);
             let mut scope = LiftScope {
                 aliases: &aliases,
-                package: &pkg.package,
+                package: &package,
                 registry,
             };
-            for item in &file.items {
+            for item in &mut file.items {
                 match item {
                     Item::Builtin(decl) => resolve_builtin_bounds(decl, &mut scope, diagnostics),
                     Item::Enum(decl) => resolve_enum_bounds(decl, &mut scope, diagnostics),
@@ -297,7 +300,7 @@ fn resolve_all_bounds(
                     Item::Protocol(decl) => resolve_protocol_bounds(decl, &mut scope, diagnostics),
                     Item::Struct(decl) => {
                         resolve_struct_bounds(decl, &mut scope, diagnostics);
-                        for function in &decl.functions {
+                        for function in &mut decl.functions {
                             resolve_function_bounds(
                                 function,
                                 Identifier::member(
@@ -318,7 +321,7 @@ fn resolve_all_bounds(
 }
 
 fn resolve_struct_bounds(
-    decl: &StructDecl,
+    decl: &mut StructDecl,
     scope: &mut LiftScope<'_>,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
@@ -326,13 +329,17 @@ fn resolve_struct_bounds(
     let Some((id, _)) = scope.registry.lookup(&identifier) else {
         return;
     };
-    let resolved =
-        resolve_param_bounds(&decl.type_params, id, scope.resolution_scope(), diagnostics);
+    let resolved = resolve_param_bounds(
+        &mut decl.type_params,
+        id,
+        scope.resolution_scope(),
+        diagnostics,
+    );
     scope.registry.set_type_param_bounds(id, resolved);
 }
 
 fn resolve_builtin_bounds(
-    decl: &BuiltinDecl,
+    decl: &mut BuiltinDecl,
     scope: &mut LiftScope<'_>,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
@@ -345,11 +352,15 @@ fn resolve_builtin_bounds(
     // the declared bounds list would not line up. Collect already
     // diagnosed the mismatch.
     if entry.type_params.len() == decl.type_params.len() {
-        let resolved =
-            resolve_param_bounds(&decl.type_params, id, scope.resolution_scope(), diagnostics);
+        let resolved = resolve_param_bounds(
+            &mut decl.type_params,
+            id,
+            scope.resolution_scope(),
+            diagnostics,
+        );
         scope.registry.set_type_param_bounds(id, resolved);
     }
-    for function in &decl.functions {
+    for function in &mut decl.functions {
         resolve_function_bounds(
             function,
             Identifier::member(scope.package, &path, function.name.as_str()),
@@ -360,7 +371,7 @@ fn resolve_builtin_bounds(
 }
 
 fn resolve_enum_bounds(
-    decl: &EnumDecl,
+    decl: &mut EnumDecl,
     scope: &mut LiftScope<'_>,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
@@ -369,10 +380,14 @@ fn resolve_enum_bounds(
     let Some((id, _)) = scope.registry.lookup(&identifier) else {
         return;
     };
-    let resolved =
-        resolve_param_bounds(&decl.type_params, id, scope.resolution_scope(), diagnostics);
+    let resolved = resolve_param_bounds(
+        &mut decl.type_params,
+        id,
+        scope.resolution_scope(),
+        diagnostics,
+    );
     scope.registry.set_type_param_bounds(id, resolved);
-    for function in &decl.functions {
+    for function in &mut decl.functions {
         resolve_function_bounds(
             function,
             Identifier::member(scope.package, &path, function.name.as_str()),
@@ -383,7 +398,7 @@ fn resolve_enum_bounds(
 }
 
 fn resolve_protocol_bounds(
-    decl: &ProtocolDecl,
+    decl: &mut ProtocolDecl,
     scope: &mut LiftScope<'_>,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
@@ -396,25 +411,27 @@ fn resolve_protocol_bounds(
     // Skip any user-declared `Self` so the bounds vec aligns with
     // the type_params list `register_protocol` built (`Self` is
     // synthetic and a reserved name. The diagnostic for re-using it
-    // already fired during collect).
-    let user_params: Vec<_> = decl
-        .type_params
-        .iter()
-        .filter(|param| param.name != "Self")
-        .cloned()
-        .collect();
-    let mut resolved = vec![Vec::new()];
-    resolved.extend(resolve_param_bounds(
-        &user_params,
+    // already fired during collect). Every declared bound still
+    // resolves in place so its type path carries a stamp.
+    let all = resolve_param_bounds(
+        &mut decl.type_params,
         id,
         scope.resolution_scope(),
         diagnostics,
-    ));
+    );
+    let mut resolved = vec![Vec::new()];
+    resolved.extend(
+        decl.type_params
+            .iter()
+            .zip(all)
+            .filter(|(param, _)| param.name != "Self")
+            .map(|(_, bounds)| bounds),
+    );
     scope.registry.set_type_param_bounds(id, resolved);
 }
 
 fn resolve_function_bounds(
-    function: &Function,
+    function: &mut Function,
     identifier: Identifier,
     scope: &mut LiftScope<'_>,
     diagnostics: &mut Vec<Diagnostic>,
@@ -429,7 +446,7 @@ fn resolve_function_bounds(
         return;
     }
     let resolved = resolve_param_bounds(
-        &function.type_params,
+        &mut function.type_params,
         id,
         scope.resolution_scope(),
         diagnostics,
@@ -441,7 +458,7 @@ fn resolve_function_bounds(
 /// `TypeParam`'s bound list maps to resolved protocol bounds.
 /// Invalid bounds are skipped after their diagnostics are emitted.
 fn resolve_param_bounds(
-    type_params: &[koja_ast::ast::TypeParam],
+    type_params: &mut [koja_ast::ast::TypeParam],
     owner: GlobalRegistryId,
     scope: ResolutionScope<'_>,
     diagnostics: &mut Vec<Diagnostic>,
@@ -449,11 +466,11 @@ fn resolve_param_bounds(
     let owners = [owner];
     let type_param_scope = TypeParamScope::new(&owners);
     type_params
-        .iter()
+        .iter_mut()
         .map(|param| {
             param
                 .bounds
-                .iter()
+                .iter_mut()
                 .filter_map(|bound| {
                     resolve_protocol_bound(bound, type_param_scope, scope, diagnostics)
                 })

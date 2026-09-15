@@ -214,13 +214,13 @@ fn debug_impl_block(target: TypeExpr, format_body: Expr, span: Span) -> Item {
 fn self_target_type(path: &[Name], type_params: &[TypeParam], span: Span) -> TypeExpr {
     let path = synthetic_path(path, span);
     if type_params.is_empty() {
-        TypeExpr::Named { path, span }
+        TypeExpr::named(path, span)
     } else {
         let args = type_params
             .iter()
             .map(|tp| named_type(tp.name.as_str(), span))
             .collect();
-        TypeExpr::Generic { path, args, span }
+        TypeExpr::generic(path, args, span)
     }
 }
 
@@ -237,10 +237,7 @@ fn debug_trait_expr(span: Span) -> TypeExpr {
 }
 
 fn named_type(name: &str, span: Span) -> TypeExpr {
-    TypeExpr::Named {
-        path: vec![Name::new(name, span)],
-        span,
-    }
+    TypeExpr::named(vec![Name::new(name, span)], span)
 }
 
 /// Builds `fn format(self) -> String <body> end`.
@@ -449,6 +446,7 @@ fn variant_match_arm(enum_path: &[Name], variant: &EnumVariant, span: Span) -> M
         EnumVariantData::Unit => (
             Pattern::EnumUnit {
                 type_path,
+                type_resolution: Resolution::Unresolved,
                 variant: variant_name,
                 span,
             },
@@ -467,6 +465,7 @@ fn variant_match_arm(enum_path: &[Name], variant: &EnumVariant, span: Span) -> M
             (
                 Pattern::EnumTuple {
                     type_path,
+                    type_resolution: Resolution::Unresolved,
                     variant: variant_name,
                     elements,
                     span,
@@ -490,6 +489,7 @@ fn variant_match_arm(enum_path: &[Name], variant: &EnumVariant, span: Span) -> M
             (
                 Pattern::EnumStruct {
                     type_path,
+                    type_resolution: Resolution::Unresolved,
                     variant: variant_name,
                     fields: field_patterns,
                     span,

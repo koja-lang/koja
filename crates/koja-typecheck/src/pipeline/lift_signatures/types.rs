@@ -90,8 +90,13 @@ impl<'a> TypeParamScope<'a> {
 /// (see [`TypeParamScope::default`]). `scope` carries the file's
 /// alias slice + current package + registry (see
 /// [`ResolutionScope`]).
+///
+/// Takes the node mutably so it can stamp `resolution` on every
+/// [`TypeExpr::Named`] and [`TypeExpr::Generic`] it visits. The stamp
+/// is the head of the returned type, or [`Resolution::Unresolved`]
+/// on a miss. Resolving the same node twice writes the same stamp.
 pub(crate) fn resolve_type_expr(
-    type_expr: &TypeExpr,
+    type_expr: &mut TypeExpr,
     type_params: TypeParamScope<'_>,
     scope: ResolutionScope<'_>,
     diagnostics: &mut Vec<Diagnostic>,
@@ -103,7 +108,7 @@ pub(crate) fn resolve_type_expr(
             ..
         } => {
             let resolved_params = params
-                .iter()
+                .iter_mut()
                 .map(|param_ty| resolve_type_expr(param_ty, type_params, scope, diagnostics))
                 .collect();
             let ret = resolve_type_expr(return_type, type_params, scope, diagnostics);
@@ -112,23 +117,36 @@ pub(crate) fn resolve_type_expr(
                 ret: Box::new(ret),
             })
         }
-        TypeExpr::Generic { path, args, span } => {
-            resolve_generic(path, args, *span, type_params, scope, diagnostics)
+        TypeExpr::Generic {
+            path,
+            args,
+            resolution,
+            span,
+        } => {
+            let resolved = resolve_generic(path, args, *span, type_params, scope, diagnostics);
+            *resolution = head_resolution(&resolved);
+            resolved
         }
-        TypeExpr::Named { path, span } => {
-            resolve_named(path, *span, type_params, scope, diagnostics)
+        TypeExpr::Named {
+            path,
+            resolution,
+            span,
+        } => {
+            let resolved = resolve_named(path, *span, type_params, scope, diagnostics);
+            *resolution = head_resolution(&resolved);
+            resolved
         }
         TypeExpr::Self_ { span } => resolve_self(*span, type_params, scope.registry, diagnostics),
         TypeExpr::Tuple { elements, .. } => {
             let resolved = elements
-                .iter()
+                .iter_mut()
                 .map(|element| resolve_type_expr(element, type_params, scope, diagnostics))
                 .collect();
             ResolvedType::Anonymous(AnonymousKind::Tuple { elements: resolved })
         }
         TypeExpr::Union { types, .. } => {
             let members = types
-                .iter()
+                .iter_mut()
                 .map(|t| resolve_type_expr(t, type_params, scope, diagnostics))
                 .collect::<Vec<_>>();
             canonical_union(members, scope.registry)
@@ -137,12 +155,23 @@ pub(crate) fn resolve_type_expr(
     }
 }
 
+/// The stamp for a named type path. `resolve_named` and
+/// `resolve_generic` only produce `ResolvedType::Named` or
+/// `ResolvedType::Unresolved`, so any other shape maps to
+/// [`Resolution::Unresolved`].
+fn head_resolution(resolved: &ResolvedType) -> Resolution {
+    match resolved {
+        ResolvedType::Named { resolution, .. } => *resolution,
+        _ => Resolution::Unresolved,
+    }
+}
+
 /// Resolve a declared return signature, folding a `-> T ! E` error
 /// channel into the underlying `Result<T, E>`. A missing return type
 /// resolves to `Unit`.
 pub(super) fn resolve_return_signature(
-    return_type: Option<&TypeExpr>,
-    error_type: Option<&TypeExpr>,
+    return_type: Option<&mut TypeExpr>,
+    error_type: Option<&mut TypeExpr>,
     type_params: TypeParamScope<'_>,
     scope: ResolutionScope<'_>,
     diagnostics: &mut Vec<Diagnostic>,
@@ -253,7 +282,7 @@ pub(crate) fn concrete_self_type(
 /// nested-type lifting lands).
 fn resolve_generic(
     path: &[Name],
-    args: &[TypeExpr],
+    args: &mut [TypeExpr],
     span: Span,
     type_params: TypeParamScope<'_>,
     scope: ResolutionScope<'_>,
@@ -275,7 +304,7 @@ fn resolve_generic(
         None => return ResolvedType::unresolved(),
     };
     let resolved_args = args
-        .iter()
+        .iter_mut()
         .map(|arg| resolve_type_expr(arg, type_params, scope, diagnostics))
         .collect();
     ResolvedType::Named {
@@ -399,7 +428,7 @@ fn lookup_path_entry<'r>(
 
 /// Resolve one protocol bound, including its type arguments.
 pub(crate) fn resolve_protocol_bound(
-    bound: &TypeExpr,
+    bound: &mut TypeExpr,
     type_params: TypeParamScope<'_>,
     scope: ResolutionScope<'_>,
     diagnostics: &mut Vec<Diagnostic>,
