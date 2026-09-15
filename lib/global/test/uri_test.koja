@@ -1,8 +1,9 @@
 alias URI.Error as URIError
+alias Test.require
 
 test "parses a full absolute URI"
   input = "http://user:pass@example.com:8080/path?a=1#frag"
-  uri = try Test.require(URI.parse(input))
+  uri = try require(URI.parse(input))
   expected = URI{
     fragment: Option.Some("frag"),
     host: Option.Some("example.com"),
@@ -17,14 +18,14 @@ test "parses a full absolute URI"
 end
 
 test "fills default port for known schemes"
-  uri = try Test.require(URI.parse("https://koja-lang.org/"))
+  uri = try require(URI.parse("https://koja-lang.org/"))
 
   assert uri.port == Option.Some(443)
   assert uri.path == "/"
 end
 
 test "parses protocol-relative reference"
-  uri = try Test.require(URI.parse("//koja-lang.org/"))
+  uri = try require(URI.parse("//koja-lang.org/"))
 
   assert uri.scheme.none?()
   assert uri.port.none?()
@@ -32,25 +33,25 @@ test "parses protocol-relative reference"
 end
 
 test "parses absolute and relative paths"
-  absolute = try Test.require(URI.parse("/foo/bar"))
+  absolute = try require(URI.parse("/foo/bar"))
 
   assert absolute.path == "/foo/bar"
   assert absolute.host.none?()
   assert absolute.scheme.none?()
 
-  relative = try Test.require(URI.parse("foo/bar"))
+  relative = try require(URI.parse("foo/bar"))
   assert relative.path == "foo/bar"
 end
 
 test "parses bracketed IPv6 host"
-  uri = try Test.require(URI.parse("//[fe80::]/"))
+  uri = try require(URI.parse("//[fe80::]/"))
 
   assert uri.host == Option.Some("fe80::")
   assert uri.to_string() == "//[fe80::]/"
 end
 
 test "parses scheme-only URI with query"
-  uri = try Test.require(URI.parse("https:?query"))
+  uri = try require(URI.parse("https:?query"))
 
   assert uri.query == Option.Some("query")
   assert uri.path == ""
@@ -58,7 +59,7 @@ test "parses scheme-only URI with query"
 end
 
 test "lowercases the scheme"
-  uri = try Test.require(URI.parse("HTTPS://EXAMPLE.COM/"))
+  uri = try require(URI.parse("HTTPS://EXAMPLE.COM/"))
 
   assert uri.scheme == Option.Some("https")
   assert uri.host == Option.Some("EXAMPLE.COM")
@@ -89,13 +90,13 @@ test "to_string reassembles components"
   ]
 
   for input in inputs
-    uri = try Test.require(URI.parse(input))
+    uri = try require(URI.parse(input))
     assert uri.to_string() == input
   end
 end
 
 test "to_string omits the default port"
-  uri = try Test.require(URI.parse("https://example.com:443/"))
+  uri = try require(URI.parse("https://example.com:443/"))
 
   assert uri.port == Option.Some(443)
   assert uri.to_string() == "https://example.com/"

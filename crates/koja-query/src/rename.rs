@@ -10,6 +10,7 @@
 
 use std::fmt;
 
+use koja_ast::ast::{AliasDecl, Item};
 use koja_ast::identifier::Identifier;
 use koja_ast::span::{FileId, Span};
 use koja_typecheck::{GlobalKind, KEYWORDS};
@@ -29,7 +30,8 @@ pub enum RenameRefusal {
     /// The symbol kind is never renamed. The payload names it.
     NotRenamable(&'static str),
     /// A reference spells the symbol under another name, such as a
-    /// file `alias`.
+    /// file `alias`, or an alias binds this function together with
+    /// its other arities.
     Aliased,
     /// The replacement is not one identifier of the right case.
     InvalidName(String),
@@ -88,6 +90,7 @@ pub fn prepare_rename(
     }
     if let SymbolKey::Global(id) = key {
         check_global_kind(analysis, id)?;
+        check_alias_binds_sibling_arities(analysis, id)?;
     }
 
     let mut spans = Vec::new();
@@ -138,6 +141,49 @@ fn check_global_kind(
         ));
     }
     Ok(())
+}
+
+/// A file `alias` of a function binds every arity under one name.
+/// Renaming one arity would rewrite the alias line and take the
+/// other arities out from under the file, so refuse when the
+/// function has siblings and an alias reaches it.
+fn check_alias_binds_sibling_arities(
+    analysis: &Analysis<'_>,
+    id: koja_ast::identifier::GlobalRegistryId,
+) -> Result<(), RenameRefusal> {
+    let registry = analysis.registry;
+    let Some(entry) = registry.get(id) else {
+        return Ok(());
+    };
+    if !matches!(entry.kind, GlobalKind::Function(_))
+        || registry.function_arities(&entry.identifier).len() < 2
+    {
+        return Ok(());
+    }
+    let aliased = analysis.files().iter().any(|file| {
+        file.items.iter().any(|item| match item {
+            Item::Alias(alias) => alias_target(alias).as_ref() == Some(&entry.identifier),
+            _ => false,
+        })
+    });
+    if aliased {
+        return Err(RenameRefusal::Aliased);
+    }
+    Ok(())
+}
+
+/// The identifier an alias line names, read the way the reference
+/// index reads it. The head segment is the package and the rest is
+/// the path.
+fn alias_target(alias: &AliasDecl) -> Option<Identifier> {
+    let (package, rest) = alias.path.split_first()?;
+    if rest.is_empty() {
+        return None;
+    }
+    Some(Identifier::new(
+        package.as_str(),
+        rest.iter().map(|name| name.text.clone()).collect(),
+    ))
 }
 
 /// Check that `new_name` is one identifier in the same case class

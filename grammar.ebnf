@@ -101,14 +101,17 @@ type_param = TYPE_IDENT , [ ":" , TYPE_IDENT , { "&" , TYPE_IDENT } ] ;
 
 type_alias_decl = { annotation } , [ "priv" ] , "type" , TYPE_IDENT , "=" , type_expr ;
 
-alias_decl = "alias" , alias_path , [ "as" , TYPE_IDENT ] ;
+alias_decl = "alias" , alias_path , [ "as" , ( IDENT | TYPE_IDENT ) ] ;
 
-alias_path = { ( IDENT | TYPE_IDENT ) , "." } , TYPE_IDENT ;
+alias_path = { ( IDENT | TYPE_IDENT ) , "." } , TYPE_IDENT , { "." , TYPE_IDENT } , [ "." , IDENT ] ;
 (* Packages are PascalCase TYPE_IDENTs (e.g. `alias Net.TCPSocket`,        *)
 (* `alias HTTP.Headers`). Lowercase IDENT segments are still accepted in   *)
 (* leading positions for dotted paths that route through a non-package     *)
-(* name, but every alias path must end with a TYPE_IDENT. The optional    *)
-(* `as TYPE_IDENT` introduces a local rename.                              *)
+(* name. The path ends with a TYPE_IDENT for a type or constant, or one    *)
+(* trailing IDENT for a package-level function (`alias Test.require`).     *)
+(* The optional `as` name introduces a local rename. Typecheck requires    *)
+(* it to have the case of the target, so a function alias is an IDENT and  *)
+(* a type or constant alias is a TYPE_IDENT.                               *)
 
 
 (* ========================================================================== *)

@@ -1,7 +1,8 @@
 alias File.Mode as FileMode
+alias Test.require
 
 test "read /dev/null returns empty string"
-  contents = try Test.require(File.read("/dev/null"))
+  contents = try require(File.read("/dev/null"))
   assert contents.empty?()
 end
 
@@ -12,16 +13,16 @@ end
 test "write and read roundtrip"
   path = "/tmp/koja_file_test_write.txt"
 
-  try Test.require(File.write(path, "hello from koja"))
+  try require(File.write(path, "hello from koja"))
   read = File.read(path)
   File.delete(path)
 
-  contents = try Test.require(read)
+  contents = try require(read)
   assert contents == "hello from koja"
 end
 
 test "open for read on /dev/null succeeds"
-  file = try Test.require(File.open("/dev/null", FileMode.Read))
+  file = try require(File.open("/dev/null", FileMode.Read))
   _ = file.close()
 end
 
@@ -33,19 +34,19 @@ end
 test "open for write, write via fd, read back"
   path = "/tmp/koja_file_test_handle_write.txt"
 
-  file = try Test.require(File.open(path, FileMode.Write))
+  file = try require(File.open(path, FileMode.Write))
   file.fd.write("handle write")
   read = File.read(path)
   File.delete(path)
 
-  contents = try Test.require(read)
+  contents = try require(read)
   assert contents == "handle write"
 end
 
 test "open for append adds to existing content"
   path = "/tmp/koja_file_test_append.txt"
 
-  try Test.require(File.write(path, "first"))
+  try require(File.write(path, "first"))
   opened = File.open(path, FileMode.Append)
 
   match opened
@@ -56,8 +57,8 @@ test "open for append adds to existing content"
   read = File.read(path)
   File.delete(path)
 
-  try Test.require(opened)
-  contents = try Test.require(read)
+  try require(opened)
+  contents = try require(read)
   assert contents == "first second"
 end
 
@@ -72,8 +73,8 @@ end
 test "delete removes a file"
   path = "/tmp/koja_file_test_delete.txt"
 
-  try Test.require(File.write(path, "delete me"))
-  try Test.require(File.delete(path))
+  try require(File.write(path, "delete me"))
+  try require(File.delete(path))
   assert not File.exists?(path)
 end
 
@@ -81,40 +82,40 @@ test "rename moves a file"
   src = "/tmp/koja_file_test_rename_src.txt"
   dst = "/tmp/koja_file_test_rename_dst.txt"
 
-  try Test.require(File.write(src, "rename me"))
+  try require(File.write(src, "rename me"))
   renamed = File.rename(src, dst)
   src_exists = File.exists?(src)
   read = File.read(dst)
   File.delete(src)
   File.delete(dst)
 
-  try Test.require(renamed)
+  try require(renamed)
   assert not src_exists
-  contents = try Test.require(read)
+  contents = try require(read)
   assert contents == "rename me"
 end
 
 test "close returns Ok"
-  file = try Test.require(File.open("/dev/null", FileMode.Read))
-  try Test.require(file.close())
+  file = try require(File.open("/dev/null", FileMode.Read))
+  try require(file.close())
 end
 
 test "binary write and read preserve arbitrary bytes"
   path = "/tmp/koja_file_test_binary.bin"
   expected: Binary = <<97, 0, 255>>
 
-  try Test.require(File.write(path, expected))
+  try require(File.write(path, expected))
   read = File.read_binary(path)
   File.delete(path)
 
-  actual = try Test.require(read)
+  actual = try require(read)
   assert actual == expected
 end
 
 test "text read rejects invalid UTF-8"
   path = "/tmp/koja_file_test_invalid_utf8.bin"
 
-  try Test.require(File.write(path, <<255>>))
+  try require(File.write(path, <<255>>))
   result = File.read(path)
   File.delete(path)
 
@@ -125,12 +126,12 @@ test "mkdir creates a directory that dir? sees and rmdir removes"
   path = "/tmp/koja_file_test_mkdir"
   File.rmdir(path)
 
-  try Test.require(File.mkdir(path))
+  try require(File.mkdir(path))
   created = File.dir?(path)
   removed = File.rmdir(path)
 
   assert created
-  try Test.require(removed)
+  try require(removed)
   assert not File.exists?(path)
 end
 
@@ -152,7 +153,7 @@ test "mkdir_p creates missing parents and is idempotent"
   parent = "/tmp/koja_file_test_mkdir_p"
   nested = "#{parent}/a/b"
 
-  try Test.require(File.mkdir_p(nested))
+  try require(File.mkdir_p(nested))
   repeat = File.mkdir_p(nested)
   created = File.dir?(nested)
   File.rmdir(nested)
@@ -160,14 +161,14 @@ test "mkdir_p creates missing parents and is idempotent"
   File.rmdir(parent)
 
   assert created
-  try Test.require(repeat)
+  try require(repeat)
 end
 
 test "rmdir errors on a non-empty directory"
   path = "/tmp/koja_file_test_rmdir_full"
   File.mkdir_p(path)
 
-  try Test.require(File.write("#{path}/occupant.txt", "here"))
+  try require(File.write("#{path}/occupant.txt", "here"))
   result = File.rmdir(path)
   File.delete("#{path}/occupant.txt")
   File.rmdir(path)

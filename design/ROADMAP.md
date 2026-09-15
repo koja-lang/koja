@@ -61,7 +61,7 @@ the features users miss first, and bounds socket waits.
 
 ### Language
 
-- Let `alias` name a package-level function or constant, not only a type.
+- **[DONE]** Let `alias` name a package-level function or constant, not only a type.
   `alias JSON.decode` binds `decode` in the file, every arity included, and
   `alias Pkg.DEFAULT_PORT` binds the constant. `as` renames either one. The shadow rule stays a hard error, so there is no precedence
   between an alias and a same-package name. The test surface is what made

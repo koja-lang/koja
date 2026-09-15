@@ -1,6 +1,8 @@
+alias Test.require
+
 test "parse simple GET request"
   raw = "GET /index.html HTTP/1.1\r\nHost: example.com\r\n\r\n"
-  req = try Test.require(Parser.parse_request(raw))
+  req = try require(Parser.parse_request(raw))
 
   assert req.method.to_string() == "GET"
   assert req.path == "/index.html"
@@ -11,7 +13,7 @@ end
 
 test "parse POST request with body"
   raw = "POST /api/data HTTP/1.1\r\nHost: example.com\r\nContent-Length: 13\r\n\r\nHello, World!"
-  req = try Test.require(Parser.parse_request(raw))
+  req = try require(Parser.parse_request(raw))
 
   assert req.method.to_string() == "POST"
   assert req.path == "/api/data"
@@ -20,7 +22,7 @@ end
 
 test "parse request with multiple headers"
   raw = "GET / HTTP/1.1\r\nHost: example.com\r\nAccept: text/html\r\nX-Custom: value\r\n\r\n"
-  req = try Test.require(Parser.parse_request(raw))
+  req = try require(Parser.parse_request(raw))
 
   assert req.headers.get("Host").unwrap() == "example.com"
   assert req.headers.get("Accept").unwrap() == "text/html"
@@ -29,7 +31,7 @@ end
 
 test "parse simple response"
   raw = "HTTP/1.1 200 OK\r\nContent-Length: 5\r\n\r\nhello"
-  resp = try Test.require(Parser.parse_response(raw))
+  resp = try require(Parser.parse_response(raw))
 
   assert resp.status.code == 200
   assert resp.status.reason == "OK"
@@ -39,7 +41,7 @@ end
 
 test "parse response with multi-word reason"
   raw = "HTTP/1.1 404 Not Found\r\nContent-Length: 9\r\n\r\nnot found"
-  resp = try Test.require(Parser.parse_response(raw))
+  resp = try require(Parser.parse_response(raw))
 
   assert resp.status.code == 404
   assert resp.status.reason == "Not Found"
@@ -47,7 +49,7 @@ end
 
 test "parse response with no body"
   raw = "HTTP/1.1 204 No Content\r\n\r\n"
-  resp = try Test.require(Parser.parse_response(raw))
+  resp = try require(Parser.parse_response(raw))
 
   assert resp.status.code == 204
   assert resp.body == ""
@@ -55,7 +57,7 @@ end
 
 test "parse chunked response"
   raw = "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n5\r\nhello\r\n6\r\n world\r\n0\r\n\r\n"
-  resp = try Test.require(Parser.parse_response(raw))
+  resp = try require(Parser.parse_response(raw))
 
   assert resp.body == "hello world"
 end

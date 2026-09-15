@@ -1,5 +1,7 @@
+alias Test.require
+
 test "async and await roundtrip"
   t = Task.async(fn () -> Int 42 end)
-  v = try Test.require(Task.await(t))
+  v = try require(Task.await(t))
   assert v == 42
 end

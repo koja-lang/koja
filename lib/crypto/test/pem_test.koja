@@ -1,3 +1,5 @@
+alias Test.require
+
 # `parse` validates PEM labels without decoding contents, so these
 # fixtures use placeholder base64 bodies.
 const FAKE_CERT: String = "-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----\n"
@@ -7,7 +9,7 @@ const FAKE_PKCS8_KEY: String = "-----BEGIN PRIVATE KEY-----\nMIGH\n-----END PRIV
 const FAKE_RSA_KEY: String = "-----BEGIN RSA PRIVATE KEY-----\nMIIE\n-----END RSA PRIVATE KEY-----\n"
 
 test "Certificate.parse accepts a CERTIFICATE block"
-  cert = try Test.require(Certificate.parse(FAKE_CERT))
+  cert = try require(Certificate.parse(FAKE_CERT))
   assert cert.pem == FAKE_CERT
 end
 
@@ -28,9 +30,9 @@ test "Certificate.parse rejects non-PEM text"
 end
 
 test "PrivateKey.parse accepts PKCS#8, RSA, and EC blocks"
-  try Test.require(PrivateKey.parse(FAKE_PKCS8_KEY))
-  try Test.require(PrivateKey.parse(FAKE_RSA_KEY))
-  try Test.require(PrivateKey.parse(FAKE_EC_KEY))
+  try require(PrivateKey.parse(FAKE_PKCS8_KEY))
+  try require(PrivateKey.parse(FAKE_RSA_KEY))
+  try require(PrivateKey.parse(FAKE_EC_KEY))
 end
 
 test "PrivateKey.parse rejects passphrase-protected keys"

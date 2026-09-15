@@ -6,25 +6,26 @@ alias Net.Socket.Kind as SocketKind
 alias Net.TCPListener
 alias Net.TCPSocket
 alias Net.UDPSocket
+alias Test.require
 
 test "create stream socket"
-  s = try Test.require(Socket.create(SocketKind.Stream))
+  s = try require(Socket.create(SocketKind.Stream))
   _ = s.close()
 end
 
 test "create datagram socket"
-  s = try Test.require(Socket.create(SocketKind.Datagram))
+  s = try require(Socket.create(SocketKind.Datagram))
   _ = s.close()
 end
 
 test "bind stream socket to any:0"
-  s = try Test.require(Socket.create(SocketKind.Stream))
-  bound = try Test.require(s.bind(SocketAddress{ip: IPAddress.any(), port: 0}))
+  s = try require(Socket.create(SocketKind.Stream))
+  bound = try require(s.bind(SocketAddress{ip: IPAddress.any(), port: 0}))
   _ = bound.close()
 end
 
 test "connect to loopback:1 is refused"
-  s = try Test.require(Socket.create(SocketKind.Stream))
+  s = try require(Socket.create(SocketKind.Stream))
 
   match s.connect(SocketAddress{ip: IPAddress.loopback(), port: 1})
     Result.Ok(conn) ->
@@ -37,14 +38,14 @@ test "connect to loopback:1 is refused"
 end
 
 test "resolve localhost returns non-empty list"
-  addrs = try Test.require(Socket.resolve("localhost"))
+  addrs = try require(Socket.resolve("localhost"))
 
   assert addrs.any?(address -> address.version == IPAddress.Version.V4
     and address.to_string() == "127.0.0.1")
 end
 
 test "TCPListener.bind to port 0"
-  listener = try Test.require(TCPListener.bind(0))
+  listener = try require(TCPListener.bind(0))
   _ = listener.close()
 end
 
@@ -63,42 +64,42 @@ test "TCPSocket.connect_addr to loopback:1 is refused"
 end
 
 test "UDPSocket.bind to port 0"
-  sock = try Test.require(UDPSocket.bind(0))
+  sock = try require(UDPSocket.bind(0))
   _ = sock.close()
 end
 
 test "UDPSocket.bind_addr with loopback"
-  sock = try Test.require(
+  sock = try require(
     UDPSocket.bind_addr(SocketAddress{ip: IPAddress.loopback(), port: 0}),
   )
   _ = sock.close()
 end
 
 test "TCPListener.bind_addr with loopback"
-  listener = try Test.require(
+  listener = try require(
     TCPListener.bind_addr(SocketAddress{ip: IPAddress.loopback(), port: 0}),
   )
   _ = listener.close()
 end
 
 test "UDP send preserves embedded NUL length"
-  socket = try Test.require(Socket.create(SocketKind.Datagram))
+  socket = try require(Socket.create(SocketKind.Datagram))
   payload = <<97, 0, 98>>.to_string().unwrap()
   address = SocketAddress{ip: IPAddress.loopback(), port: 9}
   result = socket.send_to(payload, address)
   _ = socket.close()
 
-  sent = try Test.require(result)
+  sent = try require(result)
   assert sent == 3
 end
 
 test "UDP recv_from returns a complete sender address"
   (receiver, port) = try bind_loopback_udp()
-  sender = try Test.require(UDPSocket.bind(0))
+  sender = try require(UDPSocket.bind(0))
   target = SocketAddress{ip: IPAddress.loopback(), port: port}
 
-  _sent = try Test.require(sender.send_to("ping", target))
-  (data, address) = try Test.require(receiver.recv_from(16))
+  _sent = try require(sender.send_to("ping", target))
+  (data, address) = try require(receiver.recv_from(16))
 
   _sender_closed = sender.close()
   _receiver_closed = receiver.close()

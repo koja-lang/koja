@@ -1,10 +1,12 @@
-//! File-private `alias Pkg.Type [as Local]` validation +
+//! File-private `alias Pkg.Name [as Local]` validation +
 //! path-rewrite helper.
 //!
-//! Aliases bind a single `local_name` to a target [`Identifier`].
-//! Use sites may project further segments through that head. This
-//! module's [`rewrite_through_aliases`] does the projection so the
-//! lift / resolve passes call one helper regardless of path depth.
+//! Aliases bind a single `local_name` to a target [`Identifier`],
+//! which names a type, a package-level function, or a package-level
+//! constant. Use sites may project further segments through that
+//! head. This module's [`rewrite_through_aliases`] does the
+//! projection so the lift / resolve passes call one helper
+//! regardless of path depth.
 //!
 //! Validation runs once between [`super::collect`] and
 //! [`super::lift_signatures`] so every signature site sees a
@@ -82,20 +84,22 @@ fn lookup_alias_target<'r>(
 /// [`super::lift_signatures::lift_signatures`] (so type-name
 /// lookups in struct / fn signatures see the validated roster).
 ///
-/// Six checks per alias, each emitting one diagnostic and
+/// Seven checks per alias, each emitting one diagnostic and
 /// continuing so the user sees every alias problem in one pass:
 ///
 /// 1. Path length `>= 2`: alias targets must be qualified.
-/// 2. Target identifier exists and names a struct, enum, or
-///    protocol (not a function or constant).
-/// 3. Target is visible from the aliasing package (a `priv` type
+/// 2. Target identifier exists and names a type, or a package-level
+///    function or constant. A member of a type is rejected.
+/// 3. Local name has the target's case, lowercase for a function and
+///    uppercase for everything else.
+/// 4. Target is visible from the aliasing package (a `priv` decl
 ///    cannot be aliased cross-package).
-/// 4. Local name not already used by another alias in this file.
-/// 5. Local name doesn't shadow a current-package decl, *unless*
+/// 5. Local name not already used by another alias in this file.
+/// 6. Local name doesn't shadow a current-package decl, *unless*
 ///    the alias's target is that very same identifier (redundant
 ///    self-alias is allowed, since the alias and the existing binding
 ///    resolve to the same id).
-/// 6. Same shadow check against `Global`.
+/// 7. Same shadow check against `Global`.
 pub(crate) fn validate_aliases(
     packages: &[CheckedPackage],
     registry: &GlobalRegistry,
@@ -140,7 +144,7 @@ fn validate_file_aliases<'a>(
         let Some((_, entry)) = lookup_alias_target(&alias.path, package, registry) else {
             diagnostics.push(Diagnostic::error(
                 format!(
-                    "alias target `{}` is not a registered type",
+                    "alias target `{}` is not a registered declaration",
                     path_text(&alias.path),
                 ),
                 alias.span,
@@ -148,6 +152,9 @@ fn validate_file_aliases<'a>(
             continue;
         };
         if !check_target_kind(alias, entry, diagnostics) {
+            continue;
+        }
+        if !check_local_name_case(alias, entry, diagnostics) {
             continue;
         }
         check_reference_visibility(entry, package, alias.span, diagnostics);
@@ -164,7 +171,7 @@ fn check_path_length(alias: &AliasDecl, diagnostics: &mut Vec<Diagnostic>) -> bo
     }
     diagnostics.push(Diagnostic::error(
         format!(
-            "alias path must be `Package.Type` (qualified), got `{}`",
+            "alias path must be `Package.Name` (qualified), got `{}`",
             path_text(&alias.path),
         ),
         alias.span,
@@ -172,6 +179,9 @@ fn check_path_length(alias: &AliasDecl, diagnostics: &mut Vec<Diagnostic>) -> bo
     false
 }
 
+/// Types alias at any depth. Functions and constants alias only at
+/// package level, since a member of a type is reached through the
+/// type and the type is what to alias.
 fn check_target_kind(
     alias: &AliasDecl,
     entry: &RegistryEntry,
@@ -184,17 +194,90 @@ fn check_target_kind(
         | GlobalKind::Struct(_)
         | GlobalKind::TypeAlias(_) => true,
         GlobalKind::Constant(_) | GlobalKind::Function(_) => {
-            diagnostics.push(Diagnostic::error(
+            let path = entry.identifier.path();
+            if path.len() == 1 {
+                return true;
+            }
+            let owner =
+                Identifier::new(entry.identifier.package(), path[..path.len() - 1].to_vec());
+            diagnostics.push(Diagnostic::error_with_hint(
                 format!(
-                    "alias target `{}` is a {}, not a struct, enum, or protocol",
+                    "alias target `{}` is a member of `{owner}`, not a package-level {}",
                     entry.identifier,
                     entry.kind.label(),
                 ),
+                format!("alias `{owner}` and call the member through it"),
                 alias.span,
             ));
             false
         }
     }
+}
+
+/// A bare name's case tells the reader what it is. `bar(x)` calls a
+/// function and `Bar` names a type or constant. An alias may not move
+/// a name across that line.
+fn check_local_name_case(
+    alias: &AliasDecl,
+    entry: &RegistryEntry,
+    diagnostics: &mut Vec<Diagnostic>,
+) -> bool {
+    let local = alias.local_name.as_str();
+    let is_function = matches!(entry.kind, GlobalKind::Function(_));
+    let starts_lower = local
+        .chars()
+        .next()
+        .is_some_and(|c| c.is_lowercase() || c == '_');
+    if is_function == starts_lower {
+        return true;
+    }
+    let (want, fixed) = if is_function {
+        ("lowercase", to_snake_case(local))
+    } else {
+        ("uppercase", to_pascal_case(local))
+    };
+    diagnostics.push(Diagnostic::error_with_hint(
+        format!(
+            "alias `{local}` names {} `{}`, so it must be {want}",
+            entry.kind.label(),
+            entry.identifier,
+        ),
+        format!(
+            "write `alias {} as {fixed}`, or drop `as` to bind `{}`",
+            path_text(&alias.path),
+            entry.identifier.last(),
+        ),
+        alias.span,
+    ));
+    false
+}
+
+fn to_snake_case(name: &str) -> String {
+    let mut out = String::with_capacity(name.len() + 2);
+    for (i, c) in name.chars().enumerate() {
+        if c.is_uppercase() {
+            if i > 0 {
+                out.push('_');
+            }
+            out.extend(c.to_lowercase());
+        } else {
+            out.push(c);
+        }
+    }
+    out
+}
+
+fn to_pascal_case(name: &str) -> String {
+    name.split('_')
+        .filter(|part| !part.is_empty())
+        .map(|part| {
+            let mut chars = part.chars();
+            match chars.next() {
+                Some(first) => first.to_uppercase().chain(chars).collect::<String>(),
+                None => String::new(),
+            }
+        })
+        .collect()
 }
 
 fn check_no_duplicate(
@@ -206,7 +289,7 @@ fn check_no_duplicate(
         diagnostics.push(
             Diagnostic::error(
                 format!(
-                    "duplicate alias `{}` because a local name can refer to only one type",
+                    "duplicate alias `{}` because a local name can refer to only one declaration",
                     alias.local_name,
                 ),
                 alias.span,

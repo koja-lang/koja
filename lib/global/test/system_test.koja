@@ -1,3 +1,5 @@
+alias Test.require
+
 test "set_env and get_env roundtrip"
   System.set_env("KOJA_SYSTEM_TEST_VAR", "hello")
   assert System.get_env("KOJA_SYSTEM_TEST_VAR") == Option.Some("hello")
@@ -8,7 +10,7 @@ test "get_env returns None for unset variable"
 end
 
 test "cwd returns a non-empty string"
-  dir = try Test.require(System.cwd())
+  dir = try require(System.cwd())
   assert dir.length() > 0
 end
 

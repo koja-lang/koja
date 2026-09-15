@@ -1,4 +1,5 @@
 alias Net.IPAddress
+alias Test.require
 
 test "IPAddress.any is IPv4"
   assert IPAddress.any().version == IPAddress.Version.V4
@@ -59,7 +60,7 @@ test "IPAddress rejects invalid text"
 end
 
 priv fn assert_address_text(input: String, expected: String) ! Test.Failure
-  address = try Test.require(IPAddress.parse(input))
+  address = try require(IPAddress.parse(input))
 
   expected_version = input.contains?(":")
     ? IPAddress.Version.V6
@@ -70,6 +71,6 @@ priv fn assert_address_text(input: String, expected: String) ! Test.Failure
   actual = address.to_string()
   assert actual == expected, "'#{input}' rendered incorrectly"
 
-  reparsed = try Test.require(IPAddress.parse(actual))
+  reparsed = try require(IPAddress.parse(actual))
   assert reparsed == address, "'#{input}' did not round-trip through '#{actual}'"
 end

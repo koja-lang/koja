@@ -1,3 +1,5 @@
+alias Test.require
+
 test "integer arithmetic"
   assert 2 + 3 == 5
   assert 10 - 4 == 6
@@ -75,18 +77,18 @@ test "numeric widening into Int slots"
 end
 
 test "checked narrowing round-trips"
-  small = try Test.require(127.to_int8())
+  small = try require(127.to_int8())
   assert small == 127
 
   assert 128.to_int8().err?()
   assert (-129).to_int8().err?()
 
-  medium = try Test.require((-1234).to_int32())
+  medium = try require((-1234).to_int32())
   assert medium == -1234
 
   assert (-1).to_uint64().err?()
 
-  wide = try Test.require(10.to_uint64())
-  back = try Test.require(wide.to_int())
+  wide = try require(10.to_uint64())
+  back = try require(wide.to_int())
   assert back == 10
 end

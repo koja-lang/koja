@@ -1,4 +1,5 @@
 alias URI.Error as URIError
+alias Test.require
 
 test "encode escapes only forbidden characters"
   encoded = URI.encode("ftp://s-ite.tld/?value=put it+й")
@@ -15,17 +16,17 @@ test "encode uses uppercase hex"
 end
 
 test "decode unescapes percent sequences"
-  decoded = try Test.require(URI.decode("https%3A%2F%2Fkoja-lang.org"))
+  decoded = try require(URI.decode("https%3A%2F%2Fkoja-lang.org"))
   assert decoded == "https://koja-lang.org"
 end
 
 test "decode accepts lowercase hex"
-  decoded = try Test.require(URI.decode("%2fpath"))
+  decoded = try require(URI.decode("%2fpath"))
   assert decoded == "/path"
 end
 
 test "decode passes strings without escapes through"
-  decoded = try Test.require(URI.decode("plain-text_~123"))
+  decoded = try require(URI.decode("plain-text_~123"))
   assert decoded == "plain-text_~123"
 end
 
@@ -53,6 +54,6 @@ end
 test "decode reverses encode"
   input = "hello world/й?=100%"
   encoded = URI.encode(input)
-  decoded = try Test.require(URI.decode(encoded))
+  decoded = try require(URI.decode(encoded))
   assert decoded == input
 end

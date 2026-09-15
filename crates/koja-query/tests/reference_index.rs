@@ -439,3 +439,52 @@ fn static_receiver_records_the_type_name_only() {
         vec![(4, 6, Role::Declaration), (10, 9, Role::Read)]
     );
 }
+
+#[test]
+fn function_alias_line_is_a_read_of_every_arity() {
+    let checked = check_files(&[
+        (
+            "lib.koja",
+            r#"
+            fn greet(name: String) -> String
+              name
+            end
+
+            fn greet(name: String, punct: String) -> String
+              name <> punct
+            end
+            "#,
+        ),
+        (
+            MAIN,
+            r#"
+            alias TestApp.greet
+
+            fn run -> String
+              greet("a") <> greet("b", "!")
+            end
+            "#,
+        ),
+    ]);
+    let analysis = Analysis::from_checked(&checked);
+    let index = project_index(&analysis);
+    let lib = file_id(&analysis, "lib.koja");
+    let main = file_id(&analysis, MAIN);
+
+    let one = at(&index, lib, 1, 4).key;
+    let two = at(&index, lib, 5, 4).key;
+    assert_ne!(one, two, "each arity is its own symbol");
+
+    let alias_line = (1, 15, Role::Read);
+    assert!(
+        positions(&index, one).contains(&alias_line),
+        "alias line references greet/1"
+    );
+    assert!(
+        positions(&index, two).contains(&alias_line),
+        "alias line references greet/2"
+    );
+    // The call sites resolve through the alias to the right arity.
+    assert_eq!(at(&index, main, 4, 3).key, one);
+    assert_eq!(at(&index, main, 4, 17).key, two);
+}

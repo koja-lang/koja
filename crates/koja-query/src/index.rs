@@ -405,13 +405,21 @@ impl<'ast> Visitor<'ast> for Builder<'_> {
                     return;
                 }
                 let identifier = Identifier::new(package.as_str(), name_texts(rest));
-                if let Some(id) = self.lookup(&identifier) {
-                    self.record(
-                        SymbolKey::Global(id),
-                        &alias.path[alias.path.len() - 1],
-                        Role::Read,
-                        None,
-                    );
+                let tail = &alias.path[alias.path.len() - 1];
+                // A function alias binds every arity, so the alias
+                // line is a reference to each one.
+                let mut ids: Vec<GlobalRegistryId> = self
+                    .registry
+                    .function_arities(&identifier)
+                    .into_iter()
+                    .filter_map(|arity| self.registry.lookup_function(&identifier, arity))
+                    .map(|(id, _)| id)
+                    .collect();
+                if ids.is_empty() {
+                    ids.extend(self.lookup(&identifier));
+                }
+                for id in ids {
+                    self.record(SymbolKey::Global(id), tail, Role::Read, None);
                 }
             }
             Item::Builtin(decl) => {

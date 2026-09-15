@@ -1,3 +1,5 @@
+alias Test.require
+
 test "escape sequences: tab, quote, backslash"
   # --- strings.koja: escapes, interpolation, heredoc ---
   assert "tab:\there" == "tab:\t" <> "here"
@@ -61,12 +63,12 @@ end
 
 test "to_binary and to_string round trip"
   bin = "test".to_binary()
-  val = try Test.require(bin.to_string())
+  val = try require(bin.to_string())
   assert val == "test"
 end
 
 test "Int.parse success and failure"
-  val = try Test.require(Int.parse("42"))
+  val = try require(Int.parse("42"))
   assert val == 42
 
   match Int.parse("not_a_number")
@@ -83,7 +85,7 @@ test "Int.parse success and failure"
 end
 
 test "Float.parse success and failure"
-  val = try Test.require(Float.parse("3.14"))
+  val = try require(Float.parse("3.14"))
   assert val == 3.14
 
   match Float.parse("bad")
@@ -225,7 +227,7 @@ test "codepoints and graphemes"
 end
 
 test "to_int and to_float"
-  int_val = try Test.require("42".to_int())
+  int_val = try require("42".to_int())
   assert int_val == 42
 
   match "bad".to_int()
@@ -234,7 +236,7 @@ test "to_int and to_float"
     Result.Err(_) -> fail "to_int bad kind"
   end
 
-  float_val = try Test.require("3.14".to_float())
+  float_val = try require("3.14".to_float())
   assert float_val == 3.14
 
   match "bad".to_float()

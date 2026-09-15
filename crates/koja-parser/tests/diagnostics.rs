@@ -119,12 +119,12 @@ fn rescue_without_binder_diagnostic() {
 }
 
 #[test]
-fn alias_path_must_end_with_type_ident() {
+fn alias_path_must_be_qualified() {
     parse_failing_with(
         "
-        alias Net.tcp
+        alias tcp
         ",
-        &["alias path must end with a type name (PascalCase)"],
+        &["alias path must be `Package.Name`"],
     );
 }
 

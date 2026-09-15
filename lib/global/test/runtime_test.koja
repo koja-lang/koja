@@ -1,3 +1,5 @@
+alias Test.require
+
 priv enum RuntimeProbeMsg
   Fill(Int)
   Noop
@@ -76,7 +78,7 @@ test "an idle process parks as Blocked"
 
   # Kill the probe before failing so a failed assertion does not leak it.
   probe.kill()
-  try Test.require(sync)
+  try require(sync)
   assert blocked
 end
 
@@ -85,7 +87,7 @@ test "self mailbox depth counts queued casts exactly"
   reply = probe.call(RuntimeProbeMsg.Fill(5), 5000)
   probe.kill()
 
-  depth = try Test.require(reply)
+  depth = try require(reply)
   assert depth == 5
 end
 

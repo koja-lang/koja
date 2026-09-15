@@ -1589,7 +1589,22 @@ conn = TCPSocket.connect("example.com", 80)
 
 `alias Net.TCPSocket` makes `TCPSocket` available as a local name. `alias JSON.Value` makes `Value` available as a local name. Aliases are scoped to the declaring file and don't affect other files.
 
-Aliases name types only. Package-level functions are called with qualified syntax directly, no alias needed:
+An alias can also name a package-level function or constant. A function alias binds every arity of the function, so both the call and the `&name/arity` reference work through it:
+
+```koja
+alias Test.require
+alias JSON.decode as parse
+alias Config.DEFAULT_PORT
+
+conn = try require(connect())
+value = try parse(text)
+decoder = &parse/1
+port = DEFAULT_PORT
+```
+
+The local name keeps the case of its target. A function alias is lowercase and a type or constant alias is uppercase, so `alias JSON.decode as Parse` is an error. Only package-level declarations can be aliased. To reach a method or a nested type, alias the owning type and call through it.
+
+Qualified syntax still works with no alias:
 
 ```koja
 response = HTTP.get("https://example.com")
