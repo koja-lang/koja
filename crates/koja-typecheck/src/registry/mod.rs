@@ -26,7 +26,10 @@
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 
-use koja_ast::ast::{Function, Literal};
+use koja_ast::ast::{
+    BuiltinDecl, Constant, EnumDecl, Function, Literal, ProtocolDecl, StructDecl, TypeAlias,
+    TypeParam,
+};
 use koja_ast::identifier::{
     AnonymousKind, GlobalRegistryId, Identifier, Resolution, ResolvedType, TypeParamIndex,
 };
@@ -301,20 +304,18 @@ impl GlobalRegistry {
 
     /// Register a constant in the `Constant(None)` state. The
     /// resolved type + value [`ConstantDefinition`] is stamped in
-    /// later by [`Self::set_constant_definition`]. Constants don't
-    /// take type parameters, so callers always pass an empty vec.
+    /// later by [`Self::set_constant_definition`].
     pub(crate) fn insert_constant(
         &mut self,
         identifier: Identifier,
-        span: Span,
-        name_span: Span,
+        constant: &Constant,
         visibility: VisibilityScope,
     ) -> InsertOutcome<'_> {
         self.insert(
             identifier,
             GlobalKind::Constant(None),
-            span,
-            name_span,
+            constant.span,
+            constant.name.span,
             Vec::new(),
             visibility,
         )
@@ -322,24 +323,22 @@ impl GlobalRegistry {
 
     /// Register an enum in the `Enum(None)` state. The resolved
     /// variant roster is stamped in later by
-    /// [`Self::set_enum_definition`]. `type_params` carries the
-    /// declared generic-param names from the AST so resolve and
-    /// lift can answer "what params are in scope inside this decl?"
-    /// before the variant payload types have been resolved.
+    /// [`Self::set_enum_definition`]. The declared generic-param
+    /// names are stored up front so resolve and lift can answer
+    /// "what params are in scope inside this decl?" before the
+    /// variant payload types have been resolved.
     pub(crate) fn insert_enum(
         &mut self,
         identifier: Identifier,
-        span: Span,
-        name_span: Span,
-        type_params: Vec<String>,
+        decl: &EnumDecl,
         visibility: VisibilityScope,
     ) -> InsertOutcome<'_> {
         self.insert(
             identifier,
             GlobalKind::Enum(None),
-            span,
-            name_span,
-            type_params,
+            decl.span,
+            decl.name().span,
+            type_param_names(&decl.type_params),
             visibility,
         )
     }
@@ -374,11 +373,7 @@ impl GlobalRegistry {
         let id = GlobalRegistryId::new(self.next_id);
         self.next_id += 1;
         names.functions.insert(arity, id);
-        let type_params: Vec<String> = function
-            .type_params
-            .iter()
-            .map(|param| param.name.clone())
-            .collect();
+        let type_params = type_param_names(&function.type_params);
         let type_param_bounds = vec![Vec::new(); type_params.len()];
         self.entries.insert(
             id,
@@ -402,19 +397,21 @@ impl GlobalRegistry {
 
     /// Register a protocol in the `Protocol(None)` state. Method
     /// roster is stamped later by [`Self::set_protocol_definition`].
+    /// Unlike the other inserts, `type_params` comes from the caller.
+    /// Collect builds the roster as `Self` followed by the declared
+    /// names, and rejects a declared `Self` with a diagnostic.
     pub(crate) fn insert_protocol(
         &mut self,
         identifier: Identifier,
-        span: Span,
-        name_span: Span,
+        decl: &ProtocolDecl,
         type_params: Vec<String>,
         visibility: VisibilityScope,
     ) -> InsertOutcome<'_> {
         self.insert(
             identifier,
             GlobalKind::Protocol(None),
-            span,
-            name_span,
+            decl.span,
+            decl.name.span,
             type_params,
             visibility,
         )
@@ -426,38 +423,55 @@ impl GlobalRegistry {
     pub(crate) fn insert_struct(
         &mut self,
         identifier: Identifier,
-        span: Span,
-        name_span: Span,
-        type_params: Vec<String>,
+        decl: &StructDecl,
         visibility: VisibilityScope,
     ) -> InsertOutcome<'_> {
         self.insert(
             identifier,
             GlobalKind::Struct(None),
-            span,
-            name_span,
-            type_params,
+            decl.span,
+            decl.name().span,
+            type_param_names(&decl.type_params),
+            visibility,
+        )
+    }
+
+    /// Register a `builtin` declaration that claimed no stub, as a
+    /// `Struct(None)` entry. Collect uses this after reporting that
+    /// the name is not a builtin, so the decl's methods still have an
+    /// owner and a duplicate declaration collides as usual.
+    pub(crate) fn insert_unclaimed_builtin(
+        &mut self,
+        identifier: Identifier,
+        decl: &BuiltinDecl,
+        visibility: VisibilityScope,
+    ) -> InsertOutcome<'_> {
+        self.insert(
+            identifier,
+            GlobalKind::Struct(None),
+            decl.span,
+            decl.name().span,
+            type_param_names(&decl.type_params),
             visibility,
         )
     }
 
     /// Register a `type X = ...` alias in the `TypeAlias(None)`
     /// state. The expansion is stamped in later by
-    /// [`Self::set_type_alias_definition`]. Aliases don't take
-    /// generic params today, so callers always pass an empty vec.
-    /// Generic aliases are a possible future language extension.
+    /// [`Self::set_type_alias_definition`]. Aliases take no generic
+    /// params today. Generic aliases are a possible future language
+    /// extension.
     pub(crate) fn insert_type_alias(
         &mut self,
         identifier: Identifier,
-        span: Span,
-        name_span: Span,
+        alias: &TypeAlias,
         visibility: VisibilityScope,
     ) -> InsertOutcome<'_> {
         self.insert(
             identifier,
             GlobalKind::TypeAlias(None),
-            span,
-            name_span,
+            alias.span,
+            alias.name.span,
             Vec::new(),
             visibility,
         )
@@ -921,6 +935,9 @@ impl GlobalRegistry {
         type_params: Vec<String>,
         visibility: VisibilityScope,
     ) -> InsertOutcome<'_> {
+        // Kept loose on purpose. This is the one place an entry is
+        // built from parts. The public inserts read those parts from
+        // the AST node.
         let names = self.by_identifier.entry(identifier.clone()).or_default();
         if let Some(id) = names
             .non_function
@@ -1100,9 +1117,7 @@ impl GlobalRegistry {
     pub(crate) fn claim_builtin_stub(
         &mut self,
         identifier: &Identifier,
-        span: Span,
-        name_span: Span,
-        type_params: Vec<String>,
+        decl: &BuiltinDecl,
     ) -> Option<ClaimOutcome> {
         let id = self.by_identifier.get(identifier)?.non_function?;
         if !self.unclaimed_builtin_stubs.remove(&id) {
@@ -1112,8 +1127,8 @@ impl GlobalRegistry {
             .entries
             .get_mut(&id)
             .expect("reverse index points at a missing forward entry");
-        entry.span = span;
-        entry.name_span = name_span;
+        entry.span = decl.span;
+        entry.name_span = decl.name().span;
         let GlobalKind::Builtin(definition) = &entry.kind else {
             panic!(
                 "unclaimed stub `{}` is not a Builtin entry. This is a seed invariant violation",
@@ -1121,11 +1136,11 @@ impl GlobalRegistry {
             );
         };
         let expected_arity = definition.shape.arity();
-        if type_params.len() != expected_arity {
+        if decl.type_params.len() != expected_arity {
             return Some(ClaimOutcome::ArityMismatch { id, expected_arity });
         }
-        entry.type_param_bounds = vec![Vec::new(); type_params.len()];
-        entry.type_params = type_params;
+        entry.type_param_bounds = vec![Vec::new(); decl.type_params.len()];
+        entry.type_params = type_param_names(&decl.type_params);
         Some(ClaimOutcome::Claimed(id))
     }
 
@@ -1361,6 +1376,14 @@ impl GlobalRegistry {
 /// duplication unnecessary: every value is already independent.)
 pub const UNIVERSAL_PROTOCOLS: &[&str] = &["Debug", "Equality"];
 
+/// The declared generic-param names, which is all the registry stores
+/// at insert time. Bounds are stamped later by
+/// [`GlobalRegistry::set_type_param_bounds`], once every protocol id
+/// exists.
+fn type_param_names(type_params: &[TypeParam]) -> Vec<String> {
+    type_params.iter().map(|p| p.name.clone()).collect()
+}
+
 /// Seed a builtin stub under `Global.<name>` carrying `shape` and an
 /// empty conformance map.
 fn seed_builtin_stub(
@@ -1394,6 +1417,7 @@ fn seed_builtin_stub(
 
 #[cfg(test)]
 mod tests {
+    use koja_ast::ast::{Name, Visibility};
     use koja_ast::span::{FileId, Position};
 
     use super::*;
@@ -1415,22 +1439,41 @@ mod tests {
         span_on_line_3(9, 15)
     }
 
+    /// A `builtin <name><params>` declaration at [`decl_span`] with
+    /// its name at [`name_span`].
+    fn builtin_decl(name: &str, params: &[&str]) -> BuiltinDecl {
+        BuiltinDecl {
+            annotations: Vec::new(),
+            visibility: Visibility::Public,
+            path: vec![Name::new(name, name_span())],
+            type_params: params
+                .iter()
+                .map(|param| TypeParam {
+                    name: param.to_string(),
+                    bounds: Vec::new(),
+                    span: name_span(),
+                })
+                .collect(),
+            functions: Vec::new(),
+            span: decl_span(),
+            tests: Vec::new(),
+        }
+    }
+
     #[test]
     fn claim_builtin_stub_stamps_spans_and_consumes_stub() {
         let mut reg = GlobalRegistry::with_stdlib_stubs();
         let identifier = Identifier::single("Global", "String");
+        let decl = builtin_decl("String", &[]);
 
-        let Some(ClaimOutcome::Claimed(id)) =
-            reg.claim_builtin_stub(&identifier, decl_span(), name_span(), Vec::new())
-        else {
+        let Some(ClaimOutcome::Claimed(id)) = reg.claim_builtin_stub(&identifier, &decl) else {
             panic!("seeded `Global.String` stub should be claimable");
         };
         assert_eq!(reg.get(id).unwrap().span, decl_span());
         assert_eq!(reg.get(id).unwrap().name_span, name_span());
 
         assert!(
-            reg.claim_builtin_stub(&identifier, Span::default(), Span::default(), Vec::new())
-                .is_none(),
+            reg.claim_builtin_stub(&identifier, &decl).is_none(),
             "a stub claims at most once",
         );
     }
@@ -1439,13 +1482,9 @@ mod tests {
     fn claim_builtin_stub_adopts_declared_param_names() {
         let mut reg = GlobalRegistry::with_stdlib_stubs();
         let identifier = Identifier::single("Global", "List");
+        let decl = builtin_decl("List", &["Elem"]);
 
-        let Some(ClaimOutcome::Claimed(id)) = reg.claim_builtin_stub(
-            &identifier,
-            decl_span(),
-            name_span(),
-            vec!["Elem".to_string()],
-        ) else {
+        let Some(ClaimOutcome::Claimed(id)) = reg.claim_builtin_stub(&identifier, &decl) else {
             panic!("seeded `Global.List` stub should be claimable");
         };
         assert_eq!(reg.type_params(id), Some(&["Elem".to_string()][..]));
@@ -1455,9 +1494,10 @@ mod tests {
     fn claim_builtin_stub_reports_arity_mismatch() {
         let mut reg = GlobalRegistry::with_stdlib_stubs();
         let identifier = Identifier::single("Global", "Map");
+        let decl = builtin_decl("Map", &["K"]);
 
         let Some(ClaimOutcome::ArityMismatch { id, expected_arity }) =
-            reg.claim_builtin_stub(&identifier, decl_span(), name_span(), vec!["K".to_string()])
+            reg.claim_builtin_stub(&identifier, &decl)
         else {
             panic!("wrong arity should report a mismatch");
         };
@@ -1472,24 +1512,18 @@ mod tests {
     #[test]
     fn claim_builtin_stub_rejects_non_builtin_identifiers() {
         let mut reg = GlobalRegistry::with_stdlib_stubs();
-        let user_struct = Identifier::single("App", "Config");
-        let InsertOutcome::Fresh(_) = reg.insert_struct(
-            user_struct.clone(),
-            Span::default(),
-            Span::default(),
-            Vec::new(),
-            VisibilityScope::Public,
-        ) else {
+        let user_type = Identifier::single("App", "Config");
+        let decl = builtin_decl("Config", &[]);
+        let InsertOutcome::Fresh(_) =
+            reg.insert_unclaimed_builtin(user_type.clone(), &decl, VisibilityScope::Public)
+        else {
             panic!("fresh registry should accept `App.Config`");
         };
 
-        assert!(
-            reg.claim_builtin_stub(&user_struct, decl_span(), name_span(), Vec::new())
-                .is_none()
-        );
+        assert!(reg.claim_builtin_stub(&user_type, &decl).is_none());
         let missing = Identifier::single("App", "Missing");
         assert!(
-            reg.claim_builtin_stub(&missing, decl_span(), name_span(), Vec::new())
+            reg.claim_builtin_stub(&missing, &builtin_decl("Missing", &[]))
                 .is_none()
         );
     }
