@@ -28,7 +28,7 @@ fn script_mode_accepts_bare_expression() {
     assert!(
         file.items.is_empty(),
         "no items expected, got {:?}",
-        file.items,
+        file.items
     );
     let body = file
         .body

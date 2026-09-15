@@ -69,11 +69,14 @@ pub(super) fn resolve_pattern(
             fields,
             span,
             type_path,
+            type_resolution,
             variant,
-            ..
         } => enums::resolve_enum_struct_pattern(
-            type_path,
-            variant,
+            &mut enums::EnumPatternHead {
+                type_path,
+                type_resolution,
+                variant,
+            },
             fields,
             subject_ty,
             *span,
@@ -84,11 +87,14 @@ pub(super) fn resolve_pattern(
             elements,
             span,
             type_path,
+            type_resolution,
             variant,
-            ..
         } => enums::resolve_enum_tuple_pattern(
-            type_path,
-            variant,
+            &mut enums::EnumPatternHead {
+                type_path,
+                type_resolution,
+                variant,
+            },
             elements,
             subject_ty,
             *span,
@@ -98,11 +104,14 @@ pub(super) fn resolve_pattern(
         Pattern::EnumUnit {
             span,
             type_path,
+            type_resolution,
             variant,
-            ..
         } => enums::resolve_enum_unit_pattern(
-            type_path,
-            variant,
+            &mut enums::EnumPatternHead {
+                type_path,
+                type_resolution,
+                variant,
+            },
             subject_ty,
             *span,
             resolver,
@@ -127,9 +136,10 @@ pub(super) fn resolve_pattern(
             fields,
             span,
             type_path,
-            ..
+            type_resolution,
         } => structs::resolve_struct_pattern(
             type_path,
+            type_resolution,
             fields,
             subject_ty,
             *span,
@@ -294,6 +304,7 @@ fn rewrite_dotted_struct_pattern(pat: &mut Pattern, resolver: &Resolver<'_>) {
     type_path.push(variant);
     *pat = Pattern::Struct {
         type_path,
+        type_resolution: Resolution::Unresolved,
         fields,
         span,
     };

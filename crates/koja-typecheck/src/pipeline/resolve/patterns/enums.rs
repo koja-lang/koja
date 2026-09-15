@@ -21,15 +21,14 @@ use crate::pipeline::visibility::check_reference_visibility;
 use crate::registry::{EnumDefinition, GlobalKind, ResolvedStructField, ResolvedVariantData};
 
 pub(super) fn resolve_enum_unit_pattern(
-    type_path: &[Name],
-    variant_name: &Name,
+    head: &mut EnumPatternHead<'_>,
     subject_ty: &ResolvedType,
     span: Span,
     resolver: &Resolver<'_>,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
-    let Some(target) = lookup_pattern_enum(type_path, subject_ty, span, resolver, diagnostics)
-    else {
+    let variant_name = head.variant;
+    let Some(target) = lookup_pattern_enum(head, subject_ty, span, resolver, diagnostics) else {
         return;
     };
     let Some((_, variant)) = target.definition.lookup_variant(variant_name.as_str()) else {
@@ -52,8 +51,7 @@ pub(super) fn resolve_enum_unit_pattern(
 }
 
 pub(super) fn resolve_enum_tuple_pattern(
-    type_path: &[Name],
-    variant_name: &Name,
+    head: &mut EnumPatternHead<'_>,
     elements: &mut [Pattern],
     subject_ty: &ResolvedType,
     span: Span,
@@ -61,8 +59,7 @@ pub(super) fn resolve_enum_tuple_pattern(
     diagnostics: &mut Vec<Diagnostic>,
 ) {
     let element_types = resolve_enum_tuple_element_types(
-        type_path,
-        variant_name,
+        head,
         elements.len(),
         subject_ty,
         span,
@@ -79,22 +76,15 @@ pub(super) fn resolve_enum_tuple_pattern(
 }
 
 pub(super) fn resolve_enum_struct_pattern(
-    type_path: &[Name],
-    variant_name: &Name,
+    head: &mut EnumPatternHead<'_>,
     fields: &mut [FieldPattern],
     subject_ty: &ResolvedType,
     span: Span,
     resolver: &mut Resolver<'_>,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
-    let resolved = resolve_enum_struct_metadata(
-        type_path,
-        variant_name,
-        subject_ty,
-        span,
-        resolver,
-        diagnostics,
-    );
+    let variant_name = head.variant;
+    let resolved = resolve_enum_struct_metadata(head, subject_ty, span, resolver, diagnostics);
     let Some(metadata) = resolved else {
         resolve_field_patterns_unbound(fields, resolver, diagnostics);
         return;
@@ -114,15 +104,15 @@ pub(super) fn resolve_enum_struct_pattern(
 /// before [`resolve_enum_tuple_pattern`] re-borrows the resolver
 /// mutably to recurse into payload sub-patterns.
 fn resolve_enum_tuple_element_types(
-    type_path: &[Name],
-    variant_name: &Name,
+    head: &mut EnumPatternHead<'_>,
     supplied_arity: usize,
     subject_ty: &ResolvedType,
     span: Span,
     resolver: &Resolver<'_>,
     diagnostics: &mut Vec<Diagnostic>,
 ) -> Option<Vec<ResolvedType>> {
-    let target = lookup_pattern_enum(type_path, subject_ty, span, resolver, diagnostics)?;
+    let variant_name = head.variant;
+    let target = lookup_pattern_enum(head, subject_ty, span, resolver, diagnostics)?;
     let Some((_, variant)) = target.definition.lookup_variant(variant_name.as_str()) else {
         diagnostics.push(Diagnostic::error(
             format!("`{}` has no variant `{variant_name}`", target.label),
@@ -167,14 +157,14 @@ struct EnumStructPatternMetadata {
 /// borrow ends before the per-field walk re-borrows the resolver
 /// mutably to recurse into bindings.
 fn resolve_enum_struct_metadata(
-    type_path: &[Name],
-    variant_name: &Name,
+    head: &mut EnumPatternHead<'_>,
     subject_ty: &ResolvedType,
     span: Span,
     resolver: &Resolver<'_>,
     diagnostics: &mut Vec<Diagnostic>,
 ) -> Option<EnumStructPatternMetadata> {
-    let target = lookup_pattern_enum(type_path, subject_ty, span, resolver, diagnostics)?;
+    let variant_name = head.variant;
+    let target = lookup_pattern_enum(head, subject_ty, span, resolver, diagnostics)?;
     let Some((_, variant)) = target.definition.lookup_variant(variant_name.as_str()) else {
         diagnostics.push(Diagnostic::error(
             format!("`{}` has no variant `{variant_name}`", target.label),
@@ -221,6 +211,14 @@ fn resolve_enum_tuple_elements_unbound(
     }
 }
 
+/// The `Type.Variant` head of an enum pattern. `type_resolution` is
+/// the pattern's stamp slot, written when `type_path` resolves.
+pub(super) struct EnumPatternHead<'a> {
+    pub(super) type_path: &'a [Name],
+    pub(super) type_resolution: &'a mut Resolution,
+    pub(super) variant: &'a Name,
+}
+
 pub(super) struct EnumPatternTarget<'a> {
     pub(super) definition: &'a EnumDefinition,
     pub(super) enum_id: GlobalRegistryId,
@@ -229,14 +227,18 @@ pub(super) struct EnumPatternTarget<'a> {
 
 /// Resolve `type_path` to the registered enum definition and
 /// validate its head matches `subject_ty`'s head. Emits diagnostics
-/// for unknown paths, non-enum heads, and subject mismatches.
+/// for unknown paths, non-enum heads, and subject mismatches. Stamps
+/// `type_resolution` with the entry the path names as soon as the
+/// lookup hits, so the pattern carries it even when a later check
+/// fails.
 pub(super) fn lookup_pattern_enum<'a>(
-    type_path: &[Name],
+    head: &mut EnumPatternHead<'_>,
     subject_ty: &ResolvedType,
     span: Span,
     resolver: &'a Resolver<'_>,
     diagnostics: &mut Vec<Diagnostic>,
 ) -> Option<EnumPatternTarget<'a>> {
+    let type_path = head.type_path;
     let Some((enum_id, entry)) = lookup_type(&name_texts(type_path), resolver.resolution_scope())
     else {
         diagnostics.push(Diagnostic::error(
@@ -248,6 +250,7 @@ pub(super) fn lookup_pattern_enum<'a>(
         ));
         return None;
     };
+    *head.type_resolution = Resolution::Global(enum_id);
     check_reference_visibility(entry, resolver.package, span, diagnostics);
     let GlobalKind::Enum(definition) = &entry.kind else {
         diagnostics.push(Diagnostic::error(

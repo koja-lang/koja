@@ -464,6 +464,11 @@ Not in a parallel side-table. Choices:
   serializes the annotated AST as one unit.
 - The "stale side-table" failure mode is structurally impossible.
 
+Type paths follow the same rule. `TypeExpr::Named`, `TypeExpr::Generic`,
+and the enum and struct pattern shapes carry a `Resolution` for the
+head of their path, written by lift for signatures and by resolve for
+body annotations and patterns.
+
 ### Hard rules for AST annotations
 
 1. Annotations record _decisions_, not _derivations_. If something

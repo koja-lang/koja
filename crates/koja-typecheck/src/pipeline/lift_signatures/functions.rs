@@ -25,7 +25,7 @@ use super::types::{
 /// scopes resolve to their true owners (`T` -> struct id, the function's
 /// own `<X>` -> function id).
 pub(super) fn lift_function_with_identifier(
-    function: &Function,
+    function: &mut Function,
     identifier: Identifier,
     self_context: SelfContext<'_>,
     scope: &mut LiftScope<'_>,
@@ -56,7 +56,7 @@ pub(super) fn lift_function_with_identifier(
     let type_params = TypeParamScope::new(&owners);
 
     let mut params = Vec::with_capacity(function.params.len());
-    for param in &function.params {
+    for param in &mut function.params {
         params.push(lift_param(
             param,
             &identifier,
@@ -68,8 +68,8 @@ pub(super) fn lift_function_with_identifier(
     }
 
     let declared_return_type = resolve_return_signature(
-        function.return_type.as_ref(),
-        function.error_type.as_ref(),
+        function.return_type.as_mut(),
+        function.error_type.as_mut(),
         type_params,
         scope.resolution_scope(),
         diagnostics,
@@ -356,7 +356,7 @@ fn type_param_owners(
 }
 
 fn lift_param(
-    param: &Param,
+    param: &mut Param,
     identifier: &Identifier,
     self_context: SelfContext<'_>,
     type_params: TypeParamScope<'_>,

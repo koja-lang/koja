@@ -83,6 +83,7 @@ pub fn check_program(parsed: ParsedProgram) -> Result<CheckedProgram, CheckFailu
             diagnostics: Vec::new(),
             source_paths: parsed.order.clone(),
             partial: parsed,
+            registry: None,
         });
     }
 
@@ -161,6 +162,7 @@ pub fn check_program(parsed: ParsedProgram) -> Result<CheckedProgram, CheckFailu
         return Err(CheckFailure {
             diagnostics,
             partial: rebuild_parsed(&packages),
+            registry: Some(Box::new(registry)),
             source_paths,
         });
     }

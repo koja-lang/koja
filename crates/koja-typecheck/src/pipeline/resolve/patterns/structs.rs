@@ -21,13 +21,21 @@ use crate::registry::{GlobalKind, ResolvedStructField};
 
 pub(super) fn resolve_struct_pattern(
     type_path: &[Name],
+    type_resolution: &mut Resolution,
     fields: &mut [FieldPattern],
     subject_ty: &ResolvedType,
     span: Span,
     resolver: &mut Resolver<'_>,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
-    let resolved = resolve_struct_metadata(type_path, subject_ty, span, resolver, diagnostics);
+    let resolved = resolve_struct_metadata(
+        type_path,
+        type_resolution,
+        subject_ty,
+        span,
+        resolver,
+        diagnostics,
+    );
     let Some(metadata) = resolved else {
         resolve_field_patterns_unbound(fields, resolver, diagnostics);
         return;
@@ -53,6 +61,7 @@ struct StructPatternMetadata {
 /// `Bag<Int>{ item: x }` views `item` as `Int`.
 fn resolve_struct_metadata(
     type_path: &[Name],
+    type_resolution: &mut Resolution,
     subject_ty: &ResolvedType,
     span: Span,
     resolver: &Resolver<'_>,
@@ -69,6 +78,7 @@ fn resolve_struct_metadata(
         ));
         return None;
     };
+    *type_resolution = Resolution::Global(struct_id);
     check_reference_visibility(entry, resolver.package, span, diagnostics);
     let GlobalKind::Struct(definition) = &entry.kind else {
         diagnostics.push(Diagnostic::error(

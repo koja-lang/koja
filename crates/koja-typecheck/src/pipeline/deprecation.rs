@@ -518,6 +518,7 @@ impl Walker<'_, '_> {
                 type_path,
                 fields,
                 span,
+                ..
             } => {
                 self.warn_type_path(type_path, *span);
                 for field in fields {
@@ -563,13 +564,15 @@ impl Walker<'_, '_> {
                 }
                 self.check_type_expr(return_type);
             }
-            TypeExpr::Generic { path, args, span } => {
+            TypeExpr::Generic {
+                path, args, span, ..
+            } => {
                 self.warn_type_path(path, *span);
                 for arg in args {
                     self.check_type_expr(arg);
                 }
             }
-            TypeExpr::Named { path, span } => self.warn_type_path(path, *span),
+            TypeExpr::Named { path, span, .. } => self.warn_type_path(path, *span),
             TypeExpr::Self_ { .. } | TypeExpr::Unit { .. } => {}
             TypeExpr::Tuple { elements, .. } => {
                 for element in elements {

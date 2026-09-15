@@ -47,7 +47,7 @@ pub(super) fn lift_constant(
     }
 
     let type_params = TypeParamScope::new(&[]);
-    let annotated = constant.type_annotation.as_ref().map(|type_expr| {
+    let annotated = constant.type_annotation.as_mut().map(|type_expr| {
         resolve_type_expr(
             type_expr,
             type_params,

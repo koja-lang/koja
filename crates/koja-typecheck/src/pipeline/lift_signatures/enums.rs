@@ -26,14 +26,14 @@ use super::functions::lift_function_with_identifier;
 use super::types::{TypeParamScope, resolve_type_expr};
 
 pub(super) fn lift_enum(
-    decl: &EnumDecl,
+    decl: &mut EnumDecl,
     scope: &mut LiftScope<'_>,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
     lift_enum_definition(decl, scope, diagnostics);
     let path = name_texts(&decl.path);
     let enum_identifier = Identifier::new(scope.package, path.clone());
-    for function in &decl.functions {
+    for function in &mut decl.functions {
         let method_identifier = Identifier::member(scope.package, &path, function.name.as_str());
         lift_function_with_identifier(
             function,
@@ -49,7 +49,7 @@ pub(super) fn lift_enum(
 }
 
 fn lift_enum_definition(
-    decl: &EnumDecl,
+    decl: &mut EnumDecl,
     scope: &mut LiftScope<'_>,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
@@ -75,8 +75,8 @@ fn lift_enum_definition(
     let type_params = TypeParamScope::new(&owners);
 
     let mut variants = Vec::with_capacity(decl.variants.len());
-    for variant in &decl.variants {
-        let data = match &variant.data {
+    for variant in &mut decl.variants {
+        let data = match &mut variant.data {
             EnumVariantData::Struct(fields) => {
                 if fields.is_empty() {
                     diagnostics.push(Diagnostic::error(
@@ -89,9 +89,9 @@ fn lift_enum_definition(
                     ));
                 }
                 let mut resolved = Vec::with_capacity(fields.len());
-                for field in fields {
+                for field in fields.iter_mut() {
                     let ty = resolve_type_expr(
-                        &field.type_expr,
+                        &mut field.type_expr,
                         type_params,
                         scope.resolution_scope(),
                         diagnostics,
@@ -116,7 +116,7 @@ fn lift_enum_definition(
                     ));
                 }
                 let resolved = types
-                    .iter()
+                    .iter_mut()
                     .map(|ty| {
                         resolve_type_expr(ty, type_params, scope.resolution_scope(), diagnostics)
                     })

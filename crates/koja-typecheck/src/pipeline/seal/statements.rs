@@ -9,17 +9,18 @@ use koja_ast::span::Span;
 
 use super::expressions::seal_expr;
 use super::patterns::seal_pattern;
-use super::{SealMode, seal_panic};
+use super::{SealMode, seal_optional_type_expr, seal_panic};
 
 pub(super) fn seal_statement(stmt: &Statement, mode: SealMode) {
     match stmt {
         Statement::Assignment {
             span,
             target,
+            type_annotation,
             value,
-            ..
         } => {
             seal_lvalue_shape(target, "assignment", *span);
+            seal_optional_type_expr(type_annotation.as_ref());
             seal_expr(value, mode);
         }
         Statement::Break { .. } | Statement::Return { value: None, .. } => {}

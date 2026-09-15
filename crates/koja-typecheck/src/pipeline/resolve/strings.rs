@@ -52,7 +52,8 @@ fn resolve_interpolation(
 }
 
 /// Replace `*expr` in-place with `<original>.format()`, preserving
-/// the original's span on the wrapping MethodCall.
+/// the original's span on the wrapping MethodCall. The method name
+/// is compiler-synthesized, so its span is synthetic.
 fn wrap_in_format(expr: &mut Box<Expr>) {
     let span = expr.span;
     let placeholder = Expr::new(
@@ -64,7 +65,7 @@ fn wrap_in_format(expr: &mut Box<Expr>) {
     let original = std::mem::replace(expr.as_mut(), placeholder);
     expr.kind = ExprKind::MethodCall {
         args: Vec::new(),
-        method: Name::new(FORMAT_METHOD, span),
+        method: Name::new(FORMAT_METHOD, span.as_synthetic()),
         receiver: Box::new(original),
         target: Resolution::Unresolved,
         type_args: Vec::new(),

@@ -43,6 +43,7 @@ impl Printer {
                 variant,
                 fields,
                 span,
+                ..
             } => {
                 let prefix = util::enum_prefix(type_path, variant);
                 self.field_pattern_list_to_doc(prefix, fields, *span)
@@ -52,6 +53,7 @@ impl Printer {
                 variant,
                 elements,
                 span,
+                ..
             } if !elements.is_empty() => concat(vec![
                 text(util::enum_prefix(type_path, variant)),
                 self.pattern_elements_to_doc("(", ")", elements, *span),

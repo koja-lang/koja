@@ -210,7 +210,7 @@ pub(crate) fn resolve_file(
 /// body resolution. Bound names re-resolve into a throwaway sink
 /// because lift already diagnosed any unresolvable ones.
 fn impl_bound_overlay(
-    impl_block: &ImplBlock,
+    impl_block: &mut ImplBlock,
     enclosing_type_id: Option<GlobalRegistryId>,
     env: &ResolverEnv<'_>,
 ) -> Option<BoundOverlay> {
@@ -226,7 +226,7 @@ fn impl_bound_overlay(
     let mut sink = Vec::new();
     let bounds = resolve_target_bounds(
         &impl_block.target,
-        &impl_block.target_bounds,
+        &mut impl_block.target_bounds,
         scope,
         &mut sink,
     );
@@ -411,7 +411,7 @@ pub(super) fn resolve_statement_with_expected(
         } => {
             resolve_assignment(
                 target,
-                type_annotation.as_ref(),
+                type_annotation.as_mut(),
                 value,
                 *span,
                 resolver,

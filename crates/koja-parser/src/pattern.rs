@@ -1,4 +1,5 @@
 use koja_ast::ast::*;
+use koja_ast::identifier::Resolution;
 use koja_ast::token::TokenKind;
 
 use crate::parser::Parser;
@@ -209,6 +210,7 @@ impl Parser {
             let fields = self.parse_struct_field_block();
             return Pattern::Struct {
                 type_path: vec![first],
+                type_resolution: Resolution::Unresolved,
                 fields,
                 span: self.span_from(start),
             };
@@ -232,6 +234,7 @@ impl Parser {
             self.expect(&TokenKind::RParen);
             Pattern::EnumTuple {
                 type_path,
+                type_resolution: Resolution::Unresolved,
                 variant,
                 elements,
                 span: self.span_from(start),
@@ -240,6 +243,7 @@ impl Parser {
             let fields = self.parse_struct_field_block();
             Pattern::EnumStruct {
                 type_path,
+                type_resolution: Resolution::Unresolved,
                 variant,
                 fields,
                 span: self.span_from(start),
@@ -247,6 +251,7 @@ impl Parser {
         } else {
             Pattern::EnumUnit {
                 type_path,
+                type_resolution: Resolution::Unresolved,
                 variant,
                 span: self.span_from(start),
             }

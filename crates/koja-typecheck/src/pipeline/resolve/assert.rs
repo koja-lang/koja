@@ -134,10 +134,14 @@ pub(super) fn rewrite_assert_statement(
         None => none(span),
     };
     let assertion = assertion_construction(&source, condition_span, left, right, message, span);
+    let name_span = span.as_synthetic();
     let failure = Expr::new(
         ExprKind::EnumConstruction {
-            type_path: vec![Name::new(TEST_PACKAGE, span), Name::new(FAILURE_TYPE, span)],
-            variant: Name::new(ASSERTION_TYPE, span),
+            type_path: vec![
+                Name::new(TEST_PACKAGE, name_span),
+                Name::new(FAILURE_TYPE, name_span),
+            ],
+            variant: Name::new(ASSERTION_TYPE, name_span),
             data: EnumConstructionData::Tuple(vec![assertion]),
         },
         span,
@@ -242,16 +246,17 @@ fn assertion_construction(
     message: Expr,
     span: Span,
 ) -> Expr {
+    let name_span = span.as_synthetic();
     let field = |name: &str, value: Expr| FieldInit {
-        name: Name::new(name, span),
+        name: Name::new(name, name_span),
         value,
         span,
     };
     Expr::new(
         ExprKind::StructConstruction {
             type_path: vec![
-                Name::new(TEST_PACKAGE, span),
-                Name::new(ASSERTION_TYPE, span),
+                Name::new(TEST_PACKAGE, name_span),
+                Name::new(ASSERTION_TYPE, name_span),
             ],
             fields: vec![
                 field("column", int_literal(condition_span.start.column, span)),
@@ -281,10 +286,11 @@ fn none(span: Span) -> Expr {
 }
 
 fn option_construction(variant: &str, data: EnumConstructionData, span: Span) -> Expr {
+    let name_span = span.as_synthetic();
     Expr::new(
         ExprKind::EnumConstruction {
-            type_path: vec![Name::new("Option", span)],
-            variant: Name::new(variant, span),
+            type_path: vec![Name::new("Option", name_span)],
+            variant: Name::new(variant, name_span),
             data,
         },
         span,

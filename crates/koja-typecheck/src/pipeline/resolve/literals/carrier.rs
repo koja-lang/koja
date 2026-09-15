@@ -176,7 +176,7 @@ pub(super) fn dispatch_via_carrier(
             let receiver = static_receiver(path, *ident_span);
             expr.kind = ExprKind::MethodCall {
                 receiver: Box::new(receiver),
-                method: Name::new(spec.from_method, span),
+                method: Name::new(spec.from_method, span.as_synthetic()),
                 args: vec![Arg {
                     name: None,
                     span,
@@ -213,7 +213,7 @@ fn static_receiver(path: &[String], span: Span) -> Expr {
             Expr::new(
                 ExprKind::FieldAccess {
                     receiver: Box::new(receiver),
-                    field: Name::new(field.clone(), span),
+                    field: Name::new(field.clone(), span.as_synthetic()),
                 },
                 span,
             )

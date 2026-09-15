@@ -157,7 +157,7 @@ pub(super) fn lift_impl(
     let resolved_target = resolve_impl_target(impl_block, &target_identifier, scope);
     let impl_label = format!("impl ... for {}", target_identifier.last());
     let resolved = resolve_protocol_impl_heads(
-        &impl_block.trait_expr,
+        &mut impl_block.trait_expr,
         &target_identifier,
         &resolved_target,
         &impl_label,
@@ -165,7 +165,7 @@ pub(super) fn lift_impl(
         diagnostics,
     );
     let self_override = Some(&resolved_target);
-    for member in &impl_block.members {
+    for member in &mut impl_block.members {
         let ImplMember::Function(function) = member else {
             continue;
         };
@@ -204,7 +204,7 @@ pub(super) fn lift_impl(
         scope,
         diagnostics,
     );
-    record_target_conformance(&site, target_id, &resolved, scope, diagnostics);
+    record_target_conformance(&mut site, target_id, &resolved, scope, diagnostics);
 }
 
 /// Check every conformance-header entry on a struct/enum decl
@@ -215,7 +215,7 @@ pub(super) fn lift_impl(
 pub(super) fn lift_header_conformances(
     decl_kind: &str,
     path: &[Name],
-    conformances: &[TypeExpr],
+    conformances: &mut [TypeExpr],
     functions: &mut Vec<Function>,
     bodies: &ProtocolBodies,
     scope: &mut LiftScope<'_>,
@@ -233,7 +233,7 @@ pub(super) fn lift_header_conformances(
     // decl itself with its own params projected, exactly `Self`.
     let resolved_target = concrete_self_type(target_id, scope.registry);
     let decl_label = format!("{decl_kind} {}", path_texts.join("."));
-    for trait_expr in conformances {
+    for trait_expr in conformances.iter_mut() {
         let Some(resolved) = resolve_protocol_impl_heads(
             trait_expr,
             &target_identifier,
@@ -258,7 +258,7 @@ pub(super) fn lift_header_conformances(
             scope,
             diagnostics,
         );
-        record_target_conformance(&site, target_id, &resolved, scope, diagnostics);
+        record_target_conformance(&mut site, target_id, &resolved, scope, diagnostics);
     }
 }
 
@@ -295,9 +295,9 @@ pub(super) fn lift_extend(
     if is_protocol {
         diagnose_protocol_extend_self_methods(extend_block, &target_identifier, diagnostics);
     }
-    let resolved_target = resolve_block_target(&extend_block.target, &target_identifier, scope);
+    let resolved_target = resolve_block_target(&mut extend_block.target, &target_identifier, scope);
     let self_override = Some(&resolved_target);
-    for member in &extend_block.members {
+    for member in &mut extend_block.members {
         let ImplMember::Function(function) = member else {
             continue;
         };
@@ -372,17 +372,17 @@ struct ResolvedImplHeads {
 /// here: they fire again as part of normal lift via the same
 /// scope, and we only want one copy on the user's screen.
 fn resolve_impl_target(
-    impl_block: &ImplBlock,
+    impl_block: &mut ImplBlock,
     target_identifier: &Identifier,
     scope: &LiftScope<'_>,
 ) -> ResolvedType {
-    resolve_block_target(&impl_block.target, target_identifier, scope)
+    resolve_block_target(&mut impl_block.target, target_identifier, scope)
 }
 
 /// Shared resolver for `impl`/`extend` target type expressions:
 /// the target's own type-params resolve via [`TypeParamScope`].
 fn resolve_block_target(
-    target: &TypeExpr,
+    target: &mut TypeExpr,
     target_identifier: &Identifier,
     scope: &LiftScope<'_>,
 ) -> ResolvedType {
@@ -417,7 +417,7 @@ fn impl_target_owners(
 /// into [`ResolvedImplHeads`]. `site_label` names the declaration
 /// site in diagnostics (`impl ... for Server` / `struct Server`).
 fn resolve_protocol_impl_heads(
-    trait_expr: &TypeExpr,
+    trait_expr: &mut TypeExpr,
     target_identifier: &Identifier,
     target: &ResolvedType,
     site_label: &str,
@@ -504,7 +504,7 @@ fn resolve_protocol_impl_heads(
 /// concrete impl repeating an instantiation) against the existing
 /// conformance records.
 fn record_target_conformance(
-    site: &ConformanceSite<'_>,
+    site: &mut ConformanceSite<'_>,
     target_id: GlobalRegistryId,
     resolved: &ResolvedImplHeads,
     scope: &mut LiftScope<'_>,
@@ -553,7 +553,7 @@ fn record_target_conformance(
 /// with concrete args wait on a separate matching problem, so
 /// those diagnose and return `None`.
 fn classify_conformance_scope(
-    site: &ConformanceSite<'_>,
+    site: &mut ConformanceSite<'_>,
     target_id: GlobalRegistryId,
     resolved: &ResolvedImplHeads,
     protocol_args: &[ResolvedType],
@@ -565,15 +565,11 @@ fn classify_conformance_scope(
         ResolvedType::Named { type_args, .. } => type_args.as_slice(),
         _ => &[],
     };
-    let target_bounds: &[TypeParam] = match site {
-        ConformanceSite::Header { .. } => &[],
-        ConformanceSite::Impl(block) => &block.target_bounds,
-    };
     if targets_own_params_in_order(target_id, target_args, registry) {
         let bounds = match site {
             ConformanceSite::Header { .. } => Vec::new(),
             ConformanceSite::Impl(block) => {
-                resolve_target_bounds(&block.target, target_bounds, scope, diagnostics)
+                resolve_target_bounds(&block.target, &mut block.target_bounds, scope, diagnostics)
             }
         };
         if target_args.is_empty() {
@@ -582,6 +578,10 @@ fn classify_conformance_scope(
         return Some(ConformanceScope::Parameterized { bounds });
     }
     let target_label = render_resolved(&resolved.target, registry);
+    let target_bounds: &[TypeParam] = match site {
+        ConformanceSite::Header { .. } => &[],
+        ConformanceSite::Impl(block) => &block.target_bounds,
+    };
     if let Some(bound) = target_bounds.first() {
         diagnostics.push(Diagnostic::error(
             format!(
@@ -630,7 +630,7 @@ fn classify_conformance_scope(
 /// impl-local [`crate::registry::BoundOverlay`].
 pub(crate) fn resolve_target_bounds(
     target_expr: &TypeExpr,
-    target_bounds: &[TypeParam],
+    target_bounds: &mut [TypeParam],
     scope: ResolutionScope<'_>,
     diagnostics: &mut Vec<Diagnostic>,
 ) -> Vec<Vec<ResolvedProtocolBound>> {
@@ -646,7 +646,7 @@ pub(crate) fn resolve_target_bounds(
     let owners = [owner];
     let type_params = TypeParamScope::new(&owners);
     let mut resolved: Vec<Vec<ResolvedProtocolBound>> = vec![Vec::new(); args.len()];
-    for bound in target_bounds {
+    for bound in target_bounds.iter_mut() {
         let slot = args.iter().position(|arg| {
             matches!(
                 arg,
@@ -660,7 +660,7 @@ pub(crate) fn resolve_target_bounds(
         };
         resolved[slot] = bound
             .bounds
-            .iter()
+            .iter_mut()
             .filter_map(|bound| resolve_protocol_bound(bound, type_params, scope, diagnostics))
             .collect();
     }
@@ -876,7 +876,7 @@ fn synthesize_default_method(
         return;
     }
     lift_function_with_identifier(
-        &function,
+        &mut function,
         method_identifier,
         SelfContext::Receiver {
             receiver: impl_scope.target_identifier,

@@ -72,7 +72,7 @@ pub(super) fn resolve_equality_op_expr(
     let right_taken = std::mem::replace(right.as_mut(), placeholder_expr(span));
     let method_call = ExprKind::MethodCall {
         receiver: Box::new(left_taken),
-        method: Name::new(EQ_METHOD, span),
+        method: Name::new(EQ_METHOD, span.as_synthetic()),
         args: vec![Arg {
             name: None,
             value: right_taken,

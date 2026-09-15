@@ -40,11 +40,13 @@ pub(super) fn resolve_constructor_pattern(
             *pat = match metadata.kind {
                 ConstructorRewrite::Unit => Pattern::EnumUnit {
                     type_path: metadata.type_path,
+                    type_resolution: Resolution::Unresolved,
                     variant: name_owned,
                     span,
                 },
                 ConstructorRewrite::Tuple => Pattern::EnumTuple {
                     type_path: metadata.type_path,
+                    type_resolution: Resolution::Unresolved,
                     variant: name_owned,
                     elements: elements_owned,
                     span,
@@ -169,6 +171,8 @@ fn constructor_metadata(
             return Err(());
         }
     };
-    let type_path = vec![Name::new(entry.identifier.last(), span)];
+    // The user wrote only the variant, so the enum segment is
+    // compiler-synthesized and its span is synthetic.
+    let type_path = vec![Name::new(entry.identifier.last(), span.as_synthetic())];
     Ok(ConstructorMetadata { kind, type_path })
 }

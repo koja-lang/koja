@@ -29,19 +29,20 @@ use super::types::{TypeParamScope, resolve_type_expr};
 /// entry. Then sweep for cycles and rewrite cycling aliases to
 /// `ResolvedType::unresolved` so subsequent peels short-circuit.
 pub(super) fn lift_type_aliases(
-    packages: &[CheckedPackage],
+    packages: &mut [CheckedPackage],
     registry: &mut GlobalRegistry,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
-    for pkg in packages {
-        for file in &pkg.files {
+    for pkg in packages.iter_mut() {
+        let package = pkg.package.clone();
+        for file in &mut pkg.files {
             let aliases = collect_file_aliases(file);
             let scope = LiftScope {
                 aliases: &aliases,
-                package: &pkg.package,
+                package: &package,
                 registry,
             };
-            for item in &file.items {
+            for item in &mut file.items {
                 let Item::TypeAlias(alias) = item else {
                     continue;
                 };
@@ -50,7 +51,7 @@ pub(super) fn lift_type_aliases(
                     continue;
                 };
                 let resolved = resolve_type_expr(
-                    &alias.type_expr,
+                    &mut alias.type_expr,
                     TypeParamScope::default(),
                     scope.resolution_scope(),
                     diagnostics,

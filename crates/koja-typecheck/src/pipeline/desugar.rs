@@ -124,20 +124,27 @@ fn impl_member_tests(
     }
 }
 
+/// The function keeps the block's own span. Its name and error
+/// channel path are compiler-synthesized, so those names carry
+/// synthetic spans.
 fn test_function(test: TestDecl, path: Option<&Path>, visibility: Visibility) -> Function {
     let span = test.span;
+    let name_span = span.as_synthetic();
     Function {
         annotations: Vec::new(),
         origin: FunctionOrigin::Test,
         visibility,
-        name: Name::new(synthesized_test_name(path, span.start.line), span),
+        name: Name::new(synthesized_test_name(path, span.start.line), name_span),
         type_params: Vec::new(),
         params: Vec::new(),
         return_type: None,
-        error_type: Some(TypeExpr::Named {
-            path: vec![Name::new(TEST_PACKAGE, span), Name::new(FAILURE_TYPE, span)],
+        error_type: Some(TypeExpr::named(
+            vec![
+                Name::new(TEST_PACKAGE, name_span),
+                Name::new(FAILURE_TYPE, name_span),
+            ],
             span,
-        }),
+        )),
         body: Some(test.body),
         span,
     }
