@@ -101,7 +101,7 @@ impl LocalIndex {
             } => self.insert(
                 *id,
                 LocalInfo {
-                    name: name.clone(),
+                    name: name.text.clone(),
                     span: *span,
                     ty: None,
                 },
@@ -143,7 +143,7 @@ impl LocalIndex {
                     self.insert(
                         id,
                         LocalInfo {
-                            name: target.segments[0].clone(),
+                            name: target.segments[0].text.clone(),
                             span: target.span,
                             ty: Some(value.resolution.clone()),
                         },
@@ -174,7 +174,7 @@ impl LocalIndex {
             } => self.insert_if_absent(
                 *id,
                 LocalInfo {
-                    name: name.clone(),
+                    name: name.text.clone(),
                     span: *span,
                     ty: None,
                 },
@@ -188,7 +188,7 @@ impl LocalIndex {
             } => self.insert(
                 *id,
                 LocalInfo {
-                    name: name.clone(),
+                    name: name.text.clone(),
                     span: *span,
                     ty: resolved_type.clone(),
                 },
@@ -408,7 +408,7 @@ impl LocalIndex {
             self.insert(
                 *id,
                 LocalInfo {
-                    name: name.clone(),
+                    name: name.text.clone(),
                     span: *span,
                     ty: None,
                 },

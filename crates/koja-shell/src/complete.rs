@@ -58,7 +58,7 @@ impl CompletionContext {
             if let Statement::Assignment { target, value, .. } = statement
                 && target.segments.len() == 1
             {
-                bindings.insert(target.segments[0].clone(), value.resolution.clone());
+                bindings.insert(target.segments[0].text.clone(), value.resolution.clone());
             }
         }
         Self {

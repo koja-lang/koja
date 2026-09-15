@@ -1,7 +1,7 @@
 //! Resolve-time rewrite for statement-position `for` loops.
 
 use koja_ast::ast::{
-    Arg, Diagnostic, Expr, ExprKind, LValue, Literal, MatchArm, Pattern, Statement,
+    Arg, Diagnostic, Expr, ExprKind, LValue, Literal, MatchArm, Name, Pattern, Statement,
 };
 use koja_ast::identifier::{Resolution, ResolvedType};
 use koja_ast::labels::{pattern_kind_label, pattern_span};
@@ -162,13 +162,13 @@ fn build_rewrite(
 
     let some_arm = MatchArm {
         pattern: Pattern::Constructor {
-            name: "Some".to_string(),
+            name: Name::new("Some", span),
             elements: vec![Pattern::Tuple {
                 elements: vec![
                     pattern,
                     Pattern::Binding {
                         local_id: None,
-                        name: rest_name,
+                        name: Name::new(rest_name, span),
                         span,
                     },
                 ],
@@ -182,7 +182,7 @@ fn build_rewrite(
     };
     let none_arm = MatchArm {
         pattern: Pattern::Constructor {
-            name: "None".to_string(),
+            name: Name::new("None", span),
             elements: Vec::new(),
             span,
         },
@@ -226,7 +226,7 @@ pub(super) fn assign_local(name: &str, value: Expr, span: Span) -> Statement {
         target: LValue {
             head_resolved_type: None,
             local_id: None,
-            segments: vec![name.to_string()],
+            segments: vec![Name::new(name, span)],
             span,
         },
         type_annotation: None,
@@ -249,7 +249,7 @@ pub(super) fn method_call(receiver: Expr, method: &str, args: Vec<Arg>, span: Sp
     Expr::new(
         ExprKind::MethodCall {
             receiver: Box::new(receiver),
-            method: method.to_string(),
+            method: Name::new(method, span),
             args,
             target: Resolution::Unresolved,
             type_args: Vec::new(),

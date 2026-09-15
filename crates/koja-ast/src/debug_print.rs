@@ -18,9 +18,9 @@ use crate::ast::{
     AliasDecl, AnnotationValue, Arg, BinOp, BinarySegment, BuiltinDecl, ClosureParam, CompoundOp,
     CondArm, Constant, EnumConstructionData, EnumDecl, EnumVariant, EnumVariantData, Expr,
     ExprKind, ExtendBlock, FieldInit, FieldPattern, File, Function, ImplBlock, ImplMember, Item,
-    LValue, Literal, MatchArm, Param, Pattern, ProtocolDecl, ProtocolMethod, Statement, StringPart,
-    StructDecl, StructField, TestDecl, TypeAlias, TypeExpr, TypeParam, UnaryOp, Visibility,
-    name_texts,
+    LValue, Literal, MatchArm, Name, Param, Pattern, ProtocolDecl, ProtocolMethod, Statement,
+    StringPart, StructDecl, StructField, TestDecl, TypeAlias, TypeExpr, TypeParam, UnaryOp,
+    Visibility, path_text,
 };
 use crate::identifier::{AnonymousKind, Resolution, ResolvedType};
 use crate::span::Span;
@@ -142,7 +142,7 @@ impl<'a> Printer<'a> {
     }
 
     fn alias(&mut self, alias: &AliasDecl) {
-        let header = format!("Alias {} as {}", alias.path.join("."), alias.local_name,);
+        let header = format!("Alias {} as {}", path_text(&alias.path), alias.local_name);
         self.header(&header, alias.span);
     }
 
@@ -160,7 +160,7 @@ impl<'a> Printer<'a> {
     fn enum_decl(&mut self, e: &EnumDecl) {
         let header = format!(
             "EnumDecl {}{}",
-            name_texts(&e.path).join("."),
+            path_text(&e.path),
             format_type_params(&e.type_params)
         );
         self.nested(&header, e.span, |p| {
@@ -334,7 +334,7 @@ impl<'a> Printer<'a> {
     fn builtin_decl(&mut self, b: &BuiltinDecl) {
         let header = format!(
             "BuiltinDecl {}{}",
-            name_texts(&b.path).join("."),
+            path_text(&b.path),
             format_type_params(&b.type_params)
         );
         self.nested(&header, b.span, |p| {
@@ -353,7 +353,7 @@ impl<'a> Printer<'a> {
     fn struct_decl(&mut self, s: &StructDecl) {
         let header = format!(
             "StructDecl {}{}",
-            name_texts(&s.path).join("."),
+            path_text(&s.path),
             format_type_params(&s.type_params)
         );
         self.nested(&header, s.span, |p| {
@@ -865,7 +865,7 @@ impl<'a> Printer<'a> {
                 fields,
                 span,
             } => {
-                let header = format!("Struct {}", type_path.join("."));
+                let header = format!("Struct {}", path_text(type_path));
                 self.nested(&header, *span, |p| {
                     for f in fields {
                         p.field_pattern(f);
@@ -948,7 +948,7 @@ fn expr_header(expr: &Expr) -> String {
             data,
         } => format!(
             "EnumConstruction {}.{} ({})",
-            type_path.join("."),
+            path_text(type_path),
             variant,
             enum_ctor_data_label(data),
         ),
@@ -979,22 +979,22 @@ fn expr_header(expr: &Expr) -> String {
             Resolution::Global(id) => {
                 format!(
                     "NamedFunctionReference &{}/{} -> {id}",
-                    path.join("."),
+                    path_text(path),
                     arity
                 )
             }
             Resolution::Local(local_id) => format!(
                 "NamedFunctionReference &{}/{} -> local {local_id}",
-                path.join("."),
+                path_text(path),
                 arity,
             ),
             Resolution::TypeParam { owner, index } => format!(
                 "NamedFunctionReference &{}/{} -> type param of {owner} #{index}",
-                path.join("."),
+                path_text(path),
                 arity,
             ),
             Resolution::Unresolved => {
-                format!("NamedFunctionReference &{}/{}", path.join("."), arity)
+                format!("NamedFunctionReference &{}/{}", path_text(path), arity)
             }
         },
         ExprKind::Receive { .. } => String::from("Receive"),
@@ -1013,7 +1013,7 @@ fn expr_header(expr: &Expr) -> String {
             }
         }
         ExprKind::StructConstruction { type_path, .. } => {
-            format!("StructConstruction {}", type_path.join("."))
+            format!("StructConstruction {}", path_text(type_path))
         }
         ExprKind::Ternary { .. } => String::from("Ternary"),
         ExprKind::Try { .. } => String::from("Try"),
@@ -1117,8 +1117,8 @@ fn enum_ctor_data_label(data: &EnumConstructionData) -> &'static str {
     }
 }
 
-fn enum_pattern_header(kind: &str, type_path: &[String], variant: &str) -> String {
-    format!("{kind} {}.{variant}", type_path.join("."))
+fn enum_pattern_header(kind: &str, type_path: &[Name], variant: &Name) -> String {
+    format!("{kind} {}.{variant}", path_text(type_path))
 }
 
 fn format_span(span: Span) -> String {
@@ -1178,7 +1178,7 @@ fn format_literal(lit: &Literal) -> String {
 }
 
 fn format_lvalue(lv: &LValue) -> String {
-    lv.segments.join(".")
+    path_text(&lv.segments)
 }
 
 fn format_type_params(params: &[TypeParam]) -> String {
@@ -1189,7 +1189,7 @@ fn format_type_params(params: &[TypeParam]) -> String {
         .iter()
         .map(|p| {
             if p.bounds.is_empty() {
-                p.name.clone()
+                p.name.text.clone()
             } else {
                 format!(
                     "{}: {}",
@@ -1212,10 +1212,10 @@ fn format_type_params(params: &[TypeParam]) -> String {
 /// without the tag so nested generics stay readable.
 fn type_expr_inline(t: &TypeExpr) -> String {
     match t {
-        TypeExpr::Named { path, .. } => format!("Named {}", path.join(".")),
+        TypeExpr::Named { path, .. } => format!("Named {}", path_text(path)),
         TypeExpr::Generic { path, args, .. } => format!(
             "Generic {}<{}>",
-            path.join("."),
+            path_text(path),
             args.iter()
                 .map(type_expr_brief)
                 .collect::<Vec<_>>()
@@ -1256,10 +1256,10 @@ fn type_expr_inline(t: &TypeExpr) -> String {
 /// argument where context already disambiguates.
 fn type_expr_brief(t: &TypeExpr) -> String {
     match t {
-        TypeExpr::Named { path, .. } => path.join("."),
+        TypeExpr::Named { path, .. } => path_text(path),
         TypeExpr::Generic { path, args, .. } => format!(
             "{}<{}>",
-            path.join("."),
+            path_text(path),
             args.iter()
                 .map(type_expr_brief)
                 .collect::<Vec<_>>()

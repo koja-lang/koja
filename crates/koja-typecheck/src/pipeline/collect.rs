@@ -26,7 +26,7 @@
 use koja_ast::ast::{
     Annotation, AnnotationKind, BuiltinDecl, Constant, Diagnostic, EnumDecl, ExtendBlock, File,
     Function, ImplBlock, ImplMember, Item, Name, Param, ProtocolDecl, ProtocolMethod, StructDecl,
-    TypeAlias, TypeExpr, Visibility, is_intrinsic, name_texts,
+    TypeAlias, TypeExpr, Visibility, is_intrinsic, name_texts, path_text,
 };
 use koja_ast::identifier::{GlobalRegistryId, Identifier};
 use koja_ast::labels::type_expr_span;
@@ -204,7 +204,7 @@ fn enum_has_variant(
         .any(|decl| {
             decl.variants
                 .iter()
-                .any(|variant| variant.name == name.text)
+                .any(|variant| variant.name.text == name.text)
         })
 }
 
@@ -705,7 +705,7 @@ fn register_impl(
     let Some((target_id, target_package, target_path)) = registry.lookup_owner_path(path, package)
     else {
         diagnostics.push(Diagnostic::error(
-            format!("typecheck cannot extend unknown type `{}`", path.join(".")),
+            format!("typecheck cannot extend unknown type `{}`", path_text(path)),
             type_expr_span(&impl_block.target),
         ));
         return;
@@ -765,7 +765,7 @@ fn register_extend(
     let Some((target_id, target_package, target_path)) = registry.lookup_owner_path(path, package)
     else {
         diagnostics.push(Diagnostic::error(
-            format!("typecheck cannot extend unknown type `{}`", path.join(".")),
+            format!("typecheck cannot extend unknown type `{}`", path_text(path)),
             type_expr_span(&extend_block.target),
         ));
         return;
@@ -871,7 +871,7 @@ fn register_protocol(
             ));
             continue;
         }
-        type_params.push(param.name.clone());
+        type_params.push(param.name.text.clone());
     }
     let visibility = package_visibility_scope(decl.visibility);
     let deprecation = deprecation_message(&decl.annotations, diagnostics);
@@ -984,7 +984,7 @@ fn diagnose_constant_annotations(
 /// The dotted type path of an `impl` / `extend` target (`[Foo]`,
 /// `[Outer, Inner]`), or `None` for non-nominal shapes. Type-args
 /// don't affect keying.
-pub(crate) fn nominal_target_path(target: &TypeExpr) -> Option<&[String]> {
+pub(crate) fn nominal_target_path(target: &TypeExpr) -> Option<&[Name]> {
     match target {
         TypeExpr::Named { path, .. } | TypeExpr::Generic { path, .. } => Some(path.as_slice()),
         _ => None,

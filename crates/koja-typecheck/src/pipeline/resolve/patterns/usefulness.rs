@@ -14,7 +14,7 @@
 
 use std::collections::BTreeSet;
 
-use koja_ast::ast::{FieldPattern, Literal, Pattern};
+use koja_ast::ast::{FieldPattern, Literal, Name, Pattern};
 use koja_ast::identifier::{AnonymousKind, GlobalRegistryId, Resolution, ResolvedType};
 
 use super::super::types::{display_resolution, is_primitive, peel_alias, types_equivalent};
@@ -331,12 +331,12 @@ fn constructor(ctor: Constructor, fields: Vec<DeconstructedPattern>) -> Deconstr
 /// Tag, declared payload shape and type-arg substitution for
 /// `variant_name` on the enum behind `peeled`.
 fn variant_target<'r>(
-    variant_name: &str,
+    variant_name: &Name,
     peeled: &ResolvedType,
     registry: &'r GlobalRegistry,
 ) -> Option<(u32, &'r ResolvedVariantData, Substitution)> {
     let (id, definition, type_args) = enum_of(peeled, registry)?;
-    let (tag, variant) = definition.lookup_variant(variant_name)?;
+    let (tag, variant) = definition.lookup_variant(variant_name.as_str())?;
     Some((tag, &variant.data, Substitution::from_args(id, type_args)))
 }
 
@@ -362,7 +362,7 @@ fn deconstruct_fields(
 ) -> Option<Vec<DeconstructedPattern>> {
     let mut fields = vec![WILDCARD; declared.len()];
     for field in listed {
-        let index = declared.iter().position(|d| d.name == field.name)?;
+        let index = declared.iter().position(|d| d.name == field.name.text)?;
         let field_ty = substitute(&declared[index].ty, subst);
         fields[index] = deconstruct(&field.pattern, &field_ty, registry)?;
     }

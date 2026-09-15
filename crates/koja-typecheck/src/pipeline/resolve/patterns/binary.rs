@@ -31,7 +31,7 @@
 //! the IR via the segment's `signedness` field.
 
 use koja_ast::ast::{
-    BinarySegment, BinarySignedness, BinaryUnit, Diagnostic, ExprKind, Literal, StringPart,
+    BinarySegment, BinarySignedness, BinaryUnit, Diagnostic, ExprKind, Literal, Name, StringPart,
     TypeExpr, UnaryOp,
 };
 use koja_ast::identifier::{Resolution, ResolvedType};
@@ -208,7 +208,7 @@ fn check_greedy_tail(
     let TypeExpr::Named { path, .. } = ann else {
         return true;
     };
-    let name = path.last().map(String::as_str).unwrap_or("");
+    let name = path.last().map(Name::as_str).unwrap_or("");
     if name == "Binary" && !fixed_bits.is_multiple_of(8) {
         diagnostics.push(Diagnostic::error(
             format!("`: Binary` rest requires a byte-aligned prefix, got {fixed_bits} fixed bits",),
@@ -292,7 +292,7 @@ fn segment_fixed_width(segment: &BinarySegment, diagnostics: &mut Vec<Diagnostic
             ));
             return None;
         };
-        let name = path.last().map(String::as_str).unwrap_or("");
+        let name = path.last().map(Name::as_str).unwrap_or("");
         return match name {
             "Int8" | "UInt8" => Some(8),
             "Int16" | "UInt16" => Some(16),
@@ -338,7 +338,7 @@ fn resolve_binding_type(
     _diagnostics: &mut Vec<Diagnostic>,
 ) -> ResolvedType {
     if let Some(TypeExpr::Named { path, .. }) = &segment.type_ann {
-        let name = path.last().map(String::as_str).unwrap_or("");
+        let name = path.last().map(Name::as_str).unwrap_or("");
         return resolver.registry.primitive(name);
     }
     resolver.registry.primitive("Int")
@@ -427,7 +427,7 @@ fn is_binary_or_bits_annotation(ann: &TypeExpr) -> bool {
     let TypeExpr::Named { path, .. } = ann else {
         return false;
     };
-    let name = path.last().map(String::as_str).unwrap_or("");
+    let name = path.last().map(Name::as_str).unwrap_or("");
     matches!(name, "Binary" | "Bits")
 }
 

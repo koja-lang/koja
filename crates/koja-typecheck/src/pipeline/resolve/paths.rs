@@ -2,7 +2,7 @@
 //! by static method dispatch, package function calls, and package
 //! constant reads.
 
-use koja_ast::ast::{EnumConstructionData, ExprKind};
+use koja_ast::ast::{EnumConstructionData, ExprKind, name_texts};
 use koja_ast::identifier::{GlobalRegistryId, Identifier};
 
 use crate::registry::RegistryEntry;
@@ -30,8 +30,8 @@ pub(super) fn static_dotted_path(kind: &ExprKind) -> Option<Vec<String>> {
             type_path,
             variant,
         } => {
-            let mut path = type_path.clone();
-            path.push(variant.clone());
+            let mut path = name_texts(type_path);
+            path.push(variant.text.clone());
             Some(path)
         }
         ExprKind::Ident { .. } | ExprKind::FieldAccess { .. } => {
@@ -51,7 +51,7 @@ fn walk_dotted_path(kind: &ExprKind, out: &mut Vec<String>) -> Option<()> {
         }
         ExprKind::FieldAccess { receiver, field } => {
             walk_dotted_path(&receiver.kind, out)?;
-            out.push(field.clone());
+            out.push(field.text.clone());
             Some(())
         }
         _ => None,

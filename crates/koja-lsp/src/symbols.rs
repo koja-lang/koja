@@ -12,7 +12,7 @@ use tower_lsp_server::ls_types::*;
 
 use koja_ast::ast::{
     BuiltinDecl, EnumDecl, File, Function, ImplMember, Item, Param, StructDecl, TestDecl, TypeExpr,
-    TypeParam, Visibility,
+    TypeParam, Visibility, path_text,
 };
 use koja_ast::labels::type_expr_span;
 use koja_ast::span::Span;
@@ -34,10 +34,10 @@ fn detail_with_visibility(visibility: Visibility, detail: Option<String>) -> Opt
 /// Formats a [`TypeExpr`] into a human-readable string for symbol details.
 fn type_expr_label(te: &TypeExpr) -> String {
     match te {
-        TypeExpr::Named { path, .. } => path.join("."),
+        TypeExpr::Named { path, .. } => path_text(path),
         TypeExpr::Generic { path, args, .. } => {
             let args_str: Vec<String> = args.iter().map(type_expr_label).collect();
-            format!("{}<{}>", path.join("."), args_str.join(", "))
+            format!("{}<{}>", path_text(path), args_str.join(", "))
         }
         TypeExpr::Unit { .. } => "()".to_string(),
         TypeExpr::Function {
@@ -542,7 +542,7 @@ fn enum_symbol(e: &EnumDecl) -> DocumentSymbol {
             let vrange = span_to_range(&v.span);
             #[allow(deprecated)]
             DocumentSymbol {
-                name: v.name.clone(),
+                name: v.name.text.clone(),
                 detail: None,
                 kind: SymbolKind::ENUM_MEMBER,
                 tags: None,

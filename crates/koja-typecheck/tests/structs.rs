@@ -12,7 +12,7 @@
 //! surface forms produce identical registry entries and resolution
 //! shape.
 
-use koja_ast::ast::ExprKind;
+use koja_ast::ast::{ExprKind, name_texts};
 use koja_ast::identifier::{Identifier, Resolution, ResolvedType};
 use koja_ast::util::dedent;
 use koja_typecheck::{Dispatch, GlobalKind, ResolvedStructField};
@@ -130,7 +130,7 @@ fn struct_construction_resolves_to_struct_leaf() {
     let ExprKind::StructConstruction { type_path, fields } = &trailing.kind else {
         panic!("expected StructConstruction, got {:?}", trailing.kind);
     };
-    assert_eq!(type_path, &["Point".to_string()]);
+    assert_eq!(name_texts(type_path), ["Point"]);
     assert_eq!(fields.len(), 2);
     let int = global_leaf(&checked, "Int");
     for field in fields {

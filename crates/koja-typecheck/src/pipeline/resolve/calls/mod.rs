@@ -285,7 +285,7 @@ pub(super) fn resolve_method_call_expr(
             type_args,
         } => resolve_method_call(
             receiver,
-            method,
+            method.as_str(),
             args,
             target,
             CallSite {

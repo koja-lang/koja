@@ -23,7 +23,7 @@
 //! still walked so any inner errors get reported in the same pass.
 
 use koja_ast::ast::{
-    BinarySegment, BinaryUnit, Diagnostic, ExprKind, Literal, StringPart, TypeExpr,
+    BinarySegment, BinaryUnit, Diagnostic, ExprKind, Literal, Name, StringPart, TypeExpr,
 };
 use koja_ast::identifier::ResolvedType;
 use koja_ast::span::Span;
@@ -232,7 +232,7 @@ pub(crate) fn resolve_segment(
             ));
             return None;
         };
-        let name = path.last().map(String::as_str).unwrap_or("");
+        let name = path.last().map(Name::as_str).unwrap_or("");
         let (kind, width_bits, sign) = match name {
             "Binary" => return splice_segment_info(segment, registry, diagnostics),
             "Float32" => (SegmentKind::Float, 32u64, None),

@@ -236,7 +236,7 @@ fn qualify(outer: &[String], path: &[Name]) -> Vec<String> {
 /// bare type. Targets that are not named types have no path.
 fn type_expr_path(target: &TypeExpr) -> Option<Vec<String>> {
     match target {
-        TypeExpr::Named { path, .. } | TypeExpr::Generic { path, .. } => Some(path.clone()),
+        TypeExpr::Named { path, .. } | TypeExpr::Generic { path, .. } => Some(name_texts(path)),
         _ => None,
     }
 }

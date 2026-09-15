@@ -46,14 +46,33 @@ pub enum Visibility {
 
 // Top level
 
-/// A declared name and the span of its token, so a diagnostic, an
-/// editor selection, or a rename can point at the name alone. The
-/// declaration's own `span` covers the whole node. Synthesized
-/// declarations carry a synthetic span here.
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// An identifier token with its text and span, so a diagnostic, an
+/// editor selection, or a rename can point at the name alone.
+/// Declarations and references both use it. The owning node's `span`
+/// covers the whole node. Synthesized nodes carry a synthetic span
+/// here.
+///
+/// Equality and hashing compare the text only, so a declaration and a
+/// reference to it compare equal. Compare `span` directly when the
+/// position matters.
+#[derive(Debug, Clone)]
 pub struct Name {
     pub text: String,
     pub span: Span,
+}
+
+impl PartialEq for Name {
+    fn eq(&self, other: &Self) -> bool {
+        self.text == other.text
+    }
+}
+
+impl Eq for Name {}
+
+impl std::hash::Hash for Name {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.text.hash(state);
+    }
 }
 
 impl Name {
@@ -91,6 +110,18 @@ impl PartialEq<&str> for Name {
 /// joining with `.`.
 pub fn name_texts(names: &[Name]) -> Vec<String> {
     names.iter().map(|name| name.text.clone()).collect()
+}
+
+/// The dotted text of a path, such as `Process.ExitSignal`.
+pub fn path_text(names: &[Name]) -> String {
+    let mut out = String::new();
+    for (i, name) in names.iter().enumerate() {
+        if i > 0 {
+            out.push('.');
+        }
+        out.push_str(&name.text);
+    }
+    out
 }
 
 /// The value attached to an annotation.
@@ -436,7 +467,7 @@ pub enum Severity {
 /// ```
 #[derive(Debug, Clone, PartialEq)]
 pub struct TypeParam {
-    pub name: String,
+    pub name: Name,
     pub bounds: Vec<TypeExpr>,
     pub span: Span,
 }
@@ -492,7 +523,7 @@ impl EnumDecl {
 /// A single variant within an enum declaration.
 #[derive(Debug, Clone)]
 pub struct EnumVariant {
-    pub name: String,
+    pub name: Name,
     pub data: EnumVariantData,
     pub span: Span,
 }
@@ -633,7 +664,7 @@ pub struct ProtocolMethod {
 pub enum Param {
     /// A regular named parameter with an optional default value.
     Regular {
-        name: String,
+        name: Name,
         type_expr: TypeExpr,
         default: Option<Expr>,
         local_id: Option<LocalId>,
@@ -711,7 +742,7 @@ impl BuiltinDecl {
 /// A single field within a struct declaration.
 #[derive(Debug, Clone)]
 pub struct StructField {
-    pub name: String,
+    pub name: Name,
     pub type_expr: TypeExpr,
     pub default: Option<Expr>,
     pub span: Span,
@@ -721,8 +752,8 @@ pub struct StructField {
 /// or `alias json.Decoder as JSONDecoder`.
 #[derive(Debug, Clone)]
 pub struct AliasDecl {
-    pub path: Vec<String>,
-    pub local_name: String,
+    pub path: Vec<Name>,
+    pub local_name: Name,
     pub span: Span,
 }
 
@@ -742,10 +773,10 @@ pub struct TypeAlias {
 #[derive(Debug, Clone, PartialEq)]
 pub enum TypeExpr {
     /// A simple named type: `Int`, `String`, `MyStruct`.
-    Named { path: Vec<String>, span: Span },
+    Named { path: Vec<Name>, span: Span },
     /// A generic type with type arguments: `List<Int>`, `Map<String, Int>`.
     Generic {
-        path: Vec<String>,
+        path: Vec<Name>,
         args: Vec<TypeExpr>,
         span: Span,
     },
@@ -797,7 +828,7 @@ pub enum CompoundOp {
 pub struct LValue {
     pub head_resolved_type: Option<ResolvedType>,
     pub local_id: Option<LocalId>,
-    pub segments: Vec<String>,
+    pub segments: Vec<Name>,
     pub span: Span,
 }
 
@@ -874,7 +905,7 @@ pub enum ClosureParam {
     /// can reach the same id without re-walking.
     Name {
         local_id: Option<LocalId>,
-        name: String,
+        name: Name,
         span: Span,
         type_expr: Option<TypeExpr>,
     },
@@ -1001,8 +1032,8 @@ pub enum ExprKind {
     },
     /// An enum variant construction: `Color.Red`, `Option.Some(42)`.
     EnumConstruction {
-        type_path: Vec<String>,
-        variant: String,
+        type_path: Vec<Name>,
+        variant: Name,
         data: EnumConstructionData,
     },
     /// An error return: `fail expr`. Diverges like `return`, sending
@@ -1011,7 +1042,7 @@ pub enum ExprKind {
     /// it to `return Result.Err(value)`.
     Fail { value: Box<Expr> },
     /// A field access: `point.x`.
-    FieldAccess { receiver: Box<Expr>, field: String },
+    FieldAccess { receiver: Box<Expr>, field: Name },
     /// A for loop: `for x in items ... end`.
     For {
         pattern: Pattern,
@@ -1059,7 +1090,7 @@ pub enum ExprKind {
     /// `target` is unresolved after parse. Typecheck stamps the selected
     /// declaration when named function reference resolution is implemented.
     NamedFunctionReference {
-        path: Vec<String>,
+        path: Vec<Name>,
         arity: usize,
         target: Resolution,
     },
@@ -1067,7 +1098,7 @@ pub enum ExprKind {
     /// `type_args` follows the same shape as [`ExprKind::Call`].
     MethodCall {
         receiver: Box<Expr>,
-        method: String,
+        method: Name,
         args: Vec<Arg>,
         /// Exact function selected by typecheck.
         target: Resolution,
@@ -1110,7 +1141,7 @@ pub enum ExprKind {
     },
     /// A struct construction: `Point { x: 1, y: 2 }`.
     StructConstruction {
-        type_path: Vec<String>,
+        type_path: Vec<Name>,
         fields: Vec<FieldInit>,
     },
     /// A ternary expression: `cond ? then_expr : else_expr`.
@@ -1139,7 +1170,7 @@ pub enum ExprKind {
 /// A named field initializer in a struct or enum struct construction.
 #[derive(Debug, Clone)]
 pub struct FieldInit {
-    pub name: String,
+    pub name: Name,
     pub value: Expr,
     pub span: Span,
 }
@@ -1236,7 +1267,7 @@ pub struct MatchArm {
 /// write `name: _` or omit the field entirely (partial coverage).
 #[derive(Debug, Clone)]
 pub struct FieldPattern {
-    pub name: String,
+    pub name: Name,
     pub pattern: Pattern,
     pub span: Span,
 }
@@ -1266,32 +1297,32 @@ pub enum Pattern {
     /// [`Param::Regular`] / [`ExprKind::Self_`] slot.
     Binding {
         local_id: Option<LocalId>,
-        name: String,
+        name: Name,
         span: Span,
     },
     /// A unit enum variant: `Color.Red`.
     EnumUnit {
-        type_path: Vec<String>,
-        variant: String,
+        type_path: Vec<Name>,
+        variant: Name,
         span: Span,
     },
     /// A tuple enum variant: `Option.Some(x)`.
     EnumTuple {
-        type_path: Vec<String>,
-        variant: String,
+        type_path: Vec<Name>,
+        variant: Name,
         elements: Vec<Pattern>,
         span: Span,
     },
     /// A struct enum variant: `Shape.Rect { width, height }`.
     EnumStruct {
-        type_path: Vec<String>,
-        variant: String,
+        type_path: Vec<Name>,
+        variant: Name,
         fields: Vec<FieldPattern>,
         span: Span,
     },
     /// Shorthand constructors: `Some(x)`, `Ok(x)`, `Err(x)`.
     Constructor {
-        name: String,
+        name: Name,
         elements: Vec<Pattern>,
         span: Span,
     },
@@ -1300,7 +1331,7 @@ pub enum Pattern {
     /// Unlisted fields are implicit wildcards. Empty `Point{}` is legal
     /// and matches any value of that struct type.
     Struct {
-        type_path: Vec<String>,
+        type_path: Vec<Name>,
         fields: Vec<FieldPattern>,
         span: Span,
     },
@@ -1313,7 +1344,7 @@ pub enum Pattern {
     /// `LocalRead` vocabulary as body-declared locals.
     TypedBinding {
         local_id: Option<LocalId>,
-        name: String,
+        name: Name,
         /// Resolved type of the bound payload, stamped by typecheck-
         /// resolve when the pattern is admitted (today: the pipeline
         /// `receive` arms via

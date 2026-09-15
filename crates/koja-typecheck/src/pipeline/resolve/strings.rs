@@ -1,6 +1,6 @@
 //! String literal resolution.
 
-use koja_ast::ast::{Diagnostic, Expr, ExprKind, Literal, StringPart};
+use koja_ast::ast::{Diagnostic, Expr, ExprKind, Literal, Name, StringPart};
 use koja_ast::identifier::{Resolution, ResolvedType};
 use koja_ast::span::Span;
 
@@ -64,7 +64,7 @@ fn wrap_in_format(expr: &mut Box<Expr>) {
     let original = std::mem::replace(expr.as_mut(), placeholder);
     expr.kind = ExprKind::MethodCall {
         args: Vec::new(),
-        method: FORMAT_METHOD.to_string(),
+        method: Name::new(FORMAT_METHOD, span),
         receiver: Box::new(original),
         target: Resolution::Unresolved,
         type_args: Vec::new(),

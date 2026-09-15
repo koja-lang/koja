@@ -75,7 +75,7 @@ fn lift_protocol_method(
             Param::Regular {
                 name, type_expr, ..
             } => Some(ResolvedParam {
-                name: name.clone(),
+                name: name.text.clone(),
                 ty: resolve_type_expr(
                     type_expr,
                     type_params,

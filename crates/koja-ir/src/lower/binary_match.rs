@@ -16,8 +16,8 @@
 //! into the slot.
 
 use koja_ast::ast::{
-    BinaryEndianness, BinarySegment, BinarySignedness, ExprKind, Literal, StringPart, TypeExpr,
-    UnaryOp,
+    BinaryEndianness, BinarySegment, BinarySignedness, ExprKind, Literal, Name, StringPart,
+    TypeExpr, UnaryOp,
 };
 use koja_ast::identifier::Resolution;
 use koja_typecheck::GlobalRegistry;
@@ -182,7 +182,7 @@ fn lower_greedy_tail(
     let TypeExpr::Named { path, .. } = segment.type_ann.as_ref()? else {
         return None;
     };
-    let name = path.last().map(String::as_str).unwrap_or("");
+    let name = path.last().map(Name::as_str).unwrap_or("");
     let ty = match name {
         "Binary" => IRType::Binary,
         "Bits" => IRType::Bits,
@@ -223,7 +223,7 @@ fn segment_fixed_width(segment: &BinarySegment) -> Option<u64> {
         return super::ops::parse_int_literal(n).ok().map(|v| v as u64);
     }
     if let Some(TypeExpr::Named { path, .. }) = &segment.type_ann {
-        let name = path.last().map(String::as_str).unwrap_or("");
+        let name = path.last().map(Name::as_str).unwrap_or("");
         return match name {
             "Int8" | "UInt8" => Some(8),
             "Int16" | "UInt16" => Some(16),

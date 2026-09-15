@@ -1,4 +1,4 @@
-use koja_ast::ast::{Arg, AssertSource, BinOp, Expr, ExprKind, Literal, UnaryOp};
+use koja_ast::ast::{Arg, AssertSource, BinOp, Expr, ExprKind, Literal, Name, UnaryOp};
 use koja_ast::identifier::Resolution;
 use koja_ast::span::Span;
 use koja_ast::token::TokenKind;
@@ -170,8 +170,8 @@ impl Parser {
     fn parse_dot_postfix(&mut self, receiver: Expr) -> Expr {
         self.advance(); // .
         match self.peek().clone() {
-            TokenKind::Ident(name) => {
-                self.advance();
+            TokenKind::Ident(_) => {
+                let name = self.expect_name();
                 if self.at(&TokenKind::LParen) {
                     self.advance(); // (
                     let args = self.parse_arg_list();
@@ -198,18 +198,19 @@ impl Parser {
                     )
                 }
             }
-            TokenKind::TypeIdent(variant) => {
-                self.advance();
+            TokenKind::TypeIdent(_) => {
+                let variant = self.expect_type_name();
                 let type_path = self.extract_type_path(&receiver);
                 self.parse_enum_construction_tail(type_path, variant, receiver.span)
             }
             _ => {
+                let field_span = self.current_span();
                 let span = self.span_from(receiver.span);
                 self.error("expected field name or method after '.'".into(), span);
                 Expr::new(
                     ExprKind::FieldAccess {
                         receiver: Box::new(receiver),
-                        field: String::new(),
+                        field: Name::new(String::new(), field_span),
                     },
                     span,
                 )
@@ -463,12 +464,12 @@ impl Parser {
         )
     }
 
-    fn parse_function_reference_segment(&mut self) -> Option<String> {
+    fn parse_function_reference_segment(&mut self) -> Option<Name> {
         let span = self.current_span();
         match self.peek().clone() {
             TokenKind::Ident(name) | TokenKind::TypeIdent(name) => {
                 self.advance();
-                Some(name)
+                Some(Name::new(name, span))
             }
             _ => {
                 self.error(

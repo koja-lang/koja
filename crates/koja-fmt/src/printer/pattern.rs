@@ -35,7 +35,7 @@ impl Printer {
                 elements,
                 span,
             } if !elements.is_empty() => concat(vec![
-                text(name.clone()),
+                text(&name.text),
                 self.pattern_elements_to_doc("(", ")", elements, *span),
             ]),
             Pattern::EnumStruct {
@@ -77,7 +77,9 @@ impl Printer {
             }
             Pattern::Struct {
                 type_path, fields, ..
-            } => self.field_pattern_list_to_doc(type_path.join("."), fields, pattern_span(pattern)),
+            } => {
+                self.field_pattern_list_to_doc(path_text(type_path), fields, pattern_span(pattern))
+            }
             Pattern::Tuple { elements, span } => {
                 self.pattern_elements_to_doc("(", ")", elements, *span)
             }
@@ -116,7 +118,7 @@ impl Printer {
             |f| f.span,
             |printer, f| {
                 concat(vec![
-                    text(&f.name),
+                    text(&f.name.text),
                     text(": "),
                     printer.pattern_to_doc(&f.pattern),
                 ])

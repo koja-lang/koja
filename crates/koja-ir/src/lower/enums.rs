@@ -17,7 +17,7 @@
 //! variant's declared payload.
 
 use koja_ast::ast::{
-    AnnotationKind, Diagnostic, EnumConstructionData, EnumDecl, Expr, FieldInit, name_texts,
+    AnnotationKind, Diagnostic, EnumConstructionData, EnumDecl, Expr, FieldInit, Name, name_texts,
 };
 use koja_ast::identifier::{Identifier, Resolution, ResolvedType};
 use koja_typecheck::{
@@ -141,7 +141,7 @@ fn lower_variants(
 /// the per-shape helper. The shape match is guaranteed by typecheck
 /// resolve, so reaching a mismatch here is an invariant violation.
 pub(super) fn lower_enum_construction(
-    variant_name: &str,
+    variant_name: &Name,
     data: &EnumConstructionData,
     expr_resolution: &ResolvedType,
     ctx: &mut FnLowerCtx,
@@ -152,13 +152,15 @@ pub(super) fn lower_enum_construction(
     let entry = enum_entry_from_resolution(expr_resolution, registry);
     let definition = enum_definition_from_entry(entry);
     let symbol = resolved_enum_symbol(expr_resolution, registry, &mut output.instantiations);
-    let (variant_index, variant) = definition.lookup_variant(variant_name).unwrap_or_else(|| {
-        panic!(
-            "IR lower: enum `{}` has no variant `{variant_name}` \
+    let (variant_index, variant) = definition
+        .lookup_variant(variant_name.as_str())
+        .unwrap_or_else(|| {
+            panic!(
+                "IR lower: enum `{}` has no variant `{variant_name}` \
              (typecheck seal must have rejected this)",
-            entry.identifier,
-        )
-    });
+                entry.identifier,
+            )
+        });
     let target = VariantTarget {
         symbol,
         tag: IRVariantTag(variant_index as u8),

@@ -13,22 +13,22 @@ impl Parser {
                     span: self.span_from(start),
                 }
             }
-            TokenKind::Ident(name) => {
+            TokenKind::Ident(_) => {
                 let start = self.current_span();
-                self.advance();
+                let name = self.expect_name();
                 // Legacy lowercase-package qualifier: `pkg.Type.Variant`.
                 // Canonical packages are now PascalCase (`Pkg.Type.Variant`)
                 // and flow through the `TokenKind::TypeIdent` arm below.
                 if self.at(&TokenKind::Dot) && matches!(self.peek_nth(1), TokenKind::TypeIdent(_)) {
                     let mut type_path = vec![name];
                     self.advance(); // .
-                    let next = self.expect_type_ident();
+                    let next = self.expect_type_name();
                     type_path.push(next);
                     while self.at(&TokenKind::Dot)
                         && matches!(self.peek_nth(1), TokenKind::TypeIdent(_))
                     {
                         self.advance(); // .
-                        type_path.push(self.expect_type_ident());
+                        type_path.push(self.expect_type_name());
                     }
                     let variant = type_path.pop().unwrap();
                     return self.finish_enum_pattern(type_path, variant, start);
@@ -180,14 +180,14 @@ impl Parser {
 
     fn parse_type_pattern(&mut self) -> Pattern {
         let start = self.current_span();
-        let first = self.expect_type_ident();
+        let first = self.expect_type_name();
 
         // Collect dotted segments: Type.Sub.Variant
         if self.at(&TokenKind::Dot) && matches!(self.peek_nth(1), TokenKind::TypeIdent(_)) {
             let mut segments = vec![first];
             while self.at(&TokenKind::Dot) && matches!(self.peek_nth(1), TokenKind::TypeIdent(_)) {
                 self.advance(); // .
-                segments.push(self.expect_type_ident());
+                segments.push(self.expect_type_name());
             }
             let variant = segments.pop().unwrap();
             return self.finish_enum_pattern(segments, variant, start);
@@ -223,8 +223,8 @@ impl Parser {
 
     fn finish_enum_pattern(
         &mut self,
-        type_path: Vec<String>,
-        variant: String,
+        type_path: Vec<Name>,
+        variant: Name,
         start: koja_ast::span::Span,
     ) -> Pattern {
         if self.eat(&TokenKind::LParen).is_some() {
@@ -334,7 +334,7 @@ impl Parser {
 
     fn parse_field_pattern(&mut self) -> FieldPattern {
         let start = self.current_span();
-        let name = self.expect_ident();
+        let name = self.expect_name();
         if self.eat(&TokenKind::Colon).is_none() {
             let span = self.current_span();
             self.error_with_hint(

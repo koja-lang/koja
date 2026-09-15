@@ -16,7 +16,7 @@ use super::Printer;
 /// E.g. `T`, `T: Debug`, `T: Debug & Hash`.
 pub(super) fn format_type_param(tp: &TypeParam) -> String {
     if tp.bounds.is_empty() {
-        tp.name.clone()
+        tp.name.text.clone()
     } else {
         let bounds = tp
             .bounds
@@ -285,11 +285,11 @@ pub(super) fn visibility_prefix(visibility: Visibility) -> &'static str {
 pub(super) fn alias_to_doc(a: &AliasDecl) -> Doc {
     let mut parts = Vec::new();
     parts.push(text("alias "));
-    parts.push(text(a.path.join(".")));
+    parts.push(text(path_text(&a.path)));
     let default_name = a.path.last().map(|s| s.as_str()).unwrap_or("");
     if a.local_name != default_name {
         parts.push(text(" as "));
-        parts.push(text(&a.local_name));
+        parts.push(text(&a.local_name.text));
     }
     concat(parts)
 }
@@ -378,7 +378,7 @@ pub(super) fn impl_target_to_doc(target: &TypeExpr, target_bounds: &[TypeParam])
         })
         .collect();
     concat(vec![
-        text(path.join(".")),
+        text(path_text(path)),
         text("<"),
         intersperse(args_doc, text(", ")),
         text(">"),
@@ -387,11 +387,11 @@ pub(super) fn impl_target_to_doc(target: &TypeExpr, target_bounds: &[TypeParam])
 
 pub(super) fn type_expr_to_doc(ty: &TypeExpr) -> Doc {
     match ty {
-        TypeExpr::Named { path, .. } => text(path.join(".")),
+        TypeExpr::Named { path, .. } => text(path_text(path)),
         TypeExpr::Generic { path, args, .. } => {
             let args_doc: Vec<Doc> = args.iter().map(type_expr_to_doc).collect();
             concat(vec![
-                text(path.join(".")),
+                text(path_text(path)),
                 text("<"),
                 intersperse(args_doc, text(", ")),
                 text(">"),
@@ -471,11 +471,11 @@ pub(super) fn return_signature_doc(
 
 /// The qualified head of an enum pattern (`Shape.Rect`), or the bare
 /// variant when the path is empty.
-pub(super) fn enum_prefix(type_path: &[String], variant: &str) -> String {
+pub(super) fn enum_prefix(type_path: &[Name], variant: &Name) -> String {
     if type_path.is_empty() {
-        variant.to_string()
+        variant.text.clone()
     } else {
-        format!("{}.{}", type_path.join("."), variant)
+        format!("{}.{variant}", path_text(type_path))
     }
 }
 
@@ -485,7 +485,7 @@ pub(super) fn pattern_to_doc(pat: &Pattern) -> Doc {
     match pat {
         Pattern::Wildcard { .. } => text("_"),
         Pattern::Literal { value, .. } => literal_to_doc(value),
-        Pattern::Binding { name, .. } => text(name.clone()),
+        Pattern::Binding { name, .. } => text(&name.text),
         Pattern::EnumUnit {
             type_path, variant, ..
         } => text(enum_prefix(type_path, variant)),
@@ -516,14 +516,14 @@ pub(super) fn pattern_to_doc(pat: &Pattern) -> Doc {
         } => struct_pattern_to_doc(&enum_prefix(type_path, variant), fields),
         Pattern::Struct {
             type_path, fields, ..
-        } => struct_pattern_to_doc(&type_path.join("."), fields),
+        } => struct_pattern_to_doc(&path_text(type_path), fields),
         Pattern::Constructor { name, elements, .. } => {
             if elements.is_empty() {
-                text(name.clone())
+                text(&name.text)
             } else {
                 let elems: Vec<Doc> = elements.iter().map(pattern_to_doc).collect();
                 concat(vec![
-                    text(name.clone()),
+                    text(&name.text),
                     text("("),
                     intersperse(elems, text(", ")),
                     text(")"),
@@ -533,7 +533,7 @@ pub(super) fn pattern_to_doc(pat: &Pattern) -> Doc {
         Pattern::TypedBinding {
             name, type_expr, ..
         } => concat(vec![
-            text(name.clone()),
+            text(&name.text),
             text(": "),
             type_expr_to_doc(type_expr),
         ]),
@@ -578,7 +578,7 @@ pub(super) fn pattern_to_doc(pat: &Pattern) -> Doc {
 
 fn field_pattern_to_doc(fp: &FieldPattern) -> Doc {
     concat(vec![
-        text(&fp.name),
+        text(&fp.name.text),
         text(": "),
         pattern_to_doc(&fp.pattern),
     ])
@@ -621,7 +621,7 @@ pub(super) fn closure_param_to_doc(cp: &ClosureParam) -> Doc {
             name, type_expr, ..
         } => {
             let mut parts = Vec::new();
-            parts.push(text(name.clone()));
+            parts.push(text(&name.text));
             if let Some(te) = type_expr {
                 parts.push(text(": "));
                 parts.push(type_expr_to_doc(te));
@@ -745,7 +745,7 @@ pub(super) fn pattern_is_multiline(pattern: &Pattern) -> bool {
 fn pattern_text_len(pattern: &Pattern) -> usize {
     match pattern {
         Pattern::Literal { value, .. } => literal_text_len(value),
-        Pattern::Binding { name, .. } => name.len(),
+        Pattern::Binding { name, .. } => name.text.len(),
         Pattern::Wildcard { .. } => 1,
         Pattern::Or { patterns, .. } => {
             patterns.iter().map(pattern_text_len).sum::<usize>()
@@ -838,8 +838,8 @@ pub(super) fn expr_text_len(expr: &Expr) -> usize {
             method,
             args,
             ..
-        } => expr_text_len(receiver) + 1 + method.len() + call_args_text_len(args) + 2,
-        ExprKind::FieldAccess { receiver, field } => expr_text_len(receiver) + 1 + field.len(),
+        } => expr_text_len(receiver) + 1 + method.text.len() + call_args_text_len(args) + 2,
+        ExprKind::FieldAccess { receiver, field } => expr_text_len(receiver) + 1 + field.text.len(),
         ExprKind::Ternary {
             condition,
             then_expr,
@@ -864,7 +864,7 @@ pub(super) fn expr_text_len(expr: &Expr) -> usize {
             variant,
             data,
         } => {
-            let head = path_text_len(type_path) + 1 + variant.len();
+            let head = path_text_len(type_path) + 1 + variant.text.len();
             match data {
                 EnumConstructionData::Unit => head,
                 EnumConstructionData::Tuple(elements) => {
@@ -896,14 +896,14 @@ fn call_args_text_len(args: &[Arg]) -> usize {
 fn struct_fields_text_len(fields: &[FieldInit]) -> usize {
     2 + fields
         .iter()
-        .map(|f| f.name.len() + 2 + expr_text_len(&f.value))
+        .map(|f| f.name.text.len() + 2 + expr_text_len(&f.value))
         .sum::<usize>()
         + fields.len().saturating_sub(1) * 2
 }
 
 /// Estimates the rendered width of a dotted path (`Pkg.Type`).
-fn path_text_len(path: &[String]) -> usize {
-    path.iter().map(|s| s.len()).sum::<usize>() + path.len().saturating_sub(1)
+fn path_text_len(path: &[Name]) -> usize {
+    path.iter().map(|s| s.text.len()).sum::<usize>() + path.len().saturating_sub(1)
 }
 
 pub(super) fn binop_str(op: &BinOp) -> &'static str {

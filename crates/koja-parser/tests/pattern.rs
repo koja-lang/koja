@@ -5,7 +5,7 @@
 //! and asserts the resulting AST variant. Combined, the tests pin
 //! which syntactic shape maps to which pattern node.
 
-use koja_ast::ast::{Literal, Pattern};
+use koja_ast::ast::{Literal, Pattern, name_texts};
 
 mod common;
 
@@ -181,7 +181,7 @@ fn enum_unit_variant_pattern() {
         Pattern::EnumUnit {
             type_path, variant, ..
         } => {
-            assert_eq!(type_path, &vec!["Color".to_string()]);
+            assert_eq!(name_texts(type_path), ["Color"]);
             assert_eq!(variant, "Red");
         }
         other => panic!("expected EnumUnit, got {other:?}"),
@@ -271,7 +271,7 @@ fn struct_destructure_pattern() {
         Pattern::Struct {
             type_path, fields, ..
         } => {
-            assert_eq!(type_path, &vec!["Point".to_string()]);
+            assert_eq!(name_texts(type_path), ["Point"]);
             assert_eq!(fields.len(), 2);
         }
         other => panic!("expected Struct, got {other:?}"),
@@ -312,7 +312,7 @@ fn package_qualified_enum_unit_pattern() {
         Pattern::EnumUnit {
             type_path, variant, ..
         } => {
-            assert_eq!(type_path, &vec!["Pkg".to_string(), "Color".to_string()]);
+            assert_eq!(name_texts(type_path), ["Pkg", "Color"]);
             assert_eq!(variant, "Red");
         }
         other => panic!("expected EnumUnit, got {other:?}"),

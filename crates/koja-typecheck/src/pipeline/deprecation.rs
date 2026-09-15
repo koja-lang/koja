@@ -13,8 +13,8 @@
 use koja_ast::ast::{
     Annotation, AnnotationKind, BuiltinDecl, ClosureParam, Constant, Diagnostic,
     EnumConstructionData, EnumDecl, EnumVariantData, Expr, ExprKind, ExtendBlock, File, Function,
-    ImplBlock, ImplMember, Item, Param, Pattern, ProtocolDecl, Statement, StringPart, StructDecl,
-    StructField, TypeAlias, TypeExpr, TypeParam,
+    ImplBlock, ImplMember, Item, Name, Param, Pattern, ProtocolDecl, Statement, StringPart,
+    StructDecl, StructField, TypeAlias, TypeExpr, TypeParam, name_texts,
 };
 use koja_ast::identifier::{GlobalRegistryId, Identifier, Resolution, ResolvedType};
 use koja_ast::span::Span;
@@ -206,7 +206,7 @@ impl Walker<'_, '_> {
             return false;
         };
         matches!(
-            lookup_type(path, self.scope),
+            lookup_type(&name_texts(path), self.scope),
             Some((_, entry)) if entry.deprecation.is_some()
         )
     }
@@ -256,7 +256,7 @@ impl Walker<'_, '_> {
             for bound in &param.bounds {
                 self.check_type_expr(bound);
             }
-            self.type_params.push(param.name.clone());
+            self.type_params.push(param.name.text.clone());
         }
         walk(self);
         self.type_params.truncate(depth);
@@ -586,11 +586,11 @@ impl Walker<'_, '_> {
 
     /// Warn when a source type path names a deprecated entry.
     /// In-scope generic params shadow globals, so those never warn.
-    fn warn_type_path(&mut self, path: &[String], span: Span) {
-        if path.len() == 1 && self.type_params.contains(&path[0]) {
+    fn warn_type_path(&mut self, path: &[Name], span: Span) {
+        if path.len() == 1 && self.type_params.contains(&path[0].text) {
             return;
         }
-        let Some((id, _)) = lookup_type(path, self.scope) else {
+        let Some((id, _)) = lookup_type(&name_texts(path), self.scope) else {
             return;
         };
         self.warn_use(id, span);
@@ -603,7 +603,7 @@ impl Walker<'_, '_> {
     fn warn_deprecated_method(
         &mut self,
         receiver: &Expr,
-        method: &str,
+        method: &Name,
         explicit_arity: usize,
         span: Span,
     ) {
@@ -643,7 +643,7 @@ impl Walker<'_, '_> {
         let method_identifier = Identifier::member(
             type_entry.identifier.package(),
             type_entry.identifier.path(),
-            method,
+            method.as_str(),
         );
         let arity = explicit_arity + usize::from(static_type_id.is_none());
         let Some((method_id, _)) = self

@@ -28,13 +28,14 @@ use koja_ast::ast::{
     Annotation, Arg, BinOp, EnumDecl, EnumVariant, EnumVariantData, Expr, ExprKind, FieldPattern,
     File, Function, FunctionOrigin, ImplBlock, ImplMember, Item, Literal, MatchArm, Name, Param,
     Pattern, Statement, StructDecl, StructField, TypeExpr, TypeParam, Visibility, name_texts,
+    path_text,
 };
 use koja_ast::identifier::Resolution;
 use koja_ast::span::Span;
 
 use crate::program::CheckedPackage;
 
-use super::derive_debug::{has_impl, is_internal_wrapper_type};
+use super::derive_debug::{has_impl, is_internal_wrapper_type, synthetic_path};
 
 const BOOL_TYPE: &str = "Bool";
 const EQ_METHOD: &str = "equals?";
@@ -104,7 +105,7 @@ fn equality_impl_target(block: &ImplBlock) -> Option<String> {
 fn type_expr_head(te: &TypeExpr) -> Option<&str> {
     match te {
         TypeExpr::Named { path, .. } | TypeExpr::Generic { path, .. } => {
-            path.last().map(String::as_str)
+            path.last().map(Name::as_str)
         }
         TypeExpr::Function { .. }
         | TypeExpr::Self_ { .. }
@@ -119,7 +120,7 @@ fn type_expr_head(te: &TypeExpr) -> Option<&str> {
 /// [`StructDecl::path`] / [`EnumDecl::path`].
 fn type_expr_path(te: &TypeExpr) -> Option<String> {
     match te {
-        TypeExpr::Named { path, .. } | TypeExpr::Generic { path, .. } => Some(path.join(".")),
+        TypeExpr::Named { path, .. } | TypeExpr::Generic { path, .. } => Some(path_text(path)),
         _ => None,
     }
 }
@@ -175,13 +176,13 @@ fn equality_impl_block(
 /// Mirrors the type's own generic params on the impl target so the
 /// impl monomorphizes alongside the type.
 fn self_target_type(path: &[Name], type_params: &[TypeParam], span: Span) -> TypeExpr {
-    let path = name_texts(path);
+    let path = synthetic_path(path, span);
     if type_params.is_empty() {
         TypeExpr::Named { path, span }
     } else {
         let args = type_params
             .iter()
-            .map(|tp| named_type(&tp.name, span))
+            .map(|tp| named_type(tp.name.as_str(), span))
             .collect();
         TypeExpr::Generic { path, args, span }
     }
@@ -193,7 +194,7 @@ fn equality_trait_expr(span: Span) -> TypeExpr {
 
 fn named_type(name: &str, span: Span) -> TypeExpr {
     TypeExpr::Named {
-        path: vec![name.to_string()],
+        path: vec![Name::new(name, span)],
         span,
     }
 }
@@ -212,7 +213,7 @@ fn eq_function(other_type: TypeExpr, body_expr: Expr, span: Span) -> Function {
                 span,
             },
             Param::Regular {
-                name: OTHER_PARAM.to_string(),
+                name: Name::new(OTHER_PARAM, span),
                 type_expr: other_type,
                 default: None,
                 local_id: None,
@@ -240,9 +241,9 @@ fn struct_eq_body(fields: &[StructField], span: Span) -> Expr {
 
 /// `self.<name>.equals?(other.<name>)` against the matching field on
 /// `other`.
-fn field_eq_call(name: &str, span: Span) -> Expr {
-    let self_field = field_access(self_expr(span), name, span);
-    let other_field = field_access(ident_expr(OTHER_PARAM, span), name, span);
+fn field_eq_call(name: &Name, span: Span) -> Expr {
+    let self_field = field_access(self_expr(span), name.as_str(), span);
+    let other_field = field_access(ident_expr(OTHER_PARAM, span), name.as_str(), span);
     method_call_one_arg(self_field, EQ_METHOD, other_field, span)
 }
 
@@ -302,7 +303,7 @@ fn outer_variant_arm(
 
 fn inner_match_for_unit(
     enum_path: &[Name],
-    variant_name: &str,
+    variant_name: &Name,
     all_variants: &[EnumVariant],
     span: Span,
 ) -> Expr {
@@ -320,7 +321,7 @@ fn inner_match_for_unit(
 
 fn inner_match_for_tuple(
     enum_path: &[Name],
-    variant_name: &str,
+    variant_name: &Name,
     l_bindings: &[String],
     arity: usize,
     all_variants: &[EnumVariant],
@@ -350,7 +351,7 @@ fn inner_match_for_tuple(
 
 fn inner_match_for_struct(
     enum_path: &[Name],
-    variant_name: &str,
+    variant_name: &Name,
     fields: &[StructField],
     all_variants: &[EnumVariant],
     span: Span,
@@ -403,17 +404,17 @@ fn wildcard_false_arm(span: Span) -> MatchArm {
     }
 }
 
-fn enum_unit_pattern(enum_path: &[Name], variant_name: &str, span: Span) -> Pattern {
+fn enum_unit_pattern(enum_path: &[Name], variant_name: &Name, span: Span) -> Pattern {
     Pattern::EnumUnit {
-        type_path: name_texts(enum_path),
-        variant: variant_name.to_string(),
+        type_path: synthetic_path(enum_path, span),
+        variant: Name::new(variant_name.as_str(), span),
         span,
     }
 }
 
 fn enum_tuple_pattern(
     enum_path: &[Name],
-    variant_name: &str,
+    variant_name: &Name,
     bindings: &[String],
     span: Span,
 ) -> Pattern {
@@ -421,13 +422,13 @@ fn enum_tuple_pattern(
         .iter()
         .map(|name| Pattern::Binding {
             local_id: None,
-            name: name.clone(),
+            name: Name::new(name, span),
             span,
         })
         .collect();
     Pattern::EnumTuple {
-        type_path: name_texts(enum_path),
-        variant: variant_name.to_string(),
+        type_path: synthetic_path(enum_path, span),
+        variant: Name::new(variant_name.as_str(), span),
         elements,
         span,
     }
@@ -435,7 +436,7 @@ fn enum_tuple_pattern(
 
 fn enum_struct_pattern(
     enum_path: &[Name],
-    variant_name: &str,
+    variant_name: &Name,
     fields: &[StructField],
     binding_prefix: &str,
     span: Span,
@@ -443,18 +444,18 @@ fn enum_struct_pattern(
     let field_patterns = fields
         .iter()
         .map(|f| FieldPattern {
-            name: f.name.clone(),
+            name: Name::new(f.name.as_str(), span),
             pattern: Pattern::Binding {
                 local_id: None,
-                name: format!("{binding_prefix}{}", f.name),
+                name: Name::new(format!("{binding_prefix}{}", f.name), span),
                 span,
             },
             span,
         })
         .collect();
     Pattern::EnumStruct {
-        type_path: name_texts(enum_path),
-        variant: variant_name.to_string(),
+        type_path: synthetic_path(enum_path, span),
+        variant: Name::new(variant_name.as_str(), span),
         fields: field_patterns,
         span,
     }
@@ -498,7 +499,7 @@ fn field_access(receiver: Expr, field: &str, span: Span) -> Expr {
     Expr::new(
         ExprKind::FieldAccess {
             receiver: Box::new(receiver),
-            field: field.to_string(),
+            field: Name::new(field, span),
         },
         span,
     )
@@ -508,7 +509,7 @@ fn method_call_one_arg(receiver: Expr, method: &str, arg: Expr, span: Span) -> E
     Expr::new(
         ExprKind::MethodCall {
             receiver: Box::new(receiver),
-            method: method.to_string(),
+            method: Name::new(method, span),
             args: vec![Arg {
                 name: None,
                 value: arg,

@@ -76,7 +76,7 @@ impl Parser {
 
     fn parse_type_param(&mut self) -> TypeParam {
         let span = self.current_span();
-        let name = self.expect_type_ident();
+        let name = self.expect_type_name();
         let mut bounds = Vec::new();
         if self.eat(&TokenKind::Colon).is_some() {
             bounds.push(self.parse_primary_type_expr());

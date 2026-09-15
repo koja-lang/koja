@@ -98,11 +98,11 @@ impl Printer {
 
     fn enum_variant_to_doc(&mut self, variant: &EnumVariant) -> Doc {
         match &variant.data {
-            EnumVariantData::Unit => text(&variant.name),
+            EnumVariantData::Unit => text(&variant.name.text),
             EnumVariantData::Tuple(types) => {
                 let inner: Vec<Doc> = types.iter().map(type_expr_to_doc).collect();
                 concat(vec![
-                    text(&variant.name),
+                    text(&variant.name.text),
                     text("("),
                     intersperse(inner, text(", ")),
                     text(")"),
@@ -114,7 +114,7 @@ impl Printer {
                     |field| field.span,
                     |p, field| p.struct_field_to_doc(field),
                 );
-                self.field_list_to_doc(text(&variant.name), entries, variant.span)
+                self.field_list_to_doc(text(&variant.name.text), entries, variant.span)
             }
         }
     }
@@ -212,7 +212,7 @@ impl Printer {
                 default,
                 ..
             } => {
-                let mut parts = vec![text(name.clone()), text(": "), type_expr_to_doc(type_expr)];
+                let mut parts = vec![text(&name.text), text(": "), type_expr_to_doc(type_expr)];
                 if let Some(d) = default {
                     parts.push(text(" = "));
                     parts.push(self.expr_to_doc(d));
@@ -334,7 +334,7 @@ impl Printer {
     /// field and its trailing comment.
     fn struct_field_to_doc(&mut self, field: &StructField) -> Doc {
         let mut d = concat(vec![
-            text(&field.name),
+            text(&field.name.text),
             text(": "),
             type_expr_to_doc(&field.type_expr),
         ]);

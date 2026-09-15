@@ -21,7 +21,7 @@
 
 use koja_ast::ast::{
     AliasDecl, Diagnostic, EnumConstructionData, EnumDecl, EnumVariantData, Expr, ExprKind,
-    FieldInit, StructDecl, StructField, name_texts,
+    FieldInit, Name, StructDecl, StructField, name_texts,
 };
 use koja_ast::identifier::{GlobalRegistryId, Identifier, ResolvedType};
 use koja_ast::span::Span;
@@ -77,7 +77,7 @@ pub(super) fn resolve_enum_defaults(
         let EnumVariantData::Struct(fields) = &mut variant.data else {
             continue;
         };
-        let Some((_, lifted)) = definition.lookup_variant(&variant.name) else {
+        let Some((_, lifted)) = definition.lookup_variant(variant.name.as_str()) else {
             continue;
         };
         let ResolvedVariantData::Struct(declared) = &lifted.data else {
@@ -99,7 +99,7 @@ fn resolve_field_defaults(
         let Some(default) = field.default.as_mut() else {
             continue;
         };
-        let Some(lifted) = declared.iter().find(|f| f.name == field.name) else {
+        let Some(lifted) = declared.iter().find(|f| f.name == field.name.text) else {
             continue;
         };
         // Lift's shape check rejected this default (`None` slot), so
@@ -110,7 +110,7 @@ fn resolve_field_defaults(
         resolve_declared_default(
             default,
             &lifted.ty,
-            &field.name,
+            field.name.as_str(),
             owner_label,
             env,
             diagnostics,
@@ -244,10 +244,11 @@ pub(super) fn synthesize_default_init(
         );
     }
 
+    let span = construction_span.as_synthetic();
     Some(FieldInit {
-        name: declared_field.name.clone(),
+        name: Name::new(declared_field.name.clone(), span),
         value,
-        span: construction_span.as_synthetic(),
+        span,
     })
 }
 

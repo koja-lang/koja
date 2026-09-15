@@ -8,7 +8,7 @@
 //! immutable registry borrow before the resolver re-borrows itself
 //! mutably to recurse into payload sub-patterns.
 
-use koja_ast::ast::{Diagnostic, FieldPattern, Pattern};
+use koja_ast::ast::{Diagnostic, FieldPattern, Name, Pattern, name_texts, path_text};
 use koja_ast::identifier::{GlobalRegistryId, Resolution, ResolvedType};
 use koja_ast::span::Span;
 
@@ -21,8 +21,8 @@ use crate::pipeline::visibility::check_reference_visibility;
 use crate::registry::{EnumDefinition, GlobalKind, ResolvedStructField, ResolvedVariantData};
 
 pub(super) fn resolve_enum_unit_pattern(
-    type_path: &[String],
-    variant_name: &str,
+    type_path: &[Name],
+    variant_name: &Name,
     subject_ty: &ResolvedType,
     span: Span,
     resolver: &Resolver<'_>,
@@ -32,7 +32,7 @@ pub(super) fn resolve_enum_unit_pattern(
     else {
         return;
     };
-    let Some((_, variant)) = target.definition.lookup_variant(variant_name) else {
+    let Some((_, variant)) = target.definition.lookup_variant(variant_name.as_str()) else {
         diagnostics.push(Diagnostic::error(
             format!("`{}` has no variant `{variant_name}`", target.label),
             span,
@@ -52,8 +52,8 @@ pub(super) fn resolve_enum_unit_pattern(
 }
 
 pub(super) fn resolve_enum_tuple_pattern(
-    type_path: &[String],
-    variant_name: &str,
+    type_path: &[Name],
+    variant_name: &Name,
     elements: &mut [Pattern],
     subject_ty: &ResolvedType,
     span: Span,
@@ -79,8 +79,8 @@ pub(super) fn resolve_enum_tuple_pattern(
 }
 
 pub(super) fn resolve_enum_struct_pattern(
-    type_path: &[String],
-    variant_name: &str,
+    type_path: &[Name],
+    variant_name: &Name,
     fields: &mut [FieldPattern],
     subject_ty: &ResolvedType,
     span: Span,
@@ -114,8 +114,8 @@ pub(super) fn resolve_enum_struct_pattern(
 /// before [`resolve_enum_tuple_pattern`] re-borrows the resolver
 /// mutably to recurse into payload sub-patterns.
 fn resolve_enum_tuple_element_types(
-    type_path: &[String],
-    variant_name: &str,
+    type_path: &[Name],
+    variant_name: &Name,
     supplied_arity: usize,
     subject_ty: &ResolvedType,
     span: Span,
@@ -123,7 +123,7 @@ fn resolve_enum_tuple_element_types(
     diagnostics: &mut Vec<Diagnostic>,
 ) -> Option<Vec<ResolvedType>> {
     let target = lookup_pattern_enum(type_path, subject_ty, span, resolver, diagnostics)?;
-    let Some((_, variant)) = target.definition.lookup_variant(variant_name) else {
+    let Some((_, variant)) = target.definition.lookup_variant(variant_name.as_str()) else {
         diagnostics.push(Diagnostic::error(
             format!("`{}` has no variant `{variant_name}`", target.label),
             span,
@@ -167,15 +167,15 @@ struct EnumStructPatternMetadata {
 /// borrow ends before the per-field walk re-borrows the resolver
 /// mutably to recurse into bindings.
 fn resolve_enum_struct_metadata(
-    type_path: &[String],
-    variant_name: &str,
+    type_path: &[Name],
+    variant_name: &Name,
     subject_ty: &ResolvedType,
     span: Span,
     resolver: &Resolver<'_>,
     diagnostics: &mut Vec<Diagnostic>,
 ) -> Option<EnumStructPatternMetadata> {
     let target = lookup_pattern_enum(type_path, subject_ty, span, resolver, diagnostics)?;
-    let Some((_, variant)) = target.definition.lookup_variant(variant_name) else {
+    let Some((_, variant)) = target.definition.lookup_variant(variant_name.as_str()) else {
         diagnostics.push(Diagnostic::error(
             format!("`{}` has no variant `{variant_name}`", target.label),
             span,
@@ -231,17 +231,18 @@ pub(super) struct EnumPatternTarget<'a> {
 /// validate its head matches `subject_ty`'s head. Emits diagnostics
 /// for unknown paths, non-enum heads, and subject mismatches.
 pub(super) fn lookup_pattern_enum<'a>(
-    type_path: &[String],
+    type_path: &[Name],
     subject_ty: &ResolvedType,
     span: Span,
     resolver: &'a Resolver<'_>,
     diagnostics: &mut Vec<Diagnostic>,
 ) -> Option<EnumPatternTarget<'a>> {
-    let Some((enum_id, entry)) = lookup_type(type_path, resolver.resolution_scope()) else {
+    let Some((enum_id, entry)) = lookup_type(&name_texts(type_path), resolver.resolution_scope())
+    else {
         diagnostics.push(Diagnostic::error(
             format!(
                 "typecheck does not recognize the enum type `{}`",
-                type_path.join("."),
+                path_text(type_path),
             ),
             span,
         ));

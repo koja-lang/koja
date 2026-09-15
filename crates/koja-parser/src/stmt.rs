@@ -62,7 +62,7 @@ impl Parser {
                 let span = self.span_from(start_span);
 
                 let name = if let ExprKind::Ident { name, .. } = &expr.kind {
-                    name.clone()
+                    Name::new(name.clone(), expr.span)
                 } else {
                     unreachable!()
                 };
@@ -102,7 +102,7 @@ impl Parser {
                     LValue {
                         head_resolved_type: None,
                         local_id: None,
-                        segments: vec![ERROR_IDENT.to_string()],
+                        segments: vec![Name::new(ERROR_IDENT, start_span)],
                         span: start_span,
                     }
                 });
@@ -131,7 +131,7 @@ impl Parser {
                     LValue {
                         head_resolved_type: None,
                         local_id: None,
-                        segments: vec![ERROR_IDENT.to_string()],
+                        segments: vec![Name::new(ERROR_IDENT, start_span)],
                         span: start_span,
                     }
                 };
@@ -162,7 +162,7 @@ impl Parser {
             ExprKind::Ident { name, .. } if name == "_" => Pattern::Wildcard { span: expr.span },
             ExprKind::Ident { name, .. } => Pattern::Binding {
                 local_id: None,
-                name: name.clone(),
+                name: Name::new(name.clone(), expr.span),
                 span: expr.span,
             },
             _ => {
@@ -184,13 +184,13 @@ fn try_expr_to_lvalue(expr: &Expr) -> Option<LValue> {
         ExprKind::Ident { name, .. } => Some(LValue {
             head_resolved_type: None,
             local_id: None,
-            segments: vec![name.clone()],
+            segments: vec![Name::new(name.clone(), expr.span)],
             span: expr.span,
         }),
         ExprKind::Self_ { .. } => Some(LValue {
             head_resolved_type: None,
             local_id: None,
-            segments: vec!["self".to_string()],
+            segments: vec![Name::new("self", expr.span)],
             span: expr.span,
         }),
         ExprKind::FieldAccess {

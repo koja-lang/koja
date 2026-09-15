@@ -31,7 +31,7 @@
 
 use koja_ast::ast::{
     AssertSource, BinOp, Diagnostic, EnumConstructionData, Expr, ExprKind, FieldInit, Literal,
-    Statement, StringPart, UnaryOp,
+    Name, Statement, StringPart, UnaryOp,
 };
 use koja_ast::identifier::{Identifier, Resolution, ResolvedType};
 use koja_ast::span::Span;
@@ -136,8 +136,8 @@ pub(super) fn rewrite_assert_statement(
     let assertion = assertion_construction(&source, condition_span, left, right, message, span);
     let failure = Expr::new(
         ExprKind::EnumConstruction {
-            type_path: vec![TEST_PACKAGE.to_string(), FAILURE_TYPE.to_string()],
-            variant: ASSERTION_TYPE.to_string(),
+            type_path: vec![Name::new(TEST_PACKAGE, span), Name::new(FAILURE_TYPE, span)],
+            variant: Name::new(ASSERTION_TYPE, span),
             data: EnumConstructionData::Tuple(vec![assertion]),
         },
         span,
@@ -243,13 +243,16 @@ fn assertion_construction(
     span: Span,
 ) -> Expr {
     let field = |name: &str, value: Expr| FieldInit {
-        name: name.to_string(),
+        name: Name::new(name, span),
         value,
         span,
     };
     Expr::new(
         ExprKind::StructConstruction {
-            type_path: vec![TEST_PACKAGE.to_string(), ASSERTION_TYPE.to_string()],
+            type_path: vec![
+                Name::new(TEST_PACKAGE, span),
+                Name::new(ASSERTION_TYPE, span),
+            ],
             fields: vec![
                 field("column", int_literal(condition_span.start.column, span)),
                 field("expression", string_literal(&source.expression, span)),
@@ -280,8 +283,8 @@ fn none(span: Span) -> Expr {
 fn option_construction(variant: &str, data: EnumConstructionData, span: Span) -> Expr {
     Expr::new(
         ExprKind::EnumConstruction {
-            type_path: vec!["Option".to_string()],
-            variant: variant.to_string(),
+            type_path: vec![Name::new("Option", span)],
+            variant: Name::new(variant, span),
             data,
         },
         span,

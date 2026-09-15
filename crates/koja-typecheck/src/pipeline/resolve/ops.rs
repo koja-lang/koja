@@ -21,7 +21,7 @@
 //! [`LiteralCoercion`], the same plumbing the four existing coercion
 //! sites use, just invoked at one more site.
 
-use koja_ast::ast::{Arg, BinOp, Diagnostic, Expr, ExprKind, UnaryOp};
+use koja_ast::ast::{Arg, BinOp, Diagnostic, Expr, ExprKind, Name, UnaryOp};
 use koja_ast::coercion::LiteralCoercion;
 use koja_ast::identifier::{Resolution, ResolvedType};
 use koja_ast::labels::bin_op_label;
@@ -72,7 +72,7 @@ pub(super) fn resolve_equality_op_expr(
     let right_taken = std::mem::replace(right.as_mut(), placeholder_expr(span));
     let method_call = ExprKind::MethodCall {
         receiver: Box::new(left_taken),
-        method: EQ_METHOD.to_string(),
+        method: Name::new(EQ_METHOD, span),
         args: vec![Arg {
             name: None,
             value: right_taken,

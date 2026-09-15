@@ -5,7 +5,7 @@
 //! names become first-class values.
 
 use koja_ast::ast::{
-    ClosureParam, EnumConstructionData, Expr, ExprKind, MatchArm, Pattern, StringPart,
+    ClosureParam, EnumConstructionData, Expr, ExprKind, MatchArm, Pattern, StringPart, path_text,
 };
 use koja_ast::identifier::{AnonymousKind, Resolution, ResolvedType};
 use koja_ast::labels::{expr_kind_label, pattern_kind_label, pattern_span};
@@ -166,7 +166,7 @@ pub(super) fn seal_expr(expr: &Expr, mode: SealMode) {
                 seal_panic(
                     &format!(
                         "named function reference `&{}/{arity}` has no global target",
-                        path.join(".")
+                        path_text(path)
                     ),
                     expr.span,
                 );

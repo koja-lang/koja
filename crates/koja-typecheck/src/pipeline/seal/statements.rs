@@ -4,7 +4,7 @@
 //! with at least one segment and a stamped head `LocalId`. Reaching
 //! seal with anything else is an upstream bug.
 
-use koja_ast::ast::{LValue, Statement};
+use koja_ast::ast::{LValue, Statement, path_text};
 use koja_ast::span::Span;
 
 use super::expressions::seal_expr;
@@ -61,7 +61,7 @@ fn seal_lvalue_shape(lvalue: &LValue, role: &str, statement_span: Span) {
             &format!(
                 "{role} target `{}` carries no LocalId; resolver should have stamped it on \
                  success or diagnosed otherwise",
-                lvalue.segments.join("."),
+                path_text(&lvalue.segments),
             ),
             statement_span,
         );

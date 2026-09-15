@@ -15,7 +15,7 @@
 
 use std::collections::BTreeMap;
 
-use koja_ast::ast::{AnnotationKind, Diagnostic, Expr, FieldInit, StructDecl, name_texts};
+use koja_ast::ast::{AnnotationKind, Diagnostic, Expr, FieldInit, Name, StructDecl, name_texts};
 use koja_ast::identifier::{Identifier, Resolution, ResolvedType};
 use koja_typecheck::{
     GlobalKind, GlobalRegistry, RegistryEntry, ResolvedStructField, StructDefinition,
@@ -156,7 +156,7 @@ pub(super) fn canonicalize_struct_inits(
         // source local's scope-exit drop.
         let field_ty = ctx.type_of(value);
         let owned = materialize_owned(ctx, current, value, &field_ty);
-        values_by_name.insert(field.name.clone(), owned);
+        values_by_name.insert(field.name.text.clone(), owned);
         current = next;
     }
 
@@ -182,7 +182,7 @@ pub(super) fn canonicalize_struct_inits(
 /// `expr.resolution`) sizes the result.
 pub(super) fn lower_field_access(
     receiver: &Expr,
-    field: &str,
+    field: &Name,
     field_resolution: &ResolvedType,
     ctx: &mut FnLowerCtx,
     block: IRBlockId,
@@ -192,7 +192,7 @@ pub(super) fn lower_field_access(
     let (base, current) = lower_expr(receiver, ctx, block, registry, output)?;
     let definition =
         struct_definition_from_resolution(&receiver.resolution, registry, "field access");
-    let (field_index, _) = definition.lookup_field(field).unwrap_or_else(|| {
+    let (field_index, _) = definition.lookup_field(field.as_str()).unwrap_or_else(|| {
         panic!(
             "IR lower: field access missing field `{field}` after typecheck seal \
              (resolve invariant violation)",

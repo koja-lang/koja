@@ -53,13 +53,16 @@ pub(super) fn lower_struct_check(
     let mut steps = Vec::new();
     let mut current_block = block;
     for field in fields {
-        let (field_index, declared) = definition.lookup_field(&field.name).unwrap_or_else(|| {
-            panic!(
-                "IR lower: struct pattern references unknown field `{}` \
+        let (field_index, declared) =
+            definition
+                .lookup_field(field.name.as_str())
+                .unwrap_or_else(|| {
+                    panic!(
+                        "IR lower: struct pattern references unknown field `{}` \
                  (typecheck invariant violation)",
-                field.name,
-            )
-        });
+                        field.name,
+                    )
+                });
         let (field_resolved_ty, field_ir_type) =
             field_type_for(&declared.ty, owner, inputs, output);
         let prefix = BindStep {
@@ -253,8 +256,9 @@ fn collect_catch_all_binds(
                 subject_ty: sub_resolved_ty,
             };
             for field in fields {
-                let (field_index, declared) =
-                    definition.lookup_field(&field.name).unwrap_or_else(|| {
+                let (field_index, declared) = definition
+                    .lookup_field(field.name.as_str())
+                    .unwrap_or_else(|| {
                         panic!(
                             "IR lower: nested struct pattern references unknown \
                              field `{}` (typecheck invariant violation)",

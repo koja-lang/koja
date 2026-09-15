@@ -13,7 +13,7 @@
 //! construction / static methods) so the diagnostic surface stays
 //! parallel between the two type-decl families.
 
-use koja_ast::ast::{EnumConstructionData, ExprKind};
+use koja_ast::ast::{EnumConstructionData, ExprKind, name_texts};
 use koja_ast::identifier::{Resolution, ResolvedType};
 use koja_ast::util::dedent;
 use koja_typecheck::{EnumDefinition, ResolvedEnumVariant, ResolvedVariantData};
@@ -147,7 +147,7 @@ fn unit_variant_construction_resolves_to_enum_leaf() {
     else {
         panic!("expected EnumConstruction, got {:?}", trailing.kind);
     };
-    assert_eq!(type_path, &["Color".to_string()]);
+    assert_eq!(name_texts(type_path), ["Color"]);
     assert_eq!(variant, "Red");
     assert!(matches!(data, EnumConstructionData::Unit));
 }

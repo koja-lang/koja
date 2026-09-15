@@ -1,7 +1,7 @@
 //! Coverage for statement parsing: assignment / typed assignment /
 //! compound assignment / `return` / `break`.
 
-use koja_ast::ast::{CompoundOp, ExprKind, Statement, TypeExpr};
+use koja_ast::ast::{CompoundOp, ExprKind, Statement, TypeExpr, name_texts};
 
 mod common;
 
@@ -48,7 +48,7 @@ fn typed_assignment() {
         } => {
             assert!(matches!(
                 type_annotation,
-                Some(TypeExpr::Named { path, .. }) if path == &vec!["Int".to_string()]
+                Some(TypeExpr::Named { path, .. }) if name_texts(path) == ["Int"]
             ));
         }
         other => panic!("expected Assignment, got {other:?}"),

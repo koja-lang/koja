@@ -6,7 +6,7 @@
 //!   recognises the `->` and calls [`Parser::expr_to_closure_params`]
 //!   to reinterpret the already-parsed LHS as a parameter shape.
 
-use koja_ast::ast::{ClosureParam, Expr, ExprKind};
+use koja_ast::ast::{ClosureParam, Expr, ExprKind, Name};
 use koja_ast::span::Span;
 use koja_ast::token::TokenKind;
 
@@ -50,8 +50,8 @@ impl Parser {
                     span: self.span_from(start),
                 }
             }
-            TokenKind::Ident(name) => {
-                self.advance();
+            TokenKind::Ident(_) => {
+                let name = self.expect_name();
                 let type_expr = if self.eat(&TokenKind::Colon).is_some() {
                     Some(self.parse_type_expr())
                 } else {
@@ -97,7 +97,7 @@ impl Parser {
             ExprKind::Ident { name, .. } => {
                 vec![ClosureParam::Name {
                     local_id: None,
-                    name: name.clone(),
+                    name: Name::new(name.clone(), expr.span),
                     span: expr.span,
                     type_expr: None,
                 }]

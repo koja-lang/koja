@@ -310,7 +310,7 @@ fn bind_receive_pattern(
         ));
         return None;
     }
-    let id = resolver.scope.declare(name, resolved.clone());
+    let id = resolver.scope.declare(name.as_str(), resolved.clone());
     *local_id = Some(id);
     *resolved_type = Some(resolved.clone());
     Some(resolved)

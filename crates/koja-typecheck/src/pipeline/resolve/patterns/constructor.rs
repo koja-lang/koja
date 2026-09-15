@@ -9,7 +9,7 @@
 //! generics-substitute, and IR lowering therefore never see a
 //! `Pattern::Constructor`.
 
-use koja_ast::ast::{Diagnostic, Pattern};
+use koja_ast::ast::{Diagnostic, Name, Pattern};
 use koja_ast::identifier::{Resolution, ResolvedType};
 
 use super::super::ctx::Resolver;
@@ -35,7 +35,7 @@ pub(super) fn resolve_constructor_pattern(
                 unreachable!("resolve_constructor_pattern dispatched on non-Constructor");
             };
             let span = *span;
-            let name_owned = std::mem::take(name);
+            let name_owned = name.clone();
             let elements_owned = std::mem::take(elements);
             *pat = match metadata.kind {
                 ConstructorRewrite::Unit => Pattern::EnumUnit {
@@ -70,7 +70,7 @@ enum ConstructorRewrite {
 
 struct ConstructorMetadata {
     kind: ConstructorRewrite,
-    type_path: Vec<String>,
+    type_path: Vec<Name>,
 }
 
 /// Resolve the subject's enum, look the variant up by `name`, and
@@ -132,7 +132,7 @@ fn constructor_metadata(
         return Err(());
     };
     let label = entry.identifier.to_string();
-    let Some((_index, variant)) = definition.lookup_variant(name) else {
+    let Some((_index, variant)) = definition.lookup_variant(name.as_str()) else {
         let known: Vec<String> = definition.variants.iter().map(|v| v.name.clone()).collect();
         diagnostics.push(Diagnostic::error(
             format!(
@@ -169,6 +169,6 @@ fn constructor_metadata(
             return Err(());
         }
     };
-    let type_path = vec![entry.identifier.last().to_string()];
+    let type_path = vec![Name::new(entry.identifier.last(), span)];
     Ok(ConstructorMetadata { kind, type_path })
 }

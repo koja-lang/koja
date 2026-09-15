@@ -123,7 +123,7 @@ fn lower_constant_value(expr: &Expr, registry: &GlobalRegistry) -> Option<IRCons
             let GlobalKind::Enum(Some(enum_def)) = &entry.kind else {
                 return None;
             };
-            let (tag, _) = enum_def.lookup_variant(variant)?;
+            let (tag, _) = enum_def.lookup_variant(variant.as_str())?;
             let symbol = IRSymbol::from_identifier(&entry.identifier);
             Some(IRConstantValue::EnumVariant {
                 tag: IRVariantTag(tag as u8),
@@ -144,7 +144,7 @@ fn lower_constant_value(expr: &Expr, registry: &GlobalRegistry) -> Option<IRCons
             };
             let mut canonical: Vec<Option<IRConstantValue>> = vec![None; struct_def.fields.len()];
             for init in fields {
-                let (index, _) = struct_def.lookup_field(&init.name)?;
+                let (index, _) = struct_def.lookup_field(init.name.as_str())?;
                 let value = lower_constant_value(&init.value, registry)?;
                 canonical[index as usize] = Some(value);
             }

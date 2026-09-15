@@ -7,7 +7,7 @@
 //! [`super::calls`]. Only the dispatcher entries live here, which fan
 //! out to it.
 
-use koja_ast::ast::{BinOp, Diagnostic, Expr, ExprKind, Literal, StringPart, UnaryOp};
+use koja_ast::ast::{BinOp, Diagnostic, Expr, ExprKind, Literal, StringPart, UnaryOp, path_text};
 use koja_ast::coercion::Coercion;
 use koja_ast::identifier::{GlobalRegistryId, LocalId, Resolution, ResolvedType};
 use koja_ast::labels::expr_kind_label;
@@ -342,12 +342,12 @@ fn lower_expr_inner(
             let Resolution::Global(function_id) = target else {
                 panic!(
                     "IR lower: named function reference `&{}/{arity}` has no exact target",
-                    path.join(".")
+                    path_text(path)
                 )
             };
             Ok(lower_fn_as_value(
                 *function_id,
-                &path.join("."),
+                &path_text(path),
                 &expr.resolution,
                 ctx,
                 block,

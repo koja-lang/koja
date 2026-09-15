@@ -8,7 +8,7 @@
 //!   names are PascalCase (e.g. `Net`, `HTTP`, `JSON`) and the path
 //!   must end with a `TypeIdent` segment.
 
-use koja_ast::ast::{AliasDecl, Annotation, Item, TypeAlias, Visibility};
+use koja_ast::ast::{AliasDecl, Annotation, Item, Name, TypeAlias, Visibility};
 use koja_ast::token::TokenKind;
 
 use crate::parser::Parser;
@@ -48,9 +48,11 @@ impl Parser {
 
         let path = self.parse_alias_path();
         let local_name = if self.eat(&TokenKind::Ident("as".to_string())).is_some() {
-            self.expect_type_ident()
+            self.expect_type_name()
         } else {
-            path.last().cloned().unwrap_or_default()
+            path.last()
+                .cloned()
+                .unwrap_or_else(|| Name::new(String::new(), self.current_span()))
         };
 
         Item::Alias(AliasDecl {
@@ -68,11 +70,11 @@ impl Parser {
     /// `TypeIdent` segments separated by `.`. The path must end on
     /// a `TypeIdent`. Anything else lands a diagnostic and
     /// short-circuits.
-    fn parse_alias_path(&mut self) -> Vec<String> {
+    fn parse_alias_path(&mut self) -> Vec<Name> {
         let mut path = Vec::new();
 
         while matches!(self.peek(), TokenKind::Ident(_)) {
-            path.push(self.expect_ident());
+            path.push(self.expect_name());
             if self.eat(&TokenKind::Dot).is_none() {
                 self.error(
                     "alias path must end with a type name (PascalCase)".to_string(),
@@ -89,14 +91,13 @@ impl Parser {
             );
             return path;
         }
-        path.push(self.expect_type_ident());
+        path.push(self.expect_type_name());
 
         while self.eat(&TokenKind::Dot).is_some() {
             match self.peek().clone() {
-                TokenKind::TypeIdent(_) => path.push(self.expect_type_ident()),
-                TokenKind::Ident(name) => {
-                    self.advance();
-                    path.push(name);
+                TokenKind::TypeIdent(_) => path.push(self.expect_type_name()),
+                TokenKind::Ident(_) => {
+                    path.push(self.expect_name());
                     self.error(
                         "alias path must end with a type name (PascalCase)".to_string(),
                         self.current_span(),

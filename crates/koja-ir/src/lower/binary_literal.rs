@@ -21,7 +21,7 @@
 
 use koja_ast::ast::{
     BinaryEndianness, BinarySegment, BinarySignedness, BinaryUnit, Diagnostic, Expr, ExprKind,
-    Literal, StringPart, TypeExpr,
+    Literal, Name, StringPart, TypeExpr,
 };
 use koja_ast::span::Span;
 use koja_typecheck::GlobalRegistry;
@@ -266,7 +266,7 @@ pub(super) fn classify_segment(
 
     if let Some(type_ann) = &segment.type_ann {
         if let TypeExpr::Named { path, .. } = type_ann {
-            let name = path.last().map(String::as_str).unwrap_or("");
+            let name = path.last().map(Name::as_str).unwrap_or("");
             return Ok(match name {
                 "Binary" => ClassifiedSegment::Splice,
                 "Float32" => ClassifiedSegment::Float { width: 32 },

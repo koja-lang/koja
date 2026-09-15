@@ -23,7 +23,7 @@
 //! the default carrier. That's the only graceful-degradation point:
 //! a missing default-carrier autoimport is a hard diagnostic.
 
-use koja_ast::ast::{Arg, Diagnostic, Expr, ExprKind};
+use koja_ast::ast::{Arg, Diagnostic, Expr, ExprKind, Name};
 use koja_ast::identifier::{GlobalRegistryId, Identifier, Resolution, ResolvedType};
 use koja_ast::span::Span;
 
@@ -176,7 +176,7 @@ pub(super) fn dispatch_via_carrier(
             let receiver = static_receiver(path, *ident_span);
             expr.kind = ExprKind::MethodCall {
                 receiver: Box::new(receiver),
-                method: spec.from_method.to_string(),
+                method: Name::new(spec.from_method, span),
                 args: vec![Arg {
                     name: None,
                     span,
@@ -213,7 +213,7 @@ fn static_receiver(path: &[String], span: Span) -> Expr {
             Expr::new(
                 ExprKind::FieldAccess {
                     receiver: Box::new(receiver),
-                    field: field.clone(),
+                    field: Name::new(field.clone(), span),
                 },
                 span,
             )

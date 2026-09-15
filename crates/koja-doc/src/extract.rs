@@ -11,7 +11,7 @@
 use koja_ast::ast::{
     AnnotationKind, AnnotationValue, BuiltinDecl, EnumDecl, Expr, ExprKind, ExtendBlock, File,
     Function, ImplMember, Item, Literal, Name, Param, ProtocolDecl, ProtocolMethod, StringPart,
-    StructDecl, TypeExpr, UnaryOp, Visibility, name_texts,
+    StructDecl, TypeExpr, UnaryOp, Visibility, name_texts, path_text,
 };
 use koja_ast::util::dedent;
 
@@ -521,7 +521,7 @@ fn make_pending_extend(ext: &ExtendBlock, current_package: &str) -> Option<Pendi
     Some(PendingExtend {
         current_package: current_package.to_string(),
         functions,
-        target_path: path.clone(),
+        target_path: name_texts(path),
     })
 }
 
@@ -542,7 +542,7 @@ fn extract_enum(e: &EnumDecl, path: &[String]) -> Option<DocEnum> {
         return None;
     }
 
-    let variants = e.variants.iter().map(|v| v.name.clone()).collect();
+    let variants = e.variants.iter().map(|v| v.name.text.clone()).collect();
     let functions = e.functions.iter().filter_map(extract_function).collect();
 
     Some(DocEnum {
@@ -574,7 +574,11 @@ fn extract_function(f: &Function) -> Option<DocFunction> {
         name: f.name.text.clone(),
         params,
         return_type: f.return_type.as_ref().map(type_expr_to_string),
-        type_params: f.type_params.iter().map(|tp| tp.name.clone()).collect(),
+        type_params: f
+            .type_params
+            .iter()
+            .map(|tp| tp.name.text.clone())
+            .collect(),
     })
 }
 
@@ -589,7 +593,7 @@ fn extract_params(params: &[Param]) -> Vec<DocParam> {
             Param::Regular {
                 name, type_expr, ..
             } => DocParam {
-                name: name.clone(),
+                name: name.text.clone(),
                 type_name: type_expr_to_string(type_expr),
             },
         })
@@ -612,7 +616,11 @@ fn extract_protocol(p: &ProtocolDecl) -> Option<DocProtocol> {
         doc: annotation_string(&p.annotations),
         functions,
         name: p.name.text.clone(),
-        type_params: p.type_params.iter().map(|tp| tp.name.clone()).collect(),
+        type_params: p
+            .type_params
+            .iter()
+            .map(|tp| tp.name.text.clone())
+            .collect(),
     })
 }
 
@@ -635,7 +643,11 @@ fn extract_protocol_method(m: &ProtocolMethod) -> Option<DocFunction> {
         name: m.name.text.clone(),
         params,
         return_type: m.return_type.as_ref().map(type_expr_to_string),
-        type_params: m.type_params.iter().map(|tp| tp.name.clone()).collect(),
+        type_params: m
+            .type_params
+            .iter()
+            .map(|tp| tp.name.text.clone())
+            .collect(),
     })
 }
 
@@ -649,7 +661,7 @@ fn extract_struct(s: &StructDecl, path: &[String]) -> Option<DocStruct> {
         .iter()
         .map(|f| DocField {
             default: f.default.as_ref().map(default_to_string),
-            name: f.name.clone(),
+            name: f.name.text.clone(),
             type_name: type_expr_to_string(&f.type_expr),
         })
         .collect();
@@ -661,7 +673,11 @@ fn extract_struct(s: &StructDecl, path: &[String]) -> Option<DocStruct> {
         fields,
         functions,
         name: path.join("."),
-        type_params: s.type_params.iter().map(|tp| tp.name.clone()).collect(),
+        type_params: s
+            .type_params
+            .iter()
+            .map(|tp| tp.name.text.clone())
+            .collect(),
     })
 }
 
@@ -674,7 +690,11 @@ fn extract_builtin(b: &BuiltinDecl) -> Option<DocBuiltin> {
         doc: annotation_string(&b.annotations),
         functions: b.functions.iter().filter_map(extract_function).collect(),
         name: b.name().to_string(),
-        type_params: b.type_params.iter().map(|tp| tp.name.clone()).collect(),
+        type_params: b
+            .type_params
+            .iter()
+            .map(|tp| tp.name.text.clone())
+            .collect(),
     })
 }
 
@@ -708,7 +728,7 @@ fn default_to_string(expr: &Expr) -> String {
         }
         ExprKind::EnumConstruction {
             type_path, variant, ..
-        } => format!("{}.{variant}", type_path.join(".")),
+        } => format!("{}.{variant}", path_text(type_path)),
         ExprKind::Group { expr: inner } => format!("({})", default_to_string(inner)),
         ExprKind::List { elements } => {
             let parts: Vec<String> = elements.iter().map(default_to_string).collect();
@@ -747,7 +767,7 @@ fn default_to_string(expr: &Expr) -> String {
                 .iter()
                 .map(|field| format!("{}: {}", field.name, default_to_string(&field.value)))
                 .collect();
-            format!("{}{{{}}}", type_path.join("."), parts.join(", "))
+            format!("{}{{{}}}", path_text(type_path), parts.join(", "))
         }
         ExprKind::Unary {
             op: UnaryOp::Neg,
@@ -760,10 +780,10 @@ fn default_to_string(expr: &Expr) -> String {
 /// Format a type expression as a human-readable string.
 fn type_expr_to_string(ty: &TypeExpr) -> String {
     match ty {
-        TypeExpr::Named { path, .. } => path.join("."),
+        TypeExpr::Named { path, .. } => path_text(path),
         TypeExpr::Generic { path, args, .. } => {
             let args_str: Vec<String> = args.iter().map(type_expr_to_string).collect();
-            format!("{}<{}>", path.join("."), args_str.join(", "))
+            format!("{}<{}>", path_text(path), args_str.join(", "))
         }
         TypeExpr::Unit { .. } => "()".to_string(),
         TypeExpr::Self_ { .. } => "Self".to_string(),

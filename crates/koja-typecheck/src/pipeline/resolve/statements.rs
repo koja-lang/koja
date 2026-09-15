@@ -41,7 +41,7 @@
 //! [`LValue`]: koja_ast::ast::LValue
 //! [`Resolution::Local`]: koja_ast::identifier::Resolution::Local
 
-use koja_ast::ast::{CompoundOp, Diagnostic, Expr, LValue, Pattern, TypeExpr};
+use koja_ast::ast::{CompoundOp, Diagnostic, Expr, LValue, Pattern, TypeExpr, path_text};
 use koja_ast::identifier::{Identifier, LocalId, Resolution, ResolvedType};
 use koja_ast::labels::{
     compound_op_label, pattern_kind_label, pattern_span, type_expr_span as annotation_span,
@@ -156,7 +156,7 @@ fn declare_assignment_target(
     resolver: &mut Resolver<'_>,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
-    let name = lvalue.segments[0].clone();
+    let name = lvalue.segments[0].text.clone();
 
     let value_ty = value.resolution.clone();
     let already_declared = resolver.scope.lookup(&name).is_some();
@@ -282,8 +282,13 @@ fn bind_destructure_pattern(
             name,
             span,
         } => {
-            *local_id =
-                rebind_or_declare_local(name, subject_ty.clone(), *span, resolver, diagnostics);
+            *local_id = rebind_or_declare_local(
+                name.as_str(),
+                subject_ty.clone(),
+                *span,
+                resolver,
+                diagnostics,
+            );
         }
         Pattern::Tuple { elements, span } => {
             let Some(element_types) =
@@ -349,7 +354,7 @@ pub(super) fn resolve_compound_assignment(
     resolve_expr(value, resolver, diagnostics);
 
     let op_label = compound_op_label(op);
-    let name = target.segments[0].clone();
+    let name = target.segments[0].text.clone();
 
     let Some(head) = resolve_head_local(&name, target.span, resolver, diagnostics) else {
         if assigns_to_package_constant(&name, resolver) {
@@ -430,7 +435,7 @@ fn resolve_field_assignment(
     resolver: &mut Resolver<'_>,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
-    let head_name = lvalue.segments[0].clone();
+    let head_name = lvalue.segments[0].text.clone();
     let Some(head) = resolve_head_local(&head_name, lvalue.span, resolver, diagnostics) else {
         diagnostics.push(Diagnostic::error_with_hint(
             format!("cannot assign to `{}`", format_lvalue(lvalue)),
@@ -549,7 +554,7 @@ fn walk_field_segments(
             ));
             return None;
         };
-        let Some((_, declared)) = definition.lookup_field(segment) else {
+        let Some((_, declared)) = definition.lookup_field(segment.as_str()) else {
             diagnostics.push(Diagnostic::error(
                 format!("`{}` has no field `{segment}`", entry.identifier),
                 lvalue.span,
@@ -563,7 +568,7 @@ fn walk_field_segments(
 }
 
 fn format_lvalue(lvalue: &LValue) -> String {
-    lvalue.segments.join(".")
+    path_text(&lvalue.segments)
 }
 
 /// True when `name` is a package-level constant in the resolver's

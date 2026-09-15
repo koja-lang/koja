@@ -1,5 +1,5 @@
 use koja_ast::ast::{
-    BinOp, Expr, ExprKind, ImplBlock, ImplMember, Item, Literal, Statement, TypeExpr,
+    BinOp, Expr, ExprKind, ImplBlock, ImplMember, Item, Literal, Name, Statement, TypeExpr,
 };
 use koja_ast::identifier::Identifier;
 use koja_ast::util::dedent;
@@ -68,7 +68,7 @@ fn derives_equality(checked: &CheckedProgram, type_name: &str) -> bool {
 fn type_expr_head(type_expr: &TypeExpr) -> Option<&str> {
     match type_expr {
         TypeExpr::Generic { path, .. } | TypeExpr::Named { path, .. } => {
-            path.last().map(String::as_str)
+            path.last().map(Name::as_str)
         }
         _ => None,
     }

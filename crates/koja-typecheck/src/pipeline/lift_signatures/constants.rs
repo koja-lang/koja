@@ -13,7 +13,7 @@
 
 use koja_ast::ast::{
     BinarySegment, Constant, Diagnostic, EnumConstructionData, Expr, ExprKind, FieldInit, Literal,
-    StringPart, UnaryOp,
+    Name, StringPart, UnaryOp, name_texts,
 };
 use koja_ast::identifier::{Identifier, Resolution, ResolvedType};
 use koja_ast::span::Span;
@@ -317,14 +317,14 @@ fn negated_numeric_type(
 }
 
 fn enum_variant_type(
-    type_path: &[String],
-    variant: &str,
+    type_path: &[Name],
+    variant: &Name,
     data: &mut EnumConstructionData,
     span: Span,
     scope: ResolutionScope<'_>,
     diagnostics: &mut Vec<Diagnostic>,
 ) -> ResolvedType {
-    let Some(name) = type_path.last().map(String::as_str) else {
+    let Some(name) = type_path.last().map(Name::as_str) else {
         diagnostics.push(Diagnostic::error("missing enum name", span));
         return ResolvedType::unresolved();
     };
@@ -337,7 +337,7 @@ fn enum_variant_type(
         diagnostics.push(Diagnostic::error(format!("`{name}` is not an enum"), span));
         return ResolvedType::unresolved();
     };
-    let Some((_, resolved)) = def.lookup_variant(variant) else {
+    let Some((_, resolved)) = def.lookup_variant(variant.as_str()) else {
         diagnostics.push(Diagnostic::error(
             format!("enum `{name}` has no variant `{variant}`"),
             span,
@@ -366,13 +366,13 @@ fn enum_variant_type(
 }
 
 fn struct_construction_type(
-    type_path: &[String],
+    type_path: &[Name],
     fields: &mut [FieldInit],
     span: Span,
     scope: ResolutionScope<'_>,
     diagnostics: &mut Vec<Diagnostic>,
 ) -> ResolvedType {
-    let Some(name) = type_path.last().map(String::as_str) else {
+    let Some(name) = type_path.last().map(Name::as_str) else {
         diagnostics.push(Diagnostic::error("missing struct name", span));
         return ResolvedType::unresolved();
     };
@@ -402,7 +402,7 @@ fn struct_construction_type(
     for field_init in fields.iter_mut() {
         let expected = resolved_fields
             .iter()
-            .find(|f| f.name == field_init.name)
+            .find(|f| f.name == field_init.name.text)
             .map(|f| f.ty.clone());
         resolve_constant_value(&mut field_init.value, expected.as_ref(), scope, diagnostics);
     }
@@ -418,7 +418,7 @@ fn validate_struct_fields(
 ) -> bool {
     let mut ok = true;
     for field in expected {
-        if !actual.iter().any(|f| f.name == field.name) {
+        if !actual.iter().any(|f| f.name.text == field.name) {
             diagnostics.push(Diagnostic::error(
                 format!("constant `{struct_name}` is missing field `{}`", field.name,),
                 span,
@@ -427,7 +427,7 @@ fn validate_struct_fields(
         }
     }
     for init in actual {
-        if !expected.iter().any(|f| f.name == init.name) {
+        if !expected.iter().any(|f| f.name == init.name.text) {
             diagnostics.push(Diagnostic::error(
                 format!("`{struct_name}` has no field `{}`", init.name),
                 init.span,
@@ -447,13 +447,16 @@ fn validate_struct_fields(
 /// won't resolve until nested-type lifting lands (same fall-through
 /// behavior as `resolve_named` in [`super::types`]).
 fn lookup_constant_type_identifier(
-    type_path: &[String],
+    type_path: &[Name],
     name: &str,
     scope: ResolutionScope<'_>,
 ) -> Identifier {
-    if let Some(target) =
-        rewrite_through_aliases(scope.aliases, type_path, scope.package, scope.registry)
-    {
+    if let Some(target) = rewrite_through_aliases(
+        scope.aliases,
+        &name_texts(type_path),
+        scope.package,
+        scope.registry,
+    ) {
         return target;
     }
     Identifier::single(scope.package, name)

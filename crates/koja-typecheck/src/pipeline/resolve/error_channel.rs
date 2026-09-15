@@ -12,7 +12,7 @@
 //! misfire.
 
 use koja_ast::ast::{
-    Diagnostic, EnumConstructionData, Expr, ExprKind, Literal, MatchArm, Pattern, Statement,
+    Diagnostic, EnumConstructionData, Expr, ExprKind, Literal, MatchArm, Name, Pattern, Statement,
 };
 use koja_ast::identifier::{GlobalRegistryId, Identifier, Resolution, ResolvedType};
 use koja_ast::span::Span;
@@ -463,8 +463,8 @@ pub(super) fn ok_unit_construction(
 fn result_construction(variant: &str, payload: Expr, result: &ResolvedType, span: Span) -> Expr {
     let mut construction = Expr::new(
         ExprKind::EnumConstruction {
-            type_path: vec!["Result".to_string()],
-            variant: variant.to_string(),
+            type_path: vec![Name::new("Result", span)],
+            variant: Name::new(variant, span),
             data: EnumConstructionData::Tuple(vec![payload]),
         },
         span,
@@ -546,7 +546,7 @@ fn unwrap_arm(binder: &str, span: Span) -> MatchArm {
 fn variant_arm(variant: &str, element: Pattern, tail: Expr, span: Span) -> MatchArm {
     MatchArm {
         pattern: Pattern::Constructor {
-            name: variant.to_string(),
+            name: Name::new(variant, span),
             elements: vec![element],
             span,
         },
@@ -559,7 +559,7 @@ fn variant_arm(variant: &str, element: Pattern, tail: Expr, span: Span) -> Match
 fn binding_pattern(name: &str, span: Span) -> Pattern {
     Pattern::Binding {
         local_id: None,
-        name: name.to_string(),
+        name: Name::new(name, span),
         span,
     }
 }

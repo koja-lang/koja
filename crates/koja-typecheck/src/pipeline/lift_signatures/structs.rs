@@ -80,7 +80,7 @@ fn lift_struct_definition(
         );
         fields.push(ResolvedStructField {
             default: lift_field_default(field, diagnostics),
-            name: field.name.clone(),
+            name: field.name.text.clone(),
             ty,
         });
     }

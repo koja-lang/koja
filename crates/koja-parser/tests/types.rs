@@ -5,7 +5,7 @@
 //! when nested generics close two levels at once
 //! (`Map<String, List<Int>>`).
 
-use koja_ast::ast::TypeExpr;
+use koja_ast::ast::{TypeExpr, name_texts};
 
 mod common;
 
@@ -34,9 +34,7 @@ fn named_dotted_path() {
         end
         ",
     );
-    assert!(
-        matches!(ty, TypeExpr::Named { path, .. } if path == vec!["JSON".to_string(), "Decoder".to_string()])
-    );
+    assert!(matches!(ty, TypeExpr::Named { path, .. } if name_texts(&path) == ["JSON", "Decoder"]));
 }
 
 #[test]
@@ -177,7 +175,7 @@ fn package_qualified_generic_type() {
     );
     match ty {
         TypeExpr::Generic { path, .. } => {
-            assert_eq!(path, vec!["Pkg".to_string(), "Container".to_string()]);
+            assert_eq!(name_texts(&path), ["Pkg", "Container"]);
         }
         other => panic!("expected Generic, got {other:?}"),
     }
