@@ -40,7 +40,10 @@ and leaves a complete registry behind.
 - `rename.rs`: `prepare_rename` and `validate_new_name`. The refusal rules
   are here so every consumer applies the same ones.
 - `expr_at.rs`: innermost expression and enclosing call at a position, for
-  completion and signature help.
+  completion and signature help. `signature_for_target` maps a call's stamp
+  to its lifted signature.
+- `inlay.rs`: type hints for unannotated bindings and parameter name hints
+  for positional arguments, filtered to a range.
 - `docs.rs`: `@doc` text for a registry entry, found by its `name_span`.
 - `display.rs`: one-line rendering of `ResolvedType` and signatures, for
   completion detail.

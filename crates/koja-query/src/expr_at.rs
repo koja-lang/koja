@@ -3,7 +3,7 @@
 
 use koja_ast::ast::*;
 use koja_ast::identifier::{GlobalRegistryId, Resolution};
-use koja_typecheck::GlobalRegistry;
+use koja_typecheck::{FunctionSignature, GlobalKind, GlobalRegistry};
 
 use crate::position::span_contains;
 use crate::visit::{self, Visitor};
@@ -85,6 +85,22 @@ impl<'ast> Visitor<'ast> for CallAt<'ast> {
             _ => {}
         }
         visit::walk_expr(self, expr);
+    }
+}
+
+/// The lifted signature of the function a call resolved to. `None`
+/// when `target` is not a global function or its signature is not
+/// lifted yet.
+pub fn signature_for_target(
+    target: Resolution,
+    registry: &GlobalRegistry,
+) -> Option<&FunctionSignature> {
+    let Resolution::Global(id) = target else {
+        return None;
+    };
+    match &registry.get(id)?.kind {
+        GlobalKind::Function(definition) => definition.signature.as_ref(),
+        _ => None,
     }
 }
 
