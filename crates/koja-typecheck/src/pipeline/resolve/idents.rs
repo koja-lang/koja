@@ -5,7 +5,6 @@ use koja_ast::identifier::{AnonymousKind, Identifier, LocalId, Resolution, Resol
 use koja_ast::span::Span;
 
 use crate::pipeline::aliases::rewrite_through_aliases;
-use crate::pipeline::renamed::rename_hint;
 use crate::pipeline::visibility::check_reference_visibility;
 use crate::registry::{
     FunctionLookup, FunctionSignature, GlobalKind, GlobalRegistry, RegistryEntry, VisibilityScope,
@@ -59,11 +58,10 @@ pub(super) fn resolve_ident(
         *resolution = Resolution::Global(id);
         return def.ty.clone();
     }
-    let message = format!("unknown identifier `{name}` in this scope");
-    diagnostics.push(match rename_hint(name) {
-        Some(hint) => Diagnostic::error_with_hint(message, hint, span),
-        None => Diagnostic::error(message, span),
-    });
+    diagnostics.push(Diagnostic::error(
+        format!("unknown identifier `{name}` in this scope"),
+        span,
+    ));
     ResolvedType::unresolved()
 }
 

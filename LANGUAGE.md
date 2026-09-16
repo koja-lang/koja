@@ -2702,7 +2702,7 @@ Three structs. `Duration` is a span, `Instant` is a point on the monotonic clock
 
 - `Duration{unit: Duration.Unit, value: Int}`: `new(value, unit)`, `to_hours`, `to_minutes`, `to_seconds`, `to_milliseconds`, `to_microseconds`, `to_nanoseconds`, `plus`, `minus`, `zero?`. `Duration.Unit` is an enum of those six units, each of fixed length. `new` stores the caller's number and unit as given, so `Duration.new(30, Duration.Unit.Seconds)` holds `30` and `Seconds`. A `to_*` accessor truncates toward zero when it moves to a coarser unit and traps when the span does not fit `Int` at a finer one. `plus` and `minus` return the finer of the two units. Two durations are equal when they cover the same span, so one second equals `1_000` milliseconds.
 - `Instant{nanoseconds: Int}`: `now`, `elapsed`, `since(earlier)` (zero when `earlier` is later), `plus(Duration)`, `minus(Duration)`. The field counts nanoseconds from an anchor fixed in this process. It has no epoch, means nothing to another process, and is not a timestamp.
-- `Timestamp{microseconds: Int}`: `new(value, unit)`, `now`, `plus(Duration)`, `minus(Duration)`, `since(earlier)`, `since_epoch() -> Duration`. `new` takes an epoch value in any `Duration.Unit` and stores microseconds, truncating a finer unit. Every conversion out goes through `since_epoch`: `t.since_epoch().to_seconds()` is Unix time in seconds.
+- `Timestamp{since_epoch: Duration}`: `new(value, unit)`, `now`, `plus(Duration)`, `minus(Duration)`, `since(earlier)`. A `Duration` from the Unix epoch. `new` stores the caller's value and unit as given, so nothing is truncated on the way in, and `now` reads the clock in microseconds. Every conversion out is a `Duration` accessor on the field: `t.since_epoch.to_seconds()` is Unix time in seconds. Two timestamps are equal when they name the same moment, whatever their units.
 
 ```koja
 started = Instant.now()
@@ -2714,7 +2714,7 @@ expires_at = Timestamp.new(claims.exp, Duration.Unit.Seconds)
 timeout = Duration.new(30, Duration.Unit.Seconds)
 ```
 
-`Instant` and `Timestamp` derive `Equality`. `Duration` writes its own `equals?` so the comparison crosses units. All three derive `Debug`. None has an ordering yet.
+`Duration` writes its own `equals?` so the comparison crosses units. `Instant` and `Timestamp` derive `Equality`, and `Timestamp` inherits the cross-unit comparison through its field. All three derive `Debug`. None has an ordering yet.
 
 ### Console I/O
 

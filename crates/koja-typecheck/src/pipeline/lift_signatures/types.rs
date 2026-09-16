@@ -10,7 +10,6 @@ use koja_ast::span::Span;
 pub(super) use koja_ast::labels::type_expr_span;
 
 use crate::pipeline::aliases::rewrite_through_aliases;
-use crate::pipeline::renamed::rename_hint;
 use crate::pipeline::resolve::types::canonical_union;
 use crate::pipeline::visibility::check_reference_visibility;
 use crate::registry::{Dispatch, GlobalKind, GlobalRegistry, RegistryEntry, ResolvedProtocolBound};
@@ -416,19 +415,14 @@ fn lookup_path_entry<'r>(
         }
         return Some((id, entry));
     }
-    let message = format!(
-        "typecheck does not recognize the type name `{}` (no same-package or \
-         `Global.*` entry registered)",
-        path_text(path),
-    );
-    let hint = match path {
-        [only] => rename_hint(&only.text),
-        _ => None,
-    };
-    diagnostics.push(match hint {
-        Some(hint) => Diagnostic::error_with_hint(message, hint, span),
-        None => Diagnostic::error(message, span),
-    });
+    diagnostics.push(Diagnostic::error(
+        format!(
+            "typecheck does not recognize the type name `{}` (no same-package or \
+             `Global.*` entry registered)",
+            path_text(path),
+        ),
+        span,
+    ));
     None
 }
 

@@ -38,7 +38,6 @@ pub(crate) mod deprecation;
 pub(crate) mod desugar;
 pub(crate) mod lift_signatures;
 pub(crate) mod local_scope;
-pub(crate) mod renamed;
 pub(crate) mod resolve;
 pub(crate) mod seal;
 pub(crate) mod synthesize;

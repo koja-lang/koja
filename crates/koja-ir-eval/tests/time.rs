@@ -1,6 +1,6 @@
 //! Eval coverage for the auto-imported `Global.time` stdlib file.
 //! The pure-Koja bodies (`Duration.new` / `to_milliseconds`,
-//! `Timestamp.since_epoch`, `Instant.since`) evaluate end-to-end
+//! `Timestamp.new`, `Instant.since`) evaluate end-to-end
 //! on the interpreter. The two `@extern "C"` clock reads route
 //! through `koja-ir-eval`'s curated extern dispatch table, which
 //! calls into `koja-runtime`'s symbols over the C ABI, the same
@@ -48,10 +48,10 @@ fn duration_arithmetic_lands_in_the_finer_unit() {
 }
 
 #[test]
-fn timestamp_since_epoch_returns_underlying_field() {
+fn timestamp_new_keeps_the_value() {
     // Build a `Timestamp` directly so the getter is pinned
     // independent of the wall clock.
-    let v = run_int("Timestamp{microseconds: 42}.since_epoch().to_microseconds()");
+    let v = run_int("Timestamp.new(42, Duration.Unit.Microseconds).since_epoch.to_microseconds()");
     assert_eq!(v, 42);
 }
 
@@ -61,7 +61,7 @@ fn timestamp_now_calls_runtime_extern_for_wall_clock() {
     // koja_time_now_microseconds`. The eval extern table routes the
     // C symbol straight into `koja-runtime`, so the result is a
     // positive `Int` reflecting the live wall clock.
-    let v = run_int("Timestamp.now().since_epoch().to_microseconds()");
+    let v = run_int("Timestamp.now().since_epoch.to_microseconds()");
     assert!(
         v > 0,
         "expected positive epoch microseconds from runtime extern; got {v}",

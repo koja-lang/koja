@@ -12,7 +12,7 @@
 //!   externs.
 //! - The pure-Koja getters (`Duration.new(., Duration.Unit.Milliseconds)`,
 //!   `Duration.to_milliseconds(self)`,
-//!   `Timestamp.since_epoch(self)`) lower as ordinary functions.
+//!   `Timestamp.new(., .)`) lower as ordinary functions.
 //!   Their bodies use `i64` everywhere because the pipeline treats
 //!   `Int` and `Int64` interchangeably.
 
@@ -33,7 +33,7 @@ fn timestamp_now_call_emits_extern_declare_for_runtime_symbol() {
     // Triggering `Timestamp.now()` forces the emitter to declare
     // `koja_time_now_microseconds` (the C-named extern backing the
     // call) so it's resolvable at link time against `koja-runtime`.
-    let ir_text = emit("Timestamp.now().since_epoch().to_microseconds()");
+    let ir_text = emit("Timestamp.now().since_epoch.to_microseconds()");
 
     assert_contains(&ir_text, "declare i64 @koja_time_now_microseconds()");
 }
@@ -52,7 +52,7 @@ fn timestamp_now_does_not_re_emit_runtime_symbol_under_name_mangling() {
     // `Global.Timestamp.koja_time_now_microseconds`. Mirror the
     // assertion shape from `extern.rs`: confirm there's no
     // name-mangled declare leaking in alongside.
-    let ir_text = emit("Timestamp.now().since_epoch().to_microseconds()");
+    let ir_text = emit("Timestamp.now().since_epoch.to_microseconds()");
 
     assert!(
         !ir_text.contains("@Global.Timestamp.koja_time_now_microseconds"),
@@ -91,11 +91,11 @@ fn duration_to_milliseconds_getter_returns_i64() {
 }
 
 #[test]
-fn timestamp_since_epoch_wraps_the_field() {
-    let ir_text = emit("Timestamp.now().since_epoch().to_microseconds()");
+fn timestamp_now_returns_a_duration_field() {
+    let ir_text = emit("Timestamp.now().since_epoch.to_microseconds()");
 
     assert_contains(
         &ir_text,
-        "define %Global.Duration @\"Global.Timestamp.since_epoch/1\"",
+        "define %Global.Timestamp @\"Global.Timestamp.now/0\"",
     );
 }

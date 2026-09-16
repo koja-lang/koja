@@ -123,8 +123,12 @@ target month, so January 31 plus one month is February 28 or 29. That
 is the java.time and Temporal behavior and the only one that makes
 `plus_months(1)` total.
 
-`Time` has microsecond precision to match `Timestamp`. Nanoseconds
-would be a precision `Timestamp` cannot round-trip.
+`Time` has microsecond precision. `Timestamp` keeps whatever unit its
+value arrived in, and `Timestamp.now` reads microseconds, so a
+nanosecond `Time` would carry digits the clock cannot supply and no
+database stores. Converting a nanosecond `Timestamp` to a `DateTime`
+truncates to microseconds, and the design document for that
+conversion states so.
 
 ### `Offset` and `TimeZone`
 

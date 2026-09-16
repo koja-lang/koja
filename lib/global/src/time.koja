@@ -189,68 +189,63 @@ struct Instant
 end
 
 @doc """
-Wall-clock time as microseconds since the Unix epoch.
+Wall-clock time as a `Duration` since the Unix epoch.
+
+The field keeps the value and unit the caller gave, so a timestamp
+that arrived as seconds is stored as seconds and one that arrived as
+nanoseconds keeps every digit. Read it in any unit with the
+`Duration` accessors: `t.since_epoch.to_seconds()` is Unix time.
+`now` reads the clock in microseconds. Two timestamps are equal when
+they name the same moment, whatever their units.
 
 The wall clock can jump when the system time changes. Use `Instant`
 to measure elapsed time in the running process.
-
-Every conversion goes through `Duration`. `new` takes a value and its
-unit, and `since_epoch` returns the `Duration` from the epoch, so
-`t.since_epoch().to_seconds()` is the Unix time in seconds.
 """
 struct Timestamp
-  microseconds: Int
+  since_epoch: Duration
 
   @doc """
-  Returns the timestamp `other` before this one.
+  Returns the timestamp `other` before this one, in the finer of the
+  two units.
   """
   fn minus(self, other: Duration) -> Timestamp
-    Timestamp{microseconds: self.microseconds - other.to_microseconds()}
+    Timestamp{since_epoch: self.since_epoch.minus(other)}
   end
 
   @doc """
   Creates a `Timestamp` from a count of `unit` since the Unix epoch.
-  A unit finer than microseconds truncates. For a value split into
-  whole seconds and a sub-second remainder, build from the seconds
-  and add the remainder as a `Duration`.
+  The value is stored as given. For a value split into whole seconds
+  and a sub-second remainder, build from the seconds and add the
+  remainder as a `Duration`, or combine the two in one unit first.
   """
   fn new(value: Int, unit: Duration.Unit) -> Timestamp
-    Timestamp{microseconds: Duration.new(value, unit).to_microseconds()}
+    Timestamp{since_epoch: Duration.new(value, unit)}
   end
 
   @doc """
-  Returns the current wall-clock time.
+  Returns the current wall-clock time in microseconds.
   """
   fn now -> Timestamp
-    Timestamp{microseconds: koja_time_now_microseconds()}
+    Timestamp.new(koja_time_now_microseconds(), Duration.Unit.Microseconds)
   end
 
   @doc """
-  Returns the timestamp `other` after this one.
+  Returns the timestamp `other` after this one, in the finer of the
+  two units.
   """
   fn plus(self, other: Duration) -> Timestamp
-    Timestamp{microseconds: self.microseconds + other.to_microseconds()}
+    Timestamp{since_epoch: self.since_epoch.plus(other)}
   end
 
   @doc """
-  Returns the time from `earlier` to this timestamp. Both values come
-  from the wall clock, so the result reflects any clock change between
-  them. Use this for stored timestamps. To measure elapsed time in the
-  running process, use `Instant`.
+  Returns the time from `earlier` to this timestamp, in the finer of
+  the two units. Both values come from the wall clock, so the result
+  reflects any clock change between them. Use this for stored
+  timestamps. To measure elapsed time in the running process, use
+  `Instant`.
   """
   fn since(self, earlier: Timestamp) -> Duration
-    Duration.new(
-      self.microseconds - earlier.microseconds,
-      Duration.Unit.Microseconds,
-    )
-  end
-
-  @doc """
-  Returns the time from the Unix epoch to this timestamp, in
-  microseconds. Convert with the `Duration` accessors.
-  """
-  fn since_epoch(self) -> Duration
-    Duration.new(self.microseconds, Duration.Unit.Microseconds)
+    self.since_epoch.minus(earlier.since_epoch)
   end
 
   @extern "C"
