@@ -1,16 +1,87 @@
-test "DateTime.now has positive epoch millis"
-  assert DateTime.now().timestamp_millis() > 0
+test "Duration.from_seconds counts nanoseconds"
+  assert Duration.from_seconds(5).as_nanoseconds() == 5_000_000_000
 end
 
-test "Duration.from_secs"
-  assert Duration.from_secs(5).millis() == 5000
+test "Duration constructors agree on one millisecond"
+  one = Duration.from_milliseconds(1)
+  assert one == Duration.from_microseconds(1_000)
+  assert one == Duration.from_nanoseconds(1_000_000)
 end
 
-test "Duration.from_millis"
-  assert Duration.from_millis(1500).millis() == 1500
+test "Duration accessors truncate toward zero"
+  d = Duration.from_nanoseconds(1_999_999_999)
+  assert d.as_seconds() == 1
+  assert d.as_milliseconds() == 1999
+  assert d.as_microseconds() == 1_999_999
+  assert d.as_nanoseconds() == 1_999_999_999
+end
+
+test "Duration plus and minus"
+  a = Duration.from_seconds(2)
+  b = Duration.from_milliseconds(500)
+  assert a.plus(b).as_milliseconds() == 2500
+  assert a.minus(b).as_milliseconds() == 1500
 end
 
 test "Duration zero"
-  assert Duration.from_secs(0).millis() == 0
-  assert Duration.from_millis(0).millis() == 0
+  assert Duration.from_seconds(0).zero?()
+  assert Duration.from_nanoseconds(0).zero?()
+  assert not Duration.from_nanoseconds(1).zero?()
+end
+
+test "Instant.now does not go backwards"
+  first = Instant.now()
+  second = Instant.now()
+  assert second.since(first).as_nanoseconds() >= 0
+  assert first.elapsed().as_nanoseconds() >= 0
+end
+
+test "Instant.now advances across a wait"
+  started = Instant.now()
+
+  receive
+    envelope: ((), Option<ReplyTo<()>>) ->
+      ()
+  after 20
+    ()
+  end
+
+  assert started.elapsed().as_milliseconds() >= 20
+end
+
+test "Instant.since saturates at zero"
+  earlier = Instant{nanoseconds: 100}
+  later = Instant{nanoseconds: 400}
+  assert later.since(earlier).as_nanoseconds() == 300
+  assert earlier.since(later).zero?()
+end
+
+test "Instant plus and minus"
+  base = Instant{nanoseconds: 1_000}
+  assert base.plus(Duration.from_nanoseconds(500)) ==
+    Instant{nanoseconds: 1_500}
+  assert base.minus(Duration.from_nanoseconds(500)) == Instant{nanoseconds: 500}
+end
+
+test "Timestamp.now has a positive epoch value"
+  assert Timestamp.now().as_microseconds() > 0
+end
+
+test "Timestamp converts between milliseconds and microseconds"
+  t = Timestamp.from_milliseconds(1_700_000_000_000)
+  assert t.as_microseconds() == 1_700_000_000_000_000
+  assert t.as_milliseconds() == 1_700_000_000_000
+  assert Timestamp.from_microseconds(42).as_microseconds() == 42
+end
+
+test "Timestamp.as_milliseconds truncates"
+  assert Timestamp.from_microseconds(1_999).as_milliseconds() == 1
+end
+
+test "Timestamp plus, minus, and since"
+  base = Timestamp.from_microseconds(1_000_000)
+  later = base.plus(Duration.from_milliseconds(250))
+  assert later.as_microseconds() == 1_250_000
+  assert later.minus(Duration.from_milliseconds(250)) == base
+  assert later.since(base) == Duration.from_milliseconds(250)
 end

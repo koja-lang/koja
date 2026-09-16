@@ -3,5 +3,6 @@
 use crate::externs::marshal::pass_through_externs;
 
 pass_through_externs! {
-    now_millis => fn koja_time_now_millis() -> Int64;
+    now_microseconds => fn koja_time_now_microseconds() -> Int64;
+    monotonic_nanoseconds => fn koja_time_monotonic_nanoseconds() -> Int64;
 }

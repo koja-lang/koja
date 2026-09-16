@@ -1,8 +1,22 @@
 @doc """
-The elapsed-time label the human reporters print, `3ms`.
+The elapsed-time label the human reporters print. The unit follows
+the size: `452µs` below one millisecond, `3ms` below one second, and
+`1.2s` from there.
 """
-fn elapsed_label(ms: Int) -> String
-  "#{ms}ms"
+fn elapsed_label(elapsed: Duration) -> String
+  nanoseconds = elapsed.as_nanoseconds()
+
+  cond
+    nanoseconds < 1_000_000 ->
+      "#{elapsed.as_microseconds()}µs"
+
+    nanoseconds < 1_000_000_000 ->
+      "#{elapsed.as_milliseconds()}ms"
+
+    else ->
+      tenths = elapsed.as_milliseconds() / 100
+      "#{tenths / 10}.#{tenths % 10}s"
+  end
 end
 
 @doc """
@@ -14,8 +28,8 @@ One line for `outcome` in the short style. A pass is
 """
 fn render_short(spec: Spec, outcome: Outcome) -> String
   match outcome
-    Outcome.Passed(ms) ->
-      "#{spec.id()}: ok: #{spec.description} (#{elapsed_label(ms)})"
+    Outcome.Passed(elapsed) ->
+      "#{spec.id()}: ok: #{spec.description} (#{elapsed_label(elapsed)})"
 
     Outcome.Failed(Failure.Assertion(assertion), _) ->
       assertion.render()
@@ -29,8 +43,8 @@ fn render_short(spec: Spec, outcome: Outcome) -> String
     Outcome.Crashed(reason, _) ->
       "#{spec.id()}: crash: #{first_line(reason)}"
 
-    Outcome.TimedOut(ms) ->
-      "#{spec.id()}: timeout: #{timeout_reason(ms)}"
+    Outcome.TimedOut(deadline) ->
+      "#{spec.id()}: timeout: #{timeout_reason(deadline)}"
   end
 end
 
@@ -68,13 +82,13 @@ fn render_pretty(spec: Spec, outcome: Outcome, color: Bool) -> String
         palette,
       )
 
-    Outcome.TimedOut(ms) ->
-      pretty_block(spec, "timeout", timeout_reason(ms), [], palette)
+    Outcome.TimedOut(deadline) ->
+      pretty_block(spec, "timeout", timeout_reason(deadline), [], palette)
   end
 end
 
-priv fn timeout_reason(ms: Int) -> String
-  "no result after #{elapsed_label(ms)}"
+priv fn timeout_reason(deadline: Duration) -> String
+  "no result after #{elapsed_label(deadline)}"
 end
 
 priv fn first_line(text: String) -> String

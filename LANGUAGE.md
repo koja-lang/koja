@@ -2696,6 +2696,24 @@ Read-only process metrics. See [Runtime Observability](#runtime-observability) f
 - `pid.state() -> Option<Process.State>`: one process's lifecycle state, `Option.None` when dead or unknown.
 - `pid.mailbox_depth() -> Option<Int>`: one process's queued message count, `Option.None` when dead or unknown.
 
+### Time
+
+Three structs. `Duration` is a span, `Instant` is a point on the monotonic clock, and `Timestamp` is a point on the wall clock. Elapsed time in the running process comes from `Instant`, never from two `Timestamp` reads, because the wall clock can jump.
+
+- `Duration{nanoseconds: Int}`: `from_seconds`, `from_milliseconds`, `from_microseconds`, `from_nanoseconds`, the matching `as_*` accessors (truncating), `plus`, `minus`, `zero?`.
+- `Instant{nanoseconds: Int}`: `now`, `elapsed`, `since(earlier)` (zero when `earlier` is later), `plus(Duration)`, `minus(Duration)`. The field counts nanoseconds from an anchor fixed in this process. It has no epoch, means nothing to another process, and is not a timestamp.
+- `Timestamp{microseconds: Int}`: `now`, `from_milliseconds`, `from_microseconds`, `as_milliseconds` (truncating), `as_microseconds`, `plus(Duration)`, `minus(Duration)`, `since(earlier)`.
+
+```koja
+started = Instant.now()
+work()
+IO.puts("took #{started.elapsed().as_milliseconds()}ms")
+
+created_at = Timestamp.now()
+```
+
+All three derive `Equality` and `Debug`. None has an ordering yet.
+
 ### Console I/O
 
 `IO` provides ergonomic console input/output. `STDIN`, `STDOUT`, and `STDERR` are available as `Fd` constants for low-level access.

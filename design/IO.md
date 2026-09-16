@@ -19,6 +19,9 @@ text handling written once. It supersedes the `IO.gets` bullet in
   code holds. Reactor plumbing leaves the user-facing surface.
 - `IO` shrinks to the console: `puts`, `warn`, `write`, `gets`, and
   the three standard descriptors.
+- Socket timeouts are `Duration` fields on the socket and fail with
+  `IO.Error.TimedOut`, so `Read.read` stays a one-parameter method.
+  [TIME.md](TIME.md) lands first.
 - Open: where filesystem statics live, and how a `Read` implementation
   reports an error wider than `IO.Error`.
 
@@ -240,6 +243,86 @@ There is no `from:` parameter. A caller with another reader calls
 stdlib test that opens a temp file and calls `file.read_line()`.
 
 `IO.Ready` leaves `IO`.
+
+### Timeouts are socket state
+
+The [socket deadline gap](GAPS.md#sockets-have-no-deadlines) is its
+own roadmap item, and its shape has to fit this design. A timeout is a
+field on the socket, not a parameter on the read. Koja structs are
+values, so the field is set by returning a new socket, and the runtime
+keeps no per-descriptor table:
+
+```koja
+struct TCPSocket
+  socket: Socket
+  tls: Option<TLSSession>
+  read_timeout: Option<Duration> = Option.None
+  write_timeout: Option<Duration> = Option.None
+
+  fn with_read_timeout(self, limit: Option<Duration>) -> Self
+  fn with_write_timeout(self, limit: Option<Duration>) -> Self
+end
+```
+
+A read or write that reaches its timeout fails with
+`IO.Error.TimedOut`. `None` clears it. This is the Rust
+(`set_read_timeout`) position, and it is the only one that leaves
+`Read.read(self, count)` as a one-parameter protocol method. A
+`timeout:` argument on `read` would have to appear on the protocol,
+and then on `File` and `Fd`, where it means nothing.
+
+The timeout is relative and restarts on every call, which bounds a
+silent peer but not a slow one. A peer that sends one byte every four
+seconds never trips a five second read timeout. Bounding a whole
+request is the caller's job, with an `Instant` from
+[TIME.md](TIME.md):
+
+```koja
+deadline = Instant.now().plus(Duration.from_seconds(5))
+loop
+  remaining = deadline.since(Instant.now())
+  if remaining.zero?()
+    fail IO.Error.TimedOut
+  end
+  chunk = try client.with_read_timeout(Option.Some(remaining)).read(4096)
+  ...
+end
+```
+
+A `TimedOut` on write can follow a partial write. `Write.write`
+returns the count for this reason, and the doc comment on the error
+says that a prefix may have been sent.
+
+Most servers want one timeout on every accepted connection, so the
+listener carries defaults that `accept` copies onto each socket:
+
+```koja
+struct TCPListener.Options
+  read_timeout: Option<Duration> = Option.None
+  write_timeout: Option<Duration> = Option.None
+  accept_timeout: Option<Duration> = Option.None
+end
+
+fn bind(port: Int, options: TCPListener.Options = TCPListener.Options{}) -> TCPListener ! IO.Error
+```
+
+`connect` and `accept` are not stream operations. `connect` takes the
+bound as an argument, `TCPSocket.connect(host, port, timeout)`, and
+`accept` reads `accept_timeout` from the listener's options.
+`try_accept` goes, since `accept` with `Some(Duration.from_milliseconds(0))`
+is the same call. There is no process-wide or runtime-wide default.
+Behavior that depends on ambient state a reader cannot see at the call
+site is rejected.
+
+Underneath, every one of these is a bounded reactor wait, the
+mechanism `receive ... after` and `Fd.block` already use. Sockets are
+non-blocking on both backends, so no socket option is involved. One
+runtime entry point, a bounded `Fd.block`, is the whole runtime change.
+
+Sequence: [TIME.md](TIME.md) lands first so `Duration` exists.
+Timeouts land after step 1 of the migration, so `TimedOut` has a home
+on `Fd`, and before step 3, so `TCPSocket` implements `Read` with the
+timeout already in place.
 
 ## Migration
 

@@ -47,7 +47,11 @@ The following facts constrain future planning.
 The 0.19 release is a developer experience release. It finishes the breaking
 cleanup announced in 0.18, replaces the test boilerplate with a `test`
 declaration and compiler-known assertions, brings the language server up to
-the features users miss first, and bounds socket waits.
+the features users miss first, and bounds socket waits. It also reshapes the
+standard library's time and I/O types ([TIME.md](TIME.md), [IO.md](IO.md))
+while there are no external users to protect. One release that breaks these
+together costs one migration pass over the known Koja codebases, where
+spreading the same changes across releases would cost one pass each.
 
 ### Breaking cleanup
 
@@ -58,6 +62,14 @@ the features users miss first, and bounds socket waits.
 - Change `IO.gets` to return `Option<String>` over a caller-supplied reader
   so callers can tell end of input from an empty line
   ([gap](GAPS.md#toolchain-and-stdlib-nits-from-the-git_hygiene-build)).
+  Superseded by [IO.md](IO.md), where it is one step of the `Read`
+  protocol.
+- **[DONE]** Add a monotonic `Instant`, count `Duration` in nanoseconds,
+  and rename `DateTime` to `Timestamp` counting microseconds
+  ([TIME.md](TIME.md)). The test runner measured elapsed time with the
+  wall clock, and a millisecond `DateTime` could not round-trip a
+  Postgres timestamp. This landed before the IO work, whose socket
+  timeouts take a `Duration`, and frees `DateTime` for the zoned type.
 
 ### Language
 
@@ -67,6 +79,17 @@ the features users miss first, and bounds socket waits.
   between an alias and a same-package name. The test surface is what made
   the types-only carve-out visible, and the fix is to remove the carve-out
   for every registry kind, not to add an import form.
+- Let a `struct`, `enum`, or `builtin` body declare a `const`, read as
+  `Duration.ZERO`. Package-level `const` already exists with a literal-shape
+  rule, so this adds a namespace, not a new kind of value. The stdlib keeps
+  writing fixed values as functions that return a literal, `IPAddress.any`,
+  `IPAddress.loopback`, and `Offset.utc` and `TimeZone.utc` in
+  [DATETIME.md](DATETIME.md), and a function is not eligible as a field
+  default where a constant would be. Field defaults gain a constant reference
+  in the same change, since constants inline to the literal shape defaults
+  already accept. `Duration.ZERO`, `Timestamp.UNIX_EPOCH`, `Int.MAX`, and the
+  `IPAddress` pair are the first uses. Lands before [DATETIME.md](DATETIME.md)
+  so its zones are constants from the start.
 
 ### Testing
 
@@ -116,12 +139,14 @@ The design is accepted in [TESTING.md](TESTING.md).
 
 ### Runtime
 
-- Add socket read, write, connect, and accept deadlines so a stalled peer
+- Add socket read, write, connect, and accept timeouts so a stalled peer
   cannot block its owning process forever
   ([gap](GAPS.md#sockets-have-no-deadlines)). Sockets are non-blocking
-  through the reactor on both backends, so a deadline is a bounded reactor
+  through the reactor on both backends, so a timeout is a bounded reactor
   wait, the same mechanism `receive ... after` and `Fd.watch` use, not a
-  socket option.
+  socket option. The shape is settled in
+  [IO.md](IO.md#timeouts-are-socket-state) and depends on `Duration` from
+  [TIME.md](TIME.md).
 - **[DONE]** Give the interpreter general C FFI. Done. An `@extern "C"` with no
   hand-written shim resolves through the dynamic loader, in the `@link`
   library as a shared library under the project root, on the loader's

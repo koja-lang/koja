@@ -1436,7 +1436,7 @@ fn lang_test_trace() {
             "AlphaTest\n  first alpha test (test/alpha_test.koja:",
             "BetaTest\n  beta passes (test/beta_test.koja:",
             "... ok (",
-            "ms)",
+            "s)",
             "3 successful tests. 0 failures.",
         ],
     );
@@ -1591,12 +1591,12 @@ fn lang_test_json_reporter() {
         &stderr,
         &[
             r#"{"event":"spec_started","id":"test/short_test.koja:2","group":"ShortTest","description":"a passing test"}"#,
-            r#"{"event":"spec_finished","id":"test/short_test.koja:2","outcome":"passed","ms":"#,
-            r#"{"event":"spec_finished","id":"test/short_test.koja:6","outcome":"failed","ms":"#,
+            r#"{"event":"spec_finished","id":"test/short_test.koja:2","outcome":"passed","microseconds":"#,
+            r#"{"event":"spec_finished","id":"test/short_test.koja:6","outcome":"failed","microseconds":"#,
             r#""failure":{"kind":"assertion","expression":"1 + 1 == 3","file":"test/short_test.koja","line":7,"column":12,"source_line":"    assert 1 + 1 == 3","left":"2","right":"3","message":null}"#,
-            r#"{"event":"spec_finished","id":"test/short_test.koja:10","outcome":"skipped","ms":"#,
+            r#"{"event":"spec_finished","id":"test/short_test.koja:10","outcome":"skipped","microseconds":"#,
             r#""reason":"not today"}"#,
-            r#"{"event":"finished","passed":1,"failed":1,"skipped":1,"crashed":0,"timed_out":0,"ms":"#,
+            r#"{"event":"finished","passed":1,"failed":1,"skipped":1,"crashed":0,"timed_out":0,"microseconds":"#,
         ],
     );
 
@@ -1647,10 +1647,10 @@ fn lang_test_crash_is_contained() {
                 "runs before the crash (test/contain_test.koja:4) ... ok",
                 "a crash is contained (test/contain_test.koja:8)",
                 "... CRASH (",
-                "a hang is killed at the deadline (test/contain_test.koja:13) ... TIMEOUT (3000ms)",
+                "a hang is killed at the deadline (test/contain_test.koja:13) ... TIMEOUT (3.0s)",
                 "runs after the crash and the hang (test/contain_test.koja:18) ... ok",
                 "crash: called unwrap on None\n",
-                "timeout: no result after 3000ms\n",
+                "timeout: no result after 3.0s\n",
                 "2 successful tests. 0 failures. 1 crashed. 1 timed out.",
             ],
         );

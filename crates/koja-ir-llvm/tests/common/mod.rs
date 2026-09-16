@@ -166,7 +166,7 @@ pub fn assert_program_shape(ir_text: &str) {
 /// Slice the LLVM textual IR for one function so substring asserts
 /// don't accidentally pick up matches from other defs in the same
 /// module, relevant for any test where the auto-import pulls
-/// stdlib functions (`Global.Int.band`, `DateTime.now`, …) into the
+/// stdlib functions (`Global.Int.band`, `Timestamp.now`, …) into the
 /// emitted IR alongside the user's `main`. Returns the body between
 /// the `define ... @<name>(...) {` opening brace and the matching
 /// `}` (assumes well-formed LLVM IR with no nested `}` lines, which

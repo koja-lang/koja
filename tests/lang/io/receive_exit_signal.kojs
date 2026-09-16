@@ -74,9 +74,9 @@ struct FirstStatement: Process<Ref<(), Int>, ExitSignal, Int>
 end
 
 fn wait_for(target: Ref<ExitSignal, Int>)
-  deadline = DateTime.now().timestamp_millis() + 5000
+  started = Instant.now()
 
-  while target.alive?() and DateTime.now().timestamp_millis() < deadline
+  while target.alive?() and started.elapsed().as_milliseconds() < 5000
     ()
   end
 end

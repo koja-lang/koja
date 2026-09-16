@@ -75,8 +75,8 @@ impl<'a> ResolverEnv<'a> {
 /// node (`Expr.literal_coercion`) so no resolver-level sink is
 /// needed.
 ///
-/// `enclosing_type` is the owner type's full path: `["DateTime"]`
-/// for a method on `Global.DateTime`, `["Process", "ExitSignal"]`
+/// `enclosing_type` is the owner type's full path: `["Timestamp"]`
+/// for a method on `Global.Timestamp`, `["Process", "ExitSignal"]`
 /// for a method on a nested type, `None` for top-level free
 /// functions and file bodies. It encodes the
 /// language's bare-call lookup rule: **prioritize your enclosing

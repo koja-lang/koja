@@ -465,10 +465,10 @@ the runner, so the runner's message type is
 
 ```koja
 enum Outcome
-  Crashed(String, Int)          # the crash reason, then elapsed milliseconds
-  Failed(Test.Failure, Int)     # Assertion, Error, or Skipped
-  Passed(Int)
-  TimedOut(Int)                 # the deadline that was missed
+  Crashed(String, Duration)        # the crash reason, then the elapsed time
+  Failed(Test.Failure, Duration)   # Assertion, Error, or Skipped
+  Passed(Duration)
+  TimedOut(Duration)               # the deadline that was missed
 end
 ```
 
@@ -491,10 +491,10 @@ end
   registered name from one test cannot collide with the next.
 
 Specs run one at a time in 0.19. Parallel execution is deferred until the
-process-per-test model has run for a while. Elapsed time is whole
-milliseconds from `DateTime.now()`, so a fast test reports `0ms` until the
-runtime has a monotonic clock
-([gap](GAPS.md#no-monotonic-clock-and-no-sub-millisecond-time)).
+process-per-test model has run for a while. Elapsed time comes from
+`Instant` and travels as a `Duration`. The human reporters pick the unit
+from the size, `452µs`, `3ms`, or `1.2s`, and the `json` reporter emits
+integer microseconds.
 
 ### Panics in tests
 
@@ -544,15 +544,18 @@ Three reporters ship in 0.19, selected with `--reporter <name>`:
 ```
 {"event":"started","total":13}
 {"event":"spec_started","id":"test/stack_test.koja:14","group":"StackTest","description":"pops in reverse order"}
-{"event":"spec_finished","id":"test/stack_test.koja:14","outcome":"passed","ms":3}
-{"event":"spec_finished","id":"test/stack_test.koja:22","outcome":"failed","ms":1,"failure":{"kind":"assertion","expression":"popped == 3","file":"test/stack_test.koja","line":23,"column":12,"source_line":"    assert popped == 3","left":"2","right":"3","message":null}}
-{"event":"spec_finished","id":"test/stack_test.koja:30","outcome":"crashed","ms":12,"reason":"index 5 out of bounds"}
-{"event":"spec_finished","id":"test/stack_test.koja:38","outcome":"skipped","ms":0,"reason":"DATABASE_URL is not set"}
-{"event":"spec_finished","id":"test/stack_test.koja:46","outcome":"timed_out","ms":60000}
-{"event":"finished","passed":10,"failed":2,"skipped":1,"crashed":0,"timed_out":0,"ms":75}
+{"event":"spec_finished","id":"test/stack_test.koja:14","outcome":"passed","microseconds":3120}
+{"event":"spec_finished","id":"test/stack_test.koja:22","outcome":"failed","microseconds":1045,"failure":{"kind":"assertion","expression":"popped == 3","file":"test/stack_test.koja","line":23,"column":12,"source_line":"    assert popped == 3","left":"2","right":"3","message":null}}
+{"event":"spec_finished","id":"test/stack_test.koja:30","outcome":"crashed","microseconds":12400,"reason":"index 5 out of bounds"}
+{"event":"spec_finished","id":"test/stack_test.koja:38","outcome":"skipped","microseconds":18,"reason":"DATABASE_URL is not set"}
+{"event":"spec_finished","id":"test/stack_test.koja:46","outcome":"timed_out","microseconds":60000000}
+{"event":"finished","passed":10,"failed":2,"skipped":1,"crashed":0,"timed_out":0,"microseconds":75211}
 ```
 
-The `failure` object carries a `kind` of `assertion` or `error`. `Skipped`
+`microseconds` is an integer so the value survives every JSON parser
+exactly. Go and cargo emit float seconds and the JavaScript runners emit
+milliseconds, and both lose digits on the way through. For a `timed_out`
+spec it is the deadline. The `failure` object carries a `kind` of `assertion` or `error`. `Skipped`
 is its own `outcome` value with a `reason`, because CI counts skips apart
 from failures.
 
@@ -609,7 +612,7 @@ result, which is a complete greppable log:
 test/stack_test.koja:14: ok: pops in reverse order (3ms)
 test/stack_test.koja:23:12: failure: assert popped == 3 (left: 2, right: 3)
 test/stack_test.koja:30: crash: index 5 out of bounds
-test/stack_test.koja:46: timeout: no result after 60000ms
+test/stack_test.koja:46: timeout: no result after 60.0s
 ```
 
 An `Error` failure, a crash, and a timeout print a severity line and a

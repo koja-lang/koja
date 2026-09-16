@@ -18,7 +18,7 @@ median comparison table.
 
 ## Methodology
 
-Each program brackets **only its workload** with `DateTime.now()` (Koja) /
+Each program brackets **only its workload** with `Instant.now()` (Koja) /
 `erlang:monotonic_time` (BEAM) and prints a `<name>_ms <value>` line. That keeps
 VM startup, JIT/compilation, and teardown out of the measurement, so Koja's
 ahead-of-time native binary and BEAM's bytecode are compared on the work itself.

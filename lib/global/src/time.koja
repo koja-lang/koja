@@ -1,51 +1,214 @@
 @doc """
-Wall-clock time as an epoch-millisecond timestamp.
-"""
-struct DateTime
-  millis: Int
+A span of time. Counts nanoseconds and covers about 292 years.
 
-  @doc """
-  Returns the current wall-clock time as a `DateTime`.
-  """
-  fn now -> DateTime
-    DateTime{millis: koja_time_now_millis()}
-  end
-
-  @doc """
-  Returns the number of milliseconds since the Unix epoch.
-  """
-  fn timestamp_millis(self) -> Int
-    self.millis
-  end
-
-  @extern "C"
-  priv fn koja_time_now_millis -> Int64
-end
-
-@doc """
-A span of time measured in milliseconds.
+The `as_*` accessors truncate toward zero.
 """
 struct Duration
-  millis: Int
+  nanoseconds: Int
 
   @doc """
   Creates a `Duration` from a number of seconds.
   """
-  fn from_secs(secs: Int) -> Duration
-    Duration{millis: secs * 1000}
+  fn from_seconds(seconds: Int) -> Duration
+    Duration{nanoseconds: seconds * 1_000_000_000}
   end
 
   @doc """
   Creates a `Duration` from a number of milliseconds.
   """
-  fn from_millis(ms: Int) -> Duration
-    Duration{millis: ms}
+  fn from_milliseconds(milliseconds: Int) -> Duration
+    Duration{nanoseconds: milliseconds * 1_000_000}
   end
 
   @doc """
-  Returns the total number of milliseconds in the duration.
+  Creates a `Duration` from a number of microseconds.
   """
-  fn millis(self) -> Int
-    self.millis
+  fn from_microseconds(microseconds: Int) -> Duration
+    Duration{nanoseconds: microseconds * 1_000}
   end
+
+  @doc """
+  Creates a `Duration` from a number of nanoseconds.
+  """
+  fn from_nanoseconds(nanoseconds: Int) -> Duration
+    Duration{nanoseconds: nanoseconds}
+  end
+
+  @doc """
+  Returns the whole seconds in the duration.
+  """
+  fn as_seconds(self) -> Int
+    self.nanoseconds / 1_000_000_000
+  end
+
+  @doc """
+  Returns the whole milliseconds in the duration.
+  """
+  fn as_milliseconds(self) -> Int
+    self.nanoseconds / 1_000_000
+  end
+
+  @doc """
+  Returns the whole microseconds in the duration.
+  """
+  fn as_microseconds(self) -> Int
+    self.nanoseconds / 1_000
+  end
+
+  @doc """
+  Returns the total number of nanoseconds in the duration.
+  """
+  fn as_nanoseconds(self) -> Int
+    self.nanoseconds
+  end
+
+  @doc """
+  Returns the sum of the two durations.
+  """
+  fn plus(self, other: Duration) -> Duration
+    Duration{nanoseconds: self.nanoseconds + other.nanoseconds}
+  end
+
+  @doc """
+  Returns this duration less `other`.
+  """
+  fn minus(self, other: Duration) -> Duration
+    Duration{nanoseconds: self.nanoseconds - other.nanoseconds}
+  end
+
+  @doc """
+  Returns `true` when the duration is zero.
+  """
+  fn zero?(self) -> Bool
+    self.nanoseconds == 0
+  end
+end
+
+@doc """
+A point on the monotonic clock. Only useful relative to another
+`Instant`. It has no epoch and is not a timestamp.
+
+The field counts nanoseconds since this process started. The value
+means nothing to another process or machine, and a new run starts
+from zero again. Use `Timestamp` for wall-clock time.
+"""
+struct Instant
+  nanoseconds: Int
+
+  @doc """
+  Returns the current monotonic time.
+  """
+  fn now -> Instant
+    Instant{nanoseconds: koja_time_monotonic_nanoseconds()}
+  end
+
+  @doc """
+  Returns the time from this instant to now.
+  """
+  fn elapsed(self) -> Duration
+    Instant.now().since(self)
+  end
+
+  @doc """
+  Returns the time from `earlier` to this instant. Returns zero when
+  `earlier` is later than this instant.
+  """
+  fn since(self, earlier: Instant) -> Duration
+    delta = self.nanoseconds - earlier.nanoseconds
+
+    if delta < 0
+      Duration{nanoseconds: 0}
+    else
+      Duration{nanoseconds: delta}
+    end
+  end
+
+  @doc """
+  Returns the instant `other` after this one.
+  """
+  fn plus(self, other: Duration) -> Instant
+    Instant{nanoseconds: self.nanoseconds + other.nanoseconds}
+  end
+
+  @doc """
+  Returns the instant `other` before this one.
+  """
+  fn minus(self, other: Duration) -> Instant
+    Instant{nanoseconds: self.nanoseconds - other.nanoseconds}
+  end
+
+  @extern "C"
+  priv fn koja_time_monotonic_nanoseconds -> Int64
+end
+
+@doc """
+Wall-clock time as microseconds since the Unix epoch.
+
+The wall clock can jump when the system time changes. Use `Instant`
+to measure elapsed time in the running process.
+"""
+struct Timestamp
+  microseconds: Int
+
+  @doc """
+  Returns the current wall-clock time.
+  """
+  fn now -> Timestamp
+    Timestamp{microseconds: koja_time_now_microseconds()}
+  end
+
+  @doc """
+  Creates a `Timestamp` from milliseconds since the Unix epoch.
+  """
+  fn from_milliseconds(milliseconds: Int) -> Timestamp
+    Timestamp{microseconds: milliseconds * 1_000}
+  end
+
+  @doc """
+  Creates a `Timestamp` from microseconds since the Unix epoch.
+  """
+  fn from_microseconds(microseconds: Int) -> Timestamp
+    Timestamp{microseconds: microseconds}
+  end
+
+  @doc """
+  Returns whole milliseconds since the Unix epoch.
+  """
+  fn as_milliseconds(self) -> Int
+    self.microseconds / 1_000
+  end
+
+  @doc """
+  Returns microseconds since the Unix epoch.
+  """
+  fn as_microseconds(self) -> Int
+    self.microseconds
+  end
+
+  @doc """
+  Returns the timestamp `other` after this one.
+  """
+  fn plus(self, other: Duration) -> Timestamp
+    Timestamp{microseconds: self.microseconds + other.as_microseconds()}
+  end
+
+  @doc """
+  Returns the timestamp `other` before this one.
+  """
+  fn minus(self, other: Duration) -> Timestamp
+    Timestamp{microseconds: self.microseconds - other.as_microseconds()}
+  end
+
+  @doc """
+  Returns the time from `earlier` to this timestamp. Both values come
+  from the wall clock, so the result reflects any clock change between
+  them. Use this for stored timestamps. To measure elapsed time in the
+  running process, use `Instant`.
+  """
+  fn since(self, earlier: Timestamp) -> Duration
+    Duration.from_microseconds(self.microseconds - earlier.microseconds)
+  end
+
+  @extern "C"
+  priv fn koja_time_now_microseconds -> Int64
 end

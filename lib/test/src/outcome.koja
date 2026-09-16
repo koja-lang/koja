@@ -1,5 +1,5 @@
 @doc """
-How one spec ended. Every variant carries the elapsed milliseconds.
+How one spec ended. Every variant carries the time the spec ran for.
 
   - `Passed` is a body that returned `Result.Ok`.
   - `Failed` is a body that returned `Result.Err`. The `Failure` inside
@@ -7,23 +7,24 @@ How one spec ended. Every variant carries the elapsed milliseconds.
   - `Crashed` is a body whose process died before it returned. The
     string is the panic message, followed by the backtrace when the
     runtime has one.
-  - `TimedOut` is a body that was still running at its deadline.
+  - `TimedOut` is a body that was still running at its deadline. The
+    `Duration` is the deadline.
 """
 enum Outcome
-  Crashed(String, Int)
-  Failed(Failure, Int)
-  Passed(Int)
-  TimedOut(Int)
+  Crashed(String, Duration)
+  Failed(Failure, Duration)
+  Passed(Duration)
+  TimedOut(Duration)
 
   @doc """
-  The milliseconds the spec ran for.
+  The time the spec ran for.
   """
-  fn elapsed_ms(self) -> Int
+  fn elapsed(self) -> Duration
     match self
-      Outcome.Crashed(_, ms) -> ms
-      Outcome.Failed(_, ms) -> ms
-      Outcome.Passed(ms) -> ms
-      Outcome.TimedOut(ms) -> ms
+      Outcome.Crashed(_, elapsed) -> elapsed
+      Outcome.Failed(_, elapsed) -> elapsed
+      Outcome.Passed(elapsed) -> elapsed
+      Outcome.TimedOut(elapsed) -> elapsed
     end
   end
 

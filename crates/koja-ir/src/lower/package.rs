@@ -612,7 +612,7 @@ fn global_to_ir_type(
         return resolved_type_to_ir_type(expansion, registry, instantiations);
     }
     // Builtins lower structurally from their registry-stamped shape.
-    // User-style stdlib structs (`DateTime`, `Duration`, etc. from
+    // User-style stdlib structs (`Timestamp`, `Duration`, etc. from
     // auto-imported `Global.*` files) and enums (`Option<T>`) fall
     // through to the generic monomorphization path.
     if let GlobalKind::Builtin(definition) = &entry.kind {

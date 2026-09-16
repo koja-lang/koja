@@ -44,14 +44,14 @@ struct Runner<R: Reporter>:
 
   priv fn run_spec(self, spec: Spec) -> Outcome
     me: Ref<SpecDone | Process.ExitSignal, ()> = Ref.self_ref()
-    started = DateTime.now().timestamp_millis()
+    started = Instant.now()
     child = spawn SpecProcess.start(SpecProcess{body: spec.run, runner: me})
     Process.monitor(child.pid())
 
     receive
       envelope: (SpecDone | Process.ExitSignal, Option<ReplyTo<()>>) ->
         (message, _) = envelope
-        elapsed = DateTime.now().timestamp_millis() - started
+        elapsed = started.elapsed()
 
         match message
           done: SpecDone ->
@@ -69,12 +69,11 @@ struct Runner<R: Reporter>:
       event: Process.Lifecycle ->
         child.kill()
         self.await_exit(child)
-        Outcome.Crashed("the run was interrupted", DateTime.now()
-            .timestamp_millis() - started)
+        Outcome.Crashed("the run was interrupted", started.elapsed())
     after self.options.timeout_ms
       child.kill()
       self.await_exit(child)
-      Outcome.TimedOut(self.options.timeout_ms)
+      Outcome.TimedOut(Duration.from_milliseconds(self.options.timeout_ms))
     end
   end
 
