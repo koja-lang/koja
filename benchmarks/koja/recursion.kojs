@@ -8,5 +8,5 @@ end
 
 t0 = Instant.now()
 r = fib(35)
-elapsed = t0.elapsed().as_milliseconds()
+elapsed = t0.elapsed().to_milliseconds()
 "recursion_ms #{elapsed} result #{r}".print()

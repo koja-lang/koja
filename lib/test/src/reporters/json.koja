@@ -87,7 +87,7 @@ struct JsonReporter
       Value.entry("outcome", Value.string(JsonReporter.outcome_name(outcome))),
       Value.entry(
         "microseconds",
-        Value.int(outcome.elapsed().as_microseconds()),
+        Value.int(outcome.elapsed().to_microseconds()),
       )
     ]
 
@@ -126,7 +126,7 @@ struct JsonReporter
         Value.entry("timed_out", Value.int(summary.timed_out)),
         Value.entry(
           "microseconds",
-          Value.int(summary.elapsed.as_microseconds()),
+          Value.int(summary.elapsed.to_microseconds()),
         )
       ],
     )

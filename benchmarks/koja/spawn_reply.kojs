@@ -30,5 +30,5 @@ loop
   end
 end
 
-elapsed = t0.elapsed().as_milliseconds()
+elapsed = t0.elapsed().to_milliseconds()
 "spawn_ms #{elapsed} count #{i}".print()

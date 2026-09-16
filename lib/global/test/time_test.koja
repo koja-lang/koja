@@ -1,39 +1,72 @@
-test "Duration.from_seconds counts nanoseconds"
-  assert Duration.from_seconds(5).as_nanoseconds() == 5_000_000_000
+alias Duration.Unit as TimeUnit
+
+test "Duration constructors keep the caller's unit"
+  assert Duration.new(2, TimeUnit.Hours) ==
+    Duration{unit: TimeUnit.Hours, value: 2}
+  assert Duration.new(30, TimeUnit.Seconds) ==
+    Duration{unit: TimeUnit.Seconds, value: 30}
+  assert Duration.new(30, TimeUnit.Seconds).value == 30
+  assert Duration.new(30, TimeUnit.Seconds).unit == TimeUnit.Seconds
 end
 
-test "Duration constructors agree on one millisecond"
-  one = Duration.from_milliseconds(1)
-  assert one == Duration.from_microseconds(1_000)
-  assert one == Duration.from_nanoseconds(1_000_000)
+test "Duration equality crosses units"
+  one = Duration.new(1, TimeUnit.Milliseconds)
+  assert one == Duration.new(1_000, TimeUnit.Microseconds)
+  assert one == Duration.new(1_000_000, TimeUnit.Nanoseconds)
+  assert Duration.new(1, TimeUnit.Hours) == Duration.new(60, TimeUnit.Minutes)
+  assert Duration.new(1, TimeUnit.Minutes) == Duration.new(60, TimeUnit.Seconds)
+  assert Duration.new(1, TimeUnit.Seconds) !=
+    Duration.new(999, TimeUnit.Milliseconds)
 end
 
-test "Duration accessors truncate toward zero"
-  d = Duration.from_nanoseconds(1_999_999_999)
-  assert d.as_seconds() == 1
-  assert d.as_milliseconds() == 1999
-  assert d.as_microseconds() == 1_999_999
-  assert d.as_nanoseconds() == 1_999_999_999
+test "Duration accessors convert to a finer unit"
+  assert Duration.new(5, TimeUnit.Seconds).to_nanoseconds() == 5_000_000_000
+  assert Duration.new(1, TimeUnit.Hours).to_seconds() == 3_600
+  assert Duration.new(2, TimeUnit.Minutes).to_milliseconds() == 120_000
 end
 
-test "Duration plus and minus"
-  a = Duration.from_seconds(2)
-  b = Duration.from_milliseconds(500)
-  assert a.plus(b).as_milliseconds() == 2500
-  assert a.minus(b).as_milliseconds() == 1500
+test "Duration accessors truncate toward zero in a coarser unit"
+  d = Duration.new(1_999_999_999, TimeUnit.Nanoseconds)
+  assert d.to_seconds() == 1
+  assert d.to_milliseconds() == 1999
+  assert d.to_microseconds() == 1_999_999
+  assert d.to_nanoseconds() == 1_999_999_999
+  assert Duration.new(119, TimeUnit.Seconds).to_minutes() == 1
+  assert Duration.new(-90, TimeUnit.Minutes).to_hours() == -1
+end
+
+test "Duration plus and minus return the finer unit"
+  a = Duration.new(2, TimeUnit.Seconds)
+  b = Duration.new(500, TimeUnit.Milliseconds)
+  sum = a.plus(b)
+  assert sum == Duration.new(2500, TimeUnit.Milliseconds)
+  assert sum.unit == TimeUnit.Milliseconds
+  assert a.minus(b) == Duration.new(1500, TimeUnit.Milliseconds)
+  assert b.minus(a).to_milliseconds() == -1500
+  assert Duration.new(1, TimeUnit.Hours).plus(Duration.new(2, TimeUnit.Hours)).unit ==
+    TimeUnit.Hours
+end
+
+test "Duration holds spans that do not fit nanoseconds"
+  age = Duration.new(300 * 365 * 86_400, TimeUnit.Seconds)
+  assert age.to_hours() == 300 * 365 * 24
+  assert age.plus(Duration.new(1, TimeUnit.Seconds)).to_seconds() ==
+    300 * 365 * 86_400 + 1
 end
 
 test "Duration zero"
-  assert Duration.from_seconds(0).zero?()
-  assert Duration.from_nanoseconds(0).zero?()
-  assert not Duration.from_nanoseconds(1).zero?()
+  assert Duration.new(0, TimeUnit.Seconds).zero?()
+  assert Duration.new(0, TimeUnit.Nanoseconds).zero?()
+  assert not Duration.new(1, TimeUnit.Nanoseconds).zero?()
+  assert Duration.new(0, TimeUnit.Seconds) ==
+    Duration.new(0, TimeUnit.Nanoseconds)
 end
 
 test "Instant.now does not go backwards"
   first = Instant.now()
   second = Instant.now()
-  assert second.since(first).as_nanoseconds() >= 0
-  assert first.elapsed().as_nanoseconds() >= 0
+  assert second.since(first).to_nanoseconds() >= 0
+  assert first.elapsed().to_nanoseconds() >= 0
 end
 
 test "Instant.now advances across a wait"
@@ -46,42 +79,71 @@ test "Instant.now advances across a wait"
     ()
   end
 
-  assert started.elapsed().as_milliseconds() >= 20
+  assert started.elapsed().to_milliseconds() >= 20
 end
 
 test "Instant.since saturates at zero"
   earlier = Instant{nanoseconds: 100}
   later = Instant{nanoseconds: 400}
-  assert later.since(earlier).as_nanoseconds() == 300
+  assert later.since(earlier) == Duration.new(300, TimeUnit.Nanoseconds)
   assert earlier.since(later).zero?()
 end
 
 test "Instant plus and minus"
   base = Instant{nanoseconds: 1_000}
-  assert base.plus(Duration.from_nanoseconds(500)) ==
+  assert base.plus(Duration.new(500, TimeUnit.Nanoseconds)) ==
     Instant{nanoseconds: 1_500}
-  assert base.minus(Duration.from_nanoseconds(500)) == Instant{nanoseconds: 500}
+  assert base.minus(Duration.new(1, TimeUnit.Microseconds)) ==
+    Instant{nanoseconds: 0}
 end
 
 test "Timestamp.now has a positive epoch value"
-  assert Timestamp.now().as_microseconds() > 0
+  assert Timestamp.now().since_epoch().to_seconds() > 1_700_000_000
 end
 
-test "Timestamp converts between milliseconds and microseconds"
-  t = Timestamp.from_milliseconds(1_700_000_000_000)
-  assert t.as_microseconds() == 1_700_000_000_000_000
-  assert t.as_milliseconds() == 1_700_000_000_000
-  assert Timestamp.from_microseconds(42).as_microseconds() == 42
+test "Timestamp.new stores microseconds whatever the unit"
+  seconds = Timestamp.new(1_700_000_000, TimeUnit.Seconds)
+  assert seconds == Timestamp{microseconds: 1_700_000_000_000_000}
+  assert seconds == Timestamp.new(1_700_000_000_000, TimeUnit.Milliseconds)
+  assert Timestamp.new(42, TimeUnit.Microseconds) == Timestamp{microseconds: 42}
 end
 
-test "Timestamp.as_milliseconds truncates"
-  assert Timestamp.from_microseconds(1_999).as_milliseconds() == 1
+test "Timestamp.new truncates nanoseconds"
+  assert Timestamp.new(1_999, TimeUnit.Nanoseconds) ==
+    Timestamp{microseconds: 1}
+end
+
+test "Timestamp.since_epoch converts through Duration"
+  t = Timestamp{microseconds: 1_700_000_000_123_456}
+  assert t.since_epoch().to_seconds() == 1_700_000_000
+  assert t.since_epoch().to_milliseconds() == 1_700_000_000_123
+  assert t.since_epoch().to_microseconds() == 1_700_000_000_123_456
+  assert t.since_epoch().to_nanoseconds() == 1_700_000_000_123_456_000
+end
+
+test "Timestamp round-trips a seconds and nanoseconds pair"
+  t = Timestamp.new(1_700_000_000, TimeUnit.Seconds)
+    .plus(Duration.new(123_456_789, TimeUnit.Nanoseconds))
+  since_epoch = t.since_epoch()
+  seconds = since_epoch.to_seconds()
+  nanos = since_epoch.minus(Duration.new(seconds, TimeUnit.Seconds))
+    .to_nanoseconds()
+  assert seconds == 1_700_000_000
+  assert nanos == 123_456_000
 end
 
 test "Timestamp plus, minus, and since"
-  base = Timestamp.from_microseconds(1_000_000)
-  later = base.plus(Duration.from_milliseconds(250))
-  assert later.as_microseconds() == 1_250_000
-  assert later.minus(Duration.from_milliseconds(250)) == base
-  assert later.since(base) == Duration.from_milliseconds(250)
+  base = Timestamp.new(1, TimeUnit.Seconds)
+  later = base.plus(Duration.new(250, TimeUnit.Milliseconds))
+  assert later == Timestamp{microseconds: 1_250_000}
+  assert later.minus(Duration.new(250, TimeUnit.Milliseconds)) == base
+  assert later.since(base) == Duration.new(250, TimeUnit.Milliseconds)
+end
+
+test "Timestamp.since spans centuries"
+  epoch = Timestamp.new(0, TimeUnit.Seconds)
+  year_9999 = Timestamp.new(253_402_300_799, TimeUnit.Seconds)
+  age = year_9999.since(epoch)
+  assert age.unit == TimeUnit.Microseconds
+  assert age.to_hours() == 253_402_300_799 / 3_600
 end

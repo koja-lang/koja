@@ -73,7 +73,10 @@ struct Runner<R: Reporter>:
     after self.options.timeout_ms
       child.kill()
       self.await_exit(child)
-      Outcome.TimedOut(Duration.from_milliseconds(self.options.timeout_ms))
+      Outcome.TimedOut(Duration.new(
+        self.options.timeout_ms,
+        Duration.Unit.Milliseconds,
+      ))
     end
   end
 

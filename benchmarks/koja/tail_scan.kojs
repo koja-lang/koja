@@ -20,7 +20,7 @@ subject = "koja threads this string through two hundred million frames"
 
 t0 = Instant.now()
 total = scan(subject, 0, 200000000, 0)
-elapsed = t0.elapsed().as_milliseconds()
+elapsed = t0.elapsed().to_milliseconds()
 
 if total == 0
   "scan computed nothing, wrong subject".print()

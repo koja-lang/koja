@@ -64,8 +64,8 @@ spreading the same changes across releases would cost one pass each.
   ([gap](GAPS.md#toolchain-and-stdlib-nits-from-the-git_hygiene-build)).
   Superseded by [IO.md](IO.md), where it is one step of the `Read`
   protocol.
-- **[DONE]** Add a monotonic `Instant`, count `Duration` in nanoseconds,
-  and rename `DateTime` to `Timestamp` counting microseconds
+- **[DONE]** Add a monotonic `Instant`, store `Duration` as a value and
+  a unit, and rename `DateTime` to `Timestamp` counting microseconds
   ([TIME.md](TIME.md)). The test runner measured elapsed time with the
   wall clock, and a millisecond `DateTime` could not round-trip a
   Postgres timestamp. This landed before the IO work, whose socket

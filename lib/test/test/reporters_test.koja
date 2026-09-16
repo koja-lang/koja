@@ -4,7 +4,7 @@ struct ReportersTest
   end
 
   priv fn ms(milliseconds: Int) -> Duration
-    Duration.from_milliseconds(milliseconds)
+    Duration.new(milliseconds, Duration.Unit.Milliseconds)
   end
 
   priv fn spec -> Spec
@@ -88,13 +88,16 @@ struct ReportersTest
     passed = JSON.encode(
       JsonReporter.spec_finished_event(
         spec,
-        Outcome.Passed(Duration.from_microseconds(3120)),
+        Outcome.Passed(Duration.new(3120, Duration.Unit.Microseconds)),
       ),
     )
     skipped = JSON.encode(
       JsonReporter.spec_finished_event(
         spec,
-        Outcome.Failed(Failure.Skipped("no db"), Duration.from_microseconds(18)),
+        Outcome.Failed(Failure.Skipped("no db"), Duration.new(
+          18,
+          Duration.Unit.Microseconds,
+        )),
       ),
     )
     crashed = JSON.encode(
@@ -115,7 +118,7 @@ struct ReportersTest
           failed: 2,
           passed: 10,
           skipped: 1,
-          elapsed: Duration.from_microseconds(75211),
+          elapsed: Duration.new(75211, Duration.Unit.Microseconds),
         },
       ),
     )

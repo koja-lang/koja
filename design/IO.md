@@ -278,7 +278,7 @@ request is the caller's job, with an `Instant` from
 [TIME.md](TIME.md):
 
 ```koja
-deadline = Instant.now().plus(Duration.from_seconds(5))
+deadline = Instant.now().plus(Duration.new(5, Duration.Unit.Seconds))
 loop
   remaining = deadline.since(Instant.now())
   if remaining.zero?()
@@ -309,7 +309,7 @@ fn bind(port: Int, options: TCPListener.Options = TCPListener.Options{}) -> TCPL
 `connect` and `accept` are not stream operations. `connect` takes the
 bound as an argument, `TCPSocket.connect(host, port, timeout)`, and
 `accept` reads `accept_timeout` from the listener's options.
-`try_accept` goes, since `accept` with `Some(Duration.from_milliseconds(0))`
+`try_accept` goes, since `accept` with `Some(Duration.new(0, Duration.Unit.Milliseconds))`
 is the same call. There is no process-wide or runtime-wide default.
 Behavior that depends on ambient state a reader cannot see at the call
 site is rejected.

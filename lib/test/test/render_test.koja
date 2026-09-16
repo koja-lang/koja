@@ -1,6 +1,10 @@
 struct RenderTest
   priv fn ms(milliseconds: Int) -> Duration
-    Duration.from_milliseconds(milliseconds)
+    Duration.new(milliseconds, Duration.Unit.Milliseconds)
+  end
+
+  priv fn us(microseconds: Int) -> Duration
+    Duration.new(microseconds, Duration.Unit.Microseconds)
   end
 
   priv fn spec -> Spec
@@ -132,14 +136,14 @@ struct RenderTest
   end
 
   test "elapsed_label picks the unit from the size"
-    assert elapsed_label(Duration.from_nanoseconds(0)) == "0µs"
-    assert elapsed_label(Duration.from_microseconds(452)) == "452µs"
-    assert elapsed_label(Duration.from_microseconds(999)) == "999µs"
-    assert elapsed_label(Duration.from_microseconds(1_000)) == "1ms"
-    assert elapsed_label(Duration.from_microseconds(452_700)) == "452ms"
-    assert elapsed_label(Duration.from_milliseconds(999)) == "999ms"
-    assert elapsed_label(Duration.from_milliseconds(1_000)) == "1.0s"
-    assert elapsed_label(Duration.from_milliseconds(1_249)) == "1.2s"
-    assert elapsed_label(Duration.from_milliseconds(60_000)) == "60.0s"
+    assert elapsed_label(Duration.new(0, Duration.Unit.Nanoseconds)) == "0µs"
+    assert elapsed_label(RenderTest.us(452)) == "452µs"
+    assert elapsed_label(RenderTest.us(999)) == "999µs"
+    assert elapsed_label(RenderTest.us(1_000)) == "1ms"
+    assert elapsed_label(RenderTest.us(452_700)) == "452ms"
+    assert elapsed_label(RenderTest.ms(999)) == "999ms"
+    assert elapsed_label(RenderTest.ms(1_000)) == "1.0s"
+    assert elapsed_label(RenderTest.ms(1_249)) == "1.2s"
+    assert elapsed_label(RenderTest.ms(60_000)) == "60.0s"
   end
 end

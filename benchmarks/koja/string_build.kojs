@@ -16,7 +16,7 @@ while i < n
   i += 1
 end
 
-concat_elapsed = t0.elapsed().as_milliseconds()
+concat_elapsed = t0.elapsed().to_milliseconds()
 "concat_ms #{concat_elapsed} bytes #{s.byte_length()}".print()
 
 t2 = Instant.now()
@@ -28,5 +28,5 @@ while j < n
   j += 1
 end
 
-interp_elapsed = t2.elapsed().as_milliseconds()
+interp_elapsed = t2.elapsed().to_milliseconds()
 "interp_ms #{interp_elapsed} bytes #{acc.byte_length()}".print()

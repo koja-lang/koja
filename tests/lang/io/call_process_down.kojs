@@ -38,7 +38,7 @@ fn report(label: String, result: Result<Int, CallError>, started: Instant)
       end
   end
 
-  elapsed = started.elapsed().as_milliseconds()
+  elapsed = started.elapsed().to_milliseconds()
 
   cond
     elapsed < 2500 -> IO.puts("#{label}: fast")

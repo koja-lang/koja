@@ -61,7 +61,7 @@ so programs are wrong in ad hoc ways instead.
    returns an enum, and `match` exhaustiveness forces the arm. This is
    the one-hour outage from `{:ok, dt}` made unwritable.
 5. Exact arithmetic and calendar arithmetic have different types.
-   `Duration` is nanoseconds. "One day" is not a `Duration`.
+   `Duration` counts a fixed-length unit. "One day" is not a `Duration`.
 6. Full words. `LocalDateTime`, not `NaiveDateTime`. Naive is a warning
    label on a type that is the correct choice for many columns.
 

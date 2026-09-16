@@ -4,17 +4,17 @@ the size: `452µs` below one millisecond, `3ms` below one second, and
 `1.2s` from there.
 """
 fn elapsed_label(elapsed: Duration) -> String
-  nanoseconds = elapsed.as_nanoseconds()
+  microseconds = elapsed.to_microseconds()
 
   cond
-    nanoseconds < 1_000_000 ->
-      "#{elapsed.as_microseconds()}µs"
+    microseconds < 1_000 ->
+      "#{microseconds}µs"
 
-    nanoseconds < 1_000_000_000 ->
-      "#{elapsed.as_milliseconds()}ms"
+    microseconds < 1_000_000 ->
+      "#{elapsed.to_milliseconds()}ms"
 
     else ->
-      tenths = elapsed.as_milliseconds() / 100
+      tenths = elapsed.to_milliseconds() / 100
       "#{tenths / 10}.#{tenths % 10}s"
   end
 end

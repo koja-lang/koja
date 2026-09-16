@@ -3,8 +3,9 @@
 **Status: implemented (2026-09-15).** The design landed in one branch
 for the 0.19 breaking window. The "What is wrong today" section
 describes the state before it. This document argues the position: Koja gets an
-`Instant` type on a monotonic clock, `Duration` and `Instant` count
-nanoseconds, and `DateTime` becomes `Timestamp` and counts
+`Instant` type on a monotonic clock that counts nanoseconds, `Duration`
+stores a count and the unit the caller chose, and `DateTime` becomes
+`Timestamp` and counts
 microseconds. It lands before the [IO design](IO.md), whose socket
 timeouts take a `Duration`, and before [DATETIME.md](DATETIME.md),
 which builds the calendar and zone types on `Timestamp`.
@@ -14,8 +15,10 @@ which builds the calendar and zone types on `Timestamp`.
 - `Instant` is a point on the monotonic clock. It has `now`,
   `elapsed`, `since`, and `plus`. It has no epoch, no formatting, and
   no conversion to `Timestamp`.
-- `Duration` counts nanoseconds. Constructors and accessors exist for
-  seconds, milliseconds, microseconds, and nanoseconds.
+- `Duration` is a `value` and a `unit`, from nanoseconds to hours. A
+  constructor stores what the caller wrote, so the range follows the
+  unit and nothing overflows on the way in. Equality and arithmetic
+  work in the finer of the two units.
 - `DateTime` is renamed `Timestamp` and counts microseconds since the Unix
   epoch. The name is Postgres's and jiff's, and it frees `DateTime` for the
   zoned type in [DATETIME.md](DATETIME.md). The precision matches
@@ -55,50 +58,101 @@ and one extern, `koja_time_now_millis`, which read the wall clock.
    is it" is `Timestamp`. "How much time" is `Duration`. A value of one
    type does not convert to another without going through a `Duration`.
 2. Resolution is the platform's, not a rounding choice. Both clocks
-   deliver nanoseconds. The stored precision of each type is whatever
-   fits `Int` for its useful range.
+   deliver nanoseconds. Each clock type stores the precision that fits
+   `Int` for its useful range, and `Duration` stores whatever unit it
+   was given.
 3. A monotonic point has no meaning on its own. Rust's `Instant` and
    Go's hidden monotonic reading hide the number. Koja has struct-level
    privacy only, so `Instant` keeps its field public and stays honest
    about it instead. See "Why the field is public" below.
 4. Bounds carry their unit. A timeout is a `Duration`, and the call
-   site reads `Duration.from_seconds(30)`, not `30_000`.
+   site reads `Duration.new(30, Duration.Unit.Seconds)`, not `30_000`.
 
 ## Design
 
 ### `Duration`
 
 ```koja
-@doc "A span of time. Counts nanoseconds and covers about 292 years."
+@doc "A span of time, stored as a count of one unit."
 struct Duration
-  nanoseconds: Int
+  unit: Duration.Unit
+  value: Int
 
-  fn from_seconds(seconds: Int) -> Duration
-  fn from_milliseconds(milliseconds: Int) -> Duration
-  fn from_microseconds(microseconds: Int) -> Duration
-  fn from_nanoseconds(nanoseconds: Int) -> Duration
+  enum Unit
+    Hours
+    Microseconds
+    Milliseconds
+    Minutes
+    Nanoseconds
+    Seconds
+  end
 
-  fn as_seconds(self) -> Int
-  fn as_milliseconds(self) -> Int
-  fn as_microseconds(self) -> Int
-  fn as_nanoseconds(self) -> Int
-
-  fn plus(self, other: Duration) -> Duration
   fn minus(self, other: Duration) -> Duration
+  fn new(value: Int, unit: Duration.Unit) -> Duration
+  fn plus(self, other: Duration) -> Duration
+
+  fn to_hours(self) -> Int
+  fn to_microseconds(self) -> Int
+  fn to_milliseconds(self) -> Int
+  fn to_minutes(self) -> Int
+  fn to_nanoseconds(self) -> Int
+  fn to_seconds(self) -> Int
+
   fn zero?(self) -> Bool
+end
+
+impl Equality for Duration
+  fn equals?(self, other: Duration) -> Bool
 end
 ```
 
-`Int` is 64-bit, so nanoseconds cover 292 years, which is longer than
-any process runs. The `as_*` accessors truncate toward zero, the way
-Rust's `as_millis` does. `Duration` derives `Equality`. It has no
-ordering. Comparing two durations is a three-way question, and a
-boolean `less?` would be the wrong shape for it. Ordering waits for
-open question 1. Until then callers compare through
-`as_nanoseconds()`.
+`new` stores the caller's number and unit as given.
+`Duration.new(30, Duration.Unit.Seconds)` holds `30` and `Seconds`,
+and `Debug` prints it that way. Nothing is multiplied on the way in,
+so the constructor cannot overflow, and the range follows the unit:
+292 years at nanoseconds, 292,000 years at microseconds, and 292
+billion years at seconds. `Minutes` and `Hours` add a factor of 60
+each, which buys no range that matters. They exist so two hours reads
+back as `2` and `Hours`.
 
-The current `millis()` accessor becomes `as_milliseconds()`. The field
-`millis` becomes `nanoseconds`.
+One constructor rather than six `from_*` functions. The unit is
+already a value, so a `from_seconds` would only spell
+`Duration.Unit.Seconds` a second way, and the accessors keep the
+`to_` prefix the rest of the stdlib uses (`to_string`, `to_int`,
+`to_binary`). Rust's `as_secs` was the source of the earlier `as_`
+spelling, and Koja has no cheap-view meaning for `as_` to carry.
+
+The two clocks produce the unit they measure in. `Instant.since`
+returns nanoseconds and `Timestamp.since` returns microseconds, so
+the difference of any two valid `Timestamp`s is a valid `Duration`
+without conversion. The row whose `valid_until` is `9999-12-31` has
+an age of 7,973 years, and that is a plain microsecond count.
+
+Every conversion happens on the way out. A `to_*` accessor that moves
+to a coarser unit divides and truncates toward zero, the way Rust's
+`as_millis` does. One that moves to a finer unit multiplies, and traps
+when the result does not fit `Int`. That trap fires only when the
+caller asks for a number that does not exist in 64 bits, such as
+7,973 years in nanoseconds, and not because the type picked a unit on
+the caller's behalf.
+
+`plus`, `minus`, and `equals?` convert both sides to the finer of the
+two units and work there. `Duration` writes its own `equals?` because
+the derived one would compare fields and call one second and `1_000`
+milliseconds different. `zero?` is `value == 0` and
+needs no conversion. The type has no ordering. Comparing two
+durations is a three-way question, and a boolean `less?` would be the
+wrong shape for it. Ordering waits for open question 1. Until then
+callers compare through a `to_*` accessor.
+
+`Unit` stops at `Hours`. A day is 86,400 seconds in this type and 23
+or 25 hours across a DST change in a zoned `DateTime`, so `from_days`
+would be the mistake [DATETIME.md](DATETIME.md) routes to `plus_days`.
+Months and years have no fixed length at all. Elixir's `Duration`
+carries `month` and `year` fields, which is why it has no equality
+that crosses units, no ordering, and no conversion to a number, and
+why `DateTime.diff/3` there returns an integer rather than a
+`Duration`.
 
 ### `Instant`
 
@@ -172,32 +226,57 @@ smaller value after a CPU migration on some virtualized hosts.
 struct Timestamp
   microseconds: Int
 
-  fn now -> Timestamp
-  fn from_milliseconds(milliseconds: Int) -> Timestamp
-  fn from_microseconds(microseconds: Int) -> Timestamp
-
-  fn as_milliseconds(self) -> Int
-  fn as_microseconds(self) -> Int
-
-  fn plus(self, d: Duration) -> Timestamp
   fn minus(self, d: Duration) -> Timestamp
+  fn new(value: Int, unit: Duration.Unit) -> Timestamp
+  fn now -> Timestamp
+  fn plus(self, d: Duration) -> Timestamp
   fn since(self, earlier: Timestamp) -> Duration
+  fn since_epoch(self) -> Duration
 end
 ```
 
-Microseconds since the epoch fit `Int` until the year 294,000 and
-round-trip through Postgres, SQLite's `julianday`, and every wire
-format that carries microseconds. Nanoseconds since the epoch overflow
-`Int` in 2262 and force a two-field representation, which is what Go
-does, for a precision no database stores. Microseconds is the
-practical ceiling for a calendar timestamp.
+Microseconds since the epoch fit `Int` until the year 294,000.
+Nanoseconds since the epoch overflow `Int` in 2262 and force a
+two-field representation, which is what Go and protobuf do.
+Microseconds is the ceiling because no consumer needs more to be
+correct. Postgres `timestamptz`, Python `datetime`, and Elixir
+`DateTime` store microseconds. Protobuf `Timestamp` and OTLP
+`time_unix_nano` carry nanoseconds on the wire, and a round trip
+through Koja truncates the last three digits of one of those, but
+neither format's meaning depends on them. Where nanoseconds matter,
+in a span's duration, `Instant` and `Duration` keep them.
+
+The wire formats are the reason `new` takes a unit. What arrives is
+`seconds` and `nanos` from protobuf, one nanosecond integer from
+OTLP, seconds from a JWT `exp`, milliseconds from JavaScript and
+Kafka, and microseconds from Postgres. Those are four members of
+`Duration.Unit`, so `Timestamp.new(claims.exp, Duration.Unit.Seconds)`
+and `Timestamp.new(nanos, Duration.Unit.Nanoseconds)` each need one
+call. A protobuf pair is `Timestamp.new(seconds,
+Duration.Unit.Seconds).plus(Duration.new(nanos,
+Duration.Unit.Nanoseconds))`. The order matters: `Timestamp.plus`
+works in microseconds, so a year 9999 protobuf timestamp converts,
+where adding the two `Duration`s first would land in nanoseconds and
+trap past 2262. `Minutes` and `Hours` are accepted because the enum
+has them, and are of no use.
+
+Every conversion out is one method. `since_epoch` returns the
+`Duration` from the epoch in microseconds, and the caller picks the
+unit from `Duration`: `t.since_epoch().to_seconds()` for Unix time,
+`.to_nanoseconds()` for OTLP. `Timestamp` itself never divides or
+multiplies. The one conversion table in the file is
+`Duration.in_unit`.
 
 `Timestamp.since` exists because differences of stored timestamps are a
 real need (how old is this row), but the doc comment states that it is
 not for measuring elapsed time in the running process. The field
 `millis` becomes `microseconds`, and `timestamp_millis()` becomes
-`as_milliseconds()`, which truncates. The `from_*` and `as_*` names match
-`Duration` so the two types read the same way.
+`since_epoch().to_milliseconds()`, which truncates.
+
+One trap for the Postgres driver. Postgres `timestamp` without time
+zone is civil time, a `LocalDateTime` in [DATETIME.md](DATETIME.md).
+Only `timestamptz` is an epoch point, so the Postgres type that maps
+to Koja `Timestamp` is the one not called timestamp.
 
 RFC 3339 formatting and parsing remain a [GAPS.md](GAPS.md) item and
 are not part of this document. When they land they format the
@@ -237,7 +316,7 @@ an old program points at its own fix.
   `json` reporter emits integer microseconds.
 - Socket timeouts in [IO.md](IO.md). `with_read_timeout(Duration)`
   bounds one call. A whole-request budget is
-  `deadline = Instant.now().plus(Duration.from_seconds(5))` and
+  `deadline = Instant.now().plus(Duration.new(5, Duration.Unit.Seconds))` and
   `remaining = deadline.since(Instant.now())` before each read.
 - `Runtime` metrics that report uptime or scheduler time, when they
   gain a duration field.
@@ -265,10 +344,21 @@ first step.
 
 ## Rejected
 
+- **`Duration` as one nanosecond count.** The first draft, and Go's
+  representation. It has no invariant a struct literal can break, but
+  it caps every duration at 292 years, so `from_seconds` traps on a
+  large input and `Timestamp.since` traps on the `9999-12-31` sentinel
+  that databases use for "no expiry". Go answers the same problem by
+  saturating `time.Sub`, which returns a wrong number silently.
 - **`Duration` in microseconds.** Matches `Timestamp` and covers 292,000
   years. But `clock_gettime` returns nanoseconds and there is no reason
-  to discard them for a type whose range only has to cover one
-  process's lifetime.
+  to discard them for elapsed time in one process.
+- **`Duration` as seconds plus nanoseconds.** Rust's layout. It covers
+  292 billion years at nanosecond precision, but the two fields carry
+  an invariant, `nanoseconds` in `0..1_000_000_000`, that any struct
+  literal can violate, and Koja has no private fields to guard it.
+  The `value` and `unit` pair has the same range at the coarse end,
+  keeps the caller's unit for `Debug`, and has no invariant at all.
 - **`Timestamp` in nanoseconds.** Overflows `Int` in 2262 and stores
   more than any database accepts.
 - **A `Time` union or protocol over both clocks.** The two clocks answer
@@ -284,6 +374,27 @@ first step.
   nodes that must agree on time across a clock step. Koja has no
   distribution and no node-lifetime clock agreement to preserve.
 - **Changing `receive ... after` in this MR.** See migration step 2.
+- **Folding `Timestamp` into `Duration`.** A `Timestamp` is a
+  `Duration` from the epoch, so `Duration.since_epoch()` could replace
+  the type and the unit question would vanish. What vanishes with it
+  is the anchor. `Duration` has none, `Timestamp` is anchored at the
+  epoch, and `Instant` at process start. The type records the anchor,
+  and without it the anchor moves into the variable name, which is
+  `time_t`, and the bugs are adding two timestamps or passing one as a
+  timeout. The same argument would dissolve `Instant`. The calendar
+  types in [DATETIME.md](DATETIME.md) also need a value that is known
+  to be from the epoch before they format it as a date. The kernel
+  survives as `since_epoch`.
+- **Renaming `Instant`.** Java, Kotlin, JavaScript's Temporal, and
+  Noda Time use `Instant` for the epoch point, the thing this document
+  calls `Timestamp`. Rust uses it for the monotonic point. Koja keeps
+  the Rust meaning on purpose. An instant is a moment with no calendar
+  attached, which describes a monotonic reading better than it
+  describes a value you can store in a database, and `Timestamp` is
+  protobuf's and jiff's name for the epoch point. A reader from the
+  Java side who writes `Instant.now()` expecting Unix time gets a
+  process-relative number that fails on first use, which the public
+  field section above already accepts.
 
 ## Prior art
 

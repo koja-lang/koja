@@ -1,6 +1,6 @@
 struct SummaryTest
   priv fn ms(milliseconds: Int) -> Duration
-    Duration.from_milliseconds(milliseconds)
+    Duration.new(milliseconds, Duration.Unit.Milliseconds)
   end
 
   test "an empty summary is ok"
@@ -14,7 +14,10 @@ struct SummaryTest
       .record(Outcome.Passed(SummaryTest.ms(3)))
       .record(Outcome.Failed(Failure.Error("boom"), SummaryTest.ms(1)))
       .record(
-        Outcome.Failed(Failure.Skipped("no db"), Duration.from_microseconds(18)),
+        Outcome.Failed(Failure.Skipped("no db"), Duration.new(
+          18,
+          Duration.Unit.Microseconds,
+        )),
       )
       .record(Outcome.Crashed("index out of bounds", SummaryTest.ms(12)))
       .record(Outcome.TimedOut(SummaryTest.ms(60000)))
@@ -25,7 +28,7 @@ struct SummaryTest
     assert summary.crashed == 1
     assert summary.timed_out == 1
     assert summary.total() == 5
-    assert summary.elapsed.as_microseconds() == 60_016_018
+    assert summary.elapsed.to_microseconds() == 60_016_018
   end
 
   test "a skip alone keeps the summary ok"

@@ -76,7 +76,7 @@ end
 fn wait_for(target: Ref<ExitSignal, Int>)
   started = Instant.now()
 
-  while target.alive?() and started.elapsed().as_milliseconds() < 5000
+  while target.alive?() and started.elapsed().to_milliseconds() < 5000
     ()
   end
 end
