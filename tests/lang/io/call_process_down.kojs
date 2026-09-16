@@ -26,7 +26,7 @@ struct Reaper: Process<Ref<Int, Int>, (), ()>
   end
 end
 
-fn report(label: String, result: Result<Int, CallError>, started: Int)
+fn report(label: String, result: Result<Int, CallError>, started: Instant)
   match result
     Result.Ok(_) ->
       IO.puts("#{label}: wrong reply")
@@ -38,7 +38,7 @@ fn report(label: String, result: Result<Int, CallError>, started: Int)
       end
   end
 
-  elapsed = DateTime.now().timestamp_millis() - started
+  elapsed = started.elapsed().to_milliseconds()
 
   cond
     elapsed < 2500 -> IO.puts("#{label}: fast")
@@ -59,14 +59,14 @@ struct Probe: Process<(), ProbeMsg, Int>
     # An already-dead callee resolves immediately, not at the timeout.
     dead = spawn Mute.start(())
     dead.kill()
-    started = DateTime.now().timestamp_millis()
+    started = Instant.now()
     report("dead call", dead.call(1, 5000), started)
 
     # A callee dying mid-wait wakes the parked caller.
     victim = spawn Mute.start(())
     reaper = spawn Reaper.start(victim)
     reaper.send_after((), 50)
-    started = DateTime.now().timestamp_millis()
+    started = Instant.now()
     report("mid-wait call", victim.call(1, 5000), started)
 
     ReplyTo.reply(from, 0)

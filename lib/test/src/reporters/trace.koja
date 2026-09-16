@@ -59,7 +59,7 @@ impl Reporter for TraceReporter
     match self.style
       Style.Pretty ->
         word = TraceReporter.result_word(outcome, Palette{color: self.color})
-        IO.puts(" ... #{word} (#{elapsed_label(outcome.elapsed_ms())})")
+        IO.puts(" ... #{word} (#{elapsed_label(outcome.elapsed())})")
         self.failures = push(
           self.failures,
           failure_entry(spec, outcome, self.style, self.color),

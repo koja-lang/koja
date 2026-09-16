@@ -1,51 +1,253 @@
 @doc """
-Wall-clock time as an epoch-millisecond timestamp.
+A span of time, stored as a count of one unit. The unit is the one
+the caller chose, so `Duration.new(30, Duration.Unit.Seconds)` holds
+`30` and `Seconds` and never converts on the way in. The range follows
+the unit, about 292 years at nanoseconds and 292 billion years at
+seconds.
+
+Two durations are equal when they cover the same span, whatever their
+units. `plus` and `minus` return the finer of the two units. The
+`to_*` accessors truncate toward zero when they move to a coarser
+unit. Any move to a finer unit multiplies, and traps when the result
+does not fit `Int`.
 """
-struct DateTime
-  millis: Int
+struct Duration
+  unit: Duration.Unit
+  value: Int
 
   @doc """
-  Returns the current wall-clock time as a `DateTime`.
+  The unit a `Duration` counts. Every variant has a fixed length, so
+  there is no day, month, or year. Calendar arithmetic belongs to the
+  calendar types.
   """
-  fn now -> DateTime
-    DateTime{millis: koja_time_now_millis()}
+  enum Unit
+    Hours
+    Microseconds
+    Milliseconds
+    Minutes
+    Nanoseconds
+    Seconds
   end
 
   @doc """
-  Returns the number of milliseconds since the Unix epoch.
+  Returns this duration less `other` in the finer of their units.
   """
-  fn timestamp_millis(self) -> Int
-    self.millis
+  fn minus(self, other: Duration) -> Duration
+    unit = Duration.finer(self.unit, other.unit)
+    Duration{unit: unit, value: self.in_unit(unit) - other.in_unit(unit)}
   end
 
-  @extern "C"
-  priv fn koja_time_now_millis -> Int64
+  @doc """
+  Creates a `Duration` of `value` in `unit`. The value is stored as
+  given, so nothing can overflow here.
+  """
+  fn new(value: Int, unit: Duration.Unit) -> Duration
+    Duration{unit: unit, value: value}
+  end
+
+  @doc """
+  Returns the sum of the two durations in the finer of their units.
+  """
+  fn plus(self, other: Duration) -> Duration
+    unit = Duration.finer(self.unit, other.unit)
+    Duration{unit: unit, value: self.in_unit(unit) + other.in_unit(unit)}
+  end
+
+  @doc """
+  Returns the whole hours in the duration.
+  """
+  fn to_hours(self) -> Int
+    self.in_unit(Duration.Unit.Hours)
+  end
+
+  @doc """
+  Returns the whole microseconds in the duration.
+  """
+  fn to_microseconds(self) -> Int
+    self.in_unit(Duration.Unit.Microseconds)
+  end
+
+  @doc """
+  Returns the whole milliseconds in the duration.
+  """
+  fn to_milliseconds(self) -> Int
+    self.in_unit(Duration.Unit.Milliseconds)
+  end
+
+  @doc """
+  Returns the whole minutes in the duration.
+  """
+  fn to_minutes(self) -> Int
+    self.in_unit(Duration.Unit.Minutes)
+  end
+
+  @doc """
+  Returns the nanoseconds in the duration.
+  """
+  fn to_nanoseconds(self) -> Int
+    self.in_unit(Duration.Unit.Nanoseconds)
+  end
+
+  @doc """
+  Returns the whole seconds in the duration.
+  """
+  fn to_seconds(self) -> Int
+    self.in_unit(Duration.Unit.Seconds)
+  end
+
+  @doc """
+  Returns `true` when the duration is zero.
+  """
+  fn zero?(self) -> Bool
+    self.value == 0
+  end
+
+  priv fn finer(a: Duration.Unit, b: Duration.Unit) -> Duration.Unit
+    Duration.nanoseconds_per(a) <= Duration.nanoseconds_per(b) ? a : b
+  end
+
+  priv fn in_unit(self, unit: Duration.Unit) -> Int
+    from = Duration.nanoseconds_per(self.unit)
+    to = Duration.nanoseconds_per(unit)
+
+    from < to ? self.value / (to / from) : self.value * (from / to)
+  end
+
+  priv fn nanoseconds_per(unit: Duration.Unit) -> Int
+    match unit
+      Duration.Unit.Hours -> 3_600_000_000_000
+      Duration.Unit.Microseconds -> 1_000
+      Duration.Unit.Milliseconds -> 1_000_000
+      Duration.Unit.Minutes -> 60_000_000_000
+      Duration.Unit.Nanoseconds -> 1
+      Duration.Unit.Seconds -> 1_000_000_000
+    end
+  end
+end
+
+impl Equality for Duration
+  @doc """
+  Two durations are equal when they cover the same span. The
+  comparison happens in the finer of the two units.
+  """
+  fn equals?(self, other: Duration) -> Bool
+    unit = Duration.finer(self.unit, other.unit)
+    self.in_unit(unit) == other.in_unit(unit)
+  end
 end
 
 @doc """
-A span of time measured in milliseconds.
+A point on the monotonic clock. Only useful relative to another
+`Instant`. It has no epoch and is not a timestamp.
+
+The field counts nanoseconds since this process started. The value
+means nothing to another process or machine, and a new run starts
+from zero again. Use `Timestamp` for wall-clock time.
 """
-struct Duration
-  millis: Int
+struct Instant
+  nanoseconds: Int
 
   @doc """
-  Creates a `Duration` from a number of seconds.
+  Returns the time from this instant to now.
   """
-  fn from_secs(secs: Int) -> Duration
-    Duration{millis: secs * 1000}
+  fn elapsed(self) -> Duration
+    Instant.now().since(self)
   end
 
   @doc """
-  Creates a `Duration` from a number of milliseconds.
+  Returns the instant `other` before this one.
   """
-  fn from_millis(ms: Int) -> Duration
-    Duration{millis: ms}
+  fn minus(self, other: Duration) -> Instant
+    Instant{nanoseconds: self.nanoseconds - other.to_nanoseconds()}
   end
 
   @doc """
-  Returns the total number of milliseconds in the duration.
+  Returns the current monotonic time.
   """
-  fn millis(self) -> Int
-    self.millis
+  fn now -> Instant
+    Instant{nanoseconds: koja_time_monotonic_nanoseconds()}
   end
+
+  @doc """
+  Returns the instant `other` after this one.
+  """
+  fn plus(self, other: Duration) -> Instant
+    Instant{nanoseconds: self.nanoseconds + other.to_nanoseconds()}
+  end
+
+  @doc """
+  Returns the time from `earlier` to this instant. Returns zero when
+  `earlier` is later than this instant.
+  """
+  fn since(self, earlier: Instant) -> Duration
+    delta = self.nanoseconds - earlier.nanoseconds
+    Duration.new(delta < 0 ? 0 : delta, Duration.Unit.Nanoseconds)
+  end
+
+  @extern "C"
+  priv fn koja_time_monotonic_nanoseconds -> Int64
+end
+
+@doc """
+Wall-clock time as a `Duration` since the Unix epoch.
+
+The field keeps the value and unit the caller gave, so a timestamp
+that arrived as seconds is stored as seconds and one that arrived as
+nanoseconds keeps every digit. Read it in any unit with the
+`Duration` accessors: `t.since_epoch.to_seconds()` is Unix time.
+`now` reads the clock in microseconds. Two timestamps are equal when
+they name the same moment, whatever their units.
+
+The wall clock can jump when the system time changes. Use `Instant`
+to measure elapsed time in the running process.
+"""
+struct Timestamp
+  since_epoch: Duration
+
+  @doc """
+  Returns the timestamp `other` before this one, in the finer of the
+  two units.
+  """
+  fn minus(self, other: Duration) -> Timestamp
+    Timestamp{since_epoch: self.since_epoch.minus(other)}
+  end
+
+  @doc """
+  Creates a `Timestamp` from a count of `unit` since the Unix epoch.
+  The value is stored as given. For a value split into whole seconds
+  and a sub-second remainder, build from the seconds and add the
+  remainder as a `Duration`, or combine the two in one unit first.
+  """
+  fn new(value: Int, unit: Duration.Unit) -> Timestamp
+    Timestamp{since_epoch: Duration.new(value, unit)}
+  end
+
+  @doc """
+  Returns the current wall-clock time in microseconds.
+  """
+  fn now -> Timestamp
+    Timestamp.new(koja_time_now_microseconds(), Duration.Unit.Microseconds)
+  end
+
+  @doc """
+  Returns the timestamp `other` after this one, in the finer of the
+  two units.
+  """
+  fn plus(self, other: Duration) -> Timestamp
+    Timestamp{since_epoch: self.since_epoch.plus(other)}
+  end
+
+  @doc """
+  Returns the time from `earlier` to this timestamp, in the finer of
+  the two units. Both values come from the wall clock, so the result
+  reflects any clock change between them. Use this for stored
+  timestamps. To measure elapsed time in the running process, use
+  `Instant`.
+  """
+  fn since(self, earlier: Timestamp) -> Duration
+    self.since_epoch.minus(earlier.since_epoch)
+  end
+
+  @extern "C"
+  priv fn koja_time_now_microseconds -> Int64
 end

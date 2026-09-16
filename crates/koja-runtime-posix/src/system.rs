@@ -4,7 +4,8 @@ use std::env;
 use std::ffi::{CStr, CString, c_char};
 use std::os::unix::ffi::OsStringExt;
 use std::ptr;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::sync::OnceLock;
+use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use crate::ffi::get_errno;
 #[cfg(target_os = "macos")]
@@ -84,13 +85,27 @@ pub unsafe extern "C" fn koja_set_env(key_ptr: *const u8, val_ptr: *const u8) {
     }
 }
 
-/// Returns the current wall-clock time as milliseconds since the Unix epoch.
+/// Returns the current wall-clock time as microseconds since the Unix epoch.
 #[unsafe(no_mangle)]
-pub extern "C" fn koja_time_now_millis() -> i64 {
+pub extern "C" fn koja_time_now_microseconds() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_millis() as i64)
+        .map(|d| d.as_micros() as i64)
         .unwrap_or(0)
+}
+
+/// The anchor for the monotonic clock, fixed on the first reading in
+/// this process. Anchoring here rather than at boot keeps the value
+/// small and process relative, so it cannot pass for a timestamp.
+static MONOTONIC_ANCHOR: OnceLock<Instant> = OnceLock::new();
+
+/// Returns the monotonic clock as nanoseconds since the first reading
+/// in this process. The clock does not advance while the machine
+/// sleeps and is not affected by wall-clock changes.
+#[unsafe(no_mangle)]
+pub extern "C" fn koja_time_monotonic_nanoseconds() -> i64 {
+    let anchor = MONOTONIC_ANCHOR.get_or_init(Instant::now);
+    anchor.elapsed().as_nanos() as i64
 }
 
 /// Terminates the process immediately with the given exit code.

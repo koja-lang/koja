@@ -9,15 +9,17 @@ surface.
 ```
 {"event":"started","total":13}
 {"event":"spec_started","id":"test/stack_test.koja:14","group":"StackTest","description":"pops in reverse order"}
-{"event":"spec_finished","id":"test/stack_test.koja:14","outcome":"passed","ms":3}
-{"event":"spec_finished","id":"test/stack_test.koja:22","outcome":"failed","ms":1,"failure":{"kind":"assertion",...}}
-{"event":"spec_finished","id":"test/stack_test.koja:30","outcome":"crashed","ms":12,"reason":"index 5 out of bounds"}
-{"event":"spec_finished","id":"test/stack_test.koja:38","outcome":"skipped","ms":0,"reason":"DATABASE_URL is not set"}
-{"event":"spec_finished","id":"test/stack_test.koja:46","outcome":"timed_out","ms":60000}
-{"event":"finished","passed":10,"failed":2,"skipped":1,"crashed":0,"timed_out":0,"ms":75}
+{"event":"spec_finished","id":"test/stack_test.koja:14","outcome":"passed","microseconds":3120}
+{"event":"spec_finished","id":"test/stack_test.koja:22","outcome":"failed","microseconds":1045,"failure":{"kind":"assertion",...}}
+{"event":"spec_finished","id":"test/stack_test.koja:30","outcome":"crashed","microseconds":12400,"reason":"index 5 out of bounds"}
+{"event":"spec_finished","id":"test/stack_test.koja:38","outcome":"skipped","microseconds":18,"reason":"DATABASE_URL is not set"}
+{"event":"spec_finished","id":"test/stack_test.koja:46","outcome":"timed_out","microseconds":60000000}
+{"event":"finished","passed":10,"failed":2,"skipped":1,"crashed":0,"timed_out":0,"microseconds":75211}
 ```
 
-The `failure` object has a `kind` of `assertion`, with `expression`,
+`microseconds` is the time the spec ran for, or the deadline for a
+`timed_out` spec. It is an integer so the value survives every JSON
+parser exactly. The `failure` object has a `kind` of `assertion`, with `expression`,
 `file`, `line`, `column`, `source_line`, `left`, `right`, and
 `message`, or a `kind` of `error` with `message`. A skip is its own
 `outcome` value because CI counts skips apart from failures.
@@ -83,7 +85,10 @@ struct JsonReporter
       Value.entry("event", Value.string("spec_finished")),
       Value.entry("id", Value.string(spec.id())),
       Value.entry("outcome", Value.string(JsonReporter.outcome_name(outcome))),
-      Value.entry("ms", Value.int(outcome.elapsed_ms()))
+      Value.entry(
+        "microseconds",
+        Value.int(outcome.elapsed().to_microseconds()),
+      )
     ]
 
     tail =
@@ -119,7 +124,10 @@ struct JsonReporter
         Value.entry("skipped", Value.int(summary.skipped)),
         Value.entry("crashed", Value.int(summary.crashed)),
         Value.entry("timed_out", Value.int(summary.timed_out)),
-        Value.entry("ms", Value.int(summary.elapsed_ms))
+        Value.entry(
+          "microseconds",
+          Value.int(summary.elapsed.to_microseconds()),
+        )
       ],
     )
   end

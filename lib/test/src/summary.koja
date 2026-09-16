@@ -5,7 +5,7 @@ is not a failure, so `ok?` ignores it.
 """
 struct Summary
   crashed: Int = 0
-  elapsed_ms: Int = 0
+  elapsed: Duration = Duration{unit: Duration.Unit.Nanoseconds, value: 0}
   failed: Int = 0
   passed: Int = 0
   skipped: Int = 0
@@ -22,7 +22,7 @@ struct Summary
   Returns the summary with `outcome` counted.
   """
   fn record(self, outcome: Outcome) -> Summary
-    self.elapsed_ms = self.elapsed_ms + outcome.elapsed_ms()
+    self.elapsed = self.elapsed.plus(outcome.elapsed())
 
     match outcome
       Outcome.Crashed(_, _) -> self.crashed = self.crashed + 1

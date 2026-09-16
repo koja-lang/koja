@@ -1,16 +1,26 @@
 struct SummaryTest
+  priv fn ms(milliseconds: Int) -> Duration
+    Duration.new(milliseconds, Duration.Unit.Milliseconds)
+  end
+
   test "an empty summary is ok"
     assert Summary{}.ok?()
     assert Summary{}.total() == 0
+    assert Summary{}.elapsed.zero?()
   end
 
-  test "record counts each outcome kind"
+  test "record counts each outcome kind and sums the time"
     summary = Summary{}
-      .record(Outcome.Passed(3))
-      .record(Outcome.Failed(Failure.Error("boom"), 1))
-      .record(Outcome.Failed(Failure.Skipped("no db"), 0))
-      .record(Outcome.Crashed("index out of bounds", 12))
-      .record(Outcome.TimedOut(60000))
+      .record(Outcome.Passed(SummaryTest.ms(3)))
+      .record(Outcome.Failed(Failure.Error("boom"), SummaryTest.ms(1)))
+      .record(
+        Outcome.Failed(Failure.Skipped("no db"), Duration.new(
+          18,
+          Duration.Unit.Microseconds,
+        )),
+      )
+      .record(Outcome.Crashed("index out of bounds", SummaryTest.ms(12)))
+      .record(Outcome.TimedOut(SummaryTest.ms(60000)))
 
     assert summary.passed == 1
     assert summary.failed == 1
@@ -18,26 +28,33 @@ struct SummaryTest
     assert summary.crashed == 1
     assert summary.timed_out == 1
     assert summary.total() == 5
-    assert summary.elapsed_ms == 60016
+    assert summary.elapsed.to_microseconds() == 60_016_018
   end
 
   test "a skip alone keeps the summary ok"
-    summary = Summary{}.record(Outcome.Failed(Failure.Skipped("no db"), 0))
+    summary = Summary{}.record(
+      Outcome.Failed(Failure.Skipped("no db"), SummaryTest.ms(0)),
+    )
 
     assert summary.ok?()
   end
 
   test "a failure, a crash, or a timeout makes the summary not ok"
-    assert not Summary{}.record(Outcome.Failed(Failure.Error("boom"), 0)).ok?()
-    assert not Summary{}.record(Outcome.Crashed("boom", 0)).ok?()
-    assert not Summary{}.record(Outcome.TimedOut(1)).ok?()
+    assert not Summary{}
+      .record(Outcome.Failed(Failure.Error("boom"), SummaryTest.ms(0)))
+      .ok?()
+    assert not Summary{}
+      .record(Outcome.Crashed("boom", SummaryTest.ms(0)))
+      .ok?()
+    assert not Summary{}.record(Outcome.TimedOut(SummaryTest.ms(1))).ok?()
   end
 
   test "outcome predicates"
-    assert Outcome.Passed(1).ok?()
-    assert not Outcome.Passed(1).skipped?()
-    assert Outcome.Failed(Failure.Skipped("x"), 1).skipped?()
-    assert not Outcome.Failed(Failure.Error("x"), 1).ok?()
-    assert Outcome.Crashed("x", 7).elapsed_ms() == 7
+    assert Outcome.Passed(SummaryTest.ms(1)).ok?()
+    assert not Outcome.Passed(SummaryTest.ms(1)).skipped?()
+    assert Outcome.Failed(Failure.Skipped("x"), SummaryTest.ms(1)).skipped?()
+    assert not Outcome.Failed(Failure.Error("x"), SummaryTest.ms(1)).ok?()
+    assert Outcome.Crashed("x", SummaryTest.ms(7)).elapsed() ==
+      SummaryTest.ms(7)
   end
 end

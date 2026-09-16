@@ -2696,6 +2696,26 @@ Read-only process metrics. See [Runtime Observability](#runtime-observability) f
 - `pid.state() -> Option<Process.State>`: one process's lifecycle state, `Option.None` when dead or unknown.
 - `pid.mailbox_depth() -> Option<Int>`: one process's queued message count, `Option.None` when dead or unknown.
 
+### Time
+
+Three structs. `Duration` is a span, `Instant` is a point on the monotonic clock, and `Timestamp` is a point on the wall clock. Elapsed time in the running process comes from `Instant`, never from two `Timestamp` reads, because the wall clock can jump.
+
+- `Duration{unit: Duration.Unit, value: Int}`: `new(value, unit)`, `to_hours`, `to_minutes`, `to_seconds`, `to_milliseconds`, `to_microseconds`, `to_nanoseconds`, `plus`, `minus`, `zero?`. `Duration.Unit` is an enum of those six units, each of fixed length. `new` stores the caller's number and unit as given, so `Duration.new(30, Duration.Unit.Seconds)` holds `30` and `Seconds`. A `to_*` accessor truncates toward zero when it moves to a coarser unit and traps when the span does not fit `Int` at a finer one. `plus` and `minus` return the finer of the two units. Two durations are equal when they cover the same span, so one second equals `1_000` milliseconds.
+- `Instant{nanoseconds: Int}`: `now`, `elapsed`, `since(earlier)` (zero when `earlier` is later), `plus(Duration)`, `minus(Duration)`. The field counts nanoseconds from an anchor fixed in this process. It has no epoch, means nothing to another process, and is not a timestamp.
+- `Timestamp{since_epoch: Duration}`: `new(value, unit)`, `now`, `plus(Duration)`, `minus(Duration)`, `since(earlier)`. A `Duration` from the Unix epoch. `new` stores the caller's value and unit as given, so nothing is truncated on the way in, and `now` reads the clock in microseconds. Every conversion out is a `Duration` accessor on the field: `t.since_epoch.to_seconds()` is Unix time in seconds. Two timestamps are equal when they name the same moment, whatever their units.
+
+```koja
+started = Instant.now()
+work()
+IO.puts("took #{started.elapsed().to_milliseconds()}ms")
+
+created_at = Timestamp.now()
+expires_at = Timestamp.new(claims.exp, Duration.Unit.Seconds)
+timeout = Duration.new(30, Duration.Unit.Seconds)
+```
+
+`Duration` writes its own `equals?` so the comparison crosses units. `Instant` and `Timestamp` derive `Equality`, and `Timestamp` inherits the cross-unit comparison through its field. All three derive `Debug`. None has an ordering yet.
+
 ### Console I/O
 
 `IO` provides ergonomic console input/output. `STDIN`, `STDOUT`, and `STDERR` are available as `Fd` constants for low-level access.

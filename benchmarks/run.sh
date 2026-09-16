@@ -2,7 +2,7 @@
 #
 # Build and run the Koja benchmarks, comparing against BEAM baselines when
 # Erlang is installed. Each program brackets just its workload with
-# DateTime.now()/monotonic_time and prints a "<name>_ms <value>" line, so the
+# Instant.now()/monotonic_time and prints a "<name>_ms <value>" line, so the
 # numbers exclude VM startup and compilation. We run each program a few times
 # and report the median (plus best).
 #

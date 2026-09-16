@@ -18,7 +18,7 @@ impl Process<W, M, Int> for W
 end
 
 w = spawn W.start(W{})
-t0 = DateTime.now().timestamp_millis()
+t0 = Instant.now()
 i = 0
 
 loop
@@ -30,5 +30,5 @@ loop
   end
 end
 
-t1 = DateTime.now().timestamp_millis()
-"msg_ms #{t1 - t0}".print()
+elapsed = t0.elapsed().to_milliseconds()
+"msg_ms #{elapsed}".print()

@@ -6,7 +6,7 @@ fn fib(n: Int) -> Int
   end
 end
 
-t0 = DateTime.now().timestamp_millis()
+t0 = Instant.now()
 r = fib(35)
-t1 = DateTime.now().timestamp_millis()
-"recursion_ms #{t1 - t0} result #{r}".print()
+elapsed = t0.elapsed().to_milliseconds()
+"recursion_ms #{elapsed} result #{r}".print()

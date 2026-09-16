@@ -17,7 +17,7 @@ end
 procs = 10000
 iters = 50000
 
-t0 = DateTime.now().timestamp_millis()
+t0 = Instant.now()
 
 refs: List<Ref<(), Int>> = List.new()
 j = 0
@@ -40,5 +40,5 @@ for r in refs
   end
 end
 
-t1 = DateTime.now().timestamp_millis()
-"storm_ms #{t1 - t0} procs #{procs} total #{total}".print()
+elapsed = t0.elapsed().to_milliseconds()
+"storm_ms #{elapsed} procs #{procs} total #{total}".print()

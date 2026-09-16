@@ -1,4 +1,12 @@
 struct RenderTest
+  priv fn ms(milliseconds: Int) -> Duration
+    Duration.new(milliseconds, Duration.Unit.Milliseconds)
+  end
+
+  priv fn us(microseconds: Int) -> Duration
+    Duration.new(microseconds, Duration.Unit.Microseconds)
+  end
+
   priv fn spec -> Spec
     Spec{
       description: "pops in reverse order",
@@ -26,12 +34,15 @@ struct RenderTest
     spec = RenderTest.spec()
     expected = "test/stack_test.koja:14: ok: pops in reverse order (3ms)"
 
-    assert render_short(spec, Outcome.Passed(3)) == expected
-    assert render_pretty(spec, Outcome.Passed(3), false) == expected
+    assert render_short(spec, Outcome.Passed(RenderTest.ms(3))) == expected
+    assert render_pretty(spec, Outcome.Passed(RenderTest.ms(3)), false) ==
+      expected
   end
 
   test "short style renders an assertion through Assertion.render"
-    outcome = Outcome.Failed(Failure.Assertion(RenderTest.assertion(Option.None)), 1)
+    outcome = Outcome.Failed(Failure.Assertion(RenderTest.assertion(Option.None)), RenderTest.ms(
+      1,
+    ))
     expected = "test/stack_test.koja:23:12: failure: assert popped == 3 (left: 2, right: 3)"
 
     assert render_short(RenderTest.spec(), outcome) == expected
@@ -40,23 +51,33 @@ struct RenderTest
   test "short style names the kind for the other outcomes"
     spec = RenderTest.spec()
 
-    error = render_short(spec, Outcome.Failed(Failure.Error("boom"), 1))
-    skipped = render_short(spec, Outcome.Failed(Failure.Skipped("no db"), 0))
+    error = render_short(
+      spec,
+      Outcome.Failed(Failure.Error("boom"), RenderTest.ms(1)),
+    )
+    skipped = render_short(
+      spec,
+      Outcome.Failed(Failure.Skipped("no db"), RenderTest.ms(0)),
+    )
     crashed = render_short(
       spec,
-      Outcome.Crashed("index 5 out of bounds\n  at list.koja:40", 12),
+      Outcome.Crashed("index 5 out of bounds\n  at list.koja:40", RenderTest.ms(
+        12,
+      )),
     )
-    timed_out = render_short(spec, Outcome.TimedOut(60000))
+    timed_out = render_short(spec, Outcome.TimedOut(RenderTest.ms(60000)))
 
     assert error == "test/stack_test.koja:14: failure: boom"
     assert skipped == "test/stack_test.koja:14: skipped: no db"
     assert crashed == "test/stack_test.koja:14: crash: index 5 out of bounds"
     assert timed_out ==
-      "test/stack_test.koja:14: timeout: no result after 60000ms"
+      "test/stack_test.koja:14: timeout: no result after 60.0s"
   end
 
   test "pretty style draws the snippet with operand labels"
-    outcome = Outcome.Failed(Failure.Assertion(RenderTest.assertion(Option.None)), 1)
+    outcome = Outcome.Failed(Failure.Assertion(RenderTest.assertion(Option.None)), RenderTest.ms(
+      1,
+    ))
     expected = String.join(
       [
         "failure: assertion failed", "   ╭─ test/stack_test.koja:23:12",
@@ -73,21 +94,25 @@ struct RenderTest
   test "pretty style adds the message as a help row"
     outcome = Outcome.Failed(Failure.Assertion(RenderTest.assertion(
       Option.Some("pops the most recent value"),
-    )), 1)
+    )), RenderTest.ms(1))
     rendered = render_pretty(RenderTest.spec(), outcome, false)
 
     assert rendered.ends_with?("\n   = help: pops the most recent value")
   end
 
   test "pretty style prints a location row for an error"
-    outcome = Outcome.Failed(Failure.Error("connection refused"), 1)
+    outcome = Outcome.Failed(Failure.Error("connection refused"), RenderTest.ms(
+      1,
+    ))
     expected = "failure: connection refused\n   ╭─ test/stack_test.koja:14"
 
     assert render_pretty(RenderTest.spec(), outcome, false) == expected
   end
 
   test "pretty style puts a backtrace under the gutter"
-    outcome = Outcome.Crashed("index 5 out of bounds\n  at list.koja:40", 12)
+    outcome = Outcome.Crashed("index 5 out of bounds\n  at list.koja:40", RenderTest.ms(
+      12,
+    ))
     expected = String.join(
       [
         "crash: index 5 out of bounds", "   ╭─ test/stack_test.koja:14",
@@ -100,7 +125,7 @@ struct RenderTest
   end
 
   test "color wraps the severity word and leaves the text intact"
-    outcome = Outcome.Failed(Failure.Error("boom"), 1)
+    outcome = Outcome.Failed(Failure.Error("boom"), RenderTest.ms(1))
     plain = render_pretty(RenderTest.spec(), outcome, false)
     colored = render_pretty(RenderTest.spec(), outcome, true)
 
@@ -110,8 +135,15 @@ struct RenderTest
     assert colored.contains?("boom")
   end
 
-  test "elapsed_label appends the unit"
-    assert elapsed_label(0) == "0ms"
-    assert elapsed_label(452) == "452ms"
+  test "elapsed_label picks the unit from the size"
+    assert elapsed_label(Duration.new(0, Duration.Unit.Nanoseconds)) == "0µs"
+    assert elapsed_label(RenderTest.us(452)) == "452µs"
+    assert elapsed_label(RenderTest.us(999)) == "999µs"
+    assert elapsed_label(RenderTest.us(1_000)) == "1ms"
+    assert elapsed_label(RenderTest.us(452_700)) == "452ms"
+    assert elapsed_label(RenderTest.ms(999)) == "999ms"
+    assert elapsed_label(RenderTest.ms(1_000)) == "1.0s"
+    assert elapsed_label(RenderTest.ms(1_249)) == "1.2s"
+    assert elapsed_label(RenderTest.ms(60_000)) == "60.0s"
   end
 end

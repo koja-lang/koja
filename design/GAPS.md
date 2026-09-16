@@ -281,10 +281,10 @@ runtime can wait on readiness with a bound.
 
 ---
 
-## `DateTime` has no calendar formatting or parsing
+## `Timestamp` has no calendar formatting or parsing
 
 Found 2026-08-10 while building a JSON API that exchanges RFC 3339
-timestamps. `DateTime` carries epoch milliseconds and arithmetic,
+timestamps. `Timestamp` carries epoch microseconds and arithmetic,
 but there is no way to render a calendar date ("2026-08-10T14:00:00Z")
 or parse one back. Any service with a JSON surface needs both
 directions on day one, so the civil-calendar math (days-to-date,
@@ -292,9 +292,10 @@ leap years, month lengths, UTC offsets) gets re-implemented from
 Howard Hinnant's algorithms in user code, along with a hand-rolled
 parser and its validation table.
 
-**Fix path:** `DateTime.to_rfc3339()` and `DateTime.from_rfc3339(text)`
-in the stdlib, over an internal civil-date conversion. A general
-format-string API can wait. RFC 3339 alone covers the JSON world.
+**Fix path:** the calendar and zone types in
+[DATETIME.md](DATETIME.md), where RFC 3339 parses to a `DateTime` and
+formats from one. A general format-string API can wait. RFC 3339 alone
+covers the JSON world.
 
 ---
 
@@ -538,28 +539,6 @@ unit literal to an empty parameter list. `ShortClosure` typecheck and
 lowering do not depend on the parameter count. A parser test and a
 `tests/lang` case cover it, and the `crashes` examples switch to
 `() -> ...`.
-
----
-
-## No monotonic clock and no sub-millisecond time
-
-Found 2026-09-13 while building the `Test` runner. The only clock the
-runtime exposes is `koja_time_now_millis`, read through
-`DateTime.now().timestamp_millis()`. It is wall time, so a clock
-adjustment during a measurement moves the result, and it is whole
-milliseconds, so anything faster than one millisecond measures as zero.
-
-Consequence: `koja test --trace` reports `0ms` for most unit tests, and
-a benchmark or a timeout written in Koja has the same floor. The `Test`
-package keeps the unit in one place (`Outcome` and the `json` reporter)
-and the human reporters call one `elapsed_label` helper, so the swap
-touches one type.
-
-**Fix path:** two runtime externs, `koja_time_now_micros` for wall time
-and `koja_time_monotonic_nanos` for an `Instant` type that only
-supports `now`, `elapsed`, and subtraction. `Duration` gains micro and
-nanosecond constructors and accessors. `Outcome` then carries a
-`Duration` and the reporters print sub-millisecond values.
 
 ---
 

@@ -1,12 +1,11 @@
 //! Eval coverage for the auto-imported `Global.time` stdlib file.
-//! The pure-Koja bodies (`Duration.from_secs` / `from_millis` /
-//! `millis`, `DateTime.timestamp_millis`) evaluate end-to-end on
-//! the interpreter. The `@extern "C" priv fn koja_time_now_millis`
-//! routes through `koja-ir-eval`'s curated extern dispatch
-//! table, which calls into `koja-runtime`'s `koja_time_now_millis`
-//! over the C ABI, the same symbol the LLVM backend would link
-//! against, so the two backends observe identical wall-clock
-//! values.
+//! The pure-Koja bodies (`Duration.new` / `to_milliseconds`,
+//! `Timestamp.new`, `Instant.since`) evaluate end-to-end
+//! on the interpreter. The two `@extern "C"` clock reads route
+//! through `koja-ir-eval`'s curated extern dispatch table, which
+//! calls into `koja-runtime`'s symbols over the C ABI, the same
+//! symbols the LLVM backend links against, so the two backends
+//! observe identical clocks.
 
 use koja_ast::util::dedent;
 use koja_ir_eval::{RuntimeError, Value};
@@ -23,39 +22,71 @@ fn run_int(source: &str) -> i64 {
 }
 
 #[test]
-fn duration_from_secs_multiplies_by_thousand() {
-    // `Duration.from_secs(3)` should construct a `Duration` whose
-    // `millis = 3000`. Project to a primitive via `.millis()` so
-    // the script trailing is an `Int` the harness can read.
-    let v = run_int("Duration.from_secs(3).millis()");
-    assert_eq!(v, 3_000);
+fn duration_in_seconds_converts_to_nanoseconds() {
+    let v = run_int("Duration.new(3, Duration.Unit.Seconds).to_nanoseconds()");
+    assert_eq!(v, 3_000_000_000);
 }
 
 #[test]
-fn duration_from_millis_passes_through() {
-    let v = run_int("Duration.from_millis(1500).millis()");
-    assert_eq!(v, 1500);
+fn duration_to_milliseconds_truncates() {
+    let v = run_int("Duration.new(1_999_999, Duration.Unit.Nanoseconds).to_milliseconds()");
+    assert_eq!(v, 1);
 }
 
 #[test]
-fn datetime_timestamp_millis_returns_underlying_field() {
-    // Build a `DateTime` directly so we pin the pure-Koja getter
+fn duration_arithmetic_lands_in_the_finer_unit() {
+    // `plus` converts both sides to the finer unit, so seconds plus
+    // milliseconds is milliseconds. The user-written `equals?` makes
+    // the cross-unit `==` hold, which the derived one would not.
+    let v = run_int(
+        r#"
+        sum = Duration.new(2, Duration.Unit.Seconds).plus(Duration.new(500, Duration.Unit.Milliseconds))
+        sum == Duration.new(2_500_000, Duration.Unit.Microseconds) ? sum.value : -1
+        "#,
+    );
+    assert_eq!(v, 2_500);
+}
+
+#[test]
+fn timestamp_new_keeps_the_value() {
+    // Build a `Timestamp` directly so the getter is pinned
     // independent of the wall clock.
-    let v = run_int("DateTime{millis: 42}.timestamp_millis()");
+    let v = run_int("Timestamp.new(42, Duration.Unit.Microseconds).since_epoch.to_microseconds()");
     assert_eq!(v, 42);
 }
 
 #[test]
-fn datetime_now_calls_runtime_extern_for_wall_clock() {
-    // `DateTime.now()` lowers to a call into `priv @extern "C" fn
-    // koja_time_now_millis`. The eval extern table routes the C
-    // symbol straight into `koja-runtime`, so the result is a
+fn timestamp_now_calls_runtime_extern_for_wall_clock() {
+    // `Timestamp.now()` lowers to a call into `priv @extern "C" fn
+    // koja_time_now_microseconds`. The eval extern table routes the
+    // C symbol straight into `koja-runtime`, so the result is a
     // positive `Int` reflecting the live wall clock.
-    let v = run_int("DateTime.now().timestamp_millis()");
+    let v = run_int("Timestamp.now().since_epoch.to_microseconds()");
     assert!(
         v > 0,
-        "expected positive epoch-millis from runtime extern; got {v}",
+        "expected positive epoch microseconds from runtime extern; got {v}",
     );
+}
+
+#[test]
+fn instant_now_calls_runtime_extern_for_monotonic_clock() {
+    // Two reads in order never go backwards. The anchor is fixed on
+    // the first read in the process, so the value is small and only
+    // the difference carries meaning.
+    let v = run_int(
+        r#"
+        first = Instant.now()
+        second = Instant.now()
+        second.since(first).to_nanoseconds()
+        "#,
+    );
+    assert!(v >= 0, "expected a non-negative monotonic delta; got {v}");
+}
+
+#[test]
+fn instant_since_saturates_at_zero() {
+    let v = run_int("Instant{nanoseconds: 5}.since(Instant{nanoseconds: 9}).to_nanoseconds()");
+    assert_eq!(v, 0);
 }
 
 #[test]
