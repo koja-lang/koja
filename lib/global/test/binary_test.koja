@@ -1,3 +1,5 @@
+alias Test.require
+
 test "empty binary literal has byte_size 0"
   empty: Binary = <<>>
 
@@ -234,13 +236,13 @@ end
 test "Binary.to_bits widens and round-trips with to_binary"
   b: Binary = <<0xAB, 0xCD>>
   bits = b.to_bits()
-  back = try Test.require(bits.to_binary())
+  back = try require(bits.to_binary())
   assert back == <<0xAB, 0xCD>>
 end
 
 test "Binary.to_string succeeds for valid UTF-8"
   valid: Binary = <<0x68, 0x69>>
-  str = try Test.require(valid.to_string())
+  str = try require(valid.to_string())
   assert str == "hi"
 end
 
@@ -256,7 +258,7 @@ end
 test "Bits.to_binary on byte-aligned bits from Binary"
   aligned: Binary = <<0x01, 0x02>>
   as_bits = aligned.to_bits()
-  back = try Test.require(as_bits.to_binary())
+  back = try require(as_bits.to_binary())
   assert back == <<0x01, 0x02>>
 end
 

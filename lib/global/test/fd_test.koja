@@ -1,52 +1,53 @@
 alias File.Mode as FileMode
+alias Test.require
 
 test "close returns Ok on valid fd"
-  file = try Test.require(File.open("/dev/null", FileMode.Read))
-  try Test.require(file.fd.close())
+  file = try require(File.open("/dev/null", FileMode.Read))
+  try require(file.fd.close())
 end
 
 test "close consumes the fd"
-  file = try Test.require(File.open("/dev/null", FileMode.Read))
-  try Test.require(file.close())
+  file = try require(File.open("/dev/null", FileMode.Read))
+  try require(file.close())
 end
 
 test "close on opened writable file"
   path = "/tmp/koja_fd_close_test.txt"
-  file = try Test.require(File.open(path, FileMode.Write))
+  file = try require(File.open(path, FileMode.Write))
   result = file.close()
   File.delete(path)
 
-  try Test.require(result)
+  try require(result)
 end
 
 test "write returns byte count on success"
   path = "/tmp/koja_fd_write_test.txt"
-  file = try Test.require(File.open(path, FileMode.Write))
+  file = try require(File.open(path, FileMode.Write))
   result = file.fd.write("hello")
   File.delete(path)
 
-  n = try Test.require(result)
+  n = try require(result)
   assert n == 5
 end
 
 test "write and read back roundtrip"
   path = "/tmp/koja_fd_write_roundtrip.txt"
-  file = try Test.require(File.open(path, FileMode.Write))
+  file = try require(File.open(path, FileMode.Write))
   file.fd.write("koja write test")
   read = File.read(path)
   File.delete(path)
 
-  contents = try Test.require(read)
+  contents = try require(read)
   assert contents == "koja write test"
 end
 
 test "write to /dev/null succeeds"
-  file = try Test.require(File.open("/dev/null", FileMode.Write))
-  try Test.require(file.fd.write("discard me"))
+  file = try require(File.open("/dev/null", FileMode.Write))
+  try require(file.fd.write("discard me"))
 end
 
 test "watch and unwatch do not crash"
-  file = try Test.require(File.open("/dev/null", FileMode.Read))
+  file = try require(File.open("/dev/null", FileMode.Read))
   file.fd.watch(0)
   file.fd.unwatch()
   _ = file.close()

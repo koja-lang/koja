@@ -366,3 +366,48 @@ fn new_name_must_match_the_old_case_class() {
     assert!(validate_new_name("total", "end").is_err());
     assert!(validate_new_name("total", "self").is_err());
 }
+
+#[test]
+fn rename_refuses_a_function_whose_alias_binds_sibling_arities() {
+    let checked = check(
+        r#"
+        alias TestApp.greet
+
+        fn greet(name: String) -> String
+          name
+        end
+
+        fn greet(name: String, punct: String) -> String
+          name <> punct
+        end
+
+        fn run -> String
+          greet("a")
+        end
+        "#,
+    );
+    let analysis = Analysis::from_checked(&checked);
+    let f = Fixture::new(&analysis);
+    assert_eq!(f.rename(3, 4), Err(RenameRefusal::Aliased));
+    assert_eq!(f.rename(7, 4), Err(RenameRefusal::Aliased));
+}
+
+#[test]
+fn rename_of_a_single_arity_aliased_function_rewrites_the_alias_line() {
+    let checked = check(
+        r#"
+        alias TestApp.greet
+
+        fn greet(name: String) -> String
+          name
+        end
+
+        fn run -> String
+          greet("a")
+        end
+        "#,
+    );
+    let analysis = Analysis::from_checked(&checked);
+    let f = Fixture::new(&analysis);
+    assert_eq!(f.rename(3, 4), Ok(vec![(1, 15), (3, 4), (8, 3)]));
+}

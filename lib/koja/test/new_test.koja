@@ -1,3 +1,5 @@
+alias Test.require
+
 test "run without arguments returns usage"
   args: List<String> = []
 
@@ -37,7 +39,7 @@ test "run derives the package from a kebab-case nested path"
   cleanup_scaffold(path)
   File.rmdir(parent)
 
-  try Test.require(New.run([path]))
+  try require(New.run([path]))
 
   toml = File.read("#{path}/koja.toml")
   cleanup_scaffold(path)
@@ -49,7 +51,7 @@ end
 test "run refuses an existing directory"
   name = "koja_new_test_existing"
 
-  try Test.require(File.mkdir_p(name))
+  try require(File.mkdir_p(name))
 
   result = New.run([name])
   File.rmdir(name)
@@ -65,7 +67,7 @@ test "run scaffolds a complete project"
   name = "koja_new_test_scaffold"
   cleanup_scaffold(name)
 
-  try Test.require(New.run([name]))
+  try require(New.run([name]))
 
   toml = File.read("#{name}/koja.toml")
   gitignore = File.read("#{name}/.gitignore")
@@ -91,7 +93,7 @@ priv fn check_marker(
   label: String,
 ) ! Test.Failure
 
-  text = try Test.require(contents)
+  text = try require(contents)
   assert text.contains?(marker), "#{label} is missing `#{marker}`"
 end
 

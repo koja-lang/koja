@@ -1,41 +1,43 @@
+alias Test.require
+
 test "decode null"
-  val = try Test.require(decode("null"))
+  val = try require(decode("null"))
   assert encode(val) == "null"
 end
 
 test "decode true"
-  val = try Test.require(decode("true"))
+  val = try require(decode("true"))
   assert encode(val) == "true"
 end
 
 test "decode integer"
-  val = try Test.require(decode("42"))
+  val = try require(decode("42"))
   assert encode(val) == "42"
 end
 
 test "decode string"
-  val = try Test.require(decode("\"hello\""))
+  val = try require(decode("\"hello\""))
   assert encode(val) == "\"hello\""
 end
 
 test "decode empty array"
-  val = try Test.require(decode("[]"))
+  val = try require(decode("[]"))
   assert encode(val) == "[]"
 end
 
 test "decode array"
-  val = try Test.require(decode("[1, 2, 3]"))
+  val = try require(decode("[1, 2, 3]"))
   assert encode(val) == "[1,2,3]"
 end
 
 test "decode object"
-  val = try Test.require(decode("{\"key\": \"value\"}"))
+  val = try require(decode("{\"key\": \"value\"}"))
   assert encode(val) == "{\"key\":\"value\"}"
 end
 
 test "round trip object"
   input = "{\"name\":\"koja\",\"version\":\"0.1.0\",\"tags\":[1,2,3]}"
-  val = try Test.require(decode(input))
+  val = try require(decode(input))
   assert encode(val) == input
 end
 
@@ -53,7 +55,7 @@ test "decode long array"
 
   input = "[" <> String.join(parts, ",") <> "]"
 
-  match try Test.require(decode(input))
+  match try require(decode(input))
     Value.Array(items) -> assert items.length() == count
     _ -> fail "expected an array"
   end

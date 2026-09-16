@@ -24,7 +24,7 @@ mod bounded;
 mod methods;
 mod structural;
 
-use koja_ast::ast::{Arg, Diagnostic, Expr, ExprKind, Literal};
+use koja_ast::ast::{AliasDecl, Arg, Diagnostic, Expr, ExprKind, Literal};
 use koja_ast::identifier::{
     AnonymousKind, GlobalRegistryId, Identifier, LocalId, Resolution, ResolvedType,
 };
@@ -39,6 +39,7 @@ use methods::{
 };
 use structural::{StructuralCall, resolve_structural_method_call};
 
+use crate::pipeline::aliases::rewrite_through_aliases;
 use crate::pipeline::unify::{Conflict, Substitution, substitute};
 use crate::registry::{
     FunctionLookup, FunctionSignature, GlobalKind, GlobalRegistry, RegistryEntry, ResolvedParam,
@@ -112,6 +113,7 @@ pub(super) fn resolve_call(
         args.len(),
         resolver.package,
         resolver.enclosing_type,
+        resolver.file_aliases,
         resolver.registry,
     ) {
         BareCalleeLookup::Found(found) => found,
@@ -895,16 +897,17 @@ pub(super) fn emit_conflict(
 }
 
 /// Resolve a bare call `name(...)`: prioritize the enclosing
-/// scope, then fall through to the package scope. Inside a
-/// struct/enum method, `Package.Enclosing.name` wins over
-/// `Package.name` when both exist. The escape hatch for callers
-/// who want the package-level function in the conflict case is
-/// to fully qualify (`Global.name()`), which goes through path-
-/// call resolution and never reaches this helper. Free functions
-/// and file bodies pass `enclosing_type = None` and skip the
-/// first step. Takes the registry directly (rather than the full
-/// [`Resolver`]) so the caller keeps `&mut` access for
-/// diagnostics and arg resolution on the not-found path.
+/// scope, then a file alias that binds `name`, then fall through
+/// to the package scope. Inside a struct/enum method,
+/// `Package.Enclosing.name` wins over `Package.name` when both
+/// exist. The escape hatch for callers who want the package-level
+/// function in the conflict case is to fully qualify
+/// (`Global.name()`), which goes through path-call resolution and
+/// never reaches this helper. Free functions and file bodies pass
+/// `enclosing_type = None` and skip the first step. Takes the
+/// registry directly (rather than the full [`Resolver`]) so the
+/// caller keeps `&mut` access for diagnostics and arg resolution
+/// on the not-found path.
 enum BareCalleeLookup<'a> {
     Found((GlobalRegistryId, &'a RegistryEntry)),
     Missing,
@@ -919,6 +922,7 @@ fn lookup_bare_callee<'a>(
     arity: usize,
     package: &str,
     enclosing_type: Option<&[String]>,
+    aliases: &[AliasDecl],
     registry: &'a GlobalRegistry,
 ) -> BareCalleeLookup<'a> {
     let lookup_in = |identifier: Identifier| match registry.function_lookup(&identifier, arity) {
@@ -933,6 +937,15 @@ fn lookup_bare_callee<'a>(
     };
     if let Some(enclosing) = enclosing_type
         && let Some(outcome) = lookup_in(Identifier::member(package, enclosing, name))
+    {
+        return outcome;
+    }
+    if let Some(target) = rewrite_through_aliases(
+        aliases,
+        std::slice::from_ref(&name.to_string()),
+        package,
+        registry,
+    ) && let Some(outcome) = lookup_in(target)
     {
         return outcome;
     }

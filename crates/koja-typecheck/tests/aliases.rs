@@ -1,20 +1,21 @@
-//! `alias Pkg.Type [as Local]` validation + use-site resolution.
+//! `alias Pkg.Name [as Local]` validation + use-site resolution.
 //!
 //! Pins the contract surface for [`koja_typecheck::pipeline::aliases`]:
-//! every alias must qualify (`Package.Type`), point at a registered
-//! struct/enum/protocol, name-collide with no other alias in the
-//! file, and *not* shadow a current-package or `Global` binding
-//! (carve-out: redundant self-aliases pointing at the very same
-//! identifier they would shadow are allowed). Use sites resolve via
-//! the rewritten alias target and never fall through to the
-//! "unknown type" diagnostic when the alias is well-formed.
+//! every alias must qualify (`Package.Name`), point at a registered
+//! type or a package-level function or constant, name-collide with
+//! no other alias in the file, and *not* shadow a current-package or
+//! `Global` binding (carve-out: redundant self-aliases pointing at
+//! the very same identifier they would shadow are allowed). Use sites
+//! resolve via the rewritten alias target and never fall through to
+//! the "unknown type" diagnostic when the alias is well-formed.
 
 use koja_parser::ParseMode;
+use koja_typecheck::{CheckFailure, CheckedProgram};
 
 mod common;
 
 use common::{
-    assert_file_fails_with, check_multi_file, diagnostic_messages, typecheck_file,
+    assert_file_fails_with, check_multi_file, check_packages, diagnostic_messages, typecheck_file,
     typecheck_file_fail,
 };
 
@@ -62,7 +63,7 @@ fn alias_unknown_package_diagnoses() {
     assert_file_fails_with(
         "alias Nope.Thing as Thing\n\
          fn main\n  1\nend\n",
-        &["alias target `Nope.Thing` is not a registered type"],
+        &["alias target `Nope.Thing` is not a registered declaration"],
     );
 }
 
@@ -71,7 +72,7 @@ fn alias_unknown_type_diagnoses() {
     assert_file_fails_with(
         "alias Crypto.NoSuchType\n\
          fn main\n  1\nend\n",
-        &["alias target `Crypto.NoSuchType` is not a registered type"],
+        &["alias target `Crypto.NoSuchType` is not a registered declaration"],
     );
 }
 
@@ -80,7 +81,7 @@ fn alias_path_too_short_diagnoses() {
     assert_file_fails_with(
         "alias Foo\n\
          fn main\n  1\nend\n",
-        &["alias path must be `Package.Type`"],
+        &["alias path must be `Package.Name`"],
     );
 }
 
@@ -96,7 +97,7 @@ fn alias_multi_segment_target_falls_through_when_unregistered() {
     assert_file_fails_with(
         "alias Crypto.SHA256.Inner as Inner\n\
          fn main\n  1\nend\n",
-        &["alias target `Crypto.SHA256.Inner` is not a registered type"],
+        &["alias target `Crypto.SHA256.Inner` is not a registered declaration"],
     );
 }
 
@@ -249,5 +250,236 @@ fn type_param_shadows_alias_inside_function() {
         checked.diagnostics.is_empty(),
         "expected no diagnostics for alias-vs-type-param scoping, got {:?}",
         checked.diagnostics,
+    );
+}
+
+// ---- function and constant aliases ----
+
+/// A second package with the shapes the function-alias tests need.
+/// One function at two arities, a constant, a `priv` function, and
+/// a struct with a static method.
+const LIB: &str = "
+    const MAX: Int = 10
+
+    fn greet(name: String) -> String
+      \"hi #{name}\"
+    end
+
+    fn greet(name: String, punct: String) -> String
+      \"hi #{name}#{punct}\"
+    end
+
+    priv fn hidden -> Int
+      1
+    end
+
+    struct Counter
+    end
+
+    extend Counter
+      fn zero -> Int
+        0
+      end
+    end
+";
+
+fn check_with_lib(source: &str) -> Result<CheckedProgram, CheckFailure> {
+    check_packages(
+        &[
+            ("Lib", "lib.koja", LIB),
+            (common::PACKAGE, "app.koja", source),
+        ],
+        ParseMode::File,
+    )
+}
+
+fn assert_with_lib_ok(source: &str) {
+    if let Err(failure) = check_with_lib(source) {
+        panic!(
+            "expected clean typecheck, got: {:#?}",
+            diagnostic_messages(&failure)
+        );
+    }
+}
+
+fn assert_with_lib_fails(source: &str, needles: &[&str]) {
+    let failure = check_with_lib(source).expect_err("expected typecheck to fail");
+    let messages = diagnostic_messages(&failure);
+    for needle in needles {
+        assert!(
+            messages.iter().any(|m| m.contains(needle)),
+            "expected a diagnostic containing `{needle}`, got: {messages:#?}",
+        );
+    }
+}
+
+#[test]
+fn alias_function_call_resolves() {
+    let checked = typecheck_file(
+        "alias Test.require\n\
+         fn run(outcome: Result<Int, String>) -> Int ! Test.Failure\n  try require(outcome)\nend\n",
+    );
+    assert!(
+        checked.diagnostics.is_empty(),
+        "expected no diagnostics, got {:?}",
+        checked.diagnostics,
+    );
+}
+
+#[test]
+fn alias_function_with_as_call_and_reference() {
+    let checked = typecheck_file(
+        "alias JSON.decode as parse\n\
+         fn run(text: String) -> JSON.Value ! String\n  try parse(text)\nend\n\
+         fn pick -> fn (String) -> Result<JSON.Value, String>\n  &parse/1\nend\n",
+    );
+    assert!(
+        checked.diagnostics.is_empty(),
+        "expected no diagnostics, got {:?}",
+        checked.diagnostics,
+    );
+}
+
+#[test]
+fn alias_function_covers_every_arity() {
+    assert_with_lib_ok(
+        "
+        alias Lib.greet
+        fn run -> String
+          greet(\"a\") <> greet(\"b\", \"!\")
+        end
+        ",
+    );
+}
+
+#[test]
+fn alias_function_wrong_arity_names_the_target() {
+    assert_with_lib_fails(
+        "
+        alias Lib.greet
+        fn run -> String
+          greet()
+        end
+        ",
+        &["function `Lib.greet` has no arity 0"],
+    );
+}
+
+#[test]
+fn alias_constant_reads_through() {
+    assert_with_lib_ok(
+        "
+        alias Lib.MAX
+        fn run -> Int
+          MAX + 1
+        end
+        ",
+    );
+}
+
+#[test]
+fn alias_function_bare_read_requires_explicit_reference() {
+    assert_with_lib_fails(
+        "
+        alias Lib.greet
+        fn run -> Int
+          greet
+          1
+        end
+        ",
+        &["named function `greet` requires an explicit reference"],
+    );
+}
+
+#[test]
+fn alias_function_with_uppercase_as_is_error() {
+    assert_with_lib_fails(
+        "
+        alias Lib.greet as Greet
+        fn run -> Int
+          1
+        end
+        ",
+        &["alias `Greet` names function `Lib.greet`, so it must be lowercase"],
+    );
+}
+
+#[test]
+fn alias_type_with_lowercase_as_is_error() {
+    assert_with_lib_fails(
+        "
+        alias Lib.Counter as counter
+        fn run -> Int
+          1
+        end
+        ",
+        &["alias `counter` names struct `Lib.Counter`, so it must be uppercase"],
+    );
+}
+
+#[test]
+fn alias_constant_with_lowercase_as_is_error() {
+    assert_with_lib_fails(
+        "
+        alias Lib.MAX as max
+        fn run -> Int
+          1
+        end
+        ",
+        &["alias `max` names constant `Lib.MAX`, so it must be uppercase"],
+    );
+}
+
+#[test]
+fn alias_to_method_is_error() {
+    assert_with_lib_fails(
+        "
+        alias Lib.Counter.zero
+        fn run -> Int
+          1
+        end
+        ",
+        &["alias target `Lib.Counter.zero` is a member of `Lib.Counter`"],
+    );
+}
+
+#[test]
+fn alias_to_private_function_cross_package_is_error() {
+    assert_with_lib_fails(
+        "
+        alias Lib.hidden
+        fn run -> Int
+          1
+        end
+        ",
+        &["hidden", "private"],
+    );
+}
+
+#[test]
+fn alias_function_shadowing_same_package_function_is_error() {
+    assert_with_lib_fails(
+        "
+        alias Lib.greet
+        fn greet(name: String) -> String
+          name
+        end
+        fn run -> Int
+          1
+        end
+        ",
+        &["alias `greet` would shadow", "TestApp.greet"],
+    );
+}
+
+#[test]
+fn local_binding_wins_over_function_alias() {
+    assert_with_lib_ok(
+        "
+        alias Lib.greet
+        fn run(greet: fn (String) -> String) -> String
+          greet(\"a\")
+        end
+        ",
     );
 }

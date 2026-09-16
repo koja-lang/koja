@@ -48,12 +48,45 @@ fn alias_with_nested_type_segments() {
 }
 
 #[test]
-fn alias_without_trailing_type_ident_fails() {
+fn alias_with_function_tail() {
+    let a = first_alias(
+        "
+        alias Test.require
+        ",
+    );
+    assert_eq!(a.path, vec!["Test", "require"]);
+    assert_eq!(a.local_name, "require");
+}
+
+#[test]
+fn alias_with_lowercase_as_rename() {
+    let a = first_alias(
+        "
+        alias JSON.decode as parse
+        ",
+    );
+    assert_eq!(a.path, vec!["JSON", "decode"]);
+    assert_eq!(a.local_name, "parse");
+}
+
+#[test]
+fn alias_with_lowercase_leading_segment_fails() {
     parse_failing_with(
         "
-        alias Net.tcp
+        alias net
         ",
-        &["alias path must end with a type name (PascalCase)"],
+        &["alias path must be `Package.Name`"],
+    );
+}
+
+#[test]
+fn alias_function_tail_ends_the_path() {
+    // A function name is the leaf. Nothing may follow it.
+    parse_failing_with(
+        "
+        alias JSON.decode.Foo
+        ",
+        &["expected"],
     );
 }
 

@@ -1,3 +1,5 @@
+alias Test.require
+
 test "basic round-trip"
   s = "hello world"
   cs = s.to_cstring().unwrap()
@@ -88,6 +90,6 @@ end
 
 test "accepts null pointer with zero length"
   cs = CString{ptr: CPtr.null(), len: 0}
-  value = try Test.require(cs.to_string())
+  value = try require(cs.to_string())
   assert value == ""
 end

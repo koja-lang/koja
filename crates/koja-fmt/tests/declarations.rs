@@ -17,6 +17,17 @@ fn doc_on_type_alias() {
 }
 
 #[test]
+fn function_and_constant_aliases_are_canonical() {
+    assert_unchanged(
+        "
+        alias Test.require
+        alias JSON.decode as parse
+        alias Global.STDOUT as OUT
+    ",
+    );
+}
+
+#[test]
 fn single_annotation_on_function() {
     assert_fmt(
         r#"

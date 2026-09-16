@@ -3,10 +3,12 @@
 //! - `type Name = TypeExpr`: a local rename for a type expression.
 //!   Lives both at the top level (as an `Item::TypeAlias`) and inside
 //!   `impl` bodies (as an `ImplMember::TypeAlias`).
-//! - `alias Pkg.Type [as LocalName]`: import a foreign-package
-//!   type into the current scope, optionally renaming it. Package
-//!   names are PascalCase (e.g. `Net`, `HTTP`, `JSON`) and the path
-//!   must end with a `TypeIdent` segment.
+//! - `alias Pkg.Name [as LocalName]`: bind a foreign-package type,
+//!   function, or constant in the current file, optionally renaming
+//!   it. Package names are PascalCase (e.g. `Net`, `HTTP`, `JSON`).
+//!   The path ends with a `TypeIdent` for a type or constant, or one
+//!   `Ident` for a function. Typecheck checks that the local name
+//!   has the same case as the target.
 
 use koja_ast::ast::{AliasDecl, Annotation, Item, Name, TypeAlias, Visibility};
 use koja_ast::token::TokenKind;
@@ -48,7 +50,7 @@ impl Parser {
 
         let path = self.parse_alias_path();
         let local_name = if self.eat(&TokenKind::Ident("as".to_string())).is_some() {
-            self.expect_type_name()
+            self.expect_any_name()
         } else {
             path.last()
                 .cloned()
@@ -66,10 +68,10 @@ impl Parser {
     /// leading `Ident.` qualifiers. These are never canonical, since
     /// packages are PascalCase, but are accepted as a recovery path
     /// so the resolver can later flag the source rather than the
-    /// parser bailing out. Phase 2 then consumes one-or-more
-    /// `TypeIdent` segments separated by `.`. The path must end on
-    /// a `TypeIdent`. Anything else lands a diagnostic and
-    /// short-circuits.
+    /// parser bailing out. Phase 2 consumes one or more `TypeIdent`
+    /// segments separated by `.`, and one trailing `Ident` segment
+    /// ends the path as a function name. Anything else lands a
+    /// diagnostic and short-circuits.
     fn parse_alias_path(&mut self) -> Vec<Name> {
         let mut path = Vec::new();
 
@@ -77,7 +79,7 @@ impl Parser {
             path.push(self.expect_name());
             if self.eat(&TokenKind::Dot).is_none() {
                 self.error(
-                    "alias path must end with a type name (PascalCase)".to_string(),
+                    "alias path must be `Package.Name`".to_string(),
                     self.current_span(),
                 );
                 return path;
@@ -98,15 +100,11 @@ impl Parser {
                 TokenKind::TypeIdent(_) => path.push(self.expect_type_name()),
                 TokenKind::Ident(_) => {
                     path.push(self.expect_name());
-                    self.error(
-                        "alias path must end with a type name (PascalCase)".to_string(),
-                        self.current_span(),
-                    );
                     return path;
                 }
                 _ => {
                     self.error(
-                        "alias path must end with a type name (PascalCase)".to_string(),
+                        "alias path must be `Package.Name`".to_string(),
                         self.current_span(),
                     );
                     return path;
@@ -115,5 +113,25 @@ impl Parser {
         }
 
         path
+    }
+
+    /// A local name after `as`, in either case. Typecheck matches the
+    /// case against the alias target.
+    fn expect_any_name(&mut self) -> Name {
+        let span = self.current_span();
+        match self.peek().clone() {
+            TokenKind::Ident(name) | TokenKind::TypeIdent(name) => {
+                self.advance();
+                Name::new(name, span)
+            }
+            _ => {
+                self.error(
+                    format!("expected a name after `as`, found {}", self.peek()),
+                    span,
+                );
+                self.advance();
+                Name::new(String::new(), span)
+            }
+        }
     }
 }

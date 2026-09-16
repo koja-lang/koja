@@ -4,6 +4,7 @@ use koja_ast::ast::{Diagnostic, Expr, ExprKind};
 use koja_ast::identifier::{AnonymousKind, Identifier, LocalId, Resolution, ResolvedType};
 use koja_ast::span::Span;
 
+use crate::pipeline::aliases::rewrite_through_aliases;
 use crate::pipeline::visibility::check_reference_visibility;
 use crate::registry::{
     FunctionLookup, FunctionSignature, GlobalKind, GlobalRegistry, RegistryEntry, VisibilityScope,
@@ -14,15 +15,16 @@ use super::ctx::Resolver;
 use super::paths::{PackageMember, lookup_package_member, static_dotted_path};
 use super::types::lookup_type;
 
-/// Resolve a bare identifier expression. Locals win first. Package-
-/// level constants resolve through a global lookup so an
-/// `EARTH_RADIUS` reference at a use site stamps `Resolution::Global`
-/// and returns the constant's stamped type, with auto-imported
-/// `Global` constants (`STDOUT`) as the fallback when the current
-/// package has no match. Named global functions require explicit
-/// `&name/arity` syntax. (The static-method receiver and
-/// `Type.method(...)` call paths each handle struct-name resolution
-/// directly so they do not go through this helper.)
+/// Resolve a bare identifier expression. Locals win first, then a
+/// file alias that binds the name. Package-level constants resolve
+/// through a global lookup so an `EARTH_RADIUS` reference at a use
+/// site stamps `Resolution::Global` and returns the constant's
+/// stamped type, with auto-imported `Global` constants (`STDOUT`) as
+/// the fallback when the current package has no match. Named global
+/// functions require explicit `&name/arity` syntax. (The
+/// static-method receiver and `Type.method(...)` call paths each
+/// handle struct-name resolution directly so they do not go through
+/// this helper.)
 pub(super) fn resolve_ident(
     name: &str,
     resolution: &mut Resolution,
@@ -34,7 +36,8 @@ pub(super) fn resolve_ident(
         *resolution = Resolution::Local(local_id);
         return ty.clone();
     }
-    let global_id = Identifier::single(resolver.package, name);
+    let global_id =
+        alias_target(name, resolver).unwrap_or_else(|| Identifier::single(resolver.package, name));
     if let Some((id, entry)) = resolver.registry.lookup(&global_id) {
         match &entry.kind {
             GlobalKind::Constant(Some(def)) => {
@@ -60,6 +63,18 @@ pub(super) fn resolve_ident(
         span,
     ));
     ResolvedType::unresolved()
+}
+
+/// The identifier a file alias binds `name` to, when one does. The
+/// alias validator has already confirmed the target exists and is
+/// visible, so a hit here replaces the current-package candidate.
+fn alias_target(name: &str, resolver: &Resolver<'_>) -> Option<Identifier> {
+    rewrite_through_aliases(
+        resolver.file_aliases,
+        std::slice::from_ref(&name.to_string()),
+        resolver.package,
+        resolver.registry,
+    )
 }
 
 /// Resolve a package-qualified member read: a constant
@@ -177,6 +192,9 @@ pub(super) fn resolve_named_function_reference(
     function_value_type(signature)
 }
 
+/// `&name/arity` with a single segment. A method on the enclosing
+/// type wins, then a file alias that binds the name, then the
+/// current package.
 fn resolve_bare_reference<'a>(
     path: &[String],
     arity: usize,
@@ -208,7 +226,8 @@ fn resolve_bare_reference<'a>(
             }
         }
     }
-    let identifier = Identifier::new(resolver.package, path.to_vec());
+    let identifier = alias_target(name, resolver)
+        .unwrap_or_else(|| Identifier::new(resolver.package, path.to_vec()));
     match resolver.registry.function_lookup(&identifier, arity) {
         FunctionLookup::Found(id, entry) => Some((id, entry)),
         FunctionLookup::WrongArity(arities) => {

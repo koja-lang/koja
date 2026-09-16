@@ -2,6 +2,7 @@ alias Crypto.Certificate
 alias Crypto.PrivateKey
 alias Net.Socket.Address as SocketAddress
 alias Net.Socket.Error as SocketError
+alias Test.require
 
 # Self-signed test certificate (CN=localhost, 100-year expiry).
 # `koja test` always runs from the package root, so the relative
@@ -11,27 +12,27 @@ const TLS_TEST_CERT_PATH: String = "test/fixtures/localhost_cert.pem"
 const TLS_TEST_KEY_PATH: String = "test/fixtures/localhost_key.pem"
 
 test "TLS loopback handshake and echo roundtrip"
-  server_config = try Test.require(server_test_config())
+  server_config = try require(server_test_config())
   try run_echo_roundtrip(43117, server_config, TLSConfig.insecure())
 end
 
 test "verifying client accepts a server trusted via custom CA PEM"
-  server_config = try Test.require(server_test_config())
-  ca = try Test.require(read_test_certificate())
+  server_config = try require(server_test_config())
+  ca = try require(read_test_certificate())
   client_config = TLSConfig.client().with_ca(ca)
   try run_echo_roundtrip(43119, server_config, client_config)
 end
 
 test "verifying client rejects a self-signed server certificate"
-  server_config = try Test.require(server_test_config())
+  server_config = try require(server_test_config())
   addr = SocketAddress{ip: IPAddress.loopback(), port: 43118}
-  listener = try Test.require(TCPListener.bind_addr(addr))
+  listener = try require(TCPListener.bind_addr(addr))
 
   server = Task.async(fn () -> Result<String, String>
     serve_tls_attempt(listener, server_config)
   end)
 
-  plain = try Test.require(TCPSocket.connect_addr(addr))
+  plain = try require(TCPSocket.connect_addr(addr))
   upgraded = plain.upgrade_tls("localhost", TLSConfig.client())
 
   match plain.close()
@@ -68,13 +69,13 @@ priv fn run_echo_roundtrip(
 ) ! Test.Failure
 
   addr = SocketAddress{ip: IPAddress.loopback(), port: port}
-  listener = try Test.require(TCPListener.bind_addr(addr))
+  listener = try require(TCPListener.bind_addr(addr))
 
   server = Task.async(fn () -> Result<String, String>
     serve_tls_echo(listener, server_config)
   end)
 
-  plain = try Test.require(TCPSocket.connect_addr(addr))
+  plain = try require(TCPSocket.connect_addr(addr))
   assert not plain.tls?()
 
   client =

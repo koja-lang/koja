@@ -40,7 +40,9 @@ editor shows.
 - The symbol is `self`, a builtin type, or a method that implements a protocol
   requirement. The protocol owns that name.
 - The symbol is reached through a file `alias` somewhere. The alias use site
-  would be rewritten to the wrong text.
+  would be rewritten to the wrong text. A function with more than one arity
+  is refused as soon as an alias names it, since the alias line binds every
+  arity and renaming one would take the others out from under it.
 - The new name is not one identifier in the same case class as the old one.
   Types start uppercase. Everything else starts lowercase or with `_`. A
   trailing `?` is allowed on lowercase names only. Keywords are rejected.
