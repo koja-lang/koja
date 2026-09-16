@@ -262,7 +262,7 @@ Two places need care, and both are the codec's decision rather than
 the type's.
 
 - A protobuf pair. `Timestamp.new(seconds, Duration.Unit.Seconds)
-  .plus(Duration.new(nanos, Duration.Unit.Nanoseconds))` lands in
+.plus(Duration.new(nanos, Duration.Unit.Nanoseconds))` lands in
   nanoseconds and traps for a year 9999 value, even with `nanos` of
   zero, because `plus` converts the seconds. A codec that must accept
   the full protobuf range combines the pair in microseconds itself,
@@ -271,7 +271,7 @@ the type's.
   the 2262 bound. Koja does not make that choice for it.
 - `now`. The clock hands the runtime nanoseconds, and `now` stores
   microseconds. If it stored nanoseconds, `expires_at.since(
-  Timestamp.now())` with a year 9999 `expires_at` in seconds would
+Timestamp.now())` with a year 9999 `expires_at` in seconds would
   convert the sentinel to nanoseconds and trap, and that is a common
   line. The wall clock is not accurate to nanoseconds on any host, so
   the three digits dropped are noise, and anything that needs them
