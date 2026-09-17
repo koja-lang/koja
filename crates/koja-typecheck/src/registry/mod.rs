@@ -21,8 +21,8 @@
 //! so non-function entries cannot carry them.
 //!
 //! Registry rendering for `koja check --emit-ast` lives in the
-//! [`format`] submodule. It's a separate concern from the data + insert
-//! API (different audience: diagnostic rendering vs pipeline work).
+//! [`format`] submodule. It is a separate concern from the data + insert
+//! API, with a different audience (diagnostic rendering vs pipeline work).
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 
@@ -80,7 +80,7 @@ pub enum GlobalKind {
     Protocol(Option<ProtocolDefinition>),
     Struct(Option<StructDefinition>),
     /// `type X = ...` declared at top level. The `Option` mirrors
-    /// other lifecycle-payload variants: `None` after collect,
+    /// other lifecycle-payload variants, `None` after collect and
     /// `Some(expansion)` after `lift_type_aliases` resolves the RHS.
     /// The expansion is the canonical [`ResolvedType`] the alias
     /// stands for. For the surface-aliasing case
@@ -104,7 +104,7 @@ impl GlobalKind {
     }
 }
 
-/// A single registered declaration: canonical [`Identifier`],
+/// A single registered declaration, with its canonical [`Identifier`],
 /// [`GlobalKind`], source spans, and any generic-decl param names
 /// declared on it. `span` covers the whole declaration and
 /// `name_span` its name token, so a diagnostic or an editor can point
@@ -255,7 +255,7 @@ impl GlobalRegistry {
     /// Seed a fresh registry with one [`GlobalKind::Builtin`] stub
     /// per compiler-owned type, all under the `Global` package so
     /// resolve never special-cases them. `Option<T>` is *not*
-    /// stubbed: it's an ordinary enum in autoimported
+    /// stubbed. It is an ordinary enum in autoimported
     /// `Global.kernel`.
     ///
     /// Each stub carries its [`BuiltinShape`] and an empty
@@ -315,7 +315,7 @@ impl GlobalRegistry {
             identifier,
             GlobalKind::Constant(None),
             constant.span,
-            constant.name.span,
+            constant.name().span,
             Vec::new(),
             visibility,
         )
@@ -1158,7 +1158,7 @@ impl GlobalRegistry {
         self.entries.get(&id)
     }
 
-    /// Reverse lookup: an [`Identifier`] to its id + entry. Used by
+    /// Reverse lookup from an [`Identifier`] to its id + entry. Used by
     /// resolve to stamp ids onto AST reference sites. A name declared
     /// only as functions returns the highest arity, so treat the
     /// result as "some declaration with this name" and use
@@ -1232,7 +1232,7 @@ impl GlobalRegistry {
     /// `Global.<name>` stdlib stub. Panics if the stub is missing.
     /// Preload is a [`Self::with_stdlib_stubs`] invariant.
     ///
-    /// Cross-pipeline helper: `lift_signatures` calls it when
+    /// A cross-pipeline helper. `lift_signatures` calls it when
     /// synthesizing parameter / return types from `TypeExpr::Unit`
     /// and `TypeExpr::Named`, and the resolve pass calls it
     /// (directly and via [`Self::literal_type`]) when stamping
@@ -1270,8 +1270,9 @@ impl GlobalRegistry {
 
     /// Render the name of a type parameter by its anchored
     /// `(owner, index)`. `None` when `owner` is unknown or `index`
-    /// is out of range (compiler bug: index should have come from
-    /// a [`Resolution::TypeParam`] anchored to the same owner).
+    /// is out of range, which is a compiler bug, since the index should
+    /// have come from a [`Resolution::TypeParam`] anchored to the same
+    /// owner.
     pub fn type_param_name(&self, owner: GlobalRegistryId, index: TypeParamIndex) -> Option<&str> {
         self.get(owner)?
             .type_params
@@ -1368,13 +1369,13 @@ impl GlobalRegistry {
     }
 }
 
-/// Protocols that every type implicitly satisfies: the synthesizer
+/// Protocols that every type implicitly satisfies. The synthesizer
 /// or hand-written stdlib impls guarantee an impl for every concrete
 /// monomorphization, so a bare type-parameter `T.format()` /
 /// `T.equals?(other)` resolves as if `T: Debug` / `T: Equality` were
-/// declared. `Hash` joins this list once it's auto-derived too.
+/// declared. `Hash` joins this list once it is auto-derived too.
 /// (`Clone` was removed when value semantics made explicit
-/// duplication unnecessary: every value is already independent.)
+/// duplication unnecessary, since every value is already independent.)
 pub const UNIVERSAL_PROTOCOLS: &[&str] = &["Debug", "Equality"];
 
 /// The declared generic-param names, which is all the registry stores
@@ -1456,6 +1457,7 @@ mod tests {
                 })
                 .collect(),
             functions: Vec::new(),
+            nested: Vec::new(),
             span: decl_span(),
             tests: Vec::new(),
         }

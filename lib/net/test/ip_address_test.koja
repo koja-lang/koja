@@ -1,12 +1,14 @@
 alias Net.IPAddress
 alias Test.require
 
-test "IPAddress.any is IPv4"
-  assert IPAddress.any().version == IPAddress.Version.V4
+test "IPAddress.ANY is IPv4 0.0.0.0"
+  assert IPAddress.ANY.version == IPAddress.Version.V4
+  assert IPAddress.ANY.to_string() == "0.0.0.0"
 end
 
-test "IPAddress.loopback is IPv4"
-  assert IPAddress.loopback().version == IPAddress.Version.V4
+test "IPAddress.LOOPBACK is IPv4 127.0.0.1"
+  assert IPAddress.LOOPBACK.version == IPAddress.Version.V4
+  assert IPAddress.LOOPBACK.to_string() == "127.0.0.1"
 end
 
 test "IPAddress.v4 creates an IPv4 address"

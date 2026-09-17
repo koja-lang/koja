@@ -79,17 +79,17 @@ spreading the same changes across releases would cost one pass each.
   between an alias and a same-package name. The test surface is what made
   the types-only carve-out visible, and the fix is to remove the carve-out
   for every registry kind, not to add an import form.
-- Let a `struct`, `enum`, or `builtin` body declare a `const`, read as
+- **[DONE]** Let a `struct`, `enum`, or `builtin` body declare a `const`, read as
   `Duration.ZERO`. Package-level `const` already exists with a literal-shape
-  rule, so this adds a namespace, not a new kind of value. The stdlib keeps
+  rule, so this adds a namespace, not a new kind of value. The stdlib kept
   writing fixed values as functions that return a literal, `IPAddress.any`,
   `IPAddress.loopback`, and `Offset.utc` and `TimeZone.utc` in
   [DATETIME.md](DATETIME.md), and a function is not eligible as a field
-  default where a constant would be. Field defaults gain a constant reference
+  default where a constant would be. Field defaults gained a constant reference
   in the same change, since constants inline to the literal shape defaults
-  already accept. `Duration.ZERO`, `Timestamp.UNIX_EPOCH`, `Int.MAX`, and the
-  `IPAddress` pair are the first uses. Lands before [DATETIME.md](DATETIME.md)
-  so its zones are constants from the start.
+  already accept. `Duration.ZERO`, `Timestamp.UNIX_EPOCH`, `Int.MAX`, `Int.MIN`,
+  and the `IPAddress` pair are the first uses. Landed before
+  [DATETIME.md](DATETIME.md) so its zones are constants from the start.
 
 ### Testing
 

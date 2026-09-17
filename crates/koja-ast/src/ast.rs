@@ -472,15 +472,33 @@ pub struct TypeParam {
     pub span: Span,
 }
 
-/// A package-level constant: `const NAME = expr` or `const NAME: Type = expr`.
+/// A constant, `const NAME = expr` or `const NAME: Type = expr`, at
+/// the package level or nested under a type.
 #[derive(Debug, Clone)]
 pub struct Constant {
     pub annotations: Vec<Annotation>,
     pub visibility: Visibility,
-    pub name: Name,
+    /// The declared path. One segment for a package constant
+    /// (`const MAX = 10`), more for a constant nested under a type
+    /// (`const Duration.ZERO = ...`, or `const ZERO` inside the
+    /// owner's body, which desugar hoists to the qualified form).
+    pub path: Vec<Name>,
     pub type_annotation: Option<TypeExpr>,
     pub value: Expr,
     pub span: Span,
+}
+
+impl Constant {
+    /// The constant's own (leaf) name, the last path segment.
+    pub fn name(&self) -> &Name {
+        self.path.last().expect("constant path is non-empty")
+    }
+
+    /// The owning type path for a nested constant (everything before
+    /// the leaf), empty for a package constant.
+    pub fn owner_path(&self) -> &[Name] {
+        &self.path[..self.path.len() - 1]
+    }
 }
 
 /// An enum declaration: `enum Color ... end`.
@@ -500,8 +518,8 @@ pub struct EnumDecl {
     pub conformances: Vec<TypeExpr>,
     pub variants: Vec<EnumVariant>,
     pub functions: Vec<Function>,
-    /// Nested declarations, only `Item::Struct`, `Item::Enum`, and
-    /// `Item::Protocol`.
+    /// Nested declarations, only `Item::Struct`, `Item::Enum`,
+    /// `Item::Protocol`, and `Item::Constant`.
     pub nested: Vec<Item>,
     pub span: Span,
     /// `test "..."` blocks declared in the body.
@@ -713,8 +731,8 @@ pub struct StructDecl {
     pub conformances: Vec<TypeExpr>,
     pub fields: Vec<StructField>,
     pub functions: Vec<Function>,
-    /// Nested declarations, only `Item::Struct`, `Item::Enum`, and
-    /// `Item::Protocol`.
+    /// Nested declarations, only `Item::Struct`, `Item::Enum`,
+    /// `Item::Protocol`, and `Item::Constant`.
     pub nested: Vec<Item>,
     pub span: Span,
     /// `test "..."` blocks declared in the body. The struct is their
@@ -747,6 +765,9 @@ pub struct BuiltinDecl {
     pub path: Vec<Name>,
     pub type_params: Vec<TypeParam>,
     pub functions: Vec<Function>,
+    /// Nested declarations, only `Item::Constant`. A builtin body
+    /// cannot own types or protocols.
+    pub nested: Vec<Item>,
     pub span: Span,
     /// `test "..."` blocks declared in the body.
     pub tests: Vec<TestDecl>,
@@ -1022,7 +1043,7 @@ pub struct Expr {
 }
 
 impl Expr {
-    /// Convenience constructor: wraps a kind + span with every
+    /// Convenience constructor that wraps a kind + span with every
     /// annotation slot defaulted (no coercion,
     /// `resolution: Unresolved`).
     pub fn new(kind: ExprKind, span: Span) -> Self {
@@ -1410,10 +1431,10 @@ pub enum Pattern {
         local_id: Option<LocalId>,
         name: Name,
         /// Resolved type of the bound payload, stamped by typecheck-
-        /// resolve when the pattern is admitted (today: the pipeline
-        /// `receive` arms via
+        /// resolve when the pattern is admitted (today only the
+        /// pipeline `receive` arms, via
         /// [`bind_receive_pattern`][resolver]). Lower passes consume
-        /// this directly so they don't have to re-walk `type_expr`
+        /// this directly so they do not have to re-walk `type_expr`
         /// against the registry.
         ///
         /// [resolver]: https://docs.rs/koja-typecheck

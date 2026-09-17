@@ -11,8 +11,8 @@ use tower_lsp_server::jsonrpc::Result;
 use tower_lsp_server::ls_types::*;
 
 use koja_ast::ast::{
-    BuiltinDecl, EnumDecl, File, Function, ImplMember, Item, Param, ProtocolDecl, StructDecl,
-    TestDecl, TypeExpr, TypeParam, Visibility, path_text,
+    BuiltinDecl, Constant, EnumDecl, File, Function, ImplMember, Item, Param, ProtocolDecl,
+    StructDecl, TestDecl, TypeExpr, TypeParam, Visibility, path_text,
 };
 use koja_ast::labels::type_expr_span;
 use koja_ast::span::Span;
@@ -167,6 +167,9 @@ fn collect_workspace_symbols(file: &File, query: &str, results: &mut Vec<SymbolI
                         ));
                     }
                 }
+                for nested_item in &b.nested {
+                    collect_type_workspace_symbols(nested_item, Some(name), &uri, query, results);
+                }
             }
             Item::Function(f) => {
                 if matches(f.name.as_str()) {
@@ -194,15 +197,7 @@ fn collect_workspace_symbols(file: &File, query: &str, results: &mut Vec<SymbolI
                 }
             }
             Item::Constant(c) => {
-                if matches(c.name.as_str()) {
-                    results.push(symbol_info(
-                        c.name.as_str(),
-                        SymbolKind::CONSTANT,
-                        &uri,
-                        &c.span,
-                        None,
-                    ));
-                }
+                collect_constant_workspace_symbol(c, None, &uri, query, results);
             }
             Item::Protocol(p) => {
                 collect_protocol_workspace_symbols(p, None, &uri, query, results);
@@ -275,6 +270,10 @@ fn collect_type_workspace_symbols(
             collect_protocol_workspace_symbols(p, container, uri, query, results);
             return;
         }
+        Item::Constant(c) => {
+            collect_constant_workspace_symbol(c, container, uri, query, results);
+            return;
+        }
         _ => return,
     };
     if matches(name) {
@@ -310,6 +309,27 @@ fn collect_type_workspace_symbols(
     }
     for nested_item in nested {
         collect_type_workspace_symbols(nested_item, Some(name), uri, query, results);
+    }
+}
+
+/// Collects a constant. `container` is the owner type when the
+/// constant is nested in a type body.
+fn collect_constant_workspace_symbol(
+    c: &Constant,
+    container: Option<&str>,
+    uri: &Uri,
+    query: &str,
+    results: &mut Vec<SymbolInformation>,
+) {
+    let name = c.name().as_str();
+    if query.is_empty() || name.to_ascii_lowercase().contains(query) {
+        results.push(symbol_info(
+            name,
+            SymbolKind::CONSTANT,
+            uri,
+            &c.span,
+            container.map(str::to_string),
+        ));
     }
 }
 
@@ -382,19 +402,7 @@ fn build_document_symbols(file: &File) -> Vec<DocumentSymbol> {
             Item::Struct(s) => symbols.push(struct_symbol(s)),
             Item::Test(t) => symbols.push(test_symbol(t)),
             Item::Enum(e) => symbols.push(enum_symbol(e)),
-            Item::Constant(c) => {
-                #[allow(deprecated)]
-                symbols.push(DocumentSymbol {
-                    name: c.name.text.clone(),
-                    detail: detail_with_visibility(c.visibility, None),
-                    kind: SymbolKind::CONSTANT,
-                    tags: None,
-                    deprecated: None,
-                    range: span_to_range(&c.span),
-                    selection_range: span_to_range(&c.name.span),
-                    children: None,
-                });
-            }
+            Item::Constant(c) => symbols.push(constant_symbol(c)),
             Item::Impl(imp) => {
                 if imp.span.synthetic {
                     continue;
@@ -466,8 +474,23 @@ fn member_symbols(members: &[ImplMember], tests: &[TestDecl]) -> Vec<DocumentSym
         .collect()
 }
 
+fn constant_symbol(c: &Constant) -> DocumentSymbol {
+    #[allow(deprecated)]
+    DocumentSymbol {
+        name: c.name().text.clone(),
+        detail: detail_with_visibility(c.visibility, None),
+        kind: SymbolKind::CONSTANT,
+        tags: None,
+        deprecated: None,
+        range: span_to_range(&c.span),
+        selection_range: span_to_range(&c.name().span),
+        children: None,
+    }
+}
+
 fn builtin_symbol(b: &BuiltinDecl) -> DocumentSymbol {
-    let mut children: Vec<DocumentSymbol> = b.functions.iter().map(function_symbol).collect();
+    let mut children = nested_symbols(&b.nested);
+    children.extend(b.functions.iter().map(function_symbol));
     children.extend(b.tests.iter().map(test_symbol));
     #[allow(deprecated)]
     DocumentSymbol {
@@ -589,6 +612,7 @@ fn nested_symbols(nested: &[Item]) -> Vec<DocumentSymbol> {
     nested
         .iter()
         .filter_map(|item| match item {
+            Item::Constant(c) => Some(constant_symbol(c)),
             Item::Enum(e) => Some(enum_symbol(e)),
             Item::Protocol(p) => Some(protocol_symbol(p)),
             Item::Struct(s) => Some(struct_symbol(s)),

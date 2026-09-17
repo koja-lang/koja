@@ -72,7 +72,8 @@ impl Parser {
                 | TokenKind::At
                 | TokenKind::Struct
                 | TokenKind::Enum
-                | TokenKind::Protocol => {
+                | TokenKind::Protocol
+                | TokenKind::Const => {
                     let member_span = self.current_span();
                     match self.parse_type_body_member("impl") {
                         TypeBodyMember::Function(func) => {
@@ -80,11 +81,11 @@ impl Parser {
                         }
                         TypeBodyMember::Nested(_) => {
                             self.error_with_hint(
-                                "nested type declarations are not valid in `impl` or `extend` \
-                                 blocks"
+                                "nested type and constant declarations are not valid in `impl` \
+                                 or `extend` blocks"
                                     .to_string(),
-                                "declare the type inside the owner's body or at the top level \
-                                 with a qualified name"
+                                "declare it inside the owner's body or at the top level with a \
+                                 qualified name"
                                     .to_string(),
                                 member_span,
                             );

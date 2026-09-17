@@ -4,7 +4,9 @@
 //! [`IRPackage::constants`](crate::package::IRPackage::constants) and load through
 //! [`IRInstruction::LoadConst`](crate::function::IRInstruction::LoadConst).
 
-use koja_ast::ast::{BinarySegment, Constant, Expr, ExprKind, Literal, StringPart, UnaryOp};
+use koja_ast::ast::{
+    BinarySegment, Constant, Expr, ExprKind, Literal, StringPart, UnaryOp, name_texts,
+};
 use koja_ast::identifier::{GlobalRegistryId, Identifier, Resolution, ResolvedType};
 use koja_typecheck::{GlobalKind, GlobalRegistry, LiteralCoercion, NumericLiteralWidth};
 
@@ -27,7 +29,7 @@ pub(super) fn lower_constant_pool_entry(
     package: &str,
     registry: &GlobalRegistry,
 ) -> Option<(IRSymbol, IRConstantValue)> {
-    let identifier = Identifier::single(package, constant.name.text.clone());
+    let identifier = Identifier::new(package, name_texts(&constant.path));
     let (id, entry) = registry.lookup(&identifier)?;
     if !matches!(entry.kind, GlobalKind::Constant(Some(_))) {
         return None;
@@ -99,7 +101,7 @@ fn lower_constant_value(expr: &Expr, registry: &GlobalRegistry) -> Option<IRCons
             op: UnaryOp::Neg,
             operand,
         } => {
-            // Outer-stamp coercion wins: fold the negation into a
+            // Outer-stamp coercion wins, so fold the negation into a
             // single typed `Const` at the recorded width. Falls back
             // to the recursive path (operand inherits its own
             // annotation) when the outer is unstamped.
@@ -308,20 +310,25 @@ fn fold_negated_literal_inner(operand: &Expr, target: NumericLiteralWidth) -> Op
     }
 }
 
+/// Negate an already-lowered primitive. Integers wrap. The only
+/// operand that wraps is the type's minimum, which the lexer
+/// produced from a magnitude one past the maximum (`-9223372036854775808`
+/// lexes `9223372036854775808` as `Int64::MIN`), and its negation is
+/// that same minimum, so wrapping gives the value the source names.
 fn negate_primitive(value: IRConstantValue) -> Option<IRConstantValue> {
     match value {
-        IRConstantValue::Primitive(ConstValue::Int8(n)) => {
-            Some(IRConstantValue::Primitive(ConstValue::Int8(-n)))
-        }
-        IRConstantValue::Primitive(ConstValue::Int16(n)) => {
-            Some(IRConstantValue::Primitive(ConstValue::Int16(-n)))
-        }
-        IRConstantValue::Primitive(ConstValue::Int32(n)) => {
-            Some(IRConstantValue::Primitive(ConstValue::Int32(-n)))
-        }
-        IRConstantValue::Primitive(ConstValue::Int64(n)) => {
-            Some(IRConstantValue::Primitive(ConstValue::Int64(-n)))
-        }
+        IRConstantValue::Primitive(ConstValue::Int8(n)) => Some(IRConstantValue::Primitive(
+            ConstValue::Int8(n.wrapping_neg()),
+        )),
+        IRConstantValue::Primitive(ConstValue::Int16(n)) => Some(IRConstantValue::Primitive(
+            ConstValue::Int16(n.wrapping_neg()),
+        )),
+        IRConstantValue::Primitive(ConstValue::Int32(n)) => Some(IRConstantValue::Primitive(
+            ConstValue::Int32(n.wrapping_neg()),
+        )),
+        IRConstantValue::Primitive(ConstValue::Int64(n)) => Some(IRConstantValue::Primitive(
+            ConstValue::Int64(n.wrapping_neg()),
+        )),
         IRConstantValue::Primitive(ConstValue::Float32(f)) => {
             Some(IRConstantValue::Primitive(ConstValue::Float32(-f)))
         }

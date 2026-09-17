@@ -77,6 +77,9 @@ pub fn walk_item<'ast, V: Visitor<'ast> + ?Sized>(v: &mut V, item: &'ast Item) {
             for function in &decl.functions {
                 v.visit_function(function);
             }
+            for nested in &decl.nested {
+                v.visit_item(nested);
+            }
             for test in &decl.tests {
                 walk_body(v, &test.body);
             }

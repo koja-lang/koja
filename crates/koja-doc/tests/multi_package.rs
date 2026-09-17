@@ -228,7 +228,15 @@ fn nested_types_keep_full_names_and_deprecation_metadata() {
           protocol Format
             fn format_address(self, address: IPAddress) -> String
           end
+
+          @doc \"The unspecified address.\"
+          const ANY = IPAddress{bytes: <<0, 0, 0, 0>>}
+
+          priv const secret = 1
         end
+
+        @doc \"The loopback address.\"
+        const IPAddress.LOOPBACK = IPAddress{bytes: <<127, 0, 0, 1>>}
 
         @doc \"An invalid address.\"
         enum IPAddress.ParseError
@@ -270,12 +278,24 @@ fn nested_types_keep_full_names_and_deprecation_metadata() {
         names,
         vec![
             "IPAddress",
+            "IPAddress.ANY",
             "IPAddress.Format",
             "IPAddress.Internal.Child",
+            "IPAddress.LOOPBACK",
             "IPAddress.Parse",
             "IPAddress.ParseError",
             "IPAddress.Version",
         ]
+    );
+    let constant_names: Vec<&str> = net
+        .constants
+        .iter()
+        .map(|item| item.name.as_str())
+        .collect();
+    assert_eq!(constant_names, vec!["IPAddress.ANY", "IPAddress.LOOPBACK"]);
+    assert_eq!(
+        net.constants[0].doc.as_deref(),
+        Some("The unspecified address.")
     );
     let protocol_names: Vec<&str> = net
         .protocols

@@ -162,7 +162,7 @@ fn impl_body_rejects_random_decl() {
           end
         end
         ",
-        &["nested type declarations are not valid in `impl` or `extend` blocks"],
+        &["nested type and constant declarations are not valid in `impl` or `extend` blocks"],
     );
 }
 

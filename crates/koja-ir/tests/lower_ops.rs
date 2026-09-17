@@ -417,6 +417,22 @@ fn negated_literal_in_uncoerced_position_keeps_runtime_neg() {
 }
 
 #[test]
+fn negated_int_min_magnitude_folds_to_one_const() {
+    // `9223372036854775808` does not fit `Int` on its own, so the
+    // negation folds before the operand lowers. This is the one
+    // uncoerced `-N` that skips the runtime `Neg`.
+    let script = lower("-9223372036854775808\n");
+    let block = sole_block(&script);
+    assert_eq!(
+        block.instructions,
+        vec![IRInstruction::Const {
+            dest: ValueId(0),
+            value: ConstValue::Int64(i64::MIN),
+        }],
+    );
+}
+
+#[test]
 fn float_comparison_lowers_with_bool_result() {
     let script = lower("1.0 < 2.0\n");
     let block = sole_block(&script);

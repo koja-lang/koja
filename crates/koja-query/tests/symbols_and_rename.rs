@@ -207,6 +207,50 @@ fn nested_protocol_references_resolve_in_both_spellings() {
 }
 
 #[test]
+fn nested_constant_references_resolve_in_both_spellings() {
+    let checked = check(
+        r#"
+        struct Span
+          value: Int
+
+          const ZERO = Span{value: 0}
+
+          fn zero?(self) -> Bool
+            self.value == Span.ZERO.value
+          end
+        end
+
+        const Span.MAX = Span{value: 9}
+
+        fn take(s: Span) -> Int
+          s.value
+        end
+
+        fn main() -> Int
+          take(Span.ZERO) + take(Span.MAX)
+        end
+        "#,
+    );
+    let analysis = Analysis::from_checked(&checked);
+    let f = Fixture::new(&analysis);
+
+    let zero = f.key(4, 9);
+    for (line, col) in [(7, 24), (18, 13)] {
+        let symbol = f.symbol(line, col).expect("symbol on `Span.ZERO`");
+        assert_eq!(symbol.key, zero);
+        assert!(matches!(
+            symbol.kind,
+            SymbolKind::Global(entry) if matches!(entry.kind, GlobalKind::Constant(_))
+        ));
+    }
+
+    let max = f.key(11, 12);
+    assert_ne!(max, zero);
+    let symbol = f.symbol(18, 31).expect("symbol on `Span.MAX`");
+    assert_eq!(symbol.key, max);
+}
+
+#[test]
 fn local_symbol_carries_the_declared_type() {
     let checked = check(
         r#"

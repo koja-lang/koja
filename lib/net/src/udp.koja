@@ -16,7 +16,7 @@ struct UDPSocket
   or an error if the bind fails.
   """
   fn bind(port: Int) -> UDPSocket ! SocketError
-    try UDPSocket.bind_addr(SocketAddress{ip: IPAddress.any(), port: port})
+    try UDPSocket.bind_addr(SocketAddress{ip: IPAddress.ANY, port: port})
   end
 
   @doc """

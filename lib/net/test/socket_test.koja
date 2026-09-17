@@ -20,14 +20,14 @@ end
 
 test "bind stream socket to any:0"
   s = try require(Socket.create(SocketKind.Stream))
-  bound = try require(s.bind(SocketAddress{ip: IPAddress.any(), port: 0}))
+  bound = try require(s.bind(SocketAddress{ip: IPAddress.ANY, port: 0}))
   _ = bound.close()
 end
 
 test "connect to loopback:1 is refused"
   s = try require(Socket.create(SocketKind.Stream))
 
-  match s.connect(SocketAddress{ip: IPAddress.loopback(), port: 1})
+  match s.connect(SocketAddress{ip: IPAddress.LOOPBACK, port: 1})
     Result.Ok(conn) ->
       _ = conn.close()
       fail "expected connection refused"
@@ -50,7 +50,7 @@ test "TCPListener.bind to port 0"
 end
 
 test "TCPSocket.connect_addr to loopback:1 is refused"
-  match TCPSocket.connect_addr(SocketAddress{ip: IPAddress.loopback(), port: 1})
+  match TCPSocket.connect_addr(SocketAddress{ip: IPAddress.LOOPBACK, port: 1})
     Result.Ok(conn) ->
       _ = conn.close()
       fail "expected tcp connection refused"
@@ -70,14 +70,14 @@ end
 
 test "UDPSocket.bind_addr with loopback"
   sock = try require(
-    UDPSocket.bind_addr(SocketAddress{ip: IPAddress.loopback(), port: 0}),
+    UDPSocket.bind_addr(SocketAddress{ip: IPAddress.LOOPBACK, port: 0}),
   )
   _ = sock.close()
 end
 
 test "TCPListener.bind_addr with loopback"
   listener = try require(
-    TCPListener.bind_addr(SocketAddress{ip: IPAddress.loopback(), port: 0}),
+    TCPListener.bind_addr(SocketAddress{ip: IPAddress.LOOPBACK, port: 0}),
   )
   _ = listener.close()
 end
@@ -85,7 +85,7 @@ end
 test "UDP send preserves embedded NUL length"
   socket = try require(Socket.create(SocketKind.Datagram))
   payload = <<97, 0, 98>>.to_string().unwrap()
-  address = SocketAddress{ip: IPAddress.loopback(), port: 9}
+  address = SocketAddress{ip: IPAddress.LOOPBACK, port: 9}
   result = socket.send_to(payload, address)
   _ = socket.close()
 
@@ -96,7 +96,7 @@ end
 test "UDP recv_from returns a complete sender address"
   (receiver, port) = try bind_loopback_udp()
   sender = try require(UDPSocket.bind(0))
-  target = SocketAddress{ip: IPAddress.loopback(), port: port}
+  target = SocketAddress{ip: IPAddress.LOOPBACK, port: port}
 
   _sent = try require(sender.send_to("ping", target))
   (data, address) = try require(receiver.recv_from(16))
@@ -116,9 +116,7 @@ priv fn bind_loopback_udp -> (UDPSocket, Int) ! Test.Failure
   while attempts < 20
     port = Random.int(49152, 65535)
 
-    match UDPSocket.bind_addr(
-      SocketAddress{ip: IPAddress.loopback(), port: port},
-    )
+    match UDPSocket.bind_addr(SocketAddress{ip: IPAddress.LOOPBACK, port: port})
       Result.Ok(socket) -> return (socket, port)
       Result.Err(_) -> attempts += 1
     end

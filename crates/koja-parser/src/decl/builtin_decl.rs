@@ -1,7 +1,8 @@
 //! `builtin Name<...> ... end`.
 //!
-//! Declares a compiler-owned type. The body admits functions and
-//! `test` blocks, so fields and nested types are parse errors.
+//! Declares a compiler-owned type. The body admits functions,
+//! constants, and `test` blocks, so fields and nested types are
+//! parse errors.
 
 use koja_ast::ast::{Annotation, BuiltinDecl, Item, Visibility};
 use koja_ast::token::TokenKind;
@@ -23,18 +24,22 @@ impl Parser {
 
         self.skip_newlines();
         let mut functions = Vec::new();
+        let mut nested = Vec::new();
         let mut tests = Vec::new();
         while !self.at(&TokenKind::End) && !self.at_eof() {
             match self.peek() {
                 TokenKind::Test => tests.push(self.parse_test_decl()),
-                TokenKind::Fn | TokenKind::Priv | TokenKind::At => {
+                TokenKind::Fn | TokenKind::Priv | TokenKind::At | TokenKind::Const => {
+                    let member_span = self.current_span();
                     match self.parse_type_body_member("builtin") {
                         TypeBodyMember::Function(function) => functions.push(*function),
+                        TypeBodyMember::Nested(item) if matches!(*item, Item::Constant(_)) => {
+                            nested.push(*item);
+                        }
                         TypeBodyMember::Nested(_) => {
-                            let span = self.current_span();
                             self.error(
                                 "builtin blocks cannot declare nested types".to_string(),
-                                span,
+                                member_span,
                             );
                         }
                     }
@@ -43,8 +48,9 @@ impl Parser {
                     let span = self.current_span();
                     self.error(
                         format!(
-                            "expected a function declaration in builtin block, found {other}. \
-                             The compiler provides the representation of a builtin type"
+                            "expected a function or constant declaration in builtin block, \
+                             found {other}. The compiler provides the representation of a \
+                             builtin type"
                         ),
                         span,
                     );
@@ -63,6 +69,7 @@ impl Parser {
             path,
             type_params,
             functions,
+            nested,
             span: self.span_from(start),
             tests,
         })

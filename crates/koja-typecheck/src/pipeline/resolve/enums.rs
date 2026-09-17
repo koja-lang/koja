@@ -60,14 +60,23 @@ pub(super) fn resolve_enum_construction(
 
     let GlobalKind::Enum(definition) = &enum_entry.kind else {
         bare_walk_construction_data(data, resolver, diagnostics);
-        diagnostics.push(Diagnostic::error(
+        // `Type.NAME` with no payload is how a nested constant is
+        // read. `resolve_qualified_member` already tried that and
+        // found nothing, so name the constant, not a variant.
+        let message = if matches!(data, EnumConstructionData::Unit) {
+            format!(
+                "`{}` has no constant `{variant}` (it is a {}, not an enum)",
+                enum_entry.identifier,
+                enum_entry.kind.label(),
+            )
+        } else {
             format!(
                 "cannot construct variant `{variant}` of `{}` because it is a {}, not an enum",
                 enum_entry.identifier,
                 enum_entry.kind.label(),
-            ),
-            span,
-        ));
+            )
+        };
+        diagnostics.push(Diagnostic::error(message, span));
         return ResolvedType::unresolved();
     };
     let Some(definition) = definition else {
@@ -83,10 +92,12 @@ pub(super) fn resolve_enum_construction(
     let type_params = enum_entry.type_params.clone();
     let Some((_, variant_def)) = definition.lookup_variant(variant.as_str()) else {
         bare_walk_construction_data(data, resolver, diagnostics);
-        diagnostics.push(Diagnostic::error(
-            format!("`{enum_label}` has no variant `{variant}`"),
-            span,
-        ));
+        let message = if matches!(data, EnumConstructionData::Unit) {
+            format!("`{enum_label}` has no variant or constant `{variant}`")
+        } else {
+            format!("`{enum_label}` has no variant `{variant}`")
+        };
+        diagnostics.push(Diagnostic::error(message, span));
         return ResolvedType::leaf(Resolution::Global(enum_id));
     };
 

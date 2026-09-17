@@ -1,4 +1,4 @@
-//! Expression-level lowering: dispatch on [`ExprKind`], lower each
+//! Expression-level lowering. Dispatch on [`ExprKind`], lower each
 //! supported variant into a `(ValueId, IRBlockId)` (the produced
 //! value plus the block it sits in), and surface a feature-gap
 //! diagnostic for any unsupported variant.
@@ -123,8 +123,8 @@ fn apply_value_coercion(
             // The wrap aliases the member's storage without an
             // acquire, so an owned source moves into the union.
             // Transfer the ownership stamp or the temp's release site
-            // never sees it (regression: every `write(...)` against a
-            // `Binary | String` param leaked the widened string).
+            // never sees it. Before this, every `write(...)` against a
+            // `Binary | String` param leaked the widened string.
             if ctx.is_owned(value) {
                 ctx.mark_owned(dest);
             }
@@ -405,9 +405,15 @@ fn lower_expr_inner(
             // the negated literal flows into a sized slot. Without
             // a coercion record (or against a non-literal operand)
             // we fall through to the regular UnaryOp emission.
+            //
+            // An unstamped `-9223372036854775808` folds too. It is
+            // the one `Int` whose magnitude does not fit on its own,
+            // so lowering the operand first would reject it. Every
+            // other unstamped `-N` keeps the runtime `Neg`.
             if matches!(op, UnaryOp::Neg)
-                && let Some(target) = literal_width(expr)
-                && let Some(folded) = fold_negated_literal_const(operand, target)
+                && let Some(folded) = literal_width(expr)
+                    .and_then(|target| fold_negated_literal_const(operand, target))
+                    .or_else(|| fold_int_min_literal(operand))
             {
                 let ty = const_value_type(&folded);
                 let dest = ctx.fresh_value(ty);
@@ -537,7 +543,7 @@ fn lower_local_read(
 }
 
 /// Dispatch a bare ident with [`Resolution::Global`] on the
-/// resolved entry's kind: constants flow through
+/// resolved entry's kind. Constants flow through
 /// [`lower_constant_ident`], and non-generic functions used as values
 /// flow through [`lower_fn_as_value`] (synthesizing a captureless
 /// closure wrapper and emitting [`IRInstruction::MakeClosure`]).
@@ -698,6 +704,23 @@ fn fold_negated_literal_const(operand: &Expr, target: NumericLiteralWidth) -> Op
     }
 }
 
+/// Fold an unstamped `-N` into `Int64::MIN` when `N` is exactly one
+/// past `Int64::MAX`. Returns `None` for every other operand. A
+/// smaller magnitude keeps the runtime `Neg`, and a larger one falls
+/// through so the regular path reports the range error.
+fn fold_int_min_literal(operand: &Expr) -> Option<ConstValue> {
+    match &operand.kind {
+        ExprKind::Group { expr } => fold_int_min_literal(expr),
+        ExprKind::Literal {
+            value: Literal::Int(text),
+        } => parse_int_literal(text)
+            .ok()
+            .filter(|magnitude| *magnitude == -i128::from(i64::MIN))
+            .map(|_| ConstValue::Int64(i64::MIN)),
+        _ => None,
+    }
+}
+
 /// Pick the [`ConcatKind`] that matches a `<>` operand's IR type.
 /// Typecheck guarantees both operands share a heap-payload type
 /// (`String`, `Binary`, `Bits`), so the lowerer just transcribes that
@@ -717,17 +740,17 @@ fn concat_kind_from_operand(ty: IRType) -> Option<ConcatKind> {
 /// Lower a (possibly interpolated) string literal into a single
 /// `String`-typed value.
 ///
-/// Strategy: each part lowers to its own `String` value
+/// Each part lowers to its own `String` value
 /// ([`emit_string_const`] for literals, recursive [`lower_expr`] for
 /// interpolations, where the typecheck synthesizer wraps every
-/// interpolated expression in `.format()` so it's already
+/// interpolated expression in `.format()` so it is already
 /// `String`-typed by the time we see it). N parts then fold into
 /// N-1 chained binary [`IRInstruction::Concat`] instructions, and
 /// empty parts produces a single empty-string const.
 ///
-/// Single-part fast paths preserve byte-for-byte the prior shape:
-/// a lone literal emits one `Const`, a lone interpolation emits no
-/// `Concat` at all.
+/// Single-part fast paths preserve byte-for-byte the prior shape.
+/// A lone literal emits one `Const`, and a lone interpolation emits
+/// no `Concat` at all.
 fn lower_string(
     parts: &[StringPart],
     ctx: &mut FnLowerCtx,

@@ -65,4 +65,5 @@ mod structs;
 pub(crate) mod types;
 mod walker;
 
+pub(crate) use paths::static_dotted_path;
 pub(crate) use walker::resolve_file;

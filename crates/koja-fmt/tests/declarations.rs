@@ -58,6 +58,43 @@ fn nested_protocol_in_both_spellings_is_canonical() {
 }
 
 #[test]
+fn nested_constants_stack_like_fields() {
+    assert_fmt(
+        "
+        struct Span
+            value: Int
+          const   ZERO   =  Span{value: 0}
+          priv const limit: Int = 100
+          fn zero?(self) -> Bool
+            self.value == 0
+          end
+        end
+        const   Span.MAX = Span{value: 9}
+        builtin Int
+          const MAX = 9223372036854775807
+        end
+    ",
+        "
+        struct Span
+          value: Int
+          const ZERO = Span{value: 0}
+          priv const limit: Int = 100
+
+          fn zero?(self) -> Bool
+            self.value == 0
+          end
+        end
+
+        const Span.MAX = Span{value: 9}
+
+        builtin Int
+          const MAX = 9223372036854775807
+        end
+    ",
+    );
+}
+
+#[test]
 fn single_annotation_on_function() {
     assert_fmt(
         r#"

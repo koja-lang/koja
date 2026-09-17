@@ -232,7 +232,7 @@ fn impl_target_is_generic(target: &TypeExpr, package: &str, registry: &GlobalReg
 /// already constrained to literals + struct/enum-of-literals, so the
 /// reused [`seal_expr`] walk is sufficient.
 fn seal_constant(constant: &Constant, package: &str, registry: &GlobalRegistry) {
-    let identifier = Identifier::single(package, constant.name.text.clone());
+    let identifier = Identifier::new(package, name_texts(&constant.path));
     let Some((_, entry)) = registry.lookup(&identifier) else {
         seal_panic(
             &format!(

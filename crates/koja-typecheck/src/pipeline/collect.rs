@@ -1,6 +1,6 @@
-//! Collect sub-pass: register a canonical [`Identifier`] for every
-//! globally-named decl. Pure registration: signature resolution
-//! lives in [`super::lift_signatures`].
+//! Collect sub-pass. Register a canonical [`Identifier`] for every
+//! globally-named decl. This is pure registration, and signature
+//! resolution lives in [`super::lift_signatures`].
 //!
 //! Path encoding follows the [`Identifier`] convention: top-level
 //! functions register at `path = ["name"]`. Static methods on
@@ -36,7 +36,7 @@ use crate::pipeline::visibility::check_reference_visibility;
 use crate::program::CheckedPackage;
 use crate::registry::{ClaimOutcome, GlobalKind, GlobalRegistry, InsertOutcome, VisibilityScope};
 
-/// Pass 1 of collect: register every named decl (functions,
+/// Pass 1 of collect. Register every named decl (functions,
 /// structs, enums, protocols, constants, type aliases) so that
 /// downstream impl blocks have a fully-populated registry to look
 /// up against. Skips impl blocks. Pass 2 handles those once every
@@ -80,14 +80,14 @@ pub(crate) fn collect_file_decls(
             Item::Constant(constant) => {
                 register_constant(constant, package, registry, diagnostics);
             }
-            // `alias Pkg.Type [as Local]` doesn't introduce a new
-            // global identifier: it binds a file-private local name
+            // `alias Pkg.Type [as Local]` does not introduce a new
+            // global identifier. It binds a file-private local name
             // to an existing one. Validation runs in
             // [`super::aliases::validate_aliases`]. Collect just
             // skips it here.
             Item::Alias(_) => {}
             // `type X = ...` is a package-wide global like a struct or
-            // constant: it lives in the registry as a TypeAlias entry
+            // constant. It lives in the registry as a TypeAlias entry
             // so cross-file (same package) and cross-package (`Pkg.X`)
             // lookups go through the same machinery. The RHS
             // `ResolvedType` is stamped later by lift's
@@ -100,8 +100,9 @@ pub(crate) fn collect_file_decls(
     }
 }
 
-/// Validate every nested type declaration (`struct A.B … end`) once
-/// pass 1 has registered all types. A nested type's owner path must
+/// Validate every nested declaration (`struct A.B … end`,
+/// `const A.MAX = …`) once pass 1 has registered all types. A nested
+/// item's owner path must
 /// name a struct / enum / protocol in the **same package**, and a
 /// type nested under an enum must not shadow one of that enum's
 /// variants (variants aren't registry entries, so the
@@ -149,6 +150,17 @@ pub(crate) fn validate_nested_types(
                             diagnostics,
                         );
                     }
+                    Item::Constant(decl) if !decl.owner_path().is_empty() => {
+                        validate_nested_owner(
+                            &pkg.package,
+                            "constant",
+                            decl.owner_path(),
+                            decl.name(),
+                            packages,
+                            registry,
+                            diagnostics,
+                        );
+                    }
                     _ => {}
                 }
             }
@@ -157,7 +169,7 @@ pub(crate) fn validate_nested_types(
 }
 
 /// `what` names the nested declaration's kind in diagnostics:
-/// `"type"` for structs and enums, `"protocol"` for protocols.
+/// `"type"` for structs and enums, `"protocol"`, or `"constant"`.
 fn validate_nested_owner(
     package: &str,
     what: &str,
@@ -224,7 +236,7 @@ fn enum_has_variant(
         })
 }
 
-/// Pass 2: register every `impl` and `extend` block. Runs after
+/// Pass 2 of collect. Register every `impl` and `extend` block. Runs after
 /// [`collect_file_decls`] on all packages so cross-file/cross-package
 /// targets resolve.
 pub(crate) fn collect_file_impls(
@@ -315,8 +327,8 @@ fn fresh_id(outcome: InsertOutcome<'_>, name_span: Span) -> Result<GlobalRegistr
 /// `Public` variant regardless of owner. `priv fn` declared inside a
 /// type body becomes [`VisibilityScope::TypePrivate`]. A top-level
 /// `priv fn` becomes [`VisibilityScope::PackagePrivate`]. The owner
-/// id is the type the method belongs to: even an inherent or
-/// protocol-impl method on `Foo` carries `Foo`'s id, so cross-impl
+/// id is the type the method belongs to, so even an inherent or
+/// protocol-impl method on `Foo` carries `Foo`'s id, and cross-impl
 /// calls within the same type all share one scope.
 fn function_visibility_scope(
     visibility: Visibility,
@@ -700,7 +712,7 @@ fn diagnose_builtin_feature_gaps(decl: &BuiltinDecl, diagnostics: &mut Vec<Diagn
 /// Register every method declared in an `impl Trait for Type` block
 /// under the target's qualified identifier, so cross-package impls
 /// land in the same collision-detection slot as same-package ones.
-/// There is no orphan rule: any package may conform any type to any
+/// There is no orphan rule. Any package may conform any type to any
 /// protocol, and the whole-program conformance table catches
 /// duplicate `impl P for T` pairs at lift time, where conformance
 /// facts are recorded onto the target's struct/enum definition.
@@ -898,8 +910,8 @@ fn register_protocol(
     }
 }
 
-/// Register a package-level `const NAME = expr` declaration. Stamps
-/// the constant in the `Constant(None)` state. `lift_signatures`
+/// Register a `const NAME = expr` declaration, package-level or
+/// nested under a type, in the `Constant(None)` state. `lift_signatures`
 /// resolves the optional type annotation + RHS expression and stamps
 /// the [`crate::registry::ConstantDefinition`] later. Constants
 /// occupy the same identifier namespace as functions / structs /
@@ -911,19 +923,19 @@ fn register_constant(
     registry: &mut GlobalRegistry,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
-    diagnose_constant_annotations(&constant.name, &constant.annotations, diagnostics);
+    diagnose_constant_annotations(constant.name(), &constant.annotations, diagnostics);
     diagnose_doc_on_private(
-        &constant.name,
+        constant.name(),
         "constant",
         constant.visibility,
         &constant.annotations,
         diagnostics,
     );
-    let identifier = Identifier::single(package, constant.name.text.clone());
+    let identifier = Identifier::new(package, name_texts(&constant.path));
     let visibility = package_visibility_scope(constant.visibility);
     let deprecation = deprecation_message(&constant.annotations, diagnostics);
     let outcome = registry.insert_constant(identifier, constant, visibility);
-    match fresh_id(outcome, constant.name.span) {
+    match fresh_id(outcome, constant.name().span) {
         Ok(id) => stamp_deprecation(registry, id, deprecation),
         Err(diagnostic) => diagnostics.push(diagnostic),
     }
