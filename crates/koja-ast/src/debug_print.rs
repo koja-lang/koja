@@ -284,7 +284,7 @@ impl<'a> Printer<'a> {
     fn protocol(&mut self, p: &ProtocolDecl) {
         let header = format!(
             "ProtocolDecl {}{}",
-            p.name,
+            path_text(&p.path),
             format_type_params(&p.type_params),
         );
         self.nested(&header, p.span, |printer| {

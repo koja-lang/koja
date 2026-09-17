@@ -119,6 +119,7 @@ pub(crate) fn validate_nested_types(
                     Item::Struct(decl) if !decl.owner_path().is_empty() => {
                         validate_nested_owner(
                             &pkg.package,
+                            "type",
                             decl.owner_path(),
                             decl.name(),
                             packages,
@@ -129,6 +130,18 @@ pub(crate) fn validate_nested_types(
                     Item::Enum(decl) if !decl.owner_path().is_empty() => {
                         validate_nested_owner(
                             &pkg.package,
+                            "type",
+                            decl.owner_path(),
+                            decl.name(),
+                            packages,
+                            registry,
+                            diagnostics,
+                        );
+                    }
+                    Item::Protocol(decl) if !decl.owner_path().is_empty() => {
+                        validate_nested_owner(
+                            &pkg.package,
+                            "protocol",
                             decl.owner_path(),
                             decl.name(),
                             packages,
@@ -143,8 +156,11 @@ pub(crate) fn validate_nested_types(
     }
 }
 
+/// `what` names the nested declaration's kind in diagnostics:
+/// `"type"` for structs and enums, `"protocol"` for protocols.
 fn validate_nested_owner(
     package: &str,
+    what: &str,
     owner_path: &[Name],
     leaf: &Name,
     packages: &[CheckedPackage],
@@ -156,7 +172,7 @@ fn validate_nested_owner(
     let Some((_, entry)) = registry.lookup(&owner_identifier) else {
         diagnostics.push(Diagnostic::error(
             format!(
-                "nested type `{leaf}` must be declared under a type in the same \
+                "nested {what} `{leaf}` must be declared under a type in the same \
                  package (`{owner_name}` is not a known type in `{package}`)"
             ),
             leaf.span,
@@ -168,14 +184,14 @@ fn validate_nested_owner(
         GlobalKind::Enum(_) => {
             if enum_has_variant(packages, package, owner_path, leaf) {
                 diagnostics.push(Diagnostic::error(
-                    format!("nested type `{leaf}` collides with a variant of `{owner_name}`"),
+                    format!("nested {what} `{leaf}` collides with a variant of `{owner_name}`"),
                     leaf.span,
                 ));
             }
         }
         _ => diagnostics.push(Diagnostic::error(
             format!(
-                "nested type `{leaf}` cannot be declared under `{owner_name}` (a {})",
+                "nested {what} `{leaf}` cannot be declared under `{owner_name}` (a {})",
                 entry.kind.label(),
             ),
             leaf.span,
@@ -852,20 +868,20 @@ fn register_protocol(
 ) {
     diagnose_protocol_feature_gaps(decl, diagnostics);
     diagnose_doc_on_private(
-        &decl.name,
+        decl.name(),
         "protocol",
         decl.visibility,
         &decl.annotations,
         diagnostics,
     );
-    let identifier = Identifier::single(package, decl.name.text.clone());
+    let identifier = Identifier::new(package, name_texts(&decl.path));
     let mut type_params = vec!["Self".to_string()];
     for param in &decl.type_params {
         if param.name == "Self" {
             diagnostics.push(Diagnostic::error(
                 format!(
                     "type parameter name `Self` is reserved (on protocol `{}`)",
-                    decl.name,
+                    name_texts(&decl.path).join("."),
                 ),
                 param.span,
             ));
@@ -876,7 +892,7 @@ fn register_protocol(
     let visibility = package_visibility_scope(decl.visibility);
     let deprecation = deprecation_message(&decl.annotations, diagnostics);
     let outcome = registry.insert_protocol(identifier, decl, type_params, visibility);
-    match fresh_id(outcome, decl.name.span) {
+    match fresh_id(outcome, decl.name().span) {
         Ok(id) => stamp_deprecation(registry, id, deprecation),
         Err(diagnostic) => diagnostics.push(diagnostic),
     }
@@ -1083,13 +1099,14 @@ fn diagnose_protocol_feature_gaps(decl: &ProtocolDecl, diagnostics: &mut Vec<Dia
             format!(
                 "typecheck does not yet support annotations on protocols \
                  (`@{}` on `{}`)",
-                annotation.name, decl.name,
+                annotation.name,
+                decl.name(),
             ),
             annotation.span,
         ));
     }
     for method in &decl.methods {
-        diagnose_protocol_method_feature_gaps(&decl.name, method, diagnostics);
+        diagnose_protocol_method_feature_gaps(decl.name(), method, diagnostics);
     }
 }
 

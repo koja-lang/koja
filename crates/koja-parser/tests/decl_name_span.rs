@@ -133,7 +133,7 @@ fn protocol_and_method_name_spans() {
     let Item::Protocol(p) = &items[0] else {
         panic!("expected a protocol")
     };
-    assert_name(&source, &p.name, "Shape", &p.span);
+    assert_name(&source, p.name(), "Shape", &p.span);
     assert_name(&source, &p.methods[0].name, "area", &p.methods[0].span);
 }
 

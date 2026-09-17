@@ -472,9 +472,9 @@ impl<'ast> Visitor<'ast> for Builder<'_> {
             }
             Item::Function(_) => visit::walk_item(self, item),
             Item::Protocol(decl) => {
-                let id = self.lookup(&Identifier::single(self.package, decl.name.as_str()));
+                let id = self.lookup(&self.type_identifier(&decl.path));
                 if let Some(id) = id {
-                    self.record_global_declaration(id, &decl.name);
+                    self.record_global_declaration(id, decl.name());
                     self.record_type_param_declarations(id, &decl.type_params);
                 }
                 self.with_type_owner(id, |b| visit::walk_item(b, item));

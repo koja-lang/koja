@@ -1,4 +1,5 @@
-//! `protocol Name<...> ... end`.
+//! `protocol Name<...> ... end`, or `protocol Owner.Name<...>` for a
+//! protocol nested under a type.
 //!
 //! Protocol bodies hold method signatures (optionally with default
 //! bodies) and `@annotation`-prefixed signatures. Anything else in
@@ -21,7 +22,7 @@ impl Parser {
         let start = self.current_span();
         self.advance(); // protocol
 
-        let name = self.expect_type_name();
+        let path = self.parse_decl_path();
         let type_params = self.parse_optional_type_params();
 
         self.skip_newlines();
@@ -79,7 +80,7 @@ impl Parser {
         Item::Protocol(ProtocolDecl {
             annotations,
             visibility,
-            name,
+            path,
             type_params,
             methods,
             span: self.span_from(start),

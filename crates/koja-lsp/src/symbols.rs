@@ -11,8 +11,8 @@ use tower_lsp_server::jsonrpc::Result;
 use tower_lsp_server::ls_types::*;
 
 use koja_ast::ast::{
-    BuiltinDecl, EnumDecl, File, Function, ImplMember, Item, Param, StructDecl, TestDecl, TypeExpr,
-    TypeParam, Visibility, path_text,
+    BuiltinDecl, EnumDecl, File, Function, ImplMember, Item, Param, ProtocolDecl, StructDecl,
+    TestDecl, TypeExpr, TypeParam, Visibility, path_text,
 };
 use koja_ast::labels::type_expr_span;
 use koja_ast::span::Span;
@@ -205,15 +205,7 @@ fn collect_workspace_symbols(file: &File, query: &str, results: &mut Vec<SymbolI
                 }
             }
             Item::Protocol(p) => {
-                if matches(p.name.as_str()) {
-                    results.push(symbol_info(
-                        p.name.as_str(),
-                        SymbolKind::INTERFACE,
-                        &uri,
-                        &p.span,
-                        None,
-                    ));
-                }
+                collect_protocol_workspace_symbols(p, None, &uri, query, results);
             }
             Item::TypeAlias(t) => {
                 if matches(t.name.as_str()) {
@@ -279,6 +271,10 @@ fn collect_type_workspace_symbols(
             &s.nested,
             &s.tests[..],
         ),
+        Item::Protocol(p) => {
+            collect_protocol_workspace_symbols(p, container, uri, query, results);
+            return;
+        }
         _ => return,
     };
     if matches(name) {
@@ -314,6 +310,27 @@ fn collect_type_workspace_symbols(
     }
     for nested_item in nested {
         collect_type_workspace_symbols(nested_item, Some(name), uri, query, results);
+    }
+}
+
+/// Collects a protocol. `container` is the owner type when the
+/// protocol is nested in a type body.
+fn collect_protocol_workspace_symbols(
+    p: &ProtocolDecl,
+    container: Option<&str>,
+    uri: &Uri,
+    query: &str,
+    results: &mut Vec<SymbolInformation>,
+) {
+    let name = p.name().as_str();
+    if query.is_empty() || name.to_ascii_lowercase().contains(query) {
+        results.push(symbol_info(
+            name,
+            SymbolKind::INTERFACE,
+            uri,
+            &p.span,
+            container.map(str::to_string),
+        ));
     }
 }
 
@@ -413,40 +430,7 @@ fn build_document_symbols(file: &File) -> Vec<DocumentSymbol> {
                     children: children_option(children),
                 });
             }
-            Item::Protocol(p) => {
-                let children: Vec<DocumentSymbol> = p
-                    .methods
-                    .iter()
-                    .map(|m| {
-                        #[allow(deprecated)]
-                        DocumentSymbol {
-                            name: m.name.text.clone(),
-                            detail: None,
-                            kind: SymbolKind::METHOD,
-                            tags: None,
-                            deprecated: None,
-                            range: span_to_range(&m.span),
-                            selection_range: span_to_range(&m.name.span),
-                            children: None,
-                        }
-                    })
-                    .collect();
-
-                #[allow(deprecated)]
-                symbols.push(DocumentSymbol {
-                    name: p.name.text.clone(),
-                    detail: detail_with_visibility(
-                        p.visibility,
-                        type_params_detail(&p.type_params),
-                    ),
-                    kind: SymbolKind::INTERFACE,
-                    tags: None,
-                    deprecated: None,
-                    range: span_to_range(&p.span),
-                    selection_range: span_to_range(&p.name.span),
-                    children: children_option(children),
-                });
-            }
+            Item::Protocol(p) => symbols.push(protocol_symbol(p)),
             Item::TypeAlias(ta) => {
                 #[allow(deprecated)]
                 symbols.push(DocumentSymbol {
@@ -569,11 +553,44 @@ fn enum_symbol(e: &EnumDecl) -> DocumentSymbol {
     }
 }
 
+fn protocol_symbol(p: &ProtocolDecl) -> DocumentSymbol {
+    let children: Vec<DocumentSymbol> = p
+        .methods
+        .iter()
+        .map(|m| {
+            #[allow(deprecated)]
+            DocumentSymbol {
+                name: m.name.text.clone(),
+                detail: None,
+                kind: SymbolKind::METHOD,
+                tags: None,
+                deprecated: None,
+                range: span_to_range(&m.span),
+                selection_range: span_to_range(&m.name.span),
+                children: None,
+            }
+        })
+        .collect();
+
+    #[allow(deprecated)]
+    DocumentSymbol {
+        name: p.name().text.clone(),
+        detail: detail_with_visibility(p.visibility, type_params_detail(&p.type_params)),
+        kind: SymbolKind::INTERFACE,
+        tags: None,
+        deprecated: None,
+        range: span_to_range(&p.span),
+        selection_range: span_to_range(&p.name().span),
+        children: children_option(children),
+    }
+}
+
 fn nested_symbols(nested: &[Item]) -> Vec<DocumentSymbol> {
     nested
         .iter()
         .filter_map(|item| match item {
             Item::Enum(e) => Some(enum_symbol(e)),
+            Item::Protocol(p) => Some(protocol_symbol(p)),
             Item::Struct(s) => Some(struct_symbol(s)),
             _ => None,
         })

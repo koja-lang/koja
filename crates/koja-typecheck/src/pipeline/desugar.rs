@@ -1,9 +1,9 @@
 //! Rewrites that run before every other pass so downstream code sees
 //! one shape.
 //!
-//! - Lexically nested type declarations hoist to qualified top-level
-//!   items, the same flat shape the qualified form
-//!   (`struct Owner.Nested`) produces.
+//! - Lexically nested type and protocol declarations hoist to
+//!   qualified top-level items, the same flat shape the qualified
+//!   form (`struct Owner.Nested`, `protocol Owner.Format`) produces.
 //! - `test "..."` blocks become functions with a `! Test.Failure`
 //!   channel when the `Test` package is linked, and are dropped when it
 //!   is not, so a build never type checks a test body. Top-level blocks
@@ -164,6 +164,7 @@ fn hoist_item(mut item: Item, out: &mut Vec<Item>) {
         match &mut nested_item {
             Item::Enum(decl) => prefix_path(&mut decl.path, &owner_path),
             Item::Struct(decl) => prefix_path(&mut decl.path, &owner_path),
+            Item::Protocol(decl) => prefix_path(&mut decl.path, &owner_path),
             _ => {}
         }
         hoist_item(nested_item, out);

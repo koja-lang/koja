@@ -411,7 +411,7 @@ impl GlobalRegistry {
             identifier,
             GlobalKind::Protocol(None),
             decl.span,
-            decl.name.span,
+            decl.name().span,
             type_params,
             visibility,
         )

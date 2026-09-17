@@ -153,6 +153,60 @@ fn header_conformance_resolves_to_the_protocol() {
 }
 
 #[test]
+fn nested_protocol_references_resolve_in_both_spellings() {
+    let checked = check(
+        r#"
+        struct Date
+          day: Int
+
+          protocol Format
+            fn format_date(self, date: Date) -> String
+          end
+        end
+
+        protocol Date.Parse
+          fn parse_date(self, text: String) -> Date
+        end
+
+        enum ISO8601
+          Basic
+        end
+
+        impl Date.Format for ISO8601
+          fn format_date(self, date: Date) -> String
+            "d"
+          end
+        end
+
+        fn render<F: Date.Format>(date: Date, formatter: F) -> String
+          formatter.format_date(date)
+        end
+
+        fn parse<P: Date.Parse>(text: String, parser: P) -> Date
+          parser.parse_date(text)
+        end
+        "#,
+    );
+    let analysis = Analysis::from_checked(&checked);
+    let f = Fixture::new(&analysis);
+
+    let format = f.key(4, 12);
+    for (line, col) in [(17, 11), (23, 19)] {
+        let symbol = f.symbol(line, col).expect("symbol on `Date.Format`");
+        assert_eq!(symbol.key, format);
+        assert!(matches!(
+            symbol.kind,
+            SymbolKind::Global(entry) if matches!(entry.kind, GlobalKind::Protocol(_))
+        ));
+    }
+
+    let parse = f.key(9, 15);
+    assert_ne!(parse, format);
+    let symbol = f.symbol(27, 18).expect("symbol on `Date.Parse`");
+    assert_eq!(symbol.key, parse);
+}
+
+#[test]
 fn local_symbol_carries_the_declared_type() {
     let checked = check(
         r#"

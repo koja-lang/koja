@@ -117,6 +117,56 @@ fn deeply_nested_struct_formats_and_dispatches() {
 }
 
 #[test]
+fn nested_protocols_in_both_spellings_dispatch() {
+    let out = run_string(
+        "
+        struct Date
+          day: Int
+
+          protocol Format
+            fn format_date(self, date: Date) -> String
+          end
+        end
+
+        struct Clock
+          hour: Int
+        end
+
+        protocol Clock.Format
+          fn format_clock(self, clock: Clock) -> String
+        end
+
+        enum ISO8601
+          Basic
+        end
+
+        impl Date.Format for ISO8601
+          fn format_date(self, date: Date) -> String
+            \"day #{date.day}\"
+          end
+        end
+
+        impl Clock.Format for ISO8601
+          fn format_clock(self, clock: Clock) -> String
+            \"hour #{clock.hour}\"
+          end
+        end
+
+        fn render<F: Date.Format>(date: Date, formatter: F) -> String
+          formatter.format_date(date)
+        end
+
+        fn render_clock<F: Clock.Format>(clock: Clock, formatter: F) -> String
+          formatter.format_clock(clock)
+        end
+
+        \"#{render(Date{day: 3}, ISO8601.Basic)} #{render_clock(Clock{hour: 7}, ISO8601.Basic)}\"
+        ",
+    );
+    assert_eq!(out, "day 3 hour 7");
+}
+
+#[test]
 fn enum_struct_variant_formats_with_full_name() {
     let out = run_string(
         "

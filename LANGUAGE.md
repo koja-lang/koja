@@ -996,7 +996,7 @@ end
 
 ### Nested Types
 
-A struct or enum can own other types. Declare the nested type inside the owner's body, or at the top level with a qualified name. The two forms are equivalent:
+A struct or enum can own other types and protocols. Declare the nested item inside the owner's body, or at the top level with a qualified name. The two forms are equivalent:
 
 ```koja
 struct Supervisor
@@ -1036,6 +1036,48 @@ end
 ```
 
 Nesting is a namespacing device only. The nested type does not inherit the owner's type parameters, and `priv` on a nested type means package-private as usual.
+
+A protocol nests the same way. This lets several types each own a protocol with the same leaf name, and one type can implement all of them:
+
+```koja
+struct Date
+  day: Int
+
+  protocol Format
+    fn format_date(self, date: Date) -> String
+  end
+end
+
+struct Time
+  hour: Int
+end
+
+protocol Time.Format
+  fn format_time(self, time: Time) -> String
+end
+
+enum ISO8601
+  Extended
+end
+
+impl Date.Format for ISO8601
+  fn format_date(self, date: Date) -> String
+    "day #{date.day}"
+  end
+end
+
+impl Time.Format for ISO8601
+  fn format_time(self, time: Time) -> String
+    "hour #{time.hour}"
+  end
+end
+
+fn render<F: Date.Format>(date: Date, formatter: F) -> String
+  formatter.format_date(date)
+end
+```
+
+The protocol is always referenced as `Date.Format`, in `impl` headers, generic bounds, and conformance lists alike.
 
 ### Union Types
 

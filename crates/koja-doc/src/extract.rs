@@ -263,10 +263,8 @@ pub fn extract_items(file: &File, project: &mut DocProject, package: &str, kind:
                 }
             }
             Item::Impl(_) => {}
-            Item::Protocol(p) => {
-                if let Some(dp) = extract_protocol(p) {
-                    pkg.protocols.push(dp);
-                }
+            Item::Protocol(_) => {
+                extract_type_item(item, pkg, &[]);
             }
             Item::Struct(_) => {
                 extract_type_item(item, pkg, &[]);
@@ -276,8 +274,9 @@ pub fn extract_items(file: &File, project: &mut DocProject, package: &str, kind:
     }
 }
 
-/// Extract a struct or enum and recursively flatten its lexical nested
-/// types under their full owner path. Private owners hide their subtree.
+/// Extract a struct, enum, or protocol under its full owner path, and
+/// recursively flatten a struct's or enum's lexical nested items.
+/// Private owners hide their subtree.
 fn extract_type_item(item: &Item, pkg: &mut DocPackage, owner_path: &[String]) {
     match item {
         Item::Enum(decl) => {
@@ -304,7 +303,16 @@ fn extract_type_item(item: &Item, pkg: &mut DocPackage, owner_path: &[String]) {
                 extract_type_item(nested, pkg, &path);
             }
         }
-        _ => debug_assert!(false, "nested declarations are structs or enums"),
+        Item::Protocol(decl) => {
+            let path = nested_path(owner_path, &decl.path);
+            if let Some(extracted) = extract_protocol(decl, &path) {
+                pkg.protocols.push(extracted);
+            }
+        }
+        _ => debug_assert!(
+            false,
+            "nested declarations are structs, enums, or protocols"
+        ),
     }
 }
 
@@ -600,7 +608,7 @@ fn extract_params(params: &[Param]) -> Vec<DocParam> {
         .collect()
 }
 
-fn extract_protocol(p: &ProtocolDecl) -> Option<DocProtocol> {
+fn extract_protocol(p: &ProtocolDecl, path: &[String]) -> Option<DocProtocol> {
     if p.visibility == Visibility::Private || has_doc_false(&p.annotations) {
         return None;
     }
@@ -615,7 +623,7 @@ fn extract_protocol(p: &ProtocolDecl) -> Option<DocProtocol> {
         deprecated: annotation_deprecated(&p.annotations),
         doc: annotation_string(&p.annotations),
         functions,
-        name: p.name.text.clone(),
+        name: path.join("."),
         type_params: p
             .type_params
             .iter()

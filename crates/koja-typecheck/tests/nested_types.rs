@@ -5,6 +5,12 @@
 //! rewriting the former to a `StructConstruction` / `Struct` pattern
 //! in place. These tests pin that both readings keep working and that
 //! `Owner.Nested` resolves in type position.
+//!
+//! Protocols nest the same way, in both spellings (`protocol
+//! Owner.Format` at the top level, `protocol Format` inside the
+//! owner's body). The tests at the bottom pin that a nested protocol
+//! is implementable, usable as a generic bound, and that one type can
+//! implement two nested protocols of the same leaf name.
 
 use koja_ast::util::dedent;
 
@@ -177,5 +183,111 @@ fn nested_struct_unknown_field_diagnoses_against_nested_name() {
           Outer.Inner{y: 1}
         ",
         &["has no field `y`"],
+    );
+}
+
+#[test]
+fn nested_protocol_in_both_spellings_implements_and_bounds() {
+    typecheck(&dedent(
+        "
+        struct Date
+          day: Int
+
+          protocol Format
+            fn format_date(self, date: Date) -> String
+          end
+        end
+
+        struct Clock
+          hour: Int
+        end
+
+        protocol Clock.Format
+          fn format_clock(self, clock: Clock) -> String
+        end
+
+        enum ISO8601
+          Basic
+        end
+
+        impl Date.Format for ISO8601
+          fn format_date(self, date: Date) -> String
+            \"day #{date.day}\"
+          end
+        end
+
+        impl Clock.Format for ISO8601
+          fn format_clock(self, clock: Clock) -> String
+            \"hour #{clock.hour}\"
+          end
+        end
+
+        fn render<F: Date.Format>(date: Date, formatter: F) -> String
+          formatter.format_date(date)
+        end
+
+        fn render_clock<F: Clock.Format>(clock: Clock, formatter: F) -> String
+          formatter.format_clock(clock)
+        end
+
+          render(Date{day: 3}, ISO8601.Basic)
+          render_clock(Clock{hour: 7}, ISO8601.Basic)
+          ISO8601.Basic.format_date(Date{day: 9})
+        ",
+    ));
+}
+
+#[test]
+fn nested_protocol_requires_known_owner_in_same_package() {
+    assert_script_fails_with(
+        "
+        protocol Missing.Format
+          fn f(self) -> String
+        end
+        ",
+        &["nested protocol `Format` must be declared under a type in the same package"],
+    );
+}
+
+#[test]
+fn nested_protocol_cannot_shadow_enum_variant() {
+    assert_script_fails_with(
+        "
+        enum Color
+          Red
+          Show
+
+          protocol Show
+            fn show(self) -> String
+          end
+        end
+        ",
+        &["nested protocol `Show` collides with a variant of `Color`"],
+    );
+}
+
+#[test]
+fn unqualified_nested_protocol_name_does_not_resolve() {
+    assert_script_fails_with(
+        "
+        struct Date
+          day: Int
+
+          protocol Format
+            fn format_date(self, date: Date) -> String
+          end
+        end
+
+        enum ISO8601
+          Basic
+        end
+
+        impl Format for ISO8601
+          fn format_date(self, date: Date) -> String
+            \"\"
+          end
+        end
+        ",
+        &["does not recognize the type name `Format`"],
     );
 }

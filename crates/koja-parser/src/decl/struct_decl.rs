@@ -39,7 +39,8 @@ impl Parser {
                 | TokenKind::Priv
                 | TokenKind::At
                 | TokenKind::Struct
-                | TokenKind::Enum => match self.parse_type_body_member("struct") {
+                | TokenKind::Enum
+                | TokenKind::Protocol => match self.parse_type_body_member("struct") {
                     TypeBodyMember::Function(function) => functions.push(*function),
                     TypeBodyMember::Nested(item) => nested.push(*item),
                 },
@@ -105,9 +106,9 @@ impl Parser {
         };
 
         match self.peek() {
-            TokenKind::Struct | TokenKind::Enum => TypeBodyMember::Nested(Box::new(
-                self.parse_nested_type_item(annotations, visibility),
-            )),
+            TokenKind::Struct | TokenKind::Enum | TokenKind::Protocol => TypeBodyMember::Nested(
+                Box::new(self.parse_nested_type_item(annotations, visibility)),
+            ),
             TokenKind::Fn => TypeBodyMember::Function(Box::new(
                 self.parse_function_decl(annotations, visibility),
             )),
@@ -127,22 +128,24 @@ impl Parser {
         }
     }
 
-    /// Parse a `struct`/`enum` declared inside another type's body.
+    /// Parse a `struct`, `enum`, or `protocol` declared inside another
+    /// type's body.
     fn parse_nested_type_item(
         &mut self,
         annotations: Vec<Annotation>,
         visibility: Visibility,
     ) -> Item {
         let keyword_span = self.current_span();
-        let item = if self.at(&TokenKind::Struct) {
-            self.parse_struct_item(annotations, visibility)
-        } else {
-            self.parse_enum_item(annotations, visibility)
+        let item = match self.peek() {
+            TokenKind::Struct => self.parse_struct_item(annotations, visibility),
+            TokenKind::Enum => self.parse_enum_item(annotations, visibility),
+            _ => self.parse_protocol_item(annotations, visibility),
         };
         let path = match &item {
             Item::Struct(decl) => &decl.path,
             Item::Enum(decl) => &decl.path,
-            _ => unreachable!("nested type item is always a struct or enum"),
+            Item::Protocol(decl) => &decl.path,
+            _ => unreachable!("nested type item is always a struct, enum, or protocol"),
         };
         if path.len() > 1 {
             self.error(
