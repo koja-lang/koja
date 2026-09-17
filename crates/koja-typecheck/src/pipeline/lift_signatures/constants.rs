@@ -13,16 +13,16 @@
 
 use koja_ast::ast::{
     BinarySegment, Constant, Diagnostic, EnumConstructionData, Expr, ExprKind, FieldInit, Literal,
-    Name, StringPart, UnaryOp, name_texts,
+    Name, StringPart, UnaryOp, name_texts, path_text,
 };
 use koja_ast::identifier::{Identifier, Resolution, ResolvedType};
 use koja_ast::span::Span;
 
-use crate::pipeline::aliases::rewrite_through_aliases;
 use crate::pipeline::resolve::coercion::{
     Mismatch, check_compatible_stamping, check_float_literal_finite,
 };
 use crate::pipeline::resolve::literals::{SegmentKind, resolve_segment};
+use crate::pipeline::resolve::types::lookup_type;
 use crate::registry::{
     ConstantDefinition, GlobalKind, GlobalRegistry, ResolvedStructField, ResolvedVariantData,
 };
@@ -35,14 +35,17 @@ pub(super) fn lift_constant(
     scope: &mut LiftScope<'_>,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
-    let identifier = Identifier::single(scope.package, constant.name.text.clone());
+    let identifier = Identifier::new(scope.package, name_texts(&constant.path));
     let Some((id, entry)) = scope.registry.lookup(&identifier) else {
         panic!(
             "lift_signatures found constant `{identifier}` missing from registry. This is a \
              collect invariant violation",
         );
     };
-    if matches!(entry.kind, GlobalKind::Constant(Some(_))) {
+    // Already lifted, or the name belongs to another declaration
+    // that registered first (a method on the owner, for a nested
+    // constant). Collect diagnosed the collision.
+    if !matches!(entry.kind, GlobalKind::Constant(None)) {
         return;
     }
 
@@ -324,12 +327,12 @@ fn enum_variant_type(
     scope: ResolutionScope<'_>,
     diagnostics: &mut Vec<Diagnostic>,
 ) -> ResolvedType {
-    let Some(name) = type_path.last().map(Name::as_str) else {
+    if type_path.is_empty() {
         diagnostics.push(Diagnostic::error("missing enum name", span));
         return ResolvedType::unresolved();
-    };
-    let identifier = lookup_constant_type_identifier(type_path, name, scope);
-    let Some((enum_id, entry)) = scope.registry.lookup(&identifier) else {
+    }
+    let name = path_text(type_path);
+    let Some((enum_id, entry)) = lookup_type(&name_texts(type_path), scope) else {
         diagnostics.push(Diagnostic::error(format!("unknown enum `{name}`"), span));
         return ResolvedType::unresolved();
     };
@@ -372,12 +375,12 @@ fn struct_construction_type(
     scope: ResolutionScope<'_>,
     diagnostics: &mut Vec<Diagnostic>,
 ) -> ResolvedType {
-    let Some(name) = type_path.last().map(Name::as_str) else {
+    if type_path.is_empty() {
         diagnostics.push(Diagnostic::error("missing struct name", span));
         return ResolvedType::unresolved();
-    };
-    let identifier = lookup_constant_type_identifier(type_path, name, scope);
-    let Some((struct_id, entry)) = scope.registry.lookup(&identifier) else {
+    }
+    let name = path_text(type_path);
+    let Some((struct_id, entry)) = lookup_type(&name_texts(type_path), scope) else {
         diagnostics.push(Diagnostic::error(format!("unknown struct `{name}`"), span));
         return ResolvedType::unresolved();
     };
@@ -396,7 +399,7 @@ fn struct_construction_type(
         return ResolvedType::unresolved();
     }
     let resolved_fields: Vec<ResolvedStructField> = def.fields.clone();
-    if !validate_struct_fields(&resolved_fields, fields, name, span, diagnostics) {
+    if !validate_struct_fields(&resolved_fields, fields, &name, span, diagnostics) {
         return ResolvedType::unresolved();
     }
     for field_init in fields.iter_mut() {
@@ -438,30 +441,9 @@ fn validate_struct_fields(
     ok
 }
 
-/// Project a constant value's `type_path` (the full dotted path
-/// the user wrote on `Foo.Variant{...}` / `Foo{...}`) onto a
-/// registered [`Identifier`] under the constant scope's lookup
-/// rules: an alias-bound head wins, otherwise fall back to the
-/// current package. Constant value resolution today only accepts
-/// single-segment heads, so multi-segment alias targets simply
-/// won't resolve until nested-type lifting lands (same fall-through
-/// behavior as `resolve_named` in [`super::types`]).
-fn lookup_constant_type_identifier(
-    type_path: &[Name],
-    name: &str,
-    scope: ResolutionScope<'_>,
-) -> Identifier {
-    if let Some(target) = rewrite_through_aliases(
-        scope.aliases,
-        &name_texts(type_path),
-        scope.package,
-        scope.registry,
-    ) {
-        return target;
-    }
-    Identifier::single(scope.package, name)
-}
-
+/// Render a resolved type for a constant diagnostic. A global names
+/// its qualified identifier, and every other resolution renders a
+/// placeholder, since a constant's type can only be a global.
 fn render_type(ty: &ResolvedType, registry: &GlobalRegistry) -> String {
     match ty {
         ResolvedType::Anonymous(_) | ResolvedType::Union(_) => render_resolved(ty, registry),

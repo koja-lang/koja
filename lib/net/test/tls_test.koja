@@ -25,7 +25,7 @@ end
 
 test "verifying client rejects a self-signed server certificate"
   server_config = try require(server_test_config())
-  addr = SocketAddress{ip: IPAddress.loopback(), port: 43118}
+  addr = SocketAddress{ip: IPAddress.LOOPBACK, port: 43118}
   listener = try require(TCPListener.bind_addr(addr))
 
   server = Task.async(fn () -> Result<String, String>
@@ -68,7 +68,7 @@ priv fn run_echo_roundtrip(
   client_config: TLSConfig,
 ) ! Test.Failure
 
-  addr = SocketAddress{ip: IPAddress.loopback(), port: port}
+  addr = SocketAddress{ip: IPAddress.LOOPBACK, port: port}
   listener = try require(TCPListener.bind_addr(addr))
 
   server = Task.async(fn () -> Result<String, String>

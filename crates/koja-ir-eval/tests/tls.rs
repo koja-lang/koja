@@ -7,7 +7,7 @@
 //! one interpreter runs one script, so the server runs in its own
 //! interpreter on a spawned thread while the client runs on the test
 //! thread.
-//! Sequencing: the server writes a sentinel file once its listener
+//! For sequencing, the server writes a sentinel file once its listener
 //! is bound (loopback `connect` succeeds from that point, before
 //! `accept` is even called). The client waits for the sentinel.
 //!
@@ -75,7 +75,7 @@ fn server_source(port: u16, ready_path: &str) -> String {
             end
 
           listener =
-            match TCPListener.bind_addr(SocketAddress{{ip: IPAddress.loopback(), port: {port}}})
+            match TCPListener.bind_addr(SocketAddress{{ip: IPAddress.LOOPBACK, port: {port}}})
               Result.Ok(l) -> l
               Result.Err(e) -> return "bind: " <> e.message()
             end
@@ -128,7 +128,7 @@ fn client_source(port: u16) -> String {
 
         fn main -> String
           plain =
-            match TCPSocket.connect_addr(SocketAddress{{ip: IPAddress.loopback(), port: {port}}})
+            match TCPSocket.connect_addr(SocketAddress{{ip: IPAddress.LOOPBACK, port: {port}}})
               Result.Ok(s) -> s
               Result.Err(e) -> return "connect: " <> e.message()
             end

@@ -77,24 +77,30 @@ fn alias_target(name: &str, resolver: &Resolver<'_>) -> Option<Identifier> {
     )
 }
 
-/// Resolve a package-qualified member read: a constant
-/// (`Pkg.MAX_SIZE`) or a function that needs explicit reference syntax
-/// (`Pkg.helper`). The
-/// capitalized form parses as a unit enum construction and the
-/// lowercase form as a field access, so neither shape reaches
-/// [`resolve_ident`]. When the dotted path names a constant or a
-/// function, the node is rewritten to an identifier with a stamped
-/// `Resolution::Global` so IR lowering reads it through the same
-/// path as a bare name. Locals and types win over package prefixes
-/// and bail to the normal resolution paths. Members are top-level
-/// declarations, so only two-segment paths apply. Deeper chains like
-/// `Pkg.ORIGIN.x` fall through and resolve their prefix recursively.
+/// Resolve a qualified member read, which is a constant nested under
+/// a type (`Duration.ZERO`, `Pkg.Type.MAX`), a package constant
+/// (`Pkg.MAX_SIZE`), or a function that needs explicit reference
+/// syntax (`Pkg.helper`). The capitalized form parses as a unit enum
+/// construction and the lowercase form as a field access, so neither
+/// shape reaches [`resolve_ident`]. When the dotted path names a
+/// constant or a function, the node is rewritten to an identifier
+/// with a stamped `Resolution::Global` so IR lowering reads it
+/// through the same path as a bare name. Locals win over both
+/// prefixes and bail to the normal resolution paths. A type prefix
+/// that owns no constant of that name also bails, so enum variants
+/// and static calls keep their own diagnostics. Package members are
+/// top-level declarations, so only two-segment paths apply to them.
+/// Deeper chains like `Pkg.ORIGIN.x` fall through and resolve their
+/// prefix recursively.
 pub(super) fn resolve_qualified_member(
     expr: &mut Expr,
     resolver: &Resolver<'_>,
     diagnostics: &mut Vec<Diagnostic>,
 ) -> Option<ResolvedType> {
     let path = static_dotted_path(&expr.kind)?;
+    if let Some(ty) = resolve_type_constant(expr, &path, resolver, diagnostics) {
+        return Some(ty);
+    }
     let [package, name] = path.as_slice() else {
         return None;
     };
@@ -136,6 +142,48 @@ pub(super) fn resolve_qualified_member(
         }
     };
     check_reference_visibility(entry, resolver.package, expr.span, diagnostics);
+    expr.kind = ExprKind::Ident {
+        name: path.join("."),
+        resolution: Resolution::Global(id),
+    };
+    Some(ty)
+}
+
+/// Resolve `Owner.NAME` where every segment but the last names a
+/// type and the type owns a constant `NAME`. The owner resolves
+/// through [`lookup_type`], so file aliases and `Pkg.Type` prefixes
+/// apply. Returns `None` when the head is a local, the prefix is not
+/// a type, or the type owns no such constant, so the caller falls
+/// through to package members, enum variants, and static calls.
+fn resolve_type_constant(
+    expr: &mut Expr,
+    path: &[String],
+    resolver: &Resolver<'_>,
+    diagnostics: &mut Vec<Diagnostic>,
+) -> Option<ResolvedType> {
+    let (name, owner) = path.split_last()?;
+    if owner.is_empty() || resolver.scope.lookup(&owner[0]).is_some() {
+        return None;
+    }
+    let (_, owner_entry) = lookup_type(owner, resolver.resolution_scope())?;
+    let target = Identifier::member(
+        owner_entry.identifier.package(),
+        owner_entry.identifier.path(),
+        name,
+    );
+    let (id, entry) = resolver.registry.lookup(&target)?;
+    let GlobalKind::Constant(definition) = &entry.kind else {
+        return None;
+    };
+    let Some(definition) = definition else {
+        panic!(
+            "resolve_type_constant found `{}` without a stamped definition. lifting runs before \
+             body resolution",
+            entry.identifier,
+        );
+    };
+    check_reference_visibility(entry, resolver.package, expr.span, diagnostics);
+    let ty = definition.ty.clone();
     expr.kind = ExprKind::Ident {
         name: path.join("."),
         resolution: Resolution::Global(id),
@@ -463,9 +511,9 @@ fn function_value_type(signature: &FunctionSignature) -> ResolvedType {
 /// `"self"`. A hit returns the receiver's struct type and stamps the
 /// AST node's `local_id` slot so IR lower can read the slot through
 /// the same `LocalRead` path body-declared locals use. A miss surfaces
-/// as a diagnostic: `self` outside an instance method is invalid.
+/// as a diagnostic, since `self` outside an instance method is invalid.
 ///
-/// Note: `expr.resolution` keeps the receiver's *struct type* (not a
+/// `expr.resolution` keeps the receiver's *struct type* (not a
 /// `Resolution::Local`). The `local_id` slot is the binding info,
 /// the resolution slot is the static type. Same split as `ExprKind::Ident`,
 /// where the inner `resolution` names the binding and the outer

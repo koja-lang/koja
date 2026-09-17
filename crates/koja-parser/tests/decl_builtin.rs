@@ -97,7 +97,7 @@ fn builtin_rejects_fields() {
           length: Int
         end
         ",
-        &["expected a function declaration in builtin block"],
+        &["expected a function or constant declaration in builtin block"],
     );
 }
 
@@ -111,7 +111,7 @@ fn builtin_rejects_nested_types() {
           end
         end
         ",
-        &["expected a function declaration in builtin block"],
+        &["expected a function or constant declaration in builtin block"],
     );
 }
 

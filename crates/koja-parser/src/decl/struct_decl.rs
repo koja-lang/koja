@@ -40,7 +40,8 @@ impl Parser {
                 | TokenKind::At
                 | TokenKind::Struct
                 | TokenKind::Enum
-                | TokenKind::Protocol => match self.parse_type_body_member("struct") {
+                | TokenKind::Protocol
+                | TokenKind::Const => match self.parse_type_body_member("struct") {
                     TypeBodyMember::Function(function) => functions.push(*function),
                     TypeBodyMember::Nested(item) => nested.push(*item),
                 },
@@ -106,9 +107,11 @@ impl Parser {
         };
 
         match self.peek() {
-            TokenKind::Struct | TokenKind::Enum | TokenKind::Protocol => TypeBodyMember::Nested(
-                Box::new(self.parse_nested_type_item(annotations, visibility)),
-            ),
+            TokenKind::Struct | TokenKind::Enum | TokenKind::Protocol | TokenKind::Const => {
+                TypeBodyMember::Nested(Box::new(
+                    self.parse_nested_type_item(annotations, visibility),
+                ))
+            }
             TokenKind::Fn => TypeBodyMember::Function(Box::new(
                 self.parse_function_decl(annotations, visibility),
             )),
@@ -116,7 +119,7 @@ impl Parser {
                 let span = self.current_span();
                 self.error(
                     format!(
-                        "expected a function or type declaration in {context} block, found {}",
+                        "expected a function, type, or constant declaration in {context} block, found {}",
                         self.peek()
                     ),
                     span,
@@ -128,8 +131,8 @@ impl Parser {
         }
     }
 
-    /// Parse a `struct`, `enum`, or `protocol` declared inside another
-    /// type's body.
+    /// Parse a `struct`, `enum`, `protocol`, or `const` declared inside
+    /// another type's body.
     fn parse_nested_type_item(
         &mut self,
         annotations: Vec<Annotation>,
@@ -139,18 +142,20 @@ impl Parser {
         let item = match self.peek() {
             TokenKind::Struct => self.parse_struct_item(annotations, visibility),
             TokenKind::Enum => self.parse_enum_item(annotations, visibility),
+            TokenKind::Const => self.parse_constant_item(annotations, visibility),
             _ => self.parse_protocol_item(annotations, visibility),
         };
-        let path = match &item {
-            Item::Struct(decl) => &decl.path,
-            Item::Enum(decl) => &decl.path,
-            Item::Protocol(decl) => &decl.path,
-            _ => unreachable!("nested type item is always a struct, enum, or protocol"),
+        let (what, path) = match &item {
+            Item::Struct(decl) => ("type", &decl.path),
+            Item::Enum(decl) => ("type", &decl.path),
+            Item::Protocol(decl) => ("type", &decl.path),
+            Item::Constant(decl) => ("constant", &decl.path),
+            _ => unreachable!("nested item is always a struct, enum, protocol, or constant"),
         };
         if path.len() > 1 {
             self.error(
                 format!(
-                    "nested type declarations take a single name, found `{}`. The enclosing type's prefix is implied",
+                    "nested {what} declarations take a single name, found `{}`. The enclosing type's prefix is implied",
                     name_texts(path).join(".")
                 ),
                 keyword_span,

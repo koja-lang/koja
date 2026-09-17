@@ -147,7 +147,7 @@ fn constant_name_span() {
     let Item::Constant(c) = &items[0] else {
         panic!("expected a constant")
     };
-    assert_name(&source, &c.name, "MAX_RETRIES", &c.span);
+    assert_name(&source, c.name(), "MAX_RETRIES", &c.span);
 }
 
 #[test]

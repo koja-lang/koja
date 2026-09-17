@@ -185,7 +185,7 @@ impl DocPackage {
     }
 }
 
-/// Documentation for an entire project: the user's own package
+/// Documentation for an entire project, the user's own package
 /// (named in `project_package`) plus any deps and stdlib packages
 /// the driver chose to bundle in. The renderer walks
 /// [`Self::packages`] to emit one subdir per package.
@@ -243,11 +243,12 @@ pub fn extract_items(file: &File, project: &mut DocProject, package: &str, kind:
                 if let Some(db) = extract_builtin(b) {
                     pkg.builtins.push(db);
                 }
-            }
-            Item::Constant(c) => {
-                if let Some(dc) = extract_constant(c) {
-                    pkg.constants.push(dc);
+                for nested in &b.nested {
+                    extract_type_item(nested, pkg, &name_texts(&b.path));
                 }
+            }
+            Item::Constant(_) => {
+                extract_type_item(item, pkg, &[]);
             }
             Item::Enum(_) => {
                 extract_type_item(item, pkg, &[]);
@@ -274,9 +275,9 @@ pub fn extract_items(file: &File, project: &mut DocProject, package: &str, kind:
     }
 }
 
-/// Extract a struct, enum, or protocol under its full owner path, and
-/// recursively flatten a struct's or enum's lexical nested items.
-/// Private owners hide their subtree.
+/// Extract a struct, enum, protocol, or constant under its full owner
+/// path, and recursively flatten a struct's or enum's lexical nested
+/// items. Private owners hide their subtree.
 fn extract_type_item(item: &Item, pkg: &mut DocPackage, owner_path: &[String]) {
     match item {
         Item::Enum(decl) => {
@@ -309,9 +310,15 @@ fn extract_type_item(item: &Item, pkg: &mut DocPackage, owner_path: &[String]) {
                 pkg.protocols.push(extracted);
             }
         }
+        Item::Constant(decl) => {
+            let path = nested_path(owner_path, &decl.path);
+            if let Some(extracted) = extract_constant(decl, &path) {
+                pkg.constants.push(extracted);
+            }
+        }
         _ => debug_assert!(
             false,
-            "nested declarations are structs, enums, or protocols"
+            "nested declarations are structs, enums, protocols, or constants"
         ),
     }
 }
@@ -362,8 +369,9 @@ fn resolve_pending_extends(project: &mut DocProject) {
     }
 }
 
-/// Resolve an extend target like typecheck: prefer the complete path in
-/// the current package, then read the first path segment as a package.
+/// Resolve an extend target like typecheck does. Prefer the complete
+/// path in the current package, then read the first path segment as a
+/// package.
 fn resolve_extend_target(
     project: &DocProject,
     current_package: &str,
@@ -533,7 +541,7 @@ fn make_pending_extend(ext: &ExtendBlock, current_package: &str) -> Option<Pendi
     })
 }
 
-fn extract_constant(c: &koja_ast::ast::Constant) -> Option<DocConstant> {
+fn extract_constant(c: &koja_ast::ast::Constant, path: &[String]) -> Option<DocConstant> {
     if c.visibility == Visibility::Private || has_doc_false(&c.annotations) {
         return None;
     }
@@ -541,7 +549,7 @@ fn extract_constant(c: &koja_ast::ast::Constant) -> Option<DocConstant> {
     Some(DocConstant {
         deprecated: annotation_deprecated(&c.annotations),
         doc: annotation_string(&c.annotations),
-        name: c.name.text.clone(),
+        name: path.join("."),
     })
 }
 

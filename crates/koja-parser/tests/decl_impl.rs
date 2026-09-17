@@ -200,6 +200,6 @@ fn nested_type_declaration_rejected_in_impl() {
           end
         end
         ",
-        &["nested type declarations are not valid in `impl` or `extend` blocks"],
+        &["nested type and constant declarations are not valid in `impl` or `extend` blocks"],
     );
 }

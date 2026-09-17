@@ -23,7 +23,7 @@ use super::types::lookup_type;
 ///   field: "Headers" }`.
 /// - `None` for everything else (value receivers, parenthesized
 ///   expressions, calls, etc.). Those flow through the value paths.
-pub(super) fn static_dotted_path(kind: &ExprKind) -> Option<Vec<String>> {
+pub(crate) fn static_dotted_path(kind: &ExprKind) -> Option<Vec<String>> {
     match kind {
         ExprKind::EnumConstruction {
             data: EnumConstructionData::Unit,

@@ -166,6 +166,34 @@ Constants are inlined at every usage site.
 
 Within a package, constants are read by bare name (`MAX`). Constants from the auto-imported `Global` package also resolve bare (`STDOUT`). Public constants in other packages are read through the package namespace (`Mathlib.PI`).
 
+A struct, enum, or builtin can own constants. Declare the constant inside the owner's body, or at the top level with a qualified name. The two forms are equivalent:
+
+```koja
+struct Duration
+  unit: Duration.Unit
+  value: Int
+
+  enum Unit
+    Nanoseconds
+    Seconds
+  end
+
+  const ZERO = Duration{unit: Duration.Unit.Nanoseconds, value: 0}
+end
+
+const Duration.MAX_SECONDS = 9223372036854775807
+```
+
+A nested constant is always read by its qualified name, `Duration.ZERO`, even inside the owner's own body. It can be a field default:
+
+```koja
+struct Summary
+  elapsed: Duration = Duration.ZERO
+end
+```
+
+A nested constant shares the owner's member namespace, so it cannot take the name of a method or an enum variant. The stdlib uses this form for `Int.MAX`, `Int.MIN`, `Duration.ZERO`, `Timestamp.UNIX_EPOCH`, and `IPAddress.LOOPBACK`.
+
 ---
 
 ## Value Semantics
@@ -773,7 +801,7 @@ c = Config{name: "app"} # host and port fill from the defaults
 Config{} # error: `name` has no default
 ```
 
-Default values are limited to side-effect-free expressions: literals (no interpolation), negated numerics, unit enum variants, binary literals, and struct, list, map, or set literals of those. The compiler checks each default against the field type at the declaration. A default cannot use an `alias` shorthand. Write the qualified name.
+Default values are limited to side-effect-free expressions: literals (no interpolation), negated numerics, unit enum variants, binary literals, constants (`LIMIT`, `Duration.ZERO`), and struct, list, map, or set literals of those. The compiler checks each default against the field type at the declaration. A default cannot use an `alias` shorthand. Write the qualified name.
 
 The default expression evaluates at each construction that omits the field. This makes generic defaults work: a `List<T>` field can default to `[]` and an `Option<T>` field to `Option.None`:
 
@@ -1078,6 +1106,8 @@ end
 ```
 
 The protocol is always referenced as `Date.Format`, in `impl` headers, generic bounds, and conformance lists alike.
+
+Constants nest the same way, and a `builtin` body can own them too. See [Constants](#constants).
 
 ### Union Types
 

@@ -40,9 +40,10 @@ impl Attacher<'_> {
             Item::Builtin(b) => self.walk_decl_body(
                 b.span,
                 b.span.start.line,
-                b.functions
+                b.nested
                     .iter()
-                    .map(Member::Function)
+                    .map(Member::Nested)
+                    .chain(b.functions.iter().map(Member::Function))
                     .chain(b.tests.iter().map(Member::Test))
                     .collect(),
             ),

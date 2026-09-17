@@ -17,6 +17,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `Instant`, a point on the monotonic clock and the type for elapsed time: `started = Instant.now()` then `started.elapsed()`. It counts nanoseconds and does not move when the system time changes.
 - `Timestamp`, a `Duration` since the Unix epoch. `Timestamp.new(value, unit)` stores an epoch value in the unit it arrived in, `now()` reads the clock in microseconds, and the `since_epoch` field converts on the way out, so `t.since_epoch.to_seconds()` is Unix time. It replaces `DateTime`.
 - A protocol can nest under a type, in the body (`protocol Format` inside `struct Date`) or at the top level with a qualified name (`protocol Date.Format`). It is referenced as `Date.Format` in `impl` headers, bounds, and conformance lists. Several types can each own a `Format`, and one type can implement all of them.
+- A constant can nest under a struct, enum, or builtin, in the body (`const ZERO = ...` inside `struct Duration`) or at the top level with a qualified name (`const Duration.ZERO = ...`). It is read as `Duration.ZERO` everywhere, the owner's body included, and can be a field default. The stdlib adds `Int.MAX`, `Int.MIN`, `Duration.ZERO`, `Timestamp.UNIX_EPOCH`, `IPAddress.ANY`, and `IPAddress.LOOPBACK`.
 - `alias` binds a package-level function or constant, not only a type. `alias Test.require` makes `require(x)` and `&require/1` available in the file, every arity included, and `alias JSON.decode as parse` renames it. The local name keeps the case of its target.
 - New language server features:
   - Find references lists every use of a function, type, constant, local, or type parameter across the project.
@@ -51,6 +52,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `koja format` keeps the `\#{` escape in a string pattern. The formatter dropped the backslash, so the output re-parsed as an interpolation.
 - A type declared twice reports one error. It also no longer reports an error for each duplicate derived `Debug` and `Equality` method.
 - The underline in a terminal error no longer runs one column past the end of the code it points at.
+- A struct constant with an enum field, such as `const ZERO = Span{value: 0, unit: Unit.Seconds}`, and an enum constant read from two functions both compile under LLVM. Each failed module verification before.
+- `-9223372036854775808` compiles as the smallest `Int`. The literal was rejected because its magnitude alone does not fit.
 
 ### Removed
 
@@ -58,6 +61,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Breaking change.** The `unless` keyword is removed. Write `if not cond` instead. `not` binds tighter than `and` and `or`, so a compound condition needs parentheses (`if not (a and b)`) or De Morgan (`if a != x and b != y`). The word stays reserved, and the parser reports the replacement when it meets an old `unless` block.
 - **Breaking change.** `JSON.StringBuilder` is removed after its 0.18.2 deprecation. Accumulate with `<>` or use `String.join`.
 - **Breaking change.** `IPAddress.v4?()` and `IPAddress.v6?()` are removed after their 0.18.0 deprecation. Compare `address.version` with `IPAddress.Version.V4` or `IPAddress.Version.V6`.
+- **Breaking change.** `IPAddress.any()` and `IPAddress.loopback()` are removed. They are replaced by the constants `IPAddress.ANY` and `IPAddress.LOOPBACK`.
 
 ## [0.18.4] - 2026-09-12
 

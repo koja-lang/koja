@@ -42,11 +42,13 @@ impl Printer {
             &b.annotations,
             b.span,
         );
-        let mut entries: Vec<SeqEntry> = b
-            .functions
-            .iter()
-            .map(|f| self.member_function_entry(f))
-            .collect();
+        let mut entries: Vec<SeqEntry> = Vec::new();
+        for item in &b.nested {
+            entries.push(self.member_nested_entry(item));
+        }
+        for f in &b.functions {
+            entries.push(self.member_function_entry(f));
+        }
         for test in &b.tests {
             entries.push(self.member_test_entry(test));
         }
@@ -59,7 +61,7 @@ impl Printer {
         push_annotations(&mut parts, &c.annotations);
         parts.push(text(visibility_prefix(c.visibility)));
         parts.push(text("const "));
-        parts.push(text(&c.name.text));
+        parts.push(text(name_texts(&c.path).join(".")));
         if let Some(type_ann) = &c.type_annotation {
             parts.push(text(": "));
             parts.push(type_expr_to_doc(type_ann));
@@ -427,9 +429,17 @@ impl Printer {
         )
     }
 
+    /// A nested type or protocol is a block and gets blank lines
+    /// around it. A bare nested constant is one line and stacks like
+    /// a field. An annotated one is a block, the same rule the top
+    /// level applies to constants.
     fn member_nested_entry(&mut self, item: &Item) -> SeqEntry {
         let doc = self.item_to_doc(item);
-        self.entry(*item_span(item), item_start_line(item), true, doc)
+        let block = match item {
+            Item::Constant(c) => !c.annotations.is_empty(),
+            _ => true,
+        };
+        self.entry(*item_span(item), item_start_line(item), block, doc)
     }
 
     fn member_test_entry(&mut self, t: &TestDecl) -> SeqEntry {

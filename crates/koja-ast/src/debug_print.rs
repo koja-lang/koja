@@ -7,7 +7,7 @@
 //! end_line:end_col` span suffix. Children hang below at the next
 //! indent level.
 //!
-//! Single public entry point: [`format_file`].
+//! The single public entry point is [`format_file`].
 //!
 //! Every enum dispatch is exhaustive (no `_` catch-alls) so adding a
 //! new AST variant is a compile error until the printer is updated.
@@ -147,7 +147,7 @@ impl<'a> Printer<'a> {
     }
 
     fn constant(&mut self, c: &Constant) {
-        let header = format!("Constant {}", c.name);
+        let header = format!("Constant {}", path_text(&c.path));
         self.nested(&header, c.span, |p| {
             p.annotations(&c.annotations);
             if let Some(ty) = &c.type_annotation {
@@ -934,7 +934,7 @@ impl<'a> Printer<'a> {
     }
 }
 
-// Header helpers: pure functions producing the single-line label for
+// Header helpers, pure functions producing the single-line label for
 // each node. Keeping these separate from Printer keeps the walker
 // small and makes header shape easy to eyeball.
 

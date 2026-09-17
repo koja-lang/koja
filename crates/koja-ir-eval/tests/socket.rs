@@ -120,7 +120,7 @@ fn udp_loopback_send_and_recv_from() {
               Result.Err(_) -> return false
             end
 
-          target = SocketAddress{{ip: IPAddress.loopback(), port: {port}}}
+          target = SocketAddress{{ip: IPAddress.LOOPBACK, port: {port}}}
           payload = <<97, 0, 98>>.to_string().unwrap()
           match sender.send_to(payload, target)
             Result.Ok(_) -> ()

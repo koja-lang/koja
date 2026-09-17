@@ -343,7 +343,10 @@ fn unknown_variant_in_construction_diagnoses() {
           Color.Purple
         ";
 
-    assert_script_fails_with(source, &["`TestApp.Color`", "no variant `Purple`"]);
+    assert_script_fails_with(
+        source,
+        &["`TestApp.Color`", "no variant or constant `Purple`"],
+    );
 }
 
 #[test]

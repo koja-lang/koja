@@ -29,9 +29,10 @@ fn doc_in_items(items: &[Item], name_span: Span) -> Option<String> {
         let found = match item {
             Item::Alias(_) | Item::Test(_) => None,
             Item::Builtin(decl) => doc_if_named(&decl.annotations, decl.name(), name_span)
-                .or_else(|| doc_in_functions(&decl.functions, name_span)),
+                .or_else(|| doc_in_functions(&decl.functions, name_span))
+                .or_else(|| doc_in_items(&decl.nested, name_span)),
             Item::Constant(constant) => {
-                doc_if_named(&constant.annotations, &constant.name, name_span)
+                doc_if_named(&constant.annotations, constant.name(), name_span)
             }
             Item::Enum(decl) => doc_if_named(&decl.annotations, decl.name(), name_span)
                 .or_else(|| doc_in_functions(&decl.functions, name_span))

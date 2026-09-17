@@ -31,6 +31,19 @@ struct IPAddress
   end
 
   @doc """
+  The IPv4 wildcard address, 0.0.0.0.
+  """
+  const ANY = IPAddress{bytes: <<0, 0, 0, 0>>, version: IPAddress.Version.V4}
+
+  @doc """
+  The IPv4 loopback address, 127.0.0.1.
+  """
+  const LOOPBACK = IPAddress{
+    bytes: <<127, 0, 0, 1>>,
+    version: IPAddress.Version.V4,
+  }
+
+  @doc """
   Parses a dotted-decimal IPv4 address or an IPv6 address. IPv6 input
   can use `::` compression and an embedded IPv4 suffix.
   """
@@ -54,20 +67,6 @@ struct IPAddress
       bytes: <<a: UInt8, b: UInt8, c: UInt8, d: UInt8>>,
       version: IPAddress.Version.V4,
     }
-  end
-
-  @doc """
-  Returns the IPv4 loopback address (127.0.0.1).
-  """
-  fn loopback -> IPAddress
-    IPAddress{bytes: <<127, 0, 0, 1>>, version: IPAddress.Version.V4}
-  end
-
-  @doc """
-  Returns the IPv4 wildcard address (0.0.0.0).
-  """
-  fn any -> IPAddress
-    IPAddress{bytes: <<0, 0, 0, 0>>, version: IPAddress.Version.V4}
   end
 
   @doc """

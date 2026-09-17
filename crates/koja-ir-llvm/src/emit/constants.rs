@@ -1,18 +1,16 @@
-//! Constant emission: scalar `ConstValue`s, the heap-payload header
-//! shape (`String` / `Binary` / `Bits` literals), and the
+//! Constant emission. Covers scalar `ConstValue`s, the heap-payload
+//! header shape (`String` / `Binary` / `Bits` literals), and the
 //! `LoadConst` cache that materializes pooled aggregate constants
 //! through [`emit_ir_constant_aggregate`].
 
-use std::collections::BTreeMap;
-
 use inkwell::module::Linkage;
+use inkwell::types::{ArrayType, IntType};
 use inkwell::values::{BasicValueEnum, PointerValue};
-use koja_ir::{ConstValue, EnumPayloadInit, IRConstantValue, IRSymbol};
+use koja_ir::{ConstValue, IRConstantValue, IRSymbol, IRVariantTag};
 
 use crate::ctx::EmitContext;
 use crate::error::LlvmError;
 
-use super::enums;
 use super::heap_layout::{HEADER_BYTES, RC_IMMORTAL};
 
 /// Materialize the LLVM SSA value for `LoadConst`, using
@@ -50,18 +48,19 @@ pub(super) fn emit_load_const<'ctx>(
 }
 
 /// Recursively materialize an [`IRConstantValue`] pool entry into a
-/// const LLVM SSA value (`StructValue`, enum outer aggregate built
-/// the same path as [`enums::emit_enum_construct`], string payload
-/// pointer).
+/// true LLVM constant (`StructValue`, enum outer aggregate, string
+/// payload pointer). Every branch must yield a constant and never an
+/// instruction. The cache hands the value to every function that
+/// reads the constant, and a constant struct embeds its fields by
+/// value, so an instruction here would either refer across
+/// functions or fail `const_named_struct`.
 fn emit_ir_constant_aggregate<'ctx>(
     ctx: &EmitContext<'ctx>,
     cv: &IRConstantValue,
 ) -> Result<BasicValueEnum<'ctx>, LlvmError> {
     match cv {
         IRConstantValue::Primitive(inner) => emit_const(ctx, inner),
-        IRConstantValue::EnumVariant { tag, ty } => {
-            enums::emit_enum_construct(ctx, &EnumPayloadInit::Unit, *tag, ty, &BTreeMap::new())
-        }
+        IRConstantValue::EnumVariant { tag, ty } => Ok(emit_unit_variant_constant(ctx, *tag, ty)),
         IRConstantValue::Struct { fields, ty } => {
             let struct_type = ctx.layouts.struct_type(ty.mangled());
             let comps: Vec<BasicValueEnum<'ctx>> = fields
@@ -71,6 +70,39 @@ fn emit_ir_constant_aggregate<'ctx>(
             Ok(struct_type.const_named_struct(&comps).into())
         }
     }
+}
+
+/// Build a unit variant of enum `ty` as an LLVM constant. The outer
+/// is `{ [count x iN] }` (see [`crate::layout::enums`]) and the tag
+/// is the first byte of the value, so chunk 0 carries the tag and
+/// every other chunk is zero. Placing the tag in the low byte of
+/// chunk 0 assumes a little-endian target, which holds for every
+/// target the backend emits. Constant enum values are unit variants
+/// only (the typecheck lift enforces this), so no payload is
+/// written.
+fn emit_unit_variant_constant<'ctx>(
+    ctx: &EmitContext<'ctx>,
+    tag: IRVariantTag,
+    ty: &IRSymbol,
+) -> BasicValueEnum<'ctx> {
+    let outer = ctx.enum_outer_type(ty.mangled());
+    let chunks = outer
+        .get_field_type_at_index(0)
+        .and_then(|field| field.try_into().ok())
+        .unwrap_or_else(|| {
+            panic!("LLVM emit: enum outer `{ty}` is not `{{ [count x iN] }}` (layout invariant)")
+        });
+    let chunks: ArrayType<'ctx> = chunks;
+    let chunk_ty: IntType<'ctx> = chunks.get_element_type().try_into().unwrap_or_else(|_| {
+        panic!("LLVM emit: enum outer `{ty}` chunk element is not an integer (layout invariant)")
+    });
+    let mut values = vec![chunk_ty.const_zero(); chunks.len() as usize];
+    if let Some(first) = values.first_mut() {
+        *first = chunk_ty.const_int(u64::from(tag.0), false);
+    }
+    outer
+        .const_named_struct(&[chunk_ty.const_array(&values).into()])
+        .into()
 }
 
 /// Lower a scalar [`ConstValue`] to a const LLVM value.
@@ -123,7 +155,7 @@ pub(super) fn emit_const<'ctx>(
 /// header + NUL-terminated bytes) and return the payload pointer.
 /// Intrinsic emitters that need to mint a literal error message
 /// (`Int.parse` / `Float.parse` etc.) call this to get a String SSA
-/// value compatible with the rest of the pipeline: the same
+/// value compatible with the rest of the pipeline, the same
 /// shape every `ConstValue::String` materializes through.
 pub(crate) fn emit_string_literal_payload<'ctx>(
     ctx: &EmitContext<'ctx>,

@@ -166,7 +166,7 @@ struct TCPListener
   Returns the listener or an error if any step fails.
   """
   fn bind(port: Int) -> TCPListener ! SocketError
-    try TCPListener.bind_addr(SocketAddress{ip: IPAddress.any(), port: port})
+    try TCPListener.bind_addr(SocketAddress{ip: IPAddress.ANY, port: port})
   end
 
   @doc """

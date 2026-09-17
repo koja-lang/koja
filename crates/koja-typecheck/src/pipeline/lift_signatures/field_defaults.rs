@@ -13,6 +13,8 @@ use koja_ast::ast::{
     Diagnostic, EnumConstructionData, Expr, ExprKind, StringPart, StructField, UnaryOp,
 };
 
+use crate::pipeline::resolve::static_dotted_path;
+
 /// Validate the shape of `field`'s default (if any) and yield the
 /// unresolved AST for registry storage. Shape-invalid defaults
 /// diagnose and store as `None`, so downstream sites fall back to
@@ -28,7 +30,7 @@ pub(super) fn lift_field_default(
     Some(Box::new(default.clone()))
 }
 
-/// Recursive check over the allowed default-value shapes: every
+/// Recursive check over the allowed default-value shapes. Every
 /// shape is side-effect-free and re-resolvable in any package, so a
 /// site-time re-resolution can never observably diverge from the
 /// declaration.
@@ -52,10 +54,19 @@ fn check_default_shape(expr: &Expr, diagnostics: &mut Vec<Diagnostic>) -> bool {
             }
             ok
         }
+        // A unit variant or a constant read. `Duration.ZERO` and
+        // `Color.Red` parse to the same node. Resolve tells them
+        // apart and rejects anything else that lands here.
         ExprKind::EnumConstruction {
             data: EnumConstructionData::Unit,
             ..
         } => true,
+        // A constant read in its bare (`MAX`) or lowercase-leaf
+        // (`Pkg.limit`) spelling. Resolve rejects a name that is not
+        // a constant, and resolves in the declaring package with no
+        // locals, so the value is the same at every site.
+        ExprKind::Ident { .. } => true,
+        ExprKind::FieldAccess { .. } if static_dotted_path(&expr.kind).is_some() => true,
         ExprKind::Group { expr: inner } => check_default_shape(inner, diagnostics),
         ExprKind::List { elements } => elements.iter().fold(true, |ok, element| {
             check_default_shape(element, diagnostics) && ok
@@ -88,7 +99,8 @@ fn check_default_shape(expr: &Expr, diagnostics: &mut Vec<Diagnostic>) -> bool {
         _ => {
             diagnostics.push(Diagnostic::error(
                 "default field values are limited to literals, negated numerics, unit enum \
-                 variants, binary literals, and struct, list, map, or set literals of those",
+                 variants, constants, binary literals, and struct, list, map, or set literals \
+                 of those",
                 expr.span,
             ));
             false

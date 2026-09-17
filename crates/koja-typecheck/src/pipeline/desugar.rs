@@ -1,9 +1,10 @@
 //! Rewrites that run before every other pass so downstream code sees
 //! one shape.
 //!
-//! - Lexically nested type and protocol declarations hoist to
-//!   qualified top-level items, the same flat shape the qualified
-//!   form (`struct Owner.Nested`, `protocol Owner.Format`) produces.
+//! - Lexically nested type, protocol, and constant declarations
+//!   hoist to qualified top-level items, the same flat shape the
+//!   qualified form (`struct Owner.Nested`, `protocol Owner.Format`,
+//!   `const Owner.MAX`) produces.
 //! - `test "..."` blocks become functions with a `! Test.Failure`
 //!   channel when the `Test` package is linked, and are dropped when it
 //!   is not, so a build never type checks a test body. Top-level blocks
@@ -152,6 +153,7 @@ fn test_function(test: TestDecl, path: Option<&Path>, visibility: Visibility) ->
 
 fn hoist_item(mut item: Item, out: &mut Vec<Item>) {
     let (owner_path, nested) = match &mut item {
+        Item::Builtin(decl) => (decl.path.clone(), std::mem::take(&mut decl.nested)),
         Item::Enum(decl) => (decl.path.clone(), std::mem::take(&mut decl.nested)),
         Item::Struct(decl) => (decl.path.clone(), std::mem::take(&mut decl.nested)),
         _ => {
@@ -165,6 +167,7 @@ fn hoist_item(mut item: Item, out: &mut Vec<Item>) {
             Item::Enum(decl) => prefix_path(&mut decl.path, &owner_path),
             Item::Struct(decl) => prefix_path(&mut decl.path, &owner_path),
             Item::Protocol(decl) => prefix_path(&mut decl.path, &owner_path),
+            Item::Constant(decl) => prefix_path(&mut decl.path, &owner_path),
             _ => {}
         }
         hoist_item(nested_item, out);

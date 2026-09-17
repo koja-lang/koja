@@ -2,6 +2,15 @@
 A 64-bit signed integer, the default integer type.
 """
 builtin Int
+  @doc """
+  The largest `Int`, 2^63 - 1.
+  """
+  const MAX = 9223372036854775807
+
+  @doc """
+  The smallest `Int`, -2^63.
+  """
+  const MIN = -9223372036854775808
 end
 
 @doc """

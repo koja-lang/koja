@@ -431,10 +431,8 @@ impl<'ast> Visitor<'ast> for Builder<'_> {
                 self.with_type_owner(id, |b| visit::walk_item(b, item));
             }
             Item::Constant(constant) => {
-                if let Some(id) =
-                    self.lookup(&Identifier::single(self.package, constant.name.as_str()))
-                {
-                    self.record_global_declaration(id, &constant.name);
+                if let Some(id) = self.lookup(&self.type_identifier(&constant.path)) {
+                    self.record_global_declaration(id, constant.name());
                 }
                 visit::walk_item(self, item);
             }

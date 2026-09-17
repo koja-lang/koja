@@ -78,6 +78,7 @@ fn collect_item_folds(file: &File, ranges: &mut Vec<FoldingRange>) {
                     }
                 }
                 collect_tests_folds(&b.tests, ranges);
+                collect_nested_folds(&b.nested, ranges);
             }
             Item::Struct(s) => collect_struct_folds(s, ranges),
             Item::Test(t) => collect_tests_folds(std::slice::from_ref(t), ranges),
@@ -182,6 +183,11 @@ fn collect_nested_folds(nested: &[Item], ranges: &mut Vec<FoldingRange>) {
                 }
                 collect_tests_folds(&e.tests, ranges);
                 collect_nested_folds(&e.nested, ranges);
+            }
+            Item::Constant(c) => {
+                if let Some(r) = span_fold(&c.span, Some(FoldingRangeKind::Region)) {
+                    ranges.push(r);
+                }
             }
             Item::Protocol(p) => collect_protocol_folds(p, ranges),
             Item::Struct(s) => collect_struct_folds(s, ranges),
