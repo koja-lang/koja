@@ -22,7 +22,7 @@ use crate::pipeline::resolve::coercion::{
     Mismatch, check_compatible_stamping, check_float_literal_finite,
 };
 use crate::pipeline::resolve::literals::{SegmentKind, resolve_segment};
-use crate::pipeline::resolve::types::lookup_type;
+use crate::pipeline::resolve::types::{lookup_type, names_struct};
 use crate::registry::{
     ConstantDefinition, GlobalKind, GlobalRegistry, ResolvedStructField, ResolvedVariantData,
 };
@@ -83,6 +83,38 @@ pub(super) fn lift_constant(
     );
 }
 
+/// `Owner.Nested{...}` parses as a struct-shaped enum-variant
+/// construction. When the full path names a struct, rewrite it to a
+/// `StructConstruction` so the struct arm handles it. The body
+/// resolver does the same in
+/// [`crate::pipeline::resolve::structs`], but a constant value never
+/// reaches that walk.
+fn rewrite_nested_struct_construction(expr: &mut Expr, scope: ResolutionScope<'_>) {
+    let ExprKind::EnumConstruction {
+        type_path,
+        variant,
+        data: EnumConstructionData::Struct(_),
+    } = &expr.kind
+    else {
+        return;
+    };
+    let mut path = name_texts(type_path);
+    path.push(variant.text.clone());
+    if !names_struct(&path, scope) {
+        return;
+    }
+    let ExprKind::EnumConstruction {
+        mut type_path,
+        variant,
+        data: EnumConstructionData::Struct(fields),
+    } = std::mem::replace(&mut expr.kind, ExprKind::Self_ { local_id: None })
+    else {
+        unreachable!("guarded by the match above");
+    };
+    type_path.push(variant);
+    expr.kind = ExprKind::StructConstruction { type_path, fields };
+}
+
 /// Walk the RHS, validate it's an allowed constant shape, stamp each
 /// node's `resolution`, and yield the inferred type. `expected` is
 /// the resolved annotation (if any), propagated to children for
@@ -101,6 +133,7 @@ fn resolve_constant_value(
     scope: ResolutionScope<'_>,
     diagnostics: &mut Vec<Diagnostic>,
 ) -> ResolvedType {
+    rewrite_nested_struct_construction(expr, scope);
     let ty = match &mut expr.kind {
         ExprKind::Literal { value } => {
             check_float_literal_finite(value, expr.span, diagnostics);

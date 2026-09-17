@@ -76,6 +76,52 @@ fn fallible_default_adapter_forwards_through_try() {
     assert_eq!(value, Value::Int(5));
 }
 
+/// A defaulted generic parameter infers its type from the default
+/// when omitted and from the argument when given, so one function
+/// serves `parse(text)`, `parse(text, Plain.Hex)`, and a caller's own
+/// `Reader`.
+#[test]
+fn defaulted_generic_parameter_infers_from_default_or_argument() {
+    let value = evaluate(
+        "
+        protocol Reader
+          fn read(self, text: String) -> Int
+        end
+
+        enum Plain
+          Decimal
+          Hex
+        end
+
+        impl Reader for Plain
+          fn read(self, text: String) -> Int
+            match self
+              Plain.Decimal -> 10
+              Plain.Hex -> 16
+            end
+          end
+        end
+
+        struct Wide
+          width: Int
+        end
+
+        impl Reader for Wide
+          fn read(self, text: String) -> Int
+            self.width
+          end
+        end
+
+        fn parse<F: Reader>(text: String, format: F = Plain.Decimal) -> Int
+          format.read(text)
+        end
+
+        parse(\"x\") * 10_000 + parse(\"x\", Plain.Hex) * 100 + parse(\"x\", Wide{width: 99})
+        ",
+    );
+    assert_eq!(value, Value::Int(101_699));
+}
+
 #[test]
 fn generic_overloads_monomorphize_independently() {
     let value = evaluate(

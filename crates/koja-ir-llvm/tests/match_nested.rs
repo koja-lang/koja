@@ -12,7 +12,10 @@ use koja_ir_llvm::emit_script_llvm_ir;
 
 mod common;
 
-use common::{APP_NAME, assert_contains, assert_main_shape, lower_script_source as lower};
+use common::{
+    APP_NAME, assert_contains, assert_main_shape, extract_function_body,
+    lower_script_source as lower,
+};
 
 #[test]
 fn struct_literal_field_pattern_lowers_to_and_chained_test_blocks() {
@@ -65,10 +68,13 @@ fn struct_partial_field_pattern_emits_only_one_field_test_no_follow_on() {
     let script = lower(&dedent(source));
     let ir_text = emit_script_llvm_ir(&script, APP_NAME).expect("emit_script_llvm_ir");
     assert_main_shape(&ir_text);
+    // Scope to `classify`. The stdlib in the same module has
+    // multi-test patterns that mint the block legitimately.
+    let classify = extract_function_body(&ir_text, "TestApp.classify");
     assert!(
-        !ir_text.contains("match_and_field"),
+        !classify.contains("match_and_field"),
         "single-field struct pattern should not mint a match_and_field block; \
-         full LLVM IR:\n{ir_text}"
+         classify IR:\n{classify}"
     );
 }
 

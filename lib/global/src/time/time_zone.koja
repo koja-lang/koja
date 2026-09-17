@@ -1,0 +1,171 @@
+priv const MAX_OFFSET_SECONDS: Int = 64_800
+priv const SECONDS_PER_HOUR: Int = 3_600
+priv const SECONDS_PER_MINUTE: Int = 60
+
+@doc """
+The rules that map a `Timestamp` to a civil time and back. `UTC` and
+`Fixed` need no data, so a value of this type is complete on its own
+and never consults a database.
+
+A zone with daylight saving rules is a later addition. It arrives as
+a new variant whose payload carries the IANA identifier and its
+transition table, built by a separately versioned package. Until
+then every zone has one offset, and `LocalDateTime.in_zone` always
+resolves to `Unique`.
+"""
+enum TimeZone
+  Fixed(TimeZone.Offset)
+  UTC
+
+  @doc """
+  Why a `TimeZone.Resolution` could not be reduced to one instant.
+  Each variant carries the two candidate instants.
+  """
+  enum Error
+    Ambiguous(DateTime, DateTime)
+    Gap(DateTime, DateTime)
+  end
+
+  @doc """
+  A fixed distance from UTC in whole seconds, from -18:00 to +18:00.
+  An offset is a number, not a zone. `-05:00` says nothing about
+  when daylight saving starts, so a `DateTime` in a `Fixed` zone
+  cannot do calendar arithmetic across a transition.
+  """
+  struct Offset
+    seconds: Int
+
+    @doc """
+    Why an `Offset` could not be built. Carries the rejected count of
+    seconds.
+    """
+    enum Error
+      OutOfRange(Int)
+    end
+
+    @doc """
+    The zero offset.
+    """
+    const UTC = TimeZone.Offset{seconds: 0}
+
+    @doc """
+    Builds an offset and checks that it lies within -18:00..+18:00.
+    """
+    fn new(seconds: Int) -> TimeZone.Offset ! TimeZone.Offset.Error
+      if seconds < -MAX_OFFSET_SECONDS or seconds > MAX_OFFSET_SECONDS
+        fail TimeZone.Offset.Error.OutOfRange(seconds)
+      end
+
+      TimeZone.Offset{seconds: seconds}
+    end
+
+    @doc """
+    Renders the offset as `+HH:MM` or `-HH:MM`. The zero offset is
+    `+00:00`. An offset that is not a whole minute appends `:SS`.
+    """
+    fn to_string(self) -> String
+      sign = self.seconds < 0 ? "-" : "+"
+      total = self.seconds < 0 ? -self.seconds : self.seconds
+      hours = total / SECONDS_PER_HOUR
+      minutes = total % SECONDS_PER_HOUR / SECONDS_PER_MINUTE
+      seconds = total % SECONDS_PER_MINUTE
+      text = "#{sign}#{two_digits(hours)}:#{two_digits(minutes)}"
+      seconds == 0 ? text : "#{text}:#{two_digits(seconds)}"
+    end
+  end
+
+  @doc """
+  The result of placing a civil time in a zone. `Unique` is the common
+  case. `Gap` is a clock time the zone skipped, with the instants just
+  before and just after the transition. `Ambiguous` is a clock time
+  the zone repeated, with the earlier and the later instant.
+
+  A caller that does not care writes `.compatible()`. A caller that
+  does writes a `match`, and the compiler rejects a `match` that
+  forgets an arm.
+  """
+  enum Resolution
+    Ambiguous(DateTime, DateTime)
+    Gap(DateTime, DateTime)
+    Unique(DateTime)
+
+    @doc """
+    The choice most callers want. Shifts forward through a gap and
+    picks the earlier instant in an overlap.
+    """
+    fn compatible(self) -> DateTime
+      match self
+        TimeZone.Resolution.Ambiguous(earlier, _) -> earlier
+        TimeZone.Resolution.Gap(_, following) -> following
+        TimeZone.Resolution.Unique(value) -> value
+      end
+    end
+
+    @doc """
+    The earlier candidate. For `Gap` this is the instant just before
+    the transition.
+    """
+    fn earlier(self) -> DateTime
+      match self
+        TimeZone.Resolution.Ambiguous(earlier, _) -> earlier
+        TimeZone.Resolution.Gap(before, _) -> before
+        TimeZone.Resolution.Unique(value) -> value
+      end
+    end
+
+    @doc """
+    The later candidate. For `Gap` this is the instant just after the
+    transition.
+    """
+    fn later(self) -> DateTime
+      match self
+        TimeZone.Resolution.Ambiguous(_, later) -> later
+        TimeZone.Resolution.Gap(_, following) -> following
+        TimeZone.Resolution.Unique(value) -> value
+      end
+    end
+
+    @doc """
+    The one instant, or a `TimeZone.Error` when the clock time fell
+    in a gap or an overlap. For the caller who believes the time
+    cannot be in a transition and wants a typed failure if that
+    belief is wrong.
+    """
+    fn unique(self) -> DateTime ! TimeZone.Error
+      match self
+        TimeZone.Resolution.Ambiguous(earlier, later) ->
+          fail TimeZone.Error.Ambiguous(earlier, later)
+        TimeZone.Resolution.Gap(before, following) ->
+          fail TimeZone.Error.Gap(before, following)
+        TimeZone.Resolution.Unique(value) -> value
+      end
+    end
+  end
+
+  @doc """
+  Returns `UTC` for the UTC zone and the offset text, such as
+  `+05:30`, for a fixed zone.
+  """
+  fn identifier(self) -> String
+    match self
+      TimeZone.Fixed(offset) -> offset.to_string()
+      TimeZone.UTC -> "UTC"
+    end
+  end
+
+  @doc """
+  Returns the offset from UTC in force at `at`. For the zones the
+  stdlib ships the answer does not depend on `at`.
+  """
+  fn offset_at(self, at: Timestamp) -> TimeZone.Offset
+    match self
+      TimeZone.Fixed(offset) -> offset
+      TimeZone.UTC -> TimeZone.Offset.UTC
+    end
+  end
+end
+
+# Zero-pads a value in 0..99 to two digits.
+priv fn two_digits(value: Int) -> String
+  value < 10 ? "0#{value}" : "#{value}"
+end

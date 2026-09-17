@@ -83,6 +83,29 @@ fn nested_constant_is_a_field_default() {
 }
 
 #[test]
+fn constant_value_constructs_a_nested_struct() {
+    // `TimeZone.Offset{...}` parses as a struct-shaped variant of
+    // `TimeZone`. The constant lifter must rewrite it to a struct
+    // construction the way the body resolver does.
+    typecheck(&dedent(
+        "
+        enum TimeZone
+          UTC
+          Fixed(TimeZone.Offset)
+
+          struct Offset
+            seconds: Int
+
+            const UTC = TimeZone.Offset{seconds: 0}
+          end
+        end
+
+          TimeZone.Fixed(TimeZone.Offset.UTC)
+        ",
+    ));
+}
+
+#[test]
 fn package_constant_is_a_field_default() {
     typecheck(&dedent(
         "
