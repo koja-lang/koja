@@ -500,7 +500,8 @@ pub struct EnumDecl {
     pub conformances: Vec<TypeExpr>,
     pub variants: Vec<EnumVariant>,
     pub functions: Vec<Function>,
-    /// Nested type declarations, only `Item::Struct` / `Item::Enum`.
+    /// Nested declarations, only `Item::Struct`, `Item::Enum`, and
+    /// `Item::Protocol`.
     pub nested: Vec<Item>,
     pub span: Span,
     /// `test "..."` blocks declared in the body.
@@ -625,14 +626,32 @@ pub enum ImplMember {
 }
 
 /// A protocol declaration: `protocol Display ... end`.
+///
+/// `path` is `["Display"]` for a top-level protocol and
+/// `["Date", "Format"]` for one nested under a type, whether it was
+/// declared in the owner's body or as `protocol Date.Format` at the
+/// top level. The leaf is the protocol's own name.
 #[derive(Debug, Clone)]
 pub struct ProtocolDecl {
     pub annotations: Vec<Annotation>,
     pub visibility: Visibility,
-    pub name: Name,
+    pub path: Vec<Name>,
     pub type_params: Vec<TypeParam>,
     pub methods: Vec<ProtocolMethod>,
     pub span: Span,
+}
+
+impl ProtocolDecl {
+    /// The protocol's own (leaf) name, the last path segment.
+    pub fn name(&self) -> &Name {
+        self.path.last().expect("protocol path is non-empty")
+    }
+
+    /// The owning type path for a nested protocol (everything before
+    /// the leaf), empty for a top-level protocol.
+    pub fn owner_path(&self) -> &[Name] {
+        &self.path[..self.path.len() - 1]
+    }
 }
 
 /// A method within a protocol declaration.
@@ -694,7 +713,8 @@ pub struct StructDecl {
     pub conformances: Vec<TypeExpr>,
     pub fields: Vec<StructField>,
     pub functions: Vec<Function>,
-    /// Nested type declarations, only `Item::Struct` / `Item::Enum`.
+    /// Nested declarations, only `Item::Struct`, `Item::Enum`, and
+    /// `Item::Protocol`.
     pub nested: Vec<Item>,
     pub span: Span,
     /// `test "..."` blocks declared in the body. The struct is their

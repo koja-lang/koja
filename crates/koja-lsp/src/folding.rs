@@ -9,7 +9,7 @@ use tower_lsp_server::jsonrpc::Result;
 use tower_lsp_server::ls_types::*;
 
 use koja_ast::ast::{
-    Comment, Expr, ExprKind, File, ImplMember, Item, Statement, StructDecl, TestDecl,
+    Comment, Expr, ExprKind, File, ImplMember, Item, ProtocolDecl, Statement, StructDecl, TestDecl,
 };
 use koja_ast::span::Span;
 
@@ -123,19 +123,7 @@ fn collect_item_folds(file: &File, ranges: &mut Vec<FoldingRange>) {
                 }
                 collect_tests_folds(&ext.tests, ranges);
             }
-            Item::Protocol(p) => {
-                if let Some(r) = span_fold(&p.span, Some(FoldingRangeKind::Region)) {
-                    ranges.push(r);
-                }
-                for m in &p.methods {
-                    if let Some(r) = span_fold(&m.span, Some(FoldingRangeKind::Region)) {
-                        ranges.push(r);
-                    }
-                    if let Some(body) = &m.body {
-                        collect_statement_folds(body, ranges);
-                    }
-                }
-            }
+            Item::Protocol(p) => collect_protocol_folds(p, ranges),
             Item::Constant(c) => {
                 if let Some(r) = span_fold(&c.span, Some(FoldingRangeKind::Region)) {
                     ranges.push(r);
@@ -171,6 +159,20 @@ fn collect_tests_folds(tests: &[TestDecl], ranges: &mut Vec<FoldingRange>) {
     }
 }
 
+fn collect_protocol_folds(p: &ProtocolDecl, ranges: &mut Vec<FoldingRange>) {
+    if let Some(r) = span_fold(&p.span, Some(FoldingRangeKind::Region)) {
+        ranges.push(r);
+    }
+    for m in &p.methods {
+        if let Some(r) = span_fold(&m.span, Some(FoldingRangeKind::Region)) {
+            ranges.push(r);
+        }
+        if let Some(body) = &m.body {
+            collect_statement_folds(body, ranges);
+        }
+    }
+}
+
 fn collect_nested_folds(nested: &[Item], ranges: &mut Vec<FoldingRange>) {
     for item in nested {
         match item {
@@ -181,6 +183,7 @@ fn collect_nested_folds(nested: &[Item], ranges: &mut Vec<FoldingRange>) {
                 collect_tests_folds(&e.tests, ranges);
                 collect_nested_folds(&e.nested, ranges);
             }
+            Item::Protocol(p) => collect_protocol_folds(p, ranges),
             Item::Struct(s) => collect_struct_folds(s, ranges),
             _ => {}
         }

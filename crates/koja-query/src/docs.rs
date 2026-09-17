@@ -41,13 +41,12 @@ fn doc_in_items(items: &[Item], name_span: Span) -> Option<String> {
                 doc_if_named(&function.annotations, &function.name, name_span)
             }
             Item::Impl(block) => doc_in_members(&block.members, name_span),
-            Item::Protocol(decl) => {
-                doc_if_named(&decl.annotations, &decl.name, name_span).or_else(|| {
+            Item::Protocol(decl) => doc_if_named(&decl.annotations, decl.name(), name_span)
+                .or_else(|| {
                     decl.methods
                         .iter()
                         .find_map(|m| doc_if_named(&m.annotations, &m.name, name_span))
-                })
-            }
+                }),
             Item::Struct(decl) => doc_if_named(&decl.annotations, decl.name(), name_span)
                 .or_else(|| doc_in_functions(&decl.functions, name_span))
                 .or_else(|| doc_in_items(&decl.nested, name_span)),

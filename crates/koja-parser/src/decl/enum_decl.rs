@@ -36,7 +36,8 @@ impl Parser {
                 | TokenKind::Priv
                 | TokenKind::At
                 | TokenKind::Struct
-                | TokenKind::Enum => match self.parse_type_body_member("enum") {
+                | TokenKind::Enum
+                | TokenKind::Protocol => match self.parse_type_body_member("enum") {
                     TypeBodyMember::Function(function) => functions.push(*function),
                     TypeBodyMember::Nested(item) => nested.push(*item),
                 },

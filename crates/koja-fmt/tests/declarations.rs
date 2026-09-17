@@ -28,6 +28,36 @@ fn function_and_constant_aliases_are_canonical() {
 }
 
 #[test]
+fn nested_protocol_in_both_spellings_is_canonical() {
+    assert_fmt(
+        "
+        struct Date
+            day: Int
+          protocol   Format
+                fn format_date(self,date: Date)->String
+          end
+        end
+        protocol   Date.Parse
+          fn parse_date(self, text: String) -> Date
+        end
+    ",
+        "
+        struct Date
+          day: Int
+
+          protocol Format
+            fn format_date(self, date: Date) -> String
+          end
+        end
+
+        protocol Date.Parse
+          fn parse_date(self, text: String) -> Date
+        end
+    ",
+    );
+}
+
+#[test]
 fn single_annotation_on_function() {
     assert_fmt(
         r#"

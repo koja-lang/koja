@@ -402,7 +402,7 @@ fn resolve_protocol_bounds(
     scope: &mut LiftScope<'_>,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
-    let identifier = Identifier::single(scope.package, decl.name.text.clone());
+    let identifier = Identifier::new(scope.package, name_texts(&decl.path));
     let Some((id, _)) = scope.registry.lookup(&identifier) else {
         return;
     };
@@ -492,7 +492,7 @@ fn collect_protocol_bodies(
                 let Item::Protocol(decl) = item else {
                     continue;
                 };
-                let identifier = Identifier::single(&pkg.package, decl.name.text.clone());
+                let identifier = Identifier::new(&pkg.package, name_texts(&decl.path));
                 let Some((id, _)) = registry.lookup(&identifier) else {
                     continue;
                 };

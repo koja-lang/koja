@@ -71,7 +71,8 @@ impl Parser {
                 | TokenKind::Priv
                 | TokenKind::At
                 | TokenKind::Struct
-                | TokenKind::Enum => {
+                | TokenKind::Enum
+                | TokenKind::Protocol => {
                     let member_span = self.current_span();
                     match self.parse_type_body_member("impl") {
                         TypeBodyMember::Function(func) => {

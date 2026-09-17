@@ -264,7 +264,11 @@ impl Printer {
 
     fn protocol_to_doc(&mut self, p: &ProtocolDecl) -> Doc {
         let mut parts = self.decl_header(
-            format!("{}protocol {}", visibility_prefix(p.visibility), p.name),
+            format!(
+                "{}protocol {}",
+                visibility_prefix(p.visibility),
+                name_texts(&p.path).join(".")
+            ),
             &p.type_params,
             &[],
             &p.annotations,

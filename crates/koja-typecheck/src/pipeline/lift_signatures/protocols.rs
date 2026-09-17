@@ -6,7 +6,7 @@
 //! params resolve to [`Resolution::TypeParam`] anchored on the
 //! protocol entry.
 
-use koja_ast::ast::{Diagnostic, Param, ProtocolDecl, ProtocolMethod};
+use koja_ast::ast::{Diagnostic, Param, ProtocolDecl, ProtocolMethod, name_texts};
 use koja_ast::identifier::{GlobalRegistryId, Identifier};
 
 use crate::registry::{
@@ -21,7 +21,7 @@ pub(super) fn lift_protocol(
     scope: &mut LiftScope<'_>,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
-    let identifier = Identifier::single(scope.package, decl.name.text.clone());
+    let identifier = Identifier::new(scope.package, name_texts(&decl.path));
     let (id, already_lifted) = match scope.registry.lookup(&identifier) {
         Some((id, entry)) => (id, matches!(entry.kind, GlobalKind::Protocol(Some(_)))),
         None => panic!(
@@ -43,7 +43,9 @@ pub(super) fn lift_protocol(
             diagnostics.push(Diagnostic::error(
                 format!(
                     "protocol method `{}.{}` with arity {} is already defined",
-                    decl.name, existing.name, existing.arity
+                    name_texts(&decl.path).join("."),
+                    existing.name,
+                    existing.arity
                 ),
                 method.span,
             ));

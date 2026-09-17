@@ -6,12 +6,14 @@
 //! - method-level `@annotation`
 //! - the error path for an annotation in a protocol body that is
 //!   not followed by a function signature
+//! - nested protocols in both spellings: qualified at the top level
+//!   (`protocol Date.Format`) and lexically inside a type body
 
-use koja_ast::ast::{TypeExpr, Visibility};
+use koja_ast::ast::{Item, TypeExpr, Visibility};
 
 mod common;
 
-use common::{first_protocol, parse_failing_with};
+use common::{first_enum, first_protocol, first_struct, parse_failing_with};
 
 #[test]
 fn priv_protocol_records_private_visibility() {
@@ -23,7 +25,7 @@ fn priv_protocol_records_private_visibility() {
         ",
     );
     assert_eq!(p.visibility, Visibility::Private);
-    assert_eq!(p.name, "Show");
+    assert_eq!(*p.name(), "Show");
 }
 
 #[test]
@@ -159,5 +161,75 @@ fn annotation_not_followed_by_fn_in_protocol_fails() {
         end
         ",
         &["annotation in protocol must be followed by a function signature"],
+    );
+}
+
+#[test]
+fn qualified_protocol_records_full_path() {
+    let p = first_protocol(
+        "
+        protocol Date.Format
+          fn format_date(self, date: Date) -> String
+        end
+        ",
+    );
+    assert_eq!(p.path, vec!["Date", "Format"]);
+    assert_eq!(*p.name(), "Format");
+    assert_eq!(p.owner_path().len(), 1);
+    assert_eq!(p.owner_path()[0], "Date");
+}
+
+#[test]
+fn struct_with_nested_protocol() {
+    let s = first_struct(
+        "
+        struct Date
+          day: Int
+
+          protocol Format
+            fn format_date(self, date: Date) -> String
+          end
+        end
+        ",
+    );
+    assert_eq!(s.nested.len(), 1);
+    let Item::Protocol(format) = &s.nested[0] else {
+        panic!("expected a nested protocol");
+    };
+    assert_eq!(format.path, vec!["Format"]);
+    assert_eq!(format.methods.len(), 1);
+}
+
+#[test]
+fn enum_with_nested_private_protocol() {
+    let e = first_enum(
+        "
+        enum Weekday
+          Monday
+
+          priv protocol Show
+            fn show(self) -> String
+          end
+        end
+        ",
+    );
+    let Item::Protocol(show) = &e.nested[0] else {
+        panic!("expected a nested protocol");
+    };
+    assert_eq!(*show.name(), "Show");
+    assert_eq!(show.visibility, Visibility::Private);
+}
+
+#[test]
+fn nested_protocol_rejects_multi_segment_name() {
+    parse_failing_with(
+        "
+        struct Owner
+          protocol Foo.Bar
+            fn bar(self)
+          end
+        end
+        ",
+        &["take a single name, found `Foo.Bar`"],
     );
 }

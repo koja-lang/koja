@@ -223,11 +223,21 @@ fn nested_types_keep_full_names_and_deprecation_metadata() {
               One
             end
           end
+
+          @doc \"Formats an address.\"
+          protocol Format
+            fn format_address(self, address: IPAddress) -> String
+          end
         end
 
         @doc \"An invalid address.\"
         enum IPAddress.ParseError
           Invalid(String)
+        end
+
+        @doc \"Parses an address.\"
+        protocol IPAddress.Parse
+          fn parse_address(self, text: String) -> IPAddress
         end
 
         extend IPAddress.Version
@@ -260,11 +270,19 @@ fn nested_types_keep_full_names_and_deprecation_metadata() {
         names,
         vec![
             "IPAddress",
+            "IPAddress.Format",
             "IPAddress.Internal.Child",
+            "IPAddress.Parse",
             "IPAddress.ParseError",
             "IPAddress.Version",
         ]
     );
+    let protocol_names: Vec<&str> = net
+        .protocols
+        .iter()
+        .map(|item| item.name.as_str())
+        .collect();
+    assert_eq!(protocol_names, vec!["IPAddress.Format", "IPAddress.Parse"]);
 
     let version = net
         .enums
