@@ -1,0 +1,243 @@
+alias Duration.Unit as TimeUnit
+alias Test.require
+
+priv fn iso_date -> Date
+  Date{day: 16, month: 9, year: 2026}
+end
+
+priv fn iso_time -> Time
+  Time{hour: 17, microsecond: 0, minute: 39, second: 0}
+end
+
+priv fn iso_fractional -> Time
+  Time{hour: 17, microsecond: 250_000, minute: 39, second: 5}
+end
+
+priv fn iso_reference(zone: TimeZone) -> DateTime
+  DateTime{
+    timestamp: Timestamp.new(1_789_580_340, TimeUnit.Seconds),
+    zone: zone,
+  }
+end
+
+test "Date formats in both shapes"
+  assert iso_date().to_string() == "2026-09-16"
+  assert iso_date().to_string(ISO8601.Basic) == "20260916"
+  assert Date{day: 1, month: 1, year: 0}.to_string() == "0000-01-01"
+  assert Date{day: 7, month: 3, year: 476}.to_string() == "0476-03-07"
+  assert Date{day: 31, month: 12, year: 9999}.to_string(ISO8601.Basic) ==
+    "99991231"
+end
+
+test "Date parses both shapes"
+  assert try require(Date.parse("2026-09-16")) == iso_date()
+  assert try require(Date.parse("2026-09-16", ISO8601.Extended)) == iso_date()
+  assert try require(Date.parse("20260916", ISO8601.Basic)) == iso_date()
+  assert try require(Date.parse("0000-01-01")) ==
+    Date{day: 1, month: 1, year: 0}
+  assert try require(Date.parse("9999-12-31")) ==
+    Date{day: 31, month: 12, year: 9999}
+end
+
+test "Date parse reports a field error before a shape error"
+  match Date.parse("2026-02-30")
+    Result.Err(Date.Error.InvalidDay(day)) -> assert day == 30
+    other -> fail "expected InvalidDay, got #{other}"
+  end
+
+  match Date.parse("2026-13-01")
+    Result.Err(Date.Error.InvalidMonth(month)) -> assert month == 13
+    other -> fail "expected InvalidMonth, got #{other}"
+  end
+end
+
+test "Date parse rejects every other shape as Malformed"
+  inputs = [
+    "20260916", "2026-9-16", "2026-09-16T", "2026-09-16 ", " 2026-09-16",
+    "2026/09/16", "+2026-09-16", "-2026-09-16", "2026-W38-3", "2026-259",
+    "2026-09", "", "abcd-ef-gh"
+  ]
+
+  for input in inputs
+    match Date.parse(input)
+      Result.Err(Date.Error.Malformed(text)) -> assert text == input
+      other -> fail "expected Malformed for #{input}, got #{other}"
+    end
+  end
+
+  assert Date.parse("2026-09-16", ISO8601.Basic).err?()
+end
+
+test "Time formats with a fraction only when the microsecond is set"
+  assert iso_time().to_string() == "17:39:00"
+  assert iso_time().to_string(ISO8601.Basic) == "173900"
+  assert iso_fractional().to_string() == "17:39:05.250000"
+  assert iso_fractional().to_string(ISO8601.Basic) == "173905.250000"
+  assert Time{hour: 0, microsecond: 1, minute: 0, second: 0}.to_string(
+      ISO8601.Extended,
+    ) == "00:00:00.000001"
+  assert Time.MIDNIGHT.to_string() == "00:00:00"
+end
+
+test "Time parses with optional seconds and fraction"
+  assert try require(Time.parse("17:39:00")) == iso_time()
+  assert try require(Time.parse("17:39:00", ISO8601.Extended)) == iso_time()
+  assert try require(Time.parse("17:39")) == iso_time()
+  assert try require(Time.parse("17:39:05.25")) == iso_fractional()
+  assert try require(Time.parse("17:39:05,250000")) == iso_fractional()
+  assert try require(Time.parse("17:39:05.250000999")) == iso_fractional()
+  assert try require(Time.parse("00:00:00.000001")) ==
+    Time{hour: 0, microsecond: 1, minute: 0, second: 0}
+  assert try require(Time.parse("173900", ISO8601.Basic)) == iso_time()
+  assert try require(Time.parse("1739", ISO8601.Basic)) == iso_time()
+  assert try require(Time.parse("173905.25", ISO8601.Basic)) == iso_fractional()
+end
+
+test "Time parse reports a field error and rejects other shapes"
+  match Time.parse("24:00:00")
+    Result.Err(Time.Error.InvalidHour(hour)) -> assert hour == 24
+    other -> fail "expected InvalidHour, got #{other}"
+  end
+
+  match Time.parse("23:59:60")
+    Result.Err(Time.Error.InvalidSecond(second)) -> assert second == 60
+    other -> fail "expected InvalidSecond, got #{other}"
+  end
+
+  inputs = [
+    "17:39:00Z", "17:39:00+05:00", "17:39:05.", "17:39:05.2500000000",
+    "17:39.5", "17", "1739", "17:39:0", "17-39-00", ""
+  ]
+
+  for input in inputs
+    match Time.parse(input)
+      Result.Err(Time.Error.Malformed(text)) -> assert text == input
+      other -> fail "expected Malformed for #{input}, got #{other}"
+    end
+  end
+end
+
+test "LocalDateTime formats and parses"
+  local = iso_date().at(iso_time())
+  assert local.to_string() == "2026-09-16T17:39:00"
+  assert local.to_string(ISO8601.Basic) == "20260916T173900"
+  assert iso_date().at(iso_fractional()).to_string() ==
+    "2026-09-16T17:39:05.250000"
+
+  assert try require(LocalDateTime.parse("2026-09-16T17:39:00")) == local
+  assert try require(
+      LocalDateTime.parse("2026-09-16T17:39:00", ISO8601.Extended),
+    ) == local
+  assert try require(LocalDateTime.parse("2026-09-16t17:39:00")) == local
+  assert try require(LocalDateTime.parse("2026-09-16 17:39:00")) == local
+  assert try require(LocalDateTime.parse("2026-09-16T17:39")) == local
+  assert try require(LocalDateTime.parse("20260916T173900", ISO8601.Basic)) ==
+    local
+end
+
+test "LocalDateTime parse reports every failure as Malformed"
+  inputs = [
+    "2026-09-16T17:39:00Z", "2026-09-16T17:39:00+05:00", "2026-02-30T17:39:00",
+    "2026-09-16T24:00:00", "2026-09-16", "2026-09-16T", "2026-09-16X17:39:00",
+    "20260916T173900", ""
+  ]
+
+  for input in inputs
+    match LocalDateTime.parse(input)
+      Result.Err(LocalDateTime.Error.Malformed(text)) -> assert text == input
+      other -> fail "expected Malformed for #{input}, got #{other}"
+    end
+  end
+end
+
+test "DateTime formats UTC as Z and fixed zones as an offset"
+  eastern = TimeZone.Fixed(TimeZone.Offset{seconds: -18_000})
+  kolkata = TimeZone.Fixed(TimeZone.Offset{seconds: 19_800})
+  assert iso_reference(TimeZone.UTC).to_string() == "2026-09-16T17:39:00Z"
+  assert iso_reference(TimeZone.UTC).to_string(ISO8601.Basic) ==
+    "20260916T173900Z"
+  assert iso_reference(eastern).to_string() == "2026-09-16T12:39:00-05:00"
+  assert iso_reference(eastern).to_string(ISO8601.Basic) ==
+    "20260916T123900-0500"
+  assert iso_reference(kolkata).to_string() == "2026-09-16T23:09:00+05:30"
+  assert iso_reference(TimeZone.Fixed(TimeZone.Offset.UTC)).to_string(
+      ISO8601.Extended,
+    ) == "2026-09-16T17:39:00+00:00"
+  assert iso_reference(TimeZone.UTC)
+      .plus(Duration.new(250, TimeUnit.Milliseconds))
+      .to_string() == "2026-09-16T17:39:00.250000Z"
+end
+
+test "DateTime parses Z and offsets in both shapes"
+  utc = iso_reference(TimeZone.UTC)
+  eastern = iso_reference(TimeZone.Fixed(TimeZone.Offset{seconds: -18_000}))
+  kolkata = iso_reference(TimeZone.Fixed(TimeZone.Offset{seconds: 19_800}))
+
+  assert try require(DateTime.parse("2026-09-16T17:39:00Z")) == utc
+  assert try require(DateTime.parse("2026-09-16T17:39:00Z", ISO8601.Extended)) ==
+    utc
+  assert try require(DateTime.parse("2026-09-16T17:39:00z")) == utc
+  assert try require(DateTime.parse("2026-09-16 17:39:00Z")) == utc
+  assert try require(DateTime.parse("2026-09-16T12:39:00-05:00")) == eastern
+  assert try require(DateTime.parse("2026-09-16T12:39:00-05")) == eastern
+  assert try require(DateTime.parse("2026-09-16T23:09:00+05:30")) == kolkata
+  assert try require(DateTime.parse("20260916T173900Z", ISO8601.Basic)) == utc
+  assert try require(DateTime.parse("20260916T123900-0500", ISO8601.Basic)) ==
+    eastern
+  assert try require(DateTime.parse("20260916T123900-05", ISO8601.Basic)) ==
+    eastern
+  assert try require(DateTime.parse("20260916T230900+0530", ISO8601.Basic)) ==
+    kolkata
+
+  zero = try require(DateTime.parse("2026-09-16T17:39:00+00:00"))
+  assert zero.timestamp == utc.timestamp
+  assert zero.zone == TimeZone.Fixed(TimeZone.Offset.UTC)
+  assert zero != utc
+
+  negative_zero = try require(DateTime.parse("2026-09-16T17:39:00-00:00"))
+  assert negative_zero == zero
+
+  fraction = try require(DateTime.parse("2026-09-16T17:39:00.25Z"))
+  assert fraction == utc.plus(Duration.new(250, TimeUnit.Milliseconds))
+end
+
+test "DateTime parse round-trips through format"
+  inputs = [
+    "2026-09-16T17:39:00Z", "2026-09-16T12:39:00-05:00",
+    "2026-09-16T23:09:00+05:30", "2026-09-16T17:39:00.000001Z",
+    "1969-12-31T23:59:59Z", "0000-01-01T00:00:00Z",
+    "9999-12-31T23:59:59.999999Z"
+  ]
+
+  for input in inputs
+    parsed = try require(DateTime.parse(input))
+    assert parsed.to_string() == input
+  end
+end
+
+test "DateTime parse reports every failure as Malformed"
+  inputs = [
+    "2026-09-16T17:39:00", "2026-09-16T17:39:00+19:00",
+    "2026-09-16T17:39:00-18:01", "2026-09-16T17:39:00+05:60",
+    "2026-09-16T17:39:00+5:00", "2026-09-16T17:39:00 Z",
+    "2026-09-16T17:39:00ZZ", "2026-09-16T17:39:00Z[UTC]",
+    "2026-09-16T17:39:00+0500", "2026-02-30T17:39:00Z", "2026-09-16T17:39:60Z",
+    ""
+  ]
+
+  for input in inputs
+    match DateTime.parse(input)
+      Result.Err(DateTime.Error.Malformed(text)) -> assert text == input
+      other -> fail "expected Malformed for #{input}, got #{other}"
+    end
+  end
+
+  assert DateTime.parse("20260916T173900+05:00", ISO8601.Basic).err?()
+end
+
+test "DateTime parse accepts the edge offsets"
+  high = try require(DateTime.parse("2026-09-17T11:39:00+18:00"))
+  assert high.timestamp == iso_reference(TimeZone.UTC).timestamp
+  low = try require(DateTime.parse("2026-09-15T23:39:00-18:00"))
+  assert low.timestamp == iso_reference(TimeZone.UTC).timestamp
+end

@@ -70,6 +70,15 @@ spreading the same changes across releases would cost one pass each.
   wall clock, and a millisecond `DateTime` could not round-trip a
   Postgres timestamp. This landed before the IO work, whose socket
   timeouts take a `Duration`, and frees `DateTime` for the zoned type.
+- **[DONE]** Add the calendar types on top of `Timestamp`
+  ([DATETIME.md](DATETIME.md)). `Date`, `Time`, and `LocalDateTime` are
+  civil values, `TimeZone` ships `UTC` and `Fixed(TimeZone.Offset)`,
+  `TimeZone.Resolution` surfaces gaps and overlaps as an enum, and
+  `DateTime` is a `Timestamp` in a `TimeZone`. Text is a `Format` protocol
+  per type with `ISO8601` as the stdlib implementation, so a `DateTime`
+  round-trips through JSON as RFC 3339 and a bare `Date` has a spelling
+  too. IANA zones and the `koja-lang/tz` package are the next step and
+  can land in 0.19 or 0.20.
 
 ### Language
 
@@ -83,13 +92,15 @@ spreading the same changes across releases would cost one pass each.
   `Duration.ZERO`. Package-level `const` already exists with a literal-shape
   rule, so this adds a namespace, not a new kind of value. The stdlib kept
   writing fixed values as functions that return a literal, `IPAddress.any`,
-  `IPAddress.loopback`, and `Offset.utc` and `TimeZone.utc` in
-  [DATETIME.md](DATETIME.md), and a function is not eligible as a field
-  default where a constant would be. Field defaults gained a constant reference
-  in the same change, since constants inline to the literal shape defaults
-  already accept. `Duration.ZERO`, `Timestamp.UNIX_EPOCH`, `Int.MAX`, `Int.MIN`,
-  and the `IPAddress` pair are the first uses. Landed before
-  [DATETIME.md](DATETIME.md) so its zones are constants from the start.
+  `IPAddress.loopback`, and `Offset.utc` in the [DATETIME.md](DATETIME.md)
+  draft, and a function is not eligible as a field default where a constant
+  would be. Field defaults gained a constant reference in the same change,
+  since constants inline to the literal shape defaults already accept.
+  `Duration.ZERO`, `Timestamp.UNIX_EPOCH`, `Int.MAX`, `Int.MIN`, and the
+  `IPAddress` pair are the first uses. Landed before
+  [DATETIME.md](DATETIME.md), which uses it for `TimeZone.Offset.UTC`,
+  `Date.UNIX_EPOCH`, and `Time.MIDNIGHT`. The zones themselves did not need
+  it, since `TimeZone.UTC` is a variant.
 
 ### Testing
 
@@ -157,9 +168,9 @@ The design is accepted in [TESTING.md](TESTING.md).
   a `.a`.
 
 The deferred standard library items stay in [GAPS.md](GAPS.md) and can ship
-in any patch release: RFC 3339 formatting and parsing, `UUID.v4()`,
-`Binary.compare` and endian helpers, `List.sort`, `System.cmd`, and
-`File.ls`. `Fd` random access, durability, and locking also stay there. None
+in any patch release: `UUID.v4()`, `Binary.compare` and endian helpers,
+`List.sort`, `System.cmd`, and `File.ls`. RFC 3339 left that list when the
+calendar types above landed. `Fd` random access, durability, and locking also stay there. None
 of them is a 0.19 release gate. The tree-sitter grammar, the editor
 extensions, and kojalang.org pick up the `unless` removal and the `test`
 syntax after the release ships. That is ecosystem work, not a release gate.

@@ -23,7 +23,7 @@ use crate::registry::{GlobalKind, GlobalRegistry, RegistryEntry, ResolvedProtoco
 /// variant, since they parse to the same node. Builtins route to
 /// struct-construction resolution so the "cannot construct builtin"
 /// diagnostic fires there.
-pub(super) fn names_struct(path: &[String], scope: ResolutionScope<'_>) -> bool {
+pub(crate) fn names_struct(path: &[String], scope: ResolutionScope<'_>) -> bool {
     matches!(
         lookup_type(path, scope),
         Some((_, entry)) if matches!(entry.kind, GlobalKind::Builtin(_) | GlobalKind::Struct(_))

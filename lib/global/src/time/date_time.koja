@@ -1,0 +1,167 @@
+@doc """
+A `Timestamp` viewed in a `TimeZone`. This is the type for a moment a
+person reads, such as a meeting start or a log line, and it is the
+only one of the time types that can say what the clock showed in a
+given place.
+
+A `DateTime` is two fields and nothing is cached. `date` and `time`
+compute the civil fields from the timestamp and the zone's offset at
+that instant, so a value can never disagree with itself. Two values
+are equal when they name the same instant in the same zone. The same
+instant in two zones is not equal.
+
+`plus` and `minus` take a `Duration` and are exact. They move the
+timestamp and leave the zone. `plus_days` and `plus_months` are
+calendar arithmetic. They move the civil date and place the same
+clock time back in the zone, which returns a `TimeZone.Resolution`
+because a zone with daylight saving rules can skip or repeat that
+time.
+
+Text goes through a `DateTime.Format`. `ISO8601.Extended` is the
+default, so `value.to_string()` writes `2026-09-16T17:39:00Z` and
+`DateTime.parse(text)` reads the same, and a value round-trips
+through JSON as RFC 3339.
+"""
+struct DateTime
+  timestamp: Timestamp
+  zone: TimeZone
+
+  @doc """
+  Why a `DateTime` could not be read from text. A field error from
+  `Date.new` or `Time.new`, a missing offset, and an offset outside
+  -18:00..+18:00 are all reported as `Malformed` with the whole text.
+  """
+  enum Error
+    Malformed(String)
+  end
+
+  @doc """
+  Reads and writes a `DateTime` as text. See `Date.Format`. A format
+  that reads an offset and no zone name, such as ISO 8601, produces a
+  `Fixed` zone, or `UTC` when the offset is written `Z`.
+  """
+  protocol Format
+    fn format_date_time(self, value: DateTime) -> String
+
+    fn parse_date_time(self, text: String) -> DateTime ! DateTime.Error
+  end
+
+  @doc """
+  Returns the calendar date in this value's zone.
+  """
+  fn date(self) -> Date
+    Date.from_epoch_days(
+      floor_div(self.local_microseconds(), MICROSECONDS_PER_DAY),
+    )
+  end
+
+  @doc """
+  Returns the same instant viewed in `zone`.
+  """
+  fn in_zone(self, zone: TimeZone) -> DateTime
+    DateTime{timestamp: self.timestamp, zone: zone}
+  end
+
+  @doc """
+  Returns the date and time of day in this value's zone, with the
+  zone dropped.
+  """
+  fn local(self) -> LocalDateTime
+    LocalDateTime{date: self.date(), time: self.time()}
+  end
+
+  @doc """
+  Returns the instant `other` before this one, in the same zone.
+  """
+  fn minus(self, other: Duration) -> DateTime
+    DateTime{timestamp: self.timestamp.minus(other), zone: self.zone}
+  end
+
+  @doc """
+  Returns the current wall-clock time in `zone`.
+  """
+  fn now(zone: TimeZone) -> DateTime
+    DateTime{timestamp: Timestamp.now(), zone: zone}
+  end
+
+  @doc """
+  Returns the offset from UTC that the zone has at this instant.
+  """
+  fn offset(self) -> TimeZone.Offset
+    self.zone.offset_at(self.timestamp)
+  end
+
+  @doc """
+  Reads a value from `text` through `format`, `ISO8601.Extended` by
+  default.
+  """
+  fn parse<F: DateTime.Format>(text: String, format: F = ISO8601.Extended)
+    -> DateTime ! DateTime.Error
+
+    try format.parse_date_time(text)
+  end
+
+  @doc """
+  Returns the instant `other` after this one, in the same zone.
+  Adding 24 hours across a daylight saving transition produces a
+  clock reading one hour off from where it started. That is exact
+  arithmetic doing its job. Use `plus_days` to keep the clock time.
+  """
+  fn plus(self, other: Duration) -> DateTime
+    DateTime{timestamp: self.timestamp.plus(other), zone: self.zone}
+  end
+
+  @doc """
+  Returns the same clock time `days` later in this value's zone. See
+  `TimeZone.Resolution` for why the result is not a `DateTime`.
+  """
+  fn plus_days(self, days: Int) -> TimeZone.Resolution
+    self.local().plus_days(days).in_zone(self.zone)
+  end
+
+  @doc """
+  Returns the same clock time `months` later in this value's zone,
+  clamping the day of the month the way `Date.plus_months` does.
+  """
+  fn plus_months(self, months: Int) -> TimeZone.Resolution
+    self.local().plus_months(months).in_zone(self.zone)
+  end
+
+  @doc """
+  Returns the time from `earlier` to this value. The zones do not
+  matter, since both name an instant.
+  """
+  fn since(self, earlier: DateTime) -> Duration
+    self.timestamp.since(earlier.timestamp)
+  end
+
+  @doc """
+  Returns the time of day in this value's zone, truncated to
+  microseconds.
+  """
+  fn time(self) -> Time
+    remainder = floor_mod(self.local_microseconds(), MICROSECONDS_PER_DAY)
+    Time.after_midnight(Duration.new(remainder, Duration.Unit.Microseconds))
+  end
+
+  @doc """
+  Renders this value through `format`, `ISO8601.Extended` by default.
+  """
+  fn to_string<F: DateTime.Format>(self, format: F = ISO8601.Extended) -> String
+    format.format_date_time(self)
+  end
+
+  @doc """
+  Returns the same instant viewed in `UTC`.
+  """
+  fn to_utc(self) -> DateTime
+    self.in_zone(TimeZone.UTC)
+  end
+
+  # Microseconds since the epoch on the zone's own clock, which is the
+  # UTC count shifted by the offset.
+  priv fn local_microseconds(self) -> Int
+    self.timestamp.since_epoch.to_microseconds() +
+      self.offset().seconds * MICROSECONDS_PER_SECOND
+  end
+end

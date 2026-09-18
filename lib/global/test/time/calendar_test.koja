@@ -1,0 +1,256 @@
+alias Date.Error as DateError
+alias Test.require
+alias Time.Error as TimeError
+
+test "Date.new accepts every valid date"
+  assert try require(Date.new(2026, 9, 16)) ==
+    Date{day: 16, month: 9, year: 2026}
+  assert try require(Date.new(0, 1, 1)) == Date{day: 1, month: 1, year: 0}
+  assert try require(Date.new(9999, 12, 31)) ==
+    Date{day: 31, month: 12, year: 9999}
+  assert try require(Date.new(2024, 2, 29)) ==
+    Date{day: 29, month: 2, year: 2024}
+  assert try require(Date.new(2000, 2, 29)) ==
+    Date{day: 29, month: 2, year: 2000}
+end
+
+test "Date.new rejects each field with its own error"
+  match Date.new(10000, 1, 1)
+    Result.Err(DateError.InvalidYear(year)) -> assert year == 10000
+    other -> fail "expected InvalidYear, got #{other}"
+  end
+
+  match Date.new(-1, 1, 1)
+    Result.Err(DateError.InvalidYear(year)) -> assert year == -1
+    other -> fail "expected InvalidYear, got #{other}"
+  end
+
+  match Date.new(2026, 13, 1)
+    Result.Err(DateError.InvalidMonth(month)) -> assert month == 13
+    other -> fail "expected InvalidMonth, got #{other}"
+  end
+
+  match Date.new(2026, 0, 1)
+    Result.Err(DateError.InvalidMonth(month)) -> assert month == 0
+    other -> fail "expected InvalidMonth, got #{other}"
+  end
+
+  match Date.new(2026, 2, 30)
+    Result.Err(DateError.InvalidDay(day)) -> assert day == 30
+    other -> fail "expected InvalidDay, got #{other}"
+  end
+
+  match Date.new(2001, 2, 29)
+    Result.Err(DateError.InvalidDay(day)) -> assert day == 29
+    other -> fail "expected InvalidDay, got #{other}"
+  end
+
+  match Date.new(1900, 2, 29)
+    Result.Err(DateError.InvalidDay(day)) -> assert day == 29
+    other -> fail "expected InvalidDay, got #{other}"
+  end
+
+  match Date.new(2026, 4, 31)
+    Result.Err(DateError.InvalidDay(day)) -> assert day == 31
+    other -> fail "expected InvalidDay, got #{other}"
+  end
+
+  assert Date.new(2026, 1, 0).err?()
+end
+
+test "Date epoch day conversions match the known vectors"
+  assert Date.UNIX_EPOCH.to_epoch_days() == 0
+  assert Date{day: 31, month: 12, year: 1969}.to_epoch_days() == -1
+  assert Date{day: 1, month: 3, year: 2000}.to_epoch_days() == 11_017
+  assert Date{day: 16, month: 9, year: 2026}.to_epoch_days() == 20_712
+  assert Date{day: 1, month: 1, year: 0}.to_epoch_days() == -719_528
+  assert Date{day: 31, month: 12, year: 9999}.to_epoch_days() == 2_932_896
+
+  assert Date.from_epoch_days(0) == Date.UNIX_EPOCH
+  assert Date.from_epoch_days(-1) == Date{day: 31, month: 12, year: 1969}
+  assert Date.from_epoch_days(11_017) == Date{day: 1, month: 3, year: 2000}
+  assert Date.from_epoch_days(20_712) == Date{day: 16, month: 9, year: 2026}
+  assert Date.from_epoch_days(-719_528) == Date{day: 1, month: 1, year: 0}
+  assert Date.from_epoch_days(2_932_896) == Date{day: 31, month: 12, year: 9999}
+end
+
+test "Date epoch days round-trip across every month boundary"
+  days = -719_528
+
+  while days <= 2_932_896
+    assert Date.from_epoch_days(days).to_epoch_days() == days
+    days = days + 9_973
+  end
+
+  day = 0
+
+  while day < 1_500
+    assert Date.from_epoch_days(day).to_epoch_days() == day
+    assert Date.from_epoch_days(-day).to_epoch_days() == -day
+    day = day + 1
+  end
+end
+
+test "Date.day_of_week follows the ISO numbering"
+  assert Date.UNIX_EPOCH.day_of_week() == Weekday.Thursday
+  assert Date{day: 16, month: 9, year: 2026}.day_of_week() == Weekday.Wednesday
+  assert Date{day: 1, month: 1, year: 2000}.day_of_week() == Weekday.Saturday
+  assert Date{day: 31, month: 12, year: 1969}.day_of_week() == Weekday.Wednesday
+  assert Date{day: 1, month: 1, year: 0}.day_of_week() == Weekday.Saturday
+  assert Weekday.Monday.iso_number() == 1
+  assert Weekday.Sunday.iso_number() == 7
+end
+
+test "Date.day_of_year counts from 1"
+  assert Date{day: 1, month: 1, year: 2026}.day_of_year() == 1
+  assert Date{day: 16, month: 9, year: 2026}.day_of_year() == 259
+  assert Date{day: 31, month: 12, year: 2026}.day_of_year() == 365
+  assert Date{day: 31, month: 12, year: 2024}.day_of_year() == 366
+end
+
+test "Date leap year and month length"
+  assert Date{day: 1, month: 1, year: 2024}.leap_year?()
+  assert Date{day: 1, month: 1, year: 2000}.leap_year?()
+  assert not Date{day: 1, month: 1, year: 1900}.leap_year?()
+  assert not Date{day: 1, month: 1, year: 2026}.leap_year?()
+  assert Date{day: 1, month: 2, year: 2024}.days_in_month() == 29
+  assert Date{day: 1, month: 2, year: 2026}.days_in_month() == 28
+  assert Date{day: 1, month: 4, year: 2026}.days_in_month() == 30
+  assert Date{day: 1, month: 12, year: 2026}.days_in_month() == 31
+end
+
+test "Date.plus_days crosses month and year boundaries"
+  assert Date{day: 31, month: 12, year: 2025}.plus_days(1) ==
+    Date{day: 1, month: 1, year: 2026}
+  assert Date{day: 1, month: 1, year: 2026}.plus_days(-1) ==
+    Date{day: 31, month: 12, year: 2025}
+  assert Date{day: 28, month: 2, year: 2024}.plus_days(1) ==
+    Date{day: 29, month: 2, year: 2024}
+  assert Date{day: 28, month: 2, year: 2025}.plus_days(1) ==
+    Date{day: 1, month: 3, year: 2025}
+  assert Date.UNIX_EPOCH.plus_days(20_712) ==
+    Date{day: 16, month: 9, year: 2026}
+end
+
+test "Date.plus_months clamps to the end of the target month"
+  assert Date{day: 31, month: 1, year: 2026}.plus_months(1) ==
+    Date{day: 28, month: 2, year: 2026}
+  assert Date{day: 31, month: 1, year: 2024}.plus_months(1) ==
+    Date{day: 29, month: 2, year: 2024}
+  assert Date{day: 30, month: 4, year: 2026}.plus_months(1) ==
+    Date{day: 30, month: 5, year: 2026}
+  assert Date{day: 15, month: 11, year: 2026}.plus_months(3) ==
+    Date{day: 15, month: 2, year: 2027}
+  assert Date{day: 15, month: 2, year: 2026}.plus_months(-3) ==
+    Date{day: 15, month: 11, year: 2025}
+  assert Date{day: 31, month: 3, year: 2026}.plus_months(-1) ==
+    Date{day: 28, month: 2, year: 2026}
+  assert Date{day: 1, month: 1, year: 2026}.plus_months(24) ==
+    Date{day: 1, month: 1, year: 2028}
+end
+
+test "Date.plus_years clamps February 29"
+  assert Date{day: 29, month: 2, year: 2024}.plus_years(1) ==
+    Date{day: 28, month: 2, year: 2025}
+  assert Date{day: 29, month: 2, year: 2024}.plus_years(4) ==
+    Date{day: 29, month: 2, year: 2028}
+  assert Date{day: 16, month: 9, year: 2026}.plus_years(-26) ==
+    Date{day: 16, month: 9, year: 2000}
+end
+
+test "Date.at builds a LocalDateTime"
+  date = Date{day: 16, month: 9, year: 2026}
+  time = Time{hour: 17, microsecond: 0, minute: 39, second: 0}
+  assert date.at(time) == LocalDateTime{date: date, time: time}
+end
+
+test "Time.new accepts valid fields and defaults the microsecond"
+  assert try require(Time.new(17, 39, 0)) ==
+    Time{hour: 17, microsecond: 0, minute: 39, second: 0}
+  assert try require(Time.new(23, 59, 59, 999_999)) ==
+    Time{hour: 23, microsecond: 999_999, minute: 59, second: 59}
+  assert try require(Time.new(0, 0, 0)) == Time.MIDNIGHT
+end
+
+test "Time.new rejects each field with its own error"
+  match Time.new(24, 0, 0)
+    Result.Err(TimeError.InvalidHour(hour)) -> assert hour == 24
+    other -> fail "expected InvalidHour, got #{other}"
+  end
+
+  match Time.new(0, 60, 0)
+    Result.Err(TimeError.InvalidMinute(minute)) -> assert minute == 60
+    other -> fail "expected InvalidMinute, got #{other}"
+  end
+
+  match Time.new(23, 59, 60)
+    Result.Err(TimeError.InvalidSecond(second)) -> assert second == 60
+    other -> fail "expected InvalidSecond, got #{other}"
+  end
+
+  match Time.new(0, 0, 0, 1_000_000)
+    Result.Err(TimeError.InvalidMicrosecond(microsecond)) ->
+      assert microsecond == 1_000_000
+    other -> fail "expected InvalidMicrosecond, got #{other}"
+  end
+
+  assert Time.new(-1, 0, 0).err?()
+  assert Time.new(0, 0, 0, -1).err?()
+end
+
+test "Time converts to and from a duration since midnight"
+  time = Time{hour: 17, microsecond: 250_000, minute: 39, second: 5}
+  since = time.since_midnight()
+  assert since == Duration.new(63_545_250_000, Duration.Unit.Microseconds)
+  assert Time.after_midnight(since) == time
+  assert Time.MIDNIGHT.since_midnight() == Duration.ZERO
+  assert Time.after_midnight(Duration.ZERO) == Time.MIDNIGHT
+end
+
+test "Time.after_midnight wraps at 24 hours and truncates nanoseconds"
+  assert Time.after_midnight(Duration.new(25, Duration.Unit.Hours)) ==
+    Time{hour: 1, microsecond: 0, minute: 0, second: 0}
+  assert Time.after_midnight(Duration.new(-1, Duration.Unit.Seconds)) ==
+    Time{hour: 23, microsecond: 0, minute: 59, second: 59}
+  assert Time.after_midnight(Duration.new(1_999, Duration.Unit.Nanoseconds)) ==
+    Time{hour: 0, microsecond: 1, minute: 0, second: 0}
+end
+
+test "LocalDateTime calendar arithmetic keeps the clock time"
+  time = Time{hour: 17, microsecond: 0, minute: 39, second: 0}
+  local = Date{day: 31, month: 1, year: 2026}.at(time)
+  assert local.plus_days(1) == Date{day: 1, month: 2, year: 2026}.at(time)
+  assert local.plus_months(1) == Date{day: 28, month: 2, year: 2026}.at(time)
+end
+
+test "LocalDateTime.in_zone resolves uniquely in UTC and fixed zones"
+  local = Date{day: 16, month: 9, year: 2026}.at(
+    Time{hour: 17, microsecond: 0, minute: 39, second: 0},
+  )
+  utc = local.in_zone(TimeZone.UTC)
+  expected = Timestamp.new(1_789_580_340, Duration.Unit.Seconds)
+
+  match utc
+    TimeZone.Resolution.Unique(value) ->
+      assert value.timestamp == expected
+      assert value.zone == TimeZone.UTC
+
+    other ->
+      fail "expected Unique, got #{other}"
+  end
+
+  offset = try require(TimeZone.Offset.new(-5 * 3_600))
+  eastern = local.in_zone(TimeZone.Fixed(offset)).compatible()
+  assert eastern.timestamp ==
+    expected.plus(Duration.new(5, Duration.Unit.Hours))
+  assert eastern.local() == local
+end
+
+test "LocalDateTime.in_zone handles times before the epoch"
+  local = Date{day: 31, month: 12, year: 1969}.at(
+    Time{hour: 23, microsecond: 0, minute: 59, second: 59},
+  )
+  value = local.in_zone(TimeZone.UTC).compatible()
+  assert value.timestamp == Timestamp.new(-1, Duration.Unit.Seconds)
+  assert value.local() == local
+end

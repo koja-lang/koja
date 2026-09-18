@@ -1,0 +1,450 @@
+priv const BYTE_LOWER_T: Int = 116
+priv const BYTE_SPACE: Int = 32
+priv const BYTE_UPPER_T: Int = 84
+priv const MAX_FRACTION_DIGITS: Int = 9
+priv const MICROSECOND_DIGITS: Int = 6
+
+@doc """
+The ISO 8601 text form of the calendar types, in the two shapes the
+standard defines. `Extended` has separators, `2026-09-16T17:39:00Z`.
+`Basic` has none, `20260916T173900Z`. Each variant reads and writes
+its own shape only, so a value is a complete description of the
+format.
+
+The profile is one shape per type. Out of scope
+are week dates (`2026-W38-3`), ordinal dates (`2026-259`), reduced
+precision (`2026-09`), expanded and negative years, `24:00`,
+fractions on hours or minutes, durations, intervals, and the RFC 9557
+bracketed zone. `Extended` output for a `DateTime` is also valid
+RFC 3339, which is what JSON consumers check.
+"""
+enum ISO8601
+  Basic
+  Extended
+end
+
+impl Date.Format for ISO8601
+  @doc """
+  Writes `YYYY-MM-DD` for `Extended` and `YYYYMMDD` for `Basic`.
+  """
+  fn format_date(self, value: Date) -> String
+    self.write_date(value)
+  end
+
+  @doc """
+  Reads `YYYY-MM-DD` for `Extended` and `YYYYMMDD` for `Basic`. The
+  year is exactly four digits with no sign. A field out of range
+  fails with that field's error, and any other shape fails with
+  `Malformed`.
+  """
+  fn parse_date(self, text: String) -> Date ! Date.Error
+    bytes = text.to_binary()
+
+    match self.scan_date(bytes, 0)
+      Option.Some((year, month, day, next)) ->
+        if next != bytes.byte_size()
+          fail Date.Error.Malformed(text)
+        end
+
+        try Date.new(year, month, day)
+
+      Option.None ->
+        fail Date.Error.Malformed(text)
+    end
+  end
+end
+
+impl Time.Format for ISO8601
+  @doc """
+  Writes `HH:MM:SS` for `Extended` and `HHMMSS` for `Basic`, followed
+  by a dot and six fraction digits when the microsecond is not zero.
+  """
+  fn format_time(self, value: Time) -> String
+    self.write_time(value)
+  end
+
+  @doc """
+  Reads `HH:MM:SS`, `HH:MM`, or either with a fraction of one to nine
+  digits after `.` or `,`, truncating to microseconds. `Basic` reads
+  the same without the colons. Seconds are optional because HTML
+  `time` and `datetime-local` inputs omit them. An offset is
+  rejected, since a `Time` has nowhere to put it.
+  """
+  fn parse_time(self, text: String) -> Time ! Time.Error
+    bytes = text.to_binary()
+
+    match self.scan_time(bytes, 0)
+      Option.Some((hour, minute, second, microsecond, next)) ->
+        if next != bytes.byte_size()
+          fail Time.Error.Malformed(text)
+        end
+
+        try Time.new(hour, minute, second, microsecond)
+
+      Option.None ->
+        fail Time.Error.Malformed(text)
+    end
+  end
+end
+
+impl LocalDateTime.Format for ISO8601
+  @doc """
+  Writes the date, `T`, and the time in this variant's shape.
+  """
+  fn format_local_date_time(self, value: LocalDateTime) -> String
+    "#{self.write_date(value.date)}T#{self.write_time(value.time)}"
+  end
+
+  @doc """
+  Reads a date, then `T`, `t`, or a space, then a time. An offset is
+  rejected. A field out of range and any other shape both fail with
+  `Malformed`.
+  """
+  fn parse_local_date_time(self, text: String)
+    -> LocalDateTime ! LocalDateTime.Error
+
+    bytes = text.to_binary()
+    (value, next) = try self.scan_local(text, bytes)
+
+    if next != bytes.byte_size()
+      fail LocalDateTime.Error.Malformed(text)
+    end
+
+    value
+  end
+end
+
+impl DateTime.Format for ISO8601
+  @doc """
+  Writes the local date and time in the value's zone, then `Z` for
+  the `UTC` zone or the offset as `+HH:MM` (`+HHMM` for `Basic`).
+  """
+  fn format_date_time(self, value: DateTime) -> String
+    "#{self.write_date(value.date())}T#{self.write_time(value.time())}#{self.write_offset(value.zone)}"
+  end
+
+  @doc """
+  Reads a local date and time followed by a mandatory offset: `Z`,
+  `z`, `+HH:MM`, `+HHMM`, or `+HH`, with either sign. `Z` produces the
+  `UTC` zone and any numeric offset produces a `Fixed` zone, so
+  `-00:00` is `Fixed` at zero. A missing offset, an offset outside
+  -18:00..+18:00, a field out of range, and any other shape all fail
+  with `Malformed`.
+  """
+  fn parse_date_time(self, text: String) -> DateTime ! DateTime.Error
+    bytes = text.to_binary()
+    (local, next) = self.scan_local(text, bytes)
+      rescue _ -> fail DateTime.Error.Malformed(text)
+    (zone, stop) = try self.scan_offset(text, bytes, next)
+
+    if stop != bytes.byte_size()
+      fail DateTime.Error.Malformed(text)
+    end
+
+    local.in_zone(zone).compatible()
+  end
+end
+
+extend ISO8601
+  # The byte at `index`, or -1 past the end so a comparison against
+  # any ASCII code fails.
+  priv fn byte(bytes: Binary, index: Int) -> Int
+    match bytes.at(index)
+      Option.Some(value) -> value
+      Option.None -> -1
+    end
+  end
+
+  # Reads exactly `count` ASCII digits starting at `start`.
+  priv fn digits(bytes: Binary, start: Int, count: Int) -> Option<Int>
+    value = 0
+    i = start
+
+    while i < start + count
+      b = ISO8601.byte(bytes, i)
+
+      if b < BYTE_ZERO or b > BYTE_NINE
+        return Option.None
+      end
+
+      value = value * 10 + b - BYTE_ZERO
+      i = i + 1
+    end
+
+    Option.Some(value)
+  end
+
+  # Reads `.` or `,` and one to nine digits. Returns the microsecond
+  # count, truncating past six digits, and the index after the
+  # fraction. Returns `(0, start)` when no fraction starts here.
+  priv fn fraction(bytes: Binary, start: Int) -> Option<(Int, Int)>
+    lead = ISO8601.byte(bytes, start)
+
+    if lead != BYTE_DOT and lead != BYTE_COMMA
+      return Option.Some((0, start))
+    end
+
+    microsecond = 0
+    scale = 100_000
+    i = start + 1
+
+    while ISO8601.digit?(bytes, i)
+      if i - start > MAX_FRACTION_DIGITS
+        return Option.None
+      end
+
+      if i - start <= MICROSECOND_DIGITS
+        microsecond = microsecond + (ISO8601.byte(bytes, i) - BYTE_ZERO) * scale
+        scale = scale / 10
+      end
+
+      i = i + 1
+    end
+
+    i == start + 1 ? Option.None : Option.Some((microsecond, i))
+  end
+
+  priv fn digit?(bytes: Binary, index: Int) -> Bool
+    b = ISO8601.byte(bytes, index)
+    b >= BYTE_ZERO and b <= BYTE_NINE
+  end
+
+  # Zero-pads a non-negative value to `width` digits.
+  priv fn pad(value: Int, width: Int) -> String
+    text = "#{value}"
+
+    while text.length() < width
+      text = "0#{text}"
+    end
+
+    text
+  end
+
+  # Reads a date at `start`. Returns the fields and the index after
+  # the date.
+  priv fn scan_date(self, bytes: Binary, start: Int)
+    -> Option<(Int, Int, Int, Int)>
+
+    match self
+      ISO8601.Basic ->
+        match (
+          ISO8601.digits(bytes, start, 4), ISO8601.digits(bytes, start + 4, 2),
+          ISO8601.digits(bytes, start + 6, 2)
+        )
+          (Option.Some(year), Option.Some(month), Option.Some(day)) ->
+            Option.Some((year, month, day, start + 8))
+
+          _ ->
+            Option.None
+        end
+
+      ISO8601.Extended ->
+        if ISO8601.byte(bytes, start + 4) != BYTE_MINUS
+          or ISO8601.byte(bytes, start + 7) != BYTE_MINUS
+
+          return Option.None
+        end
+
+        match (
+          ISO8601.digits(bytes, start, 4), ISO8601.digits(bytes, start + 5, 2),
+          ISO8601.digits(bytes, start + 8, 2)
+        )
+          (Option.Some(year), Option.Some(month), Option.Some(day)) ->
+            Option.Some((year, month, day, start + 10))
+
+          _ ->
+            Option.None
+        end
+    end
+  end
+
+  # Reads a date, a separator, and a time from the start of `bytes`.
+  # Returns the value and the index after the time. A field out of
+  # range fails like any other shape error, with `text` as the
+  # payload.
+  priv fn scan_local(self, text: String, bytes: Binary)
+    -> (LocalDateTime, Int) ! LocalDateTime.Error
+
+    (year, month, day, after_date) =
+      match self.scan_date(bytes, 0)
+        Option.Some(fields) -> fields
+        Option.None -> fail LocalDateTime.Error.Malformed(text)
+      end
+
+    separator = ISO8601.byte(bytes, after_date)
+
+    if separator != BYTE_UPPER_T and separator != BYTE_LOWER_T
+      and separator != BYTE_SPACE
+
+      fail LocalDateTime.Error.Malformed(text)
+    end
+
+    (hour, minute, second, microsecond, after_time) =
+      match self.scan_time(bytes, after_date + 1)
+        Option.Some(fields) -> fields
+        Option.None -> fail LocalDateTime.Error.Malformed(text)
+      end
+
+    date = Date.new(year, month, day)
+      rescue _ -> fail LocalDateTime.Error.Malformed(text)
+    time = Time.new(hour, minute, second, microsecond)
+      rescue _ -> fail LocalDateTime.Error.Malformed(text)
+    (LocalDateTime{date: date, time: time}, after_time)
+  end
+
+  # Reads `Z`, `z`, or a signed offset at `start`. Returns the zone
+  # and the index after the offset. `Extended` takes `+HH:MM` or
+  # `+HH`, and `Basic` takes `+HHMM` or `+HH`. Any other shape and
+  # an offset out of range fail with `text` as the payload.
+  priv fn scan_offset(self, text: String, bytes: Binary, start: Int)
+    -> (TimeZone, Int) ! DateTime.Error
+
+    lead = ISO8601.byte(bytes, start)
+
+    if lead == BYTE_UPPER_Z or lead == BYTE_LOWER_Z
+      return (TimeZone.UTC, start + 1)
+    end
+
+    if lead != BYTE_PLUS and lead != BYTE_MINUS
+      fail DateTime.Error.Malformed(text)
+    end
+
+    hours =
+      match ISO8601.digits(bytes, start + 1, 2)
+        Option.Some(value) -> value
+        Option.None -> fail DateTime.Error.Malformed(text)
+      end
+
+    (minutes, next) =
+      match self
+        ISO8601.Basic ->
+          match ISO8601.digits(bytes, start + 3, 2)
+            Option.Some(value) -> (value, start + 5)
+            Option.None -> (0, start + 3)
+          end
+
+        ISO8601.Extended ->
+          if ISO8601.byte(bytes, start + 3) == BYTE_COLON
+            match ISO8601.digits(bytes, start + 4, 2)
+              Option.Some(value) -> (value, start + 6)
+              Option.None -> fail DateTime.Error.Malformed(text)
+            end
+          else
+            (0, start + 3)
+          end
+      end
+
+    if minutes > 59
+      fail DateTime.Error.Malformed(text)
+    end
+
+    seconds = hours * 3_600 + minutes * 60
+    signed = lead == BYTE_MINUS ? -seconds : seconds
+    offset = TimeZone.Offset.new(signed)
+      rescue _ -> fail DateTime.Error.Malformed(text)
+    (TimeZone.Fixed(offset), next)
+  end
+
+  # Reads a time at `start`. Returns the fields, with second and
+  # microsecond as 0 when absent, and the index after the time.
+  priv fn scan_time(self, bytes: Binary, start: Int)
+    -> Option<(Int, Int, Int, Int, Int)>
+
+    hour =
+      match ISO8601.digits(bytes, start, 2)
+        Option.Some(value) -> value
+        Option.None -> return Option.None
+      end
+
+    minute_start =
+      match self
+        ISO8601.Basic ->
+          start + 2
+
+        ISO8601.Extended ->
+          if ISO8601.byte(bytes, start + 2) != BYTE_COLON
+            return Option.None
+          end
+
+          start + 3
+      end
+
+    minute =
+      match ISO8601.digits(bytes, minute_start, 2)
+        Option.Some(value) -> value
+        Option.None -> return Option.None
+      end
+
+    after_minute = minute_start + 2
+
+    second_start =
+      match self
+        ISO8601.Basic ->
+          ISO8601.digit?(bytes, after_minute) ? after_minute : -1
+
+        ISO8601.Extended ->
+          ISO8601.byte(bytes, after_minute) == BYTE_COLON
+            ? after_minute + 1
+            : -1
+      end
+
+    if second_start < 0
+      return Option.Some((hour, minute, 0, 0, after_minute))
+    end
+
+    second =
+      match ISO8601.digits(bytes, second_start, 2)
+        Option.Some(value) -> value
+        Option.None -> return Option.None
+      end
+
+    match ISO8601.fraction(bytes, second_start + 2)
+      Option.Some((microsecond, next)) ->
+        Option.Some((hour, minute, second, microsecond, next))
+      Option.None -> Option.None
+    end
+  end
+
+  priv fn write_date(self, value: Date) -> String
+    year = ISO8601.pad(value.year, 4)
+    month = ISO8601.pad(value.month, 2)
+    day = ISO8601.pad(value.day, 2)
+
+    match self
+      ISO8601.Basic -> "#{year}#{month}#{day}"
+      ISO8601.Extended -> "#{year}-#{month}-#{day}"
+    end
+  end
+
+  priv fn write_offset(self, zone: TimeZone) -> String
+    match zone
+      TimeZone.Fixed(offset) ->
+        sign = offset.seconds < 0 ? "-" : "+"
+        total = offset.seconds < 0 ? -offset.seconds : offset.seconds
+        hours = ISO8601.pad(total / 3_600, 2)
+        minutes = ISO8601.pad(total % 3_600 / 60, 2)
+
+        match self
+          ISO8601.Basic -> "#{sign}#{hours}#{minutes}"
+          ISO8601.Extended -> "#{sign}#{hours}:#{minutes}"
+        end
+
+      TimeZone.UTC ->
+        "Z"
+    end
+  end
+
+  priv fn write_time(self, value: Time) -> String
+    hour = ISO8601.pad(value.hour, 2)
+    minute = ISO8601.pad(value.minute, 2)
+    second = ISO8601.pad(value.second, 2)
+    fraction = value.microsecond == 0
+      ? ""
+      : ".#{ISO8601.pad(value.microsecond, 6)}"
+
+    match self
+      ISO8601.Basic -> "#{hour}#{minute}#{second}#{fraction}"
+      ISO8601.Extended -> "#{hour}:#{minute}:#{second}#{fraction}"
+    end
+  end
+end

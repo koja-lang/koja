@@ -1,0 +1,84 @@
+alias Test.require
+alias TimeZone.Offset
+alias TimeZone.Resolution
+
+test "Offset.new accepts the range -18:00..+18:00"
+  assert try require(Offset.new(0)) == Offset.UTC
+  assert try require(Offset.new(19_800)) == Offset{seconds: 19_800}
+  assert try require(Offset.new(64_800)) == Offset{seconds: 64_800}
+  assert try require(Offset.new(-64_800)) == Offset{seconds: -64_800}
+end
+
+test "Offset.new rejects an offset past 18 hours"
+  match Offset.new(64_801)
+    Result.Err(Offset.Error.OutOfRange(seconds)) -> assert seconds == 64_801
+    other -> fail "expected OutOfRange, got #{other}"
+  end
+
+  assert Offset.new(-64_801).err?()
+end
+
+test "Offset.to_string writes a signed hour and minute"
+  assert Offset.UTC.to_string() == "+00:00"
+  assert Offset{seconds: 19_800}.to_string() == "+05:30"
+  assert Offset{seconds: -18_000}.to_string() == "-05:00"
+  assert Offset{seconds: 64_800}.to_string() == "+18:00"
+  assert Offset{seconds: -1_800}.to_string() == "-00:30"
+  assert Offset{seconds: 45}.to_string() == "+00:00:45"
+end
+
+test "TimeZone.offset_at ignores the instant for the shipped zones"
+  fixed = TimeZone.Fixed(Offset{seconds: -18_000})
+  assert TimeZone.UTC.offset_at(Timestamp.UNIX_EPOCH) == Offset.UTC
+  assert TimeZone.UTC.offset_at(Timestamp.now()) == Offset.UTC
+  assert fixed.offset_at(Timestamp.UNIX_EPOCH) == Offset{seconds: -18_000}
+  assert fixed.offset_at(Timestamp.now()) == Offset{seconds: -18_000}
+end
+
+test "TimeZone.identifier names the zone"
+  assert TimeZone.UTC.identifier() == "UTC"
+  assert TimeZone.Fixed(Offset{seconds: 19_800}).identifier() == "+05:30"
+  assert TimeZone.Fixed(Offset.UTC).identifier() == "+00:00"
+end
+
+test "Resolution.Unique returns its value from every accessor"
+  value = DateTime{timestamp: Timestamp.UNIX_EPOCH, zone: TimeZone.UTC}
+  resolution = Resolution.Unique(value)
+  assert resolution.compatible() == value
+  assert resolution.earlier() == value
+  assert resolution.later() == value
+  assert try require(resolution.unique()) == value
+end
+
+test "Resolution.Gap shifts forward and Ambiguous picks earlier"
+  before = DateTime{timestamp: Timestamp.UNIX_EPOCH, zone: TimeZone.UTC}
+  following = before.plus(Duration.new(1, Duration.Unit.Hours))
+
+  gap = Resolution.Gap(before, following)
+  assert gap.compatible() == following
+  assert gap.earlier() == before
+  assert gap.later() == following
+
+  match gap.unique()
+    Result.Err(TimeZone.Error.Gap(a, b)) ->
+      assert a == before
+      assert b == following
+
+    other ->
+      fail "expected Gap, got #{other}"
+  end
+
+  ambiguous = Resolution.Ambiguous(before, following)
+  assert ambiguous.compatible() == before
+  assert ambiguous.earlier() == before
+  assert ambiguous.later() == following
+
+  match ambiguous.unique()
+    Result.Err(TimeZone.Error.Ambiguous(a, b)) ->
+      assert a == before
+      assert b == following
+
+    other ->
+      fail "expected Ambiguous, got #{other}"
+  end
+end

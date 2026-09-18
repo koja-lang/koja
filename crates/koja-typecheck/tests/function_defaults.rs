@@ -360,6 +360,110 @@ fn adapters_do_not_inherit_test_or_doc_annotations() {
     assert_eq!(doc_count, 1);
 }
 
+/// A type parameter that only a defaulted parameter mentions is
+/// dropped from the shorter adapters. The default expression fixes
+/// its type, and the canonical call infers it from there. Keeping
+/// it would leave `parse/1<F>(text: String)` with an `F` no argument
+/// can bind.
+#[test]
+fn adapters_drop_type_params_only_the_default_mentions() {
+    let checked = typecheck_file(&dedent(
+        r#"
+        protocol Reader
+          fn read(self, text: String) -> Int
+        end
+
+        enum Plain
+          Decimal
+        end
+
+        impl Reader for Plain
+          fn read(self, text: String) -> Int
+            10
+          end
+        end
+
+        fn parse<F: Reader>(text: String, format: F = Plain.Decimal) -> Int
+          format.read(text)
+        end
+
+        fn use -> Int
+          parse("x") + parse("x", Plain.Decimal)
+        end
+        "#,
+    ));
+
+    let type_params = test_file(&checked)
+        .items
+        .iter()
+        .filter_map(|item| match item {
+            Item::Function(function) if function.name.as_str() == "parse" => Some((
+                function.params.len(),
+                function
+                    .type_params
+                    .iter()
+                    .map(|type_param| type_param.name.text.clone())
+                    .collect::<Vec<_>>(),
+            )),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        type_params,
+        vec![(2, vec!["F".to_string()]), (1, Vec::new())]
+    );
+}
+
+/// A type parameter stays in the adapter when a kept parameter, the
+/// return type, or the bound of a kept type parameter mentions it.
+#[test]
+fn adapters_keep_type_params_the_kept_signature_mentions() {
+    let checked = typecheck_file(&dedent(
+        r#"
+        protocol Reader<T>
+          fn read(self, text: String) -> T
+        end
+
+        struct IntReader
+        end
+
+        impl Reader<Int> for IntReader
+          fn read(self, text: String) -> Int
+            10
+          end
+        end
+
+        fn parse<T, F: Reader<T>>(text: String, format: F, strict: Bool = false) -> T
+          format.read(text)
+        end
+
+        fn use -> Int
+          parse("x", IntReader{})
+        end
+        "#,
+    ));
+
+    let adapter = test_file(&checked)
+        .items
+        .iter()
+        .find_map(|item| match item {
+            Item::Function(function)
+                if function.name.as_str() == "parse" && function.params.len() == 2 =>
+            {
+                Some(
+                    function
+                        .type_params
+                        .iter()
+                        .map(|type_param| type_param.name.text.clone())
+                        .collect::<Vec<_>>(),
+                )
+            }
+            _ => None,
+        })
+        .expect("two-parameter adapter");
+    assert_eq!(adapter, vec!["T".to_string(), "F".to_string()]);
+}
+
 #[test]
 fn match_bindings_shadow_parameter_names_in_defaults() {
     typecheck_file(&dedent(
