@@ -253,11 +253,12 @@ zone that has transitions.
 
 @doc "An IANA zone's identifier and transition table. Built by a tz package."
 struct TimeZone.Rules
-  identifier: String
-  transitions: List<TimeZone.Transition>
-  final: TimeZone.Rule
+identifier: String
+transitions: List<TimeZone.Transition>
+final: TimeZone.Rule
 end
-```
+
+````
 
 `TimeZone.Rules` is plain data. Struct fields have no visibility of
 their own in Koja, and the transition table has nothing to hide: a
@@ -278,7 +279,7 @@ zones come from a package:
 alias TZ.zone
 
 chicago = try zone("America/Chicago")
-```
+````
 
 `koja-lang/tz` embeds the compiled tz database, exposes
 `zone(identifier: String) -> TimeZone ! TZ.Error`, and releases a new
