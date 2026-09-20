@@ -2788,6 +2788,28 @@ timeout = Duration.new(30, Duration.Unit.Seconds)
 
 `Duration` writes its own `equals?` so the comparison crosses units. `Instant` and `Timestamp` derive `Equality`, and `Timestamp` inherits the cross-unit comparison through its field. All three derive `Debug`. None has an ordering yet.
 
+The calendar types answer the other two questions about a moment, what the clock and calendar showed and what they showed in a given place. `Date`, `Time`, and `LocalDateTime` are civil values with no zone. `DateTime` is a `Timestamp` viewed in a `TimeZone`. A constructed civil value is always valid, since `Date.new` and `Time.new` check every field, and the year runs from 0 to 9999.
+
+- `Date{day: Int, month: Int, year: Int}`: `new(year, month, day) ! Date.Error`, `at(time)`, `day_of_week`, `day_of_year`, `days_in_month`, `leap_year?`, `plus_days`, `plus_months`, `plus_years`, `from_epoch_days`, `to_epoch_days`, and the constant `Date.UNIX_EPOCH`. `plus_months` clamps to the last day of the target month, so January 31 plus one month is February 28 or 29. `Weekday` is an enum from `Monday` to `Sunday` with `iso_number`.
+- `Time{hour: Int, microsecond: Int, minute: Int, second: Int}`: `new(hour, minute, second, microsecond = 0) ! Time.Error`, `since_midnight() -> Duration`, `after_midnight(Duration)`, and the constant `Time.MIDNIGHT`. Microsecond precision, since `Timestamp.now` reads microseconds. `after_midnight` wraps at 24 hours and truncates nanoseconds.
+- `LocalDateTime{date: Date, time: Time}`: `in_zone(zone) -> TimeZone.Resolution`, `plus_days`, `plus_months`. A clock reading with no zone, what a database `timestamp` column holds.
+- `TimeZone`: an enum with `UTC` and `Fixed(TimeZone.Offset)`. `identifier`, `offset_at(timestamp)`. `TimeZone.Offset{seconds: Int}` is a distance from UTC within -18:00..+18:00, built with `new(seconds) ! TimeZone.Offset.Error`, with the constant `TimeZone.Offset.UTC`. Zones with daylight saving rules arrive as a later variant from a separate package.
+- `TimeZone.Resolution`: `Unique(DateTime)`, `Gap(DateTime, DateTime)`, or `Ambiguous(DateTime, DateTime)`, returned wherever a civil time is placed in a zone. `compatible()` picks the answer most callers want, `earlier()` and `later()` pick a side, and `unique() ! TimeZone.Error` fails unless there was one answer. A `match` that forgets an arm does not compile. The zones the stdlib ships always resolve to `Unique`.
+- `DateTime{timestamp: Timestamp, zone: TimeZone}`: `now(zone)`, `date`, `time`, `local`, `offset`, `in_zone`, `to_utc`, `plus(Duration)`, `minus(Duration)`, `since(earlier)`, `plus_days -> TimeZone.Resolution`, `plus_months -> TimeZone.Resolution`. Nothing is cached, so `date` and `time` compute from the two fields. Two values are equal when they name the same instant in the same zone. `plus` is exact and moves the timestamp. `plus_days` is calendar arithmetic and keeps the clock time.
+
+Text goes through a format protocol per type, `Date.Format`, `Time.Format`, `LocalDateTime.Format`, and `DateTime.Format`. Each type has `to_string(format = ISO8601.Extended)` and `parse(text, format = ISO8601.Extended)`, which forward to the protocol, so the common case names no format. `ISO8601` is the stdlib format, an enum whose `Extended` variant writes `2026-09-16T17:39:00Z` and whose `Basic` variant writes `20260916T173900Z`. A `DateTime` in `Extended` form is RFC 3339. A parse fails with the field's error, `Date.Error.InvalidDay(30)`, when a field is out of range, and with `Malformed(text)` for any other shape.
+
+```koja
+created_at = Timestamp.now()
+shown = DateTime{timestamp: created_at, zone: TimeZone.UTC}
+json = shown.to_string()
+back = try DateTime.parse(json)
+assert back.timestamp == created_at
+
+birthday = try Date.parse(form.field("birthday"))
+compact = birthday.to_string(ISO8601.Basic)
+```
+
 ### Console I/O
 
 `IO` provides ergonomic console input/output. `STDIN`, `STDOUT`, and `STDERR` are available as `Fd` constants for low-level access.

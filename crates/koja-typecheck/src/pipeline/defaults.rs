@@ -5,6 +5,7 @@ use std::collections::HashSet;
 use koja_ast::ast::{
     AnnotationKind, Arg, ClosureParam, Diagnostic, EnumConstructionData, Expr, ExprKind, Function,
     FunctionOrigin, ImplMember, Item, Name, Param, Pattern, ProtocolMethod, Statement, StringPart,
+    TypeExpr, TypeParam,
 };
 use koja_ast::identifier::Resolution;
 
@@ -141,7 +142,12 @@ fn function_adapters(function: &Function) -> Vec<Function> {
                 },
                 visibility: function.visibility,
                 name: Name::new(&function.name.text, function.name.span.as_synthetic()),
-                type_params: function.type_params.clone(),
+                type_params: adapter_type_params(
+                    &function.type_params,
+                    &function.params[..arity],
+                    function.return_type.as_ref(),
+                    function.error_type.as_ref(),
+                ),
                 params: explicit_params(&function.params, arity),
                 return_type: function.return_type.clone(),
                 error_type: function.error_type.clone(),
@@ -168,7 +174,12 @@ fn protocol_adapters(method: &ProtocolMethod) -> Vec<ProtocolMethod> {
                     canonical_arity: method.params.len(),
                 },
                 name: Name::new(&method.name.text, method.name.span.as_synthetic()),
-                type_params: method.type_params.clone(),
+                type_params: adapter_type_params(
+                    &method.type_params,
+                    &method.params[..arity],
+                    method.return_type.as_ref(),
+                    method.error_type.as_ref(),
+                ),
                 params: explicit_params(&method.params, arity),
                 return_type: method.return_type.clone(),
                 error_type: method.error_type.clone(),
@@ -191,6 +202,94 @@ fn adapter_arities(params: &[Param]) -> impl Iterator<Item = usize> + '_ {
         .take_while(|param| !param_has_default(param))
         .count();
     required..params.len()
+}
+
+/// The type parameters an adapter of `arity` still needs. A type
+/// parameter that only the omitted parameters mention is dropped,
+/// since the default expression fixes its type and the canonical
+/// call infers it from there. Keeping it would leave the adapter
+/// with a type parameter no argument can bind, and every call would
+/// fail with "cannot infer type parameter". A parameter that the kept
+/// parameters, the return type, the error type, or the bound of
+/// another kept parameter mention stays.
+fn adapter_type_params(
+    type_params: &[TypeParam],
+    kept: &[Param],
+    return_type: Option<&TypeExpr>,
+    error_type: Option<&TypeExpr>,
+) -> Vec<TypeParam> {
+    if type_params.is_empty() {
+        return Vec::new();
+    }
+    let mut mentioned = HashSet::new();
+    for param in kept {
+        if let Param::Regular { type_expr, .. } = param {
+            collect_type_names(type_expr, &mut mentioned);
+        }
+    }
+    for type_expr in return_type.into_iter().chain(error_type) {
+        collect_type_names(type_expr, &mut mentioned);
+    }
+    // A kept parameter's bound can name another type parameter
+    // (`<T, F: Format<T>>`), so close over bounds until nothing new
+    // appears.
+    loop {
+        let before = mentioned.len();
+        for type_param in type_params {
+            if mentioned.contains(type_param.name.as_str()) {
+                for bound in &type_param.bounds {
+                    collect_type_names(bound, &mut mentioned);
+                }
+            }
+        }
+        if mentioned.len() == before {
+            break;
+        }
+    }
+    type_params
+        .iter()
+        .filter(|type_param| mentioned.contains(type_param.name.as_str()))
+        .cloned()
+        .collect()
+}
+
+/// Every single-segment type name a type expression mentions, which
+/// is the only shape a type parameter reference can take.
+fn collect_type_names(type_expr: &TypeExpr, out: &mut HashSet<String>) {
+    match type_expr {
+        TypeExpr::Named { path, .. } => {
+            if let [name] = path.as_slice() {
+                out.insert(name.text.clone());
+            }
+        }
+        TypeExpr::Generic { path, args, .. } => {
+            if let [name] = path.as_slice() {
+                out.insert(name.text.clone());
+            }
+            for arg in args {
+                collect_type_names(arg, out);
+            }
+        }
+        TypeExpr::Function {
+            params,
+            return_type,
+            ..
+        } => {
+            for param in params {
+                collect_type_names(param, out);
+            }
+            collect_type_names(return_type, out);
+        }
+        TypeExpr::Tuple { elements, .. }
+        | TypeExpr::Union {
+            types: elements, ..
+        } => {
+            for element in elements {
+                collect_type_names(element, out);
+            }
+        }
+        TypeExpr::Unit { .. } | TypeExpr::Self_ { .. } => {}
+    }
 }
 
 fn explicit_params(params: &[Param], arity: usize) -> Vec<Param> {

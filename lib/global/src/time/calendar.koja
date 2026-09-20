@@ -1,0 +1,449 @@
+priv const DAYS_PER_ERA: Int = 146_097
+priv const DAYS_TO_EPOCH: Int = 719_468
+priv const MAX_YEAR: Int = 9999
+priv const MICROSECONDS_PER_DAY: Int = 86_400_000_000
+priv const MICROSECONDS_PER_HOUR: Int = 3_600_000_000
+priv const MICROSECONDS_PER_MINUTE: Int = 60_000_000
+priv const MICROSECONDS_PER_SECOND: Int = 1_000_000
+
+@doc """
+A calendar date in the proleptic Gregorian calendar, with no time of
+day and no zone. `Date.new` checks every field, so a `Date` value is
+always valid. The year runs from 0 to 9999, the range the ISO 8601
+profile can write. Arithmetic that leaves that range traps, the way
+`Int` overflow does.
+
+Text goes through a `Date.Format`. `ISO8601.Extended` is the stdlib
+implementation and the default, so `date.to_string()` writes
+`2026-09-16` and `Date.parse(text)` reads it back. Pass another
+format, `date.to_string(ISO8601.Basic)`, to use a different shape.
+"""
+struct Date
+  day: Int
+  month: Int
+  year: Int
+
+  @doc """
+  Why a `Date` could not be built. The `Invalid*` variants carry the
+  rejected field. `Malformed` carries the text a format could not read.
+  """
+  enum Error
+    InvalidDay(Int)
+    InvalidMonth(Int)
+    InvalidYear(Int)
+    Malformed(String)
+  end
+
+  @doc """
+  Reads and writes a `Date` as text. A format is a value, so an enum
+  variant like `ISO8601.Extended` and a user struct both implement it.
+  `parse_date` fails with `Date.Error.Malformed` when the text does not
+  match the format's shape, and with the field error when a field is
+  out of range.
+  """
+  protocol Format
+    fn format_date(self, value: Date) -> String
+
+    fn parse_date(self, text: String) -> Date ! Date.Error
+  end
+
+  @doc """
+  1970-01-01, the date of `Timestamp.UNIX_EPOCH`.
+  """
+  const UNIX_EPOCH = Date{day: 1, month: 1, year: 1970}
+
+  @doc """
+  Combines this date with a time of day.
+  """
+  fn at(self, time: Time) -> LocalDateTime
+    LocalDateTime{date: self, time: time}
+  end
+
+  @doc """
+  Returns the day of the week.
+  """
+  fn day_of_week(self) -> Weekday
+    match floor_mod(self.to_epoch_days() + 3, 7)
+      0 -> Weekday.Monday
+      1 -> Weekday.Tuesday
+      2 -> Weekday.Wednesday
+      3 -> Weekday.Thursday
+      4 -> Weekday.Friday
+      5 -> Weekday.Saturday
+      _ -> Weekday.Sunday
+    end
+  end
+
+  @doc """
+  Returns the day of the year, 1 for January 1 and 365 or 366 for
+  December 31.
+  """
+  fn day_of_year(self) -> Int
+    first = Date{day: 1, month: 1, year: self.year}
+    self.to_epoch_days() - first.to_epoch_days() + 1
+  end
+
+  @doc """
+  Returns the number of days in this date's month.
+  """
+  fn days_in_month(self) -> Int
+    Date.last_day(self.year, self.month)
+  end
+
+  @doc """
+  Returns the date `days` after 1970-01-01. Negative values reach
+  before the epoch. Traps when the year leaves 0..9999.
+  """
+  fn from_epoch_days(days: Int) -> Date
+    z = days + DAYS_TO_EPOCH
+    era = (z >= 0 ? z : z - DAYS_PER_ERA + 1) / DAYS_PER_ERA
+    doe = z - era * DAYS_PER_ERA
+    yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365
+    doy = doe - (365 * yoe + yoe / 4 - yoe / 100)
+    mp = (5 * doy + 2) / 153
+    day = doy - (153 * mp + 2) / 5 + 1
+    month = mp < 10 ? mp + 3 : mp - 9
+    year = yoe + era * 400 + (month <= 2 ? 1 : 0)
+    Date{day: day, month: month, year: Date.checked_year(year)}
+  end
+
+  @doc """
+  Returns `true` when this date falls in a leap year.
+  """
+  fn leap_year?(self) -> Bool
+    Date.leap?(self.year)
+  end
+
+  @doc """
+  Builds a date and checks every field. Fails on a year outside
+  0..9999, a month outside 1..12, or a day past the end of the month,
+  so February 30 and 2001-02-29 are both rejected.
+  """
+  fn new(year: Int, month: Int, day: Int) -> Date ! Date.Error
+    if year < 0 or year > MAX_YEAR
+      fail Date.Error.InvalidYear(year)
+    end
+
+    if month < 1 or month > 12
+      fail Date.Error.InvalidMonth(month)
+    end
+
+    if day < 1 or day > Date.last_day(year, month)
+      fail Date.Error.InvalidDay(day)
+    end
+
+    Date{day: day, month: month, year: year}
+  end
+
+  @doc """
+  Reads a date from `text` through `format`, `ISO8601.Extended` by
+  default.
+  """
+  fn parse<F: Date.Format>(text: String, format: F = ISO8601.Extended)
+    -> Date ! Date.Error
+
+    try format.parse_date(text)
+  end
+
+  @doc """
+  Returns the date `days` later. Negative values go back.
+  """
+  fn plus_days(self, days: Int) -> Date
+    Date.from_epoch_days(self.to_epoch_days() + days)
+  end
+
+  @doc """
+  Returns the date `months` later. The day of the month is kept when
+  the target month has it and clamped to the last day otherwise, so
+  January 31 plus one month is February 28 or 29. Negative values go
+  back.
+  """
+  fn plus_months(self, months: Int) -> Date
+    total = self.year * 12 + self.month - 1 + months
+    year = Date.checked_year(floor_div(total, 12))
+    month = floor_mod(total, 12) + 1
+    last = Date.last_day(year, month)
+    Date{day: self.day < last ? self.day : last, month: month, year: year}
+  end
+
+  @doc """
+  Returns the date `years` later, clamping February 29 to February 28
+  in a non-leap year. Negative values go back.
+  """
+  fn plus_years(self, years: Int) -> Date
+    self.plus_months(years * 12)
+  end
+
+  @doc """
+  Returns the number of days from 1970-01-01 to this date. Negative
+  before the epoch.
+  """
+  fn to_epoch_days(self) -> Int
+    y = self.month <= 2 ? self.year - 1 : self.year
+    era = (y >= 0 ? y : y - 399) / 400
+    yoe = y - era * 400
+    mp = self.month > 2 ? self.month - 3 : self.month + 9
+    doy = (153 * mp + 2) / 5 + self.day - 1
+    doe = yoe * 365 + yoe / 4 - yoe / 100 + doy
+    era * DAYS_PER_ERA + doe - DAYS_TO_EPOCH
+  end
+
+  @doc """
+  Renders this date through `format`, `ISO8601.Extended` by default.
+  """
+  fn to_string<F: Date.Format>(self, format: F = ISO8601.Extended) -> String
+    format.format_date(self)
+  end
+
+  priv fn checked_year(year: Int) -> Int
+    if year < 0 or year > MAX_YEAR
+      Kernel.panic("Date year #{year} is outside 0..#{MAX_YEAR}")
+    end
+
+    year
+  end
+
+  priv fn last_day(year: Int, month: Int) -> Int
+    match month
+      2 -> Date.leap?(year) ? 29 : 28
+      4 | 6 | 9 | 11 -> 30
+      _ -> 31
+    end
+  end
+
+  priv fn leap?(year: Int) -> Bool
+    year % 4 == 0 and (year % 100 != 0 or year % 400 == 0)
+  end
+end
+
+@doc """
+A time of day with microsecond precision, with no date and no zone.
+`Time.new` checks every field, so a `Time` value is always valid.
+Second 60 is rejected, since `Timestamp` has no leap seconds either.
+
+The precision is microseconds because `Timestamp.now` reads
+microseconds and no database column stores finer. A `DateTime` built
+on a nanosecond `Timestamp` truncates to microseconds when it
+projects a `Time`.
+"""
+struct Time
+  hour: Int
+  microsecond: Int
+  minute: Int
+  second: Int
+
+  @doc """
+  Why a `Time` could not be built. The `Invalid*` variants carry the
+  rejected field. `Malformed` carries the text a format could not read.
+  """
+  enum Error
+    InvalidHour(Int)
+    InvalidMicrosecond(Int)
+    InvalidMinute(Int)
+    InvalidSecond(Int)
+    Malformed(String)
+  end
+
+  @doc """
+  Reads and writes a `Time` as text. See `Date.Format`.
+  """
+  protocol Format
+    fn format_time(self, value: Time) -> String
+
+    fn parse_time(self, text: String) -> Time ! Time.Error
+  end
+
+  @doc """
+  00:00:00.
+  """
+  const MIDNIGHT = Time{hour: 0, microsecond: 0, minute: 0, second: 0}
+
+  @doc """
+  Returns the time of day `duration` after midnight. The duration
+  wraps at 24 hours, so 25 hours is 01:00:00 and a negative duration
+  counts back from midnight. Nanoseconds truncate to microseconds.
+  """
+  fn after_midnight(duration: Duration) -> Time
+    total = floor_mod(duration.to_microseconds(), MICROSECONDS_PER_DAY)
+    Time{
+      hour: total / MICROSECONDS_PER_HOUR,
+      microsecond: total % MICROSECONDS_PER_SECOND,
+      minute: total % MICROSECONDS_PER_HOUR / MICROSECONDS_PER_MINUTE,
+      second: total % MICROSECONDS_PER_MINUTE / MICROSECONDS_PER_SECOND,
+    }
+  end
+
+  @doc """
+  Builds a time of day and checks every field. Fails on an hour
+  outside 0..23, a minute or second outside 0..59, or a microsecond
+  outside 0..999999.
+  """
+  fn new(hour: Int, minute: Int, second: Int, microsecond: Int = 0)
+    -> Time ! Time.Error
+
+    if hour < 0 or hour > 23
+      fail Time.Error.InvalidHour(hour)
+    end
+
+    if minute < 0 or minute > 59
+      fail Time.Error.InvalidMinute(minute)
+    end
+
+    if second < 0 or second > 59
+      fail Time.Error.InvalidSecond(second)
+    end
+
+    if microsecond < 0 or microsecond > 999_999
+      fail Time.Error.InvalidMicrosecond(microsecond)
+    end
+
+    Time{hour: hour, microsecond: microsecond, minute: minute, second: second}
+  end
+
+  @doc """
+  Reads a time of day from `text` through `format`, `ISO8601.Extended`
+  by default.
+  """
+  fn parse<F: Time.Format>(text: String, format: F = ISO8601.Extended)
+    -> Time ! Time.Error
+
+    try format.parse_time(text)
+  end
+
+  @doc """
+  Returns the time since midnight, in microseconds.
+  """
+  fn since_midnight(self) -> Duration
+    total = self.hour * MICROSECONDS_PER_HOUR +
+      self.minute * MICROSECONDS_PER_MINUTE +
+      self.second * MICROSECONDS_PER_SECOND + self.microsecond
+    Duration.new(total, Duration.Unit.Microseconds)
+  end
+
+  @doc """
+  Renders this time through `format`, `ISO8601.Extended` by default.
+  """
+  fn to_string<F: Time.Format>(self, format: F = ISO8601.Extended) -> String
+    format.format_time(self)
+  end
+end
+
+@doc """
+A date and a time of day with no zone. It is what a clock on the wall
+shows and what a database column without a zone holds. It does not
+name an instant until `in_zone` places it in a `TimeZone`.
+"""
+struct LocalDateTime
+  date: Date
+  time: Time
+
+  @doc """
+  Why a `LocalDateTime` could not be read from text. A field error
+  from `Date.new` or `Time.new` is reported as `Malformed` with the
+  whole text, since a format reads the two halves together.
+  """
+  enum Error
+    Malformed(String)
+  end
+
+  @doc """
+  Reads and writes a `LocalDateTime` as text. See `Date.Format`.
+  """
+  protocol Format
+    fn format_local_date_time(self, value: LocalDateTime) -> String
+
+    fn parse_local_date_time(self, text: String)
+      -> LocalDateTime ! LocalDateTime.Error
+  end
+
+  @doc """
+  Places this civil time in `zone`. The result is a
+  `TimeZone.Resolution`, since a zone with daylight saving rules can
+  skip or repeat a clock time. `UTC` and `Fixed` zones always resolve
+  to `Unique`.
+  """
+  fn in_zone(self, zone: TimeZone) -> TimeZone.Resolution
+    offset = zone.offset_at(Timestamp.UNIX_EPOCH)
+    local = self.date.to_epoch_days() * MICROSECONDS_PER_DAY +
+      self.time.since_midnight().to_microseconds()
+    utc = local - offset.seconds * MICROSECONDS_PER_SECOND
+    timestamp = Timestamp.new(utc, Duration.Unit.Microseconds)
+    TimeZone.Resolution.Unique(DateTime{timestamp: timestamp, zone: zone})
+  end
+
+  @doc """
+  Reads a value from `text` through `format`, `ISO8601.Extended` by
+  default.
+  """
+  fn parse<F: LocalDateTime.Format>(text: String, format: F = ISO8601.Extended)
+    -> LocalDateTime ! LocalDateTime.Error
+
+    try format.parse_local_date_time(text)
+  end
+
+  @doc """
+  Returns the same time of day `days` later. See `Date.plus_days`.
+  """
+  fn plus_days(self, days: Int) -> LocalDateTime
+    LocalDateTime{date: self.date.plus_days(days), time: self.time}
+  end
+
+  @doc """
+  Returns the same time of day `months` later. See `Date.plus_months`.
+  """
+  fn plus_months(self, months: Int) -> LocalDateTime
+    LocalDateTime{date: self.date.plus_months(months), time: self.time}
+  end
+
+  @doc """
+  Renders this value through `format`, `ISO8601.Extended` by default.
+  """
+  fn to_string<F: LocalDateTime.Format>(self, format: F = ISO8601.Extended)
+    -> String
+
+    format.format_local_date_time(self)
+  end
+end
+
+@doc """
+A day of the week. The variants run Monday through Sunday, the ISO
+8601 order.
+"""
+enum Weekday
+  Monday
+  Tuesday
+  Wednesday
+  Thursday
+  Friday
+  Saturday
+  Sunday
+
+  @doc """
+  Returns the ISO 8601 number, 1 for Monday through 7 for Sunday.
+  """
+  fn iso_number(self) -> Int
+    match self
+      Weekday.Monday -> 1
+      Weekday.Tuesday -> 2
+      Weekday.Wednesday -> 3
+      Weekday.Thursday -> 4
+      Weekday.Friday -> 5
+      Weekday.Saturday -> 6
+      Weekday.Sunday -> 7
+    end
+  end
+end
+
+# Division that rounds toward negative infinity, so `-7 / 2` is `-4`.
+# `Int` division truncates toward zero, which is wrong for a day count
+# or a microsecond count before the epoch.
+priv fn floor_div(a: Int, b: Int) -> Int
+  q = a / b
+  a % b != 0 and (a < 0) != (b < 0) ? q - 1 : q
+end
+
+# The remainder that pairs with `floor_div`, always in `0..b - 1` for
+# a positive `b`.
+priv fn floor_mod(a: Int, b: Int) -> Int
+  a - floor_div(a, b) * b
+end

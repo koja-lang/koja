@@ -1,0 +1,148 @@
+alias Duration.Unit as TimeUnit
+alias Test.require
+
+# 2026-09-16T17:39:00Z.
+priv const REFERENCE_SECONDS: Int = 1_789_580_340
+
+priv fn reference(zone: TimeZone) -> DateTime
+  DateTime{
+    timestamp: Timestamp.new(REFERENCE_SECONDS, TimeUnit.Seconds),
+    zone: zone,
+  }
+end
+
+priv fn eastern -> TimeZone
+  TimeZone.Fixed(TimeZone.Offset{seconds: -5 * 3_600})
+end
+
+priv fn kolkata -> TimeZone
+  TimeZone.Fixed(TimeZone.Offset{seconds: 5 * 3_600 + 30 * 60})
+end
+
+test "DateTime projects civil fields through the zone offset"
+  utc = reference(TimeZone.UTC)
+  assert utc.date() == Date{day: 16, month: 9, year: 2026}
+  assert utc.time() == Time{hour: 17, microsecond: 0, minute: 39, second: 0}
+  assert utc.offset() == TimeZone.Offset.UTC
+
+  east = reference(eastern())
+  assert east.date() == Date{day: 16, month: 9, year: 2026}
+  assert east.time() == Time{hour: 12, microsecond: 0, minute: 39, second: 0}
+  assert east.offset() == TimeZone.Offset{seconds: -18_000}
+
+  india = reference(kolkata())
+  assert india.date() == Date{day: 16, month: 9, year: 2026}
+  assert india.time() == Time{hour: 23, microsecond: 0, minute: 9, second: 0}
+end
+
+test "DateTime civil projection crosses the date line"
+  late = DateTime{
+    timestamp: Timestamp.new(REFERENCE_SECONDS + 5 * 3_600, TimeUnit.Seconds),
+    zone: TimeZone.UTC,
+  }
+  assert late.time() == Time{hour: 22, microsecond: 0, minute: 39, second: 0}
+
+  ahead = late.in_zone(TimeZone.Fixed(TimeZone.Offset{seconds: 3 * 3_600}))
+  assert ahead.date() == Date{day: 17, month: 9, year: 2026}
+  assert ahead.time() == Time{hour: 1, microsecond: 0, minute: 39, second: 0}
+
+  early = DateTime{
+    timestamp: Timestamp.new(REFERENCE_SECONDS - 16 * 3_600, TimeUnit.Seconds),
+    zone: eastern(),
+  }
+  assert early.date() == Date{day: 15, month: 9, year: 2026}
+  assert early.time() == Time{hour: 20, microsecond: 0, minute: 39, second: 0}
+end
+
+test "DateTime civil projection floors before the epoch"
+  value = DateTime{
+    timestamp: Timestamp.new(-1, TimeUnit.Seconds),
+    zone: TimeZone.UTC,
+  }
+  assert value.date() == Date{day: 31, month: 12, year: 1969}
+  assert value.time() == Time{hour: 23, microsecond: 0, minute: 59, second: 59}
+
+  shifted = value.in_zone(eastern())
+  assert shifted.date() == Date{day: 31, month: 12, year: 1969}
+  assert shifted.time() ==
+    Time{hour: 18, microsecond: 0, minute: 59, second: 59}
+
+  epoch = DateTime{timestamp: Timestamp.UNIX_EPOCH, zone: TimeZone.UTC}
+  assert epoch.date() == Date.UNIX_EPOCH
+  assert epoch.time() == Time.MIDNIGHT
+end
+
+test "DateTime truncates nanoseconds to microseconds"
+  value = DateTime{
+    timestamp: Timestamp.new(1_999, TimeUnit.Nanoseconds),
+    zone: TimeZone.UTC,
+  }
+  assert value.time() == Time{hour: 0, microsecond: 1, minute: 0, second: 0}
+end
+
+test "DateTime equality is instant and zone"
+  assert reference(TimeZone.UTC) == reference(TimeZone.UTC)
+  assert reference(TimeZone.UTC) != reference(eastern())
+  assert reference(TimeZone.UTC).timestamp == reference(eastern()).timestamp
+  assert reference(TimeZone.UTC) !=
+    reference(TimeZone.UTC).plus(Duration.new(1, TimeUnit.Seconds))
+end
+
+test "DateTime.in_zone and to_utc keep the instant"
+  east = reference(eastern())
+  assert east.to_utc() == reference(TimeZone.UTC)
+  assert east.in_zone(kolkata()) == reference(kolkata())
+  assert east.in_zone(kolkata()).timestamp == east.timestamp
+  assert east.local() ==
+    Date{day: 16, month: 9, year: 2026}.at(
+      Time{hour: 12, microsecond: 0, minute: 39, second: 0},
+    )
+end
+
+test "DateTime.plus and minus are exact and keep the zone"
+  east = reference(eastern())
+  later = east.plus(Duration.new(36, TimeUnit.Hours))
+  assert later.zone == eastern()
+  assert later.timestamp ==
+    Timestamp.new(REFERENCE_SECONDS + 36 * 3_600, TimeUnit.Seconds)
+  assert later.date() == Date{day: 18, month: 9, year: 2026}
+  assert later.time() == Time{hour: 0, microsecond: 0, minute: 39, second: 0}
+  assert later.minus(Duration.new(36, TimeUnit.Hours)) == east
+  assert later.since(east) == Duration.new(36, TimeUnit.Hours)
+  assert east.since(later) == Duration.new(-36, TimeUnit.Hours)
+end
+
+test "DateTime.since ignores the zones"
+  assert reference(kolkata()).since(reference(eastern())) == Duration.ZERO
+end
+
+test "DateTime calendar arithmetic keeps the clock time in the zone"
+  east = reference(eastern())
+  tomorrow = east.plus_days(1).compatible()
+  assert tomorrow.zone == eastern()
+  assert tomorrow.date() == Date{day: 17, month: 9, year: 2026}
+  assert tomorrow.time() == east.time()
+  assert tomorrow.since(east) == Duration.new(24, TimeUnit.Hours)
+
+  next_month = east.plus_months(1).compatible()
+  assert next_month.date() == Date{day: 16, month: 10, year: 2026}
+  assert next_month.time() == east.time()
+
+  clamped = DateTime{
+    timestamp: Timestamp.new(1_769_904_000, TimeUnit.Seconds),
+    zone: TimeZone.UTC,
+  }
+  assert clamped.date() == Date{day: 1, month: 2, year: 2026}
+  assert clamped.plus_days(-1).compatible().plus_months(1).compatible().date() ==
+    Date{day: 28, month: 2, year: 2026}
+end
+
+test "DateTime.now reads the wall clock in the zone"
+  before = Timestamp.now()
+  value = DateTime.now(eastern())
+  assert value.zone == eastern()
+  assert value.timestamp.since(before).to_nanoseconds() >= 0
+  assert Timestamp.now().since(value.timestamp).to_nanoseconds() >= 0
+  same_day = try require(value.plus_days(0).unique())
+  assert same_day.time() == value.time()
+end

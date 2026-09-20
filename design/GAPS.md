@@ -281,24 +281,6 @@ runtime can wait on readiness with a bound.
 
 ---
 
-## `Timestamp` has no calendar formatting or parsing
-
-Found 2026-08-10 while building a JSON API that exchanges RFC 3339
-timestamps. `Timestamp` carries epoch microseconds and arithmetic,
-but there is no way to render a calendar date ("2026-08-10T14:00:00Z")
-or parse one back. Any service with a JSON surface needs both
-directions on day one, so the civil-calendar math (days-to-date,
-leap years, month lengths, UTC offsets) gets re-implemented from
-Howard Hinnant's algorithms in user code, along with a hand-rolled
-parser and its validation table.
-
-**Fix path:** the calendar and zone types in
-[DATETIME.md](DATETIME.md), where RFC 3339 parses to a `DateTime` and
-formats from one. A general format-string API can wait. RFC 3339 alone
-covers the JSON world.
-
----
-
 ## No UUID generation
 
 Found 2026-08-10. Public APIs hand out UUIDs as resource

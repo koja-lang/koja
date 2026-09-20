@@ -1,4 +1,4 @@
-//! Externs declared in `lib/global/src/time.koja`.
+//! Externs declared in `lib/global/src/time/time.koja`.
 
 use crate::externs::marshal::pass_through_externs;
 
