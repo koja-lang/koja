@@ -2,10 +2,11 @@
 //! offline sync every compiling command runs.
 //!
 //! `koja deps get` and `koja deps update` are the only paths that
-//! touch the network or write `koja.lock`. Everything else runs
-//! [`sync_project`], which verifies the lock against the manifest and
-//! re-materializes `deps/` from the mirror cache, erroring with an
-//! actionable message instead of fetching.
+//! write `koja.lock`. `koja deps outdated` reads the remotes and
+//! prints. Everything else runs [`sync_project`], which verifies the
+//! lock against the manifest and re-materializes `deps/` from the
+//! mirror cache, erroring with an actionable message instead of
+//! fetching.
 //!
 //! `deps/<Package>/` trees are read-only copies of an exact commit,
 //! stamped with a `.koja-rev` marker. A marker mismatch triggers a
@@ -14,6 +15,9 @@
 
 mod git;
 mod lock;
+mod outdated;
+
+pub(crate) use outdated::cmd_outdated;
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::os::unix::fs::PermissionsExt;

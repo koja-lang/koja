@@ -1,6 +1,6 @@
 # DateTime: Calendar and Zone Types on `Timestamp`
 
-**Status: steps 1 and 2 implemented (2026-09-16). Steps 3 and 4 are
+**Status: steps 1, 2, and 3 implemented (2026-09-20). Step 4 is
 open.** This document argues a position for the 0.19 breaking window:
 Koja gets civil date and time types, a zoned `DateTime`, and a
 `TimeZone` whose rules come from a separately versioned package. It
@@ -211,8 +211,8 @@ transition table, so a value of this type never consults a database.
 """
 enum TimeZone
   Fixed(TimeZone.Offset)
-  UTC
   Named(TimeZone.Rules)
+  UTC
 
   enum Error
     Ambiguous(DateTime, DateTime)
@@ -245,30 +245,88 @@ constant, so neither needs a function that returns a literal. A zone
 is built with its variant, `TimeZone.Fixed(offset)`, and there is no
 `fixed` constructor to learn beside it.
 
-`Named` is not in 0.19. When the rules package lands, adding the
-variant is a breaking change for every exhaustive `match zone` in user
-code, and that is the point. A program that matched `UTC` and `Fixed`
-and did calendar arithmetic on both has to decide what it does with a
-zone that has transitions.
+Adding `Named` was a breaking change for every exhaustive `match zone`
+in user code, and that is the point. A program that matched `UTC` and
+`Fixed` and did calendar arithmetic on both has to decide what it does
+with a zone that has transitions.
 
-@doc "An IANA zone's identifier and transition table. Built by a tz package."
+```koja
+@doc "An IANA zone's identifier, transitions, and the rule after the last one."
 struct TimeZone.Rules
-identifier: String
-transitions: List<TimeZone.Transition>
-final: TimeZone.Rule
+  final: TimeZone.Rule
+  identifier: String
+  initial: TimeZone.Offset
+  transitions: List<TimeZone.Transition>
+
+  fn offset_at(self, at: Timestamp) -> TimeZone.Offset
 end
 
-````
+@doc "From `at` until the next transition the zone is `offset` from UTC."
+struct TimeZone.Transition
+  at: Timestamp
+  offset: TimeZone.Offset
+end
+
+@doc "The offsets after the last transition. `daylight` is `None` for a zone with no ongoing DST."
+struct TimeZone.Rule
+  daylight: Option<TimeZone.Rule.Daylight>
+  standard: TimeZone.Offset
+
+  struct Daylight
+    offset: TimeZone.Offset
+    start: TimeZone.Rule.Point
+    stop: TimeZone.Rule.Point
+  end
+
+  @doc "POSIX `Mm.w.d/time`: the `week`th `weekday` of `month` (5 is the last), `seconds` after local midnight."
+  struct Point
+    month: Int
+    seconds: Int
+    week: Int
+    weekday: Weekday
+
+    fn at(self, year: Int, offset: TimeZone.Offset) -> Int
+  end
+
+  fn offset_at(self, seconds: Int) -> TimeZone.Offset
+end
+```
 
 `TimeZone.Rules` is plain data. Struct fields have no visibility of
 their own in Koja, and the transition table has nothing to hide: a
-rules package builds one from the identifier, the transition list,
-and the rule that applies after the last transition. That struct
-literal is the whole contract between the stdlib and a rules package. The stdlib never reads a file, never embeds a
-table, and never has a "current database." A `TimeZone.Named` value is
-a complete description of the zone and can be passed, stored in a
-struct, and sent to another process like any other value. The
+rules package builds one from the identifier, the offset before the
+first transition, the transition list, and the rule that applies after
+the last transition. That struct literal is the whole contract between
+the stdlib and a rules package. The stdlib never reads a file, never
+embeds a table, and never has a "current database." A `TimeZone.Named`
+value is a complete description of the zone and can be passed, stored
+in a struct, and sent to another process like any other value. The
 transition list is reference counted, so copying a zone costs nothing.
+
+The shape mirrors a TZif file (RFC 8536), which is what `zic` writes
+and what every other implementation reads. `initial` is the file's
+time type 0, the local mean time before the first transition. The
+transition list is the 64-bit data block with everything but the
+offset dropped. `Rule` is the POSIX TZ string in the footer, held as
+numbers so the stdlib parses no text. `Point.seconds` is a plain `Int`
+because the database uses times such as `M3.5.0/-1` and `/24`.
+
+`offset_at` on a `Named` zone binary searches the transitions for the
+last one at or before the instant. From the last transition on, the
+rule is evaluated for the instant's year: both points are turned into
+instants, `start` read on the standard clock and `stop` on the
+daylight clock, and the instant is in daylight time when it falls
+between them, or outside them for a southern hemisphere zone whose
+`start` comes after `stop` in the calendar. A zone with no transitions
+is its rule throughout.
+
+`LocalDateTime.in_zone` takes the offsets in force one day before and
+one day after the clock time, builds a candidate instant from each,
+and keeps a candidate when the zone really has that offset at that
+instant. Two candidates is `Ambiguous`, one is `Unique`, and none is
+`Gap`. The `Gap` payload reads the clock time on both clocks, so
+`compatible()` returns the instant one hour later, the way java.time
+does.
 
 ### Where the rules come from
 
@@ -279,14 +337,24 @@ zones come from a package:
 alias TZ.zone
 
 chicago = try zone("America/Chicago")
-````
+```
 
 `koja-lang/tz` embeds the compiled tz database, exposes
-`zone(identifier: String) -> TimeZone ! TZ.Error`, and releases a new
-version each time IANA does. A project adds it to `koja.toml` like any
-dependency and pins the version in `koja.lock`. A government moving a
-DST date with a month's notice becomes a dependency bump, not a
-compiler release.
+`zone(identifier: String) -> TimeZone ! TZ.Error`, `identifiers()`, and
+`IANA_VERSION`, and releases a new version each time IANA does. Its
+version is the IANA release as calver: `2026.3.0` is tzdata `2026c`,
+with the letter's index as the minor and a patch for fixes to the
+package itself. A project adds it to `koja.toml` like any dependency
+and pins the version in `koja.lock`. A government moving a DST date
+with a month's notice becomes a dependency bump, not a compiler
+release, and `koja deps outdated` reports when a newer tag exists.
+
+Inside the package each zone is one packed string of integers,
+decoded into `TimeZone.Rules` when `zone` is called. A `tz.generate`
+task reads the TZif files `zic` writes, packs them, checks that every
+string decodes back to the same rules, and writes `src/data/`. A
+daily workflow compares `IANA_VERSION` with IANA's latest release and
+opens the pull request that regenerates the data.
 
 This is Elixir's `tzdata` and `tz`, Ruby's `tzinfo-data`, and Python's
 `tzdata` on PyPI. Three ecosystems arrived at "the rules are a
@@ -514,17 +582,17 @@ Additive, after [TIME.md](TIME.md).
    rules package yet. Everything is testable against fixed offsets.
 2. **[DONE]** `DateTime`, the four `Format` protocols, and `ISO8601`.
    The GAPS entry closes. `auth_manager` can drop its RFC 3339 module.
-3. `TimeZone.Rules`, `Named`, and the `koja-lang/tz` package. The
-   package ships with a test that resolves a known gap and a known
-   overlap in a zone with a recent rule change.
+3. **[DONE]** `TimeZone.Rules`, `Named`, and the `koja-lang/tz`
+   package. The package ships with tests that resolve the Chicago gap
+   and overlap, read `America/Asuncion` after Paraguay's 2024 change,
+   and decode every packed zone.
 4. `postgres-koja` decodes the four column types.
 
 Steps 1 and 2 landed in one MR for 0.19, after two compiler changes
 they needed: a protocol can nest under a type (`Date.Format`), and a
-constant can nest under a type (`TimeZone.Offset.UTC`). Step 3 can be
-0.19 or 0.20 depending on how the release lands. Nothing in steps 1
-and 2 changes when it arrives except the `match zone` arms noted
-above.
+constant can nest under a type (`TimeZone.Offset.UTC`). Step 3 landed
+in 0.19 as well, with `koja deps outdated` beside it so a pinned data
+release can be seen to age.
 
 ## Rejected
 

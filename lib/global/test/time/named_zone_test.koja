@@ -1,0 +1,240 @@
+alias Duration.Unit as TimeUnit
+alias Test.require
+alias TimeZone.Offset
+alias TimeZone.Resolution
+alias TimeZone.Rule
+alias TimeZone.Transition
+
+priv const CDT: Int = -18_000
+priv const CST: Int = -21_600
+priv const LMT: Int = -21_036
+priv const TWO_AM: Int = 7_200
+
+priv fn at(seconds: Int) -> Timestamp
+  Timestamp.new(seconds, TimeUnit.Seconds)
+end
+
+priv fn offset(seconds: Int) -> Offset
+  Offset{seconds: seconds}
+end
+
+priv fn transition(seconds: Int, offset_seconds: Int) -> Transition
+  Transition{at: at(seconds), offset: offset(offset_seconds)}
+end
+
+# `CST6CDT,M3.2.0,M11.1.0`, the rule that ends the Chicago TZif file.
+priv fn chicago_rule -> Rule
+  Rule{
+    daylight: Option.Some(Rule.Daylight{
+      offset: offset(CDT),
+      start: Rule.Point{
+        month: 3,
+        seconds: TWO_AM,
+        week: 2,
+        weekday: Weekday.Sunday,
+      },
+      stop: Rule.Point{
+        month: 11,
+        seconds: TWO_AM,
+        week: 1,
+        weekday: Weekday.Sunday,
+      },
+    }),
+    standard: offset(CST),
+  }
+end
+
+# America/Chicago with the 2025 and 2026 transitions recorded and the
+# rule taking over from the last one.
+priv fn chicago -> TimeZone
+  TimeZone.Named(TimeZone.Rules{
+    final: chicago_rule(),
+    identifier: "America/Chicago",
+    initial: offset(LMT),
+    transitions: [
+      transition(1_741_507_200, CDT), transition(1_762_066_800, CST),
+      transition(1_772_956_800, CDT), transition(1_793_516_400, CST)
+    ],
+  })
+end
+
+# Asia/Tokyo with its history left out, so the rule covers every
+# instant.
+priv fn tokyo -> TimeZone
+  TimeZone.Named(TimeZone.Rules{
+    final: Rule{daylight: Option.None, standard: offset(32_400)},
+    identifier: "Asia/Tokyo",
+    initial: offset(33_539),
+    transitions: [],
+  })
+end
+
+# `<-04>4<-03>,M9.1.6/24,M4.1.6/24`, Santiago's rule. Daylight saving
+# spans the new year, and both points sit at 24:00.
+priv fn santiago_rule -> Rule
+  Rule{
+    daylight: Option.Some(Rule.Daylight{
+      offset: offset(-10_800),
+      start: Rule.Point{
+        month: 9,
+        seconds: 86_400,
+        week: 1,
+        weekday: Weekday.Saturday,
+      },
+      stop: Rule.Point{
+        month: 4,
+        seconds: 86_400,
+        week: 1,
+        weekday: Weekday.Saturday,
+      },
+    }),
+    standard: offset(-14_400),
+  }
+end
+
+priv fn local(year: Int, month: Int, day: Int, hour: Int, minute: Int)
+  -> LocalDateTime
+
+  Date{day: day, month: month, year: year}.at(
+    Time{hour: hour, microsecond: 0, minute: minute, second: 0},
+  )
+end
+
+test "Named zone reports its identifier"
+  assert chicago().identifier() == "America/Chicago"
+  assert tokyo().identifier() == "Asia/Tokyo"
+end
+
+test "Named offset_at reads the recorded transitions"
+  zone = chicago()
+  assert zone.offset_at(at(1_735_689_600)) == offset(LMT)
+  assert zone.offset_at(at(1_741_507_199)) == offset(LMT)
+  assert zone.offset_at(at(1_741_507_200)) == offset(CDT)
+  assert zone.offset_at(at(1_751_328_000)) == offset(CDT)
+  assert zone.offset_at(at(1_762_066_800)) == offset(CST)
+  assert zone.offset_at(at(1_767_225_600)) == offset(CST)
+  assert zone.offset_at(at(1_772_956_800)) == offset(CDT)
+end
+
+test "Named offset_at follows the rule after the last transition"
+  zone = chicago()
+  assert zone.offset_at(at(1_793_516_400)) == offset(CST)
+  assert zone.offset_at(at(1_796_083_200)) == offset(CST)
+  assert zone.offset_at(at(1_805_011_199)) == offset(CST)
+  assert zone.offset_at(at(1_805_011_200)) == offset(CDT)
+  assert zone.offset_at(at(1_814_400_000)) == offset(CDT)
+  assert zone.offset_at(at(1_825_570_799)) == offset(CDT)
+  assert zone.offset_at(at(1_825_570_800)) == offset(CST)
+end
+
+test "Named zone with no transitions is its rule throughout"
+  zone = tokyo()
+  assert zone.offset_at(at(-2_587_712_400)) == offset(32_400)
+  assert zone.offset_at(Timestamp.UNIX_EPOCH) == offset(32_400)
+  assert zone.offset_at(at(1_796_083_200)) == offset(32_400)
+end
+
+test "Rule handles daylight saving that spans the new year"
+  rule = santiago_rule()
+  assert rule.offset_at(1_799_971_200) == offset(-10_800)
+  assert rule.offset_at(1_815_609_600) == offset(-14_400)
+end
+
+test "Rule.Point finds the nth and the last weekday of a month"
+  second_sunday = Rule.Point{
+    month: 3,
+    seconds: 0,
+    week: 2,
+    weekday: Weekday.Sunday,
+  }
+  assert second_sunday.at(2026, Offset.UTC) ==
+    Date{day: 8, month: 3, year: 2026}.to_epoch_days() * 86_400
+
+  last_sunday = Rule.Point{
+    month: 10,
+    seconds: 3_600,
+    week: 5,
+    weekday: Weekday.Sunday,
+  }
+  assert last_sunday.at(2026, Offset.UTC) ==
+    Date{day: 25, month: 10, year: 2026}.to_epoch_days() * 86_400 + 3_600
+
+  shifted = Rule.Point{
+    month: 3,
+    seconds: TWO_AM,
+    week: 2,
+    weekday: Weekday.Sunday,
+  }
+  assert shifted.at(2026, offset(CST)) == 1_772_956_800
+end
+
+test "in_zone resolves a plain clock time to one instant"
+  value = try require(local(2026, 6, 15, 12, 0).in_zone(chicago()).unique())
+  assert value.timestamp == at(1_781_542_800)
+  assert value.offset() == offset(CDT)
+  assert value.local() == local(2026, 6, 15, 12, 0)
+end
+
+test "in_zone reports a skipped clock time as a gap"
+  match local(2026, 3, 8, 2, 30).in_zone(chicago())
+    Resolution.Gap(before, following) ->
+      assert before.timestamp == at(1_772_955_000)
+      assert following.timestamp == at(1_772_958_600)
+      assert following.local() == local(2026, 3, 8, 3, 30)
+      assert before.local() == local(2026, 3, 8, 1, 30)
+
+    other ->
+      fail "expected Gap, got #{other}"
+  end
+end
+
+test "in_zone reports a repeated clock time as ambiguous"
+  match local(2026, 11, 1, 1, 30).in_zone(chicago())
+    Resolution.Ambiguous(earlier, later) ->
+      assert earlier.timestamp == at(1_793_514_600)
+      assert later.timestamp == at(1_793_518_200)
+      assert earlier.offset() == offset(CDT)
+      assert later.offset() == offset(CST)
+      assert earlier.local() == later.local()
+
+    other ->
+      fail "expected Ambiguous, got #{other}"
+  end
+end
+
+test "in_zone stays unique on the edges of a transition"
+  start = try require(local(2026, 3, 8, 3, 0).in_zone(chicago()).unique())
+  assert start.timestamp == at(1_772_956_800)
+
+  before_gap = try require(local(2026, 3, 8, 1, 59).in_zone(chicago()).unique())
+  assert before_gap.offset() == offset(CST)
+
+  after_overlap = try require(
+    local(2026, 11, 1, 2, 0).in_zone(chicago()).unique(),
+  )
+  assert after_overlap.offset() == offset(CST)
+end
+
+test "plus_days across a transition returns the resolution"
+  saturday = try require(local(2026, 3, 7, 2, 30).in_zone(chicago()).unique())
+  assert saturday.timestamp == at(1_772_872_200)
+
+  match saturday.plus_days(1)
+    Resolution.Gap(_, following) ->
+      assert following.local() == local(2026, 3, 8, 3, 30)
+    other -> fail "expected Gap, got #{other}"
+  end
+
+  monday = try require(saturday.plus_days(2).unique())
+  assert monday.local() == local(2026, 3, 9, 2, 30)
+  assert monday.since(saturday) == Duration.new(47, TimeUnit.Hours)
+end
+
+test "ISO8601 writes the offset in force for a Named zone"
+  summer = try require(local(2026, 6, 15, 12, 0).in_zone(chicago()).unique())
+  assert summer.to_string() == "2026-06-15T12:00:00-05:00"
+
+  winter = try require(local(2026, 12, 15, 12, 0).in_zone(chicago()).unique())
+  assert winter.to_string() == "2026-12-15T12:00:00-06:00"
+  assert winter.to_string(ISO8601.Basic) == "20261215T120000-0600"
+end

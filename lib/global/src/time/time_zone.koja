@@ -1,20 +1,25 @@
+priv const DAYS_PER_WEEK: Int = 7
 priv const MAX_OFFSET_SECONDS: Int = 64_800
+priv const SECONDS_PER_DAY: Int = 86_400
 priv const SECONDS_PER_HOUR: Int = 3_600
 priv const SECONDS_PER_MINUTE: Int = 60
 
 @doc """
 The rules that map a `Timestamp` to a civil time and back. `UTC` and
-`Fixed` need no data, so a value of this type is complete on its own
-and never consults a database.
+`Fixed` need no data. `Named` carries an IANA identifier and its own
+transition table, so a value of this type is complete on its own and
+never consults a database.
 
-A zone with daylight saving rules is a later addition. It arrives as
-a new variant whose payload carries the IANA identifier and its
-transition table, built by a separately versioned package. Until
-then every zone has one offset, and `LocalDateTime.in_zone` always
-resolves to `Unique`.
+The stdlib ships `UTC` and `Fixed`. A `Named` zone comes from a
+rules package such as `koja-lang/tz`, which embeds the IANA database
+and builds a `TimeZone.Rules` for an identifier like
+`America/Chicago`. Placing a civil time in a `Named` zone can land in
+a gap or an overlap, which `LocalDateTime.in_zone` reports as a
+`TimeZone.Resolution`.
 """
 enum TimeZone
   Fixed(TimeZone.Offset)
+  Named(TimeZone.Rules)
   UTC
 
   @doc """
@@ -143,26 +148,176 @@ enum TimeZone
   end
 
   @doc """
-  Returns `UTC` for the UTC zone and the offset text, such as
+  The offsets a zone uses after its last recorded transition. A zone
+  that no longer observes daylight saving has `daylight: None` and
+  keeps `standard` forever. A zone that does has two `Point` values
+  that name the yearly switch on and switch off.
+
+  This is the POSIX TZ rule that ends a TZif file, held as numbers.
+  """
+  struct Rule
+    daylight: Option<TimeZone.Rule.Daylight>
+    standard: TimeZone.Offset
+
+    @doc """
+    The daylight half of a `Rule`: the offset in force during daylight
+    saving, and the points in each year when it starts and stops.
+    `start` is read on the standard clock and `stop` on the daylight
+    clock, the way POSIX defines them.
+    """
+    struct Daylight
+      offset: TimeZone.Offset
+      start: TimeZone.Rule.Point
+      stop: TimeZone.Rule.Point
+    end
+
+    @doc """
+    A moment that recurs every year, the POSIX `Mm.w.d/time` form.
+    `week` 1 is the first `weekday` of `month` and `week` 5 is the
+    last. `seconds` counts from local midnight of that day and can be
+    negative or past 24 hours, as the tz database allows.
+    """
+    struct Point
+      month: Int
+      seconds: Int
+      week: Int
+      weekday: Weekday
+
+      @doc """
+      Returns the moment this point names in `year`, as seconds since
+      the epoch on a clock that is `offset` from UTC.
+      """
+      fn at(self, year: Int, offset: TimeZone.Offset) -> Int
+        first = Date{day: 1, month: self.month, year: year}
+        first_weekday = first.day_of_week().iso_number() % DAYS_PER_WEEK
+        wanted = self.weekday.iso_number() % DAYS_PER_WEEK
+        day = 1 + (wanted - first_weekday + DAYS_PER_WEEK) % DAYS_PER_WEEK +
+          (self.week - 1) * DAYS_PER_WEEK
+        day = day > first.days_in_month() ? day - DAYS_PER_WEEK : day
+        date = Date{day: day, month: self.month, year: year}
+        date.to_epoch_days() * SECONDS_PER_DAY + self.seconds - offset.seconds
+      end
+    end
+
+    @doc """
+    Returns the offset this rule gives for the instant `seconds` since
+    the epoch.
+    """
+    fn offset_at(self, seconds: Int) -> TimeZone.Offset
+      match self.daylight
+        Option.None ->
+          self.standard
+
+        Option.Some(daylight) ->
+          year = Date.from_epoch_days(
+            floor_div(seconds + self.standard.seconds, SECONDS_PER_DAY),
+          ).year
+          start = daylight.start.at(year, self.standard)
+          stop = daylight.stop.at(year, daylight.offset)
+
+          in_daylight = start < stop
+            ? seconds >= start and seconds < stop
+            : seconds >= start or seconds < stop
+
+          in_daylight ? daylight.offset : self.standard
+      end
+    end
+  end
+
+  @doc """
+  An IANA zone's identifier, its offset before any transition, its
+  recorded transitions, and the rule that applies after the last one.
+  Plain data with nothing hidden, so a rules package builds one from
+  a struct literal and the stdlib never reads a file.
+
+  `transitions` is sorted by `at`. Before the first one the zone is at
+  `initial`, usually the local mean time of the zone's city. From a
+  transition until the next one the zone is at that transition's
+  offset. From the last one on, `final` takes over. A zone with no
+  transitions is `final` throughout.
+  """
+  struct Rules
+    final: TimeZone.Rule
+    identifier: String
+    initial: TimeZone.Offset
+    transitions: List<TimeZone.Transition>
+
+    @doc """
+    Returns the offset in force at `at`.
+    """
+    fn offset_at(self, at: Timestamp) -> TimeZone.Offset
+      seconds = epoch_seconds(at)
+      last = self.transitions.length() - 1
+      index = self.transition_index(seconds)
+
+      cond
+        index == last -> self.final.offset_at(seconds)
+        index < 0 -> self.initial
+        else -> self.transitions.get(index).unwrap().offset
+      end
+    end
+
+    # Index of the last transition at or before `seconds`, or -1 when
+    # every transition is later. Binary search, since a zone can carry
+    # a few hundred transitions.
+    priv fn transition_index(self, seconds: Int) -> Int
+      low = 0
+      high = self.transitions.length() - 1
+
+      while low <= high
+        middle = (low + high) / 2
+        transition = self.transitions.get(middle).unwrap()
+
+        if epoch_seconds(transition.at) <= seconds
+          low = middle + 1
+        else
+          high = middle - 1
+        end
+      end
+
+      high
+    end
+  end
+
+  @doc """
+  One change of offset in a zone's history. From `at` until the next
+  transition the zone is `offset` from UTC.
+  """
+  struct Transition
+    at: Timestamp
+    offset: TimeZone.Offset
+  end
+
+  @doc """
+  Returns `UTC` for the UTC zone, the IANA identifier such as
+  `America/Chicago` for a named zone, and the offset text, such as
   `+05:30`, for a fixed zone.
   """
   fn identifier(self) -> String
     match self
       TimeZone.Fixed(offset) -> offset.to_string()
+      TimeZone.Named(rules) -> rules.identifier
       TimeZone.UTC -> "UTC"
     end
   end
 
   @doc """
-  Returns the offset from UTC in force at `at`. For the zones the
-  stdlib ships the answer does not depend on `at`.
+  Returns the offset from UTC in force at `at`. For `UTC` and `Fixed`
+  the answer does not depend on `at`.
   """
   fn offset_at(self, at: Timestamp) -> TimeZone.Offset
     match self
       TimeZone.Fixed(offset) -> offset
+      TimeZone.Named(rules) -> rules.offset_at(at)
       TimeZone.UTC -> TimeZone.Offset.UTC
     end
   end
+end
+
+# Whole seconds since the epoch, floored so an instant just before the
+# epoch lands in the second before it.
+priv fn epoch_seconds(at: Timestamp) -> Int
+  floor_div(at.since_epoch.to_microseconds(), MICROSECONDS_PER_SECOND)
 end
 
 # Zero-pads a value in 0..99 to two digits.

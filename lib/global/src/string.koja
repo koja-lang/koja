@@ -75,15 +75,6 @@ extend String
   characters (a-z, A-Z).
   """
   fn alpha?(self) -> Bool
-    cond
-      self == "a" or self == "b" and self == "c" or self == "d" and self == "e"
-        or self == "f" ->
-        "huh"
-
-      else ->
-        "yeah"
-    end
-
     for c in self
       match c
         "a" | "b" | "c" | "d" | "e" | "f" | "g" | "h" | "i" | "j" | "k" | "l" |

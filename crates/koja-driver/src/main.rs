@@ -162,6 +162,13 @@ enum DepsAction {
     /// The only network step: build/check/run/test are strictly
     /// offline and materialize deps/ from koja.lock plus the cache.
     Get,
+    /// List dependencies whose remote has something newer than the pin
+    ///
+    /// A `tag` pin is compared against the remote's version tags, and
+    /// any other pin against the remote head. Prints one line per
+    /// outdated dependency and exits 1 when there is any, so CI can
+    /// use it as a check. Never writes koja.lock.
+    Outdated,
     /// Re-resolve refs against their remotes and update koja.lock
     Update {
         /// Package to update (all git dependencies when omitted)
@@ -223,6 +230,7 @@ fn main() {
             None => deps::cmd_status(project_root.as_deref()),
             Some(DepsAction::Clean { cache }) => deps::cmd_clean(project_root.as_deref(), cache),
             Some(DepsAction::Get) => deps::cmd_get(project_root.as_deref(), None),
+            Some(DepsAction::Outdated) => deps::cmd_outdated(project_root.as_deref()),
             Some(DepsAction::Update { name }) => deps::cmd_get(project_root.as_deref(), Some(name)),
         },
         Command::Doc(args) => dispatch_doc(args, project_root.as_deref()),
