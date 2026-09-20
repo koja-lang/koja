@@ -84,7 +84,7 @@ spreading the same changes across releases would cost one pass each.
   real offsets, so a skipped hour is `Gap` and a repeated one is
   `Ambiguous`. The data lives in the `koja-lang/tz` package, one packed
   string per zone, versioned as calver after the IANA release
-  (`2026.3.0` is tzdata `2026c`) with a daily workflow that opens the
+  (`2026.4.0` is tzdata `2026d`) with a daily workflow that opens the
   regeneration PR. `koja deps outdated` landed with it, so a project can
   see when a pinned tag has a newer release behind it.
 
@@ -109,6 +109,15 @@ spreading the same changes across releases would cost one pass each.
   [DATETIME.md](DATETIME.md), which uses it for `TimeZone.Offset.UTC`,
   `Date.UNIX_EPOCH`, and `Time.MIDNIGHT`. The zones themselves did not need
   it, since `TimeZone.UTC` is a variant.
+- Let a `const` hold a `List`, `Map`, or `Set` literal of constant
+  expressions. Field defaults already accept those shapes, so a user who
+  writes `const TABLE = ["a": 1]` and gets "limited to literals" is meeting
+  a gap, not a rule. The blocker is that constants inline at every use site,
+  which would allocate a fresh collection per reference. A collection
+  constant needs one allocation per constant instead, built once and shared,
+  which is the same piece a `List` constant needs. The `koja-lang/tz`
+  package is the first case that wanted it. With no static table, its
+  identifier lookup is a generated `match` over string literals per region.
 
 ### Testing
 

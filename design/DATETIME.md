@@ -278,7 +278,7 @@ struct TimeZone.Rule
     stop: TimeZone.Rule.Point
   end
 
-  @doc "POSIX `Mm.w.d/time`: the `week`th `weekday` of `month` (5 is the last), `seconds` after local midnight."
+  @doc "The POSIX `Mm.w.d/time` form. The `week`th `weekday` of `month`, `seconds` after local midnight. Week 5 is the last."
   struct Point
     month: Int
     seconds: Int
@@ -313,12 +313,12 @@ because the database uses times such as `M3.5.0/-1` and `/24`.
 
 `offset_at` on a `Named` zone binary searches the transitions for the
 last one at or before the instant. From the last transition on, the
-rule is evaluated for the instant's year: both points are turned into
+rule is evaluated for the instant's year. Both points are turned into
 instants, `start` read on the standard clock and `stop` on the
-daylight clock, and the instant is in daylight time when it falls
-between them, or outside them for a southern hemisphere zone whose
-`start` comes after `stop` in the calendar. A zone with no transitions
-is its rule throughout.
+daylight clock. The instant is in daylight time when it falls between
+them. A southern hemisphere zone has `start` after `stop` in the
+calendar, so there the instant is in daylight time when it falls
+outside them. A zone with no transitions is its rule throughout.
 
 `LocalDateTime.in_zone` takes the offsets in force one day before and
 one day after the clock time, builds a candidate instant from each,
@@ -342,9 +342,9 @@ chicago = try zone("America/Chicago")
 `koja-lang/tz` embeds the compiled tz database, exposes
 `zone(identifier: String) -> TimeZone ! TZ.Error`, `identifiers()`, and
 `IANA_VERSION`, and releases a new version each time IANA does. Its
-version is the IANA release as calver: `2026.3.0` is tzdata `2026c`,
-with the letter's index as the minor and a patch for fixes to the
-package itself. A project adds it to `koja.toml` like any dependency
+version is the IANA release as calver, so `2026.4.0` is tzdata
+`2026d`, with the letter's index as the minor and a patch for fixes to
+the package itself. A project adds it to `koja.toml` like any dependency
 and pins the version in `koja.lock`. A government moving a DST date
 with a month's notice becomes a dependency bump, not a compiler
 release, and `koja deps outdated` reports when a newer tag exists.
@@ -591,8 +591,8 @@ Additive, after [TIME.md](TIME.md).
 Steps 1 and 2 landed in one MR for 0.19, after two compiler changes
 they needed: a protocol can nest under a type (`Date.Format`), and a
 constant can nest under a type (`TimeZone.Offset.UTC`). Step 3 landed
-in 0.19 as well, with `koja deps outdated` beside it so a pinned data
-release can be seen to age.
+in 0.19 as well, with `koja deps outdated` beside it so a project can
+see when its pinned data release has a newer one behind it.
 
 ## Rejected
 

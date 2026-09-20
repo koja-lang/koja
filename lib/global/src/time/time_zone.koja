@@ -150,8 +150,8 @@ enum TimeZone
   @doc """
   The offsets a zone uses after its last recorded transition. A zone
   that no longer observes daylight saving has `daylight: None` and
-  keeps `standard` forever. A zone that does has two `Point` values
-  that name the yearly switch on and switch off.
+  keeps `standard` forever. A zone that does observe it has two
+  `Point` values that name the yearly switch on and switch off.
 
   This is the POSIX TZ rule that ends a TZif file, held as numbers.
   """
@@ -160,10 +160,10 @@ enum TimeZone
     standard: TimeZone.Offset
 
     @doc """
-    The daylight half of a `Rule`: the offset in force during daylight
-    saving, and the points in each year when it starts and stops.
-    `start` is read on the standard clock and `stop` on the daylight
-    clock, the way POSIX defines them.
+    The daylight half of a `Rule`. It holds the offset in force during
+    daylight saving and the points in each year when it starts and
+    stops. `start` is read on the standard clock and `stop` on the
+    daylight clock, the way POSIX defines them.
     """
     struct Daylight
       offset: TimeZone.Offset

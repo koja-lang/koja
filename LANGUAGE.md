@@ -1713,7 +1713,7 @@ Every other command is offline. `build`, `check`, `run`, `test`, and `doc` verif
 error: dependency `postgres` is not pinned in koja.lock (koja.toml changed?), run `koja deps get`
 ```
 
-`koja deps` prints each dependency with its pin and local state. `koja deps update [name]` re-resolves refs against their remotes (moving a `branch` pin forward). `koja deps outdated` reads each remote and lists what is newer than the pin: a `tag` pin is compared against the remote's `X.Y.Z` tags (`tz 2026.3.0 -> 2026.4.0`), and any other pin against the remote head. It exits 1 when anything is outdated and never writes `koja.lock`. `koja deps clean` removes `deps/`. With `--cache` it also purges the global mirror cache.
+`koja deps` prints each dependency with its pin and local state. `koja deps update [name]` re-resolves refs against their remotes (moving a `branch` pin forward). `koja deps outdated` reads each remote and lists what is newer than the pin. A `tag` pin is compared against the remote's `X.Y.Z` tags and prints `tz 2026.3.0 -> 2026.4.0`, and any other pin is compared against the remote head. It exits 1 when anything is outdated and never writes `koja.lock`. `koja deps clean` removes `deps/`. With `--cache` it also purges the global mirror cache.
 
 Private repositories work through the ambient git configuration: SSH agents for `git@` URLs, credential helpers for https, and `insteadOf` rewrites in CI. Credentials never appear in `koja.toml` or `koja.lock`.
 

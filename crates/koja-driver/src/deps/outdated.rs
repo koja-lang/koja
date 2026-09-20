@@ -1,4 +1,4 @@
-//! `koja deps outdated`: compare every git dependency's pin with what
+//! `koja deps outdated` compares every git dependency's pin with what
 //! its remote offers now.
 //!
 //! A `tag` pin is compared against the remote's tag list as versions,
