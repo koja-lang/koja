@@ -361,14 +361,50 @@ struct LocalDateTime
   `TimeZone.Resolution`, since a zone with daylight saving rules can
   skip or repeat a clock time. `UTC` and `Fixed` zones always resolve
   to `Unique`.
+
+  A `Named` zone is checked against the offsets in force a day before
+  and a day after this clock time. Each offset proposes an instant,
+  and an instant counts when the zone really has that offset then.
+  Two instants is an overlap, one is the common case, and none is a
+  gap.
   """
   fn in_zone(self, zone: TimeZone) -> TimeZone.Resolution
-    offset = zone.offset_at(Timestamp.UNIX_EPOCH)
     local = self.date.to_epoch_days() * MICROSECONDS_PER_DAY +
       self.time.since_midnight().to_microseconds()
-    utc = local - offset.seconds * MICROSECONDS_PER_SECOND
-    timestamp = Timestamp.new(utc, Duration.Unit.Microseconds)
-    TimeZone.Resolution.Unique(DateTime{timestamp: timestamp, zone: zone})
+    day_before = zone.offset_at(
+      Timestamp.new(local - MICROSECONDS_PER_DAY, Duration.Unit.Microseconds),
+    )
+    day_after = zone.offset_at(
+      Timestamp.new(local + MICROSECONDS_PER_DAY, Duration.Unit.Microseconds),
+    )
+    first = LocalDateTime.candidate(local, day_before, zone)
+    second = LocalDateTime.candidate(local, day_after, zone)
+
+    match (first, second)
+      (Option.Some(a), Option.Some(b)) ->
+        if a == b
+          TimeZone.Resolution.Unique(a)
+        else
+          earlier = LocalDateTime.earlier(a, b)
+          later = LocalDateTime.later(a, b)
+          TimeZone.Resolution.Ambiguous(earlier, later)
+        end
+
+      (Option.Some(a), Option.None) ->
+        TimeZone.Resolution.Unique(a)
+
+      (Option.None, Option.Some(b)) ->
+        TimeZone.Resolution.Unique(b)
+
+      (Option.None, Option.None) ->
+        # The clock time was skipped. Read it on both clocks anyway.
+        # The offset from the day after gives the earlier instant, and
+        # the one from the day before gives the later instant, which
+        # is where a forward shift lands.
+        before = LocalDateTime.instant(local, day_after, zone)
+        following = LocalDateTime.instant(local, day_before, zone)
+        TimeZone.Resolution.Gap(before, following)
+    end
   end
 
   @doc """
@@ -402,6 +438,35 @@ struct LocalDateTime
     -> String
 
     format.format_local_date_time(self)
+  end
+
+  # The instant that reads as `local` when `offset` is in force, if
+  # the zone really has that offset at that instant.
+  priv fn candidate(local: Int, offset: TimeZone.Offset, zone: TimeZone)
+    -> Option<DateTime>
+
+    value = LocalDateTime.instant(local, offset, zone)
+    value.offset() == offset ? Option.Some(value) : Option.None
+  end
+
+  priv fn earlier(a: DateTime, b: DateTime) -> DateTime
+    a.since(b).to_microseconds() < 0 ? a : b
+  end
+
+  # `local` microseconds on a clock `offset` from UTC, as an instant in
+  # `zone`.
+  priv fn instant(local: Int, offset: TimeZone.Offset, zone: TimeZone)
+    -> DateTime
+
+    utc = local - offset.seconds * MICROSECONDS_PER_SECOND
+    DateTime{
+      timestamp: Timestamp.new(utc, Duration.Unit.Microseconds),
+      zone: zone,
+    }
+  end
+
+  priv fn later(a: DateTime, b: DateTime) -> DateTime
+    a.since(b).to_microseconds() < 0 ? b : a
   end
 end
 

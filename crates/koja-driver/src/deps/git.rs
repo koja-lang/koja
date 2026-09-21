@@ -147,6 +147,21 @@ pub(crate) fn resolve_ref(url: &str, reference: &GitRef) -> Result<String, Strin
     }
 }
 
+/// Every tag name on the remote, without the `refs/tags/` prefix.
+/// Peeled `^{}` entries for annotated tags are dropped, so each tag
+/// appears once.
+pub(crate) fn list_tags(url: &str) -> Result<Vec<String>, String> {
+    let refs = ls_remote(url, &["refs/tags/*"])?;
+    Ok(refs
+        .into_iter()
+        .filter_map(|(_, name)| {
+            name.strip_prefix("refs/tags/")
+                .filter(|tag| !tag.ends_with("^{}"))
+                .map(str::to_string)
+        })
+        .collect())
+}
+
 /// Export the tree at `rev` from a mirror into `dest` (created if
 /// missing). Clean source tree, no `.git`.
 pub(crate) fn export_tree(mirror: &Path, rev: &str, dest: &Path) -> Result<(), String> {

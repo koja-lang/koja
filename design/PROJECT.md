@@ -53,9 +53,10 @@ Dependencies are declared in `koja.toml`.
 `koja.lock` pins each git dependency to an exact commit. Path dependencies do
 not receive lock entries.
 
-`koja deps get` and `koja deps update` are the only commands that access the
-network or change the lockfile. Build, check, run, test, doc, LSP, and shell
-loading are offline. A missing or stale lock entry produces an actionable
+`koja deps get` and `koja deps update` are the only commands that change the
+lockfile. `koja deps outdated` also reads the remotes, to report pins with
+something newer, and writes nothing. Build, check, run, test, doc, LSP, and
+shell loading are offline. A missing or stale lock entry produces an actionable
 error instead of fetching implicitly.
 
 ## Materialization and cache

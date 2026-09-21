@@ -117,10 +117,12 @@ end
 impl DateTime.Format for ISO8601
   @doc """
   Writes the local date and time in the value's zone, then `Z` for
-  the `UTC` zone or the offset as `+HH:MM` (`+HHMM` for `Basic`).
+  the `UTC` zone or the offset in force as `+HH:MM` (`+HHMM` for
+  `Basic`). A `Named` zone writes its offset at that instant, so the
+  text is valid RFC 3339 and reads back as a `Fixed` zone.
   """
   fn format_date_time(self, value: DateTime) -> String
-    "#{self.write_date(value.date())}T#{self.write_time(value.time())}#{self.write_offset(value.zone)}"
+    "#{self.write_date(value.date())}T#{self.write_time(value.time())}#{self.write_offset(value)}"
   end
 
   @doc """
@@ -416,21 +418,25 @@ extend ISO8601
     end
   end
 
-  priv fn write_offset(self, zone: TimeZone) -> String
-    match zone
-      TimeZone.Fixed(offset) ->
-        sign = offset.seconds < 0 ? "-" : "+"
-        total = offset.seconds < 0 ? -offset.seconds : offset.seconds
-        hours = ISO8601.pad(total / 3_600, 2)
-        minutes = ISO8601.pad(total % 3_600 / 60, 2)
+  # `Z` for `UTC`, otherwise the numeric offset in force. A `Named`
+  # zone writes the offset it has at `value`, since ISO 8601 has no
+  # place for an identifier.
+  priv fn write_offset(self, value: DateTime) -> String
+    match value.zone
+      TimeZone.UTC -> "Z"
+      _ -> self.write_numeric_offset(value.offset())
+    end
+  end
 
-        match self
-          ISO8601.Basic -> "#{sign}#{hours}#{minutes}"
-          ISO8601.Extended -> "#{sign}#{hours}:#{minutes}"
-        end
+  priv fn write_numeric_offset(self, offset: TimeZone.Offset) -> String
+    sign = offset.seconds < 0 ? "-" : "+"
+    total = offset.seconds < 0 ? -offset.seconds : offset.seconds
+    hours = ISO8601.pad(total / 3_600, 2)
+    minutes = ISO8601.pad(total % 3_600 / 60, 2)
 
-      TimeZone.UTC ->
-        "Z"
+    match self
+      ISO8601.Basic -> "#{sign}#{hours}#{minutes}"
+      ISO8601.Extended -> "#{sign}#{hours}:#{minutes}"
     end
   end
 
