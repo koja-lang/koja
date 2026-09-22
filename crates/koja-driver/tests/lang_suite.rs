@@ -931,8 +931,8 @@ fn run_process_io(backend: &str) {
 /// `IO.gets` must end a line at end of input instead of spinning on the
 /// empty reads `Fd.read` returns there. It lives here because `gets`
 /// reads `STDIN` directly and a stdlib test cannot redirect it. When
-/// 0.19 changes `gets` to return `Option<String>` over a caller-supplied
-/// reader, this moves to `lib/global/test`.
+/// `design/IO.md` changes `gets` to return `Option<String>` over a
+/// caller-supplied reader, this moves to `lib/global/test`.
 #[test]
 fn lang_io_gets_ends_at_eof() {
     let dir = lang_dir().join("io_gets");

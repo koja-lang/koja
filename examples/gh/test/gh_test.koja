@@ -1,109 +1,54 @@
 alias Gh.GitHub.Repo
 alias Gh.GitHub.User
-alias JSON.Value
+alias Test.require
 
 # Trimmed-down captures of real GitHub API payloads; `null` and
 # missing keys exercise the zero-value folding in `Fields`.
 const USER_JSON: String = "{\"login\": \"octocat\", \"name\": \"The Octocat\", \"company\": \"@github\", \"blog\": \"https://github.blog\", \"location\": \"San Francisco\", \"bio\": null, \"public_repos\": 8, \"followers\": 9999, \"following\": 9, \"created_at\": \"2011-01-25T18:44:36Z\"}"
 const REPO_JSON: String = "{\"full_name\": \"octocat/Hello-World\", \"description\": \"My first repository on GitHub!\", \"fork\": false, \"language\": null, \"stargazers_count\": 2500, \"forks_count\": 1300, \"updated_at\": \"2026-06-01T12:00:00Z\"}"
 
-struct FieldsTest
-  @test "text folds null and missing keys to empty string"
-  fn test_text_zero_values ! String
-    value = try decode_fixture(USER_JSON)
+test "text folds null and missing keys to empty string"
+  value = try require(JSON.decode(USER_JSON))
 
-    if Fields.text(value, "bio") != ""
-      fail "null bio should read as empty"
-    end
-
-    if Fields.text(value, "no_such_key") != ""
-      fail "missing key should read as empty"
-    end
-
-    if Fields.text(value, "login") != "octocat"
-      fail "expected login to be octocat"
-    end
-  end
-
-  @test "number and flag read typed fields"
-  fn test_number_and_flag ! String
-    value = try decode_fixture(REPO_JSON)
-
-    if Fields.number(value, "stargazers_count") != 2500
-      fail "expected 2500 stars"
-    end
-
-    if Fields.number(value, "missing") != 0
-      fail "missing number should read as 0"
-    end
-
-    if Fields.flag(value, "fork")
-      fail "expected fork to be false"
-    end
-  end
+  assert Fields.text(value, "bio") == ""
+  assert Fields.text(value, "no_such_key") == ""
+  assert Fields.text(value, "login") == "octocat"
 end
 
-struct RenderTest
-  @test "user payload renders a profile"
-  fn test_render_user ! String
-    value = try decode_fixture(USER_JSON)
-    rendered = Cli.render_user(User.from_json(value))
+test "number and flag read typed fields"
+  value = try require(JSON.decode(REPO_JSON))
 
-    if not rendered.contains?("The Octocat (@octocat)")
-      fail "missing title line in:\n#{rendered}"
-    end
-
-    if not rendered.contains?("joined: 2011-01-25")
-      fail "missing joined date in:\n#{rendered}"
-    end
-
-    if not rendered.contains?("8 public repos · 9999 followers · 9 following")
-      fail "missing counts line in:\n#{rendered}"
-    end
-  end
-
-  @test "repo payload renders a detail view"
-  fn test_render_repo ! String
-    value = try decode_fixture(REPO_JSON)
-    rendered = Cli.render_repo(Repo.from_json(value))
-
-    if not rendered.contains?("octocat/Hello-World")
-      fail "missing repo name in:\n#{rendered}"
-    end
-
-    if not rendered.contains?("stars: 2500")
-      fail "missing stars in:\n#{rendered}"
-    end
-
-    if not rendered.contains?("My first repository on GitHub!")
-      fail "missing description in:\n#{rendered}"
-    end
-  end
-
-  @test "unknown commands and missing args fail with usage hints"
-  fn test_dispatch_errors ! String
-    match Cli.dispatch(["frobnicate"])
-      Result.Ok(_) ->
-        fail "unknown command should fail"
-
-      Result.Err(e) ->
-        if not e.contains?("unknown command: frobnicate")
-          fail "unexpected message: #{e}"
-        end
-    end
-
-    match Cli.dispatch(["user"])
-      Result.Ok(_) ->
-        fail "missing login should fail"
-
-      Result.Err(e) ->
-        if not e.contains?("missing argument")
-          fail "unexpected message: #{e}"
-        end
-    end
-  end
+  assert Fields.number(value, "stargazers_count") == 2500
+  assert Fields.number(value, "missing") == 0
+  assert not Fields.flag(value, "fork")
 end
 
-priv fn decode_fixture(raw: String) -> Value ! String
-  JSON.decode(raw) rescue e -> fail "fixture did not decode: #{e}"
+test "user payload renders a profile"
+  value = try require(JSON.decode(USER_JSON))
+  rendered = Cli.render_user(User.from_json(value))
+
+  assert rendered.contains?("The Octocat (@octocat)"), rendered
+  assert rendered.contains?("joined: 2011-01-25"), rendered
+  assert rendered.contains?("8 public repos · 9999 followers · 9 following"), rendered
+end
+
+test "repo payload renders a detail view"
+  value = try require(JSON.decode(REPO_JSON))
+  rendered = Cli.render_repo(Repo.from_json(value))
+
+  assert rendered.contains?("octocat/Hello-World"), rendered
+  assert rendered.contains?("stars: 2500"), rendered
+  assert rendered.contains?("My first repository on GitHub!"), rendered
+end
+
+test "unknown commands and missing args fail with usage hints"
+  match Cli.dispatch(["frobnicate"])
+    Result.Ok(_) -> fail "unknown command should fail"
+    Result.Err(e) -> assert e.contains?("unknown command: frobnicate"), e
+  end
+
+  match Cli.dispatch(["user"])
+    Result.Ok(_) -> fail "missing login should fail"
+    Result.Err(e) -> assert e.contains?("missing argument"), e
+  end
 end

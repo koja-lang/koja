@@ -1,58 +1,32 @@
-struct JsonUtilTest
-  @test "parse_url extracts a url from a JSON body"
-  fn test_parse_url_ok ! String
-    url = JsonUtil.parse_url("{\"url\": \"https://example.com\"}")
-      rescue e -> fail "expected Ok, got error `#{e}`"
+alias Test.require
 
-    if url != "https://example.com"
-      fail "got unexpected url `#{url}`"
-    end
-  end
+test "parse_url extracts a url from a JSON body"
+  url = try require(JsonUtil.parse_url("{\"url\": \"https://example.com\"}"))
+  assert url == "https://example.com"
+end
 
-  @test "parse_url rejects a missing url field"
-  fn test_parse_url_missing ! String
-    match JsonUtil.parse_url("{\"href\": \"https://example.com\"}")
-      Result.Err(_) -> ()
-      Result.Ok(_) -> fail "expected an error for a missing url"
-    end
-  end
+test "parse_url rejects a missing url field"
+  assert JsonUtil.parse_url("{\"href\": \"https://example.com\"}").err?()
+end
 
-  @test "parse_url rejects a non-string url"
-  fn test_parse_url_wrong_type ! String
-    match JsonUtil.parse_url("{\"url\": 42}")
-      Result.Err(_) -> ()
-      Result.Ok(_) -> fail "expected an error for a non-string url"
-    end
-  end
+test "parse_url rejects a non-string url"
+  assert JsonUtil.parse_url("{\"url\": 42}").err?()
+end
 
-  @test "parse_url rejects invalid JSON"
-  fn test_parse_url_invalid ! String
-    match JsonUtil.parse_url("not json")
-      Result.Err(_) -> ()
-      Result.Ok(_) -> fail "expected an error for invalid JSON"
-    end
-  end
+test "parse_url rejects invalid JSON"
+  assert JsonUtil.parse_url("not json").err?()
+end
 
-  @test "Link encoding serializes every field"
-  fn test_link_encoding ! String
-    link = Link{
-      code: "abc123",
-      created_at: "2026-01-01 00:00:00+00",
-      hits: 7,
-      url: "https://example.com",
-    }
-    encoded = JSON.encode(link)
+test "Link encoding serializes every field"
+  link = Link{
+    code: "abc123",
+    created_at: "2026-01-01 00:00:00+00",
+    hits: 7,
+    url: "https://example.com",
+  }
+  encoded = JSON.encode(link)
 
-    if not encoded.contains?("\"code\":\"abc123\"")
-      fail "missing code in `#{encoded}`"
-    end
-
-    if not encoded.contains?("\"hits\":7")
-      fail "missing hits in `#{encoded}`"
-    end
-
-    if not encoded.contains?("\"short_path\":\"/abc123\"")
-      fail "missing short_path in `#{encoded}`"
-    end
-  end
+  assert encoded.contains?("\"code\":\"abc123\""), encoded
+  assert encoded.contains?("\"hits\":7"), encoded
+  assert encoded.contains?("\"short_path\":\"/abc123\""), encoded
 end

@@ -348,7 +348,7 @@ Found 2026-08-28. None blocking, each with a workaround:
   line.** Both return `""`, so a line-oriented filter reading
   stdin cannot tell where input stops. Workaround is reading
   `STDIN` directly and treating an empty read as end of input.
-  0.19 changes `gets` to return `Option<String>` over a
+  [IO.md](IO.md) changes `gets` to return `Option<String>` over a
   caller-supplied reader, which also moves the `io_gets` lang
   fixture into the stdlib test suite.
 

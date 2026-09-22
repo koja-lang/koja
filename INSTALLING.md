@@ -48,7 +48,7 @@ steps:
   - run: koja test
 ```
 
-`koja-version-file` reads the version from `koja.toml` or `.tool-versions`, and `koja-version` pins one directly: an exact version, or a line like `0.18` that installs the newest matching release. The action also registers a problem matcher, so compile diagnostics annotate pull requests. See the [action README](https://github.com/koja-lang/setup-koja#readme) for all inputs.
+`koja-version-file` reads the version from `koja.toml` or `.tool-versions`, and `koja-version` pins one directly: an exact version, or a line like `0.19` that installs the newest matching release. The action also registers a problem matcher, so compile diagnostics annotate pull requests. See the [action README](https://github.com/koja-lang/setup-koja#readme) for all inputs.
 
 ### Docker
 

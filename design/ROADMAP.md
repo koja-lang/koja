@@ -148,9 +148,9 @@ The design is accepted in [TESTING.md](TESTING.md).
   library exists solely as a static archive still compiles. The CI recipes
   run both, which turns every test suite into a parity check between the
   backends.
-- **[DONE]** Deprecate `@test` in 0.19 for removal in 0.20. Done. The stdlib and the
-  `koja new` scaffold migrated by hand, and every remaining annotation
-  warns. The examples migrate after the release. No formatter rewrite.
+- **[DONE]** Deprecate `@test` in 0.19 for removal in 0.20. Done. The stdlib, the
+  examples, and the `koja new` scaffold migrated by hand, and every
+  remaining annotation warns. No formatter rewrite.
 
 ### Language server
 

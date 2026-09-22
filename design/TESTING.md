@@ -636,10 +636,8 @@ otherwise. Skipped tests do not affect it.
 - No formatter rewrite and no migration command. Flattening a wrapper struct
   into `test` blocks changes name resolution for helpers, which is not a
   trivia change, and turning `if x != y` then `fail` into `assert x == y`
-  loses or reshapes the message. The stdlib's tests and the `koja new`
-  scaffold migrated by hand in the 0.19 cycle. The examples migrate after
-  0.19 ships, so a reader on the release still sees the form the release
-  notes describe.
+  loses or reshapes the message. The stdlib's tests, the examples, and the
+  `koja new` scaffold migrated by hand in the 0.19 cycle.
 - `test` and `assert` are keywords. Neither was used as an identifier in
   the stdlib or the language suite. The annotation parser keeps accepting
   `@test` while the token exists.
