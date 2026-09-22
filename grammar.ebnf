@@ -58,13 +58,15 @@ test_decl = "test" , string_lit , { statement } , "end" ;
 (* 2. Type declarations                                                       *)
 (* ========================================================================== *)
 
-(* Nested types: `struct Owner.Nested` at top level, or a struct/enum
-   declared inside the owner's body (single-segment name, owner prefix
-   implied). References always use the qualified name. *)
+(* Nested declarations: `struct Owner.Nested` at top level, or a struct,
+   enum, protocol, or constant declared inside the owner's body
+   (single-segment name, owner prefix implied). References always use
+   the qualified name. *)
 
 decl_path = TYPE_IDENT , { "." , TYPE_IDENT } ;
 
-struct_member = struct_field | function_decl | struct_decl | enum_decl | test_decl ;
+struct_member = struct_field | function_decl | struct_decl | enum_decl
+              | protocol_decl | constant_decl | test_decl ;
 
 struct_decl = { annotation } , [ "priv" ] , "struct" , decl_path , [ type_params ] ,
               [ ":" , conformance_list ] ,
@@ -77,7 +79,8 @@ conformance_list = type_expr , { "," , type_expr } ;
 
 struct_field = IDENT , ":" , type_expr , [ "=" , expr ] ;
 
-enum_member = enum_variant | function_decl | struct_decl | enum_decl | test_decl ;
+enum_member = enum_variant | function_decl | struct_decl | enum_decl
+            | protocol_decl | constant_decl | test_decl ;
 
 enum_decl = { annotation } , [ "priv" ] , "enum" , decl_path , [ type_params ] ,
             [ ":" , conformance_list ] ,
@@ -89,15 +92,19 @@ enum_variant = TYPE_IDENT                                           (* unit *)
              | TYPE_IDENT , "{" , struct_field , { "," , struct_field } , "}" ; (* struct *)
 
 (* Builtin types: compiler-owned representations (`String`, `List<T>`).
-   Always public. The body admits only functions and tests. *)
+   Always public. The body admits functions, constants, and tests. *)
 
 builtin_decl = { annotation } , "builtin" , decl_path , [ type_params ] ,
-               { function_decl | test_decl } ,
+               { function_decl | constant_decl | test_decl } ,
                "end" ;
 
 type_params = "<" , type_param , { "," , type_param } , ">" ;
 
-type_param = TYPE_IDENT , [ ":" , TYPE_IDENT , { "&" , TYPE_IDENT } ] ;
+(* A bound is a protocol, which can be nested (`T: Date.Format`) or
+   generic (`T: Process<M>`). *)
+type_param = TYPE_IDENT , [ ":" , type_bounds ] ;
+
+type_bounds = primary_type_expr , { "&" , primary_type_expr } ;
 
 type_alias_decl = { annotation } , [ "priv" ] , "type" , TYPE_IDENT , "=" , type_expr ;
 
@@ -118,7 +125,9 @@ alias_path = { ( IDENT | TYPE_IDENT ) , "." } , TYPE_IDENT , { "." , TYPE_IDENT 
 (* 3. Protocols                                                               *)
 (* ========================================================================== *)
 
-protocol_decl = { annotation } , [ "priv" ] , "protocol" , TYPE_IDENT , [ type_params ] ,
+(* Same dotted-path naming as `struct_decl` (`protocol Date.Format`). A
+   protocol can also sit inside the owner's body. *)
+protocol_decl = { annotation } , [ "priv" ] , "protocol" , decl_path , [ type_params ] ,
                 { protocol_method } ,
                 "end" ;
 
@@ -140,9 +149,17 @@ protocol_method = { annotation } , "fn" , IDENT , [ type_params ] ,
    extend blocks declaring the same method name on the same type is a hard
    compile error, regardless of which packages they live in. *)
 
-impl_block = "impl" , type_expr , "for" , type_expr ,
+impl_block = "impl" , type_expr , "for" , impl_target ,
              { impl_member } ,
              "end" ;
+
+(* The target of an impl can bound the type parameters it introduces
+   (`impl Equality for List<T: Equality>`). A bound applies only to a
+   bare single-segment argument. Any other target is a plain type_expr. *)
+impl_target = named_type , "<" , impl_target_arg , { "," , impl_target_arg } , ">"
+            | type_expr ;
+
+impl_target_arg = type_expr , [ ":" , type_bounds ] ;
 
 extend_block = "extend" , type_expr ,
                { impl_member } ,
@@ -551,9 +568,13 @@ comment = "#" , { any_char_except_newline } ;
 (* 17. Other top-level declarations                                           *)
 (* ========================================================================== *)
 
-(* Constant names accept both IDENT and TYPE_IDENT: the convention is
-   SCREAMING_CASE (`MAX_SIZE`, `STDOUT`), which lexes as TYPE_IDENT. *)
-constant_decl = { annotation } , [ "priv" ] , "const" , ( IDENT | TYPE_IDENT ) , [ ":" , type_expr ] , "=" , expr ;
+(* Constant names accept both IDENT and TYPE_IDENT. The convention is
+   SCREAMING_SNAKE_CASE (`MAX_SIZE`, `STDOUT`), which lexes as TYPE_IDENT. 
+   The name takes an owner path (`const Duration.ZERO = ...`) for a constant
+   nested under a type, the same as `struct_decl`. *)
+constant_decl = { annotation } , [ "priv" ] , "const" , constant_path , [ ":" , type_expr ] , "=" , expr ;
+
+constant_path = { TYPE_IDENT , "." } , ( IDENT | TYPE_IDENT ) ;
 
 
 (* ========================================================================== *)
