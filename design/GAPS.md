@@ -385,6 +385,56 @@ function, carries no evaluation order questions, and keeps the
 
 ---
 
+## Struct literal defaults stop at the package boundary
+
+Found 2026-09-23 while wiring an `open_telemetry` package into remem.
+A struct literal is an eligible default field value, but only when
+its type lives in the same package. A qualified path fails the
+eligibility check before the literal is looked at:
+
+```koja
+struct Trace
+  tracer: Tracer = OpenTelemetry.Tracer{ref: Option.None}
+  # error: default field values are limited to literals ...
+end
+```
+
+The same literal with a same-package type passes, `Option.None`
+inside it included. The check sees the `OpenTelemetry.` prefix and
+stops treating the expression as a struct literal.
+
+The constant route around it has its own bug. A `const` whose struct
+literal holds `Option.None` fails to unify the field type:
+
+```koja
+struct Simple
+  ref: Option<Int>
+
+  const EMPTY: Simple = Simple{ref: Option.None}
+  # error: constant value type `Global.Option` does not match
+  # annotation `Global.Option`
+end
+```
+
+The constant path infers `Option.None` with an unbound type parameter
+and compares it against `Option<Int>` without unifying. The
+diagnostic prints both sides without their type arguments, so the
+two look identical. `Option.Some(1)` is rejected separately as a
+payload variant, which is the rule.
+
+Consequence: a package cannot offer a "do nothing" value of its own
+type as a default in a consumer's struct. Remem holds its tracer as
+`Option<Tracer>` and matches at every call site.
+
+**Fix path:** two small changes. Let the default eligibility walk
+accept a struct literal whose type is a qualified path, the same way
+it accepts a qualified constant. In the constant resolver, unify the
+literal's field types against the declared struct's field types
+before the annotation check, and print type arguments in the
+mismatch diagnostic.
+
+---
+
 ## `koja doc` does not render protocol conformances
 
 Found 2026-09-07 in a stdlib doc audit. Doc extraction skips
