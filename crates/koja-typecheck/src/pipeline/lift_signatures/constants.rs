@@ -22,7 +22,7 @@ use crate::pipeline::resolve::coercion::{
     Mismatch, check_compatible_stamping, check_float_literal_finite,
 };
 use crate::pipeline::resolve::literals::{SegmentKind, resolve_segment};
-use crate::pipeline::resolve::types::{lookup_type, names_struct};
+use crate::pipeline::resolve::types::{lookup_type, names_struct, peel_alias};
 use crate::registry::{
     ConstantDefinition, GlobalKind, GlobalRegistry, ResolvedStructField, ResolvedVariantData,
 };
@@ -150,7 +150,15 @@ fn resolve_constant_value(
             type_path,
             variant,
             data,
-        } => enum_variant_type(type_path, variant, data, expr.span, scope, diagnostics),
+        } => enum_variant_type(
+            type_path,
+            variant,
+            data,
+            expected,
+            expr.span,
+            scope,
+            diagnostics,
+        ),
         ExprKind::StructConstruction { type_path, fields } => {
             struct_construction_type(type_path, fields, expr.span, scope, diagnostics)
         }
@@ -192,8 +200,8 @@ fn resolve_constant_value(
                 diagnostics.push(Diagnostic::error(
                     format!(
                         "constant value type `{}` does not match annotation `{}`",
-                        render_type(&ty, scope.registry),
-                        render_type(expected, scope.registry),
+                        render_resolved(&ty, scope.registry),
+                        render_resolved(expected, scope.registry),
                     ),
                     expr.span,
                 ));
@@ -356,6 +364,7 @@ fn enum_variant_type(
     type_path: &[Name],
     variant: &Name,
     data: &mut EnumConstructionData,
+    expected: Option<&ResolvedType>,
     span: Span,
     scope: ResolutionScope<'_>,
     diagnostics: &mut Vec<Diagnostic>,
@@ -398,7 +407,38 @@ fn enum_variant_type(
         return ResolvedType::unresolved();
     }
     let _ = resolved;
-    ResolvedType::leaf(Resolution::Global(enum_id))
+    if entry.type_params.is_empty() {
+        return ResolvedType::leaf(Resolution::Global(enum_id));
+    }
+    match expected.map(|ty| peel_alias(ty, scope.registry)) {
+        Some(
+            expected @ ResolvedType::Named {
+                resolution: Resolution::Global(id),
+                ..
+            },
+        ) if id == enum_id => expected,
+        Some(other) => {
+            diagnostics.push(Diagnostic::error(
+                format!(
+                    "`{name}.{variant}` is a `{}` value, but `{}` is expected",
+                    entry.identifier.qualified_name(),
+                    render_resolved(&other, scope.registry),
+                ),
+                span,
+            ));
+            ResolvedType::unresolved()
+        }
+        None => {
+            diagnostics.push(Diagnostic::error(
+                format!(
+                    "cannot infer the type arguments of `{name}.{variant}`. Add a type \
+                     annotation to the constant",
+                ),
+                span,
+            ));
+            ResolvedType::unresolved()
+        }
+    }
 }
 
 fn struct_construction_type(
@@ -472,36 +512,4 @@ fn validate_struct_fields(
         }
     }
     ok
-}
-
-/// Render a resolved type for a constant diagnostic. A global names
-/// its qualified identifier, and every other resolution renders a
-/// placeholder, since a constant's type can only be a global.
-fn render_type(ty: &ResolvedType, registry: &GlobalRegistry) -> String {
-    match ty {
-        ResolvedType::Anonymous(_) | ResolvedType::Union(_) => render_resolved(ty, registry),
-        ResolvedType::Named {
-            resolution: Resolution::Global(id),
-            ..
-        } => registry
-            .get(*id)
-            .map(|e| e.identifier.qualified_name())
-            .unwrap_or_else(|| format!("<id {id}>")),
-        ResolvedType::Named {
-            resolution: Resolution::Local(local_id),
-            ..
-        } => format!("<local {local_id}>"),
-        ResolvedType::Named {
-            resolution: Resolution::TypeParam { owner, index },
-            ..
-        } => registry
-            .type_param_name(*owner, *index)
-            .map(str::to_string)
-            .unwrap_or_else(|| format!("<typeparam {owner}#{index}>")),
-        ResolvedType::Named {
-            resolution: Resolution::Unresolved,
-            ..
-        }
-        | ResolvedType::Unresolved => "<unresolved>".to_string(),
-    }
 }

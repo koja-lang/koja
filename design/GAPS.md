@@ -400,38 +400,44 @@ end
 ```
 
 The same literal with a same-package type passes, `Option.None`
-inside it included. The check sees the `OpenTelemetry.` prefix and
-stops treating the expression as a struct literal.
+inside it included. The parser reads `Pkg.Type{...}` as a
+struct-shaped enum variant construction, because it has the same
+syntax as `Enum.Variant{...}`. The lift shape check accepts only
+unit variants, so it rejects the literal before resolve can rewrite
+it into a struct construction.
 
-The constant route around it has its own bug. A `const` whose struct
-literal holds `Option.None` fails to unify the field type:
+Workaround: the package exports a constant and the consumer uses it
+as the default. A qualified constant is an eligible default.
 
 ```koja
-struct Simple
-  ref: Option<Int>
+struct Tracer
+  ref: Option<Ref>
 
-  const EMPTY: Simple = Simple{ref: Option.None}
-  # error: constant value type `Global.Option` does not match
-  # annotation `Global.Option`
+  const NOOP: Tracer = Tracer{ref: Option.None}
+end
+
+struct Trace
+  tracer: OpenTelemetry.Tracer = OpenTelemetry.Tracer.NOOP
 end
 ```
 
-The constant path infers `Option.None` with an unbound type parameter
-and compares it against `Option<Int>` without unifying. The
-diagnostic prints both sides without their type arguments, so the
-two look identical. `Option.Some(1)` is rejected separately as a
-payload variant, which is the rule.
+**Open design question:** accepting the `Pkg.Type{...}` form also
+lets `Enum.Variant{...}` through the lift check. Defaults allow unit
+variants only, but that rule appears to come from constants. The IR
+constant pool has no payload-variant value, and defaults never enter
+the pool. Two directions:
 
-Consequence: a package cannot offer a "do nothing" value of its own
-type as a default in a consumer's struct. Remem holds its tracer as
-`Option<Tracer>` and matches at every call site.
+- Keep defaults unit-variant only, and have resolve reject a
+  struct-shaped variant that stays an enum construction.
+- Allow payload variants whose contents are eligible defaults, both
+  struct-shaped and tuple (`Option.Some(Duration.ZERO)`).
 
-**Fix path:** two small changes. Let the default eligibility walk
-accept a struct literal whose type is a qualified path, the same way
-it accepts a qualified constant. In the constant resolver, unify the
-literal's field types against the declared struct's field types
-before the annotation check, and print type arguments in the
-mismatch diagnostic.
+A related idea: resolve each default once, in the declaring file,
+against the declared field type, and substitute the type parameters
+per instantiation in the IR the way generic function bodies are.
+That would remove the per-site re-resolution and the alias
+restriction on defaults, and lift would no longer need a syntax-only
+shape check.
 
 ---
 

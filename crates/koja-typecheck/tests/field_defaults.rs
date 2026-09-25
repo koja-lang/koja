@@ -240,6 +240,40 @@ fn cross_package_default_resolves_in_declaring_package() {
 }
 
 #[test]
+fn cross_package_constant_default_holds_generic_unit_variant() {
+    let result = check_packages(
+        &[
+            (
+                "Lib",
+                "lib.koja",
+                "
+                struct Tracer
+                  ref: Option<Int>
+
+                  const NOOP: Tracer = Tracer{ref: Option.None}
+                end
+                ",
+            ),
+            (
+                PACKAGE,
+                "main.koja",
+                "
+                struct Trace
+                  tracer: Lib.Tracer = Lib.Tracer.NOOP
+                end
+
+                fn build() -> Trace
+                  Trace{}
+                end
+                ",
+            ),
+        ],
+        ParseMode::File,
+    );
+    result.expect("a package constant holding `Option.None` should be a consumer's default");
+}
+
+#[test]
 fn enum_struct_variant_defaults_fill() {
     let source = "
         enum Shape

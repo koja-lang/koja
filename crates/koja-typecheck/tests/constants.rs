@@ -37,6 +37,71 @@ fn primitive_string_and_struct_literal_constants_typecheck() {
 }
 
 #[test]
+fn generic_unit_variant_constants_take_annotation_type_args() {
+    let source = "
+        struct Simple
+          ref: Option<Int>
+
+          const EMPTY: Simple = Simple{ref: Option.None}
+        end
+
+        const NOTHING: Option<Int> = Option.None
+
+        Simple.EMPTY
+        ";
+    typecheck(&dedent(source));
+}
+
+#[test]
+fn unannotated_generic_unit_variant_constant_diagnoses() {
+    let source = "
+        const NOTHING = Option.None
+
+        0
+        ";
+
+    assert_script_fails_with(
+        source,
+        &["cannot infer the type arguments of `Option.None`"],
+    );
+}
+
+#[test]
+fn generic_unit_variant_against_other_type_diagnoses() {
+    let source = "
+        const NOTHING: String = Option.None
+
+        0
+        ";
+
+    assert_script_fails_with(
+        source,
+        &["`Option.None` is a `Global.Option` value, but `Global.String` is expected"],
+    );
+}
+
+#[test]
+fn constant_mismatch_renders_type_arguments() {
+    let source = "
+        struct Point
+          x: Int
+          y: Int
+        end
+
+        const P: Option<Int> = Point{x: 0, y: 0}
+
+        0
+        ";
+
+    assert_script_fails_with(
+        source,
+        &[
+            "constant value type `TestApp.Point` does not match annotation `Global.Option<Global.Int>`",
+        ],
+    );
+}
+
+#[test]
 fn constant_annotation_mismatch_diagnoses() {
     let source = "
         struct Point
