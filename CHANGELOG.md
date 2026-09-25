@@ -9,8 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- A constant can hold a unit variant of a generic enum. `const NOTHING: Option<Int> = Option.None` and `const EMPTY: Slot = Slot{ref: Option.None}` take their type arguments from the annotation or the field type. A generic unit variant with neither is an error that asks for an annotation. A package can now export a constant such as `Tracer.NOOP` for a consumer to use as a field default.
-- The constant type mismatch error prints type arguments, so `Global.Option<Global.Int>` no longer shows as `Global.Option`.
+- Constants can hold `Option.None`, directly or in a struct field, such as `const EMPTY: Slot = Slot{ref: Option.None}`.
+- Constant type errors show the full type, such as `Option<Int>`, instead of only `Option`.
 
 ## [0.19.0] - 2026-09-22
 

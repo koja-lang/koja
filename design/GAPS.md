@@ -399,45 +399,20 @@ struct Trace
 end
 ```
 
-The same literal with a same-package type passes, `Option.None`
-inside it included. The parser reads `Pkg.Type{...}` as a
-struct-shaped enum variant construction, because it has the same
-syntax as `Enum.Variant{...}`. The lift shape check accepts only
-unit variants, so it rejects the literal before resolve can rewrite
-it into a struct construction.
+`Pkg.Type{...}` parses the same as `Enum.Variant{...}`, and the lift
+check accepts only unit variants, so it rejects the literal before
+resolve can tell the two apart.
 
-Workaround: the package exports a constant and the consumer uses it
-as the default. A qualified constant is an eligible default.
+Workaround: the package exports a constant such as
+`const NOOP: Tracer = Tracer{ref: Option.None}`, and the consumer
+writes `tracer: OpenTelemetry.Tracer = OpenTelemetry.Tracer.NOOP`.
 
-```koja
-struct Tracer
-  ref: Option<Ref>
-
-  const NOOP: Tracer = Tracer{ref: Option.None}
-end
-
-struct Trace
-  tracer: OpenTelemetry.Tracer = OpenTelemetry.Tracer.NOOP
-end
-```
-
-**Open design question:** accepting the `Pkg.Type{...}` form also
-lets `Enum.Variant{...}` through the lift check. Defaults allow unit
-variants only, but that rule appears to come from constants. The IR
-constant pool has no payload-variant value, and defaults never enter
-the pool. Two directions:
-
-- Keep defaults unit-variant only, and have resolve reject a
-  struct-shaped variant that stays an enum construction.
-- Allow payload variants whose contents are eligible defaults, both
-  struct-shaped and tuple (`Option.Some(Duration.ZERO)`).
-
-A related idea: resolve each default once, in the declaring file,
-against the declared field type, and substitute the type parameters
-per instantiation in the IR the way generic function bodies are.
-That would remove the per-site re-resolution and the alias
-restriction on defaults, and lift would no longer need a syntax-only
-shape check.
+**Open question:** once the lift check accepts `Pkg.Type{...}`,
+`Enum.Variant{...}` gets through too. Either resolve rejects it, or
+defaults start to accept payload variants. The unit-only rule comes
+from the constant pool, which defaults never enter. A larger option
+is to resolve each default once in its declaring file, which would
+also remove the alias restriction on defaults.
 
 ---
 
