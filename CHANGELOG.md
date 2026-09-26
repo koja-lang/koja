@@ -5,6 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+
+- `koja format` puts one blank line between the fields (or enum variants) of a type and its nested constants. Consecutive constants still stack.
+
+### Fixed
+
+- Constants can hold `Option.None`, directly or in a struct field, such as `const EMPTY: Slot = Slot{ref: Option.None}`.
+- Constant type errors show the full type, such as `Option<Int>`, instead of only `Option`.
+
 ## [0.19.0] - 2026-09-22
 
 ### Added

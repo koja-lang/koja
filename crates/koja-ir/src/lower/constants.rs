@@ -14,10 +14,12 @@ use crate::binary_packing::pack_integer_segment;
 use crate::constant::IRConstantValue;
 use crate::enum_decl::IRVariantTag;
 use crate::function::IRSymbol;
-use crate::types::ConstValue;
+use crate::generics::Instantiation;
+use crate::types::{ConstValue, IRType};
 
 use super::binary_literal::{ClassifiedSegment, ast_endianness_to_ir, classify_segment};
 use super::ops::{int_const_at_width, parse_int_literal};
+use super::package::resolved_type_to_ir_type;
 
 /// Translate a top-level `const NAME = <rhs>` into a pool entry, or
 /// `None` for primitives (which inline at use sites). Each
@@ -28,13 +30,14 @@ pub(super) fn lower_constant_pool_entry(
     constant: &Constant,
     package: &str,
     registry: &GlobalRegistry,
+    instantiations: &mut Vec<Instantiation>,
 ) -> Option<(IRSymbol, IRConstantValue)> {
     let identifier = Identifier::new(package, name_texts(&constant.path));
     let (id, entry) = registry.lookup(&identifier)?;
     if !matches!(entry.kind, GlobalKind::Constant(Some(_))) {
         return None;
     }
-    let value = constant_value_from_registry(id, registry)?;
+    let value = constant_value_from_registry(id, registry, instantiations)?;
     if !pools_in_constant_pool(&value) {
         return None;
     }
@@ -66,12 +69,13 @@ pub(super) fn pools_in_constant_pool(value: &IRConstantValue) -> bool {
 pub(super) fn constant_value_from_registry(
     id: GlobalRegistryId,
     registry: &GlobalRegistry,
+    instantiations: &mut Vec<Instantiation>,
 ) -> Option<IRConstantValue> {
     let entry = registry.get(id)?;
     let GlobalKind::Constant(Some(def)) = &entry.kind else {
         return None;
     };
-    lower_constant_value(&def.value, registry)
+    lower_constant_value(&def.value, registry, instantiations)
 }
 
 /// Recursively translate an already-resolved constant `Expr` into an
@@ -81,9 +85,13 @@ pub(super) fn constant_value_from_registry(
 /// `literal_coercion` annotation drives the resulting `ConstValue::*`
 /// width. Absent annotation, primitives keep their default 64-bit
 /// head.
-fn lower_constant_value(expr: &Expr, registry: &GlobalRegistry) -> Option<IRConstantValue> {
+fn lower_constant_value(
+    expr: &Expr,
+    registry: &GlobalRegistry,
+    instantiations: &mut Vec<Instantiation>,
+) -> Option<IRConstantValue> {
     match &expr.kind {
-        ExprKind::Group { expr: inner } => lower_constant_value(inner, registry),
+        ExprKind::Group { expr: inner } => lower_constant_value(inner, registry, instantiations),
         ExprKind::Literal { value } => Some(IRConstantValue::Primitive(literal_to_const(
             value,
             literal_width(expr),
@@ -110,7 +118,7 @@ fn lower_constant_value(expr: &Expr, registry: &GlobalRegistry) -> Option<IRCons
             {
                 return Some(IRConstantValue::Primitive(folded));
             }
-            let inner = lower_constant_value(operand, registry)?;
+            let inner = lower_constant_value(operand, registry, instantiations)?;
             negate_primitive(inner)
         }
         ExprKind::EnumConstruction { variant, .. } => {
@@ -126,7 +134,11 @@ fn lower_constant_value(expr: &Expr, registry: &GlobalRegistry) -> Option<IRCons
                 return None;
             };
             let (tag, _) = enum_def.lookup_variant(variant.as_str())?;
-            let symbol = IRSymbol::from_identifier(&entry.identifier);
+            let IRType::Enum(symbol) =
+                resolved_type_to_ir_type(&expr.resolution, registry, instantiations)
+            else {
+                return None;
+            };
             Some(IRConstantValue::EnumVariant {
                 tag: IRVariantTag(tag as u8),
                 ty: symbol,
@@ -147,7 +159,7 @@ fn lower_constant_value(expr: &Expr, registry: &GlobalRegistry) -> Option<IRCons
             let mut canonical: Vec<Option<IRConstantValue>> = vec![None; struct_def.fields.len()];
             for init in fields {
                 let (index, _) = struct_def.lookup_field(init.name.as_str())?;
-                let value = lower_constant_value(&init.value, registry)?;
+                let value = lower_constant_value(&init.value, registry, instantiations)?;
                 canonical[index as usize] = Some(value);
             }
             let fields = canonical.into_iter().collect::<Option<Vec<_>>>()?;

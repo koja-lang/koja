@@ -27,7 +27,7 @@ use koja_ast::token::Token;
 
 use attach::{CommentTable, Slot};
 use comments::leading_docs;
-use seq::{SeqEntry, Spacing, vertical};
+use seq::{Group, SeqEntry, Spacing, vertical};
 use util::*;
 
 /// Converts a parsed file into a `Doc` tree ready for rendering. `tokens`
@@ -135,6 +135,7 @@ impl Printer {
             doc,
             end_line: key.end.line,
             force_blank: block,
+            group: Group::Member,
             is_block: block,
             leading: self.comments.take(key, Slot::Leading),
             start_line,

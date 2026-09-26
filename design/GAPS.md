@@ -399,39 +399,20 @@ struct Trace
 end
 ```
 
-The same literal with a same-package type passes, `Option.None`
-inside it included. The check sees the `OpenTelemetry.` prefix and
-stops treating the expression as a struct literal.
+`Pkg.Type{...}` parses the same as `Enum.Variant{...}`, and the lift
+check accepts only unit variants, so it rejects the literal before
+resolve can tell the two apart.
 
-The constant route around it has its own bug. A `const` whose struct
-literal holds `Option.None` fails to unify the field type:
+Workaround: the package exports a constant such as
+`const NOOP: Tracer = Tracer{ref: Option.None}`, and the consumer
+writes `tracer: OpenTelemetry.Tracer = OpenTelemetry.Tracer.NOOP`.
 
-```koja
-struct Simple
-  ref: Option<Int>
-
-  const EMPTY: Simple = Simple{ref: Option.None}
-  # error: constant value type `Global.Option` does not match
-  # annotation `Global.Option`
-end
-```
-
-The constant path infers `Option.None` with an unbound type parameter
-and compares it against `Option<Int>` without unifying. The
-diagnostic prints both sides without their type arguments, so the
-two look identical. `Option.Some(1)` is rejected separately as a
-payload variant, which is the rule.
-
-Consequence: a package cannot offer a "do nothing" value of its own
-type as a default in a consumer's struct. Remem holds its tracer as
-`Option<Tracer>` and matches at every call site.
-
-**Fix path:** two small changes. Let the default eligibility walk
-accept a struct literal whose type is a qualified path, the same way
-it accepts a qualified constant. In the constant resolver, unify the
-literal's field types against the declared struct's field types
-before the annotation check, and print type arguments in the
-mismatch diagnostic.
+**Open question:** once the lift check accepts `Pkg.Type{...}`,
+`Enum.Variant{...}` gets through too. Either resolve rejects it, or
+defaults start to accept payload variants. The unit-only rule comes
+from the constant pool, which defaults never enter. A larger option
+is to resolve each default once in its declaring file, which would
+also remove the alias restriction on defaults.
 
 ---
 

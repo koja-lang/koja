@@ -58,7 +58,7 @@ fn nested_protocol_in_both_spellings_is_canonical() {
 }
 
 #[test]
-fn nested_constants_stack_like_fields() {
+fn nested_constants_group_apart_from_fields() {
     assert_fmt(
         "
         struct Span
@@ -77,6 +77,7 @@ fn nested_constants_stack_like_fields() {
         "
         struct Span
           value: Int
+
           const ZERO = Span{value: 0}
           priv const limit: Int = 100
 
@@ -89,6 +90,51 @@ fn nested_constants_stack_like_fields() {
 
         builtin Int
           const MAX = 9223372036854775807
+        end
+    ",
+    );
+}
+
+#[test]
+fn nested_constants_group_apart_from_variants() {
+    assert_fmt(
+        "
+        enum Direction
+          North
+          South
+          const DEFAULT = Direction.North
+          const COUNT = 2
+        end
+    ",
+        "
+        enum Direction
+          North
+          South
+
+          const DEFAULT = Direction.North
+          const COUNT = 2
+        end
+    ",
+    );
+}
+
+#[test]
+fn nested_constants_before_fields_group_apart() {
+    assert_fmt(
+        "
+        struct Slot
+          const EMPTY = Slot{ref: Option.None}
+          ref: Option<Int>
+
+          size: Int
+        end
+    ",
+        "
+        struct Slot
+          const EMPTY = Slot{ref: Option.None}
+
+          ref: Option<Int>
+          size: Int
         end
     ",
     );

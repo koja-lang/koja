@@ -15,8 +15,19 @@ struct Point
   y: Int
 end
 
+struct Slot
+  ref: Option<Int>
+
+  const EMPTY: Slot = Slot{ref: Option.None}
+end
+
+struct Holder
+  slot: Slot = Slot.EMPTY
+end
+
 const HEADING = Direction.North
 const ORIGIN = Point{x: 0, y: 0}
+const NOTHING: Option<Int> = Option.None
 
 fn direction_name(d: Direction) -> String
   match d
@@ -36,3 +47,7 @@ DEBUG.print()
 direction_name(HEADING).print()
 ORIGIN.x.print()
 ORIGIN.y.print()
+
+NOTHING.none?().print()
+Slot.EMPTY.ref.none?().print()
+Holder{}.slot.ref.none?().print()

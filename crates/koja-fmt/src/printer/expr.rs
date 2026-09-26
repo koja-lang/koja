@@ -9,7 +9,7 @@ use koja_ast::span::Span;
 use super::Printer;
 use super::attach::Slot;
 use super::comments::{leading_docs, trailing_doc};
-use super::seq::{SeqEntry, element_lines, field_lines, push_stragglers};
+use super::seq::{Group, SeqEntry, element_lines, field_lines, push_stragglers};
 use super::util::*;
 
 impl Printer {
@@ -866,6 +866,7 @@ impl Printer {
                 doc,
                 end_line: link.span.end.line,
                 force_blank: false,
+                group: Group::Member,
                 is_block: false,
                 leading: self.comments.take(receiver.span, Slot::Leading),
                 start_line: link.span.start.line,

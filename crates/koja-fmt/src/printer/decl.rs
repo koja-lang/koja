@@ -9,7 +9,7 @@ use koja_ast::span::Span;
 use super::Printer;
 use super::attach::Slot;
 use super::comments::trailing_doc;
-use super::seq::{SeqEntry, Spacing, field_lines, vertical};
+use super::seq::{Group, SeqEntry, Spacing, field_lines, vertical};
 use super::util::*;
 
 impl Printer {
@@ -402,8 +402,16 @@ impl Printer {
     /// Members print in source order. The AST keeps fields, nested
     /// types, functions, and `test` blocks in separate lists, so the
     /// entries arrive grouped by kind and sort back by line here.
+    /// Members render in source order. A run of fields and a run of
+    /// bare constants are two groups, so the first member of a new
+    /// group gets a blank line before it.
     fn type_body_to_doc(&mut self, mut entries: Vec<SeqEntry>, owner: Span) -> Doc {
         entries.sort_by_key(|entry| entry.start_line);
+        for i in 1..entries.len() {
+            if entries[i].group != entries[i - 1].group {
+                entries[i].force_blank = true;
+            }
+        }
         let dangling = self.comments.take(owner, Slot::Dangling);
         let body = if entries.is_empty() && dangling.is_empty() {
             nil()
@@ -430,16 +438,21 @@ impl Printer {
     }
 
     /// A nested type or protocol is a block and gets blank lines
-    /// around it. A bare nested constant is one line and stacks like
-    /// a field. An annotated one is a block, the same rule the top
-    /// level applies to constants.
+    /// around it. A bare nested constant is one line and stacks with
+    /// the other constants, and one blank line separates that run from
+    /// the fields (see `type_body_to_doc`). An annotated constant is a
+    /// block, the same rule the top level applies to constants.
     fn member_nested_entry(&mut self, item: &Item) -> SeqEntry {
         let doc = self.item_to_doc(item);
         let block = match item {
             Item::Constant(c) => !c.annotations.is_empty(),
             _ => true,
         };
-        self.entry(*item_span(item), item_start_line(item), block, doc)
+        let mut entry = self.entry(*item_span(item), item_start_line(item), block, doc);
+        if matches!(item, Item::Constant(_)) && !block {
+            entry.group = Group::Constant;
+        }
+        entry
     }
 
     fn member_test_entry(&mut self, t: &TestDecl) -> SeqEntry {

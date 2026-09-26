@@ -13,6 +13,17 @@ use koja_ast::ast::Comment;
 
 use super::comments::{leading_docs, trailing_doc};
 
+/// Which run of stacked children a one-line child belongs to. A type
+/// body separates its runs with one blank line while the children
+/// inside a run stay stacked.
+#[derive(Clone, Copy, PartialEq)]
+pub(super) enum Group {
+    /// Fields, enum variants, and every child outside a type body.
+    Member,
+    /// A bare nested constant.
+    Constant,
+}
+
 /// One sequence child with its attached comments and layout facts.
 pub(super) struct SeqEntry {
     pub(super) doc: Doc,
@@ -20,6 +31,7 @@ pub(super) struct SeqEntry {
     pub(super) end_line: u32,
     /// Forces a blank line before this child regardless of the source.
     pub(super) force_blank: bool,
+    pub(super) group: Group,
     /// Blank lines read better around this child (declarations, `if`,
     /// `match`, ...).
     pub(super) is_block: bool,
@@ -85,10 +97,7 @@ pub(super) fn vertical(entries: Vec<SeqEntry>, spacing: Spacing, dangling: Vec<C
         }
         // `force_blank` demands a blank before its own entry only.
         // `is_block` wants space on both sides.
-        prev_forces = match spacing {
-            Spacing::Preserve => entry.is_block,
-            Spacing::Tight => entry.force_blank,
-        };
+        prev_forces = entry.is_block;
         prev_end = Some(entry.end_line);
     }
 

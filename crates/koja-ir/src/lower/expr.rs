@@ -592,13 +592,14 @@ fn lower_constant_ident(
     registry: &GlobalRegistry,
     output: &mut LowerOutput,
 ) -> (ValueId, IRBlockId) {
-    let value = constant_value_from_registry(constant_id, registry).unwrap_or_else(|| {
-        panic!(
-            "IR lower: constant `{name}` (id {constant_id}) reaches lower \
+    let value = constant_value_from_registry(constant_id, registry, &mut output.instantiations)
+        .unwrap_or_else(|| {
+            panic!(
+                "IR lower: constant `{name}` (id {constant_id}) reaches lower \
                  without a stamped definition or with an unsupported RHS shape, \
                  typecheck seal must have rejected this",
-        );
-    });
+            );
+        });
     let entry = registry.get(constant_id).unwrap_or_else(|| {
         panic!("IR lower: constant id {constant_id} missing from registry (seal violation)",)
     });
