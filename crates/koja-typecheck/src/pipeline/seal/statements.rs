@@ -49,7 +49,8 @@ pub(super) fn seal_statement(stmt: &Statement, mode: SealMode) {
 /// paths: the head id keys the IR's `LocalRead` / `LocalWrite` and
 /// the IR lower walks the remaining segments itself. Only
 /// empty-segments and a missing head `local_id` indicate an
-/// upstream invariant break.
+/// upstream invariant break. The `_` discard binds nothing, so it
+/// is the one target allowed to carry no id.
 fn seal_lvalue_shape(lvalue: &LValue, role: &str, statement_span: Span) {
     if lvalue.segments.is_empty() {
         seal_panic(
@@ -57,7 +58,7 @@ fn seal_lvalue_shape(lvalue: &LValue, role: &str, statement_span: Span) {
             lvalue.span,
         );
     }
-    if lvalue.local_id.is_none() {
+    if lvalue.local_id.is_none() && !lvalue.is_discard() {
         seal_panic(
             &format!(
                 "{role} target `{}` carries no LocalId; resolver should have stamped it on \

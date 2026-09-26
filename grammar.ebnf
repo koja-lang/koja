@@ -345,8 +345,8 @@ closure_params = closure_param , { "," , closure_param } ;
 closure_param = IDENT , [ ":" , type_expr ]
               | "_" ;
 
-(* Short arrow closure: direct call arguments only *)
-short_closure = closure_param_short , "->" , expr ;
+(* Short arrow closure: direct call arguments only. `()` is a thunk. *)
+short_closure = ( closure_param_short | "(" , ")" ) , "->" , expr ;
 
 closure_param_short = IDENT , [ ":" , type_expr ]
                     | "_" ;

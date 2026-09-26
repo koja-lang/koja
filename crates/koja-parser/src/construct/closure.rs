@@ -4,9 +4,10 @@
 //!   parameter list with optional types and an explicit body.
 //! - Short closure: `expr -> expr`. The Pratt loop in [`crate::expr`]
 //!   recognises the `->` and calls [`Parser::expr_to_closure_params`]
-//!   to reinterpret the already-parsed LHS as a parameter shape.
+//!   to reinterpret the already-parsed LHS as a parameter shape. The
+//!   LHS is one name, `_`, or `()` for no parameters.
 
-use koja_ast::ast::{ClosureParam, Expr, ExprKind, Name};
+use koja_ast::ast::{ClosureParam, Expr, ExprKind, Literal, Name};
 use koja_ast::span::Span;
 use koja_ast::token::TokenKind;
 
@@ -103,6 +104,10 @@ impl Parser {
                 }]
             }
             ExprKind::Group { expr: inner, .. } => self.expr_to_closure_params(inner, span),
+            // `() -> body` is a thunk with no parameters.
+            ExprKind::Literal {
+                value: Literal::Unit,
+            } => Vec::new(),
             _ => {
                 self.error("invalid closure parameter list".to_string(), span);
                 vec![ClosureParam::Wildcard {

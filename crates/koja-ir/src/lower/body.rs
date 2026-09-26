@@ -198,8 +198,9 @@ fn lower_break_statement(
 /// `LocalWrite`, dispatching to [`lower_field_assignment`] for
 /// multi-segment field writes (`p.x = ...`). The first write of a
 /// local emits its `LocalDecl` into the entry block so backends see
-/// one decl per slot. Returns `Open { value: None, .. }` because no
-/// surface syntax consumes an assignment's value.
+/// one decl per slot. A `_` target lowers to the rhs plus a drop.
+/// Returns `Open { value: None, .. }` because no surface syntax
+/// consumes an assignment's value.
 fn lower_assignment(
     lvalue: &LValue,
     value: &Expr,
@@ -210,6 +211,17 @@ fn lower_assignment(
 ) -> Result<FlowResult, ()> {
     if lvalue.segments.len() >= 2 {
         return lower_field_assignment(lvalue, value, ctx, block, registry, output);
+    }
+
+    // `_ = value` evaluates the rhs and frees it in place, the same
+    // way a superseded statement value is freed. No slot is declared.
+    if lvalue.is_discard() {
+        let (value_id, current) = lower_expr(value, ctx, block, registry, output)?;
+        drop_discarded_temp(ctx, current, value_id);
+        return Ok(FlowResult::Open {
+            value: None,
+            block: current,
+        });
     }
 
     let local_id = expect_local_id(lvalue);

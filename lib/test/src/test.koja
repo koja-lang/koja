@@ -94,7 +94,7 @@ crashed. A body that returns is `false`. A body that is still running
 after five seconds is `false` as well.
 
 ```koja
-assert Test.crashes(fn () list.get(5).unwrap() end)
+assert Test.crashes(() -> list.get(5).unwrap())
 ```
 """
 fn crashes<R>(body: fn () -> R) -> Bool

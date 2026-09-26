@@ -6,6 +6,10 @@ fn apply_str(s: String, f: fn (String) -> String) -> String
   f(s)
 end
 
+fn run(f: fn () -> Int) -> Int
+  f()
+end
+
 # basic: short closure passed inline to a typed function
 apply(5, x -> x * 2).print()
 
@@ -31,3 +35,9 @@ mapped.unwrap().print()
 none_opt: Option<Int> = Option.None
 none_mapped = none_opt.map(v -> v * 10)
 (none_mapped.or(-1)).print()
+
+# zero-parameter short closure
+run(() -> 42).print()
+
+# zero-parameter short closure capturing a variable
+run(() -> offset + 1).print()

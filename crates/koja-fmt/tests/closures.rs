@@ -23,6 +23,26 @@ fn short_closure_inline() {
 }
 
 #[test]
+fn zero_param_short_closure_round_trips() {
+    assert_fmt_script(
+        "
+            fn run(f: fn () -> Int) -> Int
+              f()
+            end
+
+            run((  ) -> 42)
+        ",
+        "
+            fn run(f: fn () -> Int) -> Int
+              f()
+            end
+
+            run(() -> 42)
+        ",
+    );
+}
+
+#[test]
 fn short_block_closure_assignment_stays_inline() {
     assert_fmt_script(
         "

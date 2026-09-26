@@ -541,3 +541,57 @@ fn destructure_onto_package_constant_diagnoses() {
 
     assert_file_fails_with(source, &["LIMIT", "constant"]);
 }
+
+#[test]
+fn underscore_assignment_discards_without_binding() {
+    let source = "
+        fn main -> Int
+          _ = 1
+          _ = \"two\"
+          3
+        end
+        ";
+
+    let checked = typecheck(&dedent(source));
+    let body = function_body(&checked, "main");
+    for stmt in &body[..2] {
+        let Statement::Assignment { target, value, .. } = stmt else {
+            panic!("expected Assignment, got {stmt:?}");
+        };
+        assert!(target.local_id.is_none(), "`_` must not bind a local");
+        assert!(
+            value.resolution.is_resolved(),
+            "rhs of `_ =` still resolves"
+        );
+    }
+}
+
+#[test]
+fn underscore_is_not_readable_after_discard() {
+    let source = "
+        fn main -> Int
+          _ = 1
+          _
+        end
+        ";
+
+    let failure = typecheck_fail(&dedent(source));
+    let messages = diagnostic_messages(&failure);
+    assert!(
+        messages
+            .iter()
+            .any(|m| m.contains('_') && (m.contains("undefined") || m.contains("unknown"))),
+        "expected unknown-identifier diagnostic for `_`, got {messages:?}",
+    );
+}
+
+#[test]
+fn underscore_assignment_still_checks_annotation() {
+    let source = "
+        fn main
+          _: Int = \"x\"
+        end
+        ";
+
+    assert_file_fails_with(source, &["type annotation on `_`", "Int", "String"]);
+}

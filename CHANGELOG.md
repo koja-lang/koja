@@ -7,8 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Short closures with no parameters: `Task.async(() -> compute())` and `Test.crashes(() -> list.get(5).unwrap())` replace the `fn () ... end` block form for one-expression thunks.
+
 ### Changed
 
+- `_ = expr` is a discard. It evaluates `expr` and binds nothing, so one body can discard values of different types. Reading `_` is an unknown identifier error. Before, `_` was an ordinary local whose type was fixed at its first assignment.
 - `koja format` puts one blank line between the fields (or enum variants) of a type and its nested constants. Consecutive constants still stack.
 
 ### Fixed
