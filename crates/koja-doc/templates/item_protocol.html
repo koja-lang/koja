@@ -40,6 +40,20 @@
   {% include "function_detail.html" %}
   {% endfor %}
   {% endif %}
+
+  {% if !p.implementors.is_empty() %}
+  <h2 class="section-heading" id="implemented-by">Implemented by</h2>
+  <div class="item-list">
+    {% for i in p.implementors %}
+    <div class="item-row">
+      <a class="item-name" href="{{ ctx.root_prefix }}{{ i.href }}">{{ i.package }}.{{ i.type_name }}</a>
+      <span class="item-kind">{{ i.kind }}</span>
+      {% if let Some(condition) = i.condition %}<span class="conformance-condition">where {{ condition }}</span>{% endif %}
+      {% if let Some(doc) = i.doc %}<span class="item-brief">{{ doc|brief }}</span>{% endif %}
+    </div>
+    {% endfor %}
+  </div>
+  {% endif %}
 </main>
 
 {% include "toc.html" %}

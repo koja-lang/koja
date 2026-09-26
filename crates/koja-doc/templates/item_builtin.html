@@ -25,6 +25,9 @@
   <div class="detail-doc">{{ doc|md }}</div>
   {% endif %}
 
+  {% let conformances = b.conformances %}
+  {% include "conformances.html" %}
+
   {% if !b.functions.is_empty() %}
   <h2 class="section-heading" id="functions">Functions</h2>
   <div class="summary">

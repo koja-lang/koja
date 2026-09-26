@@ -6,7 +6,7 @@
 
 use std::ptr;
 
-use crate::extract::{DocFunction, DocProject};
+use crate::extract::{DocConformance, DocFunction, DocProject};
 use crate::search::{Symbol, SymbolTarget, collect_symbols};
 
 /// Result of a terminal doc search.
@@ -155,6 +155,7 @@ fn render_full(hit: &Symbol, partials: &[&Symbol]) -> String {
     match &hit.target {
         SymbolTarget::Builtin(b) => {
             push_doc(&mut out, &b.doc);
+            push_conformances(&mut out, &b.conformances);
             push_functions(&mut out, &b.functions);
         }
         SymbolTarget::Constant(_) => push_doc(&mut out, hit.doc()),
@@ -167,11 +168,21 @@ fn render_full(hit: &Symbol, partials: &[&Symbol]) -> String {
         SymbolTarget::Enum(e) => {
             push_doc(&mut out, &e.doc);
             push_list_section(&mut out, "Variants", &e.variants);
+            push_conformances(&mut out, &e.conformances);
             push_functions(&mut out, &e.functions);
         }
         SymbolTarget::Protocol(p) => {
             push_doc(&mut out, &p.doc);
             push_functions(&mut out, &p.functions);
+            let implementors: Vec<String> = p
+                .implementors
+                .iter()
+                .map(|i| match &i.condition {
+                    Some(condition) => format!("{}.{} where {condition}", i.package, i.type_name),
+                    None => format!("{}.{}", i.package, i.type_name),
+                })
+                .collect();
+            push_list_section(&mut out, "Implemented by", &implementors);
         }
         SymbolTarget::Struct(s) => {
             push_doc(&mut out, &s.doc);
@@ -184,6 +195,7 @@ fn render_full(hit: &Symbol, partials: &[&Symbol]) -> String {
                 })
                 .collect();
             push_list_section(&mut out, "Fields", &fields);
+            push_conformances(&mut out, &s.conformances);
             push_functions(&mut out, &s.functions);
         }
     }
@@ -248,8 +260,28 @@ fn push_functions(out: &mut String, functions: &[DocFunction]) {
         return;
     }
     out.push_str("\n## Functions\n");
+    push_function_details(out, functions, "###");
+}
+
+/// One `## Conforms to` section with a `### Protocol` heading per
+/// conformance and the requirement implementations under it.
+fn push_conformances(out: &mut String, conformances: &[DocConformance]) {
+    if conformances.is_empty() {
+        return;
+    }
+    out.push_str("\n## Conforms to\n");
+    for c in conformances {
+        match &c.condition {
+            Some(condition) => out.push_str(&format!("\n### {} where {condition}\n", c.protocol)),
+            None => out.push_str(&format!("\n### {}\n", c.protocol)),
+        }
+        push_function_details(out, &c.functions, "####");
+    }
+}
+
+fn push_function_details(out: &mut String, functions: &[DocFunction], heading: &str) {
     for f in functions {
-        out.push_str(&format!("\n### `{}`\n", f.signature_text()));
+        out.push_str(&format!("\n{heading} `{}`\n", f.signature_text()));
         push_deprecation(out, f.deprecated.as_deref());
         push_doc(out, &f.doc);
     }
@@ -273,6 +305,7 @@ mod tests {
         let mut project = DocProject::new("MyApp");
         let global = project.ensure_package("Global", PackageKind::Stdlib);
         global.builtins.push(DocBuiltin {
+            conformances: vec![],
             deprecated: None,
             doc: Some(
                 "A growable list. Backed by a heap block. Items may be optional.".to_string(),
@@ -302,6 +335,7 @@ mod tests {
             type_params: vec!["T".to_string()],
         });
         global.enums.push(DocEnum {
+            conformances: vec![],
             deprecated: None,
             doc: Some("An optional value. `Config.port` reads one.".to_string()),
             functions: vec![],
@@ -311,6 +345,7 @@ mod tests {
 
         let app = project.ensure_package("MyApp", PackageKind::Project);
         app.structs.push(DocStruct {
+            conformances: vec![],
             deprecated: None,
             doc: Some("Connection settings.".to_string()),
             fields: vec![DocField {
@@ -330,6 +365,7 @@ mod tests {
             name: "MAX_DEPTH".to_string(),
         });
         json.enums.push(DocEnum {
+            conformances: vec![],
             deprecated: None,
             doc: None,
             functions: vec![],

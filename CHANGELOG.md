@@ -10,6 +10,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - Short closures with no parameters: `Task.async(() -> compute())` and `Test.crashes(() -> list.get(5).unwrap())` replace the `fn () ... end` block form for one-expression thunks.
+- `koja doc` lists protocol conformances. Each struct, enum, and builtin page has a "Conforms to" section with the protocols from the type header and from `impl` blocks, the requirement functions under each one, and the condition of a conditional impl such as `where T: Equality`. A function with no `@doc` shows the protocol requirement's doc.
+- Protocol pages list their implementors. Search and `koja doc <symbol>` resolve conformance functions such as `Int.band`.
 
 ### Changed
 

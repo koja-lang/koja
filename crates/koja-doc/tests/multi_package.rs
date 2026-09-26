@@ -9,9 +9,9 @@
 
 use koja_ast::util::dedent;
 use koja_doc::{
-    DocProject, PackageKind, extract_items, finalize_project, render_enum, render_function,
-    render_package_index, render_root_index, render_struct, search_index_json, terminal,
-    terminal::SearchOutcome,
+    DocProject, PackageKind, extract_items, finalize_project, render_builtin, render_enum,
+    render_function, render_package_index, render_protocol, render_root_index, render_struct,
+    search_index_json, terminal, terminal::SearchOutcome,
 };
 use koja_parser::ParseMode;
 
@@ -646,4 +646,310 @@ fn big_struct_page_gets_on_this_page_toc() {
     assert!(html.contains("href=\"#fn-checkout-2\""));
     // The fallible spelling survives into the rendered signature.
     assert!(html.contains("! <span class=\"ty\">String</span>"));
+}
+
+/// A stdlib-shaped project: protocols and builtins in `Global`, a
+/// header conformance, same-package and cross-package impls, and a
+/// conditional impl.
+fn build_conformance_project() -> DocProject {
+    let mut project = DocProject::new("MyApp");
+
+    ingest(
+        &mut project,
+        "Global",
+        PackageKind::Stdlib,
+        "
+        @doc \"Bit operations.\"
+        protocol Bitwise
+          @doc \"Returns the bitwise AND of `self` and `other`.\"
+          fn band(self, other: Self) -> Self
+        end
+
+        @doc \"Equality comparison.\"
+        protocol Equality
+          @doc \"Returns `true` when `self` and `other` are equal.\"
+          fn equals?(self, other: Self) -> Bool
+        end
+
+        @doc \"A 64-bit integer.\"
+        builtin Int
+          @doc \"Adds one.\"
+          @intrinsic
+          fn succ(self) -> Int
+        end
+
+        @doc \"A growable list.\"
+        builtin List<T>
+        end
+
+        impl Bitwise for Int
+          @intrinsic
+          fn band(self, other: Int) -> Int
+        end
+
+        impl Equality for List<T: Equality>
+          @doc \"Compares element by element.\"
+          fn equals?(self, other: List<T>) -> Bool
+            true
+          end
+        end
+        ",
+    );
+
+    ingest(
+        &mut project,
+        "MyApp",
+        PackageKind::Project,
+        "
+        @doc \"A point.\"
+        struct Point: Equality
+          x: Int
+
+          fn equals?(self, other: Point) -> Bool
+            self.x == other.x
+          end
+
+          @doc \"Moves right.\"
+          fn shift(self) -> Point
+            self
+          end
+        end
+
+        @doc \"A shade.\"
+        enum Shade: Missing.Protocol
+          Light
+          Dark
+
+          fn describe(self) -> String
+            \"shade\"
+          end
+        end
+
+        @doc \"Bit shifting.\"
+        protocol Shifty
+          @doc \"Shifts left by one.\"
+          fn shl(self) -> Self
+        end
+
+        impl Shifty for Global.Int
+          @doc \"App-local shifting.\"
+          fn shl(self) -> Int
+            self
+          end
+        end
+        ",
+    );
+
+    finalize_project(&mut project);
+    project
+}
+
+#[test]
+fn header_conformance_moves_requirements_and_inherits_docs() {
+    let project = build_conformance_project();
+    let app = project.find_package("MyApp").expect("MyApp present");
+    let point = app
+        .structs
+        .iter()
+        .find(|s| s.name == "Point")
+        .expect("Point");
+
+    let inherent: Vec<&str> = point.functions.iter().map(|f| f.name.as_str()).collect();
+    assert_eq!(inherent, vec!["shift"], "requirement stayed inherent");
+
+    assert_eq!(point.conformances.len(), 1);
+    let equality = &point.conformances[0];
+    assert_eq!(
+        equality.protocol, "Global.Equality",
+        "a resolved protocol shows its package"
+    );
+    assert_eq!(
+        equality.protocol_href.as_deref(),
+        Some("Global/Equality.html")
+    );
+    assert_eq!(equality.condition, None);
+    assert_eq!(equality.functions.len(), 1);
+    assert_eq!(equality.functions[0].name, "equals?");
+    assert_eq!(
+        equality.functions[0].doc.as_deref(),
+        Some("Returns `true` when `self` and `other` are equal."),
+        "an undocumented implementation inherits the requirement doc"
+    );
+
+    let html = render_struct(point, app, &project);
+    assert!(html.contains("id=\"conforms-to\""));
+    assert!(html.contains("href=\"../Global/Equality.html\">Global.Equality</a>"));
+    assert!(html.contains("id=\"impl-Global-Equality\""));
+    assert!(html.contains("id=\"fn-equals-q-2\""));
+    let conforms = html.find("id=\"conforms-to\"").unwrap();
+    let functions = html.find("id=\"functions\"").unwrap();
+    assert!(
+        conforms < functions,
+        "conformances render before inherent functions"
+    );
+    assert!(html.contains("href=\"#conforms-to\""));
+    assert!(html.contains("href=\"#functions\""));
+}
+
+#[test]
+fn impls_from_same_and_other_packages_land_on_the_target() {
+    let project = build_conformance_project();
+    let global = project.find_package("Global").expect("Global present");
+    let int = global
+        .builtins
+        .iter()
+        .find(|b| b.name == "Int")
+        .expect("Int");
+
+    let conformances: Vec<(&str, Option<&str>, Option<&str>)> = int
+        .conformances
+        .iter()
+        .map(|c| {
+            (
+                c.protocol.as_str(),
+                c.protocol_href.as_deref(),
+                c.functions[0].doc.as_deref(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        conformances,
+        vec![
+            (
+                "Global.Bitwise",
+                Some("Global/Bitwise.html"),
+                Some("Returns the bitwise AND of `self` and `other`."),
+            ),
+            (
+                "MyApp.Shifty",
+                Some("MyApp/Shifty.html"),
+                Some("App-local shifting."),
+            ),
+        ],
+        "same-package and cross-package impls both land on Int"
+    );
+    let inherent: Vec<&str> = int.functions.iter().map(|f| f.name.as_str()).collect();
+    assert_eq!(inherent, vec!["succ"]);
+
+    let html = render_builtin(int, global, &project);
+    assert!(html.contains("href=\"../Global/Bitwise.html\">Global.Bitwise</a>"));
+    assert!(html.contains("href=\"../MyApp/Shifty.html\">MyApp.Shifty</a>"));
+    assert!(html.contains("id=\"fn-band-2\""));
+    assert!(html.contains("id=\"fn-shl-1\""));
+}
+
+#[test]
+fn conditional_impl_renders_its_condition() {
+    let project = build_conformance_project();
+    let global = project.find_package("Global").expect("Global present");
+    let list = global
+        .builtins
+        .iter()
+        .find(|b| b.name == "List")
+        .expect("List");
+
+    assert_eq!(list.conformances.len(), 1);
+    let equality = &list.conformances[0];
+    assert_eq!(equality.protocol, "Global.Equality");
+    assert_eq!(equality.condition.as_deref(), Some("T: Equality"));
+    assert_eq!(
+        equality.functions[0].doc.as_deref(),
+        Some("Compares element by element.")
+    );
+
+    let html = render_builtin(list, global, &project);
+    assert!(html.contains("<span class=\"conformance-condition\">where T: Equality</span>"));
+
+    let SearchOutcome::Hits(text) = terminal::search(&project, "List") else {
+        panic!("expected List hit");
+    };
+    assert!(text.contains("\n## Conforms to\n\n### Global.Equality where T: Equality\n"));
+    assert!(text.contains("\n#### `fn equals?(self, other: List<T>) -> Bool`\n"));
+}
+
+#[test]
+fn protocol_page_lists_implementors() {
+    let project = build_conformance_project();
+    let global = project.find_package("Global").expect("Global present");
+    let equality = global
+        .protocols
+        .iter()
+        .find(|p| p.name == "Equality")
+        .expect("Equality");
+
+    let implementors: Vec<(&str, &str, Option<&str>)> = equality
+        .implementors
+        .iter()
+        .map(|i| {
+            (
+                i.package.as_str(),
+                i.type_name.as_str(),
+                i.condition.as_deref(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        implementors,
+        vec![
+            ("Global", "List", Some("T: Equality")),
+            ("MyApp", "Point", None),
+        ]
+    );
+
+    let html = render_protocol(equality, global, &project);
+    assert!(html.contains("id=\"implemented-by\""));
+    assert!(
+        html.contains("href=\"../Global/List.html\">Global.List</a>"),
+        "every implementor is package qualified"
+    );
+    assert!(html.contains("href=\"../MyApp/Point.html\">MyApp.Point</a>"));
+    assert!(html.contains("<span class=\"item-kind\">builtin</span>"));
+    assert!(html.contains("<span class=\"item-brief\">A point.</span>"));
+    assert!(html.contains("href=\"#implemented-by\""));
+
+    let SearchOutcome::Hits(text) = terminal::search(&project, "Equality") else {
+        panic!("expected Equality hit");
+    };
+    assert!(
+        text.contains("\n## Implemented by\n\n- Global.List where T: Equality\n- MyApp.Point\n")
+    );
+}
+
+#[test]
+fn search_index_covers_conformance_functions() {
+    let project = build_conformance_project();
+    let json = search_index_json(&project);
+
+    assert!(json.contains("\"name\":\"Int.band/2\""));
+    assert!(json.contains("\"url\":\"Global/Int.html#fn-band-2\""));
+    assert!(json.contains("\"name\":\"Point.equals?/2\""));
+    assert!(json.contains("\"url\":\"MyApp/Point.html#fn-equals-q-2\""));
+
+    let SearchOutcome::Hits(text) = terminal::search(&project, "Int.band") else {
+        panic!("expected Int.band hit");
+    };
+    assert!(text.starts_with("# Global.Int.band/2 (fn)\n"));
+}
+
+#[test]
+fn undocumented_protocol_renders_by_name_only() {
+    let project = build_conformance_project();
+    let app = project.find_package("MyApp").expect("MyApp present");
+    let shade = app.enums.iter().find(|e| e.name == "Shade").expect("Shade");
+
+    assert_eq!(shade.conformances.len(), 1);
+    let missing = &shade.conformances[0];
+    assert_eq!(missing.protocol, "Missing.Protocol");
+    assert_eq!(missing.protocol_href, None);
+    assert!(missing.functions.is_empty());
+    let inherent: Vec<&str> = shade.functions.iter().map(|f| f.name.as_str()).collect();
+    assert_eq!(inherent, vec!["describe"], "header functions stay inherent");
+
+    let html = render_enum(shade, app, &project);
+    assert!(html.contains("id=\"impl-Missing-Protocol\""));
+    assert!(html.contains("Missing.Protocol"));
+    assert!(
+        !html.contains("Missing/Protocol.html"),
+        "no page link for an undocumented protocol"
+    );
 }

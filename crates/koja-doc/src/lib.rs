@@ -22,8 +22,8 @@ mod style;
 pub mod terminal;
 
 pub use extract::{
-    DocBuiltin, DocConstant, DocEnum, DocFunction, DocItem, DocPackage, DocProject, DocProtocol,
-    DocStruct, PackageKind, extract_items, finalize_project,
+    DocBuiltin, DocConformance, DocConstant, DocEnum, DocFunction, DocImplementor, DocItem,
+    DocPackage, DocProject, DocProtocol, DocStruct, PackageKind, extract_items, finalize_project,
 };
 pub use render::{
     render_builtin, render_constant, render_enum, render_function, render_package_index,

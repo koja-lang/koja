@@ -631,6 +631,34 @@ button:focus-visible {
   color: var(--ink-soft);
 }
 
+/* ---------- conformances ---------- */
+
+.conformance {
+  margin: 1.5rem 0 2.5rem;
+}
+
+.conformance-heading {
+  font-family: var(--font-mono);
+  font-size: 1.05rem;
+  font-weight: 600;
+  margin: 0 0 0.5rem;
+  scroll-margin-top: calc(var(--topbar-h) + 1rem);
+}
+
+.conformance-condition {
+  font-family: var(--font-mono);
+  font-size: 0.88rem;
+  font-weight: 400;
+  color: var(--ink-soft);
+  margin-left: 0.5rem;
+}
+
+.item-row .conformance-condition {
+  margin-left: 0;
+  font-size: 0.8rem;
+  flex-shrink: 0;
+}
+
 /* ---------- function details ---------- */
 
 .detail {

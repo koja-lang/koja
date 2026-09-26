@@ -10,8 +10,8 @@
 
 use koja_ast::ast::{
     AnnotationKind, AnnotationValue, BuiltinDecl, EnumDecl, Expr, ExprKind, ExtendBlock, File,
-    Function, ImplMember, Item, Literal, Name, Param, ProtocolDecl, ProtocolMethod, StringPart,
-    StructDecl, TypeExpr, UnaryOp, Visibility, name_texts, path_text,
+    Function, ImplBlock, ImplMember, Item, Literal, Name, Param, ProtocolDecl, ProtocolMethod,
+    StringPart, StructDecl, TypeExpr, TypeParam, UnaryOp, Visibility, name_texts, path_text,
 };
 use koja_ast::util::dedent;
 
@@ -55,6 +55,40 @@ pub struct DocItem {
     pub name: String,
 }
 
+/// One protocol a type conforms to, from its header (`struct P: Hash`)
+/// or from an `impl Protocol for Type` block. `protocol` is the display
+/// text with generic arguments, qualified with the protocol's package
+/// once it resolves (`Global.Enumeration<T, Int>`). `condition`
+/// is the rendered bound list of a conditional impl (`T: Equality`).
+/// `protocol_href` is root-relative (`Global/Hash.html`) and set only
+/// when the protocol is documented. `functions` holds the requirement
+/// implementations, moved here from the type's inherent list for a
+/// header conformance. `impl_package` is the package that declared
+/// an `impl` block, where its protocol path resolves. A header
+/// conformance resolves from the type's own package and leaves it
+/// `None`.
+#[derive(Debug)]
+pub struct DocConformance {
+    pub condition: Option<String>,
+    pub functions: Vec<DocFunction>,
+    pub impl_package: Option<String>,
+    pub protocol: String,
+    pub protocol_href: Option<String>,
+    pub protocol_path: Vec<String>,
+}
+
+/// One type that conforms to a protocol, listed on the protocol page.
+/// `href` is root-relative (`Global/Int.html`).
+#[derive(Debug)]
+pub struct DocImplementor {
+    pub condition: Option<String>,
+    pub doc: Option<String>,
+    pub href: String,
+    pub kind: String,
+    pub package: String,
+    pub type_name: String,
+}
+
 /// Documentation for a constant.
 #[derive(Debug)]
 pub struct DocConstant {
@@ -66,6 +100,7 @@ pub struct DocConstant {
 /// Documentation for an enum.
 #[derive(Debug)]
 pub struct DocEnum {
+    pub conformances: Vec<DocConformance>,
     pub deprecated: Option<String>,
     pub doc: Option<String>,
     pub functions: Vec<DocFunction>,
@@ -103,12 +138,14 @@ pub struct DocParam {
     pub type_name: String,
 }
 
-/// Documentation for a protocol.
+/// Documentation for a protocol. `implementors` is filled in
+/// [`finalize_project`] from every documented type that conforms.
 #[derive(Debug)]
 pub struct DocProtocol {
     pub deprecated: Option<String>,
     pub doc: Option<String>,
     pub functions: Vec<DocFunction>,
+    pub implementors: Vec<DocImplementor>,
     pub name: String,
     pub type_params: Vec<String>,
 }
@@ -117,6 +154,7 @@ pub struct DocProtocol {
 /// fields, the compiler owns their representation.
 #[derive(Debug)]
 pub struct DocBuiltin {
+    pub conformances: Vec<DocConformance>,
     pub deprecated: Option<String>,
     pub doc: Option<String>,
     pub functions: Vec<DocFunction>,
@@ -127,6 +165,7 @@ pub struct DocBuiltin {
 /// Documentation for a struct, including its impl functions.
 #[derive(Debug)]
 pub struct DocStruct {
+    pub conformances: Vec<DocConformance>,
     pub deprecated: Option<String>,
     pub doc: Option<String>,
     pub fields: Vec<DocField>,
@@ -140,11 +179,12 @@ pub struct DocStruct {
 /// sidebar item list. `kind` is the origin tier (project / dep /
 /// stdlib) and drives cross-package sort + renderer labelling.
 ///
-/// `pending_extends` holds methods from `extend Type` blocks
-/// declared in this package that haven't yet been routed to their
-/// target type. [`finalize_project`] drains them once every file
-/// has been ingested, so same-package and cross-package targets
-/// route identically.
+/// `pending_extends` and `pending_impls` hold methods from
+/// `extend Type` and `impl Protocol for Type` blocks declared in this
+/// package that haven't yet been routed to their target type.
+/// [`finalize_project`] drains them once every file has been
+/// ingested, so same-package and cross-package targets route
+/// identically.
 #[derive(Debug)]
 pub struct DocPackage {
     pub builtins: Vec<DocBuiltin>,
@@ -157,6 +197,7 @@ pub struct DocPackage {
     pub protocols: Vec<DocProtocol>,
     pub structs: Vec<DocStruct>,
     pending_extends: Vec<PendingExtend>,
+    pending_impls: Vec<PendingImpl>,
 }
 
 /// A method-set from an `extend Type` block, consumed by
@@ -165,6 +206,16 @@ pub struct DocPackage {
 struct PendingExtend {
     current_package: String,
     functions: Vec<DocFunction>,
+    target_path: Vec<String>,
+}
+
+/// An `impl Protocol for Type` block, consumed by
+/// [`resolve_pending_impls`] before rendering. The conformance is
+/// built here so the target only has to adopt it.
+#[derive(Debug)]
+struct PendingImpl {
+    conformance: DocConformance,
+    current_package: String,
     target_path: Vec<String>,
 }
 
@@ -181,6 +232,7 @@ impl DocPackage {
             protocols: Vec::new(),
             structs: Vec::new(),
             pending_extends: Vec::new(),
+            pending_impls: Vec::new(),
         }
     }
 }
@@ -229,10 +281,9 @@ impl DocProject {
 
 /// Extract documentation items from a parsed file into `package`
 /// inside `project`. Items with `@doc false` and `priv` declarations
-/// are excluded. `extend Type` blocks queue their methods on the
-/// current package's `pending_extends` for [`finalize_project`] to
-/// distribute. `impl Protocol for Type` blocks contribute no
-/// documentation surface beyond the protocol's own declaration.
+/// are excluded. `extend Type` and `impl Protocol for Type` blocks
+/// queue their methods on the current package's pending lists for
+/// [`finalize_project`] to distribute to the target type.
 pub fn extract_items(file: &File, project: &mut DocProject, package: &str, kind: PackageKind) {
     let pkg = project.ensure_package(package, kind);
 
@@ -263,7 +314,11 @@ pub fn extract_items(file: &File, project: &mut DocProject, package: &str, kind:
                     pkg.functions.push(df);
                 }
             }
-            Item::Impl(_) => {}
+            Item::Impl(block) => {
+                if let Some(pending) = make_pending_impl(block, package) {
+                    pkg.pending_impls.push(pending);
+                }
+            }
             Item::Protocol(_) => {
                 extract_type_item(item, pkg, &[]);
             }
@@ -327,11 +382,14 @@ fn nested_path(owner_path: &[String], path: &[Name]) -> Vec<String> {
     owner_path.iter().cloned().chain(name_texts(path)).collect()
 }
 
-/// Resolve pending `extend` blocks, sort packages by
-/// `(kind tier, name)` so the user's project lands first, then sort
-/// and flatten each package's items for the sidebar.
+/// Resolve pending `extend` and `impl` blocks, link conformances to
+/// their protocols, sort packages by `(kind tier, name)` so the
+/// user's project lands first, then sort and flatten each package's
+/// items for the sidebar.
 pub fn finalize_project(project: &mut DocProject) {
     resolve_pending_extends(project);
+    resolve_pending_impls(project);
+    link_conformances(project);
 
     project
         .packages
@@ -353,9 +411,12 @@ fn resolve_pending_extends(project: &mut DocProject) {
         .collect();
 
     for pending in pendings {
-        let Some((package_idx, target_name)) =
-            resolve_extend_target(project, &pending.current_package, &pending.target_path)
-        else {
+        let Some((package_idx, target_name)) = resolve_target(
+            project,
+            &pending.current_package,
+            &pending.target_path,
+            package_has_type,
+        ) else {
             continue;
         };
         let target = &mut project.packages[package_idx];
@@ -369,32 +430,273 @@ fn resolve_pending_extends(project: &mut DocProject) {
     }
 }
 
-/// Resolve an extend target like typecheck does. Prefer the complete
-/// path in the current package, then read the first path segment as a
-/// package.
-fn resolve_extend_target(
+/// Drain every package's `pending_impls` and attach each one to the
+/// named type as a conformance. Impls whose target isn't documented
+/// are dropped, same as extends.
+fn resolve_pending_impls(project: &mut DocProject) {
+    let pendings: Vec<PendingImpl> = project
+        .packages
+        .iter_mut()
+        .flat_map(|pkg| std::mem::take(&mut pkg.pending_impls))
+        .collect();
+
+    for pending in pendings {
+        let Some((package_idx, target_name)) = resolve_target(
+            project,
+            &pending.current_package,
+            &pending.target_path,
+            package_has_type,
+        ) else {
+            continue;
+        };
+        let target = &mut project.packages[package_idx];
+        if let Some(db) = target.builtins.iter_mut().find(|b| b.name == target_name) {
+            db.conformances.push(pending.conformance);
+        } else if let Some(ds) = target.structs.iter_mut().find(|s| s.name == target_name) {
+            ds.conformances.push(pending.conformance);
+        } else if let Some(de) = target.enums.iter_mut().find(|e| e.name == target_name) {
+            de.conformances.push(pending.conformance);
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+enum TypeKind {
+    Builtin,
+    Enum,
+    Struct,
+}
+
+impl TypeKind {
+    /// The kind chip text, same as [`DocItem::kind`].
+    fn label(self) -> &'static str {
+        match self {
+            TypeKind::Builtin => "builtin",
+            TypeKind::Enum => "enum",
+            TypeKind::Struct => "struct",
+        }
+    }
+}
+
+/// One conformance that resolved to a documented protocol. Indices
+/// point into `project.packages` and stay valid until
+/// [`finalize_package`] sorts, which runs after linking.
+struct Link {
+    conformance_idx: usize,
+    kind: TypeKind,
+    package_idx: usize,
+    protocol: ProtocolRef,
+    type_idx: usize,
+}
+
+/// What a linked conformance needs from its protocol, copied out so
+/// the type can be edited while nothing else borrows the project.
+struct ProtocolRef {
+    name: String,
+    package: String,
+    package_idx: usize,
+    requirements: Vec<Requirement>,
+}
+
+struct Requirement {
+    arity: usize,
+    doc: Option<String>,
+    name: String,
+}
+
+/// Connect every conformance to its protocol. A found protocol gets
+/// its href set, a header conformance takes the type's functions that
+/// match a requirement name, undocumented conformance functions
+/// inherit the requirement's `@doc`, and the protocol gains an
+/// implementor. A protocol that isn't documented leaves the
+/// conformance as a name only.
+fn link_conformances(project: &mut DocProject) {
+    let mut links = Vec::new();
+    for (package_idx, pkg) in project.packages.iter().enumerate() {
+        let mut collect = |kind: TypeKind, type_idx: usize, conformances: &[DocConformance]| {
+            for (conformance_idx, c) in conformances.iter().enumerate() {
+                let from = c.impl_package.as_deref().unwrap_or(&pkg.name);
+                let Some(protocol) = protocol_ref(project, from, &c.protocol_path) else {
+                    continue;
+                };
+                links.push(Link {
+                    conformance_idx,
+                    kind,
+                    package_idx,
+                    protocol,
+                    type_idx,
+                });
+            }
+        };
+        for (i, b) in pkg.builtins.iter().enumerate() {
+            collect(TypeKind::Builtin, i, &b.conformances);
+        }
+        for (i, e) in pkg.enums.iter().enumerate() {
+            collect(TypeKind::Enum, i, &e.conformances);
+        }
+        for (i, s) in pkg.structs.iter().enumerate() {
+            collect(TypeKind::Struct, i, &s.conformances);
+        }
+    }
+
+    let mut implementors: Vec<(&ProtocolRef, DocImplementor)> = Vec::new();
+    for link in &links {
+        let pkg = &mut project.packages[link.package_idx];
+        let owner_package = pkg.name.clone();
+        let (owner_name, owner_doc, conformances, functions) = match link.kind {
+            TypeKind::Builtin => {
+                let b = &mut pkg.builtins[link.type_idx];
+                (
+                    b.name.clone(),
+                    b.doc.clone(),
+                    &mut b.conformances,
+                    &mut b.functions,
+                )
+            }
+            TypeKind::Enum => {
+                let e = &mut pkg.enums[link.type_idx];
+                (
+                    e.name.clone(),
+                    e.doc.clone(),
+                    &mut e.conformances,
+                    &mut e.functions,
+                )
+            }
+            TypeKind::Struct => {
+                let s = &mut pkg.structs[link.type_idx];
+                (
+                    s.name.clone(),
+                    s.doc.clone(),
+                    &mut s.conformances,
+                    &mut s.functions,
+                )
+            }
+        };
+        let conformance = &mut conformances[link.conformance_idx];
+        link_conformance(conformance, functions, &link.protocol);
+        implementors.push((
+            &link.protocol,
+            DocImplementor {
+                condition: conformance.condition.clone(),
+                doc: owner_doc,
+                href: format!("{owner_package}/{owner_name}.html"),
+                kind: link.kind.label().to_string(),
+                package: owner_package,
+                type_name: owner_name,
+            },
+        ));
+    }
+
+    for (protocol, implementor) in implementors {
+        let pkg = &mut project.packages[protocol.package_idx];
+        if let Some(p) = pkg.protocols.iter_mut().find(|p| p.name == protocol.name) {
+            p.implementors.push(implementor);
+        }
+    }
+}
+
+/// Look a conformance's protocol up by the same rule as an extend
+/// target and copy out what linking needs.
+fn protocol_ref(
+    project: &DocProject,
+    current_package: &str,
+    path: &[String],
+) -> Option<ProtocolRef> {
+    let (package_idx, name) = resolve_target(project, current_package, path, package_has_protocol)?;
+    let pkg = &project.packages[package_idx];
+    let protocol = pkg.protocols.iter().find(|p| p.name == name)?;
+    Some(ProtocolRef {
+        name,
+        package: pkg.name.clone(),
+        package_idx,
+        requirements: protocol
+            .functions
+            .iter()
+            .map(|f| Requirement {
+                arity: f.arity,
+                doc: f.doc.clone(),
+                name: f.name.clone(),
+            })
+            .collect(),
+    })
+}
+
+/// Set the href, qualify the protocol with its package, move header
+/// functions under the conformance, and fill missing docs from the
+/// protocol requirements. A conformance that arrived with functions
+/// came from an `impl` block and keeps them as they are.
+fn link_conformance(
+    conformance: &mut DocConformance,
+    functions: &mut Vec<DocFunction>,
+    protocol: &ProtocolRef,
+) {
+    conformance.protocol_href = Some(format!("{}/{}.html", protocol.package, protocol.name));
+
+    // The display text starts with the source path. Swap that head
+    // for the resolved `Pkg.Name` and keep any generic arguments.
+    let source_head = conformance.protocol_path.join(".");
+    let args = conformance
+        .protocol
+        .strip_prefix(source_head.as_str())
+        .unwrap_or_default();
+    conformance.protocol = format!("{}.{}{args}", protocol.package, protocol.name);
+    conformance.protocol_path = std::iter::once(protocol.package.clone())
+        .chain(protocol.name.split('.').map(str::to_string))
+        .collect();
+
+    if conformance.functions.is_empty() {
+        let (moved, kept): (Vec<_>, Vec<_>) = std::mem::take(functions)
+            .into_iter()
+            .partition(|f| protocol.requirements.iter().any(|r| r.name == f.name));
+        *functions = kept;
+        conformance.functions = moved;
+    }
+
+    for f in &mut conformance.functions {
+        if f.doc.is_some() {
+            continue;
+        }
+        f.doc = protocol
+            .requirements
+            .iter()
+            .find(|r| r.name == f.name && r.arity == f.arity)
+            .and_then(|r| r.doc.clone());
+    }
+}
+
+/// The prelude package. Bare names that miss in the current package
+/// fall back here, as in typecheck's `lookup_owner_path`.
+const PRELUDE_PACKAGE: &str = "Global";
+
+/// Resolve a type path like typecheck does. Prefer the complete path
+/// in the current package, then read the first path segment as a
+/// package, then try the prelude. `has` decides which item kinds
+/// count as a match.
+fn resolve_target(
     project: &DocProject,
     current_package: &str,
     target_path: &[String],
+    has: fn(&DocPackage, &str) -> bool,
 ) -> Option<(usize, String)> {
-    let local_name = target_path.join(".");
-    if let Some(package_idx) = project.packages.iter().position(|package| {
-        package.name == current_package && package_has_type(package, &local_name)
-    }) {
-        return Some((package_idx, local_name));
-    }
-
-    let [package_name, target_path @ ..] = target_path else {
-        return None;
+    let find = |package_name: &str, name: &str| {
+        project
+            .packages
+            .iter()
+            .position(|package| package.name == package_name && has(package, name))
+            .map(|package_idx| (package_idx, name.to_string()))
     };
-    let target_name = target_path.join(".");
-    project
-        .packages
-        .iter()
-        .position(|package| {
-            package.name == package_name.as_str() && package_has_type(package, &target_name)
-        })
-        .map(|package_idx| (package_idx, target_name))
+
+    let local_name = target_path.join(".");
+    if let Some(found) = find(current_package, &local_name) {
+        return Some(found);
+    }
+    if let [package_name, rest @ ..] = target_path
+        && !rest.is_empty()
+        && let Some(found) = find(package_name, &rest.join("."))
+    {
+        return Some(found);
+    }
+    find(PRELUDE_PACKAGE, &local_name)
 }
 
 fn package_has_type(package: &DocPackage, name: &str) -> bool {
@@ -403,30 +705,45 @@ fn package_has_type(package: &DocPackage, name: &str) -> bool {
         || package.structs.iter().any(|item| item.name == name)
 }
 
+fn package_has_protocol(package: &DocPackage, name: &str) -> bool {
+    package.protocols.iter().any(|item| item.name == name)
+}
+
+fn sort_functions(functions: &mut [DocFunction]) {
+    functions.sort_by(|a, b| (&a.name, a.arity).cmp(&(&b.name, b.arity)));
+}
+
+fn sort_conformances(conformances: &mut [DocConformance]) {
+    conformances.sort_by(|a, b| a.protocol.cmp(&b.protocol));
+    for c in conformances {
+        sort_functions(&mut c.functions);
+    }
+}
+
 fn finalize_package(pkg: &mut DocPackage) {
     pkg.builtins.sort_by(|a, b| a.name.cmp(&b.name));
     pkg.constants.sort_by(|a, b| a.name.cmp(&b.name));
     pkg.enums.sort_by(|a, b| a.name.cmp(&b.name));
-    pkg.functions
-        .sort_by(|a, b| (&a.name, a.arity).cmp(&(&b.name, b.arity)));
+    sort_functions(&mut pkg.functions);
     pkg.protocols.sort_by(|a, b| a.name.cmp(&b.name));
     pkg.structs.sort_by(|a, b| a.name.cmp(&b.name));
 
     for b in &mut pkg.builtins {
-        b.functions
-            .sort_by(|a, b| (&a.name, a.arity).cmp(&(&b.name, b.arity)));
+        sort_functions(&mut b.functions);
+        sort_conformances(&mut b.conformances);
     }
     for e in &mut pkg.enums {
-        e.functions
-            .sort_by(|a, b| (&a.name, a.arity).cmp(&(&b.name, b.arity)));
+        sort_functions(&mut e.functions);
+        sort_conformances(&mut e.conformances);
     }
     for p in &mut pkg.protocols {
-        p.functions
-            .sort_by(|a, b| (&a.name, a.arity).cmp(&(&b.name, b.arity)));
+        sort_functions(&mut p.functions);
+        p.implementors
+            .sort_by(|a, b| (&a.package, &a.type_name).cmp(&(&b.package, &b.type_name)));
     }
     for s in &mut pkg.structs {
-        s.functions
-            .sort_by(|a, b| (&a.name, a.arity).cmp(&(&b.name, b.arity)));
+        sort_functions(&mut s.functions);
+        sort_conformances(&mut s.conformances);
     }
 
     pkg.items.clear();
@@ -541,6 +858,76 @@ fn make_pending_extend(ext: &ExtendBlock, current_package: &str) -> Option<Pendi
     })
 }
 
+/// Build a [`PendingImpl`] from an `impl Protocol for Type` block.
+/// The target path follows the same rule as `extend`. An impl with
+/// no documentable members still records the conformance.
+fn make_pending_impl(block: &ImplBlock, current_package: &str) -> Option<PendingImpl> {
+    let target_path = match &block.target {
+        TypeExpr::Generic { path, .. } | TypeExpr::Named { path, .. } => name_texts(path),
+        _ => return None,
+    };
+    if target_path.is_empty() {
+        return None;
+    }
+    let mut conformance = conformance_from_type_expr(&block.trait_expr)?;
+    conformance.condition = bounds_to_string(&block.target_bounds);
+    conformance.impl_package = Some(current_package.to_string());
+    conformance.functions = block
+        .members
+        .iter()
+        .filter_map(|m| match m {
+            ImplMember::Function(f) => extract_function(f),
+            ImplMember::TypeAlias(_) => None,
+        })
+        .collect();
+
+    Some(PendingImpl {
+        conformance,
+        current_package: current_package.to_string(),
+        target_path,
+    })
+}
+
+/// Read a header conformance list (`struct P: Hash, Display`) into
+/// conformances with no functions yet. [`link_conformances`] moves the
+/// requirement implementations under each one later.
+fn header_conformances(conformances: &[TypeExpr]) -> Vec<DocConformance> {
+    conformances
+        .iter()
+        .filter_map(conformance_from_type_expr)
+        .collect()
+}
+
+fn conformance_from_type_expr(ty: &TypeExpr) -> Option<DocConformance> {
+    let path = match ty {
+        TypeExpr::Generic { path, .. } | TypeExpr::Named { path, .. } => path,
+        _ => return None,
+    };
+    Some(DocConformance {
+        condition: None,
+        functions: Vec::new(),
+        impl_package: None,
+        protocol: type_expr_to_string(ty),
+        protocol_href: None,
+        protocol_path: name_texts(path),
+    })
+}
+
+/// Render the bound list of a conditional impl, `T: Equality` or
+/// `K: Hash & Debug, V: Debug`. Unbounded parameters are left out.
+/// `None` when nothing remains.
+fn bounds_to_string(params: &[TypeParam]) -> Option<String> {
+    let parts: Vec<String> = params
+        .iter()
+        .filter(|tp| !tp.bounds.is_empty())
+        .map(|tp| {
+            let bounds: Vec<String> = tp.bounds.iter().map(type_expr_to_string).collect();
+            format!("{}: {}", tp.name.text, bounds.join(" & "))
+        })
+        .collect();
+    (!parts.is_empty()).then(|| parts.join(", "))
+}
+
 fn extract_constant(c: &koja_ast::ast::Constant, path: &[String]) -> Option<DocConstant> {
     if c.visibility == Visibility::Private || has_doc_false(&c.annotations) {
         return None;
@@ -562,6 +949,7 @@ fn extract_enum(e: &EnumDecl, path: &[String]) -> Option<DocEnum> {
     let functions = e.functions.iter().filter_map(extract_function).collect();
 
     Some(DocEnum {
+        conformances: header_conformances(&e.conformances),
         deprecated: annotation_deprecated(&e.annotations),
         doc: annotation_string(&e.annotations),
         functions,
@@ -631,6 +1019,7 @@ fn extract_protocol(p: &ProtocolDecl, path: &[String]) -> Option<DocProtocol> {
         deprecated: annotation_deprecated(&p.annotations),
         doc: annotation_string(&p.annotations),
         functions,
+        implementors: Vec::new(),
         name: path.join("."),
         type_params: p
             .type_params
@@ -684,6 +1073,7 @@ fn extract_struct(s: &StructDecl, path: &[String]) -> Option<DocStruct> {
     let functions = s.functions.iter().filter_map(extract_function).collect();
 
     Some(DocStruct {
+        conformances: header_conformances(&s.conformances),
         deprecated: annotation_deprecated(&s.annotations),
         doc: annotation_string(&s.annotations),
         fields,
@@ -702,6 +1092,7 @@ fn extract_builtin(b: &BuiltinDecl) -> Option<DocBuiltin> {
         return None;
     }
     Some(DocBuiltin {
+        conformances: Vec::new(),
         deprecated: annotation_deprecated(&b.annotations),
         doc: annotation_string(&b.annotations),
         functions: b.functions.iter().filter_map(extract_function).collect(),
