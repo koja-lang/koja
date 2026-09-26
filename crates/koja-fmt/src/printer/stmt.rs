@@ -120,7 +120,7 @@ impl Printer {
     /// An assigned chain that does not fit breaks after `op` and keeps
     /// its links flush with the root.
     fn assigned_chain_to_doc(&mut self, lhs: Doc, op: &str, value: &Expr, breaks: bool) -> Doc {
-        let forced = breaks || self.comments.any_within(value.span);
+        let forced = breaks || self.chain_has_comments(value);
         let chain = self.method_chain_to_doc(value, LinkIndent::Flush);
         let sep = if forced { hardline() } else { line() };
         group(concat(vec![

@@ -943,6 +943,22 @@ impl LinkIndent {
     }
 }
 
+impl Printer {
+    /// True when a comment will force the chain to break, either on a
+    /// link (keyed by its receiver span, see `Attacher::walk_chain`) or
+    /// anywhere inside the chain's arguments.
+    pub(super) fn chain_has_comments(&self, expr: &Expr) -> bool {
+        let (_, links) = chain_links(expr);
+        links.iter().any(|link| {
+            let ExprKind::MethodCall { receiver, .. } = &link.kind else {
+                return false;
+            };
+            self.comments.has(receiver.span, Slot::Leading)
+                || self.comments.has(receiver.span, Slot::Trailing)
+        }) || self.comments.any_within(expr.span)
+    }
+}
+
 /// Links that get their own line when the chain breaks. The call glued
 /// to a simple root does not count.
 pub(super) fn chain_continuations(expr: &Expr) -> usize {

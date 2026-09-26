@@ -129,6 +129,27 @@ fn chain_comment_anchors_to_its_link() {
 }
 
 #[test]
+fn comment_between_equals_and_chain_root_forces_the_break() {
+    assert_fmt_script(
+        r#"
+            h =
+            # a
+              HTTP.Headers.new()
+              .set("Content-Type", "text/plain")
+              .set("Connection", "close")
+        "#,
+        r#"
+            h =
+              HTTP.Headers
+              # a
+              .new()
+              .set("Content-Type", "text/plain")
+              .set("Connection", "close")
+        "#,
+    );
+}
+
+#[test]
 fn struct_literal_field_trailing_comment_survives() {
     assert_unchanged(
         "

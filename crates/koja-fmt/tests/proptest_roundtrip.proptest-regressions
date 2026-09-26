@@ -9,3 +9,4 @@ cc 1915e3db1bdd3b77bed594dafd973522c8be67661a0ee1978d35a91f4f9182ff # shrinks to
 cc 731c7d3d5ef811f9f4ac22cec078b09b18d7aa4d5edb08a72f63b19d18631591 # shrinks to file_index = Index(4284873623420722620), injections = [(Index(8696322206177360048), false, "a")]
 cc 943a8361f62626bed764b55095ea2437559a9b81690291293e25ee181b2713a7 # shrinks to file_index = Index(11111621430226619675), injections = [(Index(0), true, "a"), (Index(13193697748083652812), false, "a")]
 cc 86bf6652a224e0ce3e27c099616e7dcd83cb98af863dad3b84bf4ad5ba259589 # shrinks to file_index = Index(7251964273252228308), injections = [(Index(6341068275337658368), true, "a")]
+cc cb5796b892515c673829bd25a5dfa4f7c02b2acce6dae0b4f79744ecfb0fa458 # shrinks to file_index = Index(17642213179529072730), injections = [(Index(2049638230412172402), true, "a")]
