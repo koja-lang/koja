@@ -119,11 +119,33 @@ fn param_comments_force_broken_signature() {
 fn chain_comment_anchors_to_its_link() {
     assert_unchanged_script(
         "
-            out = [3, 1, 2]
+            out =
+              [3, 1, 2]
               .map(v -> v * 2)
               # drop the small ones
               .filter(v -> v > 2)
         ",
+    );
+}
+
+#[test]
+fn comment_between_equals_and_chain_root_forces_the_break() {
+    assert_fmt_script(
+        r#"
+            h =
+            # a
+              HTTP.Headers.new()
+              .set("Content-Type", "text/plain")
+              .set("Connection", "close")
+        "#,
+        r#"
+            h =
+              HTTP.Headers
+              # a
+              .new()
+              .set("Content-Type", "text/plain")
+              .set("Connection", "close")
+        "#,
     );
 }
 

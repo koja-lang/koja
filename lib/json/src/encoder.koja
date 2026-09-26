@@ -23,7 +23,8 @@ priv struct Encoder
   # loop, so cost stays linear in the string length. Backslash goes
   # first because later passes introduce new backslashes.
   priv fn encode_string(s: String) -> String
-    escaped = s.replace("\\", "\\\\")
+    escaped =
+      s.replace("\\", "\\\\")
       .replace("\"", "\\\"")
       .replace("\n", "\\n")
       .replace("\r", "\\r")

@@ -267,7 +267,7 @@ impl Printer {
         args: &[Arg],
     ) -> Doc {
         if matches!(receiver.kind, ExprKind::MethodCall { .. }) {
-            return self.method_chain_to_doc(expr);
+            return self.method_chain_to_doc(expr, LinkIndent::Hang);
         }
         let call = |p: &mut Self| {
             concat(vec![
@@ -845,10 +845,11 @@ impl Printer {
     /// line it stays inline. A chain with a single continuation call lets
     /// the anchor break its own arguments and hugs the trailing call to
     /// the closing paren, matching how a depth-1 call on a call receiver
-    /// formats. Longer chains break every call onto its own line indented
-    /// 2 from the root. A comment between links forces the broken chain
-    /// and anchors to its link.
-    fn method_chain_to_doc(&mut self, expr: &Expr) -> Doc {
+    /// formats. Longer chains break every call onto its own line, indented
+    /// from the root by `link_indent`. A comment between links forces the
+    /// broken chain and anchors to its link.
+    pub(super) fn method_chain_to_doc(&mut self, expr: &Expr, link_indent: LinkIndent) -> Doc {
+        let hang = link_indent.width();
         let (root, links) = chain_links(expr);
         let root_doc = self.expr_to_doc(root);
 
@@ -901,14 +902,14 @@ impl Printer {
             // moving to its own line when it still does not fit.
             if let [doc] = &docs[..] {
                 let continuation = concat(vec![softline(), doc.clone()]);
-                return concat(vec![anchor, group(indent(2, continuation))]);
+                return concat(vec![anchor, group(indent(hang, continuation))]);
             }
             let mut chain_parts = Vec::with_capacity(docs.len() * 2);
             for doc in docs {
                 chain_parts.push(softline());
                 chain_parts.push(doc);
             }
-            return group(concat(vec![anchor, indent(2, concat(chain_parts))]));
+            return group(concat(vec![anchor, indent(hang, concat(chain_parts))]));
         }
 
         let mut chain_parts = Vec::new();
@@ -921,7 +922,51 @@ impl Printer {
                 chain_parts.push(tc);
             }
         }
-        concat(vec![anchor, indent(2, concat(chain_parts))])
+        concat(vec![anchor, indent(hang, concat(chain_parts))])
+    }
+}
+
+/// Link indent relative to the chain root. `Flush` is for a chain that
+/// already broke after `=`.
+#[derive(Clone, Copy)]
+pub(super) enum LinkIndent {
+    Flush,
+    Hang,
+}
+
+impl LinkIndent {
+    fn width(self) -> u32 {
+        match self {
+            LinkIndent::Flush => 0,
+            LinkIndent::Hang => 2,
+        }
+    }
+}
+
+impl Printer {
+    /// True when a comment will force the chain to break, either on a
+    /// link (keyed by its receiver span, see `Attacher::walk_chain`) or
+    /// anywhere inside the chain's arguments.
+    pub(super) fn chain_has_comments(&self, expr: &Expr) -> bool {
+        let (_, links) = chain_links(expr);
+        links.iter().any(|link| {
+            let ExprKind::MethodCall { receiver, .. } = &link.kind else {
+                return false;
+            };
+            self.comments.has(receiver.span, Slot::Leading)
+                || self.comments.has(receiver.span, Slot::Trailing)
+        }) || self.comments.any_within(expr.span)
+    }
+}
+
+/// Links that get their own line when the chain breaks. The call glued
+/// to a simple root does not count.
+pub(super) fn chain_continuations(expr: &Expr) -> usize {
+    let (root, links) = chain_links(expr);
+    if is_simple_chain_root(root) {
+        links.len().saturating_sub(1)
+    } else {
+        links.len()
     }
 }
 

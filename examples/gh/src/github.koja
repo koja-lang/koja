@@ -117,7 +117,8 @@ struct GitHub
   end
 
   priv fn headers -> Headers
-    base = Headers.new()
+    base =
+      Headers.new()
       .set("Accept", "application/vnd.github+json")
       .set("User-Agent", "koja-gh")
 

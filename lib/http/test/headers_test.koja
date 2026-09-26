@@ -30,7 +30,8 @@ test "Headers.get_all returns all values"
 end
 
 test "Headers.set replaces existing header"
-  h = Headers.new()
+  h =
+    Headers.new()
     .append("Content-Type", "text/plain")
     .set("Content-Type", "text/html")
 

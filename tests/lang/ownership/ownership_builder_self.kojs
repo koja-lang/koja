@@ -54,7 +54,8 @@ fn run_once -> Int
 end
 
 # Values come through the builders intact...
-state = State.empty()
+state =
+  State.empty()
   .with_fields(["one", "two"])
   .add_row("r1")
   .add_row("r2")

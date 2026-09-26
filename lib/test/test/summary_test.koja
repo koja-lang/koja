@@ -10,7 +10,8 @@ struct SummaryTest
   end
 
   test "record counts each outcome kind and sums the time"
-    summary = Summary{}
+    summary =
+      Summary{}
       .record(Outcome.Passed(SummaryTest.ms(3)))
       .record(Outcome.Failed(Failure.Error("boom"), SummaryTest.ms(1)))
       .record(
