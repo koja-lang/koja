@@ -926,10 +926,8 @@ impl Printer {
     }
 }
 
-/// Where a broken chain puts its `.method(args)` links relative to the
-/// root. `Hang` is the default 2 space continuation. `Flush` lines the
-/// links up with the root, the shape an assignment uses after it has
-/// already broken after `=`.
+/// Link indent relative to the chain root. `Flush` is for a chain that
+/// already broke after `=`.
 #[derive(Clone, Copy)]
 pub(super) enum LinkIndent {
     Flush,
@@ -945,10 +943,8 @@ impl LinkIndent {
     }
 }
 
-/// The number of `.method(args)` links a chain would lay out on their
-/// own lines when broken. A simple root glues its first call, so that
-/// call does not count. Decided from the AST alone, so a comment on the
-/// first link (which also rules the glue out) is not seen here.
+/// Links that get their own line when the chain breaks. The call glued
+/// to a simple root does not count.
 pub(super) fn chain_continuations(expr: &Expr) -> usize {
     let (root, links) = chain_links(expr);
     if is_simple_chain_root(root) {

@@ -20,6 +20,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `koja format` breaks an assigned method chain after `=` and keeps each call flush with the chain root. Before, a chain whose first call overflowed left `)` on its own line above an indented `.with_password(...)`.
 - Constants can hold `Option.None`, directly or in a struct field, such as `const EMPTY: Slot = Slot{ref: Option.None}`.
 - Constant type errors show the full type, such as `Option<Int>`, instead of only `Option`.
 

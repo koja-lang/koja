@@ -117,12 +117,8 @@ impl Printer {
         }
     }
 
-    /// A chain with two or more continuation links, laid out like an
-    /// assigned pipe. The whole statement stays on one line when it
-    /// fits. Otherwise the value moves below `op`, indented two, where
-    /// the chain gets its own fit check and breaks one link per line
-    /// flush with its root. A comment inside the chain or a block
-    /// argument forces the break after `op`.
+    /// An assigned chain that does not fit breaks after `op` and keeps
+    /// its links flush with the root.
     fn assigned_chain_to_doc(&mut self, lhs: Doc, op: &str, value: &Expr, breaks: bool) -> Doc {
         let forced = breaks || self.comments.any_within(value.span);
         let chain = self.method_chain_to_doc(value, LinkIndent::Flush);

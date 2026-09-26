@@ -44,6 +44,11 @@ violation of any rule is a bug, never a judgment call.
   `cond`, `if`, `receive`, a multi-line closure, or a call that contains
   one) breaks after `=` and indents the value 2 spaces. A value that fits
   on one line stays glued, including a call with an inline closure.
+- An assigned method chain with two or more continuation calls that
+  does not fit on one line also breaks after `=`. The chain then gets
+  its own fit check on the next line, and when it still overflows each
+  call takes its own line flush with the chain root. Outside an
+  assignment the calls hang 2 spaces under the root.
 - String interpolation (`#{...}`) renders its expression flat. The
   segment never introduces a line break inside the string.
 - Union types pack like symbolic operator chains: `|` ends the line and

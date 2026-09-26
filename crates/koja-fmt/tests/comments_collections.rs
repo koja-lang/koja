@@ -117,7 +117,6 @@ fn param_comments_force_broken_signature() {
 
 #[test]
 fn chain_comment_anchors_to_its_link() {
-    // A comment inside an assigned chain forces the break after `=`.
     assert_unchanged_script(
         "
             out =

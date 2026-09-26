@@ -35,8 +35,6 @@ fn method_chain_short_stays_inline() {
 
 #[test]
 fn method_chain_long_breaks_per_call() {
-    // An assigned chain breaks after `=` and lines its links up with
-    // the root, like an assigned pipe in Elixir.
     assert_fmt(
         r#"
             fn build -> String
@@ -63,7 +61,6 @@ fn method_chain_long_breaks_per_call() {
 
 #[test]
 fn returned_chain_hangs_its_links() {
-    // Outside an assignment the links keep the 2 space hang.
     assert_fmt(
         r#"
             fn build -> String
@@ -87,8 +84,6 @@ fn returned_chain_hangs_its_links() {
 
 #[test]
 fn assigned_chain_with_broken_anchor_keeps_links_flush() {
-    // The anchor's own argument list breaks, and the closing paren
-    // sits flush with the links that follow.
     assert_fmt(
         r#"
             fn f(settings: Settings) -> DbConfig
