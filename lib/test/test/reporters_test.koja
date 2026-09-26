@@ -50,7 +50,8 @@ struct ReportersTest
   end
 
   test "dots in the short style collects failures and skips without printing"
-    reporter = DotsReporter.new(Options{style: Style.Short})
+    reporter =
+      DotsReporter.new(Options{style: Style.Short})
       .started(ReportersTest.plan())
       .spec_finished(ReportersTest.spec(), Outcome.Passed(ReportersTest.ms(1)))
       .spec_finished(

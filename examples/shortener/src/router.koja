@@ -261,7 +261,8 @@ struct Router
 
   priv fn json_response<T: JSON.Encoding>(status: Status, body: T) -> Response
     text = JSON.encode(body, JSON.EncodeOptions{pretty?: true})
-    headers = Headers.new()
+    headers =
+      Headers.new()
       .set("Content-Type", "application/json")
       .set("Content-Length", "#{text.byte_length()}")
     Response{body: text, headers: headers, status: status, version: "HTTP/1.1"}

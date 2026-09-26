@@ -145,7 +145,8 @@ test "any? and all? predicates"
 end
 
 test "filter then map chaining"
-  chained = [1, 2, 3, 4, 5]
+  chained =
+    [1, 2, 3, 4, 5]
     .filter(fn (n: Int) -> Bool n > 2 end)
     .map(fn (n: Int) -> Int n * 10 end)
 

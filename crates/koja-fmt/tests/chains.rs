@@ -35,6 +35,8 @@ fn method_chain_short_stays_inline() {
 
 #[test]
 fn method_chain_long_breaks_per_call() {
+    // An assigned chain breaks after `=` and lines its links up with
+    // the root, like an assigned pipe in Elixir.
     assert_fmt(
         r#"
             fn build -> String
@@ -44,7 +46,8 @@ fn method_chain_long_breaks_per_call() {
         "#,
         r#"
             fn build -> String
-              sb = StringBuilder.new()
+              sb =
+                StringBuilder.new()
                 .add("GET")
                 .add(" ")
                 .add("/index.html")
@@ -54,6 +57,116 @@ fn method_chain_long_breaks_per_call() {
                 .add("\r\n")
               sb.build()
             end
+        "#,
+    );
+}
+
+#[test]
+fn returned_chain_hangs_its_links() {
+    // Outside an assignment the links keep the 2 space hang.
+    assert_fmt(
+        r#"
+            fn build -> String
+              StringBuilder.new().add("GET").add(" ").add("/index.html").add(" HTTP/1.1\r\n").add("Host: ").add("example.com").build()
+            end
+        "#,
+        r#"
+            fn build -> String
+              StringBuilder.new()
+                .add("GET")
+                .add(" ")
+                .add("/index.html")
+                .add(" HTTP/1.1\r\n")
+                .add("Host: ")
+                .add("example.com")
+                .build()
+            end
+        "#,
+    );
+}
+
+#[test]
+fn assigned_chain_with_broken_anchor_keeps_links_flush() {
+    // The anchor's own argument list breaks, and the closing paren
+    // sits flush with the links that follow.
+    assert_fmt(
+        r#"
+            fn f(settings: Settings) -> DbConfig
+              db_config = DbConfig.new(settings.database.host, settings.database.port, settings.database.user, settings.database.name).with_password(settings.database.password).with_statement_cache_size(settings.database.statement_cache)
+              db_config
+            end
+        "#,
+        r#"
+            fn f(settings: Settings) -> DbConfig
+              db_config =
+                DbConfig.new(
+                  settings.database.host,
+                  settings.database.port,
+                  settings.database.user,
+                  settings.database.name,
+                )
+                .with_password(settings.database.password)
+                .with_statement_cache_size(settings.database.statement_cache)
+              db_config
+            end
+        "#,
+    );
+}
+
+#[test]
+fn assigned_chain_that_fits_after_equals_stays_whole() {
+    assert_fmt(
+        r#"
+            fn f(settings: Settings) -> String
+              connection_string = settings.database_url.trim().downcase().replace("postgresql", "postgres")
+              connection_string
+            end
+        "#,
+        r#"
+            fn f(settings: Settings) -> String
+              connection_string =
+                settings.database_url.trim().downcase().replace("postgresql", "postgres")
+              connection_string
+            end
+        "#,
+    );
+}
+
+#[test]
+fn assigned_single_continuation_keeps_the_hug() {
+    assert_fmt(
+        r#"
+            fn f(settings: Config) -> DbConfig
+              config = DbConfig.new(settings.db_host, settings.db_port, settings.db_user, settings.db_name).with_password(settings.db_password)
+              config
+            end
+        "#,
+        r#"
+            fn f(settings: Config) -> DbConfig
+              config = DbConfig.new(
+                settings.db_host,
+                settings.db_port,
+                settings.db_user,
+                settings.db_name,
+              ).with_password(settings.db_password)
+              config
+            end
+        "#,
+    );
+}
+
+#[test]
+fn compound_assigned_chain_breaks_after_operator() {
+    assert_fmt_script(
+        r#"
+            total += prices.map(price -> price.cents()).filter(cents -> cents > 0).sum().clamp(0, 1000000)
+        "#,
+        r#"
+            total +=
+              prices.map(price -> price.cents())
+              .filter(cents -> cents > 0)
+              .sum()
+              .clamp(0, 1000000)
         "#,
     );
 }
@@ -115,7 +228,8 @@ fn method_chain_block_gets_spacing() {
         "#,
         r#"
             fn build(body: String) -> String
-              sb = StringBuilder.new()
+              sb =
+                StringBuilder.new()
                 .add("GET / HTTP/1.1\r\n")
                 .add("Host: example.com\r\n")
                 .add("\r\n")

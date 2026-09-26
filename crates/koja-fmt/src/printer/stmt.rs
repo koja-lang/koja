@@ -5,6 +5,7 @@ use koja_ast::ast::*;
 use koja_ast::span::Span;
 
 use super::Printer;
+use super::expr::{LinkIndent, chain_continuations};
 use super::seq::{SeqEntry, Spacing, vertical};
 use super::util::*;
 
@@ -105,12 +106,32 @@ impl Printer {
         // Decided before rendering: rendering consumes the comment
         // table the predicate consults.
         let breaks = self.forces_assignment_break(value);
+        if chain_continuations(value) >= 2 {
+            return self.assigned_chain_to_doc(lhs, op, value, breaks);
+        }
         let value_doc = self.expr_to_doc(value);
         if breaks {
             broken_assign_doc(lhs, op, value_doc)
         } else {
             group(concat(vec![lhs, text(format!(" {op} ")), value_doc]))
         }
+    }
+
+    /// A chain with two or more continuation links, laid out like an
+    /// assigned pipe. The whole statement stays on one line when it
+    /// fits. Otherwise the value moves below `op`, indented two, where
+    /// the chain gets its own fit check and breaks one link per line
+    /// flush with its root. A comment inside the chain or a block
+    /// argument forces the break after `op`.
+    fn assigned_chain_to_doc(&mut self, lhs: Doc, op: &str, value: &Expr, breaks: bool) -> Doc {
+        let forced = breaks || self.comments.any_within(value.span);
+        let chain = self.method_chain_to_doc(value, LinkIndent::Flush);
+        let sep = if forced { hardline() } else { line() };
+        group(concat(vec![
+            lhs,
+            text(format!(" {op}")),
+            indent(2, concat(vec![sep, chain])),
+        ]))
     }
 
     /// True when an assigned value renders as a multi-line block, which

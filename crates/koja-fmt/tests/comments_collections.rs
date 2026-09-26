@@ -117,9 +117,11 @@ fn param_comments_force_broken_signature() {
 
 #[test]
 fn chain_comment_anchors_to_its_link() {
+    // A comment inside an assigned chain forces the break after `=`.
     assert_unchanged_script(
         "
-            out = [3, 1, 2]
+            out =
+              [3, 1, 2]
               .map(v -> v * 2)
               # drop the small ones
               .filter(v -> v > 2)
