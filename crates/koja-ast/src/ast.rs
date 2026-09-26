@@ -907,6 +907,14 @@ pub struct LValue {
     pub span: Span,
 }
 
+impl LValue {
+    /// True for the bare `_` target. `_ = value` discards the value
+    /// and binds nothing, so the target never carries a `LocalId`.
+    pub fn is_discard(&self) -> bool {
+        matches!(self.segments.as_slice(), [name] if name.text == "_")
+    }
+}
+
 /// A statement within a function or block body.
 #[derive(Debug, Clone)]
 pub enum Statement {

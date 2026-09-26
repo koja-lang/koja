@@ -120,6 +120,13 @@ name = "koja"
 
 A variable must be assigned before it is read. See [Definite Assignment](#definite-assignment) for control-flow rules.
 
+Assigning to `_` evaluates the right-hand side and discards the value. `_` binds nothing, so one body can discard values of different types and `_` can never be read.
+
+```koja
+_ = conn.close()
+_ = try setup(conn)
+```
+
 ### Type Annotations
 
 Optional type annotations follow the variable name with a colon:
@@ -387,6 +394,13 @@ Short closures use `param -> expr` syntax as direct call arguments, with paramet
 option.map(x -> x + 1)
 list.filter(n -> n > 3)
 names.map(name -> name.upcase())
+```
+
+A closure with no parameters writes `()` on the left of the arrow:
+
+```koja
+Task.async(() -> compute())
+assert Test.crashes(() -> list.get(5).unwrap())
 ```
 
 Both positional and named arguments accept the short form, including arguments to generic functions. Use the block form outside a call argument or when the closure needs multiple parameters or statements.
@@ -2105,7 +2119,7 @@ end
 
 ```koja
 test "rejects an index past the end"
-  assert Test.crashes(fn () list.get(5).unwrap() end)
+  assert Test.crashes(() -> list.get(5).unwrap())
 end
 ```
 

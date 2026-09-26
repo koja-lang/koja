@@ -2,8 +2,8 @@
 //!
 //! Pins the resolver's behavior on the closure surface that drives
 //! the higher-order stdlib (`list.map`/`filter`, `option.then`,
-//! `result.map`): block (`fn x -> body end`) and short (`x -> body`)
-//! forms, explicit param annotations vs context-driven inference,
+//! `result.map`): block (`fn x -> body end`) and short (`x -> body`,
+//! `() -> body`) forms, explicit param annotations vs context-driven inference,
 //! capture of outer locals, nested closures, and "value-of-fn-type"
 //! storage in a local binding.
 
@@ -13,7 +13,10 @@ use koja_ast::util::dedent;
 
 mod common;
 
-use common::{function_body, global_leaf, last_expr, typecheck_script as typecheck};
+use common::{
+    diagnostic_messages, function_body, global_leaf, last_expr, typecheck_script as typecheck,
+    typecheck_script_fail as typecheck_fail,
+};
 
 fn fn_type(params: Vec<ResolvedType>, ret: ResolvedType) -> ResolvedType {
     ResolvedType::Anonymous(AnonymousKind::Function {
@@ -74,6 +77,51 @@ fn short_closure_with_unannotated_param_uses_context() {
     let closure = &args[0].value;
     let expected = fn_type(vec![int.clone()], int);
     assert_eq!(closure.resolution, expected);
+}
+
+#[test]
+fn zero_param_short_closure_resolves_to_thunk_type() {
+    let source = "
+        fn run(f: fn () -> Int) -> Int
+          f()
+        end
+
+        fn make -> Int
+          run(() -> 42)
+        end
+        ";
+
+    let checked = typecheck(&dedent(source));
+    let int = global_leaf(&checked, "Int");
+    let body = function_body(&checked, "make");
+    let trailing = last_expr(body);
+    let ExprKind::Call { args, .. } = &trailing.kind else {
+        panic!("expected Call, got {:?}", trailing.kind);
+    };
+    let closure = &args[0].value;
+    assert_eq!(closure.resolution, fn_type(Vec::new(), int));
+}
+
+#[test]
+fn zero_param_short_closure_against_unary_slot_reports_count() {
+    let source = "
+        fn apply(f: fn (Int) -> Int, value: Int) -> Int
+          f(value)
+        end
+
+        fn make -> Int
+          apply(() -> 42, 5)
+        end
+        ";
+
+    let failure = typecheck_fail(&dedent(source));
+    let messages = diagnostic_messages(&failure);
+    assert!(
+        messages
+            .iter()
+            .any(|m| m.contains("closure expects 1 parameter, got 0")),
+        "expected parameter count diagnostic, got {messages:?}",
+    );
 }
 
 #[test]

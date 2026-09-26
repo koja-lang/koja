@@ -1,0 +1,25 @@
+fn make_list -> List<String>
+  ["a", "b", "c"]
+end
+
+fn count -> Int
+  3
+end
+
+# `_` discards values of different types in one body
+_ = count()
+_ = "two"
+_ = make_list()
+
+# an annotated discard still checks the value against the annotation
+_: Int = count()
+
+# the same discard shape inside a function body
+fn discard_twice -> Int
+  _ = make_list()
+  _ = count()
+  7
+end
+
+discard_twice().print()
+"done".print()

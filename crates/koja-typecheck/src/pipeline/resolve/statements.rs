@@ -22,6 +22,9 @@
 //!   - Subsequent write of an existing name: type annotation is a
 //!     feature gap (only legal on first decl). Rhs type must equal
 //!     the existing local's type, and the existing [`LocalId`] stays put.
+//!   - `_` as the target is a discard. The rhs resolves (against the
+//!     annotation when one is written), no local is declared, and the
+//!     target keeps no [`LocalId`].
 //!
 //! - **Field write** (`segments.len() >= 2`): the head segment must
 //!   resolve to a declared local (`self` included). Each subsequent
@@ -200,6 +203,13 @@ fn declare_assignment_target(
             value_ty
         }
     };
+
+    // `_ = value` discards the value. The rhs was checked above, and
+    // nothing enters scope, so `_` never carries a type between
+    // statements. IR lower reads the missing LocalId as the discard.
+    if lvalue.is_discard() {
+        return;
+    }
 
     // Stamp the target so IR lower can read the LocalId without
     // re-walking scope. Single-segment is the only shape that reaches

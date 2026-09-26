@@ -264,6 +264,21 @@ fn short_closure_wildcard_param() {
 }
 
 #[test]
+fn short_closure_zero_params() {
+    let expr = first_call_argument("run(() -> 42)");
+    let ExprKind::ShortClosure { params, body, .. } = &expr.kind else {
+        panic!("expected ShortClosure, got {expr:?}");
+    };
+    assert!(params.is_empty());
+    assert!(matches!(
+        body.kind,
+        ExprKind::Literal {
+            value: Literal::Int(_)
+        }
+    ));
+}
+
+#[test]
 fn short_closure_body_is_full_expr() {
     let expr = first_call_argument("apply(x -> x + 1 * 2)");
     let ExprKind::ShortClosure { body, .. } = &expr.kind else {

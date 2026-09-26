@@ -253,7 +253,7 @@ on an abnormal exit:
 
 ```koja
 test "rejects an index past the end"
-  assert Test.crashes(fn () list.get(5).unwrap() end)
+  assert Test.crashes(() -> list.get(5).unwrap())
 end
 ```
 

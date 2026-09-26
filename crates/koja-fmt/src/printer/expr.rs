@@ -161,9 +161,16 @@ impl Printer {
             }
             ExprKind::Self_ { .. } => text("self"),
             ExprKind::ShortClosure { params, body } => {
-                let params_doc: Vec<Doc> = params.iter().map(closure_param_to_doc).collect();
+                let params_doc = if params.is_empty() {
+                    text("()")
+                } else {
+                    intersperse(
+                        params.iter().map(closure_param_to_doc).collect(),
+                        text(", "),
+                    )
+                };
                 group(concat(vec![
-                    intersperse(params_doc, text(", ")),
+                    params_doc,
                     text(" -> "),
                     self.expr_to_doc(body),
                 ]))
