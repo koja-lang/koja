@@ -3,7 +3,7 @@
 //! website's Rouge lexer so generated docs and kojalang.org code
 //! blocks read identically.
 
-use crate::extract::DocFunction;
+use crate::extract::{DocConformance, DocFunction};
 
 const KEYWORDS: &[&str] = &[
     "after", "alias", "and", "as", "assert", "break", "cond", "const", "else", "end", "enum",
@@ -53,6 +53,15 @@ impl SignatureToken {
             SignatureToken::Plain => None,
             SignatureToken::Type => Some("ty"),
         }
+    }
+}
+
+impl DocConformance {
+    /// Anchor for the conformance block on a type page,
+    /// `impl-Global-Hash`. Built from the path, not the display text,
+    /// so generic arguments never reach the URL.
+    pub fn anchor(&self) -> String {
+        format!("impl-{}", self.protocol_path.join("-"))
     }
 }
 

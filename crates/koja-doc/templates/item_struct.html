@@ -34,6 +34,9 @@
   </ul>
   {% endif %}
 
+  {% let conformances = s.conformances %}
+  {% include "conformances.html" %}
+
   {% if !s.functions.is_empty() %}
   <h2 class="section-heading" id="functions">Functions</h2>
   <div class="summary">

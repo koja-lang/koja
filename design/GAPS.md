@@ -416,32 +416,6 @@ also remove the alias restriction on defaults.
 
 ---
 
-## `koja doc` does not render protocol conformances
-
-Found 2026-09-07 in a stdlib doc audit. Doc extraction skips
-`impl Protocol for Type` blocks entirely, so any `@doc` inside one
-(for example the case-sensitivity note on `impl Equality for URI`)
-never reaches the HTML, `koja doc search`, or `koja doc <symbol>`.
-Header conformances (`struct Point: Hash`) are not listed on the
-type page either, and the requirement functions declared in the
-type body render as ordinary functions with no link to the protocol
-that owns their contract.
-
-Consequence: a reader of `Float` cannot see that it conforms to
-`Equality`, and a reader of `URI.equals?` cannot find the doc that
-explains its behavior. The stdlib convention that follows from this
-is that conformance functions carry no `@doc` unless the type's
-behavior has a detail the protocol requirement cannot state.
-
-**Fix path:** render a "Conforms to" section on each struct, enum,
-and builtin page that lists every conformance from the header and
-from `impl` blocks. Under each protocol, list the requirement
-functions, use the implementation's `@doc` when it has one, and
-fall back to the protocol requirement's `@doc` otherwise. Index
-those entries in search so `koja doc URI.equals?` resolves.
-
----
-
 ## Enum variant patterns do not match through a union subject
 
 Found 2026-09-07 while flattening test matches after structural

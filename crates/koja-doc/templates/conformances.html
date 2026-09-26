@@ -1,0 +1,25 @@
+{% if !conformances.is_empty() %}
+  <h2 class="section-heading" id="conforms-to">Conforms to</h2>
+  {% for c in conformances %}
+  <div class="conformance">
+    <h3 class="conformance-heading" id="{{ c.anchor() }}">
+      {% if let Some(href) = c.protocol_href %}<a href="{{ ctx.root_prefix }}{{ href }}">{{ c.protocol }}</a>{% else %}{{ c.protocol }}{% endif %}
+      {% if let Some(condition) = c.condition %}<span class="conformance-condition">where {{ condition }}</span>{% endif %}
+    </h3>
+    {% if !c.functions.is_empty() %}
+    <div class="summary">
+      {% for f in c.functions %}
+      <div class="summary-row">
+        <div class="summary-name"><a href="#{{ f.anchor() }}">{{ f.name }}/{{ f.arity }}</a></div>
+        {% if f.deprecated.is_some() %}<span class="deprecated-badge">deprecated</span>{% endif %}
+        {% if let Some(doc) = f.doc %}<div class="summary-brief">{{ doc|brief }}</div>{% endif %}
+      </div>
+      {% endfor %}
+    </div>
+    {% for f in c.functions %}
+    {% include "function_detail.html" %}
+    {% endfor %}
+    {% endif %}
+  </div>
+  {% endfor %}
+{% endif %}

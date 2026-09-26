@@ -11,7 +11,8 @@
 //! the only escaping concern is doc-string content.
 
 use crate::extract::{
-    DocBuiltin, DocConstant, DocEnum, DocFunction, DocPackage, DocProject, DocProtocol, DocStruct,
+    DocBuiltin, DocConformance, DocConstant, DocEnum, DocFunction, DocPackage, DocProject,
+    DocProtocol, DocStruct,
 };
 
 /// Format `project` as the contents of `doc/search-index.json`,
@@ -140,9 +141,15 @@ fn collect_package_symbols<'a>(pkg: &'a DocPackage, out: &mut Vec<Symbol<'a>>) {
         package: &pkg.name,
         target: SymbolTarget::Function(f),
     };
+    let conformance_members = |owner: &'a str, conformances: &'a [DocConformance]| {
+        conformances
+            .iter()
+            .flat_map(move |c| c.functions.iter().map(move |f| member(owner, f)))
+    };
 
     for b in &pkg.builtins {
         out.push(item("builtin", &b.name, SymbolTarget::Builtin(b)));
+        out.extend(conformance_members(&b.name, &b.conformances));
         out.extend(b.functions.iter().map(|f| member(&b.name, f)));
     }
     for c in &pkg.constants {
@@ -150,6 +157,7 @@ fn collect_package_symbols<'a>(pkg: &'a DocPackage, out: &mut Vec<Symbol<'a>>) {
     }
     for e in &pkg.enums {
         out.push(item("enum", &e.name, SymbolTarget::Enum(e)));
+        out.extend(conformance_members(&e.name, &e.conformances));
         out.extend(e.functions.iter().map(|f| member(&e.name, f)));
     }
     for f in &pkg.functions {
@@ -161,6 +169,7 @@ fn collect_package_symbols<'a>(pkg: &'a DocPackage, out: &mut Vec<Symbol<'a>>) {
     }
     for s in &pkg.structs {
         out.push(item("struct", &s.name, SymbolTarget::Struct(s)));
+        out.extend(conformance_members(&s.name, &s.conformances));
         out.extend(s.functions.iter().map(|f| member(&s.name, f)));
     }
 }

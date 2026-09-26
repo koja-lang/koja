@@ -8,8 +8,8 @@
 use askama::Template;
 
 use crate::extract::{
-    DocBuiltin, DocConstant, DocEnum, DocFunction, DocItem, DocPackage, DocProject, DocProtocol,
-    DocStruct, PackageKind,
+    DocBuiltin, DocConformance, DocConstant, DocEnum, DocFunction, DocItem, DocPackage, DocProject,
+    DocProtocol, DocStruct, PackageKind,
 };
 
 mod filters {
@@ -204,8 +204,37 @@ fn function_entries(functions: &[DocFunction]) -> impl Iterator<Item = TocEntry>
     functions.iter().map(TocEntry::function)
 }
 
+/// A "Conforms to" section entry, then one entry per protocol with
+/// its functions under it.
+fn push_conformance_entries(toc: &mut Vec<TocEntry>, conformances: &[DocConformance]) {
+    if conformances.is_empty() {
+        return;
+    }
+    toc.push(TocEntry::section("Conforms to", "conforms-to"));
+    for c in conformances {
+        toc.push(TocEntry::section(&c.protocol, &c.anchor()));
+        toc.extend(function_entries(&c.functions));
+    }
+}
+
+/// The inherent functions. The "Functions" section entry appears
+/// only after conformance groups, so the inherent list is not read
+/// as part of the last protocol.
+fn push_function_entries(toc: &mut Vec<TocEntry>, functions: &[DocFunction], grouped: bool) {
+    if functions.is_empty() {
+        return;
+    }
+    if grouped {
+        toc.push(TocEntry::section("Functions", "functions"));
+    }
+    toc.extend(function_entries(functions));
+}
+
 fn builtin_toc(b: &DocBuiltin) -> Vec<TocEntry> {
-    function_entries(&b.functions).collect()
+    let mut toc = Vec::new();
+    push_conformance_entries(&mut toc, &b.conformances);
+    push_function_entries(&mut toc, &b.functions, !b.conformances.is_empty());
+    toc
 }
 
 fn struct_toc(s: &DocStruct) -> Vec<TocEntry> {
@@ -213,7 +242,8 @@ fn struct_toc(s: &DocStruct) -> Vec<TocEntry> {
     if !s.fields.is_empty() {
         toc.push(TocEntry::section("Fields", "fields"));
     }
-    toc.extend(function_entries(&s.functions));
+    push_conformance_entries(&mut toc, &s.conformances);
+    push_function_entries(&mut toc, &s.functions, !s.conformances.is_empty());
     toc
 }
 
@@ -222,12 +252,17 @@ fn enum_toc(e: &DocEnum) -> Vec<TocEntry> {
     if !e.variants.is_empty() {
         toc.push(TocEntry::section("Variants", "variants"));
     }
-    toc.extend(function_entries(&e.functions));
+    push_conformance_entries(&mut toc, &e.conformances);
+    push_function_entries(&mut toc, &e.functions, !e.conformances.is_empty());
     toc
 }
 
 fn protocol_toc(p: &DocProtocol) -> Vec<TocEntry> {
-    function_entries(&p.functions).collect()
+    let mut toc: Vec<TocEntry> = function_entries(&p.functions).collect();
+    if !p.implementors.is_empty() {
+        toc.push(TocEntry::section("Implemented by", "implemented-by"));
+    }
+    toc
 }
 
 /// Shared context for the top bar, left rail, and right TOC that
