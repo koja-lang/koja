@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- `koja format` puts one blank line between the fields (or enum variants) of a type and its nested constants. Consecutive constants still stack.
+
 ### Fixed
 
 - Constants can hold `Option.None`, directly or in a struct field, such as `const EMPTY: Slot = Slot{ref: Option.None}`.
