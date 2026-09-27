@@ -4,9 +4,15 @@ alias Net.Socket.Address as SocketAddress
 alias Net.Socket.Error as SocketError
 alias Net.Socket.Kind as SocketKind
 alias Net.TCPListener
+alias Net.TCPListener.Options as ListenerOptions
 alias Net.TCPSocket
 alias Net.UDPSocket
 alias Test.require
+
+const SHORT_WAIT: Duration = Duration{
+  unit: Duration.Unit.Milliseconds,
+  value: 50,
+}
 
 test "create stream socket"
   s = try require(Socket.create(SocketKind.Stream))
@@ -61,6 +67,71 @@ test "TCPSocket.connect_addr to loopback:1 is refused"
     Result.Err(e) ->
       fail "expected ConnectionRefused, got: #{e.message()}"
   end
+end
+
+test "TCPListener.accept fails with TimedOut after accept_timeout"
+  options = ListenerOptions{accept_timeout: Option.Some(SHORT_WAIT)}
+  listener = try require(
+    TCPListener.bind_addr(
+      SocketAddress{ip: IPAddress.LOOPBACK, port: 0},
+      options,
+    ),
+  )
+  result = listener.accept()
+  _ = listener.close()
+
+  match result
+    Result.Ok(conn) ->
+      _ = conn.close()
+      fail "expected accept to time out"
+
+    Result.Err(SocketError.TimedOut) ->
+      ()
+
+    Result.Err(e) ->
+      fail "expected TimedOut, got: #{e.message()}"
+  end
+end
+
+test "TCPSocket.read fails with TimedOut when the peer is silent"
+  (listener, port) = try bind_loopback_tcp(ListenerOptions{})
+  addr = SocketAddress{ip: IPAddress.LOOPBACK, port: port}
+  client = try require(TCPSocket.connect_addr(addr))
+  result = client.with_read_timeout(Option.Some(SHORT_WAIT)).read(16)
+  _ = client.close()
+  _ = listener.close()
+
+  match result
+    Result.Ok(_) ->
+      fail "expected read to time out"
+
+    Result.Err(socket_error: SocketError) ->
+      match socket_error
+        SocketError.TimedOut -> ()
+        _ -> fail "expected TimedOut, got: #{socket_error.message()}"
+      end
+
+    Result.Err(tls_error: TLSError) ->
+      fail "expected TimedOut, got: #{tls_error.message()}"
+  end
+end
+
+test "TCPListener.accept copies the listener timeouts onto the socket"
+  options = ListenerOptions{
+    read_timeout: Option.Some(SHORT_WAIT),
+    write_timeout: Option.Some(SHORT_WAIT),
+  }
+  (listener, port) = try bind_loopback_tcp(options)
+  addr = SocketAddress{ip: IPAddress.LOOPBACK, port: port}
+  client = try require(TCPSocket.connect_addr(addr))
+  server = try require(listener.accept())
+  _ = client.close()
+  _ = server.close()
+  _ = listener.close()
+
+  assert client.read_timeout == Option.None
+  assert server.read_timeout == Option.Some(SHORT_WAIT)
+  assert server.write_timeout == Option.Some(SHORT_WAIT)
 end
 
 test "UDPSocket.bind to port 0"
@@ -123,4 +194,22 @@ priv fn bind_loopback_udp -> (UDPSocket, Int) ! Test.Failure
   end
 
   fail "could not bind a loopback UDP test socket"
+end
+
+priv fn bind_loopback_tcp(options: ListenerOptions)
+  -> (TCPListener, Int) ! Test.Failure
+
+  attempts = 0
+
+  while attempts < 20
+    port = Random.int(49152, 65535)
+    addr = SocketAddress{ip: IPAddress.LOOPBACK, port: port}
+
+    match TCPListener.bind_addr(addr, options)
+      Result.Ok(listener) -> return (listener, port)
+      Result.Err(_) -> attempts += 1
+    end
+  end
+
+  fail "could not bind a loopback TCP test socket"
 end

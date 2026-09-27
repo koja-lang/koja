@@ -98,6 +98,82 @@ fn tcp_try_accept_reports_nothing_pending() {
     );
 }
 
+/// Function mode has no driver, so a bounded wait blocks the thread on a
+/// timed `poll(2)` and must still end in `TimedOut`.
+#[test]
+fn tcp_accept_times_out_without_a_client() {
+    let port = fresh_port();
+    let source = dedent(&format!(
+        r#"
+        alias Net.Socket.Error as SocketError
+        alias Net.TCPListener
+        alias Net.TCPListener.Options as ListenerOptions
+
+        fn main -> String
+          limit = Duration{{unit: Duration.Unit.Milliseconds, value: 20}}
+          options = ListenerOptions{{accept_timeout: Option.Some(limit)}}
+          listener =
+            match TCPListener.bind({port}, options)
+              Result.Ok(l) -> l
+              Result.Err(e) -> return "bind failed: " <> e.message()
+            end
+
+          match listener.accept()
+            Result.Ok(_) -> "accepted"
+            Result.Err(SocketError.TimedOut) -> "timed out"
+            Result.Err(e) -> "accept failed: " <> e.message()
+          end
+        end
+        "#
+    ));
+    assert_eq!(
+        evaluate_qualified_program(&source).expect("fixture should run"),
+        Value::string(b"timed out".as_slice()),
+    );
+}
+
+#[test]
+fn tcp_read_times_out_on_a_silent_peer() {
+    let port = fresh_port();
+    let source = dedent(&format!(
+        r#"
+        alias Net.Socket.Error as SocketError
+        alias Net.TCPListener
+        alias Net.TCPSocket
+        alias Net.TLSError
+
+        fn main -> String
+          listener =
+            match TCPListener.bind({port})
+              Result.Ok(l) -> l
+              Result.Err(e) -> return "bind failed: " <> e.message()
+            end
+
+          client =
+            match TCPSocket.connect("127.0.0.1", {port})
+              Result.Ok(c) -> c
+              Result.Err(e) -> return "connect failed: " <> e.message()
+            end
+
+          limit = Duration{{unit: Duration.Unit.Milliseconds, value: 20}}
+          match client.with_read_timeout(Option.Some(limit)).read(16)
+            Result.Ok(_) -> "read data"
+            Result.Err(socket_error: SocketError) ->
+              match socket_error
+                SocketError.TimedOut -> "timed out"
+                _ -> "read failed: " <> socket_error.message()
+              end
+            Result.Err(tls_error: TLSError) -> "read failed: " <> tls_error.message()
+          end
+        end
+        "#
+    ));
+    assert_eq!(
+        evaluate_qualified_program(&source).expect("fixture should run"),
+        Value::string(b"timed out".as_slice()),
+    );
+}
+
 #[test]
 fn udp_loopback_send_and_recv_from() {
     let port = fresh_port();

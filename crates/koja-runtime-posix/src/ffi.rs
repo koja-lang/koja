@@ -14,6 +14,8 @@ mod platform {
     pub const EAGAIN: i32 = 35;
     pub const EINPROGRESS: i32 = 36;
     pub const EINTR: i32 = 4;
+    pub const EINVAL: i32 = 22;
+    pub const ENOTCONN: i32 = 57;
 }
 
 #[cfg(target_os = "linux")]
@@ -25,6 +27,8 @@ mod platform {
     pub const EAGAIN: i32 = 11;
     pub const EINPROGRESS: i32 = 115;
     pub const EINTR: i32 = 4;
+    pub const EINVAL: i32 = 22;
+    pub const ENOTCONN: i32 = 107;
 }
 
 pub use platform::*;
@@ -123,6 +127,8 @@ unsafe extern "C" {
     ) -> i32;
     #[link_name = "gethostname"]
     pub fn libc_gethostname(name: *mut c_char, len: usize) -> i32;
+    #[link_name = "getpeername"]
+    pub fn libc_getpeername(fd: i32, addr: *mut u8, addrlen: *mut u32) -> i32;
     #[link_name = "listen"]
     pub fn libc_listen(fd: i32, backlog: i32) -> i32;
     #[link_name = "read"]

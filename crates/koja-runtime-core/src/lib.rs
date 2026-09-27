@@ -28,7 +28,7 @@ pub mod wire;
 pub use driver::{CooperativeDriver, CooperativeRuntime};
 pub use mailbox::{Mailbox, WaitTarget};
 pub use process_table::{
-    CrashInfo, Delivery, ExitNotice, ExitReason, IoPark, MailPark, Priority, ProcessState,
+    CrashInfo, Delivery, ExitNotice, ExitReason, IoPark, IoWait, MailPark, Priority, ProcessState,
     ProcessTable, Reclaim, ReplyDelivery, ScheduleCounters, SwitchOutcome, Wake, slot_index,
 };
 pub use protocol::{
@@ -39,5 +39,5 @@ pub use ready_queue::ReadyQueue;
 pub use scheduler_trace::{TraceEntry, TraceEvent};
 pub use timer_service::TimerService;
 pub use timer_wheel::Due;
-pub use timing::duration_from_user_millis;
+pub use timing::{deadline_from_user_millis, duration_from_user_millis};
 pub use wire::{Envelope, OwnedPayload};

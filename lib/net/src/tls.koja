@@ -212,9 +212,17 @@ struct TLSSession
   @doc """
   Performs a server-side TLS handshake over the connected `fd` using
   the certificate and key from `config`. Suspends the process while
-  the socket is not ready. Returns the established session.
+  the socket is not ready. `read_timeout` bounds the total time spent
+  waiting to read and `write_timeout` the total time waiting to write,
+  measured from this call. Returns the established session.
   """
-  fn accept(fd: Fd, config: TLSConfig) -> TLSSession ! SocketError | TLSError
+  fn accept(
+    fd: Fd,
+    config: TLSConfig,
+    read_timeout: Option<Duration> = Option.None,
+    write_timeout: Option<Duration> = Option.None,
+  ) -> TLSSession ! SocketError | TLSError
+
     identity =
       match config.identity
         Option.Some(i) -> i
@@ -244,17 +252,31 @@ struct TLSSession
     end
 
     ssl_set_fd(ssl, fd.descriptor)
-    try handshake_loop(ssl, ctx, fd, false)
+    try handshake_loop(
+      ssl,
+      ctx,
+      fd,
+      false,
+      deadline_for(read_timeout),
+      deadline_for(write_timeout),
+    )
   end
 
   @doc """
   Performs a client-side TLS handshake over the connected `fd`.
   Sends `hostname` for SNI and, when `config.verify` is set, checks
   the server certificate chain against it. Suspends the process while
-  the socket is not ready. Returns the established session.
+  the socket is not ready. `read_timeout` bounds the total time spent
+  waiting to read and `write_timeout` the total time waiting to write,
+  measured from this call. Returns the established session.
   """
-  fn connect(fd: Fd, hostname: String, config: TLSConfig)
-    -> TLSSession ! SocketError | TLSError
+  fn connect(
+    fd: Fd,
+    hostname: String,
+    config: TLSConfig,
+    read_timeout: Option<Duration> = Option.None,
+    write_timeout: Option<Duration> = Option.None,
+  ) -> TLSSession ! SocketError | TLSError
 
     ctx = ssl_ctx_new(tls_method())
 
@@ -298,17 +320,31 @@ struct TLSSession
     end
 
     host_cs.free()
-    try handshake_loop(ssl, ctx, fd, true)
+    try handshake_loop(
+      ssl,
+      ctx,
+      fd,
+      true,
+      deadline_for(read_timeout),
+      deadline_for(write_timeout),
+    )
   end
 
   @doc """
   Reads up to `count` bytes of decrypted data as raw bytes. Returns
   an empty `Binary` on a clean end of stream. Suspends the process
-  while the socket is not ready.
+  while the socket is not ready, and fails with `SocketError.TimedOut`
+  once `timeout` has passed since this call without a full record.
   """
-  fn read_binary(self, fd: Fd, count: Int) -> Binary ! SocketError | TLSError
+  fn read_binary(
+    self,
+    fd: Fd,
+    count: Int,
+    timeout: Option<Duration> = Option.None,
+  ) -> Binary ! SocketError | TLSError
+
     buf: CPtr<UInt8> = CPtr.alloc(count)
-    result = read_loop(self.ssl, fd, buf, count)
+    result = read_loop(self.ssl, fd, buf, count, deadline_for(timeout))
     buf.free()
     try result
   end
@@ -326,16 +362,24 @@ struct TLSSession
   @doc """
   Encrypts and writes data to the connection. Accepts either a
   `String` (encoded as UTF-8) or a `Binary`. Returns the number of
-  bytes written. Suspends the process while the socket is not ready.
+  bytes written. Suspends the process while the socket is not ready,
+  and fails with `SocketError.TimedOut` once `timeout` has passed
+  since this call without the record going out.
   """
-  fn write(self, fd: Fd, data: Binary | String) -> Int ! SocketError | TLSError
+  fn write(
+    self,
+    fd: Fd,
+    data: Binary | String,
+    timeout: Option<Duration> = Option.None,
+  ) -> Int ! SocketError | TLSError
+
     bytes =
       match data
         b: Binary -> b
         s: String -> s.to_binary()
       end
 
-    try write_loop(self.ssl, fd, bytes)
+    try write_loop(self.ssl, fd, bytes, deadline_for(timeout))
   end
 
   priv fn add_chain_certs(ctx: CPtr<UInt8>, bio: CPtr<UInt8>) -> Bool ! TLSError
@@ -419,11 +463,17 @@ struct TLSSession
     io_failure(err)
   end
 
+  priv fn deadline_for(timeout: Option<Duration>) -> Option<Instant>
+    timeout.map(limit -> Instant.now().plus(limit))
+  end
+
   priv fn handshake_loop(
     ssl: CPtr<UInt8>,
     ctx: CPtr<UInt8>,
     fd: Fd,
     client: Bool,
+    read_deadline: Option<Instant>,
+    write_deadline: Option<Instant>,
   ) -> TLSSession ! SocketError | TLSError
 
     ret: Int = client ? ssl_connect(ssl) : ssl_accept(ssl)
@@ -441,8 +491,23 @@ struct TLSSession
       fail failure
     end
 
-    fd.block(err == SSL_ERROR_WANT_READ)
-    try handshake_loop(ssl, ctx, fd, client)
+    wants_read = err == SSL_ERROR_WANT_READ
+
+    match wait_ready(
+      fd,
+      wants_read,
+      wants_read ? read_deadline : write_deadline,
+    )
+      Result.Err(e) ->
+        ssl_free(ssl)
+        ssl_ctx_free(ctx)
+        fail e
+
+      Result.Ok(_) ->
+        ()
+    end
+
+    try handshake_loop(ssl, ctx, fd, client, read_deadline, write_deadline)
   end
 
   priv fn io_failure(err: Int) -> SocketError | TLSError
@@ -508,8 +573,13 @@ struct TLSSession
     end
   end
 
-  priv fn read_loop(ssl: CPtr<UInt8>, fd: Fd, buf: CPtr<UInt8>, count: Int)
-    -> Binary ! SocketError | TLSError
+  priv fn read_loop(
+    ssl: CPtr<UInt8>,
+    fd: Fd,
+    buf: CPtr<UInt8>,
+    count: Int,
+    deadline: Option<Instant>,
+  ) -> Binary ! SocketError | TLSError
 
     ret: Int = ssl_read(ssl, buf, count)
 
@@ -528,8 +598,8 @@ struct TLSSession
       fail io_failure(err)
     end
 
-    fd.block(err == SSL_ERROR_WANT_READ)
-    try read_loop(ssl, fd, buf, count)
+    try wait_ready(fd, err == SSL_ERROR_WANT_READ, deadline)
+    try read_loop(ssl, fd, buf, count, deadline)
   end
 
   priv fn syscall_failure -> SocketError | TLSError
@@ -606,8 +676,30 @@ struct TLSSession
     true
   end
 
-  priv fn write_loop(ssl: CPtr<UInt8>, fd: Fd, bytes: Binary)
-    -> Int ! SocketError | TLSError
+  # Waits for `fd` in one direction until `deadline`. Each wait gets
+  # the time left, so a whole call shares one bound.
+  priv fn wait_ready(fd: Fd, readable: Bool, deadline: Option<Instant>)
+    ! SocketError
+
+    match deadline
+      Option.None ->
+        _ = fd.block(readable, Option.None)
+
+      Option.Some(at) ->
+        remaining = at.since(Instant.now())
+
+        if remaining.zero?() or fd.block(readable, Option.Some(remaining))
+          fail SocketError.TimedOut
+        end
+    end
+  end
+
+  priv fn write_loop(
+    ssl: CPtr<UInt8>,
+    fd: Fd,
+    bytes: Binary,
+    deadline: Option<Instant>,
+  ) -> Int ! SocketError | TLSError
 
     ret: Int = ssl_write(ssl, CPtr.borrow(bytes), bytes.byte_size())
 
@@ -621,8 +713,8 @@ struct TLSSession
       fail io_failure(err)
     end
 
-    fd.block(err == SSL_ERROR_WANT_READ)
-    try write_loop(ssl, fd, bytes)
+    try wait_ready(fd, err == SSL_ERROR_WANT_READ, deadline)
+    try write_loop(ssl, fd, bytes, deadline)
   end
 
   @extern "C" @link "ssl:BIO_free"

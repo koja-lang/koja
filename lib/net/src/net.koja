@@ -25,9 +25,10 @@ struct Socket
 
   @doc """
   Accepts an incoming connection. Returns the client file descriptor.
+  With a `timeout`, fails once that much time passes with no client.
   """
-  fn accept(self) -> Fd ! String
-    client_fd = koja_socket_accept(self.fd.descriptor)
+  fn accept(self, timeout: Option<Duration> = Option.None) -> Fd ! String
+    client_fd = koja_socket_accept(self.fd.descriptor, timeout_ms(timeout))
 
     if client_fd == -1
       fail last_error()
@@ -62,14 +63,18 @@ struct Socket
   end
 
   @doc """
-  Connects the socket to the given address and port.
+  Connects the socket to the given address and port. With a `timeout`,
+  fails once that much time passes with the handshake still pending.
   """
-  fn connect(self, addr: SocketAddress) -> Socket ! String
+  fn connect(self, addr: SocketAddress, timeout: Option<Duration> = Option.None)
+    -> Socket ! String
+
     result = koja_socket_connect(
       self.fd.descriptor,
       CPtr.borrow(addr.ip.bytes),
       addr.ip.bytes.byte_size(),
       addr.port,
+      timeout_ms(timeout),
     )
 
     if result == -1
@@ -177,6 +182,13 @@ struct Socket
     koja_socket_try_accept(self.fd.descriptor)
   end
 
+  priv fn timeout_ms(timeout: Option<Duration>) -> Int
+    match timeout
+      Option.None -> -1
+      Option.Some(duration) -> duration.to_milliseconds()
+    end
+  end
+
   @intrinsic
   priv fn last_error -> String
 
@@ -187,7 +199,7 @@ struct Socket
   priv fn resolve_raw(hostname: String) -> List<Binary> ! String
 
   @extern "C"
-  priv fn koja_socket_accept(fd: Int32) -> Int32
+  priv fn koja_socket_accept(fd: Int32, timeout_ms: Int64) -> Int32
 
   @extern "C"
   priv fn koja_socket_bind(
@@ -203,6 +215,7 @@ struct Socket
     ip: CPtr<UInt8>,
     ip_length: Int64,
     port: Int64,
+    timeout_ms: Int64,
   ) -> Int64
 
   @extern "C"

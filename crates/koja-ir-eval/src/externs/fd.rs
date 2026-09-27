@@ -21,7 +21,7 @@
 
 use std::ptr;
 
-use koja_runtime_core::Interest;
+use koja_runtime_core::{Interest, IoWait, deadline_from_user_millis};
 
 use crate::error::RuntimeError;
 use crate::externs::marshal::{pass_through_externs, type_mismatch};
@@ -30,8 +30,8 @@ use crate::scheduler;
 use crate::value::Value;
 
 unsafe extern "C" {
-    fn koja_fd_read(fd: i32, count: i64) -> *mut u8;
-    fn koja_fd_write(fd: i32, data: *mut u8, len: i64) -> i64;
+    fn koja_fd_read(fd: i32, count: i64, timeout_ms: i64) -> *mut u8;
+    fn koja_fd_write(fd: i32, data: *mut u8, len: i64, timeout_ms: i64) -> i64;
 }
 
 pass_through_externs! {
@@ -48,50 +48,69 @@ pass_through_externs! {
     file_write_all => fn koja_file_write_all(path: CPtr, content: CPtr, len: Int64) -> Int64;
 }
 
-/// `koja_fd_read(fd, count)`: wait for `fd` to be readable, then delegate
-/// to the native reader (which owns the koja-string marshaling). Returns
-/// the length-prefixed string pointer, or null on error.
+/// `koja_fd_read(fd, count, timeout_ms)`: wait for `fd` to be readable,
+/// then delegate to the native reader (which owns the koja-string
+/// marshaling). Returns the length-prefixed string pointer, or null on
+/// error, interrupt, or timeout (with `TimedOut` as the last error).
 pub(super) async fn fd_read(args: &[Value]) -> Result<Value, RuntimeError> {
-    let [Value::Int(fd), Value::Int(count)] = args else {
+    let [Value::Int(fd), Value::Int(count), Value::Int(timeout_ms)] = args else {
         return Err(type_mismatch(
             "koja_fd_read",
-            "(fd: Int32, count: Int64)",
+            "(fd: Int32, count: Int64, timeout_ms: Int64)",
             args,
         ));
     };
-    // Interrupted by a signal: return the native null sentinel.
-    if reactor::io_block(*fd as i32, Interest::Readable).await {
-        return Ok(Value::CPtr(ptr::null_mut()));
+    let deadline = deadline_from_user_millis(*timeout_ms);
+    match reactor::io_block(*fd as i32, Interest::Readable, deadline).await {
+        IoWait::Ready => {}
+        IoWait::Interrupted => return Ok(Value::CPtr(ptr::null_mut())),
+        IoWait::TimedOut => {
+            reactor::note_timed_out();
+            return Ok(Value::CPtr(ptr::null_mut()));
+        }
     }
-    let ptr = unsafe { koja_fd_read(*fd as i32, *count) };
+    let ptr = unsafe { koja_fd_read(*fd as i32, *count, -1) };
     Ok(Value::CPtr(ptr))
 }
 
-/// `koja_fd_write(fd, data, len)`: wait for `fd` to be writable, then
-/// delegate to the native writer. Returns the bytes written, or -1.
+/// `koja_fd_write(fd, data, len, timeout_ms)`: wait for `fd` to be
+/// writable, then delegate to the native writer. Returns the bytes
+/// written, or -1 on error, interrupt, or timeout.
 pub(super) async fn fd_write(args: &[Value]) -> Result<Value, RuntimeError> {
-    let [Value::Int(fd), Value::CPtr(data), Value::Int(len)] = args else {
+    let [
+        Value::Int(fd),
+        Value::CPtr(data),
+        Value::Int(len),
+        Value::Int(timeout_ms),
+    ] = args
+    else {
         return Err(type_mismatch(
             "koja_fd_write",
-            "(fd: Int32, data: CPtr, len: Int64)",
+            "(fd: Int32, data: CPtr, len: Int64, timeout_ms: Int64)",
             args,
         ));
     };
-    // Interrupted by a signal: return the native -1 sentinel.
-    if reactor::io_block(*fd as i32, Interest::Writable).await {
-        return Ok(Value::Int(-1));
+    let deadline = deadline_from_user_millis(*timeout_ms);
+    match reactor::io_block(*fd as i32, Interest::Writable, deadline).await {
+        IoWait::Ready => {}
+        IoWait::Interrupted => return Ok(Value::Int(-1)),
+        IoWait::TimedOut => {
+            reactor::note_timed_out();
+            return Ok(Value::Int(-1));
+        }
     }
-    let written = unsafe { koja_fd_write(*fd as i32, *data, *len) };
+    let written = unsafe { koja_fd_write(*fd as i32, *data, *len, -1) };
     Ok(Value::Int(written))
 }
 
-/// `koja_io_block(fd, readable)` (`Fd.block`): suspend until `fd` is
-/// ready for the requested direction via eval's reactor.
+/// `koja_io_block(fd, readable, timeout_ms)` (`Fd.block`): suspend until
+/// `fd` is ready for the requested direction via eval's reactor. Returns
+/// 1 when the deadline passed, 0 otherwise.
 pub(super) async fn io_block(args: &[Value]) -> Result<Value, RuntimeError> {
-    let [Value::Int(fd), Value::Int(readable)] = args else {
+    let [Value::Int(fd), Value::Int(readable), Value::Int(timeout_ms)] = args else {
         return Err(type_mismatch(
             "koja_io_block",
-            "(fd: Int32, readable: Int64)",
+            "(fd: Int32, readable: Int64, timeout_ms: Int64)",
             args,
         ));
     };
@@ -100,8 +119,9 @@ pub(super) async fn io_block(args: &[Value]) -> Result<Value, RuntimeError> {
     } else {
         Interest::Writable
     };
-    let _ = reactor::io_block(*fd as i32, interest).await;
-    Ok(Value::Unit)
+    let deadline = deadline_from_user_millis(*timeout_ms);
+    let wait = reactor::io_block(*fd as i32, interest, deadline).await;
+    Ok(Value::Int(i64::from(wait == IoWait::TimedOut)))
 }
 
 /// `koja_rt_watch_fd(fd, interest)` (`Fd.watch`): arm `fd` so the driver

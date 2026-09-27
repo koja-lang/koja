@@ -527,6 +527,7 @@ lang_test_dir!(lang_process_exit, "process_exit", project);
 lang_test_dir!(lang_process_priority, "process_priority", project);
 lang_test_dir!(lang_process_argv, "process_argv", project, "hello", "world");
 lang_test_dir!(lang_receive_after, "receive_after", project);
+lang_test_dir!(lang_socket_timeout, "socket_timeout", project);
 
 /// Linux binaries must be position-independent (ELF type `DYN`) so the
 /// loader can apply ASLR. Guards the `RelocMode::PIC` emission path.

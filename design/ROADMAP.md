@@ -13,12 +13,17 @@ linking the one before it.
 
 ## 0.20.0
 
-The 0.20 release carries the I/O half of the 0.19 plan. 0.19 shipped the
-time types, the `test` declaration, and the language server features, and
-left the `Read` protocol, the socket deadlines, and the `@test` removal it
-had announced. 0.20 finishes those while there are still no external users
-to protect, and picks up the language server items that did not make the
-cut.
+The 0.20 release carries the I/O half of the 0.19 plan and the runtime half
+of the observability design. 0.19 shipped the time types, the `test`
+declaration, and the language server features, and left the `Read`
+protocol, the socket deadlines, and the `@test` removal it had announced.
+0.20 finishes those while there are still no external users to protect,
+picks up the language server items that did not make the cut, and lands
+the process context and log slot from
+[OBSERVABILITY.md](OBSERVABILITY.md) in the same window. Both are runtime
+changes to the same crate, and one breaking release means remem,
+`auth_manager`, and later `untz-tan` migrate their logging and tracing
+call sites once instead of twice.
 
 ### Breaking cleanup
 
@@ -42,6 +47,14 @@ cut.
   which is the same piece a `List` constant needs. The `koja-lang/tz`
   package is the first case that wanted it. With no static table, its
   identifier lookup is a generated `match` over string literals per region.
+- Let a field default name its struct through a dotted path or an alias
+  ([gap](GAPS.md#struct-literal-defaults-stop-at-the-package-boundary)).
+  `options: TCPListener.Options = TCPListener.Options{}` is rejected today
+  because the literal parses as a struct-shaped enum variant and the lift
+  check admits only unit variants, and the aliased spelling panics in
+  resolve. The socket deadlines shipped with `TCPListener.options` as a
+  required field because of this. The likely fix is to resolve each
+  default once in its declaring file with that file's aliases in scope.
 
 ### Language server
 
@@ -52,22 +65,57 @@ cut.
 
 ### Runtime
 
-- Add socket read, write, connect, and accept timeouts so a stalled peer
-  cannot block its owning process forever
-  ([gap](GAPS.md#sockets-have-no-deadlines)). Sockets are non-blocking
+- **[DONE]** Add socket read, write, connect, and accept timeouts so a
+  stalled peer cannot block its owning process forever. Sockets are non-blocking
   through the reactor on both backends, so a timeout is a bounded reactor
   wait, the same mechanism `receive ... after` and `Fd.watch` use, not a
-  socket option. The shape is settled in
+  socket option. The shape follows
   [IO.md](IO.md#timeouts-are-socket-state) and takes a `Duration` from
-  [TIME.md](TIME.md).
+  [TIME.md](TIME.md). The timeouts landed on the current `Socket.Error`
+  surface before the `IO.Error` migration, so that step renames the
+  error type but not the fields.
+
+### Observability
+
+[OBSERVABILITY.md](OBSERVABILITY.md) is the contract. The runtime carries
+two typed fields per process, `Process.context` copied on every message
+and a log configuration copied on every `spawn`, and the standard library
+owns `Trace` and `Log` on top of them. Exporters are packages. The work
+is ordered by dependency, and the socket deadlines above come first
+because an exporter that posts to a stalled collector must time out
+rather than block forever.
+
+1. `Process.context`: the 32-byte slot on the process, the copy on
+   `spawn`, the copy onto every `send`, `cast`, `call`, and `send_after`
+   envelope, and the install and restore around each handler run. Small
+   and mechanical, and everything after it depends on it.
+2. `Trace` in the standard library on top of the slot, with remem's
+   `lib/open_telemetry` ported to the new API as the first exporter
+   package. The export queue starts as one mutex queue with a drop
+   counter. Per-scheduler buffers wait for a benchmark.
+3. The log slot: `Log.configure` writes the calling process's slot and
+   `spawn` copies it, handlers are closures, `Log.Record` is stamped from
+   `Process.context`, and the runtime crash report flows through the same
+   path. remem and `auth_manager` delete their vendored `lib/log` and
+   threaded `Logger` values.
+
+The rest of the I/O work is independent of these three and interleaves
+wherever one of them stalls.
+
+Cut list, in the order to drop items if the release runs long: `@SOURCE`,
+the compile-time `[log] min_level` floor, span events on log records,
+per-scheduler export buffers, then the language server items. None of them
+changes the runtime shape, so each can ship in a patch or in 0.21 without
+a second migration. If step 2 or 3 stalls, the escape hatch is to tag I/O
+plus `Process.context` as 0.20 and finish `Log` and the exporter in 0.21.
 
 The deferred standard library items stay in [GAPS.md](GAPS.md) and can ship
 in any patch release: `UUID.v4()`, `Binary.compare` and endian helpers,
 `List.sort`, `System.cmd`, and `File.ls`. `Fd` random access, durability,
 and locking also stay there, as do the compiler fixes with a known cause,
 such as the
-[struct literal default](GAPS.md#struct-literal-defaults-stop-at-the-package-boundary)
-pair. None of them is a 0.20 release gate. The tree-sitter grammar, the
+[function reference default](GAPS.md#function-references-cannot-be-default-field-values).
+None of them is a 0.20 release gate. The tree-sitter grammar, the
 editor extensions, and kojalang.org pick up the `unless` removal and the
 `test` syntax from 0.19. That is ecosystem work, not a release gate.
 

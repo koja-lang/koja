@@ -246,11 +246,10 @@ stdlib test that opens a temp file and calls `file.read_line()`.
 
 ### Timeouts are socket state
 
-The [socket deadline gap](GAPS.md#sockets-have-no-deadlines) is its
-own roadmap item, and its shape has to fit this design. A timeout is a
-field on the socket, not a parameter on the read. Koja structs are
-values, so the field is set by returning a new socket, and the runtime
-keeps no per-descriptor table:
+The socket deadlines are their own roadmap item, and their shape has
+to fit this design. A timeout is a field on the socket, not a
+parameter on the read. Koja structs are values, so the field is set by
+returning a new socket, and the runtime keeps no per-descriptor table:
 
 ```koja
 struct TCPSocket
@@ -319,10 +318,19 @@ mechanism `receive ... after` and `Fd.block` already use. Sockets are
 non-blocking on both backends, so no socket option is involved. One
 runtime entry point, a bounded `Fd.block`, is the whole runtime change.
 
-Sequence: [TIME.md](TIME.md) lands first so `Duration` exists.
-Timeouts land after step 1 of the migration, so `TimedOut` has a home
-on `Fd`, and before step 3, so `TCPSocket` implements `Read` with the
-timeout already in place.
+Sequence: [TIME.md](TIME.md) lands first so `Duration` exists. The
+timeouts shipped next, before step 1 of the migration, on the current
+`Socket.Error` surface, so a bound that passes fails with
+`Socket.Error.TimedOut` until step 1 renames the error type. Three
+items wait for the migration itself. `try_accept` stays until the IO
+finalization removes it. `Fd.block` returns `Bool`, `true` on the
+timeout, until step 4 moves the readiness wait off `Fd`. And the
+`Fd.read`, `Fd.read_binary`, and `Fd.write` timeouts are trailing
+defaulted parameters, since `Fd` has no timeout fields, which step 4
+also resolves. The `TCPListener.options` field has no default value
+because a field default cannot spell a dotted struct literal today,
+so `bind` and `bind_addr` supply the default from their parameter
+instead.
 
 ## Migration
 

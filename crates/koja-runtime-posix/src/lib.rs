@@ -1,4 +1,4 @@
-//! Koja process runtime: cooperative coroutine scheduler with typed
+//! Koja process runtime. A cooperative coroutine scheduler with typed
 //! mailboxes. Each process runs on its own stack and yields on
 //! `receive` when its mailbox is empty.
 //!
@@ -31,3 +31,8 @@ pub(crate) use koja_runtime_core::wire;
 // Shared with `koja-ir-eval` so both backends resolve codepoint
 // ranges, search bytes, and check boundaries with identical semantics.
 pub use string::{codepoint_range_to_bytes, find_bytes, is_utf8_boundary};
+
+// Shared with `koja-ir-eval`, which drives the connect handshake and
+// its deadline on its own reactor.
+pub use socket::{ConnectProgress, connect_finish, connect_start};
+pub use util::set_last_error;

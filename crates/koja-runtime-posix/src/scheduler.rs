@@ -287,7 +287,7 @@ pub(crate) static TABLE: NativeTable = ProcessTable::new();
 /// together. Firing drains under this lock, releases it, then applies
 /// against [`TABLE`], where [`ProcessTable::promote_expired`]
 /// re-validates each wake against the live process state.
-struct Timers {
+pub(crate) struct Timers {
     /// Reference instant for the gate encoding, fixed at first use.
     epoch: Instant,
     /// Nanoseconds from `epoch` to the next fire, `u64::MAX` when
@@ -308,7 +308,7 @@ impl Timers {
 
     /// Runs `f` under the service lock, refreshing the gate before
     /// release so a due entry is never hidden behind a stale gate.
-    fn with<T>(&self, f: impl FnOnce(&mut TimerService<Envelope>) -> T) -> T {
+    pub(crate) fn with<T>(&self, f: impl FnOnce(&mut TimerService<Envelope>) -> T) -> T {
         let mut service = self.service.lock().unwrap();
         let out = f(&mut service);
         let gate = service
@@ -340,7 +340,7 @@ impl Timers {
 
 /// Timers, deadlines, and the drain-grace backstop, off the scheduling
 /// hot path.
-static TIMERS: LazyLock<Timers> = LazyLock::new(Timers::new);
+pub(crate) static TIMERS: LazyLock<Timers> = LazyLock::new(Timers::new);
 
 /// Where idle workers park: a sleeper count under a small mutex plus its
 /// condvar. Woken by `koja_rt_send`, `koja_rt_spawn`, the reactor, and on

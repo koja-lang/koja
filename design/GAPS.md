@@ -256,31 +256,6 @@ when the protocol exists), `Int.to_be_bytes(width)` with a matching
 
 ---
 
-## Sockets have no deadlines
-
-Found 2026-08-10 while building a TCP request-response protocol.
-`TCPSocket.read_binary`, `write`, `connect`, and `TCPListener.accept`
-block with no timeout parameter and no way to bound the wait. The
-only escapes are `try_accept` (accept only) and restructuring around
-`Fd.watch`. Consequences for any wire protocol:
-
-- A peer that stalls mid-frame (or a half-open connection after a
-  crash) blocks the owning process forever. There is no way to
-  express "read, but give up after N ms".
-- `connect` to a black-holed address waits for the OS-level timeout,
-  which can be minutes.
-- Every timeout strategy degenerates to dedicating a process to the
-  blocking call and abandoning it, which leaks the process and the
-  socket.
-
-**Fix path:** deadline variants on the socket surface
-(`read_binary(count, timeout_ms)`, `connect(host, port, timeout_ms)`,
-`accept(timeout_ms)`), shimmed on `SO_RCVTIMEO`/`SO_SNDTIMEO` and a
-nonblocking connect with a poll. `Fd.watch` already proves the
-runtime can wait on readiness with a bound.
-
----
-
 ## No UUID generation
 
 Found 2026-08-10. Public APIs hand out UUIDs as resource
@@ -403,16 +378,36 @@ end
 check accepts only unit variants, so it rejects the literal before
 resolve can tell the two apart.
 
+The boundary is the dotted path, not the package. Found again
+2026-09-26 while adding socket deadlines: a nested type in the same
+package fails the same way, so `TCPListener.options` could not
+default to `TCPListener.Options{}` and is a required field that
+`bind` and `bind_addr` fill from their own parameter default.
+Parameter defaults accept both spellings, since they resolve in the
+function body.
+
+An `alias` does not help, and is worse than the dotted path. With
+`alias Outer.Opts as Opts`, the default `opts: Opts = Opts{}` passes
+the lift check and then panics in `resolve/field_defaults.rs`
+("field default for `opts` diverged from declaration validation"),
+because the default resolves without the file's aliases and reports
+`Opts` as an unknown struct. A compiler panic on valid-looking input
+is the worse half of this gap.
+
 Workaround: the package exports a constant such as
 `const NOOP: Tracer = Tracer{ref: Option.None}`, and the consumer
 writes `tracer: OpenTelemetry.Tracer = OpenTelemetry.Tracer.NOOP`.
+For a same-package nested type, make the field required and put the
+default on the constructor's parameter.
 
-**Open question:** once the lift check accepts `Pkg.Type{...}`,
-`Enum.Variant{...}` gets through too. Either resolve rejects it, or
-defaults start to accept payload variants. The unit-only rule comes
-from the constant pool, which defaults never enter. A larger option
-is to resolve each default once in its declaring file, which would
-also remove the alias restriction on defaults.
+**Fix path:** scheduled for 0.20. Once the lift check accepts
+`Pkg.Type{...}`, `Enum.Variant{...}` gets through too. Either resolve
+rejects it, or defaults start to accept payload variants. The
+unit-only rule comes from the constant pool, which defaults never
+enter. A larger option is to resolve each default once in its
+declaring file with that file's aliases in scope, which fixes the
+dotted path and the alias panic together and removes the alias
+restriction on defaults.
 
 ---
 

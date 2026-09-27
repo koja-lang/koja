@@ -636,6 +636,19 @@ pub enum IoPark {
     SystemMail,
 }
 
+/// How a bounded I/O wait ended, shared by both backends' `io_block`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum IoWait {
+    /// The fd is ready for the requested direction (or errored / hung up).
+    /// The caller retries its syscall.
+    Ready,
+    /// A message woke the process before readiness. The caller handles
+    /// the signal instead of retrying.
+    Interrupted,
+    /// The deadline passed with the fd still not ready.
+    TimedOut,
+}
+
 /// What became of a process at its owner's switch-out
 /// ([`ProcessTable::after_switch`]).
 pub enum SwitchOutcome<X, M> {
@@ -936,13 +949,15 @@ impl<X, M: Message> ProcessTable<X, M> {
     /// Parks `pid` as `WaitingIO`, with the same kill-tombstone refusal as
     /// [`try_park`](Self::try_park), unless a system message is already
     /// queued (checked in the same hold, so a signal can't slip between
-    /// the check and the park).
-    pub fn try_park_io(&self, pid: Pid) -> IoPark {
+    /// the check and the park). As with `try_park`, the caller arms the
+    /// timer entry for `deadline` after a successful park.
+    pub fn try_park_io(&self, pid: Pid, deadline: Option<Instant>) -> IoPark {
         self.with_hot(pid, |slot, hot| {
             if hot.mailbox.has_system() {
                 return IoPark::SystemMail;
             }
             if self.park_edge(pid, slot, ProcessState::WaitingIO) {
+                hot.deadline = deadline;
                 IoPark::Parked
             } else {
                 IoPark::Refused
@@ -1239,14 +1254,16 @@ impl<X, M: Message> ProcessTable<X, M> {
         let wake = self.with_hot(pid, |slot, hot| {
             let (_, generation) = decode(pid);
             let word = slot.lifecycle.load();
-            let expired = word.generation == generation
-                && word.state == Some(ProcessState::Blocked)
-                && hot.deadline == Some(fire_at);
+            let parked = match word.state {
+                Some(state @ (ProcessState::Blocked | ProcessState::WaitingIO)) => state,
+                _ => return None,
+            };
+            let expired = word.generation == generation && hot.deadline == Some(fire_at);
             if !expired {
                 return None;
             }
             hot.deadline = None;
-            self.wake_edge(pid, slot, ProcessState::Blocked)
+            self.wake_edge(pid, slot, parked)
         });
         let wake = wake.flatten();
         if wake.is_none() {
@@ -1258,14 +1275,16 @@ impl<X, M: Message> ProcessTable<X, M> {
     /// Promotes a process from `WaitingIO` to `Runnable` if (and only if)
     /// it is still parked there: the reactor's `io_block` wake. The state
     /// guard is essential, because a concurrent system wake or kill may
-    /// have already moved it.
+    /// have already moved it. Clears the deadline so a later timer fire
+    /// is stale.
     pub fn promote_io_waiter(&self, pid: Pid) -> Option<Wake> {
-        self.with_hot(pid, |slot, _hot| {
+        self.with_hot(pid, |slot, hot| {
             let (_, generation) = decode(pid);
             let word = slot.lifecycle.load();
             if word.generation != generation || word.state != Some(ProcessState::WaitingIO) {
                 return None;
             }
+            hot.deadline = None;
             self.wake_edge(pid, slot, ProcessState::WaitingIO)
         })?
     }
@@ -1854,7 +1873,7 @@ mod tests {
         assert!(table.mark_dead_if_alive(pid), "first kill wins");
 
         assert!(!table.try_park(pid, WaitTarget::Receive, None));
-        assert!(matches!(table.try_park_io(pid), IoPark::Refused));
+        assert!(matches!(table.try_park_io(pid, None), IoPark::Refused));
         assert!(matches!(
             table.receive_or_park(pid, None),
             MailPark::Refused
@@ -2270,7 +2289,7 @@ mod tests {
     fn lifecycle_wakes_waiting_io_but_business_does_not() {
         let table = TestTable::new();
         let pid = spawn_running(&table);
-        assert!(matches!(table.try_park_io(pid), IoPark::Parked));
+        assert!(matches!(table.try_park_io(pid, None), IoPark::Parked));
         assert!(!table.has_system_mail(pid));
 
         // Business traffic must not wake an I/O waiter.
@@ -2289,7 +2308,7 @@ mod tests {
         assert!(table.deliver(pid, fake_lifecycle()).wake.is_none());
 
         // The signal is already queued: the wait must not start.
-        assert!(matches!(table.try_park_io(pid), IoPark::SystemMail));
+        assert!(matches!(table.try_park_io(pid, None), IoPark::SystemMail));
         assert!(matches!(table.after_switch(pid), SwitchOutcome::Parked));
     }
 
@@ -2297,12 +2316,48 @@ mod tests {
     fn promote_io_waiter_guards_the_source_state() {
         let table = TestTable::new();
         let pid = spawn_running(&table);
-        assert!(matches!(table.try_park_io(pid), IoPark::Parked));
+        assert!(matches!(table.try_park_io(pid, None), IoPark::Parked));
 
         assert_eq!(table.promote_io_waiter(pid).map(|wake| wake.pid), Some(pid),);
         // Already promoted: a duplicate reactor wake is a no-op.
         assert!(table.promote_io_waiter(pid).is_none());
         assert_eq!(table.counters().violations, 0);
+    }
+
+    #[test]
+    fn promote_expired_wakes_an_io_waiter() {
+        let table = TestTable::new();
+        let pid = spawn_running(&table);
+        let deadline = Instant::now() + Duration::from_millis(5);
+        assert!(matches!(
+            table.try_park_io(pid, Some(deadline)),
+            IoPark::Parked
+        ));
+        assert!(matches!(table.after_switch(pid), SwitchOutcome::Parked));
+
+        let wake = table.promote_expired(pid, deadline);
+        assert_eq!(wake.map(|wake| wake.pid), Some(pid));
+        assert_eq!(table.counters().stale_deadlines_skipped, 0);
+        // The timer won: a late readiness wake finds no `WaitingIO` process.
+        assert!(table.promote_io_waiter(pid).is_none());
+        assert_eq!(table.counters().violations, 0);
+    }
+
+    #[test]
+    fn promote_expired_skips_a_readiness_woken_io_waiter() {
+        let table = TestTable::new();
+        let pid = spawn_running(&table);
+        let deadline = Instant::now() + Duration::from_millis(5);
+        assert!(matches!(
+            table.try_park_io(pid, Some(deadline)),
+            IoPark::Parked
+        ));
+
+        // Readiness wins the race and clears the deadline, so the fired
+        // entry is stale.
+        assert!(table.promote_io_waiter(pid).is_some());
+        assert!(table.promote_expired(pid, deadline).is_none());
+        assert_eq!(table.counters().stale_deadlines_skipped, 1);
     }
 
     #[test]

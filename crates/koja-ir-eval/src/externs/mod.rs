@@ -152,7 +152,7 @@ extern_table! {
         "koja_set_env" => system::set_env(args),
         "koja_socket_accept" => net::socket_accept(args).await,
         "koja_socket_bind" => net::socket_bind(args),
-        "koja_socket_connect" => net::socket_connect(args),
+        "koja_socket_connect" => net::socket_connect(args).await,
         "koja_socket_create" => net::socket_create(args),
         "koja_socket_listen" => net::socket_listen(args),
         "koja_socket_send_to" => net::socket_send_to(args).await,
