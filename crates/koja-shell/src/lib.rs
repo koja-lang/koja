@@ -47,12 +47,12 @@ const BANNER: &str = "koja shell -- IR interpreter\n\
     Type :help for commands, :quit (or Ctrl-D) to exit\n";
 
 /// REPL commands, offered by tab completion and matched literally in
-/// [`run`]'s dispatch.
+/// [`run`]'s dispatch. The `:q` alias is omitted so `:q<Tab>` completes.
 const COMMANDS: &[&str] = &[":help", ":quit", ":reset", ":state"];
 
 const HELP: &str = "Commands:\n  \
     :help    show this message\n  \
-    :quit    exit the shell\n  \
+    :quit    exit the shell (alias :q)\n  \
     :reset   clear session state (or abandon a partial multi-line input)\n  \
     :state   print how many statement blocks the session is holding\n\
 \n\
@@ -80,7 +80,7 @@ enum InputOutcome {
     Fatal(String),
 }
 
-/// Run the REPL on stdin/stdout until `:quit`, `Ctrl-D`, or an
+/// Run the REPL on stdin/stdout until `:quit` (or `:q`), `Ctrl-D`, or an
 /// unrecoverable line-editor error.
 ///
 /// Drives a [`rustyline::Editor`] one line at a time via
@@ -134,7 +134,7 @@ pub fn run(baseline: Vec<SourceFile>, session_package: String) {
             continue;
         }
         match trimmed {
-            ":quit" => break,
+            ":quit" | ":q" => break,
             ":help" => {
                 print!("{HELP}");
                 continue;
