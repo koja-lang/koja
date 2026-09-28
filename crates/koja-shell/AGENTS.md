@@ -81,7 +81,7 @@ itself gets rewritten), this boundary is the natural cut point.
 
 ```
 :help    show command list
-:quit    exit (also Ctrl-D / EOF on a fresh prompt)
+:quit    exit (also :q, or Ctrl-D / EOF on a fresh prompt)
 :reset   clear session state (or abandon a partial multi-line input)
 :state   print number of accumulated statement blocks
 ```
