@@ -72,6 +72,16 @@ impl CommentTable {
         self.offsets.get(from).is_some_and(|&o| o < span.end.offset)
     }
 
+    /// True when any pending comment is owned by a node inside the span.
+    /// Unlike `any_within`, this follows where the attach pass put the
+    /// comment, so a comment written above a literal and routed into it
+    /// counts for the literal's owner.
+    pub(super) fn any_owned_within(&self, span: Span) -> bool {
+        self.slots.keys().any(|(key, _)| {
+            key.start.offset >= span.start.offset && key.end.offset <= span.end.offset
+        })
+    }
+
     /// Removes every unconsumed comment, sorted by source position. A
     /// non-empty result after printing is a printer bug. The caller emits
     /// them at the end of the file so nothing is lost, and debug builds
