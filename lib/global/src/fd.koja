@@ -7,12 +7,15 @@ struct Fd
   descriptor: Int32
 
   @doc """
-  Suspends the current process until this file descriptor is ready.
-  Pass `true` to wait for readable, `false` to wait for writable.
-  Returns when the I/O reactor detects readiness.
+  Suspends the current process until this file descriptor is ready or
+  `timeout` passes. Pass `true` to wait for readable, `false` to wait for
+  writable. Returns `true` when the wait ended on the timeout, `false`
+  when the I/O reactor detected readiness.
   """
-  fn block(self, readable: Bool)
-    koja_io_block(self.descriptor, readable ? 1 : 0)
+  fn block(self, readable: Bool, timeout: Option<Duration> = Option.None)
+    -> Bool
+
+    koja_io_block(self.descriptor, readable ? 1 : 0, timeout_ms(timeout)) == 1
   end
 
   @doc """
@@ -29,10 +32,13 @@ struct Fd
   @doc """
   Reads up to `count` bytes from the file descriptor.
   Returns the data read as a string, or an error message. Returns
-  `""` at end of stream.
+  `""` at end of stream. With a `timeout`, the read fails once that
+  much time passes with no data.
   """
-  fn read(self, count: Int) -> String ! String
-    bytes = try self.read_binary(count)
+  fn read(self, count: Int, timeout: Option<Duration> = Option.None)
+    -> String ! String
+
+    bytes = try self.read_binary(count, timeout)
     bytes.to_string() rescue _ -> fail "read data is not valid UTF-8"
   end
 
@@ -40,10 +46,13 @@ struct Fd
   Reads up to `count` bytes from the file descriptor as raw bytes.
   Unlike `read`, this does not assume the data is UTF-8 text, making it
   suitable for binary wire protocols. Returns the bytes read, or an
-  error message. Returns an empty binary at end of stream.
+  error message. Returns an empty binary at end of stream. With a
+  `timeout`, the read fails once that much time passes with no data.
   """
-  fn read_binary(self, count: Int) -> Binary ! String
-    ptr = koja_fd_read(self.descriptor, count)
+  fn read_binary(self, count: Int, timeout: Option<Duration> = Option.None)
+    -> Binary ! String
+
+    ptr = koja_fd_read(self.descriptor, count, timeout_ms(timeout))
 
     if ptr.null?()
       fail "read failed"
@@ -76,8 +85,12 @@ struct Fd
   Writes data to the file descriptor. Accepts either a `String` (encoded
   as UTF-8) or a `Binary` for raw wire protocols, so non-UTF-8 frames pass
   through unaltered. Returns the number of bytes written, or an error.
+  With a `timeout`, the write fails once that much time passes with the
+  descriptor still not writable.
   """
-  fn write(self, data: Binary | String) -> Int ! String
+  fn write(self, data: Binary | String, timeout: Option<Duration> = Option.None)
+    -> Int ! String
+
     bytes =
       match data
         b: Binary -> b
@@ -88,6 +101,7 @@ struct Fd
       self.descriptor,
       CPtr.borrow(bytes),
       bytes.byte_size(),
+      timeout_ms(timeout),
     )
 
     if result < 0
@@ -97,17 +111,30 @@ struct Fd
     result
   end
 
+  priv fn timeout_ms(timeout: Option<Duration>) -> Int
+    match timeout
+      Option.None -> -1
+      Option.Some(duration) -> duration.to_milliseconds()
+    end
+  end
+
   @extern "C"
   priv fn koja_fd_close(fd: Int32) -> Int32
 
   @extern "C"
-  priv fn koja_fd_read(fd: Int32, count: Int64) -> CPtr<UInt8>
+  priv fn koja_fd_read(fd: Int32, count: Int64, timeout_ms: Int64)
+    -> CPtr<UInt8>
 
   @extern "C"
-  priv fn koja_fd_write(fd: Int32, data: CPtr<UInt8>, len: Int64) -> Int64
+  priv fn koja_fd_write(
+    fd: Int32,
+    data: CPtr<UInt8>,
+    len: Int64,
+    timeout_ms: Int64,
+  ) -> Int64
 
   @extern "C"
-  priv fn koja_io_block(fd: Int32, readable: Int64)
+  priv fn koja_io_block(fd: Int32, readable: Int64, timeout_ms: Int64) -> Int64
 
   @extern "C"
   priv fn koja_rt_unwatch_fd(fd: Int32)

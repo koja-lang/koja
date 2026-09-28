@@ -16,16 +16,16 @@ use std::io;
 use std::os::fd::BorrowedFd;
 use std::sync::atomic::Ordering;
 use std::sync::{Mutex, OnceLock};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use polling::{Event, Events, PollMode, Poller};
 
-use koja_runtime_core::{IoPark, Reactor, Readiness, Waker};
+use koja_runtime_core::{IoPark, IoWait, Reactor, Readiness, Waker};
 
 use crate::ffi::{EAGAIN, EINTR, get_errno, libc_close};
 use crate::scheduler::{
-    CURRENT_PID, SHUTDOWN, TABLE, notify_all_workers, notify_workers, route_wake, send_io_event,
-    yield_to_scheduler,
+    CURRENT_PID, SHUTDOWN, TABLE, TIMERS, notify_all_workers, notify_workers, route_wake,
+    send_io_event, yield_to_scheduler,
 };
 use crate::wire::{IO_READY_ERROR, IO_READY_READ, IO_READY_WRITE};
 
@@ -324,10 +324,12 @@ fn close_raw(fd: i32) -> io::Result<()> {
 }
 
 /// Suspends the current process until `fd` is ready for the given
-/// [`Interest`], or a system/lifecycle message arrives. Called from
-/// runtime I/O paths on `EAGAIN`. Returns `true` when a queued system
-/// message interrupted the wait (the caller must stop retrying the
-/// syscall and return to the run loop), `false` when fd readiness woke it.
+/// [`Interest`], `deadline` passes, or a system/lifecycle message
+/// arrives. Called from runtime I/O paths on `EAGAIN`. `Interrupted`
+/// means a queued system message woke the process, so the caller must
+/// stop retrying the syscall and return to the run loop. `TimedOut`
+/// means the clock passed `deadline` by the time the process resumed.
+/// `Ready` is any other wake, and the caller retries its syscall.
 ///
 /// State must be set to `WaitingIO` **before** `register`: the reactor's
 /// wake guard checks `state == WaitingIO`, so a state of `Running` at fire
@@ -340,18 +342,21 @@ fn close_raw(fd: i32) -> io::Result<()> {
 /// earlier iteration's switch. See the TLS caching note in
 /// [`crate::scheduler`].
 #[inline(never)]
-pub fn io_block(fd: i32, interest: Interest) -> bool {
+pub fn io_block(fd: i32, interest: Interest, deadline: Option<Instant>) -> IoWait {
     let pid = CURRENT_PID.with(|c| c.get());
 
     // The system-mail check and the park happen in one slot hold, so a
     // signal can't slip between them and strand behind the wait.
-    match TABLE.try_park_io(pid) {
+    match TABLE.try_park_io(pid, deadline) {
         // A queued system message must not be stranded behind the wait.
         // Bail so the caller can interrupt.
-        IoPark::SystemMail => return true,
+        IoPark::SystemMail => return IoWait::Interrupted,
         IoPark::Parked => {
             if let Some(reactor) = REACTOR.get() {
                 reactor.register(fd, interest, Waker::Resume(pid));
+            }
+            if let Some(deadline) = deadline {
+                TIMERS.with(|timers| timers.arm_deadline(pid, deadline));
             }
         }
         // A refused park means a kill landed mid-run: skip the registration
@@ -364,19 +369,36 @@ pub fn io_block(fd: i32, interest: Interest) -> bool {
     if let Some(reactor) = REACTOR.get() {
         reactor.deregister(fd);
     }
+    if deadline.is_some() {
+        TABLE.clear_deadline(pid);
+        TIMERS.with(|timers| timers.cancel_deadline(pid));
+    }
 
     // A queued system message means a signal interrupted the wait, not readiness.
-    TABLE.has_system_mail(pid)
+    if TABLE.has_system_mail(pid) {
+        return IoWait::Interrupted;
+    }
+    if expired(deadline) {
+        return IoWait::TimedOut;
+    }
+    IoWait::Ready
+}
+
+fn expired(deadline: Option<Instant>) -> bool {
+    deadline.is_some_and(|deadline| Instant::now() >= deadline)
 }
 
 /// Runs a non-blocking syscall, suspending the process on `EAGAIN`
 /// until `fd` is ready for `interest` and then retrying. Returns the
 /// syscall's non-negative result, or the OS error captured at the
-/// point of a non-`EAGAIN` failure. Callers own success handling and
-/// error reporting (e.g. `set_last_error`).
+/// point of a non-`EAGAIN` failure. With a `deadline`, an `EAGAIN` at
+/// or after it is `TimedOut`. A wake at the deadline still retries the
+/// syscall once, so data that arrived on time is not dropped. Callers
+/// own success handling and error reporting (e.g. `set_last_error`).
 pub(crate) fn block_until_ready(
     fd: i32,
     interest: Interest,
+    deadline: Option<Instant>,
     mut syscall: impl FnMut() -> isize,
 ) -> io::Result<isize> {
     loop {
@@ -387,8 +409,11 @@ pub(crate) fn block_until_ready(
         if get_errno() != EAGAIN {
             return Err(io::Error::last_os_error());
         }
+        if expired(deadline) {
+            return Err(io::ErrorKind::TimedOut.into());
+        }
         // A pending signal interrupts the wait so the process can handle it.
-        if io_block(fd, interest) {
+        if io_block(fd, interest, deadline) == IoWait::Interrupted {
             return Err(io::Error::from_raw_os_error(EINTR));
         }
     }

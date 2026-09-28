@@ -14,7 +14,7 @@ use std::ffi::CString;
 use std::rc::Rc;
 
 use koja_ir::{IRSymbol, IRType, SocketMethod};
-use koja_runtime_core::Interest;
+use koja_runtime_core::{Interest, IoWait};
 
 use crate::abi;
 use crate::error::RuntimeError;
@@ -96,7 +96,7 @@ async fn recv_from<R: CallResolver>(call: IntrinsicCall<'_, R>) -> Result<Value,
     validate_recv_from_payload(&result_symbol, call.resolver)?;
 
     // Interrupted by a signal: surface an error instead of reading.
-    if reactor::io_block(fd, Interest::Readable).await {
+    if reactor::io_block(fd, Interest::Readable, None).await != IoWait::Ready {
         return helpers::result_value(result_symbol, call.resolver, Err(last_error_value()));
     }
     let buffer = unsafe { koja_socket_recv_from(fd, *count) };

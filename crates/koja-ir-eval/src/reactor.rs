@@ -22,9 +22,9 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::io;
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
-use koja_runtime_core::{Interest, IoPark, Pid, Reactor, Readiness, Waker};
+use koja_runtime_core::{Interest, IoPark, IoWait, Pid, Reactor, Readiness, Waker};
 
 use crate::scheduler::{self, YieldOnce};
 
@@ -143,39 +143,59 @@ pub(crate) fn unwatch(fd: i32) {
     REGISTRY.with(|registry| registry.borrow_mut().remove(&fd));
 }
 
-/// Suspend until `fd` is ready for `interest`, then return whether the
-/// wait was *interrupted* (resumed without the fd becoming ready, i.e.
-/// woken by a message rather than readiness). The cooperative core of
-/// every eval I/O wait: an already-ready fd returns `false` immediately
-/// (the common sequential case). Otherwise a driven process parks
-/// `WaitingIO` and yields to the driver, while a driver-less function-mode
-/// run blocks the single thread on the fd.
-pub(crate) async fn io_block(fd: i32, interest: Interest) -> bool {
+/// Suspend until `fd` is ready for `interest` or `deadline` passes. The
+/// cooperative core of every eval I/O wait: an already-ready fd returns
+/// `Ready` immediately (the common sequential case). Otherwise a driven
+/// process parks `WaitingIO` and yields to the driver, while a
+/// driver-less function-mode run blocks the single thread on the fd.
+pub(crate) async fn io_block(fd: i32, interest: Interest, deadline: Option<Instant>) -> IoWait {
     if ready_now(fd, interest) {
-        return false;
+        return IoWait::Ready;
+    }
+    if expired(deadline) {
+        return IoWait::TimedOut;
     }
     if !scheduler::runtime_installed() {
-        blocking_poll(fd, interest);
-        return false;
+        return if blocking_poll(fd, interest, deadline) {
+            IoWait::Ready
+        } else {
+            IoWait::TimedOut
+        };
     }
     let pid = scheduler::current_pid();
-    match scheduler::park_io(pid) {
-        // A queued system message must not be stranded behind the wait:
-        // report the interrupt so the caller handles the signal.
-        IoPark::SystemMail => true,
+    match scheduler::park_io(pid, deadline) {
+        // A queued system message must not be stranded behind the wait.
+        IoPark::SystemMail => IoWait::Interrupted,
         IoPark::Parked => {
             arm(fd, interest, Waker::Resume(pid));
             YieldOnce::new().await;
             unwatch(fd);
-            // Resumed without readiness means a message woke us, so report
-            // the interrupt.
-            !ready_now(fd, interest)
+            if deadline.is_some() {
+                scheduler::clear_deadline(pid);
+            }
+            if ready_now(fd, interest) {
+                IoWait::Ready
+            } else if expired(deadline) {
+                IoWait::TimedOut
+            } else {
+                IoWait::Interrupted
+            }
         }
         // A refused park means a kill landed mid-run: skip the registration
         // (no waiter to wake). The process never resumes past the next
         // yield, so the answer is moot.
-        IoPark::Refused => false,
+        IoPark::Refused => IoWait::Ready,
     }
+}
+
+fn expired(deadline: Option<Instant>) -> bool {
+    deadline.is_some_and(|deadline| Instant::now() >= deadline)
+}
+
+/// Records `TimedOut` in the runtime's last-error slot, so a handler that
+/// returns the native failure sentinel reads back as `Socket.Error.TimedOut`.
+pub(crate) fn note_timed_out() {
+    koja_runtime::set_last_error(io::Error::from(io::ErrorKind::TimedOut));
 }
 
 /// Insert (or replace) `fd`'s registration. The last `register` for an fd
@@ -206,28 +226,33 @@ fn ready_now(fd: i32, interest: Interest) -> bool {
     ready > 0 && pollfd.revents & (events | POLLERR | POLLHUP | POLLNVAL) != 0
 }
 
-/// Block the calling thread on `fd` until it is ready for `interest`
-/// (function mode: no driver to resume a parked process). Retries across
-/// `EINTR`. A genuine poll error returns so the delegated syscall surfaces
-/// it (a broken fd fails with a real errno, never `EAGAIN`, so the native
-/// `io_block` is still not reached).
-fn blocking_poll(fd: i32, interest: Interest) {
+/// Block the calling thread on `fd` until it is ready for `interest` or
+/// `deadline` passes (function mode: no driver to resume a parked
+/// process). Returns `false` only on the deadline. Retries across
+/// `EINTR`. A genuine poll error returns `true` so the delegated syscall
+/// surfaces it (a broken fd fails with a real errno, never `EAGAIN`, so
+/// the native `io_block` is still not reached).
+fn blocking_poll(fd: i32, interest: Interest, deadline: Option<Instant>) -> bool {
     let events = events_for(interest);
     loop {
+        let remaining = deadline.map(|deadline| deadline.saturating_duration_since(Instant::now()));
+        if remaining == Some(Duration::ZERO) {
+            return false;
+        }
         let mut pollfd = PollFd {
             fd,
             events,
             revents: 0,
         };
-        let ready = unsafe { poll(&mut pollfd, 1, -1) };
+        let ready = unsafe { poll(&mut pollfd, 1, timeout_ms(remaining)) };
         if ready < 0 {
             if io::Error::last_os_error().kind() == io::ErrorKind::Interrupted {
                 continue;
             }
-            return;
+            return true;
         }
         if ready > 0 && pollfd.revents & (events | POLLERR | POLLHUP | POLLNVAL) != 0 {
-            return;
+            return true;
         }
     }
 }

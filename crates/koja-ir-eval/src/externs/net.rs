@@ -9,37 +9,25 @@
 //!   readiness, then call the native symbol.
 //! - `try_accept` calls the native non-blocking symbol directly (a
 //!   non-blocking listener reports its `-2` "nothing pending" itself).
-//! - `connect` is the one path that cannot pre-wait (the fd is not
-//!   writable until the handshake is initiated), so it flips the fd to
-//!   blocking for the duration of the native call (a bounded, one-time
-//!   setup wait), then restores non-blocking for subsequent I/O.
+//! - `connect` cannot pre-wait (the fd is not writable until the
+//!   handshake is initiated), so it drives the runtime's split
+//!   `connect_start` / `connect_finish` around an eval `io_block` on
+//!   writability.
 //! - `create` / `bind` / `listen` / `setsockopt_reuse` and the last-error
 //!   readers pass straight through.
 
-use koja_runtime_core::Interest;
+use std::io;
+
+use koja_runtime::{ConnectProgress, connect_finish, connect_start, set_last_error};
+use koja_runtime_core::{Interest, IoWait, deadline_from_user_millis};
 
 use crate::error::RuntimeError;
 use crate::externs::marshal::{pass_through_externs, type_mismatch};
 use crate::reactor;
 use crate::value::Value;
 
-/// `fcntl` get-flags command. API contract: MUST equal
-/// [`koja_runtime`]'s `ffi::F_GETFL`.
-const F_GETFL: i32 = 3;
-/// `fcntl` set-flags command. API contract: MUST equal
-/// [`koja_runtime`]'s `ffi::F_SETFL`.
-const F_SETFL: i32 = 4;
-/// Non-blocking fd status flag. API contract: MUST equal
-/// [`koja_runtime`]'s `ffi::O_NONBLOCK` for the target OS.
-#[cfg(target_os = "macos")]
-const O_NONBLOCK: i32 = 0x0004;
-#[cfg(target_os = "linux")]
-const O_NONBLOCK: i32 = 0x800;
-
 unsafe extern "C" {
-    fn fcntl(fd: i32, cmd: i32, ...) -> i32;
-    fn koja_socket_accept(fd: i32) -> i32;
-    fn koja_socket_connect(fd: i32, ip: *const u8, ip_length: i64, port: i64) -> i64;
+    fn koja_socket_accept(fd: i32, timeout_ms: i64) -> i32;
     fn koja_socket_create(sock_type: i64) -> i32;
     fn koja_socket_send_to(
         fd: i32,
@@ -75,18 +63,28 @@ pub(super) fn socket_create(args: &[Value]) -> Result<Value, RuntimeError> {
     Ok(Value::Int(i64::from(fd)))
 }
 
-/// `koja_socket_accept(fd)`: wait for the listener to be readable (a
-/// pending connection), then delegate to the native blocking accept, which
-/// now completes on its first syscall.
+/// `koja_socket_accept(fd, timeout_ms)`: wait for the listener to be
+/// readable (a pending connection), then delegate to the native blocking
+/// accept, which now completes on its first syscall. Returns -1 on
+/// error, interrupt, or timeout.
 pub(super) async fn socket_accept(args: &[Value]) -> Result<Value, RuntimeError> {
-    let [Value::Int(fd)] = args else {
-        return Err(type_mismatch("koja_socket_accept", "(fd: Int32)", args));
+    let [Value::Int(fd), Value::Int(timeout_ms)] = args else {
+        return Err(type_mismatch(
+            "koja_socket_accept",
+            "(fd: Int32, timeout_ms: Int64)",
+            args,
+        ));
     };
-    // Interrupted by a signal, not readiness: return the native -1 sentinel.
-    if reactor::io_block(*fd as i32, Interest::Readable).await {
-        return Ok(Value::Int(i64::from(-1i32)));
+    let deadline = deadline_from_user_millis(*timeout_ms);
+    match reactor::io_block(*fd as i32, Interest::Readable, deadline).await {
+        IoWait::Ready => {}
+        IoWait::Interrupted => return Ok(Value::Int(-1)),
+        IoWait::TimedOut => {
+            reactor::note_timed_out();
+            return Ok(Value::Int(-1));
+        }
     }
-    let client = unsafe { koja_socket_accept(*fd as i32) };
+    let client = unsafe { koja_socket_accept(*fd as i32, -1) };
     Ok(Value::Int(i64::from(client)))
 }
 
@@ -100,30 +98,54 @@ pub(super) fn socket_try_accept(args: &[Value]) -> Result<Value, RuntimeError> {
     Ok(Value::Int(i64::from(client)))
 }
 
-/// `koja_socket_connect(fd, ip, ip_length, port)`: the one path that cannot pre-wait
-/// for readiness (the fd is not writable until the handshake starts).
-/// Flip the fd to blocking so the native connect waits in the kernel
-/// instead of parking via the native reactor, then restore non-blocking
-/// for subsequent reads / writes.
-pub(super) fn socket_connect(args: &[Value]) -> Result<Value, RuntimeError> {
+/// `koja_socket_connect(fd, ip, ip_length, port, timeout_ms)`: start the
+/// handshake, wait for writability on eval's reactor, then check the
+/// outcome. Returns 0 on success, -1 on error or timeout.
+pub(super) async fn socket_connect(args: &[Value]) -> Result<Value, RuntimeError> {
     let [
         Value::Int(fd),
         Value::CPtr(ip),
         Value::Int(ip_length),
         Value::Int(port),
+        Value::Int(timeout_ms),
     ] = args
     else {
         return Err(type_mismatch(
             "koja_socket_connect",
-            "(fd: Int32, ip: CPtr, ip_length: Int64, port: Int64)",
+            "(fd: Int32, ip: CPtr, ip_length: Int64, port: Int64, timeout_ms: Int64)",
             args,
         ));
     };
     let fd = *fd as i32;
-    set_nonblocking(fd, false);
-    let result = unsafe { koja_socket_connect(fd, *ip, *ip_length, *port) };
-    set_nonblocking(fd, true);
-    Ok(Value::Int(result))
+    let deadline = deadline_from_user_millis(*timeout_ms);
+    let mut progress = match connect_start(fd, *ip, *ip_length, *port) {
+        Ok(progress) => progress,
+        Err(e) => {
+            set_last_error(e);
+            return Ok(Value::Int(-1));
+        }
+    };
+    while progress == ConnectProgress::InProgress {
+        match reactor::io_block(fd, Interest::Writable, deadline).await {
+            IoWait::Ready => {}
+            IoWait::Interrupted => {
+                set_last_error(io::Error::from(io::ErrorKind::Interrupted));
+                return Ok(Value::Int(-1));
+            }
+            IoWait::TimedOut => {
+                reactor::note_timed_out();
+                return Ok(Value::Int(-1));
+            }
+        }
+        progress = match connect_finish(fd) {
+            Ok(progress) => progress,
+            Err(e) => {
+                set_last_error(e);
+                return Ok(Value::Int(-1));
+            }
+        };
+    }
+    Ok(Value::Int(0))
 }
 
 /// `koja_socket_send_to(fd, data, data_length, ip, ip_length, port)`: wait for the socket to be
@@ -145,27 +167,10 @@ pub(super) async fn socket_send_to(args: &[Value]) -> Result<Value, RuntimeError
         ));
     };
     // Interrupted by a signal: return the native -1 sentinel.
-    if reactor::io_block(*fd as i32, Interest::Writable).await {
+    if reactor::io_block(*fd as i32, Interest::Writable, None).await != IoWait::Ready {
         return Ok(Value::Int(-1));
     }
     let sent =
         unsafe { koja_socket_send_to(*fd as i32, *data, *data_length, *ip, *ip_length, *port) };
     Ok(Value::Int(sent))
-}
-
-/// Set or clear `O_NONBLOCK` on `fd`. A no-op on `fcntl` failure (the
-/// subsequent syscall surfaces any real error).
-fn set_nonblocking(fd: i32, nonblocking: bool) {
-    unsafe {
-        let flags = fcntl(fd, F_GETFL);
-        if flags < 0 {
-            return;
-        }
-        let updated = if nonblocking {
-            flags | O_NONBLOCK
-        } else {
-            flags & !O_NONBLOCK
-        };
-        fcntl(fd, F_SETFL, updated);
-    }
 }

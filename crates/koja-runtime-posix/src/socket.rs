@@ -8,23 +8,28 @@ use std::ffi::c_char;
 use std::io;
 use std::mem;
 use std::ptr;
+use std::time::Instant;
+
+use koja_runtime_core::{IoWait, deadline_from_user_millis};
 
 use crate::ffi::{
-    AF_INET, Addrinfo, EAGAIN, EINPROGRESS, EINTR, SO_ERROR, SO_REUSEADDR, SOL_SOCKET, SockaddrIn,
-    get_errno, libc_accept, libc_bind, libc_connect, libc_freeaddrinfo, libc_getaddrinfo,
-    libc_getsockopt, libc_listen, libc_recvfrom, libc_sendto, libc_setsockopt, libc_socket,
-    set_nonblocking,
+    AF_INET, Addrinfo, EAGAIN, EINPROGRESS, EINTR, EINVAL, ENOTCONN, SO_ERROR, SO_REUSEADDR,
+    SOL_SOCKET, SockaddrIn, get_errno, libc_accept, libc_bind, libc_connect, libc_freeaddrinfo,
+    libc_getaddrinfo, libc_getpeername, libc_getsockopt, libc_listen, libc_recvfrom, libc_sendto,
+    libc_setsockopt, libc_socket, set_nonblocking,
 };
 use crate::memory;
 use crate::reactor::{Interest, block_until_ready, io_block};
 use crate::util::{LastError, alloc_binary, set_last_error};
 
 /// Accepts a connection on a listening socket. If no connection is
-/// pending, suspends the process until one arrives. Returns the new
-/// client fd (also set to non-blocking), or -1 on error.
+/// pending, suspends the process until one arrives or `timeout_ms`
+/// passes (negative for no limit). Returns the new client fd (also set
+/// to non-blocking), or -1 on error.
 #[unsafe(no_mangle)]
-pub extern "C" fn koja_socket_accept(fd: i32) -> i32 {
-    match block_until_ready(fd, Interest::Readable, || unsafe {
+pub extern "C" fn koja_socket_accept(fd: i32, timeout_ms: i64) -> i32 {
+    let deadline = deadline_from_user_millis(timeout_ms);
+    match block_until_ready(fd, Interest::Readable, deadline, || unsafe {
         libc_accept(fd, ptr::null_mut(), ptr::null_mut()) as isize
     }) {
         Ok(client) => {
@@ -79,60 +84,116 @@ pub extern "C" fn koja_socket_bind(fd: i32, ip_ptr: *const u8, ip_length: i64, p
 }
 
 /// Connects a socket to a remote IP address and port. For non-blocking
-/// sockets, suspends the process until the TCP handshake completes.
-/// Returns 0 on success, -1 on error.
+/// sockets, suspends the process until the TCP handshake completes or
+/// `timeout_ms` passes (negative for no limit). Returns 0 on success,
+/// -1 on error.
 #[unsafe(no_mangle)]
 pub extern "C" fn koja_socket_connect(
     fd: i32,
     ip_ptr: *const u8,
     ip_length: i64,
     port: i64,
+    timeout_ms: i64,
 ) -> i64 {
-    let Ok(ip_length) = usize::try_from(ip_length) else {
-        set_last_error("invalid IP address length");
-        return -1;
-    };
-    let (addr, addr_len) = match build_sockaddr_from_ip(ip_ptr, ip_length, port) {
-        Ok(v) => v,
+    let deadline = deadline_from_user_millis(timeout_ms);
+    let result = connect_start(fd, ip_ptr, ip_length, port).and_then(|progress| {
+        if progress == ConnectProgress::Connected {
+            return Ok(());
+        }
+        loop {
+            if deadline.is_some_and(|deadline| Instant::now() >= deadline) {
+                return Err(io::ErrorKind::TimedOut.into());
+            }
+            let wait = io_block(fd, Interest::Writable, deadline);
+            if wait == IoWait::Interrupted {
+                return Err(io::Error::from_raw_os_error(EINTR));
+            }
+            if connect_finish(fd)? == ConnectProgress::Connected {
+                return Ok(());
+            }
+            if wait == IoWait::TimedOut {
+                return Err(io::ErrorKind::TimedOut.into());
+            }
+        }
+    });
+    match result {
+        Ok(()) => 0,
         Err(e) => {
             set_last_error(e);
-            return -1;
+            -1
         }
+    }
+}
+
+/// Where a non-blocking connect stands.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ConnectProgress {
+    Connected,
+    InProgress,
+}
+
+/// Issues `connect(2)`. `InProgress` means the handshake continues in the
+/// background and the caller waits for the fd to become writable, then
+/// calls [`connect_finish`].
+pub fn connect_start(
+    fd: i32,
+    ip_ptr: *const u8,
+    ip_length: i64,
+    port: i64,
+) -> io::Result<ConnectProgress> {
+    let Ok(ip_length) = usize::try_from(ip_length) else {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "invalid IP address length",
+        ));
     };
+    let (addr, addr_len) = build_sockaddr_from_ip(ip_ptr, ip_length, port)?;
     let ret = unsafe { libc_connect(fd, &addr as *const SockaddrIn as *const u8, addr_len) };
     if ret == 0 {
-        return 0;
+        return Ok(ConnectProgress::Connected);
     }
     let errno = get_errno();
     if errno == EINPROGRESS || errno == EAGAIN {
-        if io_block(fd, Interest::Writable) {
-            set_last_error(io::Error::from_raw_os_error(EINTR));
-            return -1;
-        }
-
-        let mut err: i32 = 0;
-        let mut len = mem::size_of::<i32>() as u32;
-        let ret = unsafe {
-            libc_getsockopt(
-                fd,
-                SOL_SOCKET,
-                SO_ERROR,
-                &mut err as *mut i32 as *mut u8,
-                &mut len,
-            )
-        };
-        if ret < 0 || err != 0 {
-            set_last_error(io::Error::from_raw_os_error(if err != 0 {
-                err
-            } else {
-                get_errno()
-            }));
-            return -1;
-        }
-        return 0;
+        return Ok(ConnectProgress::InProgress);
     }
-    set_last_error(io::Error::last_os_error());
-    -1
+    Err(io::Error::last_os_error())
+}
+
+/// Checks a connect that was `InProgress` after a writability wake. A
+/// peer name means the handshake finished. Otherwise `SO_ERROR` holds the
+/// failure, or zero while the handshake is still running (a timer wake).
+/// macOS reports a failed connect from `getpeername` as `EINVAL`.
+pub fn connect_finish(fd: i32) -> io::Result<ConnectProgress> {
+    let mut addr: SockaddrIn = unsafe { mem::zeroed() };
+    let mut addr_len = mem::size_of::<SockaddrIn>() as u32;
+    let ret =
+        unsafe { libc_getpeername(fd, &mut addr as *mut SockaddrIn as *mut u8, &mut addr_len) };
+    if ret == 0 {
+        return Ok(ConnectProgress::Connected);
+    }
+    let errno = get_errno();
+    if errno != ENOTCONN && errno != EINVAL {
+        return Err(io::Error::last_os_error());
+    }
+
+    let mut err: i32 = 0;
+    let mut len = mem::size_of::<i32>() as u32;
+    let ret = unsafe {
+        libc_getsockopt(
+            fd,
+            SOL_SOCKET,
+            SO_ERROR,
+            &mut err as *mut i32 as *mut u8,
+            &mut len,
+        )
+    };
+    if ret < 0 {
+        return Err(io::Error::last_os_error());
+    }
+    if err != 0 {
+        return Err(io::Error::from_raw_os_error(err));
+    }
+    Ok(ConnectProgress::InProgress)
 }
 
 /// Creates a new socket in non-blocking mode. `sock_type` is the POSIX
@@ -174,7 +235,7 @@ pub unsafe extern "C" fn koja_socket_recv_from(fd: i32, count: i64) -> *mut u8 {
     let mut sender_addr: SockaddrIn = unsafe { mem::zeroed() };
     let mut addr_len = mem::size_of::<SockaddrIn>() as u32;
 
-    let n = match block_until_ready(fd, Interest::Readable, || unsafe {
+    let n = match block_until_ready(fd, Interest::Readable, None, || unsafe {
         libc_recvfrom(
             fd,
             buf.as_mut_ptr(),
@@ -290,7 +351,7 @@ pub unsafe extern "C" fn koja_socket_send_to(
         }
     };
 
-    match block_until_ready(fd, Interest::Writable, || unsafe {
+    match block_until_ready(fd, Interest::Writable, None, || unsafe {
         libc_sendto(
             fd,
             data_ptr,

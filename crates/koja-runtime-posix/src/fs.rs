@@ -7,6 +7,8 @@ use std::path::Path;
 use std::ptr;
 use std::slice;
 
+use koja_runtime_core::{IoWait, deadline_from_user_millis};
+
 use crate::ffi::{libc_read, libc_write};
 use crate::reactor::{Interest, block_until_ready, io_block, release_fd_and_close};
 use crate::util::{alloc_binary, set_last_error};
@@ -39,12 +41,14 @@ pub extern "C" fn koja_fd_close(fd: i32) -> i32 {
 }
 
 /// Reads up to `count` bytes from a raw file descriptor. If the fd is
-/// non-blocking (sockets), suspends the process until data is available.
-/// Returns a length-prefixed Binary pointer, or null on error.
+/// non-blocking (sockets), suspends the process until data is available
+/// or `timeout_ms` passes (negative for no limit), which fails with
+/// `TimedOut`. Returns a length-prefixed Binary pointer, or null on error.
 #[unsafe(no_mangle)]
-pub extern "C" fn koja_fd_read(fd: i32, count: i64) -> *const u8 {
+pub extern "C" fn koja_fd_read(fd: i32, count: i64, timeout_ms: i64) -> *const u8 {
     let mut buf = vec![0u8; count as usize];
-    match block_until_ready(fd, Interest::Readable, || unsafe {
+    let deadline = deadline_from_user_millis(timeout_ms);
+    match block_until_ready(fd, Interest::Readable, deadline, || unsafe {
         libc_read(fd, buf.as_mut_ptr(), buf.len())
     }) {
         Ok(n) => {
@@ -60,14 +64,22 @@ pub extern "C" fn koja_fd_read(fd: i32, count: i64) -> *const u8 {
 
 /// Writes `data_len` bytes from `data_ptr` to a raw file descriptor.
 /// If the fd is non-blocking (sockets), suspends the process until the
-/// write buffer has space. Returns bytes written, or -1 on error.
+/// write buffer has space or `timeout_ms` passes (negative for no
+/// limit), which fails with `TimedOut`. Returns bytes written, or -1 on
+/// error.
 ///
 /// # Safety
 /// `data_ptr` must point to at least `data_len` readable bytes.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn koja_fd_write(fd: i32, data_ptr: *const u8, data_len: i64) -> i64 {
+pub unsafe extern "C" fn koja_fd_write(
+    fd: i32,
+    data_ptr: *const u8,
+    data_len: i64,
+    timeout_ms: i64,
+) -> i64 {
     let slice = unsafe { std::slice::from_raw_parts(data_ptr, data_len as usize) };
-    match block_until_ready(fd, Interest::Writable, || unsafe {
+    let deadline = deadline_from_user_millis(timeout_ms);
+    match block_until_ready(fd, Interest::Writable, deadline, || unsafe {
         libc_write(fd, slice.as_ptr(), slice.len())
     }) {
         Ok(n) => n as i64,
@@ -274,12 +286,17 @@ pub unsafe extern "C" fn koja_file_write_all(
     }
 }
 
+/// `Fd.block`: suspends the process until `fd` is ready for the requested
+/// direction or `timeout_ms` passes (negative for no limit). Returns 1
+/// when the deadline passed, 0 otherwise.
 #[unsafe(no_mangle)]
-pub extern "C" fn koja_io_block(fd: i32, readable: i64) {
+pub extern "C" fn koja_io_block(fd: i32, readable: i64, timeout_ms: i64) -> i64 {
     let interest = if readable != 0 {
         Interest::Readable
     } else {
         Interest::Writable
     };
-    let _ = io_block(fd, interest);
+    let deadline = deadline_from_user_millis(timeout_ms);
+    let wait = io_block(fd, interest, deadline);
+    i64::from(wait == IoWait::TimedOut)
 }

@@ -218,11 +218,17 @@ pub(crate) fn clear_deadline(pid: Pid) {
     with_timers(|timers| timers.cancel_deadline(pid));
 }
 
-/// Parks `pid` as `WaitingIO` for the reactor (`io_block`). The
-/// system-mail check and the park happen in one table hold, so a signal
-/// can never be stranded behind the wait.
-pub(crate) fn park_io(pid: Pid) -> IoPark {
-    with_table(|table| table.try_park_io(pid))
+/// Parks `pid` as `WaitingIO` for the reactor (`io_block`), arming an
+/// optional wake deadline. The system-mail check and the park happen in
+/// one table hold, so a signal can never be stranded behind the wait.
+pub(crate) fn park_io(pid: Pid, deadline: Option<Instant>) -> IoPark {
+    let park = with_table(|table| table.try_park_io(pid, deadline));
+    if matches!(park, IoPark::Parked)
+        && let Some(deadline) = deadline
+    {
+        with_timers(|timers| timers.arm_deadline(pid, deadline));
+    }
+    park
 }
 
 /// Whether a cooperative run is in flight on this thread (the driver is

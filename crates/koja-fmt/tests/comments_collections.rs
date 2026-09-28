@@ -50,6 +50,23 @@ fn list_comment_before_closing_bracket_stays_inside() {
 }
 
 #[test]
+fn comment_inside_empty_literal_keeps_it_open() {
+    assert_unchanged_script(
+        "
+            list = [
+              # nothing yet
+            ]
+            map = [
+              # nothing yet
+            :]
+            summary = Summary{
+              # nothing yet
+            }
+        ",
+    );
+}
+
+#[test]
 fn map_entry_trailing_comment_stays_with_entry() {
     assert_unchanged_script(
         "

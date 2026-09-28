@@ -9,7 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Socket timeouts. `TCPSocket` carries `read_timeout` and `write_timeout`, both `Option<Duration>` and `Option.None` by default. `with_read_timeout(limit)` and `with_write_timeout(limit)` return a socket with the new bound, and a read or write that passes its bound fails with `Socket.Error.TimedOut`. A timed out write can follow a partial write, so the count returned by an earlier `write` is the only record of what was sent. TLS sessions use the same two fields for the handshake and for `read` and `write`.
+- `TCPSocket.connect(host, port, timeout)`, `connect_addr(addr, timeout)`, `connect_tls(host, port, timeout)`, and `connect_tls_with(host, port, config, timeout)` take a trailing `Option<Duration>` that bounds the TCP handshake. It defaults to `Option.None`. DNS resolution is not bounded.
+- `TCPListener.Options` with `read_timeout`, `write_timeout`, and `accept_timeout`. `TCPListener.bind(port, options)` and `bind_addr(addr, options)` take it as a trailing argument with an all `Option.None` default. `accept` waits at most `accept_timeout` and copies the two stream timeouts onto the returned `TCPSocket`. `try_accept` does the same.
+- `Fd.block`, `Fd.read`, `Fd.read_binary`, and `Fd.write` take a trailing `timeout: Option<Duration> = Option.None`. `Fd.block` now returns `Bool`, `true` when the wait ended on the timeout. `Socket.accept` and `Socket.connect` take the same parameter. On both backends a timeout is a bounded reactor wait, the mechanism `receive ... after` uses, so no socket option is set.
 - `koja shell` now accepts `:q` as an alias for `:quit`.
+
+### Fixed
+
+- `koja format` no longer panics on a comment inside an empty list, map, or struct literal. The literal stays broken open with the comment inside, the layout an empty call argument list already used.
 
 ## [0.19.1] - 2026-09-26
 

@@ -62,6 +62,53 @@ test "verifying client rejects a self-signed server certificate"
   end
 end
 
+test "TLS read fails with TimedOut when the peer is silent"
+  server_config = try require(server_test_config())
+  addr = SocketAddress{ip: IPAddress.LOOPBACK, port: 43120}
+  listener = try require(TCPListener.bind_addr(addr))
+
+  server = Task.async(fn () -> Result<String, String>
+    serve_tls_silent(listener, server_config)
+  end)
+
+  plain = try require(TCPSocket.connect_addr(addr))
+
+  client =
+    match plain.upgrade_tls("localhost", TLSConfig.insecure())
+      Result.Ok(s) -> s
+      Result.Err(e) -> fail "upgrade_tls: #{net_message(e)}"
+    end
+
+  limit = Duration{unit: Duration.Unit.Milliseconds, value: 50}
+  result = client.with_read_timeout(Option.Some(limit)).read(16)
+
+  match client.close()
+    _ -> ()
+  end
+
+  match Task.await(server)
+    _ -> ()
+  end
+
+  match listener.close()
+    _ -> ()
+  end
+
+  match result
+    Result.Ok(_) ->
+      fail "expected read to time out"
+
+    Result.Err(socket_error: SocketError) ->
+      match socket_error
+        SocketError.TimedOut -> ()
+        _ -> fail "expected TimedOut, got: #{socket_error.message()}"
+      end
+
+    Result.Err(tls_error: TLSError) ->
+      fail "expected TimedOut, got: #{tls_error.message()}"
+  end
+end
+
 priv fn run_echo_roundtrip(
   port: Int,
   server_config: TLSConfig,
@@ -139,6 +186,36 @@ priv fn serve_tls_attempt(listener: TCPListener, config: TLSConfig)
 
         "handshake failed: " <> net_message(e)
     end
+
+  Result.Ok(outcome)
+end
+
+# Completes the handshake, then waits for the client to hang up
+# without ever writing.
+priv fn serve_tls_silent(listener: TCPListener, config: TLSConfig)
+  -> Result<String, String>
+
+  raw =
+    match listener.accept()
+      Result.Ok(s) -> s
+      Result.Err(e) -> return Result.Err("accept: " <> e.message())
+    end
+
+  secured =
+    match raw.accept_tls(config)
+      Result.Ok(s) -> s
+      Result.Err(e) -> return Result.Err("accept_tls: " <> net_message(e))
+    end
+
+  outcome =
+    match secured.read(16)
+      Result.Ok(_) -> "client wrote"
+      Result.Err(_) -> "client hung up"
+    end
+
+  match secured.close()
+    _ -> ()
+  end
 
   Result.Ok(outcome)
 end
