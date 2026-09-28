@@ -8,11 +8,11 @@ fn wrapped_chain_in_statement_position_hangs_two() {
     // its continuation lines two past the statement start.
     assert_unchanged(
         r#"
-            fn f(text: String) -> Bool
-              text.contains?("-----BEGIN PRIVATE KEY-----")
-                or text.contains?("-----BEGIN RSA PRIVATE KEY-----")
-                or text.contains?("-----BEGIN EC PRIVATE KEY-----")
-            end
+        fn f(text: String) -> Bool
+          text.contains?("-----BEGIN PRIVATE KEY-----")
+            or text.contains?("-----BEGIN RSA PRIVATE KEY-----")
+            or text.contains?("-----BEGIN EC PRIVATE KEY-----")
+        end
         "#,
     );
 }
@@ -21,14 +21,14 @@ fn wrapped_chain_in_statement_position_hangs_two() {
 fn method_chain_short_stays_inline() {
     assert_fmt(
         r#"
-            fn f -> String
-              "hello".upcase().trim()
-            end
+        fn f -> String
+          "hello".upcase().trim()
+        end
         "#,
         r#"
-            fn f -> String
-              "hello".upcase().trim()
-            end
+        fn f -> String
+          "hello".upcase().trim()
+        end
         "#,
     );
 }
@@ -37,24 +37,24 @@ fn method_chain_short_stays_inline() {
 fn method_chain_long_breaks_per_call() {
     assert_fmt(
         r#"
-            fn build -> String
-              sb = StringBuilder.new().add("GET").add(" ").add("/index.html").add(" HTTP/1.1\r\n").add("Host: ").add("example.com").add("\r\n")
-              sb.build()
-            end
+        fn build -> String
+          sb = StringBuilder.new().add("GET").add(" ").add("/index.html").add(" HTTP/1.1\r\n").add("Host: ").add("example.com").add("\r\n")
+          sb.build()
+        end
         "#,
         r#"
-            fn build -> String
-              sb =
-                StringBuilder.new()
-                .add("GET")
-                .add(" ")
-                .add("/index.html")
-                .add(" HTTP/1.1\r\n")
-                .add("Host: ")
-                .add("example.com")
-                .add("\r\n")
-              sb.build()
-            end
+        fn build -> String
+          sb =
+            StringBuilder.new()
+            .add("GET")
+            .add(" ")
+            .add("/index.html")
+            .add(" HTTP/1.1\r\n")
+            .add("Host: ")
+            .add("example.com")
+            .add("\r\n")
+          sb.build()
+        end
         "#,
     );
 }
@@ -63,21 +63,21 @@ fn method_chain_long_breaks_per_call() {
 fn returned_chain_hangs_its_links() {
     assert_fmt(
         r#"
-            fn build -> String
-              StringBuilder.new().add("GET").add(" ").add("/index.html").add(" HTTP/1.1\r\n").add("Host: ").add("example.com").build()
-            end
+        fn build -> String
+          StringBuilder.new().add("GET").add(" ").add("/index.html").add(" HTTP/1.1\r\n").add("Host: ").add("example.com").build()
+        end
         "#,
         r#"
-            fn build -> String
-              StringBuilder.new()
-                .add("GET")
-                .add(" ")
-                .add("/index.html")
-                .add(" HTTP/1.1\r\n")
-                .add("Host: ")
-                .add("example.com")
-                .build()
-            end
+        fn build -> String
+          StringBuilder.new()
+            .add("GET")
+            .add(" ")
+            .add("/index.html")
+            .add(" HTTP/1.1\r\n")
+            .add("Host: ")
+            .add("example.com")
+            .build()
+        end
         "#,
     );
 }
@@ -86,24 +86,24 @@ fn returned_chain_hangs_its_links() {
 fn assigned_chain_with_broken_anchor_keeps_links_flush() {
     assert_fmt(
         r#"
-            fn f(settings: Settings) -> DbConfig
-              db_config = DbConfig.new(settings.database.host, settings.database.port, settings.database.user, settings.database.name).with_password(settings.database.password).with_statement_cache_size(settings.database.statement_cache)
-              db_config
-            end
+        fn f(settings: Settings) -> DbConfig
+          db_config = DbConfig.new(settings.database.host, settings.database.port, settings.database.user, settings.database.name).with_password(settings.database.password).with_statement_cache_size(settings.database.statement_cache)
+          db_config
+        end
         "#,
         r#"
-            fn f(settings: Settings) -> DbConfig
-              db_config =
-                DbConfig.new(
-                  settings.database.host,
-                  settings.database.port,
-                  settings.database.user,
-                  settings.database.name,
-                )
-                .with_password(settings.database.password)
-                .with_statement_cache_size(settings.database.statement_cache)
-              db_config
-            end
+        fn f(settings: Settings) -> DbConfig
+          db_config =
+            DbConfig.new(
+              settings.database.host,
+              settings.database.port,
+              settings.database.user,
+              settings.database.name,
+            )
+            .with_password(settings.database.password)
+            .with_statement_cache_size(settings.database.statement_cache)
+          db_config
+        end
         "#,
     );
 }
@@ -112,17 +112,17 @@ fn assigned_chain_with_broken_anchor_keeps_links_flush() {
 fn assigned_chain_that_fits_after_equals_stays_whole() {
     assert_fmt(
         r#"
-            fn f(settings: Settings) -> String
-              connection_string = settings.database_url.trim().downcase().replace("postgresql", "postgres")
-              connection_string
-            end
+        fn f(settings: Settings) -> String
+          connection_string = settings.database_url.trim().downcase().replace("postgresql", "postgres")
+          connection_string
+        end
         "#,
         r#"
-            fn f(settings: Settings) -> String
-              connection_string =
-                settings.database_url.trim().downcase().replace("postgresql", "postgres")
-              connection_string
-            end
+        fn f(settings: Settings) -> String
+          connection_string =
+            settings.database_url.trim().downcase().replace("postgresql", "postgres")
+          connection_string
+        end
         "#,
     );
 }
@@ -131,21 +131,21 @@ fn assigned_chain_that_fits_after_equals_stays_whole() {
 fn assigned_single_continuation_keeps_the_hug() {
     assert_fmt(
         r#"
-            fn f(settings: Config) -> DbConfig
-              config = DbConfig.new(settings.db_host, settings.db_port, settings.db_user, settings.db_name).with_password(settings.db_password)
-              config
-            end
+        fn f(settings: Config) -> DbConfig
+          config = DbConfig.new(settings.db_host, settings.db_port, settings.db_user, settings.db_name).with_password(settings.db_password)
+          config
+        end
         "#,
         r#"
-            fn f(settings: Config) -> DbConfig
-              config = DbConfig.new(
-                settings.db_host,
-                settings.db_port,
-                settings.db_user,
-                settings.db_name,
-              ).with_password(settings.db_password)
-              config
-            end
+        fn f(settings: Config) -> DbConfig
+          config = DbConfig.new(
+            settings.db_host,
+            settings.db_port,
+            settings.db_user,
+            settings.db_name,
+          ).with_password(settings.db_password)
+          config
+        end
         "#,
     );
 }
@@ -154,14 +154,14 @@ fn assigned_single_continuation_keeps_the_hug() {
 fn compound_assigned_chain_breaks_after_operator() {
     assert_fmt_script(
         r#"
-            total += prices.map(price -> price.cents()).filter(cents -> cents > 0).sum().clamp(0, 1000000)
+        total += prices.map(price -> price.cents()).filter(cents -> cents > 0).sum().clamp(0, 1000000)
         "#,
         r#"
-            total +=
-              prices.map(price -> price.cents())
-              .filter(cents -> cents > 0)
-              .sum()
-              .clamp(0, 1000000)
+        total +=
+          prices.map(price -> price.cents())
+          .filter(cents -> cents > 0)
+          .sum()
+          .clamp(0, 1000000)
         "#,
     );
 }
@@ -173,19 +173,19 @@ fn single_continuation_call_hugs_broken_args() {
     // dropping it onto its own line.
     assert_fmt(
         r#"
-            fn f(settings: Config) -> DbConfig
-              DbConfig.new(settings.db_host, settings.db_port, settings.db_user, settings.db_name).with_password(settings.db_password)
-            end
+        fn f(settings: Config) -> DbConfig
+          DbConfig.new(settings.db_host, settings.db_port, settings.db_user, settings.db_name).with_password(settings.db_password)
+        end
         "#,
         r#"
-            fn f(settings: Config) -> DbConfig
-              DbConfig.new(
-                settings.db_host,
-                settings.db_port,
-                settings.db_user,
-                settings.db_name,
-              ).with_password(settings.db_password)
-            end
+        fn f(settings: Config) -> DbConfig
+          DbConfig.new(
+            settings.db_host,
+            settings.db_port,
+            settings.db_user,
+            settings.db_name,
+          ).with_password(settings.db_password)
+        end
         "#,
     );
 }
@@ -196,15 +196,15 @@ fn single_continuation_call_breaks_at_dot_when_anchor_fits() {
     // chain still breaks at the dot.
     assert_fmt(
         r#"
-            fn f(settings: Config) -> DbConfig
-              DbConfig.new(settings.db_host, settings.db_port).with_password(settings.extremely_long_database_password_field)
-            end
+        fn f(settings: Config) -> DbConfig
+          DbConfig.new(settings.db_host, settings.db_port).with_password(settings.extremely_long_database_password_field)
+        end
         "#,
         r#"
-            fn f(settings: Config) -> DbConfig
-              DbConfig.new(settings.db_host, settings.db_port)
-                .with_password(settings.extremely_long_database_password_field)
-            end
+        fn f(settings: Config) -> DbConfig
+          DbConfig.new(settings.db_host, settings.db_port)
+            .with_password(settings.extremely_long_database_password_field)
+        end
         "#,
     );
 }
@@ -213,28 +213,28 @@ fn single_continuation_call_breaks_at_dot_when_anchor_fits() {
 fn method_chain_block_gets_spacing() {
     assert_fmt(
         r#"
-            fn build(body: String) -> String
-              sb = StringBuilder.new().add("GET / HTTP/1.1\r\n").add("Host: example.com\r\n").add("\r\n")
-              if not body.empty?()
-                sb = sb.add(body)
-              end
-              sb.build()
-            end
+        fn build(body: String) -> String
+          sb = StringBuilder.new().add("GET / HTTP/1.1\r\n").add("Host: example.com\r\n").add("\r\n")
+          if not body.empty?()
+            sb = sb.add(body)
+          end
+          sb.build()
+        end
         "#,
         r#"
-            fn build(body: String) -> String
-              sb =
-                StringBuilder.new()
-                .add("GET / HTTP/1.1\r\n")
-                .add("Host: example.com\r\n")
-                .add("\r\n")
+        fn build(body: String) -> String
+          sb =
+            StringBuilder.new()
+            .add("GET / HTTP/1.1\r\n")
+            .add("Host: example.com\r\n")
+            .add("\r\n")
 
-              if not body.empty?()
-                sb = sb.add(body)
-              end
+          if not body.empty?()
+            sb = sb.add(body)
+          end
 
-              sb.build()
-            end
+          sb.build()
+        end
         "#,
     );
 }
@@ -246,16 +246,16 @@ fn depth_two_chain_breaks_at_dots() {
     // closure argument is hugged rather than exploded.
     assert_fmt(
         r#"
-            fn run_user(args: List<String>) -> Result<String, String>
-              require_arg(args, "<login>").map(login -> GitHub.user(login)).map_err(e -> render_error(e))
-            end
+        fn run_user(args: List<String>) -> Result<String, String>
+          require_arg(args, "<login>").map(login -> GitHub.user(login)).map_err(e -> render_error(e))
+        end
         "#,
         r#"
-            fn run_user(args: List<String>) -> Result<String, String>
-              require_arg(args, "<login>")
-                .map(login -> GitHub.user(login))
-                .map_err(e -> render_error(e))
-            end
+        fn run_user(args: List<String>) -> Result<String, String>
+          require_arg(args, "<login>")
+            .map(login -> GitHub.user(login))
+            .map_err(e -> render_error(e))
+        end
         "#,
     );
 }
@@ -266,12 +266,12 @@ fn call_on_list_literal_breaks_the_literal_first() {
     // and the call hugs the closing bracket.
     assert_fmt_script(
         r#"
-            names = ["alpha", "bravo", "charlie", "delta", "echo", "foxtrot"].map(name -> name.length())
+        names = ["alpha", "bravo", "charlie", "delta", "echo", "foxtrot"].map(name -> name.length())
         "#,
         r#"
-            names = [
-              "alpha", "bravo", "charlie", "delta", "echo", "foxtrot"
-            ].map(name -> name.length())
+        names = [
+          "alpha", "bravo", "charlie", "delta", "echo", "foxtrot"
+        ].map(name -> name.length())
         "#,
     );
 }
@@ -280,12 +280,12 @@ fn call_on_list_literal_breaks_the_literal_first() {
 fn call_on_map_literal_breaks_the_literal_first() {
     assert_fmt_script(
         r#"
-            lookup = ["alpha": 1, "bravo": 2, "charlie": 3, "delta": 4, "echo": 5].get("delta")
+        lookup = ["alpha": 1, "bravo": 2, "charlie": 3, "delta": 4, "echo": 5].get("delta")
         "#,
         r#"
-            lookup = [
-              "alpha": 1, "bravo": 2, "charlie": 3, "delta": 4, "echo": 5
-            ].get("delta")
+        lookup = [
+          "alpha": 1, "bravo": 2, "charlie": 3, "delta": 4, "echo": 5
+        ].get("delta")
         "#,
     );
 }

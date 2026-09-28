@@ -9,9 +9,9 @@ use koja_parser::ParseMode;
 fn error_channel_signature_stays_inline() {
     assert_unchanged(
         "
-            fn parse(s: String) -> Int ! ParseError
-              1
-            end
+        fn parse(s: String) -> Int ! ParseError
+          1
+        end
         ",
     );
 }
@@ -20,9 +20,9 @@ fn error_channel_signature_stays_inline() {
 fn union_error_signature_stays_inline() {
     assert_unchanged(
         "
-            fn fetch(url: String) -> Limits ! HTTP.Error | ParseError
-              parse(url)
-            end
+        fn fetch(url: String) -> Limits ! HTTP.Error | ParseError
+          parse(url)
+        end
         ",
     );
 }
@@ -31,9 +31,9 @@ fn union_error_signature_stays_inline() {
 fn protocol_method_error_signature_round_trips() {
     assert_unchanged(
         "
-            protocol Decode
-              fn decode(self, raw: Binary) -> Self ! DecodeError
-            end
+        protocol Decode
+          fn decode(self, raw: Binary) -> Self ! DecodeError
+        end
         ",
     );
 }
@@ -42,13 +42,13 @@ fn protocol_method_error_signature_round_trips() {
 fn bare_error_signature_round_trips() {
     assert_unchanged(
         "
-            fn ping(host: String) ! String
-              send(host)
-            end
+        fn ping(host: String) ! String
+          send(host)
+        end
 
-            protocol Store
-              fn flush(self) ! StoreError
-            end
+        protocol Store
+          fn flush(self) ! StoreError
+        end
         ",
     );
 }
@@ -57,14 +57,14 @@ fn bare_error_signature_round_trips() {
 fn unit_error_signature_normalizes_to_bare_form() {
     assert_fmt(
         "
-            fn ping(host: String) -> () ! String
-              send(host)
-            end
+        fn ping(host: String) -> () ! String
+          send(host)
+        end
         ",
         "
-            fn ping(host: String) ! String
-              send(host)
-            end
+        fn ping(host: String) ! String
+          send(host)
+        end
         ",
     );
 }
@@ -75,20 +75,20 @@ fn protocol_method_signature_wraps_at_width() {
     // renderer and wrap the same way.
     assert_fmt(
         "
-            protocol Transport
-              fn send_datagram_with_options(self, payload: Binary, destination_address: String, destination_port: Int32, ttl: Int32) -> Int ! SendError
-            end
+        protocol Transport
+          fn send_datagram_with_options(self, payload: Binary, destination_address: String, destination_port: Int32, ttl: Int32) -> Int ! SendError
+        end
         ",
         "
-            protocol Transport
-              fn send_datagram_with_options(
-                self,
-                payload: Binary,
-                destination_address: String,
-                destination_port: Int32,
-                ttl: Int32,
-              ) -> Int ! SendError
-            end
+        protocol Transport
+          fn send_datagram_with_options(
+            self,
+            payload: Binary,
+            destination_address: String,
+            destination_port: Int32,
+            ttl: Int32,
+          ) -> Int ! SendError
+        end
         ",
     );
 }
@@ -98,11 +98,11 @@ fn long_union_alias_packs_with_trailing_pipe() {
     // Unions pack like symbolic operator chains.
     assert_fmt(
         "
-            type IncomingNetworkEvent = ConnectionEstablished | ConnectionClosed | DataReceived | HandshakeTimeout | ProtocolViolation
+        type IncomingNetworkEvent = ConnectionEstablished | ConnectionClosed | DataReceived | HandshakeTimeout | ProtocolViolation
         ",
         "
-            type IncomingNetworkEvent = ConnectionEstablished | ConnectionClosed |
-              DataReceived | HandshakeTimeout | ProtocolViolation
+        type IncomingNetworkEvent = ConnectionEstablished | ConnectionClosed |
+          DataReceived | HandshakeTimeout | ProtocolViolation
         ",
     );
 }
@@ -113,18 +113,18 @@ fn generic_params_with_bounds_wrap_like_parens() {
     // entry keeps its bounds intact.
     assert_fmt(
         "
-            fn merge_sorted<TElement: Comparable & Hash & Equality, TCollection: Iterable & Equality>(left: TCollection, right: TCollection) -> TCollection
-              left
-            end
+        fn merge_sorted<TElement: Comparable & Hash & Equality, TCollection: Iterable & Equality>(left: TCollection, right: TCollection) -> TCollection
+          left
+        end
         ",
         "
-            fn merge_sorted<
-              TElement: Comparable & Hash & Equality,
-              TCollection: Iterable & Equality
-            >(left: TCollection, right: TCollection) -> TCollection
+        fn merge_sorted<
+          TElement: Comparable & Hash & Equality,
+          TCollection: Iterable & Equality
+        >(left: TCollection, right: TCollection) -> TCollection
 
-              left
-            end
+          left
+        end
         ",
     );
 }
@@ -133,16 +133,16 @@ fn generic_params_with_bounds_wrap_like_parens() {
 fn short_fallible_return_tail_groups_on_continuation() {
     assert_fmt(
         "
-            priv fn parse_embedded_v4(text: String, allowed: Bool, address: String) -> List<Int> ! IPAddress.ParseError
-              []
-            end
+        priv fn parse_embedded_v4(text: String, allowed: Bool, address: String) -> List<Int> ! IPAddress.ParseError
+          []
+        end
         ",
         "
-            priv fn parse_embedded_v4(text: String, allowed: Bool, address: String)
-              -> List<Int> ! IPAddress.ParseError
+        priv fn parse_embedded_v4(text: String, allowed: Bool, address: String)
+          -> List<Int> ! IPAddress.ParseError
 
-              []
-            end
+          []
+        end
         ",
     );
 }
@@ -151,15 +151,15 @@ fn short_fallible_return_tail_groups_on_continuation() {
 fn protocol_fallible_return_tail_groups_on_continuation() {
     assert_fmt(
         "
-            protocol Decoder
-              fn decode_packet_with_address(self, packet: Binary, address: String) -> Int ! ParseError
-            end
+        protocol Decoder
+          fn decode_packet_with_address(self, packet: Binary, address: String) -> Int ! ParseError
+        end
         ",
         "
-            protocol Decoder
-              fn decode_packet_with_address(self, packet: Binary, address: String)
-                -> Int ! ParseError
-            end
+        protocol Decoder
+          fn decode_packet_with_address(self, packet: Binary, address: String)
+            -> Int ! ParseError
+        end
         ",
     );
 }
@@ -168,26 +168,26 @@ fn protocol_fallible_return_tail_groups_on_continuation() {
 fn union_and_bare_error_tails_group_on_continuation() {
     assert_fmt(
         "
-            fn fetch_resource_with_limits(url: String, retries: Int) -> Limits ! HTTP.Error | ParseError
-              fetch(url)
-            end
+        fn fetch_resource_with_limits(url: String, retries: Int) -> Limits ! HTTP.Error | ParseError
+          fetch(url)
+        end
 
-            fn flush_remote_replica_with_timeout(replica: Replica, timeout: Duration) ! StoreError
-              flush(replica)
-            end
+        fn flush_remote_replica_with_timeout(replica: Replica, timeout: Duration) ! StoreError
+          flush(replica)
+        end
         ",
         "
-            fn fetch_resource_with_limits(url: String, retries: Int)
-              -> Limits ! HTTP.Error | ParseError
+        fn fetch_resource_with_limits(url: String, retries: Int)
+          -> Limits ! HTTP.Error | ParseError
 
-              fetch(url)
-            end
+          fetch(url)
+        end
 
-            fn flush_remote_replica_with_timeout(replica: Replica, timeout: Duration)
-              ! StoreError
+        fn flush_remote_replica_with_timeout(replica: Replica, timeout: Duration)
+          ! StoreError
 
-              flush(replica)
-            end
+          flush(replica)
+        end
         ",
     );
 }
@@ -198,17 +198,17 @@ fn long_fallible_return_tail_splits_as_last_resort() {
     // success and error clauses.
     assert_fmt(
         "
-            fn parse_configuration_file(path: String) -> ConfigurationDocumentWithExtendedMetadata ! ConfigurationParseOrValidationError
-              1
-            end
+        fn parse_configuration_file(path: String) -> ConfigurationDocumentWithExtendedMetadata ! ConfigurationParseOrValidationError
+          1
+        end
         ",
         "
-            fn parse_configuration_file(path: String)
-              -> ConfigurationDocumentWithExtendedMetadata
-              ! ConfigurationParseOrValidationError
+        fn parse_configuration_file(path: String)
+          -> ConfigurationDocumentWithExtendedMetadata
+          ! ConfigurationParseOrValidationError
 
-              1
-            end
+          1
+        end
         ",
     );
 }
@@ -229,9 +229,9 @@ fn first_function(source: &str) -> koja_ast::ast::Function {
 fn format_signature_keeps_a_short_header_on_one_line() {
     let f = first_function(
         "
-            fn add(a: Int, b: Int) -> Int
-              a + b
-            end
+        fn add(a: Int, b: Int) -> Int
+          a + b
+        end
         ",
     );
     assert_eq!(
@@ -244,8 +244,8 @@ fn format_signature_keeps_a_short_header_on_one_line() {
 fn format_signature_breaks_a_long_header_one_parameter_per_line() {
     let f = first_function(
         "
-            priv fn prepare_and_run(self, key: String, sql: String, oids: List<Int>, texts: List<Option<String>>, stale_close: Binary) -> (Connection, Result<QueryResult, Error>)
-            end
+        priv fn prepare_and_run(self, key: String, sql: String, oids: List<Int>, texts: List<Option<String>>, stale_close: Binary) -> (Connection, Result<QueryResult, Error>)
+        end
         ",
     );
     assert_eq!(
@@ -269,8 +269,8 @@ fn format_signature_breaks_a_long_header_one_parameter_per_line() {
 fn format_signature_keeps_bounds_and_the_error_tail() {
     let f = first_function(
         "
-            fn load<T: Decode>(path: String) -> T ! IOError
-            end
+        fn load<T: Decode>(path: String) -> T ! IOError
+        end
         ",
     );
     assert_eq!(

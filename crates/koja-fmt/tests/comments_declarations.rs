@@ -14,7 +14,7 @@ fn leading_comment_stays_attached_to_declaration() {
         priv protocol P
           fn f(self) -> Int
         end
-    ",
+        ",
         "
         enum A
           B
@@ -24,7 +24,7 @@ fn leading_comment_stays_attached_to_declaration() {
         priv protocol P
           fn f(self) -> Int
         end
-    ",
+        ",
     );
 }
 
@@ -37,7 +37,7 @@ fn blank_line_before_comment_in_const_run_preserved() {
         # explains the pair below
         priv const B: Int = 2
         priv const C: Int = 3
-    ",
+        ",
     );
 }
 
@@ -54,7 +54,7 @@ fn doc_annotated_consts_get_blank_separation() {
         \"\"\"
         const B: Int = 2
         const C: Int = 3
-    ",
+        ",
         "
         @doc \"\"\"
         The first constant.
@@ -67,7 +67,7 @@ fn doc_annotated_consts_get_blank_separation() {
         const B: Int = 2
 
         const C: Int = 3
-    ",
+        ",
     );
 }
 
@@ -80,12 +80,12 @@ fn multiple_blank_lines_in_const_run_collapse_to_one() {
 
 
         priv const B: Int = 2
-    ",
+        ",
         "
         priv const A: Int = 1
 
         priv const B: Int = 2
-    ",
+        ",
     );
 }
 
@@ -98,14 +98,14 @@ fn blank_line_between_comment_and_declaration_preserved() {
         fn f -> Int
           1
         end
-    ",
+        ",
         "
         # stray file comment
 
         fn f -> Int
           1
         end
-    ",
+        ",
     );
 }
 
@@ -121,7 +121,7 @@ fn comment_above_member_function_stays_above_head() {
             Option.None
           end
         end
-    ",
+        ",
     );
 }
 
@@ -136,7 +136,7 @@ fn comment_above_annotated_impl_function_stays_above_annotation() {
             \"point\"
           end
         end
-    ",
+        ",
     );
 }
 
@@ -149,14 +149,14 @@ fn comment_between_annotation_and_declaration_hoists_in_one_pass() {
         fn add_one(x: Int32) -> Int32
           x + 1
         end
-    ",
+        ",
         "
         # explains the function
         @doc \"Adds one.\"
         fn add_one(x: Int32) -> Int32
           x + 1
         end
-    ",
+        ",
     );
     assert_unchanged(
         "
@@ -165,7 +165,7 @@ fn comment_between_annotation_and_declaration_hoists_in_one_pass() {
         fn add_one(x: Int32) -> Int32
           x + 1
         end
-    ",
+        ",
     );
 }
 
@@ -178,14 +178,14 @@ fn comment_between_annotation_and_struct_hoists_instead_of_leaking() {
         struct Point
           x: Int32
         end
-    ",
+        ",
         "
         # explains the struct
         @doc \"A point.\"
         struct Point
           x: Int32
         end
-    ",
+        ",
     );
 }
 
@@ -197,7 +197,7 @@ fn blank_above_annotated_declaration_is_preserved() {
 
         @doc \"N.\"
         const N = 1
-    ",
+        ",
     );
 }
 
@@ -218,7 +218,7 @@ fn comment_above_second_member_function_stays_attached() {
             \"mode\"
           end
         end
-    ",
+        ",
     );
 }
 
@@ -235,7 +235,7 @@ fn comment_above_protocol_method_stays_above_head() {
             0
           end
         end
-    ",
+        ",
     );
 }
 
@@ -251,7 +251,7 @@ fn comment_above_impl_type_alias_stays_attached() {
             0
           end
         end
-    ",
+        ",
     );
 }
 
@@ -272,7 +272,7 @@ fn trailing_comment_before_end_stays_inside_impl_and_protocol() {
           fn mark(self) -> Int
           # trailing protocol note
         end
-    ",
+        ",
     );
 }
 
@@ -284,7 +284,7 @@ fn enum_variant_trailing_comment_stays_on_variant() {
           Reload # SIGHUP
           Shutdown # SIGTERM
         end
-    ",
+        ",
     );
 }
 
@@ -302,7 +302,7 @@ fn enum_struct_variant_field_comments_stay_on_fields() {
             height: Int,
           }
         end
-    ",
+        ",
     );
 }
 
@@ -313,7 +313,7 @@ fn fn_header_trailing_comment_stays_on_signature() {
         fn f(x: Int) -> Int # doubles x
           x * 2
         end
-    ",
+        ",
     );
 }
 
@@ -326,12 +326,12 @@ fn wrapped_header_trailing_comment_stays_on_signature() {
         ) -> Int # note
           x
         end
-    ",
+        ",
         "
         fn f(x: Int) -> Int # note
           x
         end
-    ",
+        ",
     );
 }
 
@@ -346,7 +346,7 @@ fn protocol_method_header_trailing_comment_stays_on_signature() {
             0
           end
         end
-    ",
+        ",
     );
 }
 
@@ -359,7 +359,7 @@ fn alias_const_type_trailing_comments_stay_on_line() {
         const N: Int32 = 4 # const trailing
 
         type Pet = Cat | Dog # type trailing
-    ",
+        ",
     );
 }
 
@@ -370,7 +370,7 @@ fn declaration_header_and_end_comments_stay_on_line() {
         struct Point # header comment
           x: Int32
         end # end comment
-    ",
+        ",
     );
 }
 
@@ -384,6 +384,6 @@ fn test_block_comments_stay_in_place() {
           1
           # before end
         end
-    "#,
+        "#,
     );
 }

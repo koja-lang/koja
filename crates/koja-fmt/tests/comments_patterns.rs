@@ -16,7 +16,7 @@ fn list_pattern_comment_anchors_to_element() {
             _ -> 0
           end
         end
-    ",
+        ",
         "
         fn f(packet: List<Int>) -> Int
           match packet
@@ -27,7 +27,7 @@ fn list_pattern_comment_anchors_to_element() {
             _ -> 0
           end
         end
-    ",
+        ",
     );
 }
 
@@ -43,7 +43,7 @@ fn tuple_pattern_trailing_comment_stays_on_element() {
             _ -> 0
           end
         end
-    ",
+        ",
     );
 }
 
@@ -60,7 +60,7 @@ fn enum_tuple_pattern_comment_anchors_to_element() {
             Option.None -> 0
           end
         end
-    ",
+        ",
     );
 }
 
@@ -78,7 +78,7 @@ fn struct_pattern_field_comments_stay_on_fields() {
             _ -> 0
           end
         end
-    ",
+        ",
     );
 }
 
@@ -95,7 +95,7 @@ fn binary_pattern_comment_stays_on_segment() {
             _ -> 0
           end
         end
-    ",
+        ",
     );
 }
 
@@ -112,7 +112,7 @@ fn or_pattern_alternative_container_comment_anchors() {
             _ -> 0
           end
         end
-    ",
+        ",
     );
 }
 
@@ -128,7 +128,7 @@ fn commented_pattern_keeps_guard_glued() {
             _ -> 0
           end
         end
-    ",
+        ",
     );
 }
 
@@ -140,7 +140,7 @@ fn destructure_pattern_comment_anchors_to_element() {
           # sequence counter
           seq, payload
         ) = split(frame)
-    ",
+        ",
     );
 }
 
@@ -158,6 +158,6 @@ fn for_pattern_comment_anchors_to_element() {
 
           0
         end
-    ",
+        ",
     );
 }

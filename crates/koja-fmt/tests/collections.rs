@@ -6,12 +6,12 @@ use common::*;
 fn binary_literal_formatting() {
     assert_fmt_script(
         "
-            b = <<1, 2, 3>>
-            c = <<header::8, payload::16 big>>
+        b = <<1, 2, 3>>
+        c = <<header::8, payload::16 big>>
         ",
         "
-            b = <<1, 2, 3>>
-            c = <<header::8, payload::16 big>>
+        b = <<1, 2, 3>>
+        c = <<header::8, payload::16 big>>
         ",
     );
 }
@@ -22,13 +22,13 @@ fn long_binary_literal_packs_like_fill() {
     // line, so a long frame stays a readable byte sequence.
     assert_fmt_script(
         "
-            frame = <<0x53::8, 0x51::8, 0x58::8, 0x70::8, 0x50::8, 0x42::8, 0x44::8, 0x45::8, 0x54::8, 0x43::8, 0x5a::8, 0x49::8>>
+        frame = <<0x53::8, 0x51::8, 0x58::8, 0x70::8, 0x50::8, 0x42::8, 0x44::8, 0x45::8, 0x54::8, 0x43::8, 0x5a::8, 0x49::8>>
         ",
         "
-            frame = <<
-              0x53::8, 0x51::8, 0x58::8, 0x70::8, 0x50::8, 0x42::8, 0x44::8, 0x45::8,
-              0x54::8, 0x43::8, 0x5a::8, 0x49::8
-            >>
+        frame = <<
+          0x53::8, 0x51::8, 0x58::8, 0x70::8, 0x50::8, 0x42::8, 0x44::8, 0x45::8,
+          0x54::8, 0x43::8, 0x5a::8, 0x49::8
+        >>
         ",
     );
 }
@@ -37,22 +37,22 @@ fn long_binary_literal_packs_like_fill() {
 fn long_binary_pattern_packs_like_fill() {
     assert_fmt_script(
         "
-            match data
-              <<first_field::32, second_field::32, third_field::32, fourth_field::16, fifth_field::16, rest: Binary>> -> rest
-              _ -> data
-            end
+        match data
+          <<first_field::32, second_field::32, third_field::32, fourth_field::16, fifth_field::16, rest: Binary>> -> rest
+          _ -> data
+        end
         ",
         "
-            match data
-              <<
-                first_field::32, second_field::32, third_field::32, fourth_field::16,
-                fifth_field::16, rest: Binary
-              >> ->
-                rest
+        match data
+          <<
+            first_field::32, second_field::32, third_field::32, fourth_field::16,
+            fifth_field::16, rest: Binary
+          >> ->
+            rest
 
-              _ ->
-                data
-            end
+          _ ->
+            data
+        end
         ",
     );
 }
@@ -63,10 +63,10 @@ fn long_binary_pattern_packs_like_fill() {
 fn binary_pattern_segment_expressions_round_trip() {
     assert_unchanged_script(
         "
-            match data
-              <<head::len * 8, tag::Header.WIDTH, rest: Binary>> -> rest
-              _ -> data
-            end
+        match data
+          <<head::len * 8, tag::Header.WIDTH, rest: Binary>> -> rest
+          _ -> data
+        end
         ",
     );
 }
@@ -77,10 +77,10 @@ fn binary_pattern_segment_expressions_round_trip() {
 fn string_pattern_keeps_interpolation_escape() {
     assert_unchanged_script(
         r#"
-            match s
-              "\#{name}" -> 1
-              _ -> 0
-            end
+        match s
+          "\#{name}" -> 1
+          _ -> 0
+        end
         "#,
     );
 }
@@ -89,10 +89,10 @@ fn string_pattern_keeps_interpolation_escape() {
 fn concat_operator() {
     assert_fmt_script(
         r#"
-            s = "hello" <> " " <> "world"
+        s = "hello" <> " " <> "world"
         "#,
         r#"
-            s = "hello" <> " " <> "world"
+        s = "hello" <> " " <> "world"
         "#,
     );
 }
@@ -103,11 +103,11 @@ fn long_concat_chain_packs_like_fill() {
     // instead of one per line after the first break.
     assert_fmt_script(
         r#"
-            params = cstring("user") <> cstring(user) <> cstring("database") <> cstring(database) <> terminator
+        params = cstring("user") <> cstring(user) <> cstring("database") <> cstring(database) <> terminator
         "#,
         r#"
-            params = cstring("user") <> cstring(user) <> cstring("database") <>
-              cstring(database) <> terminator
+        params = cstring("user") <> cstring(user) <> cstring("database") <>
+          cstring(database) <> terminator
         "#,
     );
 }
@@ -116,10 +116,10 @@ fn long_concat_chain_packs_like_fill() {
 fn struct_construction_short_inline() {
     assert_fmt_script(
         r#"
-            c = Config{name: "yo", enabled: true}
+        c = Config{name: "yo", enabled: true}
         "#,
         r#"
-            c = Config{name: "yo", enabled: true}
+        c = Config{name: "yo", enabled: true}
         "#,
     );
 }
@@ -128,15 +128,15 @@ fn struct_construction_short_inline() {
 fn struct_construction_long_multiline() {
     assert_fmt_script(
         r#"
-            c = Config{name: "a very long name here", enabled: true, verbose: false, timeout: 3000}
+        c = Config{name: "a very long name here", enabled: true, verbose: false, timeout: 3000}
         "#,
         r#"
-            c = Config{
-              name: "a very long name here",
-              enabled: true,
-              verbose: false,
-              timeout: 3000,
-            }
+        c = Config{
+          name: "a very long name here",
+          enabled: true,
+          verbose: false,
+          timeout: 3000,
+        }
         "#,
     );
 }
@@ -145,16 +145,16 @@ fn struct_construction_long_multiline() {
 fn ternary_expression() {
     assert_fmt(
         "
-            fn f(x: Int) -> Int
-              y = x > 0 ? x : -x
-              y
-            end
+        fn f(x: Int) -> Int
+          y = x > 0 ? x : -x
+          y
+        end
         ",
         "
-            fn f(x: Int) -> Int
-              y = x > 0 ? x : -x
-              y
-            end
+        fn f(x: Int) -> Int
+          y = x > 0 ? x : -x
+          y
+        end
         ",
     );
 }
@@ -163,14 +163,14 @@ fn ternary_expression() {
 fn tuple_syntax_round_trips() {
     assert_unchanged(
         r#"
-            fn split(pair: (Int, String)) -> String
-              (n, name) = pair
+        fn split(pair: (Int, String)) -> String
+          (n, name) = pair
 
-              match (n, name)
-                (0, _) -> "zero"
-                (_, label) -> label
-              end
-            end
+          match (n, name)
+            (0, _) -> "zero"
+            (_, label) -> label
+          end
+        end
         "#,
     );
 }
@@ -179,13 +179,13 @@ fn tuple_syntax_round_trips() {
 fn long_tuple_literal_packs_like_fill() {
     assert_fmt_script(
         r#"
-            t = (first_element_value, second_element_value, third_element_value, fourth_element_value)
+        t = (first_element_value, second_element_value, third_element_value, fourth_element_value)
         "#,
         r#"
-            t = (
-              first_element_value, second_element_value, third_element_value,
-              fourth_element_value
-            )
+        t = (
+          first_element_value, second_element_value, third_element_value,
+          fourth_element_value
+        )
         "#,
     );
 }
@@ -194,14 +194,14 @@ fn long_tuple_literal_packs_like_fill() {
 fn try_and_fail_round_trip() {
     assert_unchanged(
         "
-            fn caller(flag: Bool) -> Int ! MyError
-              if not flag
-                fail MyError.Nope
-              end
+        fn caller(flag: Bool) -> Int ! MyError
+          if not flag
+            fail MyError.Nope
+          end
 
-              n = try parse(\"1\")
-              try parse(\"2\")
-            end
+          n = try parse(\"1\")
+          try parse(\"2\")
+        end
         ",
     );
 }
@@ -210,9 +210,9 @@ fn try_and_fail_round_trip() {
 fn short_rescue_stays_inline() {
     assert_unchanged(
         "
-            fn caller(s: String) -> Int
-              parse(s) rescue _ -> 0
-            end
+        fn caller(s: String) -> Int
+          parse(s) rescue _ -> 0
+        end
         ",
     );
 }
@@ -221,17 +221,17 @@ fn short_rescue_stays_inline() {
 fn long_rescue_breaks_onto_continuation_line() {
     assert_fmt(
         "
-            fn connect(config: Config) -> Connection ! Error
-              socket = TCPSocket.connect(config.host, config.port) rescue e -> fail Error.ConnectFailed(e.message())
-              handshake(socket)
-            end
+        fn connect(config: Config) -> Connection ! Error
+          socket = TCPSocket.connect(config.host, config.port) rescue e -> fail Error.ConnectFailed(e.message())
+          handshake(socket)
+        end
         ",
         "
-            fn connect(config: Config) -> Connection ! Error
-              socket = TCPSocket.connect(config.host, config.port)
-                rescue e -> fail Error.ConnectFailed(e.message())
-              handshake(socket)
-            end
+        fn connect(config: Config) -> Connection ! Error
+          socket = TCPSocket.connect(config.host, config.port)
+            rescue e -> fail Error.ConnectFailed(e.message())
+          handshake(socket)
+        end
         ",
     );
 }

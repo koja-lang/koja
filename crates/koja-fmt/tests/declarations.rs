@@ -8,11 +8,11 @@ fn doc_on_type_alias() {
         "
         @doc \"A user ID.\"
         type UserId = Int
-    ",
+        ",
         "
         @doc \"A user ID.\"
         type UserId = Int
-    ",
+        ",
     );
 }
 
@@ -23,7 +23,7 @@ fn function_and_constant_aliases_are_canonical() {
         alias Test.require
         alias JSON.decode as parse
         alias Global.STDOUT as OUT
-    ",
+        ",
     );
 }
 
@@ -40,7 +40,7 @@ fn nested_protocol_in_both_spellings_is_canonical() {
         protocol   Date.Parse
           fn parse_date(self, text: String) -> Date
         end
-    ",
+        ",
         "
         struct Date
           day: Int
@@ -53,7 +53,7 @@ fn nested_protocol_in_both_spellings_is_canonical() {
         protocol Date.Parse
           fn parse_date(self, text: String) -> Date
         end
-    ",
+        ",
     );
 }
 
@@ -73,7 +73,7 @@ fn nested_constants_group_apart_from_fields() {
         builtin Int
           const MAX = 9223372036854775807
         end
-    ",
+        ",
         "
         struct Span
           value: Int
@@ -91,7 +91,7 @@ fn nested_constants_group_apart_from_fields() {
         builtin Int
           const MAX = 9223372036854775807
         end
-    ",
+        ",
     );
 }
 
@@ -105,7 +105,7 @@ fn nested_constants_group_apart_from_variants() {
           const DEFAULT = Direction.North
           const COUNT = 2
         end
-    ",
+        ",
         "
         enum Direction
           North
@@ -114,7 +114,7 @@ fn nested_constants_group_apart_from_variants() {
           const DEFAULT = Direction.North
           const COUNT = 2
         end
-    ",
+        ",
     );
 }
 
@@ -128,7 +128,7 @@ fn nested_constants_before_fields_group_apart() {
 
           size: Int
         end
-    ",
+        ",
         "
         struct Slot
           const EMPTY = Slot{ref: Option.None}
@@ -136,7 +136,7 @@ fn nested_constants_before_fields_group_apart() {
           ref: Option<Int>
           size: Int
         end
-    ",
+        ",
     );
 }
 
@@ -148,13 +148,13 @@ fn single_annotation_on_function() {
         fn add(a: Int, b: Int) -> Int
           a + b
         end
-    "#,
+        "#,
         r#"
         @doc "Adds two numbers."
         fn add(a: Int, b: Int) -> Int
           a + b
         end
-    "#,
+        "#,
     );
 }
 
@@ -167,14 +167,14 @@ fn stacked_annotations_on_struct() {
         struct Argon2C
           x: Int
         end
-    ",
+        ",
         "
         @link \"argon2\"
         @extern \"C\"
         struct Argon2C
           x: Int
         end
-    ",
+        ",
     );
 }
 
@@ -185,7 +185,7 @@ fn builtin_empty_body_is_canonical() {
         @doc \"An immutable UTF-8 string.\"
         builtin String
         end
-    ",
+        ",
     );
 }
 
@@ -202,7 +202,7 @@ fn builtin_with_functions_is_canonical() {
             1
           end
         end
-    ",
+        ",
     );
 }
 
@@ -217,7 +217,7 @@ fn conformance_header_short_is_canonical() {
             \"point\"
           end
         end
-    ",
+        ",
     );
 }
 
@@ -233,7 +233,7 @@ fn enum_conformance_header_is_canonical() {
             \"color\"
           end
         end
-    ",
+        ",
     );
 }
 
@@ -245,13 +245,13 @@ fn conformance_header_long_wraps_after_colon() {
 
           available: List<T>
         end
-    ";
+        ";
     assert_fmt(
         "
         struct Server<T>: Process<Config<T>, Msg<T>, Reply<T>>, Serialization, Comparable, Debug
           available: List<T>
         end
-    ",
+        ",
         wrapped,
     );
     assert_unchanged(wrapped);
@@ -266,14 +266,14 @@ fn stacked_annotations_on_function() {
         fn test_hash
           x = 1
         end
-    ",
+        ",
         "
         @doc \"Hashes a password.\"
         @test
         fn test_hash
           x = 1
         end
-    ",
+        ",
     );
 }
 
@@ -283,11 +283,11 @@ fn extern_c_function_no_body() {
         "
         @extern \"C\"
         fn argon2id_hash_encoded(t_cost: UInt32, m_cost: UInt32) -> Int32
-    ",
+        ",
         "
         @extern \"C\"
         fn argon2id_hash_encoded(t_cost: UInt32, m_cost: UInt32) -> Int32
-    ",
+        ",
     );
 }
 
@@ -301,7 +301,7 @@ fn extern_c_struct_per_function() {
           @extern \"C\" @link \"argon2\"
           fn verify(encoded: UInt32) -> Int32
         end
-    ",
+        ",
         "
         struct Argon2C
           @extern \"C\" @link \"argon2\"
@@ -310,7 +310,7 @@ fn extern_c_struct_per_function() {
           @extern \"C\" @link \"argon2\"
           fn verify(encoded: UInt32) -> Int32
         end
-    ",
+        ",
     );
 }
 
@@ -326,7 +326,7 @@ fn extern_c_multiline_sig_no_double_blank() {
           @extern \"C\" @link \"crypto:EVP_MD_CTX_free\"
           priv fn evp_md_ctx_free(ctx: CPtr<UInt8>)
         end
-    ",
+        ",
         "
         struct Crypto
           @extern \"C\" @link \"crypto:EVP_DigestInit_ex\"
@@ -343,7 +343,7 @@ fn extern_c_multiline_sig_no_double_blank() {
           @extern \"C\" @link \"crypto:EVP_MD_CTX_free\"
           priv fn evp_md_ctx_free(ctx: CPtr<UInt8>)
         end
-    ",
+        ",
     );
 }
 
@@ -367,7 +367,7 @@ fn priv_decls_round_trip() {
         end
 
         priv const LIMIT: Int = 10
-    ",
+        ",
     );
 }
 
@@ -380,7 +380,7 @@ fn conditional_impl_target_bounds_round_trip() {
             true
           end
         end
-    ",
+        ",
     );
     assert_unchanged(
         "
@@ -389,7 +389,7 @@ fn conditional_impl_target_bounds_round_trip() {
             \"pair\"
           end
         end
-    ",
+        ",
     );
 }
 
@@ -406,13 +406,13 @@ fn enum_struct_variant_short_stays_inline_with_hugging_braces() {
             height: Int = 2,
           }
         end
-    ",
+        ",
         "
         enum Shape
           Circle{radius: Int}
           Rect{width: Int, height: Int = 2}
         end
-    ",
+        ",
     );
 }
 
@@ -427,7 +427,7 @@ fn enum_struct_variant_long_breaks_with_trailing_commas() {
             keepalive_interval_ms: Int,
           }
         end
-    ",
+        ",
     );
 }
 
@@ -440,7 +440,7 @@ fn top_level_test_block_is_stable() {
           stack.push(1)
           assert stack.pop() == Option.Some(1)
         end
-    "#,
+        "#,
     );
 }
 
@@ -449,11 +449,11 @@ fn empty_test_block_keeps_end_on_its_own_line() {
     assert_fmt(
         r#"
         test "nothing yet" end
-    "#,
+        "#,
         r#"
         test "nothing yet"
         end
-    "#,
+        "#,
     );
 }
 
@@ -464,7 +464,7 @@ fn test_description_escapes_round_trip() {
         test "quotes \"inside\" and a tab\t"
           1
         end
-    "#,
+        "#,
     );
 }
 
@@ -483,7 +483,7 @@ fn struct_tests_print_after_functions_with_blank_lines() {
           test "pop shrinks the stack"
           end
         end
-    "#,
+        "#,
         r#"
         struct Stack
           items: List<Int>
@@ -499,7 +499,7 @@ fn struct_tests_print_after_functions_with_blank_lines() {
           test "pop shrinks the stack"
           end
         end
-    "#,
+        "#,
     );
 }
 
@@ -552,7 +552,7 @@ fn type_body_members_keep_source_order() {
             "red"
           end
         end
-    "#,
+        "#,
     );
 }
 
@@ -592,6 +592,6 @@ fn enum_impl_and_extend_tests_are_stable() {
             assert [].total() == 0
           end
         end
-    "#,
+        "#,
     );
 }

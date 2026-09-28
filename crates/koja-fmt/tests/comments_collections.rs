@@ -6,19 +6,19 @@ use common::*;
 fn list_comments_stay_with_elements() {
     assert_fmt_script(
         "
-            list = [
-              # first element
-              1,
-              2, # trailing
-              3,
-            ]
+        list = [
+          # first element
+          1,
+          2, # trailing
+          3,
+        ]
         ",
         "
-            list = [
-              # first element
-              1, 2, # trailing
-              3
-            ]
+        list = [
+          # first element
+          1, 2, # trailing
+          3
+        ]
         ",
     );
 }
@@ -27,12 +27,12 @@ fn list_comments_stay_with_elements() {
 fn list_packing_resumes_around_comments() {
     assert_unchanged_script(
         "
-            big = [
-              1, 2, # two
-              3, 4, 5, 6,
-              # header values start here
-              7, 8
-            ]
+        big = [
+          1, 2, # two
+          3, 4, 5, 6,
+          # header values start here
+          7, 8
+        ]
         ",
     );
 }
@@ -41,10 +41,10 @@ fn list_packing_resumes_around_comments() {
 fn list_comment_before_closing_bracket_stays_inside() {
     assert_unchanged_script(
         "
-            closed = [
-              1, 2
-              # before the bracket
-            ]
+        closed = [
+          1, 2
+          # before the bracket
+        ]
         ",
     );
 }
@@ -53,15 +53,15 @@ fn list_comment_before_closing_bracket_stays_inside() {
 fn comment_inside_empty_literal_keeps_it_open() {
     assert_unchanged_script(
         "
-            list = [
-              # nothing yet
-            ]
-            map = [
-              # nothing yet
-            :]
-            summary = Summary{
-              # nothing yet
-            }
+        list = [
+          # nothing yet
+        ]
+        map = [
+          # nothing yet
+        :]
+        summary = Summary{
+          # nothing yet
+        }
         ",
     );
 }
@@ -70,10 +70,10 @@ fn comment_inside_empty_literal_keeps_it_open() {
 fn map_entry_trailing_comment_stays_with_entry() {
     assert_unchanged_script(
         "
-            m = [
-              \"a\": 1, # first
-              \"b\": 2
-            ]
+        m = [
+          \"a\": 1, # first
+          \"b\": 2
+        ]
         ",
     );
 }
@@ -82,10 +82,10 @@ fn map_entry_trailing_comment_stays_with_entry() {
 fn binary_literal_comment_breaks_its_line() {
     assert_unchanged_script(
         "
-            b = <<
-              1, 2, # second
-              3
-            >>
+        b = <<
+          1, 2, # second
+          3
+        >>
         ",
     );
 }
@@ -94,11 +94,11 @@ fn binary_literal_comment_breaks_its_line() {
 fn construction_field_comments_stay_with_fields() {
     assert_unchanged_script(
         "
-            p = Point{
-              # horizontal
-              x: 1,
-              y: 2, # vertical
-            }
+        p = Point{
+          # horizontal
+          x: 1,
+          y: 2, # vertical
+        }
         ",
     );
 }
@@ -107,11 +107,11 @@ fn construction_field_comments_stay_with_fields() {
 fn call_arg_comments_stay_with_args() {
     assert_unchanged_script(
         "
-            r = compute(
-              # first arg
-              2,
-              3, # second
-            )
+        r = compute(
+          # first arg
+          2,
+          3, # second
+        )
         ",
     );
 }
@@ -120,14 +120,14 @@ fn call_arg_comments_stay_with_args() {
 fn param_comments_force_broken_signature() {
     assert_unchanged(
         "
-            fn compute(
-              # the base value
-              base: Int32,
-              scale: Int32, # multiplier
-            ) -> Int32
+        fn compute(
+          # the base value
+          base: Int32,
+          scale: Int32, # multiplier
+        ) -> Int32
 
-              base * scale
-            end
+          base * scale
+        end
         ",
     );
 }
@@ -136,11 +136,11 @@ fn param_comments_force_broken_signature() {
 fn chain_comment_anchors_to_its_link() {
     assert_unchanged_script(
         "
-            out =
-              [3, 1, 2]
-              .map(v -> v * 2)
-              # drop the small ones
-              .filter(v -> v > 2)
+        out =
+          [3, 1, 2]
+          .map(v -> v * 2)
+          # drop the small ones
+          .filter(v -> v > 2)
         ",
     );
 }
@@ -149,19 +149,19 @@ fn chain_comment_anchors_to_its_link() {
 fn comment_between_equals_and_chain_root_forces_the_break() {
     assert_fmt_script(
         r#"
-            h =
-            # a
-              HTTP.Headers.new()
-              .set("Content-Type", "text/plain")
-              .set("Connection", "close")
+        h =
+        # a
+          HTTP.Headers.new()
+          .set("Content-Type", "text/plain")
+          .set("Connection", "close")
         "#,
         r#"
-            h =
-              HTTP.Headers
-              # a
-              .new()
-              .set("Content-Type", "text/plain")
-              .set("Connection", "close")
+        h =
+          HTTP.Headers
+          # a
+          .new()
+          .set("Content-Type", "text/plain")
+          .set("Connection", "close")
         "#,
     );
 }
@@ -170,12 +170,12 @@ fn comment_between_equals_and_chain_root_forces_the_break() {
 fn struct_literal_field_trailing_comment_survives() {
     assert_unchanged(
         "
-            fn f -> Point
-              Point{
-                x: 1, # horizontal
-                y: 2,
-              }
-            end
+        fn f -> Point
+          Point{
+            x: 1, # horizontal
+            y: 2,
+          }
+        end
         ",
     );
 }
@@ -184,12 +184,12 @@ fn struct_literal_field_trailing_comment_survives() {
 fn enum_struct_literal_field_trailing_comment_survives() {
     assert_unchanged(
         "
-            fn f -> Shape
-              Shape.Rect{
-                width: 1, # px
-                height: 2,
-              }
-            end
+        fn f -> Shape
+          Shape.Rect{
+            width: 1, # px
+            height: 2,
+          }
+        end
         ",
     );
 }
@@ -198,26 +198,26 @@ fn enum_struct_literal_field_trailing_comment_survives() {
 fn chain_statement_leading_comment_stays_above_statement() {
     assert_fmt(
         r#"
-            fn f(code: Int32) -> String
-              match code
-                1 ->
-                  # wrap and copy, never free
-                  error_string(code).to_cstring().to_string().unwrap()
-                _ -> "other"
-              end
-            end
+        fn f(code: Int32) -> String
+          match code
+            1 ->
+              # wrap and copy, never free
+              error_string(code).to_cstring().to_string().unwrap()
+            _ -> "other"
+          end
+        end
         "#,
         r#"
-            fn f(code: Int32) -> String
-              match code
-                1 ->
-                  # wrap and copy, never free
-                  error_string(code).to_cstring().to_string().unwrap()
+        fn f(code: Int32) -> String
+          match code
+            1 ->
+              # wrap and copy, never free
+              error_string(code).to_cstring().to_string().unwrap()
 
-                _ ->
-                  "other"
-              end
-            end
+            _ ->
+              "other"
+          end
+        end
         "#,
     );
 }
@@ -226,24 +226,24 @@ fn chain_statement_leading_comment_stays_above_statement() {
 fn broken_assignment_head_comment_hoists_above_statement() {
     assert_fmt(
         r#"
-            fn f -> String
-              r = # note
-                match 1
-                  _ -> "x"
-                end
-              r
+        fn f -> String
+          r = # note
+            match 1
+              _ -> "x"
             end
+          r
+        end
         "#,
         r#"
-            fn f -> String
-              # note
-              r =
-                match 1
-                  _ -> "x"
-                end
-
-              r
+        fn f -> String
+          # note
+          r =
+            match 1
+              _ -> "x"
             end
+
+          r
+        end
         "#,
     );
 }

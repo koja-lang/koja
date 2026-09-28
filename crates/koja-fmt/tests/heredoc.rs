@@ -41,15 +41,15 @@ fn first_string_value(source: &str) -> String {
 fn heredoc_broken_opener_round_trips() {
     assert_unchanged(
         r#"
-            fn scaffold -> String
-              content =
-                """
-                line one
-                  nested deeper
-                line two
-                """
-              content
-            end
+        fn scaffold -> String
+          content =
+            """
+            line one
+              nested deeper
+            line two
+            """
+          content
+        end
         "#,
     );
 }
@@ -58,13 +58,13 @@ fn heredoc_broken_opener_round_trips() {
 fn heredoc_glued_opener_round_trips() {
     assert_unchanged(
         r#"
-            fn scaffold -> String
-              content = """
-              line one
-              line two
-              """
-              content
-            end
+        fn scaffold -> String
+          content = """
+          line one
+          line two
+          """
+          content
+        end
         "#,
     );
 }
@@ -72,19 +72,19 @@ fn heredoc_glued_opener_round_trips() {
 #[test]
 fn heredoc_glued_normalizes_content_to_ambient_indent() {
     let input = r#"
-            x = """
-              hello
-                nested
-              """
+        x = """
+          hello
+            nested
+          """
         "#;
     let output = fmt_script(input);
     assert_formatted(
         output.clone(),
         r#"
-            x = """
-            hello
-              nested
-            """
+        x = """
+        hello
+          nested
+        """
         "#,
     );
     // The cooked value survives the re-indent byte-exactly.
@@ -95,12 +95,12 @@ fn heredoc_glued_normalizes_content_to_ambient_indent() {
 #[test]
 fn heredoc_blank_lines_and_trailing_newline_round_trip() {
     let source = r#"
-            x = """
-            hello
+        x = """
+        hello
 
-            world
+        world
 
-            """
+        """
         "#;
     assert_fmt_script(source, source);
     assert_eq!(first_string_value(source), "hello\n\nworld\n");
@@ -110,12 +110,12 @@ fn heredoc_blank_lines_and_trailing_newline_round_trip() {
 fn heredoc_interpolation_round_trips() {
     assert_unchanged(
         r#"
-            fn greet(name: String) -> String
-              """
-              hello #{name}
-              bye
-              """
-            end
+        fn greet(name: String) -> String
+          """
+          hello #{name}
+          bye
+          """
+        end
         "#,
     );
 }
@@ -126,12 +126,12 @@ fn heredoc_quotes_round_trip() {
     // run keeps its escaped third quote.
     assert_unchanged(
         r#"
-            fn f -> String
-              """
-              say "hi"
-              a quoted run: ""\"
-              """
-            end
+        fn f -> String
+          """
+          say "hi"
+          a quoted run: ""\"
+          """
+        end
         "#,
     );
 }
@@ -140,31 +140,31 @@ fn heredoc_quotes_round_trip() {
 fn heredoc_sole_call_argument_hugs() {
     assert_unchanged(
         r#"
-            fn f
-              IO.puts("""
-              hello
-              """)
-            end
+        fn f
+          IO.puts("""
+          hello
+          """)
+        end
         "#,
     );
 
     // An exploded sole-heredoc argument list collapses to the hug.
     assert_fmt(
         r#"
-            fn f
-              IO.puts(
-                """
-                hello
-                """,
-              )
-            end
+        fn f
+          IO.puts(
+            """
+            hello
+            """,
+          )
+        end
         "#,
         r#"
-            fn f
-              IO.puts("""
-              hello
-              """)
-            end
+        fn f
+          IO.puts("""
+          hello
+          """)
+        end
         "#,
     );
 }
