@@ -103,7 +103,7 @@ impl Printer {
             } => self.if_to_doc(condition, then_body, else_body.as_deref(), expr.span),
             ExprKind::List { elements } => {
                 if elements.is_empty() {
-                    text("[]")
+                    self.empty_list_to_doc("[", "]", expr.span)
                 } else {
                     let entries = self.seq_entries(elements, |e| e.span, |p, e| p.expr_to_doc(e));
                     self.element_list_to_doc("[", "]", entries, expr.span)
@@ -117,7 +117,7 @@ impl Printer {
             }
             ExprKind::Map { entries } => {
                 if entries.is_empty() {
-                    text("[:]")
+                    self.empty_list_to_doc("[", ":]", expr.span)
                 } else {
                     let entry_docs = self.map_entries(entries);
                     self.element_list_to_doc("[", "]", entry_docs, expr.span)
@@ -182,7 +182,10 @@ impl Printer {
             ExprKind::StructConstruction { type_path, fields } => {
                 let path_str = path_text(type_path);
                 if fields.is_empty() {
-                    text(format!("{}{{}}", path_str))
+                    concat(vec![
+                        text(path_str),
+                        self.empty_list_to_doc("{", "}", expr.span),
+                    ])
                 } else {
                     self.construction_to_doc(text(path_str), fields, expr.span)
                 }
@@ -464,11 +467,7 @@ impl Printer {
     /// before the closing paren.
     pub(super) fn call_args_to_doc(&mut self, args: &[Arg], owner: Span) -> Doc {
         if args.is_empty() {
-            let stragglers = self.comments.take(owner, Slot::Stragglers);
-            if stragglers.is_empty() {
-                return text("()");
-            }
-            return broken_list("(", ")", field_lines(Vec::new(), stragglers));
+            return self.empty_list_to_doc("(", ")", owner);
         }
         if let [arg] = args
             && arg.name.is_none()
@@ -489,6 +488,16 @@ impl Printer {
         }
         let stragglers = self.comments.take(owner, Slot::Stragglers);
         broken_list("(", ")", field_lines(entries, stragglers))
+    }
+
+    /// An empty delimited list. Comments written inside it are the
+    /// owner's stragglers and keep it broken open.
+    fn empty_list_to_doc(&mut self, open: &str, close: &str, owner: Span) -> Doc {
+        let stragglers = self.comments.take(owner, Slot::Stragglers);
+        if stragglers.is_empty() {
+            return text(format!("{open}{close}"));
+        }
+        broken_list(open, close, field_lines(Vec::new(), stragglers))
     }
 
     fn arg_to_doc(&mut self, arg: &Arg) -> Doc {
