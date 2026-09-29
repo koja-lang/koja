@@ -108,29 +108,46 @@ test "trace_id and span_id return the ids as big-endian bytes"
   assert Base.encode16(ZERO.trace_id()) == "00000000000000000000000000000000"
 end
 
-test "context_from_ids round trips the byte helpers"
-  context = Process.Context{
-    flags: 1,
-    span: 0x0102030405060708,
-    trace_hi: -1,
-    trace_lo: 0x0A0B0C0D0E0F1011,
-  }
-  unsampled = Process.Context{
-    flags: 0,
-    span: 0x0102030405060708,
-    trace_hi: -1,
-    trace_lo: 0x0A0B0C0D0E0F1011,
-  }
+test "the Trace setters round trip the byte helpers"
+  Trace.clear()
+  try require(Trace.set_trace_id(<<-1::64, 0x0A0B0C0D0E0F1011::64>>))
+  try require(Trace.set_span_id(<<0x0102030405060708::64>>))
+  Trace.set_sampled(true)
+  context = Process.context()
+  Trace.clear()
 
-  assert context_from_ids(context.trace_id(), context.span_id(), true) ==
-    Option.Some(context)
-  assert context_from_ids(context.trace_id(), context.span_id(), false) ==
-    Option.Some(unsampled)
+  assert context ==
+    Process.Context{
+      flags: 1,
+      span: 0x0102030405060708,
+      trace_hi: -1,
+      trace_lo: 0x0A0B0C0D0E0F1011,
+    }
+  assert Base.encode16(context.span_id()) == "0102030405060708"
+  assert Base.encode16(context.trace_id()) == "ffffffffffffffff0a0b0c0d0e0f1011"
 end
 
-test "context_from_ids rejects ids of the wrong length"
-  assert context_from_ids(<<1::64>>, <<2::64>>, true) == Option.None
-  assert context_from_ids(<<1::64, 2::64>>, <<3::32>>, true) == Option.None
+test "each Trace setter keeps the other fields"
+  Trace.clear()
+  Trace.set_sampled(true)
+  try require(Trace.set_trace_id(<<5::64, 6::64>>))
+  try require(Trace.set_span_id(<<7::64>>))
+  set = Process.context()
+  Trace.set_sampled(false)
+  cleared_bit = Process.context()
+  Trace.clear()
+
+  assert set == Process.Context{flags: 1, span: 7, trace_hi: 5, trace_lo: 6}
+  assert cleared_bit ==
+    Process.Context{flags: 0, span: 7, trace_hi: 5, trace_lo: 6}
+  assert Process.context() == ZERO
+end
+
+test "the Trace setters reject ids of the wrong length"
+  Trace.clear()
+  assert Trace.set_trace_id(<<1::64>>) == Result.Err(Trace.Error.InvalidTraceId)
+  assert Trace.set_span_id(<<3::32>>) == Result.Err(Trace.Error.InvalidSpanId)
+  assert Process.context() == ZERO
 end
 
 test "install round trips through context"

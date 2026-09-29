@@ -38,6 +38,16 @@ struct Trace.Attribute: BoolLiteral, FloatLiteral, IntLiteral, StringLiteral
 end
 
 @doc """
+Why a `Trace` setter refused an id.
+"""
+enum Trace.Error
+  # `set_span_id` needs 8 bytes.
+  InvalidSpanId
+  # `set_trace_id` needs 16 bytes.
+  InvalidTraceId
+end
+
+@doc """
 What role a span plays in a request. `Server` handles an incoming
 request, `Client` makes an outgoing one, and `Internal` is work in
 between, such as a database query.
@@ -134,20 +144,36 @@ the closure returns. Every `cast`, `call`, and `send_after` inside the
 closure carries the span's context to its receiver, so nothing below
 needs a parent argument. Finished spans queue for `Trace.Export`.
 
-```koja
-Trace.root("GET /entities", parent, Trace.SpanKind.Server, span ->
-  response = router.dispatch(request)
-  span.attribute("http.response.status_code", response.status.code)
-  response
-end)
+A trace that arrived from another service continues through the
+setters. A codec package reads the ids off the wire, calls
+`set_trace_id`, `set_span_id`, and `set_sampled`, and the next `root`
+treats them as its parent. Nothing outside `Trace` builds a
+`Process.Context`.
 
-Trace.span("db.query", span ->
-  span.attribute("db.system", "postgresql")
-  work(db)
-end)
+```koja
+Trace.root(
+  "GET /entities",
+  Trace.SpanKind.Server,
+  fn (span: Trace.Span) -> Response
+    response = router.dispatch(request)
+    span.attribute("http.response.status_code", response.status.code)
+    response
+  end,
+)
+
+rows = Trace.span("db.query", span -> db.query(sql))
 ```
 """
 struct Trace
+  @doc """
+  Puts the calling process back to `Process.Context.ZERO`. A process
+  that handles many requests in turn clears between them, so a request
+  with no incoming trace does not continue the last one.
+  """
+  fn clear
+    TraceRuntime.install(Process.Context.ZERO)
+  end
+
   @doc """
   The calling process's context, the value to inject into an outgoing
   `traceparent` header. The same as `Process.context()`.
@@ -157,39 +183,101 @@ struct Trace
   end
 
   @doc """
-  Starts a trace, or continues the one `parent` carries, and runs
-  `work` inside a span named `name`. With no parent the trace is new
-  and sampled. With a parent the span keeps the parent's trace id and
-  sampled bit, so an unsampled upstream stays unsampled here.
+  Runs `work` inside a span named `name`. A process carrying the zero
+  context starts a new sampled trace. A process whose context the
+  setters filled continues that trace, with the set span id as the
+  parent and the set sampled bit, so an unsampled upstream stays
+  unsampled here. The context the process carried is put back when
+  `work` returns.
   """
-  fn root<R>(
-    name: String,
-    parent: Option<Process.Context>,
-    kind: Trace.SpanKind,
-    work: fn (Trace.Span) -> R,
-  ) -> R
+  fn root<R>(name: String, kind: Trace.SpanKind, work: fn (Trace.Span) -> R)
+    -> R
 
     saved = Process.context()
 
-    match parent
-      Option.Some(upstream) ->
-        run(
-          name,
-          kind,
-          saved,
-          child_of(upstream),
-          parent_span_id(upstream),
-          work,
+    if saved.trace_hi == 0 and saved.trace_lo == 0
+      fresh = Process.Context{
+        flags: 1,
+        span: TraceRuntime.span_id(),
+        trace_hi: TraceRuntime.span_id(),
+        trace_lo: TraceRuntime.span_id(),
+      }
+      return run(name, kind, saved, fresh, Option.None, work)
+    end
+
+    run(name, kind, saved, child_of(saved), parent_span_id(saved), work)
+  end
+
+  @doc """
+  Writes the sampled bit of the calling process's context and keeps the
+  ids. Spans record only under a sampled context.
+  """
+  fn set_sampled(sampled: Bool)
+    current = Process.context()
+
+    flags =
+      if sampled
+        current.flags.bor(1)
+      else
+        current.flags.band(-2)
+      end
+
+    TraceRuntime.install(
+      Process.Context{
+        flags: flags,
+        span: current.span,
+        trace_hi: current.trace_hi,
+        trace_lo: current.trace_lo,
+      },
+    )
+  end
+
+  @doc """
+  Writes the 8-byte span id the next `root` treats as its parent and
+  keeps the trace id and sampled bit. Fails when `id` is not 8 bytes.
+  """
+  fn set_span_id(id: Binary) ! Trace.Error
+    current = Process.context()
+
+    match id
+      <<span::64>> ->
+        TraceRuntime.install(
+          Process.Context{
+            flags: current.flags,
+            span: span,
+            trace_hi: current.trace_hi,
+            trace_lo: current.trace_lo,
+          },
         )
 
-      Option.None ->
-        context = Process.Context{
-          flags: 1,
-          span: TraceRuntime.span_id(),
-          trace_hi: TraceRuntime.span_id(),
-          trace_lo: TraceRuntime.span_id(),
-        }
-        run(name, kind, saved, context, Option.None, work)
+      _ ->
+        fail Trace.Error.InvalidSpanId
+    end
+  end
+
+  @doc """
+  Writes the 16-byte trace id of the calling process's context and
+  keeps the span id and sampled bit. For a codec that continues a trace
+  read off the wire, called before `root`. `spawn` copies the result
+  into children, so call it before any spawn that should inherit it.
+  Fails when `id` is not 16 bytes.
+  """
+  fn set_trace_id(id: Binary) ! Trace.Error
+    current = Process.context()
+
+    match id
+      <<trace_hi::64, trace_lo::64>> ->
+        TraceRuntime.install(
+          Process.Context{
+            flags: current.flags,
+            span: current.span,
+            trace_hi: trace_hi,
+            trace_lo: trace_lo,
+          },
+        )
+
+      _ ->
+        fail Trace.Error.InvalidTraceId
     end
   end
 

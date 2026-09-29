@@ -1968,12 +1968,11 @@ The context changes at each business message dequeue and keeps the last installe
 
 ### Tracing
 
-`Trace` opens spans as closures over `Process.context`. `Trace.root` starts a trace at a boundary, from an incoming parent context or from nothing, and `Trace.span` opens a child of whatever context the calling process carries. Both install the span's context for the closure and put back what they found when it returns. Every `cast`, `call`, and `send_after` inside the closure carries the span's context to its receiver, so code below the boundary needs no parent argument.
+`Trace` opens spans as closures over `Process.context`. `Trace.root` starts a trace at a boundary and `Trace.span` opens a child of whatever context the calling process carries. Both install the span's context for the closure and put back what they found when it returns. Every `cast`, `call`, and `send_after` inside the closure carries the span's context to its receiver, so code below the boundary needs no parent argument.
 
 ```koja
 response = Trace.root(
   "GET /entities",
-  parent,
   Trace.SpanKind.Server,
   fn (span: Trace.Span) -> Response
     response = router.dispatch(request)
@@ -1983,11 +1982,19 @@ response = Trace.root(
 )
 
 rows = Trace.span("db.query", span -> db.query(sql))
-
-headers.set("traceparent", Propagation.format(Trace.current()))
 ```
 
-The `Trace.Span` inside the closure is a handle to a record the runtime holds, not a value. `span.attribute(key, value)` and `span.status(status)` write through to that record. Under an unsampled context the handle records nothing and `recording?()` is `false`. A root with no parent starts a sampled trace. A root with a parent keeps the parent's trace id and sampled bit.
+The `Trace.Span` inside the closure is a handle to a record the runtime holds, not a value. `span.attribute(key, value)` and `span.status(status)` write through to that record. Under an unsampled context the handle records nothing and `recording?()` is `false`.
+
+`Trace.root` reads the calling process's context as its parent. A process carrying `Process.Context.ZERO` starts a new sampled trace. A trace that arrived from another service continues through three setters. A codec package decodes the ids off the wire and calls `Trace.set_trace_id(bytes)`, `Trace.set_span_id(bytes)`, and `Trace.set_sampled(bool)` before `root`. The root then keeps the set trace id and sampled bit and names the set span id as its parent. `set_trace_id` and `set_span_id` fail with `Trace.Error` when the id has the wrong length. `Trace.clear()` puts the process back to the zero context, for a process that handles one request after another. The stdlib ships no wire codec, so `traceparent` and its relatives live in packages.
+
+```koja
+try Trace.set_trace_id(trace_id)
+try Trace.set_span_id(span_id)
+Trace.set_sampled(sampled)
+response = Trace.root("GET /entities", Trace.SpanKind.Server, span -> router.dispatch(request))
+Trace.clear()
+```
 
 When the closure returns, the finished `Trace.SpanRecord` joins a queue that holds at most 4096 records. An exporter package drains it with `Trace.Export.pop()` and reports `Trace.Export.dropped()`, the count of records a full queue refused. The stdlib ships no exporter.
 
@@ -2826,9 +2833,11 @@ Read-only process metrics. See [Runtime Observability](#runtime-observability) f
 
 Closure-scoped spans over `Process.context`. See [Tracing](#tracing) for the semantics.
 
-- `Trace.root<R>(name: String, parent: Option<Process.Context>, kind: Trace.SpanKind, work: fn (Trace.Span) -> R) -> R`: starts a trace, or continues `parent`, and runs `work` in a span.
+- `Trace.root<R>(name: String, kind: Trace.SpanKind, work: fn (Trace.Span) -> R) -> R`: runs `work` in a span. Starts a new sampled trace under the zero context, continues the context the setters filled otherwise.
 - `Trace.span<R>(name: String, work: fn (Trace.Span) -> R) -> R` and `Trace.span<R>(name, kind, work)`: runs `work` in a child span of the calling process's context. `Internal` when `kind` is omitted.
 - `Trace.current() -> Process.Context`: the calling process's context, the same as `Process.context()`.
+- `Trace.set_trace_id(id: Binary) ! Trace.Error`, `Trace.set_span_id(id: Binary) ! Trace.Error`, `Trace.set_sampled(sampled: Bool)`: write one field of the calling process's context and keep the others, for a codec that continues an incoming trace. `Trace.Error` is `InvalidSpanId` or `InvalidTraceId` when an id is not 8 or 16 bytes.
+- `Trace.clear()`: puts the calling process back to `Process.Context.ZERO`.
 - `Trace.Span`: the handle inside a closure. `attribute(self, key: String, value: Trace.Attribute)`, `status(self, status: Trace.Status)`, `recording?(self) -> Bool`.
 - `Trace.SpanRecord{attributes: Map<String, Trace.Attribute>, context: Process.Context, ended_at: Timestamp, kind: Trace.SpanKind, name: String, parent_span_id: Option<Binary>, started_at: Timestamp, status: Trace.Status}`: a finished span.
 - `Trace.Attribute{value: Bool | Float | Int | String}`: a span attribute. Literals convert where a `Trace.Attribute` is expected. `Trace.Attribute.from(value)` wraps a variable.

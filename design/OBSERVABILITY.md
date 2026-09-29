@@ -158,10 +158,12 @@ The four words are the runtime layout, and the Koja struct
 `Process.Context` declares them in the same order so a read is one
 32-byte copy. User code does not touch the words. It reads the ids
 through `trace_id()` and `span_id()`, which return them as bytes, and it
-never builds a context. `Trace` and `Propagation` are the only
-constructors, through a package-private function in `global`. That
-rule is what lets the layout grow: a field added to the struct breaks
-no code outside the package. A 128-bit integer type would let
+never builds a context. `Trace` is the only constructor. A trace read
+off the wire enters through `Trace.set_trace_id`, `Trace.set_span_id`,
+and `Trace.set_sampled`, each of which writes one field and keeps the
+rest, so a codec package never sees the layout. That rule is what lets
+the layout grow: a field added to the struct breaks no code outside
+the package. A 128-bit integer type would let
 `trace_id` become one field, and the byte helper would not change.
 `flags` has sixty-three spare bits for future markers.
 
@@ -270,10 +272,13 @@ library would couple to one exporter. Elixir solved this with
 indirection because the stdlib is already the neutral layer.
 
 ```koja
-# The boundary that reads an incoming traceparent starts a root.
+# The boundary sets the incoming ids, if any, then starts a root.
+try Trace.set_trace_id(parent.trace_id)
+try Trace.set_span_id(parent.span_id)
+Trace.set_sampled(parent.sampled?)
+
 Trace.root(
   "#{method} #{path}",
-  parent,
   Trace.SpanKind.Server,
   fn (span: Trace.Span) -> Response
     response = router.dispatch(request)
@@ -291,8 +296,9 @@ Trace.span(
   end,
 )
 
-# Leaving the process tree is the one manual step.
-headers.set("traceparent", Propagation.format(Trace.current()))
+# Leaving the process tree is the one manual step. The codec package
+# encodes Trace.current(), the stdlib does not know the wire format.
+headers.set("traceparent", Propagation.header(Trace.current()))
 ```
 
 `Trace.span` mints a child span id, installs the child context in the
@@ -309,12 +315,20 @@ process's stack of open records, and the runtime moves the record out
 and back in around each write. The finished record is a
 `Trace.SpanRecord`.
 
-`Trace.root` takes the parent as an argument and ignores the context
-the process already carries, except to put it back when the closure
-returns. A root with no parent mints a trace id and sets the sampled
-bit. A root under a parent keeps the parent's trace id and sampled
-bit, so an unsampled upstream stays unsampled and records nothing here
-either. Sampling policy beyond "follow the parent" is not designed.
+`Trace.root` reads the context the process carries as its parent and
+puts it back when the closure returns. Under the zero context it mints
+a trace id and sets the sampled bit. Under a context the setters
+filled it keeps the trace id and sampled bit and names the set span id
+as the parent, so an unsampled upstream stays unsampled and records
+nothing here either. The setters exist because the stdlib carries no
+wire codec. `traceparent` is an OpenTelemetry concept and stays in a
+package, and that package needs a way to hand the runtime three
+decoded values without building a `Process.Context`. Each setter
+writes one field, so the codec never learns the layout. `Trace.clear`
+returns a process to the zero context, which a worker that serves one
+request after another calls between requests so a request with no
+incoming trace does not continue the last one. Sampling policy beyond
+"follow the parent" is not designed.
 
 The record crosses into the runtime by the message send convention: a
 deep copy moves into the runtime, and the caller's own value keeps its

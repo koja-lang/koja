@@ -307,8 +307,9 @@ carries `Process.Context.ZERO`, and nothing downstream of it records.
 The fields are the runtime layout, the 32 bytes the runtime holds in
 this order so that reading the context is one copy. Read the ids
 through `trace_id` and `span_id`, which return them as bytes, and never
-build a context by hand. `Trace` and `Propagation` are the only
-constructors, and the field list can grow.
+build a context by hand. `Trace` is the only constructor, a trace read
+off the wire enters through the `Trace` setters, and the field list
+can grow.
 """
 struct Process.Context
   flags: Int
@@ -342,32 +343,6 @@ struct Process.Context
   """
   fn trace_id(self) -> Binary
     <<self.trace_hi::64, self.trace_lo::64>>
-  end
-end
-
-# Builds a context from the ids a `traceparent` carries. `Trace` and
-# `Propagation` call it. `Option.None` when an id has the wrong length.
-priv fn context_from_ids(trace_id: Binary, span_id: Binary, sampled: Bool)
-  -> Option<Process.Context>
-
-  flags =
-    if sampled
-      1
-    else
-      0
-    end
-
-  match (trace_id, span_id)
-    (<<trace_hi::64, trace_lo::64>>, <<span::64>>) ->
-      Option.Some(Process.Context{
-        flags: flags,
-        span: span,
-        trace_hi: trace_hi,
-        trace_lo: trace_lo,
-      })
-
-    _ ->
-      Option.None
   end
 end
 
