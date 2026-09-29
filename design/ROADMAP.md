@@ -47,14 +47,14 @@ call sites once instead of twice.
   which is the same piece a `List` constant needs. The `koja-lang/tz`
   package is the first case that wanted it. With no static table, its
   identifier lookup is a generated `match` over string literals per region.
-- Let a field default name its struct through a dotted path or an alias
-  ([gap](GAPS.md#struct-literal-defaults-stop-at-the-package-boundary)).
-  `options: TCPListener.Options = TCPListener.Options{}` is rejected today
-  because the literal parses as a struct-shaped enum variant and the lift
-  check admits only unit variants, and the aliased spelling panics in
-  resolve. The socket deadlines shipped with `TCPListener.options` as a
-  required field because of this. The likely fix is to resolve each
-  default once in its declaring file with that file's aliases in scope.
+- **[DONE]** Let a field default name its struct through a dotted path
+  or an alias. `options: TCPListener.Options = TCPListener.Options{}` was
+  rejected because the literal parses as a struct-shaped enum variant
+  and the lift check admitted only unit variants, and the aliased
+  spelling panicked in resolve. The registry now carries the declaring
+  file's alias roster, every default resolves in that scope at the
+  declaration and at each site, and enum payload variants are accepted
+  as defaults. `TCPListener.options` has its default.
 
 ### Language server
 

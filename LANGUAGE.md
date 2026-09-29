@@ -815,7 +815,7 @@ c = Config{name: "app"} # host and port fill from the defaults
 Config{} # error: `name` has no default
 ```
 
-Default values are limited to side-effect-free expressions: literals (no interpolation), negated numerics, unit enum variants, binary literals, constants (`LIMIT`, `Duration.ZERO`), and struct, list, map, or set literals of those. The compiler checks each default against the field type at the declaration. A default cannot use an `alias` shorthand. Write the qualified name.
+Default values are limited to side-effect-free expressions: literals (no interpolation), negated numerics, enum variants, binary literals, constants (`LIMIT`, `Duration.ZERO`), and struct, list, map, or set literals of those. The compiler checks each default against the field type at the declaration. A default resolves in its declaring file, so it can name a type through a dotted path (`TCPListener.Options{}`, `Pkg.Type{}`) or through one of that file's aliases.
 
 The default expression evaluates at each construction that omits the field. This makes generic defaults work: a `List<T>` field can default to `[]` and an `Option<T>` field to `Option.None`:
 

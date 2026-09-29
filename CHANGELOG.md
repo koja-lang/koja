@@ -18,6 +18,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - `koja format` no longer panics on a comment inside an empty list, map, or struct literal. The literal stays broken open with the comment inside, the layout an empty call argument list already used.
+- A field default can be a struct literal named through a dotted path, such as `options: TCPListener.Options = TCPListener.Options{}`, or through a file alias. Enum variants with a payload, such as `Option.Some(3)`, are accepted as defaults too. Before, the dotted literal was rejected and the aliased one could panic the compiler. `TCPListener.options` now defaults to `TCPListener.Options{}`.
 
 ## [0.19.1] - 2026-09-26
 
