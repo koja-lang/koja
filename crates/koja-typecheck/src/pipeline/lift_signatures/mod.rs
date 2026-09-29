@@ -77,6 +77,32 @@ impl<'a> LiftScope<'a> {
     }
 }
 
+/// Visit every item in every file with that file's lift scope. Each
+/// lift pass sweeps the program this way, so the alias roster and
+/// the scope are built here once. A closure rather than an iterator
+/// because the scope holds `&mut registry`, and an iterator that
+/// yields a fresh scope per file would have to lend it.
+pub(super) fn for_each_item(
+    packages: &mut [CheckedPackage],
+    registry: &mut GlobalRegistry,
+    diagnostics: &mut Vec<Diagnostic>,
+    mut visit: impl FnMut(&mut Item, &mut LiftScope<'_>, &mut Vec<Diagnostic>),
+) {
+    for pkg in packages.iter_mut() {
+        for file in &mut pkg.files {
+            let aliases = collect_file_aliases(file);
+            let mut scope = LiftScope {
+                aliases: &aliases,
+                package: &pkg.package,
+                registry,
+            };
+            for item in &mut file.items {
+                visit(item, &mut scope, diagnostics);
+            }
+        }
+    }
+}
+
 /// `protocol_id -> (method_name, arity) -> protocol method with default body`.
 /// Local to one `lift_signatures` call.
 pub(super) type ProtocolBodies =
@@ -118,22 +144,16 @@ pub(crate) fn lift_signatures(
     // Pass 1a: protocols. Lifted first so protocol method rosters
     // exist for the bounds-resolve sub-pass below and for trait-impl
     // conformance in pass 2.
-    for pkg in packages.iter_mut() {
-        let package = pkg.package.clone();
-        for file in &mut pkg.files {
-            let aliases = collect_file_aliases(file);
-            let mut scope = LiftScope {
-                aliases: &aliases,
-                package: &package,
-                registry,
-            };
-            for item in &mut file.items {
-                if let Item::Protocol(decl) = item {
-                    protocols::lift_protocol(decl, &mut scope, diagnostics);
-                }
+    for_each_item(
+        packages,
+        registry,
+        diagnostics,
+        |item, scope, diagnostics| {
+            if let Item::Protocol(decl) = item {
+                protocols::lift_protocol(decl, scope, diagnostics);
             }
-        }
-    }
+        },
+    );
     // Pass 1b: resolve `<T: Bound>` bound names against the now-fully-
     // populated protocol set. Stamp resolved ids onto every decl's
     // `RegistryEntry.type_param_bounds`. Runs after protocol lift so
@@ -153,36 +173,27 @@ pub(crate) fn lift_signatures(
     // matter inside this pass: every signature resolution either
     // hits a protocol (already lifted) or another struct/enum
     // (already registered with type_params at collect).
-    for pkg in packages.iter_mut() {
-        let package = pkg.package.clone();
-        for file in &mut pkg.files {
-            let aliases = collect_file_aliases(file);
-            let mut scope = LiftScope {
-                aliases: &aliases,
-                package: &package,
-                registry,
-            };
-            for item in &mut file.items {
-                match item {
-                    Item::Builtin(decl) => builtins::lift_builtin(decl, &mut scope, diagnostics),
-                    Item::Enum(decl) => enums::lift_enum(decl, &mut scope, diagnostics),
-                    Item::Function(function) => {
-                        let identifier =
-                            Identifier::single(scope.package, function.name.text.clone());
-                        functions::lift_function_with_identifier(
-                            function,
-                            identifier,
-                            SelfContext::None,
-                            &mut scope,
-                            diagnostics,
-                        );
-                    }
-                    Item::Struct(decl) => structs::lift_struct(decl, &mut scope, diagnostics),
-                    _ => {}
-                }
+    for_each_item(
+        packages,
+        registry,
+        diagnostics,
+        |item, scope, diagnostics| match item {
+            Item::Builtin(decl) => builtins::lift_builtin(decl, scope, diagnostics),
+            Item::Enum(decl) => enums::lift_enum(decl, scope, diagnostics),
+            Item::Function(function) => {
+                let identifier = Identifier::single(scope.package, function.name.text.clone());
+                functions::lift_function_with_identifier(
+                    function,
+                    identifier,
+                    SelfContext::None,
+                    scope,
+                    diagnostics,
+                );
             }
-        }
-    }
+            Item::Struct(decl) => structs::lift_struct(decl, scope, diagnostics),
+            _ => {}
+        },
+    );
     // Pass 1d: constants. Runs after structs / enums lift so the
     // constant value resolver can look up struct field layouts and
     // enum variant rosters when validating struct-of-literals and
@@ -190,84 +201,62 @@ pub(crate) fn lift_signatures(
     // `Constant.value` Expr's `resolution` slots as it walks. The
     // final stamped definition clones the resolved Expr into the
     // registry so IR lower never has to re-walk file items.
-    for pkg in packages.iter_mut() {
-        let package = pkg.package.clone();
-        for file in &mut pkg.files {
-            let aliases = collect_file_aliases(file);
-            let mut scope = LiftScope {
-                aliases: &aliases,
-                package: &package,
-                registry,
-            };
-            for item in &mut file.items {
-                if let Item::Constant(constant) = item {
-                    constants::lift_constant(constant, &mut scope, diagnostics);
-                }
+    for_each_item(
+        packages,
+        registry,
+        diagnostics,
+        |item, scope, diagnostics| {
+            if let Item::Constant(constant) = item {
+                constants::lift_constant(constant, scope, diagnostics);
             }
-        }
-    }
+        },
+    );
     // Pass 2a: conformance headers (`struct T: P`). Runs before impl
     // blocks so the header records each conformance first and a
     // duplicating `impl P for T` gets the blame. Mutable so default
     // methods can synthesize into the type body.
-    for pkg in packages.iter_mut() {
-        let package = pkg.package.clone();
-        for file in &mut pkg.files {
-            let aliases = collect_file_aliases(file);
-            let mut scope = LiftScope {
-                aliases: &aliases,
-                package: &package,
-                registry,
-            };
-            for item in &mut file.items {
-                match item {
-                    Item::Enum(decl) => impls::lift_header_conformances(
-                        "enum",
-                        &decl.path,
-                        &mut decl.conformances,
-                        &mut decl.functions,
-                        &bodies,
-                        &mut scope,
-                        diagnostics,
-                    ),
-                    Item::Struct(decl) => impls::lift_header_conformances(
-                        "struct",
-                        &decl.path,
-                        &mut decl.conformances,
-                        &mut decl.functions,
-                        &bodies,
-                        &mut scope,
-                        diagnostics,
-                    ),
-                    _ => {}
-                }
-            }
-        }
-    }
+    for_each_item(
+        packages,
+        registry,
+        diagnostics,
+        |item, scope, diagnostics| match item {
+            Item::Enum(decl) => impls::lift_header_conformances(
+                "enum",
+                &decl.path,
+                &mut decl.conformances,
+                &mut decl.functions,
+                &bodies,
+                scope,
+                diagnostics,
+            ),
+            Item::Struct(decl) => impls::lift_header_conformances(
+                "struct",
+                &decl.path,
+                &mut decl.conformances,
+                &mut decl.functions,
+                &bodies,
+                scope,
+                diagnostics,
+            ),
+            _ => {}
+        },
+    );
     // Pass 2b: impl + extend blocks. Mutable so impl synthesis can
     // push members.
-    for pkg in packages.iter_mut() {
-        let package = pkg.package.clone();
-        for file in &mut pkg.files {
-            let aliases = collect_file_aliases(file);
-            let mut scope = LiftScope {
-                aliases: &aliases,
-                package: &package,
-                registry,
-            };
-            for item in &mut file.items {
-                match item {
-                    Item::Impl(impl_block) => {
-                        impls::lift_impl(impl_block, &bodies, &mut scope, diagnostics);
-                    }
-                    Item::Extend(extend_block) => {
-                        impls::lift_extend(extend_block, &mut scope, diagnostics);
-                    }
-                    _ => {}
-                }
+    for_each_item(
+        packages,
+        registry,
+        diagnostics,
+        |item, scope, diagnostics| match item {
+            Item::Impl(impl_block) => {
+                impls::lift_impl(impl_block, &bodies, scope, diagnostics);
             }
-        }
-    }
+            Item::Extend(extend_block) => {
+                impls::lift_extend(extend_block, scope, diagnostics);
+            }
+            _ => {}
+        },
+    );
 }
 
 /// Walk every generic-decl AST node, resolve each declared bound
@@ -278,46 +267,38 @@ fn resolve_all_bounds(
     registry: &mut GlobalRegistry,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
-    for pkg in packages.iter_mut() {
-        let package = pkg.package.clone();
-        for file in &mut pkg.files {
-            let aliases = collect_file_aliases(file);
-            let mut scope = LiftScope {
-                aliases: &aliases,
-                package: &package,
-                registry,
-            };
-            for item in &mut file.items {
-                match item {
-                    Item::Builtin(decl) => resolve_builtin_bounds(decl, &mut scope, diagnostics),
-                    Item::Enum(decl) => resolve_enum_bounds(decl, &mut scope, diagnostics),
-                    Item::Function(function) => resolve_function_bounds(
+    for_each_item(
+        packages,
+        registry,
+        diagnostics,
+        |item, scope, diagnostics| match item {
+            Item::Builtin(decl) => resolve_builtin_bounds(decl, scope, diagnostics),
+            Item::Enum(decl) => resolve_enum_bounds(decl, scope, diagnostics),
+            Item::Function(function) => resolve_function_bounds(
+                function,
+                Identifier::single(scope.package, function.name.text.clone()),
+                scope,
+                diagnostics,
+            ),
+            Item::Protocol(decl) => resolve_protocol_bounds(decl, scope, diagnostics),
+            Item::Struct(decl) => {
+                resolve_struct_bounds(decl, scope, diagnostics);
+                for function in &mut decl.functions {
+                    resolve_function_bounds(
                         function,
-                        Identifier::single(scope.package, function.name.text.clone()),
-                        &mut scope,
+                        Identifier::member(
+                            scope.package,
+                            &name_texts(&decl.path),
+                            function.name.as_str(),
+                        ),
+                        scope,
                         diagnostics,
-                    ),
-                    Item::Protocol(decl) => resolve_protocol_bounds(decl, &mut scope, diagnostics),
-                    Item::Struct(decl) => {
-                        resolve_struct_bounds(decl, &mut scope, diagnostics);
-                        for function in &mut decl.functions {
-                            resolve_function_bounds(
-                                function,
-                                Identifier::member(
-                                    scope.package,
-                                    &name_texts(&decl.path),
-                                    function.name.as_str(),
-                                ),
-                                &mut scope,
-                                diagnostics,
-                            );
-                        }
-                    }
-                    _ => {}
+                    );
                 }
             }
-        }
-    }
+            _ => {}
+        },
+    );
 }
 
 fn resolve_struct_bounds(

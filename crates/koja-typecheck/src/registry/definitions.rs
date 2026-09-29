@@ -12,7 +12,7 @@
 
 use std::collections::BTreeMap;
 
-use koja_ast::ast::{Expr, FunctionOrigin};
+use koja_ast::ast::{AliasDecl, Expr, FunctionOrigin};
 use koja_ast::identifier::{GlobalRegistryId, ResolvedType};
 
 /// The compiler-provided representation behind a `builtin` type
@@ -262,10 +262,16 @@ pub struct FunctionDefinition {
 /// walk a separate impl table. A future incremental-cache pass
 /// may want a richer structural index over `(target, protocol)`
 /// pairs (e.g. for cross-package resolution). Revisit then.
+///
+/// `aliases` is the declaring file's alias roster. A field default is
+/// stored unresolved and resolved again at every construction site
+/// that omits the field. The roster lets that site resolve an aliased
+/// name the way the declaring file spelled it.
 #[derive(Clone, Debug)]
 pub struct StructDefinition {
-    pub fields: Vec<ResolvedStructField>,
+    pub aliases: Vec<AliasDecl>,
     pub conformances: BTreeMap<GlobalRegistryId, Vec<Conformance>>,
+    pub fields: Vec<ResolvedStructField>,
 }
 
 /// Variant roster + protocol conformances for a user-declared
@@ -277,11 +283,13 @@ pub struct StructDefinition {
 /// [`super::RegistryEntry`] itself.
 ///
 /// See [`StructDefinition::conformances`] for the conformance-map
-/// shape and rationale.
+/// shape and rationale, and [`StructDefinition::aliases`] for why
+/// the declaring file's aliases ride along.
 #[derive(Clone, Debug)]
 pub struct EnumDefinition {
-    pub variants: Vec<ResolvedEnumVariant>,
+    pub aliases: Vec<AliasDecl>,
     pub conformances: BTreeMap<GlobalRegistryId, Vec<Conformance>>,
+    pub variants: Vec<ResolvedEnumVariant>,
 }
 
 /// One variant on an [`EnumDefinition`]. `name` is the surface

@@ -17,11 +17,10 @@ use std::collections::HashSet;
 use koja_ast::ast::{Diagnostic, Item};
 use koja_ast::identifier::{AnonymousKind, GlobalRegistryId, Identifier, Resolution, ResolvedType};
 
-use crate::pipeline::aliases::collect_file_aliases;
 use crate::program::CheckedPackage;
 use crate::registry::{GlobalKind, GlobalRegistry};
 
-use super::LiftScope;
+use super::for_each_item;
 use super::types::{TypeParamScope, resolve_type_expr};
 
 /// Lift every `Item::TypeAlias` across every file: resolve the RHS,
@@ -33,33 +32,27 @@ pub(super) fn lift_type_aliases(
     registry: &mut GlobalRegistry,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
-    for pkg in packages.iter_mut() {
-        let package = pkg.package.clone();
-        for file in &mut pkg.files {
-            let aliases = collect_file_aliases(file);
-            let scope = LiftScope {
-                aliases: &aliases,
-                package: &package,
-                registry,
+    for_each_item(
+        packages,
+        registry,
+        diagnostics,
+        |item, scope, diagnostics| {
+            let Item::TypeAlias(alias) = item else {
+                return;
             };
-            for item in &mut file.items {
-                let Item::TypeAlias(alias) = item else {
-                    continue;
-                };
-                let identifier = Identifier::single(scope.package, alias.name.text.clone());
-                let Some((id, _)) = scope.registry.lookup(&identifier) else {
-                    continue;
-                };
-                let resolved = resolve_type_expr(
-                    &mut alias.type_expr,
-                    TypeParamScope::default(),
-                    scope.resolution_scope(),
-                    diagnostics,
-                );
-                scope.registry.set_type_alias_definition(id, resolved);
-            }
-        }
-    }
+            let identifier = Identifier::single(scope.package, alias.name.text.clone());
+            let Some((id, _)) = scope.registry.lookup(&identifier) else {
+                return;
+            };
+            let resolved = resolve_type_expr(
+                &mut alias.type_expr,
+                TypeParamScope::default(),
+                scope.resolution_scope(),
+                diagnostics,
+            );
+            scope.registry.set_type_alias_definition(id, resolved);
+        },
+    );
     diagnose_alias_cycles(packages, registry, diagnostics);
 }
 

@@ -360,57 +360,6 @@ function, carries no evaluation order questions, and keeps the
 
 ---
 
-## Struct literal defaults stop at the package boundary
-
-Found 2026-09-23 while wiring an `open_telemetry` package into remem.
-A struct literal is an eligible default field value, but only when
-its type lives in the same package. A qualified path fails the
-eligibility check before the literal is looked at:
-
-```koja
-struct Trace
-  tracer: Tracer = OpenTelemetry.Tracer{ref: Option.None}
-  # error: default field values are limited to literals ...
-end
-```
-
-`Pkg.Type{...}` parses the same as `Enum.Variant{...}`, and the lift
-check accepts only unit variants, so it rejects the literal before
-resolve can tell the two apart.
-
-The boundary is the dotted path, not the package. Found again
-2026-09-26 while adding socket deadlines: a nested type in the same
-package fails the same way, so `TCPListener.options` could not
-default to `TCPListener.Options{}` and is a required field that
-`bind` and `bind_addr` fill from their own parameter default.
-Parameter defaults accept both spellings, since they resolve in the
-function body.
-
-An `alias` does not help, and is worse than the dotted path. With
-`alias Outer.Opts as Opts`, the default `opts: Opts = Opts{}` passes
-the lift check and then panics in `resolve/field_defaults.rs`
-("field default for `opts` diverged from declaration validation"),
-because the default resolves without the file's aliases and reports
-`Opts` as an unknown struct. A compiler panic on valid-looking input
-is the worse half of this gap.
-
-Workaround: the package exports a constant such as
-`const NOOP: Tracer = Tracer{ref: Option.None}`, and the consumer
-writes `tracer: OpenTelemetry.Tracer = OpenTelemetry.Tracer.NOOP`.
-For a same-package nested type, make the field required and put the
-default on the constructor's parameter.
-
-**Fix path:** scheduled for 0.20. Once the lift check accepts
-`Pkg.Type{...}`, `Enum.Variant{...}` gets through too. Either resolve
-rejects it, or defaults start to accept payload variants. The
-unit-only rule comes from the constant pool, which defaults never
-enter. A larger option is to resolve each default once in its
-declaring file with that file's aliases in scope, which fixes the
-dotted path and the alias panic together and removes the alias
-restriction on defaults.
-
----
-
 ## Enum variant patterns do not match through a union subject
 
 Found 2026-09-07 while flattening test matches after structural

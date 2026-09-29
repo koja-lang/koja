@@ -33,6 +33,7 @@ pub(super) fn lift_builtin(
         scope.registry.set_struct_definition(
             id,
             StructDefinition {
+                aliases: Vec::new(),
                 conformances: BTreeMap::new(),
                 fields: Vec::new(),
             },

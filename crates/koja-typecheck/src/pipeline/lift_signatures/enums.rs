@@ -133,8 +133,9 @@ fn lift_enum_definition(
     scope.registry.set_enum_definition(
         id,
         EnumDefinition {
-            variants,
+            aliases: scope.aliases.to_vec(),
             conformances: BTreeMap::new(),
+            variants,
         },
     );
 }
