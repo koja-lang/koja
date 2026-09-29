@@ -11,6 +11,7 @@ use crate::script::IRScript;
 use crate::types::{IRType, ValueId};
 
 use super::closures::seal_closure_ops;
+use super::constants::seal_built_constants;
 use super::enums::seal_enum_ops;
 use super::function::{collect_block_ids, seal_block, seal_package, seal_ssa};
 use super::structs::{package_instructions, script_body_instructions, seal_struct_ops};
@@ -46,6 +47,9 @@ pub(crate) fn seal_script(script: &IRScript) {
     seal_script_enum_ops(script);
     seal_script_closure_ops(script);
     seal_script_loadconst_pool(script);
+    seal_built_constants(&script.packages, &script.built_constant_order, &|mangled| {
+        script.function(mangled)
+    });
     seal_script_no_loadcapture(script);
 }
 

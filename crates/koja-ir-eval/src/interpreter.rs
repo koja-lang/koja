@@ -25,6 +25,7 @@ use koja_runtime_core::{
     duration_from_user_millis,
 };
 
+use crate::built_constants;
 use crate::error::RuntimeError;
 use crate::externs;
 use crate::externs::foreign::ForeignTable;
@@ -68,6 +69,7 @@ impl Interpreter {
         foreign: ForeignTable,
     ) -> Result<Value, RuntimeError> {
         let _foreign = externs::foreign::install(foreign);
+        let _built = built_constants::install();
         let entry = program.entry_function();
         assert!(
             matches!(entry.kind, FunctionKind::ProcessEntryWrapper { .. }),
@@ -126,7 +128,11 @@ impl Interpreter {
         let function = program
             .function(mangled)
             .unwrap_or_else(|| panic!("interpreter: function `{mangled}` not found in IRProgram"));
-        block_on(execute_function(function, Vec::new(), program))
+        let _built = built_constants::install();
+        block_on(async {
+            build_constants(program).await?;
+            execute_function(function, Vec::new(), program).await
+        })
     }
 
     /// Execute the script-mode implicit body and return its trailing
@@ -147,6 +153,7 @@ impl Interpreter {
         foreign: ForeignTable,
     ) -> Result<Value, RuntimeError> {
         let _foreign = externs::foreign::install(foreign);
+        let _built = built_constants::install();
         // Run the implicit body as PID 1 under the shared cooperative
         // driver (same boot as `run_program`) so top-level `spawn` /
         // `receive` / timers / I/O engage the runtime instead of tripping
@@ -233,46 +240,80 @@ impl Frame {
 /// registry-equivalent handle for materializing variant and field
 /// names.
 pub(crate) trait CallResolver {
-    fn resolve(&self, mangled: &str) -> Option<&IRFunction>;
-    fn enum_decl(&self, mangled: &str) -> Option<&IREnumDecl>;
-    fn struct_decl(&self, mangled: &str) -> Option<&IRStructDecl>;
+    fn built_constant_order(&self) -> &[IRSymbol];
     fn constant_value(&self, mangled: &str) -> Option<&IRConstantValue>;
+    fn enum_decl(&self, mangled: &str) -> Option<&IREnumDecl>;
+    fn resolve(&self, mangled: &str) -> Option<&IRFunction>;
+    fn struct_decl(&self, mangled: &str) -> Option<&IRStructDecl>;
 }
 
 impl CallResolver for IRProgram {
-    fn resolve(&self, mangled: &str) -> Option<&IRFunction> {
-        self.function(mangled)
+    fn built_constant_order(&self) -> &[IRSymbol] {
+        &self.built_constant_order
+    }
+
+    fn constant_value(&self, mangled: &str) -> Option<&IRConstantValue> {
+        IRProgram::constant_value(self, mangled)
     }
 
     fn enum_decl(&self, mangled: &str) -> Option<&IREnumDecl> {
         IRProgram::enum_decl(self, mangled)
     }
 
-    fn struct_decl(&self, mangled: &str) -> Option<&IRStructDecl> {
-        IRProgram::struct_decl(self, mangled)
+    fn resolve(&self, mangled: &str) -> Option<&IRFunction> {
+        self.function(mangled)
     }
 
-    fn constant_value(&self, mangled: &str) -> Option<&IRConstantValue> {
-        IRProgram::constant_value(self, mangled)
+    fn struct_decl(&self, mangled: &str) -> Option<&IRStructDecl> {
+        IRProgram::struct_decl(self, mangled)
     }
 }
 
 impl CallResolver for IRScript {
-    fn resolve(&self, mangled: &str) -> Option<&IRFunction> {
-        self.function(mangled)
+    fn built_constant_order(&self) -> &[IRSymbol] {
+        &self.built_constant_order
+    }
+
+    fn constant_value(&self, mangled: &str) -> Option<&IRConstantValue> {
+        IRScript::constant_value(self, mangled)
     }
 
     fn enum_decl(&self, mangled: &str) -> Option<&IREnumDecl> {
         IRScript::enum_decl(self, mangled)
     }
 
+    fn resolve(&self, mangled: &str) -> Option<&IRFunction> {
+        self.function(mangled)
+    }
+
     fn struct_decl(&self, mangled: &str) -> Option<&IRStructDecl> {
         IRScript::struct_decl(self, mangled)
     }
+}
 
-    fn constant_value(&self, mangled: &str) -> Option<&IRConstantValue> {
-        IRScript::constant_value(self, mangled)
+/// Run every `Built` constant init in `built_constant_order` and
+/// store each value, before the entry body runs. PID 1 does this on
+/// both backends, so an init side effect happens once at startup and
+/// every later `LoadConst` is a plain read.
+async fn build_constants<R: CallResolver>(resolver: &R) -> Result<(), RuntimeError> {
+    for symbol in resolver.built_constant_order() {
+        let Some(IRConstantValue::Built { init, .. }) = resolver.constant_value(symbol.mangled())
+        else {
+            panic!(
+                "interpreter: built constant order names `{symbol}`, which is not a built \
+                 constant (seal invariant violation)"
+            );
+        };
+        let init_fn = resolver.resolve(init.mangled()).unwrap_or_else(|| {
+            panic!(
+                "interpreter: built constant `{symbol}` init `{init}` missing from IR (seal \
+                 invariant violation)"
+            )
+        });
+        let value = execute_function(init_fn, Vec::new(), resolver).await?;
+        built_constants::store(symbol.mangled(), value);
     }
+    Ok(())
 }
 
 /// Outcome of one pass through a function body. `Done` carries the
@@ -300,6 +341,7 @@ async fn run_entry_body<'a>(
     entry: &'a IRFunction,
     args: &[String],
 ) -> Result<Value, RuntimeError> {
+    build_constants(program).await?;
     let config_type =
         entry
             .params
@@ -331,6 +373,7 @@ async fn run_entry_body<'a>(
 /// return type is `Unit`. The async analogue of the former synchronous
 /// `run_script`, so a top-level `receive` parks against the core mailbox.
 async fn run_script_body(script: &IRScript) -> Result<Value, RuntimeError> {
+    build_constants(script).await?;
     let mut frame = Frame::new();
     match execute_blocks(&script.blocks, &mut frame, script).await? {
         BlockOutcome::Done(value) => Ok(coerce_return(value, &script.return_type)),
@@ -1324,7 +1367,12 @@ fn execute_instruction<'a, R: CallResolver>(
                     const_id.mangled(),
                 )
             });
-                let value = materialize_pooled_constant(pooled, resolver)?;
+                let value = match pooled {
+                    // PID 1 ran every init before user code started
+                    // (see `build_constants`), so this is a plain read.
+                    IRConstantValue::Built { .. } => built_constants::value(const_id.mangled()),
+                    _ => materialize_pooled_constant(pooled, resolver)?,
+                };
                 frame.values.insert(*dest, value);
                 Ok(())
             }
@@ -1798,6 +1846,10 @@ fn materialize_pooled_constant<R: CallResolver>(
     resolver: &R,
 ) -> Result<Value, RuntimeError> {
     match cv {
+        IRConstantValue::Built { init, .. } => panic!(
+            "interpreter: built constant with init `{init}` nested in a static pool entry \
+             (IR lowering invariant violation)",
+        ),
         IRConstantValue::Primitive(inner) => Ok(materialize_const(inner)),
         IRConstantValue::EnumVariant { tag, ty } => {
             let decl = resolver.enum_decl(ty.mangled()).unwrap_or_else(|| {

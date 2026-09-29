@@ -11,6 +11,7 @@
 use koja_ir::IRScript;
 
 use crate::ctx::EmitContext;
+use crate::emit::built_constants::{declare_built_constant_globals, emit_built_constant_init};
 use crate::error::LlvmError;
 use crate::function::{declare_function, define_function};
 use crate::layout::enum_order::enums_in_dependency_order;
@@ -58,6 +59,9 @@ pub(crate) fn compile_script(
         define_enum_completes_and_outer(ctx, decl)?;
     }
     assert_wire_enum_order(ctx)?;
+    // Built constant globals need every struct and enum body above,
+    // and every function body below loads them.
+    declare_built_constant_globals(ctx, &script.packages)?;
     emit_app_name_global(ctx, app_name);
     let mut declared = Vec::with_capacity(script.packages.iter().map(|p| p.functions.len()).sum());
     for package in &script.packages {
@@ -65,6 +69,8 @@ pub(crate) fn compile_script(
             declared.push((function, declare_function(ctx, function)?));
         }
     }
+    // Defined before the user-main thunk so the thunk can call it.
+    emit_built_constant_init(ctx, &script.packages, &script.built_constant_order)?;
     emit_script_main(ctx, &script.blocks, script.def_location.as_ref())?;
     for (function, llvm_function) in declared {
         define_function(ctx, function, llvm_function).map_err(|e| {

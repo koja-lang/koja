@@ -27,6 +27,7 @@ use koja_typecheck::CheckedProgram;
 use koja_ast::ast::Statement;
 use koja_ast::identifier::Identifier;
 
+use crate::built_order;
 use crate::constant::IRConstantValue;
 use crate::cycle::break_type_cycles;
 use crate::elaborate::elaborate_script;
@@ -72,9 +73,14 @@ use crate::yield_checks::{insert_yield_checks, insert_yield_checks_in_body};
 /// The LLVM backend stamps it on the synthesized `__koja_user_main`
 /// so a panic in top-level script code resolves to the user's file.
 /// `None` for an items-only / synthetic body with no source path.
+///
+/// `built_constant_order` mirrors
+/// [`crate::IRProgram::built_constant_order`]: the order backends run
+/// [`IRConstantValue::Built`] inits in before the script body starts.
 #[derive(Debug, Clone)]
 pub struct IRScript {
     pub blocks: Vec<IRBasicBlock>,
+    pub built_constant_order: Vec<IRSymbol>,
     pub def_location: Option<IRSourceDef>,
     pub link_libraries: Vec<String>,
     pub packages: Vec<IRPackage>,
@@ -179,6 +185,7 @@ pub fn lower_script(checked: &CheckedProgram) -> Result<IRScript, LowerError> {
     let link_libraries = collect_link_libraries(packages.iter());
     let mut script = IRScript {
         blocks,
+        built_constant_order: Vec::new(),
         def_location: locate_script_body_location(checked),
         link_libraries,
         packages,
@@ -190,6 +197,10 @@ pub fn lower_script(checked: &CheckedProgram) -> Result<IRScript, LowerError> {
     insert_yield_checks(&mut script.packages);
     insert_yield_checks_in_body(&mut script.blocks);
     elaborate_script(&mut script.packages, &mut script.blocks);
+    script.built_constant_order = built_order::built_constant_order(&script.packages, |symbol| {
+        built_order::constant_span(symbol, &checked.registry)
+    })
+    .map_err(LowerError::Diagnostics)?;
     seal::seal_script(&script);
     Ok(script)
 }

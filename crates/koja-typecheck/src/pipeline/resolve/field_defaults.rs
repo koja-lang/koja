@@ -24,14 +24,13 @@ use koja_ast::ast::{
 use koja_ast::identifier::{GlobalRegistryId, Identifier, ResolvedType};
 use koja_ast::span::Span;
 
-use crate::pipeline::local_scope::LocalScope;
 use crate::registry::{
     GlobalKind, GlobalRegistry, RegistryEntry, ResolvedStructField, ResolvedVariantData,
 };
 
 use super::coercion::{check_compatible_stamping, mismatch_message};
 use super::ctx::ResolverEnv;
-use super::expr::resolve_expr_with_expected;
+use super::resolve_in_declaring_scope;
 
 /// Trial-resolve every field default on a struct decl. Called by the
 /// walker while it visits the declaring file.
@@ -130,7 +129,7 @@ fn resolve_declared_default(
     let mut trial = Vec::new();
     resolve_in_declaring_scope(
         default,
-        field_ty,
+        Some(field_ty),
         env.package,
         env.file_aliases,
         env.registry,
@@ -152,27 +151,6 @@ fn resolve_declared_default(
             default.span,
         ));
     }
-}
-
-/// Resolve `expr` with `expected` as the hint in a fresh scope made
-/// of `package`, the given alias roster, and no locals.
-fn resolve_in_declaring_scope(
-    expr: &mut Expr,
-    expected: &ResolvedType,
-    package: &str,
-    aliases: &[AliasDecl],
-    registry: &GlobalRegistry,
-    diagnostics: &mut Vec<Diagnostic>,
-) {
-    let mut env = ResolverEnv {
-        bound_overlay: None,
-        file_aliases: aliases,
-        package,
-        registry,
-    };
-    let mut scope = LocalScope::new();
-    let mut resolver = env.make_resolver(None, None, &[], &mut scope);
-    resolve_expr_with_expected(expr, Some(expected), &mut resolver, diagnostics);
 }
 
 /// Synthesize the omitted field's init at a construction site. Clone
@@ -197,7 +175,7 @@ pub(super) fn synthesize_default_init(
     let mut scratch = Vec::new();
     resolve_in_declaring_scope(
         &mut value,
-        &declared_field.ty,
+        Some(&declared_field.ty),
         package,
         aliases,
         registry,
@@ -218,7 +196,7 @@ pub(super) fn synthesize_default_init(
 
 /// The package and alias roster of the file that declared `owner_id`,
 /// a struct or an enum whose struct variant is under construction.
-fn declaring_scope<'a>(
+pub(crate) fn declaring_scope<'a>(
     owner_id: GlobalRegistryId,
     registry: &'a GlobalRegistry,
 ) -> (&'a str, &'a [AliasDecl]) {

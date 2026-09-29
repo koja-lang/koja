@@ -37,7 +37,7 @@ use crate::struct_decl::IRStructDecl;
 use crate::tail_calls::rewrite_tail_calls;
 use crate::types::IRType;
 use crate::union_decl::{IRUnionDecl, discover_unions};
-use crate::{lower, merge, seal, yield_checks};
+use crate::{built_order, lower, merge, seal, yield_checks};
 
 /// Sealed output of [`lower_program`]'s success path. Backends consume
 /// this directly. They build their own indices over the sealed
@@ -54,8 +54,15 @@ use crate::{lower, merge, seal, yield_checks};
 /// [`crate::IRExternAttrs::link_lib`]. The driver feeds these to the
 /// linker as `-l<name>`. Per-function `link_name` overrides stay on
 /// the [`IRFunction`]. Only the library set surfaces here.
+///
+/// `built_constant_order` lists every [`IRConstantValue::Built`]
+/// constant once, each after the constants its init reaches through
+/// the call graph. Backends run the inits in this order before the
+/// entry point starts. [`IRPackage::constants`] is a `BTreeMap`, so
+/// this list is the only place that order survives.
 #[derive(Debug, Clone)]
 pub struct IRProgram {
+    pub built_constant_order: Vec<IRSymbol>,
     pub entry_point: IRSymbol,
     pub link_libraries: Vec<String>,
     pub packages: Vec<IRPackage>,
@@ -178,6 +185,10 @@ pub fn lower_program(
     rewrite_tail_calls(&mut program.packages);
     yield_checks::insert_yield_checks(&mut program.packages);
     elaborate::elaborate(&mut program.packages);
+    program.built_constant_order = built_order::built_constant_order(&program.packages, |symbol| {
+        built_order::constant_span(symbol, &checked.registry)
+    })
+    .map_err(LowerError::Diagnostics)?;
 
     if program.function(program.entry_point.mangled()).is_none() {
         return Err(LowerError::EntryPointNotFound {

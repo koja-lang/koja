@@ -1,7 +1,8 @@
 //! Constant emission. Covers scalar `ConstValue`s, the heap-payload
-//! header shape (`String` / `Binary` / `Bits` literals), and the
+//! header shape (`String` / `Binary` / `Bits` literals), the
 //! `LoadConst` cache that materializes pooled aggregate constants
-//! through [`emit_ir_constant_aggregate`].
+//! through [`emit_ir_constant_aggregate`], and the load from a
+//! `Built` constant's global (see [`super::built_constants`]).
 
 use inkwell::module::Linkage;
 use inkwell::types::{ArrayType, IntType};
@@ -9,13 +10,18 @@ use inkwell::values::{BasicValueEnum, PointerValue};
 use koja_ir::{ConstValue, IRConstantValue, IRSymbol, IRVariantTag};
 
 use crate::ctx::EmitContext;
-use crate::error::LlvmError;
+use crate::error::{IceExt, LlvmError};
+use crate::types::ir_basic_type;
 
+use super::built_constants::built_global_name;
 use super::heap_layout::{HEADER_BYTES, RC_IMMORTAL};
 
 /// Materialize the LLVM SSA value for `LoadConst`, using
 /// [`EmitContext::load_const_cache`] so repeat references reuse a
-/// single materialization. The constant pool snapshot must have
+/// single materialization. A `Built` constant instead loads from
+/// its global at every read and skips the cache, because the cache
+/// holds true constants shared across functions and a load is an
+/// instruction in one body. The constant pool snapshot must have
 /// been attached before codegen (see
 /// [`crate::ctx::EmitContext::attach_constant_pool`]). A missing
 /// pool is a compiler-bug surface.
@@ -40,6 +46,22 @@ pub(super) fn emit_load_const<'ctx>(
              violated or pool attachment bug)",
         ))
     })?;
+    if let IRConstantValue::Built { ty, .. } = entry {
+        let global = ctx
+            .module
+            .get_global(&built_global_name(const_id))
+            .ok_or_else(|| {
+                LlvmError::Codegen(format!(
+                    "LoadConst of built constant `{const_id}` before its global was declared \
+                     (`declare_built_constant_globals` must precede codegen)",
+                ))
+            })?;
+        let llvm_ty = ir_basic_type(ctx, ty)?;
+        return ctx
+            .builder
+            .build_load(llvm_ty, global.as_pointer_value(), "built_const")
+            .or_ice();
+    }
     let materialized = emit_ir_constant_aggregate(ctx, entry)?;
     ctx.load_const_cache
         .borrow_mut()
@@ -59,6 +81,11 @@ fn emit_ir_constant_aggregate<'ctx>(
     cv: &IRConstantValue,
 ) -> Result<BasicValueEnum<'ctx>, LlvmError> {
     match cv {
+        IRConstantValue::Built { .. } => Err(LlvmError::Codegen(
+            "built constants load from their global and never fold to an aggregate \
+             (a `Built` value nested in a static constant is an IR lowering bug)"
+                .into(),
+        )),
         IRConstantValue::Primitive(inner) => emit_const(ctx, inner),
         IRConstantValue::EnumVariant { tag, ty } => Ok(emit_unit_variant_constant(ctx, *tag, ty)),
         IRConstantValue::Struct { fields, ty } => {
@@ -77,9 +104,10 @@ fn emit_ir_constant_aggregate<'ctx>(
 /// is the first byte of the value, so chunk 0 carries the tag and
 /// every other chunk is zero. Placing the tag in the low byte of
 /// chunk 0 assumes a little-endian target, which holds for every
-/// target the backend emits. Constant enum values are unit variants
-/// only (the typecheck lift enforces this), so no payload is
-/// written.
+/// target the backend emits. Only unit variants reach this path. A
+/// payload variant pools as [`IRConstantValue::Built`] and its init
+/// constructs the value at program start, so no payload is written
+/// here.
 fn emit_unit_variant_constant<'ctx>(
     ctx: &EmitContext<'ctx>,
     tag: IRVariantTag,

@@ -26,6 +26,7 @@ use crate::program::CheckedPackage;
 use crate::registry::{GlobalRegistry, ResolvedProtocolBound};
 
 mod builtins;
+mod constant_order;
 mod constants;
 mod enums;
 mod field_defaults;
@@ -194,23 +195,6 @@ pub(crate) fn lift_signatures(
             _ => {}
         },
     );
-    // Pass 1d: constants. Runs after structs / enums lift so the
-    // constant value resolver can look up struct field layouts and
-    // enum variant rosters when validating struct-of-literals and
-    // unit-enum-variant RHSs. Mutable iteration mutates each
-    // `Constant.value` Expr's `resolution` slots as it walks. The
-    // final stamped definition clones the resolved Expr into the
-    // registry so IR lower never has to re-walk file items.
-    for_each_item(
-        packages,
-        registry,
-        diagnostics,
-        |item, scope, diagnostics| {
-            if let Item::Constant(constant) = item {
-                constants::lift_constant(constant, scope, diagnostics);
-            }
-        },
-    );
     // Pass 2a: conformance headers (`struct T: P`). Runs before impl
     // blocks so the header records each conformance first and a
     // duplicating `impl P for T` gets the blame. Mutable so default
@@ -257,6 +241,14 @@ pub(crate) fn lift_signatures(
             _ => {}
         },
     );
+    // Pass 3: constants. A constant value resolves through the body
+    // resolver, so it runs last. Struct field layouts, enum variant
+    // rosters, and the `ListLiteral` / `MapLiteral` conformances from
+    // pass 2b all have to exist first. Constants lift in dependency
+    // order rather than file order, because one may read another.
+    // The final stamped definition clones the resolved `Expr` into
+    // the registry so IR lower never has to re-walk file items.
+    constant_order::lift_constants(packages, registry, diagnostics);
 }
 
 /// Walk every generic-decl AST node, resolve each declared bound

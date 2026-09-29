@@ -1,18 +1,37 @@
-//! Package-level `const` lifting: literals, enums, structs, annotation
-//! matching, interpolation / non-literal RHS rejection, duplicate names,
-//! immutability (no assigning to constants from function bodies), and
-//! package-qualified reads across package boundaries.
+//! Package-level `const` lifting: literals, enums, structs, list, map,
+//! and set literals, annotation matching, interpolation / non-literal
+//! RHS rejection, constants that read other constants in any source
+//! order, dependency cycles, duplicate names, immutability (no
+//! assigning to constants from function bodies), and package-qualified
+//! reads across package boundaries.
 
+use koja_ast::ast::ExprKind;
+use koja_ast::identifier::{Resolution, ResolvedType};
 use koja_ast::util::dedent;
 use koja_parser::ParseMode;
-use koja_typecheck::{CheckFailure, CheckedProgram};
+use koja_typecheck::{CheckFailure, CheckedProgram, ConstantDefinition, GlobalKind};
 
 mod common;
 
 use common::{
-    PACKAGE, assert_script_fails_with, check_packages, diagnostic_messages,
-    typecheck_script as typecheck, warning_messages,
+    PACKAGE, assert_script_fails_with, check_packages, diagnostic_messages, global_named, int_type,
+    registry_id, string_type, typecheck_script as typecheck, typecheck_script_fail,
+    warning_messages,
 };
+
+/// The stamped definition of the `TestApp` constant at `path`.
+fn constant_definition<'a>(checked: &'a CheckedProgram, path: &[&str]) -> &'a ConstantDefinition {
+    let id = registry_id(checked, PACKAGE, path);
+    let entry = checked.registry.get(id).expect("constant id is live");
+    match &entry.kind {
+        GlobalKind::Constant(Some(definition)) => definition,
+        other => panic!("expected a lifted constant at `{path:?}`, got {other:?}"),
+    }
+}
+
+fn list_of(checked: &CheckedProgram, element: ResolvedType) -> ResolvedType {
+    global_named(checked, "List", vec![element])
+}
 
 #[test]
 fn primitive_string_and_struct_literal_constants_typecheck() {
@@ -53,6 +72,24 @@ fn generic_unit_variant_constants_take_annotation_type_args() {
 }
 
 #[test]
+fn generic_unit_variant_constant_peels_alias_annotation() {
+    let source = "
+        type Maybe = Option<Int>
+
+        const NOTHING: Maybe = Option.None
+
+        0
+        ";
+    let checked = typecheck(&dedent(source));
+
+    let definition = constant_definition(&checked, &["NOTHING"]);
+    assert_eq!(
+        definition.value.resolution,
+        global_named(&checked, "Option", vec![int_type(&checked)])
+    );
+}
+
+#[test]
 fn unannotated_generic_unit_variant_constant_diagnoses() {
     let source = "
         const NOTHING = Option.None
@@ -62,12 +99,14 @@ fn unannotated_generic_unit_variant_constant_diagnoses() {
 
     assert_script_fails_with(
         source,
-        &["cannot infer the type arguments of `Option.None`"],
+        &["cannot infer type parameter `T` of `Global.Option` from unit variant `None`"],
     );
 }
 
 #[test]
 fn generic_unit_variant_against_other_type_diagnoses() {
+    // The annotation can never hold an `Option`, so the resolver
+    // names the mismatch instead of the inference gap it causes.
     let source = "
         const NOTHING: String = Option.None
 
@@ -76,7 +115,7 @@ fn generic_unit_variant_against_other_type_diagnoses() {
 
     assert_script_fails_with(
         source,
-        &["`Option.None` is a `Global.Option` value, but `Global.String` is expected"],
+        &["`Option.None` is a `Global.Option` value, but `String` is expected"],
     );
 }
 
@@ -120,6 +159,294 @@ fn constant_annotation_mismatch_diagnoses() {
     );
 }
 
+// Collection constants. The value resolves through the body
+// resolver, so list and map literals infer their element types, a
+// `Set` annotation dispatches through the `Set.from_list` carrier
+// rewrite, and the diagnostics match what a body binding reports.
+
+#[test]
+fn list_and_map_constants_infer_their_type() {
+    let checked = typecheck(&dedent(
+        "
+        const PRIMES = [2, 3, 5]
+        const PORTS = [\"http\": 80, \"https\": 443]
+
+        PRIMES
+        ",
+    ));
+
+    let int = int_type(&checked);
+    assert_eq!(
+        constant_definition(&checked, &["PRIMES"]).ty,
+        list_of(&checked, int.clone())
+    );
+    assert_eq!(
+        constant_definition(&checked, &["PORTS"]).ty,
+        global_named(&checked, "Map", vec![string_type(&checked), int])
+    );
+}
+
+#[test]
+fn set_annotation_stores_a_from_list_call() {
+    let checked = typecheck(&dedent(
+        "
+        const TAGS: Set<String> = [\"a\", \"b\"]
+
+        TAGS
+        ",
+    ));
+
+    let set_of_string = global_named(&checked, "Set", vec![string_type(&checked)]);
+    let definition = constant_definition(&checked, &["TAGS"]);
+    assert_eq!(definition.ty, set_of_string);
+    assert_eq!(definition.value.resolution, set_of_string);
+    match &definition.value.kind {
+        ExprKind::MethodCall { method, .. } => assert_eq!(method.text, "from_list"),
+        other => panic!("expected the carrier rewrite to a `from_list` call, got {other:?}"),
+    }
+}
+
+#[test]
+fn nested_list_in_struct_constant_typechecks() {
+    let checked = typecheck(&dedent(
+        "
+        struct Config
+          name: String
+          ports: List<Int>
+        end
+
+        const DEFAULT = Config{name: \"web\", ports: [80, 443]}
+
+        DEFAULT
+        ",
+    ));
+
+    let ExprKind::StructConstruction { fields, .. } =
+        &constant_definition(&checked, &["DEFAULT"]).value.kind
+    else {
+        panic!("expected a struct construction value");
+    };
+    let ports = fields
+        .iter()
+        .find(|field| field.name.text == "ports")
+        .expect("`ports` field is present");
+    assert_eq!(
+        ports.value.resolution,
+        list_of(&checked, int_type(&checked))
+    );
+}
+
+#[test]
+fn empty_collection_constants_without_annotation_diagnose() {
+    assert_script_fails_with(
+        "
+        const NOTHING = []
+
+        0
+        ",
+        &["`[]` has no element type"],
+    );
+    assert_script_fails_with(
+        "
+        const NOTHING = [:]
+
+        0
+        ",
+        &["`[]` has no key type"],
+    );
+}
+
+#[test]
+fn list_element_mismatch_diagnoses() {
+    assert_script_fails_with(
+        "
+        const MIXED: List<Int> = [1, \"two\"]
+
+        0
+        ",
+        &["list literal element type mismatch. Expected `Int`, found `String`"],
+    );
+}
+
+#[test]
+fn list_against_scalar_annotation_reports_once() {
+    let failure = typecheck_script_fail(&dedent(
+        "
+        const L: Int = [1]
+
+        0
+        ",
+    ));
+
+    let messages = diagnostic_messages(&failure);
+    assert_eq!(
+        messages.len(),
+        1,
+        "expected one diagnostic, got {messages:#?}"
+    );
+    assert!(
+        messages[0].contains("does not match annotation `Global.Int`"),
+        "unexpected diagnostic: {}",
+        messages[0]
+    );
+}
+
+#[test]
+fn payload_variant_constant_typechecks() {
+    let checked = typecheck(&dedent(
+        "
+        enum Shape
+          Dot
+          Circle(Float)
+        end
+
+        const UNIT = Shape.Circle(1.0)
+
+        UNIT
+        ",
+    ));
+
+    let shape = registry_id(&checked, PACKAGE, &["Shape"]);
+    assert_eq!(
+        constant_definition(&checked, &["UNIT"]).ty,
+        ResolvedType::leaf(Resolution::Global(shape))
+    );
+}
+
+#[test]
+fn struct_constant_fills_omitted_field_defaults() {
+    typecheck(&dedent(
+        "
+        struct Point
+          x: Int = 0
+          y: Int = 0
+        end
+
+        const ORIGIN = Point{}
+
+        ORIGIN
+        ",
+    ));
+}
+
+// Constants that read other constants. The lift runs in dependency
+// order, so a constant can read one declared below it whether the
+// read is bare, `Owner.NAME`, or `Package.NAME`.
+
+#[test]
+fn constant_reads_constant_declared_below_it() {
+    let checked = typecheck(&dedent(
+        "
+        const BARE = BASE
+        const OWNED = Limits.MAX
+        const QUALIFIED = TestApp.BASE
+        const BASE = 7
+
+        struct Limits
+          value: Int
+
+          const MAX = BASE
+        end
+
+        BARE
+        ",
+    ));
+
+    let int = int_type(&checked);
+    for path in [
+        &["BARE"][..],
+        &["OWNED"],
+        &["QUALIFIED"],
+        &["Limits", "MAX"],
+    ] {
+        assert_eq!(constant_definition(&checked, path).ty, int, "{path:?}");
+    }
+}
+
+#[test]
+fn constant_reads_default_of_omitted_struct_field() {
+    // `Point{}` reads `ORIGIN_X` through the omitted field's default,
+    // so the lift has to resolve `ORIGIN_X` first even though it is
+    // declared last.
+    typecheck(&dedent(
+        "
+        struct Point
+          x: Int = ORIGIN_X
+          y: Int = 0
+        end
+
+        const ORIGIN = Point{}
+        const ORIGIN_X = 0
+
+        ORIGIN
+        ",
+    ));
+}
+
+#[test]
+fn constant_reads_cross_package_constant() {
+    check_lib_and_app(
+        "
+        const LIMIT = Lib.MAX
+
+        LIMIT.print()
+        ",
+    )
+    .expect("a constant can read a public constant from another package");
+}
+
+#[test]
+fn two_constant_cycle_diagnoses_both() {
+    let failure = typecheck_script_fail(&dedent(
+        "
+        const A = B
+        const B = A
+
+        0
+        ",
+    ));
+
+    let messages = diagnostic_messages(&failure);
+    assert!(
+        messages
+            .iter()
+            .any(|m| m == "constant `A` depends on itself through `B`"),
+        "got {messages:#?}"
+    );
+    assert!(
+        messages
+            .iter()
+            .any(|m| m == "constant `B` depends on itself through `A`"),
+        "got {messages:#?}"
+    );
+}
+
+#[test]
+fn self_referential_constant_diagnoses() {
+    assert_script_fails_with(
+        "
+        const LOOP = LOOP
+
+        0
+        ",
+        &["constant `LOOP` depends on itself"],
+    );
+}
+
+#[test]
+fn constant_downstream_of_a_cycle_diagnoses() {
+    assert_script_fails_with(
+        "
+        const A = B
+        const B = A
+        const C = A
+
+        0
+        ",
+        &["constant `C` depends on `A`, which is in a dependency cycle"],
+    );
+}
+
 #[test]
 fn non_literal_rhs_diagnoses() {
     let source = "
@@ -139,7 +466,10 @@ fn interpolated_string_constant_diagnoses() {
         S
         ";
 
-    assert_script_fails_with(source, &["interpolated strings are not constant-evaluable"]);
+    assert_script_fails_with(
+        source,
+        &["interpolated strings are not allowed in constant values"],
+    );
 }
 
 #[test]
@@ -165,7 +495,7 @@ fn binary_constant_with_non_literal_segment_diagnoses() {
 
     assert_script_fails_with(
         source,
-        &["binary segment values in a constant must be literals"],
+        &["binary segment values in constant values must be literals"],
     );
 }
 

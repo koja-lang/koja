@@ -3,57 +3,159 @@
 //! Strings, binaries, unit enum variants, and struct literals pool on
 //! [`IRPackage::constants`](crate::package::IRPackage::constants) and load through
 //! [`IRInstruction::LoadConst`](crate::function::IRInstruction::LoadConst).
+//! Every other shape the typecheck lift admits (list, map, and set
+//! literals, payload variants, generic structs, and compounds that
+//! contain one of those) pools as [`IRConstantValue::Built`] with a
+//! synthesized zero-parameter init function that backends run once
+//! at program start.
 
 use koja_ast::ast::{
-    BinarySegment, Constant, Expr, ExprKind, Literal, StringPart, UnaryOp, name_texts,
+    BinarySegment, Constant, EnumConstructionData, Expr, ExprKind, Literal, StringPart, UnaryOp,
+    name_texts,
 };
 use koja_ast::identifier::{GlobalRegistryId, Identifier, Resolution, ResolvedType};
-use koja_typecheck::{GlobalKind, GlobalRegistry, LiteralCoercion, NumericLiteralWidth};
+use koja_typecheck::{
+    ConstantDefinition, GlobalKind, GlobalRegistry, LiteralCoercion, NumericLiteralWidth,
+};
 
 use crate::binary_packing::pack_integer_segment;
 use crate::constant::IRConstantValue;
 use crate::enum_decl::IRVariantTag;
-use crate::function::IRSymbol;
+use crate::function::{FunctionKind, IRFunction, IRSymbol};
 use crate::generics::Instantiation;
 use crate::types::{ConstValue, IRType};
 
 use super::binary_literal::{ClassifiedSegment, ast_endianness_to_ir, classify_segment};
+use super::body::finalize_open_flow;
+use super::ctx::{FlowResult, FnLowerCtx, LowerOutput};
+use super::expr::lower_expr;
 use super::ops::{int_const_at_width, parse_int_literal};
 use super::package::resolved_type_to_ir_type;
+
+/// Suffix appended to a constant's symbol to name its init function.
+pub(crate) const BUILT_INIT_SUFFIX: &str = "__init";
 
 /// Translate a top-level `const NAME = <rhs>` into a pool entry, or
 /// `None` for primitives (which inline at use sites). Each
 /// `Expr.literal_coercion` annotation drives the matching narrow
 /// `ConstValue::*` head, e.g. `const PI: Float32 = 3.14` lowers
 /// as `ConstValue::Float32` rather than the default 64-bit form.
+/// A value the static folder cannot express becomes a
+/// [`IRConstantValue::Built`] entry, and its init function lands on
+/// `output.synthesized_functions` for `lower_package` to merge.
 pub(super) fn lower_constant_pool_entry(
     constant: &Constant,
     package: &str,
     registry: &GlobalRegistry,
-    instantiations: &mut Vec<Instantiation>,
+    output: &mut LowerOutput,
 ) -> Option<(IRSymbol, IRConstantValue)> {
     let identifier = Identifier::new(package, name_texts(&constant.path));
-    let (id, entry) = registry.lookup(&identifier)?;
-    if !matches!(entry.kind, GlobalKind::Constant(Some(_))) {
+    let (_, entry) = registry.lookup(&identifier)?;
+    let GlobalKind::Constant(Some(def)) = &entry.kind else {
         return None;
-    }
-    let value = constant_value_from_registry(id, registry, instantiations)?;
-    if !pools_in_constant_pool(&value) {
+    };
+    let symbol = IRSymbol::from_identifier(&entry.identifier);
+    let value = match lower_constant_value(&def.value, registry, &mut output.instantiations) {
+        Some(value) if pools_in_constant_pool(&value) => value,
+        Some(_) => return None,
+        None => synthesize_built_constant(&symbol, def, registry, output)?,
+    };
+    Some((symbol, value))
+}
+
+/// Mint the init function for a `Built` constant. The init is a
+/// zero-parameter [`FunctionKind::Regular`] body that lowers
+/// `def.value` through the ordinary expression lowerer and returns
+/// the owned result. The
+/// body has no source location of its own, so panics inside it
+/// attribute to the callee that raised them.
+fn synthesize_built_constant(
+    symbol: &IRSymbol,
+    def: &ConstantDefinition,
+    registry: &GlobalRegistry,
+    output: &mut LowerOutput,
+) -> Option<IRConstantValue> {
+    let init = symbol.derived(BUILT_INIT_SUFFIX);
+    let ty = resolved_type_to_ir_type(&def.ty, registry, &mut output.instantiations);
+    let mut ctx = FnLowerCtx::new();
+    ctx.closures_mut().set_enclosing_symbol(init.clone());
+    let entry = ctx.fresh_block("entry");
+    // `Err(())` means the lowerer already pushed a diagnostic. The
+    // constant gets no pool entry, and the diagnostic fails the
+    // compile before any backend reads the pool.
+    let (value, block) = lower_expr(&def.value, &mut ctx, entry, registry, output).ok()?;
+    finalize_open_flow(
+        &mut ctx,
+        FlowResult::Open {
+            value: Some(value),
+            block,
+        },
+        &ty,
+    );
+    output.synthesized_functions.push(IRFunction {
+        blocks: ctx.into_blocks(),
+        def_location: None,
+        kind: FunctionKind::Regular,
+        params: Vec::new(),
+        return_type: ty.clone(),
+        symbol: init.clone(),
+    });
+    Some(IRConstantValue::Built { init, ty })
+}
+
+/// How a read of a constant lowers. `Inline` carries the scalar to
+/// emit as
+/// [`IRInstruction::Const`](crate::function::IRInstruction::Const).
+/// `Pooled` means the read is a
+/// [`IRInstruction::LoadConst`](crate::function::IRInstruction::LoadConst)
+/// against the pool entry `lower_package` minted, static or
+/// `Built`. The decision reruns the static folder rather than
+/// consulting the pool, because a read can lower before the
+/// declaring package's pool exists.
+pub(super) enum ConstantRead {
+    Inline(ConstValue),
+    Pooled,
+}
+
+/// Decide how a read of the constant at `id` lowers. `None` when the
+/// registry has no stamped definition for `id`, which is a seal
+/// violation the caller reports.
+pub(super) fn constant_read_shape(
+    id: GlobalRegistryId,
+    registry: &GlobalRegistry,
+    instantiations: &mut Vec<Instantiation>,
+) -> Option<ConstantRead> {
+    let entry = registry.get(id)?;
+    let GlobalKind::Constant(Some(def)) = &entry.kind else {
         return None;
-    }
-    Some((IRSymbol::from_identifier(&entry.identifier), value))
+    };
+    Some(
+        match lower_constant_value(&def.value, registry, instantiations) {
+            Some(value) if !pools_in_constant_pool(&value) => {
+                let IRConstantValue::Primitive(value) = value else {
+                    unreachable!(
+                        "non-pooling IRConstantValue must be Primitive (pool admission rule)"
+                    );
+                };
+                ConstantRead::Inline(value)
+            }
+            _ => ConstantRead::Pooled,
+        },
+    )
 }
 
 /// True when an [`IRConstantValue`] should live in the package
 /// constant pool (vs. inlining at the use site as
 /// [`IRInstruction::Const`](crate::function::IRInstruction::Const)). Heap payloads (strings, binaries,
-/// bits), unit enum variants, and structs of literals pool. Scalar
-/// numeric / bool / unit primitives inline, since the binary size
-/// win is on compound constants rather than primitives that fit in
-/// a register.
+/// bits), unit enum variants, structs of literals, and `Built`
+/// values pool. Scalar numeric / bool / unit primitives inline,
+/// since the binary size win is on compound constants rather than
+/// primitives that fit in a register.
 pub(super) fn pools_in_constant_pool(value: &IRConstantValue) -> bool {
     match value {
-        IRConstantValue::EnumVariant { .. } | IRConstantValue::Struct { .. } => true,
+        IRConstantValue::Built { .. }
+        | IRConstantValue::EnumVariant { .. }
+        | IRConstantValue::Struct { .. } => true,
         IRConstantValue::Primitive(
             ConstValue::Binary(_) | ConstValue::Bits { .. } | ConstValue::String(_),
         ) => true,
@@ -61,12 +163,12 @@ pub(super) fn pools_in_constant_pool(value: &IRConstantValue) -> bool {
     }
 }
 
-/// Walk the registry's stamped [`koja_typecheck::ConstantDefinition`] for `id` into
+/// Fold the registry's stamped [`ConstantDefinition`] for `id` into
 /// an [`IRConstantValue`]. Reads the stamped definition rather than
 /// any AST `Constant.value`. Both are correct, but the registry
 /// copy is what IR considers authoritative (the AST may be
 /// substituted at monomorphization time while the registry is not).
-pub(super) fn constant_value_from_registry(
+fn constant_value_from_registry(
     id: GlobalRegistryId,
     registry: &GlobalRegistry,
     instantiations: &mut Vec<Instantiation>,
@@ -79,12 +181,14 @@ pub(super) fn constant_value_from_registry(
 }
 
 /// Recursively translate an already-resolved constant `Expr` into an
-/// [`IRConstantValue`]. Returns `None` on shapes the lift pass should
-/// have rejected. IR treats those as compiler bugs (the typecheck
-/// seal would have caught them otherwise). Each subexpression's
-/// `literal_coercion` annotation drives the resulting `ConstValue::*`
-/// width. Absent annotation, primitives keep their default 64-bit
-/// head.
+/// [`IRConstantValue`]. Returns `None` on shapes the static folder
+/// cannot express, which the caller turns into a `Built` entry.
+/// Those shapes are list, map, and set literals, payload variants,
+/// generic structs, reads of a built constant, and any compound that
+/// contains one of those.
+/// Each subexpression's `literal_coercion` annotation drives the
+/// resulting `ConstValue::*` width. Absent annotation, primitives
+/// keep their default 64-bit head.
 fn lower_constant_value(
     expr: &Expr,
     registry: &GlobalRegistry,
@@ -121,7 +225,13 @@ fn lower_constant_value(
             let inner = lower_constant_value(operand, registry, instantiations)?;
             negate_primitive(inner)
         }
-        ExprKind::EnumConstruction { variant, .. } => {
+        // Only the unit form folds to a bare tag. A payload variant
+        // carries values the tag cannot hold, so it builds at start.
+        ExprKind::EnumConstruction {
+            variant,
+            data: EnumConstructionData::Unit,
+            ..
+        } => {
             let ResolvedType::Named {
                 resolution: Resolution::Global(enum_id),
                 ..
@@ -156,6 +266,12 @@ fn lower_constant_value(
             let GlobalKind::Struct(Some(struct_def)) = &entry.kind else {
                 return None;
             };
+            // A generic struct's pool symbol would be the
+            // unspecialized one, so its instantiation builds at
+            // start through the ordinary construction lowerer.
+            if !entry.type_params.is_empty() {
+                return None;
+            }
             let mut canonical: Vec<Option<IRConstantValue>> = vec![None; struct_def.fields.len()];
             for init in fields {
                 let (index, _) = struct_def.lookup_field(init.name.as_str())?;
@@ -166,6 +282,13 @@ fn lower_constant_value(
             let symbol = IRSymbol::from_identifier(&entry.identifier);
             Some(IRConstantValue::Struct { fields, ty: symbol })
         }
+        // A read of another constant (the resolver rewrites every
+        // `Owner.NAME` and `Pkg.NAME` spelling to this form) folds
+        // to that constant's own value when it is static.
+        ExprKind::Ident {
+            resolution: Resolution::Global(id),
+            ..
+        } => constant_value_from_registry(*id, registry, instantiations),
         _ => None,
     }
 }

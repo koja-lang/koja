@@ -19,6 +19,7 @@ use crate::types::ir_basic_type;
 
 mod binary_construct;
 mod binary_match;
+pub(crate) mod built_constants;
 mod calls;
 mod clone;
 pub(crate) mod closures;

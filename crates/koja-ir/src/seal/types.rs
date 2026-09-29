@@ -1056,6 +1056,7 @@ fn const_type(value: &ConstValue) -> IRType {
 
 fn constant_type(value: &IRConstantValue) -> IRType {
     match value {
+        IRConstantValue::Built { ty, .. } => ty.clone(),
         IRConstantValue::EnumVariant { ty, .. } => IRType::Enum(ty.clone()),
         IRConstantValue::Primitive(value) => const_type(value),
         IRConstantValue::Struct { ty, .. } => IRType::Struct(ty.clone()),

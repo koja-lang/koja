@@ -13,7 +13,6 @@ use koja_ast::identifier::{GlobalRegistryId, LocalId, Resolution, ResolvedType};
 use koja_ast::labels::expr_kind_label;
 use koja_typecheck::{GlobalKind, GlobalRegistry, LiteralCoercion, NumericLiteralWidth};
 
-use crate::constant::IRConstantValue;
 use crate::function::{IRBlockId, IRInstruction, IRSymbol};
 use crate::generics::Instantiation;
 use crate::local::IRLocalId;
@@ -24,7 +23,7 @@ use super::arms::lower_result_ty;
 use super::binary_literal::lower_binary_literal;
 use super::calls::{MethodCallShape, lower_call, lower_method_call};
 use super::closures::{lower_block_closure, lower_short_closure, synthesize_fn_as_closure_wrapper};
-use super::constants::{constant_value_from_registry, pools_in_constant_pool};
+use super::constants::{ConstantRead, constant_read_shape};
 use super::control_flow::{
     CondLowering, IfLowering, TernaryLowering, lower_cond, lower_if, lower_short_circuit,
     lower_ternary,
@@ -581,9 +580,11 @@ fn lower_global_ident(
 }
 
 /// Lower a bare ident that resolves to a package-level constant.
-/// Primitives inline as [`IRInstruction::Const`], and compounds emit a
-/// [`IRInstruction::LoadConst`] against the pool entry minted in
-/// [`super::package::lower_package`].
+/// Primitives inline as [`IRInstruction::Const`], and everything
+/// else emits a [`IRInstruction::LoadConst`] against the pool entry
+/// minted in [`super::package::lower_package`], whether that entry
+/// is a static value or a `Built` one. A read never synthesizes an
+/// init of its own.
 fn lower_constant_ident(
     constant_id: GlobalRegistryId,
     name: &str,
@@ -592,12 +593,11 @@ fn lower_constant_ident(
     registry: &GlobalRegistry,
     output: &mut LowerOutput,
 ) -> (ValueId, IRBlockId) {
-    let value = constant_value_from_registry(constant_id, registry, &mut output.instantiations)
+    let shape = constant_read_shape(constant_id, registry, &mut output.instantiations)
         .unwrap_or_else(|| {
             panic!(
                 "IR lower: constant `{name}` (id {constant_id}) reaches lower \
-                 without a stamped definition or with an unsupported RHS shape, \
-                 typecheck seal must have rejected this",
+                 without a stamped definition, typecheck seal must have rejected this",
             );
         });
     let entry = registry.get(constant_id).unwrap_or_else(|| {
@@ -609,20 +609,20 @@ fn lower_constant_ident(
             entry.kind.label(),
         );
     };
-    let ty = resolved_type_to_ir_type(&def.ty, registry, &mut output.instantiations);
-    if pools_in_constant_pool(&value) {
-        let const_id = IRSymbol::from_identifier(&entry.identifier);
-        let dest = ctx.fresh_value(ty.clone());
-        ctx.cfg
-            .append(block, IRInstruction::LoadConst { const_id, dest, ty });
-        (dest, block)
-    } else {
-        let IRConstantValue::Primitive(value) = value else {
-            unreachable!("non-pooling IRConstantValue must be Primitive (pool admission rule)");
-        };
-        let dest = ctx.fresh_value(const_value_type(&value));
-        ctx.cfg.append(block, IRInstruction::Const { dest, value });
-        (dest, block)
+    match shape {
+        ConstantRead::Inline(value) => {
+            let dest = ctx.fresh_value(const_value_type(&value));
+            ctx.cfg.append(block, IRInstruction::Const { dest, value });
+            (dest, block)
+        }
+        ConstantRead::Pooled => {
+            let ty = resolved_type_to_ir_type(&def.ty, registry, &mut output.instantiations);
+            let const_id = IRSymbol::from_identifier(&entry.identifier);
+            let dest = ctx.fresh_value(ty.clone());
+            ctx.cfg
+                .append(block, IRInstruction::LoadConst { const_id, dest, ty });
+            (dest, block)
+        }
     }
 }
 
