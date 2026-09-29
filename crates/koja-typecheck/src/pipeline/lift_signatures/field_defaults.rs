@@ -1,19 +1,17 @@
 //! Default-value lifting for struct and enum struct-variant fields.
 //!
-//! Lift stores an *unresolved* clone of the default AST on the
-//! registry field so each construction site that omits the field can
-//! clone it and re-resolve it against the substituted field type
-//! (that per-site resolution is what makes `Option.None` and `[]`
-//! work on generic fields). Only the syntactic shape is validated
-//! here. The resolve walker trial-resolves every default in the
-//! declaring file's scope once all definitions are stamped, so name
-//! and type errors surface at the declaration.
+//! Lift validates only the syntactic shape of a default and stores an
+//! unresolved clone on the registry field. A construction site that
+//! omits the field clones it and resolves it against the substituted
+//! field type, which is what makes `Option.None` and `[]` work on
+//! generic fields. The resolve walker trial-resolves every default in
+//! its declaring file once all definitions are stamped, so name and
+//! type errors surface at the declaration.
 //!
-//! The stored clone is marked synthetic here, in the same walk that
-//! checks its shape, so a site clones it without another walk and
-//! LSP position lookups in the declaring file skip every synthesized
-//! node. [`check_default_shape`] is the one description of the
-//! default grammar: an arm that accepts a shape also marks it.
+//! The walk that checks the shape also marks the clone synthetic, so
+//! LSP position lookups skip the fill at every site and no second
+//! walk has to know the grammar. [`check_default_shape`] is the one
+//! description of that grammar.
 
 use koja_ast::ast::{
     Diagnostic, EnumConstructionData, Expr, ExprKind, FieldInit, Name, StringPart, StructField,
@@ -22,10 +20,9 @@ use koja_ast::ast::{
 
 use crate::pipeline::resolve::static_dotted_path;
 
-/// Validate the shape of `field`'s default (if any) and yield a
-/// synthetic-spanned, unresolved clone for registry storage.
-/// Shape-invalid defaults diagnose and store as `None`, so
-/// downstream sites fall back to the ordinary missing-field
+/// Validate the shape of `field`'s default (if any) and yield the
+/// clone for registry storage. A shape-invalid default diagnoses and
+/// stores as `None`, so sites fall back to the ordinary missing-field
 /// diagnostic.
 pub(super) fn lift_field_default(
     field: &StructField,
@@ -39,12 +36,13 @@ pub(super) fn lift_field_default(
     Some(Box::new(stored))
 }
 
-/// Recursive check over the allowed default-value shapes that marks
-/// every span it accepts synthetic. Every shape is side-effect-free
-/// and re-resolvable in any package, so a site-time re-resolution
-/// can never observably diverge from the declaration.
+/// Recursive check over the allowed default-value shapes. Each arm
+/// that accepts a node marks its span synthetic, so accepting and
+/// marking cannot drift apart. Every shape is side-effect-free, so
+/// the fill at a site has the same value as the default at its
+/// declaration.
 ///
-/// Diagnostics use the span as it was before marking, so they point
+/// Diagnostics use the span captured before marking, so they point
 /// at the declaration like any other error.
 fn check_default_shape(expr: &mut Expr, diagnostics: &mut Vec<Diagnostic>) -> bool {
     let span = expr.span;

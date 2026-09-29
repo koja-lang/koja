@@ -263,10 +263,10 @@ pub struct FunctionDefinition {
 /// may want a richer structural index over `(target, protocol)`
 /// pairs (e.g. for cross-package resolution). Revisit then.
 ///
-/// `aliases` is the declaring file's alias roster. Field defaults
-/// are stored unresolved and re-resolved at every construction site
-/// that omits the field, and this roster is what lets that site
-/// resolve an aliased name the way the declaring file spelled it.
+/// `aliases` is the declaring file's alias roster. A field default is
+/// stored unresolved and resolved again at every construction site
+/// that omits the field. The roster lets that site resolve an aliased
+/// name the way the declaring file spelled it.
 #[derive(Clone, Debug)]
 pub struct StructDefinition {
     pub aliases: Vec<AliasDecl>,

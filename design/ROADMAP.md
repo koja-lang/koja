@@ -49,12 +49,10 @@ call sites once instead of twice.
   identifier lookup is a generated `match` over string literals per region.
 - **[DONE]** Let a field default name its struct through a dotted path
   or an alias. `options: TCPListener.Options = TCPListener.Options{}` was
-  rejected because the literal parses as a struct-shaped enum variant
-  and the lift check admitted only unit variants, and the aliased
-  spelling panicked in resolve. The registry now carries the declaring
-  file's alias roster, every default resolves in that scope at the
-  declaration and at each site, and enum payload variants are accepted
-  as defaults. `TCPListener.options` has its default.
+  rejected and the aliased spelling panicked in resolve. Every default
+  now resolves in its declaring file, at the declaration and at each
+  site, and enum payload variants are accepted as defaults.
+  `TCPListener.options` has its default.
 
 ### Language server
 

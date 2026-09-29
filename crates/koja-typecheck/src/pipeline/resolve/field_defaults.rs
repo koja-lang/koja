@@ -1,25 +1,21 @@
-//! Field-default resolution: declaration-time validation and
-//! construction-time fill.
+//! Field-default resolution, at the declaration and at each
+//! construction site that omits the field.
 //!
-//! Lift stored each default as an *unresolved* AST on the registry
-//! field. This module resolves it in two places:
+//! Lift stored each default as an unresolved, synthetic-spanned clone
+//! on the registry field. This module resolves it in two places:
 //!
-//! - **Declaration**: the walker trial-resolves every default in the
-//!   declaring file's scope, its package and its alias roster with
-//!   no locals, against the lifted field type. Unknown names, type
-//!   mismatches, and out-of-range literals all diagnose on the
-//!   declaring file.
-//! - **Construction**: a site that omits a defaulted field gets a
-//!   synthesized [`FieldInit`] cloned from the stored default, which
-//!   lift already marked synthetic, resolved with the substituted
-//!   field type as the expected hint. The declaring file's aliases
-//!   come off the owner's registry definition. The declaration owns
-//!   the diagnostics, so site resolution uses a scratch vec and
-//!   stays quiet when the declaration already failed.
+//! - At the declaration, the walker trial-resolves every default
+//!   against the lifted field type. Unknown names, type mismatches,
+//!   and out-of-range literals diagnose here.
+//! - At a construction site that omits the field, the site gets a
+//!   [`FieldInit`] cloned from the stored default and resolved against
+//!   the substituted field type. See [`synthesize_default_init`] for
+//!   why the site reports nothing.
 //!
-//! Both resolutions go through [`resolve_in_declaring_scope`], the
-//! same scope shape (declaring package, declaring file's aliases, no
-//! locals), so they cannot diverge.
+//! Both go through [`resolve_in_declaring_scope`], which resolves in
+//! the declaring package with the declaring file's aliases and no
+//! locals. One scope shape at both points is what keeps them from
+//! diverging.
 
 use koja_ast::ast::{
     AliasDecl, Diagnostic, EnumDecl, EnumVariantData, Expr, FieldInit, Name, StructDecl,
@@ -158,11 +154,8 @@ fn resolve_declared_default(
     }
 }
 
-/// Resolve `expr` with `expected` as the hint in a fresh scope:
-/// `package`, the given alias roster, and no locals. Serving the
-/// declaration trial and the construction-site fill from one
-/// function is what keeps declaration-time and site-time resolution
-/// identical.
+/// Resolve `expr` with `expected` as the hint in a fresh scope made
+/// of `package`, the given alias roster, and no locals.
 fn resolve_in_declaring_scope(
     expr: &mut Expr,
     expected: &ResolvedType,
@@ -182,17 +175,15 @@ fn resolve_in_declaring_scope(
     resolve_expr_with_expected(expr, Some(expected), &mut resolver, diagnostics);
 }
 
-/// Synthesize the omitted field's init at a construction site:
-/// clone the stored default, whose spans lift already marked
-/// synthetic, and re-resolve it against the substituted field type
-/// in the declaring file's scope.
+/// Synthesize the omitted field's init at a construction site. Clone
+/// the stored default and resolve it against the substituted field
+/// type in the declaring file's scope.
 ///
 /// Diagnostics go to a scratch vec on purpose. A default that fails
-/// here failed the same way at its declaration, which already
-/// reported it, and the walker may reach this site before that
-/// declaration. The init still returns, with whatever resolution the
-/// trial left on it, so the site does not add a missing-field error
-/// on top.
+/// here failed the same way at its declaration, which reports it, and
+/// the walker may reach this site first. The init still returns with
+/// whatever resolution the trial left, so the site adds no
+/// missing-field error on top.
 pub(super) fn synthesize_default_init(
     declared_field: &ResolvedStructField,
     owner_id: GlobalRegistryId,
