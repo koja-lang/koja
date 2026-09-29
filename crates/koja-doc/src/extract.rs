@@ -1114,10 +1114,11 @@ fn has_doc_false(annotations: &[koja_ast::ast::Annotation]) -> bool {
 
 /// Format a default-value expression for display. Covers the shapes
 /// the compiler accepts as field defaults: literals, negated
-/// numerics, enum variants, binary literals, and struct, list, map,
-/// or set literals of those. A dotted struct literal such as
-/// `Pkg.Type{}` parses as a struct-shaped variant and prints the
-/// same way.
+/// numerics, enum variants, constants, binary literals, and struct,
+/// list, map, or set literals of those. A dotted struct literal such
+/// as `Pkg.Type{}` parses as a struct-shaped variant and prints the
+/// same way. A constant read prints as written, in its bare (`MAX`)
+/// or dotted (`Pkg.limit`) spelling.
 fn default_to_string(expr: &Expr) -> String {
     match &expr.kind {
         ExprKind::BinaryLiteral { segments } => {
@@ -1157,7 +1158,11 @@ fn default_to_string(expr: &Expr) -> String {
                 EnumConstructionData::Unit => head,
             }
         }
+        ExprKind::FieldAccess { receiver, field } => {
+            format!("{}.{field}", default_to_string(receiver))
+        }
         ExprKind::Group { expr: inner } => format!("({})", default_to_string(inner)),
+        ExprKind::Ident { name, .. } => name.clone(),
         ExprKind::List { elements } => {
             let parts: Vec<String> = elements.iter().map(default_to_string).collect();
             format!("[{}]", parts.join(", "))

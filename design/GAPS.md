@@ -332,9 +332,9 @@ Found 2026-08-28. None blocking, each with a workaround:
 ## Function references cannot be default field values
 
 Found 2026-09-01 in the same `trail` conversion. Default field
-values are limited to literals, negated numerics, unit enum
-variants, binary literals, and literal collections. A `fn` typed
-field cannot default to a named function:
+values are limited to literals, negated numerics, enum variants,
+constants, binary literals, and struct, list, map, or set literals
+of those. A `fn` typed field cannot default to a named function:
 
 ```koja
 struct Config

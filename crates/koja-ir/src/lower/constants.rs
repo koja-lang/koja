@@ -80,6 +80,9 @@ fn synthesize_built_constant(
     let mut ctx = FnLowerCtx::new();
     ctx.closures_mut().set_enclosing_symbol(init.clone());
     let entry = ctx.fresh_block("entry");
+    // `Err(())` means the lowerer already pushed a diagnostic. The
+    // constant gets no pool entry, and the diagnostic fails the
+    // compile before any backend reads the pool.
     let (value, block) = lower_expr(&def.value, &mut ctx, entry, registry, output).ok()?;
     finalize_open_flow(
         &mut ctx,

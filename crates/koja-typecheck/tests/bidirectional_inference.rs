@@ -285,7 +285,7 @@ fn unit_variant_without_expected_still_diagnoses() {
 }
 
 #[test]
-fn unit_variant_under_mismatched_expected_falls_back_to_diagnostic() {
+fn unit_variant_under_mismatched_expected_names_the_mismatch() {
     let source = "
         enum Maybe<T>
           Some(T)
@@ -301,8 +301,12 @@ fn unit_variant_under_mismatched_expected_falls_back_to_diagnostic() {
         end
         ";
     // Expected type's head differs from the unit variant's enum, so
-    // the "cannot infer" diagnostic still fires.
-    assert_script_fails_with(source, &["cannot infer type parameter"]);
+    // the hint can never fill `T`. The diagnostic names that mismatch
+    // instead of the inference gap it causes.
+    assert_script_fails_with(
+        source,
+        &["`Maybe.None` is a `TestApp.Maybe` value, but `Other<T>` is expected"],
+    );
 }
 
 #[test]

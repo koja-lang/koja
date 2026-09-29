@@ -14,13 +14,14 @@
 //! definition, so readers see an unresolved type instead of a missing
 //! definition.
 
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{BTreeSet, HashMap};
 
 use koja_ast::ast::{
     Constant, Diagnostic, EnumConstructionData, Expr, ExprKind, FieldInit, Item, Name, name_texts,
     path_text,
 };
 use koja_ast::identifier::{GlobalRegistryId, Identifier, ResolvedType};
+use koja_graph::Graph;
 
 use crate::pipeline::aliases::collect_file_aliases;
 use crate::pipeline::resolve::types::lookup_type;
@@ -44,12 +45,18 @@ struct Position {
     package: usize,
 }
 
-/// One constant in the dependency graph. `reads` holds the indices
-/// of the constants its value reads, duplicates included.
+/// One constant waiting for its definition.
 struct Node {
     id: GlobalRegistryId,
     position: Position,
-    reads: Vec<usize>,
+}
+
+/// Every constant waiting for its definition, and the reads between
+/// them. A node is indexed by its position in `nodes`, and an edge
+/// `a -> b` in `reads` means the value of `a` reads `b`.
+struct Pending {
+    nodes: Vec<Node>,
+    reads: Graph<usize>,
 }
 
 /// Lift every constant in the program, each after the constants it
@@ -60,19 +67,24 @@ pub(super) fn lift_constants(
     registry: &mut GlobalRegistry,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
-    let nodes = collect_nodes(packages, registry);
-    let (ready, stuck) = topological_order(&nodes);
-    for index in ready {
-        lift_at(nodes[index].position, packages, registry, diagnostics);
+    let pending = collect_pending(packages, registry);
+    let order = pending.reads.toposort();
+    for index in order.ready {
+        let node = &pending.nodes[index];
+        lift_at(node.id, node.position, packages, registry, diagnostics);
     }
-    diagnose_stuck(&nodes, &stuck, packages, registry, diagnostics);
+    diagnose_stuck(&pending, &order.stuck, packages, registry, diagnostics);
 }
 
 /// Every constant still waiting for its definition, with the reads
-/// its value makes.
-fn collect_nodes(packages: &[CheckedPackage], registry: &GlobalRegistry) -> Vec<Node> {
+/// its value makes. Nodes are numbered in declaration order, so the
+/// sort keeps independent constants in source order. A package that
+/// declares one name twice yields one node, since collect diagnosed
+/// the duplicate and both items map to the same registry entry.
+fn collect_pending(packages: &[CheckedPackage], registry: &GlobalRegistry) -> Pending {
     let mut nodes = Vec::new();
-    let mut reads_by_node = Vec::new();
+    let mut index_of: HashMap<GlobalRegistryId, usize> = HashMap::new();
+    let mut reads_by_node: Vec<Vec<GlobalRegistryId>> = Vec::new();
     for (package_index, package) in packages.iter().enumerate() {
         for (file_index, file) in package.files.iter().enumerate() {
             let aliases = collect_file_aliases(file);
@@ -97,8 +109,12 @@ fn collect_nodes(packages: &[CheckedPackage], registry: &GlobalRegistry) -> Vec<
                 if !matches!(entry.kind, GlobalKind::Constant(None)) {
                     continue;
                 }
+                if index_of.contains_key(&id) {
+                    continue;
+                }
                 let mut reads = Vec::new();
                 collect_reads(&constant.value, scope, &mut reads);
+                index_of.insert(id, nodes.len());
                 nodes.push(Node {
                     id,
                     position: Position {
@@ -106,56 +122,28 @@ fn collect_nodes(packages: &[CheckedPackage], registry: &GlobalRegistry) -> Vec<
                         item: item_index,
                         package: package_index,
                     },
-                    reads: Vec::new(),
                 });
                 reads_by_node.push(reads);
             }
         }
     }
-    let index_of: HashMap<GlobalRegistryId, usize> = nodes
-        .iter()
-        .enumerate()
-        .map(|(index, node)| (node.id, index))
-        .collect();
-    for (node, reads) in nodes.iter_mut().zip(reads_by_node) {
-        node.reads = reads
-            .into_iter()
-            .filter_map(|id| index_of.get(&id).copied())
-            .collect();
-    }
-    nodes
-}
 
-/// Kahn's algorithm over `reads`. Returns the nodes that can lift, in
-/// an order where every node follows the nodes it reads, and the
-/// nodes that cannot, because they sit in or behind a cycle. Seeds
-/// in declaration order so independent constants keep their source
-/// order.
-fn topological_order(nodes: &[Node]) -> (Vec<usize>, Vec<usize>) {
-    let mut pending: Vec<usize> = nodes.iter().map(|node| node.reads.len()).collect();
-    let mut readers: Vec<Vec<usize>> = vec![Vec::new(); nodes.len()];
-    for (index, node) in nodes.iter().enumerate() {
-        for &read in &node.reads {
-            readers[read].push(index);
+    let mut graph = Graph::new();
+    for (index, reads) in reads_by_node.into_iter().enumerate() {
+        graph.add_node(index);
+        for read in reads.iter().filter_map(|id| index_of.get(id)) {
+            graph.add_edge(index, *read);
         }
     }
-    let mut queue: VecDeque<usize> = (0..nodes.len()).filter(|&i| pending[i] == 0).collect();
-    let mut ready = Vec::with_capacity(nodes.len());
-    while let Some(index) = queue.pop_front() {
-        ready.push(index);
-        for &reader in &readers[index] {
-            pending[reader] -= 1;
-            if pending[reader] == 0 {
-                queue.push_back(reader);
-            }
-        }
+    Pending {
+        nodes,
+        reads: graph,
     }
-    let stuck = (0..nodes.len()).filter(|&i| pending[i] > 0).collect();
-    (ready, stuck)
 }
 
-/// Lift the constant at `position` with its file's scope.
+/// Lift the constant `id` at `position` with its file's scope.
 fn lift_at(
+    id: GlobalRegistryId,
     position: Position,
     packages: &mut [CheckedPackage],
     registry: &mut GlobalRegistry,
@@ -172,34 +160,31 @@ fn lift_at(
     let Item::Constant(constant) = &mut file.items[position.item] else {
         unreachable!("positions come from `Item::Constant` items");
     };
-    lift_constant(constant, &mut scope, diagnostics);
+    lift_constant(constant, id, &mut scope, diagnostics);
 }
 
 /// Diagnose every constant that could not lift and stamp it
 /// unresolved. A constant on a cycle names the cycle. A constant
 /// behind one names the stuck constant it reads.
 fn diagnose_stuck(
-    nodes: &[Node],
+    pending: &Pending,
     stuck: &[usize],
     packages: &[CheckedPackage],
     registry: &mut GlobalRegistry,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
-    let stuck_set: HashSet<usize> = stuck.iter().copied().collect();
+    let stuck_set: BTreeSet<usize> = stuck.iter().copied().collect();
+    let name_of =
+        |index: usize| path_text(&constant_at(pending.nodes[index].position, packages).path);
     for &index in stuck {
-        let constant = constant_at(nodes[index].position, packages);
+        let constant = constant_at(pending.nodes[index].position, packages);
         let name = path_text(&constant.path);
-        let message = match cycle_from(index, nodes, &stuck_set) {
+        let message = match pending.reads.cycle_path(&index, &stuck_set) {
             Some(cycle) if cycle.is_empty() => format!("constant `{name}` depends on itself"),
             Some(cycle) => {
                 let through: Vec<String> = cycle
                     .iter()
-                    .map(|&other| {
-                        format!(
-                            "`{}`",
-                            path_text(&constant_at(nodes[other].position, packages).path)
-                        )
-                    })
+                    .map(|&other| format!("`{}`", name_of(other)))
                     .collect();
                 format!(
                     "constant `{name}` depends on itself through {}",
@@ -207,59 +192,27 @@ fn diagnose_stuck(
                 )
             }
             None => {
-                let read = nodes[index]
+                let read = pending
                     .reads
+                    .dependencies(&index)
                     .iter()
                     .find(|read| stuck_set.contains(read))
                     .expect("a stuck node outside every cycle reads a stuck node");
                 format!(
                     "constant `{name}` depends on `{}`, which is in a dependency cycle",
-                    path_text(&constant_at(nodes[*read].position, packages).path)
+                    name_of(*read)
                 )
             }
         };
         diagnostics.push(Diagnostic::error(message, constant.span));
         registry.set_constant_definition(
-            nodes[index].id,
+            pending.nodes[index].id,
             ConstantDefinition {
                 ty: ResolvedType::unresolved(),
                 value: constant.value.clone(),
             },
         );
     }
-}
-
-/// The other nodes on a cycle through `start`, in read order, or
-/// `None` when no path of stuck reads returns to `start`. An empty
-/// cycle is a constant that reads itself.
-fn cycle_from(start: usize, nodes: &[Node], stuck: &HashSet<usize>) -> Option<Vec<usize>> {
-    fn walk(
-        current: usize,
-        start: usize,
-        nodes: &[Node],
-        stuck: &HashSet<usize>,
-        path: &mut Vec<usize>,
-        visited: &mut HashSet<usize>,
-    ) -> bool {
-        for &read in &nodes[current].reads {
-            if read == start {
-                return true;
-            }
-            if !stuck.contains(&read) || !visited.insert(read) {
-                continue;
-            }
-            path.push(read);
-            if walk(read, start, nodes, stuck, path, visited) {
-                return true;
-            }
-            path.pop();
-        }
-        false
-    }
-
-    let mut path = Vec::new();
-    let mut visited = HashSet::from([start]);
-    walk(start, start, nodes, stuck, &mut path, &mut visited).then_some(path)
 }
 
 fn constant_at(position: Position, packages: &[CheckedPackage]) -> &Constant {

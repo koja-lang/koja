@@ -104,9 +104,10 @@ fn emit_ir_constant_aggregate<'ctx>(
 /// is the first byte of the value, so chunk 0 carries the tag and
 /// every other chunk is zero. Placing the tag in the low byte of
 /// chunk 0 assumes a little-endian target, which holds for every
-/// target the backend emits. Constant enum values are unit variants
-/// only (the typecheck lift enforces this), so no payload is
-/// written.
+/// target the backend emits. Only unit variants reach this path. A
+/// payload variant pools as [`IRConstantValue::Built`] and its init
+/// constructs the value at program start, so no payload is written
+/// here.
 fn emit_unit_variant_constant<'ctx>(
     ctx: &EmitContext<'ctx>,
     tag: IRVariantTag,

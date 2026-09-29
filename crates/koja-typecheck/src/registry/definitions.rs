@@ -343,12 +343,14 @@ pub struct ResolvedProtocolMethod {
 /// resolved.
 ///
 /// The registry intentionally holds the AST `Expr` rather than a
-/// projected literal payload: lift restricts the surface to literals,
-/// negated numerics, unit enum variants, and structs of literals, but
-/// IR lower wants the original `Expr`'s `resolution` data (struct id,
-/// variant tag) to canonicalize the pool entry. Storing the AST node
-/// keeps that information in one place. Registry consumers walk it
-/// the same way they'd walk a literal at the use site.
+/// projected literal payload: lift restricts the surface to the
+/// side-effect-free value grammar in `check_shape` (literals, negated
+/// numerics, enum variants, constants, binary literals, and struct,
+/// list, map, or set literals of those), but IR lower wants the
+/// original `Expr`'s `resolution` data (struct id, variant tag) to
+/// canonicalize the pool entry. Storing the AST node keeps that
+/// information in one place. Registry consumers walk it the same way
+/// they'd walk a literal at the use site.
 #[derive(Clone, Debug)]
 pub struct ConstantDefinition {
     pub ty: ResolvedType,

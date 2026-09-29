@@ -72,6 +72,24 @@ fn generic_unit_variant_constants_take_annotation_type_args() {
 }
 
 #[test]
+fn generic_unit_variant_constant_peels_alias_annotation() {
+    let source = "
+        type Maybe = Option<Int>
+
+        const NOTHING: Maybe = Option.None
+
+        0
+        ";
+    let checked = typecheck(&dedent(source));
+
+    let definition = constant_definition(&checked, &["NOTHING"]);
+    assert_eq!(
+        definition.value.resolution,
+        global_named(&checked, "Option", vec![int_type(&checked)])
+    );
+}
+
+#[test]
 fn unannotated_generic_unit_variant_constant_diagnoses() {
     let source = "
         const NOTHING = Option.None
@@ -87,9 +105,8 @@ fn unannotated_generic_unit_variant_constant_diagnoses() {
 
 #[test]
 fn generic_unit_variant_against_other_type_diagnoses() {
-    // The annotation is not an `Option`, so it gives the resolver no
-    // type argument for `T`, and the constant reports the same
-    // inference gap a body binding would.
+    // The annotation can never hold an `Option`, so the resolver
+    // names the mismatch instead of the inference gap it causes.
     let source = "
         const NOTHING: String = Option.None
 
@@ -98,7 +115,7 @@ fn generic_unit_variant_against_other_type_diagnoses() {
 
     assert_script_fails_with(
         source,
-        &["cannot infer type parameter `T` of `Global.Option` from unit variant `None`"],
+        &["`Option.None` is a `Global.Option` value, but `String` is expected"],
     );
 }
 

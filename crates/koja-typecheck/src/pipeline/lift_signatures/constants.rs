@@ -11,36 +11,25 @@
 //! seal can verify `Constant(Some(_))` without re-walking the AST.
 //! [`super::constant_order`] decides the order constants lift in.
 
-use koja_ast::ast::{Constant, Diagnostic, name_texts};
-use koja_ast::identifier::Identifier;
+use koja_ast::ast::{Constant, Diagnostic};
+use koja_ast::identifier::GlobalRegistryId;
 
 use crate::pipeline::resolve::coercion::{Mismatch, check_compatible_stamping};
 use crate::pipeline::resolve::resolve_in_declaring_scope;
-use crate::registry::{ConstantDefinition, GlobalKind};
+use crate::registry::ConstantDefinition;
 
 use super::LiftScope;
 use super::field_defaults::check_constant_shape;
 use super::types::{TypeParamScope, render_resolved, resolve_type_expr};
 
+/// Lift `constant`, whose registry entry is `id`. The caller has
+/// already checked that the entry is an unlifted constant.
 pub(super) fn lift_constant(
     constant: &mut Constant,
+    id: GlobalRegistryId,
     scope: &mut LiftScope<'_>,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
-    let identifier = Identifier::new(scope.package, name_texts(&constant.path));
-    let Some((id, entry)) = scope.registry.lookup(&identifier) else {
-        panic!(
-            "lift_signatures found constant `{identifier}` missing from registry. This is a \
-             collect invariant violation",
-        );
-    };
-    // Already lifted, or the name belongs to another declaration
-    // that registered first (a method on the owner, for a nested
-    // constant). Collect diagnosed the collision.
-    if !matches!(entry.kind, GlobalKind::Constant(None)) {
-        return;
-    }
-
     let type_params = TypeParamScope::new(&[]);
     let annotated = constant.type_annotation.as_mut().map(|type_expr| {
         resolve_type_expr(

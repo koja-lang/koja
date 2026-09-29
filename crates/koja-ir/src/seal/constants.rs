@@ -6,7 +6,7 @@
 
 use std::collections::BTreeMap;
 
-use crate::built_order::reached_constants;
+use crate::built_order::InitGraph;
 use crate::constant::IRConstantValue;
 use crate::function::{FunctionKind, IRFunction, IRSymbol};
 use crate::package::IRPackage;
@@ -68,15 +68,16 @@ pub(super) fn seal_built_constants<'a>(
             ));
         }
     }
+    let graph = InitGraph::new(packages);
     for (symbol, init) in &built {
         let Some(own) = position.get(symbol) else {
             seal_panic(&format!(
                 "built constant `{symbol}` is missing from the built constant order",
             ));
         };
-        for reached in reached_constants(init, packages) {
+        for reached in graph.reached_constants(init) {
             let before = position
-                .get(&reached)
+                .get(reached)
                 .expect("every built constant has a position by now");
             if before >= own {
                 seal_panic(&format!(

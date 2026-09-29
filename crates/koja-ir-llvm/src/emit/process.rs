@@ -75,7 +75,8 @@ pub(crate) fn emit_spawn_wrapper_body<'ctx>(
     function: &IRFunction,
     llvm_function: FunctionValue<'ctx>,
 ) -> Result<(), LlvmError> {
-    emit_wrapper_shim(ctx, function, llvm_function, false)?;
+    emit_wrapper_prologue(ctx, llvm_function)?;
+    emit_wrapper_body_call(ctx, function, llvm_function)?;
     ctx.builder.build_return(None).or_ice().map(|_| ())
 }
 
@@ -93,7 +94,9 @@ pub(crate) fn emit_process_entry_wrapper_body<'ctx>(
     function: &IRFunction,
     llvm_function: FunctionValue<'ctx>,
 ) -> Result<(), LlvmError> {
-    let exit_code = emit_wrapper_shim(ctx, function, llvm_function, true)?.ok_or_else(|| {
+    emit_wrapper_prologue(ctx, llvm_function)?;
+    emit_built_constant_init_call(ctx)?;
+    let exit_code = emit_wrapper_body_call(ctx, function, llvm_function)?.ok_or_else(|| {
         LlvmError::Codegen(format!(
             "LLVM emit: ProcessEntryWrapper `{}` body call returned no exit code",
             function.symbol,
@@ -103,17 +106,25 @@ pub(crate) fn emit_process_entry_wrapper_body<'ctx>(
     ctx.builder.build_return(None).or_ice().map(|_| ())
 }
 
-/// Shared ABI adaptation: open the entry block, load the typed
-/// config out of the runtime-provided `i8*`, and call the process
-/// body. Returns the call's result (`None` for the spawn body's
-/// `Unit`/`void` return). With `entry_process` set, the shim also
-/// calls `__koja_const_init` right after the budget seed, since PID
-/// 1 is where the built constants fill.
-fn emit_wrapper_shim<'ctx>(
+/// Open the wrapper's entry block and seed the register-strategy
+/// budget. This is the first compiled code on the fresh process
+/// stack, so the budget gets its initial grant here.
+fn emit_wrapper_prologue<'ctx>(
+    ctx: &EmitContext<'ctx>,
+    llvm_function: FunctionValue<'ctx>,
+) -> Result<(), LlvmError> {
+    let entry_bb = ctx.context.append_basic_block(llvm_function, "entry");
+    ctx.builder.position_at_end(entry_bb);
+    emit_budget_seed(ctx)
+}
+
+/// Load the typed config out of the runtime-provided `i8*` and call
+/// the process body. Returns the call's result (`None` for the spawn
+/// body's `Unit`/`void` return).
+fn emit_wrapper_body_call<'ctx>(
     ctx: &EmitContext<'ctx>,
     function: &IRFunction,
     llvm_function: FunctionValue<'ctx>,
-    entry_process: bool,
 ) -> Result<Option<BasicValueEnum<'ctx>>, LlvmError> {
     let body_symbol = wrapper_body_callee(function)?;
     let body_fn = ctx.declared_function(body_symbol).ok_or_else(|| {
@@ -129,15 +140,6 @@ fn emit_wrapper_shim<'ctx>(
         ))
     })?;
     let config_llvm_type = ir_basic_type(ctx, config_ir_type)?;
-
-    let entry_bb = ctx.context.append_basic_block(llvm_function, "entry");
-    ctx.builder.position_at_end(entry_bb);
-    // First compiled code on the fresh process stack, so this is where
-    // the register-strategy budget gets its initial grant.
-    emit_budget_seed(ctx)?;
-    if entry_process {
-        emit_built_constant_init_call(ctx)?;
-    }
     let raw_ptr = llvm_function
         .get_nth_param(0)
         .ok_or_else(|| {

@@ -953,3 +953,34 @@ fn undocumented_protocol_renders_by_name_only() {
         "no page link for an undocumented protocol"
     );
 }
+
+#[test]
+fn field_defaults_render_constant_reads_as_written() {
+    let mut project = DocProject::new("MyApp");
+    ingest(
+        &mut project,
+        "MyApp",
+        PackageKind::Project,
+        "
+        const MAX = 10
+
+        struct Limits
+          bare: Int = MAX
+          dotted: Int = Net.limit
+          nested: List<Int> = [MAX, Net.limit]
+        end
+        ",
+    );
+    let app = project.find_package("MyApp").expect("MyApp present");
+    let limits = app
+        .structs
+        .iter()
+        .find(|s| s.name == "Limits")
+        .expect("Limits");
+
+    let defaults: Vec<Option<&str>> = limits.fields.iter().map(|f| f.default.as_deref()).collect();
+    assert_eq!(
+        defaults,
+        vec![Some("MAX"), Some("Net.limit"), Some("[MAX, Net.limit]")]
+    );
+}
