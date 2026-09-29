@@ -33,19 +33,13 @@ use super::super::expr::resolve_expr;
 use super::super::types::is_primitive;
 use crate::registry::GlobalRegistry;
 
-/// Per-segment kind decided from the AST modifiers and the
-/// resolved value type. The IR lowering layer re-derives the same
-/// shape from the AST during
-/// [`koja_ir::lower::binary_literal`]. Typecheck only needs
-/// to know that the value type is admissible and to count bits.
-/// Carrying the kind alongside the bit width lets the typecheck
-/// pass return one structured result per segment without committing
-/// the IR vocabulary into the typecheck crate.
-pub(crate) enum SegmentKind {
-    Integer,
+/// The shape a `: Type` annotation gives a segment. The IR lowering
+/// layer re-derives the same shape from the AST during
+/// [`koja_ir::lower::binary_literal`]. Typecheck only needs it to
+/// check that a literal value agrees with the declared shape.
+enum SegmentKind {
     Float,
-    Splice,
-    String,
+    Integer,
 }
 
 /// Signedness of an integer binary segment: `UInt8`-style /
@@ -63,26 +57,20 @@ enum IntSign {
 /// `::N` for sized integers, the type-annotation width for floats /
 /// typed-integer forms, or `8` for an unmodified integer segment).
 /// A `Binary` splice's byte count is only known at runtime, so it
-/// carries `None`. `kind` lets the constant lift cross-check that a
-/// segment's literal value agrees with its declared shape.
+/// carries `None`.
 pub(crate) struct SegmentInfo {
-    pub(crate) kind: SegmentKind,
     pub(crate) width_bits: Option<u64>,
 }
 
 impl SegmentInfo {
-    fn fixed(kind: SegmentKind, width_bits: u64) -> Self {
+    fn fixed(width_bits: u64) -> Self {
         Self {
-            kind,
             width_bits: Some(width_bits),
         }
     }
 
     fn splice() -> Self {
-        Self {
-            kind: SegmentKind::Splice,
-            width_bits: None,
-        }
+        Self { width_bits: None }
     }
 }
 
@@ -154,9 +142,7 @@ fn unaligned_run_diagnostic(span: Span) -> Diagnostic {
 /// Validate one segment and produce its [`SegmentInfo`] (`None` plus
 /// a diagnostic on failure). Surfaces feature-gap diagnostics for
 /// the dynamic-width form (`::n` where `n` is a runtime int).
-/// Also called by the constant lift, which stamps segment value
-/// resolutions itself before delegating the width and fit rules here.
-pub(crate) fn resolve_segment(
+fn resolve_segment(
     segment: &BinarySegment,
     registry: &GlobalRegistry,
     diagnostics: &mut Vec<Diagnostic>,
@@ -170,7 +156,7 @@ pub(crate) fn resolve_segment(
             ));
             return None;
         }
-        return Some(SegmentInfo::fixed(SegmentKind::String, byte_length * 8));
+        return Some(SegmentInfo::fixed(byte_length * 8));
     }
 
     if let Some(size_expr) = &segment.size {
@@ -221,7 +207,7 @@ pub(crate) fn resolve_segment(
         if !literal_fits_int_segment(segment, width_bits, IntSign::Unsigned, diagnostics) {
             return None;
         }
-        return Some(SegmentInfo::fixed(SegmentKind::Integer, width_bits));
+        return Some(SegmentInfo::fixed(width_bits));
     }
 
     if let Some(type_ann) = &segment.type_ann {
@@ -273,7 +259,22 @@ pub(crate) fn resolve_segment(
         {
             return None;
         }
-        return Some(SegmentInfo::fixed(kind, width_bits));
+        if matches!(kind, SegmentKind::Float)
+            && matches!(
+                &segment.value.kind,
+                ExprKind::Literal {
+                    value: Literal::Int(_)
+                }
+            )
+        {
+            diagnostics.push(Diagnostic::error(
+                "binary segment value does not match the segment's declared shape \
+                 (integer segments take int literals, float segments take float literals)",
+                segment.value.span,
+            ));
+            return None;
+        }
+        return Some(SegmentInfo::fixed(width_bits));
     }
 
     // A bare segment classifies by the value's type. `Int` takes the
@@ -294,7 +295,7 @@ pub(crate) fn resolve_segment(
     if !literal_fits_int_segment(segment, 8, IntSign::Unsigned, diagnostics) {
         return None;
     }
-    Some(SegmentInfo::fixed(SegmentKind::Integer, 8))
+    Some(SegmentInfo::fixed(8))
 }
 
 /// Validate a `Binary` splice segment (bare `payload` or explicit

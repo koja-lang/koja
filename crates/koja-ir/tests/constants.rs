@@ -1,12 +1,58 @@
 //! Pooled package constants lower to [`IRInstruction::LoadConst`] once
 //! per reference site while the package pool holds a single entry per
-//! `const` declaration.
+//! `const` declaration. Values the static folder cannot express pool
+//! as [`IRConstantValue::Built`] with one synthesized init function,
+//! and `built_constant_order` runs each init after the constants it
+//! reaches.
 
-use koja_ir::{ConstValue, IRConstantValue, IRInstruction, IRScript};
+use koja_ir::{ConstValue, IRConstantValue, IRInstruction, IRScript, IRType, lower_script};
+use koja_parser::ParseMode;
 
 mod common;
 
-use common::{PACKAGE, all_instructions, lower_script_source};
+use common::{
+    PACKAGE, all_instructions, expect_diagnostics, lower_script_source, script_function,
+    script_function_names, typecheck,
+};
+
+/// The pool entry for the test package constant `name`.
+fn pooled_value<'a>(script: &'a IRScript, name: &str) -> &'a IRConstantValue {
+    let mangled = format!("{PACKAGE}.{name}");
+    script
+        .constant_value(&mangled)
+        .unwrap_or_else(|| panic!("constant `{mangled}` is not pooled"))
+}
+
+/// Assert the constant `name` is `Built` and return its init symbol.
+fn built_init(script: &IRScript, name: &str) -> String {
+    match pooled_value(script, name) {
+        IRConstantValue::Built { init, .. } => init.mangled().to_string(),
+        other => panic!("expected `{name}` to be a built constant, got {other:?}"),
+    }
+}
+
+/// The test package's `built_constant_order` as bare constant names.
+fn built_order(script: &IRScript) -> Vec<String> {
+    let prefix = format!("{PACKAGE}.");
+    script
+        .built_constant_order
+        .iter()
+        .map(|symbol| {
+            symbol
+                .mangled()
+                .strip_prefix(&prefix)
+                .unwrap_or_else(|| panic!("unexpected constant `{symbol}` in the order"))
+                .to_string()
+        })
+        .collect()
+}
+
+/// Lower a script and return its lowering diagnostics.
+fn lower_script_diagnostics(source: &str) -> Vec<String> {
+    let checked = typecheck(source, ParseMode::Script);
+    let err = lower_script(&checked).expect_err("script lowering should surface diagnostics");
+    expect_diagnostics(err)
+}
 
 /// The test package's pooled constant values, in pool order.
 fn pooled_values(script: &IRScript) -> Vec<&IRConstantValue> {
@@ -159,5 +205,218 @@ fn struct_constant_with_binary_field_folds_the_field() {
             |f| matches!(f, IRConstantValue::Primitive(ConstValue::Binary(b)) if b == &[0x53])
         ),
         "expected a folded Binary field, got {fields:?}",
+    );
+}
+
+// Built constants. Anything the static folder cannot express pools
+// as `Built` with a synthesized `<symbol>__init` function, and
+// every read is a `LoadConst` against that entry.
+
+#[test]
+fn list_constant_builds_once_and_loads_per_read() {
+    let source = "
+        const PRIMES = [2, 3, 5]
+
+        fn first() -> Int
+          PRIMES.length()
+        end
+
+        PRIMES.length() + first()
+        ";
+
+    let script = lower_script_source(source);
+    assert_eq!(pooled_constants_len(&script), 1);
+    let IRConstantValue::Built { init, ty } = pooled_value(&script, "PRIMES") else {
+        panic!(
+            "expected a built list constant, got {:?}",
+            pooled_value(&script, "PRIMES")
+        );
+    };
+    assert_eq!(init.mangled(), "TestApp.PRIMES__init");
+    assert_eq!(*ty, IRType::List(Box::new(IRType::Int64)));
+
+    let init_fn = script_function(&script, "PRIMES__init");
+    assert!(init_fn.params.is_empty(), "init takes no parameters");
+    assert_eq!(init_fn.return_type, *ty);
+    let inits = script_function_names(&script)
+        .into_iter()
+        .filter(|name| name.ends_with("__init"))
+        .count();
+    assert_eq!(inits, 1, "two reads share one init");
+
+    assert_eq!(count_load_const(&script), 2);
+    assert_eq!(built_order(&script), ["PRIMES"]);
+}
+
+#[test]
+fn map_and_struct_with_list_constants_build() {
+    let source = "
+        struct Config
+          name: String
+          ports: List<Int>
+        end
+
+        const PORTS = [\"http\": 80, \"https\": 443]
+        const DEFAULT = Config{name: \"web\", ports: [80, 443]}
+
+        PORTS.length() + DEFAULT.ports.length()
+        ";
+
+    let script = lower_script_source(source);
+    assert_eq!(built_init(&script, "PORTS"), "TestApp.PORTS__init");
+    assert_eq!(built_init(&script, "DEFAULT"), "TestApp.DEFAULT__init");
+    assert_eq!(built_order(&script), ["DEFAULT", "PORTS"]);
+}
+
+#[test]
+fn set_constant_builds_through_the_carrier_rewrite() {
+    let source = "
+        const TAGS: Set<String> = [\"a\", \"b\"]
+
+        TAGS.length()
+        ";
+
+    let script = lower_script_source(source);
+    let IRConstantValue::Built { ty, .. } = pooled_value(&script, "TAGS") else {
+        panic!("expected a built set constant");
+    };
+    assert_eq!(*ty, IRType::Set(Box::new(IRType::String)));
+}
+
+#[test]
+fn payload_variant_and_generic_struct_constants_build() {
+    // The folder only expresses unit variants and non-generic
+    // structs. Both of these would fold to a wrong value, so they
+    // build at start instead.
+    let source = "
+        enum Shape
+          Dot
+          Circle(Float)
+        end
+
+        struct Pair<T>
+          a: T
+          b: T
+        end
+
+        const UNIT = Shape.Circle(1.0)
+        const ONES = Pair{a: 1, b: 1}
+        const DOT = Shape.Dot
+
+        ONES.a
+        ";
+
+    let script = lower_script_source(source);
+    assert_eq!(built_init(&script, "UNIT"), "TestApp.UNIT__init");
+    assert_eq!(built_init(&script, "ONES"), "TestApp.ONES__init");
+    assert!(
+        matches!(
+            pooled_value(&script, "DOT"),
+            IRConstantValue::EnumVariant { .. }
+        ),
+        "a unit variant still folds statically",
+    );
+}
+
+#[test]
+fn string_constant_keeps_its_static_shape() {
+    let source = "
+        const GREETING = \"hi\"
+
+        GREETING.length()
+        ";
+
+    let script = lower_script_source(source);
+    assert_eq!(
+        pooled_value(&script, "GREETING"),
+        &IRConstantValue::Primitive(ConstValue::String("hi".to_string()))
+    );
+    assert!(built_order(&script).is_empty());
+}
+
+#[test]
+fn constant_read_of_a_scalar_constant_folds_inline() {
+    let source = "
+        const ALIAS = BASE
+        const BASE = 7
+
+        ALIAS + BASE
+        ";
+
+    let script = lower_script_source(source);
+    assert_eq!(pooled_constants_len(&script), 0);
+    assert_eq!(count_load_const(&script), 0);
+}
+
+// Startup order. `IRPackage::constants` is a `BTreeMap`, so symbol
+// order is alphabetical, and these tests name the dependent so it
+// sorts first.
+
+#[test]
+fn built_constant_read_orders_the_dependency_first() {
+    let source = "
+        const ALL = [BASE]
+        const BASE = [1, 2]
+
+        ALL.length()
+        ";
+
+    let script = lower_script_source(source);
+    assert_eq!(built_order(&script), ["BASE", "ALL"]);
+    let init_fn = script_function(&script, "ALL__init");
+    let loads = all_instructions(&init_fn.blocks)
+        .filter(|inst| matches!(inst, IRInstruction::LoadConst { .. }))
+        .count();
+    assert_eq!(loads, 1, "the init reads `BASE` through the pool");
+}
+
+#[test]
+fn read_through_a_carrier_body_orders_the_dependency_first() {
+    let source = "
+        struct Roster
+          names: List<String>
+        end
+
+        impl ListLiteral<String> for Roster
+          fn from_list(list: List<String>) -> Self
+            Roster{names: NAMES}
+          end
+        end
+
+        const ALL: Roster = [\"x\"]
+        const NAMES = [\"a\", \"b\"]
+
+        ALL.names.length()
+        ";
+
+    let script = lower_script_source(source);
+    assert_eq!(built_order(&script), ["NAMES", "ALL"]);
+}
+
+#[test]
+fn startup_cycle_through_a_carrier_body_diagnoses() {
+    let source = "
+        struct Roster
+          names: List<String>
+        end
+
+        impl ListLiteral<String> for Roster
+          fn from_list(list: List<String>) -> Self
+            STAFF
+          end
+        end
+
+        const STAFF: Roster = [\"x\"]
+
+        STAFF.names.length()
+        ";
+
+    let messages = lower_script_diagnostics(source);
+    assert_eq!(messages.len(), 1, "got {messages:#?}");
+    assert!(
+        messages[0].starts_with("constant `TestApp.STAFF` depends on itself at startup through `")
+            && messages[0].contains("Roster.from_list"),
+        "got {}",
+        messages[0]
     );
 }

@@ -22,7 +22,6 @@ mod scalar;
 mod tuple;
 
 pub(super) use binary::resolve_binary_literal;
-pub(crate) use binary::{SegmentKind, resolve_segment};
 pub(super) use list::resolve_list_literal;
 pub(super) use map::resolve_map_literal;
 pub(super) use scalar::{is_scalar_literal, resolve_scalar_literal};

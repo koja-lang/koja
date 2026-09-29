@@ -52,6 +52,7 @@ use crate::runtime::{
 };
 use crate::types::ir_basic_type;
 
+use super::built_constants::emit_built_constant_init_call;
 use super::{ValueMap, lookup};
 
 // ----- wrapper shims --------------------------------------------------------
@@ -74,7 +75,7 @@ pub(crate) fn emit_spawn_wrapper_body<'ctx>(
     function: &IRFunction,
     llvm_function: FunctionValue<'ctx>,
 ) -> Result<(), LlvmError> {
-    emit_wrapper_shim(ctx, function, llvm_function)?;
+    emit_wrapper_shim(ctx, function, llvm_function, false)?;
     ctx.builder.build_return(None).or_ice().map(|_| ())
 }
 
@@ -84,13 +85,15 @@ pub(crate) fn emit_spawn_wrapper_body<'ctx>(
 /// `i64` exit code (already routed through `Global.StopReason.code`
 /// in IR), which the shim truncates and stores into the
 /// `__koja_exit_code` global the synthesized `main` trampoline
-/// returns after `koja_rt_main_done()` joins the scheduler.
+/// returns after `koja_rt_main_done()` joins the scheduler. The entry
+/// wrapper is PID 1, so it also fills the built constants before the
+/// body runs.
 pub(crate) fn emit_process_entry_wrapper_body<'ctx>(
     ctx: &EmitContext<'ctx>,
     function: &IRFunction,
     llvm_function: FunctionValue<'ctx>,
 ) -> Result<(), LlvmError> {
-    let exit_code = emit_wrapper_shim(ctx, function, llvm_function)?.ok_or_else(|| {
+    let exit_code = emit_wrapper_shim(ctx, function, llvm_function, true)?.ok_or_else(|| {
         LlvmError::Codegen(format!(
             "LLVM emit: ProcessEntryWrapper `{}` body call returned no exit code",
             function.symbol,
@@ -103,11 +106,14 @@ pub(crate) fn emit_process_entry_wrapper_body<'ctx>(
 /// Shared ABI adaptation: open the entry block, load the typed
 /// config out of the runtime-provided `i8*`, and call the process
 /// body. Returns the call's result (`None` for the spawn body's
-/// `Unit`/`void` return).
+/// `Unit`/`void` return). With `entry_process` set, the shim also
+/// calls `__koja_const_init` right after the budget seed, since PID
+/// 1 is where the built constants fill.
 fn emit_wrapper_shim<'ctx>(
     ctx: &EmitContext<'ctx>,
     function: &IRFunction,
     llvm_function: FunctionValue<'ctx>,
+    entry_process: bool,
 ) -> Result<Option<BasicValueEnum<'ctx>>, LlvmError> {
     let body_symbol = wrapper_body_callee(function)?;
     let body_fn = ctx.declared_function(body_symbol).ok_or_else(|| {
@@ -129,6 +135,9 @@ fn emit_wrapper_shim<'ctx>(
     // First compiled code on the fresh process stack, so this is where
     // the register-strategy budget gets its initial grant.
     emit_budget_seed(ctx)?;
+    if entry_process {
+        emit_built_constant_init_call(ctx)?;
+    }
     let raw_ptr = llvm_function
         .get_nth_param(0)
         .ok_or_else(|| {

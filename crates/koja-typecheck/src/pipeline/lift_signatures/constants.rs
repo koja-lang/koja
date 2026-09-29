@@ -1,34 +1,26 @@
 //! Constant lifting resolves the optional `: Type` annotation on
-//! `const NAME[: Type] = expr`, validates the RHS shape, stamps every
-//! `Expr.resolution` slot in the value subtree, and registers the
+//! `const NAME[: Type] = expr`, checks the value's shape, resolves
+//! the value, and registers the
 //! [`crate::registry::ConstantDefinition`] on the constant entry.
 //!
-//! The constant value surface is intentionally narrow: literals,
-//! negated numerics, unit enum variants, structs of literals, and
-//! all-literal binary literals.
-//! Resolve never visits these expressions (the walker explicitly
-//! skips `Item::Constant`). Lift owns the entire resolution. That
-//! keeps the constant slice self-contained and lets seal verify
-//! `Constant(Some(_))` without re-walking the AST.
+//! A constant value has the field-default grammar, checked by
+//! [`check_constant_shape`], and resolves through the body resolver
+//! in the declaring file's scope with no locals, the same way a
+//! field default does. Resolve never visits these expressions again
+//! (the walker skips `Item::Constant`). Lift owns the resolution, so
+//! seal can verify `Constant(Some(_))` without re-walking the AST.
+//! [`super::constant_order`] decides the order constants lift in.
 
-use koja_ast::ast::{
-    BinarySegment, Constant, Diagnostic, EnumConstructionData, Expr, ExprKind, FieldInit, Literal,
-    Name, StringPart, UnaryOp, name_texts, path_text,
-};
-use koja_ast::identifier::{Identifier, Resolution, ResolvedType};
-use koja_ast::span::Span;
+use koja_ast::ast::{Constant, Diagnostic, name_texts};
+use koja_ast::identifier::Identifier;
 
-use crate::pipeline::resolve::coercion::{
-    Mismatch, check_compatible_stamping, check_float_literal_finite,
-};
-use crate::pipeline::resolve::literals::{SegmentKind, resolve_segment};
-use crate::pipeline::resolve::types::{lookup_type, names_struct, peel_alias};
-use crate::registry::{
-    ConstantDefinition, GlobalKind, GlobalRegistry, ResolvedStructField, ResolvedVariantData,
-};
+use crate::pipeline::resolve::coercion::{Mismatch, check_compatible_stamping};
+use crate::pipeline::resolve::resolve_in_declaring_scope;
+use crate::registry::{ConstantDefinition, GlobalKind};
 
 use super::LiftScope;
-use super::types::{ResolutionScope, TypeParamScope, render_resolved, resolve_type_expr};
+use super::field_defaults::check_constant_shape;
+use super::types::{TypeParamScope, render_resolved, resolve_type_expr};
 
 pub(super) fn lift_constant(
     constant: &mut Constant,
@@ -59,128 +51,24 @@ pub(super) fn lift_constant(
         )
     });
 
-    let value_scope = scope.resolution_scope();
-    let inferred = resolve_constant_value(
-        &mut constant.value,
-        annotated.as_ref(),
-        value_scope,
-        diagnostics,
-    );
-
-    // Pin the constant's stamped type at the annotation when the
-    // RHS is a coerced literal. `inferred` is still the literal's
-    // default `Int` / `Float` head, but the coercion table now
-    // carries the literal at the narrower target width and the
-    // registry should reflect the visible type. When no annotation
-    // exists, the inferred head is the visible type.
-    let ty = annotated.unwrap_or(inferred);
-    scope.registry.set_constant_definition(
-        id,
-        ConstantDefinition {
-            ty,
-            value: constant.value.clone(),
-        },
-    );
-}
-
-/// `Owner.Nested{...}` parses as a struct-shaped enum-variant
-/// construction. When the full path names a struct, rewrite it to a
-/// `StructConstruction` so the struct arm handles it. The body
-/// resolver does the same in
-/// [`crate::pipeline::resolve::structs`], but a constant value never
-/// reaches that walk.
-fn rewrite_nested_struct_construction(expr: &mut Expr, scope: ResolutionScope<'_>) {
-    let ExprKind::EnumConstruction {
-        type_path,
-        variant,
-        data: EnumConstructionData::Struct(_),
-    } = &expr.kind
-    else {
-        return;
-    };
-    let mut path = name_texts(type_path);
-    path.push(variant.text.clone());
-    if !names_struct(&path, scope) {
-        return;
-    }
-    let ExprKind::EnumConstruction {
-        mut type_path,
-        variant,
-        data: EnumConstructionData::Struct(fields),
-    } = std::mem::replace(&mut expr.kind, ExprKind::Self_ { local_id: None })
-    else {
-        unreachable!("guarded by the match above");
-    };
-    type_path.push(variant);
-    expr.kind = ExprKind::StructConstruction { type_path, fields };
-}
-
-/// Walk the RHS, validate it's an allowed constant shape, stamp each
-/// node's `resolution`, and yield the inferred type. `expected` is
-/// the resolved annotation (if any), propagated to children for
-/// per-field type checking. When the inferred head and `expected`
-/// disagree, the literal-coercion path is consulted before falling
-/// through to a strict mismatch diagnostic.
-///
-/// `scope` is the read-only [`ResolutionScope`] for the file the
-/// constant is declared in (alias slice + current package +
-/// registry). The constant value walk never mutates the registry:
-/// definition stamping happens once at the [`lift_constant`] entry
-/// point after this returns, so `&` is the right shape here.
-fn resolve_constant_value(
-    expr: &mut Expr,
-    expected: Option<&ResolvedType>,
-    scope: ResolutionScope<'_>,
-    diagnostics: &mut Vec<Diagnostic>,
-) -> ResolvedType {
-    rewrite_nested_struct_construction(expr, scope);
-    let ty = match &mut expr.kind {
-        ExprKind::Literal { value } => {
-            check_float_literal_finite(value, expr.span, diagnostics);
-            scope.registry.literal_type(value)
-        }
-        ExprKind::String { parts, .. } => {
-            string_literal_type(parts, expr.span, scope.registry, diagnostics)
-        }
-        ExprKind::Unary {
-            op: UnaryOp::Neg,
-            operand,
-        } => negated_numeric_type(operand, scope, diagnostics),
-        ExprKind::EnumConstruction {
-            type_path,
-            variant,
-            data,
-        } => enum_variant_type(
-            type_path,
-            variant,
-            data,
-            expected,
-            expr.span,
-            scope,
+    let inferred = if check_constant_shape(&mut constant.value, diagnostics) {
+        resolve_in_declaring_scope(
+            &mut constant.value,
+            annotated.as_ref(),
+            scope.package,
+            scope.aliases,
+            scope.registry,
             diagnostics,
-        ),
-        ExprKind::StructConstruction { type_path, fields } => {
-            struct_construction_type(type_path, fields, expr.span, scope, diagnostics)
-        }
-        ExprKind::BinaryLiteral { segments } => binary_literal_type(segments, scope, diagnostics),
-        ExprKind::Group { expr: inner } => {
-            resolve_constant_value(inner, expected, scope, diagnostics)
-        }
-        _ => {
-            diagnostics.push(Diagnostic::error(
-                "constant values are limited to literals, negated numerics, unit enum \
-                 variants, structs of literals, and binary literals",
-                expr.span,
-            ));
-            ResolvedType::unresolved()
-        }
+        )
+    } else {
+        constant.value.resolution.clone()
     };
 
-    if let Some(expected) = expected
-        && ty.is_resolved()
+    if let Some(expected) = annotated.as_ref()
+        && inferred.is_resolved()
         && expected.is_resolved()
     {
-        match check_compatible_stamping(expr, &ty, expected, scope.registry) {
+        match check_compatible_stamping(&mut constant.value, &inferred, expected, scope.registry) {
             None => {}
             Some(Mismatch::OutOfRange {
                 rendered_value,
@@ -193,323 +81,34 @@ fn resolve_constant_value(
                         width.label(),
                         width.range_label(),
                     ),
-                    expr.span,
+                    constant.value.span,
                 ));
             }
             Some(Mismatch::Incompatible) => {
                 diagnostics.push(Diagnostic::error(
                     format!(
                         "constant value type `{}` does not match annotation `{}`",
-                        render_resolved(&ty, scope.registry),
+                        render_resolved(&inferred, scope.registry),
                         render_resolved(expected, scope.registry),
                     ),
-                    expr.span,
+                    constant.value.span,
                 ));
             }
         }
     }
 
-    expr.resolution = ty.clone();
-    ty
-}
-
-/// Validate a `<<...>>` constant RHS. Every segment value must be a
-/// direct literal so the IR layer can fold the whole literal into
-/// bytes at compile time. Width and fit rules are shared with the
-/// resolve phase through [`resolve_segment`]. Yields `Binary` for a
-/// byte-aligned total and `Bits` otherwise.
-fn binary_literal_type(
-    segments: &mut [BinarySegment],
-    scope: ResolutionScope<'_>,
-    diagnostics: &mut Vec<Diagnostic>,
-) -> ResolvedType {
-    let mut total_bits: u64 = 0;
-    let mut all_resolved = true;
-    for segment in segments.iter_mut() {
-        if !stamp_constant_segment_value(&mut segment.value, scope, diagnostics) {
-            all_resolved = false;
-            continue;
-        }
-        let Some(info) = resolve_segment(segment, scope.registry, diagnostics) else {
-            all_resolved = false;
-            continue;
-        };
-        if !segment_kind_matches_literal(&info.kind, &segment.value) {
-            diagnostics.push(Diagnostic::error(
-                "binary segment value does not match the segment's declared shape \
-                 (integer segments take int literals, float segments take float literals)",
-                segment.value.span,
-            ));
-            all_resolved = false;
-            continue;
-        }
-        // Every constant segment is a literal, so its width is
-        // static. A dynamic-width splice cannot reach here because
-        // `stamp_constant_segment_value` already rejected the value.
-        let Some(width_bits) = info.width_bits else {
-            all_resolved = false;
-            continue;
-        };
-        total_bits += width_bits;
-    }
-    if !all_resolved {
-        return ResolvedType::unresolved();
-    }
-    let primitive_name = if total_bits.is_multiple_of(8) {
-        "Binary"
-    } else {
-        "Bits"
-    };
-    scope.registry.primitive(primitive_name)
-}
-
-/// Stamp a constant binary segment's value with its literal type.
-/// Only direct literals are allowed, since the value must fold at
-/// compile time.
-fn stamp_constant_segment_value(
-    value: &mut Expr,
-    scope: ResolutionScope<'_>,
-    diagnostics: &mut Vec<Diagnostic>,
-) -> bool {
-    match &value.kind {
-        ExprKind::Literal { value: literal } => {
-            check_float_literal_finite(literal, value.span, diagnostics);
-            value.resolution = scope.registry.literal_type(literal);
-            true
-        }
-        ExprKind::String { parts, .. } => {
-            let ty = string_literal_type(parts, value.span, scope.registry, diagnostics);
-            if !ty.is_resolved() {
-                return false;
-            }
-            value.resolution = ty;
-            true
-        }
-        _ => {
-            diagnostics.push(Diagnostic::error(
-                "binary segment values in a constant must be literals",
-                value.span,
-            ));
-            false
-        }
-    }
-}
-
-/// True when the segment's classified kind agrees with the literal
-/// the value holds. [`resolve_segment`] does not cross-check the
-/// value type for `: Type`-annotated segments, so the constant path
-/// pins it here (a float segment folds a float literal's bits and
-/// nothing else).
-fn segment_kind_matches_literal(kind: &SegmentKind, value: &Expr) -> bool {
-    match kind {
-        SegmentKind::Integer => matches!(
-            &value.kind,
-            ExprKind::Literal {
-                value: Literal::Int(_)
-            }
-        ),
-        SegmentKind::Float => matches!(
-            &value.kind,
-            ExprKind::Literal {
-                value: Literal::Float(_)
-            }
-        ),
-        SegmentKind::Splice => false,
-        SegmentKind::String => true,
-    }
-}
-
-fn string_literal_type(
-    parts: &[StringPart],
-    span: Span,
-    registry: &GlobalRegistry,
-    diagnostics: &mut Vec<Diagnostic>,
-) -> ResolvedType {
-    if parts
-        .iter()
-        .any(|part| matches!(part, StringPart::Interpolation { .. }))
-    {
-        diagnostics.push(Diagnostic::error(
-            "interpolated strings are not constant-evaluable",
-            span,
-        ));
-        return ResolvedType::unresolved();
-    }
-    registry.primitive("String")
-}
-
-fn negated_numeric_type(
-    operand: &mut Expr,
-    scope: ResolutionScope<'_>,
-    diagnostics: &mut Vec<Diagnostic>,
-) -> ResolvedType {
-    let ty = resolve_constant_value(operand, None, scope, diagnostics);
-    if !ty.is_resolved() {
-        return ResolvedType::unresolved();
-    }
-    let int = scope.registry.primitive("Int");
-    let float = scope.registry.primitive("Float");
-    if ty == int || ty == float {
-        ty
-    } else {
-        diagnostics.push(Diagnostic::error(
-            "unary `-` requires a numeric literal",
-            operand.span,
-        ));
-        ResolvedType::unresolved()
-    }
-}
-
-fn enum_variant_type(
-    type_path: &[Name],
-    variant: &Name,
-    data: &mut EnumConstructionData,
-    expected: Option<&ResolvedType>,
-    span: Span,
-    scope: ResolutionScope<'_>,
-    diagnostics: &mut Vec<Diagnostic>,
-) -> ResolvedType {
-    if type_path.is_empty() {
-        diagnostics.push(Diagnostic::error("missing enum name", span));
-        return ResolvedType::unresolved();
-    }
-    let name = path_text(type_path);
-    let Some((enum_id, entry)) = lookup_type(&name_texts(type_path), scope) else {
-        diagnostics.push(Diagnostic::error(format!("unknown enum `{name}`"), span));
-        return ResolvedType::unresolved();
-    };
-    let GlobalKind::Enum(Some(def)) = &entry.kind else {
-        diagnostics.push(Diagnostic::error(format!("`{name}` is not an enum"), span));
-        return ResolvedType::unresolved();
-    };
-    let Some((_, resolved)) = def.lookup_variant(variant.as_str()) else {
-        diagnostics.push(Diagnostic::error(
-            format!("enum `{name}` has no variant `{variant}`"),
-            span,
-        ));
-        return ResolvedType::unresolved();
-    };
-    if !matches!(resolved.data, ResolvedVariantData::Unit) {
-        diagnostics.push(Diagnostic::error(
-            format!(
-                "constant enum values must reference a unit variant, but `{name}.{variant}` \
-                 carries a payload",
-            ),
-            span,
-        ));
-        return ResolvedType::unresolved();
-    }
-    if !matches!(data, EnumConstructionData::Unit) {
-        diagnostics.push(Diagnostic::error(
-            format!("`{name}.{variant}` is a unit variant and takes no arguments"),
-            span,
-        ));
-        return ResolvedType::unresolved();
-    }
-    let _ = resolved;
-    if entry.type_params.is_empty() {
-        return ResolvedType::leaf(Resolution::Global(enum_id));
-    }
-    match expected.map(|ty| peel_alias(ty, scope.registry)) {
-        Some(
-            expected @ ResolvedType::Named {
-                resolution: Resolution::Global(id),
-                ..
-            },
-        ) if id == enum_id => expected,
-        Some(other) => {
-            diagnostics.push(Diagnostic::error(
-                format!(
-                    "`{name}.{variant}` is a `{}` value, but `{}` is expected",
-                    entry.identifier.qualified_name(),
-                    render_resolved(&other, scope.registry),
-                ),
-                span,
-            ));
-            ResolvedType::unresolved()
-        }
-        None => {
-            diagnostics.push(Diagnostic::error(
-                format!(
-                    "cannot infer the type arguments of `{name}.{variant}`. Add a type \
-                     annotation to the constant",
-                ),
-                span,
-            ));
-            ResolvedType::unresolved()
-        }
-    }
-}
-
-fn struct_construction_type(
-    type_path: &[Name],
-    fields: &mut [FieldInit],
-    span: Span,
-    scope: ResolutionScope<'_>,
-    diagnostics: &mut Vec<Diagnostic>,
-) -> ResolvedType {
-    if type_path.is_empty() {
-        diagnostics.push(Diagnostic::error("missing struct name", span));
-        return ResolvedType::unresolved();
-    }
-    let name = path_text(type_path);
-    let Some((struct_id, entry)) = lookup_type(&name_texts(type_path), scope) else {
-        diagnostics.push(Diagnostic::error(format!("unknown struct `{name}`"), span));
-        return ResolvedType::unresolved();
-    };
-    let GlobalKind::Struct(Some(def)) = &entry.kind else {
-        diagnostics.push(Diagnostic::error(format!("`{name}` is not a struct"), span));
-        return ResolvedType::unresolved();
-    };
-    if !entry.type_params.is_empty() {
-        diagnostics.push(Diagnostic::error(
-            format!(
-                "constant struct values do not yet support generic structs (`{name}` is \
-                 generic)",
-            ),
-            span,
-        ));
-        return ResolvedType::unresolved();
-    }
-    let resolved_fields: Vec<ResolvedStructField> = def.fields.clone();
-    if !validate_struct_fields(&resolved_fields, fields, &name, span, diagnostics) {
-        return ResolvedType::unresolved();
-    }
-    for field_init in fields.iter_mut() {
-        let expected = resolved_fields
-            .iter()
-            .find(|f| f.name == field_init.name.text)
-            .map(|f| f.ty.clone());
-        resolve_constant_value(&mut field_init.value, expected.as_ref(), scope, diagnostics);
-    }
-    ResolvedType::leaf(Resolution::Global(struct_id))
-}
-
-fn validate_struct_fields(
-    expected: &[ResolvedStructField],
-    actual: &[FieldInit],
-    struct_name: &str,
-    span: Span,
-    diagnostics: &mut Vec<Diagnostic>,
-) -> bool {
-    let mut ok = true;
-    for field in expected {
-        if !actual.iter().any(|f| f.name.text == field.name) {
-            diagnostics.push(Diagnostic::error(
-                format!("constant `{struct_name}` is missing field `{}`", field.name,),
-                span,
-            ));
-            ok = false;
-        }
-    }
-    for init in actual {
-        if !expected.iter().any(|f| f.name == init.name.text) {
-            diagnostics.push(Diagnostic::error(
-                format!("`{struct_name}` has no field `{}`", init.name),
-                init.span,
-            ));
-            ok = false;
-        }
-    }
-    ok
+    // Pin the constant's stamped type at the annotation when the
+    // value is a coerced literal. `inferred` is still the literal's
+    // default `Int` / `Float` head, but the coercion table now
+    // carries the literal at the narrower target width and the
+    // registry should reflect the visible type. When no annotation
+    // exists, the inferred head is the visible type.
+    let ty = annotated.unwrap_or(inferred);
+    scope.registry.set_constant_definition(
+        id,
+        ConstantDefinition {
+            ty,
+            value: constant.value.clone(),
+        },
+    );
 }

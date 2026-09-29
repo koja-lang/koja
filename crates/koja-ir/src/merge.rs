@@ -60,9 +60,11 @@ pub(crate) fn coalesce(fragments: Vec<IRPackage>) -> Vec<IRPackage> {
 }
 
 /// Wrap coalesced packages into a working [`IRProgram`]. Link
-/// libraries are collected by a later pass.
+/// libraries and the built constant order are collected by later
+/// passes.
 pub(crate) fn merge(packages: Vec<IRPackage>, entry_point: IRSymbol) -> IRProgram {
     IRProgram {
+        built_constant_order: Vec::new(),
         entry_point,
         link_libraries: Vec::new(),
         packages,

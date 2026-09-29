@@ -34,6 +34,7 @@ use koja_runtime as _;
 use boring_sys as _;
 
 mod abi;
+mod built_constants;
 mod error;
 mod externs;
 mod interpreter;

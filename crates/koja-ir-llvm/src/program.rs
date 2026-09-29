@@ -15,6 +15,7 @@
 use koja_ir::IRProgram;
 
 use crate::ctx::EmitContext;
+use crate::emit::built_constants::{declare_built_constant_globals, emit_built_constant_init};
 use crate::error::LlvmError;
 use crate::function::{declare_function, define_function};
 use crate::layout::enum_order::enums_in_dependency_order;
@@ -62,6 +63,9 @@ pub(crate) fn compile_program(
         define_enum_completes_and_outer(ctx, decl)?;
     }
     assert_wire_enum_order(ctx)?;
+    // Built constant globals need every struct and enum body above,
+    // and every function body below loads them.
+    declare_built_constant_globals(ctx, &program.packages)?;
     emit_app_name_global(ctx, app_name);
     let entry = program.entry_function();
     emit_exit_code_global(ctx);
@@ -75,6 +79,8 @@ pub(crate) fn compile_program(
             declared.push((function, declare_function(ctx, function)?));
         }
     }
+    // Defined before the bodies so the entry wrapper below can call it.
+    emit_built_constant_init(ctx, &program.packages, &program.built_constant_order)?;
     for (function, llvm_function) in &declared {
         define_function(ctx, function, *llvm_function).map_err(|e| {
             LlvmError::Codegen(format!("while defining `{}`: {e:?}", function.symbol))

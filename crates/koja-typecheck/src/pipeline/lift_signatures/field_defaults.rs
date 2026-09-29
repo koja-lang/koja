@@ -1,4 +1,6 @@
-//! Default-value lifting for struct and enum struct-variant fields.
+//! The side-effect-free value grammar, shared by field defaults and
+//! constants, plus default-value lifting for struct and enum
+//! struct-variant fields.
 //!
 //! Lift validates only the syntactic shape of a default and stores an
 //! unresolved clone on the registry field. A construction site that
@@ -8,17 +10,55 @@
 //! its declaring file once all definitions are stamped, so name and
 //! type errors surface at the declaration.
 //!
-//! The walk that checks the shape also marks the clone synthetic, so
-//! LSP position lookups skip the fill at every site and no second
-//! walk has to know the grammar. [`check_default_shape`] is the one
-//! description of that grammar.
+//! The walk that checks a default's shape also marks the clone
+//! synthetic, so LSP position lookups skip the fill at every site and
+//! no second walk has to know the grammar. A constant keeps its spans,
+//! because its value is resolved once where it is written.
+//! [`check_shape`] is the one description of the grammar, and
+//! [`ShapeRules`] is the only difference between the two callers.
 
 use koja_ast::ast::{
     Diagnostic, EnumConstructionData, Expr, ExprKind, FieldInit, Name, StringPart, StructField,
     UnaryOp,
 };
+use koja_ast::span::Span;
 
 use crate::pipeline::resolve::static_dotted_path;
+
+/// What a caller of [`check_shape`] does with the nodes it accepts.
+struct ShapeRules {
+    /// Mark every accepted span synthetic. Field defaults set this,
+    /// because the stored clone is filled in at other sites.
+    mark_synthetic: bool,
+    /// Plural noun for diagnostics, such as "default field values".
+    subject: &'static str,
+}
+
+impl ShapeRules {
+    /// `span` as the accepted node should carry it.
+    fn mark(&self, span: Span) -> Span {
+        if self.mark_synthetic {
+            span.as_synthetic()
+        } else {
+            span
+        }
+    }
+}
+
+const CONSTANT_RULES: ShapeRules = ShapeRules {
+    mark_synthetic: false,
+    subject: "constant values",
+};
+
+const DEFAULT_RULES: ShapeRules = ShapeRules {
+    mark_synthetic: true,
+    subject: "default field values",
+};
+
+/// Validate the shape of a constant's value. Spans stay as written.
+pub(super) fn check_constant_shape(expr: &mut Expr, diagnostics: &mut Vec<Diagnostic>) -> bool {
+    check_shape(expr, &CONSTANT_RULES, diagnostics)
+}
 
 /// Validate the shape of `field`'s default (if any) and yield the
 /// clone for registry storage. A shape-invalid default diagnoses and
@@ -30,36 +70,38 @@ pub(super) fn lift_field_default(
 ) -> Option<Box<Expr>> {
     let default = field.default.as_ref()?;
     let mut stored = default.clone();
-    if !check_default_shape(&mut stored, diagnostics) {
+    if !check_shape(&mut stored, &DEFAULT_RULES, diagnostics) {
         return None;
     }
     Some(Box::new(stored))
 }
 
-/// Recursive check over the allowed default-value shapes. Each arm
-/// that accepts a node marks its span synthetic, so accepting and
+/// Recursive check over the allowed value shapes. Each arm that
+/// accepts a node marks its span through `rules`, so accepting and
 /// marking cannot drift apart. Every shape is side-effect-free, so
-/// the fill at a site has the same value as the default at its
-/// declaration.
+/// the value is the same wherever it is resolved.
 ///
 /// Diagnostics use the span captured before marking, so they point
 /// at the declaration like any other error.
-fn check_default_shape(expr: &mut Expr, diagnostics: &mut Vec<Diagnostic>) -> bool {
+fn check_shape(expr: &mut Expr, rules: &ShapeRules, diagnostics: &mut Vec<Diagnostic>) -> bool {
     let span = expr.span;
-    expr.span = span.as_synthetic();
+    expr.span = rules.mark(span);
     match &mut expr.kind {
         ExprKind::BinaryLiteral { segments } => {
             let mut ok = true;
             for segment in segments {
-                segment.span = segment.span.as_synthetic();
+                segment.span = rules.mark(segment.span);
                 if matches!(
                     &segment.value.kind,
                     ExprKind::Literal { .. } | ExprKind::String { .. }
                 ) {
-                    ok &= check_default_shape(&mut segment.value, diagnostics);
+                    ok &= check_shape(&mut segment.value, rules, diagnostics);
                 } else {
                     diagnostics.push(Diagnostic::error(
-                        "binary segment values in a default field value must be literals",
+                        format!(
+                            "binary segment values in {} must be literals",
+                            rules.subject
+                        ),
                         segment.value.span,
                     ));
                     ok = false;
@@ -78,11 +120,13 @@ fn check_default_shape(expr: &mut Expr, diagnostics: &mut Vec<Diagnostic>) -> bo
             variant,
             data,
         } => {
-            mark_names_synthetic(type_path);
-            variant.span = variant.span.as_synthetic();
+            mark_names(type_path, rules);
+            variant.span = rules.mark(variant.span);
             match data {
-                EnumConstructionData::Struct(fields) => check_field_inits(fields, diagnostics),
-                EnumConstructionData::Tuple(elements) => check_all(elements, diagnostics),
+                EnumConstructionData::Struct(fields) => {
+                    check_field_inits(fields, rules, diagnostics)
+                }
+                EnumConstructionData::Tuple(elements) => check_all(elements, rules, diagnostics),
                 EnumConstructionData::Unit => true,
             }
         }
@@ -92,15 +136,15 @@ fn check_default_shape(expr: &mut Expr, diagnostics: &mut Vec<Diagnostic>) -> bo
         // locals, so the value is the same at every site.
         ExprKind::Ident { .. } => true,
         kind @ ExprKind::FieldAccess { .. } if static_dotted_path(kind).is_some() => {
-            mark_path_synthetic(kind);
+            mark_path(kind, rules);
             true
         }
-        ExprKind::Group { expr: inner } => check_default_shape(inner, diagnostics),
-        ExprKind::List { elements } => check_all(elements, diagnostics),
+        ExprKind::Group { expr: inner } => check_shape(inner, rules, diagnostics),
+        ExprKind::List { elements } => check_all(elements, rules, diagnostics),
         ExprKind::Literal { .. } => true,
         ExprKind::Map { entries } => entries.iter_mut().fold(true, |ok, (key, value)| {
-            let key_ok = check_default_shape(key, diagnostics);
-            let value_ok = check_default_shape(value, diagnostics);
+            let key_ok = check_shape(key, rules, diagnostics);
+            let value_ok = check_shape(value, rules, diagnostics);
             key_ok && value_ok && ok
         }),
         ExprKind::String { parts, .. } => {
@@ -109,25 +153,27 @@ fn check_default_shape(expr: &mut Expr, diagnostics: &mut Vec<Diagnostic>) -> bo
                 .any(|part| matches!(part, StringPart::Interpolation { .. }));
             if interpolated {
                 diagnostics.push(Diagnostic::error(
-                    "interpolated strings are not allowed in default field values",
+                    format!("interpolated strings are not allowed in {}", rules.subject),
                     span,
                 ));
             }
             !interpolated
         }
         ExprKind::StructConstruction { type_path, fields } => {
-            mark_names_synthetic(type_path);
-            check_field_inits(fields, diagnostics)
+            mark_names(type_path, rules);
+            check_field_inits(fields, rules, diagnostics)
         }
         ExprKind::Unary {
             op: UnaryOp::Neg,
             operand,
-        } => check_default_shape(operand, diagnostics),
+        } => check_shape(operand, rules, diagnostics),
         _ => {
             diagnostics.push(Diagnostic::error(
-                "default field values are limited to literals, negated numerics, enum \
-                 variants, constants, binary literals, and struct, list, map, or set literals \
-                 of those",
+                format!(
+                    "{} are limited to literals, negated numerics, enum variants, constants, \
+                     binary literals, and struct, list, map, or set literals of those",
+                    rules.subject
+                ),
                 span,
             ));
             false
@@ -137,36 +183,38 @@ fn check_default_shape(expr: &mut Expr, diagnostics: &mut Vec<Diagnostic>) -> bo
 
 /// Check every element, reporting each failure rather than stopping
 /// at the first.
-fn check_all(elements: &mut [Expr], diagnostics: &mut Vec<Diagnostic>) -> bool {
+fn check_all(elements: &mut [Expr], rules: &ShapeRules, diagnostics: &mut Vec<Diagnostic>) -> bool {
     elements.iter_mut().fold(true, |ok, element| {
-        check_default_shape(element, diagnostics) && ok
+        check_shape(element, rules, diagnostics) && ok
     })
 }
 
-/// Check every field value and mark each init's own span and name
-/// synthetic.
-fn check_field_inits(fields: &mut [FieldInit], diagnostics: &mut Vec<Diagnostic>) -> bool {
+/// Check every field value and mark each init's own span and name.
+fn check_field_inits(
+    fields: &mut [FieldInit],
+    rules: &ShapeRules,
+    diagnostics: &mut Vec<Diagnostic>,
+) -> bool {
     fields.iter_mut().fold(true, |ok, field| {
-        field.span = field.span.as_synthetic();
-        field.name.span = field.name.span.as_synthetic();
-        check_default_shape(&mut field.value, diagnostics) && ok
+        field.span = rules.mark(field.span);
+        field.name.span = rules.mark(field.name.span);
+        check_shape(&mut field.value, rules, diagnostics) && ok
     })
 }
 
-fn mark_names_synthetic(names: &mut [Name]) {
+fn mark_names(names: &mut [Name], rules: &ShapeRules) {
     for name in names {
-        name.span = name.span.as_synthetic();
+        name.span = rules.mark(name.span);
     }
 }
 
-/// Mark a static dotted path (`Pkg.limit`) synthetic below its root:
-/// each field name and each receiver down the chain. The chain is
-/// `Ident` and `FieldAccess` nodes only, which [`static_dotted_path`]
-/// has already confirmed.
-fn mark_path_synthetic(kind: &mut ExprKind) {
+/// Mark every field name and receiver below the root of a static
+/// dotted path (`Pkg.limit`). The chain is `Ident` and `FieldAccess`
+/// nodes only, which [`static_dotted_path`] has already confirmed.
+fn mark_path(kind: &mut ExprKind, rules: &ShapeRules) {
     if let ExprKind::FieldAccess { receiver, field } = kind {
-        field.span = field.span.as_synthetic();
-        receiver.span = receiver.span.as_synthetic();
-        mark_path_synthetic(&mut receiver.kind);
+        field.span = rules.mark(field.span);
+        receiver.span = rules.mark(receiver.span);
+        mark_path(&mut receiver.kind, rules);
     }
 }

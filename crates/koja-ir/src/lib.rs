@@ -13,6 +13,7 @@
 //! user-facing lowering failures. Seal failures are compiler bugs.
 
 mod binary_packing;
+mod built_order;
 mod cfg;
 mod constant;
 mod cycle;

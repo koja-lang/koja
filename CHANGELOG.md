@@ -14,6 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `TCPListener.Options` with `read_timeout`, `write_timeout`, and `accept_timeout`. `TCPListener.bind(port, options)` and `bind_addr(addr, options)` take it as a trailing argument with an all `Option.None` default. `accept` waits at most `accept_timeout` and copies the two stream timeouts onto the returned `TCPSocket`. `try_accept` does the same.
 - `Fd.block`, `Fd.read`, `Fd.read_binary`, and `Fd.write` take a trailing `timeout: Option<Duration> = Option.None`. `Fd.block` now returns `Bool`, `true` when the wait ended on the timeout. `Socket.accept` and `Socket.connect` take the same parameter. On both backends a timeout is a bounded reactor wait, the mechanism `receive ... after` uses, so no socket option is set.
 - `koja shell` now accepts `:q` as an alias for `:quit`.
+- A `const` can hold a list, map, or set literal, such as `const PRIMES = [2, 3, 5, 7]` or `const PORTS = ["http": 80]`, and a struct or enum variant whose fields hold one. A constant value takes the same grammar as a field default, so it can also read another constant declared anywhere in the program. A collection constant is built once at program start and every read borrows the shared value. A constant that depends on itself through other constants is a compile error.
 
 ### Fixed
 

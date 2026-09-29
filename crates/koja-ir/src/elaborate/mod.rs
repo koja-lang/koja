@@ -704,6 +704,7 @@ mod tests {
         pkg.functions.insert(seed.symbol.clone(), seed);
         let entry_point = install_entry_scaffold(&mut pkg);
         let mut program = IRProgram {
+            built_constant_order: Vec::new(),
             entry_point,
             link_libraries: Vec::new(),
             packages: vec![pkg],
@@ -780,6 +781,7 @@ mod tests {
         pkg.functions.insert(seed.symbol.clone(), seed);
         let entry_point = install_entry_scaffold(&mut pkg);
         let mut program = IRProgram {
+            built_constant_order: Vec::new(),
             entry_point,
             link_libraries: Vec::new(),
             packages: vec![pkg],
@@ -863,6 +865,7 @@ mod tests {
         pkg.functions.insert(seed.symbol.clone(), seed);
         let entry_point = install_entry_scaffold(&mut pkg);
         let mut program = IRProgram {
+            built_constant_order: Vec::new(),
             entry_point,
             link_libraries: Vec::new(),
             packages: vec![pkg, empty_package("Global")],
@@ -973,6 +976,7 @@ mod tests {
         pkg.functions.insert(seed.symbol.clone(), seed);
         let entry_point = install_entry_scaffold(&mut pkg);
         let mut program = IRProgram {
+            built_constant_order: Vec::new(),
             entry_point,
             link_libraries: Vec::new(),
             packages: vec![pkg],
@@ -1094,6 +1098,7 @@ mod tests {
         pkg.functions.insert(seed.symbol.clone(), seed);
         let entry_point = install_entry_scaffold(&mut pkg);
         let mut program = IRProgram {
+            built_constant_order: Vec::new(),
             entry_point,
             link_libraries: Vec::new(),
             packages: vec![pkg],

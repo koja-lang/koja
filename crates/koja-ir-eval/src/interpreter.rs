@@ -25,6 +25,7 @@ use koja_runtime_core::{
     duration_from_user_millis,
 };
 
+use crate::built_constants;
 use crate::error::RuntimeError;
 use crate::externs;
 use crate::externs::foreign::ForeignTable;
@@ -68,6 +69,7 @@ impl Interpreter {
         foreign: ForeignTable,
     ) -> Result<Value, RuntimeError> {
         let _foreign = externs::foreign::install(foreign);
+        let _built = built_constants::install();
         let entry = program.entry_function();
         assert!(
             matches!(entry.kind, FunctionKind::ProcessEntryWrapper { .. }),
@@ -126,6 +128,7 @@ impl Interpreter {
         let function = program
             .function(mangled)
             .unwrap_or_else(|| panic!("interpreter: function `{mangled}` not found in IRProgram"));
+        let _built = built_constants::install();
         block_on(execute_function(function, Vec::new(), program))
     }
 
@@ -147,6 +150,7 @@ impl Interpreter {
         foreign: ForeignTable,
     ) -> Result<Value, RuntimeError> {
         let _foreign = externs::foreign::install(foreign);
+        let _built = built_constants::install();
         // Run the implicit body as PID 1 under the shared cooperative
         // driver (same boot as `run_program`) so top-level `spawn` /
         // `receive` / timers / I/O engage the runtime instead of tripping
@@ -1324,7 +1328,30 @@ fn execute_instruction<'a, R: CallResolver>(
                     const_id.mangled(),
                 )
             });
-                let value = materialize_pooled_constant(pooled, resolver)?;
+                let value = match pooled {
+                    // A built constant runs its init once per run and
+                    // serves every later read from the cache. `cached`
+                    // hands back a clone, so no cache borrow is live
+                    // across the await, and an init that reads another
+                    // built constant recurses through this same arm.
+                    IRConstantValue::Built { init, .. } => {
+                        match built_constants::cached(const_id.mangled()) {
+                            Some(value) => value,
+                            None => {
+                                let init_fn = resolver.resolve(init.mangled()).unwrap_or_else(|| {
+                                    panic!(
+                                        "interpreter: built constant `{const_id}` init `{init}` \
+                                         missing from IR (seal invariant violation)",
+                                    )
+                                });
+                                let value = execute_function(init_fn, Vec::new(), resolver).await?;
+                                built_constants::store(const_id.mangled(), value.clone());
+                                value
+                            }
+                        }
+                    }
+                    _ => materialize_pooled_constant(pooled, resolver)?,
+                };
                 frame.values.insert(*dest, value);
                 Ok(())
             }
@@ -1798,6 +1825,10 @@ fn materialize_pooled_constant<R: CallResolver>(
     resolver: &R,
 ) -> Result<Value, RuntimeError> {
     match cv {
+        IRConstantValue::Built { init, .. } => panic!(
+            "interpreter: built constant with init `{init}` nested in a static pool entry \
+             (IR lowering invariant violation)",
+        ),
         IRConstantValue::Primitive(inner) => Ok(materialize_const(inner)),
         IRConstantValue::EnumVariant { tag, ty } => {
             let decl = resolver.enum_decl(ty.mangled()).unwrap_or_else(|| {

@@ -41,6 +41,7 @@ use inkwell::module::Linkage;
 use koja_ir::{IRBasicBlock, IRBlockId, IRFunction, IRSourceDef, IRTerminator, IRType};
 
 use crate::ctx::EmitContext;
+use crate::emit::built_constants::emit_built_constant_init_call;
 use crate::emit::{self, ValueMap};
 use crate::error::{IceExt, LlvmError};
 use crate::function::declare_blocks;
@@ -141,13 +142,15 @@ fn define_user_main<'ctx>(
     ctx.set_block_map(block_map.clone());
     let result = (|| -> Result<(), LlvmError> {
         // PID 1's first compiled code, so the register-strategy budget
-        // gets its initial grant at the top of the entry block.
+        // gets its initial grant at the top of the entry block, and
+        // the built constants fill before the body can read one.
         let entry_id = blocks
             .first()
             .expect("sealed IR guarantees an entry block")
             .id;
         ctx.builder.position_at_end(block_map[&entry_id]);
         emit_budget_seed(ctx)?;
+        emit_built_constant_init_call(ctx)?;
         for block in blocks {
             if !reachable.contains(&block.id) {
                 // Same boundary stand-in as `define_function`: blocks the
