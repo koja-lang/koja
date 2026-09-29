@@ -1,7 +1,8 @@
 # Observability: Context in the Runtime
 
-**Status: draft (2026-09-26). Nothing here is implemented.** This
-document argues a position for how Koja programs produce traces, logs,
+**Status: in progress (2026-09-28). `Process.context` and the stdlib
+`Trace` module have shipped. Log, metrics, and the exporter port are
+open.** This document argues a position for how Koja programs produce traces, logs,
 and metrics. The runtime carries two typed fields on every process: a
 small request context that also rides on every message, and a log
 configuration that children inherit at `spawn`. The standard library
@@ -142,10 +143,10 @@ belongs in the same category as who the process is.
 The runtime carries one fixed-size value per process and per message.
 
 ```
-trace_id   16 bytes
-span_id     8 bytes
-flags       1 byte   (bit 0: sampled)
-padding     7 bytes
+flags       8 bytes  (bit 0: sampled)
+span        8 bytes
+trace_hi    8 bytes  (trace id bytes 0 to 7)
+trace_lo    8 bytes  (trace id bytes 8 to 15)
 ```
 
 The value is named `Process.context`, not `Process.trace`, so a
@@ -153,19 +154,44 @@ deadline can join it later without a rename. It is not a map, it
 carries no baggage, and it has no user-visible mutability. Those three
 properties are what keep it cheap, see Performance below.
 
+The four words are the runtime layout, and the Koja struct
+`Process.Context` declares them in the same order so a read is one
+32-byte copy. User code does not touch the words. It reads the ids
+through `trace_id()` and `span_id()`, which return them as bytes, and it
+never builds a context. `Trace` and `Propagation` are the only
+constructors, through a package-private function in `global`. That
+rule is what lets the layout grow: a field added to the struct breaks
+no code outside the package. A 128-bit integer type would let
+`trace_id` become one field, and the byte helper would not change.
+`flags` has sixty-three spare bits for future markers.
+
 Rules for the runtime:
 
 - `spawn` copies the parent's context into the child.
-- Every `send`, `cast`, and `call` copies the sender's context onto
-  the message envelope.
-- When a handler runs for a message, the runtime installs the
-  envelope's context for the duration of the handler and restores the
-  previous context after. Scope is the handler invocation, not the
-  process, so a `Pool` serving two requests never crosses them.
+- Every `cast`, `call`, and `send_after` copies the sender's context
+  onto the message envelope.
+- When a business message is dequeued, the runtime installs the
+  envelope's context on the receiving process before the handler runs.
+  Nothing restores the previous value. The next business message
+  installs its own, so a `Pool` serving two requests never crosses
+  them, and `Process.run` never observes the slot between messages
+  because it tail-recurses inside the receive arm.
+- Lifecycle signals, IO readiness, exit signals, and replies leave the
+  slot alone. A reply carries no context and the caller keeps its own,
+  so a `call` is transparent to the caller's trace. An exit signal
+  describes the dead process, not a request, and inherits nothing from
+  it.
 - `send_after` captures the context at scheduling time, and the timer
   message carries it.
 - A process with no root context carries zeros with the sampled bit
   clear, and nothing downstream of it produces records.
+
+The dequeue rule has one consequence for code that writes its own
+`receive` loop. The slot changes at each business dequeue, and the
+process keeps the last installed value after the arm returns. A
+closure that must return to its own context around a `receive` wraps
+it in `Trace.span`, which restores what it found. The `Process`
+protocol's `run` never needs this.
 
 **Why parent pid is not enough.** The spawn tree is not the causal
 tree. In remem, `App` spawns the `Pool` at boot. A request `Worker`
@@ -245,17 +271,25 @@ indirection because the stdlib is already the neutral layer.
 
 ```koja
 # The boundary that reads an incoming traceparent starts a root.
-Trace.root("#{method} #{path}", parent, span ->
-  response = router.dispatch(request)
-  span.attribute("http.response.status_code", response.status.code)
-  response
-end)
+Trace.root(
+  "#{method} #{path}",
+  parent,
+  Trace.SpanKind.Server,
+  fn (span: Trace.Span) -> Response
+    response = router.dispatch(request)
+    span.attribute("http.response.status_code", response.status.code)
+    response
+  end,
+)
 
 # Anything below reads Process.context and needs no parent argument.
-Trace.span("db.query", span ->
-  span.attribute("db.system", "postgresql")
-  work(db)
-end)
+Trace.span(
+  "db.query",
+  fn (span: Trace.Span) -> Rows
+    span.attribute("db.system", "postgresql")
+    work(db)
+  end,
+)
 
 # Leaving the process tree is the one manual step.
 headers.set("traceparent", Propagation.format(Trace.current()))
@@ -264,12 +298,31 @@ headers.set("traceparent", Propagation.format(Trace.current()))
 `Trace.span` mints a child span id, installs the child context in the
 process slot, runs the closure, records the span with start and end,
 and restores the parent context. User code never writes the slot
-directly.
+directly. A short closure (`span -> db.query(sql)`) holds one
+expression, so a body with an attribute call uses the block form.
 
-`Span` inside the closure is a handle to a runtime-owned record, not a
-value. `span.attribute(...)` is a runtime call, the same way
+`Trace.Span` inside the closure is a handle to a runtime-owned record,
+not a value. `span.attribute(...)` is a runtime call, the same way
 `pool.checkin(...)` is a call on a process handle. A value would make
-that line a discarded copy.
+that line a discarded copy. The handle is an index into the calling
+process's stack of open records, and the runtime moves the record out
+and back in around each write. The finished record is a
+`Trace.SpanRecord`.
+
+`Trace.root` takes the parent as an argument and ignores the context
+the process already carries, except to put it back when the closure
+returns. A root with no parent mints a trace id and sets the sampled
+bit. A root under a parent keeps the parent's trace id and sampled
+bit, so an unsampled upstream stays unsampled and records nothing here
+either. Sampling policy beyond "follow the parent" is not designed.
+
+The record crosses into the runtime by the message send convention: a
+deep copy moves into the runtime, and the caller's own value keeps its
+slot lifecycle. That is three deep copies per recorded span (open,
+close, export) plus one per attribute write. It is correct and it
+reuses what `Ref.cast` already does. A move-into-runtime ownership
+form that skips the copy is a compiler change and waits for a
+benchmark that asks for it.
 
 The developer still owns where a trace starts and from what incoming
 parent, span names and kinds, attributes and error status, injecting
@@ -665,13 +718,16 @@ The 0.20 order in [ROADMAP.md](ROADMAP.md) is by dependency.
 
 1. Socket deadlines from [IO.md](IO.md). The exporter cannot ship
    without them.
-2. `Process.context`: the slot, the envelope copy, the handler install
-   and restore. Small and mechanical, and everything after depends on
-   it.
+2. `Process.context`: the slot, the envelope copy, the install at
+   business dequeue. Small and mechanical, and everything after
+   depends on it. Shipped.
 3. `Trace` in the stdlib on top of the slot, with remem's
    `lib/open_telemetry` ported to the new API as the first exporter
    package. One mutex export queue with a drop counter first, ring
-   buffers only after a benchmark asks for them.
+   buffers only after a benchmark asks for them. The stdlib half has
+   shipped: `Trace.root`, `Trace.span`, `Trace.current`,
+   `Trace.Export.pop` and `dropped`, with a 4096 record queue. The
+   remem port is next.
 4. The log slot, `Log.configure`, closure handlers, `Log.Record`
    stamped from `Process.context`, and the crash reporter routed
    through it. remem and `auth_manager` delete their vendored loggers.
@@ -784,15 +840,11 @@ Smaller findings from the same spikes:
 
 ## Open questions
 
-- Which context a `call` reply carries. The handler runs under the
-  caller's context, so the reply envelope can copy that, but the rule
-  is not written down.
 - Whether `Process.context` grows a deadline, and what a downstream
   handler does when it finds one expired.
 - Whether the closure form of handlers is permanent or a bridge until
   existential protocol types exist.
 - The `@SOURCE` default-parameter exception, and whether `@ARGV`
   joins the `@UPPER` family.
-- How `Trace.root` reads an incoming `traceparent` when the request
-  arrives on a process that already carries a context from its
-  spawner.
+- Whether a root with no parent should always sample, or take a
+  sampler.

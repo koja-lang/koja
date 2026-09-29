@@ -18,10 +18,11 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use crossbeam_deque::{Injector, Steal, Stealer, Worker};
+use koja_runtime_core::context::CONTEXT_SIZE;
 use koja_runtime_core::{
-    Clock, CrashInfo, Driver, Due, Executor, ExitNotice, ExitReason, Lifecycle, MailPark, Pid,
-    Priority, ProcessState, ProcessTable, Reclaim, SignalSource, SwitchOutcome, TimerService, Wake,
-    duration_from_user_millis, slot_index,
+    Clock, Context, CrashInfo, Driver, Due, Executor, ExitNotice, ExitReason, Lifecycle, MailPark,
+    Pid, Priority, ProcessState, ProcessTable, Reclaim, SignalSource, SwitchOutcome, TimerService,
+    Wake, duration_from_user_millis, slot_index,
 };
 
 use crate::fault;
@@ -187,6 +188,12 @@ pub(crate) struct NativeExecution {
     /// claim time. Its [`Drop`] `munmap`s the mapping when the execution
     /// state is reclaimed.
     stack: ProcessStack,
+    /// Open span records held for the stdlib `Trace`, innermost last.
+    /// The handle `Trace` holds is the index. A slot is `None` while
+    /// the record is moved out for an attribute write. Dropped with the
+    /// execution state, which releases the records of a process that
+    /// died inside a span.
+    pub(crate) spans: Vec<Option<crate::trace::SpanRecord>>,
 }
 
 /// `NativeExecution` holds raw pointers that are heap-allocated and not
@@ -204,6 +211,7 @@ impl NativeExecution {
             init_state,
             sp,
             stack,
+            spans: Vec::new(),
         }
     }
 
@@ -521,6 +529,7 @@ fn exit_signal_envelope(notice: &ExitNotice) -> Envelope {
             payload.as_ptr(),
             PAYLOAD_SIZE,
             Some(exit_signal_drop_glue),
+            Context::ZERO,
         )
     }
 }
@@ -1267,6 +1276,13 @@ fn maybe_dump_scheduler_trace() {
 /// only the transport buffer (never `drop_glue`).
 fn deliver_envelope(envelope: Envelope, out: *mut u8, out_cap: i64) -> i64 {
     let tag = unsafe { *envelope.buffer } as i64;
+    // A business message installs the sender's request context on the
+    // receiver for the handler that follows. System traffic and call
+    // replies carry none, so the receiver keeps whatever it had.
+    if tag == TAG_BUSINESS as i64 {
+        let pid = CURRENT_PID.with(|c| c.get());
+        TABLE.set_context(pid, envelope.context);
+    }
     let copy_len = (envelope.length - TAG_HEADER_SIZE).min(out_cap.max(0) as usize);
     unsafe {
         ptr::copy_nonoverlapping(envelope.buffer.add(TAG_HEADER_SIZE), out, copy_len);
@@ -1454,8 +1470,15 @@ pub unsafe extern "C" fn koja_rt_send(
     msg_len: i64,
     drop_glue: Option<unsafe extern "C" fn(*mut u8)>,
 ) {
-    let envelope =
-        unsafe { Envelope::from_payload(TAG_BUSINESS, msg_ptr, msg_len as usize, drop_glue) };
+    let envelope = unsafe {
+        Envelope::from_payload(
+            TAG_BUSINESS,
+            msg_ptr,
+            msg_len as usize,
+            drop_glue,
+            current_context(),
+        )
+    };
     deliver_or_discard(pid, envelope);
 }
 
@@ -1474,8 +1497,15 @@ pub unsafe extern "C" fn koja_rt_reply(
     msg_len: i64,
     drop_glue: Option<unsafe extern "C" fn(*mut u8)>,
 ) -> i64 {
-    let mut envelope =
-        unsafe { Envelope::from_payload(TAG_REPLY, msg_ptr, msg_len as usize, drop_glue) };
+    let mut envelope = unsafe {
+        Envelope::from_payload(
+            TAG_REPLY,
+            msg_ptr,
+            msg_len as usize,
+            drop_glue,
+            Context::ZERO,
+        )
+    };
     envelope.reply_token = token;
     reply_or_expire(pid, token, envelope)
 }
@@ -1592,8 +1622,17 @@ pub unsafe extern "C" fn koja_rt_send_after(
     delay_ms: i64,
     drop_glue: Option<unsafe extern "C" fn(*mut u8)>,
 ) {
-    let envelope =
-        unsafe { Envelope::from_payload(TAG_BUSINESS, msg_ptr, msg_len as usize, drop_glue) };
+    // The context is captured now, at scheduling time, so the timer
+    // message carries the request that armed it.
+    let envelope = unsafe {
+        Envelope::from_payload(
+            TAG_BUSINESS,
+            msg_ptr,
+            msg_len as usize,
+            drop_glue,
+            current_context(),
+        )
+    };
     let fire_at = Instant::now() + duration_from_user_millis(delay_ms);
 
     TIMERS.with(|timers| timers.schedule_deliver(fire_at, pid, envelope));
@@ -1661,6 +1700,24 @@ pub extern "C" fn koja_rt_demonitor(token: i64) {
 pub extern "C" fn koja_rt_parent() -> i64 {
     let pid = CURRENT_PID.with(|c| c.get());
     TABLE.parent(pid).unwrap_or(0)
+}
+
+/// The calling process's request context, as stamped onto every
+/// business envelope it sends.
+fn current_context() -> Context {
+    let pid = CURRENT_PID.with(|c| c.get());
+    TABLE.context(pid)
+}
+
+/// Copies the calling process's request context into `out`, a 32-byte
+/// `Process.Context` slot (`Process.context`).
+///
+/// # Safety
+/// `out` must point to [`CONTEXT_SIZE`] writable bytes.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn koja_rt_context_get(out: *mut u8) {
+    let context = current_context();
+    unsafe { ptr::copy_nonoverlapping(ptr::from_ref(&context).cast::<u8>(), out, CONTEXT_SIZE) };
 }
 
 /// Count of live (non-`Dead`) processes, including the entry process

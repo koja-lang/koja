@@ -1,0 +1,335 @@
+@doc """
+A span attribute value. Literals convert on their own wherever the
+compiler knows it wants a `Trace.Attribute`, so an attribute call reads
+as a plain literal.
+
+```koja
+span.attribute("http.route", "/entities")
+span.attribute("http.response.status_code", 200)
+```
+
+A variable does not convert. Wrap it with `Trace.Attribute.from`.
+"""
+struct Trace.Attribute: BoolLiteral, FloatLiteral, IntLiteral, StringLiteral
+  value: Bool | Float | Int | String
+
+  @doc """
+  Wraps a runtime value as an attribute.
+  """
+  fn from(value: Bool | Float | Int | String) -> Trace.Attribute
+    Trace.Attribute{value: value}
+  end
+
+  fn from_bool(value: Bool) -> Trace.Attribute
+    Trace.Attribute{value: value}
+  end
+
+  fn from_float(value: Float) -> Trace.Attribute
+    Trace.Attribute{value: value}
+  end
+
+  fn from_int(value: Int) -> Trace.Attribute
+    Trace.Attribute{value: value}
+  end
+
+  fn from_string(value: String) -> Trace.Attribute
+    Trace.Attribute{value: value}
+  end
+end
+
+@doc """
+What role a span plays in a request. `Server` handles an incoming
+request, `Client` makes an outgoing one, and `Internal` is work in
+between, such as a database query.
+"""
+enum Trace.SpanKind
+  Client
+  Internal
+  Server
+end
+
+@doc """
+How a span ended. `Unset` is the default and means nothing went wrong
+that the code chose to report. `Error` carries a short message. `Ok` is
+an explicit success mark and is rarely needed.
+"""
+enum Trace.Status
+  Error(String)
+  Ok
+  Unset
+end
+
+@doc """
+A finished span, the record an exporter pops from `Trace.Export`.
+`context` holds the trace id and the span's own id. `parent_span_id`
+is `Option.None` for the root of a trace. Timestamps come from
+`Timestamp.now()`, so they are wall-clock microseconds.
+"""
+struct Trace.SpanRecord
+  attributes: Map<String, Trace.Attribute>
+  context: Process.Context
+  ended_at: Timestamp
+  kind: Trace.SpanKind
+  name: String
+  parent_span_id: Option<Binary>
+  started_at: Timestamp
+  status: Trace.Status
+end
+
+@doc """
+The open span inside a `Trace.span` or `Trace.root` closure. It is a
+handle to a record the runtime holds, not a value, so `attribute` and
+`status` write through to the record that gets exported when the
+closure returns. Under an unsampled context the handle is a no-op and
+records nothing.
+"""
+struct Trace.Span
+  handle: Int
+
+  # The handle `Trace.span` hands a closure when nothing records.
+  const NOOP = Trace.Span{handle: -1}
+
+  @doc """
+  Sets attribute `key` on the open span. A later call with the same
+  key replaces the value.
+  """
+  fn attribute(self, key: String, value: Trace.Attribute)
+    if self.handle < 0
+      return
+    end
+
+    record = TraceRuntime.span_take(self.handle)
+    record.attributes = record.attributes.put(key, value)
+    TraceRuntime.span_put(self.handle, record)
+  end
+
+  @doc """
+  Whether this handle records. False for the no-op handle an
+  unsampled context produces.
+  """
+  fn recording?(self) -> Bool
+    self.handle >= 0
+  end
+
+  @doc """
+  Sets how the span ended. The last call before the closure returns
+  wins.
+  """
+  fn status(self, status: Trace.Status)
+    if self.handle < 0
+      return
+    end
+
+    record = TraceRuntime.span_take(self.handle)
+    record.status = status
+    TraceRuntime.span_put(self.handle, record)
+  end
+end
+
+@doc """
+Closure-scoped spans on top of `Process.context`. `Trace.root` starts a
+trace at a boundary, `Trace.span` opens a child of whatever context the
+calling process carries, and both restore the context they found when
+the closure returns. Every `cast`, `call`, and `send_after` inside the
+closure carries the span's context to its receiver, so nothing below
+needs a parent argument. Finished spans queue for `Trace.Export`.
+
+```koja
+Trace.root("GET /entities", parent, Trace.SpanKind.Server, span ->
+  response = router.dispatch(request)
+  span.attribute("http.response.status_code", response.status.code)
+  response
+end)
+
+Trace.span("db.query", span ->
+  span.attribute("db.system", "postgresql")
+  work(db)
+end)
+```
+"""
+struct Trace
+  @doc """
+  The calling process's context, the value to inject into an outgoing
+  `traceparent` header. The same as `Process.context()`.
+  """
+  fn current -> Process.Context
+    Process.context()
+  end
+
+  @doc """
+  Starts a trace, or continues the one `parent` carries, and runs
+  `work` inside a span named `name`. With no parent the trace is new
+  and sampled. With a parent the span keeps the parent's trace id and
+  sampled bit, so an unsampled upstream stays unsampled here.
+  """
+  fn root<R>(
+    name: String,
+    parent: Option<Process.Context>,
+    kind: Trace.SpanKind,
+    work: fn (Trace.Span) -> R,
+  ) -> R
+
+    saved = Process.context()
+
+    match parent
+      Option.Some(upstream) ->
+        run(
+          name,
+          kind,
+          saved,
+          child_of(upstream),
+          parent_span_id(upstream),
+          work,
+        )
+
+      Option.None ->
+        context = Process.Context{
+          flags: 1,
+          span: TraceRuntime.span_id(),
+          trace_hi: TraceRuntime.span_id(),
+          trace_lo: TraceRuntime.span_id(),
+        }
+        run(name, kind, saved, context, Option.None, work)
+    end
+  end
+
+  @doc """
+  Runs `work` inside an `Internal` span named `name`, a child of the
+  calling process's context.
+  """
+  fn span<R>(name: String, work: fn (Trace.Span) -> R) -> R
+    span(name, Trace.SpanKind.Internal, work)
+  end
+
+  @doc """
+  Runs `work` inside a span named `name` of `kind`, a child of the
+  calling process's context. Under an unsampled context the closure
+  runs at once with a no-op handle and nothing is recorded.
+  """
+  fn span<R>(name: String, kind: Trace.SpanKind, work: fn (Trace.Span) -> R)
+    -> R
+
+    saved = Process.context()
+
+    if not saved.sampled?()
+      return work(Trace.Span.NOOP)
+    end
+
+    run(name, kind, saved, child_of(saved), parent_span_id(saved), work)
+  end
+
+  # A context in the same trace as `parent` with a fresh span id.
+  priv fn child_of(parent: Process.Context) -> Process.Context
+    Process.Context{
+      flags: parent.flags,
+      span: TraceRuntime.span_id(),
+      trace_hi: parent.trace_hi,
+      trace_lo: parent.trace_lo,
+    }
+  end
+
+  # The span id `parent` names, or `Option.None` when it has no open span.
+  priv fn parent_span_id(parent: Process.Context) -> Option<Binary>
+    if parent.span == 0
+      Option.None
+    else
+      Option.Some(parent.span_id())
+    end
+  end
+
+  # Installs `context`, runs `work`, restores `saved`, and exports the
+  # span when `context` is sampled.
+  priv fn run<R>(
+    name: String,
+    kind: Trace.SpanKind,
+    saved: Process.Context,
+    context: Process.Context,
+    parent_span_id: Option<Binary>,
+    work: fn (Trace.Span) -> R,
+  ) -> R
+
+    if not context.sampled?()
+      TraceRuntime.install(context)
+      value = work(Trace.Span.NOOP)
+      TraceRuntime.install(saved)
+      return value
+    end
+
+    started_at = Timestamp.now()
+    attributes: Map<String, Trace.Attribute> = [:]
+    handle = TraceRuntime.span_open(
+      Trace.SpanRecord{
+        attributes: attributes,
+        context: context,
+        ended_at: started_at,
+        kind: kind,
+        name: name,
+        parent_span_id: parent_span_id,
+        started_at: started_at,
+        status: Trace.Status.Unset,
+      },
+    )
+    TraceRuntime.install(context)
+    value = work(Trace.Span{handle: handle})
+    TraceRuntime.install(saved)
+    record = TraceRuntime.span_close(handle)
+    record.ended_at = Timestamp.now()
+    TraceRuntime.export_push(record)
+    value
+  end
+end
+
+@doc """
+The queue of finished spans an exporter drains. The runtime holds at
+most 4096 records. When the queue is full a new record is dropped and
+counted, so a stalled exporter costs spans, not memory.
+"""
+struct Trace.Export
+  @doc """
+  How many finished spans the runtime has dropped because the queue
+  was full.
+  """
+  fn dropped -> Int
+    TraceRuntime.export_dropped()
+  end
+
+  @doc """
+  The oldest queued span, or `Option.None` when the queue is empty.
+  """
+  fn pop -> Option<Trace.SpanRecord>
+    TraceRuntime.export_pop()
+  end
+end
+
+# The runtime side of `Trace`. Handles index the calling process's stack
+# of open span records. `span_take` empties a slot and `span_put`
+# refills it. `span_close` pops the innermost record, which must be the
+# handle given.
+priv struct TraceRuntime
+  @intrinsic
+  fn export_dropped -> Int
+
+  @intrinsic
+  fn export_pop -> Option<Trace.SpanRecord>
+
+  @intrinsic
+  fn export_push(record: Trace.SpanRecord)
+
+  @intrinsic
+  fn install(context: Process.Context)
+
+  @intrinsic
+  fn span_close(handle: Int) -> Trace.SpanRecord
+
+  @intrinsic
+  fn span_id -> Int
+
+  @intrinsic
+  fn span_open(record: Trace.SpanRecord) -> Int
+
+  @intrinsic
+  fn span_put(handle: Int, record: Trace.SpanRecord)
+
+  @intrinsic
+  fn span_take(handle: Int) -> Trace.SpanRecord
+end

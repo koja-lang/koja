@@ -1,0 +1,200 @@
+alias Test.require
+
+# These tests live in the `global` package, so they may build contexts
+# with the literal and install them with `TraceRuntime.install`. User
+# code gets a context from `Trace` and never builds one.
+const SAMPLED_A = Process.Context{
+  flags: 1,
+  span: 11,
+  trace_hi: 12,
+  trace_lo: 13,
+}
+const SAMPLED_B = Process.Context{
+  flags: 1,
+  span: 21,
+  trace_hi: 22,
+  trace_lo: 23,
+}
+# A local name for the zero context. A qualified constant path such as
+# `Process.Context.ZERO` does not resolve as the right operand of `==`.
+const ZERO = Process.Context{flags: 0, span: 0, trace_hi: 0, trace_lo: 0}
+
+priv enum ProbeMsg
+  # Reply with the context the handler runs under.
+  Report
+  # Reply with the context seen at `start`.
+  ReportSpawn
+  # Reply with the context remembered by the last `Remember`.
+  Recall
+  # Store the handler's context for a later `Recall`.
+  Remember
+  # Install `context` before replying, to prove a reply carries none.
+  ReplyUnder(Process.Context)
+end
+
+priv struct Probe: Process<(), ProbeMsg, Process.Context>
+  remembered: Process.Context = Process.Context.ZERO
+  spawned_with: Process.Context = Process.Context.ZERO
+
+  fn start(config: ()) -> Self ! Process.StopReason
+    Probe{spawned_with: Process.context()}
+  end
+
+  fn handle(self, msg: ProbeMsg, from: Option<ReplyTo<Process.Context>>)
+    -> Process.Step<Self>
+
+    match msg
+      ProbeMsg.Report ->
+        ReplyTo.reply(from, Process.context())
+        Process.Step.Continue(self)
+
+      ProbeMsg.ReportSpawn ->
+        ReplyTo.reply(from, self.spawned_with)
+        Process.Step.Continue(self)
+
+      ProbeMsg.Recall ->
+        ReplyTo.reply(from, self.remembered)
+        Process.Step.Continue(self)
+
+      ProbeMsg.Remember ->
+        self.remembered = Process.context()
+        Process.Step.Continue(self)
+
+      ProbeMsg.ReplyUnder(context) ->
+        TraceRuntime.install(context)
+        ReplyTo.reply(from, Process.context())
+        Process.Step.Continue(self)
+    end
+  end
+end
+
+# Calls `Recall` until the timer message has landed, so the test does
+# not race the timer wheel.
+priv fn recall_when_remembered(probe: Ref<ProbeMsg, Process.Context>)
+  -> Result<Process.Context, Process.CallError>
+
+  attempts = 1000
+  found = probe.call(ProbeMsg.Recall, 5000)
+
+  while attempts > 0 and found == Result.Ok(ZERO)
+    attempts -= 1
+    found = probe.call(ProbeMsg.Recall, 5000)
+  end
+
+  found
+end
+
+test "a test process starts with the zero context"
+  context = Process.context()
+  assert context == ZERO
+  assert not context.sampled?()
+end
+
+test "the sampled bit is flag bit zero"
+  assert SAMPLED_A.sampled?()
+  assert not Process.Context{flags: 2, span: 0, trace_hi: 0, trace_lo: 0}.sampled?()
+end
+
+test "trace_id and span_id return the ids as big-endian bytes"
+  context = Process.Context{
+    flags: 1,
+    span: 0x0102030405060708,
+    trace_hi: -1,
+    trace_lo: 0x0A0B0C0D0E0F1011,
+  }
+
+  assert Base.encode16(context.span_id()) == "0102030405060708"
+  assert Base.encode16(context.trace_id()) == "ffffffffffffffff0a0b0c0d0e0f1011"
+  assert Base.encode16(ZERO.trace_id()) == "00000000000000000000000000000000"
+end
+
+test "context_from_ids round trips the byte helpers"
+  context = Process.Context{
+    flags: 1,
+    span: 0x0102030405060708,
+    trace_hi: -1,
+    trace_lo: 0x0A0B0C0D0E0F1011,
+  }
+  unsampled = Process.Context{
+    flags: 0,
+    span: 0x0102030405060708,
+    trace_hi: -1,
+    trace_lo: 0x0A0B0C0D0E0F1011,
+  }
+
+  assert context_from_ids(context.trace_id(), context.span_id(), true) ==
+    Option.Some(context)
+  assert context_from_ids(context.trace_id(), context.span_id(), false) ==
+    Option.Some(unsampled)
+end
+
+test "context_from_ids rejects ids of the wrong length"
+  assert context_from_ids(<<1::64>>, <<2::64>>, true) == Option.None
+  assert context_from_ids(<<1::64, 2::64>>, <<3::32>>, true) == Option.None
+end
+
+test "install round trips through context"
+  TraceRuntime.install(SAMPLED_A)
+  assert Process.context() == SAMPLED_A
+  TraceRuntime.install(Process.Context.ZERO)
+  assert Process.context() == ZERO
+end
+
+test "spawn copies the parent's context into the child"
+  TraceRuntime.install(SAMPLED_A)
+  probe = spawn Probe.start(())
+  TraceRuntime.install(Process.Context.ZERO)
+
+  seen = probe.call(ProbeMsg.ReportSpawn, 5000)
+  probe.kill()
+  assert try require(seen) == SAMPLED_A
+end
+
+test "a call installs the caller's context for the handler"
+  probe = spawn Probe.start(())
+  TraceRuntime.install(SAMPLED_A)
+  first = probe.call(ProbeMsg.Report, 5000)
+  TraceRuntime.install(SAMPLED_B)
+  second = probe.call(ProbeMsg.Report, 5000)
+  TraceRuntime.install(Process.Context.ZERO)
+  probe.kill()
+
+  assert try require(first) == SAMPLED_A
+  assert try require(second) == SAMPLED_B
+end
+
+test "a cast installs the sender's context for the handler"
+  probe = spawn Probe.start(())
+  TraceRuntime.install(SAMPLED_A)
+  probe.cast(ProbeMsg.Remember)
+  TraceRuntime.install(SAMPLED_B)
+  recalled = recall_when_remembered(probe)
+  TraceRuntime.install(Process.Context.ZERO)
+  probe.kill()
+
+  assert try require(recalled) == SAMPLED_A
+end
+
+test "send_after captures the context at scheduling time"
+  probe = spawn Probe.start(())
+  TraceRuntime.install(SAMPLED_A)
+  probe.send_after(ProbeMsg.Remember, 1)
+  TraceRuntime.install(SAMPLED_B)
+  recalled = recall_when_remembered(probe)
+  TraceRuntime.install(Process.Context.ZERO)
+  probe.kill()
+
+  assert try require(recalled) == SAMPLED_A
+end
+
+test "a reply leaves the caller's context alone"
+  probe = spawn Probe.start(())
+  TraceRuntime.install(SAMPLED_A)
+  replied = probe.call(ProbeMsg.ReplyUnder(SAMPLED_B), 5000)
+  kept = Process.context()
+  TraceRuntime.install(Process.Context.ZERO)
+  probe.kill()
+
+  assert try require(replied) == SAMPLED_B
+  assert kept == SAMPLED_A
+end

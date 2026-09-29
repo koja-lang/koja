@@ -12,7 +12,9 @@
 //! so the policy is shared while a process splits into an agnostic control
 //! block plus an executor-owned execution state.
 
+pub mod context;
 pub mod driver;
+pub mod export_queue;
 mod lifecycle;
 pub mod mailbox;
 pub mod memory;
@@ -20,12 +22,15 @@ pub mod process_table;
 pub mod protocol;
 pub mod ready_queue;
 pub mod scheduler_trace;
+pub mod span_ids;
 pub mod timer_service;
 pub mod timer_wheel;
 pub mod timing;
 pub mod wire;
 
+pub use context::Context;
 pub use driver::{CooperativeDriver, CooperativeRuntime};
+pub use export_queue::ExportQueue;
 pub use mailbox::{Mailbox, WaitTarget};
 pub use process_table::{
     CrashInfo, Delivery, ExitNotice, ExitReason, IoPark, IoWait, MailPark, Priority, ProcessState,

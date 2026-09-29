@@ -34,6 +34,7 @@
 
 use std::ptr;
 
+use crate::context::Context;
 use crate::memory;
 use crate::protocol::{Message, Tag};
 
@@ -106,6 +107,11 @@ pub struct Envelope {
     /// allocator funnel (`memory::alloc`, 8-byte aligned) and freed with
     /// `memory::free` on drop.
     pub buffer: *mut u8,
+    /// The sender's request context, stamped at send on business
+    /// envelopes and installed on the receiver at dequeue. Rides beside
+    /// the buffer rather than inside it, so the payload the receiver
+    /// copies is unchanged. Zero on every other tag.
+    pub context: Context,
     /// Drop glue for nested Koja heap in the payload, run before the
     /// buffer is freed on the discard path. Null when the payload owns
     /// no nested heap.
@@ -129,6 +135,7 @@ impl Envelope {
     pub fn new(buffer: *mut u8, length: usize) -> Self {
         Self {
             buffer,
+            context: Context::ZERO,
             drop_glue: None,
             length,
             reply_token: 0,
@@ -136,7 +143,9 @@ impl Envelope {
     }
 
     /// Allocates a transport buffer, stamps `tag`, and copies
-    /// `payload_len` bytes from `payload` in after the tag header.
+    /// `payload_len` bytes from `payload` in after the tag header. The
+    /// envelope carries `context`, the sender's request context for
+    /// business traffic and [`Context::ZERO`] for a reply.
     ///
     /// # Safety
     /// `payload` must point to `payload_len` readable bytes (it may be
@@ -146,6 +155,7 @@ impl Envelope {
         payload: *const u8,
         payload_len: usize,
         drop_glue: Option<unsafe extern "C" fn(*mut u8)>,
+        context: Context,
     ) -> Self {
         let length = TAG_HEADER_SIZE + payload_len;
         let buffer = memory::alloc(length);
@@ -158,6 +168,7 @@ impl Envelope {
         }
         Self {
             buffer,
+            context,
             drop_glue,
             length,
             reply_token: 0,
@@ -189,6 +200,10 @@ impl Message for Envelope {
             TAG_EXIT_SIGNAL => Tag::ExitSignal,
             _ => Tag::Business,
         }
+    }
+
+    fn context(&self) -> Context {
+        self.context
     }
 
     fn reply_token(&self) -> i64 {
@@ -238,6 +253,14 @@ impl OwnedPayload {
     /// The payload bytes, or null for the empty value.
     pub fn as_ptr(&self) -> *const u8 {
         self.buf
+    }
+
+    /// Moved-out defuse, the counterpart of [`Envelope::free_transport`].
+    /// The caller has copied the payload bytes into its own frame and
+    /// now owns any nested heap they reference, so only the buffer is
+    /// freed and the drop glue does not run. Consumes the payload.
+    pub fn free_transport(mut self) {
+        self.drop_glue = None;
     }
 }
 

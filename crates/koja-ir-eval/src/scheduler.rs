@@ -31,9 +31,11 @@ use std::thread::{self, Thread};
 use std::time::{Duration, Instant};
 
 use koja_ir::IRSymbol;
+use koja_runtime_core::Context as ProcessContext;
+use koja_runtime_core::span_ids::SpanIds;
 use koja_runtime_core::{
-    Clock, CooperativeDriver, CooperativeRuntime, CrashInfo, Executor, ExitReason, IoPark,
-    Lifecycle, MailPark, Message, MessageSource, Pid, Priority, ProcessState, ProcessTable,
+    Clock, CooperativeDriver, CooperativeRuntime, CrashInfo, Executor, ExitReason, ExportQueue,
+    IoPark, Lifecycle, MailPark, Message, MessageSource, Pid, Priority, ProcessState, ProcessTable,
     Readiness, SignalSource, Tag, TimerService, WaitTarget, Wake,
 };
 
@@ -41,15 +43,33 @@ use crate::interpreter::{CallResolver, build_exit_signal_value};
 use crate::reactor::EvalReactor;
 use crate::value::Value;
 
-/// The cooperative process table: agnostic control blocks (no executor
-/// execution state, hence `()`) keyed against eval's typed message repr.
-pub(crate) type EvalTable = ProcessTable<(), EvalMessage>;
+unsafe extern "C" {
+    /// The runtime's OS entropy source (`Random.int`), used once to
+    /// seed the span id generator.
+    fn koja_random_int(min: i64, max: i64) -> i64;
+}
+
+/// Eval's per-process execution state. The process body itself lives
+/// in the executor as a future, so the table slot only carries what
+/// the runtime holds on the process's behalf between resumes.
+#[derive(Debug, Default)]
+pub(crate) struct EvalExecution {
+    /// Open span records held for the stdlib `Trace`, innermost last.
+    /// The handle `Trace` holds is the index. A slot is `None` while
+    /// the record is moved out for an attribute write. Mirrors native
+    /// `NativeExecution.spans`.
+    spans: Vec<Option<Value>>,
+}
+
+/// The cooperative process table: agnostic control blocks plus
+/// [`EvalExecution`], keyed against eval's typed message repr.
+pub(crate) type EvalTable = ProcessTable<EvalExecution, EvalMessage>;
 
 /// The shared runtime state for one eval run: the table plus the
 /// driver's ready queue and timer service. The driver loop and the
 /// per-process await points (which park / peek the mailbox and raise
 /// wakes) all reach the state through clones of this bundle.
-pub(crate) type EvalRuntime = CooperativeRuntime<(), EvalMessage>;
+pub(crate) type EvalRuntime = CooperativeRuntime<EvalExecution, EvalMessage>;
 
 /// A suspended process body: the interpreter's `async` call tree, boxed
 /// so the executor can store and re-poll it across suspensions. Borrows
@@ -84,6 +104,13 @@ thread_local! {
     /// token values stay deterministic across parallel tests. Mirrors
     /// native `koja_rt_call_token`.
     static NEXT_TOKEN: Cell<i64> = const { Cell::new(1) };
+    /// Finished span records waiting for an exporter. Per run, so a
+    /// test's records never leak into the next. Mirrors native
+    /// `trace::EXPORTS`.
+    static EXPORTS: ExportQueue<Value> = const { ExportQueue::new() };
+    /// The span id generator, seeded on first use from the OS. Mirrors
+    /// native `trace::SPAN_IDS`.
+    static SPAN_IDS: RefCell<Option<SpanIds>> = const { RefCell::new(None) };
 }
 
 /// A staged `spawn`: the child PID is already allocated in the table (so
@@ -107,6 +134,7 @@ impl Drop for RuntimeGuard {
         REDUCTIONS_LEFT.with(|remaining| remaining.set(0));
         PENDING_SPAWNS.with(|queue| queue.borrow_mut().clear());
         NEXT_TOKEN.with(|token| token.set(1));
+        EXPORTS.with(|exports| while exports.pop().is_some() {});
     }
 }
 
@@ -325,6 +353,7 @@ pub(crate) fn reply(coords: ReplyInfo, value: Value) -> bool {
     let caller = coords.caller_pid;
     let token = coords.token;
     let message = EvalMessage {
+        context: ProcessContext::ZERO,
         reply: Some(coords),
         tag: Tag::Reply,
         value,
@@ -371,6 +400,119 @@ pub(crate) fn is_alive(pid: Pid) -> bool {
 pub(crate) fn parent() -> Option<Pid> {
     let pid = current_pid();
     with_table(|table| table.parent(pid))
+}
+
+/// The currently-resuming process's request context (`Process.context`),
+/// as stamped onto every business message it sends. Mirrors native
+/// `koja_rt_context_get`.
+pub(crate) fn context() -> ProcessContext {
+    let pid = current_pid();
+    with_table(|table| table.context(pid))
+}
+
+/// Installs `context` on the currently-resuming process, at business
+/// dequeue and from the stdlib `Trace` closures. Mirrors native
+/// `koja_rt_trace_install`.
+pub(crate) fn set_context(context: ProcessContext) {
+    let pid = current_pid();
+    with_table(|table| table.set_context(pid, context));
+}
+
+/// Runs `f` over the currently-resuming process's open span stack.
+fn with_spans<R>(f: impl FnOnce(&mut Vec<Option<Value>>) -> R) -> R {
+    let pid = current_pid();
+    // The driver claimed `pid` for this resume, which is what
+    // `with_execution` requires.
+    with_table(|table| unsafe { table.with_execution(pid, |execution| f(&mut execution.spans)) })
+        .expect("a resuming process has an execution slot")
+}
+
+/// A fresh non-zero 64-bit span id. Mirrors native `koja_rt_span_id`.
+pub(crate) fn span_id() -> i64 {
+    SPAN_IDS.with(|cell| {
+        let mut slot = cell.borrow_mut();
+        let ids = slot.get_or_insert_with(|| {
+            let mut seed = [0u8; 32];
+            // The full `i64` range overflows `koja_random_int`'s width
+            // arithmetic, so take 63 bits per word. Four words is far
+            // more entropy than the generator state needs.
+            for chunk in seed.chunks_exact_mut(8) {
+                let word = unsafe { koja_random_int(0, i64::MAX) };
+                chunk.copy_from_slice(&word.to_le_bytes());
+            }
+            SpanIds::from_seed(seed)
+        });
+        ids.next_id() as i64
+    })
+}
+
+/// Pushes `record` onto the open span stack and returns its handle.
+/// Mirrors native `koja_rt_span_open`.
+pub(crate) fn span_open(record: Value) -> i64 {
+    with_spans(|spans| {
+        spans.push(Some(record));
+        (spans.len() - 1) as i64
+    })
+}
+
+/// Moves the open record at `handle` out, leaving the slot empty until
+/// [`span_put`] fills it. Mirrors native `koja_rt_span_take`.
+pub(crate) fn span_take(handle: i64) -> Value {
+    with_spans(|spans| {
+        spans
+            .get_mut(handle as usize)
+            .and_then(Option::take)
+            .unwrap_or_else(|| panic!("Trace: span_take on handle {handle} with no open record"))
+    })
+}
+
+/// Moves `record` back into the empty slot at `handle`. Mirrors native
+/// `koja_rt_span_put`.
+pub(crate) fn span_put(handle: i64, record: Value) {
+    with_spans(|spans| {
+        let slot = spans
+            .get_mut(handle as usize)
+            .unwrap_or_else(|| panic!("Trace: span_put on handle {handle} past the open stack"));
+        assert!(
+            slot.is_none(),
+            "Trace: span_put on handle {handle} that still holds a record"
+        );
+        *slot = Some(record);
+    });
+}
+
+/// Pops the innermost open record, which must be `handle`. Mirrors
+/// native `koja_rt_span_close`.
+pub(crate) fn span_close(handle: i64) -> Value {
+    with_spans(|spans| {
+        assert!(
+            spans.len() == handle as usize + 1,
+            "Trace: span_close on handle {handle} with {} open spans",
+            spans.len()
+        );
+        spans
+            .pop()
+            .flatten()
+            .unwrap_or_else(|| panic!("Trace: span_close on handle {handle} with no record"))
+    })
+}
+
+/// Queues a finished record for the exporter. A full queue drops it
+/// and counts the drop. Mirrors native `koja_rt_export_push`.
+pub(crate) fn export_push(record: Value) {
+    EXPORTS.with(|exports| exports.push(record));
+}
+
+/// The oldest queued record, or `None` when the queue is empty.
+/// Mirrors native `koja_rt_export_pop`.
+pub(crate) fn export_pop() -> Option<Value> {
+    EXPORTS.with(ExportQueue::pop)
+}
+
+/// Records the export queue has dropped in this run. Mirrors native
+/// `koja_rt_export_dropped`.
+pub(crate) fn export_dropped() -> i64 {
+    EXPORTS.with(|exports| exports.dropped() as i64)
 }
 
 /// Sets the currently-resuming process's scheduling priority from a
@@ -447,7 +589,8 @@ pub(crate) fn spawn_child(wrapper: IRSymbol, config: Value) -> Pid {
     }
     // A refused spawn means a kill landed on the (still running) spawner.
     // Pid 0 keeps the child from outliving the already-settled cascade.
-    let Ok(pid) = with_table(|table| table.spawn((), Some(current_pid()))) else {
+    let Ok(pid) = with_table(|table| table.spawn(EvalExecution::default(), Some(current_pid())))
+    else {
         return 0;
     };
     push_wake(Wake {
@@ -468,6 +611,10 @@ pub(crate) fn spawn_child(wrapper: IRSymbol, config: Value) -> Pid {
 /// `Envelope`). `tag` is the routing class. `reply` carries the call/reply
 /// correlation coordinates when present.
 pub(crate) struct EvalMessage {
+    /// The sender's request context, stamped on business traffic and
+    /// installed on the receiver at dequeue. Zero on every other tag.
+    /// Mirrors native `Envelope.context`.
+    pub context: ProcessContext,
     /// The routing class (business / lifecycle / reply / IO-ready).
     pub tag: Tag,
     /// The payload: the message `M` for business traffic, the reply `R`
@@ -493,6 +640,10 @@ pub(crate) struct ReplyInfo {
 impl Message for EvalMessage {
     fn tag(&self) -> Tag {
         self.tag
+    }
+
+    fn context(&self) -> ProcessContext {
+        self.context
     }
 
     fn reply_token(&self) -> i64 {
@@ -610,6 +761,7 @@ impl<'a, R: CallResolver> EvalExecutor<'a, R> {
             deliver(
                 notice.watcher,
                 EvalMessage {
+                    context: ProcessContext::ZERO,
                     reply: None,
                     tag: Tag::ExitSignal,
                     value: build_exit_signal_value(self.resolver, &notice),
@@ -621,7 +773,7 @@ impl<'a, R: CallResolver> EvalExecutor<'a, R> {
 
 impl<R: CallResolver> Executor for EvalExecutor<'_, R> {
     type Continuation = ();
-    type Execution = ();
+    type Execution = EvalExecution;
     type Message = EvalMessage;
 
     fn resume(&self, pid: Pid, _continuation: ()) {
@@ -665,6 +817,7 @@ impl<R: CallResolver> Executor for EvalExecutor<'_, R> {
 impl<R: CallResolver> MessageSource<EvalMessage> for EvalExecutor<'_, R> {
     fn lifecycle_message(&self, event: Lifecycle) -> EvalMessage {
         EvalMessage {
+            context: ProcessContext::ZERO,
             reply: None,
             tag: Tag::Lifecycle,
             value: Value::Int(event as i64),
@@ -673,6 +826,7 @@ impl<R: CallResolver> MessageSource<EvalMessage> for EvalExecutor<'_, R> {
 
     fn io_ready_message(&self, readiness: Readiness, fd: i32) -> EvalMessage {
         EvalMessage {
+            context: ProcessContext::ZERO,
             reply: None,
             tag: Tag::IOReady,
             value: crate::interpreter::build_io_ready_value(self.resolver, readiness, fd),

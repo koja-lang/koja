@@ -47,6 +47,7 @@ mod runtime_block;
 mod set;
 mod socket;
 mod string;
+mod trace;
 
 /// The `0..capacity` occupied-bucket walk, re-exported so the collection
 /// glue emitter ([`crate::emit::collection_glue`]) iterates `Map` /
@@ -102,5 +103,8 @@ pub(crate) fn emit_intrinsic_body<'ctx>(
         IRIntrinsicId::Set(method) => set::emit_set(ctx, function, llvm_function, method),
         IRIntrinsicId::Socket(method) => socket::emit_socket(ctx, function, llvm_function, method),
         IRIntrinsicId::String(method) => string::emit_string(ctx, function, llvm_function, method),
+        IRIntrinsicId::TraceRuntime(method) => {
+            trace::emit_trace_runtime(ctx, function, llvm_function, method)
+        }
     }
 }

@@ -88,11 +88,14 @@ rather than block forever.
 1. `Process.context`: the 32-byte slot on the process, the copy on
    `spawn`, the copy onto every `send`, `cast`, `call`, and `send_after`
    envelope, and the install and restore around each handler run. Small
-   and mechanical, and everything after it depends on it.
+   and mechanical, and everything after it depends on it. Shipped, with
+   the install at business dequeue and the restore in the `Trace`
+   closures rather than the runtime.
 2. `Trace` in the standard library on top of the slot, with remem's
    `lib/open_telemetry` ported to the new API as the first exporter
    package. The export queue starts as one mutex queue with a drop
-   counter. Per-scheduler buffers wait for a benchmark.
+   counter. Per-scheduler buffers wait for a benchmark. The stdlib
+   module shipped. The remem port is open.
 3. The log slot: `Log.configure` writes the calling process's slot and
    `spawn` copies it, handlers are closures, `Log.Record` is stamped from
    `Process.context`, and the runtime crash report flows through the same

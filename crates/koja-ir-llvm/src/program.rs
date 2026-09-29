@@ -23,7 +23,7 @@ use crate::layout::enums::{
 };
 use crate::layout::structs::{declare_struct_type, define_struct_body};
 use crate::layout::unions::{declare_union_type, define_union_body};
-use crate::layout::wire_contract::assert_wire_enum_order;
+use crate::layout::wire_contract::{assert_wire_enum_order, assert_wire_struct_layout};
 use crate::main_wrapper::{emit_app_name_global, emit_exit_code_global, emit_process_entry_main};
 
 pub(crate) fn compile_program(
@@ -62,6 +62,7 @@ pub(crate) fn compile_program(
         define_enum_completes_and_outer(ctx, decl)?;
     }
     assert_wire_enum_order(ctx)?;
+    assert_wire_struct_layout(ctx)?;
     emit_app_name_global(ctx, app_name);
     let entry = program.entry_function();
     emit_exit_code_global(ctx);

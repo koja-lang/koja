@@ -53,7 +53,11 @@ pub(crate) const STRING_SLICE_BYTES_SYMBOL: &str = "koja_string_slice_bytes";
 pub(crate) const RT_BUILD_ARGV_SYMBOL: &str = "koja_rt_build_argv";
 pub(crate) const RT_CALL_RECEIVE_SYMBOL: &str = "koja_rt_call_receive";
 pub(crate) const RT_CALL_TOKEN_SYMBOL: &str = "koja_rt_call_token";
+pub(crate) const RT_CONTEXT_GET_SYMBOL: &str = "koja_rt_context_get";
 pub(crate) const RT_DEMONITOR_SYMBOL: &str = "koja_rt_demonitor";
+pub(crate) const RT_EXPORT_DROPPED_SYMBOL: &str = "koja_rt_export_dropped";
+pub(crate) const RT_EXPORT_POP_SYMBOL: &str = "koja_rt_export_pop";
+pub(crate) const RT_EXPORT_PUSH_SYMBOL: &str = "koja_rt_export_push";
 pub(crate) const RT_KILL_SYMBOL: &str = "koja_rt_kill";
 pub(crate) const RT_MONITOR_SYMBOL: &str = "koja_rt_monitor";
 pub(crate) const RT_MAIN_DONE_SYMBOL: &str = "koja_rt_main_done";
@@ -69,7 +73,13 @@ pub(crate) const RT_SEND_AFTER_SYMBOL: &str = "koja_rt_send_after";
 pub(crate) const RT_SEND_LIFECYCLE_SYMBOL: &str = "koja_rt_send_lifecycle";
 pub(crate) const RT_SET_PRIORITY_SYMBOL: &str = "koja_rt_set_priority";
 pub(crate) const RT_SEND_SYMBOL: &str = "koja_rt_send";
+pub(crate) const RT_SPAN_CLOSE_SYMBOL: &str = "koja_rt_span_close";
+pub(crate) const RT_SPAN_ID_SYMBOL: &str = "koja_rt_span_id";
+pub(crate) const RT_SPAN_OPEN_SYMBOL: &str = "koja_rt_span_open";
+pub(crate) const RT_SPAN_PUT_SYMBOL: &str = "koja_rt_span_put";
+pub(crate) const RT_SPAN_TAKE_SYMBOL: &str = "koja_rt_span_take";
 pub(crate) const RT_SPAWN_SYMBOL: &str = "koja_rt_spawn";
+pub(crate) const RT_TRACE_INSTALL_SYMBOL: &str = "koja_rt_trace_install";
 pub(crate) const RT_YIELD_CHECK_SYMBOL: &str = "koja_rt_yield_check";
 pub(crate) const RT_REDUCTIONS_COUNTER_SYMBOL: &str = "koja_reductions_left";
 
@@ -661,6 +671,116 @@ pub(crate) fn declare_rt_parent_extern<'ctx>(ctx: &EmitContext<'ctx>) -> Functio
     let i64_ty = ctx.context.i64_type();
     let signature = i64_ty.fn_type(&[], false);
     declare_extern(ctx, RT_PARENT_SYMBOL, signature)
+}
+
+/// Declare (or look up) `koja_rt_context_get`. Signature:
+/// `void koja_rt_context_get(i8* out)`. Copies the calling process's
+/// 32-byte `Process.Context` into `out`.
+pub(crate) fn declare_rt_context_get_extern<'ctx>(ctx: &EmitContext<'ctx>) -> FunctionValue<'ctx> {
+    let ptr_ty = ctx.context.ptr_type(AddressSpace::default());
+    let signature = ctx.context.void_type().fn_type(&[ptr_ty.into()], false);
+    declare_extern(ctx, RT_CONTEXT_GET_SYMBOL, signature)
+}
+
+/// Declare (or look up) `koja_rt_trace_install`. Signature:
+/// `void koja_rt_trace_install(i8* context)`. Installs the 32-byte
+/// `Process.Context` at `context` on the calling process.
+pub(crate) fn declare_rt_trace_install_extern<'ctx>(
+    ctx: &EmitContext<'ctx>,
+) -> FunctionValue<'ctx> {
+    let ptr_ty = ctx.context.ptr_type(AddressSpace::default());
+    let signature = ctx.context.void_type().fn_type(&[ptr_ty.into()], false);
+    declare_extern(ctx, RT_TRACE_INSTALL_SYMBOL, signature)
+}
+
+/// Declare (or look up) `koja_rt_span_id`. Signature:
+/// `i64 koja_rt_span_id()`. A fresh non-zero span id.
+pub(crate) fn declare_rt_span_id_extern<'ctx>(ctx: &EmitContext<'ctx>) -> FunctionValue<'ctx> {
+    let signature = ctx.context.i64_type().fn_type(&[], false);
+    declare_extern(ctx, RT_SPAN_ID_SYMBOL, signature)
+}
+
+/// Declare (or look up) `koja_rt_span_open`. Signature:
+/// `i64 koja_rt_span_open(i8* record, i64 len, void(i8*)* drop_glue)`.
+/// Copies the record onto the calling process's open span stack and
+/// returns its handle.
+pub(crate) fn declare_rt_span_open_extern<'ctx>(ctx: &EmitContext<'ctx>) -> FunctionValue<'ctx> {
+    let ptr_ty = ctx.context.ptr_type(AddressSpace::default());
+    let i64_ty = ctx.context.i64_type();
+    let signature = i64_ty.fn_type(&[ptr_ty.into(), i64_ty.into(), ptr_ty.into()], false);
+    declare_extern(ctx, RT_SPAN_OPEN_SYMBOL, signature)
+}
+
+/// Declare (or look up) `koja_rt_span_take`. Signature:
+/// `void koja_rt_span_take(i64 handle, i8* out, i64 out_cap)`. Moves
+/// the open record at `handle` into `out`.
+pub(crate) fn declare_rt_span_take_extern<'ctx>(ctx: &EmitContext<'ctx>) -> FunctionValue<'ctx> {
+    let ptr_ty = ctx.context.ptr_type(AddressSpace::default());
+    let i64_ty = ctx.context.i64_type();
+    let signature = ctx
+        .context
+        .void_type()
+        .fn_type(&[i64_ty.into(), ptr_ty.into(), i64_ty.into()], false);
+    declare_extern(ctx, RT_SPAN_TAKE_SYMBOL, signature)
+}
+
+/// Declare (or look up) `koja_rt_span_put`. Signature:
+/// `void koja_rt_span_put(i64 handle, i8* record, i64 len, void(i8*)* drop_glue)`.
+/// Copies the record back into the empty slot at `handle`.
+pub(crate) fn declare_rt_span_put_extern<'ctx>(ctx: &EmitContext<'ctx>) -> FunctionValue<'ctx> {
+    let ptr_ty = ctx.context.ptr_type(AddressSpace::default());
+    let i64_ty = ctx.context.i64_type();
+    let signature = ctx.context.void_type().fn_type(
+        &[i64_ty.into(), ptr_ty.into(), i64_ty.into(), ptr_ty.into()],
+        false,
+    );
+    declare_extern(ctx, RT_SPAN_PUT_SYMBOL, signature)
+}
+
+/// Declare (or look up) `koja_rt_span_close`. Signature:
+/// `void koja_rt_span_close(i64 handle, i8* out, i64 out_cap)`. Pops
+/// the innermost open record, which must be `handle`, into `out`.
+pub(crate) fn declare_rt_span_close_extern<'ctx>(ctx: &EmitContext<'ctx>) -> FunctionValue<'ctx> {
+    let ptr_ty = ctx.context.ptr_type(AddressSpace::default());
+    let i64_ty = ctx.context.i64_type();
+    let signature = ctx
+        .context
+        .void_type()
+        .fn_type(&[i64_ty.into(), ptr_ty.into(), i64_ty.into()], false);
+    declare_extern(ctx, RT_SPAN_CLOSE_SYMBOL, signature)
+}
+
+/// Declare (or look up) `koja_rt_export_push`. Signature:
+/// `void koja_rt_export_push(i8* record, i64 len, void(i8*)* drop_glue)`.
+/// Queues a copy of the finished record for the exporter.
+pub(crate) fn declare_rt_export_push_extern<'ctx>(ctx: &EmitContext<'ctx>) -> FunctionValue<'ctx> {
+    let ptr_ty = ctx.context.ptr_type(AddressSpace::default());
+    let i64_ty = ctx.context.i64_type();
+    let signature = ctx
+        .context
+        .void_type()
+        .fn_type(&[ptr_ty.into(), i64_ty.into(), ptr_ty.into()], false);
+    declare_extern(ctx, RT_EXPORT_PUSH_SYMBOL, signature)
+}
+
+/// Declare (or look up) `koja_rt_export_pop`. Signature:
+/// `i64 koja_rt_export_pop(i8* out, i64 out_cap)`. Moves the oldest
+/// queued record into `out` and returns 0, or returns -1 when empty.
+pub(crate) fn declare_rt_export_pop_extern<'ctx>(ctx: &EmitContext<'ctx>) -> FunctionValue<'ctx> {
+    let ptr_ty = ctx.context.ptr_type(AddressSpace::default());
+    let i64_ty = ctx.context.i64_type();
+    let signature = i64_ty.fn_type(&[ptr_ty.into(), i64_ty.into()], false);
+    declare_extern(ctx, RT_EXPORT_POP_SYMBOL, signature)
+}
+
+/// Declare (or look up) `koja_rt_export_dropped`. Signature:
+/// `i64 koja_rt_export_dropped()`. Records the export queue has
+/// dropped.
+pub(crate) fn declare_rt_export_dropped_extern<'ctx>(
+    ctx: &EmitContext<'ctx>,
+) -> FunctionValue<'ctx> {
+    let signature = ctx.context.i64_type().fn_type(&[], false);
+    declare_extern(ctx, RT_EXPORT_DROPPED_SYMBOL, signature)
 }
 
 /// Declare (or look up) `koja_rt_is_process_alive`. Signature:

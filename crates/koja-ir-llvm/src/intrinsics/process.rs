@@ -24,10 +24,11 @@ use crate::error::{IceExt, LlvmError};
 use crate::intrinsics::element::release_in_slot;
 use crate::intrinsics::result;
 use crate::runtime::{
-    declare_rt_call_receive_extern, declare_rt_call_token_extern, declare_rt_demonitor_extern,
-    declare_rt_is_process_alive_extern, declare_rt_kill_extern, declare_rt_monitor_extern,
-    declare_rt_parent_extern, declare_rt_reply_extern, declare_rt_self_extern,
-    declare_rt_send_after_extern, declare_rt_send_extern, declare_rt_send_lifecycle_extern,
+    declare_rt_call_receive_extern, declare_rt_call_token_extern, declare_rt_context_get_extern,
+    declare_rt_demonitor_extern, declare_rt_is_process_alive_extern, declare_rt_kill_extern,
+    declare_rt_monitor_extern, declare_rt_parent_extern, declare_rt_reply_extern,
+    declare_rt_self_extern, declare_rt_send_after_extern, declare_rt_send_extern,
+    declare_rt_send_lifecycle_extern,
 };
 use crate::types::ir_basic_type;
 
@@ -66,6 +67,7 @@ pub(super) fn emit_process<'ctx>(
     method: ProcessMethod,
 ) -> Result<(), LlvmError> {
     match method {
+        ProcessMethod::Context => emit_context(ctx, function, llvm_function),
         ProcessMethod::Demonitor => emit_demonitor(ctx, function, llvm_function),
         ProcessMethod::Monitor => emit_monitor(ctx, function, llvm_function),
         ProcessMethod::Parent => emit_parent(ctx, function, llvm_function),
@@ -609,6 +611,46 @@ fn emit_parent<'ctx>(
         .map(|_| ())
 }
 
+/// `Process.context() -> Process.Context`: copy the calling process's
+/// request context out of the runtime via `koja_rt_context_get`.
+/// `Process.Context` lays out as four `i64` words, the same 32 bytes the
+/// runtime holds, so the extern fills a stack slot of the struct type
+/// and the slot is loaded whole.
+fn emit_context<'ctx>(
+    ctx: &EmitContext<'ctx>,
+    function: &IRFunction,
+    llvm_function: FunctionValue<'ctx>,
+) -> Result<(), LlvmError> {
+    let entry_bb = ctx.context.append_basic_block(llvm_function, "entry");
+    ctx.builder.position_at_end(entry_bb);
+
+    let context_struct = match &function.return_type {
+        IRType::Struct(symbol) => ctx.layouts.struct_type(symbol.mangled()),
+        other => {
+            return Err(LlvmError::Codegen(format!(
+                "LLVM emit: `Process.context` returns `{other:?}`, expected the \
+                 `Process.Context` struct (IR seal invariant violation)",
+            )));
+        }
+    };
+    let slot = ctx
+        .builder
+        .build_alloca(context_struct, "context_slot")
+        .or_ice()?;
+    let get_fn = declare_rt_context_get_extern(ctx);
+    ctx.builder
+        .build_call(get_fn, &[slot.into()], "")
+        .or_ice()?;
+    let context = ctx
+        .builder
+        .build_load(context_struct, slot, "context")
+        .or_ice()?;
+    ctx.builder
+        .build_return(Some(&context))
+        .or_ice()
+        .map(|_| ())
+}
+
 // ----- ReplyTo method emitters --------------------------------------------
 
 /// `ReplyTo.send(self, reply: R)`: serialize bare `R` and route
@@ -978,7 +1020,7 @@ fn self_field<'ctx>(
 /// Read the LLVM value + IR type for the `index`-th parameter,
 /// surfacing both for downstream emission. Misses are an upstream
 /// IR seal / lower bug.
-fn nth_param<'ctx, 'fn_>(
+pub(super) fn nth_param<'ctx, 'fn_>(
     function: &'fn_ IRFunction,
     llvm_function: FunctionValue<'ctx>,
     index: u32,

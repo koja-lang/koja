@@ -14,6 +14,8 @@
 
 use std::time::{Duration, Instant};
 
+use crate::context::Context;
+
 /// A scheduler-assigned process handle. Opaque to user code. The native
 /// adapter packs a slot index and generation into it.
 pub type Pid = i64;
@@ -40,6 +42,11 @@ pub enum Tag {
 /// natively, a typed value cooperatively) is the executor's choice.
 pub trait Message {
     fn tag(&self) -> Tag;
+
+    /// The sender's request context, stamped on business traffic at
+    /// send and installed on the receiver when the message is dequeued.
+    /// Zero on every other tag.
+    fn context(&self) -> Context;
 
     /// The call token carried by a `Reply`-tagged message, matched
     /// against the receiver's awaited token at delivery. Non-reply
