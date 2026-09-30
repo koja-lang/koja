@@ -1,0 +1,1 @@
+type `Key` does not implement protocol `Hash` (required by type parameter `K` in `Global.Map`)

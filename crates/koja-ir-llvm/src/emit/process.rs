@@ -96,12 +96,12 @@ pub(crate) fn emit_process_entry_wrapper_body<'ctx>(
 ) -> Result<(), LlvmError> {
     emit_wrapper_prologue(ctx, llvm_function)?;
     emit_built_constant_init_call(ctx)?;
-    let exit_code = emit_wrapper_body_call(ctx, function, llvm_function)?.ok_or_else(|| {
-        LlvmError::Codegen(format!(
+    let exit_code = emit_wrapper_body_call(ctx, function, llvm_function)?.unwrap_or_else(|| {
+        panic!(
             "LLVM emit: ProcessEntryWrapper `{}` body call returned no exit code",
             function.symbol,
-        ))
-    })?;
+        )
+    });
     store_exit_code(ctx, exit_code.into_int_value())?;
     ctx.builder.build_return(None).or_ice().map(|_| ())
 }
@@ -126,28 +126,28 @@ fn emit_wrapper_body_call<'ctx>(
     function: &IRFunction,
     llvm_function: FunctionValue<'ctx>,
 ) -> Result<Option<BasicValueEnum<'ctx>>, LlvmError> {
-    let body_symbol = wrapper_body_callee(function)?;
-    let body_fn = ctx.declared_function(body_symbol).ok_or_else(|| {
-        LlvmError::Codegen(format!(
+    let body_symbol = wrapper_body_callee(function);
+    let body_fn = ctx.declared_function(body_symbol).unwrap_or_else(|| {
+        panic!(
             "LLVM emit: wrapper `{}` process body `{body_symbol}` not declared",
             function.symbol,
-        ))
-    })?;
-    let config_ir_type = function.params.first().map(|p| &p.ty).ok_or_else(|| {
-        LlvmError::Codegen(format!(
-            "LLVM emit: wrapper `{}` has no config parameter",
+        )
+    });
+    let config_ir_type = function.params.first().map(|p| &p.ty).unwrap_or_else(|| {
+        panic!(
+            "LLVM emit: wrapper `{}` has no config parameter (seal invariant violation)",
             function.symbol,
-        ))
-    })?;
+        )
+    });
     let config_llvm_type = ir_basic_type(ctx, config_ir_type)?;
     let raw_ptr = llvm_function
         .get_nth_param(0)
-        .ok_or_else(|| {
-            LlvmError::Codegen(format!(
+        .unwrap_or_else(|| {
+            panic!(
                 "LLVM emit: wrapper `{}` declaration has no param #0",
                 function.symbol,
-            ))
-        })?
+            )
+        })
         .into_pointer_value();
     let typed_config = ctx
         .builder
@@ -163,7 +163,7 @@ fn emit_wrapper_body_call<'ctx>(
 /// The process-body symbol named by the wrapper shim's IR `Call`:
 /// the single source of truth linking shim to body (no name
 /// re-derivation in the backend).
-fn wrapper_body_callee(function: &IRFunction) -> Result<&IRSymbol, LlvmError> {
+fn wrapper_body_callee(function: &IRFunction) -> &IRSymbol {
     function
         .blocks
         .iter()
@@ -172,12 +172,12 @@ fn wrapper_body_callee(function: &IRFunction) -> Result<&IRSymbol, LlvmError> {
             IRInstruction::Call { callee, .. } => Some(callee),
             _ => None,
         })
-        .ok_or_else(|| {
-            LlvmError::Codegen(format!(
+        .unwrap_or_else(|| {
+            panic!(
                 "LLVM emit: wrapper `{}` IR body carries no process-body call (lower \
                  invariant violation)",
                 function.symbol,
-            ))
+            )
         })
 }
 
@@ -192,11 +192,9 @@ fn store_exit_code<'ctx>(
         .builder
         .build_int_truncate(code_i64, ctx.context.i32_type(), "exit_code_i32")
         .or_ice()?;
-    let exit_global = ctx.module.get_global(EXIT_CODE_SYMBOL).ok_or_else(|| {
-        LlvmError::Codegen(format!(
-            "LLVM emit: `{EXIT_CODE_SYMBOL}` global not declared before wrapper body emit",
-        ))
-    })?;
+    let exit_global = ctx.module.get_global(EXIT_CODE_SYMBOL).unwrap_or_else(|| {
+        panic!("LLVM emit: `{EXIT_CODE_SYMBOL}` global not declared before wrapper body emit")
+    });
     ctx.builder
         .build_store(exit_global.as_pointer_value(), code_i32)
         .or_ice()
@@ -235,17 +233,15 @@ pub(super) fn emit_spawn<'ctx>(
         wrapper,
     } = args;
     let config_llvm_type = ir_basic_type(ctx, config_type)?;
-    let config_value = lookup(values, config)?;
+    let config_value = lookup(values, config);
 
     let (config_ptr, config_size) =
         serialize_to_stack(ctx, "spawn_config", config_llvm_type, config_value)?;
     let drop_glue = payload_drop_glue(ctx, config_type)?;
 
-    let wrapper_fn = ctx.declared_function(wrapper).ok_or_else(|| {
-        LlvmError::Codegen(format!(
-            "LLVM emit: spawn target wrapper `{wrapper}` not declared",
-        ))
-    })?;
+    let wrapper_fn = ctx
+        .declared_function(wrapper)
+        .unwrap_or_else(|| panic!("LLVM emit: spawn target wrapper `{wrapper}` not declared"));
     let wrapper_ptr = wrapper_fn.as_global_value().as_pointer_value();
 
     let spawn_fn = declare_rt_spawn_extern(ctx);
@@ -284,7 +280,7 @@ pub(super) fn emit_process_exit<'ctx>(
     reason: ValueId,
     values: &ValueMap<'ctx>,
 ) -> Result<(), LlvmError> {
-    let reason = lookup(values, reason)?.into_int_value();
+    let reason = lookup(values, reason).into_int_value();
     let process_exit_fn = declare_rt_process_exit_extern(ctx);
     ctx.builder
         .build_call(process_exit_fn, &[reason.into()], "")
@@ -302,7 +298,7 @@ pub(super) fn emit_set_priority<'ctx>(
     tag: ValueId,
     values: &ValueMap<'ctx>,
 ) -> Result<(), LlvmError> {
-    let level = lookup(values, tag)?.into_int_value();
+    let level = lookup(values, tag).into_int_value();
     let set_priority_fn = declare_rt_set_priority_extern(ctx);
     ctx.builder
         .build_call(set_priority_fn, &[level.into()], "")
@@ -325,12 +321,13 @@ pub(super) fn emit_receive<'ctx>(
     arms: &[ReceiveArm],
     values: &mut ValueMap<'ctx>,
 ) -> Result<(), LlvmError> {
-    let host_block = ctx.builder.get_insert_block().ok_or_else(|| {
-        LlvmError::Codegen("LLVM emit: Receive emitted with no insertion block".to_string())
-    })?;
-    let host_function = host_block.get_parent().ok_or_else(|| {
-        LlvmError::Codegen("LLVM emit: Receive's host block has no parent function".to_string())
-    })?;
+    let host_block = ctx
+        .builder
+        .get_insert_block()
+        .expect("LLVM emit: Receive emitted with no insertion block");
+    let host_function = host_block
+        .get_parent()
+        .expect("LLVM emit: Receive's host block has no parent function");
 
     let (payload_slot, payload_cap) = build_payload_slot(ctx, arms)?;
     let tag_value = build_receive_call(ctx, after, values, payload_slot, payload_cap)?;
@@ -379,7 +376,7 @@ fn build_receive_call<'ctx>(
     payload_cap: IntValue<'ctx>,
 ) -> Result<IntValue<'ctx>, LlvmError> {
     let tag_call = if let Some(after) = after {
-        let timeout = lookup(values, after.timeout)?.into_int_value();
+        let timeout = lookup(values, after.timeout).into_int_value();
         let receive_fn = declare_rt_receive_timeout_extern(ctx);
         ctx.builder
             .build_call(
@@ -401,7 +398,7 @@ fn build_receive_call<'ctx>(
     Ok(tag_call
         .try_as_basic_value()
         .basic()
-        .ok_or_else(|| LlvmError::Codegen("koja_rt_receive did not return a value".to_string()))?
+        .expect("koja_rt_receive did not return a value")
         .into_int_value())
 }
 

@@ -91,30 +91,19 @@ use crate::package::{IRPackage, insert_package_function};
 use crate::struct_decl::IRStructDecl;
 use crate::types::IRType;
 
-/// Run the elaborate sub-pass over a program's package set. In order:
-/// rewrite boxed-slot overwrites ([`overwrite`]), fuse dead-receiver
+/// Run the elaborate sub-pass over a package set. It first rewrites
+/// boxed-slot overwrites ([`overwrite`]), then fuses dead-receiver
 /// mutator calls and byte concats into their consuming forms
 /// ([`consume`], before discovery so deleted drops seed no glue),
-/// discover the heap-managed composites that need glue, synthesize
-/// and register it, rewrite every composite acquisition and release
-/// into a glue `Call`, then splice the `IOReady` and `ExitSignal`
+/// discovers the heap-managed composites that need glue, synthesizes
+/// and registers it, rewrites every composite acquisition and release
+/// into a glue `Call`, and last splices the `IOReady` and `ExitSignal`
 /// delivery arms into process loops ([`delivery`]).
-pub(crate) fn elaborate(packages: &mut [IRPackage]) {
-    overwrite::rewrite_indirect_overwrites(packages, &mut []);
-    consume::fuse_consuming_sites(packages, &mut []);
-    let needed = discover_glue_types(packages, &[]);
-    let deep_needed = discover_deep_copy_types(packages, &[]);
-    register_all(packages, &needed, &deep_needed);
-    rewrite_all(packages, &needed, &deep_needed);
-    delivery::deliver(packages, DeliveryKind::IoReady);
-    delivery::deliver(packages, DeliveryKind::ExitSignal);
-}
-
-/// Run the elaborate sub-pass for a script. Same steps as
-/// [`elaborate`], but discovery also scans the inline script `body`
-/// (which carries its own `Clone` / `Drop` sites outside any package
-/// function) and the rewrite covers it too.
-pub(crate) fn elaborate_script(packages: &mut [IRPackage], body: &mut [IRBasicBlock]) {
+///
+/// `body` is a script's inline top-level body, which carries its own
+/// `Clone` / `Drop` sites outside any package function. Discovery
+/// scans it and the rewrite covers it. Programs pass an empty `body`.
+pub(crate) fn elaborate(packages: &mut [IRPackage], body: &mut [IRBasicBlock]) {
     overwrite::rewrite_indirect_overwrites(packages, body);
     consume::fuse_consuming_sites(packages, body);
     let needed = discover_glue_types(packages, body);
@@ -633,7 +622,7 @@ mod tests {
     }
 
     fn elaborate_and_seal(program: &mut IRProgram) {
-        elaborate(&mut program.packages);
+        elaborate(&mut program.packages, &mut []);
         seal_program(program);
     }
 

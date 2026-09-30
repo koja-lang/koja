@@ -31,6 +31,7 @@ pub mod mangling;
 mod merge;
 mod package;
 pub mod panics;
+mod pipeline;
 mod program;
 mod script;
 mod seal;

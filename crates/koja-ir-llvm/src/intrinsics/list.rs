@@ -59,17 +59,17 @@ pub(super) fn emit_list<'ctx>(
 /// it on the return type. Every other method has `self: List<T>` as
 /// `params[0]` (or `params[1]` for `concat`'s `other`, but both
 /// share the same `T`).
-fn element(method: ListMethod, function: &IRFunction) -> Result<&IRType, LlvmError> {
+fn element(method: ListMethod, function: &IRFunction) -> &IRType {
     let candidate = match method {
         ListMethod::New => &function.return_type,
         _ => &function.params[0].ty,
     };
     match candidate {
-        IRType::List(inner) => Ok(inner),
-        other => Err(LlvmError::Codegen(format!(
+        IRType::List(inner) => inner,
+        other => panic!(
             "List.{method:?} expected a `List<T>` slot, got `{other:?}` (symbol `{}`)",
             function.symbol,
-        ))),
+        ),
     }
 }
 
@@ -78,14 +78,15 @@ fn element_byte_size<'ctx>(
     function: &IRFunction,
     method: ListMethod,
 ) -> Result<IntValue<'ctx>, LlvmError> {
-    let elem_ty = element(method, function)?;
+    let elem_ty = element(method, function);
     let basic = ir_basic_type(ctx, elem_ty)?;
-    basic.size_of().ok_or_else(|| {
-        LlvmError::Codegen(format!(
+    let size = basic.size_of().unwrap_or_else(|| {
+        panic!(
             "List.{method:?} cannot compute size of element `{elem_ty:?}` (symbol `{}`)",
             function.symbol,
-        ))
-    })
+        )
+    });
+    Ok(size)
 }
 
 fn emit_new<'ctx>(ctx: &EmitContext<'ctx>, function: &IRFunction) -> Result<(), LlvmError> {
@@ -109,7 +110,7 @@ fn emit_length<'ctx>(
     function: &IRFunction,
     llvm_function: FunctionValue<'ctx>,
 ) -> Result<(), LlvmError> {
-    let self_val = nth_struct(function, llvm_function, 0, "self")?;
+    let self_val = nth_struct(function, llvm_function, 0, "self");
     let len = extract_int(ctx, self_val, 1, "len")?;
     ret_basic(ctx, len.into())
 }
@@ -120,7 +121,7 @@ fn emit_empty_q<'ctx>(
     llvm_function: FunctionValue<'ctx>,
 ) -> Result<(), LlvmError> {
     let i64_ty = ctx.context.i64_type();
-    let self_val = nth_struct(function, llvm_function, 0, "self")?;
+    let self_val = nth_struct(function, llvm_function, 0, "self");
     let len = extract_int(ctx, self_val, 1, "len")?;
     let is_empty = ctx
         .builder
@@ -136,7 +137,7 @@ fn emit_from_list<'ctx>(
 ) -> Result<(), LlvmError> {
     // `List<T>` is the `ListLiteral<T>` carrier, so this is value-wise an
     // identity that still has to return an independent buffer.
-    let self_val = nth_struct(function, llvm_function, 0, "self")?;
+    let self_val = nth_struct(function, llvm_function, 0, "self");
     let cloned = clone_list_value(ctx, function, llvm_function, ListMethod::FromList, self_val)?;
     ret_struct(ctx, cloned)
 }
@@ -155,7 +156,7 @@ fn clone_list_value<'ctx>(
     let new_buf = copy_buffer(
         ctx,
         llvm_function,
-        element(method, function)?,
+        element(method, function),
         BufferRange {
             count: len,
             ptr: buf_ptr,
@@ -175,9 +176,9 @@ fn emit_append<'ctx>(
     let i64_ty = ctx.context.i64_type();
     let i8_ty = ctx.context.i8_type();
 
-    let self_val = nth_struct(function, llvm_function, 0, "self")?;
-    let item_val = nth_param(function, llvm_function, 1, "item")?;
-    let item_val = acquire_value(ctx, element(ListMethod::Append, function)?, item_val)?;
+    let self_val = nth_struct(function, llvm_function, 0, "self");
+    let item_val = nth_param(function, llvm_function, 1, "item");
+    let item_val = acquire_value(ctx, element(ListMethod::Append, function), item_val)?;
 
     let buf_ptr = extract_pointer(ctx, self_val, 0, "buf_ptr")?;
     let len = extract_int(ctx, self_val, 1, "len")?;
@@ -194,7 +195,7 @@ fn emit_append<'ctx>(
     let new_buf = copy_buffer(
         ctx,
         llvm_function,
-        element(ListMethod::Append, function)?,
+        element(ListMethod::Append, function),
         BufferRange {
             count: len,
             ptr: buf_ptr,
@@ -238,9 +239,9 @@ pub(super) fn emit_append_consuming<'ctx>(
     let in_place_bb = ctx.context.append_basic_block(llvm_function, "in_place");
     let grow_bb = ctx.context.append_basic_block(llvm_function, "grow");
 
-    let self_val = nth_struct(function, llvm_function, 0, "self")?;
-    let item_val = nth_param(function, llvm_function, 1, "item")?;
-    let item_val = acquire_value(ctx, element(ListMethod::Append, function)?, item_val)?;
+    let self_val = nth_struct(function, llvm_function, 0, "self");
+    let item_val = nth_param(function, llvm_function, 1, "item");
+    let item_val = acquire_value(ctx, element(ListMethod::Append, function), item_val)?;
 
     let buf_ptr = extract_pointer(ctx, self_val, 0, "buf_ptr")?;
     let len = extract_int(ctx, self_val, 1, "len")?;
@@ -327,17 +328,17 @@ fn emit_get<'ctx>(
     llvm_function: FunctionValue<'ctx>,
 ) -> Result<(), LlvmError> {
     let i8_ty = ctx.context.i8_type();
-    let option_symbol = expect_enum_symbol(&function.return_type, function, "List.get")?;
+    let option_symbol = expect_enum_symbol(&function.return_type, function, "List.get");
     let ok_bb = ctx.context.append_basic_block(llvm_function, "ok");
     let oob_bb = ctx.context.append_basic_block(llvm_function, "oob");
 
-    let self_val = nth_struct(function, llvm_function, 0, "self")?;
-    let index = nth_int(function, llvm_function, 1, "index")?;
+    let self_val = nth_struct(function, llvm_function, 0, "self");
+    let index = nth_int(function, llvm_function, 1, "index");
 
     let buf_ptr = extract_pointer(ctx, self_val, 0, "buf_ptr")?;
     let len = extract_int(ctx, self_val, 1, "len")?;
     let elem_size = element_byte_size(ctx, function, ListMethod::Get)?;
-    let elem_ty = ir_basic_type(ctx, element(ListMethod::Get, function)?)?;
+    let elem_ty = ir_basic_type(ctx, element(ListMethod::Get, function))?;
 
     let in_bounds = ctx
         .builder
@@ -361,7 +362,7 @@ fn emit_get<'ctx>(
         .builder
         .build_load(elem_ty, elem_ptr, "elem_val")
         .or_ice()?;
-    let value = acquire_value(ctx, element(ListMethod::Get, function)?, value)?;
+    let value = acquire_value(ctx, element(ListMethod::Get, function), value)?;
     let some = build_enum_value(
         ctx,
         option_symbol,
@@ -390,16 +391,16 @@ fn emit_pop<'ctx>(
     let i8_ty = ctx.context.i8_type();
     let i64_ty = ctx.context.i64_type();
     let tuple_struct = ir_basic_type(ctx, &function.return_type)?.into_struct_type();
-    let option_symbol = tuple_element_enum_symbol(&function.return_type, 0, function)?;
+    let option_symbol = tuple_element_enum_symbol(&function.return_type, 0, function);
 
     let empty_bb = ctx.context.append_basic_block(llvm_function, "empty");
     let nonempty_bb = ctx.context.append_basic_block(llvm_function, "nonempty");
 
-    let self_val = nth_struct(function, llvm_function, 0, "self")?;
+    let self_val = nth_struct(function, llvm_function, 0, "self");
     let buf_ptr = extract_pointer(ctx, self_val, 0, "buf_ptr")?;
     let len = extract_int(ctx, self_val, 1, "len")?;
     let elem_size = element_byte_size(ctx, function, ListMethod::Pop)?;
-    let elem_ty = ir_basic_type(ctx, element(ListMethod::Pop, function)?)?;
+    let elem_ty = ir_basic_type(ctx, element(ListMethod::Pop, function))?;
 
     let is_empty = ctx
         .builder
@@ -421,7 +422,7 @@ fn emit_pop<'ctx>(
     let empty_buf = copy_buffer(
         ctx,
         llvm_function,
-        element(ListMethod::Pop, function)?,
+        element(ListMethod::Pop, function),
         BufferRange {
             count: len,
             ptr: buf_ptr,
@@ -457,7 +458,7 @@ fn emit_pop<'ctx>(
         .builder
         .build_load(elem_ty, elem_ptr, "elem_val")
         .or_ice()?;
-    let elem_val = acquire_value(ctx, element(ListMethod::Pop, function)?, elem_val)?;
+    let elem_val = acquire_value(ctx, element(ListMethod::Pop, function), elem_val)?;
     let some = build_enum_value(
         ctx,
         &option_symbol,
@@ -467,7 +468,7 @@ fn emit_pop<'ctx>(
     let new_buf = copy_buffer(
         ctx,
         llvm_function,
-        element(ListMethod::Pop, function)?,
+        element(ListMethod::Pop, function),
         BufferRange {
             count: new_len,
             ptr: buf_ptr,
@@ -494,9 +495,9 @@ fn emit_replace_at<'ctx>(
     let in_bounds_bb = ctx.context.append_basic_block(llvm_function, "in_bounds");
     let done_bb = ctx.context.append_basic_block(llvm_function, "done");
 
-    let self_val = nth_struct(function, llvm_function, 0, "self")?;
-    let index = nth_int(function, llvm_function, 1, "index")?;
-    let value = nth_param(function, llvm_function, 2, "value")?;
+    let self_val = nth_struct(function, llvm_function, 0, "self");
+    let index = nth_int(function, llvm_function, 1, "index");
+    let value = nth_param(function, llvm_function, 2, "value");
 
     let buf_ptr = extract_pointer(ctx, self_val, 0, "buf_ptr")?;
     let len = extract_int(ctx, self_val, 1, "len")?;
@@ -511,7 +512,7 @@ fn emit_replace_at<'ctx>(
         .or_ice()?;
 
     ctx.builder.position_at_end(in_bounds_bb);
-    let elem_ty = element(ListMethod::ReplaceAt, function)?;
+    let elem_ty = element(ListMethod::ReplaceAt, function);
     let new_buf = copy_buffer(
         ctx,
         llvm_function,
@@ -559,9 +560,9 @@ fn emit_slice<'ctx>(
     let nonempty_bb = ctx.context.append_basic_block(llvm_function, "nonempty");
     let empty_bb = ctx.context.append_basic_block(llvm_function, "empty");
 
-    let self_val = nth_struct(function, llvm_function, 0, "self")?;
-    let start = nth_int(function, llvm_function, 1, "start")?;
-    let count = nth_int(function, llvm_function, 2, "count")?;
+    let self_val = nth_struct(function, llvm_function, 0, "self");
+    let start = nth_int(function, llvm_function, 1, "start");
+    let count = nth_int(function, llvm_function, 2, "count");
 
     let buf_ptr = extract_pointer(ctx, self_val, 0, "buf_ptr")?;
     let len = extract_int(ctx, self_val, 1, "len")?;
@@ -634,7 +635,7 @@ fn emit_slice<'ctx>(
     acquire_buffer(
         ctx,
         llvm_function,
-        element(ListMethod::Slice, function)?,
+        element(ListMethod::Slice, function),
         new_buf,
         clamped_count,
         elem_size,
@@ -660,8 +661,8 @@ fn emit_concat<'ctx>(
 ) -> Result<(), LlvmError> {
     let i8_ty = ctx.context.i8_type();
 
-    let self_val = nth_struct(function, llvm_function, 0, "self")?;
-    let other_val = nth_struct(function, llvm_function, 1, "other")?;
+    let self_val = nth_struct(function, llvm_function, 0, "self");
+    let other_val = nth_struct(function, llvm_function, 1, "other");
 
     let self_ptr = extract_pointer(ctx, self_val, 0, "self_ptr")?;
     let self_len = extract_int(ctx, self_val, 1, "self_len")?;
@@ -677,7 +678,7 @@ fn emit_concat<'ctx>(
     // Copy-on-write: a fresh `total_len` buffer seeded with `self`'s
     // elements, then `other` appended after them. Neither input buffer
     // is mutated.
-    let elem_ty = element(ListMethod::Concat, function)?;
+    let elem_ty = element(ListMethod::Concat, function);
     let new_buf = copy_buffer(
         ctx,
         llvm_function,
@@ -780,20 +781,20 @@ fn tuple_element_enum_symbol(
     tuple_ty: &IRType,
     element_index: usize,
     function: &IRFunction,
-) -> Result<IRSymbol, LlvmError> {
+) -> IRSymbol {
     let IRType::Tuple(elements) = tuple_ty else {
-        return Err(LlvmError::Codegen(format!(
+        panic!(
             "List.pop expected a tuple return type, got `{tuple_ty:?}` (symbol `{}`)",
             function.symbol,
-        )));
+        );
     };
     match elements.get(element_index) {
-        Some(IRType::Enum(symbol)) => Ok(symbol.clone()),
-        other => Err(LlvmError::Codegen(format!(
+        Some(IRType::Enum(symbol)) => symbol.clone(),
+        other => panic!(
             "List.pop expected an enum-typed element at index {element_index}, \
              got `{other:?}` (symbol `{}`)",
             function.symbol,
-        ))),
+        ),
     }
 }
 

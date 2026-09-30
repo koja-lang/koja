@@ -33,7 +33,7 @@ pub(crate) fn emit_set_from_list<'ctx>(
     let entry_block = ctx.builder.get_insert_block().unwrap();
     let elem_basic_ty = ir_basic_type(ctx, layout.key_ty)?;
 
-    let list_val = nth_struct(function, llvm_function, 0, "list")?;
+    let list_val = nth_struct(function, llvm_function, 0, "list");
     let list_ptr = ctx
         .builder
         .build_extract_value(list_val, 0, "list_ptr")
@@ -174,12 +174,12 @@ fn call_set_insert_inline<'ctx>(
         post.length,
         post.capacity,
     )?;
-    let update_tail = ctx.builder.get_insert_block().ok_or_else(|| {
-        LlvmError::Codegen(format!(
+    let update_tail = ctx.builder.get_insert_block().unwrap_or_else(|| {
+        panic!(
             "call_set_insert_inline lost update insertion block on `{}`",
             function.symbol,
-        ))
-    })?;
+        )
+    });
     ctx.builder.build_unconditional_branch(merge_bb).or_ice()?;
 
     ctx.builder.position_at_end(probe.insert_bb);
@@ -202,12 +202,12 @@ fn call_set_insert_inline<'ctx>(
         new_len,
         post.capacity,
     )?;
-    let insert_tail = ctx.builder.get_insert_block().ok_or_else(|| {
-        LlvmError::Codegen(format!(
+    let insert_tail = ctx.builder.get_insert_block().unwrap_or_else(|| {
+        panic!(
             "call_set_insert_inline lost insert insertion block on `{}`",
             function.symbol,
-        ))
-    })?;
+        )
+    });
     ctx.builder.build_unconditional_branch(merge_bb).or_ice()?;
 
     ctx.builder.position_at_end(merge_bb);

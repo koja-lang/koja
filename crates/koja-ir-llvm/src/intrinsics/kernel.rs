@@ -19,7 +19,7 @@ pub(super) fn emit_panic<'ctx>(
     function: &IRFunction,
     llvm_function: FunctionValue<'ctx>,
 ) -> Result<(), LlvmError> {
-    let message = nth_param(function, llvm_function, 0, "message")?;
+    let message = nth_param(function, llvm_function, 0, "message");
     let panic = declare_panic_extern(ctx);
     ctx.builder
         .build_call(panic, &[message.into()], "")

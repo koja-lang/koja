@@ -12,8 +12,9 @@ use inkwell::builder::BuilderError;
 /// caller needs richer context they can wrap the error themselves.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum LlvmError {
-    /// Failed to emit LLVM IR for an IRProgram, e.g. a feature-gap
-    /// instruction or terminator was encountered.
+    /// LLVM refused an operation, or the backend has a gap for a valid
+    /// program. Sealed-IR and lowering contract violations panic
+    /// instead of surfacing here.
     Codegen(String),
     /// Target machine setup failed or `write_to_file` rejected the
     /// produced module.

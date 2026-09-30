@@ -66,8 +66,8 @@ fn to_cstring<R: CallResolver>(call: IntrinsicCall<'_, R>) -> Result<Value, Runt
     let total = bytes.len() + 1; // null terminator
     let buf = unsafe { malloc(total) };
     if buf.is_null() {
-        return Err(RuntimeError::Unsupported {
-            detail: "String.to_cstring: malloc returned null".to_string(),
+        return Err(RuntimeError::Panicked {
+            message: "String.to_cstring: malloc returned null".to_string(),
         });
     }
     unsafe {
@@ -142,8 +142,8 @@ fn slice_bytes(args: &[Value]) -> Result<Value, RuntimeError> {
     let start = (start.max(0) as usize).min(bytes.len());
     let stop = (stop.max(0) as usize).min(bytes.len()).max(start);
     if !is_utf8_boundary(bytes, start) || !is_utf8_boundary(bytes, stop) {
-        return Err(RuntimeError::Unsupported {
-            detail: "String.slice_bytes offsets must land on codepoint boundaries".to_string(),
+        return Err(RuntimeError::Panicked {
+            message: "String.slice_bytes offsets must land on codepoint boundaries".to_string(),
         });
     }
     Ok(Value::string(&bytes[start..stop]))

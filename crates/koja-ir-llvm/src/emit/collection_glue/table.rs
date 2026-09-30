@@ -38,7 +38,7 @@ pub(super) fn copy_table<'ctx>(
     let entry_size = key_size + value.map(|v| abi_size(ctx, v)).transpose()?.unwrap_or(0);
     let entry_size_const = ctx.context.i64_type().const_int(entry_size, false);
 
-    let self_val = nth_struct(function, llvm_function, 0, "self")?;
+    let self_val = nth_struct(function, llvm_function, 0, "self");
     let entries = extract_pointer(ctx, self_val, 0, "entries")?;
     let states = extract_pointer(ctx, self_val, 1, "states")?;
     let len = extract_int(ctx, self_val, 2, "len")?;
@@ -105,7 +105,7 @@ pub(super) fn drop_table<'ctx>(
     let entry_size = key_size + value.map(|v| abi_size(ctx, v)).transpose()?.unwrap_or(0);
     let entry_size_const = ctx.context.i64_type().const_int(entry_size, false);
 
-    let self_val = nth_struct(function, llvm_function, 0, "self")?;
+    let self_val = nth_struct(function, llvm_function, 0, "self");
     let entries = extract_pointer(ctx, self_val, 0, "entries")?;
     let states = extract_pointer(ctx, self_val, 1, "states")?;
     let capacity = extract_int(ctx, self_val, 3, "cap")?;

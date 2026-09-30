@@ -14,7 +14,7 @@ pub(super) fn emit_adopt_binary<'ctx>(
     function: &IRFunction,
     llvm_function: FunctionValue<'ctx>,
 ) -> Result<(), LlvmError> {
-    let payload = heap_payload::pointer_param(function, llvm_function)?;
+    let payload = heap_payload::pointer_param(function, llvm_function);
     ctx.builder
         .build_return(Some(&payload))
         .or_ice()

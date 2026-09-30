@@ -27,56 +27,34 @@ use crate::ctx::EmitContext;
 use crate::error::LlvmError;
 
 /// LLVM integer type for an integer-family or `Bool` [`IRType`].
-/// Float / `String` / `Unit` variants surface as a feature-gap
-/// diagnostic. Call sites that genuinely need an int (e.g. cond
-/// branches, where the seal pass guarantees an `i1`) hit this.
-/// Sites that accept any basic type use [`ir_basic_type`].
-pub(crate) fn ir_int_type<'ctx>(
-    context: &'ctx Context,
-    ty: &IRType,
-) -> Result<IntType<'ctx>, LlvmError> {
+/// Any other variant panics, since the seal pass guarantees an
+/// integer wherever a call site needs one (cond branches take an
+/// `i1`). Sites that accept any basic type use [`ir_basic_type`].
+pub(crate) fn ir_int_type<'ctx>(context: &'ctx Context, ty: &IRType) -> IntType<'ctx> {
     match ty {
-        IRType::Binary | IRType::Bits => Err(LlvmError::Codegen(format!(
-            "expected an integer or Bool IRType, got `{ty:?}`"
-        ))),
-        IRType::Bool => Ok(context.bool_type()),
-        IRType::CPtr(_) => Err(LlvmError::Codegen(format!(
-            "expected an integer or Bool IRType, got `{ty:?}`"
-        ))),
-        IRType::Enum(_) => Err(LlvmError::Codegen(format!(
-            "expected an integer or Bool IRType, got `{ty:?}`"
-        ))),
-        IRType::Float32 | IRType::Float64 => Err(LlvmError::Codegen(format!(
-            "expected an integer or Bool IRType, got `{ty:?}`"
-        ))),
-        IRType::Function { .. } => Err(LlvmError::Codegen(format!(
-            "expected an integer or Bool IRType, got `{ty:?}`",
-        ))),
-        IRType::Indirect(_) => Err(LlvmError::Codegen(format!(
-            "expected an integer or Bool IRType, got `{ty:?}`",
-        ))),
-        IRType::Int8 | IRType::UInt8 => Ok(context.i8_type()),
-        IRType::Int16 | IRType::UInt16 => Ok(context.i16_type()),
-        IRType::Int32 | IRType::UInt32 => Ok(context.i32_type()),
-        IRType::Int64 | IRType::UInt64 => Ok(context.i64_type()),
-        IRType::List(_) | IRType::Map { .. } | IRType::Set(_) => Err(LlvmError::Codegen(format!(
-            "expected an integer or Bool IRType, got `{ty:?}`"
-        ))),
-        IRType::String => Err(LlvmError::Codegen(
-            "expected an integer or Bool IRType, got `String`".to_string(),
-        )),
-        IRType::Struct(_) => Err(LlvmError::Codegen(format!(
-            "expected an integer or Bool IRType, got `{ty:?}`",
-        ))),
-        IRType::Tuple(_) => Err(LlvmError::Codegen(format!(
-            "expected an integer or Bool IRType, got `{ty:?}`",
-        ))),
-        IRType::Union { .. } => Err(LlvmError::Codegen(format!(
-            "expected an integer or Bool IRType, got `{ty:?}`",
-        ))),
-        IRType::Unit => Err(LlvmError::Codegen(
-            "expected an integer or Bool IRType, got `Unit`".to_string(),
-        )),
+        IRType::Bool => context.bool_type(),
+        IRType::Int8 | IRType::UInt8 => context.i8_type(),
+        IRType::Int16 | IRType::UInt16 => context.i16_type(),
+        IRType::Int32 | IRType::UInt32 => context.i32_type(),
+        IRType::Int64 | IRType::UInt64 => context.i64_type(),
+        IRType::Binary
+        | IRType::Bits
+        | IRType::CPtr(_)
+        | IRType::Enum(_)
+        | IRType::Float32
+        | IRType::Float64
+        | IRType::Function { .. }
+        | IRType::Indirect(_)
+        | IRType::List(_)
+        | IRType::Map { .. }
+        | IRType::Set(_)
+        | IRType::String
+        | IRType::Struct(_)
+        | IRType::Tuple(_)
+        | IRType::Union { .. }
+        | IRType::Unit => {
+            panic!("expected an integer or Bool IRType, got `{ty:?}` (seal invariant violation)")
+        }
     }
 }
 
@@ -108,7 +86,7 @@ pub(crate) fn ir_basic_type<'ctx>(
         | IRType::UInt8
         | IRType::UInt16
         | IRType::UInt32
-        | IRType::UInt64 => Ok(ir_int_type(ctx.context, ty)?.into()),
+        | IRType::UInt64 => Ok(ir_int_type(ctx.context, ty).into()),
         IRType::Binary | IRType::Bits | IRType::String => {
             Ok(ctx.context.ptr_type(AddressSpace::default()).into())
         }

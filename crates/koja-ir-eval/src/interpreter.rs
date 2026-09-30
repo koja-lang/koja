@@ -15,9 +15,9 @@ use std::time::Instant;
 use koja_ir::mangling::closure_eq_env_symbol;
 use koja_ir::{
     BranchTarget, ConstValue, EnumPayloadInit, FunctionKind, IRBasicBlock, IRBlockId,
-    IRConstantValue, IREnumDecl, IRFunction, IRInstruction, IRIntrinsicId, IRLocalId, IRProgram,
-    IRScript, IRStructDecl, IRSymbol, IRTerminator, IRType, IRVariantPayload, IRVariantTag,
-    ReceiveAfter, ReceiveArm, ReceiveTag, ValueId,
+    IRConstantValue, IREnumDecl, IRFunction, IRInstruction, IRIntrinsicId, IRLocalId, IRPackage,
+    IRProgram, IRScript, IRStructDecl, IRSymbol, IRTerminator, IRType, IRVariantPayload,
+    IRVariantTag, ReceiveAfter, ReceiveArm, ReceiveTag, ValueId,
 };
 use koja_runtime_core::{
     CrashInfo, Driver, ExitNotice, ExitReason, Lifecycle, Priority, Readiness, Tag, Wake,
@@ -70,8 +70,6 @@ impl Interpreter {
         args: &[String],
         foreign: ForeignTable,
     ) -> Result<Value, RuntimeError> {
-        let _foreign = externs::foreign::install(foreign);
-        let _built = built_constants::install();
         let entry = program.entry_function();
         assert!(
             matches!(entry.kind, FunctionKind::ProcessEntryWrapper { .. }),
@@ -79,46 +77,11 @@ impl Interpreter {
             entry.symbol,
         );
         let args = args.to_vec();
-
-        // Boot PID 1 (the entry process) into a fresh cooperative core, then
-        // hand the run loop to the shared `CooperativeDriver`. The entry's
-        // `StopReason`-derived exit code surfaces through `exit_cell`. The
-        // process future has `Output = ()`, so it stashes its `Value` result
-        // here for `run_program` to return once the driver tears down.
-        let runtime = EvalRuntime::new();
-        let _guard = scheduler::install_runtime(runtime.clone());
-        let main = boot_main(&runtime);
-
-        let exit_cell: Rc<RefCell<Option<Result<Value, RuntimeError>>>> =
-            Rc::new(RefCell::new(None));
-        let entry_future: ProcessFuture = {
-            let cell = Rc::clone(&exit_cell);
-            Box::pin(async move {
-                let result = run_entry_body(program, entry, &args).await;
-                *cell.borrow_mut() = Some(result);
-            })
-        };
-
-        let executor = EvalExecutor::new(Rc::clone(&runtime.core), program);
-        executor.install_future(main, entry_future);
-
-        // Drain OS signals into PID 1's mailbox only when the program
-        // has a `Lifecycle` receive arm (see `EvalSignals`).
-        let signals = EvalSignals::new(program_uses_lifecycle(program));
-        EvalDriver::new(
-            runtime,
-            executor,
-            EvalReactor,
-            EvalClock,
-            signals,
-            scheduler::grace_period(),
+        run_as_entry_process(
+            program,
+            foreign,
+            Box::pin(async move { run_entry_body(program, entry, &args).await }),
         )
-        .run();
-
-        exit_cell
-            .borrow_mut()
-            .take()
-            .expect("entry process produced no result before shutdown")
     }
 
     /// Execute a named function from `program` with no arguments and
@@ -150,54 +113,66 @@ impl Interpreter {
     }
 
     /// [`Self::run_script`] with a caller-resolved [`ForeignTable`].
+    /// The implicit body runs as PID 1 like a program entry, so
+    /// top-level `spawn` / `receive` / timers / I/O engage the runtime
+    /// instead of tripping the "runtime not installed" guard.
     pub fn run_script_with(
         script: &IRScript,
         foreign: ForeignTable,
     ) -> Result<Value, RuntimeError> {
-        let _foreign = externs::foreign::install(foreign);
-        let _built = built_constants::install();
-        // Run the implicit body as PID 1 under the shared cooperative
-        // driver (same boot as `run_program`) so top-level `spawn` /
-        // `receive` / timers / I/O engage the runtime instead of tripping
-        // the "runtime not installed" guard. The body's trailing value
-        // surfaces through `exit_cell` once the driver tears down.
-        let runtime = EvalRuntime::new();
-        let _guard = scheduler::install_runtime(runtime.clone());
-        let main = boot_main(&runtime);
-
-        let exit_cell: Rc<RefCell<Option<Result<Value, RuntimeError>>>> =
-            Rc::new(RefCell::new(None));
-        let body_future: ProcessFuture = {
-            let cell = Rc::clone(&exit_cell);
-            Box::pin(async move {
-                *cell.borrow_mut() = Some(run_script_body(script).await);
-            })
-        };
-
-        let executor = EvalExecutor::new(Rc::clone(&runtime.core), script);
-        executor.install_future(main, body_future);
-
-        let signals = EvalSignals::new(script_uses_lifecycle(script));
-        EvalDriver::new(
-            runtime,
-            executor,
-            EvalReactor,
-            EvalClock,
-            signals,
-            scheduler::grace_period(),
-        )
-        .run();
-
-        exit_cell
-            .borrow_mut()
-            .take()
-            .expect("script body produced no result before shutdown")
+        run_as_entry_process(script, foreign, Box::pin(run_script_body(script)))
     }
 }
 
+/// Run `body` as PID 1 under the shared cooperative driver, with the
+/// foreign and built-constant tables installed for the run. Boots the
+/// entry process into a fresh core, hands the loop to the driver, and
+/// returns the body's result once the driver tears down. The process
+/// future has `Output = ()`, so the result travels through `exit_cell`.
+/// OS signals drain into PID 1's mailbox only when some `receive` has
+/// a `Lifecycle` arm (see [`EvalSignals`]).
+fn run_as_entry_process<'a, R: CallResolver>(
+    resolver: &'a R,
+    foreign: ForeignTable,
+    body: EvalFuture<'a, Value>,
+) -> Result<Value, RuntimeError> {
+    let _foreign = externs::foreign::install(foreign);
+    let _built = built_constants::install();
+    let runtime = EvalRuntime::new();
+    let _guard = scheduler::install_runtime(runtime.clone());
+    let main = boot_main(&runtime);
+
+    let exit_cell: Rc<RefCell<Option<Result<Value, RuntimeError>>>> = Rc::new(RefCell::new(None));
+    let entry_future: ProcessFuture = {
+        let cell = Rc::clone(&exit_cell);
+        Box::pin(async move {
+            *cell.borrow_mut() = Some(body.await);
+        })
+    };
+
+    let executor = EvalExecutor::new(Rc::clone(&runtime.core), resolver);
+    executor.install_future(main, entry_future);
+
+    let signals = EvalSignals::new(blocks_use_lifecycle(resolver.all_blocks()));
+    EvalDriver::new(
+        runtime,
+        executor,
+        EvalReactor,
+        EvalClock,
+        signals,
+        scheduler::grace_period(),
+    )
+    .run();
+
+    exit_cell
+        .borrow_mut()
+        .take()
+        .expect("entry process produced no result before shutdown")
+}
+
 /// Spawns PID 1 (the entry process) into a fresh cooperative core and
-/// enqueues its first wake, the boot both `run_program` and `run_script`
-/// perform before handing the loop to the driver.
+/// enqueues its first wake, the boot [`run_as_entry_process`] performs
+/// before handing the loop to the driver.
 fn boot_main(runtime: &EvalRuntime) -> koja_runtime_core::Pid {
     let main = runtime
         .core
@@ -242,6 +217,9 @@ impl Frame {
 /// registry-equivalent handle for materializing variant and field
 /// names.
 pub(crate) trait CallResolver {
+    /// Every block the run can execute, across all function bodies
+    /// plus the script body when there is one.
+    fn all_blocks(&self) -> impl Iterator<Item = &IRBasicBlock>;
     fn built_constant_order(&self) -> &[IRSymbol];
     fn constant_value(&self, mangled: &str) -> Option<&IRConstantValue>;
     fn enum_decl(&self, mangled: &str) -> Option<&IREnumDecl>;
@@ -250,6 +228,10 @@ pub(crate) trait CallResolver {
 }
 
 impl CallResolver for IRProgram {
+    fn all_blocks(&self) -> impl Iterator<Item = &IRBasicBlock> {
+        function_blocks(&self.packages)
+    }
+
     fn built_constant_order(&self) -> &[IRSymbol] {
         &self.built_constant_order
     }
@@ -272,6 +254,10 @@ impl CallResolver for IRProgram {
 }
 
 impl CallResolver for IRScript {
+    fn all_blocks(&self) -> impl Iterator<Item = &IRBasicBlock> {
+        function_blocks(&self.packages).chain(self.blocks.iter())
+    }
+
     fn built_constant_order(&self) -> &[IRSymbol] {
         &self.built_constant_order
     }
@@ -291,6 +277,14 @@ impl CallResolver for IRScript {
     fn struct_decl(&self, mangled: &str) -> Option<&IRStructDecl> {
         IRScript::struct_decl(self, mangled)
     }
+}
+
+/// Every block of every function body across `packages`.
+fn function_blocks(packages: &[IRPackage]) -> impl Iterator<Item = &IRBasicBlock> {
+    packages
+        .iter()
+        .flat_map(|package| package.functions.values())
+        .flat_map(|function| &function.blocks)
 }
 
 /// Run every `Built` constant init in `built_constant_order` and
@@ -344,29 +338,25 @@ async fn run_entry_body<'a>(
     args: &[String],
 ) -> Result<Value, RuntimeError> {
     build_constants(program).await?;
-    let config_type =
-        entry
-            .params
-            .first()
-            .map(|p| &p.ty)
-            .ok_or_else(|| RuntimeError::Unsupported {
-                detail: format!(
-                    "process entry wrapper `{}` has no config parameter",
-                    entry.symbol,
-                ),
-            })?;
+    let config_type = entry.params.first().map(|p| &p.ty).unwrap_or_else(|| {
+        panic!(
+            "interpreter: process entry wrapper `{}` has no config parameter (seal invariant \
+             violation)",
+            entry.symbol,
+        )
+    });
     let config_value = if is_argv_shaped(config_type) {
         argv_value(args)
     } else {
         default_value_for_type(config_type, program)?
     };
-    let body_fn =
-        process_body_of(program, &entry.symbol).ok_or_else(|| RuntimeError::Unsupported {
-            detail: format!(
-                "process entry wrapper `{}` IR body carries no resolvable process-body call",
-                entry.symbol,
-            ),
-        })?;
+    let body_fn = process_body_of(program, &entry.symbol).unwrap_or_else(|| {
+        panic!(
+            "interpreter: process entry wrapper `{}` IR body carries no resolvable process-body \
+             call (seal invariant violation)",
+            entry.symbol,
+        )
+    });
     execute_function(body_fn, vec![config_value], program).await
 }
 
@@ -397,28 +387,6 @@ fn blocks_use_lifecycle<'a>(blocks: impl Iterator<Item = &'a IRBasicBlock>) -> b
                     if arms.iter().any(|arm| arm.tag == ReceiveTag::Lifecycle)
             )
         })
-}
-
-/// [`blocks_use_lifecycle`] over every function body in `program`.
-fn program_uses_lifecycle(program: &IRProgram) -> bool {
-    blocks_use_lifecycle(
-        program
-            .packages
-            .iter()
-            .flat_map(|package| package.functions.values())
-            .flat_map(|function| &function.blocks),
-    )
-}
-
-/// [`blocks_use_lifecycle`] over the script's helper functions and its
-/// implicit top-level body.
-fn script_uses_lifecycle(script: &IRScript) -> bool {
-    let function_blocks = script
-        .packages
-        .iter()
-        .flat_map(|package| package.functions.values())
-        .flat_map(|function| &function.blocks);
-    blocks_use_lifecycle(function_blocks.chain(script.blocks.iter()))
 }
 
 /// Resolve a process wrapper's body, the [`FunctionKind::Regular`]
@@ -500,15 +468,51 @@ fn argv_value(args: &[String]) -> Value {
 }
 
 /// Build a fresh interpreter [`Value`] suitable as the entry's config
-/// argument. Mirrors the LLVM trampoline's zero-init shape: empty
-/// structs round-trip as `Value::Struct` with no fields, `List<T>`
-/// produces an empty list, and primitive scalars default to their
-/// zero element. The argv-shaped `List<String>` config never reaches
-/// this helper, since [`run_entry_body`] routes it through
-/// [`argv_value`] first.
+/// argument. Mirrors the LLVM trampoline's zero-init shape. Scalars
+/// take their zero element, collections and `Binary` start empty,
+/// `CPtr` is null, aggregates zero-init each field or element, and an
+/// enum is its tag-0 variant with a zeroed payload. The argv-shaped
+/// `List<String>` config never reaches this helper, since
+/// [`run_entry_body`] routes it through [`argv_value`] first. Types
+/// with no zero `Value` (`Bits`, `Function`, `Indirect`, `Union`)
+/// surface [`RuntimeError::Unsupported`].
 fn default_value_for_type(ty: &IRType, program: &IRProgram) -> Result<Value, RuntimeError> {
     match ty {
+        IRType::Binary => Ok(Value::binary(Vec::new())),
         IRType::Bool => Ok(Value::Bool(false)),
+        IRType::CPtr(_) => Ok(Value::CPtr(std::ptr::null_mut())),
+        IRType::Enum(symbol) => {
+            let decl = program.enum_decl(symbol.mangled()).unwrap_or_else(|| {
+                panic!("interpreter: enum `{symbol}` missing from IR (seal invariant violation)")
+            });
+            let variant = decl.variants.first().unwrap_or_else(|| {
+                panic!("interpreter: enum `{symbol}` has no variants to zero-init")
+            });
+            let payload = match &variant.payload {
+                IRVariantPayload::Struct(fields) => {
+                    let mut values = Vec::with_capacity(fields.len());
+                    for field in fields {
+                        let value = default_value_for_type(&field.ir_type, program)?;
+                        values.push((field.name.clone(), value));
+                    }
+                    EnumPayload::struct_fields(values)
+                }
+                IRVariantPayload::Tuple(types) => {
+                    let mut values = Vec::with_capacity(types.len());
+                    for element in types {
+                        values.push(default_value_for_type(element, program)?);
+                    }
+                    EnumPayload::tuple(values)
+                }
+                IRVariantPayload::Unit => EnumPayload::Unit,
+            };
+            Ok(Value::Enum {
+                name: variant.name.clone(),
+                payload,
+                symbol: symbol.clone(),
+                tag: variant.tag,
+            })
+        }
         IRType::Float32 => Ok(Value::Float32(0.0)),
         IRType::Float64 => Ok(Value::Float64(0.0)),
         IRType::Int8
@@ -519,19 +523,14 @@ fn default_value_for_type(ty: &IRType, program: &IRProgram) -> Result<Value, Run
         | IRType::UInt16
         | IRType::UInt32
         | IRType::UInt64 => Ok(Value::Int(0)),
-        IRType::List(_) => Ok(Value::List(std::rc::Rc::new(std::cell::RefCell::new(
-            Vec::new(),
-        )))),
+        IRType::List(_) => Ok(Value::List(Rc::new(RefCell::new(Vec::new())))),
+        IRType::Map { .. } => Ok(Value::Map(Rc::new(RefCell::new(Vec::new())))),
+        IRType::Set(_) => Ok(Value::Set(Rc::new(RefCell::new(Vec::new())))),
         IRType::String => Ok(Value::string(Vec::new())),
         IRType::Struct(symbol) => {
-            let decl =
-                program
-                    .struct_decl(symbol.mangled())
-                    .ok_or_else(|| RuntimeError::Unsupported {
-                        detail: format!(
-                            "interpreter: cannot build default value for unknown struct `{symbol}`",
-                        ),
-                    })?;
+            let decl = program.struct_decl(symbol.mangled()).unwrap_or_else(|| {
+                panic!("interpreter: struct `{symbol}` missing from IR (seal invariant violation)")
+            });
             let mut fields = Vec::with_capacity(decl.fields.len());
             for field in &decl.fields {
                 fields.push(default_value_for_type(&field.ir_type, program)?);
@@ -540,6 +539,13 @@ fn default_value_for_type(ty: &IRType, program: &IRProgram) -> Result<Value, Run
                 symbol: symbol.clone(),
                 fields,
             })
+        }
+        IRType::Tuple(elements) => {
+            let mut values = Vec::with_capacity(elements.len());
+            for element in elements {
+                values.push(default_value_for_type(element, program)?);
+            }
+            Ok(Value::Tuple(values))
         }
         IRType::Unit => Ok(Value::Unit),
         other => Err(RuntimeError::Unsupported {
@@ -645,25 +651,17 @@ fn execute_function<'a, R: CallResolver>(
              closures via the host GC and never invokes it",
                 function.symbol,
             ),
-            FunctionKind::SpawnWrapper { .. } => {
-                return Err(RuntimeError::Unsupported {
-                    detail: format!(
-                        "spawn wrapper `{}` cannot be invoked directly under the interpreter. \
-                     Spawn/receive scheduling lives in the LLVM runtime",
-                        function.symbol,
-                    ),
-                });
-            }
-            FunctionKind::ProcessEntryWrapper { .. } => {
-                return Err(RuntimeError::Unsupported {
-                    detail: format!(
-                        "process entry wrapper `{}` cannot be invoked directly. Use \
-                     `Interpreter::run_program`, which dispatches through state.start / \
-                     state.run for ProcessEntryWrapper entries",
-                        function.symbol,
-                    ),
-                });
-            }
+            FunctionKind::SpawnWrapper { .. } => panic!(
+                "interpreter: direct `Call` to spawn wrapper `{}`, which must dispatch via \
+             `Spawn` (seal invariant violation)",
+                function.symbol,
+            ),
+            FunctionKind::ProcessEntryWrapper { .. } => panic!(
+                "interpreter: direct `Call` to process entry wrapper `{}`, which only \
+             `Interpreter::run_program` dispatches, through state.start / state.run (seal \
+             invariant violation)",
+                function.symbol,
+            ),
             FunctionKind::Regular => {}
         }
         loop {

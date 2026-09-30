@@ -53,7 +53,7 @@ pub(crate) fn emit_length<'ctx>(
     function: &IRFunction,
     llvm_function: FunctionValue<'ctx>,
 ) -> Result<(), LlvmError> {
-    let self_val = nth_struct(function, llvm_function, 0, "self")?;
+    let self_val = nth_struct(function, llvm_function, 0, "self");
     let len = extract_int(ctx, self_val, 2, "len")?;
     ret(ctx, len.into())
 }
@@ -66,7 +66,7 @@ pub(crate) fn emit_empty_q<'ctx>(
     llvm_function: FunctionValue<'ctx>,
 ) -> Result<(), LlvmError> {
     let i64_ty = ctx.context.i64_type();
-    let self_val = nth_struct(function, llvm_function, 0, "self")?;
+    let self_val = nth_struct(function, llvm_function, 0, "self");
     let len = extract_int(ctx, self_val, 2, "len")?;
     let is_empty = ctx
         .builder

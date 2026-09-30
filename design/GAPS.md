@@ -511,3 +511,37 @@ first concrete width it meets and defaults to `Int` at the end of the
 function, would remove hints and coercions both. Koja's resolver is a
 single pass and local types are fixed at declaration, so that is a
 different resolver, not a change to this one.
+
+---
+
+## LLVM cannot hash every key type that passes the `Hash` bound
+
+Found 2026-09-30 while adding the `K: Hash & Equality` bound to
+`builtin Map` and `builtin Set`. Typecheck now rejects a key type
+without `Hash` at every call and literal, but the LLVM hashtable
+intrinsics resolve `hash` and `equals?` by symbol in
+`resolve_hash_eq` (`koja-ir-llvm/src/intrinsics/hashtable/util.rs`),
+and two key shapes that satisfy the bound miss there. The interpreter
+runs both.
+
+- **Union keys.** `hash_receiver_symbol` has no arm for
+  `IRType::Union`, so `Map<A | B, V>` fails with a codegen error even
+  when every member implements `Hash`. LANGUAGE.md promises this
+  shape works.
+- **Conditional `Hash` impls that only the table reaches.** For
+  `impl Hash for Pair<A: Hash, B: Hash>` and a `Map<Pair<Int,
+String>, V>`, the monomorphized `Pair_$Int64.String$.hash/1` is
+  never declared because no user code calls it directly. The lookup
+  misses and codegen fails.
+
+Consequence: a valid program compiles under the interpreter and fails
+under `--backend=llvm`, and the failure is a codegen error instead of
+a typecheck diagnostic.
+
+**Fix path:** the second gap is an instantiation hole. The IR pass
+that instantiates monomorphized functions should treat every
+hashtable key type as a use of its `hash` and `equals?`, so the
+symbols exist before codegen. The first needs a union hash strategy
+in the backend, most simply a member dispatch that hashes the tag
+and then the active member. Once both land, the three `Codegen`
+sites in `resolve_hash_eq` become seal invariant panics.

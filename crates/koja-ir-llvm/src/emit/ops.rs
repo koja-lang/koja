@@ -61,11 +61,9 @@ pub(crate) fn emit_fault_guard<'ctx>(
         .builder
         .get_insert_block()
         .and_then(|block| block.get_parent())
-        .ok_or_else(|| {
-            LlvmError::Codegen(format!(
-                "LLVM emit: fault guard `{label}` emitted outside a function body",
-            ))
-        })?;
+        .unwrap_or_else(|| {
+            panic!("LLVM emit: fault guard `{label}` emitted outside a function body")
+        });
     let panic_block = ctx
         .context
         .append_basic_block(function, &format!("{label}_panic"));
@@ -336,7 +334,7 @@ pub(super) fn emit_numeric_widen<'ctx>(
             .or_ice()?;
         return Ok(widened.into());
     }
-    let target_ty = ir_int_type(ctx.context, to)?;
+    let target_ty = ir_int_type(ctx.context, to);
     let int_value = value.into_int_value();
     let widened = match from {
         IRType::Int8 | IRType::Int16 | IRType::Int32 => ctx
@@ -345,12 +343,10 @@ pub(super) fn emit_numeric_widen<'ctx>(
         IRType::UInt8 | IRType::UInt16 | IRType::UInt32 => ctx
             .builder
             .build_int_z_extend(int_value, target_ty, "zwiden"),
-        other => {
-            return Err(LlvmError::Codegen(format!(
-                "LLVM emit: NumericWiden source must be a widenable sized numeric, \
-                 got `{other:?}` (typecheck violation)",
-            )));
-        }
+        other => panic!(
+            "LLVM emit: NumericWiden source must be a widenable sized numeric, \
+             got `{other:?}` (typecheck violation)",
+        ),
     }
     .or_ice()?;
     Ok(widened.into())
@@ -409,12 +405,9 @@ fn emit_string_binary_op<'ctx>(
     let predicate = match op {
         IRBinOp::Eq => IntPredicate::NE,
         IRBinOp::NotEq => IntPredicate::EQ,
-        other => {
-            return Err(LlvmError::Codegen(format!(
-                "LLVM emit: `{other:?}` is not defined for `String` operands \
-                 (typecheck violation)",
-            )));
-        }
+        other => panic!(
+            "LLVM emit: `{other:?}` is not defined for `String` operands (typecheck violation)",
+        ),
     };
     let string_eq = declare_string_eq_extern(ctx);
     let equal = ctx
@@ -443,10 +436,9 @@ fn emit_float_unary_op<'ctx>(
             .build_float_neg(operand, "fneg")
             .or_ice()
             .map(Into::into),
-        IRUnaryOp::Not => Err(LlvmError::Codegen(
+        IRUnaryOp::Not => panic!(
             "LLVM emit: `not` is Bool-only, float operand should never reach this path \
              (typecheck violation)"
-                .to_string(),
-        )),
+        ),
     }
 }

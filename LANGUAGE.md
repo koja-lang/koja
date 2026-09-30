@@ -2528,7 +2528,7 @@ List literals (`[a, b, c]`) are backed by the `ListLiteral<T>` protocol. See [Li
 
 ### `Map<K, V>`
 
-A generic hash map. Keys must implement `Hash` and `Equality`. Uses open addressing with linear probing.
+A generic hash map. Keys must implement `Hash` and `Equality`, and the compiler checks this bound. Uses open addressing with linear probing.
 
 ```koja
 m: Map<String, Int> = Map.new()
@@ -2562,7 +2562,7 @@ Map literals (`[key: value, ...]`) are backed by the `MapLiteral<K, V>` protocol
 
 ### `Set<T>`
 
-A generic hash set of unique elements. Elements must implement `Hash` and `Equality`. Uses open addressing with linear probing.
+A generic hash set of unique elements. Elements must implement `Hash` and `Equality`, and the compiler checks this bound. Uses open addressing with linear probing.
 
 ```koja
 s: Set<Int> = Set.new()

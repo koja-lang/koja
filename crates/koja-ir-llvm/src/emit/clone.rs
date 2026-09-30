@@ -23,7 +23,7 @@ pub(super) fn emit_clone<'ctx>(
 ) -> Result<(), LlvmError> {
     let result = match ty {
         IRType::Binary | IRType::Bits | IRType::Indirect(_) | IRType::String => {
-            let payload = lookup(values, source)?.into_pointer_value();
+            let payload = lookup(values, source).into_pointer_value();
             let base = block_base(ctx, payload, &format!("{dest}.block_base"))?;
             let rc_inc = declare_rc_inc_extern(ctx);
             ctx.builder
@@ -43,12 +43,12 @@ pub(super) fn emit_clone<'ctx>(
         | IRType::UInt16
         | IRType::UInt32
         | IRType::UInt64
-        | IRType::Unit => lookup(values, source)?,
+        | IRType::Unit => lookup(values, source),
         IRType::Enum(_) | IRType::Struct(_) | IRType::Tuple(_) | IRType::Union { .. } => {
-            lookup(values, source)?
+            lookup(values, source)
         }
         IRType::Function { .. } => {
-            let closure_value = lookup(values, source)?;
+            let closure_value = lookup(values, source);
             let env_ptr =
                 closures::load_closure_env_ptr(ctx, closure_value, &format!("{dest}.clone"))?;
             let rc_inc = declare_rc_inc_extern(ctx);

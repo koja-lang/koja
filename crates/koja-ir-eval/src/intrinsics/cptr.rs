@@ -1,7 +1,10 @@
 //! `CPtr<T>` family over a real raw pointer ([`Value::CPtr`]).
 //! Handlers read `T` from the calling [`IRFunction`]'s signature and
 //! size it via [`helpers::size_of_primitive`]. Non-primitive pointee
-//! types surface [`crate::error::RuntimeError::Unsupported`].
+//! types are a feature gap the LLVM backend covers and surface
+//! [`crate::error::RuntimeError::Unsupported`]. Null dereferences and
+//! allocation overflow are Koja-level faults and surface
+//! [`crate::error::RuntimeError::Panicked`].
 
 use std::ptr;
 use std::slice;
@@ -62,8 +65,8 @@ fn alloc(function: &IRFunction, args: &[Value]) -> Result<Value, RuntimeError> {
     let count = *count as usize;
     let total = count
         .checked_mul(element_size)
-        .ok_or_else(|| RuntimeError::Unsupported {
-            detail: format!(
+        .ok_or_else(|| RuntimeError::Panicked {
+            message: format!(
                 "CPtr.alloc: count {count} * element_size {element_size} overflows usize"
             ),
         })?;
@@ -143,8 +146,8 @@ fn read(function: &IRFunction, args: &[Value]) -> Result<Value, RuntimeError> {
         });
     };
     if ptr.is_null() {
-        return Err(RuntimeError::Unsupported {
-            detail: "CPtr.read(null) is undefined behavior, refusing to dereference".to_string(),
+        return Err(RuntimeError::Panicked {
+            message: "CPtr.read(null) is undefined behavior, refusing to dereference".to_string(),
         });
     }
     read_primitive(*ptr, &function.return_type, "CPtr.read")
@@ -157,8 +160,8 @@ fn write(function: &IRFunction, args: &[Value]) -> Result<Value, RuntimeError> {
         });
     };
     if ptr.is_null() {
-        return Err(RuntimeError::Unsupported {
-            detail: "CPtr.write(null, _) is undefined behavior, refusing to dereference"
+        return Err(RuntimeError::Panicked {
+            message: "CPtr.write(null, _) is undefined behavior, refusing to dereference"
                 .to_string(),
         });
     }
@@ -183,8 +186,8 @@ fn to_binary(args: &[Value]) -> Result<Value, RuntimeError> {
         return Ok(Value::binary(Vec::new()));
     }
     if ptr.is_null() {
-        return Err(RuntimeError::Unsupported {
-            detail: "CPtr.to_binary(null, len > 0) is undefined behavior, refusing to copy"
+        return Err(RuntimeError::Panicked {
+            message: "CPtr.to_binary(null, len > 0) is undefined behavior, refusing to copy"
                 .to_string(),
         });
     }
@@ -268,7 +271,10 @@ fn read_primitive(ptr: *mut u8, ty: &IRType, label: &str) -> Result<Value, Runti
             IRType::UInt64 => Value::Int(read_as::<u64>(ptr) as i64),
             other => {
                 return Err(RuntimeError::Unsupported {
-                    detail: format!("{label}: cannot read `T = {other:?}` (primitive types only)"),
+                    detail: format!(
+                        "{label}: eval can only read primitive `CPtr<T>` pointee types, got \
+                         `T = {other:?}`. Use `--backend=llvm` for non-primitive pointee types.",
+                    ),
                 });
             }
         }
@@ -310,11 +316,11 @@ fn write_primitive(
             (IRType::UInt32, Value::Int(v)) => write_as(ptr, *v as u32),
             (IRType::UInt64, Value::Int(v)) => write_as(ptr, *v as u64),
             (other_ty, other_v) => {
-                return Err(RuntimeError::Unsupported {
-                    detail: format!(
-                        "{label}: cannot write `{other_v}` as `T = {other_ty:?}` (primitive \
-                         types only)",
-                    ),
+                // A non-primitive `T` is a feature gap. A primitive `T`
+                // with a value of another shape is a type mismatch.
+                helpers::size_of_primitive(other_ty, label)?;
+                return Err(RuntimeError::TypeMismatch {
+                    detail: format!("{label}: cannot write `{other_v}` as `T = {other_ty:?}`"),
                 });
             }
         }

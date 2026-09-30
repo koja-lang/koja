@@ -31,14 +31,11 @@ pub(crate) fn emit_map_put<'ctx>(
     let i8_ty = ctx.context.i8_type();
     let i64_ty = ctx.context.i64_type();
     let table = writable_table(ctx, function, llvm_function, layout, consume_receiver)?;
-    let key_val = nth_param(function, llvm_function, 1, "key")?;
-    let value_val = nth_param(function, llvm_function, 2, "value")?;
-    let value_ty = layout.value_ty.ok_or_else(|| {
-        LlvmError::Codegen(format!(
-            "Map.put missing value type for `{}`",
-            function.symbol
-        ))
-    })?;
+    let key_val = nth_param(function, llvm_function, 1, "key");
+    let value_val = nth_param(function, llvm_function, 2, "value");
+    let value_ty = layout
+        .value_ty
+        .unwrap_or_else(|| panic!("Map.put missing value type for `{}`", function.symbol));
     let key_ops = resolve_key_hash_ops(ctx, function, layout.key_ty)?;
 
     let post = emit_resize_if_needed(ctx, llvm_function, layout, &table, &key_ops)?;
@@ -111,7 +108,7 @@ pub(crate) fn emit_set_insert<'ctx>(
     let i8_ty = ctx.context.i8_type();
     let i64_ty = ctx.context.i64_type();
     let table = writable_table(ctx, function, llvm_function, layout, consume_receiver)?;
-    let item_val = nth_param(function, llvm_function, 1, "item")?;
+    let item_val = nth_param(function, llvm_function, 1, "item");
     let key_ops = resolve_key_hash_ops(ctx, function, layout.key_ty)?;
 
     let post = emit_resize_if_needed(ctx, llvm_function, layout, &table, &key_ops)?;
@@ -212,12 +209,12 @@ pub(super) fn emit_insert_probe<'ctx>(
     } = inputs;
     let i8_ty = ctx.context.i8_type();
     let i64_ty = ctx.context.i64_type();
-    let entry_block = ctx.builder.get_insert_block().ok_or_else(|| {
-        LlvmError::Codegen(format!(
+    let entry_block = ctx.builder.get_insert_block().unwrap_or_else(|| {
+        panic!(
             "emit_insert_probe called with no insertion block for `{}`",
             function.symbol,
-        ))
-    })?;
+        )
+    });
     let hash_val = call_hash(ctx, key_ops.hash_fn, key_val)?;
     let mask = ctx
         .builder

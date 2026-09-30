@@ -39,7 +39,8 @@ without a compiler bug:
   the shared `koja_ir` constants, identical to the LLVM backend's panics.
 - `TypeMismatch { detail }` — a binary operator received operands whose
   runtime types it can't combine.
-- `Unsupported { detail }` — IR shapes the interpreter doesn't yet handle.
+- `Unsupported { detail }` — a valid program the interpreter cannot run yet
+  where the LLVM backend can. Sealed-IR contract violations panic instead.
 - `ValueUndefined { id }` — defensive guard; should be unreachable on a
   sealed program.
 

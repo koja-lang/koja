@@ -49,7 +49,7 @@ pub(super) fn emit_make_closure<'ctx>(
 ) -> Result<BasicValueEnum<'ctx>, LlvmError> {
     let mut capture_values: Vec<BasicValueEnum<'ctx>> = Vec::with_capacity(captures.len());
     for capture in captures {
-        capture_values.push(lookup(values, *capture)?);
+        capture_values.push(lookup(values, *capture));
     }
     let body_fn = ctx.declared_function(body).unwrap_or_else(|| {
         panic!(
@@ -153,15 +153,13 @@ pub(super) fn emit_closure_equals<'ctx>(
     ty: &IRType,
     values: &ValueMap<'ctx>,
 ) -> Result<BasicValueEnum<'ctx>, LlvmError> {
-    let lhs_value = lookup(values, lhs)?;
-    let rhs_value = lookup(values, rhs)?;
+    let lhs_value = lookup(values, lhs);
+    let rhs_value = lookup(values, rhs);
     let function = ctx
         .builder
         .get_insert_block()
         .and_then(|block| block.get_parent())
-        .ok_or_else(|| {
-            LlvmError::Codegen("LLVM emit: ClosureEquals emitted outside a function body".into())
-        })?;
+        .expect("LLVM emit: ClosureEquals emitted outside a function body");
     let captures_block = ctx
         .context
         .append_basic_block(function, "closure_eq.captures");
@@ -212,7 +210,7 @@ pub(super) fn emit_closure_equals<'ctx>(
         .or_ice()?
         .try_as_basic_value()
         .basic()
-        .ok_or_else(|| LlvmError::Codegen("LLVM emit: closure eq glue returned void".into()))?;
+        .expect("LLVM emit: closure eq glue returned void");
     ctx.builder
         .build_unconditional_branch(merge_block)
         .or_ice()?;
@@ -256,10 +254,10 @@ pub(super) fn emit_call_closure<'ctx>(
     result_ty: &IRType,
     values: &ValueMap<'ctx>,
 ) -> Result<BasicValueEnum<'ctx>, LlvmError> {
-    let callee_value = lookup(values, callee)?;
+    let callee_value = lookup(values, callee);
     let mut user_args: Vec<BasicMetadataValueEnum<'ctx>> = Vec::with_capacity(args.len());
     for arg in args {
-        user_args.push(lookup(values, *arg)?.into());
+        user_args.push(lookup(values, *arg).into());
     }
     let fat_ty = closure_fat_ptr_type(ctx);
     let alloca = ctx.build_entry_alloca(fat_ty, "closure_call");
@@ -300,7 +298,7 @@ pub(super) fn emit_call_closure<'ctx>(
 /// Read a single captured value from the active closure body's env
 /// block. `LoadCapture` is only valid inside a `FunctionKind::Closure`
 /// body (seal-enforced), so a missing closure frame is a compiler bug
-/// rather than a recoverable codegen error.
+/// and panics.
 pub(super) fn emit_load_capture<'ctx>(
     ctx: &EmitContext<'ctx>,
     capture_index: u32,
@@ -329,7 +327,7 @@ pub(super) fn emit_load_capture_of<'ctx>(
     let ClosureFrame { env_struct, .. } = ctx.closure_frame().unwrap_or_else(|| {
         panic!("LLVM emit: LoadCaptureOf outside a closure body (seal invariant violation)")
     });
-    let closure_value = lookup(values, closure)?;
+    let closure_value = lookup(values, closure);
     let env_ptr = load_closure_env_ptr(ctx, closure_value, "capture_of")?;
     load_capture_slot(ctx, env_struct, env_ptr, capture_index, ty, "capture_of")
 }

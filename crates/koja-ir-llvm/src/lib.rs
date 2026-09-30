@@ -30,6 +30,7 @@ mod intrinsics;
 mod layout;
 mod main_wrapper;
 mod object;
+mod pipeline;
 mod program;
 mod reductions;
 mod runtime;

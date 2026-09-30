@@ -84,27 +84,25 @@ pub(crate) fn emit_built_constant_init(
                 IRConstantValue::Built { init, .. } => Some(init),
                 _ => None,
             })
-            .ok_or_else(|| {
-                LlvmError::Codegen(format!(
-                    "built constant order names `{symbol}`, which is not a built pool entry",
-                ))
-            })?;
-        let init_fn = ctx.declared_function(init).ok_or_else(|| {
-            LlvmError::Codegen(format!(
+            .unwrap_or_else(|| {
+                panic!("built constant order names `{symbol}`, which is not a built pool entry")
+            });
+        let init_fn = ctx.declared_function(init).unwrap_or_else(|| {
+            panic!(
                 "built constant `{symbol}` init `{init}` is not declared \
                  (declare every function before `__koja_const_init`)",
-            ))
-        })?;
+            )
+        });
         let value = ctx.call_basic(init_fn, &[], "built")?;
         let global = ctx
             .module
             .get_global(&built_global_name(symbol))
-            .ok_or_else(|| {
-                LlvmError::Codegen(format!(
+            .unwrap_or_else(|| {
+                panic!(
                     "built constant `{symbol}` has no global \
                      (`declare_built_constant_globals` must precede `__koja_const_init`)",
-                ))
-            })?;
+                )
+            });
         ctx.builder
             .build_store(global.as_pointer_value(), value)
             .or_ice()?;

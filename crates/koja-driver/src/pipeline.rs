@@ -1353,8 +1353,8 @@ fn interpret_program(program: &IRProgram, args: &[String], foreign: ForeignTable
             eprintln!("error: {error}");
             if matches!(error, RuntimeError::Unsupported { .. }) {
                 eprintln!(
-                    "hint: this program uses process features the interpreter does not \
-                     support yet; run with --backend=llvm"
+                    "hint: the interpreter does not support this program yet; run with \
+                     --backend=llvm"
                 );
             }
             process::exit(1);

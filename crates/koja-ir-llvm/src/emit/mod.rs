@@ -136,7 +136,7 @@ pub(crate) fn emit_unreachable_terminator<'ctx>(
     block_id: IRBlockId,
     block_map: &BlockMap<'ctx>,
 ) -> Result<(), LlvmError> {
-    let llvm_block = lookup_block(block_map, block_id)?;
+    let llvm_block = lookup_block(block_map, block_id);
     ctx.builder.position_at_end(llvm_block);
     ctx.builder.build_unreachable().or_ice().map(|_| ())
 }
@@ -195,7 +195,7 @@ pub(crate) fn declare_block_param_phis<'ctx>(
     for block in blocks {
         let mut phis: Vec<PhiValue<'ctx>> = Vec::with_capacity(block.params.len());
         if !block.params.is_empty() {
-            let llvm_block = lookup_block(block_map, block.id)?;
+            let llvm_block = lookup_block(block_map, block.id);
             ctx.builder.position_at_end(llvm_block);
         }
         for (index, param) in block.params.iter().enumerate() {
@@ -252,25 +252,27 @@ pub(crate) fn emit_terminator_default<'ctx>(
 ) -> Result<(), LlvmError> {
     match terminator {
         IRTerminator::Branch(target) => {
-            let llvm_target = lookup_block(block_map, target.block)?;
+            let llvm_target = lookup_block(block_map, target.block);
             ctx.builder
                 .build_unconditional_branch(llvm_target)
                 .or_ice()?;
-            wire_phi_incomings(ctx, target, pred, values, phi_map)
+            wire_phi_incomings(ctx, target, pred, values, phi_map);
+            Ok(())
         }
         IRTerminator::CondBranch {
             cond,
             else_target,
             then_target,
         } => {
-            let cond_value = lookup_int(values, *cond)?;
-            let llvm_then = lookup_block(block_map, then_target.block)?;
-            let llvm_else = lookup_block(block_map, else_target.block)?;
+            let cond_value = lookup_int(values, *cond);
+            let llvm_then = lookup_block(block_map, then_target.block);
+            let llvm_else = lookup_block(block_map, else_target.block);
             ctx.builder
                 .build_conditional_branch(cond_value, llvm_then, llvm_else)
                 .or_ice()?;
-            wire_phi_incomings(ctx, then_target, pred, values, phi_map)?;
-            wire_phi_incomings(ctx, else_target, pred, values, phi_map)
+            wire_phi_incomings(ctx, then_target, pred, values, phi_map);
+            wire_phi_incomings(ctx, else_target, pred, values, phi_map);
+            Ok(())
         }
         IRTerminator::Return { value: None } => ctx.builder.build_return(None).or_ice().map(|_| ()),
         IRTerminator::Return { value: Some(id) } => {
@@ -284,7 +286,7 @@ pub(crate) fn emit_terminator_default<'ctx>(
             if current_function_returns_void(ctx) {
                 ctx.builder.build_return(None).or_ice().map(|_| ())
             } else {
-                let return_value = lookup(values, *id)?;
+                let return_value = lookup(values, *id);
                 ctx.builder
                     .build_return(Some(&return_value))
                     .or_ice()
@@ -321,7 +323,7 @@ fn emit_tail_call<'ctx>(
         );
     }
     for (arg, (local, _ty)) in args.iter().zip(frame.param_slots.iter()) {
-        let value = lookup(values, *arg)?;
+        let value = lookup(values, *arg);
         let slot = ctx.local_slot(*local);
         ctx.builder.build_store(slot, value).or_ice()?;
     }
@@ -341,23 +343,21 @@ fn emit_tail_call<'ctx>(
 /// For each phi, look up the matching branch arg's LLVM equivalent
 /// and hand it to the phi via `add_incoming`.
 ///
-/// The per-edge arity is checked at IR seal time, so a length
-/// mismatch here is a compiler bug. We panic with a clear message
-/// rather than surfacing a `Codegen` error the caller would have to
-/// add a fallthrough for.
+/// The per-edge arity and the phi entry per block are fixed at IR
+/// seal time, so a mismatch here is a compiler bug and panics.
 fn wire_phi_incomings<'ctx>(
     ctx: &EmitContext<'ctx>,
     target: &BranchTarget,
     pred: IRBlockId,
     values: &ValueMap<'ctx>,
     phi_map: &PhiMap<'ctx>,
-) -> Result<(), LlvmError> {
-    let phis = phi_map.get(&target.block).ok_or_else(|| {
-        LlvmError::Codegen(format!(
+) {
+    let phis = phi_map.get(&target.block).unwrap_or_else(|| {
+        panic!(
             "missing phi entry for block {} during branch-arg wiring",
             target.block,
-        ))
-    })?;
+        )
+    });
     if phis.len() != target.args.len() {
         panic!(
             "LLVM emit: branch from {pred} to {} passes {} arg(s) but target has {} \
@@ -370,24 +370,21 @@ fn wire_phi_incomings<'ctx>(
     // The true predecessor is the builder's current block, not
     // `block_map[pred]`: they differ when an instruction splits its host
     // block mid-body (e.g. `BinaryMatch`'s length-guarded extraction).
-    let pred_block = ctx.builder.get_insert_block().ok_or_else(|| {
-        LlvmError::Codegen("phi incoming wiring with no active block".to_string())
-    })?;
+    let pred_block = ctx
+        .builder
+        .get_insert_block()
+        .expect("phi incoming wiring with no active block");
     for (phi, arg) in phis.iter().zip(target.args.iter()) {
-        let arg_value = lookup(values, *arg)?;
+        let arg_value = lookup(values, *arg);
         phi.add_incoming(&[(&arg_value, pred_block)]);
     }
-    Ok(())
 }
 
-pub(crate) fn lookup<'ctx>(
-    values: &ValueMap<'ctx>,
-    id: ValueId,
-) -> Result<BasicValueEnum<'ctx>, LlvmError> {
+pub(crate) fn lookup<'ctx>(values: &ValueMap<'ctx>, id: ValueId) -> BasicValueEnum<'ctx> {
     values
         .get(&id)
         .copied()
-        .ok_or_else(|| LlvmError::Codegen(format!("undefined SSA value {id} during emission")))
+        .unwrap_or_else(|| panic!("undefined SSA value {id} during emission"))
 }
 
 /// True when the LLVM function currently being defined has a `void`
@@ -408,19 +405,13 @@ fn current_function_returns_void(ctx: &EmitContext<'_>) -> bool {
 /// the int / bool printer paths). Misses surface as a codegen panic
 /// because they indicate an upstream type-checker / lowering bug, not
 /// a feature gap.
-pub(crate) fn lookup_int<'ctx>(
-    values: &ValueMap<'ctx>,
-    id: ValueId,
-) -> Result<IntValue<'ctx>, LlvmError> {
-    Ok(lookup(values, id)?.into_int_value())
+pub(crate) fn lookup_int<'ctx>(values: &ValueMap<'ctx>, id: ValueId) -> IntValue<'ctx> {
+    lookup(values, id).into_int_value()
 }
 
-pub(super) fn lookup_block<'ctx>(
-    block_map: &BlockMap<'ctx>,
-    id: IRBlockId,
-) -> Result<BasicBlock<'ctx>, LlvmError> {
+pub(super) fn lookup_block<'ctx>(block_map: &BlockMap<'ctx>, id: IRBlockId) -> BasicBlock<'ctx> {
     block_map
         .get(&id)
         .copied()
-        .ok_or_else(|| LlvmError::Codegen(format!("undefined IR block {id} during emission")))
+        .unwrap_or_else(|| panic!("undefined IR block {id} during emission"))
 }

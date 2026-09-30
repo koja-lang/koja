@@ -362,9 +362,9 @@ impl<'ctx> EmitContext<'ctx> {
     }
 
     /// Resolve `symbol` to its registered LLVM function. `None` when
-    /// no declare step has run for this symbol yet. Call sites
-    /// surface that as a codegen error since the declare phase is
-    /// supposed to run before any body emission.
+    /// no declare step has run for this symbol yet. Call sites panic
+    /// on `None` since the declare phase runs before any body
+    /// emission.
     pub(crate) fn declared_function(&self, symbol: &IRSymbol) -> Option<FunctionValue<'ctx>> {
         self.declared_functions.borrow().get(symbol).copied()
     }
@@ -501,13 +501,13 @@ impl<'ctx> EmitContext<'ctx> {
         name: &str,
     ) -> Result<BasicValueEnum<'ctx>, LlvmError> {
         let at = Location::caller();
-        self.builder
+        let value = self
+            .builder
             .build_call(function, args, name)
             .or_ice()?
             .try_as_basic_value()
             .basic()
-            .ok_or_else(|| {
-                LlvmError::Codegen(format!("call `{name}` at {at} did not produce a value"))
-            })
+            .unwrap_or_else(|| panic!("call `{name}` at {at} did not produce a value"));
+        Ok(value)
     }
 }

@@ -24,7 +24,7 @@ pub(super) fn copy_list<'ctx>(
     element: &IRType,
     copy: ElementCopy,
 ) -> Result<(), LlvmError> {
-    let self_val = nth_struct(function, llvm_function, 0, "self")?;
+    let self_val = nth_struct(function, llvm_function, 0, "self");
     let src_buf = extract_pointer(ctx, self_val, 0, "src_buf")?;
     let len = extract_int(ctx, self_val, 1, "len")?;
     let element_size = element_byte_size(ctx, element)?;
@@ -76,7 +76,7 @@ pub(super) fn drop_list<'ctx>(
     llvm_function: FunctionValue<'ctx>,
     element: &IRType,
 ) -> Result<(), LlvmError> {
-    let self_val = nth_struct(function, llvm_function, 0, "self")?;
+    let self_val = nth_struct(function, llvm_function, 0, "self");
     let buf = extract_pointer(ctx, self_val, 0, "buf")?;
     let len = extract_int(ctx, self_val, 1, "len")?;
     let element_size = element_byte_size(ctx, element)?;

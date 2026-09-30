@@ -34,7 +34,7 @@ pub(super) fn emit_call<'ctx>(
     });
     let mut arg_values: Vec<BasicMetadataValueEnum<'ctx>> = Vec::with_capacity(args.len());
     for arg in args {
-        arg_values.push(lookup(values, *arg)?.into());
+        arg_values.push(lookup(values, *arg).into());
     }
     let call_site = ctx
         .builder
