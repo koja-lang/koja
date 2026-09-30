@@ -174,12 +174,12 @@ fn call_set_insert_inline<'ctx>(
         post.length,
         post.capacity,
     )?;
-    let update_tail = ctx.builder.get_insert_block().ok_or_else(|| {
-        LlvmError::Codegen(format!(
+    let update_tail = ctx.builder.get_insert_block().unwrap_or_else(|| {
+        panic!(
             "call_set_insert_inline lost update insertion block on `{}`",
             function.symbol,
-        ))
-    })?;
+        )
+    });
     ctx.builder.build_unconditional_branch(merge_bb).or_ice()?;
 
     ctx.builder.position_at_end(probe.insert_bb);
@@ -202,12 +202,12 @@ fn call_set_insert_inline<'ctx>(
         new_len,
         post.capacity,
     )?;
-    let insert_tail = ctx.builder.get_insert_block().ok_or_else(|| {
-        LlvmError::Codegen(format!(
+    let insert_tail = ctx.builder.get_insert_block().unwrap_or_else(|| {
+        panic!(
             "call_set_insert_inline lost insert insertion block on `{}`",
             function.symbol,
-        ))
-    })?;
+        )
+    });
     ctx.builder.build_unconditional_branch(merge_bb).or_ice()?;
 
     ctx.builder.position_at_end(merge_bb);

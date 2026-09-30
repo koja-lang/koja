@@ -1,81 +1,28 @@
 //! Compile a sealed [`IRScript`] into the borrowed [`EmitContext`]'s
-//! module: pre-emit every package's struct types, emit the
-//! runtime-name global, declare every helper, synthesize the script
-//! body as `main` (the spawn-driven trampoline in
-//! [`crate::main_wrapper`]), then define each helper's body.
-//!
-//! Same shape as [`crate::program::compile_program`], except the
-//! body that becomes `main` is `script.blocks` rather than an entry
-//! function, since script mode has no `fn main` item.
+//! module through the shared [`compile_packages`] sequence. The host
+//! `main` runs `script.blocks` as PID 1
+//! ([`crate::main_wrapper::emit_script_main`]), since script mode has
+//! no `fn main` item.
 
 use koja_ir::IRScript;
 
 use crate::ctx::EmitContext;
-use crate::emit::built_constants::{declare_built_constant_globals, emit_built_constant_init};
 use crate::error::LlvmError;
-use crate::function::{declare_function, define_function};
-use crate::layout::enum_order::enums_in_dependency_order;
-use crate::layout::enums::{
-    declare_enum_type, define_enum_completes_and_outer, define_enum_payload_bodies,
-};
-use crate::layout::structs::{declare_struct_type, define_struct_body};
-use crate::layout::unions::{declare_union_type, define_union_body};
-use crate::layout::wire_contract::assert_wire_enum_order;
-use crate::main_wrapper::{emit_app_name_global, emit_script_main};
+use crate::pipeline::{EntryShape, compile_packages};
 
 pub(crate) fn compile_script(
     ctx: &EmitContext<'_>,
     script: &IRScript,
     app_name: &str,
 ) -> Result<(), LlvmError> {
-    ctx.attach_constant_pool(crate::constant_pool::ConstantPoolSnapshot::from_packages(
+    compile_packages(
+        ctx,
         &script.packages,
-    ));
-    for package in &script.packages {
-        for decl in package.unions.values() {
-            declare_union_type(ctx, decl);
-        }
-        for decl in package.structs.values() {
-            declare_struct_type(ctx, decl);
-        }
-        for decl in package.enums.values() {
-            declare_enum_type(ctx, decl);
-        }
-    }
-    for package in &script.packages {
-        for decl in package.unions.values() {
-            define_union_body(ctx, decl);
-        }
-        for decl in package.structs.values() {
-            define_struct_body(ctx, decl)?;
-        }
-    }
-    for package in &script.packages {
-        for decl in package.enums.values() {
-            define_enum_payload_bodies(ctx, decl)?;
-        }
-    }
-    for decl in enums_in_dependency_order(&script.packages) {
-        define_enum_completes_and_outer(ctx, decl)?;
-    }
-    assert_wire_enum_order(ctx)?;
-    // Built constant globals need every struct and enum body above,
-    // and every function body below loads them.
-    declare_built_constant_globals(ctx, &script.packages)?;
-    emit_app_name_global(ctx, app_name);
-    let mut declared = Vec::with_capacity(script.packages.iter().map(|p| p.functions.len()).sum());
-    for package in &script.packages {
-        for function in package.functions.values() {
-            declared.push((function, declare_function(ctx, function)?));
-        }
-    }
-    // Defined before the user-main thunk so the thunk can call it.
-    emit_built_constant_init(ctx, &script.packages, &script.built_constant_order)?;
-    emit_script_main(ctx, &script.blocks, script.def_location.as_ref())?;
-    for (function, llvm_function) in declared {
-        define_function(ctx, function, llvm_function).map_err(|e| {
-            LlvmError::Codegen(format!("while defining `{}`: {e:?}", function.symbol))
-        })?;
-    }
-    Ok(())
+        &script.built_constant_order,
+        app_name,
+        EntryShape::Script {
+            blocks: &script.blocks,
+            def_location: script.def_location.as_ref(),
+        },
+    )
 }

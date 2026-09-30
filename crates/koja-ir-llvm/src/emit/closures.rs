@@ -159,9 +159,7 @@ pub(super) fn emit_closure_equals<'ctx>(
         .builder
         .get_insert_block()
         .and_then(|block| block.get_parent())
-        .ok_or_else(|| {
-            LlvmError::Codegen("LLVM emit: ClosureEquals emitted outside a function body".into())
-        })?;
+        .expect("LLVM emit: ClosureEquals emitted outside a function body");
     let captures_block = ctx
         .context
         .append_basic_block(function, "closure_eq.captures");
@@ -212,7 +210,7 @@ pub(super) fn emit_closure_equals<'ctx>(
         .or_ice()?
         .try_as_basic_value()
         .basic()
-        .ok_or_else(|| LlvmError::Codegen("LLVM emit: closure eq glue returned void".into()))?;
+        .expect("LLVM emit: closure eq glue returned void");
     ctx.builder
         .build_unconditional_branch(merge_block)
         .or_ice()?;
@@ -300,7 +298,7 @@ pub(super) fn emit_call_closure<'ctx>(
 /// Read a single captured value from the active closure body's env
 /// block. `LoadCapture` is only valid inside a `FunctionKind::Closure`
 /// body (seal-enforced), so a missing closure frame is a compiler bug
-/// rather than a recoverable codegen error.
+/// and panics.
 pub(super) fn emit_load_capture<'ctx>(
     ctx: &EmitContext<'ctx>,
     capture_index: u32,

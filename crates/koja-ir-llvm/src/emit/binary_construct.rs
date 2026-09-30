@@ -278,9 +278,7 @@ fn float_value_as_i64<'ctx>(
                     .or_ice()?
             }
         } else {
-            return Err(LlvmError::Codegen(
-                "BinaryConstruct: Float32 segment received non-float value".to_string(),
-            ));
+            panic!("BinaryConstruct: Float32 segment received non-float value");
         };
         let i32_bits = ctx
             .builder
@@ -304,9 +302,7 @@ fn float_value_as_i64<'ctx>(
                     .or_ice()?
             }
         } else {
-            return Err(LlvmError::Codegen(
-                "BinaryConstruct: Float64 segment received non-float value".to_string(),
-            ));
+            panic!("BinaryConstruct: Float64 segment received non-float value");
         };
         let i64_bits = ctx
             .builder
@@ -315,8 +311,8 @@ fn float_value_as_i64<'ctx>(
             .into_int_value();
         return Ok(i64_bits);
     }
-    Err(LlvmError::Codegen(format!(
+    panic!(
         "BinaryConstruct: unsupported float width {width}, expected 32 or 64 \
          (seal invariant violation)",
-    )))
+    )
 }

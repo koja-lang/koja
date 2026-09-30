@@ -25,7 +25,8 @@
 //! - [`from_list`]: `Set.from_list` and the inline `Set.insert` call
 //!   it emits per element.
 //!
-//! Errors surface as typed [`crate::error::LlvmError::Codegen`] values.
+//! A key type without `Hash` or `Equality` surfaces as
+//! [`crate::error::LlvmError::Codegen`]. IR-seal violations panic.
 
 use koja_ir::IRType;
 

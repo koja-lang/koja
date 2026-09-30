@@ -48,12 +48,10 @@ fn emit_bytes_hash<'ctx>(
         .build_right_shift(bit_length, i64_ty.const_int(3, false), false, "byte_count")
         .or_ice()?;
 
-    let entry = ctx.builder.get_insert_block().ok_or_else(|| {
-        LlvmError::Codegen(format!(
-            "bytes hash has no entry block on `{}`",
-            function.symbol,
-        ))
-    })?;
+    let entry = ctx
+        .builder
+        .get_insert_block()
+        .unwrap_or_else(|| panic!("bytes hash has no entry block on `{}`", function.symbol));
     let header_bb = ctx.context.append_basic_block(llvm_function, "fnv_header");
     let body_bb = ctx.context.append_basic_block(llvm_function, "fnv_body");
     let done_bb = ctx.context.append_basic_block(llvm_function, "fnv_done");

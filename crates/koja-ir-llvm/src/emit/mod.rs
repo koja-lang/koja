@@ -341,10 +341,8 @@ fn emit_tail_call<'ctx>(
 /// For each phi, look up the matching branch arg's LLVM equivalent
 /// and hand it to the phi via `add_incoming`.
 ///
-/// The per-edge arity is checked at IR seal time, so a length
-/// mismatch here is a compiler bug. We panic with a clear message
-/// rather than surfacing a `Codegen` error the caller would have to
-/// add a fallthrough for.
+/// The per-edge arity and the phi entry per block are fixed at IR
+/// seal time, so a mismatch here is a compiler bug and panics.
 fn wire_phi_incomings<'ctx>(
     ctx: &EmitContext<'ctx>,
     target: &BranchTarget,
@@ -352,12 +350,12 @@ fn wire_phi_incomings<'ctx>(
     values: &ValueMap<'ctx>,
     phi_map: &PhiMap<'ctx>,
 ) -> Result<(), LlvmError> {
-    let phis = phi_map.get(&target.block).ok_or_else(|| {
-        LlvmError::Codegen(format!(
+    let phis = phi_map.get(&target.block).unwrap_or_else(|| {
+        panic!(
             "missing phi entry for block {} during branch-arg wiring",
             target.block,
-        ))
-    })?;
+        )
+    });
     if phis.len() != target.args.len() {
         panic!(
             "LLVM emit: branch from {pred} to {} passes {} arg(s) but target has {} \
@@ -370,9 +368,10 @@ fn wire_phi_incomings<'ctx>(
     // The true predecessor is the builder's current block, not
     // `block_map[pred]`: they differ when an instruction splits its host
     // block mid-body (e.g. `BinaryMatch`'s length-guarded extraction).
-    let pred_block = ctx.builder.get_insert_block().ok_or_else(|| {
-        LlvmError::Codegen("phi incoming wiring with no active block".to_string())
-    })?;
+    let pred_block = ctx
+        .builder
+        .get_insert_block()
+        .expect("phi incoming wiring with no active block");
     for (phi, arg) in phis.iter().zip(target.args.iter()) {
         let arg_value = lookup(values, *arg)?;
         phi.add_incoming(&[(&arg_value, pred_block)]);
@@ -384,10 +383,11 @@ pub(crate) fn lookup<'ctx>(
     values: &ValueMap<'ctx>,
     id: ValueId,
 ) -> Result<BasicValueEnum<'ctx>, LlvmError> {
-    values
+    let value = values
         .get(&id)
         .copied()
-        .ok_or_else(|| LlvmError::Codegen(format!("undefined SSA value {id} during emission")))
+        .unwrap_or_else(|| panic!("undefined SSA value {id} during emission"));
+    Ok(value)
 }
 
 /// True when the LLVM function currently being defined has a `void`
@@ -419,8 +419,9 @@ pub(super) fn lookup_block<'ctx>(
     block_map: &BlockMap<'ctx>,
     id: IRBlockId,
 ) -> Result<BasicBlock<'ctx>, LlvmError> {
-    block_map
+    let block = block_map
         .get(&id)
         .copied()
-        .ok_or_else(|| LlvmError::Codegen(format!("undefined IR block {id} during emission")))
+        .unwrap_or_else(|| panic!("undefined IR block {id} during emission"));
+    Ok(block)
 }

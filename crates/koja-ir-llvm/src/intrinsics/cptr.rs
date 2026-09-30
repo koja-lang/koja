@@ -53,8 +53,8 @@ pub(super) fn emit_cptr<'ctx>(
 
 /// Resolve the pointee `T` for a `CPtr<T>` intrinsic. `alloc` /
 /// `null` carry it on the return type. Every other method receives
-/// `self: CPtr<T>` as `params[0]`. Falls through to a codegen error
-/// if neither slot is a `CPtr`.
+/// `self: CPtr<T>` as `params[0]`. Panics if neither slot is a
+/// `CPtr`.
 fn pointee(method: CPtrMethod, function: &IRFunction) -> Result<&IRType, LlvmError> {
     let candidate = match method {
         CPtrMethod::Alloc | CPtrMethod::Null => &function.return_type,
@@ -62,10 +62,10 @@ fn pointee(method: CPtrMethod, function: &IRFunction) -> Result<&IRType, LlvmErr
     };
     match candidate {
         IRType::CPtr(inner) => Ok(inner),
-        other => Err(LlvmError::Codegen(format!(
+        other => panic!(
             "CPtr.{method:?} expected a `CPtr<T>` slot, got `{other:?}` (symbol `{}`)",
             function.symbol,
-        ))),
+        ),
     }
 }
 
@@ -102,12 +102,12 @@ fn emit_alloc<'ctx>(
 ) -> Result<(), LlvmError> {
     let inner = pointee(CPtrMethod::Alloc, function)?;
     let basic = ir_basic_type(ctx, inner)?;
-    let element_size = basic.size_of().ok_or_else(|| {
-        LlvmError::Codegen(format!(
+    let element_size = basic.size_of().unwrap_or_else(|| {
+        panic!(
             "CPtr.alloc cannot compute size of pointee `{inner:?}` (symbol `{}`)",
             function.symbol,
-        ))
-    })?;
+        )
+    });
     let count = nth_int(function, llvm_function, 0, "count")?;
     guard_nonnegative(ctx, count, "CPtr.alloc count cannot be negative")?;
     let total = ctx

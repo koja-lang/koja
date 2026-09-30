@@ -115,17 +115,16 @@ fn resolve_struct_payload<'ctx>(
             );
         }
     }
-    slots
+    let payload = slots
         .into_iter()
         .enumerate()
         .map(|(i, slot)| {
-            slot.ok_or_else(|| {
-                LlvmError::Codegen(format!(
-                    "struct payload missing field at index {i} (IR seal invariant violation)",
-                ))
+            slot.unwrap_or_else(|| {
+                panic!("struct payload missing field at index {i} (IR seal invariant violation)")
             })
         })
-        .collect()
+        .collect();
+    Ok(payload)
 }
 
 /// Spill `value` to a fresh outer-typed alloca, GEP through the

@@ -323,10 +323,10 @@ fn binary_pointer_size(
 ) -> Result<u64, LlvmError> {
     let binary_ty = ir_basic_type(ctx, &IRType::Binary)?;
     let BasicTypeEnum::PointerType(binary_ptr_ty) = binary_ty else {
-        return Err(LlvmError::Codegen(format!(
+        panic!(
             "{intrinsic_label} on `{}` requires Binary to use the runtime pointer ABI",
             function.symbol,
-        )));
+        );
     };
     let binary_size = ctx
         .layouts
@@ -337,13 +337,12 @@ fn binary_pointer_size(
             .ptr_type(AddressSpace::default())
             .as_basic_type_enum(),
     );
-    if binary_size != runtime_pointer_size {
-        return Err(LlvmError::Codegen(format!(
-            "{intrinsic_label} on `{}` requires Binary to match the runtime pointer ABI \
-             ({binary_size} bytes != {runtime_pointer_size} bytes)",
-            function.symbol,
-        )));
-    }
+    assert!(
+        binary_size == runtime_pointer_size,
+        "{intrinsic_label} on `{}` requires Binary to match the runtime pointer ABI \
+         ({binary_size} bytes != {runtime_pointer_size} bytes)",
+        function.symbol,
+    );
 
     Ok(binary_size)
 }
@@ -359,16 +358,14 @@ fn validate_resolve_payload(
     let inner = match ok_field {
         IRType::List(inner) => *inner,
         other => {
-            return Err(LlvmError::Codegen(format!(
-                "Socket.resolve_raw Ok payload expected to be List<Binary>, got `{other:?}`",
-            )));
+            panic!("Socket.resolve_raw Ok payload expected to be List<Binary>, got `{other:?}`")
         }
     };
     match inner {
         IRType::Binary => Ok(()),
-        other => Err(LlvmError::Codegen(format!(
+        other => panic!(
             "Socket.resolve_raw Ok payload expected to be List<Binary>, got `List<{other:?}>`",
-        ))),
+        ),
     }
 }
 
@@ -383,23 +380,20 @@ fn resolve_recv_from_payload(
     match ok_field {
         IRType::Tuple(elements) => {
             let [IRType::Binary, IRType::Binary, IRType::Int64] = elements.as_slice() else {
-                return Err(LlvmError::Codegen(format!(
+                panic!(
                     "Socket.recv_from_raw Ok payload expected `(Binary, Binary, Int)`, \
                      got `{elements:?}`",
-                )));
+                );
             };
             Ok(IRType::Tuple(elements))
         }
-        other => Err(LlvmError::Codegen(format!(
-            "Socket.recv_from_raw Ok payload expected a Tuple, got `{other:?}`",
-        ))),
+        other => panic!("Socket.recv_from_raw Ok payload expected a Tuple, got `{other:?}`"),
     }
 }
 
 /// Single-payload `Ok` extractor shared by both intrinsics. The
-/// IR seal pins `Result.Ok` to exactly one field. Surfaces a
-/// codegen error (not a panic) on shape violations so the failure
-/// mode is symmetric with the rest of the file.
+/// IR seal pins `Result.Ok` to exactly one field, so a shape
+/// violation panics.
 fn single_ok_payload(
     ctx: &EmitContext<'_>,
     result_symbol: &IRSymbol,
@@ -414,10 +408,10 @@ fn single_ok_payload(
         IRVariantPayload::Struct(fields) if fields.len() == 1 => {
             Ok(fields.into_iter().next().unwrap().ir_type)
         }
-        other => Err(LlvmError::Codegen(format!(
+        other => panic!(
             "{intrinsic_label} on `{}` Ok variant has unexpected payload `{other:?}` \
              (expected single-field, IR seal invariant violation)",
             function.symbol,
-        ))),
+        ),
     }
 }

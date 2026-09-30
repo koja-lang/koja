@@ -181,12 +181,13 @@ fn emit_tls_yield_check(ctx: &EmitContext<'_>) -> Result<(), LlvmError> {
 fn yield_check_blocks<'ctx>(
     ctx: &EmitContext<'ctx>,
 ) -> Result<(BasicBlock<'ctx>, BasicBlock<'ctx>), LlvmError> {
-    let host_block = ctx.builder.get_insert_block().ok_or_else(|| {
-        LlvmError::Codegen("LLVM emit: YieldCheck emitted with no insertion block".to_string())
-    })?;
-    let function = host_block.get_parent().ok_or_else(|| {
-        LlvmError::Codegen("LLVM emit: YieldCheck's host block has no parent function".to_string())
-    })?;
+    let host_block = ctx
+        .builder
+        .get_insert_block()
+        .expect("LLVM emit: YieldCheck emitted with no insertion block");
+    let function = host_block
+        .get_parent()
+        .expect("LLVM emit: YieldCheck's host block has no parent function");
     let yield_bb = ctx.context.append_basic_block(function, "yield_slow");
     let continue_bb = ctx.context.append_basic_block(function, "yield_cont");
     Ok((yield_bb, continue_bb))

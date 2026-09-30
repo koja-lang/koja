@@ -71,9 +71,9 @@ fn element(method: SetMethod, function: &IRFunction) -> Result<&IRType, LlvmErro
     };
     match candidate {
         IRType::Set(inner) => Ok(inner),
-        other => Err(LlvmError::Codegen(format!(
+        other => panic!(
             "Set.{method:?} expected a `Set<T>` slot, got `{other:?}` (symbol `{}`)",
             function.symbol,
-        ))),
+        ),
     }
 }

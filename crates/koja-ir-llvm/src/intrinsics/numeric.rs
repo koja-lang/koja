@@ -36,12 +36,10 @@ pub(super) fn emit_numeric_convert<'ctx>(
 
     let result_symbol = match &function.return_type {
         IRType::Enum(symbol) => symbol.clone(),
-        other => {
-            return Err(LlvmError::Codegen(format!(
-                "numeric convert intrinsic `{}` expected a Result-enum return, got `{other:?}`",
-                function.symbol,
-            )));
-        }
+        other => panic!(
+            "numeric convert intrinsic `{}` expected a Result-enum return, got `{other:?}`",
+            function.symbol,
+        ),
     };
 
     if matches!(convert, NumericConvert::FloatToFloat32) {
@@ -202,16 +200,16 @@ fn conversion_error_symbol<'ctx>(
         .layouts
         .enum_variant_payload(result_symbol, result::err_tag(ctx, result_symbol));
     let IRVariantPayload::Tuple(types) = &payload else {
-        return Err(LlvmError::Codegen(format!(
-            "`{result_symbol}`'s Err variant payload is not a tuple (stdlib invariant violation)",
-        )));
+        panic!(
+            "`{result_symbol}`'s Err variant payload is not a tuple (stdlib invariant violation)"
+        );
     };
     match types.as_slice() {
         [IRType::Enum(symbol)] => Ok(symbol.clone()),
-        other => Err(LlvmError::Codegen(format!(
+        other => panic!(
             "`{result_symbol}`'s Err payload should be a single enum (NumericConversionError), \
              got `{other:?}`",
-        ))),
+        ),
     }
 }
 

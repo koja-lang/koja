@@ -33,29 +33,26 @@ pub(super) fn emit_load_const<'ctx>(
         return Ok(v);
     }
     let pool = ctx.constant_pool.borrow();
-    let pool = pool.as_ref().ok_or_else(|| {
-        LlvmError::Codegen(
-            "LoadConst emitted without ConstantPoolSnapshot \
-             (`attach_constant_pool` must precede codegen)"
-                .into(),
-        )
-    })?;
-    let entry = pool.get(const_id).ok_or_else(|| {
-        LlvmError::Codegen(format!(
+    let pool = pool.as_ref().expect(
+        "LoadConst emitted without ConstantPoolSnapshot \
+         (`attach_constant_pool` must precede codegen)",
+    );
+    let entry = pool.get(const_id).unwrap_or_else(|| {
+        panic!(
             "LoadConst references missing pooled constant `{const_id}` (IR seal invariant \
              violated or pool attachment bug)",
-        ))
-    })?;
+        )
+    });
     if let IRConstantValue::Built { ty, .. } = entry {
         let global = ctx
             .module
             .get_global(&built_global_name(const_id))
-            .ok_or_else(|| {
-                LlvmError::Codegen(format!(
+            .unwrap_or_else(|| {
+                panic!(
                     "LoadConst of built constant `{const_id}` before its global was declared \
                      (`declare_built_constant_globals` must precede codegen)",
-                ))
-            })?;
+                )
+            });
         let llvm_ty = ir_basic_type(ctx, ty)?;
         return ctx
             .builder
@@ -81,11 +78,10 @@ fn emit_ir_constant_aggregate<'ctx>(
     cv: &IRConstantValue,
 ) -> Result<BasicValueEnum<'ctx>, LlvmError> {
     match cv {
-        IRConstantValue::Built { .. } => Err(LlvmError::Codegen(
+        IRConstantValue::Built { .. } => panic!(
             "built constants load from their global and never fold to an aggregate \
              (a `Built` value nested in a static constant is an IR lowering bug)"
-                .into(),
-        )),
+        ),
         IRConstantValue::Primitive(inner) => emit_const(ctx, inner),
         IRConstantValue::EnumVariant { tag, ty } => Ok(emit_unit_variant_constant(ctx, *tag, ty)),
         IRConstantValue::Struct { fields, ty } => {

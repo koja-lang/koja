@@ -13,8 +13,8 @@ pub(super) fn strlen_(args: &[Value]) -> Result<Value, RuntimeError> {
         return Err(type_mismatch("strlen", "(s: CPtr<UInt8>)", args));
     };
     if ptr.is_null() {
-        return Err(RuntimeError::Unsupported {
-            detail: "strlen(null) is undefined behavior, refusing to call libc".to_string(),
+        return Err(RuntimeError::Panicked {
+            message: "strlen(null) is undefined behavior, refusing to call libc".to_string(),
         });
     }
     let len = unsafe { strlen(*ptr as *const u8) };

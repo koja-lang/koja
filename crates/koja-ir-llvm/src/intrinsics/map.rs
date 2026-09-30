@@ -72,9 +72,9 @@ fn key_value(method: MapMethod, function: &IRFunction) -> Result<(&IRType, &IRTy
     };
     match candidate {
         IRType::Map { key, value } => Ok((key, value)),
-        other => Err(LlvmError::Codegen(format!(
+        other => panic!(
             "Map.{method:?} expected a `Map<K, V>` slot, got `{other:?}` (symbol `{}`)",
             function.symbol,
-        ))),
+        ),
     }
 }

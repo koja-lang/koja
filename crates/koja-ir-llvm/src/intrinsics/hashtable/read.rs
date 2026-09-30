@@ -58,12 +58,12 @@ fn emit_read_only_probe<'ctx>(
     } = inputs;
     let i8_ty = ctx.context.i8_type();
     let i64_ty = ctx.context.i64_type();
-    let entry_block = ctx.builder.get_insert_block().ok_or_else(|| {
-        LlvmError::Codegen(format!(
+    let entry_block = ctx.builder.get_insert_block().unwrap_or_else(|| {
+        panic!(
             "emit_read_only_probe called with no insertion block for `{}`",
             function.symbol,
-        ))
-    })?;
+        )
+    });
 
     let hash_val = call_hash(ctx, key_ops.hash_fn, key_val)?;
     let mask = ctx
@@ -256,12 +256,12 @@ pub(crate) fn emit_map_get<'ctx>(
 ) -> Result<(), LlvmError> {
     let i8_ty = ctx.context.i8_type();
     let i64_ty = ctx.context.i64_type();
-    let value_ty = layout.value_ty.ok_or_else(|| {
-        LlvmError::Codegen(format!(
+    let value_ty = layout.value_ty.unwrap_or_else(|| {
+        panic!(
             "Map.get layout missing value type (symbol `{}`)",
             function.symbol,
-        ))
-    })?;
+        )
+    });
     let option_symbol = expect_enum_symbol(&function.return_type, function, "Map.get")?;
     let value_basic_ty = ir_basic_type(ctx, value_ty)?;
 

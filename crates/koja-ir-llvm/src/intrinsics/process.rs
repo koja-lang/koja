@@ -86,12 +86,10 @@ fn emit_self_ref<'ctx>(ctx: &EmitContext<'ctx>, function: &IRFunction) -> Result
 
     let ref_struct = match &function.return_type {
         IRType::Struct(symbol) => ctx.layouts.struct_type(symbol.mangled()),
-        other => {
-            return Err(LlvmError::Codegen(format!(
-                "LLVM emit: `Ref.self_ref` returns `{other:?}`, expected Struct \
-                 (IR seal invariant violation)",
-            )));
-        }
+        other => panic!(
+            "LLVM emit: `Ref.self_ref` returns `{other:?}`, expected Struct \
+             (IR seal invariant violation)",
+        ),
     };
     let mut ref_value = ref_struct.get_undef();
     ref_value = ctx
@@ -201,12 +199,10 @@ fn emit_call<'ctx>(
 
     let result_symbol = match &function.return_type {
         IRType::Enum(symbol) => symbol.clone(),
-        other => {
-            return Err(LlvmError::Codegen(format!(
-                "LLVM emit: `Ref.call` returns `{other:?}`, expected Enum \
-                 (IR seal invariant violation)",
-            )));
-        }
+        other => panic!(
+            "LLVM emit: `Ref.call` returns `{other:?}`, expected Enum \
+             (IR seal invariant violation)",
+        ),
     };
     let reply_ir_type = ok_payload_field_type(ctx, &result_symbol)?;
     let reply_llvm = ir_basic_type(ctx, &reply_ir_type)?;
@@ -443,12 +439,10 @@ fn emit_monitor<'ctx>(
 
     let ref_struct = match &function.return_type {
         IRType::Struct(symbol) => ctx.layouts.struct_type(symbol.mangled()),
-        other => {
-            return Err(LlvmError::Codegen(format!(
-                "LLVM emit: `Process.monitor` returns `{other:?}`, expected the \
-                 `Process.MonitorRef` struct (IR seal invariant violation)",
-            )));
-        }
+        other => panic!(
+            "LLVM emit: `Process.monitor` returns `{other:?}`, expected the \
+             `Process.MonitorRef` struct (IR seal invariant violation)",
+        ),
     };
     let monitor_ref = ctx
         .builder
@@ -489,30 +483,26 @@ fn emit_parent<'ctx>(
     llvm_function: FunctionValue<'ctx>,
 ) -> Result<(), LlvmError> {
     let IRType::Enum(option_symbol) = &function.return_type else {
-        return Err(LlvmError::Codegen(format!(
+        panic!(
             "LLVM emit: `Process.parent` returns `{:?}`, expected the \
              `Option<Pid>` enum (IR seal invariant violation)",
             function.return_type,
-        )));
+        );
     };
     let some_tag = ctx.layouts.enum_variant_tag(option_symbol, "Some");
     let none_tag = ctx.layouts.enum_variant_tag(option_symbol, "None");
     let pid_symbol = match ctx.layouts.enum_variant_payload(option_symbol, some_tag) {
         IRVariantPayload::Tuple(types) => match types.as_slice() {
             [IRType::Struct(symbol)] => symbol.clone(),
-            other => {
-                return Err(LlvmError::Codegen(format!(
-                    "LLVM emit: `Process.parent` Some payload is `{other:?}`, expected \
-                     a single `Pid` struct (IR seal invariant violation)",
-                )));
-            }
-        },
-        other => {
-            return Err(LlvmError::Codegen(format!(
+            other => panic!(
                 "LLVM emit: `Process.parent` Some payload is `{other:?}`, expected \
-                 a tuple (IR seal invariant violation)",
-            )));
-        }
+                 a single `Pid` struct (IR seal invariant violation)",
+            ),
+        },
+        other => panic!(
+            "LLVM emit: `Process.parent` Some payload is `{other:?}`, expected \
+             a tuple (IR seal invariant violation)",
+        ),
     };
 
     let parent_fn = declare_rt_parent_extern(ctx);
@@ -594,12 +584,10 @@ fn emit_reply_send<'ctx>(
 
     let delivery_symbol = match &function.return_type {
         IRType::Enum(symbol) => symbol.clone(),
-        other => {
-            return Err(LlvmError::Codegen(format!(
-                "LLVM emit: `ReplyTo.send` returns `{other:?}`, expected the \
-                 `ReplyTo.Delivery` enum (IR seal invariant violation)",
-            )));
-        }
+        other => panic!(
+            "LLVM emit: `ReplyTo.send` returns `{other:?}`, expected the \
+             `ReplyTo.Delivery` enum (IR seal invariant violation)",
+        ),
     };
 
     let reply_fn = declare_rt_reply_extern(ctx);
@@ -831,11 +819,7 @@ fn build_payload_drop_shim<'ctx>(
     ctx.builder.position_at_end(entry);
     let payload_ptr = shim
         .get_nth_param(0)
-        .ok_or_else(|| {
-            LlvmError::Codegen(format!(
-                "envelope drop shim `{symbol}` missing payload param"
-            ))
-        })?
+        .unwrap_or_else(|| panic!("envelope drop shim `{symbol}` missing payload param"))
         .into_pointer_value();
     release_in_slot(ctx, payload, payload_ptr)?;
     ctx.builder.build_return(None).or_ice()?;
@@ -846,11 +830,11 @@ fn build_payload_drop_shim<'ctx>(
 }
 
 /// Recover the `R` IR type from `Result<R, CallError>`'s `Ok(R)`
-/// variant by walking the enum-variant payload registry. Surfaces
-/// IR-seal violations as [`LlvmError::Codegen`]: `Ref.call`'s
-/// return type must be a binary-shaped `Result` (typecheck enforces
-/// this) and the `Ok` variant must carry exactly one positional
-/// payload field of type `R`.
+/// variant by walking the enum-variant payload registry. Panics on
+/// an IR-seal violation. `Ref.call`'s return type must be a
+/// binary-shaped `Result` (typecheck enforces this) and the `Ok`
+/// variant must carry exactly one positional payload field of type
+/// `R`.
 fn ok_payload_field_type(
     ctx: &EmitContext<'_>,
     result_symbol: &IRSymbol,
@@ -863,10 +847,10 @@ fn ok_payload_field_type(
         IRVariantPayload::Struct(fields) if fields.len() == 1 => {
             Ok(fields.into_iter().next().unwrap().ir_type)
         }
-        other => Err(LlvmError::Codegen(format!(
+        other => panic!(
             "LLVM emit: `Ref.call` return `{result_symbol}` Ok variant has unexpected \
              payload `{other:?}`, expected single-field (IR seal invariant violation)",
-        ))),
+        ),
     }
 }
 

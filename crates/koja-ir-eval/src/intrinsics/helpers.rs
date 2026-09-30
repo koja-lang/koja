@@ -106,10 +106,10 @@ pub(super) fn arg_string_bytes<'a>(
     }
 }
 
-/// Borrow the `index`-th argument as `&str`. Surfaces a clean
-/// [`RuntimeError::Unsupported`] when the payload is not valid
-/// UTF-8: codepoint-walking methods (`length`, `get`, `slice`)
-/// need it. Byte-oriented methods read raw bytes through
+/// Borrow the `index`-th argument as `&str`. Surfaces
+/// [`RuntimeError::Panicked`] when the payload is not valid UTF-8,
+/// since codepoint-walking methods (`length`, `get`, `slice`) need
+/// it. Byte-oriented methods read raw bytes through
 /// [`arg_string_bytes`] instead.
 pub(super) fn arg_string_utf8<'a>(
     args: &'a [Value],
@@ -117,8 +117,8 @@ pub(super) fn arg_string_utf8<'a>(
     label: &str,
 ) -> Result<&'a str, RuntimeError> {
     let bytes = arg_string_bytes(args, index, label)?;
-    str::from_utf8(bytes).map_err(|err| RuntimeError::Unsupported {
-        detail: format!(
+    str::from_utf8(bytes).map_err(|err| RuntimeError::Panicked {
+        message: format!(
             "{label} arg #{index}: String contents are not valid UTF-8 \
              (invalid at byte {}): {err}",
             err.valid_up_to(),
@@ -268,9 +268,10 @@ pub(super) fn enum_return_symbol(
 /// Byte size of a primitive [`IRType`]. Used by `CPtr.alloc`,
 /// `CPtr.offset`, `CPtr.read`, `CPtr.write` to compute element-
 /// width offsets. Returns [`RuntimeError::Unsupported`] for non-
-/// primitive element types. Eval can't allocate / step over a
-/// struct or list without a full size-and-align computation, and
-/// the LLVM backend covers those cases on `--backend=llvm`.
+/// primitive element types, a feature gap. Eval cannot allocate or
+/// step over a struct or list without a full size-and-align
+/// computation, and the LLVM backend covers those cases on
+/// `--backend=llvm`.
 pub(super) fn size_of_primitive(ty: &IRType, label: &str) -> Result<usize, RuntimeError> {
     match ty {
         IRType::Bool | IRType::Int8 | IRType::UInt8 => Ok(1),

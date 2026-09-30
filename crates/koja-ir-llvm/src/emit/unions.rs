@@ -25,9 +25,7 @@ pub(super) fn emit_union_wrap<'ctx>(
     payload: BasicValueEnum<'ctx>,
 ) -> Result<BasicValueEnum<'ctx>, LlvmError> {
     let IRType::Union { mangled, .. } = ty else {
-        return Err(LlvmError::Codegen(format!(
-            "LLVM emit: UnionWrap target IRType is not Union (got `{ty:?}`)",
-        )));
+        panic!("LLVM emit: UnionWrap target IRType is not Union (got `{ty:?}`)");
     };
     let outer = ctx.layouts.union_outer(mangled.mangled());
     let alloca = ctx.build_entry_alloca(outer, &format!("{mangled}_tmp"));
@@ -60,9 +58,7 @@ pub(super) fn emit_union_tag_get<'ctx>(
     value: BasicValueEnum<'ctx>,
 ) -> Result<BasicValueEnum<'ctx>, LlvmError> {
     let IRType::Union { mangled, .. } = ty else {
-        return Err(LlvmError::Codegen(format!(
-            "LLVM emit: UnionTagGet receiver IRType is not Union (got `{ty:?}`)",
-        )));
+        panic!("LLVM emit: UnionTagGet receiver IRType is not Union (got `{ty:?}`)");
     };
     let outer = ctx.layouts.union_outer(mangled.mangled());
     let alloca = ctx.build_entry_alloca(outer, &format!("{mangled}_tag_src"));
@@ -98,9 +94,7 @@ pub(super) fn emit_union_payload_get<'ctx>(
     value: BasicValueEnum<'ctx>,
 ) -> Result<BasicValueEnum<'ctx>, LlvmError> {
     let IRType::Union { mangled, .. } = ty else {
-        return Err(LlvmError::Codegen(format!(
-            "LLVM emit: UnionPayloadGet receiver IRType is not Union (got `{ty:?}`)",
-        )));
+        panic!("LLVM emit: UnionPayloadGet receiver IRType is not Union (got `{ty:?}`)");
     };
     let outer = ctx.layouts.union_outer(mangled.mangled());
     let alloca = ctx.build_entry_alloca(outer, &format!("{mangled}_payload_src"));

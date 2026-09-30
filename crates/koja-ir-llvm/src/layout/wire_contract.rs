@@ -66,10 +66,10 @@ pub(crate) fn assert_wire_enum_order(ctx: &EmitContext<'_>) -> Result<(), LlvmEr
             ));
         }
     });
-    match violation {
-        Some(message) => Err(LlvmError::Codegen(message)),
-        None => Ok(()),
+    if let Some(message) = violation {
+        panic!("{message}");
     }
+    Ok(())
 }
 
 /// Description of the first tag/name divergence from `expected`, or

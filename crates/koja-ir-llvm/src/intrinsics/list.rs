@@ -66,10 +66,10 @@ fn element(method: ListMethod, function: &IRFunction) -> Result<&IRType, LlvmErr
     };
     match candidate {
         IRType::List(inner) => Ok(inner),
-        other => Err(LlvmError::Codegen(format!(
+        other => panic!(
             "List.{method:?} expected a `List<T>` slot, got `{other:?}` (symbol `{}`)",
             function.symbol,
-        ))),
+        ),
     }
 }
 
@@ -80,12 +80,13 @@ fn element_byte_size<'ctx>(
 ) -> Result<IntValue<'ctx>, LlvmError> {
     let elem_ty = element(method, function)?;
     let basic = ir_basic_type(ctx, elem_ty)?;
-    basic.size_of().ok_or_else(|| {
-        LlvmError::Codegen(format!(
+    let size = basic.size_of().unwrap_or_else(|| {
+        panic!(
             "List.{method:?} cannot compute size of element `{elem_ty:?}` (symbol `{}`)",
             function.symbol,
-        ))
-    })
+        )
+    });
+    Ok(size)
 }
 
 fn emit_new<'ctx>(ctx: &EmitContext<'ctx>, function: &IRFunction) -> Result<(), LlvmError> {
@@ -782,18 +783,18 @@ fn tuple_element_enum_symbol(
     function: &IRFunction,
 ) -> Result<IRSymbol, LlvmError> {
     let IRType::Tuple(elements) = tuple_ty else {
-        return Err(LlvmError::Codegen(format!(
+        panic!(
             "List.pop expected a tuple return type, got `{tuple_ty:?}` (symbol `{}`)",
             function.symbol,
-        )));
+        );
     };
     match elements.get(element_index) {
         Some(IRType::Enum(symbol)) => Ok(symbol.clone()),
-        other => Err(LlvmError::Codegen(format!(
+        other => panic!(
             "List.pop expected an enum-typed element at index {element_index}, \
              got `{other:?}` (symbol `{}`)",
             function.symbol,
-        ))),
+        ),
     }
 }
 

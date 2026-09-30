@@ -283,9 +283,7 @@ fn cstring_struct_type<'ctx>(
         result::single_payload_type(ctx, result_symbol, result::ok_tag(ctx, result_symbol))?;
     match cstring_type {
         IRType::Struct(_) => Ok(ir_basic_type(ctx, &cstring_type)?.into_struct_type()),
-        other => Err(LlvmError::Codegen(format!(
-            "String.to_cstring expected a CString Ok payload, got `{other:?}`",
-        ))),
+        other => panic!("String.to_cstring expected a CString Ok payload, got `{other:?}`"),
     }
 }
 

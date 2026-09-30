@@ -80,12 +80,13 @@ pub(super) fn emit_binary_match<'ctx>(
     // greedy-tail size underflows to a huge `malloc` -> null -> SIGBUS.
     // Gate it behind the length check. A failed check short-circuits
     // to `false` without touching the payload.
-    let entry_block = ctx.builder.get_insert_block().ok_or_else(|| {
-        LlvmError::Codegen("binary match emitted with no active block".to_string())
-    })?;
-    let function = entry_block.get_parent().ok_or_else(|| {
-        LlvmError::Codegen("binary match active block has no parent function".to_string())
-    })?;
+    let entry_block = ctx
+        .builder
+        .get_insert_block()
+        .expect("binary match emitted with no active block");
+    let function = entry_block
+        .get_parent()
+        .expect("binary match active block has no parent function");
     let test_block = ctx.context.append_basic_block(function, "bin_pat_test");
     let bind_block = ctx.context.append_basic_block(function, "bin_pat_bind");
     let merge_block = ctx.context.append_basic_block(function, "bin_pat_merge");
@@ -577,11 +578,10 @@ fn narrow_to_ir_type<'ctx>(
         IRType::Int16 | IRType::UInt16 => ctx.context.i16_type(),
         IRType::Int32 | IRType::UInt32 => ctx.context.i32_type(),
         IRType::Int64 | IRType::UInt64 => ctx.context.i64_type(),
-        other => {
-            return Err(LlvmError::Codegen(format!(
-                "LLVM emit: binary pattern binding can't narrow into IR type `{other:?}`",
-            )));
-        }
+        other => panic!(
+            "LLVM emit: binary pattern binding cannot narrow into IR type `{other:?}` (seal \
+             invariant violation)",
+        ),
     };
     if extended.get_type().get_bit_width() == target.get_bit_width() {
         return Ok(extended.into());

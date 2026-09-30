@@ -33,12 +33,12 @@ pub(crate) fn emit_next<'ctx>(
     let payload_type = option_payload_type(ctx, option_symbol, function)?;
     let table = extract_table_fields(ctx, function, llvm_function)?;
     let cursor = nth_int(function, llvm_function, 1, "cursor")?;
-    let entry_block = ctx.builder.get_insert_block().ok_or_else(|| {
-        LlvmError::Codegen(format!(
+    let entry_block = ctx.builder.get_insert_block().unwrap_or_else(|| {
+        panic!(
             "collection.next has no entry block on `{}`",
             function.symbol,
-        ))
-    })?;
+        )
+    });
 
     let scan = ctx.context.append_basic_block(llvm_function, "cursor.scan");
     let check = ctx
@@ -173,20 +173,20 @@ fn option_payload_type(
         .enum_variant_payload(option_symbol, option::some_tag(ctx, option_symbol))
     {
         IRVariantPayload::Tuple(types) if types.len() == 1 => Ok(types.into_iter().next().unwrap()),
-        other => Err(LlvmError::Codegen(format!(
+        other => panic!(
             "collection.next on `{}` has unexpected Option.Some payload `{other:?}`",
             function.symbol,
-        ))),
+        ),
     }
 }
 
 fn tuple_elements<'a>(ty: &'a IRType, function: &IRFunction) -> Result<&'a [IRType], LlvmError> {
     match ty {
         IRType::Tuple(elements) if elements.len() == 2 => Ok(elements),
-        other => Err(LlvmError::Codegen(format!(
+        other => panic!(
             "collection.next on `{}` expected a two-element tuple payload, got `{other:?}`",
             function.symbol,
-        ))),
+        ),
     }
 }
 
