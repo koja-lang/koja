@@ -393,11 +393,9 @@ pub(super) fn extract_table_fields<'ctx>(
 /// receiver's `hash` / `equals?` as a `Global.<Type>.hash`-style
 /// `IRSymbol`, and per-struct impls follow the same shape with
 /// the struct's already-mangled symbol as the receiver root, so
-/// the lookup is a single index hit per side. Misses surface as
-/// a clean codegen error rather than panicking. The surface
-/// language can declare a `Map<K, _>` over a `K` that doesn't
-/// implement `Hash`, so this branch must produce an actionable
-/// diagnostic.
+/// the lookup is a single index hit per side. Misses are backend
+/// gaps (union keys, conditional `Hash` impls that nothing else
+/// instantiates) and surface as a codegen error.
 pub(super) fn resolve_hash_eq<'ctx>(
     ctx: &EmitContext<'ctx>,
     function: &IRFunction,

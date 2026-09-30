@@ -25,7 +25,7 @@
 //! - [`from_list`]: `Set.from_list` and the inline `Set.insert` call
 //!   it emits per element.
 //!
-//! A key type without `Hash` or `Equality` surfaces as
+//! A key this backend cannot hash yet surfaces as
 //! [`crate::error::LlvmError::Codegen`]. IR-seal violations panic.
 
 use koja_ir::IRType;
