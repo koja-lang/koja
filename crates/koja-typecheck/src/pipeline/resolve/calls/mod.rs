@@ -93,19 +93,15 @@ pub(super) fn resolve_call(
     };
 
     if let Some((local_id, local_ty)) = resolver.scope.lookup(name) {
-        let local_ty = local_ty.clone();
-        return resolve_local_call(
-            name,
+        let local = LocalCallee {
+            id: local_id,
             ident_resolution,
-            local_id,
-            local_ty,
-            &mut callee.resolution,
-            args,
-            call_span,
-            callee.span,
-            resolver,
-            diagnostics,
-        );
+            name,
+            span: callee.span,
+            ty: local_ty.clone(),
+            ty_slot: &mut callee.resolution,
+        };
+        return resolve_local_call(local, args, call_span, resolver, diagnostics);
     }
 
     let (id, entry) = match lookup_bare_callee(
@@ -1259,40 +1255,56 @@ fn validate_call_signature(
     }
 }
 
+/// A callee whose bare identifier named a local, with the two slots
+/// resolve stamps on success. `ident_resolution` lives in the
+/// callee's `Ident` payload and `ty_slot` is the callee expression's
+/// own resolution, so both are split borrows of one `Expr`. Sibling
+/// of [`FunctionCallee`] for the local path.
+struct LocalCallee<'a> {
+    id: LocalId,
+    ident_resolution: &'a mut Resolution,
+    name: &'a str,
+    span: Span,
+    ty: ResolvedType,
+    ty_slot: &'a mut ResolvedType,
+}
+
 /// Closure-typed local-call resolution: stamps the ident as
 /// [`Resolution::Local`], threads the function's params as expected
 /// arg types, and validates arity + per-position types. Non-function
 /// locals diagnose and return [`ResolvedType::unresolved`].
-#[allow(clippy::too_many_arguments)]
 fn resolve_local_call(
-    name: &str,
-    ident_resolution: &mut Resolution,
-    local_id: LocalId,
-    local_ty: ResolvedType,
-    callee_ty_slot: &mut ResolvedType,
+    local: LocalCallee<'_>,
     args: &mut [Arg],
     call_span: Span,
-    callee_span: Span,
     resolver: &mut Resolver<'_>,
     diagnostics: &mut Vec<Diagnostic>,
 ) -> ResolvedType {
+    let LocalCallee {
+        id,
+        ident_resolution,
+        name,
+        span,
+        ty,
+        ty_slot,
+    } = local;
     let ResolvedType::Anonymous(AnonymousKind::Function {
         params: fn_params,
         ret,
-    }) = &local_ty
+    }) = &ty
     else {
         resolve_args(args, None, resolver, diagnostics);
         diagnostics.push(Diagnostic::error(
             format!(
                 "cannot call `{name}` because it is `{}`, not a function",
-                display_resolution(&local_ty, resolver.registry),
+                display_resolution(&ty, resolver.registry),
             ),
-            callee_span,
+            span,
         ));
         return ResolvedType::unresolved();
     };
-    *ident_resolution = Resolution::Local(local_id);
-    *callee_ty_slot = local_ty.clone();
+    *ident_resolution = Resolution::Local(id);
+    *ty_slot = ty.clone();
     let expected_params = synthesize_local_call_params(fn_params);
     resolve_args(args, Some(&expected_params), resolver, diagnostics);
     validate_call_signature(

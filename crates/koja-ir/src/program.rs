@@ -274,7 +274,8 @@ fn stage_process_entry(
         &checked.registry,
         output,
     );
-    let [body, wrapper] = synthesize_process_entry_wrapper(&state_symbol, body_types);
+    let [body, wrapper] =
+        synthesize_process_entry_wrapper(&state_symbol, body_types, &checked.registry, output);
     let wrapper_symbol = wrapper.symbol.clone();
     insert_package_function(packages, &owner_package, body);
     insert_package_function(packages, &owner_package, wrapper);

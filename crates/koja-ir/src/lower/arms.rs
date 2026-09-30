@@ -10,13 +10,12 @@
 
 use koja_ast::ast::{Expr, Statement};
 use koja_ast::identifier::ResolvedType;
-use koja_typecheck::GlobalRegistry;
 
 use crate::function::{BranchTarget, IRBlockId, IRInstruction, IRTerminator};
 use crate::types::{ConstValue, IRBinOp, IRType, ValueId};
 
 use super::body::lower_body;
-use super::ctx::{FlowResult, FnLowerCtx, LowerOutput, SlotStateSnapshot};
+use super::ctx::{FlowResult, FnLowerCtx, SlotStateSnapshot};
 use super::expr::lower_expr;
 use super::ownership::{drop_discarded_temp, materialize_owned};
 use super::package::resolved_type_to_ir_type;
@@ -36,7 +35,7 @@ pub(super) type ArmJoinState = (Option<IRBlockId>, SlotStateSnapshot);
 /// branch arg is already an owned value ([`finalize_arm_value`]) and
 /// appended instructions land before the terminator, so the drop is
 /// safe on the merge edge.
-pub(super) fn join_arm_states(ctx: &mut FnLowerCtx, arms: Vec<ArmJoinState>) {
+pub(super) fn join_arm_states(ctx: &mut FnLowerCtx<'_>, arms: Vec<ArmJoinState>) {
     let states: Vec<SlotStateSnapshot> = arms.iter().map(|(_, state)| state.clone()).collect();
     ctx.merge_slot_states(states);
     let merged = ctx.snapshot_slot_states();
@@ -71,14 +70,12 @@ pub(super) fn join_arm_states(ctx: &mut FnLowerCtx, arms: Vec<ArmJoinState>) {
 /// acquired. `None` when the arm closed flow with an early `return`.
 pub(super) fn lower_arm_into(
     body: &[Statement],
-    ctx: &mut FnLowerCtx,
+    ctx: &mut FnLowerCtx<'_>,
     arm_block: IRBlockId,
     merge_block: IRBlockId,
     result_ty: &IRType,
-    registry: &GlobalRegistry,
-    output: &mut LowerOutput,
 ) -> Result<Option<IRBlockId>, ()> {
-    match lower_body(body, ctx, arm_block, registry, output)? {
+    match lower_body(body, ctx, arm_block)? {
         FlowResult::Open { block, value } => {
             let arg = match value {
                 Some(id) => finalize_arm_value(ctx, block, id, result_ty),
@@ -101,14 +98,12 @@ pub(super) fn lower_arm_into(
 /// syntactically `return`.
 pub(super) fn lower_expr_arm_into(
     expr: &Expr,
-    ctx: &mut FnLowerCtx,
+    ctx: &mut FnLowerCtx<'_>,
     arm_block: IRBlockId,
     merge_block: IRBlockId,
     result_ty: &IRType,
-    registry: &GlobalRegistry,
-    output: &mut LowerOutput,
 ) -> Result<(), ()> {
-    let (value, after) = lower_expr(expr, ctx, arm_block, registry, output)?;
+    let (value, after) = lower_expr(expr, ctx, arm_block)?;
     let arg = finalize_arm_value(ctx, after, value, result_ty);
     ctx.cfg.set_terminator(
         after,
@@ -133,7 +128,7 @@ pub(super) fn lower_expr_arm_into(
 /// Other mismatches indicate a typecheck/lowering disagreement and
 /// surface at seal.
 pub(super) fn finalize_arm_value(
-    ctx: &mut FnLowerCtx,
+    ctx: &mut FnLowerCtx<'_>,
     block: IRBlockId,
     value: ValueId,
     result_ty: &IRType,
@@ -149,12 +144,8 @@ pub(super) fn finalize_arm_value(
 /// Map the typecheck-stamped result type on a control-flow
 /// expression to its IR equivalent. Centralized so per-arm helpers
 /// don't redo the registry walk.
-pub(super) fn lower_result_ty(
-    resolution: &ResolvedType,
-    registry: &GlobalRegistry,
-    output: &mut LowerOutput,
-) -> IRType {
-    resolved_type_to_ir_type(resolution, registry, &mut output.instantiations)
+pub(super) fn lower_result_ty(resolution: &ResolvedType, ctx: &mut FnLowerCtx<'_>) -> IRType {
+    resolved_type_to_ir_type(resolution, ctx.registry, &mut ctx.output.instantiations)
 }
 
 /// Emit `lhs == rhs` over two `Int8` values in `block` and return
@@ -162,7 +153,7 @@ pub(super) fn lower_result_ty(
 pub(super) fn emit_int8_eq(
     lhs: ValueId,
     rhs: ValueId,
-    ctx: &mut FnLowerCtx,
+    ctx: &mut FnLowerCtx<'_>,
     block: IRBlockId,
 ) -> ValueId {
     let dest = ctx.fresh_value(IRType::Bool);
@@ -184,7 +175,7 @@ pub(super) fn emit_int8_eq(
 pub(super) fn emit_tag_eq(
     tag: ValueId,
     expected: u8,
-    ctx: &mut FnLowerCtx,
+    ctx: &mut FnLowerCtx<'_>,
     block: IRBlockId,
 ) -> ValueId {
     let const_dest = ctx.fresh_value(IRType::Int8);
@@ -199,7 +190,7 @@ pub(super) fn emit_tag_eq(
 }
 
 /// Emit a fresh `Const::Unit` in `block` and return its `ValueId`.
-pub(super) fn emit_unit(ctx: &mut FnLowerCtx, block: IRBlockId) -> ValueId {
+pub(super) fn emit_unit(ctx: &mut FnLowerCtx<'_>, block: IRBlockId) -> ValueId {
     let dest = ctx.fresh_value(IRType::Unit);
     ctx.cfg.append(
         block,

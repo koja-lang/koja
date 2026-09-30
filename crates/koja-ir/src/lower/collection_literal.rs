@@ -15,8 +15,8 @@ use koja_ast::identifier::{Identifier, Resolution, ResolvedType};
 use koja_ast::span::Span;
 use koja_typecheck::GlobalRegistry;
 
-use super::calls::{MethodCallShape, lower_method_call, synthesized_method_target};
-use super::ctx::{FnLowerCtx, LowerOutput};
+use super::calls::{lower_method_call, synthesized_method_target};
+use super::ctx::FnLowerCtx;
 use crate::function::IRBlockId;
 use crate::types::ValueId;
 
@@ -32,10 +32,8 @@ fn arg_of(value: &Expr) -> Arg {
 /// Lower the synthesized `MethodCall` chain like any other method call.
 fn lower_chain(
     chain: &Expr,
-    ctx: &mut FnLowerCtx,
+    ctx: &mut FnLowerCtx<'_>,
     block: IRBlockId,
-    registry: &GlobalRegistry,
-    output: &mut LowerOutput,
 ) -> Result<(ValueId, IRBlockId), ()> {
     let ExprKind::MethodCall {
         receiver,
@@ -47,50 +45,35 @@ fn lower_chain(
     else {
         unreachable!("synthesized collection-literal chain always produces MethodCall");
     };
-    lower_method_call(
-        receiver,
-        MethodCallShape {
-            method,
-            args,
-            method_type_args: type_args,
-            target: *target,
-        },
-        ctx,
-        block,
-        registry,
-        output,
-    )
+    lower_method_call(receiver, method, args, type_args, *target, ctx, block)
 }
 
 pub(super) fn lower_list_literal(
     elements: &[Expr],
     expr_resolution: &ResolvedType,
     span: Span,
-    ctx: &mut FnLowerCtx,
+    ctx: &mut FnLowerCtx<'_>,
     block: IRBlockId,
-    registry: &GlobalRegistry,
-    output: &mut LowerOutput,
 ) -> Result<(ValueId, IRBlockId), ()> {
     let items = elements.iter().map(|element| vec![arg_of(element)]);
     let chain =
-        synthesize_collection_chain("List", "append", items, expr_resolution, span, registry);
-    lower_chain(&chain, ctx, block, registry, output)
+        synthesize_collection_chain("List", "append", items, expr_resolution, span, ctx.registry);
+    lower_chain(&chain, ctx, block)
 }
 
 pub(super) fn lower_map_literal(
     entries: &[(Expr, Expr)],
     expr_resolution: &ResolvedType,
     span: Span,
-    ctx: &mut FnLowerCtx,
+    ctx: &mut FnLowerCtx<'_>,
     block: IRBlockId,
-    registry: &GlobalRegistry,
-    output: &mut LowerOutput,
 ) -> Result<(ValueId, IRBlockId), ()> {
     let items = entries
         .iter()
         .map(|(key, value)| vec![arg_of(key), arg_of(value)]);
-    let chain = synthesize_collection_chain("Map", "put", items, expr_resolution, span, registry);
-    lower_chain(&chain, ctx, block, registry, output)
+    let chain =
+        synthesize_collection_chain("Map", "put", items, expr_resolution, span, ctx.registry);
+    lower_chain(&chain, ctx, block)
 }
 
 fn stamped_expr(kind: ExprKind, resolution: ResolvedType, span: Span) -> Expr {

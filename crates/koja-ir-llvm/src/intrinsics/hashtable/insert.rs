@@ -6,7 +6,7 @@
 
 use inkwell::IntPredicate;
 use inkwell::basic_block::BasicBlock;
-use inkwell::values::{BasicValueEnum, FunctionValue, IntValue, PointerValue};
+use inkwell::values::{FunctionValue, IntValue, PointerValue};
 use koja_ir::IRFunction;
 
 use crate::ctx::EmitContext;
@@ -16,7 +16,7 @@ use crate::intrinsics::util::{build_table_struct, nth_param, ret};
 
 use super::resize::emit_resize_if_needed;
 use super::util::{
-    KeyHashOps, TableSnapshot, advance_slot, call_eq, call_hash, clone_table_buffers,
+    ProbeInputs, TableSnapshot, advance_slot, call_eq, call_hash, clone_table_buffers,
     entry_pointer, extract_table_fields, resolve_key_hash_ops, value_slot,
 };
 use super::{HashtableLayout, STATE_EMPTY, STATE_OCCUPIED};
@@ -44,12 +44,14 @@ pub(crate) fn emit_map_put<'ctx>(
     let post = emit_resize_if_needed(ctx, llvm_function, layout, &table, &key_ops)?;
     let probe = emit_insert_probe(
         ctx,
-        function,
-        llvm_function,
-        layout,
-        &post,
-        key_val,
-        &key_ops,
+        ProbeInputs {
+            function,
+            key_ops: &key_ops,
+            key_val,
+            layout,
+            llvm_function,
+            table: &post,
+        },
     )?;
 
     // Update path: dup key found, overwrite the value slot. Release
@@ -115,12 +117,14 @@ pub(crate) fn emit_set_insert<'ctx>(
     let post = emit_resize_if_needed(ctx, llvm_function, layout, &table, &key_ops)?;
     let probe = emit_insert_probe(
         ctx,
-        function,
-        llvm_function,
-        layout,
-        &post,
-        item_val,
-        &key_ops,
+        ProbeInputs {
+            function,
+            key_ops: &key_ops,
+            key_val: item_val,
+            layout,
+            llvm_function,
+            table: &post,
+        },
     )?;
 
     // Duplicate-key path: Set returns self unchanged (no update).
@@ -196,13 +200,16 @@ pub(super) struct InsertProbe<'ctx> {
 /// branches to `update_bb` / `insert_bb` via `position_at_end`.
 pub(super) fn emit_insert_probe<'ctx>(
     ctx: &EmitContext<'ctx>,
-    function: &IRFunction,
-    llvm_function: FunctionValue<'ctx>,
-    layout: &HashtableLayout<'_>,
-    table: &TableSnapshot<'ctx>,
-    key_val: BasicValueEnum<'ctx>,
-    key_ops: &KeyHashOps<'ctx>,
+    inputs: ProbeInputs<'_, 'ctx>,
 ) -> Result<InsertProbe<'ctx>, LlvmError> {
+    let ProbeInputs {
+        function,
+        key_ops,
+        key_val,
+        layout,
+        llvm_function,
+        table,
+    } = inputs;
     let i8_ty = ctx.context.i8_type();
     let i64_ty = ctx.context.i64_type();
     let entry_block = ctx.builder.get_insert_block().ok_or_else(|| {

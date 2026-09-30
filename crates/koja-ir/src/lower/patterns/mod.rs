@@ -45,10 +45,9 @@ use std::collections::HashSet;
 use koja_ast::ast::{Diagnostic, ExprKind, Name, Pattern};
 use koja_ast::identifier::{GlobalRegistryId, LocalId, Resolution, ResolvedType};
 use koja_ast::labels::{pattern_kind_label, pattern_span};
-use koja_typecheck::GlobalRegistry;
 
 use super::arms::{emit_tag_eq, lower_result_ty};
-use super::ctx::{FnLowerCtx, LowerOutput};
+use super::ctx::FnLowerCtx;
 use super::package::resolved_type_to_ir_type;
 use crate::enum_decl::IRVariantTag;
 use crate::function::{IRBlockId, IRInstruction, IRSymbol};
@@ -108,11 +107,10 @@ fn collect_pattern_binding_ids(pattern: &Pattern, ids: &mut HashSet<LocalId>) {
     }
 }
 
-/// Read-only inputs threaded through every recursive helper.
-/// Bundling them keeps `lower_pattern_check` and its per-shape
-/// helpers under the clippy `too_many_arguments` threshold.
+/// The subject a pattern is matched against, threaded through every
+/// recursive helper. Nested patterns rebind it to the projected
+/// field or payload value.
 pub(super) struct PatternInputs<'a> {
-    pub(super) registry: &'a GlobalRegistry,
     pub(super) subject: ValueId,
     pub(super) subject_ty: &'a ResolvedType,
 }
@@ -217,7 +215,7 @@ fn emit_union_tag_eq(
     subject: ValueId,
     subject_ir: &IRType,
     member_index: u8,
-    ctx: &mut FnLowerCtx,
+    ctx: &mut FnLowerCtx<'_>,
     block: IRBlockId,
 ) -> ValueId {
     let tag_value = ctx.fresh_value(IRType::Int8);
@@ -235,24 +233,17 @@ fn emit_union_tag_eq(
 pub(super) fn lower_pattern_check(
     pattern: &Pattern,
     inputs: PatternInputs<'_>,
-    ctx: &mut FnLowerCtx,
+    ctx: &mut FnLowerCtx<'_>,
     block: IRBlockId,
-    output: &mut LowerOutput,
 ) -> Result<(PatternCheck, IRBlockId), ()> {
     match pattern {
         Pattern::Binary { segments, .. } => {
-            let cond = super::binary_match::lower_binary_pattern(
-                segments,
-                inputs.subject,
-                ctx,
-                block,
-                inputs.registry,
-                output,
-            );
+            let cond =
+                super::binary_match::lower_binary_pattern(segments, inputs.subject, ctx, block);
             Ok(single_test(cond, block))
         }
         Pattern::Binding { local_id, name, .. } => {
-            lower_binding_check(*local_id, name, &inputs, ctx, block, output);
+            lower_binding_check(*local_id, name, &inputs, ctx, block);
             Ok((PatternCheck::CatchAll { binds: Vec::new() }, block))
         }
         Pattern::EnumStruct {
@@ -260,15 +251,15 @@ pub(super) fn lower_pattern_check(
             type_path: _,
             variant,
             ..
-        } => enums::lower_enum_struct_check(variant, fields, &inputs, ctx, block, output),
+        } => enums::lower_enum_struct_check(variant, fields, &inputs, ctx, block),
         Pattern::EnumTuple {
             elements,
             type_path: _,
             variant,
             ..
-        } => enums::lower_enum_tuple_check(variant, elements, &inputs, ctx, block, output),
+        } => enums::lower_enum_tuple_check(variant, elements, &inputs, ctx, block),
         Pattern::EnumUnit { variant, .. } => {
-            let cond = enums::emit_enum_tag_eq(variant, &inputs, ctx, block, output);
+            let cond = enums::emit_enum_tag_eq(variant, &inputs, ctx, block);
             Ok(single_test(cond, block))
         }
         Pattern::Literal {
@@ -283,19 +274,18 @@ pub(super) fn lower_pattern_check(
                 inputs.subject,
                 ctx,
                 block,
-                &mut output.diagnostics,
             )?;
             Ok(single_test(cond, block))
         }
-        Pattern::Or { patterns, .. } => Ok(or_pattern::lower_or_check(
-            patterns, &inputs, ctx, block, output,
-        )),
-        Pattern::Struct { fields, .. } => Ok(structs::lower_struct_check(
-            fields, &inputs, ctx, block, output,
-        )),
-        Pattern::Tuple { elements, .. } => Ok(tuples::lower_tuple_check(
-            elements, &inputs, ctx, block, output,
-        )),
+        Pattern::Or { patterns, .. } => {
+            Ok(or_pattern::lower_or_check(patterns, &inputs, ctx, block))
+        }
+        Pattern::Struct { fields, .. } => {
+            Ok(structs::lower_struct_check(fields, &inputs, ctx, block))
+        }
+        Pattern::Tuple { elements, .. } => {
+            Ok(tuples::lower_tuple_check(elements, &inputs, ctx, block))
+        }
         Pattern::TypedBinding {
             local_id,
             name,
@@ -309,7 +299,7 @@ pub(super) fn lower_pattern_check(
                 );
             });
             let member_ir =
-                resolved_type_to_ir_type(resolved, inputs.registry, &mut output.instantiations);
+                resolved_type_to_ir_type(resolved, ctx.registry, &mut ctx.output.instantiations);
             let subject_ir = ctx.type_of(inputs.subject).clone();
             let IRType::Union { members, .. } = &subject_ir else {
                 panic!(
@@ -357,7 +347,7 @@ pub(super) fn lower_pattern_check(
         }
         Pattern::Wildcard { .. } => Ok((PatternCheck::CatchAll { binds: Vec::new() }, block)),
         other => {
-            output.diagnostics.push(Diagnostic::error(
+            ctx.output.diagnostics.push(Diagnostic::error(
                 format!(
                     "IR does not yet lower match pattern `{}`",
                     pattern_kind_label(other),
@@ -373,9 +363,8 @@ fn lower_binding_check(
     local_id: Option<LocalId>,
     name: &Name,
     inputs: &PatternInputs<'_>,
-    ctx: &mut FnLowerCtx,
+    ctx: &mut FnLowerCtx<'_>,
     block: IRBlockId,
-    output: &mut LowerOutput,
 ) {
     let id = local_id.unwrap_or_else(|| {
         panic!(
@@ -388,7 +377,7 @@ fn lower_binding_check(
     // slot borrows and no drop site may free it.
     ctx.mark_slot_borrowed(ir_local);
     if !ctx.local_is_declared(ir_local) {
-        let ty = lower_result_ty(inputs.subject_ty, inputs.registry, output);
+        let ty = lower_result_ty(inputs.subject_ty, ctx);
         let entry = ctx.entry_block();
         ctx.cfg.append(
             entry,
@@ -444,7 +433,7 @@ pub(super) fn field_type_for(
     declared_ty: &ResolvedType,
     owner: GlobalRegistryId,
     inputs: &PatternInputs<'_>,
-    output: &mut LowerOutput,
+    ctx: &mut FnLowerCtx<'_>,
 ) -> (ResolvedType, IRType) {
     let subject_args: &[ResolvedType] = match inputs.subject_ty {
         ResolvedType::Named { type_args, .. } => type_args,
@@ -452,7 +441,7 @@ pub(super) fn field_type_for(
     };
     let substituted = substitute_resolved_type(declared_ty, subject_args, owner);
     let ir_type =
-        resolved_type_to_ir_type(&substituted, inputs.registry, &mut output.instantiations);
+        resolved_type_to_ir_type(&substituted, ctx.registry, &mut ctx.output.instantiations);
     (substituted, ir_type)
 }
 
@@ -466,7 +455,7 @@ pub(super) fn field_type_for(
 /// enum/struct/union pattern bind) must also
 /// [`FnLowerCtx::mark_slot_borrowed`] the slot. A binary-match greedy
 /// tail writes a freshly allocated block and must not.
-pub(super) fn ensure_local_declared(local: IRLocalId, ty: &IRType, ctx: &mut FnLowerCtx) {
+pub(super) fn ensure_local_declared(local: IRLocalId, ty: &IRType, ctx: &mut FnLowerCtx<'_>) {
     if ctx.local_is_declared(local) {
         return;
     }

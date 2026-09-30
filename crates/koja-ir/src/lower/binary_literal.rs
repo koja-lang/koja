@@ -24,7 +24,6 @@ use koja_ast::ast::{
     Literal, Name, StringPart, TypeExpr,
 };
 use koja_ast::span::Span;
-use koja_typecheck::GlobalRegistry;
 
 use crate::function::{IRBlockId, IRInstruction};
 use crate::types::{
@@ -32,7 +31,7 @@ use crate::types::{
     ValueId,
 };
 
-use super::ctx::{FnLowerCtx, LowerOutput};
+use super::ctx::FnLowerCtx;
 use super::expr::lower_expr;
 use super::ownership::{drop_discarded_temp, materialize_owned};
 
@@ -44,22 +43,25 @@ use super::ownership::{drop_discarded_temp, materialize_owned};
 pub(super) fn lower_binary_literal(
     segments: &[BinarySegment],
     span: Span,
-    ctx: &mut FnLowerCtx,
+    ctx: &mut FnLowerCtx<'_>,
     block: IRBlockId,
-    registry: &GlobalRegistry,
-    output: &mut LowerOutput,
 ) -> Result<(ValueId, IRBlockId), ()> {
     let mut current_block = block;
     let mut builder = ConcatBuilder::default();
 
     for segment in segments {
-        let (value, next_block) = lower_expr(&segment.value, ctx, current_block, registry, output)?;
+        let (value, next_block) = lower_expr(&segment.value, ctx, current_block)?;
         current_block = next_block;
         // Only bare segments classify by value type (Binary means
         // splice), so skip the lookup when a modifier decides.
         let bare = segment.size.is_none() && segment.type_ann.is_none();
         let value_ty = if bare { Some(ctx.type_of(value)) } else { None };
-        let kind = classify_segment(segment, span, value_ty.as_ref(), &mut output.diagnostics)?;
+        let kind = classify_segment(
+            segment,
+            span,
+            value_ty.as_ref(),
+            &mut ctx.output.diagnostics,
+        )?;
         let lowered_segment = match kind {
             ClassifiedSegment::Integer { width } => LoweredBinarySegment::Integer {
                 value,
@@ -81,7 +83,7 @@ pub(super) fn lower_binary_literal(
             },
             ClassifiedSegment::Splice => {
                 builder.has_splice = true;
-                builder.flush(span, ctx, current_block, output)?;
+                builder.flush(span, ctx, current_block)?;
                 builder.operands.push(value);
                 continue;
             }
@@ -89,7 +91,7 @@ pub(super) fn lower_binary_literal(
         builder.push(lowered_segment);
     }
 
-    builder.flush(span, ctx, current_block, output)?;
+    builder.flush(span, ctx, current_block)?;
     let dest = concat_operands(builder.operands, ctx, current_block);
     Ok((dest, current_block))
 }
@@ -117,18 +119,12 @@ impl ConcatBuilder {
     /// surfaced as a diagnostic instead of a panic. A splice-free
     /// literal is one unbroken run and may legitimately be sub-byte
     /// (`Bits`).
-    fn flush(
-        &mut self,
-        span: Span,
-        ctx: &mut FnLowerCtx,
-        block: IRBlockId,
-        output: &mut LowerOutput,
-    ) -> Result<(), ()> {
+    fn flush(&mut self, span: Span, ctx: &mut FnLowerCtx<'_>, block: IRBlockId) -> Result<(), ()> {
         if self.run.is_empty() {
             return Ok(());
         }
         if self.has_splice && !self.run_bits.is_multiple_of(8) {
-            output.diagnostics.push(Diagnostic::error(
+            ctx.output.diagnostics.push(Diagnostic::error(
                 "IR lower: fixed-width segments around a `Binary` splice must \
                  total whole bytes (typecheck should have rejected this literal)",
                 span,
@@ -147,7 +143,7 @@ impl ConcatBuilder {
 fn emit_construct(
     segments: Vec<LoweredBinarySegment>,
     total_bits: u64,
-    ctx: &mut FnLowerCtx,
+    ctx: &mut FnLowerCtx<'_>,
     block: IRBlockId,
 ) -> ValueId {
     let layout = ResolvedBinaryLayout {
@@ -177,7 +173,7 @@ fn emit_construct(
 /// accumulator shape. A single operand just needs to be owned: a
 /// run construct already is, and a lone borrowed splice clones so
 /// the result is independent of the source binding.
-fn concat_operands(operands: Vec<ValueId>, ctx: &mut FnLowerCtx, block: IRBlockId) -> ValueId {
+fn concat_operands(operands: Vec<ValueId>, ctx: &mut FnLowerCtx<'_>, block: IRBlockId) -> ValueId {
     let mut rest = operands.into_iter();
     let Some(first) = rest.next() else {
         return emit_construct(Vec::new(), 0, ctx, block);

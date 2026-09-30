@@ -44,6 +44,19 @@ pub(super) struct KeyHashOps<'ctx> {
     pub key_basic_ty: BasicTypeEnum<'ctx>,
 }
 
+/// What both probe loops read. The IR function names the ICE when
+/// the builder has no block, the LLVM function hosts the new
+/// blocks, and the key travels with the hash and equality glue that
+/// bucket and compare it.
+pub(super) struct ProbeInputs<'a, 'ctx> {
+    pub function: &'a IRFunction,
+    pub key_ops: &'a KeyHashOps<'ctx>,
+    pub key_val: BasicValueEnum<'ctx>,
+    pub layout: &'a HashtableLayout<'a>,
+    pub llvm_function: FunctionValue<'ctx>,
+    pub table: &'a TableSnapshot<'ctx>,
+}
+
 /// Byte size of an [`IRType`] on the host triple, routed through
 /// the same target-data the rest of the layout pipeline reads
 /// (so hash-table entry sizes match the LLVM-emitted field sizes

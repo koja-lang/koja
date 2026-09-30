@@ -205,6 +205,16 @@ fn store_exit_code<'ctx>(
 
 // ----- IRInstruction::Spawn ------------------------------------------------
 
+/// The inputs of one `IRInstruction::Spawn`: the config value and
+/// its type, the `Ref<M, R>` struct the pid wraps into, and the
+/// wrapper shim the scheduler calls.
+pub(super) struct SpawnArgs<'a> {
+    pub(super) config: ValueId,
+    pub(super) config_type: &'a IRType,
+    pub(super) ref_type: &'a IRSymbol,
+    pub(super) wrapper: &'a IRSymbol,
+}
+
 /// Emit a single `IRInstruction::Spawn`. Serializes the config
 /// value into a stack alloca, hands the raw pointer + byte size +
 /// config drop glue to `koja_rt_spawn` along with the wrapper, then
@@ -214,13 +224,16 @@ fn store_exit_code<'ctx>(
 /// heap rather than sharing it.
 pub(super) fn emit_spawn<'ctx>(
     ctx: &EmitContext<'ctx>,
-    config: ValueId,
-    config_type: &IRType,
+    args: SpawnArgs<'_>,
     dest: ValueId,
-    ref_type: &IRSymbol,
-    wrapper: &IRSymbol,
     values: &mut ValueMap<'ctx>,
 ) -> Result<(), LlvmError> {
+    let SpawnArgs {
+        config,
+        config_type,
+        ref_type,
+        wrapper,
+    } = args;
     let config_llvm_type = ir_basic_type(ctx, config_type)?;
     let config_value = lookup(values, config)?;
 
@@ -310,8 +323,6 @@ pub(super) fn emit_receive<'ctx>(
     ctx: &EmitContext<'ctx>,
     after: Option<&ReceiveAfter>,
     arms: &[ReceiveArm],
-    _dest: ValueId,
-    _result_type: &IRType,
     values: &mut ValueMap<'ctx>,
 ) -> Result<(), LlvmError> {
     let host_block = ctx.builder.get_insert_block().ok_or_else(|| {

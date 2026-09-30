@@ -27,6 +27,14 @@ use crate::types::ir_basic_type;
 /// Initial buffer capacity for `List.new`.
 const INITIAL_CAPACITY: u64 = 8;
 
+/// `count` elements starting at `ptr`, the slice of a list buffer
+/// that a copy reads from.
+#[derive(Clone, Copy)]
+struct BufferRange<'ctx> {
+    count: IntValue<'ctx>,
+    ptr: PointerValue<'ctx>,
+}
+
 pub(super) fn emit_list<'ctx>(
     ctx: &EmitContext<'ctx>,
     function: &IRFunction,
@@ -148,8 +156,10 @@ fn clone_list_value<'ctx>(
         ctx,
         llvm_function,
         element(method, function)?,
-        buf_ptr,
-        len,
+        BufferRange {
+            count: len,
+            ptr: buf_ptr,
+        },
         len,
         elem_size,
         "clone_self",
@@ -185,8 +195,10 @@ fn emit_append<'ctx>(
         ctx,
         llvm_function,
         element(ListMethod::Append, function)?,
-        buf_ptr,
-        len,
+        BufferRange {
+            count: len,
+            ptr: buf_ptr,
+        },
         new_cap,
         elem_size,
         "append",
@@ -410,8 +422,10 @@ fn emit_pop<'ctx>(
         ctx,
         llvm_function,
         element(ListMethod::Pop, function)?,
-        buf_ptr,
-        len,
+        BufferRange {
+            count: len,
+            ptr: buf_ptr,
+        },
         len,
         elem_size,
         "pop_empty",
@@ -454,8 +468,10 @@ fn emit_pop<'ctx>(
         ctx,
         llvm_function,
         element(ListMethod::Pop, function)?,
-        buf_ptr,
-        new_len,
+        BufferRange {
+            count: new_len,
+            ptr: buf_ptr,
+        },
         new_len,
         elem_size,
         "pop",
@@ -500,8 +516,10 @@ fn emit_replace_at<'ctx>(
         ctx,
         llvm_function,
         elem_ty,
-        buf_ptr,
-        len,
+        BufferRange {
+            count: len,
+            ptr: buf_ptr,
+        },
         len,
         elem_size,
         "replace",
@@ -664,8 +682,10 @@ fn emit_concat<'ctx>(
         ctx,
         llvm_function,
         elem_ty,
-        self_ptr,
-        self_len,
+        BufferRange {
+            count: self_len,
+            ptr: self_ptr,
+        },
         total_len,
         elem_size,
         "concat",
@@ -710,20 +730,22 @@ fn emit_concat<'ctx>(
 
 // --- helpers --------------------------------------------------------------
 
-/// Allocate a fresh `new_cap`-capacity buffer, copy the first
-/// `copy_count` elements out of `src`, then acquire each copy so the
-/// new buffer owns independent references.
-#[allow(clippy::too_many_arguments)]
+/// Allocate a fresh `new_cap`-capacity buffer, copy the `source`
+/// elements into it, then acquire each copy so the new buffer owns
+/// independent references.
 fn copy_buffer<'ctx>(
     ctx: &EmitContext<'ctx>,
     llvm_function: FunctionValue<'ctx>,
     element: &IRType,
-    src: PointerValue<'ctx>,
-    copy_count: IntValue<'ctx>,
+    source: BufferRange<'ctx>,
     new_cap: IntValue<'ctx>,
     elem_size: IntValue<'ctx>,
     label: &str,
 ) -> Result<PointerValue<'ctx>, LlvmError> {
+    let BufferRange {
+        count: copy_count,
+        ptr: src,
+    } = source;
     let alloc_bytes = ctx
         .builder
         .build_int_mul(new_cap, elem_size, "alloc_bytes")

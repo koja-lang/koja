@@ -65,13 +65,11 @@ pub(super) fn lower_spawn(
     inner: &Expr,
     span: Span,
     ref_resolution: &ResolvedType,
-    ctx: &mut FnLowerCtx,
+    ctx: &mut FnLowerCtx<'_>,
     block: IRBlockId,
-    registry: &GlobalRegistry,
-    output: &mut LowerOutput,
 ) -> Result<(ValueId, IRBlockId), ()> {
     let target = resolve_spawn_target(inner).ok_or_else(|| {
-        output.diagnostics.push(Diagnostic::error(
+        ctx.output.diagnostics.push(Diagnostic::error(
             "IR lower: `spawn` inner must be a static `Type.start(config)` call \
              (typecheck seal invariant)",
             span,
@@ -79,12 +77,12 @@ pub(super) fn lower_spawn(
     })?;
 
     let config_arg = target.args.first().ok_or_else(|| {
-        output.diagnostics.push(Diagnostic::error(
+        ctx.output.diagnostics.push(Diagnostic::error(
             "IR lower: `spawn Type.start(...)` requires a single config argument",
             span,
         ));
     })?;
-    let (config_value, current) = lower_expr(&config_arg.value, ctx, block, registry, output)?;
+    let (config_value, current) = lower_expr(&config_arg.value, ctx, block)?;
     let config_type = ctx.type_of(config_value);
     // `spawn` hands the config to the child process, so deep-copy it.
     // The child must share no heap storage with the spawner (rc
@@ -100,11 +98,11 @@ pub(super) fn lower_spawn(
 
     let state_ir_type = resolved_type_to_ir_type(
         &target.receiver_resolution,
-        registry,
-        &mut output.instantiations,
+        ctx.registry,
+        &mut ctx.output.instantiations,
     );
     let state_symbol = struct_symbol(&state_ir_type).ok_or_else(|| {
-        output.diagnostics.push(Diagnostic::error(
+        ctx.output.diagnostics.push(Diagnostic::error(
             format!(
                 "IR lower: `spawn` receiver must lower to a struct type \
                  (got `{state_ir_type:?}`)",
@@ -113,21 +111,22 @@ pub(super) fn lower_spawn(
         ));
     })?;
 
-    enqueue_process_method_instantiations(&target, registry, output);
+    enqueue_process_method_instantiations(&target, ctx.registry, ctx.output);
 
     let body_types = ProcessBodyTypes::resolve(
         &target.receiver_resolution,
         state_ir_type.clone(),
         config_type.clone(),
-        registry,
-        output,
+        ctx.registry,
+        ctx.output,
     );
-    let wrapper_symbol = synthesize_spawn_wrapper(&state_symbol, body_types, output);
+    let wrapper_symbol =
+        synthesize_spawn_wrapper(&state_symbol, body_types, ctx.registry, ctx.output);
 
     let ref_ir_type =
-        resolved_type_to_ir_type(ref_resolution, registry, &mut output.instantiations);
+        resolved_type_to_ir_type(ref_resolution, ctx.registry, &mut ctx.output.instantiations);
     let ref_symbol = struct_symbol(&ref_ir_type).ok_or_else(|| {
-        output.diagnostics.push(Diagnostic::error(
+        ctx.output.diagnostics.push(Diagnostic::error(
             format!("IR lower: `spawn` result must be `Ref<M, R>` (got `{ref_ir_type:?}`)",),
             span,
         ));
@@ -147,17 +146,6 @@ pub(super) fn lower_spawn(
     Ok((dest, current))
 }
 
-/// AST-side inputs to [`lower_receive`]. Bundled per the same
-/// `too_many_arguments` discipline [`super::match_expr::MatchLowering`]
-/// uses.
-pub(super) struct ReceiveLowering<'a> {
-    pub(super) after_body: &'a [Statement],
-    pub(super) after_timeout: Option<&'a Expr>,
-    pub(super) arms: &'a [MatchArm],
-    pub(super) result_resolution: &'a ResolvedType,
-    pub(super) span: Span,
-}
-
 /// Lower `receive arms after timeout body end`. Each arm becomes an
 /// [`IRBlockId`] whose payload local has been declared in the
 /// function's entry block and whose tail branches to a synthesized
@@ -165,53 +153,41 @@ pub(super) struct ReceiveLowering<'a> {
 /// The host block ends with the [`IRInstruction::Receive`] dispatch
 /// followed by [`IRTerminator::Unreachable`], since every reachable exit
 /// goes through the arm bodies into the merge block.
+///
+/// `result_resolution` is the typecheck-stamped type of the whole
+/// `receive` expression, and `span` is its source span.
 pub(super) fn lower_receive(
-    inputs: ReceiveLowering<'_>,
-    ctx: &mut FnLowerCtx,
+    arms: &[MatchArm],
+    after_timeout: Option<&Expr>,
+    after_body: &[Statement],
+    result_resolution: &ResolvedType,
+    span: Span,
+    ctx: &mut FnLowerCtx<'_>,
     block: IRBlockId,
-    registry: &GlobalRegistry,
-    output: &mut LowerOutput,
 ) -> Result<(ValueId, IRBlockId), ()> {
-    let ReceiveLowering {
-        after_body,
-        after_timeout,
-        arms,
-        result_resolution,
-        span,
-    } = inputs;
     if arms.is_empty() {
-        output.diagnostics.push(Diagnostic::error(
+        ctx.output.diagnostics.push(Diagnostic::error(
             "IR lower: `receive` reaches lower with zero arms (typecheck seal violation)",
             span,
         ));
         return Err(());
     }
-    let result_ty = lower_result_ty(result_resolution, registry, output);
+    let result_ty = lower_result_ty(result_resolution, ctx);
     let merge_block = ctx.fresh_block("receive_merge");
     let result_id = ctx.declare_merge_param(merge_block, result_ty.clone());
 
     let mut lowered_arms = Vec::with_capacity(arms.len());
     for (index, arm) in arms.iter().enumerate() {
-        let lowered =
-            lower_receive_arm(arm, index, merge_block, &result_ty, ctx, registry, output)?;
+        let lowered = lower_receive_arm(arm, index, merge_block, &result_ty, ctx)?;
         lowered_arms.push(lowered);
     }
 
     let mut current = block;
     let after = if let Some(timeout_expr) = after_timeout {
-        let (timeout_value, after_eval_block) =
-            lower_expr(timeout_expr, ctx, current, registry, output)?;
+        let (timeout_value, after_eval_block) = lower_expr(timeout_expr, ctx, current)?;
         current = after_eval_block;
         let after_block = ctx.fresh_block("receive_after");
-        lower_arm_into(
-            after_body,
-            ctx,
-            after_block,
-            merge_block,
-            &result_ty,
-            registry,
-            output,
-        )?;
+        lower_arm_into(after_body, ctx, after_block, merge_block, &result_ty)?;
         Some(ReceiveAfter {
             body: after_block,
             timeout: timeout_value,
@@ -246,9 +222,7 @@ fn lower_receive_arm(
     index: usize,
     merge_block: IRBlockId,
     result_ty: &IRType,
-    ctx: &mut FnLowerCtx,
-    registry: &GlobalRegistry,
-    output: &mut LowerOutput,
+    ctx: &mut FnLowerCtx<'_>,
 ) -> Result<ReceiveArm, ()> {
     let Pattern::TypedBinding {
         local_id,
@@ -275,9 +249,12 @@ fn lower_receive_arm(
         );
     });
 
-    let payload_type =
-        resolved_type_to_ir_type(payload_resolution, registry, &mut output.instantiations);
-    let tag = receive_tag_for(payload_resolution, registry).unwrap_or_else(|| {
+    let payload_type = resolved_type_to_ir_type(
+        payload_resolution,
+        ctx.registry,
+        &mut ctx.output.instantiations,
+    );
+    let tag = receive_tag_for(payload_resolution, ctx.registry).unwrap_or_else(|| {
         panic!(
             "IR lower: receive arm payload type does not match a known envelope \
              (typecheck seal violation): {payload_resolution:?}"
@@ -298,7 +275,7 @@ fn lower_receive_arm(
     }
 
     if let Some(guard) = &arm.guard {
-        output.diagnostics.push(Diagnostic::error(
+        ctx.output.diagnostics.push(Diagnostic::error(
             "IR lower: `receive` arms with guards are not yet supported",
             guard.span,
         ));
@@ -306,15 +283,7 @@ fn lower_receive_arm(
     }
 
     let body_block = ctx.fresh_block(format!("receive_arm_{index}"));
-    lower_arm_into(
-        &arm.body,
-        ctx,
-        body_block,
-        merge_block,
-        result_ty,
-        registry,
-        output,
-    )?;
+    lower_arm_into(&arm.body, ctx, body_block, merge_block, result_ty)?;
 
     Ok(ReceiveArm {
         body: body_block,
@@ -522,6 +491,7 @@ fn lookup_global(registry: &GlobalRegistry, path: &[&str]) -> GlobalRegistryId {
 fn synthesize_spawn_wrapper(
     state_symbol: &IRSymbol,
     types: ProcessBodyTypes,
+    registry: &GlobalRegistry,
     output: &mut LowerOutput,
 ) -> IRSymbol {
     let wrapper_symbol = state_symbol.derived(".__spawn_wrapper");
@@ -533,11 +503,15 @@ fn synthesize_spawn_wrapper(
         state_symbol,
         &types,
         ProcessBodyTail::Discard,
+        registry,
+        output,
     );
     let wrapper = build_wrapper_shim(
         wrapper_symbol.clone(),
         FunctionKind::SpawnWrapper { state: types.state },
         &body,
+        registry,
+        output,
     );
     output.synthesized_functions.push(body);
     output.synthesized_functions.push(wrapper);
@@ -559,17 +533,23 @@ fn synthesize_spawn_wrapper(
 pub(crate) fn synthesize_process_entry_wrapper(
     state_symbol: &IRSymbol,
     types: ProcessBodyTypes,
+    registry: &GlobalRegistry,
+    output: &mut LowerOutput,
 ) -> [IRFunction; 2] {
     let body = build_process_body(
         state_symbol.derived(".__entry_body"),
         state_symbol,
         &types,
         ProcessBodyTail::ExitCode,
+        registry,
+        output,
     );
     let wrapper = build_wrapper_shim(
         state_symbol.derived(".__entry_wrapper"),
         FunctionKind::ProcessEntryWrapper { state: types.state },
         &body,
+        registry,
+        output,
     );
     [body, wrapper]
 }
@@ -620,6 +600,8 @@ fn build_process_body(
     state_symbol: &IRSymbol,
     types: &ProcessBodyTypes,
     tail: ProcessBodyTail,
+    registry: &GlobalRegistry,
+    output: &mut LowerOutput,
 ) -> IRFunction {
     let IRType::Enum(result_symbol) = &types.result else {
         panic!(
@@ -630,7 +612,7 @@ fn build_process_body(
     };
     let result_symbol = result_symbol.clone();
 
-    let mut ctx = FnLowerCtx::new();
+    let mut ctx = FnLowerCtx::new(registry, output);
     ctx.closures_mut().set_enclosing_symbol(body_symbol.clone());
     let entry = ctx.fresh_block("entry");
 
@@ -724,7 +706,7 @@ fn build_process_body(
 /// `Result` split on `start` (tag `0` is `Ok`) and each rung of
 /// [`emit_apply_priority`]'s weight diamond route through here.
 fn emit_tag_branch(
-    ctx: &mut FnLowerCtx,
+    ctx: &mut FnLowerCtx<'_>,
     block: IRBlockId,
     tag: ValueId,
     expected: u8,
@@ -746,7 +728,7 @@ fn emit_tag_branch(
 /// it as an owned value (the standard match-arm pattern: the clone
 /// is taken while the scrutinee is still live).
 fn extract_result_payload(
-    ctx: &mut FnLowerCtx,
+    ctx: &mut FnLowerCtx<'_>,
     block: IRBlockId,
     result: ValueId,
     result_symbol: &IRSymbol,
@@ -782,7 +764,7 @@ fn extract_result_payload(
 /// flows on to `run`. The `priority()` result is acquired and released
 /// in the join block (a no-op for `Priority`'s unit variants).
 fn emit_apply_priority(
-    ctx: &mut FnLowerCtx,
+    ctx: &mut FnLowerCtx<'_>,
     block: IRBlockId,
     state_symbol: &IRSymbol,
     state: ValueId,
@@ -850,7 +832,7 @@ fn emit_apply_priority(
 
 /// Materialize `weight` as an `Int64` const in `block` and branch to
 /// `join` carrying it as the join block's `Int64` param.
-fn branch_with_weight(ctx: &mut FnLowerCtx, block: IRBlockId, join: IRBlockId, weight: i64) {
+fn branch_with_weight(ctx: &mut FnLowerCtx<'_>, block: IRBlockId, join: IRBlockId, weight: i64) {
     let weight_const = ctx.fresh_value(IRType::Int64);
     ctx.cfg.append(
         block,
@@ -868,7 +850,7 @@ fn branch_with_weight(ctx: &mut FnLowerCtx, block: IRBlockId, join: IRBlockId, w
 /// Close a process-body arm: dispose of the `StopReason` per the
 /// tail mode, release the config slot, and return.
 fn finish_process_arm(
-    ctx: &mut FnLowerCtx,
+    ctx: &mut FnLowerCtx<'_>,
     block: IRBlockId,
     stop_reason: ValueId,
     types: &ProcessBodyTypes,
@@ -928,8 +910,10 @@ fn build_wrapper_shim(
     wrapper_symbol: IRSymbol,
     kind: FunctionKind,
     body: &IRFunction,
+    registry: &GlobalRegistry,
+    output: &mut LowerOutput,
 ) -> IRFunction {
-    let mut ctx = FnLowerCtx::new();
+    let mut ctx = FnLowerCtx::new(registry, output);
     ctx.closures_mut()
         .set_enclosing_symbol(wrapper_symbol.clone());
     let entry = ctx.fresh_block("entry");

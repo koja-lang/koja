@@ -14,7 +14,7 @@ use koja_typecheck::{GlobalRegistry, peel_alias};
 
 use super::arms::emit_tag_eq;
 use super::calls::{conformance_method_symbol, lower_debug_family};
-use super::ctx::{FnLowerCtx, LowerOutput};
+use super::ctx::FnLowerCtx;
 use super::expr::{emit_string_const, lower_expr};
 use super::ownership::{drop_discarded_temp, materialize_owned};
 use super::package::resolved_type_to_ir_type;
@@ -54,51 +54,42 @@ pub(super) fn lower_union_conformance_call(
     receiver: &Expr,
     method: &str,
     args: &[Arg],
-    ctx: &mut FnLowerCtx,
+    ctx: &mut FnLowerCtx<'_>,
     block: IRBlockId,
-    registry: &GlobalRegistry,
-    output: &mut LowerOutput,
 ) -> Result<(ValueId, IRBlockId), ()> {
     assert!(
         args.is_empty(),
         "IR lower: union `{method}` reached lowering with {} args",
         args.len()
     );
-    let structural = peel_alias(&receiver.resolution, registry);
+    let structural = peel_alias(&receiver.resolution, ctx.registry);
     let ResolvedType::Union(members) = &structural else {
         panic!(
             "IR lower: union conformance receiver resolved to `{structural:?}` \
              (typecheck resolve invariant violation)",
         );
     };
-    let union_ty = resolved_type_to_ir_type(&structural, registry, &mut output.instantiations);
+    let union_ty =
+        resolved_type_to_ir_type(&structural, ctx.registry, &mut ctx.output.instantiations);
     if method == "hash" {
-        let (value, current) = lower_expr(receiver, ctx, block, registry, output)?;
+        let (value, current) = lower_expr(receiver, ctx, block)?;
         let subject = UnionSubject {
             members,
             ty: &union_ty,
             value,
         };
-        let (hash, after) = emit_union_hash(subject, ctx, current, registry, output);
+        let (hash, after) = emit_union_hash(subject, ctx, current);
         drop_discarded_temp(ctx, after, value);
         return Ok((hash, after));
     }
-    lower_debug_family(
-        method,
-        receiver,
-        ctx,
-        block,
-        registry,
-        output,
-        |value, ctx, block, output| {
-            let subject = UnionSubject {
-                members,
-                ty: &union_ty,
-                value,
-            };
-            emit_union_format(subject, ctx, block, registry, output)
-        },
-    )
+    lower_debug_family(method, receiver, ctx, block, |value, ctx, block| {
+        let subject = UnionSubject {
+            members,
+            ty: &union_ty,
+            value,
+        };
+        emit_union_format(subject, ctx, block)
+    })
 }
 
 /// Dispatch on the subject's tag. Arm `i` runs `arm` with the payload
@@ -107,16 +98,9 @@ pub(super) fn lower_union_conformance_call(
 /// merge block control continues in.
 pub(super) fn emit_union_switch(
     switch: UnionSwitch<'_>,
-    ctx: &mut FnLowerCtx,
+    ctx: &mut FnLowerCtx<'_>,
     block: IRBlockId,
-    registry: &GlobalRegistry,
-    output: &mut LowerOutput,
-    mut arm: impl FnMut(
-        UnionArm<'_>,
-        &mut FnLowerCtx,
-        IRBlockId,
-        &mut LowerOutput,
-    ) -> (ValueId, IRBlockId),
+    mut arm: impl FnMut(UnionArm<'_>, &mut FnLowerCtx<'_>, IRBlockId) -> (ValueId, IRBlockId),
 ) -> (ValueId, IRBlockId) {
     let UnionSwitch {
         label,
@@ -152,7 +136,8 @@ pub(super) fn emit_union_switch(
             current = next;
             arm_block
         };
-        let member_ir = resolved_type_to_ir_type(member_ty, registry, &mut output.instantiations);
+        let member_ir =
+            resolved_type_to_ir_type(member_ty, ctx.registry, &mut ctx.output.instantiations);
         let payload = emit_union_payload(value, member_index, &member_ir, union_ty, ctx, arm_block);
         let (arm_result, after) = arm(
             UnionArm {
@@ -162,7 +147,6 @@ pub(super) fn emit_union_switch(
             },
             ctx,
             arm_block,
-            output,
         );
         ctx.cfg.set_terminator(
             after,
@@ -176,104 +160,62 @@ pub(super) fn emit_union_switch(
 /// members have none and render as `"..."`, matching derived `Debug`.
 pub(super) fn emit_union_format(
     subject: UnionSubject<'_>,
-    ctx: &mut FnLowerCtx,
+    ctx: &mut FnLowerCtx<'_>,
     block: IRBlockId,
-    registry: &GlobalRegistry,
-    output: &mut LowerOutput,
 ) -> (ValueId, IRBlockId) {
     let switch = UnionSwitch {
         label: "union_format",
         result_ty: IRType::String,
         subject,
     };
-    emit_union_switch(
-        switch,
-        ctx,
-        block,
-        registry,
-        output,
-        |arm, ctx, block, output| {
-            let member = peel_alias(arm.member_ty, registry);
-            match &member {
-                ResolvedType::Anonymous(AnonymousKind::Function { .. }) => {
-                    let placeholder = emit_string_const("...".to_string(), ctx, block);
-                    let owned = materialize_owned(ctx, block, placeholder, &IRType::String);
-                    (owned, block)
-                }
-                ResolvedType::Anonymous(AnonymousKind::Tuple { elements }) => {
-                    emit_tuple_format(arm.payload, elements, ctx, block, registry, output)
-                }
-                _ => {
-                    let formatted = emit_conformance_call(
-                        &member,
-                        "format",
-                        vec![arm.payload],
-                        ctx,
-                        block,
-                        registry,
-                        output,
-                    );
-                    (formatted, block)
-                }
+    emit_union_switch(switch, ctx, block, |arm, ctx, block| {
+        let member = peel_alias(arm.member_ty, ctx.registry);
+        match &member {
+            ResolvedType::Anonymous(AnonymousKind::Function { .. }) => {
+                let placeholder = emit_string_const("...".to_string(), ctx, block);
+                let owned = materialize_owned(ctx, block, placeholder, &IRType::String);
+                (owned, block)
             }
-        },
-    )
+            ResolvedType::Anonymous(AnonymousKind::Tuple { elements }) => {
+                emit_tuple_format(arm.payload, elements, ctx, block)
+            }
+            _ => {
+                let formatted =
+                    emit_conformance_call(&member, "format", vec![arm.payload], ctx, block);
+                (formatted, block)
+            }
+        }
+    })
 }
 
 /// Hash the carried member, then fold the tag in so two members with
 /// equal payload hashes still land apart: `member.hash().bxor(tag.hash())`.
 fn emit_union_hash(
     subject: UnionSubject<'_>,
-    ctx: &mut FnLowerCtx,
+    ctx: &mut FnLowerCtx<'_>,
     block: IRBlockId,
-    registry: &GlobalRegistry,
-    output: &mut LowerOutput,
 ) -> (ValueId, IRBlockId) {
-    let int_ty = global_int_type(registry);
+    let int_ty = global_int_type(ctx.registry);
     let switch = UnionSwitch {
         label: "union_hash",
         result_ty: IRType::Int64,
         subject,
     };
-    emit_union_switch(
-        switch,
-        ctx,
-        block,
-        registry,
-        output,
-        |arm, ctx, block, output| {
-            let member = peel_alias(arm.member_ty, registry);
-            let member_hash = emit_conformance_call(
-                &member,
-                "hash",
-                vec![arm.payload],
-                ctx,
-                block,
-                registry,
-                output,
-            );
-            let tag = ctx.fresh_value(IRType::Int64);
-            ctx.cfg.append(
-                block,
-                IRInstruction::Const {
-                    dest: tag,
-                    value: ConstValue::Int64(i64::from(arm.member_index)),
-                },
-            );
-            let tag_hash =
-                emit_conformance_call(&int_ty, "hash", vec![tag], ctx, block, registry, output);
-            let mixed = emit_conformance_call(
-                &int_ty,
-                "bxor",
-                vec![member_hash, tag_hash],
-                ctx,
-                block,
-                registry,
-                output,
-            );
-            (mixed, block)
-        },
-    )
+    emit_union_switch(switch, ctx, block, |arm, ctx, block| {
+        let member = peel_alias(arm.member_ty, ctx.registry);
+        let member_hash = emit_conformance_call(&member, "hash", vec![arm.payload], ctx, block);
+        let tag = ctx.fresh_value(IRType::Int64);
+        ctx.cfg.append(
+            block,
+            IRInstruction::Const {
+                dest: tag,
+                value: ConstValue::Int64(i64::from(arm.member_index)),
+            },
+        );
+        let tag_hash = emit_conformance_call(&int_ty, "hash", vec![tag], ctx, block);
+        let mixed = emit_conformance_call(&int_ty, "bxor", vec![member_hash, tag_hash], ctx, block);
+        (mixed, block)
+    })
 }
 
 fn global_int_type(registry: &GlobalRegistry) -> ResolvedType {
@@ -289,13 +231,11 @@ fn emit_conformance_call(
     receiver_ty: &ResolvedType,
     method: &str,
     args: Vec<ValueId>,
-    ctx: &mut FnLowerCtx,
+    ctx: &mut FnLowerCtx<'_>,
     block: IRBlockId,
-    registry: &GlobalRegistry,
-    output: &mut LowerOutput,
 ) -> ValueId {
     let (callee, return_ty) =
-        conformance_method_symbol(receiver_ty, method, args.len(), registry, output);
+        conformance_method_symbol(receiver_ty, method, args.len(), ctx.registry, ctx.output);
     let owned = return_ty.is_heap_managed();
     let dest = ctx.fresh_value(return_ty);
     ctx.cfg
@@ -309,7 +249,7 @@ fn emit_conformance_call(
 pub(super) fn emit_union_tag(
     value: ValueId,
     union_ty: &IRType,
-    ctx: &mut FnLowerCtx,
+    ctx: &mut FnLowerCtx<'_>,
     block: IRBlockId,
 ) -> ValueId {
     let dest = ctx.fresh_value(IRType::Int8);
@@ -329,7 +269,7 @@ pub(super) fn emit_union_payload(
     member_index: u8,
     member_ty: &IRType,
     union_ty: &IRType,
-    ctx: &mut FnLowerCtx,
+    ctx: &mut FnLowerCtx<'_>,
     block: IRBlockId,
 ) -> ValueId {
     let dest = ctx.fresh_value(member_ty.clone());

@@ -12,7 +12,7 @@ use crate::reductions::emit_yield_check;
 
 use super::binary_construct::emit_binary_construct;
 use super::binary_match;
-use super::process::{emit_process_exit, emit_receive, emit_set_priority, emit_spawn};
+use super::process::{SpawnArgs, emit_process_exit, emit_receive, emit_set_priority, emit_spawn};
 use super::{
     ValueMap, calls, clone, closures, concat, constants, deep_copy, enums, indirect, locals,
     lookup, ops, structs, tuples, unions,
@@ -272,16 +272,21 @@ pub(crate) fn emit_instruction<'ctx>(
             dest,
             ref_type,
             wrapper,
-        } => emit_spawn(ctx, *config, config_type, *dest, ref_type, wrapper, values),
+        } => {
+            let args = SpawnArgs {
+                config: *config,
+                config_type,
+                ref_type,
+                wrapper,
+            };
+            emit_spawn(ctx, args, *dest, values)
+        }
         IRInstruction::ProcessExit { reason } => emit_process_exit(ctx, *reason, values),
         IRInstruction::SetPriority { tag } => emit_set_priority(ctx, *tag, values),
         IRInstruction::YieldCheck => emit_yield_check(ctx),
-        IRInstruction::Receive {
-            after,
-            arms,
-            dest,
-            result_type,
-        } => emit_receive(ctx, after.as_ref(), arms, *dest, result_type, values),
+        IRInstruction::Receive { after, arms, .. } => {
+            emit_receive(ctx, after.as_ref(), arms, values)
+        }
         IRInstruction::UnionWrap {
             dest,
             member_index,

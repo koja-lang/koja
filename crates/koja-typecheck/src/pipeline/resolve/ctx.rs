@@ -62,6 +62,18 @@ impl<'a> ResolverEnv<'a> {
             type_param_owners,
         }
     }
+
+    /// Project the type-resolution inputs into a [`ResolutionScope`]
+    /// for `resolve_target_bounds` and friends. Tied to `'a` rather
+    /// than `&self`, like [`Resolver::resolution_scope`], since every
+    /// field it reads is already `&'a`.
+    pub(super) fn resolution_scope(&self) -> ResolutionScope<'a> {
+        ResolutionScope {
+            aliases: self.file_aliases,
+            package: self.package,
+            registry: self.registry,
+        }
+    }
 }
 
 /// State a name lookup consults: the in-scope package, the global

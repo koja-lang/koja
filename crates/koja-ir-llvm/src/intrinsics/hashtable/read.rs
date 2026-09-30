@@ -6,7 +6,7 @@
 
 use inkwell::IntPredicate;
 use inkwell::basic_block::BasicBlock;
-use inkwell::values::{BasicValueEnum, FunctionValue, PointerValue};
+use inkwell::values::{FunctionValue, PointerValue};
 use koja_ir::IRFunction;
 
 use crate::ctx::EmitContext;
@@ -20,7 +20,7 @@ use crate::intrinsics::util::{
 use crate::types::ir_basic_type;
 
 use super::util::{
-    KeyHashOps, TableSnapshot, advance_slot, call_eq, call_hash, clone_table_buffers,
+    ProbeInputs, TableSnapshot, advance_slot, call_eq, call_hash, clone_table_buffers,
     entry_pointer, extract_table_fields, resolve_key_hash_ops, value_slot,
 };
 use super::{HashtableLayout, STATE_EMPTY, STATE_OCCUPIED, STATE_TOMBSTONE};
@@ -46,13 +46,16 @@ struct ReadOnlyProbe<'ctx> {
 /// The `advance` edge wires itself.
 fn emit_read_only_probe<'ctx>(
     ctx: &EmitContext<'ctx>,
-    function: &IRFunction,
-    llvm_function: FunctionValue<'ctx>,
-    layout: &HashtableLayout<'_>,
-    table: &TableSnapshot<'ctx>,
-    key_val: BasicValueEnum<'ctx>,
-    key_ops: &KeyHashOps<'ctx>,
+    inputs: ProbeInputs<'_, 'ctx>,
 ) -> Result<ReadOnlyProbe<'ctx>, LlvmError> {
+    let ProbeInputs {
+        function,
+        key_ops,
+        key_val,
+        layout,
+        llvm_function,
+        table,
+    } = inputs;
     let i8_ty = ctx.context.i8_type();
     let i64_ty = ctx.context.i64_type();
     let entry_block = ctx.builder.get_insert_block().ok_or_else(|| {
@@ -160,12 +163,14 @@ pub(crate) fn emit_has_q<'ctx>(
     let key_ops = resolve_key_hash_ops(ctx, function, layout.key_ty)?;
     let probe = emit_read_only_probe(
         ctx,
-        function,
-        llvm_function,
-        layout,
-        &table,
-        key_val,
-        &key_ops,
+        ProbeInputs {
+            function,
+            key_ops: &key_ops,
+            key_val,
+            layout,
+            llvm_function,
+            table: &table,
+        },
     )?;
     ctx.builder.position_at_end(probe.found_bb);
     ret(ctx, i1_ty.const_int(1, false).into())?;
@@ -196,12 +201,14 @@ pub(crate) fn emit_remove<'ctx>(
     let key_ops = resolve_key_hash_ops(ctx, function, layout.key_ty)?;
     let probe = emit_read_only_probe(
         ctx,
-        function,
-        llvm_function,
-        layout,
-        &table,
-        key_val,
-        &key_ops,
+        ProbeInputs {
+            function,
+            key_ops: &key_ops,
+            key_val,
+            layout,
+            llvm_function,
+            table: &table,
+        },
     )?;
     ctx.builder.position_at_end(probe.found_bb);
     // The clone acquired this bucket's key (and value). Tombstoning
@@ -263,12 +270,14 @@ pub(crate) fn emit_map_get<'ctx>(
     let key_ops = resolve_key_hash_ops(ctx, function, layout.key_ty)?;
     let probe = emit_read_only_probe(
         ctx,
-        function,
-        llvm_function,
-        layout,
-        &table,
-        key_val,
-        &key_ops,
+        ProbeInputs {
+            function,
+            key_ops: &key_ops,
+            key_val,
+            layout,
+            llvm_function,
+            table: &table,
+        },
     )?;
     ctx.builder.position_at_end(probe.found_bb);
     let val_ptr = unsafe {

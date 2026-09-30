@@ -19,7 +19,7 @@ use super::ownership::emit_slot_drops;
 /// subject release runs). Caller must have already materialized any
 /// returned value, so the return clone is taken before its source
 /// slot is dropped.
-pub(super) fn emit_function_exit_drops(ctx: &mut FnLowerCtx, block: IRBlockId) {
+pub(super) fn emit_function_exit_drops(ctx: &mut FnLowerCtx<'_>, block: IRBlockId) {
     for value in ctx.subject_temps_since(0) {
         let ty = ctx.type_of(value);
         ctx.cfg
