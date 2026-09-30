@@ -55,12 +55,12 @@ pub(crate) fn lower_body_to_blocks(
     registry: &GlobalRegistry,
     output: &mut LowerOutput,
 ) -> Result<(Vec<IRBasicBlock>, IRType), ()> {
-    let mut ctx = FnLowerCtx::new();
+    let mut ctx = FnLowerCtx::new(registry, output);
     if let Some(symbol) = enclosing_symbol {
         ctx.closures_mut().set_enclosing_symbol(symbol);
     }
     let entry = ctx.fresh_block("entry");
-    let flow = lower_body(body, &mut ctx, entry, registry, output)?;
+    let flow = lower_body(body, &mut ctx, entry)?;
     let return_type = match &flow {
         FlowResult::Open {
             value: Some(id), ..
@@ -80,10 +80,8 @@ pub(crate) fn lower_body_to_blocks(
 /// empty body returns `Open { value: None, block: entry }`.
 pub(super) fn lower_body(
     body: &[Statement],
-    ctx: &mut FnLowerCtx,
+    ctx: &mut FnLowerCtx<'_>,
     mut block: IRBlockId,
-    registry: &GlobalRegistry,
-    output: &mut LowerOutput,
 ) -> Result<FlowResult, ()> {
     let mut last_value: Option<ValueId> = None;
     for stmt in body {
@@ -95,7 +93,7 @@ pub(super) fn lower_body(
         if let Some(discarded) = last_value.take() {
             drop_discarded_temp(ctx, block, discarded);
         }
-        match lower_statement(stmt, ctx, block, registry, output)? {
+        match lower_statement(stmt, ctx, block)? {
             FlowResult::Open { value, block: next } => {
                 last_value = value;
                 block = next;
@@ -111,19 +109,17 @@ pub(super) fn lower_body(
 
 fn lower_statement(
     stmt: &Statement,
-    ctx: &mut FnLowerCtx,
+    ctx: &mut FnLowerCtx<'_>,
     block: IRBlockId,
-    registry: &GlobalRegistry,
-    output: &mut LowerOutput,
 ) -> Result<FlowResult, ()> {
     match stmt {
         Statement::Expr(expr) => {
-            let (value, next) = lower_expr(expr, ctx, block, registry, output)?;
+            let (value, next) = lower_expr(expr, ctx, block)?;
             // A `Never`-typed statement expression cannot reach the
             // next statement. Cap the block with `Unreachable` and
             // report `Closed` so arm-merge and fallthrough paths skip
             // the would-be branch edge.
-            if is_never(&expr.resolution, registry) {
+            if is_never(&expr.resolution, ctx.registry) {
                 ctx.cfg.set_terminator(next, IRTerminator::Unreachable);
                 return Ok(FlowResult::Closed);
             }
@@ -135,7 +131,7 @@ fn lower_statement(
         Statement::Return { value, .. } => {
             match value.as_ref() {
                 Some(expr) => {
-                    let (id, next) = lower_expr(expr, ctx, block, registry, output)?;
+                    let (id, next) = lower_expr(expr, ctx, block)?;
                     // Acquire the result as an owned value *before* the
                     // exit drops free its source slots, so the return
                     // clone is taken while the source is live.
@@ -153,14 +149,12 @@ fn lower_statement(
             }
             Ok(FlowResult::Closed)
         }
-        Statement::Assignment { target, value, .. } => {
-            lower_assignment(target, value, ctx, block, registry, output)
-        }
+        Statement::Assignment { target, value, .. } => lower_assignment(target, value, ctx, block),
         Statement::CompoundAssign {
             target, op, value, ..
-        } => lower_compound_assignment(target, *op, value, ctx, block, registry, output),
+        } => lower_compound_assignment(target, *op, value, ctx, block),
         Statement::Destructure { pattern, value, .. } => {
-            lower_destructure(pattern, value, ctx, block, registry, output)
+            lower_destructure(pattern, value, ctx, block)
         }
         Statement::Break { span } => lower_break_statement(*span, ctx, block),
     }
@@ -173,7 +167,7 @@ fn lower_statement(
 /// half-baked IR fragment.
 fn lower_break_statement(
     span: Span,
-    ctx: &mut FnLowerCtx,
+    ctx: &mut FnLowerCtx<'_>,
     block: IRBlockId,
 ) -> Result<FlowResult, ()> {
     let exit = ctx.current_loop_exit().unwrap_or_else(|| {
@@ -204,19 +198,17 @@ fn lower_break_statement(
 fn lower_assignment(
     lvalue: &LValue,
     value: &Expr,
-    ctx: &mut FnLowerCtx,
+    ctx: &mut FnLowerCtx<'_>,
     block: IRBlockId,
-    registry: &GlobalRegistry,
-    output: &mut LowerOutput,
 ) -> Result<FlowResult, ()> {
     if lvalue.segments.len() >= 2 {
-        return lower_field_assignment(lvalue, value, ctx, block, registry, output);
+        return lower_field_assignment(lvalue, value, ctx, block);
     }
 
     // `_ = value` evaluates the rhs and frees it in place, the same
     // way a superseded statement value is freed. No slot is declared.
     if lvalue.is_discard() {
-        let (value_id, current) = lower_expr(value, ctx, block, registry, output)?;
+        let (value_id, current) = lower_expr(value, ctx, block)?;
         drop_discarded_temp(ctx, current, value_id);
         return Ok(FlowResult::Open {
             value: None,
@@ -227,7 +219,7 @@ fn lower_assignment(
     let local_id = expect_local_id(lvalue);
     let ir_local = IRLocalId::from_local_id(local_id);
 
-    let (value_id, current) = lower_expr(value, ctx, block, registry, output)?;
+    let (value_id, current) = lower_expr(value, ctx, block)?;
     let value_ty = ctx.type_of(value_id);
 
     // Acquire the rhs as an owned value: borrowed sources (literals,
@@ -250,7 +242,7 @@ fn lower_assignment(
 /// overwrite. Shared by plain assignment and destructure element
 /// stores.
 pub(super) fn store_owned_into_local(
-    ctx: &mut FnLowerCtx,
+    ctx: &mut FnLowerCtx<'_>,
     current: IRBlockId,
     ir_local: IRLocalId,
     owned_value: ValueId,
@@ -322,10 +314,8 @@ pub(super) fn store_owned_into_local(
 fn lower_field_assignment(
     lvalue: &LValue,
     value: &Expr,
-    ctx: &mut FnLowerCtx,
+    ctx: &mut FnLowerCtx<'_>,
     block: IRBlockId,
-    registry: &GlobalRegistry,
-    output: &mut LowerOutput,
 ) -> Result<FlowResult, ()> {
     let local_id = expect_local_id(lvalue);
     let ir_local = IRLocalId::from_local_id(local_id);
@@ -337,9 +327,10 @@ fn lower_field_assignment(
         )
     });
 
-    let plan = build_field_chain(&head_ty, lvalue, registry, output);
+    let plan = build_field_chain(&head_ty, lvalue, ctx.registry, ctx.output);
 
-    let head_ir_type = resolved_type_to_ir_type(&head_ty, registry, &mut output.instantiations);
+    let head_ir_type =
+        resolved_type_to_ir_type(&head_ty, ctx.registry, &mut ctx.output.instantiations);
     let root_value = ctx.fresh_value(head_ir_type.clone());
     ctx.cfg.append(
         block,
@@ -374,7 +365,7 @@ fn lower_field_assignment(
         .expect("IR lower: field-assignment plan is empty for a multi-segment lvalue");
     let leaf_parent = parent_values[parent_values.len() - 1];
 
-    let (rhs_value, current) = lower_expr(value, ctx, block, registry, output)?;
+    let (rhs_value, current) = lower_expr(value, ctx, block)?;
 
     // Acquire the rhs as an owned value. The rebuilt struct's field
     // must hold a reference its drop glue can release without
@@ -533,15 +524,13 @@ fn lower_compound_assignment(
     target: &LValue,
     op: CompoundOp,
     value: &Expr,
-    ctx: &mut FnLowerCtx,
+    ctx: &mut FnLowerCtx<'_>,
     block: IRBlockId,
-    registry: &GlobalRegistry,
-    output: &mut LowerOutput,
 ) -> Result<FlowResult, ()> {
     let local_id = expect_local_id(target);
     let ir_local = IRLocalId::from_local_id(local_id);
 
-    let (rhs, current) = lower_expr(value, ctx, block, registry, output)?;
+    let (rhs, current) = lower_expr(value, ctx, block)?;
     let ty = ctx.type_of(rhs);
 
     if target.segments.len() == 1 {
@@ -586,8 +575,9 @@ fn lower_compound_assignment(
             path_text(&target.segments),
         )
     });
-    let plan = build_field_chain(&head_ty, target, registry, output);
-    let head_ir_type = resolved_type_to_ir_type(&head_ty, registry, &mut output.instantiations);
+    let plan = build_field_chain(&head_ty, target, ctx.registry, ctx.output);
+    let head_ir_type =
+        resolved_type_to_ir_type(&head_ty, ctx.registry, &mut ctx.output.instantiations);
 
     let root_value = ctx.fresh_value(head_ir_type.clone());
     ctx.cfg.append(
@@ -736,7 +726,7 @@ fn expect_local_id(lvalue: &LValue) -> LocalId {
 /// Closed flows already set their own terminator (an inner `return`),
 /// so there is nothing to do. Emits the function-exit drops, then stamps the
 /// `Return` carrying the trailing value (if any).
-pub(super) fn finalize_open_flow(ctx: &mut FnLowerCtx, flow: FlowResult, return_type: &IRType) {
+pub(super) fn finalize_open_flow(ctx: &mut FnLowerCtx<'_>, flow: FlowResult, return_type: &IRType) {
     if let FlowResult::Open { value, block } = flow {
         if return_type == &IRType::Unit {
             if let Some(value) = value {

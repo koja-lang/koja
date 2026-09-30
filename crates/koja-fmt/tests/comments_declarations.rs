@@ -364,6 +364,30 @@ fn alias_const_type_trailing_comments_stay_on_line() {
 }
 
 #[test]
+fn wrapped_conformance_trailing_comment_stays_on_list() {
+    assert_unchanged(
+        "
+        struct Server<T>:
+          Process<Config<T>, Msg<T>, Reply<T>>, Serialization, Comparable, Debug # note
+
+          available: List<T>
+        end
+        ",
+    );
+}
+
+#[test]
+fn conformance_trailing_comment_does_not_wrap_header() {
+    assert_unchanged(
+        "
+        struct Point: Eq # a long remark that would push this header line well past eighty columns
+          x: Int
+        end
+        ",
+    );
+}
+
+#[test]
 fn declaration_header_and_end_comments_stay_on_line() {
     assert_unchanged(
         "

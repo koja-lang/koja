@@ -20,9 +20,6 @@ pub(super) fn emit_map<'ctx>(
     llvm_function: FunctionValue<'ctx>,
     method: MapMethod,
 ) -> Result<(), LlvmError> {
-    let entry = ctx.context.append_basic_block(llvm_function, "entry");
-    ctx.builder.position_at_end(entry);
-
     let layout = map_layout(ctx, method, function)?;
 
     match method {
@@ -45,8 +42,6 @@ pub(super) fn emit_put_consuming<'ctx>(
     function: &IRFunction,
     llvm_function: FunctionValue<'ctx>,
 ) -> Result<(), LlvmError> {
-    let entry = ctx.context.append_basic_block(llvm_function, "entry");
-    ctx.builder.position_at_end(entry);
     let layout = map_layout(ctx, MapMethod::Put, function)?;
     hashtable::emit_map_put(ctx, function, llvm_function, &layout, true)
 }

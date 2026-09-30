@@ -8,12 +8,13 @@
 //! never used independently:
 //!
 //! - [`FnLowerCtx`] owns per-function mutable scratch state (the
-//!   CFG, value/block counters, the per-function `local` set).
-//! - [`LowerOutput`] is the per-package write-back bag every helper
-//!   threads through: feature-gap diagnostics flowing back to
-//!   `lower_program` / `lower_script`, plus the discovered
-//!   generic-instantiation set the [`crate::generics`] driver
-//!   consumes after lowering finishes.
+//!   CFG, value/block counters, the per-function `local` set) and
+//!   carries the typecheck registry and the [`LowerOutput`] bag
+//!   every helper reads.
+//! - [`LowerOutput`] is the per-package write-back bag. It holds the
+//!   feature-gap diagnostics flowing back to `lower_program` /
+//!   `lower_script`, plus the discovered generic-instantiation set
+//!   the [`crate::generics`] driver consumes after lowering finishes.
 //! - [`FlowResult`] is the return shape every `lower_*` helper
 //!   produces, distinguishing "flow continues at this block with
 //!   this value" from "flow terminated already (e.g. via early
@@ -23,6 +24,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use koja_ast::ast::Diagnostic;
 use koja_ast::identifier::LocalId;
+use koja_typecheck::GlobalRegistry;
 
 /// Snapshot of the live-slot map captured at a control-flow
 /// construct's entry. Used by `match` / `cond` / `if` / `unless` /
@@ -48,9 +50,10 @@ use crate::generics::Instantiation;
 use crate::local::IRLocalId;
 use crate::types::{IRType, ValueId};
 
-/// Per-package write-back bag threaded through every `lower_*`
-/// helper. `lower_program` / `lower_script` build one up front and
-/// destructure it after the walk. `diagnostics` short-circuits with
+/// Per-package write-back bag every `lower_*` helper reaches
+/// through [`FnLowerCtx::output`]. `lower_program` / `lower_script`
+/// build one up front and destructure it after the walk.
+/// `diagnostics` short-circuits with
 /// [`crate::error::LowerError::Diagnostics`] and `instantiations`
 /// feeds [`crate::generics::instantiate`].
 #[derive(Default)]
@@ -108,11 +111,19 @@ pub(crate) enum FlowResult {
 /// [`IRType`] for drop-glue emission. Control-flow lowering
 /// snapshots, restores, and merges it per arm.
 ///
+/// `registry` is the typecheck registry every helper consults for
+/// declaration lookups. `output` is the per-package write-back bag
+/// for diagnostics, instantiations, and synthesized functions. A
+/// nested function (closure body, spawn wrapper, glue) seeds its own
+/// context from the enclosing one.
+///
 /// One context per `IRFunction` (or per script body). Discarded after
 /// the function's blocks are extracted via [`Self::into_blocks`], and
 /// downstream consumers (seal, backends) build their own indices.
-pub(crate) struct FnLowerCtx {
+pub(crate) struct FnLowerCtx<'a> {
     pub(crate) cfg: CFGBuilder,
+    pub(crate) output: &'a mut LowerOutput,
+    pub(crate) registry: &'a GlobalRegistry,
     next_value: u32,
     next_block: u32,
     value_types: BTreeMap<ValueId, IRType>,
@@ -203,10 +214,12 @@ impl ClosureState {
     }
 }
 
-impl FnLowerCtx {
-    pub(crate) fn new() -> Self {
+impl<'a> FnLowerCtx<'a> {
+    pub(crate) fn new(registry: &'a GlobalRegistry, output: &'a mut LowerOutput) -> Self {
         Self {
             cfg: CFGBuilder::new(),
+            output,
+            registry,
             next_value: 0,
             next_block: 0,
             value_types: BTreeMap::new(),

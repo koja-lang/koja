@@ -93,8 +93,10 @@ pub(super) fn bracket_list_body(open: &str, close: &str, items: Vec<Doc>) -> Doc
 /// enum declaration. Collapses onto the header line when it fits,
 /// otherwise breaks after the colon with fill-packed entries and a
 /// blank line separating the list from the body, matching wrapped
-/// function signatures.
-pub(super) fn conformance_header_doc(conformances: &[TypeExpr]) -> Doc {
+/// function signatures. `trailing` is the header's trailing comment.
+/// It sits inside the group so it lands after the last conformance in
+/// both layouts, ahead of the break-mode newline.
+pub(super) fn conformance_header_doc(conformances: &[TypeExpr], trailing: Option<Doc>) -> Doc {
     let last = conformances.len() - 1;
     let fill_items: Vec<Doc> = conformances
         .iter()
@@ -111,6 +113,7 @@ pub(super) fn conformance_header_doc(conformances: &[TypeExpr]) -> Doc {
     group(concat(vec![
         text(":"),
         indent(2, concat(vec![line(), fill(fill_items)])),
+        trailing.unwrap_or_else(nil),
         if_break(nil(), hardline()),
     ]))
 }

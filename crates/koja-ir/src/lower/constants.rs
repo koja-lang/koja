@@ -77,13 +77,13 @@ fn synthesize_built_constant(
 ) -> Option<IRConstantValue> {
     let init = symbol.derived(BUILT_INIT_SUFFIX);
     let ty = resolved_type_to_ir_type(&def.ty, registry, &mut output.instantiations);
-    let mut ctx = FnLowerCtx::new();
+    let mut ctx = FnLowerCtx::new(registry, output);
     ctx.closures_mut().set_enclosing_symbol(init.clone());
     let entry = ctx.fresh_block("entry");
     // `Err(())` means the lowerer already pushed a diagnostic. The
     // constant gets no pool entry, and the diagnostic fails the
     // compile before any backend reads the pool.
-    let (value, block) = lower_expr(&def.value, &mut ctx, entry, registry, output).ok()?;
+    let (value, block) = lower_expr(&def.value, &mut ctx, entry).ok()?;
     finalize_open_flow(
         &mut ctx,
         FlowResult::Open {
@@ -92,8 +92,9 @@ fn synthesize_built_constant(
         },
         &ty,
     );
+    let blocks = ctx.into_blocks();
     output.synthesized_functions.push(IRFunction {
-        blocks: ctx.into_blocks(),
+        blocks,
         def_location: None,
         kind: FunctionKind::Regular,
         params: Vec::new(),

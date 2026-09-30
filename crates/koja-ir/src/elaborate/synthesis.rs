@@ -25,7 +25,7 @@ use crate::package::IRPackage;
 use crate::struct_decl::StructFieldInit;
 use crate::types::{ConstValue, IRBinOp, IRType, ValueId};
 
-use super::{find_enum, find_struct, is_inline_managed, needs_drop, needs_glue, unbox};
+use super::{find_enum, find_struct, is_inline_managed, needs_drop, needs_glue};
 
 /// The glue's sole parameter, `self`, typed as the operand. Both the
 /// shell ([`super::glue_shell`]) and every synthesized body agree on
@@ -166,7 +166,7 @@ impl Synthesizer {
     fn projection_type(&self, declared: &IRType) -> IRType {
         match self.mode {
             CopyMode::Clone => declared.clone(),
-            CopyMode::DeepCopy => unbox(declared).clone(),
+            CopyMode::DeepCopy => declared.unboxed().clone(),
         }
     }
 

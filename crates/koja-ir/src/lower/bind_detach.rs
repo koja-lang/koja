@@ -31,7 +31,7 @@ use super::patterns::pattern_binding_ids;
 pub(super) fn detach_mutated_binds(
     binds: &[(IRLocalId, IRType)],
     body: &[Statement],
-    ctx: &mut FnLowerCtx,
+    ctx: &mut FnLowerCtx<'_>,
     block: IRBlockId,
 ) {
     if !binds.iter().any(|(_, ty)| ty.is_heap_managed()) {

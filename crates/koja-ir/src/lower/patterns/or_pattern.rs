@@ -12,7 +12,7 @@
 use koja_ast::ast::Pattern;
 use koja_ast::labels::pattern_kind_label;
 
-use super::super::ctx::{FnLowerCtx, LowerOutput};
+use super::super::ctx::FnLowerCtx;
 use super::enums::emit_enum_tag_eq;
 use super::literals::emit_literal_eq_or_panic;
 use super::{ChainMode, PatternCheck, PatternInputs, TestStep};
@@ -22,9 +22,8 @@ use crate::types::ValueId;
 pub(super) fn lower_or_check(
     alternatives: &[Pattern],
     inputs: &PatternInputs<'_>,
-    ctx: &mut FnLowerCtx,
+    ctx: &mut FnLowerCtx<'_>,
     block: IRBlockId,
-    output: &mut LowerOutput,
 ) -> (PatternCheck, IRBlockId) {
     let mut steps = Vec::with_capacity(alternatives.len());
     let mut current = block;
@@ -32,7 +31,7 @@ pub(super) fn lower_or_check(
         if index > 0 {
             current = ctx.fresh_block(format!("match_or_alt_{index}"));
         }
-        let cond = emit_or_alternative(alternative, inputs, ctx, current, output);
+        let cond = emit_or_alternative(alternative, inputs, ctx, current);
         steps.push(TestStep {
             cond,
             test_block: current,
@@ -51,12 +50,11 @@ pub(super) fn lower_or_check(
 fn emit_or_alternative(
     pattern: &Pattern,
     inputs: &PatternInputs<'_>,
-    ctx: &mut FnLowerCtx,
+    ctx: &mut FnLowerCtx<'_>,
     block: IRBlockId,
-    output: &mut LowerOutput,
 ) -> ValueId {
     match pattern {
-        Pattern::EnumUnit { variant, .. } => emit_enum_tag_eq(variant, inputs, ctx, block, output),
+        Pattern::EnumUnit { variant, .. } => emit_enum_tag_eq(variant, inputs, ctx, block),
         Pattern::Literal {
             literal_coercion,
             span,
@@ -68,7 +66,6 @@ fn emit_or_alternative(
             inputs.subject,
             ctx,
             block,
-            output,
         ),
         other => panic!(
             "IR lower: or-alternative `{}` reached lowering, but \

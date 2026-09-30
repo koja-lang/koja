@@ -20,7 +20,7 @@
 
 use std::collections::{HashMap, HashSet};
 
-use crate::function::{IRBasicBlock, IRBlockId, IRInstruction, IRTerminator};
+use crate::function::{IRBasicBlock, IRBlockId, IRInstruction};
 
 /// Walk every reachable block from `entry` and return the immediate
 /// dominator of each non-entry reachable block. The map's domain is
@@ -189,22 +189,6 @@ fn visit(
     order.push(block_id);
 }
 
-/// Successor block ids reachable from `terminator`. `seal/mod.rs` keeps
-/// its own `terminator_targets` copy to avoid depending on this module.
-fn terminator_successors(terminator: &IRTerminator) -> Vec<IRBlockId> {
-    match terminator {
-        IRTerminator::Branch(target) => vec![target.block],
-        IRTerminator::CondBranch {
-            then_target,
-            else_target,
-            ..
-        } => vec![then_target.block, else_target.block],
-        IRTerminator::Return { .. } | IRTerminator::TailCall { .. } | IRTerminator::Unreachable => {
-            Vec::new()
-        }
-    }
-}
-
 pub(crate) fn successors(block: &IRBasicBlock) -> Vec<IRBlockId> {
     let mut targets = Vec::new();
     for instruction in &block.instructions {
@@ -213,7 +197,7 @@ pub(crate) fn successors(block: &IRBasicBlock) -> Vec<IRBlockId> {
             targets.extend(after.iter().map(|after| after.body));
         }
     }
-    targets.extend(terminator_successors(&block.terminator));
+    targets.extend(block.terminator.targets());
     targets
 }
 

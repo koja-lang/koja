@@ -27,14 +27,13 @@
 //! exit block to target.
 
 use koja_ast::ast::{Expr, Statement};
-use koja_typecheck::GlobalRegistry;
 
 use crate::function::{BranchTarget, IRBlockId, IRInstruction, IRTerminator};
 use crate::types::ValueId;
 
 use super::arms::emit_unit;
 use super::body::lower_body;
-use super::ctx::{FlowResult, FnLowerCtx, LowerOutput, SlotStateSnapshot};
+use super::ctx::{FlowResult, FnLowerCtx, SlotStateSnapshot};
 use super::expr::lower_expr;
 
 /// Lower a `while cond ... end`. Builds three blocks:
@@ -52,10 +51,8 @@ use super::expr::lower_expr;
 pub(super) fn lower_while(
     condition: &Expr,
     body: &[Statement],
-    ctx: &mut FnLowerCtx,
+    ctx: &mut FnLowerCtx<'_>,
     block: IRBlockId,
-    registry: &GlobalRegistry,
-    output: &mut LowerOutput,
 ) -> Result<(ValueId, IRBlockId), ()> {
     let header = ctx.fresh_block("while_header");
     let body_block = ctx.fresh_block("while_body");
@@ -64,7 +61,7 @@ pub(super) fn lower_while(
     ctx.cfg
         .set_terminator(block, IRTerminator::Branch(BranchTarget::to(header)));
 
-    let (cond_value, header_tail) = lower_expr(condition, ctx, header, registry, output)?;
+    let (cond_value, header_tail) = lower_expr(condition, ctx, header)?;
     ctx.cfg.set_terminator(
         header_tail,
         IRTerminator::CondBranch {
@@ -76,7 +73,7 @@ pub(super) fn lower_while(
 
     ctx.push_loop_exit(exit_block);
     let body_snapshot = ctx.snapshot_slot_states();
-    let body_flow = lower_body(body, ctx, body_block, registry, output)?;
+    let body_flow = lower_body(body, ctx, body_block)?;
     match body_flow {
         FlowResult::Open { block: tail, .. } => {
             drop_body_scoped_bindings(ctx, tail, &body_snapshot);
@@ -106,7 +103,7 @@ pub(super) fn lower_while(
 /// never reach the function-exit drops, where a zero-trip loop would
 /// leave them uninitialized.
 fn drop_body_scoped_bindings(
-    ctx: &mut FnLowerCtx,
+    ctx: &mut FnLowerCtx<'_>,
     tail: IRBlockId,
     body_snapshot: &SlotStateSnapshot,
 ) {
@@ -129,10 +126,8 @@ fn drop_body_scoped_bindings(
 ///   its own terminator regardless of reachability).
 pub(super) fn lower_loop(
     body: &[Statement],
-    ctx: &mut FnLowerCtx,
+    ctx: &mut FnLowerCtx<'_>,
     block: IRBlockId,
-    registry: &GlobalRegistry,
-    output: &mut LowerOutput,
 ) -> Result<(ValueId, IRBlockId), ()> {
     let body_block = ctx.fresh_block("loop_body");
     let exit_block = ctx.fresh_block("loop_exit");
@@ -142,7 +137,7 @@ pub(super) fn lower_loop(
 
     ctx.push_loop_exit(exit_block);
     let body_snapshot = ctx.snapshot_slot_states();
-    let body_flow = lower_body(body, ctx, body_block, registry, output)?;
+    let body_flow = lower_body(body, ctx, body_block)?;
     if let FlowResult::Open { block: tail, .. } = body_flow {
         drop_body_scoped_bindings(ctx, tail, &body_snapshot);
         ctx.cfg

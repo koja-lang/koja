@@ -382,12 +382,12 @@ pub(crate) fn lower_function_inner(
         return None;
     }
 
-    let mut ctx = FnLowerCtx::new();
+    let mut ctx = FnLowerCtx::new(registry, output);
     ctx.closures_mut().set_enclosing_symbol(symbol.clone());
 
     if intrinsic {
         let Some(intrinsic_id) = IRIntrinsicId::from_identifier(identifier) else {
-            output.diagnostics.push(Diagnostic::error(
+            ctx.output.diagnostics.push(Diagnostic::error(
                 format!(
                     "`@intrinsic` on `{identifier}` has no registered backend handler; \
                      add a variant to `IRIntrinsicId` and wire its emitter in both backends",
@@ -396,7 +396,7 @@ pub(crate) fn lower_function_inner(
             ));
             return None;
         };
-        let params = lower_intrinsic_params(function, signature, registry, output, &mut ctx)?;
+        let params = lower_intrinsic_params(function, signature, &mut ctx)?;
         return Some(IRFunction {
             blocks: Vec::new(),
             def_location,
@@ -408,7 +408,7 @@ pub(crate) fn lower_function_inner(
     }
 
     if extern_c {
-        let params = lower_intrinsic_params(function, signature, registry, output, &mut ctx)?;
+        let params = lower_intrinsic_params(function, signature, &mut ctx)?;
         let attrs = IRExternAttrs::from_annotations(&function.annotations);
         return Some(IRFunction {
             blocks: Vec::new(),
@@ -421,7 +421,7 @@ pub(crate) fn lower_function_inner(
     }
 
     let Some(body) = function.body.as_ref() else {
-        output.diagnostics.push(Diagnostic::error(
+        ctx.output.diagnostics.push(Diagnostic::error(
             format!(
                 "IR does not yet lower bodyless fn `{identifier}` (no `@intrinsic` / \
                  `@extern \"C\"` marker, provide one or add a body)",
@@ -432,9 +432,9 @@ pub(crate) fn lower_function_inner(
     };
 
     let entry = ctx.fresh_block("entry");
-    let params = lower_params(function, identifier, signature, registry, output, &mut ctx)?;
+    let params = lower_params(function, identifier, signature, &mut ctx)?;
 
-    let flow = lower_body(body, &mut ctx, entry, registry, output).ok()?;
+    let flow = lower_body(body, &mut ctx, entry).ok()?;
     finalize_open_flow(&mut ctx, flow, &return_type);
 
     let blocks = ctx.into_blocks();
@@ -458,9 +458,7 @@ fn lower_params(
     function: &Function,
     identifier: &Identifier,
     signature: &FunctionSignature,
-    registry: &GlobalRegistry,
-    output: &mut LowerOutput,
-    ctx: &mut FnLowerCtx,
+    ctx: &mut FnLowerCtx<'_>,
 ) -> Option<Vec<IRFunctionParam>> {
     let mut params = Vec::with_capacity(function.params.len());
     for (index, param) in function.params.iter().enumerate() {
@@ -471,7 +469,7 @@ fn lower_params(
             )
         });
         let resolved = &signature.params[index].ty;
-        let ty = resolved_type_to_ir_type(resolved, registry, &mut output.instantiations);
+        let ty = resolved_type_to_ir_type(resolved, ctx.registry, &mut ctx.output.instantiations);
         let ir_local = IRLocalId::from_local_id(local_id);
         let entry = ctx.entry_block();
         params.push(promote_param(ctx, entry, ir_local, ty));
@@ -485,9 +483,7 @@ fn lower_params(
 fn lower_intrinsic_params(
     function: &Function,
     signature: &FunctionSignature,
-    registry: &GlobalRegistry,
-    output: &mut LowerOutput,
-    ctx: &mut FnLowerCtx,
+    ctx: &mut FnLowerCtx<'_>,
 ) -> Option<Vec<IRFunctionParam>> {
     let mut params = Vec::with_capacity(function.params.len());
     for (index, param) in function.params.iter().enumerate() {
@@ -498,7 +494,7 @@ fn lower_intrinsic_params(
             )
         });
         let resolved = &signature.params[index].ty;
-        let ty = resolved_type_to_ir_type(resolved, registry, &mut output.instantiations);
+        let ty = resolved_type_to_ir_type(resolved, ctx.registry, &mut ctx.output.instantiations);
         let id = ctx.fresh_value(ty.clone());
         params.push(IRFunctionParam {
             id,

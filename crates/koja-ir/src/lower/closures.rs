@@ -46,15 +46,13 @@ pub(super) fn lower_block_closure(
     params: &[ClosureParam],
     body: &[Statement],
     closure_resolution: &ResolvedType,
-    ctx: &mut FnLowerCtx,
+    ctx: &mut FnLowerCtx<'_>,
     block: IRBlockId,
-    registry: &GlobalRegistry,
-    output: &mut LowerOutput,
 ) -> Result<(ValueId, IRBlockId), ()> {
     let fn_params = expect_function_params(closure_resolution);
     let fn_ret = expect_function_return(closure_resolution);
     let captures = collect_captures(BodyShape::Block(body), param_ids(params));
-    let captures_with_types = resolve_capture_types(&captures, registry, output);
+    let captures_with_types = resolve_capture_types(&captures, ctx.registry, ctx.output);
 
     let symbol = ctx.closures_mut().mint_symbol();
     let synthesized = synthesize_body(
@@ -66,27 +64,19 @@ pub(super) fn lower_block_closure(
             fn_ret,
         },
         &captures_with_types,
-        registry,
-        output,
+        ctx.registry,
+        ctx.output,
     )?;
-    output.synthesized_functions.push(synthesized);
+    ctx.output.synthesized_functions.push(synthesized);
     synthesize_env_glue(
         &symbol,
         &captures_with_types,
         closure_resolution,
-        registry,
-        output,
+        ctx.registry,
+        ctx.output,
     );
 
-    emit_make_closure(
-        symbol,
-        &captures_with_types,
-        closure_resolution,
-        ctx,
-        block,
-        registry,
-        output,
-    )
+    emit_make_closure(symbol, &captures_with_types, closure_resolution, ctx, block)
 }
 
 /// Lower a `x -> body_expr` short closure expression.
@@ -94,15 +84,13 @@ pub(super) fn lower_short_closure(
     params: &[ClosureParam],
     body: &Expr,
     closure_resolution: &ResolvedType,
-    ctx: &mut FnLowerCtx,
+    ctx: &mut FnLowerCtx<'_>,
     block: IRBlockId,
-    registry: &GlobalRegistry,
-    output: &mut LowerOutput,
 ) -> Result<(ValueId, IRBlockId), ()> {
     let fn_params = expect_function_params(closure_resolution);
     let fn_ret = expect_function_return(closure_resolution);
     let captures = collect_captures(BodyShape::Short(body), param_ids(params));
-    let captures_with_types = resolve_capture_types(&captures, registry, output);
+    let captures_with_types = resolve_capture_types(&captures, ctx.registry, ctx.output);
 
     let symbol = ctx.closures_mut().mint_symbol();
     let synthesized = synthesize_body(
@@ -114,27 +102,19 @@ pub(super) fn lower_short_closure(
             fn_ret,
         },
         &captures_with_types,
-        registry,
-        output,
+        ctx.registry,
+        ctx.output,
     )?;
-    output.synthesized_functions.push(synthesized);
+    ctx.output.synthesized_functions.push(synthesized);
     synthesize_env_glue(
         &symbol,
         &captures_with_types,
         closure_resolution,
-        registry,
-        output,
+        ctx.registry,
+        ctx.output,
     );
 
-    emit_make_closure(
-        symbol,
-        &captures_with_types,
-        closure_resolution,
-        ctx,
-        block,
-        registry,
-        output,
-    )
+    emit_make_closure(symbol, &captures_with_types, closure_resolution, ctx, block)
 }
 
 /// Register the synthesized glue siblings (`$drop_env$` /
@@ -147,7 +127,7 @@ fn synthesize_env_glue(
     registry: &GlobalRegistry,
     output: &mut LowerOutput,
 ) {
-    if let Some(drop_env) = synthesize_drop_env(symbol, captures) {
+    if let Some(drop_env) = synthesize_drop_env(symbol, captures, registry, output) {
         output.synthesized_functions.push(drop_env);
     }
     if let Some(copy_env) = synthesize_copy_env(symbol, captures) {
@@ -181,7 +161,7 @@ fn synthesize_eq_env(
     let env_layout: Vec<IRType> = captures.iter().map(|c| c.ir_type.clone()).collect();
     let closure_ty =
         resolved_type_to_ir_type(closure_resolution, registry, &mut output.instantiations);
-    let mut ctx = FnLowerCtx::new();
+    let mut ctx = FnLowerCtx::new(registry, output);
     let other = ctx.fresh_value(closure_ty.clone());
     let entry = ctx.fresh_block("entry");
     let conjunction = Conjunction::new("eq_env", &mut ctx);
@@ -206,15 +186,8 @@ fn synthesize_eq_env(
                 ty: capture.ir_type.clone(),
             },
         );
-        let (cond, after) = lower_value_equality(
-            own,
-            theirs,
-            &capture.resolution,
-            &mut ctx,
-            current,
-            registry,
-            output,
-        );
+        let (cond, after) =
+            lower_value_equality(own, theirs, &capture.resolution, &mut ctx, current);
         if index == last {
             let (result, merge) = conjunction.finish(cond, &mut ctx, after);
             ctx.cfg.set_terminator(
@@ -252,7 +225,12 @@ fn synthesize_eq_env(
 /// [`IRInstruction::LoadCapture`]s the value and [`IRInstruction::DropValue`]s
 /// it. Composite drops are rewritten into `drop_T` calls by
 /// [`crate::elaborate`], while leaf drops stay inline `rc--` in the backend.
-fn synthesize_drop_env(body_symbol: &IRSymbol, captures: &[CaptureInfo]) -> Option<IRFunction> {
+fn synthesize_drop_env(
+    body_symbol: &IRSymbol,
+    captures: &[CaptureInfo],
+    registry: &GlobalRegistry,
+    output: &mut LowerOutput,
+) -> Option<IRFunction> {
     if !captures
         .iter()
         .any(|capture| capture.ir_type.is_heap_managed())
@@ -260,7 +238,7 @@ fn synthesize_drop_env(body_symbol: &IRSymbol, captures: &[CaptureInfo]) -> Opti
         return None;
     }
     let env_layout: Vec<IRType> = captures.iter().map(|c| c.ir_type.clone()).collect();
-    let mut ctx = FnLowerCtx::new();
+    let mut ctx = FnLowerCtx::new(registry, output);
     let entry = ctx.fresh_block("entry");
     for (index, capture) in captures.iter().enumerate() {
         if !capture.ir_type.is_heap_managed() {
@@ -712,25 +690,20 @@ fn synthesize_body(
     registry: &GlobalRegistry,
     output: &mut LowerOutput,
 ) -> Result<IRFunction, ()> {
-    let mut ctx = FnLowerCtx::new();
+    let mut ctx = FnLowerCtx::new(registry, output);
     ctx.closures_mut().set_enclosing_symbol(symbol.clone());
     let capture_ids: Vec<LocalId> = captures.iter().map(|c| c.local_id).collect();
     ctx.closures_mut().set_captures(&capture_ids);
 
     let entry = ctx.fresh_block("entry");
-    let params = lower_closure_params(
-        sig.closure_params,
-        sig.fn_params,
-        registry,
-        output,
-        &mut ctx,
-    );
+    let params = lower_closure_params(sig.closure_params, sig.fn_params, &mut ctx);
     let body_statements = match sig.body {
         BodyShape::Block(stmts) => stmts.to_vec(),
         BodyShape::Short(expr) => vec![Statement::Expr(expr.clone())],
     };
-    let flow = lower_body(&body_statements, &mut ctx, entry, registry, output)?;
-    let return_type = resolved_type_to_ir_type(sig.fn_ret, registry, &mut output.instantiations);
+    let flow = lower_body(&body_statements, &mut ctx, entry)?;
+    let return_type =
+        resolved_type_to_ir_type(sig.fn_ret, ctx.registry, &mut ctx.output.instantiations);
     finalize_open_flow(&mut ctx, flow, &return_type);
     let env_layout: Vec<IRType> = captures.iter().map(|c| c.ir_type.clone()).collect();
     Ok(IRFunction {
@@ -750,16 +723,14 @@ fn synthesize_body(
 fn lower_closure_params(
     closure_params: &[ClosureParam],
     fn_params: &[ResolvedType],
-    registry: &GlobalRegistry,
-    output: &mut LowerOutput,
-    ctx: &mut FnLowerCtx,
+    ctx: &mut FnLowerCtx<'_>,
 ) -> Vec<IRFunctionParam> {
     let mut params = Vec::with_capacity(closure_params.len());
     for (index, (closure_param, fn_param)) in
         closure_params.iter().zip(fn_params.iter()).enumerate()
     {
         let local_id = closure_param_local_id(closure_param, index);
-        let ty = resolved_type_to_ir_type(fn_param, registry, &mut output.instantiations);
+        let ty = resolved_type_to_ir_type(fn_param, ctx.registry, &mut ctx.output.instantiations);
         let ir_local = IRLocalId::from_local_id(local_id);
         let entry = ctx.entry_block();
         params.push(promote_param(ctx, entry, ir_local, ty));
@@ -792,10 +763,8 @@ fn emit_make_closure(
     symbol: IRSymbol,
     captures: &[CaptureInfo],
     closure_resolution: &ResolvedType,
-    ctx: &mut FnLowerCtx,
+    ctx: &mut FnLowerCtx<'_>,
     block: IRBlockId,
-    registry: &GlobalRegistry,
-    output: &mut LowerOutput,
 ) -> Result<(ValueId, IRBlockId), ()> {
     let mut capture_values = Vec::with_capacity(captures.len());
     for capture in captures {
@@ -806,7 +775,11 @@ fn emit_make_closure(
         let borrowed = read_capture(capture, ctx, block);
         capture_values.push(materialize_owned(ctx, block, borrowed, &capture.ir_type));
     }
-    let ty = resolved_type_to_ir_type(closure_resolution, registry, &mut output.instantiations);
+    let ty = resolved_type_to_ir_type(
+        closure_resolution,
+        ctx.registry,
+        &mut ctx.output.instantiations,
+    );
     let dest = ctx.fresh_value(ty.clone());
     let captures_env = !capture_values.is_empty();
     ctx.cfg.append(
@@ -832,7 +805,7 @@ fn emit_make_closure(
 /// value semantics every capture copies into the env: a `LoadCapture`
 /// when the outer ctx is itself a closure body, otherwise a
 /// `LocalRead` of the outer slot. The outer binding stays live.
-fn read_capture(capture: &CaptureInfo, ctx: &mut FnLowerCtx, block: IRBlockId) -> ValueId {
+fn read_capture(capture: &CaptureInfo, ctx: &mut FnLowerCtx<'_>, block: IRBlockId) -> ValueId {
     if let Some(capture_index) = ctx.closures().capture_index(capture.local_id) {
         let dest = ctx.fresh_value(capture.ir_type.clone());
         ctx.cfg.append(
@@ -900,16 +873,19 @@ fn build_fn_as_closure_wrapper(
     registry: &GlobalRegistry,
     output: &mut LowerOutput,
 ) -> IRFunction {
-    let mut ctx = FnLowerCtx::new();
+    let mut ctx = FnLowerCtx::new(registry, output);
     ctx.closures_mut()
         .set_enclosing_symbol(wrapper_symbol.clone());
     let entry = ctx.fresh_block("entry");
 
-    let params = mint_wrapper_params(sig, &mut ctx, registry, output, entry);
+    let params = mint_wrapper_params(sig, &mut ctx, entry);
     let arg_values = read_wrapper_args(&params, &mut ctx, entry);
 
-    let return_ty =
-        resolved_type_to_ir_type(&sig.return_type, registry, &mut output.instantiations);
+    let return_ty = resolved_type_to_ir_type(
+        &sig.return_type,
+        ctx.registry,
+        &mut ctx.output.instantiations,
+    );
     let call_dest = ctx.fresh_value(return_ty.clone());
     ctx.cfg.append(
         entry,
@@ -944,14 +920,12 @@ fn build_fn_as_closure_wrapper(
 /// entry block.
 fn mint_wrapper_params(
     sig: &FunctionSignature,
-    ctx: &mut FnLowerCtx,
-    registry: &GlobalRegistry,
-    output: &mut LowerOutput,
+    ctx: &mut FnLowerCtx<'_>,
     entry: IRBlockId,
 ) -> Vec<IRFunctionParam> {
     let mut params = Vec::with_capacity(sig.params.len());
     for (index, param) in sig.params.iter().enumerate() {
-        let ty = resolved_type_to_ir_type(&param.ty, registry, &mut output.instantiations);
+        let ty = resolved_type_to_ir_type(&param.ty, ctx.registry, &mut ctx.output.instantiations);
         let local_id = LocalId::new(index as u32);
         let ir_local = IRLocalId::from_local_id(local_id);
         params.push(promote_param(ctx, entry, ir_local, ty));
@@ -965,7 +939,7 @@ fn mint_wrapper_params(
 /// match a hand-written `fn (x) -> target(x) end` shim.
 fn read_wrapper_args(
     params: &[IRFunctionParam],
-    ctx: &mut FnLowerCtx,
+    ctx: &mut FnLowerCtx<'_>,
     entry: IRBlockId,
 ) -> Vec<ValueId> {
     let mut values = Vec::with_capacity(params.len());

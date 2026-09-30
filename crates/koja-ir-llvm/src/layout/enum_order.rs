@@ -13,38 +13,49 @@
 //! in an order where every dependency lands before its dependants.
 //! Struct field types are followed transitively so a payload like
 //! `Wrapper { inner: TokenKind }` still threads `TokenKind`'s outer
-//! into the dependency set.
+//! into the dependency set. Enums with no dependency between them
+//! keep symbol order.
 //!
 //! Unresolved references (symbols missing from the program) are
 //! skipped rather than treated as errors. They contribute no size
 //! dependency this walk can honor.
 //!
-//! Pure IR-data walk, no LLVM types touched here.
+//! Pure IR-data walk over a [`koja_graph::Graph`], no LLVM types
+//! touched here.
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use koja_graph::Graph;
 use koja_ir::{IREnumDecl, IRPackage, IRStructField, IRSymbol, IRType, IRVariantPayload};
 
 /// Topologically sort every enum decl across `packages` so an enum
 /// whose payload references another enum lands after it. See the
-/// module doc for why.
+/// module doc for why. Panics on a dependency cycle, which
+/// `koja_ir::cycle` breaks with `Indirect` before emit.
 pub(crate) fn enums_in_dependency_order(packages: &[IRPackage]) -> Vec<&IREnumDecl> {
     let enum_index = build_enum_index(packages);
     let struct_field_index = build_struct_field_index(packages);
-    let mut output: Vec<&IREnumDecl> = Vec::with_capacity(enum_index.len());
-    let mut visited: BTreeSet<IRSymbol> = BTreeSet::new();
-    let mut visiting: BTreeSet<IRSymbol> = BTreeSet::new();
-    for decl in enum_index.values() {
-        visit_enum(
-            decl,
-            &enum_index,
-            &struct_field_index,
-            &mut visited,
-            &mut visiting,
-            &mut output,
+    let mut graph: Graph<&IRSymbol> = Graph::new();
+    for (symbol, decl) in &enum_index {
+        graph.add_node(symbol);
+        for dependency in enum_dependencies(decl, &struct_field_index) {
+            if let Some((target, _)) = enum_index.get_key_value(&dependency) {
+                graph.add_edge(symbol, target);
+            }
+        }
+    }
+    let order = graph.toposort();
+    if let Some(stuck) = order.stuck.first() {
+        panic!(
+            "LLVM emit: enum `{stuck}` sits on a payload dependency cycle that \
+             `koja_ir::cycle` should have broken",
         );
     }
-    output
+    order
+        .ready
+        .into_iter()
+        .map(|symbol| enum_index[symbol])
+        .collect()
 }
 
 fn build_enum_index(packages: &[IRPackage]) -> BTreeMap<IRSymbol, &IREnumDecl> {
@@ -67,36 +78,17 @@ fn build_struct_field_index(packages: &[IRPackage]) -> BTreeMap<IRSymbol, &[IRSt
     map
 }
 
-fn visit_enum<'a>(
-    decl: &'a IREnumDecl,
-    enum_index: &BTreeMap<IRSymbol, &'a IREnumDecl>,
+/// Every enum symbol that `decl`'s payloads reference inline, in
+/// symbol order.
+fn enum_dependencies(
+    decl: &IREnumDecl,
     struct_field_index: &BTreeMap<IRSymbol, &[IRStructField]>,
-    visited: &mut BTreeSet<IRSymbol>,
-    visiting: &mut BTreeSet<IRSymbol>,
-    output: &mut Vec<&'a IREnumDecl>,
-) {
-    if visited.contains(&decl.symbol) || !visiting.insert(decl.symbol.clone()) {
-        return;
-    }
+) -> BTreeSet<IRSymbol> {
     let mut deps: BTreeSet<IRSymbol> = BTreeSet::new();
     for variant in &decl.variants {
         collect_payload_enum_refs(&variant.payload, struct_field_index, &mut deps);
     }
-    for dep_symbol in deps {
-        if let Some(dep_decl) = enum_index.get(&dep_symbol) {
-            visit_enum(
-                dep_decl,
-                enum_index,
-                struct_field_index,
-                visited,
-                visiting,
-                output,
-            );
-        }
-    }
-    visiting.remove(&decl.symbol);
-    visited.insert(decl.symbol.clone());
-    output.push(decl);
+    deps
 }
 
 fn collect_payload_enum_refs(

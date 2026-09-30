@@ -516,4 +516,42 @@ impl IRType {
                 | Self::UInt64
         )
     }
+
+    /// Peel a transparent [`Self::Indirect`] box to its inner type.
+    /// A recursive field is stored boxed but read / written as
+    /// `inner` (the projection unboxes, the construction re-boxes),
+    /// so every site that reasons about a field's *value* type works
+    /// on `inner`. Any other type is returned as is.
+    pub fn unboxed(&self) -> &IRType {
+        match self {
+            Self::Indirect(inner) => inner,
+            other => other,
+        }
+    }
+}
+
+impl ConstValue {
+    /// The [`IRType`] a `Const` of this value produces. Pure
+    /// transliteration: each integer / float width gets its
+    /// mirroring type, and `Bool` / `String` / `Unit` round-trip
+    /// directly.
+    pub fn ir_type(&self) -> IRType {
+        match self {
+            Self::Binary(_) => IRType::Binary,
+            Self::Bits { .. } => IRType::Bits,
+            Self::Bool(_) => IRType::Bool,
+            Self::Float32(_) => IRType::Float32,
+            Self::Float64(_) => IRType::Float64,
+            Self::Int8(_) => IRType::Int8,
+            Self::Int16(_) => IRType::Int16,
+            Self::Int32(_) => IRType::Int32,
+            Self::Int64(_) => IRType::Int64,
+            Self::String(_) => IRType::String,
+            Self::UInt8(_) => IRType::UInt8,
+            Self::UInt16(_) => IRType::UInt16,
+            Self::UInt32(_) => IRType::UInt32,
+            Self::UInt64(_) => IRType::UInt64,
+            Self::Unit => IRType::Unit,
+        }
+    }
 }

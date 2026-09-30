@@ -28,8 +28,7 @@ use koja_ir::IRFunction;
 use crate::ctx::EmitContext;
 use crate::emit::heap_layout::{block_alloc_size, block_base, init_heap_block, load_bit_length};
 use crate::error::{IceExt, LlvmError};
-use crate::intrinsics::cptr::declare_memcpy_extern;
-use crate::runtime::{declare_malloc_extern, declare_rc_inc_extern};
+use crate::runtime::{declare_malloc_extern, declare_memcpy_extern, declare_rc_inc_extern};
 
 /// rc-acquire `src_payload`'s block and return the same payload
 /// pointer, an owned share of the immutable block, no copy. For

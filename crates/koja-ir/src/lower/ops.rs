@@ -2,13 +2,11 @@
 //! over AST nodes. Callers in [`super::expr`] handle block and value
 //! bookkeeping after these return.
 //!
-//! Three concerns live here because they form the AST vocabulary to IR
+//! Two concerns live here because they form the AST vocabulary to IR
 //! vocabulary border for non-control-flow constructs:
 //!
 //! - [`lower_literal`], [`lower_bin_op`], and [`lower_unary_op`] map
 //!   surface syntax to IR enums.
-//! - [`const_value_type`] maps each `ConstValue` variant to its
-//!   `IRType`.
 //! - [`bin_op_result_type`] and [`unary_op_result_type`] infer result
 //!   types for eager operators.
 
@@ -181,29 +179,6 @@ pub(super) fn lower_unary_op(op: UnaryOp) -> IRUnaryOp {
     match op {
         UnaryOp::Neg => IRUnaryOp::Neg,
         UnaryOp::Not => IRUnaryOp::Not,
-    }
-}
-
-/// Map a [`ConstValue`] variant to its [`IRType`]. Pure
-/// transliteration: each integer / float width gets its mirroring
-/// type, and `Bool` / `String` / `Unit` round-trip directly.
-pub(super) fn const_value_type(value: &ConstValue) -> IRType {
-    match value {
-        ConstValue::Binary(_) => IRType::Binary,
-        ConstValue::Bits { .. } => IRType::Bits,
-        ConstValue::Bool(_) => IRType::Bool,
-        ConstValue::Float32(_) => IRType::Float32,
-        ConstValue::Float64(_) => IRType::Float64,
-        ConstValue::Int8(_) => IRType::Int8,
-        ConstValue::Int16(_) => IRType::Int16,
-        ConstValue::Int32(_) => IRType::Int32,
-        ConstValue::Int64(_) => IRType::Int64,
-        ConstValue::String(_) => IRType::String,
-        ConstValue::UInt8(_) => IRType::UInt8,
-        ConstValue::UInt16(_) => IRType::UInt16,
-        ConstValue::UInt32(_) => IRType::UInt32,
-        ConstValue::UInt64(_) => IRType::UInt64,
-        ConstValue::Unit => IRType::Unit,
     }
 }
 

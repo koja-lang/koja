@@ -24,6 +24,7 @@ use crate::emit::enums::build_enum_value;
 use crate::emit::ops::emit_is_finite;
 use crate::error::{IceExt, LlvmError};
 use crate::intrinsics::result;
+use crate::intrinsics::util::nth_param;
 
 pub(super) fn emit_numeric_convert<'ctx>(
     ctx: &EmitContext<'ctx>,
@@ -31,14 +32,7 @@ pub(super) fn emit_numeric_convert<'ctx>(
     llvm_function: FunctionValue<'ctx>,
     convert: NumericConvert,
 ) -> Result<(), LlvmError> {
-    let entry = ctx.context.append_basic_block(llvm_function, "entry");
-    ctx.builder.position_at_end(entry);
-    let receiver = llvm_function.get_nth_param(0).ok_or_else(|| {
-        LlvmError::Codegen(format!(
-            "numeric convert intrinsic `{}` missing receiver param",
-            function.symbol,
-        ))
-    })?;
+    let receiver = nth_param(function, llvm_function, 0, "self")?;
 
     let result_symbol = match &function.return_type {
         IRType::Enum(symbol) => symbol.clone(),

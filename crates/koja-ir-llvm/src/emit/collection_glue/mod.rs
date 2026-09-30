@@ -25,11 +25,11 @@
 mod list;
 mod table;
 
-use inkwell::values::{BasicMetadataValueEnum, FunctionValue, IntValue, PointerValue, StructValue};
+use inkwell::values::{BasicMetadataValueEnum, FunctionValue, PointerValue};
 use koja_ir::{FunctionKind, IRFunction, IRType};
 
 use crate::ctx::EmitContext;
-use crate::error::{IceExt, LlvmError};
+use crate::error::LlvmError;
 use crate::types::ir_basic_type;
 
 /// Which per-element ownership op a collection copy body runs after
@@ -118,48 +118,6 @@ pub(super) fn abi_size<'ctx>(ctx: &EmitContext<'ctx>, ty: &IRType) -> Result<u64
         .layouts
         .target_data
         .get_abi_size(&ir_basic_type(ctx, ty)?))
-}
-
-pub(super) fn nth_struct<'ctx>(
-    function: &IRFunction,
-    llvm_function: FunctionValue<'ctx>,
-    index: u32,
-) -> Result<StructValue<'ctx>, LlvmError> {
-    llvm_function
-        .get_nth_param(index)
-        .map(|p| p.into_struct_value())
-        .ok_or_else(|| {
-            LlvmError::Codegen(format!(
-                "collection glue `{}` missing operand param #{index}",
-                function.symbol,
-            ))
-        })
-}
-
-#[track_caller]
-pub(super) fn extract_int<'ctx>(
-    ctx: &EmitContext<'ctx>,
-    value: StructValue<'ctx>,
-    index: u32,
-    name: &str,
-) -> Result<IntValue<'ctx>, LlvmError> {
-    ctx.builder
-        .build_extract_value(value, index, name)
-        .or_ice()
-        .map(|v| v.into_int_value())
-}
-
-#[track_caller]
-pub(super) fn extract_pointer<'ctx>(
-    ctx: &EmitContext<'ctx>,
-    value: StructValue<'ctx>,
-    index: u32,
-    name: &str,
-) -> Result<PointerValue<'ctx>, LlvmError> {
-    ctx.builder
-        .build_extract_value(value, index, name)
-        .or_ice()
-        .map(|v| v.into_pointer_value())
 }
 
 #[track_caller]

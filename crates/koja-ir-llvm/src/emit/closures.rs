@@ -24,9 +24,8 @@ use koja_ir::{IRFunction, IRLocalId, IRSymbol, IRType, ValueId};
 
 use crate::ctx::{ClosureFrame, EmitContext};
 use crate::error::{IceExt, LlvmError};
-use crate::intrinsics::cptr::declare_memcpy_extern;
 use crate::intrinsics::element::deep_copy_in_slot;
-use crate::runtime::{declare_closure_rc_dec_extern, declare_malloc_extern};
+use crate::runtime::{declare_closure_rc_dec_extern, declare_malloc_extern, declare_memcpy_extern};
 use crate::types::{
     CLOSURE_ENV_HEADER_FIELDS, ENV_COPY_FN_FIELD, ENV_DROP_FN_FIELD, ENV_EQ_FN_FIELD, ENV_RC_FIELD,
     ENV_SITE_ID_FIELD, closure_body_signature, closure_fat_ptr_type, env_header_fields,

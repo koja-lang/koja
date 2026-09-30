@@ -17,8 +17,6 @@ pub(super) fn emit_set<'ctx>(
     llvm_function: FunctionValue<'ctx>,
     method: SetMethod,
 ) -> Result<(), LlvmError> {
-    let entry = ctx.context.append_basic_block(llvm_function, "entry");
-    ctx.builder.position_at_end(entry);
     let layout = set_layout(ctx, method, function)?;
 
     match method {
@@ -43,8 +41,6 @@ pub(super) fn emit_insert_consuming<'ctx>(
     function: &IRFunction,
     llvm_function: FunctionValue<'ctx>,
 ) -> Result<(), LlvmError> {
-    let entry = ctx.context.append_basic_block(llvm_function, "entry");
-    ctx.builder.position_at_end(entry);
     let layout = set_layout(ctx, SetMethod::Insert, function)?;
     hashtable::emit_set_insert(ctx, function, llvm_function, &layout, true)
 }

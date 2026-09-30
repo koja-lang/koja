@@ -15,14 +15,25 @@ use koja_ir::{IRFunction, IRSymbol, IRType, ListMethod};
 use crate::ctx::EmitContext;
 use crate::emit::enums::build_enum_value;
 use crate::error::{IceExt, LlvmError};
-use crate::intrinsics::cptr::declare_memcpy_extern;
 use crate::intrinsics::element::{acquire_buffer, acquire_value, element_slot, release_in_slot};
 use crate::intrinsics::option;
-use crate::runtime::{declare_free_extern, declare_malloc_extern};
-use crate::types::{ir_basic_type, list_value_type};
+use crate::intrinsics::util::{
+    build_list_struct, expect_enum_symbol, extract_int, extract_pointer, nth_int, nth_param,
+    nth_struct,
+};
+use crate::runtime::{declare_free_extern, declare_malloc_extern, declare_memcpy_extern};
+use crate::types::ir_basic_type;
 
 /// Initial buffer capacity for `List.new`.
 const INITIAL_CAPACITY: u64 = 8;
+
+/// `count` elements starting at `ptr`, the slice of a list buffer
+/// that a copy reads from.
+#[derive(Clone, Copy)]
+struct BufferRange<'ctx> {
+    count: IntValue<'ctx>,
+    ptr: PointerValue<'ctx>,
+}
 
 pub(super) fn emit_list<'ctx>(
     ctx: &EmitContext<'ctx>,
@@ -30,9 +41,6 @@ pub(super) fn emit_list<'ctx>(
     llvm_function: FunctionValue<'ctx>,
     method: ListMethod,
 ) -> Result<(), LlvmError> {
-    let entry = ctx.context.append_basic_block(llvm_function, "entry");
-    ctx.builder.position_at_end(entry);
-
     match method {
         ListMethod::Append => emit_append(ctx, function, llvm_function),
         ListMethod::Concat => emit_concat(ctx, function, llvm_function),
@@ -101,8 +109,8 @@ fn emit_length<'ctx>(
     function: &IRFunction,
     llvm_function: FunctionValue<'ctx>,
 ) -> Result<(), LlvmError> {
-    let self_val = nth_list(function, llvm_function, 0, "self")?;
-    let len = build_extract_int(ctx, self_val, 1, "len")?;
+    let self_val = nth_struct(function, llvm_function, 0, "self")?;
+    let len = extract_int(ctx, self_val, 1, "len")?;
     ret_basic(ctx, len.into())
 }
 
@@ -112,8 +120,8 @@ fn emit_empty_q<'ctx>(
     llvm_function: FunctionValue<'ctx>,
 ) -> Result<(), LlvmError> {
     let i64_ty = ctx.context.i64_type();
-    let self_val = nth_list(function, llvm_function, 0, "self")?;
-    let len = build_extract_int(ctx, self_val, 1, "len")?;
+    let self_val = nth_struct(function, llvm_function, 0, "self")?;
+    let len = extract_int(ctx, self_val, 1, "len")?;
     let is_empty = ctx
         .builder
         .build_int_compare(IntPredicate::EQ, len, i64_ty.const_zero(), "is_empty")
@@ -128,7 +136,7 @@ fn emit_from_list<'ctx>(
 ) -> Result<(), LlvmError> {
     // `List<T>` is the `ListLiteral<T>` carrier, so this is value-wise an
     // identity that still has to return an independent buffer.
-    let self_val = nth_list(function, llvm_function, 0, "self")?;
+    let self_val = nth_struct(function, llvm_function, 0, "self")?;
     let cloned = clone_list_value(ctx, function, llvm_function, ListMethod::FromList, self_val)?;
     ret_struct(ctx, cloned)
 }
@@ -141,15 +149,17 @@ fn clone_list_value<'ctx>(
     method: ListMethod,
     self_val: StructValue<'ctx>,
 ) -> Result<StructValue<'ctx>, LlvmError> {
-    let buf_ptr = build_extract_pointer(ctx, self_val, 0, "buf_ptr")?;
-    let len = build_extract_int(ctx, self_val, 1, "len")?;
+    let buf_ptr = extract_pointer(ctx, self_val, 0, "buf_ptr")?;
+    let len = extract_int(ctx, self_val, 1, "len")?;
     let elem_size = element_byte_size(ctx, function, method)?;
     let new_buf = copy_buffer(
         ctx,
         llvm_function,
         element(method, function)?,
-        buf_ptr,
-        len,
+        BufferRange {
+            count: len,
+            ptr: buf_ptr,
+        },
         len,
         elem_size,
         "clone_self",
@@ -165,12 +175,12 @@ fn emit_append<'ctx>(
     let i64_ty = ctx.context.i64_type();
     let i8_ty = ctx.context.i8_type();
 
-    let self_val = nth_list(function, llvm_function, 0, "self")?;
+    let self_val = nth_struct(function, llvm_function, 0, "self")?;
     let item_val = nth_param(function, llvm_function, 1, "item")?;
     let item_val = acquire_value(ctx, element(ListMethod::Append, function)?, item_val)?;
 
-    let buf_ptr = build_extract_pointer(ctx, self_val, 0, "buf_ptr")?;
-    let len = build_extract_int(ctx, self_val, 1, "len")?;
+    let buf_ptr = extract_pointer(ctx, self_val, 0, "buf_ptr")?;
+    let len = extract_int(ctx, self_val, 1, "len")?;
     let elem_size = element_byte_size(ctx, function, ListMethod::Append)?;
 
     let new_len = ctx
@@ -185,8 +195,10 @@ fn emit_append<'ctx>(
         ctx,
         llvm_function,
         element(ListMethod::Append, function)?,
-        buf_ptr,
-        len,
+        BufferRange {
+            count: len,
+            ptr: buf_ptr,
+        },
         new_cap,
         elem_size,
         "append",
@@ -222,19 +234,17 @@ pub(super) fn emit_append_consuming<'ctx>(
     function: &IRFunction,
     llvm_function: FunctionValue<'ctx>,
 ) -> Result<(), LlvmError> {
-    let entry = ctx.context.append_basic_block(llvm_function, "entry");
-    ctx.builder.position_at_end(entry);
     let i64_ty = ctx.context.i64_type();
     let in_place_bb = ctx.context.append_basic_block(llvm_function, "in_place");
     let grow_bb = ctx.context.append_basic_block(llvm_function, "grow");
 
-    let self_val = nth_list(function, llvm_function, 0, "self")?;
+    let self_val = nth_struct(function, llvm_function, 0, "self")?;
     let item_val = nth_param(function, llvm_function, 1, "item")?;
     let item_val = acquire_value(ctx, element(ListMethod::Append, function)?, item_val)?;
 
-    let buf_ptr = build_extract_pointer(ctx, self_val, 0, "buf_ptr")?;
-    let len = build_extract_int(ctx, self_val, 1, "len")?;
-    let cap = build_extract_int(ctx, self_val, 2, "cap")?;
+    let buf_ptr = extract_pointer(ctx, self_val, 0, "buf_ptr")?;
+    let len = extract_int(ctx, self_val, 1, "len")?;
+    let cap = extract_int(ctx, self_val, 2, "cap")?;
     let elem_size = element_byte_size(ctx, function, ListMethod::Append)?;
     let new_len = ctx
         .builder
@@ -317,15 +327,15 @@ fn emit_get<'ctx>(
     llvm_function: FunctionValue<'ctx>,
 ) -> Result<(), LlvmError> {
     let i8_ty = ctx.context.i8_type();
-    let option_symbol = expect_enum_symbol(&function.return_type, function, ListMethod::Get)?;
+    let option_symbol = expect_enum_symbol(&function.return_type, function, "List.get")?;
     let ok_bb = ctx.context.append_basic_block(llvm_function, "ok");
     let oob_bb = ctx.context.append_basic_block(llvm_function, "oob");
 
-    let self_val = nth_list(function, llvm_function, 0, "self")?;
+    let self_val = nth_struct(function, llvm_function, 0, "self")?;
     let index = nth_int(function, llvm_function, 1, "index")?;
 
-    let buf_ptr = build_extract_pointer(ctx, self_val, 0, "buf_ptr")?;
-    let len = build_extract_int(ctx, self_val, 1, "len")?;
+    let buf_ptr = extract_pointer(ctx, self_val, 0, "buf_ptr")?;
+    let len = extract_int(ctx, self_val, 1, "len")?;
     let elem_size = element_byte_size(ctx, function, ListMethod::Get)?;
     let elem_ty = ir_basic_type(ctx, element(ListMethod::Get, function)?)?;
 
@@ -385,9 +395,9 @@ fn emit_pop<'ctx>(
     let empty_bb = ctx.context.append_basic_block(llvm_function, "empty");
     let nonempty_bb = ctx.context.append_basic_block(llvm_function, "nonempty");
 
-    let self_val = nth_list(function, llvm_function, 0, "self")?;
-    let buf_ptr = build_extract_pointer(ctx, self_val, 0, "buf_ptr")?;
-    let len = build_extract_int(ctx, self_val, 1, "len")?;
+    let self_val = nth_struct(function, llvm_function, 0, "self")?;
+    let buf_ptr = extract_pointer(ctx, self_val, 0, "buf_ptr")?;
+    let len = extract_int(ctx, self_val, 1, "len")?;
     let elem_size = element_byte_size(ctx, function, ListMethod::Pop)?;
     let elem_ty = ir_basic_type(ctx, element(ListMethod::Pop, function)?)?;
 
@@ -412,8 +422,10 @@ fn emit_pop<'ctx>(
         ctx,
         llvm_function,
         element(ListMethod::Pop, function)?,
-        buf_ptr,
-        len,
+        BufferRange {
+            count: len,
+            ptr: buf_ptr,
+        },
         len,
         elem_size,
         "pop_empty",
@@ -456,8 +468,10 @@ fn emit_pop<'ctx>(
         ctx,
         llvm_function,
         element(ListMethod::Pop, function)?,
-        buf_ptr,
-        new_len,
+        BufferRange {
+            count: new_len,
+            ptr: buf_ptr,
+        },
         new_len,
         elem_size,
         "pop",
@@ -480,12 +494,12 @@ fn emit_replace_at<'ctx>(
     let in_bounds_bb = ctx.context.append_basic_block(llvm_function, "in_bounds");
     let done_bb = ctx.context.append_basic_block(llvm_function, "done");
 
-    let self_val = nth_list(function, llvm_function, 0, "self")?;
+    let self_val = nth_struct(function, llvm_function, 0, "self")?;
     let index = nth_int(function, llvm_function, 1, "index")?;
     let value = nth_param(function, llvm_function, 2, "value")?;
 
-    let buf_ptr = build_extract_pointer(ctx, self_val, 0, "buf_ptr")?;
-    let len = build_extract_int(ctx, self_val, 1, "len")?;
+    let buf_ptr = extract_pointer(ctx, self_val, 0, "buf_ptr")?;
+    let len = extract_int(ctx, self_val, 1, "len")?;
     let elem_size = element_byte_size(ctx, function, ListMethod::ReplaceAt)?;
 
     let in_bounds = ctx
@@ -502,8 +516,10 @@ fn emit_replace_at<'ctx>(
         ctx,
         llvm_function,
         elem_ty,
-        buf_ptr,
-        len,
+        BufferRange {
+            count: len,
+            ptr: buf_ptr,
+        },
         len,
         elem_size,
         "replace",
@@ -543,12 +559,12 @@ fn emit_slice<'ctx>(
     let nonempty_bb = ctx.context.append_basic_block(llvm_function, "nonempty");
     let empty_bb = ctx.context.append_basic_block(llvm_function, "empty");
 
-    let self_val = nth_list(function, llvm_function, 0, "self")?;
+    let self_val = nth_struct(function, llvm_function, 0, "self")?;
     let start = nth_int(function, llvm_function, 1, "start")?;
     let count = nth_int(function, llvm_function, 2, "count")?;
 
-    let buf_ptr = build_extract_pointer(ctx, self_val, 0, "buf_ptr")?;
-    let len = build_extract_int(ctx, self_val, 1, "len")?;
+    let buf_ptr = extract_pointer(ctx, self_val, 0, "buf_ptr")?;
+    let len = extract_int(ctx, self_val, 1, "len")?;
     let elem_size = element_byte_size(ctx, function, ListMethod::Slice)?;
 
     // Clamp start: if start >= len, clamped_start = len.
@@ -644,13 +660,13 @@ fn emit_concat<'ctx>(
 ) -> Result<(), LlvmError> {
     let i8_ty = ctx.context.i8_type();
 
-    let self_val = nth_list(function, llvm_function, 0, "self")?;
-    let other_val = nth_list(function, llvm_function, 1, "other")?;
+    let self_val = nth_struct(function, llvm_function, 0, "self")?;
+    let other_val = nth_struct(function, llvm_function, 1, "other")?;
 
-    let self_ptr = build_extract_pointer(ctx, self_val, 0, "self_ptr")?;
-    let self_len = build_extract_int(ctx, self_val, 1, "self_len")?;
-    let other_ptr = build_extract_pointer(ctx, other_val, 0, "other_ptr")?;
-    let other_len = build_extract_int(ctx, other_val, 1, "other_len")?;
+    let self_ptr = extract_pointer(ctx, self_val, 0, "self_ptr")?;
+    let self_len = extract_int(ctx, self_val, 1, "self_len")?;
+    let other_ptr = extract_pointer(ctx, other_val, 0, "other_ptr")?;
+    let other_len = extract_int(ctx, other_val, 1, "other_len")?;
     let elem_size = element_byte_size(ctx, function, ListMethod::Concat)?;
 
     let total_len = ctx
@@ -666,8 +682,10 @@ fn emit_concat<'ctx>(
         ctx,
         llvm_function,
         elem_ty,
-        self_ptr,
-        self_len,
+        BufferRange {
+            count: self_len,
+            ptr: self_ptr,
+        },
         total_len,
         elem_size,
         "concat",
@@ -712,20 +730,22 @@ fn emit_concat<'ctx>(
 
 // --- helpers --------------------------------------------------------------
 
-/// Allocate a fresh `new_cap`-capacity buffer, copy the first
-/// `copy_count` elements out of `src`, then acquire each copy so the
-/// new buffer owns independent references.
-#[allow(clippy::too_many_arguments)]
+/// Allocate a fresh `new_cap`-capacity buffer, copy the `source`
+/// elements into it, then acquire each copy so the new buffer owns
+/// independent references.
 fn copy_buffer<'ctx>(
     ctx: &EmitContext<'ctx>,
     llvm_function: FunctionValue<'ctx>,
     element: &IRType,
-    src: PointerValue<'ctx>,
-    copy_count: IntValue<'ctx>,
+    source: BufferRange<'ctx>,
     new_cap: IntValue<'ctx>,
     elem_size: IntValue<'ctx>,
     label: &str,
 ) -> Result<PointerValue<'ctx>, LlvmError> {
+    let BufferRange {
+        count: copy_count,
+        ptr: src,
+    } = source;
     let alloc_bytes = ctx
         .builder
         .build_int_mul(new_cap, elem_size, "alloc_bytes")
@@ -752,121 +772,6 @@ fn copy_buffer<'ctx>(
         label,
     )?;
     Ok(new_buf)
-}
-
-fn nth_param<'ctx>(
-    function: &IRFunction,
-    llvm_function: FunctionValue<'ctx>,
-    index: u32,
-    name: &str,
-) -> Result<BasicValueEnum<'ctx>, LlvmError> {
-    llvm_function.get_nth_param(index).ok_or_else(|| {
-        LlvmError::Codegen(format!(
-            "missing param `{name}` (#{index}) on `{}`",
-            function.symbol,
-        ))
-    })
-}
-
-fn nth_int<'ctx>(
-    function: &IRFunction,
-    llvm_function: FunctionValue<'ctx>,
-    index: u32,
-    name: &str,
-) -> Result<IntValue<'ctx>, LlvmError> {
-    match nth_param(function, llvm_function, index, name)? {
-        BasicValueEnum::IntValue(v) => Ok(v),
-        other => Err(LlvmError::Codegen(format!(
-            "expected integer for `{name}` on `{}`, got `{other:?}`",
-            function.symbol,
-        ))),
-    }
-}
-
-fn nth_list<'ctx>(
-    function: &IRFunction,
-    llvm_function: FunctionValue<'ctx>,
-    index: u32,
-    name: &str,
-) -> Result<StructValue<'ctx>, LlvmError> {
-    match nth_param(function, llvm_function, index, name)? {
-        BasicValueEnum::StructValue(v) => Ok(v),
-        other => Err(LlvmError::Codegen(format!(
-            "expected list struct for `{name}` on `{}`, got `{other:?}`",
-            function.symbol,
-        ))),
-    }
-}
-
-fn build_extract_int<'ctx>(
-    ctx: &EmitContext<'ctx>,
-    list: StructValue<'ctx>,
-    index: u32,
-    name: &str,
-) -> Result<IntValue<'ctx>, LlvmError> {
-    let raw = ctx
-        .builder
-        .build_extract_value(list, index, name)
-        .or_ice()?;
-    Ok(raw.into_int_value())
-}
-
-fn build_extract_pointer<'ctx>(
-    ctx: &EmitContext<'ctx>,
-    list: StructValue<'ctx>,
-    index: u32,
-    name: &str,
-) -> Result<PointerValue<'ctx>, LlvmError> {
-    let raw = ctx
-        .builder
-        .build_extract_value(list, index, name)
-        .or_ice()?;
-    Ok(raw.into_pointer_value())
-}
-
-fn build_list_struct<'ctx>(
-    ctx: &EmitContext<'ctx>,
-    buf: PointerValue<'ctx>,
-    len: IntValue<'ctx>,
-    cap: IntValue<'ctx>,
-) -> Result<StructValue<'ctx>, LlvmError> {
-    let list_ty = list_value_type(ctx);
-    let undef = list_ty.get_undef();
-    let with_buf = ctx
-        .builder
-        .build_insert_value(undef, buf, 0, "with_buf")
-        .or_ice()?
-        .into_struct_value();
-    let with_len = ctx
-        .builder
-        .build_insert_value(with_buf, len, 1, "with_len")
-        .or_ice()?
-        .into_struct_value();
-    let with_cap = ctx
-        .builder
-        .build_insert_value(with_len, cap, 2, "with_cap")
-        .or_ice()?
-        .into_struct_value();
-    Ok(with_cap)
-}
-
-/// Extract the IR symbol of an enum type from `ty`, surfacing a
-/// codegen-error (not a panic) if the slot turns out to be anything
-/// else. The intrinsic emitter only calls this when the lowering
-/// pass guarantees an enum-typed slot. The error is a defensive
-/// last line in case lowering / IR-seal invariants slip.
-fn expect_enum_symbol<'ty>(
-    ty: &'ty IRType,
-    function: &IRFunction,
-    method: ListMethod,
-) -> Result<&'ty IRSymbol, LlvmError> {
-    match ty {
-        IRType::Enum(symbol) => Ok(symbol),
-        other => Err(LlvmError::Codegen(format!(
-            "List.{method:?} expected an enum-typed slot, got `{other:?}` (symbol `{}`)",
-            function.symbol,
-        ))),
-    }
 }
 
 /// Resolve the enum symbol stored at `element_index` of a tuple.

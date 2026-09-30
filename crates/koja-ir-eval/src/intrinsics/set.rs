@@ -10,7 +10,7 @@ use koja_ir::SetMethod;
 use crate::error::RuntimeError;
 use crate::interpreter::CallResolver;
 use crate::intrinsics::{IntrinsicCall, helpers};
-use crate::value::{SetEntries, Value};
+use crate::value::Value;
 
 pub(super) fn dispatch<R: CallResolver>(
     method: SetMethod,
@@ -33,31 +33,24 @@ fn new() -> Result<Value, RuntimeError> {
 }
 
 fn length(args: &[Value]) -> Result<Value, RuntimeError> {
-    let set = expect_set(args, 0, "Set.length")?;
+    let set = helpers::arg_set(args, 0, "Set.length")?;
     Ok(Value::Int(set.borrow().len() as i64))
 }
 
 fn empty_q(args: &[Value]) -> Result<Value, RuntimeError> {
-    let set = expect_set(args, 0, "Set.empty?")?;
+    let set = helpers::arg_set(args, 0, "Set.empty?")?;
     Ok(Value::Bool(set.borrow().is_empty()))
 }
 
 fn has_q(args: &[Value]) -> Result<Value, RuntimeError> {
-    let set = expect_set(args, 0, "Set.has?")?;
-    let item = expect_arg(args, 1, "Set.has?")?.clone();
+    let set = helpers::arg_set(args, 0, "Set.has?")?;
+    let item = helpers::arg(args, 1, "Set.has?")?.clone();
     Ok(Value::Bool(set.borrow().iter().any(|v| v == &item)))
 }
 
 fn next<R: CallResolver>(call: IntrinsicCall<'_, R>) -> Result<Value, RuntimeError> {
-    let set = expect_set(call.args, 0, "Set.next")?;
-    let slot = match expect_arg(call.args, 1, "Set.next")? {
-        Value::Int(slot) => *slot,
-        other => {
-            return Err(RuntimeError::TypeMismatch {
-                detail: format!("Set.next arg #1 expected Int, got `{other}`"),
-            });
-        }
-    };
+    let set = helpers::arg_set(call.args, 0, "Set.next")?;
+    let slot = helpers::arg_int(call.args, 1, "Set.next")?;
     let option_symbol = helpers::enum_return_symbol(call.function, "Set.next")?;
     let items = set.borrow();
     let value = usize::try_from(slot)
@@ -68,8 +61,8 @@ fn next<R: CallResolver>(call: IntrinsicCall<'_, R>) -> Result<Value, RuntimeErr
 }
 
 pub(super) fn insert(args: &[Value]) -> Result<Value, RuntimeError> {
-    let set = expect_set(args, 0, "Set.insert")?;
-    let item = expect_arg(args, 1, "Set.insert")?.clone();
+    let set = helpers::arg_set(args, 0, "Set.insert")?;
+    let item = helpers::arg(args, 1, "Set.insert")?.clone();
     let mut items = set.borrow().clone();
     if !items.iter().any(|v| v == &item) {
         items.push(item);
@@ -78,8 +71,8 @@ pub(super) fn insert(args: &[Value]) -> Result<Value, RuntimeError> {
 }
 
 fn remove(args: &[Value]) -> Result<Value, RuntimeError> {
-    let set = expect_set(args, 0, "Set.remove")?;
-    let item = expect_arg(args, 1, "Set.remove")?.clone();
+    let set = helpers::arg_set(args, 0, "Set.remove")?;
+    let item = helpers::arg(args, 1, "Set.remove")?.clone();
     let mut items = set.borrow().clone();
     if let Some(idx) = items.iter().position(|v| v == &item) {
         items.remove(idx);
@@ -91,14 +84,7 @@ fn remove(args: &[Value]) -> Result<Value, RuntimeError> {
 /// path goes here when the resolver synthesizes
 /// `Set.from_list([a, b, c])`. Walks the list once, deduping.
 fn from_list(args: &[Value]) -> Result<Value, RuntimeError> {
-    let list = match expect_arg(args, 0, "Set.from_list")? {
-        Value::List(items) => items.clone(),
-        other => {
-            return Err(RuntimeError::TypeMismatch {
-                detail: format!("Set.from_list expected List, got `{other}`"),
-            });
-        }
-    };
+    let list = helpers::arg_list(args, 0, "Set.from_list")?;
     let mut deduped: Vec<Value> = Vec::new();
     for item in list.borrow().iter() {
         if !deduped.iter().any(|v| v == item) {
@@ -106,19 +92,4 @@ fn from_list(args: &[Value]) -> Result<Value, RuntimeError> {
         }
     }
     Ok(Value::Set(Rc::new(RefCell::new(deduped))))
-}
-
-fn expect_arg<'a>(args: &'a [Value], index: usize, label: &str) -> Result<&'a Value, RuntimeError> {
-    args.get(index).ok_or_else(|| RuntimeError::Unsupported {
-        detail: format!("{label} missing arg #{index} (got {} args)", args.len()),
-    })
-}
-
-fn expect_set(args: &[Value], index: usize, label: &str) -> Result<SetEntries, RuntimeError> {
-    match expect_arg(args, index, label)? {
-        Value::Set(items) => Ok(items.clone()),
-        other => Err(RuntimeError::TypeMismatch {
-            detail: format!("{label} arg #{index} expected Set, got `{other}`"),
-        }),
-    }
 }

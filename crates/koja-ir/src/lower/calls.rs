@@ -37,13 +37,11 @@ pub(super) fn lower_call(
     callee: &Expr,
     args: &[Arg],
     type_args: &[ResolvedType],
-    ctx: &mut FnLowerCtx,
+    ctx: &mut FnLowerCtx<'_>,
     block: IRBlockId,
-    registry: &GlobalRegistry,
-    output: &mut LowerOutput,
 ) -> Result<(ValueId, IRBlockId), ()> {
     if matches!(callee.kind, ExprKind::FieldAccess { .. }) {
-        return lower_closure_expr_call(callee, args, ctx, block, registry, output);
+        return lower_closure_expr_call(callee, args, ctx, block);
     }
     let ExprKind::Ident { resolution, name } = &callee.kind else {
         panic!(
@@ -53,19 +51,12 @@ pub(super) fn lower_call(
         );
     };
     if let Resolution::Local(local_id) = resolution {
-        return lower_local_closure_call(
-            *local_id,
-            &callee.resolution,
-            args,
-            ctx,
-            block,
-            registry,
-            output,
-        );
+        return lower_local_closure_call(*local_id, &callee.resolution, args, ctx, block);
     }
     let Resolution::Global(id) = resolution else {
         panic!("IR lower: callee `{name}` has Unresolved resolution after typecheck seal",);
     };
+    let registry = ctx.registry;
     let entry = registry.get(*id).unwrap_or_else(|| {
         panic!(
             "IR lower: callee id {id} not present in the registry \
@@ -76,8 +67,11 @@ pub(super) fn lower_call(
     let definition = entry.expect_function_definition();
     let template_symbol = source_function_symbol(&entry.identifier, definition.arity);
     let (callee_symbol, return_ty) = if type_args.is_empty() {
-        let return_ty =
-            resolved_type_to_ir_type(&signature.return_type, registry, &mut output.instantiations);
+        let return_ty = resolved_type_to_ir_type(
+            &signature.return_type,
+            registry,
+            &mut ctx.output.instantiations,
+        );
         if signature.impl_args.is_empty() {
             (template_symbol, return_ty)
         } else {
@@ -91,7 +85,7 @@ pub(super) fn lower_call(
                 signature.params.len(),
                 &signature.impl_args,
                 registry,
-                output,
+                ctx.output,
             );
             (mangled, return_ty)
         }
@@ -99,10 +93,10 @@ pub(super) fn lower_call(
         let callee_id = *id;
         let arg_ir_types: Vec<IRType> = type_args
             .iter()
-            .map(|ty| resolved_type_to_ir_type(ty, registry, &mut output.instantiations))
+            .map(|ty| resolved_type_to_ir_type(ty, registry, &mut ctx.output.instantiations))
             .collect();
         let mangled = mangled_function_name(&template_symbol, &arg_ir_types);
-        output.instantiations.push(Instantiation {
+        ctx.output.instantiations.push(Instantiation {
             template: callee_id,
             args: type_args.to_vec(),
             method_args: Vec::new(),
@@ -110,8 +104,11 @@ pub(super) fn lower_call(
         });
         let substituted_return =
             substitute_resolved_type(&signature.return_type, type_args, callee_id);
-        let return_ty =
-            resolved_type_to_ir_type(&substituted_return, registry, &mut output.instantiations);
+        let return_ty = resolved_type_to_ir_type(
+            &substituted_return,
+            registry,
+            &mut ctx.output.instantiations,
+        );
         (mangled, return_ty)
     };
     let site = CallSite {
@@ -121,7 +118,7 @@ pub(super) fn lower_call(
         prepend: None,
         deep_copy_first_arg: false,
     };
-    emit_call(site, ctx, block, registry, output)
+    emit_call(site, ctx, block)
 }
 
 /// Mangle a bare static call into a sibling inside a concrete-pinned
@@ -164,10 +161,8 @@ fn lower_local_closure_call(
     local_id: LocalId,
     callee_ty: &ResolvedType,
     args: &[Arg],
-    ctx: &mut FnLowerCtx,
+    ctx: &mut FnLowerCtx<'_>,
     block: IRBlockId,
-    registry: &GlobalRegistry,
-    output: &mut LowerOutput,
 ) -> Result<(ValueId, IRBlockId), ()> {
     let ResolvedType::Anonymous(AnonymousKind::Function { ret, .. }) = callee_ty else {
         panic!(
@@ -175,9 +170,10 @@ fn lower_local_closure_call(
              ({callee_ty:?}), typecheck seal violation",
         );
     };
-    let callee_ir_type = resolved_type_to_ir_type(callee_ty, registry, &mut output.instantiations);
+    let callee_ir_type =
+        resolved_type_to_ir_type(callee_ty, ctx.registry, &mut ctx.output.instantiations);
     let param_types = closure_param_types(&callee_ir_type);
-    let return_ty = resolved_type_to_ir_type(ret, registry, &mut output.instantiations);
+    let return_ty = resolved_type_to_ir_type(ret, ctx.registry, &mut ctx.output.instantiations);
 
     let ir_local = IRLocalId::from_local_id(local_id);
     let callee_value = if let Some(capture_index) = ctx.closures().capture_index(local_id) {
@@ -207,7 +203,7 @@ fn lower_local_closure_call(
     let mut lowered_args = Vec::with_capacity(args.len());
     let mut current = block;
     for arg in args {
-        let (value, next) = lower_expr(&arg.value, ctx, current, registry, output)?;
+        let (value, next) = lower_expr(&arg.value, ctx, current)?;
         lowered_args.push(value);
         current = next;
     }
@@ -246,10 +242,8 @@ fn closure_param_types(callee_ir_type: &IRType) -> Vec<IRType> {
 fn lower_closure_expr_call(
     callee: &Expr,
     args: &[Arg],
-    ctx: &mut FnLowerCtx,
+    ctx: &mut FnLowerCtx<'_>,
     block: IRBlockId,
-    registry: &GlobalRegistry,
-    output: &mut LowerOutput,
 ) -> Result<(ValueId, IRBlockId), ()> {
     let ResolvedType::Anonymous(AnonymousKind::Function { ret, .. }) = &callee.resolution else {
         panic!(
@@ -258,15 +252,18 @@ fn lower_closure_expr_call(
             callee.resolution,
         );
     };
-    let callee_ir_type =
-        resolved_type_to_ir_type(&callee.resolution, registry, &mut output.instantiations);
+    let callee_ir_type = resolved_type_to_ir_type(
+        &callee.resolution,
+        ctx.registry,
+        &mut ctx.output.instantiations,
+    );
     let param_types = closure_param_types(&callee_ir_type);
-    let return_ty = resolved_type_to_ir_type(ret, registry, &mut output.instantiations);
+    let return_ty = resolved_type_to_ir_type(ret, ctx.registry, &mut ctx.output.instantiations);
 
-    let (callee_value, mut current) = lower_expr(callee, ctx, block, registry, output)?;
+    let (callee_value, mut current) = lower_expr(callee, ctx, block)?;
     let mut lowered_args = Vec::with_capacity(args.len());
     for arg in args {
-        let (value, next) = lower_expr(&arg.value, ctx, current, registry, output)?;
+        let (value, next) = lower_expr(&arg.value, ctx, current)?;
         lowered_args.push(value);
         current = next;
     }
@@ -289,19 +286,6 @@ fn lower_closure_expr_call(
     release_call_temps(ctx, current, &lowered_args, None);
     drop_discarded_temp(ctx, current, callee_value);
     Ok((dest, current))
-}
-
-/// Bundle of "what's being called" for [`lower_method_call`]: the
-/// method name, positional args, and any method-level type args
-/// (`recv.m::<U>(arg)`). Splitting these from the lowering-machinery
-/// args (frame ctx, block, registry, output) keeps the entry point
-/// at clippy's seven-arg threshold without dropping any of the
-/// values.
-pub(super) struct MethodCallShape<'a> {
-    pub(super) method: &'a Name,
-    pub(super) args: &'a [Arg],
-    pub(super) method_type_args: &'a [ResolvedType],
-    pub(super) target: Resolution,
 }
 
 pub(super) fn synthesized_method_target(
@@ -336,21 +320,20 @@ pub(super) fn synthesized_method_target(
 /// (`ExprKind::MethodCall.type_args`) drive a fresh `Instantiation`
 /// pinned to the method template so [`crate::generics::instantiate`]
 /// produces a specialized body.
+///
+/// `method_type_args` are the method-level type args of a
+/// `recv.m::<U>(arg)` call.
 pub(super) fn lower_method_call(
     receiver: &Expr,
-    shape: MethodCallShape<'_>,
-    ctx: &mut FnLowerCtx,
+    method: &Name,
+    args: &[Arg],
+    method_type_args: &[ResolvedType],
+    target: Resolution,
+    ctx: &mut FnLowerCtx<'_>,
     block: IRBlockId,
-    registry: &GlobalRegistry,
-    output: &mut LowerOutput,
 ) -> Result<(ValueId, IRBlockId), ()> {
-    let MethodCallShape {
-        method,
-        args,
-        method_type_args,
-        target,
-    } = shape;
     let method = method.as_str();
+    let registry = ctx.registry;
     // Structural receivers have no nominal method to call, so their
     // universal-protocol functions expand inline. Every route lands
     // here after monomorphization: `f == g`, a derived body comparing
@@ -360,33 +343,23 @@ pub(super) fn lower_method_call(
     let structural_receiver = peel_alias(&receiver.resolution, registry);
     match &structural_receiver {
         ResolvedType::Anonymous(AnonymousKind::Tuple { .. }) => {
-            return lower_tuple_conformance_call(
-                receiver, method, args, ctx, block, registry, output,
-            );
+            return lower_tuple_conformance_call(receiver, method, args, ctx, block);
         }
         ResolvedType::Union(_) if method == "equals?" => {
-            return lower_equality_call(receiver, args, ctx, block, registry, output);
+            return lower_equality_call(receiver, args, ctx, block);
         }
         ResolvedType::Union(_) => {
-            return lower_union_conformance_call(
-                receiver, method, args, ctx, block, registry, output,
-            );
+            return lower_union_conformance_call(receiver, method, args, ctx, block);
         }
         ResolvedType::Anonymous(AnonymousKind::Function { .. }) if method == "equals?" => {
-            return lower_equality_call(receiver, args, ctx, block, registry, output);
+            return lower_equality_call(receiver, args, ctx, block);
         }
         // Function values have no `format` of their own and render as
         // `"..."`, matching what `derive_debug` emits for function fields.
         ResolvedType::Anonymous(AnonymousKind::Function { .. }) => {
-            return lower_debug_family(
-                method,
-                receiver,
-                ctx,
-                block,
-                registry,
-                output,
-                |_, ctx, block, _| (emit_string_const("...".to_string(), ctx, block), block),
-            );
+            return lower_debug_family(method, receiver, ctx, block, |_, ctx, block| {
+                (emit_string_const("...".to_string(), ctx, block), block)
+            });
         }
         _ => {}
     }
@@ -394,7 +367,7 @@ pub(super) fn lower_method_call(
     let (prepend, current_block) = match dispatch {
         Dispatch::Static => (None, block),
         Dispatch::Instance => {
-            let (recv_id, next_block) = lower_expr(receiver, ctx, block, registry, output)?;
+            let (recv_id, next_block) = lower_expr(receiver, ctx, block)?;
             (Some(recv_id), next_block)
         }
     };
@@ -430,8 +403,11 @@ pub(super) fn lower_method_call(
 
     let (callee_symbol, return_ty) = if receiver_type_args.is_empty() && method_type_args.is_empty()
     {
-        let return_ty =
-            resolved_type_to_ir_type(&signature.return_type, registry, &mut output.instantiations);
+        let return_ty = resolved_type_to_ir_type(
+            &signature.return_type,
+            registry,
+            &mut ctx.output.instantiations,
+        );
         (
             mangled_method_name(
                 &IRSymbol::from_identifier(&struct_entry.identifier),
@@ -445,11 +421,11 @@ pub(super) fn lower_method_call(
     } else {
         let receiver_arg_ir: Vec<IRType> = receiver_type_args
             .iter()
-            .map(|ty| resolved_type_to_ir_type(ty, registry, &mut output.instantiations))
+            .map(|ty| resolved_type_to_ir_type(ty, registry, &mut ctx.output.instantiations))
             .collect();
         let method_arg_ir: Vec<IRType> = method_type_args
             .iter()
-            .map(|ty| resolved_type_to_ir_type(ty, registry, &mut output.instantiations))
+            .map(|ty| resolved_type_to_ir_type(ty, registry, &mut ctx.output.instantiations))
             .collect();
         let receiver_template = IRSymbol::from_identifier(&struct_entry.identifier);
         let callee = mangled_method_name(
@@ -467,7 +443,7 @@ pub(super) fn lower_method_call(
         // have no matching `IRFunction` and `seal_program_calls`
         // would panic.
         if !receiver_type_args.is_empty() || !method_type_args.is_empty() {
-            output.instantiations.push(Instantiation {
+            ctx.output.instantiations.push(Instantiation {
                 template: method_id,
                 args: receiver_type_args.clone(),
                 method_args: method_type_args.to_vec(),
@@ -478,7 +454,7 @@ pub(super) fn lower_method_call(
             substitute_resolved_type(&signature.return_type, &receiver_type_args, struct_id);
         let with_method = substitute_resolved_type(&with_receiver, method_type_args, method_id);
         let return_ty =
-            resolved_type_to_ir_type(&with_method, registry, &mut output.instantiations);
+            resolved_type_to_ir_type(&with_method, registry, &mut ctx.output.instantiations);
         (callee, return_ty)
     };
     let site = CallSite {
@@ -488,7 +464,7 @@ pub(super) fn lower_method_call(
         prepend,
         deep_copy_first_arg: is_message_send(&struct_entry.identifier, method),
     };
-    emit_call(site, ctx, current_block, registry, output)
+    emit_call(site, ctx, current_block)
 }
 
 /// Whether a `(receiver, method)` pair is one of the message / reply
@@ -735,10 +711,8 @@ struct CallSite<'a> {
 /// exit.
 fn emit_call(
     site: CallSite<'_>,
-    ctx: &mut FnLowerCtx,
+    ctx: &mut FnLowerCtx<'_>,
     block: IRBlockId,
-    registry: &GlobalRegistry,
-    output: &mut LowerOutput,
 ) -> Result<(ValueId, IRBlockId), ()> {
     let CallSite {
         callee_symbol,
@@ -754,7 +728,7 @@ fn emit_call(
     let mut current = block;
     let mut transferred: Option<ValueId> = None;
     for (index, arg) in args.iter().enumerate() {
-        let (mut value, next) = lower_expr(&arg.value, ctx, current, registry, output)?;
+        let (mut value, next) = lower_expr(&arg.value, ctx, current)?;
         current = next;
         if deep_copy_first_arg && index == 0 {
             let ty = ctx.type_of(value);
@@ -794,7 +768,7 @@ fn emit_call(
 /// the runtime now owns, so it is skipped. Borrowed values (slot/field
 /// reads) and non-heap values are no-ops in [`drop_discarded_temp`].
 fn release_call_temps(
-    ctx: &mut FnLowerCtx,
+    ctx: &mut FnLowerCtx<'_>,
     block: IRBlockId,
     values: &[ValueId],
     transferred: Option<ValueId>,
@@ -839,19 +813,17 @@ impl DebugMethod {
 pub(super) fn lower_debug_family(
     method: &str,
     receiver: &Expr,
-    ctx: &mut FnLowerCtx,
+    ctx: &mut FnLowerCtx<'_>,
     block: IRBlockId,
-    registry: &GlobalRegistry,
-    output: &mut LowerOutput,
-    format: impl FnOnce(ValueId, &mut FnLowerCtx, IRBlockId, &mut LowerOutput) -> (ValueId, IRBlockId),
+    format: impl FnOnce(ValueId, &mut FnLowerCtx<'_>, IRBlockId) -> (ValueId, IRBlockId),
 ) -> Result<(ValueId, IRBlockId), ()> {
     let method = DebugMethod::from_name(method).unwrap_or_else(|| {
         panic!(
             "IR lower: `{method}` is not a Debug function (typecheck resolve invariant violation)"
         )
     });
-    let (receiver_value, current) = lower_expr(receiver, ctx, block, registry, output)?;
-    let (formatted, mut current) = format(receiver_value, ctx, current, output);
+    let (receiver_value, current) = lower_expr(receiver, ctx, block)?;
+    let (formatted, mut current) = format(receiver_value, ctx, current);
     match method {
         DebugMethod::Format => {
             drop_discarded_temp(ctx, current, receiver_value);
@@ -884,7 +856,11 @@ pub(super) fn lower_debug_family(
 /// the `IO.puts` function in `koja/lib/global/src/io.koja`, so the
 /// regular function registration in `lower_function_inner` resolves
 /// it at link time.
-pub(super) fn emit_io_puts(message: ValueId, ctx: &mut FnLowerCtx, block: IRBlockId) -> IRBlockId {
+pub(super) fn emit_io_puts(
+    message: ValueId,
+    ctx: &mut FnLowerCtx<'_>,
+    block: IRBlockId,
+) -> IRBlockId {
     let callee = source_function_symbol(
         &Identifier::new("Global", vec!["IO".to_string(), "puts".to_string()]),
         1,

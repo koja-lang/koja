@@ -796,6 +796,7 @@ version = "0.19.1"
 dependencies = [
  "inkwell",
  "koja-ast",
+ "koja-graph",
  "koja-ir",
  "koja-parser",
  "koja-stdlib",

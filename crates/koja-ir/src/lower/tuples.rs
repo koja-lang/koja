@@ -26,7 +26,7 @@ use koja_typecheck::{GlobalRegistry, peel_alias};
 
 use super::body::store_owned_into_local;
 use super::calls::{conformance_method_symbol, lower_debug_family};
-use super::ctx::{FlowResult, FnLowerCtx, LowerOutput};
+use super::ctx::{FlowResult, FnLowerCtx};
 use super::equality::lower_equality_call;
 use super::expr::{emit_string_const, lower_expr};
 use super::ownership::{drop_discarded_temp, materialize_owned};
@@ -38,16 +38,14 @@ use crate::types::{ConcatKind, IRType, ValueId};
 
 pub(super) fn lower_tuple_literal(
     elements: &[Expr],
-    ctx: &mut FnLowerCtx,
+    ctx: &mut FnLowerCtx<'_>,
     block: IRBlockId,
-    registry: &GlobalRegistry,
-    output: &mut LowerOutput,
 ) -> Result<(ValueId, IRBlockId), ()> {
     let mut current = block;
     let mut values = Vec::with_capacity(elements.len());
     let mut types = Vec::with_capacity(elements.len());
     for element in elements {
-        let (value, next) = lower_expr(element, ctx, current, registry, output)?;
+        let (value, next) = lower_expr(element, ctx, current)?;
         current = next;
         // Value semantics: an element store acquires an independent
         // value, same as a struct field init.
@@ -78,12 +76,10 @@ pub(super) fn lower_tuple_literal(
 pub(super) fn lower_destructure(
     pattern: &Pattern,
     value: &Expr,
-    ctx: &mut FnLowerCtx,
+    ctx: &mut FnLowerCtx<'_>,
     block: IRBlockId,
-    registry: &GlobalRegistry,
-    output: &mut LowerOutput,
 ) -> Result<FlowResult, ()> {
-    let (tuple_value, current) = lower_expr(value, ctx, block, registry, output)?;
+    let (tuple_value, current) = lower_expr(value, ctx, block)?;
     let tuple_ty = ctx.type_of(tuple_value);
     bind_elements(pattern, tuple_value, &tuple_ty, ctx, current);
     if ctx.is_owned(tuple_value) && tuple_ty.is_heap_managed() {
@@ -108,7 +104,7 @@ fn bind_elements(
     pattern: &Pattern,
     base: ValueId,
     base_ty: &IRType,
-    ctx: &mut FnLowerCtx,
+    ctx: &mut FnLowerCtx<'_>,
     block: IRBlockId,
 ) {
     let Pattern::Tuple { elements, .. } = pattern else {
@@ -169,26 +165,16 @@ pub(super) fn lower_tuple_conformance_call(
     receiver: &Expr,
     method: &str,
     args: &[Arg],
-    ctx: &mut FnLowerCtx,
+    ctx: &mut FnLowerCtx<'_>,
     block: IRBlockId,
-    registry: &GlobalRegistry,
-    output: &mut LowerOutput,
 ) -> Result<(ValueId, IRBlockId), ()> {
     if method == "equals?" {
-        return lower_equality_call(receiver, args, ctx, block, registry, output);
+        return lower_equality_call(receiver, args, ctx, block);
     }
-    let elements = tuple_element_resolutions(&receiver.resolution, registry);
-    lower_debug_family(
-        method,
-        receiver,
-        ctx,
-        block,
-        registry,
-        output,
-        |value, ctx, block, output| {
-            emit_tuple_format(value, &elements, ctx, block, registry, output)
-        },
-    )
+    let elements = tuple_element_resolutions(&receiver.resolution, ctx.registry);
+    lower_debug_family(method, receiver, ctx, block, |value, ctx, block| {
+        emit_tuple_format(value, &elements, ctx, block)
+    })
 }
 
 fn tuple_element_resolutions(
@@ -211,10 +197,8 @@ fn tuple_element_resolutions(
 pub(super) fn emit_tuple_format(
     value: ValueId,
     elements: &[ResolvedType],
-    ctx: &mut FnLowerCtx,
+    ctx: &mut FnLowerCtx<'_>,
     block: IRBlockId,
-    registry: &GlobalRegistry,
-    output: &mut LowerOutput,
 ) -> (ValueId, IRBlockId) {
     let mut current = block;
     let mut acc = emit_string_const("(".to_string(), ctx, current);
@@ -223,8 +207,7 @@ pub(super) fn emit_tuple_format(
             let separator = emit_string_const(", ".to_string(), ctx, current);
             acc = emit_concat(acc, separator, ctx, current);
         }
-        let (piece, after) =
-            emit_element_format(value, index, element_ty, ctx, current, registry, output);
+        let (piece, after) = emit_element_format(value, index, element_ty, ctx, current);
         current = after;
         acc = emit_concat(acc, piece, ctx, current);
     }
@@ -238,30 +221,20 @@ fn emit_element_format(
     base: ValueId,
     index: usize,
     element_ty: &ResolvedType,
-    ctx: &mut FnLowerCtx,
+    ctx: &mut FnLowerCtx<'_>,
     block: IRBlockId,
-    registry: &GlobalRegistry,
-    output: &mut LowerOutput,
 ) -> (ValueId, IRBlockId) {
-    let structural_element = peel_alias(element_ty, registry);
+    let structural_element = peel_alias(element_ty, ctx.registry);
     if matches!(
         &structural_element,
         ResolvedType::Anonymous(AnonymousKind::Function { .. })
     ) {
         return (emit_string_const("...".to_string(), ctx, block), block);
     }
-    let extracted = emit_tuple_get(
-        base,
-        index,
-        &structural_element,
-        ctx,
-        block,
-        registry,
-        output,
-    );
+    let extracted = emit_tuple_get(base, index, &structural_element, ctx, block);
     match &structural_element {
         ResolvedType::Anonymous(AnonymousKind::Tuple { elements }) => {
-            emit_tuple_format(extracted, elements, ctx, block, registry, output)
+            emit_tuple_format(extracted, elements, ctx, block)
         }
         ResolvedType::Union(members) => {
             let union_ty = ctx.type_of(extracted);
@@ -270,11 +243,16 @@ fn emit_element_format(
                 ty: &union_ty,
                 value: extracted,
             };
-            emit_union_format(subject, ctx, block, registry, output)
+            emit_union_format(subject, ctx, block)
         }
         _ => {
-            let (callee, return_ty) =
-                conformance_method_symbol(&structural_element, "format", 1, registry, output);
+            let (callee, return_ty) = conformance_method_symbol(
+                &structural_element,
+                "format",
+                1,
+                ctx.registry,
+                ctx.output,
+            );
             let dest = ctx.fresh_value(return_ty);
             ctx.cfg.append(
                 block,
@@ -292,7 +270,7 @@ fn emit_element_format(
 
 /// `Concat` copies both operands, so owned intermediates are dead
 /// after each step and freed immediately.
-fn emit_concat(lhs: ValueId, rhs: ValueId, ctx: &mut FnLowerCtx, block: IRBlockId) -> ValueId {
+fn emit_concat(lhs: ValueId, rhs: ValueId, ctx: &mut FnLowerCtx<'_>, block: IRBlockId) -> ValueId {
     let dest = ctx.fresh_value(IRType::String);
     ctx.cfg.append(
         block,
@@ -316,12 +294,11 @@ pub(super) fn emit_tuple_get(
     base: ValueId,
     index: usize,
     element_ty: &ResolvedType,
-    ctx: &mut FnLowerCtx,
+    ctx: &mut FnLowerCtx<'_>,
     block: IRBlockId,
-    registry: &GlobalRegistry,
-    output: &mut LowerOutput,
 ) -> ValueId {
-    let element_ir = resolved_type_to_ir_type(element_ty, registry, &mut output.instantiations);
+    let element_ir =
+        resolved_type_to_ir_type(element_ty, ctx.registry, &mut ctx.output.instantiations);
     let extracted = ctx.fresh_value(element_ir.clone());
     ctx.cfg.append(
         block,

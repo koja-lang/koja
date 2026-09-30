@@ -37,7 +37,7 @@ use super::ctx::FnLowerCtx;
 /// The emitted `Clone` lands in `block`, before any sibling drop of
 /// the source, so the copy is always taken while the source is live.
 pub(super) fn materialize_owned(
-    ctx: &mut FnLowerCtx,
+    ctx: &mut FnLowerCtx<'_>,
     block: IRBlockId,
     value: ValueId,
     ty: &IRType,
@@ -71,7 +71,7 @@ pub(super) fn materialize_owned(
 /// to the transport and never releases it (the runtime reclaims it via
 /// the envelope drop glue). The source keeps its normal lifecycle.
 pub(super) fn materialize_boundary_copy(
-    ctx: &mut FnLowerCtx,
+    ctx: &mut FnLowerCtx<'_>,
     block: IRBlockId,
     value: ValueId,
     ty: &IRType,
@@ -103,7 +103,7 @@ pub(super) fn materialize_boundary_copy(
 /// fn-param promotion site (named fns, closures, fn-as-value wrappers)
 /// so the acquire-on-acquisition rule holds uniformly.
 pub(super) fn promote_param(
-    ctx: &mut FnLowerCtx,
+    ctx: &mut FnLowerCtx<'_>,
     entry: IRBlockId,
     local: IRLocalId,
     ty: IRType,
@@ -135,7 +135,7 @@ pub(super) fn promote_param(
 /// Release every heap-managed local slot at a control-flow exit
 /// `block` (function return / fall-through). Each slot owns its value
 /// under value semantics, so the `Drop` is unconditional.
-pub(super) fn emit_slot_drops(ctx: &mut FnLowerCtx, block: IRBlockId) {
+pub(super) fn emit_slot_drops(ctx: &mut FnLowerCtx<'_>, block: IRBlockId) {
     for (local, ty) in ctx.heap_managed_slots() {
         ctx.cfg
             .append(block, IRInstruction::DropLocal { local, ty });
@@ -146,7 +146,7 @@ pub(super) fn emit_slot_drops(ctx: &mut FnLowerCtx, block: IRBlockId) {
 /// statement is about to discard (e.g. a bare `foo()` whose fresh
 /// `String` or `List` result is unused). Borrowed or non-heap-managed
 /// values are left untouched.
-pub(super) fn drop_discarded_temp(ctx: &mut FnLowerCtx, block: IRBlockId, value: ValueId) {
+pub(super) fn drop_discarded_temp(ctx: &mut FnLowerCtx<'_>, block: IRBlockId, value: ValueId) {
     if !ctx.is_owned(value) {
         return;
     }

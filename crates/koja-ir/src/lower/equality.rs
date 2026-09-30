@@ -11,16 +11,17 @@
 
 use koja_ast::ast::{Arg, Expr};
 use koja_ast::identifier::{AnonymousKind, ResolvedType};
-use koja_typecheck::{GlobalRegistry, peel_alias};
+use koja_typecheck::peel_alias;
 
+use super::arms::emit_int8_eq;
 use super::calls::conformance_method_symbol;
-use super::ctx::{FnLowerCtx, LowerOutput};
+use super::ctx::FnLowerCtx;
 use super::expr::lower_expr;
 use super::ownership::drop_discarded_temp;
 use super::package::resolved_type_to_ir_type;
 use super::tuples::emit_tuple_get;
 use super::unions::{
-    UnionSubject, UnionSwitch, emit_int8_eq, emit_union_payload, emit_union_switch, emit_union_tag,
+    UnionSubject, UnionSwitch, emit_union_payload, emit_union_switch, emit_union_tag,
 };
 use crate::function::{BranchTarget, IRBlockId, IRInstruction, IRTerminator};
 use crate::types::{ConstValue, IRType, ValueId};
@@ -30,10 +31,8 @@ use crate::types::{ConstValue, IRType, ValueId};
 pub(super) fn lower_equality_call(
     receiver: &Expr,
     args: &[Arg],
-    ctx: &mut FnLowerCtx,
+    ctx: &mut FnLowerCtx<'_>,
     block: IRBlockId,
-    registry: &GlobalRegistry,
-    output: &mut LowerOutput,
 ) -> Result<(ValueId, IRBlockId), ()> {
     let [other] = args else {
         panic!(
@@ -41,17 +40,9 @@ pub(super) fn lower_equality_call(
             args.len()
         );
     };
-    let (lhs, current) = lower_expr(receiver, ctx, block, registry, output)?;
-    let (rhs, current) = lower_expr(&other.value, ctx, current, registry, output)?;
-    let (result, after) = lower_value_equality(
-        lhs,
-        rhs,
-        &receiver.resolution,
-        ctx,
-        current,
-        registry,
-        output,
-    );
+    let (lhs, current) = lower_expr(receiver, ctx, block)?;
+    let (rhs, current) = lower_expr(&other.value, ctx, current)?;
+    let (result, after) = lower_value_equality(lhs, rhs, &receiver.resolution, ctx, current);
     drop_discarded_temp(ctx, after, lhs);
     drop_discarded_temp(ctx, after, rhs);
     Ok((result, after))
@@ -66,18 +57,17 @@ pub(super) fn lower_value_equality(
     lhs: ValueId,
     rhs: ValueId,
     ty: &ResolvedType,
-    ctx: &mut FnLowerCtx,
+    ctx: &mut FnLowerCtx<'_>,
     block: IRBlockId,
-    registry: &GlobalRegistry,
-    output: &mut LowerOutput,
 ) -> (ValueId, IRBlockId) {
-    let structural = peel_alias(ty, registry);
+    let structural = peel_alias(ty, ctx.registry);
     match &structural {
         ResolvedType::Anonymous(AnonymousKind::Tuple { elements }) => {
-            emit_tuple_eq(lhs, rhs, elements, ctx, block, registry, output)
+            emit_tuple_eq(lhs, rhs, elements, ctx, block)
         }
         ResolvedType::Anonymous(AnonymousKind::Function { .. }) => {
-            let ty = resolved_type_to_ir_type(&structural, registry, &mut output.instantiations);
+            let ty =
+                resolved_type_to_ir_type(&structural, ctx.registry, &mut ctx.output.instantiations);
             let dest = ctx.fresh_value(IRType::Bool);
             ctx.cfg
                 .append(block, IRInstruction::ClosureEquals { dest, lhs, rhs, ty });
@@ -85,19 +75,12 @@ pub(super) fn lower_value_equality(
         }
         ResolvedType::Union(members) => {
             let union_ty =
-                resolved_type_to_ir_type(&structural, registry, &mut output.instantiations);
-            emit_union_eq(
-                (lhs, rhs),
-                (members, &union_ty),
-                ctx,
-                block,
-                registry,
-                output,
-            )
+                resolved_type_to_ir_type(&structural, ctx.registry, &mut ctx.output.instantiations);
+            emit_union_eq((lhs, rhs), (members, &union_ty), ctx, block)
         }
         _ => {
             let (callee, return_ty) =
-                conformance_method_symbol(&structural, "equals?", 2, registry, output);
+                conformance_method_symbol(&structural, "equals?", 2, ctx.registry, ctx.output);
             let dest = ctx.fresh_value(return_ty);
             ctx.cfg.append(
                 block,
@@ -119,10 +102,8 @@ fn emit_tuple_eq(
     lhs: ValueId,
     rhs: ValueId,
     elements: &[ResolvedType],
-    ctx: &mut FnLowerCtx,
+    ctx: &mut FnLowerCtx<'_>,
     block: IRBlockId,
-    registry: &GlobalRegistry,
-    output: &mut LowerOutput,
 ) -> (ValueId, IRBlockId) {
     let Some(last) = elements.len().checked_sub(1) else {
         return (emit_bool_const(true, ctx, block), block);
@@ -130,18 +111,11 @@ fn emit_tuple_eq(
     let conjunction = Conjunction::new("tuple_eq", ctx);
     let mut current = block;
     for (index, element_ty) in elements.iter().enumerate() {
-        let structural = peel_alias(element_ty, registry);
-        let lhs_element = emit_tuple_get(lhs, index, &structural, ctx, current, registry, output);
-        let rhs_element = emit_tuple_get(rhs, index, &structural, ctx, current, registry, output);
-        let (cond, after) = lower_value_equality(
-            lhs_element,
-            rhs_element,
-            &structural,
-            ctx,
-            current,
-            registry,
-            output,
-        );
+        let structural = peel_alias(element_ty, ctx.registry);
+        let lhs_element = emit_tuple_get(lhs, index, &structural, ctx, current);
+        let rhs_element = emit_tuple_get(rhs, index, &structural, ctx, current);
+        let (cond, after) =
+            lower_value_equality(lhs_element, rhs_element, &structural, ctx, current);
         if index == last {
             return conjunction.finish(cond, ctx, after);
         }
@@ -156,10 +130,8 @@ fn emit_tuple_eq(
 fn emit_union_eq(
     (lhs, rhs): (ValueId, ValueId),
     (members, union_ty): (&[ResolvedType], &IRType),
-    ctx: &mut FnLowerCtx,
+    ctx: &mut FnLowerCtx<'_>,
     block: IRBlockId,
-    registry: &GlobalRegistry,
-    output: &mut LowerOutput,
 ) -> (ValueId, IRBlockId) {
     let lhs_tag = emit_union_tag(lhs, union_ty, ctx, block);
     let rhs_tag = emit_union_tag(rhs, union_ty, ctx, block);
@@ -175,31 +147,17 @@ fn emit_union_eq(
             value: lhs,
         },
     };
-    let (payloads_equal, after) = emit_union_switch(
-        switch,
-        ctx,
-        same_tag_block,
-        registry,
-        output,
-        |arm, ctx, block, output| {
+    let (payloads_equal, after) =
+        emit_union_switch(switch, ctx, same_tag_block, |arm, ctx, block| {
             let member_ir = ctx.type_of(arm.payload);
             let rhs_payload =
                 emit_union_payload(rhs, arm.member_index, &member_ir, union_ty, ctx, block);
-            lower_value_equality(
-                arm.payload,
-                rhs_payload,
-                arm.member_ty,
-                ctx,
-                block,
-                registry,
-                output,
-            )
-        },
-    );
+            lower_value_equality(arm.payload, rhs_payload, arm.member_ty, ctx, block)
+        });
     conjunction.finish(payloads_equal, ctx, after)
 }
 
-fn emit_bool_const(value: bool, ctx: &mut FnLowerCtx, block: IRBlockId) -> ValueId {
+fn emit_bool_const(value: bool, ctx: &mut FnLowerCtx<'_>, block: IRBlockId) -> ValueId {
     let dest = ctx.fresh_value(IRType::Bool);
     ctx.cfg.append(
         block,
@@ -222,7 +180,7 @@ pub(super) struct Conjunction {
 }
 
 impl Conjunction {
-    pub(super) fn new(label: &str, ctx: &mut FnLowerCtx) -> Self {
+    pub(super) fn new(label: &str, ctx: &mut FnLowerCtx<'_>) -> Self {
         let merge = ctx.fresh_block(format!("{label}_merge"));
         let result = ctx.declare_merge_param(merge, IRType::Bool);
         Self { merge, result }
@@ -230,7 +188,12 @@ impl Conjunction {
 
     /// Continue only when `cond` holds. Returns the block a true
     /// `cond` falls into. False jumps to the merge with `false`.
-    pub(super) fn gate(&self, cond: ValueId, ctx: &mut FnLowerCtx, block: IRBlockId) -> IRBlockId {
+    pub(super) fn gate(
+        &self,
+        cond: ValueId,
+        ctx: &mut FnLowerCtx<'_>,
+        block: IRBlockId,
+    ) -> IRBlockId {
         let next = ctx.fresh_block("eq_next");
         let short_circuit = emit_bool_const(false, ctx, block);
         ctx.cfg.set_terminator(
@@ -245,7 +208,7 @@ impl Conjunction {
     }
 
     /// Jump to the merge block carrying `cond` as the chain's result.
-    pub(super) fn conclude(&self, cond: ValueId, ctx: &mut FnLowerCtx, block: IRBlockId) {
+    pub(super) fn conclude(&self, cond: ValueId, ctx: &mut FnLowerCtx<'_>, block: IRBlockId) {
         ctx.cfg.set_terminator(
             block,
             IRTerminator::Branch(BranchTarget::with_args(self.merge, vec![cond])),
@@ -257,7 +220,7 @@ impl Conjunction {
     pub(super) fn finish(
         self,
         cond: ValueId,
-        ctx: &mut FnLowerCtx,
+        ctx: &mut FnLowerCtx<'_>,
         block: IRBlockId,
     ) -> (ValueId, IRBlockId) {
         self.conclude(cond, ctx, block);

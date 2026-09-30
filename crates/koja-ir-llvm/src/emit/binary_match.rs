@@ -42,12 +42,22 @@ use koja_ir::{
 
 use crate::ctx::EmitContext;
 use crate::error::{IceExt, LlvmError};
-use crate::intrinsics::cptr::{declare_memcmp_extern, declare_memcpy_extern};
-use crate::runtime::declare_malloc_extern;
+use crate::runtime::{declare_malloc_extern, declare_memcmp_extern, declare_memcpy_extern};
 
 use super::constants::emit_string_literal_payload;
 use super::heap_layout::{LENGTH_OFFSET, block_alloc_size, init_heap_block};
 use super::{ValueMap, lookup};
+
+/// Where an integer segment reads from: the subject payload, the
+/// segment's bit position in it, and the byte order of the bytes it
+/// covers. The literal compare and the binding extract share it and
+/// differ only in what they do with the bytes.
+#[derive(Clone, Copy)]
+struct BitCursor<'ctx> {
+    bit_offset: u64,
+    endian: BinaryEndian,
+    payload: PointerValue<'ctx>,
+}
 
 /// Lower an `IRInstruction::BinaryMatch`. Returns the `i1` success
 /// bit. Binding segments stamp their extracted values into the
@@ -210,10 +220,17 @@ fn emit_segment_test<'ctx>(
         LoweredBinaryPattern::LiteralInt {
             bit_offset,
             endian,
-            sign,
             value,
             width,
-        } => emit_literal_int(ctx, payload, *bit_offset, *endian, *sign, *value, *width),
+            ..
+        } => {
+            let cursor = BitCursor {
+                bit_offset: *bit_offset,
+                endian: *endian,
+                payload,
+            };
+            emit_literal_int(ctx, cursor, *value, *width)
+        }
         LoweredBinaryPattern::LiteralBytes { bit_offset, bytes } => {
             emit_literal_bytes(ctx, payload, *bit_offset, bytes)
         }
@@ -244,16 +261,14 @@ fn emit_segment_bind<'ctx>(
             sign,
             ty,
             width,
-        } => emit_bind_int(
-            ctx,
-            payload,
-            *bit_offset,
-            *endian,
-            *local,
-            *sign,
-            ty,
-            *width,
-        ),
+        } => {
+            let cursor = BitCursor {
+                bit_offset: *bit_offset,
+                endian: *endian,
+                payload,
+            };
+            emit_bind_int(ctx, cursor, *local, *sign, ty, *width)
+        }
         LoweredBinaryPattern::GreedyTail {
             bit_offset, local, ..
         } => emit_greedy_tail(ctx, payload, bit_length, byte_length, *bit_offset, *local),
@@ -271,13 +286,11 @@ fn emit_segment_bind<'ctx>(
 /// a `memcmp` against the literal's encoded bytes instead.
 fn emit_literal_int<'ctx>(
     ctx: &EmitContext<'ctx>,
-    payload: PointerValue<'ctx>,
-    bit_offset: u64,
-    endian: BinaryEndian,
-    _sign: BinarySign,
+    cursor: BitCursor<'ctx>,
     value: i128,
     width: u64,
 ) -> Result<IntValue<'ctx>, LlvmError> {
+    let bit_offset = cursor.bit_offset;
     if !bit_offset.is_multiple_of(8) || !width.is_multiple_of(8) {
         return Err(LlvmError::Codegen(format!(
             "LLVM emit: sub-byte binary literal pattern segment (bit_offset={bit_offset}, \
@@ -286,12 +299,11 @@ fn emit_literal_int<'ctx>(
     }
     let num_bytes = width / 8;
     if width > 64 {
-        let bytes = encode_wide_literal(value, num_bytes, endian);
-        return emit_literal_bytes(ctx, payload, bit_offset, &bytes);
+        let bytes = encode_wide_literal(value, num_bytes, cursor.endian);
+        return emit_literal_bytes(ctx, cursor.payload, bit_offset, &bytes);
     }
     let i64_ty = ctx.context.i64_type();
-    let byte_offset = bit_offset / 8;
-    let extracted = extract_int(ctx, payload, byte_offset, num_bytes, endian)?;
+    let extracted = extract_int(ctx, cursor, num_bytes)?;
     let mask = mask_for_width(ctx, width);
     let masked_ext = ctx
         .builder
@@ -384,17 +396,15 @@ fn emit_literal_bytes<'ctx>(
 /// (`Int8`..`Int64`/`UInt8`..`UInt64`), and store via the local
 /// slot table. Returns nothing because bindings never gate the
 /// arm. The length check + literal comparisons handle that.
-#[allow(clippy::too_many_arguments)]
 fn emit_bind_int<'ctx>(
     ctx: &EmitContext<'ctx>,
-    payload: PointerValue<'ctx>,
-    bit_offset: u64,
-    endian: BinaryEndian,
+    cursor: BitCursor<'ctx>,
     local: IRLocalId,
     sign: BinarySign,
     ty: &IRType,
     width: u64,
 ) -> Result<(), LlvmError> {
+    let bit_offset = cursor.bit_offset;
     if !bit_offset.is_multiple_of(8) || !width.is_multiple_of(8) {
         return Err(LlvmError::Codegen(format!(
             "LLVM emit: sub-byte binary binding pattern segment (bit_offset={bit_offset}, \
@@ -402,8 +412,7 @@ fn emit_bind_int<'ctx>(
         )));
     }
     let num_bytes = width / 8;
-    let byte_offset = bit_offset / 8;
-    let extracted = extract_int(ctx, payload, byte_offset, num_bytes, endian)?;
+    let extracted = extract_int(ctx, cursor, num_bytes)?;
     let extended = extend_for_sign(ctx, extracted, sign, width)?;
     let narrowed = narrow_to_ir_type(ctx, extended, ty)?;
     let slot = ctx.local_slot(local);
@@ -479,26 +488,26 @@ fn emit_greedy_tail<'ctx>(
         .map(|_| ())
 }
 
-/// Read `num_bytes` from `payload + byte_offset` and assemble them
-/// into an `i64` via a byte-shift loop. `Big` packs high-byte-first,
-/// `Little` low-byte-first.
+/// Read `num_bytes` at the cursor's byte-aligned position and
+/// assemble them into an `i64` via a byte-shift loop. `Big` packs
+/// high-byte-first, `Little` low-byte-first. The caller has already
+/// checked that the cursor sits on a byte boundary.
 fn extract_int<'ctx>(
     ctx: &EmitContext<'ctx>,
-    payload: PointerValue<'ctx>,
-    byte_offset: u64,
+    cursor: BitCursor<'ctx>,
     num_bytes: u64,
-    endian: BinaryEndian,
 ) -> Result<IntValue<'ctx>, LlvmError> {
     let i8_ty = ctx.context.i8_type();
     let i64_ty = ctx.context.i64_type();
+    let byte_offset = cursor.bit_offset / 8;
     let mut result = i64_ty.const_int(0, false);
-    let is_little = matches!(endian, BinaryEndian::Little);
+    let is_little = matches!(cursor.endian, BinaryEndian::Little);
     for i in 0..num_bytes {
         let ptr = unsafe {
             ctx.builder
                 .build_in_bounds_gep(
                     i8_ty,
-                    payload,
+                    cursor.payload,
                     &[i64_ty.const_int(byte_offset + i, false)],
                     "seg_byte_ptr",
                 )
