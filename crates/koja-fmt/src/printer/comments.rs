@@ -41,12 +41,31 @@ pub(super) fn trailing_doc(comments: &[Comment]) -> Option<Doc> {
     ))
 }
 
+/// Renders trailing comments that a newline always follows as one line
+/// suffix, so their width never decides how the code before them wraps.
+/// Header lines use this, see [`Doc::LineSuffix`].
+pub(super) fn suffix_doc(comments: &[Comment]) -> Option<Doc> {
+    if comments.is_empty() {
+        return None;
+    }
+    let joined: String = comments
+        .iter()
+        .map(|c| format!(" {}", comment_text(&c.text)))
+        .collect();
+    Some(line_suffix(joined))
+}
+
 /// Formats a single comment body as a `Doc`, normalizing whitespace.
 pub(super) fn comment_doc(body: &str) -> Doc {
+    text(comment_text(body))
+}
+
+/// A comment body with normalized whitespace, a bare `#` when empty.
+fn comment_text(body: &str) -> String {
     let trimmed = body.trim();
     if trimmed.is_empty() {
-        text("#")
+        "#".to_string()
     } else {
-        text(format!("# {}", trimmed))
+        format!("# {}", trimmed)
     }
 }

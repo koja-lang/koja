@@ -5,6 +5,10 @@ pub enum Doc {
     Nil,
     /// A text fragment that never breaks across lines.
     Text(String),
+    /// Text the renderer emits but the fit check ignores, so it never
+    /// decides whether a group breaks. Trailing comments that a newline
+    /// always follows use it.
+    LineSuffix(String),
     /// A line break in every mode.
     Hardline,
     /// " " in flat mode, newline+indent in break mode.
@@ -30,6 +34,10 @@ pub fn nil() -> Doc {
 
 pub fn text(s: impl Into<String>) -> Doc {
     Doc::Text(s.into())
+}
+
+pub fn line_suffix(s: impl Into<String>) -> Doc {
+    Doc::LineSuffix(s.into())
 }
 
 pub fn hardline() -> Doc {
@@ -76,7 +84,7 @@ pub fn fill(docs: Vec<Doc>) -> Doc {
 /// string literal never breaks.
 pub fn flatten(doc: Doc) -> Doc {
     match doc {
-        Doc::Nil | Doc::Text(_) | Doc::Hardline => doc,
+        Doc::Nil | Doc::Text(_) | Doc::LineSuffix(_) | Doc::Hardline => doc,
         Doc::Line => space(),
         Doc::Softline => Doc::Nil,
         Doc::IfBreak(flat_doc, _) => flatten(*flat_doc),
@@ -163,7 +171,7 @@ fn render_doc_into(out: &mut String, col: &mut u32, ind: u32, mode: Mode, doc: &
     while let Some((ind, mode, d)) = stack.pop() {
         match d {
             Doc::Nil => {}
-            Doc::Text(s) => {
+            Doc::Text(s) | Doc::LineSuffix(s) => {
                 out.push_str(s);
                 *col += s.len() as u32;
             }
@@ -212,7 +220,7 @@ fn fits(mut remaining: u32, stack: &[(u32, Mode, &Doc)]) -> bool {
     let mut work: Vec<(u32, Mode, &Doc)> = stack.iter().rev().cloned().collect();
     while let Some((ind, mode, d)) = work.pop() {
         match d {
-            Doc::Nil => {}
+            Doc::Nil | Doc::LineSuffix(_) => {}
             Doc::Text(s) => {
                 let len = s.len() as u32;
                 if len > remaining {
