@@ -24,7 +24,7 @@ pub(super) fn emit_tuple_init<'ctx>(
     let tuple_type = tuple_struct_type(ctx, ty)?;
     let alloca = ctx.build_entry_alloca(tuple_type, "tuple_tmp");
     for (index, element) in elements.iter().enumerate() {
-        let value = lookup(values, *element)?;
+        let value = lookup(values, *element);
         let label = format!("tuple_elem_{index}");
         let element_ptr = ctx
             .builder

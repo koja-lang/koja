@@ -112,8 +112,8 @@ fn emit_cast<'ctx>(
     llvm_function: FunctionValue<'ctx>,
 ) -> Result<(), LlvmError> {
     let pid = pid_from_self(ctx, llvm_function, function)?;
-    let msg_value = nth_param(function, llvm_function, 1, "msg")?;
-    let msg_ir_type = nth_param_type(function, 1)?;
+    let msg_value = nth_param(function, llvm_function, 1, "msg");
+    let msg_ir_type = nth_param_type(function, 1);
     let msg_llvm = ir_basic_type(ctx, msg_ir_type)?;
     let none_payload = option_none_payload(ctx);
     let (envelope_ptr, envelope_size) =
@@ -146,9 +146,9 @@ fn emit_send_after<'ctx>(
     llvm_function: FunctionValue<'ctx>,
 ) -> Result<(), LlvmError> {
     let pid = pid_from_self(ctx, llvm_function, function)?;
-    let msg_value = nth_param(function, llvm_function, 1, "msg")?;
-    let msg_ir_type = nth_param_type(function, 1)?;
-    let delay_value = nth_param(function, llvm_function, 2, "delay")?;
+    let msg_value = nth_param(function, llvm_function, 1, "msg");
+    let msg_ir_type = nth_param_type(function, 1);
+    let delay_value = nth_param(function, llvm_function, 2, "delay");
     let msg_llvm = ir_basic_type(ctx, msg_ir_type)?;
     let none_payload = option_none_payload(ctx);
     let (envelope_ptr, envelope_size) = build_tuple_envelope_alloca(
@@ -192,9 +192,9 @@ fn emit_call<'ctx>(
     llvm_function: FunctionValue<'ctx>,
 ) -> Result<(), LlvmError> {
     let target_pid = pid_from_self(ctx, llvm_function, function)?;
-    let msg_value = nth_param(function, llvm_function, 1, "msg")?;
-    let msg_ir_type = nth_param_type(function, 1)?;
-    let timeout = nth_int(function, llvm_function, 2, "timeout")?;
+    let msg_value = nth_param(function, llvm_function, 1, "msg");
+    let msg_ir_type = nth_param_type(function, 1);
+    let timeout = nth_int(function, llvm_function, 2, "timeout");
     let msg_llvm = ir_basic_type(ctx, msg_ir_type)?;
 
     let result_symbol = match &function.return_type {
@@ -204,7 +204,7 @@ fn emit_call<'ctx>(
              (IR seal invariant violation)",
         ),
     };
-    let reply_ir_type = ok_payload_field_type(ctx, &result_symbol)?;
+    let reply_ir_type = ok_payload_field_type(ctx, &result_symbol);
     let reply_llvm = ir_basic_type(ctx, &reply_ir_type)?;
     let call_error_symbol = global_primitive_symbol(&["Process", "CallError"]);
 
@@ -356,8 +356,8 @@ fn emit_signal<'ctx>(
     llvm_function: FunctionValue<'ctx>,
 ) -> Result<(), LlvmError> {
     let pid = pid_from_self(ctx, llvm_function, function)?;
-    let event_value = nth_param(function, llvm_function, 1, "event")?;
-    let event_ir_type = nth_param_type(function, 1)?;
+    let event_value = nth_param(function, llvm_function, 1, "event");
+    let event_ir_type = nth_param_type(function, 1);
     let event_llvm = ir_basic_type(ctx, event_ir_type)?;
     let event_alloca = ctx.build_entry_alloca(event_llvm, "event_buf");
     ctx.builder
@@ -430,7 +430,7 @@ fn emit_monitor<'ctx>(
     llvm_function: FunctionValue<'ctx>,
 ) -> Result<(), LlvmError> {
     // `Pid` lays out as `{ i64 id }`.
-    let target_value = nth_struct(function, llvm_function, 0, "target")?;
+    let target_value = nth_struct(function, llvm_function, 0, "target");
     let target_pid = extract_int(ctx, target_value, 0, "target_pid")?;
     let monitor_fn = declare_rt_monitor_extern(ctx);
     let token = ctx
@@ -463,7 +463,7 @@ fn emit_demonitor<'ctx>(
     function: &IRFunction,
     llvm_function: FunctionValue<'ctx>,
 ) -> Result<(), LlvmError> {
-    let reference_value = nth_struct(function, llvm_function, 0, "reference")?;
+    let reference_value = nth_struct(function, llvm_function, 0, "reference");
     let token = extract_int(ctx, reference_value, 0, "monitor_token")?;
     let demonitor_fn = declare_rt_demonitor_extern(ctx);
     ctx.builder
@@ -576,8 +576,8 @@ fn emit_reply_send<'ctx>(
 ) -> Result<(), LlvmError> {
     let pid = pid_from_self(ctx, llvm_function, function)?;
     let token = token_from_self(ctx, llvm_function, function)?;
-    let reply_value = nth_param(function, llvm_function, 1, "reply")?;
-    let reply_ir_type = nth_param_type(function, 1)?;
+    let reply_value = nth_param(function, llvm_function, 1, "reply");
+    let reply_ir_type = nth_param_type(function, 1);
     let reply_llvm = ir_basic_type(ctx, reply_ir_type)?;
     let (reply_ptr, reply_len) = serialize_to_stack(ctx, "reply_msg", reply_llvm, reply_value)?;
     let drop_glue = payload_drop_glue(ctx, reply_ir_type)?;
@@ -835,17 +835,14 @@ fn build_payload_drop_shim<'ctx>(
 /// binary-shaped `Result` (typecheck enforces this) and the `Ok`
 /// variant must carry exactly one positional payload field of type
 /// `R`.
-fn ok_payload_field_type(
-    ctx: &EmitContext<'_>,
-    result_symbol: &IRSymbol,
-) -> Result<IRType, LlvmError> {
+fn ok_payload_field_type(ctx: &EmitContext<'_>, result_symbol: &IRSymbol) -> IRType {
     let payload = ctx
         .layouts
         .enum_variant_payload(result_symbol, result::ok_tag(ctx, result_symbol));
     match payload {
-        IRVariantPayload::Tuple(types) if types.len() == 1 => Ok(types.into_iter().next().unwrap()),
+        IRVariantPayload::Tuple(types) if types.len() == 1 => types.into_iter().next().unwrap(),
         IRVariantPayload::Struct(fields) if fields.len() == 1 => {
-            Ok(fields.into_iter().next().unwrap().ir_type)
+            fields.into_iter().next().unwrap().ir_type
         }
         other => panic!(
             "LLVM emit: `Ref.call` return `{result_symbol}` Ok variant has unexpected \
@@ -906,6 +903,6 @@ fn self_field<'ctx>(
     index: u32,
     name: &str,
 ) -> Result<IntValue<'ctx>, LlvmError> {
-    let self_struct = nth_struct(function, llvm_function, 0, "self")?;
+    let self_struct = nth_struct(function, llvm_function, 0, "self");
     extract_int(ctx, self_struct, index, name)
 }

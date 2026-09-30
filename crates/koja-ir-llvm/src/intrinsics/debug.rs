@@ -31,7 +31,7 @@ pub(super) fn emit_format<'ctx>(
     llvm_function: FunctionValue<'ctx>,
     impl_: DebugImpl,
 ) -> Result<(), LlvmError> {
-    let raw = nth_param(function, llvm_function, 0, "self")?;
+    let raw = nth_param(function, llvm_function, 0, "self");
     let payload = match impl_ {
         DebugImpl::Bool => format_via_i64(ctx, function, raw, FORMAT_BOOL_SYMBOL)?,
         DebugImpl::Float => format_via_f64(ctx, function, raw)?,

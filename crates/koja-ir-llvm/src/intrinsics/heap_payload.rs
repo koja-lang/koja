@@ -133,7 +133,7 @@ fn byte_count_from_bits<'ctx>(
 pub(super) fn pointer_param<'ctx>(
     function: &IRFunction,
     llvm_function: FunctionValue<'ctx>,
-) -> Result<PointerValue<'ctx>, LlvmError> {
+) -> PointerValue<'ctx> {
     let raw = llvm_function.get_nth_param(0).unwrap_or_else(|| {
         panic!(
             "heap-leaf intrinsic missing `self` payload pointer on `{}`",
@@ -141,7 +141,7 @@ pub(super) fn pointer_param<'ctx>(
         )
     });
     match raw {
-        BasicValueEnum::PointerValue(p) => Ok(p),
+        BasicValueEnum::PointerValue(p) => p,
         other => panic!(
             "heap-leaf intrinsic expected pointer receiver on `{}`, got `{other:?}`",
             function.symbol,

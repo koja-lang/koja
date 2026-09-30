@@ -39,8 +39,8 @@ pub(super) fn emit_parse<'ctx>(
     llvm_function: FunctionValue<'ctx>,
     target: ParseTarget,
 ) -> Result<(), LlvmError> {
-    let result_symbol = expect_enum_symbol(&function.return_type, function, label(target))?;
-    let input_ptr = nth_param(function, llvm_function, 0, "input")?;
+    let result_symbol = expect_enum_symbol(&function.return_type, function, label(target));
+    let input_ptr = nth_param(function, llvm_function, 0, "input");
 
     let (helper, out_ty, ok_load_ty): (
         FunctionValue<'ctx>,

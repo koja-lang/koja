@@ -35,8 +35,8 @@ fn emit_bytes_eq<'ctx>(
     function: &IRFunction,
     llvm_function: FunctionValue<'ctx>,
 ) -> Result<(), LlvmError> {
-    let lhs = nth_param(function, llvm_function, 0, "self")?;
-    let rhs = nth_param(function, llvm_function, 1, "other")?;
+    let lhs = nth_param(function, llvm_function, 0, "self");
+    let rhs = nth_param(function, llvm_function, 1, "other");
     let string_eq = declare_string_eq_extern(ctx);
     let equal = ctx
         .call_basic(string_eq, &[lhs.into(), rhs.into()], "string_eq")?
@@ -58,8 +58,8 @@ fn emit_int_eq<'ctx>(
     function: &IRFunction,
     llvm_function: FunctionValue<'ctx>,
 ) -> Result<(), LlvmError> {
-    let lhs = nth_int(function, llvm_function, 0, "self")?;
-    let rhs = nth_int(function, llvm_function, 1, "other")?;
+    let lhs = nth_int(function, llvm_function, 0, "self");
+    let rhs = nth_int(function, llvm_function, 1, "other");
     let cmp = ctx
         .builder
         .build_int_compare(IntPredicate::EQ, lhs, rhs, "eq")
@@ -75,8 +75,8 @@ fn emit_float_eq<'ctx>(
     function: &IRFunction,
     llvm_function: FunctionValue<'ctx>,
 ) -> Result<(), LlvmError> {
-    let lhs = nth_float(function, llvm_function, 0, "self")?;
-    let rhs = nth_float(function, llvm_function, 1, "other")?;
+    let lhs = nth_float(function, llvm_function, 0, "self");
+    let rhs = nth_float(function, llvm_function, 1, "other");
     let cmp = ctx
         .builder
         .build_float_compare(FloatPredicate::OEQ, lhs, rhs, "feq")

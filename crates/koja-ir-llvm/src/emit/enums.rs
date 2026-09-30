@@ -37,11 +37,8 @@ pub(super) fn emit_enum_construct<'ctx>(
     values: &ValueMap<'ctx>,
 ) -> Result<BasicValueEnum<'ctx>, LlvmError> {
     let payload_values: Vec<BasicValueEnum<'ctx>> = match payload {
-        EnumPayloadInit::Struct(fields) => resolve_struct_payload(fields, values)?,
-        EnumPayloadInit::Tuple(operands) => operands
-            .iter()
-            .map(|v| lookup(values, *v))
-            .collect::<Result<_, _>>()?,
+        EnumPayloadInit::Struct(fields) => resolve_struct_payload(fields, values),
+        EnumPayloadInit::Tuple(operands) => operands.iter().map(|v| lookup(values, *v)).collect(),
         EnumPayloadInit::Unit => Vec::new(),
     };
     build_enum_value(ctx, ty, tag, &payload_values)
@@ -92,7 +89,7 @@ pub(crate) fn build_enum_value<'ctx>(
 fn resolve_struct_payload<'ctx>(
     fields: &[StructFieldInit],
     values: &ValueMap<'ctx>,
-) -> Result<Vec<BasicValueEnum<'ctx>>, LlvmError> {
+) -> Vec<BasicValueEnum<'ctx>> {
     let arity = fields
         .iter()
         .map(|f| f.index as usize + 1)
@@ -100,7 +97,7 @@ fn resolve_struct_payload<'ctx>(
         .unwrap_or(0);
     let mut slots: Vec<Option<BasicValueEnum<'ctx>>> = vec![None; arity];
     for field in fields {
-        let value = lookup(values, field.value)?;
+        let value = lookup(values, field.value);
         let slot = slots.get_mut(field.index as usize).unwrap_or_else(|| {
             panic!(
                 "LLVM emit: struct payload field index {} out of bounds (arity {arity})",
@@ -115,7 +112,7 @@ fn resolve_struct_payload<'ctx>(
             );
         }
     }
-    let payload = slots
+    slots
         .into_iter()
         .enumerate()
         .map(|(i, slot)| {
@@ -123,8 +120,7 @@ fn resolve_struct_payload<'ctx>(
                 panic!("struct payload missing field at index {i} (IR seal invariant violation)")
             })
         })
-        .collect();
-    Ok(payload)
+        .collect()
 }
 
 /// Spill `value` to a fresh outer-typed alloca, GEP through the

@@ -27,7 +27,7 @@ pub(super) fn emit_struct_init<'ctx>(
     let struct_type = ctx.layouts.struct_type(ty.mangled());
     let alloca = ctx.build_entry_alloca(struct_type, &format!("{ty}_tmp"));
     for field in fields {
-        let raw_value = lookup(values, field.value)?;
+        let raw_value = lookup(values, field.value);
         let declared_ty = ctx.layouts.struct_field_ir_type(ty, field.index as usize);
         let stored = match &declared_ty {
             IRType::Indirect(inner) => box_or_pass_through(

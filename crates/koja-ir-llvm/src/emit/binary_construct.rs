@@ -125,7 +125,7 @@ fn emit_segment<'ctx>(
             // string offsets.
             let i8_ty = ctx.context.i8_type();
             let i64_ty = ctx.context.i64_type();
-            let str_ptr = lookup(values, *value)?.into_pointer_value();
+            let str_ptr = lookup(values, *value).into_pointer_value();
             // SAFETY: segment offsets come from the literal layout,
             // which sized the block to hold every segment.
             let dest = unsafe {
@@ -239,7 +239,7 @@ fn lookup_int_widened<'ctx>(
     values: &ValueMap<'ctx>,
     id: ValueId,
 ) -> Result<IntValue<'ctx>, LlvmError> {
-    let raw = lookup(values, id)?.into_int_value();
+    let raw = lookup(values, id).into_int_value();
     let bits = raw.get_type().get_bit_width();
     let i64_ty = ctx.context.i64_type();
     let widened = match bits.cmp(&64) {
@@ -265,7 +265,7 @@ fn float_value_as_i64<'ctx>(
     id: ValueId,
     width: u64,
 ) -> Result<IntValue<'ctx>, LlvmError> {
-    let raw = lookup(values, id)?;
+    let raw = lookup(values, id);
     let i64_ty = ctx.context.i64_type();
     if width == 32 {
         let f32_val = if raw.is_float_value() {

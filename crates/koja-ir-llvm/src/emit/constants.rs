@@ -82,7 +82,7 @@ fn emit_ir_constant_aggregate<'ctx>(
             "built constants load from their global and never fold to an aggregate \
              (a `Built` value nested in a static constant is an IR lowering bug)"
         ),
-        IRConstantValue::Primitive(inner) => emit_const(ctx, inner),
+        IRConstantValue::Primitive(inner) => Ok(emit_const(ctx, inner)),
         IRConstantValue::EnumVariant { tag, ty } => Ok(emit_unit_variant_constant(ctx, *tag, ty)),
         IRConstantValue::Struct { fields, ty } => {
             let struct_type = ctx.layouts.struct_type(ty.mangled());
@@ -135,43 +135,43 @@ fn emit_unit_variant_constant<'ctx>(
 pub(super) fn emit_const<'ctx>(
     ctx: &EmitContext<'ctx>,
     value: &ConstValue,
-) -> Result<BasicValueEnum<'ctx>, LlvmError> {
+) -> BasicValueEnum<'ctx> {
     match value {
         ConstValue::Binary(bytes) => {
-            Ok(emit_const_payload(ctx, bytes, (bytes.len() as u64) * 8, false, "bin").into())
+            emit_const_payload(ctx, bytes, (bytes.len() as u64) * 8, false, "bin").into()
         }
         ConstValue::Bits { bytes, bit_length } => {
-            Ok(emit_const_payload(ctx, bytes, *bit_length, false, "bits").into())
+            emit_const_payload(ctx, bytes, *bit_length, false, "bits").into()
         }
-        ConstValue::Bool(b) => Ok(ctx
+        ConstValue::Bool(b) => ctx
             .context
             .bool_type()
             .const_int(u64::from(*b), false)
-            .into()),
+            .into(),
         // `const_float` always takes f64. The f32 type narrows on
         // its own (bit-exact since f32 widens losslessly).
-        ConstValue::Float32(v) => Ok(ctx.context.f32_type().const_float(f64::from(*v)).into()),
-        ConstValue::Float64(v) => Ok(ctx.context.f64_type().const_float(*v).into()),
-        ConstValue::Int8(v) => Ok(ctx.context.i8_type().const_int(*v as u64, true).into()),
-        ConstValue::Int16(v) => Ok(ctx.context.i16_type().const_int(*v as u64, true).into()),
-        ConstValue::Int32(v) => Ok(ctx.context.i32_type().const_int(*v as u64, true).into()),
-        ConstValue::Int64(v) => Ok(ctx.context.i64_type().const_int(*v as u64, true).into()),
+        ConstValue::Float32(v) => ctx.context.f32_type().const_float(f64::from(*v)).into(),
+        ConstValue::Float64(v) => ctx.context.f64_type().const_float(*v).into(),
+        ConstValue::Int8(v) => ctx.context.i8_type().const_int(*v as u64, true).into(),
+        ConstValue::Int16(v) => ctx.context.i16_type().const_int(*v as u64, true).into(),
+        ConstValue::Int32(v) => ctx.context.i32_type().const_int(*v as u64, true).into(),
+        ConstValue::Int64(v) => ctx.context.i64_type().const_int(*v as u64, true).into(),
         ConstValue::String(s) => {
-            Ok(emit_const_payload(ctx, s.as_bytes(), (s.len() as u64) * 8, true, "str").into())
+            emit_const_payload(ctx, s.as_bytes(), (s.len() as u64) * 8, true, "str").into()
         }
-        ConstValue::UInt8(v) => Ok(ctx.context.i8_type().const_int(u64::from(*v), false).into()),
-        ConstValue::UInt16(v) => Ok(ctx
+        ConstValue::UInt8(v) => ctx.context.i8_type().const_int(u64::from(*v), false).into(),
+        ConstValue::UInt16(v) => ctx
             .context
             .i16_type()
             .const_int(u64::from(*v), false)
-            .into()),
-        ConstValue::UInt32(v) => Ok(ctx
+            .into(),
+        ConstValue::UInt32(v) => ctx
             .context
             .i32_type()
             .const_int(u64::from(*v), false)
-            .into()),
-        ConstValue::UInt64(v) => Ok(ctx.context.i64_type().const_int(*v, false).into()),
-        ConstValue::Unit => Ok(ctx.context.i8_type().const_zero().into()),
+            .into(),
+        ConstValue::UInt64(v) => ctx.context.i64_type().const_int(*v, false).into(),
+        ConstValue::Unit => ctx.context.i8_type().const_zero().into(),
     }
 }
 

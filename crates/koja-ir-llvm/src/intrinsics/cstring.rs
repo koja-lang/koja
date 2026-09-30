@@ -18,7 +18,7 @@ pub(super) fn emit_to_string<'ctx>(
 ) -> Result<(), LlvmError> {
     let i64_ty = ctx.context.i64_type();
     let (c_ptr, byte_len) = cstring_fields(ctx, function, llvm_function)?;
-    let result_symbol = result::return_symbol(function)?;
+    let result_symbol = result::return_symbol(function);
     let zero = i64_ty.const_zero();
 
     let negative = ctx
@@ -88,7 +88,7 @@ fn cstring_fields<'ctx>(
     function: &IRFunction,
     llvm_function: FunctionValue<'ctx>,
 ) -> Result<(PointerValue<'ctx>, IntValue<'ctx>), LlvmError> {
-    let receiver = nth_struct(function, llvm_function, 0, "self")?;
+    let receiver = nth_struct(function, llvm_function, 0, "self");
     let ptr = extract_pointer(ctx, receiver, 0, "cs_ptr")?;
     let len = extract_int(ctx, receiver, 1, "cs_len")?;
     Ok((ptr, len))

@@ -19,9 +19,9 @@ pub(super) fn err_tag(ctx: &EmitContext<'_>, result_symbol: &IRSymbol) -> IRVari
     ctx.layouts.enum_variant_tag(result_symbol, "Err")
 }
 
-pub(super) fn return_symbol(function: &IRFunction) -> Result<&IRSymbol, LlvmError> {
+pub(super) fn return_symbol(function: &IRFunction) -> &IRSymbol {
     match &function.return_type {
-        IRType::Enum(symbol) => Ok(symbol),
+        IRType::Enum(symbol) => symbol,
         other => panic!(
             "`{}` expected a Result return type, got `{other:?}`",
             function.symbol,
@@ -33,10 +33,10 @@ pub(super) fn single_payload_type(
     ctx: &EmitContext<'_>,
     result_symbol: &IRSymbol,
     tag: IRVariantTag,
-) -> Result<IRType, LlvmError> {
+) -> IRType {
     let payload = ctx.layouts.enum_variant_payload(result_symbol, tag);
     match payload {
-        IRVariantPayload::Tuple(types) if types.len() == 1 => Ok(types[0].clone()),
+        IRVariantPayload::Tuple(types) if types.len() == 1 => types[0].clone(),
         other => panic!(
             "`{result_symbol}` variant {tag:?} should carry one tuple field, got `{other:?}`",
         ),
@@ -56,7 +56,7 @@ pub(super) fn build_unit_error<'ctx>(
     result_symbol: &IRSymbol,
     variant: &str,
 ) -> Result<BasicValueEnum<'ctx>, LlvmError> {
-    let error_type = single_payload_type(ctx, result_symbol, err_tag(ctx, result_symbol))?;
+    let error_type = single_payload_type(ctx, result_symbol, err_tag(ctx, result_symbol));
     let IRType::Enum(error_symbol) = error_type else {
         panic!("`{result_symbol}` Err payload should be an enum, got `{error_type:?}`");
     };

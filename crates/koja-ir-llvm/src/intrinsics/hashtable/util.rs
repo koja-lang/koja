@@ -379,7 +379,7 @@ pub(super) fn extract_table_fields<'ctx>(
     function: &IRFunction,
     llvm_function: FunctionValue<'ctx>,
 ) -> Result<TableSnapshot<'ctx>, LlvmError> {
-    let self_val = nth_struct(function, llvm_function, 0, "self")?;
+    let self_val = nth_struct(function, llvm_function, 0, "self");
     Ok(TableSnapshot {
         entries_ptr: extract_pointer(ctx, self_val, 0, "entries")?,
         states_ptr: extract_pointer(ctx, self_val, 1, "states")?,

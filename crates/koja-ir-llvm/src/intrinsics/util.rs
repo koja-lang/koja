@@ -52,9 +52,9 @@ pub(crate) fn expect_enum_symbol<'ty>(
     ty: &'ty IRType,
     function: &IRFunction,
     what: &str,
-) -> Result<&'ty IRSymbol, LlvmError> {
+) -> &'ty IRSymbol {
     match ty {
-        IRType::Enum(symbol) => Ok(symbol),
+        IRType::Enum(symbol) => symbol,
         other => panic!(
             "{what} expected an enum-typed slot, got `{other:?}` (symbol `{}`)",
             function.symbol,
@@ -107,9 +107,9 @@ pub(crate) fn nth_float<'ctx>(
     llvm_function: FunctionValue<'ctx>,
     index: u32,
     name: &str,
-) -> Result<FloatValue<'ctx>, LlvmError> {
-    match nth_param(function, llvm_function, index, name)? {
-        BasicValueEnum::FloatValue(v) => Ok(v),
+) -> FloatValue<'ctx> {
+    match nth_param(function, llvm_function, index, name) {
+        BasicValueEnum::FloatValue(v) => v,
         other => wrong_kind(function, name, "float", other),
     }
 }
@@ -119,9 +119,9 @@ pub(crate) fn nth_int<'ctx>(
     llvm_function: FunctionValue<'ctx>,
     index: u32,
     name: &str,
-) -> Result<IntValue<'ctx>, LlvmError> {
-    match nth_param(function, llvm_function, index, name)? {
-        BasicValueEnum::IntValue(v) => Ok(v),
+) -> IntValue<'ctx> {
+    match nth_param(function, llvm_function, index, name) {
+        BasicValueEnum::IntValue(v) => v,
         other => wrong_kind(function, name, "integer", other),
     }
 }
@@ -133,21 +133,19 @@ pub(crate) fn nth_param<'ctx>(
     llvm_function: FunctionValue<'ctx>,
     index: u32,
     name: &str,
-) -> Result<BasicValueEnum<'ctx>, LlvmError> {
-    let param = llvm_function
+) -> BasicValueEnum<'ctx> {
+    llvm_function
         .get_nth_param(index)
-        .unwrap_or_else(|| panic!("missing param `{name}` (#{index}) on `{}`", function.symbol));
-    Ok(param)
+        .unwrap_or_else(|| panic!("missing param `{name}` (#{index}) on `{}`", function.symbol))
 }
 
 /// The IR type the seal recorded for the `index`-th parameter.
-pub(crate) fn nth_param_type(function: &IRFunction, index: u32) -> Result<&IRType, LlvmError> {
-    let ty = function
+pub(crate) fn nth_param_type(function: &IRFunction, index: u32) -> &IRType {
+    function
         .params
         .get(index as usize)
         .map(|param| &param.ty)
-        .unwrap_or_else(|| panic!("IR has no param #{index} on `{}`", function.symbol));
-    Ok(ty)
+        .unwrap_or_else(|| panic!("IR has no param #{index} on `{}`", function.symbol))
 }
 
 pub(crate) fn nth_pointer<'ctx>(
@@ -155,9 +153,9 @@ pub(crate) fn nth_pointer<'ctx>(
     llvm_function: FunctionValue<'ctx>,
     index: u32,
     name: &str,
-) -> Result<PointerValue<'ctx>, LlvmError> {
-    match nth_param(function, llvm_function, index, name)? {
-        BasicValueEnum::PointerValue(v) => Ok(v),
+) -> PointerValue<'ctx> {
+    match nth_param(function, llvm_function, index, name) {
+        BasicValueEnum::PointerValue(v) => v,
         other => wrong_kind(function, name, "pointer", other),
     }
 }
@@ -167,9 +165,9 @@ pub(crate) fn nth_struct<'ctx>(
     llvm_function: FunctionValue<'ctx>,
     index: u32,
     name: &str,
-) -> Result<StructValue<'ctx>, LlvmError> {
-    match nth_param(function, llvm_function, index, name)? {
-        BasicValueEnum::StructValue(v) => Ok(v),
+) -> StructValue<'ctx> {
+    match nth_param(function, llvm_function, index, name) {
+        BasicValueEnum::StructValue(v) => v,
         other => wrong_kind(function, name, "struct", other),
     }
 }

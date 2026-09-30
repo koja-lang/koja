@@ -30,11 +30,8 @@ use crate::error::LlvmError;
 /// Any other variant panics, since the seal pass guarantees an
 /// integer wherever a call site needs one (cond branches take an
 /// `i1`). Sites that accept any basic type use [`ir_basic_type`].
-pub(crate) fn ir_int_type<'ctx>(
-    context: &'ctx Context,
-    ty: &IRType,
-) -> Result<IntType<'ctx>, LlvmError> {
-    let int_type = match ty {
+pub(crate) fn ir_int_type<'ctx>(context: &'ctx Context, ty: &IRType) -> IntType<'ctx> {
+    match ty {
         IRType::Bool => context.bool_type(),
         IRType::Int8 | IRType::UInt8 => context.i8_type(),
         IRType::Int16 | IRType::UInt16 => context.i16_type(),
@@ -58,8 +55,7 @@ pub(crate) fn ir_int_type<'ctx>(
         | IRType::Unit => {
             panic!("expected an integer or Bool IRType, got `{ty:?}` (seal invariant violation)")
         }
-    };
-    Ok(int_type)
+    }
 }
 
 /// LLVM basic type for any value-position [`IRType`]. `Unit` maps
@@ -90,7 +86,7 @@ pub(crate) fn ir_basic_type<'ctx>(
         | IRType::UInt8
         | IRType::UInt16
         | IRType::UInt32
-        | IRType::UInt64 => Ok(ir_int_type(ctx.context, ty)?.into()),
+        | IRType::UInt64 => Ok(ir_int_type(ctx.context, ty).into()),
         IRType::Binary | IRType::Bits | IRType::String => {
             Ok(ctx.context.ptr_type(AddressSpace::default()).into())
         }

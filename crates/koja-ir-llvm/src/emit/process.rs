@@ -126,7 +126,7 @@ fn emit_wrapper_body_call<'ctx>(
     function: &IRFunction,
     llvm_function: FunctionValue<'ctx>,
 ) -> Result<Option<BasicValueEnum<'ctx>>, LlvmError> {
-    let body_symbol = wrapper_body_callee(function)?;
+    let body_symbol = wrapper_body_callee(function);
     let body_fn = ctx.declared_function(body_symbol).unwrap_or_else(|| {
         panic!(
             "LLVM emit: wrapper `{}` process body `{body_symbol}` not declared",
@@ -163,8 +163,8 @@ fn emit_wrapper_body_call<'ctx>(
 /// The process-body symbol named by the wrapper shim's IR `Call`:
 /// the single source of truth linking shim to body (no name
 /// re-derivation in the backend).
-fn wrapper_body_callee(function: &IRFunction) -> Result<&IRSymbol, LlvmError> {
-    let callee = function
+fn wrapper_body_callee(function: &IRFunction) -> &IRSymbol {
+    function
         .blocks
         .iter()
         .flat_map(|block| &block.instructions)
@@ -178,8 +178,7 @@ fn wrapper_body_callee(function: &IRFunction) -> Result<&IRSymbol, LlvmError> {
                  invariant violation)",
                 function.symbol,
             )
-        });
-    Ok(callee)
+        })
 }
 
 /// Truncate the process body's `i64` exit code and store it into the
@@ -234,7 +233,7 @@ pub(super) fn emit_spawn<'ctx>(
         wrapper,
     } = args;
     let config_llvm_type = ir_basic_type(ctx, config_type)?;
-    let config_value = lookup(values, config)?;
+    let config_value = lookup(values, config);
 
     let (config_ptr, config_size) =
         serialize_to_stack(ctx, "spawn_config", config_llvm_type, config_value)?;
@@ -281,7 +280,7 @@ pub(super) fn emit_process_exit<'ctx>(
     reason: ValueId,
     values: &ValueMap<'ctx>,
 ) -> Result<(), LlvmError> {
-    let reason = lookup(values, reason)?.into_int_value();
+    let reason = lookup(values, reason).into_int_value();
     let process_exit_fn = declare_rt_process_exit_extern(ctx);
     ctx.builder
         .build_call(process_exit_fn, &[reason.into()], "")
@@ -299,7 +298,7 @@ pub(super) fn emit_set_priority<'ctx>(
     tag: ValueId,
     values: &ValueMap<'ctx>,
 ) -> Result<(), LlvmError> {
-    let level = lookup(values, tag)?.into_int_value();
+    let level = lookup(values, tag).into_int_value();
     let set_priority_fn = declare_rt_set_priority_extern(ctx);
     ctx.builder
         .build_call(set_priority_fn, &[level.into()], "")
@@ -377,7 +376,7 @@ fn build_receive_call<'ctx>(
     payload_cap: IntValue<'ctx>,
 ) -> Result<IntValue<'ctx>, LlvmError> {
     let tag_call = if let Some(after) = after {
-        let timeout = lookup(values, after.timeout)?.into_int_value();
+        let timeout = lookup(values, after.timeout).into_int_value();
         let receive_fn = declare_rt_receive_timeout_extern(ctx);
         ctx.builder
             .build_call(

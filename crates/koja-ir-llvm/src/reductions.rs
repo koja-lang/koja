@@ -101,7 +101,7 @@ pub(crate) fn emit_budget_seed(ctx: &EmitContext<'_>) -> Result<(), LlvmError> {
 /// instead of wrapping into a never-yielding budget. The slow path
 /// reseeds from `koja_rt_yield_check`'s returned grant.
 fn emit_register_yield_check(ctx: &EmitContext<'_>) -> Result<(), LlvmError> {
-    let (yield_bb, continue_bb) = yield_check_blocks(ctx)?;
+    let (yield_bb, continue_bb) = yield_check_blocks(ctx);
 
     let i64_ty = ctx.context.i64_type();
     let decremented = spend_budget_register(ctx)?;
@@ -136,7 +136,7 @@ fn emit_register_yield_check(ctx: &EmitContext<'_>) -> Result<(), LlvmError> {
 /// `koja_reductions_left` and branch into `koja_rt_yield_check` when it
 /// reaches zero. The common case is a load / sub / store with no call.
 fn emit_tls_yield_check(ctx: &EmitContext<'_>) -> Result<(), LlvmError> {
-    let (yield_bb, continue_bb) = yield_check_blocks(ctx)?;
+    let (yield_bb, continue_bb) = yield_check_blocks(ctx);
 
     let i32_ty = ctx.context.i32_type();
     let counter = reductions_counter_global(ctx).as_pointer_value();
@@ -178,9 +178,7 @@ fn emit_tls_yield_check(ctx: &EmitContext<'_>) -> Result<(), LlvmError> {
 
 /// Append the `yield_slow` / `yield_cont` block pair to the current
 /// function.
-fn yield_check_blocks<'ctx>(
-    ctx: &EmitContext<'ctx>,
-) -> Result<(BasicBlock<'ctx>, BasicBlock<'ctx>), LlvmError> {
+fn yield_check_blocks<'ctx>(ctx: &EmitContext<'ctx>) -> (BasicBlock<'ctx>, BasicBlock<'ctx>) {
     let host_block = ctx
         .builder
         .get_insert_block()
@@ -190,7 +188,7 @@ fn yield_check_blocks<'ctx>(
         .expect("LLVM emit: YieldCheck's host block has no parent function");
     let yield_bb = ctx.context.append_basic_block(function, "yield_slow");
     let continue_bb = ctx.context.append_basic_block(function, "yield_cont");
-    Ok((yield_bb, continue_bb))
+    (yield_bb, continue_bb)
 }
 
 /// Zero-extend a `u32` grant to the 64-bit register width.

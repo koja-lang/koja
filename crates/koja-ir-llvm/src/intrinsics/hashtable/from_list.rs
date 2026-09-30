@@ -33,7 +33,7 @@ pub(crate) fn emit_set_from_list<'ctx>(
     let entry_block = ctx.builder.get_insert_block().unwrap();
     let elem_basic_ty = ir_basic_type(ctx, layout.key_ty)?;
 
-    let list_val = nth_struct(function, llvm_function, 0, "list")?;
+    let list_val = nth_struct(function, llvm_function, 0, "list");
     let list_ptr = ctx
         .builder
         .build_extract_value(list_val, 0, "list_ptr")

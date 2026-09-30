@@ -50,7 +50,7 @@ fn set_layout<'ctx, 'ty>(
     method: SetMethod,
     function: &'ty IRFunction,
 ) -> Result<hashtable::HashtableLayout<'ty>, LlvmError> {
-    let element = element(method, function)?;
+    let element = element(method, function);
     let element_size = hashtable::ir_byte_size(ctx, element)?;
     Ok(hashtable::HashtableLayout {
         entry_size: element_size,
@@ -63,14 +63,14 @@ fn set_layout<'ctx, 'ty>(
 /// Resolve the element `T` for a `Set<T>` intrinsic. `new` carries
 /// it on the return type. Every other method has `self: Set<T>` as
 /// `params[0]`.
-fn element(method: SetMethod, function: &IRFunction) -> Result<&IRType, LlvmError> {
+fn element(method: SetMethod, function: &IRFunction) -> &IRType {
     let candidate = match method {
         SetMethod::New => &function.return_type,
         SetMethod::FromList => &function.return_type,
         _ => &function.params[0].ty,
     };
     match candidate {
-        IRType::Set(inner) => Ok(inner),
+        IRType::Set(inner) => inner,
         other => panic!(
             "Set.{method:?} expected a `Set<T>` slot, got `{other:?}` (symbol `{}`)",
             function.symbol,

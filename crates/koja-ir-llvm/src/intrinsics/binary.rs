@@ -78,9 +78,9 @@ pub(super) fn emit_find<'ctx>(
     helper: FunctionValue<'ctx>,
 ) -> Result<(), LlvmError> {
     let i64_ty = ctx.context.i64_type();
-    let payload = heap_payload::pointer_param(function, llvm_function)?;
-    let needle = nth_param(function, llvm_function, 1, "needle")?;
-    let from = nth_param(function, llvm_function, 2, "from")?;
+    let payload = heap_payload::pointer_param(function, llvm_function);
+    let needle = nth_param(function, llvm_function, 1, "needle");
+    let from = nth_param(function, llvm_function, 2, "from");
     let offset = ctx
         .call_basic(
             helper,
@@ -89,7 +89,7 @@ pub(super) fn emit_find<'ctx>(
         )?
         .into_int_value();
 
-    let option_symbol = expect_enum_symbol(&function.return_type, function, "find")?;
+    let option_symbol = expect_enum_symbol(&function.return_type, function, "find");
     let absent = ctx
         .builder
         .build_int_compare(IntPredicate::EQ, offset, i64_ty.const_all_ones(), "absent")
@@ -142,7 +142,7 @@ fn emit_to_bits<'ctx>(
     function: &IRFunction,
     llvm_function: FunctionValue<'ctx>,
 ) -> Result<(), LlvmError> {
-    let payload = heap_payload::pointer_param(function, llvm_function)?;
+    let payload = heap_payload::pointer_param(function, llvm_function);
     let shared = heap_payload::share_heap_payload(ctx, function.symbol.mangled(), payload)?;
     ctx.builder.build_return(Some(&shared)).or_ice().map(|_| ())
 }
@@ -178,9 +178,9 @@ fn emit_byte_lookup<'ctx>(
     llvm_function: FunctionValue<'ctx>,
     ceil_bytes: bool,
 ) -> Result<(), LlvmError> {
-    let option_symbol = expect_enum_symbol(&function.return_type, function, "byte lookup")?;
-    let payload = heap_payload::pointer_param(function, llvm_function)?;
-    let index = nth_int(function, llvm_function, 1, "index")?;
+    let option_symbol = expect_enum_symbol(&function.return_type, function, "byte lookup");
+    let payload = heap_payload::pointer_param(function, llvm_function);
+    let index = nth_int(function, llvm_function, 1, "index");
 
     let i64_ty = ctx.context.i64_type();
     let i8_ty = ctx.context.i8_type();
@@ -258,8 +258,8 @@ fn emit_slice<'ctx>(
     function: &IRFunction,
     llvm_function: FunctionValue<'ctx>,
 ) -> Result<(), LlvmError> {
-    let payload = heap_payload::pointer_param(function, llvm_function)?;
-    let range_struct = nth_struct(function, llvm_function, 1, "range")?;
+    let payload = heap_payload::pointer_param(function, llvm_function);
+    let range_struct = nth_struct(function, llvm_function, 1, "range");
     let start = ctx
         .builder
         .build_extract_value(range_struct, 0, "start")
@@ -284,7 +284,7 @@ fn emit_bit_size<'ctx>(
     function: &IRFunction,
     llvm_function: FunctionValue<'ctx>,
 ) -> Result<(), LlvmError> {
-    let payload = heap_payload::pointer_param(function, llvm_function)?;
+    let payload = heap_payload::pointer_param(function, llvm_function);
     let bit_length = load_bit_length(ctx, payload, "bit_length")?;
     ctx.builder
         .build_return(Some(&bit_length))
@@ -300,7 +300,7 @@ fn emit_byte_size<'ctx>(
     llvm_function: FunctionValue<'ctx>,
 ) -> Result<(), LlvmError> {
     let i64_ty = ctx.context.i64_type();
-    let payload = heap_payload::pointer_param(function, llvm_function)?;
+    let payload = heap_payload::pointer_param(function, llvm_function);
     let bit_length = load_bit_length(ctx, payload, "bit_length")?;
     let byte_count = ctx
         .builder
@@ -321,8 +321,8 @@ fn emit_to_string<'ctx>(
     function: &IRFunction,
     llvm_function: FunctionValue<'ctx>,
 ) -> Result<(), LlvmError> {
-    let result_symbol = expect_enum_symbol(&function.return_type, function, "Binary.to_string")?;
-    let payload = heap_payload::pointer_param(function, llvm_function)?;
+    let result_symbol = expect_enum_symbol(&function.return_type, function, "Binary.to_string");
+    let payload = heap_payload::pointer_param(function, llvm_function);
     let i64_ty = ctx.context.i64_type();
     let bit_length = load_bit_length(ctx, payload, "bit_length")?;
     let byte_count = ctx
@@ -370,8 +370,8 @@ fn emit_to_binary<'ctx>(
     function: &IRFunction,
     llvm_function: FunctionValue<'ctx>,
 ) -> Result<(), LlvmError> {
-    let result_symbol = expect_enum_symbol(&function.return_type, function, "Bits.to_binary")?;
-    let payload = heap_payload::pointer_param(function, llvm_function)?;
+    let result_symbol = expect_enum_symbol(&function.return_type, function, "Bits.to_binary");
+    let payload = heap_payload::pointer_param(function, llvm_function);
     let i64_ty = ctx.context.i64_type();
     let bit_length = load_bit_length(ctx, payload, "bit_length")?;
     let remainder = ctx

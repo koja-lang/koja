@@ -159,7 +159,7 @@ pub(crate) fn emit_has_q<'ctx>(
 ) -> Result<(), LlvmError> {
     let i1_ty = ctx.context.bool_type();
     let table = extract_table_fields(ctx, function, llvm_function)?;
-    let key_val = nth_param(function, llvm_function, 1, "key")?;
+    let key_val = nth_param(function, llvm_function, 1, "key");
     let key_ops = resolve_key_hash_ops(ctx, function, layout.key_ty)?;
     let probe = emit_read_only_probe(
         ctx,
@@ -189,7 +189,7 @@ pub(crate) fn emit_remove<'ctx>(
     // emit_remove keeps the manual 4-step extract because it needs
     // `self_val` for the not-found return, and `extract_table_fields`
     // discards the original struct.
-    let self_val = nth_struct(function, llvm_function, 0, "self")?;
+    let self_val = nth_struct(function, llvm_function, 0, "self");
     let original = TableSnapshot {
         entries_ptr: extract_pointer(ctx, self_val, 0, "entries")?,
         states_ptr: extract_pointer(ctx, self_val, 1, "states")?,
@@ -197,7 +197,7 @@ pub(crate) fn emit_remove<'ctx>(
         capacity: extract_int(ctx, self_val, 3, "cap")?,
     };
     let table = clone_table_buffers(ctx, llvm_function, layout, &original)?;
-    let key_val = nth_param(function, llvm_function, 1, "key")?;
+    let key_val = nth_param(function, llvm_function, 1, "key");
     let key_ops = resolve_key_hash_ops(ctx, function, layout.key_ty)?;
     let probe = emit_read_only_probe(
         ctx,
@@ -262,11 +262,11 @@ pub(crate) fn emit_map_get<'ctx>(
             function.symbol,
         )
     });
-    let option_symbol = expect_enum_symbol(&function.return_type, function, "Map.get")?;
+    let option_symbol = expect_enum_symbol(&function.return_type, function, "Map.get");
     let value_basic_ty = ir_basic_type(ctx, value_ty)?;
 
     let table = extract_table_fields(ctx, function, llvm_function)?;
-    let key_val = nth_param(function, llvm_function, 1, "key")?;
+    let key_val = nth_param(function, llvm_function, 1, "key");
     let key_ops = resolve_key_hash_ops(ctx, function, layout.key_ty)?;
     let probe = emit_read_only_probe(
         ctx,

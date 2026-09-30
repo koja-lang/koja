@@ -49,7 +49,7 @@ pub(crate) fn compile_packages(
     ctx.attach_constant_pool(ConstantPoolSnapshot::from_packages(packages));
     declare_types(ctx, packages);
     define_types(ctx, packages)?;
-    assert_wire_enum_order(ctx)?;
+    assert_wire_enum_order(ctx);
     // Built constant globals need every struct and enum body above,
     // and every function body below loads them.
     declare_built_constant_globals(ctx, packages)?;
@@ -115,7 +115,7 @@ fn define_types(ctx: &EmitContext<'_>, packages: &[IRPackage]) -> Result<(), Llv
         }
     }
     for decl in enums_in_dependency_order(packages) {
-        define_enum_completes_and_outer(ctx, decl)?;
+        define_enum_completes_and_outer(ctx, decl);
     }
     Ok(())
 }

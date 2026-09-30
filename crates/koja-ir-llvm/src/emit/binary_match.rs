@@ -70,7 +70,7 @@ pub(super) fn emit_binary_match<'ctx>(
     subject: ValueId,
     values: &ValueMap<'ctx>,
 ) -> Result<IntValue<'ctx>, LlvmError> {
-    let payload = lookup(values, subject)?.into_pointer_value();
+    let payload = lookup(values, subject).into_pointer_value();
     let bit_length = load_subject_bit_length(ctx, payload)?;
     let byte_length = shift_right_by_three(ctx, bit_length)?;
     let length_ok = length_check(ctx, &layout, byte_length)?;

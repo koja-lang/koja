@@ -334,7 +334,7 @@ pub(super) fn emit_numeric_widen<'ctx>(
             .or_ice()?;
         return Ok(widened.into());
     }
-    let target_ty = ir_int_type(ctx.context, to)?;
+    let target_ty = ir_int_type(ctx.context, to);
     let int_value = value.into_int_value();
     let widened = match from {
         IRType::Int8 | IRType::Int16 | IRType::Int32 => ctx

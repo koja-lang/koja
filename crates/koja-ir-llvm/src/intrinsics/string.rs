@@ -57,9 +57,9 @@ fn emit_slice_bytes<'ctx>(
     function: &IRFunction,
     llvm_function: FunctionValue<'ctx>,
 ) -> Result<(), LlvmError> {
-    let payload = self_payload(function, llvm_function)?;
-    let start = nth_param(function, llvm_function, 1, "start")?;
-    let stop = nth_param(function, llvm_function, 2, "stop")?;
+    let payload = self_payload(function, llvm_function);
+    let start = nth_param(function, llvm_function, 1, "start");
+    let stop = nth_param(function, llvm_function, 2, "stop");
     let helper = declare_string_slice_bytes_extern(ctx);
     let value = ctx.call_basic(
         helper,
@@ -74,7 +74,7 @@ fn emit_byte_length<'ctx>(
     function: &IRFunction,
     llvm_function: FunctionValue<'ctx>,
 ) -> Result<(), LlvmError> {
-    let payload = self_payload(function, llvm_function)?;
+    let payload = self_payload(function, llvm_function);
     let byte_count = load_byte_count(ctx, payload)?;
     ctx.builder
         .build_return(Some(&byte_count))
@@ -93,7 +93,7 @@ fn emit_to_binary<'ctx>(
     function: &IRFunction,
     llvm_function: FunctionValue<'ctx>,
 ) -> Result<(), LlvmError> {
-    let payload = self_payload(function, llvm_function)?;
+    let payload = self_payload(function, llvm_function);
     let shared = heap_payload::share_heap_payload(ctx, function.symbol.mangled(), payload)?;
     ctx.builder.build_return(Some(&shared)).or_ice().map(|_| ())
 }
@@ -103,7 +103,7 @@ fn emit_length<'ctx>(
     function: &IRFunction,
     llvm_function: FunctionValue<'ctx>,
 ) -> Result<(), LlvmError> {
-    let payload = self_payload(function, llvm_function)?;
+    let payload = self_payload(function, llvm_function);
     let helper = declare_string_length_extern(ctx);
     let value = ctx.call_basic(helper, &[payload.into()], "len")?;
     ctx.builder.build_return(Some(&value)).or_ice().map(|_| ())
@@ -114,8 +114,8 @@ fn emit_slice<'ctx>(
     function: &IRFunction,
     llvm_function: FunctionValue<'ctx>,
 ) -> Result<(), LlvmError> {
-    let payload = self_payload(function, llvm_function)?;
-    let range_struct = nth_struct(function, llvm_function, 1, "range")?;
+    let payload = self_payload(function, llvm_function);
+    let range_struct = nth_struct(function, llvm_function, 1, "range");
     let start = ctx
         .builder
         .build_extract_value(range_struct, 0, "start")
@@ -138,14 +138,14 @@ fn emit_get<'ctx>(
     function: &IRFunction,
     llvm_function: FunctionValue<'ctx>,
 ) -> Result<(), LlvmError> {
-    let payload = self_payload(function, llvm_function)?;
-    let index = nth_param(function, llvm_function, 1, "index")?;
+    let payload = self_payload(function, llvm_function);
+    let index = nth_param(function, llvm_function, 1, "index");
     let helper = declare_string_get_extern(ctx);
     let raw_ptr = ctx
         .call_basic(helper, &[payload.into(), index.into()], "ch")?
         .into_pointer_value();
 
-    let option_symbol = expect_enum_symbol(&function.return_type, function, "String.get")?;
+    let option_symbol = expect_enum_symbol(&function.return_type, function, "String.get");
     let ptr_ty = ctx.context.ptr_type(AddressSpace::default());
     let is_null = ctx
         .builder
@@ -184,8 +184,8 @@ fn emit_next<'ctx>(
 ) -> Result<(), LlvmError> {
     let ptr_ty = ctx.context.ptr_type(AddressSpace::default());
     let i64_ty = ctx.context.i64_type();
-    let payload = self_payload(function, llvm_function)?;
-    let cursor = nth_param(function, llvm_function, 1, "cursor")?;
+    let payload = self_payload(function, llvm_function);
+    let cursor = nth_param(function, llvm_function, 1, "cursor");
     let next_cursor = ctx.builder.build_alloca(i64_ty, "next_cursor").or_ice()?;
     let helper = declare_string_next_extern(ctx);
     let character = ctx
@@ -205,7 +205,7 @@ fn emit_next<'ctx>(
         .build_conditional_branch(is_none, none_bb, some_bb)
         .or_ice()?;
 
-    let option_symbol = expect_enum_symbol(&function.return_type, function, "String.next")?;
+    let option_symbol = expect_enum_symbol(&function.return_type, function, "String.next");
     ctx.builder.position_at_end(some_bb);
     let next = ctx
         .builder
@@ -246,9 +246,9 @@ fn emit_to_cstring<'ctx>(
     llvm_function: FunctionValue<'ctx>,
 ) -> Result<(), LlvmError> {
     let i64_ty = ctx.context.i64_type();
-    let payload = self_payload(function, llvm_function)?;
+    let payload = self_payload(function, llvm_function);
     let byte_len = load_byte_count(ctx, payload)?;
-    let result_symbol = result::return_symbol(function)?;
+    let result_symbol = result::return_symbol(function);
     let cstring_ty = cstring_struct_type(ctx, result_symbol)?;
 
     let contains_nul = declare_string_contains_nul_extern(ctx);
@@ -280,7 +280,7 @@ fn cstring_struct_type<'ctx>(
     result_symbol: &IRSymbol,
 ) -> Result<StructType<'ctx>, LlvmError> {
     let cstring_type =
-        result::single_payload_type(ctx, result_symbol, result::ok_tag(ctx, result_symbol))?;
+        result::single_payload_type(ctx, result_symbol, result::ok_tag(ctx, result_symbol));
     match cstring_type {
         IRType::Struct(_) => Ok(ir_basic_type(ctx, &cstring_type)?.into_struct_type()),
         other => panic!("String.to_cstring expected a CString Ok payload, got `{other:?}`"),
@@ -328,7 +328,7 @@ fn emit_cstring_success<'ctx>(
 fn self_payload<'ctx>(
     function: &IRFunction,
     llvm_function: FunctionValue<'ctx>,
-) -> Result<PointerValue<'ctx>, LlvmError> {
+) -> PointerValue<'ctx> {
     nth_pointer(function, llvm_function, 0, "self")
 }
 

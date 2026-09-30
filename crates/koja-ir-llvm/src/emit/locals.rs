@@ -115,14 +115,14 @@ pub(super) fn emit_drop_value<'ctx>(
 ) -> Result<(), LlvmError> {
     match ty {
         IRType::Binary | IRType::Bits | IRType::String => {
-            let payload = lookup(values, value)?;
+            let payload = lookup(values, value);
             emit_rc_dec(ctx, payload.into_pointer_value(), &value.to_string())
         }
         // Closure: `rc--` on the env (capture release + free at zero
         // lives in `koja_closure_rc_dec`). Same path as the slot-keyed
         // `DropLocal` of a `Function`.
         IRType::Function { .. } => {
-            let closure_value = lookup(values, value)?;
+            let closure_value = lookup(values, value);
             closures::emit_drop_closure_value(ctx, closure_value, &value.to_string())
         }
         // No-glue aggregate value (every field `Copy`): nothing to
@@ -132,7 +132,7 @@ pub(super) fn emit_drop_value<'ctx>(
         // Boxed projection: the rc-aware box release (drop contents +
         // free at rc 1, decrement otherwise, null no-op).
         IRType::Indirect(inner) => {
-            let payload = lookup(values, value)?.into_pointer_value();
+            let payload = lookup(values, value).into_pointer_value();
             indirect::emit_release_box(ctx, inner, payload, &value.to_string())
         }
         _ => panic!(

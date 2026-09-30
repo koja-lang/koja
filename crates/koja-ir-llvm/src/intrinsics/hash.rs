@@ -40,7 +40,7 @@ fn emit_bytes_hash<'ctx>(
 ) -> Result<(), LlvmError> {
     let i64_ty = ctx.context.i64_type();
     let i8_ty = ctx.context.i8_type();
-    let str_ptr = nth_pointer(function, llvm_function, 0, "self")?;
+    let str_ptr = nth_pointer(function, llvm_function, 0, "self");
 
     let bit_length = load_bit_length(ctx, str_ptr, "bit_length")?;
     let byte_count = ctx
@@ -114,7 +114,7 @@ fn emit_int_hash<'ctx>(
     llvm_function: FunctionValue<'ctx>,
 ) -> Result<(), LlvmError> {
     let i64_ty = ctx.context.i64_type();
-    let value = nth_int(function, llvm_function, 0, "self")?;
+    let value = nth_int(function, llvm_function, 0, "self");
     let extended = if value.get_type().get_bit_width() < 64 {
         ctx.builder
             .build_int_z_extend(value, i64_ty, "ext")

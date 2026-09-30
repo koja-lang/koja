@@ -70,15 +70,15 @@ fn emit_resolve<'ctx>(
     function: &IRFunction,
     llvm_function: FunctionValue<'ctx>,
 ) -> Result<(), LlvmError> {
-    let result_symbol = expect_enum_symbol(&function.return_type, function, "Socket.resolve_raw")?;
-    validate_resolve_payload(ctx, result_symbol, function)?;
+    let result_symbol = expect_enum_symbol(&function.return_type, function, "Socket.resolve_raw");
+    validate_resolve_payload(ctx, result_symbol, function);
 
     let binary_size = binary_pointer_size(ctx, function, "Socket.resolve_raw")?;
 
     let i64_ty = ctx.context.i64_type();
     let i8_ty = ctx.context.i8_type();
 
-    let hostname = nth_param(function, llvm_function, 0, "hostname")?;
+    let hostname = nth_param(function, llvm_function, 0, "hostname");
 
     let resolve_fn = declare_socket_resolve_extern(ctx);
     let result_ptr = ctx
@@ -139,23 +139,22 @@ fn emit_recv_from<'ctx>(
     function: &IRFunction,
     llvm_function: FunctionValue<'ctx>,
 ) -> Result<(), LlvmError> {
-    let result_symbol =
-        expect_enum_symbol(&function.return_type, function, "Socket.recv_from_raw")?;
-    let received_type = resolve_recv_from_payload(ctx, result_symbol, function)?;
+    let result_symbol = expect_enum_symbol(&function.return_type, function, "Socket.recv_from_raw");
+    let received_type = resolve_recv_from_payload(ctx, result_symbol, function);
     binary_pointer_size(ctx, function, "Socket.recv_from_raw")?;
 
     let i64_ty = ctx.context.i64_type();
     let i8_ty = ctx.context.i8_type();
     let ptr_ty = ctx.context.ptr_type(AddressSpace::default());
 
-    let self_struct = nth_struct(function, llvm_function, 0, "self")?;
+    let self_struct = nth_struct(function, llvm_function, 0, "self");
     let fd_struct = ctx
         .builder
         .build_extract_value(self_struct, 0, "fd_struct")
         .or_ice()?
         .into_struct_value();
     let fd = extract_int(ctx, fd_struct, 0, "fd")?;
-    let count_val = nth_param(function, llvm_function, 1, "count")?;
+    let count_val = nth_param(function, llvm_function, 1, "count");
 
     let recv_fn = declare_socket_recv_from_extern(ctx);
     let result_ptr = ctx
@@ -353,8 +352,8 @@ fn validate_resolve_payload(
     ctx: &EmitContext<'_>,
     result_symbol: &IRSymbol,
     function: &IRFunction,
-) -> Result<(), LlvmError> {
-    let ok_field = single_ok_payload(ctx, result_symbol, function, "Socket.resolve_raw")?;
+) {
+    let ok_field = single_ok_payload(ctx, result_symbol, function, "Socket.resolve_raw");
     let inner = match ok_field {
         IRType::List(inner) => *inner,
         other => {
@@ -362,7 +361,7 @@ fn validate_resolve_payload(
         }
     };
     match inner {
-        IRType::Binary => Ok(()),
+        IRType::Binary => (),
         other => panic!(
             "Socket.resolve_raw Ok payload expected to be List<Binary>, got `List<{other:?}>`",
         ),
@@ -375,8 +374,8 @@ fn resolve_recv_from_payload(
     ctx: &EmitContext<'_>,
     result_symbol: &IRSymbol,
     function: &IRFunction,
-) -> Result<IRType, LlvmError> {
-    let ok_field = single_ok_payload(ctx, result_symbol, function, "Socket.recv_from_raw")?;
+) -> IRType {
+    let ok_field = single_ok_payload(ctx, result_symbol, function, "Socket.recv_from_raw");
     match ok_field {
         IRType::Tuple(elements) => {
             let [IRType::Binary, IRType::Binary, IRType::Int64] = elements.as_slice() else {
@@ -385,7 +384,7 @@ fn resolve_recv_from_payload(
                      got `{elements:?}`",
                 );
             };
-            Ok(IRType::Tuple(elements))
+            IRType::Tuple(elements)
         }
         other => panic!("Socket.recv_from_raw Ok payload expected a Tuple, got `{other:?}`"),
     }
@@ -399,14 +398,14 @@ fn single_ok_payload(
     result_symbol: &IRSymbol,
     function: &IRFunction,
     intrinsic_label: &str,
-) -> Result<IRType, LlvmError> {
+) -> IRType {
     let payload = ctx
         .layouts
         .enum_variant_payload(result_symbol, result::ok_tag(ctx, result_symbol));
     match payload {
-        IRVariantPayload::Tuple(types) if types.len() == 1 => Ok(types.into_iter().next().unwrap()),
+        IRVariantPayload::Tuple(types) if types.len() == 1 => types.into_iter().next().unwrap(),
         IRVariantPayload::Struct(fields) if fields.len() == 1 => {
-            Ok(fields.into_iter().next().unwrap().ir_type)
+            fields.into_iter().next().unwrap().ir_type
         }
         other => panic!(
             "{intrinsic_label} on `{}` Ok variant has unexpected payload `{other:?}` \

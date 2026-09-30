@@ -55,13 +55,13 @@ pub(super) fn emit_cptr<'ctx>(
 /// `null` carry it on the return type. Every other method receives
 /// `self: CPtr<T>` as `params[0]`. Panics if neither slot is a
 /// `CPtr`.
-fn pointee(method: CPtrMethod, function: &IRFunction) -> Result<&IRType, LlvmError> {
+fn pointee(method: CPtrMethod, function: &IRFunction) -> &IRType {
     let candidate = match method {
         CPtrMethod::Alloc | CPtrMethod::Null => &function.return_type,
         _ => &function.params[0].ty,
     };
     match candidate {
-        IRType::CPtr(inner) => Ok(inner),
+        IRType::CPtr(inner) => inner,
         other => panic!(
             "CPtr.{method:?} expected a `CPtr<T>` slot, got `{other:?}` (symbol `{}`)",
             function.symbol,
@@ -76,7 +76,7 @@ fn emit_address<'ctx>(
     function: &IRFunction,
     llvm_function: FunctionValue<'ctx>,
 ) -> Result<(), LlvmError> {
-    let self_ptr = nth_pointer(function, llvm_function, 0, "self")?;
+    let self_ptr = nth_pointer(function, llvm_function, 0, "self");
     let address = ctx
         .builder
         .build_ptr_to_int(self_ptr, ctx.context.i64_type(), "address")
@@ -100,7 +100,7 @@ fn emit_alloc<'ctx>(
     function: &IRFunction,
     llvm_function: FunctionValue<'ctx>,
 ) -> Result<(), LlvmError> {
-    let inner = pointee(CPtrMethod::Alloc, function)?;
+    let inner = pointee(CPtrMethod::Alloc, function);
     let basic = ir_basic_type(ctx, inner)?;
     let element_size = basic.size_of().unwrap_or_else(|| {
         panic!(
@@ -108,7 +108,7 @@ fn emit_alloc<'ctx>(
             function.symbol,
         )
     });
-    let count = nth_int(function, llvm_function, 0, "count")?;
+    let count = nth_int(function, llvm_function, 0, "count");
     guard_nonnegative(ctx, count, "CPtr.alloc count cannot be negative")?;
     let total = ctx
         .builder
@@ -148,7 +148,7 @@ fn emit_borrow<'ctx>(
     function: &IRFunction,
     llvm_function: FunctionValue<'ctx>,
 ) -> Result<(), LlvmError> {
-    let payload = nth_pointer(function, llvm_function, 0, "bytes")?;
+    let payload = nth_pointer(function, llvm_function, 0, "bytes");
     ctx.builder
         .build_return(Some(&payload))
         .or_ice()
@@ -165,7 +165,7 @@ fn emit_copy<'ctx>(
     llvm_function: FunctionValue<'ctx>,
 ) -> Result<(), LlvmError> {
     let i64_ty = ctx.context.i64_type();
-    let payload = nth_pointer(function, llvm_function, 0, "bytes")?;
+    let payload = nth_pointer(function, llvm_function, 0, "bytes");
     let bit_length = load_bit_length(ctx, payload, "bit_length")?;
     let byte_count = ctx
         .builder
@@ -205,7 +205,7 @@ fn emit_free<'ctx>(
     function: &IRFunction,
     llvm_function: FunctionValue<'ctx>,
 ) -> Result<(), LlvmError> {
-    let self_ptr = nth_pointer(function, llvm_function, 0, "self")?;
+    let self_ptr = nth_pointer(function, llvm_function, 0, "self");
     let free = declare_free_extern(ctx);
     ctx.builder
         .build_call(free, &[self_ptr.into()], "")
@@ -218,10 +218,10 @@ fn emit_offset<'ctx>(
     function: &IRFunction,
     llvm_function: FunctionValue<'ctx>,
 ) -> Result<(), LlvmError> {
-    let inner = pointee(CPtrMethod::Offset, function)?;
+    let inner = pointee(CPtrMethod::Offset, function);
     let element_ty = ir_basic_type(ctx, inner)?;
-    let self_ptr = nth_pointer(function, llvm_function, 0, "self")?;
-    let n = nth_int(function, llvm_function, 1, "n")?;
+    let self_ptr = nth_pointer(function, llvm_function, 0, "self");
+    let n = nth_int(function, llvm_function, 1, "n");
     // SAFETY: `CPtr` is the raw pointer surface. Staying inside the
     // allocation is the Koja caller's contract, not this emitter's.
     let gep = unsafe {
@@ -237,9 +237,9 @@ fn emit_read<'ctx>(
     function: &IRFunction,
     llvm_function: FunctionValue<'ctx>,
 ) -> Result<(), LlvmError> {
-    let inner = pointee(CPtrMethod::Read, function)?;
+    let inner = pointee(CPtrMethod::Read, function);
     let element_ty = ir_basic_type(ctx, inner)?;
-    let self_ptr = nth_pointer(function, llvm_function, 0, "self")?;
+    let self_ptr = nth_pointer(function, llvm_function, 0, "self");
     let val = ctx
         .builder
         .build_load(element_ty, self_ptr, "read_val")
@@ -257,8 +257,8 @@ fn emit_write<'ctx>(
     function: &IRFunction,
     llvm_function: FunctionValue<'ctx>,
 ) -> Result<(), LlvmError> {
-    let self_ptr = nth_pointer(function, llvm_function, 0, "self")?;
-    let value = nth_param(function, llvm_function, 1, "value")?;
+    let self_ptr = nth_pointer(function, llvm_function, 0, "self");
+    let value = nth_param(function, llvm_function, 1, "value");
     ctx.builder.build_store(self_ptr, value).or_ice()?;
     ctx.builder.build_return(None).or_ice().map(|_| ())
 }
@@ -269,7 +269,7 @@ fn emit_null_check<'ctx>(
     llvm_function: FunctionValue<'ctx>,
 ) -> Result<(), LlvmError> {
     let ptr_ty = ctx.context.ptr_type(AddressSpace::default());
-    let self_ptr = nth_pointer(function, llvm_function, 0, "self")?;
+    let self_ptr = nth_pointer(function, llvm_function, 0, "self");
     let cmp = ctx
         .builder
         .build_int_compare(IntPredicate::EQ, self_ptr, ptr_ty.const_null(), "is_null")
@@ -289,8 +289,8 @@ fn emit_to_binary<'ctx>(
 ) -> Result<(), LlvmError> {
     let i64_ty = ctx.context.i64_type();
 
-    let src_ptr = nth_pointer(function, llvm_function, 0, "self")?;
-    let byte_len = nth_int(function, llvm_function, 1, "len")?;
+    let src_ptr = nth_pointer(function, llvm_function, 0, "self");
+    let byte_len = nth_int(function, llvm_function, 1, "len");
     guard_nonnegative(ctx, byte_len, "CPtr.to_binary length cannot be negative")?;
 
     let total = block_alloc_size(ctx, byte_len, false, "total")?;

@@ -135,7 +135,7 @@ fn define_user_main<'ctx>(
     ctx.reset_locals();
     let block_map = declare_blocks(ctx, function, blocks);
     let reachable = emit::reachable_blocks(blocks);
-    let return_block_ids = find_return_blocks(blocks, &reachable)?;
+    let return_block_ids = find_return_blocks(blocks, &reachable);
 
     let mut values: ValueMap<'ctx> = ValueMap::new();
     let phi_map = emit::declare_block_param_phis(ctx, blocks, &block_map, &mut values)?;
@@ -363,7 +363,7 @@ fn emit_user_main_return<'ctx>(ctx: &EmitContext<'ctx>) -> Result<(), LlvmError>
 fn find_return_blocks(
     blocks: &[IRBasicBlock],
     reachable: &HashSet<IRBlockId>,
-) -> Result<HashSet<IRBlockId>, LlvmError> {
+) -> HashSet<IRBlockId> {
     let return_blocks: HashSet<IRBlockId> = blocks
         .iter()
         .filter(|block| reachable.contains(&block.id))
@@ -375,5 +375,5 @@ fn find_return_blocks(
         "LLVM expects at least one reachable Return-terminated block in `main` (seal invariant \
          violation)"
     );
-    Ok(return_blocks)
+    return_blocks
 }
