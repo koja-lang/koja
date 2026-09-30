@@ -530,7 +530,7 @@ runs both.
   shape works.
 - **Conditional `Hash` impls that only the table reaches.** For
   `impl Hash for Pair<A: Hash, B: Hash>` and a `Map<Pair<Int,
-  String>, V>`, the monomorphized `Pair_$Int64.String$.hash/1` is
+String>, V>`, the monomorphized `Pair_$Int64.String$.hash/1` is
   never declared because no user code calls it directly. The lookup
   misses and codegen fails.
 
