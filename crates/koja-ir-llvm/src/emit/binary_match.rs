@@ -42,8 +42,7 @@ use koja_ir::{
 
 use crate::ctx::EmitContext;
 use crate::error::{IceExt, LlvmError};
-use crate::intrinsics::cptr::{declare_memcmp_extern, declare_memcpy_extern};
-use crate::runtime::declare_malloc_extern;
+use crate::runtime::{declare_malloc_extern, declare_memcmp_extern, declare_memcpy_extern};
 
 use super::constants::emit_string_literal_payload;
 use super::heap_layout::{LENGTH_OFFSET, block_alloc_size, init_heap_block};

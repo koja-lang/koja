@@ -321,7 +321,7 @@ pub(super) fn ast_endianness_to_ir(endian: Option<BinaryEndianness>) -> BinaryEn
     }
 }
 
-fn ast_signedness_to_ir(sign: Option<BinarySignedness>) -> BinarySign {
+pub(super) fn ast_signedness_to_ir(sign: Option<BinarySignedness>) -> BinarySign {
     match sign.unwrap_or(BinarySignedness::Unsigned) {
         BinarySignedness::Signed => BinarySign::Signed,
         BinarySignedness::Unsigned => BinarySign::Unsigned,

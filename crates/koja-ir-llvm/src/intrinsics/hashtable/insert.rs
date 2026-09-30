@@ -12,12 +12,12 @@ use koja_ir::IRFunction;
 use crate::ctx::EmitContext;
 use crate::error::{IceExt, LlvmError};
 use crate::intrinsics::element::{acquire_value, release_in_slot};
+use crate::intrinsics::util::{build_table_struct, nth_param, ret};
 
 use super::resize::emit_resize_if_needed;
 use super::util::{
-    KeyHashOps, TableSnapshot, advance_slot, build_table_struct, call_eq, call_hash,
-    clone_table_buffers, entry_pointer, extract_table_fields, nth_param, resolve_key_hash_ops,
-    ret_struct, value_slot,
+    KeyHashOps, TableSnapshot, advance_slot, call_eq, call_hash, clone_table_buffers,
+    entry_pointer, extract_table_fields, resolve_key_hash_ops, value_slot,
 };
 use super::{HashtableLayout, STATE_EMPTY, STATE_OCCUPIED};
 
@@ -67,7 +67,7 @@ pub(crate) fn emit_map_put<'ctx>(
         post.length,
         post.capacity,
     )?;
-    ret_struct(ctx, updated)?;
+    ret(ctx, updated.into())?;
 
     // Insert path: empty (or tombstone) slot, write key+value + state.
     // Both payloads are acquired so the table owns independent
@@ -96,7 +96,7 @@ pub(crate) fn emit_map_put<'ctx>(
         new_len,
         post.capacity,
     )?;
-    ret_struct(ctx, inserted)
+    ret(ctx, inserted.into())
 }
 
 pub(crate) fn emit_set_insert<'ctx>(
@@ -132,7 +132,7 @@ pub(crate) fn emit_set_insert<'ctx>(
         post.length,
         post.capacity,
     )?;
-    ret_struct(ctx, already)?;
+    ret(ctx, already.into())?;
 
     // Insert path: empty (or tombstone) slot, write entry + state. The
     // item is acquired so the set owns an independent reference (a
@@ -155,7 +155,7 @@ pub(crate) fn emit_set_insert<'ctx>(
         new_len,
         post.capacity,
     )?;
-    ret_struct(ctx, inserted)
+    ret(ctx, inserted.into())
 }
 
 /// The table a write path mutates. Copying mode clones the receiver's

@@ -13,7 +13,7 @@ use koja_ir::MapMethod;
 use crate::error::RuntimeError;
 use crate::interpreter::CallResolver;
 use crate::intrinsics::{IntrinsicCall, helpers};
-use crate::value::{MapEntries, Value};
+use crate::value::Value;
 
 pub(super) fn dispatch<R: CallResolver>(
     method: MapMethod,
@@ -36,18 +36,18 @@ fn new() -> Result<Value, RuntimeError> {
 }
 
 fn length(args: &[Value]) -> Result<Value, RuntimeError> {
-    let map = expect_map(args, 0, "Map.length")?;
+    let map = helpers::arg_map(args, 0, "Map.length")?;
     Ok(Value::Int(map.borrow().len() as i64))
 }
 
 fn empty_q(args: &[Value]) -> Result<Value, RuntimeError> {
-    let map = expect_map(args, 0, "Map.empty?")?;
+    let map = helpers::arg_map(args, 0, "Map.empty?")?;
     Ok(Value::Bool(map.borrow().is_empty()))
 }
 
 fn get<R: CallResolver>(call: IntrinsicCall<'_, R>) -> Result<Value, RuntimeError> {
-    let map = expect_map(call.args, 0, "Map.get")?;
-    let key = expect_arg(call.args, 1, "Map.get")?.clone();
+    let map = helpers::arg_map(call.args, 0, "Map.get")?;
+    let key = helpers::arg(call.args, 1, "Map.get")?.clone();
     let option_symbol = helpers::enum_return_symbol(call.function, "Map.get")?;
     let entries = map.borrow();
     let value = entries
@@ -58,15 +58,8 @@ fn get<R: CallResolver>(call: IntrinsicCall<'_, R>) -> Result<Value, RuntimeErro
 }
 
 fn next<R: CallResolver>(call: IntrinsicCall<'_, R>) -> Result<Value, RuntimeError> {
-    let map = expect_map(call.args, 0, "Map.next")?;
-    let slot = match expect_arg(call.args, 1, "Map.next")? {
-        Value::Int(slot) => *slot,
-        other => {
-            return Err(RuntimeError::TypeMismatch {
-                detail: format!("Map.next arg #1 expected Int, got `{other}`"),
-            });
-        }
-    };
+    let map = helpers::arg_map(call.args, 0, "Map.next")?;
+    let slot = helpers::arg_int(call.args, 1, "Map.next")?;
     let option_symbol = helpers::enum_return_symbol(call.function, "Map.next")?;
     let entries = map.borrow();
     let value = usize::try_from(slot)
@@ -82,16 +75,16 @@ fn next<R: CallResolver>(call: IntrinsicCall<'_, R>) -> Result<Value, RuntimeErr
 }
 
 fn has_q(args: &[Value]) -> Result<Value, RuntimeError> {
-    let map = expect_map(args, 0, "Map.has?")?;
-    let key = expect_arg(args, 1, "Map.has?")?.clone();
+    let map = helpers::arg_map(args, 0, "Map.has?")?;
+    let key = helpers::arg(args, 1, "Map.has?")?.clone();
     let entries = map.borrow();
     Ok(Value::Bool(entries.iter().any(|(k, _)| k == &key)))
 }
 
 pub(super) fn put(args: &[Value]) -> Result<Value, RuntimeError> {
-    let map = expect_map(args, 0, "Map.put")?;
-    let key = expect_arg(args, 1, "Map.put")?.clone();
-    let value = expect_arg(args, 2, "Map.put")?.clone();
+    let map = helpers::arg_map(args, 0, "Map.put")?;
+    let key = helpers::arg(args, 1, "Map.put")?.clone();
+    let value = helpers::arg(args, 2, "Map.put")?.clone();
     let mut entries = map.borrow().clone();
     if let Some(slot) = entries.iter_mut().find(|(k, _)| k == &key) {
         slot.1 = value;
@@ -102,26 +95,11 @@ pub(super) fn put(args: &[Value]) -> Result<Value, RuntimeError> {
 }
 
 fn remove(args: &[Value]) -> Result<Value, RuntimeError> {
-    let map = expect_map(args, 0, "Map.remove")?;
-    let key = expect_arg(args, 1, "Map.remove")?.clone();
+    let map = helpers::arg_map(args, 0, "Map.remove")?;
+    let key = helpers::arg(args, 1, "Map.remove")?.clone();
     let mut entries = map.borrow().clone();
     if let Some(idx) = entries.iter().position(|(k, _)| k == &key) {
         entries.remove(idx);
     }
     Ok(Value::Map(Rc::new(RefCell::new(entries))))
-}
-
-fn expect_arg<'a>(args: &'a [Value], index: usize, label: &str) -> Result<&'a Value, RuntimeError> {
-    args.get(index).ok_or_else(|| RuntimeError::Unsupported {
-        detail: format!("{label} missing arg #{index} (got {} args)", args.len()),
-    })
-}
-
-fn expect_map(args: &[Value], index: usize, label: &str) -> Result<MapEntries, RuntimeError> {
-    match expect_arg(args, index, label)? {
-        Value::Map(entries) => Ok(entries.clone()),
-        other => Err(RuntimeError::TypeMismatch {
-            detail: format!("{label} arg #{index} expected Map, got `{other}`"),
-        }),
-    }
 }

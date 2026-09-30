@@ -14,9 +14,10 @@ use crate::ctx::EmitContext;
 use crate::emit::enums::build_enum_value;
 use crate::error::{IceExt, LlvmError};
 use crate::intrinsics::element::acquire_value;
+use crate::intrinsics::util::{expect_enum_symbol, nth_int};
 use crate::types::{ir_basic_type, tuple_struct_type};
 
-use super::util::{entry_pointer, expect_enum_symbol, extract_table_fields, nth_param, value_slot};
+use super::util::{entry_pointer, extract_table_fields, value_slot};
 use super::{HashtableLayout, STATE_OCCUPIED};
 use crate::intrinsics::option;
 
@@ -31,7 +32,7 @@ pub(crate) fn emit_next<'ctx>(
     let option_symbol = expect_enum_symbol(&function.return_type, function, "collection.next")?;
     let payload_type = option_payload_type(ctx, option_symbol, function)?;
     let table = extract_table_fields(ctx, function, llvm_function)?;
-    let cursor = nth_param(function, llvm_function, 1, "cursor")?.into_int_value();
+    let cursor = nth_int(function, llvm_function, 1, "cursor")?;
     let entry_block = ctx.builder.get_insert_block().ok_or_else(|| {
         LlvmError::Codegen(format!(
             "collection.next has no entry block on `{}`",

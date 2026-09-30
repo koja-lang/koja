@@ -12,14 +12,12 @@ use koja_ir::IRFunction;
 use crate::ctx::EmitContext;
 use crate::error::{IceExt, LlvmError};
 use crate::intrinsics::element::acquire_value;
+use crate::intrinsics::util::{build_table_struct, extract_int, extract_pointer, nth_struct, ret};
 use crate::types::{hashtable_value_type, ir_basic_type};
 
 use super::insert::emit_insert_probe;
 use super::resize::emit_resize_if_needed;
-use super::util::{
-    TableSnapshot, build_empty_table, build_table_struct, entry_pointer, extract_int,
-    extract_pointer, nth_param, resolve_key_hash_ops, ret_struct,
-};
+use super::util::{TableSnapshot, build_empty_table, entry_pointer, resolve_key_hash_ops};
 use super::{HashtableLayout, STATE_OCCUPIED};
 
 pub(crate) fn emit_set_from_list<'ctx>(
@@ -33,15 +31,7 @@ pub(crate) fn emit_set_from_list<'ctx>(
     let entry_block = ctx.builder.get_insert_block().unwrap();
     let elem_basic_ty = ir_basic_type(ctx, layout.key_ty)?;
 
-    let list_val = match nth_param(function, llvm_function, 0, "list")? {
-        BasicValueEnum::StructValue(v) => v,
-        other => {
-            return Err(LlvmError::Codegen(format!(
-                "Set.from_list expected list struct on `{}`, got `{other:?}`",
-                function.symbol,
-            )));
-        }
-    };
+    let list_val = nth_struct(function, llvm_function, 0, "list")?;
     let list_ptr = ctx
         .builder
         .build_extract_value(list_val, 0, "list_ptr")
@@ -122,7 +112,7 @@ pub(crate) fn emit_set_from_list<'ctx>(
         .build_load(hashtable_value_type(ctx), set_alloca, "final_set")
         .or_ice()?
         .into_struct_value();
-    ret_struct(ctx, final_set)
+    ret(ctx, final_set.into())
 }
 
 /// Inline the `Set.insert` body at a call site instead of emitting

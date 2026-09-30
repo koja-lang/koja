@@ -30,9 +30,6 @@ pub(super) fn emit_bitwise<'ctx>(
     ty: IntType,
     op: BitOp,
 ) -> Result<(), LlvmError> {
-    let entry = ctx.context.append_basic_block(llvm_function, "entry");
-    ctx.builder.position_at_end(entry);
-
     let lhs = receiver_param(function, llvm_function);
     let result: IntValue<'ctx> = match op {
         BitOp::Band => {

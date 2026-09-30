@@ -17,9 +17,8 @@
 
 use inkwell::AddressSpace;
 use inkwell::IntPredicate;
-use inkwell::module::Linkage;
 use inkwell::types::BasicType;
-use inkwell::values::{BasicValueEnum, FunctionValue, IntValue, PointerValue};
+use inkwell::values::{BasicValueEnum, FunctionValue, IntValue};
 use koja_ir::panics::CPTR_READ_NON_FINITE_MESSAGE;
 use koja_ir::{CPtrMethod, IRFunction, IRType};
 
@@ -27,7 +26,8 @@ use crate::ctx::EmitContext;
 use crate::emit::heap_layout::{block_alloc_size, init_heap_block, load_bit_length};
 use crate::emit::ops::{emit_fault_guard, emit_finite_guard};
 use crate::error::{IceExt, LlvmError};
-use crate::runtime::{declare_free_extern, declare_malloc_extern};
+use crate::intrinsics::util::{nth_int, nth_param, nth_pointer};
+use crate::runtime::{declare_free_extern, declare_malloc_extern, declare_memcpy_extern};
 use crate::types::ir_basic_type;
 
 pub(super) fn emit_cptr<'ctx>(
@@ -36,9 +36,6 @@ pub(super) fn emit_cptr<'ctx>(
     llvm_function: FunctionValue<'ctx>,
     method: CPtrMethod,
 ) -> Result<(), LlvmError> {
-    let entry = ctx.context.append_basic_block(llvm_function, "entry");
-    ctx.builder.position_at_end(entry);
-
     match method {
         CPtrMethod::Address => emit_address(ctx, function, llvm_function),
         CPtrMethod::Alloc => emit_alloc(ctx, function, llvm_function),
@@ -261,12 +258,7 @@ fn emit_write<'ctx>(
     llvm_function: FunctionValue<'ctx>,
 ) -> Result<(), LlvmError> {
     let self_ptr = nth_pointer(function, llvm_function, 0, "self")?;
-    let value = llvm_function.get_nth_param(1).ok_or_else(|| {
-        LlvmError::Codegen(format!(
-            "CPtr.write missing `value` param on `{}`",
-            function.symbol,
-        ))
-    })?;
+    let value = nth_param(function, llvm_function, 1, "value")?;
     ctx.builder.build_store(self_ptr, value).or_ice()?;
     ctx.builder.build_return(None).or_ice().map(|_| ())
 }
@@ -355,76 +347,4 @@ fn guard_nonnegative<'ctx>(
         )
         .or_ice()?;
     emit_fault_guard(ctx, negative, message, "negative")
-}
-
-fn nth_pointer<'ctx>(
-    function: &IRFunction,
-    llvm_function: FunctionValue<'ctx>,
-    index: u32,
-    name: &str,
-) -> Result<PointerValue<'ctx>, LlvmError> {
-    let raw = llvm_function.get_nth_param(index).ok_or_else(|| {
-        LlvmError::Codegen(format!(
-            "missing param `{name}` (#{index}) on `{}`",
-            function.symbol,
-        ))
-    })?;
-    match raw {
-        BasicValueEnum::PointerValue(p) => Ok(p),
-        other => Err(LlvmError::Codegen(format!(
-            "expected pointer for `{name}` on `{}`, got `{other:?}`",
-            function.symbol,
-        ))),
-    }
-}
-
-fn nth_int<'ctx>(
-    function: &IRFunction,
-    llvm_function: FunctionValue<'ctx>,
-    index: u32,
-    name: &str,
-) -> Result<IntValue<'ctx>, LlvmError> {
-    let raw = llvm_function.get_nth_param(index).ok_or_else(|| {
-        LlvmError::Codegen(format!(
-            "missing param `{name}` (#{index}) on `{}`",
-            function.symbol,
-        ))
-    })?;
-    match raw {
-        BasicValueEnum::IntValue(v) => Ok(v),
-        other => Err(LlvmError::Codegen(format!(
-            "expected integer for `{name}` on `{}`, got `{other:?}`",
-            function.symbol,
-        ))),
-    }
-}
-
-/// Declare (or look up) the libc `memcpy` extern. Used by
-/// [`emit_to_binary`] and CString conversions to copy raw bytes into
-/// a freshly-allocated payload block. Signature:
-/// `i8* memcpy(i8* dst, i8* src, i64 n)`.
-pub(crate) fn declare_memcpy_extern<'ctx>(ctx: &EmitContext<'ctx>) -> FunctionValue<'ctx> {
-    if let Some(existing) = ctx.module.get_function("memcpy") {
-        return existing;
-    }
-    let ptr_ty = ctx.context.ptr_type(AddressSpace::default());
-    let i64_ty = ctx.context.i64_type();
-    let signature = ptr_ty.fn_type(&[ptr_ty.into(), ptr_ty.into(), i64_ty.into()], false);
-    ctx.module
-        .add_function("memcpy", signature, Some(Linkage::External))
-}
-
-/// `int memcmp(const void *s1, const void *s2, size_t n)`. Returns
-/// `0` when the byte ranges match. Shared by binary-pattern
-/// string-segment emission and any future byte-equality helper.
-pub(crate) fn declare_memcmp_extern<'ctx>(ctx: &EmitContext<'ctx>) -> FunctionValue<'ctx> {
-    if let Some(existing) = ctx.module.get_function("memcmp") {
-        return existing;
-    }
-    let ptr_ty = ctx.context.ptr_type(AddressSpace::default());
-    let i32_ty = ctx.context.i32_type();
-    let i64_ty = ctx.context.i64_type();
-    let signature = i32_ty.fn_type(&[ptr_ty.into(), ptr_ty.into(), i64_ty.into()], false);
-    ctx.module
-        .add_function("memcmp", signature, Some(Linkage::External))
 }

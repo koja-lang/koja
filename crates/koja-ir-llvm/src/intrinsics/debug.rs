@@ -19,6 +19,7 @@ use koja_ir::{DebugImpl, IRFunction, IntType};
 
 use crate::ctx::EmitContext;
 use crate::error::{IceExt, LlvmError};
+use crate::intrinsics::util::nth_param;
 use crate::runtime::{
     FORMAT_BOOL_SYMBOL, FORMAT_F32_SYMBOL, FORMAT_F64_SYMBOL, FORMAT_I64_SYMBOL, FORMAT_U64_SYMBOL,
     declare_runtime_format,
@@ -30,14 +31,7 @@ pub(super) fn emit_format<'ctx>(
     llvm_function: FunctionValue<'ctx>,
     impl_: DebugImpl,
 ) -> Result<(), LlvmError> {
-    let entry = ctx.context.append_basic_block(llvm_function, "entry");
-    ctx.builder.position_at_end(entry);
-    let raw = llvm_function.get_nth_param(0).ok_or_else(|| {
-        LlvmError::Codegen(format!(
-            "Debug.format missing `self` param on `{}`",
-            function.symbol,
-        ))
-    })?;
+    let raw = nth_param(function, llvm_function, 0, "self")?;
     let payload = match impl_ {
         DebugImpl::Bool => format_via_i64(ctx, function, raw, FORMAT_BOOL_SYMBOL)?,
         DebugImpl::Float => format_via_f64(ctx, function, raw)?,

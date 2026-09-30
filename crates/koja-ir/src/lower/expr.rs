@@ -23,6 +23,7 @@ use super::arms::lower_result_ty;
 use super::binary_literal::lower_binary_literal;
 use super::calls::{MethodCallShape, lower_call, lower_method_call};
 use super::closures::{lower_block_closure, lower_short_closure, synthesize_fn_as_closure_wrapper};
+use super::collection_literal::{lower_list_literal, lower_map_literal};
 use super::constants::{ConstantRead, constant_read_shape};
 use super::control_flow::{
     CondLowering, IfLowering, TernaryLowering, lower_cond, lower_if, lower_short_circuit,
@@ -30,13 +31,11 @@ use super::control_flow::{
 };
 use super::ctx::{FnLowerCtx, LowerOutput};
 use super::enums::lower_enum_construction;
-use super::list_literal::lower_list_literal;
 use super::loops::{lower_loop, lower_while};
-use super::map_literal::lower_map_literal;
 use super::match_expr::{MatchLowering, lower_match};
 use super::ops::{
-    bin_op_result_type, const_value_type, int_const_at_width, lower_bin_op, lower_literal,
-    lower_unary_op, parse_int_literal, unary_op_result_type,
+    bin_op_result_type, int_const_at_width, lower_bin_op, lower_literal, lower_unary_op,
+    parse_int_literal, unary_op_result_type,
 };
 use super::ownership::drop_discarded_temp;
 use super::package::resolved_type_to_ir_type;
@@ -308,7 +307,7 @@ fn lower_expr_inner(
         ExprKind::Literal { value } => {
             let target = literal_width(expr);
             let const_value = lower_literal(value, expr.span, target, &mut output.diagnostics)?;
-            let ty = const_value_type(&const_value);
+            let ty = const_value.ir_type();
             let dest = ctx.fresh_value(ty);
             ctx.cfg.append(
                 block,
@@ -414,7 +413,7 @@ fn lower_expr_inner(
                     .and_then(|target| fold_negated_literal_const(operand, target))
                     .or_else(|| fold_int_min_literal(operand))
             {
-                let ty = const_value_type(&folded);
+                let ty = folded.ir_type();
                 let dest = ctx.fresh_value(ty);
                 ctx.cfg.append(
                     block,
@@ -611,7 +610,7 @@ fn lower_constant_ident(
     };
     match shape {
         ConstantRead::Inline(value) => {
-            let dest = ctx.fresh_value(const_value_type(&value));
+            let dest = ctx.fresh_value(value.ir_type());
             ctx.cfg.append(block, IRInstruction::Const { dest, value });
             (dest, block)
         }

@@ -11,10 +11,10 @@ use koja_ir::{IRFunction, IRSymbol, IRType};
 
 use crate::ctx::EmitContext;
 use crate::error::{IceExt, LlvmError};
-use crate::intrinsics::cptr::declare_memcpy_extern;
 use crate::intrinsics::element::acquire_in_slot;
-use crate::runtime::{declare_malloc_extern, declare_memset_extern};
-use crate::types::{hashtable_value_type, ir_basic_type};
+use crate::intrinsics::util::{build_table_struct, extract_int, extract_pointer, nth_struct};
+use crate::runtime::{declare_malloc_extern, declare_memcpy_extern, declare_memset_extern};
+use crate::types::ir_basic_type;
 
 use super::{HashtableLayout, INITIAL_CAPACITY, STATE_OCCUPIED};
 
@@ -101,37 +101,6 @@ pub(super) fn build_empty_table<'ctx>(
         )
         .or_ice()?;
     build_table_struct(ctx, entries_ptr, states_ptr, i64_ty.const_zero(), capacity)
-}
-
-pub(super) fn build_table_struct<'ctx>(
-    ctx: &EmitContext<'ctx>,
-    entries_ptr: PointerValue<'ctx>,
-    states_ptr: PointerValue<'ctx>,
-    length: IntValue<'ctx>,
-    capacity: IntValue<'ctx>,
-) -> Result<StructValue<'ctx>, LlvmError> {
-    let table_ty = hashtable_value_type(ctx);
-    let s = ctx
-        .builder
-        .build_insert_value(table_ty.get_undef(), entries_ptr, 0, "with_entries")
-        .or_ice()?
-        .into_struct_value();
-    let s = ctx
-        .builder
-        .build_insert_value(s, states_ptr, 1, "with_states")
-        .or_ice()?
-        .into_struct_value();
-    let s = ctx
-        .builder
-        .build_insert_value(s, length, 2, "with_len")
-        .or_ice()?
-        .into_struct_value();
-    let s = ctx
-        .builder
-        .build_insert_value(s, capacity, 3, "with_cap")
-        .or_ice()?
-        .into_struct_value();
-    Ok(s)
 }
 
 #[track_caller]
@@ -397,86 +366,13 @@ pub(super) fn extract_table_fields<'ctx>(
     function: &IRFunction,
     llvm_function: FunctionValue<'ctx>,
 ) -> Result<TableSnapshot<'ctx>, LlvmError> {
-    let self_val = nth_hashtable(function, llvm_function, 0, "self")?;
+    let self_val = nth_struct(function, llvm_function, 0, "self")?;
     Ok(TableSnapshot {
         entries_ptr: extract_pointer(ctx, self_val, 0, "entries")?,
         states_ptr: extract_pointer(ctx, self_val, 1, "states")?,
         length: extract_int(ctx, self_val, 2, "len")?,
         capacity: extract_int(ctx, self_val, 3, "cap")?,
     })
-}
-
-#[track_caller]
-pub(super) fn extract_int<'ctx>(
-    ctx: &EmitContext<'ctx>,
-    table: StructValue<'ctx>,
-    index: u32,
-    name: &str,
-) -> Result<IntValue<'ctx>, LlvmError> {
-    Ok(ctx
-        .builder
-        .build_extract_value(table, index, name)
-        .or_ice()?
-        .into_int_value())
-}
-
-#[track_caller]
-pub(super) fn extract_pointer<'ctx>(
-    ctx: &EmitContext<'ctx>,
-    table: StructValue<'ctx>,
-    index: u32,
-    name: &str,
-) -> Result<PointerValue<'ctx>, LlvmError> {
-    Ok(ctx
-        .builder
-        .build_extract_value(table, index, name)
-        .or_ice()?
-        .into_pointer_value())
-}
-
-pub(super) fn nth_param<'ctx>(
-    function: &IRFunction,
-    llvm_function: FunctionValue<'ctx>,
-    index: u32,
-    name: &str,
-) -> Result<BasicValueEnum<'ctx>, LlvmError> {
-    llvm_function.get_nth_param(index).ok_or_else(|| {
-        LlvmError::Codegen(format!(
-            "missing param `{name}` (#{index}) on `{}`",
-            function.symbol,
-        ))
-    })
-}
-
-pub(super) fn nth_hashtable<'ctx>(
-    function: &IRFunction,
-    llvm_function: FunctionValue<'ctx>,
-    index: u32,
-    name: &str,
-) -> Result<StructValue<'ctx>, LlvmError> {
-    match nth_param(function, llvm_function, index, name)? {
-        BasicValueEnum::StructValue(v) => Ok(v),
-        other => Err(LlvmError::Codegen(format!(
-            "expected hashtable struct for `{name}` on `{}`, got `{other:?}`",
-            function.symbol,
-        ))),
-    }
-}
-
-#[track_caller]
-pub(super) fn ret_struct<'ctx>(
-    ctx: &EmitContext<'ctx>,
-    value: StructValue<'ctx>,
-) -> Result<(), LlvmError> {
-    ctx.builder.build_return(Some(&value)).or_ice().map(|_| ())
-}
-
-#[track_caller]
-pub(super) fn ret_basic<'ctx>(
-    ctx: &EmitContext<'ctx>,
-    value: BasicValueEnum<'ctx>,
-) -> Result<(), LlvmError> {
-    ctx.builder.build_return(Some(&value)).or_ice().map(|_| ())
 }
 
 /// Resolve the Hash + Equality intrinsics for `key_ty` via the
@@ -539,21 +435,4 @@ fn hash_receiver_symbol(key_ty: &IRType) -> Option<IRSymbol> {
         IRType::Struct(symbol) => symbol.clone(),
         _ => return None,
     })
-}
-
-/// Recover the enum `IRSymbol` from a slot that the lowering pass
-/// guarantees is an `IRType::Enum`. Defensive (codegen-error, not
-/// panic) so an upstream slip surfaces as a diagnostic.
-pub(super) fn expect_enum_symbol<'ty>(
-    ty: &'ty IRType,
-    function: &IRFunction,
-    label: &str,
-) -> Result<&'ty IRSymbol, LlvmError> {
-    match ty {
-        IRType::Enum(symbol) => Ok(symbol),
-        other => Err(LlvmError::Codegen(format!(
-            "{label} expected an enum-typed slot, got `{other:?}` (symbol `{}`)",
-            function.symbol,
-        ))),
-    }
 }

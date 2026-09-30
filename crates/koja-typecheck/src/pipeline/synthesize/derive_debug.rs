@@ -23,7 +23,7 @@
 //! always finds a provider after monomorphization.
 //!
 //! Stdlib generic types are skipped because their hand-written
-//! impls live in the same files and [`collect_existing_debug_impls`]
+//! impls live in the same files and [`super::derive_protocol`]
 //! detects them.
 //!
 //! Builtins are never synthesized. The synthesizer cannot know how an
@@ -43,15 +43,16 @@
 //! types.
 
 use koja_ast::ast::{
-    Annotation, Arg, EnumDecl, EnumVariant, EnumVariantData, Expr, ExprKind, FieldPattern, File,
+    Annotation, Arg, EnumDecl, EnumVariant, EnumVariantData, Expr, ExprKind, FieldPattern,
     Function, FunctionOrigin, ImplBlock, ImplMember, Item, MatchArm, Name, Param, Pattern,
-    Statement, StringPart, StructDecl, StructField, TypeExpr, TypeParam, Visibility, name_texts,
-    path_text,
+    Statement, StringPart, StructDecl, StructField, TypeExpr, Visibility, name_texts, path_text,
 };
 use koja_ast::identifier::Resolution;
 use koja_ast::span::Span;
 
 use crate::program::CheckedPackage;
+
+use super::{ident_expr, named_type, self_expr, self_target_type, synthetic_path};
 
 const DEBUG_PROTOCOL: &str = "Debug";
 const FORMAT_METHOD: &str = "format";
@@ -62,114 +63,15 @@ const PUTS_METHOD: &str = "puts";
 const STRING_TYPE: &str = "String";
 
 /// Synthesizes `impl Debug for T` for every struct / enum in `pkg`
-/// that doesn't already have one anywhere in the same package.
-/// Mutates each file's `items` in place by appending the synthetic
-/// impl blocks alongside the type's declaration.
-///
-/// The existing-impl scan runs across all of the package's files
-/// first so a hand-written `impl Debug for List<T>` in
-/// `debug_containers.koja` suppresses synthesis in
-/// `list.koja`. A naive per-file scan would produce both the
-/// hand-written impl and a synthesized one and trip the
-/// `duplicate impl` collision in
-/// [`crate::pipeline::collect`].
-///
-/// Synthesized targets join `existing` too, so a type declared twice
-/// gets one derived impl and collect reports the duplicate once.
+/// that doesn't already have one anywhere in the same package. See
+/// [`super::derive_protocol`] for the existing-impl scan.
 pub(crate) fn derive_debug_package(pkg: &mut CheckedPackage) {
-    let mut existing = collect_package_debug_impls(pkg);
-    for file in &mut pkg.files {
-        synthesize_into_file(file, &mut existing);
-    }
-}
-
-fn collect_package_debug_impls(pkg: &CheckedPackage) -> Vec<String> {
-    pkg.files
-        .iter()
-        .flat_map(|file| {
-            collect_existing_debug_impls(file)
-                .into_iter()
-                .chain(super::header_conformance_targets(file, DEBUG_PROTOCOL))
-        })
-        .collect()
-}
-
-fn synthesize_into_file(file: &mut File, existing: &mut Vec<String>) {
-    let mut synthesized: Vec<Item> = Vec::new();
-    for item in &file.items {
-        match item {
-            Item::Struct(decl) if needs_struct_derive(decl, existing) => {
-                synthesized.push(synthesize_struct_impl(decl));
-                existing.push(name_texts(&decl.path).join("."));
-            }
-            Item::Enum(decl) if needs_enum_derive(decl, existing) => {
-                synthesized.push(synthesize_enum_impl(decl));
-                existing.push(name_texts(&decl.path).join("."));
-            }
-            _ => {}
-        }
-    }
-    file.items.extend(synthesized);
-}
-
-/// Returns the bare type names that already have an explicit
-/// `impl Debug for T` block in this file. Generic args are ignored
-/// so `impl Debug for List<T>` matches a struct named `List`.
-fn collect_existing_debug_impls(file: &File) -> Vec<String> {
-    file.items
-        .iter()
-        .filter_map(|item| match item {
-            Item::Impl(block) => debug_impl_target(block),
-            _ => None,
-        })
-        .collect()
-}
-
-fn debug_impl_target(block: &ImplBlock) -> Option<String> {
-    let trait_name = type_expr_head(&block.trait_expr)?;
-    if trait_name != DEBUG_PROTOCOL {
-        return None;
-    }
-    type_expr_path(&block.target)
-}
-
-/// The target type's full dotted path (`Net.TCPSocket`,
-/// `Process.ExitSignal`), used to match an existing impl against a
-/// decl's [`StructDecl::path`] / [`EnumDecl::path`].
-fn type_expr_path(te: &TypeExpr) -> Option<String> {
-    match te {
-        TypeExpr::Named { path, .. } | TypeExpr::Generic { path, .. } => Some(path_text(path)),
-        _ => None,
-    }
-}
-
-fn type_expr_head(te: &TypeExpr) -> Option<&str> {
-    match te {
-        TypeExpr::Named { path, .. } | TypeExpr::Generic { path, .. } => {
-            path.last().map(Name::as_str)
-        }
-        TypeExpr::Function { .. }
-        | TypeExpr::Self_ { .. }
-        | TypeExpr::Tuple { .. }
-        | TypeExpr::Union { .. }
-        | TypeExpr::Unit { .. } => None,
-    }
-}
-
-fn needs_struct_derive(decl: &StructDecl, existing: &[String]) -> bool {
-    !has_impl(existing, &decl.path)
-}
-
-/// Empty enums (no variants) are uninhabited: a `match self end`
-/// body with no arms is rejected by typecheck, and there's no value
-/// to format anyway. Skip them.
-fn needs_enum_derive(decl: &EnumDecl, existing: &[String]) -> bool {
-    !decl.variants.is_empty() && !has_impl(existing, &decl.path)
-}
-
-/// Whether `existing` (dotted impl targets) already covers the decl at `path`.
-pub(super) fn has_impl(existing: &[String], path: &[Name]) -> bool {
-    existing.contains(&name_texts(path).join("."))
+    super::derive_protocol(
+        pkg,
+        DEBUG_PROTOCOL,
+        synthesize_struct_impl,
+        synthesize_enum_impl,
+    );
 }
 
 fn synthesize_struct_impl(decl: &StructDecl) -> Item {
@@ -208,36 +110,8 @@ fn debug_impl_block(target: TypeExpr, format_body: Expr, span: Span) -> Item {
     })
 }
 
-/// Builds the `Target<Params>` type expression on the `impl ... for`
-/// side, mirroring the type's own generic parameters so the impl
-/// monomorphizes per concrete instantiation.
-fn self_target_type(path: &[Name], type_params: &[TypeParam], span: Span) -> TypeExpr {
-    let path = synthetic_path(path, span);
-    if type_params.is_empty() {
-        TypeExpr::named(path, span)
-    } else {
-        let args = type_params
-            .iter()
-            .map(|tp| named_type(tp.name.as_str(), span))
-            .collect();
-        TypeExpr::generic(path, args, span)
-    }
-}
-
-/// Copy a declaration path's segments onto a synthesized node at
-/// `span`. Shared with [`super::derive_equality`].
-pub(super) fn synthetic_path(path: &[Name], span: Span) -> Vec<Name> {
-    path.iter()
-        .map(|segment| Name::new(segment.as_str(), span))
-        .collect()
-}
-
 fn debug_trait_expr(span: Span) -> TypeExpr {
     named_type(DEBUG_PROTOCOL, span)
-}
-
-fn named_type(name: &str, span: Span) -> TypeExpr {
-    TypeExpr::named(vec![Name::new(name, span)], span)
 }
 
 /// Builds `fn format(self) -> String <body> end`.
@@ -318,16 +192,6 @@ fn inspect_function(span: Span) -> Function {
         ]),
         span,
     }
-}
-
-fn ident_expr(name: &str, span: Span) -> Expr {
-    Expr::new(
-        ExprKind::Ident {
-            name: name.to_string(),
-            resolution: Resolution::Unresolved,
-        },
-        span,
-    )
 }
 
 fn method_call_no_args(receiver: Expr, method: &str, span: Span) -> Expr {
@@ -559,10 +423,6 @@ fn binding_format_part(name: &str, ty: &TypeExpr, span: Span) -> StringPart {
         span,
     );
     interpolation_part(ident, span)
-}
-
-fn self_expr(span: Span) -> Expr {
-    Expr::new(ExprKind::Self_ { local_id: None }, span)
 }
 
 fn literal_part(value: String, span: Span) -> StringPart {

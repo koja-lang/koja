@@ -13,7 +13,7 @@ use koja_ast::identifier::ResolvedType;
 use koja_typecheck::GlobalRegistry;
 
 use crate::function::{BranchTarget, IRBlockId, IRInstruction, IRTerminator};
-use crate::types::{ConstValue, IRType, ValueId};
+use crate::types::{ConstValue, IRBinOp, IRType, ValueId};
 
 use super::body::lower_body;
 use super::ctx::{FlowResult, FnLowerCtx, LowerOutput, SlotStateSnapshot};
@@ -155,6 +155,47 @@ pub(super) fn lower_result_ty(
     output: &mut LowerOutput,
 ) -> IRType {
     resolved_type_to_ir_type(resolution, registry, &mut output.instantiations)
+}
+
+/// Emit `lhs == rhs` over two `Int8` values in `block` and return
+/// the `Bool` result.
+pub(super) fn emit_int8_eq(
+    lhs: ValueId,
+    rhs: ValueId,
+    ctx: &mut FnLowerCtx,
+    block: IRBlockId,
+) -> ValueId {
+    let dest = ctx.fresh_value(IRType::Bool);
+    ctx.cfg.append(
+        block,
+        IRInstruction::BinaryOp {
+            dest,
+            lhs,
+            op: IRBinOp::Eq,
+            operand_ty: IRType::Int8,
+            rhs,
+        },
+    );
+    dest
+}
+
+/// Emit `tag == const(expected)` in `block` and return the `Bool`
+/// result. `tag` is an already extracted enum or union tag byte.
+pub(super) fn emit_tag_eq(
+    tag: ValueId,
+    expected: u8,
+    ctx: &mut FnLowerCtx,
+    block: IRBlockId,
+) -> ValueId {
+    let const_dest = ctx.fresh_value(IRType::Int8);
+    ctx.cfg.append(
+        block,
+        IRInstruction::Const {
+            dest: const_dest,
+            value: ConstValue::Int8(expected as i8),
+        },
+    );
+    emit_int8_eq(tag, const_dest, ctx, block)
 }
 
 /// Emit a fresh `Const::Unit` in `block` and return its `ValueId`.

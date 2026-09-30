@@ -45,9 +45,9 @@ use crate::function::{
 use crate::generics::Instantiation;
 use crate::local::IRLocalId;
 use crate::mangling::mangled_method_name;
-use crate::types::{ConstValue, IRBinOp, IRType, ValueId};
+use crate::types::{ConstValue, IRType, ValueId};
 
-use super::arms::{lower_arm_into, lower_result_ty};
+use super::arms::{emit_tag_eq, lower_arm_into, lower_result_ty};
 use super::ctx::{FnLowerCtx, LowerOutput};
 use super::expr::lower_expr;
 use super::ownership::{
@@ -659,14 +659,16 @@ fn build_process_body(
 
     let ok_block = ctx.fresh_block("start_ok");
     let err_block = ctx.fresh_block("start_err");
-    emit_result_tag_branch(
-        &mut ctx,
+    let result_tag = ctx.fresh_value(IRType::Int8);
+    ctx.cfg.append(
         entry,
-        start_result,
-        &result_symbol,
-        ok_block,
-        err_block,
+        IRInstruction::EnumTagGet {
+            dest: result_tag,
+            value: start_result,
+            ty: result_symbol.clone(),
+        },
     );
+    emit_tag_branch(&mut ctx, entry, result_tag, 0, ok_block, err_block);
 
     // Ok arm: clone the state out, release the scrutinee, apply the
     // declared priority, then chain into the run loop (which borrows
@@ -717,49 +719,25 @@ fn build_process_body(
     }
 }
 
-/// Emit `cond_br (result.tag == 0) ok, err` as `block`'s terminator.
-fn emit_result_tag_branch(
+/// Emit `cond_br (tag == expected) then, else` as `block`'s
+/// terminator. `tag` is an already extracted enum tag byte: the
+/// `Result` split on `start` (tag `0` is `Ok`) and each rung of
+/// [`emit_apply_priority`]'s weight diamond route through here.
+fn emit_tag_branch(
     ctx: &mut FnLowerCtx,
     block: IRBlockId,
-    result: ValueId,
-    result_symbol: &IRSymbol,
-    ok_block: IRBlockId,
-    err_block: IRBlockId,
+    tag: ValueId,
+    expected: u8,
+    then_block: IRBlockId,
+    else_block: IRBlockId,
 ) {
-    let tag = ctx.fresh_value(IRType::Int8);
-    ctx.cfg.append(
-        block,
-        IRInstruction::EnumTagGet {
-            dest: tag,
-            value: result,
-            ty: result_symbol.clone(),
-        },
-    );
-    let ok_tag = ctx.fresh_value(IRType::Int8);
-    ctx.cfg.append(
-        block,
-        IRInstruction::Const {
-            dest: ok_tag,
-            value: ConstValue::Int8(0),
-        },
-    );
-    let is_ok = ctx.fresh_value(IRType::Bool);
-    ctx.cfg.append(
-        block,
-        IRInstruction::BinaryOp {
-            dest: is_ok,
-            lhs: tag,
-            op: IRBinOp::Eq,
-            operand_ty: IRType::Int8,
-            rhs: ok_tag,
-        },
-    );
+    let matches = emit_tag_eq(tag, expected, ctx, block);
     ctx.cfg.set_terminator(
         block,
         IRTerminator::CondBranch {
-            cond: is_ok,
-            else_target: BranchTarget::to(err_block),
-            then_target: BranchTarget::to(ok_block),
+            cond: matches,
+            else_target: BranchTarget::to(else_block),
+            then_target: BranchTarget::to(then_block),
         },
     );
 }
@@ -844,7 +822,7 @@ fn emit_apply_priority(
     let join_block = ctx.fresh_block("priority_set");
     let weight = ctx.declare_block_param(join_block, IRType::Int64);
 
-    emit_priority_tag_branch(
+    emit_tag_branch(
         ctx,
         block,
         tag,
@@ -852,7 +830,7 @@ fn emit_apply_priority(
         high_block,
         check_low_block,
     );
-    emit_priority_tag_branch(
+    emit_tag_branch(
         ctx,
         check_low_block,
         tag,
@@ -868,46 +846,6 @@ fn emit_apply_priority(
         .append(join_block, IRInstruction::SetPriority { tag: weight });
     drop_discarded_temp(ctx, join_block, priority_value);
     join_block
-}
-
-/// Emit `cond_br (tag == variant_tag) then, else` as `block`'s
-/// terminator, one rung of [`emit_apply_priority`]'s weight diamond,
-/// modeled on [`emit_result_tag_branch`].
-fn emit_priority_tag_branch(
-    ctx: &mut FnLowerCtx,
-    block: IRBlockId,
-    tag: ValueId,
-    variant_tag: u8,
-    then_block: IRBlockId,
-    else_block: IRBlockId,
-) {
-    let expected = ctx.fresh_value(IRType::Int8);
-    ctx.cfg.append(
-        block,
-        IRInstruction::Const {
-            dest: expected,
-            value: ConstValue::Int8(variant_tag as i8),
-        },
-    );
-    let matches = ctx.fresh_value(IRType::Bool);
-    ctx.cfg.append(
-        block,
-        IRInstruction::BinaryOp {
-            dest: matches,
-            lhs: tag,
-            op: IRBinOp::Eq,
-            operand_ty: IRType::Int8,
-            rhs: expected,
-        },
-    );
-    ctx.cfg.set_terminator(
-        block,
-        IRTerminator::CondBranch {
-            cond: matches,
-            else_target: BranchTarget::to(else_block),
-            then_target: BranchTarget::to(then_block),
-        },
-    );
 }
 
 /// Materialize `weight` as an `Int64` const in `block` and branch to

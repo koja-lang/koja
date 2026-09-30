@@ -229,7 +229,7 @@ impl Substitution {
 /// default `Int`/`Float` against a slot already pinned (typically by
 /// receiver seeding) to a sized variant.
 ///
-/// The post-substitute [`super::resolve::calls::validate_arg_signature`]
+/// The post-substitute [`super::resolve::calls::validate_call_signature`]
 /// then runs [`super::resolve::coercion::check_compatible`] against the
 /// substituted param type, which:
 ///   - accepts literal args that fit the sized slot ([`Compatible::Coerced`])

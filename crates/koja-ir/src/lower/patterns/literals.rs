@@ -8,7 +8,7 @@ use koja_ast::span::Span;
 use koja_typecheck::LiteralCoercion;
 
 use super::super::ctx::{FnLowerCtx, LowerOutput};
-use super::super::ops::{const_value_type, lower_literal};
+use super::super::ops::lower_literal;
 use crate::function::{IRBlockId, IRInstruction};
 use crate::types::{IRBinOp, IRType, ValueId};
 
@@ -33,7 +33,7 @@ pub(super) fn emit_literal_eq(
 ) -> Result<ValueId, ()> {
     let target = coercion.and_then(LiteralCoercion::numeric_width);
     let const_value = lower_literal(value, span, target, diagnostics)?;
-    let const_ty = const_value_type(&const_value);
+    let const_ty = const_value.ir_type();
     let const_dest = ctx.fresh_value(const_ty.clone());
     ctx.cfg.append(
         block,

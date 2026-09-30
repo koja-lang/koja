@@ -15,19 +15,15 @@
 //! holds when the LLVM emit phase stamps the extracted value
 //! into the slot.
 
-use koja_ast::ast::{
-    BinaryEndianness, BinarySegment, BinarySignedness, ExprKind, Literal, Name, StringPart,
-    TypeExpr, UnaryOp,
-};
+use koja_ast::ast::{BinarySegment, ExprKind, Literal, Name, StringPart, TypeExpr, UnaryOp};
 use koja_ast::identifier::Resolution;
 use koja_typecheck::GlobalRegistry;
 
 use crate::function::{IRBlockId, IRInstruction};
 use crate::local::IRLocalId;
-use crate::types::{
-    BinaryEndian, BinarySign, IRType, LoweredBinaryMatchLayout, LoweredBinaryPattern, ValueId,
-};
+use crate::types::{IRType, LoweredBinaryMatchLayout, LoweredBinaryPattern, ValueId};
 
+use super::binary_literal::{ast_endianness_to_ir, ast_signedness_to_ir};
 use super::ctx::{FnLowerCtx, LowerOutput};
 use super::patterns::ensure_local_declared;
 
@@ -250,18 +246,4 @@ fn string_segment_bytes(segment: &BinarySegment) -> Option<Vec<u8>> {
         }
     }
     Some(bytes)
-}
-
-fn ast_endianness_to_ir(endian: Option<BinaryEndianness>) -> BinaryEndian {
-    match endian.unwrap_or(BinaryEndianness::Big) {
-        BinaryEndianness::Big => BinaryEndian::Big,
-        BinaryEndianness::Little => BinaryEndian::Little,
-    }
-}
-
-fn ast_signedness_to_ir(sign: Option<BinarySignedness>) -> BinarySign {
-    match sign.unwrap_or(BinarySignedness::Unsigned) {
-        BinarySignedness::Signed => BinarySign::Signed,
-        BinarySignedness::Unsigned => BinarySign::Unsigned,
-    }
 }

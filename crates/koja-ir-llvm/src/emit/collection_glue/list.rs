@@ -3,17 +3,16 @@
 //! [`crate::types::list_value_type`]), with elements living off-heap
 //! behind `buf_ptr` as a flat `[T; cap]`.
 
-use inkwell::values::{FunctionValue, IntValue, PointerValue, StructValue};
+use inkwell::values::{FunctionValue, IntValue};
 use koja_ir::{IRFunction, IRType};
 
 use crate::ctx::EmitContext;
 use crate::error::{IceExt, LlvmError};
-use crate::intrinsics::cptr::declare_memcpy_extern;
 use crate::intrinsics::element::{acquire_buffer, deep_copy_buffer, release_buffer};
-use crate::runtime::{declare_free_extern, declare_malloc_extern};
-use crate::types::list_value_type;
+use crate::intrinsics::util::{build_list_struct, extract_int, extract_pointer, nth_struct};
+use crate::runtime::{declare_free_extern, declare_malloc_extern, declare_memcpy_extern};
 
-use super::{ElementCopy, abi_size, call_ptr, extract_int, extract_pointer, nth_struct};
+use super::{ElementCopy, abi_size, call_ptr};
 
 /// `clone_List<T>` / `deep_copy_List<T>`: copy the backing buffer,
 /// then acquire (clone) or deep-copy (process-boundary) every element
@@ -25,7 +24,7 @@ pub(super) fn copy_list<'ctx>(
     element: &IRType,
     copy: ElementCopy,
 ) -> Result<(), LlvmError> {
-    let self_val = nth_struct(function, llvm_function, 0)?;
+    let self_val = nth_struct(function, llvm_function, 0, "self")?;
     let src_buf = extract_pointer(ctx, self_val, 0, "src_buf")?;
     let len = extract_int(ctx, self_val, 1, "len")?;
     let element_size = element_byte_size(ctx, element)?;
@@ -77,7 +76,7 @@ pub(super) fn drop_list<'ctx>(
     llvm_function: FunctionValue<'ctx>,
     element: &IRType,
 ) -> Result<(), LlvmError> {
-    let self_val = nth_struct(function, llvm_function, 0)?;
+    let self_val = nth_struct(function, llvm_function, 0, "self")?;
     let buf = extract_pointer(ctx, self_val, 0, "buf")?;
     let len = extract_int(ctx, self_val, 1, "len")?;
     let element_size = element_byte_size(ctx, element)?;
@@ -97,27 +96,4 @@ fn element_byte_size<'ctx>(
         .context
         .i64_type()
         .const_int(abi_size(ctx, element)?, false))
-}
-
-fn build_list_struct<'ctx>(
-    ctx: &EmitContext<'ctx>,
-    buf: PointerValue<'ctx>,
-    len: IntValue<'ctx>,
-    cap: IntValue<'ctx>,
-) -> Result<StructValue<'ctx>, LlvmError> {
-    let list_ty = list_value_type(ctx);
-    let with_buf = ctx
-        .builder
-        .build_insert_value(list_ty.get_undef(), buf, 0, "with_buf")
-        .or_ice()?
-        .into_struct_value();
-    let with_len = ctx
-        .builder
-        .build_insert_value(with_buf, len, 1, "with_len")
-        .or_ice()?
-        .into_struct_value();
-    ctx.builder
-        .build_insert_value(with_len, cap, 2, "with_cap")
-        .or_ice()
-        .map(|s| s.into_struct_value())
 }

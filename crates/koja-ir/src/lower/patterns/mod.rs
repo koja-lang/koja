@@ -47,9 +47,7 @@ use koja_ast::identifier::{GlobalRegistryId, LocalId, Resolution, ResolvedType};
 use koja_ast::labels::{pattern_kind_label, pattern_span};
 use koja_typecheck::GlobalRegistry;
 
-use crate::types::{ConstValue, IRBinOp};
-
-use super::arms::lower_result_ty;
+use super::arms::{emit_tag_eq, lower_result_ty};
 use super::ctx::{FnLowerCtx, LowerOutput};
 use super::package::resolved_type_to_ir_type;
 use crate::enum_decl::IRVariantTag;
@@ -178,6 +176,7 @@ pub(super) struct PayloadBind {
 /// One extraction step in a [`PayloadBind`]'s chain. `output_type`
 /// is the type of the value this step produces (handed to the next
 /// step or to `LocalWrite` if this is the last step).
+#[derive(Clone)]
 pub(super) struct BindStep {
     pub(super) op: BindOp,
     pub(super) output_type: IRType,
@@ -190,6 +189,7 @@ pub(super) struct BindStep {
 /// `TupleElement` emits `TupleGet` (index-addressed, no decl).
 /// `UnionPayload` emits `UnionPayloadGet` (tag-gated extraction
 /// against a tagged union member).
+#[derive(Clone)]
 pub(super) enum BindOp {
     EnumPayloadField {
         enum_symbol: IRSymbol,
@@ -229,26 +229,7 @@ fn emit_union_tag_eq(
             value: subject,
         },
     );
-    let const_dest = ctx.fresh_value(IRType::Int8);
-    ctx.cfg.append(
-        block,
-        IRInstruction::Const {
-            dest: const_dest,
-            value: ConstValue::Int8(member_index as i8),
-        },
-    );
-    let cond = ctx.fresh_value(IRType::Bool);
-    ctx.cfg.append(
-        block,
-        IRInstruction::BinaryOp {
-            dest: cond,
-            lhs: tag_value,
-            op: IRBinOp::Eq,
-            operand_ty: IRType::Int8,
-            rhs: const_dest,
-        },
-    );
-    cond
+    emit_tag_eq(tag_value, member_index, ctx, block)
 }
 
 pub(super) fn lower_pattern_check(
@@ -425,6 +406,19 @@ fn lower_binding_check(
             value: inputs.subject,
         },
     );
+}
+
+/// The registry id behind a `Named` type that typecheck sealed to a
+/// global. `what` names the pattern site in the panic ("struct
+/// pattern subject", "enum subject").
+pub(super) fn global_id_of(ty: &ResolvedType, what: &str) -> GlobalRegistryId {
+    match ty {
+        ResolvedType::Named {
+            resolution: Resolution::Global(id),
+            ..
+        } => *id,
+        _ => panic!("IR lower: {what} has non-Global resolution after typecheck seal"),
+    }
 }
 
 /// Pin a binding's `LocalId` invariant: every pattern binding must

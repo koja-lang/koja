@@ -7,12 +7,13 @@
 //! [SplitMix64]: https://prng.di.unimi.it/splitmix64.c
 
 use inkwell::IntPredicate;
-use inkwell::values::{BasicValueEnum, FunctionValue, IntValue, PointerValue};
+use inkwell::values::{FunctionValue, IntValue};
 use koja_ir::{HashImpl, IRFunction, IRSymbol};
 
 use crate::ctx::EmitContext;
 use crate::emit::heap_layout::load_bit_length;
 use crate::error::{IceExt, LlvmError};
+use crate::intrinsics::util::{nth_int, nth_pointer};
 
 const FNV_OFFSET_BASIS: u64 = 0xcbf29ce484222325;
 const FNV_PRIME: u64 = 0x100000001b3;
@@ -39,24 +40,7 @@ fn emit_bytes_hash<'ctx>(
 ) -> Result<(), LlvmError> {
     let i64_ty = ctx.context.i64_type();
     let i8_ty = ctx.context.i8_type();
-    let entry = ctx.context.append_basic_block(llvm_function, "entry");
-    ctx.builder.position_at_end(entry);
-
-    let raw = llvm_function.get_nth_param(0).ok_or_else(|| {
-        LlvmError::Codegen(format!(
-            "bytes hash missing payload pointer on `{}`",
-            function.symbol,
-        ))
-    })?;
-    let str_ptr: PointerValue<'_> = match raw {
-        BasicValueEnum::PointerValue(p) => p,
-        other => {
-            return Err(LlvmError::Codegen(format!(
-                "bytes hash expected pointer receiver on `{}`, got `{other:?}`",
-                function.symbol,
-            )));
-        }
-    };
+    let str_ptr = nth_pointer(function, llvm_function, 0, "self")?;
 
     let bit_length = load_bit_length(ctx, str_ptr, "bit_length")?;
     let byte_count = ctx
@@ -64,6 +48,12 @@ fn emit_bytes_hash<'ctx>(
         .build_right_shift(bit_length, i64_ty.const_int(3, false), false, "byte_count")
         .or_ice()?;
 
+    let entry = ctx.builder.get_insert_block().ok_or_else(|| {
+        LlvmError::Codegen(format!(
+            "bytes hash has no entry block on `{}`",
+            function.symbol,
+        ))
+    })?;
     let header_bb = ctx.context.append_basic_block(llvm_function, "fnv_header");
     let body_bb = ctx.context.append_basic_block(llvm_function, "fnv_body");
     let done_bb = ctx.context.append_basic_block(llvm_function, "fnv_done");
@@ -125,22 +115,8 @@ fn emit_int_hash<'ctx>(
     function: &IRFunction,
     llvm_function: FunctionValue<'ctx>,
 ) -> Result<(), LlvmError> {
-    let entry = ctx.context.append_basic_block(llvm_function, "entry");
-    ctx.builder.position_at_end(entry);
-
     let i64_ty = ctx.context.i64_type();
-    let raw = llvm_function.get_nth_param(0).ok_or_else(|| {
-        LlvmError::Codegen(format!("missing receiver param on `{}`", function.symbol))
-    })?;
-    let value = match raw {
-        BasicValueEnum::IntValue(v) => v,
-        other => {
-            return Err(LlvmError::Codegen(format!(
-                "expected integer receiver on `{}`, got `{other:?}`",
-                function.symbol,
-            )));
-        }
-    };
+    let value = nth_int(function, llvm_function, 0, "self")?;
     let extended = if value.get_type().get_bit_width() < 64 {
         ctx.builder
             .build_int_z_extend(value, i64_ty, "ext")

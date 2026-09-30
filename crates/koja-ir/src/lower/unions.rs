@@ -12,6 +12,7 @@ use koja_ast::ast::{Arg, Expr};
 use koja_ast::identifier::{AnonymousKind, Identifier, Resolution, ResolvedType};
 use koja_typecheck::{GlobalRegistry, peel_alias};
 
+use super::arms::emit_tag_eq;
 use super::calls::{conformance_method_symbol, lower_debug_family};
 use super::ctx::{FnLowerCtx, LowerOutput};
 use super::expr::{emit_string_const, lower_expr};
@@ -19,7 +20,7 @@ use super::ownership::{drop_discarded_temp, materialize_owned};
 use super::package::resolved_type_to_ir_type;
 use super::tuples::emit_tuple_format;
 use crate::function::{BranchTarget, IRBlockId, IRInstruction, IRTerminator};
-use crate::types::{ConstValue, IRBinOp, IRType, ValueId};
+use crate::types::{ConstValue, IRType, ValueId};
 
 /// One member's view of a union value inside an [`emit_union_switch`]
 /// arm. `payload` is the value projected as `member_ty`.
@@ -137,15 +138,7 @@ pub(super) fn emit_union_switch(
         let arm_block = if index == last {
             current
         } else {
-            let expected = ctx.fresh_value(IRType::Int8);
-            ctx.cfg.append(
-                current,
-                IRInstruction::Const {
-                    dest: expected,
-                    value: ConstValue::Int8(member_index as i8),
-                },
-            );
-            let is_member = emit_int8_eq(tag, expected, ctx, current);
+            let is_member = emit_tag_eq(tag, member_index, ctx, current);
             let arm_block = ctx.fresh_block(format!("{label}_member"));
             let next = ctx.fresh_block(format!("{label}_next"));
             ctx.cfg.set_terminator(
@@ -348,26 +341,6 @@ pub(super) fn emit_union_payload(
             member_type: member_ty.clone(),
             ty: union_ty.clone(),
             value,
-        },
-    );
-    dest
-}
-
-pub(super) fn emit_int8_eq(
-    lhs: ValueId,
-    rhs: ValueId,
-    ctx: &mut FnLowerCtx,
-    block: IRBlockId,
-) -> ValueId {
-    let dest = ctx.fresh_value(IRType::Bool);
-    ctx.cfg.append(
-        block,
-        IRInstruction::BinaryOp {
-            dest,
-            lhs,
-            op: IRBinOp::Eq,
-            operand_ty: IRType::Int8,
-            rhs,
         },
     );
     dest

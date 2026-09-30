@@ -11,6 +11,7 @@ use koja_ir::IRFunction;
 
 use crate::ctx::EmitContext;
 use crate::error::{IceExt, LlvmError};
+use crate::intrinsics::util::nth_param;
 use crate::runtime::declare_panic_extern;
 
 pub(super) fn emit_panic<'ctx>(
@@ -18,15 +19,7 @@ pub(super) fn emit_panic<'ctx>(
     function: &IRFunction,
     llvm_function: FunctionValue<'ctx>,
 ) -> Result<(), LlvmError> {
-    let entry = ctx.context.append_basic_block(llvm_function, "entry");
-    ctx.builder.position_at_end(entry);
-
-    let message = llvm_function.get_nth_param(0).ok_or_else(|| {
-        LlvmError::Codegen(format!(
-            "Kernel.panic missing `message` param on `{}`",
-            function.symbol,
-        ))
-    })?;
+    let message = nth_param(function, llvm_function, 0, "message")?;
     let panic = declare_panic_extern(ctx);
     ctx.builder
         .build_call(panic, &[message.into()], "")

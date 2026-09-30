@@ -13,6 +13,7 @@ use koja_ast::ast::{Arg, Expr};
 use koja_ast::identifier::{AnonymousKind, ResolvedType};
 use koja_typecheck::{GlobalRegistry, peel_alias};
 
+use super::arms::emit_int8_eq;
 use super::calls::conformance_method_symbol;
 use super::ctx::{FnLowerCtx, LowerOutput};
 use super::expr::lower_expr;
@@ -20,7 +21,7 @@ use super::ownership::drop_discarded_temp;
 use super::package::resolved_type_to_ir_type;
 use super::tuples::emit_tuple_get;
 use super::unions::{
-    UnionSubject, UnionSwitch, emit_int8_eq, emit_union_payload, emit_union_switch, emit_union_tag,
+    UnionSubject, UnionSwitch, emit_union_payload, emit_union_switch, emit_union_tag,
 };
 use crate::function::{BranchTarget, IRBlockId, IRInstruction, IRTerminator};
 use crate::types::{ConstValue, IRType, ValueId};

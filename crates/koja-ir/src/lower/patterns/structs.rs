@@ -14,15 +14,16 @@
 //! match driver can short-circuit the chain.
 
 use koja_ast::ast::{FieldPattern, Pattern};
-use koja_ast::identifier::{Resolution, ResolvedType};
+use koja_ast::identifier::{GlobalRegistryId, ResolvedType};
+use koja_typecheck::{GlobalRegistry, StructDefinition};
 
 use super::super::ctx::{FnLowerCtx, LowerOutput};
 use super::super::structs::{resolved_struct_symbol, struct_definition_from_resolution};
 use super::{
     BindOp, BindStep, ChainMode, PatternCheck, PatternInputs, PayloadBind, TestStep,
-    ensure_local_declared, field_type_for, lower_pattern_check, require_local,
+    ensure_local_declared, field_type_for, global_id_of, lower_pattern_check, require_local,
 };
-use crate::function::{IRBlockId, IRInstruction};
+use crate::function::{IRBlockId, IRInstruction, IRSymbol};
 use crate::types::{IRType, ValueId};
 
 pub(super) fn lower_struct_check(
@@ -32,23 +33,8 @@ pub(super) fn lower_struct_check(
     block: IRBlockId,
     output: &mut LowerOutput,
 ) -> (PatternCheck, IRBlockId) {
-    let definition =
-        struct_definition_from_resolution(inputs.subject_ty, inputs.registry, "struct pattern");
-    let struct_symbol = resolved_struct_symbol(
-        inputs.subject_ty,
-        inputs.registry,
-        &mut output.instantiations,
-    );
-    let owner = match inputs.subject_ty {
-        ResolvedType::Named {
-            resolution: Resolution::Global(id),
-            ..
-        } => *id,
-        _ => panic!(
-            "IR lower: struct pattern subject has non-Global resolution after \
-             typecheck seal",
-        ),
-    };
+    let (definition, struct_symbol, owner) =
+        struct_pattern_target(inputs.subject_ty, inputs.registry, output, "struct pattern");
     let mut binds = Vec::new();
     let mut steps = Vec::new();
     let mut current_block = block;
@@ -98,6 +84,22 @@ pub(super) fn lower_struct_check(
             current_block,
         )
     }
+}
+
+/// The struct a struct pattern destructures: its typecheck
+/// definition (for field lookup), its IR symbol (for `FieldGet`),
+/// and its registry id (the owner for field type substitution).
+/// `what` names the site in the invariant panics.
+fn struct_pattern_target<'a>(
+    subject_ty: &ResolvedType,
+    registry: &'a GlobalRegistry,
+    output: &mut LowerOutput,
+    what: &str,
+) -> (&'a StructDefinition, IRSymbol, GlobalRegistryId) {
+    let definition = struct_definition_from_resolution(subject_ty, registry, what);
+    let struct_symbol = resolved_struct_symbol(subject_ty, registry, &mut output.instantiations);
+    let owner = global_id_of(subject_ty, &format!("{what} subject"));
+    (definition, struct_symbol, owner)
 }
 
 /// Lower one nested sub-pattern (a struct field or enum payload
@@ -226,30 +228,16 @@ fn collect_catch_all_binds(
             ctx.mark_slot_borrowed(ir_local);
             binds.push(PayloadBind {
                 local: ir_local,
-                chain: chain.iter().map(clone_bind_step).collect(),
+                chain: chain.to_vec(),
             });
         }
         Pattern::Struct { fields, .. } => {
-            let definition = super::super::structs::struct_definition_from_resolution(
+            let (definition, struct_symbol, owner) = struct_pattern_target(
                 sub_resolved_ty,
                 inputs.registry,
-                "struct pattern",
+                output,
+                "nested struct pattern",
             );
-            let struct_symbol = super::super::structs::resolved_struct_symbol(
-                sub_resolved_ty,
-                inputs.registry,
-                &mut output.instantiations,
-            );
-            let owner = match sub_resolved_ty {
-                ResolvedType::Named {
-                    resolution: Resolution::Global(id),
-                    ..
-                } => *id,
-                _ => panic!(
-                    "IR lower: nested struct pattern subject has non-Global \
-                     resolution after typecheck seal",
-                ),
-            };
             let nested_inputs = PatternInputs {
                 registry: inputs.registry,
                 subject: inputs.subject,
@@ -422,8 +410,9 @@ pub(super) fn consume_inner_check(
 ) {
     match inner {
         PatternCheck::CatchAll { binds: inner_binds } => {
-            for bind in inner_binds {
-                binds.push(prepend_step(prefix, bind));
+            for mut bind in inner_binds {
+                bind.chain.insert(0, prefix.clone());
+                binds.push(bind);
             }
         }
         PatternCheck::Tests {
@@ -437,53 +426,11 @@ pub(super) fn consume_inner_check(
                  Or-chained check, but typecheck-resolve admits only And-shaped \
                  nested patterns here",
             );
-            for bind in payload_binds {
-                binds.push(prepend_step(prefix, bind));
+            for mut bind in payload_binds {
+                bind.chain.insert(0, prefix.clone());
+                binds.push(bind);
             }
             steps.extend(inner_steps);
         }
-    }
-}
-
-fn prepend_step(prefix: &BindStep, mut bind: PayloadBind) -> PayloadBind {
-    bind.chain.insert(0, clone_bind_step(prefix));
-    bind
-}
-
-pub(super) fn clone_bind_step(step: &BindStep) -> BindStep {
-    BindStep {
-        op: clone_bind_op(&step.op),
-        output_type: step.output_type.clone(),
-    }
-}
-
-fn clone_bind_op(op: &BindOp) -> BindOp {
-    match op {
-        BindOp::EnumPayloadField {
-            enum_symbol,
-            payload_index,
-            tag,
-        } => BindOp::EnumPayloadField {
-            enum_symbol: enum_symbol.clone(),
-            payload_index: *payload_index,
-            tag: *tag,
-        },
-        BindOp::StructField {
-            field_index,
-            struct_symbol,
-        } => BindOp::StructField {
-            field_index: *field_index,
-            struct_symbol: struct_symbol.clone(),
-        },
-        BindOp::TupleElement { index } => BindOp::TupleElement { index: *index },
-        BindOp::UnionPayload {
-            member_index,
-            member_type,
-            union_type,
-        } => BindOp::UnionPayload {
-            member_index: *member_index,
-            member_type: member_type.clone(),
-            union_type: union_type.clone(),
-        },
     }
 }

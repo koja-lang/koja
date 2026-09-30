@@ -222,14 +222,7 @@ impl fmt::Display for Value {
             Value::Closure { body, captures } => {
                 write!(f, "<closure {body}")?;
                 if !captures.is_empty() {
-                    write!(f, " env=[")?;
-                    for (index, capture) in captures.iter().enumerate() {
-                        if index > 0 {
-                            write!(f, ", ")?;
-                        }
-                        write!(f, "{capture}")?;
-                    }
-                    write!(f, "]")?;
+                    write_joined(f, " env=[", captures, "]", fmt::Display::fmt)?;
                 }
                 write!(f, ">")
             }
@@ -242,24 +235,12 @@ impl fmt::Display for Value {
                 write!(f, "{symbol}.{name}")?;
                 match payload {
                     EnumPayload::Struct(fields) => {
-                        write!(f, "{{")?;
-                        for (index, (field_name, value)) in fields.iter().enumerate() {
-                            if index > 0 {
-                                write!(f, ", ")?;
-                            }
-                            write!(f, "{field_name}: {value}")?;
-                        }
-                        write!(f, "}}")
+                        write_joined(f, "{", fields.iter(), "}", |(field_name, value), f| {
+                            write!(f, "{field_name}: {value}")
+                        })
                     }
                     EnumPayload::Tuple(values) => {
-                        write!(f, "(")?;
-                        for (index, value) in values.iter().enumerate() {
-                            if index > 0 {
-                                write!(f, ", ")?;
-                            }
-                            write!(f, "{value}")?;
-                        }
-                        write!(f, ")")
+                        write_joined(f, "(", values.iter(), ")", fmt::Display::fmt)
                     }
                     EnumPayload::Unit => Ok(()),
                 }
@@ -274,25 +255,10 @@ impl fmt::Display for Value {
             Value::Map(entries) => write_map_entries(f, &entries.borrow()),
             Value::Set(items) => write_set_items(f, &items.borrow()),
             Value::String(bytes) => f.write_str(&String::from_utf8_lossy(bytes)),
-            Value::Tuple(elements) => {
-                write!(f, "(")?;
-                for (index, element) in elements.iter().enumerate() {
-                    if index > 0 {
-                        write!(f, ", ")?;
-                    }
-                    write!(f, "{element}")?;
-                }
-                write!(f, ")")
-            }
+            Value::Tuple(elements) => write_joined(f, "(", elements, ")", fmt::Display::fmt),
             Value::Struct { symbol, fields } => {
-                write!(f, "{symbol}(")?;
-                for (index, field) in fields.iter().enumerate() {
-                    if index > 0 {
-                        write!(f, ", ")?;
-                    }
-                    write!(f, "{field}")?;
-                }
-                write!(f, ")")
+                write!(f, "{symbol}")?;
+                write_joined(f, "(", fields, ")", fmt::Display::fmt)
             }
             Value::Union {
                 payload,
@@ -315,64 +281,11 @@ fn write_cptr(f: &mut fmt::Formatter<'_>, ptr: *mut u8) -> fmt::Result {
     }
 }
 
-/// Render a [`Value::List`] as `[a, b, c]`. Element values are
-/// formatted with their own `Display` impl so nested lists / structs
-/// round-trip cleanly.
-fn write_list_items(f: &mut fmt::Formatter<'_>, items: &[Value]) -> fmt::Result {
-    write!(f, "[")?;
-    for (index, value) in items.iter().enumerate() {
-        if index > 0 {
-            write!(f, ", ")?;
-        }
-        write!(f, "{value}")?;
-    }
-    write!(f, "]")
-}
-
-/// Render a [`Value::Map`] as `[k1: v1, k2: v2]`. Empty maps render
-/// as `[:]` to disambiguate from an empty list literal, matching
-/// the source-level convention.
-fn write_map_entries(f: &mut fmt::Formatter<'_>, entries: &[(Value, Value)]) -> fmt::Result {
-    if entries.is_empty() {
-        return write!(f, "[:]");
-    }
-    write!(f, "[")?;
-    for (index, (key, value)) in entries.iter().enumerate() {
-        if index > 0 {
-            write!(f, ", ")?;
-        }
-        write!(f, "{key}: {value}")?;
-    }
-    write!(f, "]")
-}
-
-/// Render a [`Value::Set`] as `{a, b, c}`. Empty sets render as
-/// `{}`. Curly braces (vs the list literal's brackets) make the
-/// shape unambiguous in eval's debug output even though the source
-/// syntax for set literals reuses `[...]`.
-fn write_set_items(f: &mut fmt::Formatter<'_>, items: &[Value]) -> fmt::Result {
-    write!(f, "{{")?;
-    for (index, value) in items.iter().enumerate() {
-        if index > 0 {
-            write!(f, ", ")?;
-        }
-        write!(f, "{value}")?;
-    }
-    write!(f, "}}")
-}
-
 /// Render a [`Value::Binary`] as `<<0x48, 0x65>>`. Mirrors the LLVM
 /// runtime printer's output so eval / native produce byte-identical
 /// stdout for tests.
 fn write_binary_bytes(f: &mut fmt::Formatter<'_>, bytes: &[u8]) -> fmt::Result {
-    write!(f, "<<")?;
-    for (index, byte) in bytes.iter().enumerate() {
-        if index > 0 {
-            write!(f, ", ")?;
-        }
-        write!(f, "0x{byte:02X}")?;
-    }
-    write!(f, ">>")
+    write_joined(f, "<<", bytes, ">>", write_hex_byte)
 }
 
 /// Render a [`Value::Bits`] as `<<0x48, 0b101::3>>`. Byte-aligned
@@ -385,13 +298,7 @@ fn write_bits_bytes(f: &mut fmt::Formatter<'_>, bytes: &[u8], bit_length: u64) -
         return write_binary_bytes(f, bytes);
     }
     let full_bytes = bytes.len().saturating_sub(1);
-    write!(f, "<<")?;
-    for (index, byte) in bytes.iter().take(full_bytes).enumerate() {
-        if index > 0 {
-            write!(f, ", ")?;
-        }
-        write!(f, "0x{byte:02X}")?;
-    }
+    write_joined(f, "<<", bytes.iter().take(full_bytes), "", write_hex_byte)?;
     if full_bytes > 0 {
         write!(f, ", ")?;
     }
@@ -402,4 +309,55 @@ fn write_bits_bytes(f: &mut fmt::Formatter<'_>, bytes: &[u8], bit_length: u64) -
         width = trailing_bits as usize
     )?;
     write!(f, ">>")
+}
+
+/// Item writer for byte sequences: `0x48`.
+fn write_hex_byte(byte: &u8, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+    write!(f, "0x{byte:02X}")
+}
+
+/// Write `open`, then every item through `write_item` with `, `
+/// between neighbours, then `close`.
+fn write_joined<T>(
+    f: &mut fmt::Formatter<'_>,
+    open: &str,
+    items: impl IntoIterator<Item = T>,
+    close: &str,
+    mut write_item: impl FnMut(T, &mut fmt::Formatter<'_>) -> fmt::Result,
+) -> fmt::Result {
+    f.write_str(open)?;
+    for (index, item) in items.into_iter().enumerate() {
+        if index > 0 {
+            f.write_str(", ")?;
+        }
+        write_item(item, f)?;
+    }
+    f.write_str(close)
+}
+
+/// Render a [`Value::List`] as `[a, b, c]`. Element values are
+/// formatted with their own `Display` impl so nested lists / structs
+/// round-trip cleanly.
+fn write_list_items(f: &mut fmt::Formatter<'_>, items: &[Value]) -> fmt::Result {
+    write_joined(f, "[", items, "]", fmt::Display::fmt)
+}
+
+/// Render a [`Value::Map`] as `[k1: v1, k2: v2]`. Empty maps render
+/// as `[:]` to disambiguate from an empty list literal, matching
+/// the source-level convention.
+fn write_map_entries(f: &mut fmt::Formatter<'_>, entries: &[(Value, Value)]) -> fmt::Result {
+    if entries.is_empty() {
+        return write!(f, "[:]");
+    }
+    write_joined(f, "[", entries, "]", |(key, value), f| {
+        write!(f, "{key}: {value}")
+    })
+}
+
+/// Render a [`Value::Set`] as `{a, b, c}`. Empty sets render as
+/// `{}`. Curly braces (vs the list literal's brackets) make the
+/// shape unambiguous in eval's debug output even though the source
+/// syntax for set literals reuses `[...]`.
+fn write_set_items(f: &mut fmt::Formatter<'_>, items: &[Value]) -> fmt::Result {
+    write_joined(f, "{", items, "}", fmt::Display::fmt)
 }

@@ -26,16 +26,16 @@
 
 use koja_ast::ast::{
     Annotation, Arg, BinOp, EnumDecl, EnumVariant, EnumVariantData, Expr, ExprKind, FieldPattern,
-    File, Function, FunctionOrigin, ImplBlock, ImplMember, Item, Literal, MatchArm, Name, Param,
-    Pattern, Statement, StructDecl, StructField, TypeExpr, TypeParam, Visibility, name_texts,
-    path_text,
+    Function, FunctionOrigin, ImplBlock, ImplMember, Item, Literal, MatchArm, Name, Param, Pattern,
+    Statement, StructDecl, StructField, TypeExpr, TypeParam, Visibility,
 };
 use koja_ast::identifier::Resolution;
 use koja_ast::span::Span;
 
 use crate::program::CheckedPackage;
 
-use super::derive_debug::{has_impl, is_internal_wrapper_type, synthetic_path};
+use super::derive_debug::is_internal_wrapper_type;
+use super::{ident_expr, named_type, self_expr, self_target_type, synthetic_path};
 
 const BOOL_TYPE: &str = "Bool";
 const EQ_METHOD: &str = "equals?";
@@ -43,97 +43,15 @@ const EQUALITY_PROTOCOL: &str = "Equality";
 const OTHER_PARAM: &str = "other";
 
 /// Append `impl Equality for T` for each user struct / enum in `pkg`
-/// that doesn't already have one. Existing impls are scanned across
-/// the whole package first so a hand-written impl in one file
-/// suppresses synthesis in any other file of the same package.
-/// Synthesized targets join `existing` too, so a type declared twice
-/// gets one derived impl and collect reports the duplicate once.
+/// that doesn't already have one. See [`super::derive_protocol`]
+/// for the existing-impl scan.
 pub(crate) fn derive_equality_package(pkg: &mut CheckedPackage) {
-    let mut existing = collect_package_equality_impls(pkg);
-    for file in &mut pkg.files {
-        synthesize_into_file(file, &mut existing);
-    }
-}
-
-fn collect_package_equality_impls(pkg: &CheckedPackage) -> Vec<String> {
-    pkg.files
-        .iter()
-        .flat_map(|file| {
-            collect_existing_equality_impls(file)
-                .into_iter()
-                .chain(super::header_conformance_targets(file, EQUALITY_PROTOCOL))
-        })
-        .collect()
-}
-
-fn synthesize_into_file(file: &mut File, existing: &mut Vec<String>) {
-    let mut synthesized: Vec<Item> = Vec::new();
-    for item in &file.items {
-        match item {
-            Item::Struct(decl) if needs_struct_derive(decl, existing) => {
-                synthesized.push(synthesize_struct_impl(decl));
-                existing.push(name_texts(&decl.path).join("."));
-            }
-            Item::Enum(decl) if needs_enum_derive(decl, existing) => {
-                synthesized.push(synthesize_enum_impl(decl));
-                existing.push(name_texts(&decl.path).join("."));
-            }
-            _ => {}
-        }
-    }
-    file.items.extend(synthesized);
-}
-
-fn collect_existing_equality_impls(file: &File) -> Vec<String> {
-    file.items
-        .iter()
-        .filter_map(|item| match item {
-            Item::Impl(block) => equality_impl_target(block),
-            _ => None,
-        })
-        .collect()
-}
-
-fn equality_impl_target(block: &ImplBlock) -> Option<String> {
-    let trait_name = type_expr_head(&block.trait_expr)?;
-    if trait_name != EQUALITY_PROTOCOL {
-        return None;
-    }
-    type_expr_path(&block.target)
-}
-
-fn type_expr_head(te: &TypeExpr) -> Option<&str> {
-    match te {
-        TypeExpr::Named { path, .. } | TypeExpr::Generic { path, .. } => {
-            path.last().map(Name::as_str)
-        }
-        TypeExpr::Function { .. }
-        | TypeExpr::Self_ { .. }
-        | TypeExpr::Tuple { .. }
-        | TypeExpr::Union { .. }
-        | TypeExpr::Unit { .. } => None,
-    }
-}
-
-/// The target type's full dotted path (`Net.TCPSocket`,
-/// `Process.ExitSignal`), matched against a decl's
-/// [`StructDecl::path`] / [`EnumDecl::path`].
-fn type_expr_path(te: &TypeExpr) -> Option<String> {
-    match te {
-        TypeExpr::Named { path, .. } | TypeExpr::Generic { path, .. } => Some(path_text(path)),
-        _ => None,
-    }
-}
-
-fn needs_struct_derive(decl: &StructDecl, existing: &[String]) -> bool {
-    !has_impl(existing, &decl.path)
-}
-
-/// Empty enums (no variants) are uninhabited: a `match self end`
-/// body with no arms is rejected by typecheck, and the type has no
-/// value to compare anyway. Skip synthesis.
-fn needs_enum_derive(decl: &EnumDecl, existing: &[String]) -> bool {
-    !decl.variants.is_empty() && !has_impl(existing, &decl.path)
+    super::derive_protocol(
+        pkg,
+        EQUALITY_PROTOCOL,
+        synthesize_struct_impl,
+        synthesize_enum_impl,
+    );
 }
 
 fn synthesize_struct_impl(decl: &StructDecl) -> Item {
@@ -173,27 +91,8 @@ fn equality_impl_block(
     })
 }
 
-/// Mirrors the type's own generic params on the impl target so the
-/// impl monomorphizes alongside the type.
-fn self_target_type(path: &[Name], type_params: &[TypeParam], span: Span) -> TypeExpr {
-    let path = synthetic_path(path, span);
-    if type_params.is_empty() {
-        TypeExpr::named(path, span)
-    } else {
-        let args = type_params
-            .iter()
-            .map(|tp| named_type(tp.name.as_str(), span))
-            .collect();
-        TypeExpr::generic(path, args, span)
-    }
-}
-
 fn equality_trait_expr(span: Span) -> TypeExpr {
     named_type(EQUALITY_PROTOCOL, span)
-}
-
-fn named_type(name: &str, span: Span) -> TypeExpr {
-    TypeExpr::named(vec![Name::new(name, span)], span)
 }
 
 /// Builds `fn equals?(self, other: <Target>) -> Bool <body> end`.
@@ -479,20 +378,6 @@ fn conjunction(parts: Vec<Expr>, span: Span) -> Expr {
         );
     }
     acc
-}
-
-fn ident_expr(name: &str, span: Span) -> Expr {
-    Expr::new(
-        ExprKind::Ident {
-            name: name.to_string(),
-            resolution: Resolution::Unresolved,
-        },
-        span,
-    )
-}
-
-fn self_expr(span: Span) -> Expr {
-    Expr::new(ExprKind::Self_ { local_id: None }, span)
 }
 
 fn field_access(receiver: Expr, field: &str, span: Span) -> Expr {

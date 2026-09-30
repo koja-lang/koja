@@ -114,62 +114,41 @@ pub(crate) fn validate_nested_types(
     diagnostics: &mut Vec<Diagnostic>,
 ) {
     for pkg in packages {
-        for file in &pkg.files {
-            for item in &file.items {
-                match item {
-                    Item::Struct(decl) if !decl.owner_path().is_empty() => {
-                        validate_nested_owner(
-                            &pkg.package,
-                            "type",
-                            decl.owner_path(),
-                            decl.name(),
-                            packages,
-                            registry,
-                            diagnostics,
-                        );
-                    }
-                    Item::Enum(decl) if !decl.owner_path().is_empty() => {
-                        validate_nested_owner(
-                            &pkg.package,
-                            "type",
-                            decl.owner_path(),
-                            decl.name(),
-                            packages,
-                            registry,
-                            diagnostics,
-                        );
-                    }
-                    Item::Protocol(decl) if !decl.owner_path().is_empty() => {
-                        validate_nested_owner(
-                            &pkg.package,
-                            "protocol",
-                            decl.owner_path(),
-                            decl.name(),
-                            packages,
-                            registry,
-                            diagnostics,
-                        );
-                    }
-                    Item::Constant(decl) if !decl.owner_path().is_empty() => {
-                        validate_nested_owner(
-                            &pkg.package,
-                            "constant",
-                            decl.owner_path(),
-                            decl.name(),
-                            packages,
-                            registry,
-                            diagnostics,
-                        );
-                    }
-                    _ => {}
-                }
-            }
+        let nested = pkg
+            .files
+            .iter()
+            .flat_map(|file| &file.items)
+            .filter_map(nested_decl);
+        for (what, owner_path, leaf) in nested {
+            validate_nested_owner(
+                &pkg.package,
+                what,
+                owner_path,
+                leaf,
+                packages,
+                registry,
+                diagnostics,
+            );
         }
     }
 }
 
-/// `what` names the nested declaration's kind in diagnostics:
-/// `"type"` for structs and enums, `"protocol"`, or `"constant"`.
+/// The `(what, owner_path, leaf)` of a nested declaration. `what`
+/// names its kind in diagnostics. `None` for top-level items and
+/// for item kinds that cannot nest.
+fn nested_decl(item: &Item) -> Option<(&'static str, &[Name], &Name)> {
+    let (what, owner_path, leaf) = match item {
+        Item::Constant(decl) => ("constant", decl.owner_path(), decl.name()),
+        Item::Enum(decl) => ("type", decl.owner_path(), decl.name()),
+        Item::Protocol(decl) => ("protocol", decl.owner_path(), decl.name()),
+        Item::Struct(decl) => ("type", decl.owner_path(), decl.name()),
+        _ => return None,
+    };
+    (!owner_path.is_empty()).then_some((what, owner_path, leaf))
+}
+
+/// Check one nested declaration against its owner. `what` is the
+/// kind label from [`nested_decl`].
 fn validate_nested_owner(
     package: &str,
     what: &str,
@@ -246,12 +225,79 @@ pub(crate) fn collect_file_impls(
     diagnostics: &mut Vec<Diagnostic>,
 ) {
     for item in &file.items {
-        match item {
-            Item::Impl(impl_block) => register_impl(impl_block, package, registry, diagnostics),
-            Item::Extend(extend_block) => {
-                register_extend(extend_block, package, registry, diagnostics);
+        let block = match item {
+            Item::Extend(extend_block) => BlockKind::Extend(extend_block),
+            Item::Impl(impl_block) => BlockKind::Impl(impl_block),
+            _ => continue,
+        };
+        register_method_block(block, package, registry, diagnostics);
+    }
+}
+
+/// A method block under registration. `impl P for T` and `extend T`
+/// share one registration path and differ only in which target
+/// kinds they admit and how their diagnostics read.
+#[derive(Clone, Copy)]
+enum BlockKind<'a> {
+    Extend(&'a ExtendBlock),
+    Impl(&'a ImplBlock),
+}
+
+impl<'a> BlockKind<'a> {
+    /// Whether methods may attach to a target of `kind`. Protocol
+    /// targets are admitted under `extend` for static methods only.
+    /// Lift diagnoses `self` receivers on them.
+    fn admits(self, kind: &GlobalKind) -> bool {
+        match kind {
+            GlobalKind::Builtin(_) | GlobalKind::Enum(_) | GlobalKind::Struct(_) => true,
+            GlobalKind::Protocol(_) => matches!(self, BlockKind::Extend(_)),
+            _ => false,
+        }
+    }
+
+    fn members(self) -> &'a [ImplMember] {
+        match self {
+            BlockKind::Extend(block) => &block.members,
+            BlockKind::Impl(block) => &block.members,
+        }
+    }
+
+    /// The diagnostic for a target that names no nominal type.
+    fn non_nominal_target_message(self) -> &'static str {
+        match self {
+            BlockKind::Extend(_) => {
+                "typecheck does not yet support generic or function `extend` targets"
             }
-            _ => {}
+            BlockKind::Impl(_) => "typecheck does not yet support generic impl targets",
+        }
+    }
+
+    fn noun(self) -> &'static str {
+        match self {
+            BlockKind::Extend(_) => "extend",
+            BlockKind::Impl(_) => "impl",
+        }
+    }
+
+    /// The diagnostic for a nominal target whose kind this block
+    /// does not admit.
+    fn rejected_target_message(self, target: &str, label: &str) -> String {
+        match self {
+            BlockKind::Extend(_) => format!(
+                "`extend` only supports structs, enums, builtins, and protocols \
+                 (`{target}` is a {label})"
+            ),
+            BlockKind::Impl(_) => format!(
+                "typecheck only supports `impl` on structs, enums, and builtins \
+                 (`{target}` is a {label})"
+            ),
+        }
+    }
+
+    fn target(self) -> &'a TypeExpr {
+        match self {
+            BlockKind::Extend(block) => &block.target,
+            BlockKind::Impl(block) => &block.target,
         }
     }
 }
@@ -298,10 +344,8 @@ fn register_function_with_identifier(
     let deprecation = deprecation_message(&function.annotations, diagnostics);
     let visibility = function_visibility_scope(function.visibility, owner_type);
     let outcome = registry.insert_function(identifier, function, visibility);
-    match fresh_id(outcome, function.name.span) {
-        Ok(id) => stamp_deprecation(registry, id, deprecation),
-        Err(diagnostic) => diagnostics.push(diagnostic),
-    }
+    let inserted = fresh_id(outcome, function.name.span);
+    record_insert(inserted, deprecation, registry, diagnostics);
 }
 
 /// The id of a fresh registry entry, or the `already defined` error
@@ -382,6 +426,28 @@ fn has_dedicated_validation(annotation: &Annotation) -> bool {
     annotation.name == "deprecated" || matches!(annotation.kind(), AnnotationKind::Doc(_))
 }
 
+/// Diagnose every annotation on a decl that no pass consumes yet.
+/// `accept` names the annotations a dedicated check owns, `what`
+/// is the decl noun for the message ("enum items", "protocol
+/// methods"), and `subject` is the decl's display name.
+fn diagnose_unsupported_annotations(
+    annotations: &[Annotation],
+    accept: impl Fn(&Annotation) -> bool,
+    what: &str,
+    subject: &str,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    for annotation in annotations.iter().filter(|annotation| !accept(annotation)) {
+        diagnostics.push(Diagnostic::error(
+            format!(
+                "typecheck does not yet support annotations on {what} (`@{}` on `{subject}`)",
+                annotation.name,
+            ),
+            annotation.span,
+        ));
+    }
+}
+
 /// The validated `@deprecated` message on a decl. Bare `@deprecated`
 /// and non-string or empty payloads are rejected. Every deprecation
 /// warning must tell callers what to use instead.
@@ -409,18 +475,6 @@ fn deprecation_message(
         }
     }
     message
-}
-
-/// Stamp a validated `@deprecated` message onto a freshly inserted
-/// entry.
-fn stamp_deprecation(
-    registry: &mut GlobalRegistry,
-    id: GlobalRegistryId,
-    deprecation: Option<String>,
-) {
-    if let Some(message) = deprecation {
-        registry.set_deprecation(id, message);
-    }
 }
 
 /// Reject a `self` receiver only when registration is happening
@@ -525,11 +579,10 @@ fn register_type_decl<D: TypeDecl>(
     }
 }
 
-/// Finish a type-entry insert. A fresh entry takes its deprecation.
-/// On collision the existing entry's id is returned so the caller can
-/// still register inline methods against the type that owns the name.
-/// The duplicate decl is diagnosed on its own, and its methods would
-/// otherwise dangle.
+/// Finish a type-entry insert. On collision the existing entry's id
+/// is returned so the caller can still register inline methods
+/// against the type that owns the name. The duplicate decl is
+/// diagnosed on its own, and its methods would otherwise dangle.
 fn record_type_insert(
     inserted: Result<GlobalRegistryId, Diagnostic>,
     identifier: &Identifier,
@@ -537,14 +590,29 @@ fn record_type_insert(
     registry: &mut GlobalRegistry,
     diagnostics: &mut Vec<Diagnostic>,
 ) -> Option<GlobalRegistryId> {
+    record_insert(inserted, deprecation, registry, diagnostics)
+        .or_else(|| registry.lookup(identifier).map(|(id, _)| id))
+}
+
+/// Finish a decl insert. A fresh entry takes its `@deprecated`
+/// message and returns its id. A collision is diagnosed and returns
+/// `None`.
+fn record_insert(
+    inserted: Result<GlobalRegistryId, Diagnostic>,
+    deprecation: Option<String>,
+    registry: &mut GlobalRegistry,
+    diagnostics: &mut Vec<Diagnostic>,
+) -> Option<GlobalRegistryId> {
     match inserted {
         Ok(id) => {
-            stamp_deprecation(registry, id, deprecation);
+            if let Some(message) = deprecation {
+                registry.set_deprecation(id, message);
+            }
             Some(id)
         }
         Err(diagnostic) => {
             diagnostics.push(diagnostic);
-            registry.lookup(identifier).map(|(id, _)| id)
+            None
         }
     }
 }
@@ -693,40 +761,35 @@ fn diagnose_builtin_feature_gaps(decl: &BuiltinDecl, diagnostics: &mut Vec<Diagn
             decl.span,
         ));
     }
-    for annotation in &decl.annotations {
-        if has_dedicated_validation(annotation) {
-            continue;
-        }
-        diagnostics.push(Diagnostic::error(
-            format!(
-                "typecheck does not yet support annotations on builtin items \
-                 (`@{}` on `{}`)",
-                annotation.name,
-                decl.name(),
-            ),
-            annotation.span,
-        ));
-    }
+    diagnose_unsupported_annotations(
+        &decl.annotations,
+        has_dedicated_validation,
+        "builtin items",
+        &decl.name().to_string(),
+        diagnostics,
+    );
 }
 
-/// Register every method declared in an `impl Trait for Type` block
-/// under the target's qualified identifier, so cross-package impls
-/// land in the same collision-detection slot as same-package ones.
-/// There is no orphan rule. Any package may conform any type to any
-/// protocol, and the whole-program conformance table catches
-/// duplicate `impl P for T` pairs at lift time, where conformance
-/// facts are recorded onto the target's struct/enum definition.
-fn register_impl(
-    impl_block: &ImplBlock,
+/// Register every method declared in an `impl P for T` or
+/// `extend T ... end` block under the target's qualified identifier,
+/// so cross-package blocks land in the same collision-detection slot
+/// as same-package ones. There is no orphan rule. Any package may
+/// conform any type to any protocol, and the whole-program
+/// conformance table catches duplicate `impl P for T` pairs at lift
+/// time, where conformance facts are recorded onto the target's
+/// struct/enum definition.
+fn register_method_block(
+    block: BlockKind<'_>,
     package: &str,
     registry: &mut GlobalRegistry,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
-    diagnose_impl_member_feature_gaps(impl_block, diagnostics);
-    let Some(path) = nominal_target_path(&impl_block.target) else {
+    diagnose_member_feature_gaps(block, diagnostics);
+    let target_span = type_expr_span(block.target());
+    let Some(path) = nominal_target_path(block.target()) else {
         diagnostics.push(Diagnostic::error(
-            "typecheck does not yet support generic impl targets".to_string(),
-            type_expr_span(&impl_block.target),
+            block.non_nominal_target_message().to_string(),
+            target_span,
         ));
         return;
     };
@@ -734,31 +797,18 @@ fn register_impl(
     else {
         diagnostics.push(Diagnostic::error(
             format!("typecheck cannot extend unknown type `{}`", path_text(path)),
-            type_expr_span(&impl_block.target),
+            target_span,
         ));
         return;
     };
     let entry = registry
         .get(target_id)
         .expect("lookup_owner_path returned a live id");
-    check_reference_visibility(
-        entry,
-        package,
-        type_expr_span(&impl_block.target),
-        diagnostics,
-    );
-    if !matches!(
-        entry.kind,
-        GlobalKind::Builtin(_) | GlobalKind::Enum(_) | GlobalKind::Struct(_)
-    ) {
+    check_reference_visibility(entry, package, target_span, diagnostics);
+    if !block.admits(&entry.kind) {
         diagnostics.push(Diagnostic::error(
-            format!(
-                "typecheck only supports `impl` on structs, enums, and builtins \
-                 (`{}` is a {})",
-                target_path.join("."),
-                entry.kind.label(),
-            ),
-            type_expr_span(&impl_block.target),
+            block.rejected_target_message(&target_path.join("."), entry.kind.label()),
+            target_span,
         ));
         return;
     }
@@ -766,73 +816,7 @@ fn register_impl(
         &target_package,
         &target_path,
         target_id,
-        &impl_block.members,
-        registry,
-        diagnostics,
-    );
-}
-
-/// Register every method declared in an `extend Type ... end` block,
-/// routing the methods through the target's qualified identifier so
-/// cross-package extends land in the same collision-detection slot
-/// as same-package ones.
-fn register_extend(
-    extend_block: &ExtendBlock,
-    package: &str,
-    registry: &mut GlobalRegistry,
-    diagnostics: &mut Vec<Diagnostic>,
-) {
-    diagnose_extend_member_feature_gaps(extend_block, diagnostics);
-    let Some(path) = nominal_target_path(&extend_block.target) else {
-        diagnostics.push(Diagnostic::error(
-            "typecheck does not yet support generic or function `extend` targets".to_string(),
-            type_expr_span(&extend_block.target),
-        ));
-        return;
-    };
-    let Some((target_id, target_package, target_path)) = registry.lookup_owner_path(path, package)
-    else {
-        diagnostics.push(Diagnostic::error(
-            format!("typecheck cannot extend unknown type `{}`", path_text(path)),
-            type_expr_span(&extend_block.target),
-        ));
-        return;
-    };
-    let target_entry = registry
-        .get(target_id)
-        .expect("lookup_owner_path returned a live id");
-    check_reference_visibility(
-        target_entry,
-        package,
-        type_expr_span(&extend_block.target),
-        diagnostics,
-    );
-    let entry_kind = &target_entry.kind;
-    // Protocol targets are admitted for static methods only. Lift
-    // diagnoses `self` receivers on them.
-    if !matches!(
-        entry_kind,
-        GlobalKind::Builtin(_)
-            | GlobalKind::Enum(_)
-            | GlobalKind::Protocol(_)
-            | GlobalKind::Struct(_)
-    ) {
-        diagnostics.push(Diagnostic::error(
-            format!(
-                "`extend` only supports structs, enums, builtins, and protocols \
-                 (`{}` is a {})",
-                target_path.join("."),
-                entry_kind.label(),
-            ),
-            type_expr_span(&extend_block.target),
-        ));
-        return;
-    }
-    register_block_methods(
-        &target_package,
-        &target_path,
-        target_id,
-        &extend_block.members,
+        block.members(),
         registry,
         diagnostics,
     );
@@ -904,10 +888,8 @@ fn register_protocol(
     let visibility = package_visibility_scope(decl.visibility);
     let deprecation = deprecation_message(&decl.annotations, diagnostics);
     let outcome = registry.insert_protocol(identifier, decl, type_params, visibility);
-    match fresh_id(outcome, decl.name().span) {
-        Ok(id) => stamp_deprecation(registry, id, deprecation),
-        Err(diagnostic) => diagnostics.push(diagnostic),
-    }
+    let inserted = fresh_id(outcome, decl.name().span);
+    record_insert(inserted, deprecation, registry, diagnostics);
 }
 
 /// Register a `const NAME = expr` declaration, package-level or
@@ -923,7 +905,13 @@ fn register_constant(
     registry: &mut GlobalRegistry,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
-    diagnose_constant_annotations(constant.name(), &constant.annotations, diagnostics);
+    diagnose_unsupported_annotations(
+        &constant.annotations,
+        has_dedicated_validation,
+        "constant items",
+        &constant.name().to_string(),
+        diagnostics,
+    );
     diagnose_doc_on_private(
         constant.name(),
         "constant",
@@ -935,10 +923,8 @@ fn register_constant(
     let visibility = package_visibility_scope(constant.visibility);
     let deprecation = deprecation_message(&constant.annotations, diagnostics);
     let outcome = registry.insert_constant(identifier, constant, visibility);
-    match fresh_id(outcome, constant.name().span) {
-        Ok(id) => stamp_deprecation(registry, id, deprecation),
-        Err(diagnostic) => diagnostics.push(diagnostic),
-    }
+    let inserted = fresh_id(outcome, constant.name().span);
+    record_insert(inserted, deprecation, registry, diagnostics);
 }
 
 /// Register a `type X = ...` alias with the package-qualified
@@ -952,7 +938,13 @@ fn register_type_alias(
     registry: &mut GlobalRegistry,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
-    diagnose_alias_annotations(&alias.name, &alias.annotations, diagnostics);
+    diagnose_unsupported_annotations(
+        &alias.annotations,
+        has_dedicated_validation,
+        "type aliases",
+        &alias.name.to_string(),
+        diagnostics,
+    );
     diagnose_doc_on_private(
         &alias.name,
         "type alias",
@@ -964,49 +956,8 @@ fn register_type_alias(
     let visibility = package_visibility_scope(alias.visibility);
     let deprecation = deprecation_message(&alias.annotations, diagnostics);
     let outcome = registry.insert_type_alias(identifier, alias, visibility);
-    match fresh_id(outcome, alias.name.span) {
-        Ok(id) => stamp_deprecation(registry, id, deprecation),
-        Err(diagnostic) => diagnostics.push(diagnostic),
-    }
-}
-
-fn diagnose_alias_annotations(
-    alias_name: &Name,
-    annotations: &[Annotation],
-    diagnostics: &mut Vec<Diagnostic>,
-) {
-    for annotation in annotations {
-        if has_dedicated_validation(annotation) {
-            continue;
-        }
-        diagnostics.push(Diagnostic::error(
-            format!(
-                "typecheck does not yet support `@{}` on type alias `{alias_name}`",
-                annotation.name,
-            ),
-            annotation.span,
-        ));
-    }
-}
-
-fn diagnose_constant_annotations(
-    constant_name: &Name,
-    annotations: &[Annotation],
-    diagnostics: &mut Vec<Diagnostic>,
-) {
-    for annotation in annotations {
-        if has_dedicated_validation(annotation) {
-            continue;
-        }
-        diagnostics.push(Diagnostic::error(
-            format!(
-                "typecheck does not yet support annotations on constant items \
-                 (`@{}` on `{constant_name}`)",
-                annotation.name,
-            ),
-            annotation.span,
-        ));
-    }
+    let inserted = fresh_id(outcome, alias.name.span);
+    record_insert(inserted, deprecation, registry, diagnostics);
 }
 
 /// The dotted type path of an `impl` / `extend` target (`[Foo]`,
@@ -1026,24 +977,18 @@ pub(crate) fn nominal_target_path(target: &TypeExpr) -> Option<&[Name]> {
 /// definition in the presence of these gaps so the surrounding
 /// program shape stays accurate.
 fn diagnose_struct_feature_gaps(decl: &StructDecl, diagnostics: &mut Vec<Diagnostic>) {
-    for annotation in &decl.annotations {
-        // `@intrinsic` on a struct gets the targeted replacement
-        // diagnostic from [`diagnose_intrinsic_on_struct`].
-        if has_dedicated_validation(annotation)
-            || matches!(annotation.kind(), AnnotationKind::Intrinsic)
-        {
-            continue;
-        }
-        diagnostics.push(Diagnostic::error(
-            format!(
-                "typecheck does not yet support annotations on struct items \
-                 (`@{}` on `{}`)",
-                annotation.name,
-                decl.name(),
-            ),
-            annotation.span,
-        ));
-    }
+    // `@intrinsic` on a struct gets the targeted replacement
+    // diagnostic from [`diagnose_intrinsic_on_struct`].
+    diagnose_unsupported_annotations(
+        &decl.annotations,
+        |annotation| {
+            has_dedicated_validation(annotation)
+                || matches!(annotation.kind(), AnnotationKind::Intrinsic)
+        },
+        "struct items",
+        &decl.name().to_string(),
+        diagnostics,
+    );
 }
 
 /// Diagnose every feature gap on an enum decl up front so collect is
@@ -1051,47 +996,28 @@ fn diagnose_struct_feature_gaps(decl: &StructDecl, diagnostics: &mut Vec<Diagnos
 /// the decl still registers in the presence of any gap so resolve
 /// sees a populated registry.
 fn diagnose_enum_feature_gaps(decl: &EnumDecl, diagnostics: &mut Vec<Diagnostic>) {
-    for annotation in &decl.annotations {
-        if has_dedicated_validation(annotation) {
-            continue;
-        }
-        diagnostics.push(Diagnostic::error(
-            format!(
-                "typecheck does not yet support annotations on enum items \
-                 (`@{}` on `{}`)",
-                annotation.name,
-                decl.name(),
-            ),
-            annotation.span,
-        ));
-    }
+    diagnose_unsupported_annotations(
+        &decl.annotations,
+        has_dedicated_validation,
+        "enum items",
+        &decl.name().to_string(),
+        diagnostics,
+    );
 }
 
-/// Diagnose the only impl-block member shape we don't yet support:
+/// Diagnose the only block member shape we don't yet support:
 /// `type Alias = ...`. `Function` members flow through normal
-/// registration in [`register_impl`]. This pass surfaces a diagnostic
-/// for every other shape so the user sees one error per offending
-/// member rather than a single block-level message.
-fn diagnose_impl_member_feature_gaps(impl_block: &ImplBlock, diagnostics: &mut Vec<Diagnostic>) {
-    for member in &impl_block.members {
+/// registration in [`register_block_methods`]. This pass surfaces a
+/// diagnostic for every other shape so the user sees one error per
+/// offending member rather than a single block-level message.
+fn diagnose_member_feature_gaps(block: BlockKind<'_>, diagnostics: &mut Vec<Diagnostic>) {
+    for member in block.members() {
         if let ImplMember::TypeAlias(alias) = member {
             diagnostics.push(Diagnostic::error(
-                "typecheck does not yet support `type` aliases inside `impl` blocks".to_string(),
-                alias.span,
-            ));
-        }
-    }
-}
-
-/// Mirror of [`diagnose_impl_member_feature_gaps`] for `extend`.
-fn diagnose_extend_member_feature_gaps(
-    extend_block: &ExtendBlock,
-    diagnostics: &mut Vec<Diagnostic>,
-) {
-    for member in &extend_block.members {
-        if let ImplMember::TypeAlias(alias) = member {
-            diagnostics.push(Diagnostic::error(
-                "typecheck does not yet support `type` aliases inside `extend` blocks".to_string(),
+                format!(
+                    "typecheck does not yet support `type` aliases inside `{}` blocks",
+                    block.noun(),
+                ),
                 alias.span,
             ));
         }
@@ -1103,20 +1029,13 @@ fn diagnose_extend_member_feature_gaps(
 /// and `Self` in non-receiver positions are now supported via lift's
 /// `["Self", ...user_declared]` type-param stamping.
 fn diagnose_protocol_feature_gaps(decl: &ProtocolDecl, diagnostics: &mut Vec<Diagnostic>) {
-    for annotation in &decl.annotations {
-        if has_dedicated_validation(annotation) {
-            continue;
-        }
-        diagnostics.push(Diagnostic::error(
-            format!(
-                "typecheck does not yet support annotations on protocols \
-                 (`@{}` on `{}`)",
-                annotation.name,
-                decl.name(),
-            ),
-            annotation.span,
-        ));
-    }
+    diagnose_unsupported_annotations(
+        &decl.annotations,
+        has_dedicated_validation,
+        "protocols",
+        &decl.name().to_string(),
+        diagnostics,
+    );
     for method in &decl.methods {
         diagnose_protocol_method_feature_gaps(decl.name(), method, diagnostics);
     }
@@ -1137,17 +1056,11 @@ fn diagnose_protocol_method_feature_gaps(
             method.span,
         ));
     }
-    for annotation in &method.annotations {
-        if matches!(annotation.kind(), AnnotationKind::Doc(_)) {
-            continue;
-        }
-        diagnostics.push(Diagnostic::error(
-            format!(
-                "typecheck does not yet support annotations on protocol methods \
-                 (`@{}` on `{protocol_name}.{}`)",
-                annotation.name, method.name,
-            ),
-            annotation.span,
-        ));
-    }
+    diagnose_unsupported_annotations(
+        &method.annotations,
+        |annotation| matches!(annotation.kind(), AnnotationKind::Doc(_)),
+        "protocol methods",
+        &format!("{protocol_name}.{}", method.name),
+        diagnostics,
+    );
 }

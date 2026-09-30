@@ -28,11 +28,9 @@
 
 use std::collections::BTreeMap;
 
-use crate::function::{IRBasicBlock, IRInstruction, IRSymbol};
+use crate::function::{IRBasicBlock, IRInstruction, IRSymbol, ValueMinter, high_water_mark};
 use crate::package::IRPackage;
 use crate::types::{IRType, ValueId};
-
-use super::unbox;
 
 /// A `FieldSet` on an `Indirect` slot, which this pass must pair
 /// with an rc-aware release of the old box.
@@ -73,12 +71,7 @@ pub(super) fn rewrite_indirect_overwrites(packages: &mut [IRPackage], body: &mut
         .iter_mut()
         .flat_map(|package| package.functions.values_mut())
         .map(|function| {
-            let seed = function
-                .params
-                .iter()
-                .map(|param| param.id.0 + 1)
-                .max()
-                .unwrap_or(0);
+            let seed = function.param_high_water_mark();
             (function.blocks.as_mut_slice(), seed)
         })
         .chain(std::iter::once((body, 0)))
@@ -96,7 +89,7 @@ fn rewrite_blocks(
     if sites.is_empty() {
         return;
     }
-    let mut next_value = high_water_mark(blocks, param_seed);
+    let mut values = ValueMinter::new(high_water_mark(blocks, param_seed));
     // (block, position, instructions to insert before that position)
     let mut insertions: Vec<(usize, usize, Vec<IRInstruction>)> = Vec::new();
 
@@ -106,24 +99,13 @@ fn rewrite_blocks(
                 retype_stale_pair(&mut blocks[block].instructions[index..=index + 1], site);
             }
             Some(Projection::WriteThrough { block, index }) => {
-                let clone = acquire_projection(
-                    &mut blocks[block].instructions[index],
-                    site,
-                    &mut next_value,
-                );
+                let clone =
+                    acquire_projection(&mut blocks[block].instructions[index], site, &mut values);
                 insertions.push((block, index + 1, vec![clone]));
-                insertions.push((
-                    site.block,
-                    site.index,
-                    release_old_box(site, &mut next_value),
-                ));
+                insertions.push((site.block, site.index, release_old_box(site, &mut values)));
             }
             None => {
-                insertions.push((
-                    site.block,
-                    site.index,
-                    release_old_box(site, &mut next_value),
-                ));
+                insertions.push((site.block, site.index, release_old_box(site, &mut values)));
             }
         }
     }
@@ -227,24 +209,24 @@ fn retype_stale_pair(pair: &mut [IRInstruction], site: &OverwriteSite) {
 fn acquire_projection(
     projection: &mut IRInstruction,
     site: &OverwriteSite,
-    next_value: &mut ValueId,
+    values: &mut ValueMinter,
 ) -> IRInstruction {
     let IRInstruction::FieldGet { dest, .. } = projection else {
         unreachable!("overwrite rewrite: projection shape re-checked after classification");
     };
-    let borrowed = fresh(next_value);
+    let borrowed = values.fresh();
     let owned = std::mem::replace(dest, borrowed);
     IRInstruction::Clone {
         dest: owned,
         source: borrowed,
-        ty: unbox(&site.boxed).clone(),
+        ty: site.boxed.unboxed().clone(),
     }
 }
 
 /// The boxed projection + rc-aware `DropValue` releasing the old box
 /// right before the `FieldSet` stores its replacement.
-fn release_old_box(site: &OverwriteSite, next_value: &mut ValueId) -> Vec<IRInstruction> {
-    let stale = fresh(next_value);
+fn release_old_box(site: &OverwriteSite, values: &mut ValueMinter) -> Vec<IRInstruction> {
+    let stale = values.fresh();
     vec![
         IRInstruction::FieldGet {
             base: site.base,
@@ -272,28 +254,4 @@ fn apply_insertions(
             .instructions
             .splice(position..position, instructions);
     }
-}
-
-/// The next `ValueId` past every value the function defines
-/// (function params via `param_seed`, block params, and instruction
-/// dests).
-fn high_water_mark(blocks: &[IRBasicBlock], param_seed: u32) -> ValueId {
-    let mut max = param_seed;
-    for block in blocks {
-        for param in &block.params {
-            max = max.max(param.dest.0 + 1);
-        }
-        for instruction in &block.instructions {
-            if let Some(dest) = instruction.dest() {
-                max = max.max(dest.0 + 1);
-            }
-        }
-    }
-    ValueId(max)
-}
-
-fn fresh(next: &mut ValueId) -> ValueId {
-    let id = *next;
-    next.0 += 1;
-    id
 }

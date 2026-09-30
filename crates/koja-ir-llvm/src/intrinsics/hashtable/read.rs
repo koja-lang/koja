@@ -13,13 +13,15 @@ use crate::ctx::EmitContext;
 use crate::emit::enums::build_enum_value;
 use crate::error::{IceExt, LlvmError};
 use crate::intrinsics::element::{acquire_value, release_in_slot};
+use crate::intrinsics::util::{
+    build_table_struct, expect_enum_symbol, extract_int, extract_pointer, nth_param, nth_struct,
+    ret,
+};
 use crate::types::ir_basic_type;
 
 use super::util::{
-    KeyHashOps, TableSnapshot, advance_slot, build_table_struct, call_eq, call_hash,
-    clone_table_buffers, entry_pointer, expect_enum_symbol, extract_int, extract_pointer,
-    extract_table_fields, nth_hashtable, nth_param, resolve_key_hash_ops, ret_basic, ret_struct,
-    value_slot,
+    KeyHashOps, TableSnapshot, advance_slot, call_eq, call_hash, clone_table_buffers,
+    entry_pointer, extract_table_fields, resolve_key_hash_ops, value_slot,
 };
 use super::{HashtableLayout, STATE_EMPTY, STATE_OCCUPIED, STATE_TOMBSTONE};
 use crate::intrinsics::option;
@@ -166,9 +168,9 @@ pub(crate) fn emit_has_q<'ctx>(
         &key_ops,
     )?;
     ctx.builder.position_at_end(probe.found_bb);
-    ret_basic(ctx, i1_ty.const_int(1, false).into())?;
+    ret(ctx, i1_ty.const_int(1, false).into())?;
     ctx.builder.position_at_end(probe.not_found_bb);
-    ret_basic(ctx, i1_ty.const_zero().into())
+    ret(ctx, i1_ty.const_zero().into())
 }
 
 pub(crate) fn emit_remove<'ctx>(
@@ -182,7 +184,7 @@ pub(crate) fn emit_remove<'ctx>(
     // emit_remove keeps the manual 4-step extract because it needs
     // `self_val` for the not-found return, and `extract_table_fields`
     // discards the original struct.
-    let self_val = nth_hashtable(function, llvm_function, 0, "self")?;
+    let self_val = nth_struct(function, llvm_function, 0, "self")?;
     let original = TableSnapshot {
         entries_ptr: extract_pointer(ctx, self_val, 0, "entries")?,
         states_ptr: extract_pointer(ctx, self_val, 1, "states")?,
@@ -224,7 +226,7 @@ pub(crate) fn emit_remove<'ctx>(
         new_len,
         table.capacity,
     )?;
-    ret_struct(ctx, removed)?;
+    ret(ctx, removed.into())?;
 
     // Not found. Return the untouched clone made above rather than
     // `self_val`, which the caller drops.
@@ -236,7 +238,7 @@ pub(crate) fn emit_remove<'ctx>(
         table.length,
         table.capacity,
     )?;
-    ret_struct(ctx, unchanged)
+    ret(ctx, unchanged.into())
 }
 
 pub(crate) fn emit_map_get<'ctx>(

@@ -16,10 +16,7 @@ use crate::types::{IRType, ValueId};
 use super::closures::seal_closure_decls;
 use super::enums::seal_enum_decls;
 use super::structs::seal_struct_decls;
-use super::{
-    instruction_operands, require_supported_type, seal_panic, terminator_operands,
-    terminator_targets,
-};
+use super::{instruction_operands, require_supported_type, seal_panic, terminator_operands};
 
 pub(super) fn seal_package(pkg: &IRPackage) {
     seal_struct_decls(pkg);
@@ -189,8 +186,11 @@ fn seal_tail_calls(function: &IRFunction, owner: &str) {
 /// block's declared arity. [`super::types`] validates argument types.
 ///
 /// Built once per function so the per-block walk doesn't repeat the
-/// scan.
-fn collect_block_params(blocks: &[IRBasicBlock], owner: &str) -> BTreeMap<IRBlockId, Vec<IRType>> {
+/// scan. [`super::script`] uses it for the implicit script body too.
+pub(super) fn collect_block_params(
+    blocks: &[IRBasicBlock],
+    owner: &str,
+) -> BTreeMap<IRBlockId, Vec<IRType>> {
     let mut by_block: BTreeMap<IRBlockId, Vec<IRType>> = BTreeMap::new();
     for block in blocks {
         for (index, param) in block.params.iter().enumerate() {
@@ -299,7 +299,7 @@ pub(super) fn seal_block(
             }
         }
     }
-    for target in terminator_targets(&block.terminator) {
+    for target in block.terminator.targets() {
         if !block_ids.contains(&target) {
             seal_panic(&format!(
                 "{owner} block {} terminator targets unknown block `{target}`",
@@ -472,8 +472,8 @@ fn require_branch_target_arity(
     block_params: &BTreeMap<IRBlockId, Vec<IRType>>,
 ) {
     let Some(params) = block_params.get(&target.block) else {
-        // Unknown target id was already reported by `terminator_targets`
-        // / `block_ids` walk, so skip the arity check rather than panic
+        // Unknown target id was already reported by the terminator
+        // targets / `block_ids` walk, so skip the arity check rather than panic
         // twice for the same root cause.
         return;
     };

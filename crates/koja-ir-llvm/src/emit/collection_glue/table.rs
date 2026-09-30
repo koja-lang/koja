@@ -6,20 +6,19 @@
 //! entry is `K` then `V` at byte offset `key_size`: the packed
 //! layout the hashtable intrinsics write.
 
-use inkwell::values::{FunctionValue, IntValue, PointerValue, StructValue};
+use inkwell::values::{FunctionValue, PointerValue};
 use koja_ir::{IRFunction, IRType};
 
 use crate::ctx::EmitContext;
 use crate::error::{IceExt, LlvmError};
-use crate::intrinsics::cptr::declare_memcpy_extern;
 use crate::intrinsics::element::{
     acquire_in_slot, deep_copy_in_slot, element_slot, release_in_slot,
 };
 use crate::intrinsics::occupied_loop;
-use crate::runtime::{declare_free_extern, declare_malloc_extern};
-use crate::types::hashtable_value_type;
+use crate::intrinsics::util::{build_table_struct, extract_int, extract_pointer, nth_struct};
+use crate::runtime::{declare_free_extern, declare_malloc_extern, declare_memcpy_extern};
 
-use super::{ElementCopy, abi_size, call_ptr, extract_int, extract_pointer, nth_struct};
+use super::{ElementCopy, abi_size, call_ptr};
 
 /// `clone_Map<K,V>` / `clone_Set<T>` and their `deep_copy_*`
 /// siblings: copy both backing buffers, then acquire (clone) or
@@ -39,7 +38,7 @@ pub(super) fn copy_table<'ctx>(
     let entry_size = key_size + value.map(|v| abi_size(ctx, v)).transpose()?.unwrap_or(0);
     let entry_size_const = ctx.context.i64_type().const_int(entry_size, false);
 
-    let self_val = nth_struct(function, llvm_function, 0)?;
+    let self_val = nth_struct(function, llvm_function, 0, "self")?;
     let entries = extract_pointer(ctx, self_val, 0, "entries")?;
     let states = extract_pointer(ctx, self_val, 1, "states")?;
     let len = extract_int(ctx, self_val, 2, "len")?;
@@ -106,7 +105,7 @@ pub(super) fn drop_table<'ctx>(
     let entry_size = key_size + value.map(|v| abi_size(ctx, v)).transpose()?.unwrap_or(0);
     let entry_size_const = ctx.context.i64_type().const_int(entry_size, false);
 
-    let self_val = nth_struct(function, llvm_function, 0)?;
+    let self_val = nth_struct(function, llvm_function, 0, "self")?;
     let entries = extract_pointer(ctx, self_val, 0, "entries")?;
     let states = extract_pointer(ctx, self_val, 1, "states")?;
     let capacity = extract_int(ctx, self_val, 3, "cap")?;
@@ -153,33 +152,4 @@ fn offset_ptr<'ctx>(
     // SAFETY: `bytes` is the key size, which the entry layout
     // places inside the same bucket.
     unsafe { ctx.builder.build_gep(i8_ty, base, &[offset], name).or_ice() }
-}
-
-fn build_table_struct<'ctx>(
-    ctx: &EmitContext<'ctx>,
-    entries: PointerValue<'ctx>,
-    states: PointerValue<'ctx>,
-    len: IntValue<'ctx>,
-    cap: IntValue<'ctx>,
-) -> Result<StructValue<'ctx>, LlvmError> {
-    let table_ty = hashtable_value_type(ctx);
-    let with_entries = ctx
-        .builder
-        .build_insert_value(table_ty.get_undef(), entries, 0, "with_entries")
-        .or_ice()?
-        .into_struct_value();
-    let with_states = ctx
-        .builder
-        .build_insert_value(with_entries, states, 1, "with_states")
-        .or_ice()?
-        .into_struct_value();
-    let with_len = ctx
-        .builder
-        .build_insert_value(with_states, len, 2, "with_len")
-        .or_ice()?
-        .into_struct_value();
-    ctx.builder
-        .build_insert_value(with_len, cap, 3, "with_cap")
-        .or_ice()
-        .map(|s| s.into_struct_value())
 }

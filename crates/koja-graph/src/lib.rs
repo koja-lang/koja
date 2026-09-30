@@ -10,6 +10,7 @@
 //! algorithm visits nodes in key order and the edges of one node in
 //! insertion order, so results are stable across runs.
 
+mod back_edges;
 mod cycle_path;
 mod graph;
 mod reachable;

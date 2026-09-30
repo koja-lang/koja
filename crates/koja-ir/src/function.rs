@@ -271,24 +271,58 @@ impl IRFunction {
         IRLocalId::from_local_id(LocalId::new(max + 1))
     }
 
-    pub(crate) fn next_value_id(&self) -> u32 {
-        let mut max = self
-            .params
+    /// One past the highest `ValueId` the function defines: params,
+    /// block params, and instruction dests.
+    pub(crate) fn next_value_id(&self) -> ValueId {
+        high_water_mark(&self.blocks, self.param_high_water_mark())
+    }
+
+    /// One past the highest function param id, or `0` with no
+    /// params. The seed for [`high_water_mark`] over the body.
+    pub(crate) fn param_high_water_mark(&self) -> u32 {
+        self.params
             .iter()
-            .map(|param| param.id.0)
+            .map(|param| param.id.0 + 1)
             .max()
-            .unwrap_or(0);
-        for block in &self.blocks {
-            for param in &block.params {
-                max = max.max(param.dest.0);
-            }
-            for instruction in &block.instructions {
-                if let Some(dest) = instruction.dest() {
-                    max = max.max(dest.0);
-                }
+            .unwrap_or(0)
+    }
+}
+
+/// One past the highest `ValueId` that `blocks` define (block params
+/// and instruction dests), floored at `seed`. Callers pass
+/// [`IRFunction::param_high_water_mark`] as `seed`, or `0` for a
+/// standalone script body.
+pub(crate) fn high_water_mark(blocks: &[IRBasicBlock], seed: u32) -> ValueId {
+    let mut max = seed;
+    for block in blocks {
+        for param in &block.params {
+            max = max.max(param.dest.0 + 1);
+        }
+        for instruction in &block.instructions {
+            if let Some(dest) = instruction.dest() {
+                max = max.max(dest.0 + 1);
             }
         }
-        max + 1
+    }
+    ValueId(max)
+}
+
+/// Hands out fresh `ValueId`s upward from a high-water mark, for
+/// passes that add values to an already lowered body.
+#[derive(Debug)]
+pub(crate) struct ValueMinter {
+    next: ValueId,
+}
+
+impl ValueMinter {
+    pub(crate) fn new(next: ValueId) -> Self {
+        Self { next }
+    }
+
+    pub(crate) fn fresh(&mut self) -> ValueId {
+        let id = self.next;
+        self.next.0 += 1;
+        id
     }
 }
 
@@ -1013,6 +1047,22 @@ impl IRTerminator {
     /// args because their targets declare no [`BlockParam`]s).
     pub fn branch(block: IRBlockId) -> Self {
         Self::Branch(BranchTarget::to(block))
+    }
+
+    /// The block ids this terminator can jump to, in edge order.
+    /// Empty for `Return`, `TailCall`, and `Unreachable`.
+    pub fn targets(&self) -> Vec<IRBlockId> {
+        match self {
+            IRTerminator::Branch(target) => vec![target.block],
+            IRTerminator::CondBranch {
+                then_target,
+                else_target,
+                ..
+            } => vec![then_target.block, else_target.block],
+            IRTerminator::Return { .. }
+            | IRTerminator::TailCall { .. }
+            | IRTerminator::Unreachable => Vec::new(),
+        }
     }
 
     /// Whether `value` flows out of the block through this terminator,

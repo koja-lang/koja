@@ -6,12 +6,11 @@ use koja_ir::IRFunction;
 
 use crate::ctx::EmitContext;
 use crate::error::{IceExt, LlvmError};
+use crate::intrinsics::util::{build_table_struct, extract_int, nth_struct, ret};
 use crate::runtime::{declare_malloc_extern, declare_memset_extern};
 
 use super::INITIAL_CAPACITY;
-use super::util::{
-    build_table_struct, call_malloc, extract_int, nth_hashtable, ret_basic, ret_struct,
-};
+use super::util::call_malloc;
 
 /// `fn new() -> Self`: allocate the entries + states buffers and
 /// initialize state to `EMPTY`. Same shape for `Map.new` and
@@ -44,7 +43,7 @@ pub(crate) fn emit_new<'ctx>(ctx: &EmitContext<'ctx>, entry_size: u64) -> Result
         .or_ice()?;
 
     let result = build_table_struct(ctx, entries_ptr, states_ptr, i64_ty.const_zero(), capacity)?;
-    ret_struct(ctx, result)
+    ret(ctx, result.into())
 }
 
 /// `fn length(self) -> Int`: return the `length` field. Both
@@ -54,9 +53,9 @@ pub(crate) fn emit_length<'ctx>(
     function: &IRFunction,
     llvm_function: FunctionValue<'ctx>,
 ) -> Result<(), LlvmError> {
-    let self_val = nth_hashtable(function, llvm_function, 0, "self")?;
+    let self_val = nth_struct(function, llvm_function, 0, "self")?;
     let len = extract_int(ctx, self_val, 2, "len")?;
-    ret_basic(ctx, len.into())
+    ret(ctx, len.into())
 }
 
 /// `fn empty?(self) -> Bool`: check `length == 0`. Both
@@ -67,11 +66,11 @@ pub(crate) fn emit_empty_q<'ctx>(
     llvm_function: FunctionValue<'ctx>,
 ) -> Result<(), LlvmError> {
     let i64_ty = ctx.context.i64_type();
-    let self_val = nth_hashtable(function, llvm_function, 0, "self")?;
+    let self_val = nth_struct(function, llvm_function, 0, "self")?;
     let len = extract_int(ctx, self_val, 2, "len")?;
     let is_empty = ctx
         .builder
         .build_int_compare(IntPredicate::EQ, len, i64_ty.const_zero(), "is_empty")
         .or_ice()?;
-    ret_basic(ctx, is_empty.into())
+    ret(ctx, is_empty.into())
 }

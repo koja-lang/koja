@@ -38,39 +38,39 @@ fn new() -> Result<Value, RuntimeError> {
 }
 
 fn length(args: &[Value]) -> Result<Value, RuntimeError> {
-    let list = expect_list(args, 0, "List.length")?;
+    let list = helpers::arg_list(args, 0, "List.length")?;
     Ok(Value::Int(list.borrow().len() as i64))
 }
 
 fn empty_q(args: &[Value]) -> Result<Value, RuntimeError> {
-    let list = expect_list(args, 0, "List.empty?")?;
+    let list = helpers::arg_list(args, 0, "List.empty?")?;
     Ok(Value::Bool(list.borrow().is_empty()))
 }
 
 fn from_list(args: &[Value]) -> Result<Value, RuntimeError> {
-    let list = expect_list(args, 0, "List.from_list")?;
+    let list = helpers::arg_list(args, 0, "List.from_list")?;
     Ok(Value::List(list))
 }
 
 pub(super) fn append(args: &[Value]) -> Result<Value, RuntimeError> {
-    let list = expect_list(args, 0, "List.append")?;
-    let item = expect_arg(args, 1, "List.append")?.clone();
+    let list = helpers::arg_list(args, 0, "List.append")?;
+    let item = helpers::arg(args, 1, "List.append")?.clone();
     let mut items = list.borrow().clone();
     items.push(item);
     Ok(Value::List(Rc::new(RefCell::new(items))))
 }
 
 fn concat(args: &[Value]) -> Result<Value, RuntimeError> {
-    let lhs = expect_list(args, 0, "List.concat")?;
-    let rhs = expect_list(args, 1, "List.concat")?;
+    let lhs = helpers::arg_list(args, 0, "List.concat")?;
+    let rhs = helpers::arg_list(args, 1, "List.concat")?;
     let mut combined = lhs.borrow().clone();
     combined.extend(rhs.borrow().iter().cloned());
     Ok(Value::List(Rc::new(RefCell::new(combined))))
 }
 
 fn get<R: CallResolver>(call: IntrinsicCall<'_, R>) -> Result<Value, RuntimeError> {
-    let list = expect_list(call.args, 0, "List.get")?;
-    let index = expect_int(call.args, 1, "List.get")?;
+    let list = helpers::arg_list(call.args, 0, "List.get")?;
+    let index = helpers::arg_int(call.args, 1, "List.get")?;
     let option_symbol = helpers::enum_return_symbol(call.function, "List.get")?;
     let items = list.borrow();
     let value = if index < 0 {
@@ -82,7 +82,7 @@ fn get<R: CallResolver>(call: IntrinsicCall<'_, R>) -> Result<Value, RuntimeErro
 }
 
 fn pop<R: CallResolver>(call: IntrinsicCall<'_, R>) -> Result<Value, RuntimeError> {
-    let list = expect_list(call.args, 0, "List.pop")?;
+    let list = helpers::arg_list(call.args, 0, "List.pop")?;
     let option_symbol = tuple_option_symbol(call.function)?;
     let mut items = list.borrow().clone();
     let popped = items.pop();
@@ -92,9 +92,9 @@ fn pop<R: CallResolver>(call: IntrinsicCall<'_, R>) -> Result<Value, RuntimeErro
 }
 
 fn replace_at(args: &[Value]) -> Result<Value, RuntimeError> {
-    let list = expect_list(args, 0, "List.replace_at")?;
-    let index = expect_int(args, 1, "List.replace_at")?;
-    let value = expect_arg(args, 2, "List.replace_at")?.clone();
+    let list = helpers::arg_list(args, 0, "List.replace_at")?;
+    let index = helpers::arg_int(args, 1, "List.replace_at")?;
+    let value = helpers::arg(args, 2, "List.replace_at")?.clone();
     let mut items = list.borrow().clone();
     if index >= 0
         && let Some(slot) = items.get_mut(index as usize)
@@ -105,9 +105,9 @@ fn replace_at(args: &[Value]) -> Result<Value, RuntimeError> {
 }
 
 fn slice(args: &[Value]) -> Result<Value, RuntimeError> {
-    let list = expect_list(args, 0, "List.slice")?;
-    let start = expect_int(args, 1, "List.slice")?.max(0) as usize;
-    let count = expect_int(args, 2, "List.slice")?.max(0) as usize;
+    let list = helpers::arg_list(args, 0, "List.slice")?;
+    let start = helpers::arg_int(args, 1, "List.slice")?.max(0) as usize;
+    let count = helpers::arg_int(args, 2, "List.slice")?.max(0) as usize;
     let items = list.borrow();
     let len = items.len();
     let clamped_start = start.min(len);
@@ -115,34 +115,6 @@ fn slice(args: &[Value]) -> Result<Value, RuntimeError> {
     let clamped_count = count.min(remaining);
     let copied: Vec<Value> = items[clamped_start..clamped_start + clamped_count].to_vec();
     Ok(Value::List(Rc::new(RefCell::new(copied))))
-}
-
-fn expect_arg<'a>(args: &'a [Value], index: usize, label: &str) -> Result<&'a Value, RuntimeError> {
-    args.get(index).ok_or_else(|| RuntimeError::Unsupported {
-        detail: format!("{label} missing arg #{index} (got {} args)", args.len()),
-    })
-}
-
-fn expect_list(
-    args: &[Value],
-    index: usize,
-    label: &str,
-) -> Result<Rc<RefCell<Vec<Value>>>, RuntimeError> {
-    match expect_arg(args, index, label)? {
-        Value::List(items) => Ok(items.clone()),
-        other => Err(RuntimeError::TypeMismatch {
-            detail: format!("{label} arg #{index} expected List, got `{other}`"),
-        }),
-    }
-}
-
-fn expect_int(args: &[Value], index: usize, label: &str) -> Result<i64, RuntimeError> {
-    match expect_arg(args, index, label)? {
-        Value::Int(value) => Ok(*value),
-        other => Err(RuntimeError::TypeMismatch {
-            detail: format!("{label} arg #{index} expected Int, got `{other}`"),
-        }),
-    }
 }
 
 fn tuple_option_symbol(function: &IRFunction) -> Result<IRSymbol, RuntimeError> {
