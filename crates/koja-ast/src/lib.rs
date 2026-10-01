@@ -18,5 +18,7 @@ pub mod labels;
 pub mod span;
 pub mod token;
 pub mod util;
+pub mod visit;
+pub mod visit_mut;
 
 pub use debug_print::format_file;

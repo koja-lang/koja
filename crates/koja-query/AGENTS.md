@@ -30,8 +30,6 @@ and leaves a complete registry behind.
 ## Files
 
 - `lib.rs`: `Analysis`, file table lookups by `FileId` and path.
-- `visit.rs`: `Visitor` trait with `walk_*` defaults over every node
-  family. Parents before children.
 - `index.rs`: `ReferenceIndex`, `SymbolKey`, `Occurrence`, `Role`. One pass
   over the files. Local keys carry the enclosing function span because
   typecheck restarts local ids per function.
