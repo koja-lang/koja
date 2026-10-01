@@ -9,6 +9,7 @@ use koja_ir::{IRFunction, IRType, SetMethod};
 use crate::ctx::EmitContext;
 use crate::error::LlvmError;
 use crate::intrinsics::hashtable;
+use crate::types::abi_size;
 use inkwell::values::FunctionValue;
 
 pub(super) fn emit_set<'ctx>(
@@ -51,7 +52,7 @@ fn set_layout<'ctx, 'ty>(
     function: &'ty IRFunction,
 ) -> Result<hashtable::HashtableLayout<'ty>, LlvmError> {
     let element = element(method, function);
-    let element_size = hashtable::ir_byte_size(ctx, element)?;
+    let element_size = abi_size(ctx, element)?;
     Ok(hashtable::HashtableLayout {
         entry_size: element_size,
         key_size: element_size,

@@ -12,12 +12,13 @@ use koja_ir::{IRFunction, IRSymbol, IRType, IRVariantPayload};
 
 use crate::ctx::EmitContext;
 use crate::emit::enums::build_enum_value;
+use crate::emit::heap_layout::byte_offset_ptr;
 use crate::error::{IceExt, LlvmError};
 use crate::intrinsics::element::acquire_value;
 use crate::intrinsics::util::{expect_enum_symbol, nth_int};
 use crate::types::{ir_basic_type, tuple_struct_type};
 
-use super::util::{entry_pointer, extract_table_fields, value_slot};
+use super::util::{entry_pointer, extract_table_fields};
 use super::{HashtableLayout, STATE_OCCUPIED};
 use crate::intrinsics::option;
 
@@ -118,7 +119,7 @@ pub(crate) fn emit_next<'ctx>(
         .or_ice()?;
     let key = acquire_value(ctx, layout.key_ty, key)?;
     let item: BasicValueEnum<'ctx> = if let Some(value_ty) = layout.value_ty {
-        let value_ptr = value_slot(ctx, entry_ptr, layout.key_size)?;
+        let value_ptr = byte_offset_ptr(ctx, entry_ptr, layout.key_size, "val_ptr")?;
         let value = ctx
             .builder
             .build_load(ir_basic_type(ctx, value_ty)?, value_ptr, "cursor.value")

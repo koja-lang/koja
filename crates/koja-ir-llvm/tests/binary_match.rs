@@ -17,7 +17,9 @@ use koja_ir_llvm::emit_script_llvm_ir;
 
 mod common;
 
-use common::{APP_NAME, assert_contains, assert_main_shape, lower_script_source as lower};
+use common::{
+    APP_NAME, assert_contains, assert_main_shape, assert_not_contains, lower_script_source as lower,
+};
 
 #[test]
 fn binary_match_int_literal_emits_byte_extract_and_eq() {
@@ -106,10 +108,8 @@ fn binary_match_unsigned_binding_skips_sign_extend() {
         emit_script_llvm_ir(&script, APP_NAME).expect("emit_script_llvm_ir should succeed");
 
     assert_main_shape(&ir_text);
-    assert!(
-        !ir_text.contains("sign_shl"),
-        "unsigned binary binding should not emit sign-extend IR; got:\n{ir_text}",
-    );
+    // An unsigned binding emits no sign-extend IR.
+    assert_not_contains(&ir_text, "sign_shl");
 }
 
 #[test]

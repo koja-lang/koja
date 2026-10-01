@@ -5,7 +5,7 @@
 //! [`crate::layout::TypeLayouts`]. A passive bundle that every
 //! emission module takes as a `&EmitContext` parameter.
 
-use std::cell::{Cell, RefCell};
+use std::cell::{Cell, Ref, RefCell};
 use std::collections::{BTreeMap, HashMap};
 use std::panic::Location;
 use std::sync::Arc;
@@ -67,17 +67,17 @@ pub(crate) struct EmitContext<'ctx> {
     extern_float_returns: RefCell<BTreeMap<IRSymbol, String>>,
     /// Per-function closure-emit frame, `Some` only while a
     /// `FunctionKind::Closure` body is being defined.
-    closure_frame: RefCell<Option<ClosureFrame<'ctx>>>,
+    closure_frame: Slot<ClosureFrame<'ctx>>,
     /// Per-function `IRBlockId -> BasicBlock` map, set by
     /// [`crate::function::define_function`] around the body walk.
     /// The [`koja_ir::IRInstruction::Receive`] emitter reads it to
     /// resolve arm body blocks. Other emit sites take `block_map` by
     /// parameter.
-    current_block_map: RefCell<Option<BTreeMap<IRBlockId, BasicBlock<'ctx>>>>,
+    current_block_map: Slot<BTreeMap<IRBlockId, BasicBlock<'ctx>>>,
     /// Per-function tail-call frame, `Some` only for functions whose
     /// IR carries a [`koja_ir::IRTerminator::TailCall`]. See
     /// [`TcoFrame`].
-    tco_frame: RefCell<Option<TcoFrame<'ctx>>>,
+    tco_frame: Slot<TcoFrame<'ctx>>,
     /// DWARF emitter, present only on the object-emitting `compile_*`
     /// paths. `None` keeps the `emit_*_llvm_ir` snapshot paths free of
     /// debug metadata. Drives [`Self::declare_function_debug`] /
@@ -117,6 +117,41 @@ pub(crate) struct ClosureFrame<'ctx> {
     pub(crate) env_struct: StructType<'ctx>,
 }
 
+/// One per-function value that [`crate::function::define_function`]
+/// sets before a body walk and clears after it. A second `set` before
+/// the `clear` panics so the per-function scope stays explicit.
+struct Slot<T> {
+    value: RefCell<Option<T>>,
+}
+
+impl<T> Slot<T> {
+    fn new() -> Self {
+        Self {
+            value: RefCell::new(None),
+        }
+    }
+
+    fn clear(&self) {
+        *self.value.borrow_mut() = None;
+    }
+
+    fn get(&self) -> Ref<'_, Option<T>> {
+        self.value.borrow()
+    }
+
+    #[track_caller]
+    fn set(&self, value: T) {
+        let mut slot = self.value.borrow_mut();
+        if slot.is_some() {
+            panic!(
+                "LLVM emit: per-function slot set twice without a clear in between \
+                 (caller must clear before re-entering)",
+            );
+        }
+        *slot = Some(value);
+    }
+}
+
 impl<'ctx> EmitContext<'ctx> {
     /// Build a fresh emit context against `context`, with an LLVM
     /// module named `module_name`. Convention is to pass the app
@@ -150,9 +185,9 @@ impl<'ctx> EmitContext<'ctx> {
             load_const_cache: RefCell::new(BTreeMap::new()),
             declared_functions: RefCell::new(BTreeMap::new()),
             extern_float_returns: RefCell::new(BTreeMap::new()),
-            closure_frame: RefCell::new(None),
-            current_block_map: RefCell::new(None),
-            tco_frame: RefCell::new(None),
+            closure_frame: Slot::new(),
+            current_block_map: Slot::new(),
+            tco_frame: Slot::new(),
             debug,
         }
     }
@@ -256,19 +291,13 @@ impl<'ctx> EmitContext<'ctx> {
     /// being defined. Pairs with [`Self::clear_tco_frame`]. Calling
     /// twice without a clear in between panics so the per-function
     /// scope stays explicit.
+    #[track_caller]
     pub(crate) fn set_tco_frame(&self, frame: TcoFrame<'ctx>) {
-        let mut slot = self.tco_frame.borrow_mut();
-        if slot.is_some() {
-            panic!(
-                "LLVM emit: nested TCO frame set without clearing the previous one \
-                 (caller must clear before re-entering)",
-            );
-        }
-        *slot = Some(frame);
+        self.tco_frame.set(frame);
     }
 
     pub(crate) fn clear_tco_frame(&self) {
-        *self.tco_frame.borrow_mut() = None;
+        self.tco_frame.clear();
     }
 
     /// Active TCO frame for the body being emitted, or `None` for
@@ -277,7 +306,7 @@ impl<'ctx> EmitContext<'ctx> {
     /// any function carrying a `TailCall` block is set up with a
     /// frame here before its body is walked.
     pub(crate) fn tco_frame(&self) -> Option<TcoFrame<'ctx>> {
-        self.tco_frame.borrow().clone()
+        self.tco_frame.get().clone()
     }
 
     /// Stage the per-function `IRBlockId -> BasicBlock` map for
@@ -285,19 +314,13 @@ impl<'ctx> EmitContext<'ctx> {
     /// [`koja_ir::IRInstruction::Receive`] dispatcher). Pairs with
     /// [`Self::clear_block_map`]. Calling twice without a clear in
     /// between panics so the per-function scope stays explicit.
+    #[track_caller]
     pub(crate) fn set_block_map(&self, block_map: BTreeMap<IRBlockId, BasicBlock<'ctx>>) {
-        let mut slot = self.current_block_map.borrow_mut();
-        if slot.is_some() {
-            panic!(
-                "LLVM emit: nested block map set without clearing the previous one \
-                 (caller must clear before re-entering)",
-            );
-        }
-        *slot = Some(block_map);
+        self.current_block_map.set(block_map);
     }
 
     pub(crate) fn clear_block_map(&self) {
-        *self.current_block_map.borrow_mut() = None;
+        self.current_block_map.clear();
     }
 
     /// Resolve `block_id` to its registered `BasicBlock`. Misses
@@ -308,7 +331,7 @@ impl<'ctx> EmitContext<'ctx> {
     pub(crate) fn block_for(&self, block_id: IRBlockId) -> BasicBlock<'ctx> {
         *self
             .current_block_map
-            .borrow()
+            .get()
             .as_ref()
             .unwrap_or_else(|| {
                 panic!(
@@ -329,26 +352,20 @@ impl<'ctx> EmitContext<'ctx> {
     /// defined. Pairs with [`Self::clear_closure_frame`]. Calling
     /// twice without a clear in between panics so the per-function
     /// scope stays explicit.
+    #[track_caller]
     pub(crate) fn set_closure_frame(&self, frame: ClosureFrame<'ctx>) {
-        let mut slot = self.closure_frame.borrow_mut();
-        if slot.is_some() {
-            panic!(
-                "LLVM emit: nested closure frame set without clearing the previous one \
-                 (caller must clear before re-entering)",
-            );
-        }
-        *slot = Some(frame);
+        self.closure_frame.set(frame);
     }
 
     pub(crate) fn clear_closure_frame(&self) {
-        *self.closure_frame.borrow_mut() = None;
+        self.closure_frame.clear();
     }
 
     /// Active closure frame for the body being emitted, or `None` in
     /// non-closure bodies. `LoadCapture` panics on `None` since the
     /// IR seal pass forbids it outside `FunctionKind::Closure`.
     pub(crate) fn closure_frame(&self) -> Option<ClosureFrame<'ctx>> {
-        *self.closure_frame.borrow()
+        *self.closure_frame.get()
     }
 
     /// Insert a freshly-declared function into the
@@ -509,5 +526,18 @@ impl<'ctx> EmitContext<'ctx> {
             .basic()
             .unwrap_or_else(|| panic!("call `{name}` at {at} did not produce a value"));
         Ok(value)
+    }
+
+    /// Declare a void runtime function through `declare` and call it
+    /// with `args`. For the fire-and-forget runtime entry points whose
+    /// only effect is on the heap or the scheduler.
+    pub(crate) fn call_rt_unit(
+        &self,
+        declare: fn(&EmitContext<'ctx>) -> FunctionValue<'ctx>,
+        args: &[BasicMetadataValueEnum<'ctx>],
+    ) -> Result<(), LlvmError> {
+        let function = declare(self);
+        self.builder.build_call(function, args, "").or_ice()?;
+        Ok(())
     }
 }

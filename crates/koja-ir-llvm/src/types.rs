@@ -9,12 +9,10 @@
 //! through the pre-emitted enum-layout map
 //! ([`crate::ctx::EmitContext::enum_outer_type`]).
 //!
-//! [`ir_byte_size`] / [`ir_alignment`] are the target-aware adapters
-//! the enum-layout pre-emit phase calls to compute per-variant
-//! padding and the outer blob's max-alignment chunk. They route
-//! through the host [`inkwell::targets::TargetData`] pinned on the
-//! [`crate::ctx::EmitContext`] so the layout matches the object emitter's
-//! ABI rather than a hard-coded 64-bit assumption.
+//! [`abi_size`] is the one byte-size query for an [`IRType`]. It
+//! routes through the [`inkwell::targets::TargetData`] pinned on the
+//! [`crate::ctx::EmitContext`] so buffer arithmetic matches the
+//! object emitter's layout rather than a hard-coded 64-bit assumption.
 
 use inkwell::AddressSpace;
 use inkwell::context::Context;
@@ -121,31 +119,14 @@ pub(crate) fn tuple_struct_type<'ctx>(
     Ok(ctx.context.struct_type(&element_types, false))
 }
 
-/// ABI byte size of `ty` on the host triple. Routes through
+/// ABI byte size of `ty` on the compile's target. Routes through
 /// [`inkwell::targets::TargetData::get_abi_size`] so the result
-/// matches what the object emitter will lay out (e.g. an
-/// `IRType::String` pointer is 8 bytes on 64-bit hosts and 4 on
-/// 32-bit hosts, and an `IRType::Enum(_)` is the size of its outer
-/// blob, computed by the pre-emit phase).
-///
-/// Public for follow-up enum-shaped emit work (eq, destructure,
-/// pattern match) that needs the same target-aware sizing the
-/// per-variant layout already uses inline.
-#[allow(dead_code)]
-pub(crate) fn ir_byte_size<'ctx>(ctx: &EmitContext<'ctx>, ty: &IRType) -> Result<u64, LlvmError> {
+/// matches what the object emitter lays out. A pointer-shaped type
+/// is 8 bytes on 64-bit targets, and an `IRType::Enum(_)` is the
+/// size of its outer blob.
+pub(crate) fn abi_size<'ctx>(ctx: &EmitContext<'ctx>, ty: &IRType) -> Result<u64, LlvmError> {
     let basic = ir_basic_type(ctx, ty)?;
     Ok(ctx.layouts.target_data.get_abi_size(&basic))
-}
-
-/// ABI alignment of `ty` on the host triple. Sibling of
-/// [`ir_byte_size`]. The enum layout queries `target_data`
-/// directly during the pre-emit phase (it already has
-/// `BasicTypeEnum` handles in scope). This helper is kept for the
-/// same follow-up emit work [`ir_byte_size`] is reserved for.
-#[allow(dead_code)]
-pub(crate) fn ir_alignment<'ctx>(ctx: &EmitContext<'ctx>, ty: &IRType) -> Result<u32, LlvmError> {
-    let basic = ir_basic_type(ctx, ty)?;
-    Ok(ctx.layouts.target_data.get_abi_alignment(&basic))
 }
 
 /// Closure value shape: `{ fn_ptr, env_ptr }`. Anonymous (literal)

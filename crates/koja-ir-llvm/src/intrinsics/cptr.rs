@@ -17,18 +17,17 @@
 
 use inkwell::AddressSpace;
 use inkwell::IntPredicate;
-use inkwell::types::BasicType;
 use inkwell::values::{BasicValueEnum, FunctionValue, IntValue};
 use koja_ir::panics::CPTR_READ_NON_FINITE_MESSAGE;
 use koja_ir::{CPtrMethod, IRFunction, IRType};
 
 use crate::ctx::EmitContext;
-use crate::emit::heap_layout::{block_alloc_size, init_heap_block, load_bit_length};
+use crate::emit::heap_layout::{Rounding, block_alloc_size, init_heap_block, load_byte_count};
 use crate::emit::ops::{emit_fault_guard, emit_finite_guard};
 use crate::error::{IceExt, LlvmError};
 use crate::intrinsics::util::{nth_int, nth_param, nth_pointer};
 use crate::runtime::{declare_free_extern, declare_malloc_extern, declare_memcpy_extern};
-use crate::types::ir_basic_type;
+use crate::types::{abi_size, ir_basic_type};
 
 pub(super) fn emit_cptr<'ctx>(
     ctx: &EmitContext<'ctx>,
@@ -100,14 +99,10 @@ fn emit_alloc<'ctx>(
     function: &IRFunction,
     llvm_function: FunctionValue<'ctx>,
 ) -> Result<(), LlvmError> {
-    let inner = pointee(CPtrMethod::Alloc, function);
-    let basic = ir_basic_type(ctx, inner)?;
-    let element_size = basic.size_of().unwrap_or_else(|| {
-        panic!(
-            "CPtr.alloc cannot compute size of pointee `{inner:?}` (symbol `{}`)",
-            function.symbol,
-        )
-    });
+    let element_size = ctx
+        .context
+        .i64_type()
+        .const_int(abi_size(ctx, pointee(CPtrMethod::Alloc, function))?, false);
     let count = nth_int(function, llvm_function, 0, "count");
     guard_nonnegative(ctx, count, "CPtr.alloc count cannot be negative")?;
     let total = ctx
@@ -166,11 +161,7 @@ fn emit_copy<'ctx>(
 ) -> Result<(), LlvmError> {
     let i64_ty = ctx.context.i64_type();
     let payload = nth_pointer(function, llvm_function, 0, "bytes");
-    let bit_length = load_bit_length(ctx, payload, "bit_length")?;
-    let byte_count = ctx
-        .builder
-        .build_right_shift(bit_length, i64_ty.const_int(3, false), false, "byte_count")
-        .or_ice()?;
+    let byte_count = load_byte_count(ctx, payload, Rounding::Floor)?;
     let is_empty = ctx
         .builder
         .build_int_compare(

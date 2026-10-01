@@ -45,7 +45,9 @@ use crate::error::{IceExt, LlvmError};
 use crate::runtime::{declare_malloc_extern, declare_memcmp_extern, declare_memcpy_extern};
 
 use super::constants::emit_string_literal_payload;
-use super::heap_layout::{LENGTH_OFFSET, block_alloc_size, init_heap_block};
+use super::heap_layout::{
+    Rounding, block_alloc_size, byte_count, init_heap_block, load_bit_length,
+};
 use super::{ValueMap, lookup};
 
 /// Where an integer segment reads from: the subject payload, the
@@ -71,8 +73,8 @@ pub(super) fn emit_binary_match<'ctx>(
     values: &ValueMap<'ctx>,
 ) -> Result<IntValue<'ctx>, LlvmError> {
     let payload = lookup(values, subject).into_pointer_value();
-    let bit_length = load_subject_bit_length(ctx, payload)?;
-    let byte_length = shift_right_by_three(ctx, bit_length)?;
+    let bit_length = load_bit_length(ctx, payload, "bin_pat_bit_len")?;
+    let byte_length = byte_count(ctx, bit_length, Rounding::Floor, "bin_pat_byte_len")?;
     let length_ok = length_check(ctx, &layout, byte_length)?;
 
     // Segment extraction indexes off the subject length, so on a
@@ -134,51 +136,6 @@ pub(super) fn emit_binary_match<'ctx>(
         (&matched, bind_end),
     ]);
     Ok(result.as_basic_value().into_int_value())
-}
-
-/// Read the subject's `i64 bit_length` header.
-fn load_subject_bit_length<'ctx>(
-    ctx: &EmitContext<'ctx>,
-    payload: PointerValue<'ctx>,
-) -> Result<IntValue<'ctx>, LlvmError> {
-    let i8_ty = ctx.context.i8_type();
-    let i64_ty = ctx.context.i64_type();
-    // SAFETY: GEPs in this file step back to the block header or
-    // forward by offsets the match layout bounds-checked against
-    // `bit_length`.
-    let header = unsafe {
-        ctx.builder
-            .build_gep(
-                i8_ty,
-                payload,
-                &[i64_ty.const_int((LENGTH_OFFSET as i64).wrapping_neg() as u64, true)],
-                "bin_pat_len_ptr",
-            )
-            .or_ice()?
-    };
-    let loaded = ctx
-        .builder
-        .build_load(i64_ty, header, "bin_pat_bit_len")
-        .or_ice()?;
-    Ok(loaded.into_int_value())
-}
-
-/// `byte_length = bit_length >> 3`. Logical right shift since the
-/// IR-side contract is that `bit_length` fits in non-negative
-/// `i64` (a `usize`-sized number of bits).
-fn shift_right_by_three<'ctx>(
-    ctx: &EmitContext<'ctx>,
-    bit_length: IntValue<'ctx>,
-) -> Result<IntValue<'ctx>, LlvmError> {
-    let i64_ty = ctx.context.i64_type();
-    ctx.builder
-        .build_right_shift(
-            bit_length,
-            i64_ty.const_int(3, false),
-            false,
-            "bin_pat_byte_len",
-        )
-        .or_ice()
 }
 
 /// `byte_length == fixed_bits / 8` (exact match) when the pattern

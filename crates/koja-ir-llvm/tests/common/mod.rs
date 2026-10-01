@@ -19,8 +19,11 @@
 //!   Process state appended so `lower_program` always has a valid
 //!   Process entry. Fixture functions (`fn main` and friends) emit
 //!   as plain package helpers alongside it.
-//! - [`assert_contains`]: substring assertion with a panic message
-//!   that includes the full IR text on miss.
+//! - [`assert_contains`]: substring assertion whose panic message
+//!   names the needle and the module's line count on miss, never the
+//!   module text.
+//! - [`assert_not_contains`]: the negative twin. On a hit the panic
+//!   message shows the first matching line, never the module text.
 //! - [`assert_main_shape`]: pin the script-mode wrapper invariants,
 //!   `define i64 @main()`, `ret i64 0`, and the `@__koja_app_name`
 //!   global.
@@ -118,7 +121,8 @@ pub fn lower_script_source_qualified(source: &str) -> IRScript {
 pub fn assert_contains(ir_text: &str, needle: &str) {
     assert!(
         ir_text.contains(needle),
-        "expected `{needle}` in:\n{ir_text}",
+        "expected `{needle}` in {}",
+        module_summary(ir_text),
     );
 }
 
@@ -140,6 +144,15 @@ pub fn assert_main_shape(ir_text: &str) {
     assert_contains(ir_text, "call void @koja_rt_main_done()");
     assert_contains(ir_text, "ret i64 0");
     assert_contains(ir_text, "@__koja_app_name");
+}
+
+pub fn assert_not_contains(ir_text: &str, needle: &str) {
+    if let Some(line) = ir_text.lines().find(|line| line.contains(needle)) {
+        panic!(
+            "did not expect `{needle}` in {}, found:\n{line}",
+            module_summary(ir_text),
+        );
+    }
 }
 
 /// Pin the program-mode (Process entry) trampoline invariants every
@@ -185,7 +198,10 @@ pub fn extract_function_body<'a>(ir_text: &'a str, name: &str) -> &'a str {
     let mut search_from = 0;
     let header_idx = loop {
         let Some(rel) = ir_text[search_from..].find(header) else {
-            panic!("function `@{name}` not found in IR:\n{ir_text}");
+            panic!(
+                "function `@{name}` not found in {}",
+                module_summary(ir_text),
+            );
         };
         let define_idx = search_from + rel;
         let line_end = ir_text[define_idx..]
@@ -202,13 +218,29 @@ pub fn extract_function_body<'a>(ir_text: &'a str, name: &str) -> &'a str {
         }
         search_from = line_end;
     };
-    let open = ir_text[header_idx..]
-        .find('{')
-        .unwrap_or_else(|| panic!("opening brace of `@{name}` missing in IR:\n{ir_text}"))
-        + header_idx;
-    let close = ir_text[open..]
-        .find("\n}")
-        .unwrap_or_else(|| panic!("closing brace of `@{name}` missing in IR:\n{ir_text}"))
-        + open;
+    let open = ir_text[header_idx..].find('{').unwrap_or_else(|| {
+        panic!(
+            "opening brace of `@{name}` missing in {}",
+            module_summary(ir_text),
+        )
+    }) + header_idx;
+    let close = ir_text[open..].find("\n}").unwrap_or_else(|| {
+        panic!(
+            "closing brace of `@{name}` missing in {}",
+            module_summary(ir_text),
+        )
+    }) + open;
     &ir_text[open..close]
+}
+
+/// Describe the IR text in a failure message by its line count. A
+/// test module runs to tens of thousands of lines, almost all
+/// auto-imported prelude, so a panic that prints the whole module
+/// buries the one line that matters. For the full module, write the
+/// fixture to a `.kojs` file and run `koja build --emit-llvm` on it.
+fn module_summary(ir_text: &str) -> String {
+    format!(
+        "the emitted module ({} lines, build the fixture with `koja build --emit-llvm` to see it)",
+        ir_text.lines().count(),
+    )
 }

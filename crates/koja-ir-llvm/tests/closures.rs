@@ -75,13 +75,13 @@ fn call_closure_dispatches_indirectly_with_env_first() {
         ";
     let script = lower(&dedent(source));
     let ir_text = emit_script_llvm_ir(&script, APP_NAME).expect("emit_script_llvm_ir");
-    // CallClosure spills the fat-pointer to alloca, GEPs the two
-    // halves, then dispatches via an indirect call. Inkwell prints
-    // indirect calls without a `@symbol`. Matching the GEP labels
-    // is enough to anchor the shape without coupling to inkwell's
-    // exact rendering of the call site.
-    assert_contains(&ir_text, "closure_call.fn_ptr");
-    assert_contains(&ir_text, "closure_call.env_ptr");
+    // CallClosure extracts the two fat-pointer halves, then
+    // dispatches via an indirect call. Inkwell prints indirect calls
+    // without a `@symbol`. Matching the extract labels is enough to
+    // anchor the shape without coupling to inkwell's exact rendering
+    // of the call site.
+    assert_contains(&ir_text, "%closure_call.fn = extractvalue { ptr, ptr }");
+    assert_contains(&ir_text, "%closure_call.env = extractvalue { ptr, ptr }");
 }
 
 #[test]

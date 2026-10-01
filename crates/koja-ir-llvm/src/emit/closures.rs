@@ -24,7 +24,7 @@ use koja_ir::{IRFunction, IRLocalId, IRSymbol, IRType, ValueId};
 
 use crate::ctx::{ClosureFrame, EmitContext};
 use crate::error::{IceExt, LlvmError};
-use crate::intrinsics::element::deep_copy_in_slot;
+use crate::intrinsics::element::{ElementOp, apply_in_slot};
 use crate::runtime::{declare_closure_rc_dec_extern, declare_malloc_extern, declare_memcpy_extern};
 use crate::types::{
     CLOSURE_ENV_HEADER_FIELDS, ENV_COPY_FN_FIELD, ENV_DROP_FN_FIELD, ENV_EQ_FN_FIELD, ENV_RC_FIELD,
@@ -259,26 +259,15 @@ pub(super) fn emit_call_closure<'ctx>(
     for arg in args {
         user_args.push(lookup(values, *arg).into());
     }
-    let fat_ty = closure_fat_ptr_type(ctx);
-    let alloca = ctx.build_entry_alloca(fat_ty, "closure_call");
-    ctx.builder.build_store(alloca, callee_value).or_ice()?;
-    let fn_slot = ctx
-        .builder
-        .build_struct_gep(fat_ty, alloca, 0, "closure_call.fn_ptr")
-        .or_ice()?;
-    let env_slot = ctx
-        .builder
-        .build_struct_gep(fat_ty, alloca, 1, "closure_call.env_ptr")
-        .or_ice()?;
-    let ptr_ty = ctx.context.ptr_type(AddressSpace::default());
+    let fat = callee_value.into_struct_value();
     let fn_ptr = ctx
         .builder
-        .build_load(ptr_ty, fn_slot, "closure_call.fn")
+        .build_extract_value(fat, 0, "closure_call.fn")
         .or_ice()?
         .into_pointer_value();
     let env_ptr = ctx
         .builder
-        .build_load(ptr_ty, env_slot, "closure_call.env")
+        .build_extract_value(fat, 1, "closure_call.env")
         .or_ice()?
         .into_pointer_value();
     let signature = closure_body_signature(ctx, param_types, result_ty)?;
@@ -398,7 +387,7 @@ pub(super) fn emit_drop_closure_env<'ctx>(
 /// 2. reset the fresh block's rc to 1 (the source's count came along
 ///    in the copy).
 /// 3. deep-copy every heap-managed capture in place
-///    ([`deep_copy_in_slot`] skips scalars), severing every share
+///    ([`apply_in_slot`] skips scalars), severing every share
 ///    with the source env.
 pub(crate) fn emit_copy_closure_glue_body<'ctx>(
     ctx: &EmitContext<'ctx>,
@@ -440,7 +429,7 @@ pub(crate) fn emit_copy_closure_glue_body<'ctx>(
             .builder
             .build_struct_gep(env_struct, new_env, field, &format!("env.{index}"))
             .or_ice()?;
-        deep_copy_in_slot(ctx, capture_ty, slot)?;
+        apply_in_slot(ctx, ElementOp::DeepCopy, capture_ty, slot)?;
     }
 
     ctx.builder
@@ -449,26 +438,20 @@ pub(crate) fn emit_copy_closure_glue_body<'ctx>(
         .map(|_| ())
 }
 
-/// Split a `{fn_ptr, env_ptr}` fat pointer and load its `env_ptr`
-/// field. Spill-then-GEP so the load works off the canonical
-/// [`closure_fat_ptr_type`] regardless of how the SSA value was
-/// produced. Shared by the closure clone (`rc++`) and drop
-/// (`rc--`) paths.
+/// Project the `env_ptr` field out of a `{fn_ptr, env_ptr}` fat
+/// pointer. Shared by the closure clone (`rc++`) and drop (`rc--`)
+/// paths.
 pub(crate) fn load_closure_env_ptr<'ctx>(
     ctx: &EmitContext<'ctx>,
     closure_value: BasicValueEnum<'ctx>,
     label: &str,
 ) -> Result<PointerValue<'ctx>, LlvmError> {
-    let fat_ty = closure_fat_ptr_type(ctx);
-    let alloca = ctx.build_entry_alloca(fat_ty, label);
-    ctx.builder.build_store(alloca, closure_value).or_ice()?;
-    let env_slot = ctx
-        .builder
-        .build_struct_gep(fat_ty, alloca, 1, &format!("{label}.env_ptr"))
-        .or_ice()?;
-    let ptr_ty = ctx.context.ptr_type(AddressSpace::default());
     ctx.builder
-        .build_load(ptr_ty, env_slot, &format!("{label}.env"))
+        .build_extract_value(
+            closure_value.into_struct_value(),
+            1,
+            &format!("{label}.env"),
+        )
         .or_ice()
         .map(|v| v.into_pointer_value())
 }
@@ -542,28 +525,21 @@ fn store_env_field<'ctx>(
 }
 
 /// Pack `{fn_ptr, env_ptr}` into the canonical closure fat-pointer
-/// shape. Materialized via an entry-block alloca + two stores +
-/// load so the caller sees a single SSA value of struct type
-/// matching [`closure_fat_ptr_type`].
+/// shape with two `insertvalue`s over an `undef`
+/// [`closure_fat_ptr_type`].
 fn build_closure_fat_pointer<'ctx>(
     ctx: &EmitContext<'ctx>,
     body: &IRSymbol,
     fn_ptr: PointerValue<'ctx>,
     env_ptr: PointerValue<'ctx>,
 ) -> Result<BasicValueEnum<'ctx>, LlvmError> {
-    let fat_ty = closure_fat_ptr_type(ctx);
-    let alloca = ctx.build_entry_alloca(fat_ty, &format!("{body}.closure"));
-    let fn_slot = ctx
+    let undef = closure_fat_ptr_type(ctx).get_undef();
+    let with_fn = ctx
         .builder
-        .build_struct_gep(fat_ty, alloca, 0, &format!("{body}.fn_ptr"))
+        .build_insert_value(undef, fn_ptr, 0, &format!("{body}.fn_ptr"))
         .or_ice()?;
-    ctx.builder.build_store(fn_slot, fn_ptr).or_ice()?;
-    let env_slot = ctx
-        .builder
-        .build_struct_gep(fat_ty, alloca, 1, &format!("{body}.env_ptr"))
-        .or_ice()?;
-    ctx.builder.build_store(env_slot, env_ptr).or_ice()?;
     ctx.builder
-        .build_load(fat_ty, alloca, &format!("{body}.closure_value"))
+        .build_insert_value(with_fn, env_ptr, 1, &format!("{body}.closure_value"))
         .or_ice()
+        .map(|v| v.into_struct_value().into())
 }

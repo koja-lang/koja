@@ -51,10 +51,13 @@ mod socket;
 mod string;
 pub(crate) mod util;
 
-/// The `0..capacity` occupied-bucket walk, re-exported so the collection
-/// glue emitter ([`crate::emit::collection_glue`]) iterates `Map` /
-/// `Set` buffers by the exact convention the hashtable intrinsics write.
-pub(crate) use hashtable::occupied_loop;
+/// The table snapshot, layout, buffer clone, and occupied-bucket walk,
+/// re-exported so the collection glue emitter
+/// ([`crate::emit::collection_glue`]) copies and drops `Map` / `Set`
+/// buffers by the exact convention the hashtable intrinsics write.
+pub(crate) use hashtable::{
+    HashtableLayout, TableSnapshot, apply_occupied, clone_table, extract_table_fields,
+};
 
 /// Synthesize the body of an `@intrinsic` function. Opens the `entry`
 /// block and positions the builder there, then forwards each variant

@@ -12,7 +12,7 @@ use koja_ir::{IRFunction, IRSymbol, IRType, StringMethod};
 
 use crate::ctx::EmitContext;
 use crate::emit::enums::build_enum_value;
-use crate::emit::heap_layout::load_bit_length;
+use crate::emit::heap_layout::{Rounding, load_byte_count};
 use crate::error::{IceExt, LlvmError};
 use crate::intrinsics::heap_payload;
 use crate::intrinsics::option;
@@ -75,7 +75,7 @@ fn emit_byte_length<'ctx>(
     llvm_function: FunctionValue<'ctx>,
 ) -> Result<(), LlvmError> {
     let payload = self_payload(function, llvm_function);
-    let byte_count = load_byte_count(ctx, payload)?;
+    let byte_count = load_byte_count(ctx, payload, Rounding::Floor)?;
     ctx.builder
         .build_return(Some(&byte_count))
         .or_ice()
@@ -247,7 +247,7 @@ fn emit_to_cstring<'ctx>(
 ) -> Result<(), LlvmError> {
     let i64_ty = ctx.context.i64_type();
     let payload = self_payload(function, llvm_function);
-    let byte_len = load_byte_count(ctx, payload)?;
+    let byte_len = load_byte_count(ctx, payload, Rounding::Floor)?;
     let result_symbol = result::return_symbol(function);
     let cstring_ty = cstring_struct_type(ctx, result_symbol)?;
 
@@ -332,35 +332,18 @@ fn self_payload<'ctx>(
     nth_pointer(function, llvm_function, 0, "self")
 }
 
-fn load_byte_count<'ctx>(
-    ctx: &EmitContext<'ctx>,
-    payload: PointerValue<'ctx>,
-) -> Result<IntValue<'ctx>, LlvmError> {
-    let i64_ty = ctx.context.i64_type();
-    let bit_length = load_bit_length(ctx, payload, "bit_length")?;
-    ctx.builder
-        .build_right_shift(bit_length, i64_ty.const_int(3, false), false, "byte_count")
-        .or_ice()
-}
-
 fn build_cstring<'ctx>(
     ctx: &EmitContext<'ctx>,
     cstring_ty: StructType<'ctx>,
     ptr: PointerValue<'ctx>,
     len: IntValue<'ctx>,
 ) -> Result<BasicValueEnum<'ctx>, LlvmError> {
-    let alloca = ctx.builder.build_alloca(cstring_ty, "cs_tmp").or_ice()?;
-    let ptr_field = ctx
+    let with_ptr = ctx
         .builder
-        .build_struct_gep(cstring_ty, alloca, 0, "cs_ptr")
+        .build_insert_value(cstring_ty.get_undef(), ptr, 0, "cs_ptr")
         .or_ice()?;
-    ctx.builder.build_store(ptr_field, ptr).or_ice()?;
-    let len_field = ctx
-        .builder
-        .build_struct_gep(cstring_ty, alloca, 1, "cs_len")
-        .or_ice()?;
-    ctx.builder.build_store(len_field, len).or_ice()?;
     ctx.builder
-        .build_load(cstring_ty, alloca, "cs_val")
+        .build_insert_value(with_ptr, len, 1, "cs_val")
         .or_ice()
+        .map(|v| v.into_struct_value().into())
 }

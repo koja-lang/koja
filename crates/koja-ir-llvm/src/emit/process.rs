@@ -1,8 +1,9 @@
 //! LLVM emit for `IRInstruction::Spawn` / `IRInstruction::Receive`
 //! and the [`koja_ir::FunctionKind::SpawnWrapper`] /
-//! [`koja_ir::FunctionKind::ProcessEntryWrapper`] bodies. The mailbox surface lives in `koja-runtime-posix/src/scheduler.rs`.
-//! This module is the sole call site for the `koja_rt_*` declares
-//! minted in [`crate::runtime`].
+//! [`koja_ir::FunctionKind::ProcessEntryWrapper`] bodies. The mailbox
+//! surface lives in `koja-runtime-posix/src/scheduler.rs`. The
+//! `koja_rt_*` declares come from [`crate::runtime`], which other
+//! emitters also call.
 //!
 //! The three pieces snap together as follows:
 //!
@@ -216,16 +217,15 @@ pub(super) struct SpawnArgs<'a> {
 /// Emit a single `IRInstruction::Spawn`. Serializes the config
 /// value into a stack alloca, hands the raw pointer + byte size +
 /// config drop glue to `koja_rt_spawn` along with the wrapper, then
-/// wraps the returned pid in a `Ref<M, R>` struct value bound to
-/// `dest`. The runtime owns its config copy and runs the glue at
-/// process reclaim, so the spawn site transfers the config's nested
-/// heap rather than sharing it.
+/// returns the pid wrapped in a `Ref<M, R>` struct value. The runtime
+/// owns its config copy and runs the glue at process reclaim, so the
+/// spawn site transfers the config's nested heap rather than sharing
+/// it.
 pub(super) fn emit_spawn<'ctx>(
     ctx: &EmitContext<'ctx>,
     args: SpawnArgs<'_>,
-    dest: ValueId,
-    values: &mut ValueMap<'ctx>,
-) -> Result<(), LlvmError> {
+    values: &ValueMap<'ctx>,
+) -> Result<BasicValueEnum<'ctx>, LlvmError> {
     let SpawnArgs {
         config,
         config_type,
@@ -259,15 +259,12 @@ pub(super) fn emit_spawn<'ctx>(
         .into_int_value();
 
     let ref_struct = ctx.layouts.struct_type(ref_type.mangled());
-    let mut ref_value = ref_struct.get_undef();
-    ref_value = ctx
+    let ref_value = ctx
         .builder
-        .build_insert_value(ref_value, pid, 0, "ref_pid")
+        .build_insert_value(ref_struct.get_undef(), pid, 0, "ref_pid")
         .or_ice()?
         .into_struct_value();
-
-    values.insert(dest, ref_value.into());
-    Ok(())
+    Ok(ref_value.into())
 }
 
 // ----- IRInstruction::ProcessExit ------------------------------------------
@@ -281,11 +278,7 @@ pub(super) fn emit_process_exit<'ctx>(
     values: &ValueMap<'ctx>,
 ) -> Result<(), LlvmError> {
     let reason = lookup(values, reason).into_int_value();
-    let process_exit_fn = declare_rt_process_exit_extern(ctx);
-    ctx.builder
-        .build_call(process_exit_fn, &[reason.into()], "")
-        .or_ice()?;
-    Ok(())
+    ctx.call_rt_unit(declare_rt_process_exit_extern, &[reason.into()])
 }
 
 // ----- IRInstruction::SetPriority ------------------------------------------
@@ -299,11 +292,7 @@ pub(super) fn emit_set_priority<'ctx>(
     values: &ValueMap<'ctx>,
 ) -> Result<(), LlvmError> {
     let level = lookup(values, tag).into_int_value();
-    let set_priority_fn = declare_rt_set_priority_extern(ctx);
-    ctx.builder
-        .build_call(set_priority_fn, &[level.into()], "")
-        .or_ice()?;
-    Ok(())
+    ctx.call_rt_unit(declare_rt_set_priority_extern, &[level.into()])
 }
 
 // ----- IRInstruction::Receive ----------------------------------------------
@@ -319,7 +308,7 @@ pub(super) fn emit_receive<'ctx>(
     ctx: &EmitContext<'ctx>,
     after: Option<&ReceiveAfter>,
     arms: &[ReceiveArm],
-    values: &mut ValueMap<'ctx>,
+    values: &ValueMap<'ctx>,
 ) -> Result<(), LlvmError> {
     let host_block = ctx
         .builder
@@ -375,31 +364,23 @@ fn build_receive_call<'ctx>(
     payload_slot: PointerValue<'ctx>,
     payload_cap: IntValue<'ctx>,
 ) -> Result<IntValue<'ctx>, LlvmError> {
-    let tag_call = if let Some(after) = after {
+    let tag = if let Some(after) = after {
         let timeout = lookup(values, after.timeout).into_int_value();
         let receive_fn = declare_rt_receive_timeout_extern(ctx);
-        ctx.builder
-            .build_call(
-                receive_fn,
-                &[payload_slot.into(), payload_cap.into(), timeout.into()],
-                "receive_tag",
-            )
-            .or_ice()?
+        ctx.call_basic(
+            receive_fn,
+            &[payload_slot.into(), payload_cap.into(), timeout.into()],
+            "receive_tag",
+        )?
     } else {
         let receive_fn = declare_rt_receive_extern(ctx);
-        ctx.builder
-            .build_call(
-                receive_fn,
-                &[payload_slot.into(), payload_cap.into()],
-                "receive_tag",
-            )
-            .or_ice()?
+        ctx.call_basic(
+            receive_fn,
+            &[payload_slot.into(), payload_cap.into()],
+            "receive_tag",
+        )?
     };
-    Ok(tag_call
-        .try_as_basic_value()
-        .basic()
-        .expect("koja_rt_receive did not return a value")
-        .into_int_value())
+    Ok(tag.into_int_value())
 }
 
 /// On the timeout path, branch to the `after` body when the receive

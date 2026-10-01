@@ -6,89 +6,42 @@
 //! entry is `K` then `V` at byte offset `key_size`: the packed
 //! layout the hashtable intrinsics write.
 
-use inkwell::values::{FunctionValue, PointerValue};
+use inkwell::values::FunctionValue;
 use koja_ir::{IRFunction, IRType};
 
 use crate::ctx::EmitContext;
 use crate::error::{IceExt, LlvmError};
-use crate::intrinsics::element::{
-    acquire_in_slot, deep_copy_in_slot, element_slot, release_in_slot,
+use crate::intrinsics::element::ElementOp;
+use crate::intrinsics::util::build_table_struct;
+use crate::intrinsics::{
+    HashtableLayout, TableSnapshot, apply_occupied, clone_table, extract_table_fields,
 };
-use crate::intrinsics::occupied_loop;
-use crate::intrinsics::util::{build_table_struct, extract_int, extract_pointer, nth_struct};
-use crate::runtime::{declare_free_extern, declare_malloc_extern, declare_memcpy_extern};
-
-use super::{ElementCopy, abi_size, call_ptr};
+use crate::runtime::declare_free_extern;
+use crate::types::abi_size;
 
 /// `clone_Map<K,V>` / `clone_Set<T>` and their `deep_copy_*`
-/// siblings: copy both backing buffers, then acquire (clone) or
-/// deep-copy (process-boundary) the key (and, for `Map`, the value)
-/// of every occupied bucket so the copy owns independent references.
-/// `value` is `None` for `Set` and `Some(V)` for `Map` (the value
-/// sits at byte offset `key_size` within the entry).
+/// siblings: copy both backing buffers, then apply `op` to the key
+/// (and, for `Map`, the value) of every occupied bucket so the copy
+/// owns independent references. `value` is `None` for `Set` and
+/// `Some(V)` for `Map` (the value sits at byte offset `key_size`
+/// within the entry).
 pub(super) fn copy_table<'ctx>(
     ctx: &EmitContext<'ctx>,
     function: &IRFunction,
     llvm_function: FunctionValue<'ctx>,
     key: &IRType,
     value: Option<&IRType>,
-    copy: ElementCopy,
+    op: ElementOp,
 ) -> Result<(), LlvmError> {
-    let key_size = abi_size(ctx, key)?;
-    let entry_size = key_size + value.map(|v| abi_size(ctx, v)).transpose()?.unwrap_or(0);
-    let entry_size_const = ctx.context.i64_type().const_int(entry_size, false);
-
-    let self_val = nth_struct(function, llvm_function, 0, "self");
-    let entries = extract_pointer(ctx, self_val, 0, "entries")?;
-    let states = extract_pointer(ctx, self_val, 1, "states")?;
-    let len = extract_int(ctx, self_val, 2, "len")?;
-    let capacity = extract_int(ctx, self_val, 3, "cap")?;
-
-    let entries_bytes = ctx
-        .builder
-        .build_int_mul(capacity, entry_size_const, "entries_bytes")
-        .or_ice()?;
-    let malloc = declare_malloc_extern(ctx);
-    let dst_entries = call_ptr(ctx, malloc, &[entries_bytes.into()], "dst_entries")?;
-    let dst_states = call_ptr(ctx, malloc, &[capacity.into()], "dst_states")?;
-    let memcpy = declare_memcpy_extern(ctx);
-    ctx.builder
-        .build_call(
-            memcpy,
-            &[dst_entries.into(), entries.into(), entries_bytes.into()],
-            "",
-        )
-        .or_ice()?;
-    ctx.builder
-        .build_call(
-            memcpy,
-            &[dst_states.into(), states.into(), capacity.into()],
-            "",
-        )
-        .or_ice()?;
-
-    let copy_slot = |ctx: &EmitContext<'ctx>, element: &IRType, slot| match copy {
-        ElementCopy::Acquire => acquire_in_slot(ctx, element, slot),
-        ElementCopy::Deep => deep_copy_in_slot(ctx, element, slot),
-    };
-    occupied_loop(
+    let (src, layout) = table_prologue(ctx, function, llvm_function, key, value)?;
+    let dst = clone_table(ctx, llvm_function, &layout, &src, op)?;
+    let result = build_table_struct(
         ctx,
-        llvm_function,
-        dst_states,
-        capacity,
-        "copy",
-        |ctx, index| {
-            let entry_ptr = element_slot(ctx, dst_entries, index, entry_size_const)?;
-            copy_slot(ctx, key, entry_ptr)?;
-            if let Some(value_ty) = value {
-                let value_ptr = offset_ptr(ctx, entry_ptr, key_size, "value_ptr")?;
-                copy_slot(ctx, value_ty, value_ptr)?;
-            }
-            Ok(())
-        },
+        dst.entries_ptr,
+        dst.states_ptr,
+        dst.length,
+        dst.capacity,
     )?;
-
-    let result = build_table_struct(ctx, dst_entries, dst_states, len, capacity)?;
     ctx.builder.build_return(Some(&result)).or_ice().map(|_| ())
 }
 
@@ -101,55 +54,44 @@ pub(super) fn drop_table<'ctx>(
     key: &IRType,
     value: Option<&IRType>,
 ) -> Result<(), LlvmError> {
-    let key_size = abi_size(ctx, key)?;
-    let entry_size = key_size + value.map(|v| abi_size(ctx, v)).transpose()?.unwrap_or(0);
-    let entry_size_const = ctx.context.i64_type().const_int(entry_size, false);
-
-    let self_val = nth_struct(function, llvm_function, 0, "self");
-    let entries = extract_pointer(ctx, self_val, 0, "entries")?;
-    let states = extract_pointer(ctx, self_val, 1, "states")?;
-    let capacity = extract_int(ctx, self_val, 3, "cap")?;
-
-    occupied_loop(
+    let (table, layout) = table_prologue(ctx, function, llvm_function, key, value)?;
+    apply_occupied(
         ctx,
         llvm_function,
-        states,
-        capacity,
+        &layout,
+        &table,
+        ElementOp::Release,
         "drop",
-        |ctx, index| {
-            let entry_ptr = element_slot(ctx, entries, index, entry_size_const)?;
-            release_in_slot(ctx, key, entry_ptr)?;
-            if let Some(value_ty) = value {
-                let value_ptr = offset_ptr(ctx, entry_ptr, key_size, "value_ptr")?;
-                release_in_slot(ctx, value_ty, value_ptr)?;
-            }
-            Ok(())
-        },
     )?;
 
     let free = declare_free_extern(ctx);
     ctx.builder
-        .build_call(free, &[entries.into()], "")
+        .build_call(free, &[table.entries_ptr.into()], "")
         .or_ice()?;
     ctx.builder
-        .build_call(free, &[states.into()], "")
+        .build_call(free, &[table.states_ptr.into()], "")
         .or_ice()?;
     ctx.builder.build_return(None).or_ice().map(|_| ())
 }
 
-/// Pointer `bytes` past `base`: the in-entry value slot of a `Map`
-/// bucket (`base` is the key at offset 0, the value sits at
-/// `key_size`).
-#[track_caller]
-fn offset_ptr<'ctx>(
+/// Read `self` and size the entry for the `key` / `value` pair the
+/// glue was instantiated at. Shared by [`copy_table`] and
+/// [`drop_table`].
+fn table_prologue<'ctx, 'ty>(
     ctx: &EmitContext<'ctx>,
-    base: PointerValue<'ctx>,
-    bytes: u64,
-    name: &str,
-) -> Result<PointerValue<'ctx>, LlvmError> {
-    let i8_ty = ctx.context.i8_type();
-    let offset = ctx.context.i64_type().const_int(bytes, false);
-    // SAFETY: `bytes` is the key size, which the entry layout
-    // places inside the same bucket.
-    unsafe { ctx.builder.build_gep(i8_ty, base, &[offset], name).or_ice() }
+    function: &IRFunction,
+    llvm_function: FunctionValue<'ctx>,
+    key: &'ty IRType,
+    value: Option<&'ty IRType>,
+) -> Result<(TableSnapshot<'ctx>, HashtableLayout<'ty>), LlvmError> {
+    let key_size = abi_size(ctx, key)?;
+    let value_size = value.map(|v| abi_size(ctx, v)).transpose()?.unwrap_or(0);
+    let layout = HashtableLayout {
+        entry_size: key_size + value_size,
+        key_size,
+        key_ty: key,
+        value_ty: value,
+    };
+    let table = extract_table_fields(ctx, function, llvm_function)?;
+    Ok((table, layout))
 }

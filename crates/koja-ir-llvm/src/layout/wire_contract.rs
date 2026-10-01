@@ -35,6 +35,13 @@ const WIRE_ORDERED_ENUMS: &[(&str, &[&str])] = &[
 /// tag word without a symbol in hand.
 const OPTION_WIRE_ORDER: &[&str] = &["Some", "None"];
 
+/// `Option<ReplyTo<R>>` wire tag words the envelope packers stamp
+/// into send payloads. The receive side loads them as the enum tag,
+/// so they must equal the `Option` layout tags, which
+/// [`assert_wire_enum_order`] pins to [`OPTION_WIRE_ORDER`].
+pub(crate) const OPTION_SOME_TAG: u64 = 0;
+pub(crate) const OPTION_NONE_TAG: u64 = 1;
+
 /// Mangled-name prefix every monomorphized `Option` symbol carries.
 const OPTION_SYMBOL_PREFIX: &str = "Global.Option_$";
 

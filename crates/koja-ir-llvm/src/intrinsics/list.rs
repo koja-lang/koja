@@ -8,21 +8,23 @@
 //! signature, then generates the same shape of IR regardless of `T`.
 
 use inkwell::IntPredicate;
-use inkwell::types::{BasicType, StructType};
+use inkwell::types::StructType;
 use inkwell::values::{BasicValueEnum, FunctionValue, IntValue, PointerValue, StructValue};
 use koja_ir::{IRFunction, IRSymbol, IRType, ListMethod};
 
 use crate::ctx::EmitContext;
 use crate::emit::enums::build_enum_value;
 use crate::error::{IceExt, LlvmError};
-use crate::intrinsics::element::{acquire_buffer, acquire_value, element_slot, release_in_slot};
+use crate::intrinsics::element::{
+    ElementOp, acquire_value, apply_in_slot, element_slot, walk_buffer,
+};
 use crate::intrinsics::option;
 use crate::intrinsics::util::{
     build_list_struct, expect_enum_symbol, extract_int, extract_pointer, nth_int, nth_param,
     nth_struct,
 };
 use crate::runtime::{declare_free_extern, declare_malloc_extern, declare_memcpy_extern};
-use crate::types::ir_basic_type;
+use crate::types::{abi_size, ir_basic_type};
 
 /// Initial buffer capacity for `List.new`.
 const INITIAL_CAPACITY: u64 = 8;
@@ -78,15 +80,8 @@ fn element_byte_size<'ctx>(
     function: &IRFunction,
     method: ListMethod,
 ) -> Result<IntValue<'ctx>, LlvmError> {
-    let elem_ty = element(method, function);
-    let basic = ir_basic_type(ctx, elem_ty)?;
-    let size = basic.size_of().unwrap_or_else(|| {
-        panic!(
-            "List.{method:?} cannot compute size of element `{elem_ty:?}` (symbol `{}`)",
-            function.symbol,
-        )
-    });
-    Ok(size)
+    let size = abi_size(ctx, element(method, function))?;
+    Ok(ctx.context.i64_type().const_int(size, false))
 }
 
 fn emit_new<'ctx>(ctx: &EmitContext<'ctx>, function: &IRFunction) -> Result<(), LlvmError> {
@@ -529,7 +524,7 @@ fn emit_replace_at<'ctx>(
     // `copy_buffer` acquired every retained element, including the one
     // at `index` we're about to overwrite. Release that copy so the
     // incoming value (acquired next) is the slot's sole owner.
-    release_in_slot(ctx, elem_ty, elem_ptr)?;
+    apply_in_slot(ctx, ElementOp::Release, elem_ty, elem_ptr)?;
     let value = acquire_value(ctx, elem_ty, value)?;
     ctx.builder.build_store(elem_ptr, value).or_ice()?;
     let replaced = build_list_struct(ctx, new_buf, len, len)?;
@@ -632,9 +627,10 @@ fn emit_slice<'ctx>(
             "",
         )
         .or_ice()?;
-    acquire_buffer(
+    walk_buffer(
         ctx,
         llvm_function,
+        ElementOp::Acquire,
         element(ListMethod::Slice, function),
         new_buf,
         clamped_count,
@@ -715,9 +711,10 @@ fn emit_concat<'ctx>(
     // `copy_buffer` acquired `self`'s half. The `other` half was raw
     // `memcpy`'d above, so acquire it too, giving the result
     // independent references to every element.
-    acquire_buffer(
+    walk_buffer(
         ctx,
         llvm_function,
+        ElementOp::Acquire,
         elem_ty,
         dst_ptr,
         other_len,
@@ -763,9 +760,10 @@ fn copy_buffer<'ctx>(
     ctx.builder
         .build_call(memcpy, &[new_buf.into(), src.into(), copy_bytes.into()], "")
         .or_ice()?;
-    acquire_buffer(
+    walk_buffer(
         ctx,
         llvm_function,
+        ElementOp::Acquire,
         element,
         new_buf,
         copy_count,
@@ -804,25 +802,14 @@ fn build_tuple<'ctx>(
     first_element: BasicValueEnum<'ctx>,
     second_element: BasicValueEnum<'ctx>,
 ) -> Result<BasicValueEnum<'ctx>, LlvmError> {
-    let alloca = ctx
+    let with_first = ctx
         .builder
-        .build_alloca(tuple_struct, "tuple_alloca")
-        .or_ice()?;
-    let first_ptr = ctx
-        .builder
-        .build_struct_gep(tuple_struct, alloca, 0, "first_ptr")
-        .or_ice()?;
-    ctx.builder.build_store(first_ptr, first_element).or_ice()?;
-    let second_ptr = ctx
-        .builder
-        .build_struct_gep(tuple_struct, alloca, 1, "second_ptr")
+        .build_insert_value(tuple_struct.get_undef(), first_element, 0, "tuple_first")
         .or_ice()?;
     ctx.builder
-        .build_store(second_ptr, second_element)
-        .or_ice()?;
-    ctx.builder
-        .build_load(tuple_struct, alloca, "tuple_val")
+        .build_insert_value(with_first, second_element, 1, "tuple_val")
         .or_ice()
+        .map(|v| v.into_struct_value().into())
 }
 
 fn ret_struct<'ctx>(ctx: &EmitContext<'ctx>, value: StructValue<'ctx>) -> Result<(), LlvmError> {

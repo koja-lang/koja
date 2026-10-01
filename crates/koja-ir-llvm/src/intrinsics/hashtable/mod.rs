@@ -43,8 +43,7 @@ pub(super) use from_list::emit_set_from_list;
 pub(super) use insert::{emit_map_put, emit_set_insert};
 pub(super) use lifecycle::{emit_empty_q, emit_length, emit_new};
 pub(super) use read::{emit_has_q, emit_map_get, emit_remove};
-pub(super) use util::ir_byte_size;
-pub(crate) use util::occupied_loop;
+pub(crate) use util::{TableSnapshot, apply_occupied, clone_table, extract_table_fields};
 
 /// Initial bucket count for a freshly-allocated hashtable. Capacity
 /// must stay a power of two, since probing wraps with
@@ -64,7 +63,7 @@ pub(super) const STATE_TOMBSTONE: u64 = 2;
 /// Per-instantiation layout knob for the per-method emitters. Set
 /// passes `value_ty: None` (the entry is just `T`). Map passes
 /// `Some(V)` (the entry is `K` followed by `V`).
-pub(super) struct HashtableLayout<'ty> {
+pub(crate) struct HashtableLayout<'ty> {
     pub entry_size: u64,
     pub key_size: u64,
     pub key_ty: &'ty IRType,
