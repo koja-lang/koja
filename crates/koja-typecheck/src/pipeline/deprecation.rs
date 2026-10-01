@@ -2,7 +2,7 @@
 //! `@deprecated` registry entry warns at the use span. Uses inside
 //! the deprecated decl itself, and inside `impl` / `extend` blocks
 //! whose target is deprecated, are suppressed so deprecating a type
-//! doesn't flag its own methods.
+//! does not flag its own methods.
 //!
 //! Expression uses read the [`Resolution::Global`] stamps resolve
 //! left behind (idents, static receivers) or the [`ResolvedType`]

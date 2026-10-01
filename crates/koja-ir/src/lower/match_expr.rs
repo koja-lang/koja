@@ -26,7 +26,7 @@
 //! the success block *is* the body block and binds happen at its
 //! head as before.
 //!
-//! Block allocation is lazy: body / guard / next-test blocks are
+//! Block allocation is lazy. Body / guard / next-test blocks are
 //! minted only after the arm's [`PatternCheck`] is known. This way
 //! arms following an unguarded catch-all (reachability warns on
 //! them but typecheck still admits the source) are never processed

@@ -1,25 +1,23 @@
 //! Type rules for literal / binary / unary expressions.
 //!
-//! Every helper is registry-backed: outputs flow through
+//! Every helper is registry-backed. Outputs flow through
 //! [`GlobalRegistry::primitive`] so primitive identity stays
-//! single-sourced. On a type mismatch we emit a diagnostic and return
-//! [`ResolvedType::unresolved`]. Resolve never aborts mid-walk, so a
-//! follow-on type rule sees `<unresolved>` operands and stays quiet
-//! ([`super::types::is_primitive`] short-circuits on those).
+//! single-sourced. On a type mismatch the helper emits a diagnostic
+//! and returns [`ResolvedType::unresolved`]. Resolve never aborts
+//! mid-walk, so a follow-on type rule sees `<unresolved>` operands
+//! and stays quiet ([`super::types::is_primitive`] short-circuits on
+//! those).
 //!
-//! Numeric arms (arithmetic + comparison) accept any two operands
-//! [`super::types::types_equivalent`] considers compatible. Today
-//! that's `Int ≡ Int64` and `Float ≡ Float64`, the alias rule that
-//! stands in for future union-membership: `Int` is on track to
-//! become a `Int8 | Int16 | Int32 | Int64` union with `Int64` as
-//! one of its members, at which point this same predicate keeps
-//! working with no per-call-site changes.
+//! Numeric arms (arithmetic and comparison) accept any two operands
+//! [`super::types::types_equivalent`] considers compatible, which is
+//! strict equality plus the `Int ≡ Int64` and `Float ≡ Float64`
+//! aliases.
 //!
-//! Comparison arms additionally reuse [`super::coercion::check_compatible`]
+//! Comparison arms also reuse [`super::coercion::check_compatible`]
 //! so a default `Int` / `Float` literal paired with a sized-numeric
 //! operand (`Int32 == 0`, `fd: Int32 >= 0`) picks up the matching
-//! [`LiteralCoercion`], the same plumbing the four existing coercion
-//! sites use, just invoked at one more site.
+//! [`LiteralCoercion`], the same plumbing the other coercion sites
+//! use.
 
 use koja_ast::ast::{Arg, BinOp, Diagnostic, Expr, ExprKind, Name, UnaryOp};
 use koja_ast::coercion::LiteralCoercion;
@@ -345,19 +343,15 @@ fn both(lhs: &ResolvedType, rhs: &ResolvedType, registry: &GlobalRegistry, name:
 }
 
 /// Compatibility-aware variant of [`both`] for numeric primitives.
-/// Returns true when both operands are members of the same numeric
-/// union per [`types_equivalent`]. Today the only such unions are
-/// the alias pairs `Int = {Int, Int64}` and `Float = {Float, Float64}`.
-/// When `Int` becomes a real union over `Int8 | Int16 | Int32 | Int64`
-/// (see `LANGUAGE.md` primitives table) this same predicate keeps
-/// working. The membership check generalizes inside `types_equivalent`,
-/// not here.
+/// Returns true when both operands are equivalent to the named
+/// primitive per [`types_equivalent`], which admits the alias pairs
+/// `Int = {Int, Int64}` and `Float = {Float, Float64}`. The alias
+/// check lives inside `types_equivalent`, not here.
 ///
-/// Sized numeric primitives (`Int8` … `UInt64`, `Float32`) are not
-/// members of `Int` / `Float` today, so they flow through
+/// Sized numeric primitives (`Int8` through `UInt64`, `Float32`) are
+/// not aliases of `Int` / `Float`, so they flow through
 /// [`numeric_comparison_compatible`] at comparison sites via the
-/// literal-coercion path. Arithmetic against them is deferred per
-/// `V1-PARITY.md`.
+/// literal-coercion path. Arithmetic against them is not supported.
 fn both_aliased(
     lhs: &ResolvedType,
     rhs: &ResolvedType,
@@ -376,12 +370,12 @@ fn both_aliased(
 /// - Both operands are the SAME sized-numeric primitive (`UInt8 ==
 ///   UInt8`, `Int32 < Int32`, etc). Same-type sized comparison is a
 ///   narrow allowance that lets stdlib byte-walking / FD-handle
-///   code compare values without round-tripping through `Int`. The
-///   broader `IntLiteral`-protocol story (cross-width arithmetic,
-///   mixed sized + default-literal arithmetic) stays deferred.
-/// - One sized-numeric operand (`Int8` … `UInt64`, `Float32`) paired
-///   with a default `Int` / `Float` literal whose value fits the
-///   sized type's range. The literal AST node is stamped with the
+///   code compare values without round-tripping through `Int`.
+///   Cross-width arithmetic and arithmetic that mixes a sized operand
+///   with a default literal are not supported.
+/// - One sized-numeric operand (`Int8` through `UInt64`, `Float32`)
+///   paired with a default `Int` / `Float` literal whose value fits
+///   the sized type's range. The literal AST node is stamped with the
 ///   matching [`LiteralCoercion`] via [`coercion_target_mut`], the same
 ///   plumbing struct-field / call-arg / return / enum-payload /
 ///   const-init sites use, just invoked at one more site.
@@ -446,13 +440,11 @@ fn signed_numeric_name(ty: &ResolvedType, registry: &GlobalRegistry) -> Option<&
         .copied()
 }
 
-/// Arithmetic-operand rule: arithmetic counterpart of
+/// Arithmetic-operand rule, the arithmetic counterpart of
 /// [`numeric_comparison_compatible`]. Returns the result type for
 /// `Int`/`Float` alias pairs, same-sized numerics, and sized +
 /// default-literal mixes (literal node stamped with `LiteralCoercion`).
-/// Cross-sized arithmetic (`Int32 + Int64`) -> `None`. The broader
-/// `IntLiteral<T>` carrier (planned in `literals/carrier.rs`) is the
-/// long-term direction.
+/// Cross-sized arithmetic (`Int32 + Int64`) returns `None`.
 fn numeric_arithmetic_result(
     left: &mut Expr,
     right: &mut Expr,
@@ -483,7 +475,7 @@ fn numeric_arithmetic_result(
 /// successful coercion, `false` for non-sized targets, non-literal
 /// sources, or out-of-range values. Comparison sites fall back to
 /// the type-mismatch diagnostic in those cases. Out-of-range
-/// diagnostics are deferred to the caller's mismatch path: a
+/// diagnostics are deferred to the caller's mismatch path. A
 /// dedicated narrow-int diagnostic at binary-op sites would conflate
 /// "operand types disagree" with "literal value too wide", and the
 /// existing four coercion sites already surface the latter at slot

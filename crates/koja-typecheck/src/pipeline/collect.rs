@@ -2,11 +2,11 @@
 //! globally-named decl. This is pure registration, and signature
 //! resolution lives in [`super::lift_signatures`].
 //!
-//! Path encoding follows the [`Identifier`] convention: top-level
+//! Path encoding follows the [`Identifier`] convention. Top-level
 //! functions register at `path = ["name"]`. Static methods on
 //! `Point` (declared inline in the struct body or in an `impl`
 //! block) register at `path = ["Point", "name"]`. Both forms
-//! produce the same registry entry so call resolution can't tell
+//! produce the same registry entry so call resolution cannot tell
 //! them apart.
 //!
 //! The walk is split into two passes driven by
@@ -105,8 +105,8 @@ pub(crate) fn collect_file_decls(
 /// item's owner path must
 /// name a struct / enum / protocol in the **same package**, and a
 /// type nested under an enum must not shadow one of that enum's
-/// variants (variants aren't registry entries, so the
-/// duplicate-identifier check can't catch this. Every other
+/// variants (variants are not registry entries, so the
+/// duplicate-identifier check cannot catch this. Every other
 /// same-namespace collision falls out of the registry for free).
 pub(crate) fn validate_nested_types(
     packages: &[CheckedPackage],
@@ -191,7 +191,7 @@ fn validate_nested_owner(
 }
 
 /// Whether the enum declared at `(package, owner_path)` has a variant
-/// named `name`. Scans the AST because variant data isn't stamped into
+/// named `name`. Scans the AST because variant data is not stamped into
 /// the registry until `lift_signatures`.
 fn enum_has_variant(
     packages: &[CheckedPackage],
@@ -421,7 +421,7 @@ fn diagnose_doc_on_private(
 /// helpers because a dedicated check owns them. `@doc` is checked by
 /// [`diagnose_doc_on_private`] and `@deprecated` by
 /// [`deprecation_message`], matched by name so malformed shapes
-/// aren't double-diagnosed.
+/// are not double-diagnosed.
 fn has_dedicated_validation(annotation: &Annotation) -> bool {
     annotation.name == "deprecated" || matches!(annotation.kind(), AnnotationKind::Doc(_))
 }
@@ -461,7 +461,7 @@ fn deprecation_message(
             continue;
         }
         match annotation.kind() {
-            // Trimmed so `"""` payloads don't drag their surrounding
+            // Trimmed so `"""` payloads do not drag their surrounding
             // newlines into every warning.
             AnnotationKind::Deprecated { message: text } if !text.trim().is_empty() => {
                 message = Some(text.trim().to_string());
@@ -854,8 +854,8 @@ fn register_block_methods(
 /// `["Self", ...user_declared]` so `Self` lives at index 0 and
 /// resolves through the same machinery as user-declared params.
 /// Reserves the literal `"Self"`: a user-declared param named
-/// `Self` would shadow the implicit slot, so we diagnose and
-/// register without it.
+/// `Self` would shadow the implicit slot, so the collector
+/// diagnoses and registers without it.
 fn register_protocol(
     decl: &ProtocolDecl,
     package: &str,
@@ -962,7 +962,7 @@ fn register_type_alias(
 
 /// The dotted type path of an `impl` / `extend` target (`[Foo]`,
 /// `[Outer, Inner]`), or `None` for non-nominal shapes. Type-args
-/// don't affect keying.
+/// do not affect keying.
 pub(crate) fn nominal_target_path(target: &TypeExpr) -> Option<&[Name]> {
     match target {
         TypeExpr::Named { path, .. } | TypeExpr::Generic { path, .. } => Some(path.as_slice()),
@@ -1005,7 +1005,7 @@ fn diagnose_enum_feature_gaps(decl: &EnumDecl, diagnostics: &mut Vec<Diagnostic>
     );
 }
 
-/// Diagnose the only block member shape we don't yet support:
+/// Diagnose the only block member shape the typechecker does not support:
 /// `type Alias = ...`. `Function` members flow through normal
 /// registration in [`register_block_methods`]. This pass surfaces a
 /// diagnostic for every other shape so the user sees one error per
@@ -1024,10 +1024,11 @@ fn diagnose_member_feature_gaps(block: BlockKind<'_>, diagnostics: &mut Vec<Diag
     }
 }
 
-/// Diagnose protocol-decl feature gaps still present after slice 2.5
-/// (annotations, generic protocol methods). Generic protocol decls
-/// and `Self` in non-receiver positions are now supported via lift's
-/// `["Self", ...user_declared]` type-param stamping.
+/// Diagnose the protocol-decl shapes typecheck does not support:
+/// annotations no pass consumes, and generic protocol methods.
+/// Generic protocol decls and `Self` in non-receiver positions are
+/// supported via lift's `["Self", ...user_declared]` type-param
+/// stamping.
 fn diagnose_protocol_feature_gaps(decl: &ProtocolDecl, diagnostics: &mut Vec<Diagnostic>) {
     diagnose_unsupported_annotations(
         &decl.annotations,

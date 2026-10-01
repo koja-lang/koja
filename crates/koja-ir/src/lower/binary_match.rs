@@ -75,8 +75,8 @@ pub(super) fn lower_binary_pattern(
     dest
 }
 
-/// Per-segment classification: figure out the bit width from
-/// `::N` / `: Type` / bare default, then dispatch on
+/// Per-segment classification that figures out the bit width from
+/// `::N` / `: Type` / bare default, then dispatches on
 /// `seg.value.kind`. Mirrors the typecheck-side classifier so the
 /// two layers see the same shape. Lower never diagnoses (errors
 /// are typecheck-only) and falls back to a discard when an
@@ -198,9 +198,9 @@ fn lower_greedy_tail(
 }
 
 /// Per-segment fixed bit width. `None` only on a typecheck-bypassed
-/// shape (we already diagnosed dynamic widths / byte-unit /
+/// shape (typecheck already diagnosed dynamic widths / byte-unit /
 /// unsupported types). The catch-all returns `None` rather than
-/// panicking so a stale typecheck diagnostic doesn't trip a lower
+/// panicking so a stale typecheck diagnostic does not trip a lower
 /// crash.
 fn segment_fixed_width(segment: &BinarySegment) -> Option<u64> {
     if let Some(size_expr) = &segment.size {

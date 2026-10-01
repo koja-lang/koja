@@ -1,10 +1,10 @@
-//! Top-down traversal: walk every package, file, function body, and
-//! script-mode top-level statement, dispatching to the expression
+//! Top-down traversal that walks every package, file, function body,
+//! and script-mode top-level statement, dispatching to the expression
 //! resolver as it goes.
 //!
 //! Each function body resolves against a fresh [`LocalScope`]
-//! pre-populated from the function's lifted [`FunctionSignature`]:
-//! every parameter becomes a [`LocalId`] entry whose name and type
+//! pre-populated from the function's lifted [`FunctionSignature`].
+//! Every parameter becomes a [`LocalId`] entry whose name and type
 //! match the lifted [`ResolvedParam`], and the AST [`Param.local_id`]
 //! slot is stamped so IR lower can reach the same id without
 //! re-running resolution. Script-mode `file.body` runs against its
@@ -158,7 +158,7 @@ pub(crate) fn resolve_file(
             }
             Item::Extend(extend_block) => {
                 // Same as the Impl arm above, but routed to the target
-                // type's package: an `extend Net.TCPSocket` block in
+                // type's package. An `extend Net.TCPSocket` block in
                 // package `User` registers its methods under
                 // `Net.TCPSocket.*`, so the resolver has to anchor
                 // identifiers there too.
@@ -196,7 +196,7 @@ pub(crate) fn resolve_file(
     if let Some(body) = file.body.as_mut() {
         let mut scope = LocalScope::new();
         let mut resolver = env.make_resolver(None, None, &[], &mut scope);
-        // Scripts have no return channel: a bare `return` is a normal
+        // Scripts have no return channel. A bare `return` is a normal
         // early exit and a valued `return` is rejected (exit codes go
         // through `Kernel.exit`). Treating the body as Unit-returning
         // lets `check_explicit_return` enforce that.
@@ -303,7 +303,7 @@ fn resolve_function(
 }
 
 /// Mirrors `lift_signatures::functions::type_param_owners` for the
-/// resolve pass: chain the function's own id (when it declares
+/// resolve pass, chaining the function's own id (when it declares
 /// type-params) over the receiver type's id (when this is a method).
 /// Used so in-body type annotations like `result: List<T> = ...`
 /// resolve the enclosing scope's `T` / `U` correctly.
@@ -330,7 +330,7 @@ fn type_param_owners(
 
 /// Pull the lifted signature for `identifier` out of the registry, or
 /// return `None` if `collect` rejected the function or `lift_signatures`
-/// hasn't stamped one (both are diagnosed upstream, body resolution
+/// has not stamped one (both are diagnosed upstream, body resolution
 /// is best-effort but quiet here).
 fn lifted_signature<'a>(
     identifier: &Identifier,
@@ -381,7 +381,7 @@ pub(super) fn resolve_statement(
 /// trailing-position [`Statement::Expr`]s so bidirectional shapes
 /// (`Option.None` in a function returning `Option<T>`,
 /// `Result.Ok(x)` whose `E` only resolves through the surrounding
-/// context, …) get the surrounding type as expected. Non-`Expr`
+/// context, ...) get the surrounding type as expected. Non-`Expr`
 /// statements ignore the hint.
 pub(super) fn resolve_statement_with_expected(
     stmt: &mut Statement,

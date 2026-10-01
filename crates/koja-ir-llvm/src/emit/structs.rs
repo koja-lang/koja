@@ -52,7 +52,7 @@ pub(super) fn emit_struct_init<'ctx>(
     Ok(aggregate.into())
 }
 
-/// Fill an `Indirect` slot: box an unboxed inner value, or store an
+/// Fill an `Indirect` slot. Box an unboxed inner value, or store an
 /// already-boxed pointer directly (clone glue passes the shared box
 /// through). The two are distinguishable by LLVM value kind, since a
 /// box's inner type is always an aggregate (cycle breaking only

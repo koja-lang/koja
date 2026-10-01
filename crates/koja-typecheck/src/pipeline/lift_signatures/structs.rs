@@ -1,5 +1,5 @@
-//! Struct lifting: stamp the [`crate::registry::StructDefinition`]
-//! from the AST `StructDecl` and lift inline static / instance method
+//! Struct lifting stamps the [`crate::registry::StructDefinition`]
+//! from the AST `StructDecl` and lifts inline static / instance method
 //! signatures. Generic structs (`struct Pair<T, U>`) collect their
 //! `type_params` here. Field types resolve against a scope that maps
 //! each name to a [`koja_ast::identifier::Resolution::TypeParam`].

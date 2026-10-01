@@ -47,7 +47,7 @@ const OPTION_SYMBOL_PREFIX: &str = "Global.Option_$";
 
 /// Verify every registered wire-coupled enum declares its variants in
 /// the ABI.md wire order. Runs once per compile, after enum
-/// registration. Skips enums the program never instantiated: absent
+/// registration. Skips enums the program never instantiated. Absent
 /// from the binary means no wire coupling to protect.
 pub(crate) fn assert_wire_enum_order(ctx: &EmitContext<'_>) {
     let mut violation = None;

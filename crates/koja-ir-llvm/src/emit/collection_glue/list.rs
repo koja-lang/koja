@@ -1,4 +1,4 @@
-//! `List<T>` clone / deep-copy / drop glue: the dynamic-array buffer
+//! `List<T>` clone / deep-copy / drop glue, the dynamic-array buffer
 //! walk. Layout is `{ buf_ptr, len, cap }` (see
 //! [`crate::types::list_value_type`]), with elements living off-heap
 //! behind `buf_ptr` as a flat `[T; cap]`.

@@ -12,7 +12,7 @@
 //! - **Sub-byte**: call the `__koja_pack_bits` runtime
 //!   helper. Bit-shift loops on a per-byte boundary inside LLVM
 //!   IR are far messier than the same logic in Rust, so the helper
-//!   gives us a clean Rust home for it (mirroring how `Bits`
+//!   provides a clean Rust home for it (mirroring how `Bits`
 //!   concat goes through `__koja_concat_bits`).
 //!
 //! The result heap block matches the rc layout the entire
@@ -111,7 +111,7 @@ fn emit_segment<'ctx>(
         } => {
             let int_value = float_value_as_i64(ctx, values, *value, *width)?;
             // Floats are always byte-aligned (32 / 64 bit widths),
-            // so we can lean on the byte-shift loop.
+            // so the emitter can lean on the byte-shift loop.
             emit_byte_packed_int(ctx, payload, int_value, *width, *endian, *bit_offset / 8)
         }
         LoweredBinarySegment::String {
@@ -120,7 +120,7 @@ fn emit_segment<'ctx>(
             bit_offset,
         } => {
             // String segments are always byte-aligned by language
-            // semantics: the byte_length-derived width is a
+            // semantics. The byte_length-derived width is a
             // multiple of 8 and the layout pre-rejects sub-byte
             // string offsets.
             let i8_ty = ctx.context.i8_type();
@@ -197,10 +197,10 @@ fn emit_byte_packed_int<'ctx>(
     Ok(())
 }
 
-/// Sub-byte segment: hand the i64-widened value, the bit `width`,
+/// A sub-byte segment hands the i64-widened value, the bit `width`,
 /// and the absolute `bit_offset` to the runtime helper. Endianness
-/// is meaningless for non-byte-multiple widths, so we only
-/// emit MSB-first. The helper writes the low `width` bits of
+/// is meaningless for non-byte-multiple widths, so the emitter only
+/// emits MSB-first. The helper writes the low `width` bits of
 /// `value` left-to-right starting at `bit_offset`.
 fn pack_bits_segment<'ctx>(
     ctx: &EmitContext<'ctx>,

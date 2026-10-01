@@ -1,5 +1,5 @@
 //! Synthesizes `impl Equality for T` for every user-defined struct /
-//! enum that doesn't already have one. Mirrors
+//! enum that does not already have one. Mirrors
 //! [`super::derive_debug`]: runs **pre-collect**, mutates
 //! `file.items` by appending the synthetic impl block.
 //!
@@ -43,7 +43,7 @@ const EQUALITY_PROTOCOL: &str = "Equality";
 const OTHER_PARAM: &str = "other";
 
 /// Append `impl Equality for T` for each user struct / enum in `pkg`
-/// that doesn't already have one. See [`super::derive_protocol`]
+/// that does not already have one. See [`super::derive_protocol`]
 /// for the existing-impl scan.
 pub(crate) fn derive_equality_package(pkg: &mut CheckedPackage) {
     super::derive_protocol(
@@ -155,7 +155,7 @@ fn enum_eq_body(enum_path: &[Name], variants: &[EnumVariant], span: Span) -> Exp
     match_expr(self_expr(span), arms, span)
 }
 
-/// Outer-`match self` arm: bind `self`'s payload under `__l*` names,
+/// Outer-`match self` arm. Bind `self`'s payload under `__l*` names,
 /// then nested-`match other` against the same variant for a real
 /// comparison, falling through to `_ -> false` for every other
 /// variant.
@@ -278,7 +278,7 @@ fn inner_match_for_struct(
     fallback_or_match(arms, all_variants, span)
 }
 
-/// Single-variant enums don't need a `_ -> false` arm because the
+/// Single-variant enums do not need a `_ -> false` arm because the
 /// matching arm is exhaustive on its own. Two+-variant enums keep
 /// the wildcard so the match stays total.
 fn fallback_or_match(arms: Vec<MatchArm>, all_variants: &[EnumVariant], span: Span) -> Expr {

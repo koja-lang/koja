@@ -1,4 +1,4 @@
-//! Lift-signatures sub-pass: resolve `TypeExpr`s and stamp lifted
+//! The lift-signatures sub-pass resolves `TypeExpr`s and stamps lifted
 //! payloads onto the registry: `FunctionSignature` for functions,
 //! `StructDefinition` for structs, `ProtocolDefinition` for protocols.
 //!
@@ -6,8 +6,8 @@
 //! before `resolve` (call sites, field access, and protocol-method
 //! dispatch see lifted metadata).
 //!
-//! Trait impls (`impl Foo for Bar`) get conformance-checked here:
-//! declared method sigs must match the protocol. Protocol methods
+//! Trait impls (`impl Foo for Bar`) get conformance-checked here.
+//! Declared method sigs must match the protocol. Protocol methods
 //! with default bodies that the impl omits are synthesized into the
 //! impl's `members` (cloned body, `self` typed as the impl target).
 //! Default bodies live in a per-invocation [`ProtocolBodies`] sidecar
@@ -44,8 +44,8 @@ pub(crate) use types::{ResolutionScope, TypeParamScope, resolve_type_expr};
 use types::resolve_protocol_bound;
 
 /// Mutable counterpart to [`ResolutionScope`] used by every
-/// `lift_*` function: same name-resolution inputs (alias slice,
-/// current package, registry) but with a `&mut` registry so
+/// `lift_*` function. It has the same name-resolution inputs (alias
+/// slice, current package, registry) but with a `&mut` registry so
 /// signature / definition stamps land on the right entries.
 ///
 /// **Do not grow this struct.** It exists to bundle the four
@@ -55,7 +55,7 @@ use types::resolve_protocol_bound;
 /// [`ResolutionScope`] for the rationale.
 ///
 /// Use [`Self::resolution_scope`] to drop into read-only type
-/// resolution: it reborrows `registry` immutably for the duration
+/// resolution. It reborrows `registry` immutably for the duration
 /// of the call, so any subsequent `&mut` write through the lift
 /// scope is sequenced naturally by the borrow checker.
 pub(super) struct LiftScope<'a> {
@@ -143,7 +143,7 @@ pub(crate) fn lift_signatures(
     diagnostics: &mut Vec<Diagnostic>,
 ) {
     let bodies = collect_protocol_bodies(packages, registry);
-    // Pass 1a: protocols. Lifted first so protocol method rosters
+    // Pass 1a lifts protocols first so protocol method rosters
     // exist for the bounds-resolve sub-pass below and for trait-impl
     // conformance in pass 2.
     for_each_item(
@@ -156,23 +156,23 @@ pub(crate) fn lift_signatures(
             }
         },
     );
-    // Pass 1b: resolve `<T: Bound>` bound names against the now-fully-
+    // Pass 1b resolves `<T: Bound>` bound names against the now-fully-
     // populated protocol set. Stamp resolved ids onto every decl's
     // `RegistryEntry.type_param_bounds`. Runs after protocol lift so
     // bound names can refer to protocols declared anywhere in the
     // program. Runs before struct / enum / function lift so their
-    // method signatures can already enforce bounds (slice 2.3). Each
+    // method signatures can already enforce bounds. Each
     // file's bounds resolve against its own aliases so an aliased
     // protocol name can be used as a bound (`<T: AliasedProtocol>`).
     resolve_all_bounds(packages, registry, diagnostics);
-    // Pass 1b': type aliases. Resolves each `type X = ...` RHS and
+    // Pass 1b' lifts type aliases. Resolves each `type X = ...` RHS and
     // stamps the canonical `ResolvedType` onto the alias entry so
     // struct / enum / function signatures in pass 1c can reference
-    // aliases by name. Cycle detection runs as a follow-up sweep
+    // aliases by name. Cycle detection runs as a second sweep
     // inside `lift_type_aliases`.
     type_aliases::lift_type_aliases(packages, registry, diagnostics);
-    // Pass 1c: structs, enums, top-level functions. Order doesn't
-    // matter inside this pass: every signature resolution either
+    // Pass 1c lifts structs, enums, and top-level functions. Order does
+    // not matter inside this pass. Every signature resolution either
     // hits a protocol (already lifted) or another struct/enum
     // (already registered with type_params at collect).
     for_each_item(
@@ -196,7 +196,7 @@ pub(crate) fn lift_signatures(
             _ => {}
         },
     );
-    // Pass 2a: conformance headers (`struct T: P`). Runs before impl
+    // Pass 2a lifts conformance headers (`struct T: P`). Runs before impl
     // blocks so the header records each conformance first and a
     // duplicating `impl P for T` gets the blame. Mutable so default
     // methods can synthesize into the type body.
@@ -226,7 +226,7 @@ pub(crate) fn lift_signatures(
             _ => {}
         },
     );
-    // Pass 2b: impl + extend blocks. Mutable so impl synthesis can
+    // Pass 2b lifts impl + extend blocks. Mutable so impl synthesis can
     // push members.
     for_each_item(
         packages,
@@ -381,7 +381,7 @@ fn resolve_protocol_bounds(
         return;
     };
     // Protocols register with `["Self", ...declared]`. Slot 0 is
-    // unbounded: the user-declared bounds line up at slots 1..N.
+    // unbounded. The user-declared bounds line up at slots 1..N.
     // Skip any user-declared `Self` so the bounds vec aligns with
     // the type_params list `register_protocol` built (`Self` is
     // synthetic and a reserved name. The diagnostic for re-using it
@@ -428,7 +428,7 @@ fn resolve_function_bounds(
     scope.registry.set_type_param_bounds(id, resolved);
 }
 
-/// Per-decl bound resolution shared by every owner kind: each AST
+/// Per-decl bound resolution shared by every owner kind. Each AST
 /// `TypeParam`'s bound list maps to resolved protocol bounds.
 /// Invalid bounds are skipped after their diagnostics are emitted.
 fn resolve_param_bounds(

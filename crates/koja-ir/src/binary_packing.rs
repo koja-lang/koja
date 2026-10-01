@@ -36,15 +36,15 @@ pub fn pack_integer_segment(
     }
     // A sub-byte segment writes the low `width` bits MSB first,
     // mirroring the runtime `__koja_pack_bits` helper. Endianness is
-    // meaningless for non-byte-multiple widths, so we only honour
-    // the high-order-first convention.
+    // meaningless for non-byte-multiple widths, so the packer only
+    // honours the high-order-first convention.
     pack_bits_into(buffer, value, width, start_bit);
 }
 
 /// Write the low `width` bits of `value` (MSB first) into `buffer`
-/// at bit offset `start_bit`. `buffer` is assumed pre-zeroed, and we
-/// `or` rather than overwrite so adjacent segments that share a
-/// byte don't clobber each other.
+/// at bit offset `start_bit`. `buffer` is assumed pre-zeroed, and the
+/// helper uses `or` rather than overwrite so adjacent segments that
+/// share a byte do not clobber each other.
 fn pack_bits_into(buffer: &mut [u8], value: u64, width: u64, start_bit: u64) {
     for i in 0..width {
         let bit = ((value >> (width - 1 - i)) & 1) as u8;

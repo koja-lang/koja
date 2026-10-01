@@ -32,7 +32,7 @@ use super::structs::{
     resolve_field_access, resolve_struct_construction, rewrite_dotted_struct_construction,
 };
 
-/// Default entry point: resolves `expr` with no expected-type hint
+/// Default entry point that resolves `expr` with no expected-type hint
 /// from the surrounding context.
 pub(super) fn resolve_expr(
     expr: &mut Expr,
@@ -72,7 +72,7 @@ pub(super) fn resolve_expr_with_expected(
         expr.resolution = ty;
         return;
     }
-    // `MethodCall` is also lifted out: the field-as-callable
+    // `MethodCall` is also lifted out because the field-as-callable
     // fallback rewrites `recv.field(args)` in place to
     // `Call { callee: FieldAccess(recv, field), args }`, which
     // requires `&mut Expr` access the main match's borrow on
@@ -314,8 +314,8 @@ pub(super) fn resolve_expr_with_expected(
         }
         // Unsupported shapes diagnose and leave the expression
         // unresolved. Seal runs only on the success path, so an
-        // `Unresolved` leaf here is harmless: diagnostics is non-empty
-        // and `check_program` returns early.
+        // `Unresolved` leaf here is harmless because diagnostics is
+        // non-empty and `check_program` returns early.
         other => {
             diagnostics.push(Diagnostic::error(
                 format!(

@@ -380,7 +380,7 @@ pub(super) fn hand_wrapped_result(
 }
 
 /// The expected type for a return-position expression in a
-/// `!`-spelled function: the unwrapped success type, except a
+/// `!`-spelled function is the unwrapped success type, except a
 /// [`hand_wrapped_result`] retargets at the full `Result` so its
 /// teacher diagnostic can fire.
 pub(super) fn return_site_expected(
@@ -409,7 +409,7 @@ pub(super) fn ok_wrap_return(value: &mut Option<Expr>, span: Span, resolver: &Re
     match value {
         // A value already typed as the full `Result` is the
         // [`hand_wrapped_result`] error path. Its diagnostic is in
-        // flight, so don't stack a second wrapper on top.
+        // flight, so do not stack a second wrapper on top.
         Some(inner) if types_equivalent(&inner.resolution, &channel.result, resolver.registry) => {}
         Some(inner) => ok_wrap_expr(inner, &channel.result),
         None => {

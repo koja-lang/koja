@@ -1,13 +1,13 @@
-//! Enum lifting: stamp the [`crate::registry::EnumDefinition`] from
-//! the AST `EnumDecl` and lift inline static / instance method
-//! signatures. Mirrors [`super::structs::lift_struct`]: every payload
+//! Enum lifting stamps the [`crate::registry::EnumDefinition`] from
+//! the AST `EnumDecl` and lifts inline static / instance method
+//! signatures. Mirrors [`super::structs::lift_struct`]. Every payload
 //! `TypeExpr` resolves through the same [`super::types::resolve_type_expr`]
 //! used for struct fields and function params.
 //!
 //! Empty `Tuple()` and `Struct {}` payloads diagnose here so the IR
 //! and LLVM layers never see an empty non-`Unit` payload. The `Unit`
 //! variant shape (`Red`) is the canonical "no payload" form. An
-//! empty tuple or struct is a parse-shape that doesn't carry useful
+//! empty tuple or struct is a parse-shape that does not carry useful
 //! information beyond what `Unit` already captures.
 
 use std::collections::BTreeMap;

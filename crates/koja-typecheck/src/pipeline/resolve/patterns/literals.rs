@@ -1,4 +1,4 @@
-//! Literal-pattern helpers: subject-vs-literal type checking and
+//! Literal-pattern helpers for subject-vs-literal type checking and
 //! the canonical literal text [`super::usefulness`] keys duplicate
 //! literal arms on.
 
@@ -16,7 +16,7 @@ use super::super::types::{display_resolution, is_primitive};
 
 /// Check that a `Pattern::Literal`'s value agrees with the subject
 /// type. Strict equality on the literal's default head, with one
-/// allowance: if the subject is a sized numeric primitive and the
+/// allowance. If the subject is a sized numeric primitive and the
 /// pattern's literal value fits the subject's range, stamp the
 /// pattern's `literal_coercion` so IR-side equality lowering mints
 /// a matching narrow `Const`. Out-of-range literals diagnose with

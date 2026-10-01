@@ -10,7 +10,7 @@
 //!
 //! Method calls are the dual-scope case (receiver scope + method
 //! scope). Every other call site uses a single scope. The substitution
-//! routes by the leaf's `(owner, index)` automatically. Callers don't
+//! routes by the leaf's `(owner, index)` automatically. Callers do not
 //! pass an explicit owner.
 
 use koja_ast::identifier::{
@@ -52,7 +52,7 @@ pub struct Substitution {
 }
 
 impl Substitution {
-    /// Empty substitution: every `set` is a no-op, every `get` returns
+    /// Empty substitution. Every `set` is a no-op and every `get` returns
     /// `None`. Used when a callee has no type params at all.
     pub(crate) fn empty() -> Self {
         Self { scopes: Vec::new() }
@@ -105,7 +105,7 @@ impl Substitution {
         }
     }
 
-    /// Lookup a slot. Returns `None` if `owner` isn't in scope or the
+    /// Lookup a slot. Returns `None` if `owner` is not in scope or the
     /// slot is unfilled.
     pub(crate) fn get(
         &self,
@@ -117,30 +117,27 @@ impl Substitution {
     }
 
     /// Set a slot. Returns `Err(Conflict)` if the slot was already
-    /// filled with a value that isn't [`types_equivalent`] to `value`
-    /// AND isn't a union containing `value` as a member. `Ok(())` on a
+    /// filled with a value that is not [`types_equivalent`] to `value`
+    /// AND is not a union containing `value` as a member. `Ok(())` on a
     /// fresh fill or a compatible re-fill. Out-of-scope owners and
     /// out-of-range indices are silent no-ops.
     ///
     /// The compatibility check (rather than strict `prev == value`)
-    /// matters most for the `fill_from_expected` path: a payload-
+    /// matters most for the `fill_from_expected` path. A payload-
     /// driven bind of `T -> Int64` followed by an expected-type fill
     /// of `T -> Int` must not roll back the entire substitution and
     /// strand sibling slots (`E` etc.) unbound, since `Int` and
-    /// `Int64` are the same type. Today that's the alias rule.
-    /// When `Int` becomes a union over its sized variants the same
-    /// predicate generalizes: `T -> Int64` then `T -> Int` still
-    /// resolves cleanly because `Int64` is a member of the `Int`
-    /// union.
+    /// `Int64` are the same type. That is the alias rule.
     ///
     /// The union-member arm covers the dual case for user-declared
-    /// unions: a receiver pre-bind of `M -> MsgA | MsgB` (from a
+    /// unions. A receiver pre-bind of `M -> MsgA | MsgB` (from a
     /// `Ref<MsgA | MsgB, _>.call(...)` site) followed by an
     /// arg-driven bind of `M -> MsgA` keeps the wider slot intact
     /// rather than rejecting the call as a "cannot be both" conflict.
-    /// One-direction-only: if a narrower slot value would be widened
-    /// by a later union arrival, that's a `fill_from_expected` story,
-    /// not this one. Leave it for the (rarer) flow-inference case.
+    /// The arm is one-direction-only. If a narrower slot value would
+    /// be widened by a later union arrival, that is a
+    /// `fill_from_expected` story, not this one. Leave it for the
+    /// (rarer) flow-inference case.
     pub(crate) fn set(
         &mut self,
         owner: GlobalRegistryId,
@@ -180,7 +177,7 @@ impl Substitution {
         self.scope(owner).is_some()
     }
 
-    /// Read-only view of `owner`'s slots. Panics if `owner` isn't in
+    /// Read-only view of `owner`'s slots. Panics if `owner` is not in
     /// scope. Call [`owns`] first when in doubt.
     ///
     /// [`owns`]: Substitution::owns
@@ -237,7 +234,7 @@ impl Substitution {
 ///     "argument expects `Int32`, got `Int`" diagnostic
 ///
 /// The pre-existing "cannot be both X and Y" diagnostic was wrong for
-/// these sites: the slot's type is authoritative once seeded, not
+/// these sites. The slot's type is authoritative once seeded, not
 /// "in conflict with" a literal's default type.
 fn literal_widens_into(
     prev: &ResolvedType,

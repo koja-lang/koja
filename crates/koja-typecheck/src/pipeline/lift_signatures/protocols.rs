@@ -1,5 +1,5 @@
-//! Protocol decl lifting: resolve each `ProtocolMethod`'s non-`self`
-//! params + return type into a [`ResolvedProtocolMethod`] and stamp
+//! Protocol decl lifting resolves each `ProtocolMethod`'s non-`self`
+//! params + return type into a [`ResolvedProtocolMethod`] and stamps
 //! the [`ProtocolDefinition`] onto the registry entry. Method
 //! signatures resolve under a [`TypeParamScope`] rooted at the
 //! protocol id so `Self` (slot 0) and user-declared `<C, M, R>`

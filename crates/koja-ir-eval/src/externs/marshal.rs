@@ -1,7 +1,7 @@
 //! Marshaling core for extern handlers.
 //!
-//! Most externs are pure pass-throughs: destructure the [`Value`]
-//! args, call the C symbol, wrap the raw result. The
+//! Most externs are pure pass-throughs that destructure the
+//! [`Value`] args, call the C symbol, and wrap the raw result. The
 //! [`pass_through_externs!`] macro generates the `unsafe extern "C"`
 //! declaration *and* the handler for that shape, so a module lists
 //! one line per symbol instead of ten:
@@ -32,7 +32,7 @@ pub(super) fn type_mismatch(name: &str, signature: &str, args: &[Value]) -> Runt
     }
 }
 
-/// Koja ABI token -> Rust C-ABI type, usable in type position.
+/// Maps a Koja ABI token to a Rust C-ABI type, usable in type position.
 macro_rules! c_type {
     (()) => { () };
     (CPtr) => { *mut u8 };
@@ -40,9 +40,9 @@ macro_rules! c_type {
     (Int64) => { i64 };
 }
 
-/// Koja ABI token + `&Value` -> raw C argument. Expands inside a
-/// handler. A shape mismatch early-returns the handler's uniform
-/// [`type_mismatch`] error.
+/// Maps a Koja ABI token + `&Value` to a raw C argument. Expands
+/// inside a handler. A shape mismatch early-returns the handler's
+/// uniform [`type_mismatch`] error.
 macro_rules! unmarshal_arg {
     (CPtr, $value:expr, $symbol:expr, $signature:expr, $args:expr) => {
         match $value {
@@ -76,7 +76,7 @@ macro_rules! unmarshal_arg {
     };
 }
 
-/// Koja ABI token + raw C result -> [`Value`].
+/// Maps a Koja ABI token + raw C result to a [`Value`].
 macro_rules! marshal_return {
     ((), $raw:expr) => {{
         let _: () = $raw;

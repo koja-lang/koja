@@ -1,4 +1,4 @@
-//! `Map<K,V>` / `Set<T>` clone / drop glue: the open-addressed
+//! `Map<K,V>` / `Set<T>` clone / drop glue, the open-addressed
 //! hashtable bucket walk. Layout is `{ entries_ptr, states_ptr, len,
 //! cap }` (see [`crate::types::hashtable_value_type`]), where
 //! `entries_ptr` is a flat `[Entry; cap]` and `states_ptr` a
@@ -20,7 +20,7 @@ use crate::runtime::declare_free_extern;
 use crate::types::abi_size;
 
 /// `clone_Map<K,V>` / `clone_Set<T>` and their `deep_copy_*`
-/// siblings: copy both backing buffers, then apply `op` to the key
+/// siblings copy both backing buffers, then apply `op` to the key
 /// (and, for `Map`, the value) of every occupied bucket so the copy
 /// owns independent references. `value` is `None` for `Set` and
 /// `Some(V)` for `Map` (the value sits at byte offset `key_size`

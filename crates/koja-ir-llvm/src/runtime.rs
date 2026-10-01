@@ -173,7 +173,7 @@ pub(crate) fn declare_concat_bits_extern<'ctx>(ctx: &EmitContext<'ctx>) -> Funct
 /// Declare (or look up) the `__koja_concat_bytes_owned` runtime
 /// helper. Signature: `i8* __koja_concat_bytes_owned(i8*
 /// lhs_payload, i8* rhs_payload, i64 with_nul)`. The consuming
-/// `String` / `Binary` concat: grows lhs in place when its block is
+/// `String` / `Binary` concat grows lhs in place when its block is
 /// uniquely owned, otherwise copies and releases lhs.
 pub(crate) fn declare_concat_bytes_owned_extern<'ctx>(
     ctx: &EmitContext<'ctx>,

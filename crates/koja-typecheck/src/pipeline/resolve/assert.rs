@@ -19,13 +19,13 @@
 //!
 //! The inner `fail` goes through [`super::error_channel`] unchanged,
 //! so `Result.Err` wrapping stays in one place. The only check that
-//! lives here is the channel rule: the enclosing function must
+//! lives here is the channel rule. The enclosing function must
 //! declare `! Test.Failure`, which application code cannot name
 //! because the loader links the `Test` package only with tests.
 //!
 //! Binding the operands apart would type `b` with no context, so
 //! `assert n == 0` on a `UInt32` and `assert x == Option.None` would
-//! fail where the same `if` passes. The walker closes that gap: it
+//! fail where the same `if` passes. The walker closes that gap. It
 //! resolves the left binding first and hands its type to the right
 //! binding as the expected type, the way `==` types its operands.
 

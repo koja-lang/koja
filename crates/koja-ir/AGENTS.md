@@ -35,15 +35,18 @@ coalesce fragments that share a package label
 validate the entry state, enqueue its methods, and synthesize wrappers
 instantiate discovered generics to a fixpoint
 assemble the working IRProgram
+collect link libraries from extern declarations
+discover union types
 break recursive type-layout cycles
 rewrite self tail calls
 insert cooperative yield checks
 elaborate ownership glue and runtime delivery arms
+order built-constant inits
 seal the complete IRProgram
 ```
 
-Script lowering uses the same package, generic, cycle, merge, elaborate,
-tail-call, yield-check, and seal passes around its inline body.
+Script lowering uses the same package, generic, link-library, rewrite,
+built-constant, and seal passes around its inline body.
 
 ## Hard contracts
 

@@ -123,7 +123,7 @@ fn emit_int_hash<'ctx>(
 
 /// SplitMix64 finalizer. Three rounds of `(x ^= x >> shift) *= odd
 /// constant`. The exact constants match every other Koja backend so
-/// hash values are byte-stable across eval / native / future JIT.
+/// hash values are byte-stable across the eval and native backends.
 fn splitmix64<'ctx>(
     ctx: &EmitContext<'ctx>,
     _symbol: &IRSymbol,

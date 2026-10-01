@@ -8,6 +8,9 @@
 //! through [`lower_function_with_identifier`]. Only the
 //! [`Identifier`] differs.
 
+use std::collections::BTreeMap;
+use std::path::Path;
+
 use koja_ast::ast::{
     Diagnostic, ExtendBlock, Function, ImplBlock, ImplMember, Item, Name, Param, TypeExpr,
     is_extern_c, is_intrinsic, name_texts,
@@ -37,9 +40,6 @@ use super::ctx::{FnLowerCtx, LowerOutput};
 use super::enums::lower_enum_decl;
 use super::ownership::promote_param;
 use super::structs::lower_struct_decl;
-
-use std::collections::BTreeMap;
-use std::path::Path;
 
 /// Lower one [`CheckedPackage`] into an [`IRPackage`] fragment.
 /// Generic struct / enum decls are skipped here. They live in the
@@ -172,7 +172,7 @@ pub(crate) fn lower_package(
 /// them. Synthesized default-method bodies lower like any other
 /// method. Functions key off the target's qualified identifier
 /// regardless of the impl's own package (cross-package impls carry a
-/// local protocol onto a foreign type), and the IR doesn't model the
+/// local protocol onto a foreign type), and the IR does not model the
 /// trait link.
 fn lower_impl(
     impl_block: &ImplBlock,
@@ -596,7 +596,7 @@ fn global_to_ir_type(
     // Peel through `type X = ...` aliases first. Aliases stay as
     // `Named { Global(alias_id) }` in the typecheck output to keep
     // diagnostics reading `X`, not the expansion. At IR-lower time
-    // we have to follow them so backends see the underlying shape.
+    // the lowerer must follow them so backends see the underlying shape.
     if let GlobalKind::TypeAlias(Some(expansion)) = &entry.kind {
         assert!(
             type_args.is_empty(),
@@ -642,7 +642,7 @@ fn global_to_ir_type(
 /// Structural lowering for a [`BuiltinShape`]. Generic shapes
 /// (`CPtr`, `List`, `Map`, `Set`) push an [`Instantiation`] because
 /// method monomorphization needs the entry even though the type
-/// itself carries no struct decl: call sites mangle method symbols
+/// itself carries no struct decl. Call sites mangle method symbols
 /// as `List_$T$.method`, which mono materializes via
 /// `enqueue_member_methods`.
 fn builtin_to_ir_type(
@@ -692,12 +692,11 @@ fn builtin_to_ir_type(
             value: arg(1),
         },
         // `Never` has no runtime representation. The only place an
-        // expression's resolution surfaces `Never` is a fully-
-        // divergent `if`/`else`/`cond` whose merge block we still
-        // synthesize for surrounding-flow continuity but is never
-        // reached at runtime. Mapping to `Unit` is a structurally-
-        // safe placeholder until `IRType::Never` lands alongside
-        // `Kernel.panic` and friends.
+        // expression's resolution surfaces `Never` is a fully
+        // divergent `if`/`else`/`cond` whose merge block the lowerer
+        // still synthesizes for surrounding-flow continuity but which
+        // is never reached at runtime. `Unit` is a structurally safe
+        // stand-in for a block no path reaches.
         BuiltinShape::Never => IRType::Unit,
         BuiltinShape::Set => IRType::Set(arg(0)),
         BuiltinShape::String => IRType::String,

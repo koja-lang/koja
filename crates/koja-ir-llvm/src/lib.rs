@@ -1,5 +1,5 @@
 //! LLVM backend for sealed [`koja_ir::IRProgram`]s and
-//! [`koja_ir::IRScript`]s: peer to
+//! [`koja_ir::IRScript`]s, a peer to
 //! [`koja-ir-eval`](../koja_ir_eval/index.html) but
 //! emitting native object code via [`inkwell`] instead of
 //! interpreting in-process.
@@ -53,9 +53,8 @@ use crate::target::TargetSpec;
 
 /// Codegen knobs for the `compile_*` entry points. Kept inkwell-free
 /// so the driver API stays decoupled from LLVM types, and a struct
-/// (rather than positional flags) so future additions (debug-info
-/// emission, `--target=<triple>`) land as new fields without churning
-/// the signatures.
+/// (rather than positional flags) so a new knob lands as a new field
+/// without churning the signatures.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct CompileOptions {
     /// Engage the LLVM optimization pipeline (`-O3`). Off keeps `-O0`.

@@ -295,7 +295,7 @@ pub(crate) fn emit_map_get<'ctx>(
         .builder
         .build_load(value_basic_ty, val_ptr, "val")
         .or_ice()?;
-    // Hand-out: the returned `Some` owns an independent reference, so
+    // Hand-out. The returned `Some` owns an independent reference, so
     // acquire the value (heap-leaf `rc++` / composite deep clone).
     // Otherwise the receiver's table and the returned value share one
     // reference and both drop it (a double free once glue is active).

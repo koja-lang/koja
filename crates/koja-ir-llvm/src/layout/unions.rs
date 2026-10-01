@@ -13,7 +13,7 @@
 //! opaque-then-define two-phase shape used for structs and enums
 //! so a union's member can itself be a struct / enum / nested
 //! union regardless of decl order. Members do **not** get
-//! distinct LLVM types: extraction loads the payload buffer as
+//! distinct LLVM types. Extraction loads the payload buffer as
 //! the member's IRType-derived basic type at use sites.
 
 use inkwell::types::StructType;

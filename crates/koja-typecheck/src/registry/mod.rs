@@ -4,14 +4,11 @@
 //! Insert sites emit the "already defined" diagnostic when an insert
 //! returns [`InsertOutcome::Collision`].
 //!
-//! Today only top-level structs, enums, functions, and protocols
-//! register. Methods, enum variants, constants, and type aliases land
-//! as the surrounding pipeline migrates onto path-based
-//! [`Identifier`]s.
+//! Structs, enums, functions, protocols, constants, and type aliases
+//! register, each under its path-based [`Identifier`]. Methods
+//! register as functions under `[target_path, method_name]`.
 //!
-//! Ids are assigned sequentially (monotonic `u32` counter). A future
-//! parallel-cache story will swap in content-addressable hashing
-//! without changing the public surface.
+//! Ids are assigned sequentially from a monotonic `u32` counter.
 //!
 //! # Function signatures
 //!
@@ -21,8 +18,9 @@
 //! so non-function entries cannot carry them.
 //!
 //! Registry rendering for `koja check --emit-ast` lives in the
-//! [`format`] submodule. It is a separate concern from the data + insert
-//! API, with a different audience (diagnostic rendering vs pipeline work).
+//! [`format`] submodule. It is a separate concern from the data and
+//! insert API, with a different audience (diagnostic rendering rather
+//! than pipeline work).
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 
@@ -71,7 +69,7 @@ pub use koja_ast::ast::FunctionOrigin;
 #[derive(Clone, Debug)]
 pub enum GlobalKind {
     /// A compiler-owned type declared with the `builtin` keyword.
-    /// No `Option` lifecycle: the shape is stamped at seed time.
+    /// No `Option` lifecycle because the shape is stamped at seed time.
     Builtin(BuiltinDefinition),
     Constant(Option<Box<ConstantDefinition>>),
     Enum(Option<EnumDefinition>),
@@ -83,7 +81,7 @@ pub enum GlobalKind {
     /// `Some(expansion)` after `lift_type_aliases` resolves the RHS.
     /// The expansion is the canonical [`ResolvedType`] the alias
     /// stands for. For the surface-aliasing case
-    /// (`type Pet = Cat | Dog | Fish`) that's typically a
+    /// (`type Pet = Cat | Dog | Fish`) that is typically a
     /// canonical [`ResolvedType::Union`], but any `ResolvedType`
     /// shape is permissible.
     TypeAlias(Option<ResolvedType>),
@@ -105,36 +103,36 @@ impl GlobalKind {
 
 /// A single registered declaration, with its canonical [`Identifier`],
 /// [`GlobalKind`], source spans, and any generic-decl param names
-/// declared on it. `span` covers the whole declaration and
-/// `name_span` its name token, so a diagnostic or an editor can point
-/// at the name alone.
-/// `type_params` is stamped at collect time directly from the
-/// AST so [`GlobalRegistry::type_params`] is queryable mid-lift,
-/// before [`StructDefinition`] / [`EnumDefinition`] / signature
-/// payloads are stamped.
-///
-/// `type_param_bounds` is parallel to `type_params` (same length, same
-/// indexing). Each inner vector holds the resolved protocol bounds
-/// from a `<T: P1 & P2>` bound, in source order. Empty inner vec means
-/// the param is unbounded. Default at collect time is one empty inner
-/// vec per param. Lift's bounds-resolve sub-pass replaces it with the
-/// resolved protocol bounds via [`GlobalRegistry::set_type_param_bounds`].
-///
-/// `visibility` carries the `priv` enforcement scope as a
-/// [`VisibilityScope`]. See that enum for the three-case rationale.
-/// Functions can be `TypePrivate`. Every other entry kind is either
-/// `Public` or `PackagePrivate`.
+/// declared on it.
 #[derive(Clone, Debug)]
 pub struct RegistryEntry {
     /// `@deprecated` message, always non-empty. `None` means not
     /// deprecated.
     pub deprecation: Option<String>,
+    /// Canonical path-based name.
     pub identifier: Identifier,
+    /// Declaration kind and its lifted payload.
     pub kind: GlobalKind,
+    /// Span of the name token alone, so a diagnostic or an editor can
+    /// point at the name.
     pub name_span: Span,
+    /// Span of the whole declaration.
     pub span: Span,
+    /// Generic param names, stamped at collect time directly from the
+    /// AST so [`GlobalRegistry::type_params`] is queryable mid-lift,
+    /// before [`StructDefinition`], [`EnumDefinition`], and signature
+    /// payloads are stamped.
     pub type_params: Vec<String>,
+    /// Parallel to `type_params` (same length, same indexing). Each
+    /// inner vector holds the resolved protocol bounds from a
+    /// `<T: P1 & P2>` bound, in source order. An empty inner vector
+    /// means the param is unbounded. Collect stores one empty inner
+    /// vector per param. The bounds-resolve sub-pass of lift replaces
+    /// it via [`GlobalRegistry::set_type_param_bounds`].
     pub type_param_bounds: Vec<Vec<ResolvedProtocolBound>>,
+    /// The `priv` enforcement scope. See [`VisibilityScope`] for the
+    /// three-case rationale. Functions can be `TypePrivate`. Every
+    /// other entry kind is either `Public` or `PackagePrivate`.
     pub visibility: VisibilityScope,
 }
 
@@ -185,7 +183,7 @@ impl RegistryEntry {
 /// - `PackagePrivate`: any top-level `priv` decl (function, struct,
 ///   enum, constant, type alias, protocol). Usable from any file
 ///   in the same package. The package name lives on the entry's
-///   [`Identifier`] so it doesn't need to be repeated here.
+///   [`Identifier`] so it does not need to be repeated here.
 /// - `TypePrivate(type_id)`: `priv fn` declared inside a `struct` /
 ///   `enum` / `impl` body. Callable only from other methods on the
 ///   same target type, including across inherent and protocol-impl
@@ -458,8 +456,7 @@ impl GlobalRegistry {
     /// Register a `type X = ...` alias in the `TypeAlias(None)`
     /// state. The expansion is stamped in later by
     /// [`Self::set_type_alias_definition`]. Aliases take no generic
-    /// params today. Generic aliases are a possible future language
-    /// extension.
+    /// params.
     pub(crate) fn insert_type_alias(
         &mut self,
         identifier: Identifier,
@@ -639,7 +636,7 @@ impl GlobalRegistry {
 
     /// Look up a registered alias's expansion. `None` if `id` is
     /// not a `TypeAlias` entry, or if it is but the lift pass
-    /// hasn't stamped its expansion yet (mid-lift state).
+    /// has not stamped its expansion yet (mid-lift state).
     /// [`super::pipeline::resolve::types::peel_alias`] uses this to
     /// follow `Named { Global(alias_id) }` to the underlying type.
     pub fn alias_expansion(&self, id: GlobalRegistryId) -> Option<ResolvedType> {
@@ -693,7 +690,7 @@ impl GlobalRegistry {
     /// second claim collides like any duplicate. When the declared
     /// type-param arity matches the stub's shape, the entry adopts
     /// the declared names so member lifting resolves against them.
-    /// `None` when `identifier` doesn't name an unclaimed builtin.
+    /// `None` when `identifier` does not name an unclaimed builtin.
     pub(crate) fn claim_builtin_stub(
         &mut self,
         identifier: &Identifier,
@@ -830,7 +827,7 @@ impl GlobalRegistry {
         ResolvedType::leaf(Resolution::Global(id))
     }
 
-    /// Build the [`ResolvedType`] for a primitive literal: the
+    /// Build the [`ResolvedType`] for a primitive literal. The
     /// `Literal` variants map one-to-one onto preloaded stdlib
     /// stubs (`Bool`, `Float`, `Int`, `String`, `Unit`). Convenience
     /// wrapper over [`Self::primitive`] used by the resolve pass
@@ -863,7 +860,7 @@ impl GlobalRegistry {
     /// Slice of generic-decl param names declared on `owner`. `None`
     /// when `owner` is unknown. A known owner with no generics
     /// returns `Some(&[])`. Used by
-    /// [`crate::pipeline::lift_signatures::types::TypeParamScope::lookup`]
+    /// [`crate::pipeline::lift_signatures::TypeParamScope::lookup`]
     /// to walk a chained scope and turn a name into
     /// `(owner, TypeParamIndex)`.
     pub fn type_params(&self, owner: GlobalRegistryId) -> Option<&[String]> {

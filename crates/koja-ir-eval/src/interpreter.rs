@@ -85,8 +85,8 @@ impl Interpreter {
     }
 
     /// Execute a named function from `program` with no arguments and
-    /// return its value. Test-facing seam: integration tests lower a
-    /// fixture with a synthetic Process entry, then call a fixture
+    /// return its value. This is a test-facing seam. Integration tests
+    /// lower a fixture with a synthetic Process entry, then call a fixture
     /// function (e.g. `TestApp.main`) directly and assert on its
     /// runtime [`Value`].
     pub fn run_function(program: &IRProgram, mangled: &str) -> Result<Value, RuntimeError> {
@@ -325,8 +325,8 @@ enum BlockOutcome {
 }
 
 /// Run a [`FunctionKind::ProcessEntryWrapper`] entry's body as PID 1.
-/// The wrapper itself is a backend ABI shim. The full `start` -> `run` ->
-/// `StopReason.code` dispatch lives in the IR-synthesized
+/// The wrapper itself is a backend ABI shim. The full dispatch from
+/// `start` to `run` to `StopReason.code` lives in the IR-synthesized
 /// `<state>.__entry_body` its IR `Call` names, which the interpreter
 /// executes directly with the argv-derived (or default) config. The
 /// returned [`Value::Int`] is the exit code. Driven by the
@@ -391,10 +391,10 @@ fn blocks_use_lifecycle<'a>(blocks: impl Iterator<Item = &'a IRBasicBlock>) -> b
 
 /// Resolve a process wrapper's body, the [`FunctionKind::Regular`]
 /// function its single IR `Call` names. Shared by the entry boot and the
-/// `spawn` path: a `ProcessEntryWrapper` / `SpawnWrapper` is a pure ABI
-/// shim whose body holds the real `start` -> `run` dispatch. `None` only
-/// for a malformed wrapper (seal violation). Callers decide whether that
-/// is an error or a panic.
+/// `spawn` path. A `ProcessEntryWrapper` / `SpawnWrapper` is a pure ABI
+/// shim whose body holds the real dispatch from `start` to `run`.
+/// `None` only for a malformed wrapper (seal violation). Callers decide
+/// whether that is an error or a panic.
 fn process_body_of<'a, R: CallResolver>(
     resolver: &'a R,
     wrapper: &IRSymbol,
@@ -411,8 +411,8 @@ fn process_body_of<'a, R: CallResolver>(
     resolver.resolve(body_symbol.mangled())
 }
 
-/// Build the boxed process future a `spawn` site installs: run the spawn
-/// wrapper's body with `config`, discarding its `Unit` result (the
+/// Build the boxed process future a `spawn` site installs. It runs the
+/// spawn wrapper's body with `config`, discarding its `Unit` result (the
 /// scheduler owns the spawned process's lifecycle). A missing body is a
 /// seal violation, since `Spawn::wrapper` always names a `SpawnWrapper`.
 pub(crate) fn build_spawn_future<'a, R: CallResolver>(
@@ -1020,7 +1020,7 @@ fn bind_block_params(
 /// Execute an [`IRInstruction::Receive`], returning the basic block
 /// control transfers to.
 ///
-/// Parks against the running process's core mailbox: pop a delivered
+/// Parks against the running process's core mailbox. Pop a delivered
 /// message (system traffic before business), dispatch it to a matching
 /// arm, else (when an `after` clause is present) check the deadline, else
 /// park `Blocked` and yield back to the driver. The driver re-resumes

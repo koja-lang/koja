@@ -57,7 +57,7 @@ use crate::package::{IRPackage, insert_package_function};
 /// `owner` is the [`GlobalRegistryId`] that owns the type params
 /// `args` substitutes for. For struct/enum templates (and top-level
 /// generic functions) it equals `template`. For inline methods on
-/// generic types it points at the *enclosing* type. That's where
+/// generic types it points at the *enclosing* type. That is where
 /// the body's `Resolution::TypeParam { owner, .. }` references
 /// come from (lift gave the method an inherited scope, not its
 /// own).
@@ -266,7 +266,7 @@ fn insert_function<'a>(
 /// Local copy of the typecheck-side substitution. The contract
 /// here is "every Param leaf has a concrete arg" (enforced by the
 /// inference-then-substitute flow at construction sites in
-/// typecheck), so we panic on out-of-range index instead of
+/// typecheck), so this helper panics on out-of-range index instead of
 /// substituting to `ResolvedType::unresolved` like the typecheck
 /// variant does for unresolved Phantom slots.
 pub(crate) fn substitute_resolved_type(

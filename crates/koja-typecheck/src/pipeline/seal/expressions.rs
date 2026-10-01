@@ -1,8 +1,8 @@
 //! Expression-shape seal checks. Every expression position carries a
 //! resolved [`koja_ast::identifier::ResolvedType`]. Concrete bodies
 //! reject `Resolution::TypeParam`, while generic templates permit it.
-//! A call's outer callee resolution stays unresolved until function
-//! names become first-class values.
+//! A call's outer callee resolution stays unresolved because function
+//! names are not first-class values.
 
 use koja_ast::ast::{
     ClosureParam, EnumConstructionData, Expr, ExprKind, MatchArm, Pattern, StringPart, path_text,
@@ -15,10 +15,10 @@ use super::statements::seal_statement;
 use super::{SealMode, seal_optional_type_expr, seal_panic, seal_resolved_type, seal_type_expr};
 
 pub(super) fn seal_expr(expr: &Expr, mode: SealMode) {
-    // The callee position of a `Call` is the one carve-out: function
-    // names aren't first-class values yet, so the outer callee
+    // The callee position of a `Call` is the one carve-out. Function
+    // names are not first-class values, so the outer callee
     // `Expr.resolution` stays `Unresolved`. Every other position must
-    // carry a fully-resolved type that doesn't leak `TypeParam`.
+    // carry a fully-resolved type that does not leak `TypeParam`.
     // Those are decl-side annotations and have no business on a
     // construction-site value.
     seal_resolved_type(&expr.resolution, mode, expr.span);
@@ -196,8 +196,8 @@ pub(super) fn seal_expr(expr: &Expr, mode: SealMode) {
             if !structural_receiver && !matches!(target, Resolution::Global(_)) {
                 seal_panic("method call has no exact global target", expr.span);
             }
-            // Static method calls: receiver must resolve like any
-            // other `Ident` reference (its `resolution` is the
+            // For static method calls, the receiver must resolve like
+            // any other `Ident` reference (its `resolution` is the
             // struct id, populated by resolve). Args follow the same
             // rule as `Call`. The outer `Expr.resolution` is the
             // method's return type, already enforced by the
@@ -278,7 +278,7 @@ pub(super) fn seal_expr(expr: &Expr, mode: SealMode) {
 /// Receive arms always carry a typed-binding pattern with `local_id`
 /// stamped by resolve. Validate the shape, then walk the body. The
 /// pattern's annotation `TypeExpr` does not need a separate
-/// type-param check: the `local_id`'s scope-recorded
+/// type-param check. The `local_id`'s scope-recorded
 /// `ResolvedType` rides through the body's `Resolution::Local`
 /// references and is checked there.
 fn seal_receive_arm(arm: &MatchArm, mode: SealMode) {
@@ -351,7 +351,7 @@ fn seal_closure_params(params: &[ClosureParam], outer: &Expr) {
 /// Seal the callee of a `Call`. Two shapes are accepted:
 /// - Bare `Ident { Global(_) | Local(_) }`: the outer
 ///   `Expr.resolution` stays `Unresolved` (resolve carve-out for
-///   "function names aren't values yet").
+///   "function names are not values").
 /// - `FieldAccess` with a fn-typed `Expr.resolution`: produced by
 ///   the field-as-callable rewrite in `resolve_method_call_expr`.
 fn seal_call_callee(callee: &Expr) {

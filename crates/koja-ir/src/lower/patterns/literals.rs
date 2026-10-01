@@ -1,4 +1,4 @@
-//! Literal-pattern lowering: emit `subject == const(value)` as a
+//! Literal-pattern lowering emits `subject == const(value)` as a
 //! single `Bool` value. Shared between the `Pattern::Literal` arm
 //! of [`super::lower_pattern_check`] and the literal alternative
 //! arm of `or_pattern::emit_or_alternative`.

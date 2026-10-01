@@ -1,4 +1,4 @@
-//! Heap-object header layout: the codegen-side single source of
+//! Heap-object header layout, the codegen-side single source of
 //! truth for Koja's `[i64 rc][i64 bit_length][payload]` heap ABI.
 //!
 //! Every rc-managed leaf value (`String` / `Binary` / `Bits`) lives in
@@ -48,7 +48,7 @@ pub(crate) const LENGTH_OFFSET: u64 = 8;
 
 /// Sentinel rc stamped into statically-allocated (rodata) payloads:
 /// literals and `const`s. The runtime's `koja_rc_inc` / `koja_rc_dec`
-/// treat any `rc < 0` as immortal: inc/dec are no-ops and the block is
+/// treat any `rc < 0` as immortal. Inc/dec are no-ops and the block is
 /// never freed, so a literal payload never reaches `free` (it lives in
 /// rodata, not the heap).
 ///
@@ -56,13 +56,13 @@ pub(crate) const LENGTH_OFFSET: u64 = 8;
 /// canonical negative value codegen writes.
 pub(crate) const RC_IMMORTAL: i64 = i64::MIN;
 
-/// `+HEADER_BYTES` as an `i64` constant: the payload offset from a
+/// `+HEADER_BYTES` as an `i64` constant, the payload offset from a
 /// block base.
 pub(crate) fn header_offset<'ctx>(ctx: &EmitContext<'ctx>) -> IntValue<'ctx> {
     ctx.context.i64_type().const_int(HEADER_BYTES, false)
 }
 
-/// `-HEADER_BYTES` as a signed `i64` constant: the block-base offset
+/// `-HEADER_BYTES` as a signed `i64` constant, the block-base offset
 /// from a payload pointer.
 pub(crate) fn neg_header_offset<'ctx>(ctx: &EmitContext<'ctx>) -> IntValue<'ctx> {
     ctx.context

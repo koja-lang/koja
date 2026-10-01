@@ -52,7 +52,7 @@ pub(crate) fn emit_map_put<'ctx>(
         },
     )?;
 
-    // Update path: dup key found, overwrite the value slot. Release
+    // Update path (dup key found). Overwrite the value slot. Release
     // the old value the clone acquired, store the acquired incoming
     // value. The matched key stays put (no key acquire / release).
     ctx.builder.position_at_end(probe.update_bb);
@@ -69,7 +69,7 @@ pub(crate) fn emit_map_put<'ctx>(
     )?;
     ret(ctx, updated.into())?;
 
-    // Insert path: empty (or tombstone) slot, write key+value + state.
+    // Insert path (empty or tombstone slot). Write key+value + state.
     // Both payloads are acquired so the table owns independent
     // references (the stale bytes a tombstone carries were never
     // acquired, so the overwrite needs no release).
@@ -136,7 +136,7 @@ pub(crate) fn emit_set_insert<'ctx>(
     )?;
     ret(ctx, already.into())?;
 
-    // Insert path: empty (or tombstone) slot, write entry + state. The
+    // Insert path (empty or tombstone slot). Write entry + state. The
     // item is acquired so the set owns an independent reference (a
     // tombstone's stale bytes were never acquired, so no release).
     ctx.builder.position_at_end(probe.insert_bb);

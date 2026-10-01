@@ -189,7 +189,7 @@ fn bare_walk_fields(
 /// Walk a `FieldInit` list against a substituted declared roster:
 /// for each init, look up the matching declared field and resolve
 /// its value with that field's type as the expected hint. Inits
-/// whose name doesn't match any declared field fall through to the
+/// whose name does not match any declared field fall through to the
 /// bare walk (the unknown-field diagnostic in
 /// [`validate_named_fields`] reports them). Shared by struct
 /// construction and the struct-variant arm of enum construction.

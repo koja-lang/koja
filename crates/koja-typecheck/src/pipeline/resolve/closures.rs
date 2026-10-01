@@ -19,7 +19,7 @@
 //! otherwise from an `expected: fn (T0, T1) -> R` shape supplied by
 //! the surrounding context (the call/method-call resolvers thread
 //! this from the corresponding parameter's signature). Missing both
-//! sources is an error: the closure resolves with [`Unresolved`]
+//! sources is an error. The closure resolves with [`Unresolved`]
 //! params and the body still walks for diagnostic completeness.
 //!
 //! [`LocalScope::declare`]: crate::pipeline::local_scope::LocalScope::declare
@@ -76,7 +76,7 @@ pub(super) fn resolve_closure(
     // [`crate::pipeline::resolve::walker::resolve_function_body`]
     // does for named functions. Without this, a trailing
     // `Result.Ok(v * 3)` in a closure annotated `-> Result<Int, Int>`
-    // can't pin `E` from context and fires "cannot infer type
+    // cannot pin `E` from context and fires "cannot infer type
     // parameter `E` of `Global.Result`".
     resolve_body_with_expected(body, return_hint.as_ref(), resolver, diagnostics);
     let body_return_ty = trailing_expr_type(body);

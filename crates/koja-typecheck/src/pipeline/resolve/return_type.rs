@@ -1,10 +1,10 @@
-//! Return-position checking: the trailing expression against the
-//! declared return type, and every explicit `return` statement.
+//! Return-position checking of the trailing expression against the
+//! declared return type, and of every explicit `return` statement.
 //!
 //! Once `resolve_function` has walked the body, every `Statement::Expr`
 //! carries a resolved type. The compiler's contract is that the body's
 //! final expression is the function's return value. [`check_return_type`]
-//! enforces the typecheck side: when the declared return type is
+//! enforces the typecheck side. When the declared return type is
 //! non-Unit, the trailing statement must be a [`Statement::Expr`] whose
 //! resolution equals the declared return type. [`check_explicit_return`]
 //! applies the same compatibility rules at each `return` site.
@@ -35,7 +35,7 @@ use super::types::{display_resolution, is_primitive, types_equivalent};
 /// - The declared return is `<unresolved>`. The annotation already
 ///   triggered its own diagnostic upstream, and piling on with a return
 ///   mismatch only adds noise.
-/// - Body is `None` (extern / intrinsic). Those declarations aren't
+/// - Body is `None` (extern / intrinsic). Those declarations are not
 ///   typechecked here.
 pub(super) fn check_return_type(
     function: &mut Function,
@@ -101,7 +101,7 @@ pub(super) fn check_return_type(
         // Skip to avoid pile-on noise.
         return;
     }
-    // `Never` is the lattice bottom: a body that diverges (e.g. its
+    // `Never` is the lattice bottom. A body that diverges (e.g. its
     // trailing expression is `if cond then return 1 else return 2 end`,
     // or a bare `panic()` call) satisfies any non-`Never` declared
     // return type without ever actually returning a value.

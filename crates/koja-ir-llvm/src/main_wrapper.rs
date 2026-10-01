@@ -27,7 +27,7 @@
 //! which the scheduler installs before invoking the spawned thunk.
 //!
 //! The [`__koja_app_name`](APP_NAME_SYMBOL) global lives here
-//! because it's the same kind of "runtime convention" plumbing,
+//! because it is the same kind of "runtime convention" plumbing,
 //! emitted on every compiled binary so the runtime archive's
 //! panic handler links cleanly regardless of cgu partitioning.
 //!
@@ -153,9 +153,10 @@ fn define_user_main<'ctx>(
         emit_built_constant_init_call(ctx)?;
         for block in blocks {
             if !reachable.contains(&block.id) {
-                // Same boundary stand-in as `define_function`: blocks the
-                // CFG can't reach get `unreachable` so we never try to
-                // materialize their (impossible-to-reach) value reads.
+                // Same boundary stand-in as `define_function`. Blocks the
+                // CFG cannot reach get `unreachable` so the emitter never
+                // tries to materialize their (impossible-to-reach) value
+                // reads.
                 emit::emit_unreachable_terminator(ctx, block.id, &block_map)?;
                 continue;
             }
@@ -357,7 +358,7 @@ fn emit_user_main_return<'ctx>(ctx: &EmitContext<'ctx>) -> Result<(), LlvmError>
 /// `return` in the script contributes another. All of them get
 /// capped with `ret void` by [`emit_user_main_return`]. Divergent
 /// if/else's may synthesize an unreachable merge whose `Return`
-/// reads an unmaterialized `BlockParam`. Those don't count and are
+/// reads an unmaterialized `BlockParam`. Those do not count and are
 /// filtered out via `reachable`. No reachable `Return` at all is a
 /// lowering bug and panics.
 fn find_return_blocks(

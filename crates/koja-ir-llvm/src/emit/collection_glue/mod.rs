@@ -3,8 +3,8 @@
 //! these as [`FunctionKind::CloneGlue`] / [`FunctionKind::DeepCopyGlue`]
 //! / [`FunctionKind::DropGlue`] shells with empty `blocks`. Unlike
 //! aggregate glue (whose CFG `elaborate` synthesizes in IR), a
-//! collection's body is a runtime-shaped buffer walk we build straight
-//! from the operand type here.
+//! collection's body is a runtime-shaped buffer walk this module builds
+//! straight from the operand type.
 //!
 //! Memory model is deep ownership (no buffer refcount):
 //!

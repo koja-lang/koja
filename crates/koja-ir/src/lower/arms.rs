@@ -115,12 +115,12 @@ pub(super) fn lower_expr_arm_into(
 /// Conform an arm tail value to the merge block's `BlockParam` type
 /// and hand the merge an owned value it can release.
 ///
-/// - `result_ty == Unit` and the arm produced something else: the
+/// - When `result_ty == Unit` and the arm produced something else, the
 ///   tail value is discarded (a no-else `if`'s then-arm tails on a
 ///   non-Unit value the surrounding expression types as `Unit`), so
 ///   free it if it owns a heap temp and substitute a fresh
 ///   `Const::Unit` to keep the merge edge type-consistent.
-/// - Otherwise (the arm produced a value of `result_ty`): *acquire*
+/// - Otherwise (the arm produced a value of `result_ty`), *acquire*
 ///   it so the merge `BlockParam` (which the construct's lowering
 ///   marks `owned` for heap-managed results) owns an independent
 ///   reference. An owned tail moves, and a borrowed one clones.
@@ -143,7 +143,7 @@ pub(super) fn finalize_arm_value(
 
 /// Map the typecheck-stamped result type on a control-flow
 /// expression to its IR equivalent. Centralized so per-arm helpers
-/// don't redo the registry walk.
+/// do not redo the registry walk.
 pub(super) fn lower_result_ty(resolution: &ResolvedType, ctx: &mut FnLowerCtx<'_>) -> IRType {
     resolved_type_to_ir_type(resolution, ctx.registry, &mut ctx.output.instantiations)
 }

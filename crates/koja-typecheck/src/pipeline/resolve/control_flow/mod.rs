@@ -5,7 +5,7 @@
 //! arm tail type joins. The join is strict equality (no coercion)
 //! with `Never` as the lattice bottom (`T ∪ Never = T`). Divergent
 //! arms (bodies that end in `return`) contribute `Never` and so
-//! don't constrain the join. With no expected type the arms hint
+//! do not constrain the join. With no expected type the arms hint
 //! each other through [`super::speculation::resolve_arms`].
 //!
 //! `while` stays Unit-typed. Loops are statement-shaped.
@@ -40,11 +40,8 @@ pub(super) fn resolve_if(
     resolve_expr(condition, resolver, diagnostics);
     require_bool_condition("if", condition, resolver.registry, diagnostics);
     let Some(else_body) = else_body else {
-        // No-`else` `if` is statement-shaped: there's no else-arm
-        // to join, so the surface expression is `Unit`. Matches the
-        // pre-block-params behavior. Future "if-as-expression"
-        // ergonomics that admit `if cond then 1 end` (Optional-typed
-        // implicit None) is a separate slice.
+        // No-`else` `if` is statement-shaped. There is no else-arm
+        // to join, so the surface expression is `Unit`.
         resolve_body_with_expected(then_body, expected, resolver, diagnostics);
         return resolver.registry.primitive("Unit");
     };
@@ -104,10 +101,10 @@ impl ArmSet for IfArms<'_> {
 /// Resolve a `cond ? then_expr : else_expr` ternary. Same arm-tail
 /// join semantics as `if`/`else` (strict equality with `Never` as
 /// bottom), but the arms are expressions rather than statement
-/// bodies so we read `expr.resolution` directly instead of routing
-/// through `body_tail_type`. The parser disallows nested ternaries
-/// (`a ? b ? c : d : e` is a parse error), so we only ever join
-/// two arms here.
+/// bodies so the resolver reads `expr.resolution` directly instead
+/// of routing through `body_tail_type`. The parser disallows nested
+/// ternaries (`a ? b ? c : d : e` is a parse error), so the resolver
+/// only ever joins two arms here.
 pub(super) fn resolve_ternary(
     condition: &mut Expr,
     then_expr: &mut Expr,
@@ -166,7 +163,7 @@ impl ArmSet for TernaryArms<'_> {
     }
 }
 
-/// Resolve a `cond ... end` chain: every arm's condition is a `Bool`,
+/// Resolve a `cond ... end` chain. Every arm's condition is a `Bool`,
 /// every arm's body resolves, and the result type is the strict-
 /// equality join of every arm tail type plus the else-body tail
 /// (treating `Never` as bottom). Missing
@@ -260,11 +257,11 @@ impl ArmSet for CondArms<'_> {
 /// Resolve a `while cond ... end` loop. Condition must be `Bool`.
 /// The body resolves under the same scope as anywhere else, with
 /// `loop_depth` bumped and a fresh `loop_break_seen` slot pushed
-/// so any inner `break` is gated to this loop and doesn't bleed
+/// so any inner `break` is gated to this loop and does not bleed
 /// up to an outer enclosing loop. Result type is always `Unit`:
 /// the cond-false fall-through means a `while` exits without
 /// `break` even when the body contains one, so the divergent-
-/// `Never` shape `resolve_loop` enables doesn't apply.
+/// `Never` shape `resolve_loop` enables does not apply.
 pub(super) fn resolve_while(
     condition: &mut Expr,
     body: &mut Vec<Statement>,

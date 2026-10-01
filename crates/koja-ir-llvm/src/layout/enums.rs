@@ -60,7 +60,7 @@ pub(crate) fn declare_enum_type<'ctx>(ctx: &EmitContext<'ctx>, decl: &IREnumDecl
 }
 
 /// Set every variant's payload body. No size or alignment queries
-/// happen here, so it's safe to call before any of the referenced
+/// happen here, so it is safe to call before any of the referenced
 /// types (other enums' outer chunks, mutually-referenced structs)
 /// have their bodies set. The variant complete + outer bodies are
 /// deferred to [`define_enum_completes_and_outer`].
@@ -199,7 +199,7 @@ fn define_outer_body<'ctx>(
     // Round size up to a multiple of alignment so the chunk_count
     // matches Rust's enum-size convention. LLVM rounds struct sizes
     // up regardless, but doing it explicitly keeps the count
-    // faithful to the layout we'll observe later.
+    // faithful to the layout the backend observes later.
     let outer_size = max_complete_size.div_ceil(align_u64) * align_u64;
     let chunk_count = (outer_size / align_u64) as u32;
     outer.set_body(&[chunk_type.array_type(chunk_count).into()], false);

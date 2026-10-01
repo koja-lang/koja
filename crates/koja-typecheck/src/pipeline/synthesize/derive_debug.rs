@@ -1,14 +1,13 @@
-//! Synthesizes `impl Debug for T` for every user-defined struct /
-//! enum that doesn't already have one. Mutates `file.items` in place
+//! Synthesizes `impl Debug for T` for every user-defined struct or
+//! enum that does not already have one. Mutates `file.items` in place
 //! by appending the synthetic impl blocks.
 //!
 //! Synthesized impls are indistinguishable from user-written code, so
-//! the rest of typecheck (collect / lift / resolve / seal) needs no
+//! the rest of typecheck (collect, lift, resolve, seal) needs no
 //! special-casing. Runs as a **pre-collect** pass in
 //! [`crate::check_program`] so the new items land before name binding.
-//! The pipeline's main `synthesize` step (today: `for_desugar`)
-//! runs after lift and only touches function bodies, so it can't
-//! introduce items.
+//! The `for` rewrite in [`crate::pipeline::resolve`] runs on function
+//! bodies and cannot introduce items.
 //!
 //! ## Generic types
 //!
@@ -63,7 +62,7 @@ const PUTS_METHOD: &str = "puts";
 const STRING_TYPE: &str = "String";
 
 /// Synthesizes `impl Debug for T` for every struct / enum in `pkg`
-/// that doesn't already have one anywhere in the same package. See
+/// that does not already have one anywhere in the same package. See
 /// [`super::derive_protocol`] for the existing-impl scan.
 pub(crate) fn derive_debug_package(pkg: &mut CheckedPackage) {
     super::derive_protocol(
@@ -93,8 +92,8 @@ fn synthesize_enum_impl(decl: &EnumDecl) -> Item {
 /// `print` and `inspect` come from [`print_function`] /
 /// [`inspect_function`] and inline the same bodies the `Debug`
 /// protocol declares as defaults in `lib/global/src/debug.koja`.
-/// Resolve doesn't yet pull protocol default bodies into impls
-/// that omit them, so we inline them at synthesis time.
+/// Resolve does not pull protocol default bodies into impls that
+/// omit them, so the synthesizer inlines them at synthesis time.
 fn debug_impl_block(target: TypeExpr, format_body: Expr, span: Span) -> Item {
     Item::Impl(ImplBlock {
         target,
@@ -241,26 +240,26 @@ fn field_format_part(field_name: &Name, field_type: &TypeExpr, span: Span) -> St
     interpolation_part(field_access, span)
 }
 
-/// Returns `true` for type expressions that can't be safely run
+/// Returns `true` for type expressions that cannot be safely run
 /// through `.format()` in a synthesized body, so the field renders
 /// as `"..."`:
 ///
 /// - Compiler-internal recursion-break wrappers (`Indirect`,
 ///   `Pointer`, `CPtr`).
-/// - Anything that isn't a plain named, generic, or tuple type
+/// - Anything that is not a plain named, generic, or tuple type
 ///   ([`TypeExpr::Function`], [`TypeExpr::Self_`], [`TypeExpr::Union`],
-///   [`TypeExpr::Unit`]): functions / unions / etc. don't carry
-///   `format` and there's no syntactic `Self.format()` recursion
+///   [`TypeExpr::Unit`]). Functions / unions / etc. do not carry
+///   `format` and there is no syntactic `Self.format()` recursion
 ///   contract. Tuples conform to `Debug` structurally, so they
 ///   format like any named field type.
 ///
 /// Generic instantiations (`List<Int>`, `Pair<A, B>`, …) are *not*
-/// opaque: they pick up either a hand-written stdlib impl or a
+/// opaque. They pick up either a hand-written stdlib impl or a
 /// synthesized impl, so `.format()` always resolves after
 /// monomorphization.
 ///
 /// `Equality` derivation only shares the internal-wrapper carve-out
-/// ([`is_internal_wrapper_type`]): every other field type, functions
+/// ([`is_internal_wrapper_type`]). Every other field type, functions
 /// included, is `Equality`.
 fn is_opaque_type(te: &TypeExpr) -> bool {
     match te {
@@ -370,8 +369,8 @@ fn variant_match_arm(enum_path: &[Name], variant: &EnumVariant, span: Span) -> M
     }
 }
 
-/// Body for a unit variant: the variant's surface name (`Enum.Variant`)
-/// as a literal.
+/// The body for a unit variant is the variant's surface name
+/// (`Enum.Variant`) as a literal.
 fn unit_variant_body(label: &str, span: Span) -> Expr {
     string_expr(vec![literal_part(label.to_string(), span)], span)
 }

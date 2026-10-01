@@ -19,7 +19,7 @@
 //!   fixed-width run between splices must total whole bytes.
 //!
 //! Feature gaps surface as a diagnostic and leave the literal at
-//! [`ResolvedType::unresolved`] so seal won't run. The segments are
+//! [`ResolvedType::unresolved`] so seal will not run. The segments are
 //! still walked so any inner errors get reported in the same pass.
 
 use koja_ast::ast::{
@@ -193,10 +193,10 @@ fn resolve_segment(
             ));
             return None;
         }
-        // `::N` only validly applies to integer-typed values today.
+        // `::N` only validly applies to integer-typed values.
         // Float segments use `: Float32` / `: Float64`, and string
-        // segments don't carry a size. Reject loud mismatches so a
-        // misuse like `1.0 :: 16` doesn't silently coerce.
+        // segments do not carry a size. Reject loud mismatches so a
+        // misuse like `1.0 :: 16` does not silently coerce.
         if !is_primitive(&segment.value.resolution, registry, "Int") {
             diagnostics.push(Diagnostic::error(
                 "`::N` segment size requires an `Int`-typed value",

@@ -226,7 +226,7 @@ fn emit_recv_from<'ctx>(
 /// Build `Result.Err(koja_last_error())`. The runtime helper
 /// returns a freshly-allocated Koja string payload pointer, which
 /// is exactly the LLVM-level representation of an `IRType::String`,
-/// so we can feed it straight into the `Err` payload slot without
+/// so the intrinsic can feed it straight into the `Err` payload slot without
 /// any further marshaling.
 fn build_err<'ctx>(
     ctx: &EmitContext<'ctx>,

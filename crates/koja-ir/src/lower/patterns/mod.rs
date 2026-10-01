@@ -1,5 +1,5 @@
-//! Pattern lowering: walk a [`Pattern`] against a subject `ValueId`
-//! and produce a [`PatternCheck`] describing whether the arm fires
+//! Pattern lowering walks a [`Pattern`] against a subject `ValueId`
+//! and produces a [`PatternCheck`] describing whether the arm fires
 //! unconditionally, after one or more chained predicates (joined
 //! either by [`ChainMode::And`] for struct/enum field-test chains
 //! or [`ChainMode::Or`] for or-pattern alternatives), and what
@@ -410,7 +410,7 @@ pub(super) fn global_id_of(ty: &ResolvedType, what: &str) -> GlobalRegistryId {
     }
 }
 
-/// Pin a binding's `LocalId` invariant: every pattern binding must
+/// Pin a binding's `LocalId` invariant. Every pattern binding must
 /// already carry a stamped id from the typecheck-resolve walk.
 pub(super) fn require_local(local_id: Option<LocalId>, name: &Name) -> IRLocalId {
     let id = local_id.unwrap_or_else(|| {

@@ -1,15 +1,15 @@
-//! Resolve sub-pass: walk every body, populating `Resolution` on
+//! The resolve sub-pass walks every body, populating `Resolution` on
 //! identifier references and `Expr.resolution` on every expression.
 //!
-//! Type identity is registry-backed: every primitive production goes
+//! Type identity is registry-backed. Every primitive production goes
 //! through [`crate::registry::GlobalRegistry::primitive`] so the
 //! registry stays the single source of truth for what `Int` (etc.)
 //! means.
 //!
 //! # Module layout
 //!
-//! - [`walker`]: top-down traversal, `resolve_file` -> `resolve_function`
-//!   -> `resolve_statement`.
+//! - [`walker`]: top-down traversal, `resolve_file` then `resolve_function`
+//!   then `resolve_statement`.
 //! - [`statements`]: statement-level shapes, assignment decl /
 //!   reassignment.
 //! - [`expr`]: expression dispatch, `resolve_expr`.
@@ -20,8 +20,7 @@
 //!   Shares carrier-protocol mechanics across protocol-aware
 //!   literal families.
 //! - [`strings`]: string literal resolution.
-//! - [`control_flow`]: `if` (Unit-typed, value-producing forms land
-//!   with locals).
+//! - [`control_flow`]: `if`, `cond`, the `?:` ternary, and `while`.
 //! - [`error_channel`]: `try` / `fail` / `rescue` desugaring and
 //!   `Result.Ok` auto-wrapping for `! E` functions.
 //! - [`assert`]: statement-position `assert` desugaring onto `if` and

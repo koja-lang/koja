@@ -3,9 +3,9 @@
 //!
 //! Both trim leading / trailing whitespace and hand the rest to
 //! [`koja_runtime::parse_text`], the same classification the LLVM
-//! backend's runtime helpers use, so the two backends can't drift
+//! backend's runtime helpers use, so the two backends cannot drift
 //! on what counts as `InvalidFormat` vs `OutOfRange` (a well-formed
-//! number that doesn't fit: an overflowing integer, or a float
+//! number that does not fit: an overflowing integer, or a float
 //! magnitude that rounds to infinity). The Result enum's symbol
 //! comes from `function.return_type`. The error variant tag is
 //! resolved by name via `helpers::err_variant_value`.

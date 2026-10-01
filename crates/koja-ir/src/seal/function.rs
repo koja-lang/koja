@@ -122,7 +122,7 @@ fn seal_function(function: &IRFunction) {
     }
     require_supported_type(&function.return_type, &|| format!("{owner} return type"));
     // Function parameter `ValueId`s seed the entry block's
-    // dominator-tree-rooted defined set: params are visible to
+    // dominator-tree-rooted defined set, because params are visible to
     // every block the entry dominates, which in a well-formed CFG
     // is every reachable block.
     let mut parameter_value_ids: HashSet<ValueId> = HashSet::new();
@@ -185,7 +185,7 @@ fn seal_tail_calls(function: &IRFunction, owner: &str) {
 /// validate that each [`BranchTarget`]'s `args` list matches the target
 /// block's declared arity. [`super::types`] validates argument types.
 ///
-/// Built once per function so the per-block walk doesn't repeat the
+/// Built once per function so the per-block walk does not repeat the
 /// scan. [`super::script`] uses it for the implicit script body too.
 pub(super) fn collect_block_params(
     blocks: &[IRBasicBlock],
@@ -430,7 +430,7 @@ fn walk_dominator_subtree(
 /// Operand-in-scope assertion under dominance. Failure surfaces as
 /// "no dominating block defines `…`" rather than the stricter
 /// "before it is defined" (which only fit the per-block model). The
-/// underlying invariant is the same: a value's def must dominate
+/// underlying invariant is the same. A value's def must dominate
 /// every use site.
 fn require_in_scope(value: ValueId, owner: &str, block_id: IRBlockId, defined: &HashSet<ValueId>) {
     if !defined.contains(&value) {
@@ -495,7 +495,7 @@ mod block_param_tests {
     //! [`BranchTarget`] arg/param invariants on `seal_block`. The
     //! happy path runs `seal_block` and expects no panic, while mismatch
     //! cases pin the specific seal-violation message so future edits
-    //! don't accidentally weaken the contract.
+    //! do not accidentally weaken the contract.
 
     use super::*;
     use crate::function::BlockParam;

@@ -47,7 +47,7 @@ pub struct IRUnionDecl {
 /// align padding + max-payload }` blob the LLVM enum layout
 /// produces, with the outer rounded up to its max-align stride.
 /// Nested unions resolve through `unions`. If the inner decl
-/// isn't yet registered, fall back to `1 + max(member_size)` as
+/// is not yet registered, fall back to `1 + max(member_size)` as
 /// a conservative upper bound so the caller's first sizing pass
 /// still produces a usable number that a later
 /// [`refine_nested_union_sizes`] pass can settle.
@@ -133,7 +133,7 @@ where
     (size, align)
 }
 
-/// Enum payload sizing mirrors `koja-ir-llvm`'s layout: each
+/// Enum payload sizing mirrors `koja-ir-llvm`'s layout. Each
 /// variant is a `{ i8 tag, [pad x i8], payload }` blob, and the outer
 /// is `{ [count x iN] }` where `N = max_align * 8` and the byte
 /// count is `count * max_align >= max_complete_size`. Returns the
@@ -187,7 +187,7 @@ fn union_size(payload: u32) -> (u32, u32) {
 /// the package that first observed it. Script-only unions land in
 /// the first package. Cross-package lookup goes through
 /// [`crate::IRProgram::union_decl`], so where the decl physically
-/// lives doesn't matter for backends. What matters is that every
+/// lives does not matter for backends. What matters is that every
 /// observed mangled symbol has exactly one entry.
 pub(crate) fn discover_unions(packages: &mut [IRPackage], script_blocks: &[IRBasicBlock]) {
     let declarations = Declarations::new(&*packages);

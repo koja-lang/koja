@@ -10,8 +10,8 @@
 //! "hint-or-floor-or-diagnose" walk shared between list elements
 //! and map keys/values) lives in [`axis`].
 //!
-//! Future literal-protocol families such as `BinaryLiteral` slot in
-//! here and forward through `dispatch_via_carrier`.
+//! A new literal-protocol family slots in here and forwards through
+//! `dispatch_via_carrier`.
 
 mod axis;
 mod binary;

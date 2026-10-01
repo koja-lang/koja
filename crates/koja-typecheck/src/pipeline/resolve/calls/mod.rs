@@ -1,22 +1,24 @@
 //! Bare-call (`f(args)`) and method-call (`recv.m(args)`) resolution.
 //! Both stamp the callee's `GlobalRegistryId` on the AST and validate
-//! arity + per-position types.
+//! arity and per-position types.
 //!
 //! # Module layout
 //!
 //! - [`methods`]: receiver classification (`Static` / `Instance` /
-//!   `Bounded`), dual-scope (receiver + method) type-arg inference,
-//!   and the small lookup / diagnostic-shape helpers re-used by
+//!   `Bounded`), dual-scope (receiver and method) type-arg inference,
+//!   and the small lookup and diagnostic-shape helpers reused by
 //!   [`resolve_method_call`].
 //! - [`bounded`]: `t.m(args)` against a type-param receiver,
 //!   protocol-method lookup against the type-param's bounds list,
-//!   ambiguity / not-found diagnostics, and arg validation against
+//!   ambiguity and not-found diagnostics, and arg validation against
 //!   the protocol's signature.
+//! - [`structural`]: `recv.m(args)` against a tuple, function, or
+//!   union receiver, where only the universal protocol functions
+//!   resolve.
 //!
-//! Both flavors of call entry point ([`resolve_call`] and
-//! [`resolve_method_call`]) live in this file alongside the
-//! cross-flavor helpers ([`emit_conflict`] /
-//! [`diagnose_phantom_params`] / [`resolve_args`] /
+//! Both call entry points ([`resolve_call`] and
+//! [`resolve_method_call`]) live in this file alongside the shared
+//! helpers ([`emit_conflict`], [`resolve_args`], and
 //! [`validate_call_signature`]) so submodules need only sibling
 //! `pub(super)` visibility.
 
@@ -571,9 +573,9 @@ pub(super) fn resolve_method_call(
         return MethodCallOutcome::Method(sig.return_type.clone());
     }
 
-    // Static dispatch: `receiver.resolution` is the type-name's
-    // resolution (`Global(struct_id)` with empty `type_args`).
-    // Instance dispatch: receiver carries the value's full
+    // On static dispatch, `receiver.resolution` is the type-name's
+    // resolution (`Global(struct_id)` with empty `type_args`). On
+    // instance dispatch, the receiver carries the value's full
     // resolved type. Either way, the same field seeds receiver
     // substitution.
     let receiver_callee = Callee {
@@ -631,7 +633,7 @@ pub(super) fn resolve_method_call(
             type_args: receiver_args_inferred,
         };
     }
-    // "Extend"-style domain check: a method registered at
+    // "Extend"-style domain check. A method registered at
     // `[receiver_head, method]` only applies to receivers whose
     // full `ResolvedType` matches the method's substituted `self`
     // type. Trait impls on concrete instantiations (e.g.
@@ -667,7 +669,7 @@ pub(super) fn resolve_method_call(
     MethodCallOutcome::Method(substituted_return)
 }
 
-/// Field-as-callable fallback for instance dispatch: if `struct_id`
+/// Field-as-callable fallback for instance dispatch. If `struct_id`
 /// has a field named `method` whose substituted type is
 /// `fn (Ps...) -> R`, validate args against `Ps...` and return the
 /// shape the caller stamps onto the AST. Any other field type (or
@@ -718,7 +720,7 @@ fn try_field_callable(
 }
 
 /// Drive call-site type inference for a generic callee. Tries a
-/// speculative pre-seed (`fill_from_expected` -> per-arg unify on a
+/// speculative pre-seed (`fill_from_expected` then per-arg unify on a
 /// scratch). On success the pre-seeded substitution wins so
 /// `x: Int32 = identity(42)` keeps `T = Int32` via `literal_widens_into`.
 /// On any conflict (e.g. outer expected `Unit` vs `identity(1) : Int`)
@@ -856,7 +858,7 @@ fn lookup_bare_callee<'a>(
             arities,
             identifier,
         }),
-        // A non-function with this name still wins the scope: the
+        // A non-function with this name still wins the scope. The
         // caller diagnoses it as an invalid callee.
         FunctionLookup::NoFunctions => registry.lookup(&identifier).map(BareCalleeLookup::Found),
     };
@@ -896,7 +898,7 @@ fn call_suggestion(callee: &str, arity: usize) -> String {
 /// function call (`Pkg.f(args)`, e.g. `HTTP.get(url)`). Applies only
 /// when the receiver is a bare identifier that names no local and no
 /// type in scope, since locals and type receivers always win. Returns
-/// `None` to fall through to method dispatch when the head doesn't
+/// `None` to fall through to method dispatch when the head does not
 /// name a package with declarations, so existing diagnostics cover
 /// unknown receivers.
 fn try_package_function_call(
@@ -1034,7 +1036,7 @@ fn check_callee_visibility(
     }
 }
 
-/// Pure visibility decision: does a callee with `scope` allow a
+/// Pure visibility decision. Does a callee with `scope` allow a
 /// call from `caller_package` while resolving a method on
 /// `caller_type_id`? `Public` is always reachable. `PackagePrivate`
 /// requires `callee_package == caller_package`. `TypePrivate(owner)`
@@ -1095,7 +1097,7 @@ fn resolve_non_closure_args(
     }
 }
 
-/// Second-pass arg resolution for generic callees: walk closure args
+/// Second-pass arg resolution for generic callees. Walk closure args
 /// with the substituted param type as the expected hint so closure
 /// param/return slots inherit any type-args inferred from the
 /// non-closure args. Move marking for non-closure args happened in
@@ -1304,7 +1306,7 @@ fn resolve_local_call(
 /// Build per-position [`ResolvedParam`]s for a local closure call.
 /// Names are synthesized as `arg<index>` so arity / type
 /// diagnostics still surface a label without depending on a
-/// signature decl that doesn't exist.
+/// signature decl that does not exist.
 fn synthesize_local_call_params(fn_params: &[ResolvedType]) -> Vec<ResolvedParam> {
     fn_params
         .iter()
@@ -1322,9 +1324,7 @@ mod tests {
     //! `priv fn` enforcement. Integration coverage lives in
     //! `tests/visibility.rs`. The cases here pin the decision matrix
     //! at the smallest possible API surface, including the
-    //! cross-package `PackagePrivate` rejection path that surface
-    //! syntax can't currently reach (`Pkg.fn(args)` doesn't resolve to
-    //! top-level fns today).
+    //! cross-package `PackagePrivate` rejection path.
     use super::callee_is_visible;
     use crate::registry::VisibilityScope;
     use koja_ast::identifier::GlobalRegistryId;
@@ -1368,9 +1368,9 @@ mod tests {
         let scope = VisibilityScope::TypePrivate(foo);
 
         assert!(callee_is_visible(scope, "A", "A", Some(foo)));
-        // Cross-package same-owner is irrelevant: type-private is
+        // Cross-package same-owner is irrelevant. Type-private is
         // anchored on identity, not package, but a type id is
-        // unique across the program so this can't actually occur.
+        // unique across the program so this cannot actually occur.
         assert!(callee_is_visible(scope, "A", "B", Some(foo)));
 
         assert!(!callee_is_visible(scope, "A", "A", Some(bar)));

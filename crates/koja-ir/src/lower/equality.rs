@@ -95,7 +95,7 @@ pub(super) fn lower_value_equality(
     }
 }
 
-/// Element-wise short-circuit equality: elements chain through a
+/// Element-wise short-circuit equality. Elements chain through a
 /// [`Conjunction`] so element `equals?` calls after a mismatch never
 /// run.
 fn emit_tuple_eq(

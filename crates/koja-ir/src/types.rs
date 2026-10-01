@@ -30,7 +30,7 @@ pub enum ConstValue {
     /// payload bytes, header `bit_length = bytes.len() * 8`. No
     /// trailing NUL. Segment-built `Binary` values flow through
     /// [`crate::IRInstruction::BinaryConstruct`] instead, since
-    /// runtime segment values can't be folded into a `ConstValue`.
+    /// runtime segment values cannot be folded into a `ConstValue`.
     Binary(Vec<u8>),
     /// Empty / literal-only `Bits` payload, where `bit_length` may be a
     /// non-multiple of 8. Backends materialize `ceil(bit_length / 8)`
@@ -145,7 +145,7 @@ pub enum ConcatKind {
 
 /// Endianness modifier on integer / float binary segments. Mirrors
 /// the AST [`koja_ast::ast::BinaryEndianness`] one-for-one but lives
-/// in the IR vocabulary so the LLVM backend doesn't import AST
+/// in the IR vocabulary so the LLVM backend does not import AST
 /// types. `Big` matches network byte order, the language default
 /// when no `big`/`little` modifier is written.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -171,7 +171,7 @@ pub enum BinarySign {
 /// e.g. dynamic, widths). `byte_aligned` is the convenience
 /// `total_bits % 8 == 0` result, also used by the typecheck layer
 /// to pick between [`IRType::Binary`] (aligned) and [`IRType::Bits`]
-/// (not). Backends consume both fields directly so they don't need
+/// (not). Backends consume both fields directly so they do not need
 /// to redo the arithmetic.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ResolvedBinaryLayout {
@@ -226,9 +226,9 @@ pub enum LoweredBinarySegment {
     /// payload pointer (the same pointer family `<>` operates on),
     /// and backends `memcpy` the payload bytes into the result at
     /// `bit_offset / 8`. `byte_length` is the source-byte count of
-    /// the string literal at typecheck time. We trust the typecheck
-    /// layer to have stamped a constant width because dynamic-width
-    /// segments are gated.
+    /// the string literal at typecheck time. Lowering trusts the
+    /// typecheck layer to have stamped a constant width because
+    /// dynamic-width segments are gated.
     String {
         value: ValueId,
         byte_length: u64,
@@ -238,7 +238,7 @@ pub enum LoweredBinarySegment {
 
 impl LoweredBinarySegment {
     /// Bit offset of this segment's first bit within the result
-    /// payload. Convenience for backends that don't need to match
+    /// payload. Convenience for backends that do not need to match
     /// on the variant.
     pub fn bit_offset(&self) -> u64 {
         match self {
@@ -248,7 +248,7 @@ impl LoweredBinarySegment {
         }
     }
 
-    /// Bit width of this segment. For [`Self::String`] it's
+    /// Bit width of this segment. For [`Self::String`] it is
     /// `byte_length * 8`.
     pub fn width(&self) -> u64 {
         match self {
@@ -531,8 +531,8 @@ impl IRType {
 }
 
 impl ConstValue {
-    /// The [`IRType`] a `Const` of this value produces. Pure
-    /// transliteration: each integer / float width gets its
+    /// The [`IRType`] a `Const` of this value produces, by pure
+    /// transliteration. Each integer / float width gets its
     /// mirroring type, and `Bool` / `String` / `Unit` round-trip
     /// directly.
     pub fn ir_type(&self) -> IRType {

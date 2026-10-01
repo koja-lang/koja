@@ -76,7 +76,7 @@ fn seal_program_entry_wrappers(program: &IRProgram) {
     }
 }
 
-/// Cross-package closure check: every `MakeClosure::body` must
+/// Cross-package closure check. Every `MakeClosure::body` must
 /// resolve to a registered `FunctionKind::Closure` whose
 /// `env_layout` and exposed signature line up with the
 /// instruction's `captures` arity and `IRType::Function` value
@@ -89,7 +89,7 @@ fn seal_program_closure_ops(program: &IRProgram) {
     }
 }
 
-/// Cross-package enum check: every `EnumConstruct::ty` must name an
+/// Cross-package enum check. Every `EnumConstruct::ty` must name an
 /// enum decl registered in some package, and the supplied tag +
 /// payload shape must match the variant. See
 /// [`super::enums::seal_enum_ops`] for the full rule list.
@@ -100,7 +100,7 @@ fn seal_program_enum_ops(program: &IRProgram) {
     }
 }
 
-/// Cross-package struct check: every `StructInit::ty` and
+/// Cross-package struct check. Every `StructInit::ty` and
 /// `FieldGet::struct_symbol` must name a struct decl registered in
 /// some package. Field-init counts/positions and field-index/type
 /// matches are validated against the resolved decl. See
@@ -112,7 +112,7 @@ fn seal_program_struct_ops(program: &IRProgram) {
     }
 }
 
-/// Cross-package constants check: every `LoadConst::const_id` must
+/// Cross-package constants check. Every `LoadConst::const_id` must
 /// resolve to a registered [`crate::IRConstantValue`] in some
 /// package's pool. See [`super::constants::seal_loadconst_pool`].
 fn seal_program_loadconst_pool(program: &IRProgram) {
@@ -122,7 +122,7 @@ fn seal_program_loadconst_pool(program: &IRProgram) {
     }
 }
 
-/// Cross-function check: every `Call` callee and `Spawn` wrapper must
+/// Cross-function check. Every `Call` callee and `Spawn` wrapper must
 /// be a registered function in the IRProgram. See
 /// [`super::calls::seal_calls`] for the full rule list.
 fn seal_program_calls(program: &IRProgram) {

@@ -1,4 +1,4 @@
-//! Seal sub-pass: walks the merged [`crate::IRProgram`] /
+//! The seal sub-pass walks the merged [`crate::IRProgram`] /
 //! [`crate::IRScript`] and asserts the sealed-IR invariants per the
 //! [`COMPILER-NORTHSTAR.md`] contract. Panics on violation, since seal
 //! failures indicate compiler bugs in upstream sub-passes, not user
@@ -33,7 +33,7 @@ pub(crate) use program::seal_program;
 pub(crate) use script::seal_script;
 
 /// Every [`IRType`] variant is admitted. The walk recurses into
-/// pointee, element, and member types so a future restriction has a
+/// pointee, element, and member types so a new restriction has a
 /// location-aware hook at every edge.
 pub(super) fn require_supported_type(ty: &IRType, location: &dyn Fn() -> String) {
     match ty {
@@ -161,7 +161,8 @@ pub(super) fn instruction_operands(inst: &IRInstruction) -> Vec<ValueId> {
         // The defined-before-use walk validates it like any other operand.
         IRInstruction::ProcessExit { reason } => vec![*reason],
         IRInstruction::SetPriority { tag } => vec![*tag],
-        // `YieldCheck` is a bare preemption point: no operands, no dest.
+        // `YieldCheck` is a bare preemption point with no operands and
+        // no dest.
         IRInstruction::YieldCheck => vec![],
         IRInstruction::StructInit { fields, .. } => fields.iter().map(|f| f.value).collect(),
         IRInstruction::TupleGet { base, .. } => vec![*base],

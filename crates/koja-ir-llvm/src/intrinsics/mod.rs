@@ -1,12 +1,12 @@
 //! Per-backend dispatch table for `@intrinsic` function bodies.
 //! Mirrors the eval interpreter's `koja_ir_eval::intrinsics`
-//! shape: each registered intrinsic is keyed by its
+//! shape. Each registered intrinsic is keyed by its
 //! [`koja_ir::FunctionKind::Intrinsic`] payload (an
 //! [`IRIntrinsicId`], a typed enum the lift pass mints from the
 //! function's identifier path) and routed via an exhaustive `match`
 //! to a hand-written emitter that synthesizes the LLVM body.
 //!
-//! Adding a new intrinsic: extend [`IRIntrinsicId`] in
+//! To add a new intrinsic, extend [`IRIntrinsicId`] in
 //! `koja-ir`, add a sibling `<name>.rs` module exporting
 //! `pub(super) fn emit_<name>`, wire its arm in [`emit_intrinsic_body`],
 //! and pin a 1-1 test in `tests/intrinsics.rs`. The exhaustive match

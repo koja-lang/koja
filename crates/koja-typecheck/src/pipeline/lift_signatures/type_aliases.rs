@@ -1,13 +1,13 @@
-//! `lift_type_aliases`: resolve each `type X = ...` RHS against the
-//! registry's named decls and stamp the resolved [`ResolvedType`]
+//! `lift_type_aliases` resolves each `type X = ...` RHS against the
+//! registry's named decls and stamps the resolved [`ResolvedType`]
 //! onto the alias entry. Runs after collect (alias entries exist as
-//! `TypeAlias(None)`) and after protocol lift (so a future
-//! protocol-typed alias works), and before struct / enum / function
-//! lift (so their signatures can reference aliases).
+//! `TypeAlias(None)`) and after protocol lift (so an alias RHS can
+//! name a protocol), and before struct / enum / function lift (so
+//! their signatures can reference aliases).
 //!
-//! Cycle detection runs as a follow-up sweep: walk each alias's
+//! Cycle detection runs as a second sweep that walks each alias's
 //! expansion through the registry. A visit count exceeding the
-//! number of registered aliases means we hit a cycle. Each cycle
+//! number of registered aliases means the walk hit a cycle. Each cycle
 //! diagnoses once and the offending alias's expansion is rewritten
 //! to [`ResolvedType::unresolved`] so downstream peels short-circuit
 //! cleanly.
@@ -23,7 +23,7 @@ use crate::registry::{GlobalKind, GlobalRegistry};
 use super::for_each_item;
 use super::types::{TypeParamScope, resolve_type_expr};
 
-/// Lift every `Item::TypeAlias` across every file: resolve the RHS,
+/// Lift every `Item::TypeAlias` across every file. Resolve the RHS,
 /// stamp the resulting `ResolvedType` on the registered alias
 /// entry. Then sweep for cycles and rewrite cycling aliases to
 /// `ResolvedType::unresolved` so subsequent peels short-circuit.
@@ -109,8 +109,8 @@ fn diagnose_alias_cycles(
     }
 }
 
-/// Walk `id`'s expansion, returning true iff we revisit `id`. Only
-/// traverses `Named { Global(other_alias) }` heads: aliases form
+/// Walk `id`'s expansion, returning true iff the walk revisits `id`. Only
+/// traverses `Named { Global(other_alias) }` heads, since aliases form
 /// the cycle structure. Generic args, function param/ret types, and
 /// union members are walked recursively.
 fn expansion_cycles(

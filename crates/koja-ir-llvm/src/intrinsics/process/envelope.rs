@@ -100,7 +100,7 @@ pub(super) fn option_some_payload<'ctx>(
 /// `(M, Option<ReplyTo<R>>)` envelope. `R` has no LLVM-side influence.
 /// `ReplyTo<R>` always lays out as `{ i64 id, i64 token }`, so
 /// `Option<ReplyTo<R>>` is `{ i8 tag, [7 x i8] padding, i64
-/// reply_id, i64 token }` = 24 bytes regardless of `R`. We pack it
+/// reply_id, i64 token }` = 24 bytes regardless of `R`. The emitter packs it
 /// into `[3 x i64]` so the writer side does not need the
 /// receive-side's pre-emit Option registry lookup. Binary
 /// layout matches the receiver's typed load by construction.

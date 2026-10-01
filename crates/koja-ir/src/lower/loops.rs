@@ -113,7 +113,7 @@ fn drop_body_scoped_bindings(
 }
 
 /// Lower an infinite `loop ... end`. Builds two blocks (no header,
-/// since there's no condition):
+/// since there is no condition):
 ///
 /// - `body`: lowers the body statements. The trailing flow's
 ///   terminator is the back-edge [`IRTerminator::Branch`] to itself.
@@ -122,7 +122,7 @@ fn drop_body_scoped_bindings(
 /// - `exit`: only reachable via `body::lower_break_stmt`.
 ///   Produces a fresh `Const::Unit` so the caller can keep threading.
 ///   When the body has no `break`, the exit block stays unreachable.
-///   That's intentional and harmless (every emitted block carries
+///   That is intentional and harmless (every emitted block carries
 ///   its own terminator regardless of reachability).
 pub(super) fn lower_loop(
     body: &[Statement],

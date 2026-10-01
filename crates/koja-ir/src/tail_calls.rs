@@ -100,7 +100,7 @@ fn contains_self_call(function: &IRFunction) -> bool {
 /// branches into a merge block carrying the call result as a
 /// [`crate::function::BlockParam`], and that merge block returns the
 /// param. The block holding the `Call` therefore ends in a `Branch`,
-/// not a `Return`, so [`match_tail_call`] can't see it and the call
+/// not a `Return`, so [`match_tail_call`] cannot see it and the call
 /// stays a real frame-growing recursion, fatal for the long-running
 /// `receive ... after -> self.loop()` actor idiom (unbounded stack).
 ///
@@ -116,7 +116,7 @@ fn contains_self_call(function: &IRFunction) -> bool {
 /// Each predecessor reaching `M` by an unconditional `Branch(M, [x])`
 /// is rewritten to run `M`'s exit drops in place and `Return x`. A
 /// `CondBranch` leg targeting `M` (a no-`else` `if` whose false edge
-/// jumps straight to the merge) can't be rewritten in place, because the
+/// jumps straight to the merge) cannot be rewritten in place, because the
 /// other leg must keep branching, so that edge is retargeted at a
 /// synthesized trampoline block holding the drops and the `Return`.
 /// `M` then has no predecessors and is removed. Running to a fixpoint
@@ -131,7 +131,7 @@ fn collapse_return_forwarders(function: &mut IRFunction) {
 /// `true` if one was rewritten. `false` signals the fixpoint.
 fn collapse_one_forwarder(function: &mut IRFunction) -> bool {
     // The entry block (index 0) is never a merge, so start the scan past
-    // it so a degenerate single-block forwarder can't be considered.
+    // it so a degenerate single-block forwarder cannot be considered.
     let plan = (1..function.blocks.len()).find_map(|index| {
         let block = &function.blocks[index];
         let shape = forwarder_shape(block)?;
@@ -143,7 +143,7 @@ fn collapse_one_forwarder(function: &mut IRFunction) -> bool {
     };
 
     // An unconditional `Branch` predecessor absorbs the forwarder in
-    // place. A `CondBranch` leg can't (its other leg must keep
+    // place. A `CondBranch` leg cannot (its other leg must keep
     // branching), so the leg is retargeted at a trampoline block that
     // carries the drops and the `Return`. Trampolines have no params
     // and so can never become forwarder candidates themselves, which
@@ -212,11 +212,11 @@ impl ForwarderShape {
 /// every instruction a function-exit drop, and a terminator that
 /// returns the param verbatim ([`ForwarderShape::ReturnsParam`]) or
 /// nothing in a Unit function ([`ForwarderShape::ReturnsUnit`]). A
-/// `DropValue` of the param disqualifies the block: in the param case
+/// `DropValue` of the param disqualifies the block. In the param case
 /// it would double-free the value the predecessor is about to return,
 /// and in the Unit case the predecessors have no value to replay the
 /// drop against. The Unit shape also requires a non-heap param so
-/// discarding the branched value can't leak.
+/// discarding the branched value cannot leak.
 fn forwarder_shape(block: &IRBasicBlock) -> Option<ForwarderShape> {
     let [param] = block.params.as_slice() else {
         return None;
@@ -322,7 +322,7 @@ fn apply_plan(
     // composite the later [`crate::elaborate`] pass rewrites it into a
     // `clone_T` call (or a register copy for an all-`Copy` aggregate).
     //
-    // A passthrough arg skips the acquire entirely: when the arg reads
+    // A passthrough arg skips the acquire entirely. When the arg reads
     // a slot whose trailing `DropLocal` sits in this block, or is an
     // owned temp whose trailing `DropValue` does, ownership moves
     // through the back-edge instead. The drop is elided and no clone
@@ -515,7 +515,7 @@ mod tests {
 
     /// The destination of the `Clone` inserted for the single arg, if
     /// any. The rewrite acquires a heap-managed arg before the
-    /// back-edge so the trailing slot drop can't release storage the
+    /// back-edge so the trailing slot drop cannot release storage the
     /// new args still reference.
     fn rewritten_arg_clone_dest(function: &IRFunction) -> Option<ValueId> {
         let block = &function.blocks[0];
@@ -1060,7 +1060,7 @@ mod tests {
     /// A merge whose exit drops sit in the forwarder must have them
     /// replayed into each predecessor before the back-edge. The
     /// acquire of the heap arg still happens at the call site so the
-    /// drop can't free storage the back-edge rebinds.
+    /// drop cannot free storage the back-edge rebinds.
     #[test]
     fn heap_arg_through_merge_is_acquired_before_back_edge() {
         let function = build_wrapped_self_call(IRType::String);
@@ -1227,8 +1227,8 @@ mod tests {
     }
 
     /// A merge reached by a `CondBranch` edge (a no-`else` `if` whose
-    /// false edge targets the merge directly) still collapses: the
-    /// conditional leg can't be rewritten into a `Return` in place, so
+    /// false edge targets the merge directly) still collapses. The
+    /// conditional leg cannot be rewritten into a `Return` in place, so
     /// it is retargeted at a synthesized trampoline block carrying the
     /// merge's drops and the `Return`, and the self-call arm loopifies.
     #[test]

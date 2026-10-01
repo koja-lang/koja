@@ -202,7 +202,7 @@ impl Value {
 
     /// Borrow a [`Value::String`] as `&str` when its bytes are
     /// valid UTF-8. Returns `None` for non-string values or when
-    /// the payload isn't valid UTF-8, where callers that need
+    /// the payload is not valid UTF-8, where callers that need
     /// codepoint semantics surface a clean error.
     pub fn as_string(&self) -> Option<&str> {
         match self {

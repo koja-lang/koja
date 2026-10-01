@@ -54,8 +54,8 @@ pub(super) fn lower_expr(
 /// Apply `expr.coercion` (if any) to a freshly lowered value. Each
 /// [`Coercion`] variant pairs 1:1 with an `IRInstruction::*`
 /// emission per the northstar coercion contract:
-/// [`Coercion::NumericWiden`] -> [`IRInstruction::NumericWiden`] and
-/// [`Coercion::UnionWiden`] -> [`IRInstruction::UnionWrap`].
+/// [`Coercion::NumericWiden`] maps to [`IRInstruction::NumericWiden`]
+/// and [`Coercion::UnionWiden`] maps to [`IRInstruction::UnionWrap`].
 fn apply_value_coercion(
     expr: &Expr,
     value: ValueId,
@@ -116,8 +116,7 @@ fn apply_value_coercion(
             // The wrap aliases the member's storage without an
             // acquire, so an owned source moves into the union.
             // Transfer the ownership stamp or the temp's release site
-            // never sees it. Before this, every `write(...)` against a
-            // `Binary | String` param leaked the widened string.
+            // never sees it and the widened value leaks.
             if ctx.is_owned(value) {
                 ctx.mark_owned(dest);
             }
@@ -347,7 +346,7 @@ fn lower_expr_inner(
             // stamps a coercion on the *outer* `Unary`'s span when
             // the negated literal flows into a sized slot. Without
             // a coercion record (or against a non-literal operand)
-            // we fall through to the regular UnaryOp emission.
+            // lowering falls through to the regular UnaryOp emission.
             //
             // An unstamped `-9223372036854775808` folds too. It is
             // the one `Int` whose magnitude does not fit on its own,
@@ -650,13 +649,12 @@ fn concat_kind_from_operand(ty: IRType) -> Option<ConcatKind> {
 /// ([`emit_string_const`] for literals, recursive [`lower_expr`] for
 /// interpolations, where the typecheck synthesizer wraps every
 /// interpolated expression in `.format()` so it is already
-/// `String`-typed by the time we see it). N parts then fold into
+/// `String`-typed by the time the lowerer sees it). N parts then fold into
 /// N-1 chained binary [`IRInstruction::Concat`] instructions, and
 /// empty parts produces a single empty-string const.
 ///
-/// Single-part fast paths preserve byte-for-byte the prior shape.
-/// A lone literal emits one `Const`, and a lone interpolation emits
-/// no `Concat` at all.
+/// Single-part strings take a fast path. A lone literal emits one
+/// `Const`, and a lone interpolation emits no `Concat` at all.
 fn lower_string(
     parts: &[StringPart],
     ctx: &mut FnLowerCtx<'_>,
@@ -686,7 +684,7 @@ fn lower_string(
         // `Concat` copies both operands, so the running accumulator and
         // any owned operand (e.g. a `Debug.format` result for `{x}`)
         // are dead after this step. Free them so interpolation
-        // intermediates don't leak.
+        // intermediates do not leak.
         drop_discarded_temp(ctx, block, acc);
         drop_discarded_temp(ctx, block, next_value);
         acc = dest;

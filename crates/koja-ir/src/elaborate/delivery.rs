@@ -11,8 +11,8 @@
 //! `IRInstruction`, so no backend gains a new emission shape.
 //!
 //! [`DeliveryKind`] names the payload. [`super::io_ready`] and
-//! [`super::exit_signal`] each supply the one kind-specific step: how
-//! the bare payload becomes `M` (see [`Injection`]).
+//! [`super::exit_signal`] each supply the one kind-specific step,
+//! which is how the bare payload becomes `M` (see [`Injection`]).
 
 use crate::enum_decl::{EnumPayloadInit, IRVariantTag};
 use crate::function::{
@@ -28,8 +28,9 @@ use super::{exit_signal, find_enum, io_ready};
 const OPTION_NONE_VARIANT: &str = "None";
 
 /// A located, fully-resolved synthesis request. Gathered under a shared
-/// borrow (decls live in the same package set we later mutate), then
-/// applied, so every field is owned, with no borrow into `packages`.
+/// borrow (decls live in the same package set the pass later mutates),
+/// then applied, so every field is owned, with no borrow into
+/// `packages`.
 struct ArmPlan {
     block_index: usize,
     function: IRSymbol,

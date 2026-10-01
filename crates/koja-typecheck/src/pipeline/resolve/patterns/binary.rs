@@ -404,7 +404,7 @@ fn check_literal_overflow(
 
 /// `signed` / `unsigned` / `big` / `little` modifiers require a
 /// `::N` size or a primitive type annotation. Bare segments
-/// don't carry enough shape for the modifier to mean anything.
+/// do not carry enough shape for the modifier to mean anything.
 /// V1 has the same rule.
 fn check_orphan_modifiers(segment: &BinarySegment, diagnostics: &mut Vec<Diagnostic>) {
     if segment.signedness.is_some() && segment.size.is_none() && segment.type_ann.is_none() {
@@ -433,7 +433,7 @@ fn is_binary_or_bits_annotation(ann: &TypeExpr) -> bool {
 
 /// Recover the byte length of a string-literal segment (no
 /// interpolation). Returns `None` for non-string and interpolated
-/// strings, since interpolation in binary patterns isn't supported.
+/// strings, since interpolation in binary patterns is not supported.
 fn string_segment_byte_length(segment: &BinarySegment) -> Option<u64> {
     let ExprKind::String { parts, .. } = &segment.value.kind else {
         return None;

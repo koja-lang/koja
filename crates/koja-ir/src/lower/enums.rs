@@ -2,8 +2,8 @@
 //! Mirrors [`super::structs`]: one helper per AST shape.
 //!
 //! Decl lowering pulls the canonical variant roster off the
-//! typecheck registry's [`GlobalKind::Enum`] definition so we
-//! never re-resolve a `TypeExpr` here. Construction does the same:
+//! typecheck registry's [`GlobalKind::Enum`] definition so lowering
+//! never re-resolves a `TypeExpr` here. Construction does the same:
 //! typecheck has already validated names and types, so IR's job is
 //! purely "stamp positional indices onto the variant tag and the
 //! resolved per-payload-field [`IRType`] / [`ValueId`] onto the
@@ -230,10 +230,10 @@ fn lower_tuple_variant(
     let mut values = Vec::with_capacity(exprs.len());
     for expr in exprs {
         let (value, next) = lower_expr(expr, ctx, current)?;
-        // Value semantics: an enum payload-store acquires an independent
-        // value, so a borrowed heap-leaf source is cloned (rc-bumped) in.
-        // The variant then owns a reference outliving the source local's
-        // scope-exit drop.
+        // Under value semantics, an enum payload-store acquires an
+        // independent value, so a borrowed heap-leaf source is cloned
+        // (rc-bumped) in. The variant then owns a reference outliving
+        // the source local's scope-exit drop.
         let payload_ty = ctx.type_of(value);
         let owned = materialize_owned(ctx, current, value, &payload_ty);
         values.push(owned);

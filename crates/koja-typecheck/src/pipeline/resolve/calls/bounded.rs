@@ -142,8 +142,6 @@ pub(super) fn resolve_bounded_method_call(
     // Substitute Self in the return type with the receiver's
     // type-param (e.g. `Equality.equals? -> Bool` is a no-op, but
     // `Container.first -> Self` would substitute to `T`).
-    // Generic protocols (slice 2.7+) will additionally substitute
-    // user-declared params against the receiver's type-args.
     substitute(&protocol_method.return_type, &protocol_subst)
 }
 

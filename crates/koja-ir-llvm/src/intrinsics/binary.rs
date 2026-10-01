@@ -135,8 +135,9 @@ pub(super) fn emit_bits<'ctx>(
 
 /// `Binary.to_bits(self) -> Bits` is a zero-cost reinterpret: `Binary`
 /// and `Bits` share the identical `[rc][bit_length][bytes]` block, so
-/// we rc-acquire the immutable block and hand back the same payload
-/// pointer as an owned `Bits`. The matching `Drop` rc-decrements.
+/// the intrinsic rc-acquires the immutable block and hands back the
+/// same payload pointer as an owned `Bits`. The matching `Drop`
+/// rc-decrements.
 fn emit_to_bits<'ctx>(
     ctx: &EmitContext<'ctx>,
     function: &IRFunction,
