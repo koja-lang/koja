@@ -18,6 +18,7 @@ use koja_graph::Graph;
 use koja_typecheck::{GlobalKind, GlobalRegistry};
 
 use crate::constant::IRConstantValue;
+use crate::declarations::Declarations;
 use crate::function::{IRFunction, IRInstruction, IRSymbol, IRTerminator};
 use crate::package::IRPackage;
 
@@ -51,7 +52,7 @@ pub(crate) fn built_constant_order(
     packages: &[IRPackage],
     span_of: impl Fn(&IRSymbol) -> Span,
 ) -> Result<Vec<IRSymbol>, Vec<Diagnostic>> {
-    let dependencies = Dependencies::new(&InitGraph::new(packages));
+    let dependencies = Dependencies::new(&InitGraph::new(&Declarations::new(packages)));
     let order = dependencies.graph.toposort();
     if order.stuck.is_empty() {
         return Ok(order.ready.into_iter().cloned().collect());
@@ -73,10 +74,9 @@ pub(crate) struct InitGraph<'a> {
 }
 
 impl<'a> InitGraph<'a> {
-    pub(crate) fn new(packages: &'a [IRPackage]) -> Self {
-        let inits = packages
-            .iter()
-            .flat_map(|package| package.constants.iter())
+    pub(crate) fn new(declarations: &Declarations<'a>) -> Self {
+        let inits = declarations
+            .constants()
             .filter_map(|(symbol, value)| match value {
                 IRConstantValue::Built { init, .. } => Some((symbol, init)),
                 _ => None,
@@ -87,10 +87,7 @@ impl<'a> InitGraph<'a> {
             inits,
             loads: BTreeMap::new(),
         };
-        for function in packages
-            .iter()
-            .flat_map(|package| package.functions.values())
-        {
+        for function in declarations.functions() {
             graph.index_function(function);
         }
         graph

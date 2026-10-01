@@ -18,17 +18,17 @@ use super::function::{
     collect_block_ids, collect_block_params, seal_block, seal_package, seal_ssa,
 };
 use super::structs::{package_instructions, script_body_instructions, seal_struct_ops};
-use super::types::{TypeEnvironment, seal_package_types, seal_script_body_types};
+use super::types::{seal_package_types, seal_script_body_types};
 use super::{require_supported_type, seal_panic};
 
 /// Assert every sealed-IR invariant over a script. The packages get
 /// the same checks as a program, and the implicit body gets the
 /// per-function checks with no params.
 pub(crate) fn seal_script(script: &IRScript) {
-    let type_environment = TypeEnvironment::new(&script.packages);
+    let declarations = script.declarations();
     for pkg in &script.packages {
         seal_package(pkg);
-        seal_package_types(pkg, &type_environment);
+        seal_package_types(pkg, &declarations);
     }
     let owner = "script body";
     if script.blocks.is_empty() {
@@ -44,15 +44,13 @@ pub(crate) fn seal_script(script: &IRScript) {
     // walk starts with an empty defined set.
     let parameter_value_ids: HashSet<ValueId> = HashSet::new();
     seal_ssa(&script.blocks, owner, &parameter_value_ids);
-    seal_script_body_types(&script.blocks, &script.return_type, &type_environment);
+    seal_script_body_types(&script.blocks, &script.return_type, &declarations);
     seal_script_calls(script);
     seal_script_struct_ops(script);
     seal_script_enum_ops(script);
     seal_script_closure_ops(script);
     seal_script_loadconst_pool(script);
-    seal_built_constants(&script.packages, &script.built_constant_order, &|mangled| {
-        script.function(mangled)
-    });
+    seal_built_constants(&declarations, &script.built_constant_order);
     seal_script_no_loadcapture(script);
 }
 

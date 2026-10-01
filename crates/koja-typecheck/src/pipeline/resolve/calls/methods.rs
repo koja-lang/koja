@@ -326,14 +326,7 @@ pub(super) fn infer_method_call_type_args(
         expected,
     } = target;
 
-    let mut subst = Substitution::dual(
-        receiver.id,
-        receiver.type_params.len(),
-        method.id,
-        method.type_params.len(),
-    );
-    seed_receiver_subst(&mut subst, receiver.id, receiver_type, registry);
-    seed_impl_args_subst(&mut subst, receiver.id, &sig.impl_args, registry);
+    let mut subst = seed_method_subst(receiver, method, receiver_type, &sig.impl_args, registry);
     // Mirror `infer_call_type_args`'s speculative pre-seed: lets
     // binding annotations pin sized-numeric type params before
     // arg-driven default-literal types lock in.
@@ -410,10 +403,32 @@ fn try_pre_seeded_method_subst(
     (!had_conflict).then_some(scratch)
 }
 
+/// The dual-scope substitution every method call starts from. The
+/// receiver scope is pre-filled from the receiver value's type args
+/// and from the method's `impl_args` pinning. The method scope
+/// starts empty.
+pub(super) fn seed_method_subst(
+    receiver: Callee<'_>,
+    method: Callee<'_>,
+    receiver_type: &ResolvedType,
+    impl_args: &[ResolvedType],
+    registry: &GlobalRegistry,
+) -> Substitution {
+    let mut subst = Substitution::dual(
+        receiver.id,
+        receiver.type_params.len(),
+        method.id,
+        method.type_params.len(),
+    );
+    seed_receiver_subst(&mut subst, receiver.id, receiver_type, registry);
+    seed_impl_args_subst(&mut subst, receiver.id, impl_args, registry);
+    subst
+}
+
 /// Pre-fill the receiver scope with the receiver value's resolved
 /// type-args. Lets `Pair<Int, String>.first()` pin `T = Int` from the
 /// receiver alone, before any arg unification.
-pub(super) fn seed_receiver_subst(
+fn seed_receiver_subst(
     subst: &mut Substitution,
     receiver_id: GlobalRegistryId,
     receiver_type: &ResolvedType,
@@ -431,7 +446,7 @@ pub(super) fn seed_receiver_subst(
 /// `CPtr.borrow(bytes: Binary)`) still infer cleanly. Conflicts with
 /// an already-seeded receiver slot are ignored here because the
 /// extend-domain check downstream owns that diagnostic.
-pub(super) fn seed_impl_args_subst(
+fn seed_impl_args_subst(
     subst: &mut Substitution,
     receiver_id: GlobalRegistryId,
     impl_args: &[ResolvedType],

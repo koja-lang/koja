@@ -9,8 +9,8 @@ use std::collections::BTreeMap;
 
 use crate::built_order::InitGraph;
 use crate::constant::IRConstantValue;
-use crate::function::{FunctionKind, IRFunction, IRInstruction, IRSymbol};
-use crate::package::IRPackage;
+use crate::declarations::Declarations;
+use crate::function::{FunctionKind, IRInstruction, IRSymbol};
 
 use super::seal_panic;
 
@@ -34,46 +34,39 @@ pub(super) fn seal_loadconst_pool<'inst, 'value>(
     }
 }
 
-/// Assert the `Built` invariants over `packages` and the
-/// `built_constant_order` the lowering entry stored next to them.
-/// `lookup` resolves a mangled function name the way the owning
-/// program or script does.
-pub(super) fn seal_built_constants<'a>(
-    packages: &'a [IRPackage],
-    order: &[IRSymbol],
-    lookup: &dyn Fn(&str) -> Option<&'a IRFunction>,
-) {
+/// Assert the `Built` invariants over every constant in
+/// `declarations` and the `built_constant_order` the lowering entry
+/// stored next to them.
+pub(super) fn seal_built_constants(declarations: &Declarations<'_>, order: &[IRSymbol]) {
     let mut built: BTreeMap<&IRSymbol, &IRSymbol> = BTreeMap::new();
-    for pkg in packages {
-        for (symbol, value) in &pkg.constants {
-            let IRConstantValue::Built { init, ty } = value else {
-                continue;
-            };
-            let Some(function) = lookup(init.mangled()) else {
-                seal_panic(&format!(
-                    "built constant `{symbol}` names init `{init}`, which no package registers",
-                ));
-            };
-            if function.kind != FunctionKind::Regular {
-                seal_panic(&format!(
-                    "built constant `{symbol}` init `{init}` is not a regular function (got `{:?}`)",
-                    function.kind,
-                ));
-            }
-            if !function.params.is_empty() {
-                seal_panic(&format!(
-                    "built constant `{symbol}` init `{init}` takes {} parameter(s), expected none",
-                    function.params.len(),
-                ));
-            }
-            if function.return_type != *ty {
-                seal_panic(&format!(
-                    "built constant `{symbol}` has type `{ty:?}`, but init `{init}` returns `{:?}`",
-                    function.return_type,
-                ));
-            }
-            built.insert(symbol, init);
+    for (symbol, value) in declarations.constants() {
+        let IRConstantValue::Built { init, ty } = value else {
+            continue;
+        };
+        let Some(function) = declarations.function(init) else {
+            seal_panic(&format!(
+                "built constant `{symbol}` names init `{init}`, which no package registers",
+            ));
+        };
+        if function.kind != FunctionKind::Regular {
+            seal_panic(&format!(
+                "built constant `{symbol}` init `{init}` is not a regular function (got `{:?}`)",
+                function.kind,
+            ));
         }
+        if !function.params.is_empty() {
+            seal_panic(&format!(
+                "built constant `{symbol}` init `{init}` takes {} parameter(s), expected none",
+                function.params.len(),
+            ));
+        }
+        if function.return_type != *ty {
+            seal_panic(&format!(
+                "built constant `{symbol}` has type `{ty:?}`, but init `{init}` returns `{:?}`",
+                function.return_type,
+            ));
+        }
+        built.insert(symbol, init);
     }
 
     let mut position: BTreeMap<&IRSymbol, usize> = BTreeMap::new();
@@ -89,7 +82,7 @@ pub(super) fn seal_built_constants<'a>(
             ));
         }
     }
-    let graph = InitGraph::new(packages);
+    let graph = InitGraph::new(declarations);
     for (symbol, init) in &built {
         let Some(own) = position.get(symbol) else {
             seal_panic(&format!(

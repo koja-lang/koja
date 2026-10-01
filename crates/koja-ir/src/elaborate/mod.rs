@@ -80,6 +80,7 @@ use std::collections::BTreeSet;
 
 use delivery::DeliveryKind;
 
+use crate::declarations::find_in;
 use crate::enum_decl::{IREnumDecl, IREnumVariant, IRVariantPayload};
 use crate::function::{
     FunctionKind, IRBasicBlock, IRFunction, IRFunctionParam, IRInstruction, IRSymbol,
@@ -417,21 +418,15 @@ fn constituent_types(ty: &IRType, packages: &[IRPackage]) -> Vec<IRType> {
 }
 
 fn find_struct<'a>(packages: &'a [IRPackage], symbol: &IRSymbol) -> Option<&'a IRStructDecl> {
-    packages
-        .iter()
-        .find_map(|pkg| pkg.structs.get(symbol.mangled()))
+    find_in(packages, |pkg| &pkg.structs, symbol.mangled())
 }
 
 fn find_enum<'a>(packages: &'a [IRPackage], symbol: &IRSymbol) -> Option<&'a IREnumDecl> {
-    packages
-        .iter()
-        .find_map(|pkg| pkg.enums.get(symbol.mangled()))
+    find_in(packages, |pkg| &pkg.enums, symbol.mangled())
 }
 
 fn glue_registered(packages: &[IRPackage], symbol: &IRSymbol) -> bool {
-    packages
-        .iter()
-        .any(|pkg| pkg.functions.contains_key(symbol.mangled()))
+    find_in(packages, |pkg| &pkg.functions, symbol.mangled()).is_some()
 }
 
 /// Register the clone + drop glue shells for `ty` (idempotent, as

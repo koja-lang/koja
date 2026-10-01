@@ -17,6 +17,7 @@ mod built_order;
 mod cfg;
 mod constant;
 mod cycle;
+mod declarations;
 mod dominators;
 mod elaborate;
 mod enum_decl;

@@ -15,7 +15,7 @@ use super::enums::seal_enum_ops;
 use super::function::seal_package;
 use super::seal_panic;
 use super::structs::{package_instructions, seal_struct_ops};
-use super::types::{TypeEnvironment, seal_package_types};
+use super::types::seal_package_types;
 
 /// Assert every sealed-IR invariant over a merged program. Per-package
 /// checks run first, then the cross-package ones that need the whole
@@ -33,21 +33,17 @@ pub(crate) fn seal_program(program: &IRProgram) {
             program.entry_point, entry.kind,
         ));
     }
-    let type_environment = TypeEnvironment::new(&program.packages);
+    let declarations = program.declarations();
     for pkg in &program.packages {
         seal_package(pkg);
-        seal_package_types(pkg, &type_environment);
+        seal_package_types(pkg, &declarations);
     }
     seal_program_calls(program);
     seal_program_struct_ops(program);
     seal_program_enum_ops(program);
     seal_program_closure_ops(program);
     seal_program_loadconst_pool(program);
-    seal_built_constants(
-        &program.packages,
-        &program.built_constant_order,
-        &|mangled| program.function(mangled),
-    );
+    seal_built_constants(&declarations, &program.built_constant_order);
     seal_program_entry_wrappers(program);
 }
 

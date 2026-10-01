@@ -35,7 +35,7 @@ use bounded::{BoundedCall, resolve_bounded_method_call};
 use methods::{
     MethodInferenceOutputs, MethodInferenceTarget, MethodReceiver, classify_receiver,
     diagnose_unmet_conformance, dispatch_mismatch_message, function_signature,
-    infer_method_call_type_args, method_lookup_message, seed_impl_args_subst, seed_receiver_subst,
+    infer_method_call_type_args, method_lookup_message, seed_method_subst,
 };
 use structural::{StructuralCall, resolve_structural_method_call};
 
@@ -200,26 +200,13 @@ fn resolve_function_call(
             label: &label,
             type_params: &type_params,
         };
-        let mut hint_subst = Substitution::single(callee.id, callee.type_params.len());
-        if let Some(hint) = site.expected {
-            fill_from_expected(&sig.return_type, hint, &mut hint_subst, resolver.registry);
-        }
-        let hinted_params = substitute_params(&sig.params, &hint_subst);
-        resolve_non_closure_args(args, Some(&hinted_params), resolver, diagnostics);
-        let mut partial_subst = Substitution::single(callee.id, callee.type_params.len());
-        let partial_pairs = sig
-            .params
-            .iter()
-            .zip(args.iter())
-            .map(|(p, a)| (&p.ty, &a.value.resolution, ()));
-        unify_pairs(
-            partial_pairs,
-            &mut partial_subst,
-            resolver.registry,
-            |_, _| {},
-        );
-        let partially_substituted_params = substitute_params(&sig.params, &partial_subst);
-        resolve_closure_args(args, &partially_substituted_params, resolver, diagnostics);
+        let target = ArgTarget {
+            expected: site.expected,
+            params: &sig.params,
+            return_type: &sig.return_type,
+            subst: Substitution::single(callee.id, callee.type_params.len()),
+        };
+        resolve_args_in_two_passes(args, &target, resolver, diagnostics);
         let (substituted_params, substituted_return) = infer_call_type_args(
             callee,
             &sig,
@@ -599,70 +586,19 @@ pub(super) fn resolve_method_call(
         label: &method_label,
         type_params: &method_type_params,
     };
-    let mut hint_subst = Substitution::dual(
-        receiver_callee.id,
-        receiver_callee.type_params.len(),
-        method_callee.id,
-        method_callee.type_params.len(),
-    );
-    seed_receiver_subst(
-        &mut hint_subst,
-        receiver_callee.id,
-        &receiver.resolution,
-        resolver.registry,
-    );
-    seed_impl_args_subst(
-        &mut hint_subst,
-        receiver_callee.id,
-        &sig.impl_args,
-        resolver.registry,
-    );
-    if let Some(hint) = expected {
-        fill_from_expected(&sig.return_type, hint, &mut hint_subst, resolver.registry);
-    }
-    let hinted_params = substitute_params(&sig.params, &hint_subst);
-    resolve_non_closure_args(
-        args,
-        Some(method_receiver.explicit_params(&hinted_params)),
-        resolver,
-        diagnostics,
-    );
-    let mut partial_subst = Substitution::dual(
-        receiver_callee.id,
-        receiver_callee.type_params.len(),
-        method_callee.id,
-        method_callee.type_params.len(),
-    );
-    seed_receiver_subst(
-        &mut partial_subst,
-        receiver_callee.id,
-        &receiver.resolution,
-        resolver.registry,
-    );
-    seed_impl_args_subst(
-        &mut partial_subst,
-        receiver_callee.id,
-        &sig.impl_args,
-        resolver.registry,
-    );
-    let explicit = method_receiver.explicit_params(&sig.params);
-    let partial_pairs = explicit
-        .iter()
-        .zip(args.iter())
-        .map(|(p, a)| (&p.ty, &a.value.resolution, ()));
-    unify_pairs(
-        partial_pairs,
-        &mut partial_subst,
-        resolver.registry,
-        |_, _| {},
-    );
-    let partially_substituted_params = substitute_params(&sig.params, &partial_subst);
-    resolve_closure_args(
-        args,
-        method_receiver.explicit_params(&partially_substituted_params),
-        resolver,
-        diagnostics,
-    );
+    let arg_target = ArgTarget {
+        expected,
+        params: method_receiver.explicit_params(&sig.params),
+        return_type: &sig.return_type,
+        subst: seed_method_subst(
+            receiver_callee,
+            method_callee,
+            &receiver.resolution,
+            &sig.impl_args,
+            resolver.registry,
+        ),
+    };
+    resolve_args_in_two_passes(args, &arg_target, resolver, diagnostics);
 
     let target = MethodInferenceTarget {
         receiver: receiver_callee,
@@ -1194,6 +1130,53 @@ fn is_closure_expr(kind: &ExprKind) -> bool {
         kind,
         ExprKind::Closure { .. } | ExprKind::ShortClosure { .. }
     )
+}
+
+/// The callee's open signature that the args are resolved toward.
+/// `subst` is the substitution each pass clones, `params` is the
+/// slice the user wrote against (`sig.params` for a function, the
+/// same minus `self` for an instance method), and `expected` is the
+/// surrounding expected type that may pin type params through
+/// `return_type` before any arg is looked at.
+struct ArgTarget<'a> {
+    expected: Option<&'a ResolvedType>,
+    params: &'a [ResolvedParam],
+    return_type: &'a ResolvedType,
+    subst: Substitution,
+}
+
+/// Resolve `args` in two passes so closure args see the best known
+/// param types. Pass one resolves the non-closure args against
+/// params substituted from the expected-type hint. Pass two unifies
+/// those results into a fresh clone of the target's substitution and
+/// resolves the closure args against the partially substituted
+/// params.
+fn resolve_args_in_two_passes(
+    args: &mut [Arg],
+    target: &ArgTarget<'_>,
+    resolver: &mut Resolver<'_>,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    let mut hint_subst = target.subst.clone();
+    if let Some(hint) = target.expected {
+        fill_from_expected(target.return_type, hint, &mut hint_subst, resolver.registry);
+    }
+    let hinted_params = substitute_params(target.params, &hint_subst);
+    resolve_non_closure_args(args, Some(&hinted_params), resolver, diagnostics);
+    let mut partial_subst = target.subst.clone();
+    let partial_pairs = target
+        .params
+        .iter()
+        .zip(args.iter())
+        .map(|(p, a)| (&p.ty, &a.value.resolution, ()));
+    unify_pairs(
+        partial_pairs,
+        &mut partial_subst,
+        resolver.registry,
+        |_, _| {},
+    );
+    let partially_substituted_params = substitute_params(target.params, &partial_subst);
+    resolve_closure_args(args, &partially_substituted_params, resolver, diagnostics);
 }
 
 /// Substitute `subst` into every param's declared type. Used to
