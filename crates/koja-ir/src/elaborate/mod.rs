@@ -78,6 +78,8 @@ mod synthesis;
 
 use std::collections::BTreeSet;
 
+use delivery::DeliveryKind;
+
 use crate::enum_decl::{IREnumDecl, IREnumVariant, IRVariantPayload};
 use crate::function::{
     FunctionKind, IRBasicBlock, IRFunction, IRFunctionParam, IRInstruction, IRSymbol,
@@ -89,30 +91,19 @@ use crate::package::{IRPackage, insert_package_function};
 use crate::struct_decl::IRStructDecl;
 use crate::types::IRType;
 
-/// Run the elaborate sub-pass over a program's package set. In order:
-/// rewrite boxed-slot overwrites ([`overwrite`]), fuse dead-receiver
+/// Run the elaborate sub-pass over a package set. It first rewrites
+/// boxed-slot overwrites ([`overwrite`]), then fuses dead-receiver
 /// mutator calls and byte concats into their consuming forms
 /// ([`consume`], before discovery so deleted drops seed no glue),
-/// discover the heap-managed composites that need glue, synthesize
-/// and register it, rewrite every composite acquisition and release
-/// into a glue `Call`, then splice the `IOReady` ([`io_ready`]) and
-/// `ExitSignal` ([`exit_signal`]) delivery arms into process loops.
-pub(crate) fn elaborate(packages: &mut [IRPackage]) {
-    overwrite::rewrite_indirect_overwrites(packages, &mut []);
-    consume::fuse_consuming_sites(packages, &mut []);
-    let needed = discover_glue_types(packages, &[]);
-    let deep_needed = discover_deep_copy_types(packages, &[]);
-    register_all(packages, &needed, &deep_needed);
-    rewrite_all(packages, &needed, &deep_needed);
-    io_ready::deliver_io_ready(packages);
-    exit_signal::deliver_exit_signal(packages);
-}
-
-/// Run the elaborate sub-pass for a script. Same steps as
-/// [`elaborate`], but discovery also scans the inline script `body`
-/// (which carries its own `Clone` / `Drop` sites outside any package
-/// function) and the rewrite covers it too.
-pub(crate) fn elaborate_script(packages: &mut [IRPackage], body: &mut [IRBasicBlock]) {
+/// discovers the heap-managed composites that need glue, synthesizes
+/// and registers it, rewrites every composite acquisition and release
+/// into a glue `Call`, and last splices the `IOReady` and `ExitSignal`
+/// delivery arms into process loops ([`delivery`]).
+///
+/// `body` is a script's inline top-level body, which carries its own
+/// `Clone` / `Drop` sites outside any package function. Discovery
+/// scans it and the rewrite covers it. Programs pass an empty `body`.
+pub(crate) fn elaborate(packages: &mut [IRPackage], body: &mut [IRBasicBlock]) {
     overwrite::rewrite_indirect_overwrites(packages, body);
     consume::fuse_consuming_sites(packages, body);
     let needed = discover_glue_types(packages, body);
@@ -120,8 +111,8 @@ pub(crate) fn elaborate_script(packages: &mut [IRPackage], body: &mut [IRBasicBl
     register_all(packages, &needed, &deep_needed);
     rewrite_all(packages, &needed, &deep_needed);
     rewrite::rewrite_blocks_standalone(body, &needed, &deep_needed);
-    io_ready::deliver_io_ready(packages);
-    exit_signal::deliver_exit_signal(packages);
+    delivery::deliver(packages, DeliveryKind::IoReady);
+    delivery::deliver(packages, DeliveryKind::ExitSignal);
 }
 
 fn register_all(
@@ -261,17 +252,6 @@ fn is_inline_managed(ty: &IRType) -> bool {
     is_leaf(ty) || matches!(ty, IRType::Function { .. } | IRType::Indirect(_))
 }
 
-/// Peel a transparent [`IRType::Indirect`] box to its inner type. A
-/// recursive field is stored boxed but read / written as `inner` (the
-/// projection unboxes, the construction re-boxes), so every site that
-/// reasons about a field's *value* type works on `inner`.
-pub(super) fn unbox(ty: &IRType) -> &IRType {
-    match ty {
-        IRType::Indirect(inner) => inner,
-        other => other,
-    }
-}
-
 /// An aggregate whose glue body [`synthesis`] builds in IR (as opposed to
 /// the collection family, whose body the backend synthesizes from the
 /// operand type at emit time).
@@ -296,7 +276,7 @@ fn discover_glue_types(packages: &[IRPackage], body: &[IRBasicBlock]) -> BTreeSe
             // A boxed operand (`Clone` / `DropValue` on `Indirect(T)`)
             // is handled inline, but its rc-zero release calls the
             // inner type's drop glue, so seed the unboxed inner.
-            if let Some(ty) = clone_or_drop_type(instruction).map(unbox)
+            if let Some(ty) = clone_or_drop_type(instruction).map(IRType::unboxed)
                 && needs_glue(ty, packages)
             {
                 work.push(ty.clone());
@@ -345,7 +325,7 @@ fn discover_deep_copy_types(packages: &[IRPackage], body: &[IRBasicBlock]) -> BT
     for function in packages.iter().flat_map(|pkg| pkg.functions.values()) {
         if let FunctionKind::CopyClosureGlue { env_layout } = &function.kind {
             for capture in env_layout {
-                let capture = unbox(capture);
+                let capture = capture.unboxed();
                 if needs_glue(capture, packages) {
                     work.push(capture.clone());
                 }
@@ -370,7 +350,7 @@ fn close_over_constituents(mut work: Vec<IRType>, packages: &[IRPackage]) -> BTr
             // rc-zero release and deep copy recurse into the inner
             // type's glue, so close over `inner` with no standalone
             // `Indirect` glue.
-            let constituent = unbox(&constituent).clone();
+            let constituent = constituent.unboxed().clone();
             if needs_glue(&constituent, packages) {
                 work.push(constituent);
             }
@@ -650,7 +630,7 @@ mod tests {
     }
 
     fn elaborate_and_seal(program: &mut IRProgram) {
-        elaborate(&mut program.packages);
+        elaborate(&mut program.packages, &mut []);
         seal_program(program);
     }
 
@@ -712,6 +692,7 @@ mod tests {
         pkg.functions.insert(seed.symbol.clone(), seed);
         let entry_point = install_entry_scaffold(&mut pkg);
         let mut program = IRProgram {
+            built_constant_order: Vec::new(),
             entry_point,
             link_libraries: Vec::new(),
             packages: vec![pkg],
@@ -788,6 +769,7 @@ mod tests {
         pkg.functions.insert(seed.symbol.clone(), seed);
         let entry_point = install_entry_scaffold(&mut pkg);
         let mut program = IRProgram {
+            built_constant_order: Vec::new(),
             entry_point,
             link_libraries: Vec::new(),
             packages: vec![pkg],
@@ -871,6 +853,7 @@ mod tests {
         pkg.functions.insert(seed.symbol.clone(), seed);
         let entry_point = install_entry_scaffold(&mut pkg);
         let mut program = IRProgram {
+            built_constant_order: Vec::new(),
             entry_point,
             link_libraries: Vec::new(),
             packages: vec![pkg, empty_package("Global")],
@@ -981,6 +964,7 @@ mod tests {
         pkg.functions.insert(seed.symbol.clone(), seed);
         let entry_point = install_entry_scaffold(&mut pkg);
         let mut program = IRProgram {
+            built_constant_order: Vec::new(),
             entry_point,
             link_libraries: Vec::new(),
             packages: vec![pkg],
@@ -1102,6 +1086,7 @@ mod tests {
         pkg.functions.insert(seed.symbol.clone(), seed);
         let entry_point = install_entry_scaffold(&mut pkg);
         let mut program = IRProgram {
+            built_constant_order: Vec::new(),
             entry_point,
             link_libraries: Vec::new(),
             packages: vec![pkg],

@@ -78,10 +78,7 @@ pub(crate) fn define_enum_payload_bodies<'ctx>(
 /// body, then register the variant layouts. Must run after every
 /// transitively referenced enum's outer body has been set (see
 /// [`super::enum_order`]).
-pub(crate) fn define_enum_completes_and_outer<'ctx>(
-    ctx: &EmitContext<'ctx>,
-    decl: &IREnumDecl,
-) -> Result<(), LlvmError> {
+pub(crate) fn define_enum_completes_and_outer<'ctx>(ctx: &EmitContext<'ctx>, decl: &IREnumDecl) {
     let mut variants = Vec::with_capacity(decl.variants.len());
     let mut max_complete_size: u64 = 0;
     let mut max_complete_align: u32 = 1;
@@ -99,7 +96,6 @@ pub(crate) fn define_enum_completes_and_outer<'ctx>(
         .register_enum_layout(decl.symbol.clone(), EnumLayout { variants });
     ctx.layouts
         .register_enum_variants(decl.symbol.clone(), decl.variants.clone());
-    Ok(())
 }
 
 fn define_variant_complete<'ctx>(

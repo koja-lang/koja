@@ -5,6 +5,7 @@ members = [
     "crates/koja-doc",
     "crates/koja-driver",
     "crates/koja-fmt",
+    "crates/koja-graph",
     "crates/koja-ir",
     "crates/koja-ir-eval",
     "crates/koja-ir-llvm",

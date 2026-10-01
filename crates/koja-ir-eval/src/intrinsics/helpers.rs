@@ -1,13 +1,130 @@
 //! Cross-intrinsic helpers: shared shapes that several `intrinsics/`
-//! handlers reach for. Lifted out to keep `option_value` /
-//! `result_value` / `size_of_primitive` from drifting across
-//! sibling modules.
+//! handlers reach for. Lifted out to keep the `arg_*` readers,
+//! `option_value` / `result_value`, and `size_of_primitive` from
+//! drifting across sibling modules.
+
+use std::cell::RefCell;
+use std::rc::Rc;
+use std::str;
 
 use koja_ir::{IREnumVariant, IRFunction, IRSymbol, IRType, IRVariantPayload};
 
 use crate::error::RuntimeError;
 use crate::interpreter::CallResolver;
-use crate::value::{EnumPayload, Value};
+use crate::value::{EnumPayload, MapEntries, SetEntries, Value};
+
+/// The `index`-th argument. A missing argument is a
+/// [`RuntimeError::TypeMismatch`] like every other shape violation
+/// at the intrinsic seam.
+pub(super) fn arg<'a>(
+    args: &'a [Value],
+    index: usize,
+    label: &str,
+) -> Result<&'a Value, RuntimeError> {
+    args.get(index).ok_or_else(|| RuntimeError::TypeMismatch {
+        detail: format!("{label} missing arg #{index} (got {} args)", args.len()),
+    })
+}
+
+/// Read the `index`-th argument as an `Int`.
+pub(super) fn arg_int(args: &[Value], index: usize, label: &str) -> Result<i64, RuntimeError> {
+    match arg(args, index, label)? {
+        Value::Int(value) => Ok(*value),
+        other => Err(arg_mismatch(label, index, "Int", other)),
+    }
+}
+
+/// Share the `index`-th argument's `List` storage.
+pub(super) fn arg_list(
+    args: &[Value],
+    index: usize,
+    label: &str,
+) -> Result<Rc<RefCell<Vec<Value>>>, RuntimeError> {
+    match arg(args, index, label)? {
+        Value::List(items) => Ok(items.clone()),
+        other => Err(arg_mismatch(label, index, "List", other)),
+    }
+}
+
+/// Share the `index`-th argument's `Map` storage.
+pub(super) fn arg_map(
+    args: &[Value],
+    index: usize,
+    label: &str,
+) -> Result<MapEntries, RuntimeError> {
+    match arg(args, index, label)? {
+        Value::Map(entries) => Ok(entries.clone()),
+        other => Err(arg_mismatch(label, index, "Map", other)),
+    }
+}
+
+/// The shape error for an argument of the wrong kind.
+fn arg_mismatch(label: &str, index: usize, expected: &str, other: &Value) -> RuntimeError {
+    RuntimeError::TypeMismatch {
+        detail: format!("{label} arg #{index} expected {expected}, got `{other}`"),
+    }
+}
+
+/// Read the `index`-th argument as a `Range { start, stop }` pair.
+/// Typecheck pins the `Range` shape (two `Int` fields in source
+/// order) before an intrinsic runs.
+pub(super) fn arg_range(
+    args: &[Value],
+    index: usize,
+    label: &str,
+) -> Result<(i64, i64), RuntimeError> {
+    let value = arg(args, index, label)?;
+    if let Value::Struct { fields, .. } = value
+        && let [Value::Int(start), Value::Int(stop)] = fields.as_slice()
+    {
+        return Ok((*start, *stop));
+    }
+    Err(arg_mismatch(label, index, "Range struct", value))
+}
+
+/// Share the `index`-th argument's `Set` storage.
+pub(super) fn arg_set(
+    args: &[Value],
+    index: usize,
+    label: &str,
+) -> Result<SetEntries, RuntimeError> {
+    match arg(args, index, label)? {
+        Value::Set(items) => Ok(items.clone()),
+        other => Err(arg_mismatch(label, index, "Set", other)),
+    }
+}
+
+/// Borrow the `index`-th argument's `String` bytes.
+pub(super) fn arg_string_bytes<'a>(
+    args: &'a [Value],
+    index: usize,
+    label: &str,
+) -> Result<&'a [u8], RuntimeError> {
+    match arg(args, index, label)? {
+        Value::String(bytes) => Ok(bytes.as_slice()),
+        other => Err(arg_mismatch(label, index, "String", other)),
+    }
+}
+
+/// Borrow the `index`-th argument as `&str`. Surfaces
+/// [`RuntimeError::Panicked`] when the payload is not valid UTF-8,
+/// since codepoint-walking methods (`length`, `get`, `slice`) need
+/// it. Byte-oriented methods read raw bytes through
+/// [`arg_string_bytes`] instead.
+pub(super) fn arg_string_utf8<'a>(
+    args: &'a [Value],
+    index: usize,
+    label: &str,
+) -> Result<&'a str, RuntimeError> {
+    let bytes = arg_string_bytes(args, index, label)?;
+    str::from_utf8(bytes).map_err(|err| RuntimeError::Panicked {
+        message: format!(
+            "{label} arg #{index}: String contents are not valid UTF-8 \
+             (invalid at byte {}): {err}",
+            err.valid_up_to(),
+        ),
+    })
+}
 
 /// Find `variant_name` on `symbol`'s decl. Every helper below resolves
 /// variant tags through here, by name, so no stdlib declaration order
@@ -151,9 +268,10 @@ pub(super) fn enum_return_symbol(
 /// Byte size of a primitive [`IRType`]. Used by `CPtr.alloc`,
 /// `CPtr.offset`, `CPtr.read`, `CPtr.write` to compute element-
 /// width offsets. Returns [`RuntimeError::Unsupported`] for non-
-/// primitive element types. Eval can't allocate / step over a
-/// struct or list without a full size-and-align computation, and
-/// the LLVM backend covers those cases on `--backend=llvm`.
+/// primitive element types, a feature gap. Eval cannot allocate or
+/// step over a struct or list without a full size-and-align
+/// computation, and the LLVM backend covers those cases on
+/// `--backend=llvm`.
 pub(super) fn size_of_primitive(ty: &IRType, label: &str) -> Result<usize, RuntimeError> {
     match ty {
         IRType::Bool | IRType::Int8 | IRType::UInt8 => Ok(1),

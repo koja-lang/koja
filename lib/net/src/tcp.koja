@@ -252,7 +252,7 @@ to listen on a specific address. Each call to `accept` returns a
 """
 struct TCPListener
   socket: Socket
-  options: TCPListener.Options
+  options: TCPListener.Options = TCPListener.Options{}
 
   @doc """
   Binds to the given port on all interfaces (0.0.0.0), sets

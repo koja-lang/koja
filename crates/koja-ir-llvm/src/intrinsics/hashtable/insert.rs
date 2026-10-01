@@ -6,18 +6,18 @@
 
 use inkwell::IntPredicate;
 use inkwell::basic_block::BasicBlock;
-use inkwell::values::{BasicValueEnum, FunctionValue, IntValue, PointerValue};
+use inkwell::values::{FunctionValue, IntValue, PointerValue};
 use koja_ir::IRFunction;
 
 use crate::ctx::EmitContext;
 use crate::error::{IceExt, LlvmError};
 use crate::intrinsics::element::{acquire_value, release_in_slot};
+use crate::intrinsics::util::{build_table_struct, nth_param, ret};
 
 use super::resize::emit_resize_if_needed;
 use super::util::{
-    KeyHashOps, TableSnapshot, advance_slot, build_table_struct, call_eq, call_hash,
-    clone_table_buffers, entry_pointer, extract_table_fields, nth_param, resolve_key_hash_ops,
-    ret_struct, value_slot,
+    ProbeInputs, TableSnapshot, advance_slot, call_eq, call_hash, clone_table_buffers,
+    entry_pointer, extract_table_fields, resolve_key_hash_ops, value_slot,
 };
 use super::{HashtableLayout, STATE_EMPTY, STATE_OCCUPIED};
 
@@ -31,25 +31,24 @@ pub(crate) fn emit_map_put<'ctx>(
     let i8_ty = ctx.context.i8_type();
     let i64_ty = ctx.context.i64_type();
     let table = writable_table(ctx, function, llvm_function, layout, consume_receiver)?;
-    let key_val = nth_param(function, llvm_function, 1, "key")?;
-    let value_val = nth_param(function, llvm_function, 2, "value")?;
-    let value_ty = layout.value_ty.ok_or_else(|| {
-        LlvmError::Codegen(format!(
-            "Map.put missing value type for `{}`",
-            function.symbol
-        ))
-    })?;
+    let key_val = nth_param(function, llvm_function, 1, "key");
+    let value_val = nth_param(function, llvm_function, 2, "value");
+    let value_ty = layout
+        .value_ty
+        .unwrap_or_else(|| panic!("Map.put missing value type for `{}`", function.symbol));
     let key_ops = resolve_key_hash_ops(ctx, function, layout.key_ty)?;
 
     let post = emit_resize_if_needed(ctx, llvm_function, layout, &table, &key_ops)?;
     let probe = emit_insert_probe(
         ctx,
-        function,
-        llvm_function,
-        layout,
-        &post,
-        key_val,
-        &key_ops,
+        ProbeInputs {
+            function,
+            key_ops: &key_ops,
+            key_val,
+            layout,
+            llvm_function,
+            table: &post,
+        },
     )?;
 
     // Update path: dup key found, overwrite the value slot. Release
@@ -67,7 +66,7 @@ pub(crate) fn emit_map_put<'ctx>(
         post.length,
         post.capacity,
     )?;
-    ret_struct(ctx, updated)?;
+    ret(ctx, updated.into())?;
 
     // Insert path: empty (or tombstone) slot, write key+value + state.
     // Both payloads are acquired so the table owns independent
@@ -96,7 +95,7 @@ pub(crate) fn emit_map_put<'ctx>(
         new_len,
         post.capacity,
     )?;
-    ret_struct(ctx, inserted)
+    ret(ctx, inserted.into())
 }
 
 pub(crate) fn emit_set_insert<'ctx>(
@@ -109,18 +108,20 @@ pub(crate) fn emit_set_insert<'ctx>(
     let i8_ty = ctx.context.i8_type();
     let i64_ty = ctx.context.i64_type();
     let table = writable_table(ctx, function, llvm_function, layout, consume_receiver)?;
-    let item_val = nth_param(function, llvm_function, 1, "item")?;
+    let item_val = nth_param(function, llvm_function, 1, "item");
     let key_ops = resolve_key_hash_ops(ctx, function, layout.key_ty)?;
 
     let post = emit_resize_if_needed(ctx, llvm_function, layout, &table, &key_ops)?;
     let probe = emit_insert_probe(
         ctx,
-        function,
-        llvm_function,
-        layout,
-        &post,
-        item_val,
-        &key_ops,
+        ProbeInputs {
+            function,
+            key_ops: &key_ops,
+            key_val: item_val,
+            layout,
+            llvm_function,
+            table: &post,
+        },
     )?;
 
     // Duplicate-key path: Set returns self unchanged (no update).
@@ -132,7 +133,7 @@ pub(crate) fn emit_set_insert<'ctx>(
         post.length,
         post.capacity,
     )?;
-    ret_struct(ctx, already)?;
+    ret(ctx, already.into())?;
 
     // Insert path: empty (or tombstone) slot, write entry + state. The
     // item is acquired so the set owns an independent reference (a
@@ -155,7 +156,7 @@ pub(crate) fn emit_set_insert<'ctx>(
         new_len,
         post.capacity,
     )?;
-    ret_struct(ctx, inserted)
+    ret(ctx, inserted.into())
 }
 
 /// The table a write path mutates. Copying mode clones the receiver's
@@ -196,21 +197,24 @@ pub(super) struct InsertProbe<'ctx> {
 /// branches to `update_bb` / `insert_bb` via `position_at_end`.
 pub(super) fn emit_insert_probe<'ctx>(
     ctx: &EmitContext<'ctx>,
-    function: &IRFunction,
-    llvm_function: FunctionValue<'ctx>,
-    layout: &HashtableLayout<'_>,
-    table: &TableSnapshot<'ctx>,
-    key_val: BasicValueEnum<'ctx>,
-    key_ops: &KeyHashOps<'ctx>,
+    inputs: ProbeInputs<'_, 'ctx>,
 ) -> Result<InsertProbe<'ctx>, LlvmError> {
+    let ProbeInputs {
+        function,
+        key_ops,
+        key_val,
+        layout,
+        llvm_function,
+        table,
+    } = inputs;
     let i8_ty = ctx.context.i8_type();
     let i64_ty = ctx.context.i64_type();
-    let entry_block = ctx.builder.get_insert_block().ok_or_else(|| {
-        LlvmError::Codegen(format!(
+    let entry_block = ctx.builder.get_insert_block().unwrap_or_else(|| {
+        panic!(
             "emit_insert_probe called with no insertion block for `{}`",
             function.symbol,
-        ))
-    })?;
+        )
+    });
     let hash_val = call_hash(ctx, key_ops.hash_fn, key_val)?;
     let mask = ctx
         .builder

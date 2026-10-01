@@ -41,7 +41,7 @@ pub(super) fn emit_deep_copy<'ctx>(
 ) -> Result<(), LlvmError> {
     let result = match ty {
         IRType::String | IRType::Binary | IRType::Bits => {
-            let payload = lookup(values, source)?.into_pointer_value();
+            let payload = lookup(values, source).into_pointer_value();
             let deep_copy = declare_heap_deep_copy_extern(ctx);
             ctx.call_basic(deep_copy, &[payload.into()], &format!("{dest}.deep_copy"))?
         }
@@ -57,14 +57,14 @@ pub(super) fn emit_deep_copy<'ctx>(
         | IRType::UInt16
         | IRType::UInt32
         | IRType::UInt64
-        | IRType::Unit => lookup(values, source)?,
+        | IRType::Unit => lookup(values, source),
         // No-glue aggregates own no heap, so the register copy is
         // already physically independent (same reasoning as `Clone`'s).
         IRType::Enum(_) | IRType::Struct(_) | IRType::Tuple(_) | IRType::Union { .. } => {
-            lookup(values, source)?
+            lookup(values, source)
         }
         IRType::Function { .. } => {
-            let closure_value = lookup(values, source)?;
+            let closure_value = lookup(values, source);
             let env =
                 closures::load_closure_env_ptr(ctx, closure_value, &format!("{dest}.deep_copy"))?;
             let deep_copy = declare_closure_deep_copy_extern(ctx);

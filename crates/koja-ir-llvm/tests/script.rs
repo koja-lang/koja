@@ -132,12 +132,14 @@ fn empty_string_literal_uses_zero_bit_length() {
         emit_script_llvm_ir(&script, APP_NAME).expect("emit_script_llvm_ir should succeed");
 
     assert_main_shape(&ir_text);
-    // Empty UTF-8 payload: bit_length = 0, payload array length = 1
-    // (just the trailing NUL). The rc word is the immortal sentinel
-    // (`i64::MIN`), and the payload array renders as `zeroinitializer`.
+    // Empty UTF-8 payload, so bit_length = 0 and the payload array has
+    // length 1 (just the trailing NUL). The rc word is the immortal
+    // sentinel (`i64::MIN`), and the payload array renders as
+    // `zeroinitializer`. The global's index depends on how many
+    // literals the helper bodies interned first, so it is not pinned.
     assert_contains(
         &ir_text,
-        "@koja_str.0 = private constant { i64, i64, [1 x i8] } \
+        "= private constant { i64, i64, [1 x i8] } \
          { i64 -9223372036854775808, i64 0, [1 x i8] zeroinitializer }",
     );
 }

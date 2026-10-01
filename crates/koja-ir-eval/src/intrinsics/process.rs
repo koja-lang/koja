@@ -83,7 +83,7 @@ fn self_ref(function: &IRFunction) -> Result<Value, RuntimeError> {
 /// message with an empty (`None`) reply slot.
 fn cast(function: &IRFunction, args: &[Value]) -> Result<Value, RuntimeError> {
     let pid = pid_from_ref(function, args)?;
-    let msg = nth(function, args, 1, "message")?;
+    let msg = helpers::arg(args, 1, "Ref.cast")?.clone();
     scheduler::deliver(pid, business(msg, None));
     Ok(Value::Unit)
 }
@@ -92,8 +92,8 @@ fn cast(function: &IRFunction, args: &[Value]) -> Result<Value, RuntimeError> {
 /// message fired after `delay_ms` (clamped non-negative), `None` reply slot.
 fn send_after(function: &IRFunction, args: &[Value]) -> Result<Value, RuntimeError> {
     let pid = pid_from_ref(function, args)?;
-    let msg = nth(function, args, 1, "message")?;
-    let delay_ms = int_arg(function, args, 2, "delay")?;
+    let msg = helpers::arg(args, 1, "Ref.send_after")?.clone();
+    let delay_ms = helpers::arg_int(args, 2, "Ref.send_after")?;
     let fire_at = Instant::now() + duration_from_user_millis(delay_ms);
     scheduler::schedule_timer(pid, fire_at, business(msg, None));
     Ok(Value::Unit)
@@ -147,8 +147,8 @@ fn alive(function: &IRFunction, args: &[Value]) -> Result<Value, RuntimeError> {
 /// or `CallError.ProcessDown` (target gone). Mirrors `emit_call`.
 async fn ref_call<R: CallResolver>(call: IntrinsicCall<'_, R>) -> Result<Value, RuntimeError> {
     let target = pid_from_ref(call.function, call.args)?;
-    let msg = nth(call.function, call.args, 1, "message")?;
-    let timeout_ms = int_arg(call.function, call.args, 2, "timeout")?;
+    let msg = helpers::arg(call.args, 1, "Ref.call")?.clone();
+    let timeout_ms = helpers::arg_int(call.args, 2, "Ref.call")?;
     let result_symbol = helpers::enum_return_symbol(call.function, "Ref.call")?;
 
     let caller = scheduler::current_pid();
@@ -270,7 +270,7 @@ fn context<R: CallResolver>(call: IntrinsicCall<'_, R>) -> Result<Value, Runtime
 /// reply, `Delivery.Expired` if it had moved on. Mirrors `emit_reply_send`.
 fn reply_send<R: CallResolver>(call: IntrinsicCall<'_, R>) -> Result<Value, RuntimeError> {
     let coords = reply_to_coords(call.function, call.args)?;
-    let reply = nth(call.function, call.args, 1, "reply")?;
+    let reply = helpers::arg(call.args, 1, "ReplyTo.send")?.clone();
     let delivery_symbol = helpers::enum_return_symbol(call.function, "ReplyTo.send")?;
     let variant = if scheduler::reply(coords, reply) {
         "Delivered"
@@ -397,37 +397,5 @@ fn self_shape_error(function: &IRFunction, kind: &str) -> RuntimeError {
             "`{}` expected a `{kind}` self value with integer field(s)",
             function.symbol,
         ),
-    }
-}
-
-/// Clone the `index`-th argument, erroring when it is absent.
-fn nth(
-    function: &IRFunction,
-    args: &[Value],
-    index: usize,
-    what: &str,
-) -> Result<Value, RuntimeError> {
-    args.get(index)
-        .cloned()
-        .ok_or_else(|| RuntimeError::TypeMismatch {
-            detail: format!("`{}` missing {what} (param #{index})", function.symbol),
-        })
-}
-
-/// Read the `index`-th argument as an `Int`.
-fn int_arg(
-    function: &IRFunction,
-    args: &[Value],
-    index: usize,
-    what: &str,
-) -> Result<i64, RuntimeError> {
-    match args.get(index) {
-        Some(Value::Int(value)) => Ok(*value),
-        _ => Err(RuntimeError::TypeMismatch {
-            detail: format!(
-                "`{}` expected an integer {what} (param #{index})",
-                function.symbol
-            ),
-        }),
     }
 }

@@ -3,11 +3,12 @@
 use std::collections::HashSet;
 
 use koja_ast::ast::{
-    AnnotationKind, Arg, ClosureParam, Diagnostic, EnumConstructionData, Expr, ExprKind, Function,
-    FunctionOrigin, ImplMember, Item, Name, Param, Pattern, ProtocolMethod, Statement, StringPart,
-    TypeExpr, TypeParam,
+    AnnotationKind, Arg, ClosureParam, Diagnostic, Expr, ExprKind, Function, FunctionOrigin,
+    ImplMember, Item, MatchArm, Name, Param, Pattern, ProtocolMethod, Statement, TypeExpr,
+    TypeParam,
 };
 use koja_ast::identifier::Resolution;
+use koja_ast::visit::{self, Visitor};
 
 use crate::program::CheckedPackage;
 
@@ -119,6 +120,12 @@ fn validate_defaults(params: &[Param], diagnostics: &mut Vec<Diagnostic>) {
     let has_self = params
         .iter()
         .any(|param| matches!(param, Param::Self_ { .. }));
+    let mut walker = Walker {
+        diagnostics,
+        forbidden,
+        has_self,
+        scopes: Vec::new(),
+    };
     for param in params {
         let Param::Regular {
             default: Some(default),
@@ -127,7 +134,7 @@ fn validate_defaults(params: &[Param], diagnostics: &mut Vec<Diagnostic>) {
         else {
             continue;
         };
-        check_default_expr(default, &forbidden, has_self, &mut Vec::new(), diagnostics);
+        walker.visit_expr(default);
     }
 }
 
@@ -409,208 +416,83 @@ fn param_has_default(param: &Param) -> bool {
     )
 }
 
-fn check_default_expr(
-    expr: &Expr,
-    forbidden: &HashSet<&str>,
+/// Recursion state for the default expressions of one parameter
+/// list. `forbidden` holds the sibling parameter names a default
+/// may not read, `has_self` says whether `self` is one of them, and
+/// `scopes` tracks the closure and pattern bindings that shadow a
+/// forbidden name on the way down.
+struct Walker<'a> {
+    diagnostics: &'a mut Vec<Diagnostic>,
+    forbidden: HashSet<&'a str>,
     has_self: bool,
-    scopes: &mut Vec<HashSet<String>>,
-    diagnostics: &mut Vec<Diagnostic>,
-) {
-    let shadowed = |name: &str, scopes: &[HashSet<String>]| {
-        scopes.iter().rev().any(|scope| scope.contains(name))
-    };
-    match &expr.kind {
-        ExprKind::Ident { name, .. }
-            if forbidden.contains(name.as_str()) && !shadowed(name, scopes) =>
-        {
-            diagnostics.push(Diagnostic::error(
-                format!("default parameter value cannot reference parameter `{name}`"),
-                expr.span,
-            ));
-        }
-        ExprKind::Self_ { .. } if has_self => diagnostics.push(Diagnostic::error(
-            "default parameter value cannot reference `self`".to_string(),
-            expr.span,
-        )),
-        ExprKind::Closure { params, body, .. } => {
-            scopes.push(closure_bindings(params));
-            check_body(body, forbidden, has_self, scopes, diagnostics);
-            scopes.pop();
-        }
-        ExprKind::ShortClosure { params, body } => {
-            scopes.push(closure_bindings(params));
-            check_default_expr(body, forbidden, has_self, scopes, diagnostics);
-            scopes.pop();
-        }
-        ExprKind::Binary { left, right, .. } => for_exprs(
-            [left.as_ref(), right.as_ref()],
-            forbidden,
-            has_self,
-            scopes,
-            diagnostics,
-        ),
-        ExprKind::BinaryLiteral { segments } => {
-            for segment in segments {
-                check_default_expr(&segment.value, forbidden, has_self, scopes, diagnostics);
-                if let Some(size) = &segment.size {
-                    check_default_expr(size, forbidden, has_self, scopes, diagnostics);
-                }
-            }
-        }
-        ExprKind::Call { callee, args, .. } => {
-            check_default_expr(callee, forbidden, has_self, scopes, diagnostics);
-            for arg in args {
-                check_default_expr(&arg.value, forbidden, has_self, scopes, diagnostics);
-            }
-        }
-        ExprKind::MethodCall { receiver, args, .. } => {
-            check_default_expr(receiver, forbidden, has_self, scopes, diagnostics);
-            for arg in args {
-                check_default_expr(&arg.value, forbidden, has_self, scopes, diagnostics);
-            }
-        }
-        ExprKind::Cond { arms, else_body } => {
-            for arm in arms {
-                check_default_expr(&arm.condition, forbidden, has_self, scopes, diagnostics);
-                check_body(&arm.body, forbidden, has_self, scopes, diagnostics);
-            }
-            if let Some(body) = else_body {
-                check_body(body, forbidden, has_self, scopes, diagnostics);
-            }
-        }
-        ExprKind::EnumConstruction { data, .. } => match data {
-            EnumConstructionData::Struct(fields) => {
-                for field in fields {
-                    check_default_expr(&field.value, forbidden, has_self, scopes, diagnostics);
-                }
-            }
-            EnumConstructionData::Tuple(elements) => {
-                for element in elements {
-                    check_default_expr(element, forbidden, has_self, scopes, diagnostics);
-                }
-            }
-            EnumConstructionData::Unit => {}
-        },
-        ExprKind::Assert {
-            condition, message, ..
-        } => {
-            check_default_expr(condition, forbidden, has_self, scopes, diagnostics);
-            if let Some(message) = message {
-                check_default_expr(message, forbidden, has_self, scopes, diagnostics);
-            }
-        }
-        ExprKind::Fail { value }
-        | ExprKind::Try { expr: value }
-        | ExprKind::Unary { operand: value, .. }
-        | ExprKind::Group { expr: value }
-        | ExprKind::Spawn { expr: value }
-        | ExprKind::FieldAccess {
-            receiver: value, ..
-        } => check_default_expr(value, forbidden, has_self, scopes, diagnostics),
-        ExprKind::For {
-            pattern,
-            iterable,
-            body,
-        } => {
-            check_default_expr(iterable, forbidden, has_self, scopes, diagnostics);
-            scopes.push(pattern_bindings(pattern));
-            check_body(body, forbidden, has_self, scopes, diagnostics);
-            scopes.pop();
-        }
-        ExprKind::While { condition, body } => {
-            check_default_expr(condition, forbidden, has_self, scopes, diagnostics);
-            check_body(body, forbidden, has_self, scopes, diagnostics);
-        }
-        ExprKind::If {
-            condition,
-            then_body,
-            else_body,
-        } => {
-            check_default_expr(condition, forbidden, has_self, scopes, diagnostics);
-            check_body(then_body, forbidden, has_self, scopes, diagnostics);
-            if let Some(body) = else_body {
-                check_body(body, forbidden, has_self, scopes, diagnostics);
-            }
-        }
-        ExprKind::List { elements } | ExprKind::Tuple { elements } => {
-            for element in elements {
-                check_default_expr(element, forbidden, has_self, scopes, diagnostics);
-            }
-        }
-        ExprKind::Loop { body } => check_body(body, forbidden, has_self, scopes, diagnostics),
-        ExprKind::Map { entries } => {
-            for (key, value) in entries {
-                for_exprs([key, value], forbidden, has_self, scopes, diagnostics);
-            }
-        }
-        ExprKind::Match { subject, arms } => {
-            check_default_expr(subject, forbidden, has_self, scopes, diagnostics);
-            for arm in arms {
-                scopes.push(pattern_bindings(&arm.pattern));
-                if let Some(guard) = &arm.guard {
-                    check_default_expr(guard, forbidden, has_self, scopes, diagnostics);
-                }
-                check_body(&arm.body, forbidden, has_self, scopes, diagnostics);
-                scopes.pop();
-            }
-        }
-        ExprKind::Receive {
-            arms,
-            after_timeout,
-            after_body,
-        } => {
-            for arm in arms {
-                scopes.push(pattern_bindings(&arm.pattern));
-                if let Some(guard) = &arm.guard {
-                    check_default_expr(guard, forbidden, has_self, scopes, diagnostics);
-                }
-                check_body(&arm.body, forbidden, has_self, scopes, diagnostics);
-                scopes.pop();
-            }
-            if let Some(timeout) = after_timeout {
-                check_default_expr(timeout, forbidden, has_self, scopes, diagnostics);
-            }
-            check_body(after_body, forbidden, has_self, scopes, diagnostics);
-        }
-        ExprKind::Rescue {
-            subject,
-            binder,
-            handler,
-            ..
-        } => {
-            check_default_expr(subject, forbidden, has_self, scopes, diagnostics);
-            scopes.push(binder.iter().cloned().collect());
-            check_default_expr(handler, forbidden, has_self, scopes, diagnostics);
-            scopes.pop();
-        }
-        ExprKind::String { parts, .. } => {
-            for part in parts {
-                if let StringPart::Interpolation { expr, .. } = part {
-                    check_default_expr(expr, forbidden, has_self, scopes, diagnostics);
-                }
-            }
-        }
-        ExprKind::StructConstruction { fields, .. } => {
-            for field in fields {
-                check_default_expr(&field.value, forbidden, has_self, scopes, diagnostics);
-            }
-        }
-        ExprKind::Ternary {
-            condition,
-            then_expr,
-            else_expr,
-        } => for_exprs(
-            [condition.as_ref(), then_expr.as_ref(), else_expr.as_ref()],
-            forbidden,
-            has_self,
-            scopes,
-            diagnostics,
-        ),
-        ExprKind::Ident { .. }
-        | ExprKind::Literal { .. }
-        | ExprKind::NamedFunctionReference { .. }
-        | ExprKind::Self_ { .. } => {}
+    scopes: Vec<HashSet<String>>,
+}
+
+impl Walker<'_> {
+    /// Run `walk` inside a scope that rebinds `names`.
+    fn in_scope(&mut self, names: HashSet<String>, walk: impl FnOnce(&mut Self)) {
+        self.scopes.push(names);
+        walk(self);
+        self.scopes.pop();
     }
+
+    /// Whether a closure param or pattern binding on the way down
+    /// rebinds `name`, so the ident reads that binding and not the
+    /// parameter.
+    fn is_shadowed(&self, name: &str) -> bool {
+        self.scopes.iter().rev().any(|scope| scope.contains(name))
+    }
+}
+
+impl<'ast> Visitor<'ast> for Walker<'_> {
+    fn visit_expr(&mut self, expr: &'ast Expr) {
+        match &expr.kind {
+            ExprKind::Ident { name, .. }
+                if self.forbidden.contains(name.as_str()) && !self.is_shadowed(name) =>
+            {
+                self.diagnostics.push(Diagnostic::error(
+                    format!("default parameter value cannot reference parameter `{name}`"),
+                    expr.span,
+                ));
+            }
+            ExprKind::Self_ { .. } if self.has_self => self.diagnostics.push(Diagnostic::error(
+                "default parameter value cannot reference `self`".to_string(),
+                expr.span,
+            )),
+            ExprKind::Closure { params, .. } | ExprKind::ShortClosure { params, .. } => {
+                self.in_scope(closure_bindings(params), |w| visit::walk_expr(w, expr));
+            }
+            // The iterable is read before the pattern binds.
+            ExprKind::For {
+                pattern,
+                iterable,
+                body,
+            } => {
+                self.visit_expr(iterable);
+                self.in_scope(pattern_bindings(pattern), |w| visit::walk_body(w, body));
+            }
+            // The binder is in scope for the handler only.
+            ExprKind::Rescue {
+                subject,
+                binder,
+                handler,
+                ..
+            } => {
+                self.visit_expr(subject);
+                self.in_scope(binder.iter().cloned().collect(), |w| w.visit_expr(handler));
+            }
+            _ => visit::walk_expr(self, expr),
+        }
+    }
+
+    fn visit_match_arm(&mut self, arm: &'ast MatchArm) {
+        self.in_scope(pattern_bindings(&arm.pattern), |w| {
+            visit::walk_match_arm(w, arm)
+        });
+    }
+
+    /// Patterns bind names and never read them.
+    fn visit_pattern(&mut self, _pattern: &'ast Pattern) {}
 }
 
 fn closure_bindings(params: &[ClosureParam]) -> HashSet<String> {
@@ -658,42 +540,5 @@ fn collect_pattern_bindings(pattern: &Pattern, bindings: &mut HashSet<String>) {
             }
         }
         Pattern::EnumUnit { .. } | Pattern::Literal { .. } | Pattern::Wildcard { .. } => {}
-    }
-}
-
-fn check_body(
-    body: &[Statement],
-    forbidden: &HashSet<&str>,
-    has_self: bool,
-    scopes: &mut Vec<HashSet<String>>,
-    diagnostics: &mut Vec<Diagnostic>,
-) {
-    for statement in body {
-        match statement {
-            Statement::Assignment { value, .. }
-            | Statement::CompoundAssign { value, .. }
-            | Statement::Destructure { value, .. } => {
-                check_default_expr(value, forbidden, has_self, scopes, diagnostics)
-            }
-            Statement::Expr(expr) => {
-                check_default_expr(expr, forbidden, has_self, scopes, diagnostics)
-            }
-            Statement::Return {
-                value: Some(value), ..
-            } => check_default_expr(value, forbidden, has_self, scopes, diagnostics),
-            Statement::Break { .. } | Statement::Return { value: None, .. } => {}
-        }
-    }
-}
-
-fn for_exprs<'a>(
-    exprs: impl IntoIterator<Item = &'a Expr>,
-    forbidden: &HashSet<&str>,
-    has_self: bool,
-    scopes: &mut Vec<HashSet<String>>,
-    diagnostics: &mut Vec<Diagnostic>,
-) {
-    for expr in exprs {
-        check_default_expr(expr, forbidden, has_self, scopes, diagnostics);
     }
 }

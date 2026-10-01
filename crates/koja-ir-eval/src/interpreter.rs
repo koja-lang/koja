@@ -14,17 +14,20 @@ use std::time::Instant;
 
 use koja_ir::mangling::closure_eq_env_symbol;
 use koja_ir::{
-    BinaryEndian, BinarySign, BranchTarget, ConcatKind, ConstValue, EnumPayloadInit, FunctionKind,
-    IRBasicBlock, IRBlockId, IRConstantValue, IREnumDecl, IRFunction, IRInstruction, IRIntrinsicId,
-    IRLocalId, IRProgram, IRScript, IRStructDecl, IRSymbol, IRTerminator, IRType, IRVariantPayload,
-    IRVariantTag, LoweredBinaryMatchLayout, LoweredBinaryPattern, LoweredBinarySegment,
-    ReceiveAfter, ReceiveArm, ReceiveTag, ResolvedBinaryLayout, ValueId, pack_integer_segment,
+    BranchTarget, ConstValue, EnumPayloadInit, FunctionKind, IRBasicBlock, IRBlockId,
+    IRConstantValue, IREnumDecl, IRFunction, IRInstruction, IRIntrinsicId, IRLocalId, IRPackage,
+    IRProgram, IRScript, IRStructDecl, IRSymbol, IRTerminator, IRType, IRVariantPayload,
+    IRVariantTag, ReceiveAfter, ReceiveArm, ReceiveTag, ValueId,
 };
 use koja_runtime_core::{
     CrashInfo, Driver, ExitNotice, ExitReason, Lifecycle, Priority, Readiness, Tag, Wake,
     duration_from_user_millis,
 };
 
+use crate::binary_ops::{
+    concat_values, construct_binary_literal, execute_binary_match, extend_unique_bytes,
+};
+use crate::built_constants;
 use crate::error::RuntimeError;
 use crate::externs;
 use crate::externs::foreign::ForeignTable;
@@ -68,7 +71,6 @@ impl Interpreter {
         args: &[String],
         foreign: ForeignTable,
     ) -> Result<Value, RuntimeError> {
-        let _foreign = externs::foreign::install(foreign);
         let entry = program.entry_function();
         assert!(
             matches!(entry.kind, FunctionKind::ProcessEntryWrapper { .. }),
@@ -76,46 +78,11 @@ impl Interpreter {
             entry.symbol,
         );
         let args = args.to_vec();
-
-        // Boot PID 1 (the entry process) into a fresh cooperative core, then
-        // hand the run loop to the shared `CooperativeDriver`. The entry's
-        // `StopReason`-derived exit code surfaces through `exit_cell`. The
-        // process future has `Output = ()`, so it stashes its `Value` result
-        // here for `run_program` to return once the driver tears down.
-        let runtime = EvalRuntime::new();
-        let _guard = scheduler::install_runtime(runtime.clone());
-        let main = boot_main(&runtime);
-
-        let exit_cell: Rc<RefCell<Option<Result<Value, RuntimeError>>>> =
-            Rc::new(RefCell::new(None));
-        let entry_future: ProcessFuture = {
-            let cell = Rc::clone(&exit_cell);
-            Box::pin(async move {
-                let result = run_entry_body(program, entry, &args).await;
-                *cell.borrow_mut() = Some(result);
-            })
-        };
-
-        let executor = EvalExecutor::new(Rc::clone(&runtime.core), program);
-        executor.install_future(main, entry_future);
-
-        // Drain OS signals into PID 1's mailbox only when the program
-        // has a `Lifecycle` receive arm (see `EvalSignals`).
-        let signals = EvalSignals::new(program_uses_lifecycle(program));
-        EvalDriver::new(
-            runtime,
-            executor,
-            EvalReactor,
-            EvalClock,
-            signals,
-            scheduler::grace_period(),
+        run_as_entry_process(
+            program,
+            foreign,
+            Box::pin(async move { run_entry_body(program, entry, &args).await }),
         )
-        .run();
-
-        exit_cell
-            .borrow_mut()
-            .take()
-            .expect("entry process produced no result before shutdown")
     }
 
     /// Execute a named function from `program` with no arguments and
@@ -127,7 +94,11 @@ impl Interpreter {
         let function = program
             .function(mangled)
             .unwrap_or_else(|| panic!("interpreter: function `{mangled}` not found in IRProgram"));
-        block_on(execute_function(function, Vec::new(), program))
+        let _built = built_constants::install();
+        block_on(async {
+            build_constants(program).await?;
+            execute_function(function, Vec::new(), program).await
+        })
     }
 
     /// Execute the script-mode implicit body and return its trailing
@@ -143,53 +114,66 @@ impl Interpreter {
     }
 
     /// [`Self::run_script`] with a caller-resolved [`ForeignTable`].
+    /// The implicit body runs as PID 1 like a program entry, so
+    /// top-level `spawn` / `receive` / timers / I/O engage the runtime
+    /// instead of tripping the "runtime not installed" guard.
     pub fn run_script_with(
         script: &IRScript,
         foreign: ForeignTable,
     ) -> Result<Value, RuntimeError> {
-        let _foreign = externs::foreign::install(foreign);
-        // Run the implicit body as PID 1 under the shared cooperative
-        // driver (same boot as `run_program`) so top-level `spawn` /
-        // `receive` / timers / I/O engage the runtime instead of tripping
-        // the "runtime not installed" guard. The body's trailing value
-        // surfaces through `exit_cell` once the driver tears down.
-        let runtime = EvalRuntime::new();
-        let _guard = scheduler::install_runtime(runtime.clone());
-        let main = boot_main(&runtime);
-
-        let exit_cell: Rc<RefCell<Option<Result<Value, RuntimeError>>>> =
-            Rc::new(RefCell::new(None));
-        let body_future: ProcessFuture = {
-            let cell = Rc::clone(&exit_cell);
-            Box::pin(async move {
-                *cell.borrow_mut() = Some(run_script_body(script).await);
-            })
-        };
-
-        let executor = EvalExecutor::new(Rc::clone(&runtime.core), script);
-        executor.install_future(main, body_future);
-
-        let signals = EvalSignals::new(script_uses_lifecycle(script));
-        EvalDriver::new(
-            runtime,
-            executor,
-            EvalReactor,
-            EvalClock,
-            signals,
-            scheduler::grace_period(),
-        )
-        .run();
-
-        exit_cell
-            .borrow_mut()
-            .take()
-            .expect("script body produced no result before shutdown")
+        run_as_entry_process(script, foreign, Box::pin(run_script_body(script)))
     }
 }
 
+/// Run `body` as PID 1 under the shared cooperative driver, with the
+/// foreign and built-constant tables installed for the run. Boots the
+/// entry process into a fresh core, hands the loop to the driver, and
+/// returns the body's result once the driver tears down. The process
+/// future has `Output = ()`, so the result travels through `exit_cell`.
+/// OS signals drain into PID 1's mailbox only when some `receive` has
+/// a `Lifecycle` arm (see [`EvalSignals`]).
+fn run_as_entry_process<'a, R: CallResolver>(
+    resolver: &'a R,
+    foreign: ForeignTable,
+    body: EvalFuture<'a, Value>,
+) -> Result<Value, RuntimeError> {
+    let _foreign = externs::foreign::install(foreign);
+    let _built = built_constants::install();
+    let runtime = EvalRuntime::new();
+    let _guard = scheduler::install_runtime(runtime.clone());
+    let main = boot_main(&runtime);
+
+    let exit_cell: Rc<RefCell<Option<Result<Value, RuntimeError>>>> = Rc::new(RefCell::new(None));
+    let entry_future: ProcessFuture = {
+        let cell = Rc::clone(&exit_cell);
+        Box::pin(async move {
+            *cell.borrow_mut() = Some(body.await);
+        })
+    };
+
+    let executor = EvalExecutor::new(Rc::clone(&runtime.core), resolver);
+    executor.install_future(main, entry_future);
+
+    let signals = EvalSignals::new(blocks_use_lifecycle(resolver.all_blocks()));
+    EvalDriver::new(
+        runtime,
+        executor,
+        EvalReactor,
+        EvalClock,
+        signals,
+        scheduler::grace_period(),
+    )
+    .run();
+
+    exit_cell
+        .borrow_mut()
+        .take()
+        .expect("entry process produced no result before shutdown")
+}
+
 /// Spawns PID 1 (the entry process) into a fresh cooperative core and
-/// enqueues its first wake, the boot both `run_program` and `run_script`
-/// perform before handing the loop to the driver.
+/// enqueues its first wake, the boot [`run_as_entry_process`] performs
+/// before handing the loop to the driver.
 fn boot_main(runtime: &EvalRuntime) -> koja_runtime_core::Pid {
     let main = runtime
         .core
@@ -207,10 +191,10 @@ fn boot_main(runtime: &EvalRuntime) -> koja_runtime_core::Pid {
 /// identity even though both keys happen to be `u32`. `captures`
 /// holds the closure environment array (empty for non-closure
 /// frames), which `LoadCapture` indexes into directly.
-struct Frame {
+pub(crate) struct Frame {
     captures: Vec<Value>,
-    values: BTreeMap<ValueId, Value>,
-    locals: BTreeMap<IRLocalId, Value>,
+    pub(crate) values: BTreeMap<ValueId, Value>,
+    pub(crate) locals: BTreeMap<IRLocalId, Value>,
 }
 
 impl Frame {
@@ -234,46 +218,99 @@ impl Frame {
 /// registry-equivalent handle for materializing variant and field
 /// names.
 pub(crate) trait CallResolver {
-    fn resolve(&self, mangled: &str) -> Option<&IRFunction>;
-    fn enum_decl(&self, mangled: &str) -> Option<&IREnumDecl>;
-    fn struct_decl(&self, mangled: &str) -> Option<&IRStructDecl>;
+    /// Every block the run can execute, across all function bodies
+    /// plus the script body when there is one.
+    fn all_blocks(&self) -> impl Iterator<Item = &IRBasicBlock>;
+    fn built_constant_order(&self) -> &[IRSymbol];
     fn constant_value(&self, mangled: &str) -> Option<&IRConstantValue>;
+    fn enum_decl(&self, mangled: &str) -> Option<&IREnumDecl>;
+    fn resolve(&self, mangled: &str) -> Option<&IRFunction>;
+    fn struct_decl(&self, mangled: &str) -> Option<&IRStructDecl>;
 }
 
 impl CallResolver for IRProgram {
-    fn resolve(&self, mangled: &str) -> Option<&IRFunction> {
-        self.function(mangled)
+    fn all_blocks(&self) -> impl Iterator<Item = &IRBasicBlock> {
+        function_blocks(&self.packages)
+    }
+
+    fn built_constant_order(&self) -> &[IRSymbol] {
+        &self.built_constant_order
+    }
+
+    fn constant_value(&self, mangled: &str) -> Option<&IRConstantValue> {
+        IRProgram::constant_value(self, mangled)
     }
 
     fn enum_decl(&self, mangled: &str) -> Option<&IREnumDecl> {
         IRProgram::enum_decl(self, mangled)
     }
 
-    fn struct_decl(&self, mangled: &str) -> Option<&IRStructDecl> {
-        IRProgram::struct_decl(self, mangled)
+    fn resolve(&self, mangled: &str) -> Option<&IRFunction> {
+        self.function(mangled)
     }
 
-    fn constant_value(&self, mangled: &str) -> Option<&IRConstantValue> {
-        IRProgram::constant_value(self, mangled)
+    fn struct_decl(&self, mangled: &str) -> Option<&IRStructDecl> {
+        IRProgram::struct_decl(self, mangled)
     }
 }
 
 impl CallResolver for IRScript {
-    fn resolve(&self, mangled: &str) -> Option<&IRFunction> {
-        self.function(mangled)
+    fn all_blocks(&self) -> impl Iterator<Item = &IRBasicBlock> {
+        function_blocks(&self.packages).chain(self.blocks.iter())
+    }
+
+    fn built_constant_order(&self) -> &[IRSymbol] {
+        &self.built_constant_order
+    }
+
+    fn constant_value(&self, mangled: &str) -> Option<&IRConstantValue> {
+        IRScript::constant_value(self, mangled)
     }
 
     fn enum_decl(&self, mangled: &str) -> Option<&IREnumDecl> {
         IRScript::enum_decl(self, mangled)
     }
 
+    fn resolve(&self, mangled: &str) -> Option<&IRFunction> {
+        self.function(mangled)
+    }
+
     fn struct_decl(&self, mangled: &str) -> Option<&IRStructDecl> {
         IRScript::struct_decl(self, mangled)
     }
+}
 
-    fn constant_value(&self, mangled: &str) -> Option<&IRConstantValue> {
-        IRScript::constant_value(self, mangled)
+/// Every block of every function body across `packages`.
+fn function_blocks(packages: &[IRPackage]) -> impl Iterator<Item = &IRBasicBlock> {
+    packages
+        .iter()
+        .flat_map(|package| package.functions.values())
+        .flat_map(|function| &function.blocks)
+}
+
+/// Run every `Built` constant init in `built_constant_order` and
+/// store each value, before the entry body runs. PID 1 does this on
+/// both backends, so an init side effect happens once at startup and
+/// every later `LoadConst` is a plain read.
+async fn build_constants<R: CallResolver>(resolver: &R) -> Result<(), RuntimeError> {
+    for symbol in resolver.built_constant_order() {
+        let Some(IRConstantValue::Built { init, .. }) = resolver.constant_value(symbol.mangled())
+        else {
+            panic!(
+                "interpreter: built constant order names `{symbol}`, which is not a built \
+                 constant (seal invariant violation)"
+            );
+        };
+        let init_fn = resolver.resolve(init.mangled()).unwrap_or_else(|| {
+            panic!(
+                "interpreter: built constant `{symbol}` init `{init}` missing from IR (seal \
+                 invariant violation)"
+            )
+        });
+        let value = execute_function(init_fn, Vec::new(), resolver).await?;
+        built_constants::store(symbol.mangled(), value);
     }
+    Ok(())
 }
 
 /// Outcome of one pass through a function body. `Done` carries the
@@ -301,29 +338,26 @@ async fn run_entry_body<'a>(
     entry: &'a IRFunction,
     args: &[String],
 ) -> Result<Value, RuntimeError> {
-    let config_type =
-        entry
-            .params
-            .first()
-            .map(|p| &p.ty)
-            .ok_or_else(|| RuntimeError::Unsupported {
-                detail: format!(
-                    "process entry wrapper `{}` has no config parameter",
-                    entry.symbol,
-                ),
-            })?;
+    build_constants(program).await?;
+    let config_type = entry.params.first().map(|p| &p.ty).unwrap_or_else(|| {
+        panic!(
+            "interpreter: process entry wrapper `{}` has no config parameter (seal invariant \
+             violation)",
+            entry.symbol,
+        )
+    });
     let config_value = if is_argv_shaped(config_type) {
         argv_value(args)
     } else {
         default_value_for_type(config_type, program)?
     };
-    let body_fn =
-        process_body_of(program, &entry.symbol).ok_or_else(|| RuntimeError::Unsupported {
-            detail: format!(
-                "process entry wrapper `{}` IR body carries no resolvable process-body call",
-                entry.symbol,
-            ),
-        })?;
+    let body_fn = process_body_of(program, &entry.symbol).unwrap_or_else(|| {
+        panic!(
+            "interpreter: process entry wrapper `{}` IR body carries no resolvable process-body \
+             call (seal invariant violation)",
+            entry.symbol,
+        )
+    });
     execute_function(body_fn, vec![config_value], program).await
 }
 
@@ -332,6 +366,7 @@ async fn run_entry_body<'a>(
 /// return type is `Unit`. The async analogue of the former synchronous
 /// `run_script`, so a top-level `receive` parks against the core mailbox.
 async fn run_script_body(script: &IRScript) -> Result<Value, RuntimeError> {
+    build_constants(script).await?;
     let mut frame = Frame::new();
     match execute_blocks(&script.blocks, &mut frame, script).await? {
         BlockOutcome::Done(value) => Ok(coerce_return(value, &script.return_type)),
@@ -353,28 +388,6 @@ fn blocks_use_lifecycle<'a>(blocks: impl Iterator<Item = &'a IRBasicBlock>) -> b
                     if arms.iter().any(|arm| arm.tag == ReceiveTag::Lifecycle)
             )
         })
-}
-
-/// [`blocks_use_lifecycle`] over every function body in `program`.
-fn program_uses_lifecycle(program: &IRProgram) -> bool {
-    blocks_use_lifecycle(
-        program
-            .packages
-            .iter()
-            .flat_map(|package| package.functions.values())
-            .flat_map(|function| &function.blocks),
-    )
-}
-
-/// [`blocks_use_lifecycle`] over the script's helper functions and its
-/// implicit top-level body.
-fn script_uses_lifecycle(script: &IRScript) -> bool {
-    let function_blocks = script
-        .packages
-        .iter()
-        .flat_map(|package| package.functions.values())
-        .flat_map(|function| &function.blocks);
-    blocks_use_lifecycle(function_blocks.chain(script.blocks.iter()))
 }
 
 /// Resolve a process wrapper's body, the [`FunctionKind::Regular`]
@@ -456,15 +469,51 @@ fn argv_value(args: &[String]) -> Value {
 }
 
 /// Build a fresh interpreter [`Value`] suitable as the entry's config
-/// argument. Mirrors the LLVM trampoline's zero-init shape: empty
-/// structs round-trip as `Value::Struct` with no fields, `List<T>`
-/// produces an empty list, and primitive scalars default to their
-/// zero element. The argv-shaped `List<String>` config never reaches
-/// this helper, since [`run_entry_body`] routes it through
-/// [`argv_value`] first.
+/// argument. Mirrors the LLVM trampoline's zero-init shape. Scalars
+/// take their zero element, collections and `Binary` start empty,
+/// `CPtr` is null, aggregates zero-init each field or element, and an
+/// enum is its tag-0 variant with a zeroed payload. The argv-shaped
+/// `List<String>` config never reaches this helper, since
+/// [`run_entry_body`] routes it through [`argv_value`] first. Types
+/// with no zero `Value` (`Bits`, `Function`, `Indirect`, `Union`)
+/// surface [`RuntimeError::Unsupported`].
 fn default_value_for_type(ty: &IRType, program: &IRProgram) -> Result<Value, RuntimeError> {
     match ty {
+        IRType::Binary => Ok(Value::binary(Vec::new())),
         IRType::Bool => Ok(Value::Bool(false)),
+        IRType::CPtr(_) => Ok(Value::CPtr(std::ptr::null_mut())),
+        IRType::Enum(symbol) => {
+            let decl = program.enum_decl(symbol.mangled()).unwrap_or_else(|| {
+                panic!("interpreter: enum `{symbol}` missing from IR (seal invariant violation)")
+            });
+            let variant = decl.variants.first().unwrap_or_else(|| {
+                panic!("interpreter: enum `{symbol}` has no variants to zero-init")
+            });
+            let payload = match &variant.payload {
+                IRVariantPayload::Struct(fields) => {
+                    let mut values = Vec::with_capacity(fields.len());
+                    for field in fields {
+                        let value = default_value_for_type(&field.ir_type, program)?;
+                        values.push((field.name.clone(), value));
+                    }
+                    EnumPayload::struct_fields(values)
+                }
+                IRVariantPayload::Tuple(types) => {
+                    let mut values = Vec::with_capacity(types.len());
+                    for element in types {
+                        values.push(default_value_for_type(element, program)?);
+                    }
+                    EnumPayload::tuple(values)
+                }
+                IRVariantPayload::Unit => EnumPayload::Unit,
+            };
+            Ok(Value::Enum {
+                name: variant.name.clone(),
+                payload,
+                symbol: symbol.clone(),
+                tag: variant.tag,
+            })
+        }
         IRType::Float32 => Ok(Value::Float32(0.0)),
         IRType::Float64 => Ok(Value::Float64(0.0)),
         IRType::Int8
@@ -475,19 +524,14 @@ fn default_value_for_type(ty: &IRType, program: &IRProgram) -> Result<Value, Run
         | IRType::UInt16
         | IRType::UInt32
         | IRType::UInt64 => Ok(Value::Int(0)),
-        IRType::List(_) => Ok(Value::List(std::rc::Rc::new(std::cell::RefCell::new(
-            Vec::new(),
-        )))),
+        IRType::List(_) => Ok(Value::List(Rc::new(RefCell::new(Vec::new())))),
+        IRType::Map { .. } => Ok(Value::Map(Rc::new(RefCell::new(Vec::new())))),
+        IRType::Set(_) => Ok(Value::Set(Rc::new(RefCell::new(Vec::new())))),
         IRType::String => Ok(Value::string(Vec::new())),
         IRType::Struct(symbol) => {
-            let decl =
-                program
-                    .struct_decl(symbol.mangled())
-                    .ok_or_else(|| RuntimeError::Unsupported {
-                        detail: format!(
-                            "interpreter: cannot build default value for unknown struct `{symbol}`",
-                        ),
-                    })?;
+            let decl = program.struct_decl(symbol.mangled()).unwrap_or_else(|| {
+                panic!("interpreter: struct `{symbol}` missing from IR (seal invariant violation)")
+            });
             let mut fields = Vec::with_capacity(decl.fields.len());
             for field in &decl.fields {
                 fields.push(default_value_for_type(&field.ir_type, program)?);
@@ -496,6 +540,13 @@ fn default_value_for_type(ty: &IRType, program: &IRProgram) -> Result<Value, Run
                 symbol: symbol.clone(),
                 fields,
             })
+        }
+        IRType::Tuple(elements) => {
+            let mut values = Vec::with_capacity(elements.len());
+            for element in elements {
+                values.push(default_value_for_type(element, program)?);
+            }
+            Ok(Value::Tuple(values))
         }
         IRType::Unit => Ok(Value::Unit),
         other => Err(RuntimeError::Unsupported {
@@ -601,25 +652,17 @@ fn execute_function<'a, R: CallResolver>(
              closures via the host GC and never invokes it",
                 function.symbol,
             ),
-            FunctionKind::SpawnWrapper { .. } => {
-                return Err(RuntimeError::Unsupported {
-                    detail: format!(
-                        "spawn wrapper `{}` cannot be invoked directly under the interpreter. \
-                     Spawn/receive scheduling lives in the LLVM runtime",
-                        function.symbol,
-                    ),
-                });
-            }
-            FunctionKind::ProcessEntryWrapper { .. } => {
-                return Err(RuntimeError::Unsupported {
-                    detail: format!(
-                        "process entry wrapper `{}` cannot be invoked directly. Use \
-                     `Interpreter::run_program`, which dispatches through state.start / \
-                     state.run for ProcessEntryWrapper entries",
-                        function.symbol,
-                    ),
-                });
-            }
+            FunctionKind::SpawnWrapper { .. } => panic!(
+                "interpreter: direct `Call` to spawn wrapper `{}`, which must dispatch via \
+             `Spawn` (seal invariant violation)",
+                function.symbol,
+            ),
+            FunctionKind::ProcessEntryWrapper { .. } => panic!(
+                "interpreter: direct `Call` to process entry wrapper `{}`, which only \
+             `Interpreter::run_program` dispatches, through state.start / state.run (seal \
+             invariant violation)",
+                function.symbol,
+            ),
             FunctionKind::Regular => {}
         }
         loop {
@@ -1330,7 +1373,12 @@ fn execute_instruction<'a, R: CallResolver>(
                     const_id.mangled(),
                 )
             });
-                let value = materialize_pooled_constant(pooled, resolver)?;
+                let value = match pooled {
+                    // PID 1 ran every init before user code started
+                    // (see `build_constants`), so this is a plain read.
+                    IRConstantValue::Built { .. } => built_constants::value(const_id.mangled()),
+                    _ => materialize_pooled_constant(pooled, resolver)?,
+                };
                 frame.values.insert(*dest, value);
                 Ok(())
             }
@@ -1792,7 +1840,10 @@ fn execute_instruction<'a, R: CallResolver>(
 /// Read a register. The clone is an `Rc` bump for heap-backed
 /// values, so the register and the result share storage until one
 /// of them is released.
-fn lookup(values: &BTreeMap<ValueId, Value>, id: ValueId) -> Result<Value, RuntimeError> {
+pub(crate) fn lookup(
+    values: &BTreeMap<ValueId, Value>,
+    id: ValueId,
+) -> Result<Value, RuntimeError> {
     values
         .get(&id)
         .cloned()
@@ -1804,6 +1855,10 @@ fn materialize_pooled_constant<R: CallResolver>(
     resolver: &R,
 ) -> Result<Value, RuntimeError> {
     match cv {
+        IRConstantValue::Built { init, .. } => panic!(
+            "interpreter: built constant with init `{init}` nested in a static pool entry \
+             (IR lowering invariant violation)",
+        ),
         IRConstantValue::Primitive(inner) => Ok(materialize_const(inner)),
         IRConstantValue::EnumVariant { tag, ty } => {
             let decl = resolver.enum_decl(ty.mangled()).unwrap_or_else(|| {
@@ -1895,453 +1950,6 @@ fn materialize_enum<R: CallResolver>(
         symbol: symbol.clone(),
         tag,
     })
-}
-
-/// Append `right`'s bytes onto `left` in place when `left` is a
-/// uniquely held `String` / `Binary` of the same kind. Hands `left`
-/// back untouched otherwise, so the caller can fall back to the
-/// copying concat.
-fn extend_unique_bytes(mut left: Value, right: &Value) -> Result<Value, Value> {
-    let (bytes, extra) = match (&mut left, right) {
-        (Value::Binary(bytes), Value::Binary(extra))
-        | (Value::String(bytes), Value::String(extra)) => (bytes, extra),
-        _ => return Err(left),
-    };
-    let Some(unique) = Rc::get_mut(bytes) else {
-        return Err(left);
-    };
-    unique.extend_from_slice(extra);
-    Ok(left)
-}
-
-/// Apply `<>` to two heap-payload values. Mirrors the LLVM
-/// backend's split: `String` / `Binary` are byte-aligned `memcpy`s,
-/// `Bits` does sub-byte alignment in Rust (the runtime helper's
-/// algorithm). Mismatched [`Value`] kinds vs `kind` surface a
-/// defensive `TypeMismatch`, since seal + typecheck should have
-/// kept these consistent.
-fn concat_values(kind: ConcatKind, left: &Value, right: &Value) -> Result<Value, RuntimeError> {
-    match kind {
-        ConcatKind::String => {
-            let (Value::String(l), Value::String(r)) = (left, right) else {
-                return Err(RuntimeError::TypeMismatch {
-                    detail: format!("Concat<String> on `{left}` and `{right}`"),
-                });
-            };
-            let mut out = Vec::with_capacity(l.len() + r.len());
-            out.extend_from_slice(l);
-            out.extend_from_slice(r);
-            Ok(Value::string(out))
-        }
-        ConcatKind::Binary => {
-            let (Value::Binary(l), Value::Binary(r)) = (left, right) else {
-                return Err(RuntimeError::TypeMismatch {
-                    detail: format!("Concat<Binary> on `{left}` and `{right}`"),
-                });
-            };
-            let mut out = Vec::with_capacity(l.len() + r.len());
-            out.extend_from_slice(l);
-            out.extend_from_slice(r);
-            Ok(Value::binary(out))
-        }
-        ConcatKind::Bits => {
-            let (
-                Value::Bits {
-                    bytes: lb,
-                    bit_length: ll,
-                },
-                Value::Bits {
-                    bytes: rb,
-                    bit_length: rl,
-                },
-            ) = (left, right)
-            else {
-                return Err(RuntimeError::TypeMismatch {
-                    detail: format!("Concat<Bits> on `{left}` and `{right}`"),
-                });
-            };
-            let total = ll + rl;
-            let total_bytes = total.div_ceil(8) as usize;
-            let mut out = vec![0u8; total_bytes];
-            // Copy lhs bits (which are already left-aligned in `lb`)
-            // verbatim. The trailing partial byte already has its
-            // high bits set and low bits zeroed.
-            for (idx, byte) in lb.iter().enumerate() {
-                out[idx] = *byte;
-            }
-            // Append rhs bits starting at bit offset `ll`.
-            append_bits(&mut out, *ll, rb, *rl);
-            Ok(Value::bits(out, total))
-        }
-    }
-}
-
-/// Append `length` bits from `src` (which is left-aligned with
-/// `length` valid bits and possible zero padding in the low bits of
-/// its trailing byte) into `dest` starting at bit offset
-/// `start_bit`. Helper for [`concat_values`]'s `Bits` arm, mirroring
-/// the LLVM `__koja_concat_bits` runtime helper.
-fn append_bits(dest: &mut [u8], start_bit: u64, src: &[u8], length: u64) {
-    if length == 0 {
-        return;
-    }
-    let shift = (start_bit % 8) as u32;
-    let dest_byte_start = (start_bit / 8) as usize;
-    if shift == 0 {
-        let src_bytes = length.div_ceil(8) as usize;
-        dest[dest_byte_start..dest_byte_start + src_bytes].copy_from_slice(&src[..src_bytes]);
-        return;
-    }
-    // Bit-shift each source byte right by `shift`, OR'd into the
-    // current dest byte's low bits + the next dest byte's high
-    // bits. Source padding bits past `length` are zero, so a spill
-    // of them is harmless.
-    let mut remaining = length;
-    let mut src_idx = 0;
-    let mut dest_idx = dest_byte_start;
-    while remaining > 0 {
-        let byte = src[src_idx];
-        dest[dest_idx] |= byte >> shift;
-        let next_bits = remaining.min(8);
-        let consumed_in_low = next_bits + shift as u64;
-        if consumed_in_low > 8 - shift as u64 && dest_idx + 1 < dest.len() {
-            dest[dest_idx + 1] |= byte << (8 - shift);
-        }
-        if remaining > 8 {
-            remaining -= 8;
-            src_idx += 1;
-            dest_idx += 1;
-        } else {
-            remaining = 0;
-        }
-    }
-}
-
-/// Build a `<<segments>>` literal as a runtime [`Value::Binary`] (when
-/// `layout.byte_aligned`) or [`Value::Bits`] (otherwise). Segments
-/// are packed in source order at their pre-computed `bit_offset`s.
-/// Integer and float bytes get endian-shuffled, string segments
-/// `memcpy` their payload, and sub-byte segments funnel through the
-/// shared [`pack_integer_segment`] bit packer. The buffer is
-/// pre-zeroed so unused trailing bits in the last byte stay zero.
-fn construct_binary_literal(
-    layout: ResolvedBinaryLayout,
-    segments: &[LoweredBinarySegment],
-    frame: &Frame,
-) -> Result<Value, RuntimeError> {
-    let total_bytes = layout.total_bits.div_ceil(8) as usize;
-    let mut buffer = vec![0u8; total_bytes];
-
-    for segment in segments {
-        match segment {
-            LoweredBinarySegment::Integer {
-                value,
-                width,
-                endian,
-                bit_offset,
-                ..
-            } => {
-                let resolved = lookup(&frame.values, *value)?;
-                let int_value = match resolved {
-                    Value::Int(n) => n as u64,
-                    other => {
-                        return Err(RuntimeError::TypeMismatch {
-                            detail: format!(
-                                "binary literal integer segment expected an Int value, got {other}",
-                            ),
-                        });
-                    }
-                };
-                pack_integer_segment(&mut buffer, int_value, *width, *endian, *bit_offset);
-            }
-            LoweredBinarySegment::Float {
-                value,
-                width,
-                endian,
-                bit_offset,
-            } => {
-                let resolved = lookup(&frame.values, *value)?;
-                let bits: u64 = match (*width, &resolved) {
-                    (32, Value::Float32(v)) => u64::from(v.to_bits()),
-                    (32, Value::Float64(v)) => u64::from((*v as f32).to_bits()),
-                    (64, Value::Float64(v)) => v.to_bits(),
-                    (64, Value::Float32(v)) => f64::from(*v).to_bits(),
-                    (w, _) => panic!(
-                        "interpreter: BinaryConstruct float segment of width {w}, \
-                         but float widths are 32 or 64 (seal invariant violation)",
-                    ),
-                };
-                pack_integer_segment(&mut buffer, bits, *width, *endian, *bit_offset);
-            }
-            LoweredBinarySegment::String {
-                value,
-                byte_length,
-                bit_offset,
-            } => {
-                let resolved = lookup(&frame.values, *value)?;
-                let Value::String(bytes) = resolved else {
-                    return Err(RuntimeError::TypeMismatch {
-                        detail: format!(
-                            "binary literal string segment expected a String value, got {resolved}",
-                        ),
-                    });
-                };
-                debug_assert!(
-                    bytes.len() as u64 >= *byte_length,
-                    "interpreter: BinaryConstruct string segment carries byte_length {byte_length} \
-                     but the runtime String holds {} bytes (typecheck/lower invariant violation)",
-                    bytes.len(),
-                );
-                let start_byte = (bit_offset / 8) as usize;
-                buffer[start_byte..start_byte + *byte_length as usize]
-                    .copy_from_slice(&bytes[..*byte_length as usize]);
-            }
-        }
-    }
-
-    if layout.byte_aligned {
-        Ok(Value::binary(buffer))
-    } else {
-        Ok(Value::bits(buffer, layout.total_bits))
-    }
-}
-
-/// Eval-side `BinaryMatch` driver, mirroring the LLVM emission
-/// described on [`IRInstruction::BinaryMatch`]: gate on the
-/// subject's runtime bit length (equality without a greedy tail,
-/// `>=` with one), then test every literal segment, extracting each
-/// `BindInt` / `GreedyTail` slice into its pre-declared local slot
-/// as a side effect. Binds happen as segments are walked, matching
-/// the LLVM order. A later literal failure leaves earlier binds
-/// written, which is unobservable because the arm body only runs
-/// when the whole match succeeds.
-fn execute_binary_match(
-    layout: LoweredBinaryMatchLayout,
-    segments: &[LoweredBinaryPattern],
-    subject: &Value,
-    frame: &mut Frame,
-) -> Result<bool, RuntimeError> {
-    let (bytes, bit_length) = match subject {
-        Value::Binary(b) | Value::String(b) => (b.as_slice(), b.len() as u64 * 8),
-        Value::Bits { bytes, bit_length } => (bytes.as_slice(), *bit_length),
-        other => {
-            return Err(RuntimeError::TypeMismatch {
-                detail: format!("binary match expects a Binary/Bits/String subject, got {other}"),
-            });
-        }
-    };
-    let length_ok = if layout.has_greedy_tail {
-        bit_length >= layout.fixed_bits
-    } else {
-        bit_length == layout.fixed_bits
-    };
-    if !length_ok {
-        return Ok(false);
-    }
-
-    for segment in segments {
-        match segment {
-            LoweredBinaryPattern::LiteralInt {
-                bit_offset,
-                endian,
-                sign: _,
-                value,
-                width,
-            } => {
-                // Compare raw width-truncated bits: a negative
-                // signed literal and its two's-complement bit
-                // pattern agree under the mask, so the sign
-                // modifier doesn't change the test.
-                if !literal_segment_matches(bytes, *width, *endian, *bit_offset, *value) {
-                    return Ok(false);
-                }
-            }
-            LoweredBinaryPattern::LiteralBytes {
-                bit_offset,
-                bytes: expected,
-            } => {
-                let start = (*bit_offset / 8) as usize;
-                if bytes[start..start + expected.len()] != expected[..] {
-                    return Ok(false);
-                }
-            }
-            LoweredBinaryPattern::BindInt {
-                bit_offset,
-                endian,
-                local,
-                sign,
-                ty: _,
-                width,
-            } => {
-                let extracted = extract_integer_segment(bytes, *width, *endian, *bit_offset);
-                frame
-                    .locals
-                    .insert(*local, Value::Int(sign_interpret(extracted, *width, *sign)));
-            }
-            LoweredBinaryPattern::Discard { .. } => {}
-            LoweredBinaryPattern::GreedyTail {
-                bit_offset,
-                local,
-                ty,
-            } => {
-                let Some(local) = local else { continue };
-                let tail = match ty {
-                    // Typecheck guarantees a byte-aligned prefix for
-                    // a `Binary` tail.
-                    IRType::Binary => Value::binary(&bytes[(*bit_offset / 8) as usize..]),
-                    IRType::Bits => Value::bits(
-                        extract_bit_range(bytes, *bit_offset, bit_length - *bit_offset),
-                        bit_length - *bit_offset,
-                    ),
-                    other => panic!(
-                        "interpreter: binary-match greedy tail typed `{other:?}`, \
-                         but a tail is Binary or Bits (seal invariant violation)",
-                    ),
-                };
-                frame.locals.insert(*local, tail);
-            }
-        }
-    }
-    Ok(true)
-}
-
-/// Whether the `width` bits at `start_bit` equal the low `width` bits
-/// of `value`. Widths up to 64 go through [`extract_integer_segment`].
-/// Wider literals compare byte by byte against the sign-extended
-/// two's complement encoding of `value`, since no machine word holds
-/// them.
-fn literal_segment_matches(
-    bytes: &[u8],
-    width: u64,
-    endian: BinaryEndian,
-    start_bit: u64,
-    value: i128,
-) -> bool {
-    if width <= 64 {
-        let extracted = extract_integer_segment(bytes, width, endian, start_bit);
-        return extracted == (value as u64) & width_mask(width);
-    }
-    let fill = if value < 0 { 0xFF } else { 0x00 };
-    // The byte of `value` at `significance` places from the least
-    // significant end, with sign fill past the 128-bit payload.
-    let value_byte = |significance: u64| -> u8 {
-        if significance >= 16 {
-            fill
-        } else {
-            (value >> (significance * 8)) as u8
-        }
-    };
-    if start_bit.is_multiple_of(8) && width.is_multiple_of(8) {
-        let num_bytes = width / 8;
-        let start_byte = (start_bit / 8) as usize;
-        return (0..num_bytes).all(|i| {
-            let significance = match endian {
-                BinaryEndian::Little => i,
-                BinaryEndian::Big => num_bytes - 1 - i,
-            };
-            bytes[start_byte + i as usize] == value_byte(significance)
-        });
-    }
-    // A sub-byte offset or width walks the bits MSB-first, which is
-    // the only order a sub-byte run can have.
-    (0..width).all(|i| {
-        let bit_pos = start_bit + i;
-        let byte = (bit_pos / 8) as usize;
-        let bit_in_byte = 7 - (bit_pos % 8) as u32;
-        let actual = (bytes[byte] >> bit_in_byte) & 1;
-        let significance = width - 1 - i;
-        let expected = (value_byte(significance / 8) >> (significance % 8)) & 1;
-        actual == expected
-    })
-}
-
-/// Inverse of [`pack_integer_segment`]: read `width` bits at
-/// `start_bit` as an unsigned integer, byte-shuffled per `endian`
-/// on the byte-aligned fast path, MSB-first on the sub-byte path
-/// (where endianness is meaningless). Callers keep `width` at or
-/// under 64.
-fn extract_integer_segment(bytes: &[u8], width: u64, endian: BinaryEndian, start_bit: u64) -> u64 {
-    if width == 0 {
-        return 0;
-    }
-    if start_bit.is_multiple_of(8) && width.is_multiple_of(8) {
-        let num_bytes = (width / 8) as usize;
-        let start_byte = (start_bit / 8) as usize;
-        let mut value = 0u64;
-        for (i, byte) in bytes[start_byte..start_byte + num_bytes].iter().enumerate() {
-            let shift = match endian {
-                BinaryEndian::Little => (i as u32) * 8,
-                BinaryEndian::Big => ((num_bytes - 1 - i) as u32) * 8,
-            };
-            value |= u64::from(*byte) << shift;
-        }
-        return value;
-    }
-    let mut value = 0u64;
-    for i in 0..width {
-        let bit_pos = start_bit + i;
-        let byte = (bit_pos / 8) as usize;
-        let bit_in_byte = 7 - (bit_pos % 8) as u32;
-        value = (value << 1) | u64::from((bytes[byte] >> bit_in_byte) & 1);
-    }
-    value
-}
-
-/// Reinterpret the raw `width`-bit pattern per the segment's sign
-/// modifier: sign-extend when `Signed` and the sign bit is set,
-/// zero-extend otherwise. Mirrors the LLVM emission's `sext`/`zext`
-/// choice on `BindInt`.
-fn sign_interpret(value: u64, width: u64, sign: BinarySign) -> i64 {
-    match sign {
-        BinarySign::Unsigned => value as i64,
-        BinarySign::Signed => {
-            if width == 0 || width >= 64 {
-                return value as i64;
-            }
-            let sign_bit = 1u64 << (width - 1);
-            if value & sign_bit != 0 {
-                (value | !width_mask(width)) as i64
-            } else {
-                value as i64
-            }
-        }
-    }
-}
-
-/// All-ones mask covering the low `width` bits (`u64::MAX` at 64+).
-fn width_mask(width: u64) -> u64 {
-    if width >= 64 {
-        u64::MAX
-    } else {
-        (1u64 << width) - 1
-    }
-}
-
-/// Copy `length` bits starting at `start_bit` into a fresh
-/// MSB-first, zero-padded byte buffer (the greedy-tail extraction
-/// for `Bits`). Byte-aligned starts take the `memcpy` fast path.
-fn extract_bit_range(bytes: &[u8], start_bit: u64, length: u64) -> Vec<u8> {
-    let byte_count = length.div_ceil(8) as usize;
-    if start_bit.is_multiple_of(8) {
-        let start = (start_bit / 8) as usize;
-        let mut out = bytes[start..start + byte_count].to_vec();
-        // Zero any trailing bits past `length` so equality on the
-        // resulting `Bits` value stays well-defined.
-        if !length.is_multiple_of(8) {
-            let last = out.len() - 1;
-            out[last] &= !(0xffu8 >> (length % 8));
-        }
-        return out;
-    }
-    let mut out = vec![0u8; byte_count];
-    for i in 0..length {
-        let bit_pos = start_bit + i;
-        let bit = (bytes[(bit_pos / 8) as usize] >> (7 - (bit_pos % 8) as u32)) & 1;
-        if bit != 0 {
-            out[(i / 8) as usize] |= 1 << (7 - (i % 8) as u32);
-        }
-    }
-    out
 }
 
 /// Materialize a `ConstValue` as a runtime [`Value`].

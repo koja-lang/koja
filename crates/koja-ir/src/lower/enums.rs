@@ -42,13 +42,9 @@ use super::structs::canonicalize_struct_inits;
 /// take one identity arg instead of two. Mirrors the `&RegistryEntry`
 /// pattern in `calls::emit_call` (which threads a single
 /// identity object through the bare- vs instance-call dispatch).
-/// Keeps `lower_struct_variant` under the clippy arg-count
-/// threshold without bundling the ambient
-/// `(ctx, block, registry, output)` tuple every other lower
-/// helper threads explicitly. Private to this module, since the IR
-/// vocabulary keeps `tag` and `ty` as separate fields on
-/// [`IRInstruction::EnumConstruct`], and `VariantTarget` is purely
-/// a lowering-pipeline grouping.
+/// Private to this module, since the IR vocabulary keeps `tag` and
+/// `ty` as separate fields on [`IRInstruction::EnumConstruct`], and
+/// `VariantTarget` is purely a lowering-pipeline grouping.
 struct VariantTarget {
     symbol: IRSymbol,
     tag: IRVariantTag,
@@ -144,14 +140,16 @@ pub(super) fn lower_enum_construction(
     variant_name: &Name,
     data: &EnumConstructionData,
     expr_resolution: &ResolvedType,
-    ctx: &mut FnLowerCtx,
+    ctx: &mut FnLowerCtx<'_>,
     block: IRBlockId,
-    registry: &GlobalRegistry,
-    output: &mut LowerOutput,
 ) -> Result<(ValueId, IRBlockId), ()> {
-    let entry = enum_entry_from_resolution(expr_resolution, registry);
+    let entry = enum_entry_from_resolution(expr_resolution, ctx.registry);
     let definition = enum_definition_from_entry(entry);
-    let symbol = resolved_enum_symbol(expr_resolution, registry, &mut output.instantiations);
+    let symbol = resolved_enum_symbol(
+        expr_resolution,
+        ctx.registry,
+        &mut ctx.output.instantiations,
+    );
     let (variant_index, variant) = definition
         .lookup_variant(variant_name.as_str())
         .unwrap_or_else(|| {
@@ -170,10 +168,10 @@ pub(super) fn lower_enum_construction(
             Ok(lower_unit_variant(target, ctx, block))
         }
         (ResolvedVariantData::Tuple(_), EnumConstructionData::Tuple(exprs)) => {
-            lower_tuple_variant(target, exprs, ctx, block, registry, output)
+            lower_tuple_variant(target, exprs, ctx, block)
         }
         (ResolvedVariantData::Struct(declared), EnumConstructionData::Struct(fields)) => {
-            lower_struct_variant(target, declared, fields, ctx, block, registry, output)
+            lower_struct_variant(target, declared, fields, ctx, block)
         }
         (declared, supplied) => panic!(
             "IR lower: enum `{}.{variant_name}` payload shape mismatch \
@@ -203,7 +201,7 @@ pub(super) fn resolved_enum_symbol(
 
 fn lower_unit_variant(
     target: VariantTarget,
-    ctx: &mut FnLowerCtx,
+    ctx: &mut FnLowerCtx<'_>,
     block: IRBlockId,
 ) -> (ValueId, IRBlockId) {
     let VariantTarget { symbol, tag } = target;
@@ -224,16 +222,14 @@ fn lower_unit_variant(
 fn lower_tuple_variant(
     target: VariantTarget,
     exprs: &[Expr],
-    ctx: &mut FnLowerCtx,
+    ctx: &mut FnLowerCtx<'_>,
     block: IRBlockId,
-    registry: &GlobalRegistry,
-    output: &mut LowerOutput,
 ) -> Result<(ValueId, IRBlockId), ()> {
     let VariantTarget { symbol, tag } = target;
     let mut current = block;
     let mut values = Vec::with_capacity(exprs.len());
     for expr in exprs {
-        let (value, next) = lower_expr(expr, ctx, current, registry, output)?;
+        let (value, next) = lower_expr(expr, ctx, current)?;
         // Value semantics: an enum payload-store acquires an independent
         // value, so a borrowed heap-leaf source is cloned (rc-bumped) in.
         // The variant then owns a reference outliving the source local's
@@ -261,14 +257,11 @@ fn lower_struct_variant(
     target: VariantTarget,
     declared: &[koja_typecheck::ResolvedStructField],
     fields: &[FieldInit],
-    ctx: &mut FnLowerCtx,
+    ctx: &mut FnLowerCtx<'_>,
     block: IRBlockId,
-    registry: &GlobalRegistry,
-    output: &mut LowerOutput,
 ) -> Result<(ValueId, IRBlockId), ()> {
     let VariantTarget { symbol, tag } = target;
-    let (canonical, current) =
-        canonicalize_struct_inits(declared, fields, ctx, block, registry, output)?;
+    let (canonical, current) = canonicalize_struct_inits(declared, fields, ctx, block)?;
     let dest = ctx.fresh_value(IRType::Enum(symbol.clone()));
     ctx.cfg.append(
         current,

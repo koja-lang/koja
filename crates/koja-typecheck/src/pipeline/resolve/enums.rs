@@ -32,7 +32,7 @@ use super::ctx::{BoundContext, Callee, Resolver};
 use super::expr::resolve_expr;
 use super::inference::{PhantomContext, fill_from_expected, finalize_inference, unify_pairs};
 use super::structs::{validate_named_fields, walk_field_inits};
-use super::types::{display_resolution, lookup_type};
+use super::types::{display_resolution, lookup_type, peel_alias};
 
 pub(super) fn resolve_enum_construction(
     type_path: &[Name],
@@ -114,6 +114,20 @@ pub(super) fn resolve_enum_construction(
             diagnostics,
         );
         return ResolvedType::leaf(Resolution::Global(enum_id));
+    }
+
+    if matches!(variant_def.data, ResolvedVariantData::Unit)
+        && let Some(other) = unit_variant_mismatch(enum_id, expected, resolver.registry)
+    {
+        diagnostics.push(Diagnostic::error(
+            format!(
+                "`{}.{variant}` is a `{enum_label}` value, but `{}` is expected",
+                path_text(type_path),
+                display_resolution(&other, resolver.registry),
+            ),
+            span,
+        ));
+        return ResolvedType::unresolved();
     }
 
     let callee = Callee {
@@ -199,7 +213,9 @@ fn infer_enum_type_args(
     }
     if let Some(hint) = expected {
         let template = canonical_enum_template(callee.id, callee.type_params.len());
-        fill_from_expected(&template, hint, &mut subst, registry);
+        // Unify does not peel user aliases, so `Maybe = Option<Int>`
+        // must become `Option<Int>` before it can fill `T`.
+        fill_from_expected(&template, &peel_alias(hint, registry), &mut subst, registry);
     }
     let context = match variant.data {
         ResolvedVariantData::Unit => PhantomContext::UnitVariant(&variant.name),
@@ -207,6 +223,28 @@ fn infer_enum_type_args(
     };
     finalize_inference(&[callee], &subst, &context, span, ctx, diagnostics);
     subst
+}
+
+/// A unit variant of a generic enum takes its type arguments from the
+/// expected type alone. When that type can never hold the enum, the
+/// "cannot infer" fallback would name the wrong problem, so return
+/// the peeled expected type for a mismatch diagnostic instead. A
+/// union or an unresolved hint returns `None` and inference decides.
+fn unit_variant_mismatch(
+    enum_id: GlobalRegistryId,
+    expected: Option<&ResolvedType>,
+    registry: &GlobalRegistry,
+) -> Option<ResolvedType> {
+    let expected = peel_alias(expected?, registry);
+    match &expected {
+        ResolvedType::Anonymous(_) => Some(expected),
+        ResolvedType::Named { resolution, .. }
+            if resolution.is_resolved() && *resolution != Resolution::Global(enum_id) =>
+        {
+            Some(expected)
+        }
+        _ => None,
+    }
 }
 
 /// Build the enum's canonical self-referential template

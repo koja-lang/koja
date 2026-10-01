@@ -1,0 +1,6 @@
+struct Key
+  id: Int
+end
+
+s: Set<Key> = [Key { id: 1 }]
+s.length().print()

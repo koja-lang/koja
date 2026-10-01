@@ -6,20 +6,22 @@
 
 use inkwell::IntPredicate;
 use inkwell::basic_block::BasicBlock;
-use inkwell::values::{BasicValueEnum, FunctionValue, PointerValue};
+use inkwell::values::{FunctionValue, PointerValue};
 use koja_ir::IRFunction;
 
 use crate::ctx::EmitContext;
 use crate::emit::enums::build_enum_value;
 use crate::error::{IceExt, LlvmError};
 use crate::intrinsics::element::{acquire_value, release_in_slot};
+use crate::intrinsics::util::{
+    build_table_struct, expect_enum_symbol, extract_int, extract_pointer, nth_param, nth_struct,
+    ret,
+};
 use crate::types::ir_basic_type;
 
 use super::util::{
-    KeyHashOps, TableSnapshot, advance_slot, build_table_struct, call_eq, call_hash,
-    clone_table_buffers, entry_pointer, expect_enum_symbol, extract_int, extract_pointer,
-    extract_table_fields, nth_hashtable, nth_param, resolve_key_hash_ops, ret_basic, ret_struct,
-    value_slot,
+    ProbeInputs, TableSnapshot, advance_slot, call_eq, call_hash, clone_table_buffers,
+    entry_pointer, extract_table_fields, resolve_key_hash_ops, value_slot,
 };
 use super::{HashtableLayout, STATE_EMPTY, STATE_OCCUPIED, STATE_TOMBSTONE};
 use crate::intrinsics::option;
@@ -44,21 +46,24 @@ struct ReadOnlyProbe<'ctx> {
 /// The `advance` edge wires itself.
 fn emit_read_only_probe<'ctx>(
     ctx: &EmitContext<'ctx>,
-    function: &IRFunction,
-    llvm_function: FunctionValue<'ctx>,
-    layout: &HashtableLayout<'_>,
-    table: &TableSnapshot<'ctx>,
-    key_val: BasicValueEnum<'ctx>,
-    key_ops: &KeyHashOps<'ctx>,
+    inputs: ProbeInputs<'_, 'ctx>,
 ) -> Result<ReadOnlyProbe<'ctx>, LlvmError> {
+    let ProbeInputs {
+        function,
+        key_ops,
+        key_val,
+        layout,
+        llvm_function,
+        table,
+    } = inputs;
     let i8_ty = ctx.context.i8_type();
     let i64_ty = ctx.context.i64_type();
-    let entry_block = ctx.builder.get_insert_block().ok_or_else(|| {
-        LlvmError::Codegen(format!(
+    let entry_block = ctx.builder.get_insert_block().unwrap_or_else(|| {
+        panic!(
             "emit_read_only_probe called with no insertion block for `{}`",
             function.symbol,
-        ))
-    })?;
+        )
+    });
 
     let hash_val = call_hash(ctx, key_ops.hash_fn, key_val)?;
     let mask = ctx
@@ -154,21 +159,23 @@ pub(crate) fn emit_has_q<'ctx>(
 ) -> Result<(), LlvmError> {
     let i1_ty = ctx.context.bool_type();
     let table = extract_table_fields(ctx, function, llvm_function)?;
-    let key_val = nth_param(function, llvm_function, 1, "key")?;
+    let key_val = nth_param(function, llvm_function, 1, "key");
     let key_ops = resolve_key_hash_ops(ctx, function, layout.key_ty)?;
     let probe = emit_read_only_probe(
         ctx,
-        function,
-        llvm_function,
-        layout,
-        &table,
-        key_val,
-        &key_ops,
+        ProbeInputs {
+            function,
+            key_ops: &key_ops,
+            key_val,
+            layout,
+            llvm_function,
+            table: &table,
+        },
     )?;
     ctx.builder.position_at_end(probe.found_bb);
-    ret_basic(ctx, i1_ty.const_int(1, false).into())?;
+    ret(ctx, i1_ty.const_int(1, false).into())?;
     ctx.builder.position_at_end(probe.not_found_bb);
-    ret_basic(ctx, i1_ty.const_zero().into())
+    ret(ctx, i1_ty.const_zero().into())
 }
 
 pub(crate) fn emit_remove<'ctx>(
@@ -182,7 +189,7 @@ pub(crate) fn emit_remove<'ctx>(
     // emit_remove keeps the manual 4-step extract because it needs
     // `self_val` for the not-found return, and `extract_table_fields`
     // discards the original struct.
-    let self_val = nth_hashtable(function, llvm_function, 0, "self")?;
+    let self_val = nth_struct(function, llvm_function, 0, "self");
     let original = TableSnapshot {
         entries_ptr: extract_pointer(ctx, self_val, 0, "entries")?,
         states_ptr: extract_pointer(ctx, self_val, 1, "states")?,
@@ -190,16 +197,18 @@ pub(crate) fn emit_remove<'ctx>(
         capacity: extract_int(ctx, self_val, 3, "cap")?,
     };
     let table = clone_table_buffers(ctx, llvm_function, layout, &original)?;
-    let key_val = nth_param(function, llvm_function, 1, "key")?;
+    let key_val = nth_param(function, llvm_function, 1, "key");
     let key_ops = resolve_key_hash_ops(ctx, function, layout.key_ty)?;
     let probe = emit_read_only_probe(
         ctx,
-        function,
-        llvm_function,
-        layout,
-        &table,
-        key_val,
-        &key_ops,
+        ProbeInputs {
+            function,
+            key_ops: &key_ops,
+            key_val,
+            layout,
+            llvm_function,
+            table: &table,
+        },
     )?;
     ctx.builder.position_at_end(probe.found_bb);
     // The clone acquired this bucket's key (and value). Tombstoning
@@ -224,7 +233,7 @@ pub(crate) fn emit_remove<'ctx>(
         new_len,
         table.capacity,
     )?;
-    ret_struct(ctx, removed)?;
+    ret(ctx, removed.into())?;
 
     // Not found. Return the untouched clone made above rather than
     // `self_val`, which the caller drops.
@@ -236,7 +245,7 @@ pub(crate) fn emit_remove<'ctx>(
         table.length,
         table.capacity,
     )?;
-    ret_struct(ctx, unchanged)
+    ret(ctx, unchanged.into())
 }
 
 pub(crate) fn emit_map_get<'ctx>(
@@ -247,26 +256,28 @@ pub(crate) fn emit_map_get<'ctx>(
 ) -> Result<(), LlvmError> {
     let i8_ty = ctx.context.i8_type();
     let i64_ty = ctx.context.i64_type();
-    let value_ty = layout.value_ty.ok_or_else(|| {
-        LlvmError::Codegen(format!(
+    let value_ty = layout.value_ty.unwrap_or_else(|| {
+        panic!(
             "Map.get layout missing value type (symbol `{}`)",
             function.symbol,
-        ))
-    })?;
-    let option_symbol = expect_enum_symbol(&function.return_type, function, "Map.get")?;
+        )
+    });
+    let option_symbol = expect_enum_symbol(&function.return_type, function, "Map.get");
     let value_basic_ty = ir_basic_type(ctx, value_ty)?;
 
     let table = extract_table_fields(ctx, function, llvm_function)?;
-    let key_val = nth_param(function, llvm_function, 1, "key")?;
+    let key_val = nth_param(function, llvm_function, 1, "key");
     let key_ops = resolve_key_hash_ops(ctx, function, layout.key_ty)?;
     let probe = emit_read_only_probe(
         ctx,
-        function,
-        llvm_function,
-        layout,
-        &table,
-        key_val,
-        &key_ops,
+        ProbeInputs {
+            function,
+            key_ops: &key_ops,
+            key_val,
+            layout,
+            llvm_function,
+            table: &table,
+        },
     )?;
     ctx.builder.position_at_end(probe.found_bb);
     let val_ptr = unsafe {

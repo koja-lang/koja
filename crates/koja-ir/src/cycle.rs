@@ -5,11 +5,13 @@
 //!
 //! Edges count inline `Struct(_)` / `Enum(_)` references only, since
 //! pointer-shaped types (`CPtr`, `List`, `Map`, `Set`, `Function`,
-//! existing `Indirect`) already break the size dependency. Back-
-//! edges discovered by a three-color DFS pick out the source slot,
-//! and the second walk rewrites that slot's `IRType` in place.
+//! existing `Indirect`) already break the size dependency. The back
+//! edges [`Graph::back_edges`] reports pick out the source slots, and
+//! the second walk rewrites each slot's `IRType` in place.
 
 use std::collections::{BTreeMap, BTreeSet};
+
+use koja_graph::Graph;
 
 use crate::enum_decl::{IREnumDecl, IRVariantPayload};
 use crate::function::IRSymbol;
@@ -22,8 +24,8 @@ use crate::types::IRType;
 /// slot's [`IRType`] with [`IRType::Indirect`]. Idempotent on a
 /// cycle-free IR.
 pub(crate) fn break_type_cycles(packages: &mut [IRPackage]) {
-    let graph = build_graph(packages);
-    let recursive_slots = find_back_edge_slots(&graph);
+    let edges = collect_edges(packages);
+    let recursive_slots = back_edge_slots(&edges);
     if recursive_slots.is_empty() {
         return;
     }
@@ -39,23 +41,48 @@ enum Slot {
     EnumStructField { variant: u32, field_index: u32 },
 }
 
+/// One inline reference out of a decl: the referenced symbol and the
+/// slot that holds it.
 #[derive(Clone, Debug)]
 struct Edge {
     target: IRSymbol,
     slot: Slot,
 }
 
-fn build_graph(packages: &[IRPackage]) -> BTreeMap<IRSymbol, Vec<Edge>> {
-    let mut graph: BTreeMap<IRSymbol, Vec<Edge>> = BTreeMap::new();
+/// Every decl's inline references, keyed by the decl symbol.
+fn collect_edges(packages: &[IRPackage]) -> BTreeMap<IRSymbol, Vec<Edge>> {
+    let mut edges: BTreeMap<IRSymbol, Vec<Edge>> = BTreeMap::new();
     for package in packages {
         for decl in package.structs.values() {
-            graph.insert(decl.symbol.clone(), collect_struct_edges(decl));
+            edges.insert(decl.symbol.clone(), collect_struct_edges(decl));
         }
         for decl in package.enums.values() {
-            graph.insert(decl.symbol.clone(), collect_enum_edges(decl));
+            edges.insert(decl.symbol.clone(), collect_enum_edges(decl));
         }
     }
-    graph
+    edges
+}
+
+/// The slots that carry a back edge of the inline-reference graph,
+/// keyed by the decl they sit in. Two slots of one decl that name the
+/// same target share one graph edge, and both get the indirection.
+fn back_edge_slots(edges: &BTreeMap<IRSymbol, Vec<Edge>>) -> BTreeMap<IRSymbol, BTreeSet<Slot>> {
+    let mut graph = Graph::new();
+    for (source, targets) in edges {
+        graph.add_node(source.clone());
+        for edge in targets {
+            graph.add_edge(source.clone(), edge.target.clone());
+        }
+    }
+    let mut hits: BTreeMap<IRSymbol, BTreeSet<Slot>> = BTreeMap::new();
+    for (from, to) in graph.back_edges() {
+        let slots = edges[&from]
+            .iter()
+            .filter(|edge| edge.target == to)
+            .map(|edge| edge.slot.clone());
+        hits.entry(from).or_default().extend(slots);
+    }
+    hits
 }
 
 fn collect_struct_edges(decl: &IRStructDecl) -> Vec<Edge> {
@@ -138,50 +165,6 @@ fn inline_refs(ty: &IRType) -> Vec<IRSymbol> {
         | IRType::UInt64
         | IRType::Unit => Vec::new(),
     }
-}
-
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum Color {
-    White,
-    Gray,
-    Black,
-}
-
-fn find_back_edge_slots(
-    graph: &BTreeMap<IRSymbol, Vec<Edge>>,
-) -> BTreeMap<IRSymbol, BTreeSet<Slot>> {
-    let mut colors: BTreeMap<IRSymbol, Color> =
-        graph.keys().map(|s| (s.clone(), Color::White)).collect();
-    let mut hits: BTreeMap<IRSymbol, BTreeSet<Slot>> = BTreeMap::new();
-    for node in graph.keys() {
-        if colors[node] == Color::White {
-            dfs(node, graph, &mut colors, &mut hits);
-        }
-    }
-    hits
-}
-
-fn dfs(
-    node: &IRSymbol,
-    graph: &BTreeMap<IRSymbol, Vec<Edge>>,
-    colors: &mut BTreeMap<IRSymbol, Color>,
-    hits: &mut BTreeMap<IRSymbol, BTreeSet<Slot>>,
-) {
-    colors.insert(node.clone(), Color::Gray);
-    if let Some(edges) = graph.get(node) {
-        for edge in edges {
-            match colors.get(&edge.target).copied() {
-                Some(Color::Gray) => {
-                    hits.entry(node.clone())
-                        .or_default()
-                        .insert(edge.slot.clone());
-                }
-                Some(Color::White) => dfs(&edge.target, graph, colors, hits),
-                _ => {}
-            }
-        }
-    }
-    colors.insert(node.clone(), Color::Black);
 }
 
 fn apply_indirect_rewrites(

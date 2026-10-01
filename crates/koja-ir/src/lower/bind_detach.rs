@@ -15,7 +15,8 @@
 
 use std::collections::BTreeSet;
 
-use koja_ast::ast::{EnumConstructionData, Expr, ExprKind, Statement, StringPart};
+use koja_ast::ast::{LValue, Statement};
+use koja_ast::visit::{self, Visitor};
 
 use crate::function::{IRBlockId, IRInstruction};
 use crate::local::IRLocalId;
@@ -31,19 +32,22 @@ use super::patterns::pattern_binding_ids;
 pub(super) fn detach_mutated_binds(
     binds: &[(IRLocalId, IRType)],
     body: &[Statement],
-    ctx: &mut FnLowerCtx,
+    ctx: &mut FnLowerCtx<'_>,
     block: IRBlockId,
 ) {
     if !binds.iter().any(|(_, ty)| ty.is_heap_managed()) {
         return;
     }
-    let mut assigned = BTreeSet::new();
-    collect_assigned_locals(body, &mut assigned);
+    let mut assigned = AssignedLocals::default();
+    visit::walk_body(&mut assigned, body);
     for (local, ty) in binds {
         // Only borrowed slots need the detach. A bind that already
         // owns its value (a binary-match bind writing a fresh block)
         // must keep it, as cloning over it would leak the original.
-        if !ty.is_heap_managed() || !assigned.contains(local) || !ctx.slot_is_borrowed(*local) {
+        if !ty.is_heap_managed()
+            || !assigned.locals.contains(local)
+            || !ctx.slot_is_borrowed(*local)
+        {
             continue;
         }
         let borrowed = ctx.fresh_value(ty.clone());
@@ -75,187 +79,31 @@ pub(super) fn detach_mutated_binds(
     }
 }
 
-/// Every local `body` writes, recursing into nested statement bodies
+/// Every local a body writes, including writes inside nested bodies
 /// (loops, conditionals, nested matches, closures). Assignment and
 /// destructuring rebind an existing name in place, so a whole-slot
 /// write can hit a bind just like a field write can. Non-bind ids
 /// never intersect the bind set.
-fn collect_assigned_locals(body: &[Statement], assigned: &mut BTreeSet<IRLocalId>) {
-    for statement in body {
-        match statement {
-            Statement::Assignment { target, value, .. }
-            | Statement::CompoundAssign { target, value, .. } => {
-                if let Some(local_id) = target.local_id {
-                    assigned.insert(IRLocalId::from_local_id(local_id));
-                }
-                collect_assigned_in_expr(value, assigned);
-            }
-            Statement::Break { .. } => {}
-            Statement::Destructure { pattern, value, .. } => {
-                assigned.extend(
-                    pattern_binding_ids(pattern)
-                        .into_iter()
-                        .map(IRLocalId::from_local_id),
-                );
-                collect_assigned_in_expr(value, assigned);
-            }
-            Statement::Expr(value) => collect_assigned_in_expr(value, assigned),
-            Statement::Return { value, .. } => {
-                if let Some(value) = value {
-                    collect_assigned_in_expr(value, assigned);
-                }
-            }
-        }
-    }
+#[derive(Default)]
+struct AssignedLocals {
+    locals: BTreeSet<IRLocalId>,
 }
 
-fn collect_assigned_in_expr(expr: &Expr, assigned: &mut BTreeSet<IRLocalId>) {
-    match &expr.kind {
-        ExprKind::Assert {
-            condition, message, ..
-        } => {
-            collect_assigned_in_expr(condition, assigned);
-            if let Some(message) = message {
-                collect_assigned_in_expr(message, assigned);
-            }
+impl<'ast> Visitor<'ast> for AssignedLocals {
+    fn visit_lvalue(&mut self, lvalue: &'ast LValue) {
+        if let Some(local_id) = lvalue.local_id {
+            self.locals.insert(IRLocalId::from_local_id(local_id));
         }
-        ExprKind::Binary { left, right, .. } => {
-            collect_assigned_in_expr(left, assigned);
-            collect_assigned_in_expr(right, assigned);
+    }
+
+    fn visit_statement(&mut self, statement: &'ast Statement) {
+        if let Statement::Destructure { pattern, .. } = statement {
+            self.locals.extend(
+                pattern_binding_ids(pattern)
+                    .into_iter()
+                    .map(IRLocalId::from_local_id),
+            );
         }
-        ExprKind::BinaryLiteral { segments } => {
-            for segment in segments {
-                collect_assigned_in_expr(&segment.value, assigned);
-                if let Some(size) = &segment.size {
-                    collect_assigned_in_expr(size, assigned);
-                }
-            }
-        }
-        ExprKind::Call { callee, args, .. } => {
-            collect_assigned_in_expr(callee, assigned);
-            for arg in args {
-                collect_assigned_in_expr(&arg.value, assigned);
-            }
-        }
-        ExprKind::Closure { body, .. } => collect_assigned_locals(body, assigned),
-        ExprKind::Cond { arms, else_body } => {
-            for arm in arms {
-                collect_assigned_in_expr(&arm.condition, assigned);
-                collect_assigned_locals(&arm.body, assigned);
-            }
-            if let Some(body) = else_body {
-                collect_assigned_locals(body, assigned);
-            }
-        }
-        ExprKind::EnumConstruction { data, .. } => match data {
-            EnumConstructionData::Struct(fields) => {
-                for field in fields {
-                    collect_assigned_in_expr(&field.value, assigned);
-                }
-            }
-            EnumConstructionData::Tuple(elements) => {
-                for element in elements {
-                    collect_assigned_in_expr(element, assigned);
-                }
-            }
-            EnumConstructionData::Unit => {}
-        },
-        ExprKind::Fail { value } => collect_assigned_in_expr(value, assigned),
-        ExprKind::FieldAccess { receiver, .. } => collect_assigned_in_expr(receiver, assigned),
-        ExprKind::For { iterable, body, .. } => {
-            collect_assigned_in_expr(iterable, assigned);
-            collect_assigned_locals(body, assigned);
-        }
-        ExprKind::Group { expr } | ExprKind::Spawn { expr } | ExprKind::Try { expr } => {
-            collect_assigned_in_expr(expr, assigned);
-        }
-        ExprKind::Ident { .. }
-        | ExprKind::Literal { .. }
-        | ExprKind::NamedFunctionReference { .. }
-        | ExprKind::Self_ { .. } => {}
-        ExprKind::If {
-            condition,
-            then_body,
-            else_body,
-        } => {
-            collect_assigned_in_expr(condition, assigned);
-            collect_assigned_locals(then_body, assigned);
-            if let Some(body) = else_body {
-                collect_assigned_locals(body, assigned);
-            }
-        }
-        ExprKind::List { elements } | ExprKind::Tuple { elements } => {
-            for element in elements {
-                collect_assigned_in_expr(element, assigned);
-            }
-        }
-        ExprKind::Loop { body } => collect_assigned_locals(body, assigned),
-        ExprKind::Map { entries } => {
-            for (key, value) in entries {
-                collect_assigned_in_expr(key, assigned);
-                collect_assigned_in_expr(value, assigned);
-            }
-        }
-        ExprKind::Match { subject, arms } => {
-            collect_assigned_in_expr(subject, assigned);
-            for arm in arms {
-                if let Some(guard) = &arm.guard {
-                    collect_assigned_in_expr(guard, assigned);
-                }
-                collect_assigned_locals(&arm.body, assigned);
-            }
-        }
-        ExprKind::MethodCall { receiver, args, .. } => {
-            collect_assigned_in_expr(receiver, assigned);
-            for arg in args {
-                collect_assigned_in_expr(&arg.value, assigned);
-            }
-        }
-        ExprKind::Receive {
-            arms,
-            after_timeout,
-            after_body,
-        } => {
-            for arm in arms {
-                collect_assigned_locals(&arm.body, assigned);
-            }
-            if let Some(timeout) = after_timeout {
-                collect_assigned_in_expr(timeout, assigned);
-            }
-            collect_assigned_locals(after_body, assigned);
-        }
-        ExprKind::Rescue {
-            subject, handler, ..
-        } => {
-            collect_assigned_in_expr(subject, assigned);
-            collect_assigned_in_expr(handler, assigned);
-        }
-        ExprKind::ShortClosure { body, .. } => collect_assigned_in_expr(body, assigned),
-        ExprKind::String { parts, .. } => {
-            for part in parts {
-                if let StringPart::Interpolation { expr, .. } = part {
-                    collect_assigned_in_expr(expr, assigned);
-                }
-            }
-        }
-        ExprKind::StructConstruction { fields, .. } => {
-            for field in fields {
-                collect_assigned_in_expr(&field.value, assigned);
-            }
-        }
-        ExprKind::Ternary {
-            condition,
-            then_expr,
-            else_expr,
-        } => {
-            collect_assigned_in_expr(condition, assigned);
-            collect_assigned_in_expr(then_expr, assigned);
-            collect_assigned_in_expr(else_expr, assigned);
-        }
-        ExprKind::Unary { operand, .. } => collect_assigned_in_expr(operand, assigned),
-        ExprKind::While { condition, body } => {
-            collect_assigned_in_expr(condition, assigned);
-            collect_assigned_locals(body, assigned);
-        }
+        visit::walk_statement(self, statement);
     }
 }

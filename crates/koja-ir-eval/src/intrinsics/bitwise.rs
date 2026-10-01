@@ -10,31 +10,45 @@
 use koja_ir::{BitOp, IntType};
 
 use crate::error::RuntimeError;
+use crate::intrinsics::helpers;
 use crate::value::Value;
 
 /// Run a bitwise intrinsic. `ty` selects shift signedness and the
 /// width used for count validation and result normalization.
 pub(super) fn dispatch(ty: IntType, op: BitOp, args: &[Value]) -> Result<Value, RuntimeError> {
-    let lhs = arg_int(args, 0, op)?;
+    let label = label(op);
+    let lhs = helpers::arg_int(args, 0, label)?;
     let result = match op {
-        BitOp::Band => lhs & arg_int(args, 1, op)?,
+        BitOp::Band => lhs & helpers::arg_int(args, 1, label)?,
         BitOp::Bnot => normalize(ty, !lhs),
-        BitOp::Bor => lhs | arg_int(args, 1, op)?,
+        BitOp::Bor => lhs | helpers::arg_int(args, 1, label)?,
         BitOp::Bsl => {
-            let count = shift_count(ty, op, arg_int(args, 1, op)?)?;
+            let count = shift_count(ty, op, helpers::arg_int(args, 1, label)?)?;
             normalize(ty, lhs.wrapping_shl(count))
         }
         BitOp::Bsr => {
-            let count = shift_count(ty, op, arg_int(args, 1, op)?)?;
+            let count = shift_count(ty, op, helpers::arg_int(args, 1, label)?)?;
             if ty.is_signed() {
                 lhs.wrapping_shr(count)
             } else {
                 normalize(ty, ((lhs as u64).wrapping_shr(count)) as i64)
             }
         }
-        BitOp::Bxor => lhs ^ arg_int(args, 1, op)?,
+        BitOp::Bxor => lhs ^ helpers::arg_int(args, 1, label)?,
     };
     Ok(Value::Int(result))
+}
+
+/// The `Bitwise.<method>` label for argument diagnostics.
+fn label(op: BitOp) -> &'static str {
+    match op {
+        BitOp::Band => "Bitwise.band",
+        BitOp::Bnot => "Bitwise.bnot",
+        BitOp::Bor => "Bitwise.bor",
+        BitOp::Bsl => "Bitwise.bsl",
+        BitOp::Bsr => "Bitwise.bsr",
+        BitOp::Bxor => "Bitwise.bxor",
+    }
 }
 
 /// Validate a shift count against the receiver width, trapping on
@@ -61,21 +75,5 @@ fn normalize(ty: IntType, value: i64) -> i64 {
         (masked as i64) - (1i64 << width)
     } else {
         masked as i64
-    }
-}
-
-fn arg_int(args: &[Value], index: usize, op: BitOp) -> Result<i64, RuntimeError> {
-    match args.get(index) {
-        Some(Value::Int(v)) => Ok(*v),
-        Some(other) => Err(RuntimeError::TypeMismatch {
-            detail: format!("Bitwise.{op:?} arg #{index}: expected Int, got {other:?}"),
-        }),
-        None => Err(RuntimeError::TypeMismatch {
-            detail: format!(
-                "Bitwise.{op:?} arity: expected at least {expected} args, got {got}",
-                expected = index + 1,
-                got = args.len(),
-            ),
-        }),
     }
 }

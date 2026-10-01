@@ -151,7 +151,7 @@ x /= 4
 
 ### Constants
 
-Package-level constants are declared with `const`. Values can be literals (int, float, string, bool), binary literals whose segments are all literals, enum unit variants, or struct literals whose fields are all constant expressions:
+Package-level constants are declared with `const`. A constant value takes the same grammar as a field default (see [Default Field Values](#default-field-values)): literals, negated numerics, enum variants, binary literals, other constants, and struct, list, map, or set literals of those:
 
 ```koja
 const MAX = 100
@@ -161,15 +161,21 @@ const DEBUG = false
 const SYNC = <<0x53::8, 4::32>>
 const HEADING = Direction.North
 const ORIGIN = Point{x: 0, y: 0}
+const PRIMES = [2, 3, 5, 7]
+const PORTS = ["http": 80, "https": 443]
+const DEFAULT = Config{name: "web", ports: [80, 443]}
 ```
 
-An optional type annotation is supported for generic inference:
+An optional type annotation is supported for generic inference and for set literals, which share the list literal syntax:
 
 ```koja
 const EMPTY: Option<Int> = Option.None
+const TAGS: Set<String> = ["web", "api"]
 ```
 
-Constants are inlined at every usage site.
+A constant may read another constant declared anywhere in the program, in any source order. A constant that depends on itself, directly or through other constants, is a compile error.
+
+How a constant reaches its use sites depends on its value. Scalars (int, float, bool) are inlined at every read. Strings, binaries, enum variants, and struct literals of those are pooled once per program. Collections, and any value that contains one, are built once at program start. Each read borrows the shared value, and a binding clones it like any other list, so appending to a binding never changes the constant.
 
 Within a package, constants are read by bare name (`MAX`). Constants from the auto-imported `Global` package also resolve bare (`STDOUT`). Public constants in other packages are read through the package namespace (`Mathlib.PI`).
 
@@ -815,7 +821,7 @@ c = Config{name: "app"} # host and port fill from the defaults
 Config{} # error: `name` has no default
 ```
 
-Default values are limited to side-effect-free expressions: literals (no interpolation), negated numerics, unit enum variants, binary literals, constants (`LIMIT`, `Duration.ZERO`), and struct, list, map, or set literals of those. The compiler checks each default against the field type at the declaration. A default cannot use an `alias` shorthand. Write the qualified name.
+Default values are limited to side-effect-free expressions: literals (no interpolation), negated numerics, enum variants, binary literals, constants (`LIMIT`, `Duration.ZERO`), and struct, list, map, or set literals of those. The compiler checks each default against the field type at the declaration. A default resolves in its declaring file, so it can name a type through a dotted path (`TCPListener.Options{}`) or through one of that file's aliases.
 
 The default expression evaluates at each construction that omits the field. This makes generic defaults work: a `List<T>` field can default to `[]` and an `Option<T>` field to `Option.None`:
 
@@ -2569,7 +2575,7 @@ List literals (`[a, b, c]`) are backed by the `ListLiteral<T>` protocol. See [Li
 
 ### `Map<K, V>`
 
-A generic hash map. Keys must implement `Hash` and `Equality`. Uses open addressing with linear probing.
+A generic hash map. Keys must implement `Hash` and `Equality`, and the compiler checks this bound. Uses open addressing with linear probing.
 
 ```koja
 m: Map<String, Int> = Map.new()
@@ -2603,7 +2609,7 @@ Map literals (`[key: value, ...]`) are backed by the `MapLiteral<K, V>` protocol
 
 ### `Set<T>`
 
-A generic hash set of unique elements. Elements must implement `Hash` and `Equality`. Uses open addressing with linear probing.
+A generic hash set of unique elements. Elements must implement `Hash` and `Equality`, and the compiler checks this bound. Uses open addressing with linear probing.
 
 ```koja
 s: Set<Int> = Set.new()

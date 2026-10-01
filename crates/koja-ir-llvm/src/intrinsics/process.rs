@@ -23,6 +23,7 @@ use crate::emit::process::serialize_to_stack;
 use crate::error::{IceExt, LlvmError};
 use crate::intrinsics::element::release_in_slot;
 use crate::intrinsics::result;
+use crate::intrinsics::util::{extract_int, nth_int, nth_param, nth_param_type, nth_struct};
 use crate::runtime::{
     declare_rt_call_receive_extern, declare_rt_call_token_extern, declare_rt_context_get_extern,
     declare_rt_demonitor_extern, declare_rt_is_process_alive_extern, declare_rt_kill_extern,
@@ -43,7 +44,7 @@ pub(super) fn emit_ref<'ctx>(
         RefMethod::Call => emit_call(ctx, function, llvm_function),
         RefMethod::Cast => emit_cast(ctx, function, llvm_function),
         RefMethod::Kill => emit_kill(ctx, function, llvm_function),
-        RefMethod::SelfRef => emit_self_ref(ctx, function, llvm_function),
+        RefMethod::SelfRef => emit_self_ref(ctx, function),
         RefMethod::SendAfter => emit_send_after(ctx, function, llvm_function),
         RefMethod::Signal => emit_signal(ctx, function, llvm_function),
     }
@@ -67,7 +68,7 @@ pub(super) fn emit_process<'ctx>(
     method: ProcessMethod,
 ) -> Result<(), LlvmError> {
     match method {
-        ProcessMethod::Context => emit_context(ctx, function, llvm_function),
+        ProcessMethod::Context => emit_context(ctx, function),
         ProcessMethod::Demonitor => emit_demonitor(ctx, function, llvm_function),
         ProcessMethod::Monitor => emit_monitor(ctx, function, llvm_function),
         ProcessMethod::Parent => emit_parent(ctx, function, llvm_function),
@@ -79,14 +80,7 @@ pub(super) fn emit_process<'ctx>(
 /// `Ref.self_ref() -> Ref<M, R>`: call `koja_rt_self()` and wrap
 /// the returned pid in the `Ref` struct value the function's
 /// return type already specifies.
-fn emit_self_ref<'ctx>(
-    ctx: &EmitContext<'ctx>,
-    function: &IRFunction,
-    llvm_function: FunctionValue<'ctx>,
-) -> Result<(), LlvmError> {
-    let entry_bb = ctx.context.append_basic_block(llvm_function, "entry");
-    ctx.builder.position_at_end(entry_bb);
-
+fn emit_self_ref<'ctx>(ctx: &EmitContext<'ctx>, function: &IRFunction) -> Result<(), LlvmError> {
     let self_fn = declare_rt_self_extern(ctx);
     let pid = ctx
         .call_basic(self_fn, &[], "current_pid")?
@@ -94,12 +88,10 @@ fn emit_self_ref<'ctx>(
 
     let ref_struct = match &function.return_type {
         IRType::Struct(symbol) => ctx.layouts.struct_type(symbol.mangled()),
-        other => {
-            return Err(LlvmError::Codegen(format!(
-                "LLVM emit: `Ref.self_ref` returns `{other:?}`, expected Struct \
-                 (IR seal invariant violation)",
-            )));
-        }
+        other => panic!(
+            "LLVM emit: `Ref.self_ref` returns `{other:?}`, expected Struct \
+             (IR seal invariant violation)",
+        ),
     };
     let mut ref_value = ref_struct.get_undef();
     ref_value = ctx
@@ -121,11 +113,9 @@ fn emit_cast<'ctx>(
     function: &IRFunction,
     llvm_function: FunctionValue<'ctx>,
 ) -> Result<(), LlvmError> {
-    let entry_bb = ctx.context.append_basic_block(llvm_function, "entry");
-    ctx.builder.position_at_end(entry_bb);
-
     let pid = pid_from_self(ctx, llvm_function, function)?;
-    let (msg_value, msg_ir_type) = nth_param(function, llvm_function, 1)?;
+    let msg_value = nth_param(function, llvm_function, 1, "msg");
+    let msg_ir_type = nth_param_type(function, 1);
     let msg_llvm = ir_basic_type(ctx, msg_ir_type)?;
     let none_payload = option_none_payload(ctx);
     let (envelope_ptr, envelope_size) =
@@ -157,12 +147,10 @@ fn emit_send_after<'ctx>(
     function: &IRFunction,
     llvm_function: FunctionValue<'ctx>,
 ) -> Result<(), LlvmError> {
-    let entry_bb = ctx.context.append_basic_block(llvm_function, "entry");
-    ctx.builder.position_at_end(entry_bb);
-
     let pid = pid_from_self(ctx, llvm_function, function)?;
-    let (msg_value, msg_ir_type) = nth_param(function, llvm_function, 1)?;
-    let (delay_value, _) = nth_param(function, llvm_function, 2)?;
+    let msg_value = nth_param(function, llvm_function, 1, "msg");
+    let msg_ir_type = nth_param_type(function, 1);
+    let delay_value = nth_param(function, llvm_function, 2, "delay");
     let msg_llvm = ir_basic_type(ctx, msg_ir_type)?;
     let none_payload = option_none_payload(ctx);
     let (envelope_ptr, envelope_size) = build_tuple_envelope_alloca(
@@ -205,25 +193,20 @@ fn emit_call<'ctx>(
     function: &IRFunction,
     llvm_function: FunctionValue<'ctx>,
 ) -> Result<(), LlvmError> {
-    let entry_bb = ctx.context.append_basic_block(llvm_function, "entry");
-    ctx.builder.position_at_end(entry_bb);
-
     let target_pid = pid_from_self(ctx, llvm_function, function)?;
-    let (msg_value, msg_ir_type) = nth_param(function, llvm_function, 1)?;
-    let (timeout_value, _) = nth_param(function, llvm_function, 2)?;
-    let timeout = timeout_value.into_int_value();
+    let msg_value = nth_param(function, llvm_function, 1, "msg");
+    let msg_ir_type = nth_param_type(function, 1);
+    let timeout = nth_int(function, llvm_function, 2, "timeout");
     let msg_llvm = ir_basic_type(ctx, msg_ir_type)?;
 
     let result_symbol = match &function.return_type {
         IRType::Enum(symbol) => symbol.clone(),
-        other => {
-            return Err(LlvmError::Codegen(format!(
-                "LLVM emit: `Ref.call` returns `{other:?}`, expected Enum \
-                 (IR seal invariant violation)",
-            )));
-        }
+        other => panic!(
+            "LLVM emit: `Ref.call` returns `{other:?}`, expected Enum \
+             (IR seal invariant violation)",
+        ),
     };
-    let reply_ir_type = ok_payload_field_type(ctx, &result_symbol)?;
+    let reply_ir_type = ok_payload_field_type(ctx, &result_symbol);
     let reply_llvm = ir_basic_type(ctx, &reply_ir_type)?;
     let call_error_symbol = global_primitive_symbol(&["Process", "CallError"]);
 
@@ -374,11 +357,9 @@ fn emit_signal<'ctx>(
     function: &IRFunction,
     llvm_function: FunctionValue<'ctx>,
 ) -> Result<(), LlvmError> {
-    let entry_bb = ctx.context.append_basic_block(llvm_function, "entry");
-    ctx.builder.position_at_end(entry_bb);
-
     let pid = pid_from_self(ctx, llvm_function, function)?;
-    let (event_value, event_ir_type) = nth_param(function, llvm_function, 1)?;
+    let event_value = nth_param(function, llvm_function, 1, "event");
+    let event_ir_type = nth_param_type(function, 1);
     let event_llvm = ir_basic_type(ctx, event_ir_type)?;
     let event_alloca = ctx.build_entry_alloca(event_llvm, "event_buf");
     ctx.builder
@@ -408,9 +389,6 @@ fn emit_kill<'ctx>(
     function: &IRFunction,
     llvm_function: FunctionValue<'ctx>,
 ) -> Result<(), LlvmError> {
-    let entry_bb = ctx.context.append_basic_block(llvm_function, "entry");
-    ctx.builder.position_at_end(entry_bb);
-
     let pid = pid_from_self(ctx, llvm_function, function)?;
     let kill_fn = declare_rt_kill_extern(ctx);
     ctx.builder
@@ -427,9 +405,6 @@ fn emit_alive<'ctx>(
     function: &IRFunction,
     llvm_function: FunctionValue<'ctx>,
 ) -> Result<(), LlvmError> {
-    let entry_bb = ctx.context.append_basic_block(llvm_function, "entry");
-    ctx.builder.position_at_end(entry_bb);
-
     let pid = pid_from_self(ctx, llvm_function, function)?;
     let alive_fn = declare_rt_is_process_alive_extern(ctx);
     let alive_i64 = ctx
@@ -456,16 +431,9 @@ fn emit_monitor<'ctx>(
     function: &IRFunction,
     llvm_function: FunctionValue<'ctx>,
 ) -> Result<(), LlvmError> {
-    let entry_bb = ctx.context.append_basic_block(llvm_function, "entry");
-    ctx.builder.position_at_end(entry_bb);
-
     // `Pid` lays out as `{ i64 id }`.
-    let (target_value, _) = nth_param(function, llvm_function, 0)?;
-    let target_pid = ctx
-        .builder
-        .build_extract_value(target_value.into_struct_value(), 0, "target_pid")
-        .or_ice()?
-        .into_int_value();
+    let target_value = nth_struct(function, llvm_function, 0, "target");
+    let target_pid = extract_int(ctx, target_value, 0, "target_pid")?;
     let monitor_fn = declare_rt_monitor_extern(ctx);
     let token = ctx
         .call_basic(monitor_fn, &[target_pid.into()], "monitor_token")?
@@ -473,12 +441,10 @@ fn emit_monitor<'ctx>(
 
     let ref_struct = match &function.return_type {
         IRType::Struct(symbol) => ctx.layouts.struct_type(symbol.mangled()),
-        other => {
-            return Err(LlvmError::Codegen(format!(
-                "LLVM emit: `Process.monitor` returns `{other:?}`, expected the \
-                 `Process.MonitorRef` struct (IR seal invariant violation)",
-            )));
-        }
+        other => panic!(
+            "LLVM emit: `Process.monitor` returns `{other:?}`, expected the \
+             `Process.MonitorRef` struct (IR seal invariant violation)",
+        ),
     };
     let monitor_ref = ctx
         .builder
@@ -499,15 +465,8 @@ fn emit_demonitor<'ctx>(
     function: &IRFunction,
     llvm_function: FunctionValue<'ctx>,
 ) -> Result<(), LlvmError> {
-    let entry_bb = ctx.context.append_basic_block(llvm_function, "entry");
-    ctx.builder.position_at_end(entry_bb);
-
-    let (reference_value, _) = nth_param(function, llvm_function, 0)?;
-    let token = ctx
-        .builder
-        .build_extract_value(reference_value.into_struct_value(), 0, "monitor_token")
-        .or_ice()?
-        .into_int_value();
+    let reference_value = nth_struct(function, llvm_function, 0, "reference");
+    let token = extract_int(ctx, reference_value, 0, "monitor_token")?;
     let demonitor_fn = declare_rt_demonitor_extern(ctx);
     ctx.builder
         .build_call(demonitor_fn, &[token.into()], "")
@@ -525,34 +484,27 @@ fn emit_parent<'ctx>(
     function: &IRFunction,
     llvm_function: FunctionValue<'ctx>,
 ) -> Result<(), LlvmError> {
-    let entry_bb = ctx.context.append_basic_block(llvm_function, "entry");
-    ctx.builder.position_at_end(entry_bb);
-
     let IRType::Enum(option_symbol) = &function.return_type else {
-        return Err(LlvmError::Codegen(format!(
+        panic!(
             "LLVM emit: `Process.parent` returns `{:?}`, expected the \
              `Option<Pid>` enum (IR seal invariant violation)",
             function.return_type,
-        )));
+        );
     };
     let some_tag = ctx.layouts.enum_variant_tag(option_symbol, "Some");
     let none_tag = ctx.layouts.enum_variant_tag(option_symbol, "None");
     let pid_symbol = match ctx.layouts.enum_variant_payload(option_symbol, some_tag) {
         IRVariantPayload::Tuple(types) => match types.as_slice() {
             [IRType::Struct(symbol)] => symbol.clone(),
-            other => {
-                return Err(LlvmError::Codegen(format!(
-                    "LLVM emit: `Process.parent` Some payload is `{other:?}`, expected \
-                     a single `Pid` struct (IR seal invariant violation)",
-                )));
-            }
-        },
-        other => {
-            return Err(LlvmError::Codegen(format!(
+            other => panic!(
                 "LLVM emit: `Process.parent` Some payload is `{other:?}`, expected \
-                 a tuple (IR seal invariant violation)",
-            )));
-        }
+                 a single `Pid` struct (IR seal invariant violation)",
+            ),
+        },
+        other => panic!(
+            "LLVM emit: `Process.parent` Some payload is `{other:?}`, expected \
+             a tuple (IR seal invariant violation)",
+        ),
     };
 
     let parent_fn = declare_rt_parent_extern(ctx);
@@ -616,22 +568,13 @@ fn emit_parent<'ctx>(
 /// `Process.Context` lays out as four `i64` words, the same 32 bytes the
 /// runtime holds, so the extern fills a stack slot of the struct type
 /// and the slot is loaded whole.
-fn emit_context<'ctx>(
-    ctx: &EmitContext<'ctx>,
-    function: &IRFunction,
-    llvm_function: FunctionValue<'ctx>,
-) -> Result<(), LlvmError> {
-    let entry_bb = ctx.context.append_basic_block(llvm_function, "entry");
-    ctx.builder.position_at_end(entry_bb);
-
+fn emit_context(ctx: &EmitContext<'_>, function: &IRFunction) -> Result<(), LlvmError> {
     let context_struct = match &function.return_type {
         IRType::Struct(symbol) => ctx.layouts.struct_type(symbol.mangled()),
-        other => {
-            return Err(LlvmError::Codegen(format!(
-                "LLVM emit: `Process.context` returns `{other:?}`, expected the \
-                 `Process.Context` struct (IR seal invariant violation)",
-            )));
-        }
+        other => panic!(
+            "LLVM emit: `Process.context` returns `{other:?}`, expected the \
+             `Process.Context` struct (IR seal invariant violation)",
+        ),
     };
     let slot = ctx
         .builder
@@ -664,24 +607,20 @@ fn emit_reply_send<'ctx>(
     function: &IRFunction,
     llvm_function: FunctionValue<'ctx>,
 ) -> Result<(), LlvmError> {
-    let entry_bb = ctx.context.append_basic_block(llvm_function, "entry");
-    ctx.builder.position_at_end(entry_bb);
-
     let pid = pid_from_self(ctx, llvm_function, function)?;
     let token = token_from_self(ctx, llvm_function, function)?;
-    let (reply_value, reply_ir_type) = nth_param(function, llvm_function, 1)?;
+    let reply_value = nth_param(function, llvm_function, 1, "reply");
+    let reply_ir_type = nth_param_type(function, 1);
     let reply_llvm = ir_basic_type(ctx, reply_ir_type)?;
     let (reply_ptr, reply_len) = serialize_to_stack(ctx, "reply_msg", reply_llvm, reply_value)?;
     let drop_glue = payload_drop_glue(ctx, reply_ir_type)?;
 
     let delivery_symbol = match &function.return_type {
         IRType::Enum(symbol) => symbol.clone(),
-        other => {
-            return Err(LlvmError::Codegen(format!(
-                "LLVM emit: `ReplyTo.send` returns `{other:?}`, expected the \
-                 `ReplyTo.Delivery` enum (IR seal invariant violation)",
-            )));
-        }
+        other => panic!(
+            "LLVM emit: `ReplyTo.send` returns `{other:?}`, expected the \
+             `ReplyTo.Delivery` enum (IR seal invariant violation)",
+        ),
     };
 
     let reply_fn = declare_rt_reply_extern(ctx);
@@ -913,11 +852,7 @@ fn build_payload_drop_shim<'ctx>(
     ctx.builder.position_at_end(entry);
     let payload_ptr = shim
         .get_nth_param(0)
-        .ok_or_else(|| {
-            LlvmError::Codegen(format!(
-                "envelope drop shim `{symbol}` missing payload param"
-            ))
-        })?
+        .unwrap_or_else(|| panic!("envelope drop shim `{symbol}` missing payload param"))
         .into_pointer_value();
     release_in_slot(ctx, payload, payload_ptr)?;
     ctx.builder.build_return(None).or_ice()?;
@@ -928,27 +863,24 @@ fn build_payload_drop_shim<'ctx>(
 }
 
 /// Recover the `R` IR type from `Result<R, CallError>`'s `Ok(R)`
-/// variant by walking the enum-variant payload registry. Surfaces
-/// IR-seal violations as [`LlvmError::Codegen`]: `Ref.call`'s
-/// return type must be a binary-shaped `Result` (typecheck enforces
-/// this) and the `Ok` variant must carry exactly one positional
-/// payload field of type `R`.
-fn ok_payload_field_type(
-    ctx: &EmitContext<'_>,
-    result_symbol: &IRSymbol,
-) -> Result<IRType, LlvmError> {
+/// variant by walking the enum-variant payload registry. Panics on
+/// an IR-seal violation. `Ref.call`'s return type must be a
+/// binary-shaped `Result` (typecheck enforces this) and the `Ok`
+/// variant must carry exactly one positional payload field of type
+/// `R`.
+fn ok_payload_field_type(ctx: &EmitContext<'_>, result_symbol: &IRSymbol) -> IRType {
     let payload = ctx
         .layouts
         .enum_variant_payload(result_symbol, result::ok_tag(ctx, result_symbol));
     match payload {
-        IRVariantPayload::Tuple(types) if types.len() == 1 => Ok(types.into_iter().next().unwrap()),
+        IRVariantPayload::Tuple(types) if types.len() == 1 => types.into_iter().next().unwrap(),
         IRVariantPayload::Struct(fields) if fields.len() == 1 => {
-            Ok(fields.into_iter().next().unwrap().ir_type)
+            fields.into_iter().next().unwrap().ir_type
         }
-        other => Err(LlvmError::Codegen(format!(
+        other => panic!(
             "LLVM emit: `Ref.call` return `{result_symbol}` Ok variant has unexpected \
              payload `{other:?}`, expected single-field (IR seal invariant violation)",
-        ))),
+        ),
     }
 }
 
@@ -1004,42 +936,6 @@ fn self_field<'ctx>(
     index: u32,
     name: &str,
 ) -> Result<IntValue<'ctx>, LlvmError> {
-    let self_value = llvm_function.get_nth_param(0).ok_or_else(|| {
-        LlvmError::Codegen(format!(
-            "LLVM emit: `{}` missing self parameter",
-            function.symbol,
-        ))
-    })?;
-    let self_struct = self_value.into_struct_value();
-    ctx.builder
-        .build_extract_value(self_struct, index, name)
-        .or_ice()
-        .map(|v| v.into_int_value())
-}
-
-/// Read the LLVM value + IR type for the `index`-th parameter,
-/// surfacing both for downstream emission. Misses are an upstream
-/// IR seal / lower bug.
-pub(super) fn nth_param<'ctx, 'fn_>(
-    function: &'fn_ IRFunction,
-    llvm_function: FunctionValue<'ctx>,
-    index: u32,
-) -> Result<(BasicValueEnum<'ctx>, &'fn_ IRType), LlvmError> {
-    let value = llvm_function.get_nth_param(index).ok_or_else(|| {
-        LlvmError::Codegen(format!(
-            "LLVM emit: `{}` missing param #{index}",
-            function.symbol,
-        ))
-    })?;
-    let ir_type = function
-        .params
-        .get(index as usize)
-        .map(|p| &p.ty)
-        .ok_or_else(|| {
-            LlvmError::Codegen(format!(
-                "LLVM emit: `{}` IR has no param #{index}",
-                function.symbol,
-            ))
-        })?;
-    Ok((value, ir_type))
+    let self_struct = nth_struct(function, llvm_function, 0, "self");
+    extract_int(ctx, self_struct, index, name)
 }

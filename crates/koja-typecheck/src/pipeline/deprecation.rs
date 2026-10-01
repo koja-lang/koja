@@ -11,13 +11,12 @@
 //! [`lookup_type`] the resolver used.
 
 use koja_ast::ast::{
-    Annotation, AnnotationKind, BuiltinDecl, ClosureParam, Constant, Diagnostic,
-    EnumConstructionData, EnumDecl, EnumVariantData, Expr, ExprKind, ExtendBlock, File, Function,
-    ImplBlock, ImplMember, Item, Name, Param, Pattern, ProtocolDecl, Statement, StringPart,
-    StructDecl, StructField, TypeAlias, TypeExpr, TypeParam, name_texts,
+    Annotation, AnnotationKind, Diagnostic, Expr, ExprKind, File, Function, Item, Name, Pattern,
+    ProtocolMethod, TypeExpr, TypeParam, name_texts,
 };
 use koja_ast::identifier::{GlobalRegistryId, Identifier, Resolution, ResolvedType};
 use koja_ast::span::Span;
+use koja_ast::visit::{self, Visitor};
 
 use crate::pipeline::aliases::collect_file_aliases;
 use crate::pipeline::collect::nominal_target_path;
@@ -42,12 +41,7 @@ pub(crate) fn check_file(
         scope,
         type_params: Vec::new(),
     };
-    for item in &file.items {
-        walker.check_item(item);
-    }
-    if let Some(body) = file.body.as_ref() {
-        walker.check_body(body);
-    }
+    walker.visit_file(file);
 }
 
 /// Whether the decl carries a well-formed `@deprecated` annotation.
@@ -68,134 +62,31 @@ struct Walker<'a, 'd> {
 }
 
 impl Walker<'_, '_> {
-    fn check_item(&mut self, item: &Item) {
+    /// Run `walk` and drop the type params it pushed on the way.
+    fn scoped(&mut self, walk: impl FnOnce(&mut Self)) {
+        let depth = self.type_params.len();
+        walk(self);
+        self.type_params.truncate(depth);
+    }
+
+    /// Whether the item's own uses never warn. A deprecated decl
+    /// suppresses itself, and an `impl` / `extend` block is
+    /// suppressed when its target is deprecated. Functions decide
+    /// for themselves in [`Visitor::visit_function`].
+    fn suppressed(&self, item: &Item) -> bool {
         match item {
-            Item::Alias(_) => {}
-            Item::Builtin(decl) => self.check_builtin(decl),
-            Item::Constant(constant) => self.check_constant(constant),
-            Item::Enum(decl) => self.check_enum(decl),
-            Item::Extend(block) => self.check_extend(block),
-            Item::Function(function) => self.check_function(function),
-            Item::Impl(block) => self.check_impl(block),
-            Item::Protocol(decl) => self.check_protocol(decl),
-            Item::Struct(decl) => self.check_struct(decl),
+            Item::Alias(_) | Item::Function(_) => false,
+            Item::Builtin(decl) => is_deprecated(&decl.annotations),
+            Item::Constant(constant) => is_deprecated(&constant.annotations),
+            Item::Enum(decl) => is_deprecated(&decl.annotations),
+            Item::Extend(block) => self.target_is_deprecated(&block.target),
+            Item::Impl(block) => self.target_is_deprecated(&block.target),
+            Item::Protocol(decl) => is_deprecated(&decl.annotations),
+            Item::Struct(decl) => is_deprecated(&decl.annotations),
             Item::Test(_) => {
                 unreachable!("desugar turns test blocks into functions or drops them")
             }
-            Item::TypeAlias(alias) => self.check_type_alias(alias),
-        }
-    }
-
-    fn check_constant(&mut self, constant: &Constant) {
-        if is_deprecated(&constant.annotations) {
-            return;
-        }
-        if let Some(annotation) = constant.type_annotation.as_ref() {
-            self.check_type_expr(annotation);
-        }
-        self.check_expr(&constant.value);
-    }
-
-    fn check_builtin(&mut self, decl: &BuiltinDecl) {
-        if is_deprecated(&decl.annotations) {
-            return;
-        }
-        self.with_type_params(&decl.type_params, |walker| {
-            for function in &decl.functions {
-                walker.check_function(function);
-            }
-        });
-    }
-
-    fn check_struct(&mut self, decl: &StructDecl) {
-        if is_deprecated(&decl.annotations) {
-            return;
-        }
-        self.with_type_params(&decl.type_params, |walker| {
-            for field in &decl.fields {
-                walker.check_struct_field(field);
-            }
-            for function in &decl.functions {
-                walker.check_function(function);
-            }
-        });
-    }
-
-    fn check_enum(&mut self, decl: &EnumDecl) {
-        if is_deprecated(&decl.annotations) {
-            return;
-        }
-        self.with_type_params(&decl.type_params, |walker| {
-            for variant in &decl.variants {
-                match &variant.data {
-                    EnumVariantData::Struct(fields) => {
-                        for field in fields {
-                            walker.check_struct_field(field);
-                        }
-                    }
-                    EnumVariantData::Tuple(elements) => {
-                        for element in elements {
-                            walker.check_type_expr(element);
-                        }
-                    }
-                    EnumVariantData::Unit => {}
-                }
-            }
-            for function in &decl.functions {
-                walker.check_function(function);
-            }
-        });
-    }
-
-    fn check_protocol(&mut self, decl: &ProtocolDecl) {
-        if is_deprecated(&decl.annotations) {
-            return;
-        }
-        self.with_type_params(&decl.type_params, |walker| {
-            for method in &decl.methods {
-                walker.with_type_params(&method.type_params, |walker| {
-                    walker.check_params(&method.params);
-                    if let Some(return_type) = method.return_type.as_ref() {
-                        walker.check_type_expr(return_type);
-                    }
-                    if let Some(body) = method.body.as_ref() {
-                        walker.check_body(body);
-                    }
-                });
-            }
-        });
-    }
-
-    fn check_type_alias(&mut self, alias: &TypeAlias) {
-        if is_deprecated(&alias.annotations) {
-            return;
-        }
-        self.check_type_expr(&alias.type_expr);
-    }
-
-    /// `impl Protocol for Target`. A deprecated target suppresses the
-    /// whole block. Otherwise the protocol reference is itself a use.
-    fn check_impl(&mut self, block: &ImplBlock) {
-        if self.target_is_deprecated(&block.target) {
-            return;
-        }
-        self.check_type_expr(&block.trait_expr);
-        self.check_members(&block.members);
-    }
-
-    fn check_extend(&mut self, block: &ExtendBlock) {
-        if self.target_is_deprecated(&block.target) {
-            return;
-        }
-        self.check_members(&block.members);
-    }
-
-    fn check_members(&mut self, members: &[ImplMember]) {
-        for member in members {
-            match member {
-                ImplMember::Function(function) => self.check_function(function),
-                ImplMember::TypeAlias(alias) => self.check_type_alias(alias),
-            }
+            Item::TypeAlias(alias) => is_deprecated(&alias.annotations),
         }
     }
 
@@ -209,382 +100,6 @@ impl Walker<'_, '_> {
             lookup_type(&name_texts(path), self.scope),
             Some((_, entry)) if entry.deprecation.is_some()
         )
-    }
-
-    fn check_function(&mut self, function: &Function) {
-        self.warn_legacy_test(function);
-        if is_deprecated(&function.annotations) {
-            return;
-        }
-        self.with_type_params(&function.type_params, |walker| {
-            walker.check_params(&function.params);
-            if let Some(return_type) = function.return_type.as_ref() {
-                walker.check_type_expr(return_type);
-            }
-            if let Some(body) = function.body.as_ref() {
-                walker.check_body(body);
-            }
-        });
-    }
-
-    fn check_params(&mut self, params: &[Param]) {
-        for param in params {
-            if let Param::Regular {
-                type_expr, default, ..
-            } = param
-            {
-                self.check_type_expr(type_expr);
-                if let Some(default) = default.as_ref() {
-                    self.check_expr(default);
-                }
-            }
-        }
-    }
-
-    fn check_struct_field(&mut self, field: &StructField) {
-        self.check_type_expr(&field.type_expr);
-        if let Some(default) = field.default.as_ref() {
-            self.check_expr(default);
-        }
-    }
-
-    /// Push `params` (names and protocol bounds) for the duration of
-    /// `walk`. Bounds are protocol references, so they warn too.
-    fn with_type_params(&mut self, params: &[TypeParam], walk: impl FnOnce(&mut Self)) {
-        let depth = self.type_params.len();
-        for param in params {
-            for bound in &param.bounds {
-                self.check_type_expr(bound);
-            }
-            self.type_params.push(param.name.text.clone());
-        }
-        walk(self);
-        self.type_params.truncate(depth);
-    }
-
-    fn check_body(&mut self, body: &[Statement]) {
-        for stmt in body {
-            self.check_statement(stmt);
-        }
-    }
-
-    fn check_statement(&mut self, stmt: &Statement) {
-        match stmt {
-            Statement::Assignment {
-                type_annotation,
-                value,
-                ..
-            } => {
-                if let Some(annotation) = type_annotation.as_ref() {
-                    self.check_type_expr(annotation);
-                }
-                self.check_expr(value);
-            }
-            Statement::Break { .. } | Statement::Return { value: None, .. } => {}
-            Statement::CompoundAssign { value, .. } => self.check_expr(value),
-            Statement::Destructure { pattern, value, .. } => {
-                self.check_pattern(pattern);
-                self.check_expr(value);
-            }
-            Statement::Expr(expr) => self.check_expr(expr),
-            Statement::Return {
-                value: Some(value), ..
-            } => self.check_expr(value),
-        }
-    }
-
-    fn check_expr(&mut self, expr: &Expr) {
-        // Compiler-synthesized subtrees (field-default fills, derived
-        // impls) reuse user expressions that already warned at their
-        // declaration. Warning again per site would be noise.
-        if expr.span.synthetic {
-            return;
-        }
-        match &expr.kind {
-            ExprKind::Assert {
-                condition, message, ..
-            } => {
-                self.check_expr(condition);
-                if let Some(message) = message {
-                    self.check_expr(message);
-                }
-            }
-            ExprKind::Binary { left, right, .. } => {
-                self.check_expr(left);
-                self.check_expr(right);
-            }
-            ExprKind::BinaryLiteral { segments } => {
-                for segment in segments {
-                    self.check_expr(&segment.value);
-                    if let Some(size) = segment.size.as_ref() {
-                        self.check_expr(size);
-                    }
-                }
-            }
-            ExprKind::Call { callee, args, .. } => {
-                self.check_expr(callee);
-                for arg in args {
-                    self.check_expr(&arg.value);
-                }
-            }
-            ExprKind::Closure {
-                params,
-                return_type,
-                body,
-            } => {
-                for param in params {
-                    if let ClosureParam::Name {
-                        type_expr: Some(type_expr),
-                        ..
-                    } = param
-                    {
-                        self.check_type_expr(type_expr);
-                    }
-                }
-                if let Some(return_type) = return_type.as_ref() {
-                    self.check_type_expr(return_type);
-                }
-                self.check_body(body);
-            }
-            ExprKind::Cond { arms, else_body } => {
-                for arm in arms {
-                    self.check_expr(&arm.condition);
-                    self.check_body(&arm.body);
-                }
-                if let Some(else_body) = else_body {
-                    self.check_body(else_body);
-                }
-            }
-            ExprKind::EnumConstruction { data, .. } => {
-                self.warn_resolution_head(&expr.resolution, expr.span);
-                match data {
-                    EnumConstructionData::Struct(fields) => {
-                        for field in fields {
-                            self.check_expr(&field.value);
-                        }
-                    }
-                    EnumConstructionData::Tuple(elements) => {
-                        for element in elements {
-                            self.check_expr(element);
-                        }
-                    }
-                    EnumConstructionData::Unit => {}
-                }
-            }
-            ExprKind::Fail { value } => self.check_expr(value),
-            ExprKind::FieldAccess { receiver, .. } => self.check_expr(receiver),
-            ExprKind::For {
-                pattern,
-                iterable,
-                body,
-            } => {
-                self.check_pattern(pattern);
-                self.check_expr(iterable);
-                self.check_body(body);
-            }
-            ExprKind::Group { expr: inner } | ExprKind::Spawn { expr: inner } => {
-                self.check_expr(inner);
-            }
-            ExprKind::Ident {
-                resolution: Resolution::Global(id),
-                ..
-            } => self.warn_use(*id, expr.span),
-            ExprKind::NamedFunctionReference {
-                target: Resolution::Global(id),
-                ..
-            } => self.warn_use(*id, expr.span),
-            ExprKind::Ident { .. }
-            | ExprKind::Literal { .. }
-            | ExprKind::NamedFunctionReference { .. }
-            | ExprKind::Self_ { .. } => {}
-            ExprKind::If {
-                condition,
-                then_body,
-                else_body,
-            } => {
-                self.check_expr(condition);
-                self.check_body(then_body);
-                if let Some(else_body) = else_body {
-                    self.check_body(else_body);
-                }
-            }
-            ExprKind::List { elements } | ExprKind::Tuple { elements } => {
-                for element in elements {
-                    self.check_expr(element);
-                }
-            }
-            ExprKind::Loop { body } => self.check_body(body),
-            ExprKind::Map { entries } => {
-                for (key, value) in entries {
-                    self.check_expr(key);
-                    self.check_expr(value);
-                }
-            }
-            ExprKind::Match { subject, arms } => {
-                self.check_expr(subject);
-                for arm in arms {
-                    self.check_pattern(&arm.pattern);
-                    if let Some(guard) = arm.guard.as_ref() {
-                        self.check_expr(guard);
-                    }
-                    self.check_body(&arm.body);
-                }
-            }
-            ExprKind::MethodCall {
-                receiver,
-                method,
-                args,
-                ..
-            } => {
-                self.warn_deprecated_method(receiver, method, args.len(), expr.span);
-                self.check_expr(receiver);
-                for arg in args {
-                    self.check_expr(&arg.value);
-                }
-            }
-            ExprKind::Receive {
-                arms,
-                after_timeout,
-                after_body,
-            } => {
-                for arm in arms {
-                    self.check_pattern(&arm.pattern);
-                    if let Some(guard) = arm.guard.as_ref() {
-                        self.check_expr(guard);
-                    }
-                    self.check_body(&arm.body);
-                }
-                if let Some(timeout) = after_timeout.as_ref() {
-                    self.check_expr(timeout);
-                }
-                self.check_body(after_body);
-            }
-            ExprKind::Rescue {
-                subject, handler, ..
-            } => {
-                self.check_expr(subject);
-                self.check_expr(handler);
-            }
-            ExprKind::ShortClosure { body, .. } => self.check_expr(body),
-            ExprKind::String { parts, .. } => {
-                for part in parts {
-                    if let StringPart::Interpolation { expr: inner, .. } = part {
-                        self.check_expr(inner);
-                    }
-                }
-            }
-            ExprKind::StructConstruction { fields, .. } => {
-                self.warn_resolution_head(&expr.resolution, expr.span);
-                for field in fields {
-                    self.check_expr(&field.value);
-                }
-            }
-            ExprKind::Ternary {
-                condition,
-                then_expr,
-                else_expr,
-            } => {
-                self.check_expr(condition);
-                self.check_expr(then_expr);
-                self.check_expr(else_expr);
-            }
-            ExprKind::Try { expr: inner } => self.check_expr(inner),
-            ExprKind::Unary { operand, .. } => self.check_expr(operand),
-            ExprKind::While { condition, body } => {
-                self.check_expr(condition);
-                self.check_body(body);
-            }
-        }
-    }
-
-    fn check_pattern(&mut self, pattern: &Pattern) {
-        match pattern {
-            Pattern::Binary { .. }
-            | Pattern::Binding { .. }
-            | Pattern::Literal { .. }
-            | Pattern::Wildcard { .. } => {}
-            Pattern::Constructor { elements, .. } => {
-                for element in elements {
-                    self.check_pattern(element);
-                }
-            }
-            Pattern::EnumStruct {
-                type_path,
-                fields,
-                span,
-                ..
-            }
-            | Pattern::Struct {
-                type_path,
-                fields,
-                span,
-                ..
-            } => {
-                self.warn_type_path(type_path, *span);
-                for field in fields {
-                    self.check_pattern(&field.pattern);
-                }
-            }
-            Pattern::EnumTuple {
-                type_path,
-                elements,
-                span,
-                ..
-            } => {
-                self.warn_type_path(type_path, *span);
-                for element in elements {
-                    self.check_pattern(element);
-                }
-            }
-            Pattern::EnumUnit {
-                type_path, span, ..
-            } => self.warn_type_path(type_path, *span),
-            Pattern::List { elements, .. }
-            | Pattern::Or {
-                patterns: elements, ..
-            }
-            | Pattern::Tuple { elements, .. } => {
-                for element in elements {
-                    self.check_pattern(element);
-                }
-            }
-            Pattern::TypedBinding { type_expr, .. } => self.check_type_expr(type_expr),
-        }
-    }
-
-    fn check_type_expr(&mut self, type_expr: &TypeExpr) {
-        match type_expr {
-            TypeExpr::Function {
-                params,
-                return_type,
-                ..
-            } => {
-                for param in params {
-                    self.check_type_expr(param);
-                }
-                self.check_type_expr(return_type);
-            }
-            TypeExpr::Generic {
-                path, args, span, ..
-            } => {
-                self.warn_type_path(path, *span);
-                for arg in args {
-                    self.check_type_expr(arg);
-                }
-            }
-            TypeExpr::Named { path, span, .. } => self.warn_type_path(path, *span),
-            TypeExpr::Self_ { .. } | TypeExpr::Unit { .. } => {}
-            TypeExpr::Tuple { elements, .. } => {
-                for element in elements {
-                    self.check_type_expr(element);
-                }
-            }
-            TypeExpr::Union { types, .. } => {
-                for member in types {
-                    self.check_type_expr(member);
-                }
-            }
-        }
     }
 
     /// Warn when a source type path names a deprecated entry.
@@ -703,5 +218,92 @@ impl Walker<'_, '_> {
             ),
             span,
         ));
+    }
+}
+
+impl<'ast> Visitor<'ast> for Walker<'_, '_> {
+    fn visit_item(&mut self, item: &'ast Item) {
+        if self.suppressed(item) {
+            return;
+        }
+        self.scoped(|walker| visit::walk_item(walker, item));
+    }
+
+    fn visit_function(&mut self, function: &'ast Function) {
+        self.warn_legacy_test(function);
+        if is_deprecated(&function.annotations) {
+            return;
+        }
+        self.scoped(|walker| visit::walk_function(walker, function));
+    }
+
+    fn visit_protocol_method(&mut self, method: &'ast ProtocolMethod) {
+        self.scoped(|walker| visit::walk_protocol_method(walker, method));
+    }
+
+    /// Bounds are protocol references, so they warn. The name then
+    /// shadows any global of the same text until the scope ends.
+    fn visit_type_param(&mut self, type_param: &'ast TypeParam) {
+        visit::walk_type_param(self, type_param);
+        self.type_params.push(type_param.name.text.clone());
+    }
+
+    fn visit_expr(&mut self, expr: &'ast Expr) {
+        // Compiler-synthesized subtrees (field-default fills, derived
+        // impls) reuse user expressions that already warned at their
+        // declaration. Warning again per site would be noise.
+        if expr.span.synthetic {
+            return;
+        }
+        match &expr.kind {
+            ExprKind::EnumConstruction { .. } | ExprKind::StructConstruction { .. } => {
+                self.warn_resolution_head(&expr.resolution, expr.span);
+            }
+            ExprKind::Ident {
+                resolution: Resolution::Global(id),
+                ..
+            }
+            | ExprKind::NamedFunctionReference {
+                target: Resolution::Global(id),
+                ..
+            } => self.warn_use(*id, expr.span),
+            ExprKind::MethodCall {
+                receiver,
+                method,
+                args,
+                ..
+            } => self.warn_deprecated_method(receiver, method, args.len(), expr.span),
+            _ => {}
+        }
+        visit::walk_expr(self, expr);
+    }
+
+    fn visit_pattern(&mut self, pattern: &'ast Pattern) {
+        match pattern {
+            Pattern::EnumStruct {
+                type_path, span, ..
+            }
+            | Pattern::EnumTuple {
+                type_path, span, ..
+            }
+            | Pattern::EnumUnit {
+                type_path, span, ..
+            }
+            | Pattern::Struct {
+                type_path, span, ..
+            } => self.warn_type_path(type_path, *span),
+            _ => {}
+        }
+        visit::walk_pattern(self, pattern);
+    }
+
+    fn visit_type_expr(&mut self, type_expr: &'ast TypeExpr) {
+        match type_expr {
+            TypeExpr::Generic { path, span, .. } | TypeExpr::Named { path, span, .. } => {
+                self.warn_type_path(path, *span);
+            }
+            _ => {}
+        }
+        visit::walk_type_expr(self, type_expr);
     }
 }

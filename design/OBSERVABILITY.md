@@ -837,11 +837,10 @@ Smaller findings from the same spikes:
 - A method's generic parameters are not in scope inside a block
   closure written in that method. Move the closure body to a private
   generic function and call it from a short closure.
-- Struct field defaults reject a struct literal of a type from another
-  package when the literal holds `Option.None`, and a `const` of that
-  shape fails to unify `Option<Ref<M, R>>`. Tracked in
-  [GAPS.md](GAPS.md#struct-literal-defaults-stop-at-the-package-boundary).
-  remem holds the tracer as `Option<Tracer>` instead.
+- Struct field defaults rejected a struct literal of a type from
+  another package, so remem held the tracer as `Option<Tracer>`. Fixed
+  in 0.20: a default resolves in its declaring file and accepts dotted
+  paths and aliases.
 - A struct field default is limited to literals and constants, so a
   field of type `Logger` cannot default to `Logger.default()`. A
   function parameter can.

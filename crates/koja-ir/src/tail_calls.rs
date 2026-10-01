@@ -29,7 +29,7 @@
 
 use crate::function::{
     BranchTarget, FunctionKind, IRBasicBlock, IRBlockId, IRFunction, IRInstruction, IRSymbol,
-    IRTerminator,
+    IRTerminator, ValueMinter,
 };
 use crate::local::IRLocalId;
 use crate::package::IRPackage;
@@ -72,10 +72,10 @@ fn rewrite_function(function: &mut IRFunction) {
     }
     let symbol = function.symbol.clone();
     let param_types: Vec<IRType> = function.params.iter().map(|p| p.ty.clone()).collect();
-    let mut next_value = function.next_value_id();
+    let mut values = ValueMinter::new(function.next_value_id());
     for block in &mut function.blocks {
         if let Some(plan) = match_tail_call(block, &symbol) {
-            apply_plan(block, plan, &symbol, &param_types, &mut next_value);
+            apply_plan(block, plan, &symbol, &param_types, &mut values);
         }
     }
 }
@@ -308,7 +308,7 @@ fn apply_plan(
     plan: RewritePlan,
     enclosing: &IRSymbol,
     param_types: &[IRType],
-    next_value: &mut u32,
+    values: &mut ValueMinter,
 ) {
     block.instructions.remove(plan.call_index);
 
@@ -339,8 +339,7 @@ fn apply_plan(
             elided_drops.push(drop_index);
             continue;
         }
-        let dest = ValueId(*next_value);
-        *next_value += 1;
+        let dest = values.fresh();
         clones.push(IRInstruction::Clone {
             dest,
             source: *arg,

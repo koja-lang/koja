@@ -26,7 +26,7 @@ use koja_typecheck::{GlobalKind, GlobalRegistry};
 
 use crate::Analysis;
 use crate::position::{span_contains, tail_segment_span};
-use crate::visit::{self, Visitor};
+use koja_ast::visit::{self, Visitor};
 
 /// Identity of a symbol across every file.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]

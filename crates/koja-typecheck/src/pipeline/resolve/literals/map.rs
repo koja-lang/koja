@@ -15,15 +15,18 @@
 //! inference).
 
 use koja_ast::ast::{Diagnostic, Expr, ExprKind};
-use koja_ast::identifier::{AnonymousKind, Resolution, ResolvedType};
+use koja_ast::identifier::{AnonymousKind, GlobalRegistryId, Resolution, ResolvedType};
+use koja_ast::span::Span;
 
-use super::super::ctx::Resolver;
+use super::super::ctx::{Callee, Resolver};
 use super::super::expr::resolve_expr_with_expected;
+use super::super::types::verify_bounds;
 use super::axis::{AxisLabel, infer_axis};
 use super::carrier::{
     CarrierSpec, Dispatch, LiteralCarrier, dispatch_via_carrier, lookup_global_id,
     missing_root_diagnostic, pick_carrier,
 };
+use crate::pipeline::unify::Substitution;
 
 const SPEC: CarrierSpec = CarrierSpec {
     root_name: "Map",
@@ -101,6 +104,7 @@ pub(in super::super) fn resolve_map_literal(
     };
 
     if matches!(&carrier, LiteralCarrier::Default) {
+        verify_map_bounds(map_id, &map_ty, span, resolver, diagnostics);
         expr.kind = ExprKind::Map { entries };
         return map_ty;
     }
@@ -148,6 +152,34 @@ pub(in super::super) fn resolve_map_literal(
         resolver,
         diagnostics,
     )
+}
+
+/// Check the inferred `(K, V)` against `Map`'s declared type
+/// parameter bounds. The default carrier builds `Map<K, V>` in
+/// place with no call site, so nothing else runs
+/// [`verify_bounds`] for it. The synthesized `from_entries` path
+/// gets the same check through normal method resolution.
+fn verify_map_bounds(
+    map_id: GlobalRegistryId,
+    map_ty: &ResolvedType,
+    span: Span,
+    resolver: &Resolver<'_>,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    let Some(entry) = resolver.registry.get(map_id) else {
+        return;
+    };
+    let ResolvedType::Named { type_args, .. } = map_ty else {
+        return;
+    };
+    let label = entry.identifier.to_string();
+    let callee = Callee {
+        id: map_id,
+        label: &label,
+        type_params: &entry.type_params,
+    };
+    let subst = Substitution::from_args(map_id, type_args);
+    verify_bounds(callee, &subst, span, resolver.bound_context(), diagnostics);
 }
 
 /// Pull `(K, V)` out of `expected.type_args[0..2]` when each slot

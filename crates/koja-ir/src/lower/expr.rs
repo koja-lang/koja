@@ -11,51 +11,44 @@ use koja_ast::ast::{BinOp, Diagnostic, Expr, ExprKind, Literal, StringPart, Unar
 use koja_ast::coercion::Coercion;
 use koja_ast::identifier::{GlobalRegistryId, LocalId, Resolution, ResolvedType};
 use koja_ast::labels::expr_kind_label;
-use koja_typecheck::{GlobalKind, GlobalRegistry, LiteralCoercion, NumericLiteralWidth};
+use koja_typecheck::{GlobalKind, LiteralCoercion, NumericLiteralWidth};
 
-use crate::constant::IRConstantValue;
 use crate::function::{IRBlockId, IRInstruction, IRSymbol};
-use crate::generics::Instantiation;
 use crate::local::IRLocalId;
 use crate::mangling::source_function_symbol;
 use crate::types::{ConcatKind, ConstValue, IRType, ValueId};
 
 use super::arms::lower_result_ty;
 use super::binary_literal::lower_binary_literal;
-use super::calls::{MethodCallShape, lower_call, lower_method_call};
+use super::calls::{lower_call, lower_method_call};
 use super::closures::{lower_block_closure, lower_short_closure, synthesize_fn_as_closure_wrapper};
-use super::constants::{constant_value_from_registry, pools_in_constant_pool};
+use super::collection_literal::{lower_list_literal, lower_map_literal};
+use super::constants::{ConstantRead, constant_read_shape};
 use super::control_flow::{
     CondLowering, IfLowering, TernaryLowering, lower_cond, lower_if, lower_short_circuit,
     lower_ternary,
 };
-use super::ctx::{FnLowerCtx, LowerOutput};
+use super::ctx::FnLowerCtx;
 use super::enums::lower_enum_construction;
-use super::list_literal::lower_list_literal;
 use super::loops::{lower_loop, lower_while};
-use super::map_literal::lower_map_literal;
 use super::match_expr::{MatchLowering, lower_match};
 use super::ops::{
-    bin_op_result_type, const_value_type, int_const_at_width, lower_bin_op, lower_literal,
-    lower_unary_op, parse_int_literal, unary_op_result_type,
+    bin_op_result_type, int_const_at_width, lower_bin_op, lower_literal, lower_unary_op,
+    parse_int_literal, unary_op_result_type,
 };
 use super::ownership::drop_discarded_temp;
 use super::package::resolved_type_to_ir_type;
-use super::process::{ReceiveLowering, lower_receive, lower_spawn};
+use super::process::{lower_receive, lower_spawn};
 use super::structs::{lower_field_access, lower_struct_construction};
 use super::tuples::lower_tuple_literal;
 
 pub(super) fn lower_expr(
     expr: &Expr,
-    ctx: &mut FnLowerCtx,
+    ctx: &mut FnLowerCtx<'_>,
     block: IRBlockId,
-    registry: &GlobalRegistry,
-    output: &mut LowerOutput,
 ) -> Result<(ValueId, IRBlockId), ()> {
-    let (value, block) = lower_expr_inner(expr, ctx, block, registry, output)?;
-    Ok(apply_value_coercion(
-        expr, value, ctx, block, registry, output,
-    ))
+    let (value, block) = lower_expr_inner(expr, ctx, block)?;
+    Ok(apply_value_coercion(expr, value, ctx, block))
 }
 
 /// Apply `expr.coercion` (if any) to a freshly lowered value. Each
@@ -66,17 +59,16 @@ pub(super) fn lower_expr(
 fn apply_value_coercion(
     expr: &Expr,
     value: ValueId,
-    ctx: &mut FnLowerCtx,
+    ctx: &mut FnLowerCtx<'_>,
     block: IRBlockId,
-    registry: &GlobalRegistry,
-    output: &mut LowerOutput,
 ) -> (ValueId, IRBlockId) {
     let Some(coercion) = &expr.coercion else {
         return (value, block);
     };
     match coercion {
         Coercion::NumericWiden(target) => {
-            let target_ir = resolved_type_to_ir_type(target, registry, &mut output.instantiations);
+            let target_ir =
+                resolved_type_to_ir_type(target, ctx.registry, &mut ctx.output.instantiations);
             let from = ctx.type_of(value).clone();
             let dest = ctx.fresh_value(target_ir.clone());
             ctx.cfg.append(
@@ -91,7 +83,8 @@ fn apply_value_coercion(
             (dest, block)
         }
         Coercion::UnionWiden(target) => {
-            let target_ir = resolved_type_to_ir_type(target, registry, &mut output.instantiations);
+            let target_ir =
+                resolved_type_to_ir_type(target, ctx.registry, &mut ctx.output.instantiations);
             let IRType::Union { members, .. } = &target_ir else {
                 panic!(
                     "IR lower: Coercion::UnionWiden target lowered to non-Union \
@@ -135,21 +128,19 @@ fn apply_value_coercion(
 
 fn lower_expr_inner(
     expr: &Expr,
-    ctx: &mut FnLowerCtx,
+    ctx: &mut FnLowerCtx<'_>,
     block: IRBlockId,
-    registry: &GlobalRegistry,
-    output: &mut LowerOutput,
 ) -> Result<(ValueId, IRBlockId), ()> {
     match &expr.kind {
         ExprKind::Binary { op, left, right } => {
             if matches!(op, BinOp::And | BinOp::Or) {
-                return lower_short_circuit(*op, left, right, ctx, block, registry, output);
+                return lower_short_circuit(*op, left, right, ctx, block);
             }
-            let (lhs, block) = lower_expr(left, ctx, block, registry, output)?;
-            let (rhs, block) = lower_expr(right, ctx, block, registry, output)?;
+            let (lhs, block) = lower_expr(left, ctx, block)?;
+            let (rhs, block) = lower_expr(right, ctx, block)?;
             if matches!(op, BinOp::Concat) {
                 let kind = concat_kind_from_operand(ctx.type_of(lhs)).ok_or_else(|| {
-                    output.diagnostics.push(Diagnostic::error(
+                    ctx.output.diagnostics.push(Diagnostic::error(
                         format!(
                             "IR lower: `<>` operands must be String / Binary / Bits, got `{:?}`",
                             ctx.type_of(lhs),
@@ -176,7 +167,7 @@ fn lower_expr_inner(
                 drop_discarded_temp(ctx, block, rhs);
                 return Ok((dest, block));
             }
-            let ir_op = lower_bin_op(*op, expr.span, &mut output.diagnostics)?;
+            let ir_op = lower_bin_op(*op, expr.span, &mut ctx.output.diagnostics)?;
             let operand_ty = ctx.type_of(lhs);
             let result_ty = bin_op_result_type(ir_op, operand_ty.clone());
             let dest = ctx.fresh_value(result_ty);
@@ -200,54 +191,35 @@ fn lower_expr_inner(
             Ok((dest, block))
         }
         ExprKind::BinaryLiteral { segments } => {
-            lower_binary_literal(segments, expr.span, ctx, block, registry, output)
+            lower_binary_literal(segments, expr.span, ctx, block)
         }
         ExprKind::Call {
             callee,
             args,
             type_args,
-        } => lower_call(callee, args, type_args, ctx, block, registry, output),
+        } => lower_call(callee, args, type_args, ctx, block),
         ExprKind::Closure {
             params,
             body,
             return_type: _,
-        } => lower_block_closure(params, body, &expr.resolution, ctx, block, registry, output),
-        ExprKind::EnumConstruction { variant, data, .. } => lower_enum_construction(
-            variant,
-            data,
-            &expr.resolution,
-            ctx,
-            block,
-            registry,
-            output,
-        ),
-        ExprKind::FieldAccess { receiver, field } => lower_field_access(
-            receiver,
-            field,
-            &expr.resolution,
-            ctx,
-            block,
-            registry,
-            output,
-        ),
-        ExprKind::Group { expr: inner } => lower_expr(inner, ctx, block, registry, output),
+        } => lower_block_closure(params, body, &expr.resolution, ctx, block),
+        ExprKind::EnumConstruction { variant, data, .. } => {
+            lower_enum_construction(variant, data, &expr.resolution, ctx, block)
+        }
+        ExprKind::FieldAccess { receiver, field } => {
+            lower_field_access(receiver, field, &expr.resolution, ctx, block)
+        }
+        ExprKind::Group { expr: inner } => lower_expr(inner, ctx, block),
         ExprKind::Ident { resolution, name } => match resolution {
-            Resolution::Local(local_id) => Ok(lower_local_read(
-                *local_id,
-                &expr.resolution,
-                ctx,
-                block,
-                registry,
-                &mut output.instantiations,
-            )),
+            Resolution::Local(local_id) => {
+                Ok(lower_local_read(*local_id, &expr.resolution, ctx, block))
+            }
             Resolution::Global(global_id) => Ok(lower_global_ident(
                 *global_id,
                 name,
                 &expr.resolution,
                 ctx,
                 block,
-                registry,
-                output,
             )),
             other => panic!(
                 "IR lower: bare `Ident` `{name}` reaches lower with non-Local/Global \
@@ -255,7 +227,7 @@ fn lower_expr_inner(
             ),
         },
         ExprKind::ShortClosure { params, body } => {
-            lower_short_closure(params, body, &expr.resolution, ctx, block, registry, output)
+            lower_short_closure(params, body, &expr.resolution, ctx, block)
         }
         ExprKind::Self_ { local_id } => {
             let local_id = local_id.unwrap_or_else(|| {
@@ -264,17 +236,10 @@ fn lower_expr_inner(
                      (typecheck resolve invariant violation)",
                 );
             });
-            Ok(lower_local_read(
-                local_id,
-                &expr.resolution,
-                ctx,
-                block,
-                registry,
-                &mut output.instantiations,
-            ))
+            Ok(lower_local_read(local_id, &expr.resolution, ctx, block))
         }
         ExprKind::Cond { arms, else_body } => {
-            let result_ty = lower_result_ty(&expr.resolution, registry, output);
+            let result_ty = lower_result_ty(&expr.resolution, ctx);
             lower_cond(
                 CondLowering {
                     arms,
@@ -283,8 +248,6 @@ fn lower_expr_inner(
                 },
                 ctx,
                 block,
-                registry,
-                output,
             )
         }
         ExprKind::If {
@@ -292,7 +255,7 @@ fn lower_expr_inner(
             then_body,
             else_body,
         } => {
-            let result_ty = lower_result_ty(&expr.resolution, registry, output);
+            let result_ty = lower_result_ty(&expr.resolution, ctx);
             lower_if(
                 IfLowering {
                     condition,
@@ -302,14 +265,12 @@ fn lower_expr_inner(
                 },
                 ctx,
                 block,
-                registry,
-                output,
             )
         }
         ExprKind::Literal { value } => {
             let target = literal_width(expr);
-            let const_value = lower_literal(value, expr.span, target, &mut output.diagnostics)?;
-            let ty = const_value_type(&const_value);
+            let const_value = lower_literal(value, expr.span, target, &mut ctx.output.diagnostics)?;
+            let ty = const_value.ir_type();
             let dest = ctx.fresh_value(ty);
             ctx.cfg.append(
                 block,
@@ -321,7 +282,7 @@ fn lower_expr_inner(
             Ok((dest, block))
         }
         ExprKind::Match { subject, arms } => {
-            let result_ty = lower_result_ty(&expr.resolution, registry, output);
+            let result_ty = lower_result_ty(&expr.resolution, ctx);
             lower_match(
                 MatchLowering {
                     subject,
@@ -330,8 +291,6 @@ fn lower_expr_inner(
                 },
                 ctx,
                 block,
-                registry,
-                output,
             )
         }
         ExprKind::NamedFunctionReference {
@@ -351,8 +310,6 @@ fn lower_expr_inner(
                 &expr.resolution,
                 ctx,
                 block,
-                registry,
-                output,
             ))
         }
         ExprKind::MethodCall {
@@ -361,30 +318,18 @@ fn lower_expr_inner(
             args,
             target,
             type_args,
-        } => lower_method_call(
-            receiver,
-            MethodCallShape {
-                method,
-                args,
-                method_type_args: type_args,
-                target: *target,
-            },
-            ctx,
-            block,
-            registry,
-            output,
-        ),
-        ExprKind::String { parts, .. } => lower_string(parts, ctx, block, registry, output),
-        ExprKind::Tuple { elements } => lower_tuple_literal(elements, ctx, block, registry, output),
+        } => lower_method_call(receiver, method, args, type_args, *target, ctx, block),
+        ExprKind::String { parts, .. } => lower_string(parts, ctx, block),
+        ExprKind::Tuple { elements } => lower_tuple_literal(elements, ctx, block),
         ExprKind::StructConstruction { fields, .. } => {
-            lower_struct_construction(fields, &expr.resolution, ctx, block, registry, output)
+            lower_struct_construction(fields, &expr.resolution, ctx, block)
         }
         ExprKind::Ternary {
             condition,
             then_expr,
             else_expr,
         } => {
-            let result_ty = lower_result_ty(&expr.resolution, registry, output);
+            let result_ty = lower_result_ty(&expr.resolution, ctx);
             lower_ternary(
                 TernaryLowering {
                     condition,
@@ -394,8 +339,6 @@ fn lower_expr_inner(
                 },
                 ctx,
                 block,
-                registry,
-                output,
             )
         }
         ExprKind::Unary { op, operand } => {
@@ -415,7 +358,7 @@ fn lower_expr_inner(
                     .and_then(|target| fold_negated_literal_const(operand, target))
                     .or_else(|| fold_int_min_literal(operand))
             {
-                let ty = const_value_type(&folded);
+                let ty = folded.ir_type();
                 let dest = ctx.fresh_value(ty);
                 ctx.cfg.append(
                     block,
@@ -426,7 +369,7 @@ fn lower_expr_inner(
                 );
                 return Ok((dest, block));
             }
-            let (operand, block) = lower_expr(operand, ctx, block, registry, output)?;
+            let (operand, block) = lower_expr(operand, ctx, block)?;
             let ir_op = lower_unary_op(*op);
             let operand_ty = ctx.type_of(operand);
             let result_ty = unary_op_result_type(ir_op, operand_ty.clone());
@@ -442,56 +385,32 @@ fn lower_expr_inner(
             );
             Ok((dest, block))
         }
-        ExprKind::While { condition, body } => {
-            lower_while(condition, body, ctx, block, registry, output)
+        ExprKind::While { condition, body } => lower_while(condition, body, ctx, block),
+        ExprKind::List { elements } => {
+            lower_list_literal(elements, &expr.resolution, expr.span, ctx, block)
         }
-        ExprKind::List { elements } => lower_list_literal(
-            elements,
-            &expr.resolution,
-            expr.span,
-            ctx,
-            block,
-            registry,
-            output,
-        ),
-        ExprKind::Loop { body } => lower_loop(body, ctx, block, registry, output),
-        ExprKind::Map { entries } => lower_map_literal(
-            entries,
-            &expr.resolution,
-            expr.span,
-            ctx,
-            block,
-            registry,
-            output,
-        ),
-        ExprKind::Spawn { expr: inner } => lower_spawn(
-            inner,
-            expr.span,
-            &expr.resolution,
-            ctx,
-            block,
-            registry,
-            output,
-        ),
+        ExprKind::Loop { body } => lower_loop(body, ctx, block),
+        ExprKind::Map { entries } => {
+            lower_map_literal(entries, &expr.resolution, expr.span, ctx, block)
+        }
+        ExprKind::Spawn { expr: inner } => {
+            lower_spawn(inner, expr.span, &expr.resolution, ctx, block)
+        }
         ExprKind::Receive {
             arms,
             after_timeout,
             after_body,
         } => lower_receive(
-            ReceiveLowering {
-                after_body,
-                after_timeout: after_timeout.as_deref(),
-                arms,
-                result_resolution: &expr.resolution,
-                span: expr.span,
-            },
+            arms,
+            after_timeout.as_deref(),
+            after_body,
+            &expr.resolution,
+            expr.span,
             ctx,
             block,
-            registry,
-            output,
         ),
         other => {
-            output.diagnostics.push(Diagnostic::error(
+            ctx.output.diagnostics.push(Diagnostic::error(
                 format!(
                     "IR does not yet lower this expression kind ({})",
                     expr_kind_label(other),
@@ -511,12 +430,10 @@ fn lower_expr_inner(
 fn lower_local_read(
     local_id: LocalId,
     resolution: &ResolvedType,
-    ctx: &mut FnLowerCtx,
+    ctx: &mut FnLowerCtx<'_>,
     block: IRBlockId,
-    registry: &GlobalRegistry,
-    instantiations: &mut Vec<Instantiation>,
 ) -> (ValueId, IRBlockId) {
-    let ty = resolved_type_to_ir_type(resolution, registry, instantiations);
+    let ty = resolved_type_to_ir_type(resolution, ctx.registry, &mut ctx.output.instantiations);
     if let Some(capture_index) = ctx.closures().capture_index(local_id) {
         let dest = ctx.fresh_value(ty.clone());
         ctx.cfg.append(
@@ -551,27 +468,15 @@ fn lower_global_ident(
     global_id: GlobalRegistryId,
     name: &str,
     expr_resolution: &ResolvedType,
-    ctx: &mut FnLowerCtx,
+    ctx: &mut FnLowerCtx<'_>,
     block: IRBlockId,
-    registry: &GlobalRegistry,
-    output: &mut LowerOutput,
 ) -> (ValueId, IRBlockId) {
-    let entry = registry.get(global_id).unwrap_or_else(|| {
+    let entry = ctx.registry.get(global_id).unwrap_or_else(|| {
         panic!("IR lower: global id {global_id} missing from registry (seal violation)",)
     });
     match &entry.kind {
-        GlobalKind::Constant(_) => {
-            lower_constant_ident(global_id, name, ctx, block, registry, output)
-        }
-        GlobalKind::Function(_) => lower_fn_as_value(
-            global_id,
-            name,
-            expr_resolution,
-            ctx,
-            block,
-            registry,
-            output,
-        ),
+        GlobalKind::Constant(_) => lower_constant_ident(global_id, name, ctx, block),
+        GlobalKind::Function(_) => lower_fn_as_value(global_id, name, expr_resolution, ctx, block),
         other => panic!(
             "IR lower: bare `Ident` `{name}` (id {global_id}) registers as {}, \
              typecheck seal violation",
@@ -581,23 +486,23 @@ fn lower_global_ident(
 }
 
 /// Lower a bare ident that resolves to a package-level constant.
-/// Primitives inline as [`IRInstruction::Const`], and compounds emit a
-/// [`IRInstruction::LoadConst`] against the pool entry minted in
-/// [`super::package::lower_package`].
+/// Primitives inline as [`IRInstruction::Const`], and everything
+/// else emits a [`IRInstruction::LoadConst`] against the pool entry
+/// minted in [`super::package::lower_package`], whether that entry
+/// is a static value or a `Built` one. A read never synthesizes an
+/// init of its own.
 fn lower_constant_ident(
     constant_id: GlobalRegistryId,
     name: &str,
-    ctx: &mut FnLowerCtx,
+    ctx: &mut FnLowerCtx<'_>,
     block: IRBlockId,
-    registry: &GlobalRegistry,
-    output: &mut LowerOutput,
 ) -> (ValueId, IRBlockId) {
-    let value = constant_value_from_registry(constant_id, registry, &mut output.instantiations)
+    let registry = ctx.registry;
+    let shape = constant_read_shape(constant_id, registry, &mut ctx.output.instantiations)
         .unwrap_or_else(|| {
             panic!(
                 "IR lower: constant `{name}` (id {constant_id}) reaches lower \
-                 without a stamped definition or with an unsupported RHS shape, \
-                 typecheck seal must have rejected this",
+                 without a stamped definition, typecheck seal must have rejected this",
             );
         });
     let entry = registry.get(constant_id).unwrap_or_else(|| {
@@ -609,20 +514,20 @@ fn lower_constant_ident(
             entry.kind.label(),
         );
     };
-    let ty = resolved_type_to_ir_type(&def.ty, registry, &mut output.instantiations);
-    if pools_in_constant_pool(&value) {
-        let const_id = IRSymbol::from_identifier(&entry.identifier);
-        let dest = ctx.fresh_value(ty.clone());
-        ctx.cfg
-            .append(block, IRInstruction::LoadConst { const_id, dest, ty });
-        (dest, block)
-    } else {
-        let IRConstantValue::Primitive(value) = value else {
-            unreachable!("non-pooling IRConstantValue must be Primitive (pool admission rule)");
-        };
-        let dest = ctx.fresh_value(const_value_type(&value));
-        ctx.cfg.append(block, IRInstruction::Const { dest, value });
-        (dest, block)
+    match shape {
+        ConstantRead::Inline(value) => {
+            let dest = ctx.fresh_value(value.ir_type());
+            ctx.cfg.append(block, IRInstruction::Const { dest, value });
+            (dest, block)
+        }
+        ConstantRead::Pooled => {
+            let ty = resolved_type_to_ir_type(&def.ty, registry, &mut ctx.output.instantiations);
+            let const_id = IRSymbol::from_identifier(&entry.identifier);
+            let dest = ctx.fresh_value(ty.clone());
+            ctx.cfg
+                .append(block, IRInstruction::LoadConst { const_id, dest, ty });
+            (dest, block)
+        }
     }
 }
 
@@ -635,11 +540,10 @@ fn lower_fn_as_value(
     function_id: GlobalRegistryId,
     name: &str,
     expr_resolution: &ResolvedType,
-    ctx: &mut FnLowerCtx,
+    ctx: &mut FnLowerCtx<'_>,
     block: IRBlockId,
-    registry: &GlobalRegistry,
-    output: &mut LowerOutput,
 ) -> (ValueId, IRBlockId) {
+    let registry = ctx.registry;
     let entry = registry.get(function_id).unwrap_or_else(|| {
         panic!("IR lower: fn-as-value id {function_id} missing from registry (seal violation)",)
     });
@@ -652,8 +556,9 @@ fn lower_fn_as_value(
         );
     }
     let target_symbol = source_function_symbol(&entry.identifier, definition.arity);
-    let wrapper_symbol = synthesize_fn_as_closure_wrapper(&target_symbol, sig, registry, output);
-    let ty = resolved_type_to_ir_type(expr_resolution, registry, &mut output.instantiations);
+    let wrapper_symbol =
+        synthesize_fn_as_closure_wrapper(&target_symbol, sig, registry, ctx.output);
+    let ty = resolved_type_to_ir_type(expr_resolution, registry, &mut ctx.output.instantiations);
     let dest = ctx.fresh_value(ty.clone());
     ctx.cfg.append(
         block,
@@ -754,19 +659,17 @@ fn concat_kind_from_operand(ty: IRType) -> Option<ConcatKind> {
 /// no `Concat` at all.
 fn lower_string(
     parts: &[StringPart],
-    ctx: &mut FnLowerCtx,
+    ctx: &mut FnLowerCtx<'_>,
     block: IRBlockId,
-    registry: &GlobalRegistry,
-    output: &mut LowerOutput,
 ) -> Result<(ValueId, IRBlockId), ()> {
     if parts.is_empty() {
         return Ok((emit_string_const(String::new(), ctx, block), block));
     }
     let mut iter = parts.iter();
     let first = iter.next().expect("non-empty parts");
-    let (mut acc, mut block) = lower_string_part(first, ctx, block, registry, output)?;
+    let (mut acc, mut block) = lower_string_part(first, ctx, block)?;
     for part in iter {
-        let (next_value, next_block) = lower_string_part(part, ctx, block, registry, output)?;
+        let (next_value, next_block) = lower_string_part(part, ctx, block)?;
         block = next_block;
         let dest = ctx.fresh_value(IRType::String);
         ctx.cfg.append(
@@ -793,20 +696,22 @@ fn lower_string(
 
 fn lower_string_part(
     part: &StringPart,
-    ctx: &mut FnLowerCtx,
+    ctx: &mut FnLowerCtx<'_>,
     block: IRBlockId,
-    registry: &GlobalRegistry,
-    output: &mut LowerOutput,
 ) -> Result<(ValueId, IRBlockId), ()> {
     match part {
         StringPart::Literal { value, .. } => {
             Ok((emit_string_const(value.clone(), ctx, block), block))
         }
-        StringPart::Interpolation { expr, .. } => lower_expr(expr, ctx, block, registry, output),
+        StringPart::Interpolation { expr, .. } => lower_expr(expr, ctx, block),
     }
 }
 
-pub(super) fn emit_string_const(value: String, ctx: &mut FnLowerCtx, block: IRBlockId) -> ValueId {
+pub(super) fn emit_string_const(
+    value: String,
+    ctx: &mut FnLowerCtx<'_>,
+    block: IRBlockId,
+) -> ValueId {
     let dest = ctx.fresh_value(IRType::String);
     ctx.cfg.append(
         block,

@@ -57,11 +57,9 @@ pub(super) fn emit_release_box<'ctx>(
         .builder
         .get_insert_block()
         .and_then(|block| block.get_parent())
-        .ok_or_else(|| {
-            LlvmError::Codegen(format!(
-                "LLVM emit: box release `{label}` emitted outside a function body",
-            ))
-        })?;
+        .unwrap_or_else(|| {
+            panic!("LLVM emit: box release `{label}` emitted outside a function body")
+        });
     let check_block = ctx
         .context
         .append_basic_block(function, &format!("{label}_check"));

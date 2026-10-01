@@ -29,7 +29,7 @@ use koja_ast::identifier::{GlobalRegistryId, Identifier, ResolvedType};
 
 use crate::pipeline::aliases::collect_file_aliases;
 use crate::pipeline::collect::nominal_target_path;
-use crate::pipeline::lift_signatures::{ResolutionScope, resolve_target_bounds};
+use crate::pipeline::lift_signatures::resolve_target_bounds;
 use crate::pipeline::local_scope::LocalScope;
 use crate::registry::{BoundOverlay, FunctionSignature, GlobalRegistry};
 
@@ -218,16 +218,11 @@ fn impl_bound_overlay(
         return None;
     }
     let owner = enclosing_type_id?;
-    let scope = ResolutionScope {
-        aliases: env.file_aliases,
-        package: env.package,
-        registry: env.registry,
-    };
     let mut sink = Vec::new();
     let bounds = resolve_target_bounds(
         &impl_block.target,
         &mut impl_block.target_bounds,
-        scope,
+        env.resolution_scope(),
         &mut sink,
     );
     Some(BoundOverlay { bounds, owner })

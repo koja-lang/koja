@@ -16,13 +16,14 @@
 use inkwell::basic_block::BasicBlock;
 use inkwell::types::BasicType;
 use inkwell::values::{BasicValueEnum, FunctionValue, PointerValue};
-use koja_ir::{IRFunction, IRSymbol, IRType, ParseTarget};
+use koja_ir::{IRFunction, IRSymbol, ParseTarget};
 
 use crate::ctx::EmitContext;
 use crate::emit::enums::build_enum_value;
 use crate::error::{IceExt, LlvmError};
 use crate::intrinsics::numeric::build_conversion_error;
 use crate::intrinsics::result;
+use crate::intrinsics::util::{expect_enum_symbol, nth_param};
 use crate::runtime::{declare_float_parse_extern, declare_int_parse_extern};
 
 /// Return codes of the runtime parse helpers, per the runtime's
@@ -38,17 +39,8 @@ pub(super) fn emit_parse<'ctx>(
     llvm_function: FunctionValue<'ctx>,
     target: ParseTarget,
 ) -> Result<(), LlvmError> {
-    let entry = ctx.context.append_basic_block(llvm_function, "entry");
-    ctx.builder.position_at_end(entry);
-
-    let result_symbol = expect_enum_symbol(&function.return_type, function)?;
-    let input_ptr = llvm_function.get_nth_param(0).ok_or_else(|| {
-        LlvmError::Codegen(format!(
-            "{} missing `input` param on `{}`",
-            label(target),
-            function.symbol,
-        ))
-    })?;
+    let result_symbol = expect_enum_symbol(&function.return_type, function, label(target));
+    let input_ptr = nth_param(function, llvm_function, 0, "input");
 
     let (helper, out_ty, ok_load_ty): (
         FunctionValue<'ctx>,
@@ -139,19 +131,6 @@ fn emit_err_branch<'ctx>(
     ctx.builder.position_at_end(block);
     let err = build_conversion_error(ctx, result_symbol, variant)?;
     ctx.builder.build_return(Some(&err)).or_ice().map(|_| ())
-}
-
-fn expect_enum_symbol<'ty>(
-    ty: &'ty IRType,
-    function: &IRFunction,
-) -> Result<&'ty IRSymbol, LlvmError> {
-    match ty {
-        IRType::Enum(symbol) => Ok(symbol),
-        other => Err(LlvmError::Codegen(format!(
-            "parse intrinsic on `{}` expected an enum-typed return, got `{other:?}`",
-            function.symbol,
-        ))),
-    }
 }
 
 fn label(target: ParseTarget) -> &'static str {

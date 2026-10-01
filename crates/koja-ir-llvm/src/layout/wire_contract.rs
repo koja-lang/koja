@@ -21,7 +21,6 @@
 use koja_ir::{IREnumVariant, IRType};
 
 use crate::ctx::EmitContext;
-use crate::error::LlvmError;
 
 /// Wire-ordered variant names per ABI.md's envelope catalog.
 const WIRE_ORDERED_ENUMS: &[(&str, &[&str])] = &[
@@ -56,7 +55,7 @@ const WIRE_STRUCT_FIELDS: &[(&str, &[IRType])] = &[(
 /// the ABI.md wire order. Runs once per compile, after enum
 /// registration. Skips enums the program never instantiated: absent
 /// from the binary means no wire coupling to protect.
-pub(crate) fn assert_wire_enum_order(ctx: &EmitContext<'_>) -> Result<(), LlvmError> {
+pub(crate) fn assert_wire_enum_order(ctx: &EmitContext<'_>) {
     let mut violation = None;
     ctx.layouts.for_each_enum(|symbol, variants| {
         if violation.is_some() {
@@ -79,16 +78,15 @@ pub(crate) fn assert_wire_enum_order(ctx: &EmitContext<'_>) -> Result<(), LlvmEr
             ));
         }
     });
-    match violation {
-        Some(message) => Err(LlvmError::Codegen(message)),
-        None => Ok(()),
+    if let Some(message) = violation {
+        panic!("{message}");
     }
 }
 
 /// Verify every registered wire-copied struct declares the field
 /// types in [`WIRE_STRUCT_FIELDS`]. Runs once per compile, after
 /// struct registration. Skips structs the program never instantiated.
-pub(crate) fn assert_wire_struct_layout(ctx: &EmitContext<'_>) -> Result<(), LlvmError> {
+pub(crate) fn assert_wire_struct_layout(ctx: &EmitContext<'_>) {
     let mut violation = None;
     ctx.layouts.for_each_struct(|symbol, fields| {
         if violation.is_some() {
@@ -107,9 +105,8 @@ pub(crate) fn assert_wire_struct_layout(ctx: &EmitContext<'_>) -> Result<(), Llv
             ));
         }
     });
-    match violation {
-        Some(message) => Err(LlvmError::Codegen(message)),
-        None => Ok(()),
+    if let Some(message) = violation {
+        panic!("{message}");
     }
 }
 

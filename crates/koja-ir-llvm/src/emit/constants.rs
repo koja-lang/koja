@@ -1,7 +1,8 @@
 //! Constant emission. Covers scalar `ConstValue`s, the heap-payload
-//! header shape (`String` / `Binary` / `Bits` literals), and the
+//! header shape (`String` / `Binary` / `Bits` literals), the
 //! `LoadConst` cache that materializes pooled aggregate constants
-//! through [`emit_ir_constant_aggregate`].
+//! through [`emit_ir_constant_aggregate`], and the load from a
+//! `Built` constant's global (see [`super::built_constants`]).
 
 use inkwell::module::Linkage;
 use inkwell::types::{ArrayType, IntType};
@@ -9,13 +10,18 @@ use inkwell::values::{BasicValueEnum, PointerValue};
 use koja_ir::{ConstValue, IRConstantValue, IRSymbol, IRVariantTag};
 
 use crate::ctx::EmitContext;
-use crate::error::LlvmError;
+use crate::error::{IceExt, LlvmError};
+use crate::types::ir_basic_type;
 
+use super::built_constants::built_global_name;
 use super::heap_layout::{HEADER_BYTES, RC_IMMORTAL};
 
 /// Materialize the LLVM SSA value for `LoadConst`, using
 /// [`EmitContext::load_const_cache`] so repeat references reuse a
-/// single materialization. The constant pool snapshot must have
+/// single materialization. A `Built` constant instead loads from
+/// its global at every read and skips the cache, because the cache
+/// holds true constants shared across functions and a load is an
+/// instruction in one body. The constant pool snapshot must have
 /// been attached before codegen (see
 /// [`crate::ctx::EmitContext::attach_constant_pool`]). A missing
 /// pool is a compiler-bug surface.
@@ -27,19 +33,32 @@ pub(super) fn emit_load_const<'ctx>(
         return Ok(v);
     }
     let pool = ctx.constant_pool.borrow();
-    let pool = pool.as_ref().ok_or_else(|| {
-        LlvmError::Codegen(
-            "LoadConst emitted without ConstantPoolSnapshot \
-             (`attach_constant_pool` must precede codegen)"
-                .into(),
-        )
-    })?;
-    let entry = pool.get(const_id).ok_or_else(|| {
-        LlvmError::Codegen(format!(
+    let pool = pool.as_ref().expect(
+        "LoadConst emitted without ConstantPoolSnapshot \
+         (`attach_constant_pool` must precede codegen)",
+    );
+    let entry = pool.get(const_id).unwrap_or_else(|| {
+        panic!(
             "LoadConst references missing pooled constant `{const_id}` (IR seal invariant \
              violated or pool attachment bug)",
-        ))
-    })?;
+        )
+    });
+    if let IRConstantValue::Built { ty, .. } = entry {
+        let global = ctx
+            .module
+            .get_global(&built_global_name(const_id))
+            .unwrap_or_else(|| {
+                panic!(
+                    "LoadConst of built constant `{const_id}` before its global was declared \
+                     (`declare_built_constant_globals` must precede codegen)",
+                )
+            });
+        let llvm_ty = ir_basic_type(ctx, ty)?;
+        return ctx
+            .builder
+            .build_load(llvm_ty, global.as_pointer_value(), "built_const")
+            .or_ice();
+    }
     let materialized = emit_ir_constant_aggregate(ctx, entry)?;
     ctx.load_const_cache
         .borrow_mut()
@@ -59,7 +78,11 @@ fn emit_ir_constant_aggregate<'ctx>(
     cv: &IRConstantValue,
 ) -> Result<BasicValueEnum<'ctx>, LlvmError> {
     match cv {
-        IRConstantValue::Primitive(inner) => emit_const(ctx, inner),
+        IRConstantValue::Built { .. } => panic!(
+            "built constants load from their global and never fold to an aggregate \
+             (a `Built` value nested in a static constant is an IR lowering bug)"
+        ),
+        IRConstantValue::Primitive(inner) => Ok(emit_const(ctx, inner)),
         IRConstantValue::EnumVariant { tag, ty } => Ok(emit_unit_variant_constant(ctx, *tag, ty)),
         IRConstantValue::Struct { fields, ty } => {
             let struct_type = ctx.layouts.struct_type(ty.mangled());
@@ -77,9 +100,10 @@ fn emit_ir_constant_aggregate<'ctx>(
 /// is the first byte of the value, so chunk 0 carries the tag and
 /// every other chunk is zero. Placing the tag in the low byte of
 /// chunk 0 assumes a little-endian target, which holds for every
-/// target the backend emits. Constant enum values are unit variants
-/// only (the typecheck lift enforces this), so no payload is
-/// written.
+/// target the backend emits. Only unit variants reach this path. A
+/// payload variant pools as [`IRConstantValue::Built`] and its init
+/// constructs the value at program start, so no payload is written
+/// here.
 fn emit_unit_variant_constant<'ctx>(
     ctx: &EmitContext<'ctx>,
     tag: IRVariantTag,
@@ -111,43 +135,43 @@ fn emit_unit_variant_constant<'ctx>(
 pub(super) fn emit_const<'ctx>(
     ctx: &EmitContext<'ctx>,
     value: &ConstValue,
-) -> Result<BasicValueEnum<'ctx>, LlvmError> {
+) -> BasicValueEnum<'ctx> {
     match value {
         ConstValue::Binary(bytes) => {
-            Ok(emit_const_payload(ctx, bytes, (bytes.len() as u64) * 8, false, "bin").into())
+            emit_const_payload(ctx, bytes, (bytes.len() as u64) * 8, false, "bin").into()
         }
         ConstValue::Bits { bytes, bit_length } => {
-            Ok(emit_const_payload(ctx, bytes, *bit_length, false, "bits").into())
+            emit_const_payload(ctx, bytes, *bit_length, false, "bits").into()
         }
-        ConstValue::Bool(b) => Ok(ctx
+        ConstValue::Bool(b) => ctx
             .context
             .bool_type()
             .const_int(u64::from(*b), false)
-            .into()),
+            .into(),
         // `const_float` always takes f64. The f32 type narrows on
         // its own (bit-exact since f32 widens losslessly).
-        ConstValue::Float32(v) => Ok(ctx.context.f32_type().const_float(f64::from(*v)).into()),
-        ConstValue::Float64(v) => Ok(ctx.context.f64_type().const_float(*v).into()),
-        ConstValue::Int8(v) => Ok(ctx.context.i8_type().const_int(*v as u64, true).into()),
-        ConstValue::Int16(v) => Ok(ctx.context.i16_type().const_int(*v as u64, true).into()),
-        ConstValue::Int32(v) => Ok(ctx.context.i32_type().const_int(*v as u64, true).into()),
-        ConstValue::Int64(v) => Ok(ctx.context.i64_type().const_int(*v as u64, true).into()),
+        ConstValue::Float32(v) => ctx.context.f32_type().const_float(f64::from(*v)).into(),
+        ConstValue::Float64(v) => ctx.context.f64_type().const_float(*v).into(),
+        ConstValue::Int8(v) => ctx.context.i8_type().const_int(*v as u64, true).into(),
+        ConstValue::Int16(v) => ctx.context.i16_type().const_int(*v as u64, true).into(),
+        ConstValue::Int32(v) => ctx.context.i32_type().const_int(*v as u64, true).into(),
+        ConstValue::Int64(v) => ctx.context.i64_type().const_int(*v as u64, true).into(),
         ConstValue::String(s) => {
-            Ok(emit_const_payload(ctx, s.as_bytes(), (s.len() as u64) * 8, true, "str").into())
+            emit_const_payload(ctx, s.as_bytes(), (s.len() as u64) * 8, true, "str").into()
         }
-        ConstValue::UInt8(v) => Ok(ctx.context.i8_type().const_int(u64::from(*v), false).into()),
-        ConstValue::UInt16(v) => Ok(ctx
+        ConstValue::UInt8(v) => ctx.context.i8_type().const_int(u64::from(*v), false).into(),
+        ConstValue::UInt16(v) => ctx
             .context
             .i16_type()
             .const_int(u64::from(*v), false)
-            .into()),
-        ConstValue::UInt32(v) => Ok(ctx
+            .into(),
+        ConstValue::UInt32(v) => ctx
             .context
             .i32_type()
             .const_int(u64::from(*v), false)
-            .into()),
-        ConstValue::UInt64(v) => Ok(ctx.context.i64_type().const_int(*v, false).into()),
-        ConstValue::Unit => Ok(ctx.context.i8_type().const_zero().into()),
+            .into(),
+        ConstValue::UInt64(v) => ctx.context.i64_type().const_int(*v, false).into(),
+        ConstValue::Unit => ctx.context.i8_type().const_zero().into(),
     }
 }
 

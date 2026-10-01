@@ -14,14 +14,14 @@ use crate::ctx::EmitContext;
 use crate::emit::enums::build_enum_value;
 use crate::emit::heap_layout::load_bit_length;
 use crate::error::{IceExt, LlvmError};
-use crate::intrinsics::cptr::declare_memcpy_extern;
 use crate::intrinsics::heap_payload;
 use crate::intrinsics::option;
 use crate::intrinsics::result;
+use crate::intrinsics::util::{expect_enum_symbol, nth_param, nth_pointer, nth_struct};
 use crate::runtime::{
-    declare_malloc_extern, declare_string_contains_nul_extern, declare_string_find_extern,
-    declare_string_get_extern, declare_string_length_extern, declare_string_next_extern,
-    declare_string_slice_bytes_extern, declare_string_slice_extern,
+    declare_malloc_extern, declare_memcpy_extern, declare_string_contains_nul_extern,
+    declare_string_find_extern, declare_string_get_extern, declare_string_length_extern,
+    declare_string_next_extern, declare_string_slice_bytes_extern, declare_string_slice_extern,
 };
 use crate::types::{ir_basic_type, tuple_struct_type};
 
@@ -31,8 +31,6 @@ pub(super) fn emit_string<'ctx>(
     llvm_function: FunctionValue<'ctx>,
     method: StringMethod,
 ) -> Result<(), LlvmError> {
-    let entry = ctx.context.append_basic_block(llvm_function, "entry");
-    ctx.builder.position_at_end(entry);
     match method {
         StringMethod::ByteLength => emit_byte_length(ctx, function, llvm_function),
         StringMethod::Find => super::binary::emit_find(
@@ -59,19 +57,9 @@ fn emit_slice_bytes<'ctx>(
     function: &IRFunction,
     llvm_function: FunctionValue<'ctx>,
 ) -> Result<(), LlvmError> {
-    let payload = self_payload(function, llvm_function)?;
-    let start = llvm_function.get_nth_param(1).ok_or_else(|| {
-        LlvmError::Codegen(format!(
-            "String.slice_bytes missing `start` param on `{}`",
-            function.symbol,
-        ))
-    })?;
-    let stop = llvm_function.get_nth_param(2).ok_or_else(|| {
-        LlvmError::Codegen(format!(
-            "String.slice_bytes missing `stop` param on `{}`",
-            function.symbol,
-        ))
-    })?;
+    let payload = self_payload(function, llvm_function);
+    let start = nth_param(function, llvm_function, 1, "start");
+    let stop = nth_param(function, llvm_function, 2, "stop");
     let helper = declare_string_slice_bytes_extern(ctx);
     let value = ctx.call_basic(
         helper,
@@ -86,7 +74,7 @@ fn emit_byte_length<'ctx>(
     function: &IRFunction,
     llvm_function: FunctionValue<'ctx>,
 ) -> Result<(), LlvmError> {
-    let payload = self_payload(function, llvm_function)?;
+    let payload = self_payload(function, llvm_function);
     let byte_count = load_byte_count(ctx, payload)?;
     ctx.builder
         .build_return(Some(&byte_count))
@@ -105,7 +93,7 @@ fn emit_to_binary<'ctx>(
     function: &IRFunction,
     llvm_function: FunctionValue<'ctx>,
 ) -> Result<(), LlvmError> {
-    let payload = self_payload(function, llvm_function)?;
+    let payload = self_payload(function, llvm_function);
     let shared = heap_payload::share_heap_payload(ctx, function.symbol.mangled(), payload)?;
     ctx.builder.build_return(Some(&shared)).or_ice().map(|_| ())
 }
@@ -115,7 +103,7 @@ fn emit_length<'ctx>(
     function: &IRFunction,
     llvm_function: FunctionValue<'ctx>,
 ) -> Result<(), LlvmError> {
-    let payload = self_payload(function, llvm_function)?;
+    let payload = self_payload(function, llvm_function);
     let helper = declare_string_length_extern(ctx);
     let value = ctx.call_basic(helper, &[payload.into()], "len")?;
     ctx.builder.build_return(Some(&value)).or_ice().map(|_| ())
@@ -126,22 +114,8 @@ fn emit_slice<'ctx>(
     function: &IRFunction,
     llvm_function: FunctionValue<'ctx>,
 ) -> Result<(), LlvmError> {
-    let payload = self_payload(function, llvm_function)?;
-    let range = llvm_function.get_nth_param(1).ok_or_else(|| {
-        LlvmError::Codegen(format!(
-            "String.slice missing `range` param on `{}`",
-            function.symbol,
-        ))
-    })?;
-    let range_struct = match range {
-        BasicValueEnum::StructValue(s) => s,
-        other => {
-            return Err(LlvmError::Codegen(format!(
-                "String.slice expected Range struct on `{}`, got `{other:?}`",
-                function.symbol,
-            )));
-        }
-    };
+    let payload = self_payload(function, llvm_function);
+    let range_struct = nth_struct(function, llvm_function, 1, "range");
     let start = ctx
         .builder
         .build_extract_value(range_struct, 0, "start")
@@ -164,19 +138,14 @@ fn emit_get<'ctx>(
     function: &IRFunction,
     llvm_function: FunctionValue<'ctx>,
 ) -> Result<(), LlvmError> {
-    let payload = self_payload(function, llvm_function)?;
-    let index = llvm_function.get_nth_param(1).ok_or_else(|| {
-        LlvmError::Codegen(format!(
-            "String.get missing `index` param on `{}`",
-            function.symbol,
-        ))
-    })?;
+    let payload = self_payload(function, llvm_function);
+    let index = nth_param(function, llvm_function, 1, "index");
     let helper = declare_string_get_extern(ctx);
     let raw_ptr = ctx
         .call_basic(helper, &[payload.into(), index.into()], "ch")?
         .into_pointer_value();
 
-    let option_symbol = expect_enum_symbol(&function.return_type, function, "String.get")?;
+    let option_symbol = expect_enum_symbol(&function.return_type, function, "String.get");
     let ptr_ty = ctx.context.ptr_type(AddressSpace::default());
     let is_null = ctx
         .builder
@@ -215,13 +184,8 @@ fn emit_next<'ctx>(
 ) -> Result<(), LlvmError> {
     let ptr_ty = ctx.context.ptr_type(AddressSpace::default());
     let i64_ty = ctx.context.i64_type();
-    let payload = self_payload(function, llvm_function)?;
-    let cursor = llvm_function.get_nth_param(1).ok_or_else(|| {
-        LlvmError::Codegen(format!(
-            "String.next missing `cursor` param on `{}`",
-            function.symbol,
-        ))
-    })?;
+    let payload = self_payload(function, llvm_function);
+    let cursor = nth_param(function, llvm_function, 1, "cursor");
     let next_cursor = ctx.builder.build_alloca(i64_ty, "next_cursor").or_ice()?;
     let helper = declare_string_next_extern(ctx);
     let character = ctx
@@ -241,7 +205,7 @@ fn emit_next<'ctx>(
         .build_conditional_branch(is_none, none_bb, some_bb)
         .or_ice()?;
 
-    let option_symbol = expect_enum_symbol(&function.return_type, function, "String.next")?;
+    let option_symbol = expect_enum_symbol(&function.return_type, function, "String.next");
     ctx.builder.position_at_end(some_bb);
     let next = ctx
         .builder
@@ -282,9 +246,9 @@ fn emit_to_cstring<'ctx>(
     llvm_function: FunctionValue<'ctx>,
 ) -> Result<(), LlvmError> {
     let i64_ty = ctx.context.i64_type();
-    let payload = self_payload(function, llvm_function)?;
+    let payload = self_payload(function, llvm_function);
     let byte_len = load_byte_count(ctx, payload)?;
-    let result_symbol = result::return_symbol(function)?;
+    let result_symbol = result::return_symbol(function);
     let cstring_ty = cstring_struct_type(ctx, result_symbol)?;
 
     let contains_nul = declare_string_contains_nul_extern(ctx);
@@ -316,12 +280,10 @@ fn cstring_struct_type<'ctx>(
     result_symbol: &IRSymbol,
 ) -> Result<StructType<'ctx>, LlvmError> {
     let cstring_type =
-        result::single_payload_type(ctx, result_symbol, result::ok_tag(ctx, result_symbol))?;
+        result::single_payload_type(ctx, result_symbol, result::ok_tag(ctx, result_symbol));
     match cstring_type {
         IRType::Struct(_) => Ok(ir_basic_type(ctx, &cstring_type)?.into_struct_type()),
-        other => Err(LlvmError::Codegen(format!(
-            "String.to_cstring expected a CString Ok payload, got `{other:?}`",
-        ))),
+        other => panic!("String.to_cstring expected a CString Ok payload, got `{other:?}`"),
     }
 }
 
@@ -366,20 +328,8 @@ fn emit_cstring_success<'ctx>(
 fn self_payload<'ctx>(
     function: &IRFunction,
     llvm_function: FunctionValue<'ctx>,
-) -> Result<PointerValue<'ctx>, LlvmError> {
-    let raw = llvm_function.get_nth_param(0).ok_or_else(|| {
-        LlvmError::Codegen(format!(
-            "String intrinsic missing `self` payload pointer on `{}`",
-            function.symbol,
-        ))
-    })?;
-    match raw {
-        BasicValueEnum::PointerValue(p) => Ok(p),
-        other => Err(LlvmError::Codegen(format!(
-            "String intrinsic expected pointer receiver on `{}`, got `{other:?}`",
-            function.symbol,
-        ))),
-    }
+) -> PointerValue<'ctx> {
+    nth_pointer(function, llvm_function, 0, "self")
 }
 
 fn load_byte_count<'ctx>(
@@ -391,25 +341,6 @@ fn load_byte_count<'ctx>(
     ctx.builder
         .build_right_shift(bit_length, i64_ty.const_int(3, false), false, "byte_count")
         .or_ice()
-}
-
-/// Extract the IR symbol of an enum type from `ty`. Mirrors the
-/// helper in `intrinsics/list.rs`. The lowering pass guarantees an
-/// enum-typed return for `String.get`, but the error path is kept
-/// to surface IR-seal violations as codegen errors rather than
-/// panics.
-fn expect_enum_symbol<'ty>(
-    ty: &'ty IRType,
-    function: &IRFunction,
-    label: &str,
-) -> Result<&'ty IRSymbol, LlvmError> {
-    match ty {
-        IRType::Enum(symbol) => Ok(symbol),
-        other => Err(LlvmError::Codegen(format!(
-            "{label} expected an enum-typed return, got `{other:?}` (symbol `{}`)",
-            function.symbol,
-        ))),
-    }
 }
 
 fn build_cstring<'ctx>(

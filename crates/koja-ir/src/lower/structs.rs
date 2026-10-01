@@ -81,16 +81,18 @@ pub(super) fn lower_struct_decl(
 pub(super) fn lower_struct_construction(
     fields: &[FieldInit],
     expr_resolution: &ResolvedType,
-    ctx: &mut FnLowerCtx,
+    ctx: &mut FnLowerCtx<'_>,
     block: IRBlockId,
-    registry: &GlobalRegistry,
-    output: &mut LowerOutput,
 ) -> Result<(ValueId, IRBlockId), ()> {
-    let definition = struct_definition_from_resolution(expr_resolution, registry, "construction");
-    let symbol = resolved_struct_symbol(expr_resolution, registry, &mut output.instantiations);
+    let definition =
+        struct_definition_from_resolution(expr_resolution, ctx.registry, "construction");
+    let symbol = resolved_struct_symbol(
+        expr_resolution,
+        ctx.registry,
+        &mut ctx.output.instantiations,
+    );
 
-    let (field_inits, current) =
-        canonicalize_struct_inits(&definition.fields, fields, ctx, block, registry, output)?;
+    let (field_inits, current) = canonicalize_struct_inits(&definition.fields, fields, ctx, block)?;
 
     let dest = ctx.fresh_value(IRType::Struct(symbol.clone()));
     ctx.cfg.append(
@@ -141,15 +143,13 @@ pub(super) fn resolved_struct_symbol(
 pub(super) fn canonicalize_struct_inits(
     declared: &[ResolvedStructField],
     fields: &[FieldInit],
-    ctx: &mut FnLowerCtx,
+    ctx: &mut FnLowerCtx<'_>,
     block: IRBlockId,
-    registry: &GlobalRegistry,
-    output: &mut LowerOutput,
 ) -> Result<(Vec<StructFieldInit>, IRBlockId), ()> {
     let mut current = block;
     let mut values_by_name: BTreeMap<String, ValueId> = BTreeMap::new();
     for field in fields {
-        let (value, next) = lower_expr(&field.value, ctx, current, registry, output)?;
+        let (value, next) = lower_expr(&field.value, ctx, current)?;
         // Value semantics: a field-store acquires an independent value,
         // so a borrowed heap-leaf source is cloned (rc-bumped) into the
         // field. The field then owns a reference that outlives the
@@ -184,24 +184,28 @@ pub(super) fn lower_field_access(
     receiver: &Expr,
     field: &Name,
     field_resolution: &ResolvedType,
-    ctx: &mut FnLowerCtx,
+    ctx: &mut FnLowerCtx<'_>,
     block: IRBlockId,
-    registry: &GlobalRegistry,
-    output: &mut LowerOutput,
 ) -> Result<(ValueId, IRBlockId), ()> {
-    let (base, current) = lower_expr(receiver, ctx, block, registry, output)?;
+    let (base, current) = lower_expr(receiver, ctx, block)?;
     let definition =
-        struct_definition_from_resolution(&receiver.resolution, registry, "field access");
+        struct_definition_from_resolution(&receiver.resolution, ctx.registry, "field access");
     let (field_index, _) = definition.lookup_field(field.as_str()).unwrap_or_else(|| {
         panic!(
             "IR lower: field access missing field `{field}` after typecheck seal \
              (resolve invariant violation)",
         )
     });
-    let field_type =
-        resolved_type_to_ir_type(field_resolution, registry, &mut output.instantiations);
-    let struct_symbol =
-        resolved_struct_symbol(&receiver.resolution, registry, &mut output.instantiations);
+    let field_type = resolved_type_to_ir_type(
+        field_resolution,
+        ctx.registry,
+        &mut ctx.output.instantiations,
+    );
+    let struct_symbol = resolved_struct_symbol(
+        &receiver.resolution,
+        ctx.registry,
+        &mut ctx.output.instantiations,
+    );
     let dest = ctx.fresh_value(field_type.clone());
     ctx.cfg.append(
         current,

@@ -8,7 +8,7 @@ use koja_ast::span::Span;
 
 use super::Printer;
 use super::attach::Slot;
-use super::comments::trailing_doc;
+use super::comments::suffix_doc;
 use super::seq::{Group, SeqEntry, Spacing, field_lines, vertical};
 use super::util::*;
 
@@ -383,18 +383,25 @@ impl Printer {
             header.push('>');
         }
         parts.push(text(header));
-        if !conformances.is_empty() {
-            parts.push(conformance_header_doc(conformances));
+        let trailing = self.header_trailing_doc(owner);
+        if conformances.is_empty() {
+            parts.extend(trailing);
+        } else {
+            parts.push(conformance_header_doc(conformances, trailing));
         }
-        self.push_header_trailing(&mut parts, owner);
         parts
+    }
+
+    /// The header-line trailing comment, if any, as a line suffix. A
+    /// newline always follows a header, so the comment never needs to
+    /// count toward the header's width.
+    pub(super) fn header_trailing_doc(&mut self, owner: Span) -> Option<Doc> {
+        suffix_doc(&self.comments.take(owner, Slot::HeaderTrailing))
     }
 
     /// Appends the header-line trailing comment, if any.
     pub(super) fn push_header_trailing(&mut self, parts: &mut Vec<Doc>, owner: Span) {
-        if let Some(tc) = trailing_doc(&self.comments.take(owner, Slot::HeaderTrailing)) {
-            parts.push(tc);
-        }
+        parts.extend(self.header_trailing_doc(owner));
     }
 
     /// Renders a type body (members between the header and `end`),

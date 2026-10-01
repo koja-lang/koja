@@ -7,8 +7,12 @@
 //!
 //! Parents are visited before children, so a visitor that records the
 //! last node containing a position ends with the innermost one.
+//!
+//! [`crate::visit_mut`] is the mutable counterpart. The two modules
+//! must stay in step. A new node variant needs an arm in both
+//! `walk_*` functions.
 
-use koja_ast::ast::*;
+use crate::ast::*;
 
 /// Callbacks for each AST node family. Every method has a default
 /// that walks into the children.
@@ -27,6 +31,10 @@ pub trait Visitor<'ast> {
 
     fn visit_protocol_method(&mut self, method: &'ast ProtocolMethod) {
         walk_protocol_method(self, method);
+    }
+
+    fn visit_test(&mut self, test: &'ast TestDecl) {
+        walk_test(self, test);
     }
 
     fn visit_type_param(&mut self, type_param: &'ast TypeParam) {
@@ -49,6 +57,10 @@ pub trait Visitor<'ast> {
 
     fn visit_expr(&mut self, expr: &'ast Expr) {
         walk_expr(self, expr);
+    }
+
+    fn visit_match_arm(&mut self, arm: &'ast MatchArm) {
+        walk_match_arm(self, arm);
     }
 
     fn visit_pattern(&mut self, pattern: &'ast Pattern) {
@@ -80,9 +92,7 @@ pub fn walk_item<'ast, V: Visitor<'ast> + ?Sized>(v: &mut V, item: &'ast Item) {
             for nested in &decl.nested {
                 v.visit_item(nested);
             }
-            for test in &decl.tests {
-                walk_body(v, &test.body);
-            }
+            walk_tests(v, &decl.tests);
         }
         Item::Constant(constant) => {
             if let Some(type_expr) = &constant.type_annotation {
@@ -112,16 +122,12 @@ pub fn walk_item<'ast, V: Visitor<'ast> + ?Sized>(v: &mut V, item: &'ast Item) {
             for nested in &decl.nested {
                 v.visit_item(nested);
             }
-            for test in &decl.tests {
-                walk_body(v, &test.body);
-            }
+            walk_tests(v, &decl.tests);
         }
         Item::Extend(block) => {
             v.visit_type_expr(&block.target);
             walk_impl_members(v, &block.members);
-            for test in &block.tests {
-                walk_body(v, &test.body);
-            }
+            walk_tests(v, &block.tests);
         }
         Item::Function(function) => v.visit_function(function),
         Item::Impl(block) => {
@@ -129,9 +135,7 @@ pub fn walk_item<'ast, V: Visitor<'ast> + ?Sized>(v: &mut V, item: &'ast Item) {
             walk_type_params(v, &block.target_bounds);
             v.visit_type_expr(&block.trait_expr);
             walk_impl_members(v, &block.members);
-            for test in &block.tests {
-                walk_body(v, &test.body);
-            }
+            walk_tests(v, &block.tests);
         }
         Item::Protocol(decl) => {
             walk_type_params(v, &decl.type_params);
@@ -151,12 +155,16 @@ pub fn walk_item<'ast, V: Visitor<'ast> + ?Sized>(v: &mut V, item: &'ast Item) {
             for nested in &decl.nested {
                 v.visit_item(nested);
             }
-            for test in &decl.tests {
-                walk_body(v, &test.body);
-            }
+            walk_tests(v, &decl.tests);
         }
-        Item::Test(test) => walk_body(v, &test.body),
+        Item::Test(test) => v.visit_test(test),
         Item::TypeAlias(alias) => v.visit_type_expr(&alias.type_expr),
+    }
+}
+
+fn walk_tests<'ast, V: Visitor<'ast> + ?Sized>(v: &mut V, tests: &'ast [TestDecl]) {
+    for test in tests {
+        v.visit_test(test);
     }
 }
 
@@ -217,6 +225,10 @@ pub fn walk_protocol_method<'ast, V: Visitor<'ast> + ?Sized>(
     if let Some(body) = &method.body {
         walk_body(v, body);
     }
+}
+
+pub fn walk_test<'ast, V: Visitor<'ast> + ?Sized>(v: &mut V, test: &'ast TestDecl) {
+    walk_body(v, &test.body);
 }
 
 pub fn walk_type_param<'ast, V: Visitor<'ast> + ?Sized>(v: &mut V, type_param: &'ast TypeParam) {
@@ -291,13 +303,17 @@ fn walk_args<'ast, V: Visitor<'ast> + ?Sized>(v: &mut V, args: &'ast [Arg]) {
     }
 }
 
+pub fn walk_match_arm<'ast, V: Visitor<'ast> + ?Sized>(v: &mut V, arm: &'ast MatchArm) {
+    v.visit_pattern(&arm.pattern);
+    if let Some(guard) = &arm.guard {
+        v.visit_expr(guard);
+    }
+    walk_body(v, &arm.body);
+}
+
 fn walk_match_arms<'ast, V: Visitor<'ast> + ?Sized>(v: &mut V, arms: &'ast [MatchArm]) {
     for arm in arms {
-        v.visit_pattern(&arm.pattern);
-        if let Some(guard) = &arm.guard {
-            v.visit_expr(guard);
-        }
-        walk_body(v, &arm.body);
+        v.visit_match_arm(arm);
     }
 }
 

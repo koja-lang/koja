@@ -10,7 +10,9 @@
 //! `koja-ir`, add a sibling `<name>.rs` module exporting
 //! `pub(super) fn emit_<name>`, wire its arm in [`emit_intrinsic_body`],
 //! and pin a 1-1 test in `tests/intrinsics.rs`. The exhaustive match
-//! makes the wiring step compiler-checked.
+//! makes the wiring step compiler-checked. The dispatcher opens the
+//! `entry` block before it calls the emitter, so an emitter starts
+//! with the builder already positioned.
 //!
 //! Ownership contract for collection intrinsics: `self` is borrowed
 //! and the caller drops it, so a returned collection must own an
@@ -48,21 +50,25 @@ mod set;
 mod socket;
 mod string;
 mod trace;
+pub(crate) mod util;
 
 /// The `0..capacity` occupied-bucket walk, re-exported so the collection
 /// glue emitter ([`crate::emit::collection_glue`]) iterates `Map` /
 /// `Set` buffers by the exact convention the hashtable intrinsics write.
 pub(crate) use hashtable::occupied_loop;
 
-/// Synthesize the body of an `@intrinsic` function. Forwards each
-/// variant to its hand-written emitter. Each emitter receives the
-/// inner enum directly (no string-sniffing).
+/// Synthesize the body of an `@intrinsic` function. Opens the `entry`
+/// block and positions the builder there, then forwards each variant
+/// to its hand-written emitter. Each emitter receives the inner enum
+/// directly (no string-sniffing) and starts emitting into `entry`.
 pub(crate) fn emit_intrinsic_body<'ctx>(
     ctx: &EmitContext<'ctx>,
     function: &IRFunction,
     llvm_function: FunctionValue<'ctx>,
     id: &IRIntrinsicId,
 ) -> Result<(), LlvmError> {
+    let entry = ctx.context.append_basic_block(llvm_function, "entry");
+    ctx.builder.position_at_end(entry);
     match *id {
         IRIntrinsicId::Binary(method) => binary::emit_binary(ctx, function, llvm_function, method),
         IRIntrinsicId::Bits(method) => binary::emit_bits(ctx, function, llvm_function, method),

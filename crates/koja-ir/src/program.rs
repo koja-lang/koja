@@ -17,27 +17,23 @@
 //! `seal_program` runs as the last sub-pass of `lower_program`. Seal
 //! violations panic per northstar (compiler bugs, not user errors).
 
-use std::collections::{BTreeMap, BTreeSet};
-
 use koja_ast::identifier::{GlobalRegistryId, Identifier, Resolution, ResolvedType};
 use koja_typecheck::{CheckedProgram, GlobalRegistry};
 
 use crate::constant::IRConstantValue;
-use crate::cycle::break_type_cycles;
-use crate::elaborate;
 use crate::enum_decl::IREnumDecl;
 use crate::error::LowerError;
-use crate::function::{FunctionKind, IRFunction, IRSymbol};
-use crate::generics::{self, Instantiation};
+use crate::function::{IRFunction, IRSymbol};
+use crate::generics::Instantiation;
 use crate::lower::{
     LowerOutput, ProcessBodyTypes, resolved_type_to_ir_type, synthesize_process_entry_wrapper,
 };
 use crate::package::{IRPackage, insert_package_function};
+use crate::pipeline;
 use crate::struct_decl::IRStructDecl;
-use crate::tail_calls::rewrite_tail_calls;
 use crate::types::IRType;
-use crate::union_decl::{IRUnionDecl, discover_unions};
-use crate::{lower, merge, seal, yield_checks};
+use crate::union_decl::IRUnionDecl;
+use crate::{merge, seal};
 
 /// Sealed output of [`lower_program`]'s success path. Backends consume
 /// this directly. They build their own indices over the sealed
@@ -54,8 +50,15 @@ use crate::{lower, merge, seal, yield_checks};
 /// [`crate::IRExternAttrs::link_lib`]. The driver feeds these to the
 /// linker as `-l<name>`. Per-function `link_name` overrides stay on
 /// the [`IRFunction`]. Only the library set surfaces here.
+///
+/// `built_constant_order` lists every [`IRConstantValue::Built`]
+/// constant once, each after the constants its init reaches through
+/// the call graph. Backends run the inits in this order before the
+/// entry point starts. [`IRPackage::constants`] is a `BTreeMap`, so
+/// this list is the only place that order survives.
 #[derive(Debug, Clone)]
 pub struct IRProgram {
+    pub built_constant_order: Vec<IRSymbol>,
     pub entry_point: IRSymbol,
     pub link_libraries: Vec<String>,
     pub packages: Vec<IRPackage>,
@@ -144,40 +147,18 @@ pub fn lower_program(
     entry_state: &Identifier,
 ) -> Result<IRProgram, LowerError> {
     let mut output = LowerOutput::default();
-    let mut packages = Vec::with_capacity(checked.packages.len() + 1);
-    packages.push(empty_global_stdlib_package());
-    for pkg in &checked.packages {
-        packages.push(lower::lower_package(pkg, &checked.registry, &mut output));
-    }
+    let mut packages = pipeline::lower_packages(checked, &mut output);
+    pipeline::check_diagnostics(&mut output)?;
 
-    if !output.diagnostics.is_empty() {
-        return Err(LowerError::Diagnostics(output.diagnostics));
-    }
-
-    packages = merge::coalesce(packages);
     let (entry_identifier, entry_symbol) =
         stage_process_entry(entry_state, checked, &mut packages, &mut output)?;
-
-    let initial = std::mem::take(&mut output.instantiations);
-    generics::instantiate(
-        initial,
-        &checked.registry,
-        &checked.packages,
-        &mut packages,
-        &mut output,
-    );
-
-    if !output.diagnostics.is_empty() {
-        return Err(LowerError::Diagnostics(output.diagnostics));
-    }
+    pipeline::instantiate(&mut packages, checked, &mut output)?;
 
     let mut program = merge::merge(packages, entry_symbol);
-    program.link_libraries = collect_link_libraries(program.packages.iter());
-    discover_unions(&mut program.packages, &[]);
-    break_type_cycles(&mut program.packages);
-    rewrite_tail_calls(&mut program.packages);
-    yield_checks::insert_yield_checks(&mut program.packages);
-    elaborate::elaborate(&mut program.packages);
+    program.link_libraries = pipeline::collect_link_libraries(program.packages.iter());
+    pipeline::rewrite(&mut program.packages, &mut []);
+    program.built_constant_order =
+        pipeline::built_constant_order(&program.packages, &checked.registry)?;
 
     if program.function(program.entry_point.mangled()).is_none() {
         return Err(LowerError::EntryPointNotFound {
@@ -263,7 +244,8 @@ fn stage_process_entry(
         &checked.registry,
         output,
     );
-    let [body, wrapper] = synthesize_process_entry_wrapper(&state_symbol, body_types);
+    let [body, wrapper] =
+        synthesize_process_entry_wrapper(&state_symbol, body_types, &checked.registry, output);
     let wrapper_symbol = wrapper.symbol.clone();
     insert_package_function(packages, &owner_package, body);
     insert_package_function(packages, &owner_package, wrapper);
@@ -294,40 +276,4 @@ fn enqueue_process_methods(
             });
         }
     }
-}
-
-/// Empty `Global` IRPackage seeded so `generics::monomorphize` has a
-/// place to land stdlib stub instantiations (today only `Option<T>`).
-pub(crate) fn empty_global_stdlib_package() -> IRPackage {
-    IRPackage {
-        constants: BTreeMap::new(),
-        enums: BTreeMap::new(),
-        functions: BTreeMap::new(),
-        package: "Global".to_string(),
-        structs: BTreeMap::new(),
-        unions: BTreeMap::new(),
-    }
-}
-
-/// Walk every `@extern "C"` function across `packages` and collect a
-/// deduped, sorted list of `link_lib` names. Used at lower time so
-/// backends and cache layers don't re-walk the IR. Functions without
-/// a `link_lib` (bare `@extern "C"` with no `@link`) contribute
-/// nothing. The C symbol is still resolved via the normal libc /
-/// runtime search path at link time.
-pub(crate) fn collect_link_libraries<'a, I>(packages: I) -> Vec<String>
-where
-    I: IntoIterator<Item = &'a IRPackage>,
-{
-    let mut libs = BTreeSet::new();
-    for pkg in packages {
-        for function in pkg.functions.values() {
-            if let FunctionKind::Extern(attrs) = &function.kind
-                && let Some(lib) = &attrs.link_lib
-            {
-                libs.insert(lib.clone());
-            }
-        }
-    }
-    libs.into_iter().collect()
 }

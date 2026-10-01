@@ -28,8 +28,7 @@ use koja_ir::IRFunction;
 use crate::ctx::EmitContext;
 use crate::emit::heap_layout::{block_alloc_size, block_base, init_heap_block, load_bit_length};
 use crate::error::{IceExt, LlvmError};
-use crate::intrinsics::cptr::declare_memcpy_extern;
-use crate::runtime::{declare_malloc_extern, declare_rc_inc_extern};
+use crate::runtime::{declare_malloc_extern, declare_memcpy_extern, declare_rc_inc_extern};
 
 /// rc-acquire `src_payload`'s block and return the same payload
 /// pointer, an owned share of the immutable block, no copy. For
@@ -130,22 +129,22 @@ fn byte_count_from_bits<'ctx>(
 }
 
 /// Fetch param 0 (`self`) as the payload pointer for a heap-leaf
-/// receiver. Surfaces a codegen error if the slot isn't a pointer.
+/// receiver. Panics if the slot is not a pointer.
 pub(super) fn pointer_param<'ctx>(
     function: &IRFunction,
     llvm_function: FunctionValue<'ctx>,
-) -> Result<PointerValue<'ctx>, LlvmError> {
-    let raw = llvm_function.get_nth_param(0).ok_or_else(|| {
-        LlvmError::Codegen(format!(
+) -> PointerValue<'ctx> {
+    let raw = llvm_function.get_nth_param(0).unwrap_or_else(|| {
+        panic!(
             "heap-leaf intrinsic missing `self` payload pointer on `{}`",
             function.symbol,
-        ))
-    })?;
+        )
+    });
     match raw {
-        BasicValueEnum::PointerValue(p) => Ok(p),
-        other => Err(LlvmError::Codegen(format!(
+        BasicValueEnum::PointerValue(p) => p,
+        other => panic!(
             "heap-leaf intrinsic expected pointer receiver on `{}`, got `{other:?}`",
             function.symbol,
-        ))),
+        ),
     }
 }

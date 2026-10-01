@@ -15,20 +15,15 @@
 //! holds when the LLVM emit phase stamps the extracted value
 //! into the slot.
 
-use koja_ast::ast::{
-    BinaryEndianness, BinarySegment, BinarySignedness, ExprKind, Literal, Name, StringPart,
-    TypeExpr, UnaryOp,
-};
+use koja_ast::ast::{BinarySegment, ExprKind, Literal, Name, StringPart, TypeExpr, UnaryOp};
 use koja_ast::identifier::Resolution;
-use koja_typecheck::GlobalRegistry;
 
 use crate::function::{IRBlockId, IRInstruction};
 use crate::local::IRLocalId;
-use crate::types::{
-    BinaryEndian, BinarySign, IRType, LoweredBinaryMatchLayout, LoweredBinaryPattern, ValueId,
-};
+use crate::types::{IRType, LoweredBinaryMatchLayout, LoweredBinaryPattern, ValueId};
 
-use super::ctx::{FnLowerCtx, LowerOutput};
+use super::binary_literal::{ast_endianness_to_ir, ast_signedness_to_ir};
+use super::ctx::FnLowerCtx;
 use super::patterns::ensure_local_declared;
 
 /// Lower a `Pattern::Binary` against `subject` and append an
@@ -40,18 +35,15 @@ use super::patterns::ensure_local_declared;
 pub(super) fn lower_binary_pattern(
     segments: &[BinarySegment],
     subject: ValueId,
-    ctx: &mut FnLowerCtx,
+    ctx: &mut FnLowerCtx<'_>,
     block: IRBlockId,
-    registry: &GlobalRegistry,
-    output: &mut LowerOutput,
 ) -> ValueId {
     let mut lowered: Vec<LoweredBinaryPattern> = Vec::with_capacity(segments.len());
     let mut bit_offset: u64 = 0;
     let mut has_greedy_tail = false;
 
     for segment in segments {
-        let Some(lowered_segment) = lower_segment(segment, bit_offset, ctx, registry, output)
-        else {
+        let Some(lowered_segment) = lower_segment(segment, bit_offset, ctx) else {
             continue;
         };
         match &lowered_segment {
@@ -92,9 +84,7 @@ pub(super) fn lower_binary_pattern(
 fn lower_segment(
     segment: &BinarySegment,
     bit_offset: u64,
-    ctx: &mut FnLowerCtx,
-    registry: &GlobalRegistry,
-    output: &mut LowerOutput,
+    ctx: &mut FnLowerCtx<'_>,
 ) -> Option<LoweredBinaryPattern> {
     if let Some(bytes) = string_segment_bytes(segment) {
         return Some(LoweredBinaryPattern::LiteralBytes { bit_offset, bytes });
@@ -122,8 +112,8 @@ fn lower_segment(
             let local = IRLocalId::from_local_id(*local_id);
             let ty = super::package::resolved_type_to_ir_type(
                 &segment.value.resolution,
-                registry,
-                &mut output.instantiations,
+                ctx.registry,
+                &mut ctx.output.instantiations,
             );
             ensure_local_declared(local, &ty, ctx);
             Some(LoweredBinaryPattern::BindInt {
@@ -174,7 +164,7 @@ fn lower_segment(
 fn lower_greedy_tail(
     segment: &BinarySegment,
     bit_offset: u64,
-    ctx: &mut FnLowerCtx,
+    ctx: &mut FnLowerCtx<'_>,
 ) -> Option<LoweredBinaryPattern> {
     if segment.size.is_some() {
         return None;
@@ -250,18 +240,4 @@ fn string_segment_bytes(segment: &BinarySegment) -> Option<Vec<u8>> {
         }
     }
     Some(bytes)
-}
-
-fn ast_endianness_to_ir(endian: Option<BinaryEndianness>) -> BinaryEndian {
-    match endian.unwrap_or(BinaryEndianness::Big) {
-        BinaryEndianness::Big => BinaryEndian::Big,
-        BinaryEndianness::Little => BinaryEndian::Little,
-    }
-}
-
-fn ast_signedness_to_ir(sign: Option<BinarySignedness>) -> BinarySign {
-    match sign.unwrap_or(BinarySignedness::Unsigned) {
-        BinarySignedness::Signed => BinarySign::Signed,
-        BinarySignedness::Unsigned => BinarySign::Unsigned,
-    }
 }

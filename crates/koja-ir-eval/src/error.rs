@@ -36,7 +36,8 @@ pub enum RuntimeError {
     /// Reached an `IRTerminator::Unreachable`, which means an
     /// upstream exhaustiveness or divergence judgment was wrong.
     UnreachableExecuted,
-    /// Catch-all for IR shapes the interpreter does not yet handle.
+    /// A valid program the interpreter cannot run yet where the LLVM
+    /// backend can. Sealed-IR contract violations panic instead.
     Unsupported { detail: String },
     /// An operand referenced a `ValueId` not yet defined in the
     /// current frame. Seal contract violation if it happens on a

@@ -6,6 +6,7 @@ license.workspace = true
 version.workspace = true
 
 [dependencies]
+koja-graph = { path = "../koja-graph" }
 koja-ir = { path = "../koja-ir" }
 inkwell = { version = "0.9", features = ["llvm21-1"] }
 

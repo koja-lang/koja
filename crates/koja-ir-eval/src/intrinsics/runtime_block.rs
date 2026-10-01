@@ -21,8 +21,8 @@ fn adopt_binary(args: &[Value]) -> Result<Value, RuntimeError> {
         });
     };
     if ptr.is_null() {
-        return Err(RuntimeError::Unsupported {
-            detail: "RuntimeBlock.adopt_binary cannot adopt a null pointer".to_string(),
+        return Err(RuntimeError::Panicked {
+            message: "RuntimeBlock.adopt_binary cannot adopt a null pointer".to_string(),
         });
     }
     Ok(Value::binary(abi::take_block_bytes(*ptr)))

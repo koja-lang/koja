@@ -9,7 +9,7 @@ use koja_ast::ast::Pattern;
 use koja_ast::identifier::{AnonymousKind, ResolvedType};
 use koja_typecheck::{GlobalRegistry, peel_alias};
 
-use super::super::ctx::{FnLowerCtx, LowerOutput};
+use super::super::ctx::FnLowerCtx;
 use super::super::package::resolved_type_to_ir_type;
 use super::structs::lower_subpattern_into;
 use super::{BindOp, BindStep, ChainMode, PatternCheck, PatternInputs};
@@ -18,19 +18,18 @@ use crate::function::IRBlockId;
 pub(super) fn lower_tuple_check(
     elements: &[Pattern],
     inputs: &PatternInputs<'_>,
-    ctx: &mut FnLowerCtx,
+    ctx: &mut FnLowerCtx<'_>,
     block: IRBlockId,
-    output: &mut LowerOutput,
 ) -> (PatternCheck, IRBlockId) {
-    let element_types = tuple_element_types(inputs.subject_ty, elements.len(), inputs.registry);
+    let element_types = tuple_element_types(inputs.subject_ty, elements.len(), ctx.registry);
     let mut binds = Vec::new();
     let mut steps = Vec::new();
     let mut current_block = block;
     for (index, (pattern, element_resolved)) in elements.iter().zip(&element_types).enumerate() {
         let element_ir = resolved_type_to_ir_type(
             element_resolved,
-            inputs.registry,
-            &mut output.instantiations,
+            ctx.registry,
+            &mut ctx.output.instantiations,
         );
         let prefix = BindStep {
             op: BindOp::TupleElement {
@@ -49,7 +48,6 @@ pub(super) fn lower_tuple_check(
             &mut current_block,
             &mut steps,
             &mut binds,
-            output,
         );
     }
     if steps.is_empty() {

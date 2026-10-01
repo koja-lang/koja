@@ -14,9 +14,10 @@ use crate::ctx::EmitContext;
 use crate::emit::enums::build_enum_value;
 use crate::error::{IceExt, LlvmError};
 use crate::intrinsics::element::acquire_value;
+use crate::intrinsics::util::{expect_enum_symbol, nth_int};
 use crate::types::{ir_basic_type, tuple_struct_type};
 
-use super::util::{entry_pointer, expect_enum_symbol, extract_table_fields, nth_param, value_slot};
+use super::util::{entry_pointer, extract_table_fields, value_slot};
 use super::{HashtableLayout, STATE_OCCUPIED};
 use crate::intrinsics::option;
 
@@ -28,16 +29,16 @@ pub(crate) fn emit_next<'ctx>(
 ) -> Result<(), LlvmError> {
     let i8_ty = ctx.context.i8_type();
     let i64_ty = ctx.context.i64_type();
-    let option_symbol = expect_enum_symbol(&function.return_type, function, "collection.next")?;
-    let payload_type = option_payload_type(ctx, option_symbol, function)?;
+    let option_symbol = expect_enum_symbol(&function.return_type, function, "collection.next");
+    let payload_type = option_payload_type(ctx, option_symbol, function);
     let table = extract_table_fields(ctx, function, llvm_function)?;
-    let cursor = nth_param(function, llvm_function, 1, "cursor")?.into_int_value();
-    let entry_block = ctx.builder.get_insert_block().ok_or_else(|| {
-        LlvmError::Codegen(format!(
+    let cursor = nth_int(function, llvm_function, 1, "cursor");
+    let entry_block = ctx.builder.get_insert_block().unwrap_or_else(|| {
+        panic!(
             "collection.next has no entry block on `{}`",
             function.symbol,
-        ))
-    })?;
+        )
+    });
 
     let scan = ctx.context.append_basic_block(llvm_function, "cursor.scan");
     let check = ctx
@@ -138,7 +139,7 @@ pub(crate) fn emit_next<'ctx>(
         .or_ice()?;
     let payload = build_tuple(
         ctx,
-        tuple_elements(&payload_type, function)?,
+        tuple_elements(&payload_type, function),
         &[item, next_cursor.into()],
     )?;
     let some = build_enum_value(
@@ -166,26 +167,26 @@ fn option_payload_type(
     ctx: &EmitContext<'_>,
     option_symbol: &IRSymbol,
     function: &IRFunction,
-) -> Result<IRType, LlvmError> {
+) -> IRType {
     match ctx
         .layouts
         .enum_variant_payload(option_symbol, option::some_tag(ctx, option_symbol))
     {
-        IRVariantPayload::Tuple(types) if types.len() == 1 => Ok(types.into_iter().next().unwrap()),
-        other => Err(LlvmError::Codegen(format!(
+        IRVariantPayload::Tuple(types) if types.len() == 1 => types.into_iter().next().unwrap(),
+        other => panic!(
             "collection.next on `{}` has unexpected Option.Some payload `{other:?}`",
             function.symbol,
-        ))),
+        ),
     }
 }
 
-fn tuple_elements<'a>(ty: &'a IRType, function: &IRFunction) -> Result<&'a [IRType], LlvmError> {
+fn tuple_elements<'a>(ty: &'a IRType, function: &IRFunction) -> &'a [IRType] {
     match ty {
-        IRType::Tuple(elements) if elements.len() == 2 => Ok(elements),
-        other => Err(LlvmError::Codegen(format!(
+        IRType::Tuple(elements) if elements.len() == 2 => elements,
+        other => panic!(
             "collection.next on `{}` expected a two-element tuple payload, got `{other:?}`",
             function.symbol,
-        ))),
+        ),
     }
 }
 

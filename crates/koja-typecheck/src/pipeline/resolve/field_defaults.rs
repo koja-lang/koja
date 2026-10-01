@@ -1,39 +1,36 @@
-//! Field-default resolution: declaration-time validation and
-//! construction-time fill.
+//! Field-default resolution, at the declaration and at each
+//! construction site that omits the field.
 //!
-//! Lift stored each default as an *unresolved* AST on the registry
-//! field. This module resolves it in two places:
+//! Lift stored each default as an unresolved, synthetic-spanned clone
+//! on the registry field. This module resolves it in two places:
 //!
-//! - **Declaration**: the walker trial-resolves every default in the
-//!   declaring package's scope with no file aliases and no locals,
+//! - At the declaration, the walker trial-resolves every default
 //!   against the lifted field type. Unknown names, type mismatches,
-//!   and out-of-range literals all diagnose on the declaring file.
-//! - **Construction**: a site that omits a defaulted field gets a
-//!   synthesized [`FieldInit`] cloned from the unresolved default,
-//!   resolved with the substituted field type as the expected hint.
-//!   Declaration validation already proved the expression clean, so
-//!   site resolution uses a scratch diagnostics vec.
+//!   and out-of-range literals diagnose here.
+//! - At a construction site that omits the field, the site gets a
+//!   [`FieldInit`] cloned from the stored default and resolved against
+//!   the substituted field type. See [`synthesize_default_init`] for
+//!   why the site reports nothing.
 //!
-//! Both resolutions go through [`resolve_in_declaring_scope`], the
-//! same scope shape (declaring package, empty aliases, no locals),
-//! so they cannot diverge. Aliased names in defaults are rejected
-//! at the declaration with a "write the qualified name" hint.
+//! Both go through [`resolve_in_declaring_scope`], which resolves in
+//! the declaring package with the declaring file's aliases and no
+//! locals. One scope shape at both points is what keeps them from
+//! diverging.
 
 use koja_ast::ast::{
-    AliasDecl, Diagnostic, EnumConstructionData, EnumDecl, EnumVariantData, Expr, ExprKind,
-    FieldInit, Name, StructDecl, StructField, name_texts,
+    AliasDecl, Diagnostic, EnumDecl, EnumVariantData, Expr, FieldInit, Name, StructDecl,
+    StructField, name_texts,
 };
 use koja_ast::identifier::{GlobalRegistryId, Identifier, ResolvedType};
 use koja_ast::span::Span;
 
-use crate::pipeline::local_scope::LocalScope;
 use crate::registry::{
     GlobalKind, GlobalRegistry, RegistryEntry, ResolvedStructField, ResolvedVariantData,
 };
 
 use super::coercion::{check_compatible_stamping, mismatch_message};
 use super::ctx::ResolverEnv;
-use super::expr::resolve_expr_with_expected;
+use super::resolve_in_declaring_scope;
 
 /// Trial-resolve every field default on a struct decl. Called by the
 /// walker while it visits the declaring file.
@@ -119,9 +116,8 @@ fn resolve_field_defaults(
 }
 
 /// Trial-resolve one default against its lifted field type in the
-/// declaring package's scope. Diagnostics land on the default
-/// expression. When resolution only succeeds through the file's
-/// aliases, the raw errors are replaced with one qualified-name hint.
+/// declaring file's scope. Diagnostics land on the default
+/// expression.
 fn resolve_declared_default(
     default: &mut Expr,
     field_ty: &ResolvedType,
@@ -130,39 +126,15 @@ fn resolve_declared_default(
     env: &ResolverEnv<'_>,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
-    let pristine = default.clone();
     let mut trial = Vec::new();
     resolve_in_declaring_scope(
         default,
-        field_ty,
+        Some(field_ty),
         env.package,
-        &[],
+        env.file_aliases,
         env.registry,
         &mut trial,
     );
-
-    if !trial.is_empty() && !env.file_aliases.is_empty() {
-        let mut aliased = pristine;
-        let mut scratch = Vec::new();
-        resolve_in_declaring_scope(
-            &mut aliased,
-            field_ty,
-            env.package,
-            env.file_aliases,
-            env.registry,
-            &mut scratch,
-        );
-        if scratch.is_empty() {
-            diagnostics.push(Diagnostic::error(
-                format!(
-                    "default for field `{field_name}` of `{owner_label}` cannot use an \
-                     `alias` shorthand. Write the qualified name",
-                ),
-                default.span,
-            ));
-            return;
-        }
-    }
     if !trial.is_empty() {
         diagnostics.append(&mut trial);
         return;
@@ -181,35 +153,15 @@ fn resolve_declared_default(
     }
 }
 
-/// Resolve `expr` with `expected` as the hint in a fresh scope:
-/// `package`, the given alias roster, and no locals. Serving the
-/// declaration trial, the alias probe, and the construction-site
-/// fill from one function is what keeps declaration-time and
-/// site-time resolution identical.
-fn resolve_in_declaring_scope(
-    expr: &mut Expr,
-    expected: &ResolvedType,
-    package: &str,
-    aliases: &[AliasDecl],
-    registry: &GlobalRegistry,
-    diagnostics: &mut Vec<Diagnostic>,
-) {
-    let mut env = ResolverEnv {
-        bound_overlay: None,
-        file_aliases: aliases,
-        package,
-        registry,
-    };
-    let mut scope = LocalScope::new();
-    let mut resolver = env.make_resolver(None, None, &[], &mut scope);
-    resolve_expr_with_expected(expr, Some(expected), &mut resolver, diagnostics);
-}
-
-/// Synthesize the omitted field's init at a construction site:
-/// clone the stored default, mark its spans synthetic (so LSP
-/// position lookups in the declaring file skip it), and re-resolve
-/// it against the substituted field type in the declaring package's
-/// scope.
+/// Synthesize the omitted field's init at a construction site. Clone
+/// the stored default and resolve it against the substituted field
+/// type in the declaring file's scope.
+///
+/// Diagnostics go to a scratch vec on purpose. A default that fails
+/// here failed the same way at its declaration, which reports it, and
+/// the walker may reach this site first. The init still returns with
+/// whatever resolution the trial left, so the site adds no
+/// missing-field error on top.
 pub(super) fn synthesize_default_init(
     declared_field: &ResolvedStructField,
     owner_id: GlobalRegistryId,
@@ -218,30 +170,20 @@ pub(super) fn synthesize_default_init(
 ) -> Option<FieldInit> {
     let default = declared_field.default.as_ref()?;
     let mut value = (**default).clone();
-    mark_synthetic(&mut value);
 
+    let (package, aliases) = declaring_scope(owner_id, registry);
     let mut scratch = Vec::new();
     resolve_in_declaring_scope(
         &mut value,
-        &declared_field.ty,
-        declaring_package(owner_id, registry),
-        &[],
+        Some(&declared_field.ty),
+        package,
+        aliases,
         registry,
         &mut scratch,
     );
-    debug_assert!(
-        scratch.is_empty(),
-        "field default for `{}` diverged from declaration validation. Got {scratch:?}",
-        declared_field.name,
-    );
     let actual = value.resolution.clone();
-    if actual.is_resolved() && declared_field.ty.is_resolved() {
-        let mismatch = check_compatible_stamping(&mut value, &actual, &declared_field.ty, registry);
-        debug_assert!(
-            mismatch.is_none(),
-            "field default for `{}` diverged from declaration validation. Got {mismatch:?}",
-            declared_field.name,
-        );
+    if scratch.is_empty() && actual.is_resolved() && declared_field.ty.is_resolved() {
+        let _ = check_compatible_stamping(&mut value, &actual, &declared_field.ty, registry);
     }
 
     let span = construction_span.as_synthetic();
@@ -252,49 +194,19 @@ pub(super) fn synthesize_default_init(
     })
 }
 
-fn declaring_package<'a>(owner_id: GlobalRegistryId, registry: &'a GlobalRegistry) -> &'a str {
+/// The package and alias roster of the file that declared `owner_id`,
+/// a struct or an enum whose struct variant is under construction.
+pub(crate) fn declaring_scope<'a>(
+    owner_id: GlobalRegistryId,
+    registry: &'a GlobalRegistry,
+) -> (&'a str, &'a [AliasDecl]) {
     let entry: &'a RegistryEntry = registry
         .get(owner_id)
         .expect("construction resolved through this id");
-    entry.identifier.package()
-}
-
-/// Mark every span in a default-value clone synthetic. Only the
-/// shapes the lift-time check allows can appear here; anything else
-/// was rejected at the declaration.
-fn mark_synthetic(expr: &mut Expr) {
-    expr.span = expr.span.as_synthetic();
-    match &mut expr.kind {
-        ExprKind::BinaryLiteral { segments } => {
-            for segment in segments {
-                segment.span = segment.span.as_synthetic();
-                mark_synthetic(&mut segment.value);
-            }
-        }
-        ExprKind::EnumConstruction { data, .. } => match data {
-            EnumConstructionData::Struct(fields) => mark_field_inits_synthetic(fields),
-            EnumConstructionData::Tuple(elements) => {
-                elements.iter_mut().for_each(mark_synthetic);
-            }
-            EnumConstructionData::Unit => {}
-        },
-        ExprKind::Group { expr: inner } => mark_synthetic(inner),
-        ExprKind::List { elements } => elements.iter_mut().for_each(mark_synthetic),
-        ExprKind::Map { entries } => {
-            for (key, value) in entries {
-                mark_synthetic(key);
-                mark_synthetic(value);
-            }
-        }
-        ExprKind::StructConstruction { fields, .. } => mark_field_inits_synthetic(fields),
-        ExprKind::Unary { operand, .. } => mark_synthetic(operand),
-        _ => {}
-    }
-}
-
-fn mark_field_inits_synthetic(fields: &mut [FieldInit]) {
-    for field in fields {
-        field.span = field.span.as_synthetic();
-        mark_synthetic(&mut field.value);
-    }
+    let aliases: &'a [AliasDecl] = match &entry.kind {
+        GlobalKind::Struct(Some(definition)) => &definition.aliases,
+        GlobalKind::Enum(Some(definition)) => &definition.aliases,
+        _ => &[],
+    };
+    (entry.identifier.package(), aliases)
 }

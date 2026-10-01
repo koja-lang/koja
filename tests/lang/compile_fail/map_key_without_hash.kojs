@@ -1,0 +1,7 @@
+struct Key
+  id: Int
+end
+
+m: Map<Key, Int> = Map.new()
+m = m.put(Key { id: 1 }, 10)
+m.length().print()

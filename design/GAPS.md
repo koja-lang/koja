@@ -332,9 +332,9 @@ Found 2026-08-28. None blocking, each with a workaround:
 ## Function references cannot be default field values
 
 Found 2026-09-01 in the same `trail` conversion. Default field
-values are limited to literals, negated numerics, unit enum
-variants, binary literals, and literal collections. A `fn` typed
-field cannot default to a named function:
+values are limited to literals, negated numerics, enum variants,
+constants, binary literals, and struct, list, map, or set literals
+of those. A `fn` typed field cannot default to a named function:
 
 ```koja
 struct Config
@@ -357,57 +357,6 @@ cost of a `match` at every call site.
 values. A function reference resolves statically to a known
 function, carries no evaluation order questions, and keeps the
 "defaults are data" property.
-
----
-
-## Struct literal defaults stop at the package boundary
-
-Found 2026-09-23 while wiring an `open_telemetry` package into remem.
-A struct literal is an eligible default field value, but only when
-its type lives in the same package. A qualified path fails the
-eligibility check before the literal is looked at:
-
-```koja
-struct Trace
-  tracer: Tracer = OpenTelemetry.Tracer{ref: Option.None}
-  # error: default field values are limited to literals ...
-end
-```
-
-`Pkg.Type{...}` parses the same as `Enum.Variant{...}`, and the lift
-check accepts only unit variants, so it rejects the literal before
-resolve can tell the two apart.
-
-The boundary is the dotted path, not the package. Found again
-2026-09-26 while adding socket deadlines: a nested type in the same
-package fails the same way, so `TCPListener.options` could not
-default to `TCPListener.Options{}` and is a required field that
-`bind` and `bind_addr` fill from their own parameter default.
-Parameter defaults accept both spellings, since they resolve in the
-function body.
-
-An `alias` does not help, and is worse than the dotted path. With
-`alias Outer.Opts as Opts`, the default `opts: Opts = Opts{}` passes
-the lift check and then panics in `resolve/field_defaults.rs`
-("field default for `opts` diverged from declaration validation"),
-because the default resolves without the file's aliases and reports
-`Opts` as an unknown struct. A compiler panic on valid-looking input
-is the worse half of this gap.
-
-Workaround: the package exports a constant such as
-`const NOOP: Tracer = Tracer{ref: Option.None}`, and the consumer
-writes `tracer: OpenTelemetry.Tracer = OpenTelemetry.Tracer.NOOP`.
-For a same-package nested type, make the field required and put the
-default on the constructor's parameter.
-
-**Fix path:** scheduled for 0.20. Once the lift check accepts
-`Pkg.Type{...}`, `Enum.Variant{...}` gets through too. Either resolve
-rejects it, or defaults start to accept payload variants. The
-unit-only rule comes from the constant pool, which defaults never
-enter. A larger option is to resolve each default once in its
-declaring file with that file's aliases in scope, which fixes the
-dotted path and the alias panic together and removes the alias
-restriction on defaults.
 
 ---
 
@@ -562,3 +511,37 @@ first concrete width it meets and defaults to `Int` at the end of the
 function, would remove hints and coercions both. Koja's resolver is a
 single pass and local types are fixed at declaration, so that is a
 different resolver, not a change to this one.
+
+---
+
+## LLVM cannot hash every key type that passes the `Hash` bound
+
+Found 2026-09-30 while adding the `K: Hash & Equality` bound to
+`builtin Map` and `builtin Set`. Typecheck now rejects a key type
+without `Hash` at every call and literal, but the LLVM hashtable
+intrinsics resolve `hash` and `equals?` by symbol in
+`resolve_hash_eq` (`koja-ir-llvm/src/intrinsics/hashtable/util.rs`),
+and two key shapes that satisfy the bound miss there. The interpreter
+runs both.
+
+- **Union keys.** `hash_receiver_symbol` has no arm for
+  `IRType::Union`, so `Map<A | B, V>` fails with a codegen error even
+  when every member implements `Hash`. LANGUAGE.md promises this
+  shape works.
+- **Conditional `Hash` impls that only the table reaches.** For
+  `impl Hash for Pair<A: Hash, B: Hash>` and a `Map<Pair<Int,
+String>, V>`, the monomorphized `Pair_$Int64.String$.hash/1` is
+  never declared because no user code calls it directly. The lookup
+  misses and codegen fails.
+
+Consequence: a valid program compiles under the interpreter and fails
+under `--backend=llvm`, and the failure is a codegen error instead of
+a typecheck diagnostic.
+
+**Fix path:** the second gap is an instantiation hole. The IR pass
+that instantiates monomorphized functions should treat every
+hashtable key type as a use of its `hash` and `equals?`, so the
+symbols exist before codegen. The first needs a union hash strategy
+in the backend, most simply a member dispatch that hashes the tag
+and then the active member. Once both land, the three `Codegen`
+sites in `resolve_hash_eq` become seal invariant panics.

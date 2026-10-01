@@ -491,29 +491,41 @@ impl GlobalRegistry {
     /// Stamp a resolved variant roster onto an enum entry. Panics
     /// unless the entry's kind is exactly `Enum(None)`.
     pub(crate) fn set_enum_definition(&mut self, id: GlobalRegistryId, definition: EnumDefinition) {
-        let entry = self.entries.get_mut(&id).unwrap_or_else(|| {
-            panic!("set_enum_definition on missing registry id {id}. This is a collect invariant violation")
+        self.stamp(id, "set_enum_definition", definition, |kind| match kind {
+            GlobalKind::Enum(slot) => Some(slot),
+            _ => None,
         });
-        match &entry.kind {
-            GlobalKind::Enum(None) => {
-                entry.kind = GlobalKind::Enum(Some(definition));
-            }
-            GlobalKind::Enum(Some(_)) => {
-                panic!(
-                    "set_enum_definition called twice on `{}`. lift_signatures must stamp \
-                     each enum exactly once",
-                    entry.identifier,
-                );
-            }
-            other => {
-                panic!(
-                    "set_enum_definition called on non-enum entry `{}` ({}). \
-                     Only Enum entries carry definitions",
-                    entry.identifier,
-                    other.label(),
-                );
-            }
+    }
+
+    /// Write `value` into the empty slot that `slot` selects on
+    /// entry `id`. Every lift stamp goes through here, so the three
+    /// invariant panics have one wording: `what` names the caller,
+    /// a missing id is a collect bug, a `None` from `slot` is a
+    /// wrong-kind entry, and a filled slot is a second stamp.
+    fn stamp<T>(
+        &mut self,
+        id: GlobalRegistryId,
+        what: &str,
+        value: T,
+        slot: impl FnOnce(&mut GlobalKind) -> Option<&mut Option<T>>,
+    ) {
+        let entry = self.entries.get_mut(&id).unwrap_or_else(|| {
+            panic!("{what} on missing registry id {id}. This is a collect invariant violation")
+        });
+        let label = entry.kind.label();
+        let Some(target) = slot(&mut entry.kind) else {
+            panic!(
+                "{what} called on {label} entry `{}`, which has no slot for this definition",
+                entry.identifier,
+            );
+        };
+        if target.is_some() {
+            panic!(
+                "{what} called twice on `{}`. The lift passes stamp each entry exactly once",
+                entry.identifier,
+            );
         }
+        *target = Some(value);
     }
 
     /// Record a [`Conformance`] of `target_id` to `protocol_id`.
@@ -867,31 +879,15 @@ impl GlobalRegistry {
         id: GlobalRegistryId,
         definition: ProtocolDefinition,
     ) {
-        let entry = self.entries.get_mut(&id).unwrap_or_else(|| {
-            panic!(
-                "set_protocol_definition on missing registry id {id}. This is a collect invariant violation"
-            )
-        });
-        match &entry.kind {
-            GlobalKind::Protocol(None) => {
-                entry.kind = GlobalKind::Protocol(Some(definition));
-            }
-            GlobalKind::Protocol(Some(_)) => {
-                panic!(
-                    "set_protocol_definition called twice on `{}`. lift_signatures must stamp \
-                     each protocol exactly once",
-                    entry.identifier,
-                );
-            }
-            other => {
-                panic!(
-                    "set_protocol_definition called on non-protocol entry `{}` ({}). \
-                     Only Protocol entries carry definitions",
-                    entry.identifier,
-                    other.label(),
-                );
-            }
-        }
+        self.stamp(
+            id,
+            "set_protocol_definition",
+            definition,
+            |kind| match kind {
+                GlobalKind::Protocol(slot) => Some(slot),
+                _ => None,
+            },
+        );
     }
 
     /// Stamp a resolved field layout onto a struct entry. Panics
@@ -901,29 +897,10 @@ impl GlobalRegistry {
         id: GlobalRegistryId,
         definition: StructDefinition,
     ) {
-        let entry = self.entries.get_mut(&id).unwrap_or_else(|| {
-            panic!("set_struct_definition on missing registry id {id}. This is a collect invariant violation")
+        self.stamp(id, "set_struct_definition", definition, |kind| match kind {
+            GlobalKind::Struct(slot) => Some(slot),
+            _ => None,
         });
-        match &entry.kind {
-            GlobalKind::Struct(None) => {
-                entry.kind = GlobalKind::Struct(Some(definition));
-            }
-            GlobalKind::Struct(Some(_)) => {
-                panic!(
-                    "set_struct_definition called twice on `{}`. lift_signatures must stamp \
-                     each struct exactly once",
-                    entry.identifier,
-                );
-            }
-            other => {
-                panic!(
-                    "set_struct_definition called on non-struct entry `{}` ({}). \
-                     Only Struct entries carry definitions",
-                    entry.identifier,
-                    other.label(),
-                );
-            }
-        }
     }
 
     fn insert(
@@ -976,31 +953,15 @@ impl GlobalRegistry {
         id: GlobalRegistryId,
         definition: ConstantDefinition,
     ) {
-        let entry = self.entries.get_mut(&id).unwrap_or_else(|| {
-            panic!(
-                "set_constant_definition on missing registry id {id}. This is a collect invariant violation"
-            )
-        });
-        match &entry.kind {
-            GlobalKind::Constant(None) => {
-                entry.kind = GlobalKind::Constant(Some(Box::new(definition)));
-            }
-            GlobalKind::Constant(Some(_)) => {
-                panic!(
-                    "set_constant_definition called twice on `{}`. lift_signatures must stamp \
-                     each constant exactly once",
-                    entry.identifier,
-                );
-            }
-            other => {
-                panic!(
-                    "set_constant_definition called on non-constant entry `{}` ({}). \
-                     Only Constant entries carry definitions",
-                    entry.identifier,
-                    other.label(),
-                );
-            }
-        }
+        self.stamp(
+            id,
+            "set_constant_definition",
+            Box::new(definition),
+            |kind| match kind {
+                GlobalKind::Constant(slot) => Some(slot),
+                _ => None,
+            },
+        );
     }
 
     /// Stamp a resolved expansion onto a type-alias entry. Panics
@@ -1010,32 +971,15 @@ impl GlobalRegistry {
         id: GlobalRegistryId,
         expansion: ResolvedType,
     ) {
-        let entry = self.entries.get_mut(&id).unwrap_or_else(|| {
-            panic!(
-                "set_type_alias_definition on missing registry id {id}. This is a \
-                 collect invariant violation"
-            )
-        });
-        match &entry.kind {
-            GlobalKind::TypeAlias(None) => {
-                entry.kind = GlobalKind::TypeAlias(Some(expansion));
-            }
-            GlobalKind::TypeAlias(Some(_)) => {
-                panic!(
-                    "set_type_alias_definition called twice on `{}`. \
-                     lift_type_aliases must stamp each alias exactly once",
-                    entry.identifier,
-                );
-            }
-            other => {
-                panic!(
-                    "set_type_alias_definition called on non-alias entry `{}` ({}). \
-                     Only TypeAlias entries carry expansions",
-                    entry.identifier,
-                    other.label(),
-                );
-            }
-        }
+        self.stamp(
+            id,
+            "set_type_alias_definition",
+            expansion,
+            |kind| match kind {
+                GlobalKind::TypeAlias(slot) => Some(slot),
+                _ => None,
+            },
+        );
     }
 
     /// Look up a registered alias's expansion. `None` if `id` is
@@ -1082,29 +1026,10 @@ impl GlobalRegistry {
 
     /// Stamp a resolved signature onto a collected function entry.
     pub(crate) fn set_signature(&mut self, id: GlobalRegistryId, signature: FunctionSignature) {
-        let entry = self.entries.get_mut(&id).unwrap_or_else(|| {
-            panic!(
-                "set_signature on missing registry id {id}. This is a collect invariant violation"
-            )
+        self.stamp(id, "set_signature", signature, |kind| match kind {
+            GlobalKind::Function(definition) => Some(&mut definition.signature),
+            _ => None,
         });
-        match &mut entry.kind {
-            GlobalKind::Function(definition) if definition.signature.is_none() => {
-                definition.signature = Some(signature);
-            }
-            GlobalKind::Function(_) => panic!(
-                "set_signature called twice on `{}`. lift_signatures must stamp each \
-                 function exactly once",
-                entry.identifier,
-            ),
-            other => {
-                panic!(
-                    "set_signature called on non-function entry `{}` ({}). \
-                     Only Function entries carry signatures",
-                    entry.identifier,
-                    other.label(),
-                );
-            }
-        }
     }
 
     /// Claim a seeded builtin stub for a `builtin` declaration.

@@ -11,6 +11,8 @@ Shared AST definitions used by every other crate. No logic -- just data types.
 - `labels.rs` -- short, stable diagnostic labels for AST shapes
 - `debug_print.rs` -- compact tree printer for `--emit-ast`
 - `span.rs` -- `Position` and `Span` for source locations
+- `visit.rs` -- `Visitor` trait with `walk_*` defaults over every node family, parents before children
+- `visit_mut.rs` -- `VisitorMut`, the same walk over `&mut` nodes. A new node variant needs an arm in both
 
 ## Key types
 

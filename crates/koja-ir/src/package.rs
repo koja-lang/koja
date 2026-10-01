@@ -18,13 +18,16 @@ use crate::union_decl::IRUnionDecl;
 #[derive(Debug, Clone)]
 pub struct IRPackage {
     /// Compound-constant pool keyed by mangled [`IRSymbol`]. One
-    /// entry per package-level `const NAME = <compound-rhs>` whose
-    /// RHS doesn't fold into a scalar [`crate::ConstValue`]
-    /// (strings, unit enum variants, structs of literals). Primitive
-    /// constants are inlined as [`crate::IRInstruction::Const`] at
-    /// every use site and never appear here. [`crate::IRInstruction::LoadConst`]
-    /// references entries through the same symbol so backends emit
-    /// at most one global per pool entry.
+    /// entry per package-level `const` whose value does not fold
+    /// into a scalar [`crate::ConstValue`]: strings, binaries, unit
+    /// enum variants, structs of literals, and every collection or
+    /// payload variant, which pools as [`IRConstantValue::Built`].
+    /// Primitive constants are inlined as
+    /// [`crate::IRInstruction::Const`] at every use site and never
+    /// appear here. [`crate::IRInstruction::LoadConst`] references
+    /// entries through the same symbol so backends emit at most one
+    /// global per pool entry. The accepted value grammar is
+    /// `check_shape` in the typecheck `lift_signatures` pass.
     pub constants: BTreeMap<IRSymbol, IRConstantValue>,
     /// Enum declarations owned by this package, keyed by their
     /// stable [`IRSymbol`]. Same key shape as [`Self::structs`], and

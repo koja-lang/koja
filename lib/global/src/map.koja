@@ -3,7 +3,7 @@ A generic hash map from keys of type `K` to values of type `V`.
 Keys must implement `Hash` and `Equality`. Uses open addressing
 with linear probing.
 """
-builtin Map<K, V>
+builtin Map<K: Hash & Equality, V>
 end
 
 impl Enumeration<(K, V), Int> for Map<K, V>

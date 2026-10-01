@@ -28,22 +28,15 @@ use koja_ast::ast::Statement;
 use koja_ast::identifier::Identifier;
 
 use crate::constant::IRConstantValue;
-use crate::cycle::break_type_cycles;
-use crate::elaborate::elaborate_script;
 use crate::enum_decl::IREnumDecl;
 use crate::error::LowerError;
 use crate::function::{IRBasicBlock, IRFunction, IRSourceDef, IRSymbol};
-use crate::generics;
-use crate::lower::{LowerOutput, lower_body_to_blocks, lower_package};
-use crate::merge;
+use crate::lower::{LowerOutput, lower_body_to_blocks};
 use crate::package::{IRPackage, insert_package_function};
-use crate::program::{collect_link_libraries, empty_global_stdlib_package};
+use crate::pipeline;
 use crate::seal;
 use crate::struct_decl::IRStructDecl;
-use crate::tail_calls::rewrite_tail_calls;
 use crate::types::IRType;
-use crate::union_decl::discover_unions;
-use crate::yield_checks::{insert_yield_checks, insert_yield_checks_in_body};
 
 /// Sealed output of [`lower_script`]'s success path.
 ///
@@ -72,9 +65,14 @@ use crate::yield_checks::{insert_yield_checks, insert_yield_checks_in_body};
 /// The LLVM backend stamps it on the synthesized `__koja_user_main`
 /// so a panic in top-level script code resolves to the user's file.
 /// `None` for an items-only / synthetic body with no source path.
+///
+/// `built_constant_order` mirrors
+/// [`crate::IRProgram::built_constant_order`]: the order backends run
+/// [`IRConstantValue::Built`] inits in before the script body starts.
 #[derive(Debug, Clone)]
 pub struct IRScript {
     pub blocks: Vec<IRBasicBlock>,
+    pub built_constant_order: Vec<IRSymbol>,
     pub def_location: Option<IRSourceDef>,
     pub link_libraries: Vec<String>,
     pub packages: Vec<IRPackage>,
@@ -126,29 +124,42 @@ impl IRScript {
 /// sealing.
 pub fn lower_script(checked: &CheckedProgram) -> Result<IRScript, LowerError> {
     let mut output = LowerOutput::default();
-    let mut packages: Vec<IRPackage> = Vec::with_capacity(checked.packages.len() + 1);
-    packages.push(empty_global_stdlib_package());
-    for pkg in &checked.packages {
-        packages.push(lower_package(pkg, &checked.registry, &mut output));
-    }
-    packages = merge::coalesce(packages);
+    let mut packages = pipeline::lower_packages(checked, &mut output);
 
+    let (blocks, return_type) = stage_script_body(checked, &mut packages, &mut output)?;
+    pipeline::instantiate(&mut packages, checked, &mut output)?;
+
+    let link_libraries = pipeline::collect_link_libraries(packages.iter());
+    let mut script = IRScript {
+        blocks,
+        built_constant_order: Vec::new(),
+        def_location: locate_script_body_location(checked),
+        link_libraries,
+        packages,
+        return_type,
+    };
+    pipeline::rewrite(&mut script.packages, &mut script.blocks);
+    script.built_constant_order =
+        pipeline::built_constant_order(&script.packages, &checked.registry)?;
+    seal::seal_script(&script);
+    Ok(script)
+}
+
+/// Lower the script's top-level statements into the implicit body's
+/// blocks and land any closures they synthesize in the body's own
+/// package. Returns the blocks and the trailing expression's type.
+/// Diagnostics from the body walk return before either.
+fn stage_script_body(
+    checked: &CheckedProgram,
+    packages: &mut [IRPackage],
+    output: &mut LowerOutput,
+) -> Result<(Vec<IRBasicBlock>, IRType), LowerError> {
     let body = locate_script_body(checked);
     let body_package = locate_script_body_package(checked);
     let enclosing = body_package.map(synthesize_script_body_symbol);
 
-    let lowered = lower_body_to_blocks(body, enclosing, &checked.registry, &mut output);
-
-    if !output.diagnostics.is_empty() {
-        return Err(LowerError::Diagnostics(output.diagnostics));
-    }
-
-    let (blocks, return_type) = lowered.unwrap_or_else(|()| {
-        panic!(
-            "IR lower_script: body lowering returned Err(()) without pushing diagnostics \
-             (lower_body_to_blocks contract violation)",
-        )
-    });
+    let lowered = lower_body_to_blocks(body, enclosing, &checked.registry, output);
+    pipeline::check_diagnostics(output)?;
 
     let synthesized = std::mem::take(&mut output.synthesized_functions);
     if !synthesized.is_empty() {
@@ -159,39 +170,16 @@ pub fn lower_script(checked: &CheckedProgram) -> Result<IRScript, LowerError> {
             )
         });
         for function in synthesized {
-            insert_package_function(&mut packages, target_package, function);
+            insert_package_function(packages, target_package, function);
         }
     }
 
-    let initial = std::mem::take(&mut output.instantiations);
-    generics::instantiate(
-        initial,
-        &checked.registry,
-        &checked.packages,
-        &mut packages,
-        &mut output,
-    );
-
-    if !output.diagnostics.is_empty() {
-        return Err(LowerError::Diagnostics(output.diagnostics));
-    }
-
-    let link_libraries = collect_link_libraries(packages.iter());
-    let mut script = IRScript {
-        blocks,
-        def_location: locate_script_body_location(checked),
-        link_libraries,
-        packages,
-        return_type,
-    };
-    discover_unions(&mut script.packages, &script.blocks);
-    break_type_cycles(&mut script.packages);
-    rewrite_tail_calls(&mut script.packages);
-    insert_yield_checks(&mut script.packages);
-    insert_yield_checks_in_body(&mut script.blocks);
-    elaborate_script(&mut script.packages, &mut script.blocks);
-    seal::seal_script(&script);
-    Ok(script)
+    Ok(lowered.unwrap_or_else(|()| {
+        panic!(
+            "IR lower_script: body lowering returned Err(()) without pushing diagnostics \
+             (lower_body_to_blocks contract violation)",
+        )
+    }))
 }
 
 /// Find the populated `File.body` in `checked`, or fall back to an

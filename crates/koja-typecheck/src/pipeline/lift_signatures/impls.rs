@@ -10,12 +10,12 @@
 use std::collections::HashMap;
 
 use koja_ast::ast::{
-    Diagnostic, Expr, ExprKind, ExtendBlock, Function, FunctionOrigin, ImplBlock, ImplMember,
-    MatchArm, Name, Param, Pattern, ProtocolMethod, Statement, StringPart, TypeExpr, TypeParam,
-    Visibility, name_texts,
+    Diagnostic, ExtendBlock, Function, FunctionOrigin, ImplBlock, ImplMember, Name, Param,
+    ProtocolMethod, TypeExpr, TypeParam, Visibility, name_texts,
 };
 use koja_ast::identifier::{GlobalRegistryId, Identifier, Resolution, ResolvedType};
 use koja_ast::span::Span;
+use koja_ast::visit_mut;
 
 use crate::pipeline::collect::nominal_target_path;
 use crate::pipeline::resolve::types::types_equivalent;
@@ -29,6 +29,7 @@ use super::LiftScope;
 use super::ProtocolBodies;
 use super::SelfContext;
 use super::functions::{is_concrete_type, lift_function_with_identifier};
+use super::rename_type_params::RenameTypeParam;
 use super::types::{
     ResolutionScope, TypeParamScope, concrete_self_type, dispatch_label, render_resolved,
     resolve_protocol_bound, resolve_type_expr, type_expr_span,
@@ -888,13 +889,12 @@ fn synthesize_default_method(
     site.push_synthesized(function);
 }
 
-/// Walk a synthesized default-method `Function` and rewrite every
-/// reference to a protocol type-param (`M`, `R`, …) into the
-/// concrete `TypeExpr` the impl pinned. The substitution covers
-/// param signatures, the return type, and every `TypeExpr` inside
-/// the body: match arms' typed-binding patterns,
-/// `(M, Option<ReplyTo<R>>)` receive-arm payloads, let-
-/// binding annotations, closures, and so on.
+/// Rewrite every reference to a protocol type-param (`M`, `R`, ...)
+/// in a synthesized default-method `Function` into the concrete
+/// `TypeExpr` the impl pinned. The walk covers the signature and
+/// every `TypeExpr` inside the body, including typed-binding
+/// patterns in `match` and `receive` arms, binding annotations, and
+/// closures.
 ///
 /// Without this, a default body like `Process.run`'s
 /// tuple envelope would carry bare `M`
@@ -926,253 +926,9 @@ fn substitute_protocol_type_params(
     if user_param_names.len() != trait_args.len() {
         return;
     }
-    let mapping: Vec<(&str, &TypeExpr)> = user_param_names
-        .iter()
-        .map(String::as_str)
-        .zip(trait_args.iter())
-        .collect();
-    for (from, to) in &mapping {
-        for param in &mut function.params {
-            if let Param::Regular { type_expr, .. } = param {
-                substitute_named_in_type_expr(type_expr, from, to);
-            }
-        }
-        if let Some(return_type) = &mut function.return_type {
-            substitute_named_in_type_expr(return_type, from, to);
-        }
-        if let Some(body) = &mut function.body {
-            for stmt in body {
-                substitute_named_in_statement(stmt, from, to);
-            }
-        }
-    }
-}
-
-/// Replace bare `path: [from]` `Named` / `Generic` `TypeExpr`s
-/// with the concrete `to` expression. Recurses into generic
-/// argument lists, function-type params and returns, and union
-/// alternatives so nested references like
-/// `(M, Option<ReplyTo<R>>)` rewrite all the way down.
-fn substitute_named_in_type_expr(type_expr: &mut TypeExpr, from: &str, to: &TypeExpr) {
-    match type_expr {
-        TypeExpr::Named { path, .. } if path.len() == 1 && path[0] == from => {
-            *type_expr = to.clone();
-        }
-        TypeExpr::Named { .. } | TypeExpr::Self_ { .. } | TypeExpr::Unit { .. } => {}
-        TypeExpr::Generic { path, args, .. } => {
-            // A bare `M<...>` would still need rewriting if `from`
-            // equals `path[0]` and `to` is itself a Generic, but
-            // protocol type-params are uniformly used as zero-arg
-            // names, so the realistic case is just to recurse.
-            let _ = path;
-            for arg in args {
-                substitute_named_in_type_expr(arg, from, to);
-            }
-        }
-        TypeExpr::Function {
-            params,
-            return_type,
-            ..
-        } => {
-            for param in params {
-                substitute_named_in_type_expr(param, from, to);
-            }
-            substitute_named_in_type_expr(return_type, from, to);
-        }
-        TypeExpr::Tuple { elements, .. } => {
-            for element in elements {
-                substitute_named_in_type_expr(element, from, to);
-            }
-        }
-        TypeExpr::Union { types, .. } => {
-            for ty in types {
-                substitute_named_in_type_expr(ty, from, to);
-            }
-        }
-    }
-}
-
-fn substitute_named_in_statement(statement: &mut Statement, from: &str, to: &TypeExpr) {
-    match statement {
-        Statement::Expr(expr) => substitute_named_in_expr(expr, from, to),
-        Statement::Assignment {
-            type_annotation,
-            value,
-            ..
-        } => {
-            if let Some(annotation) = type_annotation {
-                substitute_named_in_type_expr(annotation, from, to);
-            }
-            substitute_named_in_expr(value, from, to);
-        }
-        Statement::CompoundAssign { value, .. } => substitute_named_in_expr(value, from, to),
-        Statement::Destructure { pattern, value, .. } => {
-            substitute_named_in_pattern(pattern, from, to);
-            substitute_named_in_expr(value, from, to);
-        }
-        Statement::Return { value, .. } => {
-            if let Some(value) = value {
-                substitute_named_in_expr(value, from, to);
-            }
-        }
-        Statement::Break { .. } => {}
-    }
-}
-
-fn substitute_named_in_arms(arms: &mut [MatchArm], from: &str, to: &TypeExpr) {
-    for arm in arms {
-        substitute_named_in_pattern(&mut arm.pattern, from, to);
-        if let Some(guard) = &mut arm.guard {
-            substitute_named_in_expr(guard, from, to);
-        }
-        for stmt in &mut arm.body {
-            substitute_named_in_statement(stmt, from, to);
-        }
-    }
-}
-
-fn substitute_named_in_pattern(pattern: &mut Pattern, from: &str, to: &TypeExpr) {
-    match pattern {
-        Pattern::TypedBinding { type_expr, .. } => {
-            substitute_named_in_type_expr(type_expr, from, to);
-        }
-        Pattern::Or { patterns, .. }
-        | Pattern::List {
-            elements: patterns, ..
-        } => {
-            for pat in patterns {
-                substitute_named_in_pattern(pat, from, to);
-            }
-        }
-        Pattern::EnumTuple { elements, .. }
-        | Pattern::Constructor { elements, .. }
-        | Pattern::Tuple { elements, .. } => {
-            for pat in elements {
-                substitute_named_in_pattern(pat, from, to);
-            }
-        }
-        Pattern::EnumStruct { fields, .. } | Pattern::Struct { fields, .. } => {
-            for field in fields {
-                substitute_named_in_pattern(&mut field.pattern, from, to);
-            }
-        }
-        Pattern::Wildcard { .. }
-        | Pattern::Literal { .. }
-        | Pattern::Binary { .. }
-        | Pattern::Binding { .. }
-        | Pattern::EnumUnit { .. } => {}
-    }
-}
-
-fn substitute_named_in_expr(expr: &mut Expr, from: &str, to: &TypeExpr) {
-    match &mut expr.kind {
-        ExprKind::Match { subject, arms, .. } => {
-            substitute_named_in_expr(subject, from, to);
-            substitute_named_in_arms(arms, from, to);
-        }
-        ExprKind::Receive {
-            arms,
-            after_timeout,
-            after_body,
-        } => {
-            substitute_named_in_arms(arms, from, to);
-            if let Some(timeout) = after_timeout {
-                substitute_named_in_expr(timeout, from, to);
-            }
-            for stmt in after_body {
-                substitute_named_in_statement(stmt, from, to);
-            }
-        }
-        ExprKind::Closure {
-            return_type, body, ..
-        } => {
-            if let Some(rt) = return_type {
-                substitute_named_in_type_expr(rt, from, to);
-            }
-            for stmt in body {
-                substitute_named_in_statement(stmt, from, to);
-            }
-        }
-        ExprKind::ShortClosure { body, .. } => substitute_named_in_expr(body, from, to),
-        ExprKind::Call { callee, args, .. } => {
-            substitute_named_in_expr(callee, from, to);
-            for arg in args {
-                substitute_named_in_expr(&mut arg.value, from, to);
-            }
-        }
-        ExprKind::MethodCall { receiver, args, .. } => {
-            substitute_named_in_expr(receiver, from, to);
-            for arg in args {
-                substitute_named_in_expr(&mut arg.value, from, to);
-            }
-        }
-        ExprKind::Binary { left, right, .. } => {
-            substitute_named_in_expr(left, from, to);
-            substitute_named_in_expr(right, from, to);
-        }
-        ExprKind::Unary { operand, .. } => substitute_named_in_expr(operand, from, to),
-        ExprKind::If {
-            condition,
-            then_body,
-            else_body,
-            ..
-        } => {
-            substitute_named_in_expr(condition, from, to);
-            for stmt in then_body {
-                substitute_named_in_statement(stmt, from, to);
-            }
-            if let Some(else_body) = else_body {
-                for stmt in else_body {
-                    substitute_named_in_statement(stmt, from, to);
-                }
-            }
-        }
-        ExprKind::While {
-            condition, body, ..
-        } => {
-            substitute_named_in_expr(condition, from, to);
-            for stmt in body {
-                substitute_named_in_statement(stmt, from, to);
-            }
-        }
-        ExprKind::For { iterable, body, .. } => {
-            substitute_named_in_expr(iterable, from, to);
-            for stmt in body {
-                substitute_named_in_statement(stmt, from, to);
-            }
-        }
-        ExprKind::Loop { body, .. } => {
-            for stmt in body {
-                substitute_named_in_statement(stmt, from, to);
-            }
-        }
-        ExprKind::Cond {
-            arms, else_body, ..
-        } => {
-            for arm in arms {
-                substitute_named_in_expr(&mut arm.condition, from, to);
-                for stmt in &mut arm.body {
-                    substitute_named_in_statement(stmt, from, to);
-                }
-            }
-            if let Some(else_body) = else_body {
-                for stmt in else_body {
-                    substitute_named_in_statement(stmt, from, to);
-                }
-            }
-        }
-        ExprKind::FieldAccess { receiver, .. } => substitute_named_in_expr(receiver, from, to),
-        ExprKind::Group { expr, .. } | ExprKind::Spawn { expr, .. } => {
-            substitute_named_in_expr(expr, from, to);
-        }
-        ExprKind::String { parts, .. } => {
-            for part in parts {
-                if let StringPart::Interpolation { expr, .. } = part {
-                    substitute_named_in_expr(expr, from, to);
-                }
-            }
-        }
-        _ => {}
+    for (from, to) in user_param_names.iter().zip(trait_args) {
+        let mut rename = RenameTypeParam { from, to };
+        visit_mut::walk_function_mut(&mut rename, function);
     }
 }
 

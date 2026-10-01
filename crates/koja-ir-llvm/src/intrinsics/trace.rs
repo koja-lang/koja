@@ -14,10 +14,11 @@ use inkwell::types::BasicType;
 use inkwell::values::{BasicValueEnum, FunctionValue, IntValue, PointerValue};
 use koja_ir::{IRFunction, IRType, IRVariantPayload, TraceRuntimeMethod};
 
-use super::process::{nth_param, payload_drop_glue};
+use super::process::payload_drop_glue;
 use crate::ctx::EmitContext;
 use crate::emit::enums::build_enum_value;
 use crate::error::{IceExt, LlvmError};
+use crate::intrinsics::util::{nth_int, nth_param, nth_param_type};
 use crate::runtime::{
     declare_rt_export_dropped_extern, declare_rt_export_pop_extern, declare_rt_export_push_extern,
     declare_rt_span_close_extern, declare_rt_span_id_extern, declare_rt_span_open_extern,
@@ -31,8 +32,6 @@ pub(super) fn emit_trace_runtime<'ctx>(
     llvm_function: FunctionValue<'ctx>,
     method: TraceRuntimeMethod,
 ) -> Result<(), LlvmError> {
-    let entry_bb = ctx.context.append_basic_block(llvm_function, "entry");
-    ctx.builder.position_at_end(entry_bb);
     match method {
         TraceRuntimeMethod::ExportDropped => emit_export_dropped(ctx),
         TraceRuntimeMethod::ExportPop => emit_export_pop(ctx, function, llvm_function),
@@ -54,7 +53,7 @@ fn emit_install<'ctx>(
     function: &IRFunction,
     llvm_function: FunctionValue<'ctx>,
 ) -> Result<(), LlvmError> {
-    let (context_value, _) = nth_param(function, llvm_function, 0)?;
+    let context_value = nth_param(function, llvm_function, 0, "context");
     let slot = ctx
         .builder
         .build_alloca(context_value.get_type(), "context_slot")
@@ -81,9 +80,9 @@ fn emit_span_open<'ctx>(
     function: &IRFunction,
     llvm_function: FunctionValue<'ctx>,
 ) -> Result<(), LlvmError> {
-    let (record_value, record_type) = nth_param(function, llvm_function, 0)?;
+    let record_value = nth_param(function, llvm_function, 0, "record");
     let (slot, size) = spill_record(ctx, record_value, "span_record")?;
-    let drop_glue = payload_drop_glue(ctx, record_type)?;
+    let drop_glue = payload_drop_glue(ctx, nth_param_type(function, 0))?;
     let open_fn = declare_rt_span_open_extern(ctx);
     let handle = ctx.call_basic(
         open_fn,
@@ -101,7 +100,7 @@ fn emit_span_take<'ctx>(
     function: &IRFunction,
     llvm_function: FunctionValue<'ctx>,
 ) -> Result<(), LlvmError> {
-    let (handle, _) = nth_param(function, llvm_function, 0)?;
+    let handle = nth_int(function, llvm_function, 0, "handle");
     let record_llvm = ir_basic_type(ctx, &function.return_type)?;
     let (slot, cap) = record_out_slot(ctx, record_llvm, "taken_record")?;
     let take_fn = declare_rt_span_take_extern(ctx);
@@ -122,10 +121,10 @@ fn emit_span_put<'ctx>(
     function: &IRFunction,
     llvm_function: FunctionValue<'ctx>,
 ) -> Result<(), LlvmError> {
-    let (handle, _) = nth_param(function, llvm_function, 0)?;
-    let (record_value, record_type) = nth_param(function, llvm_function, 1)?;
+    let handle = nth_int(function, llvm_function, 0, "handle");
+    let record_value = nth_param(function, llvm_function, 1, "record");
     let (slot, size) = spill_record(ctx, record_value, "put_record")?;
-    let drop_glue = payload_drop_glue(ctx, record_type)?;
+    let drop_glue = payload_drop_glue(ctx, nth_param_type(function, 1))?;
     let put_fn = declare_rt_span_put_extern(ctx);
     ctx.builder
         .build_call(
@@ -145,7 +144,7 @@ fn emit_span_close<'ctx>(
     function: &IRFunction,
     llvm_function: FunctionValue<'ctx>,
 ) -> Result<(), LlvmError> {
-    let (handle, _) = nth_param(function, llvm_function, 0)?;
+    let handle = nth_int(function, llvm_function, 0, "handle");
     let record_llvm = ir_basic_type(ctx, &function.return_type)?;
     let (slot, cap) = record_out_slot(ctx, record_llvm, "closed_record")?;
     let close_fn = declare_rt_span_close_extern(ctx);
@@ -166,9 +165,9 @@ fn emit_export_push<'ctx>(
     function: &IRFunction,
     llvm_function: FunctionValue<'ctx>,
 ) -> Result<(), LlvmError> {
-    let (record_value, record_type) = nth_param(function, llvm_function, 0)?;
+    let record_value = nth_param(function, llvm_function, 0, "record");
     let (slot, size) = spill_record(ctx, record_value, "export_record")?;
-    let drop_glue = payload_drop_glue(ctx, record_type)?;
+    let drop_glue = payload_drop_glue(ctx, nth_param_type(function, 0))?;
     let push_fn = declare_rt_export_push_extern(ctx);
     ctx.builder
         .build_call(push_fn, &[slot.into(), size.into(), drop_glue.into()], "")
@@ -186,30 +185,26 @@ fn emit_export_pop<'ctx>(
     llvm_function: FunctionValue<'ctx>,
 ) -> Result<(), LlvmError> {
     let IRType::Enum(option_symbol) = &function.return_type else {
-        return Err(LlvmError::Codegen(format!(
+        panic!(
             "LLVM emit: `TraceRuntime.export_pop` returns `{:?}`, expected an \
              `Option` enum (IR seal invariant violation)",
             function.return_type,
-        )));
+        );
     };
     let some_tag = ctx.layouts.enum_variant_tag(option_symbol, "Some");
     let none_tag = ctx.layouts.enum_variant_tag(option_symbol, "None");
     let record_type = match ctx.layouts.enum_variant_payload(option_symbol, some_tag) {
         IRVariantPayload::Tuple(types) => match types.as_slice() {
             [record_type] => record_type.clone(),
-            other => {
-                return Err(LlvmError::Codegen(format!(
-                    "LLVM emit: `TraceRuntime.export_pop` Some payload is `{other:?}`, \
-                     expected a single record (IR seal invariant violation)",
-                )));
-            }
-        },
-        other => {
-            return Err(LlvmError::Codegen(format!(
+            other => panic!(
                 "LLVM emit: `TraceRuntime.export_pop` Some payload is `{other:?}`, \
-                 expected a tuple (IR seal invariant violation)",
-            )));
-        }
+                 expected a single record (IR seal invariant violation)",
+            ),
+        },
+        other => panic!(
+            "LLVM emit: `TraceRuntime.export_pop` Some payload is `{other:?}`, \
+             expected a tuple (IR seal invariant violation)",
+        ),
     };
     let record_llvm = ir_basic_type(ctx, &record_type)?;
     let (slot, cap) = record_out_slot(ctx, record_llvm, "popped_record")?;

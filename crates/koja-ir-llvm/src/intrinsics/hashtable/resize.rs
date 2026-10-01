@@ -9,8 +9,9 @@ use inkwell::values::FunctionValue;
 
 use crate::ctx::EmitContext;
 use crate::error::{IceExt, LlvmError};
-use crate::intrinsics::cptr::declare_memcpy_extern;
-use crate::runtime::{declare_free_extern, declare_malloc_extern, declare_memset_extern};
+use crate::runtime::{
+    declare_free_extern, declare_malloc_extern, declare_memcpy_extern, declare_memset_extern,
+};
 
 use super::util::{KeyHashOps, TableSnapshot, advance_slot, call_hash, call_malloc, entry_pointer};
 use super::{HashtableLayout, STATE_EMPTY, STATE_OCCUPIED};

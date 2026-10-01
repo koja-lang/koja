@@ -27,8 +27,11 @@ use crate::function::{
 use crate::package::IRPackage;
 use crate::types::ValueId;
 
-/// Insert yield checks into every regular function across `packages`.
-pub(crate) fn insert_yield_checks(packages: &mut [IRPackage]) {
+/// Insert yield checks into every regular function across `packages`
+/// and into `body`, a script's inline top-level entry (PID 1's entry),
+/// which carries source-level loops but never a `TailCall`. Programs
+/// pass an empty `body`.
+pub(crate) fn insert_yield_checks(packages: &mut [IRPackage], body: &mut [IRBasicBlock]) {
     for package in packages {
         for function in package.functions.values_mut() {
             if matches!(function.kind, FunctionKind::Regular) {
@@ -37,6 +40,7 @@ pub(crate) fn insert_yield_checks(packages: &mut [IRPackage]) {
             }
         }
     }
+    insert_in_body(body);
 }
 
 /// Insert a [`IRInstruction::YieldCheck`] at the entry of a call-containing
@@ -94,12 +98,6 @@ fn is_param_acquire(instruction: Option<&IRInstruction>, param: ValueId) -> bool
         Some(IRInstruction::Call { args, .. }) => args.first() == Some(&param),
         _ => false,
     }
-}
-
-/// Insert yield checks into a script's inline top-level body (PID 1's
-/// entry), which carries source-level loops but never a `TailCall`.
-pub(crate) fn insert_yield_checks_in_body(blocks: &mut [IRBasicBlock]) {
-    insert_in_body(blocks);
 }
 
 fn insert_in_body(blocks: &mut [IRBasicBlock]) {
@@ -246,7 +244,7 @@ mod tests {
             structs: BTreeMap::new(),
             unions: BTreeMap::new(),
         }];
-        insert_yield_checks(&mut packages);
+        insert_yield_checks(&mut packages, &mut []);
         let function = packages[0].functions.values().next().unwrap();
         assert_eq!(yield_checks(&function.blocks[0]), 1);
     }
@@ -289,7 +287,7 @@ mod tests {
             args: Vec::new(),
         });
         let mut packages = regular_function(vec![entry]);
-        insert_yield_checks(&mut packages);
+        insert_yield_checks(&mut packages, &mut []);
         let function = packages[0].functions.values().next().unwrap();
         assert_eq!(yield_checks(&function.blocks[0]), 1);
         assert!(
@@ -305,7 +303,7 @@ mod tests {
     fn leaf_function_gets_no_entry_check() {
         let entry = block(0, IRTerminator::Return { value: None });
         let mut packages = regular_function(vec![entry]);
-        insert_yield_checks(&mut packages);
+        insert_yield_checks(&mut packages, &mut []);
         let function = packages[0].functions.values().next().unwrap();
         assert_eq!(yield_checks(&function.blocks[0]), 0);
     }
@@ -334,7 +332,7 @@ mod tests {
             },
         ];
         let mut packages = regular_function_with_params(vec![param], vec![entry]);
-        insert_yield_checks(&mut packages);
+        insert_yield_checks(&mut packages, &mut []);
         let function = packages[0].functions.values().next().unwrap();
         assert_eq!(yield_checks(&function.blocks[0]), 1);
         assert!(

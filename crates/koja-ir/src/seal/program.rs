@@ -4,11 +4,13 @@
 //! the assembled [`IRProgram`].
 
 use crate::IRProgram;
-use crate::function::{FunctionKind, IRInstruction};
+use crate::function::FunctionKind;
 use crate::mangling::mangled_method_name;
 use crate::types::IRType;
 
+use super::calls::seal_calls;
 use super::closures::seal_closure_ops;
+use super::constants::{seal_built_constants, seal_loadconst_pool};
 use super::enums::seal_enum_ops;
 use super::function::seal_package;
 use super::seal_panic;
@@ -41,6 +43,11 @@ pub(crate) fn seal_program(program: &IRProgram) {
     seal_program_enum_ops(program);
     seal_program_closure_ops(program);
     seal_program_loadconst_pool(program);
+    seal_built_constants(
+        &program.packages,
+        &program.built_constant_order,
+        &|mangled| program.function(mangled),
+    );
     seal_program_entry_wrappers(program);
 }
 
@@ -111,71 +118,20 @@ fn seal_program_struct_ops(program: &IRProgram) {
 
 /// Cross-package constants check: every `LoadConst::const_id` must
 /// resolve to a registered [`crate::IRConstantValue`] in some
-/// package's pool. Lower mints both the pool entry and the
-/// `LoadConst` referencing it from the same registry-stamped
-/// constant, so a miss here indicates a lowering / merge bug.
+/// package's pool. See [`super::constants::seal_loadconst_pool`].
 fn seal_program_loadconst_pool(program: &IRProgram) {
+    let lookup = |mangled: &str| program.constant_value(mangled);
     for pkg in &program.packages {
-        for (owner, function) in &pkg.functions {
-            for block in &function.blocks {
-                for inst in &block.instructions {
-                    if let IRInstruction::LoadConst { const_id, .. } = inst
-                        && program.constant_value(const_id.mangled()).is_none()
-                    {
-                        seal_panic(&format!(
-                            "function `{owner}` loads constant `{const_id}`, but no package \
-                             has a pool entry for that symbol",
-                        ));
-                    }
-                }
-            }
-        }
+        seal_loadconst_pool(package_instructions(pkg), &lookup);
     }
 }
 
-/// Cross-function check: every `IRInstruction::Call` must name a
-/// callee that exists as a registered function in the IRProgram. Lower
-/// dereferences the callee id through the typecheck registry, so a
-/// missing target here would indicate either a registry / IRProgram
-/// drift or a genuine lowering bug, both compiler issues.
-///
-/// The same check applies to [`IRInstruction::Spawn::wrapper`].
-/// Spawn wrappers are minted by the spawn-wrapper monomorphization
-/// planner, and a missing one indicates the closure pass failed to
-/// discover the spawn site. Wrappers must register as
-/// `FunctionKind::SpawnWrapper`.
+/// Cross-function check: every `Call` callee and `Spawn` wrapper must
+/// be a registered function in the IRProgram. See
+/// [`super::calls::seal_calls`] for the full rule list.
 fn seal_program_calls(program: &IRProgram) {
+    let lookup = |mangled: &str| program.function(mangled);
     for pkg in &program.packages {
-        for (owner, function) in &pkg.functions {
-            for block in &function.blocks {
-                for inst in &block.instructions {
-                    match inst {
-                        IRInstruction::Call { callee, .. } => {
-                            if program.function(callee.mangled()).is_none() {
-                                seal_panic(&format!(
-                                    "function `{owner}` calls `{callee}`, but that function is not \
-                                     registered in the IRProgram",
-                                ));
-                            }
-                        }
-                        IRInstruction::Spawn { wrapper, .. } => {
-                            let Some(target) = program.function(wrapper.mangled()) else {
-                                seal_panic(&format!(
-                                    "function `{owner}` spawns `{wrapper}`, but no spawn wrapper \
-                                     with that symbol is registered in the IRProgram",
-                                ));
-                            };
-                            if !matches!(target.kind, FunctionKind::SpawnWrapper { .. }) {
-                                seal_panic(&format!(
-                                    "function `{owner}` spawns `{wrapper}` but that function's \
-                                     kind is not `SpawnWrapper`",
-                                ));
-                            }
-                        }
-                        _ => {}
-                    }
-                }
-            }
-        }
+        seal_calls(package_instructions(pkg), &lookup);
     }
 }

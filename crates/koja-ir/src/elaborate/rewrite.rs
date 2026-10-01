@@ -22,9 +22,9 @@
 
 use std::collections::BTreeSet;
 
-use crate::function::{IRBasicBlock, IRFunction, IRInstruction};
+use crate::function::{IRBasicBlock, IRFunction, IRInstruction, ValueMinter, high_water_mark};
 use crate::mangling::{clone_glue_symbol, deep_copy_glue_symbol, drop_glue_symbol};
-use crate::types::{IRType, ValueId};
+use crate::types::IRType;
 
 /// Rewrite every function body in `packages` plus the (optional)
 /// script `body`. Borrows only the classification sets, so it can
@@ -37,12 +37,7 @@ pub(super) fn rewrite_function(
     if needed.is_empty() && deep_needed.is_empty() {
         return;
     }
-    let seed = function
-        .params
-        .iter()
-        .map(|param| param.id.0)
-        .max()
-        .map_or(0, |max| max + 1);
+    let seed = function.param_high_water_mark();
     rewrite_blocks(&mut function.blocks, needed, deep_needed, seed);
 }
 
@@ -65,11 +60,17 @@ fn rewrite_blocks(
     deep_needed: &BTreeSet<IRType>,
     seed: u32,
 ) {
-    let mut next = ValueId(seed.max(high_water_mark(blocks)));
+    let mut values = ValueMinter::new(high_water_mark(blocks, seed));
     for block in blocks.iter_mut() {
         let mut rewritten = Vec::with_capacity(block.instructions.len());
         for instruction in block.instructions.drain(..) {
-            rewrite_instruction(instruction, needed, deep_needed, &mut next, &mut rewritten);
+            rewrite_instruction(
+                instruction,
+                needed,
+                deep_needed,
+                &mut values,
+                &mut rewritten,
+            );
         }
         block.instructions = rewritten;
     }
@@ -79,7 +80,7 @@ fn rewrite_instruction(
     instruction: IRInstruction,
     needed: &BTreeSet<IRType>,
     deep_needed: &BTreeSet<IRType>,
-    next: &mut ValueId,
+    values: &mut ValueMinter,
     out: &mut Vec<IRInstruction>,
 ) {
     match instruction {
@@ -99,20 +100,20 @@ fn rewrite_instruction(
         }
         IRInstruction::DropValue { value, ty } if needed.contains(&ty) => {
             out.push(IRInstruction::Call {
-                dest: fresh(next),
+                dest: values.fresh(),
                 callee: drop_glue_symbol(&ty),
                 args: vec![value],
             });
         }
         IRInstruction::DropLocal { local, ty } if needed.contains(&ty) => {
-            let loaded = fresh(next);
+            let loaded = values.fresh();
             out.push(IRInstruction::LocalRead {
                 dest: loaded,
                 local,
                 ty: ty.clone(),
             });
             out.push(IRInstruction::Call {
-                dest: fresh(next),
+                dest: values.fresh(),
                 callee: drop_glue_symbol(&ty),
                 args: vec![loaded],
             });
@@ -121,35 +122,12 @@ fn rewrite_instruction(
     }
 }
 
-/// The next `ValueId` past every value the blocks already define
-/// (block params + instruction dests). Combined with the param seed
-/// so the counter clears both.
-fn high_water_mark(blocks: &[IRBasicBlock]) -> u32 {
-    let mut max = 0;
-    for block in blocks {
-        for param in &block.params {
-            max = max.max(param.dest.0 + 1);
-        }
-        for instruction in &block.instructions {
-            if let Some(dest) = instruction.dest() {
-                max = max.max(dest.0 + 1);
-            }
-        }
-    }
-    max
-}
-
-fn fresh(next: &mut ValueId) -> ValueId {
-    let id = *next;
-    next.0 += 1;
-    id
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::function::{IRBlockId, IRSymbol, IRTerminator};
     use crate::local::IRLocalId;
+    use crate::types::ValueId;
 
     #[test]
     fn composite_clone_and_drop_rewrite_to_glue_calls() {

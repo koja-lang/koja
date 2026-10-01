@@ -25,7 +25,7 @@ use crate::package::IRPackage;
 use crate::struct_decl::{IRStructDecl, IRStructField};
 use crate::types::IRType;
 
-use super::{require_supported_type, seal_panic};
+use super::{field_type_matches, require_supported_type, seal_panic};
 
 pub(super) fn seal_struct_decls(pkg: &IRPackage) {
     for (sym, decl) in &pkg.structs {
@@ -250,16 +250,6 @@ fn seal_indirect_field<'decl>(
             name = field.name,
         ));
     }
-}
-
-/// Match exactly OR allow a decl `Indirect(T)` against an
-/// instruction-view `T`. Cycle-broken slots stay boxed in the decl
-/// but materialize as the unboxed value at every IR call site.
-fn field_type_matches(declared: &IRType, requested: &IRType) -> bool {
-    if declared == requested {
-        return true;
-    }
-    matches!(declared, IRType::Indirect(inner) if inner.as_ref() == requested)
 }
 
 fn require_struct<'decl>(

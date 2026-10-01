@@ -1,27 +1,24 @@
 //! Checked `CString.to_string` conversion.
 
 use inkwell::IntPredicate;
-use inkwell::values::{BasicValueEnum, FunctionValue, IntValue, PointerValue};
+use inkwell::values::{FunctionValue, IntValue, PointerValue};
 use koja_ir::{IRFunction, IRSymbol};
 
 use crate::ctx::EmitContext;
 use crate::emit::heap_layout::{block_alloc_size, init_heap_block};
 use crate::error::{IceExt, LlvmError};
-use crate::intrinsics::cptr::declare_memcpy_extern;
 use crate::intrinsics::result;
-use crate::runtime::{declare_malloc_extern, declare_utf8_validate_extern};
+use crate::intrinsics::util::{extract_int, extract_pointer, nth_struct};
+use crate::runtime::{declare_malloc_extern, declare_memcpy_extern, declare_utf8_validate_extern};
 
 pub(super) fn emit_to_string<'ctx>(
     ctx: &EmitContext<'ctx>,
     function: &IRFunction,
     llvm_function: FunctionValue<'ctx>,
 ) -> Result<(), LlvmError> {
-    let entry = ctx.context.append_basic_block(llvm_function, "entry");
-    ctx.builder.position_at_end(entry);
-
     let i64_ty = ctx.context.i64_type();
     let (c_ptr, byte_len) = cstring_fields(ctx, function, llvm_function)?;
-    let result_symbol = result::return_symbol(function)?;
+    let result_symbol = result::return_symbol(function);
     let zero = i64_ty.const_zero();
 
     let negative = ctx
@@ -91,28 +88,9 @@ fn cstring_fields<'ctx>(
     function: &IRFunction,
     llvm_function: FunctionValue<'ctx>,
 ) -> Result<(PointerValue<'ctx>, IntValue<'ctx>), LlvmError> {
-    let receiver = llvm_function.get_nth_param(0).ok_or_else(|| {
-        LlvmError::Codegen(format!(
-            "CString.to_string missing `self` param on `{}`",
-            function.symbol,
-        ))
-    })?;
-    let BasicValueEnum::StructValue(receiver) = receiver else {
-        return Err(LlvmError::Codegen(format!(
-            "CString.to_string expected struct receiver on `{}`, got `{receiver:?}`",
-            function.symbol,
-        )));
-    };
-    let ptr = ctx
-        .builder
-        .build_extract_value(receiver, 0, "cs_ptr")
-        .or_ice()?
-        .into_pointer_value();
-    let len = ctx
-        .builder
-        .build_extract_value(receiver, 1, "cs_len")
-        .or_ice()?
-        .into_int_value();
+    let receiver = nth_struct(function, llvm_function, 0, "self");
+    let ptr = extract_pointer(ctx, receiver, 0, "cs_ptr")?;
+    let len = extract_int(ctx, receiver, 1, "cs_len")?;
     Ok((ptr, len))
 }
 

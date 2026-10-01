@@ -5,12 +5,13 @@
 //! `Binary.eq` share the runtime's length-aware byte comparison,
 //! since both types carry the same `[rc][bit_length][bytes]` payload.
 
-use inkwell::values::{BasicValueEnum, FloatValue, FunctionValue, IntValue};
+use inkwell::values::FunctionValue;
 use inkwell::{FloatPredicate, IntPredicate};
 use koja_ir::{EqualityImpl, IRFunction};
 
 use crate::ctx::EmitContext;
 use crate::error::{IceExt, LlvmError};
+use crate::intrinsics::util::{nth_float, nth_int, nth_param};
 use crate::runtime::declare_string_eq_extern;
 
 pub(super) fn emit_eq<'ctx>(
@@ -34,20 +35,8 @@ fn emit_bytes_eq<'ctx>(
     function: &IRFunction,
     llvm_function: FunctionValue<'ctx>,
 ) -> Result<(), LlvmError> {
-    let entry = ctx.context.append_basic_block(llvm_function, "entry");
-    ctx.builder.position_at_end(entry);
-    let lhs = llvm_function.get_nth_param(0).ok_or_else(|| {
-        LlvmError::Codegen(format!(
-            "bytes eq missing `self` param on `{}`",
-            function.symbol,
-        ))
-    })?;
-    let rhs = llvm_function.get_nth_param(1).ok_or_else(|| {
-        LlvmError::Codegen(format!(
-            "bytes eq missing `other` param on `{}`",
-            function.symbol,
-        ))
-    })?;
+    let lhs = nth_param(function, llvm_function, 0, "self");
+    let rhs = nth_param(function, llvm_function, 1, "other");
     let string_eq = declare_string_eq_extern(ctx);
     let equal = ctx
         .call_basic(string_eq, &[lhs.into(), rhs.into()], "string_eq")?
@@ -69,37 +58,13 @@ fn emit_int_eq<'ctx>(
     function: &IRFunction,
     llvm_function: FunctionValue<'ctx>,
 ) -> Result<(), LlvmError> {
-    let entry = ctx.context.append_basic_block(llvm_function, "entry");
-    ctx.builder.position_at_end(entry);
-
-    let lhs = nth_int(function, llvm_function, 0, "self")?;
-    let rhs = nth_int(function, llvm_function, 1, "other")?;
+    let lhs = nth_int(function, llvm_function, 0, "self");
+    let rhs = nth_int(function, llvm_function, 1, "other");
     let cmp = ctx
         .builder
         .build_int_compare(IntPredicate::EQ, lhs, rhs, "eq")
         .or_ice()?;
     ctx.builder.build_return(Some(&cmp)).or_ice().map(|_| ())
-}
-
-fn nth_int<'ctx>(
-    function: &IRFunction,
-    llvm_function: FunctionValue<'ctx>,
-    index: u32,
-    name: &str,
-) -> Result<IntValue<'ctx>, LlvmError> {
-    let raw = llvm_function.get_nth_param(index).ok_or_else(|| {
-        LlvmError::Codegen(format!(
-            "missing param `{name}` (#{index}) on `{}`",
-            function.symbol,
-        ))
-    })?;
-    match raw {
-        BasicValueEnum::IntValue(v) => Ok(v),
-        other => Err(LlvmError::Codegen(format!(
-            "expected integer for `{name}` on `{}`, got `{other:?}`",
-            function.symbol,
-        ))),
-    }
 }
 
 /// Ordered IEEE 754 equality: `NaN` operands always return `false`,
@@ -110,35 +75,11 @@ fn emit_float_eq<'ctx>(
     function: &IRFunction,
     llvm_function: FunctionValue<'ctx>,
 ) -> Result<(), LlvmError> {
-    let entry = ctx.context.append_basic_block(llvm_function, "entry");
-    ctx.builder.position_at_end(entry);
-
-    let lhs = nth_float(function, llvm_function, 0, "self")?;
-    let rhs = nth_float(function, llvm_function, 1, "other")?;
+    let lhs = nth_float(function, llvm_function, 0, "self");
+    let rhs = nth_float(function, llvm_function, 1, "other");
     let cmp = ctx
         .builder
         .build_float_compare(FloatPredicate::OEQ, lhs, rhs, "feq")
         .or_ice()?;
     ctx.builder.build_return(Some(&cmp)).or_ice().map(|_| ())
-}
-
-fn nth_float<'ctx>(
-    function: &IRFunction,
-    llvm_function: FunctionValue<'ctx>,
-    index: u32,
-    name: &str,
-) -> Result<FloatValue<'ctx>, LlvmError> {
-    let raw = llvm_function.get_nth_param(index).ok_or_else(|| {
-        LlvmError::Codegen(format!(
-            "missing param `{name}` (#{index}) on `{}`",
-            function.symbol,
-        ))
-    })?;
-    match raw {
-        BasicValueEnum::FloatValue(v) => Ok(v),
-        other => Err(LlvmError::Codegen(format!(
-            "expected float for `{name}` on `{}`, got `{other:?}`",
-            function.symbol,
-        ))),
-    }
 }

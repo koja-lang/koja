@@ -17,19 +17,21 @@ use inkwell::AddressSpace;
 use inkwell::IntPredicate;
 use inkwell::basic_block::BasicBlock;
 use inkwell::types::{BasicType, BasicTypeEnum, IntType};
-use inkwell::values::{BasicValueEnum, FunctionValue, IntValue, PointerValue, StructValue};
+use inkwell::values::{BasicValueEnum, FunctionValue, IntValue, PointerValue};
 use koja_ir::{IRFunction, IRSymbol, IRType, IRVariantPayload, SocketMethod};
 
 use crate::ctx::EmitContext;
 use crate::emit::enums::build_enum_value;
 use crate::error::{IceExt, LlvmError};
-use crate::intrinsics::cptr::declare_memcpy_extern;
 use crate::intrinsics::result;
+use crate::intrinsics::util::{
+    build_list_struct, expect_enum_symbol, extract_int, nth_param, nth_struct, ret,
+};
 use crate::runtime::{
-    declare_free_extern, declare_last_error_extern, declare_malloc_extern,
+    declare_free_extern, declare_last_error_extern, declare_malloc_extern, declare_memcpy_extern,
     declare_socket_recv_from_extern, declare_socket_resolve_extern,
 };
-use crate::types::{ir_basic_type, list_value_type};
+use crate::types::ir_basic_type;
 
 /// Byte count of the `i64 count` header the runtime writes at the
 /// front of the `koja_socket_resolve` buffer. The IP-pointer array
@@ -47,8 +49,6 @@ pub(super) fn emit_socket<'ctx>(
     llvm_function: FunctionValue<'ctx>,
     method: SocketMethod,
 ) -> Result<(), LlvmError> {
-    let entry = ctx.context.append_basic_block(llvm_function, "entry");
-    ctx.builder.position_at_end(entry);
     match method {
         SocketMethod::LastError => emit_last_error(ctx),
         SocketMethod::RecvFromRaw => emit_recv_from(ctx, function, llvm_function),
@@ -70,20 +70,15 @@ fn emit_resolve<'ctx>(
     function: &IRFunction,
     llvm_function: FunctionValue<'ctx>,
 ) -> Result<(), LlvmError> {
-    let result_symbol = expect_enum_symbol(&function.return_type, function)?;
-    validate_resolve_payload(ctx, result_symbol, function)?;
+    let result_symbol = expect_enum_symbol(&function.return_type, function, "Socket.resolve_raw");
+    validate_resolve_payload(ctx, result_symbol, function);
 
     let binary_size = binary_pointer_size(ctx, function, "Socket.resolve_raw")?;
 
     let i64_ty = ctx.context.i64_type();
     let i8_ty = ctx.context.i8_type();
 
-    let hostname = llvm_function.get_nth_param(0).ok_or_else(|| {
-        LlvmError::Codegen(format!(
-            "Socket.resolve_raw missing `hostname` param on `{}`",
-            function.symbol,
-        ))
-    })?;
+    let hostname = nth_param(function, llvm_function, 0, "hostname");
 
     let resolve_fn = declare_socket_resolve_extern(ctx);
     let result_ptr = ctx
@@ -144,39 +139,22 @@ fn emit_recv_from<'ctx>(
     function: &IRFunction,
     llvm_function: FunctionValue<'ctx>,
 ) -> Result<(), LlvmError> {
-    let result_symbol = expect_enum_symbol(&function.return_type, function)?;
-    let received_type = resolve_recv_from_payload(ctx, result_symbol, function)?;
+    let result_symbol = expect_enum_symbol(&function.return_type, function, "Socket.recv_from_raw");
+    let received_type = resolve_recv_from_payload(ctx, result_symbol, function);
     binary_pointer_size(ctx, function, "Socket.recv_from_raw")?;
 
     let i64_ty = ctx.context.i64_type();
     let i8_ty = ctx.context.i8_type();
     let ptr_ty = ctx.context.ptr_type(AddressSpace::default());
 
-    let self_struct = llvm_function
-        .get_nth_param(0)
-        .ok_or_else(|| {
-            LlvmError::Codegen(format!(
-                "Socket.recv_from_raw missing `self` param on `{}`",
-                function.symbol,
-            ))
-        })?
-        .into_struct_value();
+    let self_struct = nth_struct(function, llvm_function, 0, "self");
     let fd_struct = ctx
         .builder
         .build_extract_value(self_struct, 0, "fd_struct")
         .or_ice()?
         .into_struct_value();
-    let fd = ctx
-        .builder
-        .build_extract_value(fd_struct, 0, "fd")
-        .or_ice()?
-        .into_int_value();
-    let count_val = llvm_function.get_nth_param(1).ok_or_else(|| {
-        LlvmError::Codegen(format!(
-            "Socket.recv_from_raw missing `count` param on `{}`",
-            function.symbol,
-        ))
-    })?;
+    let fd = extract_int(ctx, fd_struct, 0, "fd")?;
+    let count_val = nth_param(function, llvm_function, 1, "count");
 
     let recv_fn = declare_socket_recv_from_extern(ctx);
     let result_ptr = ctx
@@ -295,25 +273,6 @@ fn branch_on_null<'ctx>(
     Ok((ok_bb, err_bb))
 }
 
-/// `{ buf, len, cap }` `List<T>` SSA value. Both `len` and `cap`
-/// hold `count` here because the resolve buffer is sized exactly
-/// to its element count, so there's no growth headroom to mark.
-fn build_list_struct<'ctx>(
-    ctx: &EmitContext<'ctx>,
-    buf: PointerValue<'ctx>,
-    len: IntValue<'ctx>,
-    cap: IntValue<'ctx>,
-) -> Result<StructValue<'ctx>, LlvmError> {
-    let list_ty = list_value_type(ctx);
-    let with_buf = build_insert(ctx, list_ty.get_undef().into(), buf.into(), 0, "with_buf")?
-        .into_struct_value();
-    let with_len =
-        build_insert(ctx, with_buf.into(), len.into(), 1, "with_len")?.into_struct_value();
-    let with_cap =
-        build_insert(ctx, with_len.into(), cap.into(), 2, "with_cap")?.into_struct_value();
-    Ok(with_cap)
-}
-
 fn build_insert<'ctx>(
     ctx: &EmitContext<'ctx>,
     aggregate: BasicValueEnum<'ctx>,
@@ -356,23 +315,6 @@ fn build_load_int<'ctx>(
         .map(|v| v.into_int_value())
 }
 
-fn ret<'ctx>(ctx: &EmitContext<'ctx>, value: BasicValueEnum<'ctx>) -> Result<(), LlvmError> {
-    ctx.builder.build_return(Some(&value)).or_ice().map(|_| ())
-}
-
-fn expect_enum_symbol<'ty>(
-    ty: &'ty IRType,
-    function: &IRFunction,
-) -> Result<&'ty IRSymbol, LlvmError> {
-    match ty {
-        IRType::Enum(symbol) => Ok(symbol),
-        other => Err(LlvmError::Codegen(format!(
-            "Socket intrinsic on `{}` expected an enum-typed return, got `{other:?}`",
-            function.symbol,
-        ))),
-    }
-}
-
 fn binary_pointer_size(
     ctx: &EmitContext<'_>,
     function: &IRFunction,
@@ -380,10 +322,10 @@ fn binary_pointer_size(
 ) -> Result<u64, LlvmError> {
     let binary_ty = ir_basic_type(ctx, &IRType::Binary)?;
     let BasicTypeEnum::PointerType(binary_ptr_ty) = binary_ty else {
-        return Err(LlvmError::Codegen(format!(
+        panic!(
             "{intrinsic_label} on `{}` requires Binary to use the runtime pointer ABI",
             function.symbol,
-        )));
+        );
     };
     let binary_size = ctx
         .layouts
@@ -394,13 +336,12 @@ fn binary_pointer_size(
             .ptr_type(AddressSpace::default())
             .as_basic_type_enum(),
     );
-    if binary_size != runtime_pointer_size {
-        return Err(LlvmError::Codegen(format!(
-            "{intrinsic_label} on `{}` requires Binary to match the runtime pointer ABI \
-             ({binary_size} bytes != {runtime_pointer_size} bytes)",
-            function.symbol,
-        )));
-    }
+    assert!(
+        binary_size == runtime_pointer_size,
+        "{intrinsic_label} on `{}` requires Binary to match the runtime pointer ABI \
+         ({binary_size} bytes != {runtime_pointer_size} bytes)",
+        function.symbol,
+    );
 
     Ok(binary_size)
 }
@@ -411,21 +352,19 @@ fn validate_resolve_payload(
     ctx: &EmitContext<'_>,
     result_symbol: &IRSymbol,
     function: &IRFunction,
-) -> Result<(), LlvmError> {
-    let ok_field = single_ok_payload(ctx, result_symbol, function, "Socket.resolve_raw")?;
+) {
+    let ok_field = single_ok_payload(ctx, result_symbol, function, "Socket.resolve_raw");
     let inner = match ok_field {
         IRType::List(inner) => *inner,
         other => {
-            return Err(LlvmError::Codegen(format!(
-                "Socket.resolve_raw Ok payload expected to be List<Binary>, got `{other:?}`",
-            )));
+            panic!("Socket.resolve_raw Ok payload expected to be List<Binary>, got `{other:?}`")
         }
     };
     match inner {
-        IRType::Binary => Ok(()),
-        other => Err(LlvmError::Codegen(format!(
+        IRType::Binary => (),
+        other => panic!(
             "Socket.resolve_raw Ok payload expected to be List<Binary>, got `List<{other:?}>`",
-        ))),
+        ),
     }
 }
 
@@ -435,46 +374,43 @@ fn resolve_recv_from_payload(
     ctx: &EmitContext<'_>,
     result_symbol: &IRSymbol,
     function: &IRFunction,
-) -> Result<IRType, LlvmError> {
-    let ok_field = single_ok_payload(ctx, result_symbol, function, "Socket.recv_from_raw")?;
+) -> IRType {
+    let ok_field = single_ok_payload(ctx, result_symbol, function, "Socket.recv_from_raw");
     match ok_field {
         IRType::Tuple(elements) => {
             let [IRType::Binary, IRType::Binary, IRType::Int64] = elements.as_slice() else {
-                return Err(LlvmError::Codegen(format!(
+                panic!(
                     "Socket.recv_from_raw Ok payload expected `(Binary, Binary, Int)`, \
                      got `{elements:?}`",
-                )));
+                );
             };
-            Ok(IRType::Tuple(elements))
+            IRType::Tuple(elements)
         }
-        other => Err(LlvmError::Codegen(format!(
-            "Socket.recv_from_raw Ok payload expected a Tuple, got `{other:?}`",
-        ))),
+        other => panic!("Socket.recv_from_raw Ok payload expected a Tuple, got `{other:?}`"),
     }
 }
 
 /// Single-payload `Ok` extractor shared by both intrinsics. The
-/// IR seal pins `Result.Ok` to exactly one field. Surfaces a
-/// codegen error (not a panic) on shape violations so the failure
-/// mode is symmetric with the rest of the file.
+/// IR seal pins `Result.Ok` to exactly one field, so a shape
+/// violation panics.
 fn single_ok_payload(
     ctx: &EmitContext<'_>,
     result_symbol: &IRSymbol,
     function: &IRFunction,
     intrinsic_label: &str,
-) -> Result<IRType, LlvmError> {
+) -> IRType {
     let payload = ctx
         .layouts
         .enum_variant_payload(result_symbol, result::ok_tag(ctx, result_symbol));
     match payload {
-        IRVariantPayload::Tuple(types) if types.len() == 1 => Ok(types.into_iter().next().unwrap()),
+        IRVariantPayload::Tuple(types) if types.len() == 1 => types.into_iter().next().unwrap(),
         IRVariantPayload::Struct(fields) if fields.len() == 1 => {
-            Ok(fields.into_iter().next().unwrap().ir_type)
+            fields.into_iter().next().unwrap().ir_type
         }
-        other => Err(LlvmError::Codegen(format!(
+        other => panic!(
             "{intrinsic_label} on `{}` Ok variant has unexpected payload `{other:?}` \
              (expected single-field, IR seal invariant violation)",
             function.symbol,
-        ))),
+        ),
     }
 }

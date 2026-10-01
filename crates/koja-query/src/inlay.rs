@@ -15,7 +15,7 @@ use crate::Analysis;
 use crate::display::format_resolved_type;
 use crate::expr_at::signature_for_target;
 use crate::index::{ReferenceIndex, Role};
-use crate::visit::{self, Visitor};
+use koja_ast::visit::{self, Visitor};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HintKind {

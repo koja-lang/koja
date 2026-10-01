@@ -20,9 +20,6 @@ pub(super) fn emit_map<'ctx>(
     llvm_function: FunctionValue<'ctx>,
     method: MapMethod,
 ) -> Result<(), LlvmError> {
-    let entry = ctx.context.append_basic_block(llvm_function, "entry");
-    ctx.builder.position_at_end(entry);
-
     let layout = map_layout(ctx, method, function)?;
 
     match method {
@@ -45,8 +42,6 @@ pub(super) fn emit_put_consuming<'ctx>(
     function: &IRFunction,
     llvm_function: FunctionValue<'ctx>,
 ) -> Result<(), LlvmError> {
-    let entry = ctx.context.append_basic_block(llvm_function, "entry");
-    ctx.builder.position_at_end(entry);
     let layout = map_layout(ctx, MapMethod::Put, function)?;
     hashtable::emit_map_put(ctx, function, llvm_function, &layout, true)
 }
@@ -56,7 +51,7 @@ fn map_layout<'ctx, 'ty>(
     method: MapMethod,
     function: &'ty IRFunction,
 ) -> Result<hashtable::HashtableLayout<'ty>, LlvmError> {
-    let (key, value) = key_value(method, function)?;
+    let (key, value) = key_value(method, function);
     let key_size = hashtable::ir_byte_size(ctx, key)?;
     let value_size = hashtable::ir_byte_size(ctx, value)?;
     Ok(hashtable::HashtableLayout {
@@ -70,16 +65,16 @@ fn map_layout<'ctx, 'ty>(
 /// Resolve `(K, V)` for a `Map<K, V>` intrinsic. `new` carries them
 /// on the return type. Every other method has `self: Map<K, V>` as
 /// `params[0]`.
-fn key_value(method: MapMethod, function: &IRFunction) -> Result<(&IRType, &IRType), LlvmError> {
+fn key_value(method: MapMethod, function: &IRFunction) -> (&IRType, &IRType) {
     let candidate = match method {
         MapMethod::New => &function.return_type,
         _ => &function.params[0].ty,
     };
     match candidate {
-        IRType::Map { key, value } => Ok((key, value)),
-        other => Err(LlvmError::Codegen(format!(
+        IRType::Map { key, value } => (key, value),
+        other => panic!(
             "Map.{method:?} expected a `Map<K, V>` slot, got `{other:?}` (symbol `{}`)",
             function.symbol,
-        ))),
+        ),
     }
 }

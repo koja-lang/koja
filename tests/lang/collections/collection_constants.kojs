@@ -1,0 +1,69 @@
+# Collection constants build once at program start and every read
+# borrows the shared value. A binding clones like any list, so an
+# append on a read never changes the constant. A constant may read
+# one declared below it. The live-block loop pins that repeated reads
+# allocate nothing that outlives them.
+
+struct Rt
+  @extern "C"
+  fn koja_rt_live_blocks -> Int64
+end
+
+struct Config
+  name: String
+  ports: List<Int>
+end
+
+const PRIMES = [2, 3, 5, 7]
+const PORTS = ["http": 80, "https": 443]
+const TAGS: Set<String> = ["web", "api", "web"]
+const DEFAULT = Config{name: "web", ports: [80, 443]}
+const ALL = [BASE, [4]]
+const BASE = [1, 2, 3]
+
+fn prime_count -> Int
+  PRIMES.length()
+end
+
+fn last_prime -> Int
+  PRIMES.get(3).or(0)
+end
+
+fn tag_count -> Int
+  TAGS.length()
+end
+
+fn extended -> List<Int>
+  more = PRIMES
+  more = more.append(11)
+  more
+end
+
+prime_count().print()
+last_prime().print()
+PORTS.get("https").or(0).print()
+tag_count().print()
+DEFAULT.name.print()
+DEFAULT.ports.length().print()
+ALL.length().print()
+BASE.length().print()
+
+extended().length().print()
+PRIMES.length().print()
+
+extended()
+start = Rt.koja_rt_live_blocks()
+i = 0
+
+loop
+  prime_count()
+  extended()
+  i += 1
+
+  if i >= 200
+    break
+  end
+end
+
+finish = Rt.koja_rt_live_blocks()
+(finish == start ? "steady: ok" : "steady: LEAK").print()

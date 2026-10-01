@@ -7,10 +7,10 @@
 //! with a teaching diagnostic pointing at `CPtr.copy`.
 
 use koja_ast::ast::{
-    Diagnostic, EnumConstructionData, Expr, ExprKind, File, Function, ImplMember, Item, LValue,
-    Statement, StringPart, path_text,
+    Diagnostic, Expr, ExprKind, File, Function, LValue, Param, ProtocolMethod, Statement, path_text,
 };
 use koja_ast::identifier::Resolution;
+use koja_ast::visit::{self, Visitor};
 
 use crate::registry::GlobalRegistry;
 
@@ -33,298 +33,120 @@ pub(crate) fn check_file(
     registry: &GlobalRegistry,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
-    for item in &file.items {
-        match item {
-            Item::Builtin(decl) => check_functions(&decl.functions, registry, diagnostics),
-            Item::Enum(decl) => check_functions(&decl.functions, registry, diagnostics),
-            Item::Extend(block) => check_members(&block.members, registry, diagnostics),
-            Item::Function(function) => check_function(function, registry, diagnostics),
-            Item::Impl(block) => check_members(&block.members, registry, diagnostics),
-            Item::Struct(decl) => check_functions(&decl.functions, registry, diagnostics),
-            _ => {}
-        }
-    }
-    if let Some(body) = file.body.as_ref() {
-        check_body(body, Position::Escaping, registry, diagnostics);
-    }
-}
-
-fn check_functions(
-    functions: &[Function],
-    registry: &GlobalRegistry,
-    diagnostics: &mut Vec<Diagnostic>,
-) {
-    for function in functions {
-        check_function(function, registry, diagnostics);
-    }
-}
-
-fn check_members(
-    members: &[ImplMember],
-    registry: &GlobalRegistry,
-    diagnostics: &mut Vec<Diagnostic>,
-) {
-    for member in members {
-        if let ImplMember::Function(function) = member {
-            check_function(function, registry, diagnostics);
-        }
-    }
-}
-
-fn check_function(
-    function: &Function,
-    registry: &GlobalRegistry,
-    diagnostics: &mut Vec<Diagnostic>,
-) {
-    if let Some(body) = function.body.as_ref() {
-        check_body(body, Position::Returned, registry, diagnostics);
-    }
-}
-
-/// Walk a statement body. The tail statement, when it is a bare
-/// expression, produces the body's value, so it checks against
-/// `tail` (implicit return for function/closure bodies) instead of
-/// the ordinary statement positions.
-fn check_body(
-    body: &[Statement],
-    tail: Position<'_>,
-    registry: &GlobalRegistry,
-    diagnostics: &mut Vec<Diagnostic>,
-) {
-    let Some((last, leading)) = body.split_last() else {
-        return;
+    let mut walker = Walker {
+        diagnostics,
+        position: Position::Escaping,
+        registry,
     };
-    for stmt in leading {
-        check_statement(stmt, registry, diagnostics);
-    }
-    match last {
-        Statement::Expr(expr) => check_expr(expr, tail, registry, diagnostics),
-        other => check_statement(other, registry, diagnostics),
-    }
+    walker.visit_file(file);
 }
 
-fn check_statement(stmt: &Statement, registry: &GlobalRegistry, diagnostics: &mut Vec<Diagnostic>) {
-    match stmt {
-        Statement::Assignment { target, value, .. } => {
-            check_expr(value, Position::Bound(target), registry, diagnostics);
-        }
-        Statement::Break { .. } | Statement::Return { value: None, .. } => {}
-        Statement::CompoundAssign { value, .. } => {
-            check_expr(value, Position::Escaping, registry, diagnostics);
-        }
-        Statement::Destructure { value, .. } => {
-            check_expr(value, Position::Escaping, registry, diagnostics);
-        }
-        Statement::Expr(expr) => check_expr(expr, Position::Escaping, registry, diagnostics),
-        Statement::Return {
-            value: Some(value), ..
-        } => check_expr(value, Position::Returned, registry, diagnostics),
-    }
+/// Recursion state for one file. `registry` answers the
+/// `CPtr.borrow` identity check, `diagnostics` collects the escapes,
+/// and `position` is the position of the node about to be visited.
+struct Walker<'a> {
+    diagnostics: &'a mut Vec<Diagnostic>,
+    position: Position<'a>,
+    registry: &'a GlobalRegistry,
 }
 
-fn check_expr(
-    expr: &Expr,
-    position: Position<'_>,
-    registry: &GlobalRegistry,
-    diagnostics: &mut Vec<Diagnostic>,
-) {
-    if is_cptr_borrow(expr, registry) {
-        emit_escape(position, expr, diagnostics);
+impl<'a> Walker<'a> {
+    /// Run `visit` with `position` in place, then restore the
+    /// caller's position for the siblings that follow.
+    fn at(&mut self, position: Position<'a>, visit: impl FnOnce(&mut Self)) {
+        let parent = std::mem::replace(&mut self.position, position);
+        visit(self);
+        self.position = parent;
     }
-    match &expr.kind {
-        // Only an `assert` that failed its channel check survives
-        // resolve. Walk it so the operands still get checked.
-        ExprKind::Assert {
-            condition, message, ..
-        } => {
-            check_expr(condition, Position::Consumed, registry, diagnostics);
-            if let Some(message) = message {
-                check_expr(message, Position::Consumed, registry, diagnostics);
-            }
-        }
-        ExprKind::Binary { left, right, .. } => {
-            check_expr(left, Position::Escaping, registry, diagnostics);
-            check_expr(right, Position::Escaping, registry, diagnostics);
-        }
-        ExprKind::BinaryLiteral { segments } => {
-            for segment in segments {
-                check_expr(&segment.value, Position::Escaping, registry, diagnostics);
-                if let Some(size) = segment.size.as_ref() {
-                    check_expr(size, Position::Escaping, registry, diagnostics);
-                }
-            }
-        }
-        ExprKind::Call { args, .. } => {
-            for arg in args {
-                check_expr(&arg.value, Position::Consumed, registry, diagnostics);
-            }
-        }
-        ExprKind::Closure { body, .. } => {
-            check_body(body, Position::Returned, registry, diagnostics);
-        }
-        ExprKind::Cond { arms, else_body } => {
-            for arm in arms {
-                check_expr(&arm.condition, Position::Escaping, registry, diagnostics);
-                check_body(&arm.body, Position::Escaping, registry, diagnostics);
-            }
-            if let Some(else_body) = else_body {
-                check_body(else_body, Position::Escaping, registry, diagnostics);
-            }
-        }
-        ExprKind::EnumConstruction { data, .. } => match data {
-            EnumConstructionData::Struct(fields) => {
-                for field in fields {
-                    check_expr(&field.value, Position::Escaping, registry, diagnostics);
-                }
-            }
-            EnumConstructionData::Tuple(exprs) => {
-                for expr in exprs {
-                    check_expr(expr, Position::Escaping, registry, diagnostics);
-                }
-            }
-            EnumConstructionData::Unit => {}
-        },
-        ExprKind::Fail { value } => {
-            check_expr(value, Position::Returned, registry, diagnostics);
-        }
-        ExprKind::FieldAccess { receiver, .. } => {
-            check_expr(receiver, Position::Escaping, registry, diagnostics);
-        }
-        ExprKind::For { iterable, body, .. } => {
-            check_expr(iterable, Position::Escaping, registry, diagnostics);
-            check_body(body, Position::Escaping, registry, diagnostics);
-        }
-        // Parentheses are pure grouping, so `(CPtr.borrow(b)).read()`
-        // consumes the same as the unparenthesized chain.
-        ExprKind::Group { expr: inner } => check_expr(inner, position, registry, diagnostics),
-        ExprKind::Ident { .. }
-        | ExprKind::Literal { .. }
-        | ExprKind::NamedFunctionReference { .. }
-        | ExprKind::Self_ { .. } => {}
-        ExprKind::If {
-            condition,
-            then_body,
-            else_body,
-        } => {
-            check_expr(condition, Position::Escaping, registry, diagnostics);
-            check_body(then_body, Position::Escaping, registry, diagnostics);
-            if let Some(else_body) = else_body {
-                check_body(else_body, Position::Escaping, registry, diagnostics);
-            }
-        }
-        ExprKind::List { elements } => {
-            for element in elements {
-                check_expr(element, Position::Escaping, registry, diagnostics);
-            }
-        }
-        ExprKind::Map { entries } => {
-            for (key, value) in entries {
-                check_expr(key, Position::Escaping, registry, diagnostics);
-                check_expr(value, Position::Escaping, registry, diagnostics);
-            }
-        }
-        ExprKind::Loop { body } => check_body(body, Position::Escaping, registry, diagnostics),
-        ExprKind::Match { subject, arms } => {
-            check_expr(subject, Position::Escaping, registry, diagnostics);
-            for arm in arms {
-                if let Some(guard) = arm.guard.as_ref() {
-                    check_expr(guard, Position::Escaping, registry, diagnostics);
-                }
-                check_body(&arm.body, Position::Escaping, registry, diagnostics);
-            }
-        }
-        ExprKind::MethodCall { receiver, args, .. } => {
-            check_expr(receiver, Position::Consumed, registry, diagnostics);
-            for arg in args {
-                check_expr(&arg.value, Position::Consumed, registry, diagnostics);
-            }
-        }
-        ExprKind::Receive {
-            arms,
-            after_timeout,
-            after_body,
-        } => {
-            for arm in arms {
-                if let Some(guard) = arm.guard.as_ref() {
-                    check_expr(guard, Position::Escaping, registry, diagnostics);
-                }
-                check_body(&arm.body, Position::Escaping, registry, diagnostics);
-            }
-            if let Some(timeout) = after_timeout.as_ref() {
-                check_expr(timeout, Position::Escaping, registry, diagnostics);
-            }
-            check_body(after_body, Position::Escaping, registry, diagnostics);
-        }
-        ExprKind::Rescue {
-            subject, handler, ..
-        } => {
-            check_expr(subject, Position::Escaping, registry, diagnostics);
-            check_expr(handler, Position::Escaping, registry, diagnostics);
-        }
-        ExprKind::ShortClosure { body, .. } => {
-            check_expr(body, Position::Returned, registry, diagnostics);
-        }
-        ExprKind::Spawn { expr: inner } => {
-            check_expr(inner, Position::Escaping, registry, diagnostics);
-        }
-        ExprKind::String { parts, .. } => {
-            for part in parts {
-                if let StringPart::Interpolation { expr: inner, .. } = part {
-                    check_expr(inner, Position::Escaping, registry, diagnostics);
-                }
-            }
-        }
-        ExprKind::StructConstruction { fields, .. } => {
-            for field in fields {
-                check_expr(&field.value, Position::Escaping, registry, diagnostics);
-            }
-        }
-        ExprKind::Ternary {
-            condition,
-            then_expr,
-            else_expr,
-        } => {
-            check_expr(condition, Position::Escaping, registry, diagnostics);
-            check_expr(then_expr, Position::Escaping, registry, diagnostics);
-            check_expr(else_expr, Position::Escaping, registry, diagnostics);
-        }
-        ExprKind::Try { expr: inner } => {
-            check_expr(inner, Position::Escaping, registry, diagnostics);
-        }
-        ExprKind::Tuple { elements } => {
-            for element in elements {
-                check_expr(element, Position::Escaping, registry, diagnostics);
-            }
-        }
-        ExprKind::Unary { operand, .. } => {
-            check_expr(operand, Position::Escaping, registry, diagnostics);
-        }
-        ExprKind::While { condition, body } => {
-            check_expr(condition, Position::Escaping, registry, diagnostics);
-            check_body(body, Position::Escaping, registry, diagnostics);
-        }
-    }
-}
 
-fn emit_escape(position: Position<'_>, expr: &Expr, diagnostics: &mut Vec<Diagnostic>) {
-    let opening = match position {
-        Position::Bound(target) => {
+    /// Walk a statement body. The tail statement, when it is a bare
+    /// expression, produces the body's value, so it checks against
+    /// `tail` (implicit return for function/closure bodies) instead of
+    /// the ordinary statement positions.
+    fn check_body(&mut self, body: &'a [Statement], tail: Position<'a>) {
+        let Some((last, leading)) = body.split_last() else {
+            return;
+        };
+        visit::walk_body(self, leading);
+        match last {
+            Statement::Expr(expr) => self.at(tail, |w| w.visit_expr(expr)),
+            other => self.visit_statement(other),
+        }
+    }
+
+    /// Params carry defaults. The body's tail expression is the
+    /// implicit return.
+    fn check_callable(&mut self, params: &'a [Param], body: Option<&'a [Statement]>) {
+        for param in params {
+            self.visit_param(param);
+        }
+        if let Some(body) = body {
+            self.check_body(body, Position::Returned);
+        }
+    }
+
+    fn emit_escape(&mut self, expr: &Expr) {
+        let opening = match self.position {
+            Position::Bound(target) => {
+                format!(
+                    "a borrowed pointer cannot be bound to `{}`",
+                    path_text(&target.segments),
+                )
+            }
+            Position::Consumed => return,
+            Position::Escaping => "a borrowed pointer cannot be stored".to_string(),
+            Position::Returned => "a borrowed pointer cannot be returned".to_string(),
+        };
+        self.diagnostics.push(Diagnostic::error(
             format!(
-                "a borrowed pointer cannot be bound to `{}`",
-                path_text(&target.segments),
-            )
-        }
-        Position::Consumed => return,
-        Position::Escaping => "a borrowed pointer cannot be stored".to_string(),
-        Position::Returned => "a borrowed pointer cannot be returned".to_string(),
-    };
-    diagnostics.push(Diagnostic::error(
-        format!(
-            "{opening}. It is only valid within the statement that borrows it. Pass it \
+                "{opening}. It is only valid within the statement that borrows it. Pass it \
              directly to a call, or use `CPtr.copy(...)` for an owned copy",
-        ),
-        expr.span,
-    ));
+            ),
+            expr.span,
+        ));
+    }
+}
+
+impl<'a> Visitor<'a> for Walker<'a> {
+    fn visit_function(&mut self, function: &'a Function) {
+        self.check_callable(&function.params, function.body.as_deref());
+    }
+
+    fn visit_protocol_method(&mut self, method: &'a ProtocolMethod) {
+        self.check_callable(&method.params, method.body.as_deref());
+    }
+
+    fn visit_statement(&mut self, statement: &'a Statement) {
+        let position = match statement {
+            Statement::Assignment { target, .. } => Position::Bound(target),
+            Statement::Return { .. } => Position::Returned,
+            _ => Position::Escaping,
+        };
+        self.at(position, |w| visit::walk_statement(w, statement));
+    }
+
+    fn visit_expr(&mut self, expr: &'a Expr) {
+        if is_cptr_borrow(expr, self.registry) {
+            self.emit_escape(expr);
+        }
+        if let ExprKind::Closure { body, .. } = &expr.kind {
+            self.check_body(body, Position::Returned);
+            return;
+        }
+        let children = match &expr.kind {
+            // Only an `assert` that failed its channel check survives
+            // resolve. Its operands consume like call arguments.
+            ExprKind::Assert { .. } | ExprKind::Call { .. } | ExprKind::MethodCall { .. } => {
+                Position::Consumed
+            }
+            ExprKind::Fail { .. } | ExprKind::ShortClosure { .. } => Position::Returned,
+            // Parentheses are pure grouping, so `(CPtr.borrow(b)).read()`
+            // consumes the same as the unparenthesized chain.
+            ExprKind::Group { .. } => self.position,
+            _ => Position::Escaping,
+        };
+        self.at(children, |w| visit::walk_expr(w, expr));
+    }
 }
 
 /// True when `expr` is a static call to the `Global.CPtr.borrow`

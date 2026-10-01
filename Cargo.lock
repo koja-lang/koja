@@ -759,10 +759,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "koja-graph"
+version = "0.19.1"
+
+[[package]]
 name = "koja-ir"
 version = "0.19.1"
 dependencies = [
  "koja-ast",
+ "koja-graph",
  "koja-parser",
  "koja-runtime-core",
  "koja-stdlib",
@@ -791,6 +796,7 @@ version = "0.19.1"
 dependencies = [
  "inkwell",
  "koja-ast",
+ "koja-graph",
  "koja-ir",
  "koja-parser",
  "koja-stdlib",
@@ -894,6 +900,7 @@ name = "koja-typecheck"
 version = "0.19.1"
 dependencies = [
  "koja-ast",
+ "koja-graph",
  "koja-parser",
  "koja-stdlib",
 ]

@@ -9,9 +9,10 @@
 //! sidebar dropdown can pivot between packages without ambiguity.
 
 use koja_ast::ast::{
-    AnnotationKind, AnnotationValue, BuiltinDecl, EnumDecl, Expr, ExprKind, ExtendBlock, File,
-    Function, ImplBlock, ImplMember, Item, Literal, Name, Param, ProtocolDecl, ProtocolMethod,
-    StringPart, StructDecl, TypeExpr, TypeParam, UnaryOp, Visibility, name_texts, path_text,
+    AnnotationKind, AnnotationValue, BuiltinDecl, EnumConstructionData, EnumDecl, Expr, ExprKind,
+    ExtendBlock, File, Function, ImplBlock, ImplMember, Item, Literal, Name, Param, ProtocolDecl,
+    ProtocolMethod, StringPart, StructDecl, TypeExpr, TypeParam, UnaryOp, Visibility, name_texts,
+    path_text,
 };
 use koja_ast::util::dedent;
 
@@ -1113,8 +1114,11 @@ fn has_doc_false(annotations: &[koja_ast::ast::Annotation]) -> bool {
 
 /// Format a default-value expression for display. Covers the shapes
 /// the compiler accepts as field defaults: literals, negated
-/// numerics, unit enum variants, binary literals, and struct, list,
-/// map, or set literals of those.
+/// numerics, enum variants, constants, binary literals, and struct,
+/// list, map, or set literals of those. A dotted struct literal such
+/// as `Pkg.Type{}` parses as a struct-shaped variant and prints the
+/// same way. A constant read prints as written, in its bare (`MAX`)
+/// or dotted (`Pkg.limit`) spelling.
 fn default_to_string(expr: &Expr) -> String {
     match &expr.kind {
         ExprKind::BinaryLiteral { segments } => {
@@ -1134,9 +1138,31 @@ fn default_to_string(expr: &Expr) -> String {
             format!("<<{}>>", parts.join(", "))
         }
         ExprKind::EnumConstruction {
-            type_path, variant, ..
-        } => format!("{}.{variant}", path_text(type_path)),
+            type_path,
+            variant,
+            data,
+        } => {
+            let head = format!("{}.{variant}", path_text(type_path));
+            match data {
+                EnumConstructionData::Struct(fields) => {
+                    let parts: Vec<String> = fields
+                        .iter()
+                        .map(|field| format!("{}: {}", field.name, default_to_string(&field.value)))
+                        .collect();
+                    format!("{head}{{{}}}", parts.join(", "))
+                }
+                EnumConstructionData::Tuple(elements) => {
+                    let parts: Vec<String> = elements.iter().map(default_to_string).collect();
+                    format!("{head}({})", parts.join(", "))
+                }
+                EnumConstructionData::Unit => head,
+            }
+        }
+        ExprKind::FieldAccess { receiver, field } => {
+            format!("{}.{field}", default_to_string(receiver))
+        }
         ExprKind::Group { expr: inner } => format!("({})", default_to_string(inner)),
+        ExprKind::Ident { name, .. } => name.clone(),
         ExprKind::List { elements } => {
             let parts: Vec<String> = elements.iter().map(default_to_string).collect();
             format!("[{}]", parts.join(", "))

@@ -13,6 +13,7 @@
 //! user-facing lowering failures. Seal failures are compiler bugs.
 
 mod binary_packing;
+mod built_order;
 mod cfg;
 mod constant;
 mod cycle;
@@ -30,6 +31,7 @@ pub mod mangling;
 mod merge;
 mod package;
 pub mod panics;
+mod pipeline;
 mod program;
 mod script;
 mod seal;

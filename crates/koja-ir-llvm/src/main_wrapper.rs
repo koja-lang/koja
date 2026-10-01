@@ -41,6 +41,7 @@ use inkwell::module::Linkage;
 use koja_ir::{IRBasicBlock, IRBlockId, IRFunction, IRSourceDef, IRTerminator, IRType};
 
 use crate::ctx::EmitContext;
+use crate::emit::built_constants::emit_built_constant_init_call;
 use crate::emit::{self, ValueMap};
 use crate::error::{IceExt, LlvmError};
 use crate::function::declare_blocks;
@@ -134,20 +135,22 @@ fn define_user_main<'ctx>(
     ctx.reset_locals();
     let block_map = declare_blocks(ctx, function, blocks);
     let reachable = emit::reachable_blocks(blocks);
-    let return_block_ids = find_return_blocks(blocks, &reachable)?;
+    let return_block_ids = find_return_blocks(blocks, &reachable);
 
     let mut values: ValueMap<'ctx> = ValueMap::new();
     let phi_map = emit::declare_block_param_phis(ctx, blocks, &block_map, &mut values)?;
     ctx.set_block_map(block_map.clone());
     let result = (|| -> Result<(), LlvmError> {
         // PID 1's first compiled code, so the register-strategy budget
-        // gets its initial grant at the top of the entry block.
+        // gets its initial grant at the top of the entry block, and
+        // the built constants fill before the body can read one.
         let entry_id = blocks
             .first()
             .expect("sealed IR guarantees an entry block")
             .id;
         ctx.builder.position_at_end(block_map[&entry_id]);
         emit_budget_seed(ctx)?;
+        emit_built_constant_init_call(ctx)?;
         for block in blocks {
             if !reachable.contains(&block.id) {
                 // Same boundary stand-in as `define_function`: blocks the
@@ -187,12 +190,13 @@ pub(crate) fn emit_process_entry_main<'ctx>(
     ctx: &EmitContext<'ctx>,
     entry: &IRFunction,
 ) -> Result<(), LlvmError> {
-    let config_type = entry.params.first().map(|p| &p.ty).ok_or_else(|| {
-        LlvmError::Codegen(format!(
-            "LLVM emit: process entry wrapper `{}` has no config parameter",
+    let config_type = entry.params.first().map(|p| &p.ty).unwrap_or_else(|| {
+        panic!(
+            "LLVM emit: process entry wrapper `{}` has no config parameter (seal invariant \
+             violation)",
             entry.symbol,
-        ))
-    })?;
+        )
+    });
     let argv_shaped = matches!(
         config_type,
         IRType::List(element) if matches!(**element, IRType::String)
@@ -220,12 +224,12 @@ pub(crate) fn emit_process_entry_main<'ctx>(
         .build_alloca(config_llvm_type, "entry_config")
         .or_ice()?;
     if argv_shaped {
-        let argc = main_fn.get_nth_param(0).ok_or_else(|| {
-            LlvmError::Codegen("process entry main missing argc parameter".to_string())
-        })?;
-        let argv = main_fn.get_nth_param(1).ok_or_else(|| {
-            LlvmError::Codegen("process entry main missing argv parameter".to_string())
-        })?;
+        let argc = main_fn
+            .get_nth_param(0)
+            .expect("process entry main missing argc parameter");
+        let argv = main_fn
+            .get_nth_param(1)
+            .expect("process entry main missing argv parameter");
         let build_argv = declare_rt_build_argv_extern(ctx);
         ctx.builder
             .build_call(
@@ -240,12 +244,12 @@ pub(crate) fn emit_process_entry_main<'ctx>(
             .or_ice()?;
     }
 
-    let wrapper_fn = ctx.declared_function(&entry.symbol).ok_or_else(|| {
-        LlvmError::Codegen(format!(
+    let wrapper_fn = ctx.declared_function(&entry.symbol).unwrap_or_else(|| {
+        panic!(
             "LLVM emit: process entry wrapper `{}` not declared before main trampoline emit",
             entry.symbol,
-        ))
-    })?;
+        )
+    });
     let wrapper_ptr = wrapper_fn.as_global_value().as_pointer_value();
     let config_size = ctx.context.i64_type().const_int(
         ctx.layouts.target_data.get_abi_size(&config_llvm_type),
@@ -268,11 +272,9 @@ pub(crate) fn emit_process_entry_main<'ctx>(
     let main_done = declare_rt_main_done_extern(ctx);
     ctx.builder.build_call(main_done, &[], "").or_ice()?;
 
-    let exit_global = ctx.module.get_global(EXIT_CODE_SYMBOL).ok_or_else(|| {
-        LlvmError::Codegen(format!(
-            "LLVM emit: `{EXIT_CODE_SYMBOL}` global not declared before main trampoline emit",
-        ))
-    })?;
+    let exit_global = ctx.module.get_global(EXIT_CODE_SYMBOL).unwrap_or_else(|| {
+        panic!("LLVM emit: `{EXIT_CODE_SYMBOL}` global not declared before main trampoline emit")
+    });
     let exit_value = ctx
         .builder
         .build_load(i32_ty, exit_global.as_pointer_value(), "exit_code")
@@ -301,11 +303,12 @@ fn define_main_trampoline<'ctx>(ctx: &EmitContext<'ctx>) -> Result<(), LlvmError
     ctx.builder.position_at_end(entry);
     ctx.enter_synthetic_debug();
 
-    let user_main_fn = ctx.module.get_function(USER_MAIN_SYMBOL).ok_or_else(|| {
-        LlvmError::Codegen(format!(
-            "LLVM emit: `{USER_MAIN_SYMBOL}` not declared before main trampoline emit",
-        ))
-    })?;
+    let user_main_fn = ctx
+        .module
+        .get_function(USER_MAIN_SYMBOL)
+        .unwrap_or_else(|| {
+            panic!("LLVM emit: `{USER_MAIN_SYMBOL}` not declared before main trampoline emit")
+        });
     let user_main_ptr = user_main_fn.as_global_value().as_pointer_value();
     let null_ptr = ptr_type.const_null();
     let zero_i64 = i64_type.const_int(0, false);
@@ -356,21 +359,21 @@ fn emit_user_main_return<'ctx>(ctx: &EmitContext<'ctx>) -> Result<(), LlvmError>
 /// if/else's may synthesize an unreachable merge whose `Return`
 /// reads an unmaterialized `BlockParam`. Those don't count and are
 /// filtered out via `reachable`. No reachable `Return` at all is a
-/// lowering bug we surface as a codegen error.
+/// lowering bug and panics.
 fn find_return_blocks(
     blocks: &[IRBasicBlock],
     reachable: &HashSet<IRBlockId>,
-) -> Result<HashSet<IRBlockId>, LlvmError> {
+) -> HashSet<IRBlockId> {
     let return_blocks: HashSet<IRBlockId> = blocks
         .iter()
         .filter(|block| reachable.contains(&block.id))
         .filter(|block| matches!(block.terminator, IRTerminator::Return { .. }))
         .map(|block| block.id)
         .collect();
-    if return_blocks.is_empty() {
-        return Err(LlvmError::Codegen(
-            "LLVM expects at least one reachable Return-terminated block in `main`".to_string(),
-        ));
-    }
-    Ok(return_blocks)
+    assert!(
+        !return_blocks.is_empty(),
+        "LLVM expects at least one reachable Return-terminated block in `main` (seal invariant \
+         violation)"
+    );
+    return_blocks
 }

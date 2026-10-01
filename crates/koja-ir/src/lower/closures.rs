@@ -19,11 +19,9 @@
 
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 
-use koja_ast::ast::{
-    BinarySegment, ClosureParam, EnumConstructionData, Expr, ExprKind, LValue, MatchArm, Pattern,
-    Statement, StringPart,
-};
+use koja_ast::ast::{ClosureParam, Expr, ExprKind, LValue, MatchArm, Pattern, Statement};
 use koja_ast::identifier::{AnonymousKind, LocalId, Resolution, ResolvedType};
+use koja_ast::visit::{self, Visitor};
 use koja_typecheck::{FunctionSignature, GlobalRegistry};
 
 use crate::function::{
@@ -46,15 +44,13 @@ pub(super) fn lower_block_closure(
     params: &[ClosureParam],
     body: &[Statement],
     closure_resolution: &ResolvedType,
-    ctx: &mut FnLowerCtx,
+    ctx: &mut FnLowerCtx<'_>,
     block: IRBlockId,
-    registry: &GlobalRegistry,
-    output: &mut LowerOutput,
 ) -> Result<(ValueId, IRBlockId), ()> {
     let fn_params = expect_function_params(closure_resolution);
     let fn_ret = expect_function_return(closure_resolution);
     let captures = collect_captures(BodyShape::Block(body), param_ids(params));
-    let captures_with_types = resolve_capture_types(&captures, registry, output);
+    let captures_with_types = resolve_capture_types(&captures, ctx.registry, ctx.output);
 
     let symbol = ctx.closures_mut().mint_symbol();
     let synthesized = synthesize_body(
@@ -66,27 +62,19 @@ pub(super) fn lower_block_closure(
             fn_ret,
         },
         &captures_with_types,
-        registry,
-        output,
+        ctx.registry,
+        ctx.output,
     )?;
-    output.synthesized_functions.push(synthesized);
+    ctx.output.synthesized_functions.push(synthesized);
     synthesize_env_glue(
         &symbol,
         &captures_with_types,
         closure_resolution,
-        registry,
-        output,
+        ctx.registry,
+        ctx.output,
     );
 
-    emit_make_closure(
-        symbol,
-        &captures_with_types,
-        closure_resolution,
-        ctx,
-        block,
-        registry,
-        output,
-    )
+    emit_make_closure(symbol, &captures_with_types, closure_resolution, ctx, block)
 }
 
 /// Lower a `x -> body_expr` short closure expression.
@@ -94,15 +82,13 @@ pub(super) fn lower_short_closure(
     params: &[ClosureParam],
     body: &Expr,
     closure_resolution: &ResolvedType,
-    ctx: &mut FnLowerCtx,
+    ctx: &mut FnLowerCtx<'_>,
     block: IRBlockId,
-    registry: &GlobalRegistry,
-    output: &mut LowerOutput,
 ) -> Result<(ValueId, IRBlockId), ()> {
     let fn_params = expect_function_params(closure_resolution);
     let fn_ret = expect_function_return(closure_resolution);
     let captures = collect_captures(BodyShape::Short(body), param_ids(params));
-    let captures_with_types = resolve_capture_types(&captures, registry, output);
+    let captures_with_types = resolve_capture_types(&captures, ctx.registry, ctx.output);
 
     let symbol = ctx.closures_mut().mint_symbol();
     let synthesized = synthesize_body(
@@ -114,27 +100,19 @@ pub(super) fn lower_short_closure(
             fn_ret,
         },
         &captures_with_types,
-        registry,
-        output,
+        ctx.registry,
+        ctx.output,
     )?;
-    output.synthesized_functions.push(synthesized);
+    ctx.output.synthesized_functions.push(synthesized);
     synthesize_env_glue(
         &symbol,
         &captures_with_types,
         closure_resolution,
-        registry,
-        output,
+        ctx.registry,
+        ctx.output,
     );
 
-    emit_make_closure(
-        symbol,
-        &captures_with_types,
-        closure_resolution,
-        ctx,
-        block,
-        registry,
-        output,
-    )
+    emit_make_closure(symbol, &captures_with_types, closure_resolution, ctx, block)
 }
 
 /// Register the synthesized glue siblings (`$drop_env$` /
@@ -147,7 +125,7 @@ fn synthesize_env_glue(
     registry: &GlobalRegistry,
     output: &mut LowerOutput,
 ) {
-    if let Some(drop_env) = synthesize_drop_env(symbol, captures) {
+    if let Some(drop_env) = synthesize_drop_env(symbol, captures, registry, output) {
         output.synthesized_functions.push(drop_env);
     }
     if let Some(copy_env) = synthesize_copy_env(symbol, captures) {
@@ -181,7 +159,7 @@ fn synthesize_eq_env(
     let env_layout: Vec<IRType> = captures.iter().map(|c| c.ir_type.clone()).collect();
     let closure_ty =
         resolved_type_to_ir_type(closure_resolution, registry, &mut output.instantiations);
-    let mut ctx = FnLowerCtx::new();
+    let mut ctx = FnLowerCtx::new(registry, output);
     let other = ctx.fresh_value(closure_ty.clone());
     let entry = ctx.fresh_block("entry");
     let conjunction = Conjunction::new("eq_env", &mut ctx);
@@ -206,15 +184,8 @@ fn synthesize_eq_env(
                 ty: capture.ir_type.clone(),
             },
         );
-        let (cond, after) = lower_value_equality(
-            own,
-            theirs,
-            &capture.resolution,
-            &mut ctx,
-            current,
-            registry,
-            output,
-        );
+        let (cond, after) =
+            lower_value_equality(own, theirs, &capture.resolution, &mut ctx, current);
         if index == last {
             let (result, merge) = conjunction.finish(cond, &mut ctx, after);
             ctx.cfg.set_terminator(
@@ -252,7 +223,12 @@ fn synthesize_eq_env(
 /// [`IRInstruction::LoadCapture`]s the value and [`IRInstruction::DropValue`]s
 /// it. Composite drops are rewritten into `drop_T` calls by
 /// [`crate::elaborate`], while leaf drops stay inline `rc--` in the backend.
-fn synthesize_drop_env(body_symbol: &IRSymbol, captures: &[CaptureInfo]) -> Option<IRFunction> {
+fn synthesize_drop_env(
+    body_symbol: &IRSymbol,
+    captures: &[CaptureInfo],
+    registry: &GlobalRegistry,
+    output: &mut LowerOutput,
+) -> Option<IRFunction> {
     if !captures
         .iter()
         .any(|capture| capture.ir_type.is_heap_managed())
@@ -260,7 +236,7 @@ fn synthesize_drop_env(body_symbol: &IRSymbol, captures: &[CaptureInfo]) -> Opti
         return None;
     }
     let env_layout: Vec<IRType> = captures.iter().map(|c| c.ir_type.clone()).collect();
-    let mut ctx = FnLowerCtx::new();
+    let mut ctx = FnLowerCtx::new(registry, output);
     let entry = ctx.fresh_block("entry");
     for (index, capture) in captures.iter().enumerate() {
         if !capture.ir_type.is_heap_managed() {
@@ -384,7 +360,10 @@ fn collect_captures(body: BodyShape<'_>, params: HashSet<LocalId>) -> Vec<(Local
         order: Vec::new(),
         types: BTreeMap::new(),
     };
-    walker.visit_body(body);
+    match body {
+        BodyShape::Block(statements) => visit::walk_body(&mut walker, statements),
+        BodyShape::Short(expr) => walker.visit_expr(expr),
+    }
     walker
         .order
         .into_iter()
@@ -404,45 +383,21 @@ impl CaptureWalker {
         self.scopes.iter().any(|frame| frame.contains(&id))
     }
 
-    fn record(&mut self, id: LocalId, resolution: ResolvedType) {
-        if self.seen.insert(id) {
-            self.order.push(id);
-            self.types.insert(id, resolution);
+    /// A read of `id` that no frame binds is a capture. Later reads
+    /// of the same id add nothing.
+    fn record(&mut self, id: LocalId, resolution: &ResolvedType) {
+        if self.visible(id) || !self.seen.insert(id) {
+            return;
         }
+        self.order.push(id);
+        self.types.insert(id, resolution.clone());
     }
 
-    fn visit_body(&mut self, body: BodyShape<'_>) {
-        match body {
-            BodyShape::Block(statements) => self.visit_statements(statements),
-            BodyShape::Short(expr) => self.visit_expr(expr),
-        }
-    }
-
-    fn visit_statements(&mut self, statements: &[Statement]) {
-        for stmt in statements {
-            self.visit_statement(stmt);
-        }
-    }
-
-    fn visit_statement(&mut self, stmt: &Statement) {
-        match stmt {
-            Statement::Assignment { target, value, .. } => {
-                self.visit_expr(value);
-                self.note_assignment_local(target);
-            }
-            Statement::Break { .. } => {}
-            Statement::CompoundAssign { value, .. } => self.visit_expr(value),
-            Statement::Destructure { pattern, value, .. } => {
-                self.visit_expr(value);
-                self.note_pattern_locals(pattern);
-            }
-            Statement::Expr(expr) => self.visit_expr(expr),
-            Statement::Return { value, .. } => {
-                if let Some(expr) = value {
-                    self.visit_expr(expr);
-                }
-            }
-        }
+    /// Walk `expr` inside a fresh frame that binds `locals`.
+    fn in_frame(&mut self, locals: HashSet<LocalId>, expr: &Expr) {
+        self.scopes.push(locals);
+        visit::walk_expr(self, expr);
+        self.scopes.pop();
     }
 
     /// An assignment's target local belongs to the current frame:
@@ -468,206 +423,49 @@ impl CaptureWalker {
         let frame = self.scopes.last_mut().expect("walker always has a frame");
         frame.extend(pattern_binding_ids(pattern));
     }
+}
 
-    fn visit_expr(&mut self, expr: &Expr) {
-        match &expr.kind {
-            ExprKind::Assert {
-                condition, message, ..
-            } => {
-                self.visit_expr(condition);
-                if let Some(message) = message {
-                    self.visit_expr(message);
-                }
-            }
-            ExprKind::Binary { left, right, .. } => {
-                self.visit_expr(left);
-                self.visit_expr(right);
-            }
-            ExprKind::BinaryLiteral { segments } => {
-                for segment in segments {
-                    self.visit_binary_segment(segment);
-                }
-            }
-            ExprKind::Call { callee, args, .. } => {
-                self.visit_expr(callee);
-                for arg in args {
-                    self.visit_expr(&arg.value);
-                }
-            }
-            ExprKind::Closure { params, body, .. } => {
-                self.enter_closure(params, body);
-            }
-            ExprKind::Cond { arms, else_body } => {
-                for arm in arms {
-                    self.visit_expr(&arm.condition);
-                    self.visit_statements(&arm.body);
-                }
-                if let Some(body) = else_body {
-                    self.visit_statements(body);
-                }
-            }
-            ExprKind::EnumConstruction { data, .. } => match data {
-                EnumConstructionData::Unit => {}
-                EnumConstructionData::Tuple(exprs) => {
-                    for expr in exprs {
-                        self.visit_expr(expr);
-                    }
-                }
-                EnumConstructionData::Struct(field_inits) => {
-                    for field in field_inits {
-                        self.visit_expr(&field.value);
-                    }
-                }
-            },
-            ExprKind::Fail { value } => self.visit_expr(value),
-            ExprKind::FieldAccess { receiver, .. } => self.visit_expr(receiver),
-            ExprKind::For {
-                pattern,
-                iterable,
-                body,
-            } => {
-                self.visit_expr(iterable);
-                self.scopes.push(pattern_binding_ids(pattern));
-                self.visit_statements(body);
-                self.scopes.pop();
-            }
-            ExprKind::Group { expr: inner } => self.visit_expr(inner),
-            ExprKind::Ident { resolution, .. } => {
-                if let Resolution::Local(id) = resolution
-                    && !self.visible(*id)
-                {
-                    self.record(*id, expr.resolution.clone());
-                }
-            }
-            ExprKind::If {
-                condition,
-                then_body,
-                else_body,
-            } => {
-                self.visit_expr(condition);
-                self.visit_statements(then_body);
-                if let Some(body) = else_body {
-                    self.visit_statements(body);
-                }
-            }
-            ExprKind::List { elements } => {
-                for element in elements {
-                    self.visit_expr(element);
-                }
-            }
-            ExprKind::Literal { .. } | ExprKind::NamedFunctionReference { .. } => {}
-            ExprKind::Loop { body } => self.visit_statements(body),
-            ExprKind::Map { entries } => {
-                for (key, value) in entries {
-                    self.visit_expr(key);
-                    self.visit_expr(value);
-                }
-            }
-            ExprKind::Match { subject, arms } => {
-                self.visit_expr(subject);
-                for arm in arms {
-                    self.visit_match_arm(arm);
-                }
-            }
-            ExprKind::MethodCall { receiver, args, .. } => {
-                self.visit_expr(receiver);
-                for arg in args {
-                    self.visit_expr(&arg.value);
-                }
-            }
-            ExprKind::Receive {
-                arms,
-                after_timeout,
-                after_body,
-            } => {
-                for arm in arms {
-                    self.visit_match_arm(arm);
-                }
-                if let Some(timeout) = after_timeout {
-                    self.visit_expr(timeout);
-                }
-                self.visit_statements(after_body);
-            }
-            ExprKind::Rescue {
-                subject, handler, ..
-            } => {
-                self.visit_expr(subject);
-                self.visit_expr(handler);
-            }
-            ExprKind::Self_ { local_id } => {
-                if let Some(id) = local_id
-                    && !self.visible(*id)
-                {
-                    self.record(*id, expr.resolution.clone());
-                }
-            }
-            ExprKind::ShortClosure { params, body } => {
-                self.enter_short_closure(params, body);
-            }
-            ExprKind::Spawn { expr: inner } => self.visit_expr(inner),
-            ExprKind::String { parts, .. } => {
-                for part in parts {
-                    if let StringPart::Interpolation { expr, .. } = part {
-                        self.visit_expr(expr);
-                    }
-                }
-            }
-            ExprKind::StructConstruction { fields, .. } => {
-                for field in fields {
-                    self.visit_expr(&field.value);
-                }
-            }
-            ExprKind::Ternary {
-                condition,
-                then_expr,
-                else_expr,
-            } => {
-                self.visit_expr(condition);
-                self.visit_expr(then_expr);
-                self.visit_expr(else_expr);
-            }
-            ExprKind::Try { expr: inner } => self.visit_expr(inner),
-            ExprKind::Tuple { elements } => {
-                for element in elements {
-                    self.visit_expr(element);
-                }
-            }
-            ExprKind::Unary { operand, .. } => self.visit_expr(operand),
-            ExprKind::While { condition, body } => {
-                self.visit_expr(condition);
-                self.visit_statements(body);
-            }
+impl<'ast> Visitor<'ast> for CaptureWalker {
+    /// The value is read before the target binds, so `x = x + 1`
+    /// captures the outer `x` and later reads see the body local.
+    fn visit_statement(&mut self, statement: &'ast Statement) {
+        visit::walk_statement(self, statement);
+        match statement {
+            Statement::Assignment { target, .. } => self.note_assignment_local(target),
+            Statement::Destructure { pattern, .. } => self.note_pattern_locals(pattern),
+            _ => {}
         }
     }
 
-    fn enter_closure(&mut self, params: &[ClosureParam], body: &[Statement]) {
-        self.scopes.push(param_ids(params));
-        self.visit_statements(body);
-        self.scopes.pop();
-    }
-
-    fn enter_short_closure(&mut self, params: &[ClosureParam], body: &Expr) {
-        self.scopes.push(param_ids(params));
-        self.visit_expr(body);
-        self.scopes.pop();
+    fn visit_expr(&mut self, expr: &'ast Expr) {
+        match &expr.kind {
+            ExprKind::Closure { params, .. } | ExprKind::ShortClosure { params, .. } => {
+                self.in_frame(param_ids(params), expr);
+            }
+            ExprKind::For { pattern, .. } => self.in_frame(pattern_binding_ids(pattern), expr),
+            ExprKind::Ident {
+                resolution: Resolution::Local(id),
+                ..
+            } => self.record(*id, &expr.resolution),
+            ExprKind::Self_ { local_id: Some(id) } => self.record(*id, &expr.resolution),
+            _ => visit::walk_expr(self, expr),
+        }
     }
 
     /// An arm's pattern bindings (`Shape.Circle(n)`, `event: Lifecycle`)
     /// are locals of the arm's scope, not references to the outer
     /// function. Push them as a frame so guard / body reads of the
     /// bound names aren't misclassified as captures.
-    fn visit_match_arm(&mut self, arm: &MatchArm) {
+    fn visit_match_arm(&mut self, arm: &'ast MatchArm) {
         self.scopes.push(pattern_binding_ids(&arm.pattern));
-        if let Some(guard) = arm.guard.as_ref() {
-            self.visit_expr(guard);
-        }
-        self.visit_statements(&arm.body);
+        visit::walk_match_arm(self, arm);
         self.scopes.pop();
     }
 
-    fn visit_binary_segment(&mut self, segment: &BinarySegment) {
-        self.visit_expr(&segment.value);
-    }
+    /// Patterns bind names and never read locals. A binary pattern
+    /// segment holds its binding as an `Ident` expression, so walking
+    /// into it would misread the bind as a capture.
+    fn visit_pattern(&mut self, _pattern: &'ast Pattern) {}
 }
 
 /// Resolve each capture's [`IRType`] alongside its AST resolution.
@@ -712,25 +510,20 @@ fn synthesize_body(
     registry: &GlobalRegistry,
     output: &mut LowerOutput,
 ) -> Result<IRFunction, ()> {
-    let mut ctx = FnLowerCtx::new();
+    let mut ctx = FnLowerCtx::new(registry, output);
     ctx.closures_mut().set_enclosing_symbol(symbol.clone());
     let capture_ids: Vec<LocalId> = captures.iter().map(|c| c.local_id).collect();
     ctx.closures_mut().set_captures(&capture_ids);
 
     let entry = ctx.fresh_block("entry");
-    let params = lower_closure_params(
-        sig.closure_params,
-        sig.fn_params,
-        registry,
-        output,
-        &mut ctx,
-    );
+    let params = lower_closure_params(sig.closure_params, sig.fn_params, &mut ctx);
     let body_statements = match sig.body {
         BodyShape::Block(stmts) => stmts.to_vec(),
         BodyShape::Short(expr) => vec![Statement::Expr(expr.clone())],
     };
-    let flow = lower_body(&body_statements, &mut ctx, entry, registry, output)?;
-    let return_type = resolved_type_to_ir_type(sig.fn_ret, registry, &mut output.instantiations);
+    let flow = lower_body(&body_statements, &mut ctx, entry)?;
+    let return_type =
+        resolved_type_to_ir_type(sig.fn_ret, ctx.registry, &mut ctx.output.instantiations);
     finalize_open_flow(&mut ctx, flow, &return_type);
     let env_layout: Vec<IRType> = captures.iter().map(|c| c.ir_type.clone()).collect();
     Ok(IRFunction {
@@ -750,16 +543,14 @@ fn synthesize_body(
 fn lower_closure_params(
     closure_params: &[ClosureParam],
     fn_params: &[ResolvedType],
-    registry: &GlobalRegistry,
-    output: &mut LowerOutput,
-    ctx: &mut FnLowerCtx,
+    ctx: &mut FnLowerCtx<'_>,
 ) -> Vec<IRFunctionParam> {
     let mut params = Vec::with_capacity(closure_params.len());
     for (index, (closure_param, fn_param)) in
         closure_params.iter().zip(fn_params.iter()).enumerate()
     {
         let local_id = closure_param_local_id(closure_param, index);
-        let ty = resolved_type_to_ir_type(fn_param, registry, &mut output.instantiations);
+        let ty = resolved_type_to_ir_type(fn_param, ctx.registry, &mut ctx.output.instantiations);
         let ir_local = IRLocalId::from_local_id(local_id);
         let entry = ctx.entry_block();
         params.push(promote_param(ctx, entry, ir_local, ty));
@@ -792,10 +583,8 @@ fn emit_make_closure(
     symbol: IRSymbol,
     captures: &[CaptureInfo],
     closure_resolution: &ResolvedType,
-    ctx: &mut FnLowerCtx,
+    ctx: &mut FnLowerCtx<'_>,
     block: IRBlockId,
-    registry: &GlobalRegistry,
-    output: &mut LowerOutput,
 ) -> Result<(ValueId, IRBlockId), ()> {
     let mut capture_values = Vec::with_capacity(captures.len());
     for capture in captures {
@@ -806,7 +595,11 @@ fn emit_make_closure(
         let borrowed = read_capture(capture, ctx, block);
         capture_values.push(materialize_owned(ctx, block, borrowed, &capture.ir_type));
     }
-    let ty = resolved_type_to_ir_type(closure_resolution, registry, &mut output.instantiations);
+    let ty = resolved_type_to_ir_type(
+        closure_resolution,
+        ctx.registry,
+        &mut ctx.output.instantiations,
+    );
     let dest = ctx.fresh_value(ty.clone());
     let captures_env = !capture_values.is_empty();
     ctx.cfg.append(
@@ -832,7 +625,7 @@ fn emit_make_closure(
 /// value semantics every capture copies into the env: a `LoadCapture`
 /// when the outer ctx is itself a closure body, otherwise a
 /// `LocalRead` of the outer slot. The outer binding stays live.
-fn read_capture(capture: &CaptureInfo, ctx: &mut FnLowerCtx, block: IRBlockId) -> ValueId {
+fn read_capture(capture: &CaptureInfo, ctx: &mut FnLowerCtx<'_>, block: IRBlockId) -> ValueId {
     if let Some(capture_index) = ctx.closures().capture_index(capture.local_id) {
         let dest = ctx.fresh_value(capture.ir_type.clone());
         ctx.cfg.append(
@@ -900,16 +693,19 @@ fn build_fn_as_closure_wrapper(
     registry: &GlobalRegistry,
     output: &mut LowerOutput,
 ) -> IRFunction {
-    let mut ctx = FnLowerCtx::new();
+    let mut ctx = FnLowerCtx::new(registry, output);
     ctx.closures_mut()
         .set_enclosing_symbol(wrapper_symbol.clone());
     let entry = ctx.fresh_block("entry");
 
-    let params = mint_wrapper_params(sig, &mut ctx, registry, output, entry);
+    let params = mint_wrapper_params(sig, &mut ctx, entry);
     let arg_values = read_wrapper_args(&params, &mut ctx, entry);
 
-    let return_ty =
-        resolved_type_to_ir_type(&sig.return_type, registry, &mut output.instantiations);
+    let return_ty = resolved_type_to_ir_type(
+        &sig.return_type,
+        ctx.registry,
+        &mut ctx.output.instantiations,
+    );
     let call_dest = ctx.fresh_value(return_ty.clone());
     ctx.cfg.append(
         entry,
@@ -944,14 +740,12 @@ fn build_fn_as_closure_wrapper(
 /// entry block.
 fn mint_wrapper_params(
     sig: &FunctionSignature,
-    ctx: &mut FnLowerCtx,
-    registry: &GlobalRegistry,
-    output: &mut LowerOutput,
+    ctx: &mut FnLowerCtx<'_>,
     entry: IRBlockId,
 ) -> Vec<IRFunctionParam> {
     let mut params = Vec::with_capacity(sig.params.len());
     for (index, param) in sig.params.iter().enumerate() {
-        let ty = resolved_type_to_ir_type(&param.ty, registry, &mut output.instantiations);
+        let ty = resolved_type_to_ir_type(&param.ty, ctx.registry, &mut ctx.output.instantiations);
         let local_id = LocalId::new(index as u32);
         let ir_local = IRLocalId::from_local_id(local_id);
         params.push(promote_param(ctx, entry, ir_local, ty));
@@ -965,7 +759,7 @@ fn mint_wrapper_params(
 /// match a hand-written `fn (x) -> target(x) end` shim.
 fn read_wrapper_args(
     params: &[IRFunctionParam],
-    ctx: &mut FnLowerCtx,
+    ctx: &mut FnLowerCtx<'_>,
     entry: IRBlockId,
 ) -> Vec<ValueId> {
     let mut values = Vec::with_capacity(params.len());

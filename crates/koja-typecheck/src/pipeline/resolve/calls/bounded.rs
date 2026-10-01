@@ -247,7 +247,7 @@ pub(super) struct BoundedArgsSite<'a> {
 }
 
 /// Check arity + per-position type compatibility for a bounded
-/// method call. Mirrors [`super::validate_arg_signature`]'s wording so
+/// method call. Mirrors [`super::validate_call_signature`]'s wording so
 /// a "wrong arg type" diagnostic reads identically whether the
 /// call dispatches against a struct method or a protocol method.
 fn validate_bounded_args(

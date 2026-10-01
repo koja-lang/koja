@@ -12,7 +12,7 @@ use crate::reductions::emit_yield_check;
 
 use super::binary_construct::emit_binary_construct;
 use super::binary_match;
-use super::process::{emit_process_exit, emit_receive, emit_set_priority, emit_spawn};
+use super::process::{SpawnArgs, emit_process_exit, emit_receive, emit_set_priority, emit_spawn};
 use super::{
     ValueMap, calls, clone, closures, concat, constants, deep_copy, enums, indirect, locals,
     lookup, ops, structs, tuples, unions,
@@ -50,8 +50,8 @@ pub(crate) fn emit_instruction<'ctx>(
             operand_ty,
             rhs,
         } => {
-            let lhs_value = lookup(values, *lhs)?;
-            let rhs_value = lookup(values, *rhs)?;
+            let lhs_value = lookup(values, *lhs);
+            let rhs_value = lookup(values, *rhs);
             let result = ops::emit_binary_op(ctx, *op, operand_ty, lhs_value, rhs_value)?;
             values.insert(*dest, result);
             Ok(())
@@ -91,14 +91,14 @@ pub(crate) fn emit_instruction<'ctx>(
             lhs,
             rhs,
         } => {
-            let lhs_value = lookup(values, *lhs)?;
-            let rhs_value = lookup(values, *rhs)?;
+            let lhs_value = lookup(values, *lhs);
+            let rhs_value = lookup(values, *rhs);
             let result = concat::emit_concat(ctx, *kind, *consumes_lhs, lhs_value, rhs_value)?;
             values.insert(*dest, result);
             Ok(())
         }
         IRInstruction::Const { dest, value } => {
-            let constant = constants::emit_const(ctx, value)?;
+            let constant = constants::emit_const(ctx, value);
             values.insert(*dest, constant);
             Ok(())
         }
@@ -122,7 +122,7 @@ pub(crate) fn emit_instruction<'ctx>(
             ty,
             value,
         } => {
-            let base = lookup(values, *value)?;
+            let base = lookup(values, *value);
             let result = enums::emit_enum_payload_field_get(
                 ctx,
                 field_type,
@@ -135,7 +135,7 @@ pub(crate) fn emit_instruction<'ctx>(
             Ok(())
         }
         IRInstruction::EnumTagGet { dest, value, ty } => {
-            let base = lookup(values, *value)?;
+            let base = lookup(values, *value);
             let result = enums::emit_enum_tag_get(ctx, ty, base)?;
             values.insert(*dest, result);
             Ok(())
@@ -147,7 +147,7 @@ pub(crate) fn emit_instruction<'ctx>(
             field_type,
             struct_symbol,
         } => {
-            let base_value = lookup(values, *base)?;
+            let base_value = lookup(values, *base);
             let result =
                 structs::emit_field_get(ctx, base_value, *field_index, field_type, struct_symbol)?;
             values.insert(*dest, result);
@@ -161,8 +161,8 @@ pub(crate) fn emit_instruction<'ctx>(
             value,
             ..
         } => {
-            let base_value = lookup(values, *base)?;
-            let new_field = lookup(values, *value)?;
+            let base_value = lookup(values, *base);
+            let new_field = lookup(values, *value);
             let result =
                 structs::emit_field_set(ctx, base_value, *field_index, struct_symbol, new_field)?;
             values.insert(*dest, result);
@@ -170,7 +170,7 @@ pub(crate) fn emit_instruction<'ctx>(
         }
         IRInstruction::DropValue { value, ty } => locals::emit_drop_value(ctx, *value, ty, values),
         IRInstruction::IndirectPresent { base, dest, slot } => {
-            let base = lookup(values, *base)?;
+            let base = lookup(values, *base);
             let present = indirect::emit_indirect_present(ctx, base, slot)?;
             values.insert(*dest, present);
             Ok(())
@@ -210,7 +210,7 @@ pub(crate) fn emit_instruction<'ctx>(
             Ok(())
         }
         IRInstruction::LocalWrite { local, value } => {
-            let resolved = lookup(values, *value)?;
+            let resolved = lookup(values, *value);
             locals::emit_local_write(ctx, *local, resolved)
         }
         IRInstruction::MakeClosure {
@@ -234,7 +234,7 @@ pub(crate) fn emit_instruction<'ctx>(
             element_type,
             index,
         } => {
-            let base_value = lookup(values, *base)?;
+            let base_value = lookup(values, *base);
             let result = tuples::emit_tuple_get(ctx, base_value, *index, element_type)?;
             values.insert(*dest, result);
             Ok(())
@@ -250,7 +250,7 @@ pub(crate) fn emit_instruction<'ctx>(
             operand,
             operand_ty,
         } => {
-            let operand_value = lookup(values, *operand)?;
+            let operand_value = lookup(values, *operand);
             let result = ops::emit_unary_op(ctx, *op, operand_ty, operand_value)?;
             values.insert(*dest, result);
             Ok(())
@@ -261,7 +261,7 @@ pub(crate) fn emit_instruction<'ctx>(
             to,
             value,
         } => {
-            let source = lookup(values, *value)?;
+            let source = lookup(values, *value);
             let result = ops::emit_numeric_widen(ctx, from, to, source)?;
             values.insert(*dest, result);
             Ok(())
@@ -272,16 +272,21 @@ pub(crate) fn emit_instruction<'ctx>(
             dest,
             ref_type,
             wrapper,
-        } => emit_spawn(ctx, *config, config_type, *dest, ref_type, wrapper, values),
+        } => {
+            let args = SpawnArgs {
+                config: *config,
+                config_type,
+                ref_type,
+                wrapper,
+            };
+            emit_spawn(ctx, args, *dest, values)
+        }
         IRInstruction::ProcessExit { reason } => emit_process_exit(ctx, *reason, values),
         IRInstruction::SetPriority { tag } => emit_set_priority(ctx, *tag, values),
         IRInstruction::YieldCheck => emit_yield_check(ctx),
-        IRInstruction::Receive {
-            after,
-            arms,
-            dest,
-            result_type,
-        } => emit_receive(ctx, after.as_ref(), arms, *dest, result_type, values),
+        IRInstruction::Receive { after, arms, .. } => {
+            emit_receive(ctx, after.as_ref(), arms, values)
+        }
         IRInstruction::UnionWrap {
             dest,
             member_index,
@@ -289,13 +294,13 @@ pub(crate) fn emit_instruction<'ctx>(
             ty,
             value,
         } => {
-            let payload = lookup(values, *value)?;
+            let payload = lookup(values, *value);
             let result = unions::emit_union_wrap(ctx, *member_index, member_type, ty, payload)?;
             values.insert(*dest, result);
             Ok(())
         }
         IRInstruction::UnionTagGet { dest, ty, value } => {
-            let base = lookup(values, *value)?;
+            let base = lookup(values, *value);
             let result = unions::emit_union_tag_get(ctx, ty, base)?;
             values.insert(*dest, result);
             Ok(())
@@ -307,7 +312,7 @@ pub(crate) fn emit_instruction<'ctx>(
             ty,
             value,
         } => {
-            let base = lookup(values, *value)?;
+            let base = lookup(values, *value);
             let result = unions::emit_union_payload_get(ctx, member_type, ty, base)?;
             values.insert(*dest, result);
             Ok(())

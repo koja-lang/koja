@@ -30,7 +30,7 @@
 use inkwell::IntPredicate;
 use inkwell::basic_block::BasicBlock;
 use inkwell::values::{BasicValueEnum, FunctionValue};
-use koja_ir::{BinaryMethod, BitsMethod, IRFunction, IRSymbol, IRType, IRVariantTag};
+use koja_ir::{BinaryMethod, BitsMethod, IRFunction, IRSymbol, IRVariantTag};
 
 use crate::ctx::EmitContext;
 use crate::emit::constants::emit_string_literal_payload;
@@ -40,6 +40,7 @@ use crate::error::{IceExt, LlvmError};
 use crate::intrinsics::heap_payload;
 use crate::intrinsics::option;
 use crate::intrinsics::result;
+use crate::intrinsics::util::{expect_enum_symbol, nth_int, nth_param, nth_struct};
 use crate::runtime::{
     declare_binary_find_extern, declare_binary_slice_extern, declare_utf8_validate_extern,
 };
@@ -50,9 +51,6 @@ pub(super) fn emit_binary<'ctx>(
     llvm_function: FunctionValue<'ctx>,
     method: BinaryMethod,
 ) -> Result<(), LlvmError> {
-    let entry = ctx.context.append_basic_block(llvm_function, "entry");
-    ctx.builder.position_at_end(entry);
-
     match method {
         BinaryMethod::At => emit_at(ctx, function, llvm_function),
         BinaryMethod::ByteSize => emit_byte_size(ctx, function, llvm_function),
@@ -80,19 +78,9 @@ pub(super) fn emit_find<'ctx>(
     helper: FunctionValue<'ctx>,
 ) -> Result<(), LlvmError> {
     let i64_ty = ctx.context.i64_type();
-    let payload = heap_payload::pointer_param(function, llvm_function)?;
-    let needle = llvm_function.get_nth_param(1).ok_or_else(|| {
-        LlvmError::Codegen(format!(
-            "find missing `needle` param on `{}`",
-            function.symbol
-        ))
-    })?;
-    let from = llvm_function.get_nth_param(2).ok_or_else(|| {
-        LlvmError::Codegen(format!(
-            "find missing `from` param on `{}`",
-            function.symbol
-        ))
-    })?;
+    let payload = heap_payload::pointer_param(function, llvm_function);
+    let needle = nth_param(function, llvm_function, 1, "needle");
+    let from = nth_param(function, llvm_function, 2, "from");
     let offset = ctx
         .call_basic(
             helper,
@@ -101,7 +89,7 @@ pub(super) fn emit_find<'ctx>(
         )?
         .into_int_value();
 
-    let option_symbol = expect_enum_symbol(&function.return_type, function)?;
+    let option_symbol = expect_enum_symbol(&function.return_type, function, "find");
     let absent = ctx
         .builder
         .build_int_compare(IntPredicate::EQ, offset, i64_ty.const_all_ones(), "absent")
@@ -138,9 +126,6 @@ pub(super) fn emit_bits<'ctx>(
     llvm_function: FunctionValue<'ctx>,
     method: BitsMethod,
 ) -> Result<(), LlvmError> {
-    let entry = ctx.context.append_basic_block(llvm_function, "entry");
-    ctx.builder.position_at_end(entry);
-
     match method {
         BitsMethod::BitSize => emit_bit_size(ctx, function, llvm_function),
         BitsMethod::ByteAt => emit_bits_byte_at(ctx, function, llvm_function),
@@ -157,7 +142,7 @@ fn emit_to_bits<'ctx>(
     function: &IRFunction,
     llvm_function: FunctionValue<'ctx>,
 ) -> Result<(), LlvmError> {
-    let payload = heap_payload::pointer_param(function, llvm_function)?;
+    let payload = heap_payload::pointer_param(function, llvm_function);
     let shared = heap_payload::share_heap_payload(ctx, function.symbol.mangled(), payload)?;
     ctx.builder.build_return(Some(&shared)).or_ice().map(|_| ())
 }
@@ -193,17 +178,9 @@ fn emit_byte_lookup<'ctx>(
     llvm_function: FunctionValue<'ctx>,
     ceil_bytes: bool,
 ) -> Result<(), LlvmError> {
-    let option_symbol = expect_enum_symbol(&function.return_type, function)?;
-    let payload = heap_payload::pointer_param(function, llvm_function)?;
-    let index = llvm_function
-        .get_nth_param(1)
-        .ok_or_else(|| {
-            LlvmError::Codegen(format!(
-                "byte lookup missing `index` param on `{}`",
-                function.symbol,
-            ))
-        })?
-        .into_int_value();
+    let option_symbol = expect_enum_symbol(&function.return_type, function, "byte lookup");
+    let payload = heap_payload::pointer_param(function, llvm_function);
+    let index = nth_int(function, llvm_function, 1, "index");
 
     let i64_ty = ctx.context.i64_type();
     let i8_ty = ctx.context.i8_type();
@@ -281,19 +258,8 @@ fn emit_slice<'ctx>(
     function: &IRFunction,
     llvm_function: FunctionValue<'ctx>,
 ) -> Result<(), LlvmError> {
-    let payload = heap_payload::pointer_param(function, llvm_function)?;
-    let range = llvm_function.get_nth_param(1).ok_or_else(|| {
-        LlvmError::Codegen(format!(
-            "Binary.slice missing `range` param on `{}`",
-            function.symbol,
-        ))
-    })?;
-    let BasicValueEnum::StructValue(range_struct) = range else {
-        return Err(LlvmError::Codegen(format!(
-            "Binary.slice expected Range struct on `{}`, got `{range:?}`",
-            function.symbol,
-        )));
-    };
+    let payload = heap_payload::pointer_param(function, llvm_function);
+    let range_struct = nth_struct(function, llvm_function, 1, "range");
     let start = ctx
         .builder
         .build_extract_value(range_struct, 0, "start")
@@ -318,7 +284,7 @@ fn emit_bit_size<'ctx>(
     function: &IRFunction,
     llvm_function: FunctionValue<'ctx>,
 ) -> Result<(), LlvmError> {
-    let payload = heap_payload::pointer_param(function, llvm_function)?;
+    let payload = heap_payload::pointer_param(function, llvm_function);
     let bit_length = load_bit_length(ctx, payload, "bit_length")?;
     ctx.builder
         .build_return(Some(&bit_length))
@@ -334,7 +300,7 @@ fn emit_byte_size<'ctx>(
     llvm_function: FunctionValue<'ctx>,
 ) -> Result<(), LlvmError> {
     let i64_ty = ctx.context.i64_type();
-    let payload = heap_payload::pointer_param(function, llvm_function)?;
+    let payload = heap_payload::pointer_param(function, llvm_function);
     let bit_length = load_bit_length(ctx, payload, "bit_length")?;
     let byte_count = ctx
         .builder
@@ -355,8 +321,8 @@ fn emit_to_string<'ctx>(
     function: &IRFunction,
     llvm_function: FunctionValue<'ctx>,
 ) -> Result<(), LlvmError> {
-    let result_symbol = expect_enum_symbol(&function.return_type, function)?;
-    let payload = heap_payload::pointer_param(function, llvm_function)?;
+    let result_symbol = expect_enum_symbol(&function.return_type, function, "Binary.to_string");
+    let payload = heap_payload::pointer_param(function, llvm_function);
     let i64_ty = ctx.context.i64_type();
     let bit_length = load_bit_length(ctx, payload, "bit_length")?;
     let byte_count = ctx
@@ -404,8 +370,8 @@ fn emit_to_binary<'ctx>(
     function: &IRFunction,
     llvm_function: FunctionValue<'ctx>,
 ) -> Result<(), LlvmError> {
-    let result_symbol = expect_enum_symbol(&function.return_type, function)?;
-    let payload = heap_payload::pointer_param(function, llvm_function)?;
+    let result_symbol = expect_enum_symbol(&function.return_type, function, "Bits.to_binary");
+    let payload = heap_payload::pointer_param(function, llvm_function);
     let i64_ty = ctx.context.i64_type();
     let bit_length = load_bit_length(ctx, payload, "bit_length")?;
     let remainder = ctx
@@ -473,17 +439,4 @@ fn return_result<'ctx>(
 ) -> Result<(), LlvmError> {
     let value = build_enum_value(ctx, result_symbol, tag, &[payload])?;
     ctx.builder.build_return(Some(&value)).or_ice().map(|_| ())
-}
-
-fn expect_enum_symbol<'ty>(
-    ty: &'ty IRType,
-    function: &IRFunction,
-) -> Result<&'ty IRSymbol, LlvmError> {
-    match ty {
-        IRType::Enum(symbol) => Ok(symbol),
-        other => Err(LlvmError::Codegen(format!(
-            "binary intrinsic on `{}` expected an enum-typed return, got `{other:?}`",
-            function.symbol,
-        ))),
-    }
 }

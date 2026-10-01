@@ -65,5 +65,40 @@ mod structs;
 pub(crate) mod types;
 mod walker;
 
+use koja_ast::ast::{AliasDecl, Diagnostic, Expr};
+use koja_ast::identifier::ResolvedType;
+
+use crate::pipeline::local_scope::LocalScope;
+use crate::registry::GlobalRegistry;
+
+use ctx::ResolverEnv;
+use expr::resolve_expr_with_expected;
+
+pub(crate) use field_defaults::declaring_scope;
+pub(crate) use idents::{constant_named_by_ident, constant_named_by_path};
 pub(crate) use paths::static_dotted_path;
 pub(crate) use walker::resolve_file;
+
+/// Resolve `expr` with `expected` as the hint in a fresh scope made
+/// of `package`, the given alias roster, and no locals. This is the
+/// scope of a field default and of a constant value, both of which
+/// resolve where they are declared and nowhere else.
+pub(crate) fn resolve_in_declaring_scope(
+    expr: &mut Expr,
+    expected: Option<&ResolvedType>,
+    package: &str,
+    aliases: &[AliasDecl],
+    registry: &GlobalRegistry,
+    diagnostics: &mut Vec<Diagnostic>,
+) -> ResolvedType {
+    let mut env = ResolverEnv {
+        bound_overlay: None,
+        file_aliases: aliases,
+        package,
+        registry,
+    };
+    let mut scope = LocalScope::new();
+    let mut resolver = env.make_resolver(None, None, &[], &mut scope);
+    resolve_expr_with_expected(expr, expected, &mut resolver, diagnostics);
+    expr.resolution.clone()
+}

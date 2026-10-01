@@ -15,7 +15,7 @@ use crate::local::IRLocalId;
 use crate::package::IRPackage;
 use crate::struct_decl::IRStructDecl;
 use crate::types::{
-    ConstValue, IRBinOp, IRType, IRUnaryOp, LoweredBinaryPattern, LoweredBinarySegment, ValueId,
+    IRBinOp, IRType, IRUnaryOp, LoweredBinaryPattern, LoweredBinarySegment, ValueId,
 };
 use crate::union_decl::IRUnionDecl;
 
@@ -315,7 +315,7 @@ fn instruction_result_type(
         IRInstruction::Clone { dest, ty, .. } => (*dest, ty.clone()),
         IRInstruction::ClosureEquals { dest, .. } => (*dest, IRType::Bool),
         IRInstruction::Concat { dest, kind, .. } => (*dest, kind.ir_type()),
-        IRInstruction::Const { dest, value } => (*dest, const_type(value)),
+        IRInstruction::Const { dest, value } => (*dest, value.ir_type()),
         IRInstruction::DeepCopy { dest, ty, .. } => (*dest, ty.clone()),
         IRInstruction::ConsumeLocal { .. }
         | IRInstruction::DropLocal { .. }
@@ -961,7 +961,7 @@ fn require_slot_value_type(
     }
     require_same_type(
         actual,
-        unboxed_type(declared),
+        declared.unboxed(),
         &format!("{owner} {operation} value `{value}`"),
     );
 }
@@ -1034,38 +1034,12 @@ fn value_type<'a>(
     })
 }
 
-fn const_type(value: &ConstValue) -> IRType {
-    match value {
-        ConstValue::Binary(_) => IRType::Binary,
-        ConstValue::Bits { .. } => IRType::Bits,
-        ConstValue::Bool(_) => IRType::Bool,
-        ConstValue::Float32(_) => IRType::Float32,
-        ConstValue::Float64(_) => IRType::Float64,
-        ConstValue::Int8(_) => IRType::Int8,
-        ConstValue::Int16(_) => IRType::Int16,
-        ConstValue::Int32(_) => IRType::Int32,
-        ConstValue::Int64(_) => IRType::Int64,
-        ConstValue::String(_) => IRType::String,
-        ConstValue::UInt8(_) => IRType::UInt8,
-        ConstValue::UInt16(_) => IRType::UInt16,
-        ConstValue::UInt32(_) => IRType::UInt32,
-        ConstValue::UInt64(_) => IRType::UInt64,
-        ConstValue::Unit => IRType::Unit,
-    }
-}
-
 fn constant_type(value: &IRConstantValue) -> IRType {
     match value {
+        IRConstantValue::Built { ty, .. } => ty.clone(),
         IRConstantValue::EnumVariant { ty, .. } => IRType::Enum(ty.clone()),
-        IRConstantValue::Primitive(value) => const_type(value),
+        IRConstantValue::Primitive(value) => value.ir_type(),
         IRConstantValue::Struct { ty, .. } => IRType::Struct(ty.clone()),
-    }
-}
-
-fn unboxed_type(ty: &IRType) -> &IRType {
-    match ty {
-        IRType::Indirect(inner) => inner,
-        other => other,
     }
 }
 
@@ -1079,6 +1053,7 @@ mod tests {
     use crate::function::{
         BlockParam, BranchTarget, IRBasicBlock, IRBlockId, IRFunctionParam, IRTerminator,
     };
+    use crate::types::ConstValue;
 
     fn block(
         id: u32,

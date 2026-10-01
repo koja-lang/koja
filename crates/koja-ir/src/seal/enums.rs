@@ -30,8 +30,8 @@ use crate::function::{IRIndirectSlot, IRInstruction, IRSymbol};
 use crate::package::IRPackage;
 use crate::types::IRType;
 
-use super::seal_panic;
 use super::structs::seal_named_field_layout;
+use super::{field_type_matches, seal_panic};
 
 pub(super) fn seal_enum_decls(pkg: &IRPackage) {
     for (sym, decl) in &pkg.enums {
@@ -245,15 +245,6 @@ fn seal_indirect_payload(owner: &str, ty: &IRSymbol, variant: &IREnumVariant, pa
             name = variant.name,
         ));
     }
-}
-
-/// See `structs::field_type_matches`. Decl-side
-/// `Indirect(T)` matches an instruction-side `T`.
-fn field_type_matches(declared: &IRType, requested: &IRType) -> bool {
-    if declared == requested {
-        return true;
-    }
-    matches!(declared, IRType::Indirect(inner) if inner.as_ref() == requested)
 }
 
 fn payload_arity(payload: &IRVariantPayload) -> usize {

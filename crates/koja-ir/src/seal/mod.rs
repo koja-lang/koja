@@ -11,14 +11,17 @@
 //! (block shape, dominance of operand definitions, branch targets,
 //! locals, tail calls), [`types`] (per-instruction operand and result
 //! types), [`structs`], [`enums`], and [`closures`] (decl shape and
-//! the instructions that project them). Every `Call` must resolve to
-//! a function somewhere in the program or script.
+//! the instructions that project them), and [`constants`] (built
+//! constant inits and their startup order). Every `Call` must
+//! resolve to a function somewhere in the program or script.
 
 use crate::enum_decl::EnumPayloadInit;
-use crate::function::{IRBlockId, IRInstruction, IRTerminator};
+use crate::function::{IRInstruction, IRTerminator};
 use crate::types::{IRType, ValueId};
 
+mod calls;
 mod closures;
+mod constants;
 mod enums;
 mod function;
 mod program;
@@ -192,18 +195,11 @@ pub(super) fn terminator_operands(term: &IRTerminator) -> Vec<ValueId> {
     }
 }
 
-pub(super) fn terminator_targets(term: &IRTerminator) -> Vec<IRBlockId> {
-    match term {
-        IRTerminator::Branch(target) => vec![target.block],
-        IRTerminator::CondBranch {
-            then_target,
-            else_target,
-            ..
-        } => vec![then_target.block, else_target.block],
-        IRTerminator::Return { .. } | IRTerminator::TailCall { .. } | IRTerminator::Unreachable => {
-            vec![]
-        }
-    }
+/// Match exactly OR allow a decl `Indirect(T)` against an
+/// instruction-view `T`. Cycle-broken slots stay boxed in the decl
+/// but materialize as the unboxed value at every IR call site.
+pub(super) fn field_type_matches(declared: &IRType, requested: &IRType) -> bool {
+    declared == requested || declared.unboxed() == requested
 }
 
 pub(super) fn seal_panic(message: &str) -> ! {

@@ -3,12 +3,12 @@
 //! of [`super::lower_pattern_check`] and the literal alternative
 //! arm of `or_pattern::emit_or_alternative`.
 
-use koja_ast::ast::{Diagnostic, Literal};
+use koja_ast::ast::Literal;
 use koja_ast::span::Span;
 use koja_typecheck::LiteralCoercion;
 
-use super::super::ctx::{FnLowerCtx, LowerOutput};
-use super::super::ops::{const_value_type, lower_literal};
+use super::super::ctx::FnLowerCtx;
+use super::super::ops::lower_literal;
 use crate::function::{IRBlockId, IRInstruction};
 use crate::types::{IRBinOp, IRType, ValueId};
 
@@ -27,13 +27,12 @@ pub(super) fn emit_literal_eq(
     coercion: Option<&LiteralCoercion>,
     span: Span,
     subject: ValueId,
-    ctx: &mut FnLowerCtx,
+    ctx: &mut FnLowerCtx<'_>,
     block: IRBlockId,
-    diagnostics: &mut Vec<Diagnostic>,
 ) -> Result<ValueId, ()> {
     let target = coercion.and_then(LiteralCoercion::numeric_width);
-    let const_value = lower_literal(value, span, target, diagnostics)?;
-    let const_ty = const_value_type(&const_value);
+    let const_value = lower_literal(value, span, target, &mut ctx.output.diagnostics)?;
+    let const_ty = const_value.ir_type();
     let const_dest = ctx.fresh_value(const_ty.clone());
     ctx.cfg.append(
         block,
@@ -64,18 +63,9 @@ pub(super) fn emit_literal_eq_or_panic(
     coercion: Option<&LiteralCoercion>,
     span: Span,
     subject: ValueId,
-    ctx: &mut FnLowerCtx,
+    ctx: &mut FnLowerCtx<'_>,
     block: IRBlockId,
-    output: &mut LowerOutput,
 ) -> ValueId {
-    emit_literal_eq(
-        value,
-        coercion,
-        span,
-        subject,
-        ctx,
-        block,
-        &mut output.diagnostics,
-    )
-    .expect("IR lower: typecheck must have rejected non-lowerable literal")
+    emit_literal_eq(value, coercion, span, subject, ctx, block)
+        .expect("IR lower: typecheck must have rejected non-lowerable literal")
 }

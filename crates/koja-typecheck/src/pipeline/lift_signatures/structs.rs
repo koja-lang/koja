@@ -87,8 +87,9 @@ fn lift_struct_definition(
     scope.registry.set_struct_definition(
         id,
         StructDefinition {
-            fields,
+            aliases: scope.aliases.to_vec(),
             conformances: BTreeMap::new(),
+            fields,
         },
     );
 }

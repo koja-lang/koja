@@ -1,10 +1,13 @@
 //! Bare identifier, qualified member, and `self` resolution.
 
 use koja_ast::ast::{Diagnostic, Expr, ExprKind};
-use koja_ast::identifier::{AnonymousKind, Identifier, LocalId, Resolution, ResolvedType};
+use koja_ast::identifier::{
+    AnonymousKind, GlobalRegistryId, Identifier, LocalId, Resolution, ResolvedType,
+};
 use koja_ast::span::Span;
 
 use crate::pipeline::aliases::rewrite_through_aliases;
+use crate::pipeline::lift_signatures::ResolutionScope;
 use crate::pipeline::visibility::check_reference_visibility;
 use crate::registry::{
     FunctionLookup, FunctionSignature, GlobalKind, GlobalRegistry, RegistryEntry, VisibilityScope,
@@ -38,25 +41,15 @@ pub(super) fn resolve_ident(
     }
     let global_id =
         alias_target(name, resolver).unwrap_or_else(|| Identifier::single(resolver.package, name));
-    if let Some((id, entry)) = resolver.registry.lookup(&global_id) {
-        match &entry.kind {
-            GlobalKind::Constant(Some(def)) => {
-                *resolution = Resolution::Global(id);
-                return def.ty.clone();
-            }
-            GlobalKind::Function(_) => {
-                diagnose_explicit_reference(name, &global_id, resolver.registry, span, diagnostics);
-                return ResolvedType::unresolved();
-            }
-            _ => {}
-        }
-    }
-    let fallback = Identifier::single("Global", name);
-    if let Some((id, entry)) = resolver.registry.lookup(&fallback)
-        && let GlobalKind::Constant(Some(def)) = &entry.kind
+    if let Some((_, entry)) = resolver.registry.lookup(&global_id)
+        && matches!(entry.kind, GlobalKind::Function(_))
     {
+        diagnose_explicit_reference(name, &global_id, resolver.registry, span, diagnostics);
+        return ResolvedType::unresolved();
+    }
+    if let Some(id) = constant_named_by_ident(name, resolver.resolution_scope()) {
         *resolution = Resolution::Global(id);
-        return def.ty.clone();
+        return stamped_constant_type(id, resolver.registry);
     }
     diagnostics.push(Diagnostic::error(
         format!("unknown identifier `{name}` in this scope"),
@@ -75,6 +68,89 @@ fn alias_target(name: &str, resolver: &Resolver<'_>) -> Option<Identifier> {
         resolver.package,
         resolver.registry,
     )
+}
+
+/// The constant a bare `name` reads in `scope`, when one exists. A
+/// file alias that binds the name wins, then the current package,
+/// then the auto-imported `Global` package. A current-package entry
+/// of another kind shadows nothing and falls through to `Global`.
+/// Locals are the caller's concern. Shared by [`resolve_ident`] and
+/// the constant lift, which orders constants by the reads this finds.
+pub(crate) fn constant_named_by_ident(
+    name: &str,
+    scope: ResolutionScope<'_>,
+) -> Option<GlobalRegistryId> {
+    let global_id = rewrite_through_aliases(
+        scope.aliases,
+        std::slice::from_ref(&name.to_string()),
+        scope.package,
+        scope.registry,
+    )
+    .unwrap_or_else(|| Identifier::single(scope.package, name));
+    if let Some(id) = constant_at(&global_id, scope.registry) {
+        return Some(id);
+    }
+    constant_at(&Identifier::single("Global", name), scope.registry)
+}
+
+/// The constant a static dotted `path` reads in `scope`, when one
+/// exists. The path is either `Owner.NAME`, where the prefix names a
+/// type that owns the constant, or `Pkg.NAME`, where `Pkg` is a
+/// package and not a type in scope. Locals are the caller's concern.
+/// Shared by [`resolve_type_constant`] and the constant lift.
+pub(crate) fn constant_named_by_path(
+    path: &[String],
+    scope: ResolutionScope<'_>,
+) -> Option<GlobalRegistryId> {
+    if let Some(id) = type_owned_constant(path, scope) {
+        return Some(id);
+    }
+    let [package, name] = path else {
+        return None;
+    };
+    if lookup_type(std::slice::from_ref(package), scope).is_some() {
+        return None;
+    }
+    constant_at(&Identifier::single(package, name), scope.registry)
+}
+
+/// `Owner.NAME` where every segment but the last names a type and
+/// the type owns a constant `NAME`.
+fn type_owned_constant(path: &[String], scope: ResolutionScope<'_>) -> Option<GlobalRegistryId> {
+    let (name, owner) = path.split_last()?;
+    if owner.is_empty() {
+        return None;
+    }
+    let (_, owner_entry) = lookup_type(owner, scope)?;
+    let target = Identifier::member(
+        owner_entry.identifier.package(),
+        owner_entry.identifier.path(),
+        name,
+    );
+    constant_at(&target, scope.registry)
+}
+
+/// The id at `identifier` when the registry holds a constant there.
+fn constant_at(identifier: &Identifier, registry: &GlobalRegistry) -> Option<GlobalRegistryId> {
+    let (id, entry) = registry.lookup(identifier)?;
+    matches!(entry.kind, GlobalKind::Constant(_)).then_some(id)
+}
+
+/// The stamped type of constant `id`. Every constant is lifted before
+/// any body resolves, and constants lift in dependency order, so a
+/// missing definition is a pipeline bug.
+fn stamped_constant_type(id: GlobalRegistryId, registry: &GlobalRegistry) -> ResolvedType {
+    let entry = registry
+        .get(id)
+        .expect("constant id came from a registry lookup");
+    match &entry.kind {
+        GlobalKind::Constant(Some(definition)) => definition.ty.clone(),
+        _ => panic!(
+            "constant `{}` read before its definition was stamped. Constants lift in \
+             dependency order before body resolution",
+            entry.identifier,
+        ),
+    }
 }
 
 /// Resolve a qualified member read, which is a constant nested under
@@ -161,29 +237,17 @@ fn resolve_type_constant(
     resolver: &Resolver<'_>,
     diagnostics: &mut Vec<Diagnostic>,
 ) -> Option<ResolvedType> {
-    let (name, owner) = path.split_last()?;
+    let (_, owner) = path.split_last()?;
     if owner.is_empty() || resolver.scope.lookup(&owner[0]).is_some() {
         return None;
     }
-    let (_, owner_entry) = lookup_type(owner, resolver.resolution_scope())?;
-    let target = Identifier::member(
-        owner_entry.identifier.package(),
-        owner_entry.identifier.path(),
-        name,
-    );
-    let (id, entry) = resolver.registry.lookup(&target)?;
-    let GlobalKind::Constant(definition) = &entry.kind else {
-        return None;
-    };
-    let Some(definition) = definition else {
-        panic!(
-            "resolve_type_constant found `{}` without a stamped definition. lifting runs before \
-             body resolution",
-            entry.identifier,
-        );
-    };
+    let id = type_owned_constant(path, resolver.resolution_scope())?;
+    let entry = resolver
+        .registry
+        .get(id)
+        .expect("constant id came from a registry lookup");
     check_reference_visibility(entry, resolver.package, expr.span, diagnostics);
-    let ty = definition.ty.clone();
+    let ty = stamped_constant_type(id, resolver.registry);
     expr.kind = ExprKind::Ident {
         name: path.join("."),
         resolution: Resolution::Global(id),

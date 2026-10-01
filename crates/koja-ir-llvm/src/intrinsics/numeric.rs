@@ -24,6 +24,7 @@ use crate::emit::enums::build_enum_value;
 use crate::emit::ops::emit_is_finite;
 use crate::error::{IceExt, LlvmError};
 use crate::intrinsics::result;
+use crate::intrinsics::util::nth_param;
 
 pub(super) fn emit_numeric_convert<'ctx>(
     ctx: &EmitContext<'ctx>,
@@ -31,23 +32,14 @@ pub(super) fn emit_numeric_convert<'ctx>(
     llvm_function: FunctionValue<'ctx>,
     convert: NumericConvert,
 ) -> Result<(), LlvmError> {
-    let entry = ctx.context.append_basic_block(llvm_function, "entry");
-    ctx.builder.position_at_end(entry);
-    let receiver = llvm_function.get_nth_param(0).ok_or_else(|| {
-        LlvmError::Codegen(format!(
-            "numeric convert intrinsic `{}` missing receiver param",
-            function.symbol,
-        ))
-    })?;
+    let receiver = nth_param(function, llvm_function, 0, "self");
 
     let result_symbol = match &function.return_type {
         IRType::Enum(symbol) => symbol.clone(),
-        other => {
-            return Err(LlvmError::Codegen(format!(
-                "numeric convert intrinsic `{}` expected a Result-enum return, got `{other:?}`",
-                function.symbol,
-            )));
-        }
+        other => panic!(
+            "numeric convert intrinsic `{}` expected a Result-enum return, got `{other:?}`",
+            function.symbol,
+        ),
     };
 
     if matches!(convert, NumericConvert::FloatToFloat32) {
@@ -187,7 +179,7 @@ pub(super) fn build_conversion_error<'ctx>(
     result_symbol: &IRSymbol,
     variant: &str,
 ) -> Result<BasicValueEnum<'ctx>, LlvmError> {
-    let error_symbol = conversion_error_symbol(ctx, result_symbol)?;
+    let error_symbol = conversion_error_symbol(ctx, result_symbol);
     let tag = ctx.layouts.enum_variant_tag(&error_symbol, variant);
     let error_value = build_enum_value(ctx, &error_symbol, tag, &[])?;
     build_enum_value(
@@ -200,24 +192,21 @@ pub(super) fn build_conversion_error<'ctx>(
 
 /// Recover `NumericConversionError`'s symbol from the `Result`'s `Err`
 /// variant payload type.
-fn conversion_error_symbol<'ctx>(
-    ctx: &EmitContext<'ctx>,
-    result_symbol: &IRSymbol,
-) -> Result<IRSymbol, LlvmError> {
+fn conversion_error_symbol<'ctx>(ctx: &EmitContext<'ctx>, result_symbol: &IRSymbol) -> IRSymbol {
     let payload = ctx
         .layouts
         .enum_variant_payload(result_symbol, result::err_tag(ctx, result_symbol));
     let IRVariantPayload::Tuple(types) = &payload else {
-        return Err(LlvmError::Codegen(format!(
-            "`{result_symbol}`'s Err variant payload is not a tuple (stdlib invariant violation)",
-        )));
+        panic!(
+            "`{result_symbol}`'s Err variant payload is not a tuple (stdlib invariant violation)"
+        );
     };
     match types.as_slice() {
-        [IRType::Enum(symbol)] => Ok(symbol.clone()),
-        other => Err(LlvmError::Codegen(format!(
+        [IRType::Enum(symbol)] => symbol.clone(),
+        other => panic!(
             "`{result_symbol}`'s Err payload should be a single enum (NumericConversionError), \
              got `{other:?}`",
-        ))),
+        ),
     }
 }
 

@@ -33,7 +33,6 @@
 //! and contribute no orphan blocks to the CFG.
 
 use koja_ast::ast::{Expr, MatchArm, Pattern};
-use koja_typecheck::GlobalRegistry;
 
 use crate::function::{BranchTarget, IRBlockId, IRInstruction, IRTerminator};
 use crate::local::IRLocalId;
@@ -41,7 +40,7 @@ use crate::types::{IRType, ValueId};
 
 use super::arms::{ArmJoinState, join_arm_states, lower_arm_into};
 use super::bind_detach::detach_mutated_binds;
-use super::ctx::{FnLowerCtx, LowerOutput};
+use super::ctx::FnLowerCtx;
 use super::expr::lower_expr;
 use super::ownership::drop_discarded_temp;
 use super::patterns::{
@@ -58,17 +57,15 @@ pub(super) struct MatchLowering<'a> {
 
 pub(super) fn lower_match(
     inputs: MatchLowering<'_>,
-    ctx: &mut FnLowerCtx,
+    ctx: &mut FnLowerCtx<'_>,
     block: IRBlockId,
-    registry: &GlobalRegistry,
-    output: &mut LowerOutput,
 ) -> Result<(ValueId, IRBlockId), ()> {
     let MatchLowering {
         subject,
         arms,
         result_ty,
     } = inputs;
-    let (subject_value, block) = lower_expr(subject, ctx, block, registry, output)?;
+    let (subject_value, block) = lower_expr(subject, ctx, block)?;
     // Track the owned subject while its arms lower so early exits
     // (`return` / `break` inside an arm) can release it. They leave
     // before the arm tail's release below runs.
@@ -103,11 +100,10 @@ pub(super) fn lower_match(
         // values that the prior arm never produced.
         ctx.restore_slot_states(entry_snapshot.clone());
         let inputs = PatternInputs {
-            registry,
             subject: subject_value,
             subject_ty: &subject.resolution,
         };
-        let (check, _) = lower_pattern_check(&arm.pattern, inputs, ctx, current_test, output)?;
+        let (check, _) = lower_pattern_check(&arm.pattern, inputs, ctx, current_test)?;
         let arm_binds = bind_slots(&arm.pattern, subject_value, &check, ctx);
         // An unguarded catch-all has no failure edge, so it never
         // needs a fall-through. Any other arm, including a
@@ -150,7 +146,7 @@ pub(super) fn lower_match(
             }
         }
         if let Some(guard) = &arm.guard {
-            let (guard_value, after) = lower_expr(guard, ctx, success_block, registry, output)?;
+            let (guard_value, after) = lower_expr(guard, ctx, success_block)?;
             ctx.cfg.set_terminator(
                 after,
                 IRTerminator::CondBranch {
@@ -161,15 +157,7 @@ pub(super) fn lower_match(
             );
         }
         detach_mutated_binds(&arm_binds, &arm.body, ctx, body_block);
-        let arm_tail = lower_arm_into(
-            &arm.body,
-            ctx,
-            body_block,
-            merge_block,
-            &result_ty,
-            registry,
-            output,
-        )?;
+        let arm_tail = lower_arm_into(&arm.body, ctx, body_block, merge_block, &result_ty)?;
         // The match consumes its subject. When the subject is an
         // owned heap temp (`match self.handle(...)`), exactly one arm
         // body executes, so each arm's tail releases it after the
@@ -215,7 +203,7 @@ fn bind_slots(
     pattern: &Pattern,
     subject: ValueId,
     check: &PatternCheck,
-    ctx: &FnLowerCtx,
+    ctx: &FnLowerCtx<'_>,
 ) -> Vec<(IRLocalId, IRType)> {
     let payload_binds = match check {
         PatternCheck::CatchAll { binds } => binds,
@@ -242,7 +230,7 @@ fn wire_test_chain(
     mode: ChainMode,
     success_block: IRBlockId,
     fall_through: IRBlockId,
-    ctx: &mut FnLowerCtx,
+    ctx: &mut FnLowerCtx<'_>,
 ) {
     for (index, step) in steps.iter().enumerate() {
         let next_step_block = steps.get(index + 1).map(|next| next.test_block);
@@ -265,7 +253,7 @@ fn emit_payload_binds(
     binds: &[PayloadBind],
     body_block: IRBlockId,
     subject: ValueId,
-    ctx: &mut FnLowerCtx,
+    ctx: &mut FnLowerCtx<'_>,
 ) {
     for bind in binds {
         let mut current = subject;
@@ -348,7 +336,7 @@ fn emit_payload_binds(
 /// by every arm whose final-step failure edge has nowhere else to
 /// go. Typecheck has proven these edges are statically unreachable,
 /// and the block keeps the CFG well-formed.
-fn trap_block_for(slot: &mut Option<IRBlockId>, ctx: &mut FnLowerCtx) -> IRBlockId {
+fn trap_block_for(slot: &mut Option<IRBlockId>, ctx: &mut FnLowerCtx<'_>) -> IRBlockId {
     if let Some(existing) = *slot {
         return existing;
     }

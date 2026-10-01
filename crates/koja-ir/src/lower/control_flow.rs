@@ -13,13 +13,12 @@
 //! type-matching arg.
 
 use koja_ast::ast::{BinOp, CondArm, Expr, Statement};
-use koja_typecheck::GlobalRegistry;
 
 use crate::function::{BranchTarget, IRBlockId, IRInstruction, IRTerminator};
 use crate::types::{ConstValue, IRType, ValueId};
 
 use super::arms::{ArmJoinState, emit_unit, join_arm_states, lower_arm_into, lower_expr_arm_into};
-use super::ctx::{FnLowerCtx, LowerOutput};
+use super::ctx::FnLowerCtx;
 use super::expr::lower_expr;
 
 /// AST-side inputs to [`lower_if`].
@@ -49,10 +48,8 @@ pub(super) struct IfLowering<'a> {
 /// passes a synthesized `Const::Unit` to the merge directly.
 pub(super) fn lower_if(
     inputs: IfLowering<'_>,
-    ctx: &mut FnLowerCtx,
+    ctx: &mut FnLowerCtx<'_>,
     block: IRBlockId,
-    registry: &GlobalRegistry,
-    output: &mut LowerOutput,
 ) -> Result<(ValueId, IRBlockId), ()> {
     let IfLowering {
         condition,
@@ -60,7 +57,7 @@ pub(super) fn lower_if(
         result_ty,
         then_body,
     } = inputs;
-    let (cond_value, block) = lower_expr(condition, ctx, block, registry, output)?;
+    let (cond_value, block) = lower_expr(condition, ctx, block)?;
     let then_block = ctx.fresh_block("if_then");
     let merge_block = ctx.fresh_block("if_merge");
     let result_id = ctx.declare_merge_param(merge_block, result_ty.clone());
@@ -87,28 +84,12 @@ pub(super) fn lower_if(
     let entry_snapshot = ctx.snapshot_slot_states();
     let mut arm_states: Vec<ArmJoinState> = Vec::with_capacity(2);
 
-    let then_tail = lower_arm_into(
-        then_body,
-        ctx,
-        then_block,
-        merge_block,
-        &result_ty,
-        registry,
-        output,
-    )?;
+    let then_tail = lower_arm_into(then_body, ctx, then_block, merge_block, &result_ty)?;
     arm_states.push((then_tail, ctx.snapshot_slot_states()));
 
     if let (Some(else_body), Some(else_block)) = (else_body, else_block) {
         ctx.restore_slot_states(entry_snapshot.clone());
-        let else_tail = lower_arm_into(
-            else_body,
-            ctx,
-            else_block,
-            merge_block,
-            &result_ty,
-            registry,
-            output,
-        )?;
+        let else_tail = lower_arm_into(else_body, ctx, else_block, merge_block, &result_ty)?;
         arm_states.push((else_tail, ctx.snapshot_slot_states()));
     } else {
         // No `else` arm: the cond=false edge bypasses the body
@@ -139,10 +120,8 @@ pub(super) struct CondLowering<'a> {
 /// lives in its own `cond_body_<i>` block.
 pub(super) fn lower_cond(
     inputs: CondLowering<'_>,
-    ctx: &mut FnLowerCtx,
+    ctx: &mut FnLowerCtx<'_>,
     block: IRBlockId,
-    registry: &GlobalRegistry,
-    output: &mut LowerOutput,
 ) -> Result<(ValueId, IRBlockId), ()> {
     let CondLowering {
         arms,
@@ -170,8 +149,7 @@ pub(super) fn lower_cond(
 
     let mut current_test = block;
     for (index, arm) in arms.iter().enumerate() {
-        let (cond_value, after_cond) =
-            lower_expr(&arm.condition, ctx, current_test, registry, output)?;
+        let (cond_value, after_cond) = lower_expr(&arm.condition, ctx, current_test)?;
         let body_block = body_blocks[index];
         let next_test = chained_test_blocks.get(index).copied();
         let fall_through = match (next_test, else_block) {
@@ -195,15 +173,7 @@ pub(super) fn lower_cond(
             },
         );
         ctx.restore_slot_states(entry_snapshot.clone());
-        let arm_tail = lower_arm_into(
-            &arm.body,
-            ctx,
-            body_block,
-            merge_block,
-            &result_ty,
-            registry,
-            output,
-        )?;
+        let arm_tail = lower_arm_into(&arm.body, ctx, body_block, merge_block, &result_ty)?;
         arm_states.push((arm_tail, ctx.snapshot_slot_states()));
         if let Some(next) = next_test {
             current_test = next;
@@ -212,15 +182,7 @@ pub(super) fn lower_cond(
 
     if let (Some(else_body), Some(else_block)) = (else_body, else_block) {
         ctx.restore_slot_states(entry_snapshot.clone());
-        let else_tail = lower_arm_into(
-            else_body,
-            ctx,
-            else_block,
-            merge_block,
-            &result_ty,
-            registry,
-            output,
-        )?;
+        let else_tail = lower_arm_into(else_body, ctx, else_block, merge_block, &result_ty)?;
         arm_states.push((else_tail, ctx.snapshot_slot_states()));
     } else if !arms.is_empty() {
         // No else and parser-produced cond: contribute the
@@ -257,10 +219,8 @@ pub(super) struct TernaryLowering<'a> {
 /// ternary arm cannot syntactically contain a `return`).
 pub(super) fn lower_ternary(
     inputs: TernaryLowering<'_>,
-    ctx: &mut FnLowerCtx,
+    ctx: &mut FnLowerCtx<'_>,
     block: IRBlockId,
-    registry: &GlobalRegistry,
-    output: &mut LowerOutput,
 ) -> Result<(ValueId, IRBlockId), ()> {
     let TernaryLowering {
         condition,
@@ -268,7 +228,7 @@ pub(super) fn lower_ternary(
         else_expr,
         result_ty,
     } = inputs;
-    let (cond_value, block) = lower_expr(condition, ctx, block, registry, output)?;
+    let (cond_value, block) = lower_expr(condition, ctx, block)?;
     let then_block = ctx.fresh_block("ternary_then");
     let else_block = ctx.fresh_block("ternary_else");
     let merge_block = ctx.fresh_block("ternary_merge");
@@ -285,26 +245,10 @@ pub(super) fn lower_ternary(
 
     let entry_snapshot = ctx.snapshot_slot_states();
 
-    lower_expr_arm_into(
-        then_expr,
-        ctx,
-        then_block,
-        merge_block,
-        &result_ty,
-        registry,
-        output,
-    )?;
+    lower_expr_arm_into(then_expr, ctx, then_block, merge_block, &result_ty)?;
     let then_post = ctx.snapshot_slot_states();
     ctx.restore_slot_states(entry_snapshot);
-    lower_expr_arm_into(
-        else_expr,
-        ctx,
-        else_block,
-        merge_block,
-        &result_ty,
-        registry,
-        output,
-    )?;
+    lower_expr_arm_into(else_expr, ctx, else_block, merge_block, &result_ty)?;
     let else_post = ctx.snapshot_slot_states();
     ctx.merge_slot_states(vec![then_post, else_post]);
     Ok((result_id, merge_block))
@@ -322,12 +266,10 @@ pub(super) fn lower_short_circuit(
     op: BinOp,
     left: &Expr,
     right: &Expr,
-    ctx: &mut FnLowerCtx,
+    ctx: &mut FnLowerCtx<'_>,
     block: IRBlockId,
-    registry: &GlobalRegistry,
-    output: &mut LowerOutput,
 ) -> Result<(ValueId, IRBlockId), ()> {
-    let (left_value, after_left) = lower_expr(left, ctx, block, registry, output)?;
+    let (left_value, after_left) = lower_expr(left, ctx, block)?;
     let (label, bypass_value, right_on_true) = match op {
         BinOp::And => ("and", false, true),
         BinOp::Or => ("or", true, false),
@@ -361,15 +303,7 @@ pub(super) fn lower_short_circuit(
     );
 
     let bypass_state = ctx.snapshot_slot_states();
-    lower_expr_arm_into(
-        right,
-        ctx,
-        right_block,
-        merge_block,
-        &IRType::Bool,
-        registry,
-        output,
-    )?;
+    lower_expr_arm_into(right, ctx, right_block, merge_block, &IRType::Bool)?;
     let right_state = ctx.snapshot_slot_states();
     ctx.merge_slot_states(vec![bypass_state, right_state]);
     Ok((result_id, merge_block))

@@ -19,6 +19,7 @@ use koja_ir::{DebugImpl, IRFunction, IntType};
 
 use crate::ctx::EmitContext;
 use crate::error::{IceExt, LlvmError};
+use crate::intrinsics::util::nth_param;
 use crate::runtime::{
     FORMAT_BOOL_SYMBOL, FORMAT_F32_SYMBOL, FORMAT_F64_SYMBOL, FORMAT_I64_SYMBOL, FORMAT_U64_SYMBOL,
     declare_runtime_format,
@@ -30,14 +31,7 @@ pub(super) fn emit_format<'ctx>(
     llvm_function: FunctionValue<'ctx>,
     impl_: DebugImpl,
 ) -> Result<(), LlvmError> {
-    let entry = ctx.context.append_basic_block(llvm_function, "entry");
-    ctx.builder.position_at_end(entry);
-    let raw = llvm_function.get_nth_param(0).ok_or_else(|| {
-        LlvmError::Codegen(format!(
-            "Debug.format missing `self` param on `{}`",
-            function.symbol,
-        ))
-    })?;
+    let raw = nth_param(function, llvm_function, 0, "self");
     let payload = match impl_ {
         DebugImpl::Bool => format_via_i64(ctx, function, raw, FORMAT_BOOL_SYMBOL)?,
         DebugImpl::Float => format_via_f64(ctx, function, raw)?,
@@ -62,12 +56,10 @@ fn format_via_i64<'ctx>(
 ) -> Result<BasicValueEnum<'ctx>, LlvmError> {
     let int_value = match raw {
         BasicValueEnum::IntValue(v) => v,
-        other => {
-            return Err(LlvmError::Codegen(format!(
-                "Debug.format on `{}` expected int param, got `{other:?}`",
-                function.symbol,
-            )));
-        }
+        other => panic!(
+            "Debug.format on `{}` expected int param, got `{other:?}`",
+            function.symbol,
+        ),
     };
     let i64_ty = ctx.context.i64_type();
     let widened = ctx
@@ -85,12 +77,10 @@ fn format_via_f32<'ctx>(
 ) -> Result<BasicValueEnum<'ctx>, LlvmError> {
     let float_value = match raw {
         BasicValueEnum::FloatValue(v) => v,
-        other => {
-            return Err(LlvmError::Codegen(format!(
-                "Float32.format on `{}` expected float param, got `{other:?}`",
-                function.symbol,
-            )));
-        }
+        other => panic!(
+            "Float32.format on `{}` expected float param, got `{other:?}`",
+            function.symbol,
+        ),
     };
     let f32_ty = ctx.context.f32_type();
     let helper = declare_runtime_format(ctx, FORMAT_F32_SYMBOL, f32_ty.into());
@@ -104,12 +94,10 @@ fn format_via_f64<'ctx>(
 ) -> Result<BasicValueEnum<'ctx>, LlvmError> {
     let float_value = match raw {
         BasicValueEnum::FloatValue(v) => v,
-        other => {
-            return Err(LlvmError::Codegen(format!(
-                "Float.format on `{}` expected float param, got `{other:?}`",
-                function.symbol,
-            )));
-        }
+        other => panic!(
+            "Float.format on `{}` expected float param, got `{other:?}`",
+            function.symbol,
+        ),
     };
     let f64_ty = ctx.context.f64_type();
     let helper = declare_runtime_format(ctx, FORMAT_F64_SYMBOL, f64_ty.into());
@@ -130,12 +118,10 @@ fn format_via_int<'ctx>(
 ) -> Result<BasicValueEnum<'ctx>, LlvmError> {
     let int_value = match raw {
         BasicValueEnum::IntValue(v) => v,
-        other => {
-            return Err(LlvmError::Codegen(format!(
-                "Debug.format on `{}` expected int param, got `{other:?}`",
-                function.symbol,
-            )));
-        }
+        other => panic!(
+            "Debug.format on `{}` expected int param, got `{other:?}`",
+            function.symbol,
+        ),
     };
     let i64_ty = ctx.context.i64_type();
     let widened = if ty.is_signed() {
