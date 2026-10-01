@@ -314,31 +314,32 @@ fn match_guarded_arm_emits_dedicated_guard_block_with_cond_branch() {
 }
 
 #[test]
-fn match_struct_destructure_emits_field_geps_and_no_tag_check() {
+fn match_struct_destructure_emits_field_extracts_and_no_tag_check() {
     // A plain-struct destructure pattern always matches, so the IR
     // emits no `EnumTagGet` and no `match_test_<n>` block. The
-    // per-field bindings lower to `getelementptr` + `load` chains
-    // labelled `field_<index>` against the subject struct.
+    // per-field bindings lower to `extractvalue`s labelled
+    // `field_<index>` against the subject struct. The subject comes
+    // in as a parameter so LLVM cannot fold the extracts away.
     let source = "
         struct Point
           x: Int
           y: Int
         end
 
-        fn add -> Int
-          match Point{x: 3, y: 4}
+        fn add(p: Point) -> Int
+          match p
             Point{x: a, y: b} -> a + b
           end
         end
 
-        add()
+        add(Point{x: 3, y: 4})
         ";
     let script = lower(&dedent(source));
     let ir_text = emit_script_llvm_ir(&script, APP_NAME).expect("emit_script_llvm_ir");
     assert_main_shape(&ir_text);
     let add_body = extract_function_body(&ir_text, "TestApp.add");
-    assert_contains(add_body, "field_0");
-    assert_contains(add_body, "field_1");
+    assert_contains(add_body, "%field_0 = extractvalue %TestApp.Point");
+    assert_contains(add_body, "%field_1 = extractvalue %TestApp.Point");
     assert_contains(add_body, "match_body_0");
     assert!(
         !add_body.contains("match_test_"),

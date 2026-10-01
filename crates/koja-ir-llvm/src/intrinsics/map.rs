@@ -12,6 +12,7 @@ use koja_ir::{IRFunction, IRType, MapMethod};
 use crate::ctx::EmitContext;
 use crate::error::LlvmError;
 use crate::intrinsics::hashtable;
+use crate::types::abi_size;
 use inkwell::values::FunctionValue;
 
 pub(super) fn emit_map<'ctx>(
@@ -52,8 +53,8 @@ fn map_layout<'ctx, 'ty>(
     function: &'ty IRFunction,
 ) -> Result<hashtable::HashtableLayout<'ty>, LlvmError> {
     let (key, value) = key_value(method, function);
-    let key_size = hashtable::ir_byte_size(ctx, key)?;
-    let value_size = hashtable::ir_byte_size(ctx, value)?;
+    let key_size = abi_size(ctx, key)?;
+    let value_size = abi_size(ctx, value)?;
     Ok(hashtable::HashtableLayout {
         entry_size: key_size + value_size,
         key_size,

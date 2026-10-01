@@ -30,16 +30,7 @@ use koja_ir::{FunctionKind, IRFunction, IRType};
 
 use crate::ctx::EmitContext;
 use crate::error::LlvmError;
-use crate::types::ir_basic_type;
-
-/// Which per-element ownership op a collection copy body runs after
-/// `memcpy`ing the buffer(s): `Acquire` for clone glue (rc sharing)
-/// or `Deep` for deep-copy glue (physically independent storage).
-#[derive(Clone, Copy)]
-pub(super) enum ElementCopy {
-    Acquire,
-    Deep,
-}
+use crate::intrinsics::element::ElementOp;
 
 /// Entry point from [`crate::function::define_function`] for an
 /// empty-block [`FunctionKind::CloneGlue`] / [`FunctionKind::DeepCopyGlue`]
@@ -55,10 +46,10 @@ pub(crate) fn emit_collection_glue_body<'ctx>(
     let operand = &function.params[0].ty;
     match (&function.kind, operand) {
         (FunctionKind::CloneGlue, IRType::List(element)) => {
-            list::copy_list(ctx, function, llvm_function, element, ElementCopy::Acquire)
+            list::copy_list(ctx, function, llvm_function, element, ElementOp::Acquire)
         }
         (FunctionKind::DeepCopyGlue, IRType::List(element)) => {
-            list::copy_list(ctx, function, llvm_function, element, ElementCopy::Deep)
+            list::copy_list(ctx, function, llvm_function, element, ElementOp::DeepCopy)
         }
         (FunctionKind::DropGlue, IRType::List(element)) => {
             list::drop_list(ctx, function, llvm_function, element)
@@ -69,7 +60,7 @@ pub(crate) fn emit_collection_glue_body<'ctx>(
             llvm_function,
             element,
             None,
-            ElementCopy::Acquire,
+            ElementOp::Acquire,
         ),
         (FunctionKind::DeepCopyGlue, IRType::Set(element)) => table::copy_table(
             ctx,
@@ -77,7 +68,7 @@ pub(crate) fn emit_collection_glue_body<'ctx>(
             llvm_function,
             element,
             None,
-            ElementCopy::Deep,
+            ElementOp::DeepCopy,
         ),
         (FunctionKind::DropGlue, IRType::Set(element)) => {
             table::drop_table(ctx, function, llvm_function, element, None)
@@ -88,7 +79,7 @@ pub(crate) fn emit_collection_glue_body<'ctx>(
             llvm_function,
             key,
             Some(value),
-            ElementCopy::Acquire,
+            ElementOp::Acquire,
         ),
         (FunctionKind::DeepCopyGlue, IRType::Map { key, value }) => table::copy_table(
             ctx,
@@ -96,7 +87,7 @@ pub(crate) fn emit_collection_glue_body<'ctx>(
             llvm_function,
             key,
             Some(value),
-            ElementCopy::Deep,
+            ElementOp::DeepCopy,
         ),
         (FunctionKind::DropGlue, IRType::Map { key, value }) => {
             table::drop_table(ctx, function, llvm_function, key, Some(value))
@@ -108,16 +99,6 @@ pub(crate) fn emit_collection_glue_body<'ctx>(
             function.symbol,
         ),
     }
-}
-
-/// ABI byte size of `ty` on the host triple: the same target-data
-/// the rest of the layout pipeline (and the hashtable intrinsics) read,
-/// so glue buffer arithmetic matches the emitted field sizes exactly.
-pub(super) fn abi_size<'ctx>(ctx: &EmitContext<'ctx>, ty: &IRType) -> Result<u64, LlvmError> {
-    Ok(ctx
-        .layouts
-        .target_data
-        .get_abi_size(&ir_basic_type(ctx, ty)?))
 }
 
 #[track_caller]

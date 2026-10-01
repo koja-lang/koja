@@ -25,7 +25,7 @@ use koja_ir_llvm::emit_llvm_ir;
 mod common;
 
 use common::{
-    APP_NAME, assert_contains, assert_program_shape, extract_function_body,
+    APP_NAME, assert_contains, assert_not_contains, assert_program_shape, extract_function_body,
     lower_program_source as lower,
 };
 
@@ -54,10 +54,7 @@ fn binary_concat_helper_emits_inline_malloc_and_memcpy() {
     assert_contains(&ir_text, "@llvm.memcpy.p0.p0.i64");
     // The runtime concat-bits extern must NOT be declared for a
     // pure-Binary program. Binary stays inline.
-    assert!(
-        !ir_text.contains("@__koja_concat_bits"),
-        "Binary concat should not pull in the bits runtime helper:\n{ir_text}",
-    );
+    assert_not_contains(&ir_text, "@__koja_concat_bits");
 }
 
 #[test]
@@ -86,10 +83,7 @@ fn binary_literal_emits_malloc_and_byte_packing() {
     // Pure byte-aligned segments must NOT pull in the runtime
     // pack-bits helper. That path is reserved for sub-byte
     // segments.
-    assert!(
-        !ir_text.contains("@__koja_pack_bits"),
-        "byte-aligned BinaryConstruct should not reference the bit-packer:\n{ir_text}",
-    );
+    assert_not_contains(&ir_text, "@__koja_pack_bits");
 }
 
 #[test]

@@ -70,6 +70,22 @@ pub(crate) fn neg_header_offset<'ctx>(ctx: &EmitContext<'ctx>) -> IntValue<'ctx>
         .const_int((-(HEADER_BYTES as i64)) as u64, true)
 }
 
+/// Pointer `bytes` past `base`. Byte-addressed GEP for a field at a
+/// fixed offset inside one allocation, such as the value half of a
+/// `Map` bucket at `key_size`.
+pub(crate) fn byte_offset_ptr<'ctx>(
+    ctx: &EmitContext<'ctx>,
+    base: PointerValue<'ctx>,
+    bytes: u64,
+    name: &str,
+) -> Result<PointerValue<'ctx>, LlvmError> {
+    let i8_ty = ctx.context.i8_type();
+    let offset = ctx.context.i64_type().const_int(bytes, false);
+    // SAFETY: callers pass an offset the layout places inside the
+    // allocation `base` points into.
+    unsafe { ctx.builder.build_gep(i8_ty, base, &[offset], name).or_ice() }
+}
+
 /// GEP from a payload pointer back to its block base, the pointer
 /// `koja_rc_inc` / `koja_rc_dec` take.
 ///
@@ -101,6 +117,46 @@ pub(crate) fn block_base<'ctx>(
         .build_select(is_null, null_base, raw_base, &format!("{name}.or_null"))
         .or_ice()
         .map(|v| v.into_pointer_value())
+}
+
+/// How a bit count becomes a byte count. `Floor` drops a trailing
+/// partial byte, `Ceil` counts it.
+#[derive(Clone, Copy)]
+pub(crate) enum Rounding {
+    Ceil,
+    Floor,
+}
+
+/// `bits >> 3`, after adding 7 for [`Rounding::Ceil`]. Logical
+/// shift, since a `bit_length` is a non-negative `i64`.
+pub(crate) fn byte_count<'ctx>(
+    ctx: &EmitContext<'ctx>,
+    bits: IntValue<'ctx>,
+    rounding: Rounding,
+    name: &str,
+) -> Result<IntValue<'ctx>, LlvmError> {
+    let i64_ty = ctx.context.i64_type();
+    let rounded = match rounding {
+        Rounding::Ceil => ctx
+            .builder
+            .build_int_add(bits, i64_ty.const_int(7, false), &format!("{name}_rounded"))
+            .or_ice()?,
+        Rounding::Floor => bits,
+    };
+    ctx.builder
+        .build_right_shift(rounded, i64_ty.const_int(3, false), false, name)
+        .or_ice()
+}
+
+/// [`load_bit_length`] then [`byte_count`], named `bit_length` and
+/// `byte_count`, for the sites that only need the byte count.
+pub(crate) fn load_byte_count<'ctx>(
+    ctx: &EmitContext<'ctx>,
+    payload: PointerValue<'ctx>,
+    rounding: Rounding,
+) -> Result<IntValue<'ctx>, LlvmError> {
+    let bits = load_bit_length(ctx, payload, "bit_length")?;
+    byte_count(ctx, bits, rounding, "byte_count")
 }
 
 /// Load the `i64 bit_length` header for a heap payload (the word at

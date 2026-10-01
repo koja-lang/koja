@@ -12,7 +12,8 @@ use koja_ir_llvm::{emit_llvm_ir, emit_script_llvm_ir};
 mod common;
 
 use common::{
-    APP_NAME, assert_contains, extract_function_body, lower_program_source, lower_script_source,
+    APP_NAME, assert_contains, assert_not_contains, extract_function_body, lower_program_source,
+    lower_script_source,
 };
 
 #[test]
@@ -65,16 +66,22 @@ fn struct_constant_with_an_enum_field_is_a_constant_aggregate() {
 
         const ONE_MINUTE = Span{value: 1, unit: Unit.Minutes}
 
-        ONE_MINUTE.value
+        fn value_of(span: Span) -> Int
+          span.value
+        end
+
+        value_of(ONE_MINUTE)
         ";
 
     let script = lower_script_source(&dedent(source));
     let ir_text =
         emit_script_llvm_ir(&script, APP_NAME).expect("emit_script_llvm_ir should succeed");
 
+    // The constant travels whole into the call, so the aggregate
+    // stays visible. A direct `.value` read would fold to `i64 1`.
     assert_contains(
         &ir_text,
-        "%TestApp.Span { i64 1, %TestApp.Unit { [1 x i8] c\"\\01\" } }",
+        "(%TestApp.Span { i64 1, %TestApp.Unit { [1 x i8] c\"\\01\" } })",
     );
 }
 
@@ -97,7 +104,11 @@ fn nested_constant_lowers_like_a_package_constant() {
           elapsed: Span = Span.ZERO
         end
 
-        Summary{}.elapsed.value + Span.ZERO.value
+        fn value_of(span: Span) -> Int
+          span.value
+        end
+
+        value_of(Summary{}.elapsed) + value_of(Span.ZERO)
         ";
 
     let script = lower_script_source(&dedent(source));
@@ -106,7 +117,7 @@ fn nested_constant_lowers_like_a_package_constant() {
 
     assert_contains(
         &ir_text,
-        "%TestApp.Span { i64 0, %TestApp.Span.Unit { [1 x i8] c\"\\01\" } }",
+        "(%TestApp.Span { i64 0, %TestApp.Span.Unit { [1 x i8] c\"\\01\" } })",
     );
 }
 
@@ -143,10 +154,7 @@ fn built_constant_has_one_global_one_init_call_and_a_load_per_read() {
     );
     // No static constructor. The init runs inside PID 1, called once
     // from the process entry wrapper and nowhere else.
-    assert!(
-        !ir_text.contains("llvm.global_ctors"),
-        "built constants must not register a static constructor:\n{ir_text}",
-    );
+    assert_not_contains(&ir_text, "llvm.global_ctors");
     assert_contains(&ir_text, "define internal void @__koja_const_init()");
     let entry_wrapper = extract_function_body(&ir_text, "TestApp.TestEntry.__entry_wrapper");
     assert_contains(entry_wrapper, "call void @__koja_const_init()");

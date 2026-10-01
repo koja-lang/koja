@@ -21,15 +21,18 @@
 //! Substring-only assertions (LLVM may shuffle attribute / SSA
 //! numbering between patch versions). Auto-print of an enum return
 //! is unsupported in this slice, so trailing expressions are
-//! primitives and the construction lives in a preceding statement
-//! whose `alloca` / `getelementptr` keep the named types live.
+//! primitives and the construction lives in a preceding statement.
+//! A literal with constant fields folds to a constant aggregate, and
+//! its drop-glue call keeps the named type live in the body.
 
 use koja_ast::util::dedent;
 use koja_ir_llvm::emit_script_llvm_ir;
 
 mod common;
 
-use common::{APP_NAME, assert_contains, assert_main_shape, lower_script_source as lower};
+use common::{
+    APP_NAME, assert_contains, assert_main_shape, assert_not_contains, lower_script_source as lower,
+};
 
 #[test]
 fn generic_struct_emits_named_llvm_struct_with_mangled_symbol() {
@@ -52,16 +55,9 @@ fn generic_struct_emits_named_llvm_struct_with_mangled_symbol() {
         &ir_text,
         "%\"TestApp.Pair_$Int64.String$\" = type { i64, ptr }",
     );
-    assert_contains(&ir_text, "alloca %\"TestApp.Pair_$Int64.String$\"");
-    assert_contains(
-        &ir_text,
-        "getelementptr inbounds nuw %\"TestApp.Pair_$Int64.String$\"",
-    );
-    assert_contains(&ir_text, "store i64 1");
-    assert!(
-        !ir_text.contains("%TestApp.Pair "),
-        "generic template `%TestApp.Pair` must not appear as a named LLVM type:\n{ir_text}",
-    );
+    assert_contains(&ir_text, "%\"TestApp.Pair_$Int64.String$\" { i64 1, ptr");
+    // The generic template itself never becomes a named LLVM type.
+    assert_not_contains(&ir_text, "%TestApp.Pair ");
 }
 
 #[test]
@@ -146,10 +142,8 @@ fn generic_enum_emits_outer_complete_and_payload_named_types_with_mangled_symbol
         &ir_text,
         "%\"TestApp.Box_$Int64$.Of.payload\" = type { i64 }",
     );
-    assert!(
-        !ir_text.contains("%TestApp.Box "),
-        "generic template `%TestApp.Box` must not appear as a named LLVM type:\n{ir_text}",
-    );
+    // The generic template itself never becomes a named LLVM type.
+    assert_not_contains(&ir_text, "%TestApp.Box ");
 }
 
 #[test]

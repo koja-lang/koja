@@ -21,7 +21,9 @@ use koja_ir_llvm::emit_script_llvm_ir;
 
 mod common;
 
-use common::{APP_NAME, assert_contains, lower_script_source as lower_as_script};
+use common::{
+    APP_NAME, assert_contains, assert_not_contains, lower_script_source as lower_as_script,
+};
 
 fn emit(source: &str) -> String {
     let script = lower_as_script(&dedent(source));
@@ -54,10 +56,7 @@ fn timestamp_now_does_not_re_emit_runtime_symbol_under_name_mangling() {
     // name-mangled declare leaking in alongside.
     let ir_text = emit("Timestamp.now().since_epoch.to_microseconds()");
 
-    assert!(
-        !ir_text.contains("@Global.Timestamp.koja_time_now_microseconds"),
-        "extern declaration must use the bare C name, not the name mangling. Got:\n{ir_text}",
-    );
+    assert_not_contains(&ir_text, "@Global.Timestamp.koja_time_now_microseconds");
 }
 
 #[test]
@@ -71,10 +70,8 @@ fn duration_new_pure_koja_body_lowers_with_i64() {
 
     assert_contains(&ir_text, "define ");
     assert_contains(&ir_text, "@\"Global.Duration.new/2\"");
-    assert!(
-        !ir_text.contains("declare i64 @\"Global.Duration.new/2\""),
-        "pure-Koja function must emit a body, not just a declare; got:\n{ir_text}",
-    );
+    // A pure-Koja function emits a body, never a bare declare.
+    assert_not_contains(&ir_text, "declare i64 @\"Global.Duration.new/2\"");
 }
 
 #[test]

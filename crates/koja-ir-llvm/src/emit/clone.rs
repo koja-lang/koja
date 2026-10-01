@@ -5,30 +5,28 @@
 //! already rewritten every heap-owning composite into a `Call` to
 //! its `clone_T` glue.
 
+use inkwell::values::BasicValueEnum;
 use koja_ir::{IRType, ValueId};
 
 use crate::ctx::EmitContext;
 use crate::emit::heap_layout::block_base;
-use crate::error::{IceExt, LlvmError};
+use crate::error::LlvmError;
 use crate::runtime::declare_rc_inc_extern;
 
 use super::{ValueMap, closures, lookup};
 
+/// Emit one `IRInstruction::Clone` and return the acquired value.
 pub(super) fn emit_clone<'ctx>(
     ctx: &EmitContext<'ctx>,
-    dest: ValueId,
     source: ValueId,
     ty: &IRType,
-    values: &mut ValueMap<'ctx>,
-) -> Result<(), LlvmError> {
-    let result = match ty {
+    values: &ValueMap<'ctx>,
+) -> Result<BasicValueEnum<'ctx>, LlvmError> {
+    Ok(match ty {
         IRType::Binary | IRType::Bits | IRType::Indirect(_) | IRType::String => {
             let payload = lookup(values, source).into_pointer_value();
-            let base = block_base(ctx, payload, &format!("{dest}.block_base"))?;
-            let rc_inc = declare_rc_inc_extern(ctx);
-            ctx.builder
-                .build_call(rc_inc, &[base.into()], &format!("{dest}.rc_inc"))
-                .or_ice()?;
+            let base = block_base(ctx, payload, "clone.block_base")?;
+            ctx.call_rt_unit(declare_rc_inc_extern, &[base.into()])?;
             payload.into()
         }
         IRType::Bool
@@ -49,19 +47,13 @@ pub(super) fn emit_clone<'ctx>(
         }
         IRType::Function { .. } => {
             let closure_value = lookup(values, source);
-            let env_ptr =
-                closures::load_closure_env_ptr(ctx, closure_value, &format!("{dest}.clone"))?;
-            let rc_inc = declare_rc_inc_extern(ctx);
-            ctx.builder
-                .build_call(rc_inc, &[env_ptr.into()], &format!("{dest}.env_rc_inc"))
-                .or_ice()?;
+            let env_ptr = closures::load_closure_env_ptr(ctx, closure_value, "clone")?;
+            ctx.call_rt_unit(declare_rc_inc_extern, &[env_ptr.into()])?;
             closure_value
         }
         IRType::List(_) | IRType::Map { .. } | IRType::Set(_) => panic!(
             "LLVM emit: composite `IRInstruction::Clone` of type {ty:?} reached the backend \
              (the `elaborate` sub-pass must rewrite it into a `Call @clone_T`)",
         ),
-    };
-    values.insert(dest, result);
-    Ok(())
+    })
 }

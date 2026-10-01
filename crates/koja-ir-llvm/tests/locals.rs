@@ -94,7 +94,7 @@ fn reassignment_emits_a_second_store_into_the_same_slot() {
     assert_eq!(
         alloca_count, 1,
         "expected exactly one alloca for the slot. Reassignment reuses it.\n\
-         user_main body:\n{user_main}\n\nfull IR:\n{ir_text}",
+         user_main body:\n{user_main}",
     );
     assert_contains(user_main, "store i64 1");
     assert_contains(user_main, "store i64 9");
@@ -121,10 +121,7 @@ fn param_promotion_emits_alloca_and_initial_store_in_callee() {
     // Each function gets its own alloca in its own entry block.
     // We expect at least one i64 alloca for `id`'s param slot. Pin
     // one alloca minimum and a store of the param.
-    assert!(
-        ir_text.contains("alloca i64"),
-        "expected at least one i64 alloca for `id`'s param slot.\nIR:\n{ir_text}",
-    );
+    assert_contains(&ir_text, "alloca i64");
     // Constant 42 flows from caller to callee unchanged.
     assert_contains(&ir_text, "i64 42");
 }
@@ -153,7 +150,7 @@ fn local_inside_if_arm_still_uses_a_single_alloca() {
     assert_eq!(
         alloca_count, 1,
         "expected exactly one alloca even with an if-arm reassignment.\n\
-         user_main body:\n{user_main}\n\nfull IR:\n{ir_text}",
+         user_main body:\n{user_main}",
     );
     assert_contains(user_main, "store i64 0");
     assert_contains(user_main, "store i64 1");

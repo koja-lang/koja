@@ -15,7 +15,7 @@ use koja_ir::{IRIndirectSlot, IRType};
 
 use crate::ctx::EmitContext;
 use crate::error::{IceExt, LlvmError};
-use crate::intrinsics::element::release_in_slot;
+use crate::intrinsics::element::{ElementOp, apply_in_slot};
 use crate::layout::enums::COMPLETE_PAYLOAD_INDEX;
 use crate::runtime::{declare_free_extern, declare_malloc_extern, declare_rc_dec_extern};
 use crate::types::ir_basic_type;
@@ -104,7 +104,7 @@ pub(super) fn emit_release_box<'ctx>(
     // Last owner. Release the contents (the payload pointer doubles
     // as a `T` slot), then free the block.
     ctx.builder.position_at_end(last_block);
-    release_in_slot(ctx, inner, payload)?;
+    apply_in_slot(ctx, ElementOp::Release, inner, payload)?;
     let free = declare_free_extern(ctx);
     ctx.builder.build_call(free, &[base.into()], "").or_ice()?;
     ctx.builder
@@ -127,8 +127,8 @@ pub(super) fn emit_release_box<'ctx>(
 
 /// Load a `T` value through `ptr` where the IR slot is typed
 /// `Indirect(T)`. Caller has already extracted the pointer (e.g.
-/// from a struct GEP + load). This just routes through the inner
-/// type's LLVM shape.
+/// with an `extractvalue` on the struct). This just routes through
+/// the inner type's LLVM shape.
 pub(super) fn emit_unbox_value<'ctx>(
     ctx: &EmitContext<'ctx>,
     inner: &IRType,
@@ -196,26 +196,15 @@ fn indirect_pointer<'ctx>(
         IRIndirectSlot::StructField {
             field_index,
             struct_symbol,
-        } => {
-            let struct_type = ctx.layouts.struct_type(struct_symbol.mangled());
-            let alloca =
-                ctx.build_entry_alloca(struct_type, &format!("{struct_symbol}_indirect_src"));
-            ctx.builder.build_store(alloca, base).or_ice()?;
-            let field_ptr = ctx
-                .builder
-                .build_struct_gep(
-                    struct_type,
-                    alloca,
-                    *field_index,
-                    &format!("{struct_symbol}_indirect_{field_index}_ptr"),
-                )
-                .or_ice()?;
-            load_box_pointer(
-                ctx,
-                field_ptr,
+        } => ctx
+            .builder
+            .build_extract_value(
+                base.into_struct_value(),
+                *field_index,
                 &format!("{struct_symbol}_indirect_{field_index}"),
-            )?
-        }
+            )
+            .or_ice()?
+            .into_pointer_value(),
     };
     Ok(pointer)
 }

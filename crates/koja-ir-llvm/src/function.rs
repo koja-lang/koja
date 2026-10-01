@@ -95,31 +95,27 @@ fn debuggable_def_location(function: &IRFunction) -> Option<&IRSourceDef> {
     }
 }
 
+/// The LLVM type a function is declared with. Most kinds map the IR
+/// params and return type one to one. The closure and wrapper kinds
+/// take an ABI the runtime fixes, so their IR signature is only a
+/// type-checking shell.
 fn function_signature<'ctx>(
     ctx: &EmitContext<'ctx>,
     function: &IRFunction,
 ) -> Result<FunctionType<'ctx>, LlvmError> {
-    if matches!(
-        function.kind,
+    let ptr_ty = ctx.context.ptr_type(AddressSpace::default());
+    match function.kind {
         FunctionKind::Closure { .. }
-            | FunctionKind::DropClosureGlue { .. }
-            | FunctionKind::EqClosureGlue { .. }
-    ) {
-        let user_params: Vec<IRType> = function.params.iter().map(|p| p.ty.clone()).collect();
-        return closure_body_signature(ctx, &user_params, &function.return_type);
-    }
-    if matches!(function.kind, FunctionKind::CopyClosureGlue { .. }) {
+        | FunctionKind::DropClosureGlue { .. }
+        | FunctionKind::EqClosureGlue { .. } => {
+            let user_params: Vec<IRType> = function.params.iter().map(|p| p.ty.clone()).collect();
+            closure_body_signature(ctx, &user_params, &function.return_type)
+        }
         // Env deep-copy glue is called by the runtime through the env
         // header's `copy_fn` pointer with an `i8* (i8*)` ABI: env base
         // in, fresh env base out. The IR shell carries no params (the
         // env pointer has no IR type).
-        let ptr_ty = ctx.context.ptr_type(AddressSpace::default());
-        return Ok(ptr_ty.fn_type(&[ptr_ty.into()], false));
-    }
-    if matches!(
-        function.kind,
-        FunctionKind::SpawnWrapper { .. } | FunctionKind::ProcessEntryWrapper { .. }
-    ) {
+        FunctionKind::CopyClosureGlue { .. } => Ok(ptr_ty.fn_type(&[ptr_ty.into()], false)),
         // Spawn / process-entry wrappers are scheduler entry points
         // called through `koja_rt_spawn`'s `void (*)(i8*)` function
         // pointer. The IR signature carries `(config: C) -> Unit` for
@@ -127,19 +123,22 @@ fn function_signature<'ctx>(
         // the raw config pointer the runtime hands the worker thread.
         // Each body emitter loads the typed config out of that
         // pointer in the entry block.
-        let ptr_ty = ctx.context.ptr_type(AddressSpace::default());
-        return Ok(ctx.context.void_type().fn_type(&[ptr_ty.into()], false));
+        FunctionKind::SpawnWrapper { .. } | FunctionKind::ProcessEntryWrapper { .. } => {
+            Ok(ctx.context.void_type().fn_type(&[ptr_ty.into()], false))
+        }
+        _ => {
+            let mut param_types: Vec<BasicMetadataTypeEnum<'ctx>> =
+                Vec::with_capacity(function.params.len());
+            for param in &function.params {
+                param_types.push(ir_basic_type(ctx, &param.ty)?.into());
+            }
+            Ok(if matches!(function.return_type, IRType::Unit) {
+                ctx.context.void_type().fn_type(&param_types, false)
+            } else {
+                ir_basic_type(ctx, &function.return_type)?.fn_type(&param_types, false)
+            })
+        }
     }
-    let mut param_types: Vec<BasicMetadataTypeEnum<'ctx>> =
-        Vec::with_capacity(function.params.len());
-    for param in &function.params {
-        param_types.push(ir_basic_type(ctx, &param.ty)?.into());
-    }
-    Ok(if matches!(function.return_type, IRType::Unit) {
-        ctx.context.void_type().fn_type(&param_types, false)
-    } else {
-        ir_basic_type(ctx, &function.return_type)?.fn_type(&param_types, false)
-    })
 }
 
 /// Define a function's body, dispatching on [`FunctionKind`]. Bodies

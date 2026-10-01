@@ -25,7 +25,7 @@ use koja_ir_llvm::emit_script_llvm_ir;
 
 mod common;
 
-use common::{APP_NAME, PACKAGE, assert_contains, lower_script_source_in};
+use common::{APP_NAME, PACKAGE, assert_contains, assert_not_contains, lower_script_source_in};
 
 fn lower(source: &str) -> IRScript {
     lower_script_source_in(PACKAGE, source)
@@ -43,15 +43,10 @@ fn bare_extern_c_emits_declare_under_bare_last_segment() {
         emit_script_llvm_ir(&script, APP_NAME).expect("emit_script_llvm_ir should succeed");
 
     assert_contains(&ir_text, "declare float @cosf(float)");
-    assert!(
-        !ir_text.contains("define float @cosf"),
-        "extern fn must not emit a body; got:\n{ir_text}",
-    );
-    assert!(
-        !ir_text.contains(&format!("@{PACKAGE}.cosf")),
-        "extern fn declares under the bare last-segment name, not the mangled \
-         symbol; got:\n{ir_text}",
-    );
+    // An extern fn emits no body, and it declares under the bare
+    // last-segment name, not the mangled symbol.
+    assert_not_contains(&ir_text, "define float @cosf");
+    assert_not_contains(&ir_text, &format!("@{PACKAGE}.cosf"));
 }
 
 #[test]
@@ -84,10 +79,9 @@ fn aliased_link_emits_declare_under_link_name() {
         emit_script_llvm_ir(&script, APP_NAME).expect("emit_script_llvm_ir should succeed");
 
     assert_contains(&ir_text, "declare float @cos(float)");
-    assert!(
-        !ir_text.contains("declare float @cosf"),
-        "aliased extern must not declare under its mangled name; got:\n{ir_text}",
-    );
+    // An aliased extern declares under the alias only, never under
+    // its mangled name.
+    assert_not_contains(&ir_text, "declare float @cosf");
 }
 
 #[test]
@@ -108,11 +102,9 @@ fn call_site_resolves_through_aliased_link_name() {
 
     assert_contains(&ir_text, "declare float @cos(float)");
     assert_contains(&ir_text, "call float @cos(float");
-    // The internal name must not leak into the emitted call.
-    assert!(
-        !ir_text.contains("@cosf("),
-        "call site should resolve through link_name `cos`, not mangled name `cosf`; got:\n{ir_text}",
-    );
+    // The call site resolves through the link name `cos`. The
+    // internal name `cosf` must not leak into the emitted call.
+    assert_not_contains(&ir_text, "@cosf(");
 }
 
 #[test]

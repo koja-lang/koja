@@ -15,7 +15,9 @@ use crate::runtime::{
     declare_concat_bits_extern, declare_concat_bytes_owned_extern, declare_malloc_extern,
 };
 
-use super::heap_layout::{block_alloc_size, init_heap_block, load_bit_length};
+use super::heap_layout::{
+    Rounding, block_alloc_size, byte_count, init_heap_block, load_bit_length,
+};
 
 /// Lower an `IRInstruction::Concat` to its per-kind shape. `String`
 /// and `Binary` both byte-align. The copying shape is
@@ -63,13 +65,11 @@ fn emit_byte_aligned_concat<'ctx>(
     with_nul: bool,
 ) -> Result<BasicValueEnum<'ctx>, LlvmError> {
     let i8_ty = ctx.context.i8_type();
-    let i64_ty = ctx.context.i64_type();
-    let three = i64_ty.const_int(3, false);
     let l_ptr = lhs.into_pointer_value();
     let r_ptr = rhs.into_pointer_value();
 
-    let (l_bits, l_bytes) = bits_and_bytes(ctx, l_ptr, "l", three)?;
-    let (r_bits, r_bytes) = bits_and_bytes(ctx, r_ptr, "r", three)?;
+    let (l_bits, l_bytes) = bits_and_bytes(ctx, l_ptr, "l")?;
+    let (r_bits, r_bytes) = bits_and_bytes(ctx, r_ptr, "r")?;
 
     let total_bits = ctx
         .builder
@@ -125,12 +125,8 @@ fn bits_and_bytes<'ctx>(
     ctx: &EmitContext<'ctx>,
     payload: PointerValue<'ctx>,
     prefix: &str,
-    three: IntValue<'ctx>,
 ) -> Result<(IntValue<'ctx>, IntValue<'ctx>), LlvmError> {
     let bits = load_bit_length(ctx, payload, &format!("{prefix}_bits"))?;
-    let bytes = ctx
-        .builder
-        .build_right_shift(bits, three, false, &format!("{prefix}_bytes"))
-        .or_ice()?;
+    let bytes = byte_count(ctx, bits, Rounding::Floor, &format!("{prefix}_bytes"))?;
     Ok((bits, bytes))
 }
