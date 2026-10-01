@@ -3,11 +3,12 @@
 use std::collections::HashSet;
 
 use koja_ast::ast::{
-    AnnotationKind, Arg, ClosureParam, Diagnostic, EnumConstructionData, Expr, ExprKind, Function,
-    FunctionOrigin, ImplMember, Item, Name, Param, Pattern, ProtocolMethod, Statement, StringPart,
-    TypeExpr, TypeParam,
+    AnnotationKind, Arg, ClosureParam, Diagnostic, Expr, ExprKind, Function, FunctionOrigin,
+    ImplMember, Item, MatchArm, Name, Param, Pattern, ProtocolMethod, Statement, TypeExpr,
+    TypeParam,
 };
 use koja_ast::identifier::Resolution;
+use koja_ast::visit::{self, Visitor};
 
 use crate::program::CheckedPackage;
 
@@ -133,7 +134,7 @@ fn validate_defaults(params: &[Param], diagnostics: &mut Vec<Diagnostic>) {
         else {
             continue;
         };
-        walker.check_default_expr(default);
+        walker.visit_expr(default);
     }
 }
 
@@ -428,22 +429,23 @@ struct Walker<'a> {
 }
 
 impl Walker<'_> {
-    fn check_body(&mut self, body: &[Statement]) {
-        for statement in body {
-            match statement {
-                Statement::Assignment { value, .. }
-                | Statement::CompoundAssign { value, .. }
-                | Statement::Destructure { value, .. } => self.check_default_expr(value),
-                Statement::Expr(expr) => self.check_default_expr(expr),
-                Statement::Return {
-                    value: Some(value), ..
-                } => self.check_default_expr(value),
-                Statement::Break { .. } | Statement::Return { value: None, .. } => {}
-            }
-        }
+    /// Run `walk` inside a scope that rebinds `names`.
+    fn in_scope(&mut self, names: HashSet<String>, walk: impl FnOnce(&mut Self)) {
+        self.scopes.push(names);
+        walk(self);
+        self.scopes.pop();
     }
 
-    fn check_default_expr(&mut self, expr: &Expr) {
+    /// Whether a closure param or pattern binding on the way down
+    /// rebinds `name`, so the ident reads that binding and not the
+    /// parameter.
+    fn is_shadowed(&self, name: &str) -> bool {
+        self.scopes.iter().rev().any(|scope| scope.contains(name))
+    }
+}
+
+impl<'ast> Visitor<'ast> for Walker<'_> {
+    fn visit_expr(&mut self, expr: &'ast Expr) {
         match &expr.kind {
             ExprKind::Ident { name, .. }
                 if self.forbidden.contains(name.as_str()) && !self.is_shadowed(name) =>
@@ -457,187 +459,40 @@ impl Walker<'_> {
                 "default parameter value cannot reference `self`".to_string(),
                 expr.span,
             )),
-            ExprKind::Closure { params, body, .. } => {
-                self.scopes.push(closure_bindings(params));
-                self.check_body(body);
-                self.scopes.pop();
+            ExprKind::Closure { params, .. } | ExprKind::ShortClosure { params, .. } => {
+                self.in_scope(closure_bindings(params), |w| visit::walk_expr(w, expr));
             }
-            ExprKind::ShortClosure { params, body } => {
-                self.scopes.push(closure_bindings(params));
-                self.check_default_expr(body);
-                self.scopes.pop();
-            }
-            ExprKind::Binary { left, right, .. } => self.for_exprs([left.as_ref(), right.as_ref()]),
-            ExprKind::BinaryLiteral { segments } => {
-                for segment in segments {
-                    self.check_default_expr(&segment.value);
-                    if let Some(size) = &segment.size {
-                        self.check_default_expr(size);
-                    }
-                }
-            }
-            ExprKind::Call { callee, args, .. } => {
-                self.check_default_expr(callee);
-                for arg in args {
-                    self.check_default_expr(&arg.value);
-                }
-            }
-            ExprKind::MethodCall { receiver, args, .. } => {
-                self.check_default_expr(receiver);
-                for arg in args {
-                    self.check_default_expr(&arg.value);
-                }
-            }
-            ExprKind::Cond { arms, else_body } => {
-                for arm in arms {
-                    self.check_default_expr(&arm.condition);
-                    self.check_body(&arm.body);
-                }
-                if let Some(body) = else_body {
-                    self.check_body(body);
-                }
-            }
-            ExprKind::EnumConstruction { data, .. } => match data {
-                EnumConstructionData::Struct(fields) => {
-                    for field in fields {
-                        self.check_default_expr(&field.value);
-                    }
-                }
-                EnumConstructionData::Tuple(elements) => {
-                    for element in elements {
-                        self.check_default_expr(element);
-                    }
-                }
-                EnumConstructionData::Unit => {}
-            },
-            ExprKind::Assert {
-                condition, message, ..
-            } => {
-                self.check_default_expr(condition);
-                if let Some(message) = message {
-                    self.check_default_expr(message);
-                }
-            }
-            ExprKind::Fail { value }
-            | ExprKind::Try { expr: value }
-            | ExprKind::Unary { operand: value, .. }
-            | ExprKind::Group { expr: value }
-            | ExprKind::Spawn { expr: value }
-            | ExprKind::FieldAccess {
-                receiver: value, ..
-            } => self.check_default_expr(value),
+            // The iterable is read before the pattern binds.
             ExprKind::For {
                 pattern,
                 iterable,
                 body,
             } => {
-                self.check_default_expr(iterable);
-                self.scopes.push(pattern_bindings(pattern));
-                self.check_body(body);
-                self.scopes.pop();
+                self.visit_expr(iterable);
+                self.in_scope(pattern_bindings(pattern), |w| visit::walk_body(w, body));
             }
-            ExprKind::While { condition, body } => {
-                self.check_default_expr(condition);
-                self.check_body(body);
-            }
-            ExprKind::If {
-                condition,
-                then_body,
-                else_body,
-            } => {
-                self.check_default_expr(condition);
-                self.check_body(then_body);
-                if let Some(body) = else_body {
-                    self.check_body(body);
-                }
-            }
-            ExprKind::List { elements } | ExprKind::Tuple { elements } => {
-                for element in elements {
-                    self.check_default_expr(element);
-                }
-            }
-            ExprKind::Loop { body } => self.check_body(body),
-            ExprKind::Map { entries } => {
-                for (key, value) in entries {
-                    self.for_exprs([key, value]);
-                }
-            }
-            ExprKind::Match { subject, arms } => {
-                self.check_default_expr(subject);
-                for arm in arms {
-                    self.scopes.push(pattern_bindings(&arm.pattern));
-                    if let Some(guard) = &arm.guard {
-                        self.check_default_expr(guard);
-                    }
-                    self.check_body(&arm.body);
-                    self.scopes.pop();
-                }
-            }
-            ExprKind::Receive {
-                arms,
-                after_timeout,
-                after_body,
-            } => {
-                for arm in arms {
-                    self.scopes.push(pattern_bindings(&arm.pattern));
-                    if let Some(guard) = &arm.guard {
-                        self.check_default_expr(guard);
-                    }
-                    self.check_body(&arm.body);
-                    self.scopes.pop();
-                }
-                if let Some(timeout) = after_timeout {
-                    self.check_default_expr(timeout);
-                }
-                self.check_body(after_body);
-            }
+            // The binder is in scope for the handler only.
             ExprKind::Rescue {
                 subject,
                 binder,
                 handler,
                 ..
             } => {
-                self.check_default_expr(subject);
-                self.scopes.push(binder.iter().cloned().collect());
-                self.check_default_expr(handler);
-                self.scopes.pop();
+                self.visit_expr(subject);
+                self.in_scope(binder.iter().cloned().collect(), |w| w.visit_expr(handler));
             }
-            ExprKind::String { parts, .. } => {
-                for part in parts {
-                    if let StringPart::Interpolation { expr, .. } = part {
-                        self.check_default_expr(expr);
-                    }
-                }
-            }
-            ExprKind::StructConstruction { fields, .. } => {
-                for field in fields {
-                    self.check_default_expr(&field.value);
-                }
-            }
-            ExprKind::Ternary {
-                condition,
-                then_expr,
-                else_expr,
-            } => self.for_exprs([condition.as_ref(), then_expr.as_ref(), else_expr.as_ref()]),
-            ExprKind::Ident { .. }
-            | ExprKind::Literal { .. }
-            | ExprKind::NamedFunctionReference { .. }
-            | ExprKind::Self_ { .. } => {}
+            _ => visit::walk_expr(self, expr),
         }
     }
 
-    fn for_exprs<'e>(&mut self, exprs: impl IntoIterator<Item = &'e Expr>) {
-        for expr in exprs {
-            self.check_default_expr(expr);
-        }
+    fn visit_match_arm(&mut self, arm: &'ast MatchArm) {
+        self.in_scope(pattern_bindings(&arm.pattern), |w| {
+            visit::walk_match_arm(w, arm)
+        });
     }
 
-    /// Whether a closure param or pattern binding on the way down
-    /// rebinds `name`, so the ident reads that binding and not the
-    /// parameter.
-    fn is_shadowed(&self, name: &str) -> bool {
-        self.scopes.iter().rev().any(|scope| scope.contains(name))
-    }
+    /// Patterns bind names and never read them.
+    fn visit_pattern(&mut self, _pattern: &'ast Pattern) {}
 }
 
 fn closure_bindings(params: &[ClosureParam]) -> HashSet<String> {

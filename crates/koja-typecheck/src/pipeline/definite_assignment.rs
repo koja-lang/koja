@@ -10,11 +10,12 @@
 use std::collections::HashSet;
 
 use koja_ast::ast::{
-    ClosureParam, Diagnostic, EnumConstructionData, Expr, ExprKind, File, Function, ImplMember,
-    Item, LValue, MatchArm, Param, Pattern, Statement, StringPart,
+    ClosureParam, Diagnostic, EnumConstructionData, Expr, ExprKind, File, Function, LValue,
+    MatchArm, Param, Pattern, Statement, StringPart,
 };
 use koja_ast::identifier::{LocalId, Resolution, ResolvedType};
 use koja_ast::span::Span;
+use koja_ast::visit::Visitor;
 
 use super::resolve::types::is_primitive;
 use crate::registry::GlobalRegistry;
@@ -29,15 +30,7 @@ pub(crate) fn check_file(
         registry,
     };
     for item in &file.items {
-        match item {
-            Item::Builtin(decl) => checker.check_functions(&decl.functions),
-            Item::Enum(decl) => checker.check_functions(&decl.functions),
-            Item::Extend(block) => checker.check_members(&block.members),
-            Item::Function(function) => checker.check_function(function),
-            Item::Impl(block) => checker.check_members(&block.members),
-            Item::Struct(decl) => checker.check_functions(&decl.functions),
-            _ => {}
-        }
+        checker.visit_item(item);
     }
     if let Some(body) = file.body.as_ref() {
         let mut state = FlowState::default();
@@ -95,21 +88,19 @@ struct Checker<'a, 'd> {
     registry: &'a GlobalRegistry,
 }
 
+/// The visitor only finds function bodies. Each body is analyzed by
+/// [`Checker::check_function`] under its own [`FlowState`], so
+/// expressions met on the way (constant values, field defaults) are
+/// not walked.
+impl<'ast> Visitor<'ast> for Checker<'_, '_> {
+    fn visit_expr(&mut self, _expr: &'ast Expr) {}
+
+    fn visit_function(&mut self, function: &'ast Function) {
+        self.check_function(function);
+    }
+}
+
 impl Checker<'_, '_> {
-    fn check_functions(&mut self, functions: &[Function]) {
-        for function in functions {
-            self.check_function(function);
-        }
-    }
-
-    fn check_members(&mut self, members: &[ImplMember]) {
-        for member in members {
-            if let ImplMember::Function(function) = member {
-                self.check_function(function);
-            }
-        }
-    }
-
     fn check_function(&mut self, function: &Function) {
         let Some(body) = function.body.as_ref() else {
             return;

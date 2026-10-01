@@ -33,6 +33,7 @@ mod field_defaults;
 mod functions;
 mod impls;
 mod protocols;
+mod rename_type_params;
 mod structs;
 mod type_aliases;
 mod types;

@@ -6,7 +6,7 @@ use koja_ast::identifier::{GlobalRegistryId, Resolution};
 use koja_typecheck::{FunctionSignature, GlobalKind, GlobalRegistry};
 
 use crate::position::span_contains;
-use crate::visit::{self, Visitor};
+use koja_ast::visit::{self, Visitor};
 
 /// The innermost expression in `file` that contains the 1-indexed
 /// cursor position.

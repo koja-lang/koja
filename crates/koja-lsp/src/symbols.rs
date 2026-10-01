@@ -16,6 +16,7 @@ use koja_ast::ast::{
 };
 use koja_ast::labels::type_expr_span;
 use koja_ast::span::Span;
+use koja_ast::visit::{self, Visitor};
 
 use crate::backend::Backend;
 use crate::convert::{path_to_uri, span_to_range};
@@ -129,264 +130,111 @@ fn symbol_info(
 
 /// Collects workspace symbols from a file, filtering by query substring.
 fn collect_workspace_symbols(file: &File, query: &str, results: &mut Vec<SymbolInformation>) {
-    let uri = file.path.as_deref().and_then(path_to_uri);
-    let uri = match uri {
-        Some(u) => u,
-        None => return,
+    let Some(uri) = file.path.as_deref().and_then(path_to_uri) else {
+        return;
     };
-
-    let matches = |name: &str| query.is_empty() || name.to_ascii_lowercase().contains(query);
-
-    for item in &file.items {
-        match item {
-            Item::Alias(_) => {}
-            Item::Builtin(b) => {
-                let name = b.name().as_str();
-                if matches(name) {
-                    results.push(symbol_info(name, SymbolKind::STRUCT, &uri, &b.span, None));
-                }
-                for f in &b.functions {
-                    if matches(f.name.as_str()) {
-                        results.push(symbol_info(
-                            f.name.as_str(),
-                            SymbolKind::METHOD,
-                            &uri,
-                            &f.span,
-                            Some(name.to_string()),
-                        ));
-                    }
-                }
-                for t in &b.tests {
-                    if matches(&t.description) {
-                        results.push(symbol_info(
-                            &t.description,
-                            SymbolKind::EVENT,
-                            &uri,
-                            &t.span,
-                            Some(name.to_string()),
-                        ));
-                    }
-                }
-                for nested_item in &b.nested {
-                    collect_type_workspace_symbols(nested_item, Some(name), &uri, query, results);
-                }
-            }
-            Item::Function(f) => {
-                if matches(f.name.as_str()) {
-                    results.push(symbol_info(
-                        f.name.as_str(),
-                        SymbolKind::FUNCTION,
-                        &uri,
-                        &f.span,
-                        None,
-                    ));
-                }
-            }
-            Item::Struct(_) | Item::Enum(_) => {
-                collect_type_workspace_symbols(item, None, &uri, query, results);
-            }
-            Item::Test(t) => {
-                if matches(&t.description) {
-                    results.push(symbol_info(
-                        &t.description,
-                        SymbolKind::EVENT,
-                        &uri,
-                        &t.span,
-                        None,
-                    ));
-                }
-            }
-            Item::Constant(c) => {
-                collect_constant_workspace_symbol(c, None, &uri, query, results);
-            }
-            Item::Protocol(p) => {
-                collect_protocol_workspace_symbols(p, None, &uri, query, results);
-            }
-            Item::TypeAlias(t) => {
-                if matches(t.name.as_str()) {
-                    results.push(symbol_info(
-                        t.name.as_str(),
-                        SymbolKind::TYPE_PARAMETER,
-                        &uri,
-                        &t.span,
-                        None,
-                    ));
-                }
-            }
-            Item::Impl(imp) => {
-                if imp.span.synthetic {
-                    continue;
-                }
-                collect_member_workspace_symbols(
-                    &imp.members,
-                    &imp.tests,
-                    &type_expr_label(&imp.target),
-                    &uri,
-                    query,
-                    results,
-                );
-            }
-            Item::Extend(ext) => {
-                collect_member_workspace_symbols(
-                    &ext.members,
-                    &ext.tests,
-                    &type_expr_label(&ext.target),
-                    &uri,
-                    query,
-                    results,
-                );
-            }
-        }
-    }
+    let mut collector = WorkspaceSymbols {
+        containers: Vec::new(),
+        query,
+        results,
+        uri,
+    };
+    collector.visit_file(file);
 }
 
-/// Collects a struct/enum, its functions, and its nested types.
-fn collect_type_workspace_symbols(
-    item: &Item,
-    container: Option<&str>,
-    uri: &Uri,
-    query: &str,
-    results: &mut Vec<SymbolInformation>,
-) {
-    let matches = |name: &str| query.is_empty() || name.to_ascii_lowercase().contains(query);
-    let (name, kind, span, functions, nested, tests) = match item {
-        Item::Enum(e) => (
-            e.name().as_str(),
-            SymbolKind::ENUM,
-            &e.span,
-            &e.functions,
-            &e.nested,
-            &e.tests[..],
-        ),
-        Item::Struct(s) => (
-            s.name().as_str(),
-            SymbolKind::STRUCT,
-            &s.span,
-            &s.functions,
-            &s.nested,
-            &s.tests[..],
-        ),
-        Item::Protocol(p) => {
-            collect_protocol_workspace_symbols(p, container, uri, query, results);
+/// Flat symbol collection for `workspace/symbol`. `containers` is
+/// the stack of enclosing type names, and the innermost one is the
+/// container a nested symbol reports.
+struct WorkspaceSymbols<'a> {
+    containers: Vec<String>,
+    query: &'a str,
+    results: &'a mut Vec<SymbolInformation>,
+    uri: Uri,
+}
+
+impl WorkspaceSymbols<'_> {
+    fn record(&mut self, name: &str, kind: SymbolKind, span: &Span) {
+        if !self.query.is_empty() && !name.to_ascii_lowercase().contains(self.query) {
             return;
         }
-        Item::Constant(c) => {
-            collect_constant_workspace_symbol(c, container, uri, query, results);
-            return;
-        }
-        _ => return,
-    };
-    if matches(name) {
-        results.push(symbol_info(
-            name,
-            kind,
-            uri,
-            span,
-            container.map(str::to_string),
-        ));
+        let container = self.containers.last().cloned();
+        self.results
+            .push(symbol_info(name, kind, &self.uri, span, container));
     }
-    for f in functions {
-        if matches(f.name.as_str()) {
-            results.push(symbol_info(
-                f.name.as_str(),
-                SymbolKind::METHOD,
-                uri,
-                &f.span,
-                Some(name.to_string()),
-            ));
-        }
-    }
-    for t in tests {
-        if matches(&t.description) {
-            results.push(symbol_info(
-                &t.description,
-                SymbolKind::EVENT,
-                uri,
-                &t.span,
-                Some(name.to_string()),
-            ));
-        }
-    }
-    for nested_item in nested {
-        collect_type_workspace_symbols(nested_item, Some(name), uri, query, results);
+
+    /// Run `walk` with `name` as the innermost container.
+    fn in_container(&mut self, name: String, walk: impl FnOnce(&mut Self)) {
+        self.containers.push(name);
+        walk(self);
+        self.containers.pop();
     }
 }
 
-/// Collects a constant. `container` is the owner type when the
-/// constant is nested in a type body.
-fn collect_constant_workspace_symbol(
-    c: &Constant,
-    container: Option<&str>,
-    uri: &Uri,
-    query: &str,
-    results: &mut Vec<SymbolInformation>,
-) {
-    let name = c.name().as_str();
-    if query.is_empty() || name.to_ascii_lowercase().contains(query) {
-        results.push(symbol_info(
-            name,
-            SymbolKind::CONSTANT,
-            uri,
-            &c.span,
-            container.map(str::to_string),
-        ));
-    }
-}
-
-/// Collects a protocol. `container` is the owner type when the
-/// protocol is nested in a type body.
-fn collect_protocol_workspace_symbols(
-    p: &ProtocolDecl,
-    container: Option<&str>,
-    uri: &Uri,
-    query: &str,
-    results: &mut Vec<SymbolInformation>,
-) {
-    let name = p.name().as_str();
-    if query.is_empty() || name.to_ascii_lowercase().contains(query) {
-        results.push(symbol_info(
-            name,
-            SymbolKind::INTERFACE,
-            uri,
-            &p.span,
-            container.map(str::to_string),
-        ));
-    }
-}
-
-/// Collects the function members and tests of an `impl`/`extend` block.
-fn collect_member_workspace_symbols(
-    members: &[ImplMember],
-    tests: &[TestDecl],
-    container: &str,
-    uri: &Uri,
-    query: &str,
-    results: &mut Vec<SymbolInformation>,
-) {
-    let matches = |name: &str| query.is_empty() || name.to_ascii_lowercase().contains(query);
-    for member in members {
-        if let ImplMember::Function(f) = member
-            && matches(f.name.as_str())
+impl<'ast> Visitor<'ast> for WorkspaceSymbols<'_> {
+    /// A derived `impl` has no source to jump to.
+    fn visit_item(&mut self, item: &'ast Item) {
+        if let Item::Impl(block) = item
+            && block.span.synthetic
         {
-            results.push(symbol_info(
-                f.name.as_str(),
-                SymbolKind::METHOD,
-                uri,
-                &f.span,
-                Some(container.to_string()),
-            ));
+            return;
+        }
+        if let Some((name, kind, span)) = item_symbol(item) {
+            self.record(name, kind, span);
+        }
+        match item_container(item) {
+            Some(name) => self.in_container(name, |w| visit::walk_item(w, item)),
+            None => visit::walk_item(self, item),
         }
     }
-    for t in tests {
-        if matches(&t.description) {
-            results.push(symbol_info(
-                &t.description,
-                SymbolKind::EVENT,
-                uri,
-                &t.span,
-                Some(container.to_string()),
-            ));
+
+    /// A body declares no symbols, so the walk stops here.
+    fn visit_function(&mut self, function: &'ast Function) {
+        let kind = if self.containers.is_empty() {
+            SymbolKind::FUNCTION
+        } else {
+            SymbolKind::METHOD
+        };
+        self.record(function.name.as_str(), kind, &function.span);
+    }
+
+    fn visit_test(&mut self, test: &'ast TestDecl) {
+        self.record(&test.description, SymbolKind::EVENT, &test.span);
+    }
+}
+
+/// The symbol an item declares under its own name. Functions and
+/// tests have hooks of their own. `impl` and `extend` blocks name a
+/// container, not a symbol.
+fn item_symbol(item: &Item) -> Option<(&str, SymbolKind, &Span)> {
+    match item {
+        Item::Alias(_) | Item::Extend(_) | Item::Function(_) | Item::Impl(_) | Item::Test(_) => {
+            None
         }
+        Item::Builtin(decl) => Some((decl.name().as_str(), SymbolKind::STRUCT, &decl.span)),
+        Item::Constant(constant) => Some((
+            constant.name().as_str(),
+            SymbolKind::CONSTANT,
+            &constant.span,
+        )),
+        Item::Enum(decl) => Some((decl.name().as_str(), SymbolKind::ENUM, &decl.span)),
+        Item::Protocol(decl) => Some((decl.name().as_str(), SymbolKind::INTERFACE, &decl.span)),
+        Item::Struct(decl) => Some((decl.name().as_str(), SymbolKind::STRUCT, &decl.span)),
+        Item::TypeAlias(alias) => {
+            Some((alias.name.as_str(), SymbolKind::TYPE_PARAMETER, &alias.span))
+        }
+    }
+}
+
+/// The container name the item's members report, when it has
+/// members.
+fn item_container(item: &Item) -> Option<String> {
+    match item {
+        Item::Builtin(decl) => Some(decl.name().text.clone()),
+        Item::Enum(decl) => Some(decl.name().text.clone()),
+        Item::Extend(block) => Some(type_expr_label(&block.target)),
+        Item::Impl(block) => Some(type_expr_label(&block.target)),
+        Item::Struct(decl) => Some(decl.name().text.clone()),
+        _ => None,
     }
 }
 

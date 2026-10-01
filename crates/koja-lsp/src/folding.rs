@@ -8,10 +8,9 @@
 use tower_lsp_server::jsonrpc::Result;
 use tower_lsp_server::ls_types::*;
 
-use koja_ast::ast::{
-    Comment, Expr, ExprKind, File, ImplMember, Item, ProtocolDecl, Statement, StructDecl, TestDecl,
-};
+use koja_ast::ast::{Comment, Expr, ExprKind, File, Function, Item, ProtocolMethod, TestDecl};
 use koja_ast::span::Span;
+use koja_ast::visit::{self, Visitor};
 
 use crate::backend::Backend;
 
@@ -30,7 +29,7 @@ impl Backend {
 
         let mut ranges = Vec::new();
         if let Some(file) = state.active_file() {
-            collect_item_folds(file, &mut ranges);
+            ranges = region_folds(file);
             collect_comment_folds(&file.comments, &mut ranges);
         }
         Ok(Some(ranges))
@@ -53,229 +52,73 @@ fn span_fold(span: &Span, kind: Option<FoldingRangeKind>) -> Option<FoldingRange
     })
 }
 
-fn collect_item_folds(file: &File, ranges: &mut Vec<FoldingRange>) {
-    for item in &file.items {
+/// One region fold per multi-line declaration and block expression.
+fn region_folds(file: &File) -> Vec<FoldingRange> {
+    let mut regions = Regions { ranges: Vec::new() };
+    regions.visit_file(file);
+    regions.ranges
+}
+
+struct Regions {
+    ranges: Vec<FoldingRange>,
+}
+
+impl Regions {
+    fn fold(&mut self, span: &Span) {
+        if let Some(range) = span_fold(span, Some(FoldingRangeKind::Region)) {
+            self.ranges.push(range);
+        }
+    }
+}
+
+impl<'ast> Visitor<'ast> for Regions {
+    /// Functions and tests fold through their own hooks. A derived
+    /// `impl` has no source of its own to fold.
+    fn visit_item(&mut self, item: &'ast Item) {
         match item {
-            Item::Alias(_) => {}
-            Item::Function(f) => {
-                if let Some(r) = span_fold(&f.span, Some(FoldingRangeKind::Region)) {
-                    ranges.push(r);
-                }
-                if let Some(body) = &f.body {
-                    collect_statement_folds(body, ranges);
-                }
-            }
-            Item::Builtin(b) => {
-                if let Some(r) = span_fold(&b.span, Some(FoldingRangeKind::Region)) {
-                    ranges.push(r);
-                }
-                for f in &b.functions {
-                    if let Some(r) = span_fold(&f.span, Some(FoldingRangeKind::Region)) {
-                        ranges.push(r);
-                    }
-                    if let Some(body) = &f.body {
-                        collect_statement_folds(body, ranges);
-                    }
-                }
-                collect_tests_folds(&b.tests, ranges);
-                collect_nested_folds(&b.nested, ranges);
-            }
-            Item::Struct(s) => collect_struct_folds(s, ranges),
-            Item::Test(t) => collect_tests_folds(std::slice::from_ref(t), ranges),
-            Item::Enum(e) => {
-                if let Some(r) = span_fold(&e.span, Some(FoldingRangeKind::Region)) {
-                    ranges.push(r);
-                }
-                collect_tests_folds(&e.tests, ranges);
-                collect_nested_folds(&e.nested, ranges);
-            }
-            Item::Impl(imp) => {
-                if imp.span.synthetic {
-                    continue;
-                }
-                if let Some(r) = span_fold(&imp.span, Some(FoldingRangeKind::Region)) {
-                    ranges.push(r);
-                }
-                for member in &imp.members {
-                    if let ImplMember::Function(f) = member {
-                        if let Some(r) = span_fold(&f.span, Some(FoldingRangeKind::Region)) {
-                            ranges.push(r);
-                        }
-                        if let Some(body) = &f.body {
-                            collect_statement_folds(body, ranges);
-                        }
-                    }
-                }
-                collect_tests_folds(&imp.tests, ranges);
-            }
-            Item::Extend(ext) => {
-                if let Some(r) = span_fold(&ext.span, Some(FoldingRangeKind::Region)) {
-                    ranges.push(r);
-                }
-                for member in &ext.members {
-                    if let ImplMember::Function(f) = member {
-                        if let Some(r) = span_fold(&f.span, Some(FoldingRangeKind::Region)) {
-                            ranges.push(r);
-                        }
-                        if let Some(body) = &f.body {
-                            collect_statement_folds(body, ranges);
-                        }
-                    }
-                }
-                collect_tests_folds(&ext.tests, ranges);
-            }
-            Item::Protocol(p) => collect_protocol_folds(p, ranges),
-            Item::Constant(c) => {
-                if let Some(r) = span_fold(&c.span, Some(FoldingRangeKind::Region)) {
-                    ranges.push(r);
-                }
-            }
-            Item::TypeAlias(_) => {}
+            Item::Alias(_) | Item::Function(_) | Item::Test(_) | Item::TypeAlias(_) => {}
+            Item::Builtin(decl) => self.fold(&decl.span),
+            Item::Constant(constant) => self.fold(&constant.span),
+            Item::Enum(decl) => self.fold(&decl.span),
+            Item::Extend(block) => self.fold(&block.span),
+            Item::Impl(block) if block.span.synthetic => return,
+            Item::Impl(block) => self.fold(&block.span),
+            Item::Protocol(decl) => self.fold(&decl.span),
+            Item::Struct(decl) => self.fold(&decl.span),
         }
+        visit::walk_item(self, item);
     }
-}
 
-fn collect_struct_folds(s: &StructDecl, ranges: &mut Vec<FoldingRange>) {
-    if let Some(r) = span_fold(&s.span, Some(FoldingRangeKind::Region)) {
-        ranges.push(r);
+    fn visit_function(&mut self, function: &'ast Function) {
+        self.fold(&function.span);
+        visit::walk_function(self, function);
     }
-    for f in &s.functions {
-        if let Some(r) = span_fold(&f.span, Some(FoldingRangeKind::Region)) {
-            ranges.push(r);
-        }
-        if let Some(body) = &f.body {
-            collect_statement_folds(body, ranges);
-        }
-    }
-    collect_tests_folds(&s.tests, ranges);
-    collect_nested_folds(&s.nested, ranges);
-}
 
-fn collect_tests_folds(tests: &[TestDecl], ranges: &mut Vec<FoldingRange>) {
-    for t in tests {
-        if let Some(r) = span_fold(&t.span, Some(FoldingRangeKind::Region)) {
-            ranges.push(r);
-        }
-        collect_statement_folds(&t.body, ranges);
+    fn visit_protocol_method(&mut self, method: &'ast ProtocolMethod) {
+        self.fold(&method.span);
+        visit::walk_protocol_method(self, method);
     }
-}
 
-fn collect_protocol_folds(p: &ProtocolDecl, ranges: &mut Vec<FoldingRange>) {
-    if let Some(r) = span_fold(&p.span, Some(FoldingRangeKind::Region)) {
-        ranges.push(r);
+    fn visit_test(&mut self, test: &'ast TestDecl) {
+        self.fold(&test.span);
+        visit::walk_test(self, test);
     }
-    for m in &p.methods {
-        if let Some(r) = span_fold(&m.span, Some(FoldingRangeKind::Region)) {
-            ranges.push(r);
-        }
-        if let Some(body) = &m.body {
-            collect_statement_folds(body, ranges);
-        }
-    }
-}
 
-fn collect_nested_folds(nested: &[Item], ranges: &mut Vec<FoldingRange>) {
-    for item in nested {
-        match item {
-            Item::Enum(e) => {
-                if let Some(r) = span_fold(&e.span, Some(FoldingRangeKind::Region)) {
-                    ranges.push(r);
-                }
-                collect_tests_folds(&e.tests, ranges);
-                collect_nested_folds(&e.nested, ranges);
-            }
-            Item::Constant(c) => {
-                if let Some(r) = span_fold(&c.span, Some(FoldingRangeKind::Region)) {
-                    ranges.push(r);
-                }
-            }
-            Item::Protocol(p) => collect_protocol_folds(p, ranges),
-            Item::Struct(s) => collect_struct_folds(s, ranges),
-            _ => {}
+    fn visit_expr(&mut self, expr: &'ast Expr) {
+        if matches!(
+            &expr.kind,
+            ExprKind::Closure { .. }
+                | ExprKind::Cond { .. }
+                | ExprKind::For { .. }
+                | ExprKind::If { .. }
+                | ExprKind::Loop { .. }
+                | ExprKind::Match { .. }
+                | ExprKind::Receive { .. }
+                | ExprKind::While { .. }
+        ) {
+            self.fold(&expr.span);
         }
-    }
-}
-
-fn collect_statement_folds(stmts: &[Statement], ranges: &mut Vec<FoldingRange>) {
-    for stmt in stmts {
-        if let Statement::Expr(expr) = stmt {
-            collect_expr_folds(expr, ranges);
-        }
-    }
-}
-
-fn collect_expr_folds(expr: &Expr, ranges: &mut Vec<FoldingRange>) {
-    match &expr.kind {
-        ExprKind::If {
-            then_body,
-            else_body,
-            ..
-        } => {
-            if let Some(r) = span_fold(&expr.span, Some(FoldingRangeKind::Region)) {
-                ranges.push(r);
-            }
-            collect_statement_folds(then_body, ranges);
-            if let Some(eb) = else_body {
-                collect_statement_folds(eb, ranges);
-            }
-        }
-        ExprKind::Match { arms, .. } => {
-            if let Some(r) = span_fold(&expr.span, Some(FoldingRangeKind::Region)) {
-                ranges.push(r);
-            }
-            for arm in arms {
-                collect_statement_folds(&arm.body, ranges);
-            }
-        }
-        ExprKind::Cond {
-            arms, else_body, ..
-        } => {
-            if let Some(r) = span_fold(&expr.span, Some(FoldingRangeKind::Region)) {
-                ranges.push(r);
-            }
-            for arm in arms {
-                collect_statement_folds(&arm.body, ranges);
-            }
-            if let Some(eb) = else_body {
-                collect_statement_folds(eb, ranges);
-            }
-        }
-        ExprKind::For { body, .. } => {
-            if let Some(r) = span_fold(&expr.span, Some(FoldingRangeKind::Region)) {
-                ranges.push(r);
-            }
-            collect_statement_folds(body, ranges);
-        }
-        ExprKind::While { body, .. } => {
-            if let Some(r) = span_fold(&expr.span, Some(FoldingRangeKind::Region)) {
-                ranges.push(r);
-            }
-            collect_statement_folds(body, ranges);
-        }
-        ExprKind::Loop { body, .. } => {
-            if let Some(r) = span_fold(&expr.span, Some(FoldingRangeKind::Region)) {
-                ranges.push(r);
-            }
-            collect_statement_folds(body, ranges);
-        }
-        ExprKind::Receive {
-            arms, after_body, ..
-        } => {
-            if let Some(r) = span_fold(&expr.span, Some(FoldingRangeKind::Region)) {
-                ranges.push(r);
-            }
-            for arm in arms {
-                collect_statement_folds(&arm.body, ranges);
-            }
-            collect_statement_folds(after_body, ranges);
-        }
-        ExprKind::Closure { body, .. } => {
-            if let Some(r) = span_fold(&expr.span, Some(FoldingRangeKind::Region)) {
-                ranges.push(r);
-            }
-            collect_statement_folds(body, ranges);
-        }
-        _ => {}
+        visit::walk_expr(self, expr);
     }
 }
 
