@@ -165,8 +165,8 @@ impl Drop for ProcessStack {
 }
 
 /// A native process's execution state: everything the native
-/// [`Executor`](koja_runtime_core::Executor) needs to enter and resume one
-/// process. Stored opaquely in the process's table slot, owned by the
+/// [`Executor`] needs to enter and resume one process. Stored
+/// opaquely in the process's table slot, owned by the
 /// slot's `on_cpu` claim holder. The scheduling policy in
 /// `koja-runtime-core` never inspects it.
 ///
@@ -223,7 +223,8 @@ pub(crate) struct NativeExecutor;
 
 impl Executor for NativeExecutor {
     /// The saved stack pointer: read from the table before the switch,
-    /// written back after. The whole point of [`Continuation`] being a
+    /// written back after. The whole point of
+    /// [`Continuation`](Executor::Continuation) being a
     /// bare `Copy` pointer is that the driver marshals it without holding
     /// a borrow into the table across the switch.
     type Continuation = *mut u8;

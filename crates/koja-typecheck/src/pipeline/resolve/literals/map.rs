@@ -1,12 +1,12 @@
 //! `["k1": v1, "k2": v2]` resolution. The surrounding hint chooses
 //! which `MapLiteral<K, V>` conformer receives the entries.
 //!
-//! - No hint, or hint is `Map<K, V>`: the literal stays
+//! - With no hint, or a hint of `Map<K, V>`, the literal stays
 //!   [`ExprKind::Map`] on the sealed AST and stamps
 //!   `expr.resolution = Map<K, V>`. IR lowering builds the map
 //!   directly without an entry-list allocation.
-//! - Hint is some `X` that has an `impl MapLiteral<K, V> for X` in
-//!   the registry: the outer expression is rewritten in-place into
+//! - When the hint is some `X` with an `impl MapLiteral<K, V> for X`
+//!   in the registry, the outer expression is rewritten in-place into
 //!   a synthesized `X.from_entries([("k", v), ...])` method call.
 //!   The ordered entry list preserves source order and duplicate keys.
 //!

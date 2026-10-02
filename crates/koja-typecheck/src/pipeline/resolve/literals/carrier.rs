@@ -18,10 +18,10 @@
 //! ([`super::list`], [`super::map`], [`super::scalar`]) plug their
 //! literal-specific work into this spine.
 //!
-//! Protocol id resolution is registry-backed: a missing
+//! Protocol id resolution is registry-backed. A missing
 //! `Global.<protocol_name>` autoimport silently falls through to
-//! the default carrier. That's the only graceful-degradation point:
-//! a missing default-carrier autoimport is a hard diagnostic.
+//! the default carrier. That is the only graceful-degradation point.
+//! A missing default-carrier autoimport is a hard diagnostic.
 
 use koja_ast::ast::{Arg, Diagnostic, Expr, ExprKind, Name};
 use koja_ast::identifier::{GlobalRegistryId, Identifier, Resolution, ResolvedType};
@@ -186,7 +186,7 @@ pub(super) fn dispatch_via_carrier(
                 type_args: Vec::new(),
             };
             // The synthesized call dispatches through the normal
-            // method-call resolver: it populates the receiver's
+            // method-call resolver. It populates the receiver's
             // resolution (`Global(id)` leaf, then upgraded with
             // inferred type-args), validates the arg shape against
             // `<from_method>(<param>: <DefaultCarrier>) -> Self`,
@@ -221,7 +221,7 @@ fn static_receiver(path: &[String], span: Span) -> Expr {
     )
 }
 
-/// Diagnostic helper: emit "{spec.missing_root_label} requires
+/// Diagnostic helper that emits "{spec.missing_root_label} requires
 /// `Global.<root_name>` to be autoimported" at `span`. Returns
 /// [`ResolvedType::unresolved`] so the caller can plumb the
 /// short-circuit through its own control flow.

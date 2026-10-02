@@ -13,7 +13,7 @@
 //!
 //! Tuples have no nominal home for derived impls, so the universal
 //! protocol functions (`format` / `print` / `inspect` / `equals?`) expand
-//! inline at each call site instead: element-wise projection plus a
+//! inline at each call site instead, as element-wise projection plus a
 //! `Call` into each element's own conformance function, mirroring
 //! what `derive_debug` / `derive_equality` synthesize for nominal
 //! types. `equals?` routes through [`super::equality`], union
@@ -47,7 +47,7 @@ pub(super) fn lower_tuple_literal(
     for element in elements {
         let (value, next) = lower_expr(element, ctx, current)?;
         current = next;
-        // Value semantics: an element store acquires an independent
+        // Under value semantics, an element store acquires an independent
         // value, same as a struct field init.
         let element_ty = ctx.type_of(value);
         let owned = materialize_owned(ctx, current, value, &element_ty);

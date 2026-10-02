@@ -166,7 +166,7 @@ pub(super) async fn socket_send_to(args: &[Value]) -> Result<Value, RuntimeError
             args,
         ));
     };
-    // Interrupted by a signal: return the native -1 sentinel.
+    // If interrupted by a signal, return the native -1 sentinel.
     if reactor::io_block(*fd as i32, Interest::Writable, None).await != IoWait::Ready {
         return Ok(Value::Int(-1));
     }

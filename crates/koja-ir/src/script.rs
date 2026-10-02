@@ -20,7 +20,7 @@
 //!
 //! The shape mirrors a single function's body without leaking an
 //! [`IRFunction`] (which carries a name, parameters, and the
-//! "user-declared" semantics that scripts deliberately don't have).
+//! "user-declared" semantics that scripts deliberately do not have).
 
 use koja_typecheck::CheckedProgram;
 
@@ -41,7 +41,7 @@ use crate::types::IRType;
 
 /// Sealed output of [`lower_script`]'s success path.
 ///
-/// `blocks` is the implicit function's body: the top-level
+/// `blocks` is the implicit function's body. It holds the top-level
 /// statements of the script source lowered to one or more basic
 /// blocks, mirroring `IRFunction.blocks`. The fallthrough exit ends
 /// in `IRTerminator::Return`, and each explicit early `return` in
@@ -184,7 +184,7 @@ fn stage_script_body(
 }
 
 /// Find the populated `File.body` in `checked`, or fall back to an
-/// empty slice when no file carries one (a script source that's
+/// empty slice when no file carries one (a script source that is
 /// items-only, e.g. a REPL session before the user types a
 /// trailing expression). Panics if more than one file carries a
 /// body, since the driver must dispatch script-mode lowering on a

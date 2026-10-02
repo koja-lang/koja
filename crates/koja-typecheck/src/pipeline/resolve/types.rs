@@ -42,7 +42,7 @@ pub(crate) fn names_struct(path: &[String], scope: ResolutionScope<'_>) -> bool 
 /// Multi-segment paths (`Crypto.SHA256`, `HTTP.Headers`) resolve
 /// directly against the registry, so callers can write the
 /// qualified name without an `alias`. Same precedence as
-/// [`super::super::lift_signatures::types::resolve_path_to_global`]:
+/// `lift_signatures::types::resolve_path_to_global`:
 /// alias rewrite first, then `<package>.<segments…>`, then for
 /// multi-segment paths only the head-as-package interpretation
 /// (`<path[0]>.<path[1..]>`, what `alias`-rewrite would
@@ -169,22 +169,16 @@ fn peel_alias_capped(ty: &ResolvedType, registry: &GlobalRegistry, fuel: usize) 
 /// structural equality plus the `Int ≡ Int64` and `Float ≡ Float64`
 /// aliases applied recursively at every leaf, so
 /// `Result<Int, String>` and `Result<Int64, String>` are equivalent,
-/// `fn (Int) -> Int64` and `fn (Int64) -> Int` are equivalent, etc.
+/// `fn (Int) -> Int64` and `fn (Int64) -> Int` are equivalent, and so on.
 ///
-/// The alias arm is the early-bound stand-in for future union
-/// membership: per `LANGUAGE.md`'s primitives table, `Int` is on
-/// track to become an `Int8 | Int16 | Int32 | Int64` union, and
-/// `Float` likewise. Today the registry keeps `Int` and `Int64` as
-/// distinct `Identifier`s (so they remain distinct ids when one
-/// becomes the union and the other its member). This function
-/// papers over that with a hardcoded pair check. When unions land
-/// the alias arm generalizes to a registry-backed
-/// "is `a` a member of `b`'s union (or vice versa)?" check, and every
-/// caller of `types_equivalent` keeps working unchanged.
+/// The registry keeps `Int` and `Int64` as distinct `Identifier`s,
+/// so the alias arm is a hardcoded pair check. Every caller goes
+/// through this one predicate, so a change to the alias rule lands
+/// in one place.
 ///
-/// Wider numeric coercion (`Int -> Int32` etc.) is a separate
-/// concept: that's literal-fit coercion at type-equality sites,
-/// handled by [`super::coercion::check_compatible`].
+/// Wider numeric coercion (`Int` to `Int32`, for example) is a
+/// separate concept. That is literal-fit coercion at type-equality
+/// sites, handled by [`super::coercion::check_compatible`].
 pub(crate) fn types_equivalent(
     a: &ResolvedType,
     b: &ResolvedType,
@@ -215,7 +209,7 @@ pub(crate) fn types_equivalent(
                     .zip(b_args)
                     .all(|(x, y)| types_equivalent(x, y, registry));
             }
-            // Different heads: only the alias arm applies, and only
+            // With different heads, only the alias arm applies, and only
             // when both sides are bare leaves (no type-args).
             a_args.is_empty()
                 && b_args.is_empty()

@@ -219,7 +219,7 @@ fn synthesize_eq_env(
 /// null glue pointer in the env header).
 ///
 /// The body carries the same `env_layout` as the closure body and no
-/// user-visible params: for each heap-managed capture it
+/// user-visible params. For each heap-managed capture it
 /// [`IRInstruction::LoadCapture`]s the value and [`IRInstruction::DropValue`]s
 /// it. Composite drops are rewritten into `drop_T` calls by
 /// [`crate::elaborate`], while leaf drops stay inline `rc--` in the backend.
@@ -349,10 +349,10 @@ fn param_ids(params: &[ClosureParam]) -> HashSet<LocalId> {
 
 /// Walk `body` collecting every [`LocalId`] referenced through
 /// `Resolution::Local` (or `Self_::local_id`) that the closure
-/// doesn't bind itself (params, assignments, pattern bindings).
+/// does not bind itself (params, assignments, pattern bindings).
 /// Returns dedup'd ids in encounter order. Nested closures
 /// contribute via a per-scope frame, and their own params /
-/// body-locals shadow ours during their subwalk.
+/// body-locals shadow the enclosing closure's during their subwalk.
 fn collect_captures(body: BodyShape<'_>, params: HashSet<LocalId>) -> Vec<(LocalId, ResolvedType)> {
     let mut walker = CaptureWalker {
         scopes: vec![params],
@@ -405,7 +405,7 @@ impl CaptureWalker {
     /// Recording as-encountered (rather than pre-scanning the body)
     /// also covers assignments nested inside `if` / `match` / loop
     /// blocks. [`LocalId`]s are unique per enclosing function, so a
-    /// flat frame per closure can't conflate shadowed names.
+    /// flat frame per closure cannot conflate shadowed names.
     fn note_assignment_local(&mut self, target: &LValue) {
         if target.segments.len() != 1 {
             return;
@@ -455,7 +455,7 @@ impl<'ast> Visitor<'ast> for CaptureWalker {
     /// An arm's pattern bindings (`Shape.Circle(n)`, `event: Lifecycle`)
     /// are locals of the arm's scope, not references to the outer
     /// function. Push them as a frame so guard / body reads of the
-    /// bound names aren't misclassified as captures.
+    /// bound names are not misclassified as captures.
     fn visit_match_arm(&mut self, arm: &'ast MatchArm) {
         self.scopes.push(pattern_binding_ids(&arm.pattern));
         visit::walk_match_arm(self, arm);
@@ -588,9 +588,9 @@ fn emit_make_closure(
 ) -> Result<(ValueId, IRBlockId), ()> {
     let mut capture_values = Vec::with_capacity(captures.len());
     for capture in captures {
-        // The env owns its captures under value semantics: acquire
+        // The env owns its captures under value semantics, so acquire
         // each heap-managed capture into a fresh owned value before
-        // it's stored, so the env can release it on teardown without
+        // it is stored, so the env can release it on teardown without
         // disturbing the outer binding (which the read borrowed).
         let borrowed = read_capture(capture, ctx, block);
         capture_values.push(materialize_owned(ctx, block, borrowed, &capture.ir_type));

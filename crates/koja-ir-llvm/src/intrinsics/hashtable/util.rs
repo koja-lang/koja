@@ -19,7 +19,7 @@ use crate::types::ir_basic_type;
 
 use super::{HashtableLayout, INITIAL_CAPACITY, STATE_OCCUPIED};
 
-/// Live state of one hashtable: the two buffer pointers plus the
+/// Live state of one hashtable, the two buffer pointers plus the
 /// occupancy + capacity ints. Freshly extracted from `self` by
 /// [`extract_table_fields`], returned (possibly with swapped
 /// buffers and grown capacity) from a resize, or threaded by hand
@@ -34,10 +34,10 @@ pub(crate) struct TableSnapshot<'ctx> {
 }
 
 /// K-side intrinsics resolved once per `Map` / `Set` method
-/// emission: the monomorphized `hash` / `equals?` functions plus the
+/// emission, the monomorphized `hash` / `equals?` functions plus the
 /// LLVM basic type for `K`. Probe paths read all three, rehash
 /// only needs `hash_fn` + `key_basic_ty` because moving an
-/// already-bucketed key into a larger buffer doesn't compare
+/// already-bucketed key into a larger buffer does not compare
 /// against existing slots.
 pub(super) struct KeyHashOps<'ctx> {
     pub hash_fn: FunctionValue<'ctx>,

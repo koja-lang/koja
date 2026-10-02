@@ -1,5 +1,5 @@
 //! Value-semantics drop glue. Implements the reference-counting
-//! baseline: every binding, parameter, and return *acquires* an owned
+//! baseline. Every binding, parameter, and return *acquires* an owned
 //! value ([`IRInstruction::Clone`]), so each owner holds storage it can
 //! unconditionally release at scope exit ([`IRInstruction::DropLocal`]
 //! / [`IRInstruction::DropValue`]).
@@ -8,11 +8,13 @@
 //! [`IRType::is_heap_managed`] type. [`crate::elaborate`] decides
 //! what each lowers to.
 //!
-//! Four lowering-side primitives:
+//! Five lowering-side primitives:
 //!
 //! - [`materialize_owned`]: acquire a value at an ownership boundary.
 //! - [`materialize_boundary_copy`]: deep-copy a value at a process
 //!   boundary (send / spawn payloads).
+//! - [`promote_param`]: declare a parameter's slot in the entry block
+//!   and acquire the caller's borrowed argument into it.
 //! - [`emit_slot_drops`]: release every heap-managed local at a
 //!   control-flow exit.
 //! - [`drop_discarded_temp`]: release an owned value whose statement

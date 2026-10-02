@@ -57,8 +57,8 @@ const BUDGET_REGISTER: &str = "x26";
 const BUDGET_REGISTER_FEATURE: &str = "+reserve-x26";
 
 /// Whether the host keeps the budget in [`BUDGET_REGISTER`] instead of
-/// the thread-local. Compile-time constant: the backend only targets
-/// the host triple.
+/// the thread-local. This is a compile-time constant, since the backend
+/// only targets the host triple.
 fn budget_register_enabled() -> bool {
     cfg!(target_arch = "aarch64")
 }

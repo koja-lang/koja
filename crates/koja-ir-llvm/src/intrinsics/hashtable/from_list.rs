@@ -45,8 +45,8 @@ pub(crate) fn emit_set_from_list<'ctx>(
         .or_ice()?
         .into_int_value();
 
-    // Mint an empty set, then loop and insert each element. We
-    // call back into `build_empty_table` + a freshly-built insert
+    // Mint an empty set, then loop and insert each element. The intrinsic
+    // calls back into `build_empty_table` + a freshly-built insert
     // helper rather than the user-facing `Set.new` symbol because
     // the declared-function table may not have either yet at the
     // time `from_list` defines its body.
@@ -119,7 +119,7 @@ pub(crate) fn emit_set_from_list<'ctx>(
 
 /// Inline the `Set.insert` body at a call site instead of emitting
 /// a sibling function and calling it, since the per-method
-/// declared-function index isn't populated for the
+/// declared-function index is not populated for the
 /// freshly-monomorphized `Set.insert` at the point where
 /// `from_list`'s body is being emitted.
 fn call_set_insert_inline<'ctx>(
@@ -133,7 +133,7 @@ fn call_set_insert_inline<'ctx>(
     let i8_ty = ctx.context.i8_type();
     let i64_ty = ctx.context.i64_type();
     // The receiver is a `current` struct already in hand (not
-    // `self_val` from a parameter), so we don't use
+    // `self_val` from a parameter), so this helper does not use
     // [`extract_table_fields`] here. The manual 4-extract pattern
     // is the natural fit.
     let current_struct = current.into_struct_value();

@@ -55,7 +55,7 @@ pub(crate) fn seal_script(script: &IRScript) {
 }
 
 /// Mirror of `program::seal_program_closure_ops` for the
-/// script shape: validates every `MakeClosure` against the
+/// script shape, validating every `MakeClosure` against the
 /// assembled `IRScript::function` lookup. Walks the script body
 /// itself plus every package fragment.
 fn seal_script_closure_ops(script: &IRScript) {
@@ -67,7 +67,7 @@ fn seal_script_closure_ops(script: &IRScript) {
 }
 
 /// `LoadCapture` is only well-defined inside a closure body. The
-/// implicit script-body function isn't a closure, so any
+/// implicit script-body function is not a closure, so any
 /// `LoadCapture` directly in `script.blocks` is a lowering bug.
 /// Per-package closure-body checks live in
 /// [`super::closures::seal_closure_decls`] (called from

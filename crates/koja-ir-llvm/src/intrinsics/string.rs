@@ -85,9 +85,9 @@ fn emit_byte_length<'ctx>(
 /// `String.to_binary(self) -> Binary`: a zero-cost reinterpret.
 /// `String` and `Binary` share the `[rc][bit_length][bytes]` block
 /// (the String's trailing libc NUL is just unused capacity a `Binary`
-/// never reads), so we rc-acquire the immutable block and hand back
-/// the same payload pointer as an owned `Binary`. The matching `Drop`
-/// rc-decrements either alias.
+/// never reads), so the intrinsic rc-acquires the immutable block and
+/// hands back the same payload pointer as an owned `Binary`. The
+/// matching `Drop` rc-decrements either alias.
 fn emit_to_binary<'ctx>(
     ctx: &EmitContext<'ctx>,
     function: &IRFunction,

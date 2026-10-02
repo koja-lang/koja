@@ -1,6 +1,6 @@
 //! Pooled compound constants. Strings, binaries, unit enum variants,
 //! and structs of literals get one entry per top-level
-//! `const NAME = <compound-rhs>` declaration. Primitives don't pool
+//! `const NAME = <compound-rhs>` declaration. Primitives do not pool
 //! (they inline as [`crate::IRInstruction::Const`] at every use).
 //! Values the static folder cannot express (collections, payload
 //! variants, generic structs) pool as [`IRConstantValue::Built`] and

@@ -296,7 +296,7 @@ impl GlobalRegistry {
     }
 
     /// Resolve [`UNIVERSAL_PROTOCOLS`] to their `GlobalRegistryId`s.
-    /// A name that isn't registered yet (e.g. before `Global.debug`
+    /// A name that is not registered yet (e.g. before `Global.debug`
     /// has been collected) is silently skipped. Callers should only
     /// observe a non-empty list once the stdlib has loaded. Order
     /// follows the source-order of [`UNIVERSAL_PROTOCOLS`].

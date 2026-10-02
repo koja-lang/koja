@@ -3,8 +3,8 @@
 //! `koja-runtime-posix` adapter. Docs here name the native counterpart
 //! they mirror where one exists.
 //!
-//! The defining asymmetry with native: eval's [`Executor`] **is** the
-//! interpreter. A process is an `async` interpreter future owned here in
+//! Eval's [`Executor`] **is** the interpreter, the defining asymmetry
+//! with native. A process is an `async` interpreter future owned here in
 //! [`EvalExecutor`], and [`resume`](EvalExecutor::resume) polls it until
 //! it next awaits (a `receive` park) or completes. Because the suspended
 //! state lives inside the boxed future rather than a saved stack pointer,
@@ -41,7 +41,7 @@ use crate::interpreter::{CallResolver, build_exit_signal_value};
 use crate::reactor::EvalReactor;
 use crate::value::Value;
 
-/// The cooperative process table: agnostic control blocks (no executor
+/// The cooperative process table of agnostic control blocks (no executor
 /// execution state, hence `()`) keyed against eval's typed message repr.
 pub(crate) type EvalTable = ProcessTable<(), EvalMessage>;
 
@@ -51,7 +51,7 @@ pub(crate) type EvalTable = ProcessTable<(), EvalMessage>;
 /// wakes) all reach the state through clones of this bundle.
 pub(crate) type EvalRuntime = CooperativeRuntime<(), EvalMessage>;
 
-/// A suspended process body: the interpreter's `async` call tree, boxed
+/// A suspended process body, the interpreter's `async` call tree boxed
 /// so the executor can store and re-poll it across suspensions. Borrows
 /// the program for the run (`'a`), so it is not `'static`.
 pub(crate) type ProcessFuture<'a> = Pin<Box<dyn Future<Output = ()> + 'a>>;
@@ -97,7 +97,7 @@ struct PendingSpawn {
 }
 
 /// Clears the per-run thread-local state on drop, so a panic mid-run
-/// can't leak the installed core (test threads are reused).
+/// cannot leak the installed core (test threads are reused).
 pub(crate) struct RuntimeGuard;
 
 impl Drop for RuntimeGuard {
@@ -439,7 +439,7 @@ pub(crate) fn mint_token() -> i64 {
 /// returned immediately (for the `Ref` the spawning process produces).
 /// The child's future is installed by the executor after this resume.
 pub(crate) fn spawn_child(wrapper: IRSymbol, config: Value) -> Pid {
-    // Refuse new processes once draining (SIGTERM seen): the program is
+    // Refuse new processes once draining (SIGTERM seen). The program is
     // shutting down. The invalid pid 0 makes the returned `Ref` behave like
     // a ref to an already-dead process. Dropping `config` runs its glue.
     if with_table(|table| table.is_draining()) {
@@ -502,7 +502,7 @@ impl Message for EvalMessage {
 
 /// Yields control back to the driver exactly once. The caller parks
 /// itself in the table first. The first poll then returns `Pending` (the
-/// driver won't re-resume a `Blocked` process), and the next poll, which
+/// driver will not re-resume a `Blocked` process), and the next poll, which
 /// only happens after a delivery or deadline promotes the process,
 /// returns `Ready`. The receive loop re-checks the mailbox after each.
 pub(crate) struct YieldOnce {
@@ -528,7 +528,7 @@ impl Future for YieldOnce {
     }
 }
 
-/// The cooperative executor: owns the per-process interpreter futures and
+/// The cooperative executor owns the per-process interpreter futures and
 /// the [`CallResolver`] (to build spawned children's futures and mint
 /// `IOReady` values). Process execution state and the resume token both
 /// stay `()`.

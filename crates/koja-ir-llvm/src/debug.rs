@@ -1,4 +1,4 @@
-//! DWARF debug-info emission. Function-granular: each user-declared
+//! Function-granular DWARF debug-info emission. Each user-declared
 //! function gets a `DISubprogram`, and every instruction in its body
 //! carries a `DILocation` at the function's declaration line, so a
 //! runtime panic backtrace resolves frames to `file:line: name()`.
@@ -8,7 +8,7 @@
 //! Only the object-emitting `compile_*` paths construct a
 //! [`DebugInfo`]. The `emit_*_llvm_ir` snapshot paths leave it `None`
 //! so their printed IR stays metadata-free and the golden snapshots
-//! don't churn.
+//! do not churn.
 
 use std::iter::Peekable;
 use std::path::Path;
@@ -24,8 +24,8 @@ use inkwell::values::FunctionValue;
 use koja_ir::IRSymbol;
 
 /// Owns the module's [`DebugInfoBuilder`]. The compile unit it mints
-/// lives in the module's metadata once created, so we only retain the
-/// builder (used to add per-function subprograms and locations).
+/// lives in the module's metadata once created, so the struct retains
+/// only the builder (used to add per-function subprograms and locations).
 pub(crate) struct DebugInfo<'ctx> {
     builder: DebugInfoBuilder<'ctx>,
 }

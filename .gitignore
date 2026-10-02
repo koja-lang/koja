@@ -1,21 +1,23 @@
 # Build artifacts
-/target
-/target-check
+**/build/debug
+**/build/release
 **/doc
 **/target/debug
 **/target/release
-**/build/debug
-**/build/release
 *.beam
+*.dSYM
+*.exe
 *.o
 *.out
-*.exe
-*.dSYM
+/target
+/target-check
 
 # Misc
+.cursor
 .DS_Store
-justfile
 .rules
+/rustdoc/
+justfile
 tests/lang/ffi/libffi_helper.a
 tests/lang/ffi/libffi_helper.dylib
 tests/lang/ffi/libffi_helper.so

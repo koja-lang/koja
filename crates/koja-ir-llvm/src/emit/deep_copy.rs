@@ -1,4 +1,4 @@
-//! `IRInstruction::DeepCopy` emission: the process-boundary copy.
+//! `IRInstruction::DeepCopy` emission, the process-boundary copy.
 //! Mirrors [`super::clone::emit_clone`]'s type dispatch, but where
 //! clone shares heap blocks with an `rc++`, deep copy produces a
 //! value with no storage shared with the source (Koja's rc

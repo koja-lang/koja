@@ -1,9 +1,10 @@
 //! The cooperative driver's ready queue: one FIFO level per
-//! [`Priority`], with per-level aging so no level starves.
+//! [`Priority`](crate::process_table::Priority), with per-level aging
+//! so no level starves.
 //!
 //! Moved out of the process table when it sharded: the table returns
-//! [`Wake`](crate::process_table::Wake) facts and the queue owner routes
-//! them. The native adapter routes into its work-stealing deques
+//! [`Wake`] facts and the queue owner routes them. The native
+//! adapter routes into its work-stealing deques
 //! instead, so only cooperative backends use this.
 
 use std::collections::VecDeque;

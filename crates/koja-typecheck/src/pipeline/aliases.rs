@@ -11,7 +11,7 @@
 //! Validation runs once between [`super::collect`] and
 //! [`super::lift_signatures`] so every signature site sees a
 //! validated alias roster. Diagnostics fire at the alias decl
-//! itself. Alias *use* sites that don't resolve fall through to the
+//! itself. Alias *use* sites that do not resolve fall through to the
 //! same "type not registered" diagnostic any other unknown name
 //! would produce.
 
@@ -28,7 +28,7 @@ use crate::registry::{GlobalKind, GlobalRegistry, RegistryEntry};
 /// target through reference precedence (current package, head-as-
 /// package, then `Global`) and project the user's remaining segments
 /// onto it. Returns `None` when no alias binds `path[0]`, or when the
-/// target itself doesn't resolve (the validator reports the latter at
+/// target itself does not resolve (the validator reports the latter at
 /// the alias decl).
 ///
 /// Resolving the target with full precedence (rather than assuming
@@ -95,7 +95,7 @@ fn lookup_alias_target<'r>(
 /// 4. Target is visible from the aliasing package (a `priv` decl
 ///    cannot be aliased cross-package).
 /// 5. Local name not already used by another alias in this file.
-/// 6. Local name doesn't shadow a current-package decl, *unless*
+/// 6. Local name does not shadow a current-package decl, *unless*
 ///    the alias's target is that very same identifier (redundant
 ///    self-alias is allowed, since the alias and the existing binding
 ///    resolve to the same id).
@@ -307,9 +307,9 @@ fn check_no_duplicate(
 
 /// Reject any alias whose `local_name` collides with an existing
 /// binding in the current package or `Global`. The pipeline treats
-/// shadowing as a hard error. Carve-out: when the colliding
-/// identifier *is* the alias target, the alias is redundant but
-/// not a shadow (resolves to the same id). Allow it.
+/// shadowing as a hard error. When the colliding identifier *is*
+/// the alias target, the alias is redundant but not a shadow
+/// (resolves to the same id). Allow it as the one carve-out.
 fn check_no_shadow(
     alias: &AliasDecl,
     target: &Identifier,

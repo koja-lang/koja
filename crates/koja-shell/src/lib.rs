@@ -369,7 +369,7 @@ struct EvalOutcome {
 /// The trailing expression is rendered through its real `Debug.format`
 /// instance, the same path `value.print()` takes, so structs show
 /// named fields and enums show source-level variant names instead of
-/// the runtime [`Display`]'s mangled monomorphization symbols. To get
+/// the runtime `Display`'s mangled monomorphization symbols. To get
 /// there, the trailing expression `E` is rewritten to `E.format()`
 /// before lowering (see [`wrap_trailing_in_format`]): the lowered
 /// script then yields the `Debug.format` string directly, and the
@@ -383,7 +383,7 @@ struct EvalOutcome {
 /// `GitHub.user("x")` fires its request once. If the wrapped lower
 /// fails (a trailing type with no usable `Debug.format`, e.g. a bare
 /// function value), the unwrapped body runs and the runtime
-/// [`Display`] renders it.
+/// `Display` renders it.
 ///
 /// `sources` is the driver-supplied baseline (stdlib prelude plus, in
 /// a project, the project + dependency sources) with the REPL
@@ -447,7 +447,7 @@ fn run_script(script: &IRScript) -> Result<Value, String> {
 
 /// The text the REPL prints for a trailing value. The wrapped lower
 /// hands back the `Debug.format` string verbatim, and the unwrapped
-/// fallback renders the raw value through its runtime [`Display`].
+/// fallback renders the raw value through its runtime `Display`.
 fn render(value: Value) -> String {
     match value {
         Value::String(bytes) => String::from_utf8_lossy(&bytes).into_owned(),

@@ -1,5 +1,5 @@
-//! Non-entry function emission: declare an LLVM function for an
-//! [`IRFunction`] (no body), then define its body once every helper
+//! Non-entry function emission declares an LLVM function for an
+//! [`IRFunction`] (no body), then defines its body once every helper
 //! has been declared. The two-phase declare-then-define pattern lets
 //! mutually-recursive calls resolve through the
 //! `IRSymbol -> FunctionValue` index on [`EmitContext`] (populated
@@ -70,9 +70,9 @@ pub(crate) fn declare_function<'ctx>(
             ctx.register_extern_float_return(function.symbol.clone(), llvm_name.clone());
         }
     } else {
-        // FFI declarations carry no body we define. Everything else
-        // gets a maintained frame pointer so panic backtraces can
-        // walk it.
+        // FFI declarations carry no body for the backend to define.
+        // Everything else gets a maintained frame pointer so panic
+        // backtraces can walk it.
         ctx.set_function_attributes(llvm_function);
     }
     ctx.declare_function_debug(
@@ -85,7 +85,7 @@ pub(crate) fn declare_function<'ctx>(
 
 /// Source location to attribute in DWARF for `function`, or `None`
 /// when the function carries no surface-source frame worth showing.
-/// Only user-declared `Regular` bodies qualify: synthesized glue,
+/// Only user-declared `Regular` bodies qualify. Synthesized glue,
 /// closures, wrappers, and the bodyless `Intrinsic` / `Extern` kinds
 /// stay unattributed even when they retain a `def_location`.
 fn debuggable_def_location(function: &IRFunction) -> Option<&IRSourceDef> {
@@ -153,7 +153,7 @@ pub(crate) fn define_function<'ctx>(
 ) -> Result<(), LlvmError> {
     // Stage the body's debug scope before any instruction is built,
     // including the synthetic early-return kinds below, which unset the
-    // location so they don't inherit the previous function's scope.
+    // location so they do not inherit the previous function's scope.
     ctx.enter_function_debug(llvm_function, debuggable_def_location(function));
     let env_layout = match &function.kind {
         FunctionKind::CopyClosureGlue { env_layout } => {
@@ -193,7 +193,7 @@ pub(crate) fn define_function<'ctx>(
             return Ok(());
         }
         FunctionKind::SpawnWrapper { .. } => {
-            // Spawn wrappers are pure ABI shims: the real semantics
+            // Spawn wrappers are pure ABI shims. The real semantics
             // live in the IR-synthesized `<state>.__spawn_body` the
             // wrapper's IR `Call` names. The emitter only loads the
             // typed config from the raw `i8*` parameter and calls it.
@@ -201,7 +201,7 @@ pub(crate) fn define_function<'ctx>(
         }
         FunctionKind::ProcessEntryWrapper { .. } => {
             // Process-entry wrappers extend the spawn-wrapper shim
-            // with an exit-code hand-off: the `i64` the IR-synthesized
+            // with an exit-code hand-off. The `i64` the IR-synthesized
             // `<state>.__entry_body` returns is stored into the
             // module's `__koja_exit_code` global, which the
             // synthesized main trampoline returns from.
@@ -394,10 +394,10 @@ fn is_param_acquire(instruction: Option<&IRInstruction>, param: ValueId) -> bool
 
 /// Sanity-check that the entry block's leading instructions are the
 /// canonical per-parameter promotion sequences lower emits:
-/// `LocalDecl` -> (acquire `Clone` / `Call` for heap-managed) ->
+/// `LocalDecl`, then an acquire (`Clone` / `Call` for heap-managed), then
 /// `LocalWrite`. A violation indicates a lower invariant break that
-/// would otherwise corrupt the back-edge slot writes. We panic with a
-/// clear message.
+/// would otherwise corrupt the back-edge slot writes. The check panics
+/// with a clear message.
 fn debug_assert_promotion_shape(prefix: &[IRInstruction], function: &IRFunction) {
     debug_assert_eq!(prefix.len(), promotion_prefix_len(function, prefix));
     let mut cursor = prefix.iter().enumerate().peekable();
@@ -459,7 +459,7 @@ fn closure_env_ptr<'ctx>(
 }
 
 /// Pre-create one inkwell [`BasicBlock`] per IR block on
-/// `llvm_function`, returning the [`IRBlockId`] -> [`BasicBlock`]
+/// `llvm_function`, returning the [`IRBlockId`] to [`BasicBlock`]
 /// index emit consumes when lowering branch terminators. Shared
 /// helper used by both the main-wrapper synthesis and helper
 /// function definition.

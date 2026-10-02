@@ -1,4 +1,4 @@
-//! Merge sub-pass: stitch the per-package [`IRPackage`] fragments
+//! The merge sub-pass stitches the per-package [`IRPackage`] fragments
 //! produced by [`crate::lower::lower_package`] into a single working
 //! [`IRProgram`].
 //!

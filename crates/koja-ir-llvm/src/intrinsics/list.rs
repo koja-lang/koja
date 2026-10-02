@@ -3,8 +3,8 @@
 //! storage lives off-heap behind `buf_ptr`. Methods malloc / realloc
 //! / memcpy via libc directly, no Rust-side runtime helpers.
 //!
-//! Element-size-parameterized: each method computes `elem_size` from
-//! the `IRType::List(_)` inner type carried on the function's
+//! Each method is element-size-parameterized. It computes `elem_size`
+//! from the `IRType::List(_)` inner type carried on the function's
 //! signature, then generates the same shape of IR regardless of `T`.
 
 use inkwell::IntPredicate;
@@ -443,7 +443,7 @@ fn emit_pop<'ctx>(
         .build_int_mul(new_len, elem_size, "byte_off")
         .or_ice()?;
     // The popped element lives at `new_len` in the original buffer
-    // (it's excluded from the copy below).
+    // (it is excluded from the copy below).
     let elem_ptr = unsafe {
         ctx.builder
             .build_gep(i8_ty, buf_ptr, &[byte_offset], "elem_ptr")
@@ -522,8 +522,8 @@ fn emit_replace_at<'ctx>(
     )?;
     let elem_ptr = element_slot(ctx, new_buf, index, elem_size)?;
     // `copy_buffer` acquired every retained element, including the one
-    // at `index` we're about to overwrite. Release that copy so the
-    // incoming value (acquired next) is the slot's sole owner.
+    // at `index` the intrinsic is about to overwrite. Release that copy
+    // so the incoming value (acquired next) is the slot's sole owner.
     apply_in_slot(ctx, ElementOp::Release, elem_ty, elem_ptr)?;
     let value = acquire_value(ctx, elem_ty, value)?;
     ctx.builder.build_store(elem_ptr, value).or_ice()?;
@@ -563,7 +563,7 @@ fn emit_slice<'ctx>(
     let len = extract_int(ctx, self_val, 1, "len")?;
     let elem_size = element_byte_size(ctx, function, ListMethod::Slice)?;
 
-    // Clamp start: if start >= len, clamped_start = len.
+    // Clamp start. If start >= len, clamped_start = len.
     let start_ok = ctx
         .builder
         .build_int_compare(IntPredicate::ULT, start, len, "start_ok")
@@ -671,7 +671,7 @@ fn emit_concat<'ctx>(
         .build_int_add(self_len, other_len, "total_len")
         .or_ice()?;
 
-    // Copy-on-write: a fresh `total_len` buffer seeded with `self`'s
+    // Copy-on-write. A fresh `total_len` buffer seeded with `self`'s
     // elements, then `other` appended after them. Neither input buffer
     // is mutated.
     let elem_ty = element(ListMethod::Concat, function);

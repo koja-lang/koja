@@ -36,8 +36,8 @@ pub(crate) fn emit_object_file(
 /// Stamp the module flags clang sets under `-fpie`, recording that
 /// this module targets an executable, not a shared library. The C
 /// API cannot mark globals `dso_local`, so under `RelocMode::PIC`
-/// even our own definitions get GOT/PLT-style references. The linker
-/// relaxes those to direct access, since symbols defined in an
+/// even the module's own definitions get GOT/PLT-style references. The
+/// linker relaxes those to direct access, since symbols defined in an
 /// executable cannot be preempted.
 fn mark_position_independent_executable(module: &Module<'_>) {
     let two = module.get_context().i32_type().const_int(2, false);

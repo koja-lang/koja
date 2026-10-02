@@ -4,26 +4,30 @@
 //! table layout described in [`crate::types::hashtable_value_type`].
 //! `Map`'s entry is a `(K, V)` pair, `Set`'s entry is a single `T`.
 //! All the probe / resize / state-machine bookkeeping is identical
-//! between them: only the entry size and the optional value-side
+//! between them. Only the entry size and the optional value-side
 //! payload differ. This module owns the shared emitters, and the per-
 //! collection modules ([`super::map`], [`super::set`]) stitch them
 //! into the per-method dispatch.
 //!
 //! # Submodule layout
 //!
-//! - [`util`]: low-level helpers ([`call_malloc`](util::call_malloc),
-//!   [`resolve_hash_eq`](util::resolve_hash_eq), …) used by every
-//!   other submodule. Pure "build one instruction" wrappers with no
-//!   per-method shape.
+//! - [`util`]: instruction wrappers around the builder
+//!   ([`call_malloc`](util::call_malloc),
+//!   [`advance_slot`](util::advance_slot), and so on), the
+//!   occupied-bucket loop, and symbol resolution from sealed IR types
+//!   to monomorphized `hash` / `eq` functions
+//!   ([`resolve_hash_eq`](util::resolve_hash_eq)).
 //! - [`lifecycle`]: allocate and inspect (`new`, `length`, `empty?`).
 //! - [`read`]: the read-only probe loop and the `get` / `has?` /
 //!   `remove` tails that consume it.
-//! - [`resize`]: the load-factor check + rehash loop reused by every
-//!   write path.
+//! - [`resize`]: the load-factor check and rehash loop reused by
+//!   every write path.
 //! - [`insert`]: the write-side probe and the `Map.put` / `Set.insert`
 //!   tails.
 //! - [`from_list`]: `Set.from_list` and the inline `Set.insert` call
 //!   it emits per element.
+//! - [`cursor`]: the bucket-order scan behind `Map.next` and
+//!   `Set.next`.
 //!
 //! A key this backend cannot hash yet surfaces as
 //! [`crate::error::LlvmError::Codegen`]. IR-seal violations panic.

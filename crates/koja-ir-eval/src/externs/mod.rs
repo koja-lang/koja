@@ -5,7 +5,7 @@
 //! the same machine code for the body. Modules here mirror the
 //! stdlib source files that declare the externs.
 //!
-//! Adding a new extern: list the symbol in a
+//! To add a new extern, list the symbol in a
 //! [`marshal::pass_through_externs!`] invocation or hand-write the
 //! handler, then add its row to the `extern_table!` invocation below
 //! in ASCII order.

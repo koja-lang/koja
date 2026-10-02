@@ -3,15 +3,14 @@
 //! [`super::ops`]: one helper per AST shape.
 //!
 //! Decl lowering pulls the canonical field layout off the typecheck
-//! registry's [`GlobalKind::Struct`] definition so we never
-//! re-resolve a `TypeExpr` here. Construction and field access do
-//! the same: typecheck has already validated names and types, so
-//! IR's job is purely "stamp positional indices and the resolved
-//! per-field [`IRType`] onto the instruction".
+//! registry's [`GlobalKind::Struct`] definition so this module never
+//! re-resolves a `TypeExpr`. Construction and field access do the
+//! same. Typecheck has already validated names and types, so IR's
+//! job is to stamp positional indices and the resolved per-field
+//! [`IRType`] onto the instruction.
 //!
-//! Move tracking is deferred. Field reads produce a value of the
-//! field's IRType without invalidating the receiver, matching the
-//! resolve sub-pass. Tightening lands with the ownership slice.
+//! Field reads produce a value of the field's IRType without
+//! invalidating the receiver, matching the resolve sub-pass.
 
 use std::collections::BTreeMap;
 
@@ -77,7 +76,7 @@ pub(super) fn lower_struct_decl(
 /// resolved struct id off the call site's `expr.resolution` and
 /// canonicalizes the field-init list to declaration order so seal /
 /// backends iterate linearly. Each value is lowered through
-/// [`lower_expr`], so AST field-init order doesn't bleed into the IR.
+/// [`lower_expr`], so AST field-init order does not bleed into the IR.
 pub(super) fn lower_struct_construction(
     fields: &[FieldInit],
     expr_resolution: &ResolvedType,
@@ -104,7 +103,7 @@ pub(super) fn lower_struct_construction(
         },
     );
     // A struct literal allocates a fresh block whose fields it owns, so
-    // the result is an owned temp: a binding moves it, a use-and-release
+    // the result is an owned temp. A binding moves it, a use-and-release
     // site frees it. Without this it would be cloned on acquisition and
     // the original construction leaked.
     ctx.mark_owned(dest);
@@ -150,10 +149,10 @@ pub(super) fn canonicalize_struct_inits(
     let mut values_by_name: BTreeMap<String, ValueId> = BTreeMap::new();
     for field in fields {
         let (value, next) = lower_expr(&field.value, ctx, current)?;
-        // Value semantics: a field-store acquires an independent value,
-        // so a borrowed heap-leaf source is cloned (rc-bumped) into the
-        // field. The field then owns a reference that outlives the
-        // source local's scope-exit drop.
+        // Under value semantics, a field-store acquires an independent
+        // value, so a borrowed heap-leaf source is cloned (rc-bumped)
+        // into the field. The field then owns a reference that
+        // outlives the source local's scope-exit drop.
         let field_ty = ctx.type_of(value);
         let owned = materialize_owned(ctx, current, value, &field_ty);
         values_by_name.insert(field.name.text.clone(), owned);
@@ -217,9 +216,10 @@ pub(super) fn lower_field_access(
             struct_symbol,
         },
     );
-    // Value semantics: reading a heap-leaf field hands the caller an
-    // independent value (rc-bumped), balancing the drop the caller's
-    // binding/temp will emit, without disturbing the receiver's field.
+    // Under value semantics, reading a heap-leaf field hands the
+    // caller an independent value (rc-bumped), balancing the drop the
+    // caller's binding/temp will emit, without disturbing the
+    // receiver's field.
     let owned = materialize_owned(ctx, current, dest, &field_type);
     // The base is only borrowed for the read. If it was a fresh temp
     // (e.g. `make_struct().field`) it is dead now that the field has

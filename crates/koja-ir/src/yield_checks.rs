@@ -2,7 +2,7 @@
 //! cooperative-preemption point at every loop back-edge, before each
 //! [`IRTerminator::TailCall`], and at the entry of every call-containing
 //! function, so unbounded loops, tail recursion, and deep non-tail
-//! recursion alike can't monopolize a worker (or, on WASM, deadlock the
+//! recursion alike cannot monopolize a worker (or, on WASM, deadlock the
 //! only thread).
 //!
 //! Runs after [`crate::tail_calls::rewrite_tail_calls`] (so `TailCall`
@@ -47,10 +47,10 @@ pub(crate) fn insert_yield_checks(packages: &mut [IRPackage], body: &mut [IRBasi
 /// function, bounding non-tail recursion. A function reachable only through
 /// loops or straight-line code carries no call and is left untouched (its
 /// loops already yield, its straight-line work is bounded), so leaf functions
-/// don't pay for a check they can never need.
+/// do not pay for a check they can never need.
 ///
 /// The check lands after the parameter-promotion prologue (the canonical
-/// `LocalDecl` -> acquire -> `LocalWrite` run the backends split on), not at
+/// `LocalDecl`, acquire, `LocalWrite` run the backends split on), not at
 /// absolute index 0, so it never disturbs that prologue's shape.
 fn insert_entry_check(function: &mut IRFunction) {
     let contains_call = function.blocks.iter().any(|block| {
@@ -167,8 +167,8 @@ mod tests {
 
     #[test]
     fn while_loop_back_edge_gets_a_check() {
-        // entry -> header; header -CondBranch-> body, exit;
-        // body -Branch-> header (back-edge); exit -> return.
+        // Shape: `entry -> header`, `header -CondBranch-> body, exit`,
+        // `body -Branch-> header` (the back-edge), `exit -> return`.
         let mut blocks = vec![
             block(0, branch(1)),
             block(1, cond(2, 3)),
@@ -206,7 +206,7 @@ mod tests {
 
     #[test]
     fn forward_branch_is_not_a_back_edge() {
-        // A diamond: no edge targets a dominator, so no checks.
+        // In a diamond, no edge targets a dominator, so no checks.
         let mut blocks = vec![
             block(0, cond(1, 2)),
             block(1, branch(3)),

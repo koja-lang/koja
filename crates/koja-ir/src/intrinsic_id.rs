@@ -90,19 +90,19 @@ pub enum IRIntrinsicId {
     /// element type does.
     Ref(RefMethod),
     /// `@intrinsic` method on `ReplyTo<R>`. Single-method namespace
-    /// today (`send`). The wrapper enum keeps adding a sibling
-    /// method later a variant-add rather than a shape change, like
+    /// (`send`). The wrapper enum makes adding a sibling method a
+    /// variant-add rather than a shape change, like
     /// [`KernelMethod`] / [`CStringMethod`].
     ReplyTo(ReplyToMethod),
     RuntimeBlock(RuntimeBlockMethod),
     Set(SetMethod),
     /// `@intrinsic` methods on `Socket` from
     /// `koja/lib/net/src/net.koja`. The raw methods bridge into the
-    /// runtime's `koja_socket_*` C ABI (`recv_from_raw` -> mailbox-driven
-    /// recv with sender bytes, `resolve_raw` -> blocking
-    /// `getaddrinfo`). Wrapped in an enum so adding sibling methods
-    /// (e.g. `send_to_async`) is a variant-add rather than a shape
-    /// change.
+    /// runtime's `koja_socket_*` C ABI (`recv_from_raw` maps to
+    /// mailbox-driven recv with sender bytes, `resolve_raw` maps to
+    /// blocking `getaddrinfo`). Wrapped in an enum so adding sibling
+    /// methods (e.g. `send_to_async`) is a variant-add rather than a
+    /// shape change.
     Socket(SocketMethod),
     String(StringMethod),
 }
@@ -160,7 +160,7 @@ intrinsic_methods! {
 
     /// Integer receivers for the 48-cell `Bitwise` family and the
     /// 8-cell integer slice of `Equality` / `Hash`. `Bool` and `String`
-    /// are not included, as they're siblings of [`EqualityImpl::Int`] /
+    /// are not included, as they are siblings of [`EqualityImpl::Int`] /
     /// [`HashImpl::Int`] at the enum level.
     IntType {
         Int => "Int",
@@ -177,7 +177,7 @@ intrinsic_methods! {
         Panic => "panic",
     }
 
-    /// Methods on `List<T>`. The element type doesn't appear here because
+    /// Methods on `List<T>`. The element type does not appear here because
     /// the IR carries it on the [`crate::IRFunction`] signature, and backends
     /// monomorphize per element type from there.
     ListMethod {
@@ -194,7 +194,7 @@ intrinsic_methods! {
     }
 
     /// Methods on `Map<K, V>`. Like [`ListMethod`], the key + value
-    /// types don't appear here. Both ride the [`crate::IRFunction`]
+    /// types do not appear here. Both ride the [`crate::IRFunction`]
     /// signature, and backends specialize layouts per `(K, V)` pair
     /// from there.
     MapMethod {
@@ -320,7 +320,7 @@ impl ConsumingMethod {
 /// has its own emitter cell (boolean rendering, integer
 /// `format("{}")`, IEEE-754 `format("{}")` with f32/f64 width).
 ///
-/// `String` isn't here, because `String.format` ships a pure-Koja body
+/// `String` is not here, because `String.format` ships a pure-Koja body
 /// (`"\"" <> self.escape_debug() <> "\""` in
 /// `lib/global/src/debug.koja`) instead of an intrinsic.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -386,12 +386,12 @@ impl IRIntrinsicId {
     /// Map a function's canonical identifier to its dispatch slot.
     /// Returns `None` if no registered backend handles the
     /// `(receiver, method)` pair. Lift surfaces a diagnostic so
-    /// typo'd `@intrinsic` decls fail at parse -> check time, not
+    /// typo'd `@intrinsic` decls fail during parse and check, not
     /// at codegen.
     ///
     /// Strips the package prefix and walks the remaining path. All
-    /// intrinsics today are two-segment (`Type.method`). Nested-type
-    /// intrinsics would extend the match arms without changing the
+    /// intrinsics are two-segment (`Type.method`). A nested-type
+    /// intrinsic would extend the match arms without changing the
     /// shape.
     pub fn from_identifier(identifier: &Identifier) -> Option<Self> {
         match identifier.path() {
@@ -466,7 +466,7 @@ impl IntType {
 
 impl DebugImpl {
     /// Map a receiver-type name (`"Bool"`, `"Int"`, `"Float"`,
-    /// `"Float32"`, `"Int8"`, …) to the matching impl cell.
+    /// `"Float32"`, `"Int8"`, ...) to the matching impl cell.
     /// Returns `None` for receivers outside the four families
     /// (e.g. `String`, struct types), since `String.format` is pure
     /// Koja and user types route through the synthesized
@@ -492,7 +492,7 @@ impl DebugImpl {
 
 impl EqualityImpl {
     /// Map a receiver-type name (`"Bool"`, `"Int"`, `"Float"`,
-    /// `"String"`, …) to the matching impl cell. Returns `None` for
+    /// `"String"`, ...) to the matching impl cell. Returns `None` for
     /// receivers outside the five families (`Bool` / numeric /
     /// `String` / `Binary` / struct types).
     pub fn from_receiver(receiver: &str) -> Option<Self> {

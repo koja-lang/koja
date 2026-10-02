@@ -11,22 +11,22 @@
 //! [`resolve_assignment`]:
 //!
 //! - **Declaration / reassignment** (`segments.len() == 1`):
-//!   - First write of a name: optional type annotation must match the
+//!   - First write of a name. Optional type annotation must match the
 //!     rhs (or infer from rhs), insert into the scope, and stamp the
 //!     target `LValue`'s implied [`Resolution::Local`] via the AST
 //!     `Expr` shape produced for `target` lookup. If the bare name
 //!     matches a package-level
 //!     [`crate::registry::GlobalKind::Constant`] entry, assignment
-//!     is rejected: constants are immutable and cannot share an
+//!     is rejected. Constants are immutable and cannot share an
 //!     assignment LHS with locals.
-//!   - Subsequent write of an existing name: type annotation is a
+//!   - Subsequent write of an existing name. Type annotation is a
 //!     feature gap (only legal on first decl). Rhs type must equal
 //!     the existing local's type, and the existing [`LocalId`] stays put.
 //!   - `_` as the target is a discard. The rhs resolves (against the
 //!     annotation when one is written), no local is declared, and the
 //!     target keeps no [`LocalId`].
 //!
-//! - **Field write** (`segments.len() >= 2`): the head segment must
+//! - **Field write** (`segments.len() >= 2`). The head segment must
 //!   resolve to a declared local (`self` included). Each subsequent
 //!   segment projects through a struct definition's field roster, applying
 //!   the receiver's type-args at every step (so `self.entries` on
@@ -37,7 +37,7 @@
 //!   field path).
 //!
 //! [`resolve_compound_assignment`] is the same shape minus the
-//! declaration path: the head local must already exist, the leaf
+//! declaration path. The head local must already exist, the leaf
 //! field type must be `Int` or `Float`, and the rhs type must match.
 //!
 //! [`LocalId`]: koja_ast::identifier::LocalId
@@ -486,7 +486,7 @@ fn resolve_field_assignment(
     lvalue.local_id = Some(head.local_id);
 }
 
-/// Bundle of the head-local resolution: the local id and its
+/// Bundle of the head-local resolution, the local id and its
 /// resolved type. Returned by [`resolve_head_local`] so the field-
 /// assignment / compound-assignment helpers can share the lookup
 /// without each re-walking scope.

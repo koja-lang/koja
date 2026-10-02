@@ -1,10 +1,10 @@
-//! The `elaborate` IR sub-pass (post-merge, post-monomorphize): the
+//! The `elaborate` IR sub-pass (post-merge, post-monomorphize) is the
 //! last refinement before seal. It synthesizes per-type *clone*,
 //! *drop*, and *deep-copy* glue for every heap-managed **composite**
 //! type the program acquires, releases, or copies across a process
 //! boundary, and registers it on the package set so the backend can
-//! emit (and `call`) the glue without lazy backfill (northstar:
-//! codegen never invokes a planner).
+//! emit (and `call`) the glue without lazy backfill (the northstar is
+//! that codegen never invokes a planner).
 //!
 //! ## What counts as composite glue
 //!
@@ -149,7 +149,7 @@ fn rewrite_all(
 /// Leaves and the always-heap collections answer `true` by shape.
 /// Aggregates (`Struct` / `Enum` / `Union`) answer `true` iff some
 /// field / payload / member does, and a `struct` of scalars needs
-/// nothing. Recursion is bounded: value-level cycles are always
+/// nothing. Recursion is bounded. Value-level cycles are always
 /// broken by an [`IRType::Indirect`] box (stamped by
 /// [`crate::cycle::break_type_cycles`]), which answers `true`
 /// without recursing through the named type again, and a `visited`
@@ -564,7 +564,7 @@ mod tests {
     }
 
     /// Install a minimal Process-entry scaffold satisfying the
-    /// program-level seal checks: a `ProcessEntryWrapper` entry whose
+    /// program-level seal checks. It is a `ProcessEntryWrapper` entry whose
     /// state has registered `start` / `run` / `priority` stubs.
     /// Returns the wrapper symbol to stamp on `IRProgram::entry_point`.
     fn install_entry_scaffold(pkg: &mut IRPackage) -> IRSymbol {
@@ -629,7 +629,7 @@ mod tests {
             fields: vec![string_field(0, "name"), string_field(1, "label")],
             symbol: point.clone(),
         };
-        // seed: p = Point{ "", "" }; pc = clone(p); drop(p); drop(pc)
+        // Seed: `p = Point{ "", "" }; pc = clone(p); drop(p); drop(pc)`.
         let p = ValueId(0);
         let pc = ValueId(1);
         let s0 = ValueId(2);
@@ -718,8 +718,8 @@ mod tests {
                 },
             ],
         };
-        // seed: payload = ""; e = Opt.Some(payload); ec = clone(e);
-        //       drop(e); drop(ec)
+        // Seed: `payload = ""; e = Opt.Some(payload); ec = clone(e);
+        // drop(e); drop(ec)`.
         let payload = ValueId(0);
         let e = ValueId(1);
         let ec = ValueId(2);
@@ -1140,7 +1140,7 @@ mod tests {
 
     #[test]
     fn scalar_struct_needs_no_glue() {
-        // struct of scalars: needs_drop == false, so no glue and no
+        // A struct of scalars has needs_drop == false, so no glue and no
         // Clone/Drop seed is discoverable.
         let pair = sym("Test.IntPair");
         let pair_ty = IRType::Struct(pair.clone());

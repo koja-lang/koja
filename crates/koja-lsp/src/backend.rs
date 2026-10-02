@@ -108,9 +108,8 @@ impl DocumentState {
 /// the diagnostics pipeline can selectively skip the package the user
 /// is currently editing. Opening `lib/global/src/foo.koja` must not
 /// double-bundle the embedded `Global.*` modules alongside the
-/// on-disk siblings. Mirrors
-/// [`koja_driver::pipeline::bundle_many_with_autoimport`]'s
-/// `skip_package` behavior.
+/// on-disk siblings. Mirrors the `skip_package` behavior of
+/// `bundle_many_with_autoimport` in koja-driver's `pipeline`.
 pub struct Backend {
     pub(crate) client: Client,
     pub(crate) documents: Arc<RwLock<HashMap<String, DocumentState>>>,

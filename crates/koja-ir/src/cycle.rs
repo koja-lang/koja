@@ -1,4 +1,4 @@
-//! Cycle-breaking pass: wraps recursive struct fields / enum payload
+//! The cycle-breaking pass wraps recursive struct fields / enum payload
 //! slots with [`IRType::Indirect`] so backends never face a value-
 //! level recursive type. Runs over the post-monomorphization IR
 //! graph.
@@ -33,7 +33,7 @@ pub(crate) fn break_type_cycles(packages: &mut [IRPackage]) {
 }
 
 /// Slot inside a struct / enum decl that a back-edge discovery
-/// pinned: the offending field / payload position.
+/// pinned. It is the offending field / payload position.
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
 enum Slot {
     StructField(u32),

@@ -253,10 +253,10 @@ pub(crate) fn execute_binary_match(
                 value,
                 width,
             } => {
-                // Compare raw width-truncated bits: a negative
+                // Compare raw width-truncated bits. A negative
                 // signed literal and its two's-complement bit
                 // pattern agree under the mask, so the sign
-                // modifier doesn't change the test.
+                // modifier does not change the test.
                 if !literal_segment_matches(bytes, *width, *endian, *bit_offset, *value) {
                     return Ok(false);
                 }
@@ -437,7 +437,7 @@ fn literal_segment_matches(
 }
 
 /// Reinterpret the raw `width`-bit pattern per the segment's sign
-/// modifier: sign-extend when `Signed` and the sign bit is set,
+/// modifier. Sign-extend when `Signed` and the sign bit is set,
 /// zero-extend otherwise. Mirrors the LLVM emission's `sext`/`zext`
 /// choice on `BindInt`.
 fn sign_interpret(value: u64, width: u64, sign: BinarySign) -> i64 {

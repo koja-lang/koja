@@ -90,8 +90,8 @@ pub(super) fn emit_drop_local<'ctx>(
             let value = emit_local_read(ctx, local, ty)?;
             closures::emit_drop_closure_env(ctx, local, value)
         }
-        // No-glue aggregate slot (every field `Copy`): nothing to
-        // release. `elaborate` rewrites the heap-owning composites
+        // A no-glue aggregate slot (every field `Copy`) has nothing
+        // to release. `elaborate` rewrites the heap-owning composites
         // into a `LocalRead` + `Call @drop_T`, so a scalar aggregate
         // is all that survives as a bare `DropLocal` here.
         IRType::Enum(_) | IRType::Struct(_) | IRType::Tuple(_) | IRType::Union { .. } => Ok(()),
@@ -125,12 +125,12 @@ pub(super) fn emit_drop_value<'ctx>(
             let closure_value = lookup(values, value);
             closures::emit_drop_closure_value(ctx, closure_value, &value.to_string())
         }
-        // No-glue aggregate value (every field `Copy`): nothing to
-        // release. The heap-owning composites are rewritten to a
+        // A no-glue aggregate value (every field `Copy`) has nothing
+        // to release. The heap-owning composites are rewritten to a
         // `Call @drop_T` by `elaborate`.
         IRType::Enum(_) | IRType::Struct(_) | IRType::Tuple(_) | IRType::Union { .. } => Ok(()),
-        // Boxed projection: the rc-aware box release (drop contents +
-        // free at rc 1, decrement otherwise, null no-op).
+        // A boxed projection uses the rc-aware box release (drop
+        // contents + free at rc 1, decrement otherwise, null no-op).
         IRType::Indirect(inner) => {
             let payload = lookup(values, value).into_pointer_value();
             indirect::emit_release_box(ctx, inner, payload, &value.to_string())

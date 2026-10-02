@@ -3,7 +3,7 @@
 //! API lives in [`super`]. This module is the per-decl
 //! "what-is-the-shape-of-X" surface: `FunctionSignature`,
 //! `StructDefinition`, `EnumDefinition`, `ProtocolDefinition`, and
-//! the small `Resolved*` leaves they're built from.
+//! the small `Resolved*` leaves they are built from.
 //!
 //! Splitting these out keeps [`super`] focused on the
 //! [`super::GlobalRegistry`] container itself. Downstream consumers
@@ -154,14 +154,14 @@ pub struct BuiltinDefinition {
 
 /// How a function call dispatches on its callee.
 ///
-/// `Static` is the default: direct lookup by qualified name. The
+/// `Static` is the default, a direct lookup by qualified name. The
 /// argument list is exactly what the caller wrote. `Instance` requires
 /// a receiver value whose static type matches the enclosing struct.
 /// The receiver becomes the implicit first argument and the caller's
 /// explicit args populate `params[1..]`.
 ///
-/// Orthogonal to [`crate::FunctionKind`] (which describes how a body
-/// is materialized at codegen: `Regular` vs `Intrinsic`). A function
+/// Orthogonal to the IR's `FunctionKind`, which describes how a body
+/// is materialized at codegen (`Regular` or `Intrinsic`). A function
 /// is one of `{Regular, Intrinsic} × {Static, Instance}`. Keeping the
 /// axes as separate enums avoids combinatorial pattern matches at
 /// every call site that cares about only one dimension.
@@ -171,8 +171,8 @@ pub enum Dispatch {
     Static,
 }
 
-/// A single resolved parameter: surface-syntax name and resolved
-/// type, stamped by `lift_signatures` off the matching
+/// A single resolved parameter. It carries the surface-syntax name
+/// and resolved type, stamped by `lift_signatures` off the matching
 /// `Param::{Regular,Self_}` variant.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ResolvedParam {
@@ -205,7 +205,7 @@ pub struct ResolvedStructField {
 /// first parameter. Everything else stays [`Dispatch::Static`].
 ///
 /// `impl_args` carries the concrete pinning of a partial-spec impl
-/// block (`impl CPtr<UInt8>` -> `[UInt8]`). Empty for top-level
+/// block (`impl CPtr<UInt8>` maps to `[UInt8]`). Empty for top-level
 /// functions, inline struct/enum methods, and generic-pinned impl
 /// blocks (`impl Bag<T>`). Set only when every arg of the impl
 /// target is fully resolved (no `TypeParam`s). Lower consults this
@@ -253,15 +253,10 @@ pub struct FunctionDefinition {
 /// per impl of that protocol (a parameterized impl, or one or more
 /// concrete instantiations). The methods themselves register at
 /// `[target_head, method_name]`, so dispatch is `[target,
-/// method_name]` directly. IR doesn't walk this map. Typecheck
-/// consults it for bound enforcement (slice 2.3) and duplicate-impl
-/// detection.
-///
-/// Transitional note: this representation lets a struct/enum
-/// entry be self-contained for IR consumption: IR never has to
-/// walk a separate impl table. A future incremental-cache pass
-/// may want a richer structural index over `(target, protocol)`
-/// pairs (e.g. for cross-package resolution). Revisit then.
+/// method_name]` directly. IR does not walk this map. Typecheck
+/// consults it for bound enforcement and duplicate-impl detection.
+/// Keeping it on the entry makes a struct or enum self-contained
+/// for IR consumption, so IR never walks a separate impl table.
 ///
 /// `aliases` is the declaring file's alias roster. A field default is
 /// stored unresolved and resolved again at every construction site
@@ -277,7 +272,7 @@ pub struct StructDefinition {
 /// Variant roster + protocol conformances for a user-declared
 /// enum. Stamped onto a [`super::GlobalKind::Enum`] entry by the
 /// `lift_signatures` sub-pass. Variant order matches declaration
-/// order: the IR's discriminant tag is the variant's position in
+/// order. The IR's discriminant tag is the variant's position in
 /// this vec, and downstream consumers (IR lower, codegen) index by
 /// position. Generic-decl param names live on the
 /// [`super::RegistryEntry`] itself.
@@ -304,7 +299,7 @@ pub struct ResolvedEnumVariant {
 
 /// Payload shape of an enum variant.
 ///
-/// The `Struct` arm reuses [`ResolvedStructField`] verbatim: a
+/// The `Struct` arm reuses [`ResolvedStructField`] verbatim. A
 /// struct variant's payload layout is structurally a struct, and the
 /// shared shape lets the validation helpers in `resolve/structs.rs`
 /// be reused for both struct construction and struct-variant
@@ -343,7 +338,7 @@ pub struct ResolvedProtocolMethod {
 /// resolved.
 ///
 /// The registry intentionally holds the AST `Expr` rather than a
-/// projected literal payload: lift restricts the surface to the
+/// projected literal payload. Lift restricts the surface to the
 /// side-effect-free value grammar in `check_shape` (literals, negated
 /// numerics, enum variants, constants, binary literals, and struct,
 /// list, map, or set literals of those), but IR lower wants the
@@ -359,7 +354,7 @@ pub struct ConstantDefinition {
 
 impl StructDefinition {
     /// Lookup a field by name. Returns `Some((index, &field))` for a
-    /// match, `None` otherwise. Linear scan: struct field counts
+    /// match, `None` otherwise. The scan is linear. Struct field counts
     /// are small (single-digit typical, two-digit max), so the
     /// constant factor wins over a hashmap. Used by `resolve` to
     /// turn `expr.field` into an index + type.
@@ -374,7 +369,7 @@ impl StructDefinition {
 
 impl EnumDefinition {
     /// Lookup a variant by name. Returns `Some((index, &variant))`
-    /// for a match, `None` otherwise. Linear scan: variant counts
+    /// for a match, `None` otherwise. The scan is linear. Variant counts
     /// are small (single-digit typical, capped at 256 by the `i8`
     /// discriminant tag width), so the constant factor wins over a
     /// hashmap. Used by `resolve` to turn `Color.Red` into a tag +

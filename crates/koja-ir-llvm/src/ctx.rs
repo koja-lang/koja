@@ -208,9 +208,10 @@ impl<'ctx> EmitContext<'ctx> {
     }
 
     /// Set the builder's current debug location for the body about to
-    /// be emitted: the function's `DISubprogram` line when one was
-    /// attached, otherwise *unset* it so the body's instructions don't
-    /// inherit a stale scope from the previously-emitted function.
+    /// be emitted. When the function has a `DISubprogram` attached, the
+    /// location is its line. Otherwise *unset* it so the body's
+    /// instructions do not inherit a stale scope from the
+    /// previously-emitted function.
     pub(crate) fn enter_function_debug(
         &self,
         llvm_function: FunctionValue<'ctx>,
@@ -310,7 +311,7 @@ impl<'ctx> EmitContext<'ctx> {
     }
 
     /// Stage the per-function `IRBlockId -> BasicBlock` map for
-    /// emit sites that do not otherwise see it (today: the
+    /// emit sites that do not otherwise see it (today, the
     /// [`koja_ir::IRInstruction::Receive`] dispatcher). Pairs with
     /// [`Self::clear_block_map`]. Calling twice without a clear in
     /// between panics so the per-function scope stays explicit.
@@ -370,7 +371,7 @@ impl<'ctx> EmitContext<'ctx> {
 
     /// Insert a freshly-declared function into the
     /// `IRSymbol -> FunctionValue` index. Idempotent on a per-symbol
-    /// basis: the second call for the same `symbol` overwrites with
+    /// basis. The second call for the same `symbol` overwrites with
     /// the (presumed-equal) handle, mirroring the inkwell module's
     /// own dedup behavior for symbols already present in the LLVM
     /// module.
@@ -413,7 +414,7 @@ impl<'ctx> EmitContext<'ctx> {
     /// global. Callers pass `"str"` for strings, `"bin"` for binary,
     /// `"bits"` for bits. The prefix is purely cosmetic (helps
     /// reading raw LLVM IR) but the counter is shared so two
-    /// different prefixes can't collide.
+    /// different prefixes cannot collide.
     pub(crate) fn next_payload_symbol(&self, prefix: &str) -> String {
         let n = self.payload_counter.get();
         self.payload_counter.set(n + 1);
@@ -435,7 +436,7 @@ impl<'ctx> EmitContext<'ctx> {
     }
 
     /// Resolve `local` to its registered `alloca` when present.
-    /// `None` means the slot hasn't been created yet. The TCO
+    /// `None` means the slot has not been created yet. The TCO
     /// pre-registration path in [`crate::function::define_function`]
     /// creates every slot up front, so the `LocalDecl` emitter checks
     /// here before minting a fresh alloca.
@@ -506,8 +507,8 @@ impl<'ctx> EmitContext<'ctx> {
     }
 
     /// Emit a call to `function` and unwrap its return as a
-    /// [`BasicValueEnum`] named `name`. Collapses the `build_call` ->
-    /// `try_as_basic_value` -> `basic` ceremony every value-returning
+    /// [`BasicValueEnum`] named `name`. Collapses the `build_call` then
+    /// `try_as_basic_value` then `basic` ceremony every value-returning
     /// runtime call repeats. A void return is an internal compiler
     /// error reported with the caller's `file:line`.
     #[track_caller]

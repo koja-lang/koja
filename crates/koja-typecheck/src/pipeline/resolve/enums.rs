@@ -168,8 +168,8 @@ pub(super) fn resolve_enum_construction(
 /// Shape-mismatched constructions skip inference and let
 /// [`validate_variant_payload`] surface the shape diagnostic.
 ///
-/// `expected` is the bidirectional fallback: slots that payload-
-/// driven inference can't pin (a `Result.Err(e)` whose `T` only
+/// `expected` is the bidirectional fallback. Slots that payload-
+/// driven inference cannot pin (a `Result.Err(e)` whose `T` only
 /// the surrounding context knows, or a unit `Maybe.None`) get
 /// filled from the surrounding expected type before the "cannot
 /// infer" diagnostic fires.
@@ -315,7 +315,7 @@ fn substitute_variant(variant: &ResolvedEnumVariant, subst: &Substitution) -> Re
 }
 
 /// Resolve every payload sub-expression with no expected hint.
-/// Fallback for paths where the enum / variant didn't resolve, so
+/// Fallback for paths where the enum / variant did not resolve, so
 /// the seal pass still walks a populated tree.
 fn bare_walk_construction_data(
     data: &mut EnumConstructionData,

@@ -58,25 +58,23 @@ impl CheckedProgram {
 /// Short-circuits if `parsed` already carries error-severity parse
 /// diagnostics. Otherwise runs the sub-passes in order:
 ///
-/// 0. **preload stdlib stubs**: seed the [`GlobalRegistry`] with
-///    [`GlobalRegistry::with_stdlib_stubs`] so `Global.Int`/`.Bool`/
-///    `.Unit`/`.Float`/`.String` are registered as structs before any
-///    user decl. Temporary. Once the real stdlib compiles as a
-///    package these entries land through `collect`.
-/// 1. Hoist lexically nested type declarations to qualified
-///    top-level items.
-/// 2. Derive Debug and Equality impls before binding.
-/// 3. Collect declarations, then impl blocks, across every file.
-/// 4. Validate nested declarations and file aliases.
-/// 5. Lift signatures and declaration definitions into the registry.
-/// 6. Reject private types leaked through public signatures.
-/// 7. Rewrite typed surface shapes such as `for`.
-/// 8. Resolve and type-check every body.
-/// 9. Reject escaping `CPtr.borrow` results.
-/// 10. Reject reads of locals not definitely assigned on every path.
-/// 11. Warn on uses of `@deprecated` declarations.
-/// 12. Return [`CheckFailure`] if any errors were collected.
-/// 13. Seal successful AST and registry invariants.
+/// 1. Seed the [`GlobalRegistry`] with
+///    [`GlobalRegistry::with_stdlib_stubs`] so the primitive types
+///    are registered before any user decl.
+/// 2. Desugar by hoisting nested declarations to qualified
+///    top-level items and rewriting `test` blocks into functions.
+/// 3. Derive Debug and Equality impls before binding.
+/// 4. Normalize default parameters into exact-arity adapters.
+/// 5. Collect declarations, then impl blocks, across every file.
+/// 6. Validate nested declarations and file aliases.
+/// 7. Lift signatures and declaration definitions into the registry.
+/// 8. Reject private types leaked through public signatures.
+/// 9. Resolve and type-check every body, rewriting `for` on the way.
+/// 10. Reject escaping `CPtr.borrow` results.
+/// 11. Reject reads of locals not definitely assigned on every path.
+/// 12. Warn on uses of `@deprecated` declarations.
+/// 13. Return [`CheckFailure`] if any errors were collected.
+/// 14. Seal AST and registry invariants.
 pub fn check_program(parsed: ParsedProgram) -> Result<CheckedProgram, CheckFailure> {
     if parsed.has_errors() {
         return Err(CheckFailure {
@@ -97,8 +95,8 @@ pub fn check_program(parsed: ParsedProgram) -> Result<CheckedProgram, CheckFailu
     // qualified shape.
     desugar::desugar_packages(&mut packages);
 
-    // Pre-collect synthesis: append `impl Debug / Equality for T`
-    // blocks so they're present when collect / lift register items.
+    // Pre-collect synthesis appends `impl Debug / Equality for T`
+    // blocks so they are present when collect / lift register items.
     // Has to run before collect because the synthesizer introduces
     // new top-level items.
     //
@@ -106,20 +104,20 @@ pub fn check_program(parsed: ParsedProgram) -> Result<CheckedProgram, CheckFailu
     // files first so a hand-written `impl Debug for List<T>` in
     // `debug_containers.koja` suppresses synthesis in
     // `list.koja` (and vice versa). Without the cross-file scan
-    // we'd get duplicate impls.
+    // the synthesizer would emit duplicate impls.
     for pkg in &mut packages {
         synthesize::derive_debug::derive_debug_package(pkg);
         synthesize::derive_equality::derive_equality_package(pkg);
     }
     defaults::normalize_packages(&mut packages, &mut diagnostics);
 
-    // Collect is a cross-file two-pass: register every declared
-    // type first across every file in every package, then register
+    // Collect is a cross-file two-pass. It registers every declared
+    // type first across every file in every package, then registers
     // impl blocks. The split lets an `impl Debug for List<T>` in
     // `debug_containers.koja` find the `List` declared in
     // `list.koja` regardless of file order. The alternative is
     // dependency-ordered file walks at the driver layer, which the
-    // typechecker shouldn't care about.
+    // typechecker should not care about.
     for_each_file(&packages, &mut diagnostics, |file, package, diags| {
         collect::collect_file_decls(file, package, &mut registry, diags);
     });

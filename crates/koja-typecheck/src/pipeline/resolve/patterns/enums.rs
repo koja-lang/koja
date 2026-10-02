@@ -289,7 +289,7 @@ pub(super) fn lookup_pattern_enum<'a>(
 
 /// Build the type-arg substitution needed to view the enum's
 /// declared payload types in the concrete subject's type-arg
-/// instantiation. `Option<Int>.Some(x)` -> subst maps `T` to `Int`.
+/// instantiation. For `Option<Int>.Some(x)` the subst maps `T` to `Int`.
 pub(super) fn build_enum_substitution(
     enum_id: GlobalRegistryId,
     subject_ty: &ResolvedType,

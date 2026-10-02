@@ -144,7 +144,7 @@ pub(crate) fn unwatch(fd: i32) {
 }
 
 /// Suspend until `fd` is ready for `interest` or `deadline` passes. The
-/// cooperative core of every eval I/O wait: an already-ready fd returns
+/// cooperative core of every eval I/O wait. An already-ready fd returns
 /// `Ready` immediately (the common sequential case). Otherwise a driven
 /// process parks `WaitingIO` and yields to the driver, while a
 /// driver-less function-mode run blocks the single thread on the fd.
@@ -181,7 +181,7 @@ pub(crate) async fn io_block(fd: i32, interest: Interest, deadline: Option<Insta
                 IoWait::Interrupted
             }
         }
-        // A refused park means a kill landed mid-run: skip the registration
+        // A refused park means a kill landed mid-run. Skip the registration
         // (no waiter to wake). The process never resumes past the next
         // yield, so the answer is moot.
         IoPark::Refused => IoWait::Ready,
@@ -227,7 +227,7 @@ fn ready_now(fd: i32, interest: Interest) -> bool {
 }
 
 /// Block the calling thread on `fd` until it is ready for `interest` or
-/// `deadline` passes (function mode: no driver to resume a parked
+/// `deadline` passes (function mode, with no driver to resume a parked
 /// process). Returns `false` only on the deadline. Retries across
 /// `EINTR`. A genuine poll error returns `true` so the delegated syscall
 /// surfaces it (a broken fd fails with a real errno, never `EAGAIN`, so
@@ -288,7 +288,7 @@ fn fill(waker: Waker, readiness: Readiness) -> Waker {
     }
 }
 
-/// `poll(2)` timeout in milliseconds: a missing timeout blocks
+/// `poll(2)` timeout in milliseconds. A missing timeout blocks
 /// indefinitely (`-1`), and a present one clamps to `i32::MAX` ms.
 fn timeout_ms(timeout: Option<Duration>) -> i32 {
     match timeout {

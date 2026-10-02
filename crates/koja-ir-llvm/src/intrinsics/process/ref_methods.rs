@@ -54,9 +54,9 @@ pub(super) fn emit_alive<'ctx>(
 /// `(M, Some(ReplyTo { id: caller_pid, token }))` envelope, then
 /// block on `koja_rt_call_receive`. Its result maps as:
 ///
-/// - `0` -> `Result.Ok(R)` loaded from the reply slot.
-/// - `-1` + target alive -> `Result.Err(CallError.Timeout)`.
-/// - `-1` + target dead -> `Result.Err(CallError.ProcessDown)`.
+/// - `0` becomes `Result.Ok(R)` loaded from the reply slot.
+/// - `-1` + target alive becomes `Result.Err(CallError.Timeout)`.
+/// - `-1` + target dead becomes `Result.Err(CallError.ProcessDown)`.
 pub(super) fn emit_call<'ctx>(
     ctx: &EmitContext<'ctx>,
     function: &IRFunction,

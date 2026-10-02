@@ -2,19 +2,19 @@
 //! `List<T>`. The surrounding context picks which
 //! `ListLiteral<T>` conformer the value flows into:
 //!
-//! - No hint, or hint is `List<T>`: the literal stays
+//! - With no hint, or a hint of `List<T>`, the literal stays
 //!   [`ExprKind::List`] on the sealed AST and stamps
 //!   `expr.resolution = List<T>`. (`List<T>` itself implements
 //!   `ListLiteral<T>` as the trivial identity, so no `from_list`
 //!   wrap is needed.)
-//! - Hint is some `X<T>` that has an `impl ListLiteral<T> for X<T>`
-//!   in the registry: the outer expression is rewritten in-place
+//! - When the hint is some `X<T>` with `impl ListLiteral<T> for X<T>`
+//!   in the registry, the outer expression is rewritten in-place
 //!   into a synthesized `X.from_list([a, b, c])` method call. The
 //!   inner literal keeps `ExprKind::List` and stamps `List<T>`,
 //!   the outer rewritten node stamps `X<T>` and dispatches through
 //!   the normal method-call resolver.
 //!
-//! This keeps IR lower a pure translator: it only ever sees a
+//! This keeps IR lower a pure translator. It only ever sees a
 //! `ExprKind::List` whose resolution is `List<T>`. The carrier
 //! mechanics live in [`super::carrier`]. This file only owns
 //! list-literal-specific work (axis-take, element-type inference).
@@ -132,7 +132,7 @@ fn first_axis_hint(
 
 /// Pull the elements vec out of `expr.kind` so the caller can
 /// rebuild the kind into a different shape (or restore it). Panics
-/// if `expr.kind` isn't `List`, but every call site has matched on
+/// if `expr.kind` is not `List`, but every call site has matched on
 /// `ExprKind::List` already.
 fn take_elements(kind: &mut ExprKind) -> Vec<Expr> {
     let stub = ExprKind::List {

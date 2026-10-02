@@ -1,4 +1,4 @@
-//! Statement-shape seal checks: assignment / compound-assign
+//! Statement-shape seal checks, covering assignment / compound-assign
 //! target shapes plus per-statement recursion into expressions.
 //! Past resolve, every assignment target is an [`koja_ast::ast::LValue`]
 //! with at least one segment and a stamped head `LocalId`. Reaching
@@ -46,7 +46,7 @@ pub(super) fn seal_statement(stmt: &Statement, mode: SealMode) {
 
 /// Shared seal for assignment and compound-assign targets.
 /// Single-segment and multi-segment (`p.x = …`) are both happy
-/// paths: the head id keys the IR's `LocalRead` / `LocalWrite` and
+/// paths. The head id keys the IR's `LocalRead` / `LocalWrite` and
 /// the IR lower walks the remaining segments itself. Only
 /// empty-segments and a missing head `local_id` indicate an
 /// upstream invariant break. The `_` discard binds nothing, so it

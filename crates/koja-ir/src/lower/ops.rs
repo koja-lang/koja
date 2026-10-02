@@ -159,9 +159,9 @@ pub(super) fn lower_bin_op(
                  not `lower_bin_op` (caller dispatch bug)"
             )
         }
-        // `<>` concat doesn't reach this helper. The expression
+        // `<>` concat does not reach this helper. The expression
         // lowerer intercepts `BinOp::Concat` and emits
-        // [`IRInstruction::Concat`] directly. If we land here, the
+        // [`IRInstruction::Concat`] directly. If lowering lands here, the
         // dispatcher branched incorrectly, so surface a hard error
         // and the caller fails fast rather than silently miscompiling.
         BinOp::Concat => {

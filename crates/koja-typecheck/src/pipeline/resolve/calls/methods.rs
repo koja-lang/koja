@@ -56,7 +56,7 @@ pub(super) struct MethodInferenceTarget<'a> {
 /// `Instance` capture the receiver's struct id. `Bounded` captures
 /// the type-param's `(owner, index)` for bounded dispatch, since the
 /// concrete struct id only emerges post-monomorphization.
-/// `Structural` has no registry id at all: tuples, function types,
+/// `Structural` has no registry id at all. Tuples, function types,
 /// and unions admit only the universal-protocol functions, resolved
 /// by [`super::structural::resolve_structural_method_call`].
 #[derive(Clone, Copy)]
@@ -120,7 +120,7 @@ impl MethodReceiver {
 ///   trailing method call disambiguates it. This is the parser
 ///   shape for both `Crypto.SHA256.digest(...)` and
 ///   `HTTP.Headers.new()`.
-/// - `FieldAccess` chain over `Ident`s: covers paths whose tail
+/// - `FieldAccess` chain over `Ident`s, covering paths whose tail
 ///   segment is a lowercase ident before a dotted method (rare, but
 ///   semantically equivalent and cheap to support alongside the
 ///   other shapes).
@@ -296,7 +296,7 @@ fn rewrite_to_static_ident(receiver: &mut Expr, path: &[String], struct_id: Glob
 /// receiver scope is already on the receiver's [`ResolvedType`] and
 /// surfaces through the IR's existing struct/enum mangling).
 /// Trait-impl free type-params alias the receiver's slots, so a
-/// single `receiver_subst` is enough, there's no separate impl
+/// single `receiver_subst` is enough, there is no separate impl
 /// scope.
 /// Outputs of [`infer_method_call_type_args`] that the caller writes
 /// back onto the AST + receiver shape: the method's own substituted
@@ -327,7 +327,7 @@ pub(super) fn infer_method_call_type_args(
     } = target;
 
     let mut subst = seed_method_subst(receiver, method, receiver_type, &sig.impl_args, registry);
-    // Mirror `infer_call_type_args`'s speculative pre-seed: lets
+    // Mirror `infer_call_type_args`'s speculative pre-seed, which lets
     // binding annotations pin sized-numeric type params before
     // arg-driven default-literal types lock in.
     if let Some(pre_seeded) = try_pre_seeded_method_subst(

@@ -1,4 +1,4 @@
-//! Or-pattern lowering: chain n alternatives through n-1 fresh
+//! Or-pattern lowering chains n alternatives through n-1 fresh
 //! `match_or_alt_<n>` blocks, each producing one [`TestStep`].
 //! The driver wires every step's success edge to the same body
 //! block, every interior step's failure edge to the next step's

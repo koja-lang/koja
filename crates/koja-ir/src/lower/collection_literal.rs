@@ -2,9 +2,9 @@
 //! insert IR call chain.
 //!
 //! Typecheck stamps `expr.resolution` (`List<T>` or `Map<K, V>`) on the
-//! literal but leaves the literal node on the sealed AST. We synthesize
-//! the equivalent `MethodCall` tree here so the emitted IR is identical
-//! to a hand-written `List.new().append(a).append(b)` or
+//! literal but leaves the literal node on the sealed AST. The lowerer
+//! synthesizes the equivalent `MethodCall` tree here so the emitted IR is
+//! identical to a hand-written `List.new().append(a).append(b)` or
 //! `Map.new().put(k1, v1).put(k2, v2)`. The two literal kinds differ
 //! only in the type name, the insert method, and how many arguments
 //! each item contributes, so [`synthesize_collection_chain`] takes

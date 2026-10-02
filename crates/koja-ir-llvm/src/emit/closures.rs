@@ -93,7 +93,7 @@ impl<'ctx> EnvHeader<'ctx> {
 
 /// Resolve the address of one of a closure's env glue siblings
 /// (`$drop_env$` / `$copy_env$` / `$eq_env$`) for stashing in the env
-/// header. A missing function yields a null pointer: lowering omits
+/// header. A missing function yields a null pointer. Lowering omits
 /// `$drop_env$` when no capture is heap-managed (the runtime then
 /// frees the env without per-capture teardown), omits `$eq_env$` for
 /// captureless bodies (equal site ids settle equality), and only
@@ -382,7 +382,7 @@ pub(super) fn emit_drop_closure_env<'ctx>(
 /// process boundary:
 ///
 /// 1. malloc a block the size of the env struct and `memcpy` the
-///    whole source env over it: header (`drop_fn` / `copy_fn` /
+///    whole source env over it, so header (`drop_fn` / `copy_fn` /
 ///    `site_id` / `eq_fn`) and `Copy` captures land correct as-is.
 /// 2. reset the fresh block's rc to 1 (the source's count came along
 ///    in the copy).

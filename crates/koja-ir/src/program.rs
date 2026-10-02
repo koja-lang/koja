@@ -43,7 +43,7 @@ use crate::{merge, seal};
 ///
 /// `entry_point` is the stable [`IRSymbol`] backends lift into a host
 /// `main`: the synthesized `<state>.__entry_wrapper` whose
-/// [`FunctionKind::ProcessEntryWrapper`] tells backends to emit a
+/// [`crate::FunctionKind::ProcessEntryWrapper`] tells backends to emit a
 /// spawn-driven trampoline.
 ///
 /// `link_libraries` is the deduped, sorted list of bare library names
@@ -167,7 +167,7 @@ pub fn lower_program(
     Ok(program)
 }
 
-/// Synthesize the [`FunctionKind::ProcessEntryWrapper`] for the
+/// Synthesize the [`crate::FunctionKind::ProcessEntryWrapper`] for the
 /// entry state and enqueue `start` / `run` instantiations. Returns
 /// the entry's user-facing identifier (the state) plus the wrapper's
 /// mangled [`IRSymbol`]. `lower_program` stamps the latter onto

@@ -98,7 +98,7 @@ pub(super) fn named_type(name: &str, span: Span) -> TypeExpr {
     TypeExpr::named(vec![Name::new(name, span)], span)
 }
 
-/// Empty enums (no variants) are uninhabited: a `match self end`
+/// Empty enums (no variants) are uninhabited. A `match self end`
 /// body with no arms is rejected by typecheck, and the type has no
 /// value to format or compare anyway. Skip them.
 fn needs_enum_derive(decl: &EnumDecl, existing: &[String]) -> bool {

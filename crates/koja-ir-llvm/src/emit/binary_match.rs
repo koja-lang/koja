@@ -6,7 +6,7 @@
 //! 1. Load the subject's runtime bit length from `subject - 8`,
 //!    shift right by 3 for the byte length.
 //! 2. Compare the byte length against `layout.fixed_bits >> 3`
-//!    (`EQ` when there's no greedy tail, `UGE` when there is). A
+//!    (`EQ` when there is no greedy tail, `UGE` when there is). A
 //!    failed check short-circuits to `false` without touching the
 //!    payload.
 //! 3. Test phase. AND together every literal segment's comparison
@@ -29,8 +29,8 @@
 //! All sub-byte arithmetic is gated to the byte-aligned path.
 //! Typecheck rejects bit-misaligned greedy tails, but a `Bits`
 //! greedy tail with a byte-aligned fixed prefix and a sub-byte
-//! suffix still flows through here. We memcpy
-//! `ceil(remaining_bits / 8)` bytes and let the heap layout carry
+//! suffix still flows through here. The emitter `memcpy`s
+//! `ceil(remaining_bits / 8)` bytes and lets the heap layout carry
 //! the exact bit count.
 
 use inkwell::IntPredicate;
@@ -79,7 +79,8 @@ pub(super) fn emit_binary_match<'ctx>(
 
     // Segment extraction indexes off the subject length, so on a
     // too-short subject the reads run past the payload and the
-    // greedy-tail size underflows to a huge `malloc` -> null -> SIGBUS.
+    // greedy-tail size underflows to a huge `malloc`, which returns
+    // null and then faults with SIGBUS.
     // Gate it behind the length check. A failed check short-circuits
     // to `false` without touching the payload.
     let entry_block = ctx
@@ -96,7 +97,7 @@ pub(super) fn emit_binary_match<'ctx>(
         .build_conditional_branch(length_ok, test_block, merge_block)
         .or_ice()?;
 
-    // Test phase: literal comparisons only, no side effects.
+    // The test phase runs literal comparisons only, no side effects.
     ctx.builder.position_at_end(test_block);
     let mut tests_ok = true_i1(ctx);
     for segment in segments {
@@ -111,7 +112,7 @@ pub(super) fn emit_binary_match<'ctx>(
         .build_conditional_branch(tests_ok, bind_block, merge_block)
         .or_ice()?;
 
-    // Bind phase: runs only when the whole pattern matched. The
+    // The bind phase runs only when the whole pattern matched. The
     // greedy tail's fresh allocation must not happen on a failed
     // arm, or every miss leaks one block.
     ctx.builder.position_at_end(bind_block);
@@ -235,9 +236,9 @@ fn emit_segment_bind<'ctx>(
 
 /// Compare the byte-aligned slice at `bit_offset` against the
 /// constant `value`. Sub-byte widths flow through here too, but
-/// only at sub-byte `bit_offset`s. For now we gate to byte
+/// only at sub-byte `bit_offset`s. The emitter gates to byte
 /// alignment. The literal-only path that hits sub-byte widths
-/// is `<<x::3, _::5>>`-style and isn't required by any current
+/// is `<<x::3, _::5>>`-style and is not required by any current
 /// test.
 ///
 /// Widths past 64 bits do not fit the `i64` compare, so they become
@@ -302,7 +303,7 @@ fn encode_wide_literal(value: i128, num_bytes: u64, endian: BinaryEndian) -> Vec
 
 /// Compare a run of bytes at `bit_offset / 8` against an emitted
 /// constant payload via `memcmp`. `bit_offset` is byte-aligned by
-/// construction, since string segments don't carry sub-byte offsets.
+/// construction, since string segments do not carry sub-byte offsets.
 fn emit_literal_bytes<'ctx>(
     ctx: &EmitContext<'ctx>,
     payload: PointerValue<'ctx>,
@@ -383,7 +384,7 @@ fn emit_bind_int<'ctx>(
 /// into `local`'s slot (when present). Bit alignment is the caller's
 /// responsibility. Typecheck enforces a byte-aligned prefix for
 /// `: Binary` tails, and `: Bits` tails accept any prefix shape but
-/// our lower path only emits byte-aligned `bit_offset`s through this
+/// the lower path only emits byte-aligned `bit_offset`s through this
 /// helper.
 fn emit_greedy_tail<'ctx>(
     ctx: &EmitContext<'ctx>,

@@ -46,7 +46,7 @@ pub(crate) fn check_diagnostics(output: &mut LowerOutput) -> Result<(), LowerErr
 
 /// Walk every `@extern "C"` function across `packages` and collect a
 /// deduped, sorted list of `link_lib` names. Used at lower time so
-/// backends and cache layers don't re-walk the IR. Functions without
+/// backends and cache layers do not re-walk the IR. Functions without
 /// a `link_lib` (bare `@extern "C"` with no `@link`) contribute
 /// nothing. The C symbol is still resolved via the normal libc /
 /// runtime search path at link time.
@@ -68,7 +68,7 @@ where
 }
 
 /// Empty `Global` IRPackage seeded so `generics::monomorphize` has a
-/// place to land stdlib stub instantiations (today only `Option<T>`).
+/// place to land stdlib stub instantiations (`Option<T>`).
 fn empty_global_stdlib_package() -> IRPackage {
     IRPackage {
         constants: BTreeMap::new(),

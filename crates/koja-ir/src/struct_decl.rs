@@ -15,9 +15,7 @@
 //! whose `fields` are pre-canonicalized to declaration order. Each
 //! [`StructFieldInit`] therefore carries `index` plus the producing
 //! [`crate::ValueId`] only, and the field's type comes from the matching
-//! [`IRStructField::ir_type`]. Re-introducing per-init types is a
-//! follow-up if generics start producing field-substituted
-//! instantiations that diverge from the declaration shape.
+//! [`IRStructField::ir_type`].
 
 use crate::function::IRSymbol;
 use crate::types::{IRType, ValueId};

@@ -96,7 +96,7 @@ fn constructor_metadata(
     };
     let span = *span;
     if !subject_ty.is_resolved() {
-        // An upstream error already fired (subject didn't resolve).
+        // An upstream error already fired (subject did not resolve).
         // Stay silent here so the user only sees the original cause.
         return Err(());
     }

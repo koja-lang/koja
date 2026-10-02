@@ -5,6 +5,9 @@ edition.workspace = true
 license.workspace = true
 version.workspace = true
 
+[lints]
+workspace = true
+
 [dependencies]
 koja-ast = { path = "../koja-ast" }
 koja-lexer = { path = "../koja-lexer" }

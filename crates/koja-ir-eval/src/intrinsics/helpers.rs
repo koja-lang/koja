@@ -1,4 +1,4 @@
-//! Cross-intrinsic helpers: shared shapes that several `intrinsics/`
+//! Cross-intrinsic helpers, shared shapes that several `intrinsics/`
 //! handlers reach for. Lifted out to keep the `arg_*` readers,
 //! `option_value` / `result_value`, and `size_of_primitive` from
 //! drifting across sibling modules.
@@ -231,7 +231,7 @@ pub(super) fn unit_variant_value<R: CallResolver>(
 /// The single `Ok` payload type of a `Result` enum decl. The IR
 /// seal pins `Result.Ok` to exactly one tuple field. Shape
 /// violations surface as errors (not panics) because the intrinsic
-/// dispatch seam can't rely on seal.
+/// dispatch seam cannot rely on seal.
 pub(super) fn single_ok_payload<R: CallResolver>(
     result_symbol: &IRSymbol,
     resolver: &R,
@@ -250,9 +250,9 @@ pub(super) fn single_ok_payload<R: CallResolver>(
 }
 
 /// Read the receiver enum's [`IRSymbol`] off `function.return_type`,
-/// erroring when the return shape isn't an enum (a typecheck /
-/// lower invariant violation that we surface rather than panic
-/// because the intrinsic dispatch seam can't rely on seal).
+/// erroring when the return shape is not an enum (a typecheck /
+/// lower invariant violation that surfaces as an error rather than a
+/// panic because the intrinsic dispatch seam cannot rely on seal).
 pub(super) fn enum_return_symbol(
     function: &IRFunction,
     label: &str,

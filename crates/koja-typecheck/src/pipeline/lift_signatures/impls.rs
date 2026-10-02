@@ -1,5 +1,5 @@
 //! Inherent + trait impl lifting. Inherent impls forward each member
-//! to [`functions::lift_function_with_identifier`]. Trait impls
+//! to [`super::functions::lift_function_with_identifier`]. Trait impls
 //! additionally check protocol conformance, synthesize any
 //! default-bodied protocol methods that the impl omitted, and
 //! record the conformance fact (`target : protocol`) on the
@@ -97,9 +97,9 @@ impl ConformanceSite<'_> {
 /// `Copy` so helpers can take it by value (every field is a borrow).
 ///
 /// `protocol_subst` maps the protocol's type-param slots to concrete
-/// types so conformance can compare apples to apples: slot 0 (`Self`)
+/// types so conformance can compare apples to apples. Slot 0 (`Self`)
 /// is the impl's resolved target type, slots 1..N are the type-args
-/// the user wrote on `trait_expr` (`Eq<String>` -> `[String]`).
+/// the user wrote on `trait_expr` (`Eq<String>` maps to `[String]`).
 #[derive(Clone, Copy)]
 struct ProtocolImplScope<'a> {
     /// Registry id for the protocol, needed by default-method
@@ -353,7 +353,7 @@ fn diagnose_protocol_extend_self_methods(
 /// conformance verification and protocol-impl-entry stamping. The
 /// `protocol_subst` field is the [`Substitution`] threaded through
 /// [`substitute`] when comparing impl methods against protocol
-/// methods: slot 0 (`Self`) is the resolved target, slots 1..N are
+/// methods. Slot 0 (`Self`) is the resolved target, slots 1..N are
 /// the type-args the user wrote on `trait_expr`.
 struct ResolvedImplHeads {
     protocol: ResolvedType,
@@ -370,8 +370,8 @@ struct ResolvedImplHeads {
 /// to the global Int id.
 ///
 /// Diagnostics from the inner [`resolve_type_expr`] are silenced
-/// here: they fire again as part of normal lift via the same
-/// scope, and we only want one copy on the user's screen.
+/// here because they fire again as part of normal lift via the same
+/// scope, and the user should see only one copy.
 fn resolve_impl_target(
     impl_block: &mut ImplBlock,
     target_identifier: &Identifier,
@@ -380,8 +380,8 @@ fn resolve_impl_target(
     resolve_block_target(&mut impl_block.target, target_identifier, scope)
 }
 
-/// Shared resolver for `impl`/`extend` target type expressions:
-/// the target's own type-params resolve via [`TypeParamScope`].
+/// Shared resolver for `impl`/`extend` target type expressions.
+/// The target's own type-params resolve via [`TypeParamScope`].
 fn resolve_block_target(
     target: &mut TypeExpr,
     target_identifier: &Identifier,
@@ -393,7 +393,7 @@ fn resolve_block_target(
     resolve_type_expr(target, type_params, scope.resolution_scope(), &mut sink)
 }
 
-/// Owners list for any impl-block target scope: a single-entry
+/// The owners list for any impl-block target scope is a single-entry
 /// stack of the target struct/enum id when it carries type params,
 /// empty otherwise. Shared by [`resolve_impl_target`] and
 /// [`resolve_protocol_impl_heads`].
@@ -428,8 +428,8 @@ fn resolve_protocol_impl_heads(
     // Scope rooted at the target struct/enum: `T` in `Bag<T>`
     // resolves to `TypeParam(Bag, 0)`, matching how an inline
     // method on `struct Bag<T>` would resolve `T`. The impl's free
-    // type-params alias the receiver's slots. We don't allocate a
-    // separate impl-anchored scope.
+    // type-params alias the receiver's slots. Lift does not allocate
+    // a separate impl-anchored scope.
     let owners = impl_target_owners(target_identifier, scope.registry);
     let type_params = TypeParamScope::new(&owners);
     let target = target.clone();
@@ -862,8 +862,8 @@ fn synthesize_default_method(
         impl_scope.target_path,
         function.name.as_str(),
     );
-    // Synthesized protocol-default methods are always public: the
-    // protocol itself declared them, and `ProtocolMethod` doesn't
+    // Synthesized protocol-default methods are always public. The
+    // protocol itself declared them, and `ProtocolMethod` does not
     // carry a `Visibility` field at the AST level. They register
     // under the target type's name like any other method.
     if !matches!(

@@ -10,17 +10,14 @@
 //!
 //! - [`share_heap_payload`]: rc-acquire the source's immutable block
 //!   and reinterpret the *same* payload pointer as the result type.
-//!   The cheap default: Koja blocks are immutable and value semantics
-//!   makes the sharing invisible, so a same-layout reinterpret
-//!   (`Binary` ↔ `Bits`, `String` -> `Binary`) is just an `rc++`.
-//!   Mirrors the heap-leaf arm of `Clone` emission.
-//! - [`copy_heap_payload`]: deep-copy the header + payload into a
+//!   This is the cheap default. Koja blocks are immutable and value
+//!   semantics makes the sharing invisible, so a same-layout
+//!   reinterpret (`Binary` to `Bits` or back, `String` to `Binary`) is
+//!   just an `rc++`. Mirrors the heap-leaf arm of `Clone` emission.
+//! - [`copy_heap_payload`]: deep-copy the header and payload into a
 //!   fresh `rc = 1` block. Required only when the result block differs
-//!   from the source: `String`'s trailing libc NUL means
-//!   `Binary.to_string` and `CString` mint a distinct allocation. This
-//!   is also the building block for the eventual "copy on process
-//!   boundary" work, where a value must be physically duplicated
-//!   across an isolation boundary rather than rc-shared.
+//!   from the source. `String`'s trailing libc NUL means
+//!   `Binary.to_string` and `CString` mint a distinct allocation.
 
 use inkwell::values::{BasicValueEnum, FunctionValue, PointerValue};
 use koja_ir::IRFunction;
@@ -36,7 +33,7 @@ use crate::runtime::{declare_malloc_extern, declare_memcpy_extern, declare_rc_in
 /// pointer, an owned share of the immutable block, no copy. For
 /// conversions whose source and result use the identical
 /// `[i64 rc][i64 bit_length][payload]` layout, so reinterpreting the
-/// pointer is sound: the matching `Drop` rc-decrements either alias
+/// pointer is sound. The matching `Drop` rc-decrements either alias
 /// and the block is freed once the last owner releases it. The block
 /// base (rc word) is `payload - HEADER_BYTES`. Immortal (rodata)
 /// blocks are no-ops in the runtime.

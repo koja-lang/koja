@@ -32,7 +32,7 @@
 ///   caller wants for source fixtures.
 ///
 /// Not intended for dedenting the *contents* of string literals in
-/// Koja source (that's [`parser::dedent_multiline_parts`]). This is
+/// Koja source (that's koja-parser's `dedent_multiline_parts`). This is
 /// a tool-side utility for spelling fixtures.
 ///
 /// # Examples

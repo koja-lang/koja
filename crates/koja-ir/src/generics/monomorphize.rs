@@ -292,7 +292,7 @@ fn monomorphize_function(
 /// `Option<T>`) are skipped here, since they need a call site to pick
 /// the method-level args and enqueue the full
 /// `(template, args, method_args, owner)` quadruple. A struct
-/// instantiation alone doesn't pin `<U>`.
+/// instantiation alone does not pin `<U>`.
 fn enqueue_member_methods(
     inst: &Instantiation,
     registry: &GlobalRegistry,
@@ -325,7 +325,7 @@ fn enqueue_member_methods(
         // Protocol-impl methods are call-site driven. Eagerly mono'ing
         // every time the struct is instantiated cascades into missing-
         // method errors when the impl body assumes a constraint the
-        // concrete arg doesn't satisfy (e.g. `Debug for Pair<A, B>`
+        // concrete arg does not satisfy (e.g. `Debug for Pair<A, B>`
         // calling `A.format()` with no `A: Debug` bound, exploded by
         // a `Pair<Unit, X>` instance).
         if protocol_method_names.contains(candidate.identifier.last()) {

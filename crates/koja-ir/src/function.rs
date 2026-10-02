@@ -61,19 +61,19 @@ impl IRSymbol {
     }
 
     /// The bare last segment of the underlying AST identifier path
-    /// (e.g. `TestApp.cosf` -> `cosf`). Falls back to the full
+    /// (e.g. `TestApp.cosf` becomes `cosf`). Falls back to the full
     /// mangled name when no `.` is present (root identifiers,
-    /// derived monomorphization suffixes that don't contain a
+    /// derived monomorphization suffixes that do not contain a
     /// path separator). Used by the LLVM backend when it needs a
     /// human-readable C-symbol-style name for an `@extern "C"`
-    /// declaration whose `@link "lib"` payload didn't supply one.
+    /// declaration whose `@link "lib"` payload did not supply one.
     pub fn last_segment(&self) -> &str {
         let segment = self.0.rsplit('.').next().unwrap_or(self.0.as_str());
         strip_arity_suffix(segment)
     }
 }
 
-/// Drop a trailing `/N` arity suffix (`greet/1` -> `greet`). A `/`
+/// Drop a trailing `/N` arity suffix (`greet/1` becomes `greet`). A `/`
 /// followed by anything other than digits is kept.
 fn strip_arity_suffix(segment: &str) -> &str {
     let Some(slash) = segment.rfind('/') else {
@@ -586,10 +586,10 @@ pub enum IRInstruction {
         field_type: IRType,
         struct_symbol: IRSymbol,
     },
-    /// `dest = base with field_index <- value`. SSA-pure: produces a
+    /// `dest = base with field_index <- value`. SSA-pure, producing a
     /// new struct value identical to `base` except the field at
     /// `field_index` is replaced by `value`. Backends materialize
-    /// the rebuild in their own way: eval clones the field vec and
+    /// the rebuild in their own way. Eval clones the field vec and
     /// swaps one slot, while LLVM `alloca`s the receiver, GEP-stores the
     /// new field, and reloads. Heap-typed leaf overwrites are the
     /// IR-lowerer's responsibility. It must emit a synthetic
@@ -774,7 +774,7 @@ pub enum IRInstruction {
     /// signed integer sources, zero-extend unsigned sources, `fpext`
     /// a `Float32` into `Float64`. Lowered from the typecheck-stamped
     /// [`koja_ast::coercion::Coercion::NumericWiden`] at every
-    /// sized-numeric -> hub flow site (assignments, struct fields,
+    /// sized-numeric-to-hub flow site (assignments, struct fields,
     /// args, returns, enum payloads, consts).
     NumericWiden {
         dest: ValueId,
@@ -832,7 +832,7 @@ pub struct ReceiveArm {
 }
 
 /// Envelope kind a receive arm matches. `IOReady` and `ExitSignal`
-/// arms aren't written by source lowering. The `elaborate` delivery
+/// arms are not written by source lowering. The `elaborate` delivery
 /// sub-passes synthesize them for a `Process` whose message type `M`
 /// includes `IOReady` / `Process.ExitSignal`, so runtime-delivered
 /// events reach the business `handle`.

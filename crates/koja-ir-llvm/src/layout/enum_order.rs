@@ -139,7 +139,7 @@ fn collect_type_enum_refs(
                 collect_type_enum_refs(member, struct_field_index, deps);
             }
         }
-        // Heap-pointer payloads: the inner type lives behind a
+        // For heap-pointer payloads, the inner type lives behind a
         // pointer and contributes no inline size dependency to the
         // outer enum chunk computation. `Indirect` is the cycle-
         // breaking pointer minted by `koja_ir::cycle`.

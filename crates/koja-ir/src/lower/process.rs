@@ -481,7 +481,7 @@ fn lookup_global(registry: &GlobalRegistry, path: &[&str]) -> GlobalRegistryId {
 /// distinct monomorphized state cells get distinct pairs exactly
 /// like generic structs do.
 ///
-/// The wrapper is a pure ABI shim: the LLVM emit pass declares it
+/// The wrapper is a pure ABI shim. The LLVM emit pass declares it
 /// `void(i8*)` (the scheduler's `ProcessFn` shape), loads the typed
 /// config out of the runtime-provided pointer, and calls the body,
 /// which is the function its IR `Call` already names. All real
@@ -702,7 +702,7 @@ fn build_process_body(
 }
 
 /// Emit `cond_br (tag == expected) then, else` as `block`'s
-/// terminator. `tag` is an already extracted enum tag byte: the
+/// terminator. `tag` is an already extracted enum tag byte. The
 /// `Result` split on `start` (tag `0` is `Ok`) and each rung of
 /// [`emit_apply_priority`]'s weight diamond route through here.
 fn emit_tag_branch(
@@ -725,7 +725,7 @@ fn emit_tag_branch(
 }
 
 /// Project the `Result` variant's single payload field and acquire
-/// it as an owned value (the standard match-arm pattern: the clone
+/// it as an owned value (the standard match-arm pattern, where the clone
 /// is taken while the scrutinee is still live).
 fn extract_result_payload(
     ctx: &mut FnLowerCtx<'_>,
@@ -754,9 +754,9 @@ fn extract_result_payload(
 /// scheduling weight via [`IRInstruction::SetPriority`], before `run`.
 ///
 /// The variant is a runtime value, so the weight is chosen by a
-/// name-keyed branch diamond (`High -> 2`, `Low -> 0`, else (`Normal`)
-/// -> 1, matching `koja_runtime_core::Priority::from_index`). The arms
-/// converge on a join block carrying the `Int64` weight as a
+/// name-keyed branch diamond (`High -> 2`, `Low -> 0`, else
+/// `Normal -> 1`, matching `koja_runtime_core::Priority::from_index`).
+/// The arms converge on a join block carrying the `Int64` weight as a
 /// [`crate::function::BlockParam`], and that block is returned so the
 /// caller appends `run` to it.
 ///
@@ -900,10 +900,10 @@ fn finish_process_arm(
     );
 }
 
-/// Hand-build the wrapper shim's IR body: a single `Call` into the
+/// Hand-build the wrapper shim's IR body. It is a single `Call` into the
 /// process body, discarding its result. Backends never emit this CFG.
 /// The LLVM declaration is the scheduler's `void(i8*)` `ProcessFn`
-/// shape, whose signature can't be expressed in IR, so its emitter
+/// shape, whose signature cannot be expressed in IR, so its emitter
 /// reads the callee out of this `Call` and synthesizes only the
 /// load-config ABI adaptation around it.
 fn build_wrapper_shim(

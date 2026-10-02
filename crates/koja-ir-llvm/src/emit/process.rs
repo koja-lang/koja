@@ -15,7 +15,7 @@
 //!   signature is ignored at LLVM declare time in favor of the
 //!   `ProcessFn` shape `koja_rt_spawn` takes.
 //! - [`emit_spawn_wrapper_body`] / [`emit_process_entry_wrapper_body`]
-//!   fill the shim body: load the typed config out of the
+//!   fill the shim body. They load the typed config out of the
 //!   runtime-provided pointer and call the process body the IR
 //!   `Call` names (plus, for the entry shape, store the returned
 //!   exit code into `__koja_exit_code`). The backend synthesizes
@@ -408,9 +408,9 @@ fn timeout_tag_branch<'ctx>(
 
 /// Build the per-arm dispatch chain as a sequence of conditional
 /// branches keyed on the returned wire tag. Each matching arm gets a
-/// dedicated "deserialize then branch to body" block so we can share
-/// the payload-load logic without re-emitting it at every comparison
-/// site.
+/// dedicated "deserialize then branch to body" block so the emitter
+/// can share the payload-load logic without re-emitting it at every
+/// comparison site.
 ///
 /// Tags that no arm declares fall through to an `unreachable`.
 /// The typecheck seal admits only declared shapes, so a runtime
