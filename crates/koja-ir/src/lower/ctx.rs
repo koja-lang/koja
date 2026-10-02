@@ -4,8 +4,8 @@
 //! No language-aware logic lives here. This is the bookkeeping
 //! layer the rest of the [`crate::lower`] modules sit on top of.
 //!
-//! Three types live here together because they're co-evolving and
-//! never used independently:
+//! Five types live here together because they change together and
+//! are never used independently:
 //!
 //! - [`FnLowerCtx`] owns per-function mutable scratch state (the
 //!   CFG, value/block counters, the per-function `local` set) and
@@ -17,8 +17,13 @@
 //!   the [`crate::generics`] driver consumes after lowering finishes.
 //! - [`FlowResult`] is the return shape every `lower_*` helper
 //!   produces, distinguishing "flow continues at this block with
-//!   this value" from "flow terminated already (e.g. via early
-//!   `return`)".
+//!   this value" from "flow terminated already (for example via an
+//!   early `return`)".
+//! - [`LoopExit`] is one enclosing loop's `break` target plus the
+//!   subject-temp watermark at loop entry.
+//! - [`ClosureState`] is the per-function closure bookkeeping: child
+//!   symbol minting for outer functions and capture redirection for
+//!   closure bodies.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -79,8 +84,8 @@ pub(crate) struct LowerOutput {
 /// The shape every `lower_*` helper returns. `Open` carries the
 /// trailing value (when the construct produces one) and the block
 /// where flow continues. `Closed` signals that an inner statement
-/// already terminated the function (the only path today is
-/// `Statement::Return`). Closed branches don't fall through to a
+/// already terminated the function (the only such path is
+/// `Statement::Return`). Closed branches do not fall through to a
 /// surrounding merge block. The caller's wiring sees
 /// `FlowResult::Closed` directly and skips the fall-through wiring
 /// it would otherwise emit.
@@ -106,7 +111,7 @@ pub(crate) enum FlowResult {
 /// `declared` and `locals` split the local-slot bookkeeping.
 /// `declared` is monotonic. Presence means a `LocalDecl` was emitted
 /// in the entry block, and it never shrinks, so a write after a
-/// loop/branch boundary can't re-declare the slot. `locals` is the
+/// loop/branch boundary cannot re-declare the slot. `locals` is the
 /// path-sensitive live-slot map, with each entry carrying the slot's
 /// [`IRType`] for drop-glue emission. Control-flow lowering
 /// snapshots, restores, and merges it per arm.
@@ -121,22 +126,27 @@ pub(crate) enum FlowResult {
 /// the function's blocks are extracted via [`Self::into_blocks`], and
 /// downstream consumers (seal, backends) build their own indices.
 pub(crate) struct FnLowerCtx<'a> {
+    /// Slots that hold a borrowed reference rather than an owned
+    /// value. Pattern binds write the subject's payload storage
+    /// without a `Clone`, so no drop site may ever free these.
+    /// A bind the arm body mutates leaves the set at arm entry via
+    /// [`Self::unmark_slot_borrowed`] after a detach clone gives the
+    /// slot its own value.
+    borrowed_slots: BTreeSet<IRLocalId>,
     pub(crate) cfg: CFGBuilder,
-    pub(crate) output: &'a mut LowerOutput,
-    pub(crate) registry: &'a GlobalRegistry,
-    next_value: u32,
-    next_block: u32,
-    value_types: BTreeMap<ValueId, IRType>,
-    entry_block: Option<IRBlockId>,
-    declared: BTreeSet<IRLocalId>,
-    locals: BTreeMap<IRLocalId, IRType>,
     closures: ClosureState,
+    declared: BTreeSet<IRLocalId>,
+    entry_block: Option<IRBlockId>,
+    locals: BTreeMap<IRLocalId, IRType>,
     /// Stack of pending loop exits, one entry per enclosing `loop` /
     /// `while`. Carries the exit block `break` branches to and the
     /// subject-temp watermark at loop entry, so `break` can release
     /// match subjects it escapes. [`super::loops`] pushes on entry
     /// and pops on exit.
     loop_exit: Vec<LoopExit>,
+    next_block: u32,
+    next_value: u32,
+    pub(crate) output: &'a mut LowerOutput,
     /// SSA values that own a fresh heap allocation (and so may be
     /// moved into an owner or dropped as a temp). Marked at every
     /// producer that is *certain* to allocate fresh:
@@ -153,22 +163,18 @@ pub(crate) struct FnLowerCtx<'a> {
     /// slot/field read, or parameter), cloned on acquisition and never
     /// freed as a temp. Defaulting to borrowed keeps a misclassification
     /// leak-only, never a double-free. Each owned value has exactly one
-    /// consumer: it is *moved* into an owner ([`super::ownership::materialize_owned`])
-    /// or *released* at a use-and-release site ([`super::ownership::drop_discarded_temp`]).
+    /// consumer. It is *moved* into an owner
+    /// ([`super::ownership::materialize_owned`]) or *released* at a
+    /// use-and-release site ([`super::ownership::drop_discarded_temp`]).
     owned_values: BTreeSet<ValueId>,
-    /// Slots that hold a borrowed reference rather than an owned
-    /// value. Pattern binds write the subject's payload storage
-    /// without a `Clone`, so no drop site may ever free these.
-    /// A bind the arm body mutates leaves the set at arm entry via
-    /// [`Self::unmark_slot_borrowed`] after a detach clone gives the
-    /// slot its own value.
-    borrowed_slots: BTreeSet<IRLocalId>,
     /// Owned match-subject temps whose arms are currently being
     /// lowered. A `return` or `break` inside an arm exits before the
     /// arm tail's subject release runs, so early-exit lowering drops
     /// this stack (innermost first) on the way out.
     /// [`super::match_expr`] pushes before lowering arms, pops after.
     pending_subject_temps: Vec<ValueId>,
+    pub(crate) registry: &'a GlobalRegistry,
+    value_types: BTreeMap<ValueId, IRType>,
 }
 
 /// Per-function closure bookkeeping. Two roles: outer fns mint
@@ -217,20 +223,20 @@ impl ClosureState {
 impl<'a> FnLowerCtx<'a> {
     pub(crate) fn new(registry: &'a GlobalRegistry, output: &'a mut LowerOutput) -> Self {
         Self {
-            cfg: CFGBuilder::new(),
-            output,
-            registry,
-            next_value: 0,
-            next_block: 0,
-            value_types: BTreeMap::new(),
-            entry_block: None,
-            declared: BTreeSet::new(),
-            locals: BTreeMap::new(),
-            closures: ClosureState::default(),
-            loop_exit: Vec::new(),
-            owned_values: BTreeSet::new(),
             borrowed_slots: BTreeSet::new(),
+            cfg: CFGBuilder::new(),
+            closures: ClosureState::default(),
+            declared: BTreeSet::new(),
+            entry_block: None,
+            locals: BTreeMap::new(),
+            loop_exit: Vec::new(),
+            next_block: 0,
+            next_value: 0,
+            output,
+            owned_values: BTreeSet::new(),
             pending_subject_temps: Vec::new(),
+            registry,
+            value_types: BTreeMap::new(),
         }
     }
 
@@ -317,7 +323,7 @@ impl<'a> FnLowerCtx<'a> {
     /// The heap-managed local slots that became live since `snapshot`
     /// was captured, in reverse declaration order (LIFO drop). Loop
     /// lowering ([`super::loops`]) uses this to release body-scoped
-    /// bindings at the end of each iteration: such bindings leave
+    /// bindings at the end of each iteration. Such bindings leave
     /// scope at the back-edge, so they must be dropped there and kept
     /// out of the function-exit drop set, where an unexecuted loop
     /// body would otherwise leave them uninitialized.
@@ -487,7 +493,7 @@ impl<'a> FnLowerCtx<'a> {
 
     /// Merge per-arm post-state snapshots into the live slot map.
     /// A slot survives the join only when every branch declared it,
-    /// so declarations confined to one arm don't leak past the merge.
+    /// so declarations confined to one arm do not leak past the merge.
     pub(crate) fn merge_slot_states(&mut self, branches: Vec<SlotStateSnapshot>) {
         if branches.is_empty() {
             return;

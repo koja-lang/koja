@@ -35,7 +35,7 @@ use koja_ir::{BinaryMethod, BitsMethod, IRFunction, IRSymbol, IRVariantTag};
 use crate::ctx::EmitContext;
 use crate::emit::constants::emit_string_literal_payload;
 use crate::emit::enums::build_enum_value;
-use crate::emit::heap_layout::load_bit_length;
+use crate::emit::heap_layout::{Rounding, load_bit_length, load_byte_count};
 use crate::error::{IceExt, LlvmError};
 use crate::intrinsics::heap_payload;
 use crate::intrinsics::option;
@@ -135,8 +135,9 @@ pub(super) fn emit_bits<'ctx>(
 
 /// `Binary.to_bits(self) -> Bits` is a zero-cost reinterpret: `Binary`
 /// and `Bits` share the identical `[rc][bit_length][bytes]` block, so
-/// we rc-acquire the immutable block and hand back the same payload
-/// pointer as an owned `Bits`. The matching `Drop` rc-decrements.
+/// the intrinsic rc-acquires the immutable block and hands back the
+/// same payload pointer as an owned `Bits`. The matching `Drop`
+/// rc-decrements.
 fn emit_to_bits<'ctx>(
     ctx: &EmitContext<'ctx>,
     function: &IRFunction,
@@ -155,7 +156,7 @@ fn emit_at<'ctx>(
     function: &IRFunction,
     llvm_function: FunctionValue<'ctx>,
 ) -> Result<(), LlvmError> {
-    emit_byte_lookup(ctx, function, llvm_function, false)
+    emit_byte_lookup(ctx, function, llvm_function, Rounding::Floor)
 }
 
 /// `Bits.byte_at(self, index) -> Option<Int>`: same shape as
@@ -166,17 +167,17 @@ fn emit_bits_byte_at<'ctx>(
     function: &IRFunction,
     llvm_function: FunctionValue<'ctx>,
 ) -> Result<(), LlvmError> {
-    emit_byte_lookup(ctx, function, llvm_function, true)
+    emit_byte_lookup(ctx, function, llvm_function, Rounding::Ceil)
 }
 
-/// Shared body for the indexed byte reads. `ceil_bytes` selects the
+/// Shared body for the indexed byte reads. `rounding` selects the
 /// bounds arithmetic: floor for `Binary` (always byte-aligned), ceil
 /// for `Bits` (the last byte may be partial).
 fn emit_byte_lookup<'ctx>(
     ctx: &EmitContext<'ctx>,
     function: &IRFunction,
     llvm_function: FunctionValue<'ctx>,
-    ceil_bytes: bool,
+    rounding: Rounding,
 ) -> Result<(), LlvmError> {
     let option_symbol = expect_enum_symbol(&function.return_type, function, "byte lookup");
     let payload = heap_payload::pointer_param(function, llvm_function);
@@ -184,18 +185,7 @@ fn emit_byte_lookup<'ctx>(
 
     let i64_ty = ctx.context.i64_type();
     let i8_ty = ctx.context.i8_type();
-    let bit_length = load_bit_length(ctx, payload, "bit_length")?;
-    let shift_input = if ceil_bytes {
-        ctx.builder
-            .build_int_add(bit_length, i64_ty.const_int(7, false), "bits_rounded")
-            .or_ice()?
-    } else {
-        bit_length
-    };
-    let byte_count = ctx
-        .builder
-        .build_right_shift(shift_input, i64_ty.const_int(3, false), false, "byte_count")
-        .or_ice()?;
+    let byte_count = load_byte_count(ctx, payload, rounding)?;
     let nonnegative = ctx
         .builder
         .build_int_compare(IntPredicate::SGE, index, i64_ty.const_zero(), "nonnegative")
@@ -299,13 +289,8 @@ fn emit_byte_size<'ctx>(
     function: &IRFunction,
     llvm_function: FunctionValue<'ctx>,
 ) -> Result<(), LlvmError> {
-    let i64_ty = ctx.context.i64_type();
     let payload = heap_payload::pointer_param(function, llvm_function);
-    let bit_length = load_bit_length(ctx, payload, "bit_length")?;
-    let byte_count = ctx
-        .builder
-        .build_right_shift(bit_length, i64_ty.const_int(3, false), false, "byte_count")
-        .or_ice()?;
+    let byte_count = load_byte_count(ctx, payload, Rounding::Floor)?;
     ctx.builder
         .build_return(Some(&byte_count))
         .or_ice()
@@ -324,11 +309,7 @@ fn emit_to_string<'ctx>(
     let result_symbol = expect_enum_symbol(&function.return_type, function, "Binary.to_string");
     let payload = heap_payload::pointer_param(function, llvm_function);
     let i64_ty = ctx.context.i64_type();
-    let bit_length = load_bit_length(ctx, payload, "bit_length")?;
-    let byte_count = ctx
-        .builder
-        .build_right_shift(bit_length, i64_ty.const_int(3, false), false, "byte_count")
-        .or_ice()?;
+    let byte_count = load_byte_count(ctx, payload, Rounding::Floor)?;
 
     let validate = declare_utf8_validate_extern(ctx);
     let is_valid = ctx
@@ -351,8 +332,7 @@ fn emit_to_string<'ctx>(
         .or_ice()?;
 
     ctx.builder.position_at_end(valid_bb);
-    let new_payload =
-        heap_payload::copy_heap_payload(ctx, function.symbol.mangled(), payload, true, false)?;
+    let new_payload = heap_payload::copy_heap_payload(ctx, payload, true, Rounding::Floor)?;
     let ok = result::build_ok(ctx, result_symbol, new_payload.into())?;
     ctx.builder.build_return(Some(&ok)).or_ice()?;
 

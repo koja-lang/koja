@@ -11,8 +11,9 @@ use koja_ir::IRFunction;
 
 use crate::ctx::EmitContext;
 use crate::emit::enums::build_enum_value;
+use crate::emit::heap_layout::byte_offset_ptr;
 use crate::error::{IceExt, LlvmError};
-use crate::intrinsics::element::{acquire_value, release_in_slot};
+use crate::intrinsics::element::{ElementOp, acquire_value, apply_in_slot};
 use crate::intrinsics::util::{
     build_table_struct, expect_enum_symbol, extract_int, extract_pointer, nth_param, nth_struct,
     ret,
@@ -20,8 +21,8 @@ use crate::intrinsics::util::{
 use crate::types::ir_basic_type;
 
 use super::util::{
-    ProbeInputs, TableSnapshot, advance_slot, call_eq, call_hash, clone_table_buffers,
-    entry_pointer, extract_table_fields, resolve_key_hash_ops, value_slot,
+    ProbeInputs, TableSnapshot, advance_slot, call_eq, call_hash, clone_table, entry_pointer,
+    extract_table_fields, resolve_key_hash_ops,
 };
 use super::{HashtableLayout, STATE_EMPTY, STATE_OCCUPIED, STATE_TOMBSTONE};
 use crate::intrinsics::option;
@@ -196,7 +197,7 @@ pub(crate) fn emit_remove<'ctx>(
         length: extract_int(ctx, self_val, 2, "len")?,
         capacity: extract_int(ctx, self_val, 3, "cap")?,
     };
-    let table = clone_table_buffers(ctx, llvm_function, layout, &original)?;
+    let table = clone_table(ctx, llvm_function, layout, &original, ElementOp::Acquire)?;
     let key_val = nth_param(function, llvm_function, 1, "key");
     let key_ops = resolve_key_hash_ops(ctx, function, layout.key_ty)?;
     let probe = emit_read_only_probe(
@@ -214,10 +215,10 @@ pub(crate) fn emit_remove<'ctx>(
     // The clone acquired this bucket's key (and value). Tombstoning
     // drops it from the table, so release that reference now,
     // otherwise the slot's payload leaks once the table is reclaimed.
-    release_in_slot(ctx, layout.key_ty, probe.e_ptr)?;
+    apply_in_slot(ctx, ElementOp::Release, layout.key_ty, probe.e_ptr)?;
     if let Some(value_ty) = layout.value_ty {
-        let value_ptr = value_slot(ctx, probe.e_ptr, layout.key_size)?;
-        release_in_slot(ctx, value_ty, value_ptr)?;
+        let value_ptr = byte_offset_ptr(ctx, probe.e_ptr, layout.key_size, "val_ptr")?;
+        apply_in_slot(ctx, ElementOp::Release, value_ty, value_ptr)?;
     }
     ctx.builder
         .build_store(probe.s_ptr, i8_ty.const_int(STATE_TOMBSTONE, false))
@@ -294,7 +295,7 @@ pub(crate) fn emit_map_get<'ctx>(
         .builder
         .build_load(value_basic_ty, val_ptr, "val")
         .or_ice()?;
-    // Hand-out: the returned `Some` owns an independent reference, so
+    // Hand-out. The returned `Some` owns an independent reference, so
     // acquire the value (heap-leaf `rc++` / composite deep clone).
     // Otherwise the receiver's table and the returned value share one
     // reference and both drop it (a double free once glue is active).

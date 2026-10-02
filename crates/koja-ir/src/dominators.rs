@@ -16,7 +16,7 @@
 //! instruction operands or value types and derive successor edges
 //! from terminator targets plus `Receive` arm bodies (dispatch
 //! enters those blocks at runtime without a terminator edge).
-//! Reusable for any future dataflow pass (DCE, GVN, etc.).
+//! Reusable by any dataflow pass (DCE, GVN, etc.).
 
 use std::collections::{HashMap, HashSet};
 
@@ -44,9 +44,9 @@ pub(crate) fn compute_immediate_dominators(
         .collect();
     let predecessors = predecessor_map(blocks);
 
-    // Sentinel: entry is its own immediate dominator while iterating.
-    // Removed before returning so callers see "entry has no
-    // immediate dominator" as the absence of a map entry.
+    // Entry is its own immediate dominator while iterating. This
+    // sentinel is removed before returning so callers see "entry has
+    // no immediate dominator" as the absence of a map entry.
     let mut immediate_dominators: HashMap<IRBlockId, IRBlockId> = HashMap::new();
     immediate_dominators.insert(entry, entry);
 
@@ -204,7 +204,7 @@ pub(crate) fn successors(block: &IRBasicBlock) -> Vec<IRBlockId> {
 /// `block -> blocks that branch into it`. Built once per function
 /// at dominance-analysis entry and reused inside the iterative
 /// fixed-point loop. Unreachable blocks may have no entry in the
-/// returned map (no predecessors), and that's fine. The caller
+/// returned map (no predecessors), and that is fine. The caller
 /// filters them out.
 fn predecessor_map(blocks: &[IRBasicBlock]) -> HashMap<IRBlockId, Vec<IRBlockId>> {
     let mut predecessors: HashMap<IRBlockId, Vec<IRBlockId>> = HashMap::new();
@@ -222,7 +222,7 @@ mod tests {
     //! lowering emits today: linear, diamond (`if`/`else`),
     //! chained-test (`cond`/`match`). Every test pins the
     //! immediate-dominator relation block-by-block so future edits
-    //! to the algorithm don't silently weaken the contract.
+    //! to the algorithm do not silently weaken the contract.
 
     use super::*;
     use crate::function::{BranchTarget, IRBasicBlock, IRBlockId, IRTerminator};
@@ -256,7 +256,7 @@ mod tests {
 
     #[test]
     fn linear_chain_chains_immediate_dominators() {
-        // 0 -> 1 -> 2 -> return
+        // Shape: `0 -> 1 -> 2 -> return`.
         let blocks = vec![
             block(0, branch(1)),
             block(1, branch(2)),
@@ -270,8 +270,7 @@ mod tests {
 
     #[test]
     fn diamond_pins_idom_of_merge_to_entry() {
-        // 0 (cond) -> 1 -> 3
-        // 0 (cond) -> 2 -> 3
+        // Shape: `0 (cond) -> 1 -> 3` and `0 (cond) -> 2 -> 3`.
         let blocks = vec![
             block(0, cond_branch(0, 1, 2)),
             block(1, branch(3)),
@@ -290,13 +289,17 @@ mod tests {
 
     #[test]
     fn chained_test_blocks_dominate_through_else_targets() {
-        // match-style: 0 (cond) -> body_0
-        //              0 (cond) -> 1 (cond)
-        //              1 (cond) -> body_1
-        //              1 (cond) -> 2 (catch-all)
-        //              body_0 -> merge
-        //              body_1 -> merge
-        //              2      -> merge
+        // Match-style shape:
+        //
+        // ```text
+        // 0 (cond) -> body_0
+        // 0 (cond) -> 1 (cond)
+        // 1 (cond) -> body_1
+        // 1 (cond) -> 2 (catch-all)
+        // body_0 -> merge
+        // body_1 -> merge
+        // 2      -> merge
+        // ```
         let blocks = vec![
             block(0, cond_branch(0, 10, 1)),
             block(1, cond_branch(1, 11, 2)),
@@ -318,7 +321,8 @@ mod tests {
 
     #[test]
     fn unreachable_blocks_are_skipped() {
-        // 0 -> 1 (return). Block 2 has no predecessors and is unreachable.
+        // Shape: `0 -> 1 (return)`. Block 2 has no predecessors and is
+        // unreachable.
         let blocks = vec![
             block(0, branch(1)),
             block(1, return_void()),
@@ -333,8 +337,7 @@ mod tests {
 
     #[test]
     fn dominator_tree_children_inverts_idom() {
-        // 0 (cond) -> 1 -> 3
-        // 0 (cond) -> 2 -> 3
+        // Shape: `0 (cond) -> 1 -> 3` and `0 (cond) -> 2 -> 3`.
         let blocks = vec![
             block(0, cond_branch(0, 1, 2)),
             block(1, branch(3)),

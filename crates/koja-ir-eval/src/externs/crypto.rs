@@ -8,7 +8,7 @@
 //! Koja-side `Int64` arrives here as `i64`, every Koja-side
 //! `CPtr<UInt8>` as `*mut u8`). Where the actual C signature uses a
 //! narrower or differently-qualified type (`int` returns, `*mut u32`
-//! out-params, `const` pointers) we declare the extern with the
+//! out-params, `const` pointers) this module declares the extern with the
 //! wider Koja-shaped type to keep eval ABI-equivalent with the LLVM
 //! backend, which emits the same call shape directly off the
 //! `@extern "C"` declaration.

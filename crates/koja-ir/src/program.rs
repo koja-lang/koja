@@ -21,6 +21,7 @@ use koja_ast::identifier::{GlobalRegistryId, Identifier, Resolution, ResolvedTyp
 use koja_typecheck::{CheckedProgram, GlobalRegistry};
 
 use crate::constant::IRConstantValue;
+use crate::declarations::{Declarations, find_in};
 use crate::enum_decl::IREnumDecl;
 use crate::error::LowerError;
 use crate::function::{IRFunction, IRSymbol};
@@ -42,7 +43,7 @@ use crate::{merge, seal};
 ///
 /// `entry_point` is the stable [`IRSymbol`] backends lift into a host
 /// `main`: the synthesized `<state>.__entry_wrapper` whose
-/// [`FunctionKind::ProcessEntryWrapper`] tells backends to emit a
+/// [`crate::FunctionKind::ProcessEntryWrapper`] tells backends to emit a
 /// spawn-driven trampoline.
 ///
 /// `link_libraries` is the deduped, sorted list of bare library names
@@ -65,18 +66,18 @@ pub struct IRProgram {
 }
 
 impl IRProgram {
+    /// One index over every declaration in the program, for passes
+    /// that look up many symbols.
+    pub(crate) fn declarations(&self) -> Declarations<'_> {
+        Declarations::new(&self.packages)
+    }
+
     /// Lookup a function across every package by its mangled symbol.
-    /// `O(packages * log functions_per_package)`. For the 1–3 packages
-    /// a program ships today this is overwhelmingly cheap. A
-    /// flat index lands when codegen needs hot-path lookups.
-    ///
     /// Accepts any `&str`-borrowable input, so backends can pass a
     /// `&IRSymbol` directly or a raw mangled string they pulled off
     /// an `IRInstruction::Call`.
     pub fn function(&self, mangled: &str) -> Option<&IRFunction> {
-        self.packages
-            .iter()
-            .find_map(|pkg| pkg.functions.get(mangled))
+        find_in(&self.packages, |pkg| &pkg.functions, mangled)
     }
 
     /// Lookup a struct declaration across every package by its
@@ -85,9 +86,7 @@ impl IRProgram {
     /// / `IRInstruction::FieldGet` directly through the
     /// `IRSymbol: Borrow<str>` impl.
     pub fn struct_decl(&self, mangled: &str) -> Option<&IRStructDecl> {
-        self.packages
-            .iter()
-            .find_map(|pkg| pkg.structs.get(mangled))
+        find_in(&self.packages, |pkg| &pkg.structs, mangled)
     }
 
     /// Lookup an enum declaration across every package by its
@@ -96,7 +95,7 @@ impl IRProgram {
     /// `IRInstruction::EnumConstruct` directly through the
     /// `IRSymbol: Borrow<str>` impl.
     pub fn enum_decl(&self, mangled: &str) -> Option<&IREnumDecl> {
-        self.packages.iter().find_map(|pkg| pkg.enums.get(mangled))
+        find_in(&self.packages, |pkg| &pkg.enums, mangled)
     }
 
     /// Lookup a union declaration across every package by its
@@ -104,7 +103,7 @@ impl IRProgram {
     /// the `&IRSymbol` carried on `IRType::Union { mangled }`
     /// directly through the `IRSymbol: Borrow<str>` impl.
     pub fn union_decl(&self, mangled: &str) -> Option<&IRUnionDecl> {
-        self.packages.iter().find_map(|pkg| pkg.unions.get(mangled))
+        find_in(&self.packages, |pkg| &pkg.unions, mangled)
     }
 
     /// Lookup a pooled constant value across every package by its
@@ -112,9 +111,7 @@ impl IRProgram {
     /// the `&IRSymbol` carried on [`crate::IRInstruction::LoadConst`]
     /// directly through the `IRSymbol: Borrow<str>` impl.
     pub fn constant_value(&self, mangled: &str) -> Option<&IRConstantValue> {
-        self.packages
-            .iter()
-            .find_map(|pkg| pkg.constants.get(mangled))
+        find_in(&self.packages, |pkg| &pkg.constants, mangled)
     }
 
     /// The function the entry point resolves to. Panics if missing,
@@ -170,7 +167,7 @@ pub fn lower_program(
     Ok(program)
 }
 
-/// Synthesize the [`FunctionKind::ProcessEntryWrapper`] for the
+/// Synthesize the [`crate::FunctionKind::ProcessEntryWrapper`] for the
 /// entry state and enqueue `start` / `run` instantiations. Returns
 /// the entry's user-facing identifier (the state) plus the wrapper's
 /// mangled [`IRSymbol`]. `lower_program` stamps the latter onto

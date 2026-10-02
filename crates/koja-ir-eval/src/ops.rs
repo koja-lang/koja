@@ -1,6 +1,6 @@
-//! Pure operator math: take already-resolved [`Value`] operands and
+//! Pure operator math. Take already-resolved [`Value`] operands and
 //! return the [`Value`] produced by an [`IRBinOp`] / [`IRUnaryOp`].
-//! No frame, no IR walking, no resolver: every input is concrete.
+//! No frame, no IR walking, no resolver. Every input is concrete.
 //!
 //! The instruction's `operand_ty` drives numeric shape. Integer
 //! arithmetic runs at the operand type's width and signedness (in
@@ -141,8 +141,8 @@ fn apply_int_compare(
 
 /// Float arithmetic, computed at the operands' own width so results
 /// match the LLVM backend's native `float` / `double` ops. A
-/// non-finite IEEE result (overflow to ±inf, `0.0 / 0.0`, …) traps,
-/// upholding the finite-only `Float` invariant.
+/// non-finite IEEE result (overflow to ±inf, `0.0 / 0.0`, and so on)
+/// traps, upholding the finite-only `Float` invariant.
 fn apply_float_arith(op: IRBinOp, lhs: Value, rhs: Value) -> Result<Value, RuntimeError> {
     let result = match require_floats(op, &lhs, &rhs)? {
         Floats::F32(a, b) => {

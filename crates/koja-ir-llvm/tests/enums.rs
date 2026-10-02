@@ -36,7 +36,10 @@ use koja_ir_llvm::emit_script_llvm_ir;
 
 mod common;
 
-use common::{APP_NAME, assert_contains, assert_main_shape, lower_script_source as lower_script};
+use common::{
+    APP_NAME, assert_contains, assert_main_shape, assert_not_contains,
+    lower_script_source as lower_script,
+};
 
 #[test]
 fn unit_only_enum_emits_outer_blob_and_per_variant_complete_types() {
@@ -74,10 +77,7 @@ fn unit_only_enum_emits_outer_blob_and_per_variant_complete_types() {
     assert_contains(&ir_text, "%TestApp.Color.Red = type { i8 }");
     assert_contains(&ir_text, "%TestApp.Color.Blue = type { i8 }");
     // Unit variants have no payload struct.
-    assert!(
-        !ir_text.contains("%TestApp.Color.Red.payload"),
-        "Unit variants should not emit a payload struct.\nIR:\n{ir_text}",
-    );
+    assert_not_contains(&ir_text, "%TestApp.Color.Red.payload");
 }
 
 #[test]

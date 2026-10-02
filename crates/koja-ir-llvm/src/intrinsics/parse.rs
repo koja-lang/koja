@@ -5,7 +5,7 @@
 //! `koja_float_parse`) that take a Koja string payload pointer and
 //! an out-pointer for the parsed scalar, returning a
 //! `koja-runtime` `parse_text` code: ok, invalid format, or out of
-//! range (a well-formed number that doesn't fit the target: an
+//! range (a well-formed number that does not fit the target: an
 //! overflowing integer, or a float magnitude that rounds to
 //! infinity). The intrinsic body allocates an entry-block out slot,
 //! calls the helper, switches on the code, and wraps the parsed

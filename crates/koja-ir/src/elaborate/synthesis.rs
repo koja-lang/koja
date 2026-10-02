@@ -40,7 +40,7 @@ pub(super) const SELF_VALUE: ValueId = ValueId(0);
 pub(super) enum CopyMode {
     /// Intra-process acquisition: `rc++` sharing (copy-on-write).
     Clone,
-    /// Process-boundary copy: physically independent storage.
+    /// Process-boundary copy into physically independent storage.
     DeepCopy,
 }
 
@@ -95,12 +95,12 @@ pub(super) fn drop_body(ty: &IRType, packages: &[IRPackage]) -> Vec<IRBasicBlock
 /// How a single constituent is acquired at a copy boundary / released
 /// at a drop boundary.
 enum Disposition {
-    /// `Copy` scalar (or a no-glue aggregate): copy is the same SSA
-    /// value, drop is a no-op.
+    /// `Copy` scalar (or a no-glue aggregate), where copy is the same
+    /// SSA value and drop is a no-op.
     Trivial,
-    /// Heap leaf or closure: inline `Clone` / `DeepCopy` / `DropValue`
-    /// the backend renders directly (rc traffic or runtime copy
-    /// helpers on the block / env base).
+    /// Heap leaf or closure, where the backend renders the inline
+    /// `Clone` / `DeepCopy` / `DropValue` directly (rc traffic or
+    /// runtime copy helpers on the block / env base).
     Inline,
     /// Heap-managed composite: `Call` its own per-type glue.
     Glue,

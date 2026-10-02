@@ -2,8 +2,8 @@
 //! message as [`RuntimeError::Panicked`] so test harnesses can match
 //! on it. The LLVM backend's parallel emitter calls
 //! `__koja_panic`, which prints `** (panic) <message>` plus a
-//! backtrace to stderr and aborts. The eval interpreter doesn't tear
-//! down the host process, instead it bubbles the message up the same
+//! backtrace to stderr and aborts. The eval interpreter does not tear
+//! down the host process. Instead it bubbles the message up the same
 //! way every other runtime error does.
 
 use crate::error::RuntimeError;

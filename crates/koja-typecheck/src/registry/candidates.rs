@@ -44,7 +44,7 @@ pub enum CandidateDetail<'a> {
     TypeParams(&'a [String]),
 }
 
-/// One completion candidate: the completable name plus enough
+/// One completion candidate, the completable name plus enough
 /// registry-backed context to render kind and detail.
 #[derive(Clone, Copy, Debug)]
 pub struct Candidate<'a> {

@@ -1,10 +1,10 @@
-//! The `elaborate` IR sub-pass (post-merge, post-monomorphize): the
+//! The `elaborate` IR sub-pass (post-merge, post-monomorphize) is the
 //! last refinement before seal. It synthesizes per-type *clone*,
 //! *drop*, and *deep-copy* glue for every heap-managed **composite**
 //! type the program acquires, releases, or copies across a process
 //! boundary, and registers it on the package set so the backend can
-//! emit (and `call`) the glue without lazy backfill (northstar:
-//! codegen never invokes a planner).
+//! emit (and `call`) the glue without lazy backfill (the northstar is
+//! that codegen never invokes a planner).
 //!
 //! ## What counts as composite glue
 //!
@@ -80,6 +80,7 @@ use std::collections::BTreeSet;
 
 use delivery::DeliveryKind;
 
+use crate::declarations::find_in;
 use crate::enum_decl::{IREnumDecl, IREnumVariant, IRVariantPayload};
 use crate::function::{
     FunctionKind, IRBasicBlock, IRFunction, IRFunctionParam, IRInstruction, IRSymbol,
@@ -148,7 +149,7 @@ fn rewrite_all(
 /// Leaves and the always-heap collections answer `true` by shape.
 /// Aggregates (`Struct` / `Enum` / `Union`) answer `true` iff some
 /// field / payload / member does, and a `struct` of scalars needs
-/// nothing. Recursion is bounded: value-level cycles are always
+/// nothing. Recursion is bounded. Value-level cycles are always
 /// broken by an [`IRType::Indirect`] box (stamped by
 /// [`crate::cycle::break_type_cycles`]), which answers `true`
 /// without recursing through the named type again, and a `visited`
@@ -425,21 +426,15 @@ fn constituent_types(ty: &IRType, packages: &[IRPackage]) -> Vec<IRType> {
 }
 
 fn find_struct<'a>(packages: &'a [IRPackage], symbol: &IRSymbol) -> Option<&'a IRStructDecl> {
-    packages
-        .iter()
-        .find_map(|pkg| pkg.structs.get(symbol.mangled()))
+    find_in(packages, |pkg| &pkg.structs, symbol.mangled())
 }
 
 fn find_enum<'a>(packages: &'a [IRPackage], symbol: &IRSymbol) -> Option<&'a IREnumDecl> {
-    packages
-        .iter()
-        .find_map(|pkg| pkg.enums.get(symbol.mangled()))
+    find_in(packages, |pkg| &pkg.enums, symbol.mangled())
 }
 
 fn glue_registered(packages: &[IRPackage], symbol: &IRSymbol) -> bool {
-    packages
-        .iter()
-        .any(|pkg| pkg.functions.contains_key(symbol.mangled()))
+    find_in(packages, |pkg| &pkg.functions, symbol.mangled()).is_some()
 }
 
 /// Register the clone + drop glue shells for `ty` (idempotent, as
@@ -577,7 +572,7 @@ mod tests {
     }
 
     /// Install a minimal Process-entry scaffold satisfying the
-    /// program-level seal checks: a `ProcessEntryWrapper` entry whose
+    /// program-level seal checks. It is a `ProcessEntryWrapper` entry whose
     /// state has registered `start` / `run` / `priority` stubs.
     /// Returns the wrapper symbol to stamp on `IRProgram::entry_point`.
     fn install_entry_scaffold(pkg: &mut IRPackage) -> IRSymbol {
@@ -642,7 +637,7 @@ mod tests {
             fields: vec![string_field(0, "name"), string_field(1, "label")],
             symbol: point.clone(),
         };
-        // seed: p = Point{ "", "" }; pc = clone(p); drop(p); drop(pc)
+        // Seed: `p = Point{ "", "" }; pc = clone(p); drop(p); drop(pc)`.
         let p = ValueId(0);
         let pc = ValueId(1);
         let s0 = ValueId(2);
@@ -731,8 +726,8 @@ mod tests {
                 },
             ],
         };
-        // seed: payload = ""; e = Opt.Some(payload); ec = clone(e);
-        //       drop(e); drop(ec)
+        // Seed: `payload = ""; e = Opt.Some(payload); ec = clone(e);
+        // drop(e); drop(ec)`.
         let payload = ValueId(0);
         let e = ValueId(1);
         let ec = ValueId(2);
@@ -1153,7 +1148,7 @@ mod tests {
 
     #[test]
     fn scalar_struct_needs_no_glue() {
-        // struct of scalars: needs_drop == false, so no glue and no
+        // A struct of scalars has needs_drop == false, so no glue and no
         // Clone/Drop seed is discoverable.
         let pair = sym("Test.IntPair");
         let pair_ty = IRType::Struct(pair.clone());

@@ -1,4 +1,4 @@
-//! Builtin lifting: the compiler owns a builtin's definition (the
+//! Builtin lifting. The compiler owns a builtin's definition (the
 //! [`crate::registry::BuiltinShape`] is stamped at seed time), so
 //! this module only lifts inline method signatures. An unknown
 //! builtin name falls back to an ordinary struct entry at collect

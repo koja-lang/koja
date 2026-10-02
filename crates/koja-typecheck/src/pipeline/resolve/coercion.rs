@@ -7,8 +7,8 @@
 //! so `koja-ir`'s lowerer mints the matching narrow `Const`
 //! opcode.
 //!
-//! The rule: a numeric literal coerces to a sized target type iff
-//! its compile-time value fits the target's range. `Int` ≡ `Int64`
+//! The rule is that a numeric literal coerces to a sized target type
+//! iff its compile-time value fits the target's range. `Int` ≡ `Int64`
 //! and `Float` ≡ `Float64` are still handled by
 //! [`super::types::types_equivalent`] (an alias hit returns
 //! [`Compatible::Strict`] before the literal-fit path runs), so only
@@ -334,7 +334,7 @@ pub fn int_value_fits(value: i128, width: NumericLiteralWidth) -> bool {
     }
 }
 
-/// Round-trip representability check: a literal that lexically
+/// Round-trip representability check. A literal that lexically
 /// parses as `f64` fits `Float32` iff it round-trips equal
 /// through `f64 -> f32 -> f64`. `Float64` always fits the source
 /// since the lexer parses every float literal as `f64`. Int
@@ -348,7 +348,7 @@ pub fn float_value_fits(value: f64, width: NumericLiteralWidth) -> bool {
 }
 
 /// Map a [`ResolvedType`] head onto a [`NumericLiteralWidth`] when
-/// it's one of the sized numeric primitives. Returns `None` for
+/// it is one of the sized numeric primitives. Returns `None` for
 /// the `Int` / `Float` aliases (those are handled by the strict
 /// `types_equivalent` arm before this module runs) and for any
 /// non-primitive type.
@@ -440,12 +440,12 @@ pub(crate) fn check_compatible(
     Compatible::Incompatible
 }
 
-/// Hub-only lossless numeric widening: a sized integer value flows
+/// Hub-only lossless numeric widening. A sized integer value flows
 /// into an `Int` slot (`Int8` / `Int16` / `Int32` sign-extend,
 /// `UInt8` / `UInt16` / `UInt32` zero-extend), and `Float32` flows
-/// into a `Float` slot. Sideways widening (`Int8 -> Int16`) and
-/// `UInt64 -> Int` (doesn't fit) are deliberately excluded: every
-/// source type has exactly one implicit target, so a future
+/// into a `Float` slot. Sideways widening (`Int8` to `Int16`) and
+/// `UInt64` to `Int` (does not fit) are deliberately excluded. Every
+/// source type has exactly one implicit target, so an
 /// overload-resolution rule only ever needs "exact match beats
 /// widened match."
 fn widens_to_hub(

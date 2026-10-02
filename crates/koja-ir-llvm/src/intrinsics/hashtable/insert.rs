@@ -10,14 +10,15 @@ use inkwell::values::{FunctionValue, IntValue, PointerValue};
 use koja_ir::IRFunction;
 
 use crate::ctx::EmitContext;
+use crate::emit::heap_layout::byte_offset_ptr;
 use crate::error::{IceExt, LlvmError};
-use crate::intrinsics::element::{acquire_value, release_in_slot};
+use crate::intrinsics::element::{ElementOp, acquire_value, apply_in_slot};
 use crate::intrinsics::util::{build_table_struct, nth_param, ret};
 
 use super::resize::emit_resize_if_needed;
 use super::util::{
-    ProbeInputs, TableSnapshot, advance_slot, call_eq, call_hash, clone_table_buffers,
-    entry_pointer, extract_table_fields, resolve_key_hash_ops, value_slot,
+    ProbeInputs, TableSnapshot, advance_slot, call_eq, call_hash, clone_table, entry_pointer,
+    extract_table_fields, resolve_key_hash_ops,
 };
 use super::{HashtableLayout, STATE_EMPTY, STATE_OCCUPIED};
 
@@ -51,12 +52,12 @@ pub(crate) fn emit_map_put<'ctx>(
         },
     )?;
 
-    // Update path: dup key found, overwrite the value slot. Release
+    // Update path (dup key found). Overwrite the value slot. Release
     // the old value the clone acquired, store the acquired incoming
     // value. The matched key stays put (no key acquire / release).
     ctx.builder.position_at_end(probe.update_bb);
-    let val_ptr = value_slot(ctx, probe.e_ptr, layout.key_size)?;
-    release_in_slot(ctx, value_ty, val_ptr)?;
+    let val_ptr = byte_offset_ptr(ctx, probe.e_ptr, layout.key_size, "val_ptr")?;
+    apply_in_slot(ctx, ElementOp::Release, value_ty, val_ptr)?;
     let update_value = acquire_value(ctx, value_ty, value_val)?;
     ctx.builder.build_store(val_ptr, update_value).or_ice()?;
     let updated = build_table_struct(
@@ -68,7 +69,7 @@ pub(crate) fn emit_map_put<'ctx>(
     )?;
     ret(ctx, updated.into())?;
 
-    // Insert path: empty (or tombstone) slot, write key+value + state.
+    // Insert path (empty or tombstone slot). Write key+value + state.
     // Both payloads are acquired so the table owns independent
     // references (the stale bytes a tombstone carries were never
     // acquired, so the overwrite needs no release).
@@ -76,7 +77,7 @@ pub(crate) fn emit_map_put<'ctx>(
     let ins_ptr = entry_pointer(ctx, post.entries_ptr, probe.pidx, layout.entry_size)?;
     let insert_key = acquire_value(ctx, layout.key_ty, key_val)?;
     ctx.builder.build_store(ins_ptr, insert_key).or_ice()?;
-    let ins_val_ptr = value_slot(ctx, ins_ptr, layout.key_size)?;
+    let ins_val_ptr = byte_offset_ptr(ctx, ins_ptr, layout.key_size, "val_ptr")?;
     let insert_value = acquire_value(ctx, value_ty, value_val)?;
     ctx.builder
         .build_store(ins_val_ptr, insert_value)
@@ -135,7 +136,7 @@ pub(crate) fn emit_set_insert<'ctx>(
     )?;
     ret(ctx, already.into())?;
 
-    // Insert path: empty (or tombstone) slot, write entry + state. The
+    // Insert path (empty or tombstone slot). Write entry + state. The
     // item is acquired so the set owns an independent reference (a
     // tombstone's stale bytes were never acquired, so no release).
     ctx.builder.position_at_end(probe.insert_bb);
@@ -175,7 +176,7 @@ fn writable_table<'ctx>(
     if consume_receiver {
         return Ok(original);
     }
-    clone_table_buffers(ctx, llvm_function, layout, &original)
+    clone_table(ctx, llvm_function, layout, &original, ElementOp::Acquire)
 }
 
 /// Output of [`emit_insert_probe`]: which `update` vs `insert` block

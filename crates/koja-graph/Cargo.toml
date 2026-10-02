@@ -4,3 +4,6 @@ description = "Algorithms over a directed graph with ordered keys"
 edition.workspace = true
 license.workspace = true
 version.workspace = true
+
+[lints]
+workspace = true

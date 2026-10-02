@@ -180,7 +180,7 @@ pub(super) fn fuse_consuming_sites(packages: &mut [IRPackage], body: &mut [IRBas
 
 /// The consuming twin for an intrinsic dispatch id, or `None` when
 /// the function is not an eligible mutator. This table is the single
-/// place a follow-up mutator (e.g. `List.replace_at`) gets added.
+/// place a new mutator (e.g. `List.replace_at`) gets added.
 fn consuming_method(id: &IRIntrinsicId) -> Option<ConsumingMethod> {
     match id {
         IRIntrinsicId::List(ListMethod::Append) => Some(ConsumingMethod::ListAppend),

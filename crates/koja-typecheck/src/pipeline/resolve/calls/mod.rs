@@ -1,22 +1,24 @@
 //! Bare-call (`f(args)`) and method-call (`recv.m(args)`) resolution.
 //! Both stamp the callee's `GlobalRegistryId` on the AST and validate
-//! arity + per-position types.
+//! arity and per-position types.
 //!
 //! # Module layout
 //!
 //! - [`methods`]: receiver classification (`Static` / `Instance` /
-//!   `Bounded`), dual-scope (receiver + method) type-arg inference,
-//!   and the small lookup / diagnostic-shape helpers re-used by
+//!   `Bounded`), dual-scope (receiver and method) type-arg inference,
+//!   and the small lookup and diagnostic-shape helpers reused by
 //!   [`resolve_method_call`].
 //! - [`bounded`]: `t.m(args)` against a type-param receiver,
 //!   protocol-method lookup against the type-param's bounds list,
-//!   ambiguity / not-found diagnostics, and arg validation against
+//!   ambiguity and not-found diagnostics, and arg validation against
 //!   the protocol's signature.
+//! - [`structural`]: `recv.m(args)` against a tuple, function, or
+//!   union receiver, where only the universal protocol functions
+//!   resolve.
 //!
-//! Both flavors of call entry point ([`resolve_call`] and
-//! [`resolve_method_call`]) live in this file alongside the
-//! cross-flavor helpers ([`emit_conflict`] /
-//! [`diagnose_phantom_params`] / [`resolve_args`] /
+//! Both call entry points ([`resolve_call`] and
+//! [`resolve_method_call`]) live in this file alongside the shared
+//! helpers ([`emit_conflict`], [`resolve_args`], and
 //! [`validate_call_signature`]) so submodules need only sibling
 //! `pub(super)` visibility.
 
@@ -35,7 +37,7 @@ use bounded::{BoundedCall, resolve_bounded_method_call};
 use methods::{
     MethodInferenceOutputs, MethodInferenceTarget, MethodReceiver, classify_receiver,
     diagnose_unmet_conformance, dispatch_mismatch_message, function_signature,
-    infer_method_call_type_args, method_lookup_message, seed_impl_args_subst, seed_receiver_subst,
+    infer_method_call_type_args, method_lookup_message, seed_method_subst,
 };
 use structural::{StructuralCall, resolve_structural_method_call};
 
@@ -200,26 +202,13 @@ fn resolve_function_call(
             label: &label,
             type_params: &type_params,
         };
-        let mut hint_subst = Substitution::single(callee.id, callee.type_params.len());
-        if let Some(hint) = site.expected {
-            fill_from_expected(&sig.return_type, hint, &mut hint_subst, resolver.registry);
-        }
-        let hinted_params = substitute_params(&sig.params, &hint_subst);
-        resolve_non_closure_args(args, Some(&hinted_params), resolver, diagnostics);
-        let mut partial_subst = Substitution::single(callee.id, callee.type_params.len());
-        let partial_pairs = sig
-            .params
-            .iter()
-            .zip(args.iter())
-            .map(|(p, a)| (&p.ty, &a.value.resolution, ()));
-        unify_pairs(
-            partial_pairs,
-            &mut partial_subst,
-            resolver.registry,
-            |_, _| {},
-        );
-        let partially_substituted_params = substitute_params(&sig.params, &partial_subst);
-        resolve_closure_args(args, &partially_substituted_params, resolver, diagnostics);
+        let target = ArgTarget {
+            expected: site.expected,
+            params: &sig.params,
+            return_type: &sig.return_type,
+            subst: Substitution::single(callee.id, callee.type_params.len()),
+        };
+        resolve_args_in_two_passes(args, &target, resolver, diagnostics);
         let (substituted_params, substituted_return) = infer_call_type_args(
             callee,
             &sig,
@@ -584,9 +573,9 @@ pub(super) fn resolve_method_call(
         return MethodCallOutcome::Method(sig.return_type.clone());
     }
 
-    // Static dispatch: `receiver.resolution` is the type-name's
-    // resolution (`Global(struct_id)` with empty `type_args`).
-    // Instance dispatch: receiver carries the value's full
+    // On static dispatch, `receiver.resolution` is the type-name's
+    // resolution (`Global(struct_id)` with empty `type_args`). On
+    // instance dispatch, the receiver carries the value's full
     // resolved type. Either way, the same field seeds receiver
     // substitution.
     let receiver_callee = Callee {
@@ -599,70 +588,19 @@ pub(super) fn resolve_method_call(
         label: &method_label,
         type_params: &method_type_params,
     };
-    let mut hint_subst = Substitution::dual(
-        receiver_callee.id,
-        receiver_callee.type_params.len(),
-        method_callee.id,
-        method_callee.type_params.len(),
-    );
-    seed_receiver_subst(
-        &mut hint_subst,
-        receiver_callee.id,
-        &receiver.resolution,
-        resolver.registry,
-    );
-    seed_impl_args_subst(
-        &mut hint_subst,
-        receiver_callee.id,
-        &sig.impl_args,
-        resolver.registry,
-    );
-    if let Some(hint) = expected {
-        fill_from_expected(&sig.return_type, hint, &mut hint_subst, resolver.registry);
-    }
-    let hinted_params = substitute_params(&sig.params, &hint_subst);
-    resolve_non_closure_args(
-        args,
-        Some(method_receiver.explicit_params(&hinted_params)),
-        resolver,
-        diagnostics,
-    );
-    let mut partial_subst = Substitution::dual(
-        receiver_callee.id,
-        receiver_callee.type_params.len(),
-        method_callee.id,
-        method_callee.type_params.len(),
-    );
-    seed_receiver_subst(
-        &mut partial_subst,
-        receiver_callee.id,
-        &receiver.resolution,
-        resolver.registry,
-    );
-    seed_impl_args_subst(
-        &mut partial_subst,
-        receiver_callee.id,
-        &sig.impl_args,
-        resolver.registry,
-    );
-    let explicit = method_receiver.explicit_params(&sig.params);
-    let partial_pairs = explicit
-        .iter()
-        .zip(args.iter())
-        .map(|(p, a)| (&p.ty, &a.value.resolution, ()));
-    unify_pairs(
-        partial_pairs,
-        &mut partial_subst,
-        resolver.registry,
-        |_, _| {},
-    );
-    let partially_substituted_params = substitute_params(&sig.params, &partial_subst);
-    resolve_closure_args(
-        args,
-        method_receiver.explicit_params(&partially_substituted_params),
-        resolver,
-        diagnostics,
-    );
+    let arg_target = ArgTarget {
+        expected,
+        params: method_receiver.explicit_params(&sig.params),
+        return_type: &sig.return_type,
+        subst: seed_method_subst(
+            receiver_callee,
+            method_callee,
+            &receiver.resolution,
+            &sig.impl_args,
+            resolver.registry,
+        ),
+    };
+    resolve_args_in_two_passes(args, &arg_target, resolver, diagnostics);
 
     let target = MethodInferenceTarget {
         receiver: receiver_callee,
@@ -695,7 +633,7 @@ pub(super) fn resolve_method_call(
             type_args: receiver_args_inferred,
         };
     }
-    // "Extend"-style domain check: a method registered at
+    // "Extend"-style domain check. A method registered at
     // `[receiver_head, method]` only applies to receivers whose
     // full `ResolvedType` matches the method's substituted `self`
     // type. Trait impls on concrete instantiations (e.g.
@@ -731,7 +669,7 @@ pub(super) fn resolve_method_call(
     MethodCallOutcome::Method(substituted_return)
 }
 
-/// Field-as-callable fallback for instance dispatch: if `struct_id`
+/// Field-as-callable fallback for instance dispatch. If `struct_id`
 /// has a field named `method` whose substituted type is
 /// `fn (Ps...) -> R`, validate args against `Ps...` and return the
 /// shape the caller stamps onto the AST. Any other field type (or
@@ -782,7 +720,7 @@ fn try_field_callable(
 }
 
 /// Drive call-site type inference for a generic callee. Tries a
-/// speculative pre-seed (`fill_from_expected` -> per-arg unify on a
+/// speculative pre-seed (`fill_from_expected` then per-arg unify on a
 /// scratch). On success the pre-seeded substitution wins so
 /// `x: Int32 = identity(42)` keeps `T = Int32` via `literal_widens_into`.
 /// On any conflict (e.g. outer expected `Unit` vs `identity(1) : Int`)
@@ -920,7 +858,7 @@ fn lookup_bare_callee<'a>(
             arities,
             identifier,
         }),
-        // A non-function with this name still wins the scope: the
+        // A non-function with this name still wins the scope. The
         // caller diagnoses it as an invalid callee.
         FunctionLookup::NoFunctions => registry.lookup(&identifier).map(BareCalleeLookup::Found),
     };
@@ -960,7 +898,7 @@ fn call_suggestion(callee: &str, arity: usize) -> String {
 /// function call (`Pkg.f(args)`, e.g. `HTTP.get(url)`). Applies only
 /// when the receiver is a bare identifier that names no local and no
 /// type in scope, since locals and type receivers always win. Returns
-/// `None` to fall through to method dispatch when the head doesn't
+/// `None` to fall through to method dispatch when the head does not
 /// name a package with declarations, so existing diagnostics cover
 /// unknown receivers.
 fn try_package_function_call(
@@ -1098,7 +1036,7 @@ fn check_callee_visibility(
     }
 }
 
-/// Pure visibility decision: does a callee with `scope` allow a
+/// Pure visibility decision. Does a callee with `scope` allow a
 /// call from `caller_package` while resolving a method on
 /// `caller_type_id`? `Public` is always reachable. `PackagePrivate`
 /// requires `callee_package == caller_package`. `TypePrivate(owner)`
@@ -1159,7 +1097,7 @@ fn resolve_non_closure_args(
     }
 }
 
-/// Second-pass arg resolution for generic callees: walk closure args
+/// Second-pass arg resolution for generic callees. Walk closure args
 /// with the substituted param type as the expected hint so closure
 /// param/return slots inherit any type-args inferred from the
 /// non-closure args. Move marking for non-closure args happened in
@@ -1196,6 +1134,53 @@ fn is_closure_expr(kind: &ExprKind) -> bool {
     )
 }
 
+/// The callee's open signature that the args are resolved toward.
+/// `subst` is the substitution each pass clones, `params` is the
+/// slice the user wrote against (`sig.params` for a function, the
+/// same minus `self` for an instance method), and `expected` is the
+/// surrounding expected type that may pin type params through
+/// `return_type` before any arg is looked at.
+struct ArgTarget<'a> {
+    expected: Option<&'a ResolvedType>,
+    params: &'a [ResolvedParam],
+    return_type: &'a ResolvedType,
+    subst: Substitution,
+}
+
+/// Resolve `args` in two passes so closure args see the best known
+/// param types. Pass one resolves the non-closure args against
+/// params substituted from the expected-type hint. Pass two unifies
+/// those results into a fresh clone of the target's substitution and
+/// resolves the closure args against the partially substituted
+/// params.
+fn resolve_args_in_two_passes(
+    args: &mut [Arg],
+    target: &ArgTarget<'_>,
+    resolver: &mut Resolver<'_>,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    let mut hint_subst = target.subst.clone();
+    if let Some(hint) = target.expected {
+        fill_from_expected(target.return_type, hint, &mut hint_subst, resolver.registry);
+    }
+    let hinted_params = substitute_params(target.params, &hint_subst);
+    resolve_non_closure_args(args, Some(&hinted_params), resolver, diagnostics);
+    let mut partial_subst = target.subst.clone();
+    let partial_pairs = target
+        .params
+        .iter()
+        .zip(args.iter())
+        .map(|(p, a)| (&p.ty, &a.value.resolution, ()));
+    unify_pairs(
+        partial_pairs,
+        &mut partial_subst,
+        resolver.registry,
+        |_, _| {},
+    );
+    let partially_substituted_params = substitute_params(target.params, &partial_subst);
+    resolve_closure_args(args, &partially_substituted_params, resolver, diagnostics);
+}
+
 /// Substitute `subst` into every param's declared type. Used to
 /// produce closure-arg expected types from a partial inference state.
 fn substitute_params(params: &[ResolvedParam], subst: &Substitution) -> Vec<ResolvedParam> {
@@ -1212,8 +1197,8 @@ fn substitute_params(params: &[ResolvedParam], subst: &Substitution) -> Vec<Reso
 /// name the callee by `callee_label`: the fully-qualified
 /// identifier for a package function or method, the surface name
 /// for a local closure call. Per-position equivalence runs through
-/// [`check_compatible`] so a numeric literal flowing into a
-/// narrow-int / narrow-float param coerces when its compile-time
+/// [`super::coercion::check_compatible`] so a numeric literal flowing
+/// into a narrow-int / narrow-float param coerces when its compile-time
 /// value fits the param's range. The resulting coercion stamps onto
 /// the arg's [`Expr::literal_coercion`] for IR lower to consume.
 fn validate_call_signature(
@@ -1321,7 +1306,7 @@ fn resolve_local_call(
 /// Build per-position [`ResolvedParam`]s for a local closure call.
 /// Names are synthesized as `arg<index>` so arity / type
 /// diagnostics still surface a label without depending on a
-/// signature decl that doesn't exist.
+/// signature decl that does not exist.
 fn synthesize_local_call_params(fn_params: &[ResolvedType]) -> Vec<ResolvedParam> {
     fn_params
         .iter()
@@ -1339,9 +1324,7 @@ mod tests {
     //! `priv fn` enforcement. Integration coverage lives in
     //! `tests/visibility.rs`. The cases here pin the decision matrix
     //! at the smallest possible API surface, including the
-    //! cross-package `PackagePrivate` rejection path that surface
-    //! syntax can't currently reach (`Pkg.fn(args)` doesn't resolve to
-    //! top-level fns today).
+    //! cross-package `PackagePrivate` rejection path.
     use super::callee_is_visible;
     use crate::registry::VisibilityScope;
     use koja_ast::identifier::GlobalRegistryId;
@@ -1385,9 +1368,9 @@ mod tests {
         let scope = VisibilityScope::TypePrivate(foo);
 
         assert!(callee_is_visible(scope, "A", "A", Some(foo)));
-        // Cross-package same-owner is irrelevant: type-private is
+        // Cross-package same-owner is irrelevant. Type-private is
         // anchored on identity, not package, but a type id is
-        // unique across the program so this can't actually occur.
+        // unique across the program so this cannot actually occur.
         assert!(callee_is_visible(scope, "A", "B", Some(foo)));
 
         assert!(!callee_is_visible(scope, "A", "A", Some(bar)));

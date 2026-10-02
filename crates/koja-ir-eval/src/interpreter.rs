@@ -86,8 +86,8 @@ impl Interpreter {
     }
 
     /// Execute a named function from `program` with no arguments and
-    /// return its value. Test-facing seam: integration tests lower a
-    /// fixture with a synthetic Process entry, then call a fixture
+    /// return its value. This is a test-facing seam. Integration tests
+    /// lower a fixture with a synthetic Process entry, then call a fixture
     /// function (e.g. `TestApp.main`) directly and assert on its
     /// runtime [`Value`].
     pub fn run_function(program: &IRProgram, mangled: &str) -> Result<Value, RuntimeError> {
@@ -326,8 +326,8 @@ enum BlockOutcome {
 }
 
 /// Run a [`FunctionKind::ProcessEntryWrapper`] entry's body as PID 1.
-/// The wrapper itself is a backend ABI shim. The full `start` -> `run` ->
-/// `StopReason.code` dispatch lives in the IR-synthesized
+/// The wrapper itself is a backend ABI shim. The full dispatch from
+/// `start` to `run` to `StopReason.code` lives in the IR-synthesized
 /// `<state>.__entry_body` its IR `Call` names, which the interpreter
 /// executes directly with the argv-derived (or default) config. The
 /// returned [`Value::Int`] is the exit code. Driven by the
@@ -392,10 +392,10 @@ fn blocks_use_lifecycle<'a>(blocks: impl Iterator<Item = &'a IRBasicBlock>) -> b
 
 /// Resolve a process wrapper's body, the [`FunctionKind::Regular`]
 /// function its single IR `Call` names. Shared by the entry boot and the
-/// `spawn` path: a `ProcessEntryWrapper` / `SpawnWrapper` is a pure ABI
-/// shim whose body holds the real `start` -> `run` dispatch. `None` only
-/// for a malformed wrapper (seal violation). Callers decide whether that
-/// is an error or a panic.
+/// `spawn` path. A `ProcessEntryWrapper` / `SpawnWrapper` is a pure ABI
+/// shim whose body holds the real dispatch from `start` to `run`.
+/// `None` only for a malformed wrapper (seal violation). Callers decide
+/// whether that is an error or a panic.
 fn process_body_of<'a, R: CallResolver>(
     resolver: &'a R,
     wrapper: &IRSymbol,
@@ -412,8 +412,8 @@ fn process_body_of<'a, R: CallResolver>(
     resolver.resolve(body_symbol.mangled())
 }
 
-/// Build the boxed process future a `spawn` site installs: run the spawn
-/// wrapper's body with `config`, discarding its `Unit` result (the
+/// Build the boxed process future a `spawn` site installs. It runs the
+/// spawn wrapper's body with `config`, discarding its `Unit` result (the
 /// scheduler owns the spawned process's lifecycle). A missing body is a
 /// seal violation, since `Spawn::wrapper` always names a `SpawnWrapper`.
 pub(crate) fn build_spawn_future<'a, R: CallResolver>(
@@ -776,6 +776,55 @@ fn expect_closure(value: Value, instruction: &str) -> Result<(IRSymbol, Vec<Valu
     }
 }
 
+fn expect_enum(
+    value: Value,
+    instruction: &str,
+) -> Result<(EnumPayload, IRVariantTag), RuntimeError> {
+    match value {
+        Value::Enum { payload, tag, .. } => Ok((payload, tag)),
+        other => Err(RuntimeError::TypeMismatch {
+            detail: format!("{instruction} expects an Enum operand, got {other}"),
+        }),
+    }
+}
+
+fn expect_int(value: Value, instruction: &str) -> Result<i64, RuntimeError> {
+    match value {
+        Value::Int(int) => Ok(int),
+        other => Err(RuntimeError::TypeMismatch {
+            detail: format!("{instruction} expects an Int operand, got {other}"),
+        }),
+    }
+}
+
+fn expect_struct(value: Value, instruction: &str) -> Result<(IRSymbol, Vec<Value>), RuntimeError> {
+    match value {
+        Value::Struct { symbol, fields } => Ok((symbol, fields)),
+        other => Err(RuntimeError::TypeMismatch {
+            detail: format!("{instruction} expects a Struct operand, got {other}"),
+        }),
+    }
+}
+
+fn expect_tuple(value: Value, instruction: &str) -> Result<Vec<Value>, RuntimeError> {
+    match value {
+        Value::Tuple(elements) => Ok(elements),
+        other => Err(RuntimeError::TypeMismatch {
+            detail: format!("{instruction} expects a Tuple operand, got {other}"),
+        }),
+    }
+}
+
+/// The payload and member tag of a union value.
+fn expect_union(value: Value, instruction: &str) -> Result<(Value, u8), RuntimeError> {
+    match value {
+        Value::Union { payload, tag, .. } => Ok((*payload, tag)),
+        other => Err(RuntimeError::TypeMismatch {
+            detail: format!("{instruction} expects a Union operand, got {other}"),
+        }),
+    }
+}
+
 /// Drop the dead registers that would defeat a consuming site's
 /// uniqueness gate. An eval register owns an `Rc` clone until the
 /// frame ends, so two kinds are released here:
@@ -926,10 +975,7 @@ fn execute_blocks<'a, R: CallResolver>(
                     return lookup(&frame.values, *id).map(BlockOutcome::Done);
                 }
                 IRTerminator::TailCall { args, .. } => {
-                    let mut arg_values = Vec::with_capacity(args.len());
-                    for arg in args {
-                        arg_values.push(lookup(&frame.values, *arg)?);
-                    }
+                    let arg_values = lookup_all(&frame.values, args.iter().copied())?;
                     return Ok(BlockOutcome::TailRestart(arg_values));
                 }
                 IRTerminator::Unreachable => return Err(RuntimeError::UnreachableExecuted),
@@ -975,7 +1021,7 @@ fn bind_block_params(
 /// Execute an [`IRInstruction::Receive`], returning the basic block
 /// control transfers to.
 ///
-/// Parks against the running process's core mailbox: pop a delivered
+/// Parks against the running process's core mailbox. Pop a delivered
 /// message (system traffic before business), dispatch it to a matching
 /// arm, else (when an `after` clause is present) check the deadline, else
 /// park `Blocked` and yield back to the driver. The driver re-resumes
@@ -1259,580 +1305,418 @@ fn find_block(blocks: &[IRBasicBlock], id: IRBlockId) -> &IRBasicBlock {
         .unwrap_or_else(|| panic!("interpreter: block `{id}` missing (seal invariant violation)"))
 }
 
+/// Run one instruction and bind the value it defines, if any, to
+/// [`IRInstruction::dest`]. The binding happens here in one place,
+/// so no arm of [`execute_instruction_value`] touches the register.
 fn execute_instruction<'a, R: CallResolver>(
     instruction: &'a IRInstruction,
     frame: &'a mut Frame,
     resolver: &'a R,
 ) -> EvalFuture<'a, ()> {
     Box::pin(async move {
-        match instruction {
-            IRInstruction::BinaryConstruct {
-                dest,
-                layout,
-                segments,
-            } => {
-                let value = construct_binary_literal(*layout, segments, frame)?;
-                frame.values.insert(*dest, value);
-                Ok(())
+        let result = execute_instruction_value(instruction, frame, resolver).await?;
+        match (instruction.dest(), result) {
+            (Some(dest), Some(value)) => {
+                frame.values.insert(dest, value);
             }
-            IRInstruction::BinaryOp {
-                dest,
-                lhs,
-                op,
-                operand_ty,
-                rhs,
-            } => {
-                let lhs_value = lookup(&frame.values, *lhs)?;
-                let rhs_value = lookup(&frame.values, *rhs)?;
-                let result = apply_binary_op(*op, operand_ty, lhs_value, rhs_value)?;
-                frame.values.insert(*dest, result);
-                Ok(())
-            }
-            IRInstruction::Call { dest, callee, args } => {
-                let callee_fn = resolver.resolve(callee.mangled()).unwrap_or_else(|| {
-                    panic!(
-                        "interpreter: callee `{callee}` missing from IR \
+            (None, None) => {}
+            (dest, value) => panic!(
+                "interpreter: `{instruction:?}` defines {dest:?} but its arm produced {value:?} \
+                 (every arm must return a value exactly when the instruction has a `dest`)",
+            ),
+        }
+        Ok(())
+    })
+}
+
+/// The value `instruction` defines, or `None` for a pure side
+/// effect.
+async fn execute_instruction_value<R: CallResolver>(
+    instruction: &IRInstruction,
+    frame: &mut Frame,
+    resolver: &R,
+) -> Result<Option<Value>, RuntimeError> {
+    Ok(match instruction {
+        IRInstruction::BinaryConstruct {
+            layout, segments, ..
+        } => Some(construct_binary_literal(*layout, segments, frame)?),
+        IRInstruction::BinaryMatch {
+            layout,
+            segments,
+            subject,
+            ..
+        } => {
+            let subject_value = lookup(&frame.values, *subject)?;
+            let matched = execute_binary_match(*layout, segments, &subject_value, frame)?;
+            Some(Value::Bool(matched))
+        }
+        IRInstruction::BinaryOp {
+            lhs,
+            op,
+            operand_ty,
+            rhs,
+            ..
+        } => {
+            let lhs_value = lookup(&frame.values, *lhs)?;
+            let rhs_value = lookup(&frame.values, *rhs)?;
+            Some(apply_binary_op(*op, operand_ty, lhs_value, rhs_value)?)
+        }
+        IRInstruction::Call { callee, args, .. } => {
+            let callee_fn = resolver.resolve(callee.mangled()).unwrap_or_else(|| {
+                panic!(
+                    "interpreter: callee `{callee}` missing from IR \
                      (seal invariant violation)",
+                )
+            });
+            // A consuming twin's receiver value is dead after the
+            // call (consume fusion proved it), so move its register
+            // into the args instead of cloning. When that leaves the
+            // backing storage uniquely held, the twin mutates it in
+            // place instead of copying.
+            let consuming = matches!(
+                callee_fn.kind,
+                FunctionKind::Intrinsic(IRIntrinsicId::Consuming(_))
+            );
+            let mut arg_values = Vec::with_capacity(args.len());
+            for (index, arg) in args.iter().enumerate() {
+                let value = if consuming && index == 0 {
+                    frame
+                        .values
+                        .remove(arg)
+                        .ok_or(RuntimeError::ValueUndefined { id: *arg })?
+                } else {
+                    lookup(&frame.values, *arg)?
+                };
+                arg_values.push(value);
+            }
+            Some(execute_function(callee_fn, arg_values, resolver).await?)
+        }
+        IRInstruction::CallClosure { args, callee, .. } => {
+            let (body, captures) = expect_closure(lookup(&frame.values, *callee)?, "CallClosure")?;
+            let arg_values = lookup_all(&frame.values, args.iter().copied())?;
+            let body_fn = resolver.resolve(body.mangled()).unwrap_or_else(|| {
+                panic!(
+                    "interpreter: closure body `{body}` missing from IR \
+                     (seal invariant violation)",
+                )
+            });
+            Some(execute_closure_function(body_fn, arg_values, captures, resolver).await?)
+        }
+        // A `Clone` is a rebind. `lookup` already bumped the `Rc`, and
+        // sharing is safe because every mutation goes through a
+        // uniqueness check or builds a fresh value. `DeepCopy` (the
+        // process-boundary copy) gets the same treatment for the same
+        // reason.
+        IRInstruction::Clone { source, .. } | IRInstruction::DeepCopy { source, .. } => {
+            Some(lookup(&frame.values, *source)?)
+        }
+        IRInstruction::ClosureEquals { lhs, rhs, .. } => {
+            let lhs_value = lookup(&frame.values, *lhs)?;
+            let rhs_value = lookup(&frame.values, *rhs)?;
+            Some(Value::Bool(
+                closures_equal(lhs_value, rhs_value, resolver).await?,
+            ))
+        }
+        IRInstruction::Concat {
+            consumes_lhs,
+            kind,
+            lhs,
+            rhs,
+            ..
+        } => {
+            // A consumed lhs is dead after the concat, so move its
+            // register out and extend the buffer in place when
+            // that leaves it uniquely held. Same uniqueness gate as
+            // the consuming collection twins.
+            let right = lookup(&frame.values, *rhs)?;
+            let result = if *consumes_lhs {
+                let left = frame
+                    .values
+                    .remove(lhs)
+                    .ok_or(RuntimeError::ValueUndefined { id: *lhs })?;
+                match extend_unique_bytes(left, &right) {
+                    Ok(extended) => extended,
+                    Err(left) => concat_values(*kind, &left, &right)?,
+                }
+            } else {
+                concat_values(*kind, &lookup(&frame.values, *lhs)?, &right)?
+            };
+            Some(result)
+        }
+        IRInstruction::Const { value, .. } => Some(materialize_const(value)),
+        // Drop the slot's `Rc` so the consuming site that follows
+        // sees a unique value.
+        IRInstruction::ConsumeLocal { local } => {
+            frame.locals.insert(*local, Value::Unit);
+            None
+        }
+        IRInstruction::DropLocal { .. } | IRInstruction::DropValue { .. } => None,
+        IRInstruction::EnumConstruct {
+            payload, tag, ty, ..
+        } => Some(materialize_enum(ty, *tag, payload, frame, resolver)?),
+        IRInstruction::EnumPayloadFieldGet {
+            payload_index,
+            tag,
+            value,
+            ..
+        } => {
+            let (payload, actual_tag) =
+                expect_enum(lookup(&frame.values, *value)?, "EnumPayloadFieldGet")?;
+            if actual_tag != *tag {
+                panic!(
+                    "interpreter: EnumPayloadFieldGet expected tag {tag} but value carries \
+                     tag {actual_tag}, so the match driver failed to gate on a tag check",
+                );
+            }
+            let field = match &payload {
+                EnumPayload::Tuple(values) => values
+                    .get(*payload_index as usize)
+                    .cloned()
+                    .unwrap_or_else(|| {
+                        panic!(
+                            "interpreter: EnumPayloadFieldGet tuple index {payload_index} \
+                             out of range (seal invariant violation)",
+                        )
+                    }),
+                EnumPayload::Struct(fields) => fields
+                    .get(*payload_index as usize)
+                    .map(|(_, value)| value.clone())
+                    .unwrap_or_else(|| {
+                        panic!(
+                            "interpreter: EnumPayloadFieldGet struct index {payload_index} \
+                             out of range (seal invariant violation)",
+                        )
+                    }),
+                EnumPayload::Unit => panic!(
+                    "interpreter: EnumPayloadFieldGet on a Unit variant (seal invariant violation)",
+                ),
+            };
+            Some(field)
+        }
+        IRInstruction::EnumTagGet { value, .. } => {
+            let (_, tag) = expect_enum(lookup(&frame.values, *value)?, "EnumTagGet")?;
+            Some(Value::Int(i64::from(tag.0)))
+        }
+        IRInstruction::FieldGet {
+            base, field_index, ..
+        } => {
+            let (_, fields) = expect_struct(lookup(&frame.values, *base)?, "FieldGet")?;
+            let field = fields
+                .into_iter()
+                .nth(*field_index as usize)
+                .unwrap_or_else(|| {
+                    panic!(
+                        "interpreter: FieldGet index {field_index} out of range \
+                         (seal invariant violation)",
                     )
                 });
-                // A consuming twin's receiver value is dead after the
-                // call (consume fusion proved it), so move its register
-                // into the args instead of cloning. When that leaves the
-                // backing storage uniquely held, the twin mutates it in
-                // place instead of copying.
-                let consuming = matches!(
-                    callee_fn.kind,
-                    FunctionKind::Intrinsic(IRIntrinsicId::Consuming(_))
-                );
-                let mut arg_values = Vec::with_capacity(args.len());
-                for (index, arg) in args.iter().enumerate() {
-                    let value = if consuming && index == 0 {
-                        frame
-                            .values
-                            .remove(arg)
-                            .ok_or(RuntimeError::ValueUndefined { id: *arg })?
-                    } else {
-                        lookup(&frame.values, *arg)?
-                    };
-                    arg_values.push(value);
-                }
-                let result = execute_function(callee_fn, arg_values, resolver).await?;
-                frame.values.insert(*dest, result);
-                Ok(())
-            }
-            // A `Clone` is a rebind. `lookup` already bumped the `Rc`, and
-            // sharing is safe because every mutation goes through a
-            // uniqueness check or builds a fresh value. `DeepCopy` (the
-            // process-boundary copy) gets the same treatment for the same
-            // reason.
-            IRInstruction::Clone { dest, source, .. }
-            | IRInstruction::DeepCopy { dest, source, .. } => {
-                let value = lookup(&frame.values, *source)?;
-                frame.values.insert(*dest, value);
-                Ok(())
-            }
-            IRInstruction::Concat {
-                consumes_lhs,
-                dest,
-                kind,
-                lhs,
-                rhs,
-            } => {
-                // A consumed lhs is dead after the concat, so move its
-                // register out and extend the buffer in place when
-                // that leaves it uniquely held. Same uniqueness gate as
-                // the consuming collection twins.
-                let right = lookup(&frame.values, *rhs)?;
-                let result = if *consumes_lhs {
-                    let left = frame
-                        .values
-                        .remove(lhs)
-                        .ok_or(RuntimeError::ValueUndefined { id: *lhs })?;
-                    match extend_unique_bytes(left, &right) {
-                        Ok(extended) => extended,
-                        Err(left) => concat_values(*kind, &left, &right)?,
-                    }
-                } else {
-                    concat_values(*kind, &lookup(&frame.values, *lhs)?, &right)?
-                };
-                frame.values.insert(*dest, result);
-                Ok(())
-            }
-            IRInstruction::Const { dest, value } => {
-                frame.values.insert(*dest, materialize_const(value));
-                Ok(())
-            }
-            IRInstruction::LoadConst {
-                dest,
-                const_id,
-                ty: _,
-            } => {
-                let pooled = resolver.constant_value(const_id.mangled()).unwrap_or_else(|| {
+            Some(field)
+        }
+        IRInstruction::FieldSet {
+            base,
+            field_index,
+            value,
+            ..
+        } => {
+            let (symbol, mut fields) = expect_struct(lookup(&frame.values, *base)?, "FieldSet")?;
+            let new_field = lookup(&frame.values, *value)?;
+            let slot = fields.get_mut(*field_index as usize).unwrap_or_else(|| {
+                panic!(
+                    "interpreter: FieldSet index {field_index} out of range (seal invariant \
+                     violation)",
+                )
+            });
+            *slot = new_field;
+            Some(Value::Struct { fields, symbol })
+        }
+        IRInstruction::IndirectPresent { base, .. } => {
+            let base = lookup(&frame.values, *base)?;
+            Some(Value::Bool(!matches!(base, Value::Unit)))
+        }
+        IRInstruction::LoadCapture { capture_index, .. } => {
+            let value = frame
+                .captures
+                .get(*capture_index as usize)
+                .cloned()
+                .unwrap_or_else(|| {
+                    panic!(
+                        "interpreter: LoadCapture index {capture_index} out of range, \
+                         env has {} entries (seal invariant violation)",
+                        frame.captures.len(),
+                    )
+                });
+            Some(value)
+        }
+        IRInstruction::LoadCaptureOf {
+            capture_index,
+            closure,
+            ..
+        } => {
+            let (_, captures) = expect_closure(lookup(&frame.values, *closure)?, "LoadCaptureOf")?;
+            let value = captures
+                .into_iter()
+                .nth(*capture_index as usize)
+                .unwrap_or_else(|| {
+                    panic!(
+                        "interpreter: LoadCaptureOf index {capture_index} out of range \
+                         (seal invariant violation)",
+                    )
+                });
+            Some(value)
+        }
+        IRInstruction::LoadConst { const_id, .. } => {
+            let pooled = resolver.constant_value(const_id.mangled()).unwrap_or_else(|| {
                 panic!(
                     "interpreter: LoadConst `{}` missing from pooled constants (seal invariant violation)",
                     const_id.mangled(),
                 )
             });
-                let value = match pooled {
-                    // PID 1 ran every init before user code started
-                    // (see `build_constants`), so this is a plain read.
-                    IRConstantValue::Built { .. } => built_constants::value(const_id.mangled()),
-                    _ => materialize_pooled_constant(pooled, resolver)?,
-                };
-                frame.values.insert(*dest, value);
-                Ok(())
-            }
-            IRInstruction::EnumConstruct {
-                dest,
-                payload,
-                tag,
-                ty,
-            } => {
-                let value = materialize_enum(ty, *tag, payload, frame, resolver)?;
-                frame.values.insert(*dest, value);
-                Ok(())
-            }
-            IRInstruction::EnumPayloadFieldGet {
-                dest,
-                payload_index,
-                tag,
-                value,
-                ..
-            } => {
-                let base = lookup(&frame.values, *value)?;
-                let Value::Enum {
-                    payload,
-                    tag: actual_tag,
-                    ..
-                } = base
-                else {
-                    return Err(RuntimeError::TypeMismatch {
-                        detail: format!("EnumPayloadFieldGet expects an Enum receiver, got {base}"),
-                    });
-                };
-                if actual_tag != *tag {
-                    panic!(
-                        "interpreter: EnumPayloadFieldGet expected tag {tag} but value carries \
-                     tag {actual_tag}, so the match driver failed to gate on a tag check",
-                    );
-                }
-                let field = match &payload {
-                    EnumPayload::Tuple(values) => values
-                        .get(*payload_index as usize)
-                        .cloned()
-                        .unwrap_or_else(|| {
-                            panic!(
-                                "interpreter: EnumPayloadFieldGet tuple index {payload_index} \
-                             out of range (seal invariant violation)",
-                            )
-                        }),
-                    EnumPayload::Struct(fields) => fields
-                        .get(*payload_index as usize)
-                        .map(|(_, value)| value.clone())
-                        .unwrap_or_else(|| {
-                            panic!(
-                                "interpreter: EnumPayloadFieldGet struct index {payload_index} \
-                             out of range (seal invariant violation)",
-                            )
-                        }),
-                    EnumPayload::Unit => panic!(
-                        "interpreter: EnumPayloadFieldGet on a Unit variant (seal invariant violation)",
-                    ),
-                };
-                frame.values.insert(*dest, field);
-                Ok(())
-            }
-            IRInstruction::EnumTagGet { dest, value, .. } => {
-                let base = lookup(&frame.values, *value)?;
-                let Value::Enum { tag, .. } = base else {
-                    return Err(RuntimeError::TypeMismatch {
-                        detail: format!("EnumTagGet expects an Enum receiver, got {base}"),
-                    });
-                };
-                frame.values.insert(*dest, Value::Int(i64::from(tag.0)));
-                Ok(())
-            }
-            IRInstruction::FieldGet {
-                base,
-                dest,
-                field_index,
-                field_type: _,
-                struct_symbol: _,
-            } => {
-                let base_value = lookup(&frame.values, *base)?;
-                let Value::Struct { fields, .. } = base_value else {
-                    return Err(RuntimeError::TypeMismatch {
-                        detail: format!("field_get expects a Struct receiver, got {base_value}",),
-                    });
-                };
-                let field = fields
-                    .into_iter()
-                    .nth(*field_index as usize)
-                    .unwrap_or_else(|| {
-                        panic!(
-                            "interpreter: FieldGet index {field_index} out of range \
-                         (seal invariant violation)",
-                        )
-                    });
-                frame.values.insert(*dest, field);
-                Ok(())
-            }
-            IRInstruction::FieldSet {
-                base,
-                dest,
-                field_index,
-                field_type: _,
-                struct_symbol: _,
-                value,
-            } => {
-                let base_value = lookup(&frame.values, *base)?;
-                let Value::Struct { mut fields, symbol } = base_value else {
-                    return Err(RuntimeError::TypeMismatch {
-                        detail: format!("field_set expects a Struct receiver, got {base_value}",),
-                    });
-                };
-                let new_field = lookup(&frame.values, *value)?;
-                let slot = fields.get_mut(*field_index as usize).unwrap_or_else(|| {
-                    panic!(
-                        "interpreter: FieldSet index {field_index} out of range (seal invariant \
-                     violation)",
-                    )
-                });
-                *slot = new_field;
-                frame.values.insert(*dest, Value::Struct { fields, symbol });
-                Ok(())
-            }
-            // Drop the slot's `Rc` so the consuming site that follows
-            // sees a unique value.
-            IRInstruction::ConsumeLocal { local } => {
-                frame.locals.insert(*local, Value::Unit);
-                Ok(())
-            }
-            IRInstruction::DropLocal { .. } => Ok(()),
-            IRInstruction::DropValue { .. } => Ok(()),
-            IRInstruction::IndirectPresent { base, dest, .. } => {
-                let base = lookup(&frame.values, *base)?;
-                frame
-                    .values
-                    .insert(*dest, Value::Bool(!matches!(base, Value::Unit)));
-                Ok(())
-            }
-            // A `Unit` placeholder so a never-written slot (the
-            // payload local of an untaken receive arm) still reads at
-            // scope exit.
-            IRInstruction::LocalDecl { local, .. } => {
-                frame.locals.insert(*local, Value::Unit);
-                Ok(())
-            }
-            IRInstruction::LocalRead { dest, local, .. } => {
-                let value = frame.locals.get(local).cloned().unwrap_or_else(|| {
-                    panic!(
-                        "interpreter: `LocalRead` of `{local}` before its `LocalDecl` \
+            let value = match pooled {
+                // PID 1 ran every init before user code started
+                // (see `build_constants`), so this is a plain read.
+                IRConstantValue::Built { .. } => built_constants::value(const_id.mangled()),
+                _ => materialize_pooled_constant(pooled, resolver)?,
+            };
+            Some(value)
+        }
+        // A `Unit` placeholder so a never-written slot (the
+        // payload local of an untaken receive arm) still reads at
+        // scope exit.
+        IRInstruction::LocalDecl { local, .. } => {
+            frame.locals.insert(*local, Value::Unit);
+            None
+        }
+        IRInstruction::LocalRead { local, .. } => {
+            let value = frame.locals.get(local).cloned().unwrap_or_else(|| {
+                panic!(
+                    "interpreter: `LocalRead` of `{local}` before its `LocalDecl` \
                      (seal invariant violation)",
-                    )
-                });
-                frame.values.insert(*dest, value);
-                Ok(())
-            }
-            IRInstruction::LocalWrite { local, value } => {
-                let resolved = lookup(&frame.values, *value)?;
-                frame.locals.insert(*local, resolved);
-                Ok(())
-            }
-            IRInstruction::StructInit { dest, fields, ty } => {
-                let mut materialized = Vec::with_capacity(fields.len());
-                for field in fields {
-                    materialized.push(lookup(&frame.values, field.value)?);
-                }
-                frame.values.insert(
-                    *dest,
-                    Value::Struct {
-                        symbol: ty.clone(),
-                        fields: materialized,
-                    },
-                );
-                Ok(())
-            }
-            IRInstruction::TupleGet {
-                base,
-                dest,
-                element_type: _,
-                index,
-            } => {
-                let base_value = lookup(&frame.values, *base)?;
-                let Value::Tuple(elements) = base_value else {
-                    return Err(RuntimeError::TypeMismatch {
-                        detail: format!("tuple_get expects a Tuple receiver, got {base_value}"),
-                    });
-                };
-                let element = elements
-                    .into_iter()
-                    .nth(*index as usize)
-                    .unwrap_or_else(|| {
-                        panic!(
-                            "interpreter: TupleGet index {index} out of range \
-                         (seal invariant violation)",
-                        )
-                    });
-                frame.values.insert(*dest, element);
-                Ok(())
-            }
-            IRInstruction::TupleInit {
-                dest,
-                elements,
-                ty: _,
-            } => {
-                let mut materialized = Vec::with_capacity(elements.len());
-                for element in elements {
-                    materialized.push(lookup(&frame.values, *element)?);
-                }
-                frame.values.insert(*dest, Value::Tuple(materialized));
-                Ok(())
-            }
-            IRInstruction::UnaryOp {
-                dest,
-                op,
-                operand,
-                operand_ty,
-            } => {
-                let operand_value = lookup(&frame.values, *operand)?;
-                let result = apply_unary_op(*op, operand_ty, operand_value)?;
-                frame.values.insert(*dest, result);
-                Ok(())
-            }
-            IRInstruction::CallClosure {
-                args,
-                callee,
-                dest,
-                param_types: _,
-                result_ty: _,
-            } => {
-                let callee_value = lookup(&frame.values, *callee)?;
-                let Value::Closure { body, captures } = callee_value else {
-                    return Err(RuntimeError::TypeMismatch {
-                        detail: format!(
-                            "CallClosure expects a Closure receiver, got {callee_value}"
-                        ),
-                    });
-                };
-                let mut arg_values = Vec::with_capacity(args.len());
-                for arg in args {
-                    arg_values.push(lookup(&frame.values, *arg)?);
-                }
-                let body_fn = resolver.resolve(body.mangled()).unwrap_or_else(|| {
-                    panic!(
-                        "interpreter: closure body `{body}` missing from IR \
-                     (seal invariant violation)",
-                    )
-                });
-                let result =
-                    execute_closure_function(body_fn, arg_values, captures, resolver).await?;
-                frame.values.insert(*dest, result);
-                Ok(())
-            }
-            IRInstruction::ClosureEquals { dest, lhs, rhs, .. } => {
-                let lhs_value = lookup(&frame.values, *lhs)?;
-                let rhs_value = lookup(&frame.values, *rhs)?;
-                let equal = closures_equal(lhs_value, rhs_value, resolver).await?;
-                frame.values.insert(*dest, Value::Bool(equal));
-                Ok(())
-            }
-            IRInstruction::LoadCaptureOf {
-                capture_index,
-                closure,
-                dest,
-                ty: _,
-            } => {
-                let (_, captures) =
-                    expect_closure(lookup(&frame.values, *closure)?, "LoadCaptureOf")?;
-                let value = captures
-                    .into_iter()
-                    .nth(*capture_index as usize)
-                    .unwrap_or_else(|| {
-                        panic!(
-                            "interpreter: LoadCaptureOf index {capture_index} out of range \
-                         (seal invariant violation)",
-                        )
-                    });
-                frame.values.insert(*dest, value);
-                Ok(())
-            }
-            IRInstruction::LoadCapture {
-                capture_index,
-                dest,
-                ty: _,
-            } => {
-                let value = frame
-                    .captures
-                    .get(*capture_index as usize)
-                    .cloned()
-                    .unwrap_or_else(|| {
-                        panic!(
-                            "interpreter: LoadCapture index {capture_index} out of range, \
-                         env has {} entries (seal invariant violation)",
-                            frame.captures.len(),
-                        )
-                    });
-                frame.values.insert(*dest, value);
-                Ok(())
-            }
-            IRInstruction::MakeClosure {
-                body,
-                captures,
-                dest,
-                ty: _,
-            } => {
-                let mut env = Vec::with_capacity(captures.len());
-                for capture in captures {
-                    env.push(lookup(&frame.values, *capture)?);
-                }
-                frame.values.insert(
-                    *dest,
-                    Value::Closure {
-                        body: body.clone(),
-                        captures: env,
-                    },
-                );
-                Ok(())
-            }
-            // Sized integers are already canonical `Value::Int(i64)`
-            // (sign/zero-extended at materialization), so the integer
-            // widen is a pass-through. Only `Float32 -> Float64`
-            // changes representation.
-            IRInstruction::NumericWiden { dest, value, .. } => {
-                let source = lookup(&frame.values, *value)?;
-                let widened = match source {
-                    Value::Float32(v) => Value::Float64(f64::from(v)),
-                    other => other,
-                };
-                frame.values.insert(*dest, widened);
-                Ok(())
-            }
-            IRInstruction::Spawn {
-                config,
-                dest,
-                ref_type,
-                wrapper,
-                ..
-            } => {
-                // Register the child in the core table now (so its PID is
-                // stable for the returned `Ref`) and queue the spawn request.
-                // The executor builds and installs the child's future after
-                // this resume, before the driver can claim it. `Ref<M, R>`
-                // lays out as `{ i64 id }` (see `koja-ir-llvm`'s `pid_from_self`).
-                let config_value = lookup(&frame.values, *config)?;
-                let pid = scheduler::spawn_child(wrapper.clone(), config_value);
-                frame.values.insert(
-                    *dest,
-                    Value::Struct {
-                        symbol: ref_type.clone(),
-                        fields: vec![Value::Int(pid)],
-                    },
-                );
-                Ok(())
-            }
-            IRInstruction::ProcessExit { reason } => {
-                let reason = lookup(&frame.values, *reason)?;
-                let Value::Int(reason) = reason else {
-                    return Err(RuntimeError::TypeMismatch {
-                        detail: format!("ProcessExit expects an Int reason, got {reason}"),
-                    });
-                };
-                scheduler::process_exit(reason);
-                Ok(())
-            }
-            IRInstruction::SetPriority { tag } => {
-                let level = lookup(&frame.values, *tag)?;
-                let Value::Int(level) = level else {
-                    return Err(RuntimeError::TypeMismatch {
-                        detail: format!("SetPriority expects an Int tag, got {level}"),
-                    });
-                };
-                scheduler::set_priority(level);
-                Ok(())
-            }
-            IRInstruction::YieldCheck => {
-                if scheduler::reduce() {
-                    YieldOnce::new().await;
-                }
-                Ok(())
-            }
-            IRInstruction::Receive { .. } => panic!(
-                "interpreter: `Receive` reached `execute_instruction`, but `execute_blocks` \
+                )
+            });
+            Some(value)
+        }
+        IRInstruction::LocalWrite { local, value } => {
+            let resolved = lookup(&frame.values, *value)?;
+            frame.locals.insert(*local, resolved);
+            None
+        }
+        IRInstruction::MakeClosure { body, captures, .. } => Some(Value::Closure {
+            body: body.clone(),
+            captures: lookup_all(&frame.values, captures.iter().copied())?,
+        }),
+        // Sized integers are already canonical `Value::Int(i64)`
+        // (sign/zero-extended at materialization), so the integer
+        // widen is a pass-through. Only `Float32 -> Float64`
+        // changes representation.
+        IRInstruction::NumericWiden { value, .. } => Some(match lookup(&frame.values, *value)? {
+            Value::Float32(v) => Value::Float64(f64::from(v)),
+            other => other,
+        }),
+        IRInstruction::ProcessExit { reason } => {
+            let reason = expect_int(lookup(&frame.values, *reason)?, "ProcessExit")?;
+            scheduler::process_exit(reason);
+            None
+        }
+        IRInstruction::Receive { .. } => panic!(
+            "interpreter: `Receive` reached `execute_instruction`, but `execute_blocks` \
              intercepts it as a control transfer (lowering places it last in its block)",
-            ),
-            IRInstruction::UnionWrap {
-                dest,
-                member_index,
-                member_type: _,
-                ty,
-                value,
-            } => {
-                let payload = lookup(&frame.values, *value)?;
-                let IRType::Union { mangled, .. } = ty else {
+        ),
+        IRInstruction::SetPriority { tag } => {
+            let level = expect_int(lookup(&frame.values, *tag)?, "SetPriority")?;
+            scheduler::set_priority(level);
+            None
+        }
+        IRInstruction::Spawn {
+            config,
+            ref_type,
+            wrapper,
+            ..
+        } => {
+            // Register the child in the core table now (so its PID is
+            // stable for the returned `Ref`) and queue the spawn request.
+            // The executor builds and installs the child's future after
+            // this resume, before the driver can claim it. `Ref<M, R>`
+            // lays out as `{ i64 id }` (see `koja-ir-llvm`'s `pid_from_self`).
+            let config_value = lookup(&frame.values, *config)?;
+            let pid = scheduler::spawn_child(wrapper.clone(), config_value);
+            Some(Value::Struct {
+                symbol: ref_type.clone(),
+                fields: vec![Value::Int(pid)],
+            })
+        }
+        IRInstruction::StructInit { fields, ty, .. } => Some(Value::Struct {
+            symbol: ty.clone(),
+            fields: lookup_all(&frame.values, fields.iter().map(|field| field.value))?,
+        }),
+        IRInstruction::TupleGet { base, index, .. } => {
+            let elements = expect_tuple(lookup(&frame.values, *base)?, "TupleGet")?;
+            let element = elements
+                .into_iter()
+                .nth(*index as usize)
+                .unwrap_or_else(|| {
                     panic!(
-                        "interpreter: UnionWrap target IRType is not Union, got `{ty:?}` \
-                     (seal invariant violation)",
-                    );
-                };
-                frame.values.insert(
-                    *dest,
-                    Value::Union {
-                        payload: Box::new(payload),
-                        symbol: mangled.clone(),
-                        tag: *member_index,
-                    },
-                );
-                Ok(())
-            }
-            IRInstruction::UnionTagGet { dest, ty: _, value } => {
-                let base = lookup(&frame.values, *value)?;
-                let Value::Union { tag, .. } = base else {
-                    return Err(RuntimeError::TypeMismatch {
-                        detail: format!("UnionTagGet expects a Union receiver, got {base}"),
-                    });
-                };
-                frame.values.insert(*dest, Value::Int(i64::from(tag)));
-                Ok(())
-            }
-            IRInstruction::UnionPayloadGet {
-                dest,
-                member_index,
-                member_type: _,
-                ty: _,
-                value,
-            } => {
-                let base = lookup(&frame.values, *value)?;
-                let Value::Union {
-                    payload,
-                    tag: actual_tag,
-                    ..
-                } = base
-                else {
-                    return Err(RuntimeError::TypeMismatch {
-                        detail: format!("UnionPayloadGet expects a Union receiver, got {base}"),
-                    });
-                };
-                if actual_tag != *member_index {
-                    panic!(
-                        "interpreter: UnionPayloadGet expected member-index {member_index} but value \
+                        "interpreter: TupleGet index {index} out of range \
+                         (seal invariant violation)",
+                    )
+                });
+            Some(element)
+        }
+        IRInstruction::TupleInit { elements, .. } => Some(Value::Tuple(lookup_all(
+            &frame.values,
+            elements.iter().copied(),
+        )?)),
+        IRInstruction::UnaryOp {
+            op,
+            operand,
+            operand_ty,
+            ..
+        } => {
+            let operand_value = lookup(&frame.values, *operand)?;
+            Some(apply_unary_op(*op, operand_ty, operand_value)?)
+        }
+        IRInstruction::UnionPayloadGet {
+            member_index,
+            value,
+            ..
+        } => {
+            let (payload, actual_tag) =
+                expect_union(lookup(&frame.values, *value)?, "UnionPayloadGet")?;
+            if actual_tag != *member_index {
+                panic!(
+                    "interpreter: UnionPayloadGet expected member-index {member_index} but value \
                      carries tag {actual_tag}, so the match driver failed to gate on a tag check",
-                    );
-                }
-                frame.values.insert(*dest, *payload);
-                Ok(())
+                );
             }
-            IRInstruction::BinaryMatch {
-                dest,
-                layout,
-                segments,
-                subject,
-            } => {
-                let subject_value = lookup(&frame.values, *subject)?;
-                let matched = execute_binary_match(*layout, segments, &subject_value, frame)?;
-                frame.values.insert(*dest, Value::Bool(matched));
-                Ok(())
+            Some(payload)
+        }
+        IRInstruction::UnionTagGet { value, .. } => {
+            let (_, tag) = expect_union(lookup(&frame.values, *value)?, "UnionTagGet")?;
+            Some(Value::Int(i64::from(tag)))
+        }
+        IRInstruction::UnionWrap {
+            member_index,
+            ty,
+            value,
+            ..
+        } => {
+            let payload = lookup(&frame.values, *value)?;
+            let IRType::Union { mangled, .. } = ty else {
+                panic!(
+                    "interpreter: UnionWrap target IRType is not Union, got `{ty:?}` \
+                     (seal invariant violation)",
+                );
+            };
+            Some(Value::Union {
+                payload: Box::new(payload),
+                symbol: mangled.clone(),
+                tag: *member_index,
+            })
+        }
+        IRInstruction::YieldCheck => {
+            if scheduler::reduce() {
+                YieldOnce::new().await;
             }
+            None
         }
     })
 }
@@ -1848,6 +1732,15 @@ pub(crate) fn lookup(
         .get(&id)
         .cloned()
         .ok_or(RuntimeError::ValueUndefined { id })
+}
+
+/// Read several registers in order, with the sharing contract of
+/// [`lookup`] for each one.
+fn lookup_all(
+    values: &BTreeMap<ValueId, Value>,
+    ids: impl IntoIterator<Item = ValueId>,
+) -> Result<Vec<Value>, RuntimeError> {
+    ids.into_iter().map(|id| lookup(values, id)).collect()
 }
 
 fn materialize_pooled_constant<R: CallResolver>(
@@ -1924,11 +1817,7 @@ fn materialize_enum<R: CallResolver>(
     let materialized = match (payload, &variant.payload) {
         (EnumPayloadInit::Unit, IRVariantPayload::Unit) => EnumPayload::Unit,
         (EnumPayloadInit::Tuple(ids), IRVariantPayload::Tuple(_)) => {
-            let mut values = Vec::with_capacity(ids.len());
-            for id in ids {
-                values.push(lookup(&frame.values, *id)?);
-            }
-            EnumPayload::tuple(values)
+            EnumPayload::tuple(lookup_all(&frame.values, ids.iter().copied())?)
         }
         (EnumPayloadInit::Struct(inits), IRVariantPayload::Struct(declared)) => {
             let mut fields = Vec::with_capacity(inits.len());

@@ -129,7 +129,7 @@ impl<'ctx> TypeLayouts<'ctx> {
     }
 
     /// IR type of `struct_symbol`'s field at `index`. Panics on
-    /// unregistered symbol / out-of-range index: both indicate a
+    /// unregistered symbol / out-of-range index. Both indicate a
     /// pre-emit ordering or IR-seal violation upstream.
     pub(crate) fn struct_field_ir_type(&self, struct_symbol: &IRSymbol, index: usize) -> IRType {
         let map = self.struct_fields.borrow();
@@ -168,7 +168,7 @@ impl<'ctx> TypeLayouts<'ctx> {
     }
 
     /// IR-level payload of `enum_symbol`'s variant at `tag`. Panics
-    /// on unregistered symbol / out-of-range tag: both indicate a
+    /// on unregistered symbol / out-of-range tag. Both indicate a
     /// pre-emit ordering or IR-seal violation upstream.
     pub(crate) fn enum_variant_payload(
         &self,
@@ -198,7 +198,7 @@ impl<'ctx> TypeLayouts<'ctx> {
     /// emitters target stdlib enum variants (e.g.
     /// `NumericConversionError.OutOfRange`) without hardcoding tags
     /// that silently break when the declaration order changes.
-    /// Panics on unregistered symbol / unknown variant: both
+    /// Panics on unregistered symbol / unknown variant. Both
     /// indicate a pre-emit ordering or stdlib invariant violation.
     pub(crate) fn enum_variant_tag(&self, enum_symbol: &IRSymbol, name: &str) -> IRVariantTag {
         let map = self.enum_variants.borrow();
@@ -233,7 +233,7 @@ impl<'ctx> TypeLayouts<'ctx> {
         }
     }
 
-    /// Closure-borrow over the `RefCell` so callers can't hold a
+    /// Closure-borrow over the `RefCell` so callers cannot hold a
     /// long-lived `Ref` across other emit operations.
     pub(crate) fn with_enum_layout<R>(
         &self,

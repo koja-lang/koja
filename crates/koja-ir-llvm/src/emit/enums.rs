@@ -24,7 +24,7 @@ use super::indirect::emit_unbox_value;
 use super::structs::box_or_pass_through;
 use super::{ValueMap, lookup};
 
-/// Materialize an enum-variant literal: resolve `payload` operands
+/// Materialize an enum-variant literal. Resolve `payload` operands
 /// against `values`, then delegate to [`build_enum_value`] for the
 /// alloca/GEP/load dance. Tuple operands keep their declaration
 /// order. Struct operands are re-keyed into field-index order so
@@ -215,7 +215,7 @@ pub(super) fn emit_enum_payload_field_get<'ctx>(
 }
 
 /// Look up the declared IR type of `payload`'s slot at `index`.
-/// Mirrors the `IRVariantPayload` shape: tuples index directly,
+/// Mirrors the `IRVariantPayload` shape. Tuples index directly and
 /// struct payloads index into the field vec.
 fn declared_slot_type(payload: &IRVariantPayload, index: u32) -> Option<IRType> {
     match payload {

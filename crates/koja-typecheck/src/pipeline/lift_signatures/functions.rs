@@ -22,8 +22,8 @@ use super::types::{
 /// The function's [`TypeParamScope`] chains its own params (innermost)
 /// over its enclosing receiver's params (outermost) so generic methods
 /// like `fn swap(self) -> Pair<U, T>` on `struct Pair<T, U>` see both
-/// scopes resolve to their true owners (`T` -> struct id, the function's
-/// own `<X>` -> function id).
+/// scopes resolve to their true owners (`T` maps to the struct id, the
+/// function's own `<X>` to the function id).
 pub(super) fn lift_function_with_identifier(
     function: &mut Function,
     identifier: Identifier,
@@ -41,7 +41,7 @@ pub(super) fn lift_function_with_identifier(
     };
     // A duplicate function declaration in the same package is
     // already diagnosed by `collect`. The registry keeps the first
-    // entry. If we still see a second function for this identifier,
+    // entry. If lift still sees a second function for this identifier,
     // its signature has already been stamped by the first walk.
     // Skip to avoid tripping `set_signature`'s panic-on-double-set
     // invariant.
@@ -183,16 +183,16 @@ fn is_divergent_kernel_function(identifier: &Identifier) -> bool {
 /// the registry. Emitting diagnostics here keeps every path through
 /// typecheck honest. Stamping the signature anyway preserves
 /// downstream invariants (call sites can still see a `Function(Some(_))`
-/// entry, so resolve doesn't double-error on every call).
+/// entry, so resolve does not double-error on every call).
 ///
 /// Rules:
 ///
-/// - `@extern "C"` and `@intrinsic` are mutually exclusive: both
+/// - `@extern "C"` and `@intrinsic` are mutually exclusive. Both
 ///   describe bodyless functions but with different semantics
 ///   (FFI-linked vs compiler-synthesized).
 /// - `@extern "C"` functions cannot have a body (the FFI symbol is
 ///   the implementation).
-/// - `@extern "C"` functions cannot take a `self` receiver: they
+/// - `@extern "C"` functions cannot take a `self` receiver. They
 ///   are top-level FFI declarations, not methods.
 /// - Every parameter and the return type must name an FFI-admissible
 ///   primitive: `Bool`, `Unit`, `Int8..UInt64`, `Float32`, `Float64`,
@@ -300,7 +300,7 @@ fn is_ffi_admissible_type(ty: &ResolvedType, registry: &GlobalRegistry) -> bool 
 
 /// Best-effort surface label for a [`TypeExpr`] in diagnostics. Picks
 /// the head identifier, close enough for FFI rejection messaging,
-/// where the user just needs a clue which type they wrote that we
+/// where the user just needs a clue which type they wrote that lift
 /// rejected (full pretty-printing lives in `koja-fmt`).
 fn type_expr_label(ty: &TypeExpr) -> String {
     match ty {
@@ -314,12 +314,12 @@ fn type_expr_label(ty: &TypeExpr) -> String {
 }
 
 /// Build the chained [`TypeParamScope`] owner stack for a function
-/// being lifted. Innermost first: the function's own id (only when
-/// it declares its own params) over the enclosing receiver's id
-/// (always pushed for method contexts so `Self` resolves through
-/// the scope walker: the type-param name lookup naturally returns
-/// `None` for non-generic owners). Top-level non-generic fns
-/// produce an empty stack.
+/// being lifted. Innermost first, it holds the function's own id
+/// (only when it declares its own params) over the enclosing
+/// receiver's id (always pushed for method contexts so `Self`
+/// resolves through the scope walker, since the type-param name
+/// lookup naturally returns `None` for non-generic owners).
+/// Top-level non-generic fns produce an empty stack.
 ///
 /// Trait-impl methods (`impl P for List<T> { fn ... }`) and
 /// inherent-impl methods both anchor at the receiver's id. The

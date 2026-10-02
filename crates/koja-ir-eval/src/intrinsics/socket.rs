@@ -95,7 +95,7 @@ async fn recv_from<R: CallResolver>(call: IntrinsicCall<'_, R>) -> Result<Value,
     let result_symbol = helpers::enum_return_symbol(call.function, "Socket.recv_from_raw")?;
     validate_recv_from_payload(&result_symbol, call.resolver)?;
 
-    // Interrupted by a signal: surface an error instead of reading.
+    // If interrupted by a signal, surface an error instead of reading.
     if reactor::io_block(fd, Interest::Readable, None).await != IoWait::Ready {
         return helpers::result_value(result_symbol, call.resolver, Err(last_error_value()));
     }
@@ -115,7 +115,7 @@ async fn recv_from<R: CallResolver>(call: IntrinsicCall<'_, R>) -> Result<Value,
     helpers::result_value(result_symbol, call.resolver, Ok(received))
 }
 
-/// `Err` payload for a failed socket call: the runtime's last-error
+/// `Err` payload for a failed socket call, the runtime's last-error
 /// message as a `Value::String`. Mirrors the LLVM emitters' `Result.Err(
 /// koja_last_error())` shape.
 fn last_error_value() -> Value {

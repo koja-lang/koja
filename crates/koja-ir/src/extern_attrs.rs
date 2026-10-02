@@ -19,9 +19,9 @@ use koja_ast::ast::{Annotation, AnnotationKind};
 /// `link_name` overrides the C symbol the function resolves to at
 /// link time (the `sym` half of `@link "lib:sym"`). When `None`
 /// the LLVM backend uses the function's bare last-segment name
-/// (`fn cosf` -> `cosf`).
+/// (`fn cosf` becomes `cosf`).
 ///
-/// `link_lib` is the bare library name (`@link "m"` -> `m`) the
+/// `link_lib` is the bare library name (`@link "m"` becomes `m`) the
 /// driver feeds to `cc -l<name>`. Multiple `@extern "C"` functions
 /// can name the same library. The IR layer (in [`crate::IRProgram`]
 /// / [`crate::IRScript`]) dedupes across the program before
@@ -40,7 +40,7 @@ impl IRExternAttrs {
     ///
     /// Multiple `@link` annotations on one function fold with
     /// last-write-wins for whichever fields each one carries.
-    /// Annotations whose `kind()` isn't [`AnnotationKind::Link`] are
+    /// Annotations whose `kind()` is not [`AnnotationKind::Link`] are
     /// skipped silently, as the typecheck layer is responsible for
     /// rejecting unrecognized annotations.
     pub fn from_annotations(annotations: &[Annotation]) -> Self {

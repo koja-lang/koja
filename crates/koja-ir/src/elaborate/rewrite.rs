@@ -1,8 +1,8 @@
-//! Acquisition / release rewrite: turn every *composite* ownership
+//! The acquisition / release rewrite turns every *composite* ownership
 //! `Clone` / `DeepCopy` / `DropLocal` / `DropValue` lowering emitted
 //! into a `Call` to the synthesized per-type glue, so backends only
 //! ever see leaf `Clone` / `DeepCopy` / `Drop` inline and a uniform
-//! `Call` for composites (northstar: no dynamic-dispatch IR).
+//! `Call` for composites (the northstar is no dynamic-dispatch IR).
 //!
 //! A composite is rewritten iff its type carries glue, i.e. it is in
 //! the `needed` set [`super::discover_glue_types`] produced (or, for
@@ -18,7 +18,7 @@
 //!
 //! Fresh `ValueId`s (for the `LocalRead` result and each glue call's
 //! unit sink) are minted above the function's current high-water mark
-//! so they can't collide with an existing definition.
+//! so they cannot collide with an existing definition.
 
 use std::collections::BTreeSet;
 
@@ -165,9 +165,9 @@ mod tests {
 
         rewrite_blocks_standalone(&mut blocks, &needed, &BTreeSet::new());
         let instructions = &blocks[0].instructions;
-        // Clone -> Call clone glue, DropValue -> Call drop glue,
-        // DropLocal -> LocalRead + Call drop glue, and the leaf
-        // Clone stays intact.
+        // Clone becomes Call clone glue, DropValue becomes Call drop
+        // glue, DropLocal becomes LocalRead + Call drop glue, and the
+        // leaf Clone stays intact.
         assert_eq!(instructions.len(), 5);
         assert!(matches!(
             &instructions[0],

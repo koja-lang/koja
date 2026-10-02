@@ -174,7 +174,7 @@ fn collect_package_symbols<'a>(pkg: &'a DocPackage, out: &mut Vec<Symbol<'a>>) {
     }
 }
 
-/// Mirror of [`crate::render::filters::brief`]. The search payload
+/// Mirror of the `brief` filter in `render::filters`. The search payload
 /// doesn't render through a template, so we re-derive the
 /// first-sentence brief here.
 fn brief(doc: &Option<String>) -> String {

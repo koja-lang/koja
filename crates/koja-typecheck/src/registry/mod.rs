@@ -4,14 +4,11 @@
 //! Insert sites emit the "already defined" diagnostic when an insert
 //! returns [`InsertOutcome::Collision`].
 //!
-//! Today only top-level structs, enums, functions, and protocols
-//! register. Methods, enum variants, constants, and type aliases land
-//! as the surrounding pipeline migrates onto path-based
-//! [`Identifier`]s.
+//! Structs, enums, functions, protocols, constants, and type aliases
+//! register, each under its path-based [`Identifier`]. Methods
+//! register as functions under `[target_path, method_name]`.
 //!
-//! Ids are assigned sequentially (monotonic `u32` counter). A future
-//! parallel-cache story will swap in content-addressable hashing
-//! without changing the public surface.
+//! Ids are assigned sequentially from a monotonic `u32` counter.
 //!
 //! # Function signatures
 //!
@@ -21,8 +18,9 @@
 //! so non-function entries cannot carry them.
 //!
 //! Registry rendering for `koja check --emit-ast` lives in the
-//! [`format`] submodule. It is a separate concern from the data + insert
-//! API, with a different audience (diagnostic rendering vs pipeline work).
+//! [`mod@format`] submodule. It is a separate concern from the data and
+//! insert API, with a different audience (diagnostic rendering rather
+//! than pipeline work).
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 
@@ -31,11 +29,12 @@ use koja_ast::ast::{
     TypeParam, name_texts,
 };
 use koja_ast::identifier::{
-    AnonymousKind, GlobalRegistryId, Identifier, Resolution, ResolvedType, TypeParamIndex,
+    GlobalRegistryId, Identifier, Resolution, ResolvedType, TypeParamIndex,
 };
 use koja_ast::span::Span;
 
 mod candidates;
+mod conformance;
 mod definitions;
 mod format;
 
@@ -48,8 +47,6 @@ pub use definitions::{
 };
 pub use format::format_registry;
 pub use koja_ast::ast::FunctionOrigin;
-
-use crate::pipeline::resolve::types::types_equivalent;
 
 /// What kind of declaration a registry entry points at.
 ///
@@ -72,7 +69,7 @@ use crate::pipeline::resolve::types::types_equivalent;
 #[derive(Clone, Debug)]
 pub enum GlobalKind {
     /// A compiler-owned type declared with the `builtin` keyword.
-    /// No `Option` lifecycle: the shape is stamped at seed time.
+    /// No `Option` lifecycle because the shape is stamped at seed time.
     Builtin(BuiltinDefinition),
     Constant(Option<Box<ConstantDefinition>>),
     Enum(Option<EnumDefinition>),
@@ -84,7 +81,7 @@ pub enum GlobalKind {
     /// `Some(expansion)` after `lift_type_aliases` resolves the RHS.
     /// The expansion is the canonical [`ResolvedType`] the alias
     /// stands for. For the surface-aliasing case
-    /// (`type Pet = Cat | Dog | Fish`) that's typically a
+    /// (`type Pet = Cat | Dog | Fish`) that is typically a
     /// canonical [`ResolvedType::Union`], but any `ResolvedType`
     /// shape is permissible.
     TypeAlias(Option<ResolvedType>),
@@ -106,36 +103,36 @@ impl GlobalKind {
 
 /// A single registered declaration, with its canonical [`Identifier`],
 /// [`GlobalKind`], source spans, and any generic-decl param names
-/// declared on it. `span` covers the whole declaration and
-/// `name_span` its name token, so a diagnostic or an editor can point
-/// at the name alone.
-/// `type_params` is stamped at collect time directly from the
-/// AST so [`GlobalRegistry::type_params`] is queryable mid-lift,
-/// before [`StructDefinition`] / [`EnumDefinition`] / signature
-/// payloads are stamped.
-///
-/// `type_param_bounds` is parallel to `type_params` (same length, same
-/// indexing). Each inner vector holds the resolved protocol bounds
-/// from a `<T: P1 & P2>` bound, in source order. Empty inner vec means
-/// the param is unbounded. Default at collect time is one empty inner
-/// vec per param. Lift's bounds-resolve sub-pass replaces it with the
-/// resolved protocol bounds via [`GlobalRegistry::set_type_param_bounds`].
-///
-/// `visibility` carries the `priv` enforcement scope as a
-/// [`VisibilityScope`]. See that enum for the three-case rationale.
-/// Functions can be `TypePrivate`. Every other entry kind is either
-/// `Public` or `PackagePrivate`.
+/// declared on it.
 #[derive(Clone, Debug)]
 pub struct RegistryEntry {
     /// `@deprecated` message, always non-empty. `None` means not
     /// deprecated.
     pub deprecation: Option<String>,
+    /// Canonical path-based name.
     pub identifier: Identifier,
+    /// Declaration kind and its lifted payload.
     pub kind: GlobalKind,
+    /// Span of the name token alone, so a diagnostic or an editor can
+    /// point at the name.
     pub name_span: Span,
+    /// Span of the whole declaration.
     pub span: Span,
+    /// Generic param names, stamped at collect time directly from the
+    /// AST so [`GlobalRegistry::type_params`] is queryable mid-lift,
+    /// before [`StructDefinition`], [`EnumDefinition`], and signature
+    /// payloads are stamped.
     pub type_params: Vec<String>,
+    /// Parallel to `type_params` (same length, same indexing). Each
+    /// inner vector holds the resolved protocol bounds from a
+    /// `<T: P1 & P2>` bound, in source order. An empty inner vector
+    /// means the param is unbounded. Collect stores one empty inner
+    /// vector per param. The bounds-resolve sub-pass of lift replaces
+    /// it via [`GlobalRegistry::set_type_param_bounds`].
     pub type_param_bounds: Vec<Vec<ResolvedProtocolBound>>,
+    /// The `priv` enforcement scope. See [`VisibilityScope`] for the
+    /// three-case rationale. Functions can be `TypePrivate`. Every
+    /// other entry kind is either `Public` or `PackagePrivate`.
     pub visibility: VisibilityScope,
 }
 
@@ -186,7 +183,7 @@ impl RegistryEntry {
 /// - `PackagePrivate`: any top-level `priv` decl (function, struct,
 ///   enum, constant, type alias, protocol). Usable from any file
 ///   in the same package. The package name lives on the entry's
-///   [`Identifier`] so it doesn't need to be repeated here.
+///   [`Identifier`] so it does not need to be repeated here.
 /// - `TypePrivate(type_id)`: `priv fn` declared inside a `struct` /
 ///   `enum` / `impl` body. Callable only from other methods on the
 ///   same target type, including across inherent and protocol-impl
@@ -459,8 +456,7 @@ impl GlobalRegistry {
     /// Register a `type X = ...` alias in the `TypeAlias(None)`
     /// state. The expansion is stamped in later by
     /// [`Self::set_type_alias_definition`]. Aliases take no generic
-    /// params today. Generic aliases are a possible future language
-    /// extension.
+    /// params.
     pub(crate) fn insert_type_alias(
         &mut self,
         identifier: Identifier,
@@ -526,350 +522,6 @@ impl GlobalRegistry {
             );
         }
         *target = Some(value);
-    }
-
-    /// Record a [`Conformance`] of `target_id` to `protocol_id`.
-    /// Returns the previously-recorded record when the new one
-    /// overlaps it (a `Parameterized` record overlaps everything,
-    /// two `Concrete` records overlap when their target args are
-    /// equivalent). The caller emits the "duplicate `impl P for T`"
-    /// diagnostic. Panics unless `target_id` names a builtin or a
-    /// struct/enum with a stamped definition (lift orders
-    /// enum/struct definition stamping before impl conformance
-    /// recording).
-    pub(crate) fn record_conformance(
-        &mut self,
-        target_id: GlobalRegistryId,
-        protocol_id: GlobalRegistryId,
-        conformance: Conformance,
-    ) -> Option<Conformance> {
-        // Overlap check first, since type equivalence needs `&self`
-        // while the insert below holds the entry mutably.
-        if let Some(existing) = self
-            .conformance_records(target_id, protocol_id)
-            .unwrap_or_default()
-            .iter()
-            .find(|record| self.conformances_overlap(record, &conformance))
-        {
-            return Some(existing.clone());
-        }
-        let entry = self.entries.get_mut(&target_id).unwrap_or_else(|| {
-            panic!(
-                "record_conformance on missing registry id {target_id}. This is a \
-                 lift invariant violation",
-            )
-        });
-        let conformances = match &mut entry.kind {
-            GlobalKind::Builtin(def) => &mut def.conformances,
-            GlobalKind::Struct(Some(def)) => &mut def.conformances,
-            GlobalKind::Enum(Some(def)) => &mut def.conformances,
-            other => panic!(
-                "record_conformance on `{}` ({}). Only builtin and stamped \
-                 struct/enum entries accept conformances",
-                entry.identifier,
-                other.label(),
-            ),
-        };
-        conformances
-            .entry(protocol_id)
-            .or_default()
-            .push(conformance);
-        None
-    }
-
-    /// The conformance record of `target_id` to `protocol_id` that
-    /// covers the `target_args` instantiation. `Concrete` covers
-    /// exactly its recorded args, `Parameterized` covers every
-    /// instantiation whose args discharge the record's conditional
-    /// bounds. Typecheck uses this for bound enforcement and
-    /// `spawn`. IR's bounded dispatch never reaches this path (it
-    /// goes straight to `[target, method_name]`).
-    pub fn lookup_conformance(
-        &self,
-        target_id: GlobalRegistryId,
-        protocol_id: GlobalRegistryId,
-        target_args: &[ResolvedType],
-    ) -> Option<&Conformance> {
-        self.lookup_conformance_with(target_id, protocol_id, target_args, None, None)
-    }
-
-    /// The protocol arguments of the conformance that covers one
-    /// target instantiation, with the target's type arguments substituted.
-    pub fn conformance_args(
-        &self,
-        target_id: GlobalRegistryId,
-        protocol_id: GlobalRegistryId,
-        target_args: &[ResolvedType],
-    ) -> Option<Vec<ResolvedType>> {
-        let conformance = self.lookup_conformance(target_id, protocol_id, target_args)?;
-        let substitution = crate::pipeline::unify::Substitution::from_args(target_id, target_args);
-        Some(
-            conformance
-                .protocol_args
-                .iter()
-                .map(|arg| crate::pipeline::unify::substitute(arg, &substitution))
-                .collect(),
-        )
-    }
-
-    /// Like [`Self::lookup_conformance`], with an impl-local
-    /// [`BoundOverlay`] so obligations raised inside a conditional
-    /// impl body can discharge through the impl's own condition.
-    pub fn lookup_conformance_with(
-        &self,
-        target_id: GlobalRegistryId,
-        protocol_id: GlobalRegistryId,
-        target_args: &[ResolvedType],
-        overlay: Option<&BoundOverlay>,
-        expected_protocol_args: Option<&[ResolvedType]>,
-    ) -> Option<&Conformance> {
-        self.conformance_records(target_id, protocol_id)?
-            .iter()
-            .find(|record| {
-                let scope_matches = match &record.scope {
-                    ConformanceScope::Concrete(args) => {
-                        self.type_args_equivalent(args, target_args)
-                    }
-                    ConformanceScope::Parameterized { bounds } => {
-                        self.conformance_bounds_satisfied(target_id, bounds, target_args, overlay)
-                    }
-                };
-                scope_matches
-                    && expected_protocol_args.is_none_or(|expected| {
-                        let substitution =
-                            crate::pipeline::unify::Substitution::from_args(target_id, target_args);
-                        let actual = record
-                            .protocol_args
-                            .iter()
-                            .map(|arg| crate::pipeline::unify::substitute(arg, &substitution))
-                            .collect::<Vec<_>>();
-                        self.type_args_equivalent(&actual, expected)
-                    })
-            })
-    }
-
-    /// Whether every target arg discharges its slot's conditional
-    /// bounds. Unconditional records carry empty `bounds`, and a
-    /// lookup with no args (head-level consumers) has nothing to
-    /// check, so both zip to vacuous truth.
-    fn conformance_bounds_satisfied(
-        &self,
-        target_id: GlobalRegistryId,
-        bounds: &[Vec<ResolvedProtocolBound>],
-        target_args: &[ResolvedType],
-        overlay: Option<&BoundOverlay>,
-    ) -> bool {
-        let substitution = crate::pipeline::unify::Substitution::from_args(target_id, target_args);
-        bounds.iter().zip(target_args).all(|(slot_bounds, arg)| {
-            slot_bounds.iter().all(|bound| {
-                let instantiated = ResolvedProtocolBound {
-                    args: bound
-                        .args
-                        .iter()
-                        .map(|arg| crate::pipeline::unify::substitute(arg, &substitution))
-                        .collect(),
-                    protocol_id: bound.protocol_id,
-                };
-                self.bound_satisfied(arg, &instantiated, overlay)
-            })
-        })
-    }
-
-    /// Whether `ty` discharges a `ty: protocol` obligation. Named
-    /// types consult their conformance records recursively (so
-    /// `List<List<Int>>: Equality` walks down). Type params
-    /// discharge through universal protocols, their declared
-    /// bounds, or the overlay. Tuples are structurally `Debug`,
-    /// and structurally `Equality` when every element is. Other
-    /// shapes (functions, unresolved) satisfy nothing.
-    pub fn bound_satisfied(
-        &self,
-        ty: &ResolvedType,
-        bound: &ResolvedProtocolBound,
-        overlay: Option<&BoundOverlay>,
-    ) -> bool {
-        match ty {
-            ResolvedType::Named {
-                resolution: Resolution::Global(target_id),
-                type_args,
-            } => {
-                if let Some(expansion) = self.alias_expansion(*target_id) {
-                    return self.bound_satisfied(&expansion, bound, overlay);
-                }
-                self.lookup_conformance_with(
-                    *target_id,
-                    bound.protocol_id,
-                    type_args,
-                    overlay,
-                    Some(&bound.args),
-                )
-                .is_some()
-            }
-            ResolvedType::Named {
-                resolution: Resolution::TypeParam { owner, index },
-                ..
-            } => self.type_param_bound_granted(*owner, *index, bound, overlay),
-            ResolvedType::Anonymous(_) | ResolvedType::Union(_) => {
-                self.structural_bound_satisfied(ty, bound, overlay)
-            }
-            _ => false,
-        }
-    }
-
-    /// A type param discharges a bound through a universal
-    /// protocol, its declared bounds, or an overlay slot.
-    fn type_param_bound_granted(
-        &self,
-        owner: GlobalRegistryId,
-        index: TypeParamIndex,
-        bound: &ResolvedProtocolBound,
-        overlay: Option<&BoundOverlay>,
-    ) -> bool {
-        if bound.args.is_empty() && self.is_universal_protocol(bound.protocol_id) {
-            return true;
-        }
-        let slot = index.as_u32() as usize;
-        let declared = self
-            .type_param_bounds(owner)
-            .and_then(|all| all.get(slot))
-            .is_some_and(|bounds| {
-                bounds.iter().any(|candidate| {
-                    candidate.protocol_id == bound.protocol_id
-                        && self.type_args_equivalent(&candidate.args, &bound.args)
-                })
-            });
-        declared
-            || overlay.is_some_and(|o| {
-                o.owner == owner
-                    && o.bounds.get(slot).is_some_and(|bounds| {
-                        bounds.iter().any(|candidate| {
-                            candidate.protocol_id == bound.protocol_id
-                                && self.type_args_equivalent(&candidate.args, &bound.args)
-                        })
-                    })
-            })
-    }
-
-    /// Conformance for shapes with no impl target: tuples, function
-    /// types, and anonymous unions. All three are `Debug` (functions
-    /// render as `"..."`). Tuples and unions are `Equality` when every
-    /// element / member is, functions by site plus captures. Unions
-    /// are also `Hash` when every member is. Functions never hash:
-    /// the type cannot see its captures.
-    fn structural_bound_satisfied(
-        &self,
-        ty: &ResolvedType,
-        bound: &ResolvedProtocolBound,
-        overlay: Option<&BoundOverlay>,
-    ) -> bool {
-        if !bound.args.is_empty() {
-            return false;
-        }
-        let Some(entry) = self.get(bound.protocol_id) else {
-            return false;
-        };
-        if entry.identifier.package() != "Global" || entry.identifier.path().len() != 1 {
-            return false;
-        }
-        let all_satisfy = |parts: &[ResolvedType]| {
-            parts
-                .iter()
-                .all(|part| self.bound_satisfied(part, bound, overlay))
-        };
-        match (entry.identifier.last(), ty) {
-            ("Debug", _) => true,
-            ("Equality", ResolvedType::Anonymous(AnonymousKind::Function { .. })) => true,
-            ("Equality", ResolvedType::Anonymous(AnonymousKind::Tuple { elements })) => {
-                all_satisfy(elements)
-            }
-            ("Equality" | "Hash", ResolvedType::Union(members)) => all_satisfy(members),
-            _ => false,
-        }
-    }
-
-    /// Whether `protocol_id` names a universal protocol
-    /// ([`UNIVERSAL_PROTOCOLS`]), which every type param satisfies
-    /// without a declared bound.
-    pub fn is_universal_protocol(&self, protocol_id: GlobalRegistryId) -> bool {
-        self.get(protocol_id).is_some_and(|entry| {
-            entry.identifier.package() == "Global"
-                && entry.identifier.path().len() == 1
-                && UNIVERSAL_PROTOCOLS.contains(&entry.identifier.last())
-        })
-    }
-
-    /// Whether `target_id` conforms to `protocol_id` under any
-    /// instantiation. For consumers that only ask "which protocols"
-    /// and have no instantiation at hand (monitor, carriers, the
-    /// driver's Task check).
-    pub fn conforms_any(&self, target_id: GlobalRegistryId, protocol_id: GlobalRegistryId) -> bool {
-        self.conformance_records(target_id, protocol_id)
-            .is_some_and(|records| !records.is_empty())
-    }
-
-    /// The protocol whose roster supplies `method/arity` on
-    /// `target_id`, found among the protocols the target has any
-    /// conformance record for. Method names are unique per type, so
-    /// at most one protocol can claim the pair.
-    pub fn protocol_declaring_method(
-        &self,
-        target_id: GlobalRegistryId,
-        method: &str,
-        arity: usize,
-    ) -> Option<GlobalRegistryId> {
-        let entry = self.entries.get(&target_id)?;
-        let conformances = match &entry.kind {
-            GlobalKind::Builtin(def) => &def.conformances,
-            GlobalKind::Struct(Some(def)) => &def.conformances,
-            GlobalKind::Enum(Some(def)) => &def.conformances,
-            _ => return None,
-        };
-        conformances.keys().copied().find(|protocol_id| {
-            let Some(GlobalKind::Protocol(Some(definition))) =
-                self.entries.get(protocol_id).map(|entry| &entry.kind)
-            else {
-                return false;
-            };
-            definition
-                .methods
-                .iter()
-                .any(|candidate| candidate.name == method && candidate.arity == arity)
-        })
-    }
-
-    /// Every recorded conformance of `target_id` to `protocol_id`,
-    /// or `None` when the entry is not a builtin/struct/enum or has
-    /// no record for that protocol.
-    pub fn conformance_records(
-        &self,
-        target_id: GlobalRegistryId,
-        protocol_id: GlobalRegistryId,
-    ) -> Option<&[Conformance]> {
-        let entry = self.entries.get(&target_id)?;
-        let conformances = match &entry.kind {
-            GlobalKind::Builtin(def) => &def.conformances,
-            GlobalKind::Struct(Some(def)) => &def.conformances,
-            GlobalKind::Enum(Some(def)) => &def.conformances,
-            _ => return None,
-        };
-        conformances.get(&protocol_id).map(Vec::as_slice)
-    }
-
-    /// Whether two records for one `(target, protocol)` pair claim
-    /// an overlapping set of instantiations.
-    fn conformances_overlap(&self, a: &Conformance, b: &Conformance) -> bool {
-        match (&a.scope, &b.scope) {
-            (ConformanceScope::Parameterized { .. }, _)
-            | (_, ConformanceScope::Parameterized { .. }) => true,
-            (ConformanceScope::Concrete(a_args), ConformanceScope::Concrete(b_args)) => {
-                self.type_args_equivalent(a_args, b_args)
-            }
-        }
-    }
-
-    /// Pairwise [`types_equivalent`] over two arg lists.
-    fn type_args_equivalent(&self, a: &[ResolvedType], b: &[ResolvedType]) -> bool {
-        a.len() == b.len() && a.iter().zip(b).all(|(x, y)| types_equivalent(x, y, self))
     }
 
     /// Stamp a resolved method roster. Panics unless the entry's
@@ -984,7 +636,7 @@ impl GlobalRegistry {
 
     /// Look up a registered alias's expansion. `None` if `id` is
     /// not a `TypeAlias` entry, or if it is but the lift pass
-    /// hasn't stamped its expansion yet (mid-lift state).
+    /// has not stamped its expansion yet (mid-lift state).
     /// [`super::pipeline::resolve::types::peel_alias`] uses this to
     /// follow `Named { Global(alias_id) }` to the underlying type.
     pub fn alias_expansion(&self, id: GlobalRegistryId) -> Option<ResolvedType> {
@@ -1038,7 +690,7 @@ impl GlobalRegistry {
     /// second claim collides like any duplicate. When the declared
     /// type-param arity matches the stub's shape, the entry adopts
     /// the declared names so member lifting resolves against them.
-    /// `None` when `identifier` doesn't name an unclaimed builtin.
+    /// `None` when `identifier` does not name an unclaimed builtin.
     pub(crate) fn claim_builtin_stub(
         &mut self,
         identifier: &Identifier,
@@ -1175,7 +827,7 @@ impl GlobalRegistry {
         ResolvedType::leaf(Resolution::Global(id))
     }
 
-    /// Build the [`ResolvedType`] for a primitive literal: the
+    /// Build the [`ResolvedType`] for a primitive literal. The
     /// `Literal` variants map one-to-one onto preloaded stdlib
     /// stubs (`Bool`, `Float`, `Int`, `String`, `Unit`). Convenience
     /// wrapper over [`Self::primitive`] used by the resolve pass
@@ -1208,7 +860,7 @@ impl GlobalRegistry {
     /// Slice of generic-decl param names declared on `owner`. `None`
     /// when `owner` is unknown. A known owner with no generics
     /// returns `Some(&[])`. Used by
-    /// [`crate::pipeline::lift_signatures::types::TypeParamScope::lookup`]
+    /// [`crate::pipeline::lift_signatures::TypeParamScope::lookup`]
     /// to walk a chained scope and turn a name into
     /// `(owner, TypeParamIndex)`.
     pub fn type_params(&self, owner: GlobalRegistryId) -> Option<&[String]> {
@@ -1276,21 +928,6 @@ impl GlobalRegistry {
 
     pub fn is_empty(&self) -> bool {
         self.entries.is_empty()
-    }
-
-    /// Resolve [`UNIVERSAL_PROTOCOLS`] to their `GlobalRegistryId`s.
-    /// A name that isn't registered yet (e.g. before `Global.debug`
-    /// has been collected) is silently skipped. Callers should only
-    /// observe a non-empty list once the stdlib has loaded. Order
-    /// follows the source-order of [`UNIVERSAL_PROTOCOLS`].
-    pub fn universal_protocol_ids(&self) -> Vec<GlobalRegistryId> {
-        UNIVERSAL_PROTOCOLS
-            .iter()
-            .filter_map(|name| {
-                let identifier = Identifier::single("Global", *name);
-                self.lookup(&identifier).map(|(id, _)| id)
-            })
-            .collect()
     }
 }
 

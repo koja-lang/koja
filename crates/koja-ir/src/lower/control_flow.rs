@@ -7,7 +7,7 @@
 //! block with fewer incomings than predecessors.
 //!
 //! The "no-else `if` / `unless` are statement-shaped" path stays
-//! Unit-typed: the merge block's [`crate::BlockParam`] is `Unit` and the
+//! Unit-typed. The merge block's [`crate::BlockParam`] is `Unit` and the
 //! cond=false / cond=true edge that bypasses the body passes a
 //! freshly-emitted `Const::Unit` so every edge carries a
 //! type-matching arg.
@@ -44,7 +44,7 @@ pub(super) struct IfLowering<'a> {
 /// block to thread through.
 ///
 /// No-`else` (`else_body == None`) keeps the pre-block-params
-/// statement shape: the cond=false edge bypasses any arm body and
+/// statement shape. The cond=false edge bypasses any arm body and
 /// passes a synthesized `Const::Unit` to the merge directly.
 pub(super) fn lower_if(
     inputs: IfLowering<'_>,
@@ -92,7 +92,7 @@ pub(super) fn lower_if(
         let else_tail = lower_arm_into(else_body, ctx, else_block, merge_block, &result_ty)?;
         arm_states.push((else_tail, ctx.snapshot_slot_states()));
     } else {
-        // No `else` arm: the cond=false edge bypasses the body
+        // With no `else` arm, the cond=false edge bypasses the body
         // straight to the merge, so the "else" post-state is the
         // entry snapshot (no slot writes occur on that path).
         arm_states.push((None, entry_snapshot));
@@ -133,8 +133,8 @@ pub(super) fn lower_cond(
 
     // Pre-allocate one body-block per arm and one chained test-block
     // per non-first arm. The first arm's test runs in the surrounding
-    // `block` (the cond expression's open-flow continuation), so we
-    // don't pre-allocate one for it.
+    // `block` (the cond expression's open-flow continuation), so the
+    // lowerer does not pre-allocate one for it.
     let body_blocks: Vec<IRBlockId> = (0..arms.len())
         .map(|i| ctx.fresh_block(format!("cond_body_{i}")))
         .collect();
@@ -156,7 +156,7 @@ pub(super) fn lower_cond(
             (Some(next), _) => BranchTarget::to(next),
             (None, Some(else_block)) => BranchTarget::to(else_block),
             (None, None) => {
-                // No else and we exhausted arm tests: cond=false on
+                // No else and no arm test left, so cond=false on
                 // the last arm flows directly to merge with `Unit`.
                 // (The parser always produces an else, so this path is
                 // defensive parity with `resolve_cond`.)
@@ -185,9 +185,9 @@ pub(super) fn lower_cond(
         let else_tail = lower_arm_into(else_body, ctx, else_block, merge_block, &result_ty)?;
         arm_states.push((else_tail, ctx.snapshot_slot_states()));
     } else if !arms.is_empty() {
-        // No else and parser-produced cond: contribute the
+        // No else on a parser-produced cond. Contribute the
         // entry-snapshot to the merge so a slot that some arm
-        // writes (and others don't) doesn't get over-promoted.
+        // writes (and others do not) does not get over-promoted.
         arm_states.push((None, entry_snapshot.clone()));
     }
     if arm_states.is_empty() {
@@ -201,7 +201,7 @@ pub(super) fn lower_cond(
 /// AST-side inputs to [`lower_ternary`]. See [`IfLowering`] for the
 /// motivation. Ternary arms are expressions rather than statement
 /// bodies, so the carried payload is one `Expr` per arm rather than
-/// a `&[Statement]`, and we always have both arms (the parser
+/// a `&[Statement]`, and both arms are always present (the parser
 /// requires `else_expr`).
 pub(super) struct TernaryLowering<'a> {
     pub(super) condition: &'a Expr,
@@ -214,9 +214,9 @@ pub(super) struct TernaryLowering<'a> {
 /// shape as `lower_if`'s with-else path: one [`crate::BlockParam`] typed
 /// by `result_ty`, each arm branches into the merge with the arm's
 /// expression value as the per-edge branch arg. Strictly simpler
-/// than `lower_if` because the arms are single expressions: no
-/// statement-body walk, no [`super::ctx::FlowResult::Closed`] bookkeeping (a
-/// ternary arm cannot syntactically contain a `return`).
+/// than `lower_if` because the arms are single expressions, with no
+/// statement-body walk and no [`super::ctx::FlowResult::Closed`]
+/// bookkeeping (a ternary arm cannot syntactically contain a `return`).
 pub(super) fn lower_ternary(
     inputs: TernaryLowering<'_>,
     ctx: &mut FnLowerCtx<'_>,

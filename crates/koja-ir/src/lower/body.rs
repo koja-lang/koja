@@ -4,7 +4,7 @@
 //! `lower_arm_into`) can decide how to wire the block's terminator.
 //!
 //! [`lower_body_to_blocks`] is the script-mode seam. It owns its own
-//! [`FnLowerCtx`], so [`crate::lower_script`] doesn't need to know
+//! [`FnLowerCtx`], so [`crate::lower_script`] does not need to know
 //! about the lowering context at all.
 //!
 //! The fail-fast contract for feature-gap diagnostics lives here:
@@ -86,10 +86,10 @@ pub(super) fn lower_body(
     let mut last_value: Option<ValueId> = None;
     for stmt in body {
         // The previous statement's trailing value is now superseded.
-        // If it owned a fresh heap-leaf allocation it's discarded, so
+        // If it owned a fresh heap-leaf allocation it is discarded, so
         // free it here (it is still live in the current `block`, which
         // its producer dominates). The final statement's value is not
-        // dropped: it flows out as the body result.
+        // dropped, because it flows out as the body result.
         if let Some(discarded) = last_value.take() {
             drop_discarded_temp(ctx, block, discarded);
         }
@@ -222,7 +222,7 @@ fn lower_assignment(
     let (value_id, current) = lower_expr(value, ctx, block)?;
     let value_ty = ctx.type_of(value_id);
 
-    // Acquire the rhs as an owned value: borrowed sources (literals,
+    // Acquire the rhs as an owned value. Borrowed sources (literals,
     // reads, params) are deep-cloned so the slot holds an independent
     // heap-leaf allocation it can free at scope exit. The clone is
     // taken before the overwrite-drop, so a self-assign (`x = x`)
@@ -269,7 +269,7 @@ pub(super) fn store_owned_into_local(
     } else if value_ty.is_heap_managed() {
         // Reassignment of a live heap-managed slot. Free the prior
         // owned value before overwriting so the old allocation
-        // doesn't leak (a heap-leaf `rc--`, a composite `drop_T`).
+        // does not leak (a heap-leaf `rc--`, a composite `drop_T`).
         // The slot is never a borrowed pattern bind here. Any bind
         // the arm body assigns through (plain or destructure) was
         // detached into an owned copy at arm entry (`bind_detach`),
@@ -309,7 +309,7 @@ pub(super) fn store_owned_into_local(
 /// The walker derives each segment's struct decl + field index by
 /// substituting the previous level's `type_args` into the declared
 /// field type, the same algorithm the resolver runs in
-/// `walk_field_segments`, just one layer down (we look at IRTypes
+/// `walk_field_segments`, just one layer down (the walker looks at IRTypes
 /// for the actual `FieldGet` / `FieldSet` payloads).
 fn lower_field_assignment(
     lvalue: &LValue,
@@ -517,8 +517,8 @@ fn registry_struct(
 /// (FieldSet*) + LocalWrite`. Typecheck-resolve guarantees the head
 /// local was already declared, the leaf field's type is arithmetic,
 /// and the rhs's type matches, so this helper assumes a well-typed
-/// shape and panics on deviation. Unlike [`lower_assignment`], we
-/// never emit a `LocalDecl`, because compound assignment is
+/// shape and panics on deviation. Unlike [`lower_assignment`], this
+/// helper never emits a `LocalDecl`, because compound assignment is
 /// reassignment-only.
 fn lower_compound_assignment(
     target: &LValue,

@@ -14,12 +14,12 @@
 
 use std::collections::BTreeMap;
 
+use crate::declarations::Declarations;
 use crate::enum_decl::{IREnumDecl, IRVariantPayload};
 use crate::function::{
     BlockParam, IRBasicBlock, IRFunction, IRInstruction, IRSymbol, IRTerminator,
 };
 use crate::package::IRPackage;
-use crate::struct_decl::IRStructDecl;
 use crate::types::IRType;
 
 /// A lowered union declaration. `members` is the canonical
@@ -47,17 +47,16 @@ pub struct IRUnionDecl {
 /// align padding + max-payload }` blob the LLVM enum layout
 /// produces, with the outer rounded up to its max-align stride.
 /// Nested unions resolve through `unions`. If the inner decl
-/// isn't yet registered, fall back to `1 + max(member_size)` as
+/// is not yet registered, fall back to `1 + max(member_size)` as
 /// a conservative upper bound so the caller's first sizing pass
 /// still produces a usable number that a later
 /// [`refine_nested_union_sizes`] pass can settle.
 pub(crate) fn size_in_bytes(
     ty: &IRType,
-    structs: &BTreeMap<IRSymbol, IRStructDecl>,
-    enums: &BTreeMap<IRSymbol, IREnumDecl>,
+    declarations: &Declarations<'_>,
     unions: &BTreeMap<IRSymbol, IRUnionDecl>,
 ) -> u32 {
-    let (size, _align) = size_and_align(ty, structs, enums, unions);
+    let (size, _align) = size_and_align(ty, declarations, unions);
     size
 }
 
@@ -66,8 +65,7 @@ pub(crate) fn size_in_bytes(
 /// struct / enum walkers can apply field padding correctly.
 fn size_and_align(
     ty: &IRType,
-    structs: &BTreeMap<IRSymbol, IRStructDecl>,
-    enums: &BTreeMap<IRSymbol, IREnumDecl>,
+    declarations: &Declarations<'_>,
     unions: &BTreeMap<IRSymbol, IRUnionDecl>,
 ) -> (u32, u32) {
     const PTR_BYTES: u32 = 8;
@@ -88,18 +86,13 @@ fn size_and_align(
         IRType::Function { .. } => (2 * PTR_BYTES, PTR_BYTES),
         IRType::List(_) => (3 * PTR_BYTES, PTR_BYTES),
         IRType::Map { .. } | IRType::Set(_) => (4 * PTR_BYTES, PTR_BYTES),
-        IRType::Struct(symbol) => match structs.get(symbol) {
-            Some(decl) => sum_fields(
-                decl.fields.iter().map(|f| &f.ir_type),
-                structs,
-                enums,
-                unions,
-            ),
+        IRType::Struct(symbol) => match declarations.struct_decl(symbol) {
+            Some(decl) => sum_fields(decl.fields.iter().map(|f| &f.ir_type), declarations, unions),
             None => (PTR_BYTES, PTR_BYTES),
         },
-        IRType::Tuple(elements) => sum_fields(elements.iter(), structs, enums, unions),
-        IRType::Enum(symbol) => match enums.get(symbol) {
-            Some(decl) => enum_size(decl, structs, enums, unions),
+        IRType::Tuple(elements) => sum_fields(elements.iter(), declarations, unions),
+        IRType::Enum(symbol) => match declarations.enum_decl(symbol) {
+            Some(decl) => enum_size(decl, declarations, unions),
             None => (PTR_BYTES, PTR_BYTES),
         },
         IRType::Union { mangled, members } => match unions.get(mangled) {
@@ -107,7 +100,7 @@ fn size_and_align(
             None => {
                 let payload = members
                     .iter()
-                    .map(|m| size_in_bytes(m, structs, enums, unions))
+                    .map(|m| size_in_bytes(m, declarations, unions))
                     .max()
                     .unwrap_or(0);
                 union_size(payload)
@@ -122,8 +115,7 @@ fn size_and_align(
 /// `context.struct_type(&[...], false)` (non-packed) call.
 fn sum_fields<'a, I>(
     fields: I,
-    structs: &BTreeMap<IRSymbol, IRStructDecl>,
-    enums: &BTreeMap<IRSymbol, IREnumDecl>,
+    declarations: &Declarations<'_>,
     unions: &BTreeMap<IRSymbol, IRUnionDecl>,
 ) -> (u32, u32)
 where
@@ -132,7 +124,7 @@ where
     let mut size = 0u32;
     let mut align = 1u32;
     for field in fields {
-        let (field_size, field_align) = size_and_align(field, structs, enums, unions);
+        let (field_size, field_align) = size_and_align(field, declarations, unions);
         size = round_up(size, field_align);
         size += field_size;
         align = align.max(field_align);
@@ -141,15 +133,14 @@ where
     (size, align)
 }
 
-/// Enum payload sizing mirrors `koja-ir-llvm`'s layout: each
+/// Enum payload sizing mirrors `koja-ir-llvm`'s layout. Each
 /// variant is a `{ i8 tag, [pad x i8], payload }` blob, and the outer
 /// is `{ [count x iN] }` where `N = max_align * 8` and the byte
 /// count is `count * max_align >= max_complete_size`. Returns the
 /// outer's `(size, align)`.
 fn enum_size(
     decl: &IREnumDecl,
-    structs: &BTreeMap<IRSymbol, IRStructDecl>,
-    enums: &BTreeMap<IRSymbol, IREnumDecl>,
+    declarations: &Declarations<'_>,
     unions: &BTreeMap<IRSymbol, IRUnionDecl>,
 ) -> (u32, u32) {
     let mut max_complete_size = 0u32;
@@ -159,9 +150,9 @@ fn enum_size(
             // A unit variant has no value-position payload. Its
             // complete representation is only the tag byte.
             IRVariantPayload::Unit => (0, 1),
-            IRVariantPayload::Tuple(types) => sum_fields(types.iter(), structs, enums, unions),
+            IRVariantPayload::Tuple(types) => sum_fields(types.iter(), declarations, unions),
             IRVariantPayload::Struct(fields) => {
-                sum_fields(fields.iter().map(|f| &f.ir_type), structs, enums, unions)
+                sum_fields(fields.iter().map(|f| &f.ir_type), declarations, unions)
             }
         };
         let variant_align = payload_align.max(1);
@@ -196,25 +187,10 @@ fn union_size(payload: u32) -> (u32, u32) {
 /// the package that first observed it. Script-only unions land in
 /// the first package. Cross-package lookup goes through
 /// [`crate::IRProgram::union_decl`], so where the decl physically
-/// lives doesn't matter for backends. What matters is that every
+/// lives does not matter for backends. What matters is that every
 /// observed mangled symbol has exactly one entry.
 pub(crate) fn discover_unions(packages: &mut [IRPackage], script_blocks: &[IRBasicBlock]) {
-    let struct_index: BTreeMap<IRSymbol, IRStructDecl> = packages
-        .iter()
-        .flat_map(|pkg| {
-            pkg.structs
-                .iter()
-                .map(|(symbol, decl)| (symbol.clone(), decl.clone()))
-        })
-        .collect();
-    let enum_index: BTreeMap<IRSymbol, IREnumDecl> = packages
-        .iter()
-        .flat_map(|pkg| {
-            pkg.enums
-                .iter()
-                .map(|(symbol, decl)| (symbol.clone(), decl.clone()))
-        })
-        .collect();
+    let declarations = Declarations::new(&*packages);
     let mut seen: BTreeMap<IRSymbol, usize> = BTreeMap::new();
     let mut staged: Vec<BTreeMap<IRSymbol, IRType>> =
         packages.iter().map(|_| BTreeMap::new()).collect();
@@ -263,7 +239,7 @@ pub(crate) fn discover_unions(packages: &mut [IRPackage], script_blocks: &[IRBas
             };
             let max_payload_size = members
                 .iter()
-                .map(|m| size_in_bytes(m, &struct_index, &enum_index, &empty_unions))
+                .map(|m| size_in_bytes(m, &declarations, &empty_unions))
                 .max()
                 .unwrap_or(0);
             decls_by_pkg[idx].insert(
@@ -276,7 +252,7 @@ pub(crate) fn discover_unions(packages: &mut [IRPackage], script_blocks: &[IRBas
             );
         }
     }
-    refine_nested_union_sizes(&mut decls_by_pkg, &struct_index, &enum_index);
+    refine_nested_union_sizes(&mut decls_by_pkg, &declarations);
     for (pkg, unions) in packages.iter_mut().zip(decls_by_pkg) {
         pkg.unions.extend(unions);
     }
@@ -287,8 +263,7 @@ pub(crate) fn discover_unions(packages: &mut [IRPackage], script_blocks: &[IRBas
 /// `(A | B) | C` references settle into stable byte counts.
 fn refine_nested_union_sizes(
     staged: &mut [BTreeMap<IRSymbol, IRUnionDecl>],
-    struct_index: &BTreeMap<IRSymbol, IRStructDecl>,
-    enum_index: &BTreeMap<IRSymbol, IREnumDecl>,
+    declarations: &Declarations<'_>,
 ) {
     loop {
         let snapshot: BTreeMap<IRSymbol, IRUnionDecl> = staged
@@ -301,7 +276,7 @@ fn refine_nested_union_sizes(
                 let recomputed = decl
                     .members
                     .iter()
-                    .map(|m| size_in_bytes(m, struct_index, enum_index, &snapshot))
+                    .map(|m| size_in_bytes(m, declarations, &snapshot))
                     .max()
                     .unwrap_or(0);
                 if recomputed != decl.max_payload_size {
@@ -516,7 +491,7 @@ mod tests {
     use super::*;
 
     fn size(ty: &IRType) -> u32 {
-        size_in_bytes(ty, &BTreeMap::new(), &BTreeMap::new(), &BTreeMap::new())
+        size_in_bytes(ty, &Declarations::new(&[]), &BTreeMap::new())
     }
 
     #[test]

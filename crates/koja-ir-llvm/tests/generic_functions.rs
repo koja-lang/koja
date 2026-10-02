@@ -22,7 +22,10 @@ use koja_ir_llvm::emit_script_llvm_ir;
 
 mod common;
 
-use common::{APP_NAME, assert_contains, assert_main_shape, lower_script_source as lower_script};
+use common::{
+    APP_NAME, assert_contains, assert_main_shape, assert_not_contains,
+    lower_script_source as lower_script,
+};
 
 #[test]
 fn identity_function_distinct_args_emit_distinct_defines() {
@@ -43,10 +46,8 @@ fn identity_function_distinct_args_emit_distinct_defines() {
     assert_main_shape(&ir_text);
     assert_contains(&ir_text, "define i64 @\"TestApp.id/1_$Int64$\"(i64");
     assert_contains(&ir_text, "define ptr @\"TestApp.id/1_$String$\"(ptr");
-    assert!(
-        !ir_text.contains("@TestApp.id("),
-        "generic template `@TestApp.id` must not appear as a defined LLVM function:\n{ir_text}",
-    );
+    // The generic template itself never becomes an LLVM function.
+    assert_not_contains(&ir_text, "@TestApp.id(");
 }
 
 #[test]
@@ -96,8 +97,6 @@ fn method_on_generic_struct_emits_define_with_struct_mangled_prefix() {
         &ir_text,
         "call i64 @\"TestApp.Pair_$Int64.String$.first/1\"",
     );
-    assert!(
-        !ir_text.contains("@TestApp.Pair.first("),
-        "generic template `@TestApp.Pair.first` must not appear as a defined LLVM function:\n{ir_text}",
-    );
+    // The generic template itself never becomes an LLVM function.
+    assert_not_contains(&ir_text, "@TestApp.Pair.first(");
 }

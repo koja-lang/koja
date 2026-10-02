@@ -1,7 +1,7 @@
-//! Per-function local-variable scope. Tracks `name -> `[`LocalId`] +
-//! `LocalId -> `[`ResolvedType`] for params and `let`-introduced
-//! bindings. Function-scoped today. Block-scoped nesting is a
-//! follow-up.
+//! Per-function local-variable scope. Maps each name to its
+//! [`LocalId`] and each `LocalId` to its [`ResolvedType`] for params
+//! and `let`-introduced bindings. One scope covers the whole
+//! function. Blocks do not nest scopes.
 
 use std::collections::{BTreeMap, HashMap};
 
@@ -33,9 +33,8 @@ impl LocalScope {
     }
 
     /// Mint a fresh nameless [`LocalId`] and register its type.
-    /// Used for slots that aren't reachable by name (wildcard
-    /// closure params today, and future destructure machinery will
-    /// follow the same path). The id participates in normal local
+    /// Used for slots that are not reachable by name (wildcard
+    /// closure params). The id participates in normal local
     /// allocation so IR lower can emit `LocalDecl` / `LocalWrite`
     /// the same way it does for named slots.
     pub(crate) fn declare_anonymous(&mut self, ty: ResolvedType) -> LocalId {
@@ -56,9 +55,9 @@ impl LocalScope {
         Some((id, ty))
     }
 
-    /// Capture the visible name -> id map so per-arm pattern bindings
+    /// Capture the visible name to id map so per-arm pattern bindings
     /// can be unwound at the arm boundary. Only names are saved. The
-    /// id -> type table and the `next_id` counter intentionally keep
+    /// id to type table and the `next_id` counter intentionally keep
     /// growing so any lowering / seal walk that reaches the popped
     /// binding's `LocalId` still sees its type.
     pub(crate) fn snapshot(&self) -> LocalScopeSnapshot {
@@ -67,7 +66,7 @@ impl LocalScope {
         }
     }
 
-    /// Restore the visible name -> id map captured by [`snapshot`].
+    /// Restore the visible name to id map captured by [`Self::snapshot`].
     pub(crate) fn restore(&mut self, snapshot: LocalScopeSnapshot) {
         self.names = snapshot.names;
     }

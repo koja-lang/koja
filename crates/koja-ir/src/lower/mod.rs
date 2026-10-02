@@ -1,4 +1,4 @@
-//! Sealed-AST -> IR lowering, one submodule per language concern.
+//! Sealed-AST to IR lowering, one submodule per language concern.
 //! [`package`] holds the entry points [`lower_package`] and
 //! [`package::lower_function_inner`]. [`body`] drives statement lists, [`expr`]
 //! dispatches expressions to the submodule named after each form,

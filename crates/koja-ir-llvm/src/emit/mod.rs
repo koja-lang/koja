@@ -49,14 +49,14 @@ pub(crate) type BlockMap<'ctx> = BTreeMap<IRBlockId, BasicBlock<'ctx>>;
 /// [`koja_ir::BlockParam`]. Branch terminators consult this
 /// map post-`build_*_branch` to call `add_incoming` for every
 /// (phi, branch-arg) pair on each [`BranchTarget`]. Empty for blocks
-/// with no params (i.e. most blocks that aren't if/else/cond merges).
+/// with no params (i.e. most blocks that are not if/else/cond merges).
 /// Unit-typed params get a real `i8` phi like any other value
 /// position (see [`crate::types::ir_basic_type`]'s `Unit` arm).
 pub(crate) type PhiMap<'ctx> = BTreeMap<IRBlockId, Vec<PhiValue<'ctx>>>;
 
 /// Compute the set of [`IRBlockId`]s reachable from the entry block
 /// (`blocks[0]`) via the terminator-edge graph. Used by the LLVM
-/// emitters to short-circuit unreachable blocks: a value-producing
+/// emitters to short-circuit unreachable blocks. A value-producing
 /// `if`/`else` whose arms both diverge synthesizes a merge block
 /// that no edge feeds, and reading its `BlockParam` from the merge's
 /// `Return` would fail because nothing materializes the param's
@@ -181,7 +181,7 @@ pub(crate) fn emit_block<'ctx>(
 /// Each phi's `BasicValueEnum` is registered in `values` keyed by
 /// the IR `BlockParam.dest`, so subsequent block-body emission
 /// sees the param like any other operand. Phis for blocks with
-/// zero params don't get emitted (and don't need to, since their
+/// zero params do not get emitted (and do not need to, since their
 /// entry signature is empty), but the block still appears in the
 /// returned [`PhiMap`] with an empty `Vec` so the terminator walk
 /// can index uniformly.
@@ -230,8 +230,8 @@ pub(crate) fn emit_instructions<'ctx, 'block>(
     Ok((values, &block.terminator))
 }
 
-/// Emit `terminator` to its natural LLVM form: `Return` -> `ret`,
-/// `Branch` -> `br label %target`, `CondBranch` -> `br i1 %cond,
+/// Emit `terminator` to its natural LLVM form: `Return` becomes `ret`,
+/// `Branch` becomes `br label %target`, `CondBranch` becomes `br i1 %cond,
 /// label %then, label %else`. After each branch, walk the target's
 /// pre-declared block-param phis and call `add_incoming` for every
 /// (phi, branch-arg) pair so the join values flow along this edge.
@@ -239,9 +239,9 @@ pub(crate) fn emit_instructions<'ctx, 'block>(
 /// Misses are a compiler bug (the seal pass guarantees every
 /// target is a registered IR block).
 ///
-/// `pred` is the IR block id that owns `terminator`: the
-/// "incoming block" we feed `add_incoming` for each successor's
-/// phis.
+/// `pred` is the IR block id that owns `terminator`, the
+/// "incoming block" the emitter feeds `add_incoming` for each
+/// successor's phis.
 pub(crate) fn emit_terminator_default<'ctx>(
     ctx: &EmitContext<'ctx>,
     pred: IRBlockId,
@@ -277,7 +277,7 @@ pub(crate) fn emit_terminator_default<'ctx>(
         IRTerminator::Return { value: None } => ctx.builder.build_return(None).or_ice().map(|_| ()),
         IRTerminator::Return { value: Some(id) } => {
             // A `Return { value: Some(id) }` against a Unit-typed slot
-            // is the trailing-statement-of-a-Unit-fn shape: the IR
+            // is the trailing-statement-of-a-Unit-fn shape. The IR
             // tracks the (unobservable) Unit value for seal /
             // dominator analysis, but LLVM's matching function type
             // is `void` and `ret void` ignores the SSA dest. Skipping
@@ -389,7 +389,7 @@ pub(crate) fn lookup<'ctx>(values: &ValueMap<'ctx>, id: ValueId) -> BasicValueEn
 
 /// True when the LLVM function currently being defined has a `void`
 /// return type. Used by the `Return` terminator emitter to drop the
-/// trailing-Unit-value reference (the IR carries it, LLVM doesn't).
+/// trailing-Unit-value reference (the IR carries it, LLVM does not).
 fn current_function_returns_void(ctx: &EmitContext<'_>) -> bool {
     let Some(block) = ctx.builder.get_insert_block() else {
         return false;

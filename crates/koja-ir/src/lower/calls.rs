@@ -76,7 +76,7 @@ pub(super) fn lower_call(
             (template_symbol, return_ty)
         } else {
             // Bare static call into a sibling inside a concrete-pinned
-            // impl block (`impl CPtr<UInt8>` -> `Global.CPtr.strlen`
+            // impl block (inside `impl CPtr<UInt8>`, `Global.CPtr.strlen`
             // mangles as `Global.CPtr_$UInt8$.strlen`). Match the
             // mono-side `enqueue_member_methods` output so the call
             // resolves through the IRPackage.
@@ -153,9 +153,9 @@ fn impl_pinned_call_symbol(
 /// Lower a `Resolution::Local` callee, `f(args)` where `f` is a
 /// closure-typed local slot. Reads the slot through the normal
 /// local-or-capture path (`expr::lower_local_read` is the
-/// equivalent path, but here we inline because we already hold the
-/// slot's resolved type), lowers each arg in sequence, then emits
-/// [`IRInstruction::CallClosure`] dispatching through the loaded
+/// equivalent path, but this helper inlines it because it already
+/// holds the slot's resolved type), lowers each arg in sequence, then
+/// emits [`IRInstruction::CallClosure`] dispatching through the loaded
 /// fat pointer.
 fn lower_local_closure_call(
     local_id: LocalId,
@@ -236,7 +236,7 @@ fn closure_param_types(callee_ir_type: &IRType) -> Vec<IRType> {
 }
 
 /// Lower a call whose callee is a non-Ident expression of fn type
-/// (today: a `FieldAccess` produced by the field-as-callable
+/// (today, a `FieldAccess` produced by the field-as-callable
 /// rewrite). Lowers the callee to a fn-typed value, lowers args in
 /// order, then emits [`IRInstruction::CallClosure`].
 fn lower_closure_expr_call(
@@ -435,7 +435,7 @@ pub(super) fn lower_method_call(
             signature.params.len(),
             &method_arg_ir,
         );
-        // Enqueue the specific method we're calling so the mono
+        // Enqueue the specific method the call targets so the mono
         // worklist sees the call's `(method_id, receiver_args,
         // method_args)` triple. Static dispatch on a generic type
         // (`Task.async(...)`) never lowers the receiver expression,
@@ -496,8 +496,8 @@ fn runtime_transfer_arg(receiver: &Identifier, method: &str) -> Option<usize> {
 /// Pull the receiver's type-args off a method-call site. For
 /// instance dispatch they live on `receiver.resolution.type_args`.
 /// For static dispatch the receiver is a bare type name with no
-/// type-args attached at the AST layer (the pipeline does not yet support
-/// turbofish-style invocation), so this is currently always empty.
+/// type-args attached at the AST layer (the pipeline does not support
+/// turbofish-style invocation), so this is always empty.
 fn receiver_type_args(receiver: &Expr, _dispatch: Dispatch) -> Vec<ResolvedType> {
     // Static dispatch on a generic struct (`List.new()` against
     // `List<Int>`) stitches the inferred type-args back onto
@@ -614,11 +614,11 @@ fn method_dispatch_kind(receiver: &Expr, registry: &GlobalRegistry) -> Dispatch 
 /// `Global.Float` for method lookup. The typecheck pass treats these
 /// pairs as alias-equivalent (see
 /// the typecheck `types_equivalent` helper).
-/// Until `Int` and `Float` become proper unions over their sized
+/// Because `Int` and `Float` are not unions over their sized
 /// variants, methods registered on the unsized canonical (e.g.
 /// `Debug.format`, `Equality.equals?`, `Hash.hash`) need to be reachable
 /// through an `Int64`-resolved receiver too. Other primitive widths
-/// (`Int8`, `UInt32`, etc.) keep their own ids, since they're distinct
+/// (`Int8`, `UInt32`, etc.) keep their own ids, since they are distinct
 /// types in the alias rule, not collapsed.
 fn canonical_receiver_id(id: GlobalRegistryId, registry: &GlobalRegistry) -> GlobalRegistryId {
     let Some(entry) = registry.get(id) else {
@@ -773,11 +773,12 @@ fn emit_call(
 /// has taken its own copy. Callees follow the borrow convention (named
 /// fns / closures clone each param into its slot ([`super::ownership::promote_param`]),
 /// collection intrinsics copy-on-write `self` and acquire stored args),
-/// so an owned-temp argument (or fluent-chain receiver) we passed is
-/// dead after the call and would otherwise leak. `transferred` names a
-/// value moved into a transport (the message / reply send payload) that
-/// the runtime now owns, so it is skipped. Borrowed values (slot/field
-/// reads) and non-heap values are no-ops in [`drop_discarded_temp`].
+/// so an owned-temp argument (or fluent-chain receiver) the lowerer
+/// passed is dead after the call and would otherwise leak.
+/// `transferred` names a value moved into a transport (the message /
+/// reply send payload) that the runtime now owns, so it is skipped.
+/// Borrowed values (slot/field reads) and non-heap values are no-ops in
+/// [`drop_discarded_temp`].
 fn release_call_temps(
     ctx: &mut FnLowerCtx<'_>,
     block: IRBlockId,

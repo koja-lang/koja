@@ -40,6 +40,13 @@ const WIRE_ORDERED_ENUMS: &[(&str, &[&str])] = &[
 /// tag word without a symbol in hand.
 const OPTION_WIRE_ORDER: &[&str] = &["Some", "None"];
 
+/// `Option<ReplyTo<R>>` wire tag words the envelope packers stamp
+/// into send payloads. The receive side loads them as the enum tag,
+/// so they must equal the `Option` layout tags, which
+/// [`assert_wire_enum_order`] pins to [`OPTION_WIRE_ORDER`].
+pub(crate) const OPTION_SOME_TAG: u64 = 0;
+pub(crate) const OPTION_NONE_TAG: u64 = 1;
+
 /// Mangled-name prefix every monomorphized `Option` symbol carries.
 const OPTION_SYMBOL_PREFIX: &str = "Global.Option_$";
 
@@ -53,7 +60,7 @@ const WIRE_STRUCT_FIELDS: &[(&str, &[IRType])] = &[(
 
 /// Verify every registered wire-coupled enum declares its variants in
 /// the ABI.md wire order. Runs once per compile, after enum
-/// registration. Skips enums the program never instantiated: absent
+/// registration. Skips enums the program never instantiated. Absent
 /// from the binary means no wire coupling to protect.
 pub(crate) fn assert_wire_enum_order(ctx: &EmitContext<'_>) {
     let mut violation = None;

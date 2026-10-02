@@ -5,7 +5,7 @@
 //! Boxes are shared under `Clone` (`rc++`), so a field overwrite must
 //! release the *box* rc-aware instead of freeing it raw or dropping
 //! contents another owner may still reference. Lowering cannot emit
-//! this itself: it runs before [`crate::cycle`] stamps the boxes, so
+//! this itself. It runs before [`crate::cycle`] stamps the boxes, so
 //! every `FieldGet` / `FieldSet` it emits carries the unboxed view.
 //!
 //! Three overwrite shapes exist, keyed by the projection that pairs
@@ -201,7 +201,7 @@ fn retype_stale_pair(pair: &mut [IRInstruction], site: &OverwriteSite) {
     *ty = site.boxed.clone();
 }
 
-/// Turn a write-through projection into an owned copy: rename the
+/// Turn a write-through projection into an owned copy. Rename the
 /// `FieldGet` dest to a fresh id and hand the old id to a `Clone` of
 /// the inner value, so every existing use sees the acquired copy and
 /// the chain's stale drop releases the copy's reference, not the

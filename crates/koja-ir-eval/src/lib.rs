@@ -20,7 +20,7 @@
 
 // Keep `koja-runtime-posix`'s rlib in the link graph even if the direct
 // Rust-path uses (e.g. [`crate::scheduler::EvalSignals`], which calls
-// `koja_runtime::signals`) ever go away: the `#[unsafe(no_mangle)] pub
+// `koja_runtime::signals`) ever go away. The `#[unsafe(no_mangle)] pub
 // extern "C" fn`s referenced by [`crate::externs`] resolve at link time,
 // and without a `use` cargo would skip the rlib and the C symbols would
 // come up undefined.

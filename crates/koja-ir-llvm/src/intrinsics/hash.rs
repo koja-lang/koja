@@ -11,7 +11,7 @@ use inkwell::values::{FunctionValue, IntValue};
 use koja_ir::{HashImpl, IRFunction, IRSymbol};
 
 use crate::ctx::EmitContext;
-use crate::emit::heap_layout::load_bit_length;
+use crate::emit::heap_layout::{Rounding, load_byte_count};
 use crate::error::{IceExt, LlvmError};
 use crate::intrinsics::util::{nth_int, nth_pointer};
 
@@ -41,12 +41,7 @@ fn emit_bytes_hash<'ctx>(
     let i64_ty = ctx.context.i64_type();
     let i8_ty = ctx.context.i8_type();
     let str_ptr = nth_pointer(function, llvm_function, 0, "self");
-
-    let bit_length = load_bit_length(ctx, str_ptr, "bit_length")?;
-    let byte_count = ctx
-        .builder
-        .build_right_shift(bit_length, i64_ty.const_int(3, false), false, "byte_count")
-        .or_ice()?;
+    let byte_count = load_byte_count(ctx, str_ptr, Rounding::Floor)?;
 
     let entry = ctx
         .builder
@@ -128,7 +123,7 @@ fn emit_int_hash<'ctx>(
 
 /// SplitMix64 finalizer. Three rounds of `(x ^= x >> shift) *= odd
 /// constant`. The exact constants match every other Koja backend so
-/// hash values are byte-stable across eval / native / future JIT.
+/// hash values are byte-stable across the eval and native backends.
 fn splitmix64<'ctx>(
     ctx: &EmitContext<'ctx>,
     _symbol: &IRSymbol,

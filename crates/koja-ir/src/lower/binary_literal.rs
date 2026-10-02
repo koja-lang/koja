@@ -2,7 +2,7 @@
 //! [`IRInstruction::BinaryConstruct`].
 //!
 //! Per-segment, the typecheck layer has already validated value
-//! type vs modifier. Here we re-derive the per-segment width and
+//! type vs modifier. This module re-derives the per-segment width and
 //! kind (cheaper to recompute than to thread an annotation through
 //! the AST) plus the running `bit_offset` accumulator. The result
 //! is a [`ResolvedBinaryLayout`] + a `Vec<LoweredBinarySegment>`
@@ -170,7 +170,7 @@ fn emit_construct(
 
 /// Fold the literal's operands (static-run constructs and spliced
 /// values) into `Concat` instructions, mirroring `lower_string`'s
-/// accumulator shape. A single operand just needs to be owned: a
+/// accumulator shape. A single operand just needs to be owned. A
 /// run construct already is, and a lone borrowed splice clones so
 /// the result is independent of the source binding.
 fn concat_operands(operands: Vec<ValueId>, ctx: &mut FnLowerCtx<'_>, block: IRBlockId) -> ValueId {
@@ -213,7 +213,7 @@ pub(super) enum ClassifiedSegment {
 /// `resolve_segment`, since both call sites need the same width
 /// arithmetic to agree. The typecheck side rejects bad shapes while
 /// this side assumes typecheck has already passed and just
-/// transcribes. On a typecheck/lower mismatch we still surface a
+/// transcribes. On a typecheck/lower mismatch this side still surfaces a
 /// diagnostic rather than panicking, so a regression surfaces as a
 /// build-time error instead of a runtime crash.
 ///

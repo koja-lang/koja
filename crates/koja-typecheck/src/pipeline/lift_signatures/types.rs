@@ -41,7 +41,7 @@ pub(crate) struct ResolutionScope<'a> {
 /// Innermost first (e.g. `[fn_id, struct_id]` for an inline method
 /// on a generic struct). [`Self::lookup`] walks the stack and yields
 /// the first `(owner, index)` whose entry registers a matching param
-/// name. Names live on the [`GlobalRegistry`] entry: the scope is
+/// name. Names live on the [`GlobalRegistry`] entry, so the scope is
 /// just the chain.
 ///
 /// Empty scope (`TypeParamScope::default()`) is the right value
@@ -84,7 +84,7 @@ impl<'a> TypeParamScope<'a> {
 /// `TypeExpr::Named` matching the surrounding scope resolves to
 /// [`Resolution::TypeParam`]. Otherwise [`rewrite_through_aliases`]
 /// gets first crack (so an `alias`-bound name resolves to its
-/// target package), then we fall back to a preloaded `Global.<name>`
+/// target package), then lift falls back to a preloaded `Global.<name>`
 /// stub or a same-package struct/enum. `TypeExpr::Generic` recurses
 /// into its args. `type_params` is empty outside generic-decl bodies
 /// (see [`TypeParamScope::default`]). `scope` carries the file's
@@ -201,7 +201,7 @@ pub(super) fn resolve_return_signature(
 }
 
 /// Resolve a bare `Self` type-expression. Walks the scope from
-/// innermost outward and dispatches by owner kind: a protocol owner
+/// innermost outward and dispatches by owner kind. A protocol owner
 /// resolves to its implicit slot-0 type-param (protocols register
 /// with `["Self", ...declared]`). A struct/enum owner resolves to
 /// the type itself with each of its type-params projected as
@@ -241,9 +241,9 @@ fn resolve_self(
     ResolvedType::unresolved()
 }
 
-/// Build a `ResolvedType` for `Self` in a struct/enum context: the
-/// type itself with each of its declared type-params projected as a
-/// `TypeParam(owner, i)` so monomorphization substitutes them
+/// Build a `ResolvedType` for `Self` in a struct/enum context. This
+/// is the type itself with each of its declared type-params projected
+/// as a `TypeParam(owner, i)` so monomorphization substitutes them
 /// alongside every other body resolution naming the same param.
 /// Shared between `Self` resolution and the `self` receiver lifter
 /// in [`super::functions`] so both produce identical receiver types
@@ -340,7 +340,7 @@ fn resolve_named(
 /// 2. The current-package interpretation (`<package>.<segments…>`),
 ///    so user-declared types take precedence over `Global` for any
 ///    name they shadow.
-/// 3. For multi-segment paths only: the head-as-package
+/// 3. For multi-segment paths only, the head-as-package
 ///    interpretation (`<path[0]>.<path[1..]>`), so dotted names
 ///    like `Crypto.SHA256` resolve to the entry registered as
 ///    `Identifier { package: "Crypto", path: ["SHA256"] }`, i.e.

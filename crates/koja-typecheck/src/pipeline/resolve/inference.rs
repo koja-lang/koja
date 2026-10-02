@@ -96,10 +96,10 @@ pub(super) fn fill_from_expected(
 
 /// Surface phantom-param + bound-check diagnostics for every callee
 /// scope in `callees`. Each callee whose owner is in `subst` walks
-/// its slots: every `None` slot emits the per-context "cannot infer"
+/// its slots. Every `None` slot emits the per-context "cannot infer"
 /// message, and every filled slot is bound-checked against the callee's
 /// declared bounds via [`verify_bounds`]. Out-of-scope callees skip
-/// silently, since the substitution doesn't own them.
+/// silently, since the substitution does not own them.
 pub(super) fn finalize_inference(
     callees: &[Callee<'_>],
     subst: &Substitution,

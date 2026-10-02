@@ -20,7 +20,7 @@
 //!
 //! The shape mirrors a single function's body without leaking an
 //! [`IRFunction`] (which carries a name, parameters, and the
-//! "user-declared" semantics that scripts deliberately don't have).
+//! "user-declared" semantics that scripts deliberately do not have).
 
 use koja_typecheck::CheckedProgram;
 
@@ -28,6 +28,7 @@ use koja_ast::ast::Statement;
 use koja_ast::identifier::Identifier;
 
 use crate::constant::IRConstantValue;
+use crate::declarations::{Declarations, find_in};
 use crate::enum_decl::IREnumDecl;
 use crate::error::LowerError;
 use crate::function::{IRBasicBlock, IRFunction, IRSourceDef, IRSymbol};
@@ -40,7 +41,7 @@ use crate::types::IRType;
 
 /// Sealed output of [`lower_script`]'s success path.
 ///
-/// `blocks` is the implicit function's body: the top-level
+/// `blocks` is the implicit function's body. It holds the top-level
 /// statements of the script source lowered to one or more basic
 /// blocks, mirroring `IRFunction.blocks`. The fallthrough exit ends
 /// in `IRTerminator::Return`, and each explicit early `return` in
@@ -80,29 +81,31 @@ pub struct IRScript {
 }
 
 impl IRScript {
+    /// One index over every declaration in the script's packages,
+    /// for passes that look up many symbols.
+    pub(crate) fn declarations(&self) -> Declarations<'_> {
+        Declarations::new(&self.packages)
+    }
+
     /// Lookup a helper function across every package by its mangled
     /// symbol. Mirrors [`crate::IRProgram::function`] so the
     /// interpreter and LLVM backend can drive a single shared
     /// instruction walker over either IR shape. Only the
     /// call-resolver closure differs.
     pub fn function(&self, mangled: &str) -> Option<&IRFunction> {
-        self.packages
-            .iter()
-            .find_map(|pkg| pkg.functions.get(mangled))
+        find_in(&self.packages, |pkg| &pkg.functions, mangled)
     }
 
     /// Lookup a struct declaration across every package by its
     /// mangled symbol. Mirrors [`crate::IRProgram::struct_decl`].
     pub fn struct_decl(&self, mangled: &str) -> Option<&IRStructDecl> {
-        self.packages
-            .iter()
-            .find_map(|pkg| pkg.structs.get(mangled))
+        find_in(&self.packages, |pkg| &pkg.structs, mangled)
     }
 
     /// Lookup an enum declaration across every package by its
     /// mangled symbol. Mirrors [`crate::IRProgram::enum_decl`].
     pub fn enum_decl(&self, mangled: &str) -> Option<&IREnumDecl> {
-        self.packages.iter().find_map(|pkg| pkg.enums.get(mangled))
+        find_in(&self.packages, |pkg| &pkg.enums, mangled)
     }
 
     /// Lookup a pooled constant value across every package by its
@@ -110,9 +113,7 @@ impl IRScript {
     /// the `&IRSymbol` carried on [`crate::IRInstruction::LoadConst`]
     /// directly through the `IRSymbol: Borrow<str>` impl.
     pub fn constant_value(&self, mangled: &str) -> Option<&IRConstantValue> {
-        self.packages
-            .iter()
-            .find_map(|pkg| pkg.constants.get(mangled))
+        find_in(&self.packages, |pkg| &pkg.constants, mangled)
     }
 }
 
@@ -183,7 +184,7 @@ fn stage_script_body(
 }
 
 /// Find the populated `File.body` in `checked`, or fall back to an
-/// empty slice when no file carries one (a script source that's
+/// empty slice when no file carries one (a script source that is
 /// items-only, e.g. a REPL session before the user types a
 /// trailing expression). Panics if more than one file carries a
 /// body, since the driver must dispatch script-mode lowering on a

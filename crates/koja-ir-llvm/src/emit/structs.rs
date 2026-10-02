@@ -1,23 +1,23 @@
-//! Struct literal + field projection emission: `StructInit` and
-//! `FieldGet`. The literal path materializes through an entry-block
-//! alloca, GEP, store-per-field, then load, matching how every
-//! aggregate-shape instruction in this crate threads through LLVM
-//! (see also [`crate::emit::enums`]).
+//! Struct literal and field projection emission for `StructInit`,
+//! `FieldGet`, and `FieldSet`. Struct values are SSA aggregates, so
+//! the literal builds up from `undef` with one `insertvalue` per
+//! field and the projections use `extractvalue` / `insertvalue`
+//! directly. Enums go through memory instead (see
+//! [`crate::emit::enums`]) because their outer blob is reinterpreted
+//! per variant.
 
-use inkwell::types::StructType;
-use inkwell::values::{BasicValueEnum, PointerValue};
+use inkwell::values::BasicValueEnum;
 use koja_ir::{IRSymbol, IRType, StructFieldInit};
 
 use crate::ctx::EmitContext;
 use crate::error::{IceExt, LlvmError};
-use crate::types::ir_basic_type;
 
 use super::indirect::{emit_box_value, emit_unbox_value};
 use super::{ValueMap, lookup};
 
-/// Materialize a struct literal: hoist a scratch alloca to the
-/// entry block, store each field through a `getelementptr`, then
-/// load the populated struct out as the instruction's SSA value.
+/// Materialize a struct literal. Start from `undef` and
+/// `insertvalue` each field in IR order, naming the final value
+/// after the struct.
 pub(super) fn emit_struct_init<'ctx>(
     ctx: &EmitContext<'ctx>,
     fields: &[StructFieldInit],
@@ -25,7 +25,7 @@ pub(super) fn emit_struct_init<'ctx>(
     values: &ValueMap<'ctx>,
 ) -> Result<BasicValueEnum<'ctx>, LlvmError> {
     let struct_type = ctx.layouts.struct_type(ty.mangled());
-    let alloca = ctx.build_entry_alloca(struct_type, &format!("{ty}_tmp"));
+    let mut aggregate = struct_type.get_undef();
     for field in fields {
         let raw_value = lookup(values, field.value);
         let declared_ty = ctx.layouts.struct_field_ir_type(ty, field.index as usize);
@@ -38,15 +38,21 @@ pub(super) fn emit_struct_init<'ctx>(
             )?,
             _ => raw_value,
         };
-        let field_ptr = build_field_gep(ctx, struct_type, alloca, field.index, ty)?;
-        ctx.builder.build_store(field_ptr, stored).or_ice()?;
+        aggregate = ctx
+            .builder
+            .build_insert_value(
+                aggregate,
+                stored,
+                field.index,
+                &format!("{ty}_field_{}", field.index),
+            )
+            .or_ice()?
+            .into_struct_value();
     }
-    ctx.builder
-        .build_load(struct_type, alloca, ty.mangled())
-        .or_ice()
+    Ok(aggregate.into())
 }
 
-/// Fill an `Indirect` slot: box an unboxed inner value, or store an
+/// Fill an `Indirect` slot. Box an unboxed inner value, or store an
 /// already-boxed pointer directly (clone glue passes the shared box
 /// through). The two are distinguishable by LLVM value kind, since a
 /// box's inner type is always an aggregate (cycle breaking only
@@ -63,13 +69,12 @@ pub(super) fn box_or_pass_through<'ctx>(
     emit_box_value(ctx, inner, value, label)
 }
 
-/// Project a single field out of a struct-typed SSA value via a
-/// scratch entry-block alloca + GEP + load. The decl's recorded type
-/// drives the load shape. A cycle-broken `Indirect(_)` slot loads a
-/// `ptr` and then unboxes for the usual unboxed instruction view, or
-/// hands the raw box pointer through when the instruction's
-/// `field_type` is itself `Indirect` (glue and overwrite sites
-/// project the box to `rc++` / release it).
+/// Project a single field out of a struct-typed SSA value with
+/// `extractvalue`. A cycle-broken `Indirect(_)` slot yields a `ptr`,
+/// which is then unboxed for the usual unboxed instruction view, or
+/// handed through raw when the instruction's `field_type` is itself
+/// `Indirect` (glue and overwrite sites project the box to `rc++` /
+/// release it).
 pub(super) fn emit_field_get<'ctx>(
     ctx: &EmitContext<'ctx>,
     base: BasicValueEnum<'ctx>,
@@ -80,19 +85,10 @@ pub(super) fn emit_field_get<'ctx>(
     let declared_ty = ctx
         .layouts
         .struct_field_ir_type(struct_symbol, field_index as usize);
-    let struct_type = ctx.layouts.struct_type(struct_symbol.mangled());
-    let struct_value = base.into_struct_value();
-    let alloca = ctx.build_entry_alloca(struct_type, "field_tmp");
-    ctx.builder.build_store(alloca, struct_value).or_ice()?;
     let label = format!("field_{field_index}");
-    let field_ptr = ctx
+    let extracted = ctx
         .builder
-        .build_struct_gep(struct_type, alloca, field_index, &label)
-        .or_ice()?;
-    let field_llvm_type = ir_basic_type(ctx, &declared_ty)?;
-    let loaded = ctx
-        .builder
-        .build_load(field_llvm_type, field_ptr, &label)
+        .build_extract_value(base.into_struct_value(), field_index, &label)
         .or_ice()?;
     if let IRType::Indirect(inner) = &declared_ty
         && !matches!(field_type, IRType::Indirect(_))
@@ -100,18 +96,16 @@ pub(super) fn emit_field_get<'ctx>(
         return emit_unbox_value(
             ctx,
             inner,
-            loaded.into_pointer_value(),
+            extracted.into_pointer_value(),
             &format!("{label}_unbox"),
         );
     }
-    Ok(loaded)
+    Ok(extracted)
 }
 
 /// Produce a struct-typed SSA value identical to `base` except the
-/// field at `field_index` is replaced by `value`. Same alloca + GEP
-/// pattern as [`emit_field_get`]: copy the base struct into a scratch
-/// alloca, GEP-store the new field over its slot, then reload the
-/// whole struct as the instruction's SSA destination.
+/// field at `field_index` is replaced by `value`, with one
+/// `insertvalue` over the base aggregate.
 pub(super) fn emit_field_set<'ctx>(
     ctx: &EmitContext<'ctx>,
     base: BasicValueEnum<'ctx>,
@@ -131,30 +125,13 @@ pub(super) fn emit_field_set<'ctx>(
         )?,
         _ => value,
     };
-    let struct_type = ctx.layouts.struct_type(struct_symbol.mangled());
-    let struct_value = base.into_struct_value();
-    let alloca = ctx.build_entry_alloca(struct_type, "field_set_tmp");
-    ctx.builder.build_store(alloca, struct_value).or_ice()?;
-    let label = format!("field_set_{field_index}");
-    let field_ptr = ctx
-        .builder
-        .build_struct_gep(struct_type, alloca, field_index, &label)
-        .or_ice()?;
-    ctx.builder.build_store(field_ptr, stored).or_ice()?;
     ctx.builder
-        .build_load(struct_type, alloca, struct_symbol.mangled())
+        .build_insert_value(
+            base.into_struct_value(),
+            stored,
+            field_index,
+            struct_symbol.mangled(),
+        )
         .or_ice()
-}
-
-fn build_field_gep<'ctx>(
-    ctx: &EmitContext<'ctx>,
-    struct_type: StructType<'ctx>,
-    base_ptr: PointerValue<'ctx>,
-    field_index: u32,
-    symbol: &IRSymbol,
-) -> Result<PointerValue<'ctx>, LlvmError> {
-    let label = format!("{symbol}_field_{field_index}");
-    ctx.builder
-        .build_struct_gep(struct_type, base_ptr, field_index, &label)
-        .or_ice()
+        .map(|v| v.into_struct_value().into())
 }

@@ -74,7 +74,7 @@ pub fn format_resolved_type(ty: &ResolvedType, registry: &GlobalRegistry) -> Str
 }
 
 /// Render a [`FunctionSignature`] under `display_name`, including
-/// type-parameter names from the owning [`RegistryEntry`].
+/// type-parameter names from the owning [`koja_typecheck::RegistryEntry`].
 pub fn format_function_signature(
     display_name: &str,
     sig: &FunctionSignature,

@@ -7,7 +7,7 @@
 //! diagnostic label and an example fragment for the empty-and-no-
 //! hint case.
 //!
-//! The hint, when present, always wins: every entry whose
+//! The hint, when present, always wins. Every entry whose
 //! resolution disagrees emits a mismatch diagnostic but the hint
 //! is what the caller stamps. Without a hint the floor is set by
 //! the first resolved entry, and later entries that disagree diagnose
@@ -23,8 +23,8 @@ use super::super::types::display_resolution;
 
 /// Diagnostic phrasing for a single axis. Two strings rather than
 /// one because the wording is two adjectives ("list literal
-/// element" vs "map literal key") and inlining the join lets us
-/// write each pair once at the call site without `format!`-ing.
+/// element" vs "map literal key") and inlining the join lets the
+/// caller write each pair once without `format!`-ing.
 pub(super) struct AxisLabel<'a> {
     /// Phrase identifying the literal kind, e.g. "list literal",
     /// "map literal".

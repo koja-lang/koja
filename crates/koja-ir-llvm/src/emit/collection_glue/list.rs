@@ -1,4 +1,4 @@
-//! `List<T>` clone / deep-copy / drop glue: the dynamic-array buffer
+//! `List<T>` clone / deep-copy / drop glue, the dynamic-array buffer
 //! walk. Layout is `{ buf_ptr, len, cap }` (see
 //! [`crate::types::list_value_type`]), with elements living off-heap
 //! behind `buf_ptr` as a flat `[T; cap]`.
@@ -8,11 +8,12 @@ use koja_ir::{IRFunction, IRType};
 
 use crate::ctx::EmitContext;
 use crate::error::{IceExt, LlvmError};
-use crate::intrinsics::element::{acquire_buffer, deep_copy_buffer, release_buffer};
+use crate::intrinsics::element::{ElementOp, walk_buffer};
 use crate::intrinsics::util::{build_list_struct, extract_int, extract_pointer, nth_struct};
 use crate::runtime::{declare_free_extern, declare_malloc_extern, declare_memcpy_extern};
+use crate::types::abi_size;
 
-use super::{ElementCopy, abi_size, call_ptr};
+use super::call_ptr;
 
 /// `clone_List<T>` / `deep_copy_List<T>`: copy the backing buffer,
 /// then acquire (clone) or deep-copy (process-boundary) every element
@@ -22,7 +23,7 @@ pub(super) fn copy_list<'ctx>(
     function: &IRFunction,
     llvm_function: FunctionValue<'ctx>,
     element: &IRType,
-    copy: ElementCopy,
+    op: ElementOp,
 ) -> Result<(), LlvmError> {
     let self_val = nth_struct(function, llvm_function, 0, "self");
     let src_buf = extract_pointer(ctx, self_val, 0, "src_buf")?;
@@ -44,26 +45,16 @@ pub(super) fn copy_list<'ctx>(
         )
         .or_ice()?;
 
-    match copy {
-        ElementCopy::Acquire => acquire_buffer(
-            ctx,
-            llvm_function,
-            element,
-            new_buf,
-            len,
-            element_size,
-            "clone",
-        )?,
-        ElementCopy::Deep => deep_copy_buffer(
-            ctx,
-            llvm_function,
-            element,
-            new_buf,
-            len,
-            element_size,
-            "deep_copy",
-        )?,
-    }
+    walk_buffer(
+        ctx,
+        llvm_function,
+        op,
+        element,
+        new_buf,
+        len,
+        element_size,
+        "copy",
+    )?;
 
     let result = build_list_struct(ctx, new_buf, len, len)?;
     ctx.builder.build_return(Some(&result)).or_ice().map(|_| ())
@@ -81,7 +72,16 @@ pub(super) fn drop_list<'ctx>(
     let len = extract_int(ctx, self_val, 1, "len")?;
     let element_size = element_byte_size(ctx, element)?;
 
-    release_buffer(ctx, llvm_function, element, buf, len, element_size, "drop")?;
+    walk_buffer(
+        ctx,
+        llvm_function,
+        ElementOp::Release,
+        element,
+        buf,
+        len,
+        element_size,
+        "drop",
+    )?;
 
     let free = declare_free_extern(ctx);
     ctx.builder.build_call(free, &[buf.into()], "").or_ice()?;

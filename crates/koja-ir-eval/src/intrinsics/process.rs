@@ -6,7 +6,7 @@
 //! correlation, same `CallError` mapping), but traffics typed
 //! [`Value`]s through the core mailbox instead of serialized bytes.
 //!
-//! Only [`Ref.call`](RefMethod::Call) suspends: it parks on the caller's
+//! Only [`Ref.call`](RefMethod::Call) suspends. It parks on the caller's
 //! one-shot reply slot and yields to the driver until the reply lands or
 //! the timeout fires. The rest are non-blocking deliveries that return
 //! immediately.
@@ -153,8 +153,9 @@ async fn ref_call<R: CallResolver>(call: IntrinsicCall<'_, R>) -> Result<Value, 
 
     let caller = scheduler::current_pid();
     let token = scheduler::mint_token();
-    // Register interest before sending so a fast reply can't beat the caller
-    // to the awaited-token check (mirrors native's `koja_rt_call_token`).
+    // Register interest before sending so a fast reply cannot beat the
+    // caller to the awaited-token check (mirrors native's
+    // `koja_rt_call_token`).
     scheduler::set_awaiting_reply(caller, token);
     scheduler::deliver(
         target,

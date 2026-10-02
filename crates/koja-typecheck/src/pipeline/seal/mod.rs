@@ -1,6 +1,6 @@
-//! Seal sub-pass: assert every relevant [`Resolution`] /
+//! The seal sub-pass asserts every relevant [`Resolution`] /
 //! [`koja_ast::identifier::ResolvedType`] annotation is populated.
-//! Panics on violation per [`COMPILER-NORTHSTAR.md`]: seal failures
+//! Panics on violation per [`COMPILER-NORTHSTAR.md`]. Seal failures
 //! are upstream compiler bugs, not user errors.
 //!
 //! # Module layout
@@ -13,7 +13,7 @@
 //!   [`Literal`] / [`Binding`] / [`EnumUnit`] / [`EnumTuple`] /
 //!   [`EnumStruct`] / [`Or`] / [`Struct`]).
 //!
-//! Top-level orchestration (`seal_ast` -> `seal_file` ->
+//! Top-level orchestration (`seal_ast` then `seal_file` then
 //! `seal_function` / `seal_constant`) plus the cross-module
 //! helpers ([`seal_no_type_param`], [`seal_panic`]) live here so
 //! submodules need only `pub(super)` visibility.

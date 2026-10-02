@@ -26,7 +26,7 @@ fn body_of_define<'a>(ir_text: &'a str, needles: &[&str]) -> &'a str {
         .lines()
         .find(|line| line.starts_with("define") && needles.iter().all(|n| line.contains(n)))
         .map(|line| ir_text.find(line).unwrap())
-        .unwrap_or_else(|| panic!("no `define` containing {needles:?} in:\n{ir_text}"));
+        .unwrap_or_else(|| panic!("no `define` containing {needles:?} in the emitted module"));
     let body = &ir_text[header_start..];
     let body_end = body
         .find("\n}")
@@ -50,7 +50,7 @@ fn rebind_loop_call_site_routes_through_the_append_twin() {
     let call_line = ir_text
         .lines()
         .find(|line| line.contains("call") && line.contains(".$consume$"))
-        .unwrap_or_else(|| panic!("no call to a `.$consume$` twin in:\n{ir_text}"));
+        .unwrap_or_else(|| panic!("no call to a `.$consume$` twin in the emitted module"));
     assert!(
         call_line.contains("append"),
         "expected the fused call to target the append twin, got: {call_line}",

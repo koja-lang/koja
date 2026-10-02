@@ -5,8 +5,8 @@
 //! Field positions accept any pattern shape: wildcards, bindings,
 //! literals, nested structs, nested enums, or-alternatives. Omitted
 //! fields are implicit wildcards. IR lowering picks up the field
-//! bindings and any chained literal checks via
-//! [`super::super::super::lower::patterns`].
+//! bindings and any chained literal checks in koja-ir's
+//! `lower::patterns`.
 
 use koja_ast::ast::{Diagnostic, FieldPattern, Name, name_texts, path_text};
 use koja_ast::identifier::{Resolution, ResolvedType};

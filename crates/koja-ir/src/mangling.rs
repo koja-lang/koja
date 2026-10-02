@@ -177,7 +177,7 @@ pub fn drop_glue_symbol(ty: &IRType) -> IRSymbol {
 /// for `ty` (`<type>.$envdrop$`). The runtime's type-erased discard
 /// path (`koja-runtime-posix/src/wire.rs`) frees an undelivered message by
 /// calling a `void(ptr)` function over the payload bytes, an ABI the
-/// by-value [`drop_glue_symbol`] can't satisfy. The LLVM backend
+/// by-value [`drop_glue_symbol`] cannot satisfy. The LLVM backend
 /// synthesizes this thin shim per sent message / reply type. It loads
 /// the payload through the pointer and routes into the by-value
 /// `drop_T`. Same `$`-fenced collision-free rooting as the other glue.
@@ -188,7 +188,7 @@ pub fn envelope_drop_glue_symbol(ty: &IRType) -> IRSymbol {
 /// Symbol of the synthesized capture-release glue for a closure body
 /// (`<body>.$drop_env$`). Hung off the closure body's own symbol, so
 /// it stays in the body's package and is collision-free against any
-/// user method (the `$`-fenced suffix can't appear in a surface
+/// user method (the `$`-fenced suffix cannot appear in a surface
 /// name). Both `crate::lower::closures` (which mints the
 /// `FunctionKind::DropClosureGlue` body) and the LLVM backend
 /// (which takes its address at `MakeClosure`) derive through this
@@ -219,7 +219,7 @@ pub fn closure_eq_env_symbol(body: &IRSymbol) -> IRSymbol {
     body.derived(".$eq_env$")
 }
 
-/// The identity a closure value carries for equality: a 64-bit
+/// The identity a closure value carries for equality. It is a 64-bit
 /// FNV-1a hash of its body symbol, stamped into the env header's
 /// `site_id` word at `MakeClosure`. Two closures built from the same
 /// function or closure expression share a body and so a site id.

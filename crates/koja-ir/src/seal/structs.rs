@@ -307,7 +307,7 @@ pub(super) fn script_body_instructions(
 
 // Inline unit coverage for the struct seal invariants. They live next to
 // the helpers because [`seal_struct_decls`] / [`seal_struct_ops`] are
-// `pub(super)`, so integration tests under `tests/` can't reach them, and
+// `pub(super)`, so integration tests under `tests/` cannot reach them, and
 // every other seal-violation path in the crate is exercised the same way
 // (the lowering pass produces correct IR by construction, so the only way
 // to drive a violation is to hand-build a malformed [`IRPackage`] /

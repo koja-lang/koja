@@ -20,15 +20,16 @@
 //! - **scalar / no-glue aggregate**: nothing, the `memcpy` already
 //!   produced an independent value.
 //!
-//! The slot forms operate in place on a pointer into the buffer. The
-//! buffer forms wrap them in a `0..count` walk for the contiguous
-//! element arrays both `List` and the hashtable entry buffer use.
+//! [`ElementOp`] names the op. [`apply_in_slot`] runs it in place on
+//! a pointer into the buffer. [`walk_buffer`] wraps that in a
+//! `0..count` walk for the contiguous element arrays both `List` and
+//! the hashtable entry buffer use.
 
 use inkwell::AddressSpace;
 use inkwell::IntPredicate;
 use inkwell::values::{BasicValueEnum, FunctionValue, IntValue, PointerValue};
-use koja_ir::IRType;
 use koja_ir::mangling::{clone_glue_symbol, deep_copy_glue_symbol, drop_glue_symbol};
+use koja_ir::{IRSymbol, IRType};
 
 use crate::ctx::EmitContext;
 use crate::emit::closures::load_closure_env_ptr;
@@ -46,8 +47,8 @@ use crate::types::{closure_fat_ptr_type, ir_basic_type};
 /// should store or return: a heap leaf passes through after `rc++`, a
 /// composite becomes an independent deep clone via its `clone_T` glue,
 /// and a scalar (or no-glue aggregate) passes through untouched. This
-/// is the value-form counterpart to [`acquire_in_slot`], which works
-/// on a buffer slot in place.
+/// is the value-form counterpart to [`apply_in_slot`] with
+/// [`ElementOp::Acquire`], which works on a buffer slot in place.
 pub(crate) fn acquire_value<'ctx>(
     ctx: &EmitContext<'ctx>,
     element: &IRType,
@@ -74,114 +75,93 @@ pub(crate) fn acquire_value<'ctx>(
     }
 }
 
-/// Acquire the element at `slot` (a pointer into a freshly-copied
-/// buffer): bump a heap leaf's / closure env's rc, or overwrite the
-/// slot with a deep clone for a composite. Scalars need nothing, the
-/// `memcpy` already copied them.
-pub(crate) fn acquire_in_slot<'ctx>(
-    ctx: &EmitContext<'ctx>,
-    element: &IRType,
-    slot: PointerValue<'ctx>,
-) -> Result<(), LlvmError> {
-    if is_heap_leaf(element) {
-        let payload = load_pointer(ctx, slot, "elem")?;
-        let base = block_base(ctx, payload, "elem.block_base")?;
-        let rc_inc = declare_rc_inc_extern(ctx);
-        ctx.builder
-            .build_call(rc_inc, &[base.into()], "elem.rc_inc")
-            .or_ice()
-            .map(|_| ())
-    } else if matches!(element, IRType::Function { .. }) {
-        let env = load_env_from_slot(ctx, slot)?;
-        let rc_inc = declare_rc_inc_extern(ctx);
-        ctx.builder
-            .build_call(rc_inc, &[env.into()], "elem.env_rc_inc")
-            .or_ice()
-            .map(|_| ())
-    } else if let Some(clone_glue) = ctx.declared_function(&clone_glue_symbol(element)) {
-        copy_slot_through_glue(ctx, element, slot, clone_glue, "clone")
-    } else {
-        Ok(())
-    }
+/// The ownership op a slot or buffer walk applies to each element.
+#[derive(Clone, Copy)]
+pub(crate) enum ElementOp {
+    /// Make the slot own an independent reference, `rc++` on a heap
+    /// leaf or closure env and `clone_T` for a composite.
+    Acquire,
+    /// Sever every share with a fresh block or env, or `deep_copy_T`
+    /// for a composite. The process-boundary analog of `Acquire`.
+    DeepCopy,
+    /// Hand the reference back, `rc--` on a heap leaf or closure env
+    /// and `drop_T` for a composite.
+    Release,
 }
 
-/// Deep-copy the element at `slot` (a pointer into a freshly-copied
-/// buffer): swap a heap leaf for a fresh block, a closure for a fresh
-/// env, or overwrite the slot through `deep_copy_T` for a composite.
-/// Scalars need nothing, the `memcpy` already copied them. The
-/// process-boundary analog of [`acquire_in_slot`].
-pub(crate) fn deep_copy_in_slot<'ctx>(
+/// Apply `op` to the element at `slot`, a pointer into a buffer.
+/// Scalars and no-glue aggregates need nothing, the `memcpy` that
+/// produced the buffer already copied them.
+pub(crate) fn apply_in_slot<'ctx>(
     ctx: &EmitContext<'ctx>,
+    op: ElementOp,
     element: &IRType,
     slot: PointerValue<'ctx>,
 ) -> Result<(), LlvmError> {
     if is_heap_leaf(element) {
         let payload = load_pointer(ctx, slot, "elem")?;
-        let deep_copy = declare_heap_deep_copy_extern(ctx);
-        let copy = ctx.call_basic(deep_copy, &[payload.into()], "elem.deep_copy")?;
-        ctx.builder.build_store(slot, copy).or_ice().map(|_| ())
+        match op {
+            ElementOp::Acquire => {
+                let base = block_base(ctx, payload, "elem.block_base")?;
+                ctx.call_rt_unit(declare_rc_inc_extern, &[base.into()])
+            }
+            ElementOp::DeepCopy => {
+                let deep_copy = declare_heap_deep_copy_extern(ctx);
+                let copy = ctx.call_basic(deep_copy, &[payload.into()], "elem.deep_copy")?;
+                ctx.builder.build_store(slot, copy).or_ice().map(|_| ())
+            }
+            ElementOp::Release => {
+                let base = block_base(ctx, payload, "elem.block_base")?;
+                ctx.call_rt_unit(declare_rc_dec_extern, &[base.into()])
+            }
+        }
     } else if matches!(element, IRType::Function { .. }) {
         let env_slot = closure_env_slot(ctx, slot)?;
         let env = load_pointer(ctx, env_slot, "elem.env")?;
-        let deep_copy = declare_closure_deep_copy_extern(ctx);
-        let copy = ctx.call_basic(deep_copy, &[env.into()], "elem.env_deep_copy")?;
-        ctx.builder.build_store(env_slot, copy).or_ice().map(|_| ())
-    } else if let Some(deep_copy_glue) = ctx.declared_function(&deep_copy_glue_symbol(element)) {
-        copy_slot_through_glue(ctx, element, slot, deep_copy_glue, "deep_copy")
-    } else {
-        Ok(())
-    }
-}
-
-/// Release the element at `slot`: rc-decrement a heap leaf / closure
-/// env, recurse into `drop_T` for a composite, or do nothing for a
-/// scalar.
-pub(crate) fn release_in_slot<'ctx>(
-    ctx: &EmitContext<'ctx>,
-    element: &IRType,
-    slot: PointerValue<'ctx>,
-) -> Result<(), LlvmError> {
-    if is_heap_leaf(element) {
-        let payload = load_pointer(ctx, slot, "elem")?;
-        let base = block_base(ctx, payload, "elem.block_base")?;
-        let rc_dec = declare_rc_dec_extern(ctx);
-        ctx.builder
-            .build_call(rc_dec, &[base.into()], "elem.rc_dec")
-            .or_ice()
-            .map(|_| ())
-    } else if matches!(element, IRType::Function { .. }) {
-        let env = load_env_from_slot(ctx, slot)?;
-        let rc_dec = declare_closure_rc_dec_extern(ctx);
-        ctx.builder
-            .build_call(rc_dec, &[env.into()], "elem.env_rc_dec")
-            .or_ice()
-            .map(|_| ())
-    } else if let Some(drop_glue) = ctx.declared_function(&drop_glue_symbol(element)) {
+        match op {
+            ElementOp::Acquire => ctx.call_rt_unit(declare_rc_inc_extern, &[env.into()]),
+            ElementOp::DeepCopy => {
+                let deep_copy = declare_closure_deep_copy_extern(ctx);
+                let copy = ctx.call_basic(deep_copy, &[env.into()], "elem.env_deep_copy")?;
+                ctx.builder.build_store(env_slot, copy).or_ice().map(|_| ())
+            }
+            ElementOp::Release => ctx.call_rt_unit(declare_closure_rc_dec_extern, &[env.into()]),
+        }
+    } else if let Some(glue) = ctx.declared_function(&glue_symbol(op, element)) {
         let element_ty = ir_basic_type(ctx, element)?;
         let value = ctx.builder.build_load(element_ty, slot, "elem").or_ice()?;
-        ctx.builder
-            .build_call(drop_glue, &[value.into()], "elem.drop")
-            .or_ice()
-            .map(|_| ())
+        match op {
+            ElementOp::Acquire | ElementOp::DeepCopy => {
+                let copied = ctx.call_basic(glue, &[value.into()], glue_label(op))?;
+                ctx.builder.build_store(slot, copied).or_ice().map(|_| ())
+            }
+            ElementOp::Release => ctx
+                .builder
+                .build_call(glue, &[value.into()], glue_label(op))
+                .or_ice()
+                .map(|_| ()),
+        }
     } else {
         Ok(())
     }
 }
 
-/// Load the element at `slot`, pass it through `glue` (`clone_T` /
-/// `deep_copy_T`), and store the result back: the shared composite
-/// path of [`acquire_in_slot`] and [`deep_copy_in_slot`].
-fn copy_slot_through_glue<'ctx>(
-    ctx: &EmitContext<'ctx>,
-    element: &IRType,
-    slot: PointerValue<'ctx>,
-    glue: FunctionValue<'ctx>,
-    label: &str,
-) -> Result<(), LlvmError> {
-    let element_ty = ir_basic_type(ctx, element)?;
-    let original = ctx.builder.build_load(element_ty, slot, "elem").or_ice()?;
-    let copied = ctx.call_basic(glue, &[original.into()], &format!("elem.{label}"))?;
-    ctx.builder.build_store(slot, copied).or_ice().map(|_| ())
+/// The composite glue `op` routes through for `element`.
+fn glue_symbol(op: ElementOp, element: &IRType) -> IRSymbol {
+    match op {
+        ElementOp::Acquire => clone_glue_symbol(element),
+        ElementOp::DeepCopy => deep_copy_glue_symbol(element),
+        ElementOp::Release => drop_glue_symbol(element),
+    }
+}
+
+/// SSA name for the composite glue call `op` emits.
+fn glue_label(op: ElementOp) -> &'static str {
+    match op {
+        ElementOp::Acquire => "elem.clone",
+        ElementOp::DeepCopy => "elem.deep_copy",
+        ElementOp::Release => "elem.drop",
+    }
 }
 
 /// GEP to the `env_ptr` field of the closure fat pointer stored at
@@ -195,21 +175,14 @@ fn closure_env_slot<'ctx>(
         .or_ice()
 }
 
-/// Load the env pointer of the closure fat pointer stored at `slot`.
-fn load_env_from_slot<'ctx>(
-    ctx: &EmitContext<'ctx>,
-    slot: PointerValue<'ctx>,
-) -> Result<PointerValue<'ctx>, LlvmError> {
-    let env_slot = closure_env_slot(ctx, slot)?;
-    load_pointer(ctx, env_slot, "elem.env")
-}
-
-/// Acquire every element in `buf[0..count]` (a contiguous element
-/// array). [`acquire_in_slot`] is a no-op for scalars, so this whole
-/// walk is skipped when the element owns no heap.
-pub(crate) fn acquire_buffer<'ctx>(
+/// Apply `op` to every element in `buf[0..count]`, a contiguous
+/// element array. [`apply_in_slot`] is a no-op for scalars, so the
+/// whole walk is skipped when the element owns no heap.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn walk_buffer<'ctx>(
     ctx: &EmitContext<'ctx>,
     llvm_function: FunctionValue<'ctx>,
+    op: ElementOp,
     element: &IRType,
     buf: PointerValue<'ctx>,
     count: IntValue<'ctx>,
@@ -221,47 +194,7 @@ pub(crate) fn acquire_buffer<'ctx>(
     }
     index_loop(ctx, llvm_function, count, label, |ctx, index| {
         let slot = element_slot(ctx, buf, index, element_size)?;
-        acquire_in_slot(ctx, element, slot)
-    })
-}
-
-/// Deep-copy every element in `buf[0..count]`, the process-boundary
-/// analog of [`acquire_buffer`].
-pub(crate) fn deep_copy_buffer<'ctx>(
-    ctx: &EmitContext<'ctx>,
-    llvm_function: FunctionValue<'ctx>,
-    element: &IRType,
-    buf: PointerValue<'ctx>,
-    count: IntValue<'ctx>,
-    element_size: IntValue<'ctx>,
-    label: &str,
-) -> Result<(), LlvmError> {
-    if !owns_heap(ctx, element) {
-        return Ok(());
-    }
-    index_loop(ctx, llvm_function, count, label, |ctx, index| {
-        let slot = element_slot(ctx, buf, index, element_size)?;
-        deep_copy_in_slot(ctx, element, slot)
-    })
-}
-
-/// Release every element in `buf[0..count]`, the drop analog of
-/// [`acquire_buffer`].
-pub(crate) fn release_buffer<'ctx>(
-    ctx: &EmitContext<'ctx>,
-    llvm_function: FunctionValue<'ctx>,
-    element: &IRType,
-    buf: PointerValue<'ctx>,
-    count: IntValue<'ctx>,
-    element_size: IntValue<'ctx>,
-    label: &str,
-) -> Result<(), LlvmError> {
-    if !owns_heap(ctx, element) {
-        return Ok(());
-    }
-    index_loop(ctx, llvm_function, count, label, |ctx, index| {
-        let slot = element_slot(ctx, buf, index, element_size)?;
-        release_in_slot(ctx, element, slot)
+        apply_in_slot(ctx, op, element, slot)
     })
 }
 

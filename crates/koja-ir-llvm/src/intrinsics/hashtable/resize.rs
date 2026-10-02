@@ -18,8 +18,8 @@ use super::{HashtableLayout, STATE_EMPTY, STATE_OCCUPIED};
 
 /// Emit the load-factor check, the resize-and-rehash path, and the
 /// resize-or-not phi join. Returns the live table snapshot for the
-/// probe block to consume: same `length` as the input (no insert
-/// has happened yet), but possibly swapped buffers and grown
+/// probe block to consume, with the same `length` as the input (no
+/// insert has happened yet), but possibly swapped buffers and grown
 /// `capacity`. Builder ends positioned at the post-join block.
 pub(super) fn emit_resize_if_needed<'ctx>(
     ctx: &EmitContext<'ctx>,
@@ -137,12 +137,12 @@ pub(super) fn emit_resize_if_needed<'ctx>(
     })
 }
 
-/// Rehash loop: for each `ri` in `0..old.capacity`, if the old
+/// Rehash loop. For each `ri` in `0..old.capacity`, if the old
 /// state is OCCUPIED, hash the old key, linear-probe in the new
 /// buffer, memcpy the entry, mark new state OCCUPIED. Reads
 /// `key_ops.hash_fn` + `key_ops.key_basic_ty`. `eq_fn` is never
 /// consulted because moving an already-bucketed key into a larger
-/// buffer can't collide with itself. Builder ends positioned at
+/// buffer cannot collide with itself. Builder ends positioned at
 /// the rehash-done block (caller's next emission continues from
 /// there).
 fn emit_rehash_loop<'ctx>(

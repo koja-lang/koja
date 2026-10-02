@@ -5,7 +5,7 @@
 //! payload, so backend output stays byte-exact with the eval
 //! interpreter.
 //!
-//! Signed vs. unsigned widening: signed receivers (`Int`/`IntN`)
+//! Signed vs. unsigned widening. Signed receivers (`Int`/`IntN`)
 //! sign-extend to `i64` and route through `koja_format_i64`, while
 //! unsigned (`UIntN`) zero-extend to `i64` (`u64` ABI-wise) and
 //! route through `koja_format_u64`. `Bool` zero-extends through
@@ -45,9 +45,9 @@ pub(super) fn emit_format<'ctx>(
 }
 
 /// `Bool` widens through `koja_format_bool(i64)`. The shared
-/// `i64` helper signature lets us reuse [`format_via_i64`] for
-/// both `Bool` (zero-extended `i1`) and any other future non-int
-/// receiver that funnels through the boolean path.
+/// `i64` helper signature lets the backend reuse [`format_via_i64`] for
+/// both `Bool` (zero-extended `i1`) and any other non-int receiver
+/// that funnels through the boolean path.
 fn format_via_i64<'ctx>(
     ctx: &EmitContext<'ctx>,
     function: &IRFunction,

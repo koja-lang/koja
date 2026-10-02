@@ -1,6 +1,6 @@
 //! Enum-flavored pattern lowering: `EnumUnit`, `EnumTuple`, and
 //! `EnumStruct`. The unit case lives inline in the dispatcher
-//! ([`super::lower_pattern_check`]) since it's just an
+//! ([`super::lower_pattern_check`]) since it is just an
 //! [`emit_enum_tag_eq`] + [`super::single_test`] pair. The tuple
 //! and struct cases differ only in how a sub-pattern finds its
 //! payload slot (by position or by field name). Each builds a
@@ -77,7 +77,7 @@ pub(super) fn lower_enum_tuple_check(
 /// the variant's payload, its declared type, and the sub-pattern.
 type PayloadSlot<'a> = (u32, &'a ResolvedType, &'a Pattern);
 
-/// Tuple variant adapter: sub-patterns pair with payload slots by
+/// Tuple variant adapter. Sub-patterns pair with payload slots by
 /// position.
 fn positional_payloads<'a>(
     elements: &'a [Pattern],
@@ -91,7 +91,7 @@ fn positional_payloads<'a>(
         .collect()
 }
 
-/// Struct variant adapter: each field pattern finds its payload
+/// Struct variant adapter. Each field pattern finds its payload
 /// slot by name. Fields the pattern omits contribute nothing.
 fn named_payloads<'a>(
     fields: &'a [FieldPattern],

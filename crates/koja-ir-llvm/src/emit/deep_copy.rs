@@ -1,4 +1,4 @@
-//! `IRInstruction::DeepCopy` emission: the process-boundary copy.
+//! `IRInstruction::DeepCopy` emission, the process-boundary copy.
 //! Mirrors [`super::clone::emit_clone`]'s type dispatch, but where
 //! clone shares heap blocks with an `rc++`, deep copy produces a
 //! value with no storage shared with the source (Koja's rc
@@ -28,22 +28,22 @@ use koja_ir::{IRType, ValueId};
 use crate::ctx::EmitContext;
 use crate::error::{IceExt, LlvmError};
 use crate::runtime::{declare_closure_deep_copy_extern, declare_heap_deep_copy_extern};
-use crate::types::closure_fat_ptr_type;
 
 use super::{ValueMap, closures, lookup};
 
+/// Emit one `IRInstruction::DeepCopy` and return the independent
+/// value.
 pub(super) fn emit_deep_copy<'ctx>(
     ctx: &EmitContext<'ctx>,
-    dest: ValueId,
     source: ValueId,
     ty: &IRType,
-    values: &mut ValueMap<'ctx>,
-) -> Result<(), LlvmError> {
-    let result = match ty {
+    values: &ValueMap<'ctx>,
+) -> Result<BasicValueEnum<'ctx>, LlvmError> {
+    Ok(match ty {
         IRType::String | IRType::Binary | IRType::Bits => {
             let payload = lookup(values, source).into_pointer_value();
             let deep_copy = declare_heap_deep_copy_extern(ctx);
-            ctx.call_basic(deep_copy, &[payload.into()], &format!("{dest}.deep_copy"))?
+            ctx.call_basic(deep_copy, &[payload.into()], "deep_copy")?
         }
         IRType::Bool
         | IRType::CPtr(_)
@@ -65,40 +65,34 @@ pub(super) fn emit_deep_copy<'ctx>(
         }
         IRType::Function { .. } => {
             let closure_value = lookup(values, source);
-            let env =
-                closures::load_closure_env_ptr(ctx, closure_value, &format!("{dest}.deep_copy"))?;
+            let env = closures::load_closure_env_ptr(ctx, closure_value, "deep_copy")?;
             let deep_copy = declare_closure_deep_copy_extern(ctx);
             let fresh_env = ctx
-                .call_basic(deep_copy, &[env.into()], &format!("{dest}.env_deep_copy"))?
+                .call_basic(deep_copy, &[env.into()], "deep_copy.env")?
                 .into_pointer_value();
-            rebuild_fat_pointer(ctx, dest, closure_value, fresh_env)?
+            rebuild_fat_pointer(ctx, closure_value, fresh_env)?
         }
         IRType::Indirect(_) | IRType::List(_) | IRType::Map { .. } | IRType::Set(_) => panic!(
             "LLVM emit: composite `IRInstruction::DeepCopy` of type {ty:?} reached the backend \
              (the `elaborate` sub-pass must rewrite it into a `Call @deep_copy_T`)",
         ),
-    };
-    values.insert(dest, result);
-    Ok(())
+    })
 }
 
 /// Rebuild a `{fn_ptr, env_ptr}` fat pointer around a freshly-copied
-/// env: spill the original, overwrite its env field, reload.
+/// env with one `insertvalue` over the original's env field.
 fn rebuild_fat_pointer<'ctx>(
     ctx: &EmitContext<'ctx>,
-    dest: ValueId,
     closure_value: BasicValueEnum<'ctx>,
     fresh_env: PointerValue<'ctx>,
 ) -> Result<BasicValueEnum<'ctx>, LlvmError> {
-    let fat_ty = closure_fat_ptr_type(ctx);
-    let alloca = ctx.build_entry_alloca(fat_ty, &format!("{dest}.fat"));
-    ctx.builder.build_store(alloca, closure_value).or_ice()?;
-    let env_slot = ctx
-        .builder
-        .build_struct_gep(fat_ty, alloca, 1, &format!("{dest}.env_ptr"))
-        .or_ice()?;
-    ctx.builder.build_store(env_slot, fresh_env).or_ice()?;
     ctx.builder
-        .build_load(fat_ty, alloca, &format!("{dest}.value"))
+        .build_insert_value(
+            closure_value.into_struct_value(),
+            fresh_env,
+            1,
+            "deep_copy.value",
+        )
         .or_ice()
+        .map(|v| v.into_struct_value().into())
 }

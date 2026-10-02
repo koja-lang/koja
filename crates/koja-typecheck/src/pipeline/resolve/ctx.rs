@@ -9,7 +9,7 @@ use crate::registry::{BoundOverlay, GlobalRegistry};
 
 use super::error_channel::ErrorChannel;
 
-/// File-level resolver inputs: the cross-function pieces every
+/// File-level resolver inputs, the cross-function pieces every
 /// per-function [`Resolver`] reuses verbatim. Bundling them at the
 /// file level keeps the `walker::resolve_function` signature short
 /// (rather than threading `package` / `registry` positionally
@@ -90,26 +90,17 @@ impl<'a> ResolverEnv<'a> {
 /// `enclosing_type` is the owner type's full path: `["Timestamp"]`
 /// for a method on `Global.Timestamp`, `["Process", "ExitSignal"]`
 /// for a method on a nested type, `None` for top-level free
-/// functions and file bodies. It encodes the
-/// language's bare-call lookup rule: **prioritize your enclosing
-/// scope, then fall back to package scope**. So inside
-/// `System.cwd`, bare `koja_cwd()` resolves to the sibling
-/// `Global.System.koja_cwd` first. Only if no sibling matches
-/// does the resolver consult `Global.koja_cwd`. Conflicts are
-/// resolved in favor of the enclosing scope. The escape hatch
-/// for callers who really want the package-level function is to
-/// fully qualify (`Global.koja_cwd()`), which goes through path-
-/// call resolution and bypasses bare lookup entirely. The same
-/// rule generalizes when nested types land: each level wins over
-/// the next outward one.
+/// functions and file bodies. It drives the bare-call lookup rule
+/// (enclosing scope first, then package scope). The rule itself is
+/// documented on `lookup_bare_callee` in [`super::calls`].
 ///
-/// Pure data bundle by convention: no `impl` block. Helpers reach
-/// for fields directly (`resolver.registry`, `resolver.scope`) so
-/// each callee is honest about what it actually uses. The one
-/// exception is [`Self::resolution_scope`]: bundling the three
-/// type-resolution inputs in one place keeps every
-/// `resolve_type_expr` / `lookup_type` call short and rules out
-/// "passed `package` from one resolver and `aliases` from
+/// Helpers read fields directly (`resolver.registry`,
+/// `resolver.scope`) so each callee shows what it uses. The `impl`
+/// block holds only the two projections, [`Self::resolution_scope`]
+/// and [`Self::bound_context`], and the synthetic-slot counters.
+/// Bundling the three type-resolution inputs in one projection
+/// keeps every `resolve_type_expr` / `lookup_type` call short and
+/// rules out "passed `package` from one resolver and `aliases` from
 /// another" mismatches at the call site.
 pub(super) struct Resolver<'a> {
     /// Bounds the enclosing conditional impl grants its target's
@@ -117,8 +108,8 @@ pub(super) struct Resolver<'a> {
     /// `T: Encodable` inside the block). Merged into bounded
     /// dispatch and bound discharge alongside declared bounds.
     pub bound_overlay: Option<&'a BoundOverlay>,
-    /// Return type of the innermost enclosing function-shape: the
-    /// outer `fn` initially, swapped to a closure's return when its
+    /// Return type of the innermost enclosing function-shape. This is
+    /// the outer `fn` initially, swapped to a closure's return when its
     /// body resolves and restored on the way out. Threaded into
     /// every `Statement::Return`'s value as the bidirectional hint
     /// so things like `return Option.None` pick up the surrounding
@@ -130,7 +121,7 @@ pub(super) struct Resolver<'a> {
     /// Registry id of the enclosing type when the resolver is
     /// walking a method body, parallel to `enclosing_type`'s name.
     /// `None` for top-level functions and the file body. Anchors
-    /// the `priv fn` type-private check: a `TypePrivate(owner)`
+    /// the `priv fn` type-private check. A `TypePrivate(owner)`
     /// callee is only callable when this equals `Some(owner)`.
     pub enclosing_type_id: Option<GlobalRegistryId>,
     /// The innermost function-shape's error channel, present when
@@ -178,8 +169,9 @@ pub(super) struct Resolver<'a> {
     /// innermost first (function's own id when it declares
     /// type-params, then receiver). Mirrors
     /// `lift_signatures::functions::type_param_owners`, populated
-    /// once per [`make_resolver`] call so statement-level helpers
-    /// can pass it straight to [`crate::pipeline::lift_signatures::TypeParamScope::new`]
+    /// once per [`ResolverEnv::make_resolver`] call so statement-level
+    /// helpers can pass it straight to
+    /// [`crate::pipeline::lift_signatures::TypeParamScope::new`]
     /// without rebuilding the chain.
     pub type_param_owners: &'a [GlobalRegistryId],
 }

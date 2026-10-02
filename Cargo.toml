@@ -26,6 +26,13 @@ edition = "2024"
 license = "MIT"
 version = "0.19.1"
 
+# `just doc` builds with `--document-private-items` for the compiler's
+# own developers, so a public doc comment may link to a crate-private
+# item and the link resolves. koja-ast does not opt in because it may
+# gain outside users, so its public docs stay held to the default rule.
+[workspace.lints.rustdoc]
+private_intra_doc_links = "allow"
+
 # Optimize the runtime even in dev builds so `cargo test` exercises the
 # same codegen the shipped release runtime gets. The worker-migration
 # TLS-caching crash (see the note in koja-runtime-posix/src/scheduler.rs)

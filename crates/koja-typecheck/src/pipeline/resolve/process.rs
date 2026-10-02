@@ -123,7 +123,7 @@ pub(super) fn resolve_spawn(
     }
 }
 
-/// The contract rule at a `Process.monitor` call site: the monitor's
+/// The contract rule at a `Process.monitor` call site. The monitor's
 /// `ExitSignal` arrives as an ordinary business message, so the
 /// calling process's `Process<C, M, R>` impl must include
 /// `Process.ExitSignal` in `M`. Non-`monitor` callees pass through

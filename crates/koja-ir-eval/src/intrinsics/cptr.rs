@@ -248,7 +248,7 @@ unsafe fn write_as<T>(ptr: *mut u8, value: T) {
 
 fn read_primitive(ptr: *mut u8, ty: &IRType, label: &str) -> Result<Value, RuntimeError> {
     // SAFETY: the caller checked `ptr` is non-null and the IR type
-    // fixes the pointee width; foreign memory is trusted, as with FFI.
+    // fixes the pointee width. Foreign memory is trusted, as with FFI.
     let value = unsafe {
         match ty {
             IRType::Bool => Value::Bool(read_as::<u8>(ptr) != 0),

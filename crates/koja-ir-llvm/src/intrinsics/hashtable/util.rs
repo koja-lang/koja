@@ -10,22 +10,23 @@ use koja_ir::mangling::{global_primitive_symbol, mangled_method_name};
 use koja_ir::{IRFunction, IRSymbol, IRType};
 
 use crate::ctx::EmitContext;
+use crate::emit::heap_layout::byte_offset_ptr;
 use crate::error::{IceExt, LlvmError};
-use crate::intrinsics::element::acquire_in_slot;
+use crate::intrinsics::element::{ElementOp, apply_in_slot, element_slot};
 use crate::intrinsics::util::{build_table_struct, extract_int, extract_pointer, nth_struct};
 use crate::runtime::{declare_malloc_extern, declare_memcpy_extern, declare_memset_extern};
 use crate::types::ir_basic_type;
 
 use super::{HashtableLayout, INITIAL_CAPACITY, STATE_OCCUPIED};
 
-/// Live state of one hashtable: the two buffer pointers plus the
+/// Live state of one hashtable, the two buffer pointers plus the
 /// occupancy + capacity ints. Freshly extracted from `self` by
 /// [`extract_table_fields`], returned (possibly with swapped
 /// buffers and grown capacity) from a resize, or threaded by hand
 /// through multi-step write paths. `length` is invariant across
 /// the resize-or-not phi join. The bump-on-insert happens after
 /// probing, never inside the resize.
-pub(super) struct TableSnapshot<'ctx> {
+pub(crate) struct TableSnapshot<'ctx> {
     pub entries_ptr: PointerValue<'ctx>,
     pub states_ptr: PointerValue<'ctx>,
     pub length: IntValue<'ctx>,
@@ -33,10 +34,10 @@ pub(super) struct TableSnapshot<'ctx> {
 }
 
 /// K-side intrinsics resolved once per `Map` / `Set` method
-/// emission: the monomorphized `hash` / `equals?` functions plus the
+/// emission, the monomorphized `hash` / `equals?` functions plus the
 /// LLVM basic type for `K`. Probe paths read all three, rehash
 /// only needs `hash_fn` + `key_basic_ty` because moving an
-/// already-bucketed key into a larger buffer doesn't compare
+/// already-bucketed key into a larger buffer does not compare
 /// against existing slots.
 pub(super) struct KeyHashOps<'ctx> {
     pub hash_fn: FunctionValue<'ctx>,
@@ -55,15 +56,6 @@ pub(super) struct ProbeInputs<'a, 'ctx> {
     pub layout: &'a HashtableLayout<'a>,
     pub llvm_function: FunctionValue<'ctx>,
     pub table: &'a TableSnapshot<'ctx>,
-}
-
-/// Byte size of an [`IRType`] on the host triple, routed through
-/// the same target-data the rest of the layout pipeline reads
-/// (so hash-table entry sizes match the LLVM-emitted field sizes
-/// byte-for-byte).
-pub(crate) fn ir_byte_size<'ctx>(ctx: &EmitContext<'ctx>, ty: &IRType) -> Result<u64, LlvmError> {
-    let basic = ir_basic_type(ctx, ty)?;
-    Ok(ctx.layouts.target_data.get_abi_size(&basic))
 }
 
 /// Bundle [`resolve_hash_eq`] and [`ir_basic_type`] into a single
@@ -129,13 +121,15 @@ pub(super) fn call_malloc<'ctx>(
 }
 
 /// Clone a table's entries and states buffers into fresh allocations,
-/// then acquire every occupied bucket so the copy owns independent
-/// references.
-pub(super) fn clone_table_buffers<'ctx>(
+/// then apply `op` to every occupied bucket so the copy owns
+/// independent references ([`ElementOp::Acquire`]) or shares no
+/// storage at all ([`ElementOp::DeepCopy`]).
+pub(crate) fn clone_table<'ctx>(
     ctx: &EmitContext<'ctx>,
     llvm_function: FunctionValue<'ctx>,
     layout: &HashtableLayout<'_>,
     src: &TableSnapshot<'ctx>,
+    op: ElementOp,
 ) -> Result<TableSnapshot<'ctx>, LlvmError> {
     let i64_ty = ctx.context.i64_type();
     let entries_bytes = ctx
@@ -178,54 +172,37 @@ pub(super) fn clone_table_buffers<'ctx>(
         length: src.length,
         capacity: src.capacity,
     };
-    acquire_occupied_entries(ctx, llvm_function, layout, &dst)?;
+    apply_occupied(ctx, llvm_function, layout, &dst, op, "cow")?;
     Ok(dst)
 }
 
-/// Acquire the key (and, for `Map`, the value) of every occupied bucket
-/// in `table`, the per-element half of a copy-on-write clone. A no-op
-/// walk when both key and value own no heap.
-fn acquire_occupied_entries<'ctx>(
+/// Apply `op` to the key (and, for `Map`, the value) of every occupied
+/// bucket in `table`. The per-element half of a clone, or the whole
+/// element walk of a drop.
+pub(crate) fn apply_occupied<'ctx>(
     ctx: &EmitContext<'ctx>,
     llvm_function: FunctionValue<'ctx>,
     layout: &HashtableLayout<'_>,
     table: &TableSnapshot<'ctx>,
+    op: ElementOp,
+    label: &str,
 ) -> Result<(), LlvmError> {
     occupied_loop(
         ctx,
         llvm_function,
         table.states_ptr,
         table.capacity,
-        "cow",
+        label,
         |ctx, slot| {
             let entry_ptr = entry_pointer(ctx, table.entries_ptr, slot, layout.entry_size)?;
-            acquire_in_slot(ctx, layout.key_ty, entry_ptr)?;
+            apply_in_slot(ctx, op, layout.key_ty, entry_ptr)?;
             if let Some(value_ty) = layout.value_ty {
-                let value_ptr = value_slot(ctx, entry_ptr, layout.key_size)?;
-                acquire_in_slot(ctx, value_ty, value_ptr)?;
+                let value_ptr = byte_offset_ptr(ctx, entry_ptr, layout.key_size, "val_ptr")?;
+                apply_in_slot(ctx, op, value_ty, value_ptr)?;
             }
             Ok(())
         },
     )
-}
-
-/// Pointer to the value half of a `Map` bucket, `key_size` bytes past
-/// the entry base (the key sits at offset 0).
-#[track_caller]
-pub(super) fn value_slot<'ctx>(
-    ctx: &EmitContext<'ctx>,
-    entry_ptr: PointerValue<'ctx>,
-    key_size: u64,
-) -> Result<PointerValue<'ctx>, LlvmError> {
-    let i8_ty = ctx.context.i8_type();
-    let offset = ctx.context.i64_type().const_int(key_size, false);
-    // SAFETY: GEPs in this file index bucket slots masked to
-    // `capacity - 1` or step within one bucket entry.
-    unsafe {
-        ctx.builder
-            .build_gep(i8_ty, entry_ptr, &[offset], "val_ptr")
-            .or_ice()
-    }
 }
 
 /// Emit `for slot in 0..capacity { if states[slot] == OCCUPIED { body } }`
@@ -355,26 +332,20 @@ pub(super) fn advance_slot<'ctx>(
     ctx.builder.build_and(next, mask, "wrapped_slot").or_ice()
 }
 
+/// Pointer to bucket `slot` in the entries buffer. [`element_slot`]
+/// with the layout's constant entry size.
 pub(super) fn entry_pointer<'ctx>(
     ctx: &EmitContext<'ctx>,
     entries_ptr: PointerValue<'ctx>,
     slot: IntValue<'ctx>,
     entry_size: u64,
 ) -> Result<PointerValue<'ctx>, LlvmError> {
-    let i8_ty = ctx.context.i8_type();
-    let i64_ty = ctx.context.i64_type();
-    let byte_offset = ctx
-        .builder
-        .build_int_mul(slot, i64_ty.const_int(entry_size, false), "byte_off")
-        .or_ice()?;
-    unsafe {
-        ctx.builder
-            .build_gep(i8_ty, entries_ptr, &[byte_offset], "entry_ptr")
-            .or_ice()
-    }
+    let entry_size = ctx.context.i64_type().const_int(entry_size, false);
+    element_slot(ctx, entries_ptr, slot, entry_size)
 }
 
-pub(super) fn extract_table_fields<'ctx>(
+/// Read the four table fields out of `self` (param 0).
+pub(crate) fn extract_table_fields<'ctx>(
     ctx: &EmitContext<'ctx>,
     function: &IRFunction,
     llvm_function: FunctionValue<'ctx>,
