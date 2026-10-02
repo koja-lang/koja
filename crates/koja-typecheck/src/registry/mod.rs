@@ -18,7 +18,7 @@
 //! so non-function entries cannot carry them.
 //!
 //! Registry rendering for `koja check --emit-ast` lives in the
-//! [`format`] submodule. It is a separate concern from the data and
+//! [`mod@format`] submodule. It is a separate concern from the data and
 //! insert API, with a different audience (diagnostic rendering rather
 //! than pipeline work).
 

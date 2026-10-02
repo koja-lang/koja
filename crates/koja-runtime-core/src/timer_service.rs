@@ -8,8 +8,7 @@
 //! Deadlines are keyed per process: a process has at most one armed
 //! deadline, and [`TimerService::arm_deadline`] replaces any previous
 //! entry. Tokens stay internal, so callers never round-trip a
-//! [`TimerToken`](crate::timer_wheel::TimerToken) through the process
-//! table.
+//! [`TimerToken`] through the process table.
 //!
 //! The safety contract with the table: firing hands back [`Due`] entries
 //! that the driver applies under the table lock, and

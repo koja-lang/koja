@@ -22,6 +22,7 @@
 //! sources is an error. The closure resolves with [`Unresolved`]
 //! params and the body still walks for diagnostic completeness.
 //!
+//! [`LocalScope`]: crate::pipeline::local_scope::LocalScope
 //! [`LocalScope::declare`]: crate::pipeline::local_scope::LocalScope::declare
 //! [`LocalId`]: koja_ast::identifier::LocalId
 //! [`ResolvedType`]: koja_ast::identifier::ResolvedType

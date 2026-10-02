@@ -35,7 +35,7 @@ pub(super) fn resolve_string(
 /// Resolve `expr`. If the result is not already `String`, swap it
 /// for a synthetic `expr.format()` MethodCall and dispatch through
 /// the normal method-call resolver. Mirrors the in-place AST rewrite
-/// pattern used by [`super::literals::carrier::dispatch_via_carrier`].
+/// pattern used by `literals::carrier::dispatch_via_carrier`.
 fn resolve_interpolation(
     expr: &mut Box<Expr>,
     string_type: &ResolvedType,

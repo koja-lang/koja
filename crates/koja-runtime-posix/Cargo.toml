@@ -17,6 +17,11 @@ crate-type = ["rlib", "staticlib"]
 # it is set only by the `just tsan` recipe (see justfile).
 unexpected_cfgs = { level = "warn", check-cfg = ['cfg(koja_tsan)'] }
 
+# Same policy as `[workspace.lints.rustdoc]`. Repeated here because a
+# crate with its own lint table cannot also inherit the workspace one.
+[lints.rustdoc]
+private_intra_doc_links = "allow"
+
 [dependencies]
 backtrace = "0.3"
 crossbeam-deque = "0.8.6"

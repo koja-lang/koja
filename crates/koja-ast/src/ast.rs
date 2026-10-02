@@ -425,9 +425,9 @@ pub struct TestDecl {
 /// The root AST node representing a single Koja source file.
 ///
 /// `package` is the post-parse identity that flows downstream through
-/// typecheck and codegen. It's set by [`koja_parser::parse_file`] from
+/// typecheck and codegen. It's set by `koja_parser::parse_file` from
 /// the originating `SourceFile.package`. Callers that go through the
-/// bare-string [`koja_parser::parse`] entry point (REPL, formatter,
+/// bare-string `koja_parser::parse` entry point (REPL, formatter,
 /// proptests) leave it `String::new()` -- those paths never reach the
 /// package-scoped passes that read it.
 ///

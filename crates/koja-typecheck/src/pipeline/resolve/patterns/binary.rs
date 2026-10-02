@@ -6,7 +6,7 @@
 //! width, and registers binding names into the arm's local scope so
 //! the match-arm body can reference them.
 //!
-//! Pairs with [`super::super::literals::binary`]. They share the
+//! Pairs with the `literals::binary` module. They share the
 //! "compute per-segment bit width" arithmetic but disagree on what
 //! the segment's value represents (an expression to evaluate vs a
 //! pattern element to bind / test against).

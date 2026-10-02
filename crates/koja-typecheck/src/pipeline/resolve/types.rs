@@ -42,7 +42,7 @@ pub(crate) fn names_struct(path: &[String], scope: ResolutionScope<'_>) -> bool 
 /// Multi-segment paths (`Crypto.SHA256`, `HTTP.Headers`) resolve
 /// directly against the registry, so callers can write the
 /// qualified name without an `alias`. Same precedence as
-/// [`super::super::lift_signatures::types::resolve_path_to_global`]:
+/// `lift_signatures::types::resolve_path_to_global`:
 /// alias rewrite first, then `<package>.<segments…>`, then for
 /// multi-segment paths only the head-as-package interpretation
 /// (`<path[0]>.<path[1..]>`, what `alias`-rewrite would

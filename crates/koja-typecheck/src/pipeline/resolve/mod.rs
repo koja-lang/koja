@@ -23,7 +23,7 @@
 //! - [`control_flow`]: `if`, `cond`, the `?:` ternary, and `while`.
 //! - [`error_channel`]: `try` / `fail` / `rescue` desugaring and
 //!   `Result.Ok` auto-wrapping for `! E` functions.
-//! - [`assert`]: statement-position `assert` desugaring onto `if` and
+//! - [`mod@assert`]: statement-position `assert` desugaring onto `if` and
 //!   `fail Test.Failure.Assertion(...)`.
 //! - [`ops`]: literal, binary, and unary type rules.
 //! - [`return_type`]: trailing-expression-vs-declared-return checking.

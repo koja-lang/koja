@@ -15,7 +15,7 @@
 //! body as concrete ones. Field interpolations call `.format()` on
 //! bare type parameters (`A.format()`). The typechecker resolves
 //! those through the universal-`Debug` fallback in
-//! [`crate::pipeline::resolve::calls::bounded`]: every concrete
+//! `resolve::calls::bounded`: every concrete
 //! monomorphization either has a synthesized `Debug` impl (user
 //! types) or a hand-written stdlib impl (`List<T>`, `Map<K, V>`,
 //! `Set<T>`, `Option<T>`, `Result<T, E>`, `Pair<A, B>`), so the call

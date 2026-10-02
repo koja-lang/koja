@@ -1197,8 +1197,8 @@ fn substitute_params(params: &[ResolvedParam], subst: &Substitution) -> Vec<Reso
 /// name the callee by `callee_label`: the fully-qualified
 /// identifier for a package function or method, the surface name
 /// for a local closure call. Per-position equivalence runs through
-/// [`check_compatible`] so a numeric literal flowing into a
-/// narrow-int / narrow-float param coerces when its compile-time
+/// [`super::coercion::check_compatible`] so a numeric literal flowing
+/// into a narrow-int / narrow-float param coerces when its compile-time
 /// value fits the param's range. The resulting coercion stamps onto
 /// the arg's [`Expr::literal_coercion`] for IR lower to consume.
 fn validate_call_signature(

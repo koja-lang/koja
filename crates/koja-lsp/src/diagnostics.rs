@@ -451,7 +451,7 @@ impl Backend {
     /// Bundle the source list for `parse_program`, plus the project
     /// paths eligible for published diagnostics.
     ///
-    /// Mirrors [`koja_driver::pipeline::bundle_many_with_autoimport`]: the
+    /// Mirrors `bundle_many_with_autoimport` in koja-driver's `pipeline`: the
     /// embedded autoimport set is dropped for any module already
     /// provided by the active package (so opening
     /// `lib/global/src/debug.koja` doesn't double-define `Global.debug`),

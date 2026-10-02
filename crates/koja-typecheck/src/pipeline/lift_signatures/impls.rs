@@ -1,5 +1,5 @@
 //! Inherent + trait impl lifting. Inherent impls forward each member
-//! to [`functions::lift_function_with_identifier`]. Trait impls
+//! to [`super::functions::lift_function_with_identifier`]. Trait impls
 //! additionally check protocol conformance, synthesize any
 //! default-bodied protocol methods that the impl omitted, and
 //! record the conformance fact (`target : protocol`) on the

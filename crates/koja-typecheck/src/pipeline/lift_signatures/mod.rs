@@ -119,7 +119,7 @@ pub(super) type ProtocolBodies =
 ///
 /// `self_override` is the trait-impl target hook. When `None`,
 /// `self` types as
-/// [`super::types::concrete_self_type`] of the receiver, the
+/// [`types::concrete_self_type`] of the receiver, the
 /// inline / inherent path. When `Some`, `self` types as the
 /// resolved target verbatim. For a generic-target impl like
 /// `impl P for Bag<T>` the override is `Bag<TypeParam(Bag, 0)>`,

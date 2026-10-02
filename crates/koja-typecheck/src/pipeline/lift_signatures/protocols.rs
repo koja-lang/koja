@@ -3,8 +3,9 @@
 //! the [`ProtocolDefinition`] onto the registry entry. Method
 //! signatures resolve under a [`TypeParamScope`] rooted at the
 //! protocol id so `Self` (slot 0) and user-declared `<C, M, R>`
-//! params resolve to [`Resolution::TypeParam`] anchored on the
-//! protocol entry.
+//! params resolve to
+//! [`Resolution::TypeParam`](koja_ast::identifier::Resolution::TypeParam)
+//! anchored on the protocol entry.
 
 use koja_ast::ast::{Diagnostic, Param, ProtocolDecl, ProtocolMethod, name_texts};
 use koja_ast::identifier::{GlobalRegistryId, Identifier};

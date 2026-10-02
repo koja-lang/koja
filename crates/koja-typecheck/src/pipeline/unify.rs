@@ -70,8 +70,8 @@ impl Substitution {
 
     /// Build a dual-scope substitution (receiver + method) with the
     /// given arities. The first scope is `receiver`, the second is
-    /// `method`. Order matters for [`into_args`]/[`args`] callers that
-    /// extract by position.
+    /// `method`. Order matters for [`Self::args`] callers that extract
+    /// by position.
     pub(crate) fn dual(
         receiver: GlobalRegistryId,
         receiver_arity: usize,
@@ -226,10 +226,11 @@ impl Substitution {
 /// default `Int`/`Float` against a slot already pinned (typically by
 /// receiver seeding) to a sized variant.
 ///
-/// The post-substitute [`super::resolve::calls::validate_call_signature`]
+/// The post-substitute `resolve::calls::validate_call_signature`
 /// then runs [`super::resolve::coercion::check_compatible`] against the
 /// substituted param type, which:
-///   - accepts literal args that fit the sized slot ([`Compatible::Coerced`])
+///   - accepts literal args that fit the sized slot
+///     ([`Compatible::Coerced`](super::resolve::coercion::Compatible::Coerced))
 ///   - rejects non-literal `Int`/`Float` values with a clean
 ///     "argument expects `Int32`, got `Int`" diagnostic
 ///

@@ -66,7 +66,7 @@ impl LocalScope {
         }
     }
 
-    /// Restore the visible name to id map captured by [`snapshot`].
+    /// Restore the visible name to id map captured by [`Self::snapshot`].
     pub(crate) fn restore(&mut self, snapshot: LocalScopeSnapshot) {
         self.names = snapshot.names;
     }

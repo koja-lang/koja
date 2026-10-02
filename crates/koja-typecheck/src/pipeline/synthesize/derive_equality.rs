@@ -16,7 +16,7 @@
 //!   `match self … _ -> false end`.
 //! - Generic types route field / payload `.equals?()` calls through the
 //!   universal-`Equality` fallback in
-//!   [`crate::pipeline::resolve::calls::bounded`] (see
+//!   `resolve::calls::bounded` (see
 //!   [`crate::registry::UNIVERSAL_PROTOCOLS`]).
 //!
 //! Builtins are never synthesized. The synthesizer cannot know what

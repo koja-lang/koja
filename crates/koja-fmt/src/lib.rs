@@ -49,7 +49,7 @@ pub fn format_width(source: &str, width: u32, mode: ParseMode) -> FormatResult {
     FormatResult::Ok(out)
 }
 
-/// Formats a function header the way [`format`] would print it at
+/// Formats a function header the way [`format()`] would print it at
 /// column 0, wrapping at `width`. `display_name` replaces the
 /// function's own name, so a hover can show `Type.method`. The body,
 /// annotations, and comments are left out. Editors call this to show a

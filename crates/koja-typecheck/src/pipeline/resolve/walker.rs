@@ -20,6 +20,7 @@
 //! [`LocalId`]: koja_ast::identifier::LocalId
 //! [`Param.local_id`]: koja_ast::ast::Param
 //! [`Resolution::Local`]: koja_ast::identifier::Resolution::Local
+//! [`ResolvedParam`]: crate::registry::ResolvedParam
 
 use koja_ast::ast::{
     Diagnostic, Expr, ExprKind, File, Function, ImplBlock, ImplMember, Item, Param, Statement,

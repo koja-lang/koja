@@ -34,8 +34,8 @@ use super::super::types::is_primitive;
 use crate::registry::GlobalRegistry;
 
 /// The shape a `: Type` annotation gives a segment. The IR lowering
-/// layer re-derives the same shape from the AST during
-/// [`koja_ir::lower::binary_literal`]. Typecheck only needs it to
+/// layer re-derives the same shape from the AST in koja-ir's
+/// `lower::binary_literal`. Typecheck only needs it to
 /// check that a literal value agrees with the declared shape.
 enum SegmentKind {
     Float,

@@ -169,8 +169,9 @@ pub(super) struct Resolver<'a> {
     /// innermost first (function's own id when it declares
     /// type-params, then receiver). Mirrors
     /// `lift_signatures::functions::type_param_owners`, populated
-    /// once per [`make_resolver`] call so statement-level helpers
-    /// can pass it straight to [`crate::pipeline::lift_signatures::TypeParamScope::new`]
+    /// once per [`ResolverEnv::make_resolver`] call so statement-level
+    /// helpers can pass it straight to
+    /// [`crate::pipeline::lift_signatures::TypeParamScope::new`]
     /// without rebuilding the chain.
     pub type_param_owners: &'a [GlobalRegistryId],
 }
