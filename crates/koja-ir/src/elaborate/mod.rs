@@ -85,7 +85,7 @@ use crate::enum_decl::{IREnumDecl, IREnumVariant, IRVariantPayload};
 use crate::function::{
     FunctionKind, IRBasicBlock, IRFunction, IRFunctionParam, IRInstruction, IRSymbol,
 };
-use crate::intrinsic_id::{IRIntrinsicId, RefMethod, ReplyToMethod};
+use crate::intrinsic_id::{IRIntrinsicId, RefMethod, ReplyToMethod, TraceRuntimeMethod};
 use crate::local::IRLocalId;
 use crate::mangling::{clone_glue_symbol, deep_copy_glue_symbol, drop_glue_symbol};
 use crate::package::{IRPackage, insert_package_function};
@@ -360,18 +360,26 @@ fn close_over_constituents(mut work: Vec<IRType>, packages: &[IRPackage]) -> BTr
     needed
 }
 
-/// The payload type (`M` or `R`) a message / reply send intrinsic
-/// copies across a process boundary: `params[1].ty` of `Ref.cast` /
+/// The payload type a runtime-owning intrinsic copies out of the
+/// caller's frame: `M` or `R` at `params[1].ty` of `Ref.cast` /
 /// `Ref.call` / `Ref.send_after` / `ReplyTo.send` (`params[0]` is the
-/// `self` `Ref` / `ReplyTo`). `None` for any other function.
+/// `self` `Ref` / `ReplyTo`), and the span record the `TraceRuntime`
+/// stack and export queue hold (`params[0]` of `span_open` /
+/// `export_push`, `params[1]` of `span_put` after the handle). `None`
+/// for any other function.
 fn send_intrinsic_payload(function: &IRFunction) -> Option<&IRType> {
-    let is_send = matches!(
-        function.kind,
+    let payload_index = match function.kind {
         FunctionKind::Intrinsic(IRIntrinsicId::Ref(
-            RefMethod::Call | RefMethod::Cast | RefMethod::SendAfter
-        )) | FunctionKind::Intrinsic(IRIntrinsicId::ReplyTo(ReplyToMethod::Send))
-    );
-    is_send.then(|| function.params.get(1).map(|p| &p.ty))?
+            RefMethod::Call | RefMethod::Cast | RefMethod::SendAfter,
+        ))
+        | FunctionKind::Intrinsic(IRIntrinsicId::ReplyTo(ReplyToMethod::Send))
+        | FunctionKind::Intrinsic(IRIntrinsicId::TraceRuntime(TraceRuntimeMethod::SpanPut)) => 1,
+        FunctionKind::Intrinsic(IRIntrinsicId::TraceRuntime(
+            TraceRuntimeMethod::ExportPush | TraceRuntimeMethod::SpanOpen,
+        )) => 0,
+        _ => return None,
+    };
+    function.params.get(payload_index).map(|p| &p.ty)
 }
 
 /// The operand type of a `Clone` / `DropLocal` / `DropValue`, or

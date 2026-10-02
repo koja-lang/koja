@@ -20,6 +20,7 @@ pub mod signals;
 mod socket;
 mod string;
 mod system;
+mod trace;
 mod tsan;
 mod util;
 

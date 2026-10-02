@@ -1,0 +1,242 @@
+alias Test.require
+
+# The export queue is one per runtime, so each test drains what earlier
+# tests left before it records anything.
+
+priv enum TraceProbeMsg
+  # Reply with the context remembered by the last `Remember`.
+  Recall
+  # Store the handler's context for a later `Recall`.
+  Remember
+end
+
+priv struct TraceProbe: Process<(), TraceProbeMsg, Process.Context>
+  remembered: Process.Context = Process.Context.ZERO
+
+  fn start(config: ()) -> Self ! Process.StopReason
+    TraceProbe{}
+  end
+
+  fn handle(self, msg: TraceProbeMsg, from: Option<ReplyTo<Process.Context>>)
+    -> Process.Step<Self>
+
+    match msg
+      TraceProbeMsg.Recall ->
+        ReplyTo.reply(from, self.remembered)
+        Process.Step.Continue(self)
+
+      TraceProbeMsg.Remember ->
+        self.remembered = Process.context()
+        Process.Step.Continue(self)
+    end
+  end
+end
+
+# Pops every queued record so a test starts from an empty queue.
+priv fn drain
+  while Trace.Export.pop() != Option.None
+    ()
+  end
+end
+
+# Pops one record the test expects to be there.
+priv fn pop_one -> Result<Trace.SpanRecord, String>
+  Trace.Export.pop().or_err("expected a queued span record")
+end
+
+test "a root with no parent starts a sampled trace and records one span"
+  drain()
+  outside = Process.context()
+
+  (recording, inside) = Trace.root(
+    "GET /",
+    Trace.SpanKind.Server,
+    span -> (span.recording?(), Process.context()),
+  )
+
+  assert recording
+  assert Process.context() == outside
+  assert inside.sampled?()
+  assert inside.span != 0
+  assert inside.trace_hi != 0 or inside.trace_lo != 0
+
+  record = try require(pop_one())
+  assert record.name == "GET /"
+  assert record.kind == Trace.SpanKind.Server
+  assert record.context == inside
+  assert record.parent_span_id == Option.None
+  assert record.status == Trace.Status.Unset
+  assert record.attributes.length() == 0
+  assert record.ended_at.since_epoch.to_microseconds() >=
+    record.started_at.since_epoch.to_microseconds()
+  assert Trace.Export.pop() == Option.None
+end
+
+test "a nested span records its parent and shares the trace"
+  drain()
+
+  (outer, inner, restored) =
+    Trace.root(
+      "outer",
+      Trace.SpanKind.Internal,
+      fn (span: Trace.Span) -> (Process.Context, Process.Context, Process.Context)
+        outer = Process.context()
+        inner = Trace.span("inner", inner_span -> Process.context())
+        (outer, inner, Process.context())
+      end,
+    )
+
+  assert restored == outer
+  inner_record = try require(pop_one())
+  outer_record = try require(pop_one())
+  assert inner_record.name == "inner"
+  assert outer_record.name == "outer"
+  assert inner_record.kind == Trace.SpanKind.Internal
+  assert inner_record.context == inner
+  assert inner_record.parent_span_id == Option.Some(outer.span_id())
+  assert inner.trace_id() == outer.trace_id()
+  assert inner.span != outer.span
+  assert outer_record.parent_span_id == Option.None
+  assert Trace.Export.pop() == Option.None
+end
+
+test "a span outside any trace runs the closure and records nothing"
+  drain()
+
+  (recording, value) =
+    Trace.span("orphan", fn (span: Trace.Span) -> (Bool, Int)
+        span.attribute("ignored", 1)
+        span.status(Trace.Status.Ok)
+        (span.recording?(), 42)
+      end)
+
+  assert not recording
+  assert value == 42
+  assert Trace.Export.pop() == Option.None
+end
+
+test "a root under an unsampled set parent propagates the trace without recording"
+  drain()
+  Trace.clear()
+  try require(Trace.set_trace_id(<<5::64, 6::64>>))
+  try require(Trace.set_span_id(<<7::64>>))
+  parent = Process.context()
+
+  (recording, inside) = Trace.root(
+    "unsampled",
+    Trace.SpanKind.Server,
+    span -> (span.recording?(), Process.context()),
+  )
+
+  restored = Process.context()
+  Trace.clear()
+  assert not recording
+  assert not inside.sampled?()
+  assert inside.trace_id() == parent.trace_id()
+  assert inside.span != 7
+  assert restored == parent
+  assert Trace.Export.pop() == Option.None
+end
+
+test "a root under a sampled set parent names the parent span"
+  drain()
+  Trace.clear()
+  try require(Trace.set_trace_id(<<5::64, 6::64>>))
+  try require(Trace.set_span_id(<<7::64>>))
+  Trace.set_sampled(true)
+  parent = Process.context()
+
+  Trace.root("continued", Trace.SpanKind.Server, span -> ())
+  Trace.clear()
+
+  record = try require(pop_one())
+  assert record.context.trace_id() == parent.trace_id()
+  assert record.context.span != 7
+  assert record.parent_span_id == Option.Some(parent.span_id())
+  assert Trace.Export.pop() == Option.None
+end
+
+test "clear returns a process to the zero context"
+  Trace.clear()
+  try require(Trace.set_trace_id(<<5::64, 6::64>>))
+  Trace.set_sampled(true)
+  Trace.clear()
+
+  assert not Process.context().sampled?()
+  assert Process.context().trace_hi == 0
+  assert Process.context().trace_lo == 0
+end
+
+test "attributes and status land on the record"
+  drain()
+
+  Trace.root("db.query", Trace.SpanKind.Client, fn (span: Trace.Span)
+      span.attribute("db.system", "postgresql")
+      span.attribute("db.rows", 3)
+      span.attribute("db.rows", 4)
+      span.attribute("db.cached", false)
+      span.attribute("db.seconds", 1.5)
+      span.status(Trace.Status.Error("timeout"))
+    end)
+
+  record = try require(pop_one())
+  assert record.kind == Trace.SpanKind.Client
+  assert record.status == Trace.Status.Error("timeout")
+  assert record.attributes.length() == 4
+  assert record.attributes.get("db.system") ==
+    Option.Some(Trace.Attribute{value: "postgresql"})
+  assert record.attributes.get("db.rows") ==
+    Option.Some(Trace.Attribute{value: 4})
+  assert record.attributes.get("db.cached") ==
+    Option.Some(Trace.Attribute{value: false})
+  assert record.attributes.get("db.seconds") ==
+    Option.Some(Trace.Attribute{value: 1.5})
+end
+
+test "a cast from inside a span carries the span's context"
+  drain()
+  probe = spawn TraceProbe.start(())
+
+  inside =
+    Trace.root(
+      "cast",
+      Trace.SpanKind.Internal,
+      fn (span: Trace.Span) -> Process.Context
+        probe.cast(TraceProbeMsg.Remember)
+        Process.context()
+      end,
+    )
+
+  zero = Process.Context.ZERO
+  attempts = 1000
+  recalled = probe.call(TraceProbeMsg.Recall, 5000)
+
+  while attempts > 0 and recalled == Result.Ok(zero)
+    attempts -= 1
+    recalled = probe.call(TraceProbeMsg.Recall, 5000)
+  end
+
+  probe.kill()
+  assert try require(recalled) == inside
+  _ = try require(pop_one())
+end
+
+test "the export queue drops past capacity and counts the drops"
+  drain()
+  dropped_before = Trace.Export.dropped()
+  count = 0
+
+  while count < 4101
+    Trace.root("bulk", Trace.SpanKind.Internal, span -> ())
+    count += 1
+  end
+
+  popped = 0
+
+  while Trace.Export.pop() != Option.None
+    popped += 1
+  end
+
+  assert popped == 4096
+  assert Trace.Export.dropped() - dropped_before == 5
+end

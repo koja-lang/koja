@@ -8,12 +8,17 @@
 //! declared tag, so this check turns a stdlib variant reorder into a
 //! build failure instead of silent value corruption.
 //!
+//! The same check covers `Process.Context`. `Process.context` and
+//! `TraceRuntime.install` move the whole struct through one pointer as
+//! raw bytes, so the Koja declaration must keep the word count and
+//! widths the runtime's `Context` has.
+//!
 //! The tables mirror ABI.md by spec, not via a shared runtime type,
 //! the same policy as `ReceiveTag::wire_byte` (see
 //! `koja-runtime-core`'s `wire` module doc). The Rust side of each
 //! contract is pinned by unit tests in `koja-runtime-core`.
 
-use koja_ir::IREnumVariant;
+use koja_ir::{IREnumVariant, IRType};
 
 use crate::ctx::EmitContext;
 
@@ -44,6 +49,14 @@ pub(crate) const OPTION_NONE_TAG: u64 = 1;
 
 /// Mangled-name prefix every monomorphized `Option` symbol carries.
 const OPTION_SYMBOL_PREFIX: &str = "Global.Option_$";
+
+/// Field types of the structs the runtime copies as raw bytes, per
+/// ABI.md's context layout. Names and meaning are pinned by the stdlib
+/// tests, this table pins the byte layout.
+const WIRE_STRUCT_FIELDS: &[(&str, &[IRType])] = &[(
+    "Global.Process.Context",
+    &[IRType::Int64, IRType::Int64, IRType::Int64, IRType::Int64],
+)];
 
 /// Verify every registered wire-coupled enum declares its variants in
 /// the ABI.md wire order. Runs once per compile, after enum
@@ -77,6 +90,53 @@ pub(crate) fn assert_wire_enum_order(ctx: &EmitContext<'_>) {
     }
 }
 
+/// Verify every registered wire-copied struct declares the field
+/// types in [`WIRE_STRUCT_FIELDS`]. Runs once per compile, after
+/// struct registration. Skips structs the program never instantiated.
+pub(crate) fn assert_wire_struct_layout(ctx: &EmitContext<'_>) {
+    let mut violation = None;
+    ctx.layouts.for_each_struct(|symbol, fields| {
+        if violation.is_some() {
+            return;
+        }
+        let mangled = symbol.mangled();
+        let Some((_, expected)) = WIRE_STRUCT_FIELDS.iter().find(|(name, _)| *name == mangled)
+        else {
+            return;
+        };
+        if let Some(mismatch) = wire_layout_mismatch(fields, expected) {
+            violation = Some(format!(
+                "struct `{mangled}` breaks its wire contract: {mismatch}. The runtime copies \
+                 it as raw bytes, so the declaration must keep the layout cataloged in \
+                 design/ABI.md (expected {expected:?})",
+            ));
+        }
+    });
+    if let Some(message) = violation {
+        panic!("{message}");
+    }
+}
+
+/// Description of the first field type divergence from `expected`, or
+/// `None` when the declaration matches the wire layout exactly.
+fn wire_layout_mismatch(fields: &[IRType], expected: &[IRType]) -> Option<String> {
+    if fields.len() != expected.len() {
+        return Some(format!(
+            "{} field(s) declared, wire catalog has {}",
+            fields.len(),
+            expected.len(),
+        ));
+    }
+    for (index, (field, expected_type)) in fields.iter().zip(expected).enumerate() {
+        if field != expected_type {
+            return Some(format!(
+                "field at position {index} is `{field:?}`, wire layout has `{expected_type:?}`",
+            ));
+        }
+    }
+    None
+}
+
 /// Description of the first tag/name divergence from `expected`, or
 /// `None` when the declaration matches the wire order exactly.
 fn wire_order_mismatch(variants: &[IREnumVariant], expected: &[&str]) -> Option<String> {
@@ -101,9 +161,9 @@ fn wire_order_mismatch(variants: &[IREnumVariant], expected: &[&str]) -> Option<
 
 #[cfg(test)]
 mod tests {
-    use koja_ir::{IREnumVariant, IRVariantPayload, IRVariantTag};
+    use koja_ir::{IREnumVariant, IRType, IRVariantPayload, IRVariantTag};
 
-    use super::wire_order_mismatch;
+    use super::{wire_layout_mismatch, wire_order_mismatch};
 
     fn variant(name: &str, tag: u8) -> IREnumVariant {
         IREnumVariant {
@@ -139,5 +199,32 @@ mod tests {
         ];
         let mismatch = wire_order_mismatch(&variants, &["Read", "Write", "Error"]);
         assert!(mismatch.unwrap().contains("wire catalog has 3"));
+    }
+
+    const FOUR_WORDS: [IRType; 4] = [IRType::Int64, IRType::Int64, IRType::Int64, IRType::Int64];
+
+    #[test]
+    fn matching_wire_layout_passes() {
+        assert_eq!(wire_layout_mismatch(&FOUR_WORDS, &FOUR_WORDS), None);
+    }
+
+    #[test]
+    fn narrowed_field_is_reported() {
+        let fields = [IRType::Int64, IRType::Int32, IRType::Int64, IRType::Int64];
+        let mismatch = wire_layout_mismatch(&fields, &FOUR_WORDS);
+        assert!(mismatch.unwrap().contains("position 1"));
+    }
+
+    #[test]
+    fn added_field_is_reported() {
+        let fields = [
+            IRType::Int64,
+            IRType::Int64,
+            IRType::Int64,
+            IRType::Int64,
+            IRType::Int64,
+        ];
+        let mismatch = wire_layout_mismatch(&fields, &FOUR_WORDS);
+        assert!(mismatch.unwrap().contains("wire catalog has 4"));
     }
 }

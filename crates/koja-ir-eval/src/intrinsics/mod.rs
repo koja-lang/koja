@@ -36,6 +36,7 @@ mod runtime_block;
 mod set;
 mod socket;
 mod string;
+mod trace;
 
 pub(crate) use process::build_business_payload;
 
@@ -88,5 +89,6 @@ pub(crate) async fn dispatch<R: CallResolver>(
         IRIntrinsicId::Set(method) => set::dispatch(method, call),
         IRIntrinsicId::Socket(method) => socket::dispatch(method, call).await,
         IRIntrinsicId::String(method) => string::dispatch(method, call),
+        IRIntrinsicId::TraceRuntime(method) => trace::dispatch(method, call),
     }
 }

@@ -117,7 +117,7 @@ pub extern "C" fn koja_kernel_exit(code: i64) {
 /// Fills `buf` with `len` bytes of OS entropy. Retries transient `EINTR`
 /// interruptions. A genuine failure panics (the global runtime hook turns
 /// that into a clean diagnostic abort rather than a leaked error).
-fn fill_random(buf: *mut u8, len: usize) {
+pub(crate) fn fill_random(buf: *mut u8, len: usize) {
     let mut offset = 0;
     while offset < len {
         let remaining = len - offset;

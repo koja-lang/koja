@@ -16,7 +16,7 @@ use std::time::Instant;
 use koja_ir::{
     IRFunction, IRSymbol, IRType, IRVariantPayload, ProcessMethod, RefMethod, ReplyToMethod,
 };
-use koja_runtime_core::{MailPark, Pid, Tag, duration_from_user_millis};
+use koja_runtime_core::{Context, MailPark, Pid, Tag, duration_from_user_millis};
 
 use super::{IntrinsicCall, helpers};
 use crate::error::RuntimeError;
@@ -53,6 +53,7 @@ pub(super) fn process_dispatch<R: CallResolver>(
     call: IntrinsicCall<'_, R>,
 ) -> Result<Value, RuntimeError> {
     match method {
+        ProcessMethod::Context => context(call),
         ProcessMethod::Demonitor => demonitor(call.function, call.args),
         ProcessMethod::Monitor => monitor(call.function, call.args),
         ProcessMethod::Parent => parent(call),
@@ -114,6 +115,7 @@ fn signal(function: &IRFunction, args: &[Value]) -> Result<Value, RuntimeError> 
     scheduler::deliver(
         pid,
         EvalMessage {
+            context: Context::ZERO,
             reply: None,
             tag: Tag::Lifecycle,
             value: Value::Int(i64::from(tag.0)),
@@ -242,6 +244,25 @@ fn parent<R: CallResolver>(call: IntrinsicCall<'_, R>) -> Result<Value, RuntimeE
     helpers::option_value(option_symbol, call.resolver, pid)
 }
 
+/// `Process.context() -> Process.Context`: the running process's request
+/// context as the four-`Int` stdlib struct, in field order (`flags`,
+/// `span`, `trace_hi`, `trace_lo`).
+fn context<R: CallResolver>(call: IntrinsicCall<'_, R>) -> Result<Value, RuntimeError> {
+    let IRType::Struct(symbol) = &call.function.return_type else {
+        return Err(RuntimeError::TypeMismatch {
+            detail: format!(
+                "Process.context must return a struct, got {:?}",
+                call.function.return_type,
+            ),
+        });
+    };
+    let words = scheduler::context().to_words();
+    Ok(Value::Struct {
+        symbol: symbol.clone(),
+        fields: words.iter().map(|word| Value::Int(*word as i64)).collect(),
+    })
+}
+
 // ----- ReplyTo methods ----------------------------------------------------
 
 /// `ReplyTo.send(self, reply) -> ReplyTo.Delivery`: route `reply` to the
@@ -327,9 +348,12 @@ fn option_some_struct_symbol<R: CallResolver>(option_symbol: &IRSymbol, resolver
 
 // ----- shared helpers -----------------------------------------------------
 
-/// A business-tagged [`EvalMessage`] with the given reply coordinates.
+/// A business-tagged [`EvalMessage`] with the given reply coordinates,
+/// stamped with the sender's request context. Casts, call requests, and
+/// `send_after` all build through here, so the stamp happens once.
 fn business(value: Value, reply: Option<ReplyInfo>) -> EvalMessage {
     EvalMessage {
+        context: scheduler::context(),
         reply,
         tag: Tag::Business,
         value,

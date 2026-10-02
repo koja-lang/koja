@@ -105,6 +105,10 @@ pub enum IRIntrinsicId {
     /// shape change.
     Socket(SocketMethod),
     String(StringMethod),
+    /// `@intrinsic` statics on the package-private `TraceRuntime` host
+    /// from `koja/lib/global/src/trace.koja`. See
+    /// [`TraceRuntimeMethod`].
+    TraceRuntime(TraceRuntimeMethod),
 }
 
 intrinsic_methods! {
@@ -215,8 +219,12 @@ intrinsic_methods! {
 
     /// `@intrinsic`-flagged statics on the `Process` protocol: `Monitor`
     /// registers the calling process as a watcher of a `Pid`, `Demonitor`
-    /// retracts one, `Parent` reports the calling process's spawner.
+    /// retracts one, `Parent` reports the calling process's spawner, and
+    /// `Context` reads the calling process's request context. The
+    /// setter lives on [`TraceRuntimeMethod`] because only `Trace`
+    /// writes the slot.
     ProcessMethod {
+        Context => "context",
         Demonitor => "demonitor",
         Monitor => "monitor",
         Parent => "parent",
@@ -247,6 +255,28 @@ intrinsic_methods! {
 
     RuntimeBlockMethod {
         AdoptBinary => "adopt_binary",
+    }
+
+    /// `@intrinsic` statics on the package-private `TraceRuntime` host
+    /// in `koja/lib/global/src/trace.koja`. The runtime plumbing under
+    /// `Trace`: `Install` writes the calling process's request context,
+    /// `SpanId` mints a non-zero 64-bit id, the `Span*` methods manage
+    /// the per-process stack of open span records (`SpanOpen` pushes
+    /// and returns the handle, `SpanTake` moves the record out,
+    /// `SpanPut` moves it back, `SpanClose` pops it), and the `Export*`
+    /// methods drive the bounded export queue. The record type is
+    /// opaque to the runtime and rides the [`crate::IRFunction`]
+    /// signature like a message payload does.
+    TraceRuntimeMethod {
+        ExportDropped => "export_dropped",
+        ExportPop => "export_pop",
+        ExportPush => "export_push",
+        Install => "install",
+        SpanClose => "span_close",
+        SpanId => "span_id",
+        SpanOpen => "span_open",
+        SpanPut => "span_put",
+        SpanTake => "span_take",
     }
 
     /// Methods on `Set<T>`. Same monomorphization story as
@@ -425,6 +455,7 @@ impl IRIntrinsicId {
             "Set" => SetMethod::from_source(method).map(Self::Set),
             "Socket" => SocketMethod::from_source(method).map(Self::Socket),
             "String" => StringMethod::from_source(method).map(Self::String),
+            "TraceRuntime" => TraceRuntimeMethod::from_source(method).map(Self::TraceRuntime),
             "UInt64" if method == "to_int" => {
                 Some(Self::NumericConvert(NumericConvert::UInt64ToInt))
             }
@@ -615,6 +646,7 @@ impl fmt::Display for IRIntrinsicId {
             Self::Set(m) => write!(f, "Set.{}", m.segment()),
             Self::Socket(m) => write!(f, "Socket.{}", m.segment()),
             Self::String(m) => write!(f, "String.{}", m.segment()),
+            Self::TraceRuntime(m) => write!(f, "TraceRuntime.{}", m.segment()),
         }
     }
 }
@@ -681,6 +713,7 @@ mod tests {
             ("Map", "next", Id::Map(MapMethod::Next)),
             ("Map", "put", Id::Map(MapMethod::Put)),
             ("Map", "remove", Id::Map(MapMethod::Remove)),
+            ("Process", "context", Id::Process(ProcessMethod::Context)),
             (
                 "Process",
                 "demonitor",
@@ -737,6 +770,51 @@ mod tests {
             ),
             ("String", "to_binary", Id::String(StringMethod::ToBinary)),
             ("String", "to_cstring", Id::String(StringMethod::ToCstring)),
+            (
+                "TraceRuntime",
+                "export_dropped",
+                Id::TraceRuntime(TraceRuntimeMethod::ExportDropped),
+            ),
+            (
+                "TraceRuntime",
+                "export_pop",
+                Id::TraceRuntime(TraceRuntimeMethod::ExportPop),
+            ),
+            (
+                "TraceRuntime",
+                "export_push",
+                Id::TraceRuntime(TraceRuntimeMethod::ExportPush),
+            ),
+            (
+                "TraceRuntime",
+                "install",
+                Id::TraceRuntime(TraceRuntimeMethod::Install),
+            ),
+            (
+                "TraceRuntime",
+                "span_close",
+                Id::TraceRuntime(TraceRuntimeMethod::SpanClose),
+            ),
+            (
+                "TraceRuntime",
+                "span_id",
+                Id::TraceRuntime(TraceRuntimeMethod::SpanId),
+            ),
+            (
+                "TraceRuntime",
+                "span_open",
+                Id::TraceRuntime(TraceRuntimeMethod::SpanOpen),
+            ),
+            (
+                "TraceRuntime",
+                "span_put",
+                Id::TraceRuntime(TraceRuntimeMethod::SpanPut),
+            ),
+            (
+                "TraceRuntime",
+                "span_take",
+                Id::TraceRuntime(TraceRuntimeMethod::SpanTake),
+            ),
         ];
         for (receiver, method, expected) in cases {
             assert_round_trip(

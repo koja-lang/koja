@@ -116,7 +116,7 @@ pub(super) fn lower_call(
         return_ty,
         args,
         prepend: None,
-        deep_copy_first_arg: false,
+        transfer_arg: None,
     };
     emit_call(site, ctx, block)
 }
@@ -462,26 +462,34 @@ pub(super) fn lower_method_call(
         return_ty,
         args,
         prepend,
-        deep_copy_first_arg: is_message_send(&struct_entry.identifier, method),
+        transfer_arg: runtime_transfer_arg(&struct_entry.identifier, method),
     };
     emit_call(site, ctx, current_block)
 }
 
-/// Whether a `(receiver, method)` pair is one of the message / reply
-/// send intrinsics that copy their first argument across a process
-/// boundary: `Ref.cast` / `Ref.call` / `Ref.send_after` and
-/// `ReplyTo.send`. Their first surface argument (the message `M` or
-/// reply `R`) must be deep-copied so the receiving process holds a
-/// physically independent value, see
-/// [`CallSite::deep_copy_first_arg`].
-fn is_message_send(receiver: &Identifier, method: &str) -> bool {
+/// The index of the surface argument a `(receiver, method)` pair hands
+/// to the runtime, or `None` for an ordinary call. The message / reply
+/// send intrinsics (`Ref.cast` / `Ref.call` / `Ref.send_after` and
+/// `ReplyTo.send`) copy their first argument (the message `M` or reply
+/// `R`) across a process boundary, so the receiving process must hold
+/// a physically independent value. The `TraceRuntime` span intrinsics
+/// (`span_open` / `export_push` at index 0, `span_put` after the handle
+/// at index 1) hand a span record to the runtime's open span stack or
+/// export queue, which owns it from then on. See
+/// [`CallSite::transfer_arg`].
+fn runtime_transfer_arg(receiver: &Identifier, method: &str) -> Option<usize> {
     if receiver.package() != "Global" {
-        return false;
+        return None;
     }
     match receiver.path() {
-        [name] if name == "Ref" => matches!(method, "cast" | "call" | "send_after"),
-        [name] if name == "ReplyTo" => method == "send",
-        _ => false,
+        [name] if name == "Ref" && matches!(method, "cast" | "call" | "send_after") => Some(0),
+        [name] if name == "ReplyTo" && method == "send" => Some(0),
+        [name] if name == "TraceRuntime" => match method {
+            "export_push" | "span_open" => Some(0),
+            "span_put" => Some(1),
+            _ => None,
+        },
+        _ => None,
     }
 }
 
@@ -691,17 +699,20 @@ struct CallSite<'a> {
     return_ty: IRType,
     args: &'a [Arg],
     prepend: Option<ValueId>,
-    /// When set, the first surface argument is *deep-copied*
+    /// When set, the surface argument at this index is *deep-copied*
     /// ([`IRInstruction::DeepCopy`]) before the call. The message /
     /// reply send intrinsics (`Ref.cast` / `Ref.call` /
     /// `Ref.send_after` / `ReplyTo.send`) hand the payload to another
     /// process, and Koja's rc bookkeeping is unsynchronized, so the
     /// transported value must share no heap storage with the sender.
+    /// The `TraceRuntime` span intrinsics hand a record to the runtime,
+    /// which frees it through drop glue rather than the caller's slot.
     /// The caller's own value keeps its normal slot lifecycle (an owned
     /// temp source is released right after the copy). The copy is moved
-    /// into the send and reclaimed by the runtime (delivered to the
-    /// receiver or released via the envelope drop glue on discard).
-    deep_copy_first_arg: bool,
+    /// into the runtime and reclaimed there (delivered to the receiver,
+    /// handed back through a `TraceRuntime` take / close / pop, or
+    /// released via the drop glue on discard).
+    transfer_arg: Option<usize>,
 }
 
 /// Shared tail of [`lower_call`] / [`lower_method_call`]: lower
@@ -719,7 +730,7 @@ fn emit_call(
         return_ty,
         args,
         prepend,
-        deep_copy_first_arg,
+        transfer_arg,
     } = site;
     let mut lowered_args = Vec::with_capacity(args.len() + usize::from(prepend.is_some()));
     if let Some(receiver) = prepend {
@@ -730,7 +741,7 @@ fn emit_call(
     for (index, arg) in args.iter().enumerate() {
         let (mut value, next) = lower_expr(&arg.value, ctx, current)?;
         current = next;
-        if deep_copy_first_arg && index == 0 {
+        if transfer_arg == Some(index) {
             let ty = ctx.type_of(value);
             let copied = materialize_boundary_copy(ctx, current, value, &ty);
             if copied != value {

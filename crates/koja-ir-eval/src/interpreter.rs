@@ -34,6 +34,7 @@ use crate::externs::foreign::ForeignTable;
 use crate::intrinsics;
 use crate::ops::{apply_binary_op, apply_unary_op};
 use crate::reactor::EvalReactor;
+use crate::scheduler::EvalExecution;
 use crate::scheduler::{
     self, EvalClock, EvalDriver, EvalExecutor, EvalMessage, EvalRuntime, EvalSignals,
     ProcessFuture, YieldOnce, block_on,
@@ -176,7 +177,7 @@ fn run_as_entry_process<'a, R: CallResolver>(
 fn boot_main(runtime: &EvalRuntime) -> koja_runtime_core::Pid {
     let main = runtime
         .core
-        .spawn((), None)
+        .spawn(EvalExecution::default(), None)
         .expect("the entry spawn has no parent to refuse over");
     runtime.ready.borrow_mut().push(Wake {
         pid: main,
@@ -1085,6 +1086,11 @@ fn dispatch_received<R: CallResolver>(
     match message.tag {
         Tag::Business => {
             let arm = arms.iter().find(|arm| arm.tag == ReceiveTag::Business)?;
+            // A business message installs the sender's request context on
+            // the receiver for the handler that follows. System traffic
+            // carries none, so those arms leave the slot alone. Mirrors
+            // native `deliver_envelope`.
+            scheduler::set_context(message.context);
             let payload = intrinsics::build_business_payload(&arm.payload_type, message, resolver);
             frame.locals.insert(arm.payload_local, payload);
             Some(arm.body)

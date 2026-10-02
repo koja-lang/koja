@@ -42,6 +42,7 @@ use std::sync::atomic::{
 };
 use std::time::Instant;
 
+use crate::context::Context;
 use crate::lifecycle::LifecycleWord;
 use crate::mailbox::{Mailbox, WaitTarget};
 use crate::protocol::{Message, Pid, Tag};
@@ -152,6 +153,12 @@ impl<M> Default for HotState<M> {
 /// One slot: the lifecycle word, the mutex-guarded hot state, the
 /// claim-holder-owned execution cell, and lock-free per-process scalars.
 struct Slot<X, M> {
+    /// The process's request context as four relaxed words (see
+    /// [`Context`]). Only the owning process writes it while it runs, so
+    /// no reader can observe a torn value. The spawner writes the child's
+    /// copy before the `occupy` release-store, and every later write and
+    /// read happens on the process's own thread.
+    context: [AtomicU64; 4],
     execution: ExecutionCell<X>,
     hot: Mutex<HotState<M>>,
     lifecycle: LifecycleWord,
@@ -169,12 +176,27 @@ struct Slot<X, M> {
 impl<X, M> Slot<X, M> {
     fn new() -> Self {
         Self {
+            context: [const { AtomicU64::new(0) }; 4],
             execution: ExecutionCell(UnsafeCell::new(None)),
             hot: Mutex::new(HotState::default()),
             lifecycle: LifecycleWord::new(),
             parent: AtomicI64::new(0),
             priority: AtomicU8::new(Priority::default() as u8),
             reductions: AtomicU32::new(0),
+        }
+    }
+
+    fn context(&self) -> Context {
+        Context::from_words(
+            self.context
+                .each_ref()
+                .map(|word| word.load(Ordering::Relaxed)),
+        )
+    }
+
+    fn set_context(&self, context: Context) {
+        for (word, value) in self.context.iter().zip(context.to_words()) {
+            word.store(value, Ordering::Relaxed);
         }
     }
 
@@ -858,6 +880,13 @@ impl<X, M: Message> ProcessTable<X, M> {
             let pid = encode(index, generation);
 
             slot.parent.store(parent.unwrap_or(0), Ordering::Relaxed);
+            // The child inherits the spawner's request context. The
+            // spawner is alive (checked above) and is the one calling, so
+            // its slot words are stable for the read.
+            let inherited = parent
+                .and_then(|parent| self.slot(parent))
+                .map_or(Context::ZERO, |(parent_slot, _)| parent_slot.context());
+            slot.set_context(inherited);
             if let Some(parent) = parent {
                 registry.children.entry(parent).or_default().insert(pid);
             }
@@ -1144,6 +1173,28 @@ impl<X, M: Message> ProcessTable<X, M> {
     /// The crash capture recorded for `pid`, if it died `Crashed`.
     pub fn crash_info(&self, pid: Pid) -> Option<CrashInfo> {
         self.with_hot(pid, |_, hot| hot.crash_info.clone())?
+    }
+
+    /// The request context `pid` currently carries. [`Context::ZERO`]
+    /// for a stale PID.
+    pub fn context(&self, pid: Pid) -> Context {
+        match self.slot(pid) {
+            Some((slot, generation)) if slot.lifecycle.load().generation == generation => {
+                slot.context()
+            }
+            _ => Context::ZERO,
+        }
+    }
+
+    /// Installs `context` on `pid`. Called by the owning process only,
+    /// at business dequeue with the envelope's context and by the stdlib
+    /// `Trace` closures around their work. A no-op for a stale PID.
+    pub fn set_context(&self, pid: Pid, context: Context) {
+        if let Some((slot, generation)) = self.slot(pid)
+            && slot.lifecycle.load().generation == generation
+        {
+            slot.set_context(context);
+        }
     }
 
     /// The process that spawned `pid`. `None` for the entry process
@@ -1745,18 +1796,19 @@ mod tests {
 
     /// A minimal business envelope (empty payload, no glue).
     fn fake_envelope() -> Envelope {
-        unsafe { Envelope::from_payload(TAG_BUSINESS, ptr::null(), 0, None) }
+        unsafe { Envelope::from_payload(TAG_BUSINESS, ptr::null(), 0, None, Context::ZERO) }
     }
 
     /// A minimal lifecycle/system envelope (empty payload, no glue).
     fn fake_lifecycle() -> Envelope {
-        unsafe { Envelope::from_payload(TAG_LIFECYCLE, ptr::null(), 0, None) }
+        unsafe { Envelope::from_payload(TAG_LIFECYCLE, ptr::null(), 0, None, Context::ZERO) }
     }
 
     /// A minimal reply envelope carrying `token`, waking a
     /// `WaitTarget::Reply` waiter.
     fn fake_reply(token: i64) -> Envelope {
-        let mut envelope = unsafe { Envelope::from_payload(TAG_REPLY, ptr::null(), 0, None) };
+        let mut envelope =
+            unsafe { Envelope::from_payload(TAG_REPLY, ptr::null(), 0, None, Context::ZERO) };
         envelope.reply_token = token;
         envelope
     }
@@ -2637,6 +2689,48 @@ mod tests {
         assert_eq!(table.parent(root), None, "entry process has no parent");
         assert_eq!(table.parent(child), Some(root));
         assert_eq!(table.parent(child + 1), None, "stale pid has no parent");
+    }
+
+    #[test]
+    fn context_starts_zero_and_round_trips() {
+        let table = TestTable::new();
+        let root = fake_spawn(&table);
+        assert_eq!(table.context(root), Context::ZERO);
+
+        let context = Context {
+            flags: 1,
+            span: 7,
+            trace_hi: 8,
+            trace_lo: 9,
+        };
+        table.set_context(root, context);
+        assert_eq!(table.context(root), context);
+        assert_eq!(
+            table.context(root + 1),
+            Context::ZERO,
+            "stale pid reads zero"
+        );
+    }
+
+    #[test]
+    fn spawn_copies_parent_context_into_child() {
+        let table = TestTable::new();
+        let root = fake_spawn(&table);
+        let context = Context {
+            flags: 1,
+            span: 7,
+            trace_hi: 8,
+            trace_lo: 9,
+        };
+        table.set_context(root, context);
+
+        let child = fake_spawn_child(&table, root);
+        assert_eq!(table.context(child), context);
+
+        // A later write on the parent does not reach the child: the copy
+        // happens once, at spawn.
+        table.set_context(root, Context::ZERO);
+        assert_eq!(table.context(child), context);
     }
 
     /// Drains staged kills as a driver would: kill each, which stages

@@ -297,7 +297,65 @@ protocol Process<C, M, R>
   end
 end
 
+@doc """
+The request context a process carries. The runtime copies it to every
+child at `spawn`, stamps it onto every `cast`, `call`, and `send_after`
+message, and installs the message's copy on the receiver when the
+message is dequeued. `Trace` fills it in. A process nobody traced
+carries `Process.Context.ZERO`, and nothing downstream of it records.
+
+The fields are the runtime layout, the 32 bytes the runtime holds in
+this order so that reading the context is one copy. Read the ids
+through `trace_id` and `span_id`, which return them as bytes, and never
+build a context by hand. `Trace` is the only constructor, a trace read
+off the wire enters through the `Trace` setters, and the field list
+can grow.
+"""
+struct Process.Context
+  flags: Int
+  span: Int
+  trace_hi: Int
+  trace_lo: Int
+
+  @doc """
+  The context of a process that nobody traced. No trace, no span,
+  sampled bit clear.
+  """
+  const ZERO = Process.Context{flags: 0, span: 0, trace_hi: 0, trace_lo: 0}
+
+  @doc """
+  Whether the sampled bit is set. Spans record only under a sampled
+  context.
+  """
+  fn sampled?(self) -> Bool
+    self.flags.band(1) == 1
+  end
+
+  @doc """
+  The 8-byte span id, big end first. All zeros when no span is open.
+  """
+  fn span_id(self) -> Binary
+    <<self.span::64>>
+  end
+
+  @doc """
+  The 16-byte trace id, big end first. All zeros outside a trace.
+  """
+  fn trace_id(self) -> Binary
+    <<self.trace_hi::64, self.trace_lo::64>>
+  end
+end
+
 extend Process
+  @doc """
+  The calling process's request context. Inside a message handler this
+  is the sender's context at the time it sent. Elsewhere it is the
+  context the process was spawned with, or whatever an enclosing
+  `Trace.span` installed.
+  """
+  @intrinsic
+  fn context -> Process.Context
+
   @doc """
   Registers the calling process as a watcher of `target`. When the
   watched process exits for any reason, a `Process.ExitSignal` is
