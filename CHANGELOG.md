@@ -14,18 +14,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `TCPListener.Options` with `read_timeout`, `write_timeout`, and `accept_timeout`. `TCPListener.bind(port, options)` and `bind_addr(addr, options)` take it as a trailing argument with an all `Option.None` default. `accept` waits at most `accept_timeout` and copies the two stream timeouts onto the returned `TCPSocket`. `try_accept` does the same.
 - `Fd.block`, `Fd.read`, `Fd.read_binary`, and `Fd.write` take a trailing `timeout: Option<Duration> = Option.None`. `Fd.block` now returns `Bool`, `true` when the wait ended on the timeout. `Socket.accept` and `Socket.connect` take the same parameter. On both backends a timeout is a bounded reactor wait, the mechanism `receive ... after` uses, so no socket option is set.
 - `koja shell` now accepts `:q` as an alias for `:quit`.
-- `koja test --only <file>:<line>` runs one test, the id the json reporter prints. Repeat the flag to run several. An id that matches no test is an error.
-- A compiler diagnostic can carry a fix. The language server sends it with the diagnostic and offers it as a quick fix through `textDocument/codeAction`. A fix is attached only when the compiler is sure of the rewrite. The `unless` removal, the `@test` deprecation, and a valued `return` in a `Unit` function carry the first fixes.
-- The language server puts a `Run test` code lens on each `test` block. The lens carries the client command `koja.runTest` with the project root and `file:line`, which the VS Code extension runs through its test controller.
-- The language server registers for `.koja` and `koja.toml` changes on disk and rechecks every open document when a file that is not open changes.
+- `koja test --only <file>:<line>` runs one test. Repeat the flag to run several.
+- Quick fixes in the language server. The `unless` removal, the `@test` deprecation, and a valued `return` in a `Unit` function carry the first ones.
+- A `Run test` code lens on each `test` block.
+- The language server rechecks open documents when a `.koja` file or `koja.toml` changes on disk.
 - A `const` can hold a list, map, or set literal, such as `const PRIMES = [2, 3, 5, 7]` or `const PORTS = ["http": 80]`, and a struct or enum variant whose fields hold one. A constant value takes the same grammar as a field default, so it can also read another constant declared anywhere in the program. A collection constant is built once at program start and every read borrows the shared value. A constant that depends on itself through other constants is a compile error.
 
 ### Fixed
 
 - `koja format` no longer panics on a comment inside an empty list, map, or struct literal. The literal stays broken open with the comment inside, the layout an empty call argument list already used.
 - A field default can be a struct literal named through a dotted path, such as `options: TCPListener.Options = TCPListener.Options{}`, or through a file alias. Enum variants with a payload, such as `Option.Some(3)`, are accepted as defaults too. Before, the dotted literal was rejected and the aliased one could panic the compiler. `TCPListener.options` now defaults to `TCPListener.Options{}`.
-- The language server syncs documents incrementally and checks 150 ms after the last edit, so an editor that types or pastes quickly no longer sees a flash of errors for every keystroke. A check that an edit overtook publishes nothing.
-- The language server negotiates its position encoding and converts every span through the text of its file. Before, a line with a multi-byte character put every later hover, highlight, and edit on that line off by the extra bytes.
+- The language server syncs documents incrementally and checks 150 ms after the last edit. A check that an edit overtook publishes nothing, so a multi-step edit no longer leaves errors from a half-applied state on screen.
+- Language server positions are right on a line with a multi-byte character. Before, every hover, highlight, and edit after it on that line was off by the extra bytes.
 
 ## [0.19.1] - 2026-09-26
 
