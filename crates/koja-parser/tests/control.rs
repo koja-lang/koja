@@ -118,6 +118,18 @@ fn unless_is_rejected_with_replacement_hint() {
 }
 
 #[test]
+fn unless_fix_rewrites_the_keyword() {
+    let source = "fn run\n  unless x\n    1\n  end\nend\n";
+    let result = parse_failing_with(source, &["`unless` was removed in 0.19"]);
+    let fix = result.errors[0]
+        .fix
+        .as_ref()
+        .expect("removal diagnostic carries a fix");
+    assert_eq!(fix.title, "Replace `unless` with `if not`");
+    assert_eq!(fix.apply(source), "fn run\n  if not x\n    1\n  end\nend\n");
+}
+
+#[test]
 fn match_with_arms() {
     let expr = first_function_expr(
         "

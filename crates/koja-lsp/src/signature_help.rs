@@ -33,8 +33,7 @@ impl Backend {
             _ => return Ok(None),
         };
 
-        let line = pos.line + 1;
-        let col = pos.character + 1;
+        let (line, col) = state.line_column(pos);
         let call_site = match find_enclosing_call(file, line, col) {
             Some(c) => c,
             None => return Ok(None),

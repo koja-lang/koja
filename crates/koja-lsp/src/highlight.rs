@@ -10,7 +10,6 @@ use tower_lsp_server::ls_types::*;
 use koja_query::Role;
 
 use crate::backend::Backend;
-use crate::convert::span_to_range;
 
 impl Backend {
     /// Handles `textDocument/documentHighlight`.
@@ -35,12 +34,13 @@ impl Backend {
             return Ok(None);
         };
 
+        let positions = state.positions(file);
         let highlights = state
             .index
             .occurrences(symbol.key)
             .filter(|occurrence| occurrence.span.file == file)
             .map(|occurrence| DocumentHighlight {
-                range: span_to_range(&occurrence.span),
+                range: positions.range(&occurrence.span),
                 kind: Some(match occurrence.role {
                     Role::Read => DocumentHighlightKind::READ,
                     Role::Declaration | Role::Write => DocumentHighlightKind::WRITE,

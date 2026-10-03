@@ -149,13 +149,8 @@ impl<'source> Lexer<'source> {
 
     /// Push an error diagnostic with a hint.
     fn error(&mut self, message: impl Into<String>, hint: &str, span: Span) {
-        self.errors.push(Diagnostic {
-            severity: Severity::Error,
-            message: message.into(),
-            hint: Some(hint.into()),
-            span,
-            related: None,
-        });
+        self.errors
+            .push(Diagnostic::error_with_hint(message, hint, span));
     }
 
     /// Maps a scanned name to a keyword token or an identifier/type token.
@@ -669,6 +664,7 @@ impl<'source> Lexer<'source> {
             hint,
             span: self.span(start),
             related: None,
+            fix: None,
         });
     }
 }

@@ -244,6 +244,7 @@ impl Parser {
                 hint,
                 span,
                 related: None,
+                fix: None,
             });
             self.advance()
         }
@@ -363,23 +364,18 @@ impl Parser {
     // =========================================================================
 
     pub(crate) fn error(&mut self, message: String, span: Span) {
-        self.errors.push(Diagnostic {
-            severity: Severity::Error,
-            message,
-            hint: None,
-            span,
-            related: None,
-        });
+        self.errors.push(Diagnostic::error(message, span));
     }
 
     pub(crate) fn error_with_hint(&mut self, message: String, hint: String, span: Span) {
-        self.errors.push(Diagnostic {
-            severity: Severity::Error,
-            message,
-            hint: Some(hint),
-            span,
-            related: None,
-        });
+        self.errors
+            .push(Diagnostic::error_with_hint(message, hint, span));
+    }
+
+    /// Push a diagnostic built by the caller, for the few sites that
+    /// attach a [`Fix`](koja_ast::ast::Fix) or a related location.
+    pub(crate) fn report(&mut self, diagnostic: Diagnostic) {
+        self.errors.push(diagnostic);
     }
 
     // =========================================================================

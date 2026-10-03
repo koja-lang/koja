@@ -52,10 +52,19 @@ call sites once instead of twice.
 
 ### Language server
 
-- Code actions attached to diagnostics, so teaching diagnostics become
-  one-keystroke fixes.
-- Incremental text synchronization in place of full-document sync.
-- A run-test code lens on each `test` declaration.
+- **[DONE]** Code actions attached to diagnostics, so teaching diagnostics
+  become one-keystroke fixes. A `Diagnostic` carries an optional `Fix`, the
+  server sends it in `data`, and `textDocument/codeAction` turns it into a
+  quick fix. The `unless` removal, the `@test` deprecation, and a valued
+  `return` in a `Unit` function carry the first fixes.
+- **[DONE]** Incremental text synchronization in place of full-document sync.
+  Buffers live in a synchronous store, checks debounce at 150 ms, a stale
+  check publishes nothing, the position encoding is negotiated, and a
+  sibling changed on disk rechecks the open documents.
+- **[DONE]** A run-test code lens on each `test` declaration. The lens carries
+  `koja.runTest` with the project root and `file:line`, `vscode-koja` runs it
+  through its test controller, and `koja test --only <file>:<line>` runs one
+  test.
 
 ### Runtime
 

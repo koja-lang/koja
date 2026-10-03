@@ -14,6 +14,7 @@ use koja_query::expr_at::{find_expr_at, receiver_type_id};
 use koja_typecheck::{Candidate, CandidateDetail, CandidateKind, GlobalKind, GlobalRegistry};
 
 use crate::backend::Backend;
+use crate::convert::Positions;
 
 impl Backend {
     /// Handles `textDocument/completion` requests by returning keyword
@@ -37,8 +38,7 @@ impl Backend {
             _ => return Ok(Some(CompletionResponse::Array(items))),
         };
 
-        let line = pos.line + 1;
-        let col = pos.character + 1;
+        let (line, col) = state.line_column(pos);
         if let Some(expr) = find_expr_at(file, line, col)
             && let ExprKind::FieldAccess { receiver, .. } = &expr.kind
             && let Some(type_id) = receiver_type_id(receiver, registry)
@@ -55,7 +55,12 @@ impl Backend {
             return Ok(Some(CompletionResponse::Array(items)));
         }
 
-        let prefix = word_prefix_at(&state.source, pos);
+        // The prefix comes from the live buffer, which can be a few
+        // keystrokes ahead of the analyzed text.
+        let prefix = match self.buffers.snapshot(uri.as_str()) {
+            Some(buffer) => word_prefix_at(&Positions::new(self.encoding(), &buffer.text), pos),
+            None => word_prefix_at(&state.active_positions(), pos),
+        };
         let prefix_lower = prefix.to_ascii_lowercase();
         let matches =
             |name: &str| prefix.is_empty() || name.to_ascii_lowercase().starts_with(&prefix_lower);
@@ -125,15 +130,8 @@ fn to_completion_item(candidate: &Candidate<'_>, registry: &GlobalRegistry) -> C
     }
 }
 
-fn word_prefix_at(source: &str, pos: Position) -> String {
-    let lines: Vec<&str> = source.lines().collect();
-    let line_idx = pos.line as usize;
-    if line_idx >= lines.len() {
-        return String::new();
-    }
-    let line = lines[line_idx];
-    let col = (pos.character as usize).min(line.len());
-    let before = &line[..col];
+fn word_prefix_at(positions: &Positions<'_>, pos: Position) -> String {
+    let before = &positions.text()[..positions.offset(pos)];
     before
         .chars()
         .rev()
