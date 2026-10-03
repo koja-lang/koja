@@ -516,6 +516,75 @@ fn legacy_test_annotation_warns_at_the_annotation() {
 }
 
 #[test]
+fn legacy_test_fix_rewrites_the_header_as_a_test_block() {
+    let source = dedent(
+        "
+        struct StackTest
+          @test \"push then \\\"pop\\\"\"
+          fn test_push_pop -> Unit ! String
+            ()
+          end
+        end
+
+        @test
+        fn top_level_legacy ! String
+          ()
+        end
+        ",
+    );
+    let checked = typecheck_file(&source);
+    let fixes: Vec<_> = checked
+        .diagnostics
+        .iter()
+        .filter(|d| d.severity == Severity::Warning)
+        .map(|d| d.fix.as_ref().expect("legacy test warning carries a fix"))
+        .collect();
+    assert_eq!(fixes.len(), 2);
+    let expected = dedent(
+        "
+        struct StackTest
+          test \"push then \\\"pop\\\"\"
+            ()
+          end
+        end
+
+        test \"top_level_legacy\"
+          ()
+        end
+        ",
+    );
+    // The later fix goes first so the earlier one's offsets still hold.
+    assert_eq!(fixes[0].apply(&fixes[1].apply(&source)), expected);
+}
+
+#[test]
+fn legacy_test_without_a_typed_header_keeps_the_hint_alone() {
+    let source = "
+        @test
+        fn bare_header
+          ()
+        end
+
+        @doc \"documented\"
+        @test
+        fn documented ! String
+          ()
+        end
+        ";
+    let checked = typecheck_file(&dedent(source));
+    let warnings: Vec<_> = checked
+        .diagnostics
+        .iter()
+        .filter(|d| d.severity == Severity::Warning)
+        .collect();
+    assert_eq!(warnings.len(), 2, "{warnings:#?}");
+    for warning in warnings {
+        assert!(warning.hint.is_some());
+        assert!(warning.fix.is_none(), "no fix without a sure header end");
+    }
+}
+
+#[test]
 fn test_blocks_do_not_warn() {
     let source = "
         struct Stack

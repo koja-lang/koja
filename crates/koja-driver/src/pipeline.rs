@@ -75,7 +75,7 @@ use koja_ir::{IRPackage, IRProgram, IRScript, lower_program, lower_script};
 use koja_ir_eval::{ForeignTable, Interpreter, RuntimeError, Unresolved, Value};
 use koja_ir_llvm::CompileOptions;
 use koja_parser::{FileId, ParseMode, ParsedProgram, SourceFile, parse_file, parse_program};
-use koja_test::{HARNESS_ENTRY, discover_tests, generate_harness};
+use koja_test::{HARNESS_ENTRY, discover_tests, generate_harness, select_tests};
 use koja_typecheck::{CheckFailure, CheckedProgram, check_program, format_registry};
 
 use crate::commands::{load_project_or_exit, try_load_project};
@@ -217,6 +217,10 @@ pub(crate) struct TestOptions {
     /// Execution backend. Defaults to `interpreter`, or `llvm` when the project declares a C extern the interpreter cannot resolve
     #[arg(long, value_enum)]
     pub(crate) backend: Option<Backend>,
+
+    /// Run only the test at this `file:line`, the id the json reporter prints. Repeat the flag to run several
+    #[arg(long, value_name = "FILE:LINE")]
+    pub(crate) only: Vec<String>,
 
     /// Write machine-readable reporter output to this file instead of stderr
     #[arg(long, value_name = "PATH")]
@@ -1215,6 +1219,16 @@ fn run_project_tests(config: &ProjectConfig, root: &Path, options: &TestOptions)
         println!("no tests found");
         return;
     }
+    let tests = if options.only.is_empty() {
+        tests
+    } else {
+        select_tests(tests, &options.only).unwrap_or_else(|unmatched| {
+            for id in unmatched {
+                eprintln!("error: no test at {id}");
+            }
+            process::exit(1);
+        })
+    };
 
     splice_generated_source(
         &mut parsed,

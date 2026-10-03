@@ -8,7 +8,6 @@ use tower_lsp_server::jsonrpc::Result;
 use tower_lsp_server::ls_types::*;
 
 use crate::backend::Backend;
-use crate::convert::span_to_range;
 
 impl Backend {
     /// Handles `textDocument/definition` requests by resolving the symbol
@@ -36,7 +35,7 @@ impl Backend {
 
         Ok(Some(GotoDefinitionResponse::Scalar(Location {
             uri: state.uri_of(&analysis, span.file, &uri),
-            range: span_to_range(&span),
+            range: state.range_of(&span),
         })))
     }
 }

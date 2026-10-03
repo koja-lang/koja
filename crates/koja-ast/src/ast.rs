@@ -315,6 +315,11 @@ pub struct Diagnostic {
     /// earlier definition behind `already defined`. Boxed to keep
     /// `Diagnostic` small.
     pub related: Option<Box<Related>>,
+    /// A repair the compiler is sure of. Attached only when applying
+    /// it leaves the program the author meant, so an editor can offer
+    /// it as a one-keystroke fix. Anything less certain stays in
+    /// `hint` as prose.
+    pub fix: Option<Box<Fix>>,
 }
 
 /// A source location with a short label, such as `previous function
@@ -322,6 +327,24 @@ pub struct Diagnostic {
 #[derive(Debug, Clone)]
 pub struct Related {
     pub message: String,
+    pub span: Span,
+}
+
+/// A machine-applicable repair for a [`Diagnostic`]. Every edit
+/// targets the diagnostic's own file.
+#[derive(Debug, Clone)]
+pub struct Fix {
+    pub edits: Vec<Edit>,
+    /// Short imperative label an editor shows, such as `Replace
+    /// \`unless\` with \`if not\``.
+    pub title: String,
+}
+
+/// One text replacement. An empty `replacement` deletes the span and
+/// an empty span inserts at its start.
+#[derive(Debug, Clone)]
+pub struct Edit {
+    pub replacement: String,
     pub span: Span,
 }
 
@@ -334,6 +357,7 @@ impl Diagnostic {
             hint: None,
             span,
             related: None,
+            fix: None,
         }
     }
 
@@ -349,6 +373,7 @@ impl Diagnostic {
             hint: Some(hint.into()),
             span,
             related: None,
+            fix: None,
         }
     }
 
@@ -360,6 +385,7 @@ impl Diagnostic {
             hint: None,
             span,
             related: None,
+            fix: None,
         }
     }
 
@@ -375,6 +401,7 @@ impl Diagnostic {
             hint: Some(hint.into()),
             span,
             related: None,
+            fix: None,
         }
     }
 
@@ -385,6 +412,46 @@ impl Diagnostic {
             span,
         }));
         self
+    }
+
+    /// Attach a repair. See [`Fix`].
+    pub fn with_fix(mut self, title: impl Into<String>, edits: Vec<Edit>) -> Self {
+        self.fix = Some(Box::new(Fix {
+            edits,
+            title: title.into(),
+        }));
+        self
+    }
+}
+
+impl Fix {
+    /// `source` with every edit applied. Edits are applied from the
+    /// end of the file backward so earlier offsets stay valid.
+    pub fn apply(&self, source: &str) -> String {
+        let mut edits: Vec<&Edit> = self.edits.iter().collect();
+        edits.sort_by_key(|edit| std::cmp::Reverse(edit.span.start.offset));
+        let mut text = source.to_string();
+        for edit in edits {
+            let start = edit.span.start.offset as usize;
+            let end = edit.span.end.offset as usize;
+            text.replace_range(start..end, &edit.replacement);
+        }
+        text
+    }
+}
+
+impl Edit {
+    /// Replace the text under `span` with `replacement`.
+    pub fn replace(span: Span, replacement: impl Into<String>) -> Self {
+        Self {
+            replacement: replacement.into(),
+            span,
+        }
+    }
+
+    /// Delete the text under `span`.
+    pub fn delete(span: Span) -> Self {
+        Self::replace(span, "")
     }
 }
 

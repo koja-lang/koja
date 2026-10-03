@@ -15,7 +15,6 @@ use koja_query::Analysis;
 use koja_query::rename::{Rename, RenameRefusal, prepare_rename, validate_new_name};
 
 use crate::backend::{Backend, DocumentState};
-use crate::convert::span_to_range;
 
 impl Backend {
     /// Handles `textDocument/prepareRename`.
@@ -41,15 +40,12 @@ impl Backend {
         let Some(file) = analysis.file_id(&state.active_path) else {
             return Ok(None);
         };
+        let (line, column) = state.line_column(params.position);
         let range = state
             .index
-            .occurrence_at(
-                file,
-                params.position.line + 1,
-                params.position.character + 1,
-            )
-            .map(|occurrence| span_to_range(&occurrence.span))
-            .unwrap_or_else(|| span_to_range(&rename.declaration));
+            .occurrence_at(file, line, column)
+            .map(|occurrence| state.range_of(&occurrence.span))
+            .unwrap_or_else(|| state.range_of(&rename.declaration));
         Ok(Some(PrepareRenameResponse::RangeWithPlaceholder {
             range,
             placeholder: rename.name,
@@ -80,7 +76,7 @@ impl Backend {
         for span in &rename.spans {
             let target = state.uri_of(&analysis, span.file, &uri);
             changes.entry(target).or_default().push(TextEdit {
-                range: span_to_range(span),
+                range: state.range_of(span),
                 new_text: params.new_name.clone(),
             });
         }

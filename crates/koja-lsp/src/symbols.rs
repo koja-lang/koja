@@ -15,11 +15,11 @@ use koja_ast::ast::{
     StructDecl, TestDecl, TypeExpr, TypeParam, Visibility, path_text,
 };
 use koja_ast::labels::type_expr_span;
-use koja_ast::span::Span;
+use koja_ast::span::{FileId, Span};
 use koja_ast::visit::{self, Visitor};
 
 use crate::backend::Backend;
-use crate::convert::{path_to_uri, span_to_range};
+use crate::convert::{Positions, path_to_uri};
 
 /// Prefixes `detail` with `priv` for private declarations.
 fn detail_with_visibility(visibility: Visibility, detail: Option<String>) -> Option<String> {
@@ -78,7 +78,7 @@ impl Backend {
 
         let symbols = state
             .active_file()
-            .map(build_document_symbols)
+            .map(|file| build_document_symbols(file, &state.active_positions()))
             .unwrap_or_default();
         Ok(Some(DocumentSymbolResponse::Nested(symbols)))
     }
@@ -97,8 +97,10 @@ impl Backend {
 
         let docs = self.documents.read().await;
         for state in docs.values() {
-            for parsed_file in state.parsed.iter() {
-                collect_workspace_symbols(&parsed_file.ast, &query, &mut results);
+            // `parsed` iterates in file id order.
+            for (index, parsed_file) in state.parsed.iter().enumerate() {
+                let positions = state.positions(FileId(index as u32));
+                collect_workspace_symbols(&parsed_file.ast, &query, &positions, &mut results);
             }
         }
 
@@ -112,7 +114,7 @@ fn symbol_info(
     name: &str,
     kind: SymbolKind,
     uri: &Uri,
-    span: &Span,
+    range: Range,
     container: Option<String>,
 ) -> SymbolInformation {
     SymbolInformation {
@@ -122,19 +124,25 @@ fn symbol_info(
         deprecated: None,
         location: Location {
             uri: uri.clone(),
-            range: span_to_range(span),
+            range,
         },
         container_name: container,
     }
 }
 
 /// Collects workspace symbols from a file, filtering by query substring.
-fn collect_workspace_symbols(file: &File, query: &str, results: &mut Vec<SymbolInformation>) {
+fn collect_workspace_symbols(
+    file: &File,
+    query: &str,
+    positions: &Positions<'_>,
+    results: &mut Vec<SymbolInformation>,
+) {
     let Some(uri) = file.path.as_deref().and_then(path_to_uri) else {
         return;
     };
     let mut collector = WorkspaceSymbols {
         containers: Vec::new(),
+        positions,
         query,
         results,
         uri,
@@ -147,6 +155,7 @@ fn collect_workspace_symbols(file: &File, query: &str, results: &mut Vec<SymbolI
 /// container a nested symbol reports.
 struct WorkspaceSymbols<'a> {
     containers: Vec<String>,
+    positions: &'a Positions<'a>,
     query: &'a str,
     results: &'a mut Vec<SymbolInformation>,
     uri: Uri,
@@ -158,8 +167,9 @@ impl WorkspaceSymbols<'_> {
             return;
         }
         let container = self.containers.last().cloned();
+        let range = self.positions.range(span);
         self.results
-            .push(symbol_info(name, kind, &self.uri, span, container));
+            .push(symbol_info(name, kind, &self.uri, range, container));
     }
 
     /// Run `walk` with `name` as the innermost container.
@@ -239,24 +249,24 @@ fn item_container(item: &Item) -> Option<String> {
 }
 
 /// Converts a parsed file's top-level items into document symbols.
-fn build_document_symbols(file: &File) -> Vec<DocumentSymbol> {
+fn build_document_symbols(file: &File, positions: &Positions<'_>) -> Vec<DocumentSymbol> {
     let mut symbols = Vec::new();
 
     for item in &file.items {
         match item {
             Item::Alias(_) => {}
-            Item::Builtin(b) => symbols.push(builtin_symbol(b)),
-            Item::Function(f) => symbols.push(function_symbol(f)),
-            Item::Struct(s) => symbols.push(struct_symbol(s)),
-            Item::Test(t) => symbols.push(test_symbol(t)),
-            Item::Enum(e) => symbols.push(enum_symbol(e)),
-            Item::Constant(c) => symbols.push(constant_symbol(c)),
+            Item::Builtin(b) => symbols.push(builtin_symbol(b, positions)),
+            Item::Function(f) => symbols.push(function_symbol(f, positions)),
+            Item::Struct(s) => symbols.push(struct_symbol(s, positions)),
+            Item::Test(t) => symbols.push(test_symbol(t, positions)),
+            Item::Enum(e) => symbols.push(enum_symbol(e, positions)),
+            Item::Constant(c) => symbols.push(constant_symbol(c, positions)),
             Item::Impl(imp) => {
                 if imp.span.synthetic {
                     continue;
                 }
                 let target_name = type_expr_label(&imp.target);
-                let children = member_symbols(&imp.members, &imp.tests);
+                let children = member_symbols(&imp.members, &imp.tests, positions);
 
                 #[allow(deprecated)]
                 symbols.push(DocumentSymbol {
@@ -265,14 +275,14 @@ fn build_document_symbols(file: &File) -> Vec<DocumentSymbol> {
                     kind: SymbolKind::MODULE,
                     tags: None,
                     deprecated: None,
-                    range: span_to_range(&imp.span),
-                    selection_range: span_to_range(&type_expr_span(&imp.target)),
+                    range: positions.range(&imp.span),
+                    selection_range: positions.range(&type_expr_span(&imp.target)),
                     children: children_option(children),
                 });
             }
             Item::Extend(ext) => {
                 let target_name = type_expr_label(&ext.target);
-                let children = member_symbols(&ext.members, &ext.tests);
+                let children = member_symbols(&ext.members, &ext.tests, positions);
 
                 #[allow(deprecated)]
                 symbols.push(DocumentSymbol {
@@ -281,12 +291,12 @@ fn build_document_symbols(file: &File) -> Vec<DocumentSymbol> {
                     kind: SymbolKind::MODULE,
                     tags: None,
                     deprecated: None,
-                    range: span_to_range(&ext.span),
-                    selection_range: span_to_range(&type_expr_span(&ext.target)),
+                    range: positions.range(&ext.span),
+                    selection_range: positions.range(&type_expr_span(&ext.target)),
                     children: children_option(children),
                 });
             }
-            Item::Protocol(p) => symbols.push(protocol_symbol(p)),
+            Item::Protocol(p) => symbols.push(protocol_symbol(p, positions)),
             Item::TypeAlias(ta) => {
                 #[allow(deprecated)]
                 symbols.push(DocumentSymbol {
@@ -298,8 +308,8 @@ fn build_document_symbols(file: &File) -> Vec<DocumentSymbol> {
                     kind: SymbolKind::TYPE_PARAMETER,
                     tags: None,
                     deprecated: None,
-                    range: span_to_range(&ta.span),
-                    selection_range: span_to_range(&ta.name.span),
+                    range: positions.range(&ta.span),
+                    selection_range: positions.range(&ta.name.span),
                     children: None,
                 });
             }
@@ -309,20 +319,23 @@ fn build_document_symbols(file: &File) -> Vec<DocumentSymbol> {
     symbols
 }
 
-/// Builds a [`DocumentSymbol`] for a builtin declaration.
 /// Children of an `impl`/`extend` block: its methods, then its tests.
-fn member_symbols(members: &[ImplMember], tests: &[TestDecl]) -> Vec<DocumentSymbol> {
+fn member_symbols(
+    members: &[ImplMember],
+    tests: &[TestDecl],
+    positions: &Positions<'_>,
+) -> Vec<DocumentSymbol> {
     members
         .iter()
         .filter_map(|m| match m {
-            ImplMember::Function(f) => Some(function_symbol(f)),
+            ImplMember::Function(f) => Some(function_symbol(f, positions)),
             _ => None,
         })
-        .chain(tests.iter().map(test_symbol))
+        .chain(tests.iter().map(|t| test_symbol(t, positions)))
         .collect()
 }
 
-fn constant_symbol(c: &Constant) -> DocumentSymbol {
+fn constant_symbol(c: &Constant, positions: &Positions<'_>) -> DocumentSymbol {
     #[allow(deprecated)]
     DocumentSymbol {
         name: c.name().text.clone(),
@@ -330,16 +343,17 @@ fn constant_symbol(c: &Constant) -> DocumentSymbol {
         kind: SymbolKind::CONSTANT,
         tags: None,
         deprecated: None,
-        range: span_to_range(&c.span),
-        selection_range: span_to_range(&c.name().span),
+        range: positions.range(&c.span),
+        selection_range: positions.range(&c.name().span),
         children: None,
     }
 }
 
-fn builtin_symbol(b: &BuiltinDecl) -> DocumentSymbol {
-    let mut children = nested_symbols(&b.nested);
-    children.extend(b.functions.iter().map(function_symbol));
-    children.extend(b.tests.iter().map(test_symbol));
+/// Builds a [`DocumentSymbol`] for a builtin declaration.
+fn builtin_symbol(b: &BuiltinDecl, positions: &Positions<'_>) -> DocumentSymbol {
+    let mut children = nested_symbols(&b.nested, positions);
+    children.extend(b.functions.iter().map(|f| function_symbol(f, positions)));
+    children.extend(b.tests.iter().map(|t| test_symbol(t, positions)));
     #[allow(deprecated)]
     DocumentSymbol {
         name: b.name().text.clone(),
@@ -347,17 +361,17 @@ fn builtin_symbol(b: &BuiltinDecl) -> DocumentSymbol {
         kind: SymbolKind::STRUCT,
         tags: None,
         deprecated: None,
-        range: span_to_range(&b.span),
-        selection_range: span_to_range(&b.name().span),
+        range: positions.range(&b.span),
+        selection_range: positions.range(&b.name().span),
         children: children_option(children),
     }
 }
 
 /// Builds a [`DocumentSymbol`] for a struct declaration.
-fn struct_symbol(s: &StructDecl) -> DocumentSymbol {
-    let mut children = nested_symbols(&s.nested);
-    children.extend(s.functions.iter().map(function_symbol));
-    children.extend(s.tests.iter().map(test_symbol));
+fn struct_symbol(s: &StructDecl, positions: &Positions<'_>) -> DocumentSymbol {
+    let mut children = nested_symbols(&s.nested, positions);
+    children.extend(s.functions.iter().map(|f| function_symbol(f, positions)));
+    children.extend(s.tests.iter().map(|t| test_symbol(t, positions)));
     #[allow(deprecated)]
     DocumentSymbol {
         name: s.name().text.clone(),
@@ -365,16 +379,16 @@ fn struct_symbol(s: &StructDecl) -> DocumentSymbol {
         kind: SymbolKind::STRUCT,
         tags: None,
         deprecated: None,
-        range: span_to_range(&s.span),
-        selection_range: span_to_range(&s.name().span),
+        range: positions.range(&s.span),
+        selection_range: positions.range(&s.name().span),
         children: children_option(children),
     }
 }
 
 /// The description is the name, since a test has no identifier of
 /// its own.
-fn test_symbol(t: &TestDecl) -> DocumentSymbol {
-    let range = span_to_range(&t.span);
+fn test_symbol(t: &TestDecl, positions: &Positions<'_>) -> DocumentSymbol {
+    let range = positions.range(&t.span);
     #[allow(deprecated)]
     DocumentSymbol {
         name: t.description.clone(),
@@ -389,12 +403,12 @@ fn test_symbol(t: &TestDecl) -> DocumentSymbol {
 }
 
 /// Builds a [`DocumentSymbol`] for an enum declaration.
-fn enum_symbol(e: &EnumDecl) -> DocumentSymbol {
+fn enum_symbol(e: &EnumDecl, positions: &Positions<'_>) -> DocumentSymbol {
     let mut children: Vec<DocumentSymbol> = e
         .variants
         .iter()
         .map(|v| {
-            let vrange = span_to_range(&v.span);
+            let vrange = positions.range(&v.span);
             #[allow(deprecated)]
             DocumentSymbol {
                 name: v.name.text.clone(),
@@ -408,9 +422,9 @@ fn enum_symbol(e: &EnumDecl) -> DocumentSymbol {
             }
         })
         .collect();
-    children.extend(nested_symbols(&e.nested));
-    children.extend(e.functions.iter().map(function_symbol));
-    children.extend(e.tests.iter().map(test_symbol));
+    children.extend(nested_symbols(&e.nested, positions));
+    children.extend(e.functions.iter().map(|f| function_symbol(f, positions)));
+    children.extend(e.tests.iter().map(|t| test_symbol(t, positions)));
     #[allow(deprecated)]
     DocumentSymbol {
         name: e.name().text.clone(),
@@ -418,13 +432,13 @@ fn enum_symbol(e: &EnumDecl) -> DocumentSymbol {
         kind: SymbolKind::ENUM,
         tags: None,
         deprecated: None,
-        range: span_to_range(&e.span),
-        selection_range: span_to_range(&e.name().span),
+        range: positions.range(&e.span),
+        selection_range: positions.range(&e.name().span),
         children: children_option(children),
     }
 }
 
-fn protocol_symbol(p: &ProtocolDecl) -> DocumentSymbol {
+fn protocol_symbol(p: &ProtocolDecl, positions: &Positions<'_>) -> DocumentSymbol {
     let children: Vec<DocumentSymbol> = p
         .methods
         .iter()
@@ -436,8 +450,8 @@ fn protocol_symbol(p: &ProtocolDecl) -> DocumentSymbol {
                 kind: SymbolKind::METHOD,
                 tags: None,
                 deprecated: None,
-                range: span_to_range(&m.span),
-                selection_range: span_to_range(&m.name.span),
+                range: positions.range(&m.span),
+                selection_range: positions.range(&m.name.span),
                 children: None,
             }
         })
@@ -450,20 +464,20 @@ fn protocol_symbol(p: &ProtocolDecl) -> DocumentSymbol {
         kind: SymbolKind::INTERFACE,
         tags: None,
         deprecated: None,
-        range: span_to_range(&p.span),
-        selection_range: span_to_range(&p.name().span),
+        range: positions.range(&p.span),
+        selection_range: positions.range(&p.name().span),
         children: children_option(children),
     }
 }
 
-fn nested_symbols(nested: &[Item]) -> Vec<DocumentSymbol> {
+fn nested_symbols(nested: &[Item], positions: &Positions<'_>) -> Vec<DocumentSymbol> {
     nested
         .iter()
         .filter_map(|item| match item {
-            Item::Constant(c) => Some(constant_symbol(c)),
-            Item::Enum(e) => Some(enum_symbol(e)),
-            Item::Protocol(p) => Some(protocol_symbol(p)),
-            Item::Struct(s) => Some(struct_symbol(s)),
+            Item::Constant(c) => Some(constant_symbol(c, positions)),
+            Item::Enum(e) => Some(enum_symbol(e, positions)),
+            Item::Protocol(p) => Some(protocol_symbol(p, positions)),
+            Item::Struct(s) => Some(struct_symbol(s, positions)),
             _ => None,
         })
         .collect()
@@ -478,7 +492,7 @@ fn children_option(children: Vec<DocumentSymbol>) -> Option<Vec<DocumentSymbol>>
 }
 
 /// Builds a [`DocumentSymbol`] for a function declaration.
-fn function_symbol(f: &Function) -> DocumentSymbol {
+fn function_symbol(f: &Function, positions: &Positions<'_>) -> DocumentSymbol {
     let params: Vec<String> = f
         .params
         .iter()
@@ -503,8 +517,8 @@ fn function_symbol(f: &Function) -> DocumentSymbol {
         kind: SymbolKind::FUNCTION,
         tags: None,
         deprecated: None,
-        range: span_to_range(&f.span),
-        selection_range: span_to_range(&f.name.span),
+        range: positions.range(&f.span),
+        selection_range: positions.range(&f.name.span),
         children: None,
     }
 }
