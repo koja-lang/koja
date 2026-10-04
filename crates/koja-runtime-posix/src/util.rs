@@ -4,6 +4,7 @@ use std::cell::RefCell;
 use std::io;
 use std::ptr;
 
+use crate::ffi::EBADF;
 use crate::memory;
 
 /// Total bytes of header prepended to every rc-managed leaf heap
@@ -293,12 +294,19 @@ impl From<io::Error> for LastError {
 /// Stable cause code for an `io::Error`: the mapped `ErrorKind` code
 /// when known, otherwise the raw OS errno negated (so the Koja side can
 /// surface it as `Unknown(errno)` without conflating the two spaces).
+/// `EBADF` has no `ErrorKind` of its own and is the `Closed` cause. The
+/// reactor wakes a waiter whose fd another process closed so it
+/// observes exactly this errno on its retry.
 fn cause_code(e: &io::Error) -> i32 {
     let mapped = error_kind_code(e.kind());
     if mapped != 0 {
         return mapped;
     }
-    e.raw_os_error().map_or(0, |raw| -raw)
+    match e.raw_os_error() {
+        Some(EBADF) => ERROR_CODE_CLOSED,
+        Some(raw) => -raw,
+        None => 0,
+    }
 }
 
 impl From<&str> for LastError {
@@ -310,36 +318,51 @@ impl From<&str> for LastError {
     }
 }
 
+/// A path that is not valid UTF-8 cannot name a file, so it is the
+/// `InvalidPath` cause.
 impl From<std::str::Utf8Error> for LastError {
     fn from(e: std::str::Utf8Error) -> Self {
         LastError {
-            code: error_kind_code(io::ErrorKind::InvalidData),
+            code: ERROR_CODE_INVALID_PATH,
             message: e.to_string(),
         }
     }
 }
 
-/// Reserved code for DNS failures, not part of the `io::ErrorKind` mapping.
+/// Cause codes the runtime sets outside the `io::ErrorKind` mapping.
+/// Each sits in its alphabetical slot of the table in [`error_kind_code`].
+const ERROR_CODE_CLOSED: i32 = 4;
+const ERROR_CODE_INVALID_PATH: i32 = 11;
 pub const ERROR_CODE_NAME_NOT_FOUND: i32 = 13;
 
 /// Maps `io::ErrorKind` to the stable cause codes consumed by the Koja
-/// stdlib (`SocketError` in `lib/net/src/error.koja`). Keep both sides
-/// in sync. A 0 means "unmapped" and the Koja side falls back to
-/// `Unknown(code)`.
+/// stdlib. The table is alphabetical by cause name, and each Koja enum
+/// (`IO.Error` and `File.Error` in `lib/global`, `Socket.Error` in
+/// `lib/net`) reads its own subset of it. Keep every side in sync. A 0
+/// means "unmapped" and the Koja side falls back to `Unknown(code)`.
+///
+/// `WouldBlock` has no code because `block_until_ready` parks and
+/// retries on `EAGAIN`, so it never reaches Koja code.
 fn error_kind_code(kind: io::ErrorKind) -> i32 {
     match kind {
         io::ErrorKind::AddrInUse => 1,
-        io::ErrorKind::BrokenPipe => 2,
-        io::ErrorKind::ConnectionAborted => 3,
-        io::ErrorKind::ConnectionRefused => 4,
-        io::ErrorKind::ConnectionReset => 5,
-        io::ErrorKind::HostUnreachable => 6,
-        io::ErrorKind::InvalidData => 7,
-        io::ErrorKind::NetworkUnreachable => 8,
-        io::ErrorKind::NotConnected => 9,
-        io::ErrorKind::PermissionDenied => 10,
-        io::ErrorKind::TimedOut => 11,
-        io::ErrorKind::WouldBlock => 12,
+        io::ErrorKind::AlreadyExists => 2,
+        io::ErrorKind::BrokenPipe => 3,
+        // 4 is `Closed`, from the raw `EBADF` in `cause_code`.
+        io::ErrorKind::ConnectionAborted => 5,
+        io::ErrorKind::ConnectionRefused => 6,
+        io::ErrorKind::ConnectionReset => 7,
+        io::ErrorKind::DirectoryNotEmpty => 8,
+        io::ErrorKind::HostUnreachable => 9,
+        io::ErrorKind::Interrupted => 10,
+        // 11 is `InvalidPath`, from a non-UTF-8 path in `cstr_path`.
+        io::ErrorKind::IsADirectory => 12,
+        // 13 is `NameNotFound`, from `getaddrinfo` in `socket.rs`.
+        io::ErrorKind::NetworkUnreachable => 14,
+        io::ErrorKind::NotADirectory => 15,
+        io::ErrorKind::NotFound => 16,
+        io::ErrorKind::PermissionDenied => 17,
+        io::ErrorKind::TimedOut => 18,
         _ => 0,
     }
 }

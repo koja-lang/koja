@@ -16,8 +16,6 @@
 //! - `create` / `bind` / `listen` / `setsockopt_reuse` and the last-error
 //!   readers pass straight through.
 
-use std::io;
-
 use koja_runtime::{ConnectProgress, connect_finish, connect_start, set_last_error};
 use koja_runtime_core::{Interest, IoWait, deadline_from_user_millis};
 
@@ -78,7 +76,10 @@ pub(super) async fn socket_accept(args: &[Value]) -> Result<Value, RuntimeError>
     let deadline = deadline_from_user_millis(*timeout_ms);
     match reactor::io_block(*fd as i32, Interest::Readable, deadline).await {
         IoWait::Ready => {}
-        IoWait::Interrupted => return Ok(Value::Int(-1)),
+        IoWait::Interrupted => {
+            reactor::note_interrupted();
+            return Ok(Value::Int(-1));
+        }
         IoWait::TimedOut => {
             reactor::note_timed_out();
             return Ok(Value::Int(-1));
@@ -129,7 +130,7 @@ pub(super) async fn socket_connect(args: &[Value]) -> Result<Value, RuntimeError
         match reactor::io_block(fd, Interest::Writable, deadline).await {
             IoWait::Ready => {}
             IoWait::Interrupted => {
-                set_last_error(io::Error::from(io::ErrorKind::Interrupted));
+                reactor::note_interrupted();
                 return Ok(Value::Int(-1));
             }
             IoWait::TimedOut => {

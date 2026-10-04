@@ -107,6 +107,46 @@ fn union_member_dedup_collapses_repeats() {
 }
 
 #[test]
+fn union_keeps_members_that_share_a_leaf_name() {
+    // `A.Error` and `B.Error` both display as `Error`. The display
+    // string orders union members but is not their identity, so the
+    // two stay distinct and a value of either widens into the union.
+    // Before the structural dedup, `A.Error | B.Error` collapsed to
+    // `A.Error` and the `B.Error` assignment below failed.
+    let source = "
+        struct A
+        end
+
+        enum A.Error
+          One
+        end
+
+        struct B
+        end
+
+        enum B.Error
+          Two
+        end
+
+        fn pick(flag: Bool) -> A.Error | B.Error
+          if flag
+            a: A.Error | B.Error = A.Error.One
+            return a
+          end
+
+          b: A.Error | B.Error = B.Error.Two
+          b
+        end
+
+          match pick(false)
+            e: A.Error -> 1
+            e: B.Error -> 2
+          end
+        ";
+    typecheck(&dedent(source));
+}
+
+#[test]
 fn nested_union_in_signature_typechecks() {
     // `(A | B) | C` is the parser's intermediate shape. The lifter
     // canonicalizes the nested members into a single flat

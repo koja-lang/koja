@@ -1,0 +1,94 @@
+alias IO.Error as IOError
+
+@doc """
+Why a read, write, or close on an open descriptor failed. Variants
+name causes, not operations. The caller already knows which call
+failed, so these say why.
+
+`BrokenPipe` means the peer closed its read side, `ConnectionReset`
+means the peer dropped the connection, and `TimedOut` means the call
+passed the bound in its options. `Closed` means the descriptor is no
+longer open, either because this process already closed it or because
+another process closed it while this one waited. `Interrupted` means a
+system message such as a lifecycle event arrived while the process
+waited. The caller must return to its run loop so that message is
+handled, and must not retry the call first. `Unknown` carries the raw
+OS errno for causes outside the mapped set.
+
+Produced by `IO.Reader.read`, `IO.Writer.write`, and `close` on `Fd`,
+`File`, and the socket types. Path operations fail with `File.Error`
+and connection setup with `Socket.Error`.
+"""
+enum IO.Error
+  BrokenPipe
+  Closed
+  ConnectionReset
+  Interrupted
+  TimedOut
+  Unknown(Int)
+
+  @doc """
+  Maps a runtime cause code to the stream cause it names, or
+  `Option.None` when the code belongs to another domain. Mostly
+  internal. A composite operation such as `File.read` uses it to
+  route a code between `File.Error` and `IO.Error`.
+  """
+  fn from_code(code: Int) -> Option<IOError>
+    # Mirrors `error_kind_code` in `crates/koja-runtime-posix/src/util.rs`.
+
+    match code
+      3 -> Option.Some(IOError.BrokenPipe)
+      4 -> Option.Some(IOError.Closed)
+      7 -> Option.Some(IOError.ConnectionReset)
+      10 -> Option.Some(IOError.Interrupted)
+      18 -> Option.Some(IOError.TimedOut)
+      _ -> Option.None
+    end
+  end
+
+  @doc """
+  Builds the error for the current C `errno`. For failures reported
+  by foreign libraries (e.g. BoringSSL) that bypass the runtime's
+  last-error slot. Mostly internal. Prefer matching returned errors.
+  """
+  fn from_errno -> IOError
+    IOError.from_code_or_unknown(koja_errno_code())
+  end
+
+  @doc """
+  Builds the error for the most recent failed runtime I/O call.
+  Mostly internal. Prefer matching returned errors.
+  """
+  fn last -> IOError
+    IOError.from_code_or_unknown(koja_last_error_code())
+  end
+
+  @doc """
+  Returns a human-readable description of the error.
+  """
+  fn message(self) -> String
+    match self
+      IOError.BrokenPipe -> "broken pipe"
+      IOError.Closed -> "descriptor is closed"
+      IOError.ConnectionReset -> "connection reset by peer"
+      IOError.Interrupted -> "interrupted by a system message"
+      IOError.TimedOut -> "operation timed out"
+      IOError.Unknown(errno) -> "I/O error (errno #{errno})"
+    end
+  end
+
+  priv fn from_code_or_unknown(code: Int) -> IOError
+    # Negative codes are raw OS errno values for unmapped causes.
+
+    match IOError.from_code(code)
+      Option.Some(error) -> error
+      Option.None -> IOError.Unknown(code < 0 ? 0 - code : 0)
+    end
+  end
+
+  @extern "C"
+  priv fn koja_errno_code -> Int32
+
+  @extern "C"
+  priv fn koja_last_error_code -> Int32
+end

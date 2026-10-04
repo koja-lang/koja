@@ -1,4 +1,5 @@
-//! Externs declared in `lib/global/src/fd.koja`.
+//! Externs declared in `lib/global/src/fd.koja` and
+//! `lib/global/src/file.koja`.
 //!
 //! Three families:
 //!
@@ -63,7 +64,10 @@ pub(super) async fn fd_read(args: &[Value]) -> Result<Value, RuntimeError> {
     let deadline = deadline_from_user_millis(*timeout_ms);
     match reactor::io_block(*fd as i32, Interest::Readable, deadline).await {
         IoWait::Ready => {}
-        IoWait::Interrupted => return Ok(Value::CPtr(ptr::null_mut())),
+        IoWait::Interrupted => {
+            reactor::note_interrupted();
+            return Ok(Value::CPtr(ptr::null_mut()));
+        }
         IoWait::TimedOut => {
             reactor::note_timed_out();
             return Ok(Value::CPtr(ptr::null_mut()));
@@ -93,7 +97,10 @@ pub(super) async fn fd_write(args: &[Value]) -> Result<Value, RuntimeError> {
     let deadline = deadline_from_user_millis(*timeout_ms);
     match reactor::io_block(*fd as i32, Interest::Writable, deadline).await {
         IoWait::Ready => {}
-        IoWait::Interrupted => return Ok(Value::Int(-1)),
+        IoWait::Interrupted => {
+            reactor::note_interrupted();
+            return Ok(Value::Int(-1));
+        }
         IoWait::TimedOut => {
             reactor::note_timed_out();
             return Ok(Value::Int(-1));
