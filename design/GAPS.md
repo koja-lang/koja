@@ -555,12 +555,19 @@ to turn a bad path into `false` where `rescue _ -> return false` reads
 as the intent. `File.rename` keeps a `match` so it can free the first
 `CString` before it fails on the second.
 
-**Fix path:** accept `return` as a handler by parsing the handler as
-a statement when it starts with `return`, or by letting the rescue
-desugar mark the handler as arm-body position before resolve walks
-it. A block handler (`rescue e ->` followed by an indented body and
-`end`) would cover the multi-statement case and match how `match`
-arms already read.
+**Fix path (agreed 2026-10-04, to land as one branch):** the model
+is the closure pair, a short form and a block form. The `->` in a
+short closure and in `rescue e -> handler` introduces a one-statement
+body, so both take an expression or a diverging `return`, `break`, or
+`fail`. `fail` is "return on the error channel" and becomes
+`Statement::Fail`, rejected by the parser in expression position the
+way `return` is, instead of an `ExprKind` that typecheck rejects
+late. `body_tail_type` treats `break` as divergent like `return`, so
+a `match`, `if`, or `cond` arm may end in `break`. A block handler
+for the multi-statement case comes after, with its own terminator
+design. A stash on `fix/nested-type-unions` holds a first cut of the
+`rescue` half (handler as `Box<Statement>`, parser dispatch on
+`return` and `break`, tests, docs).
 
 ## Diagnostics render a nested type by its leaf name
 

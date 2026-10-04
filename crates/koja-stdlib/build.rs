@@ -65,8 +65,7 @@ fn main() {
 
             let module_name = module_name(&package_name, &src_dir, &file_path);
             let relative = lib_relative(&lib_dir, &file_path);
-            if let Some(previous) =
-                relative_by_module.insert(module_name.clone(), relative.clone())
+            if let Some(previous) = relative_by_module.insert(module_name.clone(), relative.clone())
             {
                 panic!("{relative} and {previous} both embed as `{module_name}`");
             }
