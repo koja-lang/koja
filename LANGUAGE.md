@@ -2729,24 +2729,31 @@ Three error domains cover I/O. `IO.Error` is a failure on an open stream, `File.
 - `IO.Error`: `BrokenPipe`, `Closed`, `ConnectionReset`, `Interrupted`, `TimedOut`, `Unknown(Int)`.
 - `File.Error`: `AlreadyExists`, `DirectoryNotEmpty`, `InvalidPath`, `IsDirectory`, `NotDirectory`, `NotFound`, `PermissionDenied`, `Unknown(Int)`.
 
-#### `IO.Reader` and `IO.Writer`
+#### `IO.Reader<E>` and `IO.Writer<E>`
 
-The stream protocols. A type that implements `read` gets `read_string` and `read_line` from the protocol. Each method takes an options struct as its last parameter with an all-default value, so a call names only what it changes.
+The stream protocols. Each is generic in `E`, the error its implementor fails with, so the protocol does not need one enum wide enough for every stream. `Fd` implements `IO.Reader<IO.Error>` and `TCPSocket` implements `IO.Reader<IO.Error | TLSError>`, and a caller sees the TLS cause by name. A type that implements `read` gets `read_string` and `read_line` from the protocol. Each method takes an options struct as its last parameter with an all-default value, so a call names only what it changes.
 
-- `IO.Reader.read(self, count: Int, options: IO.Reader.Options = IO.Reader.Options{}) -> Binary ! IO.Error`: reads up to `count` bytes. An empty `Binary` is end of input.
-- `IO.Reader.read_string(self, count: Int, options) -> String ! IO.Error | String.ConversionError`: reads up to `count` bytes and decodes them as UTF-8.
-- `IO.Reader.read_line(self, options) -> Option<String> ! IO.Error | String.ConversionError`: reads up to and drops the next newline. `Option.None` at end of input.
-- `IO.Writer.write(self, data: Binary | String, options: IO.Writer.Options = IO.Writer.Options{}) -> Int ! IO.Error`: writes data and returns the byte count written.
+- `IO.Reader.read(self, count: Int, options: IO.Reader.Options = IO.Reader.Options{}) -> Binary ! E`: reads up to `count` bytes. An empty `Binary` is end of input.
+- `IO.Reader.read_string(self, count: Int, options) -> String ! E | String.ConversionError`: reads up to `count` bytes and decodes them as UTF-8.
+- `IO.Reader.read_line(self, options) -> Option<String> ! E | String.ConversionError`: reads up to and drops the next newline. `Option.None` at end of input.
+- `IO.Writer.write(self, data: Binary | String, options: IO.Writer.Options = IO.Writer.Options{}) -> Int ! E`: writes data and returns the byte count written.
 
 `IO.Reader.Options` and `IO.Writer.Options` each hold `timeout: Option<Duration>`, `Option.None` by default. A read or write that waits past its timeout fails with `IO.Error.TimedOut`.
 
+A call site never writes `E`. A bound names it, and the bound's error is what the generic body fails with.
+
 ```koja
 line = try socket.read_line(IO.Reader.Options{timeout: Option.Some(limit)})
+
+fn drain<S: IO.Reader<IO.Error>>(source: S) -> Int ! IO.Error
+  bytes = try source.read(4096)
+  bytes.byte_size()
+end
 ```
 
 #### `Fd`
 
-An open file descriptor. `File.open` returns one for a file, `STDIN`, `STDOUT`, and `STDERR` name the standard streams, and the socket types wrap one. `Fd` implements `IO.Reader` and `IO.Writer`, and every operation on an open descriptor fails with `IO.Error`.
+An open file descriptor. `File.open` returns one for a file, `STDIN`, `STDOUT`, and `STDERR` name the standard streams, and the socket types wrap one. `Fd` implements `IO.Reader<IO.Error>` and `IO.Writer<IO.Error>`, and every operation on an open descriptor fails with `IO.Error`.
 
 ```koja
 struct Fd

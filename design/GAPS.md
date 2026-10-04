@@ -621,3 +621,48 @@ if the rule itself should change, the registry key gains a dispatch
 axis and about 25 lookup sites across typecheck, IR, and query
 resolve through it. That is its own branch and a LANGUAGE.md change
 to the identity rule.
+
+## A protocol argument is not inferred from a bound
+
+Found 2026-10-04 while making `IO.Reader<E>` generic in its error.
+Call inference binds a function's type parameters from the argument
+types it is given. A parameter that appears only inside a bound on
+another parameter never gets a value:
+
+```koja
+fn drain<S: IO.Reader<E>, E>(source: S) -> Int ! E
+  bytes = try source.read(4096)
+  bytes.byte_size()
+end
+
+drain(socket)
+# error: typecheck cannot infer type parameter `E` of `drain` from
+# the supplied arguments
+# error: type `TCPSocket` does not implement protocol
+# `IO.Reader<<unresolved>>`
+```
+
+`S` binds to `TCPSocket` from the argument. `E` has no argument to
+bind from, and `finalize_inference` in
+`koja-typecheck/src/pipeline/resolve/inference.rs` reports the empty
+slot. The information is in the registry. `TCPSocket` has exactly one
+conformance to `IO.Reader`, with `protocol_args` of
+`[IO.Error | TLSError]`, and `conformance_args` in
+`registry/conformance.rs` returns it. The `for` statement already uses
+that lookup to find the `Enumeration` arguments of its subject.
+
+Consequence: a generic consumer of `IO.Reader<E>` or `IO.Writer<E>`
+must name a concrete error in its bound,
+`fn drain<S: IO.Reader<IO.Error | TLSError>>(source: S)`, and so
+cannot be written once for every stream. A `BufferedReader<R, E>`
+over any reader is the first thing blocked. Implementors and call
+sites are unaffected, since `impl IO.Reader<IO.Error> for Fd` names
+its argument and `socket.read_line()` dispatches on the receiver.
+
+**Fix path:** after the argument pass binds what it can, walk the
+unfilled slots. For each one that appears as an argument of a protocol
+bound whose bounded parameter is filled, look up that parameter's
+conformance to the protocol and unify the bound's argument list with
+the conformance's `protocol_args`. One conformance per type and
+protocol makes the answer unique. A slot still empty after that pass
+reports as it does today.

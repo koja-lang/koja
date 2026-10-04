@@ -85,7 +85,7 @@ struct Fd
   priv fn koja_rt_watch_fd(fd: Int32, interest: Int64)
 end
 
-impl IO.Reader for Fd
+impl IO.Reader<IOError> for Fd
   @doc """
   Reads up to `count` bytes from the file descriptor. Returns an empty
   binary at end of stream. With `options.timeout` set, the read fails
@@ -106,7 +106,7 @@ impl IO.Reader for Fd
   end
 end
 
-impl IO.Writer for Fd
+impl IO.Writer<IOError> for Fd
   @doc """
   Writes `data` to the file descriptor and returns the number of bytes
   written. With `options.timeout` set, the write fails with

@@ -110,9 +110,6 @@ test "TCPSocket.read fails with TimedOut when the peer is silent"
 
     Result.Err(tls_error: TLSError) ->
       fail "expected TimedOut, got: #{tls_error.message()}"
-
-    Result.Err(conversion: String.ConversionError) ->
-      fail "expected TimedOut, got: #{conversion}"
   end
 end
 

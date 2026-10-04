@@ -69,9 +69,6 @@ struct App: Process<App, (), String>
 
       Result.Err(tls_error: TLSError) ->
         IO.puts("read failed: " <> tls_error.message())
-
-      Result.Err(conversion: String.ConversionError) ->
-        IO.puts("read failed: #{conversion}")
     end
 
     _ = client.close()

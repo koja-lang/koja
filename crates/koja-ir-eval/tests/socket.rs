@@ -48,7 +48,7 @@ fn tcp_loopback_round_trip() {
           end
 
           inbound =
-            match server.read(4)
+            match server.read_string(4)
               Result.Ok(text) -> text
               Result.Err(_) -> return "server read failed"
             end
@@ -58,7 +58,7 @@ fn tcp_loopback_round_trip() {
             Result.Err(_) -> return "server write failed"
           end
 
-          match client.read(16)
+          match client.read_string(16)
             Result.Ok(text) -> text
             Result.Err(_) -> "client read failed"
           end
@@ -163,7 +163,6 @@ fn tcp_read_times_out_on_a_silent_peer() {
                 _ -> "read failed: " <> io_error.message()
               end
             Result.Err(tls_error: TLSError) -> "read failed: " <> tls_error.message()
-            Result.Err(conversion: String.ConversionError) -> "read failed: #{{conversion}}"
           end
         end
         "#

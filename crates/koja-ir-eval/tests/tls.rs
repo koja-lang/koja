@@ -98,7 +98,7 @@ fn server_source(port: u16, ready_path: &str) -> String {
             end
 
           data =
-            match secured.read(64)
+            match secured.read_string(64)
               Result.Ok(d) -> d
               Result.Err(_) -> return "server read failed"
             end
@@ -145,7 +145,7 @@ fn client_source(port: u16) -> String {
           end
 
           echoed =
-            match client.read(64)
+            match client.read_string(64)
               Result.Ok(d) -> d
               Result.Err(_) -> return "client read failed"
             end

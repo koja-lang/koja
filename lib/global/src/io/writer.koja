@@ -1,4 +1,3 @@
-alias IO.Error as IOError
 alias IO.Writer.Options as WriterOptions
 
 @doc """
@@ -17,8 +16,13 @@ end
 @doc """
 A sink for bytes. Accepts a `String`, encoded as UTF-8, or a `Binary`
 for raw wire protocols, so non-UTF-8 frames pass through unaltered.
+
+`E` is the error a write fails with, and each implementor names its
+own, as `IO.Reader` does. A descriptor writes with
+`IO.Writer<IO.Error>` and a TLS socket with
+`IO.Writer<IO.Error | TLSError>`.
 """
-protocol IO.Writer
+protocol IO.Writer<E>
   @doc """
   Writes `data` and returns the number of bytes written, which can be
   fewer than the size of `data`.
@@ -27,5 +31,5 @@ protocol IO.Writer
     self,
     data: Binary | String,
     options: WriterOptions = WriterOptions{},
-  ) -> Int ! IOError
+  ) -> Int ! E
 end

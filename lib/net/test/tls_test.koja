@@ -107,9 +107,6 @@ test "TLS read fails with TimedOut when the peer is silent"
 
     Result.Err(tls_error: TLSError) ->
       fail "expected TimedOut, got: #{tls_error.message()}"
-
-    Result.Err(conversion: String.ConversionError) ->
-      fail "expected TimedOut, got: #{conversion}"
   end
 end
 
@@ -141,7 +138,7 @@ priv fn run_echo_roundtrip(
     rescue e -> fail "client write: #{net_message(e)}"
 
   echoed =
-    match client.read(1024)
+    match client.read_string(1024)
       Result.Ok(d) -> d
       Result.Err(e) -> fail "client read: #{net_message(e)}"
     end
@@ -240,7 +237,7 @@ priv fn serve_tls_echo(listener: TCPListener, config: TLSConfig)
     end
 
   data =
-    match secured.read(1024)
+    match secured.read_string(1024)
       Result.Ok(d) -> d
       Result.Err(e) -> return Result.Err("server read: " <> net_message(e))
     end

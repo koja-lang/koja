@@ -1,4 +1,3 @@
-alias IO.Error as IOError
 alias IO.Reader.Options as ReaderOptions
 
 @doc """
@@ -17,13 +16,19 @@ end
 A source of bytes. `read` is the one required method. `read_string`
 and `read_line` build on it and add UTF-8 decoding, so text handling
 lives in one place for every reader.
+
+`E` is the error a read fails with, and each implementor names its
+own. A descriptor reads with `IO.Reader<IO.Error>`. A TLS socket reads
+with `IO.Reader<IO.Error | TLSError>`, so a caller sees the TLS cause
+by name instead of a stream error that stands in for it. The decoding
+methods add `String.ConversionError` to whatever `E` is.
 """
-protocol IO.Reader
+protocol IO.Reader<E>
   @doc """
   Reads up to `count` bytes. Returns an empty binary at end of stream.
   """
   fn read(self, count: Int, options: ReaderOptions = ReaderOptions{})
-    -> Binary ! IOError
+    -> Binary ! E
 
   @doc """
   Reads up to `count` bytes and decodes them as UTF-8. Returns `""` at
@@ -32,7 +37,7 @@ protocol IO.Reader
   `read_line` for text that arrives in unknown chunks.
   """
   fn read_string(self, count: Int, options: ReaderOptions = ReaderOptions{})
-    -> String ! IOError | String.ConversionError
+    -> String ! E | String.ConversionError
     bytes = try self.read(count, options)
     try bytes.to_string()
   end
@@ -49,7 +54,7 @@ protocol IO.Reader
   the bytes read so far. Both limits lift when a buffered reader lands.
   """
   fn read_line(self, options: ReaderOptions = ReaderOptions{})
-    -> Option<String> ! IOError | String.ConversionError
+    -> Option<String> ! E | String.ConversionError
     line: Binary = <<>>
 
     while true

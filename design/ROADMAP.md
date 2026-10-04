@@ -30,12 +30,12 @@ call sites once instead of twice.
 - Remove `@test` after its 0.19 deprecation. Every remaining annotation
   warns today, so the removal is a parser error with the `test "..."`
   replacement, on the `unless` model.
-- Reshape the I/O types along [IO.md](IO.md). Steps 1 and 2 landed,
+- Reshape the I/O types along [IO.md](IO.md). Steps 1 to 3 landed,
   the three error domains `IO.Error`, `File.Error`, and `Socket.Error`,
-  the `IO.Reader` and `IO.Writer` protocols with per-call options,
-  `File.open` returning an `Fd`, and `IO.gets` returning
-  `Option<String>` so callers can tell end of input from an empty line.
-  Steps 3 and 4 remain, `TCPSocket` onto the protocols and the reactor
+  the `IO.Reader<E>` and `IO.Writer<E>` protocols with per-call
+  options and `Fd` and `TCPSocket` on them, `File.open` returning an
+  `Fd`, and `IO.gets` returning `Option<String>` so callers can tell
+  end of input from an empty line. Step 4 remains, the reactor
   plumbing off `Fd`.
 
 ### Language

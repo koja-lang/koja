@@ -181,7 +181,7 @@ priv fn net_error_message(
 end
 
 priv fn read_all(socket: TCPSocket, acc: String) -> String ! Error
-  chunk = socket.read(8192)
+  chunk = socket.read_string(8192)
     rescue e -> fail Error.ConnectionFailed("read failed: " <>
       net_error_message(e))
 

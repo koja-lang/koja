@@ -312,17 +312,15 @@ struct TLSSession
   end
 
   @doc """
-  Reads up to `count` bytes of decrypted data as raw bytes. Returns
-  an empty `Binary` on a clean end of stream. Suspends the process
-  while the socket is not ready, and fails with `IOError.TimedOut`
-  once `timeout` has passed since this call without a full record.
+  Reads up to `count` bytes of decrypted data. Returns an empty
+  `Binary` on a clean end of stream. Suspends the process while the
+  socket is not ready, and fails with `IOError.TimedOut` once
+  `timeout` has passed since this call without a full record.
+  `TCPSocket` calls this from its `IO.Reader` conformance with its own
+  descriptor.
   """
-  fn read_binary(
-    self,
-    fd: Fd,
-    count: Int,
-    timeout: Option<Duration> = Option.None,
-  ) -> Binary ! IOError | TLSError
+  fn read(self, fd: Fd, count: Int, timeout: Option<Duration> = Option.None)
+    -> Binary ! IOError | TLSError
 
     buf: CPtr<UInt8> = CPtr.alloc(count)
     result = read_loop(self.ssl, fd, buf, count, deadline_for(timeout))
