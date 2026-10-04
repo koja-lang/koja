@@ -19,23 +19,22 @@ impl Backend {
         let uri = params.text_document_position_params.text_document.uri;
         let position = params.text_document_position_params.position;
 
-        let docs = self.documents.read().await;
-        let Some(state) = docs.get(uri.as_str()) else {
-            return Ok(None);
-        };
-        let Some(analysis) = state.analysis() else {
-            return Ok(None);
-        };
-        let Some(symbol) = state.symbol_at(&analysis, position) else {
-            return Ok(None);
-        };
-        let Some(span) = state.index.declaration_span(symbol.key, analysis.registry) else {
-            return Ok(None);
-        };
-
-        Ok(Some(GotoDefinitionResponse::Scalar(Location {
-            uri: state.uri_of(&analysis, span.file, &uri),
-            range: state.range_of(&span),
-        })))
+        self.with_analysis(&uri, |doc| {
+            let Some(symbol) = doc.symbol_at(position) else {
+                return Ok(None);
+            };
+            let Some(span) = doc
+                .state
+                .index
+                .declaration_span(symbol.key, doc.analysis.registry)
+            else {
+                return Ok(None);
+            };
+            Ok(Some(GotoDefinitionResponse::Scalar(Location {
+                uri: doc.uri_of(span.file, &uri),
+                range: doc.range_of(&span),
+            })))
+        })
+        .await
     }
 }

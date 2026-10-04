@@ -6,7 +6,7 @@ use std::path::PathBuf;
 
 use koja_ast::span::FileId;
 use koja_ast::util::dedent;
-use koja_parser::{ParseMode, SourceFile, parse_program};
+use koja_parser::{ParseMode, SourceFile, SourceTable, parse_program};
 use koja_query::rename::{RenameRefusal, prepare_rename, validate_new_name};
 use koja_query::symbol::{Symbol, SymbolKind, symbol_at};
 use koja_query::{Analysis, ReferenceIndex, SymbolKey, docs};
@@ -28,21 +28,37 @@ fn sources(files: &[(&str, &str)]) -> Vec<SourceFile> {
     sources
 }
 
-fn check(source: &str) -> CheckedProgram {
+/// A typechecked program with the sources its spans index into.
+struct Checked {
+    program: CheckedProgram,
+    sources: SourceTable,
+}
+
+impl Checked {
+    fn analysis(&self) -> Analysis<'_> {
+        Analysis::from_checked(&self.program, &self.sources)
+    }
+}
+
+fn check(source: &str) -> Checked {
     let parsed = parse_program(sources(&[(MAIN, source)]), ParseMode::File);
-    check_program(parsed).unwrap_or_else(|failure| {
+    let sources = parsed.source_table();
+    let program = check_program(parsed).unwrap_or_else(|failure| {
         let messages: Vec<&str> = failure
             .diagnostics
             .iter()
             .map(|d| d.message.as_str())
             .collect();
         panic!("typecheck failed: {messages:?}")
-    })
+    });
+    Checked { program, sources }
 }
 
-fn fail(source: &str) -> CheckFailure {
+fn fail(source: &str) -> (CheckFailure, SourceTable) {
     let parsed = parse_program(sources(&[(MAIN, source)]), ParseMode::File);
-    check_program(parsed).expect_err("typecheck should fail")
+    let sources = parsed.source_table();
+    let failure = check_program(parsed).expect_err("typecheck should fail");
+    (failure, sources)
 }
 
 /// Index and cursor helpers over one analysis.
@@ -101,7 +117,7 @@ fn keywords_inside_a_struct_hit_no_symbol() {
         end
         "#,
     );
-    let analysis = Analysis::from_checked(&checked);
+    let analysis = checked.analysis();
     let f = Fixture::new(&analysis);
     assert!(f.symbol(2, 3).is_none(), "`priv` is not a symbol");
     assert!(f.symbol(3, 3).is_none(), "indentation is not a symbol");
@@ -139,7 +155,7 @@ fn header_conformance_resolves_to_the_protocol() {
         end
         "#,
     );
-    let analysis = Analysis::from_checked(&checked);
+    let analysis = checked.analysis();
     let f = Fixture::new(&analysis);
     let declaration = f.key(1, 10);
     for (line, col) in [(5, 15), (13, 12)] {
@@ -187,7 +203,7 @@ fn nested_protocol_references_resolve_in_both_spellings() {
         end
         "#,
     );
-    let analysis = Analysis::from_checked(&checked);
+    let analysis = checked.analysis();
     let f = Fixture::new(&analysis);
 
     let format = f.key(4, 12);
@@ -231,7 +247,7 @@ fn nested_constant_references_resolve_in_both_spellings() {
         end
         "#,
     );
-    let analysis = Analysis::from_checked(&checked);
+    let analysis = checked.analysis();
     let f = Fixture::new(&analysis);
 
     let zero = f.key(4, 9);
@@ -260,7 +276,7 @@ fn local_symbol_carries_the_declared_type() {
         end
         "#,
     );
-    let analysis = Analysis::from_checked(&checked);
+    let analysis = checked.analysis();
     let f = Fixture::new(&analysis);
     let total = f.symbol(3, 3).expect("read of total");
     assert_eq!(total.name, "total");
@@ -310,7 +326,7 @@ fn doc_for_finds_declarations_by_name_span() {
         end
         "#,
     );
-    let analysis = Analysis::from_checked(&checked);
+    let analysis = checked.analysis();
     let f = Fixture::new(&analysis);
     let doc_at = |line, col| {
         let SymbolKey::Global(id) = f.key(line, col) else {
@@ -328,7 +344,7 @@ fn doc_for_finds_declarations_by_name_span() {
 #[test]
 fn doc_for_reads_builtins_and_inline_builtin_methods() {
     let checked = check("fn len(s: String) -> Int\n  s.length()\nend\n");
-    let analysis = Analysis::from_checked(&checked);
+    let analysis = checked.analysis();
     let f = Fixture::new(&analysis);
     let SymbolKey::Global(string_id) = f.key(1, 11) else {
         panic!("String is a global");
@@ -354,7 +370,7 @@ fn rename_collects_every_span_of_a_local_and_a_function() {
         end
         "#,
     );
-    let analysis = Analysis::from_checked(&checked);
+    let analysis = checked.analysis();
     let f = Fixture::new(&analysis);
     assert_eq!(f.rename(3, 3), Ok(vec![(2, 3), (3, 3)]));
     assert_eq!(f.rename(7, 3), Ok(vec![(1, 4), (7, 3), (7, 15)]));
@@ -363,7 +379,7 @@ fn rename_collects_every_span_of_a_local_and_a_function() {
 
 #[test]
 fn rename_refuses_while_the_program_has_errors() {
-    let failure = fail(
+    let (failure, sources) = fail(
         r#"
         fn broken() -> Int
           "no"
@@ -374,7 +390,7 @@ fn rename_refuses_while_the_program_has_errors() {
         end
         "#,
     );
-    let analysis = Analysis::from_failure(&failure).expect("registry present");
+    let analysis = Analysis::from_failure(&failure, &sources).expect("registry present");
     let f = Fixture::new(&analysis);
     assert!(f.symbol(6, 3).is_some(), "navigation still works");
     assert_eq!(f.rename(6, 3), Err(RenameRefusal::ProgramHasErrors));
@@ -405,7 +421,7 @@ fn rename_refuses_stdlib_builtins_self_and_protocol_methods() {
         end
         "#,
     );
-    let analysis = Analysis::from_checked(&checked);
+    let analysis = checked.analysis();
     let f = Fixture::new(&analysis);
     // `Int` is a builtin declared in the stdlib.
     assert!(matches!(
@@ -440,7 +456,7 @@ fn rename_refuses_a_symbol_referenced_through_an_alias() {
         end
         "#,
     );
-    let analysis = Analysis::from_checked(&checked);
+    let analysis = checked.analysis();
     let f = Fixture::new(&analysis);
     // The alias use site resolves to `Process.ExitSignal`, which is
     // stdlib and aliased, so both refusals are acceptable.
@@ -484,7 +500,7 @@ fn rename_refuses_a_function_whose_alias_binds_sibling_arities() {
         end
         "#,
     );
-    let analysis = Analysis::from_checked(&checked);
+    let analysis = checked.analysis();
     let f = Fixture::new(&analysis);
     assert_eq!(f.rename(3, 4), Err(RenameRefusal::Aliased));
     assert_eq!(f.rename(7, 4), Err(RenameRefusal::Aliased));
@@ -505,7 +521,7 @@ fn rename_of_a_single_arity_aliased_function_rewrites_the_alias_line() {
         end
         "#,
     );
-    let analysis = Analysis::from_checked(&checked);
+    let analysis = checked.analysis();
     let f = Fixture::new(&analysis);
     assert_eq!(f.rename(3, 4), Ok(vec![(1, 15), (3, 4), (8, 3)]));
 }

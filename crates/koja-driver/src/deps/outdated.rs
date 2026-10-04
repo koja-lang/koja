@@ -10,11 +10,11 @@
 use std::path::Path;
 use std::process;
 
-use super::git;
-use super::lock::Lockfile;
-use super::short;
+use koja_project::deps::lock::Lockfile;
+use koja_project::deps::{git, short};
+use koja_project::{DepSource, GitRef};
+
 use crate::commands::load_project_or_exit;
-use crate::project::{DepSource, GitRef};
 
 /// `koja deps outdated`. Exits 1 when any dependency has something
 /// newer, so CI can use it as a check.

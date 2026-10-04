@@ -23,81 +23,74 @@ impl Backend {
         let uri = params.text_document_position_params.text_document.uri;
         let pos = params.text_document_position_params.position;
 
-        let docs = self.documents.read().await;
-        let state = match docs.get(uri.as_str()) {
-            Some(s) => s,
-            None => return Ok(None),
-        };
-        let (file, registry) = match (state.active_file(), state.registry.as_deref()) {
-            (Some(f), Some(r)) => (f, r),
-            _ => return Ok(None),
-        };
+        self.with_analysis(&uri, |doc| {
+            let Some(file) = doc.active_file() else {
+                return Ok(None);
+            };
+            let registry = doc.analysis.registry;
+            let (line, col) = doc.line_column(pos);
+            let Some(call_site) = find_enclosing_call(file, line, col) else {
+                return Ok(None);
+            };
 
-        let (line, col) = state.line_column(pos);
-        let call_site = match find_enclosing_call(file, line, col) {
-            Some(c) => c,
-            None => return Ok(None),
-        };
+            let (function_name, sig) = match &call_site.expr.kind {
+                ExprKind::Call { callee, .. } => {
+                    let ExprKind::Ident { name, resolution } = &callee.kind else {
+                        return Ok(None);
+                    };
+                    let sig = signature_for_target(*resolution, registry);
+                    (name.clone(), sig)
+                }
+                ExprKind::MethodCall { method, target, .. } => {
+                    let sig = signature_for_target(*target, registry);
+                    (method.text.clone(), sig)
+                }
+                _ => return Ok(None),
+            };
+            let Some(sig) = sig else {
+                return Ok(None);
+            };
 
-        let (function_name, sig) = match &call_site.expr.kind {
-            ExprKind::Call { callee, .. } => {
-                let ExprKind::Ident { name, resolution } = &callee.kind else {
-                    return Ok(None);
-                };
-                let sig = signature_for_target(*resolution, registry);
-                (name.clone(), sig)
-            }
-            ExprKind::MethodCall { method, target, .. } => {
-                let sig = signature_for_target(*target, registry);
-                (method.text.clone(), sig)
-            }
-            _ => return Ok(None),
-        };
+            let params: Vec<ParameterInformation> = sig
+                .params
+                .iter()
+                .filter(|p| p.name != "self")
+                .map(|p| ParameterInformation {
+                    label: ParameterLabel::Simple(format!(
+                        "{}: {}",
+                        p.name,
+                        format_resolved_type(&p.ty, registry)
+                    )),
+                    documentation: None,
+                })
+                .collect();
 
-        let sig = match sig {
-            Some(s) => s,
-            None => return Ok(None),
-        };
+            let params_str: Vec<String> = sig
+                .params
+                .iter()
+                .filter(|p| p.name != "self")
+                .map(|p| format!("{}: {}", p.name, format_resolved_type(&p.ty, registry)))
+                .collect();
+            let label = format!(
+                "fn {}({}) -> {}",
+                function_name,
+                params_str.join(", "),
+                format_resolved_type(&sig.return_type, registry)
+            );
 
-        let params: Vec<ParameterInformation> = sig
-            .params
-            .iter()
-            .filter(|p| p.name != "self")
-            .map(|p| ParameterInformation {
-                label: ParameterLabel::Simple(format!(
-                    "{}: {}",
-                    p.name,
-                    format_resolved_type(&p.ty, registry)
-                )),
+            let active_param = call_site.active_param as u32;
+            let signature = SignatureInformation {
+                label,
                 documentation: None,
-            })
-            .collect();
-
-        let params_str: Vec<String> = sig
-            .params
-            .iter()
-            .filter(|p| p.name != "self")
-            .map(|p| format!("{}: {}", p.name, format_resolved_type(&p.ty, registry)))
-            .collect();
-        let label = format!(
-            "fn {}({}) -> {}",
-            function_name,
-            params_str.join(", "),
-            format_resolved_type(&sig.return_type, registry)
-        );
-
-        let active_param = call_site.active_param as u32;
-        let signature = SignatureInformation {
-            label,
-            documentation: None,
-            parameters: Some(params),
-            active_parameter: Some(active_param),
-        };
-
-        Ok(Some(SignatureHelp {
-            signatures: vec![signature],
-            active_signature: Some(0),
-            active_parameter: Some(active_param),
-        }))
+                parameters: Some(params),
+                active_parameter: Some(active_param),
+            };
+            Ok(Some(SignatureHelp {
+                signatures: vec![signature],
+                active_signature: Some(0),
+                active_parameter: Some(active_param),
+            }))
+        })
+        .await
     }
 }

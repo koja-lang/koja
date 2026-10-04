@@ -5,7 +5,7 @@ use std::path::PathBuf;
 
 use koja_ast::span::FileId;
 use koja_ast::util::dedent;
-use koja_parser::{ParseMode, SourceFile, parse_program};
+use koja_parser::{ParseMode, SourceFile, SourceTable, parse_program};
 use koja_query::{Analysis, Occurrence, ReferenceIndex, Role, SymbolKey};
 use koja_typecheck::{CheckFailure, CheckedProgram, check_program};
 
@@ -25,25 +25,41 @@ fn sources(files: &[(&str, &str)]) -> Vec<SourceFile> {
     sources
 }
 
-fn check(source: &str) -> CheckedProgram {
+/// A typechecked program with the sources its spans index into.
+struct Checked {
+    program: CheckedProgram,
+    sources: SourceTable,
+}
+
+impl Checked {
+    fn analysis(&self) -> Analysis<'_> {
+        Analysis::from_checked(&self.program, &self.sources)
+    }
+}
+
+fn check(source: &str) -> Checked {
     check_files(&[(MAIN, source)])
 }
 
-fn check_files(files: &[(&str, &str)]) -> CheckedProgram {
+fn check_files(files: &[(&str, &str)]) -> Checked {
     let parsed = parse_program(sources(files), ParseMode::File);
-    check_program(parsed).unwrap_or_else(|failure| {
+    let sources = parsed.source_table();
+    let program = check_program(parsed).unwrap_or_else(|failure| {
         let messages: Vec<&str> = failure
             .diagnostics
             .iter()
             .map(|d| d.message.as_str())
             .collect();
         panic!("typecheck failed: {messages:?}")
-    })
+    });
+    Checked { program, sources }
 }
 
-fn fail(source: &str) -> CheckFailure {
+fn fail(source: &str) -> (CheckFailure, SourceTable) {
     let parsed = parse_program(sources(&[(MAIN, source)]), ParseMode::File);
-    check_program(parsed).expect_err("typecheck should fail")
+    let sources = parsed.source_table();
+    let failure = check_program(parsed).expect_err("typecheck should fail");
+    (failure, sources)
 }
 
 fn project_index(analysis: &Analysis<'_>) -> ReferenceIndex {
@@ -86,7 +102,7 @@ fn locals_in_two_functions_do_not_share_a_key() {
         end
         "#,
     );
-    let analysis = Analysis::from_checked(&checked);
+    let analysis = checked.analysis();
     let index = project_index(&analysis);
     let main = file_id(&analysis, MAIN);
 
@@ -131,7 +147,7 @@ fn global_used_from_a_sibling_file() {
             "#,
         ),
     ]);
-    let analysis = Analysis::from_checked(&checked);
+    let analysis = checked.analysis();
     let index = project_index(&analysis);
     let main = file_id(&analysis, MAIN);
     let helper = file_id(&analysis, "helper.koja");
@@ -162,7 +178,7 @@ fn type_parameter_declaration_and_reads() {
         end
         "#,
     );
-    let analysis = Analysis::from_checked(&checked);
+    let analysis = checked.analysis();
     let index = project_index(&analysis);
     let main = file_id(&analysis, MAIN);
 
@@ -196,7 +212,7 @@ fn method_call_split_across_a_newline() {
         end
         "#,
     );
-    let analysis = Analysis::from_checked(&checked);
+    let analysis = checked.analysis();
     let index = project_index(&analysis);
     let main = file_id(&analysis, MAIN);
 
@@ -233,7 +249,7 @@ fn qualified_type_in_a_field_annotation() {
         end
         "#,
     );
-    let analysis = Analysis::from_checked(&checked);
+    let analysis = checked.analysis();
     let index = project_index(&analysis);
     let main = file_id(&analysis, MAIN);
 
@@ -265,7 +281,7 @@ fn enum_pattern_paths_reference_the_enum() {
         end
         "#,
     );
-    let analysis = Analysis::from_checked(&checked);
+    let analysis = checked.analysis();
     let index = project_index(&analysis);
     let main = file_id(&analysis, MAIN);
 
@@ -292,7 +308,7 @@ fn assignment_after_declaration_is_a_write() {
         end
         "#,
     );
-    let analysis = Analysis::from_checked(&checked);
+    let analysis = checked.analysis();
     let index = project_index(&analysis);
     let main = file_id(&analysis, MAIN);
 
@@ -317,7 +333,7 @@ fn stdlib_reference_resolves_to_its_declaration_span() {
         end
         "#,
     );
-    let analysis = Analysis::from_checked(&checked);
+    let analysis = checked.analysis();
     let index = project_index(&analysis);
     let main = file_id(&analysis, MAIN);
 
@@ -357,7 +373,7 @@ fn desugared_calls_leave_no_occurrence() {
         end
         "#,
     );
-    let analysis = Analysis::from_checked(&checked);
+    let analysis = checked.analysis();
     let index = project_index(&analysis);
     let main = file_id(&analysis, MAIN);
 
@@ -383,7 +399,7 @@ fn desugared_calls_leave_no_occurrence() {
 
 #[test]
 fn a_program_with_a_type_error_still_answers() {
-    let failure = fail(
+    let (failure, sources) = fail(
         r#"
         fn broken() -> Int
           "not an int"
@@ -394,7 +410,8 @@ fn a_program_with_a_type_error_still_answers() {
         end
         "#,
     );
-    let analysis = Analysis::from_failure(&failure).expect("registry survives a type error");
+    let analysis =
+        Analysis::from_failure(&failure, &sources).expect("registry survives a type error");
     assert!(analysis.has_errors);
     let index = project_index(&analysis);
     let main = file_id(&analysis, MAIN);
@@ -425,7 +442,7 @@ fn static_receiver_records_the_type_name_only() {
         end
         "#,
     );
-    let analysis = Analysis::from_checked(&checked);
+    let analysis = checked.analysis();
     let index = project_index(&analysis);
     let main = file_id(&analysis, MAIN);
 
@@ -466,7 +483,7 @@ fn function_alias_line_is_a_read_of_every_arity() {
             "#,
         ),
     ]);
-    let analysis = Analysis::from_checked(&checked);
+    let analysis = checked.analysis();
     let index = project_index(&analysis);
     let lib = file_id(&analysis, "lib.koja");
     let main = file_id(&analysis, MAIN);

@@ -2,11 +2,46 @@
 //! completion. Mirrors `display_resolution` in `koja-typecheck`,
 //! which stays private to that crate.
 
+use koja_ast::ast::{TypeExpr, path_text};
 use koja_ast::identifier::{AnonymousKind, Resolution, ResolvedType};
 use koja_typecheck::{
     FunctionSignature, GlobalRegistry, ResolvedEnumVariant, ResolvedParam, ResolvedProtocolMethod,
     ResolvedStructField, ResolvedVariantData,
 };
+
+/// Render a [`TypeExpr`] as the user wrote it, for outline details
+/// and other places that have the syntax but no registry.
+pub fn type_expr_label(type_expr: &TypeExpr) -> String {
+    match type_expr {
+        TypeExpr::Named { path, .. } => path_text(path),
+        TypeExpr::Generic { path, args, .. } => {
+            let args: Vec<String> = args.iter().map(type_expr_label).collect();
+            format!("{}<{}>", path_text(path), args.join(", "))
+        }
+        TypeExpr::Unit { .. } => "()".to_string(),
+        TypeExpr::Function {
+            params,
+            return_type,
+            ..
+        } => {
+            let params: Vec<String> = params.iter().map(type_expr_label).collect();
+            format!(
+                "fn ({}) -> {}",
+                params.join(", "),
+                type_expr_label(return_type)
+            )
+        }
+        TypeExpr::Self_ { .. } => "Self".to_string(),
+        TypeExpr::Tuple { elements, .. } => {
+            let elements: Vec<String> = elements.iter().map(type_expr_label).collect();
+            format!("({})", elements.join(", "))
+        }
+        TypeExpr::Union { types, .. } => {
+            let types: Vec<String> = types.iter().map(type_expr_label).collect();
+            types.join(" | ")
+        }
+    }
+}
 
 /// Render a [`ResolvedType`] as a short, user-facing string.
 pub fn format_resolved_type(ty: &ResolvedType, registry: &GlobalRegistry) -> String {

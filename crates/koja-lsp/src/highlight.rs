@@ -20,34 +20,25 @@ impl Backend {
         let uri = params.text_document_position_params.text_document.uri;
         let position = params.text_document_position_params.position;
 
-        let docs = self.documents.read().await;
-        let Some(state) = docs.get(uri.as_str()) else {
-            return Ok(None);
-        };
-        let Some(analysis) = state.analysis() else {
-            return Ok(None);
-        };
-        let Some(file) = analysis.file_id(&state.active_path) else {
-            return Ok(None);
-        };
-        let Some(symbol) = state.symbol_at(&analysis, position) else {
-            return Ok(None);
-        };
-
-        let positions = state.positions(file);
-        let highlights = state
-            .index
-            .occurrences(symbol.key)
-            .filter(|occurrence| occurrence.span.file == file)
-            .map(|occurrence| DocumentHighlight {
-                range: positions.range(&occurrence.span),
-                kind: Some(match occurrence.role {
-                    Role::Read => DocumentHighlightKind::READ,
-                    Role::Declaration | Role::Write => DocumentHighlightKind::WRITE,
-                }),
-            })
-            .collect();
-
-        Ok(Some(highlights))
+        self.with_analysis(&uri, |doc| {
+            let Some(symbol) = doc.symbol_at(position) else {
+                return Ok(None);
+            };
+            let highlights = doc
+                .state
+                .index
+                .occurrences(symbol.key)
+                .filter(|occurrence| occurrence.span.file == doc.file)
+                .map(|occurrence| DocumentHighlight {
+                    range: doc.positions.range(&occurrence.span),
+                    kind: Some(match occurrence.role {
+                        Role::Read => DocumentHighlightKind::READ,
+                        Role::Declaration | Role::Write => DocumentHighlightKind::WRITE,
+                    }),
+                })
+                .collect();
+            Ok(Some(highlights))
+        })
+        .await
     }
 }

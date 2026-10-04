@@ -25,48 +25,42 @@ impl Backend {
         let uri = params.text_document_position_params.text_document.uri;
         let position = params.text_document_position_params.position;
 
-        let docs = self.documents.read().await;
-        let Some(state) = docs.get(uri.as_str()) else {
-            return Ok(None);
-        };
-        let Some(analysis) = state.analysis() else {
-            return Ok(None);
-        };
-        let Some(symbol) = state.symbol_at(&analysis, position) else {
-            return Ok(None);
-        };
-
-        let hover_text = match &symbol.kind {
-            SymbolKind::Global(entry) => {
-                let SymbolKey::Global(id) = symbol.key else {
-                    return Ok(None);
-                };
-                global_hover(&analysis, id, entry)
-            }
-            SymbolKind::Local { ty } => {
-                let signature = match ty {
-                    Some(ty) => format!(
-                        "{}: {}",
-                        symbol.name,
-                        format_resolved_type(ty, analysis.registry)
-                    ),
-                    None => symbol.name.clone(),
-                };
-                Some(format_hover(&signature, None))
-            }
-            SymbolKind::TypeParam => Some(format_hover(
-                &format!("{} (type parameter)", symbol.name),
-                None,
-            )),
-        };
-
-        Ok(hover_text.map(|text| Hover {
-            contents: HoverContents::Markup(MarkupContent {
-                kind: MarkupKind::Markdown,
-                value: text,
-            }),
-            range: None,
-        }))
+        self.with_analysis(&uri, |doc| {
+            let Some(symbol) = doc.symbol_at(position) else {
+                return Ok(None);
+            };
+            let hover_text = match &symbol.kind {
+                SymbolKind::Global(entry) => {
+                    let SymbolKey::Global(id) = symbol.key else {
+                        return Ok(None);
+                    };
+                    global_hover(&doc.analysis, id, entry)
+                }
+                SymbolKind::Local { ty } => {
+                    let signature = match ty {
+                        Some(ty) => format!(
+                            "{}: {}",
+                            symbol.name,
+                            format_resolved_type(ty, doc.analysis.registry)
+                        ),
+                        None => symbol.name.clone(),
+                    };
+                    Some(format_hover(&signature, None))
+                }
+                SymbolKind::TypeParam => Some(format_hover(
+                    &format!("{} (type parameter)", symbol.name),
+                    None,
+                )),
+            };
+            Ok(hover_text.map(|text| Hover {
+                contents: HoverContents::Markup(MarkupContent {
+                    kind: MarkupKind::Markdown,
+                    value: text,
+                }),
+                range: None,
+            }))
+        })
+        .await
     }
 }
 

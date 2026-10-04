@@ -20,37 +20,27 @@ impl Backend {
     ) -> Result<Option<Vec<InlayHint>>> {
         let uri = params.text_document.uri;
 
-        let docs = self.documents.read().await;
-        let Some(state) = docs.get(uri.as_str()) else {
-            return Ok(None);
-        };
-        let Some(analysis) = state.analysis() else {
-            return Ok(None);
-        };
-        let Some(file) = analysis.file_id(&state.active_path) else {
-            return Ok(None);
-        };
-
-        let positions = state.positions(file);
-        let range = range_to_span(&params.range, file, &positions);
-        let hints = inlay::hints(&analysis, &state.index, file, range)
-            .into_iter()
-            .map(|hint| InlayHint {
-                position: positions.position(&hint.position),
-                label: InlayHintLabel::String(hint.label),
-                kind: Some(match hint.kind {
-                    HintKind::Type => InlayHintKind::TYPE,
-                    HintKind::Parameter => InlayHintKind::PARAMETER,
-                }),
-                text_edits: None,
-                tooltip: None,
-                padding_left: None,
-                padding_right: Some(hint.kind == HintKind::Parameter),
-                data: None,
-            })
-            .collect();
-
-        Ok(Some(hints))
+        self.with_analysis(&uri, |doc| {
+            let range = range_to_span(&params.range, doc.file, &doc.positions);
+            let hints = inlay::hints(&doc.analysis, &doc.state.index, doc.file, range)
+                .into_iter()
+                .map(|hint| InlayHint {
+                    position: doc.positions.position(&hint.position),
+                    label: InlayHintLabel::String(hint.label),
+                    kind: Some(match hint.kind {
+                        HintKind::Type => InlayHintKind::TYPE,
+                        HintKind::Parameter => InlayHintKind::PARAMETER,
+                    }),
+                    text_edits: None,
+                    tooltip: None,
+                    padding_left: None,
+                    padding_right: Some(hint.kind == HintKind::Parameter),
+                    data: None,
+                })
+                .collect();
+            Ok(Some(hints))
+        })
+        .await
     }
 }
 

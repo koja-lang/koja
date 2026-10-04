@@ -20,39 +20,33 @@ impl Backend {
         let position = params.text_document_position.position;
         let include_declaration = params.context.include_declaration;
 
-        let docs = self.documents.read().await;
-        let Some(state) = docs.get(uri.as_str()) else {
-            return Ok(None);
-        };
-        let Some(analysis) = state.analysis() else {
-            return Ok(None);
-        };
-        let Some(symbol) = state.symbol_at(&analysis, position) else {
-            return Ok(None);
-        };
+        self.with_analysis(&uri, |doc| {
+            let Some(symbol) = doc.symbol_at(position) else {
+                return Ok(None);
+            };
+            let index = &doc.state.index;
+            let mut locations: Vec<Location> = index
+                .occurrences(symbol.key)
+                .filter(|occurrence| include_declaration || occurrence.role != Role::Declaration)
+                .map(|occurrence| Location {
+                    uri: doc.uri_of(occurrence.span.file, &uri),
+                    range: doc.range_of(&occurrence.span),
+                })
+                .collect();
 
-        let mut locations: Vec<Location> = state
-            .index
-            .occurrences(symbol.key)
-            .filter(|occurrence| include_declaration || occurrence.role != Role::Declaration)
-            .map(|occurrence| Location {
-                uri: state.uri_of(&analysis, occurrence.span.file, &uri),
-                range: state.range_of(&occurrence.span),
-            })
-            .collect();
-
-        // A declaration outside the indexed files, such as a stdlib
-        // type, still has a name span in the registry.
-        if include_declaration
-            && state.index.declaration(symbol.key).is_none()
-            && let Some(span) = state.index.declaration_span(symbol.key, analysis.registry)
-        {
-            locations.push(Location {
-                uri: state.uri_of(&analysis, span.file, &uri),
-                range: state.range_of(&span),
-            });
-        }
-
-        Ok(Some(locations))
+            // A declaration outside the indexed files, such as a
+            // stdlib type, still has a name span in the registry.
+            if include_declaration
+                && index.declaration(symbol.key).is_none()
+                && let Some(span) = index.declaration_span(symbol.key, doc.analysis.registry)
+            {
+                locations.push(Location {
+                    uri: doc.uri_of(span.file, &uri),
+                    range: doc.range_of(&span),
+                });
+            }
+            Ok(Some(locations))
+        })
+        .await
     }
 }

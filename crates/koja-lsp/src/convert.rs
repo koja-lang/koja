@@ -7,7 +7,8 @@
 //! multi-byte character on the line, so every conversion goes
 //! through [`Positions`] over the text of the file in question.
 
-use std::path::Path;
+use std::borrow::Cow;
+use std::path::{Path, PathBuf};
 
 use tower_lsp_server::ls_types::*;
 
@@ -140,32 +141,18 @@ fn clamp_to_boundary(line: &str, byte_column: usize) -> usize {
     column
 }
 
-/// Extracts a file system path from a `file://` URI.
-pub(crate) fn uri_to_path(uri: &str) -> Option<std::path::PathBuf> {
-    let rest = uri.strip_prefix("file://")?;
-    Some(std::path::PathBuf::from(percent_decode(rest)))
+/// The file system path of a `file` URI. `None` for any other scheme,
+/// such as an untitled buffer, which has no path on disk.
+pub(crate) fn uri_to_path(uri: &Uri) -> Option<PathBuf> {
+    if !uri.scheme().as_str().eq_ignore_ascii_case("file") {
+        return None;
+    }
+    uri.to_file_path().map(Cow::into_owned)
 }
 
 /// Converts a file system path to a `file://` URI.
 pub(crate) fn path_to_uri(path: &Path) -> Option<Uri> {
     Uri::from_file_path(path)
-}
-
-fn percent_decode(s: &str) -> String {
-    let mut out = String::with_capacity(s.len());
-    let mut bytes = s.bytes();
-    while let Some(b) = bytes.next() {
-        if b == b'%' {
-            let hi = bytes.next().and_then(|c| (c as char).to_digit(16));
-            let lo = bytes.next().and_then(|c| (c as char).to_digit(16));
-            if let (Some(h), Some(l)) = (hi, lo) {
-                out.push((h * 16 + l) as u8 as char);
-            }
-        } else {
-            out.push(b as char);
-        }
-    }
-    out
 }
 
 #[cfg(test)]
@@ -228,6 +215,17 @@ mod tests {
         assert_eq!(positions.offset(Position::new(0, 10)), 2);
         assert_eq!(positions.offset(Position::new(7, 0)), 3);
         assert_eq!(positions.line_column(Position::new(0, 10)), (1, 3));
+    }
+
+    #[test]
+    fn file_uris_decode_to_paths_and_other_schemes_do_not() {
+        let file: Uri = "file:///proj/src/caf%C3%A9.koja".parse().unwrap();
+        assert_eq!(
+            uri_to_path(&file),
+            Some(PathBuf::from("/proj/src/café.koja"))
+        );
+        let untitled: Uri = "untitled:Untitled-1".parse().unwrap();
+        assert_eq!(uri_to_path(&untitled), None);
     }
 
     #[test]

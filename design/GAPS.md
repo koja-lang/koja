@@ -78,15 +78,6 @@ can call any package function. Known limitations:
   does. A library that exists only as a static archive does not load, and
   calling one of its externs errors with `RuntimeError::ExternUnresolved`,
   same as `koja run --backend=interpreter`.
-- **`Global` self-edit inconsistency.** `ProjectLoader` skips any stdlib
-  package whose name matches the project (its `seen_packages` set), so a
-  project named like a stdlib package — even `Global` — does not
-  double-load. The one residual edge: running the REPL _inside_
-  `koja/lib/global` loads the qualified stdlib packages (`Crypto`,
-  `HTTP`, …, baked against the published `Global`) alongside the edited
-  `Global`, since `ProjectLoader` does not replicate the
-  `bundle_with_autoimport` rule that drops qualified sources on a
-  `Global` self-compile. Only reachable when editing the stdlib itself.
 
 ---
 
