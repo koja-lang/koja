@@ -268,11 +268,13 @@ struct TCPListener
 end
 
 @doc """
-Events delivered to a process that spawns a `TCPServer`.
+Events delivered to a process that spawns a `TCPServer`. `Connected`
+carries each accepted connection, and `Error` carries a listener
+failure. A closed connection is observed by the process that holds
+the `TCPSocket`, since the server hands it off at `Connected`.
 """
 enum TCPServer.Event
   Connected(TCPSocket)
-  Closed(IO.Descriptor)
   Error(SocketError)
 end
 

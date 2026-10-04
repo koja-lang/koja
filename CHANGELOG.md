@@ -40,6 +40,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **Breaking change.** `IO.Descriptor.read_binary` and `TCPSocket.read_binary` are removed. `read` returns `Binary` on both now, so `socket.read_binary(n)` becomes `socket.read(n)`.
 - **Breaking change.** The `File` value type and `File.close` are removed. `File.open` returns an `IO.Descriptor`, so `file.close()` becomes `descriptor.close()` on the descriptor it returned.
+- **Breaking change.** `TCPServer.Event.Closed` is removed. No version of `TCPServer` ever produced it, since the server hands each `TCPSocket` to its owner at `Connected` and does not watch it after that, so a closed connection is seen by the holder as an empty `read` or an `IO.Error`. A `TCPEvent.Closed(_) ->` arm in an owner's `handle` is deleted.
 - **Breaking change.** `TCPListener.try_accept` and `Socket.try_accept_raw` are removed. A zero bound on `accept` is the same poll, so `match listener.try_accept()` with `Option.Some(socket)` and `Option.None` arms becomes `match listener.accept(Option.Some(Duration.ZERO))` with `Result.Ok(socket)` and `Result.Err(Socket.Error.TimedOut)` arms, and the other `Result.Err` arm now sees the failures `try_accept` hid.
 
 ### Fixed

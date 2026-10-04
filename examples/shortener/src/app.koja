@@ -90,9 +90,6 @@ struct App: Process<List<String>, TCPEvent, String>
         _ = spawn Worker.start(Worker{client: client, pool: self.pool})
         Step.Continue(self)
 
-      TCPEvent.Closed(_) ->
-        Step.Continue(self)
-
       TCPEvent.Error(e) ->
         IO.puts("listener error: " <> e.message())
         Step.Done(StopReason.Shutdown)
