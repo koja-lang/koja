@@ -50,7 +50,8 @@ fn route(outcome: Result<Int, ParseError | NetError | AuthError>) -> String
             ParseError.BadDigit(s) -> "parse #{s}"
           end
 
-        err: NetError -> "net"
+        err: NetError ->
+          "net"
 
         err: AuthError ->
           match err
