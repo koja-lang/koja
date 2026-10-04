@@ -789,7 +789,8 @@ pub enum IRInstruction {
     /// used as the runtime tag byte. Lowered from the typecheck-
     /// stamped [`koja_ast::coercion::Coercion::UnionWiden`] at every
     /// member->union flow site (assignments, struct fields, args,
-    /// returns).
+    /// returns). A union->wider-union flow lowers to one of these
+    /// per source member behind a switch on the source tag.
     UnionWrap {
         dest: ValueId,
         member_index: u8,

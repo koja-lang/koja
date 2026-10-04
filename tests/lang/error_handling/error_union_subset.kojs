@@ -1,0 +1,96 @@
+# A union widens into a wider union that holds all of its members.
+# `try` and `fail` propagate a `! A | B` callee through a `! A | B | C`
+# caller, and a plain `A | B` value flows into an `A | B | C` slot.
+
+enum ParseError
+  BadDigit(String)
+end
+
+enum NetError
+  Timeout
+end
+
+enum AuthError
+  Denied(String)
+end
+
+fn narrow(mode: Int) -> Int ! ParseError | NetError
+  if mode == 1
+    fail ParseError.BadDigit("x")
+  end
+
+  if mode == 2
+    fail NetError.Timeout
+  end
+
+  mode
+end
+
+fn wide_try(mode: Int) -> Int ! ParseError | NetError | AuthError
+  if mode == 3
+    fail AuthError.Denied("nope")
+  end
+
+  try narrow(mode)
+end
+
+fn wide_rescue(mode: Int) -> Int ! ParseError | NetError | AuthError
+  narrow(mode) rescue e -> fail e
+end
+
+fn route(outcome: Result<Int, ParseError | NetError | AuthError>) -> String
+  match outcome
+    Result.Ok(v) ->
+      "ok #{v}"
+
+    Result.Err(e) ->
+      match e
+        err: ParseError ->
+          match err
+            ParseError.BadDigit(s) -> "parse #{s}"
+          end
+
+        err: NetError ->
+          "net"
+
+        err: AuthError ->
+          match err
+            AuthError.Denied(s) -> "auth #{s}"
+          end
+      end
+  end
+end
+
+IO.puts(route(wide_try(0)))
+IO.puts(route(wide_try(1)))
+IO.puts(route(wide_try(2)))
+IO.puts(route(wide_try(3)))
+IO.puts(route(wide_rescue(1)))
+IO.puts(route(wide_rescue(2)))
+
+# The same widening on a value, not an error: a `String | Int` flows
+# into a `String | Int | Bool` parameter and a typed binding sees the
+# member it started as.
+fn describe(value: String | Int | Bool) -> String
+  match value
+    s: String -> "string #{s}"
+    i: Int -> "int #{i}"
+    b: Bool -> "bool #{b}"
+  end
+end
+
+fn pick(flag: Bool) -> String | Int
+  if flag
+    text: String | Int = "hello"
+    return text
+  end
+
+  number: String | Int = 7
+  number
+end
+
+IO.puts(describe(pick(true)))
+IO.puts(describe(pick(false)))
+
+widened: String | Int | Bool = pick(true)
+IO.puts(describe(widened))

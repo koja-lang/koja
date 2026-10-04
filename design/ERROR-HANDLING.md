@@ -253,6 +253,11 @@ fn fetch_limits(url: String) -> Limits ! HTTP.Error | NumericConversionError
 end
 ```
 
+The same rule accepts a callee whose error union is a subset of the
+caller's, so `try` on a `! HTTP.Error | IO.Error` callee inside a
+`! HTTP.Error | IO.Error | File.Error` caller needs no mapping either.
+The lowering switches on the source tag and re-wraps each member.
+
 Two error domains compose with zero ceremony and the signature honestly
 enumerates every failure source. This replaces Rust's `From`-based
 implicit conversion (and the `thiserror` cottage industry that feeds

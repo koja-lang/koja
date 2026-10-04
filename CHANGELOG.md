@@ -19,8 +19,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A `Run test` code lens on each `test` block.
 - The language server rechecks open documents when a `.koja` file or `koja.toml` changes on disk.
 - A `const` can hold a list, map, or set literal, such as `const PRIMES = [2, 3, 5, 7]` or `const PORTS = ["http": 80]`, and a struct or enum variant whose fields hold one. A constant value takes the same grammar as a field default, so it can also read another constant declared anywhere in the program. A collection constant is built once at program start and every read borrows the shared value. A constant that depends on itself through other constants is a compile error.
+- A union widens into a wider union that holds all of its members, the same way one member does. A `Cat | Dog` value flows into a `Cat | Dog | Fish` slot, and a function that fails with `ParseError | NetError` can be called with `try`, or rescued with `rescue e -> fail e`, from one that fails with `ParseError | NetError | AuthError`. Before, both were type errors.
 
 ### Fixed
+
+- Two nested types with the same last name, such as `File.Error` and `IO.Error`, stay distinct in a union. Before, `File.Error | IO.Error` collapsed to one member and a value of the other was rejected.
 
 - `koja format` no longer panics on a comment inside an empty list, map, or struct literal. The literal stays broken open with the comment inside, the layout an empty call argument list already used.
 - A field default can be a struct literal named through a dotted path, such as `options: TCPListener.Options = TCPListener.Options{}`, or through a file alias. Enum variants with a payload, such as `Option.Some(3)`, are accepted as defaults too. Before, the dotted literal was rejected and the aliased one could panic the compiler. `TCPListener.options` now defaults to `TCPListener.Options{}`.

@@ -12,7 +12,8 @@
 //!   into a union slot (call args, struct fields, return slots, let
 //!   bindings, enum tuple payloads) by stamping
 //!   `Coercion::UnionWiden(target)` on the source `Expr` so IR
-//!   lower can emit the matching `UnionWrap`.
+//!   lower can emit the matching `UnionWrap`. A union whose members
+//!   all belong to the slot's union widens the same way.
 //! - **Diagnostics**: bare `FieldAccess` against a union receiver
 //!   surfaces a precise "match the union first" error, and a
 //!   `MethodCall` admits only the universal protocol functions
@@ -259,6 +260,81 @@ fn non_member_into_union_diagnoses() {
           take(C{z: 0})
         ";
     assert_script_fails_with(source, &["expects `A | B`", "C"]);
+}
+
+#[test]
+fn union_widens_into_superset_union() {
+    // An `A | B` value flows into an `A | B | C` slot in a call
+    // argument, a let binding, and a return slot. Each site stamps
+    // `Coercion::UnionWiden` just as a single member would.
+    let source = "
+        struct A
+          x: Int
+        end
+
+        struct B
+          y: Int
+        end
+
+        struct C
+          z: Int
+        end
+
+        fn narrow(flag: Bool) -> A | B
+          if flag
+            a: A | B = A{x: 1}
+            return a
+          end
+
+          b: A | B = B{y: 2}
+          b
+        end
+
+        fn take(v: A | B | C) -> Int
+          match v
+            _ -> 0
+          end
+        end
+
+        fn widen(flag: Bool) -> A | B | C
+          narrow(flag)
+        end
+
+          take(narrow(true))
+          wide: A | B | C = narrow(false)
+          take(wide)
+          widen(true)
+        ";
+    typecheck(&dedent(source));
+}
+
+#[test]
+fn union_with_outside_member_into_union_diagnoses() {
+    // `A | C` does not widen into `A | B`. One stranger in the
+    // source union is enough to reject the whole flow.
+    let source = "
+        struct A
+          x: Int
+        end
+
+        struct B
+          y: Int
+        end
+
+        struct C
+          z: Int
+        end
+
+        fn take(v: A | B) -> Int
+          match v
+            _ -> 0
+          end
+        end
+
+          mixed: A | C = A{x: 1}
+          take(mixed)
+        ";
+    assert_script_fails_with(source, &["expects `A | B`", "A | C"]);
 }
 
 #[test]
