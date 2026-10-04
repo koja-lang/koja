@@ -357,6 +357,54 @@ fn try_and_fail_widen_errors_into_declared_union() {
 }
 
 #[test]
+fn try_and_rescue_propagate_a_narrower_union() {
+    // A `! A | B` callee flows through a `! A | B | C` caller. `try`
+    // widens the callee's error union at the boundary, and a rescue
+    // handler can `fail` the bound error for the same reason.
+    let source = "
+        enum ParseError
+          Bad
+        end
+
+        enum NetError
+          Timeout
+        end
+
+        enum AuthError
+          Denied
+        end
+
+        fn narrow(mode: Int) -> Int ! ParseError | NetError
+          if mode == 1
+            fail ParseError.Bad
+          end
+
+          if mode == 2
+            fail NetError.Timeout
+          end
+
+          mode
+        end
+
+        fn wide_try(mode: Int) -> Int ! ParseError | NetError | AuthError
+          if mode == 3
+            fail AuthError.Denied
+          end
+
+          try narrow(mode)
+        end
+
+        fn wide_rescue(mode: Int) -> Int ! ParseError | NetError | AuthError
+          narrow(mode) rescue e -> fail e
+        end
+
+          wide_try(0)
+          wide_rescue(0)
+        ";
+    typecheck(&dedent(source));
+}
+
+#[test]
 fn rescue_types_as_subject_ok_type() {
     let checked = typecheck(&with_prelude("  parse(\"2\") rescue _ -> 0"));
     assert_eq!(trailing_resolution(&checked), int_type(&checked));

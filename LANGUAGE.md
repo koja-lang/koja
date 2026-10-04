@@ -1154,6 +1154,8 @@ c = Cat{name: "Whiskers"}
 pet: Pet = c
 ```
 
+So does a union whose members all belong to the target. A `Cat | Dog` value flows into a `Pet` slot, and a function that fails with `ParseError | NetError` can be called with `try` from one that fails with `ParseError | NetError | AuthError`.
+
 Order doesn't matter. `Post | Comment` and `Comment | Post` are the same type.
 
 ### Tuples
