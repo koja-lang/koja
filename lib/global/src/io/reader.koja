@@ -1,0 +1,75 @@
+alias IO.Error as IOError
+alias IO.Reader.Options as ReaderOptions
+
+@doc """
+Per-call settings for `IO.Reader` methods. Every field has a default,
+so a call site names only what it changes, as in
+`socket.read(16, IO.Reader.Options{timeout: Option.Some(limit)})`.
+
+`timeout` is how long one read may wait for data before it fails with
+`IO.Error.TimedOut`. `Option.None` waits with no bound.
+"""
+struct IO.Reader.Options
+  timeout: Option<Duration> = Option.None
+end
+
+@doc """
+A source of bytes. `read` is the one required method. `read_string`
+and `read_line` build on it and add UTF-8 decoding, so text handling
+lives in one place for every reader.
+"""
+protocol IO.Reader
+  @doc """
+  Reads up to `count` bytes. Returns an empty binary at end of stream.
+  """
+  fn read(self, count: Int, options: ReaderOptions = ReaderOptions{})
+    -> Binary ! IOError
+
+  @doc """
+  Reads up to `count` bytes and decodes them as UTF-8. Returns `""` at
+  end of stream. A multi-byte character cut at the `count` boundary
+  fails with `String.ConversionError.InvalidUTF8`, so prefer
+  `read_line` for text that arrives in unknown chunks.
+  """
+  fn read_string(self, count: Int, options: ReaderOptions = ReaderOptions{})
+    -> String ! IOError | String.ConversionError
+    bytes = try self.read(count, options)
+    try bytes.to_string()
+  end
+
+  @doc """
+  Reads one line and returns it without the trailing newline. Returns
+  `Option.None` when the stream ended before any byte arrived, so a
+  loop over lines stops on `None`. A last line with no newline comes
+  back as `Option.Some`.
+
+  Bytes accumulate raw and decode once per line, since a multi-byte
+  character split across reads is not valid UTF-8 on its own. The
+  default body reads one byte at a time, and an error mid-line drops
+  the bytes read so far. Both limits lift when a buffered reader lands.
+  """
+  fn read_line(self, options: ReaderOptions = ReaderOptions{})
+    -> Option<String> ! IOError | String.ConversionError
+    line: Binary = <<>>
+
+    while true
+      byte = try self.read(1, options)
+
+      if byte == <<>>
+        if line == <<>>
+          return Option.None
+        end
+
+        break
+      end
+
+      if byte == <<10>>
+        break
+      end
+
+      line = line <> byte
+    end
+
+    Option.Some(try line.to_string())
+  end
+end

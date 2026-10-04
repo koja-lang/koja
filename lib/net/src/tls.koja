@@ -144,9 +144,9 @@ Use `client()` for a verifying client (the default and recommended
 mode), `insecure()` to skip certificate verification (testing only),
 or `server(cert, key)` for the server side of a handshake.
 
-Credentials are in-memory `Crypto.Certificate` / `Crypto.PrivateKey`
-values; to use files, read and parse them first (e.g.
-`Certificate.parse(File.read(path)?)?`).
+Credentials are in-memory `Crypto.Certificate` and `Crypto.PrivateKey`
+values. To use files, read and parse them first, as in
+`cert = try Certificate.parse(try File.read(path))`.
 
 `with_ca` replaces the system trust store with a custom CA bundle
 for verification.
@@ -212,16 +212,12 @@ struct TLSSession
   @doc """
   Performs a server-side TLS handshake over the connected `fd` using
   the certificate and key from `config`. Suspends the process while
-  the socket is not ready. `read_timeout` bounds the total time spent
-  waiting to read and `write_timeout` the total time waiting to write,
-  measured from this call. Returns the established session.
+  the socket is not ready. `timeout` bounds the whole handshake,
+  measured from this call, and a wait past it fails with
+  `IOError.TimedOut`. Returns the established session.
   """
-  fn accept(
-    fd: Fd,
-    config: TLSConfig,
-    read_timeout: Option<Duration> = Option.None,
-    write_timeout: Option<Duration> = Option.None,
-  ) -> TLSSession ! IOError | TLSError
+  fn accept(fd: Fd, config: TLSConfig, timeout: Option<Duration> = Option.None)
+    -> TLSSession ! IOError | TLSError
 
     identity =
       match config.identity
@@ -252,30 +248,22 @@ struct TLSSession
     end
 
     ssl_set_fd(ssl, fd.descriptor)
-    try handshake_loop(
-      ssl,
-      ctx,
-      fd,
-      false,
-      deadline_for(read_timeout),
-      deadline_for(write_timeout),
-    )
+    try handshake_loop(ssl, ctx, fd, false, deadline_for(timeout))
   end
 
   @doc """
   Performs a client-side TLS handshake over the connected `fd`.
   Sends `hostname` for SNI and, when `config.verify` is set, checks
   the server certificate chain against it. Suspends the process while
-  the socket is not ready. `read_timeout` bounds the total time spent
-  waiting to read and `write_timeout` the total time waiting to write,
-  measured from this call. Returns the established session.
+  the socket is not ready. `timeout` bounds the whole handshake,
+  measured from this call, and a wait past it fails with
+  `IOError.TimedOut`. Returns the established session.
   """
   fn connect(
     fd: Fd,
     hostname: String,
     config: TLSConfig,
-    read_timeout: Option<Duration> = Option.None,
-    write_timeout: Option<Duration> = Option.None,
+    timeout: Option<Duration> = Option.None,
   ) -> TLSSession ! IOError | TLSError
 
     ctx = ssl_ctx_new(tls_method())
@@ -320,14 +308,7 @@ struct TLSSession
     end
 
     host_cs.free()
-    try handshake_loop(
-      ssl,
-      ctx,
-      fd,
-      true,
-      deadline_for(read_timeout),
-      deadline_for(write_timeout),
-    )
+    try handshake_loop(ssl, ctx, fd, true, deadline_for(timeout))
   end
 
   @doc """
@@ -470,8 +451,7 @@ struct TLSSession
     ctx: CPtr<UInt8>,
     fd: Fd,
     client: Bool,
-    read_deadline: Option<Instant>,
-    write_deadline: Option<Instant>,
+    deadline: Option<Instant>,
   ) -> TLSSession ! IOError | TLSError
 
     ret: Int = client ? ssl_connect(ssl) : ssl_accept(ssl)
@@ -489,13 +469,7 @@ struct TLSSession
       fail failure
     end
 
-    wants_read = err == SSL_ERROR_WANT_READ
-
-    match wait_ready(
-      fd,
-      wants_read,
-      wants_read ? read_deadline : write_deadline,
-    )
+    match wait_ready(fd, err == SSL_ERROR_WANT_READ, deadline)
       Result.Err(e) ->
         ssl_free(ssl)
         ssl_ctx_free(ctx)
@@ -505,7 +479,7 @@ struct TLSSession
         ()
     end
 
-    try handshake_loop(ssl, ctx, fd, client, read_deadline, write_deadline)
+    try handshake_loop(ssl, ctx, fd, client, deadline)
   end
 
   priv fn io_failure(err: Int) -> IOError | TLSError

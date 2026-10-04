@@ -3,7 +3,7 @@ alias File.Mode as FileMode
 alias IO.Error as IOError
 
 @doc """
-The mode used when opening a file: `Read`, `Write`, or `Append`.
+The mode used when opening a file, one of `Read`, `Write`, or `Append`.
 """
 enum File.Mode
   Read
@@ -12,18 +12,13 @@ enum File.Mode
 end
 
 @doc """
-A file handle backed by a file descriptor.
+Operations on paths. Each function names a file or directory by its
+path and fails with `File.Error`. `open` returns the descriptor for
+the file, and from there reads, writes, and `close` are `Fd` methods
+that fail with `IO.Error`. `read`, `read_binary`, and `write` do a
+whole file in one call for the common case.
 """
 struct File
-  fd: Fd
-
-  @doc """
-  Closes the file handle.
-  """
-  fn close(self) ! IOError
-    try self.fd.close()
-  end
-
   @doc """
   Deletes the file at the given path.
   """
@@ -98,14 +93,16 @@ struct File
   end
 
   @doc """
-  Opens a file with the given mode and returns a `File` handle.
+  Opens a file with the given mode and returns its descriptor. Read
+  and write through the `IO.Reader` and `IO.Writer` methods on `Fd`,
+  and release it with `Fd.close`.
 
-  Modes:
-  - `FileMode.Read` opens for reading. The file must exist.
-  - `FileMode.Write` opens for writing and creates or truncates the file.
-  - `FileMode.Append` opens for appending and creates the file if needed.
+  `File.Mode.Read` opens for reading, and the file must exist.
+  `File.Mode.Write` opens for writing and creates or truncates the
+  file. `File.Mode.Append` opens for appending and creates the file if
+  needed.
   """
-  fn open(path: String, mode: FileMode) -> File ! FileError
+  fn open(path: String, mode: FileMode) -> Fd ! FileError
     mode_int =
       match mode
         FileMode.Read -> 0
@@ -121,13 +118,12 @@ struct File
       fail FileError.last()
     end
 
-    File{fd: Fd{descriptor: fd}}
+    Fd{descriptor: fd}
   end
 
   @doc """
-  Reads the entire contents of a file at the given path as UTF-8
-  text. This is a convenience method that opens, reads, and closes
-  the file.
+  Reads the entire contents of the file at the given path as UTF-8
+  text. Opens, reads, and closes the file in one call.
   """
   fn read(path: String) -> String ! FileError | IOError | String.ConversionError
     bytes = try File.read_binary(path)
@@ -135,7 +131,8 @@ struct File
   end
 
   @doc """
-  Reads the entire contents of a file at the given path as raw bytes.
+  Reads the entire contents of the file at the given path as raw bytes.
+  Opens, reads, and closes the file in one call.
   """
   fn read_binary(path: String) -> Binary ! FileError | IOError
     cs = try path_cstring(path)
@@ -189,7 +186,8 @@ struct File
   end
 
   @doc """
-  Writes text or raw bytes to the given path, creating or truncating it.
+  Writes text or raw bytes to the given path, creating or truncating
+  it. Opens, writes, and closes the file in one call.
   """
   fn write(path: String, content: Binary | String) ! FileError | IOError
     path_cs = try path_cstring(path)

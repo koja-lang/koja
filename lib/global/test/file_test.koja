@@ -1,3 +1,4 @@
+alias File.Error as FileError
 alias File.Mode as FileMode
 alias Test.require
 
@@ -6,8 +7,20 @@ test "read /dev/null returns empty string"
   assert contents.empty?()
 end
 
-test "read nonexistent file returns Err"
-  assert File.read("/tmp/nonexistent_koja_file_test_12345").err?()
+test "read nonexistent file fails with NotFound"
+  match File.read("/tmp/nonexistent_koja_file_test_12345")
+    Result.Ok(_) ->
+      fail "expected the read to fail"
+
+    Result.Err(file_error: FileError) ->
+      match file_error
+        FileError.NotFound -> ()
+        _ -> fail "expected NotFound, got: #{file_error.message()}"
+      end
+
+    Result.Err(e) ->
+      fail "expected NotFound, got: #{e}"
+  end
 end
 
 test "write and read roundtrip"
@@ -21,26 +34,49 @@ test "write and read roundtrip"
   assert contents == "hello from koja"
 end
 
-test "open for read on /dev/null succeeds"
-  file = try require(File.open("/dev/null", FileMode.Read))
-  _ = file.close()
+test "open for read on /dev/null returns a descriptor"
+  fd = try require(File.open("/dev/null", FileMode.Read))
+  try require(fd.close())
 end
 
-test "open nonexistent file for read returns Err"
+test "open nonexistent file for read fails with NotFound"
   missing = "/tmp/nonexistent_koja_file_test_12345"
-  assert File.open(missing, FileMode.Read).err?()
+
+  match File.open(missing, FileMode.Read)
+    Result.Ok(_) -> fail "expected the open to fail"
+    Result.Err(FileError.NotFound) -> ()
+    Result.Err(e) -> fail "expected NotFound, got: #{e.message()}"
+  end
 end
 
-test "open for write, write via fd, read back"
+test "open for write, write through the descriptor, read back"
   path = "/tmp/koja_file_test_handle_write.txt"
 
-  file = try require(File.open(path, FileMode.Write))
-  file.fd.write("handle write")
+  fd = try require(File.open(path, FileMode.Write))
+  written = fd.write("handle write")
+  _ = fd.close()
   read = File.read(path)
   File.delete(path)
 
+  assert try require(written) == 12
   contents = try require(read)
   assert contents == "handle write"
+end
+
+test "open for read, read through the descriptor"
+  path = "/tmp/koja_file_test_handle_read.txt"
+
+  try require(File.write(path, "line one\nline two"))
+  fd = try require(File.open(path, FileMode.Read))
+  first = fd.read_line()
+  rest = fd.read_string(64)
+  at_end = fd.read(1)
+  _ = fd.close()
+  File.delete(path)
+
+  assert try require(first) == Option.Some("line one")
+  assert try require(rest) == "line two"
+  assert try require(at_end) == <<>>
 end
 
 test "open for append adds to existing content"
@@ -50,8 +86,12 @@ test "open for append adds to existing content"
   opened = File.open(path, FileMode.Append)
 
   match opened
-    Result.Ok(file) -> _ = file.fd.write(" second")
-    Result.Err(_) -> ()
+    Result.Ok(fd) ->
+      _ = fd.write(" second")
+      _ = fd.close()
+
+    Result.Err(_) ->
+      ()
   end
 
   read = File.read(path)
@@ -95,11 +135,6 @@ test "rename moves a file"
   assert contents == "rename me"
 end
 
-test "close returns Ok"
-  file = try require(File.open("/dev/null", FileMode.Read))
-  try require(file.close())
-end
-
 test "binary write and read preserve arbitrary bytes"
   path = "/tmp/koja_file_test_binary.bin"
   expected: Binary = <<97, 0, 255>>
@@ -112,14 +147,25 @@ test "binary write and read preserve arbitrary bytes"
   assert actual == expected
 end
 
-test "text read rejects invalid UTF-8"
+test "text read fails with InvalidUTF8 on bad bytes"
   path = "/tmp/koja_file_test_invalid_utf8.bin"
 
   try require(File.write(path, <<255>>))
   result = File.read(path)
   File.delete(path)
 
-  assert result.err?()
+  match result
+    Result.Ok(_) ->
+      fail "expected the read to fail"
+
+    Result.Err(conversion: String.ConversionError) ->
+      match conversion
+        String.ConversionError.InvalidUTF8 -> ()
+      end
+
+    Result.Err(e) ->
+      fail "expected InvalidUTF8, got: #{e}"
+  end
 end
 
 test "mkdir creates a directory that dir? sees and rmdir removes"
@@ -135,18 +181,26 @@ test "mkdir creates a directory that dir? sees and rmdir removes"
   assert not File.exists?(path)
 end
 
-test "mkdir errors when the directory already exists"
+test "mkdir fails with AlreadyExists when the directory exists"
   path = "/tmp/koja_file_test_mkdir_existing"
   File.mkdir_p(path)
 
   result = File.mkdir(path)
   File.rmdir(path)
 
-  assert result.err?()
+  match result
+    Result.Ok(_) -> fail "expected mkdir to fail"
+    Result.Err(FileError.AlreadyExists) -> ()
+    Result.Err(e) -> fail "expected AlreadyExists, got: #{e.message()}"
+  end
 end
 
-test "mkdir errors when the parent is missing"
-  assert File.mkdir("/tmp/koja_file_test_no_parent/child").err?()
+test "mkdir fails with NotFound when the parent is missing"
+  match File.mkdir("/tmp/koja_file_test_no_parent/child")
+    Result.Ok(_) -> fail "expected mkdir to fail"
+    Result.Err(FileError.NotFound) -> ()
+    Result.Err(e) -> fail "expected NotFound, got: #{e.message()}"
+  end
 end
 
 test "mkdir_p creates missing parents and is idempotent"
@@ -164,7 +218,7 @@ test "mkdir_p creates missing parents and is idempotent"
   try require(repeat)
 end
 
-test "rmdir errors on a non-empty directory"
+test "rmdir fails with DirectoryNotEmpty on a non-empty directory"
   path = "/tmp/koja_file_test_rmdir_full"
   File.mkdir_p(path)
 
@@ -173,7 +227,11 @@ test "rmdir errors on a non-empty directory"
   File.delete("#{path}/occupant.txt")
   File.rmdir(path)
 
-  assert result.err?()
+  match result
+    Result.Ok(_) -> fail "expected rmdir to fail"
+    Result.Err(FileError.DirectoryNotEmpty) -> ()
+    Result.Err(e) -> fail "expected DirectoryNotEmpty, got: #{e.message()}"
+  end
 end
 
 test "dir? is false for regular files and missing paths"

@@ -1,6 +1,7 @@
 alias Crypto.Certificate
 alias Crypto.PrivateKey
 alias IO.Error as IOError
+alias IO.Reader.Options as ReaderOptions
 alias Net.Socket.Address as SocketAddress
 alias Test.require
 
@@ -80,7 +81,7 @@ test "TLS read fails with TimedOut when the peer is silent"
     end
 
   limit = Duration{unit: Duration.Unit.Milliseconds, value: 50}
-  result = client.with_read_timeout(Option.Some(limit)).read(16)
+  result = client.read(16, ReaderOptions{timeout: Option.Some(limit)})
 
   match client.close()
     _ -> ()

@@ -69,8 +69,8 @@ const SURFACE: &[(&str, &[&str])] = &[
     (
         "File",
         &[
+            "Error",
             "Mode",
-            "close",
             "delete",
             "dir?",
             "exists?",
@@ -88,6 +88,7 @@ const SURFACE: &[(&str, &[&str])] = &[
             "mkdir_p",
             "open",
             "read",
+            "read_binary",
             "rename",
             "rmdir",
             "write",
@@ -96,7 +97,12 @@ const SURFACE: &[(&str, &[&str])] = &[
     ("Float", &["format", "parse"]),
     ("Float32", &["format"]),
     ("FloatLiteral", &[]),
-    ("IO", &["Ready", "gets", "puts", "warn", "write"]),
+    (
+        "IO",
+        &[
+            "Error", "Reader", "Ready", "Writer", "gets", "puts", "warn", "write",
+        ],
+    ),
     ("Int", &["equals?", "format", "hash", "parse"]),
     ("Int8", &["equals?", "format", "hash"]),
     ("Int16", &["equals?", "format", "hash"]),

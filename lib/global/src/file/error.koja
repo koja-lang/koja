@@ -9,9 +9,9 @@ say why.
 interior NUL or is not valid UTF-8. `Unknown` carries the raw OS errno
 for causes outside the mapped set.
 
-Produced by `File.open`, `File.delete`, `File.mkdir`, `File.rename`,
-and the other path operations. Once a `File` is open, reads and writes
-on it fail with `IO.Error` instead.
+Produced by the `File` path operations such as `open`, `delete`,
+`mkdir`, and `rename`. Once `open` has returned an `Fd`, reads and
+writes on it fail with `IO.Error` instead.
 """
 enum File.Error
   AlreadyExists

@@ -1,7 +1,13 @@
 alias IO.Error as IOError
+alias IO.Reader.Options as ReaderOptions
+alias IO.Writer.Options as WriterOptions
 
 @doc """
-Raw file descriptor for I/O operations.
+An open file descriptor. `File.open` returns one for a file, `STDIN`,
+`STDOUT`, and `STDERR` name the standard streams, and the socket types
+wrap one. Reads and writes come from the `IO.Reader` and `IO.Writer`
+conformances below, and every operation on an open descriptor fails
+with `IO.Error`.
 """
 struct Fd
   descriptor: Int32
@@ -28,37 +34,6 @@ struct Fd
   end
 
   @doc """
-  Reads up to `count` bytes from the file descriptor as UTF-8 text.
-  Returns `""` at end of stream. With a `timeout`, the read fails with
-  `IO.Error.TimedOut` once that much time passes with no data.
-  """
-  fn read(self, count: Int, timeout: Option<Duration> = Option.None)
-    -> String ! IOError | String.ConversionError
-
-    bytes = try self.read_binary(count, timeout)
-    try bytes.to_string()
-  end
-
-  @doc """
-  Reads up to `count` bytes from the file descriptor as raw bytes.
-  Unlike `read`, this does not assume the data is UTF-8 text, making it
-  suitable for binary wire protocols. Returns an empty binary at end of
-  stream. With a `timeout`, the read fails with `IO.Error.TimedOut`
-  once that much time passes with no data.
-  """
-  fn read_binary(self, count: Int, timeout: Option<Duration> = Option.None)
-    -> Binary ! IOError
-
-    ptr = koja_fd_read(self.descriptor, count, timeout_ms(timeout))
-
-    if ptr.null?()
-      fail IOError.last()
-    end
-
-    RuntimeBlock.adopt_binary(ptr)
-  end
-
-  @doc """
   Removes this file descriptor from I/O readiness monitoring.
   No further `IOReady` messages will be delivered for this fd.
   """
@@ -76,36 +51,6 @@ struct Fd
   """
   fn watch(self, interest: Int)
     koja_rt_watch_fd(self.descriptor, interest)
-  end
-
-  @doc """
-  Writes data to the file descriptor. Accepts either a `String` (encoded
-  as UTF-8) or a `Binary` for raw wire protocols, so non-UTF-8 frames pass
-  through unaltered. Returns the number of bytes written. With a
-  `timeout`, the write fails with `IO.Error.TimedOut` once that much
-  time passes with the descriptor still not writable.
-  """
-  fn write(self, data: Binary | String, timeout: Option<Duration> = Option.None)
-    -> Int ! IOError
-
-    bytes =
-      match data
-        b: Binary -> b
-        s: String -> s.to_binary()
-      end
-
-    result = koja_fd_write(
-      self.descriptor,
-      CPtr.borrow(bytes),
-      bytes.byte_size(),
-      timeout_ms(timeout),
-    )
-
-    if result < 0
-      fail IOError.last()
-    end
-
-    result
   end
 
   priv fn timeout_ms(timeout: Option<Duration>) -> Int
@@ -138,4 +83,54 @@ struct Fd
 
   @extern "C"
   priv fn koja_rt_watch_fd(fd: Int32, interest: Int64)
+end
+
+impl IO.Reader for Fd
+  @doc """
+  Reads up to `count` bytes from the file descriptor. Returns an empty
+  binary at end of stream. With `options.timeout` set, the read fails
+  with `IO.Error.TimedOut` once that much time passes with no data.
+  """
+  fn read(self, count: Int, options: ReaderOptions) -> Binary ! IOError
+    ptr = Fd.koja_fd_read(
+      self.descriptor,
+      count,
+      Fd.timeout_ms(options.timeout),
+    )
+
+    if ptr.null?()
+      fail IOError.last()
+    end
+
+    RuntimeBlock.adopt_binary(ptr)
+  end
+end
+
+impl IO.Writer for Fd
+  @doc """
+  Writes `data` to the file descriptor and returns the number of bytes
+  written. With `options.timeout` set, the write fails with
+  `IO.Error.TimedOut` once that much time passes with the descriptor
+  still not writable.
+  """
+  fn write(self, data: Binary | String, options: WriterOptions) -> Int ! IOError
+    bytes =
+      match data
+        b: Binary -> b
+        s: String -> s.to_binary()
+      end
+
+    result = Fd.koja_fd_write(
+      self.descriptor,
+      CPtr.borrow(bytes),
+      bytes.byte_size(),
+      Fd.timeout_ms(options.timeout),
+    )
+
+    if result < 0
+      fail IOError.last()
+    end
+
+    result
+  end
 end

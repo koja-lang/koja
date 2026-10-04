@@ -25,11 +25,10 @@ impl Koja.Task for New
       fail "directory '#{path}' already exists"
     end
 
-    File.mkdir_p("#{path}/src")
-      rescue message -> fail "cannot create directory: #{message}"
+    File.mkdir_p("#{path}/src") rescue e -> fail "cannot create directory: #{e}"
 
     File.mkdir_p("#{path}/test")
-      rescue message -> fail "cannot create directory: #{message}"
+      rescue e -> fail "cannot create directory: #{e}"
 
     try write_scaffold(path, name)
 

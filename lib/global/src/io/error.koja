@@ -15,9 +15,9 @@ waited. The caller must return to its run loop so that message is
 handled, and must not retry the call first. `Unknown` carries the raw
 OS errno for causes outside the mapped set.
 
-Produced by `IO.Reader.read`, `IO.Writer.write`, and `close` on `Fd`,
-`File`, and the socket types. Path operations fail with `File.Error`
-and connection setup with `Socket.Error`.
+Produced by `IO.Reader.read`, `IO.Writer.write`, and `close` on `Fd`
+and the socket types. Path operations fail with `File.Error` and
+connection setup with `Socket.Error`.
 """
 enum IO.Error
   BrokenPipe

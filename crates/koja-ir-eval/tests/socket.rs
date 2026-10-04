@@ -107,18 +107,16 @@ fn tcp_accept_times_out_without_a_client() {
         r#"
         alias Net.Socket.Error as SocketError
         alias Net.TCPListener
-        alias Net.TCPListener.Options as ListenerOptions
 
         fn main -> String
           limit = Duration{{unit: Duration.Unit.Milliseconds, value: 20}}
-          options = ListenerOptions{{accept_timeout: Option.Some(limit)}}
           listener =
-            match TCPListener.bind({port}, options)
+            match TCPListener.bind({port})
               Result.Ok(l) -> l
               Result.Err(e) -> return "bind failed: " <> e.message()
             end
 
-          match listener.accept()
+          match listener.accept(Option.Some(limit))
             Result.Ok(_) -> "accepted"
             Result.Err(SocketError.TimedOut) -> "timed out"
             Result.Err(e) -> "accept failed: " <> e.message()
@@ -138,6 +136,7 @@ fn tcp_read_times_out_on_a_silent_peer() {
     let source = dedent(&format!(
         r#"
         alias IO.Error as IOError
+        alias IO.Reader.Options as ReaderOptions
         alias Net.TCPListener
         alias Net.TCPSocket
         alias Net.TLSError
@@ -156,7 +155,7 @@ fn tcp_read_times_out_on_a_silent_peer() {
             end
 
           limit = Duration{{unit: Duration.Unit.Milliseconds, value: 20}}
-          match client.with_read_timeout(Option.Some(limit)).read(16)
+          match client.read(16, ReaderOptions{{timeout: Option.Some(limit)}})
             Result.Ok(_) -> "read data"
             Result.Err(io_error: IOError) ->
               match io_error
