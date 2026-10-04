@@ -737,15 +737,13 @@ dependencies = [
  "koja-ir-llvm",
  "koja-lexer",
  "koja-parser",
+ "koja-project",
  "koja-runtime-posix",
  "koja-shell",
  "koja-stdlib",
  "koja-test",
  "koja-typecheck",
  "libc",
- "serde",
- "tar",
- "toml",
 ]
 
 [[package]]
@@ -818,12 +816,13 @@ dependencies = [
  "koja-ast",
  "koja-fmt",
  "koja-parser",
+ "koja-project",
  "koja-query",
  "koja-stdlib",
  "koja-typecheck",
  "serde",
+ "serde_json",
  "tokio",
- "toml",
  "tower-lsp-server",
 ]
 
@@ -834,6 +833,18 @@ dependencies = [
  "koja-ast",
  "koja-lexer",
  "proptest",
+]
+
+[[package]]
+name = "koja-project"
+version = "0.19.1"
+dependencies = [
+ "koja-parser",
+ "koja-stdlib",
+ "libc",
+ "serde",
+ "tar",
+ "toml",
 ]
 
 [[package]]

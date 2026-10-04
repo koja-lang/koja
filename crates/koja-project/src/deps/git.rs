@@ -15,16 +15,16 @@ use std::process::{Command, Stdio};
 
 use koja_stdlib::koja_home;
 
-use crate::project::GitRef;
+use crate::manifest::GitRef;
 
 /// Directory holding the mirror clones.
-pub(crate) fn cache_dir() -> Result<PathBuf, String> {
+pub fn cache_dir() -> Result<PathBuf, String> {
     Ok(koja_home()?.join("cache").join("git"))
 }
 
 /// Mirror-clone directory for `url`: a readable slug plus a URL hash
 /// so distinct URLs never collide.
-pub(crate) fn mirror_dir(url: &str) -> Result<PathBuf, String> {
+pub fn mirror_dir(url: &str) -> Result<PathBuf, String> {
     Ok(cache_dir()?.join(format!("{}-{:016x}.git", slug(url), fnv1a(url))))
 }
 
@@ -82,7 +82,7 @@ pub(crate) fn fetch(mirror: &Path, url: &str) -> Result<(), String> {
 }
 
 /// Whether the mirror already contains `rev` as a commit.
-pub(crate) fn has_commit(mirror: &Path, rev: &str) -> bool {
+pub fn has_commit(mirror: &Path, rev: &str) -> bool {
     run(
         &[
             "-C",
@@ -102,7 +102,7 @@ pub(crate) fn has_commit(mirror: &Path, rev: &str) -> bool {
 /// via `ls-remote` (peeled `^{}` lines win for annotated tags). A
 /// `rev` resolves against the mirror clone, fetching once if needed,
 /// since remotes generally refuse to answer for arbitrary SHAs.
-pub(crate) fn resolve_ref(url: &str, reference: &GitRef) -> Result<String, String> {
+pub fn resolve_ref(url: &str, reference: &GitRef) -> Result<String, String> {
     match reference {
         GitRef::Branch(branch) => {
             let full = format!("refs/heads/{branch}");
@@ -150,7 +150,7 @@ pub(crate) fn resolve_ref(url: &str, reference: &GitRef) -> Result<String, Strin
 /// Every tag name on the remote, without the `refs/tags/` prefix.
 /// Peeled `^{}` entries for annotated tags are dropped, so each tag
 /// appears once.
-pub(crate) fn list_tags(url: &str) -> Result<Vec<String>, String> {
+pub fn list_tags(url: &str) -> Result<Vec<String>, String> {
     let refs = ls_remote(url, &["refs/tags/*"])?;
     Ok(refs
         .into_iter()

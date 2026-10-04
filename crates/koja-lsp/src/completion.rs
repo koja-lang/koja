@@ -14,6 +14,7 @@ use koja_query::expr_at::{find_expr_at, receiver_type_id};
 use koja_typecheck::{Candidate, CandidateDetail, CandidateKind, GlobalKind, GlobalRegistry};
 
 use crate::backend::Backend;
+use crate::convert::Positions;
 
 impl Backend {
     /// Handles `textDocument/completion` requests by returning keyword
@@ -25,64 +26,67 @@ impl Backend {
     ) -> Result<Option<CompletionResponse>> {
         let uri = params.text_document_position.text_document.uri;
         let pos = params.text_document_position.position;
-        let mut items = Vec::new();
 
-        let docs = self.documents.read().await;
-        let state = match docs.get(uri.as_str()) {
-            Some(s) => s,
-            None => return Ok(Some(CompletionResponse::Array(items))),
-        };
-        let (file, registry) = match (state.active_file(), state.registry.as_deref()) {
-            (Some(f), Some(r)) => (f, r),
-            _ => return Ok(Some(CompletionResponse::Array(items))),
-        };
+        self.with_analysis(&uri, |doc| {
+            let Some(file) = doc.active_file() else {
+                return Ok(None);
+            };
+            let registry = doc.analysis.registry;
+            let mut items = Vec::new();
 
-        let line = pos.line + 1;
-        let col = pos.character + 1;
-        if let Some(expr) = find_expr_at(file, line, col)
-            && let ExprKind::FieldAccess { receiver, .. } = &expr.kind
-            && let Some(type_id) = receiver_type_id(receiver, registry)
-        {
-            let is_static = matches!(&receiver.kind, ExprKind::Ident { .. })
-                && matches!(
-                    registry.get(type_id).map(|e| &e.kind),
-                    Some(GlobalKind::Struct(_) | GlobalKind::Enum(_))
-                )
-                && receiver.resolution == koja_ast::identifier::ResolvedType::Unresolved;
-            for candidate in registry.dot_candidates(type_id, is_static) {
-                items.push(to_completion_item(&candidate, registry));
-            }
-            return Ok(Some(CompletionResponse::Array(items)));
-        }
-
-        let prefix = word_prefix_at(&state.source, pos);
-        let prefix_lower = prefix.to_ascii_lowercase();
-        let matches =
-            |name: &str| prefix.is_empty() || name.to_ascii_lowercase().starts_with(&prefix_lower);
-
-        for kw in koja_typecheck::KEYWORDS {
-            if matches(kw) {
-                items.push(CompletionItem {
-                    label: kw.to_string(),
-                    kind: Some(CompletionItemKind::KEYWORD),
-                    ..Default::default()
-                });
-            }
-        }
-
-        let mut packages = vec![state.active_package.as_str()];
-        if state.active_package != "Global" {
-            packages.push("Global");
-        }
-        for pkg in packages {
-            for candidate in registry.symbol_candidates(pkg, &state.active_package) {
-                if matches(candidate.label) {
+            let (line, col) = doc.line_column(pos);
+            if let Some(expr) = find_expr_at(file, line, col)
+                && let ExprKind::FieldAccess { receiver, .. } = &expr.kind
+                && let Some(type_id) = receiver_type_id(receiver, registry)
+            {
+                let is_static = matches!(&receiver.kind, ExprKind::Ident { .. })
+                    && matches!(
+                        registry.get(type_id).map(|e| &e.kind),
+                        Some(GlobalKind::Struct(_) | GlobalKind::Enum(_))
+                    )
+                    && receiver.resolution == koja_ast::identifier::ResolvedType::Unresolved;
+                for candidate in registry.dot_candidates(type_id, is_static) {
                     items.push(to_completion_item(&candidate, registry));
                 }
+                return Ok(Some(CompletionResponse::Array(items)));
             }
-        }
 
-        Ok(Some(CompletionResponse::Array(items)))
+            // The prefix comes from the live buffer, which can be a
+            // few keystrokes ahead of the analyzed text.
+            let prefix = match self.buffers.snapshot(&uri) {
+                Some(buffer) => word_prefix_at(&Positions::new(self.encoding(), &buffer.text), pos),
+                None => word_prefix_at(&doc.positions, pos),
+            };
+            let prefix_lower = prefix.to_ascii_lowercase();
+            let matches = |name: &str| {
+                prefix.is_empty() || name.to_ascii_lowercase().starts_with(&prefix_lower)
+            };
+
+            for kw in koja_typecheck::KEYWORDS {
+                if matches(kw) {
+                    items.push(CompletionItem {
+                        label: kw.to_string(),
+                        kind: Some(CompletionItemKind::KEYWORD),
+                        ..Default::default()
+                    });
+                }
+            }
+
+            let active_package = doc.state.active_package.as_str();
+            let mut packages = vec![active_package];
+            if active_package != "Global" {
+                packages.push("Global");
+            }
+            for pkg in packages {
+                for candidate in registry.symbol_candidates(pkg, active_package) {
+                    if matches(candidate.label) {
+                        items.push(to_completion_item(&candidate, registry));
+                    }
+                }
+            }
+            Ok(Some(CompletionResponse::Array(items)))
+        })
+        .await
     }
 }
 
@@ -125,15 +129,8 @@ fn to_completion_item(candidate: &Candidate<'_>, registry: &GlobalRegistry) -> C
     }
 }
 
-fn word_prefix_at(source: &str, pos: Position) -> String {
-    let lines: Vec<&str> = source.lines().collect();
-    let line_idx = pos.line as usize;
-    if line_idx >= lines.len() {
-        return String::new();
-    }
-    let line = lines[line_idx];
-    let col = (pos.character as usize).min(line.len());
-    let before = &line[..col];
+fn word_prefix_at(positions: &Positions<'_>, pos: Position) -> String {
+    let before = &positions.text()[..positions.offset(pos)];
     before
         .chars()
         .rev()

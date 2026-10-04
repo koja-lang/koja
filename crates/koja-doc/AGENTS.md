@@ -48,9 +48,9 @@ with no TOC entries leave the third column blank.
 
 [`koja-driver`'s `cmd_doc`](../koja-driver/src/commands.rs) calls
 `extract_items` once per (parsed_file, package, kind) tuple. By default it
-bundles the project + every path dep + the embedded stdlib
-(`koja_stdlib::autoimport_sources()` + `qualified_sources()`), and
-`--project-only` opts out of the stdlib + deps. The driver's
+bundles the embedded stdlib first, then the project and every dep, through
+`koja_project::ProjectLoader` with `StdlibOptions`, and `--project-only`
+opts out of the stdlib + deps. The driver's
 `cmd_doc_serve` rebuilds (unless `--no-rebuild`) and then hosts the doc
 tree via [`koja-driver`'s `serve` module](../koja-driver/src/serve.rs).
 Serving is required for the in-page fuzzy search since browsers refuse to

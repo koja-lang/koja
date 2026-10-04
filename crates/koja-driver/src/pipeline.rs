@@ -61,6 +61,7 @@
 //!   whose tests need no native extern runs without a link step.
 //! - `check` and `shell` have no backend dimension.
 
+use std::collections::BTreeSet;
 use std::env;
 use std::ffi::OsStr;
 use std::fs;
@@ -75,14 +76,16 @@ use koja_ir::{IRPackage, IRProgram, IRScript, lower_program, lower_script};
 use koja_ir_eval::{ForeignTable, Interpreter, RuntimeError, Unresolved, Value};
 use koja_ir_llvm::CompileOptions;
 use koja_parser::{FileId, ParseMode, ParsedProgram, SourceFile, parse_file, parse_program};
-use koja_test::{HARNESS_ENTRY, discover_tests, generate_harness};
+use koja_project::{
+    Dependencies, ErrorPolicy, LoadOptions, LoadedSource, ProjectConfig, ProjectLoader,
+    StdlibOptions, manifest, stdlib_sources,
+};
+use koja_test::{HARNESS_ENTRY, discover_tests, generate_harness, select_tests};
 use koja_typecheck::{CheckFailure, CheckedProgram, check_program, format_registry};
 
 use crate::commands::{load_project_or_exit, try_load_project};
 use crate::diagnostics::{DiagnosticFormat, SourceTable, render_program_diagnostics};
 use crate::link::{self, LinkOptions};
-use crate::loader::{self, ErrorPolicy, LoadOptions, LoadedSource, ProjectLoader};
-use crate::project::{self, ProjectConfig};
 use crate::tasks::{TASK_HARNESS_ENTRY, TaskProvider, generate_task_harness, resolve_tasks};
 
 /// Which downstream backend a `run` invocation drives.
@@ -217,6 +220,10 @@ pub(crate) struct TestOptions {
     /// Execution backend. Defaults to `interpreter`, or `llvm` when the project declares a C extern the interpreter cannot resolve
     #[arg(long, value_enum)]
     pub(crate) backend: Option<Backend>,
+
+    /// Run only the test at this `file:line`, the id the json reporter prints. Repeat the flag to run several
+    #[arg(long, value_name = "FILE:LINE")]
+    pub(crate) only: Vec<String>,
 
     /// Write machine-readable reporter output to this file instead of stderr
     #[arg(long, value_name = "PATH")]
@@ -416,7 +423,7 @@ fn resolve_source_shape(
         None => env::current_dir()
             .map_err(|err| format!("cannot determine current directory: {err}"))?,
     };
-    match project::load_project(&root).map_err(|err| err.to_string())? {
+    match manifest::load_project(&root).map_err(|err| err.to_string())? {
         Some(config) => Ok(SourceShape::Project {
             config: Box::new(config),
             root,
@@ -506,7 +513,7 @@ fn shell_session(project_root: Option<&Path>) -> ShellSession {
             cwd
         }
     };
-    let config = match project::load_project(&root) {
+    let config = match manifest::load_project(&root) {
         Ok(Some(config)) => config,
         Ok(None) => return stdlib_session(),
         Err(err) => {
@@ -516,30 +523,51 @@ fn shell_session(project_root: Option<&Path>) -> ShellSession {
     };
     println!("loading project `{}`", config.name);
     match ProjectLoader::new(&config, &root).sources(LoadOptions {
+        dependencies: Dependencies::Sync,
         extensions: &["koja"],
-        include_dependencies: true,
-        include_stdlib: true,
         include_tests: false,
         on_error: ErrorPolicy::Lenient,
+        stdlib: Some(StdlibOptions {
+            extraction_root: None,
+            link_tests: true,
+        }),
     }) {
-        Ok(sources) => ShellSession {
-            baseline: sources.into_iter().map(into_source_file).collect(),
-            session_package: config.namespace(),
-        },
+        Ok(loaded) => {
+            for warning in &loaded.warnings {
+                eprintln!("warning: {warning}");
+            }
+            ShellSession {
+                baseline: loaded.sources.into_iter().map(into_source_file).collect(),
+                session_package: config.namespace(),
+            }
+        }
         Err(_) => stdlib_session(),
     }
 }
 
 /// Stdlib-only `REPL` session for a bare `koja shell` (no project),
-/// reusing the same primitive [`ProjectLoader`] loads stdlib from.
+/// reusing the same rule [`ProjectLoader`] loads stdlib with.
 fn stdlib_session() -> ShellSession {
     ShellSession {
-        baseline: loader::stdlib_sources()
-            .into_iter()
-            .map(into_source_file)
-            .collect(),
+        baseline: stdlib_bundle(true),
         session_package: koja_shell::SESSION_PACKAGE.to_string(),
     }
+}
+
+/// The stdlib alone as parser inputs, for single-file compiles and
+/// sessions that have no project to claim packages. `link_tests`
+/// links the `Test` package, see [`StdlibOptions::link_tests`].
+fn stdlib_bundle(link_tests: bool) -> Vec<SourceFile> {
+    stdlib_sources(
+        &BTreeSet::new(),
+        &StdlibOptions {
+            extraction_root: None,
+            link_tests,
+        },
+    )
+    .into_iter()
+    .map(into_source_file)
+    .collect()
 }
 
 fn into_source_file(loaded: LoadedSource) -> SourceFile {
@@ -716,10 +744,7 @@ fn run_task(
     };
 
     let program = if provider.toolchain {
-        lower_task_harness(
-            bundle_many_with_autoimport(Vec::new(), None, false),
-            provider,
-        )
+        lower_task_harness(stdlib_bundle(false), provider)
     } else {
         let (config, root) = project
             .as_ref()
@@ -787,8 +812,7 @@ fn build_task_program(
     task_name: &str,
     provider: &TaskProvider,
 ) -> IRProgram {
-    let user_files = collect_project_sources_or_exit(config, root, false);
-    let bundled = bundle_many_with_autoimport(user_files, Some(&config.namespace()), false);
+    let bundled = collect_project_sources_or_exit(config, root, false);
 
     let checked = check_bundle(bundled.clone(), ParseMode::File);
     check_task_conformance(&checked, task_name, provider);
@@ -914,60 +938,6 @@ fn check_single_file(path: &Path, mode: ParseMode, emit_ast: bool) {
     }
 }
 
-/// Wrap one user-supplied [`SourceFile`] with the embedded stdlib
-/// (auto-import plus qualified packages) so every pipeline feeds
-/// the parser the same compilation unit. Stdlib sources lead so
-/// the registry sees their declarations before any user code that
-/// references them. Single-file callers never declare project
-/// membership, hence `skip_package: None`.
-fn bundle_with_autoimport(user: SourceFile, include_tests: bool) -> Vec<SourceFile> {
-    bundle_many_with_autoimport(vec![user], None, include_tests)
-}
-
-/// Multi-file counterpart to [`bundle_with_autoimport`] for
-/// project mode, where `user_files` already merges project and
-/// dependency sources.
-///
-/// `skip_package` handles the stdlib self-compile: when the project
-/// IS an embedded package (building or testing `lib/global`,
-/// `lib/json`, …) the on-disk sources already provide every decl
-/// the autoimport would inject, and a second copy would collide at
-/// registry seal time.
-///
-/// `include_tests` links the `Test` package. It is true exactly when
-/// the project's test sources are loaded (`koja test`, `koja check`),
-/// so a build never sees `Test.Failure` and `assert` cannot type
-/// check in application code.
-fn bundle_many_with_autoimport(
-    user_files: Vec<SourceFile>,
-    skip_package: Option<&str>,
-    include_tests: bool,
-) -> Vec<SourceFile> {
-    let mut sources = koja_stdlib::autoimport_sources();
-    // Qualified stdlib packages (Crypto, HTTP, JSON, Net, …)
-    // ship pre-baked against the published Global. Loading them
-    // when the user IS compiling Global self-imports an
-    // inconsistent pair. The user's edited `lib/global/src` would
-    // co-exist with qualified packages typechecked against the
-    // older baked Global, and protocol-impl resolution gets
-    // confused (e.g. HTTP's `format`/`equals?` calls fail to see the
-    // user's edited `Global` protocol impls because the qualified
-    // packages were lifted before user files joined the bundle).
-    // Qualified deps don't tag along on a Global self-compile, except
-    // for a test build, where the harness needs `Test` and `Test`
-    // needs `JSON` for its json reporter.
-    if skip_package != Some("Global") {
-        sources.extend(koja_stdlib::qualified_sources_for(include_tests));
-    } else if include_tests {
-        sources.extend(koja_stdlib::test_build_sources());
-    }
-    if let Some(skip) = skip_package {
-        sources.retain(|file| file.package != skip);
-    }
-    sources.extend(user_files);
-    sources
-}
-
 /// Read a source file and drive it through the script-mode
 /// pipeline (`parse -> check -> lower_script`). Returns the sealed
 /// [`IRScript`] on success. Bails the process on any pipeline
@@ -992,17 +962,13 @@ fn build_script(path: &Path) -> IRScript {
 fn read_and_check(path: &Path, mode: ParseMode, include_tests: bool) -> (CheckedProgram, String) {
     let source = read_source_or_exit(path);
     let package = derive_package(path);
-    let checked = check_bundle(
-        bundle_with_autoimport(
-            SourceFile {
-                package: package.clone(),
-                path: path.to_path_buf(),
-                source,
-            },
-            include_tests,
-        ),
-        mode,
-    );
+    let mut bundled = stdlib_bundle(include_tests);
+    bundled.push(SourceFile {
+        package: package.clone(),
+        path: path.to_path_buf(),
+        source,
+    });
+    let checked = check_bundle(bundled, mode);
     (checked, package)
 }
 
@@ -1129,11 +1095,8 @@ fn resolve_output_name(output: Option<String>, path: &Path) -> String {
 /// whole set, and print `<project>: OK` (or per-file ASTs when
 /// `emit_ast` is set).
 fn check_project(config: &ProjectConfig, root: &Path, emit_ast: bool) {
-    let user_files = collect_project_sources_or_exit(config, root, true);
-    let checked = check_bundle(
-        bundle_many_with_autoimport(user_files, Some(&config.namespace()), true),
-        ParseMode::File,
-    );
+    let bundled = collect_project_sources_or_exit(config, root, true);
+    let checked = check_bundle(bundled, ParseMode::File);
     if emit_ast {
         emit_checked_ast(&checked);
     } else {
@@ -1187,8 +1150,10 @@ fn run_project_tests(config: &ProjectConfig, root: &Path, options: &TestOptions)
     // `assert` stamps each file's path into the failure it reports at
     // run time, and the test binary has no project root to relativize
     // against. Hand the parser root-relative paths so a failure reads
-    // `test/stack_test.koja:12:12` like the harness lines do.
-    let user_files = collect_project_sources_or_exit(config, root, true)
+    // `test/stack_test.koja:12:12` like the harness lines do. Stdlib
+    // paths are synthetic and never under the root, so they pass
+    // through unchanged.
+    let bundled = collect_project_sources_or_exit(config, root, true)
         .into_iter()
         .map(|file| SourceFile {
             path: file
@@ -1199,7 +1164,6 @@ fn run_project_tests(config: &ProjectConfig, root: &Path, options: &TestOptions)
             ..file
         })
         .collect();
-    let bundled = bundle_many_with_autoimport(user_files, Some(&namespace), true);
     let mut parsed = parse_program(bundled, ParseMode::File);
     if parsed.has_errors() {
         let sources = capture_sources(&parsed);
@@ -1215,6 +1179,16 @@ fn run_project_tests(config: &ProjectConfig, root: &Path, options: &TestOptions)
         println!("no tests found");
         return;
     }
+    let tests = if options.only.is_empty() {
+        tests
+    } else {
+        select_tests(tests, &options.only).unwrap_or_else(|unmatched| {
+            for id in unmatched {
+                eprintln!("error: no test at {id}");
+            }
+            process::exit(1);
+        })
+    };
 
     splice_generated_source(
         &mut parsed,
@@ -1442,11 +1416,8 @@ fn exec_binary(binary: &str, args: &[String], remove_after: bool) -> ! {
 /// `lower_program`) and return the sealed [`IRProgram`]. Bails the
 /// process with a formatted error on any failure.
 fn build_project_program(config: &ProjectConfig, root: &Path) -> IRProgram {
-    let user_files = collect_project_sources_or_exit(config, root, false);
-    let checked = check_bundle(
-        bundle_many_with_autoimport(user_files, Some(&config.namespace()), false),
-        ParseMode::File,
-    );
+    let bundled = collect_project_sources_or_exit(config, root, false);
+    let checked = check_bundle(bundled, ParseMode::File);
     let entry = resolve_project_entry(config);
     match lower_program(&checked, &entry) {
         Ok(program) => program,
@@ -1478,11 +1449,16 @@ fn resolve_project_entry(config: &ProjectConfig) -> Identifier {
     Identifier::single(config.namespace(), entry)
 }
 
-/// Collect the project's compiler inputs: the project's own `src`
-/// (plus `test` when `include_tests`) and every path dependency's
-/// `src`, each tagged with its package. Bails the process on any I/O
-/// or dependency-graph error. Stdlib rides in separately via
-/// `bundle_*_with_autoimport`, so it is not collected here.
+/// Collect the project's compiler inputs in bundle order. The stdlib
+/// packages the project does not claim come first, then the project's
+/// own `src` (plus `test` when `include_tests`), then every
+/// dependency's `src`, each tagged with its package. Bails the process
+/// on any I/O or dependency-graph error.
+///
+/// `include_tests` also links the `Test` package. It is true exactly
+/// when the project's test sources are loaded (`koja test`, `koja
+/// check`), so a build never sees `Test.Failure` and `assert` cannot
+/// type check in application code.
 fn collect_project_sources_or_exit(
     config: &ProjectConfig,
     root: &Path,
@@ -1490,17 +1466,20 @@ fn collect_project_sources_or_exit(
 ) -> Vec<SourceFile> {
     let loaded = ProjectLoader::new(config, root)
         .sources(LoadOptions {
+            dependencies: Dependencies::Sync,
             extensions: &["koja"],
-            include_dependencies: true,
-            include_stdlib: false,
             include_tests,
             on_error: ErrorPolicy::Strict,
+            stdlib: Some(StdlibOptions {
+                extraction_root: None,
+                link_tests: include_tests,
+            }),
         })
         .unwrap_or_else(|err| {
             eprintln!("error: {err}");
             process::exit(1);
         });
-    loaded.into_iter().map(into_source_file).collect()
+    loaded.sources.into_iter().map(into_source_file).collect()
 }
 
 /// Default output path for project builds:
@@ -1617,15 +1596,9 @@ fn print_check_warnings(checked: &CheckedProgram, sources: &SourceTable) {
 /// Snapshot every parsed file's source before `check_program`
 /// consumes the parse, for snippet rendering. `CheckFailure::partial`
 /// is rebuilt without sources on the typecheck-failure path, so the
-/// driver keeps its own copy, indexed by [`koja_parser::FileId`].
+/// driver keeps its own copy.
 fn capture_sources(parsed: &ParsedProgram) -> SourceTable {
-    SourceTable::new(
-        parsed
-            .order
-            .iter()
-            .map(|path| (path.clone(), parsed.files[path].source.clone()))
-            .collect(),
-    )
+    parsed.source_table()
 }
 
 /// Collect every diagnostic the parse produced, across all files.
@@ -1662,17 +1635,13 @@ mod tests {
     use super::*;
 
     fn lower_test_script(source: &str) -> IRScript {
-        let checked = check_bundle(
-            bundle_with_autoimport(
-                SourceFile {
-                    package: "Probe".to_string(),
-                    path: PathBuf::from("probe.kojs"),
-                    source: source.to_string(),
-                },
-                false,
-            ),
-            ParseMode::Script,
-        );
+        let mut bundled = stdlib_bundle(false);
+        bundled.push(SourceFile {
+            package: "Probe".to_string(),
+            path: PathBuf::from("probe.kojs"),
+            source: source.to_string(),
+        });
+        let checked = check_bundle(bundled, ParseMode::Script);
         lower_script(&checked).expect("script lowers")
     }
 

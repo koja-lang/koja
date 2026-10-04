@@ -11,8 +11,8 @@ use koja_ast::util::dedent;
 mod common;
 
 use common::{
-    assert_script_fails_with, diagnostic_messages, typecheck_script as typecheck,
-    typecheck_script_fail as typecheck_fail,
+    assert_script_fails_with, diagnostic_messages, typecheck_file_fail,
+    typecheck_script as typecheck, typecheck_script_fail as typecheck_fail,
 };
 
 #[test]
@@ -67,6 +67,53 @@ fn trailing_assignment_with_non_unit_return_diagnoses() {
         ";
 
     assert_script_fails_with(source, &["return type mismatch", "non-expression"]);
+}
+
+#[test]
+fn valued_return_in_unit_function_fix_drops_the_value() {
+    let source = dedent(
+        "
+        fn shout(flag: Bool)
+          if flag
+            return 42
+          end
+        end
+        ",
+    );
+    let failure = typecheck_file_fail(&source);
+    let diagnostic = failure
+        .diagnostics
+        .iter()
+        .find(|d| d.message.contains("cannot return a value"))
+        .expect("valued return diagnoses");
+    let fix = diagnostic
+        .fix
+        .as_ref()
+        .expect("valued return carries a fix");
+    assert_eq!(fix.title, "Drop the return value");
+    assert_eq!(
+        fix.apply(&source),
+        dedent(
+            "
+            fn shout(flag: Bool)
+              if flag
+                return
+              end
+            end
+            ",
+        )
+    );
+}
+
+#[test]
+fn valued_return_in_script_body_has_no_fix() {
+    let failure = typecheck_fail(&dedent("return 42\n"));
+    let diagnostic = failure
+        .diagnostics
+        .iter()
+        .find(|d| d.message.contains("scripts do not return a value"))
+        .expect("script return diagnoses");
+    assert!(diagnostic.fix.is_none());
 }
 
 #[test]

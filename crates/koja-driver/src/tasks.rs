@@ -13,9 +13,7 @@ use std::collections::BTreeMap;
 use std::path::Path;
 
 use koja_ast::util::dedent;
-
-use crate::deps;
-use crate::project::ProjectConfig;
+use koja_project::{ProjectConfig, deps};
 
 /// Name of the synthesized task-harness entry type, spliced into the
 /// providing package's namespace when lowering a task run.

@@ -18,14 +18,16 @@ the `eq` behind `a == b` or the `Option` behind a `for` loop stays invisible.
 ## Entry point
 
 ```rust
-let analysis = Analysis::from_checked(&checked);        // or from_failure(&failure)
+let sources = parsed.source_table();                    // before check_program
+let analysis = Analysis::from_checked(&checked, &sources); // or from_failure(&failure, &sources)
 let index = ReferenceIndex::build_filtered(&analysis, |file| is_project(file));
 let symbol = symbol::symbol_at(&analysis, &index, file_id, line, col);
 ```
 
-`Analysis` borrows files and registry. `from_failure` returns `None` only
-when the parser failed, because typecheck runs every pass before it reports
-and leaves a complete registry behind.
+`Analysis` borrows the files, the registry, and the `SourceTable` taken
+before typecheck ran. `from_failure` returns `None` only when the parser
+failed, because typecheck runs every pass before it reports and leaves a
+complete registry behind.
 
 ## Files
 
@@ -44,7 +46,11 @@ and leaves a complete registry behind.
   for positional arguments, filtered to a range.
 - `docs.rs`: `@doc` text for a registry entry, found by its `name_span`.
 - `display.rs`: one-line rendering of `ResolvedType` and signatures, for
-  completion detail.
+  completion detail, and `type_expr_label` for a written `TypeExpr`.
+- `outline.rs`: the declaration tree of a file, for an outline view and
+  symbol search. One `Visitor` walk, children in source order.
+- `folding.rs`: the foldable regions of a file, blocks and comment runs.
+- `test_sites.rs`: the span of every test in a file, for a run-test lens.
 - `signature.rs`: a function header built from the registry entry and laid
   out by `koja-fmt`, for hover. `type_expr_of` turns a `ResolvedType` back
   into source syntax.

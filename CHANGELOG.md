@@ -18,12 +18,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `Trace`, closure-scoped spans in the standard library. `Trace.root(name, kind, work)` starts a trace at a boundary, and `Trace.span(name, work)` or `Trace.span(name, kind, work)` opens a child of the calling process's context. Both install the span's context for the closure, so every message sent inside it carries the span, and both restore the context they found. The closure gets a `Trace.Span` handle with `attribute(key, value)`, `status(status)`, and `recording?()`. `Trace.Attribute`, `Trace.SpanKind`, and `Trace.Status` are the value types.
 - `Trace.set_trace_id(bytes)`, `Trace.set_span_id(bytes)`, and `Trace.set_sampled(bool)` each write one field of the calling process's context and keep the rest. A codec package calls them before `Trace.root` to continue an incoming trace, and the root then keeps the trace id and sampled bit and names the set span id as its parent. A root under the zero context starts a new sampled trace instead. The two id setters fail with `Trace.Error` on a wrong length. `Trace.clear()` returns a process to the zero context between requests, and `Trace.current()` is the context a codec encodes into an outgoing header.
 - `Trace.Export`, the queue an exporter package drains. A finished `Trace.SpanRecord` joins a queue of at most 4096 records. `Trace.Export.pop()` takes the oldest and `Trace.Export.dropped()` counts what a full queue refused.
+- `koja test --only <file>:<line>` runs one test. Repeat the flag to run several.
+- Quick fixes in the language server. The `unless` removal, the `@test` deprecation, and a valued `return` in a `Unit` function carry the first ones.
+- A `Run test` code lens on each `test` block.
+- The language server rechecks open documents when a `.koja` file or `koja.toml` changes on disk.
 - A `const` can hold a list, map, or set literal, such as `const PRIMES = [2, 3, 5, 7]` or `const PORTS = ["http": 80]`, and a struct or enum variant whose fields hold one. A constant value takes the same grammar as a field default, so it can also read another constant declared anywhere in the program. A collection constant is built once at program start and every read borrows the shared value. A constant that depends on itself through other constants is a compile error.
 
 ### Fixed
 
 - `koja format` no longer panics on a comment inside an empty list, map, or struct literal. The literal stays broken open with the comment inside, the layout an empty call argument list already used.
 - A field default can be a struct literal named through a dotted path, such as `options: TCPListener.Options = TCPListener.Options{}`, or through a file alias. Enum variants with a payload, such as `Option.Some(3)`, are accepted as defaults too. Before, the dotted literal was rejected and the aliased one could panic the compiler. `TCPListener.options` now defaults to `TCPListener.Options{}`.
+- The language server syncs documents incrementally and checks 150 ms after the last edit. A check that an edit overtook publishes nothing, so a multi-step edit no longer leaves errors from a half-applied state on screen.
+- Language server positions are right on a line with a multi-byte character. Before, every hover, highlight, and edit after it on that line was off by the extra bytes.
 
 ## [0.19.1] - 2026-09-26
 

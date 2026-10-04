@@ -14,38 +14,12 @@ use std::sync::OnceLock;
 
 use koja_ast::ast::{Diagnostic, Severity};
 use koja_ast::span::{FileId, Span};
+pub use koja_parser::SourceTable;
 
-/// Source files for rendering, indexed by [`FileId`]. A diagnostic
-/// whose file id misses the table renders without a location.
-pub struct SourceTable {
-    files: Vec<(PathBuf, String)>,
-    /// When true, every span resolves to the one entry. Covers
-    /// bare parses whose spans carry [`FileId::UNKNOWN`].
-    single: bool,
-}
-
-impl SourceTable {
-    pub fn new(files: Vec<(PathBuf, String)>) -> Self {
-        Self {
-            files,
-            single: false,
-        }
-    }
-
-    /// One-file table that attributes every span to that file.
-    pub fn single(path: impl Into<PathBuf>, source: impl Into<String>) -> Self {
-        Self {
-            files: vec![(path.into(), source.into())],
-            single: true,
-        }
-    }
-
-    fn resolve(&self, file: FileId) -> Option<(&Path, &str)> {
-        let index = if self.single { 0 } else { file.0 as usize };
-        self.files
-            .get(index)
-            .map(|(path, source)| (path.as_path(), source.as_str()))
-    }
+/// The path and text a span renders against, or `None` when its file
+/// id misses the table.
+fn resolve(sources: &SourceTable, file: FileId) -> Option<(&Path, &str)> {
+    Some((sources.path_of(file)?, sources.text_of(file)?))
 }
 
 /// Hints longer than this render as a trailing `help:` block instead
@@ -187,7 +161,7 @@ fn render_short(diagnostic: &Diagnostic, sources: &SourceTable) -> String {
 /// `path:line:col`, or `<unknown>` when the span's file is not in
 /// the table.
 fn short_location(span: Span, sources: &SourceTable) -> String {
-    match sources.resolve(span.file) {
+    match resolve(sources, span.file) {
         Some((path, _)) => format!(
             "{}:{}:{}",
             display_path(path),
@@ -245,7 +219,7 @@ fn render_pretty(diagnostic: &Diagnostic, sources: &SourceTable, color: bool) ->
     let inline_hint = hint.filter(|hint| fits_inline(hint));
     let help = hint.filter(|_| inline_hint.is_none());
 
-    if let Some((path, source)) = sources.resolve(diagnostic.span.file) {
+    if let Some((path, source)) = resolve(sources, diagnostic.span.file) {
         out.push('\n');
         out.push_str(&render_snippet(
             Snippet {
@@ -266,7 +240,7 @@ fn render_pretty(diagnostic: &Diagnostic, sources: &SourceTable, color: bool) ->
         let label = Some(related.message.as_str()).filter(|message| fits_inline(message));
         let note = label.is_none().then_some(related.message.as_str());
         out.push('\n');
-        if let Some((path, source)) = sources.resolve(related.span.file) {
+        if let Some((path, source)) = resolve(sources, related.span.file) {
             out.push_str(&render_snippet(
                 Snippet {
                     span: related.span,
@@ -508,7 +482,7 @@ mod tests {
     }
 
     fn no_sources() -> SourceTable {
-        SourceTable::new(Vec::new())
+        SourceTable::default()
     }
 
     fn render(

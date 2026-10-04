@@ -10,6 +10,7 @@ use koja_ast::span::{FileId, Span};
 use koja_query::inlay::{self, HintKind};
 
 use crate::backend::Backend;
+use crate::convert::Positions;
 
 impl Backend {
     /// Handles `textDocument/inlayHint`.
@@ -19,53 +20,44 @@ impl Backend {
     ) -> Result<Option<Vec<InlayHint>>> {
         let uri = params.text_document.uri;
 
-        let docs = self.documents.read().await;
-        let Some(state) = docs.get(uri.as_str()) else {
-            return Ok(None);
-        };
-        let Some(analysis) = state.analysis() else {
-            return Ok(None);
-        };
-        let Some(file) = analysis.file_id(&state.active_path) else {
-            return Ok(None);
-        };
-
-        let range = range_to_span(&params.range, file);
-        let hints = inlay::hints(&analysis, &state.index, file, range)
-            .into_iter()
-            .map(|hint| InlayHint {
-                position: Position::new(
-                    hint.position.line.saturating_sub(1),
-                    hint.position.column.saturating_sub(1),
-                ),
-                label: InlayHintLabel::String(hint.label),
-                kind: Some(match hint.kind {
-                    HintKind::Type => InlayHintKind::TYPE,
-                    HintKind::Parameter => InlayHintKind::PARAMETER,
-                }),
-                text_edits: None,
-                tooltip: None,
-                padding_left: None,
-                padding_right: Some(hint.kind == HintKind::Parameter),
-                data: None,
-            })
-            .collect();
-
-        Ok(Some(hints))
+        self.with_analysis(&uri, |doc| {
+            let range = range_to_span(&params.range, doc.file, &doc.positions);
+            let hints = inlay::hints(&doc.analysis, &doc.state.index, doc.file, range)
+                .into_iter()
+                .map(|hint| InlayHint {
+                    position: doc.positions.position(&hint.position),
+                    label: InlayHintLabel::String(hint.label),
+                    kind: Some(match hint.kind {
+                        HintKind::Type => InlayHintKind::TYPE,
+                        HintKind::Parameter => InlayHintKind::PARAMETER,
+                    }),
+                    text_edits: None,
+                    tooltip: None,
+                    padding_left: None,
+                    padding_right: Some(hint.kind == HintKind::Parameter),
+                    data: None,
+                })
+                .collect();
+            Ok(Some(hints))
+        })
+        .await
     }
 }
 
-/// The inverse of `span_to_range`. Offsets stay zero because the
+/// The inverse of `Positions::range`. Offsets stay zero because the
 /// range only filters by line and column.
-fn range_to_span(range: &Range, file: FileId) -> Span {
-    let position = |p: &Position| koja_ast::span::Position {
-        offset: 0,
-        line: p.line + 1,
-        column: p.character + 1,
+fn range_to_span(range: &Range, file: FileId, positions: &Positions<'_>) -> Span {
+    let position = |p: Position| {
+        let (line, column) = positions.line_column(p);
+        koja_ast::span::Position {
+            offset: 0,
+            line,
+            column,
+        }
     };
     Span {
-        start: position(&range.start),
-        end: position(&range.end),
+        start: position(range.start),
+        end: position(range.end),
         file,
         synthetic: false,
     }

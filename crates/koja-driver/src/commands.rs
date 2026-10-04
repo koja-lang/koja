@@ -7,17 +7,18 @@
 //! (`build`, `check`, `run`, `eval`, `shell`, `test`) live next
 //! door in [`crate::pipeline`].
 
+use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 use std::{env, fs, process};
 
 use koja_doc::terminal::SearchOutcome;
 use koja_parser::ParseMode;
+use koja_project::{
+    Dependencies, ErrorPolicy, LoadOptions, LoadedSource, ProjectConfig, ProjectLoader,
+    SourceOrigin, StdlibOptions, manifest, stdlib_sources, walk_source_files,
+};
 
 use crate::diagnostics::print_file_diagnostics;
-use crate::loader::{
-    self, ErrorPolicy, LoadOptions, LoadedSource, ProjectLoader, SourceOrigin, walk_source_files,
-};
-use crate::project::{self, ProjectConfig};
 use crate::serve;
 
 /// Returns the process's current directory, or prints an error to
@@ -56,7 +57,7 @@ pub(crate) fn try_load_project(project_root: Option<&Path>) -> Option<(ProjectCo
     let root = project_root
         .map(Path::to_path_buf)
         .unwrap_or_else(current_dir_or_exit);
-    match project::load_project(&root) {
+    match manifest::load_project(&root) {
         Ok(Some(config)) => Some((config, root)),
         Ok(None) => None,
         Err(e) => {
@@ -272,7 +273,9 @@ fn discover_doc_inputs(project_root: Option<&Path>, project_only: bool) -> Disco
             eprintln!("error: --project-only requires a koja.toml project");
             process::exit(1);
         }
-        let inputs = loader::stdlib_sources().into_iter().map(DocInput::from);
+        let inputs = stdlib_sources(&BTreeSet::new(), &doc_stdlib())
+            .into_iter()
+            .map(DocInput::from);
         return DiscoveredDocInputs {
             inputs: inputs.collect(),
             project_package: String::new(),
@@ -283,19 +286,35 @@ fn discover_doc_inputs(project_root: Option<&Path>, project_only: bool) -> Disco
 
     let loaded = ProjectLoader::new(&config, &root)
         .sources(LoadOptions {
+            dependencies: if project_only {
+                Dependencies::Skip
+            } else {
+                Dependencies::Sync
+            },
             extensions: &["koja"],
-            include_dependencies: !project_only,
-            include_stdlib: !project_only,
             include_tests: false,
             on_error: ErrorPolicy::Lenient,
+            stdlib: (!project_only).then(doc_stdlib),
         })
         .unwrap_or_default();
+    for warning in &loaded.warnings {
+        eprintln!("warning: {warning}");
+    }
 
     DiscoveredDocInputs {
-        inputs: loaded.into_iter().map(DocInput::from).collect(),
+        inputs: loaded.sources.into_iter().map(DocInput::from).collect(),
         project_package: config.namespace(),
         project_root: Some(root),
         stdlib_fallback: false,
+    }
+}
+
+/// Documentation is not a compile, so the `Test` package is always
+/// documented and the link-only-with-tests rule does not apply.
+fn doc_stdlib() -> StdlibOptions {
+    StdlibOptions {
+        extraction_root: None,
+        link_tests: true,
     }
 }
 

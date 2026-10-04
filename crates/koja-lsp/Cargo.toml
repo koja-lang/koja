@@ -16,10 +16,11 @@ path = "src/main.rs"
 koja-ast = { path = "../koja-ast" }
 koja-fmt = { path = "../koja-fmt" }
 koja-parser = { path = "../koja-parser" }
+koja-project = { path = "../koja-project" }
 koja-query = { path = "../koja-query" }
 koja-stdlib = { path = "../koja-stdlib" }
 koja-typecheck = { path = "../koja-typecheck" }
 serde = { version = "1", features = ["derive"] }
+serde_json = "1"
 tokio = { version = "1", features = ["full"] }
-toml = "0.8"
 tower-lsp-server = "0.23"

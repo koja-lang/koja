@@ -1,0 +1,17 @@
+[package]
+name = "koja-project"
+description = "Project manifest, source discovery, and dependency resolution for the Koja language"
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+koja-parser = { path = "../koja-parser" }
+koja-stdlib = { path = "../koja-stdlib" }
+libc = "0.2"
+serde = { version = "1", features = ["derive"] }
+tar = "0.4"
+toml = "0.8"

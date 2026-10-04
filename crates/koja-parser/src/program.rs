@@ -15,9 +15,14 @@
 //! The bare [`crate::parse`] primitive remains for callers without a
 //! file context (REPL session input, proptest-synthesized strings,
 //! `koja-fmt`'s string-in/string-out contract).
+//!
+//! [`SourceTable`] is the path and text of every file by [`FileId`],
+//! taken from a [`ParsedProgram`] before typecheck consumes it. Every
+//! later stage that renders a span or converts a position reads it.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use koja_ast::ast::{Diagnostic, File, Severity};
 use koja_ast::span::FileId;
@@ -139,6 +144,83 @@ impl ParsedProgram {
 
     pub fn is_empty(&self) -> bool {
         self.order.is_empty()
+    }
+
+    /// The path and text of every file, indexed like the spans the
+    /// parse produced. Take it before typecheck consumes the program,
+    /// since the checked program keeps the paths but not the text.
+    pub fn source_table(&self) -> SourceTable {
+        SourceTable::new(
+            self.order
+                .iter()
+                .map(|path| (path.clone(), self.files[path].source.as_str())),
+        )
+    }
+}
+
+/// The path and text of every source file, indexed by [`FileId`].
+/// A span whose file id misses the table resolves to nothing, and
+/// callers render it without a location or fall back to a file of
+/// their own choosing.
+#[derive(Clone, Debug, Default)]
+pub struct SourceTable {
+    files: Vec<(PathBuf, Arc<str>)>,
+    /// When true, every span resolves to the one entry. Covers bare
+    /// parses whose spans carry [`FileId::UNKNOWN`].
+    single: bool,
+}
+
+impl SourceTable {
+    pub fn new<S: Into<Arc<str>>>(files: impl IntoIterator<Item = (PathBuf, S)>) -> Self {
+        Self {
+            files: files
+                .into_iter()
+                .map(|(path, text)| (path, text.into()))
+                .collect(),
+            single: false,
+        }
+    }
+
+    /// One-file table that attributes every span to that file.
+    pub fn single(path: impl Into<PathBuf>, text: impl Into<Arc<str>>) -> Self {
+        Self {
+            files: vec![(path.into(), text.into())],
+            single: true,
+        }
+    }
+
+    pub fn path_of(&self, file: FileId) -> Option<&Path> {
+        self.resolve(file).map(|(path, _)| path.as_path())
+    }
+
+    pub fn text_of(&self, file: FileId) -> Option<&str> {
+        self.resolve(file).map(|(_, text)| &**text)
+    }
+
+    /// The id of the file at `path`.
+    pub fn file_id(&self, path: &Path) -> Option<FileId> {
+        self.files
+            .iter()
+            .position(|(candidate, _)| candidate == path)
+            .map(|index| FileId(index as u32))
+    }
+
+    /// Every path in id order.
+    pub fn paths(&self) -> impl Iterator<Item = &Path> {
+        self.files.iter().map(|(path, _)| path.as_path())
+    }
+
+    pub fn len(&self) -> usize {
+        self.files.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.files.is_empty()
+    }
+
+    fn resolve(&self, file: FileId) -> Option<&(PathBuf, Arc<str>)> {
+        let index = if self.single { 0 } else { file.0 as usize };
+        self.files.get(index)
     }
 }
 
